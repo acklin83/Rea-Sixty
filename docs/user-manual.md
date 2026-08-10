@@ -551,6 +551,35 @@ primary transport (`◄◄` `►►` `■` `►` `●`) below. `SHIFT` is the UF
 modifier. The primary transport ships bound to REAPER's own transport actions and
 can be rebound; the secondary row ships **unbound** and is yours.
 
+## Extender — the UF1 as a 9th fader
+
+Off by default. Turn it on and the UF1's fader joins the UF8's bank as one
+continuous **nine-wide** strip: *Side* **Right** (default) puts the UF1 at strip 9
+with the UF8 on 1-8, **Left** puts it at strip 1 with the UF8 on 2-9. Banking
+moves all nine together.
+
+Only the **fader** joins. The UF1 keeps its own screen, V-Pots and soft-keys —
+they simply point at the ninth track instead of at the selection.
+
+Extender and the Focus-Set pin are mutually exclusive: switching either on clears
+the other, and releasing the pin puts the Extender back the way you left it.
+
+*Settings → Bindings → UF1.*
+
+## Pin Set — parking the UF1 on a Focus Set
+
+**Pin Set** is a clutch. With it engaged, the UF1 parks on **one member** of the
+Focus Set and its `CHANNEL` encoder scrolls through the members — independently
+of the REAPER selection and of where the UF8 is banked. Let go and the UF1 goes
+back to following the selection.
+
+Two settings shape it, both in *Settings → Bindings → UF1*:
+
+| Setting | Effect |
+|---|---|
+| Focus Set scope | **Both** (default) — the members pin the UF8's head *and* the UF1 parks on them. **UF1 only** — the UF1 parks the set, the UF8 banks untouched. **UF8 only** — the members pin the UF8 head, the UF1 keeps following the selection. |
+| UF8 sends follow the UF1 Focus Set track | On by default. The UF8's *sends of the focused track* view follows the member the UF1 is parked on rather than the last-touched track, so sends automation writes to the channel the UF1 is showing. Only bites with a UF1 present and Pin Set engaged. |
+
 ## Nav cross and jog wheel
 
 The five-key cross (up / left / centre / right / down) and the jog wheel belong to
