@@ -856,6 +856,15 @@ void seedFactoryDefaults_(Config& c)
         lp.type    = ActionType::Builtin;
         lp.action  = "uf1_encoder_ch_select";
     }
+    // The single SOFT key above the fader display. It shipped unbound — the
+    // only free key in that cluster, and the only one with an LED going spare.
+    // Pin Set is the UF1-shaped default (Frank 2026-08-10): the UF1 is the
+    // surface that PARKS on a Focus Set, and the key sits directly above the
+    // track name that changes when you pin. Toggle → the LED shows pinned.
+    // User-rebindable like every other key; see upgradeBackfillUf1SoftKey_
+    // for why an existing config gets it without losing an own assignment.
+    L1[ButtonId::Uf1ChannelSoftKey] =
+        mkBuiltin("temp_selset_recall", Behavior::Toggle, "PIN SET");
     L1[ButtonId::Uf1Flip]        = mkBuiltin("uf1_flip",              Behavior::Toggle,    "FLIP");
     L1[ButtonId::Uf1Master]      = mkBuiltin("uf1_master",            Behavior::Toggle,    "MASTER");
     L1[ButtonId::Uf1FiveToEight] = mkBuiltin("uf1_five_to_eight",     Behavior::Momentary, "5-8");
@@ -2157,7 +2166,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // v17 (2026-07-31): secondary transport +SHIFT = the 6 REAPER automation modes
 // (SSL UF1 silk labels OFF/READ/WRT/TRIM/LTCH/TCH). upgradeBackfillUf1Automation_
 // fills the empty Shift slots into older configs (leaves Plain + any user edit).
-constexpr int kCurrentBindingsVersion = 19;
+constexpr int kCurrentBindingsVersion = 20;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2569,6 +2578,23 @@ void upgradeBackfillUf1EncoderLong_(Config& c)
 // (ButtonId::Uf8Select). Only fills an EMPTY double slot — an explicit
 // user assignment (or a slot they deliberately cleared) is never
 // resurrected (matches upgradeBackfillUf1EncoderLong_).
+// v19→v20 (2026-08-10): the UF1's single SOFT key (above the fader display)
+// gets a factory default of Pin Set. It shipped unbound, so a config written
+// before today carries either nothing for it or an assignment its owner made
+// on purpose. Fill ONLY the empty case — an own binding, or a slot deliberately
+// cleared to Noop with an action string, is left exactly as it is.
+void upgradeBackfillUf1SoftKey_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    Binding& bd = L1.bindings[ButtonId::Uf1ChannelSoftKey];   // default-creates
+    auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+    if (sp.type != ActionType::Noop || !sp.action.empty()) return;
+    sp.type     = ActionType::Builtin;
+    sp.action   = "temp_selset_recall";
+    sp.label    = "PIN SET";
+    bd.behavior = Behavior::Toggle;
+}
+
 void upgradeBackfillSelDouble_(Config& c)
 {
     Layer& L1 = c.layers[0];
@@ -2852,6 +2878,9 @@ void load()
             }
             if (tmp.version < 19) {
                 upgradeBackfillSelDouble_(tmp);
+            }
+            if (tmp.version < 20) {
+                upgradeBackfillUf1SoftKey_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
