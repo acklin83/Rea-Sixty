@@ -1637,6 +1637,10 @@ std::atomic<bool> g_tempSelsetClearRequest{false};
 std::atomic<bool> g_tempSelsetToggleSelRequest{false};
 std::atomic<bool> g_tempSelsetSetFromSelRequest{false};
 std::atomic<bool> g_tempSelsetPinFocusedRequest{false};
+// UF1 SOFT key: pin the channel the UF1 is SHOWING and engage the pin in one
+// press; press again releases. Distinct from g_tempSelsetPinFocusedRequest,
+// which reads GetLastTouchedTrack and never un-pins (Frank 2026-08-10).
+std::atomic<bool> g_uf1PinChannelRequest{false};
 // UF1 Held-Track ("focused track" clutch = the Focus Set pin, g_tempSelsetActive):
 // when the pin is on the UF1 parks on ONE Focus-Set member and its channel encoder
 // scrolls through the members INDEPENDENTLY of the REAPER selection / UF8 bank
@@ -2456,6 +2460,7 @@ void tempSelsetClear_();
 void tempSelsetToggleSelected_();
 void tempSelsetSetFromSelection_();
 void tempSelsetPinFocused_();
+void uf1PinChannel_();
 void applyUf1HoldScroll_(int step);   // defined near applyTempSelsetScroll_ (UF1 held-member scroll)
 MediaTrack* heldFocusTrack_();        // UF8 sends target: UF1 held member (if enabled) else last-touched
 
@@ -2611,6 +2616,9 @@ void drainSelsets_() {
     }
     if (g_tempSelsetPinFocusedRequest.exchange(false)) {
         tempSelsetPinFocused_();
+    }
+    if (g_uf1PinChannelRequest.exchange(false)) {
+        uf1PinChannel_();
     }
     // UF1 held-member scroll posted by the REAPER-action route (NEXT/PREV).
     // The surface channel-encoder calls applyUf1HoldScroll_ directly from the
@@ -33360,6 +33368,37 @@ void tempSelsetPinFocused_()
     g_pageDirty.store(true);
 }
 
+// One press does both halves of what the UF1's SOFT key is for: put the channel
+// the UF1 is currently showing into the Focus Set, and engage the pin. Press
+// again and it releases — that is what makes it a real toggle with a meaningful
+// LED, where temp_selset_recall alone only ever flipped the clutch and
+// temp_selset_pin_focused only ever pinned.
+//
+// Two differences from temp_selset_pin_focused, both deliberate:
+//   · the track is uf1FocusedTrack_(), not GetLastTouchedTrack — on the UF1
+//     those are different tracks in Extender mode, and different again while
+//     the pin is already parked on another member.
+//   · releasing is part of it. The member stays IN the set; only the clutch
+//     goes off, so pressing again re-pins and adds whatever channel you are on
+//     by then.
+// Main-thread only — reached through the request atomic + drain, per the
+// worker-thread API rule.
+void uf1PinChannel_()
+{
+    if (g_tempSelsetActive.load()) {
+        tempSelsetToggleRecall_();      // release the clutch, keep the set
+        return;
+    }
+    MediaTrack* tr = uf1FocusedTrack_();
+    if (!tr) return;
+    char buf[64] = {0};
+    GetSetMediaTrackInfo_String(tr, "GUID", buf, false);
+    if (buf[0]) g_tempSelsetGuids.insert(buf);
+    tempSelsetToggleRecall_();          // pin on (writes + arms the members)
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
+}
+
 void tempSelsetToggleRecall_()
 {
     const bool wasActive = g_tempSelsetActive.load();
@@ -38729,6 +38768,13 @@ void registerBindingHandlers()
             if (firing) g_tempSelsetSetFromSelRequest.store(true);
         },
         nullptr, "Focus Set: set from selection", false
+    });
+    registerBuiltin("temp_selset_pin_uf1_channel", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_uf1PinChannelRequest.store(true);
+        },
+        [](int) { return g_tempSelsetActive.load(); },
+        "Focus Set: pin the UF1 channel (toggle)", true
     });
     registerBuiltin("temp_selset_pin_focused", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {

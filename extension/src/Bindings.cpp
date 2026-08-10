@@ -864,7 +864,7 @@ void seedFactoryDefaults_(Config& c)
     // User-rebindable like every other key; see upgradeBackfillUf1SoftKey_
     // for why an existing config gets it without losing an own assignment.
     L1[ButtonId::Uf1ChannelSoftKey] =
-        mkBuiltin("temp_selset_recall", Behavior::Toggle, "PIN SET");
+        mkBuiltin("temp_selset_pin_uf1_channel", Behavior::Toggle, "PIN SET");
     L1[ButtonId::Uf1Flip]        = mkBuiltin("uf1_flip",              Behavior::Toggle,    "FLIP");
     L1[ButtonId::Uf1Master]      = mkBuiltin("uf1_master",            Behavior::Toggle,    "MASTER");
     L1[ButtonId::Uf1FiveToEight] = mkBuiltin("uf1_five_to_eight",     Behavior::Momentary, "5-8");
@@ -2166,7 +2166,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // v17 (2026-07-31): secondary transport +SHIFT = the 6 REAPER automation modes
 // (SSL UF1 silk labels OFF/READ/WRT/TRIM/LTCH/TCH). upgradeBackfillUf1Automation_
 // fills the empty Shift slots into older configs (leaves Plain + any user edit).
-constexpr int kCurrentBindingsVersion = 20;
+constexpr int kCurrentBindingsVersion = 21;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2590,9 +2590,27 @@ void upgradeBackfillUf1SoftKey_(Config& c)
     auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
     if (sp.type != ActionType::Noop || !sp.action.empty()) return;
     sp.type     = ActionType::Builtin;
-    sp.action   = "temp_selset_recall";
+    sp.action   = "temp_selset_pin_uf1_channel";
     sp.label    = "PIN SET";
     bd.behavior = Behavior::Toggle;
+}
+
+// v20→v21 (2026-08-10, same day): the SOFT key's v20 seed was
+// temp_selset_recall, which only flips the clutch — press it on a fresh set and
+// nothing is pinned, because nothing is IN the set. The seed is now
+// temp_selset_pin_uf1_channel, which pins the shown channel AND engages in one
+// press. Rewrites ONLY the exact v20 seed on the exact button: v20 existed for
+// about an hour and never shipped, so that value there is ours, not a choice.
+// Any other action on the key — including one the user picked — is left alone.
+void upgradeUf1SoftKeyPinChannel_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    auto it = L1.bindings.find(ButtonId::Uf1ChannelSoftKey);
+    if (it == L1.bindings.end()) return;
+    auto& sp = it->second.shortPress[static_cast<int>(Modifier::Plain)];
+    if (sp.type != ActionType::Builtin) return;
+    if (sp.action != "temp_selset_recall") return;
+    sp.action = "temp_selset_pin_uf1_channel";
 }
 
 void upgradeBackfillSelDouble_(Config& c)
@@ -2881,6 +2899,9 @@ void load()
             }
             if (tmp.version < 20) {
                 upgradeBackfillUf1SoftKey_(tmp);
+            }
+            if (tmp.version < 21) {
+                upgradeUf1SoftKeyPinChannel_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -4285,6 +4306,7 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             {"temp_selset_remove",          "Rem from Set"},
             {"temp_selset_toggle_selected", "Toggle Sel"},
             {"temp_selset_set_from_selection", "Set frm Sel"},
+            {"temp_selset_pin_uf1_channel", "Pin This Ch"},
             {"temp_selset_pin_focused",     "Pin Focused"},
             {"temp_selset_clear",           "Clear Set"},
             {"selset_cycle",                "Cycle Sets"},

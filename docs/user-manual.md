@@ -501,7 +501,7 @@ because the same physical key does different work in each.
 | V-Pot above the fader | Pan by default, or whatever the Sticky Pot is pinned to. **Push** clears an armed pin, resets a live pin, or — with no pin — centres Pan. |
 | `SOLO` / `CUT` | Solo / mute the focused track. Fixed, not rebindable. |
 | `SEL` | Select the focused track exclusively; **Shift +** `SEL` extends the selection. Double-press opens the FX chain by default. |
-| `SOFT` (above the fader display) | **Pin Set** — engage / release the Focus-Set clutch, LED lit while pinned. Factory default since v0.5; it shipped unbound before that. Rebindable like every other key, and an assignment you had already made is kept. |
+| `SOFT` (above the fader display) | **Pin This Ch** — one press puts the channel the UF1 is showing into the Focus Set *and* engages the pin; press again to release, and the channel stays in the set. LED lit while pinned. Factory default since v0.5; it shipped unbound before that. Rebindable like every other key, and an assignment you had already made is kept. |
 | `FLIP` | Swap the fader and V-Pot assignments. Factory default, rebindable. |
 | `MASTER` | Put the Master bus on the channel. Factory default, rebindable. |
 | `CHANNEL` encoder | Step the UF1's channel through the track list. **Shift +** turn is always Instance Cycle, whatever mode is selected. **Push** opens the focused plug-in's GUI. Both are factory defaults and rebindable. |
