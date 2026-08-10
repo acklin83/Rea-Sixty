@@ -21394,6 +21394,33 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     }
     if (!eqTr) { eqTr = tr; eqFx = uf1FindEqFx_(tr); }
 
+    // Which instance the graph LANDED on, and what each candidate offered — the
+    // three sources disagree silently, and "one instance never draws" looks the
+    // same from outside whichever one won (Frank 2026-08-10: a 4K E in slot 1 of
+    // track 1 whose graph never appears, every other instance fine). The prime
+    // suspect is the per-track instance CURSOR (g_stripInstanceFxGuid, keyed by
+    // track GUID and persistent): once you have cycled instances on a track it
+    // outranks everything below it, so the graph follows the cursor and not the
+    // strip you are looking at. Logged on change only.
+    //   Enable: ExtState rea_sixty/uf1_trace = 1  →  reaper_uf1_input.log
+    if (g_uf1Trace && (sFxTr != eqTr || sFx != eqFx)) {
+        if (FILE* lg = std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a")) {
+            char fxn[128] = {0};
+            if (eqTr && eqFx >= 0) TrackFX_GetFXName(eqTr, eqFx, fxn, sizeof(fxn));
+            const int cursor = stripInstanceFxRaw_(tr);
+            const ActiveFxTarget a = resolveActiveFx_();
+            std::fprintf(lg,
+                "EQ-SRC paintTrack=%d -> eqTrack=%d eqFx=%d '%s' | cursor(raw)=%d "
+                "activeFx={tr=%d,fx=%d} | fallbackFindEq=%d\n",
+                tr   ? int(GetMediaTrackInfo_Value(tr,   "IP_TRACKNUMBER")) : -1,
+                eqTr ? int(GetMediaTrackInfo_Value(eqTr, "IP_TRACKNUMBER")) : -1,
+                eqFx, fxn, cursor,
+                a.tr ? int(GetMediaTrackInfo_Value(a.tr, "IP_TRACKNUMBER")) : -1,
+                a.fxIdx, uf1FindEqFx_(tr));
+            std::fclose(lg);
+        }
+    }
+
     if (sFxTr != eqTr || sFx != eqFx || force) {
         sFxTr = eqTr;
         sFx = eqFx;
