@@ -4,7 +4,7 @@ UI screenshots of Rea-Sixty, macOS. Two capture rounds:
 
 - **2026-07-19**, `v0.3.2-8-g940a43f` — the Learn-HUD shots and everything
   under Modes / Favourites / Selection Sets / Parameter Groups / Manual / About.
-- **2026-08-10**, `v0.4.4-215-ge52b288` and `745285e` — ten Settings shots re-taken
+- **2026-08-10**, `v0.4.4-215-ge52b288` through `fd8898e` — eleven Settings shots re-taken
   after the Device pane was split (Devices, Appearance, Behaviour, the three
   Bindings sub-tabs, FX Learn, Exchange).
 
@@ -92,14 +92,11 @@ so none of them may be published before that tag.
 | `settings-parameter-groups.png` | Parameter Groups tab — eight slots, Slot 1 populated | |
 | `settings-manual.png` | Manual tab — the manual rendered in-app, chapter list on the left | |
 | `settings-about.png` | About tab — version, codename, build, repository, setup export/import, log paths | |
+| `settings-search.png` | The rail **search** with `rme` typed — two hits, and the pane behind it switched to Modes → REC | Shows the 160 px rail truncating result rows to the label alone; the full breadcrumb is on the hover tooltip |
 
 ### Panes with no screenshot at all
 
-No file in this folder covers these. Worth capturing in the same sitting as
-the re-shoots above; again, only a hand capture in REAPER can produce them.
-
-- the rail **Search settings** field with a query typed in, showing the
-  breadcrumb result list — the last one still missing
+None. Every rail entry and every section that needed one has a capture.
 
 ## Notes for reuse
 
