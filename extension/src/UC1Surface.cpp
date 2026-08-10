@@ -4342,12 +4342,20 @@ void UC1Surface::pollGainReduction_()
         // reading. A mapped CS that is NOT an SSL 360° plug-in (bx_console, …)
         // has no gate stream of its own, so the strip stays dark rather than
         // borrowing the other instance's gate.
+        // Settings fingerprint of the ACTIVE strip — the only thing that can
+        // separate two strips of the SAME model (Frank 2026-08-10).
+        const char* fpId[12]; double fpVal[12];
+        const int nfp = (csFxIdx >= 0)
+            ? uf8::sslStripFingerprint(csTr, csFxIdx, fpId, fpVal, 12) : 0;
+        sslcore::StripParam fp[12];
+        for (int i = 0; i < nfp; ++i) fp[i] = { fpId[i], fpVal[i] };
         const int inst = (csFxIdx >= 0)
                            ? uf8::sslCoreInstanceOrdinal(csTr, csFxIdx) : 0;
         std::vector<float> gg;
         if (trackIdx > 0 && inst >= 0 &&
-            sslcore::getChannelStripMeterForTrackModel(gateType, trackIdx,
-                                                       csModel, inst, gg) &&
+            sslcore::getChannelStripMeterForTrackStrip(gateType, trackIdx,
+                                                       csModel, fp, nfp,
+                                                       inst, gg) &&
             !gg.empty()) {
             csGateGr = std::abs(gg[0]);
         }

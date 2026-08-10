@@ -149,6 +149,15 @@ bool fxIsSsl360(void* track /*MediaTrack**/, int fx);
 // instance on the track answered last. Main-thread-only (REAPER FX API).
 int sslCoreInstanceOrdinal(void* track /*MediaTrack**/, int fx);
 
+// This FX's current settings, in the parameter's real units, for the ids the
+// impersonator captures off the wire (sslcore::fingerprintIds). Hand the result
+// to getChannelStripMeterForTrackStrip and it will pick THIS plug-in's meter
+// stream — even against a second strip of the same model on the same track,
+// which nothing else on the protocol can separate. Fills `ids`/`vals` in
+// parallel; returns the count (<= maxOut), 0 when the FX has no usable map.
+int sslStripFingerprint(void* track /*MediaTrack**/, int fx,
+                        const char** ids, double* vals, int maxOut);
+
 // True when the FX slot is a JSFX (REAPER "fx_type" == "JS"). JSFX
 // numeric sliders mis-report their step size as 1.0 (= full range)
 // via TrackFX_GetParameterStepSizes, so the knob/encoder handlers

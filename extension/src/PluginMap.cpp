@@ -7,6 +7,9 @@
 
 #include "reaper_plugin_functions.h"
 #include "UserPluginCatalog.h"
+#include "SslCoreImpersonator.h"   // sslcore::fingerprintIds — one id list, shared
+#include <cstring>
+#include <cstdlib>
 
 namespace uf8 {
 namespace {
@@ -507,6 +510,45 @@ bool fxIsSsl360(void* trackOpaque, int fx)
         if (n.rfind(p, 0) == 0) { n.remove_prefix(p.size()); break; }
     }
     return n.rfind("SSL ", 0) == 0 || n.rfind("4K ", 0) == 0;
+}
+
+// Read the FX's current settings for the ids the impersonator captures, so a
+// meter stream can be matched to THIS plug-in rather than to a position in a
+// list. Values come out of TrackFX_GetFormattedParamValue and are therefore in
+// the parameter's real units — dB, Hz, ratio — which is exactly how the SSL
+// plug-in streams them. The ids are the LinkSlot ids, which ARE the wire's
+// short-ids, so no translation table exists to fall out of date.
+// Returns how many entries were filled (<= maxOut); 0 = nothing usable.
+int sslStripFingerprint(void* trackOpaque, int fx,
+                        const char** ids, double* vals, int maxOut)
+{
+    auto* tr = static_cast<MediaTrack*>(trackOpaque);
+    if (!tr || fx < 0 || !ids || !vals || maxOut <= 0) return 0;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return 0;
+    char nm[256];
+    if (!fxIdentityName(tr, fx, nm, sizeof(nm)) || !nm[0]) return 0;
+    const PluginMap* map = lookupPluginMapByName(nm);
+    if (!map) return 0;
+    const char* const* want = nullptr;
+    const int nWant = sslcore::fingerprintIds(want);
+    int n = 0;
+    for (int i = 0; i < nWant && n < maxOut; ++i) {
+        const LinkSlot* slot = nullptr;
+        for (const LinkSlot& s : map->slots)
+            if (s.id && std::strcmp(s.id, want[i]) == 0) { slot = &s; break; }
+        if (!slot || slot->vst3Param < 0) continue;
+        char buf[64] = {0};
+        if (!TrackFX_GetFormattedParamValue(tr, fx, slot->vst3Param,
+                                            buf, sizeof(buf)) || !buf[0])
+            continue;
+        // "-6.3 dB" / "1.2 kHz" — atof takes the leading number and stops at the
+        // unit. kHz would read as 1.2 against the wire's 1200, so those simply
+        // fail to match and cost us one candidate id, never a wrong pick.
+        ids[n]  = want[i];
+        vals[n] = std::atof(buf);
+        ++n;
+    }
+    return n;
 }
 
 int sslCoreInstanceOrdinal(void* trackOpaque, int fx)

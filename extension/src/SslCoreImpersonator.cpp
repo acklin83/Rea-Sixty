@@ -56,15 +56,29 @@ namespace {
 // meter DataTypes are arriving with sample values, so we can see end-to-end that
 // the plugin is streaming to us.
 bool  g_trace = false;
+// Hard ceiling. The log grows at ~25 Hz × one line per live plug-in and had
+// reached 823 MB unnoticed on Frank's machine (2026-08-10). At the cap it
+// starts over rather than rotating: a live diagnosis reads the NEWEST lines,
+// and a second file on disk is another thing to forget about.
+constexpr long kTraceMaxBytes = 100L * 1024 * 1024;
 void  slog(const char* fmt, ...) {
     if (!g_trace) return;
-    FILE* f = std::fopen(uf8::logPath("reaper_sslcore.log").c_str(), "a");
+    const std::string path = uf8::logPath("reaper_sslcore.log");
+    FILE* f = std::fopen(path.c_str(), "a");
     if (!f) return;
     va_list ap; va_start(ap, fmt);
     std::vfprintf(f, fmt, ap);
     va_end(ap);
     std::fputc('\n', f);
+    const long size = std::ftell(f);       // append stream → this IS the size
     std::fclose(f);
+    if (size > kTraceMaxBytes) {
+        if (FILE* w = std::fopen(path.c_str(), "w")) {
+            std::fprintf(w, "[trace restarted — hit the %ld MB cap]\n",
+                         kTraceMaxBytes / (1024 * 1024));
+            std::fclose(w);
+        }
+    }
 }
 
 // ---------------------------------------------------------------- shared state
@@ -190,6 +204,48 @@ std::map<uint16_t, std::string>  g_portName;       // UDP port -> track name  (g
 // 4K B are the same plug-in binary with a different analogue type.
 std::map<socket_t, std::string>  g_clientModel;    // per-client, e.g. "4KE"
 std::map<uint16_t, std::string>  g_portModel;      // UDP port -> model (g_meterMx)
+
+// ── Parameter fingerprint ────────────────────────────────────────────────────
+// The model above separates a 4K E from a 4K B. TWO STRIPS OF THE SAME MODEL it
+// cannot separate — and Frank's point stands: they ARE separable, or they could
+// not draw different EQ curves. What separates them is their SETTINGS, and the
+// plug-in streams those: every parameter arrives on the instance's own control
+// connection as a real-unit double (type=18, pb `09 <double LE>`), addressed by
+// an object id whose wire short-id was declared earlier in a type=16 frame.
+//
+// ★ Those short-ids are LITERALLY the ids in our own LinkSlot tables —
+// "GateThreshold", "CompThreshold", "InputTrim" … (PluginMap.cpp) — which also
+// carry the VST3 index per model. So the caller can read the same parameter off
+// the candidate FX in REAPER and compare. That is the bridge; nothing has to be
+// guessed or ordered.
+//
+// Only these are captured — enough to tell two strips apart in practice, few
+// enough to cost nothing. Anything the user is likely to set differently.
+// The list itself lives in the header (fingerprintIds) so PluginMap can read the
+// same parameters out of REAPER without linking this file.
+inline const char* const* fpIds_() {
+    const char* const* p = nullptr; fingerprintIds(p); return p;
+}
+inline int fpCount_() {
+    const char* const* p = nullptr; return fingerprintIds(p);
+}
+constexpr int kFpMax = 16;   // storage bound; the list is well under this
+
+int fpIndexOf_(const std::string& id) {
+    const char* const* ids = fpIds_();
+    for (int i = 0, n = fpCount_(); i < n; ++i)
+        if (id == ids[i]) return i;
+    return -1;
+}
+
+struct FpSet {
+    double val[kFpMax] = {};
+    bool   have[kFpMax] = {};
+};
+// objId -> fingerprint slot, learned per connection from the type=16 declarations.
+std::map<socket_t, std::map<uint64_t, int>> g_clientFpObj;
+std::map<socket_t, uint16_t>                g_connPort;   // conn -> its UDP port (g_meterMx)
+std::map<uint16_t, FpSet>                   g_portFp;     // UDP port -> values (g_meterMx)
 std::map<uint16_t, int>          g_portIndex;      // UDP port -> HostTrackIndex (g_meterMx)
 // Order in which UDP ports were first seen — the instance ORDER. REAPER builds
 // an FX chain slot by slot, so the plug-ins connect to Core in chain order and
@@ -598,6 +654,10 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             if (auto itM = g_clientModel.find(dc->second);
                                 itM != g_clientModel.end())
                                 g_portModel[sp] = itM->second;
+                            // Bind the connection to its port so the parameter
+                            // frames arriving on the TCP side (worker thread,
+                            // no port in hand) can be filed under this stream.
+                            g_connPort[dc->second] = sp;
                         }
                     } else if (g_portName.find(sp) == g_portName.end() && !g_pending.empty()) {
                         // Shared/fallback port, not yet named — old timing correlation.
@@ -826,6 +886,14 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                     g_clientName.erase(c);
                     g_clientIndex.erase(c);
                     g_clientModel.erase(c);
+                    g_clientFpObj.erase(c);
+                    {
+                        std::lock_guard<std::mutex> lk(g_meterMx);
+                        if (auto it = g_connPort.find(c); it != g_connPort.end()) {
+                            g_portFp.erase(it->second);   // stale settings help nobody
+                            g_connPort.erase(it);
+                        }
+                    }
                     // Tear down this connection's dedicated UDP data socket.
                     for (auto it = dataFdConn.begin(); it != dataFdConn.end(); ++it) {
                         if (it->second != c) continue;
@@ -915,22 +983,55 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             // ONLY per-instance discriminator on this protocol.
                             // Keep the prefix ("4KE"); first one wins, so a later
                             // re-declaration cannot flip a live connection.
-                            if (ftype == 16 && avail > 8 &&
-                                g_clientModel.find(c) == g_clientModel.end()) {
+                            if (ftype == 16 && avail > 8) {
                                 for (size_t k = 8; k + 1 < avail; ++k) {
                                     if (pay[k] != 0x12) continue;
                                     const size_t sl = pay[k + 1];
-                                    if (sl < 12 || k + 2 + sl > avail) continue;
-                                    const char* s = reinterpret_cast<const char*>(pay + k + 2);
-                                    const std::string nm(s, sl);
+                                    if (sl == 0 || k + 2 + sl > avail) break;
+                                    const std::string nm(
+                                        reinterpret_cast<const char*>(pay + k + 2), sl);
                                     const std::string suf = "EQCurveData";
                                     if (nm.size() > suf.size() &&
                                         nm.compare(nm.size() - suf.size(), suf.size(), suf) == 0) {
-                                        g_clientModel[c] = nm.substr(0, nm.size() - suf.size());
-                                        slog("[corr] client model = %s",
-                                             g_clientModel[c].c_str());
+                                        if (g_clientModel.find(c) == g_clientModel.end()) {
+                                            g_clientModel[c] = nm.substr(0, nm.size() - suf.size());
+                                            slog("[corr] client model = %s",
+                                                 g_clientModel[c].c_str());
+                                        }
+                                    } else if (const int fi = fpIndexOf_(nm); fi >= 0) {
+                                        // Remember which object id carries this
+                                        // parameter ON THIS CONNECTION, so its
+                                        // value frames can be recognised below.
+                                        uint64_t oid = 0;
+                                        std::memcpy(&oid, pay, 8);
+                                        g_clientFpObj[c][oid] = fi;
                                     }
                                     break;
+                                }
+                            }
+
+                            // Fingerprint VALUE frames: `09 <8-byte double LE>`
+                            // on an object this connection declared as one of
+                            // kFpIds. Stored against the connection's UDP port so
+                            // the reader can match a stream to the FX in REAPER
+                            // that holds the same settings.
+                            if (ftype == 18 && avail >= 17 && pay[8] == 0x09) {
+                                if (auto itO = g_clientFpObj.find(c);
+                                    itO != g_clientFpObj.end()) {
+                                    uint64_t oid = 0;
+                                    std::memcpy(&oid, pay, 8);
+                                    if (auto itF = itO->second.find(oid);
+                                        itF != itO->second.end()) {
+                                        double v = 0;
+                                        std::memcpy(&v, pay + 9, 8);
+                                        std::lock_guard<std::mutex> lk(g_meterMx);
+                                        if (auto itP = g_connPort.find(c);
+                                            itP != g_connPort.end()) {
+                                            FpSet& fs = g_portFp[itP->second];
+                                            fs.val[itF->second]  = v;
+                                            fs.have[itF->second] = true;
+                                        }
+                                    }
                                 }
                             }
 
@@ -1487,6 +1588,62 @@ bool getChannelStripMeterForTrackModel(int csType, int trackIndex,
     }
     return getChannelStripMeterForTrackInstance(csType, trackIndex,
                                                 instanceOrdinal, current);
+}
+
+bool getChannelStripMeterForTrackStrip(int csType, int trackIndex,
+                                       const char* model,
+                                       const StripParam* fp, int nfp,
+                                       int instanceOrdinal,
+                                       std::vector<float>& current) {
+    // Identity by SETTINGS — the last rung, and the only one that separates two
+    // strips of the SAME model. Frank, 2026-08-10: "zwei strips des selben
+    // models sind sehr wohl trennbar, sonst hätten sie ja auch dieselbe
+    // EQ-Graph." Exactly: what differs is what the user dialled in, and each
+    // instance streams its own parameter values on its own connection.
+    //
+    // The caller passes the ACTIVE FX's values, read from REAPER through the
+    // LinkSlot table whose ids are the same strings the wire uses. Score each
+    // live stream on how many of them agree; a strict winner takes it. No
+    // winner (nothing captured yet, or two strips genuinely set the same) →
+    // fall through to the model, then to the ordinal. Every rung is a narrowing,
+    // never a guess: an ambiguous answer defers instead of picking.
+    if (csType < 0 || csType > int(ChannelStripMeter::MicPreSaturation)) return false;
+    if (trackIndex <= 0) return false;
+    if (fp && nfp > 0) {
+        std::lock_guard<std::mutex> lk(g_meterMx);
+        const long long now = nowMs();
+        const Slot* best = nullptr;
+        int bestScore = 0, bestCount = 0;
+        for (const auto& kv : g_inst) {
+            if (kv.second.kind != Kind::ChannelStrip) continue;
+            auto pi = g_portIndex.find(kv.first);
+            if (pi == g_portIndex.end() || pi->second != trackIndex) continue;
+            if (now - kv.second.lastMs > 1000) continue;
+            auto pf = g_portFp.find(kv.first);
+            if (pf == g_portFp.end()) continue;
+            int score = 0;
+            for (int i = 0; i < nfp; ++i) {
+                const int fi = fpIndexOf_(fp[i].id ? fp[i].id : "");
+                if (fi < 0 || !pf->second.have[fi]) continue;
+                // Relative tolerance: the wire carries dB, Hz and ratios in one
+                // set, and REAPER's formatted value is rounded for display.
+                const double a = pf->second.val[fi], b = fp[i].value;
+                const double tol = 0.02 * std::max(1.0, std::max(std::fabs(a),
+                                                                 std::fabs(b)));
+                if (std::fabs(a - b) <= tol) ++score;
+            }
+            if (score > bestScore) { bestScore = score; best = &kv.second.meter[csType];
+                                     bestCount = 1; }
+            else if (score == bestScore && score > 0) ++bestCount;
+        }
+        if (bestScore > 0 && bestCount == 1 && best) {
+            if (!best->have || best->current.empty()) return false;  // right strip, no such meter
+            current = best->current;
+            return true;
+        }
+    }
+    return getChannelStripMeterForTrackModel(csType, trackIndex, model,
+                                             instanceOrdinal, current);
 }
 
 long long msSinceLastData() {

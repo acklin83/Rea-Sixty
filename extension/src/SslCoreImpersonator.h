@@ -144,6 +144,48 @@ bool getChannelStripMeterForTrackModel(int csType, int trackIndex,
                                        const char* model, int instanceOrdinal,
                                        std::vector<float>& current);
 
+// One parameter of the strip the caller wants, as REAPER sees it. `id` is the
+// LinkSlot id — "GateThreshold", "CompThreshold", "InputTrim" … — which is also
+// the wire's own short-id for that parameter, so the two sides need no
+// translation table. `value` is in the parameter's real units (dB, Hz, ratio).
+struct StripParam { const char* id; double value; };
+
+// The parameter ids the impersonator actually captures off the wire. Ask REAPER
+// for exactly these — ONE list, so the two sides cannot drift apart. Returns the
+// count and points `ids` at the array.
+//
+// Header-only on purpose: PluginMap.cpp needs the list to read the same
+// parameters out of REAPER, and it is linked on its own by the unit tests —
+// pulling in the whole socket-owning impersonator just for eleven strings would
+// be the wrong dependency.
+inline int fingerprintIds(const char* const*& ids)
+{
+    static const char* const kIds[] = {
+        "GateThreshold", "GateRange",  "CompThreshold", "CompRatio",
+        "InputTrim",     "OutputTrim", "HighPassFreq",  "LowPassFreq",
+        "FaderLevel",    "HighEqGain", "LowEqGain",
+    };
+    ids = kIds;
+    return int(sizeof(kIds) / sizeof(kIds[0]));
+}
+
+// ★★ THE ONE TO CALL. Resolves the stream by narrowing, most specific first:
+//   1. SETTINGS — the values in `fp`, matched against what each live instance
+//      streams. This is the only rung that separates two strips of the SAME
+//      model, and it works for the reason Frank gave: strips set differently
+//      draw different EQ curves, so they must be distinguishable.
+//   2. MODEL — "4K E" vs "4K B", from the EQ-curve object name at connect.
+//   3. ORDINAL — FX-chain position, valid only while the UDP ports happen to
+//      still be in connect order. A single plug-in reconnect breaks it, which is
+//      how a 4K B's gate reduction ended up on the 4K E (Frank, HW 2026-08-10).
+// Each rung DEFERS when ambiguous rather than picking, so a tie never silently
+// shows a neighbour's meter. Pass what you have; nullptr/0 skips a rung.
+bool getChannelStripMeterForTrackStrip(int csType, int trackIndex,
+                                       const char* model,
+                                       const StripParam* fp, int nfp,
+                                       int instanceOrdinal,
+                                       std::vector<float>& current);
+
 // Milliseconds since the last meter datagram of any kind (INT64_MAX if none).
 long long msSinceLastData();
 
