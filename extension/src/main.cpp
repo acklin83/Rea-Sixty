@@ -1719,6 +1719,12 @@ std::atomic<int>  g_selsetSaveRequest{0};
 // main-thread onTimer drain runs the actual swap. Frank 2026-06-20.
 //   switch req: 0..7 = favourite slot to switch to, -1 = none
 //   cycle  req: accumulated signed detents (0 = none)
+// Bumped whenever a plug-in is REPLACED under an existing slot (CS/BC Switch,
+// Copy, Cycle). Track and FX index stay the same, so every cache keyed on
+// (track, fxIndex) — and every send-on-change dedupe — silently keeps the old
+// plug-in's answer: no EQ graph, and the UC1 still reading "4K E" after a swap
+// to a 4K B (Frank 2026-08-10). The painters fold this into their change gate.
+std::atomic<uint32_t> g_fxIdentityGen{0};
 std::atomic<int>  g_csSwitchReq{-1};
 std::atomic<int>  g_csCopyReq{-1};
 std::atomic<int>  g_csCycleReq{0};
@@ -11092,6 +11098,7 @@ static void applyCsSwitch_(int slot, bool ownSettings)
     }
 
     if (any) {
+        g_fxIdentityGen.fetch_add(1);   // the plug-in under this slot is a different one now
         g_bankDirty.store(true);
         if (g_uc1_surface) { g_uc1_surface->invalidateCache(); g_uc1_surface->refresh(); }
     }
@@ -11127,6 +11134,7 @@ static void applyCsCopy_(int slot)
     uf8::param_groups::popBroadcastSuppress();
 
     if (any) {
+        g_fxIdentityGen.fetch_add(1);   // the plug-in under this slot is a different one now
         g_bankDirty.store(true);
         if (g_uc1_surface) { g_uc1_surface->invalidateCache(); g_uc1_surface->refresh(); }
     }
@@ -11216,6 +11224,7 @@ static void applyBcSwitch_(int slot, bool ownSettings)
     uf8::param_groups::popBroadcastSuppress();
 
     if (any) {
+        g_fxIdentityGen.fetch_add(1);   // the plug-in under this slot is a different one now
         g_bankDirty.store(true);
         if (g_uc1_surface) { g_uc1_surface->invalidateCache(); g_uc1_surface->refresh(); }
     }
@@ -11249,6 +11258,7 @@ static void applyBcCopy_(int slot)
     uf8::param_groups::popBroadcastSuppress();
 
     if (any) {
+        g_fxIdentityGen.fetch_add(1);   // the plug-in under this slot is a different one now
         g_bankDirty.store(true);
         if (g_uc1_surface) { g_uc1_surface->invalidateCache(); g_uc1_surface->refresh(); }
     }
@@ -11318,6 +11328,7 @@ void applyShowFocusedPluginGui_()
         g_uf8PluginModeWithGui.store(false);
         restoreSelModeAfterUf8PluginMode_();
         g_pageDirty.store(true);
+        g_fxIdentityGen.fetch_add(1);   // the plug-in under this slot is a different one now
         g_bankDirty.store(true);
         SetExtState("ReaSixty", "uf8PluginMode", "0", true);
         g_pluginGuiSyncRequest.store(true);
@@ -21421,9 +21432,22 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         }
     }
 
-    if (sFxTr != eqTr || sFx != eqFx || force) {
+    // ★ Keyed on the plug-in's IDENTITY, not on (track, fx). A CS-Switch swaps a
+    // 4K E for a 4K B at the same index, and the two do NOT share parameter
+    // numbering — traced: EQ In is param 18 on the 4K E and 14 on the 4K B. With
+    // a position-only key the cached ix[] stayed on the old plug-in's numbers, so
+    // the graph read the wrong parameters and vanished. Covers a swap done by
+    // hand in the FX chain too, which no generation counter would catch.
+    static std::string sIdent;
+    std::string ident;
+    if (eqTr && eqFx >= 0) {
+        char idb[256] = {0};
+        if (uf8::fxIdentityName(eqTr, eqFx, idb, sizeof(idb))) ident = idb;
+    }
+    if (sFxTr != eqTr || sFx != eqFx || ident != sIdent || force) {
         sFxTr = eqTr;
         sFx = eqFx;
+        sIdent = ident;
         if (sFx >= 0) {
             // A learned CS resolves through its UC1 link slots (v15 opt-in);
             // everything else by SSL's own parameter names.
@@ -23280,8 +23304,12 @@ void uf1PaintChannel_()
                            |  static_cast<int>(g_uf1EncoderMode.load());
     const bool modeFieldChanged = (modeFieldKey != sModeField);
     sModeField = modeFieldKey;
+    static uint32_t sIdentGen = 0;
+    const uint32_t identGen = g_fxIdentityGen.load();
+    const bool identChanged = (identGen != sIdentGen);
+    sIdentGen = identGen;
     const bool changed = (tr != sTr) || viewChanged || screenChanged || menuEdge
-                       || modeFieldChanged;
+                       || modeFieldChanged || identChanged;
     sTr = tr;
     // The meter INSTANCE the view reads can change with NO UF1 action: the
     // auto-follow tracks the SELECTED REAPER track (Frank 2026-07-29). When it

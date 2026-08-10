@@ -750,6 +750,14 @@ void UC1Surface::invalidateCache()
     lastZone03Text_.clear();
     lastButtonLed_.fill(-1);  // re-push every button LED on the next poll
     lastBcBypassed_ = -1;     // re-push BC backlight (without phantom cosmetic)
+    // The central/large LCD frames too. A CS-Switch REPLACES the plug-in at the
+    // same track and the same FX index, so nothing the dedupe compares changes —
+    // and the device kept showing the old strip's name while every other surface
+    // had moved on (Frank 2026-08-10, "UC1 zeigt 4K E"). Identity can change
+    // under a slot; position cannot be the whole key.
+    lastSmallTripleFrame_.clear();
+    lastLargeTripleFrame_.clear();
+    lastFocusedPalette_ = -1;
 }
 
 int UC1Surface::poll()
