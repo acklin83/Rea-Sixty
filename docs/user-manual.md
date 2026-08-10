@@ -1836,7 +1836,7 @@ You end up with both strips on the track, same settings, one active — so you c
 
 ## Which sections carry
 
-On the Channel Strip you can restrict what a swap carries, under **Copy sections (copy mode only):** — four checkboxes, all on by default:
+On the Channel Strip you can restrict what a swap carries. **Settings → Favourites**, under **Copy sections (copy mode only):** — four checkboxes, all on by default:
 
 | Box | Covers |
 |---|---|
