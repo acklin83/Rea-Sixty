@@ -22476,6 +22476,21 @@ static int uf1FindStripFx_(MediaTrack* tr)
 {
     if (!tr) return -1;
     const int n = TrackFX_GetCount(tr);
+    // ★ A CHANNEL STRIP OUTRANKS A BUS COMPRESSOR. Types 4 (BC 2) and 6 (the 360
+    // Link BC wrapper) are Bus Compressors; every other type is a channel strip.
+    // Taking simply the first strip-typed FX let a BC sitting EARLIER in the chain
+    // win over the channel strip behind it: the UF1 painted the BC 2 layout, whose
+    // parameter names do not exist on that plug-in, so the V-Pots resolved to −1
+    // and turning one did nothing at all (Frank 2026-08-11 — "zeigt irgendwas von
+    // einem BC2, aber wenn ich einen Wert verstelle passiert NICHTS"). The
+    // name-based finder this replaced could never land on a BC because it searched
+    // for EQ parameters, so the regression arrived with the replacement.
+    // Two passes, CS first; a BC-only track still resolves to its BC.
+    auto isBusComp = [](int ty) { return ty == 4 || ty == 6; };
+    for (int fx = 0; fx < n; ++fx) {
+        const int ty = uf1CsPluginType_(tr, fx);
+        if (ty >= 0 && !isBusComp(ty)) return fx;
+    }
     for (int fx = 0; fx < n; ++fx)
         if (uf1CsPluginType_(tr, fx) >= 0) return fx;
     return -1;
