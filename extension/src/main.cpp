@@ -14316,7 +14316,7 @@ void applyUf1MeterVpot_(uint8_t id, int step)
 
 // Channel-view twin of applyUf1MeterVpot_: the 4 V-Pots drive the focused SSL
 // channel-strip plug-in per the p188 page tables. DEFINED far below (it needs
-// uf1ParamByName_ / uf1FindEqFx_, which live next to the channel painter);
+// uf1ParamByName_, which lives next to the channel painter);
 // forward-declared here so the encoder drain (kVpot1..4) can call it in
 // Channel view. Main-thread only.
 void applyUf1ChannelVpot_(uint8_t id, int step);
@@ -21344,21 +21344,12 @@ namespace {
 
 // Index of an FX on `tr` exposing SSL-channel-strip EQ params, or -1. Detected
 // by an "HF Gain" / "HMF Gain" param name so it works across SSL CS variants.
-int uf1FindEqFx_(MediaTrack* tr)
-{
-    if (!tr) return -1;
-    const int n = TrackFX_GetCount(tr);
-    char nm[128];
-    for (int fx = 0; fx < n; ++fx) {
-        const int pc = TrackFX_GetNumParams(tr, fx);
-        for (int p = 0; p < pc && p < 96; ++p) {
-            if (TrackFX_GetParamName(tr, fx, p, nm, sizeof(nm)) &&
-                (std::strstr(nm, "HMF Gain") || std::strstr(nm, "HF Gain")))
-                return fx;
-        }
-    }
-    return -1;
-}
+// (uf1FindEqFx_ — "first FX whose parameters are NAMED like an SSL EQ" — was
+// deleted 2026-08-11. It was blind to every learned third-party strip, so it
+// silently handed the channel to a real SSL strip further down the chain, and it
+// was the raw material for two rounds of "the graph shows a different FX than
+// the controls". "Which FX is the strip" has ONE answer: uf1CsPluginType_ /
+// uf1FindStripFx_ / uf1ResolveCsFx_. Do not reintroduce a name-based search.)
 
 std::string uf1Lower_(const char* s)
 {
@@ -21513,90 +21504,37 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         "LMF Gain","LMF Freq","LMF Q","LF Freq","LF Gain","LF Type",
         "LPF","HPF","EQ In" };
 
-    // EQ source = THE STRIP THE UF1 IS SHOWING, so the graph and the controls can
-    // never disagree (Frank: "welche instanz auf uc1/uf8 aktiv ist muss
-    // zusammenpassen"). That question already has exactly one owner —
-    // uf1ResolveCsFx_ — and this function now asks it instead of keeping a second,
-    // drifting copy of the same logic. Its own chain (cursor → focused plug-in
-    // window → any EQ on the track) survives only for the case where NO strip
-    // resolves, i.e. where the V-Pots have nothing to drive either, so a plain
-    // third-party EQ still gets a graph. There are many 4K E instances; reading
-    // the selected track's first EQ (the behaviour before all this) picked the
-    // wrong one.
-    auto fxHasEq = [](MediaTrack* t, int fx) -> bool {
-        if (!t || fx < 0 || fx >= TrackFX_GetCount(t)) return false;
-        // A learned CS that opted in (v15) counts even though none of its
-        // parameters are called "HF Gain" — its UC1 map says which ones are.
-        if (uf1EqGraphMapAt_(t, fx)) return true;
-        const int pc = TrackFX_GetNumParams(t, fx);
-        char pn[128];
-        for (int p = 0; p < pc && p < 96; ++p)
-            if (TrackFX_GetParamName(t, fx, p, pn, sizeof(pn)) &&
-                (std::strstr(pn, "HMF Gain") || std::strstr(pn, "HF Gain")))
-                return true;
-        return false;
-    };
-    // ★ THE STRIP ON SCREEN DECIDES. uf1ResolveCsFx_ is the answer to "which strip
-    // is the UF1 showing" — it owns the V-Pots, the soft keys and the CS-TYPE cell,
-    // and it covers learned CS/BC and UF1-only maps, not just the built-in SSL
-    // types. This function used to run its OWN chain, which had drifted: it never
-    // got the `== focusTr` guard uf1ResolveCsFx_ grew on 2026-07-30, so the
-    // surface's active-FX cursor parked on a NEIGHBOURING channel drew that
-    // neighbour's curve while everything else on screen addressed the focused
-    // track (Frank 2026-08-11). Invisible until the EQ-In invert fix made that
-    // strip draw at all. Asking the one resolver removes the drift by
-    // construction instead of duplicating its guards — keep it that way.
+    // ══ THE GRAPH DRAWS THE STRIP ON SCREEN. ONE LINE, NO SECOND PATH. ══════
+    // uf1ResolveCsFx_ is the single answer to "which FX is the UF1 showing" — it
+    // drives the V-Pots, the soft keys and the CS-TYPE cell. The graph asks it and
+    // draws whatever it says. Nothing else.
+    //
+    // ⛔ DO NOT ADD A FALLBACK HERE. Every past bug in this function was a second
+    // path disagreeing with the first: an unguarded cursor drew a neighbouring
+    // channel; a name-based EQ search drew the neighbouring SLOT; an "does this FX
+    // have an EQ?" filter left the graph on the PREVIOUS strip's curve while the
+    // soft keys had already moved on (Frank 2026-08-11: "Die Soft-Keys steuern FX2
+    // aber der Graph ist von FX1 — DAS MUSS 100% STABIL SEIN"). If the resolved
+    // strip has no EQ params, ix[] resolves to −1 and the render draws a flat line
+    // on its own. A blank graph on the right FX is correct; a curve from the wrong
+    // FX never is.
     MediaTrack* eqTr = nullptr; int eqFx = -1;
-    MediaTrack* csTr = nullptr; int csFx = -1;
-    const bool stripOnScreen = (uf1ResolveCsFx_(tr, csTr, csFx) >= 0
-                                && csTr && csFx >= 0);
-    if (stripOnScreen) {
-        // The strip on screen, and ONLY it. A strip without an EQ (a Bus
-        // Compressor) leaves the graph blank rather than borrowing some other
-        // plug-in's curve — a graph the V-Pots don't drive is the whole bug.
-        if (fxHasEq(csTr, csFx)) { eqTr = csTr; eqFx = csFx; }
-    } else {
-        // No strip on screen → the V-Pots have nothing either, so the broader
-        // search is free to run and a plain third-party EQ still draws. Confined
-        // to the painted track, in uf1ResolveCsFx_'s own branch order.
-        { ActiveFxTarget a = resolveActiveFx_();
-          if (a.tr == tr && fxHasEq(a.tr, a.fxIdx)) { eqTr = a.tr; eqFx = a.fxIdx; } }
-        if (!eqTr) {
-            int trNum = -1, itemNum = -1, fxNum = -1;
-            if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum > 0) {
-                MediaTrack* cand = GetTrack(nullptr, trNum - 1);
-                const int candFx = fxNum & 0x00FFFFFF;
-                if (cand == tr && fxHasEq(cand, candFx)) { eqTr = cand; eqFx = candFx; }
-            }
-        }
-        if (!eqTr) { eqTr = tr; eqFx = uf1FindEqFx_(tr); }
-    }
+    uf1ResolveCsFx_(tr, eqTr, eqFx);
 
-    // Which instance the graph LANDED on, and what each candidate offered.
-    // `stripFx` is now the deciding one — if eqFx ever differs from it while a
-    // strip IS on screen, the graph and the V-Pots have drifted apart again and
-    // this line says so on the spot (that drift is what drew a neighbouring
-    // channel's curve for months, 2026-08-11). `cursor` / `activeFx` stay in the
-    // line because they are what the fallback branch uses when no strip resolves.
+    // Which FX the graph landed on. Same value the soft keys use, by construction
+    // — so if this ever disagrees with what the CS-TYPE cell shows, the bug is in
+    // uf1ResolveCsFx_ and applies to the whole strip view, not just the graph.
     // Logged on change only.
     //   Enable: ExtState rea_sixty/uf1_trace = 1  →  reaper_uf1_input.log
     if (g_uf1Trace && (sFxTr != eqTr || sFx != eqFx)) {
         if (FILE* lg = std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a")) {
             char fxn[128] = {0};
             if (eqTr && eqFx >= 0) TrackFX_GetFXName(eqTr, eqFx, fxn, sizeof(fxn));
-            const int cursor = stripInstanceFxRaw_(tr);
-            const ActiveFxTarget a = resolveActiveFx_();
             std::fprintf(lg,
-                "EQ-SRC paintTrack=%d -> eqTrack=%d eqFx=%d '%s' | stripOnScreen=%d "
-                "stripTrack=%d stripFx=%d | cursor(raw)=%d activeFx={tr=%d,fx=%d} "
-                "| fallbackFindEq=%d\n",
+                "EQ-SRC paintTrack=%d -> eqTrack=%d eqFx=%d '%s'\n",
                 tr   ? int(GetMediaTrackInfo_Value(tr,   "IP_TRACKNUMBER")) : -1,
                 eqTr ? int(GetMediaTrackInfo_Value(eqTr, "IP_TRACKNUMBER")) : -1,
-                eqFx, fxn, int(stripOnScreen),
-                csTr ? int(GetMediaTrackInfo_Value(csTr, "IP_TRACKNUMBER")) : -1,
-                csFx, cursor,
-                a.tr ? int(GetMediaTrackInfo_Value(a.tr, "IP_TRACKNUMBER")) : -1,
-                a.fxIdx, uf1FindEqFx_(tr));
+                eqFx, fxn);
             std::fclose(lg);
         }
     }
@@ -22489,9 +22427,8 @@ int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx)
               const int ty = tryFx(cand, candFx);
               if (ty >= 0) { outTr = cand; outFx = candFx; return ty; } } } }
     if (focusTr) {
-        // uf1FindStripFx_, NOT uf1FindEqFx_ — the latter is name-based and skips
-        // straight past a learned third-party strip to a real SSL one further
-        // down the chain (see the helper's comment).
+        // uf1FindStripFx_ — the same recogniser everything else uses. The
+        // name-based finder that used to sit here is gone (see its epitaph).
         const int fx = uf1FindStripFx_(focusTr);
         const int ty = tryFx(focusTr, fx);
         if (ty >= 0) { outTr = focusTr; outFx = fx; return ty; }
