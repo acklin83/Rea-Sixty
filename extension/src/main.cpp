@@ -23577,12 +23577,20 @@ void uf1PaintChannel_()
         g_uf1_dev->send(uf1::buildScreen(meterView ? 0x011f : 0x0123, zero));
         if (!meterView) {
             // Leaving the Meter view → clear the meter soft-key highlight (0x0102) so
-            // FINE(05)/PRESETS(09)/RESET(03) don't stay lit behind the Channel/DAW
-            // soft-key labels (Frank 2026-08-02). Drop presets-browser mode too; FINE
-            // state persists and its highlight re-asserts on the next meter entry.
+            // FINE/PRESETS/RESET don't stay lit behind the Channel/DAW soft-key
+            // labels (Frank 2026-08-02). Drop presets-browser mode too; FINE state
+            // persists and its highlight re-asserts on the next meter entry.
+            //
+            // ★ CLEAR IS 0x00, NOT 0x01. 0x0102 is a per-key BITMASK, not an index:
+            // bit0 = SK1 … bit3 = SK4. The July decode read the observed 01/03/05/09
+            // as "normal / Reset / Fine / Presets", but they are 0x01|(1<<n) — so the
+            // "normal" 0x01 we sent to clear was in fact "highlight SK1", and the
+            // leftmost label kept a white background through every later mode change
+            // (Frank 2026-08-11, photo). SSL sending 0x01 in its meter screens is
+            // consistent: SK1 is the screen-name key, highlighted as the active one.
             g_uf1PresetsMode.store(false);
-            const std::array<uint8_t, 1> norm{0x01};
-            g_uf1_dev->send(uf1::buildScreen(0x0102, norm));
+            const std::array<uint8_t, 1> none{0x00};
+            g_uf1_dev->send(uf1::buildScreen(0x0102, none));
         }
     }
 
@@ -23664,6 +23672,10 @@ void uf1PaintChannel_()
             // SSL writes 0x011b with an EMPTY payload (cap101 len-6 frame); the
             // cap66 replay leaves a 2-byte 00 00 in it.
             put(0x011b, {});
+            // No soft-key highlight in the channel views — self-heals a mask left
+            // over from a meter session (or a previous run), not just the one the
+            // view-change one-shot above clears.
+            put(0x0102, {0x00});
         }
     }
 
@@ -24944,6 +24956,40 @@ void uf1PaintChannel_()
                 // rectangle on). Keys 2-4 need the state byte or they stay dark.
                 if (i != 0)
                     g_uf1_dev->send(uf1::buildLedLevel(id, lvl ? 0x00 : 0x11));
+            }
+        }
+    }
+
+    // ---- Meter view owns its four soft-key LEDs (Frank 2026-08-11) ---------
+    // The p188 block that drives these LEDs runs in the CHANNEL view only, so in
+    // Meter view they just kept whatever the channel had last written — SK1 sat
+    // GREEN "ohne Grund". Green is precisely what the state-only path writes for
+    // key 1: FF38 0xf0, and buildColour packs xx = (g4<<4)|r4, so 0xf0 is g4=15,
+    // r4=0 = full green. Nobody was lying; nobody was repainting either.
+    // Meter view now states them: FINE (SK3) and the PRESETS browser (SK4) light,
+    // the rest dark. Stands down for the GR meter and the MODE menu, same as
+    // everyone else on this row.
+    if (g_uf1_dev && meterView && !grOwnsSk) {
+        static int sMtrLed[4] = { -1, -1, -1, -1 };
+        if (modeMenu) {
+            for (int i = 0; i < 4; ++i) sMtrLed[i] = -1;   // repaint on release
+        } else {
+            const bool on[4] = { false, false,
+                                 g_uf1MeterFine.load(),
+                                 g_uf1PresetsMode.load() };
+            for (int i = 0; i < 4; ++i) {
+                const int want = on[i] ? 1 : 0;
+                if (want == sMtrLed[i] && !changed) continue;
+                sMtrLed[i] = want;
+                const uint8_t id = kUf1CsSoftKeyLedId[i];
+                g_uf1_dev->send(uf1::buildLed(id, true));                    // FF3B
+                if (i == 0) {
+                    // Key 1 is FF38-only — an FF39 to id 0x01 sticks the rectangle.
+                    g_uf1_dev->send(uf1::buildLedPrimary(id, on[i] ? 0xf0 : 0x11));
+                } else {
+                    g_uf1_dev->send(uf1::buildLedPrimary(id, on[i] ? 0xff : 0x11));
+                    g_uf1_dev->send(uf1::buildLedLevel(id,   on[i] ? 0x00 : 0x11));
+                }
             }
         }
     }
