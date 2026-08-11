@@ -24500,40 +24500,23 @@ void uf1PaintChannel_()
             p.insert(p.end(), lbl.begin(), lbl.end());
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChSoftKey, p));
         }
-        // …and the BACKDROP behind it (0x0000) as the key's state light. The SOFT
-        // key's headline job is Pin Set, which is a toggle you have to be able to
-        // see; the label text is the user's and must not be hijacked to show it
-        // (0de0dac), and the key has no LED of its own. So the backdrop carries
-        // the state: lit while the key's bound builtin reports ON. Generic on
-        // purpose — any stateful binding lights it, not just the pin.
-        // Values are SSL's own: the init parks it at {0x03,0x00}; 0x01 lights it
-        // (proven on hardware 2026-08-10 — send exactly what was proven).
-        {
-            const auto& sp = bdSoft.shortPress[0];
-            const bool lit = (sp.type == uf8::bindings::ActionType::Builtin)
-                          && uf8::bindings::builtinHasState(sp.action)
-                          && uf8::bindings::builtinStateOf(sp.action, sp.param);
-            static int sChSoftBg = -1;
-            const int want = lit ? 1 : 0;
-            if (changed || want != sChSoftBg) {
-                sChSoftBg = want;
-                // ★ TWO BYTES, both states. 0x0000 is a 2-byte word — the decode
-                // note says so ("2-byte backdrop … the init parks it at 03 00")
-                // and the channel LAYOUT burst opens with put(0x0000,{0x03,0x00})
-                // right before 0x000d / 0x0011 / 0x0100, i.e. it is part of the
-                // plane setup. Lighting it with a ONE-byte 0x01 tore that plane
-                // down: pinning the channel dropped the display to the bare MCU
-                // look — no colour bar, no GR LEDs — and it stayed there, because
-                // the layout burst only re-runs on a track / view / screen change
-                // and this block's own static then suppressed any further write
-                // (Frank 2026-08-11). Same value, correct width.
-                static const uint8_t kLit[2]  = { 0x01, 0x00 };
-                static const uint8_t kNorm[2] = { 0x03, 0x00 };
-                g_uf1_dev->send(lit
-                    ? uf1::buildScreen(uf1::scr::kChSoftKeyBg, kLit)
-                    : uf1::buildScreen(uf1::scr::kChSoftKeyBg, kNorm));
-            }
-        }
+        // ⛔ NOBODY LIGHTS 0x0000 FROM HERE. It used to carry the SOFT key's state
+        // (lit while its bound builtin reported ON, added 2026-08-10 because the
+        // key has no LED of its own). It cost the whole display: with Pin Focused
+        // on, the UF1 fell back to the bare MCU look — no colour bar, no GR meter —
+        // on EVERY track, whatever the Focus Scope said (Frank 2026-08-11).
+        // Both halves of that are mechanical. The pin builtins report plain
+        // g_tempSelsetActive with no scope check, so the light engaged even with
+        // the scope on UF8-only; and this block re-fires on `changed`, which
+        // includes tr != sTr, so the write repeated on every track change.
+        // 0x0000 is part of the PLANE SETUP — the channel layout burst opens with
+        // put(0x0000,{0x03,0x00}) right before 0x000d / 0x0011 / 0x0100. Writing
+        // it from a second place tore the plane down. Correcting the payload width
+        // to two bytes did NOT help (add7cb7, tested), so the second writer is gone
+        // rather than tuned: the layout burst is the only owner again.
+        // The key simply has no state indication, exactly as before 2026-08-10.
+        // If one is wanted later it must NOT be 0x0000 — and it needs a decode that
+        // survives a pinned channel across track changes, not a single probe.
     }
 
     // Solo-Active indication (0x0120) — the region under the firmware's
