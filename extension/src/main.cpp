@@ -24517,7 +24517,17 @@ void uf1PaintChannel_()
             const int want = lit ? 1 : 0;
             if (changed || want != sChSoftBg) {
                 sChSoftBg = want;
-                static const uint8_t kLit[1]  = { 0x01 };
+                // ★ TWO BYTES, both states. 0x0000 is a 2-byte word — the decode
+                // note says so ("2-byte backdrop … the init parks it at 03 00")
+                // and the channel LAYOUT burst opens with put(0x0000,{0x03,0x00})
+                // right before 0x000d / 0x0011 / 0x0100, i.e. it is part of the
+                // plane setup. Lighting it with a ONE-byte 0x01 tore that plane
+                // down: pinning the channel dropped the display to the bare MCU
+                // look — no colour bar, no GR LEDs — and it stayed there, because
+                // the layout burst only re-runs on a track / view / screen change
+                // and this block's own static then suppressed any further write
+                // (Frank 2026-08-11). Same value, correct width.
+                static const uint8_t kLit[2]  = { 0x01, 0x00 };
                 static const uint8_t kNorm[2] = { 0x03, 0x00 };
                 g_uf1_dev->send(lit
                     ? uf1::buildScreen(uf1::scr::kChSoftKeyBg, kLit)
