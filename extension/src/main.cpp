@@ -21412,6 +21412,51 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             g_uf1_dev->send(uf1::buildScreen(0x0122,
                 std::span<const uint8_t>(rta.data(), rta.size())));
         }
+
+        // ── The SELECTED BAND (the pale-blue column) ─────────────────────────
+        // 0x0124, ONE byte: 0 = no band selected, else ISO band index + 1. Read
+        // off cap108, where SlFreq was swept over the whole range: its two
+        // SETTLED plateaus are the proof — "5.0kHz" held 25 (ISO 24) and "200Hz"
+        // held 11 (ISO 10). The +1 is Param 51's own first enum value, "No Band
+        // Selected", carried onto the wire. (Mid-sweep frames disagree by a step
+        // or two; label and graphic are separate frames and the encoder outruns
+        // them, so only the plateaus can be read.)
+        //
+        // We never sent this address at all, so choosing a band moved the plug-in
+        // and nothing on the UF1 (Frank 2026-08-11: "SlFreq wird nicht angezeigt
+        // ... 2 hervorgehobene säule in hellblau").
+        {
+            static const double kIsoBands[31] = {
+                20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400,
+                500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000,
+                6300, 8000, 10000, 12500, 16000, 20000 };
+            uint8_t sel = 0;
+            MediaTrack* mtr = nullptr; int mfx = -1;
+            if (uf1PinnedMeterTrackFx_(mtr, mfx)) {
+                char buf[64] = {0};
+                // The label, not the normalised value: "630 Hz Band" / "5.0 kHz
+                // Band" / "No Band Selected". Parsing the plug-in's own text
+                // needs no assumption about how many enum steps it has.
+                if (TrackFX_GetFormattedParamValue(mtr, mfx, 51, buf, sizeof(buf))
+                    && buf[0] && !std::strstr(buf, "No Band")) {
+                    double hz = std::atof(buf);
+                    if (std::strstr(buf, "kHz")) hz *= 1000.0;
+                    if (hz > 0.0) {
+                        int best = 0;
+                        for (int i = 1; i < 31; ++i)
+                            if (std::fabs(kIsoBands[i] - hz) <
+                                std::fabs(kIsoBands[best] - hz)) best = i;
+                        sel = uint8_t(best + 1);
+                    }
+                }
+            }
+            static uint8_t sSel = 0xff;
+            if (force || sel != sSel) {
+                sSel = sel;
+                g_uf1_dev->send(uf1::buildScreen(0x0124,
+                    std::span<const uint8_t>(&sel, 1)));
+            }
+        }
     }
     else if (screen == 3) {
         // Loudness history LINE (0x0122 sub-frame 1, 250 cols, byte 0..180). RESOLVED by
