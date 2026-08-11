@@ -461,6 +461,11 @@ int g_forceView = -1;
 // writes every frame at ~25 Hz, which is the point — see the dump site.
 bool g_t10Dump = false;
 
+// Analogue-needle probe (REASIXTY_NDL_PROBE). One line per CHANGE of VuPpm /
+// TextVuPpm on the instance being read — see the probe site for what it settles.
+// It writes through slog, so it turns the trace on with it.
+bool g_ndlProbe = false;
+
 // 360SelectedView (= c5ea04de4990b792) = `view` as a double.
 //
 // Read the four identity frames in subscribeInitial() again: they are NOT
@@ -891,6 +896,35 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             }
                         }
                     }
+                    // ── NEEDLE PROBE (REASIXTY_NDL_PROBE / ExtState uf1_ndl_probe)
+                    // The one open question about the analogue needle: VuPpm(0) is
+                    // the value the plug-in's own needle rides — fast, and floored
+                    // at the FACEPLATE (-36 in VU, measured) — while TextVuPpm(1)
+                    // is the numeric readout, unclamped and floored at -139.2. The
+                    // needle renders TextVuPpm today, which is why its ballistic
+                    // does not match the plug-in (Frank 2026-08-11).
+                    //
+                    // Two things have to be measured, and this line has both:
+                    //   UNIT — in PPM mode, does VuPpm carry MARKS (silence floors
+                    //          at 0) or still VU dB (floors at -36)? Silence alone
+                    //          answers it; no signal needed.
+                    //   RATE — one line per CHANGE, so the line rate IS the update
+                    //          rate of each type. Nothing is logged while a value
+                    //          sits still, so silence costs nothing.
+                    // Deliberately not folded into the 2 s summary: at 2 s per
+                    // sample a ballistic cannot be seen at all.
+                    if (g_ndlProbe && sp == g_srcPort) {
+                        const Slot& s0 = inst.meter[int(sslmeter::DataType::VuPpm)];
+                        const Slot& s1 = inst.meter[int(sslmeter::DataType::TextVuPpm)];
+                        const float v0 = (s0.have && !s0.current.empty()) ? s0.current[0] : 0.f;
+                        const float v1 = (s1.have && !s1.current.empty()) ? s1.current[0] : 0.f;
+                        static float sV0 = 1e9f, sV1 = 1e9f;
+                        if (v0 != sV0 || v1 != sV1) {
+                            sV0 = v0; sV1 = v1;
+                            slog("[ndl] %.3f src=%u vuppm=%.2f textvuppm=%.2f", t,
+                                 unsigned(sp), double(v0), double(v1));
+                        }
+                    }
                     // Periodic summary: which DataTypes are live + a sample value.
                     // We ALREADY hold g_meterMx here (lk above) — std::mutex is
                     // NOT recursive, so re-locking self-deadlocks the worker
@@ -1269,8 +1303,10 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
 // ------------------------------------------------------------------- public
 bool start(uint16_t tcpPort, uint16_t dataPort) {
     if (g_running.load()) return true;
-    g_trace   = std::getenv("REASIXTY_SSLCORE_TRACE") != nullptr;
-    g_t10Dump = std::getenv("REASIXTY_T10_DUMP") != nullptr;
+    g_trace    = std::getenv("REASIXTY_SSLCORE_TRACE") != nullptr;
+    g_t10Dump  = std::getenv("REASIXTY_T10_DUMP") != nullptr;
+    g_ndlProbe = std::getenv("REASIXTY_NDL_PROBE") != nullptr;
+    if (g_ndlProbe) g_trace = true;   // the probe writes through the trace log
     if (const char* fv = std::getenv("REASIXTY_FORCE_VIEW")) {
         g_forceView = std::atoi(fv);
         g_view.store(g_forceView); g_viewDirty.store(true);

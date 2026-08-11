@@ -42275,6 +42275,18 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
                 setenv("REASIXTY_T10_DUMP", "1", 1);
 #endif
             }
+            // Analogue-needle probe — same bridge. One `[ndl]` line per CHANGE of
+            // VuPpm / TextVuPpm on the instance being read, which is the only way
+            // to see a ballistic (the 2 s summary cannot). Turns the trace on with
+            // it. OFF by default; a single run answers both the unit and the rate.
+            if (const char* dv = GetExtState("rea_sixty", "uf1_ndl_probe");
+                dv && *dv && strcmp(dv, "0")) {
+#if defined(_WIN32)
+                _putenv_s("REASIXTY_NDL_PROBE", "1");
+#else
+                setenv("REASIXTY_NDL_PROBE", "1", 1);
+#endif
+            }
             const bool ok = sslcore::start(uint16_t(tcpPort), uint16_t(dataPort));
             initLog(ok ? "step: SSL Core impersonator started"
                        : "step: SSL Core impersonator FAILED to start");
