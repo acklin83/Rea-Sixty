@@ -21219,31 +21219,34 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         static MediaTrack* sNdlTr  = nullptr;
         static Uf1PeakHold sNdlHold;
         if (ppmMode) {
-            // ★ The plug-in streams dB RELATIVE TO REF here — NOT marks. MEASURED
-            // twice: cap98 (a -30/-20/-10 dBFS tone reads -12.01/-2.01/8.0 against
-            // a -18 ref) and the 2026-08-11 needle probe in PPM mode (range -36 ..
-            // +6.09, silence resting at -36, which no mark scale does). So the
-            // conversion belongs HERE, not only in the fallback: until now the live
-            // path handed raw dB to uf1PpmByte_, which takes MARKS, and everything
-            // at or below the reference level came out as byte 0 — the needle lay
-            // on its bottom stop through normal programme and only kicked on peaks
-            // (Frank 2026-08-11: "nicht die gleiche Ballistik wie das Plugin").
-            // At the reference it should sit at mark 4, byte 91, mid-dial.
+            // ★ THE RULE, measured 2026-08-11 with a known signal: the plug-in
+            // streams the value FOR THE FACEPLATE IT IS DRAWING. In PPM mode that
+            // is PPM MARKS, ready to render — 1 kHz at the three IEC landmarks
+            // read 3.97 / 5.97 / 0.97 against a -18 dBFS reference, i.e. marks
+            // 4 / 6 / 1 to two decimals. (In VU mode the same field is VU dB, and
+            // it pegs at the VU dial's +3 — that clamp is the faceplate's end
+            // stop, not a property of the data. cap98 measured VU mode and its
+            // dB-relative numbers are right FOR VU.)
             //
-            // SOURCE is VuPpm(0), the value the plug-in's own needle rides — the
-            // probe settled the question the old comment left open. Both types
-            // carry the SAME numbers, but VuPpm changes 28.8×/s against
-            // TextVuPpm's 17.8×/s and TextVuPpm trails it by a frame: it is the
-            // numeric readout, refreshed slower on purpose. The +3 clamp that sent
-            // us to TextVuPpm in the first place is the VU FACEPLATE's end stop —
-            // in PPM mode VuPpm ran to +6.09, well past it, because the plug-in
-            // streams the value for the faceplate it is drawing.
-            // pk is the plug-in's own lagging needle (same unit).
-            constexpr float kPpmRefMark   = 4.0f;   // PPM 4 = the reference level
-            constexpr float kPpmDbPerMark = 4.0f;   // IEC 60268-10 Type II, cap94
-            auto markOf = [](float dbRel) {
-                return kPpmRefMark + dbRel / kPpmDbPerMark;
-            };
+            // It also carries the full IEC 60268-10 Type II BALLISTIC already:
+            // after the -10 dBFS tone the value fell 5.94 -> 0.07 in 2.5 s = 23.5
+            // dB in 2.5 s, against the standard's 24 dB in 2.8 s. So the needle is
+            // rendered, never shaped — synthesising a fallback here would fight
+            // the plug-in's own.
+            //
+            // ⚠ These values go to uf1PpmByte_ RAW. A dB->mark conversion was
+            // added here on 2026-08-11 (7689d98) on the strength of a probe run
+            // over MUSIC, where the resting value looked like a floor rather than
+            // a mark and the numbers fit the dB story; it squashed mark 4 to 5,
+            // mark 6 to 5.5 and mark 1 to 4.25, i.e. everything into mid-dial
+            // (Frank: "PPM zeigt nicht annähernd das, was im plugin gezeigt
+            // wird"). Reverted. Only the FALLBACK below converts, because there
+            // the input really is dBFS.
+            //
+            // SOURCE is VuPpm(0), not TextVuPpm(1): same numbers, but VuPpm is the
+            // live needle while TextVuPpm holds its peak — through the burst
+            // section VuPpm was already falling (5.00) while TextVuPpm still read
+            // 5.97. pk is the plug-in's own lagging needle (same unit).
             float mL, mR, mhL = 0.f, mhR = 0.f; bool havePpmHold = false;
             std::vector<float> c, k;
             const bool havePpm =
@@ -21251,23 +21254,24 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 sslcore::getMeter(int(sslmeter::DataType::VuPpm), c, k) &&
                 c.size() >= 2;
             if (havePpm) {
-                mL = markOf(std::isfinite(c[0]) ? c[0] : -36.f);
-                mR = markOf(std::isfinite(c[1]) ? c[1] : -36.f);
+                mL = std::isfinite(c[0]) ? c[0] : 0.f;
+                mR = std::isfinite(c[1]) ? c[1] : 0.f;
                 if (k.size() >= 2 && (std::isfinite(k[0]) || std::isfinite(k[1]))) {
-                    mhL = markOf(std::isfinite(k[0]) ? k[0] : -36.f);
-                    mhR = markOf(std::isfinite(k[1]) ? k[1] : -36.f);
+                    mhL = std::isfinite(k[0]) ? k[0] : 0.f;
+                    mhR = std::isfinite(k[1]) ? k[1] : 0.f;
                     havePpmHold = true;
                 }
             } else {
-                // Fallback (impersonator off / REAPER peaks): the same conversion
-                // off our own dBFS via the screen's Ref (param 9). One markOf, so
-                // the two paths cannot drift into different units again.
+                // Fallback (impersonator off / REAPER peaks): here the input IS
+                // dBFS, so it has to become marks — PPM 4.0 = Ref, 4.0 dB/mark
+                // (IEC 60268-10 Type II, cap94). Ref = param 9. This conversion
+                // belongs ONLY here; the live values above are already marks.
                 float refDb = -18.f;
                 MediaTrack* mtr = nullptr; int mfx = -1;
                 if (uf1PinnedMeterTrackFx_(mtr, mfx))
                     refDb = float(-36.0 + TrackFX_GetParamNormalized(mtr, mfx, 9) * 36.0);
-                mL = markOf(dbL - refDb);
-                mR = markOf(dbR - refDb);
+                mL = 4.f + (dbL - refDb) / 4.f;
+                mR = 4.f + (dbR - refDb) / 4.f;
             }
             if (force || tr != sNdlTr || sNdlPpm != ppmMode) {
                 sNdlTr = tr; sNdlPpm = ppmMode; sNdlHold.reset(mL, mR, now);
