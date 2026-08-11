@@ -4889,6 +4889,14 @@ const std::vector<const char*>& builtinCategoryOrder()
 // bit0 = UF8, bit1 = UC1, bit2 = UF1. Universal builtins → all three.
 uint8_t builtinDeviceMask(const std::string& n)
 {
+    // The UF1's four HARDWARE MODES are a UF1 property you set from ANYWHERE —
+    // that is the whole reason they were made bindable (2026-08-11: "these make
+    // each one bindable to any button on any surface"). The uf1_ prefix below
+    // would have scoped them to the UF1's own picker, where they are the one
+    // place you do NOT need them: MODE + soft-key already does it there. Frank
+    // went looking for "UF1 METER" on a UF8 top soft-key and found nothing.
+    // (The jog modes dodged this by accident — they are named jog_mode_*.)
+    if (n.rfind("uf1_view_", 0) == 0) return 0b111;
     if (n.rfind("uf1_", 0) == 0) return 0b100;   // UF1-only (uf1_flip/master/uf1_encoder_*/…)
     if (n.rfind("uf8_", 0) == 0) return 0b001;   // UF8-only (uf8_plugin_mode_*)
     if (n.rfind("uc1_", 0) == 0) return 0b010;   // UC1-only (uc1_outgain_fader_toggle)

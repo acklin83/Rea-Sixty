@@ -21503,6 +21503,30 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                     std::span<const uint8_t>(&sel, 1)));
             }
         }
+
+        // ── The dB AXIS LABELS ───────────────────────────────────────────────
+        // 0x012a, TWO bytes: [ |ScaleTop| , |ScaleBottom| ] in dB. Decoded from
+        // cap108's full SclTop/SclBtm sweep — 240 of 244 label changes agree
+        // (the four that don't are the label running a step ahead of the
+        // graphic mid-turn, the same artefact as 0x0124). cap108's note called
+        // this "peak/selected-band"; it is neither.
+        //
+        // Without it the bars restretched but the printed scale stayed at the
+        // firmware's 0 … -120 (Frank 2026-08-11: "die Werte sind noch die
+        // alten"). Everything else SSL sends during that sweep is the V-Pot
+        // label row — there is no separate axis-text element, which is why the
+        // numbers looked unreachable.
+        {
+            const uint8_t axis[2] = {
+                uint8_t(std::clamp(int(std::lround(-double(rtaTop))), 0, 255)),
+                uint8_t(std::clamp(int(std::lround(-double(rtaBot))), 0, 255)) };
+            static uint8_t sAxis[2] = { 0xff, 0xff };
+            if (force || axis[0] != sAxis[0] || axis[1] != sAxis[1]) {
+                sAxis[0] = axis[0]; sAxis[1] = axis[1];
+                g_uf1_dev->send(uf1::buildScreen(0x012a,
+                    std::span<const uint8_t>(axis, 2)));
+            }
+        }
     }
     else if (screen == 3) {
         // Loudness history LINE (0x0122 sub-frame 1, 250 cols, byte 0..180). RESOLVED by
