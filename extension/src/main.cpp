@@ -17883,6 +17883,52 @@ static void uf1SetJogField_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h,
         h[k] = (k < s.size()) ? static_cast<uint8_t>(s[k]) : 0;
 }
 
+// The live header row — the "REAPER | N/M | OFF" cell set, with N/M for whatever
+// view is up and the ENC / JOG mode overlaid in the "REAPER" cell.
+//
+// ★ ONE builder, because there are TWO senders: the cycle pacer restates it every
+// ~40 ms, and a one-shot fires it on `changed` so the mode field appears the
+// instant MODE or SCRUB goes down. They used to compute it separately and
+// DISAGREED in DAW mode — the pacer sent the soft-key BANK N/M, the one-shot sent
+// the strip PAGE N/M — so every MODE tap, track change or encoder detent made the
+// cell flip between the two answers 40 ms apart. That is the flicker Frank still
+// saw after 1511dc0 ("kurzer flicker ... bei ENC Text"): the earlier fix stopped
+// the LAYOUT from being re-established, but this cell had a second author.
+// Main-thread + pacer-thread read atomics only.
+static std::array<uint8_t, sizeof(kUf1PluginHeader)> uf1BuildLiveHeader_()
+{
+    const int subMode = g_uf1ChannelSubMode.load();
+    auto hdr = uf1PageHeader_(1, 1);
+    if (subMode == 2) {                // SENDS: send-window group N/M
+        hdr = uf1PageHeader_(g_uf1SendGroup.load() + 1,
+                             std::max(1, g_uf1SendGroupCount.load()));
+    } else if (subMode == 1) {         // DAW: soft-key BANK N/M
+        // Denominator = the REAL number of assigned soft-key banks, not the fixed
+        // 10/9 (Frank 2026-08-04). Do NOT store-clamp g_uf1SoftBank here: this runs
+        // every tick and fought the Settings bank slider, which drives it directly
+        // and must reach EMPTY banks to assign them ("springt zurück auf 1", Frank
+        // 2026-08-05). Clamp for DISPLAY only; the ◄ ► paging owns the live bank.
+        const int inUse = uf8::bindings::uf1SoftBankInUseCount();
+        const int cur   = g_uf1SoftBank.load();
+        hdr = uf1PageHeader_(cur + 1, std::max(inUse, cur + 1));
+    } else {                           // Plugin: SSL strip param-page N/M
+        hdr = uf1PageHeader_(g_uf1CsPage.load() + 1,
+                             std::max(1, g_uf1CsActivePages.load()));
+    }
+    // Mode overlay in the "REAPER" cell. Jog picker (Scrub held) wins; else the
+    // ENC rule (held MODE = picker, or a non-default encoder mode persists); else
+    // a non-default jog mode persists. Frank 2026-08-06.
+    const EncoderMode em  = g_uf1EncoderMode.load();
+    const Uf1JogMode  jgm = g_uf1JogMode.load();
+    if (g_uf1ScrubHeld.load())
+        uf1SetJogField_(hdr, jgm);
+    else if (g_uf1ModeMenu.load() || em != EncoderMode::ChSelect)
+        uf1SetEncoderField_(hdr, em);
+    else if (jgm != Uf1JogMode::Playhead)
+        uf1SetJogField_(hdr, jgm);
+    return hdr;
+}
+
 // ---- Overview cycle pacer ---------------------------------------------------
 // SSL emits the Overview cycle at a metronomic 40.8 ms (24.5 Hz) with at most
 // ~1 ms jitter and NEVER pauses. REAPER's ~33 ms timer cannot produce that
@@ -24215,41 +24261,10 @@ void uf1PaintChannel_()
             // shows its page "N/M" (like Sends); a static bank shows the live
             // soft-key BANK "N/10". Plugin mode = the SSL strip's param-page "N/M".
             const int subMode = g_uf1ChannelSubMode.load();
-            // Page header with the LIVE "N/M" cell for the current view.
-            auto hdr = uf1PageHeader_(1, 1);   // placeholder, set per-mode below
-            if (subMode == 2) {                // SENDS: send-window group N/M
-                hdr = uf1PageHeader_(g_uf1SendGroup.load() + 1,
-                                     std::max(1, g_uf1SendGroupCount.load()));
-            } else if (subMode == 1) {         // DAW: soft-key BANK N/M
-                // Denominator = the REAL number of assigned soft-key banks, not the
-                // fixed 10/9 (Frank 2026-08-04). Do NOT store-clamp g_uf1SoftBank
-                // here: this painter runs every tick and fought the Settings bank
-                // slider, which drives g_uf1SoftBank directly and must reach EMPTY
-                // banks to assign them ("springt zurück auf 1", Frank 2026-08-05).
-                // Clamp for DISPLAY only; the ◄ ► paging (uf1_page_step, nb=inUse)
-                // owns keeping the live bank in range and recovers a stale one on the
-                // next step. M grows to include a deliberately-picked higher bank so
-                // N never exceeds M (editing empty bank 3 reads 3/3, not 3/1).
-                const int inUse = uf8::bindings::uf1SoftBankInUseCount();
-                const int cur   = g_uf1SoftBank.load();
-                hdr = uf1PageHeader_(cur + 1, std::max(inUse, cur + 1));
-            } else {                           // Plugin: SSL strip param-page N/M
-                hdr = uf1PageHeader_(g_uf1CsPage.load() + 1,
-                                     std::max(1, g_uf1CsActivePages.load()));
-            }
-            // …then overlay the channel-encoder mode in the "REAPER" cell while MODE
-            // is held (picker) OR whenever the mode is non-default, so the picked mode
-            // stays visible after release. The pacer re-emits every tick. N/M is kept.
-            // Jog Mode shares this cell: Scrub-held (picker) → "JOG …" always wins;
-            // else the ENC rule; else a non-default jog mode persists (Frank 2026-08-06).
-            const EncoderMode em = g_uf1EncoderMode.load();
-            const Uf1JogMode  jgm = g_uf1JogMode.load();
-            if (g_uf1ScrubHeld.load())
-                uf1SetJogField_(hdr, jgm);
-            else if (g_uf1ModeMenu.load() || em != EncoderMode::ChSelect)
-                uf1SetEncoderField_(hdr, em);
-            else if (jgm != Uf1JogMode::Playhead)
-                uf1SetJogField_(hdr, jgm);
+            // Page header with the LIVE "N/M" cell + the ENC/JOG overlay. Shared
+            // builder — see uf1BuildLiveHeader_ for why this must not be a second
+            // copy of the rule.
+            auto hdr = uf1BuildLiveHeader_();
             parts->tail.push_back(uf1::buildScreen(uf1::scr::kHeaderRow,
                 std::span<const uint8_t>(hdr.data(), hdr.size())));
         }
@@ -24568,23 +24583,11 @@ void uf1PaintChannel_()
     // costs nothing visually — unlike the layout bursts, which is why the mode-field
     // edge was split off them.
     if (changed) {
-        // Sends mode shows the send-window group N/M; the live cycle header
-        // (above) re-streams it every tick, so this one-shot just avoids a
-        // wrong-N/M flash on the repaint that establishes the layout.
-        const int subMode = g_uf1ChannelSubMode.load();
-        auto hdr = (subMode == 2)
-            ? uf1PageHeader_(g_uf1SendGroup.load() + 1,
-                             std::max(1, g_uf1SendGroupCount.load()))
-            : uf1PageHeader_(g_uf1CsPage.load() + 1,
-                             std::max(1, g_uf1CsActivePages.load()));
-        const EncoderMode em = g_uf1EncoderMode.load();
-        const Uf1JogMode  jgm = g_uf1JogMode.load();
-        if (g_uf1ScrubHeld.load())                                   // Jog picker wins
-            uf1SetJogField_(hdr, jgm);
-        else if (g_uf1ModeMenu.load() || em != EncoderMode::ChSelect)
-            uf1SetEncoderField_(hdr, em);   // mode in the "REAPER" cell
-        else if (jgm != Uf1JogMode::Playhead)
-            uf1SetJogField_(hdr, jgm);
+        // Same builder as the pacer — this one-shot only exists so the mode field
+        // appears on the SAME tick the button goes down, instead of up to 40 ms
+        // later. Computing the header a second way here is what made the cell
+        // flicker in DAW mode (see uf1BuildLiveHeader_).
+        const auto hdr = uf1BuildLiveHeader_();
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow,
             std::span<const uint8_t>(hdr.data(), hdr.size())));
     }
@@ -24989,11 +24992,20 @@ void uf1PaintChannel_()
             const int ledState = keyHasColour
                 ? ((1 << 30) | (on ? (1 << 24) : 0) | static_cast<int>(scaled & 0xFFFFFF))
                 : (on ? 1 : 0);
-            // While the BC-GR meter owns these four LEDs, poison the cache
-            // instead of sending: the meter paints them later this same tick, so
-            // a send here is pure churn — and the poisoned entry is what makes
-            // every LED re-send the moment the meter hands them back.
-            if (grOwnsSk) { sSkLed[i] = INT_MIN; }
+            // While the BC-GR meter or the MODE menu owns these four LEDs, poison
+            // the cache instead of sending: they paint them later this same tick,
+            // so a send here is pure churn — and the poisoned entry is what makes
+            // every LED re-send the moment they hand them back.
+            //
+            // ⚠ `modeMenu` joined this on 2026-08-11. Pressing MODE flips
+            // grOwnsSk OFF (the BC meter stands down while the menu is up), which
+            // un-parked this block on the very tick the menu paints — so all four
+            // LEDs got the channel state and then the menu's, two frame sets apart
+            // in one tick. That is a visible flash, and key 1 shows it worst
+            // because it is FF38-only and swings 0xf0 <-> 0x11 (Frank: "kurzer
+            // flicker auf LED soft-key 1"). Same rule as the placeholder-then-real
+            // trap in [[uf1-mode-edge-must-not-relayout]]: ONE writer per tick.
+            if (grOwnsSk || modeMenu) { sSkLed[i] = INT_MIN; }
             else if (changed || ledState != sSkLed[i]) {
                 sSkLed[i] = ledState;
                 const uint8_t id = kUf1CsSoftKeyLedId[i];   // 0x01..0x04
