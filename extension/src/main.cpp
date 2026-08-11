@@ -21783,16 +21783,16 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         const bool   lfBell = ix[11]>=0 && TrackFX_GetParamNormalized(sFxTr,sFx,ix[11])>=0.5;
         // HP ('High Pass Filter'): value in Hz ("80"), or "OUT" when disengaged.
         double hpF = uf1ParamFmt_(sFxTr, sFx, ix[13], 20);
-        // LP ('Low Pass Filter'): value in kHz shown WITHOUT a unit ("15.0" = 15
-        // kHz, like the EQ bands LMF "1.00"/HMF "3.00"), so scale up. "OUT" →
-        // atof 0 → off via the clamp below. uf1ParamFmt_ would read "15.0" as 15
-        // Hz and the clamp would kill it (the 2026-06-18 "lopass macht nichts").
-        double lpF = 20000.0;
-        if (ix[12] >= 0) {
-            char lb[64];
-            if (TrackFX_GetFormattedParamValue(sFxTr, sFx, ix[12], lb, sizeof(lb)))
-                lpF = std::atof(lb) * 1000.0;
-        }
+        // LP ('Low Pass Filter'). The SSL CS shows this in kHz with NO unit ("15.0"
+        // = 15 kHz, like the EQ bands LMF "1.00"/HMF "3.00"), which is why this
+        // used to multiply the raw string by 1000 flat. That assumption is only
+        // true for SSL: a learned third-party strip reporting plain Hz ("8000")
+        // came out at 8 MHz, hit the safety rail below and was silently treated as
+        // "filter off" — the LP simply never drew (Frank 2026-08-11, TAM, "obwohl
+        // alles zugeordnet ist"). uf1ParamFreq_ is the helper that already decides
+        // this per value: a 'k'/'K' suffix scales, a bare number under 30 is kHz,
+        // anything else is Hz. "OUT" → atof 0 → off via the clamp below, as before.
+        double lpF = uf1ParamFreq_(sFxTr, sFx, ix[12], 20000.0);
         // HARD SAFETY: a wrong param grab or mis-scaled unit must NEVER slam the
         // whole graph (the 2026-06-18 regression). Outside the sane HPF/LPF freq
         // ranges, force the filter "off" (HPF≤21 / LPF≥19000 are the render rails).
