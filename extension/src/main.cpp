@@ -22438,6 +22438,26 @@ int uf1CsPageCountFor_(int type, MediaTrack* tr, int fx)
     return kUf1CsTypePageCount[type];
 }
 
+// First FX on the track the STRIP recogniser accepts — learned third-party CS/BC
+// included. uf1FindEqFx_, which this replaces as the last-resort fallback, scans
+// for SSL parameter NAMES ("HF Gain" / "HMF Gain"), so it is blind to a learned
+// plug-in carrying the vendor's own names: on a track holding [1: learned CS,
+// 2: 4K B] it returns 2, and the ENTIRE strip view — V-Pots, soft keys, CS-TYPE
+// cell and EQ graph — jumped to the 4K B (Frank 2026-08-11, after CS-switching
+// position 1 to a learned favourite). uf1CsPluginType_'s own comment predicted
+// exactly this: "the FindEq fallback grabs a real SSL strip on the same track".
+// A CS-Switch REPLACES the FX, so its GUID changes and the instance cursor
+// drops — which is precisely why a freshly switched strip lands in this branch.
+// Main-thread only (walks the FX chain).
+static int uf1FindStripFx_(MediaTrack* tr)
+{
+    if (!tr) return -1;
+    const int n = TrackFX_GetCount(tr);
+    for (int fx = 0; fx < n; ++fx)
+        if (uf1CsPluginType_(tr, fx) >= 0) return fx;
+    return -1;
+}
+
 // Resolve the SSL channel-strip FX the UF1 channel V-Pots + screen operate on,
 // and its p188 type. MUST match what uf1PaintEqGraph_ shows so the V-Pots drive
 // exactly the FX on screen (Frank: "welche Instanz auf UC1/UF8 aktiv ist muss
@@ -22469,7 +22489,10 @@ int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx)
               const int ty = tryFx(cand, candFx);
               if (ty >= 0) { outTr = cand; outFx = candFx; return ty; } } } }
     if (focusTr) {
-        const int fx = uf1FindEqFx_(focusTr);
+        // uf1FindStripFx_, NOT uf1FindEqFx_ — the latter is name-based and skips
+        // straight past a learned third-party strip to a real SSL one further
+        // down the chain (see the helper's comment).
+        const int fx = uf1FindStripFx_(focusTr);
         const int ty = tryFx(focusTr, fx);
         if (ty >= 0) { outTr = focusTr; outFx = fx; return ty; }
     }
