@@ -21513,13 +21513,15 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         "LMF Gain","LMF Freq","LMF Q","LF Freq","LF Gain","LF Type",
         "LPF","HPF","EQ In" };
 
-    // EQ source = the instance the SURFACE is currently working on, so the UF1
-    // EQ graph stays consistent with what UC1/UF8 show/control (Frank: "welche
-    // instanz auf uc1/uf8 aktiv ist muss zusammenpassen"). resolveActiveFx_() is
-    // the shared resolver — cursor from V-Pot/Encoder Instance-Cycle, then the
-    // focused-domain Instance. Fall back to the focused plug-in window, then to
-    // any EQ FX on the channel track. There are many 4K E instances; reading the
-    // selected track's first EQ (the old behaviour) picked the wrong one.
+    // EQ source = the instance the SURFACE is currently working on, ON THE PAINTED
+    // TRACK, so the UF1 EQ graph stays consistent with what UC1/UF8 show/control
+    // (Frank: "welche instanz auf uc1/uf8 aktiv ist muss zusammenpassen").
+    // resolveActiveFx_() is the shared resolver — cursor from V-Pot/Encoder
+    // Instance-Cycle, then the focused-domain Instance. Fall back to the focused
+    // plug-in window, then to any EQ FX on the channel track. There are many 4K E
+    // instances; reading the selected track's first EQ (the old behaviour) picked
+    // the wrong one. The branch order here is deliberately the SAME as
+    // uf1ResolveCsFx_'s — keep them in step, the two must resolve alike.
     auto fxHasEq = [](MediaTrack* t, int fx) -> bool {
         if (!t || fx < 0 || fx >= TrackFX_GetCount(t)) return false;
         // A learned CS that opted in (v15) counts even though none of its
@@ -21533,15 +21535,26 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
                 return true;
         return false;
     };
+    // ★ BOTH cursor branches are confined to the PAINTED track. uf1ResolveCsFx_ —
+    // which owns the V-Pots, the soft keys and the CS-TYPE cell — grew exactly this
+    // guard on 2026-07-30 ("Plugin mode FOLLOWS the UF1-focused track"), and this
+    // function, whose own doc comment says the two MUST agree, never got it. So the
+    // surface's active-FX cursor sitting on a NEIGHBOURING track drew that
+    // neighbour's curve while every other element on the screen addressed the
+    // focused track's strip (Frank 2026-08-11: "zeigt beim CS mit invertiertem
+    // EQ-In den Nachbar"). It was invisible until the EQ-In invert fix (5b641a7)
+    // made that strip draw at all — the graph was simply blank before.
+    // Within the focused track the cursor still picks the INSTANCE, which is the
+    // whole point of instance cycling; it just cannot leave the channel any more.
     MediaTrack* eqTr = nullptr; int eqFx = -1;
     { ActiveFxTarget a = resolveActiveFx_();
-      if (fxHasEq(a.tr, a.fxIdx)) { eqTr = a.tr; eqFx = a.fxIdx; } }
+      if (a.tr == tr && fxHasEq(a.tr, a.fxIdx)) { eqTr = a.tr; eqFx = a.fxIdx; } }
     if (!eqTr) {
         int trNum = -1, itemNum = -1, fxNum = -1;
         if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum > 0) {
             MediaTrack* cand = GetTrack(nullptr, trNum - 1);
             const int candFx = fxNum & 0x00FFFFFF;
-            if (fxHasEq(cand, candFx)) { eqTr = cand; eqFx = candFx; }
+            if (cand == tr && fxHasEq(cand, candFx)) { eqTr = cand; eqFx = candFx; }
         }
     }
     if (!eqTr) { eqTr = tr; eqFx = uf1FindEqFx_(tr); }
