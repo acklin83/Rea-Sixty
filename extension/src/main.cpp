@@ -13695,6 +13695,19 @@ MediaTrack* uf1FocusedTrack_()
             return members[static_cast<size_t>(idx)];
         }
     }
+    // DAW mode follows the SELECTION, never last-touched. The 4-track window is
+    // built from the selection (uf1DawWindowStart_), and its V-Pots write those
+    // tracks' volume with CSurf_OnVolumeChange — which makes the written track
+    // REAPER's LAST-TOUCHED. Reading last-touched below therefore dragged the whole
+    // UF1 strip onto whichever window track you had just nudged, motor fader and
+    // all: nudge V-Pot 3 and the fader jumped to that channel's level (Frank
+    // 2026-08-11, "der Fader soll nicht automatisch folgen" — with the 5-8 group it
+    // jumped four tracks away, which is the same mechanism further out).
+    // The window and the strip now share ONE anchor, which is the only way they can
+    // stay consistent. MASTER / Extender / Held-Track are decided above and are
+    // unaffected; Meter view keeps the normal follow (the sub-mode is stale there).
+    if (!g_uf1MeterView.load() && g_uf1ChannelSubMode.load() == 1)
+        return GetSelectedTrack(nullptr, 0);
     MediaTrack* tr = GetLastTouchedTrack();
     if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
     // Toggling MASTER off must return to the SELECTED channel. But driving the
