@@ -4610,6 +4610,17 @@ bool                    g_uf1RazorDragIsCopy = false;
 // crossfade OFF, so REAPER doesn't "drop" it + crossfade at every jog tick. Release = up.
 std::atomic<bool>       g_uf1RazorContentHeld{false};
 std::atomic<bool>       g_uf1RazorContentFresh{false};   // set on press → grab once
+// Item-jog drag gesture (Frank 2026-08-11): NAV-CENTRE held = "mouse down". While
+// it is down the jog just moves items; the RELEASE trims + crossfades once, like a
+// mouse drop. `Moved` distinguishes a drag from a plain click, so a click with no
+// jog still does what NAV-CENTRE always did (spotlight zoom).
+std::atomic<bool>       g_uf1JogItemsHeld{false};
+std::atomic<bool>       g_uf1JogItemsMoved{false};
+// Set by the input thread when a release ENDED A DRAG; drained by onTimer, which
+// owns the edit (REAPER item API is main-thread only). A explicit hand-off rather
+// than a falling edge on `Held`: the edge alone cannot tell a drag from a click,
+// and it would have trimmed on a plain NAV-CENTRE press.
+std::atomic<bool>       g_uf1JogItemsDrop{false};
 // Copy gesture (Ctrl + jog in Items): true once a duplicate has been made for the
 // CURRENT Ctrl hold, so a continuous Ctrl+jog clones ONCE then drags the copies.
 // Cleared when Ctrl releases (onTimer) or on a non-copy jog. Not persisted.
@@ -9086,9 +9097,13 @@ static double uf1DropXfadeLen_()
 // neighbours by the crossfade length and set the AUTO fades — a native crossfade IS the pair
 // of AUTO fades over the overlap. Each item's LIVE track is scanned, so a cross-track drop
 // trims/crossfades on the destination track. Move + copy alike. Main thread.
-static void uf1RazorContentCommitXfades_()
+// ★ Takes the dropped items as an argument so the ITEM jog can commit through the
+// exact same body (Frank 2026-08-11 asked for the razor's behaviour on plain item
+// moves). A second copy of this would drift — it is fiddly in three places at
+// once (clean cuts, the midpoint delete test, the geometric neighbour search).
+static void uf1CommitDropXfades_(const std::vector<MediaItem*>& src)
 {
-    if (g_uf1RazorCopyClones.empty()) return;
+    if (src.empty()) return;
     // Auto-crossfade + trim-behind must be OFF for OUR splits too. The drag's guard lives in
     // uf1RazorContentGesture_; this runs later (onTimer) with the pref already restored, so
     // REAPER was splitting WITH auto-crossfade and pushing the cut edges apart by the xfade
@@ -9097,12 +9112,11 @@ static void uf1RazorContentCommitXfades_()
     // log: middle slice came back as 5.99 instead of 6.00). Clean cuts here, fades set below.
     Uf1NoAutoEdit_ noEdit;
     const double X = uf1DropXfadeLen_();
-    std::unordered_set<MediaItem*> dropped(g_uf1RazorCopyClones.begin(),
-                                           g_uf1RazorCopyClones.end());
+    std::unordered_set<MediaItem*> dropped(src.begin(), src.end());
     // Snapshot the drops first — the edits below mutate the tracks' item lists.
     struct Drop { MediaItem* it; MediaTrack* tr; double s, e; };
     std::vector<Drop> drops;
-    for (MediaItem* d : g_uf1RazorCopyClones) {
+    for (MediaItem* d : src) {
         if (!ValidatePtr2(nullptr, d, "MediaItem*")) continue;
         MediaTrack* tr = GetMediaItem_Track(d);
         if (!tr) continue;
@@ -9185,8 +9199,40 @@ static void uf1RazorContentCommitXfades_()
             }
         }
     }
-    g_uf1RazorCopyClones.clear();                               // gesture done
     UpdateArrange();
+}
+
+// Razor content drop — the gesture's own item list, then clear it.
+static void uf1RazorContentCommitXfades_()
+{
+    uf1CommitDropXfades_(g_uf1RazorCopyClones);
+    g_uf1RazorCopyClones.clear();                               // gesture done
+}
+
+// ITEM-jog drop (Frank 2026-08-11). Same deal one mode over: NAV-CENTRE is held
+// for the drag, plain D_POSITION moves while it is down — nothing destructive, so
+// the move is free in both directions — and the release trims + crossfades ONCE.
+//
+// Why not cut on every detent and let the previous cut "grow back", which is what
+// Frank first sketched: every click would be destructive (20 clicks = 20 splits,
+// 20 undo steps), and growing a cut back needs the ORIGINAL item, which is gone
+// the moment we first trim. Keeping a shadow copy of it means not really cutting
+// — so cutting once, when the move is done, is the same answer without the
+// bookkeeping. It is also exactly what a mouse drag does.
+//
+// The SELECTION is read at release, not at press: Cmd-copy replaces the moved
+// items with fresh duplicates mid-gesture, and those are what ends up selected.
+static void uf1JogItemsCommitDrop_()
+{
+    std::vector<MediaItem*> sel;
+    const int n = CountSelectedMediaItems(nullptr);
+    sel.reserve(size_t(n < 0 ? 0 : n));
+    for (int i = 0; i < n; ++i)
+        if (MediaItem* it = GetSelectedMediaItem(nullptr, i)) sel.push_back(it);
+    if (sel.empty()) return;
+    Undo_BeginBlock2(nullptr);
+    uf1CommitDropXfades_(sel);
+    Undo_EndBlock2(nullptr, "Rea-Sixty: UF1 item drop (trim + crossfade)", -1);
 }
 
 // No razor present → create a VISIBLE (non-zero) area anchored at the edit cursor,
@@ -9325,6 +9371,14 @@ void uf1JogDispatch_(int count)
             const bool cross = uf8::bindings::modifierHeld(uf8::bindings::Modifier::Ctrl);
             if (copy) { if (!g_uf1JogCopyArmed.exchange(true)) uf1JogDuplicateSelectedItems_(); }
             else      { g_uf1JogCopyArmed.store(false); }
+            // Inside a NAV-CENTRE drag the move must stay non-destructive, so
+            // REAPER's own auto-crossfade/trim-behind stays off for the whole
+            // gesture and the release applies it once (uf1JogItemsCommitDrop_).
+            // Also marks the gesture as a DRAG, so the release commits instead of
+            // falling through to NAV-CENTRE's click action.
+            const bool dragging = g_uf1JogItemsHeld.load();
+            if (dragging) g_uf1JogItemsMoved.store(true);
+            Uf1NoAutoEdit_ noEdit;
             if (cross) applyUf1JogMoveItemsToTrack_(count);
             else       applyUf1JogMoveItemsDelta_(delta);
             break;
@@ -19438,6 +19492,21 @@ void onUf1Event(const uf1::InputEvent& ev)
                 }
                 g_pageDirty.store(true);
                 break;
+            }
+            // Items mode: the same held "mouse-down", so a move can be trimmed +
+            // crossfaded on release like a mouse drop (Frank 2026-08-11). NOT
+            // consumed on a plain click — if no jog happened while it was down,
+            // the release falls through to NAV-CENTRE's own job below, so the
+            // spotlight zoom is still there.
+            if (ev.id == uf1::btn::kNavCentre &&
+                g_uf1JogMode.load() == Uf1JogMode::Items) {
+                g_uf1JogItemsHeld.store(ev.pressed);
+                if (ev.pressed) { g_uf1JogItemsMoved.store(false); break; }
+                if (g_uf1JogItemsMoved.exchange(false)) {
+                    g_uf1JogItemsDrop.store(true);               // → onTimer commits
+                    break;
+                }
+                // else: a click, not a drag — let the binding handle it.
             }
             // MODE-hold menu open: the 4 display soft-keys pick the mode (before
             // the Meter-Screen-Selector / channel soft-key blocks so it wins in
@@ -31284,6 +31353,10 @@ void onTimer()
         if (s_prevRazorHeld && !held) uf1RazorContentCommitXfades_();
         s_prevRazorHeld = held;
     }
+
+    // Item-jog DROP. The input thread raises this only when a release actually
+    // ended a drag, so it fires once per gesture and never for a plain click.
+    if (g_uf1JogItemsDrop.exchange(false)) uf1JogItemsCommitDrop_();
 
     // Jog Items copy latch: disarm as soon as Cmd (the copy modifier) is released, so
     // releasing Cmd WITHOUT turning the jog (then re-pressing) makes a fresh copy on the
