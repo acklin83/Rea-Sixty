@@ -34568,6 +34568,31 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     return false;
 }
 
+// ---- Toggle state for our REAPER actions -----------------------------------
+// REAPER asks this for every action it draws a check-mark for, and — the reason
+// it exists here — `bindingHasActiveSlot_` asks GetToggleCommandState2 for any
+// REAPER action bound to a surface button. Without the hook that call returns
+// -1 ("no state"), the binding reports INACTIVE, and the LED stays dark however
+// the mode is set. Frank 2026-08-11: MODE fired and the display followed, but a
+// button bound to _REASIXTY_UF1_MODE_METER never lit — he had bound the ACTION,
+// not the uf1_view_meter builtin, and only the builtin had a stateOf.
+//
+// Return 1 = on, 0 = off, -1 = not a stateful action of ours (REAPER then treats
+// it as a plain one-shot, which is right for CS-Switch, FX-move and friends).
+// Reads atomics only — REAPER calls this from the main thread, but keep it that
+// way so it can never touch the FX API ([[feedback-reaper-api-input-thread]]).
+int toggleActionState(int command)
+{
+    if (command <= 0) return -1;
+    for (int i = 0; i < kUf1ViewActionCount; ++i)
+        if (command == g_cmdUf1View[i] && command != 0)
+            return uf1ViewMode_() == kUf1ViewActions[i].view ? 1 : 0;
+    for (int i = 0; i < kUf1EncActionCount; ++i)
+        if (command == g_cmdUf1Enc[i] && command != 0)
+            return g_uf1EncoderMode.load() == kUf1EncActions[i].mode ? 1 : 0;
+    return -1;
+}
+
 } // anonymous
 
 // ---- Solo/Mute button modifier modes (external linkage) ---------------
@@ -42282,6 +42307,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdFxMoveUp    = plugin_register("custom_action", &g_actionFxMoveUp);
     g_cmdFxMoveDown  = plugin_register("custom_action", &g_actionFxMoveDown);
     plugin_register("hookcommand2", reinterpret_cast<void*>(hookCommand2));
+    // …and the state half of it: without this, a REAPER action of ours bound to a
+    // surface button can never light its LED, because bindingHasActiveSlot_ asks
+    // GetToggleCommandState2 and gets "no state" (see toggleActionState).
+    plugin_register("toggleaction", reinterpret_cast<void*>(toggleActionState));
     // Temp Selection Set persistence — official SDK pattern. REAPER
     // calls SaveExtensionConfig during Cmd+S to emit our state into
     // the .rpp, and ProcessExtensionLine to feed it back on next load.
