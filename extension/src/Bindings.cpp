@@ -839,10 +839,11 @@ void seedFactoryDefaults_(Config& c)
     //                          incl. the double-click Fine latch).
     //  · ENC push→ show_focused_plugin_gui (toggle the focused plug-in GUI).
     //  · FLIP    → uf1_flip / MASTER → uf1_master (Toggle; LED = state).
-    //  · 5-8     → uf1_five_to_eight (DAW bank/group · Sends window).
+    //  · 5-8     → uf1_five_to_eight (DAW channel group 1-4/5-8 · Sends window).
     //  · V-Pot 1-4 push → uf1_vpot_reset (param 0..3 = which V-Pot).
     //  · Bank ◄ ►→ uf1_bank_step  (param -1/+1 = ±8 tracks).
-    //  · Page ◄ ►→ uf1_page_step  (param -1/+1 = soft-key / plug-in page).
+    //  · Page ◄ ►→ uf1_page_step  (param -1/+1 = soft-key bank / plug-in page;
+    //                          held MODE + arrow pages INSIDE a dynamic bank).
     L1[ButtonId::Uf1Shift]       = mkBuiltin("mod_shift",              Behavior::Hold,      "SHIFT");
     L1[ButtonId::Uf1ChannelPush] = mkBuiltin("show_focused_plugin_gui", Behavior::Momentary, "ENC PUSH");
     // …plus a LONG-PRESS on the channel encoder → back to Channel Select

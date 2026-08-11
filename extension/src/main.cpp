@@ -39521,29 +39521,29 @@ void registerBindingHandlers()
         nullptr, "UF1 Mode: cycle", false
     });
 
-    // "5-8" (0x22) — DAW mode: page the dynamic soft-key bank (if one is
-    // active) else toggle the 4-track group; Sends mode: page the send
-    // window. Gated on the channel sub-mode exactly as the two removed
-    // hardcoded blocks. Atomic stores + a config-mutex read
-    // (getUf1SoftBankDynamic) only → worker-safe.
+    // "5-8" (0x22) — DAW mode: toggle the 4-track group, ALWAYS; Sends mode:
+    // page the send window. Gated on the channel sub-mode exactly as the two
+    // removed hardcoded blocks. Atomic stores only → worker-safe.
+    //
+    // ★ It used to page the dynamic soft-key bank INSTEAD whenever one was
+    // active, deciding in code which of the two jobs the key had. That made the
+    // channel group — the one thing the key is labelled for — unreachable for as
+    // long as a dynamic bank was up (Frank 2026-08-11). The group is the native
+    // SSL meaning and now always wins; the dynamic bank's pages moved to
+    // MODE + ◄ ► (see uf1_page_step), which is the same held-MODE gesture that
+    // already picks the view and the encoder mode.
     registerBuiltin("uf1_five_to_eight", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing || g_uf1MeterView.load()) return;
             const int sub = g_uf1ChannelSubMode.load();
             if (sub == 1) {
-                if (uf8::bindings::getUf1SoftBankDynamic(g_uf1SoftBank.load())
-                    != uf8::bindings::DynamicBankKind::None) {
-                    const int cnt = std::max(1, g_uf1DynBankPageCount.load());
-                    g_uf1DynBankPage.store((g_uf1DynBankPage.load() + 1) % cnt);
-                } else {
-                    g_uf1DawGroup.store(g_uf1DawGroup.load() ? 0 : 1);
-                }
+                g_uf1DawGroup.store(g_uf1DawGroup.load() ? 0 : 1);
             } else if (sub == 2) {
                 const int cnt = std::max(1, g_uf1SendGroupCount.load());
                 g_uf1SendGroup.store((g_uf1SendGroup.load() + 1) % cnt);
             }
         },
-        nullptr, "UF1: 5-8 bank / group", false
+        nullptr, "UF1: 5-8 channel group / send window", false
     });
 
     // Bank ◄ / ► (0x21 / 0x23) — coarse track select, ±8 tracks. param
@@ -39576,6 +39576,22 @@ void registerBindingHandlers()
             }
             const int dir = right ? 1 : -1;
             if (g_uf1ChannelSubMode.load() == 1) {
+                // MODE + ◄ ► = page WITHIN the active dynamic bank (Frank
+                // 2026-08-11). The plain arrows keep their job — soft-key bank
+                // prev/next — so the two paging levels are two gestures on one
+                // key pair instead of two jobs fighting over "5-8". Falls back
+                // to the bank step when the bank is static or single-page, so
+                // the combination is never a dead press.
+                if (g_uf1ModeMenu.load()) {
+                    const int cnt = std::max(1, g_uf1DynBankPageCount.load());
+                    if (cnt > 1 &&
+                        uf8::bindings::getUf1SoftBankDynamic(g_uf1SoftBank.load())
+                            != uf8::bindings::DynamicBankKind::None) {
+                        g_uf1DynBankPage.store(
+                            (g_uf1DynBankPage.load() + (dir > 0 ? 1 : cnt - 1)) % cnt);
+                        return;
+                    }
+                }
                 // Page only through the REALLY-ASSIGNED soft-key banks, so ◄ ►
                 // can't step onto empty banks (Frank 2026-08-04). Min 1.
                 const int nb = std::max(1, uf8::bindings::uf1SoftBankInUseCount());
@@ -39587,7 +39603,7 @@ void registerBindingHandlers()
                                    + (dir > 0 ? 1 : np - 1)) % np);
             }
         },
-        nullptr, "Soft-Key / Plug-in Page \xC2\xB1""1", true
+        nullptr, "Soft-Key Bank / Plug-in Page \xC2\xB1""1 (+MODE: bank page)", true
     });
 
     registerBuiltin("tcp_follows_selection_toggle", DescBuilder{
