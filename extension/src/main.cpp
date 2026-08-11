@@ -21208,38 +21208,55 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         static MediaTrack* sNdlTr  = nullptr;
         static Uf1PeakHold sNdlHold;
         if (ppmMode) {
-            // PPM MARKS: the plug-in's OWN readout carries them. VuPpm(0) is
-            // CLAMPED to the VU faceplate's +3 end stop (see main.cpp:16871) and
-            // does NOT carry marks, so read TextVuPpm(1) — the un-clamped value
-            // cap94's mark→byte table was built against (0x011c field0). cur =
-            // live mark, pk = the plug-in's own lagging needle. Do NOT synthesise
-            // a PPM ballistic — plug-in computes, we render (§5 of the audit).
-            // ⚠ SOURCE is the one live-probe open item (needsHwCapture): if a
-            // probe shows VuPpm(0) itself carries marks in PPM mode, swap to it.
+            // ★ The plug-in streams dB RELATIVE TO REF here — NOT marks. MEASURED
+            // twice: cap98 (a -30/-20/-10 dBFS tone reads -12.01/-2.01/8.0 against
+            // a -18 ref) and the 2026-08-11 needle probe in PPM mode (range -36 ..
+            // +6.09, silence resting at -36, which no mark scale does). So the
+            // conversion belongs HERE, not only in the fallback: until now the live
+            // path handed raw dB to uf1PpmByte_, which takes MARKS, and everything
+            // at or below the reference level came out as byte 0 — the needle lay
+            // on its bottom stop through normal programme and only kicked on peaks
+            // (Frank 2026-08-11: "nicht die gleiche Ballistik wie das Plugin").
+            // At the reference it should sit at mark 4, byte 91, mid-dial.
+            //
+            // SOURCE is VuPpm(0), the value the plug-in's own needle rides — the
+            // probe settled the question the old comment left open. Both types
+            // carry the SAME numbers, but VuPpm changes 28.8×/s against
+            // TextVuPpm's 17.8×/s and TextVuPpm trails it by a frame: it is the
+            // numeric readout, refreshed slower on purpose. The +3 clamp that sent
+            // us to TextVuPpm in the first place is the VU FACEPLATE's end stop —
+            // in PPM mode VuPpm ran to +6.09, well past it, because the plug-in
+            // streams the value for the faceplate it is drawing.
+            // pk is the plug-in's own lagging needle (same unit).
+            constexpr float kPpmRefMark   = 4.0f;   // PPM 4 = the reference level
+            constexpr float kPpmDbPerMark = 4.0f;   // IEC 60268-10 Type II, cap94
+            auto markOf = [](float dbRel) {
+                return kPpmRefMark + dbRel / kPpmDbPerMark;
+            };
             float mL, mR, mhL = 0.f, mhR = 0.f; bool havePpmHold = false;
             std::vector<float> c, k;
             const bool havePpm =
                 sslcore::isRunning() &&
-                sslcore::getMeter(int(sslmeter::DataType::TextVuPpm), c, k) &&
+                sslcore::getMeter(int(sslmeter::DataType::VuPpm), c, k) &&
                 c.size() >= 2;
             if (havePpm) {
-                mL = std::isfinite(c[0]) ? c[0] : 0.f;
-                mR = std::isfinite(c[1]) ? c[1] : 0.f;
+                mL = markOf(std::isfinite(c[0]) ? c[0] : -36.f);
+                mR = markOf(std::isfinite(c[1]) ? c[1] : -36.f);
                 if (k.size() >= 2 && (std::isfinite(k[0]) || std::isfinite(k[1]))) {
-                    mhL = std::isfinite(k[0]) ? k[0] : 0.f;
-                    mhR = std::isfinite(k[1]) ? k[1] : 0.f;
+                    mhL = markOf(std::isfinite(k[0]) ? k[0] : -36.f);
+                    mhR = markOf(std::isfinite(k[1]) ? k[1] : -36.f);
                     havePpmHold = true;
                 }
             } else {
-                // Fallback (impersonator off / REAPER peaks): mark from dBFS via
-                // the screen's Ref. PPM 4.0 = Ref dBFS, 4.0 dB/mark (IEC 60268-10
-                // Type II, cap94). Ref = param 9. Mirrors the VU fallback above.
+                // Fallback (impersonator off / REAPER peaks): the same conversion
+                // off our own dBFS via the screen's Ref (param 9). One markOf, so
+                // the two paths cannot drift into different units again.
                 float refDb = -18.f;
                 MediaTrack* mtr = nullptr; int mfx = -1;
                 if (uf1PinnedMeterTrackFx_(mtr, mfx))
                     refDb = float(-36.0 + TrackFX_GetParamNormalized(mtr, mfx, 9) * 36.0);
-                mL = 4.f + (dbL - refDb) / 4.f;
-                mR = 4.f + (dbR - refDb) / 4.f;
+                mL = markOf(dbL - refDb);
+                mR = markOf(dbR - refDb);
             }
             if (force || tr != sNdlTr || sNdlPpm != ppmMode) {
                 sNdlTr = tr; sNdlPpm = ppmMode; sNdlHold.reset(mL, mR, now);
