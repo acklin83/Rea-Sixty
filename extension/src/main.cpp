@@ -21535,6 +21535,33 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             const uint8_t* csf0 = (ri == 0) ? kLoudR0Sf0 : (ri == 1) ? kLoudR1Sf0 : kLoudR2Sf0;
             const uint8_t* csf2 = (ri == 0) ? kLoudR0Sf2 : (ri == 1) ? kLoudR1Sf2 : kLoudR2Sf2;
             const uint8_t* csf3 = (ri == 0) ? kLoudR0Sf3 : (ri == 1) ? kLoudR1Sf3 : kLoudR2Sf3;
+            // ── The two LEVEL BARS live inside sf0, and sf0 was pure chrome ──
+            // sf0 is the "axis" sub-frame, and it also carries the two vertical
+            // bars: idx 26 = MOMENTARY (DataType 11), idx 27 = SHORT-TERM (12).
+            // Sending the captured snapshot verbatim froze them at that capture's
+            // IDLE values (R0 33/48, R1 0/0, R2 15/15), so they never moved
+            // (Frank 2026-07-29 "zeigt nichts", again 2026-08-11 "Loudness balken
+            // ... überhaupt nicht so wie plugin").
+            //
+            // Decoded from cap120/121/122: idx27 fits the Short-Term readout to
+            // <0.6 byte across all three Scale Ranges, with the SAME
+            // target-relative law as the history line; idx26 has the same slope
+            // but leads it at transitions, i.e. the faster Momentary ballistic.
+            // This was built and deployed on 2026-07-29 and never committed — it
+            // was in the handoff as "awaiting HW verify (NOT yet committed)" and
+            // went with the next build.
+            std::array<uint8_t, 251> sf0{};
+            for (int i = 0; i < 251; ++i) sf0[size_t(i)] = csf0[i];
+            auto valByte = [&](int dataType) -> uint8_t {
+                std::vector<float> c, p;
+                if (!sslcore::getMeter(dataType, c, p) || c.empty()) return 0;
+                const float lufs = c[0];
+                if (!std::isfinite(lufs) || lufs <= -99.f || lufs >= 60.f) return 0;
+                const double y = (double(lufs) - target - rb) * 180.0 / span;
+                return uint8_t(std::clamp(int(std::llround(y)), 0, 180));
+            };
+            sf0[26] = valByte(int(sslmeter::DataType::LoudMomentary));
+            sf0[27] = valByte(int(sslmeter::DataType::LoudShortTerm));
             std::array<uint8_t, 251> sf2{};
             for (int i = 0; i < 251; ++i) sf2[size_t(i)] = csf2[i];  // selector + tail chrome
             // sf2 byte c (1..64) -> phys col 248+c -> age 64-c  (sf2[1]=age63==sf1[250],
@@ -21543,10 +21570,13 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 sf2[size_t(c)] = colByte(64 - c);
             static std::array<uint8_t, 251> sLoudSf{};
             static std::array<uint8_t, 251> sLoudSf2{};
+            static std::array<uint8_t, 251> sLoudSf0{};
             static int sLoudRi = -1;
-            if (force || sf != sLoudSf || sf2 != sLoudSf2 || ri != sLoudRi) {
-                sLoudSf = sf; sLoudSf2 = sf2; sLoudRi = ri;
-                g_uf1_dev->send(uf1::buildScreen(0x0122, std::span<const uint8_t>(csf0, 251)));
+            if (force || sf != sLoudSf || sf2 != sLoudSf2 || sf0 != sLoudSf0 ||
+                ri != sLoudRi) {
+                sLoudSf = sf; sLoudSf2 = sf2; sLoudSf0 = sf0; sLoudRi = ri;
+                g_uf1_dev->send(uf1::buildScreen(0x0122,
+                    std::span<const uint8_t>(sf0.data(), sf0.size())));
                 g_uf1_dev->send(uf1::buildScreen(0x0122,
                     std::span<const uint8_t>(sf.data(), sf.size())));
                 g_uf1_dev->send(uf1::buildScreen(0x0122,
