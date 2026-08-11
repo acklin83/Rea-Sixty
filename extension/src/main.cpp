@@ -21736,7 +21736,20 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     // Falls through to the parametric render whenever the strip is not an SSL
     // 360 plug-in, is not streaming, or the impersonator is off — so nothing
     // that worked before can stop working.
-    if (eqOn && sslcore::isRunning() && sFxTr && sFx >= 0) {
+    // ⛔ NATIVE SSL STRIPS ONLY. The impersonator resolves a stream by
+    // settings → model → ORDINAL among the strips streaming on this TRACK. A
+    // learned third-party strip streams nothing, so the first two rungs miss and
+    // the ORDINAL rung hands back whatever SSL strip happens to share the track —
+    // the graph then drew that strip's curve under the learned strip's name (Frank
+    // 2026-08-11: UF1 on TAM, curve coming from the 4K B; looked like "only native
+    // SSL gets a graph"). A user-owned map has its own parameters and renders
+    // parametrically below, which is where it belongs. Same discriminator
+    // uf1CsPluginType_ uses, for the same reason: lookupPluginMapByName also
+    // returns user maps, so `pm != nullptr` is NOT proof of a built-in SSL strip.
+    bool userOwnedStrip = false;
+    if (!sIdent.empty())
+        userOwnedStrip = uf8::user_plugins::lookupOwnedByName(sIdent.c_str()) != nullptr;
+    if (eqOn && !userOwnedStrip && sslcore::isRunning() && sFxTr && sFx >= 0) {
         const int trackIdx =
             static_cast<int>(GetMediaTrackInfo_Value(sFxTr, "IP_TRACKNUMBER"));
         const char* fpId[12]; double fpVal[12];
