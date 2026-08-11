@@ -21513,15 +21513,16 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         "LMF Gain","LMF Freq","LMF Q","LF Freq","LF Gain","LF Type",
         "LPF","HPF","EQ In" };
 
-    // EQ source = the instance the SURFACE is currently working on, ON THE PAINTED
-    // TRACK, so the UF1 EQ graph stays consistent with what UC1/UF8 show/control
-    // (Frank: "welche instanz auf uc1/uf8 aktiv ist muss zusammenpassen").
-    // resolveActiveFx_() is the shared resolver — cursor from V-Pot/Encoder
-    // Instance-Cycle, then the focused-domain Instance. Fall back to the focused
-    // plug-in window, then to any EQ FX on the channel track. There are many 4K E
-    // instances; reading the selected track's first EQ (the old behaviour) picked
-    // the wrong one. The branch order here is deliberately the SAME as
-    // uf1ResolveCsFx_'s — keep them in step, the two must resolve alike.
+    // EQ source = THE STRIP THE UF1 IS SHOWING, so the graph and the controls can
+    // never disagree (Frank: "welche instanz auf uc1/uf8 aktiv ist muss
+    // zusammenpassen"). That question already has exactly one owner —
+    // uf1ResolveCsFx_ — and this function now asks it instead of keeping a second,
+    // drifting copy of the same logic. Its own chain (cursor → focused plug-in
+    // window → any EQ on the track) survives only for the case where NO strip
+    // resolves, i.e. where the V-Pots have nothing to drive either, so a plain
+    // third-party EQ still gets a graph. There are many 4K E instances; reading
+    // the selected track's first EQ (the behaviour before all this) picked the
+    // wrong one.
     auto fxHasEq = [](MediaTrack* t, int fx) -> bool {
         if (!t || fx < 0 || fx >= TrackFX_GetCount(t)) return false;
         // A learned CS that opted in (v15) counts even though none of its
@@ -21535,38 +21536,49 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
                 return true;
         return false;
     };
-    // ★ BOTH cursor branches are confined to the PAINTED track. uf1ResolveCsFx_ —
-    // which owns the V-Pots, the soft keys and the CS-TYPE cell — grew exactly this
-    // guard on 2026-07-30 ("Plugin mode FOLLOWS the UF1-focused track"), and this
-    // function, whose own doc comment says the two MUST agree, never got it. So the
-    // surface's active-FX cursor sitting on a NEIGHBOURING track drew that
-    // neighbour's curve while every other element on the screen addressed the
-    // focused track's strip (Frank 2026-08-11: "zeigt beim CS mit invertiertem
-    // EQ-In den Nachbar"). It was invisible until the EQ-In invert fix (5b641a7)
-    // made that strip draw at all — the graph was simply blank before.
-    // Within the focused track the cursor still picks the INSTANCE, which is the
-    // whole point of instance cycling; it just cannot leave the channel any more.
+    // ★ THE STRIP ON SCREEN DECIDES. uf1ResolveCsFx_ is the answer to "which strip
+    // is the UF1 showing" — it owns the V-Pots, the soft keys and the CS-TYPE cell,
+    // and it covers learned CS/BC and UF1-only maps, not just the built-in SSL
+    // types. This function used to run its OWN chain, which had drifted: it never
+    // got the `== focusTr` guard uf1ResolveCsFx_ grew on 2026-07-30, so the
+    // surface's active-FX cursor parked on a NEIGHBOURING channel drew that
+    // neighbour's curve while everything else on screen addressed the focused
+    // track (Frank 2026-08-11). Invisible until the EQ-In invert fix made that
+    // strip draw at all. Asking the one resolver removes the drift by
+    // construction instead of duplicating its guards — keep it that way.
     MediaTrack* eqTr = nullptr; int eqFx = -1;
-    { ActiveFxTarget a = resolveActiveFx_();
-      if (a.tr == tr && fxHasEq(a.tr, a.fxIdx)) { eqTr = a.tr; eqFx = a.fxIdx; } }
-    if (!eqTr) {
-        int trNum = -1, itemNum = -1, fxNum = -1;
-        if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum > 0) {
-            MediaTrack* cand = GetTrack(nullptr, trNum - 1);
-            const int candFx = fxNum & 0x00FFFFFF;
-            if (cand == tr && fxHasEq(cand, candFx)) { eqTr = cand; eqFx = candFx; }
+    MediaTrack* csTr = nullptr; int csFx = -1;
+    const bool stripOnScreen = (uf1ResolveCsFx_(tr, csTr, csFx) >= 0
+                                && csTr && csFx >= 0);
+    if (stripOnScreen) {
+        // The strip on screen, and ONLY it. A strip without an EQ (a Bus
+        // Compressor) leaves the graph blank rather than borrowing some other
+        // plug-in's curve — a graph the V-Pots don't drive is the whole bug.
+        if (fxHasEq(csTr, csFx)) { eqTr = csTr; eqFx = csFx; }
+    } else {
+        // No strip on screen → the V-Pots have nothing either, so the broader
+        // search is free to run and a plain third-party EQ still draws. Confined
+        // to the painted track, in uf1ResolveCsFx_'s own branch order.
+        { ActiveFxTarget a = resolveActiveFx_();
+          if (a.tr == tr && fxHasEq(a.tr, a.fxIdx)) { eqTr = a.tr; eqFx = a.fxIdx; } }
+        if (!eqTr) {
+            int trNum = -1, itemNum = -1, fxNum = -1;
+            if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum > 0) {
+                MediaTrack* cand = GetTrack(nullptr, trNum - 1);
+                const int candFx = fxNum & 0x00FFFFFF;
+                if (cand == tr && fxHasEq(cand, candFx)) { eqTr = cand; eqFx = candFx; }
+            }
         }
+        if (!eqTr) { eqTr = tr; eqFx = uf1FindEqFx_(tr); }
     }
-    if (!eqTr) { eqTr = tr; eqFx = uf1FindEqFx_(tr); }
 
-    // Which instance the graph LANDED on, and what each candidate offered — the
-    // three sources disagree silently, and "one instance never draws" looks the
-    // same from outside whichever one won (Frank 2026-08-10: a 4K E in slot 1 of
-    // track 1 whose graph never appears, every other instance fine). The prime
-    // suspect is the per-track instance CURSOR (g_stripInstanceFxGuid, keyed by
-    // track GUID and persistent): once you have cycled instances on a track it
-    // outranks everything below it, so the graph follows the cursor and not the
-    // strip you are looking at. Logged on change only.
+    // Which instance the graph LANDED on, and what each candidate offered.
+    // `stripFx` is now the deciding one — if eqFx ever differs from it while a
+    // strip IS on screen, the graph and the V-Pots have drifted apart again and
+    // this line says so on the spot (that drift is what drew a neighbouring
+    // channel's curve for months, 2026-08-11). `cursor` / `activeFx` stay in the
+    // line because they are what the fallback branch uses when no strip resolves.
+    // Logged on change only.
     //   Enable: ExtState rea_sixty/uf1_trace = 1  →  reaper_uf1_input.log
     if (g_uf1Trace && (sFxTr != eqTr || sFx != eqFx)) {
         if (FILE* lg = std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a")) {
@@ -21575,11 +21587,14 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
             const int cursor = stripInstanceFxRaw_(tr);
             const ActiveFxTarget a = resolveActiveFx_();
             std::fprintf(lg,
-                "EQ-SRC paintTrack=%d -> eqTrack=%d eqFx=%d '%s' | cursor(raw)=%d "
-                "activeFx={tr=%d,fx=%d} | fallbackFindEq=%d\n",
+                "EQ-SRC paintTrack=%d -> eqTrack=%d eqFx=%d '%s' | stripOnScreen=%d "
+                "stripTrack=%d stripFx=%d | cursor(raw)=%d activeFx={tr=%d,fx=%d} "
+                "| fallbackFindEq=%d\n",
                 tr   ? int(GetMediaTrackInfo_Value(tr,   "IP_TRACKNUMBER")) : -1,
                 eqTr ? int(GetMediaTrackInfo_Value(eqTr, "IP_TRACKNUMBER")) : -1,
-                eqFx, fxn, cursor,
+                eqFx, fxn, int(stripOnScreen),
+                csTr ? int(GetMediaTrackInfo_Value(csTr, "IP_TRACKNUMBER")) : -1,
+                csFx, cursor,
                 a.tr ? int(GetMediaTrackInfo_Value(a.tr, "IP_TRACKNUMBER")) : -1,
                 a.fxIdx, uf1FindEqFx_(tr));
             std::fclose(lg);
