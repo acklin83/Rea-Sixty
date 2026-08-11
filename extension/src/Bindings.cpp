@@ -842,8 +842,9 @@ void seedFactoryDefaults_(Config& c)
     //  · 5-8     → uf1_five_to_eight (DAW channel group 1-4/5-8 · Sends window).
     //  · V-Pot 1-4 push → uf1_vpot_reset (param 0..3 = which V-Pot).
     //  · Bank ◄ ►→ uf1_bank_step  (param -1/+1 = ±8 tracks).
-    //  · Page ◄ ►→ uf1_page_step  (param -1/+1 = soft-key bank / plug-in page;
-    //                          held MODE + arrow pages INSIDE a dynamic bank).
+    //  · Page ◄ ►→ uf1_page_step  (param -1/+1 = soft-key bank / plug-in page),
+    //                          LONG press → uf1_dyn_bank_page (inside a dynamic
+    //                          bank).
     L1[ButtonId::Uf1Shift]       = mkBuiltin("mod_shift",              Behavior::Hold,      "SHIFT");
     L1[ButtonId::Uf1ChannelPush] = mkBuiltin("show_focused_plugin_gui", Behavior::Momentary, "ENC PUSH");
     // …plus a LONG-PRESS on the channel encoder → back to Channel Select
@@ -877,6 +878,21 @@ void seedFactoryDefaults_(Config& c)
     L1[ButtonId::Uf1BankRight]   = mkBuiltin("uf1_bank_step", Behavior::Momentary, "BANK \xE2\x96\xB8", 255, 255, 255, +1);
     L1[ButtonId::Uf1ArrowLeft]   = mkBuiltin("uf1_page_step", Behavior::Momentary, "PAGE \xE2\x97\x82", 255, 255, 255, -1);
     L1[ButtonId::Uf1ArrowRight]  = mkBuiltin("uf1_page_step", Behavior::Momentary, "PAGE \xE2\x96\xB8", 255, 255, 255, +1);
+    // …and their LONG press pages INSIDE a dynamic soft-key bank. Two paging
+    // levels on one key pair: short = which bank, long = which page of it. See
+    // upgradeBackfillUf1ArrowLongPress_ for how an existing config gets it.
+    {
+        struct ArrowLp { ButtonId id; int param; };
+        for (const ArrowLp& a : { ArrowLp{ButtonId::Uf1ArrowLeft,  -1},
+                                  ArrowLp{ButtonId::Uf1ArrowRight, +1} }) {
+            Binding& bd = L1[a.id];
+            bd.hasLongPress = true;
+            auto& lp  = bd.longPress[static_cast<int>(Modifier::Plain)];
+            lp.type   = ActionType::Builtin;
+            lp.action = "uf1_dyn_bank_page";
+            lp.param  = a.param;
+        }
+    }
     // Secondary transport +SHIFT = the 6 REAPER automation modes. The SSL UF1
     // silk labels (OFF/READ/WRT/TRIM/LTCH/TCH) ARE this mapping (Frank 2026-07-31
     // "steht schon in den abkürzungen der buttons"). Only the SHIFT slot is set —
@@ -2193,7 +2209,11 @@ bool invokeBuiltin(const std::string& name, int param)
 // v17 (2026-07-31): secondary transport +SHIFT = the 6 REAPER automation modes
 // (SSL UF1 silk labels OFF/READ/WRT/TRIM/LTCH/TCH). upgradeBackfillUf1Automation_
 // fills the empty Shift slots into older configs (leaves Plain + any user edit).
-constexpr int kCurrentBindingsVersion = 23;
+// v24 (2026-08-11): the UF1 Page ◄ ► gain a LONG press → uf1_dyn_bank_page, so
+// paging INSIDE a dynamic soft-key bank has its own gesture instead of taking
+// over "5-8" (which is the channel group again). upgradeBackfillUf1ArrowLongPress_
+// fills only an UNTOUCHED long-press slot.
+constexpr int kCurrentBindingsVersion = 24;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2673,6 +2693,27 @@ void upgradeBackfillUf1Fine_(Config& c)
     bd.behavior = Behavior::Toggle;
 }
 
+// v23→v24 (2026-08-11): the UF1 Page ◄ ► gain a LONG press → uf1_dyn_bank_page,
+// so paging INSIDE a dynamic soft-key bank stops fighting "5-8" for the key.
+// Backfill ONLY into an untouched long-press slot — a long press the user has
+// assigned is theirs.
+void upgradeBackfillUf1ArrowLongPress_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    auto seedLong = [&](ButtonId id, int param) {
+        Binding& bd = L1.bindings[id];        // default-creates if missing
+        if (bd.hasLongPress) return;          // user / prior run already set it
+        auto& lp = bd.longPress[static_cast<int>(Modifier::Plain)];
+        if (lp.type != ActionType::Noop || !lp.action.empty()) return;
+        bd.hasLongPress = true;
+        lp.type   = ActionType::Builtin;
+        lp.action = "uf1_dyn_bank_page";
+        lp.param  = param;
+    };
+    seedLong(ButtonId::Uf1ArrowLeft,  -1);
+    seedLong(ButtonId::Uf1ArrowRight, +1);
+}
+
 void upgradeBackfillSelDouble_(Config& c)
 {
     Layer& L1 = c.layers[0];
@@ -2968,6 +3009,9 @@ void load()
             }
             if (tmp.version < 23) {
                 upgradeBackfillUf1Fine_(tmp);
+            }
+            if (tmp.version < 24) {
+                upgradeBackfillUf1ArrowLongPress_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -4834,7 +4878,8 @@ const char* builtinCategory(const std::string& n)
     if (n == "bank_left"  || n == "bank_right"
      || n == "page_left"  || n == "page_right"
      || n == "bank_by_1_left" || n == "bank_by_1_right"
-     || n == "uf1_bank_step" || n == "uf1_page_step")
+     || n == "uf1_bank_step" || n == "uf1_page_step"
+     || n == "uf1_dyn_bank_page")
         return "Bank / Page";
 
     if (n.rfind("auto_", 0) == 0) return "Automation";

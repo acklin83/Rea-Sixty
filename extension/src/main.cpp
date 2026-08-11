@@ -39576,24 +39576,12 @@ void registerBindingHandlers()
             }
             const int dir = right ? 1 : -1;
             if (g_uf1ChannelSubMode.load() == 1) {
-                // MODE + ◄ ► = page WITHIN the active dynamic bank (Frank
-                // 2026-08-11). The plain arrows keep their job — soft-key bank
-                // prev/next — so the two paging levels are two gestures on one
-                // key pair instead of two jobs fighting over "5-8". Falls back
-                // to the bank step when the bank is static or single-page, so
-                // the combination is never a dead press.
-                if (g_uf1ModeMenu.load()) {
-                    const int cnt = std::max(1, g_uf1DynBankPageCount.load());
-                    if (cnt > 1 &&
-                        uf8::bindings::getUf1SoftBankDynamic(g_uf1SoftBank.load())
-                            != uf8::bindings::DynamicBankKind::None) {
-                        g_uf1DynBankPage.store(
-                            (g_uf1DynBankPage.load() + (dir > 0 ? 1 : cnt - 1)) % cnt);
-                        return;
-                    }
-                }
                 // Page only through the REALLY-ASSIGNED soft-key banks, so ◄ ►
                 // can't step onto empty banks (Frank 2026-08-04). Min 1.
+                // (Paging INSIDE a dynamic bank is the LONG press — see
+                // uf1_dyn_bank_page. It was briefly MODE + arrow, which was a bad
+                // pick: holding MODE pops the view menu over the soft-keys, so
+                // you page a bank you can no longer see. Frank 2026-08-11.)
                 const int nb = std::max(1, uf8::bindings::uf1SoftBankInUseCount());
                 g_uf1SoftBank.store((g_uf1SoftBank.load() % nb + dir + nb) % nb);
             } else {
@@ -39603,7 +39591,30 @@ void registerBindingHandlers()
                                    + (dir > 0 ? 1 : np - 1)) % np);
             }
         },
-        nullptr, "Soft-Key Bank / Plug-in Page \xC2\xB1""1 (+MODE: bank page)", true
+        nullptr, "Soft-Key Bank / Plug-in Page \xC2\xB1""1", true
+    });
+
+    // Page INSIDE the active dynamic soft-key bank (FX list, sends, …). The LONG
+    // press of the same ◄ ► keys — short steps the bank, long steps the page —
+    // so one key pair carries both paging LEVELS without a modifier that hides
+    // what you are paging (Frank 2026-08-11: MODE + arrow pops the view menu
+    // over the very keys you are looking at, "d'uh").
+    // No-op when the bank is static or single-page, rather than silently
+    // stepping the bank: a long press is deliberate, and moving something else
+    // than what was asked for is worse than doing nothing.
+    // param sign = direction. Atomic stores + a config-mutex read → worker-safe.
+    registerBuiltin("uf1_dyn_bank_page", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing || g_uf1MeterView.load()) return;
+            if (g_uf1ChannelSubMode.load() != 1) return;      // DAW mode only
+            if (uf8::bindings::getUf1SoftBankDynamic(g_uf1SoftBank.load())
+                == uf8::bindings::DynamicBankKind::None) return;
+            const int cnt = std::max(1, g_uf1DynBankPageCount.load());
+            if (cnt < 2) return;
+            const int dir = (param >= 0) ? 1 : cnt - 1;
+            g_uf1DynBankPage.store((g_uf1DynBankPage.load() + dir) % cnt);
+        },
+        nullptr, "UF1: Dynamic Bank Page \xC2\xB1""1", true
     });
 
     registerBuiltin("tcp_follows_selection_toggle", DescBuilder{
