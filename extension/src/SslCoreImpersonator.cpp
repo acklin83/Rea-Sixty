@@ -253,6 +253,39 @@ std::map<socket_t, std::map<uint64_t, int>> g_clientFpObj;
 // the port appears, and kept in step afterwards.
 std::map<socket_t, FpSet>                   g_clientFp;   // conn -> values   (g_meterMx)
 
+// ── The same thing for the METER ─────────────────────────────────────────────
+// Two Meters on one track are as indistinguishable on the wire as two strips of
+// the same model were, and for the same reason: everything the datagram carries
+// is shared. Their SETTINGS are not, and the Meter announces them on its own
+// control connection exactly like the strip does — so this is the strip
+// fingerprint again, over a different id list (meterFingerprintIds, header).
+//
+// Kept SEPARATE from the strip set rather than merged into one table: a Meter and
+// a strip share no parameter, and one combined list would let a strip id score
+// against a Meter stream. Same storage shape, same lifecycle.
+inline const MeterParamId* mfIds_() {
+    const MeterParamId* p = nullptr; meterFingerprintIds(p); return p;
+}
+inline int mfCount_() {
+    const MeterParamId* p = nullptr; return meterFingerprintIds(p);
+}
+constexpr int kMeterFpMax = 16;   // storage bound; the list is well under this
+
+int mfIndexOf_(const std::string& id) {
+    const MeterParamId* ids = mfIds_();
+    for (int i = 0, n = mfCount_(); i < n; ++i)
+        if (id == ids[i].wireId) return i;
+    return -1;
+}
+
+struct MeterFpSet {
+    double val[kMeterFpMax] = {};
+    bool   have[kMeterFpMax] = {};
+};
+std::map<socket_t, std::map<uint64_t, int>> g_clientMfObj;  // conn: objId -> slot
+std::map<socket_t, MeterFpSet>              g_clientMf;   // conn -> values (g_meterMx)
+std::map<uint16_t, MeterFpSet>              g_portMf;     // port -> values (g_meterMx)
+
 // ── The plug-in's OWN EQ curve ───────────────────────────────────────────────
 // PluginEQCurveDataValueEventArgs { repeated float m_dBValues = 1; } — the
 // reconstructed schema (analysis/ssl360-protobuf) settles what the numbers are:
@@ -691,6 +724,9 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             if (auto itF = g_clientFp.find(dc->second);
                                 itF != g_clientFp.end())
                                 g_portFp[sp] = itF->second;
+                            if (auto itM = g_clientMf.find(dc->second);
+                                itM != g_clientMf.end())
+                                g_portMf[sp] = itM->second;
                             if (auto itE = g_clientEq.find(dc->second);
                                 itE != g_clientEq.end())
                                 g_portEq[sp] = itE->second;
@@ -923,14 +959,17 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                     g_clientIndex.erase(c);
                     g_clientModel.erase(c);
                     g_clientFpObj.erase(c);
+                    g_clientMfObj.erase(c);
                     {
                         std::lock_guard<std::mutex> lk(g_meterMx);
                         if (auto it = g_connPort.find(c); it != g_connPort.end()) {
                             g_portFp.erase(it->second);   // stale settings help nobody
+                            g_portMf.erase(it->second);
                             g_portEq.erase(it->second);
                             g_connPort.erase(it);
                         }
                         g_clientFp.erase(c);
+                        g_clientMf.erase(c);
                         g_clientEq.erase(c);
                         g_clientEqObj.erase(c);
                     }
@@ -1047,6 +1086,11 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                         uint64_t oid = 0;
                                         std::memcpy(&oid, pay, 8);
                                         g_clientFpObj[c][oid] = fi;
+                                    } else if (const int mi = mfIndexOf_(nm); mi >= 0) {
+                                        // Same, for the Meter's own settings.
+                                        uint64_t oid = 0;
+                                        std::memcpy(&oid, pay, 8);
+                                        g_clientMfObj[c][oid] = mi;
                                     }
                                     break;
                                 }
@@ -1118,6 +1162,29 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                         if (auto itP = g_connPort.find(c);
                                             itP != g_connPort.end()) {
                                             FpSet& fs = g_portFp[itP->second];
+                                            fs.val[itF->second]  = v;
+                                            fs.have[itF->second] = true;
+                                        }
+                                    }
+                                }
+                                // The Meter's settings arrive in the same form —
+                                // a double, whether the parameter is a real unit
+                                // or an enum index (the caller's table says which).
+                                if (auto itO = g_clientMfObj.find(c);
+                                    itO != g_clientMfObj.end()) {
+                                    uint64_t oid = 0;
+                                    std::memcpy(&oid, pay, 8);
+                                    if (auto itF = itO->second.find(oid);
+                                        itF != itO->second.end()) {
+                                        double v = 0;
+                                        std::memcpy(&v, pay + 9, 8);
+                                        std::lock_guard<std::mutex> lk(g_meterMx);
+                                        MeterFpSet& cs = g_clientMf[c];
+                                        cs.val[itF->second]  = v;
+                                        cs.have[itF->second] = true;
+                                        if (auto itP = g_connPort.find(c);
+                                            itP != g_connPort.end()) {
+                                            MeterFpSet& fs = g_portMf[itP->second];
                                             fs.val[itF->second]  = v;
                                             fs.have[itF->second] = true;
                                         }
@@ -1294,16 +1361,18 @@ void cycleMeterSelection(int delta) {
 // instead of sticking to whichever instance streamed signal first. If the selected
 // track has no live Meter, g_srcPort is left untouched (the sticky first-live
 // fallback stands), so an un-metered selection never blanks the view.
+static std::vector<uint16_t> liveMeterPorts_(int trackIndex);
 static void steerAutoPort_() {
     if (g_meterSel >= 0) return;                     // manual V-Pot1 pin wins
     const int want = g_autoTrackIdx.load();
     if (want <= 0) return;
-    const long long cut = nowMs() - 2000;
-    for (const auto& kv : g_inst) {
-        if (kv.second.kind != Kind::Meter || kv.second.lastMs < cut) continue;
-        auto pi = g_portIndex.find(kv.first);
-        if (pi != g_portIndex.end() && pi->second == want) { g_srcPort = kv.first; return; }
-    }
+    // The track's Meters in CONNECT order, and take the first. Iterating g_inst
+    // instead handed out whichever UDP port number happened to sort first, so on
+    // a track with two Meters the view could land on either one — and the FX the
+    // V-Pots then edited was resolved separately, by FX-chain order. Two
+    // different answers to "which instance", which is the whole bug.
+    const std::vector<uint16_t> live = liveMeterPorts_(want);
+    if (!live.empty()) g_srcPort = live.front();
 }
 
 void setAutoTrackIndex(int trackIndex1) { g_autoTrackIdx.store(trackIndex1); }
@@ -1360,8 +1429,11 @@ std::string currentMeterName() {
 // auto-picked one) — mirrors currentMeterName() so the UF1 can route V-Pot2/3/4
 // edits + their displayed values to the SAME instance V-Pot1 selected, instead of
 // whatever track happens to be focused. 0 = unknown/none. Thread-safe.
-int currentMeterTrackIndex() {
-    std::lock_guard<std::mutex> lk(g_meterMx);
+// The port the view is reading — the pin, else the auto-picked instance, else
+// the first in track order. Caller MUST hold g_meterMx. currentMeterTrackIndex()
+// and currentMeterPort() are the same question asked at two levels of detail, so
+// they resolve through this one body and cannot answer differently.
+static uint16_t currentMeterPortLocked_() {
     steerAutoPort_();   // auto-mode: resolve to the selected track's instance
     uint16_t port = 0;
     if (g_meterSel >= 0) {
@@ -1374,8 +1446,32 @@ int currentMeterTrackIndex() {
             if (!ports.empty()) port = ports.front();
         }
     }
+    return port;
+}
+
+int currentMeterTrackIndex() {
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    const uint16_t port = currentMeterPortLocked_();
     auto it = g_portIndex.find(port);
     return (it != g_portIndex.end()) ? it->second : 0;
+}
+
+int currentMeterPort() {
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    return int(currentMeterPortLocked_());
+}
+
+int currentMeterInstanceOnTrack(int* countOut) {
+    if (countOut) *countOut = 0;
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    const uint16_t port = currentMeterPortLocked_();
+    auto ti = g_portIndex.find(port);
+    if (ti == g_portIndex.end()) return -1;
+    const std::vector<uint16_t> live = liveMeterPorts_(ti->second);
+    if (countOut) *countOut = int(live.size());
+    for (size_t i = 0; i < live.size(); ++i)
+        if (live[i] == port) return int(i);
+    return -1;
 }
 
 bool meterProAvailable() {
@@ -1615,6 +1711,100 @@ static uint16_t resolveStripPort_(int trackIndex, const char* model,
     // 3 — ordinal.
     if (instanceOrdinal >= 0 && size_t(instanceOrdinal) < live.size())
         return live[size_t(instanceOrdinal)];
+    return 0;
+}
+
+// ── Which METER STREAM belongs to which Meter plug-in ────────────────────────
+// The strip resolver above, one plug-in over. Same three rungs, same rule that
+// an ambiguous rung defers instead of picking: routing a V-Pot edit to the wrong
+// instance is invisible — the display keeps showing the other one's numbers,
+// which is exactly how this survived unnoticed next to the strip fix.
+//
+// Every live Meter on the track, in connect order. Caller holds g_meterMx.
+static std::vector<uint16_t> liveMeterPorts_(int trackIndex)
+{
+    const long long cut = nowMs() - 3000;   // a loaded Meter streams ~25 Hz
+    std::vector<std::pair<uint64_t, uint16_t>> v;
+    for (const auto& kv : g_inst) {
+        if (kv.second.kind != Kind::Meter || kv.second.lastMs < cut) continue;
+        auto pi = g_portIndex.find(kv.first);
+        if (pi == g_portIndex.end() || pi->second != trackIndex) continue;
+        auto sq = g_portSeq.find(kv.first);
+        v.emplace_back(sq == g_portSeq.end() ? UINT64_MAX : sq->second, kv.first);
+    }
+    std::sort(v.begin(), v.end(),
+              [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::vector<uint16_t> out;
+    out.reserve(v.size());
+    for (const auto& e : v) out.push_back(e.second);
+    return out;
+}
+
+int meterPortForFx(int trackIndex, bool isPro,
+                   const StripParam* fp, int nfp, int instanceOrdinal)
+{
+    if (trackIndex <= 0) return 0;
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    const std::vector<uint16_t> live = liveMeterPorts_(trackIndex);
+    if (live.empty()) return 0;
+    // Which rung answered, logged once per changed answer — this is the whole
+    // diagnosis when the surface edits the wrong Meter, and it is not derivable
+    // from anything else in the log.
+    auto say = [&](int rung, uint16_t port) {
+        static int sRung = -1; static uint16_t sPort = 0; static int sTrack = -1;
+        if (rung == sRung && port == sPort && trackIndex == sTrack) return int(port);
+        sRung = rung; sPort = port; sTrack = trackIndex;
+        slog("[meter] track %d fx#%d -> port %u by %s", trackIndex, instanceOrdinal,
+             unsigned(port), rung == 0 ? "sole instance" : rung == 1 ? "settings"
+                          : rung == 2 ? "pro-ness"      : "ordinal");
+        return int(port);
+    };
+    if (live.size() == 1) return say(0, live.front());   // nothing to tell apart
+
+    // 1 — settings.
+    if (fp && nfp > 0) {
+        uint16_t best = 0; int bestScore = 0, bestCount = 0;
+        for (uint16_t port : live) {
+            auto pm = g_portMf.find(port);
+            if (pm == g_portMf.end()) continue;
+            int score = 0;
+            for (int i = 0; i < nfp; ++i) {
+                const int mi = mfIndexOf_(fp[i].id ? fp[i].id : "");
+                if (mi < 0 || !pm->second.have[mi]) continue;
+                const double a = pm->second.val[mi], b = fp[i].value;
+                // Same relative tolerance as the strips: REAPER's formatted value
+                // is rounded for display, and an enum index compares exactly.
+                const double tol = 0.02 * std::max(1.0, std::max(std::fabs(a),
+                                                                 std::fabs(b)));
+                if (std::fabs(a - b) <= tol) ++score;
+            }
+            if (score > bestScore)      { bestScore = score; best = port; bestCount = 1; }
+            else if (score == bestScore && score > 0) ++bestCount;
+        }
+        if (bestScore > 0 && bestCount == 1) return say(1, best);
+    }
+
+    // 2 — Pro-ness. POSITIVE evidence only: isPro is set the first time an
+    // instance streams a Loudness data type, so a false only means "has not shown
+    // Loudness yet", never "is not a Pro". Both directions therefore require that
+    // some instance on this track HAS shown it, or the rung says nothing.
+    {
+        int pros = 0; uint16_t proPort = 0, plainPort = 0; int plains = 0;
+        for (uint16_t port : live) {
+            auto in = g_inst.find(port);
+            if (in == g_inst.end()) continue;
+            if (in->second.isPro) { ++pros;   if (!proPort)   proPort   = port; }
+            else                  { ++plains; if (!plainPort) plainPort = port; }
+        }
+        if (pros > 0) {
+            if (isPro  && pros   == 1) return say(2, proPort);
+            if (!isPro && plains == 1) return say(2, plainPort);
+        }
+    }
+
+    // 3 — ordinal.
+    if (instanceOrdinal >= 0 && size_t(instanceOrdinal) < live.size())
+        return say(3, live[size_t(instanceOrdinal)]);
     return 0;
 }
 

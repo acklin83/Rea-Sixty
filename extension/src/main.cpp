@@ -13986,7 +13986,49 @@ bool uf1PinnedMeterTrackFx_(MediaTrack*& trOut, int& fxOut)
     MediaTrack* tr = GetTrack(nullptr, idx1 - 1);
     if (!tr) return false;
     int cnt = 0;
-    if (!uf1FindMeterFx_(tr, 0, fxOut, cnt)) return false;  // the (usually sole) Meter on that track
+    if (!uf1FindMeterFx_(tr, 0, fxOut, cnt)) return false;  // first Meter = the fallback
+    // TWO Meters on the track and the first one is a coin toss: the display reads
+    // the instance the impersonator resolved, the V-Pots edited whichever Meter
+    // came first in the FX chain. Ask which FX owns the stream being READ, by the
+    // same settings → Pro-ness → ordinal narrowing the channel strips use.
+    if (cnt > 1) {
+        const int port = sslcore::currentMeterPort();
+        // Cached: this runs from every meter paint block, several times a tick,
+        // and the walk below costs a dozen TrackFX reads per candidate. The
+        // answer only changes when the stream or the track does — re-checked
+        // twice a second so an FX added or removed mid-session still lands.
+        static int          sPort = -1;
+        static MediaTrack*  sTr   = nullptr;
+        static int          sCnt  = 0;
+        static int          sFx   = -1;
+        static int64_t      sAtMs = 0;
+        const int64_t now = nowMs_();
+        if (port > 0 && port == sPort && tr == sTr && cnt == sCnt &&
+            sFx >= 0 && now - sAtMs < 500) {
+            fxOut = sFx;
+            trOut = tr;
+            return true;
+        }
+        if (port > 0) {
+            const int trackIdx = int(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+            for (int sel = 0; sel < cnt; ++sel) {
+                int fx = -1, dummy = 0;
+                if (!uf1FindMeterFx_(tr, sel, fx, dummy) || fx < 0) continue;
+                char nm[256] = {0};
+                const bool isPro = uf8::fxIdentityName(tr, fx, nm, sizeof(nm)) &&
+                                   std::strstr(nm, "Meter Pro") != nullptr;
+                const char* fpId[16]; double fpVal[16];
+                const int nfp = uf8::sslMeterFingerprint(tr, fx, fpId, fpVal, 16);
+                sslcore::StripParam fp[16];
+                for (int i = 0; i < nfp; ++i) fp[i] = { fpId[i], fpVal[i] };
+                if (sslcore::meterPortForFx(trackIdx, isPro, fp, nfp, sel) == port) {
+                    fxOut = fx;
+                    break;
+                }
+            }
+            sPort = port; sTr = tr; sCnt = cnt; sFx = fxOut; sAtMs = now;
+        }
+    }
     trOut = tr;
     return true;
 }
@@ -14004,8 +14046,17 @@ void uf1EmitMeterInstanceLabel_()
     const int count = sslcore::meterInstanceCount();
     const std::string nm = sslcore::currentMeterName();
     char lbl[16] = {0};
-    if (!nm.empty())
-        std::snprintf(lbl, sizeof(lbl), "%.9s", nm.c_str());
+    if (!nm.empty()) {
+        // Two Meters on ONE track announce the same track name, so the label read
+        // the same for both and cycling V-Pot1 looked like it had stuck. Number
+        // them — "Track 4 2" is the second Meter in that track's chain.
+        int onTrack = 0;
+        const int ord = sslcore::currentMeterInstanceOnTrack(&onTrack);
+        if (onTrack > 1 && ord >= 0)
+            std::snprintf(lbl, sizeof(lbl), "%.7s %d", nm.c_str(), ord + 1);
+        else
+            std::snprintf(lbl, sizeof(lbl), "%.9s", nm.c_str());
+    }
     else if (count <= 1)
         std::snprintf(lbl, sizeof(lbl), "MASTER");
     else if (sslcore::meterSelection() < 0)

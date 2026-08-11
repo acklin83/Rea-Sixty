@@ -551,6 +551,54 @@ int sslStripFingerprint(void* trackOpaque, int fx,
     return n;
 }
 
+// The Meter's own settings, for the ids the impersonator captures off ITS wire
+// (sslcore::meterFingerprintIds). Two Meters on one track are separable by
+// nothing else — the datagram carries no instance id and both announce the same
+// track — so this is what tells the V-Pots which plug-in they are editing.
+//
+// The parameter indices in that table are the METER PRO's, read from its own
+// 57-parameter dump. The plain SSL Meter has never been dumped, so it gets no
+// fingerprint rather than a fingerprint read off the wrong indices — Pro-ness
+// alone already separates a Pro from a plain one.
+// Returns how many entries were filled (<= maxOut); 0 = nothing usable.
+int sslMeterFingerprint(void* trackOpaque, int fx,
+                        const char** ids, double* vals, int maxOut)
+{
+    auto* tr = static_cast<MediaTrack*>(trackOpaque);
+    if (!tr || fx < 0 || !ids || !vals || maxOut <= 0) return 0;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return 0;
+    char nm[256];
+    if (!fxIdentityName(tr, fx, nm, sizeof(nm)) || !nm[0]) return 0;
+    if (!std::strstr(nm, "Meter Pro")) return 0;
+    const sslcore::MeterParamId* want = nullptr;
+    const int nWant = sslcore::meterFingerprintIds(want);
+    int n = 0;
+    for (int i = 0; i < nWant && n < maxOut; ++i) {
+        double v = 0.0;
+        if (want[i].steps >= 2) {
+            // The wire sends the ENUM INDEX; rebuild it from the normalised
+            // value the same way the plug-in must have derived it.
+            double mn = 0.0, mx = 1.0;
+            const double raw = TrackFX_GetParam(tr, fx, want[i].vst3Param, &mn, &mx);
+            if (!(mx > mn)) continue;
+            const double norm = (raw - mn) / (mx - mn);
+            v = std::floor(norm * double(want[i].steps - 1) + 0.5);
+        } else {
+            // Real units — "500.0 ms" / "-18.0 dBFS": atof takes the leading
+            // number and stops at the unit, exactly as the strip side does.
+            char buf[64] = {0};
+            if (!TrackFX_GetFormattedParamValue(tr, fx, want[i].vst3Param,
+                                                buf, sizeof(buf)) || !buf[0])
+                continue;
+            v = std::atof(buf);
+        }
+        ids[n]  = want[i].wireId;
+        vals[n] = v;
+        ++n;
+    }
+    return n;
+}
+
 int sslCoreInstanceOrdinal(void* trackOpaque, int fx)
 {
     auto* tr = static_cast<MediaTrack*>(trackOpaque);

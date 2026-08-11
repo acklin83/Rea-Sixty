@@ -158,6 +158,15 @@ int sslCoreInstanceOrdinal(void* track /*MediaTrack**/, int fx);
 int sslStripFingerprint(void* track /*MediaTrack**/, int fx,
                         const char** ids, double* vals, int maxOut);
 
+// The same, for an SSL Meter Pro (ids from sslcore::meterFingerprintIds). Hand
+// the result to sslcore::meterPortForFx to find out which stream this Meter
+// plug-in owns — the thing that says whether the V-Pots are editing the instance
+// the display is drawing. 0 for a plain SSL Meter: its parameter indices have
+// never been dumped, and a fingerprint read off the Pro's indices would be
+// numbers from the wrong parameters. Main-thread-only (REAPER FX API).
+int sslMeterFingerprint(void* track /*MediaTrack**/, int fx,
+                        const char** ids, double* vals, int maxOut);
+
 // True when the FX slot is a JSFX (REAPER "fx_type" == "JS"). JSFX
 // numeric sliders mis-report their step size as 1.0 (= full range)
 // via TrackFX_GetParameterStepSizes, so the knob/encoder handlers

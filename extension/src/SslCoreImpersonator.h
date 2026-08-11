@@ -162,6 +162,82 @@ inline int fingerprintIds(const char* const*& ids)
     return int(sizeof(kIds) / sizeof(kIds[0]));
 }
 
+// ── The SSL METER has the same identity problem, one plug-in over ────────────
+// Two SSL Meters on ONE track stream on two UDP ports that differ in nothing the
+// datagram carries, and "the first Meter on the track" then edits one instance
+// while the display draws the other. The Meter announces its own settings exactly
+// like the channel strip does — a type=16 frame declares the wire short-id, a
+// type=18 frame carries the value — so the same narrowing works here.
+//
+// ★ MEASURED, not guessed. The wire ids are the plug-in's own type=16
+// declarations (sslcore trace, 2026-08-11); the VST3 indices come from the
+// 57-parameter dump docs/ssl-native-params/VST3__SSL_Meter_Pro_(SSL).md; and the
+// two were tied together by reading each streamed value against that dump's
+// CURRENT value. Only pairs that actually agree are listed.
+//
+// `steps` says how to read the wire number, and it is not a preference:
+//   0    — the wire sends REAL UNITS: RmsIntegrationTime 500.0 = "500.0 ms",
+//          RefLevel -18.0 = "-18.0 dBFS". Compare against the formatted value.
+//   >=2  — the wire sends the ENUM INDEX, and the caller reconstructs it as
+//          round(normalised × (steps-1)). Confirmed on five independent params:
+//          PeakHold 2 ↔ 0.5×4, VUOffset 1 ↔ 0.5×2, MaxNeedle 1 ↔ 0.5×2,
+//          LissajousFade 4 ↔ 0.6667×6, RtaPeakHold 4 ↔ 0.5714×7. The counts are
+//          the HW-verified ones from kUf1MeterVPots (Frank's param walk-through);
+//          RtaScaleBottom's 12 follows from its own pair (11 ↔ 1.0×11).
+// ⚠ RTA Scale Top/Bottom are ENUMS on the wire even though the V-Pot table drives
+// them continuously — Bottom streams 11, not -120 dB. A "real unit" reading of
+// them would silently never match.
+// ⚠ The indices are the METER PRO's. The plain SSL Meter has never been dumped,
+// so the fingerprint is only offered for a Pro (see sslMeterFingerprint).
+struct MeterParamId { const char* wireId; int vst3Param; int steps; };
+inline int meterFingerprintIds(const MeterParamId*& ids)
+{
+    static const MeterParamId kIds[] = {
+        // real units
+        { "DigitalMetersRmsIntegrationTime",  5,  0 },   // 500.0  ↔ "500.0 ms"
+        { "AnalogueMetersRefLevel",           9,  0 },   // -18.0  ↔ "-18.0 dBFS"
+        { "LoudnessIntegrationTimeM",        32,  0 },   // 400.0  ↔ "400.0 ms"
+        { "LoudnessIntegrationTimeS",        33,  0 },   // 3.0    ↔ "3.0 s"
+        // enum index
+        { "DigitalMetersPeakHold",            3,  5 },
+        { "DigitalMetersType",                6,  7 },
+        { "AnalogueMetersMode",               8,  2 },
+        { "AnalogueMetersPeakHold",          10,  3 },
+        { "AnalogueMetersVUOffset",          11,  3 },
+        { "LissajousFadeTime",               16,  7 },
+        { "RtaPeakHold",                     18,  8 },
+        { "RtaScaleBottom",                  23, 12 },
+    };
+    ids = kIds;
+    return int(sizeof(kIds) / sizeof(kIds[0]));
+}
+
+// The UDP source port of the Meter instance the view is currently READING — the
+// V-Pot1 pin, else the auto-picked one. 0 = none resolved yet. This is the
+// instance identity the surface must route its edits to; pair it with
+// meterPortForFx below to name the FX in REAPER that owns it. Thread-safe.
+int currentMeterPort();
+
+// Position of that same instance among the Meters on ITS OWN track (0-based, in
+// connect = FX-chain order), with the track's Meter count in `countOut`. -1 when
+// nothing is resolved. Two Meters on one track both announce the same track
+// NAME, so V-Pot1's label shows the same word twice and the pin looks stuck —
+// this is what lets the surface number them. Thread-safe.
+int currentMeterInstanceOnTrack(int* countOut);
+
+// Which stream belongs to THIS Meter FX, by the same three rungs as the strips:
+//   1. SETTINGS — `fp` (sslMeterFingerprint output, ids from the table above)
+//                 against what each Meter on the track streamed at connect.
+//   2. PRO-NESS — a Meter Pro streams Loudness data types, a plain Meter never
+//                 does. Positive evidence only: it separates them only once some
+//                 instance on the track has actually shown Loudness.
+//   3. ORDINAL  — position among the track's Meters in connect order.
+// Returns the UDP port, or 0 for "cannot say" — each rung DEFERS when ambiguous
+// rather than picking, so a tie never quietly routes to the neighbour.
+// Thread-safe.
+int meterPortForFx(int trackIndex, bool isPro,
+                   const StripParam* fp, int nfp, int instanceOrdinal);
+
 // ★★ THE ONE TO CALL. Resolves the stream by narrowing, most specific first:
 //   1. SETTINGS — the values in `fp`, matched against what each live instance
 //      streams. This is the only rung that separates two strips of the SAME
