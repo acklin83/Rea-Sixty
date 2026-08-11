@@ -21504,6 +21504,9 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     static int ix[15];
     static std::array<uint8_t, 251> sLast{};
     static bool sHave = false;
+    // Whether ix[14] (EQ In) reads with inverted sense — resolved with ix[] below,
+    // because it is a property of the plug-in MAP, not of this tick.
+    static bool sEqInInverted = false;
 
     const char* names[15] = {
         "HF Gain","HF Freq","HF Type","HMF Gain","HMF Freq","HMF Q",
@@ -21629,6 +21632,29 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
                 std::fclose(lg);
             }
         }
+        // ★ Does the EQ-In param read INVERTED? A plug-in can expose the section
+        // toggle with 1 = OUT, and the user says so with the FX-Learn invert
+        // checkbox. Reading it raw drew the graph exactly backwards — flat while
+        // the EQ was in, curved while it was out (Frank 2026-08-10). The UC1's
+        // knob-dim cascade hit the identical bug in June and fixes it the same
+        // way (UC1Surface's sectionOff).
+        //
+        // WHICH flag governs depends on the slot the user learned it on: SSL-Link
+        // 0 (the plug-in IN button) writes bypassInverted, the EQ-IN button writes
+        // buttonInverted[kEqIn] — both from the same checkbox. So match on the
+        // PARAM the graph actually reads instead of guessing the slot; that also
+        // keeps this right if the canonical "EQ In" name ever resolves elsewhere.
+        // Cached here because the lookup is by FX identity and only the resolve
+        // block knows it changed.
+        sEqInInverted = false;
+        if (!ident.empty() && ix[14] >= 0) {
+            if (const uc1::PluginBindings* pb = uc1::lookupBindingsByName(ident)) {
+                if (pb->buttonParam[uc1::button::kEqIn] == ix[14])
+                    sEqInInverted = pb->buttonInverted[uc1::button::kEqIn];
+                else if (pb->bypassParam == ix[14])
+                    sEqInInverted = pb->bypassInverted;
+            }
+        }
     }
 
     std::array<uint8_t, 251> col{};
@@ -21639,8 +21665,10 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     };
 
     bool eqOn = sFx >= 0;
-    if (eqOn && ix[14] >= 0)                       // EQ In toggle
-        eqOn = TrackFX_GetParamNormalized(sFxTr, sFx, ix[14]) >= 0.5;
+    if (eqOn && ix[14] >= 0) {                     // EQ In toggle
+        const bool raw = TrackFX_GetParamNormalized(sFxTr, sFx, ix[14]) >= 0.5;
+        eqOn = sEqInInverted ? !raw : raw;         // see sEqInInverted's resolve
+    }
 
     // The OTHER way "no graph" happens: the graph IS drawn, dead flat, because
     // EQ In is off or a band param never resolved. Indistinguishable from the
@@ -21650,9 +21678,10 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         if (eqOn != sOn || sFx != sOnFx) {
             sOn = eqOn; sOnFx = sFx;
             if (FILE* lg = std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a")) {
-                std::fprintf(lg, "EQ-ON fx=%d eqOn=%d ix[EQIn]=%d ix[HFg]=%d "
+                std::fprintf(lg, "EQ-ON fx=%d eqOn=%d inv=%d ix[EQIn]=%d ix[HFg]=%d "
                                  "ix[HMFg]=%d ix[LMFg]=%d ix[LFg]=%d\n",
-                             sFx, int(eqOn), ix[14], ix[0], ix[3], ix[6], ix[10]);
+                             sFx, int(eqOn), int(sEqInInverted),
+                             ix[14], ix[0], ix[3], ix[6], ix[10]);
                 std::fclose(lg);
             }
         }
