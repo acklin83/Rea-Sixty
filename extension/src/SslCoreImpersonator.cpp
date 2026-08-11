@@ -1314,12 +1314,23 @@ static std::vector<uint16_t> aliveMeterPorts_() {
             out.push_back(kv.first);
     // Order by the plug-in's HostTrackIndex so V-Pot1 cycles in TRACK order, not
     // by the arbitrary UDP source-port number (that was "content right, ORDER
-    // wrong"). Ports with no known index sort last, stable by port.
+    // wrong"). Ports with no known index sort last.
+    //
+    // WITHIN one track, order by CONNECT SEQUENCE — the port number is as
+    // arbitrary here as it was across tracks. It has to be the same order
+    // liveMeterPorts_ uses, or the pin and the FX resolution walk two different
+    // lists: Frank 2026-08-11 cycled V-Pot1 and got "Track 4 2" first and
+    // "Track 4 1" second, because the label counts in connect order and the
+    // cycle counted in port order. One ordering, or the numbering is a lie.
     std::sort(out.begin(), out.end(), [](uint16_t a, uint16_t b) {
         auto ia = g_portIndex.find(a), ib = g_portIndex.find(b);
         const int va = (ia != g_portIndex.end()) ? ia->second : INT_MAX;
         const int vb = (ib != g_portIndex.end()) ? ib->second : INT_MAX;
-        return (va != vb) ? (va < vb) : (a < b);
+        if (va != vb) return va < vb;
+        auto sa = g_portSeq.find(a), sb = g_portSeq.find(b);
+        const uint64_t qa = (sa != g_portSeq.end()) ? sa->second : UINT64_MAX;
+        const uint64_t qb = (sb != g_portSeq.end()) ? sb->second : UINT64_MAX;
+        return (qa != qb) ? (qa < qb) : (a < b);
     });
     return out;
 }
