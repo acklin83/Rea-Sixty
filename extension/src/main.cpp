@@ -13661,23 +13661,14 @@ MediaTrack* uf1FocusedTrack_()
     // overriding the selection (Frank 2026-07-30). Everything downstream reads
     // this one resolver, so the strip / fader / GR all follow the master.
     if (g_uf1Master.load() && master) return master;
-    // Extender: the UF1 is the 9th strip of the UF8 bank (Frank 2026-08-05). It
-    // shows the bank slot to the RIGHT of the UF8 (bankOffset + physical UF8 count)
-    // or to the LEFT (bankOffset + 0; the UF8 strips shift +1 in stripToVisibleSlot).
-    // Everything on the UF1 (rich strip / V-Pots / meter / soft-keys / fader
-    // write-back) follows this track for free. Mutually exclusive with the Focus-Set
-    // pin → it wins over the branch below. Slot past the track list → fall through
-    // (UF1 shows the selection when there is no Nth track).
-    // Suppressed in a FADER route mode: there the UF8 faders show the focused
-    // track's SENDS, so the UF1's +1 strip is the 9th SEND, not a 9th track —
-    // it falls through to the focused track (whose sends are on the bank) and
-    // the Extender fader block drives the send (Step 4). Track modes are
-    // unaffected → the HW-verified Step 1-3 case is byte-identical.
-    if (g_uf1Extender.load() && !uf1ExtenderRouteFader_()) {
-        const int slot = g_bankOffset.load()
-                       + (g_uf1ExtenderSide.load() ? effectiveStripCount_() : 0);
-        if (MediaTrack* et = visibleTrackAt(slot)) return et;
-    }
+    // ⛔ The Extender does NOT repoint this resolver any more (Frank 2026-08-11,
+    // "Option A ist scheisse"). Only the FADER joins the UF8 bank; the display,
+    // V-Pots, soft-keys and LEDs follow the SELECTION, exactly like the UC1 —
+    // which is what the original design note said all along ("only the FADER
+    // joins the bank"). Pointing the whole rich layer at the 9th track made the
+    // UF1 useless whenever the selection differed: the screen described a plug-in
+    // the surface was not addressing. The bank slot now lives in uf1FaderTrack_
+    // below, which the painter's fader block alone consults.
     // Held mode: the "focused track" clutch (= Focus Set pin, g_tempSelsetActive)
     // is on and the set is non-empty → the UF1 parks on member[g_uf1HeldIndex],
     // independent of the REAPER selection (Frank 2026-08-04). The channel encoder
@@ -13718,6 +13709,25 @@ MediaTrack* uf1FocusedTrack_()
     if (tr == master) tr = nullptr;
     if (!tr) tr = GetSelectedTrack(nullptr, 0);
     return tr;
+}
+
+// The track the UF1's MOTOR FADER belongs to — the ONLY thing the Extender
+// repoints. In Extender mode the UF1 is the 9th strip of the UF8 bank: the slot
+// to the RIGHT of the UF8 (bankOffset + physical UF8 count) or to the LEFT
+// (bankOffset + 0; the UF8 strips shift +1 in stripToVisibleSlot). Slot past the
+// track list → fall through to the focused track. Suppressed in a FADER route
+// mode: there the UF8 faders show the focused track's SENDS, so the UF1's +1
+// strip is the 9th SEND, not a 9th track — the Extender send block drives it.
+// Everything else on the UF1 reads uf1FocusedTrack_ and follows the SELECTION,
+// like the UC1 (Frank 2026-08-11). Main-thread only.
+MediaTrack* uf1FaderTrack_()
+{
+    if (g_uf1Extender.load() && !uf1ExtenderRouteFader_()) {
+        const int slot = g_bankOffset.load()
+                       + (g_uf1ExtenderSide.load() ? effectiveStripCount_() : 0);
+        if (MediaTrack* et = visibleTrackAt(slot)) return et;
+    }
+    return uf1FocusedTrack_();
 }
 
 // Sticky Pot (per-track pinned plug-in param) — defined below in the core block
@@ -24851,6 +24861,18 @@ void uf1PaintChannel_()
     // re-enable lands after any 0x0100 layout frames sent above.
     uf1PaintChannelStrip_(tr, changed, extRouteActive ? &extRoute : nullptr);
 
+    // ★ THE FADER HAS ITS OWN TRACK. In Extender mode the UF1 fader is the 9th
+    // strip of the UF8 bank while the screen, V-Pots, soft-keys and LEDs stay on
+    // the SELECTION like the UC1 (Frank 2026-08-11). `ftr` is that track — it is
+    // the focused track whenever the Extender is off, so nothing changes there.
+    // Every read AND write in this block addresses ftr; the rest of the painter
+    // uses tr. Do not mix them.
+    // Never null: tr is already non-null here, and uf1FaderTrack_ falls back to it.
+    // Written this way rather than an early return, which would skip the GR-LED,
+    // Meter-LED and MODE-menu blocks that follow.
+    MediaTrack* const extFtr = uf1FaderTrack_();
+    MediaTrack* const ftr    = extFtr ? extFtr : tr;
+
     // Fader <-> volume (or Pan under FLIP — g_uf1Flip swaps fader/V-Pot).
     //  - While touched: write the user's fader position to the focused track's
     //    volume (or Pan under FLIP) — motor is limp (released on touch-down).
@@ -24879,7 +24901,7 @@ void uf1PaintChannel_()
     // the fader still does something. (UF8-mode learned plug-ins with a faderVst3Param
     // are a follow-up — csFaderForTrack already covers SSL + user-CS maps.)
     const bool stripMode = g_uf1StripMode.load();
-    const CsFaderHandle csf = stripMode ? csFaderForTrack(tr) : CsFaderHandle{ -1, -1 };
+    const CsFaderHandle csf = stripMode ? csFaderForTrack(ftr) : CsFaderHandle{ -1, -1 };
     const bool stripFader = stripMode && csf.vst3Param >= 0;
     // SENDS + FLIP send-on-fader: the fader rides the FIRST of the 4 shown sends
     // (7.75 mixer slot g_uf1SendGroup*4 + 0, combinedSendSlot_) of the focused
@@ -24893,9 +24915,9 @@ void uf1PaintChannel_()
     const bool sendFlip = (g_uf1ChannelSubMode.load() == 2) && flip && !stripFader;
     StripRoute sendRoute;
     if (sendFlip) {
-        const CombinedSlot cs = combinedSendSlot_(tr, g_uf1SendGroup.load() * 4);
+        const CombinedSlot cs = combinedSendSlot_(ftr, g_uf1SendGroup.load() * 4);
         if (cs.apiIndex >= 0) {
-            sendRoute.track = tr; sendRoute.sendCategory = cs.category;
+            sendRoute.track = ftr; sendRoute.sendCategory = cs.category;
             sendRoute.sendIndex = cs.apiIndex; sendRoute.valid = true;
         }
     }
@@ -24919,7 +24941,7 @@ void uf1PaintChannel_()
     int  stickyFx = -1, stickyParam = -1; bool stickyTog = false;
     const bool stickyFader = flip && !stripFader && !sendFader
         && g_stickyActive.load()
-        && stickyResolveOnTrack_(tr, &stickyFx, &stickyParam, &stickyTog);
+        && stickyResolveOnTrack_(ftr, &stickyFx, &stickyParam, &stickyTog);
     // End-of-edit finalise (finishRouteVolEdit_ isend=1) fired ONCE on touch-release,
     // so Touch-mode recording stops + snaps back like the surface send-fader path.
     static bool sSendFaderEditing = false;
@@ -24928,7 +24950,7 @@ void uf1PaintChannel_()
         if (g_uf1FaderHasPos.load()) {
             if (stripFader) {
                 const double n = std::clamp(double(pos) / double(kUf1FaderMax), 0.0, 1.0);
-                TrackFX_SetParamNormalized(tr, csf.fxIndex, csf.vst3Param, n);
+                TrackFX_SetParamNormalized(ftr, csf.fxIndex, csf.vst3Param, n);
             }
             else if (extSendFader) {
                 writeRouteVolAutomation_(extRoute, kExtSendGestureSlot, uf1PosToVol_(pos));
@@ -24945,11 +24967,11 @@ void uf1PaintChannel_()
             }
             else if (stickyFader) {
                 const double n = std::clamp(double(pos) / double(kUf1FaderMax), 0.0, 1.0);
-                TrackFX_SetParamNormalized(tr, stickyFx, stickyParam, n);
+                TrackFX_SetParamNormalized(ftr, stickyFx, stickyParam, n);
                 g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // don't let the move steal focus
             }
-            else if (flip && !sendFlip) CSurf_OnPanChange(tr, uf1PosToPan_(pos), /*relative*/false);
-            else      CSurf_OnVolumeChange(tr, uf1PosToVol_(pos), false);
+            else if (flip && !sendFlip) CSurf_OnPanChange(ftr, uf1PosToPan_(pos), /*relative*/false);
+            else      CSurf_OnVolumeChange(ftr, uf1PosToVol_(pos), false);
             // Echo the user's hand position to the firmware's MOTOR TARGET every
             // tick while the motor is limp. FF 1E while limp only updates the
             // target (it doesn't drive — verified: no mid-drag motion). This is
@@ -24979,21 +25001,21 @@ void uf1PaintChannel_()
         }
         uint16_t pos;
         if (stripFader) {
-            const double n = TrackFX_GetParamNormalized(tr, csf.fxIndex, csf.vst3Param);
+            const double n = TrackFX_GetParamNormalized(ftr, csf.fxIndex, csf.vst3Param);
             pos = static_cast<uint16_t>(std::clamp(n, 0.0, 1.0) * double(kUf1FaderMax) + 0.5);
         } else if (extSendFader) {
-            pos = uf1VolToPos_(readRouteVolumeLinear_(extRoute, tr));   // motor follows the 9th send
+            pos = uf1VolToPos_(readRouteVolumeLinear_(extRoute, ftr));   // motor follows the 9th send
         } else if (extRouteActive) {
             pos = 0;   // empty/absent 9th slot → park the motor low, like a blank UF8 send strip
         } else if (sendFader) {
-            pos = uf1VolToPos_(readRouteVolumeLinear_(sendRoute, tr));   // motor follows EFFECTIVE
+            pos = uf1VolToPos_(readRouteVolumeLinear_(sendRoute, ftr));   // motor follows EFFECTIVE
         } else if (stickyFader) {
-            const double n = TrackFX_GetParamNormalized(tr, stickyFx, stickyParam);
+            const double n = TrackFX_GetParamNormalized(ftr, stickyFx, stickyParam);
             pos = static_cast<uint16_t>(std::clamp(n, 0.0, 1.0) * double(kUf1FaderMax) + 0.5);
         } else if (flip && !sendFlip) {
-            pos = uf1PanToPos_(GetMediaTrackInfo_Value(tr, "D_PAN"));
+            pos = uf1PanToPos_(GetMediaTrackInfo_Value(ftr, "D_PAN"));
         } else {
-            pos = uf1VolToPos_(GetMediaTrackInfo_Value(tr, "D_VOL"));
+            pos = uf1VolToPos_(GetMediaTrackInfo_Value(ftr, "D_VOL"));
         }
         if (pos != sLastMotorPos) { g_uf1_dev->send(uf1::buildMotorPosition(pos)); sLastMotorPos = pos; }
         if (!sMotorEngaged) { g_uf1_dev->send(uf1::buildMotorEnable(true)); sMotorEngaged = true; }
