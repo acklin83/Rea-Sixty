@@ -20497,18 +20497,29 @@ uint8_t uf1PpmByte_(float mark)
     return static_cast<uint8_t>(std::lround(b));
 }
 
-// RTA band value: dBFS -> byte. A pure linear law (cap90), derived from the
-// screen's own scale settings (SclTop 0 dB, SclBtm -120 dB, cap76):
-// byte = 3 + (dBFS + 120) * 5/3, clamped to [3, 200]. Header baseline is 3.
-uint8_t uf1RtaByte_(float dbfs)
+// RTA band value: dBFS -> byte, across the screen's OWN scale. cap90 measured a
+// pure linear law at SclTop 0 dB / SclBtm -120 dB — byte = 3 + (dBFS + 120)·5/3 —
+// and said in as many words that it "should be DERIVED from SclTop/SclBtm, not
+// hardcoded; those are TrackFX params we can read". It never was, so both V-Pots
+// moved the plug-in and changed nothing on the UF1 (Frank 2026-08-11).
+//
+// The span is what generalises: 3 is the header baseline, the bar runs to 200, so
+//   byte = 3 + (dBFS - bottom) · 197/(top - bottom)
+// ⚠ cap90's 5/3 is 200/120, i.e. it used 200 counts of travel, not 197 — keep
+// THAT, or the byte-exact 198-at-3-dBFS check stops matching:
+//   byte = 3 + (dBFS - bottom) · 200/(top - bottom), clamped [3, 200].
+// At the captured settings this is the same law, digit for digit.
+uint8_t uf1RtaByte_(float dbfs, float topDb, float botDb)
 {
-    // Empty / below-floor band: SSL emits byte 0, NOT the baseline 3.
-    // Verified byte-exact against the wire (cap90_uf1_rta_level, cap81_uf1_meter_rta):
+    // Empty / below-floor band: SSL emits byte 0, NOT the baseline 3. Verified
+    // byte-exact against the wire (cap90_uf1_rta_level, cap81_uf1_meter_rta):
     // byte 0 is the dominant empty-band value and byte 2 is never emitted, so the
     // scale bottom is 0 (empty) -> 1 -> law baseline 3+. Emitting 3 here lit a
     // permanent 1px floor across every quiet band.
-    if (!std::isfinite(dbfs) || dbfs <= -120.f) return 0;
-    double b = 3.0 + (static_cast<double>(dbfs) + 120.0) * (5.0 / 3.0);
+    if (!std::isfinite(dbfs) || dbfs <= botDb) return 0;
+    const double span = double(topDb) - double(botDb);
+    if (!(span > 0.0)) return 0;
+    double b = 3.0 + (double(dbfs) - double(botDb)) * (200.0 / span);
     if (b < 3.0)   b = 3.0;
     if (b > 200.0) b = 200.0;
     return static_cast<uint8_t>(std::lround(b));
@@ -21356,6 +21367,23 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             sslcore::getMeter(int(sslmeter::DataType::Rta31Band), cur, pk) &&
             cur.size() >= 31;
 
+        // The screen's own scale — params 22/23, read as the plug-in FORMATS them
+        // ("0 dB", "-120 dB") rather than rebuilt from the normalised value: both
+        // are enums on the wire and the step list is the plug-in's business.
+        // Without this the bars ran on the captured default whatever the V-Pots
+        // said, which is exactly what SclTop/SclBtm "doing nothing" looked like.
+        float rtaTop = 0.f, rtaBot = -120.f;
+        {
+            MediaTrack* mtr = nullptr; int mfx = -1;
+            if (uf1PinnedMeterTrackFx_(mtr, mfx)) {
+                char buf[64] = {0};
+                if (TrackFX_GetFormattedParamValue(mtr, mfx, 22, buf, sizeof(buf)) && buf[0])
+                    rtaTop = float(std::atof(buf));
+                if (TrackFX_GetFormattedParamValue(mtr, mfx, 23, buf, sizeof(buf)) && buf[0])
+                    rtaBot = float(std::atof(buf));
+            }
+            if (!(rtaTop > rtaBot)) { rtaTop = 0.f; rtaBot = -120.f; }
+        }
         std::array<uint8_t, 64> rta{};
         rta[0] = 0x00; rta[1] = 0x03;
         // Own peak-hold per band (the plugin's pk array isn't always present).
@@ -21371,8 +21399,8 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             if (have && (pk.size() >= 31)) h = pk[static_cast<size_t>(i)];
             else if (v >= h) h = v;
             else { h = static_cast<float>(h - 26.5 * dtR); if (h < v) h = v; }
-            rta[static_cast<size_t>(2 + 2 * i)] = uf1RtaByte_(v);
-            rta[static_cast<size_t>(3 + 2 * i)] = uf1RtaByte_(h);
+            rta[static_cast<size_t>(2 + 2 * i)] = uf1RtaByte_(v, rtaTop, rtaBot);
+            rta[static_cast<size_t>(3 + 2 * i)] = uf1RtaByte_(h, rtaTop, rtaBot);
         }
         static std::array<uint8_t, 64> sRta{};
         if (force || rta != sRta) {
