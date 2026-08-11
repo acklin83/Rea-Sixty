@@ -10654,8 +10654,19 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
             // curated. Name-alias is only a FALLBACK for a control the map leaves
             // unmapped (e.g. an un-learned JSFX HPF). It must never override an
             // explicit mapping (that grabbed bx's 'HPF On/Off' over 'HPF Frequency').
-            int sp = uc1::hudParamForControl(oldMap, false, linkIdx, isBtn, nullptr);
-            int dp = uc1::hudParamForControl(dstMap, false, linkIdx, isBtn, nullptr);
+            // ★ The invert flag matters for the BUTTON column. buttonInverted says
+            // the param's numeric sense runs backwards to what the control MEANS
+            // (SSL "Bypass": 1 = off, vs a plug-in's "EQ In": 1 = on). Both sides
+            // were read with nullptr here, so the RAW value was carried across a
+            // mismatched pair and the control landed the wrong way round (Frank
+            // 2026-08-11, a learned EQ with EQ-IN inverted).
+            // The knob column's `inverted[]` is a different animal — an ENCODER
+            // DIRECTION flag ("physical CW should decrease the VST3 value") — and
+            // must never be applied to a carried value.
+            bool srcInv = false, dstInv = false;
+            int sp = uc1::hudParamForControl(oldMap, false, linkIdx, isBtn, &srcInv);
+            int dp = uc1::hudParamForControl(dstMap, false, linkIdx, isBtn, &dstInv);
+            if (!isBtn) { srcInv = false; dstInv = false; }
             // Name-based fallback for controls without an explicit FX-Learn map —
             // skipped when "copy only mapped parameters" is on, so unmapped plug-in
             // internals (e.g. SSL CS Auto Makeup Gain) are never carried. Frank 2026-06-27.
@@ -10795,7 +10806,34 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
                         }
                     }
                 }
-                if (!didFilterOff) {
+                // POLARITY MISMATCH on a toggle: the two sides disagree about which
+                // raw value means "on", so carrying the raw value switches the
+                // control the wrong way round. Write the MEANING instead — read it
+                // exactly as the UC1 LED does (UC1Surface: `inverted ? !raw : raw`)
+                // and re-encode it under the DESTINATION's own flag. 0/1 is the
+                // established encoding for these buttons ("Toggle write itself still
+                // flips between 0 and 1", UC1PluginMap.h).
+                // Runs ONLY when the two flags actually differ — an agreeing pair
+                // (both normal, or both inverted) means the raw values already carry
+                // the same meaning, and the tuned discrete path below stays untouched.
+                bool didPolarity = false;
+                if (!didFilterOff && isBtn && srcInv != dstInv
+                    && sp != uc1::kParamNone) {
+                    const bool rawOn   = TrackFX_GetParamNormalized(tr, oldIdx, sp) >= 0.5;
+                    const bool meaning = srcInv ? !rawOn : rawOn;   // what the surface shows
+                    const double outN  = (dstInv ? !meaning : meaning) ? 1.0 : 0.0;
+                    TrackFX_SetParamNormalized(tr, newIdx, dp, outN);
+                    appliedN = outN; appliedH = newHash;
+                    didPolarity = true;
+                    if (const char* en = GetExtState("rea_sixty", "cs_log");
+                        en && en[0] == '1') {
+                        char lg[200]; std::snprintf(lg, sizeof(lg),
+                            "[cs] k=%d POLARITY srcInv=%d dstInv=%d raw=%d -> means=%d n=%.1f",
+                            key, int(srcInv), int(dstInv), int(rawOn), int(meaning), outN);
+                        csLog_(lg);
+                    }
+                }
+                if (!didFilterOff && !didPolarity) {
                     applyParamValue_(tr, newIdx, dp, val, key);
                     appliedN = TrackFX_GetParamNormalized(tr, newIdx, dp);
                     appliedH = newHash;             // wrote → this plug-in holds it now
@@ -11039,8 +11077,12 @@ static bool switchBcTo_(MediaTrack* tr, const char* addName,
         const bool copied = !forceOwnSettings;
         for (int btn = 0; btn <= 1; ++btn) {
             const bool isBtn = (btn != 0);
-            int sp = uc1::hudParamForControl(oldMap, true, linkIdx, isBtn, nullptr);
-            int dp = uc1::hudParamForControl(dstMap, true, linkIdx, isBtn, nullptr);
+            // Button-column polarity, exactly as in switchCsTo_ — the BC twin had
+            // the same nullptr and therefore the same wrong-way-round toggle.
+            bool srcInv = false, dstInv = false;
+            int sp = uc1::hudParamForControl(oldMap, true, linkIdx, isBtn, &srcInv);
+            int dp = uc1::hudParamForControl(dstMap, true, linkIdx, isBtn, &dstInv);
+            if (!isBtn) { srcInv = false; dstInv = false; }
             // Name-based fallback for controls without an explicit FX-Learn map —
             // skipped when "copy only mapped parameters" is on, so unmapped plug-in
             // internals (e.g. SSL CS Auto Makeup Gain) are never carried. Frank 2026-06-27.
@@ -11097,10 +11139,27 @@ static bool switchBcTo_(MediaTrack* tr, const char* addName,
             unsigned appliedH = val.appliedHash;
             if (dp != uc1::kParamNone && !dstWritten.count(dp)) {
                 dstWritten.insert(dp);
-                applyParamValue_(tr, newIdx, dp, val, key);
-                appliedN = TrackFX_GetParamNormalized(tr, newIdx, dp);
-                appliedH = newHash;
-                if (val.numeric) reapply.push_back({ dp, key, val });
+                // Polarity mismatch on a toggle — see switchCsTo_ for the reasoning.
+                // Only fires when the two invert flags actually differ.
+                if (isBtn && srcInv != dstInv && sp != uc1::kParamNone) {
+                    const bool rawOn   = TrackFX_GetParamNormalized(tr, oldIdx, sp) >= 0.5;
+                    const bool meaning = srcInv ? !rawOn : rawOn;
+                    const double outN  = (dstInv ? !meaning : meaning) ? 1.0 : 0.0;
+                    TrackFX_SetParamNormalized(tr, newIdx, dp, outN);
+                    appliedN = outN; appliedH = newHash;
+                    if (const char* en = GetExtState("rea_sixty", "cs_log");
+                        en && en[0] == '1') {
+                        char lg[200]; std::snprintf(lg, sizeof(lg),
+                            "[bc] k=%d POLARITY srcInv=%d dstInv=%d raw=%d -> means=%d n=%.1f",
+                            key, int(srcInv), int(dstInv), int(rawOn), int(meaning), outN);
+                        csLog_(lg);
+                    }
+                } else {
+                    applyParamValue_(tr, newIdx, dp, val, key);
+                    appliedN = TrackFX_GetParamNormalized(tr, newIdx, dp);
+                    appliedH = newHash;
+                    if (val.numeric) reapply.push_back({ dp, key, val });
+                }
             }
             intent[key] = val;
             intent[key].appliedNorm = appliedN;
