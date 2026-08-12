@@ -4618,6 +4618,8 @@ std::atomic<bool>       g_uf1RazorContentFresh{false};   // set on press → gra
 struct Uf1EnvPt { double t, v, tn; int sh; };
 struct Uf1EnvDrag {
     TrackEnvelope* env = nullptr;
+    TrackEnvelope* srcEnv = nullptr;  // where it was lifted from — a lane change is an edit
+                                      // even at offset 0, so the edge points are still due
     double s = 0.0, e = 0.0;          // the area as it stood at gesture start
     std::vector<Uf1EnvPt> pts;        // lifted once
     std::vector<Uf1EnvPt> under;      // what the CURRENT destination held before we covered it
@@ -8807,6 +8809,225 @@ static std::string uf1EnvGuid_(TrackEnvelope* env)
     GetSetEnvelopeInfo_String(env, "GUID", buf.data(), false);
     return std::string(buf.data());
 }
+static TrackEnvelope* uf1EnvByGuidOnTrack_(MediaTrack* tr, const std::string& guid);
+
+static void uf1EnvShow_(TrackEnvelope* env);   // defined once the action helpers exist
+static MediaTrack* uf1TrackOfEnvelope_(TrackEnvelope* env);
+
+// Envelopes THIS gesture brought into existence, with the action that did it and the point
+// count it had right after — the yardstick for whether the gesture left it untouched.
+struct Uf1EnvMade { TrackEnvelope* env; MediaTrack* tr; int cmd; int pts; };
+std::vector<Uf1EnvMade> g_uf1RazorEnvMade;
+
+// Run a main-section action against ONE track. The action list works on the selection, so
+// the selection is set and then put back exactly as it was — count, order and "nothing was
+// selected" included.
+static void uf1RunActionOnTrack_(int cmd, MediaTrack* tr)
+{
+    if (!cmd || !tr) return;
+    std::vector<MediaTrack*> sel;
+    const int ns = CountSelectedTracks(nullptr);
+    sel.reserve(size_t(ns < 0 ? 0 : ns));
+    for (int i = 0; i < ns; ++i)
+        if (MediaTrack* t = GetSelectedTrack(nullptr, i)) sel.push_back(t);
+    // ★ RUNNING AN ACTION WIPES THE RAZOR AREAS. Measured, not assumed (trace 2026-08-12):
+    // the content drag created the destination envelope, and the very next line was
+    // "[rzcreate]" — the area was gone and the jog made a fresh one at the cursor. The
+    // rectangle path never showed it because it writes the areas back itself right after.
+    // Snapshot and restore, so the one caller that has nothing to write back survives too.
+    std::vector<std::pair<MediaTrack*, std::string>> razor;
+    const int nt = CountTracks(nullptr);
+    for (int i = 0; i < nt; ++i)
+        if (MediaTrack* t = GetTrack(nullptr, i)) {
+            std::string s = uf1RazorGet_(t);
+            if (!s.empty()) razor.push_back({ t, std::move(s) });
+        }
+
+    SetOnlyTrackSelected(tr);
+    Main_OnCommandEx(cmd, 0, nullptr);
+    if (sel.empty()) SetTrackSelected(tr, false);
+    else { SetOnlyTrackSelected(sel.front());
+           for (size_t i = 1; i < sel.size(); ++i) SetTrackSelected(sel[i], true); }
+
+    int still = 0;
+    for (auto& r : razor) if (!uf1RazorGet_(r.first).empty()) ++still;
+    for (auto& r : razor)
+        if (ValidatePtr2(nullptr, r.first, "MediaTrack*")) uf1RazorSet_(r.first, r.second);
+    if (!razor.empty() && still == 0)
+        rzlog_("[act] the action cleared %d razor area(s) — restored", int(razor.size()));
+}
+// Find a main-section action by what it is CALLED. No API creates a built-in track
+// envelope — only `create` flags for FX envelopes exist — so making one means running
+// REAPER's own toggle action, and its command ID is not something to guess: the action
+// list is enumerable, so we look the name up at runtime and log what we matched. A miss
+// returns 0 and the caller blocks instead of doing something approximate.
+static int uf1ActionByWords_(const std::vector<std::string>& words)
+{
+    KbdSectionInfo* sec = SectionFromUniqueID(0);          // 0 = main section
+    if (!sec) return 0;
+    const char* nm = nullptr;
+    for (int i = 0; ; ++i) {
+        const int cmd = kbd_enumerateActions(sec, i, &nm);
+        if (!cmd) break;
+        if (!nm) continue;
+        std::string low(nm);
+        std::transform(low.begin(), low.end(), low.begin(),
+                       [](unsigned char c) { return char(std::tolower(c)); });
+        bool all = true;
+        for (const auto& w : words) if (low.find(w) == std::string::npos) { all = false; break; }
+        if (all) { rzlog_("[act] \"%s\" → %d", nm, cmd); return cmd; }
+    }
+    return 0;
+}
+// The action that toggles THIS envelope's lane, found by name. One place, because showing
+// and hiding are the same command.
+static int uf1EnvToggleCmd_(TrackEnvelope* env, char* nameOut, int nameOutSz)
+{
+    if (!env) return 0;
+    if (nameOut && nameOutSz) nameOut[0] = 0;
+    char nm[256]; nm[0] = 0;
+    if (!GetEnvelopeName(env, nm, int(sizeof(nm))) || !nm[0]) return 0;
+    if (nameOut && nameOutSz) { std::snprintf(nameOut, size_t(nameOutSz), "%s", nm); }
+    std::string low(nm);
+    std::transform(low.begin(), low.end(), low.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    return uf1ActionByWords_({ "toggle", low, "envelope", "visible" });
+}
+// Give an existing envelope a lane of its own — REAPER's mouse drag opens the matching lane
+// when a razor area lands there (Frank 2026-08-12).
+//
+// ★ This runs REAPER's own toggle action, NOT a chunk edit. Rewriting the chunk's VIS field
+// was a guess about a format I never read, and it silently did nothing: the lane stayed
+// shut, the block was written onto an invisible envelope, and REAPER threw the razor area
+// away — which is what kept dropping the whole gesture and re-creating a stub area at the
+// cursor. The same action creates and hides these lanes and demonstrably works; the result
+// is checked afterwards either way.
+// Does this envelope have a lane of its own RIGHT NOW? I_TCPH is the obvious candidate and
+// it lies inside a gesture: it is the laid-out height, and the TCP has not been laid out
+// again since the visibility action ran. So a lane we had just hidden still reported a
+// height, uf1EnvShow_ skipped it as "already visible", the area was written onto a hidden
+// envelope, and REAPER discarded it (Frank 2026-08-12, "irgendwas ist immer noch faul" —
+// the trace showed no [act] show line at all before the area failed to stick).
+//
+// The chunk's VIS flag is the state itself rather than a picture of it. Read-only, and the
+// raw character goes into the trace so the parse can be checked instead of believed.
+static bool uf1EnvHasLane_(TrackEnvelope* env)
+{
+    if (!env) return false;
+    std::vector<char> buf(1 << 16); buf[0] = 0;
+    if (GetEnvelopeStateChunk(env, buf.data(), int(buf.size()), false)) {
+        std::string ch(buf.data());
+        size_t p = ch.compare(0, 4, "VIS ") == 0 ? 0 : ch.find("\nVIS ");
+        if (p != std::string::npos) {
+            if (ch[p] == '\n') ++p;
+            const char v = (p + 4 < ch.size()) ? ch[p + 4] : '?';
+            rzlog_("   VIS='%c' (I_TCPH=%.0f)", v, GetEnvelopeInfo_Value(env, "I_TCPH"));
+            return v != '0';
+        }
+    }
+    return GetEnvelopeInfo_Value(env, "I_TCPH") > 0.0;
+}
+// Is any razor area currently sitting on this envelope? Nothing may hide a lane that still
+// carries one — REAPER drops the area with it, and the gesture loses its rectangle.
+static bool uf1RazorHasAreaFor_(TrackEnvelope* env)
+{
+    if (!env) return false;
+    const std::string g = uf1EnvGuid_(env);
+    if (g.empty()) return false;
+    const int n = CountTracks(nullptr);
+    for (int i = 0; i < n; ++i)
+        if (MediaTrack* t = GetTrack(nullptr, i))
+            if (uf1RazorGet_(t).find(g) != std::string::npos) return true;
+    return false;
+}
+static void uf1EnvShow_(TrackEnvelope* env)
+{
+    if (!env || uf1EnvHasLane_(env)) return;                          // already has a lane
+    MediaTrack* tr = uf1TrackOfEnvelope_(env);
+    char nm[256] = { 0 };
+    const int cmd = uf1EnvToggleCmd_(env, nm, int(sizeof(nm)));
+    if (!tr || !cmd) { rzlog_("[act] cannot show \"%s\" — no track or no action", nm); return; }
+    uf1RunActionOnTrack_(cmd, tr);
+    const bool ok = uf1EnvHasLane_(env);
+    rzlog_("[act] show \"%s\" on track %d → %s", nm,
+           int(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER")), ok ? "visible" : "STILL HIDDEN");
+    // OPENING a lane counts exactly like making one. From the second pass over the same
+    // track onwards the envelope already exists — hidden, because the pass before handed
+    // it back — so it is only shown, and registering just the CREATE left it open from
+    // then on (Frank 2026-08-12: "zieh mal runter und dann wieder hoch"). Both ways in,
+    // one way out.
+    if (ok) {
+        bool known = false;
+        for (auto& m : g_uf1RazorEnvMade) if (m.env == env) { known = true; break; }
+        if (!known) g_uf1RazorEnvMade.push_back({ env, tr, cmd, CountEnvelopePointsEx(env, -1) });
+    }
+}
+// The SAME envelope on another track — matched by name, which is what "the same lane one
+// track down" means to a user (Volume → Volume). Shown if hidden, CREATED if the track
+// doesn't have it yet, because that is what REAPER's own drag does (Frank 2026-08-12).
+//
+// Creating runs REAPER's toggle action on the destination track, which needs it selected —
+// the selection is put back exactly as it was. The result is then RE-CHECKED: if the
+// envelope still isn't there the lookup failed and we return null, so a wrong action can
+// never quietly do something else to the project.
+static TrackEnvelope* uf1EnvLikeOnTrack_(MediaTrack* dst, TrackEnvelope* src)
+{
+    if (!dst || !src) return nullptr;
+    char nm[256]; nm[0] = 0;
+    if (!GetEnvelopeName(src, nm, int(sizeof(nm))) || !nm[0]) return nullptr;
+    if (TrackEnvelope* e = GetTrackEnvelopeByName(dst, nm)) { uf1EnvShow_(e); return e; }
+
+    std::string low(nm);
+    std::transform(low.begin(), low.end(), low.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    const int cmd = uf1ActionByWords_({ "toggle", low, "envelope", "visible" });
+    if (!cmd) { rzlog_("[act] no action found for \"%s\" envelope", nm); return nullptr; }
+    uf1RunActionOnTrack_(cmd, dst);
+
+    TrackEnvelope* e = GetTrackEnvelopeByName(dst, nm);
+    rzlog_("[act] create \"%s\" on track %d → %s", nm,
+           int(GetMediaTrackInfo_Value(dst, "IP_TRACKNUMBER")), e ? "ok" : "STILL MISSING");
+    if (!e) return nullptr;
+    uf1EnvShow_(e);
+    // Remember it, so passing on can take it away again — see uf1EnvUndoMade_.
+    g_uf1RazorEnvMade.push_back({ e, dst, cmd, CountEnvelopePointsEx(e, -1) });
+    return e;
+}
+// REAPER deletes an envelope it created mid-drag as soon as the drag moves on, provided
+// the drag left it as it found it (Frank 2026-08-12). Same here: the toggle action that
+// made it is simply run again — and ONLY when the point count is back to what it was at
+// creation, so a block that stayed behind can never take its lane down with it. A freshly
+// made envelope is not necessarily empty (REAPER seeds one point), which is why this
+// compares against the count AT CREATION rather than against zero.
+static void uf1EnvUndoMade_(TrackEnvelope* env)
+{
+    for (size_t i = 0; i < g_uf1RazorEnvMade.size(); ++i) {
+        if (g_uf1RazorEnvMade[i].env != env) continue;
+        const Uf1EnvMade m = g_uf1RazorEnvMade[i];
+        if (!env || !ValidatePtr2(nullptr, env, "TrackEnvelope*")) {
+            g_uf1RazorEnvMade.erase(g_uf1RazorEnvMade.begin() + long(i));
+            return;
+        }
+        // ⛔ Never hide a lane that still carries a razor area — REAPER drops the area with
+        // it and the gesture loses its rectangle. Stays on the list so a later pass can
+        // still hand it back once the area has moved off.
+        if (uf1RazorHasAreaFor_(env)) {
+            rzlog_("[act] keeping the envelope we made — an area is still on it");
+            return;
+        }
+        const int now = CountEnvelopePointsEx(env, -1);
+        if (now != m.pts) {
+            g_uf1RazorEnvMade.erase(g_uf1RazorEnvMade.begin() + long(i));
+            rzlog_("[act] keeping the envelope we made (%d points, was %d)", now, m.pts);
+            return;
+        }
+        g_uf1RazorEnvMade.erase(g_uf1RazorEnvMade.begin() + long(i));
+        uf1RunActionOnTrack_(m.cmd, m.tr);
+        rzlog_("[act] removed the envelope we made on track %d",
+               int(GetMediaTrackInfo_Value(m.tr, "IP_TRACKNUMBER")));
+        return;
+    }
+}
 // Nearest VISIBLE track above / below (BirdBird get_previous/next_visible_track).
 static MediaTrack* uf1PrevVisibleTrack_(MediaTrack* tr)
 {
@@ -8941,19 +9162,61 @@ static void uf1RazorSlideTime_(double delta, int edge)
     }
     UpdateArrange();
 }
-// Move the WHOLE razor rectangle one LANE (dir +1 down / -1 up). Blocked at either end of
-// the lane list, so nothing is lost by running off the edge.
+// Move the WHOLE razor rectangle one TRACK (dir +1 down / -1 up), keeping each area on
+// the KIND of lane it was on: a media area lands on the destination track's media lane, an
+// envelope area on that track's envelope of the SAME NAME — opened if it was hidden. That
+// is what the mouse does (Frank 2026-08-12), and it is the only reading that makes sense:
+// walking a flat lane list would drop a Volume area onto some unrelated Pan lane, and the
+// older track-only walk copied the GUID verbatim onto a track where it means nothing.
+//
+// Blocked as a whole — at the track boundary, or when any destination track lacks the
+// envelope — so a move never half-lands. Growing the rectangle is a different question and
+// still walks lanes: see uf1RazorVertEdgeOnce_.
 static void uf1RazorShiftTracksOnce_(int dir)
 {
-    const auto lanes = uf1RazorLanes_();
-    auto occ = uf1RazorOccupancy_(lanes);
-    if (occ.empty() || lanes.empty()) return;
-    for (auto& o : occ) {
-        const int nl = o.lane + dir;
-        if (nl < 0 || nl >= int(lanes.size())) return;
-        o.lane = nl;
+    auto tracks = uf1RazorTracks_();
+    if (tracks.empty()) return;
+    struct Mv { MediaTrack* dst; double s, e; std::string guid; };
+    std::vector<Mv> mv;
+    std::vector<TrackEnvelope*> leaving;         // handed back AFTER the area has moved off
+    for (auto& rt : tracks) {
+        MediaTrack* dst = dir > 0 ? uf1NextVisibleTrack_(rt.tr) : uf1PrevVisibleTrack_(rt.tr);
+        if (!dst) return;                       // off the end — move nothing
+        for (auto& tp : uf1RazorParse_(rt.str)) {
+            if (uf1RazorIsMediaGuid_(tp.guid)) { mv.push_back({ dst, tp.s, tp.e, "\"\"" }); continue; }
+            TrackEnvelope* src = uf1EnvByGuidOnTrack_(rt.tr, tp.guid);
+            TrackEnvelope* ne  = uf1EnvLikeOnTrack_(dst, src);
+            if (!ne) {
+                rzlog_("[lane] BLOCKED: track %d has no envelope matching %s",
+                       int(GetMediaTrackInfo_Value(dst, "IP_TRACKNUMBER")), tp.guid.c_str());
+                return;
+            }
+            if (src) leaving.push_back(src);
+            mv.push_back({ dst, tp.s, tp.e, "\"" + uf1EnvGuid_(ne) + "\"" });
+        }
     }
-    uf1RazorApplyOcc_(lanes, occ);
+    for (auto& rt : tracks) uf1RazorSet_(rt.tr, "");
+    std::vector<std::pair<MediaTrack*, std::string>> build;
+    for (auto& m : mv) {
+        auto it = build.begin();
+        for (; it != build.end(); ++it) if (it->first == m.dst) break;
+        if (it == build.end()) { build.push_back({ m.dst, std::string() }); it = build.end() - 1; }
+        char num[64];
+        if (!it->second.empty()) it->second += ' ';
+        std::snprintf(num, sizeof(num), "%.15g", m.s); it->second += num; it->second += ' ';
+        std::snprintf(num, sizeof(num), "%.15g", m.e); it->second += num; it->second += ' ';
+        it->second += m.guid;
+    }
+    for (auto& kv : build) uf1RazorSet_(kv.first, kv.second);
+    // Only NOW is it safe to give back a lane this gesture borrowed: the area has left it,
+    // so dropping it can't take the area down with it.
+    for (TrackEnvelope* e : leaving) uf1EnvUndoMade_(e);
+    // Did it stick? REAPER silently discards an area whose lane isn't visible, and that
+    // loss used to surface three steps later as a stub area at the cursor. Say it here.
+    for (auto& kv : build)
+        if (uf1RazorGet_(kv.first).empty())
+            rzlog_("[lane] area did NOT stick on track %d: [%s]",
+                   int(GetMediaTrackInfo_Value(kv.first, "IP_TRACKNUMBER")), kv.second.c_str());
     UpdateArrange();
 }
 // Grow / retract the top or bottom edge of the rectangle by one LANE. dir +1 = the edge
@@ -9053,7 +9316,7 @@ static void uf1EnvPin_(TrackEnvelope* env, double t, double raw)
 // the envelope right here — that IS the move; a COPY leaves the original untouched.
 static Uf1EnvDrag uf1RazorEnvLift_(TrackEnvelope* env, double s, double e, bool copy)
 {
-    Uf1EnvDrag d; d.env = env; d.s = s; d.e = e;
+    Uf1EnvDrag d; d.env = env; d.srcEnv = env; d.s = s; d.e = e;
     if (!env) return d;
     d.edgeS = uf1EnvRawAt_(env, s - kUf1EnvEdgeDelta);   // BEFORE the hole exists
     d.edgeE = uf1EnvRawAt_(env, e + kUf1EnvEdgeDelta);
@@ -9078,6 +9341,55 @@ static Uf1EnvDrag uf1RazorEnvLift_(TrackEnvelope* env, double s, double e, bool 
         Envelope_SortPointsEx(env, -1);
     }
     return d;
+}
+static void uf1RazorEnvWrite_(Uf1EnvDrag& d, double amt);
+static MediaTrack* uf1TrackOfEnvelope_(TrackEnvelope* env);
+
+// Put the current destination back exactly as it was found: our edge points sit JUST
+// OUTSIDE the stamp range so the range delete can't reach them and they need their own
+// pinpoint removal — before `under` goes back, or the restore lands on top of them.
+// Split out because a vertical step has to unstamp one envelope and stamp another.
+static void uf1RazorEnvUnstamp_(Uf1EnvDrag& d)
+{
+    if (!d.env || !d.written) return;
+    if (!ValidatePtr2(nullptr, d.env, "TrackEnvelope*")) return;
+    const double a = d.s + d.moved, b = d.e + d.moved;
+    auto unpin = [&](double t) { DeleteEnvelopePointRangeEx(d.env, -1, t - 1e-7, t + 1e-7); };
+    unpin(a - kUf1EnvEdgeDelta);
+    unpin(b + kUf1EnvEdgeDelta);
+    DeleteEnvelopePointRangeEx(d.env, -1, a - 1e-9, b + 1e-9);
+    bool no = true;
+    for (const auto& p : d.under)
+        InsertEnvelopePointEx(d.env, -1, p.t, p.v, p.sh, p.tn, false, &no);
+    Envelope_SortPointsEx(d.env, -1);
+    d.under.clear();
+    d.written = false;
+}
+// Carry the block to the SAME envelope one track over: take it off the one it is on, then
+// stamp it down on the new one at the offset it already has. The hole pinned at lift stays
+// where it is — that is the source, and a move is supposed to leave it empty.
+static void uf1RazorEnvRetarget_(Uf1EnvDrag& d, int dir)
+{
+    if (!d.env || d.pts.empty()) return;
+    MediaTrack* tr = uf1TrackOfEnvelope_(d.env);
+    if (!tr) return;
+    MediaTrack* dst = dir > 0 ? uf1NextVisibleTrack_(tr) : uf1PrevVisibleTrack_(tr);
+    if (!dst) return;
+    TrackEnvelope* ne = uf1EnvLikeOnTrack_(dst, d.env);
+    if (!ne || ne == d.env) {
+        rzlog_("[envv] track %d has no matching envelope — block stays put",
+               dst ? int(GetMediaTrackInfo_Value(dst, "IP_TRACKNUMBER")) : -1);
+        return;
+    }
+    uf1RazorEnvUnstamp_(d);
+    d.env = ne;
+    rzlog_("[envv] block → track %d", int(GetMediaTrackInfo_Value(dst, "IP_TRACKNUMBER")));
+    uf1RazorEnvWrite_(d, 0.0);             // same offset, new lane
+    // The lane we came from is NOT handed back here — the razor area is still sitting on
+    // it. Taking it away now kills the area's GUID, REAPER drops the area, and the shift
+    // that was about to move it finds nothing left to move (Frank 2026-08-12: dragging
+    // onto a track without the envelope did nothing, and the razor reappeared at the
+    // cursor). uf1RazorShiftTracksOnce_ hands it back once the area has moved off.
 }
 // Stamp the lifted points at the new offset. The drag stays NON-DESTRUCTIVE, the way a
 // mouse drag is: nothing under the area is lost until the gesture ends, so jogging back
@@ -9118,16 +9430,7 @@ static void uf1RazorEnvWrite_(Uf1EnvDrag& d, double amt)
         }
         return out;
     };
-    // Our own edge points sit JUST OUTSIDE the stamp range, so the range delete above
-    // can't take them back — they need their own pinpoint removal, and it has to happen
-    // before `under` is restored or the restore lands on top of them.
-    auto unpin = [&](double t) { DeleteEnvelopePointRangeEx(d.env, -1, t - 1e-7, t + 1e-7); };
-    if (d.written) {                       // leave the old range exactly as we found it
-        unpin(d.s + d.moved - kUf1EnvEdgeDelta);
-        unpin(d.e + d.moved + kUf1EnvEdgeDelta);
-        DeleteEnvelopePointRangeEx(d.env, -1, d.s + d.moved - 1e-9, d.e + d.moved + 1e-9);
-        stamp(d.under, 0.0);
-    }
+    uf1RazorEnvUnstamp_(d);                // leave the old range exactly as we found it
     d.moved += amt;
     const double a = d.s + d.moved, b = d.e + d.moved;
     d.under = collect(a, b);               // …and remember the new one before covering it
@@ -9136,9 +9439,13 @@ static void uf1RazorEnvWrite_(Uf1EnvDrag& d, double amt)
     DeleteEnvelopePointRangeEx(d.env, -1, a - 1e-9, b + 1e-9);
     stamp(d.pts, d.moved);
     // EDGE POINTS while dragging, not only on release (Frank 2026-08-12) — they are put
-    // down and taken back with the block, so jogging back is still lossless. At offset 0
-    // there is nothing to pin: the block is home and the timeline is untouched.
-    if (d.moved != 0.0) {
+    // down and taken back with the block, so jogging back is still lossless. Nothing to pin
+    // only when the block is genuinely HOME: same lane, same offset. A lane change at
+    // offset 0 is a real edit — dragging a block one track down without moving it in time
+    // left the destination with no edge point at all, so everything right of the block
+    // ramped away to the next surviving point instead of carrying on at its old value
+    // (Frank 2026-08-12, "wir machen den rest rechts der envelope kaputt").
+    if (d.moved != 0.0 || d.env != d.srcEnv) {
         uf1EnvPin_(d.env, a - kUf1EnvEdgeDelta, d.outA);
         uf1EnvPin_(d.env, b + kUf1EnvEdgeDelta, d.outB);
     }
@@ -9498,6 +9805,7 @@ static void uf1RazorContentGesture_(bool vertical, int dir, double amt, bool cop
         g_uf1RazorGrabDone.store(true);                // …even if it finds nothing
         g_uf1RazorCopyClones.clear();
         g_uf1RazorEnvDrag.clear();
+        g_uf1RazorEnvMade.clear();
         g_uf1RazorDragIsCopy = copy;
         if (!g_uf1RazorUndoOpen.exchange(true)) Undo_BeginBlock2(nullptr);
         rzlogRazor_("razor");
@@ -9569,6 +9877,8 @@ static void uf1RazorContentGesture_(bool vertical, int dir, double amt, bool cop
             if (dst) jobs.push_back({ it, dst });
         }
         for (auto& j : jobs) MoveMediaItemToTrack(j.it, j.dst);
+        for (auto& d : g_uf1RazorEnvDrag)              // …and the envelope block with them
+            uf1RazorEnvRetarget_(d, dir);
         uf1RazorShiftTracksOnce_(dir);
     } else {                                           // DRAG in time
         for (MediaItem* it : g_uf1RazorCopyClones)
@@ -9764,6 +10074,7 @@ static void uf1RazorContentCommitXfades_()
         rzlog_("[envend] moved=%.4f src=[%.4f..%.4f] dst=[%.4f..%.4f] copy=%d",
                d.moved, d.s, d.e, d.s + d.moved, d.e + d.moved, g_uf1RazorDragIsCopy ? 1 : 0);
     g_uf1RazorEnvDrag.clear();
+    g_uf1RazorEnvMade.clear();   // whatever the block ended on, it keeps its lane
     if (g_uf1RazorUndoOpen.exchange(false))
         Undo_EndBlock2(nullptr, "Rea-Sixty: UF1 razor content move", -1);
 }
@@ -9862,24 +10173,28 @@ void applyUf1JogRazor_(int count, double timeDelta)
         if (accum <= -1.0) { s = static_cast<int>(accum); accum -= s; }
         return s;
     };
+    // CTRL IS THE CROSS AXIS, whatever the nav cross has picked. It used to be read only
+    // for the Whole target, so with the target on an edge — which is where creating an
+    // area leaves it — Ctrl fell through and the jog drew the right edge out instead of
+    // moving the rectangle to the next lane (Frank 2026-08-12, "zeichnet nach rechts
+    // anstatt vertikal zu verschieben"). Ctrl means the same thing in Items mode; a
+    // modifier that quietly does nothing in three of five states is a trap, not a mode.
+    if (ctrl) {
+        int st = vertSteps(); const int d = st > 0 ? 1 : -1;
+        for (int i = 0, k = st > 0 ? st : -st; i < k; ++i) {
+            if (g_uf1RazorContentHeld.load()) uf1RazorContentVertStep_(d, copy);  // with content
+            else                              uf1RazorShiftTracksOnce_(d);        // rectangle only
+        }
+        return;
+    }
     switch (target) {
         case Uf1RazorTarget::LeftEdge:  uf1RazorSlideTime_(timeDelta, -1); break;
         case Uf1RazorTarget::RightEdge: uf1RazorSlideTime_(timeDelta, +1); break;
         case Uf1RazorTarget::Whole:
-            if (g_uf1RazorContentHeld.load()) {
-                // NAV-CENTRE HELD = mouse-down CONTENT drag (Frank 2026-08-07). Ctrl =
-                // across tracks, else in time; Cmd = copy on either axis.
-                if (ctrl) { int st = vertSteps(); const int d = st > 0 ? 1 : -1;
-                            for (int i = 0, k = st > 0 ? st : -st; i < k; ++i)
-                                uf1RazorContentVertStep_(d, copy); }
-                else       applyUf1JogRazorContent_(timeDelta);
-            } else {
-                // NOT held = just slide the SELECTION rectangle (non-destructive).
-                if (ctrl) { int st = vertSteps(); const int d = st > 0 ? 1 : -1;
-                            for (int i = 0, k = st > 0 ? st : -st; i < k; ++i)
-                                uf1RazorShiftTracksOnce_(d); }
-                else       uf1RazorSlideTime_(timeDelta, 0);
-            }
+            // NAV-CENTRE HELD = mouse-down CONTENT drag (Frank 2026-08-07); otherwise just
+            // slide the SELECTION rectangle in time (non-destructive). Cmd = copy.
+            if (g_uf1RazorContentHeld.load()) applyUf1JogRazorContent_(timeDelta);
+            else                              uf1RazorSlideTime_(timeDelta, 0);
             break;
         case Uf1RazorTarget::TopEdge: { int st = vertSteps(); const int d = st > 0 ? 1 : -1;
             for (int i = 0, k = st > 0 ? st : -st; i < k; ++i) uf1RazorVertEdgeOnce_(true, d); break; }
