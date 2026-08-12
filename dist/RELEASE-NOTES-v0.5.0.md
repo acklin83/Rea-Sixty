@@ -35,6 +35,11 @@ spectrum and the full Loudness page set, fed live from the SSL 360° plug-ins. M
 instances can be pinned, and a track with two meters no longer draws one while editing the
 other. The needles read the plug-in's own meter rather than a derived peak.
 
+The meter view carries its own soft-keys as well: RESET for the holds, FINE for a
+finer resolution on continuous parameters, and PRESETS, which browses the plug-in's
+own preset library read straight from SSL's on-disk XML. The channel strip follows
+the selection in that view and keeps showing levels.
+
 **Jog Mode.** The jog wheel no longer has one job. It has an **object**, and the object
 decides what turning it means. Hold `SCRUB` and turn the wheel to pick between
 **Playhead**, **Scrub** (audible scrubbing), **Items**, **Envelope** and **Razor**.
