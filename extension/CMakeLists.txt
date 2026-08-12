@@ -414,6 +414,38 @@ if(WIN32)
     target_compile_definitions(reaper_uf8 PRIVATE NOMINMAX)
 endif()
 
+# Windows gives the main thread 1 MB of stack and MSVC's prologue probes the
+# whole frame before the first instruction, so an oversized local crashes in
+# __chkstk with no breadcrumb and no usable stack trace (0xc00000fd). It has
+# bitten twice: 699a0d0 (Config locals in bindings::load) and the Config
+# temporary inside seedFactoryDefaults_, which reached 90% of the budget once
+# the UF1 fields grew sizeof(Binding). macOS and Linux thread stacks are ~8 MB,
+# so neither notices. Fail the build here instead of on a user's machine.
+# 256 KB is well clear of the largest legitimate frame in the tree
+# (drawFxLearnEditor_, ~149 KB) and well under the cliff. MSVC has no
+# equivalent flag; frame size is a property of the code, so catching it on the
+# other two compilers is enough. Both spellings are probed rather than assumed
+# — GCC and Clang disagree about whether -Werror= accepts an option that takes
+# an argument, and an unverified build flag is how the UF1 merge broke CI.
+if(NOT MSVC)
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag("-Wframe-larger-than=262144" HAVE_WFRAME_LARGER_THAN)
+    if(HAVE_WFRAME_LARGER_THAN)
+        target_compile_options(reaper_uf8 PRIVATE -Wframe-larger-than=262144)
+        check_cxx_compiler_flag("-Werror=frame-larger-than" HAVE_WERROR_FRAME_BARE)
+        if(HAVE_WERROR_FRAME_BARE)
+            target_compile_options(reaper_uf8 PRIVATE -Werror=frame-larger-than)
+        else()
+            check_cxx_compiler_flag("-Werror=frame-larger-than=262144"
+                                    HAVE_WERROR_FRAME_ARG)
+            if(HAVE_WERROR_FRAME_ARG)
+                target_compile_options(reaper_uf8 PRIVATE
+                    -Werror=frame-larger-than=262144)
+            endif()
+        endif()
+    endif()
+endif()
+
 target_link_libraries(reaper_uf8 PRIVATE reasixty_hidapi)
 
 if(APPLE)

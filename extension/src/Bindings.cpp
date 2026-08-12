@@ -512,8 +512,17 @@ Binding mkBuiltin(const char* name, Behavior b, const char* label,
 void seedFactoryDefaults_(Config& c)
 {
     crumb_("seed: enter");
-    c = Config{};
-    crumb_("seed: Config{} done");
+    // `c = Config{}` materialises the temporary on the stack, and
+    // sizeof(Config) is 937 KB against Windows's 1 MB main-thread stack —
+    // MSVC's prologue probes the whole frame before the first instruction,
+    // so this crashes in __chkstk with no breadcrumb (0xc00000fd). 699a0d0
+    // heap-allocated every named Config local for exactly this reason but
+    // could not see this one: it was a temporary, and at the time Config
+    // was 578 KB and fit. The UF1 fields took sizeof(Binding) from 1336 to
+    // 1984 bytes, which is what pushed it over. Move-assign from the heap:
+    // Config is maps and vectors, so the move itself is cheap.
+    { auto fresh = std::make_unique<Config>(); c = std::move(*fresh); }
+    crumb_("seed: fresh Config done");
     c.version     = 2;
     c.activeLayer = 0;
     c.layers[0].name = "Layer 1";
