@@ -404,6 +404,16 @@ endif()
 # everywhere, so opt out of SWELL's macros project-wide.
 target_compile_definitions(reaper_uf8 PRIVATE WDL_NO_DEFINE_MINMAX)
 
+# windows.h #defines min/max too, and SWELL's opt-out above does nothing about
+# those. Unparenthesised std::min / std::max then fail to parse (MSVC C2589,
+# "illegal token on right side of ::") — ~20 sites across main.cpp and
+# SslCoreImpersonator.cpp, none of which the branch ever saw because CI only
+# built main and the UF1 work lived on a branch until 2026-08-12. NOMINMAX at
+# the project level beats parenthesising every call.
+if(WIN32)
+    target_compile_definitions(reaper_uf8 PRIVATE NOMINMAX)
+endif()
+
 target_link_libraries(reaper_uf8 PRIVATE reasixty_hidapi)
 
 if(APPLE)

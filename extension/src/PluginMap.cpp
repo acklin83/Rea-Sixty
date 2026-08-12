@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>          // std::floor — libstdc++/MSVC don't pull it in transitively
 #include <string>
 
 #include "reaper_plugin_functions.h"
