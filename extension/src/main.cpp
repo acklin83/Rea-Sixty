@@ -8916,14 +8916,54 @@ static void uf1RazorEnvStep_(TrackEnvelope* env, double s, double e, double amt,
     }
     Envelope_SortPointsEx(env, -1);
 }
-// Split every item on `tr` at `pos` (BirdBird's split loop — collect first, then split).
-static void uf1RazorSplitAt_(MediaTrack* tr, double pos)
+// Split every item on `tr` at `pos` (BirdBird's split loop — collect first, then split),
+// with an EXACT cut: the two pieces are normalised to meet precisely at `pos`, whatever
+// REAPER's split-crossfade did to the new edges, and the auto-fades it wrote there are
+// cleared. The drop commit sets the real fades afterwards, deliberately.
+//
+// ★ MEASURED, not assumed (razor trace 2026-08-12): even inside Uf1NoAutoEdit_ — with
+// `autoxfade` zeroed for the whole scope — SplitMediaItem STILL pulls the right-hand
+// piece back by the split-crossfade length. A split on a razor bound therefore
+// MANUFACTURES a fade-length fragment straddling that bound, and every crumb in Frank's
+// screenshots is one of those: at the left bound its midpoint falls outside the area, so
+// the grab leaves it on the timeline; at the right bound its midpoint falls inside, so
+// the grab drags it along. Three fixes argued from pictures each moved the fragment
+// somewhere else — the cure is to stop making it.
+//
+// `keep` items are never split. A drop's own edges must not cut a SIBLING drop of the
+// same gesture: the commit snapshots each drop's geometry up front, so a sibling that
+// gets split underneath keeps only its stump under the recorded pointer while its body
+// becomes a new, unlisted item — which the next drop then deletes as "covered" (Frank
+// 2026-08-12: "zweiter copy löscht sogar die kopie"; trace `killed=2`, the drop's own
+// [7.1875..7.5000] gone from `after`).
+static void uf1RazorSplitAt_(MediaTrack* tr, double pos,
+                             const std::unordered_set<MediaItem*>* keep = nullptr)
 {
     std::vector<MediaItem*> items;
     const int cnt = CountTrackMediaItems(tr);
     items.reserve(cnt);
     for (int k = 0; k < cnt; ++k) items.push_back(GetTrackMediaItem(tr, k));
-    for (MediaItem* it : items) SplitMediaItem(it, pos);
+    for (MediaItem* it : items) {
+        if (!it || (keep && keep->count(it))) continue;
+        MediaItem* rhs = SplitMediaItem(it, pos);
+        if (!rhs) continue;                            // not split — leave its fades alone
+        const double lp = GetMediaItemInfo_Value(it, "D_POSITION");
+        if (pos - lp > 1e-9) SetMediaItemInfo_Value(it, "D_LENGTH", pos - lp);
+        SetMediaItemInfo_Value(it, "D_FADEOUTLEN_AUTO", 0.0);
+        const double rp = GetMediaItemInfo_Value(rhs, "D_POSITION");
+        const double rl = GetMediaItemInfo_Value(rhs, "D_LENGTH");
+        if (pos - rp > 1e-9) {                         // keep the audio aligned via the take
+            MediaItem_Take* tk = GetActiveTake(rhs);
+            double rate = tk ? GetMediaItemTakeInfo_Value(tk, "D_PLAYRATE") : 1.0;
+            if (!(rate > 0.0)) rate = 1.0;
+            const double d = pos - rp;
+            SetMediaItemInfo_Value(rhs, "D_POSITION", pos);
+            SetMediaItemInfo_Value(rhs, "D_LENGTH",   rl - d);
+            if (tk) SetMediaItemTakeInfo_Value(tk, "D_STARTOFFS",
+                        GetMediaItemTakeInfo_Value(tk, "D_STARTOFFS") + d * rate);
+        }
+        SetMediaItemInfo_Value(rhs, "D_FADEINLEN_AUTO", 0.0);
+    }
 }
 // Media items on `tr` inside [s,e], called right after splitting at both bounds.
 //
@@ -9020,6 +9060,26 @@ static std::vector<MediaItem*> uf1ItemsInRange_(MediaTrack* tr, double s, double
         if (end > s + 1e-9 && pos < e - 1e-9) out.push_back(it);
     }
     return out;
+}
+// True when an item reaches into [s,e] with NOTHING BUT its own crossfade tail — the
+// signature of a neighbour an earlier drop faded into, not of content. A COPY has to
+// ignore those or it clones a fade-length crumb at each bound (Frank 2026-08-12).
+//
+// The test reads the item's own D_FADE*LEN_AUTO instead of comparing against a length
+// we carry around: an AUTO fade is exactly what a native crossfade is MADE of, it is
+// written by the drop commit that made the overlap, and it is zero when the user has
+// auto-crossfade switched off — in which case this correctly skips nothing. An item
+// that spans the whole area, or that reaches in further than its own fade, is content.
+static bool uf1RazorFadeOverhangOnly_(MediaItem* it, double s, double e)
+{
+    if (!it) return false;
+    const double pos = GetMediaItemInfo_Value(it, "D_POSITION");
+    const double end = pos + GetMediaItemInfo_Value(it, "D_LENGTH");
+    if (pos < s - 1e-9 && end > s + 1e-9 && end < e - 1e-9)     // reaches in from the LEFT
+        return end - s <= GetMediaItemInfo_Value(it, "D_FADEOUTLEN_AUTO") + 1e-9;
+    if (end > e + 1e-9 && pos < e - 1e-9 && pos > s + 1e-9)     // reaches in from the RIGHT
+        return e - pos <= GetMediaItemInfo_Value(it, "D_FADEINLEN_AUTO") + 1e-9;
+    return false;
 }
 // Chunk-clone an item onto `tr` with fresh GUIDs (BirdBird copy_media_item_to_track).
 static MediaItem* uf1CloneItemToTrack_(MediaTrack* tr, MediaItem* item)
@@ -9176,6 +9236,14 @@ static void uf1RazorContentGesture_(bool vertical, int dir, double amt, bool cop
     const bool fresh = g_uf1RazorContentFresh.exchange(false)   // NAV-CENTRE was just pressed
                     || (!g_uf1RazorGrabDone.load() && g_uf1RazorCopyClones.empty())
                     || g_uf1RazorDragIsCopy != copy;
+    // ⚠ REAPER's fade length must be read BEFORE the guard below zeroes `autoxfade`:
+    // uf1DropXfadeLen_() returns 0 when auto-crossfade reads as OFF, so reading it inside
+    // the guard's scope silently disarmed the unfade step on EVERY grab. The trace says it
+    // in two consecutive lines (2026-08-12): "[grab] … xfade=0.0000" and then "[drop] …
+    // xfade=1 len=0.0100", same project, same second — and `unfaded` came back identical
+    // to `before` in every grab, including the ones where a 10 ms overhang was plainly
+    // sitting inside the area. Exactly the trap the note on Uf1EditPrefs_ warns about.
+    const double xf = uf1DropXfadeLen_();
     Uf1NoAutoEdit_ noEdit;                             // auto-crossfade + trim OFF for the drag
     if (fresh) {                                       // GRAB the razor's content once
         g_uf1RazorGrabDone.store(true);                // …even if it finds nothing
@@ -9184,24 +9252,37 @@ static void uf1RazorContentGesture_(bool vertical, int dir, double amt, bool cop
         for (auto& rt : tracks)
             for (auto& tp : uf1RazorParse_(rt.str)) {
                 if (!uf1RazorIsMediaGuid_(tp.guid)) continue;
-                // Undo our own previous drop's crossfade overhang on BOTH bounds
-                // first — for copy as well as move, because the leftover sits on
-                // the timeline either way and the split below would only turn it
-                // into a crumb. See uf1RazorUnfadeBound_.
-                const double xf = uf1DropXfadeLen_();
                 rzlog_("[grab] %s area=[%.4f..%.4f] xfade=%.4f",
                        copy ? "COPY" : "MOVE", tp.s, tp.e, xf);
                 rzlogTrack_("before", rt.tr);
-                uf1RazorUnfadeBound_(rt.tr, tp.s, xf);
-                uf1RazorUnfadeBound_(rt.tr, tp.e, xf);
-                rzlogTrack_("unfaded", rt.tr);
                 if (copy) {
+                    // A COPY leaves the source exactly where it is, so the crossfades
+                    // at the area's bounds still have both partners and must NOT be
+                    // taken back. Unfading them pulled the neighbours off the source
+                    // item while its own AUTO fades stayed on — fade-outs sitting on
+                    // butt joints, no crossfades, and only the LAST drop looking right
+                    // because nothing grabbed over it again (Frank 2026-08-12).
+                    // Nothing is split on this path either, so an overhang can't become
+                    // a crumb; it only has to be recognised and left out of the clone.
                     for (MediaItem* it : uf1ItemsInRange_(rt.tr, tp.s, tp.e)) {
+                        if (uf1RazorFadeOverhangOnly_(it, tp.s, tp.e)) continue;
                         MediaItem* cl = uf1CloneItemToTrack_(rt.tr, it);
-                        if (cl) if (MediaItem* sl = uf1BoundClone_(rt.tr, cl, tp.s, tp.e))
+                        if (cl) if (MediaItem* sl = uf1BoundClone_(rt.tr, cl, tp.s, tp.e)) {
                             g_uf1RazorCopyClones.push_back(sl);
+                            rzlog_("   cloned [%.4f..%.4f]",
+                                   GetMediaItemInfo_Value(sl, "D_POSITION"),
+                                   GetMediaItemInfo_Value(sl, "D_POSITION") +
+                                   GetMediaItemInfo_Value(sl, "D_LENGTH"));
+                        }
                     }
                 } else {
+                    // A MOVE takes the content away, so our own previous drop's
+                    // crossfade overhang on the bounds is left fading into nothing:
+                    // take it back BEFORE the split, or the split turns it into a
+                    // crumb. See uf1RazorUnfadeBound_.
+                    uf1RazorUnfadeBound_(rt.tr, tp.s, xf);
+                    uf1RazorUnfadeBound_(rt.tr, tp.e, xf);
+                    rzlogTrack_("unfaded", rt.tr);
                     uf1RazorSplitAt_(rt.tr, tp.s); uf1RazorSplitAt_(rt.tr, tp.e);
                     rzlogTrack_("split", rt.tr);
                     for (MediaItem* it : uf1RazorSlices_(rt.tr, tp.s, tp.e, xf)) {
@@ -9317,10 +9398,12 @@ static void uf1CommitDropXfades_(const std::vector<MediaItem*>& src)
         rzlog_("  drop=[%.4f..%.4f] x=%.4f", ds, de, x);
         rzlogTrack_("before", tr);
 
-        // 1) Split the underlying items at the drop's edges. Splitting at D's OWN edges is a
-        //    no-op for D, so only the neighbours get cut.
-        uf1RazorSplitAt_(tr, ds);
-        uf1RazorSplitAt_(tr, de);
+        // 1) Split the UNDERLYING items at the drop's edges. Splitting at D's own edges is
+        //    a no-op for D — but NOT for a sibling drop of the same gesture, whose body a
+        //    neighbouring drop's edge will happily cut in half (see uf1RazorSplitAt_'s
+        //    `keep`). Every dropped item is therefore off limits to the knife.
+        uf1RazorSplitAt_(tr, ds, &dropped);
+        uf1RazorSplitAt_(tr, de, &dropped);
         rzlogTrack_("split", tr);
 
         // 2) Delete every non-dropped slice the drop now covers. Own scan (not
