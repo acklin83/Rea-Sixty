@@ -4610,6 +4610,8 @@ bool                    g_uf1RazorDragIsCopy = false;
 // crossfade OFF, so REAPER doesn't "drop" it + crossfade at every jog tick. Release = up.
 std::atomic<bool>       g_uf1RazorContentHeld{false};
 std::atomic<bool>       g_uf1RazorContentFresh{false};   // set on press → grab once
+// One grab per gesture, EVEN IF IT FOUND NOTHING — see uf1RazorContentGesture_.
+std::atomic<bool>       g_uf1RazorGrabDone{false};
 // Item-jog drag gesture (Frank 2026-08-11): NAV-CENTRE held = "mouse down". While
 // it is down the jog just moves items; the RELEASE trims + crossfades once, like a
 // mouse drop. `Moved` distinguishes a drag from a plain click, so a click with no
@@ -8923,7 +8925,24 @@ static void uf1RazorSplitAt_(MediaTrack* tr, double pos)
     for (int k = 0; k < cnt; ++k) items.push_back(GetTrackMediaItem(tr, k));
     for (MediaItem* it : items) SplitMediaItem(it, pos);
 }
-// Media items on `tr` fully inside [s,e] (after splitting at the bounds).
+// Media items on `tr` inside [s,e], called right after splitting at both bounds.
+//
+// ★ MIDPOINT test, not an edge test. The edge test this used to do —
+// `pos >= s-1e-9 && pos+len <= e+1e-9` — demanded that the split land on the
+// razor bound to the NANOSECOND, and REAPER quantises item edges to SAMPLES
+// (2.08e-5 s at 48 k, four orders of magnitude coarser). A bound that isn't
+// already on a sample edge therefore produced a slice starting a hair BEFORE s,
+// the test rejected it, and the grab came back EMPTY.
+//
+// The damage was not "nothing moves": with the list empty, `fresh` is true again
+// on the NEXT detent, so every detent re-grabbed at the razor's NEW position —
+// cutting a fresh sliver off whatever neighbour had drifted under the area and
+// dragging it along (Frank 2026-08-11: the first move left the item behind, and
+// from then on each move took a chip of the neighbour with it).
+//
+// After splitting at s and e every item on the track lies wholly inside or wholly
+// outside, so the midpoint is exact — and it is the same test the drop commit
+// already uses for "covered", which is where this was first learned.
 static std::vector<MediaItem*> uf1RazorSlices_(MediaTrack* tr, double s, double e)
 {
     std::vector<MediaItem*> out;
@@ -8932,7 +8951,8 @@ static std::vector<MediaItem*> uf1RazorSlices_(MediaTrack* tr, double s, double 
         MediaItem* it = GetTrackMediaItem(tr, k);
         const double pos = GetMediaItemInfo_Value(it, "D_POSITION");
         const double len = GetMediaItemInfo_Value(it, "D_LENGTH");
-        if (pos >= s - 1e-9 && pos + len <= e + 1e-9) out.push_back(it);
+        const double mid = pos + len * 0.5;
+        if (mid > s + 1e-9 && mid < e - 1e-9) out.push_back(it);
     }
     return out;
 }
@@ -9018,11 +9038,18 @@ static void uf1RazorContentGesture_(bool vertical, int dir, double amt, bool cop
             MediaTrack* d = dir > 0 ? uf1NextVisibleTrack_(rt.tr) : uf1PrevVisibleTrack_(rt.tr);
             if (!d) return;
         }
+    // Grab ONCE per gesture — even when the grab comes back EMPTY. The old
+    // `|| g_uf1RazorCopyClones.empty()` re-grabbed on every detent as long as the
+    // list stayed empty, and a re-grab cuts at the razor's CURRENT position: each
+    // detent sliced a fresh sliver off whatever neighbour had drifted under the
+    // area and dragged it along (Frank 2026-08-11). An empty grab now simply means
+    // this gesture moves nothing, which is visible and harmless.
     const bool fresh = g_uf1RazorContentFresh.exchange(false)   // NAV-CENTRE was just pressed
-                    || g_uf1RazorCopyClones.empty()
+                    || (!g_uf1RazorGrabDone.load() && g_uf1RazorCopyClones.empty())
                     || g_uf1RazorDragIsCopy != copy;
     Uf1NoAutoEdit_ noEdit;                             // auto-crossfade + trim OFF for the drag
     if (fresh) {                                       // GRAB the razor's content once
+        g_uf1RazorGrabDone.store(true);                // …even if it finds nothing
         g_uf1RazorCopyClones.clear();
         g_uf1RazorDragIsCopy = copy;
         for (auto& rt : tracks)
@@ -19489,6 +19516,7 @@ void onUf1Event(const uf1::InputEvent& ev)
                 if (ev.pressed) {
                     g_uf1RazorTarget.store(Uf1RazorTarget::Whole);
                     g_uf1RazorContentFresh.store(true);
+                    g_uf1RazorGrabDone.store(false);   // new gesture → grab again
                 }
                 g_pageDirty.store(true);
                 break;
