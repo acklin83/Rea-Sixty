@@ -8943,7 +8943,9 @@ static void uf1RazorSplitAt_(MediaTrack* tr, double pos)
 // After splitting at s and e every item on the track lies wholly inside or wholly
 // outside, so the midpoint is exact — and it is the same test the drop commit
 // already uses for "covered", which is where this was first learned.
-static std::vector<MediaItem*> uf1RazorSlices_(MediaTrack* tr, double s, double e)
+static double uf1DropXfadeLen_();   // defined with the drop commit, below
+static std::vector<MediaItem*> uf1RazorSlices_(MediaTrack* tr, double s, double e,
+                                               double xfade)
 {
     std::vector<MediaItem*> out;
     const int cnt = CountTrackMediaItems(tr);
@@ -8952,7 +8954,21 @@ static std::vector<MediaItem*> uf1RazorSlices_(MediaTrack* tr, double s, double 
         const double pos = GetMediaItemInfo_Value(it, "D_POSITION");
         const double len = GetMediaItemInfo_Value(it, "D_LENGTH");
         const double mid = pos + len * 0.5;
-        if (mid > s + 1e-9 && mid < e - 1e-9) out.push_back(it);
+        if (!(mid > s + 1e-9 && mid < e - 1e-9)) continue;
+        // ⚠ Skip a NEIGHBOUR'S CROSSFADE OVERHANG. Our own drop commit extends the
+        // left neighbour to ds+x and pulls the right one back to de-x — that is
+        // what a native crossfade IS — so those items now reach INTO the area by
+        // exactly the fade length. Move the same razor edit a second time and the
+        // split at the bound cuts that overhang off as a sliver whose midpoint is
+        // inside, the grab takes it along, and at the drop it counts as "dropped"
+        // rather than as the neighbour — so no neighbour is found and no fades are
+        // written (Frank 2026-08-12: "beim zweiten mal macht reaper nicht die
+        // kleinen schnipsel um den cross-fade").
+        // A sliver at the very edge, no longer than the fade, is that overhang.
+        if (xfade > 1e-9 && len <= xfade * 1.5 &&
+            (pos <= s + xfade * 1.5 || pos + len >= e - xfade * 1.5))
+            continue;
+        out.push_back(it);
     }
     return out;
 }
@@ -9063,7 +9079,8 @@ static void uf1RazorContentGesture_(bool vertical, int dir, double amt, bool cop
                     }
                 } else {
                     uf1RazorSplitAt_(rt.tr, tp.s); uf1RazorSplitAt_(rt.tr, tp.e);
-                    for (MediaItem* it : uf1RazorSlices_(rt.tr, tp.s, tp.e))
+                    for (MediaItem* it : uf1RazorSlices_(rt.tr, tp.s, tp.e,
+                                                        uf1DropXfadeLen_()))
                         g_uf1RazorCopyClones.push_back(it);
                 }
             }
@@ -31346,11 +31363,20 @@ static void uf1NavCrossSyncLeds_()
             break;
         default: break;                            // Playhead / Scrub: nav cross dark
     }
-    static int sLastLit  = -2;
-    static int sLastMode = -2;
+    static int     sLastLit  = -2;
+    static int     sLastMode = -2;
+    static int64_t sLastSend = 0;
     const int m = static_cast<int>(mode);
-    if (lit == sLastLit && m == sLastMode) return;
-    sLastLit = lit; sLastMode = m;
+    // Send on CHANGE, and re-assert a LIT one every 500 ms. Change-detect alone
+    // was not enough on the hardware (Frank 2026-08-12: "LED leuchtet schlicht
+    // nicht"): these three frames go out once and then compete with the layout
+    // and text bursts the painter streams continuously over the same link, so a
+    // single write is not something the LED is guaranteed to survive. A dark
+    // cross costs nothing to leave alone; only a lit one is restated.
+    const int64_t now = nowMs_();
+    const bool changedState = (lit != sLastLit || m != sLastMode);
+    if (!changedState && (lit < 0 || now - sLastSend < 500)) return;
+    sLastLit = lit; sLastMode = m; sLastSend = now;
     for (uint8_t led : kAll) {
         const bool on = (int(led) == lit);
         g_uf1_dev->send(uf1::buildLed(led, true));                       // FF3B enable
