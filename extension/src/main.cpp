@@ -31287,46 +31287,48 @@ static void applyStartupBank_()
 // others — only while Jog Mode == Razor (Frank 2026-08-06). Addresses 0x10-0x14 derived
 // from led = code − 0x18 (see [[uf1-led-reference-uf8-protocol]]); confirm on HW. Deduped
 // (only writes on a state change). Main thread (g_uf1_dev).
-static void uf1RazorSyncLeds_()
+// ★ ONE owner of the five nav-cross LEDs. It used to be two functions — a razor
+// one that painted all five and an envelope one that painted only the centre and
+// had to KNOW about the razor to stay off its toes ("razor owns the nav LEDs
+// now"). That ordering rule is exactly what the handoff warned would not survive
+// a third writer, and 2026-08-11 brought one: Items mode lights the centre while
+// NAV-CENTRE is held, to show the item drag is "mouse-down" (Frank).
+//
+// So: the jog MODE decides which LED is lit, in one place, and all five are
+// written every time the answer changes. No mode has to know about another.
+static void uf1NavCrossSyncLeds_()
 {
     if (!g_uf1_dev) return;
-    static int lastState = -2;                         // -2 uninit · -1 razor-off · 0..4 target
-    const int st = (g_uf1JogMode.load() == Uf1JogMode::Razor)
-                   ? static_cast<int>(g_uf1RazorTarget.load()) : -1;
-    if (st == lastState) return;
-    lastState = st;
-    // target enum {Whole,Left,Right,Top,Bottom} → LED byte
+    static const uint8_t kAll[5] = { 0x10, 0x11, 0x12, 0x13, 0x14 };
+    constexpr uint8_t kCentre = 0x12;
+    // razor target enum {Whole,Left,Right,Top,Bottom} → LED byte
     static const uint8_t kByTarget[5] = { 0x12, 0x11, 0x13, 0x10, 0x14 };
-    static const uint8_t kAll[5]      = { 0x10, 0x11, 0x12, 0x13, 0x14 };
+
+    int lit = -1;                                  // LED byte to light, -1 = none
+    const auto mode = g_uf1JogMode.load();
+    switch (mode) {
+        case Uf1JogMode::Razor:
+            lit = kByTarget[std::clamp(static_cast<int>(g_uf1RazorTarget.load()), 0, 4)];
+            break;
+        case Uf1JogMode::Envelope:                 // lit = points, dark = playhead
+            if (!g_uf1EnvJogPlayhead.load()) lit = kCentre;
+            break;
+        case Uf1JogMode::Items:                    // lit = the drag is "mouse-down"
+            if (g_uf1JogItemsHeld.load()) lit = kCentre;
+            break;
+        default: break;                            // Playhead / Scrub: nav cross dark
+    }
+    static int sLastLit  = -2;
+    static int sLastMode = -2;
+    const int m = static_cast<int>(mode);
+    if (lit == sLastLit && m == sLastMode) return;
+    sLastLit = lit; sLastMode = m;
     for (uint8_t led : kAll) {
-        const bool on = (st >= 0 && kByTarget[st] == led);
+        const bool on = (int(led) == lit);
         g_uf1_dev->send(uf1::buildLed(led, true));                       // FF3B enable
         g_uf1_dev->send(uf1::buildColourRgb(led, on ? 0x00FF66u : 0u));  // FF38 colour
         g_uf1_dev->send(uf1::buildLedLevel(led, on ? 0x00 : 0x11));      // FF39 bright/off
     }
-}
-
-// Envelope mode: the nav-centre LED (0x12) shows what the jog edits — LIT = the selected
-// envelope's POINTS, DARK = the PLAYHEAD (Frank 2026-08-08). Same colour/level bytes as
-// the razor edge LEDs so the nav cross looks like one thing.
-// Ordering matters: this runs AFTER uf1RazorSyncLeds_ and DELIBERATELY leaves the LED
-// alone while Razor owns the nav cross — else the two would fight over 0x12 on every
-// mode change (razor→envelope: razor blanks all 5, we light ours; envelope→razor: we keep
-// our hands off and razor's target write stands).
-static void uf1EnvSyncLed_()
-{
-    if (!g_uf1_dev) return;
-    static int lastState = -2;                    // -2 uninit · -1 not envelope · 0 playhead · 1 points
-    const auto mode = g_uf1JogMode.load();
-    const int  st   = (mode == Uf1JogMode::Envelope)
-                      ? (g_uf1EnvJogPlayhead.load() ? 0 : 1) : -1;
-    if (st == lastState) return;
-    lastState = st;
-    if (st < 0 && mode == Uf1JogMode::Razor) return;          // razor owns the nav LEDs now
-    const bool on = (st == 1);
-    g_uf1_dev->send(uf1::buildLed(0x12, true));                       // FF3B enable
-    g_uf1_dev->send(uf1::buildColourRgb(0x12, on ? 0x00FF66u : 0u));  // FF38 colour
-    g_uf1_dev->send(uf1::buildLedLevel(0x12, on ? 0x00 : 0x11));      // FF39 bright/off
 }
 
 void onTimer()
@@ -31372,8 +31374,7 @@ void onTimer()
 
     // Razor mode: keep the nav-cross LEDs showing the active edge target. Envelope's
     // centre-LED sync runs right after (and only touches 0x12) — see uf1EnvSyncLed_.
-    uf1RazorSyncLeds_();
-    uf1EnvSyncLed_();
+    uf1NavCrossSyncLeds_();
 
     // Load-sweep selection safety net. Root cause is fixed at the source (the
     // impersonator no longer sends the "activate this channel" command frames
