@@ -8944,6 +8944,55 @@ static void uf1RazorSplitAt_(MediaTrack* tr, double pos)
 // outside, so the midpoint is exact — and it is the same test the drop commit
 // already uses for "covered", which is where this was first learned.
 static double uf1DropXfadeLen_();   // defined with the drop commit, below
+
+// Take back the CROSSFADE OVERHANG our own previous drop left on this track's
+// razor bounds, BEFORE splitting for a new grab.
+//
+// The drop commit builds a native crossfade by extending the left neighbour to
+// ds+x and pulling the right one back to de-x, so after any drop both neighbours
+// reach INTO the area by the fade length. Split at the bound again and that
+// overhang becomes a sliver: take it along and the next drop sees it as "dropped"
+// instead of as the neighbour, so no fades get written; leave it behind and it
+// stays on the timeline as a 10 ms crumb. Frank saw both, in that order
+// (2026-08-12). Neither is the answer — the overhang should simply not exist any
+// more, because the item it was fading INTO is about to move away.
+//
+// So: an item that CROSSES a bound and sticks into the area by no more than the
+// fade length is cut back to the bound, and its auto-fade there is dropped. The
+// timeline returns to exactly the state it was in before that crossfade was made.
+static void uf1RazorUnfadeBound_(MediaTrack* tr, double bound, double x)
+{
+    if (!tr || x <= 1e-9) return;
+    const double lim = x * 1.5;
+    const int cnt = CountTrackMediaItems(tr);
+    for (int k = 0; k < cnt; ++k) {
+        MediaItem* it = GetTrackMediaItem(tr, k);
+        if (!it) continue;
+        const double pos = GetMediaItemInfo_Value(it, "D_POSITION");
+        const double len = GetMediaItemInfo_Value(it, "D_LENGTH");
+        const double end = pos + len;
+        // …reaching RIGHT across the bound (a left neighbour's fade-out tail)
+        if (pos < bound - 1e-9 && end > bound + 1e-9 && end <= bound + lim) {
+            SetMediaItemInfo_Value(it, "D_LENGTH", bound - pos);
+            SetMediaItemInfo_Value(it, "D_FADEOUTLEN_AUTO", 0.0);
+            continue;
+        }
+        // …reaching LEFT across it (a right neighbour's fade-in head): pull the
+        // start back to the bound, keeping the audio aligned via the take offset.
+        if (end > bound + 1e-9 && pos < bound - 1e-9 && pos >= bound - lim) {
+            MediaItem_Take* tk = GetActiveTake(it);
+            double rate = tk ? GetMediaItemTakeInfo_Value(tk, "D_PLAYRATE") : 1.0;
+            if (!(rate > 0.0)) rate = 1.0;
+            const double dlt = bound - pos;
+            SetMediaItemInfo_Value(it, "D_POSITION", bound);
+            SetMediaItemInfo_Value(it, "D_LENGTH",   len - dlt);
+            if (tk) SetMediaItemTakeInfo_Value(tk, "D_STARTOFFS",
+                        GetMediaItemTakeInfo_Value(tk, "D_STARTOFFS") + dlt * rate);
+            SetMediaItemInfo_Value(it, "D_FADEINLEN_AUTO", 0.0);
+        }
+    }
+}
+
 static std::vector<MediaItem*> uf1RazorSlices_(MediaTrack* tr, double s, double e,
                                                double xfade)
 {
@@ -8955,19 +9004,6 @@ static std::vector<MediaItem*> uf1RazorSlices_(MediaTrack* tr, double s, double 
         const double len = GetMediaItemInfo_Value(it, "D_LENGTH");
         const double mid = pos + len * 0.5;
         if (!(mid > s + 1e-9 && mid < e - 1e-9)) continue;
-        // ⚠ Skip a NEIGHBOUR'S CROSSFADE OVERHANG. Our own drop commit extends the
-        // left neighbour to ds+x and pulls the right one back to de-x — that is
-        // what a native crossfade IS — so those items now reach INTO the area by
-        // exactly the fade length. Move the same razor edit a second time and the
-        // split at the bound cuts that overhang off as a sliver whose midpoint is
-        // inside, the grab takes it along, and at the drop it counts as "dropped"
-        // rather than as the neighbour — so no neighbour is found and no fades are
-        // written (Frank 2026-08-12: "beim zweiten mal macht reaper nicht die
-        // kleinen schnipsel um den cross-fade").
-        // A sliver at the very edge, no longer than the fade, is that overhang.
-        if (xfade > 1e-9 && len <= xfade * 1.5 &&
-            (pos <= s + xfade * 1.5 || pos + len >= e - xfade * 1.5))
-            continue;
         out.push_back(it);
     }
     return out;
@@ -9037,6 +9073,43 @@ struct Uf1NoAutoEdit_ {
     }
     ~Uf1NoAutoEdit_() { if (p) *p = saved; }
 };
+
+// ★ REAPER's OWN editing preferences — the ones Frank asked us to respect
+// ("reaper einstellung für x-fade und split bei edit"). Read them, do not invent
+// a policy. All four are REAPER's, documented and verified:
+//   autoxfade         &1 = "Auto-crossfade media items when editing"
+//                     &2 = "Trim content behind media items when editing"
+//                     (&4/&8/&16 are the RECORDING overlap modes — not ours)
+//   defsplitxfadelen  the crossfade length, in seconds
+//   defxfadeshape     the crossfade shape, 0..6 (C_FADEIN/OUTSHAPE's own scale)
+//
+// ⚠ Read this BEFORE constructing a Uf1NoAutoEdit_ — that guard zeroes `autoxfade`
+// for the duration of our own splits, so anything reading it afterwards sees
+// "everything off" instead of the user's setting.
+// Guarded reads: an unknown key returns null and the field keeps a sane default.
+struct Uf1EditPrefs_ {
+    bool   autoXfade  = true;
+    bool   trimBehind = true;
+    double xfadeLen   = 0.010;
+    int    xfadeShape = 0;
+};
+static Uf1EditPrefs_ uf1EditPrefs_()
+{
+    Uf1EditPrefs_ e;
+    int sz = 0;
+    if (int* p = static_cast<int*>(get_config_var("autoxfade", &sz)))
+        if (sz == static_cast<int>(sizeof(int))) {
+            e.autoXfade  = (*p & 1) != 0;
+            e.trimBehind = (*p & 2) != 0;
+        }
+    sz = 0;
+    if (double* p = static_cast<double*>(get_config_var("defsplitxfadelen", &sz)))
+        if (sz == static_cast<int>(sizeof(double)) && *p > 0.0) e.xfadeLen = *p;
+    sz = 0;
+    if (int* p = static_cast<int*>(get_config_var("defxfadeshape", &sz)))
+        if (sz == static_cast<int>(sizeof(int)) && *p >= 0 && *p <= 6) e.xfadeShape = *p;
+    return e;
+}
 // Razor CONTENT drag (Whole target). The content is GRABBED ONCE at gesture start — source
 // slices for a MOVE, trimmed clones for a COPY — into g_uf1RazorCopyClones, then DRAGGED:
 // time (D_POSITION += amt) or across tracks (MoveMediaItemToTrack to the adjacent visible
@@ -9071,6 +9144,13 @@ static void uf1RazorContentGesture_(bool vertical, int dir, double amt, bool cop
         for (auto& rt : tracks)
             for (auto& tp : uf1RazorParse_(rt.str)) {
                 if (!uf1RazorIsMediaGuid_(tp.guid)) continue;
+                // Undo our own previous drop's crossfade overhang on BOTH bounds
+                // first — for copy as well as move, because the leftover sits on
+                // the timeline either way and the split below would only turn it
+                // into a crumb. See uf1RazorUnfadeBound_.
+                const double xf = uf1DropXfadeLen_();
+                uf1RazorUnfadeBound_(rt.tr, tp.s, xf);
+                uf1RazorUnfadeBound_(rt.tr, tp.e, xf);
                 if (copy) {
                     for (MediaItem* it : uf1ItemsInRange_(rt.tr, tp.s, tp.e)) {
                         MediaItem* cl = uf1CloneItemToTrack_(rt.tr, it);
@@ -9079,8 +9159,7 @@ static void uf1RazorContentGesture_(bool vertical, int dir, double amt, bool cop
                     }
                 } else {
                     uf1RazorSplitAt_(rt.tr, tp.s); uf1RazorSplitAt_(rt.tr, tp.e);
-                    for (MediaItem* it : uf1RazorSlices_(rt.tr, tp.s, tp.e,
-                                                        uf1DropXfadeLen_()))
+                    for (MediaItem* it : uf1RazorSlices_(rt.tr, tp.s, tp.e, xf))
                         g_uf1RazorCopyClones.push_back(it);
                 }
             }
@@ -9123,14 +9202,13 @@ void applyUf1JogRazorContent_(double dt)
                             uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd));
 }
 
-// Default crossfade length for the drop — follows REAPER's auto-crossfade length pref if
-// present, else 10 ms. Guarded read: an unknown key returns null → fallback (no crash).
+// The drop's crossfade length: REAPER's own, and ZERO when the user has
+// auto-crossfade switched off. Wrapper over uf1EditPrefs_ so the callers that
+// only need the length keep reading like before.
 static double uf1DropXfadeLen_()
 {
-    int sz = 0;
-    if (double* p = static_cast<double*>(get_config_var("defsplitxfadelen", &sz)))
-        if (sz == static_cast<int>(sizeof(double)) && *p > 0.0) return *p;
-    return 0.010;
+    const Uf1EditPrefs_ e = uf1EditPrefs_();
+    return e.autoXfade ? e.xfadeLen : 0.0;
 }
 
 // Razor content DROP — on the NAV-CENTRE release, make the just-dropped items behave like a
@@ -9148,6 +9226,14 @@ static double uf1DropXfadeLen_()
 static void uf1CommitDropXfades_(const std::vector<MediaItem*>& src)
 {
     if (src.empty()) return;
+    // REAPER's own two switches decide what a drop DOES — read them before the
+    // guard below zeroes `autoxfade`:
+    //   trim behind OFF → leave everything underneath alone; the drop just sits
+    //                     on top, which is exactly what REAPER does.
+    //   auto-crossfade OFF → trim, but write no fades.
+    // Neither is a policy of ours to have (Frank 2026-08-11: "reaper einstellung
+    // für x-fade und split bei edit nicht respektiert").
+    const Uf1EditPrefs_ prefs = uf1EditPrefs_();
     // Auto-crossfade + trim-behind must be OFF for OUR splits too. The drag's guard lives in
     // uf1RazorContentGesture_; this runs later (onTimer) with the pref already restored, so
     // REAPER was splitting WITH auto-crossfade and pushing the cut edges apart by the xfade
@@ -9155,7 +9241,10 @@ static void uf1CommitDropXfades_(const std::vector<MediaItem*>& src)
     // inside" delete, leaving a ghost under the drop (Frank 2026-08-08, verified in the razor
     // log: middle slice came back as 5.99 instead of 6.00). Clean cuts here, fades set below.
     Uf1NoAutoEdit_ noEdit;
-    const double X = uf1DropXfadeLen_();
+    // Nothing to do at all when the user edits in overlap mode: no trim, and a
+    // crossfade needs the trim to have made the edges.
+    if (!prefs.trimBehind) { UpdateArrange(); return; }
+    const double X = prefs.autoXfade ? prefs.xfadeLen : 0.0;
     std::unordered_set<MediaItem*> dropped(src.begin(), src.end());
     // Snapshot the drops first — the edits below mutate the tracks' item lists.
     struct Drop { MediaItem* it; MediaTrack* tr; double s, e; };
@@ -9215,6 +9304,13 @@ static void uf1CommitDropXfades_(const std::vector<MediaItem*>& src)
             if (ie >= ds - win && ie <= ds + win && ie > leftEnd)  { left  = it; leftEnd  = ie; }
             if (ip >= de - win && ip <= de + win && ip < rightPos) { right = it; rightPos = ip; }
         }
+        // The SHAPE is REAPER's too (defxfadeshape, 0..6 on C_FADEIN/OUTSHAPE's
+        // own scale) — we used to write the length and leave the curve at
+        // whatever the item happened to carry.
+        auto shape = [&](MediaItem* it, const char* key) {
+            int sh = prefs.xfadeShape;
+            SetMediaItemInfo_Value(it, key, double(sh));
+        };
         if (x > 1e-9 && left) {                                 // right edge → exactly ds + x
             const double lp = GetMediaItemInfo_Value(left, "D_POSITION");
             const double nl = (ds + x) - lp;
@@ -9222,6 +9318,8 @@ static void uf1CommitDropXfades_(const std::vector<MediaItem*>& src)
                 SetMediaItemInfo_Value(left, "D_LENGTH", nl);
                 SetMediaItemInfo_Value(left, "D_FADEOUTLEN_AUTO", x);
                 SetMediaItemInfo_Value(d,    "D_FADEINLEN_AUTO",  x);
+                shape(left, "C_FADEOUTSHAPE");
+                shape(d,    "C_FADEINSHAPE");
             }
         }
         if (x > 1e-9 && right) {                                // front → exactly de - x
@@ -9240,6 +9338,8 @@ static void uf1CommitDropXfades_(const std::vector<MediaItem*>& src)
                             GetMediaItemTakeInfo_Value(tk, "D_STARTOFFS") + dlt * rate);
                 SetMediaItemInfo_Value(d,     "D_FADEOUTLEN_AUTO", x);
                 SetMediaItemInfo_Value(right, "D_FADEINLEN_AUTO",  x);
+                shape(d,     "C_FADEOUTSHAPE");
+                shape(right, "C_FADEINSHAPE");
             }
         }
     }
