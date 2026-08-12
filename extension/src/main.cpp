@@ -9110,6 +9110,46 @@ static Uf1EditPrefs_ uf1EditPrefs_()
         if (sz == static_cast<int>(sizeof(int)) && *p >= 0 && *p <= 6) e.xfadeShape = *p;
     return e;
 }
+// ---- Razor / item-drop TRACE ------------------------------------------------
+// REASIXTY_RAZOR_LOG (ExtState uf1_razor_log, same env bridge as the other
+// probes → needs a REAPER restart). Writes /tmp/reaper_razor.log.
+//
+// Why it exists: the drop path has too many states to reason about from a
+// screenshot — grab vs commit, move vs copy, one track vs several, and the
+// SECOND pass over ground the first pass already edited. Three fixes in a row
+// were argued from pictures and each left a different crumb behind (Frank
+// 2026-08-12). This prints every item the code touches, with position and
+// length, before and after, so the crumb can be traced to the exact step that
+// made it instead of to a theory.
+bool g_razorLog = std::getenv("REASIXTY_RAZOR_LOG") != nullptr;
+static void rzlog_(const char* fmt, ...)
+{
+    if (!g_razorLog) return;
+    FILE* f = std::fopen(uf8::logPath("reaper_razor.log").c_str(), "a");
+    if (!f) return;
+    va_list ap; va_start(ap, fmt);
+    std::vfprintf(f, fmt, ap);
+    va_end(ap);
+    std::fputc('\n', f);
+    std::fclose(f);
+}
+// One line per item on the track, so a step can be read as before/after.
+static void rzlogTrack_(const char* tag, MediaTrack* tr)
+{
+    if (!g_razorLog || !tr) return;
+    const int n = CountTrackMediaItems(tr);
+    char line[1024]; int o = 0;
+    o += std::snprintf(line + o, sizeof(line) - o, "   %-10s n=%d:", tag, n);
+    for (int i = 0; i < n && o < int(sizeof(line)) - 48; ++i) {
+        MediaItem* it = GetTrackMediaItem(tr, i);
+        if (!it) continue;
+        const double p = GetMediaItemInfo_Value(it, "D_POSITION");
+        const double l = GetMediaItemInfo_Value(it, "D_LENGTH");
+        o += std::snprintf(line + o, sizeof(line) - o, "  [%.4f..%.4f]", p, p + l);
+    }
+    rzlog_("%s", line);
+}
+
 // Razor CONTENT drag (Whole target). The content is GRABBED ONCE at gesture start — source
 // slices for a MOVE, trimmed clones for a COPY — into g_uf1RazorCopyClones, then DRAGGED:
 // time (D_POSITION += amt) or across tracks (MoveMediaItemToTrack to the adjacent visible
@@ -9149,8 +9189,12 @@ static void uf1RazorContentGesture_(bool vertical, int dir, double amt, bool cop
                 // the timeline either way and the split below would only turn it
                 // into a crumb. See uf1RazorUnfadeBound_.
                 const double xf = uf1DropXfadeLen_();
+                rzlog_("[grab] %s area=[%.4f..%.4f] xfade=%.4f",
+                       copy ? "COPY" : "MOVE", tp.s, tp.e, xf);
+                rzlogTrack_("before", rt.tr);
                 uf1RazorUnfadeBound_(rt.tr, tp.s, xf);
                 uf1RazorUnfadeBound_(rt.tr, tp.e, xf);
+                rzlogTrack_("unfaded", rt.tr);
                 if (copy) {
                     for (MediaItem* it : uf1ItemsInRange_(rt.tr, tp.s, tp.e)) {
                         MediaItem* cl = uf1CloneItemToTrack_(rt.tr, it);
@@ -9159,8 +9203,14 @@ static void uf1RazorContentGesture_(bool vertical, int dir, double amt, bool cop
                     }
                 } else {
                     uf1RazorSplitAt_(rt.tr, tp.s); uf1RazorSplitAt_(rt.tr, tp.e);
-                    for (MediaItem* it : uf1RazorSlices_(rt.tr, tp.s, tp.e, xf))
+                    rzlogTrack_("split", rt.tr);
+                    for (MediaItem* it : uf1RazorSlices_(rt.tr, tp.s, tp.e, xf)) {
                         g_uf1RazorCopyClones.push_back(it);
+                        rzlog_("   grabbed [%.4f..%.4f]",
+                               GetMediaItemInfo_Value(it, "D_POSITION"),
+                               GetMediaItemInfo_Value(it, "D_POSITION") +
+                               GetMediaItemInfo_Value(it, "D_LENGTH"));
+                    }
                 }
             }
     }
@@ -9256,16 +9306,22 @@ static void uf1CommitDropXfades_(const std::vector<MediaItem*>& src)
         const double s = GetMediaItemInfo_Value(d, "D_POSITION");
         drops.push_back({ d, tr, s, s + GetMediaItemInfo_Value(d, "D_LENGTH") });
     }
+    rzlog_("[drop] n=%d trim=%d xfade=%d len=%.4f shape=%d", int(drops.size()),
+           prefs.trimBehind ? 1 : 0, prefs.autoXfade ? 1 : 0,
+           prefs.xfadeLen, prefs.xfadeShape);
     for (const Drop& dp : drops) {
         MediaTrack* tr = dp.tr; MediaItem* d = dp.it;
         const double ds = dp.s, de = dp.e;
         if (de - ds <= 1e-9) continue;
         const double x = std::min(X, (de - ds) * 0.5);         // never exceed half the drop
+        rzlog_("  drop=[%.4f..%.4f] x=%.4f", ds, de, x);
+        rzlogTrack_("before", tr);
 
         // 1) Split the underlying items at the drop's edges. Splitting at D's OWN edges is a
         //    no-op for D, so only the neighbours get cut.
         uf1RazorSplitAt_(tr, ds);
         uf1RazorSplitAt_(tr, de);
+        rzlogTrack_("split", tr);
 
         // 2) Delete every non-dropped slice the drop now covers. Own scan (not
         //    uf1RazorSlices_, which the grab shares) with a tolerant edge test: a slice
@@ -9284,6 +9340,7 @@ static void uf1CommitDropXfades_(const std::vector<MediaItem*>& src)
             }
             for (MediaItem* it : kill)
                 if (ValidatePtr2(nullptr, it, "MediaItem*")) DeleteTrackMediaItem(tr, it);
+            rzlog_("   killed=%d", int(kill.size()));
         }
 
         // 3) Neighbours: find them GEOMETRICALLY (nearest edge within a window), never by
@@ -9342,6 +9399,8 @@ static void uf1CommitDropXfades_(const std::vector<MediaItem*>& src)
                 shape(right, "C_FADEINSHAPE");
             }
         }
+        rzlog_("   left=%s right=%s", left ? "yes" : "NONE", right ? "yes" : "NONE");
+        rzlogTrack_("after", tr);
     }
     UpdateArrange();
 }
@@ -42731,6 +42790,14 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
                 setenv("REASIXTY_NDL_PROBE", "1", 1);
 #endif
             }
+            // Razor / item-drop trace — every item the grab and the drop touch,
+            // with position and length, before and after each step. See rzlog_.
+            // Set the flag DIRECTLY: g_razorLog's static initialiser reads the
+            // environment long before this runs, so going through setenv here
+            // would leave it false forever.
+            if (const char* dv = GetExtState("rea_sixty", "uf1_razor_log");
+                dv && *dv && strcmp(dv, "0"))
+                g_razorLog = true;
             const bool ok = sslcore::start(uint16_t(tcpPort), uint16_t(dataPort));
             initLog(ok ? "step: SSL Core impersonator started"
                        : "step: SSL Core impersonator FAILED to start");
