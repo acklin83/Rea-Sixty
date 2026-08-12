@@ -9000,14 +9000,19 @@ static double uf1DropXfadeLen_();   // defined with the drop commit, below
 // So: an item that CROSSES a bound and sticks into the area by no more than the
 // fade length is cut back to the bound, and its auto-fade there is dropped. The
 // timeline returns to exactly the state it was in before that crossfade was made.
-static void uf1RazorUnfadeBound_(MediaTrack* tr, double bound, double x)
+//
+// `keep` items are never touched: when a whole BLOCK of items moves together their
+// mutual crossfades keep both partners and must survive — only the crossfades to the
+// items STAYING BEHIND have lost theirs.
+static void uf1RazorUnfadeBound_(MediaTrack* tr, double bound, double x,
+                                 const std::unordered_set<MediaItem*>* keep = nullptr)
 {
     if (!tr || x <= 1e-9) return;
     const double lim = x * 1.5;
     const int cnt = CountTrackMediaItems(tr);
     for (int k = 0; k < cnt; ++k) {
         MediaItem* it = GetTrackMediaItem(tr, k);
-        if (!it) continue;
+        if (!it || (keep && keep->count(it))) continue;
         const double pos = GetMediaItemInfo_Value(it, "D_POSITION");
         const double len = GetMediaItemInfo_Value(it, "D_LENGTH");
         const double end = pos + len;
@@ -9663,7 +9668,40 @@ void uf1JogDispatch_(int count)
             // Also marks the gesture as a DRAG, so the release commits instead of
             // falling through to NAV-CENTRE's click action.
             const bool dragging = g_uf1JogItemsHeld.load();
-            if (dragging) g_uf1JogItemsMoved.store(true);
+            const bool firstStep = dragging && !g_uf1JogItemsMoved.exchange(true);
+            // The neighbours an earlier drop crossfaded INTO these items lose their
+            // partner the moment the items move away, and the drop commit at the far
+            // end never looks back here — so the overhangs stayed on the timeline
+            // fading into the hole ([6.6150..7.0100] and [7.4275..…] around an empty
+            // [7.0100..7.4275], Frank 2026-08-12). Take them back at the ORIGIN, once,
+            // on the first detent of the drag — the same step the razor grab does, on
+            // the path that has no grab. NOT for a COPY: there the originals stay put
+            // and their crossfades still have both partners.
+            // ⚠ Read the fade length BEFORE Uf1NoAutoEdit_ below zeroes `autoxfade`,
+            // or uf1DropXfadeLen_() comes back 0 and this silently does nothing.
+            if (firstStep) {
+                const double xf = uf1DropXfadeLen_();
+                std::unordered_set<MediaItem*> moving;
+                const int ns = CountSelectedMediaItems(nullptr);
+                for (int i = 0; i < ns; ++i)
+                    if (MediaItem* it = GetSelectedMediaItem(nullptr, i)) moving.insert(it);
+                rzlog_("[ijog] %s n=%d xfade=%.4f", copy ? "COPY" : "MOVE",
+                       int(moving.size()), xf);
+                if (!copy)
+                    for (MediaItem* it : moving) {
+                        MediaTrack* tr = GetMediaItem_Track(it);
+                        if (!tr) continue;
+                        const double p = GetMediaItemInfo_Value(it, "D_POSITION");
+                        const double l = GetMediaItemInfo_Value(it, "D_LENGTH");
+                        // BOTH lines, or the trace can't tell the two apart: a neighbour
+                        // that was trimmed back reads exactly like one that never had an
+                        // overhang — flush with the item's edge either way.
+                        rzlogTrack_("before", tr);
+                        uf1RazorUnfadeBound_(tr, p,     xf, &moving);
+                        uf1RazorUnfadeBound_(tr, p + l, xf, &moving);
+                        rzlogTrack_("unfaded", tr);
+                    }
+            }
             Uf1NoAutoEdit_ noEdit;
             if (cross) applyUf1JogMoveItemsToTrack_(count);
             else       applyUf1JogMoveItemsDelta_(delta);
