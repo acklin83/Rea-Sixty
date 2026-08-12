@@ -586,9 +586,9 @@ local function editPluginShort(dom)
   local cs, bc, uf8 = readShort()
   local cur = (dom == "b" and bc) or (dom == "u" and uf8) or cs
   local ok, val = reaper.GetUserInputs("Plug-in name", 1,
-    "Short name (max 7),extrawidth=80", cur)
+    "Short name (max 12),extrawidth=110", cur)
   if not ok then return end
-  val = val:gsub("[;\n]", " "):sub(1, 7)
+  val = val:gsub("[;\n]", " "):sub(1, 12)
   sendCmd("setshort;" .. dom .. ";" .. val)
 end
 
@@ -1486,7 +1486,20 @@ local function renderParamPanel(st, asn)
   local rgb = (activeTab == "cs") and csRgb()
            or (activeTab == "bc") and bcRgb()
            or 0x4A90D8                                   -- UF8 accent (blue)
-  local _, fxname = reaper.TrackFX_GetFXName(tr, fx, "")
+  -- A rename WINS over the factory name — same precedence the surfaces use
+  -- (fxUserRename_ → instanceLabel_). TrackFX_GetFXName ignores the rename, so
+  -- asking only that showed the factory name here while every surface showed the
+  -- rename (Frank 2026-08-12). Inlined: this file is AT the 200-local ceiling,
+  -- a top-level helper does not fit (luac: "too many local variables").
+  -- Markers must match kInsertMarkers_ in main.cpp.
+  local okRn, fxname = reaper.TrackFX_GetNamedConfigParm(tr, fx, "renamed_name")
+  if okRn and fxname and fxname ~= "" then
+    for _, m in ipairs({ "\226\150\182 ", "\226\151\137CS ", "\226\151\137BC ", "[*] " }) do
+      if fxname:sub(1, #m) == m then fxname = fxname:sub(#m + 1) break end
+    end
+  else
+    _, fxname = reaper.TrackFX_GetFXName(tr, fx, "")
+  end
   dtext(x0 + pad, top + pad, col(0xC8CCD4, 1), fit(fxname or "", PW - 2 * pad, hf), hf)
 
   -- Filter line (type to filter, Backspace to delete — handled in loop()).

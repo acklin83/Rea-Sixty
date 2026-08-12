@@ -166,8 +166,15 @@ std::vector<uint8_t> buildChannelStripType(uint8_t strip, std::string_view text)
     // cells visually blank — same pattern buildFaderDbReadout uses
     // (Frank 2026-05-09: space-padding rendered visible spaces beyond
     // the text, NUL-padding renders the cells truly empty).
-    constexpr size_t kFrameW = 7;
-    constexpr size_t kMaxChars = 8;
+    // TWELVE cells — HW-CONFIRMED 2026-08-12 (Frank: "zeichen passen"). The
+    // header comment above says SSL 360° ships 4 and this code capped at 7; both
+    // were habits, not measurements, and the zone had been under-used since May
+    // ("observed pixel space for more on the LCD", 2026-05-09). 12 is verified to
+    // render; the true ceiling may be higher still and is untested.
+    // kFrameW matches kMaxChars so every frame covers the whole zone — otherwise
+    // a long label followed by a short one leaves the tail cells holding stale text.
+    constexpr size_t kFrameW = 12;
+    constexpr size_t kMaxChars = 12;
     const size_t take = (std::min)(text.size(), kMaxChars);
     const size_t n    = (std::max)(take, kFrameW);   // always at least kFrameW
     const uint8_t lenByte = static_cast<uint8_t>(n + 2);

@@ -11429,7 +11429,7 @@ std::string hudShortLabel_(const char* name)
     }
     while (*q == ' ') ++q;
     std::string s;
-    for (; *q && s.size() < 7; ++q)
+    for (; *q && s.size() < 12; ++q)
         if (static_cast<unsigned char>(*q) > 32 &&
             static_cast<unsigned char>(*q) < 127) s += *q;
     if (s.empty()) s = "FX";
@@ -15625,18 +15625,20 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
 
-    // Short-label edit (7-char colour-bar zone). Persists on every
-    // keystroke; mirrors the V-Pot label edit pattern.
+    // Short-label edit (12-char colour-bar zone — HW-confirmed 2026-08-12 on
+    // UF8 + UC1). Persists on every keystroke; mirrors the V-Pot label edit.
     {
-        char shortBuf[16] = {};
-        std::strncpy(shortBuf, editing->displayShort.c_str(), 7);
-        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 84.0));
+        constexpr size_t kShortMax = 12;               // one number, see below
+        char shortBuf[kShortMax + 1] = {};
+        std::strncpy(shortBuf, editing->displayShort.c_str(), kShortMax);
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 128.0));
         if (ImGui_InputTextWithHint(ctx, "##fxl_hdr_short", "Short",
-                shortBuf, 8, nullptr, nullptr))
+                shortBuf, sizeof(shortBuf), nullptr, nullptr))
         {
             UserPluginMap copy = *editing;
             copy.displayShort = shortBuf;
-            if (copy.displayShort.size() > 7) copy.displayShort.resize(7);
+            if (copy.displayShort.size() > kShortMax)
+                copy.displayShort.resize(kShortMax);
             user_plugins::upsert(std::move(copy));
             persistAndReport_();
             return;   // re-resolve editing pointer next frame
@@ -16962,21 +16964,29 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                             // (Editing one row at a time matches the
                             // typical workflow.)
                         }
-                        char editBuf[16] = {0};
-                        std::strncpy(editBuf, s.customLabel.c_str(),
-                                     sizeof(editBuf) - 1);
+                        // ONE number for the buffer, the size handed to ImGui
+                        // and the clamp. They used to disagree — a 16-byte
+                        // buffer filled to 15, declared to ImGui as 8, clamped
+                        // at 7 — so a stored label longer than 7 had no NUL
+                        // inside the size ImGui was told about and the field
+                        // rendered EMPTY instead of showing what fits (Frank
+                        // 2026-08-12: "nicht einfach alles ausgeblendet …
+                        // einfach nur so viele Zeichen schlucken wie möglich").
+                        constexpr size_t kSlotLabelMax = 12;
+                        char editBuf[kSlotLabelMax + 1] = {0};
+                        std::strncpy(editBuf, s.customLabel.c_str(), kSlotLabelMax);
                         char inpId[48];
                         snprintf(inpId, sizeof(inpId),
                                  "##al_slotlbl_%d", static_cast<int>(i));
                         ImGui_SetNextItemWidth(ctx, -1.0);
                         if (ImGui_InputTextWithHint(ctx, inpId,
                                 s.slotName.c_str(),
-                                editBuf, 8,
+                                editBuf, sizeof(editBuf),
                                 nullptr, nullptr))
                         {
                             s.customLabel = editBuf;
-                            if (s.customLabel.size() > 7)
-                                s.customLabel.resize(7);
+                            if (s.customLabel.size() > kSlotLabelMax)
+                                s.customLabel.resize(kSlotLabelMax);
                         }
                     }
 

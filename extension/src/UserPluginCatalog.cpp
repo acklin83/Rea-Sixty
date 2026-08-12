@@ -768,10 +768,10 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         std::string dom;
         if (getStrI_(po, "domain", dom)) m.domain = domainFromName_(dom.c_str());
         getStrI_(po, "displayShort", m.displayShort);
-        // Widened from 4→7 chars 2026-05-09 — UF8 / UC1 colour-bar zone
-        // accepts longer strings via length-byte protocol; older 4-char
-        // values still load identically (just no padding).
-        if (m.displayShort.size() > 7) m.displayShort.resize(7);
+        // Widened 4→7 (2026-05-09) → 12 (2026-08-12, the colour-bar zone
+        // measured on HW at last). Older 4- and 7-char values still load
+        // identically — the cap only ever truncates, never pads.
+        if (m.displayShort.size() > 12) m.displayShort.resize(12);
         getBoolI_(po, "isDefault", m.isDefault);
         // v4: explicit uf8Mode flag. For v3 files the key is missing — we
         // derive uf8Mode below (after the uf8 block parses) from

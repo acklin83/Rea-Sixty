@@ -259,8 +259,27 @@ local function shortName(raw)
   return nm
 end
 
+-- Insert-list active marker, stripped so a renamed FX doesn't show the
+-- decoration. Must stay in step with kInsertMarkers_ in main.cpp.
+local INSERT_MARKERS = { "\226\150\182 ", "\226\151\137CS ", "\226\151\137BC ", "[*] " }
+
+local function stripInsertMarker(s)
+  for _, m in ipairs(INSERT_MARKERS) do
+    if s:sub(1, #m) == m then return s:sub(#m + 1) end
+  end
+  return s
+end
+
 local function fxLabel(tr, fxIdx)
   if not tr or not fxIdx or fxIdx < 0 then return nil end
+  -- A USER RENAME WINS over the factory name — same precedence the surfaces
+  -- use (fxUserRename_ → instanceLabel_ on UF8/UC1/UF1). TrackFX_GetFXName
+  -- returns the factory name regardless of the rename, so asking only that
+  -- left this panel showing the original while every surface showed the
+  -- rename (Frank 2026-08-12). Not run through shortName(): the rename is
+  -- the user's own wording, with no "VST3:" prefix or vendor tail to trim.
+  local okRn, rn = reaper.TrackFX_GetNamedConfigParm(tr, fxIdx, "renamed_name")
+  if okRn and rn and rn ~= "" then return stripInsertMarker(rn) end
   local _, nm = reaper.TrackFX_GetFXName(tr, fxIdx, "")
   if not nm or nm == "" then return nil end
   return shortName(nm)

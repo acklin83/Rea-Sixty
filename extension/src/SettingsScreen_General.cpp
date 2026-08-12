@@ -35,6 +35,8 @@ void reasixty_identifyUf8();
 void reasixty_identifyUc1();
 bool reasixty_selFollowsColor();
 void reasixty_setSelFollowsColor(bool follow);
+bool reasixty_routingNameInColourBar();
+void reasixty_setRoutingNameInColourBar(bool on);
 bool reasixty_grAnyFx();
 void reasixty_setGrAnyFx(bool enabled);
 bool reasixty_grCombineUf8();
@@ -359,6 +361,13 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
                                         "SEL LED follows REAPER track color"),
                        &selFollow)) {
         reasixty_setSelFollowsColor(selFollow);
+    }
+
+    bool routeName = reasixty_routingNameInColourBar();
+    if (ImGui_Checkbox(ctx, reasixty_sp("Colour bar names the send / receive source track",
+                                        "Color bar names the send / receive source track"),
+                       &routeName)) {
+        reasixty_setRoutingNameInColourBar(routeName);
     }
 
     // Track names longer than the 7-char scribble-strip slot need shortening.

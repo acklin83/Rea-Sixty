@@ -161,6 +161,8 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Inserts row height",                    kSecAppearance, "On-screen" },
     { "Inserts top offset",                    kSecAppearance, "On-screen" },
     { "SEL LED follows REAPER track colour",   kSecAppearance, "Surface display" },
+    { "Colour bar names the send / receive source track",
+                                               kSecAppearance, "Surface display" },
     { "Long track-name handling",              kSecAppearance, "Surface display" },
     { "Theme",                                 kSecAppearance, "Theme" },
     { "Font Size",                             kSecAppearance, "Font Size" },

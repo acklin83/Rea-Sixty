@@ -2992,6 +2992,19 @@ std::atomic<int> g_scribbleBrightness{BL_Full};
 // ExtState; toggling re-fires bankDirty so per-strip SEL re-pushes.
 std::atomic<bool> g_selFollowsColor{true};
 
+// In a send / receive mode the colour-bar name line has nothing to name — that
+// zone carries the active plug-in / instance, and a route isn't one. Optionally
+// fill it with the route's SOURCE track instead, "S: " / "R: " prefixed.
+//
+// Why it is worth a setting: the scribble above already shows the OTHER end (the
+// send's destination — "Reverb"), which is the half the user can read. What they
+// can't see, without the REAPER mixer in focus, is which track the send belongs
+// to (user report via Frank 2026-08-12). Off by default: anyone running a
+// one-channel side-mixer always knows the selected track, and for them this is
+// just noise in the colour bar.
+std::atomic<bool> g_routingNameInColourBar{false};
+
+
 // "Show any GR data" — when true (default), the CS GR strip on UF8
 // AND the UC1 Comp meter fall back to ANY track FX exposing the
 // PreSonus GainReduction_dB convention if no SSL CS / user-mapped
@@ -3713,6 +3726,10 @@ void loadBrightness()
     const char* selFollow = GetExtState("rea_sixty", "sel_follows_color");
     if (selFollow && *selFollow) {
         g_selFollowsColor.store(std::atoi(selFollow) != 0);
+    }
+    const char* rnc = GetExtState("rea_sixty", "routing_name_colour_bar");
+    if (rnc && *rnc) {
+        g_routingNameInColourBar.store(std::atoi(rnc) != 0);
     }
     const char* grAny = GetExtState("rea_sixty", "gr_any_fx");
     if (grAny && *grAny) {
@@ -24299,6 +24316,16 @@ std::string uf1ActiveFxShortName_()
 {
     const ActiveFxTarget a = resolveActiveFx_();
     if (!a.tr || a.fxIdx < 0) return "";
+    // A USER RENAME WINS, exactly as it does on UF8 (instanceLabel_) and UC1
+    // (reasixty_fxUserRename) — "UC1's CS / BC labels and UF8's csType zone share
+    // one rename-precedence rule", and this zone is the UF1's twin of that. It was
+    // the one of the three that never asked, so a renamed FX showed its map short
+    // name here while the other two showed the rename (Frank 2026-08-12: "UF1
+    // anzeige muss doch gleich sein wie UF8"). Trimmed to the same 12 as below.
+    if (std::string rn = fxUserRename_(a.tr, a.fxIdx); !rn.empty()) {
+        if (rn.size() > 12) rn.resize(12);
+        return rn;
+    }
     char id[256] = {0};
     if (uf8::fxIdentityName(a.tr, a.fxIdx, id, sizeof(id))) {
         // User map WINS (same precedence as the control resolver) so a learned
@@ -28576,8 +28603,8 @@ void pushZonesForVisibleSlots()
                                 s2 += buf;
                             }
                         }
-                        // Length-budget: the colour-bar zone fits 7
-                        // characters. Try shortening the common RME-
+                        // Length-budget: the colour-bar zone fits 12
+                        // characters (HW-confirmed 2026-08-12). Try shortening the common RME-
                         // device prefixes (MADI / ANALOG / ADAT / SPDIF
                         // / AES) first — domain-specific shortcuts that
                         // beat generic abbreviation. Then route through
@@ -28602,7 +28629,7 @@ void pushZonesForVisibleSlots()
                             shorten("SPDIF ",  "SP ");
                             shorten("AES ",    "AE ");
                         }
-                        csType = abbreviateTrackName_(s2, 7, -1, /*foldLatin1*/ true);
+                        csType = abbreviateTrackName_(s2, 12, -1, /*foldLatin1*/ true);
                     }
                 }
             }
@@ -28614,8 +28641,48 @@ void pushZonesForVisibleSlots()
         // In Send/Receive routing mode the strip represents a route, not the
         // bank track's plug-in chain — showing a plug-in / CS name in the
         // colour bar there is misleading. Blank it (Frank 2026-06-25).
-        if (routedFader || routedVpot) csType.clear();
-        if (csType.size() > 7) csType.resize(7);
+        //
+        // …unless the user wants the freed zone to name the route's SOURCE
+        // TRACK: "S:" for a send, "R:" for a receive. The scribble above
+        // already names the OTHER end (the destination), which is the half
+        // that is readable; what is missing without the REAPER mixer in focus
+        // is which track the route belongs to (user report via Frank
+        // 2026-08-12). The zone is SEVEN characters — the prefix costs two, so
+        // the name gets five, shortened by Settings → Track-name mode like
+        // every other name on this strip. The fader route wins when both
+        // outputs are routed, matching the name / dB readouts above so all of
+        // the strip describes the same route.
+        if (routedFader || routedVpot) {
+            csType.clear();
+            if (g_routingNameInColourBar.load()) {
+                const StripRoute& rr = (routedFader && faderRoute.valid) ? faderRoute
+                                                                        : vpotRoute;
+                // The track the route BELONGS TO — sending track for a send,
+                // receiving track for a receive (Frank 2026-08-12). The scribble
+                // above names the far end, so the two together read "this route,
+                // of that track"; naming the far end here would just repeat it.
+                MediaTrack* from = rr.track;
+                if (rr.valid && from
+                    && ValidatePtr2(nullptr, from, "MediaTrack*")) {
+                    char rn[256] = {0};
+                    GetSetMediaTrackInfo_String(from, "P_NAME", rn, false);
+                    std::string src = rn;
+                    if (src.empty()) {
+                        if (from == GetMasterTrack(nullptr)) {
+                            src = "MASTER";
+                        } else {
+                            char fb[16];
+                            snprintf(fb, sizeof(fb), "CH %d", static_cast<int>(
+                                GetMediaTrackInfo_Value(from, "IP_TRACKNUMBER")));
+                            src = fb;
+                        }
+                    }
+                    csType = std::string(rr.sendCategory == 0 ? "S:" : "R:")
+                           + abbreviateTrackName_(src, 10, -1, /*foldLatin1*/ true);
+                }
+            }
+        }
+        if (csType.size() > 12) csType.resize(12);
         if (csType != g_lastCsType[s]) {
             g_lastCsType[s] = csType;
             g_dev->send(uf8::buildChannelStripType(static_cast<uint8_t>(s), csType));
@@ -36161,6 +36228,20 @@ void reasixty_identifyUc1()
 bool reasixty_selFollowsColor()
 {
     return g_selFollowsColor.load();
+}
+
+bool reasixty_routingNameInColourBar()
+{
+    return g_routingNameInColourBar.load();
+}
+
+void reasixty_setRoutingNameInColourBar(bool on)
+{
+    g_routingNameInColourBar.store(on);
+    SetExtState("rea_sixty", "routing_name_colour_bar", on ? "1" : "0", true);
+    // Force a slot-label re-push so the colour bar changes without waiting for
+    // a bank shift — the label cache would otherwise hold the old string.
+    g_bankDirty.store(true);
 }
 
 void reasixty_setSelFollowsColor(bool follow)

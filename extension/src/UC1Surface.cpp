@@ -4836,13 +4836,13 @@ void UC1Surface::refresh()
         // the empty LCD field is a clearer "nothing here" cue than a
         // literal label. Frank 2026-05-25.
 
-        // Central label width — buildCentralLabel accepts up to 8 chars
-        // (Frank 2026-05-09 widening probe). The A/B/C multi-instance
+        // Central label width — buildCentralLabel takes up to 12 chars
+        // (widened 2026-08-12 with the UF8 twin). The A/B/C multi-instance
         // letter suffix was dropped 2026-05-09 — Frank wants the raw
         // displayShort regardless of how many instances are on the
         // track (instance cycling is conveyed via the encoder action,
         // not the LCD label).
-        constexpr int kCentralLabelW = 7;
+        constexpr int kCentralLabelW = 12;
         char labelBuf[kCentralLabelW + 1] = {0};
         // UC1 LCD = Latin-1; fold the (possibly user-renamed) FX label
         // BEFORE the byte-wise strncpy so an umlaut never gets split.

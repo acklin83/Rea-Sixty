@@ -482,12 +482,14 @@ std::vector<uint8_t> buildIndicatorZoneSetup()
 std::vector<uint8_t> buildCentralLabel(std::string_view text)
 {
     // FF 66 <N+1> 01 <N bytes, NUL-padded for short text> CKSUM. SSL
-    // 360° always sends 4 chars; we widen to a fixed kFrameW=7 so
-    // longer labels fit (Frank 2026-05-09 widening probe). Padding is
-    // NUL not space — visible space would render trailing blank cells
-    // as gaps past the text. NUL-padding leaves them truly empty.
-    constexpr size_t kFrameW = 7;
-    constexpr size_t kMaxChars = 8;
+    // 360° always sends 4 chars; the 2026-05-09 widening probe went to 7/8 and
+    // stopped there without measuring. Raised to TWELVE 2026-08-12 alongside the
+    // UF8 twin (buildChannelStripType), where 12 is HW-confirmed — this zone has
+    // the same length-prefixed structure, so it is the same question and gets the
+    // same answer until the hardware says otherwise. Padding is NUL not space —
+    // visible space renders trailing cells as gaps; NUL leaves them truly empty.
+    constexpr size_t kFrameW = 12;
+    constexpr size_t kMaxChars = 12;
     const size_t take = (std::min)(text.size(), kMaxChars);
     const size_t n    = (std::max)(take, kFrameW);
     std::vector<uint8_t> data;
