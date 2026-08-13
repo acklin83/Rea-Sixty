@@ -560,8 +560,11 @@ continuous **nine-wide** strip: *Side* **Right** (default) puts the UF1 at strip
 with the UF8 on 1-8, **Left** puts it at strip 1 with the UF8 on 2-9. Banking
 moves all nine together.
 
-Only the **fader** joins. The UF1 keeps its own screen, V-Pots and soft-keys —
-they simply point at the ninth track instead of at the selection.
+Only the **fader** joins, together with the small display right above it. That
+strip names the track the fader is moving, so the fader and its readout can never
+disagree. The colour screen, the V-Pots and the soft-keys stay on the **selected**
+track, the way the UC1 behaves. You can therefore keep working on one channel's
+plug-in while the fader rides a different track in the bank.
 
 Extender and the Focus-Set pin are mutually exclusive: switching either on clears
 the other, and releasing the pin puts the Extender back the way you left it.
