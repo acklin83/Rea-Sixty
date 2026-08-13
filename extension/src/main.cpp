@@ -25964,25 +25964,40 @@ void uf1PaintChannel_()
     uf1PaintEqGraph_(tr, changed);
     }  // end channel-view painting (else of meterView)
 
-    // Small-LCD channel strip (name / dB / pan / ch# / colour / Solo·Cut LEDs) —
-    // painted in BOTH views so the strip above the fader always follows the channel
-    // selection, identical to the Channel/DAW view (Frank 2026-08-02). The level +
-    // GR meter (0x0009/0x0015/0x0016) rides each view's own cycle and is handled
-    // there, not here. Runs after the meter/channel paint so its Solo/Cut FF3B
-    // re-enable lands after any 0x0100 layout frames sent above.
-    uf1PaintChannelStrip_(tr, changed, extRouteActive ? &extRoute : nullptr);
-
     // ★ THE FADER HAS ITS OWN TRACK. In Extender mode the UF1 fader is the 9th
-    // strip of the UF8 bank while the screen, V-Pots, soft-keys and LEDs stay on
-    // the SELECTION like the UC1 (Frank 2026-08-11). `ftr` is that track — it is
+    // strip of the UF8 bank while the BIG screen, V-Pots, soft-keys and LEDs stay
+    // on the SELECTION like the UC1 (Frank 2026-08-11). `ftr` is that track — it is
     // the focused track whenever the Extender is off, so nothing changes there.
-    // Every read AND write in this block addresses ftr; the rest of the painter
-    // uses tr. Do not mix them.
+    // Every read AND write in the fader block addresses ftr; the big-screen paint
+    // above uses tr. Do not mix them.
     // Never null: tr is already non-null here, and uf1FaderTrack_ falls back to it.
     // Written this way rather than an early return, which would skip the GR-LED,
     // Meter-LED and MODE-menu blocks that follow.
+    // Resolved BEFORE the small-LCD paint below, which needs it too.
     MediaTrack* const extFtr = uf1FaderTrack_();
     MediaTrack* const ftr    = extFtr ? extFtr : tr;
+
+    // Small-LCD channel strip (name / dB / pan / ch# / colour / Solo·Cut LEDs) —
+    // painted in BOTH views. The level + GR meter (0x0009/0x0015/0x0016) rides
+    // each view's own cycle and is handled there, not here. Runs after the
+    // meter/channel paint so its Solo/Cut FF3B re-enable lands after any 0x0100
+    // layout frames sent above.
+    //
+    // ⛔ It paints `ftr`, NOT `tr`: this zone belongs to the FADER, so it has to
+    // name the track the fader is actually moving. It used to take `tr` and was
+    // written before `ftr` existed (Frank 2026-08-02, pre-Extender); the 2026-08-11
+    // split gave the fader its own track and left this call behind, so with the
+    // Extender on the motor sat on bank slot 9 while the strip above it showed the
+    // SELECTION. When the selection was one of the eight on the UF8 its name then
+    // appeared twice across the two surfaces and the UF1 looked like it was not
+    // extending anything at all (forum report 2026-08-13). Frank: "Der Name des
+    // selected track DARF NICHT auf das kleine display des Faders. Nur das grosse
+    // Display soll sich am selected track orientieren."
+    //
+    // Extender off, and the SENDS case, are both unaffected: uf1FaderTrack_ returns
+    // the focused track unless the track-extender branch fires, so ftr == tr there,
+    // and the 9th-SEND readout keeps arriving through sendOverride as before.
+    uf1PaintChannelStrip_(ftr, changed, extRouteActive ? &extRoute : nullptr);
 
     // Fader <-> volume (or Pan under FLIP — g_uf1Flip swaps fader/V-Pot).
     //  - While touched: write the user's fader position to the focused track's
