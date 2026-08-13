@@ -2,7 +2,7 @@
 
 *REAPER × SSL UF8 / UC1 / UF1. A native, open-source replacement for SSL 360° on REAPER.*
 
-> ## ⚠ Windows: v0.5.0 stops REAPER from starting
+> ## Windows: v0.5.0 stops REAPER from starting
 >
 > If you updated to **v0.5.0 on Windows**, REAPER crashes while loading the
 > extension and never opens, so you cannot reach ReaPack to update. Rename one
