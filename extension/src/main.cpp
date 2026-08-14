@@ -23770,49 +23770,6 @@ static int uf1FindStripFx_(MediaTrack* tr)
 // then the focused plug-in window, then any strip FX on the focused track.
 // Returns the type index and fills outTr/outFx, or -1 (V-Pots no-op).
 // Main-thread only.
-// Say which stage of uf1ResolveCsFx_ decided, and why the earlier ones did not.
-// Logs ONLY when the verdict changes, so it is a handful of lines per session
-// rather than one per frame. Everything the UF1 and the HUD's UF1 tab show comes
-// out of that function, so when they disagree with the editor this is the answer.
-static void uf1ResolveTrace_(const char* stage, MediaTrack* tr, int fx, int ty,
-                             MediaTrack* focusTr)
-{
-    // Track NUMBERS, not pointers, and the focused track's whole FX list. Reading
-    // pointers made me assert twice that two tracks were different when the real
-    // question was which FX on ONE track the cursor had landed on. The list is what
-    // answers that without another round trip.
-    auto trNum_ = [](MediaTrack* t) -> int {
-        if (!t || !ValidatePtr2(nullptr, t, "MediaTrack*")) return -1;
-        return static_cast<int>(GetMediaTrackInfo_Value(t, "IP_TRACKNUMBER"));
-    };
-    char line[900];
-    char nm[128] = "-";
-    if (tr && fx >= 0 && ValidatePtr2(nullptr, tr, "MediaTrack*"))
-        uf8::fxIdentityName(tr, fx, nm, sizeof(nm));
-    char chain[512] = {0};
-    if (focusTr && ValidatePtr2(nullptr, focusTr, "MediaTrack*")) {
-        const int n = TrackFX_GetCount(focusTr);
-        for (int i = 0; i < n && i < 12; ++i) {
-            char f[128] = "?";
-            uf8::fxIdentityName(focusTr, i, f, sizeof(f));
-            char one[160];
-            std::snprintf(one, sizeof(one), "%s[%d]%s(t%d)",
-                          i ? " " : "", i, f, uf1CsPluginType_(focusTr, i));
-            std::strncat(chain, one, sizeof(chain) - std::strlen(chain) - 1);
-        }
-    }
-    std::snprintf(line, sizeof(line),
-                  "%s | activeTr=%d fx=%d type=%d name='%s' | focusTr=%d | focusChain: %s",
-                  stage, trNum_(tr), fx, ty, nm, trNum_(focusTr), chain);
-    static std::string last;
-    if (last == line) return;
-    last = line;
-    if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uf1resolve.log").c_str(), "a")) {
-        std::fprintf(f, "%s\n", line);
-        std::fflush(f);
-        std::fclose(f);
-    }
-}
 
 int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx)
 {
@@ -23842,22 +23799,13 @@ int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx)
         if (lastActivatedInstance_(lt, lfx)) {
             const int ty = tryFx(lt, lfx);
             if (ty >= 0) {
-                uf1ResolveTrace_("STAGE0 last-activated WIN", lt, lfx, ty, focusTr);
                 outTr = lt; outFx = lfx; return ty;
             }
         }
     }
     { const ActiveFxTarget a = resolveActiveFx_();
-      const int aTy = tryFx(a.tr, a.fxIdx);
-      // Log stage 1 whether it wins or loses, and WHY it loses: this is the stage
-      // that is supposed to carry "the instance the user chose", and three rounds
-      // of reasoning about it from the source got the wrong answer each time.
-      uf1ResolveTrace_(a.tr != focusTr    ? "STAGE1 SKIP: active FX on a DIFFERENT track"
-                     : aTy < 0            ? "STAGE1 SKIP: track/fx not a known strip type"
-                                          : "STAGE1 active-cursor WIN",
-                       a.tr, a.fxIdx, aTy, focusTr);
       if (a.tr == focusTr) {
-          const int ty = aTy;
+          const int ty = tryFx(a.tr, a.fxIdx);
           if (ty >= 0) { outTr = a.tr; outFx = a.fxIdx; return ty; } } }
     { int trNum = -1, itemNum = -1, fxNum = -1;
       if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum > 0) {
@@ -23872,11 +23820,9 @@ int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx)
         const int fx = uf1FindStripFx_(focusTr);
         const int ty = tryFx(focusTr, fx);
         if (ty >= 0) {
-            uf1ResolveTrace_("STAGE3 stripFind", focusTr, fx, ty, focusTr);
             outTr = focusTr; outFx = fx; return ty;
         }
     }
-    uf1ResolveTrace_("NONE", nullptr, -1, -1, focusTr);
     return -1;
 }
 

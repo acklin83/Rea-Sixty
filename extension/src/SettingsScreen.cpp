@@ -7,7 +7,6 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
-#include <cstdarg>      // TEMP: seDbg_ UF1-tab teardown trace
 #include <cstring>
 #include <ctime>
 #include <functional>
@@ -3652,69 +3651,10 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
 // Editor panel — two-column matrix. Left: SHORT PRESS (Plain row + 3
 // modifier collapsibles). Right: LONG PRESS (same shape, only for
 // Momentary). Auto-saves on every change.
-// ============================================================================
-// Bindings-editor layout trace — OPT-IN, off by default.
-//
-//   reaper.SetExtState("rea_sixty", "uf1_tab_trace", "1", true)   then restart
-//
-// For the intermittent "UF1 tab takes the whole Settings window down and it will
-// not reopen" (Frank 2026-08-13). learnings #31: that teardown leaves NO crash
-// report and is invisible to source reading — a BeginChild landing below the fold
-// returns FALSE, its body is skipped, and ReaImGui garbage-collects the window one
-// defer cycle later. Static auditing this exact path already failed once; only an
-// on-device trace found it. It is opt-in rather than temporary because the bug is
-// intermittent: leaving it in means the next occurrence is already recorded,
-// instead of needing a special build first.
-//
-// Flush and close per line on purpose — the window can go down before any buffered
-// writer would drain, and the LAST line is the whole point.
-//
-// Log: uf8::logPath("rea_sixty_uf1tab.log")  (/tmp on macOS, %TEMP% on Windows)
-static bool seDbgOn_()
-{
-    // The ExtState gate is EVALUATED ONCE and cached, and it did not fire even
-    // with uf1_tab_trace=1 sitting in reaper-extstate.ini — REAPER started clean,
-    // every other log was written, this one was never created. Rather than lose a
-    // third round of Frank's time to the switch instead of the bug, the gate now
-    // fails OPEN: on unless explicitly turned off with uf1_tab_trace=0.
-    //
-    // Cost of being wrong in this direction is a log file nobody reads. Cost in
-    // the other direction is another reproduction that records nothing, which has
-    // already happened twice.
-    static const bool on = [] {
-        const char* v = GetExtState("rea_sixty", "uf1_tab_trace");
-        return !(v && *v && strcmp(v, "0") == 0);
-    }();
-    return on;
-}
-static void seDbg_(const char* fmt, ...)
-{
-    if (!seDbgOn_()) return;
-    char line[512];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(line, sizeof(line), fmt, ap);
-    va_end(ap);
-    // ⚠ Open ONCE, flush per line, never close. It used to fopen/fclose per line,
-    // which was affordable while this only traced the bindings editor. Adding a
-    // line per parameter row was not: Pro-C 2 has 186 params, so a single frame
-    // became ~380 open/write/close cycles, and at that rate the pane stopped
-    // responding to page keys at all — Frank read that as paging being broken,
-    // which it was, by the instrumentation rather than the bug.
-    //
-    // fflush is what the abort survives on, and it still happens per line. The
-    // fopen/fclose pair contributed nothing to that and cost everything.
-    static FILE* f = std::fopen(uf8::logPath("rea_sixty_uf1tab.log").c_str(), "a");
-    if (!f) return;
-    std::fprintf(f, "%s\n", line);
-    std::fflush(f);
-}
-// ============================================================================
 
 void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
 {
     using namespace uf8::bindings;
-    seDbg_("editor: ENTER id=%d layer=%d", static_cast<int>(id), layer);
 
     Binding bd    = getBinding(layer, id);
     bool    dirty = false;
@@ -3900,11 +3840,8 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             double curX = 0, curY = 0, availX = 0, availY = 0;
             ImGui_GetCursorPos(ctx, &curX, &curY);
             ImGui_GetContentRegionAvail(ctx, &availX, &availY);
-            seDbg_("  col[%s] BEFORE  wantH=%.0f  curY=%.0f  availY=%.0f",
-                   tag, h, curY, availY);
         }
         const bool colOpen = ImGui_BeginChild(ctx, childId, &w, &h, &childFlags, nullptr);
-        seDbg_("  col[%s] BeginChild=%s", tag, colOpen ? "TRUE" : "FALSE(culled)");
         if (colOpen) {
             ImGui_Text(ctx, title);
             ImGui_Separator(ctx);
@@ -5910,19 +5847,12 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                     drawTrackColourPalette_(ctx);
                 }
             } else {
-                seDbg_("branch: softbank tab=%d bank=%d slot=%d BEFORE",
-                       s_deviceTab, uf1Bank, slotIdx);
                 drawUf1SoftBankSlotEditor_(ctx, uf1Bank, slotIdx);
-                seDbg_("branch: softbank AFTER");
             }
         }
     } else {
-        seDbg_("branch: editor tab=%d sel=%d BEFORE",
-               s_deviceTab, static_cast<int>(editSel));
         drawBindingEditor(ctx, s_editLayer, editSel);
-        seDbg_("branch: editor AFTER");
     }
-    seDbg_("--- pane survived the editor, tab=%d ---", s_deviceTab);
 
     // UF1 behaviour toggles — rendered BELOW the editor so they add NO height above
     // the tall binding-editor columns (moving them here fixed the "UF1 tab crash":
@@ -14908,10 +14838,7 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
                          bool softKeys, int idx)
 {
     const int pos = g_uf1EditingPage * uf8::kUserUf1PerPage + idx;
-    seDbg_("  uf1cell sk=%d idx=%d page=%d pos=%d  ENTER",
-           softKeys ? 1 : 0, idx, g_uf1EditingPage, pos);
     const int explicitParam = mappedVst3ForUf1_(softKeys, pos);
-    seDbg_("  uf1cell pos=%d explicitParam=%d", pos, explicitParam);
     // INHERITED: what the UF1 actually drives here when this position carries no
     // explicit binding — the plug-in's learned CS/BC map filled sequentially, or
     // a built-in strip's p188 slot. The editor used to draw "—" for those while
@@ -14919,7 +14846,6 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
     const int inherited = (explicitParam >= 0) ? -1
         : reasixty_uf1EffectiveParam(fx.tr, fx.fxIdx, softKeys,
                                      g_uf1EditingPage, idx);
-    seDbg_("  uf1cell pos=%d inherited=%d (effectiveParam returned)", pos, inherited);
     const int mapped = (explicitParam >= 0) ? explicitParam : inherited;
     const bool isMapped = (explicitParam >= 0);
     const bool isInherited = (explicitParam < 0 && inherited >= 0);
@@ -15353,8 +15279,6 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
 
 void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
 {
-    seDbg_("uf1schematic ENTER match='%s' tr=%p fx=%d editPage=%d",
-           g_editingMatch.c_str(), (void*)fx.tr, fx.fxIdx, g_uf1EditingPage);
     // Page selector. Pages exist as far as the highest mapped position, plus
     // one spare so the user can always start a new page — the hardware page
     // count follows the map (uf1MapPageCount), so a page that ends up empty
@@ -17836,7 +17760,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                          &childFlags, &winFlags)) {
         if (s_mockup == 2) {
             drawFxLearnUf1Schematic_(ctx, fx);
-            seDbg_("schematic RETURNED ok, continuing left child");
         } else if (s_mockup == 1) {
             drawFxLearnUf8Schematic_(ctx, fx);
         } else if (topo) {
@@ -18016,7 +17939,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             ImGui_Separator(ctx);
             ImGui_Spacing(ctx);
 
-            seDbg_("VU/GR cal section ENTER");
             const bool isBc =
                 (editing->domain == uf8::Domain::BusComp);
             const int     which  = isBc ? 0 : 1;
@@ -18108,7 +18030,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
 
     // Right pane — param list.
     int rightWinFlags = 0;
-    seDbg_("param list child BEFORE BeginChild");
     if (ImGui_BeginChild(ctx, "fxl_params", &rightW, &hLeft,
                          &childFlags, &rightWinFlags)) {
         const bool haveParamSource = fx.ok || !editing->paramSnapshot.empty();
@@ -18274,7 +18195,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             const auto fltToks = searchTokensLower_(g_paramFilter);
 
             char pname[128];
-            seDbg_("param rows: n=%d", n);
             for (int p = 0; p < n; ++p) {
                 pname[0] = 0;
                 paramNameFor_(*editing, fx, p, pname, sizeof(pname));
@@ -18304,7 +18224,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
 
                 // One line per DRAWN row, not per candidate: enough to name the row
                 // that throws, without the volume that made the pane unusable.
-                seDbg_("  row p=%d drawn '%s'", p, pname);
                 bool selected = false;
                 int  selFlags = ImGui_SelectableFlags_AllowDoubleClick;
                 if (isBound) selFlags |= ImGui_SelectableFlags_Disabled;
@@ -18352,7 +18271,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 }
             }
 
-            seDbg_("param rows: LOOP DONE");
             if (paramCount > kMaxParams) {
                 ImGui_Spacing(ctx);
                 char overflow[96];
@@ -18363,7 +18281,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             }
         }
         ImGui_EndChild(ctx);
-        seDbg_("param list: EndChild DONE");
     }
 
     // Mode-change confirm popup removed 2026-05-24 — Frank: switches
@@ -18377,9 +18294,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     // — the same popup serves FX-Learn slots, UF8 V-Pots, and UF8
     // faders. Frank 2026-05-26 generalisation.
     drawFxLearnCurveEditorPopup_(ctx);
-    seDbg_("editor: curve popup DONE");
     drawFeelNamePrompt_(ctx);
-    seDbg_("editor: LEAVE");
 }
 
 } // namespace

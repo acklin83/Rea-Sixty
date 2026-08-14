@@ -34,33 +34,6 @@
 local SECT   = "rea_sixty"
 local RUNKEY = "hud_imgui_running"
 
--- ⚠ TEMPORARY breadcrumb trace for the abort that kills REAPER while the HUD is
--- open (memory: handoff-fxlearn-abort-2026-08-14). The C++ side catches an
--- escaping exception at onTimer / onRunTick / Extended, but this script is Lua —
--- if the throw happens inside ReaImGui's own render, no C++ catch of ours ever
--- sees it. The decisive question is therefore WHERE the last breadcrumb lands:
---   "frame N end" was the last line  → our Lua finished; the throw is in
---                                      ReaImGui's render/EndFrame.
---   a mid-frame mark was the last    → that section built the offending call.
--- Deliberately GLOBAL, not `local`: this file is at Lua's 200-local ceiling for
--- the main chunk and a 201st local makes the whole script fail to load.
--- Gated on the same ExtState as the C++ trace; set it to "0" to silence both.
--- One handle, flushed per line — the C++ side learned the hard way that
--- open/close per line is slow enough to look like a different bug.
-HUDDBG_ON   = (reaper.GetExtState(SECT, "uf1_tab_trace") ~= "0")
-HUDDBG_F    = nil
-HUDDBG_N    = 0
-function HUDDBG(msg)
-  if not HUDDBG_ON then return end
-  if not HUDDBG_F then
-    local dir = (reaper.GetOS():find("Win")) and (os.getenv("TEMP") or ".") or "/tmp"
-    HUDDBG_F = io.open(dir .. "/rea_sixty_hud.log", "a")
-    if not HUDDBG_F then HUDDBG_ON = false return end
-  end
-  HUDDBG_F:write(msg, "\n")
-  HUDDBG_F:flush()
-end
-
 local _, _, sectionID, cmdID = reaper.get_action_context()
 
 if reaper.GetExtState(SECT, RUNKEY) == "1" then
@@ -2300,14 +2273,8 @@ local function render()
   -- UF1 device tab (v11): one view only — the page grid mirrors the hardware,
   -- so there is no list/mockup split to make.
   if activeTab == "uf1" then
-    HUDDBG("  uf1 tab: renderUf1Tab")
     renderUf1Tab(readUf1())
-    HUDDBG("  uf1 tab: renderUf1Tab DONE")
-    if paramPanelOpen then
-      HUDDBG("  uf1 tab: renderParamPanel")
-      renderParamPanel(st, {})
-      HUDDBG("  uf1 tab: renderParamPanel DONE")
-    end
+    if paramPanelOpen then renderParamPanel(st, {}) end
     return
   end
 
@@ -3887,9 +3854,6 @@ local shutdown
 local function loop()
   if reaper.GetExtState(SECT, RUNKEY) ~= "1" then return shutdown() end
 
-  HUDDBG_N = HUDDBG_N + 1
-  HUDDBG("frame " .. HUDDBG_N .. " BEGIN tab=" .. tostring(activeTab))
-
   if first_frame then
     if restore_x then
       reaper.ImGui_SetNextWindowPos(ctx, restore_x, restore_y)
@@ -4141,7 +4105,6 @@ local function loop()
     -- — which then spams the console and can wedge the instance. See the memory
     -- note reaimgui-v010-begin-end-pairing. Pop* below stay UNCONDITIONAL: they
     -- balance the pushes made BEFORE Begin (window stack only is conditional).
-    HUDDBG("frame " .. HUDDBG_N .. " before End")
     reaper.ImGui_End(ctx)
   end
   reaper.ImGui_PopStyleColor(ctx, 1)
@@ -4149,7 +4112,6 @@ local function loop()
   -- The LAST line of the log decides where the throw is. If a run ends on this
   -- one, our Lua completed the frame and the abort happened afterwards, inside
   -- ReaImGui's own render — nothing in this script or in our C++ catches.
-  HUDDBG("frame " .. HUDDBG_N .. " END")
 
   if open then reaper.defer(loop) else shutdown() end
 end
