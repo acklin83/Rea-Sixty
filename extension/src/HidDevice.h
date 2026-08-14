@@ -1,14 +1,20 @@
 #pragma once
 //
-// HidDevice — reads the UF8 HID controller (VID 0x31E9 / PID 0x0022).
+// HidDevice — hidapi reader for the UF8 HID interface (VID 0x31E9 / PID 0x0022).
 //
-// The vendor-USB device (PID 0x0021) carries display/color output only.
-// Physical input from faders, V-pots and buttons comes through a separate
-// HID device on the same USB hub (PID 0x0022). We open it with hidapi,
-// run a dedicated reader thread, and dispatch raw reports via a callback.
+// ⚠ CURRENTLY UNUSED. Nothing constructs one: main.cpp declares g_hid but never
+// assigns it, and initDevices_ does not open it. Do not debug UF8 input here.
 //
-// Parsing to MCU happens in main.cpp once we've characterized the report
-// format (test with logRawHid first, then map).
+// The early assumption was that PID 0x0021 carried display/colour OUT only and
+// that faders, V-Pots and buttons had to come back over this separate HID
+// interface. That turned out to be wrong: 0x0021 is bidirectional, and ALL UF8
+// input arrives on its bulk IN endpoint 0x81. The live path is
+// UF8Device::readCallback_ -> rawInputHandler_ -> onUf8Input (main.cpp), which
+// does its own FF-frame walk; uf8::parseButtonEvent covers the button frames.
+//
+// Kept because the interface is real hardware we may still want to read (the
+// report format was never characterised), but until something opens it this is
+// dead weight — see COMPENDIUM.md §6.
 //
 
 #include <atomic>

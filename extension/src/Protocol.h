@@ -22,7 +22,15 @@ constexpr uint8_t kFrameMagic = 0xFF;
 constexpr size_t  kStripCount = 8;
 
 struct ButtonEvent {
-    uint8_t id;       // 0x78 = BANK->, 0x79 = BANK<-, others TBD
+    // Raw device byte from FF 22 03 <id> 00 <state>. The full id catalogue is
+    // decoded and lives in Bindings.cpp's fromUf8DeviceId (footswitches 0x00/
+    // 0x01, top soft-keys 0x18..0x1F, layer 0x40..0x42, quick 0x43..0x45,
+    // send/plugin row 0x48..0x4F, page 0x52/0x53, auto row 0x58..0x5D,
+    // bank-select row 0x68..0x6D, selection-mode row 0x70..0x72, encoder-mode
+    // row 0x73..0x76, bank 0x78/0x79, zoom 0x7A..0x7E); per-strip Solo/Cut/Sel
+    // are handled inline in main.cpp's onUf8Input. Keep new ids in that table,
+    // not here — this struct stays a dumb carrier.
+    uint8_t id;
     bool    pressed;  // true on press, false on release
 };
 
@@ -34,6 +42,10 @@ std::vector<uint8_t> buildColorCommand(const std::array<uint8_t, kStripCount>& p
 // Build the plugin-mixer heartbeat pair (13 B each):
 //   FF 66 09 15 00x8 84
 //   FF 66 09 16 00x8 85
+// NOT on the live path: UF8Device's worker owns these two opcodes and stamps
+// per-strip Comp / Gate GR bytes into them every 20 ms (hb3 / hb4 in
+// workerLoop_), so emitting them from here as well would race and flicker.
+// Referenced only by tests/test_protocol.cpp as a byte-layout fixture.
 std::array<std::vector<uint8_t>, 2> buildPluginMixerHeartbeat();
 
 // Build a scribble-strip-text command for a single strip.
@@ -69,9 +81,11 @@ std::vector<uint8_t> buildMotorEnable(uint8_t strip, bool enable);
 
 // Drive one strip's VU meter.
 //   FF 38 04 <strip*3> 00 00 <0xF0 | level> CKSUM     (8 bytes)
-// Best-guess from cap10 frame layout. level is the MCU meter nibble
-// (0..0xE full scale, 0xF clip). Actual byte semantics still partially
-// TBD — refine once we have captures with known audio levels to verify.
+// Best-guess from cap10 frame layout, never verified against known audio
+// levels. ⚠ NO CALL SITE — it was superseded by buildVuMeter (FF 66 21 09/0A,
+// 8 strips x in+out per frame), which is what pushVuMeter actually sends. Left
+// standing only as the record of what the FF 38 meter opcode looked like; if
+// nothing ends up needing it, it goes. See COMPENDIUM.md §6.
 std::vector<uint8_t> buildMeter(uint8_t strip, uint8_t level);
 
 // Switch UF8 display mode:

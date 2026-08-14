@@ -1,8 +1,17 @@
 #pragma once
 //
 // UC1Device — libusb wrapper for the SSL UC1 (VID 0x31E9 / PID 0x0023).
-// Parallel to UF8Device, but much simpler: UC1 needs no custom init
-// sequence and only one keepalive command (FF 1B 01 <counter 0-3>).
+// Parallel to UF8Device. Init = replay the captured SSL 360 LED/framebuffer
+// flood (uc1_init_sequence.inc, ~460 frames) so the device leaves its splash
+// screen and enters operational state; the replay happens inline at the head
+// of workerLoop_, not in a separate init thread the way UF8/UF1 do it.
+//
+// Steady-state liveness is TWO streams, and both are load-bearing:
+//   FF 1B 01 <counter 0-3>   keepalive, ~1 Hz
+//   FF 5B 02 <hi> <lo>       the GR meter at 50 Hz — the firmware treats this
+//                            as its watchdog and drops to "Attempting to
+//                            reconnect to SSL 360" if it stops. See
+//                            setGainReduction below.
 //
 // Threading: libusb calls happen on a dedicated worker. send() is
 // producer-side (thread-safe, buffered). Event callbacks fire on the
