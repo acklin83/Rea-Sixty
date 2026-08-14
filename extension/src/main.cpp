@@ -7291,8 +7291,12 @@ bool pushTouchedFxReveal_(void* tr, int fxIdx, uf8::Domain domain)
         // short FX name when nothing matches.
         g_touchedFxReveal.label =
             fxCycleDisplayName_(static_cast<MediaTrack*>(tr), fxIdx);
-        if (g_touchedFxReveal.label.size() > 7) {
-            g_touchedFxReveal.label.resize(7);
+        // 12 — this label lands in `csType`, the same colour-bar zone as
+        // displayShort in the very next branch of that if/else, and the zone is
+        // twelve wide (52ac0dd, HW-confirmed). Left at 7 it cut the reveal
+        // shorter than the name the same strip shows a moment later.
+        if (g_touchedFxReveal.label.size() > 12) {
+            g_touchedFxReveal.label.resize(12);
         }
     }
     g_touchedFxReveal.until =

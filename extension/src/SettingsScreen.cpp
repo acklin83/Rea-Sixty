@@ -6382,7 +6382,7 @@ void qlOfferTarget_(const QlTarget& tgt)
     // Match defaults to the cleaned root (strips "VST3: " / " (Vendor)") so
     // it matches every instance / wrapper of the same plug-in; the user can
     // still edit it. Falls back to the full name if cleaning emptied it.
-    // Display short reuses the same heuristic, truncated to 7 chars.
+    // Display short reuses the same heuristic, truncated to 12 chars.
     const std::string root = deriveMatchRoot_(tgt.name);
     const std::string match = root.empty() ? tgt.name : root;
     std::snprintf(g_newMatch, sizeof(g_newMatch), "%s", match.c_str());
@@ -8387,7 +8387,7 @@ void unbindUf8_(int kind, int strip, int bank)
 // "CH01"→"CH02"; Frank 2026-07-21). The original digit width is kept where the
 // stepped number still fits. A label with NO digit run is returned verbatim (the
 // pre-2026-07-21 behaviour — the same label is copied to every overflow strip).
-// Result is capped at the 7-char scribble limit, matching setUf8FaderLabel_/
+// Result is capped at the 12-char scribble limit, matching setUf8FaderLabel_/
 // setUf8Label_ so a Fill can never store a longer label than a manual rename.
 std::string bumpLabelDigits_(const std::string& label, int delta)
 {
@@ -8407,7 +8407,7 @@ std::string bumpLabelDigits_(const std::string& label, int delta)
     char numBuf[16];
     snprintf(numBuf, sizeof(numBuf), "%0*d", static_cast<int>(de - ds), next);
     std::string out = label.substr(0, ds) + numBuf + label.substr(de);
-    if (out.size() > 7) out.resize(7);
+    if (out.size() > 12) out.resize(12);
     return out;
 }
 
@@ -8830,7 +8830,10 @@ void setUf8DefaultNorm_(int strip, int bank, double norm)
 void setUf8Label_(int strip, int bank, const std::string& label)
 {
     std::string trimmed = label;
-    if (trimmed.size() > 7) trimmed.resize(7);
+    // 12, the HW-confirmed zone width (52ac0dd). This writes the SHARED
+    // per-parameter name, so a 7 here cut a name that the UF1's own field
+    // happily takes at 11/13 — the same string, two different limits.
+    if (trimmed.size() > 12) trimmed.resize(12);
     int param = -1;
     if (!g_editingMatch.empty()) {
         for (const auto& m : uf8::user_plugins::get().maps) {
@@ -8859,7 +8862,7 @@ void setUf8Label_(int strip, int bank, const std::string& label)
 void setUf8FaderLabel_(int strip, const std::string& label)
 {
     std::string trimmed = label;
-    if (trimmed.size() > 7) trimmed.resize(7);
+    if (trimmed.size() > 12) trimmed.resize(12);
     mutateUf8_([&](uf8::UserUf8Map& u) {
         u.strips[g_uf8EditingFaderBank][strip].faderLabel = trimmed;
     });
