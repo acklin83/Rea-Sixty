@@ -39482,6 +39482,13 @@ if (-not $cert) {
 # remove it again so the folder is clean for the next run.
 $cat = Join-Path $env:TEMP 'rea_sixty_winusb.cat'
 Remove-Item -LiteralPath $cat -Force -ErrorAction SilentlyContinue
+# Self-healing, and NOT a duplicate of the C++ staging cleanup: a machine
+# poisoned by an older build has a .cat sitting in $wd already, and if the
+# staging delete failed for any reason the very first hash here would throw
+# again. Clearing it here means the script repairs itself no matter how it
+# was launched.
+Get-ChildItem -LiteralPath $wd -Filter *.cat -ErrorAction SilentlyContinue |
+    Remove-Item -Force -ErrorAction SilentlyContinue
 New-FileCatalog -Path $wd -CatalogFilePath $cat -CatalogVersion 2 | Out-Null
 $sig = Set-AuthenticodeSignature -FilePath $cat -Certificate $cert -HashAlgorithm SHA256
 if ($sig.Status -ne 'Valid') { throw "CAT signature failed: $($sig.Status)" }
