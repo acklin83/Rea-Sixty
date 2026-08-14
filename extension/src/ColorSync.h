@@ -12,6 +12,8 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>   // refresh() takes a std::function; do not rely on the
+                        // transitive include from UF8Device.h
 
 #include "Protocol.h"
 #include "UF8Device.h"

@@ -2,6 +2,13 @@
 //
 // MixerLayout — pure layout/widget logic for the Plugin Mixer view tab.
 //
+// ⚠ UNREACHABLE. draw() has no call site anywhere in the tree: the Plug-in
+// Mixer never got a rail entry in MixerWindow.cpp's kRail, so nothing can
+// reach it. The body below is a one-line placeholder plus the plan for what
+// would go in it. Phase 2.6 is real backlog and NOT near-term (Frank,
+// 2026-08-14), so this is parked rather than in progress. It still compiles
+// into the target; see COMPENDIUM.md §6.
+//
 // 75% left: horizontally scrollable channel-strip columns (one per track
 //           hosting a CS-family plugin from PluginMap).
 // 25% right: vertical Bus Compressor rack (one strip per BC instance).
