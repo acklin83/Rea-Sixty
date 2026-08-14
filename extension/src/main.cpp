@@ -6527,6 +6527,20 @@ inline void clearLastActivatedInstance_()
     g_lastActiveFxGuid.clear();
 }
 
+// ⛔ THE TRACK A HARDWARE SEL PUT US ON.
+// uf1FocusedTrack_ follows REAPER's LAST-TOUCHED track and only falls back to
+// the selection. Neither SetOnlyTrackSelected nor CSurf_OnSelectedChange makes a
+// track last-touched — they change/report selection — so pressing SEL moved the
+// selection while the UF1's screen, V-Pots and EQ graph stayed on whatever was
+// touched last. On the UF1 in Extender mode that is the whole feature: its SEL
+// selects the 9th bank track and nothing followed (Frank 2026-08-14).
+//
+// Self-clearing by construction: the anchor counts only while it IS the first
+// selected track, so selecting anywhere else by any means drops it and the
+// last-touched follow resumes untouched. No timer, no staleness.
+MediaTrack* g_uf1SelAnchor = nullptr;
+inline void setUf1SelAnchor_(MediaTrack* tr) { g_uf1SelAnchor = tr; }
+
 // Recency tracking so the HUD's "what plug-in am I on" follows whichever the user
 // touched LAST — the FX-cycle cursor or the focused plug-in window (Frank
 // 2026-06-17: "plugin sichtbar vs. fx cycle: neuester soll gewinnen"). The cycle
@@ -14688,6 +14702,14 @@ MediaTrack* uf1FocusedTrack_()
     // unaffected; Meter view keeps the normal follow (the sub-mode is stale there).
     if (!g_uf1MeterView.load() && g_uf1ChannelSubMode.load() == 1)
         return GetSelectedTrack(nullptr, 0);
+    // A hardware SEL wins over last-touched, for exactly as long as the track it
+    // selected is still the selected one. See g_uf1SelAnchor: without this the
+    // UF1's own SEL could not move the UF1, because selecting a track does not
+    // make it last-touched.
+    if (g_uf1SelAnchor
+        && ValidatePtr2(nullptr, g_uf1SelAnchor, "MediaTrack*")
+        && g_uf1SelAnchor == GetSelectedTrack(nullptr, 0))
+        return g_uf1SelAnchor;
     MediaTrack* tr = GetLastTouchedTrack();
     if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
     // Toggling MASTER off must return to the SELECTED channel. But driving the
@@ -15924,8 +15946,11 @@ void drainInputQueue()
             // uf1FaderTrack_ falls back to uf1FocusedTrack_ whenever the extender
             // branch does not fire, so Extender-off behaviour is unchanged.
             if (MediaTrack* tr = uf1FaderTrack_()) {
-                // Picking a channel by hand outranks any earlier activation.
+                // Picking a channel by hand outranks any earlier activation,
+                // and anchors the UF1 to it (last-touched does not move on a
+                // selection, so nothing would follow otherwise).
                 clearLastActivatedInstance_();
+                setUf1SelAnchor_(tr);
                 if (e.value > 0.5)                     // Shift held at press → additive
                     CSurf_OnSelectedChange(tr, -1);    // toggle this track's selection
                 else
@@ -16546,6 +16571,7 @@ void drainInputQueue()
                 }
                 if (!tr) break;
                 clearLastActivatedInstance_();
+                setUf1SelAnchor_(tr);
                 CSurf_OnSelectedChange(tr, -1);
                 break;
             }
@@ -16572,6 +16598,7 @@ void drainInputQueue()
                 }
                 if (!tr) break;
                 clearLastActivatedInstance_();
+                setUf1SelAnchor_(tr);
                 SetOnlyTrackSelected(tr);
                 followSelectedInMixer(tr);
                 break;
