@@ -23829,11 +23829,24 @@ int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx)
     //     saw it as "the EQ graph shows the new channel only after I touch the
     //     EQ" (2026-08-14), but the V-Pots and soft-keys were equally stale.
     {
-        const bool focusMovedSinceActivation =
+        const bool focusMoved =
             !g_lastActiveFocusGuid.empty() && focusTr
             && uc1::trackGuid(focusTr) != g_lastActiveFocusGuid;
+        // ★ ...and only if the channel moved TO actually has a strip of its own.
+        // Standing down on a channel that carries none left every stage below
+        // with nothing to find, so the surface went blank — the graph most
+        // visibly (Frank 2026-08-14, "wird nicht angezeigt wenn das UF1 seinen
+        // eigenen Track selected"). Blanking is worse than keeping the last
+        // instance: the user gets an empty screen for a channel that never had
+        // anything to show, and loses the plug-in they were working on.
+        //
+        // This is NOT the forbidden second path — the resolver still returns one
+        // answer that the V-Pots, soft-keys, CS-TYPE cell and graph all share.
+        // It only decides WHEN recency yields to locality.
+        const bool focusHasOwnStrip =
+            focusMoved && (tryFx(focusTr, uf1FindStripFx_(focusTr)) >= 0);
         MediaTrack* lt = nullptr; int lfx = -1;
-        if (!focusMovedSinceActivation && lastActivatedInstance_(lt, lfx)) {
+        if (!(focusMoved && focusHasOwnStrip) && lastActivatedInstance_(lt, lfx)) {
             const int ty = tryFx(lt, lfx);
             if (ty >= 0) {
                 outTr = lt; outFx = lfx; return ty;
