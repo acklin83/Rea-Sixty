@@ -6705,6 +6705,14 @@ void applySelectRelative_(int step)
     if (next < 0)        next = 0;
     if (next > vc - 1)   next = vc - 1;
     if (MediaTrack* tr = visibleTrackAt(next)) {
+        // ⛔ SAME RULE AS THE SEL BUTTON. Navigating the channel by hand says
+        // "show me this channel", so the last-activated instance must not keep
+        // outranking it. This was on the SEL paths only, which is exactly why SEL
+        // worked and the channel encoder did not: touching any EQ value stamps
+        // the cursor onto that instance, and every encoder detent after it
+        // resolved straight back to the instance you had touched (Frank
+        // 2026-08-14, "mit SEL geht es, wieso nicht mit channel encoder").
+        clearLastActivatedInstance_();
         SetOnlyTrackSelected(tr);
         followSelectedInMixer(tr);
     }
@@ -6760,6 +6768,9 @@ void applySelectRangeRelative_(int step)
     // follow (only CSurf_OnSelectedChange does), so there is no per-track
     // scroll; the single follow to the cursor happens via the focus drain.
     g_inRangeSelect.store(true);
+    // Same rule as the plain nav and the SEL button — a deliberate channel move
+    // outranks the last-activated instance.
+    clearLastActivatedInstance_();
     SetOnlyTrackSelected(loTr);
     for (int i = lo + 1; i <= hi; ++i)
         if (MediaTrack* tr = visibleTrackAt(i)) SetTrackSelected(tr, true);
