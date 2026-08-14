@@ -7,9 +7,19 @@
 //
 // WHY PLATFORM-NATIVE. The extension ships no bundled binary and must not — a
 // new dylib drags in notarisation and ReaPack packaging. So each platform uses
-// what the OS already provides: NSURLSession (macOS, built), WinHTTP (Windows),
-// libcurl via dlopen (Linux). All behind this one interface. Only macOS is
-// implemented today; the others return a clear error until built.
+// what the OS already provides, all behind this one interface:
+//   macOS    macos_http.mm   NSURLSession
+//   Windows  win_http.cpp    WinHTTP (winhttp.lib, ships with the OS)
+//   Linux    linux_http.cpp  libcurl via dlopen, so a missing libcurl costs
+//                            the exchange and not the whole extension
+// All three are implemented and built. HttpClient.cpp is the fallback for a
+// fourth platform: it is #if'd out on all three above and exists so an
+// unported target fails with a readable message instead of hanging.
+//
+// Each backend runs one thread per request doing the synchronous call and
+// drops its Response into a mutex-guarded map; poll() drains it on the main
+// thread. The extension makes a handful of requests per session, so a thread
+// each is the smaller thing to get right than an async state machine.
 
 #pragma once
 

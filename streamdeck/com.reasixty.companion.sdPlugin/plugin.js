@@ -1,15 +1,17 @@
 // Rea-Sixty Companion — Stream Deck plugin (zero-dependency Node).
 //
 // Two connections:
-//   1. Elgato Stream Deck app  — WebSocket (Node 22+ global WebSocket), the
-//      standard plugin registration handshake. Receives key events, sends
-//      titles/images.
+//   1. Elgato Stream Deck app — WebSocket, the standard plugin registration
+//      handshake. Receives key events, sends titles/images.
 //   2. Rea-Sixty extension bridge — raw TCP (net.Socket) to 127.0.0.1:49900,
-//      newline-delimited JSON. keyDown -> {"cmd":"action"|"reaper"}; the bridge
-//      pushes {"ev":"state"} which we mirror onto key titles.
+//      newline-delimited JSON. keyDown sends {"cmd":"action"|"reaper"}; the
+//      bridge pushes {"ev":"state"} which we mirror onto key titles.
 //
-// No npm dependencies, no build step. The Stream Deck app supplies the Node
-// runtime declared in manifest.json ("Nodejs".Version = "24").
+// ONE dependency: `ws`. The Stream Deck app supplies the Node runtime declared
+// in manifest.json, and that is pinned to "20", which has no global WebSocket
+// — hence the package. The bridge side is raw `net` and needs nothing. No
+// build step either way. If the manifest's Nodejs.Version is ever raised past
+// 22, `ws` can go and the global WebSocket takes over.
 
 "use strict";
 

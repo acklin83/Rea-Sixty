@@ -3,22 +3,27 @@
 -- @version 0.1.0
 -- @provides [main] .
 -- @about
---   SPIKE / parallel variant of rea_sixty_focused_panel.lua.
+--   THE frameless focused-track panel: surface-focused track + active CS / BC
+--   plug-in + last-touched param, driven by the focused_panel_* ExtState keys,
+--   rendered as a real **ReaImGui** window.
 --
---   Same content (surface-focused track + active CS / BC plug-in + last-touched
---   param) and the SAME option ExtState keys (focused_panel_*), but rendered as a
---   real **ReaImGui** window instead of a JS_Composite LICE bitmap.
+--   It began (2026-06-16) as a parallel spike next to a JS_Composite-based
+--   rea_sixty_focused_panel.lua. That original is gone, and the extension
+--   DELETES it from the user's Scripts folder on load (reasixty_cleanupLegacyLua
+--   in main.cpp). This file is the only version; the `_imgui` suffix is
+--   historical.
 --
---   Why: the JS_Composite panel can only host on titled windows and turns the
+--   Why the old one had to go: the JS_Composite panel can only host on titled
+--   windows and turns the
 --   arrange / TCP / ruler BLACK on macOS, so it can't be placed everywhere.
 --   A ReaImGui frameless window is a real top-level OS window — drag it ANYWHERE,
 --   over the arrange, over the TCP, onto a second monitor. No host-window
 --   gymnastics, no black-out. Modelled on TK_TRANSPORT's window setup
 --   (NoTitleBar | TopMost, no NoMove, no per-frame SetNextWindowPos).
 --
---   Position + size persist under their OWN keys (focused_panel_imgui_*) so this
---   spike coexists with the shipping composite panel. Reads the same data the
---   extension publishes: overlay / overlay_focus / overlay_param_cs|bc.
+--   Position + size persist under their own keys (focused_panel_imgui_*), kept
+--   distinct from the plain focused_panel_* option keys above. Reads the data
+--   the extension publishes: overlay / overlay_focus / overlay_param_cs|bc.
 --
 --   Run to start; run again (or untick) to stop. Requires ReaImGui (>= 0.9).
 

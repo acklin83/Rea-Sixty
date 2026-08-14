@@ -3,12 +3,17 @@
 -- @version 0.1.0
 -- @provides [main] .
 -- @about
---   SPIKE / parallel variant of rea_sixty_assignment_hud.lua.
+--   THE Learn-HUD. Per-domain tabs, grouped param list, click-to-learn, layer
+--   badge, auto-follow focus. Rendered with **ReaImGui**: hi-res/DPI-aware
+--   text, freely movable + multi-monitor, built-in title-bar docking, hover
+--   tooltips for free.
 --
---   Same Learn-HUD (per-domain tabs, grouped param list, click-to-learn,
---   layer badge, auto-follow focus) but rendered with **ReaImGui** instead of
---   pure `gfx`. Wins: hi-res/DPI-aware text, freely movable + multi-monitor,
---   ReaImGui's built-in title-bar docking, hover tooltips for free.
+--   It began (2026-06-16) as a parallel spike next to a pure-`gfx`
+--   rea_sixty_assignment_hud.lua. That original is gone, and the extension
+--   DELETES it from the user's Scripts folder on load (reasixty_cleanupLegacyLua
+--   in main.cpp). This file is the only version; the `_imgui` suffix is
+--   historical and stays because the deployed filename is baked into the
+--   embedded header and the registered action.
 --
 --   ⚠ THIS FILE IS AT LUA'S 200-LOCAL CEILING FOR THE MAIN CHUNK. A new
 --   top-level `local` (including `local function`) makes the whole script fail

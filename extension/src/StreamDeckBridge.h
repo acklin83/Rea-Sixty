@@ -33,9 +33,12 @@
 // the only thing the worker and main thread share besides the queue (both
 // guarded by a mutex).
 //
-// This TU has ZERO REAPER-API dependencies so it can be unit-tested headless
-// (see tests/test_sdbridge.cpp): connect a socket, send a command line, assert
-// drainCommands() returns it; broadcast a line, assert the client receives it.
+// This TU has ZERO REAPER-API dependencies, so it COULD be unit-tested
+// headless (connect a socket, send a command line, assert drainCommands()
+// returns it; broadcast a line, assert the client receives it). No such test
+// exists yet — an earlier version of this comment pointed at a
+// tests/test_sdbridge.cpp that was never written. Keep the property anyway:
+// it is what makes the bridge debuggable without REAPER in the loop.
 //
 
 #include <cstdint>
