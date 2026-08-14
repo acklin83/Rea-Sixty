@@ -677,7 +677,7 @@ now say the truth either way, so nothing is misleading in the meantime:
 | `jsfx/rea_sixty_gr_probe.jsfx` | A file users can find in the tree and wrongly assume they should load | Loses a working envelope-follower probe |
 | `SettingsScreen.cpp:4632` "OLD section-style" User-Quick editor | ~200 lines compiled in a file that is already 21.5k | Irreversible without git; the replacement is the per-slot editor at :4286 |
 
-### A real bug found while cleaning, deliberately NOT fixed
+### A real bug found while cleaning, since FIXED (`93d4ef8`)
 
 `UserPluginCatalog.cpp:146`, in `logErr_`:
 
@@ -685,15 +685,24 @@ now say the truth either way, so nothing is misleading in the meantime:
 const char* logPath = uf8::logPath("rea_sixty.log").c_str();
 ```
 
-`uf8::logPath` returns `std::string` **by value**. The temporary dies at the end
-of the full expression, so `logPath` dangles before `std::fopen` reads it. Clang
-catches it (`-Wdangling-gsl`) and it is the only warning in the build. It
-usually appears to work because the freed short-string buffer often still holds
-the bytes, which is exactly what makes it a bad one to leave. Windows takes the
-other branch (a literal) and is unaffected.
+`uf8::logPath` returns `std::string` **by value**. The temporary died at the
+semicolon, so `logPath` dangled before `std::fopen` read it. It usually appeared
+to work because the freed short-string buffer often still held the bytes, which
+is exactly what made it a bad one to leave. Windows takes the other branch (a
+literal) and was never affected.
 
-Left alone because this cleanup pass is comments only. The fix is to bind the
-string to a named local first.
+Fixed by binding to a named `std::string`. It was the only site with this shape:
+the other ~40 log calls pass `uf8::logPath(...).c_str()` straight into `fopen`
+as one expression, where the temporary legitimately outlives the call, so they
+are correct and were left alone.
+
+**This was the build's only warning (`-Wdangling-gsl`). The build is now clean,
+so any new warning is a signal rather than noise.**
+
+Still open, deliberately: the `#ifdef _WIN32` branch of the same function uses a
+bare relative `"rea_sixty.log"` instead of `uf8::logPath`, so on Windows this
+one log lands in REAPER's CWD while every other log in the tree goes to
+`%TEMP%`. Changing it moves a user-visible file, so it wants its own decision.
 
 ---
 
