@@ -22904,6 +22904,13 @@ static const uf8::UserPluginMap* uf1EqGraphMapAt_(MediaTrack* tr, int fx)
 
 static int uf1FindStripFx_(MediaTrack* tr);   // defined next to uf1ResolveCsFx_
 
+// How many consecutive frames the EQ graph re-sends after the strip under it
+// changes. One is not enough: the first set can land while the firmware is
+// still rebuilding the layout for that view, and a dropped set is
+// indistinguishable from a drawn one on this side. Eight at ~30 Hz is a quarter
+// of a second of insistence, which nobody can see and no device can miss.
+static constexpr int kEqForceFrames = 8;
+
 void uf1PaintEqGraph_(MediaTrack* tr, bool force)
 {
     static MediaTrack* sFxTr = nullptr;
@@ -22921,10 +22928,21 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     // happened to move. uf1PaintChannel_ has had this reset since 2026-07-18;
     // its statics are not these, and this function was never given one.
     static uint32_t sEqGen = 0;
+    // ⛔ FRAMES, not a flag. Clearing the change-detection once only guarantees
+    // that ONE frame is transmitted, and one frame is demonstrably not enough:
+    // the first send after a channel change can land while the firmware is still
+    // rebuilding its layout for that view, and a column set the device drops is
+    // indistinguishable here from one it drew — we would go on believing it is
+    // on screen. That is "the first time never works, the second time does".
+    // Six attempts at naming the precise mechanism failed; this makes the
+    // mechanism irrelevant by re-sending for a few consecutive frames. The cost
+    // is a handful of 251-byte writes per channel change.
+    static int sForceFrames = 0;
     if (const uint32_t gen = g_uf1Gen.load(std::memory_order_relaxed); gen != sEqGen) {
         sEqGen = gen;
-        sHave  = false;          // force the next column set out
-        sFxTr  = nullptr; sFx = -1;   // and re-resolve ix[] against the live FX
+        sHave  = false;
+        sFxTr  = nullptr; sFx = -1;   // re-resolve ix[] against the live FX
+        sForceFrames = kEqForceFrames;
     }
     // Whether ix[14] (EQ In) reads with inverted sense — resolved with ix[] below,
     // because it is a property of the plug-in MAP, not of this tick.
@@ -23006,6 +23024,7 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         // old picture stayed up until a parameter moved. That is "the graph only
         // updates the second time you land on a channel" (Frank 2026-08-14).
         sHave = false;
+        sForceFrames = kEqForceFrames;
         if (sFx >= 0) {
             // A learned CS resolves through its UC1 link slots (v15 opt-in);
             // everything else by SSL's own parameter names.
@@ -23167,8 +23186,9 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
             col[0] = 0x00; col[1] = 0x01;
             // Same change-gate and same two-frame send as the parametric path
             // below — one way to put columns on the device, not two.
-            if (sHave && !force && col == sLast) return;
+            if (sHave && !force && sForceFrames == 0 && col == sLast) return;
             sLast = col; sHave = true;
+            if (sForceFrames > 0) --sForceFrames;
             const std::array<uint8_t, 2> eqRefreshW{0x01, 0x64};
             g_uf1_dev->send(uf1::buildScreen(0x0122, eqRefreshW));
             g_uf1_dev->send(uf1::buildScreen(0x0122,
@@ -23225,8 +23245,9 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     col[0] = 0x00;
     col[1] = 0x01;
 
-    if (sHave && !force && col == sLast) return;
+    if (sHave && !force && sForceFrames == 0 && col == sLast) return;
     sLast = col; sHave = true;
+    if (sForceFrames > 0) --sForceFrames;
     // SSL 360 pairs EVERY full FD graph frame with a short "01 <val>" companion
     // to element 0x0122, always SHORT-then-FD (cap73: 260 FD / 260 short, 1:1).
     // We were sending only the FD frame, so the device never refreshed the graph
