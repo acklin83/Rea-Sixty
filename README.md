@@ -2,13 +2,10 @@
 
 *REAPER × SSL UF8 / UC1 / UF1. A native, open-source replacement for SSL 360° on REAPER.*
 
-> ## Windows: v0.5.0 stops REAPER from starting
->
-> If you updated to **v0.5.0 on Windows**, REAPER crashes while loading the
-> extension and never opens, so you cannot reach ReaPack to update. Rename one
-> file and you are back in: **[Windows recovery, thirty seconds](docs/v0.5.0-windows-recovery.md)**.
->
-> macOS and Linux are not affected. Fixed in v0.5.1.
+> **Still stuck on v0.5.0 under Windows?** That build stopped REAPER from
+> starting, so ReaPack is out of reach. Renaming one file gets you back in:
+> [Windows recovery, thirty seconds](docs/v0.5.0-windows-recovery.md). Fixed
+> since v0.5.1; macOS and Linux were never affected.
 
 > [Released](https://github.com/acklin83/Rea-Sixty/releases). Install via ReaPack:
 > ```
