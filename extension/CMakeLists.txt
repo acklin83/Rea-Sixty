@@ -472,7 +472,12 @@ if(WIN32)
     # BrowseForSaveFile on Windows — that is a SWELL-only symbol).
     # winhttp = the mapping exchange's HTTPS client (src/win_http.cpp). Ships
     # with Windows, so nothing extra to package.
-    target_link_libraries(reaper_uf8 PRIVATE delayimp.lib comdlg32.lib winhttp.lib)
+    # setupapi = the WinUSB driver-status readout in Settings -> About. Reading
+    # SPDRP_SERVICE / SPDRP_MFG needs no elevation and no PowerShell, which is
+    # the whole point: the user can see what their devices are bound to without
+    # a UAC prompt.
+    target_link_libraries(reaper_uf8 PRIVATE
+        delayimp.lib comdlg32.lib winhttp.lib setupapi.lib)
 endif()
 
 if(UNIX AND NOT APPLE)

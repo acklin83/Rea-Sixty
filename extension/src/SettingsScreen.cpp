@@ -475,6 +475,14 @@ bool reasixty_setupRestoreFactoryDefaults(std::string* errOut);
 #ifdef _WIN32
 bool reasixty_installWinUsbDriver(std::string* errOut);
 bool reasixty_uninstallWinUsbDriver(std::string* errOut);
+// Both START a job now and return whether it LAUNCHED. The outcome (installed /
+// failed with a log path / cancelled at the permission prompt) arrives via the
+// job state, because waiting for an elevated pnputil run on the main thread
+// would freeze REAPER for its whole duration.
+int         reasixty_winUsbJobState();      // 0 idle, 1 running, 2 finished
+std::string reasixty_winUsbJobMessage();
+void        reasixty_winUsbJobClear();      // consume a finished result
+std::string reasixty_winUsbDriverStatus();  // per-device binding, SetupAPI, no UAC
 #endif
 #ifdef __linux__
 bool reasixty_installLinuxUdevRule(std::string* errOut);
@@ -20813,25 +20821,56 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
         "Plug the devices in before pressing. SSL 360° stops seeing them "
         "after install; reinstall SSL 360° to revert.");
     ImGui_Spacing(ctx);
+
+    // What each surface is bound to RIGHT NOW. Nobody could tell before, which
+    // is how a working install got mistaken for a dead unit. Read via SetupAPI,
+    // so no elevation and no UAC; cached and refreshed on demand rather than
+    // every frame, because it enumerates the whole USB tree.
+    static std::string s_drvStatus;
+    static bool        s_drvStatusInit = false;
+    if (!s_drvStatusInit) {
+        s_drvStatusInit = true;
+        s_drvStatus = reasixty_winUsbDriverStatus();
+    }
+    ImGui_Text(ctx, "Current driver binding:");
+    ImGui_TextWrapped(ctx, s_drvStatus.c_str());
+    if (ImGui_Button(ctx, "Refresh##winusb_status", nullptr, nullptr))
+        s_drvStatus = reasixty_winUsbDriverStatus();
+    ImGui_Spacing(ctx);
+
     static std::string s_winusbMsg;
+    // The job runs on a worker so the UI does not freeze for the length of an
+    // elevated pnputil run. While it runs, both buttons are inert: a second
+    // press would race the first, and pressing again is exactly what users do
+    // when nothing appears to happen.
+    const int  jobState = reasixty_winUsbJobState();
+    const bool jobBusy  = (jobState == 1);
+    if (jobState == 2) {
+        // Finished: adopt the worker's verdict and re-read the bindings once,
+        // so the readout above reflects what just happened without a click.
+        s_winusbMsg = reasixty_winUsbJobMessage();
+        s_drvStatus = reasixty_winUsbDriverStatus();
+        reasixty_winUsbJobClear();
+    } else if (jobBusy) {
+        s_winusbMsg = reasixty_winUsbJobMessage();
+    }
+    // ⚠ NOT ImGui_BeginDisabled — this ReaImGui function set has no such call
+    // (checked against vendor/reaimgui/reaper_imgui_functions.h; see the
+    // signature-drift note in the ReaImGui memory). While a job runs the
+    // buttons are simply not drawn, which also removes the temptation to press
+    // again when nothing seems to be happening.
+    if (!jobBusy) {
     if (ImGui_Button(ctx, "Install UF8/UC1/UF1 WinUSB driver##winusb_install",
                      nullptr, nullptr))
     {
         std::string err;
-        if (reasixty_installWinUsbDriver(&err)) {
-            // Where to look afterwards. Our INF sets Class = USBDevice, so the
-            // device leaves "Universal Serial Bus controllers" for "Universal
-            // Serial Bus devices" AND is renamed. creal looked for the old name
-            // in the old category, found nothing, and concluded his UF1 was
-            // dead. One sentence, and it nearly cost a user.
-            s_winusbMsg = "Driver install started. Follow the UAC + publisher "
-                          "prompts, then unplug + replug the devices. In Device "
-                          "Manager they move to \"Universal Serial Bus devices\" "
-                          "and are renamed to \"SSL ... (Rea-Sixty / WinUSB)\".";
-        } else {
+        // The worker owns the outcome message now (installed / failed with the
+        // log path / cancelled at the UAC prompt). This branch only reports a
+        // failure to LAUNCH, which is a different thing entirely.
+        if (!reasixty_installWinUsbDriver(&err)) {
             s_winusbMsg = err.empty()
-                ? "Driver install failed."
-                : ("Driver install failed: " + err);
+                ? "Driver install could not start."
+                : ("Driver install could not start: " + err);
         }
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
@@ -20839,23 +20878,13 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
                      nullptr, nullptr))
     {
         std::string err;
-        if (reasixty_uninstallWinUsbDriver(&err)) {
-            // Names the manual cleanup because the uninstall only removes ONE
-            // oemNN and a machine with two copies cannot be cleaned from here
-            // (see [[winusb-installer-deletes-sslbus]]). creal reached for
-            // regedit, which Windows refuses; say the supported command
-            // instead of leaving him to guess.
-            s_winusbMsg = "Driver uninstall started. Follow the UAC prompt, "
-                          "then unplug + replug the devices. Reinstall SSL 360° "
-                          "to restore its driver. Leftover copies: "
-                          "pnputil /delete-driver oemNN.inf /uninstall /force "
-                          "in an admin prompt, never regedit.";
-        } else {
+        if (!reasixty_uninstallWinUsbDriver(&err)) {
             s_winusbMsg = err.empty()
-                ? "Driver uninstall failed."
-                : ("Driver uninstall failed: " + err);
+                ? "Driver uninstall could not start."
+                : ("Driver uninstall could not start: " + err);
         }
     }
+    }   // end of the not-busy button pair
     if (!s_winusbMsg.empty()) {
         ImGui_TextWrapped(ctx, s_winusbMsg.c_str());
     }

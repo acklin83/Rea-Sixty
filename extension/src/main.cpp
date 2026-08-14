@@ -39367,6 +39367,9 @@ bool reasixty_setupRestoreFactoryDefaults(std::string* errOut)
 #ifdef _WIN32
 #include "winusb_inf.h"
 #include <shellapi.h>
+#include <objbase.h>     // CoInitializeEx — ShellExecuteEx wants an apartment
+#include <setupapi.h>    // driver-status readout (no elevation, no PowerShell)
+#include <thread>
 
 // Drop the embedded WinUSB INF + a PowerShell helper to %TEMP% and run
 // the helper elevated under one UAC prompt. The helper:
@@ -39400,6 +39403,175 @@ bool reasixty_setupRestoreFactoryDefaults(std::string* errOut)
 //
 // Returns true if PowerShell was launched (final result is visible
 // only via the device state after the user clicks through UAC).
+// ---- WinUSB job state ---------------------------------------------------
+// The install takes seconds to tens of seconds (minting a cert, pnputil, a
+// force-bind per hardware id). Waiting for it on the main thread would freeze
+// REAPER's UI for that whole time, so the wait happens on a worker and the
+// About pane polls these. Written by the worker, read by the main thread.
+namespace {
+std::atomic<int> g_winusbJobState{0};   // 0 = idle/never run, 1 = running, 2 = done
+std::mutex       g_winusbJobMu;
+std::string      g_winusbJobMsg;
+
+void winUsbSetJobMsg_(std::string m)
+{
+    std::lock_guard<std::mutex> lk(g_winusbJobMu);
+    g_winusbJobMsg = std::move(m);
+}
+
+// Launch `psPath` elevated and WAIT for it, so we can report what actually
+// happened instead of "started". Three outcomes the user can act on:
+//   cancelled  — ShellExecuteEx fails with ERROR_CANCELLED. Very common, and it
+//                is NOT a failure; saying "failed" here sends people debugging
+//                a driver problem they do not have.
+//   exit != 0  — the script threw. Its transcript has the reason; name the path.
+//   exit == 0  — installed.
+bool winUsbRunElevated_(const char* psPath, const char* what,
+                        const char* logName, std::string* errOut)
+{
+    if (g_winusbJobState.load() == 1) {
+        if (errOut) *errOut = "a driver job is already running";
+        return false;
+    }
+    char tmpDir[MAX_PATH] = {0};
+    GetTempPathA(MAX_PATH, tmpDir);
+    std::string logPath = std::string(tmpDir) + logName;
+    std::string ps      = psPath;
+    std::string label   = what;
+
+    g_winusbJobState.store(1);
+    winUsbSetJobMsg_(std::string("Driver ") + label + " running. Follow the UAC "
+                     "prompt if it appears.");
+
+    std::thread([ps, label, logPath]() {
+        // ShellExecuteEx wants an initialised COM apartment on the calling
+        // thread; the main thread has one, a fresh std::thread does not.
+        const HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        std::string args = "-NoProfile -ExecutionPolicy Bypass -File \"" + ps + "\"";
+
+        SHELLEXECUTEINFOA sei{};
+        sei.cbSize       = sizeof(sei);
+        sei.fMask        = SEE_MASK_NOCLOSEPROCESS;   // we need the handle to wait on
+        sei.lpVerb       = "runas";
+        sei.lpFile       = "powershell.exe";
+        sei.lpParameters = args.c_str();
+        sei.nShow        = SW_HIDE;
+
+        std::string msg;
+        if (!ShellExecuteExA(&sei) || !sei.hProcess) {
+            const DWORD e = GetLastError();
+            msg = (e == ERROR_CANCELLED)
+                ? ("Driver " + label + " cancelled at the Windows permission "
+                   "prompt. Nothing was changed.")
+                : ("Driver " + label + " could not start (error "
+                   + std::to_string(static_cast<unsigned>(e)) + ").");
+        } else {
+            WaitForSingleObject(sei.hProcess, INFINITE);
+            DWORD code = 1;
+            GetExitCodeProcess(sei.hProcess, &code);
+            CloseHandle(sei.hProcess);
+            if (code == 0) {
+                msg = (label == "install")
+                    ? "Driver installed. Unplug and replug the devices. In "
+                      "Device Manager they move to \"Universal Serial Bus "
+                      "devices\" and are renamed to \"SSL ... (Rea-Sixty / "
+                      "WinUSB)\"."
+                    : "Driver uninstalled. Unplug and replug the devices. "
+                      "Reinstall SSL 360\xC2\xB0 to restore its driver.";
+            } else {
+                msg = "Driver " + label + " FAILED (exit "
+                    + std::to_string(static_cast<unsigned>(code))
+                    + "). Details: " + logPath;
+            }
+        }
+        winUsbSetJobMsg_(std::move(msg));
+        g_winusbJobState.store(2);
+        if (SUCCEEDED(co)) CoUninitialize();
+    }).detach();
+
+    return true;
+}
+}  // namespace
+
+int reasixty_winUsbJobState() { return g_winusbJobState.load(); }
+
+std::string reasixty_winUsbJobMessage()
+{
+    std::lock_guard<std::mutex> lk(g_winusbJobMu);
+    return g_winusbJobMsg;
+}
+
+// Back to idle once the pane has taken the result. Without this the About pane
+// would re-adopt the same verdict every frame and re-enumerate the USB tree
+// with it.
+void reasixty_winUsbJobClear()
+{
+    int expected = 2;
+    g_winusbJobState.compare_exchange_strong(expected, 0);
+}
+
+// ---- Part 2: what is each surface actually bound to, right now? ----------
+// SetupAPI, not PowerShell: this only READS, so it needs no elevation and no
+// UAC, and it can refresh while the pane is open. Matching the shape the
+// StoerPC readout used: provider "Rea-Sixty" + service "WinUSB" means ours and
+// the device will be picked up; "Solid State Logic" + "SSLBUS" means SSL's
+// driver still owns it and we cannot open it.
+std::string reasixty_winUsbDriverStatus()
+{
+    struct Want { const char* id; const char* name; };
+    static const Want kWant[] = {
+        { "VID_31E9&PID_0021", "UF8" },
+        { "VID_31E9&PID_0023", "UC1" },
+        { "VID_31E9&PID_0025", "UF1" },
+    };
+
+    HDEVINFO set = SetupDiGetClassDevsA(nullptr, "USB", nullptr,
+                                        DIGCF_ALLCLASSES | DIGCF_PRESENT);
+    std::string found[3];
+    if (set != INVALID_HANDLE_VALUE) {
+        SP_DEVINFO_DATA dev{};
+        dev.cbSize = sizeof(dev);
+        for (DWORD i = 0; SetupDiEnumDeviceInfo(set, i, &dev); ++i) {
+            char hw[1024] = {0};
+            if (!SetupDiGetDeviceRegistryPropertyA(set, &dev, SPDRP_HARDWAREID,
+                                                   nullptr,
+                                                   reinterpret_cast<PBYTE>(hw),
+                                                   sizeof(hw) - 2, nullptr))
+                continue;
+            // REG_MULTI_SZ: walk the NUL-separated ids.
+            for (int w = 0; w < 3; ++w) {
+                bool hit = false;
+                for (const char* p = hw; *p; p += std::strlen(p) + 1) {
+                    if (std::strstr(p, kWant[w].id)) { hit = true; break; }
+                }
+                if (!hit || !found[w].empty()) continue;
+                char svc[128] = {0}, mfg[256] = {0};
+                SetupDiGetDeviceRegistryPropertyA(set, &dev, SPDRP_SERVICE,
+                        nullptr, reinterpret_cast<PBYTE>(svc), sizeof(svc) - 1,
+                        nullptr);
+                SetupDiGetDeviceRegistryPropertyA(set, &dev, SPDRP_MFG,
+                        nullptr, reinterpret_cast<PBYTE>(mfg), sizeof(mfg) - 1,
+                        nullptr);
+                const bool ours = (_stricmp(svc, "WinUSB") == 0);
+                found[w] = std::string(kWant[w].name) + ": "
+                         + (svc[0] ? svc : "(no driver)")
+                         + (mfg[0] ? (std::string(" / ") + mfg) : std::string())
+                         + (ours ? "   [ready]" : "   [not ours]");
+            }
+        }
+        SetupDiDestroyDeviceInfoList(set);
+    }
+
+    std::string out;
+    for (int w = 0; w < 3; ++w) {
+        if (!out.empty()) out += "\n";
+        out += found[w].empty()
+             ? (std::string(kWant[w].name) + ": not connected")
+             : found[w];
+    }
+    return out;
+}
+
 bool reasixty_installWinUsbDriver(std::string* errOut)
 {
     namespace sb = uf8::setup_bundle;
@@ -39446,6 +39618,14 @@ bool reasixty_installWinUsbDriver(std::string* errOut)
     // PowerShell helper. ASCII-safe (no UTF8/BOM concerns when written
     // via fopen "wb"). Keep newlines as \n; PowerShell accepts them.
     static const char* kPsScript = R"PS($ErrorActionPreference = 'Stop'
+
+# Everything this script does is transcribed. Before this, a throw closed the
+# hidden PowerShell window with no trace, so neither the user nor we could tell
+# whether the driver had installed — the whole reason creal's catalog failure
+# went unseen for as long as it did. The transcript is the artifact he can paste.
+$log = Join-Path $env:TEMP 'rea_sixty_winusb_install.log'
+try { Start-Transcript -Path $log -Force | Out-Null } catch { }
+try {
 
 $wd = Join-Path $env:TEMP 'rea_sixty_winusb'
 $inf = Join-Path $wd 'rea_sixty_winusb.inf'
@@ -39601,6 +39781,18 @@ try {
         }
     }
 } catch { }
+
+Write-Output 'REASIXTY_RESULT=OK'
+}
+catch {
+    # The exit code is what the caller reports as installed / failed, so a throw
+    # must not leave it at 0. The message goes into the transcript too.
+    Write-Output ('REASIXTY_RESULT=FAIL ' + $_.Exception.Message)
+    try { Stop-Transcript | Out-Null } catch { }
+    exit 1
+}
+try { Stop-Transcript | Out-Null } catch { }
+exit 0
 )PS";
 
     if (FILE* f = std::fopen(psPath, "wb")) {
@@ -39611,19 +39803,8 @@ try {
         return false;
     }
 
-    // ShellExecute powershell.exe with "runas" so we get exactly one
-    // UAC prompt covering cert-store writes + pnputil. -NoProfile
-    // skips $PROFILE so a user-customised profile can't break us.
-    char args[MAX_PATH + 128];
-    snprintf(args, sizeof(args),
-             "-NoProfile -ExecutionPolicy Bypass -File \"%s\"", psPath);
-    HINSTANCE rc = ShellExecuteA(nullptr, "runas", "powershell.exe",
-                                 args, nullptr, SW_HIDE);
-    if (reinterpret_cast<INT_PTR>(rc) <= 32) {
-        if (errOut) *errOut = "powershell launch failed (user cancelled UAC?)";
-        return false;
-    }
-    return true;
+    return winUsbRunElevated_(psPath, "install",
+                              "rea_sixty_winusb_install.log", errOut);
 }
 
 bool reasixty_uninstallWinUsbDriver(std::string* errOut)
@@ -39632,14 +39813,24 @@ bool reasixty_uninstallWinUsbDriver(std::string* errOut)
     // store and remove it. Also delete the signing cert we created.
     static const char* kPsUninstall = R"PS($ErrorActionPreference = 'Stop'
 
-# Remove driver from store.
-$drivers = pnputil /enum-drivers | Out-String
-$match = [regex]::Match($drivers,
-    'Published Name:\s+(oem\d+\.inf)[\s\S]*?Original Name:\s+rea_sixty_winusb\.inf')
-if ($match.Success) {
-    $oem = $match.Groups[1].Value
-    pnputil /delete-driver $oem /uninstall 2>&1 | Out-Null
+$log = Join-Path $env:TEMP 'rea_sixty_winusb_uninstall.log'
+try { Start-Transcript -Path $log -Force | Out-Null } catch { }
+try {
+
+# Remove EVERY copy of our package, not just the first. The old regex matched a
+# single oemNN, so a machine that had accumulated copies (one per press of the
+# install button, before that was fixed) could never be cleaned from the UI and
+# the user was left reaching for regedit, which Windows refuses.
+$pub = $null
+$ours = @()
+foreach ($line in (pnputil /enum-drivers)) {
+    if ($line -match 'Published Name:\s+(oem\d+\.inf)') { $pub = $matches[1] }
+    elseif ($line -match 'Original Name:\s+rea_sixty_winusb\.inf') {
+        if ($pub) { $ours += $pub }
+    }
 }
+foreach ($o in $ours) { pnputil /delete-driver $o /uninstall 2>&1 | Out-Null }
+Write-Output ("removed: " + ($ours -join ',') )
 
 # Remove signing cert from all stores.
 $subject = 'CN=Rea-Sixty Driver Signer'
@@ -39648,6 +39839,16 @@ foreach ($store in @('My','Root','TrustedPublisher')) {
         Where-Object { $_.Subject -eq $subject } |
         Remove-Item -Force 2>$null
 }
+
+Write-Output 'REASIXTY_RESULT=OK'
+}
+catch {
+    Write-Output ('REASIXTY_RESULT=FAIL ' + $_.Exception.Message)
+    try { Stop-Transcript | Out-Null } catch { }
+    exit 1
+}
+try { Stop-Transcript | Out-Null } catch { }
+exit 0
 )PS";
 
     char tmpDir[MAX_PATH] = {0};
@@ -39667,16 +39868,8 @@ foreach ($store in @('My','Root','TrustedPublisher')) {
         return false;
     }
 
-    char args[MAX_PATH + 128];
-    snprintf(args, sizeof(args),
-             "-NoProfile -ExecutionPolicy Bypass -File \"%s\"", psPath);
-    HINSTANCE rc = ShellExecuteA(nullptr, "runas", "powershell.exe",
-                                 args, nullptr, SW_HIDE);
-    if (reinterpret_cast<INT_PTR>(rc) <= 32) {
-        if (errOut) *errOut = "powershell launch failed (user cancelled UAC?)";
-        return false;
-    }
-    return true;
+    return winUsbRunElevated_(psPath, "uninstall",
+                              "rea_sixty_winusb_uninstall.log", errOut);
 }
 #endif
 
