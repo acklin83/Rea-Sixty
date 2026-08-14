@@ -23196,7 +23196,16 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
             col[0] = 0x00; col[1] = 0x01;
             // Same change-gate and same two-frame send as the parametric path
             // below — one way to put columns on the device, not two.
-            if (sHave && !force && sForceFrames == 0 && col == sLast) return;
+            const bool suppressed = (sHave && !force && sForceFrames == 0 && col == sLast);
+            if (g_uf1Trace) {
+                if (FILE* lg = std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a")) {
+                    std::fprintf(lg, "EQ-DRAW src=STREAM fx=%d force=%d ff=%d %s\n",
+                                 sFx, int(force), sForceFrames,
+                                 suppressed ? "SUPPRESSED(identical)" : "SENT");
+                    std::fclose(lg);
+                }
+            }
+            if (suppressed) return;
             sLast = col; sHave = true;
             if (sForceFrames > 0) --sForceFrames;
             const std::array<uint8_t, 2> eqRefreshW{0x01, 0x64};
@@ -23255,7 +23264,16 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     col[0] = 0x00;
     col[1] = 0x01;
 
-    if (sHave && !force && sForceFrames == 0 && col == sLast) return;
+    const bool suppressed = (sHave && !force && sForceFrames == 0 && col == sLast);
+    if (g_uf1Trace) {
+        if (FILE* lg = std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a")) {
+            std::fprintf(lg, "EQ-DRAW src=PARAM fx=%d eqOn=%d force=%d ff=%d %s\n",
+                         sFx, int(eqOn), int(force), sForceFrames,
+                         suppressed ? "SUPPRESSED(identical)" : "SENT");
+            std::fclose(lg);
+        }
+    }
+    if (suppressed) return;
     sLast = col; sHave = true;
     if (sForceFrames > 0) --sForceFrames;
     // SSL 360 pairs EVERY full FD graph frame with a short "01 <val>" companion
