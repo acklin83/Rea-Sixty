@@ -24541,10 +24541,20 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
 
     // 0x00-prefixed text send for the channel-info plane.
     auto sendZoneText = [&](uint16_t addr, const std::string& content) {
+        // ⛔ FOLD TO LATIN-1 AT THE EMIT. The UF1 screen reads one byte per glyph,
+        // so raw UTF-8 splits an umlaut in two: "ÖRGELI" arrived as "Â*RGELI"
+        // (Frank 2026-08-13). Same treatment the UF8 scribble strips already get.
+        // German umlauts sit identically in Latin-1 and CP-1252, so the fold is
+        // right whichever of the two the panel actually uses.
+        // Fold HERE, never in a shared name builder: a second fold re-decodes the
+        // high bytes, and Ä/Ö/Ü/ß are themselves UTF-8 lead bytes, so double-folded
+        // text looks worse than unfolded ([[surface-lcd-latin1-umlauts]]).
+        // ASCII-only zones (dB, channel number, timecode) pass through untouched.
+        const std::string folded = utf8ToLatin1(content);
         std::vector<uint8_t> p;
-        p.reserve(content.size() + 1);
+        p.reserve(folded.size() + 1);
         p.push_back(0x00);
-        p.insert(p.end(), content.begin(), content.end());
+        p.insert(p.end(), folded.begin(), folded.end());
         g_uf1_dev->send(uf1::buildScreen(addr, p));
     };
 
@@ -25232,10 +25242,20 @@ void uf1PaintChannel_()
     // CS-TYPE cell (0x0017), whose content is resolved in the V-Pot block — Channel
     // view only, so it stays here rather than in uf1PaintChannelStrip_.
     auto sendZoneText = [&](uint16_t addr, const std::string& content) {
+        // ⛔ FOLD TO LATIN-1 AT THE EMIT. The UF1 screen reads one byte per glyph,
+        // so raw UTF-8 splits an umlaut in two: "ÖRGELI" arrived as "Â*RGELI"
+        // (Frank 2026-08-13). Same treatment the UF8 scribble strips already get.
+        // German umlauts sit identically in Latin-1 and CP-1252, so the fold is
+        // right whichever of the two the panel actually uses.
+        // Fold HERE, never in a shared name builder: a second fold re-decodes the
+        // high bytes, and Ä/Ö/Ü/ß are themselves UTF-8 lead bytes, so double-folded
+        // text looks worse than unfolded ([[surface-lcd-latin1-umlauts]]).
+        // ASCII-only zones (dB, channel number, timecode) pass through untouched.
+        const std::string folded = utf8ToLatin1(content);
         std::vector<uint8_t> p;
-        p.reserve(content.size() + 1);
+        p.reserve(folded.size() + 1);
         p.push_back(0x00);
-        p.insert(p.end(), content.begin(), content.end());
+        p.insert(p.end(), folded.begin(), folded.end());
         g_uf1_dev->send(uf1::buildScreen(addr, p));
     };
 
@@ -25294,7 +25314,9 @@ void uf1PaintChannel_()
                                  const std::string& value) {
             // 9-char label zone + 10-char value zone (uf1ValueLine) — a longer
             // param name would otherwise bleed into the yellow value field.
-            const std::string line = uf1ValueLine(label, value);
+            // Latin-1 at the emit, like every UF1 text zone: a plug-in's param name
+            // is arbitrary UTF-8 and the panel is one byte per glyph.
+            const std::string line = utf8ToLatin1(uf1ValueLine(label, value));
             if (!changed && line == sVpot[idx]) return;
             sVpot[idx] = line;
             std::vector<uint8_t> p;
@@ -25618,7 +25640,9 @@ void uf1PaintChannel_()
         static std::string sChSoft;
         const auto bdSoft = uf8::bindings::getBinding(
             0, uf8::bindings::ButtonId::Uf1ChannelSoftKey);
-        const std::string lbl = bdSoft.label;
+        // The user types this label in Settings, so it is arbitrary UTF-8; fold it
+        // like every other UF1 text zone.
+        const std::string lbl = utf8ToLatin1(bdSoft.label);
         if (changed || lbl != sChSoft) {
             sChSoft = lbl;
             std::vector<uint8_t> p;
@@ -25909,6 +25933,13 @@ void uf1PaintChannel_()
             }
             // Label (0x0104, <idx> + text) — SSL strip only; change-detected.
             // 13 chars is the field; abbreviate past it (see kUf1SoftKeyChars).
+            // Fold to Latin-1 FIRST, for two reasons: the UF1 panel is one byte per
+            // glyph (see the sendZoneText comment), and folding before the length
+            // check makes that check and the byte-wise abbreviation character-safe
+            // instead of counting an umlaut as two and possibly cutting one in half.
+            // abbreviateTrackName_ therefore keeps foldLatin1=false — folding twice
+            // would re-decode the high bytes.
+            label = utf8ToLatin1(label);
             if (label.size() > kUf1SoftKeyChars)
                 label = abbreviateTrackName_(label,
                                              static_cast<int>(kUf1SoftKeyChars),
