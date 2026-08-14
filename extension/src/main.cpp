@@ -6527,19 +6527,40 @@ inline void clearLastActivatedInstance_()
     g_lastActiveFxGuid.clear();
 }
 
-// ⛔ THE TRACK A HARDWARE SEL PUT US ON.
-// uf1FocusedTrack_ follows REAPER's LAST-TOUCHED track and only falls back to
-// the selection. Neither SetOnlyTrackSelected nor CSurf_OnSelectedChange makes a
-// track last-touched — they change/report selection — so pressing SEL moved the
-// selection while the UF1's screen, V-Pots and EQ graph stayed on whatever was
-// touched last. On the UF1 in Extender mode that is the whole feature: its SEL
-// selects the 9th bank track and nothing followed (Frank 2026-08-14).
+// ⛔ SELECTION vs LAST-TOUCHED — WHICHEVER THE USER DID MORE RECENTLY WINS.
+// uf1FocusedTrack_ followed REAPER's LAST-TOUCHED track and only fell back to
+// the selection. But selecting a track does NOT make it last-touched: neither
+// SetOnlyTrackSelected nor CSurf_OnSelectedChange does that, they change and
+// report selection. So every way of choosing a channel that is not "touch
+// something on it" left the UF1 behind — SEL, the channel encoder, the mouse in
+// the TCP. In Extender mode that is the whole feature: the UF1's SEL selects the
+// 9th bank track and nothing followed (Frank 2026-08-14).
 //
-// Self-clearing by construction: the anchor counts only while it IS the first
-// selected track, so selecting anywhere else by any means drops it and the
-// last-touched follow resumes untouched. No timer, no staleness.
-MediaTrack* g_uf1SelAnchor = nullptr;
-inline void setUf1SelAnchor_(MediaTrack* tr) { g_uf1SelAnchor = tr; }
+// An anchor set at each SEL call site fixed SEL and missed the encoder, because
+// per-site plumbing only ever covers the sites you remember. These two stamps
+// cover every path there is, including ones added later: poll both signals once
+// a tick and let the more recent one win. Touching a param on an unselected
+// track still pulls the UF1 to it, which is the behaviour that made last-touched
+// the default in the first place.
+int64_t     g_uf1SelChangeMs     = 0;
+int64_t     g_uf1TouchChangeMs   = 0;
+MediaTrack* g_uf1LastSeenSel     = nullptr;
+MediaTrack* g_uf1LastSeenTouched = nullptr;
+
+// Main thread, once per tick.
+void uf1TrackFocusRecency_()
+{
+    MediaTrack* sel = GetSelectedTrack(nullptr, 0);
+    if (sel != g_uf1LastSeenSel) {
+        g_uf1LastSeenSel = sel;
+        g_uf1SelChangeMs = nowMs_();
+    }
+    MediaTrack* tch = GetLastTouchedTrack();
+    if (tch != g_uf1LastSeenTouched) {
+        g_uf1LastSeenTouched = tch;
+        g_uf1TouchChangeMs   = nowMs_();
+    }
+}
 
 // Recency tracking so the HUD's "what plug-in am I on" follows whichever the user
 // touched LAST — the FX-cycle cursor or the focused plug-in window (Frank
@@ -14702,14 +14723,13 @@ MediaTrack* uf1FocusedTrack_()
     // unaffected; Meter view keeps the normal follow (the sub-mode is stale there).
     if (!g_uf1MeterView.load() && g_uf1ChannelSubMode.load() == 1)
         return GetSelectedTrack(nullptr, 0);
-    // A hardware SEL wins over last-touched, for exactly as long as the track it
-    // selected is still the selected one. See g_uf1SelAnchor: without this the
-    // UF1's own SEL could not move the UF1, because selecting a track does not
-    // make it last-touched.
-    if (g_uf1SelAnchor
-        && ValidatePtr2(nullptr, g_uf1SelAnchor, "MediaTrack*")
-        && g_uf1SelAnchor == GetSelectedTrack(nullptr, 0))
-        return g_uf1SelAnchor;
+    // Chose a channel more recently than you touched one? Then the channel you
+    // chose is what you meant. Covers SEL, the channel encoder, the mouse and
+    // anything added later, because it compares the two signals rather than
+    // trusting a flag someone remembered to set. See uf1TrackFocusRecency_.
+    if (g_uf1SelChangeMs > g_uf1TouchChangeMs) {
+        if (MediaTrack* sel = GetSelectedTrack(nullptr, 0)) return sel;
+    }
     MediaTrack* tr = GetLastTouchedTrack();
     if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
     // Toggling MASTER off must return to the SELECTED channel. But driving the
@@ -15950,7 +15970,6 @@ void drainInputQueue()
                 // and anchors the UF1 to it (last-touched does not move on a
                 // selection, so nothing would follow otherwise).
                 clearLastActivatedInstance_();
-                setUf1SelAnchor_(tr);
                 if (e.value > 0.5)                     // Shift held at press → additive
                     CSurf_OnSelectedChange(tr, -1);    // toggle this track's selection
                 else
@@ -16571,7 +16590,6 @@ void drainInputQueue()
                 }
                 if (!tr) break;
                 clearLastActivatedInstance_();
-                setUf1SelAnchor_(tr);
                 CSurf_OnSelectedChange(tr, -1);
                 break;
             }
@@ -16598,7 +16616,6 @@ void drainInputQueue()
                 }
                 if (!tr) break;
                 clearLastActivatedInstance_();
-                setUf1SelAnchor_(tr);
                 SetOnlyTrackSelected(tr);
                 followSelectedInMixer(tr);
                 break;
@@ -32541,6 +32558,7 @@ void onTimerBody_()
 {
     ++g_tickCounter;
     refreshUf1TraceFlag_();
+    uf1TrackFocusRecency_();
 
     // One-shot: engage the pinned startup soft-key bank once the UF8 is up
     // (so pushLayerLeds reaches hardware). Cheap re-check each tick until a
