@@ -6513,15 +6513,19 @@ std::unordered_map<std::string, std::string> g_stripInstanceFxGuid;
 // per track and only read for the surface's focused track. See setStripInstanceFx_.
 std::string g_lastActiveTrackGuid;
 std::string g_lastActiveFxGuid;
-// Which track the UF1 was showing WHEN that activation happened. "The instance I
-// just activated" only outranks the current channel until the user picks a
-// different channel — choosing a channel is a newer statement than the
-// activation that preceded it. Without this the strip view (V-Pots, soft-keys,
-// CS-TYPE cell and the EQ graph alike) stayed on the old instance after a
-// selection change and only moved once an EQ param was touched, because touching
-// one is what makes the new instance the last-activated (Frank 2026-08-14).
-std::string g_lastActiveFocusGuid;
 bool lastActivatedInstance_(MediaTrack*& outTr, int& outFx);
+
+// Forget the last-activated instance. Called from every HARDWARE channel
+// selection: picking a channel by hand says "show me this channel", so the
+// sticky cursor from an earlier activation must not outrank it. Without this the
+// strip view (V-Pots, soft-keys, CS-TYPE cell and the EQ graph alike) stayed on
+// the old instance and only caught up when an EQ param was touched — touching
+// one is exactly what re-stamps the cursor (Frank 2026-08-14).
+inline void clearLastActivatedInstance_()
+{
+    g_lastActiveTrackGuid.clear();
+    g_lastActiveFxGuid.clear();
+}
 
 // Recency tracking so the HUD's "what plug-in am I on" follows whichever the user
 // touched LAST — the FX-cycle cursor or the focused plug-in window (Frank
@@ -6560,12 +6564,6 @@ void setStripInstanceFx_(MediaTrack* tr, int idx)
     // being reordered underneath it.
     g_lastActiveTrackGuid = g;
     g_lastActiveFxGuid    = fxg;
-    // Stamp the channel the UF1 was on at this moment. Stage 0 compares against
-    // it, so the activation wins until the user moves to another channel.
-    if (MediaTrack* ft = uf1FocusedTrack_())
-        g_lastActiveFocusGuid = uc1::trackGuid(ft);
-    else
-        g_lastActiveFocusGuid.clear();
 }
 
 // Resolve the last-activated instance back to a live (track, fx). Returns false
@@ -15926,6 +15924,8 @@ void drainInputQueue()
             // uf1FaderTrack_ falls back to uf1FocusedTrack_ whenever the extender
             // branch does not fire, so Extender-off behaviour is unchanged.
             if (MediaTrack* tr = uf1FaderTrack_()) {
+                // Picking a channel by hand outranks any earlier activation.
+                clearLastActivatedInstance_();
                 if (e.value > 0.5)                     // Shift held at press → additive
                     CSurf_OnSelectedChange(tr, -1);    // toggle this track's selection
                 else
@@ -16545,6 +16545,7 @@ void drainInputQueue()
                     }
                 }
                 if (!tr) break;
+                clearLastActivatedInstance_();
                 CSurf_OnSelectedChange(tr, -1);
                 break;
             }
@@ -16570,6 +16571,7 @@ void drainInputQueue()
                     }
                 }
                 if (!tr) break;
+                clearLastActivatedInstance_();
                 SetOnlyTrackSelected(tr);
                 followSelectedInMixer(tr);
                 break;
@@ -20727,6 +20729,11 @@ void openUf1BringUp_()
         const char* v = GetExtState("rea_sixty", "uf1_trace");
         if (v && *v && strcmp(v, "0")) g_uf1Trace.store(true);
     }
+    // The frame trace still latches here (see below), but the FLAG itself is
+    // re-read every tick now — see refreshUf1TraceFlag_. Latching it at device
+    // init meant every diagnosis cost a REAPER restart before it could even
+    // begin, and a previous session lost a whole round to a trace that produced
+    // no log because the flag was set after startup.
     // Trace flag BEFORE open(): open() spawns the init thread, and setting the
     // flag afterwards raced it — traces randomly missed the whole init replay
     // (EP0 'C' lines, the zero block, FF54), which made "did the init run?"
@@ -23817,36 +23824,20 @@ int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx)
     // the project, that combination showed the 4K E no matter which instance was
     // activated. Recency beats locality here, by request.
     //
-    // Guarded twice.
-    //  1. Only when it still resolves to a live FX the UF1 recognises as a strip
-    //     type. A deleted track, a removed FX or a plug-in with no map falls
-    //     straight through to the old behaviour rather than blanking the surface.
-    //  2. ★ Only while the user has not CHANGED CHANNEL since that activation.
-    //     Picking a channel is a newer statement than the activation before it,
-    //     and without this the whole strip view stayed on the old instance after
-    //     a selection change — it only caught up once an EQ param was touched,
-    //     because touching one re-stamps the cursor onto the new instance. Frank
-    //     saw it as "the EQ graph shows the new channel only after I touch the
-    //     EQ" (2026-08-14), but the V-Pots and soft-keys were equally stale.
+    // Guarded: only when it still resolves to a live FX the UF1 recognises as a
+    // strip type. A deleted track, a removed FX or a plug-in with no map falls
+    // straight through to the old behaviour rather than blanking the surface.
+    //
+    // ★ The cursor is DROPPED the moment the user picks a channel by hand
+    // (clearLastActivatedInstance_, called from every hardware SEL). Selecting a
+    // channel says "show me this channel", full stop — from there the resolver
+    // runs its normal track-relative stages, so the UF1 behaves exactly as it
+    // does for any other channel. That is the whole rule; there is no
+    // comparison, no exception, and no case where selecting a channel leaves the
+    // surface on a different one.
     {
-        const bool focusMoved =
-            !g_lastActiveFocusGuid.empty() && focusTr
-            && uc1::trackGuid(focusTr) != g_lastActiveFocusGuid;
-        // ★ ...and only if the channel moved TO actually has a strip of its own.
-        // Standing down on a channel that carries none left every stage below
-        // with nothing to find, so the surface went blank — the graph most
-        // visibly (Frank 2026-08-14, "wird nicht angezeigt wenn das UF1 seinen
-        // eigenen Track selected"). Blanking is worse than keeping the last
-        // instance: the user gets an empty screen for a channel that never had
-        // anything to show, and loses the plug-in they were working on.
-        //
-        // This is NOT the forbidden second path — the resolver still returns one
-        // answer that the V-Pots, soft-keys, CS-TYPE cell and graph all share.
-        // It only decides WHEN recency yields to locality.
-        const bool focusHasOwnStrip =
-            focusMoved && (tryFx(focusTr, uf1FindStripFx_(focusTr)) >= 0);
         MediaTrack* lt = nullptr; int lfx = -1;
-        if (!(focusMoved && focusHasOwnStrip) && lastActivatedInstance_(lt, lfx)) {
+        if (lastActivatedInstance_(lt, lfx)) {
             const int ty = tryFx(lt, lfx);
             if (ty >= 0) {
                 outTr = lt; outFx = lfx; return ty;
@@ -32509,9 +32500,20 @@ void onTimer()
     }
 }
 
+// Re-read the UF1 trace switch so it can be turned on and off in a running
+// REAPER. Cheap: one ExtState read per second, not per tick.
+void refreshUf1TraceFlag_()
+{
+    if ((g_tickCounter % 30) != 0) return;
+    const char* v = GetExtState("rea_sixty", "uf1_trace");
+    const bool want = (v && *v && strcmp(v, "0") != 0);
+    if (want != g_uf1Trace.load()) g_uf1Trace.store(want);
+}
+
 void onTimerBody_()
 {
     ++g_tickCounter;
+    refreshUf1TraceFlag_();
 
     // One-shot: engage the pinned startup soft-key bank once the UF8 is up
     // (so pushLayerLeds reaches hardware). Cheap re-check each tick until a
