@@ -3668,9 +3668,18 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
 // Log: uf8::logPath("rea_sixty_uf1tab.log")  (/tmp on macOS, %TEMP% on Windows)
 static bool seDbgOn_()
 {
+    // The ExtState gate is EVALUATED ONCE and cached, and it did not fire even
+    // with uf1_tab_trace=1 sitting in reaper-extstate.ini — REAPER started clean,
+    // every other log was written, this one was never created. Rather than lose a
+    // third round of Frank's time to the switch instead of the bug, the gate now
+    // fails OPEN: on unless explicitly turned off with uf1_tab_trace=0.
+    //
+    // Cost of being wrong in this direction is a log file nobody reads. Cost in
+    // the other direction is another reproduction that records nothing, which has
+    // already happened twice.
     static const bool on = [] {
         const char* v = GetExtState("rea_sixty", "uf1_tab_trace");
-        return v && *v && strcmp(v, "0") != 0;
+        return !(v && *v && strcmp(v, "0") == 0);
     }();
     return on;
 }
@@ -17807,6 +17816,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                          &childFlags, &winFlags)) {
         if (s_mockup == 2) {
             drawFxLearnUf1Schematic_(ctx, fx);
+            seDbg_("schematic RETURNED ok, continuing left child");
         } else if (s_mockup == 1) {
             drawFxLearnUf8Schematic_(ctx, fx);
         } else if (topo) {
@@ -17986,6 +17996,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             ImGui_Separator(ctx);
             ImGui_Spacing(ctx);
 
+            seDbg_("VU/GR cal section ENTER");
             const bool isBc =
                 (editing->domain == uf8::Domain::BusComp);
             const int     which  = isBc ? 0 : 1;
@@ -18077,6 +18088,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
 
     // Right pane — param list.
     int rightWinFlags = 0;
+    seDbg_("param list child BEFORE BeginChild");
     if (ImGui_BeginChild(ctx, "fxl_params", &rightW, &hLeft,
                          &childFlags, &rightWinFlags)) {
         const bool haveParamSource = fx.ok || !editing->paramSnapshot.empty();
@@ -18242,9 +18254,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             const auto fltToks = searchTokensLower_(g_paramFilter);
 
             char pname[128];
+            seDbg_("param rows: n=%d", n);
             for (int p = 0; p < n; ++p) {
+                seDbg_("  row p=%d BEFORE name", p);
                 pname[0] = 0;
                 paramNameFor_(*editing, fx, p, pname, sizeof(pname));
+                seDbg_("  row p=%d name='%s'", p, pname);
 
                 // Hide REAPER's injected MIDI-learn params (MIDI CC … /
                 // Pitch / Program / Channel Pressure) — never real
