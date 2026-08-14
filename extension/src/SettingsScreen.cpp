@@ -7,6 +7,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdarg>      // TEMP: seDbg_ UF1-tab teardown trace
 #include <cstring>
 #include <ctime>
 #include <functional>
@@ -3647,9 +3648,52 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
 // Editor panel — two-column matrix. Left: SHORT PRESS (Plain row + 3
 // modifier collapsibles). Right: LONG PRESS (same shape, only for
 // Momentary). Auto-saves on every change.
+// ============================================================================
+// Bindings-editor layout trace — OPT-IN, off by default.
+//
+//   reaper.SetExtState("rea_sixty", "uf1_tab_trace", "1", true)   then restart
+//
+// For the intermittent "UF1 tab takes the whole Settings window down and it will
+// not reopen" (Frank 2026-08-13). learnings #31: that teardown leaves NO crash
+// report and is invisible to source reading — a BeginChild landing below the fold
+// returns FALSE, its body is skipped, and ReaImGui garbage-collects the window one
+// defer cycle later. Static auditing this exact path already failed once; only an
+// on-device trace found it. It is opt-in rather than temporary because the bug is
+// intermittent: leaving it in means the next occurrence is already recorded,
+// instead of needing a special build first.
+//
+// Flush and close per line on purpose — the window can go down before any buffered
+// writer would drain, and the LAST line is the whole point.
+//
+// Log: uf8::logPath("rea_sixty_uf1tab.log")  (/tmp on macOS, %TEMP% on Windows)
+static bool seDbgOn_()
+{
+    static const bool on = [] {
+        const char* v = GetExtState("rea_sixty", "uf1_tab_trace");
+        return v && *v && strcmp(v, "0") != 0;
+    }();
+    return on;
+}
+static void seDbg_(const char* fmt, ...)
+{
+    if (!seDbgOn_()) return;
+    char line[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uf1tab.log").c_str(), "a")) {
+        std::fprintf(f, "%s\n", line);
+        std::fflush(f);
+        std::fclose(f);
+    }
+}
+// ============================================================================
+
 void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
 {
     using namespace uf8::bindings;
+    seDbg_("editor: ENTER id=%d layer=%d", static_cast<int>(id), layer);
 
     Binding bd    = getBinding(layer, id);
     bool    dirty = false;
@@ -3828,7 +3872,19 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         int childFlags = ImGui_ChildFlags_Borders;
         char childId[32];
         snprintf(childId, sizeof(childId), "%s_col", tag);
-        if (ImGui_BeginChild(ctx, childId, &w, &h, &childFlags, nullptr)) {
+        // TEMP TRACE: cursor Y and remaining height are what decide culling, so
+        // log them BEFORE the call. A child asking for h at a Y where only
+        // availY < h is left is the off-screen case that reaps the window.
+        {
+            double curX = 0, curY = 0, availX = 0, availY = 0;
+            ImGui_GetCursorPos(ctx, &curX, &curY);
+            ImGui_GetContentRegionAvail(ctx, &availX, &availY);
+            seDbg_("  col[%s] BEFORE  wantH=%.0f  curY=%.0f  availY=%.0f",
+                   tag, h, curY, availY);
+        }
+        const bool colOpen = ImGui_BeginChild(ctx, childId, &w, &h, &childFlags, nullptr);
+        seDbg_("  col[%s] BeginChild=%s", tag, colOpen ? "TRUE" : "FALSE(culled)");
+        if (colOpen) {
             ImGui_Text(ctx, title);
             ImGui_Separator(ctx);
 
@@ -5833,12 +5889,19 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                     drawTrackColourPalette_(ctx);
                 }
             } else {
+                seDbg_("branch: softbank tab=%d bank=%d slot=%d BEFORE",
+                       s_deviceTab, uf1Bank, slotIdx);
                 drawUf1SoftBankSlotEditor_(ctx, uf1Bank, slotIdx);
+                seDbg_("branch: softbank AFTER");
             }
         }
     } else {
+        seDbg_("branch: editor tab=%d sel=%d BEFORE",
+               s_deviceTab, static_cast<int>(editSel));
         drawBindingEditor(ctx, s_editLayer, editSel);
+        seDbg_("branch: editor AFTER");
     }
+    seDbg_("--- pane survived the editor, tab=%d ---", s_deviceTab);
 
     // UF1 behaviour toggles — rendered BELOW the editor so they add NO height above
     // the tall binding-editor columns (moving them here fixed the "UF1 tab crash":
@@ -5970,6 +6033,37 @@ std::string g_pendingModeMatch;
 int         g_pendingModePrimary = 0;    // 1=CS, 2=BC, 3=UF8-only
 bool        g_pendingModeOpen    = false;
 std::string g_lastSaveError;             // last persistence error, sticky until next save
+
+// ⛔ An exception that escapes an editor button KILLS REAPER. Frank 2026-08-14:
+// "Fill: Replace" on a Pro-C UF1 mapping aborted the whole application. The crash
+// report is useless on its own — the throw site is unwound away, so thread 0 shows
+// only terminate/abort, and the only real evidence was register x22 holding the
+// "CLNGC++" ABI marker, which at least proves it was a C++ exception rather than
+// an NSException. macOS logged no reason.
+//
+// We run inside REAPER's run loop; the host has no handler for our exceptions and
+// treats one as fatal. So the boundary between an editor action and the host is
+// OUR job to seal. This wraps the action, keeps REAPER alive, and records what()
+// where we can read it next time.
+//
+// Deliberately NOT wrapped around a whole ImGui frame: unwinding out of the middle
+// of one leaves Begin/End unpaired, which is its own window-teardown class of bug
+// (learnings #31). Only around plain action handlers, which nest nothing.
+template <class F>
+static void guardedEditorAction_(const char* what, F&& fn)
+{
+    auto note = [&](const std::string& msg) {
+        g_lastSaveError = std::string("\"") + what + "\" failed: " + msg;
+        if (FILE* f = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+            std::fprintf(f, "[fxlearn] EXCEPTION in %s: %s\n", what, msg.c_str());
+            std::fflush(f);
+            std::fclose(f);
+        }
+    };
+    try                             { fn(); }
+    catch (const std::exception& e) { note(e.what()); }
+    catch (...)                     { note("unknown exception"); }
+}
 
 // Single-mapping sharing (.rea60map). The Share popup collects the metadata
 // the exchange needs before writing the file; the import staging area holds a
@@ -15283,7 +15377,8 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
     // rather than a second copy of it (Frank 2026-08-08/09). Same four sit in
     // the HUD's right-click menu; both drive the same functions.
     if (ImGui_Button(ctx, "Fill: Replace##uf1_fill_rep", nullptr, nullptr))
-        fillUf1WithRest_(g_editingMatch, fx.tr, fx.fxIdx, /*replace*/true);
+        guardedEditorAction_("Fill: Replace", [&] {
+            fillUf1WithRest_(g_editingMatch, fx.tr, fx.fxIdx, /*replace*/true); });
     if (ImGui_IsItemHovered(ctx, nullptr))
         ImGui_SetTooltip(ctx,
             "Clear the UF1 layer, then take every parameter the UC1 does NOT\n"
@@ -15291,14 +15386,16 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
             "everything else onto the V-Pots.");
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_Button(ctx, "Fill: Append##uf1_fill", nullptr, nullptr))
-        fillUf1WithRest_(g_editingMatch, fx.tr, fx.fxIdx, /*replace*/false);
+        guardedEditorAction_("Fill: Append", [&] {
+            fillUf1WithRest_(g_editingMatch, fx.tr, fx.fxIdx, /*replace*/false); });
     if (ImGui_IsItemHovered(ctx, nullptr))
         ImGui_SetTooltip(ctx,
             "Same, but adds to the end instead of clearing first — so the UC1\n"
             "mapping the UF1 starts from is kept, and the rest lands after it.");
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_Button(ctx, "Fill from UC1##uf1_fill_uc1", nullptr, nullptr))
-        fillUf1FromUc1_(g_editingMatch);
+        guardedEditorAction_("Fill from UC1", [&] {
+            fillUf1FromUc1_(g_editingMatch); });
     if (ImGui_IsItemHovered(ctx, nullptr))
         ImGui_SetTooltip(ctx,
             "Mirror the UC1 mapping onto the UF1 — what the UF1 shows on its\n"
@@ -15306,7 +15403,8 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
             "Replaces the UF1 layer.");
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_Button(ctx, "Unbind all##uf1_unbind_all", nullptr, nullptr))
-        uf1ClearAll_(g_editingMatch);
+        guardedEditorAction_("Unbind all", [&] {
+            uf1ClearAll_(g_editingMatch); });
     if (ImGui_IsItemHovered(ctx, nullptr))
         ImGui_SetTooltip(ctx, "Empty the UF1 layer. The layer itself stays on.");
     // Our EQ graph for a LEARNED CS. The built-in strips draw it from SSL's own
