@@ -623,38 +623,77 @@ is deliberate)
 
 ## 7. Discrepancies found
 
-Comment or doc versus actual code. Input for the step 2 cleanup.
+Comment or doc versus actual code.
+
+**Status: the stale-text items were corrected 2026-08-14** (`dfc41ae`,
+`a70594f`, `3c486c3`, `d52f484`, `b58fc47`). The table stays as the record of
+what was wrong and why, because the same claims tend to grow back. Items still
+open are marked OPEN and are the ones that need a deletion decision rather than
+an edit; see §6.
 
 | # | Where | Says | Actually |
 | --- | --- | --- | --- |
 | 1 | `main.cpp:1` file header | "we simply use CountTracks() and show tracks 1..8 regardless of scroll, bank-shift hookup is a follow-up" | `rebuildVisibleTrackList` (`main.cpp:1899`) does full banking, folder mode, show-only-selected, pinned master, UF1 extender. |
-| 2 | `HidDevice.h:3` | describes PID 0x0022 as the UF8 input path, "parsing to MCU happens in main.cpp once we've characterized the report format" | Never opened. UF8 input comes from the libusb bulk IN on PID 0x0021 via `setRawInputHandler`. The whole TU is dead. |
+| 2 · text fixed, file open | `HidDevice.h:3` | describes PID 0x0022 as the UF8 input path, "parsing to MCU happens in main.cpp once we've characterized the report format" | Never opened. UF8 input comes from the libusb bulk IN on PID 0x0021 via `setRawInputHandler`. The whole TU is dead. |
 | 3 | `Protocol.h:25` `ButtonEvent::id` | "0x78 = BANK->, 0x79 = BANK<-, others TBD" | The full id table is decoded in `Bindings.cpp` `fromUf8DeviceId`, roughly 50 ids. |
-| 4 | `Protocol.h:71` `buildMeter` | "Best-guess from cap10 frame layout ... semantics still partially TBD" | No call site at all. VU goes out via `buildVuMeter`. |
+| 4 · annotated, deletion open | `Protocol.h:71` `buildMeter` | "Best-guess from cap10 frame layout ... semantics still partially TBD" | No call site at all. VU goes out via `buildVuMeter`. |
 | 5 | `Bindings.h:3` header block | "Phase A ... no UI yet"; "per-strip Sel/Cut/Solo/Rec stay hardcoded"; "per-strip top soft-key (0x18..) also stay hardcoded in v1" | Full Settings UI exists; `TopSoftKey1..8` and `Uf8Select` are first-class `ButtonId`s with factory bindings. |
 | 6 | `UserPluginCatalog.h:11` | "Phase 2.5d-A Step 1, data layer + JSON I/O only. No UI, no FX-Learn dispatch yet" | Full FX-Learn UI, HUD, dispatch, exchange upload. |
 | 7 | `UserPluginCatalog.h:706` version history | narrates v1 through v8 | `kCurrentFormatVersion = 16`. v9 through v16 are squeezed into the trailing comment on the constant line instead of the block. |
 | 8 | `UC1Device.h:4` | "UC1 needs no custom init sequence" | `UC1Device.cpp:19` includes `uc1_init_sequence.inc` and replays it at `UC1Device.cpp:271`. |
 | 9 | `MixerWindow.h:3` and `:12` | "dockable on-screen Plugin Mixer (Phase 2.6)"; "Bodies are stubs until ImGui has been vendored into extension/vendor/imgui/ and icontheme.h has been pulled from upstream" | The **host window** is fully implemented (868 lines) and hosts the 12-entry Settings rail. Two separate errors: the vendored-ImGui plan was abandoned for **ReaImGui via GetFunc** (`vendor/imgui/` does not exist), and the class no longer does what its name says. The Plug-in Mixer *view* itself is genuinely unbuilt, see item 10. |
-| 10 | `MixerLayout.h:16` | "Phase 2.6 scaffold; bodies arrive in 2.6b/2.6c" | Accurate about the body. The Plug-in Mixer view is real open backlog, **not near-term** (Frank, 2026-08-14). What the comment omits is that nothing calls `draw` at all, so the scaffold is not even reachable. |
+| 10 · annotated, parked | `MixerLayout.h:16` | "Phase 2.6 scaffold; bodies arrive in 2.6b/2.6c" | Accurate about the body. The Plug-in Mixer view is real open backlog, **not near-term** (Frank, 2026-08-14). What the comment omits is that nothing calls `draw` at all, so the scaffold is not even reachable. |
 | 11 | `HttpClient.h:12` | "Only macOS is implemented today; the others return a clear error until built" | All three are implemented (`macos_http.mm`, `win_http.cpp`, `linux_http.cpp`) and built by CMake. `HttpClient.cpp` is the never-taken fallback. |
 | 12 | `StreamDeckBridge.h:36` | "see tests/test_sdbridge.cpp" | That file does not exist. |
 | 13 | `streamdeck/.../plugin.js:6-12` | "WebSocket (Node 22+ global WebSocket)", "manifest.json Nodejs.Version = 24", "No npm dependencies" | `manifest.json` says Version "20", `package.json` depends on `ws`, and lines 19-22 of the same file explain why. Three contradictions in one header. |
 | 14 | `scripts/rea_sixty_assignment_hud_imgui.lua:6` and `rea_sixty_focused_panel_imgui.lua:6` | "SPIKE / parallel variant of rea_sixty_assignment_hud.lua" | The non-imgui originals are gone, and `reasixty_cleanupLegacyLua` (`main.cpp:43388`) actively deletes them from the user's Scripts folder. These are the only version. |
-| 15 | `docs/protocol-notes-uc1.md:255` | "GR is computed by a bundled JSFX envelope-follower (`rea_sixty_gr_probe.jsfx`)" | README.md line 31 says "No JSFX probe, no sidechain tap." GR comes from `GainReduction_dB` plus the SSL Core impersonator. The JSFX file is orphaned. |
+| 15 · doc fixed, jsfx open | `docs/protocol-notes-uc1.md:255` | "GR is computed by a bundled JSFX envelope-follower (`rea_sixty_gr_probe.jsfx`)" | README.md line 31 says "No JSFX probe, no sidechain tap." GR comes from `GainReduction_dB` plus the SSL Core impersonator. The JSFX file is orphaned. |
 | 16 | `.local-docs/release-process.md` repo table | source repo at `~/Documents/dev/reaper-uf8` | The working copy is `~/Documents/dev/Rea-Sixty`. The old path does not exist. |
 | 17 | `ColorSync.h` | declares `refresh(const std::function<...>&)` | Does not include `<functional>`; it compiles only through the transitive include in `Protocol.h`/`UF8Device.h`. |
-| 18 | `SettingsScreen.cpp:4632` | "User-Quick slot editor (OLD section-style) UNUSED" | Honest, but the region is still compiled. |
+| 18 · OPEN | `SettingsScreen.cpp:4632` | "User-Quick slot editor (OLD section-style) UNUSED" | Honest, but the region is still compiled. |
 | 19 | `CMakeLists.txt:707` | "tests + CLI helpers" wired with `enable_testing()` | No CI job ever runs `ctest`. The workflow is compile-only. |
 
-Items 1, 2, 5, 6, 8, 9, 11, 12, 13, 14, 15, 16 are plain stale text and are
-safe to correct without touching behaviour. Items 4, 10, and the orphans in
-section 6 involve deleting code and want a decision first.
+Two extra finds surfaced while editing and were fixed in the same pass:
+`docs/protocol-notes-uc1.md` also carried "Init sequence, trivial, no custom
+sequence file needed" as a ticked-off item (same error as item 8), and
+`rea_sixty_focused_panel_imgui.lua` claimed to "coexist with the shipping
+composite panel" that no longer exists.
 
 Checked and found **accurate**, so no cleanup needed: the `Protocol.h:319` GR
 comment (it explicitly corrects the older "single-byte frame" note and points
 at `UF8Device::setGrBytes`), and `MixerLayout.h`'s scaffold claim about its own
 body.
+
+### Still open, needs a decision rather than an edit
+
+The five rows above marked open all come down to "delete or keep". The comments
+now say the truth either way, so nothing is misleading in the meantime:
+
+| Candidate | Cost of keeping | Cost of deleting |
+| --- | --- | --- |
+| `HidDevice.{h,cpp}` + `g_hid` + `logHid` | ~110 lines compiled for nothing; hidapi stays a hard link dependency | Loses the only scaffolding for reading UF8 PID 0x0022, whose report format was never characterised |
+| `uf8::buildMeter` | ~10 lines | Loses the record of the FF 38 meter opcode layout |
+| `MixerLayout.{h,cpp}` | ~58 lines and a stale rail-less view | Loses the written-out plan for Phase 2.6, which is backlog, not cancelled |
+| `jsfx/rea_sixty_gr_probe.jsfx` | A file users can find in the tree and wrongly assume they should load | Loses a working envelope-follower probe |
+| `SettingsScreen.cpp:4632` "OLD section-style" User-Quick editor | ~200 lines compiled in a file that is already 21.5k | Irreversible without git; the replacement is the per-slot editor at :4286 |
+
+### A real bug found while cleaning, deliberately NOT fixed
+
+`UserPluginCatalog.cpp:146`, in `logErr_`:
+
+```c
+const char* logPath = uf8::logPath("rea_sixty.log").c_str();
+```
+
+`uf8::logPath` returns `std::string` **by value**. The temporary dies at the end
+of the full expression, so `logPath` dangles before `std::fopen` reads it. Clang
+catches it (`-Wdangling-gsl`) and it is the only warning in the build. It
+usually appears to work because the freed short-string buffer often still holds
+the bytes, which is exactly what makes it a bad one to leave. Windows takes the
+other branch (a literal) and is unaffected.
+
+Left alone because this cleanup pass is comments only. The fix is to bind the
+string to a named local first.
 
 ---
 
