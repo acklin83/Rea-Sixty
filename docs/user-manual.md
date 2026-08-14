@@ -57,7 +57,7 @@ In REAPER:
 
 First-run setup buttons live in **Settings → About**:
 
-- **Windows:** *Install UF8/UC1 WinUSB driver* (one UAC prompt)
+- **Windows:** *Install UF8/UC1/UF1 WinUSB driver* (one UAC prompt)
 - **Linux:** *Install Linux udev rule* (one pkexec prompt)
 - **macOS:** no setup needed; IOKit already grants libusb access to the device class
 
@@ -565,6 +565,11 @@ strip names the track the fader is moving, so the fader and its readout can neve
 disagree. The colour screen, the V-Pots and the soft-keys stay on the **selected**
 track, the way the UC1 behaves. You can therefore keep working on one channel's
 plug-in while the fader rides a different track in the bank.
+
+The UF1's **SEL** belongs to the fader rather than to the screen: it selects the
+track the UF1's fader is on, which is what its SEL lamp has always been
+reporting. Pressing it therefore brings the colour screen, the V-Pots and the
+soft-keys over to that track as well.
 
 Extender and the Focus-Set pin are mutually exclusive: switching either on clears
 the other, and releasing the pin puts the Extender back the way you left it.
@@ -1407,9 +1412,11 @@ A single bundled file format covering: bindings, learned plug-in maps, Parameter
 
 Section appears only when the build is Windows.
 
-- Text: binds UF8 + UC1 to WinUSB so libusb can claim them without Zadig. One-time setup, requires admin. SSL 360° stops seeing the devices after install — reinstall SSL 360° to revert.
-- **Install UF8/UC1 WinUSB driver** button — kicks off the in-product installer with a UAC + publisher prompt. After acceptance, unplug + replug devices.
-- **Uninstall** button — runs `pnputil /delete-driver /uninstall` (UAC prompt), removes `rea_sixty_winusb.inf` from the driver store, and clears the Rea-Sixty signing cert from the My / Root / TrustedPublisher stores. After uninstall, unplug + replug devices; the SSL 360° driver (or whatever was previously bound) takes over again.
+- Text: binds UF8, UC1 and UF1 to WinUSB so libusb can claim them without Zadig. One-time setup, requires admin. **Plug the devices in before pressing**, because the rebind only reaches devices attached at the moment it runs. SSL 360° stops seeing them after install; reinstall SSL 360° to revert.
+- **Current driver binding**: one line per device saying what it is bound to right now, with a **Refresh** button. `WinUSB / Rea-Sixty` means ours and the device will be picked up; anything else means another driver still owns it. It only reads, so it raises no admin prompt, and it re-reads itself when an install or uninstall finishes.
+- **Install UF8/UC1/UF1 WinUSB driver** button: runs the in-product installer with a UAC and publisher prompt, then reports what actually happened. Either *installed*, or *failed* with the path of a log you can paste, or *cancelled at the permission prompt*. Cancelling is not a failure and is named as such. While it runs, both buttons disappear so a second press cannot race the first. After it finishes, unplug and replug the devices.
+- **Where the devices go afterwards.** Our INF puts them in class `USBDevice`, so in Device Manager they move out of *Universal Serial Bus controllers* into *Universal Serial Bus devices*, and they are renamed to `SSL UF1 (Rea-Sixty / WinUSB)` or `SSL UF8 / UC1 (Rea-Sixty / WinUSB)`. Looking for the old name in the old category and finding nothing does not mean the unit is dead.
+- **Uninstall** button: runs `pnputil /delete-driver /uninstall` (UAC prompt), removes **every** copy of `rea_sixty_winusb.inf` from the driver store, and clears the Rea-Sixty signing cert from the My / Root / TrustedPublisher stores. After uninstall, unplug and replug devices; the SSL 360° driver (or whatever was previously bound) takes over again. If a copy is ever left behind, the supported cleanup is `pnputil /delete-driver oemNN.inf /uninstall /force` in an admin prompt, never regedit, which Windows refuses.
 
 ### Linux udev rule (Linux only)
 
