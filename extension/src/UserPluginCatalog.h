@@ -8,9 +8,25 @@
 // two registries combine in a two-stage lookup: built-ins first, user maps
 // second (see lookupPluginMapByName in PluginMap.cpp).
 //
-// Phase 2.5d-A Step 1 — data layer + JSON I/O only. No UI, no FX-Learn
-// dispatch yet. See docs/plan-fx-learn-and-multi-instance.md for the full
-// design.
+// A map is keyed by `match`, a case-sensitive substring of the FX name, and
+// carries one binding block per surface:
+//   slots[]            UC1 controls, addressed by SSL 360 Link linkIdx, each
+//                      with up to three held-modifier overlays (see FxLayer)
+//   uf8.banks / .strips  2 fader-banks x 8 V-Pot-banks x 8 strips, plus the
+//                      per-strip Fader / Solo / Cut / Sel bindings
+//   uf1.vpots / .softKeys  SPARSE, by flat position (page*4 + idx), and
+//                      deliberately layer-free
+// The UF1 block is optional: with none, the UF1 fills itself sequentially from
+// the UC1 `slots` (uf1LearnedStreamSlots_ in main.cpp), which is why a UC1
+// mapping already works on the UF1 without extra effort.
+//
+// Beyond the bindings a map also carries metering calibration, a curated UC1
+// EXT FUNCS list, per-parameter user display names, and a snapshot of the
+// plug-in's VST3 param list so the editor stays usable with no live instance.
+//
+// Editor is Settings -> FX Learn (SettingsScreen::drawFxLearn) plus the Learn
+// HUD companion; suggestions come from AutoLearnEngine; single maps travel
+// between users as .rea60map through the mapping exchange (see MapShare below).
 //
 
 #include <array>
@@ -731,7 +747,26 @@ namespace user_plugins {
 // v8 (2026-06-01): added `extFuncs` on UserPluginMap (user-curated UC1
 // EXT FUNCS list, CS mode). v7 readers seeing a v8 file ignore the field;
 // v8 readers seeing a v7 file load with an empty list (no behaviour change).
-constexpr int kCurrentFormatVersion = 16;  // v16: "uf1EqGraph" became a tri-state (0 follow global / 1 on / 2 off); a v15 `true` loads as 1. v15: + "uf1EqGraph" — draw our EQ graph on the UF1 for a LEARNED CS (params resolved via the UC1 link slots), emitted only when set. v14: + UF1 soft-key "special" (fixed non-parameter action: HQ / A/B / Strip Mode / Strip Mode+GUI), emitted only when set. v13: + "paramLabels" — ONE user display name per parameter, read by all three surfaces (emitted only when non-empty). v12: + per-soft-key UF1 LED colour (uf1 slot "ledRgb"). v11: + explicit UF1 plugin-mode map (uf1{vpots,softKeys} + uf1Mode). Older files load byte-identical.
+// v9  (2026-06-15): added per-control FX-Learn modifier layers (`modLayers`).
+// v10 (2026-06-17): added the Control+Option layer (`modLayers.ctrlOption`).
+//     v9 files load byte-identical — an absent key is an empty overlay.
+// v11 (2026-08-08): added the explicit UF1 plugin-mode map (`uf1{vpots,
+//     softKeys}` + `uf1Mode`). Absent block = no UF1 layer = the sequential
+//     fallback, which is what every older file gets.
+// v12 (2026-08-09): added per-soft-key UF1 LED colour (uf1 slot `ledRgb`).
+// v13 (2026-08-09): added `paramLabels` — ONE user display name per
+//     parameter, read by all three surfaces. Emitted only when non-empty.
+// v14 (2026-08-09): added the UF1 soft-key `special` (fixed non-parameter
+//     action: HQ / A/B / Strip Mode / Strip Mode+GUI). Emitted only when set.
+// v15 (2026-08-09): added `uf1EqGraph` — draw our EQ graph on the UF1 for a
+//     LEARNED channel strip, params resolved via the UC1 link slots.
+// v16 (2026-08-10): `uf1EqGraph` became a TRI-STATE (0 follow the global
+//     setting / 1 always on / 2 never). A v15 `true` loads as 1: back when
+//     there was no global switch it WAS an explicit choice, so it stays one.
+//
+// The rule every entry above follows: additive and emitted-only-when-set, so
+// an older reader ignores the key and an older file loads byte-identical.
+constexpr int kCurrentFormatVersion = 16;
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused

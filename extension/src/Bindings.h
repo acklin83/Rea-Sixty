@@ -1,20 +1,44 @@
 #pragma once
 //
-// Bindings — Phase A: data model + dispatch refactor (no UI yet).
+// Bindings — what every button on every surface does, and what its LED shows.
 //
-// Architecture: see memory bindings-architecture.md. Phase A scope:
-//   1. Define data model + ButtonId enum.
-//   2. JSON load/save at ~/Library/Application Support/REAPER/rea_sixty/
-//      bindings.json.
-//   3. Factory defaults that mirror today's hardcoded global-button
-//      behaviour exactly (so reload-after-this-commit feels identical).
-//   4. Refactor onUf8Input's global-button branches to call dispatch().
+// ONE map covers all three devices. Device bytes overlap across surfaces (0x1D
+// is UF1 Solo but UF8 TopSoftKey6), so each physical control gets its own
+// ButtonId and the two device-id tables (fromUf8DeviceId, fromUf1DeviceId)
+// keep them apart. UC1 controls are named explicitly (Uc1Encoder1/2, …).
 //
-// Per-strip Sel/Cut/Solo/Rec stay hardcoded in onUf8Input (resolved Q2:
-// modifier-customisation is a later phase). Per-strip V-Pot push (0x08..)
-// and per-strip top soft-key (0x18..) also stay hardcoded in v1 — the
-// PM-mode soft-key tables move into Layer 2/3 default bindings only when
-// Phase B/C lands. v1 leaves them alone (architecture risks section).
+// Resolution order for a press:
+//   active layer (0..2)
+//     -> ButtonId
+//       -> Binding
+//         -> short / long / double  x  modifier slot (Plain, Shift, Cmd, Ctrl)
+//           -> ActionSlot = a CHAIN of ActionSteps, each Reaper action id,
+//              keyboard chord, registered builtin, or MIDI message
+// The modifier is snapshotted at PRESS time and reused for the release
+// decision, so letting go of Shift mid-press cannot fire the wrong slot.
+//
+// Top-soft-keys additionally route through the user-Quick system: 3 Quicks per
+// layer, 6 sub-banks each, 8 slots per sub-bank. A sub-bank flagged with a
+// DynamicBankKind ignores its static slots and computes labels, LEDs and
+// dispatch live from the focused track (FX list, parameter groups, colours).
+// The UF1 has its own global bank set: 10 banks x 4 display soft-keys.
+//
+// What is deliberately NOT bindable, and why:
+//   UF1 Solo / Cut  fire natively in onUf1Event (focused-track solo/mute).
+//                   Their LED handling is delicate; they stay locked.
+//   UF1 MODE (0x20) is a firmware-local view toggle. The host never sees a
+//                   use for it and it is absent from fromUf1DeviceId.
+//   UF8 per-strip SEL is bindable, but through the SHARED Uf8Select id rather
+//                   than eight ids: native exclusive-select always happens,
+//                   and a bound gesture fires additively on top. It is absent
+//                   from fromUf8DeviceId because the per-strip block in
+//                   onUf8Input owns its own double-tap detection.
+//
+// Persistence: <REAPER resource>/rea_sixty/bindings.json, plus per-layer and
+// UC1-only export/import. Editor is Settings -> Bindings
+// (SettingsScreen::drawBindings). Builtins are registered from main.cpp at
+// REAPER_PLUGIN_ENTRY so their handlers reach its atomics and queueInput
+// directly; see registerBindingHandlers there for the catalogue.
 //
 
 #include <cstdint>
