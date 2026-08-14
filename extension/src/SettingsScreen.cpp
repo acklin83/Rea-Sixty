@@ -14938,10 +14938,17 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
         snprintf(shown, sizeof(shown), "—");
     }
 
-    char id[64];
-    snprintf(id, sizeof(id), "%s##uf1cell_%d_%d",
-             isListen ? "\xE2\x97\x8F listening\xE2\x80\xA6" : shown,
-             softKeys ? 1 : 0, pos);
+    // ⛔ The id buffer MUST outlast the label. `shown` holds up to 95 bytes and
+    // this used to be char[64], so a long parameter name — FabFilter's are long —
+    // filled it and snprintf truncated the "##uf1cell_x_y" suffix straight off the
+    // end. Two things then go wrong at once: the cell loses the unique ImGui id
+    // the suffix exists to provide, and the cut can land INSIDE a multi-byte UTF-8
+    // sequence, handing ImGui a malformed string. Size it so the suffix always
+    // fits, and clamp the visible part by CHARACTERS rather than bytes so a clamp
+    // can never split one either.
+    char id[sizeof(shown) + 40];
+    const char* label = isListen ? "\xE2\x97\x8F listening\xE2\x80\xA6" : shown;
+    snprintf(id, sizeof(id), "%s##uf1cell_%d_%d", label, softKeys ? 1 : 0, pos);
     double bw = 168.0, bh = 44.0;
     // Soft-key labels carry their LED colour (v12) so the editor reads like the
     // hardware does — you find the key by its colour, not by counting positions
