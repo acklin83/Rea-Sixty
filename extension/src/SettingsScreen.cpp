@@ -3691,11 +3691,19 @@ static void seDbg_(const char* fmt, ...)
     va_start(ap, fmt);
     vsnprintf(line, sizeof(line), fmt, ap);
     va_end(ap);
-    if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uf1tab.log").c_str(), "a")) {
-        std::fprintf(f, "%s\n", line);
-        std::fflush(f);
-        std::fclose(f);
-    }
+    // ⚠ Open ONCE, flush per line, never close. It used to fopen/fclose per line,
+    // which was affordable while this only traced the bindings editor. Adding a
+    // line per parameter row was not: Pro-C 2 has 186 params, so a single frame
+    // became ~380 open/write/close cycles, and at that rate the pane stopped
+    // responding to page keys at all — Frank read that as paging being broken,
+    // which it was, by the instrumentation rather than the bug.
+    //
+    // fflush is what the abort survives on, and it still happens per line. The
+    // fopen/fclose pair contributed nothing to that and cost everything.
+    static FILE* f = std::fopen(uf8::logPath("rea_sixty_uf1tab.log").c_str(), "a");
+    if (!f) return;
+    std::fprintf(f, "%s\n", line);
+    std::fflush(f);
 }
 // ============================================================================
 
@@ -18256,10 +18264,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             char pname[128];
             seDbg_("param rows: n=%d", n);
             for (int p = 0; p < n; ++p) {
-                seDbg_("  row p=%d BEFORE name", p);
                 pname[0] = 0;
                 paramNameFor_(*editing, fx, p, pname, sizeof(pname));
-                seDbg_("  row p=%d name='%s'", p, pname);
 
                 // Hide REAPER's injected MIDI-learn params (MIDI CC … /
                 // Pitch / Program / Channel Pressure) — never real
@@ -18284,6 +18290,9 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     "  [%4d] %s##fxl_param_%d",
                     p, pname, p);
 
+                // One line per DRAWN row, not per candidate: enough to name the row
+                // that throws, without the volume that made the pane unusable.
+                seDbg_("  row p=%d drawn '%s'", p, pname);
                 bool selected = false;
                 int  selFlags = ImGui_SelectableFlags_AllowDoubleClick;
                 if (isBound) selFlags |= ImGui_SelectableFlags_Disabled;
