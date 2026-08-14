@@ -777,6 +777,12 @@ public:
     // don't recurse), and otherwise translate (track, fxIdx, vst3Param,
     // value) to a builtin-slot or user-FX-Learn broadcast.
     int Extended(int call, void* parm1, void* parm2, void* parm3) override;
+
+private:
+    // The real body. `Extended` is a thin try/catch around it — REAPER calls
+    // this from its run loop, which treats an escaping C++ exception as fatal
+    // ([[handoff-fxlearn-abort-2026-08-14]]).
+    int extendedBody_(int call, void* parm1, void* parm2, void* parm3);
 };
 
 // Per-slot MediaTrack cache so GetTouchState can map REAPER's track
@@ -18548,7 +18554,26 @@ void ReaSixtySurface::SetSurfaceRecArm(MediaTrack* tr, bool arm)
 // Known: automation playback fires here per tick. Group members get
 // written along for the ride. Acceptable for v1; filter via
 // GetTrackAutomationMode if it becomes annoying.
+// ⚠ DIAGNOSTIC, defined near onTimer. See the note there — this names an
+// escaping exception that the crash report cannot.
+void logEscapingException_(const char* where, const char* what);
+
 int ReaSixtySurface::Extended(int call, void* parm1, void* parm2, void* parm3)
+{
+    // REAPER calls this OUTSIDE our timer, for every FX-param change from any
+    // source, so it is a second way into our code from the run loop — and the
+    // first abort left an empty log precisely because only the timer path was
+    // wrapped. Rethrows; this only names the throw.
+    try {
+        return extendedBody_(call, parm1, parm2, parm3);
+    } catch (const std::exception& e) {
+        logEscapingException_("ReaSixtySurface::Extended", e.what()); throw;
+    } catch (...) {
+        logEscapingException_("ReaSixtySurface::Extended", nullptr);  throw;
+    }
+}
+
+int ReaSixtySurface::extendedBody_(int call, void* parm1, void* parm2, void* parm3)
 {
     if (call != CSURF_EXT_SETFXPARAM) return 0;
     if (uf8::param_groups::inBroadcast()) return 1;
@@ -32427,7 +32452,36 @@ static void uf1NavCrossSyncLeds_()
     }
 }
 
+// ⚠ DIAGNOSTIC. Log an escaping C++ exception's what() before it reaches
+// REAPER's run loop, which treats one as fatal and abort()s. The crash report
+// names NOTHING — the throw site is unwound before terminate() runs — so this
+// string is the only evidence there will ever be
+// ([[handoff-fxlearn-abort-2026-08-14]]). `where` bounds it: the first attempt
+// only wrapped the Settings rail dispatch and the next abort produced an empty
+// log, which proved the throw is somewhere else in the tick.
+void logEscapingException_(const char* where, const char* what)
+{
+    if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uf1tab.log").c_str(), "a")) {
+        std::fprintf(f, "!!! EXCEPTION escaping %s: %s\n",
+                     where ? where : "?", (what && *what) ? what : "(no what())");
+        std::fflush(f);
+        std::fclose(f);
+    }
+}
+
+void onTimerBody_();
+
+// Rethrows: swallowing an exception mid-ImGui-frame leaves Begin/End unpaired,
+// which is its own bug class (learnings #31). The failure mode stays what it is
+// today; we only learn its name.
 void onTimer()
+{
+    try                             { onTimerBody_(); }
+    catch (const std::exception& e) { logEscapingException_("onTimer", e.what()); throw; }
+    catch (...)                     { logEscapingException_("onTimer", nullptr);  throw; }
+}
+
+void onTimerBody_()
 {
     ++g_tickCounter;
 
@@ -35128,7 +35182,15 @@ void onTimer()
     // hits the OS close button, which is why the read happens AFTER
     // onRunTick.
     static bool s_lastMixerVisible = false;
-    g_mixerWindow.onRunTick();
+    // Labelled separately from the outer onTimer catch: that alone would only
+    // say "somewhere in the tick", and the ImGui frame is half the tick.
+    try {
+        g_mixerWindow.onRunTick();
+    } catch (const std::exception& e) {
+        logEscapingException_("MixerWindow::onRunTick", e.what()); throw;
+    } catch (...) {
+        logEscapingException_("MixerWindow::onRunTick", nullptr);  throw;
+    }
     const bool nowVisible = g_mixerWindow.isOpen();
     if (nowVisible != s_lastMixerVisible) {
         uf8::bindings::onMixerVisibilityChanged(nowVisible);
