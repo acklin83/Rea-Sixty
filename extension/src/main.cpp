@@ -39557,6 +39557,50 @@ foreach ($hwid in @('USB\VID_31E9&PID_0021','USB\VID_31E9&PID_0023','USB\VID_31E
     # An absent device is a benign no-op (returns FALSE, no swap); only a
     # currently-attached UF8/UC1/UF1 is rebound to WinUSB.
 }
+
+# Step 6: keep exactly ONE copy of our package in the driver store.
+# `pnputil /add-driver` stages a NEW oemNN on every call, so each press of the
+# install button left another copy behind — measured on the StoerPC 2026-08-14,
+# four runs turned oem2 into oem2 + oem13. That is how users end up with the
+# duplicates they cannot remove: the uninstall path resolves ONE oemNN, so the
+# extras are unreachable from the UI and regedit is not a supported way out
+# (forum user creal had exactly this, 2026-08-13).
+#
+# Delete only packages NO DEVICE IS USING: read each device's actual
+# DriverInfPath and keep those. Plain /delete-driver, never /uninstall /force —
+# an unused package deletes cleanly, and refusing to touch a bound one is the
+# whole safety property here.
+try {
+    $inUse = @{}
+    foreach ($devpid in @('PID_0021','PID_0023','PID_0025')) {
+        Get-PnpDevice -EA SilentlyContinue |
+            Where-Object { $_.InstanceId -like "USB\VID_31E9&$devpid*" } |
+            ForEach-Object {
+                $p = (Get-PnpDeviceProperty -InstanceId $_.InstanceId `
+                        -KeyName DEVPKEY_Device_DriverInfPath -EA SilentlyContinue).Data
+                if ($p) { $inUse[$p.ToLower()] = $true }
+            }
+    }
+    $ours = @()
+    $pub2 = $null
+    foreach ($line in (pnputil /enum-drivers)) {
+        if ($line -match 'Published Name:\s+(oem\d+\.inf)') { $pub2 = $matches[1] }
+        elseif ($line -match 'Original Name:\s+rea_sixty_winusb\.inf') {
+            if ($pub2) { $ours += $pub2 }
+        }
+    }
+    # Never leave zero: if nothing is bound yet (no device attached), keep the
+    # newest and drop the rest, so a device plugged in later still finds one.
+    if ($ours.Count -gt 1 -and $inUse.Count -eq 0) {
+        $keep = ($ours | Sort-Object { [int]($_ -replace '\D','') })[-1]
+        $inUse[$keep.ToLower()] = $true
+    }
+    foreach ($o in $ours) {
+        if (-not $inUse.ContainsKey($o.ToLower())) {
+            pnputil /delete-driver $o 2>&1 | Out-Null
+        }
+    }
+} catch { }
 )PS";
 
     if (FILE* f = std::fopen(psPath, "wb")) {
