@@ -22913,6 +22913,19 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     static int ix[15];
     static std::array<uint8_t, 251> sLast{};
     static bool sHave = false;
+    // ⛔ A REOPENED DEVICE IS A BLANK DEVICE. sLast/sHave are "what the UF1 is
+    // already showing", and every send below is change-gated against them. They
+    // used to survive a device rebuild, so after a re-plug or a stale-handle
+    // reopen the firmware came up empty while this code still believed it had
+    // painted the current curve — and nothing was sent until some EQ parameter
+    // happened to move. uf1PaintChannel_ has had this reset since 2026-07-18;
+    // its statics are not these, and this function was never given one.
+    static uint32_t sEqGen = 0;
+    if (const uint32_t gen = g_uf1Gen.load(std::memory_order_relaxed); gen != sEqGen) {
+        sEqGen = gen;
+        sHave  = false;          // force the next column set out
+        sFxTr  = nullptr; sFx = -1;   // and re-resolve ix[] against the live FX
+    }
     // Whether ix[14] (EQ In) reads with inverted sense — resolved with ix[] below,
     // because it is a property of the plug-in MAP, not of this tick.
     static bool sEqInInverted = false;
@@ -22985,6 +22998,14 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         sFxTr = eqTr;
         sFx = eqFx;
         sIdent = ident;
+        // ⛔ The strip under the graph just CHANGED, so whatever the device is
+        // showing belongs to the previous one. Without dropping the
+        // change-detection here, a new channel whose curve happens to equal the
+        // last one transmitted — a second 4K E at defaults, or any two tracks
+        // whose EQ is off and therefore both flat — sent nothing at all, and the
+        // old picture stayed up until a parameter moved. That is "the graph only
+        // updates the second time you land on a channel" (Frank 2026-08-14).
+        sHave = false;
         if (sFx >= 0) {
             // A learned CS resolves through its UC1 link slots (v15 opt-in);
             // everything else by SSL's own parameter names.
