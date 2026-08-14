@@ -6513,6 +6513,14 @@ std::unordered_map<std::string, std::string> g_stripInstanceFxGuid;
 // per track and only read for the surface's focused track. See setStripInstanceFx_.
 std::string g_lastActiveTrackGuid;
 std::string g_lastActiveFxGuid;
+// Which track the UF1 was showing WHEN that activation happened. "The instance I
+// just activated" only outranks the current channel until the user picks a
+// different channel — choosing a channel is a newer statement than the
+// activation that preceded it. Without this the strip view (V-Pots, soft-keys,
+// CS-TYPE cell and the EQ graph alike) stayed on the old instance after a
+// selection change and only moved once an EQ param was touched, because touching
+// one is what makes the new instance the last-activated (Frank 2026-08-14).
+std::string g_lastActiveFocusGuid;
 bool lastActivatedInstance_(MediaTrack*& outTr, int& outFx);
 
 // Recency tracking so the HUD's "what plug-in am I on" follows whichever the user
@@ -6552,6 +6560,12 @@ void setStripInstanceFx_(MediaTrack* tr, int idx)
     // being reordered underneath it.
     g_lastActiveTrackGuid = g;
     g_lastActiveFxGuid    = fxg;
+    // Stamp the channel the UF1 was on at this moment. Stage 0 compares against
+    // it, so the activation wins until the user moves to another channel.
+    if (MediaTrack* ft = uf1FocusedTrack_())
+        g_lastActiveFocusGuid = uc1::trackGuid(ft);
+    else
+        g_lastActiveFocusGuid.clear();
 }
 
 // Resolve the last-activated instance back to a live (track, fx). Returns false
@@ -15899,7 +15913,19 @@ void drainInputQueue()
             continue;
         }
         if (e.kind == PendingInput::Uf1SelectFocused) {
-            if (MediaTrack* tr = uf1FocusedTrack_()) {
+            // ⛔ uf1FaderTrack_, NOT uf1FocusedTrack_. In Extender mode the UF1 is
+            // the 9th strip of the UF8 bank: its fader, its small LCD and its SEL
+            // LED all address that bank slot, while uf1FocusedTrack_ IS the
+            // selection. Selecting "the focused track" therefore re-selected the
+            // track that was already selected — a no-op — so SEL did nothing on
+            // the UF1 in Extender mode while its LED sat dark, correctly saying
+            // the shown track was not selected (Frank 2026-08-14).
+            //
+            // Same split, same mistake as da8a2f6: the 2026-08-11 rework gave the
+            // fader zone its own resolver and left a caller behind on `tr`.
+            // uf1FaderTrack_ falls back to uf1FocusedTrack_ whenever the extender
+            // branch does not fire, so Extender-off behaviour is unchanged.
+            if (MediaTrack* tr = uf1FaderTrack_()) {
                 if (e.value > 0.5)                     // Shift held at press → additive
                     CSurf_OnSelectedChange(tr, -1);    // toggle this track's selection
                 else
@@ -23791,12 +23817,23 @@ int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx)
     // the project, that combination showed the 4K E no matter which instance was
     // activated. Recency beats locality here, by request.
     //
-    // Guarded: only when it still resolves to a live FX the UF1 recognises as a
-    // strip type. A deleted track, a removed FX or a plug-in with no map falls
-    // straight through to the old behaviour rather than blanking the surface.
+    // Guarded twice.
+    //  1. Only when it still resolves to a live FX the UF1 recognises as a strip
+    //     type. A deleted track, a removed FX or a plug-in with no map falls
+    //     straight through to the old behaviour rather than blanking the surface.
+    //  2. ★ Only while the user has not CHANGED CHANNEL since that activation.
+    //     Picking a channel is a newer statement than the activation before it,
+    //     and without this the whole strip view stayed on the old instance after
+    //     a selection change — it only caught up once an EQ param was touched,
+    //     because touching one re-stamps the cursor onto the new instance. Frank
+    //     saw it as "the EQ graph shows the new channel only after I touch the
+    //     EQ" (2026-08-14), but the V-Pots and soft-keys were equally stale.
     {
+        const bool focusMovedSinceActivation =
+            !g_lastActiveFocusGuid.empty() && focusTr
+            && uc1::trackGuid(focusTr) != g_lastActiveFocusGuid;
         MediaTrack* lt = nullptr; int lfx = -1;
-        if (lastActivatedInstance_(lt, lfx)) {
+        if (!focusMovedSinceActivation && lastActivatedInstance_(lt, lfx)) {
             const int ty = tryFx(lt, lfx);
             if (ty >= 0) {
                 outTr = lt; outFx = lfx; return ty;
