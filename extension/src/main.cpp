@@ -13741,9 +13741,19 @@ void publishHud_()
         // (built-in maps aren't editable). The HUD opens GetUserInputs seeded with
         // the matching field. Frank 2026-06-24.
         {
+            // The UF1 gets its OWN field. It resolves its target independently
+            // (uf1ResolveCsFx_, its own track), so on the UF1 tab the HUD used to
+            // fall back to the CS field and showed a different plug-in's Kurzname
+            // — or nothing at all when no CS map was in play (Frank 2026-08-14).
+            MediaTrack* u1ShortTr = nullptr; int u1ShortFx = -1;
+            const int u1ShortType =
+                uf1ResolveCsFx_(uf1FocusedTrack_(), u1ShortTr, u1ShortFx);
             const std::string sShort = userMapShort_(csTr, csFx) + ';'
                                      + userMapShort_(bcTr, bcFx) + ';'
-                                     + userMapShort_(uf8Tr, uf8Fx);
+                                     + userMapShort_(uf8Tr, uf8Fx) + ';'
+                                     + ((u1ShortType >= 0)
+                                        ? userMapShort_(u1ShortTr, u1ShortFx)
+                                        : std::string{});
             if (sShort != g_hudShortPublished) {
                 g_hudShortPublished = sShort;
                 SetExtState("rea_sixty", "hud_short", sShort.c_str(), false);
@@ -32903,10 +32913,10 @@ void onTimer()
                 publishHud_();
             } else if (s.rfind("setshort;", 0) == 0) {
                 // "setshort;<dom>;<text>" — set the active plug-in's Kurzname
-                // (displayShort) for domain c=CS / b=BC / u=UF8, from the HUD's
-                // inline editor. Resolves the live FX identity (rename-safe) and
-                // writes the USER map's short label; no-op for built-in/unmapped
-                // FX. Frank 2026-06-24.
+                // (displayShort) for domain c=CS / b=BC / u=UF8 / 1=UF1, from the
+                // HUD's inline editor. Resolves the live FX identity (rename-safe)
+                // and writes the USER map's short label; no-op for built-in/
+                // unmapped FX. Frank 2026-06-24, UF1 added 2026-08-14.
                 const auto d1 = s.find(';');
                 const auto d2 = s.find(';', d1 + 1);
                 if (d1 != std::string::npos && d2 != std::string::npos) {
@@ -32916,6 +32926,13 @@ void onTimer()
                     if (dom == 'u') {
                         const void* m = nullptr;
                         resolveFocusedUf8Target_(tr, fx, m, nullptr);
+                    } else if (dom == '1') {
+                        // Same resolver the UF1 tab and the hardware use, so the
+                        // rename lands on the plug-in the tab is showing.
+                        MediaTrack* u1 = nullptr; int u1Fx = -1;
+                        if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1, u1Fx) >= 0) {
+                            tr = u1; fx = u1Fx;
+                        }
                     } else {
                         MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
                         int csFx = -1, bcFx = -1;

@@ -6034,7 +6034,7 @@ namespace {
 // Inline form state for "+ New" / per-row error reporting. File-scope
 // statics — same pattern as the bindings editor's transient buffers.
 char        g_newMatch[128]      = {};
-char        g_newDisplay[16]     = {};   // up to 7 chars + NUL + slack
+char        g_newDisplay[16]     = {};   // up to 12 chars + NUL + slack
 // Mode picker for the "+ New" popup. 1=CS-primary, 2=BC-primary,
 // 3=UF8-only. Default 1 matches the old CS default. The UF8 checkbox is
 // stored separately so toggling mode doesn't lose it.
@@ -6274,12 +6274,12 @@ std::string deriveMatchRoot_(const std::string& fxName)
 }
 
 // Heuristic: build a displayShort from a full FX name. Same cleaning as
-// deriveMatchRoot_, then takes the first 7 chars (UF8 / UC1 colour-bar
-// zone width).
+// deriveMatchRoot_, then takes the first 12 chars (UF8 / UC1 colour-bar
+// zone width, HW-confirmed 2026-08-12 — hudShortLabel_ already used 12).
 std::string deriveShortLabel_(const std::string& fxName)
 {
     std::string s = deriveMatchRoot_(fxName);
-    if (s.size() > 7) s.resize(7);
+    if (s.size() > 12) s.resize(12);
     return s;
 }
 
@@ -18349,6 +18349,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 }
             }
 
+            seDbg_("param rows: LOOP DONE");
             if (paramCount > kMaxParams) {
                 ImGui_Spacing(ctx);
                 char overflow[96];
@@ -18359,6 +18360,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             }
         }
         ImGui_EndChild(ctx);
+        seDbg_("param list: EndChild DONE");
     }
 
     // Mode-change confirm popup removed 2026-05-24 — Frank: switches
@@ -18372,7 +18374,9 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     // — the same popup serves FX-Learn slots, UF8 V-Pots, and UF8
     // faders. Frank 2026-05-26 generalisation.
     drawFxLearnCurveEditorPopup_(ctx);
+    seDbg_("editor: curve popup DONE");
     drawFeelNamePrompt_(ctx);
+    seDbg_("editor: LEAVE");
 }
 
 } // namespace
@@ -18729,8 +18733,8 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                                  sizeof(g_newMatch) - 1);
                     g_newMatch[sizeof(g_newMatch) - 1] = '\0';
                     std::string s = deriveShortLabel_(g_installedFx[i].name);
-                    std::strncpy(g_newDisplay, s.c_str(), 7);
-                    g_newDisplay[7] = '\0';
+                    std::strncpy(g_newDisplay, s.c_str(), 12);
+                    g_newDisplay[12] = '\0';
                 }
             };
 
@@ -18781,11 +18785,11 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             nullptr, nullptr);
 
         ImGui_Spacing(ctx);
-        ImGui_Text(ctx, "Display label (1..7 chars, scribble-strip zone):");
-        // displayShort caps at 7 chars; 8-byte buf includes terminator.
+        ImGui_Text(ctx, "Display label (1..12 chars, scribble-strip zone):");
+        // displayShort caps at 12 chars; 13-byte buf includes terminator.
         ImGui_InputTextWithHint(ctx, "##fxl_new_short",
             "FFP4",
-            g_newDisplay, 8, nullptr, nullptr);
+            g_newDisplay, 13, nullptr, nullptr);
 
         ImGui_Spacing(ctx);
         ImGui_Text(ctx, "Mode:");
@@ -18833,7 +18837,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
 
             std::string match = g_newMatch;
             std::string disp  = g_newDisplay;
-            if (disp.size() > 7) disp.resize(7);
+            if (disp.size() > 12) disp.resize(12);
 
             // Trim leading/trailing whitespace from the match. Inner spaces
             // are preserved on purpose ('Pro-Q 4' is a real FX name).
@@ -21177,7 +21181,7 @@ bool reasixty_hudLearnTick(int activeLayer) { return uf8::hudLearnTick_(activeLa
 int  reasixty_hudLearnArmed()               { return uf8::g_hudLearnIdx; }
 int  reasixty_hudLearnLayer()               { return uf8::g_hudLearnLayer; }
 
-// Set the "Kurzname" (displayShort, 7-char zone label) of the USER map that
+// Set the "Kurzname" (displayShort, 12-char zone label) of the USER map that
 // owns `fxName`, driven from the on-screen Learn-HUD. Mirrors the Settings
 // FX-Learn short field exactly (catalog-copy → upsert → persist). No-op when
 // the FX has no user map (built-in SSL maps aren't user-editable). Frank
@@ -21190,7 +21194,10 @@ bool reasixty_hudSetShort(const char* fxName, const char* text)
     if (!om) return false;
     const std::string match = om->match;
     std::string s = text ? text : "";
-    if (s.size() > 7) s.resize(7);
+    // 12, like the Settings field and the HUD's own input — this clamp was left
+    // at 7 when the zone grew (52ac0dd), so a name typed into the HUD came back
+    // cut while the same name typed in Settings survived.
+    if (s.size() > 12) s.resize(12);
     auto cat = uf8::user_plugins::get();
     for (auto& m : cat.maps) {
         if (m.match != match) continue;

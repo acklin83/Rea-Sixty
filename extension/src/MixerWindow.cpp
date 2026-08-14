@@ -3,10 +3,12 @@
 #include "ManualView.h"
 #include "ExchangeView.h"
 #include "ThemeBridge.h"
+#include "LogPath.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -783,7 +785,42 @@ void MixerWindow::onRunTick()
                         // rail entry first) stays armed and fires on an
                         // unrelated visit later. Frank 2026-08-09.
                         settingsLatchSectionScroll();
-                        e.draw(impl_->ctx);
+                        // ⚠ DIAGNOSTIC, not a fix. The FX-Learn pane aborts
+                        // REAPER on a big FabFilter map, and the crash report
+                        // names nothing: the throw site is unwound away before
+                        // terminate() runs, so macOS logs no reason string at
+                        // all ([[handoff-fxlearn-abort-2026-08-14]]). ReaImGui
+                        // reports API errors to native callers by THROWING, so
+                        // what() is the message the crash report cannot give us.
+                        // Log it, then rethrow: the failure mode stays exactly
+                        // what it is today (swallowing it would leave the ImGui
+                        // window stack unpaired mid-frame, which is its own bug
+                        // class), but one reproduction now names the call.
+                        try {
+                            e.draw(impl_->ctx);
+                        } catch (const std::exception& ex) {
+                            if (FILE* lf = std::fopen(
+                                    uf8::logPath("rea_sixty_uf1tab.log").c_str(),
+                                    "a")) {
+                                std::fprintf(lf,
+                                    "!!! EXCEPTION out of pane '%s': %s\n",
+                                    e.id, ex.what());
+                                std::fflush(lf);
+                                std::fclose(lf);
+                            }
+                            throw;
+                        } catch (...) {
+                            if (FILE* lf = std::fopen(
+                                    uf8::logPath("rea_sixty_uf1tab.log").c_str(),
+                                    "a")) {
+                                std::fprintf(lf,
+                                    "!!! NON-std EXCEPTION out of pane '%s'\n",
+                                    e.id);
+                                std::fflush(lf);
+                                std::fclose(lf);
+                            }
+                            throw;
+                        }
                         break;
                     }
                 }

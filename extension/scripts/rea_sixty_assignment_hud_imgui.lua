@@ -569,22 +569,30 @@ local function readBcFav()
   return cur, hasBc, slots, src
 end
 
--- Plug-in Kurzname (displayShort) seeds, "<cs>;<bc>;<uf8>" — the USER map's
--- short label per domain, empty when that domain has no editable user map.
--- Feeds the inline Kurzname editor (click the LCD / UF8 header).
+-- Plug-in Kurzname (displayShort) seeds, "<cs>;<bc>;<uf8>;<uf1>" — the USER
+-- map's short label per domain, empty when that domain has no editable user
+-- map. Feeds the inline Kurzname editor (click the LCD / UF8 header).
+-- The UF1 field rides last: it resolves its own target and can sit on a
+-- different plug-in than the CS one (added 2026-08-14). A pre-UF1 payload has
+-- three fields and reads back as an empty UF1 name.
 local function readShort()
   local raw = reaper.GetExtState(SECT, "hud_short")
-  local cs, bc, uf8 = raw:match("^([^;]*);([^;]*);(.*)$")
-  return cs or "", bc or "", uf8 or ""
+  local cs, bc, uf8, uf1 = raw:match("^([^;]*);([^;]*);([^;]*);(.*)$")
+  if not cs then
+    cs, bc, uf8 = raw:match("^([^;]*);([^;]*);(.*)$")
+    uf1 = ""
+  end
+  return cs or "", bc or "", uf8 or "", uf1 or ""
 end
 
 -- Open the native rename dialog for the active plug-in's Kurzname and push it
--- to the extension. `dom` = "c" CS / "b" BC / "u" UF8. Seeds with the current
--- value so an edit is non-destructive. No-op when the FX has no user map (the
--- extension silently drops it). Frank 2026-06-24.
+-- to the extension. `dom` = "c" CS / "b" BC / "u" UF8 / "1" UF1. Seeds with the
+-- current value so an edit is non-destructive. No-op when the FX has no user
+-- map (the extension silently drops it). Frank 2026-06-24.
 local function editPluginShort(dom)
-  local cs, bc, uf8 = readShort()
-  local cur = (dom == "b" and bc) or (dom == "u" and uf8) or cs
+  local cs, bc, uf8, uf1 = readShort()
+  local cur = (dom == "b" and bc) or (dom == "u" and uf8)
+           or (dom == "1" and uf1) or cs
   local ok, val = reaper.GetUserInputs("Plug-in name", 1,
     "Short name (max 12),extrawidth=110", cur)
   if not ok then return end
@@ -2104,9 +2112,14 @@ local function drawHudEditRow()
   local y = TAB_H + 4
   rect(0, TAB_H, WW - RW, FAV_H, col(0x131316, 1))
 
-  local dom = (activeTab == "bc") and "b" or (activeTab == "uf8") and "u" or "c"
-  local cs, bc, uf8 = readShort()
-  local curShort = (dom == "b" and bc) or (dom == "u" and uf8) or cs
+  -- The UF1 tab names its OWN plug-in. It used to fall through to the CS field,
+  -- so switching to the UF1 tab showed the CS map's Kurzname — or an empty
+  -- "click to set…" when there was no CS map at all (Frank 2026-08-14).
+  local dom = (activeTab == "bc") and "b" or (activeTab == "uf8") and "u"
+           or (activeTab == "uf1") and "1" or "c"
+  local cs, bc, uf8, uf1 = readShort()
+  local curShort = (dom == "b" and bc) or (dom == "u" and uf8)
+                or (dom == "1" and uf1) or cs
 
   -- Name field (Kurzname) — all tabs.
   local nlbl = "Name:"
