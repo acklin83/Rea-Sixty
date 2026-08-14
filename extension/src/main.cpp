@@ -4654,6 +4654,16 @@ std::vector<Uf1EnvDrag> g_uf1RazorEnvDrag;
 // The flag keeps Begin/End balanced even if a gesture is interrupted — a second Begin
 // without its End would nest REAPER's block and swallow the step.
 std::atomic<bool>       g_uf1RazorUndoOpen{false};
+// Envelope jog undo (Frank 2026-08-13, "Jog Envelope Mode: No undo points?").
+// Razor and the item drop have had undo blocks since they were built; the envelope
+// jog never got one, so moving points from the wheel changed the project with
+// nothing to undo. It cannot borrow the razor's shape: that block closes on the
+// held-centre RELEASE, and the envelope jog is free-running with no gesture
+// boundary to hang it on. So it closes on IDLE instead, the same way the send
+// pan/vol edits finalise (g_sendVolEditUntilMs) — one block per continuous move
+// rather than one undo point per detent, which would bury the undo history.
+std::atomic<bool>       g_uf1JogEnvUndoOpen{false};
+std::atomic<int64_t>    g_uf1JogEnvUndoUntilMs{0};
 // One grab per gesture, EVEN IF IT FOUND NOTHING — see uf1RazorContentGesture_.
 std::atomic<bool>       g_uf1RazorGrabDone{false};
 // Item-jog drag gesture (Frank 2026-08-11): NAV-CENTRE held = "mouse down". While
@@ -8722,6 +8732,13 @@ void applyUf1JogEnvelope_(int count, double timeDelta)
     const bool copy = uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd);
     const bool ctrl = uf8::bindings::modifierHeld(uf8::bindings::Modifier::Ctrl);
     const bool timeAxis = ctrl || copy;   // copying points only makes sense in time
+    // Open the undo block on the first detent of a move and push the idle deadline
+    // out on every one after it; the onTimer drain closes it once the wheel has been
+    // still for 300 ms. The duplicate below has to land INSIDE the block, so this
+    // sits before it. Balanced by the exchange: a second Begin without its End would
+    // nest REAPER's block and swallow the step (same reason the razor uses a latch).
+    if (!g_uf1JogEnvUndoOpen.exchange(true)) Undo_BeginBlock2(nullptr);
+    g_uf1JogEnvUndoUntilMs.store(nowMs_() + 300);
     if (copy) { if (!g_uf1JogCopyArmed.exchange(true)) uf1JogDuplicateEnvPoints_(env); }
     else      { g_uf1JogCopyArmed.store(false); }
     const int n = CountEnvelopePointsEx(env, -1);
@@ -33950,6 +33967,18 @@ void onTimer()
                 finishRouteVolEdit_(s);
                 g_sendVolEditUntilMs[s] = 0;
             }
+        // UF1 Envelope jog — close the undo block once the wheel has been still.
+        // The jog is free-running (no held key to release), so idle is the only
+        // gesture boundary there is. One block per continuous move: spin the wheel
+        // twenty detents, undo once. Same window as the send edits above.
+        if (g_uf1JogEnvUndoOpen.load()) {
+            const int64_t until = g_uf1JogEnvUndoUntilMs.load();
+            if (until && now > until) {
+                g_uf1JogEnvUndoUntilMs.store(0);
+                if (g_uf1JogEnvUndoOpen.exchange(false))
+                    Undo_EndBlock2(nullptr, "Rea-Sixty: UF1 envelope jog", -1);
+            }
+        }
     }
     if (g_sync) {
         // Phase 2.8 Nav Mode hijacks the colour-bar: marker/region colour
