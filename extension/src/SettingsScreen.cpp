@@ -14884,7 +14884,10 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
                          bool softKeys, int idx)
 {
     const int pos = g_uf1EditingPage * uf8::kUserUf1PerPage + idx;
+    seDbg_("  uf1cell sk=%d idx=%d page=%d pos=%d  ENTER",
+           softKeys ? 1 : 0, idx, g_uf1EditingPage, pos);
     const int explicitParam = mappedVst3ForUf1_(softKeys, pos);
+    seDbg_("  uf1cell pos=%d explicitParam=%d", pos, explicitParam);
     // INHERITED: what the UF1 actually drives here when this position carries no
     // explicit binding — the plug-in's learned CS/BC map filled sequentially, or
     // a built-in strip's p188 slot. The editor used to draw "—" for those while
@@ -14892,6 +14895,7 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
     const int inherited = (explicitParam >= 0) ? -1
         : reasixty_uf1EffectiveParam(fx.tr, fx.fxIdx, softKeys,
                                      g_uf1EditingPage, idx);
+    seDbg_("  uf1cell pos=%d inherited=%d (effectiveParam returned)", pos, inherited);
     const int mapped = (explicitParam >= 0) ? explicitParam : inherited;
     const bool isMapped = (explicitParam >= 0);
     const bool isInherited = (explicitParam < 0 && inherited >= 0);
@@ -15318,6 +15322,8 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
 
 void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
 {
+    seDbg_("uf1schematic ENTER match='%s' tr=%p fx=%d editPage=%d",
+           g_editingMatch.c_str(), (void*)fx.tr, fx.fxIdx, g_uf1EditingPage);
     // Page selector. Pages exist as far as the highest mapped position, plus
     // one spare so the user can always start a new page — the hardware page
     // count follows the map (uf1MapPageCount), so a page that ends up empty
