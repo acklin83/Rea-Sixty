@@ -23147,7 +23147,17 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     bool userOwnedStrip = false;
     if (!sIdent.empty())
         userOwnedStrip = uf8::user_plugins::lookupOwnedByName(sIdent.c_str()) != nullptr;
-    if (eqOn && !userOwnedStrip && sslcore::isRunning() && sFxTr && sFx >= 0) {
+    // ⛔ NOT straight after a strip change (sForceFrames). The streamed curve is
+    // resolved per TRACK, and a channel you just landed on has not pushed
+    // anything yet — the resolution then falls through its own last rung and
+    // hands back a curve belonging to another strip instead of failing, so the
+    // graph sat on the previous channel's shape until a knob was moved and the
+    // plug-in emitted. That is exactly "updates on a value change, never on a
+    // channel change" (Frank 2026-08-14). For those first frames render from
+    // REAPER's own parameters, which are correct the instant the strip resolves;
+    // the stream takes over again once it is live for THIS strip.
+    if (eqOn && !userOwnedStrip && sslcore::isRunning() && sFxTr && sFx >= 0
+        && sForceFrames == 0) {
         const int trackIdx =
             static_cast<int>(GetMediaTrackInfo_Value(sFxTr, "IP_TRACKNUMBER"));
         const char* fpId[12]; double fpVal[12];
