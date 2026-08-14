@@ -22902,6 +22902,8 @@ static const uf8::UserPluginMap* uf1EqGraphMapAt_(MediaTrack* tr, int fx)
     return on ? um : nullptr;
 }
 
+static int uf1FindStripFx_(MediaTrack* tr);   // defined next to uf1ResolveCsFx_
+
 void uf1PaintEqGraph_(MediaTrack* tr, bool force)
 {
     static MediaTrack* sFxTr = nullptr;
@@ -22946,11 +22948,23 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         if (FILE* lg = std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a")) {
             char fxn[128] = {0};
             if (eqTr && eqFx >= 0) TrackFX_GetFXName(eqTr, eqFx, fxn, sizeof(fxn));
+            // Everything that decides WHICH TRACK, then which FX on it. The
+            // track question is upstream of the FX question and has been the
+            // real answer more than once, so both are on one line.
+            auto trNo = [](MediaTrack* t) {
+                return t ? int(GetMediaTrackInfo_Value(t, "IP_TRACKNUMBER")) : -1; };
+            MediaTrack* selT = GetSelectedTrack(nullptr, 0);
+            MediaTrack* tchT = GetLastTouchedTrack();
             std::fprintf(lg,
-                "EQ-SRC paintTrack=%d -> eqTrack=%d eqFx=%d '%s'\n",
-                tr   ? int(GetMediaTrackInfo_Value(tr,   "IP_TRACKNUMBER")) : -1,
-                eqTr ? int(GetMediaTrackInfo_Value(eqTr, "IP_TRACKNUMBER")) : -1,
-                eqFx, fxn);
+                "EQ-SRC paintTrack=%d -> eqTrack=%d eqFx=%d '%s'"
+                " | focused=%d sel=%d touched=%d selMs=%lld touchMs=%lld winner=%s"
+                " | ext=%d faderTrack=%d ownStripFx=%d\n",
+                trNo(tr), trNo(eqTr), eqFx, fxn,
+                trNo(uf1FocusedTrack_()), trNo(selT), trNo(tchT),
+                (long long)g_uf1SelChangeMs, (long long)g_uf1TouchChangeMs,
+                (g_uf1SelChangeMs > g_uf1TouchChangeMs) ? "SEL" : "TOUCH",
+                g_uf1Extender.load() ? 1 : 0, trNo(uf1FaderTrack_()),
+                tr ? uf1FindStripFx_(tr) : -1);
             std::fclose(lg);
         }
     }
