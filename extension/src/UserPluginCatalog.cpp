@@ -140,12 +140,27 @@ bool writeFileAtomic_(const std::string& path, const std::string& contents)
 
 void logErr_(const char* fmt, ...)
 {
+    // Hold the path in a named string. uf8::logPath returns std::string BY
+    // VALUE, so `const char* p = uf8::logPath(...).c_str()` leaves p dangling
+    // the instant the full-expression ends — before fopen on the next line
+    // ever reads it. It appeared to work because the freed short-string buffer
+    // usually still held the bytes, which is what kept it alive for so long;
+    // clang flags it as -Wdangling-gsl.
+    //
+    // Every other log site in the tree writes
+    // `std::fopen(uf8::logPath(...).c_str(), "a")` in ONE expression, where
+    // the temporary legitimately outlives the call. Only this one stored the
+    // pointer first. Keep it that way: either pass it straight to fopen, or
+    // bind the string to a local like this.
 #ifdef _WIN32
-    const char* logPath = "rea_sixty.log";
+    // NB: relative, so it lands in REAPER's CWD rather than %TEMP%. Unlike
+    // every other log in the tree, which goes through uf8::logPath on all
+    // platforms. Left as-is here to keep this a pure bug fix.
+    const std::string logFile = "rea_sixty.log";
 #else
-    const char* logPath = uf8::logPath("rea_sixty.log").c_str();
+    const std::string logFile = uf8::logPath("rea_sixty.log");
 #endif
-    if (FILE* lf = std::fopen(logPath, "a")) {
+    if (FILE* lf = std::fopen(logFile.c_str(), "a")) {
         va_list ap;
         va_start(ap, fmt);
         std::fprintf(lf, "[user_plugins] ");
