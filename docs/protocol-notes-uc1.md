@@ -250,14 +250,25 @@ The UC1 is physically laid out to match SSL Native Bus Compressor 2 + Channel St
 
 Channel Strip section knob IDs still TBD — `uc1_04`–`uc1_07` only exercised Bus Comp controls. A follow-up capture cycling the EQ and Dyn knobs is needed.
 
-## GR data source — not from the plugin
+## GR data source
 
-The SSL plugins ship GR to 360° over encrypted Thrift IPC (see `plugin-ipc-notes.md`). We do **not** read that channel. GR is computed by a bundled JSFX envelope-follower (`extension/jsfx/rea_sixty_gr_probe.jsfx`) inserted next to the SSL compressor, and its value is read via `TrackFX_GetParam`. With the `FF 5B 02 …` encoding now concrete, wiring the JSFX output into `rea_sixty_gr_probe_send_dB()` → `FF 5B 02 <dB×10 BE-16> <chk>` is a straight translation.
+**This section described a plan that was never shipped. Superseded; kept for the record of what was tried.**
+
+The original plan was a bundled JSFX envelope-follower (`extension/jsfx/rea_sixty_gr_probe.jsfx`) inserted next to the SSL compressor, read back via `TrackFX_GetParam`. That file is still in the tree but is **not** built, embedded or referenced by any source, and no GR ever came from it.
+
+What actually ships, in order of preference:
+
+1. **`TrackFX_GetNamedConfigParm(tr, fx, "GainReduction_dB", …)`** — the PreSonus VST3 GR extension REAPER exposes for supported compressors, including the SSL Bus Compressor and Channel Strip. One figure per plug-in. This is the primary source for compressor GR on both the UC1 BC needle and the UF8 GR row.
+2. **The SSL 360°Core impersonator** (`SslCoreImpersonator`, `SslMeterProtocol`) for everything that API cannot carry. It matters because `GainReduction_dB` reports a single value per plug-in and **none at all for the gate**, so the CS Gate strip reads the plug-in's own meter stream instead. Opt-in via ExtState `rea_sixty/ssl_core`; SSL 360° must be quit, since the two contend for the same ports.
+
+Neither path reads the encrypted Thrift IPC channel described in `plugin-ipc-notes.md`. The impersonator receives plain unencrypted protobuf over UDP because that is what the plug-ins send to Core; see `analysis/ssl360-protobuf/`.
+
+The `FF 5B 02 <dB×10 BE-16> <chk>` encoding below is correct and is what `UC1Device` streams at 50 Hz.
 
 ## Open items
 
 - [x] USB descriptor dump — endpoints, max packet size, interface class/subclass (confirmed EP 0x02 OUT / 0x81 IN bulk)
-- [x] Init sequence — trivial; 5 reusable payloads (keepalive + zero-GR), no custom sequence file needed
+- [x] Init sequence — turned out NOT to be trivial. The 5 reusable payloads (keepalive + zero-GR) get the link up, but the device stays on its SSL splash screen until the captured LED/framebuffer flood is replayed. That flood is `extension/src/uc1_init_sequence.inc` (~460 frames, generated from `uc1_23_ssl360_startup.pcapng`) and `UC1Device::workerLoop_` sends it before anything else
 - [x] Idle heartbeat identification (`FF 1B 01 <counter>`, 4-phase)
 - [~] Plugin-presence frames — `FF 66` writes to zones 0x04/0x0E/0x10 land the plugin-name/state, `FF 5C` flips the LED mask. Full cross-plugin list requires more captures (4K B, SSL 360 Link, Native Channel Strip 2, etc.)
 - [x] Physical-knob → event-frame ID map for Bus Comp section (see table above)

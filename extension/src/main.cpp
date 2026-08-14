@@ -1,13 +1,34 @@
 //
-// REAPER extension entry point. Glues ColorSync + UF8Device to REAPER's
-// API. The visible-track resolution is the one piece that's REAPER-specific
-// and deserves comment:
+// REAPER extension entry point, and the integration point for nearly
+// everything. At 44k lines this is the file you grep, not the file you read —
+// COMPENDIUM.md in the repo root is the map. The landmarks:
 //
-//   REAPER exposes the mixer view via TCP/MCP scroll state. Our extension
-//   polls on a timer (33 ms) and resolves the 8 "currently visible" tracks
-//   in the TCP order. For the first milestone we simply use CountTracks()
-//   and show tracks 1..8 regardless of scroll — bank-shift hookup is a
-//   follow-up once we confirm the pipe actually drives the hardware.
+//   REAPER_PLUGIN_ENTRYPOINT   registration, ExtState restore, module setup
+//   ReaSixtySurface            IReaperControlSurface: Run/SetSurface*/Extended
+//   onTimer -> onTimerBody_    THE main-thread tick, ~30 Hz. Everything that
+//                              touches the REAPER API happens here or below it
+//   queueInput / drainInputQueue   the thread boundary (see below)
+//   onUf8Input / onUf1Event    device input parsing, on the libusb worker
+//   uf1Paint*                  all UF1 screen rendering
+//   registerBindingHandlers    the builtin catalogue
+//   reasixty_*                 ~400 C-linkage accessors that SettingsScreen.cpp
+//                              calls; the two files are decoupled by this flat
+//                              surface rather than by headers
+//
+// ⚠ THREADING IS THE LOAD-BEARING RULE. REAPER's track and FX API is main
+// thread only. Device callbacks arrive on a libusb worker thread, so they may
+// NOT call it: they enqueue a PendingInput and onTimerBody_'s drain executes
+// it. This includes the bindings builtins, which also run on the input thread.
+//
+// ⚠ An exception escaping into REAPER's run loop is fatal to the host, so
+// onTimer and Extended are thin try/catch wrappers around onTimerBody_ and
+// extendedBody_. The one exception to the exception: a throw from inside an
+// ImGui frame is RETHROWN, because swallowing it there corrupts the ImGui
+// stack (g_throwCameFromImGuiFrame).
+//
+// Visible-track resolution (what the 8 UF8 strips point at) is rebuildVisible-
+// TrackList: banking window, Folder Mode, Show-Only-Selected, pinned master
+// and the UF1 Extender all feed it. It is not a plain "tracks 1..8".
 //
 
 #define REAPERAPI_IMPLEMENT
