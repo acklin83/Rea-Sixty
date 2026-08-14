@@ -20797,27 +20797,37 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     }
 
 #ifdef _WIN32
-    // Windows-only: bind UF8 + UC1 to WinUSB so libusb can claim them
+    // Windows-only: bind UF8, UC1 and UF1 to WinUSB so libusb can claim them
     // without Zadig. Single UAC prompt; replaces SSL 360°'s driver
     // (SSL 360° will stop seeing the devices afterwards).
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
     ImGui_Text(ctx, "Windows USB driver");
     ImGui_Separator(ctx);
+    // Says UF1 too: the script has always force-bound PID_0025, but the text
+    // named only UF8 + UC1, so a UF1 owner read the button as not being for
+    // them (forum user creal, 2026-08-13). "Plug in first" is not advice, it is
+    // a requirement: the rebind only reaches devices present when it runs.
     ImGui_TextWrapped(ctx,
-        "  Binds UF8 + UC1 to WinUSB. One-time setup, requires admin. "
-        "SSL 360° stops seeing the devices after install — reinstall "
-        "SSL 360° to revert.");
+        "  Binds UF8, UC1 and UF1 to WinUSB. One-time setup, requires admin. "
+        "Plug the devices in before pressing. SSL 360° stops seeing them "
+        "after install; reinstall SSL 360° to revert.");
     ImGui_Spacing(ctx);
     static std::string s_winusbMsg;
-    if (ImGui_Button(ctx, "Install UF8/UC1 WinUSB driver##winusb_install",
+    if (ImGui_Button(ctx, "Install UF8/UC1/UF1 WinUSB driver##winusb_install",
                      nullptr, nullptr))
     {
         std::string err;
         if (reasixty_installWinUsbDriver(&err)) {
-            s_winusbMsg = "Driver install started — follow the UAC + "
-                          "publisher prompts, then unplug + replug "
-                          "the devices.";
+            // Where to look afterwards. Our INF sets Class = USBDevice, so the
+            // device leaves "Universal Serial Bus controllers" for "Universal
+            // Serial Bus devices" AND is renamed. creal looked for the old name
+            // in the old category, found nothing, and concluded his UF1 was
+            // dead. One sentence, and it nearly cost a user.
+            s_winusbMsg = "Driver install started. Follow the UAC + publisher "
+                          "prompts, then unplug + replug the devices. In Device "
+                          "Manager they move to \"Universal Serial Bus devices\" "
+                          "and are renamed to \"SSL ... (Rea-Sixty / WinUSB)\".";
         } else {
             s_winusbMsg = err.empty()
                 ? "Driver install failed."
@@ -20830,9 +20840,16 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     {
         std::string err;
         if (reasixty_uninstallWinUsbDriver(&err)) {
-            s_winusbMsg = "Driver uninstall started — follow the UAC "
-                          "prompt, then unplug + replug the devices. "
-                          "Reinstall SSL 360° to restore its driver.";
+            // Names the manual cleanup because the uninstall only removes ONE
+            // oemNN and a machine with two copies cannot be cleaned from here
+            // (see [[winusb-installer-deletes-sslbus]]). creal reached for
+            // regedit, which Windows refuses; say the supported command
+            // instead of leaving him to guess.
+            s_winusbMsg = "Driver uninstall started. Follow the UAC prompt, "
+                          "then unplug + replug the devices. Reinstall SSL 360° "
+                          "to restore its driver. Leftover copies: "
+                          "pnputil /delete-driver oemNN.inf /uninstall /force "
+                          "in an admin prompt, never regedit.";
         } else {
             s_winusbMsg = err.empty()
                 ? "Driver uninstall failed."

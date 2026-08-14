@@ -39410,14 +39410,25 @@ bool reasixty_installWinUsbDriver(std::string* errOut)
         return false;
     }
 
-    // Working dir: %TEMP%\rea_sixty_winusb\. Both INF and CAT live in
-    // there because New-FileCatalog hashes everything in the dir.
+    // Working dir: %TEMP%\rea_sixty_winusb\. ONLY the INF lives in here —
+    // New-FileCatalog hashes every file under -Path, so a catalog written into
+    // this folder becomes an input to the next run's hashing and throws. That is
+    // what locked out every user who pressed the button twice; see below.
     char workDir[MAX_PATH];
     snprintf(workDir, sizeof(workDir), "%srea_sixty_winusb", tmpDir);
     CreateDirectoryA(workDir, nullptr);  // OK if it already exists
 
     char infPath[MAX_PATH];
     snprintf(infPath, sizeof(infPath), "%s\\rea_sixty_winusb.inf", workDir);
+
+    // Belt and braces: clear a catalog left by a build that still wrote it in
+    // here, so upgrading to this fix repairs a machine that is already poisoned
+    // instead of needing the user to empty %TEMP% by hand.
+    {
+        char staleCat[MAX_PATH];
+        snprintf(staleCat, sizeof(staleCat), "%s\\rea_sixty_winusb.cat", workDir);
+        DeleteFileA(staleCat);
+    }
 
     if (FILE* f = std::fopen(infPath, "wb")) {
         std::fwrite(sb::kWinUsbInfBytesBytes, 1,
@@ -39458,7 +39469,19 @@ if (-not $cert) {
 }
 
 # Step 3: catalog + signature.
-$cat = Join-Path $wd 'rea_sixty_winusb.cat'
+# ⛔ The catalog MUST NOT live inside $wd. New-FileCatalog hashes every file
+# under -Path, so a .cat written in there is hashed by the NEXT run and the
+# cmdlet throws "Unable to create the hash for file ...rea_sixty_winusb.cat".
+# With $ErrorActionPreference = 'Stop' the script dies right there, before
+# pnputil ever runs, and the window closes before anyone can read it. First run
+# looked fine because the folder held only the INF — so every SECOND and later
+# attempt on a user's machine was a silent no-op. Forum user creal lost his UF1
+# to this and nearly sold it (2026-08-13).
+# The signed CAT is referenced by CatalogFile= in the INF, so pnputil needs it
+# NEXT TO the INF at /add-driver time: build it outside, then copy it in, and
+# remove it again so the folder is clean for the next run.
+$cat = Join-Path $env:TEMP 'rea_sixty_winusb.cat'
+Remove-Item -LiteralPath $cat -Force -ErrorAction SilentlyContinue
 New-FileCatalog -Path $wd -CatalogFilePath $cat -CatalogVersion 2 | Out-Null
 $sig = Set-AuthenticodeSignature -FilePath $cat -Certificate $cert -HashAlgorithm SHA256
 if ($sig.Status -ne 'Valid') { throw "CAT signature failed: $($sig.Status)" }
@@ -39467,7 +39490,16 @@ if ($sig.Status -ne 'Valid') { throw "CAT signature failed: $($sig.Status)" }
 # it is the shared bus driver for the whole SSL family (UF8/UC1 AND UF1 +
 # O-Series), and removing it breaks the UF1 in SSL 360 with Code 28.
 # We coexist with it and override only our two device interfaces below.
-pnputil /add-driver $inf | Out-Null
+# The INF's CatalogFile= names rea_sixty_winusb.cat as a sibling, so put the
+# signed catalog beside it for the duration of the call and take it out again.
+$catInWd = Join-Path $wd 'rea_sixty_winusb.cat'
+Copy-Item -LiteralPath $cat -Destination $catInWd -Force
+try   { pnputil /add-driver $inf | Out-Null }
+finally {
+    # ALWAYS, including on a throw: a catalog left behind here is exactly what
+    # made the next run fail.
+    Remove-Item -LiteralPath $catInWd -Force -ErrorAction SilentlyContinue
+}
 
 # Resolve the staged published name (oemNN.inf) of our just-added package.
 # Walk enum-drivers line by line: "Published Name" precedes "Original Name"
