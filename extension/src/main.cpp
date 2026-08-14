@@ -36184,6 +36184,31 @@ int reasixty_uf1CsPage()
 {
     return g_uf1CsPage.load();
 }
+
+// Point the SURFACE at an FX, i.e. write the same instance cursor that Instance
+// Cycle and FX Cycle write. Frank 2026-08-14: he picked Pro-C in the FX-Learn
+// "Instance:" combo, reasonably expected the UF1 and the HUD to follow, and they
+// did not — that combo only told the EDITOR which live instance to read values
+// from. Everything the device shows resolves through uf1ResolveCsFx_, whose first
+// stage is this cursor; with the cursor unset it falls through to uf1FindStripFx_,
+// which prefers a channel strip over a bus comp, so a track holding a 4K E and a
+// learned Pro-C always showed the 4K E.
+//
+// The knock-on was bigger than the wrong strip: the FX-Learn page row links to the
+// hardware only while reasixty_uf1ShownMatch() equals the edited map, so paging
+// with the hardware keys silently stopped working too, and the HUD's UF1 tab
+// described a different plug-in than the editor right next to it. One cursor,
+// three symptoms.
+//
+// Main-thread only (called from the settings frame).
+void reasixty_pointSurfaceAtFx(void* tr, int fxIdx)
+{
+    if (!tr || fxIdx < 0) return;
+    MediaTrack* t = static_cast<MediaTrack*>(tr);
+    if (!ValidatePtr2(nullptr, t, "MediaTrack*")) return;
+    if (fxIdx >= TrackFX_GetCount(t)) return;
+    setStripInstanceFx_(t, fxIdx);
+}
 void reasixty_setUf1CsPage(int page)
 {
     if (page < 0) page = 0;

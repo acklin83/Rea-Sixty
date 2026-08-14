@@ -111,6 +111,10 @@ int  reasixty_uf1SoftBank();
 int  reasixty_uf1CsPage();                  // live plugin-mode page (◄ ►)
 void reasixty_setUf1CsPage(int page);
 const char* reasixty_uf1ShownMatch();       // map match the UF1 shows, "" = none
+// Point the SURFACE's instance cursor at an FX — the same cursor Instance Cycle
+// and FX Cycle write. Picking an instance in the FX-Learn combo used to be
+// editor-only, so the editor could show Pro-C while the UF1 sat on a 4K E.
+void reasixty_pointSurfaceAtFx(void* tr, int fxIdx);
 // The param the UF1 would actually drive at a position — explicit UF1 map, else
 // the learned CS/BC fill, else the built-in p188 table. -1 = nothing. The
 // editors show INHERITED params through this, so they can't drift from the
@@ -16612,6 +16616,11 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                               e.label.c_str(), e.key.c_str());
                 if (ImGui_Selectable(ctx, rowId, &sel, &sf, nullptr, nullptr)) {
                     g_fxSelectorKey = e.key;
+                    // Point the SURFACE here too, not just the editor. Picking an
+                    // instance and having the UF1 keep showing a different plug-in
+                    // is the bug Frank hit; it also silently broke hardware paging,
+                    // which is gated on the device showing the edited map.
+                    reasixty_pointSurfaceAtFx(e.tr, e.fxIdx);
                 }
             }
             ImGui_EndCombo(ctx);
