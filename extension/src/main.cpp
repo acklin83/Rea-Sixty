@@ -22909,7 +22909,16 @@ static int uf1FindStripFx_(MediaTrack* tr);   // defined next to uf1ResolveCsFx_
 // still rebuilding the layout for that view, and a dropped set is
 // indistinguishable from a drawn one on this side. Eight at ~30 Hz is a quarter
 // of a second of insistence, which nobody can see and no device can miss.
-static constexpr int kEqForceFrames = 8;
+// Long enough to outlive the firmware's channel-strip LAYOUT rebuild. On every
+// track change the paint sends a CS-TYPE string (0x0017) and the firmware
+// latches a fresh layout from it — which resets the 0x0122 region to its flat
+// baseline, on the device's own schedule, after our columns have already gone
+// out. Eight frames (a quarter second) was not enough: the log showed all eight
+// SENT and the screen still held the previous channel's shape, which only a
+// wipe on the device can explain. 45 at ~30 Hz is 1.5 s of re-sending; the cost
+// is 45 writes of 251 bytes per channel change, which is nothing, and the user
+// cannot see it because every frame carries the same correct curve.
+static constexpr int kEqForceFrames = 45;
 
 void uf1PaintEqGraph_(MediaTrack* tr, bool force)
 {
@@ -23264,16 +23273,23 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     col[0] = 0x00;
     col[1] = 0x01;
 
-    const bool suppressed = (sHave && !force && sForceFrames == 0 && col == sLast);
+    // ⛔ Do NOT transmit on the layout tick itself. `force` is true exactly when
+    // uf1PaintChannel_ has just emitted the CS-TYPE string that makes the
+    // firmware rebuild the strip layout, and a curve sent into that rebuild is
+    // wiped by it. Arm the window and let the following frames carry the curve.
+    const bool layoutTick = force;
+    const bool suppressed = (!layoutTick && sHave && !force
+                             && sForceFrames == 0 && col == sLast);
     if (g_uf1Trace) {
         if (FILE* lg = std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a")) {
             std::fprintf(lg, "EQ-DRAW src=PARAM fx=%d eqOn=%d force=%d ff=%d %s\n",
                          sFx, int(eqOn), int(force), sForceFrames,
-                         suppressed ? "SUPPRESSED(identical)" : "SENT");
+                         layoutTick ? "HELD(layout rebuild)"
+                                    : (suppressed ? "SUPPRESSED(identical)" : "SENT"));
             std::fclose(lg);
         }
     }
-    if (suppressed) return;
+    if (layoutTick || suppressed) return;
     sLast = col; sHave = true;
     if (sForceFrames > 0) --sForceFrames;
     // SSL 360 pairs EVERY full FD graph frame with a short "01 <val>" companion
