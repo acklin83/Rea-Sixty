@@ -579,10 +579,12 @@ the separate `acklin83/reaper-scripts` repo.
 ## 6. Open TODOs and known soft spots
 
 **Deliberately unfinished**
-- **Phase 2.6, the on-screen Plug-in Mixer.** `MixerLayout.cpp` is a 33-line
-  scaffold that draws one line of placeholder text, and `MixerLayout::draw` is
-  **never called** from anywhere. It is still compiled into the target. The
-  docked window hosts the Settings rail only.
+- **Phase 2.6, the on-screen Plug-in Mixer. Not near-term** (Frank,
+  2026-08-14). `MixerLayout.cpp` is a 33-line scaffold that draws one line of
+  placeholder text, and `MixerLayout::draw` is **never called** from anywhere.
+  It is still compiled into the target. `MixerWindow`, the host that was named
+  for this view, is finished and hosts the Settings rail only. Treat the two as
+  separate things: the host is done, the view is backlog.
 - `SettingsScreen.cpp:4632` marks an entire "User-Quick slot editor (OLD
   section-style)" region as UNUSED. It is still compiled.
 - UC1 seven-segment hundreds digit is only partly decoded; values over 99
@@ -633,8 +635,8 @@ Comment or doc versus actual code. Input for the step 2 cleanup.
 | 6 | `UserPluginCatalog.h:11` | "Phase 2.5d-A Step 1, data layer + JSON I/O only. No UI, no FX-Learn dispatch yet" | Full FX-Learn UI, HUD, dispatch, exchange upload. |
 | 7 | `UserPluginCatalog.h:706` version history | narrates v1 through v8 | `kCurrentFormatVersion = 16`. v9 through v16 are squeezed into the trailing comment on the constant line instead of the block. |
 | 8 | `UC1Device.h:4` | "UC1 needs no custom init sequence" | `UC1Device.cpp:19` includes `uc1_init_sequence.inc` and replays it at `UC1Device.cpp:271`. |
-| 9 | `MixerWindow.h:12` | "Phase 2.6a scaffold. Bodies are stubs until ImGui has been vendored into extension/vendor/imgui/ and icontheme.h has been pulled from upstream" | Fully implemented, 868 lines, and it uses **ReaImGui via GetFunc**, not a vendored ImGui. `vendor/imgui/` does not exist. |
-| 10 | `MixerLayout.h:16` | "Phase 2.6 scaffold; bodies arrive in 2.6b/2.6c" | Accurate about the body, but omits that nothing calls `draw` at all. |
+| 9 | `MixerWindow.h:3` and `:12` | "dockable on-screen Plugin Mixer (Phase 2.6)"; "Bodies are stubs until ImGui has been vendored into extension/vendor/imgui/ and icontheme.h has been pulled from upstream" | The **host window** is fully implemented (868 lines) and hosts the 12-entry Settings rail. Two separate errors: the vendored-ImGui plan was abandoned for **ReaImGui via GetFunc** (`vendor/imgui/` does not exist), and the class no longer does what its name says. The Plug-in Mixer *view* itself is genuinely unbuilt, see item 10. |
+| 10 | `MixerLayout.h:16` | "Phase 2.6 scaffold; bodies arrive in 2.6b/2.6c" | Accurate about the body. The Plug-in Mixer view is real open backlog, **not near-term** (Frank, 2026-08-14). What the comment omits is that nothing calls `draw` at all, so the scaffold is not even reachable. |
 | 11 | `HttpClient.h:12` | "Only macOS is implemented today; the others return a clear error until built" | All three are implemented (`macos_http.mm`, `win_http.cpp`, `linux_http.cpp`) and built by CMake. `HttpClient.cpp` is the never-taken fallback. |
 | 12 | `StreamDeckBridge.h:36` | "see tests/test_sdbridge.cpp" | That file does not exist. |
 | 13 | `streamdeck/.../plugin.js:6-12` | "WebSocket (Node 22+ global WebSocket)", "manifest.json Nodejs.Version = 24", "No npm dependencies" | `manifest.json` says Version "20", `package.json` depends on `ws`, and lines 19-22 of the same file explain why. Three contradictions in one header. |
