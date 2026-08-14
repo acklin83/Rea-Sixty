@@ -22920,17 +22920,6 @@ static int uf1FindStripFx_(MediaTrack* tr);   // defined next to uf1ResolveCsFx_
 // still rebuilding the layout for that view, and a dropped set is
 // indistinguishable from a drawn one on this side. Eight at ~30 Hz is a quarter
 // of a second of insistence, which nobody can see and no device can miss.
-// Long enough to outlive the firmware's channel-strip LAYOUT rebuild. On every
-// track change the paint sends a CS-TYPE string (0x0017) and the firmware
-// latches a fresh layout from it — which resets the 0x0122 region to its flat
-// baseline, on the device's own schedule, after our columns have already gone
-// out. Eight frames (a quarter second) was not enough: the log showed all eight
-// SENT and the screen still held the previous channel's shape, which only a
-// wipe on the device can explain. 45 at ~30 Hz is 1.5 s of re-sending; the cost
-// is 45 writes of 251 bytes per channel change, which is nothing, and the user
-// cannot see it because every frame carries the same correct curve.
-static constexpr int kEqForceFrames = 45;
-
 void uf1PaintEqGraph_(MediaTrack* tr, bool force)
 {
     static MediaTrack* sFxTr = nullptr;
@@ -22948,21 +22937,10 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     // happened to move. uf1PaintChannel_ has had this reset since 2026-07-18;
     // its statics are not these, and this function was never given one.
     static uint32_t sEqGen = 0;
-    // ⛔ FRAMES, not a flag. Clearing the change-detection once only guarantees
-    // that ONE frame is transmitted, and one frame is demonstrably not enough:
-    // the first send after a channel change can land while the firmware is still
-    // rebuilding its layout for that view, and a column set the device drops is
-    // indistinguishable here from one it drew — we would go on believing it is
-    // on screen. That is "the first time never works, the second time does".
-    // Six attempts at naming the precise mechanism failed; this makes the
-    // mechanism irrelevant by re-sending for a few consecutive frames. The cost
-    // is a handful of 251-byte writes per channel change.
-    static int sForceFrames = 0;
     if (const uint32_t gen = g_uf1Gen.load(std::memory_order_relaxed); gen != sEqGen) {
         sEqGen = gen;
         sHave  = false;
         sFxTr  = nullptr; sFx = -1;   // re-resolve ix[] against the live FX
-        sForceFrames = kEqForceFrames;
     }
     // Whether ix[14] (EQ In) reads with inverted sense — resolved with ix[] below,
     // because it is a property of the plug-in MAP, not of this tick.
@@ -23044,7 +23022,6 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         // old picture stayed up until a parameter moved. That is "the graph only
         // updates the second time you land on a channel" (Frank 2026-08-14).
         sHave = false;
-        sForceFrames = kEqForceFrames;
         if (sFx >= 0) {
             // A learned CS resolves through its UC1 link slots (v15 opt-in);
             // everything else by SSL's own parameter names.
@@ -23167,17 +23144,7 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     bool userOwnedStrip = false;
     if (!sIdent.empty())
         userOwnedStrip = uf8::user_plugins::lookupOwnedByName(sIdent.c_str()) != nullptr;
-    // ⛔ NOT straight after a strip change (sForceFrames). The streamed curve is
-    // resolved per TRACK, and a channel you just landed on has not pushed
-    // anything yet — the resolution then falls through its own last rung and
-    // hands back a curve belonging to another strip instead of failing, so the
-    // graph sat on the previous channel's shape until a knob was moved and the
-    // plug-in emitted. That is exactly "updates on a value change, never on a
-    // channel change" (Frank 2026-08-14). For those first frames render from
-    // REAPER's own parameters, which are correct the instant the strip resolves;
-    // the stream takes over again once it is live for THIS strip.
-    if (eqOn && !userOwnedStrip && sslcore::isRunning() && sFxTr && sFx >= 0
-        && sForceFrames == 0) {
+    if (eqOn && !userOwnedStrip && sslcore::isRunning() && sFxTr && sFx >= 0) {
         const int trackIdx =
             static_cast<int>(GetMediaTrackInfo_Value(sFxTr, "IP_TRACKNUMBER"));
         const char* fpId[12]; double fpVal[12];
@@ -23216,18 +23183,8 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
             col[0] = 0x00; col[1] = 0x01;
             // Same change-gate and same two-frame send as the parametric path
             // below — one way to put columns on the device, not two.
-            const bool suppressed = (sHave && !force && sForceFrames == 0 && col == sLast);
-            if (g_uf1Trace) {
-                if (FILE* lg = std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a")) {
-                    std::fprintf(lg, "EQ-DRAW src=STREAM fx=%d force=%d ff=%d %s\n",
-                                 sFx, int(force), sForceFrames,
-                                 suppressed ? "SUPPRESSED(identical)" : "SENT");
-                    std::fclose(lg);
-                }
-            }
-            if (suppressed) return;
+            if (sHave && !force && col == sLast) return;
             sLast = col; sHave = true;
-            if (sForceFrames > 0) --sForceFrames;
             const std::array<uint8_t, 2> eqRefreshW{0x01, 0x64};
             g_uf1_dev->send(uf1::buildScreen(0x0122, eqRefreshW));
             g_uf1_dev->send(uf1::buildScreen(0x0122,
@@ -23284,25 +23241,8 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     col[0] = 0x00;
     col[1] = 0x01;
 
-    // ⛔ Do NOT transmit on the layout tick itself. `force` is true exactly when
-    // uf1PaintChannel_ has just emitted the CS-TYPE string that makes the
-    // firmware rebuild the strip layout, and a curve sent into that rebuild is
-    // wiped by it. Arm the window and let the following frames carry the curve.
-    const bool layoutTick = force;
-    const bool suppressed = (!layoutTick && sHave && !force
-                             && sForceFrames == 0 && col == sLast);
-    if (g_uf1Trace) {
-        if (FILE* lg = std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a")) {
-            std::fprintf(lg, "EQ-DRAW src=PARAM fx=%d eqOn=%d force=%d ff=%d %s\n",
-                         sFx, int(eqOn), int(force), sForceFrames,
-                         layoutTick ? "HELD(layout rebuild)"
-                                    : (suppressed ? "SUPPRESSED(identical)" : "SENT"));
-            std::fclose(lg);
-        }
-    }
-    if (layoutTick || suppressed) return;
+    if (sHave && !force && col == sLast) return;
     sLast = col; sHave = true;
-    if (sForceFrames > 0) --sForceFrames;
     // SSL 360 pairs EVERY full FD graph frame with a short "01 <val>" companion
     // to element 0x0122, always SHORT-then-FD (cap73: 260 FD / 260 short, 1:1).
     // We were sending only the FD frame, so the device never refreshed the graph
