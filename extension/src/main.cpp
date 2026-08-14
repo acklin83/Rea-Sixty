@@ -4222,6 +4222,29 @@ int64_t nowMs_()
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+// Record an exception that escaped a surface input handler. Always on: it costs
+// nothing until something throws, and when something does this line is the only
+// evidence that exists — the macOS crash report loses the throw site, and by the
+// time anyone asks, the state that produced it is long gone. Logs the surface
+// state alongside the reason so the report says WHICH page/mode was up.
+// Flush and close per line: whatever threw may be about to repeat.
+void logInputDrainException_(const char* what)
+{
+    if (FILE* f = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+        std::fprintf(f,
+            "[input] EXCEPTION escaped drainInputQueue: %s"
+            "  (uf1 softBank=%d csPage=%d subMode=%d meterView=%d "
+            "extender=%d)\n",
+            what,
+            g_uf1SoftBank.load(), g_uf1CsPage.load(),
+            g_uf1ChannelSubMode.load(),
+            g_uf1MeterView.load() ? 1 : 0,
+            g_uf1Extender.load() ? 1 : 0);
+        std::fflush(f);
+        std::fclose(f);
+    }
+}
+
 void tickIdentify()
 {
     const int64_t now = nowMs_();
@@ -33969,7 +33992,33 @@ void onTimer()
     g_followGuiPendingFx.store(-1, std::memory_order_relaxed);
     uf8::bindings::tickPending();
     uf8::bindings::tickLongPressThreshold();
-    drainInputQueue();
+    // ⛔ SEAL THE HOST BOUNDARY. An exception escaping a surface handler does not
+    // fault — it unwinds all the way out through REAPER's run loop, hits
+    // terminate, and ABORTS THE WHOLE APPLICATION. Frank lost REAPER twice on
+    // 2026-08-14 this way: once on FX-Learn "Fill: Replace" against a Pro-C
+    // mapping, then on the UF1's page-left key. Both crash reports are near
+    // useless on their own, because the throw site is unwound away before
+    // terminate runs: thread 0 shows only pthread_kill/abort under
+    // NSApplication run, and the sole hard evidence was register x22 carrying the
+    // "CLNGC++" ABI marker, which at least proves a C++ exception rather than an
+    // NSException. macOS logged no reason string either time.
+    //
+    // REAPER has no handler for our exceptions and treats one as fatal, so this
+    // boundary is ours to hold whatever the underlying bug turns out to be. The
+    // drain runs on the main thread from onTimer and OUTSIDE any ImGui frame, so
+    // catching here cannot leave Begin/End unpaired (learnings #31) — that is
+    // exactly why the guard sits on the drain and not around a frame.
+    //
+    // This is CONTAINMENT PLUS EVIDENCE, not a fix: the reason lands in
+    // rea_sixty.log with the surface state around it, and the next occurrence
+    // finally names what throws instead of leaving another empty report.
+    try {
+        drainInputQueue();
+    } catch (const std::exception& e) {
+        logInputDrainException_(e.what());
+    } catch (...) {
+        logInputDrainException_("unknown exception");
+    }
     commitDebouncedTouchReleases();
     // V-Pot send-pan has no touch-release; finalise its automation edit once the
     // knob has been idle past the window (the fader-flip path finalises on release).
