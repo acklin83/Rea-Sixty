@@ -10704,15 +10704,20 @@ int fillUf1WithRest_(const std::string& match, MediaTrack* tr, int fxIdx,
         for (const auto& s : m.slots)       if (s.vst3Param >= 0) used.insert(s.vst3Param);
         for (const auto& s : m.uf1.vpots)   if (s.vst3Param >= 0) used.insert(s.vst3Param);
         for (const auto& s : m.uf1.softKeys)if (s.vst3Param >= 0) used.insert(s.vst3Param);
-        int vPos = 0, kPos = 0, added = 0;
+        int vPos = 0, kPos = 0, added = 0, dropped = 0;
         // Each stream fills its OWN positions — they are separate rows on the
         // hardware and share only the page cursor.
+        // Returns -1 once the stream is full: the search is BOUNDED now. It used
+        // to be `for (;; ++cur)`, which happily handed out position 700 on a
+        // plug-in with 700 parameters and is what made the editor draw 175 page
+        // buttons in one row (see kUserUf1MaxPos).
         auto nextFree = [](const std::vector<UserUf1Slot>& v, int& cur) {
-            for (;; ++cur) {
+            for (; cur <= uf8::kUserUf1MaxPos; ++cur) {
                 bool taken = false;
                 for (const auto& s : v) if (s.pos == cur) { taken = true; break; }
                 if (!taken) return cur;
             }
+            return -1;
         };
         for (const auto& p : m.paramSnapshot) {
             if (p.vst3Param < 0 || used.count(p.vst3Param)) continue;
@@ -10726,15 +10731,28 @@ int fillUf1WithRest_(const std::string& match, MediaTrack* tr, int fxIdx,
             }
             UserUf1Slot ns{};
             ns.vst3Param = p.vst3Param;
-            if (isSwitch) {
-                ns.pos = nextFree(m.uf1.softKeys, kPos);
-                m.uf1.softKeys.push_back(std::move(ns));
-            } else {
-                ns.pos = nextFree(m.uf1.vpots, vPos);
-                m.uf1.vpots.push_back(std::move(ns));
-            }
+            // Stream full → count it and carry on; the OTHER stream may still have
+            // room (switches and continuous params fill separate rows), so this
+            // does not break out of the loop.
+            const int pos = isSwitch ? nextFree(m.uf1.softKeys, kPos)
+                                     : nextFree(m.uf1.vpots,    vPos);
+            if (pos < 0) { ++dropped; continue; }
+            ns.pos = pos;
+            if (isSwitch) m.uf1.softKeys.push_back(std::move(ns));
+            else          m.uf1.vpots.push_back(std::move(ns));
             used.insert(p.vst3Param);
             ++added;
+        }
+        // Never cap silently. A user who fills a 700-parameter plug-in and gets 128
+        // slots has to be told, or the missing parameters look like a bug.
+        if (dropped > 0) {
+            char msg[160];
+            snprintf(msg, sizeof(msg),
+                     "Added %d; %d more did not fit. The UF1 layer holds %d pages "
+                     "(%d V-Pots + %d soft-keys). Map the rest by hand if needed.",
+                     added, dropped, uf8::kUserUf1MaxPages,
+                     uf8::kUserUf1MaxPos + 1, uf8::kUserUf1MaxPos + 1);
+            g_lastSaveError = msg;
         }
         if (added > 0) {
             m.uf1Mode = true;
@@ -15310,8 +15328,13 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
         for (const auto& m : cat.maps)
             if (m.match == g_editingMatch) { pages = uf8::uf1MapPageCount(m.uf1); break; }
     }
-    const int shownPages = pages + 1;                 // always one spare
+    // Clamp BOTH ends. `pages` comes from the highest mapped position, and a map
+    // written by an older build can still carry positions past the ceiling, so the
+    // editor must survive one rather than trusting the fill to have capped it.
+    if (pages > uf8::kUserUf1MaxPages) pages = uf8::kUserUf1MaxPages;
+    const int shownPages = std::min(pages + 1, uf8::kUserUf1MaxPages);  // one spare
     if (g_uf1EditingPage >= shownPages) g_uf1EditingPage = shownPages - 1;
+    if (g_uf1EditingPage < 0)           g_uf1EditingPage = 0;
     // Page follows the HARDWARE and vice versa (Frank 2026-08-09), so paging
     // ◄ ► on the UF1 moves the editor and clicking a page here moves the UF1.
     // Gated on the device actually showing THIS map — otherwise editing one
@@ -15325,7 +15348,10 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
             g_uf1EditingPage = hw;                     // hardware → editor
     }
     for (int p = 0; p < shownPages; ++p) {
-        if (p) ImGui_SameLine(ctx, nullptr, nullptr);
+        // Wrap after 8 rather than one endless SameLine row. Even inside the
+        // 16-page ceiling a single line of page buttons runs off the pane, and an
+        // unbounded row was half of what made a big FabFilter map lethal.
+        if (p) { if (p % 8) ImGui_SameLine(ctx, nullptr, nullptr); }
         const bool active = (p == g_uf1EditingPage);
         // The LAST entry is the spare page — it does not exist on the hardware
         // or in the HUD tab (both follow uf1MapPageCount), so labelling it

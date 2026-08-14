@@ -521,6 +521,21 @@ struct UserUf1Map {
     std::vector<UserUf1Slot> softKeys;   // 4 per page
 };
 constexpr int kUserUf1PerPage = 4;
+// ⛔ HARD CEILING on how far the UF1 layer may reach. Without one, "Fill: Replace"
+// on a plug-in with a big parameter list places a slot for EVERY unused parameter,
+// and a FabFilter easily has hundreds. That propagates: uf1MapPageCount grows with
+// the highest position, and the FX-Learn page selector draws one button per page
+// on a single SameLine row, so the editor ends up drawing hundreds of widgets in
+// one endless line. Frank lost REAPER twice on 2026-08-14 with Pro-C, once on the
+// fill itself and once on the UF1's page-left key, both times to a C++ exception
+// escaping into the host's run loop.
+//
+// 16 pages = 64 V-Pot slots + 64 soft-key slots. That is double what the built-in
+// SSL strips use (kUf1CsPageCount = 8) and far past what anyone pages through by
+// hand on a four-knob surface; the point of the layer is a usable mapping, not a
+// complete parameter dump.
+constexpr int kUserUf1MaxPages = 16;
+constexpr int kUserUf1MaxPos   = kUserUf1MaxPages * kUserUf1PerPage - 1;
 // True when the UF1 layer carries anything at all — the "is there an explicit
 // map?" test used by runtime, the v10->v11 migration and the save filter.
 inline bool uf1MapHasContent(const UserUf1Map& u)
@@ -540,13 +555,22 @@ inline const UserUf1Slot* uf1SlotAt(const std::vector<UserUf1Slot>& v, int pos)
     return nullptr;
 }
 // Pages needed to show every mapped UF1 position (both streams share the page
-// cursor, exactly like the sequential fallback). At least 1.
+// cursor, exactly like the sequential fallback). At least 1, never more than
+// kUserUf1MaxPages.
+//
+// The ceiling lives HERE rather than at the call sites because every consumer
+// derives from this one number — the FX-Learn page selector, the HUD tab and the
+// hardware's own page count. A map saved by a build without the fill cap can still
+// carry positions far past the ceiling, so clamping at the source is what makes
+// those old maps survive being opened instead of taking REAPER down.
 inline int uf1MapPageCount(const UserUf1Map& u)
 {
     int hi = -1;
     for (const auto& s : u.vpots)    if (s.vst3Param >= 0 && s.pos > hi) hi = s.pos;
     for (const auto& s : u.softKeys) if (s.vst3Param >= 0 && s.pos > hi) hi = s.pos;
-    return (hi < 0) ? 1 : (hi / kUserUf1PerPage) + 1;
+    if (hi < 0) return 1;
+    const int pages = (hi / kUserUf1PerPage) + 1;
+    return pages > kUserUf1MaxPages ? kUserUf1MaxPages : pages;
 }
 
 // Snapshot of one VST3 parameter on the learned plug-in. Captured when an
