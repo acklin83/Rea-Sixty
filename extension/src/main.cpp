@@ -26880,14 +26880,25 @@ std::string uf1ValueLine(std::string_view label, std::string_view value)
 std::string composeValueLine(std::string_view label, std::string_view value)
 {
     constexpr size_t kWidth = 19;
-    if (label.size() + value.size() + 1 > kWidth) {
-        // Prefer to show full value; trim label.
-        const size_t labelMax = kWidth - value.size() - 1;
-        label = label.substr(0, labelMax);
-    }
+    // ⛔ Every subtraction below is size_t. A `value` at least as long as the
+    // whole line wrapped `kWidth - value.size() - 1` to ~2^64; substr(0, huge)
+    // is legal and clamps, so the label came back at FULL length, and then
+    // `padding` underflowed too and append() threw std::length_error
+    // ("basic_string"). That escaped onTimer into REAPER's run loop, which
+    // treats an uncaught C++ exception as fatal — the SIGABRT Frank hit all day
+    // on 2026-08-14. `value` is a plug-in's FORMATTED parameter value, i.e.
+    // arbitrary text: FabFilter runs past 19 characters, SSL's own strips never
+    // did, which is why it read as "always FabFilter".
+    //
+    // Clamp BEFORE subtracting. Cap at kWidth-1 rather than kWidth so there is
+    // always at least one pad space, which keeps the value right-aligned in its
+    // zone the way the firmware expects.
+    if (value.size() > kWidth - 1) value = value.substr(0, kWidth - 1);
+    // Prefer to show the full value; trim the label to whatever is left.
+    const size_t labelMax = kWidth - value.size() - 1;
+    if (label.size() > labelMax) label = label.substr(0, labelMax);
     std::string out(label);
-    const size_t padding = kWidth - label.size() - value.size();
-    out.append(padding, ' ');
+    out.append(kWidth - label.size() - value.size(), ' ');
     out.append(value);
     return out;
 }
@@ -32475,14 +32486,31 @@ void logEscapingException_(const char* where, const char* what)
 
 void onTimerBody_();
 
-// Rethrows: swallowing an exception mid-ImGui-frame leaves Begin/End unpaired,
-// which is its own bug class (learnings #31). The failure mode stays what it is
-// today; we only learn its name.
+// Set by the onRunTick catch below just before it rethrows, so the outer handler
+// can tell an ImGui-frame throw from any other. Plain bool: both handlers run on
+// the main thread, in the same call.
+bool g_throwCameFromImGuiFrame = false;
+
+// A throw from the ImGui frame is RETHROWN — unwinding out of the middle of one
+// leaves Begin/End unpaired, which is its own bug class (learnings #31) and can
+// cascade into a worse crash than the abort. Anything else is SWALLOWED: the
+// tick is a sequence of independent pushes, so losing the rest of one is a
+// visual glitch, while letting it escape into REAPER's run loop is a SIGABRT
+// with an unreadable crash report. The 2026-08-14 abort was exactly that — a
+// size_t underflow in composeValueLine, three lines of arithmetic, one lost
+// afternoon.
 void onTimer()
 {
-    try                             { onTimerBody_(); }
-    catch (const std::exception& e) { logEscapingException_("onTimer", e.what()); throw; }
-    catch (...)                     { logEscapingException_("onTimer", nullptr);  throw; }
+    g_throwCameFromImGuiFrame = false;
+    try {
+        onTimerBody_();
+    } catch (const std::exception& e) {
+        logEscapingException_("onTimer", e.what());
+        if (g_throwCameFromImGuiFrame) throw;
+    } catch (...) {
+        logEscapingException_("onTimer", nullptr);
+        if (g_throwCameFromImGuiFrame) throw;
+    }
 }
 
 void onTimerBody_()
@@ -35191,9 +35219,11 @@ void onTimerBody_()
     try {
         g_mixerWindow.onRunTick();
     } catch (const std::exception& e) {
-        logEscapingException_("MixerWindow::onRunTick", e.what()); throw;
+        logEscapingException_("MixerWindow::onRunTick", e.what());
+        g_throwCameFromImGuiFrame = true; throw;
     } catch (...) {
-        logEscapingException_("MixerWindow::onRunTick", nullptr);  throw;
+        logEscapingException_("MixerWindow::onRunTick", nullptr);
+        g_throwCameFromImGuiFrame = true; throw;
     }
     const bool nowVisible = g_mixerWindow.isOpen();
     if (nowVisible != s_lastMixerVisible) {
