@@ -6502,6 +6502,13 @@ double g_stripInstanceAccum[8] = {0, 0, 0, 0, 0, 0, 0, 0};
 // track-GUID + fx-GUID string.
 std::unordered_map<std::string, std::string> g_stripInstanceFxGuid;
 
+// The single most recently ACTIVATED instance, project-wide (track GUID + fx GUID).
+// The map above cannot answer "which instance did I just activate" because it is
+// per track and only read for the surface's focused track. See setStripInstanceFx_.
+std::string g_lastActiveTrackGuid;
+std::string g_lastActiveFxGuid;
+bool lastActivatedInstance_(MediaTrack*& outTr, int& outFx);
+
 // Recency tracking so the HUD's "what plug-in am I on" follows whichever the user
 // touched LAST — the FX-cycle cursor or the focused plug-in window (Frank
 // 2026-06-17: "plugin sichtbar vs. fx cycle: neuester soll gewinnen"). The cycle
@@ -6530,6 +6537,35 @@ void setStripInstanceFx_(MediaTrack* tr, int idx)
     }
     g_stripInstanceFxGuid[g] = fxg;
     g_lastFxCycleMs = nowMs_();   // an FX-cycle landed → cursor is the newest signal
+    // LAST ACTIVATED INSTANCE, project-wide (Frank 2026-08-14). The map above is
+    // keyed per TRACK and is only ever read for whichever track the surface is
+    // focused on, so activating an instance on track 3 while the surface sits
+    // elsewhere writes a cursor nobody reads. This pair records the single most
+    // recent activation regardless of track, which is what "the instance I just
+    // activated" actually means. GUIDs, not pointers, so it survives the FX list
+    // being reordered underneath it.
+    g_lastActiveTrackGuid = g;
+    g_lastActiveFxGuid    = fxg;
+}
+
+// Resolve the last-activated instance back to a live (track, fx). Returns false
+// when it is gone — the track was deleted, the FX removed — so callers fall back
+// to the normal resolution instead of showing something stale.
+bool lastActivatedInstance_(MediaTrack*& outTr, int& outFx)
+{
+    outTr = nullptr; outFx = -1;
+    if (g_lastActiveTrackGuid.empty() || g_lastActiveFxGuid.empty()) return false;
+    const int n = CountTracks(nullptr);
+    for (int i = -1; i < n; ++i) {          // -1 = master
+        MediaTrack* t = (i < 0) ? GetMasterTrack(nullptr) : GetTrack(nullptr, i);
+        if (!t) continue;
+        if (uc1::trackGuid(t) != g_lastActiveTrackGuid) continue;
+        const int fx = uf8::findFxIndexByGuid(t, g_lastActiveFxGuid);
+        if (fx < 0) return false;
+        outTr = t; outFx = fx;
+        return true;
+    }
+    return false;
 }
 
 // Look up the raw stored cursor for `tr` (no clamping). Returns -1
@@ -23695,6 +23731,50 @@ static int uf1FindStripFx_(MediaTrack* tr)
 // then the focused plug-in window, then any strip FX on the focused track.
 // Returns the type index and fills outTr/outFx, or -1 (V-Pots no-op).
 // Main-thread only.
+// Say which stage of uf1ResolveCsFx_ decided, and why the earlier ones did not.
+// Logs ONLY when the verdict changes, so it is a handful of lines per session
+// rather than one per frame. Everything the UF1 and the HUD's UF1 tab show comes
+// out of that function, so when they disagree with the editor this is the answer.
+static void uf1ResolveTrace_(const char* stage, MediaTrack* tr, int fx, int ty,
+                             MediaTrack* focusTr)
+{
+    // Track NUMBERS, not pointers, and the focused track's whole FX list. Reading
+    // pointers made me assert twice that two tracks were different when the real
+    // question was which FX on ONE track the cursor had landed on. The list is what
+    // answers that without another round trip.
+    auto trNum_ = [](MediaTrack* t) -> int {
+        if (!t || !ValidatePtr2(nullptr, t, "MediaTrack*")) return -1;
+        return static_cast<int>(GetMediaTrackInfo_Value(t, "IP_TRACKNUMBER"));
+    };
+    char line[900];
+    char nm[128] = "-";
+    if (tr && fx >= 0 && ValidatePtr2(nullptr, tr, "MediaTrack*"))
+        uf8::fxIdentityName(tr, fx, nm, sizeof(nm));
+    char chain[512] = {0};
+    if (focusTr && ValidatePtr2(nullptr, focusTr, "MediaTrack*")) {
+        const int n = TrackFX_GetCount(focusTr);
+        for (int i = 0; i < n && i < 12; ++i) {
+            char f[128] = "?";
+            uf8::fxIdentityName(focusTr, i, f, sizeof(f));
+            char one[160];
+            std::snprintf(one, sizeof(one), "%s[%d]%s(t%d)",
+                          i ? " " : "", i, f, uf1CsPluginType_(focusTr, i));
+            std::strncat(chain, one, sizeof(chain) - std::strlen(chain) - 1);
+        }
+    }
+    std::snprintf(line, sizeof(line),
+                  "%s | activeTr=%d fx=%d type=%d name='%s' | focusTr=%d | focusChain: %s",
+                  stage, trNum_(tr), fx, ty, nm, trNum_(focusTr), chain);
+    static std::string last;
+    if (last == line) return;
+    last = line;
+    if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uf1resolve.log").c_str(), "a")) {
+        std::fprintf(f, "%s\n", line);
+        std::fflush(f);
+        std::fclose(f);
+    }
+}
+
 int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx)
 {
     outTr = nullptr; outFx = -1;
@@ -23707,9 +23787,38 @@ int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx)
     // cursor + focused-FX window count ONLY when they land on focusTr (this keeps
     // instance cycling / GUI-follow on the CURRENT track), and a track without a
     // CS/BC resolves to −1 (blank) instead of sticking to the previous strip.
+    // ★ STAGE 0 — THE LAST ACTIVATED INSTANCE WINS, whatever track it is on.
+    // Frank 2026-08-14: "ich will die ZULETZT AKTIVIERTE INSTANZ". Every stage
+    // below is track-relative and therefore could not deliver that: stage 1 only
+    // counts when the active FX sits on the UF1's own focused track, and stage 3
+    // prefers a channel strip over a bus comp. With a 4K E and a learned Pro-C in
+    // the project, that combination showed the 4K E no matter which instance was
+    // activated. Recency beats locality here, by request.
+    //
+    // Guarded: only when it still resolves to a live FX the UF1 recognises as a
+    // strip type. A deleted track, a removed FX or a plug-in with no map falls
+    // straight through to the old behaviour rather than blanking the surface.
+    {
+        MediaTrack* lt = nullptr; int lfx = -1;
+        if (lastActivatedInstance_(lt, lfx)) {
+            const int ty = tryFx(lt, lfx);
+            if (ty >= 0) {
+                uf1ResolveTrace_("STAGE0 last-activated WIN", lt, lfx, ty, focusTr);
+                outTr = lt; outFx = lfx; return ty;
+            }
+        }
+    }
     { const ActiveFxTarget a = resolveActiveFx_();
+      const int aTy = tryFx(a.tr, a.fxIdx);
+      // Log stage 1 whether it wins or loses, and WHY it loses: this is the stage
+      // that is supposed to carry "the instance the user chose", and three rounds
+      // of reasoning about it from the source got the wrong answer each time.
+      uf1ResolveTrace_(a.tr != focusTr    ? "STAGE1 SKIP: active FX on a DIFFERENT track"
+                     : aTy < 0            ? "STAGE1 SKIP: track/fx not a known strip type"
+                                          : "STAGE1 active-cursor WIN",
+                       a.tr, a.fxIdx, aTy, focusTr);
       if (a.tr == focusTr) {
-          const int ty = tryFx(a.tr, a.fxIdx);
+          const int ty = aTy;
           if (ty >= 0) { outTr = a.tr; outFx = a.fxIdx; return ty; } } }
     { int trNum = -1, itemNum = -1, fxNum = -1;
       if ((GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) && trNum > 0) {
@@ -23723,8 +23832,12 @@ int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx)
         // name-based finder that used to sit here is gone (see its epitaph).
         const int fx = uf1FindStripFx_(focusTr);
         const int ty = tryFx(focusTr, fx);
-        if (ty >= 0) { outTr = focusTr; outFx = fx; return ty; }
+        if (ty >= 0) {
+            uf1ResolveTrace_("STAGE3 stripFind", focusTr, fx, ty, focusTr);
+            outTr = focusTr; outFx = fx; return ty;
+        }
     }
+    uf1ResolveTrace_("NONE", nullptr, -1, -1, focusTr);
     return -1;
 }
 
@@ -36207,6 +36320,21 @@ void reasixty_pointSurfaceAtFx(void* tr, int fxIdx)
     MediaTrack* t = static_cast<MediaTrack*>(tr);
     if (!ValidatePtr2(nullptr, t, "MediaTrack*")) return;
     if (fxIdx >= TrackFX_GetCount(t)) return;
+    // ⛔ THE CURSOR ALONE IS NOT ENOUGH, and this cost several rounds. It is stored
+    // PER TRACK (keyed by track GUID in g_stripInstanceFxGuid) and read back on
+    // whichever track the surface is focused on. Setting it for the plug-in's track
+    // while the surface sits on another one writes a cursor nobody ever reads.
+    //
+    // The on-device trace said so plainly: stage 1 kept reporting
+    //   "active FX on a DIFFERENT track ... name='VST3: 4K E'"
+    // so the UF1 fell through to uf1FindStripFx_, which prefers a channel strip,
+    // and showed a 4K E while the editor showed Pro-C on another track entirely.
+    //
+    // So move the focus as well. Selecting the track is what makes
+    // uf1FocusedTrack_() return it, which is what makes stage 1's a.tr == focusTr
+    // hold, which is what lets the chosen instance win. Selection first, then the
+    // cursor, so the cursor lands on the track that will actually be read.
+    SetOnlyTrackSelected(t);
     setStripInstanceFx_(t, fxIdx);
 }
 void reasixty_setUf1CsPage(int page)
