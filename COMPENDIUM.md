@@ -699,10 +699,12 @@ are correct and were left alone.
 **This was the build's only warning (`-Wdangling-gsl`). The build is now clean,
 so any new warning is a signal rather than noise.**
 
-Still open, deliberately: the `#ifdef _WIN32` branch of the same function uses a
-bare relative `"rea_sixty.log"` instead of `uf8::logPath`, so on Windows this
-one log lands in REAPER's CWD while every other log in the tree goes to
-`%TEMP%`. Changing it moves a user-visible file, so it wants its own decision.
+The same function's `#ifdef _WIN32` branch was fixed straight after
+(`7cb6f6c`): it used a bare relative `"rea_sixty.log"`, so on Windows this one
+log landed in REAPER's CWD while every other log went to `%TEMP%`. The branch
+was redundant as well as wrong, since `uf8::logPath` already resolves per
+platform. A log path should never need an `#ifdef` at the call site; if one
+turns up, it is bypassing `LogPath.cpp`.
 
 ---
 
