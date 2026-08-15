@@ -152,14 +152,14 @@ void logErr_(const char* fmt, ...)
     // the temporary legitimately outlives the call. Only this one stored the
     // pointer first. Keep it that way: either pass it straight to fopen, or
     // bind the string to a local like this.
-#ifdef _WIN32
-    // NB: relative, so it lands in REAPER's CWD rather than %TEMP%. Unlike
-    // every other log in the tree, which goes through uf8::logPath on all
-    // platforms. Left as-is here to keep this a pure bug fix.
-    const std::string logFile = "rea_sixty.log";
-#else
+    //
+    // No #ifdef here. uf8::logPath already resolves per platform (%TEMP% on
+    // Windows via GetTempPath, /tmp elsewhere), which is the entire reason
+    // LogPath.cpp exists. This site used to special-case Windows to a bare
+    // relative "rea_sixty.log", so on Windows this one log landed in REAPER's
+    // current working directory while every other log went to %TEMP% — an
+    // inconsistency, and a file the user would not find.
     const std::string logFile = uf8::logPath("rea_sixty.log");
-#endif
     if (FILE* lf = std::fopen(logFile.c_str(), "a")) {
         va_list ap;
         va_start(ap, fmt);
