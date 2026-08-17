@@ -163,6 +163,11 @@ int                reasixty_activeSubBankFor(int layer);
 // Pinned startup soft-key bank (fixed user-Quick engaged at boot).
 bool               reasixty_startupBank(int* layer, int* quick, int* sub);
 void               reasixty_setStartupBank(bool on, int layer, int quick, int sub);
+// Pinned UF1 startup view — 0 Plugin, 1 DAW, 2 Meter, 3 Sends (the kUf1View*
+// order in main.cpp). Unset = the UF1 comes up on Plugin.
+bool               reasixty_uf1StartupView(int* view);
+void               reasixty_setUf1StartupView(bool on, int view);
+int                reasixty_uf1ViewMode();
 // British / American spelling picked at render time (Appearance → Spelling).
 // Defined in main.cpp; same declaration as SettingsScreen.cpp carries.
 const char* reasixty_sp(const char* uk, const char* us);
@@ -1280,6 +1285,46 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
             }
             ImGui_TextDisabled(ctx,
                 "Ignored while UF8 Plugin Mode is on (it owns the soft-keys).");
+            ImGui_Unindent(ctx, /*indent_w*/ nullptr);
+        }
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    sectionHeader("UF1");
+
+    // Startup view. The four views were only ever reachable live (hold MODE,
+    // the uf1_view_* built-ins, the REASIXTY_UF1_MODE_* actions), so the UF1
+    // always came up on Plug-in. Off = unchanged.
+    {
+        static const char* kSvName[4] = { "Plug-in", "DAW", "Meter", "Sends" };
+
+        int sv = 0;
+        const bool svOn = reasixty_uf1StartupView(&sv);
+        bool on = svOn;
+        if (ImGui_Checkbox(ctx, "Start the UF1 in a fixed view", &on)) {
+            // Seed from what the UF1 shows right now, so ticking the box pins
+            // the view the user is looking at.
+            reasixty_setUf1StartupView(on, on ? reasixty_uf1ViewMode() : 0);
+            if (on) sv = reasixty_uf1ViewMode();
+        }
+        if (on) {
+            ImGui_Indent(ctx, /*indent_w*/ nullptr);
+            ImGui_SetNextItemWidth(ctx, 110.0);
+            // sv is already range-checked: reasixty_uf1StartupView rejects
+            // anything outside 0..3, and reasixty_uf1ViewMode only returns those.
+            if (ImGui_BeginCombo(ctx, "##uf1_startup_view",
+                                 kSvName[sv], nullptr)) {
+                for (int i = 0; i < 4; ++i) {
+                    bool s = (sv == i);
+                    if (ImGui_Selectable(ctx, kSvName[i], &s,
+                                         nullptr, nullptr, nullptr)) {
+                        sv = i;
+                        reasixty_setUf1StartupView(true, sv);
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
             ImGui_Unindent(ctx, /*indent_w*/ nullptr);
         }
     }

@@ -355,6 +355,17 @@ constexpr int kModifierCount = 4;
 struct Binding {
     Behavior    behavior = Behavior::Momentary;
     std::string label;
+    // Did a HUMAN type that label, or did it come from the bound action?
+    // The two are indistinguishable in `label` alone, and that was the bug:
+    // the UF1's SOFT key ships as Pin Set with the label "PIN SET", so
+    // rebinding it left the surface announcing an action the key no longer
+    // fired (forum 4.2). With this flag the editor can refresh the label
+    // whenever the action changes AND still never touch a name the user
+    // chose — the same precedence fxCycleDisplayName_ applies to plug-in
+    // names. Typing sets it; clearing the field hands the label back to the
+    // action. Migration marks pre-v25 labels that differ from the factory
+    // seed as user-set, so nobody's own wording is overwritten on upgrade.
+    bool        labelIsUserSet = false;
 
     // LED appearance — split active / inactive state.
     //   Active   = the "engaged" visual: Toggle=on, Hold=held, Momentary

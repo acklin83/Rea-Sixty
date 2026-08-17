@@ -2662,6 +2662,65 @@ static bool drawKeyboardChordField(ImGui_Context* ctx, const char* prefix,
     return dirty;
 }
 
+// What a key should CALL ITSELF when its owner hasn't named it: the display
+// name of the action bound to its plain short press. Built-ins carry one in the
+// registry; REAPER actions resolve through kbd_getTextFromCmd. Keyboard macros
+// and MIDI have no useful name — leave those alone rather than printing a chord
+// on the surface.
+//
+// This is the automatic half of forum 4.2: the UF1's SOFT key shipped as Pin Set
+// with the label "PIN SET", and rebinding it left that word on the display for
+// an action the key no longer fired. Binding::labelIsUserSet is the other half —
+// it decides whether this ever gets to speak.
+static std::string autoLabelForAction_(const uf8::bindings::ActionSlot& sp)
+{
+    using namespace uf8::bindings;
+    switch (sp.type) {
+        case ActionType::Builtin:
+            return sp.action.empty() ? std::string()
+                                     : builtinDisplayName(sp.action);
+        case ActionType::Reaper: {
+            std::string n = reasixty_resolveActionName(sp.action);
+            // Both sentinels are worse than saying nothing on a hardware label.
+            if (n == "(unresolved)" || n == "(no name)") return {};
+            return n;
+        }
+        default:
+            return {};
+    }
+}
+
+// Identity of the action a label would be derived from. Comparing this before
+// and after the editor's widgets answers "did the ACTION change?" — which is the
+// only edit that may refresh an auto label. A colour or behaviour change must
+// not (Frank's factory wording, e.g. "FLIP", would jump to the registry's longer
+// display name on an unrelated edit).
+static std::string actionIdentity_(const uf8::bindings::ActionSlot& sp)
+{
+    return std::to_string(static_cast<int>(sp.type)) + "\x1f" + sp.action
+         + "\x1f" + std::to_string(sp.param);
+}
+
+// Apply the precedence in one place: a label the user typed is untouchable;
+// otherwise the label follows the action. Call with the pre-edit identity.
+static void refreshAutoLabel_(uf8::bindings::Binding& bd,
+                              const std::string& identityBefore)
+{
+    using namespace uf8::bindings;
+    const auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+    if (bd.labelIsUserSet)                       return;
+    if (actionIdentity_(sp) == identityBefore)   return;
+    bd.label = autoLabelForAction_(sp);
+}
+
+// Behaviour wording, shared by the per-button editor and the UF1 soft-key bank
+// slot editor so the two cannot drift. Order IS the Behavior enum.
+static const char* const kBehaviorLabels_[3] = {
+    "Momentary (fire on press)",
+    "Toggle (flip on each press)",
+    "Hold (state mirrors button)"
+};
+
 // The per-action "Display label" only renders where the control actually shows a
 // text label on the surface — the UF8 top-soft-keys (the LCD above the V-Pots).
 // Every other UF8 button and EVERY UF1 control has no such label slot, so the field
@@ -3666,6 +3725,11 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
 
     Binding bd    = getBinding(layer, id);
     bool    dirty = false;
+    // Snapshot the plain short-press action, so the save at the bottom can tell
+    // an action change (which may refresh an auto label) from a colour or
+    // behaviour change (which must not) — see refreshAutoLabel_.
+    const std::string labelActionBefore =
+        actionIdentity_(bd.shortPress[static_cast<int>(Modifier::Plain)]);
 
     char header[200];
     // Header reads left-to-right with broadest context first
@@ -3866,19 +3930,14 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             if (!isLongCol) {
                 // BeginCombo + Selectable — ImGui_Combo with \0-items
                 // renders invisible in ReaImGui v0.10 (see GR meter source).
-                static const char* kBehaviorLabels[3] = {
-                    "Momentary (fire on press)",
-                    "Toggle (flip on each press)",
-                    "Hold (state mirrors button)"
-                };
                 int b = std::clamp(static_cast<int>(bd.behavior), 0, 2);
                 double bw = 240;
                 ImGui_PushItemWidth(ctx, bw);
                 if (ImGui_BeginCombo(ctx, "Behavior##pri_beh",
-                                     kBehaviorLabels[b], /*flags*/ nullptr)) {
+                                     kBehaviorLabels_[b], /*flags*/ nullptr)) {
                     for (int i = 0; i < 3; ++i) {
                         bool sel = (b == i);
-                        if (ImGui_Selectable(ctx, kBehaviorLabels[i], &sel,
+                        if (ImGui_Selectable(ctx, kBehaviorLabels_[i], &sel,
                                              /*flags*/ nullptr,
                                              /*size_w*/ nullptr,
                                              /*size_h*/ nullptr)) {
@@ -4011,10 +4070,20 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                                     lblBuf, sizeof(lblBuf),
                                     nullptr, nullptr)) {
             bd.label = lblBuf;
+            // Typing claims the name; emptying the field hands it back to the
+            // action, and refills it right away so the field always shows what
+            // the surface will show.
+            bd.labelIsUserSet = !bd.label.empty();
+            if (!bd.labelIsUserSet) {
+                bd.label = autoLabelForAction_(
+                    bd.shortPress[static_cast<int>(Modifier::Plain)]);
+            }
             uf8::bindings::setBinding(layer, id, bd);
             uf8::bindings::save();
         }
         ImGui_PopItemWidth(ctx);
+        ImGui_TextDisabled(ctx,
+            "Empty = follow the assigned action.");
         ImGui_Spacing(ctx);
     }
 
@@ -4274,7 +4343,14 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     popBindingsTheme(ctx, themePushed);
 
     if (cleared) clearBinding(layer, id);
-    else if (dirty) setBinding(layer, id, bd);
+    else if (dirty) {
+        // UF1 only, because the UF1 is the only surface where this editor
+        // offers a Label at all. The UF8's top-soft-key LCD has its own
+        // per-slot label with its own fallback, and pushing a full REAPER
+        // action name into an 8-character cell would be a downgrade there.
+        if (idIsUf1) refreshAutoLabel_(bd, labelActionBefore);
+        setBinding(layer, id, bd);
+    }
 
     ImGui_PopID(ctx);
 }
@@ -4373,6 +4449,10 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                                 labelBuf, sizeof(labelBuf),
                                 nullptr, nullptr)) {
         bd.label = labelBuf;
+        // These slots have no auto-label pass of their own, but the flag has to
+        // be honest anyway: the async action browser reads it, and a name typed
+        // here is a name the user chose.
+        bd.labelIsUserSet = !bd.label.empty();
         dirty = true;
     }
     ImGui_PopItemWidth(ctx);
@@ -4499,6 +4579,7 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
 
     Binding bd = getUf1SoftBankSlot(bank, slotIdx);
     auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+    const std::string labelActionBefore = actionIdentity_(sp);
 
     char hdr[120];
     snprintf(hdr, sizeof(hdr), "Editing: Soft-Key %d  (Bank %d / %d)",
@@ -4519,9 +4600,35 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
                                 "shown on the UF1 screen soft-key",
                                 labelBuf, sizeof(labelBuf), nullptr, nullptr)) {
         bd.label = labelBuf;
+        bd.labelIsUserSet = !bd.label.empty();
+        if (!bd.labelIsUserSet) bd.label = autoLabelForAction_(sp);
         dirty = true;
     }
     ImGui_PopItemWidth(ctx);
+    ImGui_TextDisabled(ctx, "Empty = follow the assigned action.");
+
+    // Behaviour. dispatchUf1SoftBankSlot has always honoured this field — both
+    // press edges reach it (main.cpp, the DAW-mode display-soft-key block) — but
+    // the editor never offered it, so every bank slot was stuck on the
+    // Momentary default. Same combo + same wording as the per-button editor.
+    {
+        int b = std::clamp(static_cast<int>(bd.behavior), 0, 2);
+        ImGui_PushItemWidth(ctx, 240);
+        if (ImGui_BeginCombo(ctx, "Behavior##uf1sbbeh",
+                             kBehaviorLabels_[b], /*flags*/ nullptr)) {
+            for (int i = 0; i < 3; ++i) {
+                bool sel = (b == i);
+                if (ImGui_Selectable(ctx, kBehaviorLabels_[i], &sel,
+                                     /*flags*/ nullptr,
+                                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+                    bd.behavior = static_cast<Behavior>(i);
+                    dirty = true;
+                }
+            }
+            ImGui_EndCombo(ctx);
+        }
+        ImGui_PopItemWidth(ctx);
+    }
 
     ActionFieldsRef ref{
         &sp.type, &sp.action, &sp.param,
@@ -4625,7 +4732,10 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
         }
     }
 
-    if (dirty) setUf1SoftBankSlot(bank, slotIdx, bd);
+    if (dirty) {
+        refreshAutoLabel_(bd, labelActionBefore);
+        setUf1SoftBankSlot(bank, slotIdx, bd);
+    }
     ImGui_PopID(ctx);
 }
 

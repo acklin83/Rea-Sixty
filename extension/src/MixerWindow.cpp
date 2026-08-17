@@ -226,6 +226,8 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Engage a fixed soft-key bank at startup",
                                                kSecBehaviour, "Soft-keys" },
     { "Use current hardware bank",             kSecBehaviour, "Soft-keys" },
+    { "UF1",                                   kSecBehaviour, "UF1" },
+    { "Start the UF1 in a fixed view",         kSecBehaviour, "UF1" },
     { "Alt/Option + fader drag \xE2\x86\x92 snap back to original on release",
                                                kSecBehaviour, "Keyboard" },
     { "Keyboard Shift acts as Shift modifier", kSecBehaviour, "Keyboard" },

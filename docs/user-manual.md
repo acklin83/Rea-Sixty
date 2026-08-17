@@ -543,6 +543,10 @@ Identical to Plugin view except the four display soft-keys fire the current
 case the key behaves like a UF8 FX key — plain press, **+Shift**, **+Cmd**,
 **+Ctrl** and long-press each do something different.
 
+Each bank slot carries its own **Behavior** (*Momentary*, *Toggle* or *Hold*)
+alongside its label, action and LED colours, so a bank key can latch rather than
+fire once.
+
 Soft-key labels are capped at **13 characters** and V-Pot labels at **11**; both
 are abbreviated rather than truncated, so every word stays readable.
 
@@ -874,6 +878,12 @@ Surface-side handling of the REAPER Master bus. See **Master track** (own chapte
 | Parameter change switches soft-key bank | On by default. A focused-parameter change switches the SSL soft-key bank to whichever bank holds that parameter. Off → the bank stays put when you touch a parameter. The UF8 parameter display follows the parameter either way. |
 | Engage a fixed soft-key bank at startup | Off by default. Ticking it reveals three combos — **Layer** (1-3), **Quick** (Q1-Q3), **Sub-bank** (V-POT / Soft 1-5) — and that user-Quick is engaged once on the first timer tick of every fresh REAPER session, instead of the plug-in-driven default. **Use current hardware bank** fills the three combos from whatever is engaged on the UF8 right now. Layer 1's Q1 / Q2 are greyed out: they are the hardcoded SSL CS / BC focus and carry no user-Quick slots. Ignored while UF8 Plug-in Mode is on — that mode owns the soft-keys. |
 
+### UF1
+
+| Control | Effect |
+|---|---|
+| Start the UF1 in a fixed view | Off by default, and the UF1 comes up in **Plug-in** view. Ticking it pins whichever view the UF1 is showing at that moment; the combo below changes it to Plug-in, DAW, Meter or Sends. The pinned view is applied once, on the first timer tick that sees the UF1, so plugging the device in mid-session engages it too. |
+
 ### Keyboard
 
 | Toggle | Effect |
@@ -1026,6 +1036,7 @@ For a regular button, the editor exposes:
 - **LED appearance** — colour + brightness override that replaces the action's default state-of mapping.
 - For **MIDI Command** bindings: channel / note number / velocity / CC value as appropriate.
 - For **REAPER Action** bindings: a search dialog that browses REAPER's Action List by name or command ID (also exposes ReaScript loading).
+- For **UF1** controls: a **Label**, which is what the UF1 prints next to the key. Leave it empty and the label follows whatever action is bound; type your own and it stays, whatever you rebind the key to afterwards. Clearing the field hands the name back to the action. This is why the UF1's single SOFT key stops reading `PIN SET` once you give it a different job.
 
 ### Right-click context menu
 

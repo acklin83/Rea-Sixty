@@ -1183,6 +1183,9 @@ void serializeBindingBody_(const Binding& bd, std::ostringstream& os)
 {
     os << "\"behavior\": "; appendEscaped(os, behaviorName(bd.behavior));
     os << ", \"label\": ";  appendEscaped(os, bd.label);
+    // Only emitted when true — an absent key reads as false, which is what a
+    // factory-seeded label is.
+    if (bd.labelIsUserSet) os << ", \"label_user\": true";
     os << ", \"color\": ["
        << int(bd.color[0]) << ", "
        << int(bd.color[1]) << ", "
@@ -1652,6 +1655,10 @@ void parseBindingBody_(wdl_json_element* be, Binding& bd)
         if (auto* s = v->get_string_value(true))
             bd.ledShowWhenEmpty = (std::strcmp(s, "true") == 0
                                 || std::strcmp(s, "1") == 0);
+    if (auto* v = be->get_item_by_name("label_user"))
+        if (auto* s = v->get_string_value(true))
+            bd.labelIsUserSet = (std::strcmp(s, "true") == 0
+                              || std::strcmp(s, "1") == 0);
     if (auto* v = be->get_item_by_name("short"))
         parseMatrixRow_(v, bd.shortPress);
     if (auto* v = be->get_item_by_name("long"); v && v->is_object()) {
@@ -1895,6 +1902,10 @@ bool parseLayer_(wdl_json_element* lobj, Layer& out)
             if (auto* s = v->get_string_value(true))
                 bd.ledShowWhenEmpty = (std::strcmp(s, "true") == 0
                                     || std::strcmp(s, "1") == 0);
+        if (auto* v = be->get_item_by_name("label_user"))
+            if (auto* s = v->get_string_value(true))
+                bd.labelIsUserSet = (std::strcmp(s, "true") == 0
+                                  || std::strcmp(s, "1") == 0);
 
         // New-schema matrix. Both `short` and `long` are optional —
         // missing slots stay at default (Noop).
@@ -2222,7 +2233,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // paging INSIDE a dynamic soft-key bank has its own gesture instead of taking
 // over "5-8" (which is the channel group again). upgradeBackfillUf1ArrowLongPress_
 // fills only an UNTOUCHED long-press slot.
-constexpr int kCurrentBindingsVersion = 24;
+constexpr int kCurrentBindingsVersion = 25;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2723,6 +2734,48 @@ void upgradeBackfillUf1ArrowLongPress_(Config& c)
     seedLong(ButtonId::Uf1ArrowRight, +1);
 }
 
+// v24→v25 (2026-08-18): `labelIsUserSet` is new, so for every config written
+// before it the label's ORIGIN has to be inferred once — and it can only be
+// inferred by comparing against the factory seed. Anything that differs was
+// typed by a human and must never be auto-refreshed from the bound action
+// again. Anything identical to the seed is ours, and stays refreshable.
+//
+// Getting this wrong in the safe-looking direction (mark nothing) would have
+// silently renamed keys people had named themselves on their first rebind, so
+// the comparison is worth the extra Config. That Config is HEAP-allocated —
+// ~940 KB on the stack is an instant Windows load crash
+// ([[windows-stack-overflow-config]]), which this project has now paid for
+// twice.
+void upgradeMarkUserLabels_(Config& c)
+{
+    auto facPtr = std::make_unique<Config>();
+    Config& fac = *facPtr;
+    seedFactoryDefaults_(fac);
+
+    auto mark = [](Binding& bd, const Binding* factory) {
+        if (bd.label.empty()) return;
+        if (factory && factory->label == bd.label) return;   // ours, not theirs
+        bd.labelIsUserSet = true;
+    };
+
+    for (int li = 0; li < 3; ++li) {
+        const auto& facL = fac.layers[li].bindings;
+        for (auto& kv : c.layers[li].bindings) {
+            const auto it = facL.find(kv.first);
+            mark(kv.second, it == facL.end() ? nullptr : &it->second);
+        }
+    }
+    for (int b = 0; b < kUf1SoftBankCount; ++b)
+        for (int s = 0; s < kUf1SoftBankSlots; ++s)
+            mark(c.uf1SoftBanks[b][s], &fac.uf1SoftBanks[b][s]);
+    for (int li = 0; li < 3; ++li)
+        for (int q = 0; q < kQuicksPerLayer; ++q)
+            for (int sb = 0; sb < kSubBanksPerQuick; ++sb)
+                for (int sl = 0; sl < kSlotsPerSubBank; ++sl)
+                    mark(c.userQuicks[li].quicks[q].subBanks[sb].slots[sl],
+                         &fac.userQuicks[li].quicks[q].subBanks[sb].slots[sl]);
+}
+
 void upgradeBackfillSelDouble_(Config& c)
 {
     Layer& L1 = c.layers[0];
@@ -3021,6 +3074,9 @@ void load()
             }
             if (tmp.version < 24) {
                 upgradeBackfillUf1ArrowLongPress_(tmp);
+            }
+            if (tmp.version < 25) {
+                upgradeMarkUserLabels_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins

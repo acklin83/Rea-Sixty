@@ -405,6 +405,12 @@ void     reasixty_setDynBankCtrl(int kind, int ctrl);
 // instead of the plug-in-driven default. get returns true when a pin is set.
 bool     reasixty_startupBank(int* layer, int* quick, int* sub);
 void     reasixty_setStartupBank(bool on, int layer, int quick, int sub);
+// Pinned UF1 startup view (Plugin / DAW / Meter / Sends — the kUf1View* order).
+// Applied once the UF1 is up, same one-shot shape as the startup bank. get
+// returns true when a view is pinned; unset = the UF1 boots on Plugin as before.
+bool     reasixty_uf1StartupView(int* view);
+void     reasixty_setUf1StartupView(bool on, int view);
+int      reasixty_uf1ViewMode();   // live view, so Settings can pin "this one"
 // Page a bankable dynamic bank from a UC1 encoder (main thread). Returns true
 // when the engaged sub-bank is bankable AND its configured control matches —
 // the caller then skips the encoder's normal action. control: see BankControl.
@@ -32950,6 +32956,21 @@ static void applyStartupBank_()
     g_softKeyDirty.store(true);
 }
 
+// Engage the user's pinned UF1 startup view (Settings → Behaviour → UF1), the
+// same one-shot shape as applyStartupBank_ above. The four views were only ever
+// reachable live (MODE-hold soft-keys, uf1_view_* builtins, REASIXTY_UF1_MODE_*
+// actions), so the UF1 always came up on Plugin. No-op when unpinned.
+// On a normal boot this runs in the tick BEFORE the mode-banner block seeds its
+// baseline, so no banner fires for it. Plugging the UF1 in mid-session DOES
+// flash one — which is the honest reading: the device just arrived and the
+// banner names the mode it arrived in.
+static void applyUf1StartupView_()
+{
+    int view = -1;
+    if (!reasixty_uf1StartupView(&view)) return;
+    uf1SetViewMode_(view);
+}
+
 // Razor nav-cross LEDs: light the ONE arrow/centre matching the active target, dark the
 // others — only while Jog Mode == Razor (Frank 2026-08-06). Addresses 0x10-0x14 derived
 // from led = code − 0x18 (see [[uf1-led-reference-uf8-protocol]]); confirm on HW. Deduped
@@ -33077,6 +33098,17 @@ void onTimerBody_()
         if (!s_startupBankDone && g_dev) {
             s_startupBankDone = true;
             applyStartupBank_();
+        }
+    }
+
+    // Same one-shot for the UF1's pinned startup view — its own flag, because
+    // the two devices arrive independently (a UF1-only rig never sets the one
+    // above, and gating on g_dev would strand the view forever).
+    {
+        static bool s_startupViewDone = false;
+        if (!s_startupViewDone && g_uf1_dev) {
+            s_startupViewDone = true;
+            applyUf1StartupView_();
         }
     }
 
@@ -37807,6 +37839,28 @@ void reasixty_setStartupBank(bool on, int layer, int quick, int sub)
     SetExtState("rea_sixty", "startup_bank", b, true);
 }
 
+// Pinned UF1 startup view (Settings → Behaviour → UF1). Stored as the kUf1View*
+// index; empty/absent = unpinned, and the UF1 comes up on Plugin exactly as it
+// did before. Applied once by applyUf1StartupView_ on the first tick that sees
+// the device.
+bool reasixty_uf1StartupView(int* view)
+{
+    const char* v = GetExtState("rea_sixty", "uf1_startup_view");
+    if (!v || !*v) return false;
+    const int n = std::atoi(v);
+    if (n < 0 || n >= kUf1ViewCount) return false;
+    if (view) *view = n;
+    return true;
+}
+void reasixty_setUf1StartupView(bool on, int view)
+{
+    if (!on) { SetExtState("rea_sixty", "uf1_startup_view", "", true); return; }
+    if (view < 0 || view >= kUf1ViewCount) return;
+    char b[16]; std::snprintf(b, sizeof(b), "%d", view);
+    SetExtState("rea_sixty", "uf1_startup_view", b, true);
+}
+int reasixty_uf1ViewMode() { return uf1ViewMode_(); }
+
 // Inserts overlay design (Settings → Inserts) — colours (0xRRGGBB) + fill /
 // border opacity for the MCP highlight AND the dock panel. Stored as ExtState
 // (persistent), read live by the companion Lua; no in-memory mirror needed.
@@ -40742,6 +40796,24 @@ void reasixty_actionPickerPoll()
     // step to BE a REAPER action — set the type so the inline picker
     // re-renders into the REAPER section without a separate radio click.
     target.type   = ActionType::Reaper;
+    // Browse is the SECOND way to rebind a key, and it bypasses the editor's
+    // own auto-label pass entirely — which is how the UF1 SOFT key kept
+    // announcing "PIN SET" for an action it no longer fired (forum 4.2). Same
+    // precedence as there: a name the user typed is never touched. Only the
+    // plain short press step 0 owns the label, so the other slots stay out of it.
+    // Scoped to the UF1 for the same reason the editor's pass is: the UF8's
+    // top-soft-key slots have their own label with its own LCD fallback.
+    const bool labelFollowsAction =
+        (g_pickerMode == PickerMode::Uf1Bank)
+     || (g_pickerMode == PickerMode::Layer
+         && g_pickerId >= ButtonId::Uf1VpotAbovePush
+         && g_pickerId <= ButtonId::Uf1Jog);
+    if (labelFollowsAction && !bd.labelIsUserSet
+        && !g_pickerDouble && !g_pickerLongPress
+        && modIdx == static_cast<int>(Modifier::Plain) && stepIdx == 0) {
+        const std::string n = reasixty_resolveActionName(actionStr);
+        bd.label = (n == "(unresolved)" || n == "(no name)") ? std::string() : n;
+    }
     if (g_pickerMode == PickerMode::UserQuick) {
         setUserQuickSlot(g_pickerUQLayer, g_pickerUQQuick,
                          g_pickerUQSubBank, g_pickerUQSlot, bd);
