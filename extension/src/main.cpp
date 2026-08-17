@@ -14843,6 +14843,21 @@ constexpr double kUf1AboveFaderPanPerDetent = 1.0 / 64.0;
 // per raw encoder count (~4 counts/detent → ~1 dB/detent). Conservative; HW-tunable.
 constexpr double kUf1FlipVolDbPerCount = 0.25;
 
+// Turning a V-Pot down past the floor means SILENCE, not "-60 dB and stuck".
+// The motor fader has always been able to do it (uf1PosToVol_ returns 0.0 at
+// position 0 = -inf), and so can every fader in REAPER — but the V-Pot volume
+// paths clamped the dB and then raised 10^(dB/20), so a channel could be turned
+// down but never off from the encoder (Frank 2026-08-17: "über v-pot am uf1 geht
+// fader nur bis auf -60, mit richtigem fader auf -inf").
+// -60 stays REACHABLE as the last audible value; one detent below it is -inf.
+// Coming back up works because the callers read a silent track back as -60.
+constexpr double kUf1VpotFloorDb = -60.0;
+inline double uf1VpotVolLinear_(double nDb)
+{
+    return (nDb < kUf1VpotFloorDb) ? 0.0 : std::pow(10.0, nDb / 20.0);
+}
+
+
 // Apply an above-fader V-Pot detent delta to the focused track. Main-thread only
 // (drained from the input queue). Mode-dispatched so it's trivially extensible.
 void applyUf1AboveFaderVpot_(int step)
@@ -14910,9 +14925,8 @@ void applyUf1AboveFaderVpot_(int step)
         const double curLin = GetMediaTrackInfo_Value(tr, "D_VOL");
         const double curDb  = (curLin > 0.0) ? 20.0 * std::log10(curLin) : -60.0;
         double nDb = curDb + step * kUf1FlipVolDbPerCount * kScale;
-        if (nDb >  12.0) nDb =  12.0;
-        if (nDb < -60.0) nDb = -60.0;
-        CSurf_OnVolumeChange(tr, std::pow(10.0, nDb / 20.0), false);
+        if (nDb > 12.0) nDb = 12.0;
+        CSurf_OnVolumeChange(tr, uf1VpotVolLinear_(nDb), false);
         return;
     }
     switch (g_uf1AboveFaderMode.load()) {
@@ -24079,9 +24093,8 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
         // factor (not the full UF8 knob-speed; the UF1 dB/count is its own).
         const double fine = g_uf1CsFine.load() ? g_fineFactorUf1.load() : 1.0;
         double nDb = curDb + step * kUf1FlipVolDbPerCount * fine;
-        if (nDb >  12.0) nDb =  12.0;
-        if (nDb < -60.0) nDb = -60.0;
-        CSurf_OnVolumeChange(t, std::pow(10.0, nDb / 20.0), false);
+        if (nDb > 12.0) nDb = 12.0;
+        CSurf_OnVolumeChange(t, uf1VpotVolLinear_(nDb), false);
         return;
     }
 
@@ -24119,11 +24132,14 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
         // Fine Ctrl (Quick-Key-2) applies in SENDS mode too (Frank 2026-08-04).
         const double fine = g_uf1CsFine.load() ? g_fineFactorUf1.load() : 1.0;
         double nDb = sSAcc[vi] + step * kUf1FlipVolDbPerCount * fine;
-        if (nDb >  12.0) nDb =  12.0;
-        if (nDb < -60.0) nDb = -60.0;
-        sSAcc[vi] = nDb;
+        if (nDb > 12.0) nDb = 12.0;
+        // A send turns fully off too, same rule as the track volume above. The
+        // accumulator is CLAMPED at the floor even when the write is silence, so
+        // turning back up starts at −60 instead of climbing out of −∞.
+        if (nDb < kUf1VpotFloorDb - 1.0) nDb = kUf1VpotFloorDb - 1.0;
+        sSAcc[vi] = std::max(nDb, kUf1VpotFloorDb);
         sSMs[vi]  = now;
-        writeRouteVolAutomation_(r, strip, std::pow(10.0, nDb / 20.0));
+        writeRouteVolAutomation_(r, strip, uf1VpotVolLinear_(nDb));
         g_sendVolEditUntilMs[strip] = now + 300;   // idle-timed Touch finalise
         return;
     }
