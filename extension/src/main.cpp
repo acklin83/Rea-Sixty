@@ -24692,6 +24692,18 @@ void applyUf1ChannelVpotPush_(int idx)
         r.track = focusTr; r.sendCategory = cs.category;
         r.sendIndex = cs.apiIndex; r.valid = true;
         const int strip = 8 + idx;
+        // SHIFT = centre this send's PAN, the twin of Shift+turn panning it
+        // (Frank 2026-08-17). Same UI-path write as the turn, so the reset lands in
+        // the envelope like every other pan move, and the accumulator is dropped so
+        // the next gesture re-seeds from centre instead of from where it left off.
+        if (g_shiftHeld.load()) {
+            writeRoutePanAutomation_(r, strip, 0.0);
+            finishRoutePanEdit_(strip);
+            g_sendPanEditUntilMs[strip]  = 0;
+            g_sendPanVpotAccum[strip]    = 0.0;
+            g_sendPanVpotKey[strip].clear();
+            return;
+        }
         writeRouteVolAutomation_(r, strip, 1.0);
         finishRouteVolEdit_(strip);
         g_sendVolEditUntilMs[strip] = 0;
