@@ -652,16 +652,18 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
     // used to be: a static outlives a stop/start of the impersonator and would hand
     // the next run a dead socket's half-frame, and nothing ever erased its entries.
     std::map<socket_t, std::vector<uint8_t>> acc_;
-    // Runaway backstop ONLY — deliberately far above any real session. Frank's mix
-    // on 2026-08-17 had 69 tracks each carrying a 4K E, so 69 SIMULTANEOUS
-    // connections is not pathological, it is Tuesday. This started life at 64 on
-    // the mistaken reading that one plug-in had reconnected 70 times; the log says
-    // otherwise (69 DISTINCT tracks, one stream each, every one healthy — exactly
-    // what real Core sees: 12 plug-ins, 12 connections). A cap that a real project
-    // can reach would silently cost the user their last plug-ins, which is worse
-    // than anything it protects against. poll() has no ceiling of its own, so this
-    // number answers to nothing but "obviously insane".
-    constexpr size_t kMaxClients = 256;
+    // Runaway backstop ONLY — deliberately far above any real session, and NOT a
+    // budget. Frank's mix on 2026-08-17 had 69 tracks each carrying a 4K E, so 69
+    // SIMULTANEOUS connections is not pathological, it is Tuesday. This started
+    // life at 64 on the mistaken reading that one plug-in had reconnected 70 times;
+    // the log says otherwise (69 DISTINCT tracks, one stream each, every one
+    // healthy — exactly what real Core sees: 12 plug-ins, 12 connections).
+    // ⛔ A cap a real project can REACH is not protection, it is a new bug that
+    // silently costs the user their last plug-ins. So: 2048 (Frank's call,
+    // 2026-08-17). Nothing here scales with it — poll() has no ceiling, and if the
+    // host's own descriptor limit runs out first, accept() simply fails and we skip
+    // that connection instead of dying.
+    constexpr size_t kMaxClients = 2048;
     bool capLogged = false;
 
     // Full teardown for ONE client, by index. This used to live inline in the
