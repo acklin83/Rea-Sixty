@@ -7619,11 +7619,14 @@ std::vector<InstanceHit> buildInstanceHits_(MediaTrack* tr,
 // index, pin the BC anchor on BC hits, fire the carousel + UC1 refresh +
 // GUI-follow. Shared by applyInstanceCycle_ (within-track) and
 // applyInstanceScrollAll_ (cross-track). `tr` is explicit so the cross-
-// track caller can land on a freshly-selected neighbour track. Assumes
-// g_uc1_surface is valid (both callers gate on it).
+// track caller can land on a freshly-selected neighbour track.
+// ⛔ Does NOT require a UC1 (it used to assume one, because both callers gated on
+// it — that gate is gone, see activeFocusTrack_). Everything here except the BC
+// anchor and the LCD refresh is plain project state, so on a UF1-only rig the
+// landing still happens and only the UC1's own decorations are skipped.
 void landInstanceHit_(MediaTrack* tr, const std::vector<InstanceHit>& hits, int k)
 {
-    if (!tr || !g_uc1_surface) return;
+    if (!tr) return;
     if (k < 0 || k >= static_cast<int>(hits.size())) return;
     const auto fp = uf8::getFocusedParam();
     const InstanceHit& target = hits[k];
@@ -7657,7 +7660,7 @@ void landInstanceHit_(MediaTrack* tr, const std::vector<InstanceHit>& hits, int 
         uc1::setBcInstanceIndex(tr, target.instIdx);
         // Pin the BC anchor to the focused track so Encoder 2 + the
         // BC carousel agree with the cycle's selection.
-        g_uc1_surface->setBcAnchorTrack(tr);
+        if (g_uc1_surface) g_uc1_surface->setBcAnchorTrack(tr);
         triggerPluginModeFollowSync_();
     } else {
         uf8::setFocus({uf8::Domain::None, 0});
@@ -7672,18 +7675,42 @@ void landInstanceHit_(MediaTrack* tr, const std::vector<InstanceHit>& hits, int 
     for (const auto& h : hits) ring.push_back(h.fxIdx);
     showCycleCarousel_(tr, k, ring);
 
-    g_uc1_surface->invalidateCache();
-    g_uc1_surface->refresh();
+    if (g_uc1_surface) {
+        g_uc1_surface->invalidateCache();
+        g_uc1_surface->refresh();
+    }
     g_pageDirty.store(true);
     g_bankDirty.store(true);
 
     followFocusedPluginGuiAcrossCycle_(tr, target.fxIdx);
 }
 
+// Which track the active-FX layer works on, WITHOUT requiring a UC1.
+//
+// ⛔ The UC1 used to be the only answer, and every caller opened with a bare
+// `if (!g_uc1_surface) return;`. On a rig with no UC1 that killed SIX features
+// outright — FX Cycle, Instance Cycle, both Scroll-Alls, activeCsBcTargets_ and,
+// worst of all, resolveActiveFx_, which feeds the UF1's CS-TYPE cell and the
+// first stage of uf1ResolveCsFx_. A UF1-only user pressed FX Cycle and nothing
+// happened, ever, with no clue why (forum report 2026-08-17, item 2.5; Frank's
+// own rig has a UC1, which is exactly why it "works here").
+//
+// Order: the UC1's focus wins when there IS a UC1, so nothing about a UC1 rig
+// changes by a single byte. Otherwise the UF1's own focus (uf1FocusedTrack_ =
+// last-touched, Frank's call 2026-08-17) — that way the surface acts on the same
+// channel it is displaying. Selection is the last resort, as before.
+MediaTrack* activeFocusTrack_()
+{
+    if (g_uc1_surface)
+        if (auto* t = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()))
+            return t;
+    if (MediaTrack* t = uf1FocusedTrack_()) return t;
+    return GetSelectedTrack(nullptr, 0);
+}
+
 void applyInstanceCycle_(int step)
 {
     if (step == 0) return;
-    if (!g_uc1_surface) return;
 
     // Walk learned plug-ins ON THE SELECTED TRACK ONLY. CS and BC
     // hits both come from the same track — pulling BC from a separate
@@ -7693,8 +7720,7 @@ void applyInstanceCycle_(int step)
     // durchgehen". When the cycle lands on a BC plug-in we still move
     // the BC anchor onto the focused track so Encoder 2 + the carousel
     // line up with what just got highlighted.
-    MediaTrack* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
-    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    MediaTrack* tr = activeFocusTrack_();
     if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
 
     int csCount = 0, bcCount = 0, uf8OnlyCount = 0;
@@ -7890,9 +7916,7 @@ void landFxCursor_(MediaTrack* tr, const std::vector<int>& ring, int k)
 void applyFxCycle_(int step)
 {
     if (step == 0) return;
-    if (!g_uc1_surface) return;
-    MediaTrack* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
-    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    MediaTrack* tr = activeFocusTrack_();
     if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
 
     std::vector<int> ring = buildFxRing_(tr);
@@ -8003,9 +8027,7 @@ void scrollToAdjacentTrack_(MediaTrack* fromTr, int dir, bool instancesOnly)
 void applyFxScrollAll_(int step)
 {
     if (step == 0) return;
-    if (!g_uc1_surface) return;
-    MediaTrack* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
-    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    MediaTrack* tr = activeFocusTrack_();
     if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
 
     std::vector<int> ring = buildFxRing_(tr);
@@ -8036,9 +8058,7 @@ void applyFxScrollAll_(int step)
 void applyInstanceScrollAll_(int step)
 {
     if (step == 0) return;
-    if (!g_uc1_surface) return;
-    MediaTrack* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
-    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    MediaTrack* tr = activeFocusTrack_();
     if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
 
     std::vector<InstanceHit> hits = buildInstanceHits_(tr);
@@ -8128,9 +8148,7 @@ struct ActiveFxTarget { MediaTrack* tr; int fxIdx; };
 
 ActiveFxTarget resolveActiveFx_()
 {
-    if (!g_uc1_surface) return {nullptr, -1};
-    MediaTrack* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
-    if (!tr) tr = GetSelectedTrack(nullptr, 0);
+    MediaTrack* tr = activeFocusTrack_();
     if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return {nullptr, -1};
 
     // Cursor branch — user has explicitly cycled (V-Pot FX Cycle,
@@ -13163,9 +13181,12 @@ void publishOverlayFav_()
 void activeCsBcTargets_(MediaTrack*& csTr, int& csFx, MediaTrack*& bcTr, int& bcFx)
 {
     csTr = bcTr = nullptr; csFx = bcFx = -1;
-    if (!g_uc1_surface) return;
-    csTr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
-    bcTr = static_cast<MediaTrack*>(g_uc1_surface->bcAnchorTrackPublic());
+    // CS side works without a UC1; the BC ANCHOR is a UC1 concept (Encoder 2
+    // parks it), so without one there simply is no anchor and bcTr stays null.
+    csTr = activeFocusTrack_();
+    bcTr = g_uc1_surface
+             ? static_cast<MediaTrack*>(g_uc1_surface->bcAnchorTrackPublic())
+             : csTr;
     if (csTr && ValidatePtr2(nullptr, csTr, "MediaTrack*")
         && uc1::csInstanceCount(csTr) > 0)
         csFx = uc1::fxIndexForInstance(csTr, false, uc1::csInstanceIndex(csTr));
