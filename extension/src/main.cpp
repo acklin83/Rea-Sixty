@@ -24119,6 +24119,30 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
         r.sendIndex = cs.apiIndex; r.valid = true;
         const int strip = 8 + vi;               // reserved UF1 SENDS V-Pot gesture slot
 
+        // SHIFT = this send's PAN instead of its level (Frank 2026-08-17). Same
+        // shape as the Extender's above-fader send pan: software accumulator seeded
+        // ONCE from the EFFECTIVE pan, virtual-notch centre detent, then the UI-path
+        // write that records automation. Sharing the gesture slot with the volume is
+        // deliberate — a send's combined index is the same for both, and the two
+        // gestures are mutually exclusive by the modifier.
+        if (g_shiftHeld.load()) {
+            const int64_t     pnow = nowMs_();
+            const std::string pkey = routeCacheKey_(r);
+            if (pnow - g_sendPanVpotMs[strip] > 300 || g_sendPanVpotKey[strip] != pkey) {
+                g_sendPanVpotAccum[strip] = readRoutePanEffective_(r);
+                g_sendPanVpotKey[strip]   = pkey;
+            }
+            const double fineP = g_uf1CsFine.load() ? g_fineFactorUf1.load() : 1.0;
+            const double nextP = uf8::applyVirtualNotch(
+                g_sendPanVpotAccum[strip],
+                step * kUf1AboveFaderPanPerDetent * fineP, /*center*/ 0.0,
+                /*zone*/ g_notchZone.load() * 2.0, -1.0, 1.0);
+            g_sendPanVpotAccum[strip] = nextP;
+            g_sendPanVpotMs[strip]    = pnow;
+            writeRoutePanAutomation_(r, strip, nextP);
+            return;
+        }
+
         static double      sSAcc[4] = {0, 0, 0, 0};   // per-V-Pot dB accumulator
         static std::string sSKey[4];
         static int64_t     sSMs[4]  = {0, 0, 0, 0};
@@ -25245,8 +25269,17 @@ void uf1PaintChannel_()
     const uint32_t identGen = g_fxIdentityGen.load();
     const bool identChanged = (identGen != sIdentGen);
     sIdentGen = identGen;
+    // SHIFT is a repaint trigger, not just an input modifier: in Sends view the
+    // V-Pots swap from level to PAN while it is held, so the readout has to follow
+    // the key down and up. Without this the pots move the pan while the screen keeps
+    // showing dB until some unrelated change happens to repaint (same class as the
+    // mode-banner rule — a new mode toggle belongs in the onTimer diff).
+    static bool sShift = false;
+    const bool shiftNow     = g_shiftHeld.load();
+    const bool shiftChanged = (shiftNow != sShift);
+    sShift = shiftNow;
     const bool changed = (tr != sTr) || viewChanged || screenChanged || menuEdge
-                       || modeFieldChanged || identChanged;
+                       || modeFieldChanged || identChanged || shiftChanged;
     // Bus-Comp GR meter on the four display soft-key LEDs (Settings → Devices →
     // Metering). Read ONCE per tick, here, because two places need it: the p188
     // soft-key block must know whether to leave those LEDs alone, and the meter
@@ -25915,10 +25948,19 @@ void uf1PaintChannel_()
                 StripRoute r;
                 r.track = tr; r.sendCategory = cs.category;
                 r.sendIndex = cs.apiIndex; r.valid = true;
-                const double v = readRouteVolumeLinear_(r, tr);   // EFFECTIVE level
-                sendVpotParam(uint8_t(i), routeName_(r), formatDbReadout(v) + "dB");
-                setBar(i, static_cast<double>(uf1VolToPos_(v))
-                            / static_cast<double>(kUf1FaderMax), /*bipolar*/false);
+                // While SHIFT is held the V-Pot rides this send's PAN, so the
+                // readout has to follow it. A control that shows one value and moves
+                // another is the same trap as the dead Pan/Vol pots in plugin mode.
+                if (g_shiftHeld.load()) {
+                    const double pn = readRoutePanEffective_(r);   // EFFECTIVE pan
+                    sendVpotParam(uint8_t(i), routeName_(r), formatPanReadout(pn));
+                    setBar(i, (pn + 1.0) * 0.5, /*bipolar*/true);
+                } else {
+                    const double v = readRouteVolumeLinear_(r, tr);   // EFFECTIVE level
+                    sendVpotParam(uint8_t(i), routeName_(r), formatDbReadout(v) + "dB");
+                    setBar(i, static_cast<double>(uf1VolToPos_(v))
+                                / static_cast<double>(kUf1FaderMax), /*bipolar*/false);
+                }
             }
         } else if (g_uf1ChannelSubMode.load() == 1) {
             // DAW mode (Frank 2026-07-30): the 4 V-Pots are volume faders for the

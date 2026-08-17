@@ -556,6 +556,7 @@ list shows them.
 | Control | Function |
 |---|---|
 | V1-V4 | The level of each send in the group. An empty slot is blank and inert. |
+| **Shift +** V1-V4 | **Pan** that send instead. The readout and the bar follow the key, so what you see is what the knob is moving. Centre has the same virtual notch as every other pan. |
 | SK1-SK4 | The **send mode** of the send above it. Each press steps through REAPER's three settings in the order its send window lists them: `POST` (post-fader, post-pan) → `PRE FADER` (post-FX) → `PRE FX`. |
 | **Shift +** SK1-SK4 | **Mute** that send. The key then reads `MUTED` until you unmute it, because a silenced send you cannot see is worse than one you have to look for. |
 

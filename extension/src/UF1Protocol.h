@@ -166,7 +166,11 @@ constexpr uint8_t kEqGraph = 0x03;   // EQ-graph tint (via "EQ Colour")
 constexpr uint8_t kPrimSoloLit = 0xff;  // g=15,r=15 → yellow, like REAPER's solo
 constexpr uint8_t kPrimCutLit  = 0x0f;  // g=0,r=15  → pure bright red
 constexpr uint8_t kFf39Lit     = 0x00;  // FF39 carries 0x00 on the lit transition
-constexpr uint8_t kDimSolo     = 0x20;  // g=2,r=0   → dim green (resting)
+constexpr uint8_t kDimSolo     = 0x22;  // g=2,r=2   → dim YELLOW (resting). Follows
+                                        // kPrimSoloLit: the resting state is the
+                                        // same hue at low level, not a different
+                                        // colour. Was 0x20, dim green, left behind
+                                        // when the lit state went yellow.
 constexpr uint8_t kDimCut      = 0x02;  // g=0,r=2   → dim red (resting, never fully off)
 }
 
