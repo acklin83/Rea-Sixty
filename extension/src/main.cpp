@@ -33304,13 +33304,28 @@ void onTimerBody_()
         const bool u8s  = g_pluginFaderMode.load();
         const bool u8p  = g_uf8PluginMode.load();
         const bool tch  = g_hudTouchLearn.load();
-        if (!mbInit) {
-            mbInit = true;
+        // ⇨ A PROJECT LOAD IS A NEW BASELINE, NOT A SERIES OF USER ACTIONS.
+        // Several of these live in the project file — the Sticky Pot's active flag
+        // is written by our project_config_extension and restored on load — so a
+        // load legitimately CHANGES them, and the banner announced the restore as
+        // though the user had just flipped it: "Sticky • Off" on every single
+        // project open (Frank 2026-08-17). Re-seed instead of diffing, exactly as
+        // on the very first tick; same project-pointer test the insert-marker
+        // reconcile already uses.
+        static ReaProject* mbProj = nullptr;
+        ReaProject* const mbCurProj = EnumProjects(-1, nullptr, 0);
+        const bool mbProjChanged = (mbCurProj != mbProj);
+        mbProj = mbCurProj;
+        auto mbSeed = [&] {
             mbLastSel = sm; mbLastEnc = em; mbLastUf1Enc = uf1em;
             mbSticky = sa; mbStickyArm = sarm; mbFocusPin = fp; mbFocusScope = fsc;
             mbFlip = ufl; mbMaster = ufm; mbStrip = ufs; mbExt = ufe; mbExtSide = ufes;
             mbView = ufv; mbJog = jm; mbEnvPh = eph;
             mbUf8Strip = u8s; mbUf8Plugin = u8p; mbTouch = tch;
+        };
+        if (!mbInit || mbProjChanged) {
+            mbInit = true;
+            mbSeed();
         } else {
             // Collect EVERY change this tick into one label so simultaneous flips
             // (e.g. pinning the Focus Set also suspends the Extender) show BOTH, not
