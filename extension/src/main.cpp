@@ -25875,24 +25875,29 @@ void uf1PaintChannel_()
         }
         }
 
-    // 0x011c header one-shot: overwrite the MCU "FADER SEL | 1/10" the cap66 init
-    // left with the Plugin-mode header "REAPER | N/M | OFF". The N/M soft-key-page
-    // indicator is LIVE (Plugin = strip pages, DAW = user soft-key pages) — here
-    // g_uf1CsActivePages is already current (the V-Pot painter published it earlier
-    // this tick). Gated on `changed`, not `layoutChanged`: the ENC / JOG mode cell
-    // must appear the instant MODE or SCRUB is held or the encoder mode steps. It
-    // is a pure text rewrite of a cell the pacer restates every cycle anyway, so it
-    // costs nothing visually — unlike the layout bursts, which is why the mode-field
-    // edge was split off them.
-    if (changed) {
-        // Same builder as the pacer — this one-shot only exists so the mode field
-        // appears on the SAME tick the button goes down, instead of up to 40 ms
-        // later. Computing the header a second way here is what made the cell
-        // flicker in DAW mode (see uf1BuildLiveHeader_).
-        const auto hdr = uf1BuildLiveHeader_();
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow,
-            std::span<const uint8_t>(hdr.data(), hdr.size())));
-    }
+    // ⛔ NO 0x011c ONE-SHOT HERE. The cell has exactly ONE sender: the cycle
+    // snapshot built above, which the pacer thread emits (and RE-emits verbatim
+    // while no fresh snapshot arrives, by design — SSL restates the stale cycle in
+    // silence and the device wants that stream unbroken).
+    //
+    // There used to be a direct send on `changed`, so the mode field would appear
+    // on the same tick the button went down instead of up to a cycle later. It
+    // bought ~40 ms and cost a visible glitch: the main thread sent the FRESH
+    // header at T, and the pacer, running on its own clock, re-emitted the LAST
+    // SNAPSHOT — whose tail still carried the header as it was when that snapshot
+    // was painted — a few milliseconds later. New value, old value, then new again
+    // once the next snapshot landed. That is exactly what the forum report
+    // describes (2026-08-17, item 2.7: "as if JOG mode and ENC mode are displayed
+    // two times before stopping to the current value").
+    //
+    // Note what this is NOT: 1511dc0 stopped the LAYOUT being re-established, and
+    // uf1BuildLiveHeader_ made both senders agree on the CONTENT. Neither could fix
+    // this one, because the two senders never disagreed about what to draw — they
+    // disagreed about WHEN, and the loser was whoever's frame arrived last. Two
+    // writers on one cell is a race even when they compute the same bytes.
+    //
+    // The snapshot is rebuilt every painter tick and the pacer emits at least every
+    // 41 ms, so the field still follows the button within about one frame.
 
     // ---- FAKE-CS layout trigger (2026-06-05) -------------------------------
     // The Plugin-Mode channel-strip LAYOUT + colour bar do not render on a
