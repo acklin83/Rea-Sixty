@@ -199,6 +199,14 @@ constexpr uint16_t kTimecode     = 0x0119;  // 11-char 7-segment time/position f
                                             // Decoded 2026-07-24, analysis/uf1_0119_timecode_decode.py.
 constexpr uint16_t kSoftKeyLabel = 0x0104;
 constexpr uint16_t kFocusedParam = 0x010e;  // single focused param text (name+value)
+// Per-V-Pot BAR STYLE, one byte each (decoded 2026-08-17 from cap72 by pairing
+// each frame with the four 0x010e labels that followed it):
+//   0x08 origin in the MIDDLE (In/Out Trim, band Gain) · 0x02 fill from the left
+//   (Width, Mic, Ratio, Threshold, Mix) · 0x01 pointer instead of a fill (band
+//   Freq, Q, High/Low Pass, Release) · 0x03 pot empty.
+// SSL re-sends it on every page change. ⚠ The ORIGIN is HERE, not in the odd byte
+// of kVpotBars — that one is brightness (hardware-measured).
+constexpr uint16_t kVpotStyle    = 0x010d;
 constexpr uint16_t kVpotBars     = 0x010f;  // 4 V-pot readout bars
 constexpr uint16_t kHeaderRow    = 0x011c;  // Channel view: 8 x 25-byte ASCII header
                                             // (REAPER | N/8 | OFF). Meter view: 6 x 25-byte

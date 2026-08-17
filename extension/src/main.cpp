@@ -25748,12 +25748,33 @@ void uf1PaintChannel_()
         int barModeProbe = -1;
         if (const char* bm = GetExtState("rea_sixty", "uf1_bar_mode"); bm && *bm)
             barModeProbe = std::atoi(bm);
-        auto setBar = [&](int i, double norm, bool bipolar) {
+        // ⇨ 0x010d — the per-V-Pot BAR STYLE, one byte each. DECODED 2026-08-17 from
+        // cap72 by pairing every style frame with the four 0x010e labels that follow:
+        //   0x08 = origin in the MIDDLE   (In Trim, Out Trim, LF/LMF/HMF/HF Gain)
+        //   0x02 = fill from the left     (Width, Mic, Ratio, Threshold, Mix)
+        //   0x01 = pointer, not a fill    (band Freq, Q, High/Low Pass, Release)
+        //   0x03 = pot empty              (every unassigned slot)
+        // SSL re-sends it on EVERY page change. We sent it ONCE, hardcoded to
+        // cap85's {02,02,08,02}, as part of the plugin large-display burst — a
+        // snapshot of a page whose third pot happened to be Out Trim. So V-Pot 3
+        // carried a permanent bright centre line in every mode, whatever was drawn
+        // (Frank 2026-08-17; the forum report files the same thing as "3rd v-pot is
+        // broken, only uses the right space of the rectangle").
+        //
+        // ⚠ The ORIGIN lives here, NOT in the odd byte of 0x010f. That byte is
+        // BRIGHTNESS: 0x80 draws all four bars bright, 0x00 dark (measured on the
+        // hardware — forcing it through 0/1/2/4/8/128 changed nothing but the
+        // brightness). Our `bipolar` flag was wired to it, so gain pots came out
+        // bright and everything else dim, by accident rather than intent. Left as it
+        // is for now: it is a look, and SSL's own captures use a mix.
+        std::array<uint8_t, 4> styles{0x03, 0x03, 0x03, 0x03};
+        auto setBar = [&](int i, double norm, bool bipolar, bool empty = false) {
             const int pos = std::clamp(static_cast<int>(std::lround(norm * 100.0)), 0, 100);
             bars[i * 2]     = static_cast<uint8_t>(pos);
             bars[i * 2 + 1] = (barModeProbe >= 0)
                                 ? static_cast<uint8_t>(barModeProbe)
                                 : (bipolar ? 0x80 : 0x00);
+            styles[i] = empty ? 0x03 : (bipolar ? 0x08 : 0x02);
         };
         if (g_uf1ChannelSubMode.load() == 2) {
             // Sends mode: the 4 V-Pots follow the focused track's 7.75 MIXER-SLOT
@@ -25779,7 +25800,7 @@ void uf1PaintChannel_()
                 const int slot = grp * 4 + i;
                 const CombinedSlot cs =
                     (slot < layoutSize) ? layout[slot] : CombinedSlot{0, -1};
-                if (cs.apiIndex < 0) { sendVpotParam(uint8_t(i), "", ""); setBar(i, 0.0, false); continue; }
+                if (cs.apiIndex < 0) { sendVpotParam(uint8_t(i), "", ""); setBar(i, 0.0, false, /*empty*/true); continue; }
                 StripRoute r;
                 r.track = tr; r.sendCategory = cs.category;
                 r.sendIndex = cs.apiIndex; r.valid = true;
@@ -25797,7 +25818,7 @@ void uf1PaintChannel_()
             const int nTracks = CountTracks(nullptr);
             for (int i = 0; i < 4; ++i) {
                 MediaTrack* t = (base + i < nTracks) ? GetTrack(nullptr, base + i) : nullptr;
-                if (!t) { sendVpotParam(uint8_t(i), "", ""); setBar(i, 0.0, false); continue; }
+                if (!t) { sendVpotParam(uint8_t(i), "", ""); setBar(i, 0.0, false, /*empty*/true); continue; }
                 char nm[64] = {0};
                 GetTrackName(t, nm, sizeof(nm));
                 const double vol = GetMediaTrackInfo_Value(t, "D_VOL");
@@ -25885,7 +25906,7 @@ void uf1PaintChannel_()
                 }
                 // Blank when the slot is empty / the param is absent / (learned)
                 // the fill ran out of mapped params on this page.
-                if (p < 0) { sendVpotParam(uint8_t(i), "", ""); setBar(i, 0.0, false); continue; }
+                if (p < 0) { sendVpotParam(uint8_t(i), "", ""); setBar(i, 0.0, false, /*empty*/true); continue; }
                 char val[64] = {0};
                 TrackFX_GetFormattedParamValue(csTr, csFx, p, val, int(sizeof(val)));
                 sendVpotParam(uint8_t(i), label, val);
@@ -25901,12 +25922,22 @@ void uf1PaintChannel_()
             setBar(0, (panV + 1.0) * 0.5, /*bipolar*/true);   // pan: centre-origin
             setBar(1, static_cast<double>(uf1VolToPos_(volV))
                         / static_cast<double>(kUf1FaderMax), /*bipolar*/false);
-            setBar(2, 0.0, false);
-            setBar(3, 0.0, false);
+            setBar(2, 0.0, false, /*empty*/true);
+            setBar(3, 0.0, false, /*empty*/true);
         }
         if (changed || !sVpotBarsValid || bars != sVpotBars) {
             sVpotBars = bars; sVpotBarsValid = true;
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
+        }
+        // …and the styles alongside them, on the same change gate. Sent BEFORE the
+        // bars would be tidier but the device does not care, and keeping the two
+        // gates independent means a page whose positions happen to repeat still
+        // gets its styles corrected.
+        static std::array<uint8_t, 4> sVpotStyle{};
+        static bool sVpotStyleValid = false;
+        if (changed || !sVpotStyleValid || styles != sVpotStyle) {
+            sVpotStyle = styles; sVpotStyleValid = true;
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, styles));
         }
         }
 
