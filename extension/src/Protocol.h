@@ -79,14 +79,11 @@ std::vector<uint8_t> buildFaderPosition(uint8_t strip, uint8_t lsb, uint8_t msb)
 // touch events, so the motor releases under the user's finger.
 std::vector<uint8_t> buildMotorEnable(uint8_t strip, bool enable);
 
-// Drive one strip's VU meter.
-//   FF 38 04 <strip*3> 00 00 <0xF0 | level> CKSUM     (8 bytes)
-// Best-guess from cap10 frame layout, never verified against known audio
-// levels. ⚠ NO CALL SITE — it was superseded by buildVuMeter (FF 66 21 09/0A,
-// 8 strips x in+out per frame), which is what pushVuMeter actually sends. Left
-// standing only as the record of what the FF 38 meter opcode looked like; if
-// nothing ends up needing it, it goes. See COMPENDIUM.md §6.
-std::vector<uint8_t> buildMeter(uint8_t strip, uint8_t level);
+// Per-strip VU metering is buildVuMeter (FF 66 21 09/0A, 8 strips x in+out per
+// frame), further down. An earlier buildMeter() guessed at a per-strip FF 38 04
+// meter frame from the cap10 layout; it was never verified against known audio
+// levels, never called, and was removed 2026-08-14. Recover from git if the
+// FF 38 meter opcode ever turns out to be real.
 
 // Switch UF8 display mode:
 //   Plugin-Mixer Layer: FF 66 11 0F 10 00 40 00 <20 00 × 6> 96   (shows color bar)
