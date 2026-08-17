@@ -546,12 +546,22 @@ case the key behaves like a UF8 FX key — plain press, **+Shift**, **+Cmd**,
 Soft-key labels are capped at **13 characters** and V-Pot labels at **11**; both
 are abbreviated rather than truncated, so every word stays readable.
 
-## Sends view
+## Sends / Receives view
 
-The channel layout showing the focused track's sends, four at a time. The header
-counts the groups, so `2/3` means you are on the second block of four. Hardware
-outputs sit in the list alongside the track sends, in the order REAPER's own send
-list shows them.
+The channel layout showing the focused track's **sends** — or its **receives** —
+four at a time. The header counts the groups, so `2/3` means you are on the
+second block of four, and the type cell on the channel display reads `SENDS` or
+`RECEIVES` so the two are never confused on a track that feeds and takes from the
+same places.
+
+In the send list, hardware outputs sit alongside the track sends, in the order
+REAPER's own send list shows them. A receive is named after the track it comes
+**from**.
+
+| Control | Function |
+|---|---|
+| `5-8` | Page to the next block of four. |
+| **Shift +** `5-8` | Flip between **Sends** and **Receives**. The window jumps back to the first group, because the two lists are rarely the same length. Also available as its own action, *UF1: Sends / Receives view*, if you would rather put it on another key. |
 
 | Control | Function |
 |---|---|

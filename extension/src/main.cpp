@@ -490,6 +490,9 @@ std::atomic<int>      g_uf1DawGroup{0};
 // track's sends [group*4 .. group*4+3]. The "5-8" button (0x22) banks it +1 (wrap
 // based on the send count); reset to 0 on Sends-mode entry / focus-track change.
 std::atomic<int>      g_uf1SendGroup{0};
+// Routing view side: false = the track's SENDS, true = its RECEIVES. Persisted;
+// see uf1ToggleRecvView_ / uf1RouteSlot_ for why one flag is the whole feature.
+std::atomic<bool>     g_uf1RecvView{false};
 // SENDS-mode number of send groups = ceil(combined send layout size / 4), min 1.
 // Published by the painter (needs the REAPER API to build the layout — main-thread
 // only); read by the input-worker "5-8" handler to wrap the send-window bank (the
@@ -3993,6 +3996,8 @@ void loadBrightness()
         if (n != 2 && n != 4 && n != 5) n = 2;   // Measures / Samples / h:m:s:f only
         g_uf1TcMode.store(n);
     }
+    if (const char* v = GetExtState("rea_sixty", "uf1_recv_view"); v && *v)
+        g_uf1RecvView.store(std::atoi(v) != 0);
     if (const char* v = GetExtState("rea_sixty", "nav_color_bar"); v && *v) {
         int n = std::atoi(v);
         if (n < 0 || n > 2) n = 0;
@@ -5330,6 +5335,84 @@ CombinedSlot combinedSendSlot_(MediaTrack* tr, int slot)
     static std::vector<CombinedSlot> layout;   // reused, main-thread only
     buildCombinedSendLayout_(tr, layout);
     if (slot < 0 || slot >= static_cast<int>(layout.size())) return {0, -1};
+    return layout[slot];
+}
+
+// The RECEIVE view of the same track — category −1. Simpler than the send side by
+// nature: a receive has no hardware-output twin to interleave, so the visual order
+// is just the receives, honouring I_SLOT_HINT the same way the mixer does and
+// keeping empty indices as gaps so a strip never silently addresses its neighbour.
+void buildCombinedRecvLayout_(MediaTrack* tr, std::vector<CombinedSlot>& out)
+{
+    out.clear();
+    if (!tr) return;
+    struct E { int apiIndex; int hint; bool empty; };
+    std::vector<E> hinted, real, empties;
+    const int ext = sendIndexExtent_(tr, -1);
+    for (int i = 0; i < ext; ++i) {
+        auto* src = static_cast<MediaTrack*>(
+            GetSetTrackSendInfo(tr, -1, i, "P_SRCTRACK", nullptr));
+        const bool empty = !(src && ValidatePtr2(nullptr, src, "MediaTrack*"));
+        const int  h     = empty ? -1 : sendVisualSlotHint_(tr, -1, i);
+        const E    e{i, h, empty};
+        if (h >= 0)     hinted.push_back(e);
+        else if (empty) empties.push_back(e);
+        else            real.push_back(e);
+    }
+    int slotSpace = static_cast<int>(hinted.size() + real.size() + empties.size());
+    for (const auto& e : hinted) if (e.hint + 1 > slotSpace) slotSpace = e.hint + 1;
+    if (slotSpace <= 0) return;
+    out.assign(static_cast<size_t>(slotSpace), CombinedSlot{-1, -1});
+    std::vector<char> used(static_cast<size_t>(slotSpace), 0);
+    std::vector<E> demoted;
+    for (const auto& e : hinted) {
+        if (e.hint < slotSpace && !used[e.hint]) {
+            out[e.hint] = {-1, e.apiIndex}; used[e.hint] = 1;
+        } else demoted.push_back(e);
+    }
+    int freeSlot = 0;
+    auto place = [&](const E& e) {
+        while (freeSlot < slotSpace && used[freeSlot]) ++freeSlot;
+        if (freeSlot >= slotSpace) return;
+        out[freeSlot] = {-1, e.empty ? -1 : e.apiIndex};
+        used[freeSlot] = 1; ++freeSlot;
+    };
+    for (const auto& e : real)    place(e);
+    for (const auto& e : demoted) place(e);
+    for (const auto& e : empties) place(e);
+}
+
+// ONE entry point for the UF1's routing view, so the painter and every handler
+// address the same thing. g_uf1RecvView (declared with the other UF1 view state)
+// picks the side; everything downstream already speaks `category` — routeName_
+// reads P_SRCTRACK for −1, and the vol/pan automation helpers take their own
+// receive path — which is why receives cost a layout builder and a flag rather
+// than a second feature.
+
+void buildUf1RouteLayout_(MediaTrack* tr, std::vector<CombinedSlot>& out)
+{
+    if (g_uf1RecvView.load()) buildCombinedRecvLayout_(tr, out);
+    else                      buildCombinedSendLayout_(tr, out);
+}
+
+// Flip the view. The window resets to the first group because a receive list is
+// a different length than the send list, so keeping the index would land on a gap
+// (or past the end) more often than not.
+void uf1ToggleRecvView_()
+{
+    const bool next = !g_uf1RecvView.load();
+    g_uf1RecvView.store(next);
+    g_uf1SendGroup.store(0);
+    SetExtState("rea_sixty", "uf1_recv_view", next ? "1" : "0", true);
+    g_pageDirty.store(true);
+}
+
+CombinedSlot uf1RouteSlot_(MediaTrack* tr, int slot)
+{
+    static std::vector<CombinedSlot> layout;   // main-thread only
+    buildUf1RouteLayout_(tr, layout);
+    if (slot < 0 || slot >= static_cast<int>(layout.size()))
+        return {g_uf1RecvView.load() ? -1 : 0, -1};
     return layout[slot];
 }
 
@@ -24112,7 +24195,7 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
     if (g_uf1ChannelSubMode.load() == 2) {
         MediaTrack* focusTr = uf1FocusedTrack_();
         if (!focusTr) return;
-        const CombinedSlot cs = combinedSendSlot_(focusTr, g_uf1SendGroup.load() * 4 + vi);
+        const CombinedSlot cs = uf1RouteSlot_(focusTr, g_uf1SendGroup.load() * 4 + vi);
         if (cs.apiIndex < 0) return;            // gap slot → no-op
         StripRoute r;
         r.track = focusTr; r.sendCategory = cs.category;
@@ -24472,7 +24555,7 @@ void applyUf1ChannelSoftKey_(int idx)
     if (g_uf1ChannelSubMode.load() == 2) {
         MediaTrack* sTr = uf1FocusedTrack_();
         if (!sTr) return;
-        const CombinedSlot cs = combinedSendSlot_(sTr, g_uf1SendGroup.load() * 4 + idx);
+        const CombinedSlot cs = uf1RouteSlot_(sTr, g_uf1SendGroup.load() * 4 + idx);
         if (cs.apiIndex < 0) return;
         // SHIFT = mute this send. We already READ a send's mute (the Extender CUT
         // button rides it), we just never wrote it, so a send could not be silenced
@@ -24686,7 +24769,7 @@ void applyUf1ChannelVpotPush_(int idx)
     if (g_uf1ChannelSubMode.load() == 2) {
         MediaTrack* focusTr = uf1FocusedTrack_();
         if (!focusTr) return;
-        const CombinedSlot cs = combinedSendSlot_(focusTr, g_uf1SendGroup.load() * 4 + idx);
+        const CombinedSlot cs = uf1RouteSlot_(focusTr, g_uf1SendGroup.load() * 4 + idx);
         if (cs.apiIndex < 0) return;
         StripRoute r;
         r.track = focusTr; r.sendCategory = cs.category;
@@ -25946,7 +26029,7 @@ void uf1PaintChannel_()
             static MediaTrack* sSendTrack = nullptr;
             if (tr != sSendTrack) { g_uf1SendGroup.store(0); sSendTrack = tr; }
             std::vector<CombinedSlot> layout;
-            buildCombinedSendLayout_(tr, layout);
+            buildUf1RouteLayout_(tr, layout);
             const int layoutSize = static_cast<int>(layout.size());
             const int groups = std::max(1, (layoutSize + 3) / 4);
             g_uf1SendGroupCount.store(groups);
@@ -26293,7 +26376,15 @@ void uf1PaintChannel_()
         // firmware does not clear a text zone on write — the UF8 pads to a fixed
         // width for exactly that reason (Protocol.cpp buildChannelStripType) — so a
         // shorter blank would leave the tail of a longer previous name standing.
-        const std::string want = bare ? std::string(12, ' ') : fxName;
+        // In the ROUTING view the CS-type cell has no channel strip to name, so it
+        // says which side you are looking at instead. Without it, sends and receives
+        // are told apart only by the track names in the V-Pot labels, which is no
+        // help on a track whose sends and receives point at the same places.
+        const bool routeView = (g_uf1ChannelSubMode.load() == 2);
+        const std::string want = routeView
+                                   ? (g_uf1RecvView.load() ? std::string("RECEIVES")
+                                                           : std::string("SENDS"))
+                                   : (bare ? std::string(12, ' ') : fxName);
         if (!want.empty() && (changed || want != sFxName)) {
             sFxName = want;
             sendZoneText(uf1::scr::kCsType, want);
@@ -26415,7 +26506,7 @@ void uf1PaintChannel_()
                 // HW-verified buildLedPrimary/buildLedLevel state bytes off `on`).
                 haveLabel = true;
                 const CombinedSlot cs =
-                    combinedSendSlot_(tr, g_uf1SendGroup.load() * 4 + i);
+                    uf1RouteSlot_(tr, g_uf1SendGroup.load() * 4 + i);
                 if (cs.apiIndex >= 0) {
                     // MUTE wins the label: a silenced send the user cannot see is a
                     // trap, and the key doubles as the mute (Shift) so its state
@@ -26714,7 +26805,7 @@ void uf1PaintChannel_()
     const bool sendFlip = (g_uf1ChannelSubMode.load() == 2) && flip && !stripFader;
     StripRoute sendRoute;
     if (sendFlip) {
-        const CombinedSlot cs = combinedSendSlot_(ftr, g_uf1SendGroup.load() * 4);
+        const CombinedSlot cs = uf1RouteSlot_(ftr, g_uf1SendGroup.load() * 4);
         if (cs.apiIndex >= 0) {
             sendRoute.track = ftr; sendRoute.sendCategory = cs.category;
             sendRoute.sendIndex = cs.apiIndex; sendRoute.valid = true;
@@ -41644,11 +41735,27 @@ void registerBindingHandlers()
             if (sub == 1) {
                 g_uf1DawGroup.store(g_uf1DawGroup.load() ? 0 : 1);
             } else if (sub == 2) {
+                // SHIFT flips the routing view between the track's SENDS and its
+                // RECEIVES (Frank 2026-08-17; forum item 3.9). Without a modifier
+                // the key keeps paging the window of four, as before. Reachable as
+                // its own builtin too, for anyone who would rather bind it.
+                if (g_shiftHeld.load()) { uf1ToggleRecvView_(); return; }
                 const int cnt = std::max(1, g_uf1SendGroupCount.load());
                 g_uf1SendGroup.store((g_uf1SendGroup.load() + 1) % cnt);
             }
         },
         nullptr, "UF1: 5-8 channel group / send window", false
+    });
+
+    // Sends <-> Receives in the UF1 routing view. Also on Shift + 5-8; this exists
+    // so it can be bound anywhere (Frank's rule: every new action is a builtin).
+    registerBuiltin("uf1_sends_receives_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            uf1ToggleRecvView_();
+        },
+        [](int) { return g_uf1RecvView.load(); },
+        "UF1: Sends / Receives view", true
     });
 
     // Bank ◄ / ► (0x21 / 0x23) — coarse track select, ±8 tracks. param
