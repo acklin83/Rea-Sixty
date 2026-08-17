@@ -92,7 +92,7 @@ All three devices share **VID `0x31E9`**, interface 0, **EP `0x02` OUT** and
 | Device | PID | Declared at |
 | --- | --- | --- |
 | UF8 (vendor control) | `0x0021` | `UF8Device.cpp:23` |
-| UF8 HID (input) | `0x0022` | `HidDevice.h:3` (**unused**, see Discrepancies) |
+| UF8 HID (input) | `0x0022` | not used by the module. `tools/uf8_hid_probe` only |
 | UC1 | `0x0023` | `UC1Protocol.h:29` |
 | UF1 | `0x0025` | `UF1Device.cpp:21` |
 
@@ -580,13 +580,10 @@ the separate `acklin83/reaper-scripts` repo.
 
 **Deliberately unfinished**
 - **Phase 2.6, the on-screen Plug-in Mixer. Not near-term** (Frank,
-  2026-08-14). `MixerLayout.cpp` is a 33-line scaffold that draws one line of
-  placeholder text, and `MixerLayout::draw` is **never called** from anywhere.
-  It is still compiled into the target. `MixerWindow`, the host that was named
-  for this view, is finished and hosts the Settings rail only. Treat the two as
-  separate things: the host is done, the view is backlog.
-- `SettingsScreen.cpp:4632` marks an entire "User-Quick slot editor (OLD
-  section-style)" region as UNUSED. It is still compiled.
+  2026-08-14). Nothing of it exists in the tree: its `MixerLayout` scaffold was
+  never reachable and was deleted 2026-08-14. `MixerWindow`, the host named for
+  this view, is finished and hosts the Settings rail. Treat the two as separate
+  things: the host is done, the view is unstarted.
 - UC1 seven-segment hundreds digit is only partly decoded; values over 99
   render ones and tens correctly and leave the hundreds cells inherited
   (`UC1Protocol.h:252`).
@@ -608,18 +605,21 @@ the separate `acklin83/reaper-scripts` repo.
   where every change risks a merge conflict and where the frame-size guard
   earns its keep.
 
-**Dead or orphaned code** (candidates for step 2, listed here so the decision
-is deliberate)
-- `HidDevice.{h,cpp}` plus `g_hid` (`main.cpp:408`) and `logHid`
-  (`main.cpp:26585`): compiled and linked, never opened, never called.
-- `uf8::buildMeter` (`Protocol.cpp:87`): declared, defined, no call site.
-- `uf8::buildPluginMixerHeartbeat`: only referenced from `test_protocol.cpp`.
-- `MixerLayout.{h,cpp}`: no call site.
-- `jsfx/rea_sixty_gr_probe.jsfx`: not embedded by CMake, not referenced by any
-  source. Only `docs/protocol-notes-uc1.md` still describes it as the GR
-  mechanism, which the README explicitly contradicts.
+**Removed 2026-08-14** (recover from git if ever wanted): `HidDevice.{h,cpp}`
+plus `g_hid` and `logHid`; `uf8::buildMeter`; `MixerLayout.{h,cpp}`;
+`jsfx/rea_sixty_gr_probe.jsfx`; and the 208-line `#if 0` User-Quick section
+editor in `SettingsScreen.cpp`. All five had no call site; the JSFX had no
+build step. `uf8::buildPluginMixerHeartbeat` was kept: it is referenced by
+`test_protocol.cpp` as a frame-layout fixture, and the device worker owning the
+opcode is exactly what the test documents.
 
----
+⚠ One consequence is still open: `reaper_uf8` links `reasixty_hidapi`, so the
+shipped module keeps a hard dependency on libhidapi that nothing in it uses any
+more. Dropping it would also remove the delay-load, the macOS bundling and the
+Linux SONAME bundling, and would permanently kill the "libhidapi-hidraw0 missing
+means REAPER silently drops the plugin" failure on minimal distros. It is a
+release-affecting change on three platforms, so it needs its own pass.
+`tools/uf8_hid_probe` links hidapi directly and keeps it regardless.
 
 ## 7. Discrepancies found
 
@@ -634,23 +634,23 @@ an edit; see §6.
 | # | Where | Says | Actually |
 | --- | --- | --- | --- |
 | 1 | `main.cpp:1` file header | "we simply use CountTracks() and show tracks 1..8 regardless of scroll, bank-shift hookup is a follow-up" | `rebuildVisibleTrackList` (`main.cpp:1899`) does full banking, folder mode, show-only-selected, pinned master, UF1 extender. |
-| 2 · text fixed, file open | `HidDevice.h:3` | describes PID 0x0022 as the UF8 input path, "parsing to MCU happens in main.cpp once we've characterized the report format" | Never opened. UF8 input comes from the libusb bulk IN on PID 0x0021 via `setRawInputHandler`. The whole TU is dead. |
+| 2 · done, file deleted | `HidDevice.h:3` | describes PID 0x0022 as the UF8 input path, "parsing to MCU happens in main.cpp once we've characterized the report format" | Never opened. UF8 input comes from the libusb bulk IN on PID 0x0021 via `setRawInputHandler`. The whole TU is dead. |
 | 3 | `Protocol.h:25` `ButtonEvent::id` | "0x78 = BANK->, 0x79 = BANK<-, others TBD" | The full id table is decoded in `Bindings.cpp` `fromUf8DeviceId`, roughly 50 ids. |
-| 4 · annotated, deletion open | `Protocol.h:71` `buildMeter` | "Best-guess from cap10 frame layout ... semantics still partially TBD" | No call site at all. VU goes out via `buildVuMeter`. |
+| 4 · done, deleted | `Protocol.h:71` `buildMeter` | "Best-guess from cap10 frame layout ... semantics still partially TBD" | No call site at all. VU goes out via `buildVuMeter`. |
 | 5 | `Bindings.h:3` header block | "Phase A ... no UI yet"; "per-strip Sel/Cut/Solo/Rec stay hardcoded"; "per-strip top soft-key (0x18..) also stay hardcoded in v1" | Full Settings UI exists; `TopSoftKey1..8` and `Uf8Select` are first-class `ButtonId`s with factory bindings. |
 | 6 | `UserPluginCatalog.h:11` | "Phase 2.5d-A Step 1, data layer + JSON I/O only. No UI, no FX-Learn dispatch yet" | Full FX-Learn UI, HUD, dispatch, exchange upload. |
 | 7 | `UserPluginCatalog.h:706` version history | narrates v1 through v8 | `kCurrentFormatVersion = 16`. v9 through v16 are squeezed into the trailing comment on the constant line instead of the block. |
 | 8 | `UC1Device.h:4` | "UC1 needs no custom init sequence" | `UC1Device.cpp:19` includes `uc1_init_sequence.inc` and replays it at `UC1Device.cpp:271`. |
 | 9 | `MixerWindow.h:3` and `:12` | "dockable on-screen Plugin Mixer (Phase 2.6)"; "Bodies are stubs until ImGui has been vendored into extension/vendor/imgui/ and icontheme.h has been pulled from upstream" | The **host window** is fully implemented (868 lines) and hosts the 12-entry Settings rail. Two separate errors: the vendored-ImGui plan was abandoned for **ReaImGui via GetFunc** (`vendor/imgui/` does not exist), and the class no longer does what its name says. The Plug-in Mixer *view* itself is genuinely unbuilt, see item 10. |
-| 10 · annotated, parked | `MixerLayout.h:16` | "Phase 2.6 scaffold; bodies arrive in 2.6b/2.6c" | Accurate about the body. The Plug-in Mixer view is real open backlog, **not near-term** (Frank, 2026-08-14). What the comment omits is that nothing calls `draw` at all, so the scaffold is not even reachable. |
+| 10 · done, deleted | `MixerLayout.h:16` | "Phase 2.6 scaffold; bodies arrive in 2.6b/2.6c" | Accurate about the body. The Plug-in Mixer view is real open backlog, **not near-term** (Frank, 2026-08-14). What the comment omits is that nothing calls `draw` at all, so the scaffold is not even reachable. |
 | 11 | `HttpClient.h:12` | "Only macOS is implemented today; the others return a clear error until built" | All three are implemented (`macos_http.mm`, `win_http.cpp`, `linux_http.cpp`) and built by CMake. `HttpClient.cpp` is the never-taken fallback. |
 | 12 | `StreamDeckBridge.h:36` | "see tests/test_sdbridge.cpp" | That file does not exist. |
 | 13 | `streamdeck/.../plugin.js:6-12` | "WebSocket (Node 22+ global WebSocket)", "manifest.json Nodejs.Version = 24", "No npm dependencies" | `manifest.json` says Version "20", `package.json` depends on `ws`, and lines 19-22 of the same file explain why. Three contradictions in one header. |
 | 14 | `scripts/rea_sixty_assignment_hud_imgui.lua:6` and `rea_sixty_focused_panel_imgui.lua:6` | "SPIKE / parallel variant of rea_sixty_assignment_hud.lua" | The non-imgui originals are gone, and `reasixty_cleanupLegacyLua` (`main.cpp:43388`) actively deletes them from the user's Scripts folder. These are the only version. |
-| 15 · doc fixed, jsfx open | `docs/protocol-notes-uc1.md:255` | "GR is computed by a bundled JSFX envelope-follower (`rea_sixty_gr_probe.jsfx`)" | README.md line 31 says "No JSFX probe, no sidechain tap." GR comes from `GainReduction_dB` plus the SSL Core impersonator. The JSFX file is orphaned. |
+| 15 · done | `docs/protocol-notes-uc1.md:255` | "GR is computed by a bundled JSFX envelope-follower (`rea_sixty_gr_probe.jsfx`)" | README.md line 31 says "No JSFX probe, no sidechain tap." GR comes from `GainReduction_dB` plus the SSL Core impersonator. The JSFX file is orphaned. |
 | 16 | `.local-docs/release-process.md` repo table | source repo at `~/Documents/dev/reaper-uf8` | The working copy is `~/Documents/dev/Rea-Sixty`. The old path does not exist. |
 | 17 | `ColorSync.h` | declares `refresh(const std::function<...>&)` | Does not include `<functional>`; it compiles only through the transitive include in `Protocol.h`/`UF8Device.h`. |
-| 18 · OPEN | `SettingsScreen.cpp:4632` | "User-Quick slot editor (OLD section-style) UNUSED" | Honest, but the region is still compiled. |
+| 18 · done, deleted | `SettingsScreen.cpp:4632` | "User-Quick slot editor (OLD section-style) UNUSED" | Honest, but the region is still compiled. |
 | 19 | `CMakeLists.txt:707` | "tests + CLI helpers" wired with `enable_testing()` | No CI job ever runs `ctest`. The workflow is compile-only. |
 
 Two extra finds surfaced while editing and were fixed in the same pass:
@@ -659,23 +659,13 @@ sequence file needed" as a ticked-off item (same error as item 8), and
 `rea_sixty_focused_panel_imgui.lua` claimed to "coexist with the shipping
 composite panel" that no longer exists.
 
-Checked and found **accurate**, so no cleanup needed: the `Protocol.h:319` GR
-comment (it explicitly corrects the older "single-byte frame" note and points
-at `UF8Device::setGrBytes`), and `MixerLayout.h`'s scaffold claim about its own
-body.
+Checked and found **accurate**, so no correction was needed: the
+`Protocol.h:319` GR comment, which explicitly overrides the older "single-byte
+frame" note and points at `UF8Device::setGrBytes`.
 
-### Still open, needs a decision rather than an edit
+### Deletion candidates: all cleared (2026-08-14)
 
-The five rows above marked open all come down to "delete or keep". The comments
-now say the truth either way, so nothing is misleading in the meantime:
-
-| Candidate | Cost of keeping | Cost of deleting |
-| --- | --- | --- |
-| `HidDevice.{h,cpp}` + `g_hid` + `logHid` | ~110 lines compiled for nothing; hidapi stays a hard link dependency | Loses the only scaffolding for reading UF8 PID 0x0022, whose report format was never characterised |
-| `uf8::buildMeter` | ~10 lines | Loses the record of the FF 38 meter opcode layout |
-| `MixerLayout.{h,cpp}` | ~58 lines and a stale rail-less view | Loses the written-out plan for Phase 2.6, which is backlog, not cancelled |
-| `jsfx/rea_sixty_gr_probe.jsfx` | A file users can find in the tree and wrongly assume they should load | Loses a working envelope-follower probe |
-| `SettingsScreen.cpp:4632` "OLD section-style" User-Quick editor | ~200 lines compiled in a file that is already 21.5k | Irreversible without git; the replacement is the per-slot editor at :4286 |
+Frank's call was to remove them. See §6 for what went and what stayed.
 
 ### A real bug found while cleaning, since FIXED (`93d4ef8`)
 
@@ -733,7 +723,6 @@ One line each. Line counts are the current state.
 | `UF8Device.h/.cpp` | 152/569 | libusb wrapper for the UF8: claim, init replay, send queue, 50 Hz heartbeat with GR stamping, async bulk IN. |
 | `UC1Device.h/.cpp` | 116/618 | Same for the UC1, plus the 50 Hz `FF 5B` GR liveness stream. |
 | `UF1Device.h/.cpp` | 113/506 | Same for the UF1, plus `sendBurst` for atomic image chunks and a cross-URB read residual. |
-| `HidDevice.h/.cpp` | 53/55 | hidapi reader for UF8 PID 0x0022. **Currently unused.** |
 | `MidiBridge.h/.cpp` | 76/175 | CoreMIDI virtual MCU ports. macOS only; stubs elsewhere. |
 | `LogPath.h/.cpp` | 24/27 | Per-platform diagnostic log directory (`/tmp` vs `%TEMP%`). |
 
@@ -789,7 +778,6 @@ One line each. Line counts are the current state.
 | `ExchangeView.h/.cpp` | 24/1392 | The mapping-exchange tab: browse, detail, diff, install, publish, sign-in. |
 | `ManualView.h/.cpp` | 34/757 | Focused Markdown renderer for the embedded `docs/user-manual.md`. |
 | `ThemeBridge.h/.cpp` | 73/138 | Three ImGui palettes (Vanilla, Dark, Light) pushed and popped per frame. |
-| `MixerLayout.h/.cpp` | 25/33 | Phase 2.6 Plug-in Mixer scaffold. **No call site.** |
 
 ### extension, other
 
@@ -799,7 +787,6 @@ One line each. Line counts are the current state.
 | `cmake/embed_factory_bundle.cmake` | Turns any file into a `const char[]` header. |
 | `cmake/write_commit_count.cmake` | git describe into `commit_count.h`, short-circuits on no change. |
 | `jsfx/rea_sixty_input_level.jsfx` | True-input probe for the UC1 input meter. Embedded and auto-deployed. |
-| `jsfx/rea_sixty_gr_probe.jsfx` | Envelope-follower GR probe. **Orphaned**, superseded by the impersonator. |
 | `scripts/rea_sixty_assignment_hud_imgui.lua` | Learn HUD: surface mockup mirroring the focused plug-in's assignments. 4128 lines. |
 | `scripts/rea_sixty_focused_panel_imgui.lua` | Frameless focused-track panel. |
 | `scripts/rea_sixty_inserts_overlay.lua` | Non-destructive highlight of the active CS/BC instance in the MCP inserts list. |
