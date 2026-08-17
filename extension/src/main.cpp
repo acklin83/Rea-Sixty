@@ -25769,8 +25769,20 @@ void uf1PaintChannel_()
         // is for now: it is a look, and SSL's own captures use a mix.
         std::array<uint8_t, 4> styles{0x03, 0x03, 0x03, 0x03};
         auto setBar = [&](int i, double norm, bool bipolar, bool empty = false) {
-            const int pos = std::clamp(static_cast<int>(std::lround(norm * 100.0)), 0, 100);
-            bars[i * 2]     = static_cast<uint8_t>(pos);
+            // ⛔ A CENTRE BAR CARRIES A SIGNED DEVIATION, NOT AN ABSOLUTE POSITION.
+            // Decoded 2026-08-17 from cap72 by pairing every style-0x08 pot with its
+            // own dB readout: 0 dB -> 0, full boost -> 100 (0x64), full cut -> 156
+            // (0x9c = -100 in two's complement), -0.1 dB -> 255. So the byte is an
+            // int8 in -100..+100 measured FROM the centre.
+            // We were sending the plain 0..100 position, so a gain at 0 dB went out
+            // as 50, the firmware read +50, and every gain sat at three quarters of
+            // the bar (Frank 2026-08-17: "alle Gain-Werte fangen mit 0 = 75% des
+            // Balkens an; beim UF8 gehört 0 genau in die Mitte"). Unipolar bars are
+            // unaffected — there 0..100 IS the position.
+            const int pos = bipolar
+                ? std::clamp(static_cast<int>(std::lround((norm - 0.5) * 200.0)), -100, 100)
+                : std::clamp(static_cast<int>(std::lround(norm * 100.0)),            0, 100);
+            bars[i * 2]     = static_cast<uint8_t>(static_cast<int8_t>(pos));
             bars[i * 2 + 1] = (barModeProbe >= 0)
                                 ? static_cast<uint8_t>(barModeProbe)
                                 : (bipolar ? 0x80 : 0x00);
