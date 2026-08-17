@@ -5783,7 +5783,13 @@ bool        g_pendingDeleteOpen  = false;// set when row's Del was clicked,
 std::string g_pendingModeMatch;
 int         g_pendingModePrimary = 0;    // 1=CS, 2=BC, 3=UF8-only
 bool        g_pendingModeOpen    = false;
-std::string g_lastSaveError;             // last persistence error, sticky until next save
+std::string g_lastSaveError;             // last persistence note, sticky until next save
+// ⛔ THIS LINE IS NOT ALWAYS AN ERROR. Both render sites hardcoded red, so an
+// "Exported to …" success was drawn in the failure colour and read as a crash
+// (forum report 2026-08-17, item 4.8: "it seems like a code error"). The flag
+// says which it is; it defaults to false, and every assignment below clears it
+// explicitly so a stale success cannot tint a later failure green.
+bool        g_lastSaveOk = false;
 
 // ⛔ An exception that escapes an editor button KILLS REAPER. Frank 2026-08-14:
 // "Fill: Replace" on a Pro-C UF1 mapping aborted the whole application. The crash
@@ -5804,7 +5810,7 @@ template <class F>
 static void guardedEditorAction_(const char* what, F&& fn)
 {
     auto note = [&](const std::string& msg) {
-        g_lastSaveError = std::string("\"") + what + "\" failed: " + msg;
+        g_lastSaveOk = false; g_lastSaveError = std::string("\"") + what + "\" failed: " + msg;
         if (FILE* f = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
             std::fprintf(f, "[fxlearn] EXCEPTION in %s: %s\n", what, msg.c_str());
             std::fflush(f);
@@ -6391,11 +6397,11 @@ const char* modeLabel_(uf8::Domain d, bool uf8Mode)
 void persistAndReport_()
 {
     using uf8::user_plugins::SaveResult;
-    g_lastSaveError.clear();
+    g_lastSaveOk = false; g_lastSaveError.clear();
     switch (uf8::user_plugins::save()) {
         case SaveResult::Ok:        break;
-        case SaveResult::Collision: g_lastSaveError = "Save refused: a match collides with a built-in plug-in map."; break;
-        case SaveResult::IoError:   g_lastSaveError = "Save failed: could not write user_plugins.json (see "
+        case SaveResult::Collision: g_lastSaveOk = false; g_lastSaveError = "Save refused: a match collides with a built-in plug-in map."; break;
+        case SaveResult::IoError:   g_lastSaveOk = false; g_lastSaveError = "Save failed: could not write user_plugins.json (see "
                                                       + uf8::logPath("rea_sixty.log") + ")."; break;
     }
 }
@@ -10506,7 +10512,7 @@ int fillUf1WithRest_(const std::string& match, MediaTrack* tr, int fxIdx,
                      "(%d V-Pots + %d soft-keys). Map the rest by hand if needed.",
                      added, dropped, uf8::kUserUf1MaxPages,
                      uf8::kUserUf1MaxPos + 1, uf8::kUserUf1MaxPos + 1);
-            g_lastSaveError = msg;
+            g_lastSaveOk = false; g_lastSaveError = msg;
         }
         if (added > 0) {
             m.uf1Mode = true;
@@ -15673,19 +15679,19 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         std::string err;
         const std::string chosen = reasixty_fxLearnExportViaDialog(&err);
         if (chosen.empty()) {
-            if (!err.empty()) g_lastSaveError = "Export failed: " + err;
+            if (!err.empty()) g_lastSaveOk = false; g_lastSaveError = "Export failed: " + err;
         } else {
-            g_lastSaveError = "Exported to " + chosen;
+            g_lastSaveError = "Exported to " + chosen; g_lastSaveOk = true;
         }
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_Button(ctx, "Import##fxl_hdr_import", nullptr, nullptr)) {
         std::string err;
         if (reasixty_fxLearnImportViaDialog(&err)) {
-            g_lastSaveError.clear();
-            if (!err.empty()) g_lastSaveError = err;
+            g_lastSaveOk = false; g_lastSaveError.clear();
+            if (!err.empty()) g_lastSaveOk = false; g_lastSaveError = err;
         } else if (!err.empty()) {
-            g_lastSaveError = "Import failed: " + err;
+            g_lastSaveOk = false; g_lastSaveError = "Import failed: " + err;
         }
     }
     // ---- Single-mapping sharing --------------------------------------
@@ -15737,7 +15743,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             // catalog, so one bad shared file would block every later save.
             // Reject it here rather than stage it.
             if (user_plugins::collidesWithBuiltin(in.map.match)) {
-                g_lastSaveError = "Import refused: \"" + in.map.match
+                g_lastSaveOk = false; g_lastSaveError = "Import refused: \"" + in.map.match
                                 + "\" collides with a built-in plug-in map.";
             } else {
                 bool exists = false;
@@ -15757,7 +15763,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 }
             }
         } else if (!err.empty()) {
-            g_lastSaveError = "Import failed: " + err;
+            g_lastSaveOk = false; g_lastSaveError = "Import failed: " + err;
         }
     }
     if (ImGui_IsItemHovered(ctx, nullptr)) {
@@ -15766,7 +15772,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             "Your other maps are left alone.");
     }
     if (!g_lastSaveError.empty()) {
-        ImGui_TextColored(ctx, 0xCC4444FF, g_lastSaveError.c_str());
+        ImGui_TextColored(ctx, g_lastSaveOk ? 0x55BB55FF : 0xCC4444FF,
+                          g_lastSaveError.c_str());
     }
 
     // The map-picker / Default-toggle / Short-input may have just
@@ -16356,7 +16363,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
 
     if (!g_lastSaveError.empty()) {
         ImGui_Spacing(ctx);
-        ImGui_TextColored(ctx, 0xCC4444FF, g_lastSaveError.c_str());
+        ImGui_TextColored(ctx, g_lastSaveOk ? 0x55BB55FF : 0xCC4444FF,
+                          g_lastSaveError.c_str());
     }
 
     // ---- AutoLearn Setup pre-flight modal --------------------------------
@@ -18200,10 +18208,10 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         if (ImGui_Button(ctx, "Import…##fxl_import_welcome", nullptr, nullptr)) {
             std::string err;
             if (reasixty_fxLearnImportViaDialog(&err)) {
-                g_lastSaveError.clear();
-                if (!err.empty()) g_lastSaveError = err;
+                g_lastSaveOk = false; g_lastSaveError.clear();
+                if (!err.empty()) g_lastSaveOk = false; g_lastSaveError = err;
             } else if (!err.empty()) {
-                g_lastSaveError = "Import failed: " + err;
+                g_lastSaveOk = false; g_lastSaveError = "Import failed: " + err;
             }
         }
         // Landing someone else's single mapping — the likely first move for a
@@ -18215,7 +18223,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             uf8::user_plugins::MapShare in;
             if (reasixty_mapShareImportViaDialog(&in, &err)) {
                 if (user_plugins::collidesWithBuiltin(in.map.match)) {
-                    g_lastSaveError = "Import refused: \"" + in.map.match
+                    g_lastSaveOk = false; g_lastSaveError = "Import refused: \"" + in.map.match
                                     + "\" collides with a built-in plug-in map.";
                 } else {
                     g_editingMatch = in.map.match;
@@ -18225,12 +18233,13 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     persistAndReport_();
                 }
             } else if (!err.empty()) {
-                g_lastSaveError = "Import failed: " + err;
+                g_lastSaveOk = false; g_lastSaveError = "Import failed: " + err;
             }
         }
         if (!g_lastSaveError.empty()) {
             ImGui_Spacing(ctx);
-            ImGui_TextColored(ctx, 0xCC4444FF, g_lastSaveError.c_str());
+            ImGui_TextColored(ctx, g_lastSaveOk ? 0x55BB55FF : 0xCC4444FF,
+                          g_lastSaveError.c_str());
         }
     } else {
         // Live-follow the focused FX (Frank 2026-06-20, "Learn FX soll
@@ -18870,7 +18879,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     } else {
                         SetExtState("ReaSixty", "shareAuthor",
                                     g_shareAuthor, true);
-                        g_lastSaveError = "Shared to " + chosen;
+                        g_lastSaveOk = false; g_lastSaveError = "Shared to " + chosen;
                         g_shareError.clear();
                         ImGui_CloseCurrentPopup(ctx);
                     }

@@ -1514,6 +1514,15 @@ std::string composeValueLine(std::string_view label, std::string_view value);
 // the YELLOW value zone. 9 was the shipped guess, 13 overran. Both dialogs
 // that name this limit (Settings FX-Learn cell, HUD UF1 cell) say 11 too.
 constexpr size_t kUf1LabelChars = 11;
+// …and the YELLOW value zone is the other 8 (19 − 11). The label got its cap on
+// 2026-08-09; the VALUE never did, and composeValueLine right-aligns it in the
+// 19-char buffer — so anything longer than 8 characters starts left of column 12
+// and is drawn in the WHITE label zone. "Concert Hall" (12) begins at column 7,
+// which is why a forum user reported the first three characters coming out white
+// ("Con") and, on other names, characters missing entirely where the label field
+// overwrote them ("Sm th Plate", "oth Room"). Truncating is what he asked for and
+// what the numbers want: "-12.3 dB" is exactly 8.
+constexpr size_t kUf1ValueChars = 8;
 // The UF1's SOFT-KEY label field (screen 0x0104) is 13 characters — measured on
 // the hardware 2026-08-09. It was the one UF1 text zone with no cap at all, so a
 // long user name or param name simply ran off the key. Abbreviated, never
@@ -23117,6 +23126,28 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     };
 
     bool eqOn = sFx >= 0;
+    // ⛔ AN FX IS NOT AN EQ. "Some plug-in resolved" used to be the whole test, so
+    // on anything without an "EQ In" param — i.e. everything that is not an SSL
+    // strip — the EQ counted as ON, the parametric render ran with defaults, and
+    // the HP default of 20 Hz cleared the "off" rail and was DRAWN. That is the
+    // phantom low-cut every user without SSL plug-ins sees on every plug-in on
+    // every track (forum report 2026-08-17, item 1.1). Require at least one EQ
+    // band or filter to have actually resolved before claiming there is a curve:
+    // ix = HFg HFf HFt HMFg HMFf HMFq LMFg LMFf LMFq LFf LFg LFt LPF HPF EQIn.
+    if (eqOn) {
+        bool haveAny = false;
+        for (int k = 0; k < 14 && !haveAny; ++k) haveAny = ix[k] >= 0;
+        eqOn = haveAny;
+    }
+    // A map that says "Never" means NEVER — not "resolve the parameters some other
+    // way". uf1EqGraphMapAt_ returns nullptr both for "no map" and for "map says
+    // off", so the off case fell through to the name-based resolve above and drew
+    // anyway; the setting's own tooltip promises "Draw our EQ curve on the UF1 for
+    // this plug-in", so this was simply broken (item 1.1, second half).
+    if (eqOn && !sIdent.empty()) {
+        if (const auto* um = uf8::user_plugins::lookupOwnedByName(sIdent.c_str()))
+            if (um->uf1EqGraph == uf8::UserPluginMap::Uf1EqGraph::Off) eqOn = false;
+    }
     if (eqOn && ix[14] >= 0) {                     // EQ In toggle
         const bool raw = TrackFX_GetParamNormalized(sFxTr, sFx, ix[14]) >= 0.5;
         eqOn = sEqInInverted ? !raw : raw;         // see sEqInInverted's resolve
@@ -23222,7 +23253,11 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         const double lfF=uf1ParamFreq_(sFxTr,sFx,ix[9],200), lfG=uf1ParamFmt_(sFxTr,sFx,ix[10],0);
         const bool   lfBell = ix[11]>=0 && TrackFX_GetParamNormalized(sFxTr,sFx,ix[11])>=0.5;
         // HP ('High Pass Filter'): value in Hz ("80"), or "OUT" when disengaged.
-        double hpF = uf1ParamFmt_(sFxTr, sFx, ix[13], 20);
+        // ⛔ The fallback is OFF (5 Hz clears the rail below), NOT 20. A missing
+        // HPF param used to default to 20 Hz, which is inside the "engaged" range,
+        // so every plug-in with no high-pass at all got one drawn at the far left.
+        // A filter we cannot read is a filter we must not draw.
+        double hpF = uf1ParamFmt_(sFxTr, sFx, ix[13], 5.0);
         // LP ('Low Pass Filter'). The SSL CS shows this in kHz with NO unit ("15.0"
         // = 15 kHz, like the EQ bands LMF "1.00"/HMF "3.00"), which is why this
         // used to multiply the raw string by 1000 flat. That assumption is only
@@ -26004,6 +26039,27 @@ void uf1PaintChannel_()
             sFxName = want;
             sendZoneText(uf1::scr::kCsType, want);
         }
+
+        // …and the four soft-key labels go with it. The layout burst writes SSL's
+        // captured "PRE / SOLO SAFE / PLUG-IN" + the 0xd8 phase glyph to establish
+        // the plane, and the p188 block below only overrides them for a recognised
+        // strip — so a track with nothing on it advertised four functions it does
+        // not have (forum report 2026-08-17, item 4.3). Same shape as the CS-TYPE
+        // blank above: the latch string still goes out, the CELL is cleared one
+        // frame later. Channel sub-mode only; in DAW and Sends the keys belong to
+        // the user's bank and to the send block, both of which write their own.
+        static bool sBareSk = false;
+        if (bare && g_uf1ChannelSubMode.load() == 0 && (changed || !sBareSk)) {
+            sBareSk = true;
+            for (uint8_t k = 0; k < 4; ++k) {
+                std::vector<uint8_t> p;
+                p.push_back(k);
+                p.insert(p.end(), kUf1SoftKeyChars, ' ');
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kSoftKeyLabel, p));
+            }
+        } else if (!bare) {
+            sBareSk = false;
+        }
     }
 
     // ---- Channel-strip SOFT-KEY labels + LEDs (p188 tables) ----------------
@@ -26992,7 +27048,19 @@ std::string uf1ValueLine(std::string_view label, std::string_view value)
     if (lab.size() > kUf1LabelChars)
         lab = abbreviateTrackName_(lab, static_cast<int>(kUf1LabelChars),
                                    TNM_SmartAbbrev, /*foldLatin1*/ false);
-    return composeValueLine(lab, value);
+    // ⛔ CAP THE VALUE TOO, not just the label. composeValueLine right-aligns the
+    // value in a 19-char buffer, but the firmware colours by fixed COLUMN, so an
+    // over-long value does not overflow to the right where it would simply be cut
+    // — it grows LEFTWARDS into the white label zone. See kUf1ValueChars.
+    // Truncated, NOT SmartAbbrev'd: these are formatted parameter values, and
+    // vowel-dropping "12 dB/oct" or "-3.5 dB" produces nonsense. Trailing spaces
+    // go so a clipped word does not look like a stray gap.
+    std::string val(value);
+    if (val.size() > kUf1ValueChars) {
+        val.resize(kUf1ValueChars);
+        while (!val.empty() && val.back() == ' ') val.pop_back();
+    }
+    return composeValueLine(lab, val);
 }
 
 std::string composeValueLine(std::string_view label, std::string_view value)
