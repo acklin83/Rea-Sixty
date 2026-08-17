@@ -3,8 +3,9 @@
 // MixerWindow — the dockable on-screen window that hosts Rea-Sixty's UI.
 //
 // ⚠ The name is historical. It was created for the Phase 2.6 Plug-in Mixer
-// view, which does NOT exist (MixerLayout is an unreachable scaffold, see
-// MixerLayout.h). What this window actually hosts today is the Settings rail:
+// view, which does NOT exist: its scaffold (MixerLayout) was never reachable
+// and was removed 2026-08-14. What this window actually hosts is the Settings
+// rail:
 // a left-hand list of twelve panes (Devices, Appearance, Behaviour, Bindings,
 // Modes, FX Learn, Favourites, Selection Sets, Parameter Groups, Exchange,
 // Manual, About) with the selected pane drawn in the content area. The rail
