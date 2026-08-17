@@ -6194,20 +6194,22 @@ static bool dynFxBankColour_(MediaTrack* tr, int fxIdx, uint32_t& rgbOut)
 // the UF8 path (dynamicBankSlot_, which adds dynBankSlotBase_) and the UF1 path
 // (dynamicBankSlotUf1_, which uses its own page*4 index). Empty/out-of-range →
 // present=false. Main-thread only (touches REAPER FX API).
+std::string fxCycleDisplayName_(MediaTrack* tr, int fxIdx);   // defined further down
+
 static DynSlotInfo fxBankSlotInfo_(MediaTrack* tr, int fxIdx)
 {
     DynSlotInfo info;
     if (!tr || fxIdx < 0 || fxIdx >= TrackFX_GetCount(tr)) return info;  // empty slot
     info.present = true;
-    char nm[256] = {0};
-    TrackFX_GetFXName(tr, fxIdx, nm, sizeof(nm));
-    std::string s(nm);
-    // Strip a leading "VST3: " / "JS: " type prefix + trailing " (vendor)"
-    // so the 12-char LCD shows the plug-in name.
-    if (const auto p = s.find(": "); p != std::string::npos && p < 8)
-        s.erase(0, p + 2);
-    if (const auto p = s.rfind(" ("); p != std::string::npos)
-        s.erase(p);
+    // ⇨ THE USER'S OWN NAME WINS, like everywhere else a plug-in is named on a
+    // surface. This built its label from the RAW TrackFX_GetFXName with nothing but
+    // prefix/vendor stripping, so a mapped plug-in showed its factory name — and
+    // since that rarely fits, the abbreviator turned it into soup: Frank got
+    // "U1176RACm(nA" where the map says "UAD 1176 A" (2026-08-17).
+    // fxCycleDisplayName_ is the shared rule: user rename, else the plug-in map's
+    // short name, else the stripped factory name. Serves BOTH surfaces — the UF8's
+    // dynamic FX bank comes through here too.
+    std::string s = fxCycleDisplayName_(tr, fxIdx);
     info.label = s.empty() ? "FX" : s;
     const bool enabled = TrackFX_GetEnabled(tr, fxIdx);
     const bool offline = TrackFX_GetOffline(tr, fxIdx);
