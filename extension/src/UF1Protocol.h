@@ -169,6 +169,15 @@ constexpr uint8_t kDimCut      = 0x02;  // g=0,r=2   → dim red (resting, never
 
 // Screen element addresses (FF 67) — the subset we drive natively first.
 // Full map in docs/protocol-notes-uf1 / docs/uf1-native-build-plan.
+//
+// ⚠ THE FIRMWARE PRE-DRAWS THE CAPTIONS; WE ONLY FILL THE CELLS. Several zones sit
+// UNDER a label the panel paints by itself — "Soft Key" over the page counter, the
+// "SOLO CLR 1" caption over kSoloActive. Blanking our side does NOT remove the
+// caption, it leaves the caption with an empty value, which reads worse than the
+// number did. So "just remove that text" is usually not ours to grant (a forum
+// request to drop the "1/1" counter, 2026-08-17, is exactly this misreading).
+// Before promising to hide anything on this screen: check whether the words are
+// ours at all. If we never send them, they are the firmware's.
 namespace scr {
 // Channel-info zone (0x00xx)
 // The soft-key label above the CHANNEL display (the small LCD). One byte of
