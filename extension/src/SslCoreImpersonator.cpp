@@ -13,6 +13,14 @@
   using socket_t = SOCKET;
   static constexpr socket_t kInvalid = INVALID_SOCKET;
   #define SC_CLOSE closesocket
+  // WSAPoll wants Vista+; the SDK's sdkddkver.h already defaults _WIN32_WINNT to
+  // the newest supported target, so it needs no define of our own here.
+  using pollfd_t = WSAPOLLFD;
+  #define SC_POLL WSAPoll
+  inline bool scWouldBlock() {
+      const int e = WSAGetLastError();
+      return e == WSAEWOULDBLOCK || e == WSAEINTR;
+  }
 #else
   #include <sys/socket.h>
   #include <netinet/in.h>
@@ -21,9 +29,15 @@
   #include <unistd.h>
   #include <fcntl.h>
   #include <errno.h>
+  #include <poll.h>
   using socket_t = int;
   static constexpr socket_t kInvalid = -1;
   #define SC_CLOSE ::close
+  using pollfd_t = struct pollfd;
+  #define SC_POLL ::poll
+  inline bool scWouldBlock() {
+      return errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR;
+  }
 #endif
 
 #include <atomic>
@@ -550,6 +564,20 @@ std::vector<uint8_t> announcement(uint16_t tcpPort) {
     return f;
 }
 
+// Every write to a plug-in goes through here, never through a bare ::send(). A
+// write into a socket whose peer is already gone raises SIGPIPE, whose default
+// disposition kills the PROCESS — and the process is REAPER, not us. macOS/BSD
+// suppress it per socket (SO_NOSIGPIPE, set at accept); Linux only offers it per
+// call, which is what this wrapper is for.
+int sendTo(socket_t s, const std::vector<uint8_t>& b) {
+#if defined(MSG_NOSIGNAL)
+    const int flags = MSG_NOSIGNAL;
+#else
+    const int flags = 0;
+#endif
+    return int(::send(s, reinterpret_cast<const char*>(b.data()), int(b.size()), flags));
+}
+
 bool setNonBlocking(socket_t s) {
 #if defined(_WIN32)
     u_long m = 1; return ioctlsocket(s, FIONBIO, &m) == 0;
@@ -620,6 +648,59 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
     // per-connection UDP dataFd → its TCP connection fd. A datagram's DEST socket
     // then identifies the instance authoritatively — no stream-order timing guess.
     std::map<socket_t, socket_t> dataFdConn;
+    // Per-client TCP reassembly buffer. Function-scope, NOT the function-static it
+    // used to be: a static outlives a stop/start of the impersonator and would hand
+    // the next run a dead socket's half-frame, and nothing ever erased its entries.
+    std::map<socket_t, std::vector<uint8_t>> acc_;
+    // Hard ceiling on simultaneous plug-in connections. A real session is ~12; on
+    // 2026-08-17 ONE plug-in object opened 70 in 150 s and dropped none of them.
+    constexpr size_t kMaxClients = 64;
+    bool capLogged = false;
+
+    // Full teardown for ONE client, by index. This used to live inline in the
+    // recv()==0 branch, so a connection that ended any OTHER way — reset, POLLERR,
+    // anything that makes recv() return −1 — would have stayed in `clients` forever
+    // with its socket open. Hardening, not the cause of the 2026-08-17 kill: there
+    // the plug-in never closed anything, it simply kept opening MORE
+    // ([[sslcore-fd-setsize-kills-reaper]]).
+    auto dropClient = [&](size_t i) {
+        const socket_t c = clients[i];
+        SC_CLOSE(c);
+        greeted.erase(c);
+        g_namedClients.erase(c);
+        g_clientName.erase(c);
+        g_clientIndex.erase(c);
+        g_clientModel.erase(c);
+        g_clientFpObj.erase(c);
+        g_clientMfObj.erase(c);
+        acc_.erase(c);
+        {
+            std::lock_guard<std::mutex> lk(g_meterMx);
+            if (auto it = g_connPort.find(c); it != g_connPort.end()) {
+                g_portFp.erase(it->second);   // stale settings help nobody
+                g_portMf.erase(it->second);
+                g_portEq.erase(it->second);
+                g_connPort.erase(it);
+            }
+            g_clientFp.erase(c);
+            g_clientMf.erase(c);
+            g_clientEq.erase(c);
+            g_clientEqObj.erase(c);
+        }
+        // Tear down this connection's dedicated UDP data socket.
+        for (auto it = dataFdConn.begin(); it != dataFdConn.end(); ++it) {
+            if (it->second != c) continue;
+            const socket_t ufd = it->first;
+            for (size_t k = 0; k < dataFds.size(); ++k)
+                if (dataFds[k] == ufd) { dataFds.erase(dataFds.begin() + long(k));
+                                         dataPorts.erase(dataPorts.begin() + long(k)); break; }
+            SC_CLOSE(ufd);
+            dataFdConn.erase(it);
+            break;
+        }
+        clients.erase(clients.begin() + long(i));
+    };
+
     const std::vector<uint8_t> hb  = heartbeat();
     const std::vector<uint8_t> ann = announcement(actualTcp);
     double lastAnn = 0, lastHb = 0, lastSub = 0;
@@ -636,7 +717,17 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
         // plug-in selects externally and REAPER paints it immediately) collapses
         // into a brief flash instead of a slow count. Just more loopback UDP;
         // does not touch metering or cause reconnects.
-        if (annFd != kInvalid && t - lastAnn > 0.05) {
+        // …but announce fast only while plug-ins are still ARRIVING. Every announce
+        // is a standing invitation to connect, and at 20/s it is an invitation the
+        // plug-ins kept accepting: 70 connections from one object in 150 s on
+        // 2026-08-17. The burst cadence is what collapses the load countdown, so it
+        // is kept for the first plug-in and re-armed by EVERY new connection (3 s of
+        // quiet ends it) — a bank of 12 still connects in one burst. Once nothing
+        // new has arrived for 3 s we fall back to the pre-countdown 1 s, which is
+        // still prompt for a plug-in added later in the session.
+        const double annPeriod =
+            (greeted.empty() || nowMs() - g_lastNewConnMs.load() < 3000) ? 0.05 : 1.0;
+        if (annFd != kInvalid && t - lastAnn > annPeriod) {
             lastAnn = t;
             for (uint16_t dp : {16008, 16009}) {
                 sockaddr_in a{}; a.sin_family = AF_INET; a.sin_port = htons(dp); a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -646,36 +737,81 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
         }
         if (!clients.empty() && t - lastHb > 0.25) {
             lastHb = t;
-            for (socket_t c : clients) ::send(c, reinterpret_cast<const char*>(hb.data()), int(hb.size()), 0);
+            for (socket_t c : clients) sendTo(c, hb);
         }
         // Re-subscribe every 5s (capture cadence ~6.6s) so the plugin keeps the
         // meter streams open instead of dropping the connection.
         if (!clients.empty() && t - lastSub > 5.0) {
             lastSub = t;
             const auto sub = subscribeRefresh();
-            for (socket_t c : clients) ::send(c, reinterpret_cast<const char*>(sub.data()), int(sub.size()), 0);
+            for (socket_t c : clients) sendTo(c, sub);
         }
         // A view change must not wait for the next 5 s refresh — the user has
         // already switched the UF1 screen and would stare at a dead element
         // until the plug-in starts computing that view's meters.
         if (!clients.empty() && g_viewDirty.exchange(false)) {
             const auto v = viewFrame(g_view.load());
-            for (socket_t c : clients) ::send(c, reinterpret_cast<const char*>(v.data()), int(v.size()), 0);
+            for (socket_t c : clients) sendTo(c, v);
             if (g_trace) slog("[%.1f] view -> %d", t, g_view.load());
         }
 
-        fd_set rset; FD_ZERO(&rset);
-        FD_SET(listenFd, &rset);
-        socket_t maxfd = listenFd;
-        for (socket_t d : dataFds) { FD_SET(d, &rset); if (d > maxfd) maxfd = d; }
-        for (socket_t c : clients) { FD_SET(c, &rset); if (c > maxfd) maxfd = c; }
-        timeval tv{0, 40 * 1000};
-        if (::select(int(maxfd) + 1, &rset, nullptr, nullptr, &tv) <= 0) continue;
+        // ⛔ poll(), NEVER select(). On macOS an fd_set is a fixed bitmap indexed by
+        // the fd NUMBER, and FD_SET() with an fd >= FD_SETSIZE (1024) does not fail
+        // or clamp — it calls __darwin_check_fd_set_overflow, which faults the whole
+        // PROCESS via EXC_GUARD. That is what killed REAPER on 2026-08-17: no
+        // dialog, no crash report from REAPER, audio still playing, window simply
+        // gone, because the kernel shot the host and REAPER never got to run its own
+        // handler. The fd number is process-wide, so this was never ours to bound —
+        // whatever REAPER itself has open pushes ours up. poll() takes the fds as a
+        // LIST and has no such ceiling. Windows select() has the mirror-image limit
+        // (fd_set there is a count-capped array, FD_SETSIZE = 64, silently dropping
+        // the rest), which WSAPoll avoids too. [[sslcore-fd-setsize-kills-reaper]]
+        std::vector<pollfd_t> pfds;
+        pfds.reserve(1 + dataFds.size() + clients.size());
+        auto watch = [&](socket_t s) {
+            pollfd_t p{}; p.fd = s; p.events = POLLIN; pfds.push_back(p);
+        };
+        watch(listenFd);
+        for (socket_t d : dataFds) watch(d);
+        for (socket_t c : clients) watch(c);
+        if (SC_POLL(pfds.data(), static_cast<unsigned>(pfds.size()), 40) <= 0) continue;
+        // POLLHUP / POLLERR / POLLNVAL count as readable on purpose: recv() then
+        // returns 0 or −1 and dropClient reclaims the socket. Under select() those
+        // ends were invisible, so they were never reclaimed at all.
+        std::set<socket_t> readable;
+        for (const auto& p : pfds)
+            if (p.revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL))
+                readable.insert(p.fd);
 
-        if (FD_ISSET(listenFd, &rset)) {
+        if (readable.count(listenFd)) {
             socket_t c = ::accept(listenFd, nullptr, nullptr);
-            if (c != kInvalid) {
+            if (c != kInvalid && clients.size() >= kMaxClients) {
+                // Refuse rather than serve a runaway. poll() means a flood can no
+                // longer kill the host, but every extra connection still costs a
+                // heartbeat every 0.25 s and a re-subscribe every 5 s.
+                SC_CLOSE(c);
+                if (!capLogged) {
+                    capLogged = true;
+                    slog("[%.1f] ⛔ %zu clients — refusing further connections", t, clients.size());
+                }
+            } else if (c != kInvalid) {
+                capLogged = false;
                 setNonBlocking(c);
+                // Never let a write into a dead socket signal the HOST. We heartbeat
+                // every client every 0.25 s, so we write into peers that have just
+                // gone away as a matter of course, and a write to a reset socket
+                // raises SIGPIPE — default disposition: kill the process. REAPER
+                // happens to ignore SIGPIPE, which is the only reason 150 s of
+                // writing into 70 dead connections merely leaked instead of killing
+                // it outright on 2026-08-17. Measured, not assumed: the same load
+                // takes down a test binary that does not ignore it. Our own signal
+                // disposition is not ours to set inside a host, so suppress at the
+                // socket instead (Linux has no SO_NOSIGPIPE; see the send sites).
+              #if defined(SO_NOSIGPIPE)
+                int nosig = 1;
+                setsockopt(c, SOL_SOCKET, SO_NOSIGPIPE,
+                           reinterpret_cast<char*>(&nosig), sizeof(nosig));
+              #endif
                 int one = 1; setsockopt(c, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char*>(&one), sizeof(one));
                 clients.push_back(c);
                 // REACTIVE handshake (2026-07-27, CAPTURED from real Core): do NOT
@@ -688,7 +824,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
             }
         }
         for (socket_t d : dataFds) {
-          if (!FD_ISSET(d, &rset)) continue;
+          if (!readable.count(d)) continue;
           // Keep the sender: its source port is what tells two plug-in instances
           // apart (see the Instance comment — the wire carries no PluginType).
           sockaddr_in from{}; socklen_t fromLen = sizeof(from);
@@ -983,44 +1119,18 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
         }
         for (size_t i = 0; i < clients.size();) {
             socket_t c = clients[i];
-            if (FD_ISSET(c, &rset)) {
+            if (readable.count(c)) {
                 int n = int(::recv(c, reinterpret_cast<char*>(buf), sizeof(buf), 0));
-                if (n == 0) {
-                    SC_CLOSE(c);
-                    greeted.erase(c);
-                    g_namedClients.erase(c);
-                    g_clientName.erase(c);
-                    g_clientIndex.erase(c);
-                    g_clientModel.erase(c);
-                    g_clientFpObj.erase(c);
-                    g_clientMfObj.erase(c);
-                    {
-                        std::lock_guard<std::mutex> lk(g_meterMx);
-                        if (auto it = g_connPort.find(c); it != g_connPort.end()) {
-                            g_portFp.erase(it->second);   // stale settings help nobody
-                            g_portMf.erase(it->second);
-                            g_portEq.erase(it->second);
-                            g_connPort.erase(it);
-                        }
-                        g_clientFp.erase(c);
-                        g_clientMf.erase(c);
-                        g_clientEq.erase(c);
-                        g_clientEqObj.erase(c);
-                    }
-                    // Tear down this connection's dedicated UDP data socket.
-                    for (auto it = dataFdConn.begin(); it != dataFdConn.end(); ++it) {
-                        if (it->second != c) continue;
-                        const socket_t ufd = it->first;
-                        for (size_t k = 0; k < dataFds.size(); ++k)
-                            if (dataFds[k] == ufd) { dataFds.erase(dataFds.begin() + long(k));
-                                                     dataPorts.erase(dataPorts.begin() + long(k)); break; }
-                        SC_CLOSE(ufd);
-                        dataFdConn.erase(it);
-                        break;
-                    }
-                    clients.erase(clients.begin() + long(i));
+                // n == 0 is a clean close; n < 0 with a REAL error (reset, pipe,
+                // invalid socket) is a dirty one. Both mean the connection is over.
+                // Only the clean case used to be handled; a dirty end would have
+                // stayed in `clients` with its socket open and a heartbeat still
+                // being written into it every 0.25 s for the rest of the session.
+                if (n == 0 || (n < 0 && !scWouldBlock())) {
+                    dropClient(i);
                     continue;
                 }
+                if (n < 0) { ++i; continue; }   // spurious wake, nothing to read yet
                 // First bytes from this client = the plug-in's type-4/type-5
                 // hello. Reply with the opening NOW (reactive handshake, like real
                 // Core) — this is what keeps the plug-in from selecting its track.
@@ -1042,9 +1152,9 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                         dataFdConn[udp] = c;
                     }
                     auto seq = openingSequence(udpPort, connId);
-                    ::send(c, reinterpret_cast<const char*>(seq.data()), int(seq.size()), 0);
+                    sendTo(c, seq);
                     auto sub = subscribeInitial();
-                    ::send(c, reinterpret_cast<const char*>(sub.data()), int(sub.size()), 0);
+                    sendTo(c, sub);
                     greeted.insert(c);
                     g_connected.store(true);
                     g_lastNewConnMs.store(nowMs());
@@ -1059,8 +1169,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                 // (matches subscribeInitial): efbc5100 | len32 | 12-B hdr |
                 // paylen32 | type32 | payload(8-B objId + protobuf).
                 if (n > 0) {
-                    static std::map<socket_t, std::vector<uint8_t>> sAcc;
-                    auto& acc = sAcc[c];
+                    auto& acc = acc_[c];
                     acc.insert(acc.end(), buf, buf + n);
                     size_t off = 0;
                     for (;;) {

@@ -729,6 +729,18 @@ if(NOT WIN32)
     target_include_directories(test_ssl_meter PRIVATE src)
     add_test(NAME ssl_meter COMMAND test_ssl_meter)
 
+    # Socket-reclaim regression for the 2026-08-17 host kill. Drives the real
+    # impersonator over loopback, so it is POSIX-only (SO_LINGER/RST + /dev/fd)
+    # and needs no REAPER API. Exits 77 = skipped when the ports are taken.
+    if(NOT WIN32)
+        add_executable(test_sslcore_fd_reclaim tests/test_sslcore_fd_reclaim.cpp
+            src/SslCoreImpersonator.cpp src/SslMeterProtocol.cpp src/LogPath.cpp)
+        target_include_directories(test_sslcore_fd_reclaim PRIVATE src)
+        target_link_libraries(test_sslcore_fd_reclaim PRIVATE Threads::Threads)
+        add_test(NAME sslcore_fd_reclaim COMMAND test_sslcore_fd_reclaim)
+        set_tests_properties(sslcore_fd_reclaim PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
+
     # Includes UserPluginCatalog.cpp directly (see the file header) — do NOT
     # also list it as a source or every symbol lands twice.
     add_executable(test_user_catalog_uf1 tests/test_user_catalog_uf1.cpp
