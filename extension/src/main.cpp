@@ -25956,42 +25956,6 @@ void uf1PaintChannel_()
         static std::array<uint8_t, 8> sVpotBars{};
         static bool sVpotBarsValid = false;
         std::array<uint8_t, 8> bars{};
-        // ⚠ TEMPORARY PROBE — rea_sixty/uf1_bar_mode. Forces the odd (mode) byte on
-        // ALL four pots so the meaning of that byte can be settled in ONE pass on
-        // the hardware. Empty / absent / negative = normal behaviour. Read live, so
-        // the value can be changed from a script without restarting REAPER.
-        //
-        // Why: V-Pot 3 carries a permanent bright centre line (Frank 2026-08-17,
-        // and the same thing the forum report calls "3rd v-pot is broken"). Page 1
-        // of every strip type has "Output Trim" in slot 3 — the ONLY bipolar entry
-        // on that page — so 0x80 goes out there once and the marker never leaves,
-        // even in DAW mode where we send 0x00 for all four (frame-trace confirmed).
-        // cap56 shows SSL cycling this byte through 0 → 1 → 2 → 4, so it is a MODE
-        // ENUM (the MCU V-Pot ring family: dot / boost-cut / wrap / spread), not the
-        // boolean we model — and 0x00 may well mean "unchanged" rather than "plain".
-        // REMOVE once the values are known and `bipolar` is replaced by the real enum.
-        int barModeProbe = -1;
-        if (const char* bm = GetExtState("rea_sixty", "uf1_bar_mode"); bm && *bm)
-            barModeProbe = std::atoi(bm);
-        // ⇨ 0x010d — the per-V-Pot BAR STYLE, one byte each. DECODED 2026-08-17 from
-        // cap72 by pairing every style frame with the four 0x010e labels that follow:
-        //   0x08 = origin in the MIDDLE   (In Trim, Out Trim, LF/LMF/HMF/HF Gain)
-        //   0x02 = fill from the left     (Width, Mic, Ratio, Threshold, Mix)
-        //   0x01 = pointer, not a fill    (band Freq, Q, High/Low Pass, Release)
-        //   0x03 = pot empty              (every unassigned slot)
-        // SSL re-sends it on EVERY page change. We sent it ONCE, hardcoded to
-        // cap85's {02,02,08,02}, as part of the plugin large-display burst — a
-        // snapshot of a page whose third pot happened to be Out Trim. So V-Pot 3
-        // carried a permanent bright centre line in every mode, whatever was drawn
-        // (Frank 2026-08-17; the forum report files the same thing as "3rd v-pot is
-        // broken, only uses the right space of the rectangle").
-        //
-        // ⚠ The ORIGIN lives here, NOT in the odd byte of 0x010f. That byte is
-        // BRIGHTNESS: 0x80 draws all four bars bright, 0x00 dark (measured on the
-        // hardware — forcing it through 0/1/2/4/8/128 changed nothing but the
-        // brightness). Our `bipolar` flag was wired to it, so gain pots came out
-        // bright and everything else dim, by accident rather than intent. Left as it
-        // is for now: it is a look, and SSL's own captures use a mix.
         std::array<uint8_t, 4> styles{0x03, 0x03, 0x03, 0x03};
         auto setBar = [&](int i, double norm, bool bipolar, bool empty = false) {
             // ⛔ A CENTRE BAR CARRIES A SIGNED DEVIATION, NOT AN ABSOLUTE POSITION.
@@ -26013,9 +25977,7 @@ void uf1PaintChannel_()
             // slot is not a gain (Frank 2026-08-17). It is not polarity — forcing it
             // on the hardware changed nothing but brightness — and there is no
             // reason for one pot to be dimmer than the next.
-            bars[i * 2 + 1] = (barModeProbe >= 0)
-                                ? static_cast<uint8_t>(barModeProbe)
-                                : 0x80;
+            bars[i * 2 + 1] = 0x80;
             // …and the STYLE follows the UF8, which Frank confirms reads correctly:
             // unipolar draws a travelling LINE (0x01), bipolar a fill from the
             // centre (0x08), an empty slot nothing (0x03). We briefly sent 0x02
