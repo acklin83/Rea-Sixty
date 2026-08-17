@@ -652,9 +652,16 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
     // used to be: a static outlives a stop/start of the impersonator and would hand
     // the next run a dead socket's half-frame, and nothing ever erased its entries.
     std::map<socket_t, std::vector<uint8_t>> acc_;
-    // Hard ceiling on simultaneous plug-in connections. A real session is ~12; on
-    // 2026-08-17 ONE plug-in object opened 70 in 150 s and dropped none of them.
-    constexpr size_t kMaxClients = 64;
+    // Runaway backstop ONLY — deliberately far above any real session. Frank's mix
+    // on 2026-08-17 had 69 tracks each carrying a 4K E, so 69 SIMULTANEOUS
+    // connections is not pathological, it is Tuesday. This started life at 64 on
+    // the mistaken reading that one plug-in had reconnected 70 times; the log says
+    // otherwise (69 DISTINCT tracks, one stream each, every one healthy — exactly
+    // what real Core sees: 12 plug-ins, 12 connections). A cap that a real project
+    // can reach would silently cost the user their last plug-ins, which is worse
+    // than anything it protects against. poll() has no ceiling of its own, so this
+    // number answers to nothing but "obviously insane".
+    constexpr size_t kMaxClients = 256;
     bool capLogged = false;
 
     // Full teardown for ONE client, by index. This used to live inline in the
@@ -717,14 +724,16 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
         // plug-in selects externally and REAPER paints it immediately) collapses
         // into a brief flash instead of a slow count. Just more loopback UDP;
         // does not touch metering or cause reconnects.
-        // …but announce fast only while plug-ins are still ARRIVING. Every announce
-        // is a standing invitation to connect, and at 20/s it is an invitation the
-        // plug-ins kept accepting: 70 connections from one object in 150 s on
-        // 2026-08-17. The burst cadence is what collapses the load countdown, so it
-        // is kept for the first plug-in and re-armed by EVERY new connection (3 s of
-        // quiet ends it) — a bank of 12 still connects in one burst. Once nothing
-        // new has arrived for 3 s we fall back to the pre-countdown 1 s, which is
-        // still prompt for a plug-in added later in the session.
+        // …but announce fast only while plug-ins are still ARRIVING. The burst
+        // cadence is what collapses the load countdown, so it is kept for the first
+        // plug-in and re-armed by EVERY new connection (3 s of quiet ends it) — a
+        // project full of strips still connects in one burst. Once nothing new has
+        // arrived for 3 s we fall back to the pre-countdown 1 s, which is still
+        // prompt for a plug-in added later in the session.
+        // NB this is housekeeping, not a bug fix: it went in believing the plug-ins
+        // were accepting the same invitation repeatedly, and the log disproved that
+        // (69 tracks, 69 connections, no duplicates). It stands because 20 loopback
+        // datagrams a second, forever, buys nothing once everyone is connected.
         const double annPeriod =
             (greeted.empty() || nowMs() - g_lastNewConnMs.load() < 3000) ? 0.05 : 1.0;
         if (annFd != kInvalid && t - lastAnn > annPeriod) {

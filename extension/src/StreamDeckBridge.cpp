@@ -17,6 +17,8 @@
   using socket_t = SOCKET;
   static constexpr socket_t kInvalid = INVALID_SOCKET;
   #define SD_CLOSE closesocket
+  using pollfd_t = WSAPOLLFD;
+  #define SD_POLL WSAPoll
 #else
   #include <sys/socket.h>
   #include <sys/types.h>
@@ -26,9 +28,12 @@
   #include <unistd.h>
   #include <fcntl.h>
   #include <errno.h>
+  #include <poll.h>
   using socket_t = int;
   static constexpr socket_t kInvalid = -1;
   #define SD_CLOSE ::close
+  using pollfd_t = struct pollfd;
+  #define SD_POLL ::poll
 #endif
 
 #include "WDL/jsonparse.h"
@@ -37,6 +42,8 @@
 #include <mutex>
 #include <thread>
 #include <deque>
+#include <set>
+#include <vector>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -149,9 +156,19 @@ struct Client {
 };
 
 bool sendRaw(socket_t fd, const char* data, size_t len) {
+    // A write into a socket whose peer has gone raises SIGPIPE, and its default
+    // disposition kills the PROCESS — which here is REAPER, not us. We broadcast to
+    // every subscribed client on every state change, so writing into a peer that
+    // just vanished is routine, not exotic. macOS/BSD also get SO_NOSIGPIPE at
+    // accept; this flag is the Linux half (and belt-and-braces on the others).
+#if defined(MSG_NOSIGNAL)
+    const int sendFlags = MSG_NOSIGNAL;
+#else
+    const int sendFlags = 0;
+#endif
     size_t sent = 0;
     while (sent < len) {
-        int n = ::send(fd, data + sent, static_cast<int>(len - sent), 0);
+        int n = ::send(fd, data + sent, static_cast<int>(len - sent), sendFlags);
         if (n > 0) { sent += static_cast<size_t>(n); continue; }
         if (n < 0 && wouldBlock()) { std::this_thread::yield(); continue; }
         return false;  // peer closed or hard error
@@ -228,29 +245,48 @@ void workerMain(int port, bool bindAll) {
     std::vector<Client> clients;
 
     while (g_running.load()) {
-        fd_set rset;
-        FD_ZERO(&rset);
-        FD_SET(listenFd, &rset);
-        socket_t maxfd = listenFd;
+        // ⛔ poll(), NEVER select() — see SslCoreImpersonator.cpp for the full
+        // story. Short version: on macOS an fd_set is a bitmap indexed by the fd
+        // NUMBER, and FD_SET() with an fd >= FD_SETSIZE (1024) does not fail, it
+        // faults the whole PROCESS. That killed REAPER on 2026-08-17 from the
+        // impersonator's copy of this same loop: no dialog, no crash report, audio
+        // still playing, window gone. The fd number is process-wide, so a server
+        // that opens only a handful of sockets is NOT safe from it — REAPER's own
+        // descriptors are what push the numbers up, and 69 SSL plug-ins loading a
+        // project was enough. [[sslcore-fd-setsize-kills-reaper]]
+        std::vector<pollfd_t> pfds;
+        pfds.reserve(1 + clients.size());
+        { pollfd_t p{}; p.fd = listenFd; p.events = POLLIN; pfds.push_back(p); }
         for (const auto& c : clients) {
-            FD_SET(c.fd, &rset);
-            if (c.fd > maxfd) maxfd = c.fd;
+            pollfd_t p{}; p.fd = c.fd; p.events = POLLIN; pfds.push_back(p);
         }
 
         // Short timeout so g_running is polled ~60x/s and outbound lines flush
         // with low latency.
-        timeval tv{0, 16 * 1000};
-        int sel = ::select(static_cast<int>(maxfd) + 1, &rset, nullptr, nullptr, &tv);
+        const int sel = SD_POLL(pfds.data(), static_cast<unsigned>(pfds.size()), 16);
+
+        // POLLHUP / POLLERR / POLLNVAL count as readable: recv() then returns 0 or
+        // −1 and the existing drop paths below reclaim the client.
+        std::set<socket_t> readable;
+        if (sel > 0)
+            for (const auto& p : pfds)
+                if (p.revents & (POLLIN | POLLHUP | POLLERR | POLLNVAL))
+                    readable.insert(p.fd);
 
         if (sel > 0) {
             // New connection.
-            if (FD_ISSET(listenFd, &rset)) {
+            if (readable.count(listenFd)) {
                 socket_t fd = ::accept(listenFd, nullptr, nullptr);
                 if (fd != kInvalid) {
                     setNonBlocking(fd);
                     int one = 1;
                     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY,
                                reinterpret_cast<char*>(&one), sizeof(one));
+                  #if defined(SO_NOSIGPIPE)
+                    int nosig = 1;   // see sendRaw — never signal the host to death
+                    setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE,
+                               reinterpret_cast<char*>(&nosig), sizeof(nosig));
+                  #endif
                     Client cl;
                     cl.fd = fd;
                     // Greet immediately (this thread owns the fd).
@@ -266,7 +302,7 @@ void workerMain(int port, bool bindAll) {
             for (size_t i = 0; i < clients.size();) {
                 Client& cl = clients[i];
                 bool drop = false;
-                if (FD_ISSET(cl.fd, &rset)) {
+                if (readable.count(cl.fd)) {
                     char buf[2048];
                     int n = ::recv(cl.fd, buf, sizeof(buf), 0);
                     if (n > 0)        { drop = !ingest(cl, buf, n); }
