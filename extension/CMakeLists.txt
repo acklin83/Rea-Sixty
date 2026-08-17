@@ -331,7 +331,6 @@ add_library(reaper_uf8 MODULE
     src/UC1Surface.cpp
     src/ColorSync.cpp
     src/MidiBridge.cpp
-    src/HidDevice.cpp
     # Phase 2.7 — the dockable window and the Settings panes it hosts.
     # (Phase 2.6, the Plug-in Mixer view, was never built; its MixerLayout
     #  scaffold was removed 2026-08-14.)

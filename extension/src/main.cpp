@@ -87,7 +87,6 @@
 #include "ColorSync.h"
 #include "FocusedParam.h"
 #include "GrCalibration.h"
-#include "HidDevice.h"
 #include "MarkerOverlay.h"
 #include "MidiBridge.h"
 #include "DynaMountManager.h"
@@ -426,7 +425,6 @@ namespace {
 std::unique_ptr<uf8::UF8Device>   g_dev;
 std::unique_ptr<uf8::ColorSync>   g_sync;
 std::unique_ptr<uf8::MidiBridge>  g_midi;
-std::unique_ptr<uf8::HidDevice>   g_hid;
 
 // UC1 — optional. If the device isn't present on the bus we just skip
 // it; UF8 continues to work independently. Opening UC1 as a separate
@@ -26599,16 +26597,6 @@ void uf1PaintChannel_()
         } else {
             sMenuShown = false; sMenuSel = -2;
         }
-    }
-}
-
-// Log raw HID reports until we've reverse-engineered the report format.
-void logHid(const uint8_t* data, size_t len)
-{
-    if (FILE* f = std::fopen(uf8::logPath("reaper_uf8_hid.log").c_str(), "a")) {
-        for (size_t i = 0; i < len; ++i) std::fprintf(f, "%02x ", data[i]);
-        std::fprintf(f, "\n");
-        std::fclose(f);
     }
 }
 
