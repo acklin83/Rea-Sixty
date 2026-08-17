@@ -25731,10 +25731,29 @@ void uf1PaintChannel_()
         static std::array<uint8_t, 8> sVpotBars{};
         static bool sVpotBarsValid = false;
         std::array<uint8_t, 8> bars{};
+        // ⚠ TEMPORARY PROBE — rea_sixty/uf1_bar_mode. Forces the odd (mode) byte on
+        // ALL four pots so the meaning of that byte can be settled in ONE pass on
+        // the hardware. Empty / absent / negative = normal behaviour. Read live, so
+        // the value can be changed from a script without restarting REAPER.
+        //
+        // Why: V-Pot 3 carries a permanent bright centre line (Frank 2026-08-17,
+        // and the same thing the forum report calls "3rd v-pot is broken"). Page 1
+        // of every strip type has "Output Trim" in slot 3 — the ONLY bipolar entry
+        // on that page — so 0x80 goes out there once and the marker never leaves,
+        // even in DAW mode where we send 0x00 for all four (frame-trace confirmed).
+        // cap56 shows SSL cycling this byte through 0 → 1 → 2 → 4, so it is a MODE
+        // ENUM (the MCU V-Pot ring family: dot / boost-cut / wrap / spread), not the
+        // boolean we model — and 0x00 may well mean "unchanged" rather than "plain".
+        // REMOVE once the values are known and `bipolar` is replaced by the real enum.
+        int barModeProbe = -1;
+        if (const char* bm = GetExtState("rea_sixty", "uf1_bar_mode"); bm && *bm)
+            barModeProbe = std::atoi(bm);
         auto setBar = [&](int i, double norm, bool bipolar) {
             const int pos = std::clamp(static_cast<int>(std::lround(norm * 100.0)), 0, 100);
             bars[i * 2]     = static_cast<uint8_t>(pos);
-            bars[i * 2 + 1] = bipolar ? 0x80 : 0x00;
+            bars[i * 2 + 1] = (barModeProbe >= 0)
+                                ? static_cast<uint8_t>(barModeProbe)
+                                : (bipolar ? 0x80 : 0x00);
         };
         if (g_uf1ChannelSubMode.load() == 2) {
             // Sends mode: the 4 V-Pots follow the focused track's 7.75 MIXER-SLOT
