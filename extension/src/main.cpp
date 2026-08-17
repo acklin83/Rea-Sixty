@@ -26003,17 +26003,19 @@ void uf1PaintChannel_()
                 setBar(i, TrackFX_GetParamNormalized(csTr, csFx, p), bipolar);
             }
         } else {
-            const double panV = GetMediaTrackInfo_Value(tr, "D_PAN");
-            const double volV = GetMediaTrackInfo_Value(tr, "D_VOL");
-            sendVpotParam(0, "Pan", formatPanReadout(panV));
-            sendVpotParam(1, "Vol", formatDbReadout(volV) + "dB");
-            sendVpotParam(2, "", "");
-            sendVpotParam(3, "", "");
-            setBar(0, (panV + 1.0) * 0.5, /*bipolar*/true);   // pan: centre-origin
-            setBar(1, static_cast<double>(uf1VolToPos_(volV))
-                        / static_cast<double>(kUf1FaderMax), /*bipolar*/false);
-            setBar(2, 0.0, false, /*empty*/true);
-            setBar(3, 0.0, false, /*empty*/true);
+            // ⛔ NOTHING, not "Pan" and "Vol". Plugin mode with no channel strip on
+            // the track used to show the track's pan on V-Pot 1 and its volume on
+            // V-Pot 2 — but the ROTATION handler has no such case: it resolves the
+            // strip FX and returns when there is none, so both pots read out values
+            // they cannot move. A control that displays something it does not drive
+            // is worse than an empty one (Frank 2026-08-17: "die v-pots funktionieren
+            // nicht dafür. Besser dann gar nix anzeigen").
+            // Pan and volume are not lost — that is what DAW mode is for, where the
+            // four pots really do ride the window's track volumes.
+            for (uint8_t i = 0; i < 4; ++i) {
+                sendVpotParam(i, "", "");
+                setBar(i, 0.0, false, /*empty*/true);
+            }
         }
         if (changed || !sVpotBarsValid || bars != sVpotBars) {
             sVpotBars = bars; sVpotBarsValid = true;
