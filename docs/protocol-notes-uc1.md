@@ -254,7 +254,7 @@ Channel Strip section knob IDs still TBD — `uc1_04`–`uc1_07` only exercised 
 
 **This section described a plan that was never shipped. Superseded; kept for the record of what was tried.**
 
-The original plan was a bundled JSFX envelope-follower (`extension/jsfx/rea_sixty_gr_probe.jsfx`) inserted next to the SSL compressor, read back via `TrackFX_GetParam`. That file is still in the tree but is **not** built, embedded or referenced by any source, and no GR ever came from it.
+The original plan was a bundled JSFX envelope-follower (`rea_sixty_gr_probe.jsfx`) inserted next to the SSL compressor, read back via `TrackFX_GetParam`. It was never built, embedded or referenced by any source, no GR ever came from it, and the file was deleted on 2026-08-14 (recover from git if the approach is ever wanted). The one JSFX that DOES ship is `rea_sixty_input_level.jsfx`, which serves the UC1 input meter and has nothing to do with GR.
 
 What actually ships, in order of preference:
 
