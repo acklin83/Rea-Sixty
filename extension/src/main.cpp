@@ -26334,6 +26334,31 @@ void uf1PaintChannel_()
         // survives a pinned channel across track changes, not a single probe.
     }
 
+    // ⚠ TEMPORARY PROBE — rea_sixty/uf1_sk_highlight. Forces the 0x0102 soft-key
+    // HIGHLIGHT mask so its meaning can be read off the hardware. Empty / absent /
+    // negative = normal (the layout burst's 0x00, i.e. no highlight).
+    //
+    // Why a probe and not an implementation: SSL writes 08 and 0c here in CHANNEL
+    // captures while we write 00, but two corpus readings both collapsed. "Bit =
+    // key is on" is contradicted by the LED levels (0x08 with SK4 dark, 0x00 with
+    // SK1/2/4 lit), and "bit = key is empty" by the same label set appearing with
+    // both 0x0c and 0x00. Both elements are change-gated on the wire, so pairing
+    // them after the fact compares stale values — the trick that cracked 0x010d
+    // does not transfer, because THAT one is re-sent on every page change.
+    // One pass on the device settles it: 0x01, 0x02, 0x04, 0x08, then 0x0f.
+    // REMOVE once the meaning is known.
+    {
+        static int sSkHi = INT_MIN;
+        int want = -1;
+        if (const char* h = GetExtState("rea_sixty", "uf1_sk_highlight"); h && *h)
+            want = std::atoi(h);
+        if (changed || want != sSkHi) {
+            sSkHi = want;
+            const uint8_t v = static_cast<uint8_t>(want < 0 ? 0 : want);
+            g_uf1_dev->send(uf1::buildScreen(0x0102, std::span<const uint8_t>(&v, 1)));
+        }
+    }
+
     // Solo-Active indication (0x0120) — the region under the firmware's
     // "SOLO CLR 1" caption, manual p187. Dead in our build until the 2026-08-10
     // sweep found it: it is a 1-byte FLAG, and non-zero makes the FIRMWARE draw
