@@ -25866,6 +25866,9 @@ void uf1PaintChannel_()
         // geht erst 4k E"). Send the real type so each renders its own layout. Link
         // ("Link") / BC ("BC 2") strings are best-effort (unverified vs a capture);
         // −1 (no SSL strip) keeps "4K E" so a plain track still triggers a layout.
+        // On a track with NO FX at all that string is only the latch: the block near
+        // the end of this function overwrites the CELL with spaces a frame later, so
+        // the layout (and with it the colour bar) stands but reads blank.
         {
             MediaTrack* tt = nullptr; int tf = -1;
             const int tty = uf1ResolveCsFx_(tr, tt, tf);
@@ -25967,15 +25970,39 @@ void uf1PaintChannel_()
     // 2026-07-29). Overrides the layout trigger's "4K E" placeholder above (which
     // reliably establishes the layout with a known SSL type) with the real name,
     // change-detected so it also follows an FX-instance cycle that doesn't raise
-    // `changed`. Only overrides when an FX resolves — a track with no FX keeps the
-    // placeholder. NB the zone is a short label; long names are clipped by the
+    // `changed`. NB the zone is a short label; long names are clipped by the
     // firmware (helper already trims to ~12). Colour stays TRACK colour (0x0018).
+    //
+    // ★ A TRACK WITH NOTHING ON IT BLANKS THE CELL (Frank 2026-08-17: "wieso steht
+    // im colour-bar auf der UF1 trotzdem 4KE auch wenn gar kein Plugin auf der Spur
+    // ist"). It used to keep the placeholder, because on the UF1 0x0017 is BOTH the
+    // layout latch and the label — drop the string and the whole channel-strip
+    // layout goes with it, colour bar included (see the layout burst above). The
+    // UF8 has the two split: there the bar is gated by the plug-in SLOT frames
+    // (buildPluginSlotActive + buildPluginSlotName), and UF8Device::blankAllZones
+    // marks every slot occupied with SPACES, which leaves the CS-type zone free to
+    // be empty (main.cpp ~28977). So: the latch string still goes out in the burst
+    // above, and this block overwrites it one frame later with SPACES rather than an
+    // empty payload — spaces are what keeps the UF8's slot counting as occupied
+    // while rendering nothing, so they are the likeliest string to hold the UF1's
+    // latch too. If the layout drops on an FX-less track, THIS is the change.
     {
         static std::string sFxName;
         const std::string fxName = uf1ActiveFxShortName_();
-        if (!fxName.empty() && (changed || fxName != sFxName)) {
-            sFxName = fxName;
-            sendZoneText(uf1::scr::kCsType, fxName);
+        // Blank only when BOTH resolvers come up empty. uf1ResolveCsFx_ >= 0 means a
+        // real strip type is on screen and must stay; and uf1ActiveFxShortName_ ends
+        // in resolveActiveFx_'s FX[0] fallback, so an empty name really does mean
+        // "no FX on this track", not just "none active".
+        MediaTrack* nmTr = nullptr; int nmFx = -1;
+        const bool bare = fxName.empty() && uf1ResolveCsFx_(tr, nmTr, nmFx) < 0;
+        // TWELVE spaces = the zone's full width (the helper trims names to 12). The
+        // firmware does not clear a text zone on write — the UF8 pads to a fixed
+        // width for exactly that reason (Protocol.cpp buildChannelStripType) — so a
+        // shorter blank would leave the tail of a longer previous name standing.
+        const std::string want = bare ? std::string(12, ' ') : fxName;
+        if (!want.empty() && (changed || want != sFxName)) {
+            sFxName = want;
+            sendZoneText(uf1::scr::kCsType, want);
         }
     }
 
