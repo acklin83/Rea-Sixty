@@ -24366,6 +24366,66 @@ const char* uf1SkSpecialLabel_(uf8::Uf1SkSpecial act)
     return "";
 }
 
+// How many DISTINCT settings does a discrete param actually offer, and what is
+// the next one? Answers "bei allen SSL strips checken" (Frank 2026-08-17) without
+// naming a single strip: ASK THE PLUG-IN. Sampling five normalised points and
+// keeping the distinct FORMATTED values gets every case right by itself —
+// docs/ssl-native-params, columns for 0.0 / 0.5 / 1.0:
+//   4K E   EQ Colour   Brown · Black · Orange   -> 3 settings
+//   4K G   EQ Colour   Pink  · Black · Black    -> 2 (the UC1 special-cases this
+//                                                    by name; here it falls out)
+//   CS 2   EQ Type     G     · E     · E        -> 2
+//   Link   EQ Type     0     · 0.5   · 1        -> 3
+//   4K B   no EQ Type at all
+// A CONTINUOUS param yields five distinct values with no repeats, and that is the
+// guard: without at least one adjacent repeat we do NOT treat it as stepped and
+// the caller keeps its plain 0<->1 toggle. Each returned target is the MIDDLE of
+// its run, so the write lands safely inside the step rather than on its edge.
+// Main-thread only (REAPER FX API).
+static bool uf1DiscreteCycleNext_(MediaTrack* tr, int fx, int param,
+                                  double cur, double& outNext)
+{
+    constexpr int kN = 5;
+    std::array<std::string, kN> txt;
+    char buf[128];
+    for (int i = 0; i < kN; ++i) {
+        const double n = static_cast<double>(i) / (kN - 1);
+        // Probing has to WRITE to read the formatted value back, so remember the
+        // live one and put it back before returning — the user must not hear five
+        // settings fly past on every press.
+        TrackFX_SetParamNormalized(tr, fx, param, n);
+        txt[i] = TrackFX_GetFormattedParamValue(tr, fx, param, buf, sizeof(buf))
+                   ? buf : "";
+    }
+    TrackFX_SetParamNormalized(tr, fx, param, cur);
+
+    bool anyRepeat = false;
+    for (int i = 1; i < kN; ++i) if (txt[i] == txt[i - 1]) anyRepeat = true;
+    if (!anyRepeat) return false;            // continuous — leave it to the toggle
+
+    // Distinct runs, in order, each represented by the midpoint of its samples.
+    std::vector<double> targets;
+    int runStart = 0;
+    for (int i = 1; i <= kN; ++i) {
+        if (i == kN || txt[i] != txt[runStart]) {
+            const double a = static_cast<double>(runStart) / (kN - 1);
+            const double b = static_cast<double>(i - 1)    / (kN - 1);
+            targets.push_back((a + b) * 0.5);
+            runStart = i;
+        }
+    }
+    if (targets.size() < 3) return false;    // 2 settings = the toggle already works
+
+    // Which run are we in now? Nearest target wins.
+    size_t curIdx = 0; double best = 1e9;
+    for (size_t k = 0; k < targets.size(); ++k) {
+        const double d = std::fabs(targets[k] - cur);
+        if (d < best) { best = d; curIdx = k; }
+    }
+    outNext = targets[(curIdx + 1) % targets.size()];
+    return true;
+}
+
 // Toggle a Channel-view soft-key param (p188). idx = 0..3 (display soft-keys
 // 0x19-0x1C). Resolves the SAME on-screen SSL strip FX + page as the V-Pots
 // (uf1ResolveCsFx_ + g_uf1CsPage), looks up the current-page soft-key param by
@@ -24509,7 +24569,14 @@ void applyUf1ChannelSoftKey_(int idx)
     if (p < 0) return;                            // blank / label-only / unmapped
 
     const double cur = TrackFX_GetParamNormalized(tr, fx, p);
-    const double nv  = (cur > 0.5) ? 0.0 : 1.0;
+    // A param with MORE than two settings must cycle all of them. The 4K E's
+    // "EQ Colour" is Brown / Black / Orange, and this used to be a hard 0<->1
+    // flip, so Black (0.5) could not be reached from the UF1 at all (Frank
+    // 2026-08-17). uf1DiscreteCycleNext_ asks the plug-in instead of naming any
+    // strip, so 4K G and CS 2 stay two-way on their own and a learned plug-in with
+    // six options cycles six. Falls through to the plain toggle otherwise.
+    double nv = (cur > 0.5) ? 0.0 : 1.0;
+    uf1DiscreteCycleNext_(tr, fx, p, cur, nv);
     if (nv != cur) TrackFX_SetParamNormalized(tr, fx, p, nv);
 }
 
@@ -25783,10 +25850,21 @@ void uf1PaintChannel_()
                 ? std::clamp(static_cast<int>(std::lround((norm - 0.5) * 200.0)), -100, 100)
                 : std::clamp(static_cast<int>(std::lround(norm * 100.0)),            0, 100);
             bars[i * 2]     = static_cast<uint8_t>(static_cast<int8_t>(pos));
+            // BRIGHTNESS, uniformly bright. This byte was wired to `bipolar`, which
+            // is why V-Pot 1 read dimmer than its neighbours on any page whose first
+            // slot is not a gain (Frank 2026-08-17). It is not polarity — forcing it
+            // on the hardware changed nothing but brightness — and there is no
+            // reason for one pot to be dimmer than the next.
             bars[i * 2 + 1] = (barModeProbe >= 0)
                                 ? static_cast<uint8_t>(barModeProbe)
-                                : (bipolar ? 0x80 : 0x00);
-            styles[i] = empty ? 0x03 : (bipolar ? 0x08 : 0x02);
+                                : 0x80;
+            // …and the STYLE follows the UF8, which Frank confirms reads correctly:
+            // unipolar draws a travelling LINE (0x01), bipolar a fill from the
+            // centre (0x08), an empty slot nothing (0x03). We briefly sent 0x02
+            // here — SSL's "fill from the left", which it uses for Width / Mic /
+            // Ratio / Threshold / Mix — and that made frequencies fill instead of
+            // point. Matching the UF8 is the whole request: one rule, both surfaces.
+            styles[i] = empty ? 0x03 : (bipolar ? 0x08 : 0x01);
         };
         if (g_uf1ChannelSubMode.load() == 2) {
             // Sends mode: the 4 V-Pots follow the focused track's 7.75 MIXER-SLOT
