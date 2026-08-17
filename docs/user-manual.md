@@ -546,6 +546,23 @@ case the key behaves like a UF8 FX key — plain press, **+Shift**, **+Cmd**,
 Soft-key labels are capped at **13 characters** and V-Pot labels at **11**; both
 are abbreviated rather than truncated, so every word stays readable.
 
+## Sends view
+
+The channel layout showing the focused track's sends, four at a time. The header
+counts the groups, so `2/3` means you are on the second block of four. Hardware
+outputs sit in the list alongside the track sends, in the order REAPER's own send
+list shows them.
+
+| Control | Function |
+|---|---|
+| V1-V4 | The level of each send in the group. An empty slot is blank and inert. |
+| SK1-SK4 | The **send mode** of the send above it. Each press steps through REAPER's three settings in the order its send window lists them: `POST` (post-fader, post-pan) → `PRE FADER` (post-FX) → `PRE FX`. |
+| **Shift +** SK1-SK4 | **Mute** that send. The key then reads `MUTED` until you unmute it, because a silenced send you cannot see is worse than one you have to look for. |
+
+The names are REAPER's own, so the key and the send window always agree. `PRE FX`
+is the tap ahead of the track's insert chain — the one headphone feeds and
+sidechains usually want.
+
 ## Secondary transport row
 
 `OFF` `READ` `WRT` `TRIM` `LTCH` `TCH` and `SHIFT` along the bottom, with the

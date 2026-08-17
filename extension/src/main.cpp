@@ -24450,10 +24450,31 @@ void applyUf1ChannelSoftKey_(int idx)
         if (!sTr) return;
         const CombinedSlot cs = combinedSendSlot_(sTr, g_uf1SendGroup.load() * 4 + idx);
         if (cs.apiIndex < 0) return;
+        // SHIFT = mute this send. We already READ a send's mute (the Extender CUT
+        // button rides it), we just never wrote it, so a send could not be silenced
+        // from the UF1 at all (forum report 2026-08-17, item 3.19; the suggestion to
+        // hang it off this very key is his too).
+        if (g_shiftHeld.load()) {
+            const bool muted = GetTrackSendInfo_Value(
+                sTr, cs.category, cs.apiIndex, "B_MUTE") > 0.5;
+            SetTrackSendInfo_Value(sTr, cs.category, cs.apiIndex, "B_MUTE",
+                                   muted ? 0.0 : 1.0);
+            g_pageDirty.store(true);
+            return;
+        }
+        // …otherwise cycle the send mode through all THREE of REAPER's settings, in
+        // the order its own send window lists them:
+        //   0 = Post-Fader (post-pan) · 3 = Pre-Fader (post-FX) · 1 = Pre-FX
+        // This was a two-way flip between 0 and 3, so Pre-FX — the tap ahead of the
+        // insert chain, i.e. the one headphone and sidechain feeds want — could not
+        // be reached from the UF1 (item 3.18). Worse, the readout folded 1 and 3
+        // into one "PRE", so a send set to Pre-FX with the mouse showed PRE and the
+        // first press threw it to Post-Fader, losing the setting silently.
         const int mode = static_cast<int>(GetTrackSendInfo_Value(
             sTr, cs.category, cs.apiIndex, "I_SENDMODE"));
-        SetTrackSendInfo_Value(sTr, cs.category, cs.apiIndex, "I_SENDMODE",
-                               (mode != 0) ? 0.0 : 3.0);
+        const double next = (mode == 0) ? 3.0 : (mode == 3) ? 1.0 : 0.0;
+        SetTrackSendInfo_Value(sTr, cs.category, cs.apiIndex, "I_SENDMODE", next);
+        g_pageDirty.store(true);
         return;
     }
 
@@ -26342,11 +26363,18 @@ void uf1PaintChannel_()
                 const CombinedSlot cs =
                     combinedSendSlot_(tr, g_uf1SendGroup.load() * 4 + i);
                 if (cs.apiIndex >= 0) {
+                    // MUTE wins the label: a silenced send the user cannot see is a
+                    // trap, and the key doubles as the mute (Shift) so its state
+                    // belongs here. Otherwise REAPER's own three names, so the key
+                    // agrees with the send window instead of inventing wording.
+                    const bool muted = GetTrackSendInfo_Value(
+                        tr, cs.category, cs.apiIndex, "B_MUTE") > 0.5;
                     const int mode = static_cast<int>(GetTrackSendInfo_Value(
                         tr, cs.category, cs.apiIndex, "I_SENDMODE"));
-                    const bool pre = (mode != 0);
-                    label = pre ? "PRE" : "POST";
-                    on = pre;
+                    label = muted ? "MUTED"
+                          : (mode == 1) ? "PRE FX"
+                          : (mode == 3) ? "PRE FADER" : "POST";
+                    on = muted || (mode != 0);
                 }
                 // gap slot → blank label + LED off
             } else if (dawDyn) {

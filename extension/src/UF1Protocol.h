@@ -160,7 +160,10 @@ constexpr uint8_t kEqGraph = 0x03;   // EQ-graph tint (via "EQ Colour")
 // r15=yellow, 0x3f=g3 r15=orange). Pure green/red isolate the nibbles.
 //   LIT  (soloed/muted):  FF38 = <colour>, FF39 = 0x00
 //   DIM/off:              FF38 = FF39 = <dim colour>
-constexpr uint8_t kPrimSoloLit = 0xf0;  // g=15,r=0  → pure bright green
+// YELLOW (g=15,r=15), matching REAPER's own TCP/MCP solo colour rather than the
+// pure green we shipped (Frank 2026-08-17). The byte is (green<<4)|red, so green
+// plus red IS yellow — no blue nibble involved (that lives in yy).
+constexpr uint8_t kPrimSoloLit = 0xff;  // g=15,r=15 → yellow, like REAPER's solo
 constexpr uint8_t kPrimCutLit  = 0x0f;  // g=0,r=15  → pure bright red
 constexpr uint8_t kFf39Lit     = 0x00;  // FF39 carries 0x00 on the lit transition
 constexpr uint8_t kDimSolo     = 0x20;  // g=2,r=0   → dim green (resting)
