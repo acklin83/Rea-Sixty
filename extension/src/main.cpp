@@ -26334,31 +26334,6 @@ void uf1PaintChannel_()
         // survives a pinned channel across track changes, not a single probe.
     }
 
-    // ⚠ TEMPORARY PROBE — rea_sixty/uf1_sk_highlight. Forces the 0x0102 soft-key
-    // HIGHLIGHT mask so its meaning can be read off the hardware. Empty / absent /
-    // negative = normal (the layout burst's 0x00, i.e. no highlight).
-    //
-    // Why a probe and not an implementation: SSL writes 08 and 0c here in CHANNEL
-    // captures while we write 00, but two corpus readings both collapsed. "Bit =
-    // key is on" is contradicted by the LED levels (0x08 with SK4 dark, 0x00 with
-    // SK1/2/4 lit), and "bit = key is empty" by the same label set appearing with
-    // both 0x0c and 0x00. Both elements are change-gated on the wire, so pairing
-    // them after the fact compares stale values — the trick that cracked 0x010d
-    // does not transfer, because THAT one is re-sent on every page change.
-    // One pass on the device settles it: 0x01, 0x02, 0x04, 0x08, then 0x0f.
-    // REMOVE once the meaning is known.
-    {
-        static int sSkHi = INT_MIN;
-        int want = -1;
-        if (const char* h = GetExtState("rea_sixty", "uf1_sk_highlight"); h && *h)
-            want = std::atoi(h);
-        if (changed || want != sSkHi) {
-            sSkHi = want;
-            const uint8_t v = static_cast<uint8_t>(want < 0 ? 0 : want);
-            g_uf1_dev->send(uf1::buildScreen(0x0102, std::span<const uint8_t>(&v, 1)));
-        }
-    }
-
     // Solo-Active indication (0x0120) — the region under the firmware's
     // "SOLO CLR 1" caption, manual p187. Dead in our build until the 2026-08-10
     // sweep found it: it is a 1-byte FLAG, and non-zero makes the FIRMWARE draw
@@ -26518,6 +26493,9 @@ void uf1PaintChannel_()
             if (g_uf1DynBankPage.load() >= pages) g_uf1DynBankPage.store(0);
         }
         const int dawDynPage = dawDyn ? g_uf1DynBankPage.load() : 0;
+        // The on-screen HIGHLIGHT mask (0x0102) collected across the four keys —
+        // see the send just after the loop for why it is worth having.
+        uint8_t skHighlight = 0;
         for (int i = 0; i < 4; ++i) {
             std::string label;
             bool haveLabel = false, on = false;
@@ -26750,6 +26728,29 @@ void uf1PaintChannel_()
                     g_uf1_dev->send(uf1::buildLedPrimary(id, on ? 0xff : 0x11)); // FF38
                     g_uf1_dev->send(uf1::buildLedLevel(id,   on ? 0x00 : 0x11)); // FF39
                 }
+            }
+            if (on) skHighlight |= static_cast<uint8_t>(1u << i);
+        }
+
+        // ⇨ 0x0102 — the on-screen highlight, one bit per key, bit0 = SK1.
+        // HW-decoded 2026-08-17 (Frank walked 1/2/4/8/9/10/11/12/15 and every
+        // combination landed exactly where the bits say). Two corpus readings had
+        // failed before that, both because this element and the labels are
+        // change-gated on the wire, so pairing them after the fact compares values
+        // from different moments.
+        //
+        // ★ This is a SECOND channel, and that is the point (Frank's idea): the four
+        // soft-key LEDs have three owners, and when the Bus-Comp GR meter takes them
+        // the keys' own on/off state used to vanish for as long as the meter ran.
+        // The highlight is not part of that arbitration, so an engaged toggle stays
+        // visible underneath the metering. Sent unconditionally for the same reason
+        // — deliberately NOT gated on grOwnsSk.
+        {
+            static int sSkHi = INT_MIN;
+            if (changed || skHighlight != sSkHi) {
+                sSkHi = skHighlight;
+                g_uf1_dev->send(uf1::buildScreen(0x0102,
+                    std::span<const uint8_t>(&skHighlight, 1)));
             }
         }
     }

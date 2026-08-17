@@ -514,7 +514,7 @@ EQ curve is drawn on the screen and the four V-Pots carry that page's parameters
 
 | Control | Function |
 |---|---|
-| SK1-SK4 | The channel-strip section toggles for the current page (EQ In, HF Type, …). A blank slot does nothing. |
+| SK1-SK4 | The channel-strip section toggles for the current page (EQ In, HF Type, …). A blank slot does nothing. An engaged toggle **lights its key and highlights it on screen**. The highlight matters when the Bus-Comp GR meter is using the four key LEDs: the LEDs are then showing gain reduction, and the highlight is what still tells you which sections are in. |
 | V1-V4 | The current page's four parameters. |
 | `◄` `►` (page arrows) | Step the strip page. |
 | `5-8` | Jump to V-Pots 5-8 of the page. |
