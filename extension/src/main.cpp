@@ -12998,12 +12998,19 @@ std::string fxCycleDisplayName_(MediaTrack* tr, int fxIdx)
     if (auto rn = fxUserRename_(tr, fxIdx); !rn.empty()) return rn;
     char buf[256] = {0};
     if (!TrackFX_GetFXName(tr, fxIdx, buf, sizeof(buf))) return std::string{};
-    if (const auto* pm = uf8::lookupPluginMapByName(buf)) {
-        return pm->displayShort;
-    }
-    if (const auto* um = uf8::user_plugins::lookupOwnedByName(buf)) {
-        return um->displayShort;
-    }
+    // ⇨ USER MAP FIRST, then the built-in SSL map. Same precedence as
+    // uf1ActiveFxShortName_, and for the same reason it was chosen there
+    // (2026-07-29): a learned "bx_4K G" must show ITS Short User Name, not the SSL
+    // "4K G" it happens to substring-hit. The two helpers had opposite orders, so
+    // the dynamic FX bank and the CS-type cell could name the same plug-in
+    // differently (Frank 2026-08-17, aligned on request).
+    // Both lookups are skipped when the map carries no short name — otherwise a map
+    // with the field left blank returns "" and the key goes empty instead of
+    // falling through to the plug-in's own name.
+    if (const auto* um = uf8::user_plugins::lookupOwnedByName(buf))
+        if (!um->displayShort.empty()) return um->displayShort;
+    if (const auto* pm = uf8::lookupPluginMapByName(buf))
+        if (pm->displayShort && *pm->displayShort) return pm->displayShort;
     return shortFxName_(tr, fxIdx);
 }
 
