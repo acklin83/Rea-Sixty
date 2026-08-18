@@ -5308,6 +5308,12 @@ const char* builtinCategory(const std::string& n)
     if (n.rfind("jog_mode_", 0) == 0 || n.rfind("jog_nav_", 0) == 0)
         return "Jog Modes";
 
+    // What the modes DO, as opposed to which mode is engaged. Kept apart from
+    // "Jog Modes" so neither list becomes the leftovers drawer (Frank
+    // 2026-08-18): five mode switches there, the named actions here.
+    if (n.rfind("jog_", 0) == 0)
+        return "Jog Actions";
+
     if (n == "flip" || n == "pan_force"
      || n == "mixer_toggle" || n == "home"
      || n == "folder_mode" || n == "show_only_selected"
@@ -5397,7 +5403,7 @@ const std::vector<const char*>& builtinCategoryOrder()
 {
     static const std::vector<const char*> kCats = {
         "Favourites", "Cycle Actions", "Selection Modes", "Encoder Modes",
-        "Jog Modes",
+        "Jog Modes", "Jog Actions",
         "Hardware Modes", "Plug-in", "Layer", "Soft-Key Bank", "SSL",
         "Bank / Page", "Automation", "Zoom", "Sends / Receives",
         "Selection Sets", "Parameter Groups", "Tracks", "Master",

@@ -4549,11 +4549,30 @@ struct PendingInput {
                          // 2 centre; bit2 = Shift (add-to-selection). value =
                          // signed direction (+1 = right/up/press). The drain
                          // routes by g_uf1JogMode → applyUf1JogNav_.
+        Uf1JogAction,    // ONE named jog-mode action (the Jog Actions builtins).
+                         // Unlike Uf1JogNav above, the mode does NOT decide what
+                         // happens — the action already says it, which is the
+                         // point of making the nav cross bindable per mode
+                         // (Frank 2026-08-18). strip = Uf1JogActionOp; value =
+                         // signed direction where the op has one, else the
+                         // press/release edge for the held drag.
     };
     Kind    kind;
     uint8_t strip;
     double  value;
 };
+
+// The named jog-mode actions, carried in PendingInput::strip. Each one is a
+// single Jog Actions builtin; the drain runs it on the main thread. Shift on the
+// selecting ones means add-to-selection and rides in the high bit.
+enum class Uf1JogActionOp : uint8_t {
+    RazorWhole = 0, RazorLeft, RazorRight, RazorTop, RazorBottom,
+    EnvPointPrev, EnvPointNext, EnvLaneUp, EnvLaneDown, EnvTargetToggle,
+    ItemPrev, ItemNext, ItemTrackUp, ItemTrackDown,
+    ZoomSelection,
+    ContentDrag,
+};
+constexpr uint8_t kUf1JogActionShiftBit = 0x80;
 
 // Sub-ops for PendingInput::Uf1Transport (carried in PendingInput::value).
 enum class Uf1TransportOp : int {
@@ -8970,6 +8989,76 @@ void applyUf1JogNav_(uint8_t code, int dir)
             if (axis == 0) uf1MoveCursorByGrid_(dir);
             else           Main_OnCommand(dir > 0 ? 40111 : 40112, 0);   // vertical zoom in/out
             break;
+    }
+}
+
+// Main-thread executor for ONE named jog-mode action (the Jog Actions builtins).
+// The mode is NOT consulted: the action already names what it does, which is the
+// whole point of the per-mode nav cross — a key bound to "Envelope: next point"
+// does that wherever you put it (Frank 2026-08-18).
+// ContentDrag is the exception that proves it: it IS a mode-dependent hold, and
+// it keeps the two behaviours the input path had — Razor grabs the whole razor
+// area, Items arms a drag whose release either drops or falls back to the zoom.
+static void applyUf1JogAction_(uint8_t op8, double value)
+{
+    const bool shift = (op8 & kUf1JogActionShiftBit) != 0;
+    const auto op    = static_cast<Uf1JogActionOp>(op8 & ~kUf1JogActionShiftBit);
+    const int  dir   = (value < 0) ? -1 : +1;
+    using Op = Uf1JogActionOp;
+    switch (op) {
+        case Op::RazorWhole:  g_uf1RazorTarget.store(Uf1RazorTarget::Whole);
+                              g_pageDirty.store(true); break;
+        case Op::RazorLeft:   g_uf1RazorTarget.store(Uf1RazorTarget::LeftEdge);
+                              g_pageDirty.store(true); break;
+        case Op::RazorRight:  g_uf1RazorTarget.store(Uf1RazorTarget::RightEdge);
+                              g_pageDirty.store(true); break;
+        case Op::RazorTop:    g_uf1RazorTarget.store(Uf1RazorTarget::TopEdge);
+                              g_pageDirty.store(true); break;
+        case Op::RazorBottom: g_uf1RazorTarget.store(Uf1RazorTarget::BottomEdge);
+                              g_pageDirty.store(true); break;
+
+        case Op::EnvPointPrev: uf1SelectAdjacentEnvPoint_(-1, shift); break;
+        case Op::EnvPointNext: uf1SelectAdjacentEnvPoint_(+1, shift); break;
+        case Op::EnvLaneUp:    uf1SwitchEnvLane_(+1); break;
+        case Op::EnvLaneDown:  uf1SwitchEnvLane_(-1); break;
+        case Op::EnvTargetToggle:
+            g_uf1EnvJogPlayhead.store(!g_uf1EnvJogPlayhead.load());
+            g_pageDirty.store(true);
+            break;
+
+        case Op::ItemPrev:      uf1SelectAdjacentItem_(-1, shift); break;
+        case Op::ItemNext:      uf1SelectAdjacentItem_(+1, shift); break;
+        case Op::ItemTrackUp:   uf1SelectItemAdjacentTrack_(+1, shift); break;
+        case Op::ItemTrackDown: uf1SelectItemAdjacentTrack_(-1, shift); break;
+
+        case Op::ZoomSelection:
+            uf1JogNavCenterToggle_(g_uf1JogMode.load());
+            break;
+
+        case Op::ContentDrag: {
+            // value carries the press edge (1 = down, 0 = up), because this one
+            // is a HOLD: the binding fires on both edges and the drag lives
+            // between them.
+            const bool down = (value > 0.5);
+            const auto mode = g_uf1JogMode.load();
+            if (mode == Uf1JogMode::Razor) {
+                g_uf1RazorContentHeld.store(down);
+                if (down) {
+                    g_uf1RazorTarget.store(Uf1RazorTarget::Whole);
+                    g_uf1RazorContentFresh.store(true);
+                    g_uf1RazorGrabDone.store(false);
+                }
+                g_pageDirty.store(true);
+            } else if (mode == Uf1JogMode::Items) {
+                g_uf1JogItemsHeld.store(down);
+                if (down) { g_uf1JogItemsMoved.store(false); break; }
+                // Release: a drag drops, a plain click falls back to the zoom —
+                // the same either/or the input path had.
+                if (g_uf1JogItemsMoved.exchange(false)) g_uf1JogItemsDrop.store(true);
+                else                                    uf1JogNavCenterToggle_(mode);
+            }
+            break;
+        }
     }
 }
 
@@ -16185,6 +16274,10 @@ void drainInputQueue()
         }
         if (e.kind == PendingInput::Uf1JogNav) {
             applyUf1JogNav_(e.strip, static_cast<int>(e.value));
+            continue;
+        }
+        if (e.kind == PendingInput::Uf1JogAction) {
+            applyUf1JogAction_(e.strip, e.value);
             continue;
         }
         if (e.kind == PendingInput::AutomationMode) {
@@ -44096,6 +44189,76 @@ void registerBindingHandlers()
     registerBuiltin("jog_nav_up",     jogNavBuiltin(1, +1, "Jog Mode: nav \xE2\x96\xB2 (above / zoom in)"));
     registerBuiltin("jog_nav_down",   jogNavBuiltin(1, -1, "Jog Mode: nav \xE2\x96\xBC (below / zoom out)"));
     registerBuiltin("jog_nav_center", jogNavBuiltin(2, +1, "Jog Mode: nav centre (spotlight zoom toggle)"));
+
+    // ---- Jog Actions --------------------------------------------------------
+    // What the nav cross DOES in each Jog Mode, one named action each, so the
+    // cross can be bound per mode instead of five keys meaning five different
+    // things through one collective builtin (Frank 2026-08-18). Handlers only
+    // POST — the REAPER work runs in the main-thread drain (threading rule).
+    // Shift on the selecting ones = add to the selection, snapshotted at the
+    // press edge like the jog_nav_* family does.
+    auto jogAct = [](Uf1JogActionOp op, const char* label, bool shiftAware) {
+        return DescBuilder{
+            [op, shiftAware](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                uint8_t code = static_cast<uint8_t>(op);
+                if (shiftAware
+                    && uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift))
+                    code |= kUf1JogActionShiftBit;
+                queueInput({PendingInput::Uf1JogAction, code, 1.0});
+            },
+            nullptr, label, false
+        };
+    };
+    using JA = Uf1JogActionOp;
+    registerBuiltin("jog_razor_whole",  jogAct(JA::RazorWhole,  "Razor: target whole area", false));
+    registerBuiltin("jog_razor_left",   jogAct(JA::RazorLeft,   "Razor: target left edge", false));
+    registerBuiltin("jog_razor_right",  jogAct(JA::RazorRight,  "Razor: target right edge", false));
+    registerBuiltin("jog_razor_top",    jogAct(JA::RazorTop,    "Razor: target top edge", false));
+    registerBuiltin("jog_razor_bottom", jogAct(JA::RazorBottom, "Razor: target bottom edge", false));
+
+    registerBuiltin("jog_env_point_prev", jogAct(JA::EnvPointPrev, "Envelope: previous point", true));
+    registerBuiltin("jog_env_point_next", jogAct(JA::EnvPointNext, "Envelope: next point", true));
+    registerBuiltin("jog_env_lane_up",    jogAct(JA::EnvLaneUp,    "Envelope: lane above", false));
+    registerBuiltin("jog_env_lane_down",  jogAct(JA::EnvLaneDown,  "Envelope: lane below", false));
+
+    registerBuiltin("jog_item_prev",       jogAct(JA::ItemPrev,      "Items: previous item", true));
+    registerBuiltin("jog_item_next",       jogAct(JA::ItemNext,      "Items: next item", true));
+    registerBuiltin("jog_item_track_up",   jogAct(JA::ItemTrackUp,   "Items: item on track above", true));
+    registerBuiltin("jog_item_track_down", jogAct(JA::ItemTrackDown, "Items: item on track below", true));
+
+    // The two stateful ones carry a toggle state so their LED means something.
+    registerBuiltin("jog_env_target_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            queueInput({PendingInput::Uf1JogAction,
+                        static_cast<uint8_t>(JA::EnvTargetToggle), 1.0});
+        },
+        [](int) { return g_uf1EnvJogPlayhead.load(); },
+        "Envelope: jog edits points / playhead", true
+    });
+    registerBuiltin("jog_zoom_selection", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            queueInput({PendingInput::Uf1JogAction,
+                        static_cast<uint8_t>(JA::ZoomSelection), 1.0});
+        },
+        [](int) { return g_uf1JogNavZoomed.load(); },
+        "Zoom to selection (toggle)", true
+    });
+    // HOLD, not a press: the drag lives between the two edges, so the binding
+    // must be set to Hold behaviour for this to work (the factory seed does).
+    // `pressed` rides in value because Hold fires the handler on both edges.
+    registerBuiltin("jog_content_drag", DescBuilder{
+        [](bool firing, bool pressed, int /*param*/) {
+            if (!firing) return;
+            queueInput({PendingInput::Uf1JogAction,
+                        static_cast<uint8_t>(JA::ContentDrag),
+                        pressed ? 1.0 : 0.0});
+        },
+        [](int) { return g_uf1RazorContentHeld.load() || g_uf1JogItemsHeld.load(); },
+        "Jog: hold to drag content", true
+    });
 
     // ---- Parameter Groups ---------------------------------------------------
     // Multi-track parameter sync (8 persistent slots + temp group from
