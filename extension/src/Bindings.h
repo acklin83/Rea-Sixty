@@ -439,6 +439,12 @@ enum class DynamicBankKind : uint8_t {
 struct UserQuickSubBank {
     Binding slots[kSlotsPerSubBank];   // top-soft-key positions
     DynamicBankKind dynamic = DynamicBankKind::None;  // non-None → computed bank
+    // Which held modifier calls THIS bank up: -1 none, 0 Shift, 1 Cmd, 2 Ctrl.
+    // The setting lives on the bank it belongs to, so you open the bank you want
+    // and say "that one is on Shift" (Frank 2026-08-18, correcting a first cut
+    // that kept the map on the Quick). setSubBankModifier clears the same
+    // modifier from the other five, since two banks cannot share one.
+    int modifier = -1;
 };
 // LED appearance override for one Sub-Bank selector button (V-POT or
 // Soft 1..5) under a specific (Layer, Quick) context. Lets the user
@@ -466,7 +472,6 @@ constexpr int kBankModifierCount = 3;   // Shift, Cmd, Ctrl
 struct UserQuick {
     UserQuickSubBank subBanks[kSubBanksPerQuick];     // V-POT, Soft 1..5
     SubBankLed       subBankLeds[kSubBanksPerQuick];  // per-(L,Q) LED override
-    int              modSubBank[kBankModifierCount] = { -1, -1, -1 };
 };
 struct LayerUserQuicks {
     UserQuick quicks[kQuicksPerLayer]; // Q1, Q2, Q3
@@ -509,9 +514,10 @@ struct Config {
     // from the focused track; the 4 static slots above are then ignored.
     // Default None ⇒ classic static behaviour.
     DynamicBankKind uf1SoftBankDynamic[kUf1SoftBankCount] = {};
-    // Same for the UF1's ten banks. Global, not per-Quick: the UF1 has no Quick
-    // concept. -1 = no swap.
-    int uf1SoftBankMod[kBankModifierCount] = { -1, -1, -1 };
+    // Same for the UF1's ten banks, one entry per bank: -1 none, 0 Shift,
+    // 1 Cmd, 2 Ctrl.
+    int uf1SoftBankModifier[kUf1SoftBankCount] = { -1, -1, -1, -1, -1,
+                                                   -1, -1, -1, -1, -1 };
 };
 
 // Builtin registry. Phase A registers from main.cpp at REAPER_PLUGIN_ENTRY
@@ -742,10 +748,14 @@ void       setSubBankLed(int layer, int quick, int subBank,
 // ignores writes.
 // Bank-modifier map: which sub-bank a held Shift(0) / Cmd(1) / Ctrl(2) swaps to.
 // -1 = no swap. See kBankModifierCount and UserQuick::modSubBank.
-int  getBankModifier(int layer, int quick, int mod);
-void setBankModifier(int layer, int quick, int mod, int subBank);   // <0 clears
-int  getUf1BankModifier(int mod);
-void setUf1BankModifier(int mod, int bank);                         // <0 clears
+int  getSubBankModifier(int layer, int quick, int subBank);           // -1 none
+void setSubBankModifier(int layer, int quick, int subBank, int mod); // <0 clears
+int  getUf1SoftBankModifier(int bank);                               // -1 none
+void setUf1SoftBankModifier(int bank, int mod);                      // <0 clears
+// Reverse lookup used by the surface: which bank does this held modifier call up?
+// -1 when nothing claims it. mod is 0 Shift / 1 Cmd / 2 Ctrl.
+int  subBankForModifier(int layer, int quick, int mod);
+int  uf1SoftBankForModifier(int mod);
 
 DynamicBankKind getSubBankDynamic(int layer, int quick, int subBank);
 void            setSubBankDynamic(int layer, int quick, int subBank,

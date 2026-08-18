@@ -4696,42 +4696,34 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     ImGui_PopID(ctx);   // "uqslot_inline"
 }
 
-// The UF1's three bank modifiers. Global (the UF1 has no Quick concept), so
-// unlike the UF8 version this does not depend on which bank is open. Drawn on
+// The UF1 bank's modifier. Same shape as the UF8 version: the setting sits on
+// the bank it calls up, and picking one clears it from the other nine. Drawn on
 // both branches of the bank editor, because it is true of the bank either way.
-void drawUf1BankModifierRow_(ImGui_Context* ctx)
+void drawUf1BankModifierRow_(ImGui_Context* ctx, int bank)
 {
     using namespace uf8::bindings;
+    static const char* kModName[kBankModifierCount] = { "Shift", "Cmd", "Ctrl" };
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Bank modifiers");
-    ImGui_TextDisabled(ctx,
-        "Hold to swap all four keys to another bank. Global, not per bank.");
-    ImGui_Spacing(ctx);
-    static const char* kModName[kBankModifierCount] = { "Shift", "Cmd", "Ctrl" };
-    for (int m = 0; m < kBankModifierCount; ++m) {
-        const int cur = getUf1BankModifier(m);
-        char label[24];
-        if (cur >= 0) snprintf(label, sizeof(label), "Bank %d", cur + 1);
-        else          snprintf(label, sizeof(label), "(off)");
-        char id[40];
-        snprintf(id, sizeof(id), "%s##uf1bankmod_%d", kModName[m], m);
-        ImGui_SetNextItemWidth(ctx, 140.0);
-        if (ImGui_BeginCombo(ctx, id, label, /*flags*/ nullptr)) {
-            bool selOff = (cur < 0);
-            if (ImGui_Selectable(ctx, "(off)", &selOff, nullptr, nullptr, nullptr))
-                setUf1BankModifier(m, -1);
-            for (int b = 0; b < kUf1SoftBankCount; ++b) {
-                bool sel = (cur == b);
-                char bid[40];
-                snprintf(bid, sizeof(bid), "Bank %d##uf1bm_%d_%d", b + 1, m, b);
-                if (ImGui_Selectable(ctx, bid, &sel, nullptr, nullptr, nullptr))
-                    setUf1BankModifier(m, b);
-            }
-            ImGui_EndCombo(ctx);
+    const int cur = getUf1SoftBankModifier(bank);
+    const char* label = (cur >= 0 && cur < kBankModifierCount)
+                          ? kModName[cur] : "(none)";
+    ImGui_Text(ctx, "Bank modifier");
+    ImGui_SetNextItemWidth(ctx, 140.0);
+    if (ImGui_BeginCombo(ctx, "##uf1bankmod", label, /*flags*/ nullptr)) {
+        bool selNone = (cur < 0);
+        if (ImGui_Selectable(ctx, "(none)", &selNone, nullptr, nullptr, nullptr))
+            setUf1SoftBankModifier(bank, -1);
+        for (int m = 0; m < kBankModifierCount; ++m) {
+            bool sel = (cur == m);
+            if (ImGui_Selectable(ctx, kModName[m], &sel, nullptr, nullptr, nullptr))
+                setUf1SoftBankModifier(bank, m);
         }
+        ImGui_EndCombo(ctx);
     }
+    ImGui_TextDisabled(ctx,
+        "Hold it and all four keys show this bank until you let go.");
     ImGui_TextDisabled(ctx,
         "Shift = the UF1 SHIFT key. Cmd and Ctrl need their own key.");
     ImGui_Spacing(ctx);
@@ -5638,51 +5630,39 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
 
     if (dirty) setSubBankLed(editLayer, engagedQ, sbIdx, app);
 
-    // ---- Bank modifiers (per Quick, not per Sub-Bank) ---------------------
-    // Holding one of these swaps the whole soft-key row to another Sub-Bank for
-    // as long as it is down. It belongs to the Quick, so it reads the same on
-    // whichever of the six cells you opened; the heading says so.
+    // ---- Bank modifier (this bank) ---------------------------------------
+    // The setting sits on the bank it calls up: open the one you want, put it on
+    // Shift. Two banks cannot share a modifier, so picking one here silently
+    // clears it from the other five (Frank 2026-08-18, correcting a first cut
+    // that kept a per-Quick table here instead).
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Bank modifiers");
-    ImGui_TextDisabled(ctx,
-        "Hold to swap the whole row to another Sub-Bank. Applies to the "
-        "Quick, not to this one cell.");
     ImGui_Spacing(ctx);
     {
         static const char* kModName[kBankModifierCount] =
             { "Shift", "Cmd", "Ctrl" };
-        static const char* kSbName[kSubBanksPerQuick] =
-            { "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5" };
-        for (int m = 0; m < kBankModifierCount; ++m) {
-            const int cur = getBankModifier(editLayer, engagedQ, m);
-            const char* label = (cur >= 0 && cur < kSubBanksPerQuick)
-                                  ? kSbName[cur] : "(off)";
-            char id[48];
-            snprintf(id, sizeof(id), "%s##bankmod_%d_%d_%d",
-                          kModName[m], editLayer, engagedQ, m);
-            ImGui_SetNextItemWidth(ctx, 140.0);
-            if (ImGui_BeginCombo(ctx, id, label, /*flags*/ nullptr)) {
-                bool selOff = (cur < 0);
-                if (ImGui_Selectable(ctx, "(off)", &selOff,
+        const int cur = getSubBankModifier(editLayer, engagedQ, sbIdx);
+        const char* label = (cur >= 0 && cur < kBankModifierCount)
+                              ? kModName[cur] : "(none)";
+        ImGui_Text(ctx, "Bank modifier");
+        ImGui_SetNextItemWidth(ctx, 140.0);
+        if (ImGui_BeginCombo(ctx, "##bankmod", label, /*flags*/ nullptr)) {
+            bool selNone = (cur < 0);
+            if (ImGui_Selectable(ctx, "(none)", &selNone,
+                                 nullptr, nullptr, nullptr))
+                setSubBankModifier(editLayer, engagedQ, sbIdx, -1);
+            for (int m = 0; m < kBankModifierCount; ++m) {
+                bool sel = (cur == m);
+                if (ImGui_Selectable(ctx, kModName[m], &sel,
                                      nullptr, nullptr, nullptr))
-                    setBankModifier(editLayer, engagedQ, m, -1);
-                for (int b = 0; b < kSubBanksPerQuick; ++b) {
-                    bool sel = (cur == b);
-                    char sbid[40];
-                    snprintf(sbid, sizeof(sbid), "%s##bm_%d_%d_%d_%d",
-                                  kSbName[b], editLayer, engagedQ, m, b);
-                    if (ImGui_Selectable(ctx, sbid, &sel,
-                                         nullptr, nullptr, nullptr))
-                        setBankModifier(editLayer, engagedQ, m, b);
-                }
-                ImGui_EndCombo(ctx);
+                    setSubBankModifier(editLayer, engagedQ, sbIdx, m);
             }
+            ImGui_EndCombo(ctx);
         }
         ImGui_TextDisabled(ctx,
-            "Shift = UF8 FINE key. Cmd and Ctrl need their own key, or the "
-            "keyboard switches under Behaviour.");
+            "Hold it and all eight keys show this Sub-Bank until you let go.");
+        ImGui_TextDisabled(ctx,
+            "Shift = UF8 FINE key. Cmd and Ctrl need their own key.");
     }
 }
 
@@ -5985,9 +5965,9 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                             "Track-Colors palette (global — 8 keys = these colors):"));
                     drawTrackColourPalette_(ctx);
                 }
-                drawUf1BankModifierRow_(ctx);
+                drawUf1BankModifierRow_(ctx, uf1Bank);
             } else {
-                drawUf1BankModifierRow_(ctx);
+                drawUf1BankModifierRow_(ctx, uf1Bank);
                 drawUf1SoftBankSlotEditor_(ctx, uf1Bank, slotIdx);
             }
         }

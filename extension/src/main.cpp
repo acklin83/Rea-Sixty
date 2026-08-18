@@ -5035,7 +5035,7 @@ static int effectiveSubBank_(int layer)
     if (m < 0) return base;
     const int q = g_activeQuick[layer].load();
     if (q < 0) return base;
-    const int swap = uf8::bindings::getBankModifier(layer, q, m);
+    const int swap = uf8::bindings::subBankForModifier(layer, q, m);
     return (swap >= 0) ? swap : base;
 }
 static int effectiveUf1SoftBank_()
@@ -5043,7 +5043,7 @@ static int effectiveUf1SoftBank_()
     const int base = g_uf1SoftBank.load();
     const int m = bankModifierIndexNow_();
     if (m < 0) return base;
-    const int swap = uf8::bindings::getUf1BankModifier(m);
+    const int swap = uf8::bindings::uf1SoftBankForModifier(m);
     return (swap >= 0) ? swap : base;
 }
 

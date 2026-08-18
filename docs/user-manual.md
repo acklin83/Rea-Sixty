@@ -548,9 +548,10 @@ alongside its label, action and LED colours, so a bank key can latch rather than
 fire once.
 
 A held modifier does not change what one key does, it changes **which bank all
-four keys come from**. Under **Bank modifiers** in the bank editor you map Shift,
-Cmd and Ctrl each to a bank; holding one shows that bank for as long as you hold
-it, releasing returns to the engaged one. Shift is the UF1's SHIFT key.
+four keys come from**. Pick the bank you want, set its **Bank modifier** to
+Shift, Cmd or Ctrl, and holding that modifier shows that bank until you let go.
+Two banks cannot share a modifier: assigning one clears it from the other nine.
+Shift is the UF1's SHIFT key.
 
 Soft-key labels are capped at **13 characters** and V-Pot labels at **11**; both
 are abbreviated rather than truncated, so every word stays readable.
@@ -922,7 +923,7 @@ When you click a Top-Soft-Key (or a Sub-Bank cell) in the schematic, an **Edit Q
 
 Each slot carries a **Behavior** (*Momentary*, *Toggle* or *Hold*), the same setting a regular button has.
 
-Modifiers work on the **whole row**, not on a single key. Open any Sub-Bank cell and look for **Bank modifiers**: map Shift, Cmd or Ctrl to another Sub-Bank, and holding that modifier shows that Sub-Bank across all eight keys until you let go. The mapping belongs to the Quick, so it reads the same whichever of the six cells you opened. Shift is the UF8's FINE key; for Cmd and Ctrl, either bind a key to those modifiers yourself or switch on the matching keyboard option under *Settings, Behaviour, Keyboard*.
+Modifiers work on the **whole row**, not on a single key. Open the Sub-Bank cell you want to reach, set its **Bank modifier** to Shift, Cmd or Ctrl, and holding that modifier shows that Sub-Bank across all eight keys until you let go. Two Sub-Banks cannot share a modifier: assigning one clears it from the other five. Shift is the UF8's FINE key; for Cmd and Ctrl, either bind a key to those modifiers yourself or switch on the matching keyboard option under *Settings, Behaviour, Keyboard*.
 
 On a **dynamic** Sub-Bank none of this applies: the keys come from the focused track, and Shift, Cmd, Ctrl and long-press run the FX-key gestures instead, which are set on the Sub-Bank cell.
 
