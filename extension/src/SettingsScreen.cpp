@@ -947,7 +947,9 @@ static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
 // earlier cut put four radio buttons on every individual key; that was the same
 // data seen through the wrong lens.
 static int g_slotEditModIdx = 0;
-static const char* const kLayerName_[4] = { "Plain", "Shift", "Cmd", "Ctrl" };
+// NOT called "layer" anywhere the user can see it — that word already means
+// the surface layers 1-3 (Frank 2026-08-18). These are modifiers.
+static const char* const kModifierName_[4] = { "Plain", "Shift", "Cmd", "Ctrl" };
 
 // Regular bindable button — one the user assigns actions to via the
 // per-button binding editor (the getBinding path). Excludes Top-Soft-Keys
@@ -2795,10 +2797,21 @@ static void refreshAutoLabel_(uf8::bindings::Binding& bd,
 static bool drawBankLayerRow_(ImGui_Context* ctx, const char* tag, int* modIdx)
 {
     using namespace uf8::bindings;
+    // ⇨ IT FOLLOWS THE HARDWARE, like the Quick and Sub-Bank pickers above it.
+    // Hold FINE and the editor shows that modifier's bank. It does NOT snap back
+    // on release: you cannot hold a key on the surface and drive the mouse at the
+    // same time, so releasing leaves the picker where you put it and you edit in
+    // peace (Frank 2026-08-18). Click a button to go back to Plain.
+    {
+        static int s_lastHeld = 0;
+        const int held = static_cast<int>(currentModifierSnapshot());
+        if (held != s_lastHeld && held != 0) *modIdx = held;
+        s_lastHeld = held;
+    }
     static const char* kModNames[kModifierCount] =
         { "Plain", "Shift", "Cmd", "Ctrl" };
     bool changed = false;
-    ImGui_Text(ctx, "Layer");
+    ImGui_Text(ctx, "Modifier");
     ImGui_SameLine(ctx, nullptr, nullptr);
     for (int m = 0; m < kModifierCount; ++m) {
         char idbuf[64];
@@ -5025,8 +5038,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     // ---- Header + navigation hint -------------------------------------
     char hdr[160];
     snprintf(hdr, sizeof(hdr),
-                  "Editing: Sub-Bank %s, %s layer   (Layer %d, Quick %d)",
-                  sbLabels[sbIdx], kLayerName_[g_slotEditModIdx],
+                  "Editing: Sub-Bank %s, %s   (Layer %d, Quick %d)",
+                  sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
                   editLayer + 1, engagedQ + 1);
     ImGui_Text(ctx, hdr);
     ImGui_Separator(ctx);
@@ -5166,13 +5179,13 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     {
         char presetHdr[160];
         snprintf(presetHdr, sizeof(presetHdr),
-                      "Soft-key preset for Sub-Bank %s, %s layer"
+                      "Soft-key preset for Sub-Bank %s, %s"
                       "   (Layer %d, Quick %d)",
-                      sbLabels[sbIdx], kLayerName_[g_slotEditModIdx],
+                      sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
                       editLayer + 1, engagedQ + 1);
         ImGui_Text(ctx, presetHdr);
         ImGui_TextDisabled(ctx,
-            "Snapshot this layer's 8 Top-Soft-Key slots as a "
+            "Snapshot this modifier's 8 Top-Soft-Key slots as a "
             "named preset, or recall one into this Sub-Bank.");
         ImGui_Spacing(ctx);
 
@@ -5296,9 +5309,9 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             SoftKeyBankPreset p = bankPresetAt(s_pendingIdx);
             char line[256];
             snprintf(line, sizeof(line),
-                "Overwrite the 8 slots of %s, %s layer, on (Layer %d, Quick %d) "
+                "Overwrite the 8 slots of %s (%s) on (Layer %d, Quick %d) "
                 "with preset '%s'?",
-                sbLabels[sbIdx], kLayerName_[g_slotEditModIdx],
+                sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
                 editLayer + 1, engagedQ + 1, p.name.c_str());
             ImGui_TextWrapped(ctx, line);
             ImGui_Spacing(ctx);
@@ -5521,9 +5534,9 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             SoftKeyBankPreset p = factoryBankPresetAt(facRef);
             char line[256];
             snprintf(line, sizeof(line),
-                "Overwrite the 8 slots of %s, %s layer (Layer %d, Quick %d) with "
+                "Overwrite the 8 slots of %s (%s) on (Layer %d, Quick %d) with "
                 "factory bank '%s'?",
-                sbLabels[sbIdx], kLayerName_[g_slotEditModIdx],
+                sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
                 editLayer + 1, engagedQ + 1, p.name.c_str());
             ImGui_TextWrapped(ctx, line);
             ImGui_Spacing(ctx);
@@ -5866,8 +5879,8 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         // exactly what picking it here shows.
         drawBankLayerRow_(ctx, "uf8bank", &g_slotEditModIdx);
         ImGui_TextDisabled(ctx,
-            "The whole row switches with the modifier, like it does on the "
-            "surface. Shift = the FINE key.");
+            "Follows the modifier you hold, and stays there when you let go so "
+            "you can edit it. Shift = the FINE key.");
         ImGui_Spacing(ctx);
         ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
@@ -5910,8 +5923,8 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         ImGui_Spacing(ctx);
         drawBankLayerRow_(ctx, "uf1bank", &g_slotEditModIdx);
         ImGui_TextDisabled(ctx,
-            "All four keys switch with the modifier, like they do on the "
-            "surface. Shift = the UF1 SHIFT key.");
+            "Follows the modifier you hold, and stays there when you let go so "
+            "you can edit it. Shift = the UF1 SHIFT key.");
         ImGui_Spacing(ctx);
 
         // ---- Dynamic bank (per bank) --------------------------------
