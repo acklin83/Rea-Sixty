@@ -580,6 +580,9 @@ bool invokeBuiltin(const std::string& name, int param);
 // Look up a builtin's display name. Falls back to the canonical name
 // if the builtin isn't registered (UI then shows the snake_case name).
 std::string builtinDisplayName(const std::string& name);
+// Human-readable label for a slot that carries an action but no name of its own.
+// NEVER returns the raw builtin id — see the definition for why that mattered.
+std::string softKeyFallbackLabel(const ActionSlot& sp);
 
 // Category label for a built-in — the SAME grouping the Settings action
 // picker shows. Empty string = uncategorised / internal sentinel. Single

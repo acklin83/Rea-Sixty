@@ -26587,9 +26587,8 @@ void uf1PaintChannel_()
                 if (!sp.label.empty())               label = sp.label;
                 else if (plainLayer && !dawSlot.label.empty())
                                                      label = dawSlot.label;
-                else if (sp.type == uf8::bindings::ActionType::Builtin
-                         && !sp.action.empty())
-                    label = uf8::bindings::builtinDisplayName(sp.action);
+                else if (!sp.action.empty())
+                    label = uf8::bindings::softKeyFallbackLabel(sp);
                 haveLabel = true;
                 on = bindingHasActiveSlotForSet_(dawSlot, mIdx);
                 // LED colour from the binding (active vs inactive colour + brightness),
@@ -28613,7 +28612,7 @@ void pushZonesForVisibleSlots()
                 userLabel = !sp.label.empty() ? sp.label
                           : (plainLayer ? userSlot.label : std::string());
                 if (userLabel.empty() && userBankSlotPresent) {
-                    userLabel = sp.action;
+                    userLabel = uf8::bindings::softKeyFallbackLabel(sp);
                     if (userLabel.size() > 12) userLabel.resize(12);
                 }
                 // Bank-5 dynamic label: a switch_cs_N / switch_bc_N slot shows
@@ -28683,7 +28682,7 @@ void pushZonesForVisibleSlots()
                 } else if (fPlain && !fslot.label.empty()) {
                     sslFreeLabel = fslot.label;
                 } else if (sslFreeSlotPresent) {
-                    sslFreeLabel = fsp.action;
+                    sslFreeLabel = uf8::bindings::softKeyFallbackLabel(fsp);
                     if (sslFreeLabel.size() > 12) sslFreeLabel.resize(12);
                 }
             }
@@ -37090,7 +37089,7 @@ const char* reasixty_userBankSlotLabel(int bank, int slot)
             sp.type != uf8::bindings::ActionType::Noop
             || !sp.action.empty();
         if (slotPresent) {
-            s_buf = sp.action;
+            s_buf = uf8::bindings::softKeyFallbackLabel(sp);
             if (s_buf.size() > 8) s_buf.resize(8);
         }
     }

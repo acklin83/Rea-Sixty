@@ -1380,9 +1380,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
                 scribble = slot.label;
             } else if (sp.type != uf8::bindings::ActionType::Noop
                        || !sp.action.empty()) {
-                scribble = (sp.type == uf8::bindings::ActionType::Builtin)
-                    ? uf8::bindings::builtinDisplayName(sp.action)
-                    : sp.action;
+                scribble = uf8::bindings::softKeyFallbackLabel(sp);
             }
         } else if (editIsSslCsBc) {
             // SSL CS (Q1) / BC (Q2) preview — derive the param labels from
@@ -1416,9 +1414,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
                     scribble = slot.label;
                 } else if (sp.type != uf8::bindings::ActionType::Noop
                            || !sp.action.empty()) {
-                    scribble = (sp.type == uf8::bindings::ActionType::Builtin)
-                        ? uf8::bindings::builtinDisplayName(sp.action)
-                        : sp.action;
+                    scribble = uf8::bindings::softKeyFallbackLabel(sp);
                 }
             }
         } else {
@@ -2546,8 +2542,8 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
                 lbl = sp.label;
             } else if (plainLayer && !sb.label.empty()) {
                 lbl = sb.label;
-            } else if (sp.type == ActionType::Builtin && !sp.action.empty()) {
-                lbl = builtinDisplayName(sp.action);
+            } else if (!sp.action.empty()) {
+                lbl = softKeyFallbackLabel(sp);
             }
             // Only Plain falls back to "SOFT n": an empty modifier set previews
             // blank, because that is what the hardware will show.

@@ -5223,6 +5223,33 @@ std::string builtinDisplayName(const std::string& name)
     return it->second.displayName;
 }
 
+// ⇨ A SOFT-KEY LABEL OF LAST RESORT — NEVER THE RAW BUILTIN ID.
+// When a slot carries an action but no label of its own, something has to be
+// shown, and that something used to be `sp.action`: "switch_bc_8" on the LCD,
+// which is code and has no business on the surface (Frank 2026-08-18). It only
+// ever surfaced on a MODIFIER SET, because Plain quietly borrowed the key's own
+// name — a set deliberately does not, and rightly so.
+// Favourite switches get the same wording the factory bank uses ("BC Fav 8"),
+// so an unassigned favourite reads the same on either set. Everything else gets
+// its registered display name. Capped to the 12-char LCD width by the caller.
+std::string softKeyFallbackLabel(const ActionSlot& sp)
+{
+    if (sp.action.empty()) return {};
+    const bool isCsFav = sp.action.rfind("switch_cs_", 0) == 0;
+    const bool isBcFav = sp.action.rfind("switch_bc_", 0) == 0;
+    if (isCsFav || isBcFav) {
+        const int n = std::atoi(sp.action.c_str() + 10);
+        if (n >= 1 && n <= 8) {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%s Fav %d", isCsFav ? "CS" : "BC", n);
+            return buf;
+        }
+    }
+    if (sp.type == ActionType::Builtin)
+        return builtinDisplayName(sp.action);
+    return sp.action;   // REAPER command ids etc. — the user can name those
+}
+
 bool builtinUsesParam(const std::string& name)
 {
     auto it = g_builtins.find(name);
