@@ -106,11 +106,22 @@ not a fallback. Hence v28 and the backfill running for anything below it.
   now carries a mechanical check to run before committing anything that touches
   `SettingsScreen.cpp`.
 
+## Verified, and the manual that followed
+
+Frank ran the whole priority list on the device the same evening and reported it
+as fine, the SCRUB tile in the UF1 settings tab included, which is what confirms
+`91dc31b`. Playhead and Scrub now carrying the plain zoom cross instead of the
+old cursor-by-grid was raised as a possible regression and confirmed as intended,
+so no replacement action for it.
+
+The manual was then brought in line (`6e8f780`). The cross table still described
+the collective behaviour, and the Native actions chapter had no Jog entry at all,
+so the six mode setters and the twenty-two Jog Actions were undocumented. Two
+smaller corrections went with it: the Bindings pane's click-to-edit list did not
+know about the cross tiles or the jog wheel, and the Label bullet claimed every
+UF1 control has the field when five keys have it.
+
 ## Open
 
-Nothing here is verified on hardware. The priority list is in the memory handoff;
-the short version is: config survives a restart (again — v29 landed after the
-last check), the four data-loss fixes one by one, favourites on a track without a
-strip, then the cross through all five modes. Beyond that, 360 Link's EQ Type is
-still the one device check left from the 17th, and the forum list stays locked
-without Frank's per-item go-ahead.
+360 Link's EQ Type is still the one device check left from the 17th, and the
+forum list stays locked without Frank's per-item go-ahead.
