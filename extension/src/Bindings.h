@@ -216,10 +216,52 @@ enum class ButtonId : uint16_t {
     // Flip / Master / primary transport 0x38..0x3E. Transport carries
     // factory defaults via uf1_transport; Flip/Master ship UNBOUND for now.
     Uf1Flip, Uf1Master, Uf1Rwd, Uf1Ffw, Uf1Stop, Uf1Play, Uf1Rec,
+    // ⇨ THE NAV CROSS, ONCE PER JOG MODE — 5 keys x 5 modes = 25 slots.
+    // The five physical ids above stay (they are what fromUf1DeviceId returns),
+    // but the dispatch remaps them to the id for the ACTIVE mode before it looks
+    // up a binding. That way one key can do five different things without the
+    // meaning hiding in the drain, which is what jog_nav_* used to do
+    // (Frank 2026-08-06 "volle Freiheit", built 2026-08-18).
+    // Order is mode-minor and MUST match enum Uf1JogMode (Playhead, Scrub,
+    // Items, Envelope, Razor) so perModeNavId(base, mode) = groupStart + mode.
+    Uf1NavUpPlayhead, Uf1NavUpScrub, Uf1NavUpItems, Uf1NavUpEnvelope, Uf1NavUpRazor,
+    Uf1NavLeftPlayhead, Uf1NavLeftScrub, Uf1NavLeftItems, Uf1NavLeftEnvelope, Uf1NavLeftRazor,
+    Uf1NavCentrePlayhead, Uf1NavCentreScrub, Uf1NavCentreItems, Uf1NavCentreEnvelope, Uf1NavCentreRazor,
+    Uf1NavRightPlayhead, Uf1NavRightScrub, Uf1NavRightItems, Uf1NavRightEnvelope, Uf1NavRightRazor,
+    Uf1NavDownPlayhead, Uf1NavDownScrub, Uf1NavDownItems, Uf1NavDownEnvelope, Uf1NavDownRazor,
     // Jog wheel (0x06, rotate-only) — NOT bindable (mode-driven), but SELECTABLE in
     // the UF1 vector so its Jog Mode settings show below the editor (Frank 2026-08-06).
+    // KEEP LAST in the UF1 block: four range checks read `<= Uf1Jog` to mean
+    // "is a UF1 control" (Bindings.cpp builtinDeviceForId, SettingsScreen idIsUf1
+    // + selIsUf1, main.cpp labelFollowsAction).
     Uf1Jog,
 };
+
+// How many jog modes the nav block above is sized for. main.cpp owns the real
+// enum (Uf1JogMode) and static_asserts that the two agree — Bindings.h cannot
+// see it, and a silent mismatch would map keys onto the wrong mode's ids.
+constexpr int kUf1JogModeCountForNav = 5;
+
+// The per-mode nav id for a physical cross key. `base` is one of the five
+// Uf1Nav* ids; `mode` is a Uf1JogMode value. Out of range → the base id back,
+// so a caller that has not been taught about modes still resolves to something.
+inline ButtonId perModeNavId(ButtonId base, int mode)
+{
+    if (mode < 0 || mode >= kUf1JogModeCountForNav) return base;
+    switch (base) {
+        case ButtonId::Uf1NavUp:
+            return static_cast<ButtonId>(static_cast<int>(ButtonId::Uf1NavUpPlayhead) + mode);
+        case ButtonId::Uf1NavLeft:
+            return static_cast<ButtonId>(static_cast<int>(ButtonId::Uf1NavLeftPlayhead) + mode);
+        case ButtonId::Uf1NavCentre:
+            return static_cast<ButtonId>(static_cast<int>(ButtonId::Uf1NavCentrePlayhead) + mode);
+        case ButtonId::Uf1NavRight:
+            return static_cast<ButtonId>(static_cast<int>(ButtonId::Uf1NavRightPlayhead) + mode);
+        case ButtonId::Uf1NavDown:
+            return static_cast<ButtonId>(static_cast<int>(ButtonId::Uf1NavDownPlayhead) + mode);
+        default: return base;
+    }
+}
 
 // Map UF8 device byte (FF 22 03 <id> 00 <s>) to ButtonId. Returns None
 // if the id isn't a v1-bindable global — caller falls through to whatever

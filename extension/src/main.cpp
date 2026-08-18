@@ -4676,6 +4676,27 @@ constexpr int kUf1EncoderModeCount =
 enum class Uf1JogMode : uint8_t { Playhead, Scrub, Items, Envelope, Razor };
 std::atomic<Uf1JogMode> g_uf1JogMode{Uf1JogMode::Playhead};
 constexpr int kUf1JogModeCount = static_cast<int>(Uf1JogMode::Razor) + 1;
+// The per-mode nav-cross ButtonIds are laid out in blocks of this size, and
+// Bindings.h has to hard-code it because it cannot see this enum. Adding a jog
+// mode without widening the block would map the new mode onto the next key's
+// ids, so the two must agree.
+static_assert(kUf1JogModeCount == uf8::bindings::kUf1JogModeCountForNav,
+              "add the jog mode to the per-mode nav ButtonId block too");
+
+// ⇨ THE NAV CROSS RESOLVES THROUGH THE ACTIVE JOG MODE.
+// fromUf1DeviceId returns the PHYSICAL id (Uf1NavUp…), which is the same five
+// bytes whatever the mode is. Every dispatch path runs the id through here
+// first, so a press looks up the binding of the mode you are actually in.
+// ⚠ There are TWO dispatch sites in onUf1Event — the early
+// "has an action for the held modifier" path and the catch-all at the end. Miss
+// one and the cross silently falls back to the physical id's binding, which is
+// the never-dispatched fallback, in some modes only. Lives in main.cpp because
+// g_uf1JogMode does; Bindings.cpp cannot see it.
+static uf8::bindings::ButtonId uf1RemapNavForJogMode_(uf8::bindings::ButtonId id)
+{
+    return uf8::bindings::perModeNavId(
+        id, static_cast<int>(g_uf1JogMode.load()));
+}
 // USER-ADJUSTABLE jog feel (Frank 2026-08-06 "alle speeds sollen einstellbar sein").
 // All ExtState-persisted + Settings-editable (UF1 tab). NOT g_nudgeAmount — the jog
 // is its own smooth thing, PER MODE:
@@ -20898,36 +20919,11 @@ void onUf1Event(const uf1::InputEvent& ev)
                 g_uf1ScrubHeld.store(ev.pressed);
                 break;
             }
-            // Razor mode: the NAV-CENTRE button is a HELD "mouse-down" for the content
-            // drag (Frank 2026-08-07). Held → the Whole target's jog drags content as one
-            // continuous gesture (auto-crossfade off); release commits. Press grabs fresh.
-            // Consumed here in Razor mode only; other modes keep the normal centre nav.
-            if (ev.id == uf1::btn::kNavCentre &&
-                g_uf1JogMode.load() == Uf1JogMode::Razor) {
-                g_uf1RazorContentHeld.store(ev.pressed);
-                if (ev.pressed) {
-                    g_uf1RazorTarget.store(Uf1RazorTarget::Whole);
-                    g_uf1RazorContentFresh.store(true);
-                    g_uf1RazorGrabDone.store(false);   // new gesture → grab again
-                }
-                g_pageDirty.store(true);
-                break;
-            }
-            // Items mode: the same held "mouse-down", so a move can be trimmed +
-            // crossfaded on release like a mouse drop (Frank 2026-08-11). NOT
-            // consumed on a plain click — if no jog happened while it was down,
-            // the release falls through to NAV-CENTRE's own job below, so the
-            // spotlight zoom is still there.
-            if (ev.id == uf1::btn::kNavCentre &&
-                g_uf1JogMode.load() == Uf1JogMode::Items) {
-                g_uf1JogItemsHeld.store(ev.pressed);
-                if (ev.pressed) { g_uf1JogItemsMoved.store(false); break; }
-                if (g_uf1JogItemsMoved.exchange(false)) {
-                    g_uf1JogItemsDrop.store(true);               // → onTimer commits
-                    break;
-                }
-                // else: a click, not a drag — let the binding handle it.
-            }
+            // (The NAV-CENTRE hold that used to be intercepted here — Razor's and
+            // Items' content drag — is the `jog_content_drag` builtin now, seeded
+            // as a Hold binding on the centre in those two modes. Intercepting it
+            // ahead of the dispatch would have made that binding unreachable, and
+            // with it any other action you put on the centre there.)
             // MODE-hold menu open: the 4 display soft-keys pick the mode (before
             // the Meter-Screen-Selector / channel soft-key blocks so it wins in
             // BOTH views). SK1 Plugin, SK2 DAW → the channel layout (sub-mode);
@@ -20968,7 +20964,8 @@ void onUf1Event(const uf1::InputEvent& ev)
             // below). Release edges still reach the final dispatch() so a
             // Momentary binding's press/release stays balanced. Frank
             // 2026-07-30 ("noch nicht wirklich bindable").
-            if (const auto uBid = uf8::bindings::fromUf1DeviceId(ev.id);
+            if (const auto uBid = uf1RemapNavForJogMode_(
+                    uf8::bindings::fromUf1DeviceId(ev.id));
                 uBid != uf8::bindings::ButtonId::None
                 && uBid != uf8::bindings::ButtonId::Uf1Solo
                 && uBid != uf8::bindings::ButtonId::Uf1Cut
@@ -21159,7 +21156,8 @@ void onUf1Event(const uf1::InputEvent& ev)
             // shipped transport + Solo/Cut/Sel behaviour; unbound buttons
             // (NAV, arrows, secondary transport, …) are user-assignable.
             // dispatch handles both press and release edges itself.
-            if (auto bId = uf8::bindings::fromUf1DeviceId(ev.id);
+            if (auto bId = uf1RemapNavForJogMode_(
+                    uf8::bindings::fromUf1DeviceId(ev.id));
                 bId != uf8::bindings::ButtonId::None) {
                 uf8::bindings::dispatch(bId, ev.pressed);
             }

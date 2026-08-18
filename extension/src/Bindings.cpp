@@ -163,6 +163,35 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf1NavCentre,     "uf1_nav_centre"      },
     { ButtonId::Uf1NavRight,      "uf1_nav_right"       },
     { ButtonId::Uf1NavDown,       "uf1_nav_down"        },
+    // Per-mode nav cross — 5 keys x 5 modes. Order MUST match the enum block
+    // in Bindings.h (mode-minor: Playhead, Scrub, Items, Envelope, Razor).
+    // Without a name a binding does not serialise and the editor collapses,
+    // so all 25 are listed even though they are never typed by hand.
+    { ButtonId::Uf1NavUpPlayhead, "uf1_nav_up_playhead" },
+    { ButtonId::Uf1NavUpScrub, "uf1_nav_up_scrub" },
+    { ButtonId::Uf1NavUpItems, "uf1_nav_up_items" },
+    { ButtonId::Uf1NavUpEnvelope, "uf1_nav_up_envelope" },
+    { ButtonId::Uf1NavUpRazor, "uf1_nav_up_razor" },
+    { ButtonId::Uf1NavLeftPlayhead, "uf1_nav_left_playhead" },
+    { ButtonId::Uf1NavLeftScrub, "uf1_nav_left_scrub" },
+    { ButtonId::Uf1NavLeftItems, "uf1_nav_left_items" },
+    { ButtonId::Uf1NavLeftEnvelope, "uf1_nav_left_envelope" },
+    { ButtonId::Uf1NavLeftRazor, "uf1_nav_left_razor" },
+    { ButtonId::Uf1NavCentrePlayhead, "uf1_nav_centre_playhead" },
+    { ButtonId::Uf1NavCentreScrub, "uf1_nav_centre_scrub" },
+    { ButtonId::Uf1NavCentreItems, "uf1_nav_centre_items" },
+    { ButtonId::Uf1NavCentreEnvelope, "uf1_nav_centre_envelope" },
+    { ButtonId::Uf1NavCentreRazor, "uf1_nav_centre_razor" },
+    { ButtonId::Uf1NavRightPlayhead, "uf1_nav_right_playhead" },
+    { ButtonId::Uf1NavRightScrub, "uf1_nav_right_scrub" },
+    { ButtonId::Uf1NavRightItems, "uf1_nav_right_items" },
+    { ButtonId::Uf1NavRightEnvelope, "uf1_nav_right_envelope" },
+    { ButtonId::Uf1NavRightRazor, "uf1_nav_right_razor" },
+    { ButtonId::Uf1NavDownPlayhead, "uf1_nav_down_playhead" },
+    { ButtonId::Uf1NavDownScrub, "uf1_nav_down_scrub" },
+    { ButtonId::Uf1NavDownItems, "uf1_nav_down_items" },
+    { ButtonId::Uf1NavDownEnvelope, "uf1_nav_down_envelope" },
+    { ButtonId::Uf1NavDownRazor, "uf1_nav_down_razor" },
     { ButtonId::Uf1SecLeft,       "uf1_sec_left"        },
     { ButtonId::Uf1SecRight,      "uf1_sec_right"       },
     { ButtonId::Uf1Cycle,         "uf1_cycle"           },
@@ -488,6 +517,50 @@ uint32_t pressKey(int layer, ButtonId id)
     return (static_cast<uint32_t>(layer) << 16)
          | static_cast<uint32_t>(static_cast<uint16_t>(id));
 }
+
+// ⇨ THE PER-MODE NAV-CROSS FACTORY TABLE — used by the factory seed AND by the
+// backfill that teaches an existing config about the 25 new ids. ONE list, or
+// the two would drift and a user upgrading would get a different cross than a
+// fresh install (Frank 2026-08-18).
+// Playhead and Scrub get the plain zoom cross back, because that is what the key
+// does when no editing mode is engaged; the four editing modes get the named
+// action that mode's half of applyUf1JogNav_ used to run, so nothing changes
+// hands out of the box. The centre in Razor and Items is the HELD content drag
+// and therefore seeds as Behavior::Hold — a Momentary seed would fire once and
+// never let go.
+struct NavSeed { ButtonId id; const char* action; const char* label; Behavior beh; };
+const NavSeed kNavSeed[] = {
+        // Playhead / Scrub: the zoom cross, centre zooms to fit.
+        { ButtonId::Uf1NavUpPlayhead,     "zoom_up",     "ZOOM \xE2\x96\xB2", Behavior::Momentary },
+        { ButtonId::Uf1NavDownPlayhead,   "zoom_down",   "ZOOM \xE2\x96\xBC", Behavior::Momentary },
+        { ButtonId::Uf1NavLeftPlayhead,   "zoom_left",   "ZOOM \xE2\x97\x82", Behavior::Momentary },
+        { ButtonId::Uf1NavRightPlayhead,  "zoom_right",  "ZOOM \xE2\x96\xB8", Behavior::Momentary },
+        { ButtonId::Uf1NavCentrePlayhead, "zoom_center", "FIT",            Behavior::Momentary },
+        { ButtonId::Uf1NavUpScrub,        "zoom_up",     "ZOOM \xE2\x96\xB2", Behavior::Momentary },
+        { ButtonId::Uf1NavDownScrub,      "zoom_down",   "ZOOM \xE2\x96\xBC", Behavior::Momentary },
+        { ButtonId::Uf1NavLeftScrub,      "zoom_left",   "ZOOM \xE2\x97\x82", Behavior::Momentary },
+        { ButtonId::Uf1NavRightScrub,     "zoom_right",  "ZOOM \xE2\x96\xB8", Behavior::Momentary },
+        { ButtonId::Uf1NavCentreScrub,    "zoom_center", "FIT",            Behavior::Momentary },
+        // Items: prev/next item, item on the track above/below, centre drags.
+        { ButtonId::Uf1NavLeftItems,      "jog_item_prev",       "ITEM \xE2\x97\x82", Behavior::Momentary },
+        { ButtonId::Uf1NavRightItems,     "jog_item_next",       "ITEM \xE2\x96\xB8", Behavior::Momentary },
+        { ButtonId::Uf1NavUpItems,        "jog_item_track_up",   "TRK \xE2\x96\xB2",  Behavior::Momentary },
+        { ButtonId::Uf1NavDownItems,      "jog_item_track_down", "TRK \xE2\x96\xBC",  Behavior::Momentary },
+        { ButtonId::Uf1NavCentreItems,    "jog_content_drag",    "DRAG",           Behavior::Hold },
+        // Envelope: prev/next point, lane above/below, centre switches what
+        // the wheel edits.
+        { ButtonId::Uf1NavLeftEnvelope,   "jog_env_point_prev",   "PT \xE2\x97\x82",   Behavior::Momentary },
+        { ButtonId::Uf1NavRightEnvelope,  "jog_env_point_next",   "PT \xE2\x96\xB8",   Behavior::Momentary },
+        { ButtonId::Uf1NavUpEnvelope,     "jog_env_lane_up",      "LANE \xE2\x96\xB2", Behavior::Momentary },
+        { ButtonId::Uf1NavDownEnvelope,   "jog_env_lane_down",    "LANE \xE2\x96\xBC", Behavior::Momentary },
+        { ButtonId::Uf1NavCentreEnvelope, "jog_env_target_toggle","TARGET",         Behavior::Toggle },
+        // Razor: the four edges, centre takes the whole area and drags it.
+        { ButtonId::Uf1NavLeftRazor,      "jog_razor_left",   "EDGE \xE2\x97\x82", Behavior::Momentary },
+        { ButtonId::Uf1NavRightRazor,     "jog_razor_right",  "EDGE \xE2\x96\xB8", Behavior::Momentary },
+        { ButtonId::Uf1NavUpRazor,        "jog_razor_top",    "EDGE \xE2\x96\xB2", Behavior::Momentary },
+        { ButtonId::Uf1NavDownRazor,      "jog_razor_bottom", "EDGE \xE2\x96\xBC", Behavior::Momentary },
+        { ButtonId::Uf1NavCentreRazor,    "jog_content_drag", "DRAG",           Behavior::Hold },
+    };
 
 // ---- Factory defaults -----------------------------------------------------
 
@@ -841,6 +914,17 @@ void seedFactoryDefaults_(Config& c)
     L1[ButtonId::Uf1NavLeft]   = mkBuiltin("jog_nav_left",   Behavior::Momentary, "JOG \xE2\x97\x82");
     L1[ButtonId::Uf1NavRight]  = mkBuiltin("jog_nav_right",  Behavior::Momentary, "JOG \xE2\x96\xB8");
     L1[ButtonId::Uf1NavCentre] = mkBuiltin("jog_nav_center", Behavior::Momentary, "FOCUS");
+    // ⇨ AND THE SAME CROSS, ONCE PER JOG MODE (Frank 2026-08-18).
+    // The five ids above stay as the never-dispatched fallback; the remap in
+    // main.cpp sends every press to the id of the ACTIVE mode, which is what
+    // these seed. Playhead gets the plain zoom cross back, because that is what
+    // the key does when no editing mode is engaged ("Playhead = standard-
+    // belegung"); the four editing modes get the named action that mode's half
+    // of applyUf1JogNav_ used to run, so out of the box nothing changes hands.
+    // The centre in Razor and Items is the HELD content drag, so it seeds with
+    // Behavior::Hold — a Momentary seed there would fire once and never let go.
+    for (const auto& n : kNavSeed)
+        L1[n.id] = mkBuiltin(n.action, n.beh, n.label);
     // Controls that used to be HARDCODED fall-throughs in onUf1Event now ship
     // as real, rebindable factory defaults (their worker-safe builtins live in
     // main.cpp) so the bindings editor shows the action instead of "none":
@@ -2368,7 +2452,10 @@ bool invokeBuiltin(const std::string& name, int param)
 // Sub-Bank cell colour. Absent reads as Plain, and a set only writes an entry
 // once it has claimed one, so an old file restores to exactly what it painted
 // before: both sets on Plain's colour. No migration step.
-constexpr int kCurrentBindingsVersion = 27;
+// 28: the nav cross gained 25 per-mode ButtonIds. Dispatch resolves the cross
+// through the active Jog Mode, so an older config has NO binding for it until
+// upgradeBackfillUf1Buttons_ seeds them — that pass now runs for < 28 too.
+constexpr int kCurrentBindingsVersion = 28;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2731,6 +2818,14 @@ void upgradeBackfillUf1Buttons_(Config& c)
     fillBuiltin(ButtonId::Uf1NavLeft,   "jog_nav_left",   "JOG \xE2\x97\x82");
     fillBuiltin(ButtonId::Uf1NavRight,  "jog_nav_right",  "JOG \xE2\x96\xB8");
     fillBuiltin(ButtonId::Uf1NavCentre, "jog_nav_center", "FOCUS");
+    // ⇨ AND THE 25 PER-MODE NAV IDS (v27→v28, 2026-08-18).
+    // Every config written before today lacks them entirely, and since the
+    // dispatch now resolves the cross through the active mode, a missing entry
+    // means a DEAD cross — not a fallback. Backfilled from the same table the
+    // factory seed uses, and only where the slot is missing, so anyone who has
+    // already bound one keeps it.
+    for (const auto& n : kNavSeed)
+        fillBuiltin(n.id, n.action, n.label, n.beh);
     // v15→v16 (2026-07-31): controls that were hardcoded fall-throughs in
     // onUf1Event are now real factory-default bindings. Backfill the MISSING
     // slots on older configs (a user's own customisation, if any, survives;
@@ -3213,7 +3308,9 @@ void load()
             if (tmp.version < 14) {
                 upgradeBackfillShift360LearnHud_(tmp);
             }
-            if (tmp.version < 16) {
+            // Runs for < 28 as well: v27 configs predate the per-mode nav ids,
+            // and without them the cross has no binding to find at all.
+            if (tmp.version < 28) {
                 upgradeBackfillUf1Buttons_(tmp);
             }
             if (tmp.version < 17) {
