@@ -20014,6 +20014,18 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                      || bid == uf8::bindings::ButtonId::BankRight;
                     int bk = -1;
                     if (isBankBtn) bk = engagedBankableKind_();
+                    // ⇨ IN UF8 PLUGIN MODE THE BANK KEYS ARE THE FADER BANK.
+                    // Plugin Mode surfaces a plug-in over 2 fader-banks of 8
+                    // strips, and Bank ◄/► are reserved for stepping between
+                    // them (Frank 2026-05-17, tryFaderBankNav). That predates
+                    // dynamic-bank paging by a month, so when a dynamic FX bank
+                    // is ALSO set to page with the Bank keys the older claim
+                    // wins: otherwise the intercept below eats the press and the
+                    // second bank of 8 channels cannot be reached at all
+                    // (Frank 2026-08-18: "wir hatten immer 2 banks in den UF8
+                    // Plugin-Modes! Für 2x8kanäle!"). The other paging controls
+                    // (UF8 encoder, UC1 encoders) are unaffected.
+                    if (isBankBtn && g_uf8PluginMode.load()) bk = -1;
                     if (isBankBtn && bk >= 0
                         && g_dynBankCtrl[bk].load()
                                == static_cast<int>(BankControl::Uf8Bank)) {
