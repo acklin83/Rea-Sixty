@@ -6102,7 +6102,7 @@ static int engagedBankableKind_()
     if (q < 0) return -1;
     const int sb = g_activeSubBank[layer].load();
     const auto dk = uf8::bindings::getSubBankDynamic(
-        layer, q, sb, static_cast<int>(uf8::bindings::currentModifierSnapshot()));
+        layer, q, sb, static_cast<int>(uf8::bindings::bankModifierSnapshot()));
     return dynBankBankable_(dk) ? static_cast<int>(dk) : -1;
 }
 
@@ -19831,7 +19831,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         uf8::bindings::getSubBankDynamic(
                             layer, aq, sb,
                             static_cast<int>(
-                                uf8::bindings::currentModifierSnapshot()));
+                                uf8::bindings::bankModifierSnapshot()));
                     if (dk != uf8::bindings::DynamicBankKind::None) {
                         dispatchDynamicPress_(dk, id - 0x18, pressed);
                     } else {
@@ -20840,7 +20840,7 @@ void onUf1Event(const uf1::InputEvent& ev)
                 && !g_uf1ModeMenu.load()) {
                 const int bank = g_uf1SoftBank.load();
                 const int slot = static_cast<int>(ev.id - uf1::btn::kDisplaySoft1);
-                const auto dk  = uf8::bindings::getUf1SoftBankDynamic(bank, static_cast<int>(uf8::bindings::currentModifierSnapshot()));
+                const auto dk  = uf8::bindings::getUf1SoftBankDynamic(bank, static_cast<int>(uf8::bindings::bankModifierSnapshot()));
                 if (dk != uf8::bindings::DynamicBankKind::None) {
                     // Dynamic bank: fire the SAME FX-key gestures as the UF8 (Push /
                     // +Shift / +Cmd / +Ctrl / Long-press → reasixty_fxBankOp), not
@@ -25398,7 +25398,7 @@ void uf1PaintChannel_()
     // ([[uf1-mode-edge-must-not-relayout]]). shiftChanged above covers the UF1
     // SHIFT key alone; this also catches Cmd, Ctrl and the keyboard modifiers.
     static int  sMod = -1;
-    const int   modNow     = static_cast<int>(uf8::bindings::currentModifierSnapshot());
+    const int   modNow     = static_cast<int>(uf8::bindings::bankModifierSnapshot());
     const bool  modChanged = (modNow != sMod);
     sMod = modNow;
     const bool changed = (tr != sTr) || viewChanged || screenChanged || menuEdge
@@ -26453,7 +26453,7 @@ void uf1PaintChannel_()
         // g_uf1DynBankPage selects items [page*4 .. page*4+3] (ABSOLUTE — the UF1
         // path never uses UF8's dynBankSlotBase_).
         const auto dawDynKind = dawBanks
-            ? uf8::bindings::getUf1SoftBankDynamic(bankNo, static_cast<int>(uf8::bindings::currentModifierSnapshot()))
+            ? uf8::bindings::getUf1SoftBankDynamic(bankNo, static_cast<int>(uf8::bindings::bankModifierSnapshot()))
             : uf8::bindings::DynamicBankKind::None;
         const bool dawDyn = dawDynKind != uf8::bindings::DynamicBankKind::None;
         MediaTrack* dawDynTr = dawDyn ? uf1FocusedTrack_() : nullptr;
@@ -26551,7 +26551,7 @@ void uf1PaintChannel_()
                 // layer carries its own in ActionSlot::label, and an empty layer
                 // shows EMPTY rather than borrowing the Plain name.
                 const int mIdx =
-                    static_cast<int>(uf8::bindings::currentModifierSnapshot());
+                    static_cast<int>(uf8::bindings::bankModifierSnapshot());
                 const bool plainLayer =
                     (mIdx == static_cast<int>(uf8::bindings::Modifier::Plain));
                 const auto& sp = dawSlot.shortPress[mIdx];
@@ -28543,7 +28543,7 @@ void pushZonesForVisibleSlots()
             if (curQuick >= 0)
                 dynKind = uf8::bindings::getSubBankDynamic(
                     curLayer, curQuick, curSub,
-                    static_cast<int>(uf8::bindings::currentModifierSnapshot()));
+                    static_cast<int>(uf8::bindings::bankModifierSnapshot()));
             if (curQuick >= 0
                 && dynKind != uf8::bindings::DynamicBankKind::None) {
                 dynInfo = dynamicBankSlot_(dynKind, favContextTrack_(), s);
@@ -28564,7 +28564,7 @@ void pushZonesForVisibleSlots()
                 // modifier layer shows EMPTY, never the Plain label — a key that
                 // does nothing under Shift must not look like it does.
                 const int mIdx =
-                    static_cast<int>(uf8::bindings::currentModifierSnapshot());
+                    static_cast<int>(uf8::bindings::bankModifierSnapshot());
                 const bool plainLayer =
                     (mIdx == static_cast<int>(uf8::bindings::Modifier::Plain));
                 const auto& sp = userSlot.shortPress[mIdx];
@@ -33148,7 +33148,7 @@ void onTimerBody_()
     // a modifier never used to change what the surface displays.
     {
         static int s_lastMod = -1;
-        const int m = static_cast<int>(uf8::bindings::currentModifierSnapshot());
+        const int m = static_cast<int>(uf8::bindings::bankModifierSnapshot());
         if (m != s_lastMod) {
             s_lastMod = m;
             g_softKeyDirty.store(true);
@@ -41958,7 +41958,7 @@ void registerBindingHandlers()
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing || g_uf1MeterView.load()) return;
             if (g_uf1ChannelSubMode.load() != 1) return;      // DAW mode only
-            if (uf8::bindings::getUf1SoftBankDynamic(g_uf1SoftBank.load(), static_cast<int>(uf8::bindings::currentModifierSnapshot()))
+            if (uf8::bindings::getUf1SoftBankDynamic(g_uf1SoftBank.load(), static_cast<int>(uf8::bindings::bankModifierSnapshot()))
                 == uf8::bindings::DynamicBankKind::None) return;
             const int cnt = std::max(1, g_uf1DynBankPageCount.load());
             if (cnt < 2) return;

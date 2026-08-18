@@ -949,7 +949,7 @@ static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
 static int g_slotEditModIdx = 0;
 // NOT called "layer" anywhere the user can see it — that word already means
 // the surface layers 1-3 (Frank 2026-08-18). These are modifiers.
-static const char* const kModifierName_[4] = { "Plain", "Shift", "Cmd", "Ctrl" };
+static const char* const kModifierName_[2] = { "Plain", "Shift" };
 
 // Regular bindable button — one the user assigns actions to via the
 // per-button binding editor (the getBinding path). Excludes Top-Soft-Keys
@@ -2804,23 +2804,23 @@ static bool drawBankLayerRow_(ImGui_Context* ctx, const char* tag, int* modIdx)
     // peace (Frank 2026-08-18). Click a button to go back to Plain.
     {
         static int s_lastHeld = 0;
-        const int held = static_cast<int>(currentModifierSnapshot());
+        const int held = static_cast<int>(bankModifierSnapshot());
         if (held != s_lastHeld && held != 0) *modIdx = held;
         s_lastHeld = held;
     }
-    static const char* kModNames[kModifierCount] =
-        { "Plain", "Shift", "Cmd", "Ctrl" };
+    if (*modIdx < 0 || *modIdx >= kSoftKeyModifierSets) *modIdx = 0;
+    static const char* kModNames[kSoftKeyModifierSets] = { "Plain", "Shift" };
     bool changed = false;
     ImGui_Text(ctx, "Modifier");
     ImGui_SameLine(ctx, nullptr, nullptr);
-    for (int m = 0; m < kModifierCount; ++m) {
+    for (int m = 0; m < kSoftKeyModifierSets; ++m) {
         char idbuf[64];
         snprintf(idbuf, sizeof(idbuf), "%s##%s_lay%d", kModNames[m], tag, m);
         if (ImGui_RadioButton(ctx, idbuf, *modIdx == m)) {
             *modIdx = m;
             changed = true;
         }
-        if (m < kModifierCount - 1) ImGui_SameLine(ctx, nullptr, nullptr);
+        if (m < kSoftKeyModifierSets - 1) ImGui_SameLine(ctx, nullptr, nullptr);
     }
     return changed;
 }

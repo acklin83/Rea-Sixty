@@ -352,6 +352,17 @@ enum class Modifier : uint8_t {
 };
 constexpr int kModifierCount = 4;
 
+// ⛔ SOFT-KEY BANKS GET TWO, NOT FOUR: Plain and Shift.
+// The surfaces carry exactly one modifier key (the UF8's FINE, the UF1's SHIFT),
+// so Cmd and Ctrl banks could only ever be reached from the computer keyboard —
+// where those keys already drive the FX-Learn modifier layers. On Windows it is
+// worse than a clash of conventions: the "Cmd" slot is fed by ALT there, the very
+// key FX-Learn's Option layer uses. Storing four and offering two would just be
+// carrying dead weight (Frank 2026-08-18: "LOGISCH REDUZIERST DU AUF 2! SONST
+// SCHLEPPST DU NUR WIEDER MÜLL MIT!"). Binding::shortPress keeps all four — that
+// is the generic per-button matrix and every ordinary key still uses it.
+constexpr int kSoftKeyModifierSets = 2;
+
 struct Binding {
     Behavior    behavior = Behavior::Momentary;
     std::string label;
@@ -438,12 +449,12 @@ enum class DynamicBankKind : uint8_t {
 
 struct UserQuickSubBank {
     Binding slots[kSlotsPerSubBank];   // top-soft-key positions
-    // ⇨ PER MODIFIER LAYER. A layer is a FULL bank, not just a second set of
-    // actions: Plain can be static while Shift is an FX bank. Index = Modifier
-    // (0 Plain, 1 Shift, 2 Cmd, 3 Ctrl). Anything less makes the layer a
-    // half-feature that falls apart at the edges — presets and dynamic banks
-    // hung off the sub-bank and knew nothing about layers (Frank 2026-08-18).
-    DynamicBankKind dynamic[kModifierCount] = {};      // non-None → computed
+    // ⇨ ONE PER MODIFIER SET, and a set is a FULL bank rather than just a second
+    // list of actions: Plain can be static while Shift is an FX bank. Presets
+    // and the dynamic kind used to hang off the sub-bank and know nothing about
+    // modifiers, which made the whole thing fall apart at its edges
+    // (Frank 2026-08-18).
+    DynamicBankKind dynamic[kSoftKeyModifierSets] = {};   // non-None → computed
 };
 // LED appearance override for one Sub-Bank selector button (V-POT or
 // Soft 1..5) under a specific (Layer, Quick) context. Lets the user
@@ -500,8 +511,8 @@ struct Config {
     // bank (FX list / parameter groups / colours) whose 4 keys derive live
     // from the focused track; the 4 static slots above are then ignored.
     // Default None ⇒ classic static behaviour.
-    // [bank][modifier layer] — same rule as the UF8 above.
-    DynamicBankKind uf1SoftBankDynamic[kUf1SoftBankCount][kModifierCount] = {};
+    // [bank][modifier set] — same rule as the UF8 above.
+    DynamicBankKind uf1SoftBankDynamic[kUf1SoftBankCount][kSoftKeyModifierSets] = {};
 };
 
 // Builtin registry. Phase A registers from main.cpp at REAPER_PLUGIN_ENTRY
@@ -626,6 +637,15 @@ void     setKeyboardCmdHeld  (bool held);
 void     setKeyboardCtrlHeld (bool held);
 bool     modifierHeld(Modifier m);
 Modifier currentModifierSnapshot();
+
+// ⛔ SOFT-KEY BANKS SEE ONLY PLAIN AND SHIFT. Cmd and Ctrl are dropped to Plain
+// here on purpose: the surfaces carry exactly one modifier key (the UF8's FINE,
+// the UF1's SHIFT), so a Cmd or Ctrl bank could only ever be reached from the
+// computer keyboard — and those two keys already belong to the FX-Learn
+// modifier layers. On Windows the collision is literal: the "Cmd" slot is driven
+// by ALT there (no Cmd key exists), which is the same key FX-Learn's Option
+// layer uses. One press, two meanings (Frank 2026-08-18: "Gibt ja nur Shift!").
+Modifier bankModifierSnapshot();
 
 // Per-layer variants. exportLayerTo writes a single layer wrapped in a
 // {"version":1,"type":"layer","index":N,"layer":{…}} object so the
