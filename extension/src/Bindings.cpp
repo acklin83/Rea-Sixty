@@ -1442,7 +1442,7 @@ void serializeSubBankDynamic_(const Config& c, std::ostringstream& os,
                     if (k == DynamicBankKind::None) continue;
                     if (!first) os << ",";
                     first = false;
-                    // "mod" absent means Plain, so a pre-v25 file reads back
+                    // "mod" absent means Plain, so a pre-v26 file reads back
                     // onto layer 0 exactly where it used to live.
                     os << "\n    {";
                     if (onlyLayer < 0) os << "\"layer\": " << li << ", ";
@@ -1867,7 +1867,7 @@ void parseSubBankDynamic_(wdl_json_element* root, Config& out, int forceLayer = 
         if (subBank < 0 || subBank >= kSubBanksPerQuick) continue;
         if (kind < 0 || kind > static_cast<int>(DynamicBankKind::TrackColours))
             continue;
-        int mod = 0;   // absent = Plain (pre-v25 shape)
+        int mod = 0;   // absent = Plain (pre-v26 shape)
         if (auto* v = eo->get_item_by_name("mod"))
             if (auto* t = v->get_string_value(true)) mod = std::atoi(t);
         if (mod < 0 || mod >= kSoftKeyModifierSets) continue;
@@ -1941,7 +1941,7 @@ void parseUf1SoftBankDynamic_(wdl_json_element* root, Config& out)
         if (bank < 0 || bank >= kUf1SoftBankCount) continue;
         if (kind < 0 || kind > static_cast<int>(DynamicBankKind::TrackColours))
             continue;
-        int mod = 0;   // absent = Plain (pre-v25 shape)
+        int mod = 0;   // absent = Plain (pre-v26 shape)
         if (auto* v = eo->get_item_by_name("mod"))
             if (auto* t = v->get_string_value(true)) mod = std::atoi(t);
         if (mod < 0 || mod >= kSoftKeyModifierSets) continue;
