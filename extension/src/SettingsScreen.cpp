@@ -1062,6 +1062,29 @@ static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
 }
 
 
+// The Sub-Bank selector cell for a sub-bank index, and the reverse test.
+// A sub-bank cell IS a bank, so the editor's selection may never sit on a
+// different one than the engaged bank (see drawBindings).
+bool isSubBankCellId_(uf8::bindings::ButtonId id)
+{
+    using namespace uf8::bindings;
+    return id == ButtonId::VPotBank
+        || (id >= ButtonId::SoftKey1Bank && id <= ButtonId::SoftKey5Bank);
+}
+
+uf8::bindings::ButtonId subBankCellId_(int sbIdx)
+{
+    using namespace uf8::bindings;
+    switch (sbIdx) {
+        case 1:  return ButtonId::SoftKey1Bank;
+        case 2:  return ButtonId::SoftKey2Bank;
+        case 3:  return ButtonId::SoftKey3Bank;
+        case 4:  return ButtonId::SoftKey4Bank;
+        case 5:  return ButtonId::SoftKey5Bank;
+        default: return ButtonId::VPotBank;
+    }
+}
+
 // Regular bindable button — one the user assigns actions to via the
 // per-button binding editor (the getBinding path). Excludes Top-Soft-Keys
 // (live labels, userQuicks path) and the structural Layer / Quick /
@@ -5893,6 +5916,17 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // reasixty_softkeyCurrentBank covers both cases, and the schematic's green
     // ring already derives from it.
     const int s_editSubBank = reasixty_softkeyCurrentBank();
+
+    // ⇨ AND THE SELECTION FOLLOWS IT TOO.
+    // A sub-bank cell is not an ordinary button, it IS a bank. Leaving the blue
+    // "selected" fill on cell 1 while the green ring sat on cell 2 put the two
+    // competing answers back on screen that 9e1e8be removed — and worse than
+    // cosmetically: drawSubBankCellEditor_ takes its sub-bank from the SELECTION
+    // while its Quick comes from the ENGAGED bank, so the LED and preset editor
+    // was working on a bank the surface was not on (Frank 2026-08-18: "wieso ist
+    // der blaue fucker immernoch da?"). Only sub-bank cells are pulled along;
+    // any other selected button keeps its selection.
+    if (isSubBankCellId_(s_selected)) s_selected = subBankCellId_(s_editSubBank);
 
     // ---- Hardware schematic (vector, mirrors SSL UF8 page-14 layout) ----
     // Click → selects the button for editing AND, for Layer / Quick /
