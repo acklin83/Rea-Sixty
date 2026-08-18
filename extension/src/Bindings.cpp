@@ -4438,6 +4438,13 @@ bool saveBankPreset(const std::string& name,
         p.slots[s].inactiveBrightness = src.inactiveBrightness;
         p.slots[s].ledShowWhenEmpty   = src.ledShowWhenEmpty;
         p.slots[s].shortPress[0] = src.shortPress[mod];
+        // Store the label this SET actually shows: its own if it has one, the
+        // key's name only when saving Plain. Otherwise saving the Shift set
+        // would quietly capture the Plain name.
+        if (!src.shortPress[mod].label.empty())
+            p.slots[s].label = src.shortPress[mod].label;
+        else if (mod != 0)
+            p.slots[s].label.clear();
     }
     int existing = -1;
     for (int i = 0; i < static_cast<int>(g_cfg.bankPresets.size()); ++i) {
@@ -4489,6 +4496,15 @@ bool recallBankPreset(int idx, int layer, int quick, int subBank, int mod)
         Binding& dst = g_cfg.userQuicks[layer].quicks[quick]
                           .subBanks[subBank].slots[s];
         dst.shortPress[mod] = p.slots[s].shortPress[0];
+        // ⇨ THE LABEL HAS TO COME ALONG, INTO ANY SET.
+        // A preset slot's label may sit in Binding::label — that is where a key's
+        // name lives, and where every preset saved before today put it. A modifier
+        // set deliberately does NOT fall back to the Plain label, so recalling into
+        // Shift without carrying it produced a set whose actions fired while the
+        // screen stayed blank (Frank 2026-08-18: "LABELS ERSCHEINEN NICHT ABER
+        // ACTION FEUERT"). Label-only slots vanished entirely.
+        if (dst.shortPress[mod].label.empty())
+            dst.shortPress[mod].label = p.slots[s].label;
         if (mod == 0) {
             dst.behavior       = p.slots[s].behavior;
             dst.label          = p.slots[s].label;
@@ -4638,10 +4654,14 @@ bool recallFactoryBankPreset(int idx, int layer, int quick, int subBank, int mod
         Binding& dst = g_cfg.userQuicks[layer].quicks[quick]
                           .subBanks[subBank].slots[s];
         dst.shortPress[mod] = p.slots[s].shortPress[0];
+        if (dst.shortPress[mod].label.empty())
+            dst.shortPress[mod].label = p.slots[s].label;
         if (mod == 0) {
             const std::string keepLabel = p.slots[s].label;
+            const auto        keepSet   = dst.shortPress[0];
             dst = p.slots[s];
-            dst.label = keepLabel;
+            dst.label         = keepLabel;
+            dst.shortPress[0] = keepSet;   // keeps the label we just carried in
         }
     }
     persistLocked_();
