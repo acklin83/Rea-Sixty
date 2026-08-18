@@ -1044,6 +1044,7 @@ static const char* dynKindLabel_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::ParamGroups: return "Parameter Groups";
         case DynamicBankKind::TrackColours:
             return reasixty_sp("Track Colours", "Track Colors");
+        case DynamicBankKind::Favourites:  return "CS / BC Favourites";
         default:                           return "Off (static slots)";
     }
 }
@@ -1057,6 +1058,7 @@ static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::ParamGroups: return "GROUPS";
         case DynamicBankKind::TrackColours:
             return reasixty_sp("COLOURS", "COLORS");
+        case DynamicBankKind::Favourites:  return "FAVS";
         default:                           return "";
     }
 }
@@ -4747,6 +4749,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                 static const DynamicBankKind kKinds[] = {
                     DynamicBankKind::None,        DynamicBankKind::FxBank,
                     DynamicBankKind::ParamGroups, DynamicBankKind::TrackColours,
+                    DynamicBankKind::Favourites,
                 };
                 for (const auto k : kKinds) {
                     bool sel = (k == dynKind);
@@ -5382,6 +5385,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             { DynamicBankKind::ParamGroups,  "Parameter Groups" },
             { DynamicBankKind::TrackColours,
               reasixty_sp("Track Colours", "Track Colors") },
+            { DynamicBankKind::Favourites,   "CS / BC Favourites" },
         };
         const DynamicBankKind curKind =
             getSubBankDynamic(editLayer, engagedQ, sbIdx, kDynamicKindSet);
@@ -5434,6 +5438,18 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             ImGui_TextDisabled(ctx,
                 "Only while this bank is the engaged Sub-Bank; the control "
                 "keeps its normal function otherwise.");
+            ImGui_Spacing(ctx);
+        }
+
+        if (curKind == DynamicBankKind::Favourites) {
+            ImGui_TextDisabled(ctx,
+                "The 8 favourites of whichever class you last worked on: CS or "
+                "BC, decided live, in that class's colour. Push switches; "
+                "whether it carries the current settings or recalls the "
+                "favourite's own is the per-class setting in Favourites.");
+            ImGui_TextDisabled(ctx,
+                "A track without a strip gets one inserted at the end of its "
+                "FX chain.");
             ImGui_Spacing(ctx);
         }
 
@@ -6255,6 +6271,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 { DynamicBankKind::ParamGroups,  "Parameter Groups" },
                 { DynamicBankKind::TrackColours,
               reasixty_sp("Track Colours", "Track Colors") },
+                { DynamicBankKind::Favourites,   "CS / BC Favourites" },
             };
             const DynamicBankKind curKind =
                 uf8::bindings::getUf1SoftBankDynamic(

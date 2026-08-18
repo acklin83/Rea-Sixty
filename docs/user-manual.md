@@ -972,13 +972,14 @@ Open a Sub-Bank cell in the UF8 schematic and look for the **Dynamic bank** sect
 | `FX (focused track, paged)` | The focused track's plug-ins |
 | `Parameter Groups` | Parameter Groups 1–8 |
 | `Track Colours` | Your eight-colour palette |
+| `CS / BC Favourites` | Your eight Channel Strip or Bus Compressor favourites |
 
 The choice is stored per Sub-Bank, so each of the six Sub-Banks under each Quick can be dynamic or static independently. While a bank is dynamic its eight stored slots are ignored — they are not lost, and turning the bank back to `Off` restores them.
 
 A dynamic Sub-Bank announces itself in three places, so you never edit slots that cannot fire:
 
 - The Sub-Bank cell in the schematic carries an **amber tick** in its top-right corner.
-- The eight scribble strips above it read the bank's kind (`FX`, `GROUPS`, `COLOURS`) rather than the stored slot labels, because those labels never reach the hardware while the bank is dynamic.
+- The eight scribble strips above it read the bank's kind (`FX`, `GROUPS`, `COLOURS`, `FAVS`) rather than the stored slot labels, because those labels never reach the hardware while the bank is dynamic.
 - Clicking any of the eight keys shows what the bank computes instead of a slot editor, with the same **Dynamic bank** dropdown, so you can switch it back to static without hunting for the cell.
 
 Layer 1's Q1 and Q2 are driven by the plug-in and carry no user slots, so they cannot be made dynamic. Everything else can: Layer 1 Q3, and all three Quicks on Layers 2 and 3.
@@ -986,6 +987,16 @@ Layer 1's Q1 and Q2 are driven by the plug-in and carry no user slots, so they c
 Dynamic banks are a UF8 feature and are inactive while UF8 Plug-in Mode is engaged.
 
 **Track colours and Parameter Groups apply to every selected track,** not just the focused one, so you can colour or group a whole selection with one press. The FX bank always acts on the focused track alone.
+
+**The Favourites bank**
+
+The eight keys are your eight favourites — Channel Strip or Bus Compressor, whichever class you last worked on. Rea-Sixty decides that the same way every other favourite action does: from the parameter you last touched, falling back to the class the soft-key row is showing. So the bank follows you between the two rather than making you pick one.
+
+Each key wears its class colour from **Appearance**, the same yellow and red the inserts overlay and the FX bank use, so you can see at a glance which of the two you are looking at. The key of the favourite currently on the track is bright, the other assigned ones are dim, and a favourite you have not filled in stays dark and does nothing.
+
+A press switches the track to that favourite. Whether it carries your current settings across or recalls what that favourite last had is **not** a property of the bank: it is the per-class setting under **Favourites**, which drives every favourite action alike. Channel Strips default to carrying the settings, Bus Compressors to recalling their own.
+
+If the track has no strip at all, the press inserts the favourite at the end of the track's FX chain. It arrives on the plug-in's own settings, because there is nothing to carry across.
 
 **The FX bank**
 

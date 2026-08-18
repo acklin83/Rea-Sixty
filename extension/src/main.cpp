@@ -6235,6 +6235,11 @@ static DynSlotInfo fxBankSlotInfo_(MediaTrack* tr, int fxIdx)
     return info;
 }
 
+// Favourite-slot resolvers (defined with the CS/BC switch block further down):
+// which of the 8 favourites carries this plug-in identity, or -1.
+static int csFavSlotForName_(const char* addName);
+static int bcFavSlotForName_(const char* addName);
+
 // Resolve key `slot` (0..7) of a dynamic bank against `tr`. Main-thread only
 // (touches REAPER track/send API). Empty/out-of-range → present=false.
 static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
@@ -6256,6 +6261,53 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
             const uint8_t mask = uf8::param_groups::getMaskForTrack(tr);
             const bool member = (mask & (1u << slot)) != 0;
             info.led = member ? 2 : 1;   // bright = focused track is a member
+            return info;
+        }
+        case DK::Favourites: {
+            // The 8 favourites of whichever domain is live. favDomainIsBc_ is the
+            // SAME resolver switch_cs_N / fav_cycle use, so the bank can never
+            // disagree with the actions about which class you are on.
+            const bool isBc = favDomainIsBc_();
+            info.present = true;
+            std::string addName, favLbl;
+            const bool taken = isBc ? resolveBcFav(slot, addName, favLbl)
+                                    : resolveCsFav(slot, addName, favLbl);
+            if (taken) {
+                // The plug-in's SHORT name, same source as the FX-Cycle colour
+                // bar; the favourite's stored "label" is its identity string.
+                if (const auto* pb = uc1::lookupBindingsByName(addName);
+                    pb && pb->shortName && *pb->shortName) {
+                    info.label = pb->shortName;
+                } else {
+                    info.label = !favLbl.empty() ? favLbl : addName;
+                }
+            } else {
+                char b[12];
+                std::snprintf(b, sizeof(b), "%s Fav %d", isBc ? "BC" : "CS",
+                              slot + 1);
+                info.label = b;
+            }
+            // Class colour from Appearance, shared with the FX bank's keys.
+            info.hasRgb = true;
+            info.rgb = static_cast<uint32_t>(
+                isBc ? reasixty_overlayBcColor() : reasixty_overlayCsColor())
+                & 0xFFFFFFu;
+            // Bright = this favourite is the one on the track right now. An
+            // unassigned favourite stays dark: it has a name but nothing to
+            // switch to, and a lit key that does nothing is the trap this
+            // project has walked into twice already.
+            info.led = 0;
+            if (taken) {
+                const uc1::UC1Bindings b2 = uc1::lookupBindingsOnTrack(tr);
+                const int fxIdx = isBc ? b2.busCompFxIdx : b2.channelFxIdx;
+                char ident[256];
+                const bool haveIdent = fxIdx >= 0
+                    && uf8::fxIdentityName(tr, fxIdx, ident, sizeof(ident));
+                const int cur = haveIdent
+                    ? (isBc ? bcFavSlotForName_(ident) : csFavSlotForName_(ident))
+                    : -1;
+                info.led = (cur == slot) ? 2 : 1;
+            }
             return info;
         }
         case DK::TrackColours: {
@@ -6304,7 +6356,8 @@ static int dynamicBankItemCountUf1_(uf8::bindings::DynamicBankKind kind,
 {
     using DK = uf8::bindings::DynamicBankKind;
     if (kind == DK::FxBank) return tr ? TrackFX_GetCount(tr) : 0;
-    if (kind == DK::ParamGroups || kind == DK::TrackColours) return 8;
+    if (kind == DK::ParamGroups || kind == DK::TrackColours
+        || kind == DK::Favourites) return 8;
     return 0;
 }
 
@@ -6507,6 +6560,19 @@ static void applyDynBankColourOp_(MediaTrack* tr, int slot, int gesture)
     g_pageDirty.store(true);
 }
 
+// Favourites bank press: switch the track's CS or BC to favourite `slot`. The
+// press only POSTS the request — the same atomics switch_cs_N / switch_bc_N use
+// — so the per-domain copy/own setting is applied by the drain, and this bank
+// can never disagree with the actions or with the overlay's setting.
+// Gesture 0 (plain push) only: the other four stay free, because on this bank
+// there is no second reading of a favourite to offer (Frank 2026-08-18).
+static void applyDynBankFavouriteOp_(int slot, int gesture)
+{
+    if (slot < 0 || slot >= 8 || gesture != 0) return;
+    if (favDomainIsBc_()) g_bcSwitchReq.store(slot);
+    else                  g_csSwitchReq.store(slot);
+}
+
 // Main-thread executor for a UF8 dynamic bank press (drained in onTimer).
 static void applyDynBankReq_(uint32_t enc)
 {
@@ -6526,6 +6592,9 @@ static void applyDynBankReq_(uint32_t enc)
             break;
         case DK::TrackColours:
             applyDynBankColourOp_(tr, slot, gesture);
+            break;
+        case DK::Favourites:
+            applyDynBankFavouriteOp_(slot, gesture);
             break;
         default: break;
     }
@@ -6547,6 +6616,9 @@ static void applyDynBankUf1_(uf8::bindings::DynamicBankKind kind,
             break;
         case DK::TrackColours:
             if (absIdx < 8) applyDynBankColourOp_(tr, absIdx, gesture);
+            break;
+        case DK::Favourites:
+            if (absIdx < 8) applyDynBankFavouriteOp_(absIdx, gesture);
             break;
         default: break;
     }
@@ -11654,7 +11726,27 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
     const uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(tr);
     const int oldIdx = b.channelFxIdx;
     const uc1::PluginBindings* oldMap = b.channelMap;
-    if (oldIdx < 0 || !oldMap) return false;   // no CS on track → skip (decision Q2)
+    if (oldIdx < 0 || !oldMap) {
+        // ⇨ NO STRIP ON THE TRACK: PUT ONE THERE.
+        // This used to return false ("decision Q2"), which made every favourite
+        // action a silent no-op on a bare track — and would have left the
+        // Favourites bank with eight dead keys there (Frank 2026-08-18). The
+        // favourite goes in at the END of the chain, which is where
+        // TrackFX_AddByName(-1) puts it and what REAPER does for a plain insert.
+        // Nothing to carry: no old strip means no values, no section mask and no
+        // memory to restore, so the plug-in arrives on its own defaults.
+        // Copy mode still needs an original to A/B against and keeps bailing out.
+        if (copyMode) return false;
+        const int idx = addFavByName_(tr, addName);
+        if (idx < 0) return false;
+        TrackFX_Show(tr, idx, 2);   // close the window REAPER auto-floats on add
+        if (focusResult) {
+            syncInstanceFromFxIdx_(tr, idx, /*setFocusedDomain*/ true,
+                                   /*setBcAnchor*/ false);
+            setStripInstanceFx_(tr, idx);
+        }
+        return true;
+    }
 
     // Remember which parameter the user was on, so the swap keeps the focus on
     // the SAME control instead of resetting to slot 0 (bypass/IN). Restored after
@@ -12148,7 +12240,27 @@ static bool switchBcTo_(MediaTrack* tr, const char* addName,
     const uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(tr);
     const int oldIdx = b.busCompFxIdx;
     const uc1::PluginBindings* oldMap = b.busCompMap;
-    if (oldIdx < 0 || !oldMap) return false;   // no BC on track → skip
+    if (oldIdx < 0 || !oldMap) {
+        // ⇨ NO STRIP ON THE TRACK: PUT ONE THERE.
+        // This used to return false ("decision Q2"), which made every favourite
+        // action a silent no-op on a bare track — and would have left the
+        // Favourites bank with eight dead keys there (Frank 2026-08-18). The
+        // favourite goes in at the END of the chain, which is where
+        // TrackFX_AddByName(-1) puts it and what REAPER does for a plain insert.
+        // Nothing to carry: no old strip means no values, no section mask and no
+        // memory to restore, so the plug-in arrives on its own defaults.
+        // Copy mode still needs an original to A/B against and keeps bailing out.
+        if (copyMode) return false;
+        const int idx = addFavByName_(tr, addName);
+        if (idx < 0) return false;
+        TrackFX_Show(tr, idx, 2);   // close the window REAPER auto-floats on add
+        if (focusResult) {
+            syncInstanceFromFxIdx_(tr, idx, /*setFocusedDomain*/ true,
+                                   /*setBcAnchor*/ true);
+            setStripInstanceFx_(tr, idx);
+        }
+        return true;
+    }
 
     const uf8::FocusedParam fpBefore = uf8::getFocusedParam();   // keep focus on swap
 

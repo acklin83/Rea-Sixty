@@ -457,6 +457,11 @@ enum class DynamicBankKind : uint8_t {
     FxBank       = 1,   // track FX, paged 1-8 / 9-16 / … by a configured control
     ParamGroups  = 3,   // parameter groups 1..8
     TrackColours = 4,   // configured colour palette 1..8
+    // The 8 CS or BC favourites — WHICH of the two is decided live by
+    // favDomainIsBc_(), the same resolver every other favourite action uses, so
+    // one bank serves both and follows whichever instance you last worked on
+    // (Frank 2026-08-18). Keys wear the CS/BC class colour from Appearance.
+    Favourites   = 5,
 };
 
 struct UserQuickSubBank {
