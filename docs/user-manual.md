@@ -923,9 +923,9 @@ Three click-to-edit special cases:
 
 ### Offline soft-key editing + edit selector
 
-You can view and edit the Top-Soft-Key slots **without a UF8 connected** and regardless of whether UF8 Plug-in Mode is on — the Bindings pane is fully offline.
+You can view and edit the Top-Soft-Key slots **without a UF8 connected**. The engaged bank is a value Rea-Sixty holds either way, so clicking a Quick or Sub-Bank still moves it and the editor still follows.
 
-When you click a Top-Soft-Key (or a Sub-Bank cell) in the schematic, an **Edit Quick** (Q1 / Q2 / Q3) and **Edit sub-bank** (V-POT / Soft 1-5) selector appears. Pick which coordinate to edit; the schematic and the slot editor then point at that (Layer, Quick, Sub-Bank).
+When you click a Top-Soft-Key (or a Sub-Bank cell) in the schematic, a **Quick** (Q1 / Q2 / Q3) and **Sub-bank** (V-POT / Soft 1-5) selector appears. It is not a second setting beside the hardware: it shows the bank that is engaged, and clicking one engages another, exactly as pressing that key would. What you edit is always what the surface is on.
 
 Each slot carries a **Behavior** (*Momentary*, *Toggle* or *Hold*), the same setting a regular button has.
 

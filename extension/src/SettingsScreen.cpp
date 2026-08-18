@@ -1510,15 +1510,9 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
                     c.ox + b.x + b.w - 1, c.oy + b.y + 7,
                     0xFFB020FF);
             }
-            // Cyan inner ring = the Sub-Bank the editor is pointing at
-            // (manual / offline). Soft-key labels above follow this.
-            if (b.idx == editSubBank) {
-                ImGui_DrawList_AddRect(c.dl,
-                    c.ox + b.x, c.oy + b.y,
-                    c.ox + b.x + b.w, c.oy + b.y + 20,
-                    0x33CCEEFF, /*rounding*/ nullptr,
-                    /*flags*/ nullptr, /*thickness*/ nullptr);
-            }
+            // (The cyan "editor is pointing here" ring is gone: the editor
+            // points at the ENGAGED bank now, which the green ring already
+            // marks. Two rings for one fact was one too many.)
         }
     }
 
@@ -5691,33 +5685,20 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     const int       s_editLayer = getActiveLayer();
     static ButtonId s_selected  = ButtonId::None;
 
-    // UI-local soft-key edit context. Decouples the soft-key / sub-bank
-    // editors from the LIVE engaged Quick/Sub-Bank so they're editable
-    // offline and in UF8 Plugin Mode (where a Quick-click is a no-op, so
-    // the old live coupling left the slots unreachable — see backlog A0).
-    static int s_editQuick   = -1;   // -1 = uninitialised; 0..2 = Q1/Q2/Q3
-    static int s_editSubBank = 0;    // 0..5 = V-POT, Soft 1..5
-    if (s_editQuick < 0) s_editQuick = (s_editLayer == 0) ? 2 : 0;
-
-    // Follow the LIVE UF8 state by default, while staying manually
-    // overridable + offline-usable (Frank 2026-06-23): when the engaged
-    // Quick / Sub-Bank on the hardware CHANGES, adopt it into the edit
-    // selection so the schematic mirrors the surface. A manual radio /
-    // tile click then re-pins it until the next live change. Offline
-    // (live = -1) nothing is adopted, so the manual pick persists.
-    {
-        const int liveQ  = (s_editLayer >= 0 && s_editLayer <= 2)
-                           ? reasixty_engagedQuickFor(s_editLayer)  : -1;
-        const int liveSB = (s_editLayer >= 0 && s_editLayer <= 2)
-                           ? reasixty_activeSubBankFor(s_editLayer) : -1;
-        static int s_lastLiveQ  = -999;
-        static int s_lastLiveSB = -999;
-        if (liveQ >= 0 && liveQ != s_lastLiveQ)  s_editQuick   = liveQ;
-        if (liveSB >= 0 && liveSB != s_lastLiveSB && liveQ >= 0)
-            s_editSubBank = liveSB;
-        s_lastLiveQ  = liveQ;
-        s_lastLiveSB = liveSB;
-    }
+    // ⇨ WHAT YOU EDIT IS WHAT IS ENGAGED. NO SECOND TRUTH.
+    // These used to be UI-local and merely *followed* the hardware on a change,
+    // which meant the pane could sit on a different Quick or Sub-Bank than the
+    // surface and nothing on screen said which one you were actually looking at
+    // (Frank 2026-08-18: "EDIT = AKTIVE BANK AUF HARDWARE! IMMER!").
+    //
+    // Clicking a Quick or Sub-Bank tile still dispatches its binding, so a click
+    // MOVES the engaged bank and the editor follows by definition. That also
+    // keeps it working offline: with no device attached the engaged bank is
+    // still a value in this process, and clicking sets it.
+    const int s_editQuick   = (s_editLayer >= 0 && s_editLayer <= 2)
+                              ? reasixty_engagedQuickFor(s_editLayer) : -1;
+    const int s_editSubBank = (s_editLayer >= 0 && s_editLayer <= 2)
+                              ? reasixty_activeSubBankFor(s_editLayer) : 0;
 
     // ---- Hardware schematic (vector, mirrors SSL UF8 page-14 layout) ----
     // Click → selects the button for editing AND, for Layer / Quick /
@@ -5779,28 +5760,9 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
-    // WYSIWYG pivot: clicking a Quick or Sub-Bank tile in the schematic
-    // pivots the edit selector to that coordinate. Edge-triggered on the
-    // selection change so the radios below stay user-controllable on
-    // later frames (a level-triggered pivot would pin them).
-    {
-        static ButtonId s_lastPivotSel = ButtonId::None;
-        if (s_selected != s_lastPivotSel) {
-            s_lastPivotSel = s_selected;
-            if      (s_selected == ButtonId::Quick1) s_editQuick = 0;
-            else if (s_selected == ButtonId::Quick2) s_editQuick = 1;
-            else if (s_selected == ButtonId::Quick3) s_editQuick = 2;
-            else switch (s_selected) {
-                case ButtonId::VPotBank:     s_editSubBank = 0; break;
-                case ButtonId::SoftKey1Bank: s_editSubBank = 1; break;
-                case ButtonId::SoftKey2Bank: s_editSubBank = 2; break;
-                case ButtonId::SoftKey3Bank: s_editSubBank = 3; break;
-                case ButtonId::SoftKey4Bank: s_editSubBank = 4; break;
-                case ButtonId::SoftKey5Bank: s_editSubBank = 5; break;
-                default: break;
-            }
-        }
-    }
+    // (The old "pivot the edit selector on selection" block is gone: the edit
+    // context IS the engaged bank now, and clicking a tile dispatches its
+    // binding, which moves the engaged bank. Nothing local left to pivot.)
 
     // ---- Editor — branches on what the user clicked ---------------------
     // A top-soft-key tile pivots to the user-Quick slot editor for the
@@ -5838,42 +5800,46 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
      || editSel == ButtonId::SoftKey4Bank
      || editSel == ButtonId::SoftKey5Bank;
 
-    // Soft-key edit-context selector. Lets the user choose which Quick
-    // (and, for the slot editor, which Sub-Bank) to edit independent of
-    // the live hardware state. ● marks what's engaged live on this layer.
+    // Quick / Sub-Bank selector. These do not hold an edit state of their own
+    // any more: clicking one DISPATCHES its binding, which engages that bank on
+    // the hardware, and the editor follows because it reads the engaged bank.
+    // So the selected radio is always the engaged one, by construction, and the
+    // old "engaged live" dot has nothing left to mark.
     if (isTopSoftKey || isSubBankCell) {
-        const int liveQ  = reasixty_activeQuickFor(s_editLayer);
-        const int liveSB = reasixty_activeSubBankFor(s_editLayer);
         const char* qLabels[3]  = { "Q1", "Q2", "Q3" };
         const char* sbLabels[6] = {
             "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
         };
-        ImGui_Text(ctx, "Edit Quick:");
+        static const ButtonId kQuickBtn[3] =
+            { ButtonId::Quick1, ButtonId::Quick2, ButtonId::Quick3 };
+        static const ButtonId kBankBtn[6] = {
+            ButtonId::VPotBank,     ButtonId::SoftKey1Bank, ButtonId::SoftKey2Bank,
+            ButtonId::SoftKey3Bank, ButtonId::SoftKey4Bank, ButtonId::SoftKey5Bank };
+        ImGui_Text(ctx, "Quick:");
         for (int qi = 0; qi < 3; ++qi) {
             ImGui_SameLine(ctx, nullptr, nullptr);
             char tag[40];
-            snprintf(tag, sizeof(tag), "%s%s##bind_editq_%d",
-                          qLabels[qi], liveQ == qi ? "  \xE2\x97\x8F" : "",
-                          qi);
-            if (ImGui_RadioButton(ctx, tag, s_editQuick == qi))
-                s_editQuick = qi;
+            snprintf(tag, sizeof(tag), "%s##bind_editq_%d", qLabels[qi], qi);
+            if (ImGui_RadioButton(ctx, tag, s_editQuick == qi)) {
+                uf8::bindings::dispatch(kQuickBtn[qi], /*pressed*/ true);
+                uf8::bindings::dispatch(kQuickBtn[qi], /*pressed*/ false);
+            }
         }
         if (isTopSoftKey) {
-            ImGui_Text(ctx, "Edit sub-bank:");
+            ImGui_Text(ctx, "Sub-bank:");
             for (int bi = 0; bi < 6; ++bi) {
                 ImGui_SameLine(ctx, nullptr, nullptr);
-                const bool isLive = (liveSB == bi && liveQ == s_editQuick);
                 char tag[48];
-                snprintf(tag, sizeof(tag), "%s%s##bind_editsb_%d",
-                              sbLabels[bi], isLive ? "  \xE2\x97\x8F" : "",
-                              bi);
-                if (ImGui_RadioButton(ctx, tag, s_editSubBank == bi))
-                    s_editSubBank = bi;
+                snprintf(tag, sizeof(tag), "%s##bind_editsb_%d", sbLabels[bi], bi);
+                if (ImGui_RadioButton(ctx, tag, s_editSubBank == bi)) {
+                    uf8::bindings::dispatch(kBankBtn[bi], /*pressed*/ true);
+                    uf8::bindings::dispatch(kBankBtn[bi], /*pressed*/ false);
+                }
             }
         }
         ImGui_TextDisabled(ctx,
-            "Pick which Quick + Sub-Bank to edit. \xE2\x97\x8F = engaged "
-            "live on this layer. Edits work offline / in Plugin Mode.");
+            "This is the bank engaged on the surface. Clicking here engages "
+            "another one, exactly like pressing the key would.");
         ImGui_Spacing(ctx);
         // The bank's four layers. Holding the modifier on the hardware shows
         // exactly what picking it here shows.
