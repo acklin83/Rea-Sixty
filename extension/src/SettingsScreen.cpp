@@ -2783,11 +2783,27 @@ static int g_slotEditModIdx = 0;
 // mod_cmd and mod_ctrl exist as builtins but no key is seeded with them, so
 // they need either a key of their own or the host-keyboard switches under
 // Settings, Behaviour, Keyboard.
-static bool drawSlotModifierRow_(ImGui_Context* ctx, const char* tag, int* modIdx)
+static bool drawSlotModifierRow_(ImGui_Context* ctx, const char* tag,
+                                 int* modIdx, const uf8::bindings::Binding& bd)
 {
     using namespace uf8::bindings;
     static const char* kModNames[kModifierCount] =
         { "Plain", "+Shift", "+Cmd", "+Ctrl" };
+    // Stay out of the way until they are actually in use. Most keys only ever
+    // want Plain, and four radio rows on every slot editor was the price of a
+    // feature almost nobody reaches for (Frank 2026-08-18).
+    bool inUse = (*modIdx != 0);
+    for (int m = 1; m < kModifierCount && !inUse; ++m) {
+        const auto& s = bd.shortPress[m];
+        inUse = (s.type != ActionType::Noop || !s.action.empty());
+    }
+    if (!inUse) {
+        char btn[64];
+        snprintf(btn, sizeof(btn), "+ Modifier##%s_modshow", tag);
+        if (!ImGui_SmallButton(ctx, btn)) return false;
+        *modIdx = 1;                       // open on +Shift, the reachable one
+        return true;
+    }
     bool changed = false;
     for (int m = 0; m < kModifierCount; ++m) {
         char idbuf[64];
@@ -2799,8 +2815,7 @@ static bool drawSlotModifierRow_(ImGui_Context* ctx, const char* tag, int* modId
         if (m < kModifierCount - 1) ImGui_SameLine(ctx, nullptr, nullptr);
     }
     ImGui_TextDisabled(ctx,
-        "Shift is the UF1 SHIFT key / UF8 FINE key. Cmd and Ctrl need a key of "
-        "their own, or the keyboard switches under Behaviour.");
+        "Shift = UF1 SHIFT / UF8 FINE. Cmd and Ctrl need their own key.");
     return changed;
 }
 
@@ -4541,9 +4556,13 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                           dynKindLabel_(dynKind));
             ImGui_Text(ctx, note);
             ImGui_TextDisabled(ctx,
-                "All 8 keys are computed live from the focused track, so this "
-                "slot's stored action never fires. The slots are kept, not "
-                "discarded: switch the bank back to static and they return.");
+                "All 8 keys come from the focused track, so this slot never "
+                "fires. Its assignment is kept for when you switch back.");
+            if (dynKind == DynamicBankKind::FxBank) {
+                ImGui_TextDisabled(ctx,
+                    "Shift / Cmd / Ctrl / long-press run the FX-key gestures "
+                    "instead. They are set on the Sub-Bank cell.");
+            }
             ImGui_Spacing(ctx);
             ImGui_SetNextItemWidth(ctx, 260.0);
             if (ImGui_BeginCombo(ctx, "Dynamic bank##uqslot_dyn",
@@ -4618,8 +4637,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     // modifier at press time and indexes shortPress with it, but only Plain was
     // ever fillable here.
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Modifier");
-    drawSlotModifierRow_(ctx, idtag, &g_slotEditModIdx);
+    drawSlotModifierRow_(ctx, idtag, &g_slotEditModIdx, bd);
     ImGui_Spacing(ctx);
 
     // Slot's action picker. f.label = nullptr — the slot has only ONE
@@ -4812,8 +4830,7 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
     // modifier at press time and indexes shortPress with it; the editor just
     // never let you fill anything but Plain (forum 3.5, second half).
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Modifier");
-    drawSlotModifierRow_(ctx, idtag, &g_slotEditModIdx);
+    drawSlotModifierRow_(ctx, idtag, &g_slotEditModIdx, bd);
     ImGui_Spacing(ctx);
 
     ActionFieldsRef ref{
