@@ -1265,9 +1265,12 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
                 // fall-through (Frank 2026-06-23).
                 const auto slot = uf8::bindings::getUserQuickSlot(
                     0, editQuick, editSubBank, i);
-                const auto& sp = slot.shortPress[
-                    static_cast<int>(uf8::bindings::Modifier::Plain)];
-                if (!slot.label.empty()) {
+                // Free SSL slots carry the modifier sets too, so preview the
+                // one the picker is on, like the user-Quick branch above.
+                const auto& sp = slot.shortPress[g_slotEditModIdx];
+                if (!sp.label.empty()) {
+                    scribble = sp.label;
+                } else if (g_slotEditModIdx == 0 && !slot.label.empty()) {
                     scribble = slot.label;
                 } else if (sp.type != uf8::bindings::ActionType::Noop
                            || !sp.action.empty()) {
@@ -5697,8 +5700,13 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // still a value in this process, and clicking sets it.
     const int s_editQuick   = (s_editLayer >= 0 && s_editLayer <= 2)
                               ? reasixty_engagedQuickFor(s_editLayer) : -1;
-    const int s_editSubBank = (s_editLayer >= 0 && s_editLayer <= 2)
-                              ? reasixty_activeSubBankFor(s_editLayer) : 0;
+    // NOT reasixty_activeSubBankFor: that is only the user-Quick sub-bank. On
+    // Layer 1 Q1/Q2 (SSL CS / BC) the page lives in g_softKeyBank instead, and
+    // reading the wrong one pointed the editor at a bank the surface was not on
+    // — which hid the user-editable slots in the BC's empty banks 2-5.
+    // reasixty_softkeyCurrentBank covers both cases, and the schematic's green
+    // ring already derives from it.
+    const int s_editSubBank = reasixty_softkeyCurrentBank();
 
     // ---- Hardware schematic (vector, mirrors SSL UF8 page-14 layout) ----
     // Click → selects the button for editing AND, for Layer / Quick /
