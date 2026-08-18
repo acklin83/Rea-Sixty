@@ -2490,10 +2490,14 @@ bool invokeBuiltin(const std::string& name, int param)
 // Sub-Bank cell colour. Absent reads as Plain, and a set only writes an entry
 // once it has claimed one, so an old file restores to exactly what it painted
 // before: both sets on Plain's colour. No migration step.
+// 29: the per-mode nav ids seeded with labels ("ZOOM \xE2\x96\xB2" and friends) for the
+// few hours v28 existed. The UF1 prints nothing beside the cross, so those are
+// invisible AND they stop the label following the action once bound. Cleared for
+// anyone who caught v28.
 // 28: the nav cross gained 25 per-mode ButtonIds. Dispatch resolves the cross
 // through the active Jog Mode, so an older config has NO binding for it until
 // upgradeBackfillUf1Buttons_ seeds them — that pass now runs for < 28 too.
-constexpr int kCurrentBindingsVersion = 28;
+constexpr int kCurrentBindingsVersion = 29;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2991,6 +2995,20 @@ void upgradeUf1SoftKeyPinChannel_(Config& c)
 // ONLY when the plain slot is still empty — a key the user has bound is theirs,
 // and this runs on every existing config. The Shift slot (LTCH / auto_latch) is
 // untouched.
+// v28→v29 (2026-08-18): drop the labels v28 seeded onto the nav cross. Only
+// where the user has not claimed one — a name someone typed is theirs, even on a
+// key that cannot show it.
+void upgradeClearUf1NavLabels_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    for (const auto& n : kNavSeed) {
+        auto it = L1.bindings.find(n.id);
+        if (it == L1.bindings.end()) continue;
+        if (it->second.labelIsUserSet) continue;
+        it->second.label.clear();
+    }
+}
+
 void upgradeBackfillUf1SoloClear_(Config& c)
 {
     Layer& L1 = c.layers[0];
@@ -3356,6 +3374,9 @@ void load()
             }
             // Runs for < 28 as well: v27 configs predate the per-mode nav ids,
             // and without them the cross has no binding to find at all.
+            if (tmp.version < 29) {
+                upgradeClearUf1NavLabels_(tmp);
+            }
             if (tmp.version < 28) {
                 upgradeBackfillUf1Buttons_(tmp);
             }
@@ -5386,6 +5407,12 @@ std::string builtinDisplayName(const std::string& name)
 // Favourite switches get the same wording the factory bank uses ("BC Fav 8"),
 // so an unassigned favourite reads the same on either set. Everything else gets
 // its registered display name. Capped to the 12-char LCD width by the caller.
+bool uf1ControlShowsLabel(ButtonId id)
+{
+    return id == ButtonId::Uf1ChannelSoftKey
+        || (id >= ButtonId::Uf1DisplaySoft1 && id <= ButtonId::Uf1DisplaySoft4);
+}
+
 std::string softKeyFallbackLabel(const ActionSlot& sp)
 {
     if (sp.action.empty()) return {};

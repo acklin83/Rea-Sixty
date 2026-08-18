@@ -3047,6 +3047,14 @@ static bool controlHasDisplayLabel_(uf8::bindings::ButtonId id)
     return id >= B::TopSoftKey1 && id <= B::TopSoftKey8;
 }
 
+// Which UF1 keys actually print their name — see uf8::bindings for the reasoning;
+// the action picker in main.cpp asks the same question, so the rule lives there.
+// The 10x4 DAW bank slots have their own field in their own editor.
+static bool uf1ControlShowsLabel_(uf8::bindings::ButtonId id)
+{
+    return uf8::bindings::uf1ControlShowsLabel(id);
+}
+
 bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                       ActionFieldsRef f, int layer,
                       uf8::bindings::ButtonId id, bool isLongPress,
@@ -4387,7 +4395,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     // The UF8's top-soft-keys have had one forever (the user-Quick slot editor);
     // UF1 keys never got the field, so there was no way to name one — Frank
     // 2026-08-10 ("lass ihn mich anschreiben however the fuck i want").
-    if (idIsUf1) {
+    if (uf1ControlShowsLabel_(id)) {
         char lblBuf[64] = {0};
         std::strncpy(lblBuf, bd.label.c_str(), sizeof(lblBuf) - 1);
         ImGui_PushItemWidth(ctx, scaleW_(ctx, 220.0));

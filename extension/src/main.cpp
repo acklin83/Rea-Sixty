@@ -41259,11 +41259,13 @@ void reasixty_actionPickerPoll()
     // plain short press step 0 owns the label, so the other slots stay out of it.
     // Scoped to the UF1 for the same reason the editor's pass is: the UF8's
     // top-soft-key slots have their own label with its own LCD fallback.
+    // Only where the surface can show it. Writing an auto-label onto a UF1 key
+    // that prints nothing left invisible data behind AND latched the label away
+    // from the action (Frank 2026-08-18).
     const bool labelFollowsAction =
         (g_pickerMode == PickerMode::Uf1Bank)
      || (g_pickerMode == PickerMode::Layer
-         && g_pickerId >= ButtonId::Uf1VpotAbovePush
-         && g_pickerId <= ButtonId::Uf1Jog);
+         && uf8::bindings::uf1ControlShowsLabel(g_pickerId));
     if (labelFollowsAction && !bd.labelIsUserSet
         && !g_pickerDouble && !g_pickerLongPress
         && modIdx == static_cast<int>(Modifier::Plain) && stepIdx == 0) {

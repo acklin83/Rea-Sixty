@@ -636,6 +636,11 @@ std::string builtinDisplayName(const std::string& name);
 // Human-readable label for a slot that carries an action but no name of its own.
 // NEVER returns the raw builtin id — see the definition for why that mattered.
 std::string softKeyFallbackLabel(const ActionSlot& sp);
+// True for the five UF1 keys that actually PRINT their name (the SOFT key beside
+// the small display, and the four under the main screen). Everywhere else on the
+// UF1 a label is invisible data that also latches labelIsUserSet, so neither the
+// editor nor the action picker should write one.
+bool uf1ControlShowsLabel(ButtonId id);
 
 // Category label for a built-in — the SAME grouping the Settings action
 // picker shows. Empty string = uncategorised / internal sentinel. Single
