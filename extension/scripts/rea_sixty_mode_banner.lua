@@ -98,6 +98,14 @@ local function pollBanner()
   if raw == "" then return end
   local text, seq = raw:match("^(.-)\t(%d+)$")
   if not seq then return end
+  -- First poll of this run: adopt whatever is already published WITHOUT showing
+  -- it. The ExtState survives the companion, so starting up (or restarting it)
+  -- with last_seq = nil re-flashed the last banner of the previous run, which
+  -- read as a mode changing on its own at startup (Frank 2026-08-18).
+  if last_seq == nil then
+    last_seq = seq
+    return
+  end
   if seq ~= last_seq then
     last_seq   = seq
     cur_text   = text or ""

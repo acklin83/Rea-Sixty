@@ -15747,6 +15747,10 @@ struct StickyPin {
 };
 std::unordered_map<std::string /*track GUID*/, StickyPin> g_stickyPins;
 std::atomic<bool> g_stickyActive{true};       // global active / suspended
+// Raised by any path that RESTORES a mode rather than changing it (project load
+// callbacks). The mode-banner block re-seeds its baseline instead of diffing on
+// the next tick, so restoring a saved state never flashes a banner.
+std::atomic<bool> g_modeBannerReseed{false};
 std::atomic<bool> g_stickyArmGetNext{false};  // "get next touched" armed (worker→main)
 // Set to nowMs_()+window after every sticky param WRITE. chaseLastTouchedFx absorbs
 // while it's live so a sticky move doesn't hijack the GLOBAL focused param (which
@@ -16000,6 +16004,7 @@ bool stickyProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
     if (std::strncmp(p, "STICKY_ACTIVE", 13) == 0) {
         p += 13; while (*p == ' ' || *p == '\t') ++p;
         g_stickyActive.store(*p != '0');
+        g_modeBannerReseed.store(true);   // restored state, not a user flip
         return true;
     }
     if (std::strncmp(p, "STICKY_PIN", 10) != 0) return false;
@@ -16027,6 +16032,14 @@ void stickyBeginLoad_(bool /*isUndo*/, struct project_config_extension_t* /*reg*
 {
     g_stickyPins.clear();
     g_stickyActive.store(true);   // default active; STICKY_ACTIVE 0 restores suspended
+    // Loading a project is not the user flipping a mode. begin_load forces the
+    // default ON and the STICKY_ACTIVE line then restores OFF a moment later, so
+    // a timer tick landing between the two saw a genuine true→false change and
+    // announced "Sticky • Off" on every single project open (Frank 2026-08-18:
+    // "ich seh immernoch sticky off bei jedem start"). The project-change check
+    // in the banner block cannot cover it: the project pointer is already
+    // current while these callbacks are still running.
+    g_modeBannerReseed.store(true);
 }
 
 project_config_extension_t g_stickyProjConfig{
@@ -33481,7 +33494,8 @@ void onTimerBody_()
             mbView = ufv; mbJog = jm; mbEnvPh = eph;
             mbUf8Strip = u8s; mbUf8Plugin = u8p; mbTouch = tch;
         };
-        if (!mbInit || mbProjChanged) {
+        if (!mbInit || mbProjChanged
+            || g_modeBannerReseed.exchange(false)) {
             mbInit = true;
             mbSeed();
         } else {
