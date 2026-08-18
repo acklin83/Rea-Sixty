@@ -5907,9 +5907,15 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     ImGui_TextDisabled(ctx,
         "Active = this Sub-Bank is the selected one. Inactive = "
         "another Sub-Bank is selected in this Quick.");
+    if (g_slotEditModIdx != 0) {
+        ImGui_TextDisabled(ctx,
+            "Editing the Shift set. It wears Plain's colours until you change "
+            "one here.");
+    }
     ImGui_Spacing(ctx);
 
-    SubBankLed app = getSubBankLed(editLayer, engagedQ, sbIdx);
+    SubBankLed app = getSubBankLed(editLayer, engagedQ, sbIdx,
+                                   g_slotEditModIdx);
     bool dirty = false;
 
     auto drawRow = [&](const char* label, uint8_t (&rgb)[3],
@@ -5980,7 +5986,15 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     drawRow("Active",   app.color,         app.brightness,         tagA);
     drawRow("Inactive", app.inactiveColor, app.inactiveBrightness, tagI);
 
-    if (dirty) setSubBankLed(editLayer, engagedQ, sbIdx, app);
+    if (g_slotEditModIdx != 0 && app.isSet) {
+        if (ImGui_Button(ctx, "Follow Plain##sbled_follow",
+                         /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            resetSubBankLed(editLayer, engagedQ, sbIdx, g_slotEditModIdx);
+            dirty = false;   // the reset already persisted
+        }
+    }
+
+    if (dirty) setSubBankLed(editLayer, engagedQ, sbIdx, g_slotEditModIdx, app);
 }
 
 } // namespace

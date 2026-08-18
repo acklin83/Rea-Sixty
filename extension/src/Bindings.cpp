@@ -1377,23 +1377,30 @@ void serializeSubBankLeds_(const Config& c, std::ostringstream& os,
     for (int li = loLayer; li < hiLayer && !anyData; ++li)
         for (int qi = 0; qi < kQuicksPerLayer && !anyData; ++qi)
             for (int bi = 0; bi < kSubBanksPerQuick && !anyData; ++bi)
-                if (!isDefault_(c.userQuicks[li].quicks[qi].subBankLeds[bi]))
-                    anyData = true;
+                for (int m = 0; m < kSoftKeyModifierSets && !anyData; ++m)
+                    if (!isDefault_(
+                            c.userQuicks[li].quicks[qi].subBankLeds[bi][m]))
+                        anyData = true;
     if (!anyData && onlyLayer < 0) return;
 
     os << ",\n  \"sub_bank_leds\": [";
     bool first = true;
     for (int li = loLayer; li < hiLayer; ++li) {
         for (int qi = 0; qi < kQuicksPerLayer; ++qi) {
-            for (int bi = 0; bi < kSubBanksPerQuick; ++bi) {
-                const auto& a = c.userQuicks[li].quicks[qi].subBankLeds[bi];
+            for (int bi = 0; bi < kSubBanksPerQuick; ++bi)
+            for (int m = 0; m < kSoftKeyModifierSets; ++m) {
+                const auto& a = c.userQuicks[li].quicks[qi].subBankLeds[bi][m];
                 if (isDefault_(a)) continue;
+                // A modifier set that inherits Plain has nothing of its own to
+                // write; only a claimed one is real data.
+                if (m != 0 && !a.isSet) continue;
                 if (!first) os << ",";
                 first = false;
                 os << "\n    {";
                 if (onlyLayer < 0) os << "\"layer\": " << li << ", ";
                 os << "\"quick\": " << qi
                    << ", \"sub_bank\": " << bi
+                   << ", \"mod\": " << m
                    << ", \"color\": [" << int(a.color[0]) << ", "
                                        << int(a.color[1]) << ", "
                                        << int(a.color[2]) << "]"
@@ -1813,9 +1820,14 @@ void parseSubBankLeds_(wdl_json_element* root, Config& out, int forceLayer = -1)
         if (layer   < 0 || layer   >= 3)                 continue;
         if (quick   < 0 || quick   >= kQuicksPerLayer)   continue;
         if (subBank < 0 || subBank >= kSubBanksPerQuick) continue;
+        int mod = 0;   // absent = Plain (pre-v27 shape)
+        if (auto* v = eo->get_item_by_name("mod"))
+            if (auto* t = v->get_string_value(true)) mod = std::atoi(t);
+        if (mod < 0 || mod >= kSoftKeyModifierSets) continue;
         SubBankLed& a = out.userQuicks[layer].quicks[quick]
-                            .subBankLeds[subBank];
+                            .subBankLeds[subBank][mod];
         a = SubBankLed{};
+        a.isSet = (mod != 0);
         if (auto* v = eo->get_item_by_name("color"); v && v->is_array()) {
             for (int k = 0; k < 3 && k < v->m_array->GetSize(); ++k) {
                 if (auto* s = v->enum_item(k)->get_string_value(true)) {
@@ -2342,7 +2354,11 @@ bool invokeBuiltin(const std::string& name, int param)
 // "mod" key (absent reads as Plain, so old files need no migration step). This
 // sat at 25 by accident for a few hours: the revert of the bank-swap experiment
 // took the bump with it while the schema changes stayed.
-constexpr int kCurrentBindingsVersion = 26;
+// 27: sub_bank_leds gained the same "mod" key — a modifier set can wear its own
+// Sub-Bank cell colour. Absent reads as Plain, and a set only writes an entry
+// once it has claimed one, so an old file restores to exactly what it painted
+// before: both sets on Plain's colour. No migration step.
+constexpr int kCurrentBindingsVersion = 27;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4550,19 +4566,36 @@ static bool subBankLedInRange_(int layer, int quick, int subBank)
         && subBank  >= 0 && subBank  < kSubBanksPerQuick;
 }
 
-SubBankLed getSubBankLed(int layer, int quick, int subBank)
+SubBankLed getSubBankLed(int layer, int quick, int subBank, int mod)
 {
     if (!subBankLedInRange_(layer, quick, subBank)) return {};
+    if (mod < 0 || mod >= kSoftKeyModifierSets)     return {};
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    return g_cfg.userQuicks[layer].quicks[quick].subBankLeds[subBank];
+    const auto& row = g_cfg.userQuicks[layer].quicks[quick].subBankLeds[subBank];
+    // A set that never claimed its own appearance wears Plain's.
+    if (mod != 0 && !row[mod].isSet) return row[0];
+    return row[mod];
 }
 
-void setSubBankLed(int layer, int quick, int subBank,
+void resetSubBankLed(int layer, int quick, int subBank, int mod)
+{
+    if (!subBankLedInRange_(layer, quick, subBank)) return;
+    if (mod <= 0 || mod >= kSoftKeyModifierSets) return;   // Plain is the base
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    g_cfg.userQuicks[layer].quicks[quick].subBankLeds[subBank][mod] =
+        SubBankLed{};
+    persistLocked_();
+}
+
+void setSubBankLed(int layer, int quick, int subBank, int mod,
                    const SubBankLed& app)
 {
     if (!subBankLedInRange_(layer, quick, subBank)) return;
+    if (mod < 0 || mod >= kSoftKeyModifierSets)     return;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    g_cfg.userQuicks[layer].quicks[quick].subBankLeds[subBank] = app;
+    SubBankLed v = app;
+    v.isSet = (mod != 0);   // Plain is the base; the flag is a set's own claim
+    g_cfg.userQuicks[layer].quicks[quick].subBankLeds[subBank][mod] = v;
     persistLocked_();
 }
 

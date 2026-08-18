@@ -478,10 +478,18 @@ struct SubBankLed {
     Brightness  brightness            = Brightness::Bright;
     uint8_t     inactiveColor[3]      = {255, 255, 255};
     Brightness  inactiveBrightness    = Brightness::Dim;
+    // ⇨ ONLY MEANINGFUL ON A MODIFIER SET. Plain is the base and always counts;
+    // a set with isSet == false inherits Plain, the same way a soft-key's set
+    // inherits the key's colour until it claims one of its own. Without the
+    // flag, "white/bright" could not be told apart from "never touched", and
+    // introducing the second set would have turned every configured cell white
+    // the moment you held Shift.
+    bool        isSet                 = false;
 };
 struct UserQuick {
     UserQuickSubBank subBanks[kSubBanksPerQuick];     // V-POT, Soft 1..5
-    SubBankLed       subBankLeds[kSubBanksPerQuick];  // per-(L,Q) LED override
+    // per-(L,Q) LED override, one per modifier set (see SubBankLed::isSet).
+    SubBankLed       subBankLeds[kSubBanksPerQuick][kSoftKeyModifierSets];
 };
 struct LayerUserQuicks {
     UserQuick quicks[kQuicksPerLayer]; // Q1, Q2, Q3
@@ -761,9 +769,13 @@ void     setUserQuickSlot(int layer, int quick, int subBank, int slot,
 // reads these for the 6 sub-bank-selector cells when a Quick is
 // engaged on the editor's layer, so V-POT/Soft 1-5 can have
 // distinct colours per (L, Q) coordinate.
-SubBankLed getSubBankLed(int layer, int quick, int subBank);
-void       setSubBankLed(int layer, int quick, int subBank,
-                         const SubBankLed& app);
+// mod picks the modifier set. A set that has not claimed its own appearance
+// returns Plain's, so no caller has to implement the fallback itself.
+SubBankLed getSubBankLed(int layer, int quick, int subBank, int mod);
+// Hand a modifier set's cell appearance back to Plain (no-op on Plain itself).
+void       resetSubBankLed(int layer, int quick, int subBank, int mod);
+void       setSubBankLed(int layer, int quick, int subBank, int mod,
+                              const SubBankLed& app);
 
 // Per-(Layer, Quick) Sub-Bank dynamic-kind flag. Non-None turns the
 // Sub-Bank into a computed bank (FX list / sends / groups / colours);

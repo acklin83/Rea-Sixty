@@ -31899,8 +31899,13 @@ ResolvedLed resolveLed_(uf8::Uf8GlobalLed cell,
     if (sbIdx >= 0 && activeLayer >= 0 && activeLayer <= 2) {
         const int engagedQ = g_activeQuick[activeLayer].load();
         if (engagedQ >= 0 && engagedQ < uf8::bindings::kQuicksPerLayer) {
+            // The cell wears the held set's colour: holding Shift shows the
+            // Shift bank, so the selector that names it follows (Frank
+            // 2026-08-18). getSubBankLed falls back to Plain for a set that
+            // never claimed one.
             const auto a = uf8::bindings::getSubBankLed(
-                activeLayer, engagedQ, sbIdx);
+                activeLayer, engagedQ, sbIdx,
+                static_cast<int>(uf8::bindings::bankModifierSnapshot()));
             uint8_t rgb[3];
             uf8::bindings::Brightness bri;
             if (active) {
