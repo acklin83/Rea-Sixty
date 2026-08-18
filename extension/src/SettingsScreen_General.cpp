@@ -1308,6 +1308,8 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
             reasixty_setUf1StartupView(on, on ? reasixty_uf1ViewMode() : 0);
             if (on) sv = reasixty_uf1ViewMode();
         }
+        if (!on)
+            ImGui_TextDisabled(ctx, "Off: comes back up where you left it.");
         if (on) {
             ImGui_Indent(ctx, /*indent_w*/ nullptr);
             ImGui_SetNextItemWidth(ctx, 110.0);

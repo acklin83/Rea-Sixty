@@ -33221,8 +33221,14 @@ static void applyStartupBank_()
 static void applyUf1StartupView_()
 {
     int view = -1;
-    if (!reasixty_uf1StartupView(&view)) return;
-    uf1SetViewMode_(view);
+    if (reasixty_uf1StartupView(&view)) { uf1SetViewMode_(view); return; }
+    // No fixed view pinned: come back up in the one the UF1 was last left in.
+    // GLOBAL, not per project (Frank 2026-08-18) — which view the surface shows
+    // is a property of the surface, not of the session you happen to open.
+    if (const char* v = GetExtState("rea_sixty", "uf1_last_view"); v && *v) {
+        const int n = std::atoi(v);
+        if (n >= 0 && n < kUf1ViewCount) uf1SetViewMode_(n);
+    }
 }
 
 // Razor nav-cross LEDs: light the ONE arrow/centre matching the active target, dark the
@@ -33376,6 +33382,21 @@ void onTimerBody_()
         if (!s_startupViewDone && g_uf1_dev) {
             s_startupViewDone = true;
             applyUf1StartupView_();
+        }
+        // Remember the view for the next session. Diffed here rather than
+        // written at the toggle sites, so every route is covered at once —
+        // MODE-hold, the uf1_view_* builtins, the REASIXTY_UF1_MODE_* actions —
+        // and on the main thread, where SetExtState belongs. Runs AFTER the
+        // restore above, or the default view would overwrite the stored one
+        // before it was ever applied.
+        static int s_lastViewSeen = -1;
+        if (g_uf1_dev) {
+            const int v = uf1ViewMode_();
+            if (v != s_lastViewSeen) {
+                s_lastViewSeen = v;
+                char b[8]; std::snprintf(b, sizeof(b), "%d", v);
+                SetExtState("rea_sixty", "uf1_last_view", b, true);
+            }
         }
     }
 

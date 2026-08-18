@@ -895,7 +895,7 @@ Surface-side handling of the REAPER Master bus. See **Master track** (own chapte
 
 | Control | Effect |
 |---|---|
-| Start the UF1 in a fixed view | Off by default, and the UF1 comes up in **Plug-in** view. Ticking it pins whichever view the UF1 is showing at that moment; the combo below changes it to Plug-in, DAW, Meter or Sends. The pinned view is applied once, on the first timer tick that sees the UF1, so plugging the device in mid-session engages it too. |
+| Start the UF1 in a fixed view | Off by default, and the UF1 comes back up in the view you last left it in. Ticking it pins whichever view the UF1 is showing at that moment instead; the combo below changes it to Plug-in, DAW, Meter or Sends. Either way the view is applied once, on the first timer tick that sees the UF1, so plugging the device in mid-session engages it too. The last-used view is remembered globally, not per project: which view the surface shows belongs to the surface, not to the session you happen to open. |
 
 ### Keyboard
 
