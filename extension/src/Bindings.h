@@ -242,6 +242,12 @@ enum class ButtonId : uint16_t {
 // see it, and a silent mismatch would map keys onto the wrong mode's ids.
 constexpr int kUf1JogModeCountForNav = 5;
 
+// The reverse of perModeNavId: which physical key and which mode a per-mode nav
+// id stands for. Returns false for anything else. The editor needs it because
+// the schematic tile IS the per-mode id (so its tint and tooltip show the mode
+// you are in), and the mode dropdown reads back out of the selection.
+bool splitPerModeNavId(ButtonId id, ButtonId* baseOut, int* modeOut);
+
 // The per-mode nav id for a physical cross key. `base` is one of the five
 // Uf1Nav* ids; `mode` is a Uf1JogMode value. Out of range → the base id back,
 // so a caller that has not been taught about modes still resolves to something.

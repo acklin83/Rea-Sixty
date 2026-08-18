@@ -711,10 +711,25 @@ const char* hwFaceLabel(ButtonId id)
         case ButtonId::Uf1BankRight:   return "BANK \xE2\x96\xB8";
         case ButtonId::Uf1ArrowLeft:   return "PAGE \xE2\x97\x82";
         case ButtonId::Uf1ArrowRight:  return "PAGE \xE2\x96\xB8";
+        case ButtonId::Uf1NavUpPlayhead: case ButtonId::Uf1NavUpScrub:
+        case ButtonId::Uf1NavUpItems:    case ButtonId::Uf1NavUpEnvelope:
+        case ButtonId::Uf1NavUpRazor:
         case ButtonId::Uf1NavUp:       return "NAV \xE2\x96\xB2";
+        case ButtonId::Uf1NavDownPlayhead: case ButtonId::Uf1NavDownScrub:
+        case ButtonId::Uf1NavDownItems:    case ButtonId::Uf1NavDownEnvelope:
+        case ButtonId::Uf1NavDownRazor:
         case ButtonId::Uf1NavDown:     return "NAV \xE2\x96\xBC";
+        case ButtonId::Uf1NavLeftPlayhead: case ButtonId::Uf1NavLeftScrub:
+        case ButtonId::Uf1NavLeftItems:    case ButtonId::Uf1NavLeftEnvelope:
+        case ButtonId::Uf1NavLeftRazor:
         case ButtonId::Uf1NavLeft:     return "NAV \xE2\x97\x82";
+        case ButtonId::Uf1NavRightPlayhead: case ButtonId::Uf1NavRightScrub:
+        case ButtonId::Uf1NavRightItems:    case ButtonId::Uf1NavRightEnvelope:
+        case ButtonId::Uf1NavRightRazor:
         case ButtonId::Uf1NavRight:    return "NAV \xE2\x96\xB8";
+        case ButtonId::Uf1NavCentrePlayhead: case ButtonId::Uf1NavCentreScrub:
+        case ButtonId::Uf1NavCentreItems:    case ButtonId::Uf1NavCentreEnvelope:
+        case ButtonId::Uf1NavCentreRazor:
         case ButtonId::Uf1NavCentre:   return "NAV \xE2\x97\x8F";
         case ButtonId::Uf1Play:        return "PLAY";
         case ButtonId::Uf1Stop:        return "STOP";
@@ -2586,12 +2601,23 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     // the encoder, jog (17) below the keys.
     drawDial(268, 336, 40, ButtonId::Uf1ChannelPush, "CHANNEL",        // (15)
              /*ticks*/ true);
-    // (16) NAV cross — Up / Left / Centre / Right / Down (0x28..0x2C)
-    drawHwBtn(252, 408, 32, 30, ButtonId::Uf1NavUp,     "\xE2\x96\xB2");
-    drawHwBtn(212, 442, 36, 32, ButtonId::Uf1NavLeft,   "\xE2\x97\x84");
-    drawHwBtn(252, 442, 32, 32, ButtonId::Uf1NavCentre, "\xE2\x97\x8F");
-    drawHwBtn(288, 442, 36, 32, ButtonId::Uf1NavRight,  "\xE2\x96\xBA");
-    drawHwBtn(252, 476, 32, 30, ButtonId::Uf1NavDown,   "\xE2\x96\xBC");
+    // (16) NAV cross — Up / Left / Centre / Right / Down (0x28..0x2C).
+    // ⇨ DRAWN AS THE ID OF THE LIVE JOG MODE, not the physical one, so the
+    // assigned-tint and the hover tooltip describe what the key does RIGHT NOW.
+    // Selecting a tile therefore selects a per-mode id, and the editor reads the
+    // mode back out of it (splitPerModeNavId).
+    {
+        const int jm = reasixty_uf1JogMode();
+        auto nav = [&](float x, float y, float w, float h, ButtonId base,
+                       const char* glyph) {
+            drawHwBtn(x, y, w, h, uf8::bindings::perModeNavId(base, jm), glyph);
+        };
+        nav(252, 408, 32, 30, ButtonId::Uf1NavUp,     "\xE2\x96\xB2");
+        nav(212, 442, 36, 32, ButtonId::Uf1NavLeft,   "\xE2\x97\x84");
+        nav(252, 442, 32, 32, ButtonId::Uf1NavCentre, "\xE2\x97\x8F");
+        nav(288, 442, 36, 32, ButtonId::Uf1NavRight,  "\xE2\x96\xBA");
+        nav(252, 476, 32, 30, ButtonId::Uf1NavDown,   "\xE2\x96\xBC");
+    }
 
     // (13) MODE (locked view toggle) + 5-8  |  (14) soft-key page arrows
     drawLocked(360, 266, 52, 24, "MODE");
@@ -4081,6 +4107,41 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     ImGui_PushID(ctx, uf8::bindings::toName(id));
     const int themePushed = pushBindingsTheme(ctx);
 
+    // ⇨ NAV CROSS: WHICH JOG MODE AM I EDITING?
+    // The tile carries a per-mode id, so the picker below reads the mode out of
+    // it and offers the others. Same rule as the Sub-Bank tiles: it follows the
+    // surface, and switching here switches the surface (Frank 2026-08-18). The
+    // visibility ticks are the SAME setting the jog wheel's own page shows —
+    // one store, two places to reach it — because a mode the picker skips can
+    // never be reached on the device, which would make its cross unreachable
+    // too. A ticked-off mode is offered for ticking back on, not for editing.
+    if (uf8::bindings::ButtonId navBase; uf8::bindings::splitPerModeNavId(
+            id, &navBase, nullptr)) {
+        const int live = reasixty_uf1JogMode();
+        const int jn   = reasixty_uf1JogModeCount();
+        ImGui_Text(ctx, "Jog Mode");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_SetNextItemWidth(ctx, 160.0);
+        if (ImGui_BeginCombo(ctx, "##navjogmode",
+                             reasixty_uf1JogModeName(live), nullptr)) {
+            for (int m = 0; m < jn; ++m) {
+                const bool vis = reasixty_uf1JogModeVisible(m);
+                char cid[32]; snprintf(cid, sizeof(cid), "##navjmv%d", m);
+                bool v = vis;
+                if (ImGui_Checkbox(ctx, cid, &v))
+                    reasixty_setUf1JogModeVisible(m, v);
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                bool sel = (m == live);
+                if (ImGui_Selectable(ctx, reasixty_uf1JogModeName(m), &sel,
+                                     nullptr, nullptr, nullptr)
+                    && vis)
+                    reasixty_setUf1JogMode(m);
+            }
+            ImGui_EndCombo(ctx);
+        }
+        ImGui_Spacing(ctx);
+    }
+
     // JOG WHEEL: rotate-only, mode-driven → NO action binding. Show ONLY the Jog
     // Mode settings (no action picker / LED block). Keyboard-enterable (InputDouble).
     if (id == ButtonId::Uf1Jog) {
@@ -4110,17 +4171,28 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         ImGui_SetNextItemWidth(ctx, 140.0);
         if (ImGui_InputDouble(ctx, "Deadzone (0=off)##jog", &dz, &d1, &f1, "%.1f", &fl))
             reasixty_setUf1JogDeadzone(dz);
-        double trk = reasixty_uf1JogTrackDiv();   // Items Ctrl+jog: counts per vertical hop
-        ImGui_SetNextItemWidth(ctx, 140.0);
-        if (ImGui_InputDouble(ctx, "Items vert. step (Ctrl)##jog", &trk, &d1, &f1, "%.1f", &fl))
-            reasixty_setUf1JogTrackDiv(trk);
-        double ev = reasixty_uf1JogEnvValueStep();   // Envelope plain jog = point VALUE
-        double ed = 0.005, ef = 0.05;
-        ImGui_SetNextItemWidth(ctx, 140.0);
-        if (ImGui_InputDouble(ctx, "Envelope value step##jog", &ev, &ed, &ef, "%.4f", &fl))
-            reasixty_setUf1JogEnvValueStep(ev);
-        // Per-mode TIME axis unit + amount. Envelope's time is the Ctrl axis (Cmd=copy).
-        for (int m = 0; m <= 3; ++m) {   // Playhead / Scrub / Items / Envelope (wired modes)
+        // ⇨ ONLY WHAT THE MODE YOU ARE IN ACTUALLY USES (Frank 2026-08-18).
+        // The three above belong to the wheel itself and always apply; these two
+        // and the time axis below are per-mode, and showing all of them at once
+        // was ten rows of which four mattered.
+        const int liveJm = reasixty_uf1JogMode();
+        if (liveJm == 2) {   // Items
+            double trk = reasixty_uf1JogTrackDiv();   // Ctrl+jog: counts per vertical hop
+            ImGui_SetNextItemWidth(ctx, 140.0);
+            if (ImGui_InputDouble(ctx, "Items vert. step (Ctrl)##jog", &trk, &d1, &f1, "%.1f", &fl))
+                reasixty_setUf1JogTrackDiv(trk);
+        }
+        if (liveJm == 3) {   // Envelope
+            double ev = reasixty_uf1JogEnvValueStep();   // plain jog = point VALUE
+            double ed = 0.005, ef = 0.05;
+            ImGui_SetNextItemWidth(ctx, 140.0);
+            if (ImGui_InputDouble(ctx, "Envelope value step##jog", &ev, &ed, &ef, "%.4f", &fl))
+                reasixty_setUf1JogEnvValueStep(ev);
+        }
+        // Per-mode TIME axis unit + amount, for the live mode only. Razor (4)
+        // has no time axis at the wheel, so it shows none of this.
+        if (liveJm <= 3) {
+            const int m = liveJm;
             const int unit = reasixty_uf1JogUnit(m);   // 0 sec, 1 zoom, 2 grid
             ImGui_Text(ctx, reasixty_uf1JogModeName(m));
             ImGui_SameLine(ctx, nullptr, nullptr);
@@ -6056,6 +6128,16 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // der blaue fucker immernoch da?"). Only sub-bank cells are pulled along;
     // any other selected button keeps its selection.
     if (isSubBankCellId_(s_selected)) s_selected = subBankCellId_(s_editSubBank);
+
+    // ⇨ AND THE NAV CROSS FOLLOWS THE JOG MODE, for the same reason.
+    // A cross tile carries the id of one mode. Change the mode on the device and
+    // a stale selection would leave the editor on the old mode's binding while
+    // the tiles already show the new one — the two-answers-on-screen bug again,
+    // one object further along.
+    if (uf8::bindings::ButtonId navBase;
+        uf8::bindings::splitPerModeNavId(s_selected, &navBase, nullptr)) {
+        s_selected = uf8::bindings::perModeNavId(navBase, reasixty_uf1JogMode());
+    }
 
     // ---- Hardware schematic (vector, mirrors SSL UF8 page-14 layout) ----
     // Click → selects the button for editing AND, for Layer / Quick /

@@ -676,6 +676,19 @@ In **Items** and **Envelope**, holding `SHIFT` while pressing `←` `→` **adds
 the selection instead of replacing it, so you can walk a run of items or points
 onto the wheel. The cross keys light to show the Razor target you have aimed at.
 
+**Everything in that table is a factory default, not a fixed rule.** Each cross
+key holds its own binding *per object*, so the same physical key can do five
+different things and you decide all five. Click a cross key in **Settings →
+Bindings → UF1** and pick the object at the top of the editor: the picker follows
+the surface, and changing it there changes the wheel's object too, so what you
+edit is always what you are holding. The Shift row is a binding as well, which is
+where the add-to-selection defaults above live; leave it empty and the key falls
+back to its plain action.
+
+The ticks beside each object in that picker are the same ones on the jog wheel's
+own page. An object you untick is skipped by the wheel's picker, so its cross
+bindings are unreachable until you tick it back on. They are kept, not lost.
+
 Three modifiers stack on the jog:
 
 - **Shift** — fine. Divides the step (default ÷4).

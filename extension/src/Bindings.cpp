@@ -211,6 +211,28 @@ constexpr NameEntry kNames[] = {
 
 } // namespace
 
+bool splitPerModeNavId(ButtonId id, ButtonId* baseOut, int* modeOut)
+{
+    struct Grp { ButtonId first; ButtonId base; };
+    static const Grp kGrp[] = {
+        { ButtonId::Uf1NavUpPlayhead,     ButtonId::Uf1NavUp     },
+        { ButtonId::Uf1NavLeftPlayhead,   ButtonId::Uf1NavLeft   },
+        { ButtonId::Uf1NavCentrePlayhead, ButtonId::Uf1NavCentre },
+        { ButtonId::Uf1NavRightPlayhead,  ButtonId::Uf1NavRight  },
+        { ButtonId::Uf1NavDownPlayhead,   ButtonId::Uf1NavDown   },
+    };
+    for (const auto& g : kGrp) {
+        const int lo = static_cast<int>(g.first);
+        const int v  = static_cast<int>(id);
+        if (v >= lo && v < lo + kUf1JogModeCountForNav) {
+            if (baseOut) *baseOut = g.base;
+            if (modeOut) *modeOut = v - lo;
+            return true;
+        }
+    }
+    return false;
+}
+
 const char* toName(ButtonId id)
 {
     for (auto& e : kNames) if (e.id == id) return e.name;
