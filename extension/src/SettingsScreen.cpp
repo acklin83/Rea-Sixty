@@ -904,6 +904,37 @@ std::string describeActionStep_(const uf8::bindings::ActionStep& s)
     return "";
 }
 
+// The name of a dynamic-bank kind, resolved at CALL time. There are three
+// places that show it now (the UF8 Sub-Bank cell editor, the UF1 bank editor,
+// and the UF8 slot editor's "this bank is computed" notice), and a shared table
+// of `const char*` could not carry the British/American swap: reasixty_sp is a
+// runtime lookup, so a `static` table freezes whichever spelling was live the
+// first time it was built.
+static const char* dynKindLabel_(uf8::bindings::DynamicBankKind k)
+{
+    using uf8::bindings::DynamicBankKind;
+    switch (k) {
+        case DynamicBankKind::FxBank:      return "FX (focused track)";
+        case DynamicBankKind::ParamGroups: return "Parameter Groups";
+        case DynamicBankKind::TrackColours:
+            return reasixty_sp("Track Colours", "Track Colors");
+        default:                           return "Off (static slots)";
+    }
+}
+
+// Same, short enough for a scribble cell (the strip LCDs are ~72 px wide).
+static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
+{
+    using uf8::bindings::DynamicBankKind;
+    switch (k) {
+        case DynamicBankKind::FxBank:      return "FX";
+        case DynamicBankKind::ParamGroups: return "GROUPS";
+        case DynamicBankKind::TrackColours:
+            return reasixty_sp("COLOURS", "COLORS");
+        default:                           return "";
+    }
+}
+
 // Regular bindable button — one the user assigns actions to via the
 // per-button binding editor (the getBinding path). Excludes Top-Soft-Keys
 // (live labels, userQuicks path) and the structural Layer / Quick /
@@ -1160,7 +1191,20 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
         // Quick is live (Frank 2026-06-23). For SSL CS/BC keep the live
         // plug-in / bank resolution.
         const bool editIsSslCsBc = (activeLayer == 0 && editQuick <= 1);
-        if (!editIsSslCsBc
+        // A DYNAMIC Sub-Bank computes all 8 keys from the focused track, so the
+        // stored slot labels below are dead text. Showing them made this panel
+        // lie about what the hardware would display (Frank 2026-08-18) — worse
+        // than showing nothing, because the labels look plausible. Name the kind
+        // instead; the live labels need track context this panel does not have.
+        const auto editDynKind =
+            (!editIsSslCsBc && editQuick >= 0 && editQuick <= 2
+             && editSubBank >= 0 && editSubBank <= 5)
+                ? uf8::bindings::getSubBankDynamic(activeLayer, editQuick,
+                                                   editSubBank)
+                : uf8::bindings::DynamicBankKind::None;
+        if (editDynKind != uf8::bindings::DynamicBankKind::None) {
+            scribble = dynKindShort_(editDynKind);
+        } else if (!editIsSslCsBc
             && editQuick >= 0 && editQuick <= 2
             && editSubBank >= 0 && editSubBank <= 5) {
             const auto slot = uf8::bindings::getUserQuickSlot(
@@ -1428,6 +1472,19 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
                     c.ox + b.x + b.w + 2, c.oy + b.y + 22,
                     0x40C040FF, /*rounding*/ nullptr,
                     /*flags*/ nullptr, /*thickness*/ nullptr);
+            }
+            // Amber corner tick = this Sub-Bank is DYNAMIC (its 8 keys are
+            // computed from the focused track). It used to take a click on the
+            // cell to find that out, so a bank could look like eight editable
+            // slots and be none (Frank 2026-08-18). Drawn as a filled triangle
+            // in the top-right corner, clear of both rings.
+            if (uf8::bindings::getSubBankDynamic(activeLayer, editQuick, b.idx)
+                != uf8::bindings::DynamicBankKind::None) {
+                ImGui_DrawList_AddTriangleFilled(c.dl,
+                    c.ox + b.x + b.w - 7, c.oy + b.y + 1,
+                    c.ox + b.x + b.w - 1, c.oy + b.y + 1,
+                    c.ox + b.x + b.w - 1, c.oy + b.y + 7,
+                    0xFFB020FF);
             }
             // Cyan inner ring = the Sub-Bank the editor is pointing at
             // (manual / offline). Soft-key labels above follow this.
@@ -4432,6 +4489,48 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     ImGui_Text(ctx, hdr);
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
+
+    // ⇨ A DYNAMIC SUB-BANK HAS NO STATIC SLOTS TO EDIT. Without this the editor
+    // happily took assignments for all 8 keys and none of them could ever fire —
+    // the only hint was hidden one click away, on the Sub-Bank cell (Frank
+    // 2026-08-18). The UF1 bank editor has behaved this way since 2026-07-30;
+    // this is the UF8 half it never got. The combo is repeated here on purpose,
+    // so turning the bank back to static does not require finding the other page.
+    {
+        const DynamicBankKind dynKind =
+            getSubBankDynamic(editLayer, qIdx, sbIdx);
+        if (dynKind != DynamicBankKind::None) {
+            char note[200];
+            snprintf(note, sizeof(note),
+                          "This Sub-Bank is dynamic: %s.",
+                          dynKindLabel_(dynKind));
+            ImGui_Text(ctx, note);
+            ImGui_TextDisabled(ctx,
+                "All 8 keys are computed live from the focused track, so this "
+                "slot's stored action never fires. The slots are kept, not "
+                "discarded: switch the bank back to static and they return.");
+            ImGui_Spacing(ctx);
+            ImGui_SetNextItemWidth(ctx, 260.0);
+            if (ImGui_BeginCombo(ctx, "Dynamic bank##uqslot_dyn",
+                                 dynKindLabel_(dynKind), /*flags*/ nullptr)) {
+                static const DynamicBankKind kKinds[] = {
+                    DynamicBankKind::None,        DynamicBankKind::FxBank,
+                    DynamicBankKind::ParamGroups, DynamicBankKind::TrackColours,
+                };
+                for (const auto k : kKinds) {
+                    bool sel = (k == dynKind);
+                    if (ImGui_Selectable(ctx, dynKindLabel_(k), &sel,
+                                         /*flags*/ nullptr,
+                                         /*size_w*/ nullptr,
+                                         /*size_h*/ nullptr)) {
+                        setSubBankDynamic(editLayer, qIdx, sbIdx, k);
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+            return;
+        }
+    }
 
     ImGui_PushID(ctx, "uqslot_inline");
     char idtag[48];
