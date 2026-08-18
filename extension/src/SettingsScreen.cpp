@@ -6286,7 +6286,17 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // wheel's page shows: a mode its picker skips cannot be reached on the
     // device, so its cross bindings would be stranded with no sign of why. A
     // ticked-off mode can be ticked back on, not selected.
-    if (s_deviceTab == 2) {
+    // ⚠ ONLY WHERE IT IS NEEDED, never as a permanent row.
+    // The UF1 editor's two 480 px columns are BeginChild windows, and this tab
+    // has already been killed once by pushing them far enough down to be culled
+    // ([[learnings]] #31 — a culled child makes ReaImGui reap the whole Settings
+    // window a defer cycle later). So this block appears for the five cross
+    // tiles and the jog wheel, the two things it governs, and adds no height
+    // anywhere else (Frank 2026-08-18: settings crash on the SCRUB tile).
+    const bool jogModeRelevant =
+        editSel == ButtonId::Uf1Jog
+        || uf8::bindings::splitPerModeNavId(editSel, nullptr, nullptr);
+    if (s_deviceTab == 2 && jogModeRelevant) {
         const int live = reasixty_uf1JogMode();
         const int jn   = reasixty_uf1JogModeCount();
         ImGui_Text(ctx, "Jog Mode:");
@@ -6308,8 +6318,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             }
             ImGui_EndCombo(ctx);
         }
-        ImGui_Spacing(ctx);
-        ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
     }
 
