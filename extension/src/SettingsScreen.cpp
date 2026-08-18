@@ -826,7 +826,50 @@ bool                    s_bindingCtxOpenRequested = false;
 // getActiveLayer()); keeping the popup tied to the canvas's ID stack
 // avoids the cross-tab ID mismatch that would happen if OpenPopup was
 // inside a tab but BeginPopup outside.
-void renderBindingContextMenu_(ImGui_Context* ctx, int layer)
+// ⇨ A SOFT-KEY DOES NOT LIVE IN THE LAYER MAP.
+// Copy/Paste used getBinding/setBinding for every tile, which is right for an
+// ordinary button and wrong for the two kinds of soft-key: the UF8 top-soft-keys
+// live in the user-Quick store at (layer, quick, sub-bank, slot), the UF1 display
+// soft-keys in the bank store at (bank, slot). So the menu was copying and
+// pasting an empty layer binding nobody reads, and nothing appeared to happen
+// (Frank 2026-08-18). These two route to the right store.
+//
+// The clipboard carries ONE modifier set, matching the presets: you see the
+// Shift set, you copy the Shift set.
+uf8::bindings::Binding ctxReadBinding_(int layer, uf8::bindings::ButtonId id,
+                                       int quick, int subBank)
+{
+    using namespace uf8::bindings;
+    if (id >= ButtonId::TopSoftKey1 && id <= ButtonId::TopSoftKey8) {
+        const int slot = static_cast<int>(id) - static_cast<int>(ButtonId::TopSoftKey1);
+        if (quick >= 0) return getUserQuickSlot(layer, quick, subBank, slot);
+        return Binding{};
+    }
+    if (id >= ButtonId::Uf1DisplaySoft1 && id <= ButtonId::Uf1DisplaySoft4) {
+        const int slot = static_cast<int>(id) - static_cast<int>(ButtonId::Uf1DisplaySoft1);
+        return getUf1SoftBankSlot(reasixty_uf1SoftBank(), slot);
+    }
+    return getBinding(layer, id);
+}
+void ctxWriteBinding_(int layer, uf8::bindings::ButtonId id,
+                      int quick, int subBank, const uf8::bindings::Binding& bd)
+{
+    using namespace uf8::bindings;
+    if (id >= ButtonId::TopSoftKey1 && id <= ButtonId::TopSoftKey8) {
+        const int slot = static_cast<int>(id) - static_cast<int>(ButtonId::TopSoftKey1);
+        if (quick >= 0) setUserQuickSlot(layer, quick, subBank, slot, bd);
+        return;
+    }
+    if (id >= ButtonId::Uf1DisplaySoft1 && id <= ButtonId::Uf1DisplaySoft4) {
+        const int slot = static_cast<int>(id) - static_cast<int>(ButtonId::Uf1DisplaySoft1);
+        setUf1SoftBankSlot(reasixty_uf1SoftBank(), slot, bd);
+        return;
+    }
+    setBinding(layer, id, bd);
+}
+
+void renderBindingContextMenu_(ImGui_Context* ctx, int layer,
+                               int quick, int subBank)
 {
     if (s_bindingCtxOpenRequested) {
         ImGui_OpenPopup(ctx, "##binding_ctx_menu", nullptr);
@@ -835,8 +878,8 @@ void renderBindingContextMenu_(ImGui_Context* ctx, int layer)
     if (!ImGui_BeginPopup(ctx, "##binding_ctx_menu", nullptr)) return;
 
     if (ImGui_MenuItem(ctx, "Copy binding",  nullptr, nullptr, nullptr)) {
-        s_bindingClipboard = uf8::bindings::getBinding(
-            layer, s_bindingCtxBtn);
+        s_bindingClipboard = ctxReadBinding_(
+            layer, s_bindingCtxBtn, quick, subBank);
         s_bindingClipboardFull = true;
     }
     bool pasteEnabled = s_bindingClipboardFull
@@ -844,18 +887,30 @@ void renderBindingContextMenu_(ImGui_Context* ctx, int layer)
     if (ImGui_MenuItem(ctx, "Paste binding", nullptr, nullptr,
                        &pasteEnabled))
     {
-        uf8::bindings::setBinding(
-            layer, s_bindingCtxBtn, s_bindingClipboard);
+        ctxWriteBinding_(
+            layer, s_bindingCtxBtn, quick, subBank, s_bindingClipboard);
     }
 
     ImGui_Separator(ctx);
 
-    // Reset only the right-clicked binding to its factory default.
-    bool resetEnabled = s_bindingCtxBtn != uf8::bindings::ButtonId::None;
-    if (ImGui_MenuItem(ctx, "Reset binding to factory default", nullptr,
-                       nullptr, &resetEnabled))
+    // Reset only the right-clicked binding to its factory default. Soft-keys are
+    // excluded: resetBindingToDefault works on the LAYER map, and a soft-key does
+    // not live there, so on those tiles it would have quietly done nothing to the
+    // slot and something to a binding nobody reads. They ship empty anyway, so
+    // "clear" is what a reset would mean, and that is the editor's Clear button.
     {
-        uf8::bindings::resetBindingToDefault(layer, s_bindingCtxBtn);
+        using namespace uf8::bindings;
+        const bool isSoftKey =
+            (s_bindingCtxBtn >= ButtonId::TopSoftKey1
+             && s_bindingCtxBtn <= ButtonId::TopSoftKey8)
+         || (s_bindingCtxBtn >= ButtonId::Uf1DisplaySoft1
+             && s_bindingCtxBtn <= ButtonId::Uf1DisplaySoft4);
+        bool resetEnabled = (s_bindingCtxBtn != ButtonId::None) && !isSoftKey;
+        if (ImGui_MenuItem(ctx, "Reset binding to factory default", nullptr,
+                           nullptr, &resetEnabled))
+        {
+            resetBindingToDefault(layer, s_bindingCtxBtn);
+        }
     }
     ImGui_EndPopup(ctx);
 }
@@ -1605,7 +1660,8 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
 
     // Right-click context menu — must live inside the same canvas ID
     // scope as the OpenPopup call so the popup ID matches.
-    renderBindingContextMenu_(ctx, uf8::bindings::getActiveLayer());
+    renderBindingContextMenu_(ctx, uf8::bindings::getActiveLayer(),
+                               editQuick, editSubBank);
 
     ImGui_PopFont(ctx);
 }
@@ -2165,7 +2221,7 @@ void drawUc1BindingsVector(ImGui_Context* ctx, ButtonId& sel)
               ButtonId::Uc1Encoder2Push, "PUSH");
 
     // Right-click context menu — same canvas ID scope as drawUf8Vector.
-    renderBindingContextMenu_(ctx, uf8::bindings::getActiveLayer());
+    renderBindingContextMenu_(ctx, uf8::bindings::getActiveLayer(), -1, 0);
 
     ImGui_PopFont(ctx);
 }
@@ -2484,7 +2540,7 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     ImGui_PopFont(ctx);
 
     // Right-click context menu — same canvas ID scope as drawUf8Vector.
-    renderBindingContextMenu_(ctx, getActiveLayer());
+    renderBindingContextMenu_(ctx, getActiveLayer(), -1, 0);
 
     ImGui_PopFont(ctx);
 }
