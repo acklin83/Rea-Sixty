@@ -902,16 +902,9 @@ void renderBindingContextMenu_(ImGui_Context* ctx, int layer,
     if (ImGui_MenuItem(ctx, "Copy binding",  nullptr, nullptr, nullptr)) {
         s_bindingClipboard = ctxReadBinding_(
             layer, s_bindingCtxBtn, quick, subBank);
-        // Soft-keys hold two independent sets. Reduce the clipboard to the set
-        // on screen, so pasting cannot silently destroy the other one.
-        if (ctxIsSoftKey_(s_bindingCtxBtn) && g_slotEditModIdx != 0) {
-            auto set = s_bindingClipboard.shortPress[g_slotEditModIdx];
-            uf8::bindings::Binding one;
-            one.shortPress[0] = set;
-            one.label         = set.label;
-            one.behavior      = s_bindingClipboard.behavior;
-            s_bindingClipboard = one;
-        }
+        // The clipboard keeps the WHOLE binding; Paste decides which set to take
+        // from it. Stubbing it down to one set here meant pasting onto an
+        // ordinary button wiped that button's colours and its other slots.
         s_bindingClipboardFull = true;
     }
     bool pasteEnabled = s_bindingClipboardFull
@@ -922,13 +915,28 @@ void renderBindingContextMenu_(ImGui_Context* ctx, int layer,
         if (ctxIsSoftKey_(s_bindingCtxBtn)) {
             // Merge into the destination's set, leaving the other one alone.
             auto dst = ctxReadBinding_(layer, s_bindingCtxBtn, quick, subBank);
-            dst.shortPress[g_slotEditModIdx] = s_bindingClipboard.shortPress[0];
-            if (g_slotEditModIdx == 0) {
+            const int m = g_slotEditModIdx;
+            dst.shortPress[m]  = s_bindingClipboard.shortPress[m];
+            dst.longPress[m]   = s_bindingClipboard.longPress[m];
+            dst.doublePress[m] = s_bindingClipboard.doublePress[m];
+            if (m == 0) {
+                // Everything that belongs to the KEY rather than to a set:
+                // name, behaviour, LED. Dropping these made paste lose colours
+                // and long presses it used to carry.
                 dst.label          = s_bindingClipboard.label;
                 dst.labelIsUserSet = s_bindingClipboard.labelIsUserSet;
                 dst.behavior       = s_bindingClipboard.behavior;
-            } else if (dst.shortPress[g_slotEditModIdx].label.empty()) {
-                dst.shortPress[g_slotEditModIdx].label = s_bindingClipboard.label;
+                dst.hasLongPress   = s_bindingClipboard.hasLongPress;
+                dst.hasDoublePress = s_bindingClipboard.hasDoublePress;
+                dst.brightness         = s_bindingClipboard.brightness;
+                dst.inactiveBrightness = s_bindingClipboard.inactiveBrightness;
+                dst.ledShowWhenEmpty   = s_bindingClipboard.ledShowWhenEmpty;
+                for (int c = 0; c < 3; ++c) {
+                    dst.color[c]         = s_bindingClipboard.color[c];
+                    dst.inactiveColor[c] = s_bindingClipboard.inactiveColor[c];
+                }
+            } else if (dst.shortPress[m].label.empty()) {
+                dst.shortPress[m].label = s_bindingClipboard.label;
             }
             ctxWriteBinding_(layer, s_bindingCtxBtn, quick, subBank, dst);
         } else {

@@ -1044,22 +1044,30 @@ bool stepIsEmpty_(const ActionStep& st)
     return true;
 }
 
+// ⚠ TWO QUESTIONS, TWO PREDICATES. Do not merge them again.
+//   slotIsEmpty_   — "does this slot DO anything?" Used by DISPATCH:
+//                    effectiveLongSlot_'s Plain fallback and the long/double
+//                    arming sites. A slot carrying only a colour must count as
+//                    empty here, or Shift+long-press stops firing and the arm
+//                    swallows the press. Widening this broke exactly that.
+//   slotHasNoData_ — "is there anything worth WRITING?" Used by the serialiser,
+//                    which drops empty slots. A label-only slot is real data:
+//                    that is what a soft-key's Shift set looks like, and what
+//                    recallBankPreset writes into it (Frank 2026-08-18).
 bool slotIsEmpty_(const ActionSlot& s)
 {
-    // ⇨ A LABEL OR AN LED OVERRIDE IS CONTENT. It used to check the ACTION only,
-    // and serializeMatrixRow_ drops every "empty" slot, so a slot that carried a
-    // name and no action was written as nothing and came back blank after a
-    // restart. That is exactly what a soft-key modifier set can be: the Shift set
-    // of a label-only bank, and the labels recallBankPreset now carries into it
-    // (Frank 2026-08-18, "LABELS ERSCHEINEN NICHT"). The fix would have undone
-    // itself on the next start.
-    if (!s.label.empty())                                   return false;
-    if (s.led.hasActive || s.led.hasInactive)               return false;
     if (!stepIsEmpty_(s)) return false;
     for (const auto& st : s.extraSteps) {
         if (!stepIsEmpty_(st)) return false;
     }
     return true;
+}
+
+bool slotHasNoData_(const ActionSlot& s)
+{
+    if (!s.label.empty())                     return false;
+    if (s.led.hasActive || s.led.hasInactive) return false;
+    return slotIsEmpty_(s);
 }
 
 } // namespace
@@ -1174,7 +1182,7 @@ void serializeMatrixRow_(const ActionSlot (&row)[kModifierCount],
     os << "{";
     bool first = true;
     for (int m = 0; m < kModifierCount; ++m) {
-        if (slotIsEmpty_(row[m])) continue;
+        if (slotHasNoData_(row[m])) continue;
         if (!first) os << ", ";
         first = false;
         os << "\"" << modifierKeyName_(m) << "\": {";
@@ -1418,13 +1426,14 @@ void serializeBankPresets_(const Config& c, std::ostringstream& os)
 // short/long slots Noop + no label) — such slots are skipped on save.
 static bool uf1BankSlotEmpty_(const Binding& bd)
 {
+    // A per-SET label counts, not just the key's own name: naming a UF1 soft-key
+    // on the Shift set with no action assigned is a legitimate thing to do, and
+    // this predicate dropping it is why that vanished on restart. Same rule as
+    // slotHasNoData_, which this duplicates for the UF1 bank store.
     for (int m = 0; m < kModifierCount; ++m) {
-        if (bd.shortPress[m].type != ActionType::Noop
-            || !bd.shortPress[m].action.empty()) return false;
-        if (bd.longPress[m].type != ActionType::Noop
-            || !bd.longPress[m].action.empty())  return false;
-        if (bd.doublePress[m].type != ActionType::Noop
-            || !bd.doublePress[m].action.empty()) return false;
+        if (!slotHasNoData_(bd.shortPress[m]))  return false;
+        if (!slotHasNoData_(bd.longPress[m]))   return false;
+        if (!slotHasNoData_(bd.doublePress[m])) return false;
     }
     return bd.label.empty();
 }
@@ -3714,10 +3723,17 @@ Modifier currentModifierSnapshot()
 }
 
 // Soft-key banks only ever see Plain and Shift — see the header for why.
+//
+// ⛔ HARDWARE SHIFT ONLY. currentModifierSnapshot() also ORs in the computer
+// keyboard's Shift, which is right for a binding: you press Shift and a key, both
+// deliberately. It is wrong here, because this snapshot decides what the SURFACE
+// DISPLAYS. With the keyboard folded in, Shift-clicking in the arrange or typing
+// a capital letter swapped all eight UF8 labels and all four UF1 DAW labels to
+// their Shift set — usually blank — and took the LEDs with them. The pane says
+// "Shift = the FINE key", so that is the only thing that may move it.
 Modifier bankModifierSnapshot()
 {
-    const Modifier m = currentModifierSnapshot();
-    return (m == Modifier::Shift) ? Modifier::Shift : Modifier::Plain;
+    return g_modShiftHeld.load() ? Modifier::Shift : Modifier::Plain;
 }
 
 // Long-press slot resolution with PLAIN fallback. The arm records the
@@ -4516,7 +4532,10 @@ bool recallBankPreset(int idx, int layer, int quick, int subBank, int mod)
         // Shift without carrying it produced a set whose actions fired while the
         // screen stayed blank (Frank 2026-08-18: "LABELS ERSCHEINEN NICHT ABER
         // ACTION FEUERT"). Label-only slots vanished entirely.
-        if (dst.shortPress[mod].label.empty())
+        // Modifier sets only. On Plain the key's own name IS the label, and
+        // duplicating it into the set would shadow the editor's Label field,
+        // which writes Binding::label there.
+        if (mod != 0 && dst.shortPress[mod].label.empty())
             dst.shortPress[mod].label = p.slots[s].label;
         if (mod == 0) {
             dst.behavior       = p.slots[s].behavior;
@@ -4667,7 +4686,10 @@ bool recallFactoryBankPreset(int idx, int layer, int quick, int subBank, int mod
         Binding& dst = g_cfg.userQuicks[layer].quicks[quick]
                           .subBanks[subBank].slots[s];
         dst.shortPress[mod] = p.slots[s].shortPress[0];
-        if (dst.shortPress[mod].label.empty())
+        // Modifier sets only. On Plain the key's own name IS the label, and
+        // duplicating it into the set would shadow the editor's Label field,
+        // which writes Binding::label there.
+        if (mod != 0 && dst.shortPress[mod].label.empty())
             dst.shortPress[mod].label = p.slots[s].label;
         if (mod == 0) {
             const std::string keepLabel = p.slots[s].label;
