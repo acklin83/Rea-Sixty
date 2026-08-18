@@ -666,15 +666,26 @@ The cross is not one thing either — it follows the object, exactly like the wh
 
 | Object | `←` `→` | `↑` `↓` | centre |
 |---|---|---|---|
-| **Playhead** | Move the edit cursor one grid step. | Zoom vertically in / out. | Zoom to the whole project; press again to restore the view you came from. |
+| **Playhead** | Zoom out / in horizontally. | Zoom in / out vertically. | Zoom to fit the project. |
 | **Scrub** | As Playhead. | As Playhead. | As Playhead. |
-| **Items** | Select the previous / next item on the track. | Select the item on the track above / below. | Zoom to the span of the selected items; press again to restore. |
-| **Envelope** | Select the previous / next point. | Switch envelope lane. | Toggle what the jog edits: the selected **points** or the **playhead**. No zoom here — nudging the cursor while shaping an envelope is worth more. |
-| **Razor** | Aim at the **left** / **right** edge. | Aim at the **top** / **bottom** edge. | Aim at the **whole area** — and see *Razor* below, where the centre is also a held gesture. |
+| **Items** | Select the previous / next item on the track. | Select the item on the track above / below. | **Hold** it and the wheel drags the selected items as one move; release drops them. Press and let go without turning and it zooms to the selected items instead, press again to come back. |
+| **Envelope** | Select the previous / next point. | Switch envelope lane. | Toggle what the jog edits: the selected **points** or the **playhead**. No zoom here, nudging the cursor while shaping an envelope is worth more. |
+| **Razor** | Aim at the **left** / **right** edge. | Aim at the **top** / **bottom** edge. | **Hold** it to take the **whole area** and drag its content. See *Razor* below. |
 
-In **Items** and **Envelope**, holding `SHIFT` while pressing `←` `→` **adds** to
-the selection instead of replacing it, so you can walk a run of items or points
-onto the wheel. The cross keys light to show the Razor target you have aimed at.
+Playhead and Scrub carry the plain zoom cross, the same five REAPER zoom actions
+the UF8's cursor pad uses (40111 / 40112 / 1011 / 1012 / 40295): with no editing
+object engaged there is nothing on screen for the cross to select, so it does
+what the cross on the other surface does.
+
+In **Items**, `SHIFT` on any of the four arrows **adds** to the selection instead
+of replacing it, and in **Envelope** the same goes for `←` `→` on points, so you
+can walk a run of items or points onto the wheel. That is not a hidden check
+inside the key: each of those keys carries the *(add)* twin of its own action in
+its Shift slot, where you can see it and change it. A Shift slot you leave empty
+falls back to the plain action, which is why the keys without one are unaffected
+by the modifier.
+
+The cross keys light to show the Razor target you have aimed at.
 
 **Everything in that table is a factory default, not a fixed rule.** Each cross
 key holds its own binding *per object*, so the same physical key can do five
@@ -929,10 +940,12 @@ Top of the pane: a tab bar with **UF8**, **UC1** and **UF1**, each rendering its
 
 The "current layer" follows whichever Layer button (1 / 2 / 3) is highlighted in the schematic — click a Layer button to switch the live layer; the green outline indicates which one is active. There is no separate layer-tab strip.
 
-Three click-to-edit special cases:
+Five click-to-edit special cases:
 
 - **Top-soft-keys** (the 8 buttons above the V-Pots) open the **user-Quick slot editor** for the (Layer, Quick, Sub-Bank) coordinate you are editing instead of the regular per-button editor — top-soft-keys are slot pickers, not direct actions.
 - **Sub-bank selectors** (V-POT + 1..5) open the **sub-bank cell editor** with a Per-Quick LED override so the user can distinguish (Layer, Quick) contexts visually.
+- **The UF1 nav cross** (the four arrows and the centre key around the jog wheel) opens the regular editor with a **Jog Mode** picker above it. Each of those five keys holds a separate binding per object, and the picker says which one you are editing. It follows the surface and moves it: change the object there and the wheel changes with it, so what you edit is always what you are holding. See the chapter *Jog Mode*.
+- **The UF1 jog wheel** is selectable but fires nothing, so clicking it opens the wheel's own settings (picker speed, fine divisor, the step for the object you are in, and its time axis) with no action picker at all. Only the settings the live object actually uses are shown.
 - Everything else uses the regular per-button binding editor.
 
 ### Offline soft-key editing + edit selector
@@ -1090,7 +1103,7 @@ For a regular button, the editor exposes:
 - **LED appearance** — colour + brightness override that replaces the action's default state-of mapping.
 - For **MIDI Command** bindings: channel / note number / velocity / CC value as appropriate.
 - For **REAPER Action** bindings: a search dialog that browses REAPER's Action List by name or command ID (also exposes ReaScript loading).
-- For **UF1** controls: a **Label**, which is what the UF1 prints next to the key. Leave it empty and the label follows whatever action is bound; type your own and it stays, whatever you rebind the key to afterwards. Clearing the field hands the name back to the action. This is why the UF1's single SOFT key stops reading `PIN SET` once you give it a different job.
+- For the five **UF1** keys the screen prints a name for (the `SOFT` key and the four display soft-keys): a **Label**. Leave it empty and the label follows whatever action is bound; type your own and it stays, whatever you rebind the key to afterwards. Clearing the field hands the name back to the action. This is why the UF1's single SOFT key stops reading `PIN SET` once you give it a different job. Every other UF1 key has no field, because the surface has nowhere to print it.
 
 ### Right-click context menu
 
@@ -1787,6 +1800,70 @@ Each maps to a REAPER zoom action (defaults for the UF8 cursor pad).
 - **Zoom out horizontally** — zoom out horizontally (1011).
 - **Zoom in horizontally** — zoom in horizontally (1012).
 - **Zoom to fit project** — zoom to fit the whole project (40295).
+
+## Jog Modes
+
+Which object the UF1's jog wheel is working on (see the chapter **Jog Mode**). The
+usual picker is `SCRUB` held plus a turn of the wheel; these actions put the same
+choice on a button. Each direct setter lights while its object is the live one.
+
+- **UF1 Jog Mode: cycle** steps to the next object.
+- **UF1 Jog Mode: Playhead** puts the wheel on the play cursor.
+- **UF1 Jog Mode: Scrub** puts it on audible scrub.
+- **UF1 Jog Mode: Items** puts it on the selected items.
+- **UF1 Jog Mode: Envelope** puts it on the selected envelope points.
+- **UF1 Jog Mode: Razor Edit** puts it on the razor edit.
+
+## Jog Actions
+
+The individual things the nav cross does, one named action each. That is what
+makes the cross bindable per object, and it also means any of them can go on any
+other key. They are offered in every surface's picker, because they act on the
+UF1's jog state rather than on the key that fires them.
+
+Razor. Each of these aims the wheel at a different part of the razor edit:
+
+- **Razor: target whole area**
+- **Razor: target left edge**
+- **Razor: target right edge**
+- **Razor: target top edge**
+- **Razor: target bottom edge**
+
+Envelope:
+
+- **Envelope: previous point** and **Envelope: next point** walk the selection
+  along the points of the selected envelope. The **(add)** twin of each extends
+  the selection instead of replacing it.
+- **Envelope: lane above** and **Envelope: lane below** select the previous or
+  next visible track envelope. Hidden lanes are stepped over.
+- **Envelope: jog edits points / playhead** is a toggle. The wheel either moves
+  the selected points or nudges the play cursor.
+
+Items:
+
+- **Items: previous item** and **Items: next item** take the item before or after
+  the current one on the same track, and have **(add)** twins as well.
+- **Items: item on track above** and **Items: item on track below** take the
+  nearest item on the next track that has one, so empty tracks are skipped. Also
+  with **(add)** twins.
+
+Two that are not tied to a single object:
+
+- **Zoom to selection (toggle)** saves the arrange view and zooms it to whatever
+  the live object is: the selected items, the selected envelope points, or the
+  whole project when there is no selection to aim at. Press it again and the view
+  you came from is back. Nothing carries this at the factory, it is here for
+  anyone who wants it on a key of their own.
+- **Jog: hold to drag content** needs its behaviour set to **Hold**. In Razor it
+  takes the whole area and drags its content with the wheel; in Items it arms a
+  drag of the selected items, and a press that turns nothing falls back to *Zoom
+  to selection*. On Momentary it would fire once and never let go, so the
+  behaviour is part of the action rather than a preference.
+
+The older collective **Jog Mode: nav** actions are still honoured for anyone who
+bound them by hand, but they are no longer offered in the picker. Each of them
+meant something different in every object, which is the thing the named actions
+above exist to undo.
 
 ## Parameter Groups
 
