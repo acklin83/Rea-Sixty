@@ -36979,10 +36979,29 @@ void reasixty_editorEngageSubBankIfLocked(int subBank)
     if (layer < 0 || layer > 2) return;
     const int target =
         std::clamp(subBank, 0, uf8::bindings::kSubBanksPerQuick - 1);
-    if (g_activeQuick[layer].load() < 0) return;   // SSL page bank, not ours
-    if (g_activeSubBank[layer].exchange(target) != target) {
-        g_bankDirty.store(true);
+    if (g_activeQuick[layer].load() >= 0) {
+        if (g_activeSubBank[layer].exchange(target) != target) {
+            g_bankDirty.store(true);
+            g_softKeyDirty.store(true);
+        }
+        return;
+    }
+    // No user-Quick engaged: the cell picks the SSL PAGE bank, the same thing
+    // softkey_bank_select does on its non-Quick path. Bailing out here instead
+    // left the editor unable to reach any other bank in Plugin Mode at all, and
+    // once the selection was tied to the engaged cell it snapped straight back
+    // on every click (Frank 2026-08-18: "wieso komm ich bei UF8 plugin mode
+    // nicht mehr auf die zweite bank?").
+    // NOT clamped to softkey::maxBankFor the way the builtin is: that clamp
+    // keeps the SURFACE off a page the plug-in leaves empty, while the empty
+    // pages are exactly where the user's own free-slot assignments live (the
+    // unused BC banks 2-5). The editor has to be able to point at them.
+    if (g_softKeyBank.exchange(target) != target) {
         g_softKeyDirty.store(true);
+        g_bankDirty.store(true);
+        char buf[8];
+        snprintf(buf, sizeof(buf), "%d", target);
+        SetExtState("ReaSixty", "softKeyBank", buf, true);
     }
 }
 
