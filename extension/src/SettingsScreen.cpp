@@ -6128,10 +6128,49 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // save/load, UC1 = device-scoped UC1 save/load). Set inside the tab
     // bodies, which only run for the selected tab.
     static int s_deviceTab = 0;   // 0 = UF8, 1 = UC1, 2 = UF1
+    // Remember which surface you were on across Settings opens — the same
+    // one-shot restore the Modes sub-tabs use: SetSelected on the first frame
+    // after entering the pane, dropped afterwards so your clicks own the tab.
+    // The frame-gap test re-arms it when you navigate away and back, because
+    // drawBindings only runs while its pane is visible (Frank 2026-08-18).
+    static int  s_tabSaved     = -1;
+    static bool s_tabConsumed  = false;
+    static int  s_tabWritten   = -1;
+    static int  s_tabLastFrame = -1;
+    if (s_tabSaved < 0) {
+        const char* saved = GetExtState("rea_sixty", "bindings_device_tab");
+        s_tabSaved = (saved && *saved) ? std::atoi(saved) : 0;
+        if (s_tabSaved < 0 || s_tabSaved > 2) s_tabSaved = 0;
+        s_tabWritten  = s_tabSaved;
+        s_tabConsumed = false;
+    }
+    {
+        const int frame = ImGui_GetFrameCount(ctx);
+        if (s_tabLastFrame >= 0 && frame > s_tabLastFrame + 1)
+            s_tabConsumed = false;
+        s_tabLastFrame = frame;
+    }
+    auto tabFlagsForDevice = [&](int idx) -> int {
+        // if/return, not a ternary: ImGui_TabItemFlags_SetSelected is a
+        // ReaImGuiEnum and mixing it with a literal 0 in a conditional is
+        // ambiguous. The Modes sub-tabs write it the same way.
+        if (!s_tabConsumed && idx == s_tabSaved)
+            return ImGui_TabItemFlags_SetSelected;
+        return 0;
+    };
+    auto persistDeviceTab = [&](int idx) {
+        s_deviceTab = idx;
+        if (idx == s_tabWritten) return;
+        s_tabWritten = idx;
+        char buf[8]; snprintf(buf, sizeof(buf), "%d", idx);
+        SetExtState("rea_sixty", "bindings_device_tab", buf, true);
+    };
+
     int tabBarFlags = 0;
     if (ImGui_BeginTabBar(ctx, "bindings_surface_tabs", &tabBarFlags)) {
-        if (ImGui_BeginTabItem(ctx, "UF8", nullptr, nullptr)) {
-            s_deviceTab = 0;
+        int flagsUf8 = tabFlagsForDevice(0);
+        if (ImGui_BeginTabItem(ctx, "UF8", nullptr, &flagsUf8)) {
+            persistDeviceTab(0);
             drawUf8Vector(ctx, s_selected, s_editQuick, s_editSubBank);
             // Bank-scroll stride: when a selection scrolls past the surface
             // edge, jump a whole 8-strip bank or slide by one channel.
@@ -6151,13 +6190,15 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 "by 8 = jump to the next bank, by 1 = slide one channel.");
             ImGui_EndTabItem(ctx);
         }
-        if (ImGui_BeginTabItem(ctx, "UC1", nullptr, nullptr)) {
-            s_deviceTab = 1;
+        int flagsUc1 = tabFlagsForDevice(1);
+        if (ImGui_BeginTabItem(ctx, "UC1", nullptr, &flagsUc1)) {
+            persistDeviceTab(1);
             drawUc1BindingsVector(ctx, s_selected);
             ImGui_EndTabItem(ctx);
         }
-        if (ImGui_BeginTabItem(ctx, "UF1", nullptr, nullptr)) {
-            s_deviceTab = 2;
+        int flagsUf1 = tabFlagsForDevice(2);
+        if (ImGui_BeginTabItem(ctx, "UF1", nullptr, &flagsUf1)) {
+            persistDeviceTab(2);
             drawUf1Vector(ctx, s_selected);
             // NB: UF1 behaviour toggles (sends-follow / Extender) are rendered BELOW
             // the binding editor, NOT here — putting them in the tab item pushed the
@@ -6167,6 +6208,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             ImGui_EndTabItem(ctx);
         }
         ImGui_EndTabBar(ctx);
+        s_tabConsumed = true;   // clicks own the tab from the next frame on
     }
 
     ImGui_Spacing(ctx);
