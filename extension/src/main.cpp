@@ -39029,6 +39029,20 @@ void reasixty_setUf1JogModeVisible(int mode, bool on)
     SetExtState("rea_sixty", key, on ? "1" : "0", true);
 }
 int reasixty_uf1JogModeCount() { return kUf1JogModeCount; }
+// The LIVE jog mode, for the Settings nav-cross editor: it shows the mode the
+// surface is in and switching it there switches the surface too, the same way
+// clicking a Sub-Bank tile engages that bank (Frank 2026-08-18). Persisted like
+// the picker's own switch, so it survives a restart either way.
+int reasixty_uf1JogMode() { return static_cast<int>(g_uf1JogMode.load()); }
+void reasixty_setUf1JogMode(int mode)
+{
+    if (mode < 0 || mode >= kUf1JogModeCount) return;
+    const auto m = static_cast<Uf1JogMode>(mode);
+    if (g_uf1JogMode.exchange(m) != m) {
+        uf1JogPersistMode_(m);
+        g_pageDirty.store(true);
+    }
+}
 const char* reasixty_uf1JogModeName(int mode)   // for the Settings labels
 {
     return (mode >= 0 && mode < kUf1JogModeCount)
@@ -44195,14 +44209,17 @@ void registerBindingHandlers()
     // POST — the REAPER work runs in the main-thread drain (threading rule).
     // Shift on the selecting ones = add to the selection, snapshotted at the
     // press edge like the jog_nav_* family does.
-    auto jogAct = [](Uf1JogActionOp op, const char* label, bool shiftAware) {
+    // `add` = the add-to-selection twin. It is its OWN action rather than the
+    // same one checking modifierHeld(Shift) internally, because the factory seed
+    // puts it on the key's Shift slot: what a gesture does belongs in the
+    // binding you can see, not in a check you cannot (Frank 2026-08-18). Rebind
+    // the Shift slot and you get what you bound, with nothing left over.
+    auto jogAct = [](Uf1JogActionOp op, const char* label, bool add) {
         return DescBuilder{
-            [op, shiftAware](bool firing, bool /*pressed*/, int /*param*/) {
+            [op, add](bool firing, bool /*pressed*/, int /*param*/) {
                 if (!firing) return;
                 uint8_t code = static_cast<uint8_t>(op);
-                if (shiftAware
-                    && uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift))
-                    code |= kUf1JogActionShiftBit;
+                if (add) code |= kUf1JogActionShiftBit;
                 queueInput({PendingInput::Uf1JogAction, code, 1.0});
             },
             nullptr, label, false
@@ -44215,15 +44232,25 @@ void registerBindingHandlers()
     registerBuiltin("jog_razor_top",    jogAct(JA::RazorTop,    "Razor: target top edge", false));
     registerBuiltin("jog_razor_bottom", jogAct(JA::RazorBottom, "Razor: target bottom edge", false));
 
-    registerBuiltin("jog_env_point_prev", jogAct(JA::EnvPointPrev, "Envelope: previous point", true));
-    registerBuiltin("jog_env_point_next", jogAct(JA::EnvPointNext, "Envelope: next point", true));
-    registerBuiltin("jog_env_lane_up",    jogAct(JA::EnvLaneUp,    "Envelope: lane above", false));
-    registerBuiltin("jog_env_lane_down",  jogAct(JA::EnvLaneDown,  "Envelope: lane below", false));
+    registerBuiltin("jog_env_point_prev", jogAct(JA::EnvPointPrev, "Envelope: previous point", false));
+    registerBuiltin("jog_env_point_next", jogAct(JA::EnvPointNext, "Envelope: next point", false));
+    registerBuiltin("jog_env_lane_up",    jogAct(JA::EnvLaneUp,     "Envelope: lane above", false));
+    registerBuiltin("jog_env_lane_down",  jogAct(JA::EnvLaneDown,   "Envelope: lane below", false));
 
-    registerBuiltin("jog_item_prev",       jogAct(JA::ItemPrev,      "Items: previous item", true));
-    registerBuiltin("jog_item_next",       jogAct(JA::ItemNext,      "Items: next item", true));
-    registerBuiltin("jog_item_track_up",   jogAct(JA::ItemTrackUp,   "Items: item on track above", true));
-    registerBuiltin("jog_item_track_down", jogAct(JA::ItemTrackDown, "Items: item on track below", true));
+    registerBuiltin("jog_item_prev",       jogAct(JA::ItemPrev,      "Items: previous item", false));
+    registerBuiltin("jog_item_next",       jogAct(JA::ItemNext,      "Items: next item", false));
+    registerBuiltin("jog_item_track_up",   jogAct(JA::ItemTrackUp,   "Items: item on track above", false));
+    registerBuiltin("jog_item_track_down", jogAct(JA::ItemTrackDown, "Items: item on track below", false));
+
+    // The add-to-selection twins — factory-seeded on the Shift slot of the same
+    // keys, so Shift+arrow extends the selection exactly as it always did, but
+    // now visibly and rebindably.
+    registerBuiltin("jog_env_point_prev_add", jogAct(JA::EnvPointPrev, "Envelope: previous point (add)", true));
+    registerBuiltin("jog_env_point_next_add", jogAct(JA::EnvPointNext, "Envelope: next point (add)", true));
+    registerBuiltin("jog_item_prev_add",       jogAct(JA::ItemPrev,      "Items: previous item (add)", true));
+    registerBuiltin("jog_item_next_add",       jogAct(JA::ItemNext,      "Items: next item (add)", true));
+    registerBuiltin("jog_item_track_up_add",   jogAct(JA::ItemTrackUp,   "Items: item on track above (add)", true));
+    registerBuiltin("jog_item_track_down_add", jogAct(JA::ItemTrackDown, "Items: item on track below (add)", true));
 
     // The two stateful ones carry a toggle state so their LED means something.
     registerBuiltin("jog_env_target_toggle", DescBuilder{

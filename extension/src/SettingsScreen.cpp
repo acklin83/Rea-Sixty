@@ -166,6 +166,10 @@ const char* reasixty_uf1JogModeName(int mode);
 bool        reasixty_uf1JogModeVisible(int mode);
 void        reasixty_setUf1JogModeVisible(int mode, bool on);
 int         reasixty_uf1JogModeCount();
+// Live jog mode — the nav-cross editor follows it and switching there switches
+// the surface, like clicking a Sub-Bank tile engages that bank.
+int         reasixty_uf1JogMode();
+void        reasixty_setUf1JogMode(int mode);
 void reasixty_identifyUf8();
 void reasixty_identifyUc1();
 bool reasixty_selFollowsColor();
