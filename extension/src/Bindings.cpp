@@ -3724,16 +3724,17 @@ Modifier currentModifierSnapshot()
 
 // Soft-key banks only ever see Plain and Shift — see the header for why.
 //
-// ⛔ HARDWARE SHIFT ONLY. currentModifierSnapshot() also ORs in the computer
-// keyboard's Shift, which is right for a binding: you press Shift and a key, both
-// deliberately. It is wrong here, because this snapshot decides what the SURFACE
-// DISPLAYS. With the keyboard folded in, Shift-clicking in the arrange or typing
-// a capital letter swapped all eight UF8 labels and all four UF1 DAW labels to
-// their Shift set — usually blank — and took the LEDs with them. The pane says
-// "Shift = the FINE key", so that is the only thing that may move it.
+// ⚠ KEYBOARD SHIFT COUNTS, exactly like the FINE / SHIFT key. That is what
+// "Keyboard Shift acts as Shift modifier" (Settings, Behaviour, Keyboard, ON by
+// default) is FOR, and it holds for every modifier, not just for bindings.
+// An audit called the resulting label switching a bug and I briefly cut the
+// keyboard out of this path; Frank corrected it the same hour. The audit
+// described a symptom correctly and diagnosed it wrongly — the switching is the
+// feature working.
 Modifier bankModifierSnapshot()
 {
-    return g_modShiftHeld.load() ? Modifier::Shift : Modifier::Plain;
+    const Modifier m = currentModifierSnapshot();
+    return (m == Modifier::Shift) ? Modifier::Shift : Modifier::Plain;
 }
 
 // Long-press slot resolution with PLAIN fallback. The arm records the
