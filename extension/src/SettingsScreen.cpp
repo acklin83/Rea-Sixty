@@ -2770,6 +2770,40 @@ static void refreshAutoLabel_(uf8::bindings::Binding& bd,
     bd.label = autoLabelForAction_(sp);
 }
 
+// Which modifier slot the soft-key slot editors are pointing at. Shared by the
+// UF8 user-Quick slot editor and the UF1 bank slot editor so switching surfaces
+// does not silently move you back to Plain. Session state, not persisted.
+static int g_slotEditModIdx = 0;
+
+// The Plain / +Shift / +Cmd / +Ctrl selector both slot editors put above the
+// action fields. Returns true when the selection changed.
+//
+// Worth knowing when reading this: only Shift is reachable out of the box. The
+// UF1's SHIFT key and the UF8's FINE key carry mod_shift from the factory;
+// mod_cmd and mod_ctrl exist as builtins but no key is seeded with them, so
+// they need either a key of their own or the host-keyboard switches under
+// Settings, Behaviour, Keyboard.
+static bool drawSlotModifierRow_(ImGui_Context* ctx, const char* tag, int* modIdx)
+{
+    using namespace uf8::bindings;
+    static const char* kModNames[kModifierCount] =
+        { "Plain", "+Shift", "+Cmd", "+Ctrl" };
+    bool changed = false;
+    for (int m = 0; m < kModifierCount; ++m) {
+        char idbuf[64];
+        snprintf(idbuf, sizeof(idbuf), "%s##%s_mod%d", kModNames[m], tag, m);
+        if (ImGui_RadioButton(ctx, idbuf, *modIdx == m)) {
+            *modIdx = m;
+            changed = true;
+        }
+        if (m < kModifierCount - 1) ImGui_SameLine(ctx, nullptr, nullptr);
+    }
+    ImGui_TextDisabled(ctx,
+        "Shift is the UF1 SHIFT key / UF8 FINE key. Cmd and Ctrl need a key of "
+        "their own, or the keyboard switches under Behaviour.");
+    return changed;
+}
+
 // Behaviour wording, shared by the per-button editor and the UF1 soft-key bank
 // slot editor so the two cannot drift. Order IS the Behavior enum.
 static const char* const kBehaviorLabels_[3] = {
@@ -4478,7 +4512,8 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     const char* sbName = sbLabels[sbIdx];
 
     Binding bd = getUserQuickSlot(editLayer, qIdx, sbIdx, slotIdx);
-    auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+    const int modIdx = g_slotEditModIdx;
+    auto& sp = bd.shortPress[modIdx];
 
     // Full breadcrumb. Frank 2026-05-13: "selbstverständlich" that the
     // header carries every coordinate that defines what this slot is.
@@ -4556,6 +4591,37 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     }
     ImGui_PopItemWidth(ctx);
 
+    // Behaviour. dispatchUserQuickSlot has always read this field, the editor
+    // simply never offered it, so all 144 user-Quick slots per layer were stuck
+    // on Momentary (forum 3.5, which asked for it on the soft-keys generally —
+    // the UF1 half shipped first, this is the UF8 one).
+    {
+        int b = std::clamp(static_cast<int>(bd.behavior), 0, 2);
+        ImGui_PushItemWidth(ctx, 240);
+        if (ImGui_BeginCombo(ctx, "Behavior##uqslotbeh",
+                             kBehaviorLabels_[b], /*flags*/ nullptr)) {
+            for (int i = 0; i < 3; ++i) {
+                bool sel = (b == i);
+                if (ImGui_Selectable(ctx, kBehaviorLabels_[i], &sel,
+                                     /*flags*/ nullptr,
+                                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+                    bd.behavior = static_cast<Behavior>(i);
+                    dirty = true;
+                }
+            }
+            ImGui_EndCombo(ctx);
+        }
+        ImGui_PopItemWidth(ctx);
+    }
+
+    // Modifier slot — same story: dispatchUserQuickSlot snapshots the held
+    // modifier at press time and indexes shortPress with it, but only Plain was
+    // ever fillable here.
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Modifier");
+    drawSlotModifierRow_(ctx, idtag, &g_slotEditModIdx);
+    ImGui_Spacing(ctx);
+
     // Slot's action picker. f.label = nullptr — the slot has only ONE
     // label (the binding's bd.label above), Frank's request 2026-05-13:
     // "für was Label UND display label? Label reicht."
@@ -4570,16 +4636,21 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     if (drawActionPicker(ctx, idtag, ref,
                          /*layer*/ -1, ButtonId::None,
                          /*isLongPress*/ false,
-                         /*modIdx*/ 0, /*stepIdx*/ 0,
+                         modIdx, /*stepIdx*/ 0,
                          /*uqLayer*/ editLayer, /*uqQuick*/ qIdx,
                          /*uqSubBank*/ sbIdx, /*uqSlot*/ slotIdx)) {
         dirty = true;
     }
-    if (ImGui_Button(ctx, "Clear slot##uqclr_inl",
+    // Clears the WHOLE key, not the selected modifier slot — it always did,
+    // but with four slots on screen the old wording "Clear slot" had become a
+    // lie. To empty just one slot, pick "None (disabled)" in the picker above.
+    if (ImGui_Button(ctx, "Clear whole key##uqclr_inl",
                      /*size_w*/ nullptr, /*size_h*/ nullptr)) {
         bd = Binding{};
         dirty = true;
     }
+    ImGui_TextDisabled(ctx,
+        "Clears the label, behaviour, LED and all four modifier slots.");
 
     // LED appearance for this slot. Same Active / Inactive split the
     // regular binding editor exposes, scoped to this user-Quick slot.
@@ -4677,8 +4748,14 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
     if (slotIdx < 0 || slotIdx >= kUf1SoftBankSlots) return;
 
     Binding bd = getUf1SoftBankSlot(bank, slotIdx);
-    auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
-    const std::string labelActionBefore = actionIdentity_(sp);
+    // ⚠ The label follows the PLAIN slot's action and nothing else, so the
+    // before-snapshot has to read Plain even while the editor is pointing at a
+    // modifier slot. Taking it from `sp` instead would make every edit to the
+    // Shift slot look like an action change and rewrite an auto label.
+    const std::string labelActionBefore =
+        actionIdentity_(bd.shortPress[static_cast<int>(Modifier::Plain)]);
+    const int modIdx = g_slotEditModIdx;
+    auto& sp = bd.shortPress[modIdx];
 
     char hdr[120];
     snprintf(hdr, sizeof(hdr), "Editing: Soft-Key %d  (Bank %d / %d)",
@@ -4700,7 +4777,9 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
                                 labelBuf, sizeof(labelBuf), nullptr, nullptr)) {
         bd.label = labelBuf;
         bd.labelIsUserSet = !bd.label.empty();
-        if (!bd.labelIsUserSet) bd.label = autoLabelForAction_(sp);
+        if (!bd.labelIsUserSet)
+            bd.label = autoLabelForAction_(
+                bd.shortPress[static_cast<int>(Modifier::Plain)]);
         dirty = true;
     }
     ImGui_PopItemWidth(ctx);
@@ -4729,6 +4808,14 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
         ImGui_PopItemWidth(ctx);
     }
 
+    // Modifier slot. dispatchUf1SoftBankSlot already snapshots the held
+    // modifier at press time and indexes shortPress with it; the editor just
+    // never let you fill anything but Plain (forum 3.5, second half).
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Modifier");
+    drawSlotModifierRow_(ctx, idtag, &g_slotEditModIdx);
+    ImGui_Spacing(ctx);
+
     ActionFieldsRef ref{
         &sp.type, &sp.action, &sp.param,
         /*label*/ nullptr,
@@ -4739,17 +4826,20 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
     };
     if (drawActionPicker(ctx, idtag, ref,
                          /*layer*/ -1, ButtonId::None,
-                         /*isLongPress*/ false, /*modIdx*/ 0, /*stepIdx*/ 0,
+                         /*isLongPress*/ false, modIdx, /*stepIdx*/ 0,
                          /*uqLayer*/ -1, /*uqQuick*/ -1,
                          /*uqSubBank*/ -1, /*uqSlot*/ -1,
                          /*uf1Bank*/ bank, /*uf1Slot*/ slotIdx)) {
         dirty = true;
     }
-    if (ImGui_Button(ctx, "Clear slot##uf1sbclr",
+    // Same as the UF8 editor: this is the whole key, not one modifier slot.
+    if (ImGui_Button(ctx, "Clear whole key##uf1sbclr",
                      /*size_w*/ nullptr, /*size_h*/ nullptr)) {
         bd = Binding{};
         dirty = true;
     }
+    ImGui_TextDisabled(ctx,
+        "Clears the label, behaviour, LED and all four modifier slots.");
 
     // LED — Active / Inactive colour + brightness, exactly like the UF8
     // soft-key slots. The DAW-mode soft-key painter reads these back to

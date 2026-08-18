@@ -544,8 +544,9 @@ case the key behaves like a UF8 FX key — plain press, **+Shift**, **+Cmd**,
 **+Ctrl** and long-press each do something different.
 
 Each bank slot carries its own **Behavior** (*Momentary*, *Toggle* or *Hold*)
-alongside its label, action and LED colours, so a bank key can latch rather than
-fire once.
+and its own four **Modifier** slots (Plain, +Shift, +Cmd, +Ctrl), alongside its
+label, action and LED colours. So a bank key can latch rather than fire once,
+and can do something different when held with a modifier.
 
 Soft-key labels are capped at **13 characters** and V-Pot labels at **11**; both
 are abbreviated rather than truncated, so every word stays readable.
@@ -914,6 +915,10 @@ Three click-to-edit special cases:
 You can view and edit the Top-Soft-Key slots **without a UF8 connected** and regardless of whether UF8 Plug-in Mode is on — the Bindings pane is fully offline.
 
 When you click a Top-Soft-Key (or a Sub-Bank cell) in the schematic, an **Edit Quick** (Q1 / Q2 / Q3) and **Edit sub-bank** (V-POT / Soft 1-5) selector appears. Pick which coordinate to edit; the schematic and the slot editor then point at that (Layer, Quick, Sub-Bank).
+
+Each slot carries a **Behavior** (*Momentary*, *Toggle* or *Hold*) and four **Modifier** slots (Plain, +Shift, +Cmd, +Ctrl), the same two settings a regular button has. Only Shift is available without setup: it is the UF8's FINE key and the UF1's SHIFT key. For Cmd and Ctrl, either bind a key to those modifiers yourself or switch on the matching keyboard option under *Settings, Behaviour, Keyboard*.
+
+**Clear whole key** does what it says: label, behaviour, LED and all four modifier slots. To empty a single modifier slot, pick *None (disabled)* in its action picker.
 
 The schematic shows **two rings** so you never lose track of what's live vs what you're editing:
 
