@@ -5291,6 +5291,45 @@ void drawTrackColourPalette_(ImGui_Context* ctx)
     }
 }
 
+// The five FX-key gestures. GLOBAL (g_fxBankOp drives every FX bank on every
+// surface), so both bank editors show the same five combos rather than one
+// surface silently inheriting settings it never displays: the UF1's dynamic FX
+// bank fires these exact gestures and had no way to reach them
+// (Frank 2026-08-18). One function, so the two can never drift apart.
+static void drawFxBankGestures_(ImGui_Context* ctx)
+{
+    ImGui_TextDisabled(ctx,
+        "FX-key gestures (global — applies to every FX bank):");
+    static const char* kOpNames[] = {
+        "(nothing)", "Focus FX (surface follows)",
+        "Float/close FX window", "Bypass toggle",
+        "FX solo (bypass others)", "Offline toggle",
+        "Delete FX", "Move FX up", "Move FX down",
+    };
+    static const char* kGesture[5] = {
+        "Push", "+Shift", "+Cmd", "+Ctrl", "Long-press",
+    };
+    for (int g = 0; g < 5; ++g) {
+        const int cur = reasixty_fxBankOp(g);
+        char cid[24]; std::snprintf(cid, sizeof(cid), "##fxop%d", g);
+        ImGui_Text(ctx, kGesture[g]);
+        double sameOffs = 90.0;
+        ImGui_SameLine(ctx, &sameOffs, nullptr);
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_BeginCombo(ctx, cid,
+                kOpNames[(cur >= 0 && cur < 9) ? cur : 0],
+                /*flags*/ nullptr)) {
+            for (int o = 0; o < 9; ++o) {
+                bool sel = (o == cur);
+                if (ImGui_Selectable(ctx, kOpNames[o], &sel,
+                                     nullptr, nullptr, nullptr))
+                    reasixty_setFxBankOp(g, o);
+            }
+            ImGui_EndCombo(ctx);
+        }
+    }
+}
+
 // ---- Sub-Bank cell editor (V-POT / Soft 1-5 in the mockup) --------------
 // Replaces the regular drawBindingEditor for these cells — they don't
 // carry a user-editable action (the binding is always
@@ -5454,36 +5493,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         }
 
         if (curKind == DynamicBankKind::FxBank) {
-            ImGui_TextDisabled(ctx,
-                "FX-key gestures (global — applies to every FX bank):");
-            static const char* kOpNames[] = {
-                "(nothing)", "Focus FX (surface follows)",
-                "Float/close FX window", "Bypass toggle",
-                "FX solo (bypass others)", "Offline toggle",
-                "Delete FX", "Move FX up", "Move FX down",
-            };
-            static const char* kGesture[5] = {
-                "Push", "+Shift", "+Cmd", "+Ctrl", "Long-press",
-            };
-            for (int g = 0; g < 5; ++g) {
-                const int cur = reasixty_fxBankOp(g);
-                char cid[24]; std::snprintf(cid, sizeof(cid), "##fxop%d", g);
-                ImGui_Text(ctx, kGesture[g]);
-                double sameOffs = 90.0;
-                ImGui_SameLine(ctx, &sameOffs, nullptr);
-                ImGui_SetNextItemWidth(ctx, 220.0);
-                if (ImGui_BeginCombo(ctx, cid,
-                        kOpNames[(cur >= 0 && cur < 9) ? cur : 0],
-                        /*flags*/ nullptr)) {
-                    for (int o = 0; o < 9; ++o) {
-                        bool sel = (o == cur);
-                        if (ImGui_Selectable(ctx, kOpNames[o], &sel,
-                                             nullptr, nullptr, nullptr))
-                            reasixty_setFxBankOp(g, o);
-                    }
-                    ImGui_EndCombo(ctx);
-                }
-            }
+            drawFxBankGestures_(ctx);
         } else if (curKind == DynamicBankKind::TrackColours) {
             ImGui_TextDisabled(ctx,
                 reasixty_sp("Track-Colours palette (global — 8 keys = these colours):",
@@ -6204,13 +6214,26 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             "This is the bank engaged on the surface. Clicking here engages "
             "another one, exactly like pressing the key would.");
         ImGui_Spacing(ctx);
-        // The bank's four layers. Holding the modifier on the hardware shows
+        // The bank's two sets. Holding the modifier on the hardware shows
         // exactly what picking it here shows.
-        drawBankLayerRow_(ctx, "uf8bank", &g_slotEditModIdx);
-        ImGui_TextDisabled(ctx,
-            "Follows the modifier you hold, and stays there when you let go so "
-            "you can edit it. Shift = the FINE key.");
-        ImGui_Spacing(ctx);
+        // ⇨ UNLESS THE ENGAGED SUB-BANK IS DYNAMIC — then there are no sets to
+        // pick between and the modifiers run the FX-key gestures instead. Same
+        // reasoning as the UF1 bank editor below.
+        const bool uf8SubBankIsDyn =
+            s_editQuick >= 0
+            && uf8::bindings::getSubBankDynamic(
+                   s_editLayer, s_editQuick, s_editSubBank,
+                   uf8::bindings::kDynamicKindSet)
+               != uf8::bindings::DynamicBankKind::None;
+        if (uf8SubBankIsDyn) {
+            g_slotEditModIdx = 0;
+        } else {
+            drawBankLayerRow_(ctx, "uf8bank", &g_slotEditModIdx);
+            ImGui_TextDisabled(ctx,
+                "Follows the modifier you hold, and stays there when you let go "
+                "so you can edit it. Shift = the FINE key.");
+            ImGui_Spacing(ctx);
+        }
         ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
     }
@@ -6250,11 +6273,25 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             "10 banks of 4 soft-keys, active in DAW mode. The UF1 "
             "\xE2\x97\x82 \xE2\x96\xB8 keys page the same bank.");
         ImGui_Spacing(ctx);
-        drawBankLayerRow_(ctx, "uf1bank", &g_slotEditModIdx);
-        ImGui_TextDisabled(ctx,
-            "Follows the modifier you hold, and stays there when you let go so "
-            "you can edit it. Shift = the UF1 SHIFT key.");
-        ImGui_Spacing(ctx);
+        // ⇨ NO MODIFIER PICKER ON A DYNAMIC BANK. There are no sets to pick
+        // between: the modifiers run the FX-key gestures instead, and the
+        // stored slots are ignored altogether. Offering the choice anyway put a
+        // control on screen that decided nothing (Frank 2026-08-18). Forced back
+        // to Plain, because the picker is what normally resets it and it drives
+        // the LED editors further down.
+        const bool uf1BankIsDyn =
+            uf8::bindings::getUf1SoftBankDynamic(
+                reasixty_uf1SoftBank(), uf8::bindings::kDynamicKindSet)
+            != uf8::bindings::DynamicBankKind::None;
+        if (uf1BankIsDyn) {
+            g_slotEditModIdx = 0;
+        } else {
+            drawBankLayerRow_(ctx, "uf1bank", &g_slotEditModIdx);
+            ImGui_TextDisabled(ctx,
+                "Follows the modifier you hold, and stays there when you let go "
+                "so you can edit it. Shift = the UF1 SHIFT key.");
+            ImGui_Spacing(ctx);
+        }
 
         // ---- Dynamic bank (per bank) --------------------------------
         // Flag the whole bank as computed-from-context. Any non-Off kind
@@ -6303,10 +6340,54 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             ImGui_Spacing(ctx);
 
             if (curKind != DynamicBankKind::None) {
+                // ⇨ ◄ ► LONG-PRESS PAGES, NOT "5-8". The 5-8 key is always the
+                // DAW channel group (Frank, settled 2026-08-11 and again
+                // 2026-08-18: "5-8 ist immer die nächsten 5-8 kanäle"); paging
+                // inside a dynamic bank moved to the arrows' long press in the
+                // same breath. This text still described the old arrangement.
                 ImGui_TextDisabled(ctx,
                     "Keys computed live from the focused track (4 at a time). "
-                    "The \"5-8\" key banks through them in groups of 4. The 4 "
-                    "static slots are ignored while this is on.");
+                    "The 4 static slots are ignored while this is on.");
+                {
+                    // Where the paging action actually sits, rather than a
+                    // second setting beside the binding that owns it: a long
+                    // press on ◄ ► out of the factory, and yours to move.
+                    int layer = 0; bool lp = false;
+                    uf8::bindings::ButtonId bid = uf8::bindings::ButtonId::None;
+                    uf8::bindings::Modifier md = uf8::bindings::Modifier::Plain;
+                    std::string where;
+                    char line[200];
+                    if (uf8::bindings::findFirstBoundTo("uf1_dyn_bank_page",
+                            &layer, &bid, &md, &lp, &where)) {
+                        const char* nm = (bid == uf8::bindings::ButtonId::None)
+                            ? where.c_str() : uf8::bindings::toName(bid);
+                        snprintf(line, sizeof(line), "Pages with: %s%s",
+                                 (nm && *nm) ? nm : "?",
+                                 lp ? " (long press)" : "");
+                    } else {
+                        snprintf(line, sizeof(line),
+                                 "Pages with: nothing is bound to "
+                                 "\"UF1: Dynamic Bank Page\" right now.");
+                    }
+                    ImGui_TextDisabled(ctx, line);
+                    ImGui_TextDisabled(ctx,
+                        "Factory: a LONG press on the UF1 \xE2\x97\x82 \xE2\x96\xB8 keys. "
+                        "Rebind it like any other action; \"5-8\" stays the DAW "
+                        "channel group.");
+                }
+                ImGui_Spacing(ctx);
+                if (curKind == DynamicBankKind::FxBank) {
+                    drawFxBankGestures_(ctx);
+                    ImGui_Spacing(ctx);
+                }
+                if (curKind == DynamicBankKind::Favourites) {
+                    ImGui_TextDisabled(ctx,
+                        "The 8 favourites of whichever class you last worked "
+                        "on: CS or BC, decided live, in that class's colour. "
+                        "Push switches; carry-or-recall is the per-class "
+                        "setting in Favourites.");
+                    ImGui_Spacing(ctx);
+                }
                 if (curKind == DynamicBankKind::TrackColours) {
                     ImGui_Spacing(ctx);
                     ImGui_TextDisabled(ctx,

@@ -984,7 +984,9 @@ A dynamic Sub-Bank announces itself in three places, so you never edit slots tha
 
 Layer 1's Q1 and Q2 are driven by the plug-in and carry no user slots, so they cannot be made dynamic. Everything else can: Layer 1 Q3, and all three Quicks on Layers 2 and 3.
 
-Dynamic banks are a UF8 feature and are inactive while UF8 Plug-in Mode is engaged.
+The UF1's ten soft-key banks take the same setting, in **Settings → Bindings → UF1**. There a whole bank is dynamic rather than a Sub-Bank, its four keys show four items at a time, and a **long press** on the UF1's `◄ ►` keys pages through them. (`5-8` is always the DAW channel group, never the bank.) The FX-key gestures are global, so the five you set on either surface drive both.
+
+While a bank is dynamic it has no Shift set: the modifiers run those FX-key gestures instead, so the modifier picker disappears from the editor. On the UF8, dynamic banks are inactive while UF8 Plug-in Mode is engaged.
 
 **Track colours and Parameter Groups apply to every selected track,** not just the focused one, so you can colour or group a whole selection with one press. The FX bank always acts on the focused track alone.
 
