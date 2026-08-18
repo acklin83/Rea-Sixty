@@ -26285,8 +26285,13 @@ void uf1PaintChannel_()
     // Change-detected; forced on `changed` like every other zone here.
     {
         static std::string sChSoft;
+        // Layer-aware, like this key's dispatch and its LED already are. It read
+        // layer 0 outright, so renaming the SOFT key on Layer 2 changed what it
+        // fired and what its LED did, while the channel display kept showing
+        // Layer 1's name.
         const auto bdSoft = uf8::bindings::getBinding(
-            0, uf8::bindings::ButtonId::Uf1ChannelSoftKey);
+            uf8::bindings::getActiveLayer(),
+            uf8::bindings::ButtonId::Uf1ChannelSoftKey);
         // The user types this label in Settings, so it is arbitrary UTF-8; fold it
         // like every other UF1 text zone.
         const std::string lbl = utf8ToLatin1(bdSoft.label);

@@ -836,6 +836,28 @@ bool                    s_bindingCtxOpenRequested = false;
 //
 // The clipboard carries ONE modifier set, matching the presets: you see the
 // Shift set, you copy the Shift set.
+// Which modifier LAYER the soft-key editors are showing. A bank has four of
+// them: Plain, Shift, Cmd, Ctrl. Picking one here points the eight (or four)
+// scribble previews AND the slot editor at that layer, which is how the surface
+// itself behaves when you hold the modifier.
+//
+// It belongs to the BANK, not to a key: you are looking at bank 1 and you switch
+// it to its Shift layer, exactly as holding Shift on the hardware does (Frank
+// 2026-08-18: "Ich bin auf Soft-Key Bank fucking 1 und sehe die Labels ohne
+// modifier. Dann drück ich shift und sehe Soft-Key Bank 1 mit Shift"). An
+// earlier cut put four radio buttons on every individual key; that was the same
+// data seen through the wrong lens.
+static int g_slotEditModIdx = 0;
+// NOT called "layer" anywhere the user can see it — that word already means
+// the surface layers 1-3 (Frank 2026-08-18). These are modifiers.
+static const char* const kModifierName_[2] = { "Plain", "Shift" };
+
+bool ctxIsSoftKey_(uf8::bindings::ButtonId id)
+{
+    using namespace uf8::bindings;
+    return (id >= ButtonId::TopSoftKey1 && id <= ButtonId::TopSoftKey8)
+        || (id >= ButtonId::Uf1DisplaySoft1 && id <= ButtonId::Uf1DisplaySoft4);
+}
 uf8::bindings::Binding ctxReadBinding_(int layer, uf8::bindings::ButtonId id,
                                        int quick, int subBank)
 {
@@ -880,6 +902,16 @@ void renderBindingContextMenu_(ImGui_Context* ctx, int layer,
     if (ImGui_MenuItem(ctx, "Copy binding",  nullptr, nullptr, nullptr)) {
         s_bindingClipboard = ctxReadBinding_(
             layer, s_bindingCtxBtn, quick, subBank);
+        // Soft-keys hold two independent sets. Reduce the clipboard to the set
+        // on screen, so pasting cannot silently destroy the other one.
+        if (ctxIsSoftKey_(s_bindingCtxBtn) && g_slotEditModIdx != 0) {
+            auto set = s_bindingClipboard.shortPress[g_slotEditModIdx];
+            uf8::bindings::Binding one;
+            one.shortPress[0] = set;
+            one.label         = set.label;
+            one.behavior      = s_bindingClipboard.behavior;
+            s_bindingClipboard = one;
+        }
         s_bindingClipboardFull = true;
     }
     bool pasteEnabled = s_bindingClipboardFull
@@ -887,8 +919,22 @@ void renderBindingContextMenu_(ImGui_Context* ctx, int layer,
     if (ImGui_MenuItem(ctx, "Paste binding", nullptr, nullptr,
                        &pasteEnabled))
     {
-        ctxWriteBinding_(
-            layer, s_bindingCtxBtn, quick, subBank, s_bindingClipboard);
+        if (ctxIsSoftKey_(s_bindingCtxBtn)) {
+            // Merge into the destination's set, leaving the other one alone.
+            auto dst = ctxReadBinding_(layer, s_bindingCtxBtn, quick, subBank);
+            dst.shortPress[g_slotEditModIdx] = s_bindingClipboard.shortPress[0];
+            if (g_slotEditModIdx == 0) {
+                dst.label          = s_bindingClipboard.label;
+                dst.labelIsUserSet = s_bindingClipboard.labelIsUserSet;
+                dst.behavior       = s_bindingClipboard.behavior;
+            } else if (dst.shortPress[g_slotEditModIdx].label.empty()) {
+                dst.shortPress[g_slotEditModIdx].label = s_bindingClipboard.label;
+            }
+            ctxWriteBinding_(layer, s_bindingCtxBtn, quick, subBank, dst);
+        } else {
+            ctxWriteBinding_(
+                layer, s_bindingCtxBtn, quick, subBank, s_bindingClipboard);
+        }
     }
 
     ImGui_Separator(ctx);
@@ -990,21 +1036,6 @@ static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
     }
 }
 
-// Which modifier LAYER the soft-key editors are showing. A bank has four of
-// them: Plain, Shift, Cmd, Ctrl. Picking one here points the eight (or four)
-// scribble previews AND the slot editor at that layer, which is how the surface
-// itself behaves when you hold the modifier.
-//
-// It belongs to the BANK, not to a key: you are looking at bank 1 and you switch
-// it to its Shift layer, exactly as holding Shift on the hardware does (Frank
-// 2026-08-18: "Ich bin auf Soft-Key Bank fucking 1 und sehe die Labels ohne
-// modifier. Dann drück ich shift und sehe Soft-Key Bank 1 mit Shift"). An
-// earlier cut put four radio buttons on every individual key; that was the same
-// data seen through the wrong lens.
-static int g_slotEditModIdx = 0;
-// NOT called "layer" anywhere the user can see it — that word already means
-// the surface layers 1-3 (Frank 2026-08-18). These are modifiers.
-static const char* const kModifierName_[2] = { "Plain", "Shift" };
 
 // Regular bindable button — one the user assigns actions to via the
 // per-button binding editor (the getBinding path). Excludes Top-Soft-Keys
@@ -4659,18 +4690,26 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
 
     bool dirty = false;
     char labelBuf[64] = {0};
-    std::strncpy(labelBuf, bd.label.c_str(), sizeof(labelBuf) - 1);
+    std::strncpy(labelBuf,
+                 (g_slotEditModIdx == 0)
+                     ? bd.label.c_str()
+                     : bd.shortPress[g_slotEditModIdx].label.c_str(),
+                 sizeof(labelBuf) - 1);
     double w = 240;
     ImGui_PushItemWidth(ctx, w);
     if (ImGui_InputTextWithHint(ctx, "Label##uqslotlabel_inl",
                                 "shown on the top-soft-key LCD",
                                 labelBuf, sizeof(labelBuf),
                                 nullptr, nullptr)) {
-        bd.label = labelBuf;
-        // These slots have no auto-label pass of their own, but the flag has to
-        // be honest anyway: the async action browser reads it, and a name typed
-        // here is a name the user chose.
-        bd.labelIsUserSet = !bd.label.empty();
+        // Same rule as the UF1 editor: the name belongs to the set on screen.
+        if (g_slotEditModIdx == 0) {
+            bd.label = labelBuf;
+            // The flag has to be honest: the async action browser reads it, and
+            // a name typed here is a name the user chose.
+            bd.labelIsUserSet = !bd.label.empty();
+        } else {
+            bd.shortPress[g_slotEditModIdx].label = labelBuf;
+        }
         dirty = true;
     }
     ImGui_PopItemWidth(ctx);
@@ -4849,16 +4888,30 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
 
     bool dirty = false;
     char labelBuf[64] = {0};
-    std::strncpy(labelBuf, bd.label.c_str(), sizeof(labelBuf) - 1);
+    std::strncpy(labelBuf,
+                 (g_slotEditModIdx == 0)
+                     ? bd.label.c_str()
+                     : bd.shortPress[g_slotEditModIdx].label.c_str(),
+                 sizeof(labelBuf) - 1);
     ImGui_PushItemWidth(ctx, 240);
     if (ImGui_InputTextWithHint(ctx, "Label##uf1sblabel",
                                 "shown on the UF1 screen soft-key",
                                 labelBuf, sizeof(labelBuf), nullptr, nullptr)) {
-        bd.label = labelBuf;
-        bd.labelIsUserSet = !bd.label.empty();
-        if (!bd.labelIsUserSet)
-            bd.label = autoLabelForAction_(
-                bd.shortPress[static_cast<int>(Modifier::Plain)]);
+        // ⇨ THE NAME BELONGS TO THE SET YOU ARE EDITING.
+        // Binding::label is the key's Plain name; a modifier set carries its own
+        // in ActionSlot::label, which is what the surface reads for it. Writing
+        // Binding::label from the Shift set meant the Shift set could not be
+        // named at all — it showed a raw action id, or on the UF1 nothing
+        // (Frank 2026-08-18).
+        if (g_slotEditModIdx == 0) {
+            bd.label = labelBuf;
+            bd.labelIsUserSet = !bd.label.empty();
+            if (!bd.labelIsUserSet)
+                bd.label = autoLabelForAction_(
+                    bd.shortPress[static_cast<int>(Modifier::Plain)]);
+        } else {
+            bd.shortPress[g_slotEditModIdx].label = labelBuf;
+        }
         dirty = true;
     }
     ImGui_PopItemWidth(ctx);

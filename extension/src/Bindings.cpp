@@ -1046,6 +1046,15 @@ bool stepIsEmpty_(const ActionStep& st)
 
 bool slotIsEmpty_(const ActionSlot& s)
 {
+    // ⇨ A LABEL OR AN LED OVERRIDE IS CONTENT. It used to check the ACTION only,
+    // and serializeMatrixRow_ drops every "empty" slot, so a slot that carried a
+    // name and no action was written as nothing and came back blank after a
+    // restart. That is exactly what a soft-key modifier set can be: the Shift set
+    // of a label-only bank, and the labels recallBankPreset now carries into it
+    // (Frank 2026-08-18, "LABELS ERSCHEINEN NICHT"). The fix would have undone
+    // itself on the next start.
+    if (!s.label.empty())                                   return false;
+    if (s.led.hasActive || s.led.hasInactive)               return false;
     if (!stepIsEmpty_(s)) return false;
     for (const auto& st : s.extraSteps) {
         if (!stepIsEmpty_(st)) return false;
@@ -2250,7 +2259,11 @@ bool invokeBuiltin(const std::string& name, int param)
 // paging INSIDE a dynamic soft-key bank has its own gesture instead of taking
 // over "5-8" (which is the channel group again). upgradeBackfillUf1ArrowLongPress_
 // fills only an UNTOUCHED long-press slot.
-constexpr int kCurrentBindingsVersion = 25;
+// 26: soft-key modifier SETS. sub_bank_dynamic / uf1_soft_bank_dynamic gained a
+// "mod" key (absent reads as Plain, so old files need no migration step). This
+// sat at 25 by accident for a few hours: the revert of the bank-swap experiment
+// took the bump with it while the schema changes stayed.
+constexpr int kCurrentBindingsVersion = 26;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4761,7 +4774,12 @@ bool dispatchUserQuickSlot(int layer, int quick, int subBank,
         return true;
     }
 
-    int slotMod = static_cast<int>(Modifier::Plain);
+    // ⇨ TOGGLE AND HOLD PICK THE HELD SET TOO.
+    // This used to be filled in only for Momentary, which was harmless while a
+    // soft-key had one set. With sets AND the Behavior combo both exposed, a
+    // Toggle key showed its Shift label and fired its PLAIN action, or nothing
+    // at all when Plain was empty (Frank 2026-08-18).
+    int slotMod = static_cast<int>(bankModifierSnapshot());
     if (bd.behavior == Behavior::Momentary) {
         std::lock_guard<std::mutex> lk(g_pressMx);
         if (pressed) {
@@ -4854,7 +4872,12 @@ bool dispatchUf1SoftBankSlot(int bank, int slot, bool pressed)
         return true;
     }
 
-    int slotMod = static_cast<int>(Modifier::Plain);
+    // ⇨ TOGGLE AND HOLD PICK THE HELD SET TOO.
+    // This used to be filled in only for Momentary, which was harmless while a
+    // soft-key had one set. With sets AND the Behavior combo both exposed, a
+    // Toggle key showed its Shift label and fired its PLAIN action, or nothing
+    // at all when Plain was empty (Frank 2026-08-18).
+    int slotMod = static_cast<int>(bankModifierSnapshot());
     if (bd.behavior == Behavior::Momentary) {
         std::lock_guard<std::mutex> lk(g_pressMx);
         if (pressed) {
