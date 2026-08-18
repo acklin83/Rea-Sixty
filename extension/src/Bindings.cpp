@@ -550,6 +550,10 @@ uint32_t pressKey(int layer, ButtonId id)
 // hands out of the box. The centre in Razor and Items is the HELD content drag
 // and therefore seeds as Behavior::Hold — a Momentary seed would fire once and
 // never let go.
+// ⚠ Labels are EMPTY on purpose. The UF1 prints nothing next to the nav cross,
+// so a label there is data nobody can ever see, and with labelIsUserSet it would
+// additionally stop following the action you bind (Frank 2026-08-18: "wieso sind
+// da labels drin? können wir ja gar nirgends anzeigen").
 // `shiftAction` (nullptr = leave Shift empty) seeds the key's SHIFT slot. The
 // add-to-selection gestures live there rather than inside the plain action, so
 // what Shift does is visible in the editor and rebindable like anything else
@@ -559,35 +563,35 @@ struct NavSeed { ButtonId id; const char* action; const char* label; Behavior be
                  const char* shiftAction; };
 const NavSeed kNavSeed[] = {
         // Playhead / Scrub: the zoom cross, centre zooms to fit.
-        { ButtonId::Uf1NavUpPlayhead,     "zoom_up",     "ZOOM \xE2\x96\xB2", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavDownPlayhead,   "zoom_down",   "ZOOM \xE2\x96\xBC", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavLeftPlayhead,   "zoom_left",   "ZOOM \xE2\x97\x82", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavRightPlayhead,  "zoom_right",  "ZOOM \xE2\x96\xB8", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavCentrePlayhead, "zoom_center", "FIT",            Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavUpScrub,        "zoom_up",     "ZOOM \xE2\x96\xB2", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavDownScrub,      "zoom_down",   "ZOOM \xE2\x96\xBC", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavLeftScrub,      "zoom_left",   "ZOOM \xE2\x97\x82", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavRightScrub,     "zoom_right",  "ZOOM \xE2\x96\xB8", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavCentreScrub,    "zoom_center", "FIT",            Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavUpPlayhead,     "zoom_up", "", Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavDownPlayhead,   "zoom_down", "", Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavLeftPlayhead,   "zoom_left", "", Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavRightPlayhead,  "zoom_right", "", Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavCentrePlayhead, "zoom_center", "",            Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavUpScrub,        "zoom_up", "", Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavDownScrub,      "zoom_down", "", Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavLeftScrub,      "zoom_left", "", Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavRightScrub,     "zoom_right", "", Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavCentreScrub,    "zoom_center", "",            Behavior::Momentary , nullptr },
         // Items: prev/next item, item on the track above/below, centre drags.
-        { ButtonId::Uf1NavLeftItems,      "jog_item_prev",       "ITEM \xE2\x97\x82", Behavior::Momentary , "jog_item_prev_add" },
-        { ButtonId::Uf1NavRightItems,     "jog_item_next",       "ITEM \xE2\x96\xB8", Behavior::Momentary , "jog_item_next_add" },
-        { ButtonId::Uf1NavUpItems,        "jog_item_track_up",   "TRK \xE2\x96\xB2",  Behavior::Momentary , "jog_item_track_up_add" },
-        { ButtonId::Uf1NavDownItems,      "jog_item_track_down", "TRK \xE2\x96\xBC",  Behavior::Momentary , "jog_item_track_down_add" },
-        { ButtonId::Uf1NavCentreItems,    "jog_content_drag",    "DRAG",           Behavior::Hold , nullptr },
+        { ButtonId::Uf1NavLeftItems,      "jog_item_prev", "", Behavior::Momentary , "jog_item_prev_add" },
+        { ButtonId::Uf1NavRightItems,     "jog_item_next", "", Behavior::Momentary , "jog_item_next_add" },
+        { ButtonId::Uf1NavUpItems,        "jog_item_track_up", "",  Behavior::Momentary , "jog_item_track_up_add" },
+        { ButtonId::Uf1NavDownItems,      "jog_item_track_down", "",  Behavior::Momentary , "jog_item_track_down_add" },
+        { ButtonId::Uf1NavCentreItems,    "jog_content_drag", "",           Behavior::Hold , nullptr },
         // Envelope: prev/next point, lane above/below, centre switches what
         // the wheel edits.
-        { ButtonId::Uf1NavLeftEnvelope,   "jog_env_point_prev",   "PT \xE2\x97\x82",   Behavior::Momentary , "jog_env_point_prev_add" },
-        { ButtonId::Uf1NavRightEnvelope,  "jog_env_point_next",   "PT \xE2\x96\xB8",   Behavior::Momentary , "jog_env_point_next_add" },
-        { ButtonId::Uf1NavUpEnvelope,     "jog_env_lane_up",      "LANE \xE2\x96\xB2", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavDownEnvelope,   "jog_env_lane_down",    "LANE \xE2\x96\xBC", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavCentreEnvelope, "jog_env_target_toggle","TARGET",         Behavior::Toggle , nullptr },
+        { ButtonId::Uf1NavLeftEnvelope,   "jog_env_point_prev", "",   Behavior::Momentary , "jog_env_point_prev_add" },
+        { ButtonId::Uf1NavRightEnvelope,  "jog_env_point_next", "",   Behavior::Momentary , "jog_env_point_next_add" },
+        { ButtonId::Uf1NavUpEnvelope,     "jog_env_lane_up", "", Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavDownEnvelope,   "jog_env_lane_down", "", Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavCentreEnvelope, "jog_env_target_toggle", "",         Behavior::Toggle , nullptr },
         // Razor: the four edges, centre takes the whole area and drags it.
-        { ButtonId::Uf1NavLeftRazor,      "jog_razor_left",   "EDGE \xE2\x97\x82", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavRightRazor,     "jog_razor_right",  "EDGE \xE2\x96\xB8", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavUpRazor,        "jog_razor_top",    "EDGE \xE2\x96\xB2", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavDownRazor,      "jog_razor_bottom", "EDGE \xE2\x96\xBC", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavCentreRazor,    "jog_content_drag", "DRAG",           Behavior::Hold , nullptr },
+        { ButtonId::Uf1NavLeftRazor,      "jog_razor_left", "", Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavRightRazor,     "jog_razor_right", "", Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavUpRazor,        "jog_razor_top", "", Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavDownRazor,      "jog_razor_bottom", "", Behavior::Momentary , nullptr },
+        { ButtonId::Uf1NavCentreRazor,    "jog_content_drag", "",           Behavior::Hold , nullptr },
     };
 
 // ---- Factory defaults -----------------------------------------------------
@@ -5444,7 +5448,15 @@ const char* builtinCategory(const std::string& n)
     if (n.rfind("encoder_", 0) == 0 || n.rfind("uf1_encoder_", 0) == 0)
         return "Encoder Modes";
 
-    if (n.rfind("jog_mode_", 0) == 0 || n.rfind("jog_nav_", 0) == 0)
+    // ⇨ jog_nav_* IS HIDDEN, NOT GONE.
+    // The five collective nav builtins are what the cross fired before it became
+    // bindable per mode. Their meaning depends on the active mode, which is
+    // exactly the thing the Jog Actions replaced, so offering them in the picker
+    // only invites the question "what does this one do?" (Frank 2026-08-18).
+    // Still registered, because configs written before today point at them and a
+    // dangling name would dispatch to nothing.
+    if (n.rfind("jog_nav_", 0) == 0) return "";
+    if (n.rfind("jog_mode_", 0) == 0)
         return "Jog Modes";
 
     // What the modes DO, as opposed to which mode is engaged. Kept apart from

@@ -4107,40 +4107,6 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     ImGui_PushID(ctx, uf8::bindings::toName(id));
     const int themePushed = pushBindingsTheme(ctx);
 
-    // ⇨ NAV CROSS: WHICH JOG MODE AM I EDITING?
-    // The tile carries a per-mode id, so the picker below reads the mode out of
-    // it and offers the others. Same rule as the Sub-Bank tiles: it follows the
-    // surface, and switching here switches the surface (Frank 2026-08-18). The
-    // visibility ticks are the SAME setting the jog wheel's own page shows —
-    // one store, two places to reach it — because a mode the picker skips can
-    // never be reached on the device, which would make its cross unreachable
-    // too. A ticked-off mode is offered for ticking back on, not for editing.
-    if (uf8::bindings::ButtonId navBase; uf8::bindings::splitPerModeNavId(
-            id, &navBase, nullptr)) {
-        const int live = reasixty_uf1JogMode();
-        const int jn   = reasixty_uf1JogModeCount();
-        ImGui_Text(ctx, "Jog Mode");
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        ImGui_SetNextItemWidth(ctx, 160.0);
-        if (ImGui_BeginCombo(ctx, "##navjogmode",
-                             reasixty_uf1JogModeName(live), nullptr)) {
-            for (int m = 0; m < jn; ++m) {
-                const bool vis = reasixty_uf1JogModeVisible(m);
-                char cid[32]; snprintf(cid, sizeof(cid), "##navjmv%d", m);
-                bool v = vis;
-                if (ImGui_Checkbox(ctx, cid, &v))
-                    reasixty_setUf1JogModeVisible(m, v);
-                ImGui_SameLine(ctx, nullptr, nullptr);
-                bool sel = (m == live);
-                if (ImGui_Selectable(ctx, reasixty_uf1JogModeName(m), &sel,
-                                     nullptr, nullptr, nullptr)
-                    && vis)
-                    reasixty_setUf1JogMode(m);
-            }
-            ImGui_EndCombo(ctx);
-        }
-        ImGui_Spacing(ctx);
-    }
 
     // JOG WHEEL: rotate-only, mode-driven → NO action binding. Show ONLY the Jog
     // Mode settings (no action picker / LED block). Keyboard-enterable (InputDouble).
@@ -6300,6 +6266,41 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 "so you can edit it. Shift = the FINE key.");
             ImGui_Spacing(ctx);
         }
+        ImGui_Separator(ctx);
+        ImGui_Spacing(ctx);
+    }
+
+    // ⇨ ONE JOG-MODE PICKER FOR THE WHOLE UF1 PAGE.
+    // It governs both views that are per-mode — the nav cross's bindings and the
+    // jog wheel's feel — instead of one picker hiding inside each editor
+    // (Frank 2026-08-18). Follows the surface and switches it, the same contract
+    // the Quick / Sub-Bank row above has. The ticks are the SAME setting the jog
+    // wheel's page shows: a mode its picker skips cannot be reached on the
+    // device, so its cross bindings would be stranded with no sign of why. A
+    // ticked-off mode can be ticked back on, not selected.
+    if (s_deviceTab == 2) {
+        const int live = reasixty_uf1JogMode();
+        const int jn   = reasixty_uf1JogModeCount();
+        ImGui_Text(ctx, "Jog Mode:");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_SetNextItemWidth(ctx, 170.0);
+        if (ImGui_BeginCombo(ctx, "##uf1jogmode",
+                             reasixty_uf1JogModeName(live), nullptr)) {
+            for (int m = 0; m < jn; ++m) {
+                const bool vis = reasixty_uf1JogModeVisible(m);
+                char cid[32]; snprintf(cid, sizeof(cid), "##uf1jmv%d", m);
+                bool v = vis;
+                if (ImGui_Checkbox(ctx, cid, &v))
+                    reasixty_setUf1JogModeVisible(m, v);
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                bool sel = (m == live);
+                if (ImGui_Selectable(ctx, reasixty_uf1JogModeName(m), &sel,
+                                     nullptr, nullptr, nullptr) && vis)
+                    reasixty_setUf1JogMode(m);
+            }
+            ImGui_EndCombo(ctx);
+        }
+        ImGui_Spacing(ctx);
         ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
     }
