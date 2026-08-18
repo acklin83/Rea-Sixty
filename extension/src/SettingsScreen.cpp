@@ -4985,8 +4985,6 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                 lsp.led = uf8::bindings::LedOverride{};
                 dirty = true;
             }
-            ImGui_TextDisabled(ctx,
-                "This set paints its own colour. Follow the key to hand it back.");
         }
     }
 
@@ -5232,8 +5230,6 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
                 lsp.led = uf8::bindings::LedOverride{};
                 dirty = true;
             }
-            ImGui_TextDisabled(ctx,
-                "This set paints its own colour. Follow the key to hand it back.");
         }
     }
 
@@ -5412,9 +5408,6 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         ImGui_TextDisabled(ctx,
             "Compute this Sub-Bank's 8 keys live from the focused track "
             "instead of fixed slots. The slots below are ignored while on.");
-        ImGui_TextDisabled(ctx,
-            "Applies to both modifier sets: on a dynamic bank the modifiers "
-            "run the FX-key gestures instead of showing a second set.");
         ImGui_Spacing(ctx);
 
         struct DynOpt { DynamicBankKind kind; const char* label; };
@@ -5481,14 +5474,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         }
 
         if (curKind == DynamicBankKind::Favourites) {
-            ImGui_TextDisabled(ctx,
-                "The 8 favourites of whichever class you last worked on: CS or "
-                "BC, decided live, in that class's colour. Push switches; "
-                "whether it carries the current settings or recalls the "
-                "favourite's own is the per-class setting in Favourites.");
-            ImGui_TextDisabled(ctx,
-                "A track without a strip gets one inserted at the end of its "
-                "FX chain.");
+            ImGui_TextDisabled(ctx, "CS or BC, whichever you last touched.");
             ImGui_Spacing(ctx);
         }
 
@@ -5895,11 +5881,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                                   "Load factory set?###fac_loadset_confirm",
                                   nullptr, nullptr)) {
             ImGui_TextWrapped(ctx,
-                "Load the full Rea-Sixty factory set into Layer 1 / "
-                "Quick 3? This overwrites all 48 slots in that Quick's "
-                "V-POT + Soft 1-5 sub-banks, on the modifier set selected "
-                "above. Other layers/quicks and the other set are "
-                "untouched.");
+                "Overwrite all 48 slots of Layer 1 / Quick 3 on the "
+                "selected modifier set?");
             ImGui_Spacing(ctx);
             if (ImGui_Button(ctx, "Load set##fac_loadset_ok",
                              nullptr, nullptr)) {
@@ -5929,11 +5912,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     ImGui_TextDisabled(ctx,
         "Active = this Sub-Bank is the selected one. Inactive = "
         "another Sub-Bank is selected in this Quick.");
-    if (g_slotEditModIdx != 0) {
-        ImGui_TextDisabled(ctx,
-            "Editing the Shift set. It wears Plain's colours until you change "
-            "one here.");
-    }
+    if (g_slotEditModIdx != 0)
+        ImGui_TextDisabled(ctx, "Shift set. Inherits Plain until changed.");
     ImGui_Spacing(ctx);
 
     SubBankLed app = getSubBankLed(editLayer, engagedQ, sbIdx,
@@ -6318,10 +6298,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 if (o.kind == curKind) curLabel = o.label;
 
             ImGui_Text(ctx, "Dynamic bank");
-            ImGui_TextDisabled(ctx,
-                "Applies to both modifier sets: on a dynamic bank the "
-                "modifiers run the FX-key gestures instead of showing a "
-                "second set.");
             ImGui_SetNextItemWidth(ctx, 260.0);
             if (ImGui_BeginCombo(ctx, "##uf1dynbank", curLabel,
                                  /*flags*/ nullptr)) {
@@ -6370,10 +6346,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                                  "\"UF1: Dynamic Bank Page\" right now.");
                     }
                     ImGui_TextDisabled(ctx, line);
-                    ImGui_TextDisabled(ctx,
-                        "Factory: a LONG press on the UF1 \xE2\x97\x82 \xE2\x96\xB8 keys. "
-                        "Rebind it like any other action; \"5-8\" stays the DAW "
-                        "channel group.");
                 }
                 ImGui_Spacing(ctx);
                 if (curKind == DynamicBankKind::FxBank) {
@@ -6382,10 +6354,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 }
                 if (curKind == DynamicBankKind::Favourites) {
                     ImGui_TextDisabled(ctx,
-                        "The 8 favourites of whichever class you last worked "
-                        "on: CS or BC, decided live, in that class's colour. "
-                        "Push switches; carry-or-recall is the per-class "
-                        "setting in Favourites.");
+                        "CS or BC, whichever you last touched.");
                     ImGui_Spacing(ctx);
                 }
                 if (curKind == DynamicBankKind::TrackColours) {
