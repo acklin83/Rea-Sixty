@@ -596,8 +596,18 @@ sidechains usually want.
 
 `OFF` `READ` `WRT` `TRIM` `LTCH` `TCH` and `SHIFT` along the bottom, with the
 primary transport (`◄◄` `►►` `■` `►` `●`) below. `SHIFT` is the UF1's Shift
-modifier. The primary transport ships bound to REAPER's own transport actions and
-can be rebound; the secondary row ships **unbound** and is yours.
+modifier, and the primary transport ships bound to REAPER's own transport actions.
+
+The six silk labels are not decoration: **hold `SHIFT` and each of those keys sets
+the focused track's automation mode**, in the order the silk reads. That is the
+factory default and it is why the UF1 needs no separate AUTO mode. The key lights
+for the mode the track is in.
+
+Their **plain** presses are mostly yours. Two are spoken for, because the device
+prints its own caption over them: key `1` clears every solo (the `SOLO CLR`
+caption above it, and its `SOLO ACTIVE` lamp lights on its own), and key `2`
+toggles Fine (the `FINE CTRL 2` caption). `CYCLE` and `CLICK` carry repeat and
+metronome. Everything here is rebindable.
 
 ## Extender — the UF1 as a 9th fader
 
