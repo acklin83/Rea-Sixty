@@ -2770,55 +2770,6 @@ static void refreshAutoLabel_(uf8::bindings::Binding& bd,
     bd.label = autoLabelForAction_(sp);
 }
 
-// Which modifier slot the soft-key slot editors are pointing at. Shared by the
-// UF8 user-Quick slot editor and the UF1 bank slot editor so switching surfaces
-// does not silently move you back to Plain. Session state, not persisted.
-static int g_slotEditModIdx = 0;
-
-// The Plain / +Shift / +Cmd / +Ctrl selector both slot editors put above the
-// action fields. Returns true when the selection changed.
-//
-// Worth knowing when reading this: only Shift is reachable out of the box. The
-// UF1's SHIFT key and the UF8's FINE key carry mod_shift from the factory;
-// mod_cmd and mod_ctrl exist as builtins but no key is seeded with them, so
-// they need either a key of their own or the host-keyboard switches under
-// Settings, Behaviour, Keyboard.
-static bool drawSlotModifierRow_(ImGui_Context* ctx, const char* tag,
-                                 int* modIdx, const uf8::bindings::Binding& bd)
-{
-    using namespace uf8::bindings;
-    static const char* kModNames[kModifierCount] =
-        { "Plain", "+Shift", "+Cmd", "+Ctrl" };
-    // Stay out of the way until they are actually in use. Most keys only ever
-    // want Plain, and four radio rows on every slot editor was the price of a
-    // feature almost nobody reaches for (Frank 2026-08-18).
-    bool inUse = (*modIdx != 0);
-    for (int m = 1; m < kModifierCount && !inUse; ++m) {
-        const auto& s = bd.shortPress[m];
-        inUse = (s.type != ActionType::Noop || !s.action.empty());
-    }
-    if (!inUse) {
-        char btn[64];
-        snprintf(btn, sizeof(btn), "+ Modifier##%s_modshow", tag);
-        if (!ImGui_SmallButton(ctx, btn)) return false;
-        *modIdx = 1;                       // open on +Shift, the reachable one
-        return true;
-    }
-    bool changed = false;
-    for (int m = 0; m < kModifierCount; ++m) {
-        char idbuf[64];
-        snprintf(idbuf, sizeof(idbuf), "%s##%s_mod%d", kModNames[m], tag, m);
-        if (ImGui_RadioButton(ctx, idbuf, *modIdx == m)) {
-            *modIdx = m;
-            changed = true;
-        }
-        if (m < kModifierCount - 1) ImGui_SameLine(ctx, nullptr, nullptr);
-    }
-    ImGui_TextDisabled(ctx,
-        "Shift = UF1 SHIFT / UF8 FINE. Cmd and Ctrl need their own key.");
-    return changed;
-}
-
 // Behaviour wording, shared by the per-button editor and the UF1 soft-key bank
 // slot editor so the two cannot drift. Order IS the Behavior enum.
 static const char* const kBehaviorLabels_[3] = {
@@ -4527,8 +4478,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     const char* sbName = sbLabels[sbIdx];
 
     Binding bd = getUserQuickSlot(editLayer, qIdx, sbIdx, slotIdx);
-    const int modIdx = g_slotEditModIdx;
-    auto& sp = bd.shortPress[modIdx];
+    auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
 
     // Full breadcrumb. Frank 2026-05-13: "selbstverständlich" that the
     // header carries every coordinate that defines what this slot is.
@@ -4560,8 +4510,8 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                 "fires. Its assignment is kept for when you switch back.");
             if (dynKind == DynamicBankKind::FxBank) {
                 ImGui_TextDisabled(ctx,
-                    "Shift / Cmd / Ctrl / long-press run the FX-key gestures "
-                    "instead. They are set on the Sub-Bank cell.");
+                    "Shift / Cmd / Ctrl / long-press run the FX-key gestures. "
+                    "They are set on the Sub-Bank cell.");
             }
             ImGui_Spacing(ctx);
             ImGui_SetNextItemWidth(ctx, 260.0);
@@ -4633,13 +4583,6 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
         ImGui_PopItemWidth(ctx);
     }
 
-    // Modifier slot — same story: dispatchUserQuickSlot snapshots the held
-    // modifier at press time and indexes shortPress with it, but only Plain was
-    // ever fillable here.
-    ImGui_Spacing(ctx);
-    drawSlotModifierRow_(ctx, idtag, &g_slotEditModIdx, bd);
-    ImGui_Spacing(ctx);
-
     // Slot's action picker. f.label = nullptr — the slot has only ONE
     // label (the binding's bd.label above), Frank's request 2026-05-13:
     // "für was Label UND display label? Label reicht."
@@ -4654,7 +4597,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     if (drawActionPicker(ctx, idtag, ref,
                          /*layer*/ -1, ButtonId::None,
                          /*isLongPress*/ false,
-                         modIdx, /*stepIdx*/ 0,
+                         /*modIdx*/ 0, /*stepIdx*/ 0,
                          /*uqLayer*/ editLayer, /*uqQuick*/ qIdx,
                          /*uqSubBank*/ sbIdx, /*uqSlot*/ slotIdx)) {
         dirty = true;
@@ -4668,7 +4611,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
         dirty = true;
     }
     ImGui_TextDisabled(ctx,
-        "Clears the label, behaviour, LED and all four modifier slots.");
+        "Clears the label, behaviour, LED and the assigned action.");
 
     // LED appearance for this slot. Same Active / Inactive split the
     // regular binding editor exposes, scoped to this user-Quick slot.
@@ -4753,6 +4696,47 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     ImGui_PopID(ctx);   // "uqslot_inline"
 }
 
+// The UF1's three bank modifiers. Global (the UF1 has no Quick concept), so
+// unlike the UF8 version this does not depend on which bank is open. Drawn on
+// both branches of the bank editor, because it is true of the bank either way.
+void drawUf1BankModifierRow_(ImGui_Context* ctx)
+{
+    using namespace uf8::bindings;
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Bank modifiers");
+    ImGui_TextDisabled(ctx,
+        "Hold to swap all four keys to another bank. Global, not per bank.");
+    ImGui_Spacing(ctx);
+    static const char* kModName[kBankModifierCount] = { "Shift", "Cmd", "Ctrl" };
+    for (int m = 0; m < kBankModifierCount; ++m) {
+        const int cur = getUf1BankModifier(m);
+        char label[24];
+        if (cur >= 0) snprintf(label, sizeof(label), "Bank %d", cur + 1);
+        else          snprintf(label, sizeof(label), "(off)");
+        char id[40];
+        snprintf(id, sizeof(id), "%s##uf1bankmod_%d", kModName[m], m);
+        ImGui_SetNextItemWidth(ctx, 140.0);
+        if (ImGui_BeginCombo(ctx, id, label, /*flags*/ nullptr)) {
+            bool selOff = (cur < 0);
+            if (ImGui_Selectable(ctx, "(off)", &selOff, nullptr, nullptr, nullptr))
+                setUf1BankModifier(m, -1);
+            for (int b = 0; b < kUf1SoftBankCount; ++b) {
+                bool sel = (cur == b);
+                char bid[40];
+                snprintf(bid, sizeof(bid), "Bank %d##uf1bm_%d_%d", b + 1, m, b);
+                if (ImGui_Selectable(ctx, bid, &sel, nullptr, nullptr, nullptr))
+                    setUf1BankModifier(m, b);
+            }
+            ImGui_EndCombo(ctx);
+        }
+    }
+    ImGui_TextDisabled(ctx,
+        "Shift = the UF1 SHIFT key. Cmd and Ctrl need their own key.");
+    ImGui_Spacing(ctx);
+}
+
 // UF1 soft-key bank slot editor — assign a label + action to one of the 4
 // display soft-keys within the selected bank (10 banks, DAW mode). Reuses
 // drawActionPicker via the slot's Plain short-press ref; built-ins, typed
@@ -4772,8 +4756,7 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
     // Shift slot look like an action change and rewrite an auto label.
     const std::string labelActionBefore =
         actionIdentity_(bd.shortPress[static_cast<int>(Modifier::Plain)]);
-    const int modIdx = g_slotEditModIdx;
-    auto& sp = bd.shortPress[modIdx];
+    auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
 
     char hdr[120];
     snprintf(hdr, sizeof(hdr), "Editing: Soft-Key %d  (Bank %d / %d)",
@@ -4826,13 +4809,6 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
         ImGui_PopItemWidth(ctx);
     }
 
-    // Modifier slot. dispatchUf1SoftBankSlot already snapshots the held
-    // modifier at press time and indexes shortPress with it; the editor just
-    // never let you fill anything but Plain (forum 3.5, second half).
-    ImGui_Spacing(ctx);
-    drawSlotModifierRow_(ctx, idtag, &g_slotEditModIdx, bd);
-    ImGui_Spacing(ctx);
-
     ActionFieldsRef ref{
         &sp.type, &sp.action, &sp.param,
         /*label*/ nullptr,
@@ -4843,7 +4819,7 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
     };
     if (drawActionPicker(ctx, idtag, ref,
                          /*layer*/ -1, ButtonId::None,
-                         /*isLongPress*/ false, modIdx, /*stepIdx*/ 0,
+                         /*isLongPress*/ false, /*modIdx*/ 0, /*stepIdx*/ 0,
                          /*uqLayer*/ -1, /*uqQuick*/ -1,
                          /*uqSubBank*/ -1, /*uqSlot*/ -1,
                          /*uf1Bank*/ bank, /*uf1Slot*/ slotIdx)) {
@@ -4856,7 +4832,7 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
         dirty = true;
     }
     ImGui_TextDisabled(ctx,
-        "Clears the label, behaviour, LED and all four modifier slots.");
+        "Clears the label, behaviour, LED and the assigned action.");
 
     // LED — Active / Inactive colour + brightness, exactly like the UF8
     // soft-key slots. The DAW-mode soft-key painter reads these back to
@@ -5661,6 +5637,53 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     drawRow("Inactive", app.inactiveColor, app.inactiveBrightness, tagI);
 
     if (dirty) setSubBankLed(editLayer, engagedQ, sbIdx, app);
+
+    // ---- Bank modifiers (per Quick, not per Sub-Bank) ---------------------
+    // Holding one of these swaps the whole soft-key row to another Sub-Bank for
+    // as long as it is down. It belongs to the Quick, so it reads the same on
+    // whichever of the six cells you opened; the heading says so.
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Bank modifiers");
+    ImGui_TextDisabled(ctx,
+        "Hold to swap the whole row to another Sub-Bank. Applies to the "
+        "Quick, not to this one cell.");
+    ImGui_Spacing(ctx);
+    {
+        static const char* kModName[kBankModifierCount] =
+            { "Shift", "Cmd", "Ctrl" };
+        static const char* kSbName[kSubBanksPerQuick] =
+            { "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5" };
+        for (int m = 0; m < kBankModifierCount; ++m) {
+            const int cur = getBankModifier(editLayer, engagedQ, m);
+            const char* label = (cur >= 0 && cur < kSubBanksPerQuick)
+                                  ? kSbName[cur] : "(off)";
+            char id[48];
+            snprintf(id, sizeof(id), "%s##bankmod_%d_%d_%d",
+                          kModName[m], editLayer, engagedQ, m);
+            ImGui_SetNextItemWidth(ctx, 140.0);
+            if (ImGui_BeginCombo(ctx, id, label, /*flags*/ nullptr)) {
+                bool selOff = (cur < 0);
+                if (ImGui_Selectable(ctx, "(off)", &selOff,
+                                     nullptr, nullptr, nullptr))
+                    setBankModifier(editLayer, engagedQ, m, -1);
+                for (int b = 0; b < kSubBanksPerQuick; ++b) {
+                    bool sel = (cur == b);
+                    char sbid[40];
+                    snprintf(sbid, sizeof(sbid), "%s##bm_%d_%d_%d_%d",
+                                  kSbName[b], editLayer, engagedQ, m, b);
+                    if (ImGui_Selectable(ctx, sbid, &sel,
+                                         nullptr, nullptr, nullptr))
+                        setBankModifier(editLayer, engagedQ, m, b);
+                }
+                ImGui_EndCombo(ctx);
+            }
+        }
+        ImGui_TextDisabled(ctx,
+            "Shift = UF8 FINE key. Cmd and Ctrl need their own key, or the "
+            "keyboard switches under Behaviour.");
+    }
 }
 
 } // namespace
@@ -5962,7 +5985,9 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                             "Track-Colors palette (global — 8 keys = these colors):"));
                     drawTrackColourPalette_(ctx);
                 }
+                drawUf1BankModifierRow_(ctx);
             } else {
+                drawUf1BankModifierRow_(ctx);
                 drawUf1SoftBankSlotEditor_(ctx, uf1Bank, slotIdx);
             }
         }

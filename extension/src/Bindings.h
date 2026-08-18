@@ -451,9 +451,22 @@ struct SubBankLed {
     uint8_t     inactiveColor[3]      = {255, 255, 255};
     Brightness  inactiveBrightness    = Brightness::Dim;
 };
+// Which sub-bank a HELD modifier swaps to, per (Layer, Quick). Index 0 = Shift,
+// 1 = Cmd, 2 = Ctrl, matching Modifier minus the Plain entry. -1 = no swap, and
+// that is the default, so an untouched config behaves exactly as before.
+//
+// This is the modifier's ONE meaning on the soft-keys: it moves the whole bank,
+// not one key. Per-key modifier slots existed for a day (834143d) and were
+// pulled again — you cannot have both on the same eight keys, because a Shift
+// that changes the bank can no longer select a key's Shift slot (Frank
+// 2026-08-18: "wär doch viel übersichtlicher gleich die ganze soft-key bank auf
+// modifier zu belegen").
+constexpr int kBankModifierCount = 3;   // Shift, Cmd, Ctrl
+
 struct UserQuick {
     UserQuickSubBank subBanks[kSubBanksPerQuick];     // V-POT, Soft 1..5
     SubBankLed       subBankLeds[kSubBanksPerQuick];  // per-(L,Q) LED override
+    int              modSubBank[kBankModifierCount] = { -1, -1, -1 };
 };
 struct LayerUserQuicks {
     UserQuick quicks[kQuicksPerLayer]; // Q1, Q2, Q3
@@ -496,6 +509,9 @@ struct Config {
     // from the focused track; the 4 static slots above are then ignored.
     // Default None ⇒ classic static behaviour.
     DynamicBankKind uf1SoftBankDynamic[kUf1SoftBankCount] = {};
+    // Same for the UF1's ten banks. Global, not per-Quick: the UF1 has no Quick
+    // concept. -1 = no swap.
+    int uf1SoftBankMod[kBankModifierCount] = { -1, -1, -1 };
 };
 
 // Builtin registry. Phase A registers from main.cpp at REAPER_PLUGIN_ENTRY
@@ -724,6 +740,13 @@ void       setSubBankLed(int layer, int quick, int subBank,
 // Sub-Bank into a computed bank (FX list / sends / groups / colours);
 // its 8 static slots are then ignored. Out-of-range returns None /
 // ignores writes.
+// Bank-modifier map: which sub-bank a held Shift(0) / Cmd(1) / Ctrl(2) swaps to.
+// -1 = no swap. See kBankModifierCount and UserQuick::modSubBank.
+int  getBankModifier(int layer, int quick, int mod);
+void setBankModifier(int layer, int quick, int mod, int subBank);   // <0 clears
+int  getUf1BankModifier(int mod);
+void setUf1BankModifier(int mod, int bank);                         // <0 clears
+
 DynamicBankKind getSubBankDynamic(int layer, int quick, int subBank);
 void            setSubBankDynamic(int layer, int quick, int subBank,
                                   DynamicBankKind kind);

@@ -1460,6 +1460,52 @@ void serializeUf1SoftBankDynamic_(const Config& c, std::ostringstream& os)
     os << "\n  ]";
 }
 
+// Bank-modifier map: which sub-bank a held Shift / Cmd / Ctrl swaps to. Written
+// only when something is set, so an untouched config gains no keys. UF8 is per
+// (layer, quick); the UF1's ten banks are global.
+void serializeBankModifiers_(const Config& c, std::ostringstream& os)
+{
+    bool any = false;
+    for (int li = 0; li < 3 && !any; ++li)
+        for (int qi = 0; qi < kQuicksPerLayer && !any; ++qi)
+            for (int m = 0; m < kBankModifierCount && !any; ++m)
+                if (c.userQuicks[li].quicks[qi].modSubBank[m] >= 0) any = true;
+    for (int m = 0; m < kBankModifierCount && !any; ++m)
+        if (c.uf1SoftBankMod[m] >= 0) any = true;
+    if (!any) return;
+
+    os << ",\n  \"bank_modifiers\": [";
+    bool first = true;
+    for (int li = 0; li < 3; ++li) {
+        for (int qi = 0; qi < kQuicksPerLayer; ++qi) {
+            for (int m = 0; m < kBankModifierCount; ++m) {
+                const int sb = c.userQuicks[li].quicks[qi].modSubBank[m];
+                if (sb < 0) continue;
+                if (!first) os << ",";
+                first = false;
+                os << "\n    {\"layer\": " << li << ", \"quick\": " << qi
+                   << ", \"mod\": " << m << ", \"sub_bank\": " << sb << "}";
+            }
+        }
+    }
+    os << "\n  ]";
+
+    bool anyUf1 = false;
+    for (int m = 0; m < kBankModifierCount && !anyUf1; ++m)
+        if (c.uf1SoftBankMod[m] >= 0) anyUf1 = true;
+    if (!anyUf1) return;
+    os << ",\n  \"uf1_bank_modifiers\": [";
+    first = true;
+    for (int m = 0; m < kBankModifierCount; ++m) {
+        if (c.uf1SoftBankMod[m] < 0) continue;
+        if (!first) os << ",";
+        first = false;
+        os << "\n    {\"mod\": " << m
+           << ", \"bank\": " << c.uf1SoftBankMod[m] << "}";
+    }
+    os << "\n  ]";
+}
+
 std::string serialize(const Config& c)
 {
     std::ostringstream os;
@@ -1479,6 +1525,7 @@ std::string serialize(const Config& c)
     serializeBankPresets_(c, os);
     serializeUf1SoftBanks_(c, os);
     serializeUf1SoftBankDynamic_(c, os);
+    serializeBankModifiers_(c, os);
     os << "\n}\n";
     return os.str();
 }
@@ -1844,6 +1891,47 @@ void parseUf1SoftBankDynamic_(wdl_json_element* root, Config& out)
     }
 }
 
+void parseBankModifiers_(wdl_json_element* root, Config& out)
+{
+    if (auto* arr = root->get_item_by_name("bank_modifiers");
+        arr && arr->is_array() && arr->m_array) {
+        const int n = arr->m_array->GetSize();
+        for (int i = 0; i < n; ++i) {
+            wdl_json_element* eo = arr->enum_item(i);
+            if (!eo || !eo->is_object()) continue;
+            int layer = -1, quick = -1, mod = -1, sub = -1;
+            auto num = [&](const char* k, int& dst) {
+                if (auto* v = eo->get_item_by_name(k))
+                    if (auto* t = v->get_string_value(true)) dst = std::atoi(t);
+            };
+            num("layer", layer); num("quick", quick);
+            num("mod", mod);     num("sub_bank", sub);
+            if (layer < 0 || layer > 2)                    continue;
+            if (quick < 0 || quick >= kQuicksPerLayer)     continue;
+            if (mod   < 0 || mod   >= kBankModifierCount)  continue;
+            if (sub   < 0 || sub   >= kSubBanksPerQuick)   continue;
+            out.userQuicks[layer].quicks[quick].modSubBank[mod] = sub;
+        }
+    }
+    if (auto* arr = root->get_item_by_name("uf1_bank_modifiers");
+        arr && arr->is_array() && arr->m_array) {
+        const int n = arr->m_array->GetSize();
+        for (int i = 0; i < n; ++i) {
+            wdl_json_element* eo = arr->enum_item(i);
+            if (!eo || !eo->is_object()) continue;
+            int mod = -1, bank = -1;
+            auto num = [&](const char* k, int& dst) {
+                if (auto* v = eo->get_item_by_name(k))
+                    if (auto* t = v->get_string_value(true)) dst = std::atoi(t);
+            };
+            num("mod", mod); num("bank", bank);
+            if (mod  < 0 || mod  >= kBankModifierCount) continue;
+            if (bank < 0 || bank >= kUf1SoftBankCount)  continue;
+            out.uf1SoftBankMod[mod] = bank;
+        }
+    }
+}
+
 bool parseLayer_(wdl_json_element* lobj, Layer& out)
 {
     if (!lobj || !lobj->is_object()) return false;
@@ -2133,6 +2221,7 @@ bool tryParse_(const std::string& json, Config& out)
     parseBankPresets_(root, out);
     parseUf1SoftBanks_(root, out);
     parseUf1SoftBankDynamic_(root, out);
+    parseBankModifiers_(root, out);
     return true;
 }
 
@@ -2233,7 +2322,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // paging INSIDE a dynamic soft-key bank has its own gesture instead of taking
 // over "5-8" (which is the channel group again). upgradeBackfillUf1ArrowLongPress_
 // fills only an UNTOUCHED long-press slot.
-constexpr int kCurrentBindingsVersion = 25;
+constexpr int kCurrentBindingsVersion = 26;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4335,6 +4424,43 @@ void setSubBankLed(int layer, int quick, int subBank,
     if (!subBankLedInRange_(layer, quick, subBank)) return;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     g_cfg.userQuicks[layer].quicks[quick].subBankLeds[subBank] = app;
+    persistLocked_();
+}
+
+// Bank-modifier map. -1 = the held modifier changes nothing, which is the
+// default and reproduces the pre-2026-08-18 behaviour exactly.
+// `mod` is 0 Shift / 1 Cmd / 2 Ctrl (Modifier minus Plain).
+int getBankModifier(int layer, int quick, int mod)
+{
+    if (layer < 0 || layer > 2)                   return -1;
+    if (quick < 0 || quick >= kQuicksPerLayer)    return -1;
+    if (mod   < 0 || mod   >= kBankModifierCount) return -1;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return g_cfg.userQuicks[layer].quicks[quick].modSubBank[mod];
+}
+void setBankModifier(int layer, int quick, int mod, int subBank)
+{
+    if (layer < 0 || layer > 2)                   return;
+    if (quick < 0 || quick >= kQuicksPerLayer)    return;
+    if (mod   < 0 || mod   >= kBankModifierCount) return;
+    if (subBank >= kSubBanksPerQuick)             return;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    g_cfg.userQuicks[layer].quicks[quick].modSubBank[mod] =
+        (subBank < 0) ? -1 : subBank;
+    persistLocked_();
+}
+int getUf1BankModifier(int mod)
+{
+    if (mod < 0 || mod >= kBankModifierCount) return -1;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return g_cfg.uf1SoftBankMod[mod];
+}
+void setUf1BankModifier(int mod, int bank)
+{
+    if (mod < 0 || mod >= kBankModifierCount) return;
+    if (bank >= kUf1SoftBankCount)            return;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    g_cfg.uf1SoftBankMod[mod] = (bank < 0) ? -1 : bank;
     persistLocked_();
 }
 

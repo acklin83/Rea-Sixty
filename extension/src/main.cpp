@@ -5003,6 +5003,50 @@ std::atomic<bool> g_routingDirty{false};
 std::atomic<int> g_activeQuick[3]   = { -1, -1, -1 };
 std::atomic<int> g_activeSubBank[3] = {  0,  0,  0 };
 
+// ⇨ THE MODIFIER MOVES THE WHOLE BANK, NOT ONE KEY.
+// Holding Shift / Cmd / Ctrl temporarily engages a different sub-bank, if the
+// user mapped one for it; releasing returns to the engaged bank. Everything the
+// USER PERCEIVES as "the current bank" has to go through here: the dispatch, the
+// eight labels, the six bank LEDs. Everything that WRITES the bank, and the
+// Settings read-outs that must show the real engaged bank rather than a
+// transient one, keeps reading g_activeSubBank directly.
+//
+// Frank 2026-08-18, on why this replaced per-key modifier slots: "wär doch viel
+// übersichtlicher gleich die ganze soft-key bank auf modifier zu belegen". The
+// two cannot coexist on the same keys anyway — a Shift that changes the bank can
+// no longer pick a key's Shift slot.
+//
+// Called from BOTH threads (input-thread dispatch, main-thread painters); the
+// accessor takes g_cfgMutex, exactly like getSubBankDynamic beside it.
+static int bankModifierIndexNow_()
+{
+    switch (uf8::bindings::currentModifierSnapshot()) {
+        case uf8::bindings::Modifier::Shift: return 0;
+        case uf8::bindings::Modifier::Cmd:   return 1;
+        case uf8::bindings::Modifier::Ctrl:  return 2;
+        default:                             return -1;
+    }
+}
+static int effectiveSubBank_(int layer)
+{
+    if (layer < 0 || layer > 2) return 0;
+    const int base = g_activeSubBank[layer].load();
+    const int m = bankModifierIndexNow_();
+    if (m < 0) return base;
+    const int q = g_activeQuick[layer].load();
+    if (q < 0) return base;
+    const int swap = uf8::bindings::getBankModifier(layer, q, m);
+    return (swap >= 0) ? swap : base;
+}
+static int effectiveUf1SoftBank_()
+{
+    const int base = g_uf1SoftBank.load();
+    const int m = bankModifierIndexNow_();
+    if (m < 0) return base;
+    const int swap = uf8::bindings::getUf1BankModifier(m);
+    return (swap >= 0) ? swap : base;
+}
+
 // Helper: clear every other Send/Receive mode on the same physical
 // output (V-Pot or Fader) so the user can never end up with two
 // conflicting routing modes pointing at the same strip area.
@@ -6100,7 +6144,7 @@ static int engagedBankableKind_()
     if (layer < 0 || layer > 2) return -1;
     const int q = g_activeQuick[layer].load();
     if (q < 0) return -1;
-    const int sb = g_activeSubBank[layer].load();
+    const int sb = effectiveSubBank_(layer);
     const auto dk = uf8::bindings::getSubBankDynamic(layer, q, sb);
     return dynBankBankable_(dk) ? static_cast<int>(dk) : -1;
 }
@@ -19149,7 +19193,7 @@ static std::array<uint8_t, sizeof(kUf1PluginHeader)> uf1BuildLiveHeader_()
         // and must reach EMPTY banks to assign them ("springt zurück auf 1", Frank
         // 2026-08-05). Clamp for DISPLAY only; the ◄ ► paging owns the live bank.
         const int inUse = uf8::bindings::uf1SoftBankInUseCount();
-        const int cur   = g_uf1SoftBank.load();
+        const int cur   = effectiveUf1SoftBank_();
         hdr = uf1PageHeader_(cur + 1, std::max(inUse, cur + 1));
     } else {                           // Plugin: SSL strip param-page N/M
         hdr = uf1PageHeader_(g_uf1CsPage.load() + 1,
@@ -19822,7 +19866,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 const int aq = (layer >= 0 && layer <= 2)
                                ? g_activeQuick[layer].load() : -1;
                 if (aq >= 0) {
-                    const int sb = g_activeSubBank[layer].load();
+                    const int sb = effectiveSubBank_(layer);
                     // A dynamic Sub-Bank computes its keys live → route the
                     // press to the dynamic handler (posts to the main-thread
                     // drain) instead of the stored user-Quick binding.
@@ -20834,7 +20878,7 @@ void onUf1Event(const uf1::InputEvent& ev)
                  ev.id == uf1::btn::kDisplaySoft3 || ev.id == uf1::btn::kDisplaySoft4)
                 && !g_uf1MeterView.load() && g_uf1ChannelSubMode.load() == 1
                 && !g_uf1ModeMenu.load()) {
-                const int bank = g_uf1SoftBank.load();
+                const int bank = effectiveUf1SoftBank_();
                 const int slot = static_cast<int>(ev.id - uf1::btn::kDisplaySoft1);
                 const auto dk  = uf8::bindings::getUf1SoftBankDynamic(bank);
                 if (dk != uf8::bindings::DynamicBankKind::None) {
@@ -25388,8 +25432,19 @@ void uf1PaintChannel_()
     const bool shiftNow     = g_shiftHeld.load();
     const bool shiftChanged = (shiftNow != sShift);
     sShift = shiftNow;
+    // A held bank modifier swaps which soft-key bank the four keys show. That is
+    // a TEXT event: the labels and the header's N/M change, the plane does not.
+    // So it belongs in `changed` and must stay out of `layoutChanged`
+    // ([[uf1-mode-edge-must-not-relayout]]). Diffed on the RESOLVED bank rather
+    // than on the modifier itself, so holding a modifier with nothing mapped to
+    // it costs no repaint at all.
+    static int sEffBank = -1;
+    const int  effBankNow     = effectiveUf1SoftBank_();
+    const bool bankModChanged = (effBankNow != sEffBank);
+    sEffBank = effBankNow;
     const bool changed = (tr != sTr) || viewChanged || screenChanged || menuEdge
-                       || modeFieldChanged || identChanged || shiftChanged;
+                       || modeFieldChanged || identChanged || shiftChanged
+                       || bankModChanged;
     // Bus-Comp GR meter on the four display soft-key LEDs (Settings → Devices →
     // Metering). Read ONCE per tick, here, because two places need it: the p188
     // soft-key block must know whether to leave those LEDs alone, and the meter
@@ -26431,7 +26486,7 @@ void uf1PaintChannel_()
         // not the SSL strip's section keys.
         const bool dawBanks = (g_uf1ChannelSubMode.load() == 1);
         const bool sendsSk  = (g_uf1ChannelSubMode.load() == 2);
-        const int  bankNo   = g_uf1SoftBank.load();
+        const int  bankNo   = effectiveUf1SoftBank_();
         // A DAW soft-key bank can be flagged dynamic (per bank): its 4 keys are
         // computed live from the focused track (FX list / parameter groups /
         // colours) via the surface-agnostic engine, not the 4 static slots. It is
@@ -28506,7 +28561,7 @@ void pushZonesForVisibleSlots()
                                    && curLayer >= 0 && curLayer <= 2)
                                   ? g_activeQuick[curLayer].load()  : -1;
             const int curSub    = (curLayer >= 0 && curLayer <= 2)
-                                  ? g_activeSubBank[curLayer].load() : 0;
+                                  ? effectiveSubBank_(curLayer) : 0;
             std::string userLabel;
             bool userBankSlotPresent = false;
             // Dynamic Sub-Bank: keys computed live from the focused track's
@@ -32350,7 +32405,7 @@ void pushUf8GlobalLeds()
                                     ? g_activeQuick[activeLayer].load() : -1;
     const int subBankForLeds      = (activeQuickForBanks >= 0
                                      && activeLayer >= 0 && activeLayer <= 2)
-                                    ? g_activeSubBank[activeLayer].load()
+                                    ? effectiveSubBank_(activeLayer)
                                     : softKeyBank;
     sendUf8GlobalLed(uf8::Uf8GlobalLed::VPotBank, subBankForLeds == 0);
     sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft1,    subBankForLeds == 1);
@@ -33098,6 +33153,25 @@ void onTimerBody_()
         if (!s_startupBankDone && g_dev) {
             s_startupBankDone = true;
             applyStartupBank_();
+        }
+    }
+
+    // A held bank modifier swaps the engaged sub-bank for as long as it is down,
+    // so the eight labels and the six bank LEDs have to follow the key going
+    // down AND coming back up. Nothing repainted on a modifier before this,
+    // because a modifier never used to change what the surface shows.
+    // Diffed on the RESOLVED bank, not on the modifier: holding Shift with
+    // nothing mapped to it must stay free.
+    {
+        static int s_effSub[3] = { -1, -1, -1 };
+        const int layer = uf8::bindings::getActiveLayer();
+        if (layer >= 0 && layer <= 2) {
+            const int eff = effectiveSubBank_(layer);
+            if (eff != s_effSub[layer]) {
+                s_effSub[layer] = eff;
+                g_softKeyDirty.store(true);
+                g_bankDirty.store(true);
+            }
         }
     }
 
@@ -36848,7 +36922,7 @@ const char* reasixty_userBankSlotLabel(int bank, int slot)
     if (slot < 0 || slot >= uf8::bindings::kSlotsPerSubBank) return nullptr;
     const int layer = uf8::bindings::getActiveLayer();
     if (layer < 0 || layer > 2) return nullptr;
-    const int sub = g_activeSubBank[layer].load();
+    const int sub = effectiveSubBank_(layer);
     static thread_local std::string s_buf;
     const auto userSlot = uf8::bindings::getUserQuickSlot(layer, bank, sub, slot);
     s_buf = userSlot.label;
@@ -41903,7 +41977,7 @@ void registerBindingHandlers()
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing || g_uf1MeterView.load()) return;
             if (g_uf1ChannelSubMode.load() != 1) return;      // DAW mode only
-            if (uf8::bindings::getUf1SoftBankDynamic(g_uf1SoftBank.load())
+            if (uf8::bindings::getUf1SoftBankDynamic(effectiveUf1SoftBank_())
                 == uf8::bindings::DynamicBankKind::None) return;
             const int cnt = std::max(1, g_uf1DynBankPageCount.load());
             if (cnt < 2) return;
@@ -43558,7 +43632,7 @@ void registerBindingHandlers()
             const int activeQuick =
                 (layer >= 0 && layer <= 2) ? g_activeQuick[layer].load() : -1;
             if (activeQuick >= 0) {
-                return g_activeSubBank[layer].load() == param;
+                return effectiveSubBank_(layer) == param;
             }
             return g_softKeyBank.load() == param;
         },
