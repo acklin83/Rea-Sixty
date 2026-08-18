@@ -547,11 +547,12 @@ Each bank slot carries its own **Behavior** (*Momentary*, *Toggle* or *Hold*)
 alongside its label, action and LED colours, so a bank key can latch rather than
 fire once.
 
-A held modifier does not change what one key does, it changes **which bank all
-four keys come from**. Pick the bank you want, set its **Bank modifier** to
-Shift, Cmd or Ctrl, and holding that modifier shows that bank until you let go.
-Two banks cannot share a modifier: assigning one clears it from the other nine.
-Shift is the UF1's SHIFT key.
+Every bank also has **four layers**: Plain, Shift, Cmd and Ctrl. Hold the UF1's
+SHIFT key and the four keys show their Shift layer, labels and all, and fire it;
+release and you are back on Plain. In the editor the **Layer** row above the
+slots picks which one you are looking at, so what you edit is what the surface
+shows while you hold that modifier. A layer you left empty shows empty, it does
+not fall back to the Plain label.
 
 Soft-key labels are capped at **13 characters** and V-Pot labels at **11**; both
 are abbreviated rather than truncated, so every word stays readable.
@@ -923,11 +924,11 @@ When you click a Top-Soft-Key (or a Sub-Bank cell) in the schematic, an **Edit Q
 
 Each slot carries a **Behavior** (*Momentary*, *Toggle* or *Hold*), the same setting a regular button has.
 
-Modifiers work on the **whole row**, not on a single key. Open the Sub-Bank cell you want to reach, set its **Bank modifier** to Shift, Cmd or Ctrl, and holding that modifier shows that Sub-Bank across all eight keys until you let go. Two Sub-Banks cannot share a modifier: assigning one clears it from the other five. Shift is the UF8's FINE key; for Cmd and Ctrl, either bind a key to those modifiers yourself or switch on the matching keyboard option under *Settings, Behaviour, Keyboard*.
+Every Sub-Bank also has **four layers**: Plain, Shift, Cmd and Ctrl. Holding the modifier switches the whole row of eight, labels and all, and releasing returns to Plain. The **Layer** row next to the Quick and Sub-Bank pickers chooses which layer you are editing, and the scribble previews follow it. Shift is the UF8's FINE key; for Cmd and Ctrl, either bind a key to those modifiers yourself or switch on the matching keyboard option under *Settings, Behaviour, Keyboard*. A layer you left empty shows empty on the hardware, it does not borrow the Plain label.
 
 On a **dynamic** Sub-Bank none of this applies: the keys come from the focused track, and Shift, Cmd, Ctrl and long-press run the FX-key gestures instead, which are set on the Sub-Bank cell.
 
-**Clear whole key** does what it says: label, behaviour, LED and the assigned action.
+**Clear whole key** does what it says: label, behaviour, LED and all four modifier slots. To empty a single modifier slot, pick *None (disabled)* in its action picker.
 
 The schematic shows **two rings** so you never lose track of what's live vs what you're editing:
 
