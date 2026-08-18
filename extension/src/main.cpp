@@ -26587,9 +26587,20 @@ void uf1PaintChannel_()
                 if (label.empty() && !dawSlot.ledShowWhenEmpty) {
                     keyColRgb = 0; keyColBright = false;   // empty → dark
                 } else {
-                    const auto& c = on ? dawSlot.color : dawSlot.inactiveColor;
-                    keyColBright = (on ? dawSlot.brightness : dawSlot.inactiveBrightness)
-                                   == uf8::bindings::Brightness::Bright;
+                    // ⇨ THE SET'S OWN COLOUR, IF IT HAS ONE.
+                    // A modifier set is a full bank, so it carries its own LED
+                    // override (ActionSlot::led) just like an ordinary button's
+                    // modifier slot does. Reading dawSlot.color outright meant
+                    // the Shift set could never look different from Plain
+                    // (Frank 2026-08-18). effectiveLed* falls back to the key's
+                    // colour when the set has no override, so a set that never
+                    // set one paints exactly as before.
+                    uint8_t c[3];
+                    uf8::bindings::Brightness bri;
+                    const auto& lsp = dawSlot.shortPress[mIdx];
+                    if (on) uf8::bindings::effectiveLedActive  (dawSlot, lsp, c, bri);
+                    else    uf8::bindings::effectiveLedInactive(dawSlot, lsp, c, bri);
+                    keyColBright = (bri == uf8::bindings::Brightness::Bright);
                     keyColRgb = (uint32_t(c[0]) << 16) | (uint32_t(c[1]) << 8)
                               | static_cast<uint32_t>(c[2]);
                 }
@@ -28911,22 +28922,39 @@ void pushZonesForVisibleSlots()
                     }
                 }
             } else if (curQuick >= 0 && userBankSlotPresent) {
+                // ⇨ THE SET'S OWN COLOUR, IF IT HAS ONE — see the UF1 painter
+                // for the reasoning. effectiveLed* falls back to the key's
+                // colour, so a set without an override is unchanged.
                 const auto userSlot = uf8::bindings::getUserQuickSlot(
                     curLayer, curQuick, curSub, s);
-                const uint32_t bc = wantActive
-                    ? packRgb_(userSlot.color)
-                    : packRgb_(userSlot.inactiveColor);
-                ledColRgb = bc;
-                ledClr = uf8::ledColourForTrackRgb(bc);
+                const int lm =
+                    static_cast<int>(uf8::bindings::bankModifierSnapshot());
+                uint8_t c[3];
+                uf8::bindings::Brightness bri;
+                if (wantActive)
+                    uf8::bindings::effectiveLedActive(
+                        userSlot, userSlot.shortPress[lm], c, bri);
+                else
+                    uf8::bindings::effectiveLedInactive(
+                        userSlot, userSlot.shortPress[lm], c, bri);
+                ledColRgb = packRgb_(c);
+                ledClr = uf8::ledColourForTrackRgb(ledColRgb);
             } else if (sslFreeSlotPresent) {
                 const int qd = (domSk == uf8::Domain::BusComp) ? 1 : 0;
                 const auto fslot = uf8::bindings::getUserQuickSlot(
                     0, qd, bankSk, s);
-                const uint32_t bc = wantActive
-                    ? packRgb_(fslot.color)
-                    : packRgb_(fslot.inactiveColor);
-                ledColRgb = bc;
-                ledClr = uf8::ledColourForTrackRgb(bc);
+                const int lm =
+                    static_cast<int>(uf8::bindings::bankModifierSnapshot());
+                uint8_t c[3];
+                uf8::bindings::Brightness bri;
+                if (wantActive)
+                    uf8::bindings::effectiveLedActive(
+                        fslot, fslot.shortPress[lm], c, bri);
+                else
+                    uf8::bindings::effectiveLedInactive(
+                        fslot, fslot.shortPress[lm], c, bri);
+                ledColRgb = packRgb_(c);
+                ledClr = uf8::ledColourForTrackRgb(ledColRgb);
             } else {
                 static const uf8::bindings::ButtonId kTskIdsForLed[8] = {
                     uf8::bindings::ButtonId::TopSoftKey1,

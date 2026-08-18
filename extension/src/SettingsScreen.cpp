@@ -4931,8 +4931,65 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     char tagA[24], tagI[24];
     snprintf(tagA, sizeof(tagA), "act_%s",  idtag);
     snprintf(tagI, sizeof(tagI), "inact_%s", idtag);
-    drawSlotLedRow("Active",   bd.color,         bd.brightness,         tagA);
-    drawSlotLedRow("Inactive", bd.inactiveColor, bd.inactiveBrightness, tagI);
+    // ⇨ A MODIFIER SET HAS ITS OWN LED, like everything else about it.
+    // On Plain these rows edit the KEY's colour (Binding::color); on a modifier
+    // set they edit that set's override (ActionSlot::led), which the painters
+    // resolve through effectiveLed*. Without this the Shift set could never look
+    // different from Plain: you set a colour, and it landed on the key
+    // (Frank 2026-08-18). The rows start out showing the colour the set paints
+    // right now, which is the key's until the set claims one of its own.
+    {
+        auto& lsp = bd.shortPress[g_slotEditModIdx];
+        const bool setLevel = (g_slotEditModIdx != 0);
+        uint8_t actRgb[3], inaRgb[3];
+        Brightness actBri, inaBri;
+        effectiveLedActive  (bd, lsp, actRgb, actBri);
+        effectiveLedInactive(bd, lsp, inaRgb, inaBri);
+        // On Plain the rows show and write the key's own fields, so what the
+        // editor offers is what it can store. On a set they show what the set
+        // paints (its override, else the key's) and the first edit writes the
+        // override.
+        if (!setLevel) {
+            for (int c = 0; c < 3; ++c) {
+                actRgb[c] = bd.color[c];
+                inaRgb[c] = bd.inactiveColor[c];
+            }
+            actBri = bd.brightness;
+            inaBri = bd.inactiveBrightness;
+        }
+        const bool wasDirty = dirty;
+        drawSlotLedRow("Active",   actRgb, actBri, tagA);
+        drawSlotLedRow("Inactive", inaRgb, inaBri, tagI);
+        if (dirty && !setLevel) {
+            for (int c = 0; c < 3; ++c) {
+                bd.color[c]         = actRgb[c];
+                bd.inactiveColor[c] = inaRgb[c];
+            }
+            bd.brightness         = actBri;
+            bd.inactiveBrightness = inaBri;
+        }
+        if (setLevel && dirty && !wasDirty) {
+            // First edit on this set writes the override; from here the set
+            // stops following the key.
+            for (int c = 0; c < 3; ++c) {
+                lsp.led.color[c]         = actRgb[c];
+                lsp.led.inactiveColor[c] = inaRgb[c];
+            }
+            lsp.led.brightness         = actBri;
+            lsp.led.inactiveBrightness = inaBri;
+            lsp.led.hasActive   = true;
+            lsp.led.hasInactive = true;
+        }
+        if (setLevel && (lsp.led.hasActive || lsp.led.hasInactive)) {
+            if (ImGui_Button(ctx, "Follow the key##uqled_follow",
+                             /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+                lsp.led = uf8::bindings::LedOverride{};
+                dirty = true;
+            }
+            ImGui_TextDisabled(ctx,
+                "This set paints its own colour. Follow the key to hand it back.");
+        }
+    }
 
     if (dirty) {
         setUserQuickSlot(editLayer, qIdx, sbIdx, slotIdx, bd);
@@ -5126,8 +5183,60 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
     char tagA[32], tagI[32];
     snprintf(tagA, sizeof(tagA), "act_%d_%d", bank, slotIdx);
     snprintf(tagI, sizeof(tagI), "ina_%d_%d", bank, slotIdx);
-    drawSlotLedRow("Active",   bd.color,         bd.brightness,         tagA);
-    drawSlotLedRow("Inactive", bd.inactiveColor, bd.inactiveBrightness, tagI);
+    // ⇨ A MODIFIER SET HAS ITS OWN LED — same rule as the UF8 slot editor.
+    // Plain edits the KEY's colour, a modifier set edits that set's override
+    // (ActionSlot::led). The rows open on whatever the set paints today, which
+    // is the key's colour until the set claims one (Frank 2026-08-18).
+    {
+        auto& lsp = bd.shortPress[g_slotEditModIdx];
+        const bool setLevel = (g_slotEditModIdx != 0);
+        uint8_t actRgb[3], inaRgb[3];
+        Brightness actBri, inaBri;
+        effectiveLedActive  (bd, lsp, actRgb, actBri);
+        effectiveLedInactive(bd, lsp, inaRgb, inaBri);
+        // On Plain the rows show and write the key's own fields, so what the
+        // editor offers is what it can store. On a set they show what the set
+        // paints (its override, else the key's) and the first edit writes the
+        // override.
+        if (!setLevel) {
+            for (int c = 0; c < 3; ++c) {
+                actRgb[c] = bd.color[c];
+                inaRgb[c] = bd.inactiveColor[c];
+            }
+            actBri = bd.brightness;
+            inaBri = bd.inactiveBrightness;
+        }
+        const bool wasDirty = dirty;
+        drawSlotLedRow("Active",   actRgb, actBri, tagA);
+        drawSlotLedRow("Inactive", inaRgb, inaBri, tagI);
+        if (dirty && !setLevel) {
+            for (int c = 0; c < 3; ++c) {
+                bd.color[c]         = actRgb[c];
+                bd.inactiveColor[c] = inaRgb[c];
+            }
+            bd.brightness         = actBri;
+            bd.inactiveBrightness = inaBri;
+        }
+        if (setLevel && dirty && !wasDirty) {
+            for (int c = 0; c < 3; ++c) {
+                lsp.led.color[c]         = actRgb[c];
+                lsp.led.inactiveColor[c] = inaRgb[c];
+            }
+            lsp.led.brightness         = actBri;
+            lsp.led.inactiveBrightness = inaBri;
+            lsp.led.hasActive   = true;
+            lsp.led.hasInactive = true;
+        }
+        if (setLevel && (lsp.led.hasActive || lsp.led.hasInactive)) {
+            if (ImGui_Button(ctx, "Follow the key##uf1sbled_follow",
+                             /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+                lsp.led = uf8::bindings::LedOverride{};
+                dirty = true;
+            }
+            ImGui_TextDisabled(ctx,
+                "This set paints its own colour. Follow the key to hand it back.");
+        }
+    }
 
     {
         bool showEmpty = bd.ledShowWhenEmpty;
