@@ -2800,9 +2800,14 @@ static bool drawBankLayerRow_(ImGui_Context* ctx, const char* tag, int* modIdx)
     // same time, so releasing leaves the picker where you put it and you edit in
     // peace (Frank 2026-08-18). Click a button to go back to Plain.
     {
+        // TOGGLE on the rising edge, the same gesture the FX-Learn editor has
+        // used since 2026-07-21: press SHIFT to jump to the Shift set, press it
+        // again to come back to Plain. Rising edge only, so releasing never
+        // moves the picker and you can edit the set you jumped to with the mouse.
         static int s_lastHeld = 0;
         const int held = static_cast<int>(bankModifierSnapshot());
-        if (held != s_lastHeld && held != 0) *modIdx = held;
+        if (held != s_lastHeld && held != 0)
+            *modIdx = (*modIdx == held) ? 0 : held;
         s_lastHeld = held;
     }
     if (*modIdx < 0 || *modIdx >= kSoftKeyModifierSets) *modIdx = 0;

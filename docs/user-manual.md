@@ -550,8 +550,9 @@ fire once.
 Every bank also holds **two sets of keys**: Plain and Shift. Hold the UF1's SHIFT
 key and the four keys show their Shift set, labels and all, and fire it; release
 and you are back on Plain. In the editor the **Modifier** row above the slots
-picks which set you are looking at. It follows the modifier you hold and stays
-there when you let go, so you can hold SHIFT once and then edit that set with the
+picks which set you are looking at. Press SHIFT once to jump to the Shift set
+and press it again to come back to Plain, the same gesture the FX-Learn editor
+uses. Releasing never moves it, so you can edit the set you jumped to with the
 mouse. A set you left empty shows empty on the surface, it does not fall back to
 the Plain label.
 
@@ -929,7 +930,7 @@ When you click a Top-Soft-Key (or a Sub-Bank cell) in the schematic, a **Quick**
 
 Each slot carries a **Behavior** (*Momentary*, *Toggle* or *Hold*), the same setting a regular button has.
 
-Every Sub-Bank also holds **two sets of keys**: Plain and Shift. Holding the FINE key switches the whole row of eight, labels and all, and releasing returns to Plain. The **Modifier** row next to the Quick and Sub-Bank pickers chooses which set you are editing, and the scribble previews follow it. Like those two pickers it follows the hardware: hold FINE and it moves to Shift, and it stays there when you release so you can edit with the mouse. A set you left empty shows empty on the hardware, it does not borrow the Plain label.
+Every Sub-Bank also holds **two sets of keys**: Plain and Shift. Holding the FINE key switches the whole row of eight, labels and all, and releasing returns to Plain. The **Modifier** row next to the Quick and Sub-Bank pickers chooses which set you are editing, and the scribble previews follow it. Like those two pickers it follows the hardware: press FINE to jump to the Shift set and press it again to come back to Plain. Releasing never moves it, so you can edit with the mouse. A set you left empty shows empty on the hardware, it does not borrow the Plain label.
 
 There is no Cmd or Ctrl set. The surface carries one modifier key and no more, so those two would have to come from the computer keyboard, where they already belong to the FX-Learn modifier layers.
 
