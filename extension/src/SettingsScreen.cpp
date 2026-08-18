@@ -4952,7 +4952,9 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
         &sp.stepValue, &sp.wrap,
     };
     if (drawActionPicker(ctx, idtag, ref,
-                         /*layer*/ -1, ButtonId::None,
+                         // Real id, not None: builtinDeviceForId(None) falls through
+                         // to "UF8" and hid all 14 uf1_* builtins from a UF1 key.
+                         /*layer*/ -1, ButtonId::Uf1DisplaySoft1,
                          /*isLongPress*/ false, modIdx, /*stepIdx*/ 0,
                          /*uqLayer*/ -1, /*uqQuick*/ -1,
                          /*uqSubBank*/ -1, /*uqSlot*/ -1,
