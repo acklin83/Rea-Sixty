@@ -1285,13 +1285,23 @@ void serializeLayerBody_(const Layer& L, std::ostringstream& os,
     os << ",\n";
     os << fieldPad << "\"bindings\": {";
     bool first = true;
-    for (auto& kv : L.bindings) {
-        const char* name = toName(kv.first);
-        if (!name || !*name) continue;
+    // ⇨ STABLE ORDER — walk kNames, not the map.
+    // L.bindings is an unordered_map, so its iteration order shifts whenever the
+    // map is rebuilt. Every load therefore rewrote the file with the same
+    // bindings in a different order, and a config diff was mostly reshuffling
+    // with any real change buried in it (Frank 2026-08-18, checking exactly that
+    // after the v26 migration). kNames is the declaration order and already
+    // serves as the stable order for findFirstBoundTo, for the same reason.
+    // Nothing is lost by the switch: an entry without a name was skipped before
+    // too, and a name is what kNames membership means.
+    for (const auto& e : kNames) {
+        if (!e.name || !*e.name) continue;
+        const auto it = L.bindings.find(e.id);
+        if (it == L.bindings.end()) continue;
         if (!first) os << ",";
         first = false;
-        os << "\n" << bindingPad << "\"" << name << "\": {";
-        serializeBindingBody_(kv.second, os);
+        os << "\n" << bindingPad << "\"" << e.name << "\": {";
+        serializeBindingBody_(it->second, os);
         os << "}";
     }
     if (!first) os << "\n" << fieldPad;
@@ -3443,14 +3453,15 @@ bool exportUc1To(int layer, const std::string& path)
     std::ostringstream os;
     os << "{\n  \"version\": 1,\n  \"type\": \"uc1\",\n  \"bindings\": {";
     bool first = true;
-    for (auto& kv : L.bindings) {
-        if (!isUc1Id_(kv.first)) continue;
-        const char* name = toName(kv.first);
-        if (!name || !*name) continue;
+    // Stable order, same reasoning as serializeLayerBody_.
+    for (const auto& e : kNames) {
+        if (!isUc1Id_(e.id) || !e.name || !*e.name) continue;
+        const auto it = L.bindings.find(e.id);
+        if (it == L.bindings.end()) continue;
         if (!first) os << ",";
         first = false;
-        os << "\n    \"" << name << "\": {";
-        serializeBindingBody_(kv.second, os);
+        os << "\n    \"" << e.name << "\": {";
+        serializeBindingBody_(it->second, os);
         os << "}";
     }
     if (!first) os << "\n  ";
