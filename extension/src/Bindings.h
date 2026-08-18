@@ -438,7 +438,12 @@ enum class DynamicBankKind : uint8_t {
 
 struct UserQuickSubBank {
     Binding slots[kSlotsPerSubBank];   // top-soft-key positions
-    DynamicBankKind dynamic = DynamicBankKind::None;  // non-None → computed bank
+    // ⇨ PER MODIFIER LAYER. A layer is a FULL bank, not just a second set of
+    // actions: Plain can be static while Shift is an FX bank. Index = Modifier
+    // (0 Plain, 1 Shift, 2 Cmd, 3 Ctrl). Anything less makes the layer a
+    // half-feature that falls apart at the edges — presets and dynamic banks
+    // hung off the sub-bank and knew nothing about layers (Frank 2026-08-18).
+    DynamicBankKind dynamic[kModifierCount] = {};      // non-None → computed
 };
 // LED appearance override for one Sub-Bank selector button (V-POT or
 // Soft 1..5) under a specific (Layer, Quick) context. Lets the user
@@ -495,7 +500,8 @@ struct Config {
     // bank (FX list / parameter groups / colours) whose 4 keys derive live
     // from the focused track; the 4 static slots above are then ignored.
     // Default None ⇒ classic static behaviour.
-    DynamicBankKind uf1SoftBankDynamic[kUf1SoftBankCount] = {};
+    // [bank][modifier layer] — same rule as the UF8 above.
+    DynamicBankKind uf1SoftBankDynamic[kUf1SoftBankCount][kModifierCount] = {};
 };
 
 // Builtin registry. Phase A registers from main.cpp at REAPER_PLUGIN_ENTRY
@@ -724,8 +730,8 @@ void       setSubBankLed(int layer, int quick, int subBank,
 // Sub-Bank into a computed bank (FX list / sends / groups / colours);
 // its 8 static slots are then ignored. Out-of-range returns None /
 // ignores writes.
-DynamicBankKind getSubBankDynamic(int layer, int quick, int subBank);
-void            setSubBankDynamic(int layer, int quick, int subBank,
+DynamicBankKind getSubBankDynamic(int layer, int quick, int subBank, int mod);
+void            setSubBankDynamic(int layer, int quick, int subBank, int mod,
                                   DynamicBankKind kind);
 
 // Soft-Key Bank presets — named snapshots of one Sub-Bank's 8 slots
@@ -738,14 +744,17 @@ int               findBankPreset(const std::string& name); // -1 if not found
 // `name`. Overwrites an existing preset with the same name. Returns
 // false on out-of-range coords or empty name.
 bool              saveBankPreset(const std::string& name,
-                                 int layer, int quick, int subBank);
+                                 int layer, int quick, int subBank, int mod);
 // Replace an existing preset's name. Returns false on duplicate name,
 // empty new name, or out-of-range idx.
 bool              renameBankPreset(int idx, const std::string& newName);
 bool              deleteBankPreset(int idx);
 // Copy the named preset's 8 slots into (layer, quick, subBank),
 // overwriting whatever was there. Returns false on out-of-range.
-bool              recallBankPreset(int idx, int layer, int quick, int subBank);
+// Presets carry ONE layer's eight slots, and recall lands in the layer you
+// are on. A preset saved from Plain can be recalled into Shift.
+bool              recallBankPreset(int idx, int layer, int quick, int subBank,
+                                  int mod);
 
 // ---- Factory Rea-Sixty soft-key bank presets ----------------------------
 // Read-only curated banks built ONLY from Rea-Sixty's own built-ins (the
@@ -757,7 +766,7 @@ int               factoryBankPresetCount();
 SoftKeyBankPreset factoryBankPresetAt(int idx);          // copy; OOR = empty
 // Copy factory bank `idx`'s 8 slots into (layer, quick, subBank).
 bool              recallFactoryBankPreset(int idx, int layer, int quick,
-                                          int subBank);
+                                          int subBank, int mod);
 // Bulk: fill the 6 sub-banks of (layer, quick) with factory banks 0..5 in
 // order (V-POT←0, Soft1←1, … Soft5←5). Returns banks written, -1 on OOR.
 int               loadFactoryReaSixtySet(int layer, int quick);
@@ -776,8 +785,8 @@ void     setUf1SoftBankSlot(int bank, int slot, const Binding& bd);
 // Per-bank dynamic-kind flag. Non-None turns the bank into a computed
 // bank (FX list / parameter groups / colours); its 4 static slots are
 // then ignored. Out-of-range returns None / ignores writes.
-DynamicBankKind getUf1SoftBankDynamic(int bank);
-void            setUf1SoftBankDynamic(int bank, DynamicBankKind kind);
+DynamicBankKind getUf1SoftBankDynamic(int bank, int mod);
+void            setUf1SoftBankDynamic(int bank, int mod, DynamicBankKind kind);
 // Number of UF1 soft-key banks in use (highest assigned bank + 1, min 1) —
 // dynamic banks or banks with any non-empty slot count. Drives the DAW-mode
 // header denominator + bounds the DAW bank paging. Frank 2026-08-04.

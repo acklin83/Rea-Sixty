@@ -947,6 +947,7 @@ static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
 // earlier cut put four radio buttons on every individual key; that was the same
 // data seen through the wrong lens.
 static int g_slotEditModIdx = 0;
+static const char* const kLayerName_[4] = { "Plain", "Shift", "Cmd", "Ctrl" };
 
 // Regular bindable button — one the user assigns actions to via the
 // per-button binding editor (the getBinding path). Excludes Top-Soft-Keys
@@ -1213,7 +1214,8 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
             (!editIsSslCsBc && editQuick >= 0 && editQuick <= 2
              && editSubBank >= 0 && editSubBank <= 5)
                 ? uf8::bindings::getSubBankDynamic(activeLayer, editQuick,
-                                                   editSubBank)
+                                                   editSubBank,
+                                                   g_slotEditModIdx)
                 : uf8::bindings::DynamicBankKind::None;
         if (editDynKind != uf8::bindings::DynamicBankKind::None) {
             scribble = dynKindShort_(editDynKind);
@@ -1497,7 +1499,8 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
             // cell to find that out, so a bank could look like eight editable
             // slots and be none (Frank 2026-08-18). Drawn as a filled triangle
             // in the top-right corner, clear of both rings.
-            if (uf8::bindings::getSubBankDynamic(activeLayer, editQuick, b.idx)
+            if (uf8::bindings::getSubBankDynamic(activeLayer, editQuick, b.idx,
+                                                 g_slotEditModIdx)
                 != uf8::bindings::DynamicBankKind::None) {
                 ImGui_DrawList_AddTriangleFilled(c.dl,
                     c.ox + b.x + b.w - 7, c.oy + b.y + 1,
@@ -4538,7 +4541,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     // so turning the bank back to static does not require finding the other page.
     {
         const DynamicBankKind dynKind =
-            getSubBankDynamic(editLayer, qIdx, sbIdx);
+            getSubBankDynamic(editLayer, qIdx, sbIdx, g_slotEditModIdx);
         if (dynKind != DynamicBankKind::None) {
             char note[200];
             snprintf(note, sizeof(note),
@@ -4567,7 +4570,8 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                                          /*flags*/ nullptr,
                                          /*size_w*/ nullptr,
                                          /*size_h*/ nullptr)) {
-                        setSubBankDynamic(editLayer, qIdx, sbIdx, k);
+                        setSubBankDynamic(editLayer, qIdx, sbIdx,
+                                          g_slotEditModIdx, k);
                     }
                 }
                 ImGui_EndCombo(ctx);
@@ -5021,8 +5025,9 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     // ---- Header + navigation hint -------------------------------------
     char hdr[160];
     snprintf(hdr, sizeof(hdr),
-                  "Editing: %s   (Layer %d, Quick %d)",
-                  sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
+                  "Editing: Sub-Bank %s, %s layer   (Layer %d, Quick %d)",
+                  sbLabels[sbIdx], kLayerName_[g_slotEditModIdx],
+                  editLayer + 1, engagedQ + 1);
     ImGui_Text(ctx, hdr);
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
@@ -5057,7 +5062,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
               reasixty_sp("Track Colours", "Track Colors") },
         };
         const DynamicBankKind curKind =
-            getSubBankDynamic(editLayer, engagedQ, sbIdx);
+            getSubBankDynamic(editLayer, engagedQ, sbIdx, g_slotEditModIdx);
         const char* curDynLabel = kDynOpts[0].label;
         for (const auto& o : kDynOpts)
             if (o.kind == curKind) curDynLabel = o.label;
@@ -5070,7 +5075,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                                      /*flags*/ nullptr,
                                      /*size_w*/ nullptr,
                                      /*size_h*/ nullptr)) {
-                    setSubBankDynamic(editLayer, engagedQ, sbIdx, o.kind);
+                    setSubBankDynamic(editLayer, engagedQ, sbIdx,
+                                      g_slotEditModIdx, o.kind);
                 }
             }
             ImGui_EndCombo(ctx);
@@ -5160,11 +5166,13 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     {
         char presetHdr[160];
         snprintf(presetHdr, sizeof(presetHdr),
-                      "Preset for %s   (Layer %d, Quick %d)",
-                      sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
+                      "Soft-key preset for Sub-Bank %s, %s layer"
+                      "   (Layer %d, Quick %d)",
+                      sbLabels[sbIdx], kLayerName_[g_slotEditModIdx],
+                      editLayer + 1, engagedQ + 1);
         ImGui_Text(ctx, presetHdr);
         ImGui_TextDisabled(ctx,
-            "Snapshot the 8 Top-Soft-Key slots in this Sub-Bank as a "
+            "Snapshot this layer's 8 Top-Soft-Key slots as a "
             "named preset, or recall one into this Sub-Bank.");
         ImGui_Spacing(ctx);
 
@@ -5288,16 +5296,16 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             SoftKeyBankPreset p = bankPresetAt(s_pendingIdx);
             char line[256];
             snprintf(line, sizeof(line),
-                "Overwrite the 8 slots of %s on (Layer %d, Quick %d) "
+                "Overwrite the 8 slots of %s, %s layer, on (Layer %d, Quick %d) "
                 "with preset '%s'?",
-                sbLabels[sbIdx], editLayer + 1, engagedQ + 1,
-                p.name.c_str());
+                sbLabels[sbIdx], kLayerName_[g_slotEditModIdx],
+                editLayer + 1, engagedQ + 1, p.name.c_str());
             ImGui_TextWrapped(ctx, line);
             ImGui_Spacing(ctx);
             if (ImGui_Button(ctx, "Recall##bp_recall_ok",
                              nullptr, nullptr)) {
                 recallBankPreset(s_pendingIdx, editLayer, engagedQ,
-                                 sbIdx);
+                                 sbIdx, g_slotEditModIdx);
                 ImGui_CloseCurrentPopup(ctx);
             }
             ImGui_SameLine(ctx, nullptr, nullptr);
@@ -5340,7 +5348,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                     ? "Save (overwrite)##bp_saveas_ok"
                     : "Save##bp_saveas_ok";
                 if (ImGui_Button(ctx, label, nullptr, nullptr)) {
-                    saveBankPreset(nm, editLayer, engagedQ, sbIdx);
+                    saveBankPreset(nm, editLayer, engagedQ, sbIdx,
+                                   g_slotEditModIdx);
                     selRef = findBankPreset(nm);
                     ImGui_CloseCurrentPopup(ctx);
                 }
@@ -5512,15 +5521,16 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             SoftKeyBankPreset p = factoryBankPresetAt(facRef);
             char line[256];
             snprintf(line, sizeof(line),
-                "Overwrite the 8 slots of %s (Layer %d, Quick %d) with "
+                "Overwrite the 8 slots of %s, %s layer (Layer %d, Quick %d) with "
                 "factory bank '%s'?",
-                sbLabels[sbIdx], editLayer + 1, engagedQ + 1,
-                p.name.c_str());
+                sbLabels[sbIdx], kLayerName_[g_slotEditModIdx],
+                editLayer + 1, engagedQ + 1, p.name.c_str());
             ImGui_TextWrapped(ctx, line);
             ImGui_Spacing(ctx);
             if (ImGui_Button(ctx, "Recall##fac_recall_ok",
                              nullptr, nullptr)) {
-                recallFactoryBankPreset(facRef, editLayer, engagedQ, sbIdx);
+                recallFactoryBankPreset(facRef, editLayer, engagedQ, sbIdx,
+                                        g_slotEditModIdx);
                 ImGui_CloseCurrentPopup(ctx);
             }
             ImGui_SameLine(ctx, nullptr, nullptr);
@@ -5562,8 +5572,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     // ---- Per-(Layer, Quick) LED override -----------------------------
     char ledHdr[160];
     snprintf(ledHdr, sizeof(ledHdr),
-                  reasixty_sp("LED colours for %s on (Layer %d, Quick %d)",
-                              "LED colors for %s on (Layer %d, Quick %d)"),
+                  reasixty_sp("LED colours for Sub-Bank %s on (Layer %d, Quick %d)",
+                              "LED colors for Sub-Bank %s on (Layer %d, Quick %d)"),
                   sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
     ImGui_Text(ctx, ledHdr);
     ImGui_TextDisabled(ctx,
@@ -5921,7 +5931,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
               reasixty_sp("Track Colours", "Track Colors") },
             };
             const DynamicBankKind curKind =
-                uf8::bindings::getUf1SoftBankDynamic(uf1Bank);
+                uf8::bindings::getUf1SoftBankDynamic(uf1Bank, g_slotEditModIdx);
             const char* curLabel = kUf1DynOpts[0].label;
             for (const auto& o : kUf1DynOpts)
                 if (o.kind == curKind) curLabel = o.label;
@@ -5936,7 +5946,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                                          /*flags*/ nullptr,
                                          /*size_w*/ nullptr,
                                          /*size_h*/ nullptr)) {
-                        uf8::bindings::setUf1SoftBankDynamic(uf1Bank, o.kind);
+                        uf8::bindings::setUf1SoftBankDynamic(uf1Bank, g_slotEditModIdx, o.kind);
                     }
                 }
                 ImGui_EndCombo(ctx);

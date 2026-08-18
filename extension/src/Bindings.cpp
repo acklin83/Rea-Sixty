@@ -1353,25 +1353,31 @@ void serializeSubBankDynamic_(const Config& c, std::ostringstream& os)
     for (int li = 0; li < 3 && !anyData; ++li)
         for (int qi = 0; qi < kQuicksPerLayer && !anyData; ++qi)
             for (int bi = 0; bi < kSubBanksPerQuick && !anyData; ++bi)
-                if (c.userQuicks[li].quicks[qi].subBanks[bi].dynamic
-                    != DynamicBankKind::None)
-                    anyData = true;
+                for (int m = 0; m < kModifierCount && !anyData; ++m)
+                    if (c.userQuicks[li].quicks[qi].subBanks[bi].dynamic[m]
+                        != DynamicBankKind::None)
+                        anyData = true;
     if (!anyData) return;
 
     os << ",\n  \"sub_bank_dynamic\": [";
     bool first = true;
     for (int li = 0; li < 3; ++li)
         for (int qi = 0; qi < kQuicksPerLayer; ++qi)
-            for (int bi = 0; bi < kSubBanksPerQuick; ++bi) {
-                const auto k = c.userQuicks[li].quicks[qi].subBanks[bi].dynamic;
-                if (k == DynamicBankKind::None) continue;
-                if (!first) os << ",";
-                first = false;
-                os << "\n    {\"layer\": " << li
-                   << ", \"quick\": " << qi
-                   << ", \"sub_bank\": " << bi
-                   << ", \"kind\": " << static_cast<int>(k) << "}";
-            }
+            for (int bi = 0; bi < kSubBanksPerQuick; ++bi)
+                for (int m = 0; m < kModifierCount; ++m) {
+                    const auto k =
+                        c.userQuicks[li].quicks[qi].subBanks[bi].dynamic[m];
+                    if (k == DynamicBankKind::None) continue;
+                    if (!first) os << ",";
+                    first = false;
+                    // "mod" absent means Plain, so a pre-v27 file reads back
+                    // onto layer 0 exactly where it used to live.
+                    os << "\n    {\"layer\": " << li
+                       << ", \"quick\": " << qi
+                       << ", \"sub_bank\": " << bi
+                       << ", \"mod\": " << m
+                       << ", \"kind\": " << static_cast<int>(k) << "}";
+                }
     os << "\n  ]";
 }
 
@@ -1445,18 +1451,21 @@ void serializeUf1SoftBankDynamic_(const Config& c, std::ostringstream& os)
 {
     bool any = false;
     for (int b = 0; b < kUf1SoftBankCount && !any; ++b)
-        if (c.uf1SoftBankDynamic[b] != DynamicBankKind::None) any = true;
+        for (int m = 0; m < kModifierCount && !any; ++m)
+            if (c.uf1SoftBankDynamic[b][m] != DynamicBankKind::None) any = true;
     if (!any) return;
     os << ",\n  \"uf1_soft_bank_dynamic\": [";
     bool first = true;
-    for (int b = 0; b < kUf1SoftBankCount; ++b) {
-        const auto k = c.uf1SoftBankDynamic[b];
-        if (k == DynamicBankKind::None) continue;
-        if (!first) os << ",";
-        first = false;
-        os << "\n    {\"bank\": " << b
-           << ", \"kind\": " << static_cast<int>(k) << "}";
-    }
+    for (int b = 0; b < kUf1SoftBankCount; ++b)
+        for (int m = 0; m < kModifierCount; ++m) {
+            const auto k = c.uf1SoftBankDynamic[b][m];
+            if (k == DynamicBankKind::None) continue;
+            if (!first) os << ",";
+            first = false;
+            os << "\n    {\"bank\": " << b
+               << ", \"mod\": " << m
+               << ", \"kind\": " << static_cast<int>(k) << "}";
+        }
     os << "\n  ]";
 }
 
@@ -1770,7 +1779,11 @@ void parseSubBankDynamic_(wdl_json_element* root, Config& out)
         if (subBank < 0 || subBank >= kSubBanksPerQuick) continue;
         if (kind < 0 || kind > static_cast<int>(DynamicBankKind::TrackColours))
             continue;
-        out.userQuicks[layer].quicks[quick].subBanks[subBank].dynamic =
+        int mod = 0;   // absent = Plain (pre-v27 shape)
+        if (auto* v = eo->get_item_by_name("mod"))
+            if (auto* t = v->get_string_value(true)) mod = std::atoi(t);
+        if (mod < 0 || mod >= kModifierCount) continue;
+        out.userQuicks[layer].quicks[quick].subBanks[subBank].dynamic[mod] =
             static_cast<DynamicBankKind>(kind);
     }
 }
@@ -1840,7 +1853,11 @@ void parseUf1SoftBankDynamic_(wdl_json_element* root, Config& out)
         if (bank < 0 || bank >= kUf1SoftBankCount) continue;
         if (kind < 0 || kind > static_cast<int>(DynamicBankKind::TrackColours))
             continue;
-        out.uf1SoftBankDynamic[bank] = static_cast<DynamicBankKind>(kind);
+        int mod = 0;   // absent = Plain (pre-v27 shape)
+        if (auto* v = eo->get_item_by_name("mod"))
+            if (auto* t = v->get_string_value(true)) mod = std::atoi(t);
+        if (mod < 0 || mod >= kModifierCount) continue;
+        out.uf1SoftBankDynamic[bank][mod] = static_cast<DynamicBankKind>(kind);
     }
 }
 
@@ -4282,11 +4299,12 @@ void setUf1SoftBankSlot(int bank, int slot, const Binding& bd)
     persistLocked_();
 }
 
-DynamicBankKind getUf1SoftBankDynamic(int bank)
+DynamicBankKind getUf1SoftBankDynamic(int bank, int mod)
 {
     if (bank < 0 || bank >= kUf1SoftBankCount) return DynamicBankKind::None;
+    if (mod  < 0 || mod  >= kModifierCount)    return DynamicBankKind::None;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    return g_cfg.uf1SoftBankDynamic[bank];
+    return g_cfg.uf1SoftBankDynamic[bank][mod];
 }
 
 // Number of UF1 soft-key banks actually IN USE = (highest in-use bank index
@@ -4299,7 +4317,9 @@ int uf1SoftBankInUseCount()
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     int highest = -1;
     for (int b = 0; b < kUf1SoftBankCount; ++b) {
-        bool inUse = (g_cfg.uf1SoftBankDynamic[b] != DynamicBankKind::None);
+        bool inUse = false;
+        for (int m = 0; m < kModifierCount && !inUse; ++m)
+            if (g_cfg.uf1SoftBankDynamic[b][m] != DynamicBankKind::None) inUse = true;
         for (int s = 0; !inUse && s < kUf1SoftBankSlots; ++s)
             if (!uf1BankSlotEmpty_(g_cfg.uf1SoftBanks[b][s])) inUse = true;
         if (inUse) highest = b;
@@ -4307,11 +4327,12 @@ int uf1SoftBankInUseCount()
     return highest + 1 >= 1 ? highest + 1 : 1;
 }
 
-void setUf1SoftBankDynamic(int bank, DynamicBankKind kind)
+void setUf1SoftBankDynamic(int bank, int mod, DynamicBankKind kind)
 {
     if (bank < 0 || bank >= kUf1SoftBankCount) return;
+    if (mod  < 0 || mod  >= kModifierCount)    return;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    g_cfg.uf1SoftBankDynamic[bank] = kind;
+    g_cfg.uf1SoftBankDynamic[bank][mod] = kind;
     persistLocked_();
 }
 
@@ -4338,18 +4359,21 @@ void setSubBankLed(int layer, int quick, int subBank,
     persistLocked_();
 }
 
-DynamicBankKind getSubBankDynamic(int layer, int quick, int subBank)
+DynamicBankKind getSubBankDynamic(int layer, int quick, int subBank, int mod)
 {
     if (!subBankLedInRange_(layer, quick, subBank)) return DynamicBankKind::None;
+    if (mod < 0 || mod >= kModifierCount)           return DynamicBankKind::None;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    return g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank].dynamic;
+    return g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank].dynamic[mod];
 }
 
-void setSubBankDynamic(int layer, int quick, int subBank, DynamicBankKind kind)
+void setSubBankDynamic(int layer, int quick, int subBank, int mod,
+                       DynamicBankKind kind)
 {
     if (!subBankLedInRange_(layer, quick, subBank)) return;
+    if (mod < 0 || mod >= kModifierCount)           return;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank].dynamic = kind;
+    g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank].dynamic[mod] = kind;
     persistLocked_();
 }
 
@@ -4380,16 +4404,33 @@ int findBankPreset(const std::string& name)
 }
 
 bool saveBankPreset(const std::string& name,
-                    int layer, int quick, int subBank)
+                    int layer, int quick, int subBank, int mod)
 {
     if (name.empty()) return false;
     if (!userQuickSlotInRange_(layer, quick, subBank, 0)) return false;
+    if (mod < 0 || mod >= kModifierCount) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     SoftKeyBankPreset p;
     p.name = name;
     for (int s = 0; s < kSlotsPerSubBank; ++s) {
-        p.slots[s] = g_cfg.userQuicks[layer].quicks[quick]
-                        .subBanks[subBank].slots[s];
+        // ONE layer's worth. A Binding carries all four; copying the lot would
+        // make "save the Shift bank" quietly capture Plain, Cmd and Ctrl too.
+        const Binding& src = g_cfg.userQuicks[layer].quicks[quick]
+                                .subBanks[subBank].slots[s];
+        p.slots[s] = Binding{};
+        p.slots[s].behavior       = src.behavior;
+        p.slots[s].label          = src.label;
+        p.slots[s].labelIsUserSet = src.labelIsUserSet;
+        p.slots[s].color[0] = src.color[0];
+        p.slots[s].color[1] = src.color[1];
+        p.slots[s].color[2] = src.color[2];
+        p.slots[s].brightness = src.brightness;
+        p.slots[s].inactiveColor[0] = src.inactiveColor[0];
+        p.slots[s].inactiveColor[1] = src.inactiveColor[1];
+        p.slots[s].inactiveColor[2] = src.inactiveColor[2];
+        p.slots[s].inactiveBrightness = src.inactiveBrightness;
+        p.slots[s].ledShowWhenEmpty   = src.ledShowWhenEmpty;
+        p.slots[s].shortPress[0] = src.shortPress[mod];
     }
     int existing = -1;
     for (int i = 0; i < static_cast<int>(g_cfg.bankPresets.size()); ++i) {
@@ -4426,16 +4467,33 @@ bool deleteBankPreset(int idx)
     return true;
 }
 
-bool recallBankPreset(int idx, int layer, int quick, int subBank)
+bool recallBankPreset(int idx, int layer, int quick, int subBank, int mod)
 {
     if (!userQuickSlotInRange_(layer, quick, subBank, 0)) return false;
+    if (mod < 0 || mod >= kModifierCount) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     if (idx < 0 || idx >= static_cast<int>(g_cfg.bankPresets.size()))
         return false;
     const SoftKeyBankPreset& p = g_cfg.bankPresets[idx];
     for (int s = 0; s < kSlotsPerSubBank; ++s) {
-        g_cfg.userQuicks[layer].quicks[quick]
-            .subBanks[subBank].slots[s] = p.slots[s];
+        // Lands in the layer you are editing, leaving the other three alone.
+        // A preset captured on Plain recalls into Shift unchanged — the stored
+        // slot is a layer's worth of actions, not a fixed Plain/Shift pair.
+        Binding& dst = g_cfg.userQuicks[layer].quicks[quick]
+                          .subBanks[subBank].slots[s];
+        dst.shortPress[mod] = p.slots[s].shortPress[0];
+        if (mod == 0) {
+            dst.behavior       = p.slots[s].behavior;
+            dst.label          = p.slots[s].label;
+            dst.labelIsUserSet = p.slots[s].labelIsUserSet;
+            for (int c = 0; c < 3; ++c) {
+                dst.color[c]         = p.slots[s].color[c];
+                dst.inactiveColor[c] = p.slots[s].inactiveColor[c];
+            }
+            dst.brightness         = p.slots[s].brightness;
+            dst.inactiveBrightness = p.slots[s].inactiveBrightness;
+            dst.ledShowWhenEmpty   = p.slots[s].ledShowWhenEmpty;
+        }
     }
     persistLocked_();
     return true;
@@ -4560,16 +4618,24 @@ SoftKeyBankPreset factoryBankPresetAt(int idx)
     return banks[idx];
 }
 
-bool recallFactoryBankPreset(int idx, int layer, int quick, int subBank)
+bool recallFactoryBankPreset(int idx, int layer, int quick, int subBank, int mod)
 {
     if (!userQuickSlotInRange_(layer, quick, subBank, 0)) return false;
+    if (mod < 0 || mod >= kModifierCount) return false;
     const auto& banks = factoryReaSixtyBanks_();
     if (idx < 0 || idx >= static_cast<int>(banks.size())) return false;
     const SoftKeyBankPreset p = banks[idx];   // copy before taking the lock
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     for (int s = 0; s < kSlotsPerSubBank; ++s) {
-        g_cfg.userQuicks[layer].quicks[quick]
-            .subBanks[subBank].slots[s] = p.slots[s];
+        // Lands in the layer being edited, like the user presets do.
+        Binding& dst = g_cfg.userQuicks[layer].quicks[quick]
+                          .subBanks[subBank].slots[s];
+        dst.shortPress[mod] = p.slots[s].shortPress[0];
+        if (mod == 0) {
+            const std::string keepLabel = p.slots[s].label;
+            dst = p.slots[s];
+            dst.label = keepLabel;
+        }
     }
     persistLocked_();
     return true;

@@ -926,7 +926,9 @@ Each slot carries a **Behavior** (*Momentary*, *Toggle* or *Hold*), the same set
 
 Every Sub-Bank also has **four layers**: Plain, Shift, Cmd and Ctrl. Holding the modifier switches the whole row of eight, labels and all, and releasing returns to Plain. The **Layer** row next to the Quick and Sub-Bank pickers chooses which layer you are editing, and the scribble previews follow it. Shift is the UF8's FINE key; for Cmd and Ctrl, either bind a key to those modifiers yourself or switch on the matching keyboard option under *Settings, Behaviour, Keyboard*. A layer you left empty shows empty on the hardware, it does not borrow the Plain label.
 
-On a **dynamic** Sub-Bank none of this applies: the keys come from the focused track, and Shift, Cmd, Ctrl and long-press run the FX-key gestures instead, which are set on the Sub-Bank cell.
+A layer is a **full bank**, not just a second set of actions. Each one has its own **Dynamic bank** setting and its own presets, so Plain can hold eight fixed assignments while Shift is an FX bank. Saving a preset captures the layer you are on; recalling one lands in the layer you are on, so a preset captured on Plain can be recalled into Shift.
+
+On a **dynamic** layer the keys come from the focused track, and Shift, Cmd, Ctrl and long-press run the FX-key gestures instead.
 
 **Clear whole key** does what it says: label, behaviour, LED and all four modifier slots. To empty a single modifier slot, pick *None (disabled)* in its action picker.
 
