@@ -6102,7 +6102,7 @@ static int engagedBankableKind_()
     if (q < 0) return -1;
     const int sb = g_activeSubBank[layer].load();
     const auto dk = uf8::bindings::getSubBankDynamic(
-        layer, q, sb, static_cast<int>(uf8::bindings::bankModifierSnapshot()));
+        layer, q, sb, uf8::bindings::kDynamicKindSet);
     return dynBankBankable_(dk) ? static_cast<int>(dk) : -1;
 }
 
@@ -18626,6 +18626,7 @@ void invalidateGlobalLedCell_(uf8::Uf8GlobalLed cell);
 // True iff any modifier-slot in the binding has an active stateful
 // action (toggle on, REAPER GetToggleCommandState2 == 1).
 bool bindingHasActiveSlot_(const uf8::bindings::Binding& bd);
+bool bindingHasActiveSlotForSet_(const uf8::bindings::Binding& bd, int mod);
 extern int g_lastAutoMode;
 
 // Cell 0x24 sits outside the per-strip LED range. cap33 shows SSL360
@@ -19829,9 +19830,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     // drain) instead of the stored user-Quick binding.
                     const auto dk =
                         uf8::bindings::getSubBankDynamic(
-                            layer, aq, sb,
-                            static_cast<int>(
-                                uf8::bindings::bankModifierSnapshot()));
+                            layer, aq, sb, uf8::bindings::kDynamicKindSet);
                     if (dk != uf8::bindings::DynamicBankKind::None) {
                         dispatchDynamicPress_(dk, id - 0x18, pressed);
                     } else {
@@ -20840,7 +20839,7 @@ void onUf1Event(const uf1::InputEvent& ev)
                 && !g_uf1ModeMenu.load()) {
                 const int bank = g_uf1SoftBank.load();
                 const int slot = static_cast<int>(ev.id - uf1::btn::kDisplaySoft1);
-                const auto dk  = uf8::bindings::getUf1SoftBankDynamic(bank, static_cast<int>(uf8::bindings::bankModifierSnapshot()));
+                const auto dk  = uf8::bindings::getUf1SoftBankDynamic(bank, uf8::bindings::kDynamicKindSet);
                 if (dk != uf8::bindings::DynamicBankKind::None) {
                     // Dynamic bank: fire the SAME FX-key gestures as the UF8 (Push /
                     // +Shift / +Cmd / +Ctrl / Long-press → reasixty_fxBankOp), not
@@ -26458,7 +26457,7 @@ void uf1PaintChannel_()
         // g_uf1DynBankPage selects items [page*4 .. page*4+3] (ABSOLUTE — the UF1
         // path never uses UF8's dynBankSlotBase_).
         const auto dawDynKind = dawBanks
-            ? uf8::bindings::getUf1SoftBankDynamic(bankNo, static_cast<int>(uf8::bindings::bankModifierSnapshot()))
+            ? uf8::bindings::getUf1SoftBankDynamic(bankNo, uf8::bindings::kDynamicKindSet)
             : uf8::bindings::DynamicBankKind::None;
         const bool dawDyn = dawDynKind != uf8::bindings::DynamicBankKind::None;
         MediaTrack* dawDynTr = dawDyn ? uf1FocusedTrack_() : nullptr;
@@ -26567,7 +26566,7 @@ void uf1PaintChannel_()
                          && !sp.action.empty())
                     label = uf8::bindings::builtinDisplayName(sp.action);
                 haveLabel = true;
-                on = bindingHasActiveSlot_(dawSlot);
+                on = bindingHasActiveSlotForSet_(dawSlot, mIdx);
                 // LED colour from the binding (active vs inactive colour + brightness),
                 // like the UF8 soft-keys — Frank assigns these in Settings → Bindings →
                 // UF1 and HW-confirmed they render. An unassigned slot (blank label) goes
@@ -28547,8 +28546,7 @@ void pushZonesForVisibleSlots()
             DynSlotInfo dynInfo;
             if (curQuick >= 0)
                 dynKind = uf8::bindings::getSubBankDynamic(
-                    curLayer, curQuick, curSub,
-                    static_cast<int>(uf8::bindings::bankModifierSnapshot()));
+                    curLayer, curQuick, curSub, uf8::bindings::kDynamicKindSet);
             if (curQuick >= 0
                 && dynKind != uf8::bindings::DynamicBankKind::None) {
                 dynInfo = dynamicBankSlot_(dynKind, favContextTrack_(), s);
@@ -28629,12 +28627,24 @@ void pushZonesForVisibleSlots()
                 const int qd = (domSk == uf8::Domain::BusComp) ? 1 : 0;
                 const auto fslot = uf8::bindings::getUserQuickSlot(
                     0, qd, bankSk, s);
-                const auto& fsp = fslot.shortPress[
-                    static_cast<int>(uf8::bindings::Modifier::Plain)];
+                // ⇨ THE HELD SET, like every other soft-key path. This read
+                // Plain outright, so holding Shift over a free BC slot fired the
+                // Shift action while the LCD went on showing the Plain name —
+                // the dispatcher and the Settings preview were both set-aware,
+                // only the painter was not (Frank 2026-08-18). Same label rule:
+                // the set's own name, the key's name on Plain only, and an empty
+                // set stays empty rather than borrowing Plain's.
+                const int fMod =
+                    static_cast<int>(uf8::bindings::bankModifierSnapshot());
+                const bool fPlain =
+                    (fMod == static_cast<int>(uf8::bindings::Modifier::Plain));
+                const auto& fsp = fslot.shortPress[fMod];
                 sslFreeSlotPresent =
                     fsp.type != uf8::bindings::ActionType::Noop
                     || !fsp.action.empty();
-                if (!fslot.label.empty()) {
+                if (!fsp.label.empty()) {
+                    sslFreeLabel = fsp.label;
+                } else if (fPlain && !fslot.label.empty()) {
                     sslFreeLabel = fslot.label;
                 } else if (sslFreeSlotPresent) {
                     sslFreeLabel = fsp.action;
@@ -28797,7 +28807,12 @@ void pushZonesForVisibleSlots()
                     if (userBankSlotPresent) {
                         const auto userSlot = uf8::bindings::getUserQuickSlot(
                             curLayer, curQuick, curSub, s);
-                        slotActive = bindingHasActiveSlot_(userSlot);
+                        // The set that is showing, not the union of both — the
+                        // label above already followed it.
+                        slotActive = bindingHasActiveSlotForSet_(
+                            userSlot,
+                            static_cast<int>(
+                                uf8::bindings::bankModifierSnapshot()));
                     }
                     tssk = slotActive
                         ? uf8::TopSoftKeyState::On
@@ -28811,7 +28826,9 @@ void pushZonesForVisibleSlots()
                 const int qd = (domSk == uf8::Domain::BusComp) ? 1 : 0;
                 const auto fslot = uf8::bindings::getUserQuickSlot(
                     0, qd, bankSk, s);
-                const bool slotActive = bindingHasActiveSlot_(fslot);
+                const bool slotActive = bindingHasActiveSlotForSet_(
+                    fslot,
+                    static_cast<int>(uf8::bindings::bankModifierSnapshot()));
                 tssk = slotActive
                     ? uf8::TopSoftKeyState::On
                     : uf8::TopSoftKeyState::Dim;
@@ -31932,7 +31949,9 @@ ResolvedLed resolveLed_(uf8::Uf8GlobalLed cell,
 // permanently bright (Frank 2026-05-06). Press feedback through the
 // builtin handler (sendUf8GlobalLed(led, true) at press, false at
 // release) still gives the brief highlight users expect.
-bool bindingHasActiveSlot_(const uf8::bindings::Binding& bd)
+// One slot's engaged state: a stateful builtin that reports "on", or a REAPER
+// action whose toggle state is 1. Everything else is stateless and reads as off.
+static bool actionSlotActive_(const uf8::bindings::ActionSlot& s)
 {
     using AT = uf8::bindings::ActionType;
     auto slotActive = [](const uf8::bindings::ActionSlot& s) -> bool {
@@ -31958,11 +31977,30 @@ bool bindingHasActiveSlot_(const uf8::bindings::Binding& bd)
         }
         return false;
     };
+    return slotActive(s);
+}
+
+// ⇨ ONE MODIFIER SET ONLY — for the soft-keys.
+// A soft-key slot is TWO BANKS in one Binding, and its label and its dispatch
+// both follow the held set. The union below then lit a key because the set you
+// were NOT holding had an engaged action, so the row showed one bank's names
+// over the other bank's lights (Frank 2026-08-18).
+bool bindingHasActiveSlotForSet_(const uf8::bindings::Binding& bd, int mod)
+{
+    if (mod < 0 || mod >= uf8::bindings::kModifierCount) return false;
+    return actionSlotActive_(bd.shortPress[mod])
+        || actionSlotActive_(bd.longPress[mod]);
+}
+
+bool bindingHasActiveSlot_(const uf8::bindings::Binding& bd)
+{
     // Walk all modifier slots (short + long press) — a stateful action
     // bound to e.g. Shift+Btn360 should light the cell after toggling
     // even when Plain is Noop. Matches the routing-row LED convention.
-    for (const auto& s : bd.shortPress) if (slotActive(s)) return true;
-    for (const auto& s : bd.longPress)  if (slotActive(s)) return true;
+    // For an ordinary button the four slots are one key's gestures; only the
+    // soft-key stores hold two banks, and those ask the per-set version above.
+    for (const auto& s : bd.shortPress) if (actionSlotActive_(s)) return true;
+    for (const auto& s : bd.longPress)  if (actionSlotActive_(s)) return true;
     return false;
 }
 
@@ -36889,11 +36927,63 @@ int reasixty_engagedQuickFor(int layer)
     const int gq = g_activeQuick[layer].load();
     if (gq >= 0) return gq;
     if (layer == 0) {
+        // With bank-follow OFF the surface reads the LATCHED domain, not the
+        // focused param — the same distinction the soft-key push and
+        // reasixty_softkeyCurrentBank already make. Reading the raw focus here
+        // pointed the editor at Q1 while the hardware was showing Q2, and since
+        // the pane edits the engaged bank that is a silent wrong-bank edit
+        // (Frank 2026-08-18). Bank-follow is ON by default, so this only ever
+        // bit users who turned it off.
+        if (!g_paramSwitchesSoftKeyBank.load())
+            return g_softKeyDomain.load() == 1 ? 1 : 0;
         const auto dom = uf8::getFocusedParam().domain;
         if (dom == uf8::Domain::ChannelStrip) return 0;   // Q1 = CS
         if (dom == uf8::Domain::BusComp)      return 1;   // Q2 = BC
     }
     return -1;
+}
+
+// ⇨ THE EDITOR MUST REACH A BANK EVEN WHERE THE HARDWARE MAY NOT SWITCH ONE.
+// domain_cs/bc, softkey_bank_N and softkey_bank_select all bail out under UF8
+// Plugin Mode on purpose: engaging a user-Quick there would replace the
+// FX-Learn-driven top-soft-key labels and cut access to the learned parameters
+// (Frank 2026-05-13). Since the Settings radios became binding dispatches
+// (9e1e8be) that lock-out froze the PANE as well — in Plugin Mode no click
+// moved the editor to any bank, so the soft-key editor was unreachable.
+// These two set the engaged bank directly and ONLY while the lock-out is in
+// force; otherwise the dispatch the caller already issued did the work. The
+// hardware rule is untouched: the surface still refuses to switch.
+// Layer 1 Q1/Q2 are deliberately NOT handled — those are the SSL CS/BC domains,
+// reached by moving the focused param, which is the very thing Plugin Mode must
+// not do. They carry no user slots either, so there is nothing to edit there.
+void reasixty_editorEngageQuickIfLocked(int layer, int quick)
+{
+    if (!g_uf8PluginMode.load()) return;
+    if (layer < 0 || layer > 2) return;
+    if (quick < 0 || quick >= uf8::bindings::kQuicksPerLayer) return;
+    if (layer == 0 && quick <= 1) return;
+    if (uf8::bindings::getActiveLayer() != layer) {
+        uf8::bindings::setActiveLayer(layer);
+        pushLayerLeds(layer);
+    }
+    if (g_activeQuick[layer].exchange(quick) != quick) {
+        g_bankDirty.store(true);
+        g_softKeyDirty.store(true);
+    }
+}
+
+void reasixty_editorEngageSubBankIfLocked(int subBank)
+{
+    if (!g_uf8PluginMode.load()) return;
+    const int layer = uf8::bindings::getActiveLayer();
+    if (layer < 0 || layer > 2) return;
+    const int target =
+        std::clamp(subBank, 0, uf8::bindings::kSubBanksPerQuick - 1);
+    if (g_activeQuick[layer].load() < 0) return;   // SSL page bank, not ours
+    if (g_activeSubBank[layer].exchange(target) != target) {
+        g_bankDirty.store(true);
+        g_softKeyDirty.store(true);
+    }
 }
 
 // User-Quick slot label for the Settings preview. `bank` is interpreted
@@ -36998,15 +37088,6 @@ int reasixty_softkeyCurrentBank()
     }
     return std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
 }
-const char* reasixty_softkeyCurrentBankName()
-{
-    static const char* kNames[6] = {
-        "V-POT", "Bank 1", "Bank 2", "Bank 3", "Bank 4", "Bank 5",
-    };
-    const int b = reasixty_softkeyCurrentBank();
-    return kNames[b];
-}
-
 const char* reasixty_uf8Serial()
 {
     if (!g_dev) return "";
@@ -41963,7 +42044,7 @@ void registerBindingHandlers()
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing || g_uf1MeterView.load()) return;
             if (g_uf1ChannelSubMode.load() != 1) return;      // DAW mode only
-            if (uf8::bindings::getUf1SoftBankDynamic(g_uf1SoftBank.load(), static_cast<int>(uf8::bindings::bankModifierSnapshot()))
+            if (uf8::bindings::getUf1SoftBankDynamic(g_uf1SoftBank.load(), uf8::bindings::kDynamicKindSet)
                 == uf8::bindings::DynamicBankKind::None) return;
             const int cnt = std::max(1, g_uf1DynBankPageCount.load());
             if (cnt < 2) return;

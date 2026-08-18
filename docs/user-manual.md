@@ -938,14 +938,11 @@ Each set is a **full bank**, not just a second list of actions. Both have their 
 
 When a modifier's set is **dynamic** its keys come from the focused track, and Shift, Cmd, Ctrl and long-press run the FX-key gestures instead.
 
-**Clear whole key** does what it says: label, behaviour, LED and all four modifier slots. To empty a single modifier slot, pick *None (disabled)* in its action picker.
+**Clear whole key** does what it says: label, behaviour, LED and both sets. To empty a single set, pick *None (disabled)* in its action picker.
 
-The schematic shows **two rings** so you never lose track of what's live vs what you're editing:
+What you edit is what is engaged. Clicking a Quick or Sub-Bank tile in the schematic **engages** that bank, and the editor follows it, so the pane can never sit on a different bank than the surface. A **green ring** marks the engaged Quick / Sub-Bank.
 
-- A **green ring** marks the Quick / Sub-Bank currently engaged live on the hardware.
-- A **cyan ring** marks the one you're editing.
-
-The Top-Soft-Key labels in the schematic **follow the edit selection**, so you can preview every Quick / Sub-Bank page offline — not just the one engaged on the surface.
+This works with no UF8 attached, so you can still walk through every Quick / Sub-Bank page offline — the Top-Soft-Key labels in the schematic show the bank you just engaged.
 
 ### Factory Rea-Sixty soft-key banks
 
@@ -1071,7 +1068,7 @@ For a regular button, the editor exposes:
 
 ### Right-click context menu
 
-Right-clicking a button in the schematic opens Copy / Paste / Clear options for that binding, plus **Reset binding to factory default** — restores just that one control's baked-in factory binding, leaving every other binding untouched (unlike the *Reset to factory defaults* in the About pane, which wipes everything).
+Right-clicking a button in the schematic opens **Copy binding** / **Paste binding** for that binding, plus **Reset binding to factory default** — restores just that one control's baked-in factory binding, leaving every other binding untouched (unlike the *Reset to factory defaults* in the About pane, which wipes everything).
 
 ### Export / Import / Reset
 

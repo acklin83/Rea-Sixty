@@ -1070,6 +1070,37 @@ bool slotHasNoData_(const ActionSlot& s)
     return slotIsEmpty_(s);
 }
 
+// The same question one level up: "is there anything worth WRITING about this
+// whole key?" A soft-key carries more than its actions — a colour, a Behaviour,
+// the LED-when-empty tick — and both soft-key stores decided emptiness from the
+// ACTIONS alone. So the one case where those fields are the only thing the user
+// set is exactly the case that dropped them: tick "LED when empty" on a key you
+// deliberately left unassigned, restart, gone (Frank 2026-08-18). Belongs to the
+// slotHasNoData_ family — it answers what to WRITE, never what DISPATCH should
+// treat as empty. Do not hand it to a dispatch path.
+bool bindingHasNoData_(const Binding& bd)
+{
+    if (!bd.label.empty())                    return false;
+    if (bd.labelIsUserSet)                    return false;
+    if (bd.behavior != Behavior::Momentary)   return false;
+    if (bd.ledShowWhenEmpty)                  return false;
+    if (bd.hasLongPress || bd.hasDoublePress) return false;
+    // Factory LED appearance = white/Bright over white/Dim (struct defaults).
+    if (bd.color[0] != 0xFF || bd.color[1] != 0xFF || bd.color[2] != 0xFF)
+        return false;
+    if (bd.brightness != Brightness::Bright)  return false;
+    if (bd.inactiveColor[0] != 0xFF || bd.inactiveColor[1] != 0xFF
+        || bd.inactiveColor[2] != 0xFF)
+        return false;
+    if (bd.inactiveBrightness != Brightness::Dim) return false;
+    for (int m = 0; m < kModifierCount; ++m) {
+        if (!slotHasNoData_(bd.shortPress[m]))  return false;
+        if (!slotHasNoData_(bd.longPress[m]))   return false;
+        if (!slotHasNoData_(bd.doublePress[m])) return false;
+    }
+    return true;
+}
+
 } // namespace
 
 bool slotIsEmpty(const ActionSlot& s)
@@ -1091,7 +1122,18 @@ void serializeStepFields_(const ActionStep& s, std::ostringstream& os)
         os << ", \"label\": ";
         appendEscaped(os, s.label);
     }
-    if (s.type == ActionType::Midi) {
+    // ⇨ KEEP THE MIDI FIELDS EVEN WHEN THE STEP IS NOT (CURRENTLY) MIDI.
+    // The editor saves on every keystroke, so flipping a configured MIDI step to
+    // REAPER for a moment wrote the step without its midi block and the device,
+    // channel and data bytes were gone from disk — switching back gave you an
+    // empty form (Frank 2026-08-18). Written whenever anything differs from the
+    // struct defaults; a step that never was MIDI still writes nothing.
+    const bool midiWorthKeeping =
+        s.type == ActionType::Midi
+     || !s.midiDevice.empty()
+     || s.midiChannel != 1 || s.midiMsgType != 0
+     || s.midiData1 != 60  || s.midiData2 != 127;
+    if (midiWorthKeeping) {
         os << ", \"midi\": {";
         os << "\"device\": ";   appendEscaped(os, s.midiDevice);
         os << ", \"channel\": " << s.midiChannel;
@@ -1259,23 +1301,26 @@ void serializeLayerBody_(const Layer& L, std::ostringstream& os,
 // Emits all populated (layer, quick, subBank, slot) entries as a flat
 // list. Empty slots are skipped so a default-constructed Config writes
 // nothing here (no 432-line empty matrix in the JSON).
-void serializeUserQuicks_(const Config& c, std::ostringstream& os)
+// onlyLayer >= 0 restricts the list to that layer and DROPS the "layer" field,
+// so a per-layer export can be imported onto any layer. In that mode the array
+// is emitted even when empty: absent means "this file says nothing about the
+// soft-keys" (a pre-v2 layer file), empty means "this layer has none", and the
+// importer has to be able to tell those apart.
+void serializeUserQuicks_(const Config& c, std::ostringstream& os,
+                          int onlyLayer = -1)
 {
-    auto slotIsEmptyAll_ = [](const Binding& bd) {
-        for (int m = 0; m < kModifierCount; ++m) {
-            if (!slotIsEmpty_(bd.shortPress[m])) return false;
-            if (!slotIsEmpty_(bd.longPress[m]))  return false;
-            if (!slotIsEmpty_(bd.doublePress[m])) return false;
-        }
-        return bd.label.empty();
-    };
+    // The local lambda that used to sit here asked slotIsEmpty_ — the DISPATCH
+    // predicate — so a label-only or colour-only slot counted as empty and never
+    // reached the file. bindingHasNoData_ is the writer's question.
+    const int loLayer = (onlyLayer >= 0) ? onlyLayer : 0;
+    const int hiLayer = (onlyLayer >= 0) ? onlyLayer + 1 : 3;
 
     bool anyData = false;
-    for (int li = 0; li < 3 && !anyData; ++li) {
+    for (int li = loLayer; li < hiLayer && !anyData; ++li) {
         for (int qi = 0; qi < kQuicksPerLayer && !anyData; ++qi) {
             for (int bi = 0; bi < kSubBanksPerQuick && !anyData; ++bi) {
                 for (int si = 0; si < kSlotsPerSubBank && !anyData; ++si) {
-                    if (!slotIsEmptyAll_(
+                    if (!bindingHasNoData_(
                             c.userQuicks[li].quicks[qi].subBanks[bi].slots[si])) {
                         anyData = true;
                     }
@@ -1283,21 +1328,22 @@ void serializeUserQuicks_(const Config& c, std::ostringstream& os)
             }
         }
     }
-    if (!anyData) return;
+    if (!anyData && onlyLayer < 0) return;
 
     os << ",\n  \"user_quicks\": [";
     bool first = true;
-    for (int li = 0; li < 3; ++li) {
+    for (int li = loLayer; li < hiLayer; ++li) {
         for (int qi = 0; qi < kQuicksPerLayer; ++qi) {
             for (int bi = 0; bi < kSubBanksPerQuick; ++bi) {
                 for (int si = 0; si < kSlotsPerSubBank; ++si) {
                     const auto& bd = c.userQuicks[li].quicks[qi]
                                         .subBanks[bi].slots[si];
-                    if (slotIsEmptyAll_(bd)) continue;
+                    if (bindingHasNoData_(bd)) continue;
                     if (!first) os << ",";
                     first = false;
-                    os << "\n    {\"layer\": " << li
-                       << ", \"quick\": " << qi
+                    os << "\n    {";
+                    if (onlyLayer < 0) os << "\"layer\": " << li << ", ";
+                    os << "\"quick\": " << qi
                        << ", \"sub_bank\": " << bi
                        << ", \"slot\": " << si
                        << ", \"binding\": {";
@@ -1313,7 +1359,8 @@ void serializeUserQuicks_(const Config& c, std::ostringstream& os)
 // Per-(Layer, Quick) Sub-Bank LED overrides. Emitted as a flat list of
 // entries — one per (L, Q, SB) with non-default appearance. Default
 // is white/bright/dim, so an unmodified config writes nothing here.
-void serializeSubBankLeds_(const Config& c, std::ostringstream& os)
+void serializeSubBankLeds_(const Config& c, std::ostringstream& os,
+                           int onlyLayer = -1)
 {
     auto isDefault_ = [](const SubBankLed& a) {
         return a.color[0] == 255 && a.color[1] == 255 && a.color[2] == 255
@@ -1323,25 +1370,29 @@ void serializeSubBankLeds_(const Config& c, std::ostringstream& os)
             && a.inactiveBrightness == Brightness::Dim;
     };
 
+    const int loLayer = (onlyLayer >= 0) ? onlyLayer : 0;
+    const int hiLayer = (onlyLayer >= 0) ? onlyLayer + 1 : 3;
+
     bool anyData = false;
-    for (int li = 0; li < 3 && !anyData; ++li)
+    for (int li = loLayer; li < hiLayer && !anyData; ++li)
         for (int qi = 0; qi < kQuicksPerLayer && !anyData; ++qi)
             for (int bi = 0; bi < kSubBanksPerQuick && !anyData; ++bi)
                 if (!isDefault_(c.userQuicks[li].quicks[qi].subBankLeds[bi]))
                     anyData = true;
-    if (!anyData) return;
+    if (!anyData && onlyLayer < 0) return;
 
     os << ",\n  \"sub_bank_leds\": [";
     bool first = true;
-    for (int li = 0; li < 3; ++li) {
+    for (int li = loLayer; li < hiLayer; ++li) {
         for (int qi = 0; qi < kQuicksPerLayer; ++qi) {
             for (int bi = 0; bi < kSubBanksPerQuick; ++bi) {
                 const auto& a = c.userQuicks[li].quicks[qi].subBankLeds[bi];
                 if (isDefault_(a)) continue;
                 if (!first) os << ",";
                 first = false;
-                os << "\n    {\"layer\": " << li
-                   << ", \"quick\": " << qi
+                os << "\n    {";
+                if (onlyLayer < 0) os << "\"layer\": " << li << ", ";
+                os << "\"quick\": " << qi
                    << ", \"sub_bank\": " << bi
                    << ", \"color\": [" << int(a.color[0]) << ", "
                                        << int(a.color[1]) << ", "
@@ -1364,21 +1415,25 @@ void serializeSubBankLeds_(const Config& c, std::ostringstream& os)
 // static slots (that's the point), so this can't piggy-back on the
 // user_quicks slot list — it needs its own array. Default None writes
 // nothing.
-void serializeSubBankDynamic_(const Config& c, std::ostringstream& os)
+void serializeSubBankDynamic_(const Config& c, std::ostringstream& os,
+                              int onlyLayer = -1)
 {
+    const int loLayer = (onlyLayer >= 0) ? onlyLayer : 0;
+    const int hiLayer = (onlyLayer >= 0) ? onlyLayer + 1 : 3;
+
     bool anyData = false;
-    for (int li = 0; li < 3 && !anyData; ++li)
+    for (int li = loLayer; li < hiLayer && !anyData; ++li)
         for (int qi = 0; qi < kQuicksPerLayer && !anyData; ++qi)
             for (int bi = 0; bi < kSubBanksPerQuick && !anyData; ++bi)
                 for (int m = 0; m < kSoftKeyModifierSets && !anyData; ++m)
                     if (c.userQuicks[li].quicks[qi].subBanks[bi].dynamic[m]
                         != DynamicBankKind::None)
                         anyData = true;
-    if (!anyData) return;
+    if (!anyData && onlyLayer < 0) return;
 
     os << ",\n  \"sub_bank_dynamic\": [";
     bool first = true;
-    for (int li = 0; li < 3; ++li)
+    for (int li = loLayer; li < hiLayer; ++li)
         for (int qi = 0; qi < kQuicksPerLayer; ++qi)
             for (int bi = 0; bi < kSubBanksPerQuick; ++bi)
                 for (int m = 0; m < kSoftKeyModifierSets; ++m) {
@@ -1387,10 +1442,11 @@ void serializeSubBankDynamic_(const Config& c, std::ostringstream& os)
                     if (k == DynamicBankKind::None) continue;
                     if (!first) os << ",";
                     first = false;
-                    // "mod" absent means Plain, so a pre-v27 file reads back
+                    // "mod" absent means Plain, so a pre-v25 file reads back
                     // onto layer 0 exactly where it used to live.
-                    os << "\n    {\"layer\": " << li
-                       << ", \"quick\": " << qi
+                    os << "\n    {";
+                    if (onlyLayer < 0) os << "\"layer\": " << li << ", ";
+                    os << "\"quick\": " << qi
                        << ", \"sub_bank\": " << bi
                        << ", \"mod\": " << m
                        << ", \"kind\": " << static_cast<int>(k) << "}";
@@ -1428,14 +1484,11 @@ static bool uf1BankSlotEmpty_(const Binding& bd)
 {
     // A per-SET label counts, not just the key's own name: naming a UF1 soft-key
     // on the Shift set with no action assigned is a legitimate thing to do, and
-    // this predicate dropping it is why that vanished on restart. Same rule as
-    // slotHasNoData_, which this duplicates for the UF1 bank store.
-    for (int m = 0; m < kModifierCount; ++m) {
-        if (!slotHasNoData_(bd.shortPress[m]))  return false;
-        if (!slotHasNoData_(bd.longPress[m]))   return false;
-        if (!slotHasNoData_(bd.doublePress[m])) return false;
-    }
-    return bd.label.empty();
+    // this predicate dropping it is why that vanished on restart. It used to
+    // spell out the slot loop itself and so missed the colour / Behaviour /
+    // LED-when-empty fields the editor offers on an unassigned key; it now
+    // shares the one writer predicate with the UF8 store.
+    return bindingHasNoData_(bd);
 }
 
 // UF1 soft-key banks — flat list of {bank, slot, body}; only non-empty
@@ -1513,17 +1566,25 @@ std::string serialize(const Config& c)
 // Standalone per-layer envelope. The "type" / "index" fields let
 // importLayerFrom verify the file before applying it (and let users
 // recognise the file at a glance).
-std::string serializeOneLayer_(const Layer& L, int idx)
+std::string serializeOneLayer_(const Config& c, int idx)
 {
     std::ostringstream os;
     os << "{\n";
-    os << "  \"version\": 1,\n";
+    // v2 carries the layer's 144 top-soft-key slots as well. v1 files only ever
+    // held the layer's button map, so "save layer" handed back a file that
+    // silently rebuilt half the layer on import — with a success message
+    // (Frank 2026-08-18). The three arrays below are layer-relative (no "layer"
+    // field), so a layer saved from L1 can be loaded onto L3.
+    os << "  \"version\": 2,\n";
     os << "  \"type\": \"layer\",\n";
     os << "  \"index\": " << idx << ",\n";
     os << "  \"layer\": {\n";
-    serializeLayerBody_(L, os, "    ", "      ");
-    os << "  }\n";
-    os << "}\n";
+    serializeLayerBody_(c.layers[idx], os, "    ", "      ");
+    os << "  }";
+    serializeUserQuicks_(c, os, idx);
+    serializeSubBankLeds_(c, os, idx);
+    serializeSubBankDynamic_(c, os, idx);
+    os << "\n}\n";
     return os.str();
 }
 
@@ -1698,7 +1759,9 @@ void parseBindingBody_(wdl_json_element* be, Binding& bd)
     }
 }
 
-void parseUserQuicks_(wdl_json_element* root, Config& out)
+// forceLayer >= 0 ignores each entry's "layer" field (a per-layer export
+// omits it) and writes everything onto that layer instead.
+void parseUserQuicks_(wdl_json_element* root, Config& out, int forceLayer = -1)
 {
     auto* arr = root->get_item_by_name("user_quicks");
     if (!arr || !arr->is_array() || !arr->m_array) return;
@@ -1706,9 +1769,10 @@ void parseUserQuicks_(wdl_json_element* root, Config& out)
     for (int i = 0; i < n; ++i) {
         wdl_json_element* eo = arr->enum_item(i);
         if (!eo || !eo->is_object()) continue;
-        int layer = -1, quick = -1, subBank = -1, slot = -1;
-        if (auto* v = eo->get_item_by_name("layer"))
-            if (auto* s = v->get_string_value(true)) layer = std::atoi(s);
+        int layer = forceLayer, quick = -1, subBank = -1, slot = -1;
+        if (forceLayer < 0)
+            if (auto* v = eo->get_item_by_name("layer"))
+                if (auto* s = v->get_string_value(true)) layer = std::atoi(s);
         if (auto* v = eo->get_item_by_name("quick"))
             if (auto* s = v->get_string_value(true)) quick = std::atoi(s);
         if (auto* v = eo->get_item_by_name("sub_bank"))
@@ -1728,7 +1792,9 @@ void parseUserQuicks_(wdl_json_element* root, Config& out)
     }
 }
 
-void parseSubBankLeds_(wdl_json_element* root, Config& out)
+// forceLayer >= 0 ignores each entry's "layer" field (a per-layer export
+// omits it) and writes everything onto that layer instead.
+void parseSubBankLeds_(wdl_json_element* root, Config& out, int forceLayer = -1)
 {
     auto* arr = root->get_item_by_name("sub_bank_leds");
     if (!arr || !arr->is_array() || !arr->m_array) return;
@@ -1736,9 +1802,10 @@ void parseSubBankLeds_(wdl_json_element* root, Config& out)
     for (int i = 0; i < n; ++i) {
         wdl_json_element* eo = arr->enum_item(i);
         if (!eo || !eo->is_object()) continue;
-        int layer = -1, quick = -1, subBank = -1;
-        if (auto* v = eo->get_item_by_name("layer"))
-            if (auto* s = v->get_string_value(true)) layer = std::atoi(s);
+        int layer = forceLayer, quick = -1, subBank = -1;
+        if (forceLayer < 0)
+            if (auto* v = eo->get_item_by_name("layer"))
+                if (auto* s = v->get_string_value(true)) layer = std::atoi(s);
         if (auto* v = eo->get_item_by_name("quick"))
             if (auto* s = v->get_string_value(true)) quick = std::atoi(s);
         if (auto* v = eo->get_item_by_name("sub_bank"))
@@ -1775,7 +1842,9 @@ void parseSubBankLeds_(wdl_json_element* root, Config& out)
     }
 }
 
-void parseSubBankDynamic_(wdl_json_element* root, Config& out)
+// forceLayer >= 0 ignores each entry's "layer" field (a per-layer export
+// omits it) and writes everything onto that layer instead.
+void parseSubBankDynamic_(wdl_json_element* root, Config& out, int forceLayer = -1)
 {
     auto* arr = root->get_item_by_name("sub_bank_dynamic");
     if (!arr || !arr->is_array() || !arr->m_array) return;
@@ -1783,9 +1852,10 @@ void parseSubBankDynamic_(wdl_json_element* root, Config& out)
     for (int i = 0; i < n; ++i) {
         wdl_json_element* eo = arr->enum_item(i);
         if (!eo || !eo->is_object()) continue;
-        int layer = -1, quick = -1, subBank = -1, kind = 0;
-        if (auto* v = eo->get_item_by_name("layer"))
-            if (auto* s = v->get_string_value(true)) layer = std::atoi(s);
+        int layer = forceLayer, quick = -1, subBank = -1, kind = 0;
+        if (forceLayer < 0)
+            if (auto* v = eo->get_item_by_name("layer"))
+                if (auto* s = v->get_string_value(true)) layer = std::atoi(s);
         if (auto* v = eo->get_item_by_name("quick"))
             if (auto* s = v->get_string_value(true)) quick = std::atoi(s);
         if (auto* v = eo->get_item_by_name("sub_bank"))
@@ -1797,7 +1867,7 @@ void parseSubBankDynamic_(wdl_json_element* root, Config& out)
         if (subBank < 0 || subBank >= kSubBanksPerQuick) continue;
         if (kind < 0 || kind > static_cast<int>(DynamicBankKind::TrackColours))
             continue;
-        int mod = 0;   // absent = Plain (pre-v27 shape)
+        int mod = 0;   // absent = Plain (pre-v25 shape)
         if (auto* v = eo->get_item_by_name("mod"))
             if (auto* t = v->get_string_value(true)) mod = std::atoi(t);
         if (mod < 0 || mod >= kSoftKeyModifierSets) continue;
@@ -1871,7 +1941,7 @@ void parseUf1SoftBankDynamic_(wdl_json_element* root, Config& out)
         if (bank < 0 || bank >= kUf1SoftBankCount) continue;
         if (kind < 0 || kind > static_cast<int>(DynamicBankKind::TrackColours))
             continue;
-        int mod = 0;   // absent = Plain (pre-v27 shape)
+        int mod = 0;   // absent = Plain (pre-v25 shape)
         if (auto* v = eo->get_item_by_name("mod"))
             if (auto* t = v->get_string_value(true)) mod = std::atoi(t);
         if (mod < 0 || mod >= kSoftKeyModifierSets) continue;
@@ -2427,6 +2497,42 @@ void upgradeBackfillShift360LearnHud_(Config& c)
     fill(c.layers[0], ButtonId::Uc1Btn360);
 }
 
+// ⇨ EVERY ACTION SLOT IN THE CONFIG, NOT JUST THE LAYER MAPS.
+// A soft-key does not live in layers[L].bindings — it lives in one of the two
+// soft-key stores. The cleanup migrations walked the layer maps only, so a
+// soft-key left sitting on a retired builtin (quick_select_N, show_user_bank,
+// uf1_transport) was never rewritten and fired nothing for ever, with the picker
+// still showing a plausible name (Frank 2026-08-18).
+// `fn` gets the layer the slot belongs to — the retire-quick migration needs it
+// to compute the replacement jump. The UF1 bank store and the bank presets are
+// global/coordinate-free, so they are handed layer 0, where their factory
+// assignments live.
+template <typename F>
+void forEachActionSlot_(Config& c, F&& fn)
+{
+    auto doBinding = [&fn](int layer, Binding& bd) {
+        for (int m = 0; m < kModifierCount; ++m) {
+            fn(layer, bd.shortPress[m]);
+            fn(layer, bd.longPress[m]);
+            fn(layer, bd.doublePress[m]);
+        }
+    };
+    for (int li = 0; li < 3; ++li) {
+        for (auto& kv : c.layers[li].bindings) doBinding(li, kv.second);
+        for (int qi = 0; qi < kQuicksPerLayer; ++qi)
+            for (int bi = 0; bi < kSubBanksPerQuick; ++bi)
+                for (int si = 0; si < kSlotsPerSubBank; ++si)
+                    doBinding(li, c.userQuicks[li].quicks[qi]
+                                     .subBanks[bi].slots[si]);
+    }
+    for (int b = 0; b < kUf1SoftBankCount; ++b)
+        for (int si = 0; si < kUf1SoftBankSlots; ++si)
+            doBinding(0, c.uf1SoftBanks[b][si]);
+    for (auto& p : c.bankPresets)
+        for (int si = 0; si < kSlotsPerSubBank; ++si)
+            doBinding(0, p.slots[si]);
+}
+
 // v9 → v10: scrub the dead builtins out of every binding slot
 // (shortPress + longPress, all modifier rows). Maps each old action
 // to its surviving equivalent. The replacement for quick_select_N /
@@ -2472,14 +2578,10 @@ void upgradeRetireQuickSelect_(Config& c)
             return;
         }
     };
+    forEachActionSlot_(c, migrateSlot);
     for (int li = 0; li < 3; ++li) {
         for (auto& kv : c.layers[li].bindings) {
             Binding& bd = kv.second;
-            for (int m = 0; m < kModifierCount; ++m) {
-                migrateSlot(li, bd.shortPress[m]);
-                migrateSlot(li, bd.longPress[m]);
-                migrateSlot(li, bd.doublePress[m]);
-            }
             // Behavior was Toggle for the Quick buttons under the old
             // model — flip to Momentary so the new softkey_bank_N
             // press semantics match the factory default.
@@ -2525,16 +2627,7 @@ void upgradeRetireUf1Builtins_(Config& c)
             return;
         }
     };
-    for (int li = 0; li < 3; ++li) {
-        for (auto& kv : c.layers[li].bindings) {
-            Binding& bd = kv.second;
-            for (int m = 0; m < kModifierCount; ++m) {
-                migrateSlot(bd.shortPress[m]);
-                migrateSlot(bd.longPress[m]);
-                migrateSlot(bd.doublePress[m]);
-            }
-        }
-    }
+    forEachActionSlot_(c, [&](int /*layer*/, ActionSlot& s) { migrateSlot(s); });
 }
 
 // Sanitize the Sub-Bank-selector + Quick-button bindings against
@@ -2697,7 +2790,14 @@ void upgradeBackfillUf1SoftKey_(Config& c)
     if (sp.type != ActionType::Noop || !sp.action.empty()) return;
     sp.type     = ActionType::Builtin;
     sp.action   = "temp_selset_pin_uf1_channel";
-    sp.label    = "PIN SET";
+    // ⇨ THE KEY'S NAME, NOT THE SET'S. The factory seed puts it in
+    // Binding::label (mkBuiltin does), this backfill put it in ActionSlot::label
+    // — and the two mean different things: a slot label belongs to a modifier
+    // SET, a Binding label names the key. On a config that came through here the
+    // auto-label refresh then had nothing of its own to replace, so rebinding
+    // the key left "PIN SET" on the display over an action it no longer fires:
+    // forum 4.2 all over again, for pre-v20 configs only.
+    bd.label    = "PIN SET";
     bd.behavior = Behavior::Toggle;
 }
 
@@ -3246,7 +3346,7 @@ bool exportLayerTo(int layer, const std::string& path)
 {
     if (layer < 0 || layer > 2) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    return writeFile_(path, serializeOneLayer_(g_cfg.layers[layer], layer));
+    return writeFile_(path, serializeOneLayer_(g_cfg, layer));
 }
 
 bool importLayerFrom(int layer, const std::string& path)
@@ -3275,9 +3375,30 @@ bool importLayerFrom(int layer, const std::string& path)
     Layer tmp;
     if (!parseLayer_(layerObj, tmp)) return false;
 
+    // v2 files also carry the layer's 144 top-soft-key slots (+ sub-bank LEDs
+    // and dynamic kinds). Parse them onto a scratch Config's layer 0 — the
+    // parsers write into a Config, and Config is far too big for the stack
+    // (Windows load crash, see load()).
+    // A v1 file says NOTHING about the soft-keys, so it must leave the target
+    // layer's alone; an EMPTY v2 array means "this layer has none" and must
+    // clear them. Hence the presence check rather than a count check.
+    const bool hasSoftKeys =
+        root->get_item_by_name("user_quicks")     != nullptr
+     || root->get_item_by_name("sub_bank_leds")   != nullptr
+     || root->get_item_by_name("sub_bank_dynamic") != nullptr;
+    std::unique_ptr<Config> quicksPtr;
+    if (hasSoftKeys) {
+        quicksPtr = std::make_unique<Config>();
+        parseUserQuicks_(root, *quicksPtr, /*forceLayer*/ 0);
+        parseSubBankLeds_(root, *quicksPtr, /*forceLayer*/ 0);
+        parseSubBankDynamic_(root, *quicksPtr, /*forceLayer*/ 0);
+    }
+
     {
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         g_cfg.layers[layer] = std::move(tmp);
+        if (quicksPtr)
+            g_cfg.userQuicks[layer] = std::move(quicksPtr->userQuicks[0]);
         ensureConfigDir_();
         writeFile_(configPath_(), serialize(g_cfg));
         g_bindingsGen.fetch_add(1, std::memory_order_relaxed);
@@ -4158,7 +4279,7 @@ Binding getBinding(int layer, ButtonId id)
 
 bool findFirstBoundTo(const std::string& builtinName,
                       int* layerOut, ButtonId* idOut, Modifier* modOut,
-                      bool* longPressOut)
+                      bool* longPressOut, std::string* softKeyWhereOut)
 {
     if (builtinName.empty()) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
@@ -4195,6 +4316,55 @@ bool findFirstBoundTo(const std::string& builtinName,
                     if (longPressOut)  *longPressOut  = true;
                     return true;
                 }
+            }
+        }
+    }
+
+    // ---- Then the two soft-key stores -----------------------------------
+    // Nothing here has a ButtonId, so a hit reports its coordinates instead.
+    static const char* kSubBankNames[kSubBanksPerQuick] = {
+        "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
+    };
+    auto hit = [&](int layer, int m, bool longPress, const std::string& where) {
+        if (layerOut)        *layerOut        = layer;
+        if (idOut)           *idOut           = ButtonId::None;
+        if (modOut)          *modOut          = static_cast<Modifier>(m);
+        if (longPressOut)    *longPressOut    = longPress;
+        if (softKeyWhereOut) *softKeyWhereOut = where;
+        return true;
+    };
+    for (int layer = 0; layer < 3; ++layer) {
+        for (int qi = 0; qi < kQuicksPerLayer; ++qi) {
+            for (int bi = 0; bi < kSubBanksPerQuick; ++bi) {
+                for (int si = 0; si < kSlotsPerSubBank; ++si) {
+                    const Binding& bd = g_cfg.userQuicks[layer].quicks[qi]
+                                            .subBanks[bi].slots[si];
+                    for (int m = 0; m < kModifierCount; ++m) {
+                        const bool isShort = matchSlot(bd.shortPress[m]);
+                        if (!isShort
+                            && !(bd.hasLongPress && matchSlot(bd.longPress[m])))
+                            continue;
+                        char buf[96];
+                        snprintf(buf, sizeof(buf), "Q%d / %s / key %d",
+                                      qi + 1, kSubBankNames[bi], si + 1);
+                        return hit(layer, m, !isShort, buf);
+                    }
+                }
+            }
+        }
+    }
+    for (int b = 0; b < kUf1SoftBankCount; ++b) {
+        for (int si = 0; si < kUf1SoftBankSlots; ++si) {
+            const Binding& bd = g_cfg.uf1SoftBanks[b][si];
+            for (int m = 0; m < kModifierCount; ++m) {
+                const bool isShort = matchSlot(bd.shortPress[m]);
+                if (!isShort
+                    && !(bd.hasLongPress && matchSlot(bd.longPress[m])))
+                    continue;
+                char buf[96];
+                snprintf(buf, sizeof(buf), "UF1 bank %d / key %d",
+                              b + 1, si + 1);
+                return hit(0, m, !isShort, buf);
             }
         }
     }
@@ -4458,6 +4628,15 @@ bool saveBankPreset(const std::string& name,
         p.slots[s].behavior       = src.behavior;
         p.slots[s].label          = src.label;
         p.slots[s].labelIsUserSet = src.labelIsUserSet;
+        // ⇨ ALL THREE GESTURES, NOT JUST THE SHORT PRESS. Saving only
+        // shortPress[mod] meant recalling preset A over a bank that held B left
+        // B's long- and double-press in place: the key then did A on a tap and B
+        // on a hold, a combination the user never configured anywhere
+        // (Frank 2026-08-18).
+        p.slots[s].hasLongPress   = src.hasLongPress;
+        p.slots[s].hasDoublePress = src.hasDoublePress;
+        p.slots[s].longPress[0]   = src.longPress[mod];
+        p.slots[s].doublePress[0] = src.doublePress[mod];
         p.slots[s].color[0] = src.color[0];
         p.slots[s].color[1] = src.color[1];
         p.slots[s].color[2] = src.color[2];
@@ -4511,6 +4690,46 @@ bool deleteBankPreset(int idx)
     return true;
 }
 
+// Write one preset slot onto modifier set `mod` of `dst`. The user recall and
+// the factory recall both go through here — they used to write different fields
+// in different ways, so the two buttons in the same window left the bank in
+// different states (Frank 2026-08-18). Caller holds g_cfgMutex.
+static void applyPresetSlotLocked_(const Binding& src, int mod, Binding& dst)
+{
+    dst.shortPress[mod]  = src.shortPress[0];
+    dst.longPress[mod]   = src.longPress[0];
+    dst.doublePress[mod] = src.doublePress[0];
+    // The flags are per-KEY, not per-set, so they are OR'd in: a preset that
+    // brings a long press switches the column on, one without it must not
+    // switch off a column another set is still using.
+    dst.hasLongPress   = dst.hasLongPress   || src.hasLongPress;
+    dst.hasDoublePress = dst.hasDoublePress || src.hasDoublePress;
+    // ⇨ THE LABEL HAS TO COME ALONG, INTO ANY SET.
+    // A preset slot's label may sit in Binding::label — that is where a key's
+    // name lives, and where every preset saved before today put it. A modifier
+    // set deliberately does NOT fall back to the Plain label, so recalling into
+    // Shift without carrying it produced a set whose actions fired while the
+    // screen stayed blank (Frank 2026-08-18: "LABELS ERSCHEINEN NICHT ABER
+    // ACTION FEUERT"). Label-only slots vanished entirely.
+    // Modifier sets only. On Plain the key's own name IS the label, and
+    // duplicating it into the set would shadow the editor's Label field, which
+    // writes Binding::label there.
+    if (mod != 0 && dst.shortPress[mod].label.empty())
+        dst.shortPress[mod].label = src.label;
+    if (mod == 0) {
+        dst.behavior       = src.behavior;
+        dst.label          = src.label;
+        dst.labelIsUserSet = src.labelIsUserSet;
+        for (int c = 0; c < 3; ++c) {
+            dst.color[c]         = src.color[c];
+            dst.inactiveColor[c] = src.inactiveColor[c];
+        }
+        dst.brightness         = src.brightness;
+        dst.inactiveBrightness = src.inactiveBrightness;
+        dst.ledShowWhenEmpty   = src.ledShowWhenEmpty;
+    }
+}
+
 bool recallBankPreset(int idx, int layer, int quick, int subBank, int mod)
 {
     if (!userQuickSlotInRange_(layer, quick, subBank, 0)) return false;
@@ -4520,36 +4739,12 @@ bool recallBankPreset(int idx, int layer, int quick, int subBank, int mod)
         return false;
     const SoftKeyBankPreset& p = g_cfg.bankPresets[idx];
     for (int s = 0; s < kSlotsPerSubBank; ++s) {
-        // Lands in the layer you are editing, leaving the other three alone.
+        // Lands in the set you are editing, leaving the other one alone.
         // A preset captured on Plain recalls into Shift unchanged — the stored
-        // slot is a layer's worth of actions, not a fixed Plain/Shift pair.
-        Binding& dst = g_cfg.userQuicks[layer].quicks[quick]
-                          .subBanks[subBank].slots[s];
-        dst.shortPress[mod] = p.slots[s].shortPress[0];
-        // ⇨ THE LABEL HAS TO COME ALONG, INTO ANY SET.
-        // A preset slot's label may sit in Binding::label — that is where a key's
-        // name lives, and where every preset saved before today put it. A modifier
-        // set deliberately does NOT fall back to the Plain label, so recalling into
-        // Shift without carrying it produced a set whose actions fired while the
-        // screen stayed blank (Frank 2026-08-18: "LABELS ERSCHEINEN NICHT ABER
-        // ACTION FEUERT"). Label-only slots vanished entirely.
-        // Modifier sets only. On Plain the key's own name IS the label, and
-        // duplicating it into the set would shadow the editor's Label field,
-        // which writes Binding::label there.
-        if (mod != 0 && dst.shortPress[mod].label.empty())
-            dst.shortPress[mod].label = p.slots[s].label;
-        if (mod == 0) {
-            dst.behavior       = p.slots[s].behavior;
-            dst.label          = p.slots[s].label;
-            dst.labelIsUserSet = p.slots[s].labelIsUserSet;
-            for (int c = 0; c < 3; ++c) {
-                dst.color[c]         = p.slots[s].color[c];
-                dst.inactiveColor[c] = p.slots[s].inactiveColor[c];
-            }
-            dst.brightness         = p.slots[s].brightness;
-            dst.inactiveBrightness = p.slots[s].inactiveBrightness;
-            dst.ledShowWhenEmpty   = p.slots[s].ledShowWhenEmpty;
-        }
+        // slot is one set's worth of gestures, not a fixed Plain/Shift pair.
+        applyPresetSlotLocked_(p.slots[s], mod,
+                               g_cfg.userQuicks[layer].quicks[quick]
+                                   .subBanks[subBank].slots[s]);
     }
     persistLocked_();
     return true;
@@ -4683,31 +4878,23 @@ bool recallFactoryBankPreset(int idx, int layer, int quick, int subBank, int mod
     const SoftKeyBankPreset p = banks[idx];   // copy before taking the lock
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     for (int s = 0; s < kSlotsPerSubBank; ++s) {
-        // Lands in the layer being edited, like the user presets do.
-        Binding& dst = g_cfg.userQuicks[layer].quicks[quick]
-                          .subBanks[subBank].slots[s];
-        dst.shortPress[mod] = p.slots[s].shortPress[0];
-        // Modifier sets only. On Plain the key's own name IS the label, and
-        // duplicating it into the set would shadow the editor's Label field,
-        // which writes Binding::label there.
-        if (mod != 0 && dst.shortPress[mod].label.empty())
-            dst.shortPress[mod].label = p.slots[s].label;
-        if (mod == 0) {
-            const std::string keepLabel = p.slots[s].label;
-            const auto        keepSet   = dst.shortPress[0];
-            dst = p.slots[s];
-            dst.label         = keepLabel;
-            dst.shortPress[0] = keepSet;   // keeps the label we just carried in
-        }
+        // Same writer as the user recall. On Plain this used to assign the whole
+        // Binding (`dst = p.slots[s]`), which took the OTHER modifier set and the
+        // long/double presses down with it — so the two recall buttons in one
+        // window behaved differently (Frank 2026-08-18).
+        applyPresetSlotLocked_(p.slots[s], mod,
+                               g_cfg.userQuicks[layer].quicks[quick]
+                                   .subBanks[subBank].slots[s]);
     }
     persistLocked_();
     return true;
 }
 
-int loadFactoryReaSixtySet(int layer, int quick)
+int loadFactoryReaSixtySet(int layer, int quick, int mod)
 {
     if (layer < 0 || layer >= 3) return -1;
     if (quick < 0 || quick >= kQuicksPerLayer) return -1;
+    if (mod < 0 || mod >= kSoftKeyModifierSets) return -1;
     const auto& banks = factoryReaSixtyBanks_();
     // std::clamp, not std::min — Windows <windows.h> defines a min() macro that
     // breaks std::min on MSVC (error C2589). banks.size() ≥ 0, so clamping the
@@ -4718,8 +4905,15 @@ int loadFactoryReaSixtySet(int layer, int quick)
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         for (int sb = 0; sb < n; ++sb) {
             for (int s = 0; s < kSlotsPerSubBank; ++s) {
-                g_cfg.userQuicks[layer].quicks[quick]
-                    .subBanks[sb].slots[s] = banks[sb].slots[s];
+                // ⇨ ONE SET, like every other recall. This used to assign whole
+                // Bindings, so loading the factory set wiped the Shift set of all
+                // 48 slots while the dialog only warned about "48 slots"
+                // (Frank 2026-08-18). Its sibling recallFactoryBankPreset has
+                // taken a `mod` since modifier sets existed; this one never got
+                // the parameter.
+                applyPresetSlotLocked_(banks[sb].slots[s], mod,
+                                       g_cfg.userQuicks[layer].quicks[quick]
+                                           .subBanks[sb].slots[s]);
             }
         }
         persistLocked_();
@@ -4967,6 +5161,11 @@ void resetLayerToDefaults(int layer)
     Config& tmp = *tmpPtr;
     seedFactoryDefaults_(tmp);
     g_cfg.layers[layer] = std::move(tmp.layers[layer]);
+    // ⇨ AND THE LAYER'S SOFT-KEYS. They live in a parallel store, so a reset
+    // that only swapped the button map left all 144 top-soft-key slots in
+    // place — "reset to defaults" that kept most of the layer
+    // (Frank 2026-08-18). Same store the export/import pair forgot.
+    g_cfg.userQuicks[layer] = std::move(tmp.userQuicks[layer]);
     persistLocked_();
 }
 

@@ -446,6 +446,10 @@ int                reasixty_activeUserBank();
 int                reasixty_activeQuickFor(int layer);
 int                reasixty_activeSubBankFor(int layer);
 int                reasixty_engagedQuickFor(int layer);
+// Move the engaged bank from the EDITOR while UF8 Plugin Mode has the hardware
+// builtins locked out (no-ops otherwise — the dispatch already did it).
+void               reasixty_editorEngageQuickIfLocked(int layer, int quick);
+void               reasixty_editorEngageSubBankIfLocked(int subBank);
 // Pinned startup soft-key bank (fixed user-Quick engaged at boot).
 bool               reasixty_startupBank(int* layer, int* quick, int* sub);
 void               reasixty_setStartupBank(bool on, int layer, int quick, int sub);
@@ -454,7 +458,6 @@ const char*        reasixty_userBankSlotLabel(int bank, int slot);
 // to highlight the matching V-POT/Bank tile and by the per-binding
 // editor header to surface the live bank context.
 int                reasixty_softkeyCurrentBank();
-const char*        reasixty_softkeyCurrentBankName();
 int                reasixty_softKeyBankRaw();
 void               reasixty_setSoftKeyBank(int bank);
 // Bindings save/load to user-chosen path. Both spawn a native file
@@ -907,8 +910,22 @@ void renderBindingContextMenu_(ImGui_Context* ctx, int layer,
         // ordinary button wiped that button's colours and its other slots.
         s_bindingClipboardFull = true;
     }
+    // ⇨ THE SUB-BANK CELLS TAKE NO PASTE.
+    // Their action is a hard invariant: upgradeSanitizeBankAndQuickActions_
+    // rewrites all six back to softkey_bank_select on every single load, which
+    // is what keeps a corrupted cell from leaving a bank dark (Frank 2026-05-13).
+    // So a paste onto one was accepted, saved, and silently undone at the next
+    // start. Refusing it says the same thing out loud, the way the dynamic-bank
+    // slot editor now refuses assignments that could never fire.
+    const bool ctxIsBankCell = [] {
+        using namespace uf8::bindings;
+        return s_bindingCtxBtn == ButtonId::VPotBank
+            || (s_bindingCtxBtn >= ButtonId::SoftKey1Bank
+                && s_bindingCtxBtn <= ButtonId::SoftKey5Bank);
+    }();
     bool pasteEnabled = s_bindingClipboardFull
-                     && s_bindingCtxBtn != uf8::bindings::ButtonId::None;
+                     && s_bindingCtxBtn != uf8::bindings::ButtonId::None
+                     && !ctxIsBankCell;
     if (ImGui_MenuItem(ctx, "Paste binding", nullptr, nullptr,
                        &pasteEnabled))
     {
@@ -1057,6 +1074,14 @@ bool regularBindable_(ButtonId id)
     if (id >= ButtonId::TopSoftKey1 && id <= ButtonId::TopSoftKey8)
         return false;
     switch (id) {
+        // The UF1's four display soft-keys live in the uf1SoftBanks store, not
+        // in the layer map, so getBinding always returns an empty Binding for
+        // them: the tile could never tint as assigned and the tooltip would have
+        // been blank (Frank 2026-08-18). Same exclusion the UF8 top-soft-keys
+        // get above, and the mock LCD two rows below already shows their real
+        // labels.
+        case ButtonId::Uf1DisplaySoft1: case ButtonId::Uf1DisplaySoft2:
+        case ButtonId::Uf1DisplaySoft3: case ButtonId::Uf1DisplaySoft4:
         case ButtonId::Layer1: case ButtonId::Layer2: case ButtonId::Layer3:
         case ButtonId::Quick1: case ButtonId::Quick2: case ButtonId::Quick3:
         case ButtonId::VPotBank:
@@ -1311,7 +1336,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
              && editSubBank >= 0 && editSubBank <= 5)
                 ? uf8::bindings::getSubBankDynamic(activeLayer, editQuick,
                                                    editSubBank,
-                                                   g_slotEditModIdx)
+                                                   uf8::bindings::kDynamicKindSet)
                 : uf8::bindings::DynamicBankKind::None;
         if (editDynKind != uf8::bindings::DynamicBankKind::None) {
             scribble = dynKindShort_(editDynKind);
@@ -1492,6 +1517,10 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
         if (justClicked) {
             uf8::bindings::dispatch(b.id, /*pressed*/ true);
             uf8::bindings::dispatch(b.id, /*pressed*/ false);
+            // In UF8 Plugin Mode the dispatch above deliberately does nothing,
+            // which since 9e1e8be also meant the editor could not be pointed at
+            // any bank. Move it here instead; the surface stays locked.
+            reasixty_editorEngageQuickIfLocked(activeLayer, b.idx);
         }
         // Green ring = LIVE engaged Quick on the UF8 (hardware state).
         if (b.idx == activeQuickRing) {
@@ -1584,6 +1613,9 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
                 // button would.
                 uf8::bindings::dispatch(b.id, /*pressed*/ true);
                 uf8::bindings::dispatch(b.id, /*pressed*/ false);
+                // Plugin Mode locks softkey_bank_select out; keep the pane
+                // reachable (see reasixty_editorEngageSubBankIfLocked).
+                reasixty_editorEngageSubBankIfLocked(b.idx);
             }
             if (b.idx == activeBank) {
                 // Green outline = LIVE active bank (hardware state).
@@ -1599,7 +1631,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
             // slots and be none (Frank 2026-08-18). Drawn as a filled triangle
             // in the top-right corner, clear of both rings.
             if (uf8::bindings::getSubBankDynamic(activeLayer, editQuick, b.idx,
-                                                 g_slotEditModIdx)
+                                                 uf8::bindings::kDynamicKindSet)
                 != uf8::bindings::DynamicBankKind::None) {
                 ImGui_DrawList_AddTriangleFilled(c.dl,
                     c.ox + b.x + b.w - 7, c.oy + b.y + 1,
@@ -2471,14 +2503,36 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     // banks × 4 slots) — the screen shows the current bank's 4 labels the
     // way the UF8 scribbles show theirs. Blank slot falls back to "SOFT n".
     const int uf1Bank = reasixty_uf1SoftBank();
+    // A dynamic bank computes its 4 keys from the focused track, so the stored
+    // slots are dead text — name the kind instead, exactly as the UF8 schematic
+    // does. Preview the modifier set the picker is on, with the surface's own
+    // label rule. All three of these were missing here, so this panel showed
+    // Plain's stored names no matter what the editor or the bank was set to
+    // (Frank 2026-08-18).
+    const auto uf1DynKind =
+        getUf1SoftBankDynamic(uf1Bank, uf8::bindings::kDynamicKindSet);
     for (int i = 0; i < 4; ++i) {
-        const Binding sb = getUf1SoftBankSlot(uf1Bank, i);
-        const auto& sp = sb.shortPress[static_cast<int>(Modifier::Plain)];
-        std::string lbl = !sp.label.empty() ? sp.label
-                        : (sp.type == ActionType::Builtin && !sp.action.empty())
-                              ? builtinDisplayName(sp.action)
-                              : std::string();
-        if (lbl.empty()) { char h[8]; snprintf(h, sizeof h, "SOFT %d", i + 1); lbl = h; }
+        std::string lbl;
+        if (uf1DynKind != DynamicBankKind::None) {
+            lbl = dynKindShort_(uf1DynKind);
+        } else {
+            const Binding sb = getUf1SoftBankSlot(uf1Bank, i);
+            const auto& sp = sb.shortPress[g_slotEditModIdx];
+            const bool plainLayer = (g_slotEditModIdx == 0);
+            if (!sp.label.empty()) {
+                lbl = sp.label;
+            } else if (plainLayer && !sb.label.empty()) {
+                lbl = sb.label;
+            } else if (sp.type == ActionType::Builtin && !sp.action.empty()) {
+                lbl = builtinDisplayName(sp.action);
+            }
+            // Only Plain falls back to "SOFT n": an empty modifier set previews
+            // blank, because that is what the hardware will show.
+            if (lbl.empty() && plainLayer) {
+                char h[8]; snprintf(h, sizeof h, "SOFT %d", i + 1);
+                lbl = h;
+            }
+        }
         if (lbl.size() > 12) lbl.resize(12);
         drawTextCentered_(c, colCx(i), 64, 0x4488DDFF, lbl.c_str());
     }
@@ -4570,12 +4624,13 @@ namespace {
 
 // ---- User-Quick slot editor (per-slot, driven by TopSoftKey click) ------
 // Edits ONE user-Quick slot at coordinates (editLayer, editQuick,
-// editSubBank, slotIdx). The Quick + Sub-Bank halves come from the
-// UI-local edit selector in drawBindings (s_editQuick / s_editSubBank),
-// NOT live hardware — so soft-key slots stay visible & editable offline
-// (no UF8 connected) and regardless of UF8 Plugin Mode (in which a
-// Quick-click is a no-op, so the old live-Quick coupling left the slots
-// unreachable). The green ● in the selector marks what's engaged live.
+// editSubBank, slotIdx). The Quick + Sub-Bank halves are DERIVED from the
+// engaged bank (9e1e8be: "EDIT = AKTIVE BANK AUF HARDWARE! IMMER!"), not held
+// as a UI-local selection — clicking a Quick or Sub-Bank tile engages it and the
+// editor follows. That keeps working offline (the engaged bank is a value this
+// process holds with no UF8 attached) and in UF8 Plugin Mode, where the tile
+// click is routed past the locked-out builtins by
+// reasixty_editorEngageQuickIfLocked.
 //
 // Layer 1 Q1/Q2 = SSL CS/BC are plug-in-driven; their slots are filled
 // by the SSL plug-in's stock soft-key labels and not user-editable.
@@ -4651,7 +4706,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     // so turning the bank back to static does not require finding the other page.
     {
         const DynamicBankKind dynKind =
-            getSubBankDynamic(editLayer, qIdx, sbIdx, g_slotEditModIdx);
+            getSubBankDynamic(editLayer, qIdx, sbIdx, kDynamicKindSet);
         if (dynKind != DynamicBankKind::None) {
             char note[200];
             snprintf(note, sizeof(note),
@@ -4767,16 +4822,18 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                          /*uqSubBank*/ sbIdx, /*uqSlot*/ slotIdx)) {
         dirty = true;
     }
-    // Clears the WHOLE key, not the selected modifier slot — it always did,
-    // but with four slots on screen the old wording "Clear slot" had become a
-    // lie. To empty just one slot, pick "None (disabled)" in the picker above.
+    // Clears the WHOLE key, not the selected modifier set — it always did, but
+    // with both sets on screen the old wording "Clear slot" had become a lie. To
+    // empty just one set, pick "None (disabled)" in the picker above. (The
+    // Binding's unreachable Cmd/Ctrl rows go too; a soft-key has no such sets,
+    // so saying "four" here only raised the question of which four.)
     if (ImGui_Button(ctx, "Clear whole key##uqclr_inl",
                      /*size_w*/ nullptr, /*size_h*/ nullptr)) {
         bd = Binding{};
         dirty = true;
     }
     ImGui_TextDisabled(ctx,
-        "Clears the label, behaviour, LED and all four modifier slots.");
+        "Clears the label, behaviour, LED and both modifier sets.");
 
     // LED appearance for this slot. Same Active / Inactive split the
     // regular binding editor exposes, scoped to this user-Quick slot.
@@ -4976,7 +5033,7 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
         dirty = true;
     }
     ImGui_TextDisabled(ctx,
-        "Clears the label, behaviour, LED and all four modifier slots.");
+        "Clears the label, behaviour, LED and both modifier sets.");
 
     // LED — Active / Inactive colour + brightness, exactly like the UF8
     // soft-key slots. The DAW-mode soft-key painter reads these back to
@@ -5132,9 +5189,9 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     const char* sbLabels[6] = {
         "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
     };
-    // Quick comes from the UI-local edit selector (drawBindings), not
-    // live hardware — keeps the Sub-Bank preset/LED editor reachable
-    // offline and in UF8 Plugin Mode. See drawUserQuickSlotEditor_.
+    // Quick is the ENGAGED one, derived in drawBindings — the editor and the
+    // surface are never on different banks. Reachable offline and in UF8 Plugin
+    // Mode alike; see drawUserQuickSlotEditor_.
     const int engagedQ = editQuick;
 
     // Layer 1 Q1/Q2 = SSL CS/BC focus — plug-in driven, not a free
@@ -5185,6 +5242,9 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         ImGui_TextDisabled(ctx,
             "Compute this Sub-Bank's 8 keys live from the focused track "
             "instead of fixed slots. The slots below are ignored while on.");
+        ImGui_TextDisabled(ctx,
+            "Applies to both modifier sets: on a dynamic bank the modifiers "
+            "run the FX-key gestures instead of showing a second set.");
         ImGui_Spacing(ctx);
 
         struct DynOpt { DynamicBankKind kind; const char* label; };
@@ -5196,7 +5256,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
               reasixty_sp("Track Colours", "Track Colors") },
         };
         const DynamicBankKind curKind =
-            getSubBankDynamic(editLayer, engagedQ, sbIdx, g_slotEditModIdx);
+            getSubBankDynamic(editLayer, engagedQ, sbIdx, kDynamicKindSet);
         const char* curDynLabel = kDynOpts[0].label;
         for (const auto& o : kDynOpts)
             if (o.kind == curKind) curDynLabel = o.label;
@@ -5210,7 +5270,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                                      /*size_w*/ nullptr,
                                      /*size_h*/ nullptr)) {
                     setSubBankDynamic(editLayer, engagedQ, sbIdx,
-                                      g_slotEditModIdx, o.kind);
+                                      kDynamicKindSet, o.kind);
                 }
             }
             ImGui_EndCombo(ctx);
@@ -5683,12 +5743,14 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             ImGui_TextWrapped(ctx,
                 "Load the full Rea-Sixty factory set into Layer 1 / "
                 "Quick 3? This overwrites all 48 slots in that Quick's "
-                "V-POT + Soft 1-5 sub-banks. Other layers/quicks are "
+                "V-POT + Soft 1-5 sub-banks, on the modifier set selected "
+                "above. Other layers/quicks and the other set are "
                 "untouched.");
             ImGui_Spacing(ctx);
             if (ImGui_Button(ctx, "Load set##fac_loadset_ok",
                              nullptr, nullptr)) {
-                loadFactoryReaSixtySet(/*layer*/ 0, /*quick*/ 2);
+                loadFactoryReaSixtySet(/*layer*/ 0, /*quick*/ 2,
+                                       g_slotEditModIdx);
                 ImGui_CloseCurrentPopup(ctx);
             }
             ImGui_SameLine(ctx, nullptr, nullptr);
@@ -6042,12 +6104,17 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
               reasixty_sp("Track Colours", "Track Colors") },
             };
             const DynamicBankKind curKind =
-                uf8::bindings::getUf1SoftBankDynamic(uf1Bank, g_slotEditModIdx);
+                uf8::bindings::getUf1SoftBankDynamic(
+                    uf1Bank, uf8::bindings::kDynamicKindSet);
             const char* curLabel = kUf1DynOpts[0].label;
             for (const auto& o : kUf1DynOpts)
                 if (o.kind == curKind) curLabel = o.label;
 
             ImGui_Text(ctx, "Dynamic bank");
+            ImGui_TextDisabled(ctx,
+                "Applies to both modifier sets: on a dynamic bank the "
+                "modifiers run the FX-key gestures instead of showing a "
+                "second set.");
             ImGui_SetNextItemWidth(ctx, 260.0);
             if (ImGui_BeginCombo(ctx, "##uf1dynbank", curLabel,
                                  /*flags*/ nullptr)) {
@@ -6057,7 +6124,8 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                                          /*flags*/ nullptr,
                                          /*size_w*/ nullptr,
                                          /*size_h*/ nullptr)) {
-                        uf8::bindings::setUf1SoftBankDynamic(uf1Bank, g_slotEditModIdx, o.kind);
+                        uf8::bindings::setUf1SoftBankDynamic(
+                            uf1Bank, uf8::bindings::kDynamicKindSet, o.kind);
                     }
                 }
                 ImGui_EndCombo(ctx);
@@ -19944,16 +20012,20 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         uf8::bindings::ButtonId id = uf8::bindings::ButtonId::None;
         uf8::bindings::Modifier m  = uf8::bindings::Modifier::Plain;
         bool longPress = false;
+        std::string softKeyWhere;
         const bool found = uf8::bindings::findFirstBoundTo(
-            builtinName, &layer, &id, &m, &longPress);
+            builtinName, &layer, &id, &m, &longPress, &softKeyWhere);
         char line[256];
         if (found) {
-            const char* name = uf8::bindings::toName(id);
+            // A soft-key hit has no ButtonId — it reports its bank coordinates.
+            const char* name = (id == uf8::bindings::ButtonId::None)
+                             ? softKeyWhere.c_str()
+                             : uf8::bindings::toName(id);
             const char* lp   = longPress ? " (long press)" : "";
             snprintf(line, sizeof(line), "%s — L%d %s%s%s",
                           friendly,
                           layer + 1,
-                          name ? name : "?",
+                          (name && *name) ? name : "?",
                           modShort(m),
                           lp);
         } else {

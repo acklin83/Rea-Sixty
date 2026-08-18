@@ -363,6 +363,18 @@ constexpr int kModifierCount = 4;
 // is the generic per-button matrix and every ordinary key still uses it.
 constexpr int kSoftKeyModifierSets = 2;
 
+// ⇨ A DYNAMIC BANK'S KIND LIVES ON THE PLAIN SET ONLY.
+// Holding a modifier over a dynamic bank runs that bank's FX-key gesture
+// (Push / +Shift / +Cmd / +Ctrl / long → reasixty_fxBankOp); it does NOT swap in
+// a modifier set. The two readings of the same key cannot both win, and Frank
+// chose the gestures. So every RUNTIME path — dispatch and render alike — must
+// ask for the kind with this constant, never with bankModifierSnapshot():
+// reading it from the live snapshot answered "not dynamic" while Shift was
+// down, which sent the press into the empty static Shift slot and blanked the
+// keys (regression 2026-08-18). The editor writes the kind on Plain too, so a
+// bank cannot be dynamic on one set and static on the other.
+constexpr int kDynamicKindSet = 0;
+
 struct Binding {
     Behavior    behavior = Behavior::Momentary;
     std::string label;
@@ -715,11 +727,18 @@ Binding getBinding(int layer, ButtonId id);
 // 3 layers and every bound ButtonId looking for a slot that fires
 // the named builtin. Returns the first match (no preference order
 // beyond unordered_map iteration). Output params are optional.
+// ⇨ SOFT-KEYS COUNT TOO. They are not in the layer map, so a search that
+// stopped there reported "(unbound)" for an action the user had put on a
+// soft-key — and the honest way to react to that is to bind it a second time
+// (Frank 2026-08-18). A soft-key hit sets *idOut = ButtonId::None and fills
+// softKeyWhereOut with a readable location ("Q1 / Soft 3 / key 5"); the layer
+// map is searched first, so existing hits are unaffected.
 bool findFirstBoundTo(const std::string& builtinName,
                       int* layerOut    = nullptr,
                       ButtonId* idOut  = nullptr,
                       Modifier* modOut = nullptr,
-                      bool* longPressOut = nullptr);
+                      bool* longPressOut = nullptr,
+                      std::string* softKeyWhereOut = nullptr);
 
 // Whether the layer has an entry for this id at all. Distinguishes
 // "user has touched this binding" (entry exists, even if all fields
@@ -789,7 +808,7 @@ bool              recallFactoryBankPreset(int idx, int layer, int quick,
                                           int subBank, int mod);
 // Bulk: fill the 6 sub-banks of (layer, quick) with factory banks 0..5 in
 // order (V-POT←0, Soft1←1, … Soft5←5). Returns banks written, -1 on OOR.
-int               loadFactoryReaSixtySet(int layer, int quick);
+int               loadFactoryReaSixtySet(int layer, int quick, int mod);
 
 // Dispatch a press/release through a user-quick slot. Same long-press
 // + modifier-matrix logic as dispatch(ButtonId), but the slot is
