@@ -1187,6 +1187,7 @@ V-Pots cycle per-strip (each strip's own track). The three single encoders cycle
 | Setting | Effect |
 |---|---|
 | Enable RME / TotalReaper integration | Master switch. Requires the TotalReaper extension. While REC Selection Mode is active, the assignments below trigger TotalReaper actions against the strip's track. |
+| (presence line) | Says whether TotalReaper was detected. When it is missing, a button hands you to ReaPack with the repository selected, so it installs like any other package. TotalReaper ships from the same repository as Rea-Sixty, so if you installed through ReaPack it is already listed. Without ReaPack the button opens the project page instead. |
 | V-Pot rotation → Preamp gain ±1 dB | Steps preamp gain instead of pan. |
 | V-Pot rotation + Shift → Change input channel | Re-routes the strip's track input on rotation. |
 | V-Pot push (combo) | TotalReaper action assignment. Choices: `None`, `Toggle 48V phantom`, `Toggle pad`, `Toggle phase invert`, `Toggle AutoLevel`. |
@@ -2242,7 +2243,7 @@ If you add or delete a send on a track that already has send automation, a fader
 
 # REC + RME (TotalReaper) integration
 
-Requires the **TotalReaper** extension (separate ReaPack package) and an RME interface supporting TotalMix FX 2.1 Global OSC.
+Requires the **TotalReaper** extension (separate ReaPack package, same repository as Rea-Sixty) and an RME interface supporting TotalMix FX 2.1 Global OSC. Settings → Modes → REC says whether it was detected and offers a button to fetch it through ReaPack when it is not.
 
 Master switch: Settings → Modes → REC → "Enable RME / TotalReaper integration".
 

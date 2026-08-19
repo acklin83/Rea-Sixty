@@ -422,6 +422,8 @@ void reasixty_setRecUf1ShiftInputCh(bool on);
 void reasixty_setRecUf1VpotPush(int v);
 void reasixty_setRecUf1Cut(int v);
 void reasixty_setRecUf1Solo(int v);
+bool reasixty_totalReaperPresent();
+bool reasixty_openTotalReaperInReaPack();
 bool reasixty_stripFollowsFocusedFx();
 void reasixty_setStripFollowsFocusedFx(bool follow);
 bool reasixty_pluginGuiFollowsInstance();
@@ -20282,6 +20284,26 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         "is active, the assignments below dispatch TotalReaper named "
         "actions against the strip's track. \"None\" leaves the button's "
         "default REC behaviour intact.");
+
+    // Presence line, and a way to get it when it is missing. TotalReaper ships
+    // from the SAME ReaPack repository as Rea-Sixty, so for anyone who
+    // installed through ReaPack this is one click. We hand over to ReaPack
+    // rather than downloading an extension binary ourselves.
+    if (reasixty_totalReaperPresent()) {
+        ImGui_Text(ctx, "  TotalReaper detected.");
+    } else {
+        ImGui_Text(ctx, "  TotalReaper not detected.");
+        if (ImGui_Button(ctx, "Get TotalReaper via ReaPack",
+                         /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            static const char* kTotalReaperUrl =
+                "https://github.com/acklin83/TotalReaper";
+            // False = no ReaPack (or the repo is not configured): the project
+            // page explains the manual install, so nobody hits a dead button.
+            if (!reasixty_openTotalReaperInReaPack()) {
+                reasixty_openUrl(kTotalReaperUrl);
+            }
+        }
+    }
 
     if (rmeOn) {
         ImGui_Spacing(ctx);

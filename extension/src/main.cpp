@@ -39614,6 +39614,55 @@ int  reasixty_recUf1VpotPush()         { return static_cast<int>(g_recUf1VpotPus
 int  reasixty_recUf1Cut()              { return static_cast<int>(g_recUf1Cut.load()); }
 int  reasixty_recUf1Solo()             { return static_cast<int>(g_recUf1Solo.load()); }
 
+// True when TotalReaper is loaded. Its actions are the only handle we have on
+// it, and this one exists in every version that has the preamp features.
+bool reasixty_totalReaperPresent()
+{
+    return NamedCommandLookup("_TOTALREAPER_TOGGLE_48V") != 0;
+}
+
+// Hand the user to ReaPack with TotalReaper in front of them. Returns false when
+// ReaPack is not installed, and the caller opens the project page instead.
+//
+// ⛔ We do NOT download anything ourselves. It would mean fetching an extension
+// binary and dropping it into UserPlugins for REAPER to load unasked, past code
+// signing, notarisation and the platform choice. ReaPack does exactly this job
+// with an index, hashes and the user's confirmation.
+//
+// Both packages live in the SAME repository, so a Rea-Sixty user installed
+// through ReaPack already has it configured; AddSetRepository is only there for
+// someone who installed by hand. Signatures read off the installed dylib
+// 2026-08-19, not from memory:
+//   bool AddSetRepository(name, url, enable, autoInstall, errorOut, errorOut_sz)
+//        autoInstall 2 = "obey user setting"
+//   void ProcessQueue(refreshUI)
+//   bool AboutRepository(repoName)  — false when the repo is not configured
+bool reasixty_openTotalReaperInReaPack()
+{
+    using AddSetFn = bool (*)(const char*, const char*, bool, int, char*, int);
+    using ProcFn   = void (*)(bool);
+    using AboutFn  = bool (*)(const char*);
+    auto* about = reinterpret_cast<AboutFn>(
+        plugin_getapi("ReaPack_AboutRepository"));
+    if (!about) return false;   // no ReaPack at all
+    static constexpr const char* kRepoName = "Frank Acklin Scripts";
+    static constexpr const char* kIndexUrl =
+        "https://github.com/acklin83/reaper-scripts/raw/main/index.xml";
+    auto* addSet = reinterpret_cast<AddSetFn>(
+        plugin_getapi("ReaPack_AddSetRepository"));
+    auto* proc = reinterpret_cast<ProcFn>(
+        plugin_getapi("ReaPack_ProcessQueue"));
+    if (addSet && proc) {
+        char err[256] = {0};
+        // Enable it, leave auto-install on the user's own setting. An already
+        // configured repository keeps its URL and just gets enabled.
+        addSet(kRepoName, kIndexUrl, true, 2, err, sizeof(err));
+        proc(true);
+    }
+    return about(kRepoName);
+}
+
+
 void reasixty_setRecRmeEnabled(bool on)
 {
     g_recRmeEnabled.store(on);
