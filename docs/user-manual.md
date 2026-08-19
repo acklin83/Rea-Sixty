@@ -65,9 +65,9 @@ First-run setup buttons live in **Settings → About**:
 
 Download from <https://github.com/acklin83/Rea-Sixty/releases>:
 
-- **Mac:** `rea-sixty-mac-v0.3.2.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
-- **Windows:** `rea-sixty-win-v0.3.2.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
-- **Linux:** `rea-sixty-linux-v0.5.1.tar.gz` — `reaper_rea-sixty.so` plus the two bundled libraries (`libusb-1.0.so.0`, `libhidapi-hidraw.so.0`), the udev rule, and INSTALL.txt. Unpack **all three** files together into `~/.config/REAPER/UserPlugins/` — the plugin loads the libraries from its own folder, so no `apt install` is needed. Then apply the udev rule (or use the *Install Linux udev rule* button in Settings → About).
+- **Mac:** `rea-sixty-mac-v<version>.zip` — three Apple-notarised dylibs. Unzip into `~/Library/Application Support/REAPER/UserPlugins/`.
+- **Windows:** `rea-sixty-win-v<version>.zip` — three DLLs. Unzip into `%APPDATA%\REAPER\UserPlugins\`.
+- **Linux:** `rea-sixty-linux-v<version>.tar.gz` — `reaper_rea-sixty.so` plus the two bundled libraries (`libusb-1.0.so.0`, `libhidapi-hidraw.so.0`), the udev rule, and INSTALL.txt. Unpack **all three** files together into `~/.config/REAPER/UserPlugins/` — the plugin loads the libraries from its own folder, so no `apt install` is needed. Then apply the udev rule (or use the *Install Linux udev rule* button in Settings → About).
 
 The **Stream Deck Companion** plugin (`com.reasixty.companion.streamDeckPlugin`) is attached to each release separately — it is not part of the ReaPack package. Download it and double-click it; the Stream Deck app installs it.
 
