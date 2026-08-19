@@ -24,6 +24,10 @@
 // Settings → Appearance state, defined in main.cpp at file scope.
 int reasixty_theme();
 int reasixty_fontScale();
+// Device filter — true when a control scoped to `mask` should be drawn at all.
+// See main.cpp's g_devicesSeen: the gate is "ever attached to this machine",
+// not "connected right now".
+bool reasixty_settingsShowsDevice(int mask);
 
 // Font + base-size accessors consumed by the Manual renderer (ManualView.cpp).
 // Refreshed each frame from the live Settings context so the renderer always
@@ -144,10 +148,24 @@ constexpr double kRailWidthPx = 160.0;
 // A result row is TWO lines — the setting, then "Pane › Section" a size down.
 // One line could only ever fit the label at 160 px, which made two hits from
 // two different panes indistinguishable. Frank 2026-08-10.
+// Device scope of a setting. Same bit order as bindings::builtinDeviceMask() and
+// main.cpp's kSeenUf8/Uc1/Uf1, so nothing has to be translated between the three
+// places that scope things by surface.
+constexpr uint8_t kDevUf8 = 0b001;
+constexpr uint8_t kDevUc1 = 0b010;
+constexpr uint8_t kDevUf1 = 0b100;
+constexpr uint8_t kDevAll = 0b111;
+
 struct SearchEntry {
     const char* label;    // the control's own label
     Section     section;  // pane it lives in
     const char* group;    // section heading inside that pane ("" = pane-level)
+    // Which surfaces this setting applies to. Defaulted, so the ~100 universal
+    // rows below stay three-element aggregates and only the device-specific
+    // ones carry a fourth field. A result whose devices are all absent is
+    // filtered out of the result list, exactly as the pane hides the control —
+    // otherwise search would be a back door onto a setting that isn't drawn.
+    uint8_t     dev = kDevAll;
 };
 
 constexpr SearchEntry kSearchIndex[] = {
@@ -172,53 +190,57 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Reopen on last tab viewed",             kSecAppearance, "Settings window" },
     // -- Devices ------------------------------------------------------------
     { "Connected devices",                     kSecDevices, "Connected devices" },
+    { "Show settings for devices you don't have",
+                                               kSecDevices, "Connected devices" },
+    { "Forget devices that aren't connected",
+                                               kSecDevices, "Connected devices" },
     // Drawn as "  LEDs" / "  LCDs" — the two leading spaces are layout
     // indent, not part of the name.
     { "LEDs",                                  kSecDevices, "Brightness" },
     { "LCDs",                                  kSecDevices, "Brightness" },
     { "GR meter source",                       kSecDevices, "Metering" },
-    { "Combine GR across plug-ins (UF8 strips)", kSecDevices, "Metering" },
-    { "Combine GR across plug-ins (UC1 Comp)", kSecDevices, "Metering" },
-    { "UF1 soft-key LEDs = BC gain reduction", kSecDevices, "Metering" },
+    { "Combine GR across plug-ins (UF8 strips)", kSecDevices, "Metering", kDevUf8 },
+    { "Combine GR across plug-ins (UC1 Comp)", kSecDevices, "Metering", kDevUc1 },
+    { "UF1 soft-key LEDs = BC gain reduction", kSecDevices, "Metering", kDevUf1 },
     // Drawn as "  Full scale" / "  Steps per LED" — leading spaces are indent.
-    { "Full scale",                            kSecDevices, "Metering" },
-    { "Steps per LED",                         kSecDevices, "Metering" },
-    { "UC1 Input",                             kSecDevices, "Metering" },
-    { "UC1 Output",                            kSecDevices, "Metering" },
-    { "UF8 Strips",                            kSecDevices, "Metering" },
-    { "Copy Input to Output",                  kSecDevices, "Metering" },
+    { "Full scale",                            kSecDevices, "Metering", kDevUf1 },
+    { "Steps per LED",                         kSecDevices, "Metering", kDevUf1 },
+    { "UC1 Input",                             kSecDevices, "Metering", kDevUc1 },
+    { "UC1 Output",                            kSecDevices, "Metering", kDevUc1 },
+    { "UF8 Strips",                            kSecDevices, "Metering", kDevUf8 },
+    { "Copy Input to Output",                  kSecDevices, "Metering", kDevUc1 },
     { "Shift activates Fine mode (V-Pots / encoders, not faders)",
                                                kSecDevices, "V-Pot / encoder feel" },
     { "Fine mode steps JSFX sliders by their native increment",
                                                kSecDevices, "V-Pot / encoder feel" },
-    { "UF8 V-Pot speed",                       kSecDevices, "V-Pot / encoder feel" },
-    { "UF8 Fine factor",                       kSecDevices, "V-Pot / encoder feel" },
-    { "UC1 encoder speed",                     kSecDevices, "V-Pot / encoder feel" },
-    { "UC1 Fine factor",                       kSecDevices, "V-Pot / encoder feel" },
-    { "UF1 V-Pot speed",                      kSecDevices, "V-Pot / encoder feel" },
-    { "UF1 Fine factor",                       kSecDevices, "V-Pot / encoder feel" },
+    { "UF8 V-Pot speed",                       kSecDevices, "V-Pot / encoder feel", kDevUf8 },
+    { "UF8 Fine factor",                       kSecDevices, "V-Pot / encoder feel", kDevUf8 },
+    { "UC1 encoder speed",                     kSecDevices, "V-Pot / encoder feel", kDevUc1 },
+    { "UC1 Fine factor",                       kSecDevices, "V-Pot / encoder feel", kDevUc1 },
+    { "UF1 V-Pot speed",                      kSecDevices, "V-Pot / encoder feel", kDevUf1 },
+    { "UF1 Fine factor",                       kSecDevices, "V-Pot / encoder feel", kDevUf1 },
     { "Virtual notch zone",                    kSecDevices, "V-Pot / encoder feel" },
     { "Notch fine step",                       kSecDevices, "V-Pot / encoder feel" },
     { "Notch hold",                            kSecDevices, "V-Pot / encoder feel" },
-    { "BC VU meter (0/4/8/12/16/20 dB)",       kSecDevices, "UC1 GR calibration" },
-    { "CS DYN GR LEDs (3/6/10/14/20 dB)",      kSecDevices, "UC1 GR calibration" },
+    { "BC VU meter (0/4/8/12/16/20 dB)",       kSecDevices, "UC1 GR calibration", kDevUc1 },
+    { "CS DYN GR LEDs (3/6/10/14/20 dB)",      kSecDevices, "UC1 GR calibration", kDevUc1 },
     // -- Behaviour ----------------------------------------------------------
-    { "TCP follows UF8 selection",             kSecBehaviour, "Tracks" },
+    { "TCP follows UF8 selection",             kSecBehaviour, "Tracks", kDevUf8 },
     { "Surface mirrors:",                      kSecBehaviour, "Tracks" },
     { "Pinned tracks survive banking",         kSecBehaviour, "Tracks" },
     { "Touch selects channel",                 kSecBehaviour, "Tracks" },
     { "Track selection follows parameter change",
                                                kSecBehaviour, "Tracks" },
-    { "Show Master as Track 0 on UC1",         kSecBehaviour, "Master track" },
+    { "Show Master as Track 0 on UC1",         kSecBehaviour, "Master track", kDevUc1 },
     { "Pinned Master",                         kSecBehaviour, "Master track" },
     { "Don't show offline FX",                 kSecBehaviour, "Plug-ins" },
     { "Wrap Plug-in Cycle",                    kSecBehaviour, "Plug-ins" },
     { "SSL Strip Mode follows focused plug-in window",
                                                kSecBehaviour, "Plug-ins" },
     { "Plug-in GUI follows active Instance",   kSecBehaviour, "Plug-ins" },
-    { "UF1 PLUG-IN key opens the plug-in GUI", kSecBehaviour, "Plug-ins" },
+    { "UF1 PLUG-IN key opens the plug-in GUI", kSecBehaviour, "Plug-ins", kDevUf1 },
     { "Auto-engage UF8 Plug-in Mode for UF8-mapped plug-ins",
-                                               kSecBehaviour, "Plug-ins" },
+                                               kSecBehaviour, "Plug-ins", kDevUf8 },
     { "Pin plug-in GUI position",              kSecBehaviour, "Plug-ins" },
     { "Pin FX-chain GUI position",             kSecBehaviour, "Plug-ins" },
     { "Parameter change switches soft-key bank",
@@ -226,8 +248,8 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Engage a fixed soft-key bank at startup",
                                                kSecBehaviour, "Soft-keys" },
     { "Use current hardware bank",             kSecBehaviour, "Soft-keys" },
-    { "UF1",                                   kSecBehaviour, "UF1" },
-    { "Start the UF1 in a fixed view",         kSecBehaviour, "UF1" },
+    { "UF1",                                   kSecBehaviour, "UF1", kDevUf1 },
+    { "Start the UF1 in a fixed view",         kSecBehaviour, "UF1", kDevUf1 },
     { "Alt/Option + fader drag \xE2\x86\x92 snap back to original on release",
                                                kSecBehaviour, "Keyboard" },
     { "Keyboard Shift acts as Shift modifier", kSecBehaviour, "Keyboard" },
@@ -271,8 +293,8 @@ constexpr SearchEntry kSearchIndex[] = {
     // -- Bindings --
     { "Scroll banks:",                                     kSecBindings, "" },
     { "Focus Set scope:",                                  kSecBindings, "" },
-    { "UF1 Extender - 9th fader of the UF8 bank",          kSecBindings, "Focus Set scope" },
-    { "UF8 sends follow the UF1 Focus Set track",          kSecBindings, "Focus Set scope" },
+    { "UF1 Extender - 9th fader of the UF8 bank",          kSecBindings, "Focus Set scope", kDevUf8 },
+    { "UF8 sends follow the UF1 Focus Set track",          kSecBindings, "Focus Set scope", kDevUf8 },
     { "Reset this layer to factory defaults",              kSecBindings, "" },
     // -- Modes --
     { "Show only tracks armed for automation writing",     kSecModes, "AUTO" },
@@ -281,20 +303,20 @@ constexpr SearchEntry kSearchIndex[] = {
     { "V-Pot push opens active FX as:",                    kSecModes, "FX / Cycle" },
     { "Enable RME / TotalReaper integration",              kSecModes, "REC" },
     { "V-Pot rotation \xE2\x86\x92 Preamp gain \xC2\xB1" "1 dB",
-                                                           kSecModes, "REC" },
+                                                           kSecModes, "REC", kDevUf8 },
     { "Encoder 2 rotation \xE2\x86\x92 Preamp gain \xC2\xB1" "1 dB",
-                                                           kSecModes, "REC" },
+                                                           kSecModes, "REC", kDevUc1 },
     { "Above-fader V-Pot rotation \xE2\x86\x92 Preamp gain \xC2\xB1" "1 dB",
-                                                           kSecModes, "REC" },
+                                                           kSecModes, "REC", kDevUf1 },
     { "Auto-follow playhead / edit cursor",                kSecModes, "NAV" },
     { "Take over LCD",                                     kSecModes, "NAV" },
     { "Lower-row format:",                                 kSecModes, "NAV" },
-    { "Region press (UF8 top-soft-key):",                  kSecModes, "NAV" },
+    { "Region press (UF8 top-soft-key):",                  kSecModes, "NAV", kDevUf8 },
     { "Playhead nudge step",                               kSecModes, "Nudge" },
     { "Amount per detent",                                 kSecModes, "Nudge" },
     // -- FX Learn --
     { "Quick-Learn skip list",                             kSecFxLearn, "" },
-    { "Show EQ Graph on the UF1",                          kSecFxLearn, "UF1 layer" },
+    { "EQ Graph on the UF1",                               kSecFxLearn, "UF1 layer", kDevUf1 },
     { "Fill from UC1",                                     kSecFxLearn, "UF1 layer" },
     { "Unbind all",                                        kSecFxLearn, "UF1 layer" },
     // -- Favourites --
@@ -705,6 +727,10 @@ void MixerWindow::onRunTick()
                     ImGui_GetContentRegionAvail(impl_->ctx, &availW, &availH);
                     int hits = 0;
                     for (const SearchEntry& s : kSearchIndex) {
+                        // Hidden in its pane → hidden here. A result row that
+                        // scrolls you to a control the pane doesn't draw is
+                        // worse than no result at all.
+                        if (!reasixty_settingsShowsDevice(s.dev)) continue;
                         const std::string crumb =
                             searchBreadcrumb(s, /*withGroup*/ true);
                         if (!settingsSearchMatches(toks, crumb)) continue;

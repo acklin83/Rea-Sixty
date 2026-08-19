@@ -1192,6 +1192,43 @@ std::atomic<bool>         g_csFavRememberNonCopied{true};
 // restores each favourite's own per-channel memory instead. One switch drives
 // ALL plain favourite actions incl. the CS/BC Favourites soft-key banks; the
 // explicit *_own cycle builtins always force own regardless. Frank 2026-06-26.
+// ---- Device inventory ------------------------------------------------------
+// Which surfaces this machine has EVER had attached. bit0 = UF8, bit1 = UC1,
+// bit2 = UF1 — the same bit order as bindings::builtinDeviceMask(), so the two
+// device-scoping mechanisms never need translating between each other.
+//
+// "Ever seen" and NOT "connected right now" on purpose. Gating the Settings
+// panes on live presence would make every UF8 control vanish the moment someone
+// unplugged the UF8 for a session, which reads as "my configuration is gone",
+// not as "that device is absent". Ever-seen cannot do that: it only ever grows,
+// and it grows the first time the device opens.
+//
+// A zero mask means nothing has ever attached — a fresh install, or someone
+// setting up before the hardware arrives. That case shows EVERYTHING, because
+// hiding all three panes would be worse than showing one too many.
+// ExtState rea_sixty/devices_seen. Written once per device per machine.
+std::atomic<int>          g_devicesSeen{0};
+// Escape hatch for the filter: on = show controls for devices you have never
+// had. Off (default) is safe precisely because the gate is ever-seen.
+// ExtState rea_sixty/show_absent_devices. Forum item 4.5.
+std::atomic<bool>         g_showAbsentDeviceSettings{false};
+
+// Stamp a surface into the inventory. Called from each device's open path, so
+// it runs at most a handful of times per REAPER session and only ever writes
+// ExtState when the bit is actually new.
+void markDeviceSeen_(int bit)
+{
+    const int prev = g_devicesSeen.fetch_or(bit);
+    if ((prev & bit) == bit) return;                 // already known
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%d", (prev | bit) & 0b111);
+    SetExtState("rea_sixty", "devices_seen", buf, true);
+}
+// Bit per surface, matching bindings::builtinDeviceMask().
+constexpr int kSeenUf8 = 0b001;
+constexpr int kSeenUc1 = 0b010;
+constexpr int kSeenUf1 = 0b100;
+
 // Per-domain (Frank 2026-06-26): CS defaults to COPY (carry the live EQ/dyn values
 // onto the next strip), BC defaults to OWN (each compressor favourite recalls its own
 // remembered values rather than having CS-style live values pushed onto it). Two
@@ -4211,6 +4248,12 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "fav_multi_unify"); v && *v) {
         g_favMultiUnify.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "devices_seen"); v && *v) {
+        g_devicesSeen.store(std::atoi(v) & 0b111);
+    }
+    if (const char* v = GetExtState("rea_sixty", "show_absent_devices"); v && *v) {
+        g_showAbsentDeviceSettings.store(std::atoi(v) != 0);
     }
     if (const char* v = GetExtState("rea_sixty", "fav_copy_mapped_only"); v && *v) {
         g_favCopyMappedOnly.store(std::atoi(v) != 0);
@@ -19630,6 +19673,7 @@ void initDevices_()
         }
         g_dev.reset();
     } else {
+        markDeviceSeen_(kSeenUf8);
         g_sync = std::make_unique<uf8::ColorSync>(*g_dev);
         g_sync->invalidate();
         g_dev->setRawInputHandler(onUf8Input);
@@ -19662,6 +19706,7 @@ void initDevices_()
     // Best-effort UC1 attach — absence is fine, UF8 runs standalone.
     g_uc1_dev = std::make_unique<uc1::UC1Device>();
     if (g_uc1_dev->open()) {
+        markDeviceSeen_(kSeenUc1);
         g_uc1_surface = std::make_unique<uc1::UC1Surface>();
         g_uc1_surface->attach(*g_uc1_dev);
         // Focus whatever track REAPER currently considers "last touched"
@@ -21631,6 +21676,7 @@ void openUf1BringUp_()
         g_uf1_dev.reset();
         return;
     }
+    markDeviceSeen_(kSeenUf1);
     g_uf1_dev->setRawInputHandler(onUf1Input);
     g_uf1_dev->setInputHandler(onUf1Event);
 
@@ -37603,6 +37649,55 @@ void reasixty_toggleMixerWindow()
 // wrappers are the only legal hook into runtime state from the UI side.
 // All called from the main thread (onTimer → ImGui → these), so plain
 // non-atomic loads are fine where the underlying state is atomic anyway.
+
+// Settings device filter. `mask` uses the kSeenUf8/Uc1/Uf1 bits; a control that
+// applies to more than one surface passes the OR of them and is shown as soon as
+// ONE of those surfaces is known. See g_devicesSeen for why this asks "ever
+// seen" and not "connected".
+bool reasixty_settingsShowsDevice(int mask)
+{
+    if (g_showAbsentDeviceSettings.load()) return true;
+    const int seen = g_devicesSeen.load();
+    if (seen == 0) return true;       // nothing has ever attached — show all
+    return (seen & mask) != 0;
+}
+
+bool reasixty_showAbsentDeviceSettings()
+{
+    return g_showAbsentDeviceSettings.load();
+}
+
+void reasixty_setShowAbsentDeviceSettings(bool on)
+{
+    g_showAbsentDeviceSettings.store(on);
+    SetExtState("rea_sixty", "show_absent_devices", on ? "1" : "0", true);
+}
+
+int reasixty_devicesSeenMask()
+{
+    return g_devicesSeen.load();
+}
+
+// Shrink the inventory back to what is attached right now. The mask otherwise
+// only ever grows, which is right while you are acquiring surfaces and wrong
+// the day you sell one — without this, a UC1 that left the studio keeps its
+// settings on screen forever. Also the only way to SEE the filter work on a rig
+// that owns all three.
+//
+// Nothing connected leaves a zero mask, which means "show everything". That is
+// the same fallback a fresh install gets, so the worst case is a full pane, not
+// an empty one.
+void reasixty_forgetAbsentDevices()
+{
+    int live = 0;
+    if (g_dev     && g_dev->isOpen())     live |= kSeenUf8;
+    if (g_uc1_dev && g_uc1_dev->isOpen()) live |= kSeenUc1;
+    if (g_uf1_dev && g_uf1_dev->isOpen()) live |= kSeenUf1;
+    g_devicesSeen.store(live);
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%d", live);
+    SetExtState("rea_sixty", "devices_seen", buf, true);
+}
 
 bool reasixty_uf8Connected()
 {

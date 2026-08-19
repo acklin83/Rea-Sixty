@@ -24,6 +24,14 @@
 bool reasixty_uf8Connected();
 bool reasixty_uc1Connected();
 bool reasixty_uf1Connected();
+// Device filter for the panes. See main.cpp's g_devicesSeen: "ever attached to
+// this machine", not "connected right now" — otherwise unplugging a UF8 for one
+// session would read as "my settings are gone".
+bool reasixty_settingsShowsDevice(int mask);
+bool reasixty_showAbsentDeviceSettings();
+void reasixty_setShowAbsentDeviceSettings(bool on);
+int  reasixty_devicesSeenMask();
+void reasixty_forgetAbsentDevices();
 const char* reasixty_uf8Serial();
 const char* reasixty_uc1Serial();
 const char* reasixty_uf1Serial();
@@ -173,6 +181,16 @@ int                reasixty_uf1ViewMode();
 const char* reasixty_sp(const char* uk, const char* us);
 
 namespace uf8 {
+
+namespace {
+// Surface bits, same order as bindings::builtinDeviceMask() and main.cpp's
+// kSeenUf8/Uc1/Uf1. A control that applies to several surfaces ORs them and is
+// drawn as soon as ONE of them is known.
+constexpr int kDevUf8 = 0b001;
+constexpr int kDevUc1 = 0b010;
+constexpr int kDevUf1 = 0b100;
+inline bool showsDev(int mask) { return reasixty_settingsShowsDevice(mask); }
+}  // namespace
 
 // Pending "scroll to this heading" request from the rail search box. Set on a
 // result click, latched by the very next pane draw, consumed by the matching
@@ -520,6 +538,35 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
 
     deviceLine("UF1", uf1On, reasixty_uf1Serial());
 
+    // Settings for surfaces this machine has never had are hidden by default.
+    // The escape hatch only appears when it would change something — with all
+    // three known it is a checkbox that can do nothing, and those are worse
+    // than absent. Forum item 4.5.
+    const int seenMask = reasixty_devicesSeenMask();
+    if (seenMask != (kDevUf8 | kDevUc1 | kDevUf1)) {
+        ImGui_Spacing(ctx);
+        bool showAbsent = reasixty_showAbsentDeviceSettings();
+        if (ImGui_Checkbox(ctx, "Show settings for devices you don't have",
+                           &showAbsent)) {
+            reasixty_setShowAbsentDeviceSettings(showAbsent);
+        }
+    }
+
+    // Offered only when the inventory holds something that isn't here — the
+    // mask grows by itself and would otherwise never shrink, so a surface you
+    // sold keeps its settings on screen for good.
+    {
+        const int liveMask = (uf8On ? kDevUf8 : 0) | (uc1On ? kDevUc1 : 0)
+                           | (uf1On ? kDevUf1 : 0);
+        if ((seenMask & ~liveMask) != 0) {
+            ImGui_Spacing(ctx);
+            if (ImGui_Button(ctx, "Forget devices that aren't connected",
+                             /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+                reasixty_forgetAbsentDevices();
+            }
+        }
+    }
+
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
 
@@ -594,15 +641,19 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
     // meter reads the channel's total reduction. Separate per surface so
     // e.g. the UF8 strip can show combined while the UC1 shows the CS only.
     // No effect unless "Show any GR Data" is selected. Frank 2026-06-12.
-    bool cUf8 = reasixty_grCombineUf8();
-    if (ImGui_Checkbox(ctx, "Combine GR across plug-ins (UF8 strips)",
-                       &cUf8)) {
-        reasixty_setGrCombineUf8(cUf8);
+    if (showsDev(kDevUf8)) {
+        bool cUf8 = reasixty_grCombineUf8();
+        if (ImGui_Checkbox(ctx, "Combine GR across plug-ins (UF8 strips)",
+                           &cUf8)) {
+            reasixty_setGrCombineUf8(cUf8);
+        }
     }
-    bool cUc1 = reasixty_grCombineUc1();
-    if (ImGui_Checkbox(ctx, "Combine GR across plug-ins (UC1 Comp)",
-                       &cUc1)) {
-        reasixty_setGrCombineUc1(cUc1);
+    if (showsDev(kDevUc1)) {
+        bool cUc1 = reasixty_grCombineUc1();
+        if (ImGui_Checkbox(ctx, "Combine GR across plug-ins (UC1 Comp)",
+                           &cUc1)) {
+            reasixty_setGrCombineUc1(cUc1);
+        }
     }
 
     // UF1: the four display soft-key LEDs as a Bus-Compressor GR meter. Range
@@ -611,7 +662,7 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
     // sets the pair; the two below stay free, and the preset reads "Custom" when
     // they don't match one. Off returns the LEDs to the soft-key on/off states.
     // Reads the same Bus Compressor the UC1 needle does.
-    {
+    if (showsDev(kDevUf1)) {
         struct BcGrPreset { const char* label; int fullDb; int steps; };
         static const BcGrPreset kBcGrPresets[] = {
             { "Off",                      0,  2 },
@@ -728,19 +779,23 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
                     reasixty_setMeterFall(mid, v);
             };
 
-            fallRow("UC1 Input",  0);
-            fallRow("UC1 Output", 1);
-            fallRow("UF8 Strips", 2);
+            if (showsDev(kDevUc1)) {
+                fallRow("UC1 Input",  0);
+                fallRow("UC1 Output", 1);
+            }
+            if (showsDev(kDevUf8)) fallRow("UF8 Strips", 2);
             ImGui_EndTable(ctx);
         }
     }
 
-    if (ImGui_Button(ctx, "Copy Input to Output##meter",
-                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-        reasixty_copyMeter(0, 1);
+    if (showsDev(kDevUc1)) {
+        if (ImGui_Button(ctx, "Copy Input to Output##meter",
+                         /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            reasixty_copyMeter(0, 1);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_Text(ctx, "match both UC1 meters");
     }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    ImGui_Text(ctx, "match both UC1 meters");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
@@ -794,23 +849,29 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
             ImGui_SameLine(ctx, nullptr, nullptr);
             ImGui_Text(ctx, label);
         };
-        field("UF8 V-Pot speed", reasixty_knobSpeedUf8(),
-              0.01, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUf8);
-        field("UF8 Fine factor", reasixty_fineFactorUf8(),
-              0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUf8);
-        ImGui_Spacing(ctx);
-        field("UC1 encoder speed", reasixty_knobSpeedUc1(),
-              0.01, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUc1);
-        field("UC1 Fine factor", reasixty_fineFactorUc1(),
-              0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUc1);
-        ImGui_Spacing(ctx);
+        if (showsDev(kDevUf8)) {
+            field("UF8 V-Pot speed", reasixty_knobSpeedUf8(),
+                  0.01, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUf8);
+            field("UF8 Fine factor", reasixty_fineFactorUf8(),
+                  0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUf8);
+            ImGui_Spacing(ctx);
+        }
+        if (showsDev(kDevUc1)) {
+            field("UC1 encoder speed", reasixty_knobSpeedUc1(),
+                  0.01, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUc1);
+            field("UC1 Fine factor", reasixty_fineFactorUc1(),
+                  0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUc1);
+            ImGui_Spacing(ctx);
+        }
         // The UF1's own pair. Its Fine is Quick-Key-2 on the surface, not the
         // Shift/FINE the other two use, so it wants its own numbers.
-        field("UF1 V-Pot speed", reasixty_knobSpeedUf1(),
-              0.01, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUf1);
-        field("UF1 Fine factor", reasixty_fineFactorUf1(),
-              0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUf1);
-        ImGui_Spacing(ctx);
+        if (showsDev(kDevUf1)) {
+            field("UF1 V-Pot speed", reasixty_knobSpeedUf1(),
+                  0.01, 2.0, 1.0, "%.2fx", reasixty_setKnobSpeedUf1);
+            field("UF1 Fine factor", reasixty_fineFactorUf1(),
+                  0.05, 0.50, 1.0, "%.2fx", reasixty_setFineFactorUf1);
+            ImGui_Spacing(ctx);
+        }
         // Virtual-notch zone: how close to the neutral point (0 dB / centre
         // pan) a V-Pot must land for the magnet to snap. 0 % disables the
         // slow-approach snap (crossing the centre still snaps). Stored as a
@@ -832,6 +893,11 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
     // UC1 GR calibration sits at the very bottom of the Devices pane per
     // Frank 2026-05-20 — it's a niche hardware-trim workflow that doesn't
     // need to be above the common settings.
+    //
+    // Last section in the pane, so the device filter can be an early return
+    // rather than forty lines of extra indentation. If anything is ever
+    // appended below, this has to become a wrapping if.
+    if (!showsDev(kDevUc1)) return;
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
     sectionHeader("UC1 GR calibration");
@@ -958,9 +1024,11 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
     // TCP scrolls to keep the UF8-selected track visible. Independent of
     // the always-on MCP follow (those are separate REAPER scroll surfaces).
     // Frank 2026-05-20.
-    bool tcpFollow = reasixty_tcpFollowsSelection();
-    if (ImGui_Checkbox(ctx, "TCP follows UF8 selection", &tcpFollow)) {
-        reasixty_setTcpFollowsSelection(tcpFollow);
+    if (showsDev(kDevUf8)) {
+        bool tcpFollow = reasixty_tcpFollowsSelection();
+        if (ImGui_Checkbox(ctx, "TCP follows UF8 selection", &tcpFollow)) {
+            reasixty_setTcpFollowsSelection(tcpFollow);
+        }
     }
 
     // Visibility follow: the surface mirrors what's visible in either
@@ -1020,9 +1088,11 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
     // before track 1, as a virtual "track 0". UC1-only — never appears on
     // the UF8 strips. A Bus Compressor on the Master shows in the BC
     // context independently of this toggle.
-    bool showMaster = reasixty_uc1ShowMasterAsTrack0();
-    if (ImGui_Checkbox(ctx, "Show Master as Track 0 on UC1", &showMaster)) {
-        reasixty_setUc1ShowMasterAsTrack0(showMaster);
+    if (showsDev(kDevUc1)) {
+        bool showMaster = reasixty_uc1ShowMasterAsTrack0();
+        if (ImGui_Checkbox(ctx, "Show Master as Track 0 on UC1", &showMaster)) {
+            reasixty_setUc1ShowMasterAsTrack0(showMaster);
+        }
     }
 
     // "Pin Master to UF8 Strip 1/8" (bindable built-ins / REAPER actions)
@@ -1087,21 +1157,25 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
     // The UF1's PLUG-IN soft-key on a NATIVE SSL strip. An explicit UF1 map
     // chooses per key (FX-Learn → UF1 cell → Action); the built-in p188 pages
     // have no per-key storage, so they follow this.
-    bool uskg = reasixty_uf1StripKeyWithGui();
-    if (ImGui_Checkbox(ctx, "UF1 PLUG-IN key opens the plug-in GUI", &uskg)) {
-        reasixty_setUf1StripKeyWithGui(uskg);
+    if (showsDev(kDevUf1)) {
+        bool uskg = reasixty_uf1StripKeyWithGui();
+        if (ImGui_Checkbox(ctx, "UF1 PLUG-IN key opens the plug-in GUI", &uskg)) {
+            reasixty_setUf1StripKeyWithGui(uskg);
+        }
     }
 
     // (Favourite copy-mode, section mask, remember + per-project bank moved to
     // the dedicated Favourites tab. Frank 2026-06-26.)
 
     // Moved out of the former Modes → "Device" sub-tab on 2026-05-20.
-    bool engageUf8 = reasixty_cycleEngagesUf8();
-    if (ImGui_Checkbox(ctx,
-        "Auto-engage UF8 Plug-in Mode for UF8-mapped plug-ins",
-        &engageUf8))
-    {
-        reasixty_setCycleEngagesUf8(engageUf8);
+    if (showsDev(kDevUf8)) {
+        bool engageUf8 = reasixty_cycleEngagesUf8();
+        if (ImGui_Checkbox(ctx,
+            "Auto-engage UF8 Plug-in Mode for UF8-mapped plug-ins",
+            &engageUf8))
+        {
+            reasixty_setCycleEngagesUf8(engageUf8);
+        }
     }
 
     // Pin plug-in GUI position: drag a plug-in window where you want it,
@@ -1289,14 +1363,17 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
         }
     }
 
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    sectionHeader("UF1");
+    if (showsDev(kDevUf1)) {
+        ImGui_Spacing(ctx);
+        ImGui_Spacing(ctx);
+        sectionHeader("UF1");
+    }
 
     // Startup view. The four views were only ever reachable live (hold MODE,
     // the uf1_view_* built-ins, the REASIXTY_UF1_MODE_* actions), so the UF1
-    // always came up on Plug-in. Off = unchanged.
-    {
+    // always came up on Plug-in. Off = unchanged. Guarded separately from the
+    // heading above so the forty lines below keep their indentation.
+    if (showsDev(kDevUf1)) {
         static const char* kSvName[4] = { "Plug-in", "DAW", "Meter", "Sends" };
 
         int sv = 0;

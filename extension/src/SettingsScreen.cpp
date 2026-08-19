@@ -46,6 +46,9 @@
 // runtime state. Called only from the main thread (via onTimer → ImGui).
 bool reasixty_uf8Connected();
 bool reasixty_uc1Connected();
+// Device filter — "ever attached to this machine", not "connected right now".
+// See main.cpp's g_devicesSeen.
+bool reasixty_settingsShowsDevice(int mask);
 
 // True while a V-Pot is armed for Touch-to-Learn step-capture (set by main.cpp
 // via reasixty_setVpotCaptureActive). The UF8 learn tick reads it to route
@@ -523,6 +526,15 @@ int  reasixty_uf8FaderBank();
 void reasixty_setUf8FaderBank(int fb);
 
 namespace uf8 {
+
+namespace {
+// Surface bits, same order as bindings::builtinDeviceMask() and main.cpp's
+// kSeenUf8/Uc1/Uf1.
+constexpr int kDevUf8 = 0b001;
+constexpr int kDevUc1 = 0b010;
+constexpr int kDevUf1 = 0b100;
+inline bool showsDev(int mask) { return reasixty_settingsShowsDevice(mask); }
+}  // namespace
 
 // Scale a design-time pixel width by the active font-size ratio so
 // fixed-width input fields, combos, and table columns still fit their
@@ -6193,7 +6205,8 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     int tabBarFlags = 0;
     if (ImGui_BeginTabBar(ctx, "bindings_surface_tabs", &tabBarFlags)) {
         int flagsUf8 = tabFlagsForDevice(0);
-        if (ImGui_BeginTabItem(ctx, "UF8", nullptr, &flagsUf8)) {
+        if (showsDev(kDevUf8)
+            && ImGui_BeginTabItem(ctx, "UF8", nullptr, &flagsUf8)) {
             persistDeviceTab(0);
             drawUf8Vector(ctx, s_selected, s_editQuick, s_editSubBank);
             // Bank-scroll stride: when a selection scrolls past the surface
@@ -6215,13 +6228,15 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             ImGui_EndTabItem(ctx);
         }
         int flagsUc1 = tabFlagsForDevice(1);
-        if (ImGui_BeginTabItem(ctx, "UC1", nullptr, &flagsUc1)) {
+        if (showsDev(kDevUc1)
+            && ImGui_BeginTabItem(ctx, "UC1", nullptr, &flagsUc1)) {
             persistDeviceTab(1);
             drawUc1BindingsVector(ctx, s_selected);
             ImGui_EndTabItem(ctx);
         }
         int flagsUf1 = tabFlagsForDevice(2);
-        if (ImGui_BeginTabItem(ctx, "UF1", nullptr, &flagsUf1)) {
+        if (showsDev(kDevUf1)
+            && ImGui_BeginTabItem(ctx, "UF1", nullptr, &flagsUf1)) {
             persistDeviceTab(2);
             drawUf1Vector(ctx, s_selected);
             // NB: UF1 behaviour toggles (sends-follow / Extender) are rendered BELOW
@@ -6549,11 +6564,16 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     if (s_deviceTab == 2) {
         ImGui_Spacing(ctx);
         ImGui_Separator(ctx);
-        bool sendsFollow = reasixty_uf1SendsFollowHeld();
-        if (ImGui_Checkbox(ctx, "UF8 sends follow the UF1 Focus Set track", &sendsFollow))
-            reasixty_setUf1SendsFollowHeld(sendsFollow);
-        ImGui_TextDisabled(ctx, "Off: UF8 sends stay on the last-touched track.");
-        ImGui_Spacing(ctx);
+        // Both of the UF8-named controls in this UF1-only block need a UF8 to
+        // mean anything. The block already implies the UF1, so the filter here
+        // asks for the OTHER surface, not the OR of the two.
+        if (showsDev(kDevUf8)) {
+            bool sendsFollow = reasixty_uf1SendsFollowHeld();
+            if (ImGui_Checkbox(ctx, "UF8 sends follow the UF1 Focus Set track", &sendsFollow))
+                reasixty_setUf1SendsFollowHeld(sendsFollow);
+            ImGui_TextDisabled(ctx, "Off: UF8 sends stay on the last-touched track.");
+            ImGui_Spacing(ctx);
+        }
         // Focus Set scope — where Pin Set applies (UF8 head vs UF1 park).
         int scope = reasixty_focusSetScope();   // 0 Both, 1 UF1-only, 2 UF8-only
         ImGui_Text(ctx, "Focus Set scope:");
@@ -6572,9 +6592,10 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             "selection.");
         ImGui_Spacing(ctx);
         bool extender = reasixty_uf1Extender();
-        if (ImGui_Checkbox(ctx, "UF1 Extender - 9th fader of the UF8 bank", &extender))
+        if (showsDev(kDevUf8)
+            && ImGui_Checkbox(ctx, "UF1 Extender - 9th fader of the UF8 bank", &extender))
             reasixty_setUf1Extender(extender);
-        if (extender) {
+        if (extender && showsDev(kDevUf8)) {
             int side = reasixty_uf1ExtenderSide();   // 1 = right, 0 = left
             ImGui_Text(ctx, "Side:");
             ImGui_SameLine(ctx, nullptr, nullptr);
@@ -16092,7 +16113,11 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
     // parameter names; a learned plug-in names them differently, so the curve
     // stayed blank until it could be resolved through the UC1 slots instead.
     ImGui_Spacing(ctx);
-    {
+    // Both controls only change what the UF1 DRAWS, so they go with the UF1.
+    // Safe to hide here: this block sits BELOW the binding editor, so removing
+    // it only ever takes height away (learnings #31 is about adding height
+    // above it).
+    if (showsDev(kDevUf1)) {
         // The GLOBAL switch sits directly above the per-map override so the
         // relationship is visible: the combo below spells out what "follow"
         // currently resolves to. Applies to learned Channel Strips only — the
@@ -20302,22 +20327,9 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     }
 
     if (rmeOn) {
-        ImGui_Spacing(ctx);
-        bool gainRot = reasixty_recVpotRotateGain();
-        if (ImGui_Checkbox(ctx,
-                           "V-Pot rotation → Preamp gain ±1 dB",
-                           &gainRot))
-        {
-            reasixty_setRecVpotRotateGain(gainRot);
-        }
-        bool shiftInputCh = reasixty_recVpotShiftInputCh();
-        if (ImGui_Checkbox(ctx,
-                           "V-Pot rotation + Shift → Change input channel",
-                           &shiftInputCh))
-        {
-            reasixty_setRecVpotShiftInputCh(shiftInputCh);
-        }
-
+        // Shared by all three halves below, so it lives OUTSIDE their device
+        // gates — scoping it inside the UF8 block put the UC1 and UF1 combos
+        // out of reach of their own picker.
         // Per-button action assignment. Index order MUST match
         // RecRmeAction enum in main.cpp (None=0, Toggle48V=1, …).
         // BeginCombo + Selectable instead of ImGui_Combo: see line 2272 —
@@ -20353,68 +20365,93 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
             }
             ImGui_PopItemWidth(ctx);
         };
+        // The per-strip half is the UF8's — hidden without a UF8.
+        if (showsDev(kDevUf8)) {
+            ImGui_Spacing(ctx);
+            bool gainRot = reasixty_recVpotRotateGain();
+            if (ImGui_Checkbox(ctx,
+                               "V-Pot rotation → Preamp gain ±1 dB",
+                               &gainRot))
+            {
+                reasixty_setRecVpotRotateGain(gainRot);
+            }
+            bool shiftInputCh = reasixty_recVpotShiftInputCh();
+            if (ImGui_Checkbox(ctx,
+                               "V-Pot rotation + Shift → Change input channel",
+                               &shiftInputCh))
+            {
+                reasixty_setRecVpotShiftInputCh(shiftInputCh);
+            }
 
-        pickerCombo("V-Pot push##rec_rme",
-                    reasixty_recVpotPush(),  reasixty_setRecVpotPush);
-        pickerCombo("Cut button##rec_rme",
-                    reasixty_recCut(),       reasixty_setRecCut);
-        pickerCombo("Solo button##rec_rme",
-                    reasixty_recSolo(),      reasixty_setRecSolo);
 
-        // UC1 — focused-track scope (single-strip surface, no banking).
-        ImGui_Spacing(ctx);
-        ImGui_Separator(ctx);
-        ImGui_Text(ctx, "UC1 — focused track");
-        ImGui_Spacing(ctx);
-        bool uc1GainRot = reasixty_recUc1Enc2RotateGain();
-        if (ImGui_Checkbox(ctx,
-                           "Encoder 2 rotation → Preamp gain ±1 dB",
-                           &uc1GainRot))
-        {
-            reasixty_setRecUc1Enc2RotateGain(uc1GainRot);
-        }
-        bool uc1ShiftInputCh = reasixty_recUc1Enc2ShiftInputCh();
-        if (ImGui_Checkbox(ctx,
-                           "Encoder 2 rotation + Shift → Change input channel",
-                           &uc1ShiftInputCh))
-        {
-            reasixty_setRecUc1Enc2ShiftInputCh(uc1ShiftInputCh);
-        }
-        pickerCombo("Encoder 2 push##rec_rme_uc1",
-                    reasixty_recUc1Enc2Push(), reasixty_setRecUc1Enc2Push);
-        pickerCombo("Cut button##rec_rme_uc1",
-                    reasixty_recUc1Cut(),      reasixty_setRecUc1Cut);
-        pickerCombo("Solo button##rec_rme_uc1",
-                    reasixty_recUc1Solo(),     reasixty_setRecUc1Solo);
-        pickerCombo("Polarity button##rec_rme_uc1",
-                    reasixty_recUc1Polarity(), reasixty_setRecUc1Polarity);
+            pickerCombo("V-Pot push##rec_rme",
+                        reasixty_recVpotPush(),  reasixty_setRecVpotPush);
+            pickerCombo("Cut button##rec_rme",
+                        reasixty_recCut(),       reasixty_setRecCut);
+            pickerCombo("Solo button##rec_rme",
+                        reasixty_recSolo(),      reasixty_setRecSolo);
 
-        // UF1 — the fader side of a one-channel surface. Same three controls the
-        // UC1 gets, minus Polarity (the UF1 has no such key).
-        ImGui_Spacing(ctx);
-        ImGui_Separator(ctx);
-        ImGui_Text(ctx, "UF1 — channel on the fader");
-        ImGui_Spacing(ctx);
-        bool uf1GainRot = reasixty_recUf1RotateGain();
-        if (ImGui_Checkbox(ctx,
-                           "Above-fader V-Pot rotation → Preamp gain ±1 dB",
-                           &uf1GainRot))
-        {
-            reasixty_setRecUf1RotateGain(uf1GainRot);
         }
-        bool uf1ShiftInputCh = reasixty_recUf1ShiftInputCh();
-        if (ImGui_Checkbox(ctx,
-                           "Above-fader V-Pot rotation + Shift → Change input channel",
-                           &uf1ShiftInputCh))
-        {
-            reasixty_setRecUf1ShiftInputCh(uf1ShiftInputCh);
+        // The UC1 half — hidden without a UC1.
+        if (showsDev(kDevUc1)) {
+            // UC1 — focused-track scope (single-strip surface, no banking).
+            ImGui_Spacing(ctx);
+            ImGui_Separator(ctx);
+            ImGui_Text(ctx, "UC1 — focused track");
+            ImGui_Spacing(ctx);
+            bool uc1GainRot = reasixty_recUc1Enc2RotateGain();
+            if (ImGui_Checkbox(ctx,
+                               "Encoder 2 rotation → Preamp gain ±1 dB",
+                               &uc1GainRot))
+            {
+                reasixty_setRecUc1Enc2RotateGain(uc1GainRot);
+            }
+            bool uc1ShiftInputCh = reasixty_recUc1Enc2ShiftInputCh();
+            if (ImGui_Checkbox(ctx,
+                               "Encoder 2 rotation + Shift → Change input channel",
+                               &uc1ShiftInputCh))
+            {
+                reasixty_setRecUc1Enc2ShiftInputCh(uc1ShiftInputCh);
+            }
+            pickerCombo("Encoder 2 push##rec_rme_uc1",
+                        reasixty_recUc1Enc2Push(), reasixty_setRecUc1Enc2Push);
+            pickerCombo("Cut button##rec_rme_uc1",
+                        reasixty_recUc1Cut(),      reasixty_setRecUc1Cut);
+            pickerCombo("Solo button##rec_rme_uc1",
+                        reasixty_recUc1Solo(),     reasixty_setRecUc1Solo);
+            pickerCombo("Polarity button##rec_rme_uc1",
+                        reasixty_recUc1Polarity(), reasixty_setRecUc1Polarity);
+
         }
-        pickerCombo("V-Pot push##rec_rme_uf1",
-                    reasixty_recUf1VpotPush(), reasixty_setRecUf1VpotPush);
-        pickerCombo("Cut button##rec_rme_uf1",
-                    reasixty_recUf1Cut(),      reasixty_setRecUf1Cut);
-        pickerCombo("Solo button##rec_rme_uf1",
-                    reasixty_recUf1Solo(),     reasixty_setRecUf1Solo);
+        // The UF1 half of the RME block — hidden without a UF1.
+        if (showsDev(kDevUf1)) {
+            // UF1 — the fader side of a one-channel surface. Same three controls the
+            // UC1 gets, minus Polarity (the UF1 has no such key).
+            ImGui_Spacing(ctx);
+            ImGui_Separator(ctx);
+            ImGui_Text(ctx, "UF1 — channel on the fader");
+            ImGui_Spacing(ctx);
+            bool uf1GainRot = reasixty_recUf1RotateGain();
+            if (ImGui_Checkbox(ctx,
+                               "Above-fader V-Pot rotation → Preamp gain ±1 dB",
+                               &uf1GainRot))
+            {
+                reasixty_setRecUf1RotateGain(uf1GainRot);
+            }
+            bool uf1ShiftInputCh = reasixty_recUf1ShiftInputCh();
+            if (ImGui_Checkbox(ctx,
+                               "Above-fader V-Pot rotation + Shift → Change input channel",
+                               &uf1ShiftInputCh))
+            {
+                reasixty_setRecUf1ShiftInputCh(uf1ShiftInputCh);
+            }
+            pickerCombo("V-Pot push##rec_rme_uf1",
+                        reasixty_recUf1VpotPush(), reasixty_setRecUf1VpotPush);
+            pickerCombo("Cut button##rec_rme_uf1",
+                        reasixty_recUf1Cut(),      reasixty_setRecUf1Cut);
+            pickerCombo("Solo button##rec_rme_uf1",
+                        reasixty_recUf1Solo(),     reasixty_setRecUf1Solo);
+        }
     }
 
         ImGui_EndTabItem(ctx);
@@ -20674,7 +20711,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     // Region-press radio is only meaningful when UC1 mirrors UF8 (in
     // independent modes drill on a region tap doesn't fire). Hide
     // entirely rather than grey to keep the page short.
-    if (uc1Mode == 0) {
+    if (uc1Mode == 0 && showsDev(kDevUf8)) {
         ImGui_Text(ctx, "Region press (UF8 top-soft-key):");
         int rp = reasixty_navRegionPress();
         if (ImGui_RadioButton(ctx, "Jump + Drill##nav_rp_both", rp == 0)) {
