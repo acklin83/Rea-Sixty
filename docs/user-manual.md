@@ -5,7 +5,7 @@ author: |
   Frank Acklin
   \
   [www.stoersender-studio.ch](https://www.stoersender-studio.ch)
-date: v0.5.3
+date: v0.5.4
 documentclass: article
 geometry: margin=2.5cm
 fontsize: 11pt
@@ -37,7 +37,7 @@ Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no 
 
 ## Versioning
 
-This manual documents Rea-Sixty v0.5.3. Earlier manuals (anything dated before 2026-08-18) are superseded.
+This manual documents Rea-Sixty v0.5.4. Earlier manuals (anything dated before 2026-08-19) are superseded.
 
 Each release also carries a codename, shown on the **About** tab below the version. The codename has no functional role — just makes the release easier to refer to in conversation.
 
