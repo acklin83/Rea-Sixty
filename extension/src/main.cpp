@@ -42942,17 +42942,29 @@ void registerBindingHandlers()
         "Toggle UF8 Plug-in Mode (with GUI)", false
     });
 
-    registerBuiltin("pan_force", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (!firing) return;
-            const bool next = !g_forcePan.load();
-            g_forcePan.store(next);
-            g_pageDirty.store(true);
-            SetExtState("ReaSixty", "forcePan", next ? "1" : "0", true);
-        },
-        [](int) { return g_forcePan.load(); },
-        "Toggle V-Pots → Pan", false
-    });
+    {
+        DescBuilder d{
+            [](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing) return;
+                const bool next = !g_forcePan.load();
+                g_forcePan.store(next);
+                g_pageDirty.store(true);
+                SetExtState("ReaSixty", "forcePan", next ? "1" : "0", true);
+            },
+            [](int) { return g_forcePan.load(); },
+            "Toggle V-Pots → Pan", false
+        };
+        // UF8 + UC1, NOT the UF1. g_forcePan is read only by the 8-strip path
+        // (computeStripCurrentPb_, slotForStrip, stickyGloballyEnabled_,
+        // commitDebouncedTouchReleases, pushUf8GlobalLeds) — the same
+        // "UF8/UC1 state that does not apply to the UF1" the note above
+        // stickyUf1AboveEnabled_ lists. Without this the builtin sat in the
+        // UF1 picker and did nothing when bound there: the name-prefix table
+        // in builtinDeviceMask() had caught its siblings `flip` and
+        // `encoder_*` by hand and missed this one. Audit 2026-08-19.
+        d.deviceMask = 0b011;
+        registerBuiltin("pan_force", d);
+    }
 
     registerBuiltin("mixer_toggle", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {

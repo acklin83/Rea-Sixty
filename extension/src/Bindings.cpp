@@ -5591,6 +5591,12 @@ const std::vector<const char*>& builtinCategoryOrder()
 }
 
 // bit0 = UF8, bit1 = UC1, bit2 = UF1. Universal builtins → all three.
+//
+// FALLBACK ONLY. This decides from the id's prefix plus the hand-maintained
+// exception blocks below, so a device-specific builtin whose name carries no
+// prefix falls through to "universal" without a word. New builtins set
+// BuiltinDescriptor::deviceMask at their registration site instead; that value
+// wins in builtinShownForId. Do not grow the exception list.
 uint8_t builtinDeviceMask(const std::string& n)
 {
     // The UF1's four HARDWARE MODES are a UF1 property you set from ANYWHERE —
@@ -5633,7 +5639,15 @@ int builtinDeviceForId(ButtonId id)
 
 bool builtinShownForId(const std::string& n, ButtonId id)
 {
-    return (builtinDeviceMask(n) & (1u << builtinDeviceForId(id))) != 0;
+    // An explicit mask on the descriptor wins over the name-prefix table.
+    // 0 means the registration site said nothing, so fall back. See the
+    // BuiltinDescriptor::deviceMask comment for why the table alone is not
+    // enough.
+    uint8_t mask = 0;
+    auto it = g_builtins.find(n);
+    if (it != g_builtins.end()) mask = it->second.deviceMask;
+    if (mask == 0) mask = builtinDeviceMask(n);
+    return (mask & (1u << builtinDeviceForId(id))) != 0;
 }
 
 bool builtinStateOf(const std::string& name, int param)

@@ -619,6 +619,28 @@ struct BuiltinDescriptor {
     std::string displayName;   // human-friendly label for the picker UI
     bool        usesParam = false;  // hide param field in UI when false
     RunWithStep runWithStep;
+
+    // Device scope, stated at the REGISTRATION site: bit0 = UF8, bit1 = UC1,
+    // bit2 = UF1. 0 = not stated, fall back to builtinDeviceMask()'s
+    // name-prefix table.
+    //
+    // The table alone cannot be right by construction: it reads the id's
+    // prefix and carries four hand-maintained exception blocks, so anything
+    // device-specific WITHOUT a uf8_/uc1_/uf1_ prefix falls through to
+    // "universal" silently. That is how `pan_force` came to sit in the UF1
+    // picker while doing nothing there — it writes g_forcePan, which no UF1
+    // path reads (see the note at main.cpp's stickyUf1AboveEnabled_). Its
+    // siblings `flip` and `encoder_*` were caught only because someone
+    // remembered to list them.
+    //
+    // New builtins state their scope HERE, next to the code whose reach it
+    // describes, rather than in a prefix table two thousand lines away. The
+    // existing entries may migrate opportunistically; the table stays as the
+    // fallback for every id already shipped.
+    //
+    // Also at the END of the struct, for the same reason as runWithStep: the
+    // positional brace initializers across main.cpp must keep working.
+    uint8_t     deviceMask = 0;
 };
 
 void registerBuiltin(const char* name, BuiltinDescriptor desc);
