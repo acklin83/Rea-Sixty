@@ -2596,7 +2596,13 @@ Named commands (_-prefixed) resolve via REAPER's `NamedCommandLookup` so ReaScri
 
 ## MIDI Command bindings
 
-Emit any MIDI message: Note On/Off, CC, Program Change, Pitch Bend, NRPN. Channel / Note / Value editable. The message goes to a virtual MIDI port that the extension opens — route it in REAPER's MIDI plumbing as needed.
+Emit a MIDI message from any button, from any soft-key slot on the UF8 and the UF1, and from any step of an action chain. Four message types: **Note On**, **Note Off**, **Control Change** and **Program Change**. You set the channel (1 to 16) and the two data bytes, which mean note number and velocity, CC number and value, or a program number, where the second byte is not sent at all.
+
+The message goes to one of **REAPER's own MIDI output devices**, picked by name in the editor, or to every one of them at once if you leave the picker on *(all enabled outputs)*. The target is therefore whatever REAPER already talks to, and there is nothing to patch or route afterwards. A device that is currently unplugged still appears, marked *(offline)*, so a binding is not silently lost when you open the editor without that hardware connected.
+
+Because a slot is a chain, one key can send several messages with a gap between them. That is how a unit which wants a bank select before its program change gets both from one press.
+
+If the bound device is no longer in REAPER's output list, unplugged or renamed, the press does nothing and the reason is written to `rea_sixty.log`.
 
 \newpage
 
