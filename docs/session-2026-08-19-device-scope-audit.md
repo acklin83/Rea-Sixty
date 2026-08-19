@@ -88,3 +88,58 @@ Step 4 produced two fixes and no fault list. The weight of item 4.5 therefore
 sits in steps 1 to 3 — filtering the Settings panes by which devices the user
 actually owns, gated on "ever seen on this machine" rather than "connected right
 now", so unplugging a UF8 for one session doesn't make its settings vanish.
+
+---
+
+# Steps 1 to 3: hiding what you don't own
+
+Shipped the same day as the audit above (`73f8e62`).
+
+## The design call
+
+The obvious gate is "is the device connected right now". It is the wrong one.
+Unplug a UF8 for one session and every UF8 setting disappears, which a user
+reads as *my configuration is gone*, not *that device is absent*.
+
+So the gate is **ever attached to this machine**: `g_devicesSeen`, ExtState
+`rea_sixty/devices_seen`, stamped once per surface at its open path. It only
+grows, so it cannot make a present device's settings vanish — which is exactly
+why the filter can default to ON. Someone who owns the surface never learns the
+feature exists.
+
+A zero mask means nothing has ever attached (fresh install, or setting up before
+the hardware arrives) and shows everything. A full pane beats an empty one.
+
+Because the mask only grows, it needed a way down: **Forget devices that aren't
+connected** resets it to whatever is live. That covers selling a surface, and it
+is the only way to see any of this on a rig that owns all three.
+
+## Where scope lives
+
+Two places, and they must agree:
+
+- `SearchEntry::dev` in `MixerWindow.cpp` tags each indexed control. Defaulted to
+  all three, so only the device-specific rows carry a fourth field.
+- The panes gate the drawing.
+
+The search had to follow the panes: a result row that scrolls you to a control
+the page does not draw is worse than no result at all. Bit order is shared with
+`bindings::builtinDeviceMask()`, so nothing needs translating between the two
+mechanisms.
+
+## Two corrections the census forced
+
+- **"Fill from UC1" is not UC1-scoped.** `fillUf1FromUc1_` takes
+  `g_editingMatch` and mirrors the map's UC1 *slots* onto the UF1 layer. It
+  works with no UC1 on the bus. Tagged by name, untagged after reading it.
+- **The index called a control "Show EQ Graph on the UF1".** The control reads
+  "EQ Graph on the UF1". The index is a mirror of the code, so it now mirrors it.
+
+## How to test it on a full rig
+
+1. Unplug two surfaces, restart REAPER. **Forget devices that aren't connected**
+   appears under the device list, because the inventory still holds all three.
+2. Click it. UC1 GR calibration, the UF8 feel fields, the foreign halves of the
+   REC block and the foreign Bindings tabs all go. Search stops finding them.
+3. Plug the surfaces back in and restart. The open paths stamp them again and
+   everything returns by itself.
