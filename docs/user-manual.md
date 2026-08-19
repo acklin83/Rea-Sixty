@@ -1556,7 +1556,7 @@ The pane stacks several sections from top to bottom.
 
 ### Versions
 
-- **Version** — `git describe --tags --always --dirty` of the source tree at build time. On a tagged release: `v0.3.2`. Past a tag: `v0.3.2-N-g<sha>` (N commits past the tag). With uncommitted changes: trailing `-dirty`. Read this line first when triaging issues so it's obvious which build is loaded.
+- **Version** — `git describe --tags --always --dirty` of the source tree at build time. On a tagged release: `v0.5.3`. Past a tag: `v0.5.3-N-g<sha>` (N commits past the tag). With uncommitted changes: trailing `-dirty`. Read this line first when triaging issues so it's obvious which build is loaded.
 - **Build** — date + time of the compiled extension.
 - **REAPER** — the host REAPER version string.
 - **ReaImGui** — the bundled-ABI banner (currently v0.10).
