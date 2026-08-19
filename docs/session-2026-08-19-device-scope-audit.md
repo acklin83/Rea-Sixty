@@ -143,3 +143,30 @@ mechanisms.
    REC block and the foreign Bindings tabs all go. Search stops finding them.
 3. Plug the surfaces back in and restart. The open paths stamp them again and
    everything returns by itself.
+
+---
+
+# Shipped as v0.5.4 "Phantom Power"
+
+Tag on `0c49624`, 19 August 2026. Everything above plus the UF1 REC + RME round
+went out together.
+
+## One thing the runbook could not have told us
+
+`reaper-scripts`' ReaPack-index workflow hung **twice** in *Install
+dependencies* (`apt-get install pandoc`, `gem install reapack-index`): 22
+minutes, cancelled, re-run, another 20. The documented duration for the whole
+run is 80 to 90 seconds. Nothing about it was ours; the job never got as far as
+reading the package.
+
+The index was built locally with the same tool and the identical invocation, and
+pushed by hand. The exact commands are in the `v0.5.4-shipped` memory. Two
+things worth repeating here:
+
+- **macOS system Ruby (2.6) is too old for `reapack-index`.** Its dependency
+  chain needs Ruby 3.2+. Homebrew's Ruby works.
+- **Cancel the stuck run before pushing**, or two pushes race.
+- **`raw.githubusercontent.com` is cached.** Straight after the push the raw URL
+  still served the previous index. That is not a failed push. Check
+  `gh api repos/acklin83/reaper-scripts/contents/index.xml` against main
+  instead, which is the authoritative answer.
