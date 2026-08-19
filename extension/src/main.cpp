@@ -15066,14 +15066,17 @@ MediaTrack* uf1FocusedTrack_()
     // overriding the selection (Frank 2026-07-30). Everything downstream reads
     // this one resolver, so the strip / fader / GR all follow the master.
     if (g_uf1Master.load() && master) return master;
-    // ⛔ The Extender does NOT repoint this resolver any more (Frank 2026-08-11,
-    // "Option A ist scheisse"). Only the FADER joins the UF8 bank; the display,
-    // V-Pots, soft-keys and LEDs follow the SELECTION, exactly like the UC1 —
-    // which is what the original design note said all along ("only the FADER
-    // joins the bank"). Pointing the whole rich layer at the 9th track made the
-    // UF1 useless whenever the selection differed: the screen described a plug-in
-    // the surface was not addressing. The bank slot now lives in uf1FaderTrack_
-    // below, which the painter's fader block alone consults.
+    // ⛔ The Extender does NOT repoint this resolver (Frank 2026-08-11, "Option A
+    // ist scheisse"). Pointing the whole surface at the 9th track made the UF1
+    // useless whenever the selection differed: the screen described a plug-in the
+    // surface was not addressing.
+    // This resolver is the RIGHT half of the UF1 — the 4 V-Pots, the 4 display
+    // soft-keys and the EQ graph, i.e. the plug-in area, which follows the
+    // SELECTION exactly like the UC1. The LEFT half (fader, level meter, small
+    // channel LCD, Solo, Cut, Sel, above-fader V-Pot, the soft-key above the
+    // channel) is the bank slot and resolves through uf1FaderTrack_ below.
+    // Splitting by physical side is the whole rule; when in doubt about a new
+    // control, ask which side of the panel it sits on (Frank 2026-08-19).
     // Held mode: the "focused track" clutch (= Focus Set pin, g_tempSelsetActive)
     // is on and the set is non-empty → the UF1 parks on member[g_uf1HeldIndex],
     // independent of the REAPER selection (Frank 2026-08-04). The channel encoder
@@ -15130,11 +15133,26 @@ MediaTrack* uf1FocusedTrack_()
 // track list → fall through to the focused track. Suppressed in a FADER route
 // mode: there the UF8 faders show the focused track's SENDS, so the UF1's +1
 // strip is the 9th SEND, not a 9th track — the Extender send block drives it.
-// Everything else on the UF1 reads uf1FocusedTrack_ and follows the SELECTION,
-// like the UC1 (Frank 2026-08-11). Main-thread only.
+// ⇨ THE FADER SIDE, not just the fader (Frank 2026-08-19). The UF1 has two
+// halves, and the Extender splits them: the LEFT half (fader, level meter, small
+// channel LCD, Solo, Cut, Sel, the above-fader V-Pot and the soft-key above the
+// channel) belongs to the 9th BANK slot, while the RIGHT half (4 V-Pots, 4
+// display soft-keys, EQ graph) follows the SELECTION like the UC1. Every control
+// of the left half resolves through HERE; the right half reads uf1FocusedTrack_.
+// The 2026-08-11 rework only moved the fader itself and the 2026-08-13 fix only
+// moved the strip PAINT, so the left half's ACTIONS kept writing to the selection
+// while their own LEDs showed the bank slot: Cut lit for one track and muted
+// another. Splitting by physical side is the rule that makes surface and action
+// agree.
+// MASTER outranks the Extender (Frank 2026-08-19): with MASTER engaged the
+// extender branch is skipped so BOTH halves land on the master track via
+// uf1FocusedTrack_, which resolves MASTER first. Written as a guard rather than a
+// second master lookup so there is exactly one place that decides it.
+// Main-thread only.
 MediaTrack* uf1FaderTrack_()
 {
-    if (g_uf1Extender.load() && !uf1ExtenderRouteFader_()) {
+    if (!g_uf1Master.load()
+        && g_uf1Extender.load() && !uf1ExtenderRouteFader_()) {
         const int slot = g_bankOffset.load()
                        + (g_uf1ExtenderSide.load() ? effectiveStripCount_() : 0);
         if (MediaTrack* et = visibleTrackAt(slot)) return et;
@@ -15184,7 +15202,12 @@ inline double uf1VpotVolLinear_(double nDb)
 void applyUf1AboveFaderVpot_(int step)
 {
     if (step == 0) return;
-    MediaTrack* tr = uf1FocusedTrack_();
+    // ⛔ uf1FaderTrack_ — this knob sits directly ABOVE the fader, so it is the
+    // fader side and must address the fader's track. On the selection (until
+    // 2026-08-19) the Extender made it pan one track while the pan bar above it
+    // read another, FLIP rode the wrong track's volume while the fader panned the
+    // right one, and Sticky Pot wrote a pin the fader block reads off `ftr`.
+    MediaTrack* tr = uf1FaderTrack_();
     if (!tr) return;
     // The per-track knob obeys the UF1's own speed + Fine, like the four
     // channel V-Pots do (Frank 2026-08-10). Applied to every target below —
@@ -16337,7 +16360,12 @@ void drainInputQueue()
                 toggleRouteSolo_(uf1ExtenderSendRoute_());
                 continue;
             }
-            if (MediaTrack* tr = uf1FocusedTrack_()) {
+            // ⛔ uf1FaderTrack_ — SOLO sits on the FADER side, so it must solo the
+            // track the strip above it names and the fader moves. It read the
+            // selection until 2026-08-19, which with the Extender on meant the LED
+            // showed the bank slot while the press hit whatever was selected.
+            // Same class as the SEL fix (Uf1SelectFocused below) and da8a2f6.
+            if (MediaTrack* tr = uf1FaderTrack_()) {
                 CSurf_OnSoloChange(tr, -1);
                 const bool on = GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
                 uf8::param_groups::broadcastSoloMute(tr, true, on ? 1 : 0);
@@ -16357,7 +16385,8 @@ void drainInputQueue()
                 }
                 continue;   // route mode: never mute the source track (empty slot → eat)
             }
-            if (MediaTrack* tr = uf1FocusedTrack_()) {
+            // ⛔ uf1FaderTrack_ — see the SOLO branch above. CUT is the fader side.
+            if (MediaTrack* tr = uf1FaderTrack_()) {
                 CSurf_OnMuteChange(tr, -1);
                 const bool on = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
                 uf8::param_groups::broadcastSoloMute(tr, false, on ? 1 : 0);
@@ -16485,7 +16514,8 @@ void drainInputQueue()
             // (main thread). Armed (get-next) → clear this track's pin; else a live
             // pin → reset it to its default (toggle flips 0/1, else midpoint); else
             // no pin → the knob's own default = centre Pan.
-            if (MediaTrack* tr = uf1FocusedTrack_()) {
+            // ⛔ uf1FaderTrack_ — same knob, same side as the rotation above.
+            if (MediaTrack* tr = uf1FaderTrack_()) {
                 if (g_stickyArmGetNext.load()) {
                     stickyClearForTrack_(tr);
                     g_stickyArmGetNext.store(false);
@@ -22504,15 +22534,19 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // The channel strip above the fader keeps showing the FOCUSED track's level +
     // GR meter in Meter mode too — identical to the Channel/DAW view (Frank
     // 2026-08-02: "in meter mode ... keine pegel ... soll gleich bleiben wie in
-    // daw/plugin mode"). Same LIVE source as the Channel view (uf1ChannelMeterBytes_,
-    // tr = the fader's focused track), so it follows the channel selection. The
+    // daw/plugin mode"). Same LIVE source as the Channel view, and like there it
+    // reads the FADER SIDE (uf1FaderTrack_) — this meter sits on the small LCD
+    // above the fader, so it has to show the track the fader moves, not the
+    // selection driving the big screen around it (Frank 2026-08-19). The
     // 0x00xx zone is the manual's separate "small LCD" — it is NOT the big meter
     // display (proven inert on it, [[uf1-vu-red-numbers-parked]]), so driving it
     // live cannot disturb the goniometer / needles / bargraphs.
     // Overview (screen 0) streams it in the per-image cycle below (replacing the
     // captured ff placeholder); the other screens have no cycle → send per tick here.
     uint8_t chLvL = 0, chLvR = 0, chComp = 0, chGate = 0;
-    uf1ChannelMeterBytes_(tr, chLvL, chLvR, chComp, chGate);
+    MediaTrack* const chMeterFtr = uf1FaderTrack_();
+    MediaTrack* const chMeterTr  = chMeterFtr ? chMeterFtr : tr;
+    uf1ChannelMeterBytes_(chMeterTr, chLvL, chLvR, chComp, chGate);
     if (screen != 0) {
         const uint8_t m0009[] = {chLvL, chLvR, 0x00, 0x00};
         const uint8_t m000a[] = {0x00, 0x00, 0x00, 0x00};
@@ -25571,6 +25605,20 @@ void uf1PaintChannel_()
     }
 
     if (!tr) { sTr = nullptr; return; }
+
+    // ★ THE FADER SIDE HAS ITS OWN TRACK. The UF1 is split down the middle: the
+    // LEFT half (fader, level meter, small channel LCD, Solo, Cut, Sel, the
+    // above-fader V-Pot, the soft-key above the channel) is `ftr`, the RIGHT half
+    // (4 V-Pots, 4 display soft-keys, EQ graph) is `tr`. They differ only while
+    // the Extender is on; uf1FaderTrack_ falls back to the focused track
+    // otherwise, so nothing changes without it. Do not mix them — a left-half
+    // element on `tr` shows one track and acts on another, which is exactly the
+    // bug Frank hit on 2026-08-19.
+    // Never null: tr is non-null past the guard above and uf1FaderTrack_ falls
+    // back to it. Resolved HERE rather than further down because both the meter
+    // block and the small-LCD paint need it.
+    MediaTrack* const extFtr = uf1FaderTrack_();
+    MediaTrack* const ftr    = extFtr ? extFtr : tr;
     // The MODE button flips the firmware view; a switch forces a full repaint
     // of the newly-shown plane (its change-detect statics went stale while
     // hidden). The fader follows volume in BOTH views (handled below).
@@ -26021,7 +26069,7 @@ void uf1PaintChannel_()
         // = 0x0009; comp GR LED = 0x0015, gate GR LED = 0x0016 (0 rest .. 0x0f).
         // 0x000a = a second element, meaning unknown → held idle 0.
         uint8_t lvL = 0, lvR = 0, compByte = 0x00, gateByte = 0x00;
-        uf1ChannelMeterBytes_(tr, lvL, lvR, compByte, gateByte);
+        uf1ChannelMeterBytes_(ftr, lvL, lvR, compByte, gateByte);   // fader side
         const uint8_t k0009i[] = {lvL, lvR, 0x00, 0x00};       // LEVEL L/R
         const uint8_t k000ai[] = {0x00, 0x00, 0x00, 0x00};     // idle (unknown)
         const uint8_t kZeroi = 0x00;
@@ -26998,19 +27046,6 @@ void uf1PaintChannel_()
     // change-detects the 251-byte output internally before transmitting.
     uf1PaintEqGraph_(tr, changed);
     }  // end channel-view painting (else of meterView)
-
-    // ★ THE FADER HAS ITS OWN TRACK. In Extender mode the UF1 fader is the 9th
-    // strip of the UF8 bank while the BIG screen, V-Pots, soft-keys and LEDs stay
-    // on the SELECTION like the UC1 (Frank 2026-08-11). `ftr` is that track — it is
-    // the focused track whenever the Extender is off, so nothing changes there.
-    // Every read AND write in the fader block addresses ftr; the big-screen paint
-    // above uses tr. Do not mix them.
-    // Never null: tr is already non-null here, and uf1FaderTrack_ falls back to it.
-    // Written this way rather than an early return, which would skip the GR-LED,
-    // Meter-LED and MODE-menu blocks that follow.
-    // Resolved BEFORE the small-LCD paint below, which needs it too.
-    MediaTrack* const extFtr = uf1FaderTrack_();
-    MediaTrack* const ftr    = extFtr ? extFtr : tr;
 
     // Small-LCD channel strip (name / dB / pan / ch# / colour / Solo·Cut LEDs) —
     // painted in BOTH views. The level + GR meter (0x0009/0x0015/0x0016) rides
@@ -36664,7 +36699,10 @@ void uf1PinChannel_()
         tempSelsetToggleRecall_();      // release the clutch, keep the set
         return;
     }
-    MediaTrack* tr = uf1FocusedTrack_();
+    // ⛔ uf1FaderTrack_ — the key sits above the channel NAME on the fader side,
+    // and that name is what changes when you pin, so it has to pin the track it
+    // is printed above (Frank 2026-08-19).
+    MediaTrack* tr = uf1FaderTrack_();
     if (!tr) return;
     char buf[64] = {0};
     GetSetMediaTrackInfo_String(tr, "GUID", buf, false);
