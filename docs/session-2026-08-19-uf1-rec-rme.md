@@ -78,7 +78,43 @@ clients on one port. Settings → Modes → REC now reports whether it was detec
 and hands the user to ReaPack when it is missing; both packages ship from the
 same repository, so that is one click.
 
+## UC1 LMF Gain: measured, and it is the hardware
+
+Chased on request and closed without a code change. Everything below was
+measured with the detent census that already lived in the code
+(`reasixty_uc1KnobCensus`, ExtState `uc1_knob_count`), not reasoned about.
+
+What was ruled out, in order:
+
+1. **Detents are not lost.** Wire count and consumer count matched exactly on
+   both knobs: HMF 382/382 over 286 frames, LMF 521/521 over 377. Neither the
+   firmware nor our input path drops anything.
+2. **The processing is identical.** All four EQ gains take the same path, the
+   same `kEqGainSpeed`, the same range; `clickToDelta_` is strictly linear with
+   no clamp and no acceleration; the notch slots (18/20/23/27) do not collide.
+3. **It is not the user's feel settings.** `user_plugins.json` gives LMF the
+   same sensitivity as its neighbours in every plug-in that has an entry.
+4. **The plug-in adopts every value.** A per-detent trace of the whole chain
+   showed `after == next` on every single line, so a read-modify-write race
+   against a slow plug-in — which was the leading theory, and got built and
+   reverted — is not happening either.
+
+What the trace did show: the LMF encoder emits counter-direction spikes in the
+middle of a turn. Over one fast sweep each, HMF reversed direction on 6 % of its
+detents, LMF on 23 %.
+
+A bounce filter for those spikes was built, measured and **reverted**. It helped
+a little but not enough, and the numbers said why it never could: the gaps of
+the reversals that still arrived had a median of 56 ms and their magnitudes ran
+up to 6, so catching them means opening the window so wide that genuine reversals
+get eaten too — on everyone's hardware, not just this encoder. Frank's call, and
+he is right: the pot itself is worn. Worth remembering that the earlier note
+already said LMF is slower *far from 0 dB* as well, which on its own rules out
+the 0 dB magnet as the cause — a detail this session's first explanation ignored.
+
+Nothing from this is in the tree. If the encoder is replaced and the problem
+persists, start at the census, it takes five minutes.
+
 ## Open
 
-* Nothing from this round. The LMF gain behaviour Frank mentioned is a separate
-  path (plug-in params ride `kVpotBoost`, not the pan law) and was not touched.
+* Nothing from this round.
