@@ -20279,11 +20279,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     {
         reasixty_setRecRmeEnabled(rmeOn);
     }
-    ImGui_Text(ctx,
-        "  Requires the TotalReaper extension. While REC Selection Mode "
-        "is active, the assignments below dispatch TotalReaper named "
-        "actions against the strip's track. \"None\" leaves the button's "
-        "default REC behaviour intact.");
+    ImGui_Text(ctx, "  Requires the TotalReaper extension.");
 
     // Presence line, and a way to get it when it is missing. TotalReaper ships
     // from the SAME ReaPack repository as Rea-Sixty, so for anyone who
