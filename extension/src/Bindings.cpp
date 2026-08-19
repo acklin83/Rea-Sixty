@@ -163,8 +163,8 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf1NavCentre,     "uf1_nav_centre"      },
     { ButtonId::Uf1NavRight,      "uf1_nav_right"       },
     { ButtonId::Uf1NavDown,       "uf1_nav_down"        },
-    // Per-mode nav cross — 5 keys x 5 modes. Order MUST match the enum block
-    // in Bindings.h (mode-minor: Playhead, Scrub, Items, Envelope, Razor).
+    // Per-mode nav cross — 5 keys x 6 modes. Order MUST match the enum block
+    // in Bindings.h (mode-minor: Playhead, Scrub, Items, Envelope, Razor, Fades).
     // Without a name a binding does not serialise and the editor collapses,
     // so all 25 are listed even though they are never typed by hand.
     { ButtonId::Uf1NavUpPlayhead, "uf1_nav_up_playhead" },
@@ -172,26 +172,31 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf1NavUpItems, "uf1_nav_up_items" },
     { ButtonId::Uf1NavUpEnvelope, "uf1_nav_up_envelope" },
     { ButtonId::Uf1NavUpRazor, "uf1_nav_up_razor" },
+    { ButtonId::Uf1NavUpFades, "uf1_nav_up_fades" },
     { ButtonId::Uf1NavLeftPlayhead, "uf1_nav_left_playhead" },
     { ButtonId::Uf1NavLeftScrub, "uf1_nav_left_scrub" },
     { ButtonId::Uf1NavLeftItems, "uf1_nav_left_items" },
     { ButtonId::Uf1NavLeftEnvelope, "uf1_nav_left_envelope" },
     { ButtonId::Uf1NavLeftRazor, "uf1_nav_left_razor" },
+    { ButtonId::Uf1NavLeftFades, "uf1_nav_left_fades" },
     { ButtonId::Uf1NavCentrePlayhead, "uf1_nav_centre_playhead" },
     { ButtonId::Uf1NavCentreScrub, "uf1_nav_centre_scrub" },
     { ButtonId::Uf1NavCentreItems, "uf1_nav_centre_items" },
     { ButtonId::Uf1NavCentreEnvelope, "uf1_nav_centre_envelope" },
     { ButtonId::Uf1NavCentreRazor, "uf1_nav_centre_razor" },
+    { ButtonId::Uf1NavCentreFades, "uf1_nav_centre_fades" },
     { ButtonId::Uf1NavRightPlayhead, "uf1_nav_right_playhead" },
     { ButtonId::Uf1NavRightScrub, "uf1_nav_right_scrub" },
     { ButtonId::Uf1NavRightItems, "uf1_nav_right_items" },
     { ButtonId::Uf1NavRightEnvelope, "uf1_nav_right_envelope" },
     { ButtonId::Uf1NavRightRazor, "uf1_nav_right_razor" },
+    { ButtonId::Uf1NavRightFades, "uf1_nav_right_fades" },
     { ButtonId::Uf1NavDownPlayhead, "uf1_nav_down_playhead" },
     { ButtonId::Uf1NavDownScrub, "uf1_nav_down_scrub" },
     { ButtonId::Uf1NavDownItems, "uf1_nav_down_items" },
     { ButtonId::Uf1NavDownEnvelope, "uf1_nav_down_envelope" },
     { ButtonId::Uf1NavDownRazor, "uf1_nav_down_razor" },
+    { ButtonId::Uf1NavDownFades, "uf1_nav_down_fades" },
     { ButtonId::Uf1SecLeft,       "uf1_sec_left"        },
     { ButtonId::Uf1SecRight,      "uf1_sec_right"       },
     { ButtonId::Uf1Cycle,         "uf1_cycle"           },
@@ -541,7 +546,7 @@ uint32_t pressKey(int layer, ButtonId id)
 }
 
 // ⇨ THE PER-MODE NAV-CROSS FACTORY TABLE — used by the factory seed AND by the
-// backfill that teaches an existing config about the 25 new ids. ONE list, or
+// backfill that teaches an existing config about the 30 per-mode ids. ONE list, or
 // the two would drift and a user upgrading would get a different cross than a
 // fresh install (Frank 2026-08-18).
 // Playhead and Scrub get the plain zoom cross back, because that is what the key
@@ -592,6 +597,16 @@ const NavSeed kNavSeed[] = {
         { ButtonId::Uf1NavUpRazor,        "jog_razor_top", "", Behavior::Momentary , nullptr },
         { ButtonId::Uf1NavDownRazor,      "jog_razor_bottom", "", Behavior::Momentary , nullptr },
         { ButtonId::Uf1NavCentreRazor,    "jog_content_drag", "",           Behavior::Hold , nullptr },
+        // Fades: the arrows carry ONE action each that means two things, because
+        // the centre switches what the cross is for (aim at a fade / walk the
+        // items) exactly the way Envelope's centre switches what the wheel edits.
+        // Splitting them into four aim-only and four walk-only actions would put
+        // eight bindings on four keys, and the key could still only hold one.
+        { ButtonId::Uf1NavLeftFades,      "jog_fade_left", "", Behavior::Momentary , "jog_fade_left_add" },
+        { ButtonId::Uf1NavRightFades,     "jog_fade_right", "", Behavior::Momentary , "jog_fade_right_add" },
+        { ButtonId::Uf1NavUpFades,        "jog_fade_up", "", Behavior::Momentary , "jog_fade_up_add" },
+        { ButtonId::Uf1NavDownFades,      "jog_fade_down", "", Behavior::Momentary , "jog_fade_down_add" },
+        { ButtonId::Uf1NavCentreFades,    "jog_fade_nav_toggle", "",        Behavior::Toggle , nullptr },
     };
 
 // ---- Factory defaults -----------------------------------------------------
@@ -2490,6 +2505,9 @@ bool invokeBuiltin(const std::string& name, int param)
 // Sub-Bank cell colour. Absent reads as Plain, and a set only writes an entry
 // once it has claimed one, so an old file restores to exactly what it painted
 // before: both sets on Plain's colour. No migration step.
+// 30: the Fades jog mode. The per-mode nav block grew from 25 to 30 ids, so
+// upgradeBackfillUf1Buttons_ runs once more to seed the five Fades keys on a
+// config that predates them.
 // 29: the per-mode nav ids seeded with labels ("ZOOM \xE2\x96\xB2" and friends) for the
 // few hours v28 existed. The UF1 prints nothing beside the cross, so those are
 // invisible AND they stop the label following the action once bound. Cleared for
@@ -2497,7 +2515,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // 28: the nav cross gained 25 per-mode ButtonIds. Dispatch resolves the cross
 // through the active Jog Mode, so an older config has NO binding for it until
 // upgradeBackfillUf1Buttons_ seeds them — that pass now runs for < 28 too.
-constexpr int kCurrentBindingsVersion = 29;
+constexpr int kCurrentBindingsVersion = 30;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -2860,9 +2878,10 @@ void upgradeBackfillUf1Buttons_(Config& c)
     fillBuiltin(ButtonId::Uf1NavLeft,   "jog_nav_left",   "JOG \xE2\x97\x82");
     fillBuiltin(ButtonId::Uf1NavRight,  "jog_nav_right",  "JOG \xE2\x96\xB8");
     fillBuiltin(ButtonId::Uf1NavCentre, "jog_nav_center", "FOCUS");
-    // ⇨ AND THE 25 PER-MODE NAV IDS (v27→v28, 2026-08-18).
-    // Every config written before today lacks them entirely, and since the
-    // dispatch now resolves the cross through the active mode, a missing entry
+    // ⇨ AND THE 30 PER-MODE NAV IDS (v27→v28 for the first 25, v29→v30 for
+    // the five Fades ones).
+    // A config written before either of those lacks the ids entirely, and since
+    // the dispatch resolves the cross through the active mode, a missing entry
     // means a DEAD cross — not a fallback. Backfilled from the same table the
     // factory seed uses, and only where the slot is missing, so anyone who has
     // already bound one keeps it.
@@ -3377,7 +3396,13 @@ void load()
             if (tmp.version < 29) {
                 upgradeClearUf1NavLabels_(tmp);
             }
-            if (tmp.version < 28) {
+            // v29→v30 (2026-08-19): the Fades jog mode adds five more per-mode
+            // nav ids, and a v29 config has none of them — the cross would be
+            // DEAD in the new mode, not merely unbound. Same reason v27 needed
+            // it, so the same backfill runs again: fillBuiltin bails on a slot
+            // that already exists, so everything a v29 config carries is left
+            // exactly as the user has it and only the five new ids get seeded.
+            if (tmp.version < 30) {
                 upgradeBackfillUf1Buttons_(tmp);
             }
             if (tmp.version < 17) {
@@ -5488,7 +5513,7 @@ const char* builtinCategory(const std::string& n)
 
     // What the modes DO, as opposed to which mode is engaged. Kept apart from
     // "Jog Modes" so neither list becomes the leftovers drawer (Frank
-    // 2026-08-18): five mode switches there, the named actions here.
+    // 2026-08-18): the mode switches there, the named actions here.
     if (n.rfind("jog_", 0) == 0)
         return "Jog Actions";
 

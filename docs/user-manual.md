@@ -685,6 +685,7 @@ pick the object.
 | **Items** | Moves the selected item(s). Default one quarter of a grid step per count. |
 | **Envelope** | Moves the selected envelope points, same default step. |
 | **Razor** | Moves the razor edit — which edge, see below. |
+| **Fades** | Changes a fade length, 10 ms per count. Where there is a neighbour it is the crossfade. See *Fades* below. |
 
 The arrow cross **selects**, the jog **moves**. That split is the whole idea: you
 never have to let go of the wheel to change what you are working on.
@@ -700,6 +701,8 @@ The cross is not one thing either — it follows the object, exactly like the wh
 | **Items** | Select the previous / next item on the track. | Select the item on the track above / below. | **Hold** it and the wheel drags the selected items as one move; release drops them. Press and let go without turning and it zooms to the selected items instead, press again to come back. |
 | **Envelope** | Select the previous / next point. | Switch envelope lane. | Toggle what the jog edits: the selected **points** or the **playhead**. No zoom here, nudging the cursor while shaping an envelope is worth more. |
 | **Razor** | Aim at the **left** / **right** edge. | Aim at the **top** / **bottom** edge. | **Hold** it to take the **whole area** and drag its content. See *Razor* below. |
+| **Fades**, aiming | Aim at the **fade-in** / **fade-out**. | Next / previous fade type. | Switch the cross over to walking the items. |
+| **Fades**, walking | Select the previous / next item on the track. | Select the item on the track above / below. | Switch the cross back to aiming. |
 
 Playhead and Scrub carry the plain zoom cross, the same five REAPER zoom actions
 the UF8's cursor pad uses (40111 / 40112 / 1011 / 1012 / 40295): with no editing
@@ -717,8 +720,8 @@ by the modifier.
 The cross keys light to show the Razor target you have aimed at.
 
 **Everything in that table is a factory default, not a fixed rule.** Each cross
-key holds its own binding *per object*, so the same physical key can do five
-different things and you decide all five. Click a cross key in **Settings →
+key holds its own binding *per object*, so the same physical key can do six
+different things and you decide all six. Click a cross key in **Settings →
 Bindings → UF1** and pick the object at the top of the editor: the picker follows
 the surface, and changing it there changes the wheel's object too, so what you
 edit is always what you are holding. The Shift row is a binding as well, which is
@@ -732,9 +735,10 @@ bindings are unreachable until you tick it back on. They are kept, not lost.
 Three modifiers stack on the jog:
 
 - **Shift** — fine. Divides the step (default ÷4).
-- **Cmd** — copy instead of move.
+- **Cmd** — copy instead of move. In Fades it means move instead of resize.
 - **Ctrl** — cross axis. In Items, that means moving track by track rather than in
-  time; the vertical axis is discrete, so it steps one track at a time.
+  time; the vertical axis is discrete, so it steps one track at a time. In Fades
+  it takes the fade curve rather than its length.
 
 ## Razor
 
@@ -746,6 +750,49 @@ cannot sweep up material it is dragging across.
 
 Every speed here is adjustable — the picker speed, the fine divisor and the step
 per object all live in *Settings → Bindings → UF1*.
+
+## Fades
+
+The wheel changes a fade length. Which fade is decided by the edge you are aiming
+at and by what is next to it, and by nothing else.
+
+Aim at the **fade-in** and you are on the item's left edge, at the **fade-out**
+and you are on its right. If another item touches or overlaps that edge, the fade
+there **is** the crossfade with it, and the wheel dials the crossfade: the overlap
+grows and shrinks around the seam, both items keep their audio where it is, and
+two items that merely butt together become a real crossfade the moment you turn
+the wheel up. If there is nothing at that edge, or a gap, the wheel works the
+item's own fade.
+
+That is why there is no separate crossfade target to aim at. The only thing ever
+unclear about one was *which* neighbour, and the side you are aiming at answers
+it.
+
+`↑` and `↓` step the fade type. These are REAPER's own seven, in REAPER's own
+order — the same ones its **Item: Set fade-in shape to type N** actions set. Type
+1 is linear; on a crossfade type 1 is linear equal-gain and type 2 is equal-power.
+Both halves of a crossfade always take the same type, which is what REAPER does
+too. The list wraps, so `↑` from 7 lands back on 1.
+
+Hold **Cmd** and the wheel *moves* instead of changing anything. At a crossfade
+the seam travels and the crossfade keeps its length, so you can slide a cut
+without re-dialling it, and neither side's audio moves. At a plain fade the item
+edge travels and the fade keeps its length, so it goes along.
+
+Hold **Ctrl** and the wheel takes the fade **curve** instead of the length.
+
+Growing stops where the material stops. A crossfade cannot be pulled longer than
+the recording behind the two items, and nothing is looped or stretched to fake
+it — the wheel simply reaches the end and stays there.
+
+The wheel works on every selected item. With nothing selected it takes the item
+under the edit cursor on the selected track, so walking with `SEL` and reaching
+for the wheel needs no extra click. With neither, nothing happens.
+
+The **centre** key hands the cross over to walking the items and back, the same
+way Envelope's centre switches what the wheel edits. Walking, the four arrows do
+exactly what they do in Items, `SHIFT` included, so a whole track's fades are one
+gesture: walk, aim, turn, walk on.
 
 \newpage
 
@@ -1871,6 +1918,7 @@ choice on a button. Each direct setter lights while its object is the live one.
 - **UF1 Jog Mode: Items** puts it on the selected items.
 - **UF1 Jog Mode: Envelope** puts it on the selected envelope points.
 - **UF1 Jog Mode: Razor Edit** puts it on the razor edit.
+- **UF1 Jog Mode: Fades** puts it on the fades of the selected items.
 
 ## Jog Actions
 
@@ -1904,6 +1952,22 @@ Items:
 - **Items: item on track above** and **Items: item on track below** take the
   nearest item on the next track that has one, so empty tracks are skipped. Also
   with **(add)** twins.
+
+Fades. Each of these means two things, because the centre key decides which of
+the two the cross is doing. That is deliberate: a key can only hold one binding,
+so a switch that changes what the whole cross is for has to live inside the
+actions rather than beside them.
+
+- **Fades: fade-in / previous item** and **Fades: fade-out / next item** aim the
+  wheel at the item's left or right fade while the cross is aiming, and walk to
+  the previous or next item on the track while it is walking. Both have **(add)**
+  twins for the walking half.
+- **Fades: next fade type / item above** and **Fades: previous fade type / item
+  below** step the aimed fade through REAPER's seven types while aiming, and take
+  the nearest item on the track above or below while walking. **(add)** twins as
+  well.
+- **Fades: cross aims fades / walks items** is the toggle between the two. Its
+  LED is lit while the cross is walking.
 
 Two that are not tied to a single object:
 

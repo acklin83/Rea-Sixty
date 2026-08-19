@@ -216,19 +216,27 @@ enum class ButtonId : uint16_t {
     // Flip / Master / primary transport 0x38..0x3E. Transport carries
     // factory defaults via uf1_transport; Flip/Master ship UNBOUND for now.
     Uf1Flip, Uf1Master, Uf1Rwd, Uf1Ffw, Uf1Stop, Uf1Play, Uf1Rec,
-    // ⇨ THE NAV CROSS, ONCE PER JOG MODE — 5 keys x 5 modes = 25 slots.
+    // ⇨ THE NAV CROSS, ONCE PER JOG MODE — 5 keys x 6 modes = 30 slots.
     // The five physical ids above stay (they are what fromUf1DeviceId returns),
     // but the dispatch remaps them to the id for the ACTIVE mode before it looks
-    // up a binding. That way one key can do five different things without the
+    // up a binding. That way one key can do six different things without the
     // meaning hiding in the drain, which is what jog_nav_* used to do
     // (Frank 2026-08-06 "volle Freiheit", built 2026-08-18).
     // Order is mode-minor and MUST match enum Uf1JogMode (Playhead, Scrub,
-    // Items, Envelope, Razor) so perModeNavId(base, mode) = groupStart + mode.
+    // Items, Envelope, Razor, Fades) so perModeNavId(base, mode) = groupStart + mode.
+    // ⚠ A new mode APPENDS to each group (never inserts): the ids are persisted
+    // by NAME, so the shifted values are harmless, but the arithmetic above only
+    // holds while every group stays contiguous and in enum order.
     Uf1NavUpPlayhead, Uf1NavUpScrub, Uf1NavUpItems, Uf1NavUpEnvelope, Uf1NavUpRazor,
+    Uf1NavUpFades,
     Uf1NavLeftPlayhead, Uf1NavLeftScrub, Uf1NavLeftItems, Uf1NavLeftEnvelope, Uf1NavLeftRazor,
+    Uf1NavLeftFades,
     Uf1NavCentrePlayhead, Uf1NavCentreScrub, Uf1NavCentreItems, Uf1NavCentreEnvelope, Uf1NavCentreRazor,
+    Uf1NavCentreFades,
     Uf1NavRightPlayhead, Uf1NavRightScrub, Uf1NavRightItems, Uf1NavRightEnvelope, Uf1NavRightRazor,
+    Uf1NavRightFades,
     Uf1NavDownPlayhead, Uf1NavDownScrub, Uf1NavDownItems, Uf1NavDownEnvelope, Uf1NavDownRazor,
+    Uf1NavDownFades,
     // Jog wheel (0x06, rotate-only) — NOT bindable (mode-driven), but SELECTABLE in
     // the UF1 vector so its Jog Mode settings show below the editor (Frank 2026-08-06).
     // KEEP LAST in the UF1 block: four range checks read `<= Uf1Jog` to mean
@@ -240,7 +248,7 @@ enum class ButtonId : uint16_t {
 // How many jog modes the nav block above is sized for. main.cpp owns the real
 // enum (Uf1JogMode) and static_asserts that the two agree — Bindings.h cannot
 // see it, and a silent mismatch would map keys onto the wrong mode's ids.
-constexpr int kUf1JogModeCountForNav = 5;
+constexpr int kUf1JogModeCountForNav = 6;
 
 // The reverse of perModeNavId: which physical key and which mode a per-mode nav
 // id stands for. Returns false for anything else. The editor needs it because

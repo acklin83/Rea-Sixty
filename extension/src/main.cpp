@@ -4781,6 +4781,11 @@ enum class Uf1JogActionOp : uint8_t {
     ItemPrev, ItemNext, ItemTrackUp, ItemTrackDown,
     ZoomSelection,
     ContentDrag,
+    // Fades. The four arrows carry ONE op each that means two things, because
+    // the centre switches what the cross is for. That is the same exception
+    // ContentDrag is, and for the same reason: the key can only hold one
+    // binding, so a switch on the cross has to live inside the action.
+    FadeLeft, FadeRight, FadeUp, FadeDown, FadeNavToggle,
 };
 constexpr uint8_t kUf1JogActionShiftBit = 0x80;
 
@@ -4883,9 +4888,12 @@ constexpr int kUf1EncoderModeCount =
 // it is extremely smooth). Persisted via ExtState "uf1JogMode". Baustein 1 wires
 // Playhead (edit cursor) + Items (move in time via API); Scrub/Envelope/Razor are
 // stubs for the later Bausteine.
-enum class Uf1JogMode : uint8_t { Playhead, Scrub, Items, Envelope, Razor };
+// ⚠ APPEND new modes, never insert: SettingsScreen.cpp reads the live mode as a
+// raw int (2 = Items, 3 = Envelope, 4 = Razor) to decide which per-mode rows to
+// show, and the ExtState "uf1JogMode" persists the same int.
+enum class Uf1JogMode : uint8_t { Playhead, Scrub, Items, Envelope, Razor, Fades };
 std::atomic<Uf1JogMode> g_uf1JogMode{Uf1JogMode::Playhead};
-constexpr int kUf1JogModeCount = static_cast<int>(Uf1JogMode::Razor) + 1;
+constexpr int kUf1JogModeCount = static_cast<int>(Uf1JogMode::Fades) + 1;
 // The per-mode nav-cross ButtonIds are laid out in blocks of this size, and
 // Bindings.h has to hard-code it because it cannot see this enum. Adding a jog
 // mode without widening the block would map the new mode onto the next key's
@@ -5013,6 +5021,33 @@ double              g_uf1JogNavSavedStart = 0.0, g_uf1JogNavSavedEnd = 0.0;
 // next point from the cursor, so jog-the-playhead then arrow-to-grab reads as one move.
 // Session-only (like the razor target), main thread + LED sync read it.
 std::atomic<bool>   g_uf1EnvJogPlayhead{false};
+// ---- Fades mode state (2026-08-19) ----------------------------------------
+// Which EDGE of the item the wheel works on. false = the fade-in (left edge),
+// true = the fade-out (right edge). The ←/→ keys aim it and nav-cross LED
+// 0x11 / 0x13 shows which.
+//
+// ⇨ THE EDGE ALSO DECIDES FADE vs CROSSFADE, and nothing else does. If an item
+// touches or overlaps the aimed edge, the fade there IS the crossfade with that
+// neighbour (a native crossfade is exactly the pair of AUTO fades over the
+// overlap — the same fact uf1CommitDropXfades_ is built on). If nothing is
+// there, or a gap, the wheel works the item's own manual fade. That is why
+// there is no third "crossfade" target to aim at: which neighbour was always
+// the ambiguous part of one, and the aimed side answers it.
+std::atomic<bool>   g_uf1FadeOutEdge{false};
+// What the nav CROSS is for. false = aim at a fade (←→ edge, ↑↓ fade type),
+// true = walk the items (←→ prev/next, ↑↓ track above/below), which is what the
+// Items cross does. The CENTRE toggles it and its LED 0x12 shows the walk state,
+// the same shape as Envelope's points/playhead switch. Session-only.
+std::atomic<bool>   g_uf1FadeCrossWalks{false};
+// Ctrl+jog = fade CURVATURE (D_FADE*DIR, -1..1) per count. Its own step because
+// it is a unitless shape parameter, not time — same reason the envelope value
+// step is separate from the envelope time step. ExtState "uf1JogFadeCurve".
+std::atomic<double> g_uf1JogFadeCurveStep{0.05};
+// Undo coalescing for the Fades jog. Identical mechanism to the envelope jog:
+// the wheel is free-running (no key to release), so the only gesture boundary
+// there is is the wheel going still. onTimer closes the block after 300 ms.
+std::atomic<bool>    g_uf1JogFadeUndoOpen{false};
+std::atomic<int64_t> g_uf1JogFadeUndoUntilMs{0};
 // The per-mode step UNIT (Frank 2026-08-06: "Sekunden machen NULL Sinn für alles" —
 // keep as an option, but default ZoomRel for the scrub-y modes / Grid for the
 // place-precisely modes). ZoomRel = a fraction of the VISIBLE arrange range per
@@ -5041,6 +5076,11 @@ struct Uf1JogStepInit_ {
         set(Uf1JogMode::Items,    Uf1JogUnit::Grid,    0.25);  // 1 = grid, 0.5 half, 0.25 quarter
         set(Uf1JogMode::Envelope, Uf1JogUnit::Grid,    0.25);
         set(Uf1JogMode::Razor,    Uf1JogUnit::Grid,    0.25);
+        // Fades is the second mode that must NOT be grid-relative: a fade length
+        // is absolute time, not a musical division — a 1/16 fade-in means nothing
+        // and changes meaning with the tempo. 10 ms per count is one third of a
+        // second per turn, Shift-fine 2.5 ms.
+        set(Uf1JogMode::Fades,    Uf1JogUnit::Seconds, 0.010);
     }
 } g_uf1JogStepInit_;
 // Full name (desktop mode-banner) + compact name (UF1 header "REAPER" cell, ≤ fits
@@ -5053,6 +5093,7 @@ inline const char* uf1JogModeFriendly(Uf1JogMode m)
         case Uf1JogMode::Items:    return "Items";
         case Uf1JogMode::Envelope: return "Envelope";
         case Uf1JogMode::Razor:    return "Razor Edit";
+        case Uf1JogMode::Fades:    return "Fades";
     }
     return "Jog";
 }
@@ -5064,6 +5105,7 @@ inline const char* uf1JogModeHdr_(Uf1JogMode m)
         case Uf1JogMode::Items:    return "Items";
         case Uf1JogMode::Envelope: return "Envelope";
         case Uf1JogMode::Razor:    return "Razor";
+        case Uf1JogMode::Fades:    return "Fades";
     }
     return "Jog";
 }
@@ -9175,6 +9217,8 @@ static void uf1JogNavCenterToggle_(Uf1JogMode mode)
     g_uf1JogNavZoomed.store(true);
 }
 
+static void uf1FadeStepShapeSelection_(int dir);   // defined with the Fades core, below
+
 // Route a NAV-cross press by the active Jog Mode. code = strip byte: bits0-1 axis
 // (0 horiz / 1 vert / 2 centre), bit2 = Shift (add-to-selection). dir = ±1.
 // Razor arrows fall back to Playhead nav until Baustein 5.
@@ -9191,6 +9235,23 @@ void applyUf1JogNav_(uint8_t code, int dir)
         else if (axis == 0) t = (dir < 0) ? Uf1RazorTarget::LeftEdge : Uf1RazorTarget::RightEdge;
         else                t = (dir > 0) ? Uf1RazorTarget::TopEdge  : Uf1RazorTarget::BottomEdge;
         g_uf1RazorTarget.store(t);
+        g_pageDirty.store(true);
+        return;
+    }
+    if (mode == Uf1JogMode::Fades) {
+        // The legacy collective jog_nav_* keys, for anyone still on them: same
+        // split as the named Fades actions, so the cross means the same thing
+        // whichever of the two a key carries.
+        if (axis == 2) {
+            g_uf1FadeCrossWalks.store(!g_uf1FadeCrossWalks.load());
+        } else if (g_uf1FadeCrossWalks.load()) {
+            if (axis == 0) uf1SelectAdjacentItem_(dir, shift);
+            else           uf1SelectItemAdjacentTrack_(dir, shift);
+        } else if (axis == 0) {
+            g_uf1FadeOutEdge.store(dir > 0);
+        } else {
+            uf1FadeStepShapeSelection_(dir);
+        }
         g_pageDirty.store(true);
         return;
     }
@@ -9261,6 +9322,32 @@ static void applyUf1JogAction_(uint8_t op8, double value)
         case Op::ItemNext:      uf1SelectAdjacentItem_(+1, shift); break;
         case Op::ItemTrackUp:   uf1SelectItemAdjacentTrack_(+1, shift); break;
         case Op::ItemTrackDown: uf1SelectItemAdjacentTrack_(-1, shift); break;
+
+        // Fades: the cross does one of two jobs and the centre picks which.
+        // AIMING, ←→ chooses the item edge the wheel works on and ↑↓ steps the
+        // fade type there; WALKING, all four do what the Items cross does, so
+        // you can run along a track fixing fades without leaving the mode
+        // (Frank 2026-08-19, modelled on Envelope's centre).
+        case Op::FadeLeft:
+            if (g_uf1FadeCrossWalks.load()) uf1SelectAdjacentItem_(-1, shift);
+            else { g_uf1FadeOutEdge.store(false); g_pageDirty.store(true); }
+            break;
+        case Op::FadeRight:
+            if (g_uf1FadeCrossWalks.load()) uf1SelectAdjacentItem_(+1, shift);
+            else { g_uf1FadeOutEdge.store(true); g_pageDirty.store(true); }
+            break;
+        case Op::FadeUp:
+            if (g_uf1FadeCrossWalks.load()) uf1SelectItemAdjacentTrack_(+1, shift);
+            else                            uf1FadeStepShapeSelection_(+1);
+            break;
+        case Op::FadeDown:
+            if (g_uf1FadeCrossWalks.load()) uf1SelectItemAdjacentTrack_(-1, shift);
+            else                            uf1FadeStepShapeSelection_(-1);
+            break;
+        case Op::FadeNavToggle:
+            g_uf1FadeCrossWalks.store(!g_uf1FadeCrossWalks.load());
+            g_pageDirty.store(true);
+            break;
 
         case Op::ZoomSelection:
             uf1JogNavCenterToggle_(g_uf1JogMode.load());
@@ -10688,6 +10775,343 @@ static void uf1JogItemsCommitDrop_()
     Undo_EndBlock2(nullptr, "Rea-Sixty: UF1 item drop (trim + crossfade)", -1);
 }
 
+// ============================ FADES MODE ====================================
+// Jog Mode 6 (Frank 2026-08-19). The wheel edits a FADE; which fade is decided
+// by one piece of state and by geometry, never by a third mode flag:
+//
+//   g_uf1FadeOutEdge says which END of the item is aimed at (←/→ set it), and
+//   whatever meets that edge decides whether it is a plain fade or a CROSSFADE.
+//   Touching or overlapping neighbour → the fade there IS the crossfade with it
+//   (a native crossfade is exactly the pair of AUTO fades over the overlap, the
+//   same fact uf1CommitDropXfades_ is built on). Nothing there, or a gap → the
+//   item's own manual fade.
+//
+// That is why there is no separate "crossfade" target to aim at: WHICH neighbour
+// was the only ambiguous part of one, and the aimed side answers it.
+//
+// ★ No Uf1NoAutoEdit_ anywhere below, on purpose. That guard exists because
+// SplitMediaItem crossfades behind our back (measured, see uf1RazorSplitAt_);
+// nothing here splits. Plain SetMediaItemInfo_Value writes do not run REAPER's
+// editing behaviours, so there is nothing for the guard to guard.
+
+// How much MATERIAL a take has beyond the item, in PROJECT seconds: `head` is
+// how far the left edge may move left, `tail` how far the right edge may move
+// right. An empty item or a MIDI take (its source length is in QN, not seconds)
+// has no such wall — report a large number so the caller's clamp does not freeze
+// the wheel on something that simply cannot run out.
+struct Uf1FadeRoom_ { double head = 1e18, tail = 1e18; };
+static Uf1FadeRoom_ uf1FadeRoom_(MediaItem* it)
+{
+    Uf1FadeRoom_ r;
+    MediaItem_Take* tk = it ? GetActiveTake(it) : nullptr;
+    if (!tk) return r;
+    PCM_source* src = GetMediaItemTake_Source(tk);
+    if (!src) return r;
+    bool qn = false;
+    const double slen = GetMediaSourceLength(src, &qn);
+    if (qn || !(slen > 0.0)) return r;
+    double rate = GetMediaItemTakeInfo_Value(tk, "D_PLAYRATE");
+    if (!(rate > 0.0)) rate = 1.0;
+    const double offs = GetMediaItemTakeInfo_Value(tk, "D_STARTOFFS");
+    const double len  = GetMediaItemInfo_Value(it, "D_LENGTH");
+    r.head = std::max(0.0, offs / rate);
+    r.tail = std::max(0.0, (slen - offs) / rate - len);
+    return r;
+}
+
+// Move ONE edge of an item, keeping its audio where it is on the timeline. The
+// LEFT edge needs all three writes together — position, length and the take's
+// start offset — or the material slides under the item; the RIGHT edge only
+// needs the length, because the item is anchored at its position. Fade lengths
+// are deliberately untouched: this is "move", not "resize".
+static void uf1FadeMoveEdge_(MediaItem* it, bool leftEdge, double d)
+{
+    if (!it || std::fabs(d) < 1e-12) return;
+    if (!leftEdge) {
+        SetMediaItemInfo_Value(it, "D_LENGTH",
+            GetMediaItemInfo_Value(it, "D_LENGTH") + d);
+        return;
+    }
+    const double pos = GetMediaItemInfo_Value(it, "D_POSITION");
+    const double len = GetMediaItemInfo_Value(it, "D_LENGTH");
+    double np = pos + d;
+    if (np < 0.0) { d -= np; np = 0.0; }          // never off the front of the project
+    MediaItem_Take* tk = GetActiveTake(it);
+    double rate = tk ? GetMediaItemTakeInfo_Value(tk, "D_PLAYRATE") : 1.0;
+    if (!(rate > 0.0)) rate = 1.0;
+    SetMediaItemInfo_Value(it, "D_POSITION", np);
+    SetMediaItemInfo_Value(it, "D_LENGTH",   len - d);
+    if (tk) SetMediaItemTakeInfo_Value(tk, "D_STARTOFFS",
+                GetMediaItemTakeInfo_Value(tk, "D_STARTOFFS") + d * rate);
+}
+
+// The item that MEETS the aimed edge. It has to touch or overlap, within a
+// sample's worth of tolerance (item edges quantise to samples, so an exact
+// equality test finds nothing — the same lesson the razor drop learned the hard
+// way). A GAP is deliberately not a neighbour: at a butt joint you want a
+// crossfade, but two bars apart you want a plain fade-in.
+static MediaItem* uf1FadeNeighbourAt_(MediaItem* it, bool outEdge)
+{
+    if (!it) return nullptr;
+    MediaTrack* tr = GetMediaItem_Track(it);
+    if (!tr) return nullptr;
+    const double pos = GetMediaItemInfo_Value(it, "D_POSITION");
+    const double end = pos + GetMediaItemInfo_Value(it, "D_LENGTH");
+    constexpr double eps = 1e-6;
+    MediaItem* best = nullptr; double bestKey = 0.0;
+    const int n = CountTrackMediaItems(tr);
+    for (int i = 0; i < n; ++i) {
+        MediaItem* o = GetTrackMediaItem(tr, i);
+        if (!o || o == it) continue;
+        const double op = GetMediaItemInfo_Value(o, "D_POSITION");
+        const double oe = op + GetMediaItemInfo_Value(o, "D_LENGTH");
+        // Different fixed lanes never touch, whatever their times say.
+        if (GetMediaItemInfo_Value(o, "I_FIXEDLANE")
+            != GetMediaItemInfo_Value(it, "I_FIXEDLANE")) continue;
+        if (outEdge) {
+            // Starts inside us and carries on past our end. The two exclusions
+            // matter: an item that ENDS inside ours is buried, and one that
+            // starts BEFORE ours swallows it — in either case there is no join
+            // here, and treating one as a partner would make the overlap
+            // arithmetic below read a length that is not an overlap at all.
+            if (op > pos + eps && op <= end + eps && oe > end + eps
+                && (!best || op > bestKey)) { best = o; bestKey = op; }
+        } else {
+            if (oe < end - eps && oe >= pos - eps && op < pos - eps
+                && (!best || oe < bestKey)) { best = o; bestKey = oe; }
+        }
+    }
+    return best;
+}
+
+// Resolve the aimed edge into the pair the wheel works on. `b` null means a
+// plain fade on `a`; otherwise `a`/`b` are the earlier/later halves of a
+// crossfade, whichever of the two the aim came from.
+static void uf1FadeSite_(MediaItem* it, bool outEdge, MediaItem** a, MediaItem** b)
+{
+    *a = it; *b = nullptr;
+    MediaItem* nb = uf1FadeNeighbourAt_(it, outEdge);
+    if (!nb) return;
+    if (outEdge) { *a = it; *b = nb; }
+    else         { *a = nb; *b = it; }
+}
+
+// Grow or shrink a crossfade, keeping the SEAM where it is: the overlap changes
+// symmetrically around its own centre, so the cut does not wander while you dial
+// the length. Both AUTO fades follow, which is all a native crossfade is. A butt
+// joint (overlap 0) is a legal starting point — turning up from there is how you
+// make a crossfade without touching the mouse.
+static void uf1FadeResizeCross_(MediaItem* a, MediaItem* b, double delta)
+{
+    const double ae = GetMediaItemInfo_Value(a, "D_POSITION")
+                    + GetMediaItemInfo_Value(a, "D_LENGTH");
+    const double bp = GetMediaItemInfo_Value(b, "D_POSITION");
+    const double x  = ae - bp;                       // current overlap
+    const Uf1FadeRoom_ ra = uf1FadeRoom_(a);
+    const Uf1FadeRoom_ rb = uf1FadeRoom_(b);
+    // Growing by g spends g/2 of A's tail and g/2 of B's head, so the tighter of
+    // the two is the wall. Shrinking only ever gives material back.
+    const double maxX = x + 2.0 * std::min(ra.tail, rb.head);
+    double nx = x + delta;
+    if (nx < 0.0)   nx = 0.0;
+    if (nx > maxX)  nx = maxX;
+    const double g = nx - x;
+    if (std::fabs(g) < 1e-12) return;
+    // A new crossfade gets REAPER's own default shape, an existing one keeps
+    // whatever it carries — dialling a length is not a request to restyle it.
+    const bool fresh = (x <= 1e-9 && nx > 1e-9);
+    uf1FadeMoveEdge_(a, false, +g * 0.5);
+    uf1FadeMoveEdge_(b, true,  -g * 0.5);
+    SetMediaItemInfo_Value(a, "D_FADEOUTLEN_AUTO", nx);
+    SetMediaItemInfo_Value(b, "D_FADEINLEN_AUTO",  nx);
+    if (fresh) {
+        const int sh = uf1EditPrefs_().xfadeShape;
+        SetMediaItemInfo_Value(a, "C_FADEOUTSHAPE", double(sh));
+        SetMediaItemInfo_Value(b, "C_FADEINSHAPE",  double(sh));
+    }
+}
+
+// A plain fade on one item. Clamped to the item, and the matching AUTO fade is
+// cleared: an AUTO fade is drawn INSTEAD of the manual one, so a leftover would
+// make a plainly turning wheel look like it does nothing. Zero is this file's
+// "no auto fade" (uf1RazorSplitAt_ writes the same).
+static void uf1FadeResizeManual_(MediaItem* it, bool outEdge, double delta)
+{
+    const char* key = outEdge ? "D_FADEOUTLEN"      : "D_FADEINLEN";
+    const char* aut = outEdge ? "D_FADEOUTLEN_AUTO" : "D_FADEINLEN_AUTO";
+    const double len = GetMediaItemInfo_Value(it, "D_LENGTH");
+    double v = GetMediaItemInfo_Value(it, key) + delta;
+    if (v < 0.0) v = 0.0;
+    if (v > len) v = len;
+    SetMediaItemInfo_Value(it, key, v);
+    SetMediaItemInfo_Value(it, aut, 0.0);
+}
+
+// Move the whole thing instead of resizing it: at a crossfade the SEAM wanders
+// and the length stays (REAPER's own "Move crossfade", not "Move fade"), and
+// neither side's audio shifts. At a plain fade the item EDGE moves and the fade
+// keeps its length, so it travels with the edge.
+static void uf1FadeMove_(MediaItem* it, bool outEdge, double d)
+{
+    MediaItem *a = nullptr, *b = nullptr;
+    uf1FadeSite_(it, outEdge, &a, &b);
+    if (b) {
+        const double al = GetMediaItemInfo_Value(a, "D_LENGTH");
+        const double bl = GetMediaItemInfo_Value(b, "D_LENGTH");
+        const double x  = GetMediaItemInfo_Value(a, "D_POSITION") + al
+                        - GetMediaItemInfo_Value(b, "D_POSITION");
+        const Uf1FadeRoom_ ra = uf1FadeRoom_(a);
+        const Uf1FadeRoom_ rb = uf1FadeRoom_(b);
+        // Later: A needs tail, B loses head but must stay longer than the fade.
+        // Earlier: B needs head, A shrinks and must stay longer than the fade.
+        const double hi = std::min(ra.tail, bl - x);
+        const double lo = -std::min(rb.head, al - x);
+        if (d > hi) d = hi;
+        if (d < lo) d = lo;
+        if (std::fabs(d) < 1e-12) return;
+        uf1FadeMoveEdge_(a, false, d);
+        uf1FadeMoveEdge_(b, true,  d);
+        return;
+    }
+    const double len  = GetMediaItemInfo_Value(a, "D_LENGTH");
+    const double fade = GetMediaItemInfo_Value(a, outEdge ? "D_FADEOUTLEN" : "D_FADEINLEN");
+    const Uf1FadeRoom_ r = uf1FadeRoom_(a);
+    if (outEdge) {                                   // right edge
+        if (d > r.tail)      d = r.tail;
+        if (d < fade - len)  d = fade - len;
+        uf1FadeMoveEdge_(a, false, d);
+    } else {                                         // left edge
+        if (d < -r.head)     d = -r.head;
+        if (d > len - fade)  d = len - fade;
+        uf1FadeMoveEdge_(a, true, d);
+    }
+}
+
+// Fade CURVATURE, D_FADE*DIR, clamped to REAPER's -1..1. Both halves of a
+// crossfade move together, the way its shape does.
+static void uf1FadeCurve_(MediaItem* it, bool outEdge, double delta)
+{
+    MediaItem *a = nullptr, *b = nullptr;
+    uf1FadeSite_(it, outEdge, &a, &b);
+    // Read ONE value and write it to both halves, rather than nudging each from
+    // its own: two halves that started out different would otherwise stay
+    // different for ever, and a crossfade with mismatched curves is not
+    // something you can dial back into agreement by turning a wheel.
+    const char* srcKey = (b || outEdge) ? "D_FADEOUTDIR" : "D_FADEINDIR";
+    double v = GetMediaItemInfo_Value(a, srcKey) + delta;
+    if (v < -1.0) v = -1.0;
+    if (v >  1.0) v =  1.0;
+    if (b) {
+        SetMediaItemInfo_Value(a, "D_FADEOUTDIR", v);
+        SetMediaItemInfo_Value(b, "D_FADEINDIR",  v);
+    } else {
+        SetMediaItemInfo_Value(a, srcKey, v);
+    }
+}
+
+// Step the fade SHAPE. REAPER calls these type 1..7 in its own action list
+// ("Item: Set fade-in shape to type N", 41514-41520 and 41836); C_FADE*SHAPE
+// carries them as 0..6, type 1 = linear. Wraps, so ↑ from 7 lands on 1. A
+// crossfade takes the same type on both halves, exactly like REAPER's
+// "Item: Set crossfade shape to type N" (41528-41534, 41838).
+static void uf1FadeStepShape_(MediaItem* it, bool outEdge, int dir)
+{
+    MediaItem *a = nullptr, *b = nullptr;
+    uf1FadeSite_(it, outEdge, &a, &b);
+    const char* srcKey = (b || outEdge) ? "C_FADEOUTSHAPE" : "C_FADEINSHAPE";
+    int sh = static_cast<int>(GetMediaItemInfo_Value(a, srcKey) + 0.5);
+    sh = ((sh + dir) % 7 + 7) % 7;
+    if (b) {
+        SetMediaItemInfo_Value(a, "C_FADEOUTSHAPE", double(sh));
+        SetMediaItemInfo_Value(b, "C_FADEINSHAPE",  double(sh));
+    } else {
+        SetMediaItemInfo_Value(a, outEdge ? "C_FADEOUTSHAPE" : "C_FADEINSHAPE", double(sh));
+    }
+}
+
+// The items the Fades wheel works on: everything selected, and with nothing
+// selected the item under the edit cursor on a selected track — so walking with
+// SEL and then reaching for the wheel needs no extra click. Empty means the
+// wheel does nothing, visibly and harmlessly.
+static std::vector<MediaItem*> uf1FadeItems_()
+{
+    std::vector<MediaItem*> out;
+    const int n = CountSelectedMediaItems(nullptr);
+    out.reserve(size_t(n < 0 ? 0 : n));
+    for (int i = 0; i < n; ++i)
+        if (MediaItem* it = GetSelectedMediaItem(nullptr, i)) out.push_back(it);
+    if (!out.empty()) return out;
+    const double cur = GetCursorPosition();
+    const int nt = CountSelectedTracks(nullptr);
+    for (int t = 0; t < nt; ++t) {
+        MediaTrack* tr = GetSelectedTrack(nullptr, t);
+        if (!tr) continue;
+        const int ni = CountTrackMediaItems(tr);
+        for (int i = 0; i < ni; ++i) {
+            MediaItem* it = GetTrackMediaItem(tr, i);
+            if (!it) continue;
+            const double p = GetMediaItemInfo_Value(it, "D_POSITION");
+            const double e = p + GetMediaItemInfo_Value(it, "D_LENGTH");
+            if (cur >= p - 1e-9 && cur <= e + 1e-9) { out.push_back(it); break; }
+        }
+    }
+    return out;
+}
+
+// Fade SHAPE stepping from the nav cross (↑ ↓), across the whole target set.
+// Its own entry point rather than a branch in the wheel dispatch, because the
+// cross fires once per press while the wheel arrives in detents.
+static void uf1FadeStepShapeSelection_(int dir)
+{
+    std::vector<MediaItem*> items = uf1FadeItems_();
+    if (items.empty()) return;
+    const bool outEdge = g_uf1FadeOutEdge.load();
+    Undo_BeginBlock2(nullptr);
+    for (MediaItem* it : items)
+        if (ValidatePtr2(nullptr, it, "MediaItem*"))
+            uf1FadeStepShape_(it, outEdge, dir);
+    Undo_EndBlock2(nullptr, "Rea-Sixty: UF1 fade shape", -1);
+    UpdateArrange();
+}
+
+// The wheel, in Fades mode. Cmd MOVES instead of resizing; Ctrl inside "resize"
+// takes the CURVE instead of the length (its own step, because a curvature is
+// not time — the same split the envelope jog makes between its time and value
+// axes). The undo block opens on the first detent and the onTimer drain closes
+// it once the wheel has been still for 300 ms, so one continuous move is one
+// undo step.
+void applyUf1JogFades_(int count, double timeDelta)
+{
+    std::vector<MediaItem*> items = uf1FadeItems_();
+    if (items.empty()) return;
+    const bool outEdge = g_uf1FadeOutEdge.load();
+    const bool move    = uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd);
+    const bool curve   = uf8::bindings::modifierHeld(uf8::bindings::Modifier::Ctrl);
+    double curveDelta = 0.0;
+    if (curve && !move) {
+        double vstep = g_uf1JogFadeCurveStep.load();
+        if (uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)) {
+            const double d = g_uf1JogFineDiv.load(); if (d > 0.0) vstep /= d;
+        }
+        curveDelta = vstep * count;
+        if (!(curveDelta != 0.0)) return;
+    } else if (timeDelta == 0.0) {
+        return;
+    }
+    if (!g_uf1JogFadeUndoOpen.exchange(true)) Undo_BeginBlock2(nullptr);
+    g_uf1JogFadeUndoUntilMs.store(nowMs_() + 300);
+    for (MediaItem* it : items) {
+        if (!ValidatePtr2(nullptr, it, "MediaItem*")) continue;
+        if (move) { uf1FadeMove_(it, outEdge, timeDelta); continue; }
+        if (curve) { uf1FadeCurve_(it, outEdge, curveDelta); continue; }
+        MediaItem *a = nullptr, *b = nullptr;
+        uf1FadeSite_(it, outEdge, &a, &b);
+        if (b) uf1FadeResizeCross_(a, b, timeDelta);
+        else   uf1FadeResizeManual_(a, outEdge, timeDelta);
+    }
+    UpdateArrange();
+}
+
 // No razor present → create a VISIBLE (non-zero) area anchored at the edit cursor,
 // growing right by |delta|. Non-zero on purpose — REAPER discards a zero-width razor, so
 // we can't create [cur,cur] and grow it. Returns false if there's nothing to put it on.
@@ -10891,6 +11315,7 @@ void uf1JogDispatch_(int count)
             else                            applyUf1JogEnvelope_(count, delta);
             break;
         case Uf1JogMode::Razor:    applyUf1JogRazor_(count, delta);    break;
+        case Uf1JogMode::Fades:    applyUf1JogFades_(count, delta);    break;
     }
 }
 
@@ -33859,6 +34284,14 @@ static void uf1NavCrossSyncLeds_()
         case Uf1JogMode::Items:                    // lit = the drag is "mouse-down"
             if (g_uf1JogItemsHeld.load()) lit = kCentre;
             break;
+        case Uf1JogMode::Fades:
+            // Walking lights the CENTRE (the cross is doing the Items job);
+            // aiming lights the edge the wheel is on. Never both, so the
+            // single-LED writer below stays as it is.
+            if (g_uf1FadeCrossWalks.load())      lit = kCentre;
+            else if (g_uf1FadeOutEdge.load())    lit = 0x13;   // right = fade-out
+            else                                 lit = 0x11;   // left  = fade-in
+            break;
         default: break;                            // Playhead / Scrub: nav cross dark
     }
     static int     sLastLit  = -2;
@@ -34177,6 +34610,8 @@ void onTimerBody_()
         static int           mbView = 0;
         static int           mbJog = 0;
         static bool          mbEnvPh = false;
+        static bool          mbFadeOut = false;
+        static bool          mbFadeWalk = false;
         static unsigned      mbSeq     = 0;
         const SelectionMode sm = g_selectionMode.load();
         const EncoderMode   em = g_encoderMode.load();
@@ -34212,6 +34647,8 @@ void onTimerBody_()
         const int  ufv  = uf1ViewMode_();
         const int  jm   = static_cast<int>(g_uf1JogMode.load());
         const bool eph  = g_uf1EnvJogPlayhead.load();
+        const bool fdo  = g_uf1FadeOutEdge.load();
+        const bool fdw  = g_uf1FadeCrossWalks.load();
         const bool u8s  = g_pluginFaderMode.load();
         const bool u8p  = g_uf8PluginMode.load();
         const bool tch  = g_hudTouchLearn.load();
@@ -34232,6 +34669,7 @@ void onTimerBody_()
             mbSticky = sa; mbStickyArm = sarm; mbFocusPin = fp; mbFocusScope = fsc;
             mbFlip = ufl; mbMaster = ufm; mbStrip = ufs; mbExt = ufe; mbExtSide = ufes;
             mbView = ufv; mbJog = jm; mbEnvPh = eph;
+            mbFadeOut = fdo; mbFadeWalk = fdw;
             mbUf8Strip = u8s; mbUf8Plugin = u8p; mbTouch = tch;
         };
         if (!mbInit || mbProjChanged
@@ -34280,6 +34718,13 @@ void onTimerBody_()
             // Envelope mode's jog target (nav-centre): points ⇄ playhead.
             if (eph != mbEnvPh) { chg.push_back(std::string("Envelope \xE2\x80\xA2 ")
                                       + (eph ? "Playhead" : "Points")); mbEnvPh = eph; }
+            // Fades mode's two switches: which edge the wheel is on, and whether
+            // the cross aims or walks. Both are invisible on the desktop
+            // otherwise, and the LED alone cannot say which of the two it means.
+            if (fdo != mbFadeOut) { chg.push_back(std::string("Fades \xE2\x80\xA2 ")
+                                       + (fdo ? "Fade out" : "Fade in")); mbFadeOut = fdo; }
+            if (fdw != mbFadeWalk){ chg.push_back(std::string("Fades \xE2\x80\xA2 ")
+                                       + (fdw ? "Walk items" : "Aim fades")); mbFadeWalk = fdw; }
             // UF8/UC1: SSL Strip Mode + the UF8 Plugin Mode it is mutex'd with.
             if (u8s != mbUf8Strip)  { chg.push_back(std::string("UF8 Strip \xE2\x80\xA2 ") + onOff(u8s)); mbUf8Strip = u8s; }
             if (u8p != mbUf8Plugin) { chg.push_back(std::string("UF8 Plugin \xE2\x80\xA2 ") + onOff(u8p)); mbUf8Plugin = u8p; }
@@ -35766,6 +36211,16 @@ void onTimerBody_()
                     Undo_EndBlock2(nullptr, "Rea-Sixty: UF1 envelope jog", -1);
             }
         }
+        // UF1 Fades jog — same idle close, same reason: the wheel is free-running,
+        // so twenty detents of dialling a fade have to undo as one step.
+        if (g_uf1JogFadeUndoOpen.load()) {
+            const int64_t until = g_uf1JogFadeUndoUntilMs.load();
+            if (until && now > until) {
+                g_uf1JogFadeUndoUntilMs.store(0);
+                if (g_uf1JogFadeUndoOpen.exchange(false))
+                    Undo_EndBlock2(nullptr, "Rea-Sixty: UF1 fade jog", -1);
+            }
+        }
     }
     if (g_sync) {
         // Phase 2.8 Nav Mode hijacks the colour-bar: marker/region colour
@@ -36882,8 +37337,11 @@ custom_action_register_t g_actionJogModeEnvelope{
     0, "REASIXTY_JOG_MODE_ENVELOPE", "Rea-Sixty: UF1 Jog Mode = Envelope", nullptr };
 custom_action_register_t g_actionJogModeRazor{
     0, "REASIXTY_JOG_MODE_RAZOR", "Rea-Sixty: UF1 Jog Mode = Razor Edit", nullptr };
+custom_action_register_t g_actionJogModeFades{
+    0, "REASIXTY_JOG_MODE_FADES", "Rea-Sixty: UF1 Jog Mode = Fades", nullptr };
 int g_cmdJogModeCycle = 0, g_cmdJogModePlayhead = 0, g_cmdJogModeScrub = 0,
-    g_cmdJogModeItems = 0, g_cmdJogModeEnvelope = 0, g_cmdJogModeRazor = 0;
+    g_cmdJogModeItems = 0, g_cmdJogModeEnvelope = 0, g_cmdJogModeRazor = 0,
+    g_cmdJogModeFades = 0;
 
 // UF1 channel-encoder MODE + the four hardware VIEW modes as REAPER-native
 // actions too (Frank 2026-08-10, the same both-routes ask the Jog Modes got).
@@ -37316,6 +37774,7 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
         else if (command == g_cmdJogModeItems)    jm = static_cast<int>(Uf1JogMode::Items);
         else if (command == g_cmdJogModeEnvelope) jm = static_cast<int>(Uf1JogMode::Envelope);
         else if (command == g_cmdJogModeRazor)    jm = static_cast<int>(Uf1JogMode::Razor);
+        else if (command == g_cmdJogModeFades)    jm = static_cast<int>(Uf1JogMode::Fades);
         if (jm >= 0) {
             g_uf1JogMode.store(static_cast<Uf1JogMode>(jm));
             char b[8]; std::snprintf(b, sizeof(b), "%d", jm);
@@ -39539,6 +39998,13 @@ void   reasixty_setUf1JogEnvValueStep(double v)
     if (!(v > 0.0)) v = 0.0001;
     g_uf1JogEnvValueStep.store(v);
     SetExtState("rea_sixty", "uf1JogEnvValStep", std::to_string(v).c_str(), true);
+}
+double reasixty_uf1JogFadeCurveStep() { return g_uf1JogFadeCurveStep.load(); }
+void   reasixty_setUf1JogFadeCurveStep(double v)
+{
+    if (!(v > 0.0)) v = 0.0001;
+    g_uf1JogFadeCurveStep.store(v);
+    SetExtState("rea_sixty", "uf1JogFadeCurve", std::to_string(v).c_str(), true);
 }
 double reasixty_uf1JogStep(int mode)
 {
@@ -42732,6 +43198,11 @@ void registerBindingHandlers()
         [](int) { return g_uf1JogMode.load() == Uf1JogMode::Razor; },
         "UF1 Jog Mode: Razor Edit", false
     });
+    registerBuiltin("jog_mode_fades", DescBuilder{
+        [setJogMode](bool f, bool, int) { if (f) setJogMode(Uf1JogMode::Fades); },
+        [](int) { return g_uf1JogMode.load() == Uf1JogMode::Fades; },
+        "UF1 Jog Mode: Fades", false
+    });
 
     // Channel-encoder MODE setters for the UF1 (Frank 2026-07-31). The UF1 has
     // its OWN encoder mode (g_uf1EncoderMode), independent of the UF8's
@@ -44808,10 +45279,22 @@ void registerBindingHandlers()
     // now visibly and rebindably.
     registerBuiltin("jog_env_point_prev_add", jogAct(JA::EnvPointPrev, "Envelope: previous point (add)", true));
     registerBuiltin("jog_env_point_next_add", jogAct(JA::EnvPointNext, "Envelope: next point (add)", true));
+    // Fades. One action per arrow, and the name says both halves, because the
+    // centre decides which half runs. Splitting them into aim-only and walk-only
+    // actions would put eight bindings on four keys.
+    registerBuiltin("jog_fade_left",  jogAct(JA::FadeLeft,  "Fades: fade-in / previous item", false));
+    registerBuiltin("jog_fade_right", jogAct(JA::FadeRight, "Fades: fade-out / next item", false));
+    registerBuiltin("jog_fade_up",    jogAct(JA::FadeUp,    "Fades: next fade type / item above", false));
+    registerBuiltin("jog_fade_down",  jogAct(JA::FadeDown,  "Fades: previous fade type / item below", false));
+
     registerBuiltin("jog_item_prev_add",       jogAct(JA::ItemPrev,      "Items: previous item (add)", true));
     registerBuiltin("jog_item_next_add",       jogAct(JA::ItemNext,      "Items: next item (add)", true));
     registerBuiltin("jog_item_track_up_add",   jogAct(JA::ItemTrackUp,   "Items: item on track above (add)", true));
     registerBuiltin("jog_item_track_down_add", jogAct(JA::ItemTrackDown, "Items: item on track below (add)", true));
+    registerBuiltin("jog_fade_left_add",  jogAct(JA::FadeLeft,  "Fades: fade-in / previous item (add)", true));
+    registerBuiltin("jog_fade_right_add", jogAct(JA::FadeRight, "Fades: fade-out / next item (add)", true));
+    registerBuiltin("jog_fade_up_add",    jogAct(JA::FadeUp,    "Fades: next fade type / item above (add)", true));
+    registerBuiltin("jog_fade_down_add",  jogAct(JA::FadeDown,  "Fades: previous fade type / item below (add)", true));
 
     // The two stateful ones carry a toggle state so their LED means something.
     registerBuiltin("jog_env_target_toggle", DescBuilder{
@@ -44822,6 +45305,15 @@ void registerBindingHandlers()
         },
         [](int) { return g_uf1EnvJogPlayhead.load(); },
         "Envelope: jog edits points / playhead", true
+    });
+    registerBuiltin("jog_fade_nav_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            queueInput({PendingInput::Uf1JogAction,
+                        static_cast<uint8_t>(JA::FadeNavToggle), 1.0});
+        },
+        [](int) { return g_uf1FadeCrossWalks.load(); },
+        "Fades: cross aims fades / walks items", true
     });
     registerBuiltin("jog_zoom_selection", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
@@ -45622,6 +46114,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     if (const char* v = GetExtState("rea_sixty", "uf1JogEnvValStep"); v && *v) {
         const double d = std::atof(v); if (d > 0.0) g_uf1JogEnvValueStep.store(d);
     }
+    if (const char* v = GetExtState("rea_sixty", "uf1JogFadeCurve"); v && *v) {
+        const double d = std::atof(v); if (d > 0.0) g_uf1JogFadeCurveStep.store(d);
+    }
     for (int m = 0; m < kUf1JogModeCount; ++m) {
         char key[24]; std::snprintf(key, sizeof(key), "uf1JogStep%d", m);
         if (const char* v = GetExtState("rea_sixty", key); v && *v) {
@@ -45722,6 +46217,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdJogModeItems    = plugin_register("custom_action", &g_actionJogModeItems);
     g_cmdJogModeEnvelope = plugin_register("custom_action", &g_actionJogModeEnvelope);
     g_cmdJogModeRazor    = plugin_register("custom_action", &g_actionJogModeRazor);
+    g_cmdJogModeFades    = plugin_register("custom_action", &g_actionJogModeFades);
     // UF1 encoder modes + the four hardware view modes. idStr/name come from the
     // static tables next to the declarations (the register_t only stores the
     // pointers, so they must outlive registration — string literals do).

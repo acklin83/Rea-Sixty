@@ -161,6 +161,8 @@ double      reasixty_uf1JogDeadzone();
 void        reasixty_setUf1JogDeadzone(double v);
 double      reasixty_uf1JogEnvValueStep();
 void        reasixty_setUf1JogEnvValueStep(double v);
+double      reasixty_uf1JogFadeCurveStep();
+void        reasixty_setUf1JogFadeCurveStep(double v);
 double      reasixty_uf1JogStep(int mode);
 void        reasixty_setUf1JogStep(int mode, double v);
 int         reasixty_uf1JogUnit(int mode);
@@ -4187,9 +4189,16 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             if (ImGui_InputDouble(ctx, "Envelope value step##jog", &ev, &ed, &ef, "%.4f", &fl))
                 reasixty_setUf1JogEnvValueStep(ev);
         }
+        if (liveJm == 5) {   // Fades
+            double fc = reasixty_uf1JogFadeCurveStep();   // Ctrl+jog = fade CURVE
+            double fd = 0.01, ff = 0.1;
+            ImGui_SetNextItemWidth(ctx, 140.0);
+            if (ImGui_InputDouble(ctx, "Fade curve step (Ctrl)##jog", &fc, &fd, &ff, "%.3f", &fl))
+                reasixty_setUf1JogFadeCurveStep(fc);
+        }
         // Per-mode TIME axis unit + amount, for the live mode only. Razor (4)
         // has no time axis at the wheel, so it shows none of this.
-        if (liveJm <= 3) {
+        if (liveJm != 4) {
             const int m = liveJm;
             const int unit = reasixty_uf1JogUnit(m);   // 0 sec, 1 zoom, 2 grid
             ImGui_Text(ctx, reasixty_uf1JogModeName(m));
