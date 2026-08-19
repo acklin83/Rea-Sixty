@@ -779,6 +779,15 @@ One line per device — **UF8**, **UC1**, **UF1** — reading `[connected]` or `
 
 UF8 and UC1 each get an **Identify** button while connected: it flashes that unit's LEDs and displays between Dark and Full at 4 Hz for two seconds, so you can tell which box is which in a multi-unit rig. The UF1 has no Identify button.
 
+Rea-Sixty remembers which surfaces have been attached to this computer, and hides the settings for the ones that never have. With only a UF1 on the desk you do not see UC1 GR calibration, UF8 V-Pot feel, or the UF8 and UC1 halves of the REC block. The search box hides them too, so a search cannot land you on a control the page does not draw.
+
+It remembers rather than checks: unplugging a surface for an afternoon leaves all of its settings where they were.
+
+- **Show settings for devices you don't have** brings everything back. It appears only while something is hidden.
+- **Forget devices that aren't connected** shrinks the list to whatever is plugged in right now. Use it when a surface leaves the studio for good. It appears only while the list holds something absent.
+
+If no surface has ever been attached, everything is shown.
+
 ### Brightness
 
 Two 5-step sliders (Dark / Dim / Half / Bright / Full):
