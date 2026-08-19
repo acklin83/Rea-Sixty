@@ -794,6 +794,26 @@ way Envelope's centre switches what the wheel edits. Walking, the four arrows do
 exactly what they do in Items, `SHIFT` included, so a whole track's fades are one
 gesture: walk, aim, turn, walk on.
 
+### The view follows
+
+Fades is the one object where the wheel works at a scale you cannot see from
+across the room, so the arrange view comes along: whenever you change **what**
+you are on — the other edge, another item, a track above or below — the view
+frames that fade, with the fade taking up about a third of the width so you keep
+your bearings. Walking to another track scrolls it into view as well. Turning the
+wheel does **not** re-frame; the picture only moves again when a growing fade
+would otherwise run out of it, so dialling a length stays still to look at.
+
+There is a floor on how close it goes, because a 5 ms crossfade blown up to fill
+a third of the screen tells you nothing about where you are. Half a second by
+default, and it is a number you can set.
+
+When you leave the object, or switch the following off, the view you came from is
+put back.
+
+This is on out of the box. Turn it off in *Settings → Bindings → UF1*, on the jog
+wheel's own page, or put **Fades: follow the fade with the view** on a key.
+
 \newpage
 
 # Settings window
@@ -1968,6 +1988,8 @@ actions rather than beside them.
   well.
 - **Fades: cross aims fades / walks items** is the toggle between the two. Its
   LED is lit while the cross is walking.
+- **Fades: follow the fade with the view** turns the following view on and off.
+  It is on by default, and switching it off puts back the view you started from.
 
 Two that are not tied to a single object:
 

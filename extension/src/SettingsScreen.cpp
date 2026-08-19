@@ -163,6 +163,10 @@ double      reasixty_uf1JogEnvValueStep();
 void        reasixty_setUf1JogEnvValueStep(double v);
 double      reasixty_uf1JogFadeCurveStep();
 void        reasixty_setUf1JogFadeCurveStep(double v);
+bool        reasixty_uf1FadeFollow();
+void        reasixty_setUf1FadeFollow(bool on);
+double      reasixty_uf1FadeFollowMin();
+void        reasixty_setUf1FadeFollowMin(double v);
 double      reasixty_uf1JogStep(int mode);
 void        reasixty_setUf1JogStep(int mode, double v);
 int         reasixty_uf1JogUnit(int mode);
@@ -4195,6 +4199,16 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             ImGui_SetNextItemWidth(ctx, 140.0);
             if (ImGui_InputDouble(ctx, "Fade curve step (Ctrl)##jog", &fc, &fd, &ff, "%.3f", &fl))
                 reasixty_setUf1JogFadeCurveStep(fc);
+            bool fo = reasixty_uf1FadeFollow();
+            if (ImGui_Checkbox(ctx, "Follow the fade with the view##jog", &fo))
+                reasixty_setUf1FadeFollow(fo);
+            if (fo) {
+                double fm = reasixty_uf1FadeFollowMin();   // narrowest the view goes
+                double md = 0.1, mf = 0.5;
+                ImGui_SetNextItemWidth(ctx, 140.0);
+                if (ImGui_InputDouble(ctx, "Closest view (s)##jog", &fm, &md, &mf, "%.2f", &fl))
+                    reasixty_setUf1FadeFollowMin(fm);
+            }
         }
         // Per-mode TIME axis unit + amount, for the live mode only. Razor (4)
         // has no time axis at the wheel, so it shows none of this.

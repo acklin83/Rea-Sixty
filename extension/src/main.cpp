@@ -4786,6 +4786,9 @@ enum class Uf1JogActionOp : uint8_t {
     // ContentDrag is, and for the same reason: the key can only hold one
     // binding, so a switch on the cross has to live inside the action.
     FadeLeft, FadeRight, FadeUp, FadeDown, FadeNavToggle,
+    // Switching the follow zoom OFF has to give the view back, and the arrange
+    // view is main-thread-only, so the toggle posts this instead of touching it.
+    FadeFollowRestore,
 };
 constexpr uint8_t kUf1JogActionShiftBit = 0x80;
 
@@ -5043,6 +5046,22 @@ std::atomic<bool>   g_uf1FadeCrossWalks{false};
 // it is a unitless shape parameter, not time — same reason the envelope value
 // step is separate from the envelope time step. ExtState "uf1JogFadeCurve".
 std::atomic<double> g_uf1JogFadeCurveStep{0.05};
+// FOLLOW ZOOM (Frank 2026-08-19): the arrange view frames the fade you are on,
+// so walking a track with the cross keeps the work in the picture instead of
+// leaving you to chase it with the mouse. Default ON: it is what this mode is
+// FOR, and a mode you switch on deliberately should not also need a checkbox
+// found before it does anything ([[uf1-rec-rme-shipped]], the two default-off
+// checkboxes that made a working feature look broken).
+std::atomic<bool>   g_uf1FadeFollow{true};
+// The narrowest the follow zoom will go, in seconds. A 5 ms crossfade framed to
+// fill a third of the screen would tear the view open to sample level and lose
+// you completely, so the window never gets tighter than this whatever the fade
+// measures. ExtState "uf1FadeFollowMin".
+std::atomic<double> g_uf1FadeFollowMinSec{0.5};
+// The view we took over, given back when the mode is left or the option goes
+// off. Same contract as the nav-centre spotlight zoom.
+std::atomic<bool>   g_uf1FadeFollowStashed{false};
+double              g_uf1FadeFollowSavedStart = 0.0, g_uf1FadeFollowSavedEnd = 0.0;
 // Undo coalescing for the Fades jog. Identical mechanism to the envelope jog:
 // the wheel is free-running (no key to release), so the only gesture boundary
 // there is is the wheel going still. onTimer closes the block after 300 ms.
@@ -9218,6 +9237,17 @@ static void uf1JogNavCenterToggle_(Uf1JogMode mode)
 }
 
 static void uf1FadeStepShapeSelection_(int dir);   // defined with the Fades core, below
+static void uf1FadeFollowFrame_(bool force);      //   "
+void        uf1FadeFollowRestore_();              //   "
+
+// Walking to another TRACK also has a vertical axis to keep in the picture, and
+// REAPER has the action for it. Horizontal framing follows, in that order, so
+// the scroll cannot undo the zoom.
+static void uf1FadeFollowTrack_()
+{
+    if (g_uf1FadeFollow.load()) Main_OnCommand(40913, 0);   // scroll selected tracks into view
+    uf1FadeFollowFrame_(true);
+}
 
 // Route a NAV-cross press by the active Jog Mode. code = strip byte: bits0-1 axis
 // (0 horiz / 1 vert / 2 centre), bit2 = Shift (add-to-selection). dir = ±1.
@@ -9245,10 +9275,11 @@ void applyUf1JogNav_(uint8_t code, int dir)
         if (axis == 2) {
             g_uf1FadeCrossWalks.store(!g_uf1FadeCrossWalks.load());
         } else if (g_uf1FadeCrossWalks.load()) {
-            if (axis == 0) uf1SelectAdjacentItem_(dir, shift);
-            else           uf1SelectItemAdjacentTrack_(dir, shift);
+            if (axis == 0) { uf1SelectAdjacentItem_(dir, shift); uf1FadeFollowFrame_(true); }
+            else           { uf1SelectItemAdjacentTrack_(dir, shift); uf1FadeFollowTrack_(); }
         } else if (axis == 0) {
             g_uf1FadeOutEdge.store(dir > 0);
+            uf1FadeFollowFrame_(true);
         } else {
             uf1FadeStepShapeSelection_(dir);
         }
@@ -9331,23 +9362,28 @@ static void applyUf1JogAction_(uint8_t op8, double value)
         case Op::FadeLeft:
             if (g_uf1FadeCrossWalks.load()) uf1SelectAdjacentItem_(-1, shift);
             else { g_uf1FadeOutEdge.store(false); g_pageDirty.store(true); }
+            uf1FadeFollowFrame_(true);
             break;
         case Op::FadeRight:
             if (g_uf1FadeCrossWalks.load()) uf1SelectAdjacentItem_(+1, shift);
             else { g_uf1FadeOutEdge.store(true); g_pageDirty.store(true); }
+            uf1FadeFollowFrame_(true);
             break;
         case Op::FadeUp:
-            if (g_uf1FadeCrossWalks.load()) uf1SelectItemAdjacentTrack_(+1, shift);
+            if (g_uf1FadeCrossWalks.load()) { uf1SelectItemAdjacentTrack_(+1, shift);
+                                              uf1FadeFollowTrack_(); }
             else                            uf1FadeStepShapeSelection_(+1);
             break;
         case Op::FadeDown:
-            if (g_uf1FadeCrossWalks.load()) uf1SelectItemAdjacentTrack_(-1, shift);
+            if (g_uf1FadeCrossWalks.load()) { uf1SelectItemAdjacentTrack_(-1, shift);
+                                              uf1FadeFollowTrack_(); }
             else                            uf1FadeStepShapeSelection_(-1);
             break;
         case Op::FadeNavToggle:
             g_uf1FadeCrossWalks.store(!g_uf1FadeCrossWalks.load());
             g_pageDirty.store(true);
             break;
+        case Op::FadeFollowRestore: uf1FadeFollowRestore_(); break;
 
         case Op::ZoomSelection:
             uf1JogNavCenterToggle_(g_uf1JogMode.load());
@@ -11058,6 +11094,79 @@ static std::vector<MediaItem*> uf1FadeItems_()
     return out;
 }
 
+// ---- Follow zoom ----------------------------------------------------------
+// The span the view should frame: the crossfade's overlap, or the plain fade's
+// own stretch. Across a multi-selection it is the UNION, because the honest
+// answer to "show me what I am changing" is all of it — with the single item
+// the cross leaves you on, that union IS the one fade.
+static bool uf1FadeRegion_(double* r0, double* r1)
+{
+    std::vector<MediaItem*> items = uf1FadeItems_();
+    if (items.empty()) return false;
+    const bool outEdge = g_uf1FadeOutEdge.load();
+    bool any = false;
+    for (MediaItem* it : items) {
+        if (!ValidatePtr2(nullptr, it, "MediaItem*")) continue;
+        MediaItem *a = nullptr, *b = nullptr;
+        uf1FadeSite_(it, outEdge, &a, &b);
+        double s0, s1;
+        if (b) {
+            s0 = GetMediaItemInfo_Value(b, "D_POSITION");
+            s1 = GetMediaItemInfo_Value(a, "D_POSITION")
+               + GetMediaItemInfo_Value(a, "D_LENGTH");
+        } else {
+            const double p = GetMediaItemInfo_Value(a, "D_POSITION");
+            const double l = GetMediaItemInfo_Value(a, "D_LENGTH");
+            if (outEdge) { s1 = p + l; s0 = s1 - GetMediaItemInfo_Value(a, "D_FADEOUTLEN"); }
+            else         { s0 = p;     s1 = s0 + GetMediaItemInfo_Value(a, "D_FADEINLEN"); }
+        }
+        if (s1 < s0) std::swap(s0, s1);
+        if (!any) { *r0 = s0; *r1 = s1; any = true; }
+        else { if (s0 < *r0) *r0 = s0; if (s1 > *r1) *r1 = s1; }
+    }
+    return any;
+}
+
+// Frame the fade. `force` for a change of WHAT you are on (the aimed edge, or a
+// different item); without it the view is only re-taken when the fade is about
+// to leave the picture, so dialling a length does not make the arrange breathe
+// at every detent (Frank 2026-08-19 picked exactly that middle setting).
+static void uf1FadeFollowFrame_(bool force)
+{
+    if (!g_uf1FadeFollow.load()) return;
+    if (g_uf1JogMode.load() != Uf1JogMode::Fades) return;
+    double r0 = 0.0, r1 = 0.0;
+    if (!uf1FadeRegion_(&r0, &r1)) return;
+    double vs = 0.0, ve = 0.0;
+    GetSet_ArrangeView2(nullptr, false, 0, 0, &vs, &ve);
+    if (!(ve > vs)) return;
+    // Stash the view we are taking over, ONCE per stay in the mode.
+    if (!g_uf1FadeFollowStashed.exchange(true))
+        { g_uf1FadeFollowSavedStart = vs; g_uf1FadeFollowSavedEnd = ve; }
+    if (!force) {
+        // The inset is what keeps this from firing on the very edge: without it
+        // a growing crossfade would re-centre one detent, sit flush the next,
+        // and twitch all the way up.
+        const double inset = (ve - vs) * 0.10;
+        if (r0 >= vs + inset && r1 <= ve - inset) return;
+    }
+    const double c = (r0 + r1) * 0.5;
+    double w = (r1 - r0) * 3.0;                  // the fade fills about a third
+    const double minW = g_uf1FadeFollowMinSec.load();
+    if (!(w > minW)) w = minW;
+    double a = c - w * 0.5, b = c + w * 0.5;
+    if (a < 0.0) { b -= a; a = 0.0; }
+    GetSet_ArrangeView2(nullptr, true, 0, 0, &a, &b);
+}
+
+// Give the view back. Called on leaving the mode and when the option goes off.
+void uf1FadeFollowRestore_()
+{
+    if (!g_uf1FadeFollowStashed.exchange(false)) return;
+    double a = g_uf1FadeFollowSavedStart, b = g_uf1FadeFollowSavedEnd;
+    if (b > a) GetSet_ArrangeView2(nullptr, true, 0, 0, &a, &b);
+}
+
 // Fade SHAPE stepping from the nav cross (↑ ↓), across the whole target set.
 // Its own entry point rather than a branch in the wheel dispatch, because the
 // cross fires once per press while the wheel arrives in detents.
@@ -11109,6 +11218,7 @@ void applyUf1JogFades_(int count, double timeDelta)
         if (b) uf1FadeResizeCross_(a, b, timeDelta);
         else   uf1FadeResizeManual_(a, outEdge, timeDelta);
     }
+    uf1FadeFollowFrame_(false);
     UpdateArrange();
 }
 
@@ -36211,6 +36321,19 @@ void onTimerBody_()
                     Undo_EndBlock2(nullptr, "Rea-Sixty: UF1 envelope jog", -1);
             }
         }
+        // Fades follow-zoom: give the view back the moment the mode is left.
+        // A plain edge on the mode int, kept well away from the UF1 painter's
+        // `changed` flag — a mode edge that re-establishes the display plane is
+        // its own bug class ([[uf1-mode-edge-must-not-relayout]]).
+        {
+            static int sPrevJogMode = -1;
+            const int jmNow = static_cast<int>(g_uf1JogMode.load());
+            if (sPrevJogMode != jmNow) {
+                if (sPrevJogMode == static_cast<int>(Uf1JogMode::Fades))
+                    uf1FadeFollowRestore_();
+                sPrevJogMode = jmNow;
+            }
+        }
         // UF1 Fades jog — same idle close, same reason: the wheel is free-running,
         // so twenty detents of dialling a fade have to undo as one step.
         if (g_uf1JogFadeUndoOpen.load()) {
@@ -39998,6 +40121,20 @@ void   reasixty_setUf1JogEnvValueStep(double v)
     if (!(v > 0.0)) v = 0.0001;
     g_uf1JogEnvValueStep.store(v);
     SetExtState("rea_sixty", "uf1JogEnvValStep", std::to_string(v).c_str(), true);
+}
+bool reasixty_uf1FadeFollow() { return g_uf1FadeFollow.load(); }
+void reasixty_setUf1FadeFollow(bool on)
+{
+    g_uf1FadeFollow.store(on);
+    SetExtState("rea_sixty", "uf1FadeFollow", on ? "1" : "0", true);
+    if (!on) uf1FadeFollowRestore_();   // Settings runs on the main thread
+}
+double reasixty_uf1FadeFollowMin() { return g_uf1FadeFollowMinSec.load(); }
+void   reasixty_setUf1FadeFollowMin(double v)
+{
+    if (!(v > 0.0)) v = 0.01;
+    g_uf1FadeFollowMinSec.store(v);
+    SetExtState("rea_sixty", "uf1FadeFollowMin", std::to_string(v).c_str(), true);
 }
 double reasixty_uf1JogFadeCurveStep() { return g_uf1JogFadeCurveStep.load(); }
 void   reasixty_setUf1JogFadeCurveStep(double v)
@@ -45315,6 +45452,19 @@ void registerBindingHandlers()
         [](int) { return g_uf1FadeCrossWalks.load(); },
         "Fades: cross aims fades / walks items", true
     });
+    registerBuiltin("jog_fade_follow_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const bool on = !g_uf1FadeFollow.load();
+            g_uf1FadeFollow.store(on);
+            SetExtState("rea_sixty", "uf1FadeFollow", on ? "1" : "0", true);
+            if (!on) queueInput({PendingInput::Uf1JogAction,
+                                 static_cast<uint8_t>(JA::FadeFollowRestore), 1.0});
+            g_pageDirty.store(true);
+        },
+        [](int) { return g_uf1FadeFollow.load(); },
+        "Fades: follow the fade with the view", true
+    });
     registerBuiltin("jog_zoom_selection", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
@@ -46116,6 +46266,11 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     }
     if (const char* v = GetExtState("rea_sixty", "uf1JogFadeCurve"); v && *v) {
         const double d = std::atof(v); if (d > 0.0) g_uf1JogFadeCurveStep.store(d);
+    }
+    if (const char* v = GetExtState("rea_sixty", "uf1FadeFollow"); v && *v)
+        g_uf1FadeFollow.store(std::atoi(v) != 0);
+    if (const char* v = GetExtState("rea_sixty", "uf1FadeFollowMin"); v && *v) {
+        const double d = std::atof(v); if (d > 0.0) g_uf1FadeFollowMinSec.store(d);
     }
     for (int m = 0; m < kUf1JogModeCount; ++m) {
         char key[24]; std::snprintf(key, sizeof(key), "uf1JogStep%d", m);
