@@ -284,6 +284,8 @@ constexpr SearchEntry kSearchIndex[] = {
                                                            kSecModes, "REC" },
     { "Encoder 2 rotation \xE2\x86\x92 Preamp gain \xC2\xB1" "1 dB",
                                                            kSecModes, "REC" },
+    { "Above-fader V-Pot rotation \xE2\x86\x92 Preamp gain \xC2\xB1" "1 dB",
+                                                           kSecModes, "REC" },
     { "Auto-follow playhead / edit cursor",                kSecModes, "NAV" },
     { "Take over LCD",                                     kSecModes, "NAV" },
     { "Lower-row format:",                                 kSecModes, "NAV" },

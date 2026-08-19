@@ -412,6 +412,16 @@ void reasixty_setRecUc1Enc2Push(int v);
 void reasixty_setRecUc1Cut(int v);
 void reasixty_setRecUc1Solo(int v);
 void reasixty_setRecUc1Polarity(int v);
+bool reasixty_recUf1RotateGain();
+bool reasixty_recUf1ShiftInputCh();
+int  reasixty_recUf1VpotPush();
+int  reasixty_recUf1Cut();
+int  reasixty_recUf1Solo();
+void reasixty_setRecUf1RotateGain(bool on);
+void reasixty_setRecUf1ShiftInputCh(bool on);
+void reasixty_setRecUf1VpotPush(int v);
+void reasixty_setRecUf1Cut(int v);
+void reasixty_setRecUf1Solo(int v);
 bool reasixty_stripFollowsFocusedFx();
 void reasixty_setStripFollowsFocusedFx(bool follow);
 bool reasixty_pluginGuiFollowsInstance();
@@ -6145,9 +6155,21 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         s_tabConsumed = false;
     }
     {
+        // ⛔ A GAP IS ALSO A COUNTER THAT WENT BACKWARDS. MixerWindow::toggle
+        // drops the context on every open and ensureCtx builds a fresh one
+        // ("A fresh ctx per open", MixerWindow.cpp), so after closing and
+        // reopening Settings the frame count starts small again. The old test
+        // `frame > last + 1` is false for 1 vs 4200, so the restore never
+        // re-armed and the UF1 tab was forgotten across a close (Frank
+        // 2026-08-19). Anything other than "exactly the next frame" is a gap.
+        // Equal frames (two draws in one frame) must NOT re-arm, or the tab
+        // would snap back under the user's click.
         const int frame = ImGui_GetFrameCount(ctx);
-        if (s_tabLastFrame >= 0 && frame > s_tabLastFrame + 1)
+        if (s_tabLastFrame >= 0
+            && (frame < s_tabLastFrame || frame > s_tabLastFrame + 1))
+        {
             s_tabConsumed = false;
+        }
         s_tabLastFrame = frame;
     }
     auto tabFlagsForDevice = [&](int idx) -> int {
@@ -20068,8 +20090,13 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         s_lastWritten   = s_savedTab;
         s_savedConsumed = false;
     }
+    // Same re-arm test as the Bindings device tabs, and the same fix: a fresh
+    // ImGui context per Settings open restarts the frame count, so a BACKWARDS
+    // jump is a gap too. See the comment there.
     const int frame = ImGui_GetFrameCount(ctx);
-    if (s_lastFrameSeen >= 0 && frame > s_lastFrameSeen + 1) {
+    if (s_lastFrameSeen >= 0
+        && (frame < s_lastFrameSeen || frame > s_lastFrameSeen + 1))
+    {
         s_savedConsumed = false;   // re-arm restore on pane re-entry
     }
     s_lastFrameSeen = frame;
@@ -20343,6 +20370,33 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
                     reasixty_recUc1Solo(),     reasixty_setRecUc1Solo);
         pickerCombo("Polarity button##rec_rme_uc1",
                     reasixty_recUc1Polarity(), reasixty_setRecUc1Polarity);
+
+        // UF1 — the fader side of a one-channel surface. Same three controls the
+        // UC1 gets, minus Polarity (the UF1 has no such key).
+        ImGui_Spacing(ctx);
+        ImGui_Separator(ctx);
+        ImGui_Text(ctx, "UF1 — channel on the fader");
+        ImGui_Spacing(ctx);
+        bool uf1GainRot = reasixty_recUf1RotateGain();
+        if (ImGui_Checkbox(ctx,
+                           "Above-fader V-Pot rotation → Preamp gain ±1 dB",
+                           &uf1GainRot))
+        {
+            reasixty_setRecUf1RotateGain(uf1GainRot);
+        }
+        bool uf1ShiftInputCh = reasixty_recUf1ShiftInputCh();
+        if (ImGui_Checkbox(ctx,
+                           "Above-fader V-Pot rotation + Shift → Change input channel",
+                           &uf1ShiftInputCh))
+        {
+            reasixty_setRecUf1ShiftInputCh(uf1ShiftInputCh);
+        }
+        pickerCombo("V-Pot push##rec_rme_uf1",
+                    reasixty_recUf1VpotPush(), reasixty_setRecUf1VpotPush);
+        pickerCombo("Cut button##rec_rme_uf1",
+                    reasixty_recUf1Cut(),      reasixty_setRecUf1Cut);
+        pickerCombo("Solo button##rec_rme_uf1",
+                    reasixty_recUf1Solo(),     reasixty_setRecUf1Solo);
     }
 
         ImGui_EndTabItem(ctx);

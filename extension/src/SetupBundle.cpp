@@ -65,6 +65,20 @@ constexpr ExtKey kKeys[] = {
     { "rea_sixty", "rec_vpot_push" },
     { "rea_sixty", "rec_vpot_rotate_gain" },
     { "rea_sixty", "rec_vpot_shift_inputch" },
+    // The UC1's and UF1's own REC + RME assignments. The UC1 set was missing
+    // here since it shipped, so moving a setup carried the UF8 triplet and
+    // silently reset the other surfaces to their factory actions.
+    { "rea_sixty", "rec_uc1_cut" },
+    { "rea_sixty", "rec_uc1_enc2_push" },
+    { "rea_sixty", "rec_uc1_enc2_rotate_gain" },
+    { "rea_sixty", "rec_uc1_enc2_shift_inputch" },
+    { "rea_sixty", "rec_uc1_polarity" },
+    { "rea_sixty", "rec_uc1_solo" },
+    { "rea_sixty", "rec_uf1_cut" },
+    { "rea_sixty", "rec_uf1_rotate_gain" },
+    { "rea_sixty", "rec_uf1_shift_inputch" },
+    { "rea_sixty", "rec_uf1_solo" },
+    { "rea_sixty", "rec_uf1_vpot_push" },
     { "rea_sixty", "scribble_brightness" },
     { "rea_sixty", "sel_follows_color" },
     { "rea_sixty", "selset_auto_mode" },

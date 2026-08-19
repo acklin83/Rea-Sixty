@@ -1373,6 +1373,24 @@ std::atomic<RecRmeAction> g_recUc1Cut{RecRmeAction::TogglePad};
 std::atomic<RecRmeAction> g_recUc1Solo{RecRmeAction::None};
 std::atomic<RecRmeAction> g_recUc1Polarity{RecRmeAction::TogglePhase};
 
+// UF1 mirror of the same triplet. The UF1 is a one-channel surface like the UC1,
+// so the scope is the FADER SIDE's track (uf1FaderTrack_), not a bank strip: the
+// above-fader V-Pot (rotation + push), CUT and SOLO. There is no Polarity key on
+// the UF1, hence five settings instead of six. Independent of the UC1's so a user
+// with both can opt one in without the other. Same factory assignment as the UC1
+// (48V on the push, Pad on Cut, Phase on Solo) — Frank's SSL workflow.
+// ON by default, unlike the UF8's and UC1's: the UF8 has eight V-Pots that keep
+// panning a whole bank, so hijacking them is a real loss and has to be asked for.
+// The UF1 has exactly ONE pot above the fader, and REC + RME is a mode you switch
+// on deliberately — switching it on and still getting pan is not a preference,
+// it is a dead control (Frank 2026-08-19: "v-pot dreh für gain geht nicht (macht
+// channel pan in reaper)"). Untick them to keep pan.
+std::atomic<bool>         g_recUf1RotateGain{true};
+std::atomic<bool>         g_recUf1ShiftInputCh{true};
+std::atomic<RecRmeAction> g_recUf1VpotPush{RecRmeAction::Toggle48V};
+std::atomic<RecRmeAction> g_recUf1Cut{RecRmeAction::TogglePad};
+std::atomic<RecRmeAction> g_recUf1Solo{RecRmeAction::TogglePhase};
+
 inline const char* recRmeActionStr(RecRmeAction a)
 {
     switch (a) {
@@ -1492,16 +1510,146 @@ inline SelectionMode parseSelectionMode(const char* s)
     return SelectionMode::Norm;
 }
 
+// The ONE gate every surface asks: RME master switch on AND SelectionMode is Rec
+// or RecMon. AUTO / Instance / Norm fall through to the surface's legacy
+// behaviour even when the RME toggle is on. Lives here because it depends on
+// SelectionMode declared above, and this early so the UF1 input path (which runs
+// long before the UC1 bridges further down) can reach it.
+inline bool recRmeActive_()
+{
+    if (!g_recRmeEnabled.load()) return false;
+    const auto m = g_selectionMode.load();
+    return m == SelectionMode::Rec || m == SelectionMode::RecMon;
+}
+
 // True when REC + RME is engaged AND the given button assignment fires a
 // TotalReaper toggle action — i.e. the LED should mirror P_EXT state, not
 // the track's underlying B_MUTE / I_SOLO. Lives here because it depends on
 // SelectionMode declared above.
 inline bool recRmeButtonActive(RecRmeAction a)
 {
-    if (!g_recRmeEnabled.load()) return false;
-    const auto sm = g_selectionMode.load();
-    if (sm != SelectionMode::Rec && sm != SelectionMode::RecMon) return false;
+    if (!recRmeActive_()) return false;
     return a != RecRmeAction::None;
+}
+
+// What a button's LED should show while REC + RME drives it.
+//   -1 → no mirror: mode off, unassigned, or an action TotalReaper does not echo
+//        (AutoLevel). The caller renders the button's own B_MUTE / I_SOLO state.
+//    0 / 1 → the mirrored toggle is off / on.
+inline int recRmeMirroredState_(RecRmeAction a, MediaTrack* tr)
+{
+    if (!tr || !recRmeButtonActive(a)) return -1;
+    const char* key = recRmePExtKey(a);
+    if (!key) return -1;
+    return (readTrackPExt_(tr, key) == "1") ? 1 : 0;
+}
+
+// THE preamp readout, shared by all three surfaces (defined next to the UC1
+// bridges, declared here because the UF8 and UF1 painters run long before it).
+// Fills `outLabel` with the 48V / Pd / Ph flag line — or, while `flashInputName`
+// is true, with "In <channel>" — and `outValue` with the gain in dB. Returns
+// false when TotalReaper has echoed nothing for this track (input is not an RME
+// pre, or /sendall has not populated yet), which is the caller's cue to leave the
+// zone on its normal content rather than print a misleading 0.0 dB.
+// `latin1` folds the channel name for the UC1's LCD; the UF8 and UF1 fold at
+// emit, so they pass false.
+// Build a 7-char abbreviation of an RME-style input channel name.
+// "MADI 5" → "MA 5", "ANALOG 1" → "An 1", "Drums OH" → first 7 chars.
+// Stereo pairs already include the "/N" suffix from caller.
+inline std::string abbrevInputChanName_(std::string name)
+{
+    auto prefix = [&](const char* longP, const char* shortP) {
+        const auto ll = std::strlen(longP);
+        if (name.size() >= ll && name.compare(0, ll, longP) == 0) {
+            name.replace(0, ll, shortP);
+        }
+    };
+    if (name.size() > 7) {
+        prefix("MADI ",   "MA ");
+        prefix("ANALOG ", "An ");
+        prefix("Analog ", "An ");
+        prefix("ADAT ",   "AD ");
+        prefix("SPDIF ",  "SP ");
+        prefix("AES ",    "AS ");
+    }
+    if (name.size() > 7) name.resize(7);
+    return name;
+}
+
+bool recRmeReadoutText_(MediaTrack* tr, bool flashInputName, bool latin1,
+                        std::string* outLabel, std::string* outValue)
+{
+    if (!tr || !outLabel || !outValue) return false;
+    const bool on48v   = readTrackPExt_(tr, "P_EXT:totalreaper_48v")   == "1";
+    const bool onPad   = readTrackPExt_(tr, "P_EXT:totalreaper_pad")   == "1";
+    const bool onPhase = readTrackPExt_(tr, "P_EXT:totalreaper_phase") == "1";
+    const std::string gainStr = readTrackPExt_(tr, "P_EXT:totalreaper_gain");
+    // All four empty / cleared → TotalReaper hasn't echoed anything
+    // for this track yet (input isn't an RME pre, or /sendall hasn't
+    // populated). Skip the readout so the focused-param zone keeps
+    // its normal content rather than displaying "0.0dB" misleadingly.
+    if (!on48v && !onPad && !onPhase && gainStr.empty()) return false;
+
+    // Input-channel flash: when the user just shifted-rotated to a new
+    // input channel, swap the flag line for the channel name for ~1.5s.
+    bool labelSet = false;
+    if (flashInputName) {
+        const int recInput = static_cast<int>(
+            GetMediaTrackInfo_Value(tr, "I_RECINPUT"));
+        if (recInput >= 0
+            && !(recInput & 4096)
+            && !(recInput & 2048))
+        {
+            const int chan = recInput & 0x3FF;
+            if (const char* nm = GetInputChannelName(chan); nm && *nm) {
+                std::string s2 = latin1 ? utf8ToLatin1(nm) : std::string(nm);
+                if ((recInput & 1024) != 0) {
+                    // Stereo pair: append "/<n+1>" from trailing digit.
+                    size_t numStart = s2.size();
+                    while (numStart > 0
+                        && std::isdigit(static_cast<unsigned char>(
+                                            s2[numStart - 1])))
+                    {
+                        --numStart;
+                    }
+                    if (numStart < s2.size()) {
+                        const int leftNum =
+                            std::atoi(s2.c_str() + numStart);
+                        char buf[16];
+                        snprintf(buf, sizeof(buf), "/%d", leftNum + 1);
+                        s2 += buf;
+                    }
+                }
+                *outLabel = "In " + abbrevInputChanName_(std::move(s2));
+                labelSet = true;
+            }
+        }
+    }
+    if (!labelSet) {
+        std::string flags;
+        flags += on48v   ? "48V" : "   ";
+        flags += ' ';
+        flags += onPad   ? "Pd"  : "  ";
+        flags += ' ';
+        flags += onPhase ? "Ph"  : "  ";
+        *outLabel = flags;
+    }
+
+    char gbuf[16];
+    if (gainStr.empty()) {
+        // Six chars, same width as the "%4.1fdB" case — the UC1 used to print
+        // five here, which shifted the column by one whenever TotalReaper had a
+        // track's flags but not its gain.
+        snprintf(gbuf, sizeof(gbuf), "  --dB");
+    } else {
+        // RME preamp gain is always >= 0 dB (no attenuator on the mic-pre side;
+        // that lives on `pad`). Clamp and drop the sign so it never reads signed.
+        double db = std::atof(gainStr.c_str());
+        if (db < 0.0) db = 0.0;
+        snprintf(gbuf, sizeof(gbuf), "%4.1fdB", db);
+    }
+    *outValue = gbuf;
+    return true;
 }
 
 // Forward decl — defined further down with the other clock helpers.
@@ -4189,6 +4337,21 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "rec_uc1_polarity"); v && *v) {
         g_recUc1Polarity.store(parseRecRmeAction(v));
     }
+    if (const char* v = GetExtState("rea_sixty", "rec_uf1_rotate_gain"); v && *v) {
+        g_recUf1RotateGain.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_uf1_shift_inputch"); v && *v) {
+        g_recUf1ShiftInputCh.store(std::atoi(v) != 0);
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_uf1_vpot_push"); v && *v) {
+        g_recUf1VpotPush.store(parseRecRmeAction(v));
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_uf1_cut"); v && *v) {
+        g_recUf1Cut.store(parseRecRmeAction(v));
+    }
+    if (const char* v = GetExtState("rea_sixty", "rec_uf1_solo"); v && *v) {
+        g_recUf1Solo.store(parseRecRmeAction(v));
+    }
     const char* sff = GetExtState("rea_sixty", "strip_follows_focused_fx");
     if (sff && *sff) {
         g_stripFollowsFocusedFx.store(std::atoi(sff) != 0);
@@ -4517,14 +4680,18 @@ struct PendingInput {
                               //   bound to the same param.
 
         // ---- UF1 (single-channel surface, follows focus, no bank) -------
-        // All global-scope: they resolve their own target via
-        // uf1FocusedTrack_() rather than the strip/bank model, so they are
-        // dispatched in the global section of drainInputQueue (like
-        // MainAction) before per-strip resolution.
+        // All global-scope: they resolve their own target themselves rather
+        // than through the strip/bank model, so they are dispatched in the
+        // global section of drainInputQueue (like MainAction) before per-strip
+        // resolution. Which resolver depends on the SIDE of the panel the
+        // control sits on: the fader side uses uf1FaderTrack_, the plug-in side
+        // uf1FocusedTrack_ (see uf1FaderTrack_ for the split).
         Uf1Transport,    // value = Uf1TransportOp (CSurf_On* transport)
         Uf1SoloToggle,   // toggle solo on the focused track
         Uf1MuteToggle,   // toggle mute (CUT) on the focused track
-        Uf1SelectFocused,// exclusive-select the focused track
+        Uf1SelectFocused,// exclusive-select the fader side's track
+        Uf1RecArmToggle, // Sel Mode REC: SEL push toggles I_RECARM instead
+        Uf1RecArmMonToggle, // Sel Mode REC+MON: I_RECARM + I_RECMON together
         Uf1Encoder,      // strip = uf1::enc id, value = signed detent delta
         Uf1CsSoftKey,    // strip = channel-strip soft-key index 0..3 (p188).
                          // Channel view only; the drain resolves the on-screen
@@ -14417,6 +14584,131 @@ void runReaperActionOnTrackN_(int cmdId, MediaTrack* tr, int times)
     g_pendingFocusGuiSync.store(false);
 }
 
+// Step a track's hardware input channel by ±n, preserving the MIDI /
+// multichannel / stereo flag bits. Shared by the UF8 V-Pot (InputChannelDelta)
+// and the UF1 above-fader knob — one place, because the mask constants have to
+// match TotalReaper's (PreampActions.cpp:36-39) and a second copy would drift.
+// Main-thread only (REAPER track API). No-op on MIDI / multichannel inputs:
+// they do not map onto a simple ±1 hardware channel.
+// Fire the TotalReaper action assigned to a UF1 control against `tr`. Returns
+// false when REC + RME is not engaged, the control is unassigned, or TotalReaper
+// is not installed — the caller then runs its normal behaviour, so switching the
+// mode on never leaves a key dead. Main-thread only.
+bool recRmeUf1Fire_(RecRmeAction a, MediaTrack* tr);
+
+void recRmeStepInputChannel_(MediaTrack* tr, int delta)
+{
+    if (!tr || delta == 0) return;
+    const int cur = static_cast<int>(GetMediaTrackInfo_Value(tr, "I_RECINPUT"));
+    if (cur < 0) return;
+    if (cur & 4096) return;   // MIDI
+    if (cur & 2048) return;   // multichannel
+    const int flags = cur & ~0x3FF;
+    int chan = (cur & 0x3FF) + delta;
+    const int maxIn = GetNumAudioInputs();
+    if (chan < 0) chan = 0;
+    if (maxIn > 0 && chan > maxIn - 1) chan = maxIn - 1;
+    const int next = flags | chan;
+    if (next != cur) {
+        SetMediaTrackInfo_Value(tr, "I_RECINPUT", static_cast<double>(next));
+    }
+}
+
+void runReaperActionOnTrack_(int cmdId, MediaTrack* tr);   // defined just below
+
+// Full-scale for the preamp-gain readout bar. RME pres typically run to +75 dB
+// (Frank 2026-08-19: "rme interfaces gain gehen gewöhnlich bis +75dB");
+// TotalReaper reports no maximum, so the number has to come from the hardware.
+constexpr double kRmeGainFullScaleDb = 75.0;
+
+// The V-Pot readout bar's position while REC + RME drives the knob, 0..1.
+// Negative when there is nothing to show (mode off, or TotalReaper has not
+// echoed a gain for this track), which is the caller's cue to keep its normal
+// bar. Shared by the UF8 strips and the UF1 channel — a UF8 strip and the UF1
+// channel are the same strip, so the bar has to mean the same thing on both.
+double recRmeGainBarNorm_(MediaTrack* tr)
+{
+    if (!tr || !recRmeActive_()) return -1.0;
+    const std::string g = readTrackPExt_(tr, "P_EXT:totalreaper_gain");
+    if (g.empty()) return -1.0;
+    double db = std::atof(g.c_str());
+    if (db < 0.0) db = 0.0;
+    if (db > kRmeGainFullScaleDb) db = kRmeGainFullScaleDb;
+    return db / kRmeGainFullScaleDb;
+}
+
+// The hardware input name a REC + RME strip shows in place of its channel-strip
+// type label ("MA 5", "An 1"). Empty when the mode is off, when the track's input
+// is MIDI / multichannel / absent, or when the channel has no name — the caller
+// then keeps whatever that zone normally says.
+//
+// ONE builder for the UF8 and the UF1 because their displays are identical
+// (Frank 2026-08-19: "die sind ganz genau gleich"), and a second copy of the
+// masks would drift from TotalReaper's (PreampActions.cpp:36-39: MIDI = 4096,
+// multichannel = 2048, stereo = 1024, channel mask = 0x3FF).
+// `foldLatin1` is transport, not looks: the UF1 folds at its own emit and would
+// re-decode the high bytes if this folded them too ([[surface-lcd-latin1-umlauts]]).
+// Main-thread only.
+std::string recRmeInputNameLabel_(MediaTrack* tr, bool foldLatin1)
+{
+    if (!tr || !recRmeActive_()) return {};
+    const int recInput = static_cast<int>(
+        GetMediaTrackInfo_Value(tr, "I_RECINPUT"));
+    // Hardware inputs only — MIDI / multichannel / "no input" keep the
+    // surrounding mode's default text.
+    if (recInput < 0 || (recInput & 4096) || (recInput & 2048)) return {};
+    const int chan = recInput & 0x3FF;
+    const char* nm = GetInputChannelName(chan);
+    if (!nm || !*nm) return {};
+    std::string s2(nm);
+    if ((recInput & 1024) != 0) {
+        // Render the pair: "MADI 5" becomes "MADI 5/6". The trailing decimal of
+        // the left-channel name is the pair's left index. No trailing number
+        // (a user alias like "Drums OH") leaves it as-is.
+        size_t numStart = s2.size();
+        while (numStart > 0
+            && std::isdigit(static_cast<unsigned char>(s2[numStart - 1])))
+        {
+            --numStart;
+        }
+        if (numStart < s2.size()) {
+            const int leftNum = std::atoi(s2.c_str() + numStart);
+            char buf[16];
+            snprintf(buf, sizeof(buf), "/%d", leftNum + 1);
+            s2 += buf;
+        }
+    }
+    // Length budget: the zone fits 12 characters (HW-confirmed 2026-08-12).
+    // Shorten the common RME device prefixes first — domain shortcuts beat
+    // generic abbreviation — then hand the rest to abbreviateTrackName_, which
+    // honours Settings → Track-name mode, so an alias like "Drums OH" gets
+    // vowel-dropped instead of cut mid-word.
+    if (s2.size() > 7) {
+        auto shorten = [&](const char* longP, const char* shortP) {
+            const auto ll = std::strlen(longP);
+            if (s2.size() >= ll && s2.compare(0, ll, longP) == 0) {
+                s2.replace(0, ll, shortP);
+            }
+        };
+        shorten("MADI ",   "MA ");
+        shorten("ANALOG ", "AN ");
+        shorten("Analog ", "An ");
+        shorten("ADAT ",   "AD ");
+        shorten("SPDIF ",  "SP ");
+        shorten("AES ",    "AE ");
+    }
+    return abbreviateTrackName_(s2, 12, -1, foldLatin1);
+}
+
+bool recRmeUf1Fire_(RecRmeAction a, MediaTrack* tr)
+{
+    if (!tr || !recRmeButtonActive(a)) return false;
+    const int cmdId = totalReaperCmdId_(a);
+    if (cmdId == 0) return false;
+    runReaperActionOnTrack_(cmdId, tr);
+    return true;
+}
+
 void runReaperActionOnTrack_(int cmdId, MediaTrack* tr)
 {
     runReaperActionOnTrackN_(cmdId, tr, 1);
@@ -15176,6 +15468,7 @@ bool stickyUf1AboveEnabled_();
 enum class Uf1AboveFaderMode : uint8_t { Pan /*, Param, SendLevel, … */ };
 std::atomic<Uf1AboveFaderMode> g_uf1AboveFaderMode{Uf1AboveFaderMode::Pan};
 
+
 // One detent ≈ 1/64 of the full pan sweep (−1..+1). Conservative; HW-tunable.
 constexpr double kUf1AboveFaderPanPerDetent = 1.0 / 64.0;
 // FLIP mode: the above-fader V-Pot rides Volume (the fader took Pan). dB nudged
@@ -15209,6 +15502,50 @@ void applyUf1AboveFaderVpot_(int step)
     // right one, and Sticky Pot wrote a pin the fader block reads off `ftr`.
     MediaTrack* tr = uf1FaderTrack_();
     if (!tr) return;
+    // REC + RME owns this knob while the mode runs — preamp gain, or the input
+    // channel with Shift. Claimed BEFORE the Extender send branch, Sticky Pot and
+    // FLIP: when you are tracking, the knob above the fader is the preamp, and a
+    // send has no preamp at all (Frank 2026-08-19, "so dass es funzt egal ob UF1
+    // extender ist oder nicht").
+    // Both accumulate, because one physical detent arrives as 2-3 USB events:
+    // raw-through would step gain 3 dB per detent and kick the input channel on a
+    // push's incidental jitter. The two scales are the UF8's own measured ones
+    // (drainInputQueue: gain 2.0, input channel 4.0) — do not retune them here,
+    // they cost Frank a round each in May.
+    // Main thread (this runs out of the drain), so the REAPER API is safe.
+    if (recRmeActive_()) {
+        const bool shiftMod = uf8::bindings::modifierHeld(
+            uf8::bindings::Modifier::Shift);
+        if (shiftMod && g_recUf1ShiftInputCh.load()) {
+            static double s_inChanAccum = 0.0;
+            constexpr double kInputChanScale = 4.0;
+            s_inChanAccum += step / kInputChanScale;
+            int delta = 0;
+            if (s_inChanAccum >=  1.0 || s_inChanAccum <= -1.0) {
+                delta = static_cast<int>(s_inChanAccum);
+                s_inChanAccum -= delta;
+            }
+            if (delta != 0) recRmeStepInputChannel_(tr, delta);
+            return;
+        }
+        if (g_recUf1RotateGain.load()) {
+            static double s_gainAccum = 0.0;
+            constexpr double kRecGainScale = 2.0;
+            s_gainAccum += step / kRecGainScale;
+            int gstep = 0;
+            if (s_gainAccum >=  1.0 || s_gainAccum <= -1.0) {
+                gstep = static_cast<int>(s_gainAccum);
+                s_gainAccum -= gstep;
+            }
+            if (gstep != 0) {
+                if (const int cmd = totalReaperGainCmdId_(gstep); cmd != 0) {
+                    runReaperActionOnTrackN_(cmd, tr,
+                                             gstep > 0 ? gstep : -gstep);
+                }
+            }
+            return;
+        }
+    }
     // The per-track knob obeys the UF1's own speed + Fine, like the four
     // channel V-Pots do (Frank 2026-08-10). Applied to every target below —
     // send pan, a Sticky-Pot param, FLIP volume, plain pan — because from the
@@ -16352,6 +16689,12 @@ void drainInputQueue()
             continue;
         }
         if (e.kind == PendingInput::Uf1SoloToggle) {
+            // REC + RME: SOLO fires its assigned TotalReaper action (factory:
+            // phase invert) against the fader side's track. Ahead of the Extender
+            // send branch — a send has no preamp, and Frank wants the mode to
+            // behave the same with and without the Extender. Unassigned or
+            // TotalReaper missing → false → the normal solo below runs.
+            if (recRmeUf1Fire_(g_recUf1Solo.load(), uf1FaderTrack_())) continue;
             // Extender send fader: SOLO = exclusive un-mute of the 9th SEND (mute
             // every other send of the source track) — like the UF8 strip SOLO in a
             // route mode (Frank 2026-08-05). Shown via the mute/Cut LEDs, not a solo
@@ -16373,6 +16716,9 @@ void drainInputQueue()
             continue;
         }
         if (e.kind == PendingInput::Uf1MuteToggle) {
+            // REC + RME: CUT fires its assigned action (factory: pad). See the
+            // SOLO branch above for the ordering.
+            if (recRmeUf1Fire_(g_recUf1Cut.load(), uf1FaderTrack_())) continue;
             // Extender send fader: CUT toggles the 9th SEND's mute (like the UF8
             // strip CUT in a route mode), not the source track's (Frank 2026-08-05).
             if (uf1ExtenderRouteFader_()) {
@@ -16416,6 +16762,31 @@ void drainInputQueue()
                 else
                     SetOnlyTrackSelected(tr);          // plain press → exclusive select
                 followSelectedInMixer(tr);
+            }
+            continue;
+        }
+        if (e.kind == PendingInput::Uf1RecArmToggle
+            || e.kind == PendingInput::Uf1RecArmMonToggle) {
+            // Sel Mode REC / REC+MON: the SEL press arms the channel the fader
+            // side is on. Same bodies as the UF8's RecArmToggle / RecArmMonToggle
+            // (main.cpp ~18156), just resolved through uf1FaderTrack_ instead of a
+            // bank strip.
+            //
+            // CSurf_OnRecArmChange, NOT SetMediaTrackInfo_Value: the direct write
+            // triggers REAPER's "auto-select armed tracks" preference, which fires
+            // SetSurfaceSelected → followSelectedInMixer → the bank jumps back to
+            // the armed track (Frank 2026-05-14, "wenn nicht auf bank 1 hüpft er
+            // nach rec-arm sofort zurück zu bank 1"). The CSurf path behaves like
+            // clicking the TCP arm button.
+            if (MediaTrack* tr = uf1FaderTrack_()) {
+                const double prevArm = GetMediaTrackInfo_Value(tr, "I_RECARM");
+                CSurf_OnRecArmChange(tr, -1);
+                if (e.kind == PendingInput::Uf1RecArmMonToggle) {
+                    // Monitor follows the NEW arm state — on when arming, off when
+                    // disarming. Post-toggle state, so read it off prevArm.
+                    const bool nowArmed = prevArm < 0.5;
+                    CSurf_OnInputMonitorChange(tr, nowArmed ? 1 : 0);
+                }
             }
             continue;
         }
@@ -16496,6 +16867,9 @@ void drainInputQueue()
             continue;
         }
         if (e.kind == PendingInput::Uf1AboveVpotPush) {
+            // REC + RME: the push fires its assigned action (factory: 48V) instead
+            // of centring pan / resetting the pin. Same ordering rule as CUT/SOLO.
+            if (recRmeUf1Fire_(g_recUf1VpotPush.load(), uf1FaderTrack_())) continue;
             // Extender send fader: the V-Pot rides the 9th SEND's pan, so its PUSH
             // centres that send's pan (Frank 2026-08-05) — like the UF8 PanCenter.
             // Re-seed the software accumulator to centre so a following rotation
@@ -16879,23 +17253,7 @@ void drainInputQueue()
                     s_inChanAccum[s] -= delta;
                 }
                 if (delta == 0) break;
-                const int cur = static_cast<int>(
-                    GetMediaTrackInfo_Value(tr, "I_RECINPUT"));
-                if (cur < 0) break;
-                // Skip MIDI / multichannel — they don't map to a simple
-                // ±1 hardware channel concept.
-                if (cur & 4096) break;
-                if (cur & 2048) break;
-                const int flags = cur & ~0x3FF;
-                int chan = (cur & 0x3FF) + delta;
-                const int maxIn = GetNumAudioInputs();
-                if (chan < 0) chan = 0;
-                if (maxIn > 0 && chan > maxIn - 1) chan = maxIn - 1;
-                const int next = flags | chan;
-                if (next != cur) {
-                    SetMediaTrackInfo_Value(tr, "I_RECINPUT",
-                                            static_cast<double>(next));
-                }
+                recRmeStepInputChannel_(tr, delta);
                 break;
             }
             case PendingInput::SoloToggle: {
@@ -18959,6 +19317,19 @@ void sendLed(LedClass cls, MediaTrack* tr, bool on)
     {
         if (auto u = userStripCtxFocused_(); u.map) return;
     }
+    // ⛔ NOT WHILE THE SELECTION IS BORROWED. runReaperActionOnTrackN_ narrows
+    // the selection to one track, fires a TotalReaper action and puts it back;
+    // REAPER calls SetSurfaceSelected for BOTH steps, and the Sel branch below
+    // fires sendSelRenderTrigger + pushSelectedStripBitmask on each one. Cell
+    // 0x24 in that trigger IS the AutoTrim lamp, so every gain detent in
+    // REC + RME flashed TRIM and the channel number (Frank 2026-08-19,
+    // "blinkt immer noch" — the first attempt guarded the timer, which is not
+    // where this comes from: these frames go out straight from the callback).
+    // g_inSelectionSwap already suppressed the focus coalescer for the same
+    // borrowed selection; this is the same borrowing, one consumer further on.
+    // Nothing is lost by skipping: the selection at the end of the swap is the
+    // one that was there before it, so there is nothing new to show.
+    if (g_inSelectionSwap.load()) return;
     // REC + RME: when SOLO / CUT is bound to a TotalReaper toggle, the
     // per-tick poll in pushZonesForVisibleSlots owns the LED — block the
     // event-driven push from REAPER's mute/solo callbacks so it doesn't
@@ -20724,7 +21095,16 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // The responsiveness lift instead lives as a plain per-detent
                 // gain on the CONTINUOUS plug-in-param consumer (kVpotBoost in
                 // drainInputQueue), which leaves the stepped recovery intact.
-                const double panVal = static_cast<double>(signed6) / 128.0;
+                // 1/64 per raw count, the SAME base law the UF1's above-fader
+                // knob uses (kUf1AboveFaderPanPerDetent). It was 1/128 here, so
+                // at identical settings the UF8 panned half as far per detent as
+                // the UF1 and felt sluggish next to it (Frank 2026-08-19: "uf1
+                // v-pot pan ist viel angenehmer zum drehen als auf uf8"). The
+                // per-surface speed setting still scales on top; this only makes
+                // the two surfaces start from the same place.
+                // ⚠ Pan only. Plug-in parameters ride kVpotBoost, a different base
+                // law on purpose — this does not touch them.
+                const double panVal = static_cast<double>(signed6) / 64.0;
 
                 // Per-strip V-Pot rotation. Scale: pan keeps signed6/
                 // 128 (1 detent = 0.78% pan); AUTO + Instance need raw
@@ -21159,16 +21539,37 @@ void onUf1Event(const uf1::InputEvent& ev)
                         // (still excluded from the binding-first check above,
                         // no dispatch here — "locked, LED-heikel").
                         if (ev.pressed) {
+                            // Selection Mode retargets the SEL press, exactly as it
+                            // does on the UF8's eight SELs (main.cpp ~20406): REC arms
+                            // the channel, REC+MON arms it and flips input monitoring.
+                            // Frank 2026-08-19: "Wir reden hier von einem MODE! Wieso
+                            // soll das fürs UF1 anders sein als für UF8" — you cycle to
+                            // the channel you want and arm it with SEL. The UF8 has to
+                            // hijack SEL because it owns no arm keys; the UF1 has one
+                            // channel, so the same mode reads as one key. The SEL LED
+                            // shows the arm state while the mode runs (uf1PaintChannel
+                            // Strip_). Only Rec / RecMon are handled here; AUTO stays
+                            // out because the six automation modes already live on the
+                            // secondary row's Shift slot with their own labels + LED.
+                            const auto selMode = g_selectionMode.load();
+                            if (selMode == SelectionMode::Rec) {
+                                queueInput({PendingInput::Uf1RecArmToggle, 0, 0.0});
+                            } else if (selMode == SelectionMode::RecMon) {
+                                queueInput({PendingInput::Uf1RecArmMonToggle, 0, 0.0});
+                            } else {
                             // Capture SHIFT at PRESS time (like the UF8, main.cpp
                             // ~16846) so a Shift+SEL is ADDITIVE — extend the existing
                             // selection with the UF1's channel, not replace it. Without
                             // this the UF1 SEL always did SetOnlyTrackSelected, so
                             // "UF8-first, extend by the UF1 channel" cleared the UF8
                             // selection (Frank 2026-08-05). Carried in the event value.
+                            // Like the UF8, the arm above wins over the Shift branch —
+                            // REC mode does not multi-select.
                             const bool selShift = uf8::bindings::modifierHeld(
                                 uf8::bindings::Modifier::Shift);
                             queueInput({PendingInput::Uf1SelectFocused, 0,
                                         selShift ? 1.0 : 0.0});
+                            }
                         }
                         uf8::bindings::dispatch(uf8::bindings::ButtonId::Uf1Sel, ev.pressed);
                         break;
@@ -25370,8 +25771,8 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
                                          sendOverride->sendIndex, "B_MUTE") > 0.5;   // CUT toggles this
     }
 
-    static std::string sName, sDb, sPan, sCh;
-    static int         sPanBar = INT_MIN;      // encoded pos*2+centreFlag (−1 = unset)
+    static std::string sName, sDb, sValLine, sCh;
+    static int         sBarKey = INT_MIN;      // encoded pos*2+centreFlag (−1 = unset)
     static uint32_t    sColor  = 0xFFFFFFFFu;
 
     // 0x00-prefixed text send for the channel-info plane.
@@ -25432,9 +25833,9 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     // Pan value line (0x000e) + readout bar (0x000f) — the per-track knob readout
     // ABOVE the fader. When the focused track has an ACTIVE pin, the line shows the
     // pinned param instead of Pan ("*name value"); else the normal Pan line +
-    // centre-detent bar. Change-detected (sPan/sPanBar) so it animates as the knob
+    // centre-detent bar. Change-detected (sValLine/sBarKey) so it animates as the knob
     // turns.
-    std::string panLine;
+    std::string valLine;   // same name the UF8 strip uses
     int         barPos = 50;      // 0..100
     uint8_t     barCentre = 0x00; // 0x80 only for a real Pan centre-detent
     int spFx = -1, spParam = -1; bool spTog = false;
@@ -25442,7 +25843,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         // Extender: the pan line/bar read out the 9th SEND's pan (what the above-
         // fader V-Pot drives), so knob and readout agree. Empty slot → blank line,
         // centred bar.
-        panLine   = sendValid ? composeValueLine("Pan", formatPanReadout(ovPan)) : std::string();
+        valLine   = sendValid ? composeValueLine("Pan", formatPanReadout(ovPan)) : std::string();
         barPos    = std::clamp(static_cast<int>(std::lround((ovPan + 1.0) * 50.0)), 0, 100);
         barCentre = (ovPan == 0.0) ? 0x80 : 0x00;
     } else if (g_stickyActive.load() && stickyResolveOnTrack_(tr, &spFx, &spParam, &spTog)) {
@@ -25462,21 +25863,65 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         }
         // Same 9-char label zone as the V-Pot readout — a pinned param's own
         // name is regularly longer than that.
-        panLine = uf1ValueLine(std::string("*") + nm, val);       // '*' = pinned marker
+        valLine = uf1ValueLine(std::string("*") + nm, val);       // '*' = pinned marker
         const double nrm = TrackFX_GetParamNormalized(tr, spFx, spParam);
         barPos = std::clamp(static_cast<int>(std::lround(nrm * 100.0)), 0, 100);
     } else {
         const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
-        panLine   = composeValueLine("Pan", formatPanReadout(pan));
+        valLine   = composeValueLine("Pan", formatPanReadout(pan));
         barPos    = std::clamp(static_cast<int>(std::lround((pan + 1.0) * 50.0)), 0, 100);
         barCentre = (pan == 0.0) ? 0x80 : 0x00;
     }
-    if (changed || panLine != sPan) { sPan = panLine; sendZoneText(uf1::scr::kPanLabel, panLine); }
-    const int panBarKey = barPos * 2 + (barCentre ? 1 : 0);
-    if (changed || panBarKey != sPanBar) {
-        sPanBar = panBarKey;
+    // REC + RME overrides, applied AFTER the chain and INDEPENDENTLY of each
+    // other — which is how the UF8 does it, and the reason matters: the value
+    // line and the readout bar have different fallbacks. TotalReaper can know a
+    // track's 48V / pad / phase and have no gain for it yet, in which case the
+    // line must show the flags while the bar keeps whatever it was showing.
+    // Folding both into one branch (2026-08-19, first cut) made the bar go blank
+    // in exactly that state, while the UF8 next to it still drew a line.
+    {
+        std::string rmeLabel, rmeValue;
+        // No input-name flash: the channel-strip type cell already names the
+        // input permanently, exactly as the UF8's does, so blinking it in here
+        // would say the same thing twice and cost the flags while it did.
+        if (recRmeActive_()
+            && recRmeReadoutText_(tr, /*flashInputName*/false, /*latin1*/false,
+                                  &rmeLabel, &rmeValue)) {
+            valLine = uf1ValueLine(rmeLabel, rmeValue);
+        }
+        if (const double gNorm = recRmeGainBarNorm_(tr); gNorm >= 0.0) {
+            barPos    = static_cast<int>(std::lround(gNorm * 100.0));
+            barCentre = 0x00;   // unipolar, no centre detent
+        }
+    }
+    if (changed || valLine != sValLine) { sValLine = valLine; sendZoneText(uf1::scr::kValueLine, valLine); }
+    // The bar's STYLE, which the init replay leaves at 0x03 = "off". Nothing
+    // corrected it afterwards, so every position we sent to the bar below drew
+    // nothing at all — not the Pan bar, not a Sticky Pot, not the preamp gain
+    // (Frank 2026-08-19). Same class as the 0x010d bug on the big display, and
+    // the same fix: own the style instead of inheriting a captured frame.
+    // 0x01 = pointer, which is the normal Pan look and the one Frank picked for
+    // the gain as well; it is also the value the big display already uses for
+    // everything unipolar, so both screens now follow one rule.
+    // Sent on the same change gate as the position, and a style change forces
+    // the position out again — otherwise the change detection below would
+    // swallow it and the new style would have nothing to draw.
+    {
+        static uint8_t sBarStyle = 0;
+        constexpr uint8_t kStylePointer = 0x01;
+        if (changed || sBarStyle != kStylePointer) {
+            sBarStyle = kStylePointer;
+            g_uf1_dev->send(uf1::buildScreen(
+                uf1::scr::kBarStyle,
+                std::span<const uint8_t>(&sBarStyle, 1)));
+            sBarKey = INT_MIN;
+        }
+    }
+    const int barKey = barPos * 2 + (barCentre ? 1 : 0);
+    if (changed || barKey != sBarKey) {
+        sBarKey = barKey;
         const std::vector<uint8_t> pb = { static_cast<uint8_t>(barPos), barCentre };
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kPanBar, pb));
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVPotReadoutBar, pb));
     }
 
     // Channel number (0x0014)
@@ -25494,7 +25939,27 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     // colour regardless. `selected` folds into the change key so a selection change
     // (colour unchanged) still repaints.
     const bool     selSel = GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5;
-    const uint32_t selKey = (rgb & 0x00FFFFFFu) | (selSel ? 0x01000000u : 0u);
+    // Sel Mode REC / REC+MON retargets this LED to the ARM state, exactly like the
+    // UF8's SEL row (ledColourFor, main.cpp ~18802): bright red armed, dim red not.
+    // The selection bit is invisible in this mode by design — while you are arming,
+    // what you need to see is what is armed.
+    // Colours: the UF8 sends nibbles directly (0x0F bright / 0x01 dim); the UF1
+    // takes 8-bit RGB and quantises with gamma 2.2 (uf1::quantiseChannel), where
+    // 0xFF → nibble 15 and 0x40 → nibble 1. So these two constants land on exactly
+    // the UF8's two red levels rather than on a guess.
+    constexpr uint32_t kSelRecArmedRgb = 0xFF0000u;
+    constexpr uint32_t kSelRecIdleRgb  = 0x400000u;
+    const auto     selLedMode = g_selectionMode.load();
+    const bool     recLed = (selLedMode == SelectionMode::Rec
+                          || selLedMode == SelectionMode::RecMon);
+    const bool     recArmed = recLed
+        && GetMediaTrackInfo_Value(tr, "I_RECARM") > 0.5;
+    // Mode + arm fold into the change key, or the LED would sit on the last colour
+    // it was told about until something else happened to repaint.
+    const uint32_t selKey = (rgb & 0x00FFFFFFu)
+                          | (selSel   ? 0x01000000u : 0u)
+                          | (recLed   ? 0x02000000u : 0u)
+                          | (recArmed ? 0x04000000u : 0u);
     if (changed || selKey != sColor) {
         sColor = selKey;
         // SEL LED (0x07) is FULL RGB (Frank 2026-08-05: Solo/Cut are multi-colour too —
@@ -25513,7 +25978,9 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
             : ((static_cast<uint32_t>(cr * 255 / mx) << 16)
              | (static_cast<uint32_t>(cg * 255 / mx) << 8)
              |  static_cast<uint32_t>(cb * 255 / mx));
-        const uint32_t ledRgb = selSel ? boosted : 0x000000u;   // not selected → dark
+        const uint32_t ledRgb = recLed
+            ? (recArmed ? kSelRecArmedRgb : kSelRecIdleRgb)   // REC: arm state
+            : (selSel   ? boosted         : 0x000000u);       // not selected → dark
         if (changed) g_uf1_dev->send(uf1::buildLed(uf1::led::kSel, true));            // FF3B enable
         g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, ledRgb));                 // FF38 full RGB (dark if unsel)
         g_uf1_dev->send(uf1::buildLedLevel(uf1::led::kSel, uf1::led::kFf39Lit));      // FF39 = 0x00 → LIT
@@ -25534,10 +26001,20 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         // soloed send is shown simply as the only UN-muted one, so the SOLO LED
         // stays dark (a send has no solo state — Frank 2026-08-05). Off route mode:
         // the source track's own I_SOLO / B_MUTE.
-        const bool soloed = sendZone ? false
-                                     : (GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5);
-        const bool muted  = sendValid ? ovMuted
-                                       : (GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5);
+        // REC + RME: while the buttons fire TotalReaper toggles, their LEDs have
+        // to show THOSE states — a Cut lit from B_MUTE while the key toggles the
+        // pad is worse than no LED at all. -1 = no mirror (mode off, unassigned,
+        // or AutoLevel, which TotalReaper does not echo) → the track's own state.
+        const int mirrSolo = recRmeMirroredState_(g_recUf1Solo.load(), tr);
+        const int mirrCut  = recRmeMirroredState_(g_recUf1Cut.load(),  tr);
+        const bool soloed = (mirrSolo >= 0)
+            ? (mirrSolo == 1)
+            : (sendZone ? false
+                        : (GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5));
+        const bool muted  = (mirrCut >= 0)
+            ? (mirrCut == 1)
+            : (sendValid ? ovMuted
+                         : (GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5));
         auto sendLed = [&](uint8_t id, bool on, uint8_t litPrim, uint8_t dim) {
             const uint8_t prim = on ? litPrim          : dim;
             const uint8_t lvl  = on ? uf1::led::kFf39Lit : dim;
@@ -26651,8 +27128,21 @@ void uf1PaintChannel_()
         // says which side you are looking at instead. Without it, sends and receives
         // are told apart only by the track names in the V-Pot labels, which is no
         // help on a track whose sends and receives point at the same places.
+        // REC + RME: the cell names the hardware input instead, exactly as the
+        // UF8's does — same builder, same 12-char budget, so the two panels
+        // cannot say different things. Wins over the FX name and over the
+        // routing view's SENDS / RECEIVES, because while the mode runs this is
+        // what the pot and the buttons beside it are addressing.
+        // Writing TEXT here is safe; what must never be written is an EMPTY
+        // payload — 0x0017 is the channel-strip layout's latch as well as its
+        // label, so a blank drops the whole plane ([[uf1-plugin-mode-fake-cs-plan]]).
+        // The `!want.empty()` guard below is that safeguard, and this branch can
+        // only ever add a non-empty string.
+        const std::string rmeInName = recRmeInputNameLabel_(tr, /*foldLatin1*/false);
         const bool routeView = (g_uf1ChannelSubMode.load() == 2);
-        const std::string want = routeView
+        const std::string want = !rmeInName.empty()
+                                   ? rmeInName
+                                   : routeView
                                    ? (g_uf1RecvView.load() ? std::string("RECEIVES")
                                                            : std::string("SENDS"))
                                    : (bare ? std::string(12, ' ') : fxName);
@@ -27894,7 +28384,21 @@ uint16_t vpotPosFromUnipolar(double v)
 
 uint16_t vpotPosFromNormalized(double v) { return vpotPosFromUnipolar(v); }
 
-uint16_t vpotPosFromPan(double pan) { return vpotPosFromBipolar(pan); }
+// ⇨ PAN IS A SINGLE LINE, NOT A FILL (Frank 2026-08-19: "pan füllt auf UF8 von
+// der mitte her, beim UF1 ist es nur der einzelne strich der bei C in der mitte
+// ist. Für pan lieber den einzelnen strich"). So pan goes out in the UNIPOLAR
+// encoding, where centre is simply 50, and every pan branch of the mode register
+// says 0x01 to match. Plug-in parameters that are genuinely bipolar (EQ gain and
+// friends) keep 0x08 and keep filling from the middle — that is what makes a
+// gain readable at a glance, and it is not what pan wants.
+// ⛔ Encoding and mode MUST agree: the bipolar centre anchor (byte0=0x00,
+// byte1=0x80) renders as the LEFT EDGE under mode 0x01.
+uint16_t vpotPosFromPan(double pan)
+{
+    if (pan < -1.0) pan = -1.0;
+    if (pan >  1.0) pan =  1.0;
+    return vpotPosFromUnipolar((pan + 1.0) * 0.5);
+}
 
 // Phase 2.8 Nav Mode — colour-bar callback used by ColorSync when the
 // overlay is active. Returns the strip item's REAPER colour (low 24
@@ -29710,78 +30214,10 @@ void pushZonesForVisibleSlots()
         // generic "REAPER" / CS-variant label. Useful when the strip is
         // driving TotalMix-side input parameters — colour bar then names
         // the input, mirroring what the V-Pot/Cut/Solo actions target.
+        if (const std::string inName =
+                recRmeInputNameLabel_(tr, /*foldLatin1*/true); !inName.empty())
         {
-            const auto curSel = g_selectionMode.load();
-            const bool inRecMode = curSel == SelectionMode::Rec
-                                || curSel == SelectionMode::RecMon;
-            if (inRecMode && g_recRmeEnabled.load()) {
-                const int recInput = static_cast<int>(
-                    GetMediaTrackInfo_Value(tr, "I_RECINPUT"));
-                // Same masks TotalReaper uses (PreampActions.cpp:36-39):
-                // MIDI = 4096, Multichannel = 2048, channel mask = 0x3FF.
-                // Hardware inputs only — leave csType as-is for MIDI /
-                // multichannel / "no input" so the user still sees the
-                // surrounding mode's default text.
-                if (recInput >= 0
-                    && !(recInput & 4096)
-                    && !(recInput & 2048))
-                {
-                    const int chan = recInput & 0x3FF;
-                    if (const char* nm = GetInputChannelName(chan); nm && *nm) {
-                        std::string s2(nm);
-                        const bool stereo = (recInput & 1024) != 0;
-                        if (stereo) {
-                            // Render the pair: "MADI 5" → "MADI 5/6".
-                            // Trailing decimal of the left-channel name
-                            // is the pair's left index; append "/<n+1>".
-                            // If there's no trailing number (user-aliased
-                            // name like "Drums OH"), leave as-is.
-                            size_t numStart = s2.size();
-                            while (numStart > 0
-                                && std::isdigit(static_cast<unsigned char>(
-                                    s2[numStart - 1])))
-                            {
-                                --numStart;
-                            }
-                            if (numStart < s2.size()) {
-                                const int leftNum =
-                                    std::atoi(s2.c_str() + numStart);
-                                char buf[16];
-                                snprintf(buf, sizeof(buf), "/%d",
-                                              leftNum + 1);
-                                s2 += buf;
-                            }
-                        }
-                        // Length-budget: the colour-bar zone fits 12
-                        // characters (HW-confirmed 2026-08-12). Try shortening the common RME-
-                        // device prefixes (MADI / ANALOG / ADAT / SPDIF
-                        // / AES) first — domain-specific shortcuts that
-                        // beat generic abbreviation. Then route through
-                        // abbreviateTrackName_ which honours Settings →
-                        // Track-name mode (Truncate vs Smart Abbreviate),
-                        // so user-set aliases like "Drums OH" / "Vocal
-                        // Mic" get vowel-dropped instead of cut mid-word.
-                        if (s2.size() > 7) {
-                            auto shorten =
-                                [&](const char* longP, const char* shortP) {
-                                const auto ll = std::strlen(longP);
-                                if (s2.size() >= ll
-                                    && s2.compare(0, ll, longP) == 0)
-                                {
-                                    s2.replace(0, ll, shortP);
-                                }
-                            };
-                            shorten("MADI ",   "MA ");
-                            shorten("ANALOG ", "AN ");
-                            shorten("Analog ", "An ");
-                            shorten("ADAT ",   "AD ");
-                            shorten("SPDIF ",  "SP ");
-                            shorten("AES ",    "AE ");
-                        }
-                        csType = abbreviateTrackName_(s2, 12, -1, /*foldLatin1*/ true);
-                    }
-                }
-            }
+            csType = inName;
         }
         // Empty slot when nothing matched — track has zero plug-ins.
         // A blank LCD field reads "nothing here" faster than a literal
@@ -29943,7 +30379,14 @@ void pushZonesForVisibleSlots()
         //   4. focused but unavailable here → blank (collapsed bar).
         //   5. Plugin mode → SSL strip Pan (linkIdx 3).
         //   6. default     → REAPER track pan.
-        if (routedFader) {
+        // REC + RME comes before all of them: while the mode runs the knob turns
+        // preamp gain, so the bar under it has to show gain and not the pan it is
+        // no longer touching (Frank 2026-08-19). Unipolar, full scale +75 dB, and
+        // the mode register below agrees. No gain echoed yet → fall through and
+        // keep the normal bar.
+        if (const double gNorm = recRmeGainBarNorm_(tr); gNorm >= 0.0) {
+            vpotBar[s] = vpotPosFromUnipolar(gNorm);
+        } else if (routedFader) {
             // Fader carries the route's volume → V-Pot is free for pan.
             // FLIP swaps: fader=pan, V-Pot=volume. FLIP+PAN held shows
             // the track's own pan on the V-Pot (transient overlay).
@@ -30408,45 +30851,18 @@ void pushZonesForVisibleSlots()
         // populates via OSC from TotalMix's /sendall on csurf enable
         // (alpha-5+), so the readout matches whatever TotalMix has
         // running rather than starting at 0 dB.
-        {
-            const auto curSel = g_selectionMode.load();
-            const bool inRecMode = curSel == SelectionMode::Rec
-                                || curSel == SelectionMode::RecMon;
-            if (!selectionModeHandled
-                && inRecMode
-                && g_recRmeEnabled.load())
-            {
-                auto readExt = [&](const char* key) -> std::string {
-                    char buf[64] = {0};
-                    GetSetMediaTrackInfo_String(tr,
-                        const_cast<char*>(key), buf, false);
-                    return std::string(buf);
-                };
-                const bool on48v   = readExt("P_EXT:totalreaper_48v")   == "1";
-                const bool onPad   = readExt("P_EXT:totalreaper_pad")   == "1";
-                const bool onPhase = readExt("P_EXT:totalreaper_phase") == "1";
-                std::string flags;
-                flags += on48v   ? "48V" : "   ";
-                flags += ' ';
-                flags += onPad   ? "Pd"  : "  ";
-                flags += ' ';
-                flags += onPhase ? "Ph"  : "  ";
-                std::string gainStr = readExt("P_EXT:totalreaper_gain");
-                char gbuf[16];
-                if (gainStr.empty()) {
-                    snprintf(gbuf, sizeof(gbuf), "  --dB");
-                } else {
-                    // RME preamp gain is always >= 0 dB (no attenuator
-                    // on the mic-pre side; that lives on `pad`). Clamp
-                    // and drop the sign so the readout never reads as
-                    // signed value.
-                    double db = std::atof(gainStr.c_str());
-                    if (db < 0.0) db = 0.0;
-                    snprintf(gbuf, sizeof(gbuf), "%4.1fdB", db);
-                }
-                valLine = composeValueLine(flags, gbuf);
-                selectionModeHandled = true;
-            }
+        if (!selectionModeHandled && recRmeActive_()) {
+            // Defaults are what the builder would have produced for a track
+            // TotalReaper has said nothing about: all flags off, gain unknown.
+            // It leaves them untouched when it returns false, and the UF8 shows
+            // the zone either way (unlike the UC1/UF1, which fall back to their
+            // normal content) — that is the pre-existing behaviour, kept.
+            std::string flags = "         ";
+            std::string gain  = "  --dB";
+            recRmeReadoutText_(tr, /*flashInputName*/false, /*latin1*/false,
+                               &flags, &gain);
+            valLine = composeValueLine(flags, gain);
+            selectionModeHandled = true;
         }
         // Instance mode: the active FX name is rendered in the
         // colour-bar Channel-Strip-Type zone (see csType override
@@ -30775,11 +31191,11 @@ void pushZonesForVisibleSlots()
                 if (!fRoute.valid) {
                     vpotMode[s] = 0x03;
                 } else if (g_flip.load() && g_forcePan.load()) {
-                    vpotMode[s] = 0x08;       // FLIP+PAN held → track pan
+                    vpotMode[s] = 0x01;       // FLIP+PAN held → track pan (line)
                 } else if (g_flip.load()) {
                     vpotMode[s] = 0x01;       // FLIP → V-Pot = volume
                 } else {
-                    vpotMode[s] = 0x08;       // default → V-Pot = send pan
+                    vpotMode[s] = 0x01;       // default → V-Pot = send pan (line)
                 }
                 continue;
             }
@@ -30787,7 +31203,7 @@ void pushZonesForVisibleSlots()
                 static_cast<int>(s), bankOffset, trackCount);
             if (vRoute.active()) {
                 if (!vRoute.valid)            vpotMode[s] = 0x03;
-                else if (g_forcePan.load())   vpotMode[s] = 0x08;
+                else if (g_forcePan.load())   vpotMode[s] = 0x01;   // pan = line
                 else                          vpotMode[s] = 0x01;
                 continue;
             }
@@ -30816,6 +31232,13 @@ void pushZonesForVisibleSlots()
             }
             MediaTrack* tr = visibleTrackAt(realSlot);
             if (MediaTrack* mp = masterPinTrack_(s)) tr = mp;  // Master-pin
+            // REC + RME: preamp gain is a unipolar sweep. Must agree with the
+            // position branch above, which claims the bar first — a bipolar mode
+            // here would draw a unipolar position as a centre dot.
+            if (recRmeGainBarNorm_(tr) >= 0.0) {
+                vpotMode[s] = 0x01;
+                continue;
+            }
             // Sticky Pot bar mode: routes already continued above; a pinned
             // strip drives a unipolar sweep (toggle → no bar). v1 treats every
             // pinned param as unipolar (bipolar EQ-gain fills from the left, a
@@ -30854,7 +31277,7 @@ void pushZonesForVisibleSlots()
                 // visible. 0x03 ("no bar") clears the ring.
                 vpotMode[s] = 0x03;
             } else if (!slot) {
-                vpotMode[s] = 0x08;  // pan fallback — bipolar centre
+                vpotMode[s] = 0x01;  // pan fallback — single line, centre = 50
             } else if (isBinarySlot(*slot)) {
                 vpotMode[s] = 0x03;  // binary — no bar
             } else if (isBipolarSlot(*slot)) {
@@ -33467,7 +33890,15 @@ void refreshUf1TraceFlag_()
     if ((g_tickCounter % 30) != 0) return;
     const char* v = GetExtState("rea_sixty", "uf1_trace");
     const bool want = (v && *v && strcmp(v, "0") != 0);
-    if (want != g_uf1Trace.load()) g_uf1Trace.store(want);
+    if (want == g_uf1Trace.load()) return;
+    g_uf1Trace.store(want);
+    // ⛔ AND PUSH IT INTO THE DEVICE. openUf1BringUp_ latches setFrameTrace once
+    // at open, so until now only the INPUT log followed this flag live while the
+    // OUT-frame log needed a REAPER restart to start — which is exactly the trap
+    // the comment at the latch warns about, one level down. Cost a round on
+    // 2026-08-19: the trace was switched on, reaper_uf1_input.log filled up and
+    // reaper_uf1_frames.log was never created. Relaxed atomic store, main thread.
+    if (g_uf1_dev) g_uf1_dev->setFrameTrace(want);
 }
 
 void onTimerBody_()
@@ -39177,6 +39608,12 @@ int  reasixty_recUc1Cut()              { return static_cast<int>(g_recUc1Cut.loa
 int  reasixty_recUc1Solo()             { return static_cast<int>(g_recUc1Solo.load()); }
 int  reasixty_recUc1Polarity()         { return static_cast<int>(g_recUc1Polarity.load()); }
 
+bool reasixty_recUf1RotateGain()       { return g_recUf1RotateGain.load(); }
+bool reasixty_recUf1ShiftInputCh()     { return g_recUf1ShiftInputCh.load(); }
+int  reasixty_recUf1VpotPush()         { return static_cast<int>(g_recUf1VpotPush.load()); }
+int  reasixty_recUf1Cut()              { return static_cast<int>(g_recUf1Cut.load()); }
+int  reasixty_recUf1Solo()             { return static_cast<int>(g_recUf1Solo.load()); }
+
 void reasixty_setRecRmeEnabled(bool on)
 {
     g_recRmeEnabled.store(on);
@@ -39622,6 +40059,34 @@ void reasixty_setRecUc1Polarity(int v)
     g_recUc1Polarity.store(a);
     SetExtState("rea_sixty", "rec_uc1_polarity", recRmeActionStr(a), true);
 }
+void reasixty_setRecUf1RotateGain(bool on)
+{
+    g_recUf1RotateGain.store(on);
+    SetExtState("rea_sixty", "rec_uf1_rotate_gain", on ? "1" : "0", true);
+}
+void reasixty_setRecUf1ShiftInputCh(bool on)
+{
+    g_recUf1ShiftInputCh.store(on);
+    SetExtState("rea_sixty", "rec_uf1_shift_inputch", on ? "1" : "0", true);
+}
+void reasixty_setRecUf1VpotPush(int v)
+{
+    const auto a = static_cast<RecRmeAction>(v);
+    g_recUf1VpotPush.store(a);
+    SetExtState("rea_sixty", "rec_uf1_vpot_push", recRmeActionStr(a), true);
+}
+void reasixty_setRecUf1Cut(int v)
+{
+    const auto a = static_cast<RecRmeAction>(v);
+    g_recUf1Cut.store(a);
+    SetExtState("rea_sixty", "rec_uf1_cut", recRmeActionStr(a), true);
+}
+void reasixty_setRecUf1Solo(int v)
+{
+    const auto a = static_cast<RecRmeAction>(v);
+    g_recUf1Solo.store(a);
+    SetExtState("rea_sixty", "rec_uf1_solo", recRmeActionStr(a), true);
+}
 
 // UC1-side dispatch bridges. Called from UC1Surface::handleKnob_ /
 // handleButton_ on the main thread (the surface drains its input
@@ -39636,12 +40101,7 @@ void reasixty_setRecUc1Polarity(int v)
 // gate UF8 uses (main.cpp ~7587, 7644): RME on + SelectionMode is Rec
 // or RecMon. AUTO / Instance / Norm fall through to the surface's
 // legacy behaviour even when the RME toggle is on.
-static inline bool recRmeUc1Active_()
-{
-    if (!g_recRmeEnabled.load()) return false;
-    const auto m = g_selectionMode.load();
-    return m == SelectionMode::Rec || m == SelectionMode::RecMon;
-}
+static inline bool recRmeUc1Active_() { return recRmeActive_(); }
 
 // Public wrapper so UC1Surface's LED branches can take the same gate
 // decision without exposing g_selectionMode / SelectionMode.
@@ -39683,123 +40143,28 @@ inline bool recUc1InputChanFlashActive_()
     return (now - g_recUc1InputChanFlashMs.load()) < 1500;
 }
 
-// Build a 7-char abbreviation of an RME-style input channel name.
-// "MADI 5" → "MA 5", "ANALOG 1" → "An 1", "Drums OH" → first 7 chars.
-// Stereo pairs already include the "/N" suffix from caller.
-inline std::string abbrevInputChanName_(std::string name)
-{
-    auto prefix = [&](const char* longP, const char* shortP) {
-        const auto ll = std::strlen(longP);
-        if (name.size() >= ll && name.compare(0, ll, longP) == 0) {
-            name.replace(0, ll, shortP);
-        }
-    };
-    if (name.size() > 7) {
-        prefix("MADI ",   "MA ");
-        prefix("ANALOG ", "An ");
-        prefix("Analog ", "An ");
-        prefix("ADAT ",   "AD ");
-        prefix("SPDIF ",  "SP ");
-        prefix("AES ",    "AS ");
-    }
-    if (name.size() > 7) name.resize(7);
-    return name;
-}
 
 // Readout-line builder for UC1's CS readout zone. Mirrors the UF8
 // V-Pot value-line layout (main.cpp ~10403): flags on the left,
 // gain dB on the right. Returns false when REC+RME isn't active for
 // this track or TotalReaper hasn't populated any of the P_EXT keys.
+
 bool reasixty_recUc1ReadoutText(MediaTrack* tr,
                                 std::string* outLabel,
                                 std::string* outValue)
 {
-    if (!tr || !outLabel || !outValue) return false;
     if (!recRmeUc1Active_()) return false;
-    auto readExt = [&](const char* key) -> std::string {
-        char buf[64] = {0};
-        GetSetMediaTrackInfo_String(tr, const_cast<char*>(key), buf, false);
-        return std::string(buf);
-    };
-    const bool on48v   = readExt("P_EXT:totalreaper_48v")   == "1";
-    const bool onPad   = readExt("P_EXT:totalreaper_pad")   == "1";
-    const bool onPhase = readExt("P_EXT:totalreaper_phase") == "1";
-    const std::string gainStr = readExt("P_EXT:totalreaper_gain");
-    // All four empty / cleared → TotalReaper hasn't echoed anything
-    // for this track yet (input isn't an RME pre, or /sendall hasn't
-    // populated). Skip the readout so the focused-param zone keeps
-    // its normal content rather than displaying "0.0dB" misleadingly.
-    if (!on48v && !onPad && !onPhase && gainStr.empty()) return false;
-
-    // Input-channel flash: when the user just shifted-rotated to a new
-    // input channel, swap the flag line for the channel name for ~1.5s.
-    bool labelSet = false;
-    if (recUc1InputChanFlashActive_()) {
-        const int recInput = static_cast<int>(
-            GetMediaTrackInfo_Value(tr, "I_RECINPUT"));
-        if (recInput >= 0
-            && !(recInput & 4096)
-            && !(recInput & 2048))
-        {
-            const int chan = recInput & 0x3FF;
-            if (const char* nm = GetInputChannelName(chan); nm && *nm) {
-                std::string s2 = utf8ToLatin1(nm);  // UC1 LCD = Latin-1
-                if ((recInput & 1024) != 0) {
-                    // Stereo pair: append "/<n+1>" from trailing digit.
-                    size_t numStart = s2.size();
-                    while (numStart > 0
-                        && std::isdigit(static_cast<unsigned char>(
-                                            s2[numStart - 1])))
-                    {
-                        --numStart;
-                    }
-                    if (numStart < s2.size()) {
-                        const int leftNum =
-                            std::atoi(s2.c_str() + numStart);
-                        char buf[16];
-                        snprintf(buf, sizeof(buf), "/%d", leftNum + 1);
-                        s2 += buf;
-                    }
-                }
-                *outLabel = "In " + abbrevInputChanName_(std::move(s2));
-                labelSet = true;
-            }
-        }
-    }
-    if (!labelSet) {
-        std::string flags;
-        flags += on48v   ? "48V" : "   ";
-        flags += ' ';
-        flags += onPad   ? "Pd"  : "  ";
-        flags += ' ';
-        flags += onPhase ? "Ph"  : "  ";
-        *outLabel = flags;
-    }
-
-    char gbuf[16];
-    if (gainStr.empty()) {
-        snprintf(gbuf, sizeof(gbuf), " --dB");
-    } else {
-        double db = std::atof(gainStr.c_str());
-        if (db < 0.0) db = 0.0;
-        snprintf(gbuf, sizeof(gbuf), "%4.1fdB", db);
-    }
-    *outValue = gbuf;
-    return true;
+    return recRmeReadoutText_(tr, recUc1InputChanFlashActive_(), /*latin1*/true,
+                              outLabel, outValue);
 }
 
 int reasixty_recUc1ButtonMirroredState(int which, MediaTrack* tr)
 {
-    if (!tr) return -1;
-    if (!recRmeUc1Active_()) return -1;
     const RecRmeAction a = (which == 1) ? g_recUc1Cut.load()
                          : (which == 2) ? g_recUc1Solo.load()
                          : (which == 3) ? g_recUc1Polarity.load()
                                         : RecRmeAction::None;
-    if (a == RecRmeAction::None) return -1;
-    const char* key = recRmePExtKey(a);
-    if (!key) return -1;
-    return (readTrackPExt_(tr, key) == "1") ? 1 : 0;
+    return recRmeMirroredState_(a, tr);
 }
 
 // Predicate form — same gate as dispatch but doesn't fire the action.

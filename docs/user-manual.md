@@ -131,6 +131,8 @@ The Instance domain (`ChannelStrip`, `BusComp`, or `None` for UF8-only user maps
 
 Each strip's `SEL` button is hijacked by the active Selection Mode. Toggle modes via the dedicated buttons on the UF8 (mapped through Bindings) or via the per-mode builtin actions.
 
+The modes are global, so a UF1 follows them too. On the UF1 the mode retargets its single `SEL`, and the channel it acts on is the one the fader side is showing: dial the channel encoder to the track you want, then press `SEL`.
+
 ## NORM
 
 The default — `SEL` toggles REAPER track selection. V-Pots default to Pan. No automatic colour-bar overrides on the upper LCD.
@@ -139,9 +141,11 @@ The default — `SEL` toggles REAPER track selection. V-Pots default to Pan. No 
 
 Each strip's `SEL` toggles arm. V-Pots stay on Pan unless `REC + RME` integration is on (next mode).
 
+On the UF1, `SEL` toggles arm for the channel on the fader, and the `SEL` LED turns red: bright when the channel is armed, dim when it is not. Track selection is invisible while the mode runs, which is the point: what you need to see when you are arming is what is armed. Anything you have bound to `SEL` yourself (a double press, a long press) still fires.
+
 ## REC + MON
 
-Each strip's `SEL` toggles arm + monitor. Otherwise like REC.
+Each strip's `SEL` toggles arm + monitor. Otherwise like REC. Same on the UF1.
 
 ### REC + RME (TotalReaper integration)
 
@@ -151,6 +155,12 @@ A sub-mode of REC / REC+MON. When **Settings → Modes → REC → "Enable RME /
 - V-Pot push / Cut / Solo / Polarity = configurable TotalReaper actions (48V toggle, pad toggle, phase invert, AutoLevel toggle).
 - Shift+V-Pot rotation = change input channel
 - The strip's colour bar shows the input name ("Mic 1", "Line 3") instead of the CS variant label
+
+The UC1 and the UF1 get the same thing on their own controls, with their own assignments in Settings, so you can opt one surface in without the other. On the UC1 it is Encoder 2, Cut, Solo and Polarity. On the UF1 it is the V-Pot above the fader (rotation and push), Cut and Solo, all acting on the channel the fader side is showing. Out of the box all three surfaces come set up the same way: 48V on the push, pad on Cut, phase on Solo.
+
+Every surface reads out the same way, because a UF8 strip and the UF1 channel are the same channel strip: `48V Pd Ph` on the left of the value line, the preamp gain on the right, the V-Pot readout bar under it riding the gain from 0 to +75 dB, and the channel-strip type cell naming the hardware input ("MA 5", "An 1") in place of the plug-in name. A track TotalReaper has said nothing about keeps its normal readout rather than showing a made-up 0.0 dB.
+
+While REC + RME is engaged, the UF1's Cut and Solo LEDs show the TotalMix state they are switching, not the track's mute and solo. With the Extender on they keep working on the channel the fader side shows, including in a send view: a send has no preamp, so the preamp actions win there.
 
 ## AUTO
 
@@ -495,12 +505,17 @@ because the same physical key does different work in each.
 
 ## The channel (all views)
 
+These are the controls down the left of the panel, and they all address the same
+channel: the one the fader is moving. With the Extender on that is the bank's 9th
+track rather than the selected one, so the strip and the keys beside it always
+agree.
+
 | Control | Function |
 |---|---|
 | Fader | Volume of the UF1's channel. Touch-sensitive, drives touch automation. |
-| V-Pot above the fader | Pan by default, or whatever the Sticky Pot is pinned to. **Push** clears an armed pin, resets a live pin, or — with no pin — centres Pan. |
-| `SOLO` / `CUT` | Solo / mute the focused track. Fixed, not rebindable. |
-| `SEL` | Select the focused track exclusively; **Shift +** `SEL` extends the selection. Double-press opens the FX chain by default. |
+| V-Pot above the fader | Pan by default, or whatever the Sticky Pot is pinned to. **Push** clears an armed pin, resets a live pin, or — with no pin — centres Pan. In REC + RME it rides the preamp gain, and **Shift +** turn changes the input channel. |
+| `SOLO` / `CUT` | Solo / mute the channel. Fixed, not rebindable. In REC + RME they fire their assigned TotalReaper actions instead, and their lamps show those states. |
+| `SEL` | Select the channel exclusively; **Shift +** `SEL` extends the selection. Double-press opens the FX chain by default. In REC / REC + MON it arms the channel instead, and its lamp turns red to show the arm state. |
 | `SOFT` (above the fader display) | **Pin This Ch** — one press puts the channel the UF1 is showing into the Focus Set *and* engages the pin; press again to release, and the channel stays in the set. While pinned, the **background behind the key's label lights up** on the channel display. Factory default since v0.5; it shipped unbound before that. Rebindable like every other key, and an assignment you had already made is kept — the backlight follows whatever you bind, as long as that action has an on/off state. |
 | `FLIP` | Swap the fader and V-Pot assignments. Factory default, rebindable. |
 | `MASTER` | Put the Master bus on the channel. Factory default, rebindable. |
@@ -616,16 +631,20 @@ continuous **nine-wide** strip: *Side* **Right** (default) puts the UF1 at strip
 with the UF8 on 1-8, **Left** puts it at strip 1 with the UF8 on 2-9. Banking
 moves all nine together.
 
-Only the **fader** joins, together with the small display right above it. That
-strip names the track the fader is moving, so the fader and its readout can never
-disagree. The colour screen, the V-Pots and the soft-keys stay on the **selected**
-track, the way the UC1 behaves. You can therefore keep working on one channel's
-plug-in while the fader rides a different track in the bank.
+The split runs down the middle of the panel. The **left half** joins the bank:
+the fader, the level meter, the small display above it, **SOLO**, **CUT**,
+**SEL**, the V-Pot above the fader and the soft-key above the channel all address
+the track the fader is moving, so nothing on that side can name one track and act
+on another. The **right half** stays on the **selected** track, the way the UC1
+behaves: the colour screen, the four V-Pots, the four display soft-keys and the
+EQ graph. You can therefore keep working on one channel's plug-in while the fader
+rides a different track in the bank.
 
-The UF1's **SEL** belongs to the fader rather than to the screen: it selects the
-track the UF1's fader is on, which is what its SEL lamp has always been
-reporting. Pressing it therefore brings the colour screen, the V-Pots and the
-soft-keys over to that track as well.
+Pressing **SEL** selects the track the fader is on, which brings the right half
+over to it as well.
+
+**MASTER** outranks the Extender: engage it and both halves show the master
+track. Turn it off and the Extender is back as it was.
 
 Extender and the Focus-Set pin are mutually exclusive: switching either on clears
 the other, and releasing the pin puts the Extender back the way you left it.
@@ -1174,7 +1193,26 @@ V-Pots cycle per-strip (each strip's own track). The three single encoders cycle
 | Cut button (combo) | Same action list. |
 | Solo button (combo) | Same action list. |
 
-(Polarity is not a separately assignable REC button — only V-Pot push / Cut / Solo.)
+The rows above are the UF8 strips. The UC1 and the UF1 have their own set below, so each surface can be opted in separately.
+
+| Setting (UC1) | Effect |
+|---|---|
+| Encoder 2 rotation → Preamp gain ±1 dB | Steps preamp gain on the focused track. |
+| Encoder 2 rotation + Shift → Change input channel | Re-routes that track's input. |
+| Encoder 2 push (combo) | Action assignment, same list as above. |
+| Cut button (combo) | Same action list. |
+| Solo button (combo) | Same action list. |
+| Polarity button (combo) | Same action list. |
+
+| Setting (UF1) | Effect |
+|---|---|
+| Above-fader V-Pot rotation → Preamp gain ±1 dB | Steps preamp gain on the channel the fader side is showing. |
+| Above-fader V-Pot rotation + Shift → Change input channel | Re-routes that channel's input. |
+| V-Pot push (combo) | Action assignment, same list as above. |
+| Cut button (combo) | Same action list. |
+| Solo button (combo) | Same action list. |
+
+The UF1 has no Polarity key, so it has three assignable buttons rather than four.
 
 ### NAV
 
@@ -2208,6 +2246,11 @@ Requires the **TotalReaper** extension (separate ReaPack package) and an RME int
 
 Master switch: Settings → Modes → REC → "Enable RME / TotalReaper integration".
 
+The three surfaces have separate assignments in that tab, so you can opt one in
+without the others. What follows describes the UF8 strips; the UC1 uses Encoder 2,
+Cut, Solo and Polarity on the focused track, and the UF1 uses the V-Pot above the
+fader, Cut and Solo on the channel its fader side is showing.
+
 When on AND REC / REC+MON selection mode is active:
 
 - V-Pot rotation → preamp gain ±1 dB (configurable per `V-Pot rotation → Preamp gain ±1 dB` toggle)
@@ -2217,11 +2260,21 @@ When on AND REC / REC+MON selection mode is active:
 - Solo button → action of choice
 - Polarity (if mapped) → action of choice
 
-Strip colour bar shows the input channel name ("Mic 1", "Line 3") instead of the CS variant label.
+The channel-strip type cell shows the input channel name ("Mic 1", "Line 3") instead of the CS variant label, and the V-Pot readout bar shows the preamp gain instead of pan, since that is what the knob above it is turning. Full scale is +75 dB, which is as far as RME pres usually go.
 
-Hardware inputs only — MIDI / multichannel inputs leave the original colour-bar label intact.
+Hardware inputs only — MIDI / multichannel inputs leave the original label intact.
 
-The TotalReaper action names are looked up via `NamedCommandLookup`; if TotalReaper isn't installed the integration silently no-ops.
+The TotalReaper action names are looked up via `NamedCommandLookup`; if TotalReaper isn't installed the integration silently no-ops and every key keeps its normal behaviour, so turning the mode on can never leave a control dead.
+
+The UF1 reads out exactly as a UF8 strip does, down to the same zones: flags on
+the left of the value line, gain on the right, the readout bar on the gain, and
+the type cell naming the input. A track TotalReaper has not reported anything
+about keeps its usual readout instead. Cut and Solo light from the TotalMix state
+they switch rather than from the track's mute and solo.
+
+With the UF1 in Extender mode this all keeps working on the channel the fader
+side shows, in a send view as well: a send has no preamp, so the preamp actions
+take that side's Cut and Solo while the mode is engaged.
 
 \newpage
 

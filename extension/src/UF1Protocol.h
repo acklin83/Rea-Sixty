@@ -204,8 +204,23 @@ constexpr uint16_t kChActive  = 0x0006;  // 1-byte "channel populated" flag (01)
 constexpr uint16_t kColourBar = 0x0018;  // 1-byte palette index of the fader colour bar (uf8::quantize)
 constexpr uint16_t kTrackName = 0x000b;
 constexpr uint16_t kOutputDb  = 0x000c;
-constexpr uint16_t kPanLabel  = 0x000e;
-constexpr uint16_t kPanBar    = 0x000f;
+// ⇨ SAME NAMES AS THE UF8, on purpose. A UF8 strip and the UF1 channel are the
+// same channel strip — the UF8 is eight of them (Frank 2026-08-19: "DIE GANZE
+// FADER/BUTTONS/DISPLAY SACHE BEIM UF8 = 8X UF1"). These two were called
+// kPanLabel / kPanBar, which named one of the things they can show rather than
+// what they are, and that mismatch is how a reader concludes the UF8 "has no
+// equivalent" and starts inventing one. Value line = uf8::buildValueLine,
+// readout bar = uf8::buildVPotReadoutBar. Neither is about pan: they carry pan,
+// a Sticky-Pot parameter, volume under FLIP, a send's level, preamp gain.
+// Bar STYLE for the readout bar below, one byte. HW-measured 2026-08-19 (Frank
+// dialled the values in on the device): 0x01 pointer (the normal pan look),
+// 0x02 fill left to right, 0x04 off, 0x08 fill from the centre rightwards.
+// Same role kVpotStyle (0x010d) has for the big display's four pots, and the
+// same trap: the init replay latches it to 0x03 and nothing ever corrected it,
+// so the bar drew nothing no matter what position was sent.
+constexpr uint16_t kBarStyle       = 0x000d;
+constexpr uint16_t kValueLine      = 0x000e;
+constexpr uint16_t kVPotReadoutBar = 0x000f;
 constexpr uint16_t kChNumber  = 0x0014;
 constexpr uint16_t kCsType    = 0x0017;
 // Large LCD (0x01xx)
