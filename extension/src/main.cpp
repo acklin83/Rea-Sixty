@@ -16669,6 +16669,15 @@ void uf1EmitMeterInstanceLabel_(bool force = true)
         }
     }
     if (nm.empty()) nm = sslcore::currentMeterName();
+    // ⛔ FOLD TO LATIN-1 HERE, AND BEFORE THE TRUNCATION BELOW.
+    // The UF1 panel is single-byte, so raw UTF-8 splits an umlaut into two
+    // glyphs ("ÖRGELI" as "Â*RGELI"). Every other UF1 name emit was folded on
+    // 2026-08-13; this one was not, because back then it carried the plug-in's
+    // announced name and not a REAPER track name — reading P_NAME live earlier
+    // today is what dragged UTF-8 into this cell ([[surface-lcd-latin1-umlauts]]).
+    // BEFORE the snprintf, because "%.9s" counts BYTES: on UTF-8 it would cut an
+    // umlaut in half, which is the same trap the soft-key label documents.
+    nm = utf8ToLatin1(nm);
     char lbl[16] = {0};
     if (!nm.empty()) {
         // Two Meters on ONE track announce the same track name, so the label read
@@ -23545,9 +23554,15 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             winStart = std::clamp(winStart, 0, std::max(0, n - 7));
 
             std::array<uint8_t, 200> row{};   // NUL-filled
+            // Folded HERE, at the emit, and BEFORE the 24-byte cut: preset names
+            // come off DISK, so a user-saved one can carry an umlaut, and the cut
+            // counts bytes. Same rule as every other UF1 name emit
+            // ([[surface-lcd-latin1-umlauts]]); the ASCII callers below are
+            // unaffected by the fold.
             auto setField = [&](int f, const std::string& s) {
-                for (size_t k = 0; k < s.size() && k < 24; ++k)
-                    row[(size_t)f * 25 + k] = (uint8_t)s[k];
+                const std::string t = utf8ToLatin1(s);
+                for (size_t k = 0; k < t.size() && k < 24; ++k)
+                    row[(size_t)f * 25 + k] = (uint8_t)t[k];
             };
             setField(0, "METER");
             if (!have)       setField(1, "(no meter)");
