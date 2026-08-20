@@ -729,6 +729,13 @@ if(NOT WIN32)
     target_include_directories(test_ssl_meter PRIVATE src)
     add_test(NAME ssl_meter COMMAND test_ssl_meter)
 
+    # Pulls PluginChunkPatch.cpp in whole (see the file header) — do NOT also
+    # list it as a source or every symbol lands twice.
+    add_executable(test_ssl_preset_chunk tests/test_ssl_preset_chunk.cpp)
+    target_include_directories(test_ssl_preset_chunk PRIVATE
+        src "${REAPER_SDK_DIR}/sdk" "${WDL_DIR}")
+    add_test(NAME ssl_preset_chunk COMMAND test_ssl_preset_chunk)
+
     # Socket-reclaim regression for the 2026-08-17 host kill. Drives the real
     # impersonator over loopback, so it is POSIX-only (SO_LINGER/RST + /dev/fd)
     # and needs no REAPER API. Exits 77 = skipped when the ports are taken.

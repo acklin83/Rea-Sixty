@@ -57,4 +57,15 @@ int togglePluginAB(MediaTrack* track);
 // One chunk read covers both flags; cheaper than two separate calls.
 void readPluginToggleStates(MediaTrack* track, int& ab, int& hq);
 
+// Load an SSL preset FILE into one plug-in instance the way the plug-in's own
+// browser does: through its state chunk, so the instance ends up SHOWING the
+// preset rather than "that preset, modified". `presetPath` is the .xml on disk
+// (it becomes the slot's LastLoadedPreset), `presetXml` its contents. Only ids
+// the instance already carries are written, and only in the ACTIVE A/B slot.
+// Returns the number of values written, or 0 when the chunk is not in the shape
+// this can safely rewrite — then NOTHING was written and the caller should fall
+// back to setting the host parameters.
+int loadSslPresetIntoInstance(MediaTrack* track, int fx,
+                              const char* presetPath, const char* presetXml);
+
 } // namespace uf8

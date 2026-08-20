@@ -17114,6 +17114,27 @@ static int uf1LoadMeterPresetXml_(MediaTrack* tr, int fx, const std::string& pat
     { char buf[4096]; size_t n; while ((n = fread(buf, 1, sizeof(buf), f)) > 0) xml.append(buf, n); }
     fclose(f);
 
+    // ⇨ THE PLUG-IN'S OWN ROUTE FIRST. Setting host parameters (below) reproduces
+    // the preset's VALUES, and the plug-in still reads "the last preset,
+    // modified" — because SSL does not derive the loaded preset from the values,
+    // it keeps it as an attribute in its state (<A LastLoadedPreset="…">). Frank
+    // 2026-08-20: "er soll doch im plugin auch das preset laden! jetzt ist es
+    // einfach das geladene preset mit änderungen!". So write the state, and keep
+    // the parameter path as the fallback for a chunk this cannot safely rewrite.
+    if (const int viaChunk =
+            uf8::loadSslPresetIntoInstance(tr, fx, path.c_str(), xml.c_str())) {
+        if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+            std::fprintf(lg,
+                         "[uf1] meter preset: %d values via chunk  track=%d fx=%d"
+                         "  (%s)\n",
+                         viaChunk,
+                         (int)GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"), fx,
+                         path.c_str());
+            std::fclose(lg);
+        }
+        return viaChunk;
+    }
+
     // name → param-index for this FX (GetParamName strings match the map's `name`).
     std::map<std::string, int> nameToIdx;
     const int nParams = TrackFX_GetNumParams(tr, fx);
@@ -17162,8 +17183,8 @@ static int uf1LoadMeterPresetXml_(MediaTrack* tr, int fx, const std::string& pat
     // 6 skipped", and neither is visible on the surface.
     if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
         std::fprintf(lg,
-                     "[uf1] meter preset: %d applied, %d skipped  track=%d fx=%d"
-                     "  (%s)\n",
+                     "[uf1] meter preset (param fallback): %d applied, "
+                     "%d skipped  track=%d fx=%d  (%s)\n",
                      applied, skipped,
                      (int)GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"), fx,
                      path.c_str());

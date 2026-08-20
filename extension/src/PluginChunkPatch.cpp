@@ -355,4 +355,234 @@ void readPluginToggleStates(MediaTrack* tr, int& ab, int& hq) {
     }
 }
 
+
+// ── Native preset load: the plug-in's own state, not just its parameters ───
+// Setting the host parameters gets the VALUES right and the plug-in still shows
+// "that preset, modified" — because what SSL calls the loaded preset is not a
+// function of the values at all, it is an ATTRIBUTE in the state:
+//   <A LastLoadedPreset="/Library/…/Presets/MeterPro/K-20.xml">
+// (Frank 2026-08-20: "er soll doch im plugin auch das preset laden! jetzt ist es
+// einfach das geladene preset mit änderungen!")
+//
+// So write it where SSL keeps it. REAPER hands the instance's chunk over
+// verbatim through TrackFX_Get/SetNamedConfigParm("vst_chunk") — which is also
+// the ONLY route that survives a Meter Pro: its chunk is ~840 KB (the loudness
+// history rides along), and GetTrackStateChunk would have to carry the whole
+// track and would truncate.
+//
+// ⚠ THIS EDIT CHANGES THE LENGTH, and the container counts bytes in three
+// places. Measured over 113 real SSL blocks out of Frank's own template chains
+// and test project (2026-08-20):
+//   * "VC2!" + uint32 sits immediately before the XML, and that uint32 IS the
+//     XML length. True for EVERY block, whichever plug-in.
+//   * two further uint32 lengths live in the first 128 bytes, always exactly 16
+//     apart, both counting the blob minus a small constant. Their OFFSET is not
+//     fixed (48/60 when the int at offset 8 is 2, 64/76 when it is 4), so they
+//     are found BY VALUE, never by position.
+// Everything else is copied byte for byte. If any of that does not hold, this
+// writes NOTHING and returns 0, and the caller falls back to setting the host
+// parameters — a preset with the right values beats a wrecked instance.
+
+namespace {
+
+uint32_t rdU32(const std::string& b, size_t o) {
+    return  (uint32_t)(uint8_t)b[o]
+         | ((uint32_t)(uint8_t)b[o + 1] << 8)
+         | ((uint32_t)(uint8_t)b[o + 2] << 16)
+         | ((uint32_t)(uint8_t)b[o + 3] << 24);
+}
+
+void wrU32(std::string& b, size_t o, uint32_t v) {
+    b[o]     = (char)( v        & 0xFF);
+    b[o + 1] = (char)((v >> 8)  & 0xFF);
+    b[o + 2] = (char)((v >> 16) & 0xFF);
+    b[o + 3] = (char)((v >> 24) & 0xFF);
+}
+
+std::string xmlAttrEscape(const std::string& s) {
+    std::string o;
+    o.reserve(s.size() + 8);
+    for (char c : s) {
+        switch (c) {
+            case '&':  o += "&amp;";  break;
+            case '<':  o += "&lt;";   break;
+            case '>':  o += "&gt;";   break;
+            case '"':  o += "&quot;"; break;
+            default:   o.push_back(c);
+        }
+    }
+    return o;
+}
+
+// Substitute every value the preset names into the ACTIVE A/B slot of `xml`, and
+// point that slot's LastLoadedPreset at the file. Returns how many values were
+// substituted. Only ids the instance ALREADY carries are touched: the plug-in's
+// own identity lives in the same state (HostTrackIndex, SessionDataId, UniqueId)
+// and no preset may overwrite it.
+int applyPresetToStateXml(std::string& xml,
+                          const std::string& presetXml,
+                          const std::string& presetPath)
+{
+    // Active slot — the same StateASelected the HQ / A-B patches above read.
+    char tag = 'A';
+    const size_t sas = xml.find("StateASelected=\"");
+    if (sas != std::string::npos && sas + 16 < xml.size())
+        tag = (xml[sas + 16] == '0') ? 'B' : 'A';
+
+    const std::string open = std::string("<") + tag;
+    size_t slotOpen = std::string::npos;
+    for (size_t p = 0; ; ) {
+        const size_t h = xml.find(open, p);
+        if (h == std::string::npos) break;
+        const char after = (h + 2 < xml.size()) ? xml[h + 2] : '\0';
+        if (after == ' ' || after == '>') { slotOpen = h; break; }
+        p = h + 2;
+    }
+    size_t regionStart = 0, regionEnd = xml.size();
+    if (slotOpen != std::string::npos) {
+        const size_t gt = xml.find('>', slotOpen);
+        const std::string close = std::string("</") + tag + ">";
+        const size_t e = (gt == std::string::npos)
+                       ? std::string::npos : xml.find(close, gt);
+        if (gt != std::string::npos && e != std::string::npos) {
+            regionStart = gt + 1; regionEnd = e;
+        } else {
+            slotOpen = std::string::npos;   // no A/B slots → whole state
+        }
+    }
+
+    const size_t ps = xml.find("<PROCESSOR_STATE>", regionStart);
+    if (ps == std::string::npos || ps > regionEnd) return 0;
+    const size_t pe = xml.find("</PROCESSOR_STATE>", ps);
+    if (pe == std::string::npos || pe > regionEnd) return 0;
+    std::string body = xml.substr(ps, pe - ps);
+
+    int applied = 0;
+    for (size_t p = 0; (p = presetXml.find("<PARAM", p)) != std::string::npos; ) {
+        const size_t end = presetXml.find("/>", p);
+        if (end == std::string::npos) break;
+        const std::string t = presetXml.substr(p, end - p);
+        p = end + 2;
+        const size_t ip = t.find("id=\""), vp = t.find("value=\"");
+        if (ip == std::string::npos || vp == std::string::npos) continue;
+        const size_t ie = t.find('"', ip + 4), ve = t.find('"', vp + 7);
+        if (ie == std::string::npos || ve == std::string::npos) continue;
+        // id="X" with the closing quote, so no id can be another's prefix.
+        const std::string key = "id=\"" + t.substr(ip + 4, ie - (ip + 4)) + "\"";
+        const size_t at = body.find(key);
+        if (at == std::string::npos) continue;   // this variant has no such id
+        const size_t vs = body.find("value=\"", at);
+        if (vs == std::string::npos) continue;
+        const size_t tagEnd = body.find("/>", at);
+        if (tagEnd != std::string::npos && tagEnd < vs) continue;  // other tag
+        const size_t vsEnd = body.find('"', vs + 7);
+        if (vsEnd == std::string::npos) continue;
+        body.replace(vs + 7, vsEnd - (vs + 7), t.substr(vp + 7, ve - (vp + 7)));
+        ++applied;
+    }
+    if (applied == 0) return 0;
+    xml.replace(ps, pe - ps, body);   // slotOpen sits BEFORE ps → still valid
+
+    // The attribute the plug-in SHOWS. Everything above only makes the values
+    // agree with it.
+    if (slotOpen != std::string::npos) {
+        const size_t gt = xml.find('>', slotOpen);
+        const std::string esc = xmlAttrEscape(presetPath);
+        const size_t at = xml.find("LastLoadedPreset=\"", slotOpen);
+        if (at != std::string::npos && gt != std::string::npos && at < gt) {
+            const size_t e = xml.find('"', at + 18);
+            if (e != std::string::npos && e < gt)
+                xml.replace(at + 18, e - (at + 18), esc);
+        } else {
+            xml.insert(slotOpen + 2, " LastLoadedPreset=\"" + esc + "\"");
+        }
+    }
+    return applied;
+}
+
+// Rewrite ONE decoded chunk in place: preset values into the active slot,
+// LastLoadedPreset onto it, and the three byte counts fixed up. Returns the
+// number of values written, 0 when the blob is not in the shape described above
+// (and then `bin` is untouched). Pure — no REAPER API, so the test can drive it.
+int patchSslChunkWithPreset(std::string& bin,
+                            const std::string& presetPath,
+                            const std::string& presetXml)
+{
+    if (bin.size() < 160) return 0;
+    const size_t xs = bin.find("<?xml");
+    size_t xe = bin.find("</SSL_PLUGIN_STATE>");
+    if (xs == std::string::npos || xe == std::string::npos || xs < 8) return 0;
+    xe += 19;
+    if (bin.compare(xs - 8, 4, "VC2!") != 0) return 0;
+    if (rdU32(bin, xs - 4) != (uint32_t)(xe - xs)) return 0;
+
+    std::vector<size_t> lenAt;                       // found by VALUE, see above
+    for (size_t o = 8; o + 4 <= 128 && o + 4 <= xs; o += 4) {
+        const uint32_t v = rdU32(bin, o);
+        if (v <= bin.size() && v + 1024 >= bin.size() && v > (uint32_t)(xe - xs))
+            lenAt.push_back(o);
+    }
+    if (lenAt.size() != 2) return 0;
+    if (rdU32(bin, lenAt[0]) != rdU32(bin, lenAt[1]) + 16) return 0;
+
+    std::string xml = bin.substr(xs, xe - xs);
+    const size_t wasLen = xml.size();
+    const int applied = applyPresetToStateXml(xml, presetXml, presetPath);
+    if (applied <= 0) return 0;
+    const long delta = (long)xml.size() - (long)wasLen;
+
+    std::string out = bin.substr(0, xs) + xml + bin.substr(xe);
+    wrU32(out, xs - 4, (uint32_t)xml.size());
+    for (size_t o : lenAt) wrU32(out, o, (uint32_t)((long)rdU32(out, o) + delta));
+    bin.swap(out);
+    return applied;
+}
+
+}  // namespace
+
+int loadSslPresetIntoInstance(MediaTrack* tr, int fx,
+                              const char* presetPath, const char* presetXml)
+{
+    if (!tr || !presetPath || !*presetPath || !presetXml || !*presetXml) return 0;
+    if (!TrackFX_GetNamedConfigParm || !TrackFX_SetNamedConfigParm) return 0;
+
+    // Grown, not guessed: a truncated read looks exactly like a plug-in whose
+    // chunk we don't understand, and that would silently downgrade every load.
+    std::string b64;
+    for (size_t cap = 1u << 20; cap <= (1u << 26); cap <<= 2) {
+        std::vector<char> buf(cap, 0);
+        if (TrackFX_GetNamedConfigParm(tr, fx, "vst_chunk", buf.data(), (int)cap)
+            && buf[0]) {
+            std::string got(buf.data());
+            if (got.size() + 64 < cap) { b64.swap(got); break; }
+        }
+    }
+    if (b64.empty()) return 0;
+
+    std::string bin = b64Decode(b64);
+    const int applied = patchSslChunkWithPreset(bin, presetPath, presetXml);
+    if (applied <= 0) return 0;
+
+    if (!TrackFX_SetNamedConfigParm(tr, fx, "vst_chunk", b64Encode(bin).c_str()))
+        return 0;
+
+    // Read back. If the plug-in did not take it, put the ORIGINAL back rather
+    // than leave the instance in whatever a rejected chunk made of it.
+    {
+        std::vector<char> chk(1u << 20, 0);
+        std::string back;
+        if (TrackFX_GetNamedConfigParm(tr, fx, "vst_chunk", chk.data(),
+                                       (int)chk.size()) && chk[0])
+            back = b64Decode(std::string(chk.data()));
+        // A short read is fine here: the marker sits far past 1 MB only for
+        // chunks that big, and those we simply do not second-guess.
+        if (back.size() > 160 && back.size() < (1u << 20) * 3 / 4 &&
+            back.find("</SSL_PLUGIN_STATE>") == std::string::npos) {
+            TrackFX_SetNamedConfigParm(tr, fx, "vst_chunk", b64.c_str());
+            return 0;
+        }
+    }
+    return applied;
+}
+
 }  // namespace uf8
