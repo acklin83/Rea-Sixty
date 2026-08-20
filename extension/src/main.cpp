@@ -5062,7 +5062,7 @@ std::atomic<double> g_uf1FadeFollowMinSec{0.5};
 // off. Same contract as the nav-centre spotlight zoom.
 std::atomic<bool>   g_uf1FadeFollowStashed{false};
 double              g_uf1FadeFollowSavedStart = 0.0, g_uf1FadeFollowSavedEnd = 0.0;
-// ---- Cmd+jog = pull a time selection (Playhead / Scrub, 2026-08-19) --------
+// ---- Cmd+jog = pull a time selection (Playhead only, 2026-08-19) ----------
 // Cmd is the "different verb on the same axis" modifier — copy in Items, move in
 // Fades — and in the two cursor modes there was no verb on it at all. Shift could
 // not have it: Shift is the FINE divisor on every mode's wheel and says so in the
@@ -5074,12 +5074,17 @@ double              g_uf1FadeFollowSavedStart = 0.0, g_uf1FadeFollowSavedEnd = 0
 // the ANCHOR at the cursor, every detent after it drags the far end. Let Cmd go
 // and the selection stays put; press again and a new one starts. Turning back
 // onto the anchor collapses it, which is REAPER's own way of clearing one.
+//
+// ⛔ SCRUB HAD THIS AND LOST IT AGAIN (Frank 2026-08-20, at the device: "In Scrub
+// mode funktioniert time selection nicht - raus dort"). The far end there was
+// accumulated from the deltas we hand CSurf_ScrubAmt, because writing the edit
+// cursor underneath a continuous scrub feed would be a second hand on the same
+// wheel. That accumulation had nothing anchoring it to what REAPER actually did
+// with those deltas, and on the hardware the two came apart. Do not rebuild it
+// from this end: it would need a POSITION to read back out of the scrub engine,
+// and the SDK offers none.
 std::atomic<bool>   g_uf1TimeSelArmed{false};
 double              g_uf1TimeSelAnchor = 0.0;
-// Scrub tracks its own far end instead of reading the cursor: CSurf_ScrubAmt
-// drives REAPER's scrub engine and we must not also write the edit cursor under
-// it, so the selection is accumulated from the same deltas the scrub gets.
-double              g_uf1TimeSelScrubEnd = 0.0;
 // Undo coalescing for the Fades jog. Identical mechanism to the envelope jog:
 // the wheel is free-running (no key to release), so the only gesture boundary
 // there is is the wheel going still. onTimer closes the block after 300 ms.
@@ -11225,6 +11230,16 @@ void applyUf1JogFades_(int count, double timeDelta)
     } else if (timeDelta == 0.0) {
         return;
     }
+    // ⇨ THE FADE-OUT RUNS THE WHEEL THE OTHER WAY (Frank 2026-08-20, at the
+    // device). The two fades are mirror images of each other on screen, and a
+    // wheel that grows both on the same turn is right at one end and wrong at
+    // the other — you stop feeling which end you are on and start reading it.
+    //
+    // ONLY THE LENGTH is mirrored. Cmd moves in TIME and Ctrl bends a CURVE, and
+    // time in particular has to keep running the same way whichever end you are
+    // standing at: a wheel that sends the seam left here and right there would
+    // trade one confusion for a worse one.
+    const double lenDelta = outEdge ? -timeDelta : timeDelta;
     if (!g_uf1JogFadeUndoOpen.exchange(true)) Undo_BeginBlock2(nullptr);
     g_uf1JogFadeUndoUntilMs.store(nowMs_() + 300);
     for (MediaItem* it : items) {
@@ -11233,8 +11248,8 @@ void applyUf1JogFades_(int count, double timeDelta)
         if (curve) { uf1FadeCurve_(it, outEdge, curveDelta); continue; }
         MediaItem *a = nullptr, *b = nullptr;
         uf1FadeSite_(it, outEdge, &a, &b);
-        if (b) uf1FadeResizeCross_(a, b, timeDelta);
-        else   uf1FadeResizeManual_(a, outEdge, timeDelta);
+        if (b) uf1FadeResizeCross_(a, b, lenDelta);
+        else   uf1FadeResizeManual_(a, outEdge, lenDelta);
     }
     uf1FadeFollowFrame_(false);
     UpdateArrange();
@@ -11379,16 +11394,13 @@ void uf1JogDispatch_(int count)
         case Uf1JogUnit::Grid:    scale = uf1JogGridSec_();   break;
     }
     const double delta = step * scale * count;   // seconds
-    // Cmd in the two cursor modes = pull a time selection instead of just moving.
-    // Latched here, once, so both cases below can ask "are we pulling?" without
-    // each keeping its own edge detector. Released Cmd leaves the selection alone.
-    const bool pulling = (mode == Uf1JogMode::Playhead || mode == Uf1JogMode::Scrub)
+    // Cmd in Playhead = pull a time selection instead of just moving the cursor.
+    // Latched, not held by a key: the first detent drops the anchor, the rest
+    // drag the far end, and releasing Cmd leaves the selection alone.
+    const bool pulling = (mode == Uf1JogMode::Playhead)
                       && uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd);
     if (!pulling) g_uf1TimeSelArmed.store(false);
-    else if (!g_uf1TimeSelArmed.exchange(true)) {
-        g_uf1TimeSelAnchor   = GetCursorPosition();
-        g_uf1TimeSelScrubEnd = g_uf1TimeSelAnchor;
-    }
+    else if (!g_uf1TimeSelArmed.exchange(true)) g_uf1TimeSelAnchor = GetCursorPosition();
     switch (mode) {
         case Uf1JogMode::Playhead:
             uf1JogMovePlayhead_(delta, unit, step);
@@ -11407,17 +11419,6 @@ void uf1JogDispatch_(int count)
                 double np = GetCursorPosition() + delta;
                 if (np < 0.0) np = 0.0;
                 SetEditCurPos(np, true, false);
-            }
-            // Pulling while scrubbing: you HEAR where the edge is going, which is
-            // the whole point of doing it here rather than in Playhead. The far
-            // end is accumulated from the same delta the scrub engine got — the
-            // edit cursor is deliberately not written, because CSurf_ScrubAmt is
-            // a continuous feed and a cursor write underneath it would be a
-            // second hand on the same wheel.
-            if (pulling) {
-                g_uf1TimeSelScrubEnd += delta;
-                if (g_uf1TimeSelScrubEnd < 0.0) g_uf1TimeSelScrubEnd = 0.0;
-                uf1TimeSelSet_(g_uf1TimeSelScrubEnd);
             }
             break;
         }

@@ -736,24 +736,22 @@ Three modifiers stack on the jog:
 
 - **Shift** — fine. Divides the step (default ÷4).
 - **Cmd** — copy instead of move. In Fades it means move instead of resize, and
-  in Playhead and Scrub it pulls a time selection.
+  in Playhead it pulls a time selection.
 - **Ctrl** — cross axis. In Items, that means moving track by track rather than in
   time; the vertical axis is discrete, so it steps one track at a time. In Fades
   it takes the fade curve rather than its length.
 
 ## Pulling a time selection
 
-In **Playhead** and **Scrub**, hold **Cmd** and turn: the first click drops an
-anchor where the cursor is and every one after it drags the other end, so a time
-selection grows out of the wheel. Let Cmd go and the selection stays. Press again
-and a new one starts from wherever you are. Turn back onto the anchor and it
-collapses, which is how you clear one without reaching for anything.
+In **Playhead**, hold **Cmd** and turn: the first click drops an anchor where the
+cursor is and every one after it drags the other end, so a time selection grows
+out of the wheel. Let Cmd go and the selection stays. Press again and a new one
+starts from wherever you are. Turn back onto the anchor and it collapses, which
+is how you clear one without reaching for anything.
 
-In Playhead the far end is the cursor, and it snaps to the grid if that is the
-step unit you have set. In Scrub you **hear** the material as the edge travels,
-which is the reason the gesture is there and not only in Playhead.
-
-**Shift** still divides the step, so Shift and Cmd together pull finely.
+The far end is the cursor, so it snaps to the grid if that is the step unit you
+have set, and **Shift** still divides the step: Shift and Cmd together pull
+finely.
 
 ## Razor
 
@@ -772,7 +770,11 @@ The wheel changes a fade length. Which fade is decided by the edge you are aimin
 at and by what is next to it, and by nothing else.
 
 Aim at the **fade-in** and you are on the item's left edge, at the **fade-out**
-and you are on its right. If another item touches or overlaps that edge, the fade
+and you are on its right. The wheel runs **the other way round on the fade-out**,
+because the two fades are mirror images: one turn does the same thing to both
+ends of the item, rather than the same thing to both numbers. Moving with Cmd and
+bending with Ctrl are not mirrored, so time keeps running the same way whichever
+end you are on. If another item touches or overlaps that edge, the fade
 there **is** the crossfade with it, and the wheel dials the crossfade: the overlap
 grows and shrinks around the seam, both items keep their audio where it is, and
 two items that merely butt together become a real crossfade the moment you turn
