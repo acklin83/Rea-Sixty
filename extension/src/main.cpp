@@ -16497,11 +16497,37 @@ bool uf1PinnedMeterTrackFx_(MediaTrack*& trOut, int& fxOut)
 // index 0 is V-Pot1's name field (name-only form, as the entry burst's "MASTER").
 // Main-thread only (g_uf1_dev). The selection also routes which instance's
 // meters getMeter/getOverload return, so the name tracks what is on screen.
-void uf1EmitMeterInstanceLabel_()
+void uf1EmitMeterInstanceLabel_(bool force = true)
 {
     if (!g_uf1_dev) return;
     const int count = sslcore::meterInstanceCount();
-    const std::string nm = sslcore::currentMeterName();
+    // ⇨ THE NAME COMES FROM REAPER, NOT FROM THE ANNOUNCEMENT.
+    // The plug-in announces its HostTrackName ONCE, when it connects, and the
+    // impersonator stops reading that client's announcements as soon as it has
+    // name and index. So a track RENAMED later kept its old label here for the
+    // rest of the session (Frank 2026-08-20). We already resolve the real track
+    // for this instance — ask REAPER, which cannot go stale. The announced name
+    // stays as the fallback for the moment before an instance is correlated.
+    std::string nm;
+    {
+        MediaTrack* mtr = nullptr; int mfx = -1;
+        if (uf1PinnedMeterTrackFx_(mtr, mfx) && mtr) {
+            char buf[256] = {0};
+            GetSetMediaTrackInfo_String(mtr, "P_NAME", buf, false);
+            nm = buf;
+            // Same fallbacks the channel strip uses, so one instance never reads
+            // "MASTER" on one screen and blank on the other.
+            if (nm.empty()) {
+                if (mtr == GetMasterTrack(nullptr)) nm = "MASTER";
+                else {
+                    const int no = int(GetMediaTrackInfo_Value(mtr, "IP_TRACKNUMBER"));
+                    char fb[16]; std::snprintf(fb, sizeof(fb), "CH %d", no > 0 ? no : 0);
+                    nm = fb;
+                }
+            }
+        }
+    }
+    if (nm.empty()) nm = sslcore::currentMeterName();
     char lbl[16] = {0};
     if (!nm.empty()) {
         // Two Meters on ONE track announce the same track name, so the label read
@@ -16520,6 +16546,14 @@ void uf1EmitMeterInstanceLabel_()
         std::snprintf(lbl, sizeof(lbl), "AUTO");
     else
         std::snprintf(lbl, sizeof(lbl), "%d/%d", sslcore::meterSelection() + 1, count);
+    // ⚠ DEDUPED, BUT NEVER AGAINST A BURST. Every existing caller sits right
+    // after a screen entry or a state change that may have wiped the cell, so
+    // they all force. Only the per-tick rename watch dedupes — otherwise this
+    // would be a send per frame, and the meter link has no room for that.
+    static std::string sLast;
+    const std::string cur = lbl;
+    if (!force && cur == sLast) return;
+    sLast = cur;
     std::vector<uint8_t> p;
     p.push_back(0x00);                                // V-Pot1 index
     for (const char* c = lbl; *c; ++c) p.push_back(uint8_t(*c));
@@ -27020,6 +27054,12 @@ void uf1PaintChannel_()
     // view/screen entry block above already emits the label on those changes.
     if (meterView && instChanged && !viewChanged && !screenChanged)
         uf1EmitMeterInstanceLabel_();
+    // …and a RENAME is none of those events, so nothing re-emitted the label and
+    // the meter view kept the old name for the rest of the session (Frank
+    // 2026-08-20). Watched per tick; the dedup inside means it only reaches the
+    // device when the text actually changed.
+    else if (meterView && !viewChanged && !screenChanged)
+        uf1EmitMeterInstanceLabel_(/*force*/ false);
     if (meterView && (viewChanged || screenChanged || pageChanged || instChanged)) {
         // Read the values off the instance V-Pot1 selected (the pin), not the
         // focused track — so the displayed values follow the selection.
