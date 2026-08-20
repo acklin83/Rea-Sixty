@@ -23726,7 +23726,18 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                     // time, or the path was already selected (then there is
                     // nothing to echo), and the chunk load takes over. So this
                     // can only be as good as before, or better.
-                    if (sslcore::presetSelection() != path &&
+                    // ⛔ ONLY when the two identities agree. setPresetSelection
+                    // addresses the selected UDP PORT; ptr/pfx came from
+                    // uf1PinnedMeterTrackFx_, which falls back to the master's
+                    // monitoring chain when the announced track index resolves to
+                    // nothing. Where they disagree, the property write would load
+                    // the preset into SOMEBODY ELSE'S meter — a silent edit on a
+                    // track the user is not even looking at. Then the chunk path,
+                    // which addresses the FX itself, is the only correct one.
+                    const int annIdx = sslcore::currentMeterTrackIndex();
+                    MediaTrack* annTr = (annIdx > 0)
+                                      ? GetTrack(nullptr, annIdx - 1) : nullptr;
+                    if (annTr == ptr && sslcore::presetSelection() != path &&
                         sslcore::setPresetSelection(path)) {
                         g_uf1PresetPending      = path;
                         g_uf1PresetPendingUntil = nowMs_() + 600;
@@ -23760,7 +23771,15 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 put(0x0102, {0x09});
                 put(0x010d, {0x0a, 0x06, 0x06, 0x0a});
                 txt(0x0104, 0x02, "Navigate Back");
-                txt(0x010e, 0x00, "HARDWARE OUTPUT");   // V-Pot1 label (cap uf1_rp)
+                // ⚠ NOT the capture's "HARDWARE OUTPUT" (cap uf1_rp). That string
+                // is not a browser caption, it is the INSTANCE the capture
+                // session happened to be metering — replaying it renamed Frank's
+                // instance to somebody else's every time the browser opened
+                // ("dort steht hardware anstatt Adi on Po", 2026-08-20). Same
+                // class as the Loudness axis numbers earlier today: text inside a
+                // captured frame carries that session's state. The live label is
+                // the one the meter view already computes.
+                uf1EmitMeterInstanceLabel_();
                 txt(0x010e, 0x03, "Select");            // V-Pot4 label
             }
             const int n   = (int)g_uf1PresetList.size();
@@ -23846,15 +23865,39 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // property is not a load command on this version, and then the chunk path
     // still does the job. Either way this runs once and clears.
     if (!g_uf1PresetPending.empty()) {
-        const bool done = (sslcore::presetSelection() == g_uf1PresetPending);
-        if (done || nowMs_() > g_uf1PresetPendingUntil) {
+        // ⛔ THE RECEIPT MUST COME FROM THE INSTANCE THE USER IS LOOKING AT.
+        // setPresetSelection addresses a UDP PORT, uf1PinnedMeterTrackFx_ resolves
+        // an FX, and those two can name different instances — the FX side falls
+        // back to the master's monitoring chain when the announced track index
+        // resolves to nothing. Reading the port's echo back therefore confirmed a
+        // load that had happened somewhere else, the fallback never fired, and
+        // nothing arrived in the plug-in on screen (Frank 2026-08-20: "lädt
+        // nichts mehr"). So the proof is read from the FX itself, throttled
+        // because it costs a chunk read.
+        static int64_t sNextCheck = 0;
+        const int64_t nowP = nowMs_();
+        bool done = false;
+        if (nowP >= sNextCheck && g_uf1PresetPendingTr) {
+            sNextCheck = nowP + 150;
+            char have[512] = {0};
+            if (uf8::sslLoadedPresetName(g_uf1PresetPendingTr, g_uf1PresetPendingFx,
+                                         have, sizeof(have))) {
+                const size_t sl = g_uf1PresetPending.find_last_of("/\\");
+                std::string want = (sl == std::string::npos)
+                                 ? g_uf1PresetPending
+                                 : g_uf1PresetPending.substr(sl + 1);
+                if (want.size() > 4) want.resize(want.size() - 4);   // ".xml"
+                done = (want == have);
+            }
+        }
+        if (done || nowP > g_uf1PresetPendingUntil) {
             if (!done && g_uf1PresetPendingTr)
                 uf1LoadMeterPresetXml_(g_uf1PresetPendingTr, g_uf1PresetPendingFx,
                                        g_uf1PresetPending);
             if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
                 std::fprintf(lg, "[uf1] meter preset: %s  (%s)\n",
-                             done ? "loaded by the plug-in (PresetSelection)"
-                                  : "no echo, fell back to the chunk",
+                             done ? "the plug-in loaded it (PresetSelection)"
+                                  : "the instance did not take it, chunk instead",
                              g_uf1PresetPending.c_str());
                 std::fclose(lg);
             }
