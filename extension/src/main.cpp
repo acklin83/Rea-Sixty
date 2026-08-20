@@ -16971,9 +16971,141 @@ static void uf1RefreshMeterPresetList_(MediaTrack* tr, int fx)
     if (g_uf1PresetSel < 0) g_uf1PresetSel = 0;
 }
 
-// Load one SSL preset XML into the pinned instance by setting the matching host
-// params to their PLAIN values (the XML `value` IS the plain value — units match
-// the dump 1:1). Returns the number of params applied. Main-thread.
+// ── SSL preset value → REAPER's parameter domain ─────────────────────────
+// ⛔ THE NUMBER IN THE FILE IS NOT A NORMALISED VALUE, and normalised is the only
+// domain REAPER has for a VST3: the format exposes every parameter as 0..1 plus a
+// string formatter. So TrackFX_SetParam(…, 500.0) for "500 ms" does not say
+// 500 ms, it says far past the top of the range — and the parameter rails. Loading
+// a preset wrote a wall of extremes into the plug-in instead of the preset
+// (Frank 2026-08-20: "presets werden nicht geladen").
+//
+// SSL writes each value in the PLUG-IN's own domain, and JUCE has two of those:
+//   * a CHOICE parameter stores its INDEX. RtaScaleBottom="11.0" is the twelfth
+//     entry (-120 dB), not eleven decibels — and RtaPeakHold="4.0" is the fifth
+//     entry, which reads "3 sec", so the index is not the seconds either.
+//   * a FLOAT parameter stores its PLAIN value in its own unit.
+//     AnalogueMetersRefLevel="-18.0" really is -18.0 dBFS.
+// Both halves are verified rather than assumed: the factory "Default Preset.xml"
+// read against the 57-parameter dump reproduces every stepped id as
+// index/(steps-1) and every continuous one as its plain value inside its own
+// range (RMS Integration 500 → (500-10)/4990 = 0.0982, the dump's figure to the
+// last digit).
+//
+// WHICH of the two a parameter is comes from REAPER (TrackFX_GetParameterStepSizes),
+// never from a table, and the continuous ones are inverted through the plug-in's
+// OWN formatter: read the number it prints at each end of the range, aim, bisect,
+// then check that it reads back as the number the file asked for. Nothing here
+// hardcodes a range, and whatever fails that check is SKIPPED instead of guessed
+// — the same rule, for the same reason, as the parameter NAMES above.
+
+// Leading number of a formatted value ("-18.0 dBFS", "+4 dBu", "500.0 ms").
+// False for the strings that carry no number at all ("Off", "Infinite",
+// "L+R Sum") — exactly the ones no number may be guessed out of.
+static bool sslFmtNumber_(const char* s, double& out)
+{
+    if (!s) return false;
+    while (*s == ' ' || *s == '\t' || *s == '+') ++s;
+    const char* d = (*s == '-') ? s + 1 : s;
+    if (!((*d >= '0' && *d <= '9') || *d == '.')) return false;  // keeps strtod off
+    char* end = nullptr;                                         // "inf" / "nan"
+    const double v = std::strtod(s, &end);
+    if (end == s) return false;
+    out = v;
+    return true;
+}
+
+// One reading of the plug-in's own value formatter at a normalised position.
+// Prefers the non-destructive host call and falls back to putting the parameter
+// there and reading it back, because TrackFX_FormatParamValueNormalized is
+// documented to need the Cockos VST extensions, which a VST3 need not carry.
+// The fallback is acceptable HERE and nowhere else: we are mid-preset-load, the
+// parameter is about to be overwritten anyway, and the caller puts it back when
+// the search fails.
+struct SslFmtProbe {
+    MediaTrack* tr; int fx; int idx; bool destructive;
+    bool at(double norm, double& num) const
+    {
+        char b[128] = {0};
+        if (!destructive) {
+            if (!TrackFX_FormatParamValueNormalized ||          // null-guarded like
+                !TrackFX_FormatParamValueNormalized(tr, fx, idx, // GetParamFromIdent
+                                                    norm, b, sizeof(b))
+                || !b[0]) return false;
+        } else {
+            TrackFX_SetParamNormalized(tr, fx, idx, norm);
+            if (!TrackFX_GetFormattedParamValue(tr, fx, idx, b, sizeof(b))
+                || !b[0]) return false;
+        }
+        return sslFmtNumber_(b, num);
+    }
+};
+
+// Preset value (choice index or plain unit) → REAPER's 0..1 for THIS parameter on
+// THIS instance. false = could not be established, and then the caller must leave
+// the parameter alone rather than write an approximation of it.
+static bool sslPresetNorm_(MediaTrack* tr, int fx, int idx, double v, double& out)
+{
+    // 1. Stepped (choice / toggle): the file value is the INDEX, and REAPER
+    //    reports the step as 1/(steps-1) of the normalised range.
+    double step = 0.0, smallStep = 0.0, largeStep = 0.0; bool isToggle = false;
+    if (TrackFX_GetParameterStepSizes &&
+        TrackFX_GetParameterStepSizes(tr, fx, idx, &step, &smallStep, &largeStep,
+                                      &isToggle)
+        && step > 0.0 && step <= 1.0) {
+        const double spanF = 1.0 / step;               // = steps - 1
+        const double span  = std::round(spanF);
+        const double i     = std::round(v);
+        if (span >= 1.0 && std::fabs(spanF - span) < 0.01 &&
+            std::fabs(v - i) < 0.01 && i >= 0.0 && i <= span) {
+            out = std::clamp(i / span, 0.0, 1.0);
+            return true;
+        }
+        // Not one of this parameter's indices, so it is not an index at all
+        // (REAPER also reports a step for some continuous parameters). Fall
+        // through and read the number as a plain value.
+    }
+
+    // 2. Continuous: invert the formatter. Any probing that MOVED the parameter
+    //    is undone here — the write below is the only one that may stand.
+    const double before = TrackFX_GetParamNormalized(tr, fx, idx);
+    SslFmtProbe pr{tr, fx, idx, false};
+    double lo = 0.0, hi = 0.0;
+    if (!pr.at(0.0, lo) || !pr.at(1.0, hi)) {
+        pr.destructive = true;
+        if (!pr.at(0.0, lo) || !pr.at(1.0, hi)) {
+            TrackFX_SetParamNormalized(tr, fx, idx, before);
+            return false;
+        }
+    }
+    bool ok = false;
+    double bestN = 0.0, bestV = 0.0;
+    if (hi != lo) {
+        const double tol = std::fabs(hi - lo) * 0.02;
+        const bool   asc = hi > lo;
+        double a = 0.0, b = 1.0;
+        double n   = std::clamp((v - lo) / (hi - lo), 0.0, 1.0);  // linear first —
+        double num = 0.0;                                         // most ranges are
+        if (pr.at(n, num)) {
+            bestN = n; bestV = num;
+            for (int it = 0; it < 16 && std::fabs(bestV - v) > 1e-9; ++it) {
+                if ((num < v) == asc) a = n; else b = n;
+                n = 0.5 * (a + b);
+                if (!pr.at(n, num)) break;
+                if (std::fabs(num - v) < std::fabs(bestV - v)) { bestN = n; bestV = num; }
+            }
+            ok = std::fabs(bestV - v) <= tol;
+        }
+    }
+    if (pr.destructive) TrackFX_SetParamNormalized(tr, fx, idx, before);
+    if (!ok) return false;
+    out = bestN;
+    return true;
+}
+
+// Load one SSL preset XML into the pinned instance: every id the plug-in still
+// has as a host parameter is set to the preset's value, converted into REAPER's
+// domain by sslPresetNorm_ above. Returns the number of params applied.
+// Main-thread.
 static int uf1LoadMeterPresetXml_(MediaTrack* tr, int fx, const std::string& path)
 {
     FILE* f = fopen(path.c_str(), "rb");
@@ -17005,7 +17137,7 @@ static int uf1LoadMeterPresetXml_(MediaTrack* tr, int fx, const std::string& pat
         return -1;
     };
 
-    int applied = 0;
+    int applied = 0, skipped = 0;
     for (size_t pos = 0; (pos = xml.find("<PARAM", pos)) != std::string::npos; ) {
         const size_t end = xml.find("/>", pos);
         if (end == std::string::npos) break;
@@ -17018,9 +17150,24 @@ static int uf1LoadMeterPresetXml_(MediaTrack* tr, int fx, const std::string& pat
         const size_t ve = tag.find('"', vp + 7);
         if (ie == std::string::npos || ve == std::string::npos) continue;
         const int idx = idToIdx(tag.substr(ip + 4, ie - (ip + 4)));
-        if (idx < 0) continue;
-        TrackFX_SetParam(tr, fx, idx, atof(tag.substr(vp + 7, ve - (vp + 7)).c_str()));
+        if (idx < 0) continue;   // view state, or a variant without this parameter
+        const double v = atof(tag.substr(vp + 7, ve - (vp + 7)).c_str());
+        double norm = 0.0;
+        if (!sslPresetNorm_(tr, fx, idx, v, norm)) { ++skipped; continue; }
+        TrackFX_SetParamNormalized(tr, fx, idx, norm);
         ++applied;
+    }
+    // One line per load, because the COUNTS are the diagnosis if a preset ever
+    // looks wrong again: "0 applied" is a different bug from "41 applied,
+    // 6 skipped", and neither is visible on the surface.
+    if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+        std::fprintf(lg,
+                     "[uf1] meter preset: %d applied, %d skipped  track=%d fx=%d"
+                     "  (%s)\n",
+                     applied, skipped,
+                     (int)GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"), fx,
+                     path.c_str());
+        std::fclose(lg);
     }
     return applied;
 }
