@@ -5101,9 +5101,19 @@ std::atomic<double> g_uf1JogStep[kUf1JogModeCount];
 // Which Jog Modes the Scrub-held picker offers (user on/off, analog to the encoder
 // ring visibility). ExtState "uf1JogVis<m>". Default all on.
 std::atomic<bool>   g_uf1JogVisible[kUf1JogModeCount];
+// …and the ORDER they come in. Same shape as the encoder ring
+// (g_uf1EncoderSeq): a PERMUTATION of the mode ints, position to mode, so the
+// SCRUB-held picker walks the order you set instead of the order the enum
+// happens to be written in (Frank 2026-08-20: "die kommen ja in einer
+// Reihenfolge daher"). ExtState "uf1_jog_seq", CSV. Default = enum order, which
+// is exactly what the picker did before, so nothing moves out of the box.
+std::atomic<int>    g_uf1JogSeq[kUf1JogModeCount];
 struct Uf1JogStepInit_ {
     Uf1JogStepInit_() {
-        for (int m = 0; m < kUf1JogModeCount; ++m) g_uf1JogVisible[m].store(true);
+        for (int m = 0; m < kUf1JogModeCount; ++m) {
+            g_uf1JogVisible[m].store(true);
+            g_uf1JogSeq[m].store(m);          // identity = today's enum order
+        }
         auto set = [](Uf1JogMode m, Uf1JogUnit u, double v) {
             g_uf1JogUnit[static_cast<int>(m)].store(static_cast<int>(u));
             g_uf1JogStep[static_cast<int>(m)].store(v);
@@ -8855,17 +8865,20 @@ void uf1JogModeStep_(int rawStep)
     if (accum >=  1.0) { steps = static_cast<int>(accum); accum -= steps; }
     if (accum <= -1.0) { steps = static_cast<int>(accum); accum -= steps; }
     if (steps == 0) return;
-    // Step through the VISIBLE modes only (user on/off, like the encoder ring).
-    const int dir = steps > 0 ? 1 : -1;
-    int m = static_cast<int>(g_uf1JogMode.load());
-    for (int i = 0, n = steps > 0 ? steps : -steps; i < n; ++i) {
-        int cand = m;
-        for (int guard = 0; guard < kUf1JogModeCount; ++guard) {
-            cand = (cand + dir + kUf1JogModeCount) % kUf1JogModeCount;
-            if (g_uf1JogVisible[cand].load()) { m = cand; break; }
-        }
+    // Walk the VISIBLE modes in RING order (g_uf1JogSeq), wrapping — the same
+    // body uf1EncoderStepVisible_ runs for the other ring, so the two pickers
+    // now behave identically and the on-screen carousel can show either.
+    int vis[kUf1JogModeCount]; int n = 0;
+    for (int k = 0; k < kUf1JogModeCount; ++k) {
+        const int c = g_uf1JogSeq[k].load();
+        if (c >= 0 && c < kUf1JogModeCount && g_uf1JogVisible[c].load()) vis[n++] = c;
     }
-    const auto nm = static_cast<Uf1JogMode>(m);
+    if (n == 0) return;                       // everything hidden: nothing to step to
+    int idx = 0;
+    const int cur = static_cast<int>(g_uf1JogMode.load());
+    for (int i = 0; i < n; ++i) if (vis[i] == cur) { idx = i; break; }
+    idx = ((idx + steps) % n + n) % n;
+    const auto nm = static_cast<Uf1JogMode>(vis[idx]);
     if (g_uf1JogMode.exchange(nm) != nm) { uf1JogPersistMode_(nm); g_pageDirty.store(true); }
 }
 
@@ -34791,6 +34804,51 @@ void onTimerBody_()
             if (ms != msPub) { msPub = ms;
                 SetExtState("rea_sixty", "mode_state", ms.c_str(), false); }
         }
+        // ⇨ THE MODE RING, WHILE YOU ARE SCROLLING IT (Frank 2026-08-20).
+        // Both pickers are rings you scroll blind: the surface shows the mode you
+        // are ON and nothing about what is coming. So while MODE or SCRUB is
+        // held, publish the whole VISIBLE ring in its user order plus where you
+        // are in it, and the companion draws it as a carousel. Released, the key
+        // is cleared and the companion falls back to the flash banner.
+        //
+        // Its own ExtState, not mode_banner: that one is transient-by-seq and
+        // hides on a timer, this one is live-while-held and must NOT time out
+        // under your thumb. One publisher per data domain
+        // ([[onscreen-display-architecture]]).
+        {
+            static std::string mrLast;
+            std::string mr;
+            const bool encHeld = g_uf1ModeMenu.load();
+            const bool jogHeld = g_uf1ScrubHeld.load();
+            if (encHeld || jogHeld) {
+                const char* kind = jogHeld ? "Jog" : "Encoder";
+                const int   cur  = jogHeld ? static_cast<int>(g_uf1JogMode.load())
+                                           : static_cast<int>(g_uf1EncoderMode.load());
+                const int   tot  = jogHeld ? kUf1JogModeCount : kEncoderModeCount;
+                std::string names; int idx = 0, n = 0;
+                for (int k = 0; k < tot; ++k) {
+                    const int m = jogHeld ? g_uf1JogSeq[k].load() : g_uf1EncoderSeq[k].load();
+                    if (m < 0 || m >= tot) continue;
+                    const bool vis = jogHeld ? g_uf1JogVisible[m].load()
+                                             : g_uf1EncoderVisible[m].load();
+                    if (!vis) continue;
+                    if (m == cur) idx = n;
+                    names += '\t';
+                    names += jogHeld ? uf1JogModeFriendly(static_cast<Uf1JogMode>(m))
+                                     : encoderModeFriendly(static_cast<EncoderMode>(m));
+                    ++n;
+                }
+                // SCRUB is also held for the Jog picker while the wheel is idle,
+                // so this appears the moment you press it. That is the point.
+                if (n > 0) mr = std::string(kind) + "\t" + std::to_string(idx) + names;
+            }
+            // Diff-guarded: SetExtState on every tick of a held key would be a
+            // write per frame for as long as you hold it.
+            if (mr != mrLast) {
+                mrLast = mr;
+                SetExtState("rea_sixty", "mode_ring", mr.c_str(), false);
+            }
+        }
         // Publish a transient banner label + an incrementing seq so the companion
         // (re)starts its ~2 s hide timer on each fresh change.
         auto fireBanner = [](const std::string& text) {
@@ -40250,6 +40308,29 @@ void reasixty_setUf1JogModeVisible(int mode, bool on)
     SetExtState("rea_sixty", key, on ? "1" : "0", true);
 }
 int reasixty_uf1JogModeCount() { return kUf1JogModeCount; }
+// Ring order, mirroring the encoder ring's accessors one for one.
+int reasixty_uf1JogSeqAt(int pos)
+{
+    if (pos < 0 || pos >= kUf1JogModeCount) return 0;
+    return g_uf1JogSeq[pos].load();
+}
+void reasixty_uf1JogMoveSeq(int pos, int dir)
+{
+    const int other = pos + dir;
+    if (pos   < 0 || pos   >= kUf1JogModeCount) return;
+    if (other < 0 || other >= kUf1JogModeCount) return;
+    const int a = g_uf1JogSeq[pos].load();
+    const int b = g_uf1JogSeq[other].load();
+    g_uf1JogSeq[pos].store(b);
+    g_uf1JogSeq[other].store(a);
+    std::string csv;
+    for (int k = 0; k < kUf1JogModeCount; ++k) {
+        char t[16]; std::snprintf(t, sizeof(t), "%d", g_uf1JogSeq[k].load());
+        if (k) csv += ',';
+        csv += t;
+    }
+    SetExtState("rea_sixty", "uf1_jog_seq", csv.c_str(), true);
+}
 // The LIVE jog mode, for the Settings nav-cross editor: it shows the mode the
 // surface is in and switching it there switches the surface too, the same way
 // clicking a Sub-Bank tile engages that bank (Frank 2026-08-18). Persisted like
@@ -46162,6 +46243,16 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // Make the "Rea-Sixty Input Level" probe available in the FX browser.
     reasixty_deployInputLevelJsfx();
     reasixty_deployInsertsOverlayLua();
+    // ⚠ THE OTHER TWO COMPANIONS HAVE TO LAND HERE TOO.
+    // Each one writes itself to disk from its toggle, and only from there — so a
+    // user who autostarts one through __startup.lua launches whatever version
+    // was on disk the last time they toggled it, for ever. Any change we make to
+    // the .lua is then invisible to exactly the people who use it most, and it
+    // reads as the feature not working rather than as a stale file (found while
+    // adding the mode-ring carousel, 2026-08-20). Deploy compares content and
+    // returns early when it matches, so this costs a stat and a read per start.
+    reasixty_deployModeBannerLua();
+    reasixty_deployFocusedPanelLua();
     reasixty_cleanupLegacyLua();   // purge pre-ReaImGui gfx HUD/panel scripts
 
     initLog("step: capture g_reaperGetFunc");
@@ -46320,6 +46411,24 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     }
     if (const char* v = GetExtState("rea_sixty", "uf1JogFadeCurve"); v && *v) {
         const double d = std::atof(v); if (d > 0.0) g_uf1JogFadeCurveStep.store(d);
+    }
+    // Jog ring order. A malformed or short key is ignored wholesale, so the
+    // identity default stands rather than a half-applied permutation.
+    if (const char* v = GetExtState("rea_sixty", "uf1_jog_seq"); v && *v) {
+        int tmp[kUf1JogModeCount]; int n = 0; bool ok = true;
+        const char* p = v;
+        while (*p && n < kUf1JogModeCount) {
+            tmp[n++] = std::atoi(p);
+            while (*p && *p != ',') ++p;
+            if (*p == ',') ++p;
+        }
+        if (n != kUf1JogModeCount || *p) ok = false;
+        bool seen[kUf1JogModeCount] = {};
+        for (int k = 0; ok && k < kUf1JogModeCount; ++k) {
+            if (tmp[k] < 0 || tmp[k] >= kUf1JogModeCount || seen[tmp[k]]) ok = false;
+            else seen[tmp[k]] = true;
+        }
+        if (ok) for (int k = 0; k < kUf1JogModeCount; ++k) g_uf1JogSeq[k].store(tmp[k]);
     }
     if (const char* v = GetExtState("rea_sixty", "uf1FadeFollow"); v && *v)
         g_uf1FadeFollow.store(std::atoi(v) != 0);

@@ -6,6 +6,12 @@
 --   Transient on-screen banner that flashes the new mode whenever the
 --   Selection-Mode or Encoder-Mode flips (Stream B3, Frank 2026-06-22).
 --
+--   It ALSO carries the mode-ring carousel (Frank 2026-08-20): while MODE or
+--   SCRUB is held on the UF1 the extension publishes the whole visible ring to
+--   ExtState "rea_sixty"/"mode_ring", and this window shows the live mode with
+--   its neighbours either side, wrapping, for as long as the key is down. Same
+--   window on purpose: one companion, one dock, switchable views.
+--
 --   The extension publishes the change to ExtState "rea_sixty"/"mode_banner"
 --   as "<text>\t<seq>". This companion watches the seq; on each fresh change
 --   it shows the text for a couple of seconds, then fades back to invisible.
@@ -93,6 +99,63 @@ local cur_text   = ""
 local last_seq   = nil
 local show_until = 0.0
 
+-- The RING carousel: live while MODE or SCRUB is held on the UF1. Published as
+-- "<kind>\t<idx>\t<name>\t<name>..." and cleared on release. Unlike the banner
+-- this has NO timer: it is visible exactly as long as the key is down, because
+-- it is something you read while your thumb is on the wheel.
+local ring_kind  = nil
+local ring_idx   = 0
+local ring_names = {}
+
+local function pollRing()
+  local raw = reaper.GetExtState(SECT, "mode_ring")
+  if raw == "" then ring_kind = nil; return end
+  local parts = {}
+  for f in (raw .. "\t"):gmatch("(.-)\t") do parts[#parts + 1] = f end
+  if #parts < 3 then ring_kind = nil; return end
+  ring_kind = parts[1]
+  ring_idx  = tonumber(parts[2]) or 0
+  ring_names = {}
+  for i = 3, #parts do ring_names[#ring_names + 1] = parts[i] end
+  if #ring_names == 0 then ring_kind = nil end
+end
+
+-- How many neighbours to show either side of the live one.
+local function ringWings() return math.max(1, math.floor(num("mode_ring_wings", 2))) end
+
+-- Draw the carousel: the live mode full strength in the middle, its neighbours
+-- fading out either side, wrapping. Wrapping matters — it IS a ring, and a list
+-- that stopped at the ends would say the opposite.
+local function drawRing(fg)
+  local n = #ring_names
+  local wings = ringWings()
+
+  reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 8, 2)
+  reaper.ImGui_TextColored(ctx, rgba(fg, 0x70), ring_kind)
+  reaper.ImGui_PopStyleVar(ctx, 1)
+
+  -- A window wide enough to hold the whole ring stops being a window: show ALL
+  -- of it, from the top, and let the marker do the moving. A symmetric window
+  -- cannot show an even-sized ring whole (two modes would render as one), and a
+  -- list that hides half of a two-item ring is worse than no list.
+  local from, to = -wings, wings
+  if 2 * wings + 1 >= n then from, to = -ring_idx, n - 1 - ring_idx end
+
+  for off = from, to do
+    local i = ((ring_idx + off) % n + n) % n
+    local name = ring_names[i + 1]
+    if off == 0 then
+      -- The live one carries a marker as well as the colour, so it still reads
+      -- at a glance on a dim screen or from across the room.
+      reaper.ImGui_TextColored(ctx, rgba(fg, 0xFF), "\xE2\x96\xB8 " .. name)
+    else
+      local d = math.abs(off)
+      local a = math.max(0x30, 0xB0 - (d - 1) * 0x40)
+      reaper.ImGui_TextColored(ctx, rgba(fg, a), "   " .. name)
+    end
+  end
+end
+
 local function pollBanner()
   local raw = reaper.GetExtState(SECT, "mode_banner")
   if raw == "" then return end
@@ -135,6 +198,16 @@ local function setHold()
     local v = tonumber(input)
     if v then reaper.SetExtState(SECT, "mode_banner_secs",
       string.format("%.2f", math.max(0.3, v)), true) end
+  end
+end
+
+local function setWings()
+  local ret, input = reaper.GetUserInputs("Mode ring", 1,
+    "Neighbours each side: (e.g. 2),extrawidth=40", tostring(ringWings()))
+  if ret then
+    local v = tonumber(input)
+    if v then reaper.SetExtState(SECT, "mode_ring_wings",
+      tostring(math.max(1, math.floor(v))), true) end
   end
 end
 
@@ -199,6 +272,7 @@ local function drawContextMenu()
   if not reaper.ImGui_BeginPopup(ctx, POPUP_ID) then return end
   if reaper.ImGui_MenuItem(ctx, "Font size\xE2\x80\xA6")  then setFontSize() end
   if reaper.ImGui_MenuItem(ctx, "Duration\xE2\x80\xA6")   then setHold() end
+  if reaper.ImGui_MenuItem(ctx, "Ring neighbours\xE2\x80\xA6") then setWings() end
   reaper.ImGui_Separator(ctx)
   if reaper.ImGui_MenuItem(ctx, "Background colour\xE2\x80\xA6") then chooseColor("mode_banner_bg") end
   if reaper.ImGui_MenuItem(ctx, "Text colour\xE2\x80\xA6")       then chooseColor("mode_banner_fg") end
@@ -236,8 +310,14 @@ local function loop()
   end
 
   pollBanner()
+  pollRing()
   font_px = fontPx()
-  local showing = reaper.time_precise() < show_until and cur_text ~= ""
+  -- The held ring WINS over the flash banner: switching a mode fires a banner
+  -- for the same change, and the carousel already says it, better. Without this
+  -- the two would stack up in the same little window while you scroll.
+  local ringing = ring_kind ~= nil
+  local showing = ringing
+    or (reaper.time_precise() < show_until and cur_text ~= "")
 
   if first_frame then
     if restore_x then
@@ -272,7 +352,8 @@ local function loop()
   local visible, open = reaper.ImGui_Begin(ctx, 'Rea-Sixty Mode##mb', true, flags)
   if visible then
     if showing then
-      reaper.ImGui_TextColored(ctx, rgba(fg), cur_text)
+      if ringing then drawRing(fg)
+      else            reaper.ImGui_TextColored(ctx, rgba(fg), cur_text) end
       if reaper.ImGui_IsWindowHovered(ctx)
          and reaper.ImGui_IsMouseClicked(ctx, 1) then
         reaper.ImGui_OpenPopup(ctx, POPUP_ID)

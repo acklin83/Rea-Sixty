@@ -732,6 +732,24 @@ The ticks beside each object in that picker are the same ones on the jog wheel's
 own page. An object you untick is skipped by the wheel's picker, so its cross
 bindings are unreachable until you tick it back on. They are kept, not lost.
 
+The order is yours too. On the jog wheel's page each object has a `▲` and a `▼`
+beside its tick, and the picker walks that order, exactly the way the channel
+encoder's own ring works. Put the two objects you live in next to each other and
+the wheel is one notch away from either.
+
+## Seeing the ring while you turn it
+
+Both pickers are rings, and until now you scrolled them blind: the surface named
+the object you were on and said nothing about what was coming. Hold `MODE` or
+`SCRUB` and the on-screen banner turns into that ring instead: the live one
+marked, its neighbours above and below, wrapping round the ends because a ring is
+what it is. Let go and it disappears.
+
+It is the same little window the mode banner uses, so it sits where you put that
+and takes its colours and font from the same right-click menu. **Ring
+neighbours** there decides how many you see either side. A ring short enough to
+fit is simply shown whole.
+
 Three modifiers stack on the jog:
 
 - **Shift** — fine. Divides the step (default ÷4).

@@ -175,6 +175,8 @@ const char* reasixty_uf1JogModeName(int mode);
 bool        reasixty_uf1JogModeVisible(int mode);
 void        reasixty_setUf1JogModeVisible(int mode, bool on);
 int         reasixty_uf1JogModeCount();
+int         reasixty_uf1JogSeqAt(int pos);
+void        reasixty_uf1JogMoveSeq(int pos, int dir);
 // Live jog mode — the nav-cross editor follows it and switching there switches
 // the surface, like clicking a Sub-Bank tile engages that bank.
 int         reasixty_uf1JogMode();
@@ -4151,14 +4153,28 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     if (id == ButtonId::Uf1Jog) {
         ImGui_Text(ctx, "JOG WHEEL \xE2\x80\x94 Jog Mode");
         ImGui_Spacing(ctx);
-        ImGui_Text(ctx, "Modes");
+        // Order + visibility, the same row shape the channel encoder's ring
+        // has. The picker walks THIS order (Frank 2026-08-20), and it is what
+        // the on-screen carousel shows while SCRUB is held.
+        ImGui_Text(ctx, "Modes (order + visibility)");
         const int jn = reasixty_uf1JogModeCount();
-        for (int m = 0; m < jn; ++m) {
-            char cid[24]; snprintf(cid, sizeof(cid), "##jogvis%d", m);
+        for (int pos = 0; pos < jn; ++pos) {
+            const int m = reasixty_uf1JogSeqAt(pos);
+            char rowId[24]; snprintf(rowId, sizeof(rowId), "jogmode_%d", pos);
+            ImGui_PushID(ctx, rowId);
             bool vis = reasixty_uf1JogModeVisible(m);
-            if (ImGui_Checkbox(ctx, cid, &vis)) reasixty_setUf1JogModeVisible(m, vis);
+            if (ImGui_Checkbox(ctx, "##vis", &vis)) reasixty_setUf1JogModeVisible(m, vis);
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (pos > 0) {
+                if (ImGui_SmallButton(ctx, "\xE2\x96\xB2##up")) reasixty_uf1JogMoveSeq(pos, -1);
+            } else { ImGui_TextDisabled(ctx, "\xE2\x96\xB2"); }
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (pos < jn - 1) {
+                if (ImGui_SmallButton(ctx, "\xE2\x96\xBC##dn")) reasixty_uf1JogMoveSeq(pos, +1);
+            } else { ImGui_TextDisabled(ctx, "\xE2\x96\xBC"); }
             ImGui_SameLine(ctx, nullptr, nullptr);
             ImGui_Text(ctx, reasixty_uf1JogModeName(m));
+            ImGui_PopID(ctx);
         }
         ImGui_Spacing(ctx);
         int    fl = 0;
@@ -6408,7 +6424,8 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         ImGui_SetNextItemWidth(ctx, 170.0);
         if (ImGui_BeginCombo(ctx, "##uf1jogmode",
                              reasixty_uf1JogModeName(live), nullptr)) {
-            for (int m = 0; m < jn; ++m) {
+            for (int pos = 0; pos < jn; ++pos) {
+                const int  m   = reasixty_uf1JogSeqAt(pos);
                 const bool vis = reasixty_uf1JogModeVisible(m);
                 char cid[32]; snprintf(cid, sizeof(cid), "##uf1jmv%d", m);
                 bool v = vis;
