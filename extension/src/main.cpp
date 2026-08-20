@@ -16316,6 +16316,147 @@ const Uf1MeterPage kUf1MeterVPots[3][3] = {
         { {19,0,"Source",true},{-1,0,nullptr},{-1,0,nullptr}},  // P3 Analysis Source(name-only) / — / —
     },
 };
+// ── Meter params by NAME, not by index ─────────────────────────────────────
+// ⛔ THE TABLES ABOVE ARE METER PRO'S INDEX SPACE, AND AN INDEX IS NOT AN
+// IDENTITY. The basic "SSL Meter" is a SUBSET of Meter Pro, so every parameter
+// that the subset drops shifts everything after it — and the shift GROWS with
+// the index, which is exactly what it looked like on the hardware: slot 4
+// ("TruePk") read parameter 5 (RMS Integration), slot 6 ("Type", the K-20
+// scale) read parameter 8 (Analogue Mode, VU/PPM), and slot 16 (Lissajous Fade)
+// landed far enough away to show a meaningless number (Frank 2026-08-20).
+// A plug-in UPDATE that inserts one parameter does the same thing, and the
+// memory already warns that stored paramIdx values shift when SSL updates.
+//
+// So the table index is treated as what it always was — a row in the DUMP — and
+// the live index is looked up by the parameter's NAME on the instance actually
+// in front of us. The preset loader has resolved SSL ids this way all along;
+// this is the same move for the V-Pots.
+//
+// Names are verbatim from docs/ssl-native-params/VST3__SSL_Meter_Pro_(SSL).md,
+// which was dumped with GetParamName, so they match at runtime.
+// (53-56 are REAPER's own GroupSense/Bypass/Wet/Delta, listed for completeness;
+// "Bypass" therefore appears twice and resolves to the FIRST match, index 0 —
+// the plug-in's own, the same rule the preset loader uses.)
+const char* const kUf1MeterProParam[] = {
+    "Bypass",
+    "Global Delay",
+    "True Peak High Quality",
+    "Digital Peak Hold",
+    "Digital True Peak",
+    "RMS Integration",
+    "Digital Type",
+    "Channel Format",
+    "Analogue Mode",
+    "Analogue Reference Level",
+    "Analogue Max Needle",
+    "0 VU Line-Up",
+    "Analogue Dual Format",
+    "Analogue Custom Meter - Left",
+    "Analogue Custom Meter - Right",
+    "Analogue Meters LED Overload",
+    "Lissajous Fade Time",
+    "Ana/RTA Sum Compensation",
+    "RTA Peak Hold",
+    "RTA Analysis Source",
+    "RTA Weighting",
+    "RTA Averaging",
+    "RTA Scale Top",
+    "RTA Scale Bottom",
+    "Loudness Measurement Operation",
+    "Loudness History Window Size",
+    "Loudness History Scroll",
+    "Loudness True Peak",
+    "Dialogue Detection",
+    "Minimum Dialogue Content",
+    "Int Loudness Gating Mode",
+    "Integrated Overlap",
+    "Momentary Integration Time",
+    "Short-Term Integration Time",
+    "Loudness Mode",
+    "Loudness Surround Weighting",
+    "Loudness Integrated Target",
+    "Integrated Target Variance",
+    "Integrated Loudness Alert",
+    "Int Loudness Dialogue Alert",
+    "Short Term Max Alert",
+    "Momentary Max Alert",
+    "Loudness Range Min Alert",
+    "Loudness Range Max Alert",
+    "Dialogue Range Min Alert",
+    "Dialogue Range Max Alert",
+    "True Peak Max Alert",
+    "Loudness Meter Scale Range",
+    "Loudness Display Type",
+    "Loudness Terminology",
+    "Loudness Play/Pause",
+    "RTA Selected Band",
+    "Save Loudness History",
+    "GroupSense",
+    "Bypass",
+    "Wet",
+    "Delta"
+};
+constexpr int kUf1MeterProParamCount =
+    int(sizeof(kUf1MeterProParam) / sizeof(kUf1MeterProParam[0]));
+
+// EXACT (case-insensitive) name match only. Deliberately NOT uf1ParamByName_:
+// its substring fallback is a fine thing for the channel strip's name variants,
+// but here a near-miss would hand the V-Pot a plausible WRONG parameter, which
+// is the precise failure being fixed. Absent parameter → -1 → the slot goes
+// blank, which is honest.
+int uf1MeterParamExact_(MediaTrack* tr, int fx, const char* want)
+{
+    if (!tr || fx < 0 || !want || !*want) return -1;
+    auto lower = [](const char* s) {
+        std::string r(s ? s : "");
+        for (char& c : r) c = char(std::tolower((unsigned char)c));
+        return r;
+    };
+    const std::string w = lower(want);
+    const int pc = TrackFX_GetNumParams(tr, fx);
+    char nm[128];
+    for (int p = 0; p < pc; ++p)
+        if (TrackFX_GetParamName(tr, fx, p, nm, sizeof(nm)) && lower(nm) == w)
+            return p;
+    return -1;
+}
+
+// Dump row → the live parameter index on THIS instance. Cached per (track, fx,
+// param count): the label emitter alone resolves three of these per paint, and
+// a name scan is a TrackFX_GetParamName call per parameter. The param count in
+// the key means swapping one Meter variant for another on the same slot
+// re-resolves instead of serving a stale map.
+int uf1MeterParam_(MediaTrack* tr, int fx, int proIdx)
+{
+    if (!tr || fx < 0 || proIdx < 0 || proIdx >= kUf1MeterProParamCount) return -1;
+    static MediaTrack* sTr  = nullptr;
+    static int         sFx  = -1;
+    static int         sCnt = -1;
+    static int         sMap[kUf1MeterProParamCount];
+    const int pc = TrackFX_GetNumParams(tr, fx);
+    if (tr != sTr || fx != sFx || pc != sCnt) {
+        sTr = tr; sFx = fx; sCnt = pc;
+        for (int& m : sMap) m = -2;                  // -2 = not looked up yet
+    }
+    // LAZY, one row at a time. Resolving all 57 up front is a name scan per row,
+    // so a rebuild would be ~57 x pc GetParamName calls — and with two Meters
+    // alternating in a tick the single cache slot thrashes, turning that into
+    // tens of thousands of calls a second. Only a handful of rows are ever asked
+    // for on a given screen, so paying per row keeps it to one scan each.
+    if (sMap[proIdx] == -2)
+        sMap[proIdx] = uf1MeterParamExact_(tr, fx, kUf1MeterProParam[proIdx]);
+    return sMap[proIdx];
+}
+
+// Normalised read for a dump row, with a fallback when this variant lacks the
+// parameter — so a missing row cannot quietly read as 0.0 and be scaled into a
+// real-looking dB value.
+double uf1MeterParamNorm_(MediaTrack* tr, int fx, int proIdx, double fallback)
+{
+    const int lp = uf1MeterParam_(tr, fx, proIdx);
+    return (lp >= 0) ? TrackFX_GetParamNormalized(tr, fx, lp) : fallback;
+}
+
 // LOUDNESS (screen 3) V-Pot pages — DECODED from the SSL->UF1 0x010e label groups
 // (every param index is a real TrackFX index from docs/ssl-native-params/
 // VST3__SSL_Meter_Pro_(SSL).md, nothing guessed). ALL 10 pages captured:
@@ -16581,7 +16722,9 @@ void uf1EmitMeterScaleSelector_(MediaTrack* tr, int fx, int screen)
     if      (screen == 0) { param = 6; map = kDigitalTypeSel;  n = 7; }  // Overview: Digital Type
     else if (screen == 1) { param = 8; map = kAnalogueModeSel; n = 2; }  // Analogue: VU/PPM
     else { sLastScreen = screen; sLastSel = 0xFF; return; }              // RTA/Loudness: data-driven
-    const double nv = TrackFX_GetParamNormalized(tr, fx, param);
+    const int lsel = uf1MeterParam_(tr, fx, param);
+    if (lsel < 0) return;
+    const double nv = TrackFX_GetParamNormalized(tr, fx, lsel);
     const int idx = std::clamp(int(nv * (n - 1) + 0.5), 0, n - 1);
     const uint8_t sel = map[idx];
     if (screen == sLastScreen && sel == sLastSel) return;   // already selected
@@ -16618,7 +16761,8 @@ void uf1EmitMeterParamLabels_(MediaTrack* tr, int fx, int screen, int page)
             for (; s && s[n] && n < width; ++n) p.push_back(uint8_t(s[n]));
             for (; n < width; ++n) p.push_back(0x00);
         };
-        if (vs[i]->param < 0) { put("", 8); put("", 10); }
+        const int lp = uf1MeterParam_(tr, fx, vs[i]->param);
+        if (vs[i]->param < 0 || lp < 0) { put("", 8); put("", 10); }
         else if (vs[i]->nameOnly) {
             // Enum shown as the value ALONE (Digital Type / Analogue Mode /
             // Analysis Source): a NAME-ONLY frame — idx + value, variable, no
@@ -16626,7 +16770,7 @@ void uf1EmitMeterParamLabels_(MediaTrack* tr, int fx, int screen, int page)
             // instance label does. This is the ONLY form the UF1 repaints for such
             // a slot; a name+value frame leaves the value static (HW 2026-07-23).
             char val[64] = {0};
-            TrackFX_GetFormattedParamValue(tr, fx, vs[i]->param, val, int(sizeof(val)));
+            TrackFX_GetFormattedParamValue(tr, fx, lp, val, int(sizeof(val)));
             for (const char* c = val; *c; ++c) p.push_back(uint8_t(*c));
         }
         else {
@@ -16638,7 +16782,7 @@ void uf1EmitMeterParamLabels_(MediaTrack* tr, int fx, int screen, int page)
             // cap104: our "TruePk"+3pad vs SSL's "TruePk"+2pad. 2026-07-23.
             put(vs[i]->name, 8);
             char val[64] = {0};
-            TrackFX_GetFormattedParamValue(tr, fx, vs[i]->param, val, int(sizeof(val)));
+            TrackFX_GetFormattedParamValue(tr, fx, lp, val, int(sizeof(val)));
             put(val, 10);
         }
         g_uf1_dev->send(uf1::buildScreen(0x010e,
@@ -16943,6 +17087,8 @@ void applyUf1MeterVpot_(uint8_t id, int step)
     const Uf1MeterPage& mpg = uf1MeterVPotPage_(screen, page);
     const Uf1MeterVPot& v = (vi == 0) ? mpg.v2 : (vi == 1) ? mpg.v3 : mpg.v4;
     if (v.param < 0) return;   // Loudness / unassigned slot → no-op
+    const int lp = uf1MeterParam_(tr, fx, v.param);   // dump row → live index
+    if (lp < 0) return;        // this variant does not have it
 
     sAccum[vi+1] += step / kChannelEncoderScale;   // +1: slot 0 reserved for sel
     int notches = 0;
@@ -16951,7 +17097,7 @@ void applyUf1MeterVpot_(uint8_t id, int step)
     if (notches == 0) return;
     sAccum[vi+1] -= notches;
 
-    const double cur = TrackFX_GetParamNormalized(tr, fx, v.param);
+    const double cur = TrackFX_GetParamNormalized(tr, fx, lp);
     double dn  = (v.steps >= 2) ? (1.0 / (v.steps - 1))
                      : (v.contStep > 0.0 ? v.contStep : kUf1MeterContStep);
     // FINE (SK3): shrink the step for CONTINUOUS params only — enum params are
@@ -16960,7 +17106,7 @@ void applyUf1MeterVpot_(uint8_t id, int step)
     double nv = cur + notches * dn;
     if (nv < 0.0) nv = 0.0;
     if (nv > 1.0) nv = 1.0;
-    if (nv != cur) TrackFX_SetParamNormalized(tr, fx, v.param, nv);
+    if (nv != cur) TrackFX_SetParamNormalized(tr, fx, lp, nv);
     // Refresh the on-screen name/value so the readout tracks the turn.
     uf1EmitMeterParamLabels_(tr, fx, screen, page);
 }
@@ -23906,7 +24052,7 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 float kVuRef = -18.f;
                 MediaTrack* mtr = nullptr; int mfx = -1;
                 if (uf1PinnedMeterTrackFx_(mtr, mfx))
-                    kVuRef = float(-36.0 + TrackFX_GetParamNormalized(mtr, mfx, 9) * 36.0);
+                    kVuRef = float(-36.0 + uf1MeterParamNorm_(mtr, mfx, 9, 0.5) * 36.0);
                 vuL = dbL - kVuRef; vuR = dbR - kVuRef;
             }
         }
@@ -23926,7 +24072,7 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         {
             MediaTrack* mtr = nullptr; int mfx = -1;
             if (uf1PinnedMeterTrackFx_(mtr, mfx))
-                ppmMode = TrackFX_GetParamNormalized(mtr, mfx, 8) >= 0.5;   // kAnalogueModeSel: 0.5+ = 04 = PPM
+                ppmMode = uf1MeterParamNorm_(mtr, mfx, 8, 0.0) >= 0.5;   // kAnalogueModeSel: 0.5+ = 04 = PPM
         }
         uint8_t nL, nR, hL, hR;
         // Peak-hold "second needle" — held max, snaps to current every 3 s
@@ -23986,7 +24132,7 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 float refDb = -18.f;
                 MediaTrack* mtr = nullptr; int mfx = -1;
                 if (uf1PinnedMeterTrackFx_(mtr, mfx))
-                    refDb = float(-36.0 + TrackFX_GetParamNormalized(mtr, mfx, 9) * 36.0);
+                    refDb = float(-36.0 + uf1MeterParamNorm_(mtr, mfx, 9, 0.5) * 36.0);
                 mL = 4.f + (dbL - refDb) / 4.f;
                 mR = 4.f + (dbR - refDb) / 4.f;
             }
@@ -24098,9 +24244,9 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             MediaTrack* mtr = nullptr; int mfx = -1;
             if (uf1PinnedMeterTrackFx_(mtr, mfx)) {
                 char buf[64] = {0};
-                if (TrackFX_GetFormattedParamValue(mtr, mfx, 22, buf, sizeof(buf)) && buf[0])
+                if (TrackFX_GetFormattedParamValue(mtr, mfx, uf1MeterParam_(mtr, mfx, 22), buf, sizeof(buf)) && buf[0])
                     rtaTop = float(std::atof(buf));
-                if (TrackFX_GetFormattedParamValue(mtr, mfx, 23, buf, sizeof(buf)) && buf[0])
+                if (TrackFX_GetFormattedParamValue(mtr, mfx, uf1MeterParam_(mtr, mfx, 23), buf, sizeof(buf)) && buf[0])
                     rtaBot = float(std::atof(buf));
             }
             if (!(rtaTop > rtaBot)) { rtaTop = 0.f; rtaBot = -120.f; }
@@ -24154,7 +24300,7 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 // The label, not the normalised value: "630 Hz Band" / "5.0 kHz
                 // Band" / "No Band Selected". Parsing the plug-in's own text
                 // needs no assumption about how many enum steps it has.
-                if (TrackFX_GetFormattedParamValue(mtr, mfx, 51, buf, sizeof(buf))
+                if (TrackFX_GetFormattedParamValue(mtr, mfx, uf1MeterParam_(mtr, mfx, 51), buf, sizeof(buf))
                     && buf[0] && !std::strstr(buf, "No Band")) {
                     double hz = std::atof(buf);
                     if (std::strstr(buf, "kHz")) hz *= 1000.0;
@@ -24223,9 +24369,9 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         const bool havePin = haveHist && uf1PinnedMeterTrackFx_(mtr, mfx);
         if (havePin) {
             char tv[64] = {0};
-            TrackFX_GetFormattedParamValue(mtr, mfx, 36, tv, int(sizeof(tv)));
+            TrackFX_GetFormattedParamValue(mtr, mfx, uf1MeterParam_(mtr, mfx, 36), tv, int(sizeof(tv)));
             target = std::atof(tv);                           // "-23 LUFS" -> -23.0
-            ri = std::clamp(int(TrackFX_GetParamNormalized(mtr, mfx, 47) * 2.0 + 0.5), 0, 2);
+            ri = std::clamp(int(uf1MeterParamNorm_(mtr, mfx, 47, 0.0) * 2.0 + 0.5), 0, 2);
         } else if (haveHist) {
             const float tt = hist[hist.size() - 10];          // trailer |target|
             if (tt > 0.f && tt < 100.f) target = -double(tt);
