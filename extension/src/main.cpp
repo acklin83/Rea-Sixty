@@ -24650,6 +24650,37 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             // went with the next build.
             std::array<uint8_t, 251> sf0{};
             for (int i = 0; i < 251; ++i) sf0[size_t(i)] = csf0[i];
+            // ── The axis LABELS are TEXT in sf0, and they were a CAPTURE ──────
+            // sf0[2..25] is eight 3-byte, NUL-padded, left-aligned numbers. The
+            // ladder they sit on is fixed per Scale Range — +9/+6/+3/0/-3/-6/
+            // -12/-18 LU for -18..+9, doubled for -36..+18, tripled for
+            // -54..+27 (decoded from all three captured frames; the spacing
+            // tightens to double steps for the bottom two ticks in each). The
+            // NUMBERS are not fixed: the capture session showed LUFS against
+            // its own -23 target, so replaying them printed somebody else's
+            // meter on every session with another target, and printed LUFS even
+            // when the plug-in is set to LU (Frank 2026-08-20: "-18 to +9 zeigt
+            // z.B. -41 bis -14"). -41..-14 IS -18..+9 LU against -23 LUFS —
+            // right arithmetic, wrong question. Written live now.
+            {
+                static const int kTicksLU[8] = { 9, 6, 3, 0, -3, -6, -12, -18 };
+                // 48 = Loudness Display Type (Absolute 0 / Relative 1). Without a
+                // pinned instance there is no parameter to read, and the history
+                // trailer only carries the target — so LUFS, as before.
+                const bool relative =
+                    havePin && uf1MeterParamNorm_(mtr, mfx, 48, 0.0) >= 0.5;
+                for (int t = 0; t < 8; ++t) {
+                    const int  lu = kTicksLU[t] * (ri + 1);
+                    const long v  = relative ? long(lu)
+                                             : std::lround(double(lu) + target);
+                    char lab[16];
+                    // No plus sign: the captured frames print "4", not "+4".
+                    std::snprintf(lab, sizeof(lab), "%ld", v);
+                    for (int c = 0; c < 3; ++c)
+                        sf0[size_t(2 + 3 * t + c)] =
+                            lab[c] ? uint8_t(lab[c]) : 0;   // field is 3 wide
+                }
+            }
             auto valByte = [&](int dataType) -> uint8_t {
                 std::vector<float> c, p;
                 if (!sslcore::getMeter(dataType, c, p) || c.empty()) return 0;
