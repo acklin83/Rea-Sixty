@@ -16955,9 +16955,14 @@ static std::vector<Uf1PresetEntry> uf1ScanMeterPresets_(const std::string& dir)
 #endif
     // ⚠ A correct PATH is only half of it — this scan was POSIX-only, so even
     // with the right folder Windows came back empty (2026-08-20).
-    // `group` prefixes the display name: the channel strips file their presets in
-    // SUB-FOLDERS ("SSL4KE/Bass/CG Bass.xml"), which the plug-in's own list shows
-    // as groups. One level deep, which is all SSL uses.
+    // ⚠ AND ONE LEVEL IS NOT ENOUGH. The 4K E ships 114 presets and only 18 of
+    // them are in the first two levels: its "Producer Presets" folder holds one
+    // folder PER PRODUCER. A one-level scan showed a sixth of the library and
+    // looked perfectly complete doing it. Recursive, with a depth cap so a
+    // symlink loop cannot hang the paint thread.
+    // The display name is the DEEPEST folder plus the file ("Adrian Hall/Kick
+    // In"), not the whole relative path: the row is 24 bytes, and the deepest
+    // folder is the one that says something.
     auto take = [&](const std::string& fn, const std::string& in,
                     const std::string& group) {
         if (fn.size() <= 4) return;
@@ -16967,39 +16972,41 @@ static std::vector<Uf1PresetEntry> uf1ScanMeterPresets_(const std::string& dir)
         out.push_back({ group.empty() ? bare : group + "/" + bare,
                         in + kSep + fn });
     };
-    auto scan = [&](const std::string& in, const std::string& group, auto&& subdir) {
+    struct Walk {
+        decltype(take)& take;
+        const char* sep;
+        void go(const std::string& in, const std::string& group, int depth) {
+            if (depth > 4) return;
 #if defined(_WIN32)
-        WIN32_FIND_DATAA fd;
-        HANDLE h = FindFirstFileA((in + "\\*").c_str(), &fd);
-        if (h != INVALID_HANDLE_VALUE) {
+            WIN32_FIND_DATAA fd;
+            HANDLE h = FindFirstFileA((in + "\\*").c_str(), &fd);
+            if (h == INVALID_HANDLE_VALUE) return;
             do {
                 const std::string fn = fd.cFileName;
                 if (fn == "." || fn == "..") continue;
-                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) subdir(in, fn);
-                else                                                take(fn, in, group);
+                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                    go(in + sep + fn, fn, depth + 1);
+                else
+                    take(fn, in, group);
             } while (FindNextFileA(h, &fd));
             FindClose(h);
-        }
 #else
-        if (DIR* d = opendir(in.c_str())) {
+            DIR* d = opendir(in.c_str());
+            if (!d) return;
             while (dirent* e = readdir(d)) {
                 const std::string fn = e->d_name;
                 if (fn == "." || fn == "..") continue;
+                const std::string full = in + sep + fn;
                 struct stat st{};
-                const std::string full = in + kSep + fn;
-                const bool isDir = (stat(full.c_str(), &st) == 0) && S_ISDIR(st.st_mode);
-                if (isDir) subdir(in, fn);
-                else       take(fn, in, group);
+                if (stat(full.c_str(), &st) != 0) continue;
+                if (S_ISDIR(st.st_mode)) go(full, fn, depth + 1);
+                else                     take(fn, in, group);
             }
             closedir(d);
-        }
 #endif
-    };
-    scan(dir, std::string(),
-         [&](const std::string& parent, const std::string& sub) {
-             scan(parent + kSep + sub, sub,
-                  [](const std::string&, const std::string&) {});   // one level
-         });
+        }
+    } walk{take, kSep};
+    walk.go(dir, std::string(), 0);
     std::sort(out.begin(), out.end(), [](const Uf1PresetEntry& ea,
                                          const Uf1PresetEntry& eb) {
         const std::string& a = ea.name;
