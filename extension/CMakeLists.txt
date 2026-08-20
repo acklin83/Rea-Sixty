@@ -321,6 +321,7 @@ add_library(reaper_uf8 MODULE
     src/UserPluginCatalog.cpp
     src/AutoLearnEngine.cpp
     src/PluginChunkPatch.cpp
+    src/SslPresetLibrary.cpp
     src/FocusedParam.cpp
     src/UF8Device.cpp
     src/UF1Protocol.cpp

@@ -20,6 +20,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "SslPresetLibrary.h"
 
 #include "FocusedParam.h"
 #include "UC1Device.h"
@@ -370,6 +371,17 @@ private:
         Browse,    // banner 0x02 — preset list inside selected domain
     };
     PresetsSubMode presetsSub_ = PresetsSubMode::Selector;
+    // SSL's OWN preset library for the browsed plug-in. REAPER's preset API is
+    // EMPTY for every SSL plug-in (TrackFX_GetPreset returns nothing), which is
+    // why this screen had nothing to show and no way to load — the presets live
+    // on disk, one folder per plug-in, and sslpreset reads them. Same source and
+    // same loader the UF1's browser uses.
+    std::vector<sslpreset::Entry> presetList_;
+    int         presetSel_    = 0;      // index into presetList_
+    void*       presetTrack_  = nullptr;  // instance the list was built for
+    int         presetFx_     = -1;
+    // Rebuild presetList_ for the focused plug-in and select what it has loaded.
+    void refreshPresetList_();
     bool           presetsSelectCs_ = true;  // false = BC selected
 
     // EXT_FUNCS scroll cursor — index into the kExtFuncs list (defined

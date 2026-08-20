@@ -1,4 +1,5 @@
 #include "UC1Surface.h"
+#include "PluginChunkPatch.h"   // uf8::sslLoadedPresetName
 #include "LogPath.h"
 
 #include <algorithm>
@@ -1380,26 +1381,19 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             ++stats_.knobEventsHandled;
             return;
         }
-        // Browse subscreen — live-preview navigate the focused-domain
-        // plug-in's preset list. NavigatePresets loads each preset on
-        // the way (REAPER's only API for sequential preset traversal).
+        // Browse subscreen — move the SELECTION. It no longer loads on the
+        // way: the old live-preview walked TrackFX_NavigatePresets, which is
+        // REAPER's only sequential preset API and is empty for every SSL
+        // plug-in, so it browsed nothing and overwrote the instance doing it.
+        // Browsing is now free of side effects and CONFIRM loads.
         if (!focusedTrack_) {
             ++stats_.knobEventsHandled;
             return;
         }
-        auto match = uf8::lookupPluginOnTrack(
-            focusedTrack_,
-            presetsSelectCs_ ? uf8::Domain::ChannelStrip
-                             : uf8::Domain::BusComp);
-        if (!match.map) {
-            ++stats_.knobEventsHandled;
-            return;
-        }
-        const int dir = step > 0 ? 1 : -1;
-        const int abs = step > 0 ? step : -step;
-        for (int k = 0; k < abs; ++k) {
-            TrackFX_NavigatePresets(static_cast<MediaTrack*>(focusedTrack_),
-                                    match.fxIndex, dir);
+        refreshPresetList_();
+        if (!presetList_.empty()) {
+            presetSel_ = std::clamp(presetSel_ + step, 0,
+                                    static_cast<int>(presetList_.size()) - 1);
         }
         renderPresetsSubscreen_();
         ++stats_.knobEventsHandled;
@@ -2137,26 +2131,19 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
                 case Uc1Mode::ExtFuncs:  /* B: confirm selection */ break;
                 case Uc1Mode::Routing:   /* nop */ break;
                 case Uc1Mode::Presets:
-                    // Live-preview model: every encoder detent already
-                    // loaded the preset. Confirm = "I'll keep this one,
-                    // back to MAIN."
-                    if (focusedTrack_) {
-                        auto match = uf8::lookupPluginOnTrack(
-                            focusedTrack_, uf8::Domain::ChannelStrip);
-                        if (!match.map) {
-                            match = uf8::lookupPluginOnTrack(
-                                focusedTrack_, uf8::Domain::BusComp);
-                        }
-                        if (match.map) {
-                            char name[128] = {};
-                            TrackFX_GetPreset(
-                                static_cast<MediaTrack*>(focusedTrack_),
-                                match.fxIndex, name, sizeof(name));
-                            char line[160];
-                            snprintf(line, sizeof(line),
-                                "UC1 Preset confirmed: %s\n",
-                                name[0] ? name : "<no name>");
-                        }
+                    // CONFIRM loads the selected preset into the plug-in.
+                    // Browsing itself changes nothing, so this is the only
+                    // write — and it goes through the plug-in's own state, so
+                    // the instance SHOWS the preset instead of "that preset,
+                    // modified".
+                    if (presetsSub_ == PresetsSubMode::Browse &&
+                        presetTrack_ && presetFx_ >= 0 &&
+                        !presetList_.empty()) {
+                        const int i = std::clamp(
+                            presetSel_, 0, static_cast<int>(presetList_.size()) - 1);
+                        sslpreset::load(static_cast<MediaTrack*>(presetTrack_),
+                                        presetFx_,
+                                        presetList_[static_cast<size_t>(i)].path);
                     }
                     setMode(Uc1Mode::Main);
                     break;
@@ -3346,29 +3333,67 @@ void UC1Surface::renderPresetsSubscreen_()
         sendListBody("", "", "<no track>", "", "");
         return;
     }
+    refreshPresetList_();
+    if (presetFx_ < 0) {
+        sendListBody("", "", "<no plug-in>", "", "");
+        return;
+    }
+    if (presetList_.empty()) {
+        sendListBody("", "", "<no presets>", "", "");
+        return;
+    }
+    // The five slots are the window around the selection, slot 2 is the
+    // selected one (the firmware paints it as the current entry). Off the ends
+    // the slots stay empty rather than wrapping, so the list has a visible top
+    // and bottom. The UC1's LCD is Latin-1 like every other SSL surface, and
+    // preset names come off DISK — a user-saved one can carry an umlaut.
+    const int n = static_cast<int>(presetList_.size());
+    presetSel_ = std::clamp(presetSel_, 0, n - 1);
+    auto slot = [&](int off) -> std::string {
+        const int i = presetSel_ + off;
+        return (i < 0 || i >= n) ? std::string()
+                                 : utf8ToLatin1(presetList_[static_cast<size_t>(i)].name);
+    };
+    sendListBody(slot(-2), slot(-1), slot(0), slot(1), slot(2));
+}
+
+void UC1Surface::refreshPresetList_()
+{
+    // Rebuilt when the browsed instance changes, not on every render: a scan
+    // walks the whole library (the 4K E has 114 files) and this runs on every
+    // encoder detent.
     auto match = uf8::lookupPluginOnTrack(
         focusedTrack_,
         presetsSelectCs_ ? uf8::Domain::ChannelStrip
                          : uf8::Domain::BusComp);
     if (!match.map) {
-        sendListBody("", "", "<no plug-in>", "", "");
+        presetList_.clear();
+        presetTrack_ = nullptr; presetFx_ = -1;
         return;
     }
-    char name[128] = {};
-    TrackFX_GetPreset(static_cast<MediaTrack*>(focusedTrack_),
-                      match.fxIndex, name, sizeof(name));
-    int numPresets = 0;
-    const int curIdx = TrackFX_GetPresetIndex(
-        static_cast<MediaTrack*>(focusedTrack_), match.fxIndex, &numPresets);
-    // REAPER's preset API doesn't expose names without navigating, so
-    // adjacent slots show "..." when more presets exist in that
-    // direction. Visually less rich than SSL360's full prev/next
-    // names but functional and avoids a destructive walk-and-restore.
-    const std::string prev = (curIdx > 0) ? "..." : "";
-    const std::string next = (curIdx + 1 < numPresets) ? "..." : "";
-    sendListBody("", prev,
-        name[0] ? utf8ToLatin1(name) : std::string{"<no name>"},  // UC1 = Latin-1
-        next, "");
+    if (presetTrack_ == focusedTrack_ && presetFx_ == match.fxIndex &&
+        !presetList_.empty())
+        return;
+    presetTrack_ = focusedTrack_;
+    presetFx_    = match.fxIndex;
+    presetList_  = sslpreset::listFor(
+        static_cast<MediaTrack*>(focusedTrack_), match.fxIndex);
+    // Start ON what the instance has loaded, so the list opens where the user
+    // already is instead of at the top. The plug-in keeps that name itself.
+    presetSel_ = 0;
+    char loaded[512] = {0};
+    if (uf8::sslLoadedPresetName(static_cast<MediaTrack*>(focusedTrack_),
+                                 match.fxIndex, loaded, sizeof(loaded))) {
+        for (size_t i = 0; i < presetList_.size(); ++i) {
+            const std::string& nm = presetList_[i].name;
+            const size_t sl = nm.find_last_of('/');
+            if (nm == loaded || (sl != std::string::npos &&
+                                 nm.compare(sl + 1, std::string::npos, loaded) == 0)) {
+                presetSel_ = static_cast<int>(i);
+                break;
+            }
+        }
+    }
 }
 
 void UC1Surface::pushKnobReadout_(uint8_t knobId, void* trackRaw, int fxIdx,
