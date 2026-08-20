@@ -16967,6 +16967,18 @@ static void uf1RefreshMeterPresetList_(MediaTrack* tr, int fx)
 {
     g_uf1PresetDir  = uf1MeterPresetDir_(tr, fx);
     g_uf1PresetList = uf1ScanMeterPresets_(g_uf1PresetDir);
+    // Open ON the preset the instance actually has loaded — the browser is there
+    // to change it, and a list that always starts at the top says nothing about
+    // where you are (Frank 2026-08-20: "ich will sehen, was aktuell geladen
+    // ist"). The plug-in keeps that name itself; we read it back rather than
+    // remembering what we last wrote, so a preset loaded from SSL's own browser
+    // (or one loaded before we ever ran) shows up just the same.
+    g_uf1PresetSel = 0;
+    char loaded[512] = {0};
+    if (uf8::sslLoadedPresetName(tr, fx, loaded, sizeof(loaded))) {
+        for (size_t i = 0; i < g_uf1PresetList.size(); ++i)
+            if (g_uf1PresetList[i] == loaded) { g_uf1PresetSel = (int)i; break; }
+    }
     if (g_uf1PresetSel >= (int)g_uf1PresetList.size()) g_uf1PresetSel = 0;
     if (g_uf1PresetSel < 0) g_uf1PresetSel = 0;
 }
@@ -23708,9 +23720,12 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             const bool enter = !sPresets;
             if (enter) {
                 // Scan SSL's preset dir for THIS instance once, at browse-open.
-                if (have) uf1RefreshMeterPresetList_(ptr, pfx);
-                else      g_uf1PresetList.clear();
-                g_uf1PresetSel = 0;
+                if (have) {
+                    uf1RefreshMeterPresetList_(ptr, pfx);   // also picks the
+                } else {                                    // loaded preset
+                    g_uf1PresetList.clear();
+                    g_uf1PresetSel = 0;
+                }
                 put(0x0100, {0x04, 0x03});
                 put(0x0102, {0x09});
                 put(0x010d, {0x0a, 0x06, 0x06, 0x0a});
@@ -23721,15 +23736,18 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             const int n   = (int)g_uf1PresetList.size();
             const int sel = std::clamp(g_uf1PresetSel, 0, n > 0 ? n - 1 : 0);
 
-            // 0x011c = 8 × 25-byte fields: [0]="METER", [1..7] = a scrolling 7-row
-            // window. The SELECTED row is marked ">" (Frank couldn't tell what was
-            // selected). The window follows `sel` — scrolls only when the selection
-            // would leave it — so items above AND below the current one stay visible.
-            static int winStart = 0;
-            if (enter) winStart = 0;
-            if (sel < winStart)     winStart = sel;
-            if (sel > winStart + 6) winStart = sel - 6;
-            winStart = std::clamp(winStart, 0, std::max(0, n - 7));
+            // 0x011c = 8 × 25-byte fields: [0]="METER", [1..7] = a 7-row window.
+            // ⚠ THE HIGHLIGHT IS THE FIRMWARE'S, AND IT IS FIXED ON THE MIDDLE ROW.
+            // So the selection has to be PUT there and the list scrolled under it —
+            // which is exactly what SSL does: in cap uf1_rp its window advances by
+            // ONE entry per detent, never in jumps, all the way through the list.
+            // A window that only scrolls when the selection would fall off (what
+            // this did before) leaves the green row on whatever happens to be in
+            // the middle, so it marks a preset nobody chose (Frank 2026-08-20:
+            // "jeweils die mittlere preset ist grün"). Rows outside the list stay
+            // EMPTY instead of clamping the window, so the green row is the
+            // selection at both ends of the list too.
+            const int winStart = sel - 3;
 
             std::array<uint8_t, 200> row{};   // NUL-filled
             // Folded HERE, at the emit, and BEFORE the 24-byte cut: preset names
@@ -23747,9 +23765,9 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             else if (n == 0) setField(1, "(no presets)");
             else for (int f = 1; f <= 7; ++f) {
                 const int pi = winStart + (f - 1);
-                if (pi >= n) break;
-                setField(f, (pi == sel ? "> " : "  ") + g_uf1PresetList[pi]);
-            }
+                if (pi < 0 || pi >= n) continue;      // above/below the list
+                setField(f, g_uf1PresetList[pi]);     // no marker: the middle row
+            }                                         // IS the selection
             // Restate the list + clear the goniometer area EVERY tick, NOT change-
             // detected: after we pause the cycle on entry the pacer still flushes its
             // ONE in-flight frame, whose tail re-sends 0x011c (= the -inf dB grid) and

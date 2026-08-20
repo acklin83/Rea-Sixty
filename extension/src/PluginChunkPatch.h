@@ -65,6 +65,11 @@ void readPluginToggleStates(MediaTrack* track, int& ab, int& hq);
 // Returns the number of values written, or 0 when the chunk is not in the shape
 // this can safely rewrite — then NOTHING was written and the caller should fall
 // back to setting the host parameters.
+// Name of the preset the instance currently reports as loaded (base name, no
+// ".xml"), read from the same attribute loadSslPresetIntoInstance writes.
+// false = nothing to report, and then `out` is left empty.
+bool sslLoadedPresetName(MediaTrack* track, int fx, char* out, int outSz);
+
 // `diagOut` (optional) receives a one-line reason whenever this returns 0, so a
 // declined chunk cannot be mistaken for a chunk that was never read.
 int loadSslPresetIntoInstance(MediaTrack* track, int fx,

@@ -618,6 +618,70 @@ int patchSslChunkWithPreset(std::string& bin,
 
 }  // namespace
 
+// Which preset the instance currently reports as loaded — the same attribute
+// loadSslPresetIntoInstance writes, read back. `out` gets the NAME (the file's
+// base name without ".xml"), which is what the surface lists. false = no chunk,
+// no attribute, or a plug-in that keeps none.
+bool sslLoadedPresetName(MediaTrack* tr, int fx, char* out, int outSz)
+{
+    if (!out || outSz <= 0) return false;
+    out[0] = 0;
+    if (!tr || !TrackFX_GetNamedConfigParm) return false;
+
+    std::string b64;
+    for (size_t cap = 1u << 20; cap <= (1u << 26); cap <<= 2) {
+        std::vector<char> buf(cap, 0);
+        if (TrackFX_GetNamedConfigParm(tr, fx, "vst_chunk", buf.data(), (int)cap)
+            && buf[0]) {
+            std::string got(buf.data());
+            if (got.size() + 64 < cap) { b64.swap(got); break; }
+        }
+    }
+    if (b64.empty()) return false;
+    const std::string bin = b64Decode(b64);
+
+    // The ACTIVE slot's attribute — B's is a different preset, and reading the
+    // wrong one would put the browser on an entry the user is not hearing.
+    const size_t xs = bin.find("<?xml");
+    if (xs == std::string::npos) return false;
+    char tag = 'A';
+    const size_t sas = bin.find("StateASelected=\"", xs);
+    if (sas != std::string::npos && sas + 16 < bin.size())
+        tag = (bin[sas + 16] == '0') ? 'B' : 'A';
+    const std::string open = std::string("<") + tag;
+    size_t slot = std::string::npos;
+    for (size_t p = xs; ; ) {
+        const size_t h = bin.find(open, p);
+        if (h == std::string::npos) break;
+        const char after = (h + 2 < bin.size()) ? bin[h + 2] : '\0';
+        if (after == ' ' || after == '>') { slot = h; break; }
+        p = h + 2;
+    }
+    if (slot == std::string::npos) return false;
+    const size_t gt = bin.find('>', slot);
+    const size_t at = bin.find("LastLoadedPreset=\"", slot);
+    if (at == std::string::npos || gt == std::string::npos || at > gt) return false;
+    const size_t e = bin.find('"', at + 18);
+    if (e == std::string::npos || e > gt) return false;
+
+    std::string path = bin.substr(at + 18, e - (at + 18));
+    // Undo the attribute escaping, then keep the file's base name without the
+    // extension: that is the string the preset list is built from.
+    for (const auto& r : {std::pair<const char*, const char*>{"&amp;", "&"},
+                          {"&lt;", "<"}, {"&gt;", ">"}, {"&quot;", "\""}})
+        for (size_t p = 0; (p = path.find(r.first, p)) != std::string::npos; )
+            path.replace(p, strlen(r.first), r.second);
+    const size_t slash = path.find_last_of("/\\");
+    std::string name = (slash == std::string::npos) ? path : path.substr(slash + 1);
+    if (name.size() > 4) {
+        const std::string ext = name.substr(name.size() - 4);
+        if (ext == ".xml" || ext == ".XML") name.resize(name.size() - 4);
+    }
+    if (name.empty() || (int)name.size() >= outSz) return false;
+    memcpy(out, name.c_str(), name.size() + 1);
+    return true;
+}
+
 int loadSslPresetIntoInstance(MediaTrack* tr, int fx,
                               const char* presetPath, const char* presetXml,
                               char* diagOut, int diagOutSz)
