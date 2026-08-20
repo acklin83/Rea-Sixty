@@ -5534,6 +5534,7 @@ const char* builtinCategory(const std::string& n)
      || n == "uf1_time_display_step"
      || n == "uf1_flip" || n == "uf1_master"
      || n == "uf1_five_to_eight" || n == "uf1_vpot_reset"
+     || n == "uf1_presets"
      || n.rfind("uf1_strip_mode_", 0) == 0
      || n.rfind("uf1_view_", 0) == 0
      || n == "uf1_extender" || n == "uf1_extender_side"

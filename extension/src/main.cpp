@@ -618,6 +618,9 @@ std::atomic<bool> g_uf1MeterResetReq {false};
 // Loudness screen SK3 = PLAY: toggles the plug-in's Loudness Play/Pause (param 50).
 // Worker-safe request; the main-thread painter owns the REAPER call.
 std::atomic<bool> g_uf1LoudPlayReq {false};
+// Set when the preset browser closes: the Channel view has no entry burst to
+// restore itself from, so its next paint has to be forced.
+bool g_uf1PresetJustClosed = false;
 // Meter-view PRESETS soft-key (SK4, 0x1C): SK4 opens the preset browser for the pinned
 // Meter instance (0x0100=0403, 0x0102=09, cap 2026-08-02). V-Pot4 scrolls the SSL Meter /
 // Meter Pro preset LIBRARY (SSL's own XML presets on disk — REAPER's TrackFX_GetPreset is
@@ -628,7 +631,12 @@ std::atomic<bool> g_uf1PresetsMode {false};
 // Preset-browser working state — MAIN-THREAD ONLY (the painter in onTimer + the V-Pot4
 // drain in applyUf1MeterVpot_, both main-thread). Scanned once on entry, scrolled/loaded
 // on V-Pot4. g_uf1PresetSel indexes g_uf1PresetList.
-std::vector<std::string> g_uf1PresetList;   // preset display names (no ".xml"), sorted
+// One row of the browser. `name` is what the surface shows ("Bass/CG Bass" for a
+// preset inside a group), `path` the file to load — kept per entry because the
+// channel strips file their presets in SUB-FOLDERS, so a directory plus a name
+// no longer rebuilds the path.
+struct Uf1PresetEntry { std::string name, path; };
+std::vector<Uf1PresetEntry> g_uf1PresetList;
 std::string              g_uf1PresetDir;    // resolved SSL preset directory for the pin
 int                      g_uf1PresetSel = 0;
 // V-Pot4 PUSH ("Select") → load the highlighted preset. Set worker-side, consumed
@@ -16893,9 +16901,25 @@ static std::string uf1MeterPresetDir_(MediaTrack* tr, int fx)
     char nm[256] = {0};
     if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return std::string();
     const std::string s = nm;
-    if (s.find("Meter") == std::string::npos) return std::string();
-    const bool pro = s.find("Meter Pro") != std::string::npos;   // check the longer name first
-    const char* leaf = pro ? "MeterPro" : "Meter";
+    // SSL files every plug-in's presets under its own leaf, and the folder names
+    // are NOT the plug-in names — they are these. Longest match first, or
+    // "Meter Pro" lands in the plain Meter's folder and "360 Link Bus
+    // Compressor" in 360 Link's.
+    static const struct { const char* part; const char* leaf; } kDirs[] = {
+        { "Meter Pro",                 "MeterPro"                },
+        { "Meter",                     "Meter"                   },
+        { "Channel Strip 2",           "ChannelStrip2"           },
+        { "360 Link Bus Compressor",   "SSL360LinkBusCompressor" },
+        { "360 Link",                  "SSL360Link"              },
+        { "Bus Compressor 2",          "BusCompressor2"          },
+        { "4K B",                      "SSL4KB"                  },
+        { "4K E",                      "SSL4KE"                  },
+        { "4K G",                      "SSL4KG"                  },
+    };
+    const char* leaf = nullptr;
+    for (const auto& d : kDirs)
+        if (s.find(d.part) != std::string::npos) { leaf = d.leaf; break; }
+    if (!leaf) return std::string();
 #if defined(__APPLE__)
     return std::string("/Library/Application Support/Solid State Logic/PlugIns/Presets/") + leaf;
 #elif defined(_WIN32)
@@ -16920,34 +16944,66 @@ static std::string uf1MeterPresetDir_(MediaTrack* tr, int fx)
 
 // Enumerate *.xml preset names (without extension) in `dir`, NATURAL sort (so
 // "+9" precedes "+18" — matches SSL 360's own list order, cap uf1_rp).
-static std::vector<std::string> uf1ScanMeterPresets_(const std::string& dir)
+static std::vector<Uf1PresetEntry> uf1ScanMeterPresets_(const std::string& dir)
 {
-    std::vector<std::string> out;
+    std::vector<Uf1PresetEntry> out;
     if (dir.empty()) return out;
+#if defined(_WIN32)
+    const char* kSep = "\\";
+#else
+    const char* kSep = "/";
+#endif
     // ⚠ A correct PATH is only half of it — this scan was POSIX-only, so even
     // with the right folder Windows came back empty (2026-08-20).
-    auto take = [&out](const std::string& fn) {
+    // `group` prefixes the display name: the channel strips file their presets in
+    // SUB-FOLDERS ("SSL4KE/Bass/CG Bass.xml"), which the plug-in's own list shows
+    // as groups. One level deep, which is all SSL uses.
+    auto take = [&](const std::string& fn, const std::string& in,
+                    const std::string& group) {
         if (fn.size() <= 4) return;
         const std::string ext = fn.substr(fn.size() - 4);
-        if (ext == ".xml" || ext == ".XML") out.push_back(fn.substr(0, fn.size() - 4));
+        if (ext != ".xml" && ext != ".XML") return;
+        const std::string bare = fn.substr(0, fn.size() - 4);
+        out.push_back({ group.empty() ? bare : group + "/" + bare,
+                        in + kSep + fn });
     };
+    auto scan = [&](const std::string& in, const std::string& group, auto&& subdir) {
 #if defined(_WIN32)
-    WIN32_FIND_DATAA fd;
-    const std::string pat = dir + "\\*.xml";
-    HANDLE h = FindFirstFileA(pat.c_str(), &fd);
-    if (h != INVALID_HANDLE_VALUE) {
-        do {
-            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) take(fd.cFileName);
-        } while (FindNextFileA(h, &fd));
-        FindClose(h);
-    }
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA((in + "\\*").c_str(), &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                const std::string fn = fd.cFileName;
+                if (fn == "." || fn == "..") continue;
+                if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) subdir(in, fn);
+                else                                                take(fn, in, group);
+            } while (FindNextFileA(h, &fd));
+            FindClose(h);
+        }
 #else
-    if (DIR* d = opendir(dir.c_str())) {
-        while (dirent* e = readdir(d)) take(e->d_name);
-        closedir(d);
-    }
+        if (DIR* d = opendir(in.c_str())) {
+            while (dirent* e = readdir(d)) {
+                const std::string fn = e->d_name;
+                if (fn == "." || fn == "..") continue;
+                struct stat st{};
+                const std::string full = in + kSep + fn;
+                const bool isDir = (stat(full.c_str(), &st) == 0) && S_ISDIR(st.st_mode);
+                if (isDir) subdir(in, fn);
+                else       take(fn, in, group);
+            }
+            closedir(d);
+        }
 #endif
-    std::sort(out.begin(), out.end(), [](const std::string& a, const std::string& b) {
+    };
+    scan(dir, std::string(),
+         [&](const std::string& parent, const std::string& sub) {
+             scan(parent + kSep + sub, sub,
+                  [](const std::string&, const std::string&) {});   // one level
+         });
+    std::sort(out.begin(), out.end(), [](const Uf1PresetEntry& ea,
+                                         const Uf1PresetEntry& eb) {
+        const std::string& a = ea.name;
+        const std::string& b = eb.name;
         size_t i = 0, j = 0;
         while (i < a.size() && j < b.size()) {
             const unsigned char ca = a[i], cb = b[j];
@@ -16986,8 +17042,16 @@ static void uf1RefreshMeterPresetList_(MediaTrack* tr, int fx)
     g_uf1PresetSel = 0;
     char loaded[512] = {0};
     if (uf8::sslLoadedPresetName(tr, fx, loaded, sizeof(loaded))) {
-        for (size_t i = 0; i < g_uf1PresetList.size(); ++i)
-            if (g_uf1PresetList[i] == loaded) { g_uf1PresetSel = (int)i; break; }
+        for (size_t i = 0; i < g_uf1PresetList.size(); ++i) {
+            // The instance reports a base name; a grouped entry shows as
+            // "Group/Name", so match on the tail.
+            const std::string& n = g_uf1PresetList[i].name;
+            const size_t sl = n.find('/');
+            if (n == loaded || (sl != std::string::npos &&
+                                n.compare(sl + 1, std::string::npos, loaded) == 0)) {
+                g_uf1PresetSel = (int)i; break;
+            }
+        }
     }
     if (g_uf1PresetSel >= (int)g_uf1PresetList.size()) g_uf1PresetSel = 0;
     if (g_uf1PresetSel < 0) g_uf1PresetSel = 0;
@@ -17924,8 +17988,12 @@ void drainInputQueue()
                 case uf1::enc::kVpot4:          // per-screen/page params); in Channel
                     // view they drive the focused SSL channel-strip plug-in (step 3b,
                     // p188 tables — applyUf1ChannelVpot_).
-                    if (g_uf1MeterView.load()) applyUf1MeterVpot_(id, step);
-                    else                       applyUf1ChannelVpot_(id, step);
+                    // The preset browser owns the V-Pots in EITHER view — it
+                    // is the same browser, and V-Pot4 scrolls it. Its handler
+                    // lives in the meter path, which is where it started.
+                    if (g_uf1MeterView.load() || g_uf1PresetsMode.load())
+                         applyUf1MeterVpot_(id, step);
+                    else applyUf1ChannelVpot_(id, step);
                     break;
                 default:
                     break;
@@ -22437,7 +22505,7 @@ void onUf1Event(const uf1::InputEvent& ev)
             // param set. Scrolling V-Pot4 only moves the highlight (browse), matching
             // SSL — the load is the explicit push.
             if (ev.id == uf1::btn::kVpot4Push && ev.pressed &&
-                g_uf1MeterView.load() && g_uf1PresetsMode.load()) {
+                g_uf1PresetsMode.load()) {
                 g_uf1PresetLoadReq.store(true);
                 break;
             }
@@ -22489,6 +22557,14 @@ void onUf1Event(const uf1::InputEvent& ev)
             // store only (worker-safe); the painter emits the 0x0102 highlight on the
             // change (05 active / 01 normal). Channel view keeps SK3 as its own soft-key.
             // Not on Loudness (screen 3) — there SK3 is PLAY, not FINE.
+            // SK3 = "Navigate Back" whenever the browser is up, in either view —
+            // in the Channel view that key is otherwise a p188 soft-key, and the
+            // browser must never be a room without a door.
+            if (ev.id == uf1::btn::kDisplaySoft3 && ev.pressed &&
+                g_uf1PresetsMode.load()) {
+                g_uf1PresetsMode.store(false);
+                break;
+            }
             if (ev.id == uf1::btn::kDisplaySoft3 && ev.pressed &&
                 g_uf1MeterView.load()) {
                 // In the presets browser SK3 = "Navigate Back" → exit. That check
@@ -23662,6 +23738,34 @@ std::vector<uint8_t> uf1BuildLoudnessReadouts_()
 // own ~26.5 dB/s so the hold field decays like its native meter.
 // `force` (view just switched / track changed) resets the hold and bypasses
 // the change-throttle.
+// Which instance the preset browser is listing. In the Meter view that is the
+// pinned Meter; in the Channel view the focused SSL strip, which is how the same
+// browser serves CS2 and the 4K strips (Frank 2026-08-20: "die presets für SSL CS
+// brauchen wir schon lange"). One resolver, so the list, the LOADED-preset lookup
+// and the load itself cannot end up on three different plug-ins.
+// The browser's header cell. SSL's capture says "METER" there because that
+// capture was the Meter's browser; with the channel strips on the same list the
+// header has to name what is actually being browsed.
+static std::string uf1PresetBrowserTitle_(MediaTrack* tr, int fx, bool have)
+{
+    if (!have) return "PRESETS";
+    char nm[256] = {0};
+    if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm)) || !nm[0]) return "PRESETS";
+    std::string s = nm;
+    // "SSL Native Channel Strip 2" is wider than the 24-byte cell and every SSL
+    // name starts the same way; the distinguishing part is the tail.
+    const std::string drop = "SSL Native ";
+    if (s.compare(0, drop.size(), drop) == 0) s.erase(0, drop.size());
+    return s;
+}
+
+static bool uf1PresetBrowserFx_(MediaTrack*& outTr, int& outFx)
+{
+    if (g_uf1MeterView.load()) return uf1PinnedMeterTrackFx_(outTr, outFx);
+    outTr = nullptr; outFx = -1;
+    return uf1ResolveCsFx_(uf1FocusedTrack_(), outTr, outFx) >= 0 && outTr;
+}
+
 void uf1PaintMeter_(MediaTrack* tr, bool force)
 {
     // AUTO-MODE instance follow (Frank 2026-07-29 "der selektierten Spur folgen"):
@@ -23680,171 +23784,6 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // the bars fall like SSL AND switching to an already-frozen instance blanks
     // immediately (no 1 s phantom flash). Set before the getMeter reads below.
     { const int ps = GetPlayState(); sslcore::setTransportStopped(!(ps & 1) && !(ps & 4)); }
-    // ── PRESETS browser (SK4) ──────────────────────────────────────────────
-    // While open: pause the meter cycle, paint the browser chrome once (0x0100=0403,
-    // 0x0102=09, SK3→"Navigate Back", V-Pot4→"Select"), then stream the preset LIST.
-    // ★ THE LIST IS TEXT IN 0x011c — 8 fields × 25 bytes: field 0 = "METER" header,
-    //   fields 1-7 = a scrolling window of 7 preset names (DECODED from cap uf1_rp,
-    //   2026-08-03 — the earlier "0x0122 bitmap" note was WRONG; 0x0122 there is just a
-    //   scroll/highlight descriptor). The SELECTED preset sits at the TOP row (field 1);
-    //   scrolling advances the window. 0x011f = the scrollbar thumb (0..100). Without
-    //   this, 0x011c kept the frozen meter dB row → the "6 entries, all -inf" Frank saw.
-    // The list is SSL's own on-disk preset LIBRARY (uf1RefreshMeterPresetList_) — NOT
-    // REAPER's TrackFX preset combo, which is EMPTY for these plug-ins. V-Pot4 scrolls +
-    // loads (applyUf1MeterVpot_); SK3 exits. Early-returns → no meter streaming.
-    {
-        static bool sPresets = false;
-        const bool presets = g_uf1PresetsMode.load();
-        if (presets && g_uf1_dev) {
-            g_uf1CycleActive.store(false, std::memory_order_relaxed);  // pause meter cycle
-            MediaTrack* ptr = nullptr; int pfx = -1;
-            const bool have = uf1PinnedMeterTrackFx_(ptr, pfx);
-            // V-Pot4 push ("Select") → load the marked preset from its XML AND CLOSE
-            // the browser (Frank 2026-08-03: "das preset laden bei push", screen weg).
-            // Closing gives the visible feedback the load itself doesn't (the meter
-            // reappears with the new config). Exit runs next tick (presets→false).
-            if (g_uf1PresetLoadReq.exchange(false)) {
-                const int nn = (int)g_uf1PresetList.size();
-                if (have && nn > 0) {
-                    const int s = std::clamp(g_uf1PresetSel, 0, nn - 1);
-                    // Separator per platform. Win32 does accept a forward slash
-                    // mid-path, so the old hardcoded "/" would have worked by
-                    // accident — but a path that is right only because the API
-                    // is forgiving is one nobody can read.
-#if defined(_WIN32)
-                    const char* kSep = "\\";
-#else
-                    const char* kSep = "/";
-#endif
-                    const std::string path =
-                        g_uf1PresetDir + kSep + g_uf1PresetList[s] + ".xml";
-                    // ⇨ ASK THE PLUG-IN FIRST. PresetSelection is its own load
-                    // path — the property its browser writes — so this is a
-                    // string instead of a rewritten 840 KB chunk. It is not
-                    // trusted blindly: the plug-in re-announces the property
-                    // once it has loaded, and that ECHO is the proof. No echo in
-                    // time, or the path was already selected (then there is
-                    // nothing to echo), and the chunk load takes over. So this
-                    // can only be as good as before, or better.
-                    // ⛔ ONLY when the two identities agree. setPresetSelection
-                    // addresses the selected UDP PORT; ptr/pfx came from
-                    // uf1PinnedMeterTrackFx_, which falls back to the master's
-                    // monitoring chain when the announced track index resolves to
-                    // nothing. Where they disagree, the property write would load
-                    // the preset into SOMEBODY ELSE'S meter — a silent edit on a
-                    // track the user is not even looking at. Then the chunk path,
-                    // which addresses the FX itself, is the only correct one.
-                    const int annIdx = sslcore::currentMeterTrackIndex();
-                    MediaTrack* annTr = (annIdx > 0)
-                                      ? GetTrack(nullptr, annIdx - 1) : nullptr;
-                    if (annTr == ptr && sslcore::presetSelection() != path &&
-                        sslcore::setPresetSelection(path)) {
-                        g_uf1PresetPending      = path;
-                        g_uf1PresetPendingUntil = nowMs_() + 600;
-                        g_uf1PresetPendingTr    = ptr;
-                        g_uf1PresetPendingFx    = pfx;
-                    } else {
-                        uf1LoadMeterPresetXml_(ptr, pfx, path);
-                    }
-                }
-                g_uf1PresetsMode.store(false);
-            }
-            auto put = [&](uint16_t a, std::initializer_list<uint8_t> p) {
-                g_uf1_dev->send(uf1::buildScreen(a,
-                    std::span<const uint8_t>(std::data(p), p.size())));
-            };
-            auto txt = [&](uint16_t a, uint8_t idx, const char* s) {
-                std::vector<uint8_t> b; b.push_back(idx);
-                for (const char* c = s; *c; ++c) b.push_back(uint8_t(*c));
-                g_uf1_dev->send(uf1::buildScreen(a, b));
-            };
-            const bool enter = !sPresets;
-            if (enter) {
-                // Scan SSL's preset dir for THIS instance once, at browse-open.
-                if (have) {
-                    uf1RefreshMeterPresetList_(ptr, pfx);   // also picks the
-                } else {                                    // loaded preset
-                    g_uf1PresetList.clear();
-                    g_uf1PresetSel = 0;
-                }
-                put(0x0100, {0x04, 0x03});
-                put(0x0102, {0x09});
-                put(0x010d, {0x0a, 0x06, 0x06, 0x0a});
-                txt(0x0104, 0x02, "Navigate Back");
-                // ⚠ NOT the capture's "HARDWARE OUTPUT" (cap uf1_rp). That string
-                // is not a browser caption, it is the INSTANCE the capture
-                // session happened to be metering — replaying it renamed Frank's
-                // instance to somebody else's every time the browser opened
-                // ("dort steht hardware anstatt Adi on Po", 2026-08-20). Same
-                // class as the Loudness axis numbers earlier today: text inside a
-                // captured frame carries that session's state. The live label is
-                // the one the meter view already computes.
-                uf1EmitMeterInstanceLabel_();
-                txt(0x010e, 0x03, "Select");            // V-Pot4 label
-            }
-            const int n   = (int)g_uf1PresetList.size();
-            const int sel = std::clamp(g_uf1PresetSel, 0, n > 0 ? n - 1 : 0);
-
-            // 0x011c = 8 × 25-byte fields: [0]="METER", [1..7] = a 7-row window.
-            // ⚠ THE HIGHLIGHT IS THE FIRMWARE'S, AND IT IS FIXED ON THE MIDDLE ROW.
-            // So the selection has to be PUT there and the list scrolled under it —
-            // which is exactly what SSL does: in cap uf1_rp its window advances by
-            // ONE entry per detent, never in jumps, all the way through the list.
-            // A window that only scrolls when the selection would fall off (what
-            // this did before) leaves the green row on whatever happens to be in
-            // the middle, so it marks a preset nobody chose (Frank 2026-08-20:
-            // "jeweils die mittlere preset ist grün"). Rows outside the list stay
-            // EMPTY instead of clamping the window, so the green row is the
-            // selection at both ends of the list too.
-            const int winStart = sel - 3;
-
-            std::array<uint8_t, 200> row{};   // NUL-filled
-            // Folded HERE, at the emit, and BEFORE the 24-byte cut: preset names
-            // come off DISK, so a user-saved one can carry an umlaut, and the cut
-            // counts bytes. Same rule as every other UF1 name emit
-            // ([[surface-lcd-latin1-umlauts]]); the ASCII callers below are
-            // unaffected by the fold.
-            auto setField = [&](int f, const std::string& s) {
-                const std::string t = utf8ToLatin1(s);
-                for (size_t k = 0; k < t.size() && k < 24; ++k)
-                    row[(size_t)f * 25 + k] = (uint8_t)t[k];
-            };
-            setField(0, "METER");
-            if (!have)       setField(1, "(no meter)");
-            else if (n == 0) setField(1, "(no presets)");
-            else for (int f = 1; f <= 7; ++f) {
-                const int pi = winStart + (f - 1);
-                if (pi < 0 || pi >= n) continue;      // above/below the list
-                setField(f, g_uf1PresetList[pi]);     // no marker: the middle row
-            }                                         // IS the selection
-            // Restate the list + clear the goniometer area EVERY tick, NOT change-
-            // detected: after we pause the cycle on entry the pacer still flushes its
-            // ONE in-flight frame, whose tail re-sends 0x011c (= the -inf dB grid) and
-            // 0x0122 (the goniometer) ~40 ms later. A change-detected send would lose
-            // that race and stick on -inf (Frank "names ~0.1s then -inf"). Restating
-            // wins once the pacer idles; SSL likewise restates 0x011c every cycle.
-            g_uf1_dev->send(uf1::buildScreen(0x011c, row));
-            std::array<uint8_t, 251> z{};
-            g_uf1_dev->send(uf1::buildScreen(0x0122, z));
-
-            static int sCur = INT_MIN;
-            uint8_t cur = 0;
-            if (n > 1) cur = uint8_t(std::clamp(int(std::lround(100.0 * sel / (n - 1))), 0, 100));
-            if (enter || int(cur) != sCur) {
-                sCur = cur;
-                g_uf1_dev->send(uf1::buildScreen(0x011f, std::span<const uint8_t>(&cur, 1)));
-            }
-            sPresets = true;
-            return;   // browsing → skip all meter streaming
-        }
-        if (!presets && sPresets) {
-            sPresets = false;   // exited → restore the meter screen + resume the cycle
-            for (const auto& f : uf1MeterScreenBurst_(std::clamp(g_uf1MeterScreen.load(), 0, 3)))
-                g_uf1_dev->send(uf1::buildScreen(f.addr, f.payload));
-            uf1EmitMeterInstanceLabel_();
-            force = true;
-        }
-    }
     // RESET (SK2) request: flash 0x0102=03 for ~150 ms (capture 2026-08-02) and clear
     // our peak-hold statics by forcing a full repaint (the force-gated resets below zero
     // sFallbackHold + sBarHold). The plug-in's OWN held peak needs a Core→plug-in reset
@@ -27424,9 +27363,11 @@ void uf1PaintChannel_()
     const int   modNow     = static_cast<int>(uf8::bindings::bankModifierSnapshot());
     const bool  modChanged = (modNow != sMod);
     sMod = modNow;
+    const bool presetClosed = g_uf1PresetJustClosed;
+    g_uf1PresetJustClosed = false;
     const bool changed = (tr != sTr) || viewChanged || screenChanged || menuEdge
                        || modeFieldChanged || identChanged || shiftChanged
-                       || modChanged;
+                       || modChanged || presetClosed;
     // Bus-Comp GR meter on the four display soft-key LEDs (Settings → Devices →
     // Metering). Read ONCE per tick, here, because two places need it: the p188
     // soft-key block must know whether to leave those LEDs alone, and the meter
@@ -27446,7 +27387,7 @@ void uf1PaintChannel_()
     // meters to their idle 0xff state, which the pacer then undoes a frame later.
     // Layout-establishing sends use THIS gate; text/label repaints keep `changed`.
     const bool layoutChanged = (tr != sTr) || viewChanged || screenChanged
-                             || identChanged;
+                             || identChanged || presetClosed;
     sTr = tr;
     // The meter INSTANCE the view reads can change with NO UF1 action: the
     // auto-follow tracks the SELECTED REAPER track (Frank 2026-07-29). When it
@@ -27805,6 +27746,179 @@ void uf1PaintChannel_()
         }
     }
 
+    // ── PRESETS browser (SK4 in the Meter view, an action in the Channel view) ──
+    // Painted BEFORE the view dispatch, because it belongs to neither: the same
+    // list serves the Meter's presets and the channel strips' (Frank 2026-08-20:
+    // "die presets für SSL CS brauchen wir schon lange"). Which instance it
+    // lists comes from uf1PresetBrowserFx_.
+    // While open: pause the meter cycle, paint the browser chrome once (0x0100=0403,
+    // 0x0102=09, SK3→"Navigate Back", V-Pot4→"Select"), then stream the preset LIST.
+    // ★ THE LIST IS TEXT IN 0x011c — 8 fields × 25 bytes: field 0 = "METER" header,
+    //   fields 1-7 = a scrolling window of 7 preset names (DECODED from cap uf1_rp,
+    //   2026-08-03 — the earlier "0x0122 bitmap" note was WRONG; 0x0122 there is just a
+    //   scroll/highlight descriptor). The SELECTED preset sits at the TOP row (field 1);
+    //   scrolling advances the window. 0x011f = the scrollbar thumb (0..100). Without
+    //   this, 0x011c kept the frozen meter dB row → the "6 entries, all -inf" Frank saw.
+    // The list is SSL's own on-disk preset LIBRARY (uf1RefreshMeterPresetList_) — NOT
+    // REAPER's TrackFX preset combo, which is EMPTY for these plug-ins. V-Pot4 scrolls +
+    // loads (applyUf1MeterVpot_); SK3 exits. Early-returns → no meter streaming.
+    {
+        static bool sPresets = false;
+        const bool presets = g_uf1PresetsMode.load();
+        if (presets && g_uf1_dev) {
+            g_uf1CycleActive.store(false, std::memory_order_relaxed);  // pause meter cycle
+            MediaTrack* ptr = nullptr; int pfx = -1;
+            const bool have = uf1PresetBrowserFx_(ptr, pfx);
+            // V-Pot4 push ("Select") → load the marked preset from its XML AND CLOSE
+            // the browser (Frank 2026-08-03: "das preset laden bei push", screen weg).
+            // Closing gives the visible feedback the load itself doesn't (the meter
+            // reappears with the new config). Exit runs next tick (presets→false).
+            if (g_uf1PresetLoadReq.exchange(false)) {
+                const int nn = (int)g_uf1PresetList.size();
+                if (have && nn > 0) {
+                    const int s = std::clamp(g_uf1PresetSel, 0, nn - 1);
+                    // The entry carries its own path: with groups the file is
+                    // one folder deeper than the list's root.
+                    const std::string path = g_uf1PresetList[s].path;
+                    // ⇨ ASK THE PLUG-IN FIRST. PresetSelection is its own load
+                    // path — the property its browser writes — so this is a
+                    // string instead of a rewritten 840 KB chunk. It is not
+                    // trusted blindly: the plug-in re-announces the property
+                    // once it has loaded, and that ECHO is the proof. No echo in
+                    // time, or the path was already selected (then there is
+                    // nothing to echo), and the chunk load takes over. So this
+                    // can only be as good as before, or better.
+                    // ⛔ ONLY when the two identities agree. setPresetSelection
+                    // addresses the selected UDP PORT; ptr/pfx came from
+                    // uf1PinnedMeterTrackFx_, which falls back to the master's
+                    // monitoring chain when the announced track index resolves to
+                    // nothing. Where they disagree, the property write would load
+                    // the preset into SOMEBODY ELSE'S meter — a silent edit on a
+                    // track the user is not even looking at. Then the chunk path,
+                    // which addresses the FX itself, is the only correct one.
+                    // …and only in the Meter view. The port identity behind
+                    // setPresetSelection is the METER's; on a channel strip it
+                    // names a different plug-in, so the chunk path — which
+                    // addresses the FX itself — is the only correct one there.
+                    const int annIdx = g_uf1MeterView.load()
+                                     ? sslcore::currentMeterTrackIndex() : -1;
+                    MediaTrack* annTr = (annIdx > 0)
+                                      ? GetTrack(nullptr, annIdx - 1) : nullptr;
+                    if (annTr == ptr && sslcore::presetSelection() != path &&
+                        sslcore::setPresetSelection(path)) {
+                        g_uf1PresetPending      = path;
+                        g_uf1PresetPendingUntil = nowMs_() + 600;
+                        g_uf1PresetPendingTr    = ptr;
+                        g_uf1PresetPendingFx    = pfx;
+                    } else {
+                        uf1LoadMeterPresetXml_(ptr, pfx, path);
+                    }
+                }
+                g_uf1PresetsMode.store(false);
+            }
+            auto put = [&](uint16_t a, std::initializer_list<uint8_t> p) {
+                g_uf1_dev->send(uf1::buildScreen(a,
+                    std::span<const uint8_t>(std::data(p), p.size())));
+            };
+            auto txt = [&](uint16_t a, uint8_t idx, const char* s) {
+                std::vector<uint8_t> b; b.push_back(idx);
+                for (const char* c = s; *c; ++c) b.push_back(uint8_t(*c));
+                g_uf1_dev->send(uf1::buildScreen(a, b));
+            };
+            const bool enter = !sPresets;
+            if (enter) {
+                // Scan SSL's preset dir for THIS instance once, at browse-open.
+                if (have) {
+                    uf1RefreshMeterPresetList_(ptr, pfx);   // also picks the
+                } else {                                    // loaded preset
+                    g_uf1PresetList.clear();
+                    g_uf1PresetSel = 0;
+                }
+                put(0x0100, {0x04, 0x03});
+                put(0x0102, {0x09});
+                put(0x010d, {0x0a, 0x06, 0x06, 0x0a});
+                txt(0x0104, 0x02, "Navigate Back");
+                // ⚠ NOT the capture's "HARDWARE OUTPUT" (cap uf1_rp). That string
+                // is not a browser caption, it is the INSTANCE the capture
+                // session happened to be metering — replaying it renamed Frank's
+                // instance to somebody else's every time the browser opened
+                // ("dort steht hardware anstatt Adi on Po", 2026-08-20). Same
+                // class as the Loudness axis numbers earlier today: text inside a
+                // captured frame carries that session's state. The live label is
+                // the one the meter view already computes.
+                uf1EmitMeterInstanceLabel_();
+                txt(0x010e, 0x03, "Select");            // V-Pot4 label
+            }
+            const int n   = (int)g_uf1PresetList.size();
+            const int sel = std::clamp(g_uf1PresetSel, 0, n > 0 ? n - 1 : 0);
+
+            // 0x011c = 8 × 25-byte fields: [0]="METER", [1..7] = a 7-row window.
+            // ⚠ THE HIGHLIGHT IS THE FIRMWARE'S, AND IT IS FIXED ON THE MIDDLE ROW.
+            // So the selection has to be PUT there and the list scrolled under it —
+            // which is exactly what SSL does: in cap uf1_rp its window advances by
+            // ONE entry per detent, never in jumps, all the way through the list.
+            // A window that only scrolls when the selection would fall off (what
+            // this did before) leaves the green row on whatever happens to be in
+            // the middle, so it marks a preset nobody chose (Frank 2026-08-20:
+            // "jeweils die mittlere preset ist grün"). Rows outside the list stay
+            // EMPTY instead of clamping the window, so the green row is the
+            // selection at both ends of the list too.
+            const int winStart = sel - 3;
+
+            std::array<uint8_t, 200> row{};   // NUL-filled
+            // Folded HERE, at the emit, and BEFORE the 24-byte cut: preset names
+            // come off DISK, so a user-saved one can carry an umlaut, and the cut
+            // counts bytes. Same rule as every other UF1 name emit
+            // ([[surface-lcd-latin1-umlauts]]); the ASCII callers below are
+            // unaffected by the fold.
+            auto setField = [&](int f, const std::string& s) {
+                const std::string t = utf8ToLatin1(s);
+                for (size_t k = 0; k < t.size() && k < 24; ++k)
+                    row[(size_t)f * 25 + k] = (uint8_t)t[k];
+            };
+            // The header is the plug-in, not a fixed word: the browser is no
+            // longer the Meter's alone.
+            setField(0, uf1PresetBrowserTitle_(ptr, pfx, have));
+            if (!have)       setField(1, "(no plug-in)");
+            else if (n == 0) setField(1, "(no presets)");
+            else for (int f = 1; f <= 7; ++f) {
+                const int pi = winStart + (f - 1);
+                if (pi < 0 || pi >= n) continue;      // above/below the list
+                setField(f, g_uf1PresetList[pi].name);  // no marker: the middle
+            }                                         // IS the selection
+            // Restate the list + clear the goniometer area EVERY tick, NOT change-
+            // detected: after we pause the cycle on entry the pacer still flushes its
+            // ONE in-flight frame, whose tail re-sends 0x011c (= the -inf dB grid) and
+            // 0x0122 (the goniometer) ~40 ms later. A change-detected send would lose
+            // that race and stick on -inf (Frank "names ~0.1s then -inf"). Restating
+            // wins once the pacer idles; SSL likewise restates 0x011c every cycle.
+            g_uf1_dev->send(uf1::buildScreen(0x011c, row));
+            std::array<uint8_t, 251> z{};
+            g_uf1_dev->send(uf1::buildScreen(0x0122, z));
+
+            static int sCur = INT_MIN;
+            uint8_t cur = 0;
+            if (n > 1) cur = uint8_t(std::clamp(int(std::lround(100.0 * sel / (n - 1))), 0, 100));
+            if (enter || int(cur) != sCur) {
+                sCur = cur;
+                g_uf1_dev->send(uf1::buildScreen(0x011f, std::span<const uint8_t>(&cur, 1)));
+            }
+            sPresets = true;
+            return;   // browsing → this owns the display, paint nothing else
+        }
+        if (!presets && sPresets) {
+            sPresets = false;
+            // Exited. The Meter view can restore itself from its own screen
+            // burst; the Channel view has no such burst, so it is repainted by
+            // forcing the next tick's change gates (g_uf1PresetJustClosed).
+            if (g_uf1MeterView.load()) {
+                for (const auto& f : uf1MeterScreenBurst_(std::clamp(g_uf1MeterScreen.load(), 0, 3)))
+                    g_uf1_dev->send(uf1::buildScreen(f.addr, f.payload));
+                uf1EmitMeterInstanceLabel_();
+            }
+            g_uf1PresetJustClosed = true;
+        }
+    }
     if (meterView) {
         uf1PaintMeter_(tr, changed);
     } else {
@@ -44171,6 +44285,19 @@ void registerBindingHandlers()
     regUf1View("uf1_view_daw",    kUf1ViewDaw,    "UF1 Mode: DAW");
     regUf1View("uf1_view_meter",  kUf1ViewMeter,  "UF1 Mode: Meter");
     regUf1View("uf1_view_sends",  kUf1ViewSends,  "UF1 Mode: Sends");
+
+    // The preset browser, as an action. In the Meter view SK4 already opens it;
+    // in the Channel view every soft key is a p188 parameter, so there is no key
+    // to take — this makes it bindable to any button on any surface instead of
+    // stealing one. Same browser, same list, whichever plug-in the view resolves
+    // (Frank 2026-08-20: "die presets für SSL CS brauchen wir schon lange").
+    registerBuiltin("uf1_presets", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_uf1PresetsMode.store(!g_uf1PresetsMode.load());
+        },
+        [](int) { return g_uf1PresetsMode.load(); },
+        "UF1: Preset browser", false
+    });
     registerBuiltin("uf1_view_cycle", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (firing) uf1SetViewMode_((uf1ViewMode_() + 1) % kUf1ViewCount);
