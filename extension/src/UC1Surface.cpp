@@ -1377,6 +1377,11 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             // Toggle CS/BC selection on every rotation step (only two
             // options, so the magnitude of step is irrelevant — flip).
             presetsSelectCs_ = !presetsSelectCs_;
+            // The other section is a DIFFERENT instance on a different track;
+            // its list and folder have nothing to do with this one's.
+            presetList_.clear();
+            presetTrack_ = nullptr; presetFx_ = -1;
+            presetGroup_.clear(); presetSel_ = 0;
             renderPresetsSubscreen_();
             ++stats_.knobEventsHandled;
             return;
@@ -1386,10 +1391,6 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         // REAPER's only sequential preset API and is empty for every SSL
         // plug-in, so it browsed nothing and overwrote the instance doing it.
         // Browsing is now free of side effects and CONFIRM loads.
-        if (!focusedTrack_) {
-            ++stats_.knobEventsHandled;
-            return;
-        }
         refreshPresetList_();
         if (const int rn = static_cast<int>(presetRows_().size()); rn > 0)
             presetSel_ = std::clamp(presetSel_ + step, 0, rn - 1);
@@ -3359,10 +3360,6 @@ void UC1Surface::renderPresetsSubscreen_()
         device_->send(buildMenuIndicator08());
         device_->send(buildMenuCommit());
     };
-    if (!focusedTrack_) {
-        sendListBody("", "", "<no track>", "", "");
-        return;
-    }
     refreshPresetList_();
     if (presetFx_ < 0) {
         sendListBody("", "", "<no plug-in>", "", "");
@@ -3421,11 +3418,23 @@ std::vector<UC1Surface::PresetRow> UC1Surface::presetRows_() const
 
 void UC1Surface::refreshPresetList_()
 {
-    // Rebuilt when the browsed instance changes, not on every render: a scan
-    // walks the whole library (the 4K E has 114 files) and this runs on every
-    // encoder detent.
+    // ⛔ EACH SECTION HAS ITS OWN INSTANCE, and the two are not on the same
+    // track. The Channel Strip section follows focusedTrack_ (the CHANNEL
+    // encoder), the Bus Comp section follows its own anchor (the BC encoder) —
+    // that is the whole point of the UC1 having both live at once. So the
+    // CHANNEL STRIP folder browses the strip under the CS section and the BUS
+    // COMP folder the compressor under the BC section (Frank 2026-08-20: "die
+    // sollen sich auf die im moment gewählte instanz beziehen"). Reading both
+    // off focusedTrack_ pointed the BC list at whatever compressor happened to
+    // sit on the CS section's track, and at nothing when that track had none.
+    void* const domTrack = presetsSelectCs_ ? focusedTrack_ : effectiveBcTrack_();
+    if (!domTrack) {
+        presetList_.clear();
+        presetTrack_ = nullptr; presetFx_ = -1;
+        return;
+    }
     auto match = uf8::lookupPluginOnTrack(
-        focusedTrack_,
+        domTrack,
         presetsSelectCs_ ? uf8::Domain::ChannelStrip
                          : uf8::Domain::BusComp);
     if (!match.map) {
@@ -3433,19 +3442,19 @@ void UC1Surface::refreshPresetList_()
         presetTrack_ = nullptr; presetFx_ = -1;
         return;
     }
-    if (presetTrack_ == focusedTrack_ && presetFx_ == match.fxIndex &&
+    if (presetTrack_ == domTrack && presetFx_ == match.fxIndex &&
         !presetList_.empty())
         return;
-    presetTrack_ = focusedTrack_;
+    presetTrack_ = domTrack;
     presetFx_    = match.fxIndex;
     presetList_  = sslpreset::listFor(
-        static_cast<MediaTrack*>(focusedTrack_), match.fxIndex);
+        static_cast<MediaTrack*>(domTrack), match.fxIndex);
     // Start ON what the instance has loaded, so the list opens where the user
     // already is instead of at the top. The plug-in keeps that name itself.
     presetSel_   = 0;
     presetGroup_.clear();
     char loaded[512] = {0};
-    if (uf8::sslLoadedPresetName(static_cast<MediaTrack*>(focusedTrack_),
+    if (uf8::sslLoadedPresetName(static_cast<MediaTrack*>(domTrack),
                                  match.fxIndex, loaded, sizeof(loaded))) {
         for (size_t i = 0; i < presetList_.size(); ++i) {
             if (presetList_[i].name != loaded) continue;
