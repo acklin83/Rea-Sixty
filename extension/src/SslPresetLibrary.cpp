@@ -174,7 +174,11 @@ std::vector<Entry> scan(const std::string& dir)
         out.push_back({ bare, group, in + kSep + fn });
     };
     struct Walk {
-        decltype(take)& take;
+        // NOT named `take`: GCC rejects a member whose name changes the meaning
+        // of the enclosing scope's `take` ("changes meaning of 'take'",
+        // -fpermissive), while clang accepts it. Same family as the brace-assign
+        // trap — the Mac builds it, the Linux CI job does not.
+        decltype(take)& add;
         const char* sep;
         // `group` accumulates the path BELOW the root, '/'-joined, so a surface
         // can rebuild the folder tree from it.
@@ -191,7 +195,7 @@ std::vector<Entry> scan(const std::string& dir)
                     go(in + sep + fn, group.empty() ? fn : group + "/" + fn,
                        depth + 1);
                 else
-                    take(fn, in, group);
+                    add(fn, in, group);
             } while (FindNextFileA(h, &fd));
             FindClose(h);
 #else
@@ -205,7 +209,7 @@ std::vector<Entry> scan(const std::string& dir)
                 if (stat(full.c_str(), &st) != 0) continue;
                 if (S_ISDIR(st.st_mode))
                     go(full, group.empty() ? fn : group + "/" + fn, depth + 1);
-                else                     take(fn, in, group);
+                else                     add(fn, in, group);
             }
             closedir(d);
 #endif
