@@ -92,6 +92,14 @@ local restore_x, restore_y, restore_w, restore_h = loadRect()
 local first_frame = true
 local last_save_x, last_save_y, last_save_w, last_save_h
 
+-- The ANCHOR: the point on screen the user parked this thing at. For the banner
+-- it is the window's top-left, as it always was. For the ring it is where the
+-- LIVE line sits, so the ring opens up and down around it instead of hanging
+-- down off it. Both are kept in the same saved rect, and the placement below
+-- converts between them.
+local anchor_x = restore_x or 600
+local anchor_y = restore_y or 120
+
 ------------------------------------------------------------------------
 -- Banner state — watch the published seq, restart the hide timer on change.
 ------------------------------------------------------------------------
@@ -123,23 +131,49 @@ end
 -- How many neighbours to show either side of the live one.
 local function ringWings() return math.max(1, math.floor(num("mode_ring_wings", 2))) end
 
+-- Which offsets get drawn, as one answer both the layout and the placement use.
+-- A window wide enough to hold the whole ring stops being a window: show ALL of
+-- it, from the top, and let the marker do the moving. A symmetric window cannot
+-- show an even-sized ring whole (two modes would render as one), and a list that
+-- hides half of a two-item ring is worse than no list.
+local function ringSpan()
+  local n = #ring_names
+  local wings = ringWings()
+  if 2 * wings + 1 >= n then return -ring_idx, n - 1 - ring_idx end
+  return -wings, wings
+end
+
+-- ⇨ THE RING GROWS AROUND THE ANCHOR, NOT DOWN FROM IT (Frank 2026-08-20).
+-- An ImGui window is placed by its top-left, so an auto-resizing one hangs
+-- DOWNWARD off the spot you dragged it to and the live entry walks further down
+-- the more neighbours you show. What you park is the place you look at, so the
+-- LIVE line is what gets pinned there and the ring opens up and down around it.
+--
+-- That needs the live line's offset inside the window, which is only knowable
+-- after a frame has drawn it. Measured once per line-count and remembered, so
+-- only the very first hold of a given size settles, and even that is one frame.
+local ring_dy      = {}     -- line count -> live line's y offset inside the window
+local ring_live_y  = nil    -- this frame's measured live-line screen y
+local WIN_PAD_Y    = 10     -- matches the WindowPadding we push below
+
+-- The offset to use for a given line count: measured if we have it, else the
+-- honest estimate (padding + the caption + the lines above the live one).
+local function ringDy(lines, above, lineh)
+  return ring_dy[lines] or (WIN_PAD_Y + lineh * (1 + above))
+end
+
 -- Draw the carousel: the live mode full strength in the middle, its neighbours
 -- fading out either side, wrapping. Wrapping matters — it IS a ring, and a list
 -- that stopped at the ends would say the opposite.
 local function drawRing(fg)
   local n = #ring_names
-  local wings = ringWings()
 
   reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_ItemSpacing(), 8, 2)
   reaper.ImGui_TextColored(ctx, rgba(fg, 0x70), ring_kind)
   reaper.ImGui_PopStyleVar(ctx, 1)
 
-  -- A window wide enough to hold the whole ring stops being a window: show ALL
-  -- of it, from the top, and let the marker do the moving. A symmetric window
-  -- cannot show an even-sized ring whole (two modes would render as one), and a
-  -- list that hides half of a two-item ring is worse than no list.
-  local from, to = -wings, wings
-  if 2 * wings + 1 >= n then from, to = -ring_idx, n - 1 - ring_idx end
+  local from, to = ringSpan()
+  ring_live_y = nil
 
   for off = from, to do
     local i = ((ring_idx + off) % n + n) % n
@@ -147,6 +181,8 @@ local function drawRing(fg)
     if off == 0 then
       -- The live one carries a marker as well as the colour, so it still reads
       -- at a glance on a dim screen or from across the room.
+      local _, cy = reaper.ImGui_GetCursorScreenPos(ctx)
+      ring_live_y = cy
       reaper.ImGui_TextColored(ctx, rgba(fg, 0xFF), "\xE2\x96\xB8 " .. name)
     else
       local d = math.abs(off)
@@ -319,12 +355,23 @@ local function loop()
   local showing = ringing
     or (reaper.time_precise() < show_until and cur_text ~= "")
 
-  if first_frame then
-    if restore_x then
-      reaper.ImGui_SetNextWindowPos(ctx, restore_x, restore_y)
-    else
-      reaper.ImGui_SetNextWindowPos(ctx, 600, 120)
-    end
+  -- Placement. The banner is left alone after the first frame so it stays
+  -- draggable; the ring is commanded every frame, because its height changes
+  -- with the neighbour count and the live line has to keep landing on the
+  -- anchor. A drag during a ring still wins: the position that comes back
+  -- differs from the one we asked for, and that difference IS the new anchor.
+  local ring_lines, ring_above = 0, 0
+  local want_x, want_y
+  if ringing then
+    local from, to = ringSpan()
+    ring_lines = to - from + 1
+    ring_above = -from
+    local dy = ringDy(ring_lines, ring_above, font_px * 1.35)
+    want_x, want_y = anchor_x, anchor_y + WIN_PAD_Y - dy
+    reaper.ImGui_SetNextWindowPos(ctx, want_x, want_y)
+    first_frame = false
+  elseif first_frame then
+    reaper.ImGui_SetNextWindowPos(ctx, anchor_x, anchor_y)
     first_frame = false
   end
 
@@ -361,10 +408,25 @@ local function loop()
       drawContextMenu()
       local px, py = reaper.ImGui_GetWindowPos(ctx)
       local pw, ph = reaper.ImGui_GetWindowSize(ctx)
-      px, py, pw, ph = math.floor(px), math.floor(py), math.floor(pw), math.floor(ph)
-      if px ~= last_save_x or py ~= last_save_y then
-        last_save_x, last_save_y, last_save_w, last_save_h = px, py, pw, ph
-        saveRect(px, py, pw, ph)
+      if ringing then
+        -- Learn where the live line actually sits inside this window, so the
+        -- next frame (and every later hold of this size) places it exactly.
+        if ring_live_y and ring_lines > 0 then
+          ring_dy[ring_lines] = ring_live_y - py
+        end
+        -- Dragged out from under us? Then the anchor moved with it.
+        if want_x and (math.abs(px - want_x) > 0.5 or math.abs(py - want_y) > 0.5) then
+          anchor_x = px
+          anchor_y = py + (ring_dy[ring_lines] or (py - want_y)) - WIN_PAD_Y
+        end
+      else
+        anchor_x, anchor_y = px, py
+      end
+      local sx, sy = math.floor(anchor_x), math.floor(anchor_y)
+      pw, ph = math.floor(pw), math.floor(ph)
+      if sx ~= last_save_x or sy ~= last_save_y then
+        last_save_x, last_save_y, last_save_w, last_save_h = sx, sy, pw, ph
+        saveRect(sx, sy, pw, ph)
       end
     else
       -- Keep the context alive with a zero-footprint dummy.

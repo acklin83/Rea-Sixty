@@ -750,6 +750,10 @@ and takes its colours and font from the same right-click menu. **Ring
 neighbours** there decides how many you see either side. A ring short enough to
 fit is simply shown whole.
 
+The spot you drag it to is where the **live** one stays. The ring opens upward
+and downward around it, so adding neighbours grows the list in both directions
+rather than pushing what you are looking at further down the screen.
+
 Three modifiers stack on the jog:
 
 - **Shift** — fine. Divides the step (default ÷4).
