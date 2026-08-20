@@ -75,6 +75,27 @@ bool  g_trace = false;
 // starts over rather than rotating: a live diagnosis reads the NEWEST lines,
 // and a second file on disk is another thing to forget about.
 constexpr long kTraceMaxBytes = 100L * 1024 * 1024;
+// ── Object-declaration dump ────────────────────────────────────────────────
+// The plug-in NAMES every object it uses: a type-16 frame carries the object's
+// 8-byte id and its wire name as protobuf field 2. That is the whole reason a
+// property can be found WITHOUT a USB capture — we are the Core, both ends of
+// this TCP connection are ours. Turn the dump on, press the control in the
+// plug-in's own GUI, and the name plus the value it writes are in the log.
+// Separate from g_trace on purpose: the trace is a firehose, this is a list.
+std::atomic<bool> g_objDump{false};
+
+void objLog(const char* fmt, ...) {
+    static std::mutex mx;
+    std::lock_guard<std::mutex> lk(mx);
+    FILE* f = std::fopen(uf8::logPath("reasixty_ssl_objects.log").c_str(), "a");
+    if (!f) return;
+    va_list ap; va_start(ap, fmt);
+    std::vfprintf(f, fmt, ap);
+    va_end(ap);
+    std::fputc('\n', f);
+    std::fclose(f);
+}
+
 void  slog(const char* fmt, ...) {
     if (!g_trace) return;
     const std::string path = uf8::logPath("reaper_sslcore.log");
@@ -1223,6 +1244,17 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                     if (sl == 0 || k + 2 + sl > avail) break;
                                     const std::string nm(
                                         reinterpret_cast<const char*>(pay + k + 2), sl);
+                                    if (g_objDump.load(std::memory_order_relaxed)) {
+                                        char line[640];
+                                        std::snprintf(line, sizeof(line),
+                                            "decl %02x%02x%02x%02x%02x%02x%02x%02x  %s",
+                                            pay[0], pay[1], pay[2], pay[3],
+                                            pay[4], pay[5], pay[6], pay[7], nm.c_str());
+                                        static std::mutex dmx;
+                                        static std::set<std::string> dseen;
+                                        std::lock_guard<std::mutex> dlk(dmx);
+                                        if (dseen.insert(line).second) objLog("%s", line);
+                                    }
                                     const std::string suf = "EQCurveData";
                                     if (nm.size() > suf.size() &&
                                         nm.compare(nm.size() - suf.size(), suf.size(), suf) == 0) {
@@ -1248,6 +1280,27 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                     }
                                     break;
                                 }
+                            }
+
+                            // Every DISTINCT property write, deduped on the exact
+                            // bytes: the first 8 are the object id from the
+                            // declarations above, the rest is the value. A control
+                            // pressed in the plug-in's GUI shows up here as a pair
+                            // the connect burst never sent.
+                            if (ftype == 18 && avail >= 8 &&
+                                g_objDump.load(std::memory_order_relaxed)) {
+                                std::string h;
+                                h.reserve(80);
+                                char bb[4];
+                                for (size_t k = 0; k < avail && k < 40; ++k) {
+                                    std::snprintf(bb, sizeof(bb), "%02x", pay[k]);
+                                    h += bb;
+                                }
+                                static std::mutex smx;
+                                static std::set<std::string> sseen;
+                                std::lock_guard<std::mutex> slk(smx);
+                                if (sseen.size() < 4000 && sseen.insert(h).second)
+                                    objLog("set  %s", h.c_str());
                             }
 
                             // EQ CURVE frames on the object named above.
@@ -1464,6 +1517,8 @@ void stop() {
     if (!g_running.exchange(false)) { if (g_worker.joinable()) g_worker.join(); return; }
     if (g_worker.joinable()) g_worker.join();
 }
+
+void setObjectDump(bool on) { g_objDump.store(on, std::memory_order_relaxed); }
 
 bool isRunning()      { return g_running.load(); }
 bool pluginConnected(){ return g_connected.load(); }

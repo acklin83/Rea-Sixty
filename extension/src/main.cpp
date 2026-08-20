@@ -615,6 +615,9 @@ constexpr double  kUf1MeterFineFactor = 0.25;   // continuous step multiplier wh
 // peak-hold statics. (The plug-in's OWN held peak needs a Core→plug-in reset — not in
 // the SSL→UF1 stream — so this resets what WE hold/decay; HW-verify what remains.)
 std::atomic<bool> g_uf1MeterResetReq {false};
+// Loudness screen SK3 = PLAY: toggles the plug-in's Loudness Play/Pause (param 50).
+// Worker-safe request; the main-thread painter owns the REAPER call.
+std::atomic<bool> g_uf1LoudPlayReq {false};
 // Meter-view PRESETS soft-key (SK4, 0x1C): SK4 opens the preset browser for the pinned
 // Meter instance (0x0100=0403, 0x0102=09, cap 2026-08-02). V-Pot4 scrolls the SSL Meter /
 // Meter Pro preset LIBRARY (SSL's own XML presets on disk — REAPER's TrackFX_GetPreset is
@@ -22489,7 +22492,10 @@ void onUf1Event(const uf1::InputEvent& ev)
                     g_uf1MeterFine.store(!g_uf1MeterFine.load());
                     break;
                 }
-                // Loudness: SK3 is PLAY, not FINE — nothing here owns it.
+                // Loudness: SK3 is PLAY, not FINE. Toggles the plug-in's own
+                // Loudness Play/Pause; the painter does the REAPER call.
+                g_uf1LoudPlayReq.store(true);
+                break;
             }
             // Display soft-key 4 = PRESETS in the Meter view — open/close the preset
             // browser for the pinned Meter instance (capture 2026-08-02). Atomic store
@@ -23805,20 +23811,58 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         sResetFlashUntil = nowMs_() + 150;
         force = true;                       // → sFallbackHold / sBarHold reset below
     }
-    // Soft-key highlight (0x0102): RESET flash 03 > FINE active 05 > normal 01 (the
-    // capture-confirmed soft-key-row byte). Not on Loudness (SK3=PLAY owns 0x0102).
+    // Object-declaration dump (ExtState rea_sixty/sslcore_obj_dump=1 ->
+    // <tmp>/reasixty_ssl_objects.log). The plug-in names every object it uses,
+    // so this is how a control that is NOT a host parameter gets found without a
+    // USB capture: switch it on, press the control in the plug-in's own GUI, and
+    // read the name and the value it wrote. Polled here rather than latched once
+    // so it can be switched on and off without restarting REAPER; the meter view
+    // is exactly where the plug-in is connected anyway. Main thread, 2 s apart.
+    {
+        static int64_t sObjDumpNext = 0;
+        const int64_t nowD = nowMs_();
+        if (nowD >= sObjDumpNext) {
+            sObjDumpNext = nowD + 2000;
+            const char* v = GetExtState("rea_sixty", "sslcore_obj_dump");
+            sslcore::setObjectDump(v && *v && std::strcmp(v, "0") != 0);
+        }
+    }
+    // PLAY (SK3, Loudness only): toggle the plug-in's Loudness Play/Pause, dump
+    // row 50. A real host parameter, so this is an ordinary write on the pinned
+    // instance — nothing about it needs the Core protocol.
+    if (g_uf1LoudPlayReq.exchange(false)) {
+        MediaTrack* ltr = nullptr; int lfx = -1;
+        if (uf1PinnedMeterTrackFx_(ltr, lfx)) {
+            const int lp = uf1MeterParam_(ltr, lfx, 50);
+            if (lp >= 0)
+                TrackFX_SetParamNormalized(ltr, lfx, lp,
+                    TrackFX_GetParamNormalized(ltr, lfx, lp) >= 0.5 ? 0.0 : 1.0);
+        }
+    }
+    // Soft-key highlight (0x0102). ⇨ IT IS A BITMASK, not a list of states: 0x01
+    // is the base, and bit 1<<(key+1) lights that soft key. Every captured value
+    // falls out of that — 03 = SK2 (the RESET flash), 05 = SK3 (FINE active),
+    // 09 = SK4 (the presets browser, which sets its own). So the flash and an
+    // active SK3 no longer displace each other, and Loudness gets the same
+    // emitter as the rest with PLAY on SK3's bit instead of FINE.
     if (g_uf1_dev) {
         static int sHi = -1;
-        if (g_uf1MeterScreen.load() != 3) {
-            const uint8_t hi = (nowMs_() < sResetFlashUntil) ? 0x03
-                             : (g_uf1MeterFine.load()        ? 0x05 : 0x01);
-            if (force || hi != sHi) {
-                sHi = hi;
-                g_uf1_dev->send(uf1::buildScreen(0x0102,
-                                std::span<const uint8_t>(&hi, 1)));
-            }
+        const int  scr = g_uf1MeterScreen.load();
+        bool sk3 = false;
+        if (scr == 3) {
+            MediaTrack* ltr = nullptr; int lfx = -1;
+            if (uf1PinnedMeterTrackFx_(ltr, lfx))
+                sk3 = uf1MeterParamNorm_(ltr, lfx, 50, 1.0) >= 0.5;   // playing
         } else {
-            sHi = -1;   // Loudness owns 0x0102 → re-send on return to a FINE screen
+            sk3 = g_uf1MeterFine.load();
+        }
+        const uint8_t hi = uint8_t(0x01
+                         | ((nowMs_() < sResetFlashUntil) ? 0x02 : 0x00)
+                         | (sk3                           ? 0x04 : 0x00));
+        if (force || hi != sHi) {
+            sHi = hi;
+            g_uf1_dev->send(uf1::buildScreen(0x0102,
+                            std::span<const uint8_t>(&hi, 1)));
         }
     }
     auto peakToDb = [](double p) -> float {

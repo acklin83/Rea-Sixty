@@ -47,6 +47,13 @@ bool pluginConnected();
 // Safe to call from any thread; takes effect on the worker's next pass.
 void setView(int view);
 
+// Log every object the plug-in DECLARES (id + wire name) and every distinct
+// property WRITE it sends, to <tmp>/reasixty_ssl_objects.log. This is how a
+// control that is not a host parameter gets found: switch it on, press the
+// control in the plug-in's own GUI, and read the name and value it wrote.
+// Off by default; driven by the ExtState rea_sixty/sslcore_obj_dump.
+void setObjectDump(bool on);
+
 // Copy the most recent values for `dataType` (a sslmeter::DataType) into out.
 // Returns false if that type hasn't been seen yet. Thread-safe.
 // Reads the SSL Meter (Pro) plug-in's stream specifically — a channel strip on
