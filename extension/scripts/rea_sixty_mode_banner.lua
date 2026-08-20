@@ -99,6 +99,7 @@ local last_save_x, last_save_y, last_save_w, last_save_h
 -- converts between them.
 local anchor_x = restore_x or 600
 local anchor_y = restore_y or 120
+local was_ringing = false
 
 ------------------------------------------------------------------------
 -- Banner state — watch the published seq, restart the hide timer on change.
@@ -149,17 +150,23 @@ end
 -- the more neighbours you show. What you park is the place you look at, so the
 -- LIVE line is what gets pinned there and the ring opens up and down around it.
 --
--- That needs the live line's offset inside the window, which is only knowable
--- after a frame has drawn it. Measured once per line-count and remembered, so
--- only the very first hold of a given size settles, and even that is one frame.
-local ring_dy      = {}     -- line count -> live line's y offset inside the window
-local ring_live_y  = nil    -- this frame's measured live-line screen y
+-- ⚠ MEASURE THE GEOMETRY, DO NOT CACHE THE ANSWER.
+-- The live line's offset is base + above * step: `base` is the padding plus the
+-- caption, `step` is one row. Both depend on the font and nothing else, so two
+-- numbers describe every shape the ring can take. Caching the finished offset
+-- per shape instead meant a cache MISS every time the marker moved through a
+-- fully-shown ring — and a miss falls back to a guess, so the window sat one
+-- frame wrong on every single step. Two measurements, no misses, no settle.
+local ring_base    = nil    -- window top to the first row
+local ring_step    = nil    -- row to row
+local ring_first_y = nil    -- this frame: screen y of the first row
+local ring_live_y  = nil    -- this frame: screen y of the live row
 local WIN_PAD_Y    = 10     -- matches the WindowPadding we push below
 
--- The offset to use for a given line count: measured if we have it, else the
--- honest estimate (padding + the caption + the lines above the live one).
-local function ringDy(lines, above, lineh)
-  return ring_dy[lines] or (WIN_PAD_Y + lineh * (1 + above))
+local function ringDy(above, lineh)
+  local base = ring_base or (WIN_PAD_Y + lineh)
+  local step = ring_step or lineh
+  return base + above * step
 end
 
 -- Draw the carousel: the live mode full strength in the middle, its neighbours
@@ -173,11 +180,15 @@ local function drawRing(fg)
   reaper.ImGui_PopStyleVar(ctx, 1)
 
   local from, to = ringSpan()
-  ring_live_y = nil
+  ring_live_y, ring_first_y = nil, nil
 
   for off = from, to do
     local i = ((ring_idx + off) % n + n) % n
     local name = ring_names[i + 1]
+    if off == from then
+      local _, fy = reaper.ImGui_GetCursorScreenPos(ctx)
+      ring_first_y = fy
+    end
     if off == 0 then
       -- The live one carries a marker as well as the colour, so it still reads
       -- at a glance on a dim screen or from across the room.
@@ -360,16 +371,28 @@ local function loop()
   -- with the neighbour count and the live line has to keep landing on the
   -- anchor. A drag during a ring still wins: the position that comes back
   -- differs from the one we asked for, and that difference IS the new anchor.
-  local ring_lines, ring_above = 0, 0
+  local ring_above = 0
   local want_x, want_y
+  if not ringing and was_ringing then
+    -- ⇨ THE FALLING EDGE, OR THE WHOLE THING WALKS UP THE SCREEN.
+    -- Picking a mode also fires a banner, so the window carries straight on from
+    -- where the RING left it — and the banner branch below then adopts that
+    -- top-left as the new anchor. Since the ring's top-left sits a good few
+    -- lines ABOVE the anchor, every hold-and-release shifted the box upward by
+    -- that much, for good (Frank 2026-08-20: "nach auswahl schiebt er sich
+    -- wieder hoch"). Put it back on the anchor first, and the adoption becomes
+    -- the no-op it always was.
+    reaper.ImGui_SetNextWindowPos(ctx, anchor_x, anchor_y)
+    was_ringing = false
+  end
   if ringing then
     local from, to = ringSpan()
-    ring_lines = to - from + 1
     ring_above = -from
-    local dy = ringDy(ring_lines, ring_above, font_px * 1.35)
+    local dy = ringDy(ring_above, font_px * 1.35)
     want_x, want_y = anchor_x, anchor_y + WIN_PAD_Y - dy
     reaper.ImGui_SetNextWindowPos(ctx, want_x, want_y)
-    first_frame = false
+    was_ringing  = true
+    first_frame  = false
   elseif first_frame then
     reaper.ImGui_SetNextWindowPos(ctx, anchor_x, anchor_y)
     first_frame = false
@@ -411,13 +434,14 @@ local function loop()
       if ringing then
         -- Learn where the live line actually sits inside this window, so the
         -- next frame (and every later hold of this size) places it exactly.
-        if ring_live_y and ring_lines > 0 then
-          ring_dy[ring_lines] = ring_live_y - py
+        if ring_first_y then ring_base = ring_first_y - py end
+        if ring_first_y and ring_live_y and ring_above > 0 then
+          ring_step = (ring_live_y - ring_first_y) / ring_above
         end
         -- Dragged out from under us? Then the anchor moved with it.
         if want_x and (math.abs(px - want_x) > 0.5 or math.abs(py - want_y) > 0.5) then
           anchor_x = px
-          anchor_y = py + (ring_dy[ring_lines] or (py - want_y)) - WIN_PAD_Y
+          anchor_y = py + ringDy(ring_above, font_px * 1.35) - WIN_PAD_Y
         end
       else
         anchor_x, anchor_y = px, py
