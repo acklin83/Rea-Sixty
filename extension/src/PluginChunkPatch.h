@@ -65,7 +65,10 @@ void readPluginToggleStates(MediaTrack* track, int& ab, int& hq);
 // Returns the number of values written, or 0 when the chunk is not in the shape
 // this can safely rewrite — then NOTHING was written and the caller should fall
 // back to setting the host parameters.
+// `diagOut` (optional) receives a one-line reason whenever this returns 0, so a
+// declined chunk cannot be mistaken for a chunk that was never read.
 int loadSslPresetIntoInstance(MediaTrack* track, int fx,
-                              const char* presetPath, const char* presetXml);
+                              const char* presetPath, const char* presetXml,
+                              char* diagOut = nullptr, int diagOutSz = 0);
 
 } // namespace uf8

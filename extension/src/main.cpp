@@ -17121,8 +17121,9 @@ static int uf1LoadMeterPresetXml_(MediaTrack* tr, int fx, const std::string& pat
     // 2026-08-20: "er soll doch im plugin auch das preset laden! jetzt ist es
     // einfach das geladene preset mit änderungen!". So write the state, and keep
     // the parameter path as the fallback for a chunk this cannot safely rewrite.
-    if (const int viaChunk =
-            uf8::loadSslPresetIntoInstance(tr, fx, path.c_str(), xml.c_str())) {
+    char chunkDiag[256] = {0};
+    if (const int viaChunk = uf8::loadSslPresetIntoInstance(
+            tr, fx, path.c_str(), xml.c_str(), chunkDiag, sizeof(chunkDiag))) {
         if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
             std::fprintf(lg,
                          "[uf1] meter preset: %d values via chunk  track=%d fx=%d"
@@ -17183,9 +17184,9 @@ static int uf1LoadMeterPresetXml_(MediaTrack* tr, int fx, const std::string& pat
     // 6 skipped", and neither is visible on the surface.
     if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
         std::fprintf(lg,
-                     "[uf1] meter preset (param fallback): %d applied, "
+                     "[uf1] meter preset (param fallback: %s): %d applied, "
                      "%d skipped  track=%d fx=%d  (%s)\n",
-                     applied, skipped,
+                     chunkDiag[0] ? chunkDiag : "?", applied, skipped,
                      (int)GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"), fx,
                      path.c_str());
         std::fclose(lg);
@@ -22467,17 +22468,26 @@ void onUf1Event(const uf1::InputEvent& ev)
             // change (05 active / 01 normal). Channel view keeps SK3 as its own soft-key.
             // Not on Loudness (screen 3) — there SK3 is PLAY, not FINE.
             if (ev.id == uf1::btn::kDisplaySoft3 && ev.pressed &&
-                g_uf1MeterView.load() && g_uf1MeterScreen.load() != 3) {
-                // In the presets browser SK3 = "Navigate Back" → exit; otherwise FINE.
-                if (g_uf1PresetsMode.load()) g_uf1PresetsMode.store(false);
-                else                         g_uf1MeterFine.store(!g_uf1MeterFine.load());
-                break;
+                g_uf1MeterView.load()) {
+                // In the presets browser SK3 = "Navigate Back" → exit. That check
+                // comes BEFORE the screen gate: the browser opens on Loudness too,
+                // where SK3 is PLAY, and gating first left it with no way out.
+                if (g_uf1PresetsMode.load()) { g_uf1PresetsMode.store(false); break; }
+                if (g_uf1MeterScreen.load() != 3) {
+                    g_uf1MeterFine.store(!g_uf1MeterFine.load());
+                    break;
+                }
+                // Loudness: SK3 is PLAY, not FINE — nothing here owns it.
             }
             // Display soft-key 4 = PRESETS in the Meter view — open/close the preset
             // browser for the pinned Meter instance (capture 2026-08-02). Atomic store
             // only (worker-safe); the painter draws the browser chrome + current name.
+            // On EVERY meter screen, Loudness included: its own entry burst labels
+            // SK4 "PRESETS" like the other three (kUf1MeterScreens[3], 0x0104 idx 3),
+            // so the screen gate this used to carry only broke the key (Frank
+            // 2026-08-20: "bei loudness screen funktioniert presets button nicht").
             if (ev.id == uf1::btn::kDisplaySoft4 && ev.pressed &&
-                g_uf1MeterView.load() && g_uf1MeterScreen.load() != 3) {
+                g_uf1MeterView.load()) {
                 g_uf1PresetsMode.store(!g_uf1PresetsMode.load());
                 break;
             }

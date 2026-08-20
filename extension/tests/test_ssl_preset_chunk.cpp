@@ -49,22 +49,45 @@ uint32_t get32(const std::string& s, size_t o) {
          | ((uint32_t)(uint8_t)s[o + 3] << 24);
 }
 
-// A blob shaped like the real thing: 48 bytes of header, the two 16-apart blob
-// lengths at 48 / 60, "VC2!" + XML length, the XML, and a trailing block the
-// rewrite must not touch. `lenOff` moves the length pair, because on real
-// plug-ins it sits at 48/60 or at 64/76 depending on the header shape.
-std::string makeChunk(const std::string& xml, size_t lenOff = 48,
-                      size_t suffixLen = 46)
+void put32be(std::string& s, size_t o, uint32_t v) {
+    s[o]     = (char)((v >> 24) & 0xFF);
+    s[o + 1] = (char)((v >> 16) & 0xFF);
+    s[o + 2] = (char)((v >> 8)  & 0xFF);
+    s[o + 3] = (char)( v        & 0xFF);
+}
+uint32_t get32be(const std::string& s, size_t o) {
+    return  (uint32_t)(uint8_t)s[o + 3]
+         | ((uint32_t)(uint8_t)s[o + 2] << 8)
+         | ((uint32_t)(uint8_t)s[o + 1] << 16)
+         | ((uint32_t)(uint8_t)s[o]     << 24);
+}
+
+// A blob shaped like what REAPER hands over for a real SSL Meter Pro: the
+// leading little-endian count, the VstW / CcnK-FBCh container with its two
+// big-endian counts, then the plug-in's own state ending in "VC2!" + XML
+// length + XML, and an 8-byte trailer that is NOT part of chunkSize.
+// `withContainer` = false drops the VST2 wrapper, which the smaller SSL
+// plug-ins do without.
+std::string makeChunk(const std::string& xml, bool withContainer = true,
+                      size_t suffixLen = 40)
 {
-    const size_t prefix = lenOff + 28;          // … lenA … lenB … "VC2!" + len
-    std::string b(prefix, '\0');
-    put32(b, 4, 0xFEED5EEEu);                   // REAPER's marker, byte for byte
-    b.replace(prefix - 8, 4, "VC2!");
-    put32(b, prefix - 4, (uint32_t)xml.size());
+    const size_t dataAt = withContainer ? 192 : 8;
+    std::string b(dataAt + 8, '\0');            // … + "VC2!" + XML length
+    if (withContainer) {
+        b.replace(8, 4, "VstW");
+        b.replace(24, 4, "CcnK");
+        b.replace(32, 4, "FBCh");
+        b.replace(40, 4, "MTPR");
+    }
+    b.replace(dataAt + 0, 4, "VC2!");
+    put32(b, dataAt + 4, (uint32_t)xml.size());
     b += xml;
     b += std::string(suffixLen, '\x7f');        // must survive verbatim
-    put32(b, lenOff,      (uint32_t)(b.size() - 66));
-    put32(b, lenOff + 12, (uint32_t)(b.size() - 82));
+    put32(b, 0, (uint32_t)(b.size() - 16));
+    if (withContainer) {
+        put32be(b, 28,  (uint32_t)(b.size() - 40));    // byteSize
+        put32be(b, 180, (uint32_t)(b.size() - 192));   // chunkSize, at CcnK+156
+    }
     return b;
 }
 
@@ -95,24 +118,28 @@ const char* kPreset =
 const char* kPath = "/Library/Application Support/Solid State Logic/"
                     "PlugIns/Presets/MeterPro/K-20.xml";
 
-// The three byte counts and the untouched tail, after any rewrite.
-void checkInvariants(const std::string& b, size_t lenOff, size_t suffixLen) {
+// All four byte counts and the untouched tail, after any rewrite.
+void checkInvariants(const std::string& b, bool withContainer = true,
+                     size_t suffixLen = 40) {
     const size_t xs = b.find("<?xml");
     const size_t xe = b.find("</SSL_PLUGIN_STATE>") + 19;
     EXPECT(xs != std::string::npos && xe > xs);
     EXPECT(b.compare(xs - 8, 4, "VC2!") == 0);
     EXPECT(get32(b, xs - 4) == (uint32_t)(xe - xs));
-    EXPECT(get32(b, lenOff) == (uint32_t)(b.size() - 66));
-    EXPECT(get32(b, lenOff + 12) == get32(b, lenOff) - 16);
-    EXPECT(get32(b, 4) == 0xFEED5EEEu);
+    EXPECT(get32(b, 0) == (uint32_t)(b.size() - 16));
+    if (withContainer) {
+        EXPECT(get32be(b, 28)  == (uint32_t)(b.size() - 40));
+        EXPECT(get32be(b, 180) == (uint32_t)(b.size() - 192));
+        EXPECT(b.compare(24, 4, "CcnK") == 0 && b.compare(32, 4, "FBCh") == 0);
+    }
     EXPECT(b.substr(xe) == std::string(suffixLen, '\x7f'));
 }
 
-void testRewrite(size_t lenOff) {
-    std::string b = makeChunk(kState, lenOff);
+void testRewrite(bool withContainer) {
+    std::string b = makeChunk(kState, withContainer);
     const int n = uf8::patchSslChunkWithPreset(b, kPath, kPreset);
     EXPECT(n == 3);                     // the id the variant lacks is skipped
-    checkInvariants(b, lenOff, 46);
+    checkInvariants(b, withContainer);
 
     const std::string xml = b.substr(b.find("<?xml"));
     // Values landed in the ACTIVE slot …
@@ -136,7 +163,7 @@ void testInactiveSlotUntouched() {
     std::string b = makeChunk(st);
     const int n = uf8::patchSslChunkWithPreset(b, kPath, kPreset);
     EXPECT(n == 1);                     // B only carries DigitalMetersType
-    checkInvariants(b, 48, 46);
+    checkInvariants(b);
     const std::string xml = b.substr(b.find("<?xml"));
     const size_t a = xml.find("<A "), bb = xml.find("<B");
     EXPECT(a != std::string::npos && bb > a);
@@ -164,9 +191,16 @@ void testRefusesUnknownShapes() {
         EXPECT(uf8::patchSslChunkWithPreset(b, kPath, kPreset) == 0);
         EXPECT(b == before);
     }
-    {   // the two blob lengths are not 16 apart
+    {   // the leading count is not a count
         std::string b = makeChunk(kState);
-        put32(b, 60, get32(b, 48) - 20);
+        put32(b, 0, 7);
+        const std::string before = b;
+        EXPECT(uf8::patchSslChunkWithPreset(b, kPath, kPreset) == 0);
+        EXPECT(b == before);
+    }
+    {   // the container is there but its chunkSize is stale
+        std::string b = makeChunk(kState);
+        put32be(b, 180, 7);
         const std::string before = b;
         EXPECT(uf8::patchSslChunkWithPreset(b, kPath, kPreset) == 0);
         EXPECT(b == before);
@@ -191,8 +225,8 @@ void testRefusesUnknownShapes() {
 }  // namespace
 
 int main() {
-    testRewrite(48);        // header shape with the int at offset 8 == 2
-    testRewrite(64);        // … and == 4, where the length pair moves
+    testRewrite(true);      // with the VST2-style container (the Meter)
+    testRewrite(false);     // without it (the smaller SSL plug-ins)
     testInactiveSlotUntouched();
     testRefusesUnknownShapes();
     std::printf("test_ssl_preset_chunk: all passed\n");

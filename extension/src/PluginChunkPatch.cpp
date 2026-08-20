@@ -1,7 +1,9 @@
 #include "PluginChunkPatch.h"
 
 #include <array>
+#include <cstdarg>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <string_view>
@@ -370,18 +372,24 @@ void readPluginToggleStates(MediaTrack* tr, int& ab, int& hq) {
 // history rides along), and GetTrackStateChunk would have to carry the whole
 // track and would truncate.
 //
-// ⚠ THIS EDIT CHANGES THE LENGTH, and the container counts bytes in three
-// places. Measured over 113 real SSL blocks out of Frank's own template chains
-// and test project (2026-08-20):
-//   * "VC2!" + uint32 sits immediately before the XML, and that uint32 IS the
-//     XML length. True for EVERY block, whichever plug-in.
-//   * two further uint32 lengths live in the first 128 bytes, always exactly 16
-//     apart, both counting the blob minus a small constant. Their OFFSET is not
-//     fixed (48/60 when the int at offset 8 is 2, 64/76 when it is 4), so they
-//     are found BY VALUE, never by position.
-// Everything else is copied byte for byte. If any of that does not hold, this
-// writes NOTHING and returns 0, and the caller falls back to setting the host
-// parameters — a preset with the right values beats a wrecked instance.
+// ⚠ THIS EDIT CHANGES THE LENGTH, and the container counts the bytes FOUR
+// times, in two endiannesses. The layout below is what a real Meter Pro chunk
+// actually contains (837217 bytes, read back out of REAPER on 2026-08-20 — the
+// first attempt at this was modelled on the <VST> block in the project file
+// instead, which is a DIFFERENT framing, and it refused every chunk):
+//     0    uint32 LE   = blob - 16          REAPER's own count
+//     4    uint32 LE   = 1
+//     8    "VstW" + three big-endian words
+//     24   "CcnK"                            VST2-style container, optional
+//     28   uint32 BE   = blob - 40           byteSize
+//     32   "FBCh" + version + fxID + fxVersion + numPrograms + future[128]
+//     156+ uint32 BE   = blob - 192          chunkSize   (at CcnK + 156)
+//     184  the plug-in's own state … "VC2!" + uint32 LE = XML length … the XML
+// The "VC2!" length is the one constant across every SSL plug-in (verified on
+// 113 blocks); the rest is checked at load time, never assumed: each count has
+// to read as "the blob minus a small header" or this writes NOTHING and returns
+// 0, and the caller falls back to setting the host parameters. A preset with
+// the right values beats a wrecked instance.
 
 namespace {
 
@@ -390,6 +398,22 @@ uint32_t rdU32(const std::string& b, size_t o) {
          | ((uint32_t)(uint8_t)b[o + 1] << 8)
          | ((uint32_t)(uint8_t)b[o + 2] << 16)
          | ((uint32_t)(uint8_t)b[o + 3] << 24);
+}
+
+// The container mixes endianness: REAPER's own counts are little-endian, the
+// VST2-style FBCh header inside it is big-endian, as that format has always been.
+uint32_t rdU32BE(const std::string& b, size_t o) {
+    return  (uint32_t)(uint8_t)b[o + 3]
+         | ((uint32_t)(uint8_t)b[o + 2] << 8)
+         | ((uint32_t)(uint8_t)b[o + 1] << 16)
+         | ((uint32_t)(uint8_t)b[o]     << 24);
+}
+
+void wrU32BE(std::string& b, size_t o, uint32_t v) {
+    b[o + 3] = (char)( v        & 0xFF);
+    b[o + 2] = (char)((v >> 8)  & 0xFF);
+    b[o + 1] = (char)((v >> 16) & 0xFF);
+    b[o]     = (char)((v >> 24) & 0xFF);
 }
 
 void wrU32(std::string& b, size_t o, uint32_t v) {
@@ -413,6 +437,8 @@ std::string xmlAttrEscape(const std::string& s) {
     }
     return o;
 }
+
+struct LenField { size_t off; bool bigEndian; };
 
 // Substitute every value the preset names into the ACTIVE A/B slot of `xml`, and
 // point that slot's LastLoadedPreset at the file. Returns how many values were
@@ -506,34 +532,86 @@ int applyPresetToStateXml(std::string& xml,
 // (and then `bin` is untouched). Pure — no REAPER API, so the test can drive it.
 int patchSslChunkWithPreset(std::string& bin,
                             const std::string& presetPath,
-                            const std::string& presetXml)
+                            const std::string& presetXml,
+                            char* diagOut = nullptr, int diagOutSz = 0)
 {
-    if (bin.size() < 160) return 0;
+    auto diag = [&](const char* fmt, ...) {
+        if (!diagOut || diagOutSz <= 0) return;
+        va_list ap; va_start(ap, fmt);
+        vsnprintf(diagOut, (size_t)diagOutSz, fmt, ap);
+        va_end(ap);
+    };
+    if (bin.size() < 160) { diag("blob %zu bytes", bin.size()); return 0; }
     const size_t xs = bin.find("<?xml");
     size_t xe = bin.find("</SSL_PLUGIN_STATE>");
-    if (xs == std::string::npos || xe == std::string::npos || xs < 8) return 0;
-    xe += 19;
-    if (bin.compare(xs - 8, 4, "VC2!") != 0) return 0;
-    if (rdU32(bin, xs - 4) != (uint32_t)(xe - xs)) return 0;
-
-    std::vector<size_t> lenAt;                       // found by VALUE, see above
-    for (size_t o = 8; o + 4 <= 128 && o + 4 <= xs; o += 4) {
-        const uint32_t v = rdU32(bin, o);
-        if (v <= bin.size() && v + 1024 >= bin.size() && v > (uint32_t)(xe - xs))
-            lenAt.push_back(o);
+    if (xs == std::string::npos || xe == std::string::npos || xs < 8) {
+        diag("blob %zu, head %02x%02x%02x%02x, xml at %ld, state end %ld",
+             bin.size(), (unsigned char)bin[0], (unsigned char)bin[1],
+             (unsigned char)bin[2], (unsigned char)bin[3],
+             (long)(xs == std::string::npos ? -1 : (long)xs),
+             (long)(xe == std::string::npos ? -1 : (long)xe));
+        return 0;
     }
-    if (lenAt.size() != 2) return 0;
-    if (rdU32(bin, lenAt[0]) != rdU32(bin, lenAt[1]) + 16) return 0;
+    xe += 19;
+    if (bin.compare(xs - 8, 4, "VC2!") != 0) {
+        diag("blob %zu, xml at %zu, no VC2! (%02x%02x%02x%02x)", bin.size(), xs,
+             (unsigned char)bin[xs-8], (unsigned char)bin[xs-7],
+             (unsigned char)bin[xs-6], (unsigned char)bin[xs-5]);
+        return 0;
+    }
+    if (rdU32(bin, xs - 4) != (uint32_t)(xe - xs)) {
+        diag("blob %zu, VC2! len %u vs xml %zu", bin.size(),
+             rdU32(bin, xs - 4), xe - xs);
+        return 0;
+    }
+
+    // Every byte count that has to move with the edit, each one CHECKED before
+    // it is believed: a length here always reads as "the whole blob, minus a
+    // small header". A field that does not is not a length, and then this
+    // refuses rather than writing over something it has not understood.
+    auto isLen = [&](size_t off, bool be) {
+        if (off + 4 > bin.size()) return false;
+        const uint32_t v = be ? rdU32BE(bin, off) : rdU32(bin, off);
+        return v <= bin.size() && v + 256 >= bin.size()
+            && v > (uint32_t)(xe - xs);
+    };
+    std::vector<LenField> lens;
+    if (!isLen(0, false)) {
+        diag("blob %zu, xml %zu at %zu, no leading length (head %08x %08x %08x)",
+             bin.size(), xe - xs, xs,
+             rdU32(bin, 0), rdU32(bin, 4), rdU32(bin, 8));
+        return 0;
+    }
+    lens.push_back({0, false});
+    // The VST2-style container REAPER wraps a VST3 state in — present on the
+    // Meter, absent on the smaller plug-ins, so it is optional but, once found,
+    // must be intact: 'CcnK' + byteSize + 'FBCh' + … + chunkSize at +156.
+    const size_t ck = bin.find("CcnK");
+    if (ck != std::string::npos && ck < 256) {
+        if (bin.compare(ck + 8, 4, "FBCh") != 0 ||
+            !isLen(ck + 4, true) || !isLen(ck + 156, true)) {
+            diag("blob %zu, CcnK at %zu not the expected shape "
+                 "(byteSize %u, chunkSize %u)", bin.size(), ck,
+                 ck + 8 <= bin.size() ? rdU32BE(bin, ck + 4) : 0,
+                 ck + 160 <= bin.size() ? rdU32BE(bin, ck + 156) : 0);
+            return 0;
+        }
+        lens.push_back({ck + 4,   true});
+        lens.push_back({ck + 156, true});
+    }
 
     std::string xml = bin.substr(xs, xe - xs);
     const size_t wasLen = xml.size();
     const int applied = applyPresetToStateXml(xml, presetXml, presetPath);
-    if (applied <= 0) return 0;
+    if (applied <= 0) { diag("no id of the preset is in the instance"); return 0; }
     const long delta = (long)xml.size() - (long)wasLen;
 
     std::string out = bin.substr(0, xs) + xml + bin.substr(xe);
     wrU32(out, xs - 4, (uint32_t)xml.size());
-    for (size_t o : lenAt) wrU32(out, o, (uint32_t)((long)rdU32(out, o) + delta));
+    for (const LenField& f : lens) {
+        if (f.bigEndian) wrU32BE(out, f.off, (uint32_t)((long)rdU32BE(out, f.off) + delta));
+        else             wrU32  (out, f.off, (uint32_t)((long)rdU32  (out, f.off) + delta));
+    }
     bin.swap(out);
     return applied;
 }
@@ -541,44 +619,69 @@ int patchSslChunkWithPreset(std::string& bin,
 }  // namespace
 
 int loadSslPresetIntoInstance(MediaTrack* tr, int fx,
-                              const char* presetPath, const char* presetXml)
+                              const char* presetPath, const char* presetXml,
+                              char* diagOut, int diagOutSz)
 {
-    if (!tr || !presetPath || !*presetPath || !presetXml || !*presetXml) return 0;
-    if (!TrackFX_GetNamedConfigParm || !TrackFX_SetNamedConfigParm) return 0;
+    // Every early return says WHY into diagOut. A chunk we decline looks exactly
+    // like a chunk we never read, and the caller's fallback hides both.
+    auto diag = [&](const char* fmt, ...) {
+        if (!diagOut || diagOutSz <= 0) return;
+        va_list ap; va_start(ap, fmt);
+        vsnprintf(diagOut, (size_t)diagOutSz, fmt, ap);
+        va_end(ap);
+    };
+    diag("no attempt");
+    if (!tr || !presetPath || !*presetPath || !presetXml || !*presetXml) {
+        diag("bad args");
+        return 0;
+    }
+    if (!TrackFX_GetNamedConfigParm || !TrackFX_SetNamedConfigParm) {
+        diag("no NamedConfigParm in this REAPER");
+        return 0;
+    }
 
     // Grown, not guessed: a truncated read looks exactly like a plug-in whose
     // chunk we don't understand, and that would silently downgrade every load.
-    std::string b64;
-    for (size_t cap = 1u << 20; cap <= (1u << 26); cap <<= 2) {
-        std::vector<char> buf(cap, 0);
-        if (TrackFX_GetNamedConfigParm(tr, fx, "vst_chunk", buf.data(), (int)cap)
-            && buf[0]) {
-            std::string got(buf.data());
-            if (got.size() + 64 < cap) { b64.swap(got); break; }
+    bool readOk = false;
+    auto readChunk = [&]() {
+        std::string out;
+        for (size_t cap = 1u << 20; cap <= (1u << 26); cap <<= 2) {
+            std::vector<char> buf(cap, 0);
+            if (TrackFX_GetNamedConfigParm(tr, fx, "vst_chunk", buf.data(),
+                                           (int)cap) && buf[0]) {
+                readOk = true;
+                std::string got(buf.data());
+                if (got.size() + 64 < cap) { out.swap(got); break; }
+            }
         }
+        return out;
+    };
+    const std::string b64 = readChunk();
+    if (b64.empty()) {
+        diag(readOk ? "vst_chunk larger than 64 MB" : "vst_chunk read failed");
+        return 0;
     }
-    if (b64.empty()) return 0;
 
     std::string bin = b64Decode(b64);
-    const int applied = patchSslChunkWithPreset(bin, presetPath, presetXml);
+    const int applied = patchSslChunkWithPreset(bin, presetPath, presetXml,
+                                                diagOut, diagOutSz);
     if (applied <= 0) return 0;
 
-    if (!TrackFX_SetNamedConfigParm(tr, fx, "vst_chunk", b64Encode(bin).c_str()))
+    if (!TrackFX_SetNamedConfigParm(tr, fx, "vst_chunk", b64Encode(bin).c_str())) {
+        diag("vst_chunk write refused (%d values, %zu bytes)", applied, bin.size());
         return 0;
+    }
 
-    // Read back. If the plug-in did not take it, put the ORIGINAL back rather
-    // than leave the instance in whatever a rejected chunk made of it.
+    // Read back and look for the attribute we just wrote. A write that REAPER
+    // accepts but the plug-in drops would otherwise be indistinguishable from a
+    // load — which is exactly the failure this whole function exists to end.
+    // Nothing to show for it → put the ORIGINAL back.
     {
-        std::vector<char> chk(1u << 20, 0);
-        std::string back;
-        if (TrackFX_GetNamedConfigParm(tr, fx, "vst_chunk", chk.data(),
-                                       (int)chk.size()) && chk[0])
-            back = b64Decode(std::string(chk.data()));
-        // A short read is fine here: the marker sits far past 1 MB only for
-        // chunks that big, and those we simply do not second-guess.
-        if (back.size() > 160 && back.size() < (1u << 20) * 3 / 4 &&
-            back.find("</SSL_PLUGIN_STATE>") == std::string::npos) {
+        const std::string back = readChunk();
+        const std::string want = "LastLoadedPreset=\"" + xmlAttrEscape(presetPath);
+        if (back.empty() || b64Decode(back).find(want) == std::string::npos) {
             TrackFX_SetNamedConfigParm(tr, fx, "vst_chunk", b64.c_str());
+            diag("plug-in did not keep the chunk, original restored");
             return 0;
         }
     }
