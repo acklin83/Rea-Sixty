@@ -62,6 +62,10 @@
 #include <utility>
 
 namespace sslcore {
+// The selected instance's UDP port. Defined far below with the rest of the
+// selection logic; declared here because the worker resolves a RESET command to
+// the connection that owns that port. Caller must hold g_meterMx.
+static uint16_t currentMeterPortLocked_();
 namespace {
 
 // Diagnostic log — the impersonator is otherwise blind. Enabled by the env var
@@ -486,6 +490,10 @@ std::vector<uint8_t> fromHex(const char* hx) {
 // Which meter view the plug-in should compute. See setView() in the header for
 // why this gates the data rather than just the plug-in's own GUI.
 std::atomic<int>  g_view{0};
+// Momentary RESET commands for the SELECTED instance. Bit 0 = peak holds and
+// overloads, bit 1 = the loudness measurements. Raised from the surface thread,
+// drained by the worker (which owns the sockets).
+std::atomic<int>  g_resetReq{0};
 std::atomic<bool> g_viewDirty{false};
 // REASIXTY_FORCE_VIEW: pin the meter view the plug-in computes, overriding whatever the
 // UF1 screen asks for. Trace tool — drives view 3 (Loudness history, DataTypes 25/26)
@@ -529,6 +537,42 @@ std::vector<uint8_t> viewFrame(int view) {
     f.insert(f.end(), db, db + 8);
     return f;
 }
+
+// A type-18 SET-PROPERTY on any object. Same framing as viewFrame above, with
+// both length fields computed rather than baked: verified by rebuilding the
+// captured view frame from it byte for byte.
+std::vector<uint8_t> propFrame(const uint8_t obj[8], const std::vector<uint8_t>& val)
+{
+    std::vector<uint8_t> f = { 0xef, 0xbc, 0x51, 0x00 };
+    auto put32 = [&](uint32_t v) {
+        f.push_back(uint8_t( v        & 0xff)); f.push_back(uint8_t((v >> 8)  & 0xff));
+        f.push_back(uint8_t((v >> 16) & 0xff)); f.push_back(uint8_t((v >> 24) & 0xff));
+    };
+    put32(uint32_t(28 + val.size()));
+    put32(0x10);
+    put32(1);
+    f.push_back(0x28); f.push_back(0xe0); f.push_back(0xc7); f.push_back(0x45);
+    put32(uint32_t(12 + val.size()));
+    put32(18);                                   // SET-PROPERTY
+    f.insert(f.end(), obj, obj + 8);
+    f.insert(f.end(), val.begin(), val.end());
+    return f;
+}
+
+// The two RESET commands, straight out of the plug-in's own declarations
+// (rea_sixty/sslcore_obj_dump, 2026-08-20):
+//   756491f36a84ec3d  GlobalResetPeakHoldsAndOverloads
+//   fd868ce4ddef814f  ResetLoudnessMeasurements
+// Neither is a host parameter — they are nowhere in the 57-parameter dump — so
+// this is the only way to reach them. They announce themselves as `08 01 12 03
+// "OFF"`, i.e. an enum at index 1 with its label, the same shape LoudnessPlay
+// uses (`08 02 12 04 "Play"`). So: index 2 to press, index 1 to release, and
+// only the VALUE is sent — the label is the plug-in's own annotation, exactly as
+// the view property takes a bare double.
+static const uint8_t kObjResetPeakHolds[8] =
+    { 0x75, 0x64, 0x91, 0xf3, 0x6a, 0x84, 0xec, 0x3d };
+static const uint8_t kObjResetLoudness[8] =
+    { 0xfd, 0x86, 0x8c, 0xe4, 0xdd, 0xef, 0x81, 0x4f };
 
 std::vector<uint8_t> subscribeInitial() {
     std::vector<uint8_t> out;
@@ -781,6 +825,28 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
         // A view change must not wait for the next 5 s refresh — the user has
         // already switched the UF1 screen and would stare at a dead element
         // until the plug-in starts computing that view's meters.
+        if (const int rq = clients.empty() ? 0 : g_resetReq.exchange(0)) {
+            // To THIS meter, not to every meter in the session: resolve the
+            // selected instance's UDP port back to the connection that owns it.
+            // No match means we cannot tell which one is meant, and then nothing
+            // is sent — a reset on the wrong instance is worse than none.
+            socket_t target = kInvalid;
+            {
+                std::lock_guard<std::mutex> lk(g_meterMx);
+                const uint16_t port = currentMeterPortLocked_();
+                for (const auto& kv : g_connPort)
+                    if (kv.second == port) { target = kv.first; break; }
+            }
+            if (target != kInvalid) {
+                auto press = [&](const uint8_t* obj) {
+                    sendTo(target, propFrame(obj, { 0x08, 0x02 }));   // ON
+                    sendTo(target, propFrame(obj, { 0x08, 0x01 }));   // back to OFF
+                };
+                if (rq & 1) press(kObjResetPeakHolds);
+                if (rq & 2) press(kObjResetLoudness);
+                if (g_trace) slog("[%.1f] reset req=%d -> conn", t, rq);
+            }
+        }
         if (!clients.empty() && g_viewDirty.exchange(false)) {
             const auto v = viewFrame(g_view.load());
             for (socket_t c : clients) sendTo(c, v);
@@ -1253,7 +1319,19 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                         static std::mutex dmx;
                                         static std::set<std::string> dseen;
                                         std::lock_guard<std::mutex> dlk(dmx);
-                                        if (dseen.insert(line).second) objLog("%s", line);
+                                        if (dseen.insert(line).second) {
+                                            objLog("%s", line);
+                                            // The whole declaration too: if an
+                                            // object is an enum, its members are
+                                            // in here, and guessing an index is
+                                            // then unnecessary.
+                                            std::string h; char bb[4];
+                                            for (size_t q = 0; q < avail && q < 160; ++q) {
+                                                std::snprintf(bb, sizeof(bb), "%02x", pay[q]);
+                                                h += bb;
+                                            }
+                                            objLog("decl+ %s", h.c_str());
+                                        }
                                     }
                                     const std::string suf = "EQCurveData";
                                     if (nm.size() > suf.size() &&
@@ -1519,6 +1597,12 @@ void stop() {
 }
 
 void setObjectDump(bool on) { g_objDump.store(on, std::memory_order_relaxed); }
+
+void resetMeter(bool peakHolds, bool loudness)
+{
+    const int m = (peakHolds ? 1 : 0) | (loudness ? 2 : 0);
+    if (m) g_resetReq.fetch_or(m, std::memory_order_relaxed);
+}
 
 bool isRunning()      { return g_running.load(); }
 bool pluginConnected(){ return g_connected.load(); }

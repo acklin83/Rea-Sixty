@@ -54,6 +54,12 @@ void setView(int view);
 // Off by default; driven by the ExtState rea_sixty/sslcore_obj_dump.
 void setObjectDump(bool on);
 
+// Press the plug-in's own RESET commands on the SELECTED meter instance:
+// GlobalResetPeakHoldsAndOverloads and/or ResetLoudnessMeasurements. Neither is
+// a host parameter, so this is the only route to them. Thread-safe request; the
+// worker owns the socket and sends on its next pass.
+void resetMeter(bool peakHolds, bool loudness);
+
 // Copy the most recent values for `dataType` (a sslmeter::DataType) into out.
 // Returns false if that type hasn't been seen yet. Thread-safe.
 // Reads the SSL Meter (Pro) plug-in's stream specifically — a channel strip on

@@ -23810,6 +23810,12 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     if (g_uf1MeterResetReq.exchange(false)) {
         sResetFlashUntil = nowMs_() + 150;
         force = true;                       // → sFallbackHold / sBarHold reset below
+        // …and the PLUG-IN's own holds, which is what the key is actually for.
+        // Neither reset is a host parameter (nothing like it exists in the
+        // 57-parameter dump); they are commands on named objects the plug-in
+        // declares to the Core, and we are the Core. The loudness measurement
+        // only resets where it is displayed.
+        sslcore::resetMeter(true, g_uf1MeterScreen.load() == 3);
     }
     // Object-declaration dump (ExtState rea_sixty/sslcore_obj_dump=1 ->
     // <tmp>/reasixty_ssl_objects.log). The plug-in names every object it uses,
