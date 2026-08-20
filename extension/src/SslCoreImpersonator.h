@@ -60,6 +60,17 @@ void setObjectDump(bool on);
 // worker owns the socket and sends on its next pass.
 void resetMeter(bool peakHolds, bool loudness);
 
+// ── The plug-in's OWN preset library ───────────────────────────────────────
+// Every SSL plug-in announces two properties: PresetList, an XML document of
+// everything it can load, and PresetSelection, the full path of what is loaded
+// right now. Both come over the wire unprompted, so neither a disk scan nor a
+// chunk read is needed to know either — and writing PresetSelection is how the
+// plug-in's own browser loads. `port` 0 = the instance the meter view has
+// selected. Empty string = nothing announced (yet).
+std::string presetListXml(int port = 0);
+std::string presetSelection(int port = 0);
+bool        setPresetSelection(const std::string& path, int port = 0);
+
 // Copy the most recent values for `dataType` (a sslmeter::DataType) into out.
 // Returns false if that type hasn't been seen yet. Thread-safe.
 // Reads the SSL Meter (Pro) plug-in's stream specifically — a channel strip on

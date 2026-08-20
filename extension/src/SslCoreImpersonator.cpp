@@ -346,6 +346,17 @@ std::map<uint16_t, EqCurve>   g_portEq;        // UDP port -> curve  (g_meterMx)
 std::map<socket_t, uint16_t>                g_connPort;   // conn -> its UDP port (g_meterMx)
 std::map<uint16_t, FpSet>                   g_portFp;     // UDP port -> values (g_meterMx)
 std::map<uint16_t, int>          g_portIndex;      // UDP port -> HostTrackIndex (g_meterMx)
+
+// ── The plug-in's OWN preset list and selection (2026-08-20) ───────────────
+// Both are properties the plug-in ANNOUNCES, and keeps announcing: PresetList
+// is an XML document of everything it can load, PresetSelection is the full path
+// of what is loaded right now. That makes the disk scan and the chunk read the
+// surface used before into detours — this is the plug-in's own answer, in its
+// own order, including user presets wherever they live, on any platform.
+// Per connection while it is being learned, mirrored per UDP port so the meter
+// selection can address it like every other per-instance fact.
+std::map<socket_t, std::string>  g_clientPresetList, g_clientPresetSel;
+std::map<uint16_t, std::string>  g_portPresetList,   g_portPresetSel;
 // Order in which UDP ports were first seen — the instance ORDER. REAPER builds
 // an FX chain slot by slot, so the plug-ins connect to Core in chain order and
 // the n-th SSL stream on a track is the n-th SSL plug-in on it. That is what
@@ -494,6 +505,13 @@ std::atomic<int>  g_view{0};
 // overloads, bit 1 = the loudness measurements. Raised from the surface thread,
 // drained by the worker (which owns the sockets).
 std::atomic<int>  g_resetReq{0};
+
+// Outbound property writes with a payload (the reset commands need none, a
+// preset path does). Queued from the surface thread, drained by the worker,
+// which owns the sockets. port 0 = whichever instance the meter view has
+// selected.
+std::mutex g_cmdMx;
+std::vector<std::pair<uint16_t, std::vector<uint8_t>>> g_cmdQueue;
 std::atomic<bool> g_viewDirty{false};
 // REASIXTY_FORCE_VIEW: pin the meter view the plug-in computes, overriding whatever the
 // UF1 screen asks for. Trace tool — drives view 3 (Loudness history, DataTypes 25/26)
@@ -573,6 +591,15 @@ static const uint8_t kObjResetPeakHolds[8] =
     { 0x75, 0x64, 0x91, 0xf3, 0x6a, 0x84, 0xec, 0x3d };
 static const uint8_t kObjResetLoudness[8] =
     { 0xfd, 0x86, 0x8c, 0xe4, 0xdd, 0xef, 0x81, 0x4f };
+
+// The plug-in's own preset library. Same shape on every SSL plug-in (the ids are
+// name hashes), which is why the channel strips get this for free.
+//   5b8dee912da184cf  PresetList       an XML document of everything it can load
+//   c1b39cd2945eb9be  PresetSelection  the full path of what is loaded now
+static const uint8_t kObjPresetList[8] =
+    { 0x5b, 0x8d, 0xee, 0x91, 0x2d, 0xa1, 0x84, 0xcf };
+static const uint8_t kObjPresetSel[8] =
+    { 0xc1, 0xb3, 0x9c, 0xd2, 0x94, 0x5e, 0xb9, 0xbe };
 
 std::vector<uint8_t> subscribeInitial() {
     std::vector<uint8_t> out;
@@ -747,6 +774,8 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
         g_clientModel.erase(c);
         g_clientFpObj.erase(c);
         g_clientMfObj.erase(c);
+        g_clientPresetList.erase(c);
+        g_clientPresetSel.erase(c);
         acc_.erase(c);
         {
             std::lock_guard<std::mutex> lk(g_meterMx);
@@ -845,6 +874,23 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                 if (rq & 1) press(kObjResetPeakHolds);
                 if (rq & 2) press(kObjResetLoudness);
                 if (g_trace) slog("[%.1f] reset req=%d -> conn", t, rq);
+            }
+        }
+        if (!clients.empty()) {
+            std::vector<std::pair<uint16_t, std::vector<uint8_t>>> q;
+            { std::lock_guard<std::mutex> lk(g_cmdMx); q.swap(g_cmdQueue); }
+            for (auto& item : q) {
+                socket_t target = kInvalid;
+                {
+                    std::lock_guard<std::mutex> lk(g_meterMx);
+                    const uint16_t port = item.first ? item.first
+                                                     : currentMeterPortLocked_();
+                    for (const auto& kv : g_connPort)
+                        if (kv.second == port) { target = kv.first; break; }
+                }
+                if (target != kInvalid) sendTo(target, item.second);
+                else if (g_trace) slog("[%.1f] cmd dropped: no conn for port %u",
+                                       t, unsigned(item.first));
             }
         }
         if (!clients.empty() && g_viewDirty.exchange(false)) {
@@ -957,6 +1003,12 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             // frames arriving on the TCP side (worker thread,
                             // no port in hand) can be filed under this stream.
                             g_connPort[dc->second] = sp;
+                            // Anything already learned on the connection follows it
+                            // to the port (both arrive before the first datagram).
+                            if (auto itL = g_clientPresetList.find(dc->second);
+                                itL != g_clientPresetList.end()) g_portPresetList[sp] = itL->second;
+                            if (auto itS = g_clientPresetSel.find(dc->second);
+                                itS != g_clientPresetSel.end()) g_portPresetSel[sp] = itS->second;
                             // Flush whatever this connection already told us —
                             // that is the opening parameter dump, which arrived
                             // before any port existed to file it under.
@@ -1477,6 +1529,51 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                 }
                             }
 
+                            // PresetList / PresetSelection: `0a <varint len> <bytes>`.
+                            // Ids are name hashes, so they are the same constant on
+                            // every SSL plug-in — the channel strips announce these
+                            // two exactly like the Meter does.
+                            if (ftype == 18 && avail >= 10 && pay[8] == 0x0a) {
+                                const bool isList = std::memcmp(pay, kObjPresetList, 8) == 0;
+                                const bool isSel  = std::memcmp(pay, kObjPresetSel,  8) == 0;
+                                if (isList || isSel) {
+                                    size_t k = 9, sl = 0, shift = 0;
+                                    while (k < avail && shift <= 28) {      // varint length
+                                        sl |= size_t(pay[k] & 0x7f) << shift;
+                                        if (!(pay[k] & 0x80)) { ++k; break; }
+                                        ++k; shift += 7;
+                                    }
+                                    // Only a COMPLETE string is stored: a truncated
+                                    // preset list would parse into a short list that
+                                    // looks perfectly plausible.
+                                    if (sl > 0 && k + sl <= avail) {
+                                        std::string v(reinterpret_cast<const char*>(pay + k), sl);
+                                        std::lock_guard<std::mutex> lk(g_meterMx);
+                                        auto& dst = isList ? g_clientPresetList[c]
+                                                           : g_clientPresetSel[c];
+                                        const bool changed = (dst != v);
+                                        dst = v;
+                                        if (auto itP = g_connPort.find(c); itP != g_connPort.end())
+                                            (isList ? g_portPresetList : g_portPresetSel)[itP->second] = v;
+                                        if (changed && isList &&
+                                            g_objDump.load(std::memory_order_relaxed)) {
+                                            // The whole document, once, so the parser
+                                            // can be written against the real thing.
+                                            char fn[64];
+                                            std::snprintf(fn, sizeof(fn),
+                                                          "reasixty_presetlist_%d.xml", int(c));
+                                            if (FILE* f = std::fopen(uf8::logPath(fn).c_str(), "w")) {
+                                                std::fwrite(v.data(), 1, v.size(), f);
+                                                std::fclose(f);
+                                            }
+                                        }
+                                    } else if (sl > 0) {
+                                        objLog("preset %s TRUNCATED: len=%zu avail=%zu",
+                                               isList ? "list" : "sel", sl, avail);
+                                    }
+                                }
+                            }
+
                             static const uint8_t kHostTrackNameObj[8] =
                                 { 0xf0,0x63,0x0f,0x41,0xc7,0x66,0x7f,0x0c };
                             static const uint8_t kHostTrackIndexObj[8] =
@@ -1597,6 +1694,38 @@ void stop() {
 }
 
 void setObjectDump(bool on) { g_objDump.store(on, std::memory_order_relaxed); }
+
+namespace {
+std::string presetProp_(const std::map<uint16_t, std::string>& byPort, int port)
+{
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    const uint16_t p = port ? uint16_t(port) : currentMeterPortLocked_();
+    auto it = byPort.find(p);
+    return (it != byPort.end()) ? it->second : std::string();
+}
+}  // namespace
+
+std::string presetListXml(int port)  { return presetProp_(g_portPresetList, port); }
+std::string presetSelection(int port) { return presetProp_(g_portPresetSel, port); }
+
+bool setPresetSelection(const std::string& path, int port)
+{
+    if (path.empty() || !g_running.load()) return false;
+    // `0a <varint len> <bytes>` — the same encoding the plug-in announces it in.
+    std::vector<uint8_t> val;
+    val.push_back(0x0a);
+    for (size_t n = path.size(); ; ) {
+        uint8_t b = uint8_t(n & 0x7f);
+        n >>= 7;
+        if (n) b |= 0x80;
+        val.push_back(b);
+        if (!n) break;
+    }
+    val.insert(val.end(), path.begin(), path.end());
+    std::lock_guard<std::mutex> lk(g_cmdMx);
+    g_cmdQueue.emplace_back(uint16_t(port), propFrame(kObjPresetSel, val));
+    return true;
+}
 
 void resetMeter(bool peakHolds, bool loudness)
 {

@@ -635,6 +635,13 @@ int                      g_uf1PresetSel = 0;
 // on the main thread by the painter (which owns the file read + param set). Scroll
 // only moves g_uf1PresetSel; loading is the explicit push, per SSL's "Select" label.
 std::atomic<bool>        g_uf1PresetLoadReq{false};
+// A load asked of the PLUG-IN (PresetSelection) that has not been confirmed yet.
+// The plug-in re-announces the property once it has loaded, so the echo is the
+// proof; without one in time the chunk path takes over. Main thread only.
+std::string  g_uf1PresetPending;
+int64_t      g_uf1PresetPendingUntil = 0;
+MediaTrack*  g_uf1PresetPendingTr = nullptr;
+int          g_uf1PresetPendingFx = -1;
 // MASTER button (id 0x39, under FLIP by the fader): when engaged the UF1 strip
 // follows the MASTER track (UC1 "track 00") instead of the selected/last-touched
 // one — uf1FocusedTrack_ returns GetMasterTrack. Toggle; set by the input worker.
@@ -23709,8 +23716,25 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
 #else
                     const char* kSep = "/";
 #endif
-                    uf1LoadMeterPresetXml_(ptr, pfx,
-                        g_uf1PresetDir + kSep + g_uf1PresetList[s] + ".xml");
+                    const std::string path =
+                        g_uf1PresetDir + kSep + g_uf1PresetList[s] + ".xml";
+                    // ⇨ ASK THE PLUG-IN FIRST. PresetSelection is its own load
+                    // path — the property its browser writes — so this is a
+                    // string instead of a rewritten 840 KB chunk. It is not
+                    // trusted blindly: the plug-in re-announces the property
+                    // once it has loaded, and that ECHO is the proof. No echo in
+                    // time, or the path was already selected (then there is
+                    // nothing to echo), and the chunk load takes over. So this
+                    // can only be as good as before, or better.
+                    if (sslcore::presetSelection() != path &&
+                        sslcore::setPresetSelection(path)) {
+                        g_uf1PresetPending      = path;
+                        g_uf1PresetPendingUntil = nowMs_() + 600;
+                        g_uf1PresetPendingTr    = ptr;
+                        g_uf1PresetPendingFx    = pfx;
+                    } else {
+                        uf1LoadMeterPresetXml_(ptr, pfx, path);
+                    }
                 }
                 g_uf1PresetsMode.store(false);
             }
@@ -23816,6 +23840,28 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // declares to the Core, and we are the Core. The loudness measurement
         // only resets where it is displayed.
         sslcore::resetMeter(true, g_uf1MeterScreen.load() == 3);
+    }
+    // Did the plug-in take the preset we asked it to load? Its own
+    // re-announcement of PresetSelection is the receipt; silence means the
+    // property is not a load command on this version, and then the chunk path
+    // still does the job. Either way this runs once and clears.
+    if (!g_uf1PresetPending.empty()) {
+        const bool done = (sslcore::presetSelection() == g_uf1PresetPending);
+        if (done || nowMs_() > g_uf1PresetPendingUntil) {
+            if (!done && g_uf1PresetPendingTr)
+                uf1LoadMeterPresetXml_(g_uf1PresetPendingTr, g_uf1PresetPendingFx,
+                                       g_uf1PresetPending);
+            if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                std::fprintf(lg, "[uf1] meter preset: %s  (%s)\n",
+                             done ? "loaded by the plug-in (PresetSelection)"
+                                  : "no echo, fell back to the chunk",
+                             g_uf1PresetPending.c_str());
+                std::fclose(lg);
+            }
+            g_uf1PresetPending.clear();
+            g_uf1PresetPendingTr = nullptr;
+            g_uf1PresetPendingFx = -1;
+        }
     }
     // Object-declaration dump (ExtState rea_sixty/sslcore_obj_dump=1 ->
     // <tmp>/reasixty_ssl_objects.log). The plug-in names every object it uses,
