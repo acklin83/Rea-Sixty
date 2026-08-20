@@ -1391,10 +1391,8 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             return;
         }
         refreshPresetList_();
-        if (!presetList_.empty()) {
-            presetSel_ = std::clamp(presetSel_ + step, 0,
-                                    static_cast<int>(presetList_.size()) - 1);
-        }
+        if (const int rn = static_cast<int>(presetRows_().size()); rn > 0)
+            presetSel_ = std::clamp(presetSel_ + step, 0, rn - 1);
         renderPresetsSubscreen_();
         ++stats_.knobEventsHandled;
         return;
@@ -2103,6 +2101,18 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
                 case Uc1Mode::Presets:
                     // BACK in Browse → up to Selector. BACK in
                     // Selector → exit to MAIN.
+                    if (presetsSub_ == PresetsSubMode::Browse &&
+                        !presetGroup_.empty()) {
+                        // Up one folder first — leaving the browser from three
+                        // levels down would be a trapdoor.
+                        const size_t sl = presetGroup_.find_last_of('/');
+                        presetGroup_ = (sl == std::string::npos)
+                                     ? std::string() : presetGroup_.substr(0, sl);
+                        presetSel_ = 0;
+                        renderPresetsSubscreen_();
+                        ++stats_.buttonEventsHandled;
+                        return;
+                    }
                     if (presetsSub_ == PresetsSubMode::Browse) {
                         presetsSub_ = PresetsSubMode::Selector;
                         // Re-send banner 0x03 (we switched to 0x02 in
@@ -2137,13 +2147,28 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
                     // the instance SHOWS the preset instead of "that preset,
                     // modified".
                     if (presetsSub_ == PresetsSubMode::Browse &&
-                        presetTrack_ && presetFx_ >= 0 &&
-                        !presetList_.empty()) {
-                        const int i = std::clamp(
-                            presetSel_, 0, static_cast<int>(presetList_.size()) - 1);
-                        sslpreset::load(static_cast<MediaTrack*>(presetTrack_),
-                                        presetFx_,
-                                        presetList_[static_cast<size_t>(i)].path);
+                        presetTrack_ && presetFx_ >= 0) {
+                        const auto rows = presetRows_();
+                        if (!rows.empty()) {
+                            const int i = std::clamp(
+                                presetSel_, 0, static_cast<int>(rows.size()) - 1);
+                            const PresetRow& r = rows[static_cast<size_t>(i)];
+                            if (r.isFolder) {
+                                // Step INTO it and stay in the browser.
+                                std::string child = r.label;
+                                if (!child.empty() && child.back() == '/') child.pop_back();
+                                presetGroup_ = presetGroup_.empty()
+                                             ? child : presetGroup_ + "/" + child;
+                                presetSel_ = 0;
+                                renderPresetsSubscreen_();
+                                ++stats_.buttonEventsHandled;
+                                return;             // not a load, not an exit
+                            }
+                            if (r.entry >= 0)
+                                sslpreset::load(
+                                    static_cast<MediaTrack*>(presetTrack_), presetFx_,
+                                    presetList_[static_cast<size_t>(r.entry)].path);
+                        }
                     }
                     setMode(Uc1Mode::Main);
                     break;
@@ -3319,8 +3344,13 @@ void UC1Surface::renderPresetsSubscreen_()
     // Manual writes the domain name with a trailing space ("CHANNEL
     // STRIP " / "BUS COMP ") in capture — match exactly so firmware
     // recognises the layout.
-    device_->send(buildLcdHeader(presetsSelectCs_
-        ? "CHANNEL STRIP " : "BUS COMP "));
+    // The header says WHERE you are: the domain at the top level, the folder
+    // once you have stepped into one. Trailing space as in the capture.
+    device_->send(buildLcdHeader(presetGroup_.empty()
+        ? (presetsSelectCs_ ? "CHANNEL STRIP " : "BUS COMP ")
+        : utf8ToLatin1(presetGroup_.substr(
+              presetGroup_.find_last_of('/') == std::string::npos
+                  ? 0 : presetGroup_.find_last_of('/') + 1) + " ")));
     auto sendListBody = [&](std::string_view prev2, std::string_view prev1,
                             std::string_view curr, std::string_view next1,
                             std::string_view next2) {
@@ -3347,14 +3377,46 @@ void UC1Surface::renderPresetsSubscreen_()
     // the slots stay empty rather than wrapping, so the list has a visible top
     // and bottom. The UC1's LCD is Latin-1 like every other SSL surface, and
     // preset names come off DISK — a user-saved one can carry an umlaut.
-    const int n = static_cast<int>(presetList_.size());
+    const auto rows = presetRows_();
+    if (rows.empty()) { sendListBody("", "", "<empty folder>", "", ""); return; }
+    const int n = static_cast<int>(rows.size());
     presetSel_ = std::clamp(presetSel_, 0, n - 1);
     auto slot = [&](int off) -> std::string {
         const int i = presetSel_ + off;
         return (i < 0 || i >= n) ? std::string()
-                                 : utf8ToLatin1(presetList_[static_cast<size_t>(i)].name);
+                                 : utf8ToLatin1(rows[static_cast<size_t>(i)].label);
     };
     sendListBody(slot(-2), slot(-1), slot(0), slot(1), slot(2));
+}
+
+std::vector<UC1Surface::PresetRow> UC1Surface::presetRows_() const
+{
+    // Sub-folders of presetGroup_ first (in the order they appear, which is the
+    // sorted order of the entries), then the presets that live in it. Nothing
+    // deeper: a folder is a row you step into, not a path you read.
+    std::vector<PresetRow> rows;
+    std::vector<std::string> seen;
+    const std::string& g = presetGroup_;
+    for (size_t i = 0; i < presetList_.size(); ++i) {
+        const std::string& eg = presetList_[i].group;
+        if (eg == g) continue;                       // a preset of this folder
+        if (!g.empty() &&
+            (eg.size() <= g.size() + 1 || eg.compare(0, g.size(), g) != 0 ||
+             eg[g.size()] != '/'))
+            continue;                                // not below this folder
+        const size_t base = g.empty() ? 0 : g.size() + 1;
+        const size_t sl   = eg.find('/', base);
+        const std::string child = eg.substr(base, sl == std::string::npos
+                                                ? std::string::npos : sl - base);
+        if (child.empty()) continue;
+        if (std::find(seen.begin(), seen.end(), child) != seen.end()) continue;
+        seen.push_back(child);
+        rows.push_back({ child + "/", true, -1 });
+    }
+    for (size_t i = 0; i < presetList_.size(); ++i)
+        if (presetList_[i].group == g)
+            rows.push_back({ presetList_[i].name, false, static_cast<int>(i) });
+    return rows;
 }
 
 void UC1Surface::refreshPresetList_()
@@ -3380,18 +3442,21 @@ void UC1Surface::refreshPresetList_()
         static_cast<MediaTrack*>(focusedTrack_), match.fxIndex);
     // Start ON what the instance has loaded, so the list opens where the user
     // already is instead of at the top. The plug-in keeps that name itself.
-    presetSel_ = 0;
+    presetSel_   = 0;
+    presetGroup_.clear();
     char loaded[512] = {0};
     if (uf8::sslLoadedPresetName(static_cast<MediaTrack*>(focusedTrack_),
                                  match.fxIndex, loaded, sizeof(loaded))) {
         for (size_t i = 0; i < presetList_.size(); ++i) {
-            const std::string& nm = presetList_[i].name;
-            const size_t sl = nm.find_last_of('/');
-            if (nm == loaded || (sl != std::string::npos &&
-                                 nm.compare(sl + 1, std::string::npos, loaded) == 0)) {
-                presetSel_ = static_cast<int>(i);
-                break;
-            }
+            if (presetList_[i].name != loaded) continue;
+            // Open IN the folder that holds it, on it.
+            presetGroup_ = presetList_[i].group;
+            const auto rows = presetRows_();
+            for (size_t r = 0; r < rows.size(); ++r)
+                if (rows[r].entry == static_cast<int>(i)) {
+                    presetSel_ = static_cast<int>(r); break;
+                }
+            break;
         }
     }
 }

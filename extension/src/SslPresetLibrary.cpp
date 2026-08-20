@@ -171,12 +171,13 @@ std::vector<Entry> scan(const std::string& dir)
         const std::string ext = fn.substr(fn.size() - 4);
         if (ext != ".xml" && ext != ".XML") return;
         const std::string bare = fn.substr(0, fn.size() - 4);
-        out.push_back({ group.empty() ? bare : group + "/" + bare,
-                        in + kSep + fn });
+        out.push_back({ bare, group, in + kSep + fn });
     };
     struct Walk {
         decltype(take)& take;
         const char* sep;
+        // `group` accumulates the path BELOW the root, '/'-joined, so a surface
+        // can rebuild the folder tree from it.
         void go(const std::string& in, const std::string& group, int depth) {
             if (depth > 4) return;
 #if defined(_WIN32)
@@ -187,7 +188,8 @@ std::vector<Entry> scan(const std::string& dir)
                 const std::string fn = fd.cFileName;
                 if (fn == "." || fn == "..") continue;
                 if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-                    go(in + sep + fn, fn, depth + 1);
+                    go(in + sep + fn, group.empty() ? fn : group + "/" + fn,
+                       depth + 1);
                 else
                     take(fn, in, group);
             } while (FindNextFileA(h, &fd));
@@ -201,7 +203,8 @@ std::vector<Entry> scan(const std::string& dir)
                 const std::string full = in + sep + fn;
                 struct stat st{};
                 if (stat(full.c_str(), &st) != 0) continue;
-                if (S_ISDIR(st.st_mode)) go(full, fn, depth + 1);
+                if (S_ISDIR(st.st_mode))
+                    go(full, group.empty() ? fn : group + "/" + fn, depth + 1);
                 else                     take(fn, in, group);
             }
             closedir(d);
@@ -211,8 +214,8 @@ std::vector<Entry> scan(const std::string& dir)
     walk.go(dir, std::string(), 0);
     std::sort(out.begin(), out.end(), [](const Entry& ea,
                                          const Entry& eb) {
-        const std::string& a = ea.name;
-        const std::string& b = eb.name;
+        const std::string a = ea.group.empty() ? ea.name : ea.group + "/" + ea.name;
+        const std::string b = eb.group.empty() ? eb.name : eb.group + "/" + eb.name;
         size_t i = 0, j = 0;
         while (i < a.size() && j < b.size()) {
             const unsigned char ca = a[i], cb = b[j];
@@ -377,7 +380,14 @@ static bool sslPresetNorm_(MediaTrack* tr, int fx, int idx, double v, double& ou
 int load(MediaTrack* tr, int fx, const std::string& path)
 {
     FILE* f = fopen(path.c_str(), "rb");
-    if (!f) return 0;
+    if (!f) {
+        // Silence here used to look exactly like "the surface never called me".
+        if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+            std::fprintf(lg, "[preset] cannot open (%s)\n", path.c_str());
+            std::fclose(lg);
+        }
+        return 0;
+    }
     std::string xml;
     { char buf[4096]; size_t n; while ((n = fread(buf, 1, sizeof(buf), f)) > 0) xml.append(buf, n); }
     fclose(f);

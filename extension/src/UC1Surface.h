@@ -377,11 +377,20 @@ private:
     // on disk, one folder per plug-in, and sslpreset reads them. Same source and
     // same loader the UF1's browser uses.
     std::vector<sslpreset::Entry> presetList_;
-    int         presetSel_    = 0;      // index into presetList_
+    int         presetSel_    = 0;      // index into the CURRENT folder's rows
+    // Folder the browser is standing in ("" = the plug-in's top level). SSL
+    // files its presets in folders and the 4K E has 114 of them across a dozen
+    // producers — a flat list of 14-character rows is unusable (Frank
+    // 2026-08-20: "zeigt sie alle flach, nicht in ordnern").
+    std::string presetGroup_;
     void*       presetTrack_  = nullptr;  // instance the list was built for
     int         presetFx_     = -1;
     // Rebuild presetList_ for the focused plug-in and select what it has loaded.
     void refreshPresetList_();
+    // One row of the browse list: a sub-folder to step into, or a preset to load.
+    struct PresetRow { std::string label; bool isFolder; int entry; };
+    // The rows of presetGroup_: its sub-folders first, then its own presets.
+    std::vector<PresetRow> presetRows_() const;
     bool           presetsSelectCs_ = true;  // false = BC selected
 
     // EXT_FUNCS scroll cursor — index into the kExtFuncs list (defined

@@ -20,9 +20,21 @@ class MediaTrack;
 
 namespace sslpreset {
 
-// One row of a browser. `name` is what a surface shows ("Adrian Hall/Kick In"
-// for a preset inside a group), `path` the file to load.
-struct Entry { std::string name, path; };
+// One preset. `name` is the file's own name, `group` the folder path below the
+// library root it sits in ("" at the top, "Producer Presets/Adrian Hall" deeper
+// down, always '/'-separated whatever the platform), `path` the file to load.
+// A surface that browses folders walks `group`; a flat one can show `display()`.
+struct Entry {
+    std::string name, group, path;
+    // For a list with no folder navigation: the DEEPEST folder plus the name,
+    // because a row is 14 to 24 bytes and the deepest folder is the part that
+    // says something ("Adrian Hall/Kick In", not "Producer Presets/Adrian…").
+    std::string display() const {
+        if (group.empty()) return name;
+        const size_t sl = group.find_last_of('/');
+        return (sl == std::string::npos ? group : group.substr(sl + 1)) + "/" + name;
+    }
+};
 
 // SSL's preset folder for this FX, or "" when the plug-in has none (or the
 // platform has no SSL plug-ins at all).

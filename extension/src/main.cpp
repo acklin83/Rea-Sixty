@@ -16838,12 +16838,7 @@ static void uf1RefreshMeterPresetList_(MediaTrack* tr, int fx)
         for (size_t i = 0; i < g_uf1PresetList.size(); ++i) {
             // The instance reports a base name; a grouped entry shows as
             // "Group/Name", so match on the tail.
-            const std::string& n = g_uf1PresetList[i].name;
-            const size_t sl = n.find('/');
-            if (n == loaded || (sl != std::string::npos &&
-                                n.compare(sl + 1, std::string::npos, loaded) == 0)) {
-                g_uf1PresetSel = (int)i; break;
-            }
+            if (g_uf1PresetList[i].name == loaded) { g_uf1PresetSel = (int)i; break; }
         }
     }
     if (g_uf1PresetSel >= (int)g_uf1PresetList.size()) g_uf1PresetSel = 0;
@@ -27452,7 +27447,7 @@ void uf1PaintChannel_()
             else for (int f = 1; f <= 7; ++f) {
                 const int pi = winStart + (f - 1);
                 if (pi < 0 || pi >= n) continue;      // above/below the list
-                setField(f, g_uf1PresetList[pi].name);  // no marker: the middle
+                setField(f, g_uf1PresetList[pi].display());  // no marker: the middle
             }                                         // IS the selection
             // Restate the list + clear the goniometer area EVERY tick, NOT change-
             // detected: after we pause the cycle on entry the pacer still flushes its
