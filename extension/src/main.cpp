@@ -16387,17 +16387,30 @@ bool uf1FindMeterFx_(MediaTrack* tr, int sel, int& fxOut, int& countOut)
 {
     fxOut = -1; countOut = 0;
     if (!tr) return false;
-    const int n = TrackFX_GetCount(tr);
     int matchIdx = -1;
-    for (int i = 0; i < n; ++i) {
-        char nm[256] = {0};
-        if (!uf8::fxIdentityName(tr, i, nm, sizeof(nm))) continue;
-        // "SSL Meter" and "SSL Meter Pro" both contain "SSL Meter".
-        if (std::strstr(nm, "SSL Meter") == nullptr) continue;
-        if (countOut == 0) matchIdx = i;             // first match = fallback
-        if (countOut == sel) fxOut = i;
-        ++countOut;
-    }
+    // ⇨ TWO CHAINS, NOT ONE (Frank 2026-08-20: "master und monitoring fx MÜSSEN
+    // funktionieren"). REAPER's MONITORING FX are the master track's
+    // hardware-output chain, and the SDK addresses that chain by setting
+    // 0x1000000 on the FX index — the same flag normal tracks use for their
+    // record-input FX (reaper_plugin_functions.h: "record input FX (normal
+    // tracks) or hardware output FX (master track)"). Every TrackFX_* call
+    // downstream accepts the flag, so once the index carries it, the readouts,
+    // the V-Pot edits and the preset browser all work unchanged. Scanning only
+    // TrackFX_GetCount is why a Meter in the monitoring chain was invisible.
+    auto scan = [&](int count, int flag) {
+        for (int i = 0; i < count; ++i) {
+            const int idx = i | flag;
+            char nm[256] = {0};
+            if (!uf8::fxIdentityName(tr, idx, nm, sizeof(nm))) continue;
+            // "SSL Meter" and "SSL Meter Pro" both contain "SSL Meter".
+            if (std::strstr(nm, "SSL Meter") == nullptr) continue;
+            if (countOut == 0) matchIdx = idx;        // first match = fallback
+            if (countOut == sel) fxOut = idx;
+            ++countOut;
+        }
+    };
+    scan(TrackFX_GetCount(tr), 0);                    // normal chain first…
+    scan(TrackFX_GetRecCount(tr), 0x1000000);         // …then monitoring / rec
     if (countOut == 0) return false;
     if (fxOut < 0) fxOut = matchIdx;                  // sel out of range → first
     return true;
@@ -16413,11 +16426,24 @@ bool uf1PinnedMeterTrackFx_(MediaTrack*& trOut, int& fxOut)
 {
     trOut = nullptr; fxOut = -1;
     const int idx1 = sslcore::currentMeterTrackIndex();   // 1-based HostTrackIndex
-    if (idx1 <= 0) return false;
-    MediaTrack* tr = GetTrack(nullptr, idx1 - 1);
-    if (!tr) return false;
+    // ⇨ THE MASTER IS NOT IN GetTrack's INDEX SPACE, and that is the whole reason
+    // a Meter on the master or in the monitoring chain resolved to nothing: this
+    // used to bail on idx1 <= 0 and then only ever ask GetTrack(idx1-1). Ordinary
+    // tracks keep the direct route; anything the index cannot name falls through
+    // to the master, whose two chains uf1FindMeterFx_ now both walk.
+    //
+    // The fallback is deliberately also taken when an INDEXED track turns out to
+    // hold no Meter: what the plug-in announces for a master/monitoring instance
+    // is the host's business and we have no capture of it, so the code is built
+    // not to care. If it announces a real index, the fast path takes it; if it
+    // announces 0, a stale index, or nothing, the master is searched anyway.
+    MediaTrack* tr  = (idx1 > 0) ? GetTrack(nullptr, idx1 - 1) : nullptr;
     int cnt = 0;
-    if (!uf1FindMeterFx_(tr, 0, fxOut, cnt)) return false;  // first Meter = the fallback
+    if (!tr || !uf1FindMeterFx_(tr, 0, fxOut, cnt)) {
+        tr = GetMasterTrack(nullptr);
+        cnt = 0;
+        if (!tr || !uf1FindMeterFx_(tr, 0, fxOut, cnt)) return false;
+    }
     // TWO Meters on the track and the first one is a coin toss: the display reads
     // the instance the impersonator resolved, the V-Pots edited whichever Meter
     // came first in the FX chain. Ask which FX owns the stream being READ, by the
@@ -16664,17 +16690,34 @@ static const SslMeterPresetMap kSslMeterPresetMap[] = {
 // is not an SSL Meter or this platform isn't wired.
 static std::string uf1MeterPresetDir_(MediaTrack* tr, int fx)
 {
-#if defined(__APPLE__)
+    // fxIdentityName, not TrackFX_GetFXName: it prefers the plug-in's FACTORY
+    // name, so renaming the FX in REAPER does not silently empty the preset
+    // browser. Same reason uf1FindMeterFx_ uses it.
     char nm[256] = {0};
-    if (!TrackFX_GetFXName(tr, fx, nm, sizeof(nm))) return std::string();
+    if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return std::string();
     const std::string s = nm;
     if (s.find("Meter") == std::string::npos) return std::string();
     const bool pro = s.find("Meter Pro") != std::string::npos;   // check the longer name first
-    return std::string("/Library/Application Support/Solid State Logic/PlugIns/Presets/")
-         + (pro ? "MeterPro" : "Meter");
+    const char* leaf = pro ? "MeterPro" : "Meter";
+#if defined(__APPLE__)
+    return std::string("/Library/Application Support/Solid State Logic/PlugIns/Presets/") + leaf;
+#elif defined(_WIN32)
+    // VERIFIED on the Windows rig 2026-08-20 (StoerPC): the same tree, rooted at
+    // ProgramData —  C:\ProgramData\Solid State Logic\PlugIns\Presets\MeterPro
+    // holds the XMLs, byte for byte the layout macOS has. Read the root from the
+    // ENVIRONMENT rather than hardcoding C:\ProgramData: it is relocatable, and
+    // a hardcoded drive letter is the classic way this breaks on someone else's
+    // machine while working on ours.
+    const char* pd = std::getenv("ProgramData");
+    if (!pd || !*pd) pd = "C:\\ProgramData";
+    return std::string(pd) + "\\Solid State Logic\\PlugIns\\Presets\\" + leaf;
 #else
-    (void)tr; (void)fx;
-    return std::string();   // Windows/Linux SSL preset path — TODO (ProgramData / ~/.config)
+    // Linux gets NOTHING, and that is the finished answer rather than a gap: SSL
+    // ships no Linux plug-ins at all (their own system requirements, checked
+    // 2026-08-20, list macOS and Windows only). There is no folder to point at,
+    // so the browser correctly comes back empty instead of hunting for one.
+    (void)leaf;
+    return std::string();
 #endif
 }
 
@@ -16684,16 +16727,26 @@ static std::vector<std::string> uf1ScanMeterPresets_(const std::string& dir)
 {
     std::vector<std::string> out;
     if (dir.empty()) return out;
-#if !defined(_WIN32)
+    // ⚠ A correct PATH is only half of it — this scan was POSIX-only, so even
+    // with the right folder Windows came back empty (2026-08-20).
+    auto take = [&out](const std::string& fn) {
+        if (fn.size() <= 4) return;
+        const std::string ext = fn.substr(fn.size() - 4);
+        if (ext == ".xml" || ext == ".XML") out.push_back(fn.substr(0, fn.size() - 4));
+    };
+#if defined(_WIN32)
+    WIN32_FIND_DATAA fd;
+    const std::string pat = dir + "\\*.xml";
+    HANDLE h = FindFirstFileA(pat.c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) take(fd.cFileName);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+#else
     if (DIR* d = opendir(dir.c_str())) {
-        while (dirent* e = readdir(d)) {
-            const std::string fn = e->d_name;
-            if (fn.size() > 4) {
-                const std::string ext = fn.substr(fn.size() - 4);
-                if (ext == ".xml" || ext == ".XML")
-                    out.push_back(fn.substr(0, fn.size() - 4));
-            }
-        }
+        while (dirent* e = readdir(d)) take(e->d_name);
         closedir(d);
     }
 #endif
@@ -23262,8 +23315,17 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 const int nn = (int)g_uf1PresetList.size();
                 if (have && nn > 0) {
                     const int s = std::clamp(g_uf1PresetSel, 0, nn - 1);
+                    // Separator per platform. Win32 does accept a forward slash
+                    // mid-path, so the old hardcoded "/" would have worked by
+                    // accident — but a path that is right only because the API
+                    // is forgiving is one nobody can read.
+#if defined(_WIN32)
+                    const char* kSep = "\\";
+#else
+                    const char* kSep = "/";
+#endif
                     uf1LoadMeterPresetXml_(ptr, pfx,
-                        g_uf1PresetDir + "/" + g_uf1PresetList[s] + ".xml");
+                        g_uf1PresetDir + kSep + g_uf1PresetList[s] + ".xml");
                 }
                 g_uf1PresetsMode.store(false);
             }

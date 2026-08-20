@@ -1360,7 +1360,19 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                             reinterpret_cast<const char*>(pay + 10), slen);
                                 } else if (std::memcmp(pay, kHostTrackIndexObj, 8) == 0 &&
                                            pay[8] == 0x08) {          // pb: 08 <varint>
-                                    g_clientIndex[c] = int(pay[9] & 0x7f);  // 1-based track idx
+                                    // ⚠ A REAL VARINT, not one byte. The old
+                                    // `pay[9] & 0x7f` silently truncated every
+                                    // index above 127 to its low 7 bits, so on a
+                                    // big session track 130 announced itself as
+                                    // track 2 and the meter followed the wrong
+                                    // one. Sessions that large are ordinary here.
+                                    int v = 0, shift = 0; size_t k = 9;
+                                    while (k < avail && shift <= 28) {
+                                        v |= int(pay[k] & 0x7f) << shift;
+                                        if (!(pay[k] & 0x80)) { ++k; break; }
+                                        ++k; shift += 7;
+                                    }
+                                    g_clientIndex[c] = v;             // 1-based track idx
                                 }
                                 // Queue once this client has announced BOTH; the
                                 // port claim below ties them to the next new port.
@@ -1369,6 +1381,13 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                 if (itN != g_clientName.end() && itI != g_clientIndex.end()) {
                                     g_pending.push_back({ itN->second, itI->second });
                                     g_namedClients.insert(c);
+                                    // ALWAYS logged, not behind g_trace: it fires
+                                    // once per plug-in connect, and it is the only
+                                    // record of what the host calls an instance.
+                                    // Needed to tell a master / monitoring-chain
+                                    // Meter from a plain track one without guessing.
+                                    slog("[%.1f] instance announced: track=%d name=\"%s\"",
+                                         t, itI->second, itN->second.c_str());
                                     // KEEP g_clientName/g_clientIndex keyed by this
                                     // connection fd — the dedicated-port correlation
                                     // reads them by fd; they are no longer a
