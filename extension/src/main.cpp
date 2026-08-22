@@ -19962,6 +19962,23 @@ void invalidateGlobalLedCell_(uf8::Uf8GlobalLed cell);
 // True iff any modifier-slot in the binding has an active stateful
 // action (toggle on, REAPER GetToggleCommandState2 == 1).
 bool bindingHasActiveSlot_(const uf8::bindings::Binding& bd);
+
+// ── One resolution of "what does this UF1 button's LED look like" ──────────
+// Split out of the per-button pass in uf1PaintChannel_ so the NAV CROSS can use
+// the SAME rules instead of a private copy: the cross carries a full binding per
+// jog mode (25 ButtonIds since 2026-08-18), and a lamp that ignores the binding
+// makes that assignability invisible.
+//   state  → which slot decides, and whether it reads as active
+//   colour → that slot's effective LED, dimmed to a quarter when Dim
+// The caller keeps its own special cases (Play/Rec read the transport, the "2"
+// quick key reads Fine) by patching `on` between the two calls.
+static bool uf1BindingLedState_(const uf8::bindings::Binding& bd,
+                                uf8::bindings::Modifier mod,
+                                bool& onOut,
+                                const uf8::bindings::ActionSlot*& colSlotOut);
+static uint32_t uf1BindingLedColour_(const uf8::bindings::Binding& bd,
+                                     const uf8::bindings::ActionSlot& colSlot,
+                                     bool on);
 bool bindingHasActiveSlotForSet_(const uf8::bindings::Binding& bd, int mod);
 extern int g_lastAutoMode;
 
@@ -26810,6 +26827,66 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     }
 }
 
+// Definitions for the two resolvers declared far above. Body moved VERBATIM out
+// of the per-button pass below, so the buttons that already worked keep the
+// behaviour they had and the nav cross inherits it rather than imitating it.
+static bool uf1BindingLedState_(const uf8::bindings::Binding& bd,
+                                uf8::bindings::Modifier mod,
+                                bool& onOut,
+                                const uf8::bindings::ActionSlot*& colSlotOut)
+{
+    const auto& plainSlot = bd.shortPress[
+        static_cast<int>(uf8::bindings::Modifier::Plain)];
+    const auto& modSlot   = bd.shortPress[static_cast<int>(mod)];
+    bool on = false;              // ACTIVE vs INACTIVE colour + FF39 byte
+    bool show = false;            // false → LED dark
+    const uf8::bindings::ActionSlot* colSlot = &plainSlot;
+    if (mod == uf8::bindings::Modifier::Plain) {
+        on = bindingHasActiveSlot_(bd);
+        const bool customLed = plainSlot.led.hasActive || plainSlot.led.hasInactive;
+        show = !uf8::bindings::slotIsEmpty(plainSlot) || !bd.label.empty()
+               || bd.ledShowWhenEmpty || customLed;
+    } else if (!uf8::bindings::slotIsEmpty(modSlot)) {
+        show = true; colSlot = &modSlot;
+        bool stateful = false, active = false;
+        if (modSlot.type == uf8::bindings::ActionType::Builtin
+            && uf8::bindings::builtinHasState(modSlot.action)) {
+            stateful = true;
+            active = uf8::bindings::builtinStateOf(modSlot.action, modSlot.param);
+        } else if (modSlot.type == uf8::bindings::ActionType::Reaper
+                   && !modSlot.action.empty()) {
+            int aid = std::atoi(modSlot.action.c_str());
+            if (aid <= 0) aid = NamedCommandLookup(modSlot.action.c_str());
+            if (aid > 0) {
+                const int st = GetToggleCommandState2(SectionFromUniqueID(0), aid);
+                if (st >= 0) { stateful = true; active = (st == 1); }
+            }
+        }
+        on = stateful ? active : true;
+    } else if (bindingHasActiveSlot_(bd)) {
+        on = true; show = true;   // colSlot stays plainSlot
+    }
+    onOut = on; colSlotOut = colSlot;
+    return show;
+}
+
+static uint32_t uf1BindingLedColour_(const uf8::bindings::Binding& bd,
+                                     const uf8::bindings::ActionSlot& colSlot,
+                                     bool on)
+{
+    uint8_t rgb3[3];
+    uf8::bindings::Brightness bri;
+    if (on) uf8::bindings::effectiveLedActive  (bd, colSlot, rgb3, bri);
+    else    uf8::bindings::effectiveLedInactive(bd, colSlot, rgb3, bri);
+    const uint32_t rgb = (uint32_t(rgb3[0]) << 16)
+                       | (uint32_t(rgb3[1]) << 8)
+                       |  static_cast<uint32_t>(rgb3[2]);
+    if (bri == uf8::bindings::Brightness::Bright) return rgb;
+    return (((((rgb >> 16) & 0xFF) / 4) << 16)      // dim = a quarter per channel
+          | ((((rgb >> 8)  & 0xFF) / 4) << 8)
+          |  (( rgb        & 0xFF) / 4));
+}
+
 void uf1PaintChannel_()
 {
     if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
@@ -27217,19 +27294,14 @@ void uf1PaintChannel_()
             for (size_t k = 0; k < kUf1BtnLedN; ++k) {
                 const uf8::bindings::Binding bd =
                     uf8::bindings::getBinding(layer, kUf1BtnLeds[k].id);
-                const auto& plainSlot = bd.shortPress[
-                    static_cast<int>(uf8::bindings::Modifier::Plain)];
-                const auto& modSlot   = bd.shortPress[mi];
                 // Per-modifier resolution, mirroring the UF8 (resolveLed_ ~25394):
                 // pick the slot for the held modifier, decide state, then take that
                 // slot's effective LED (slot override wins, else binding-level).
-                bool on = false;              // ACTIVE vs INACTIVE colour + FF39 byte
-                bool show = false;            // false → LED dark
-                const uf8::bindings::ActionSlot* colSlot = &plainSlot;
+                bool on = false;
+                const uf8::bindings::ActionSlot* colSlot = nullptr;
+                bool show = uf1BindingLedState_(bd, mod, on, colSlot);
                 if (mod == uf8::bindings::Modifier::Plain) {
-                    // Base view: today's behaviour. State across all modifier slots;
                     // Play/Rec are momentary (no toggle state) → transport reality.
-                    on = bindingHasActiveSlot_(bd);
                     if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1Play)
                         on = (psNow & 1) != 0;   // playing
                     else if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1Rec)
@@ -27241,59 +27313,12 @@ void uf1PaintChannel_()
                         // own Fine flag.
                         on = g_uf1MeterView.load() ? g_uf1MeterFine.load()
                                                    : g_uf1CsFine.load();
-                    // Empty binding → dark, unless it carries a label / per-slot LED /
-                    // ledShowWhenEmpty (superset of the DAW soft-key emptiness test).
                     // SecKey2 (Fine) always renders — it's a hardcoded indicator.
-                    const bool customLed =
-                        plainSlot.led.hasActive || plainSlot.led.hasInactive;
-                    show = !uf8::bindings::slotIsEmpty(plainSlot) || !bd.label.empty()
-                           || bd.ledShowWhenEmpty || customLed
-                           || kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1SecKey2;
-                } else if (!uf8::bindings::slotIsEmpty(modSlot)) {
-                    // Held modifier + this button HAS an action for it. If that action
-                    // is STATEFUL (a mode/toggle like the auto_* automation modes on
-                    // +SHIFT), light it by its state — the ACTIVE mode bright, the
-                    // others dim (so you see which automation mode is live). A stateless
-                    // (momentary) shift action just shows bright (armed preview). Either
-                    // way the colour is the slot's "shift colour" the user set.
-                    show = true; colSlot = &modSlot;
-                    bool stateful = false, active = false;
-                    if (modSlot.type == uf8::bindings::ActionType::Builtin
-                        && uf8::bindings::builtinHasState(modSlot.action)) {
-                        stateful = true;
-                        active = uf8::bindings::builtinStateOf(modSlot.action, modSlot.param);
-                    } else if (modSlot.type == uf8::bindings::ActionType::Reaper
-                               && !modSlot.action.empty()) {
-                        int aid = std::atoi(modSlot.action.c_str());
-                        if (aid <= 0) aid = NamedCommandLookup(modSlot.action.c_str());
-                        if (aid > 0) {
-                            const int st = GetToggleCommandState2(SectionFromUniqueID(0), aid);
-                            if (st >= 0) { stateful = true; active = (st == 1); }
-                        }
-                    }
-                    on = stateful ? active : true;
-                } else if (bindingHasActiveSlot_(bd)) {
-                    // No action for the held modifier, but a Plain action is engaged
-                    // (the SHIFT key itself while held, or a toggled-on button) — keep
-                    // it lit with its Plain appearance instead of blacking out. Empty
-                    // modifier slots never force-show otherwise (Frank 2026-05-17).
-                    on = true; show = true;   // colSlot stays plainSlot
+                    if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1SecKey2)
+                        show = true;
                 }
-                uint32_t scaled = 0;
-                if (show) {
-                    uint8_t rgb3[3];
-                    uf8::bindings::Brightness bri;
-                    if (on) uf8::bindings::effectiveLedActive  (bd, *colSlot, rgb3, bri);
-                    else    uf8::bindings::effectiveLedInactive(bd, *colSlot, rgb3, bri);
-                    const bool bright = (bri == uf8::bindings::Brightness::Bright);
-                    const uint32_t rgb = (uint32_t(rgb3[0]) << 16)
-                                       | (uint32_t(rgb3[1]) << 8)
-                                       |  static_cast<uint32_t>(rgb3[2]);
-                    scaled = bright ? rgb   // dim = quarter brightness, per channel
-                        : (((((rgb >> 16) & 0xFF) / 4) << 16)
-                         | ((((rgb >> 8)  & 0xFF) / 4) << 8)
-                         |  (( rgb        & 0xFF) / 4));
-                }
+                const uint32_t scaled =
+                    show ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
                 // Fold the held modifier into the change-detect key so holding /
                 // releasing SHIFT (Cmd/Ctrl) re-sends every LED on the edge.
                 const int packed = (mi << 25) | (on ? (1 << 24) : 0)
@@ -34750,53 +34775,86 @@ static void applyUf1StartupView_()
 static void uf1NavCrossSyncLeds_()
 {
     if (!g_uf1_dev) return;
-    static const uint8_t kAll[5] = { 0x10, 0x11, 0x12, 0x13, 0x14 };
-    constexpr uint8_t kCentre = 0x12;
-    // razor target enum {Whole,Left,Right,Top,Bottom} → LED byte
-    static const uint8_t kByTarget[5] = { 0x12, 0x11, 0x13, 0x10, 0x14 };
+    // LED byte per key, in cross order: up, left, centre, right, down.
+    static const uint8_t kAll[5]  = { 0x10, 0x11, 0x12, 0x13, 0x14 };
+    static const uf8::bindings::ButtonId kBase[5] = {
+        uf8::bindings::ButtonId::Uf1NavUp,    uf8::bindings::ButtonId::Uf1NavLeft,
+        uf8::bindings::ButtonId::Uf1NavCentre, uf8::bindings::ButtonId::Uf1NavRight,
+        uf8::bindings::ButtonId::Uf1NavDown };
+    constexpr int kCentreIdx = 2;
+    // razor target enum {Whole,Left,Right,Top,Bottom} → index into kAll
+    static const int kByTarget[5] = { kCentreIdx, 1, 3, 0, 4 };
 
-    int lit = -1;                                  // LED byte to light, -1 = none
-    const auto mode = g_uf1JogMode.load();
+    // ⇨ THE CROSS SHOWS ITS BINDINGS, per jog mode. Each key carries a full
+    // binding PER MODE (perModeNavId, 25 ButtonIds since 2026-08-18), so a lamp
+    // that only ever lit in Razor, Envelope and Items was hiding the one thing
+    // worth showing: what this key does right now (Frank 2026-08-20: "für was
+    // haben wir pro mode zuweisbarkeit"). Colour, dim/bright and the modifier
+    // slot come from uf1BindingLedState_/Colour_, the SAME resolver the other
+    // UF1 buttons use, so the cross cannot drift into its own dialect.
+    //
+    // On top of that, three modes have a SELECTION to show — which razor edge is
+    // picked, whether the wheel edits points or the playhead, whether an item
+    // drag is held. That one key wins over its binding colour, because it is the
+    // only thing on the cross that changes without the user pressing anything.
+    const auto mode  = g_uf1JogMode.load();
+    const int  layer = uf8::bindings::getActiveLayer();
+    const auto mod   = uf8::bindings::currentModifierSnapshot();
+    const int  mi    = static_cast<int>(mod);
+
+    int marked = -1;
     switch (mode) {
         case Uf1JogMode::Razor:
-            lit = kByTarget[std::clamp(static_cast<int>(g_uf1RazorTarget.load()), 0, 4)];
+            marked = kByTarget[std::clamp(
+                static_cast<int>(g_uf1RazorTarget.load()), 0, 4)];
             break;
-        case Uf1JogMode::Envelope:                 // lit = points, dark = playhead
-            if (!g_uf1EnvJogPlayhead.load()) lit = kCentre;
+        case Uf1JogMode::Envelope:                 // marked = points, not playhead
+            if (!g_uf1EnvJogPlayhead.load()) marked = kCentreIdx;
             break;
-        case Uf1JogMode::Items:                    // lit = the drag is "mouse-down"
-            if (g_uf1JogItemsHeld.load()) lit = kCentre;
+        case Uf1JogMode::Items:                    // marked = the drag is "mouse-down"
+            if (g_uf1JogItemsHeld.load()) marked = kCentreIdx;
             break;
         case Uf1JogMode::Fades:
-            // Walking lights the CENTRE (the cross is doing the Items job);
-            // aiming lights the edge the wheel is on. Never both, so the
-            // single-LED writer below stays as it is.
-            if (g_uf1FadeCrossWalks.load())      lit = kCentre;
-            else if (g_uf1FadeOutEdge.load())    lit = 0x13;   // right = fade-out
-            else                                 lit = 0x11;   // left  = fade-in
+            // Walking marks the CENTRE (the cross is doing the Items job); aiming
+            // marks the edge the wheel is on.
+            if (g_uf1FadeCrossWalks.load())      marked = kCentreIdx;
+            else if (g_uf1FadeOutEdge.load())    marked = 3;      // right = fade-out
+            else                                 marked = 1;      // left  = fade-in
             break;
-        default: break;                            // Playhead / Scrub: nav cross dark
+        default: break;                            // Playhead / Scrub: bindings only
     }
-    static int     sLastLit  = -2;
-    static int     sLastMode = -2;
-    static int64_t sLastSend = 0;
-    const int m = static_cast<int>(mode);
-    // Send on CHANGE, and re-assert a LIT one every 500 ms. Change-detect alone
+
+    // Send on CHANGE, and re-assert a LIT key every 500 ms. Change-detect alone
     // was not enough on the hardware (Frank 2026-08-12: "LED leuchtet schlicht
-    // nicht"): these three frames go out once and then compete with the layout
-    // and text bursts the painter streams continuously over the same link, so a
-    // single write is not something the LED is guaranteed to survive. A dark
-    // cross costs nothing to leave alone; only a lit one is restated.
-    const int64_t now = nowMs_();
-    const bool changedState = (lit != sLastLit || m != sLastMode);
-    if (!changedState && (lit < 0 || now - sLastSend < 500)) return;
-    sLastLit = lit; sLastMode = m; sLastSend = now;
-    for (uint8_t led : kAll) {
-        const bool on = (int(led) == lit);
-        g_uf1_dev->send(uf1::buildLed(led, true));                       // FF3B enable
-        g_uf1_dev->send(uf1::buildColourRgb(led, on ? 0x00FF66u : 0u));  // FF38 colour
-        g_uf1_dev->send(uf1::buildLedLevel(led, on ? 0x00 : 0x11));      // FF39 bright/off
+    // nicht"): these frames compete with the layout and text bursts the painter
+    // streams continuously over the same link, so a single write is not something
+    // the LED is guaranteed to survive. A dark key costs nothing to leave alone.
+    static int     sPacked[5] = { -2, -2, -2, -2, -2 };
+    static int64_t sLastSend  = 0;
+    const int64_t  now        = nowMs_();
+    const bool     reassert   = (now - sLastSend >= 500);
+    bool           anyLit     = false;
+
+    for (int i = 0; i < 5; ++i) {
+        const auto bid = uf8::bindings::perModeNavId(kBase[i], static_cast<int>(mode));
+        const uf8::bindings::Binding bd = uf8::bindings::getBinding(layer, bid);
+        bool on = false;
+        const uf8::bindings::ActionSlot* colSlot = nullptr;
+        bool show = uf1BindingLedState_(bd, mod, on, colSlot);
+        uint32_t scaled = show ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
+        if (i == marked) {                         // the mode's own pick wins
+            show = true; on = true; scaled = 0x00FF66u;
+        }
+        if (on) anyLit = true;
+        const int packed = (mi << 25) | (on ? (1 << 24) : 0)
+                         | static_cast<int>(scaled & 0xFFFFFF);
+        if (packed == sPacked[i] && !(on && reassert)) continue;
+        sPacked[i] = packed;
+        g_uf1_dev->send(uf1::buildLed(kAll[i], true));                  // FF3B enable
+        g_uf1_dev->send(uf1::buildColourRgb(kAll[i], scaled));          // FF38 colour
+        g_uf1_dev->send(uf1::buildLedLevel(kAll[i], on ? 0x00 : 0x11)); // FF39 state
     }
+    if (anyLit && reassert) sLastSend = now;
 }
 
 // ⚠ DIAGNOSTIC. Log an escaping C++ exception's what() before it reaches
