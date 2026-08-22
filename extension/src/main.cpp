@@ -26333,10 +26333,10 @@ void applyUf1ChannelVpotPush_(int idx)
 // ⚠ Four capitals have no 7-segment shape at all — K M V W X. The table below
 // approximates them so nothing silently vanishes, but the real rule is to CHOOSE
 // WORDS THAT FIT THE FONT: "BARS" reads perfectly, "MIX" never will.
-// ⚠ HW-UNVERIFIED: whether the firmware paints the raw mask or looks the byte up
-// in its own digit table. The encoding is a mask, so it should paint — but no
-// capture can prove it (SSL never sends a letter). The format-name flash on the
-// time-display step is the probe: press it and the answer is on the panel.
+// ✅ HW-PROVEN 2026-08-22: the firmware paints the RAW MASK. It does not look the
+// byte up in a digit table — Frank pressed the format step and read letters off
+// the panel. The same press proved the field is TEN cells wide, not eleven (see
+// kUf1TcFirst below).
 static uint8_t uf1Seg7Glyph_(char ch)
 {
     switch (ch) {
@@ -26392,18 +26392,28 @@ static uint8_t uf1Seg7Glyph_(char ch)
     return 0x00;                            // unknown → blank, never garbage
 }
 
-// Text → the 11-byte 0x0119 field, LEFT-aligned (text reads left to right; the
-// clock right-aligns because a number does). '.' ':' and ',' fold into the dp of
-// the cell before them instead of eating one, exactly as the clock's separators
-// do. Anything past 11 cells is dropped — there is no scrolling here.
+// ⛔ TEN CELLS ON THE GLASS, ELEVEN IN THE PAYLOAD. Byte 0 is not displayed —
+// HW-PROVEN 2026-08-22, the day the field first got a left-aligned string and
+// Frank saw it eat the first letter ("es sind eben NICHT 11!"). Nobody could see
+// it before because the clock right-aligns and never filled the field. So every
+// writer works in out[kUf1TcFirst .. 10] and leaves out[0] blank.
+constexpr int kUf1TcFirst = 1;    // payload index of the leftmost VISIBLE cell
+constexpr int kUf1TcCells = 10;   // visible cells
+
+// Text → the 0x0119 field, LEFT-aligned (text reads left to right; the clock
+// right-aligns because a number does). '.' ':' and ',' fold into the dp of the
+// cell before them instead of eating one, exactly as the clock's separators do.
+// Anything past the ten cells is dropped — there is no scrolling here.
 static void uf1EncodeSeg7Text_(const char* s, uint8_t out[11])
 {
     for (int k = 0; k < 11; ++k) out[k] = 0x00;
     int n = 0;
-    for (const char* p = s; *p && n < 11; ++p) {
+    for (const char* p = s; *p && n < kUf1TcCells; ++p) {
         const char c = *p;
-        if ((c == '.' || c == ':' || c == ',') && n > 0) { out[n - 1] |= 0x01; continue; }
-        out[n++] = static_cast<uint8_t>(uf1Seg7Glyph_(c) << 1);
+        if ((c == '.' || c == ':' || c == ',') && n > 0) {
+            out[kUf1TcFirst + n - 1] |= 0x01; continue;
+        }
+        out[kUf1TcFirst + n++] = static_cast<uint8_t>(uf1Seg7Glyph_(c) << 1);
     }
 }
 
@@ -26420,14 +26430,19 @@ static void uf1FlashTimecode_(std::string_view text, int ms)
 }
 
 // Encode a REAPER position string (from format_timestr_pos) into the UF1's
-// 11-byte 0x0119 field. Each byte = (SEG7[digit] << 1) | dp; the separators
-// ':' '.' ',' set the dp (bit 0) on the PRECEDING digit — there is no colon or
-// period glyph on the field (decode 2026-07-24: "hatte nur punkte"). The result
-// is right-aligned into out[11], left-padded with 0x00 (blank). A '-' (negative
-// positions) has no minus glyph, so it is dropped, clamping to the digits alone.
-// A string with more than 11 digits keeps the rightmost 11 (low-order survive,
-// matching the right-aligned field). Mirrors uf1_0119_timecode_decode.py:31-36.
-// NB: right-align ORIGIN is unconfirmed on hardware — see the build blueprint.
+// 0x0119 field. Each byte = (SEG7[digit] << 1) | dp; the separators ':' '.' ','
+// set the dp (bit 0) on the PRECEDING digit — there is no colon or period glyph
+// on the field (decode 2026-07-24: "hatte nur punkte"). The result is
+// right-aligned into the TEN VISIBLE cells, left-padded with 0x00 (blank). A '-'
+// (negative positions) has no minus glyph, so it is dropped, clamping to the
+// digits alone. A longer string keeps the rightmost ten digits (the low-order
+// ones survive, matching a right-aligned field).
+// ⚠ Was eleven until 2026-08-22 — an eleven-digit sample count put its leading
+// digit in the invisible byte 0 and read an order of magnitude short. That the
+// dead cell went unnoticed for a month is right-align's doing: no clock string
+// was ever long enough to reach it. NB SSL itself does NOT right-align (its idle
+// "1.1.00" sits at payload 4..7 — each format has its own fixed layout); ours is
+// a deliberate simplification Frank has been reading since 2026-07-24.
 static void uf1EncodeTimecode_(const char* s, uint8_t out[11])
 {
     static const uint8_t SEG7[10] = {
@@ -26444,13 +26459,14 @@ static void uf1EncodeTimecode_(const char* s, uint8_t out[11])
         }
         // any other char (space, '-', …) is skipped — no glyph for it
     }
-    if (n > 11) {                                // keep the rightmost 11 digits
-        const int drop = n - 11;
-        for (int k = 0; k < 11; ++k) digits[k] = digits[k + drop];
-        n = 11;
+    if (n > kUf1TcCells) {                       // keep the rightmost ten digits
+        const int drop = n - kUf1TcCells;
+        for (int k = 0; k < kUf1TcCells; ++k) digits[k] = digits[k + drop];
+        n = kUf1TcCells;
     }
     for (int k = 0; k < 11; ++k) out[k] = 0x00;              // left-pad blanks
-    for (int k = 0; k < n; ++k) out[11 - n + k] = digits[k]; // right-align
+    for (int k = 0; k < n; ++k)                              // right-align
+        out[kUf1TcFirst + kUf1TcCells - n + k] = digits[k];
 }
 
 // Short display name of the ACTIVE FX for the CS-TYPE zone (0x0017), mirroring
