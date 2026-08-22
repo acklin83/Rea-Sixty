@@ -34842,8 +34842,14 @@ static void uf1NavCrossSyncLeds_()
         const uf8::bindings::ActionSlot* colSlot = nullptr;
         bool show = uf1BindingLedState_(bd, mod, on, colSlot);
         uint32_t scaled = show ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
-        if (i == marked) {                         // the mode's own pick wins
-            show = true; on = true; scaled = 0x00FF66u;
+        if (i == marked) {
+            // The mode's own pick wins the STATE, but not the colour: it lights
+            // in this binding's ACTIVE colour, exactly as the editor shows it.
+            // A hardcoded green here was the reason the editor could not show
+            // what the cross does — the fact lived in the painter, so there was
+            // nothing to display and nothing to change (Frank 2026-08-20).
+            show = true; on = true;
+            scaled = uf1BindingLedColour_(bd, *colSlot, true);
         }
         if (on) anyLit = true;
         const int packed = (mi << 25) | (on ? (1 << 24) : 0)

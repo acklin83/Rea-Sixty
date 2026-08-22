@@ -971,7 +971,14 @@ void seedFactoryDefaults_(Config& c)
     // The centre in Razor and Items is the HELD content drag, so it seeds with
     // Behavior::Hold — a Momentary seed there would fire once and never let go.
     for (const auto& n : kNavSeed) {
+        // Green ACTIVE, the default white stays for inactive. The cross lights
+        // green when its mode has something picked (razor edge, envelope points,
+        // a held item drag, the fade edge), and that colour belongs in the
+        // BINDING so the editor can show it and the user can change it. It used
+        // to be a constant inside the painter, which is why the editor had
+        // nothing to display (Frank 2026-08-20).
         L1[n.id] = mkBuiltin(n.action, n.beh, n.label);
+        L1[n.id].color[0] = 0x00; L1[n.id].color[1] = 0xFF; L1[n.id].color[2] = 0x66;
         if (n.shiftAction) {
             auto& sh = L1[n.id].shortPress[static_cast<int>(Modifier::Shift)];
             sh.type   = ActionType::Builtin;
@@ -2515,7 +2522,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // 28: the nav cross gained 25 per-mode ButtonIds. Dispatch resolves the cross
 // through the active Jog Mode, so an older config has NO binding for it until
 // upgradeBackfillUf1Buttons_ seeds them — that pass now runs for < 28 too.
-constexpr int kCurrentBindingsVersion = 30;
+constexpr int kCurrentBindingsVersion = 31;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -3017,6 +3024,26 @@ void upgradeUf1SoftKeyPinChannel_(Config& c)
 // v28→v29 (2026-08-18): drop the labels v28 seeded onto the nav cross. Only
 // where the user has not claimed one — a name someone typed is theirs, even on a
 // key that cannot show it.
+// v30→v31 (2026-08-20): the per-mode nav ids exist on these configs but carry
+// the default white ACTIVE colour, because the green the cross actually lit with
+// was a constant in the painter. Now that the painter reads the binding, an
+// untouched config would light white and the editor would agree with it — right,
+// but not what anyone has been looking at. So: paint the factory green in, and
+// ONLY where the binding still carries the factory white, so a colour someone
+// chose is never overwritten.
+void upgradeUf1NavActiveColour_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    for (const auto& n : kNavSeed) {
+        auto it = L1.bindings.find(n.id);
+        if (it == L1.bindings.end()) continue;
+        Binding& bd = it->second;
+        if (bd.color[0] != 0xFF || bd.color[1] != 0xFF || bd.color[2] != 0xFF)
+            continue;                                  // the user picked one
+        bd.color[0] = 0x00; bd.color[1] = 0xFF; bd.color[2] = 0x66;
+    }
+}
+
 void upgradeClearUf1NavLabels_(Config& c)
 {
     Layer& L1 = c.layers[0];
@@ -3404,6 +3431,12 @@ void load()
             // exactly as the user has it and only the five new ids get seeded.
             if (tmp.version < 30) {
                 upgradeBackfillUf1Buttons_(tmp);
+            }
+            // v30→v31 (2026-08-20): give the per-mode nav cross its ACTIVE
+            // colour in the binding, where the editor can see it. Runs after the
+            // backfill above so the ids it seeds are covered too.
+            if (tmp.version < 31) {
+                upgradeUf1NavActiveColour_(tmp);
             }
             if (tmp.version < 17) {
                 upgradeBackfillUf1Automation_(tmp);
