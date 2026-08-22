@@ -9314,7 +9314,7 @@ void applyUf1JogNav_(uint8_t code, int dir)
     const auto mode  = g_uf1JogMode.load();
     if (mode == Uf1JogMode::Razor) {
         // Nav cross = razor target PICKER (all 5, incl. centre = whole). The jog then
-        // moves the picked target; the nav-cross LED shows it (uf1RazorSyncLeds_).
+        // moves the picked target; the nav-cross LED shows it (uf1NavCrossSyncLeds_).
         Uf1RazorTarget t;
         if      (axis == 2) t = Uf1RazorTarget::Whole;
         else if (axis == 0) t = (dir < 0) ? Uf1RazorTarget::LeftEdge : Uf1RazorTarget::RightEdge;
