@@ -27780,9 +27780,14 @@ void uf1PaintChannel_()
         // the session's first paint (sTcMode == INT_MIN) — nothing changed then,
         // we simply had not looked yet.
         if (modeChanged && sTcMode != INT_MIN) {
-            // "HOURS", not "TIME": T and M are the two weakest shapes in the
-            // font, and the rule is to pick words the font can actually draw.
-            uf1FlashTimecode_(mode == 2 ? "BARS" : mode == 5 ? "HOURS" : "SAMPLE",
+            // The three names the builtin itself uses — Bars / Time / Samples
+            // (Frank 2026-08-22: "sollte es nicht time anstatt hours heissen").
+            // The label has to match what the format is CALLED; my earlier
+            // "HOURS" was typography talking over naming. It does cost the two
+            // weakest glyphs in the font (t is the lower-case shape, M is one of
+            // the impossible four) — if either reads badly on the panel, the fix
+            // is a better glyph, not a different word.
+            uf1FlashTimecode_(mode == 2 ? "BARS" : mode == 5 ? "TIME" : "SAMPLES",
                               1200);
         }
         // A flash owns the field until it expires; the clock then repaints itself
