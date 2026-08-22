@@ -26827,6 +26827,19 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     }
 }
 
+// ⇨ AN UNASSIGNED MODIFIER LEAVES THE LAMP ALONE. "Armed" = the held modifier
+// really has a short-press action on THIS button, and that is the only case in
+// which the LED is allowed to leave its base appearance. Same predicate and the
+// same slotIsEmpty semantics as the UF8 (modifierSlotArmed_ below): a colour
+// override on an otherwise empty modifier slot does NOT arm it, so holding
+// SHIFT over a button with no SHIFT action never repaints it.
+static bool uf1ModSlotArmed_(const uf8::bindings::Binding& bd,
+                             uf8::bindings::Modifier mod)
+{
+    if (mod == uf8::bindings::Modifier::Plain) return false;
+    return !uf8::bindings::slotIsEmpty(bd.shortPress[static_cast<int>(mod)]);
+}
+
 // Definitions for the two resolvers declared far above. Body moved VERBATIM out
 // of the per-button pass below, so the buttons that already worked keep the
 // behaviour they had and the nav cross inherits it rather than imitating it.
@@ -26841,12 +26854,18 @@ static bool uf1BindingLedState_(const uf8::bindings::Binding& bd,
     bool on = false;              // ACTIVE vs INACTIVE colour + FF39 byte
     bool show = false;            // false → LED dark
     const uf8::bindings::ActionSlot* colSlot = &plainSlot;
-    if (mod == uf8::bindings::Modifier::Plain) {
+    if (!uf1ModSlotArmed_(bd, mod)) {
+        // No modifier held, or one this button knows nothing about — either way
+        // paint what the base view paints. Until 2026-08-22 an unarmed modifier
+        // had its own third branch that lit ONLY a button with an engaged action
+        // and left every other one DARK, so holding SHIFT blacked out the UF1
+        // (Frank: "bei modifiern die nicht belegt sind sollen sich die LEDs von
+        // buttons nicht ändern"). The UF8 has behaved this way since 2026-05-17.
         on = bindingHasActiveSlot_(bd);
         const bool customLed = plainSlot.led.hasActive || plainSlot.led.hasInactive;
         show = !uf8::bindings::slotIsEmpty(plainSlot) || !bd.label.empty()
                || bd.ledShowWhenEmpty || customLed;
-    } else if (!uf8::bindings::slotIsEmpty(modSlot)) {
+    } else {
         show = true; colSlot = &modSlot;
         bool stateful = false, active = false;
         if (modSlot.type == uf8::bindings::ActionType::Builtin
@@ -26863,8 +26882,6 @@ static bool uf1BindingLedState_(const uf8::bindings::Binding& bd,
             }
         }
         on = stateful ? active : true;
-    } else if (bindingHasActiveSlot_(bd)) {
-        on = true; show = true;   // colSlot stays plainSlot
     }
     onOut = on; colSlotOut = colSlot;
     return show;
@@ -27300,7 +27317,12 @@ void uf1PaintChannel_()
                 bool on = false;
                 const uf8::bindings::ActionSlot* colSlot = nullptr;
                 bool show = uf1BindingLedState_(bd, mod, on, colSlot);
-                if (mod == uf8::bindings::Modifier::Plain) {
+                // The hardcoded indicators below belong to the BASE view, so they
+                // also hold while an unarmed modifier is down — otherwise the very
+                // buttons that are supposed to stay put (PLAY, REC, the Fine key)
+                // would be the three that flicker on the SHIFT edge.
+                const bool armed = uf1ModSlotArmed_(bd, mod);
+                if (!armed) {
                     // Play/Rec are momentary (no toggle state) → transport reality.
                     if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1Play)
                         on = (psNow & 1) != 0;   // playing
@@ -27319,9 +27341,11 @@ void uf1PaintChannel_()
                 }
                 const uint32_t scaled =
                     show ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
-                // Fold the held modifier into the change-detect key so holding /
-                // releasing SHIFT (Cmd/Ctrl) re-sends every LED on the edge.
-                const int packed = (mi << 25) | (on ? (1 << 24) : 0)
+                // Fold the modifier that actually DROVE this lamp into the
+                // change-detect key, not the one being held: an unarmed button
+                // resolves to Plain, so it must not re-send on the SHIFT edge.
+                // These frames share the link with the layout and text bursts.
+                const int packed = ((armed ? mi : 0) << 25) | (on ? (1 << 24) : 0)
                                  | static_cast<int>(scaled & 0xFFFFFF);
                 if (force || packed != sBtnLed[k]) {
                     sBtnLed[k] = packed;
@@ -34852,7 +34876,10 @@ static void uf1NavCrossSyncLeds_()
             scaled = uf1BindingLedColour_(bd, *colSlot, true);
         }
         if (on) anyLit = true;
-        const int packed = (mi << 25) | (on ? (1 << 24) : 0)
+        // Key on the modifier that DROVE the lamp: a cross key with nothing on
+        // the held modifier resolves to Plain and must not re-send on the edge.
+        const int packed = ((uf1ModSlotArmed_(bd, mod) ? mi : 0) << 25)
+                         | (on ? (1 << 24) : 0)
                          | static_cast<int>(scaled & 0xFFFFFF);
         if (packed == sPacked[i] && !(on && reassert)) continue;
         sPacked[i] = packed;
