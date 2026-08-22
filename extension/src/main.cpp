@@ -26898,6 +26898,12 @@ static uint32_t uf1BindingLedColour_(const uf8::bindings::Binding& bd,
     const uint32_t rgb = (uint32_t(rgb3[0]) << 16)
                        | (uint32_t(rgb3[1]) << 8)
                        |  static_cast<uint32_t>(rgb3[2]);
+    // ⇨ OFF MEANS OFF. The editor offers Off / Dim / Bright for every UF1 key,
+    // and until 2026-08-22 this read only "Bright?" — so Off rendered as Dim and
+    // the radio did nothing (the UF8 has honoured it via brightnessToState_ since
+    // 2026-05-06). Black here also drives the FF39 byte at the send sites: a lamp
+    // with no colour is never "lit".
+    if (bri == uf8::bindings::Brightness::Off) return 0u;
     if (bri == uf8::bindings::Brightness::Bright) return rgb;
     return (((((rgb >> 16) & 0xFF) / 4) << 16)      // dim = a quarter per channel
           | ((((rgb >> 8)  & 0xFF) / 4) << 8)
@@ -27192,24 +27198,21 @@ void uf1PaintChannel_()
         if (uf1PinnedMeterTrackFx_(mtr, mfx))
             uf1EmitMeterParamLabels_(mtr, mfx, meterScreen, meterPage);
     }
-    // Nav LEDs — glow only when the move is possible (like the analyzer). THREE
-    // independent axes (Frank 2026-07-30):
-    //   ◄ ► (0x0c/0x0e, cap106-confirmed) = SOFT-KEY PAGES. Meter = meter pages;
-    //       channel = g_uf1CsPage / count (Plugin = strip pages; DAW = the user
-    //       soft-key pages, 1 for now → both dark until those land).
-    //   "5-8" (0x0a = btn 0x22 − 0x18, DERIVED — HW-verify) = the DAW 4-track group,
-    //       lit when the 2nd group (5-8) is engaged. DAW only.
-    //   Bank ◄ ► (0x09/0x0b = btn 0x21/0x23 − 0x18, DERIVED) = ±8 track select, lit
-    //       when a track exists that way. All views.
-    // Frame = FF38+FF39 (0x11 lit / 0x00 off) + FF3B, like the arrows. Change-
-    // detected per LED; `changed` re-asserts after a layout re-establish.
+    // AVAILABILITY — three axes that glow only when the move is possible, like
+    // the analyzer (Frank 2026-07-30):
+    //   ◄ ► (cap106-confirmed) = SOFT-KEY PAGES. Meter = meter pages; channel =
+    //       g_uf1CsPage / count (Plugin = strip pages, DAW = the soft-key pages).
+    //   "5-8" = the DAW 4-track group, lit when the 2nd group is engaged. DAW only.
+    //   Bank ◄ ► = ±8 track select, lit when a track exists that way. All views.
+    // ⇨ THESE ARE STATES, NOT LAMPS. Until 2026-08-22 each one wrote its own
+    // hardcoded FF38/FF39 pair, which is why the LED settings on MASTER, BANK ◄ ►,
+    // PAGE ◄ ► and 5-8 did nothing at all — the editor offered a colour and the
+    // painter never read it (Frank 2026-08-22: "der master button auf UF1 reagiert
+    // auch nicht auf die LED einstellung"). They now go through the SAME per-button
+    // pass as every other UF1 key: the binding owns the COLOUR, and the values
+    // computed here only decide `on`. MASTER needs nothing at all here — its
+    // builtin (uf1_master) reports its own state, so the pass lights it already.
     if (g_uf1_dev) {
-        auto navLed = [&](uint8_t id, bool on) {
-            const uint8_t lvl = on ? 0x11 : 0x00;
-            g_uf1_dev->send(uf1::buildLedPrimary(id, lvl));   // FF38
-            g_uf1_dev->send(uf1::buildLedLevel(id, lvl));     // FF39
-            g_uf1_dev->send(uf1::buildLed(id, on));           // FF3B
-        };
         // ◄ ► soft-key page availability.
         bool leftOn, rightOn;
         if (meterView) {
@@ -27236,18 +27239,26 @@ void uf1PaintChannel_()
         const bool bankLOn = selIdx > 0;
         const bool bankROn = selIdx < nTracks - 1;
 
-        // MASTER (btn 0x39) engaged → the strip follows the master track. LED id
-        // 0x21 (= 0x39 − 0x18, DERIVED — HW-verify).
-        const bool masterOn = g_uf1Master.load();
-
-        static int sL = -1, sR = -1, s58 = -1, sBL = -1, sBR = -1, sM = -1;
         const bool force = changed;
-        if (force || int(leftOn)  != sL)  { sL  = leftOn;  navLed(0x0c, leftOn); }
-        if (force || int(rightOn) != sR)  { sR  = rightOn; navLed(0x0e, rightOn); }
-        if (force || int(five8On) != s58) { s58 = five8On; navLed(0x0a, five8On); }
-        if (force || int(bankLOn) != sBL) { sBL = bankLOn; navLed(0x09, bankLOn); }
-        if (force || int(bankROn) != sBR) { sBR = bankROn; navLed(0x0b, bankROn); }
-        if (force || int(masterOn)!= sM)  { sM  = masterOn; navLed(0x21, masterOn); }
+
+        // ⇨ ONE PLACE DECIDES "is this key's move possible", and it is keyed on the
+        // ACTION, not on the key. These three builtins are STATELESS (no stateOf),
+        // so bindingHasActiveSlot_ can never light them and the pass would leave
+        // them permanently idle. Reading the slot means the lamp follows the action
+        // wherever it is bound — swap PAGE ◄ to param +1 and it shows the RIGHT
+        // page's availability, put uf1_bank_step on a soft-key and that one glows.
+        auto availabilityState = [&](const uf8::bindings::ActionSlot& sp,
+                                     bool& out) -> bool {
+            if (sp.type != uf8::bindings::ActionType::Builtin) return false;
+            if (sp.action == "uf1_page_step") {
+                out = (sp.param >= 0) ? rightOn : leftOn;  return true;
+            }
+            if (sp.action == "uf1_bank_step") {
+                out = (sp.param >= 0) ? bankROn : bankLOn; return true;
+            }
+            if (sp.action == "uf1_five_to_eight") { out = five8On; return true; }
+            return false;
+        };
 
         // General per-button LED pass — SHIFT + the other bindable transport/mode
         // buttons LIGHT UP from their bound action's state, and MODIFIER-AWARE so
@@ -27275,8 +27286,10 @@ void uf1PaintChannel_()
         //     buttons: NO key-1-only FF38 special case (that was ONLY soft-key id 0x01).
         // LED ids are DERIVED (device_btn_id − 0x18) — HW-CONFIRMED as the rule for
         // every tested pair, but HW-UNVERIFIED for these specific buttons → HW-verify.
-        // Excludes buttons driven above/elsewhere (nav cross, arrows, bank ◄►, 5-8,
-        // master, solo/cut/sel, display soft-keys 1-4).
+        // Excludes only the keys another painter genuinely owns: the nav cross
+        // (uf1NavCrossSyncLeds_), the four display soft-keys (three owners, the
+        // arbitration IS the feature) and solo/cut/sel (track state + track colour,
+        // and SEL has no LED editor for exactly that reason).
         struct Uf1BtnLed { uf8::bindings::ButtonId id; uint8_t led; };
         static const Uf1BtnLed kUf1BtnLeds[] = {
             { uf8::bindings::ButtonId::Uf1Shift,          0x1e },  // btn 0x36
@@ -27295,6 +27308,16 @@ void uf1PaintChannel_()
             { uf8::bindings::ButtonId::Uf1Play,           0x25 },  // btn 0x3d
             { uf8::bindings::ButtonId::Uf1Rec,            0x26 },  // btn 0x3e
             { uf8::bindings::ButtonId::Uf1ChannelSoftKey, 0x00 },  // btn 0x18
+            // Joined 2026-08-22 — they used to be painted by a private navLed()
+            // that knew nothing about bindings. `on` still comes from the
+            // availability block above (or, for MASTER, from the builtin's own
+            // state); the COLOUR now comes from the binding like everywhere else.
+            { uf8::bindings::ButtonId::Uf1BankLeft,       0x09 },  // btn 0x21
+            { uf8::bindings::ButtonId::Uf1FiveToEight,    0x0a },  // btn 0x22
+            { uf8::bindings::ButtonId::Uf1BankRight,      0x0b },  // btn 0x23
+            { uf8::bindings::ButtonId::Uf1ArrowLeft,      0x0c },  // btn 0x24
+            { uf8::bindings::ButtonId::Uf1ArrowRight,     0x0e },  // btn 0x26
+            { uf8::bindings::ButtonId::Uf1Master,         0x21 },  // btn 0x39
         };
         constexpr size_t kUf1BtnLedN = sizeof(kUf1BtnLeds) / sizeof(kUf1BtnLeds[0]);
         static int  sBtnLed[kUf1BtnLedN];
@@ -27339,6 +27362,10 @@ void uf1PaintChannel_()
                     if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1SecKey2)
                         show = true;
                 }
+                // Availability wins `on` for the three stateless page/bank/group
+                // builtins, on whichever slot is driving this lamp.
+                if (bool avail = false; availabilityState(*colSlot, avail))
+                    on = avail;
                 const uint32_t scaled =
                     show ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
                 // Fold the modifier that actually DROVE this lamp into the
@@ -27352,7 +27379,9 @@ void uf1PaintChannel_()
                     const uint8_t led = kUf1BtnLeds[k].led;
                     if (force) g_uf1_dev->send(uf1::buildLed(led, true));        // FF3B enable
                     g_uf1_dev->send(uf1::buildColourRgb(led, scaled));           // FF38 colour
-                    g_uf1_dev->send(uf1::buildLedLevel(led, on ? 0x00 : 0x11));  // FF39 state
+                    // No colour → not lit, whatever the state says (Brightness::Off).
+                    g_uf1_dev->send(uf1::buildLedLevel(led,
+                        (on && scaled) ? 0x00 : 0x11));                          // FF39 state
                 }
             }
         }
@@ -28359,6 +28388,10 @@ void uf1PaintChannel_()
                     keyColBright = (bri == uf8::bindings::Brightness::Bright);
                     keyColRgb = (uint32_t(c[0]) << 16) | (uint32_t(c[1]) << 8)
                               | static_cast<uint32_t>(c[2]);
+                    // Off is a third state, not "not bright" — same fix as
+                    // uf1BindingLedColour_ (2026-08-22). The radio exists in the
+                    // slot editor, so it has to mean something here.
+                    if (bri == uf8::bindings::Brightness::Off) keyColRgb = 0;
                 }
             } else if (skXmap) {
                 // Explicit UF1 map: the soft-key owns its label + on-state.
@@ -28496,8 +28529,10 @@ void uf1PaintChannel_()
                 if (changed) g_uf1_dev->send(uf1::buildLed(id, true));  // FF3B enable
                 if (keyHasColour) {
                     g_uf1_dev->send(uf1::buildColourRgb(id, scaled));            // FF38 colour
+                    // No colour → not lit, whatever `on` says (Brightness::Off).
                     if (i != 0)
-                        g_uf1_dev->send(uf1::buildLedLevel(id, on ? 0x00 : 0x11)); // FF39 state
+                        g_uf1_dev->send(uf1::buildLedLevel(id,
+                            (on && scaled) ? 0x00 : 0x11));                      // FF39 state
                 } else if (i == 0) {
                     // FF38-only. on = 0xf0 bright; off = 0x11 dim (Frank HW 2026-07-29).
                     g_uf1_dev->send(uf1::buildLedPrimary(id, on ? 0xf0 : 0x11)); // FF38 only
@@ -34885,7 +34920,8 @@ static void uf1NavCrossSyncLeds_()
         sPacked[i] = packed;
         g_uf1_dev->send(uf1::buildLed(kAll[i], true));                  // FF3B enable
         g_uf1_dev->send(uf1::buildColourRgb(kAll[i], scaled));          // FF38 colour
-        g_uf1_dev->send(uf1::buildLedLevel(kAll[i], on ? 0x00 : 0x11)); // FF39 state
+        g_uf1_dev->send(uf1::buildLedLevel(kAll[i],
+            (on && scaled) ? 0x00 : 0x11));                             // FF39 state
     }
     if (anyLit && reassert) sLastSend = now;
 }
