@@ -26315,6 +26315,110 @@ void applyUf1ChannelVpotPush_(int idx)
     if (dv != cur) TrackFX_SetParamNormalized(tr, fx, p, dv);
 }
 
+// ⇨ THE TIME FIELD IS SEGMENT-ADDRESSED, SO IT CAN SPELL (Frank 2026-08-22:
+// "können wir das 10-digit Timedisplay missbrauchen um auch Text anzuzeigen?").
+// 0x0119 does not take digits — it takes a SEGMENT BITMASK per cell, which is
+// why the decode reads (SEG7[d] << 1) | dp. SSL only ever sends the ten digit
+// patterns, but nothing in the encoding says it has to: any of the 128 masks is
+// a legal cell value, so the field is really eleven little 7-segment canvases.
+//
+//        aaaa        a = 0x01   d = 0x08   g = 0x40
+//       f    b       b = 0x02   e = 0x10
+//       f    b       c = 0x04   f = 0x20
+//        gggg        The payload byte is (mask << 1) | dp, so the dp (the
+//       e    c       separator dot AFTER the cell) is bit 0 and the segments
+//       e    c       live in bits 1..7.
+//        dddd  dp
+//
+// ⚠ Four capitals have no 7-segment shape at all — K M V W X. The table below
+// approximates them so nothing silently vanishes, but the real rule is to CHOOSE
+// WORDS THAT FIT THE FONT: "BARS" reads perfectly, "MIX" never will.
+// ⚠ HW-UNVERIFIED: whether the firmware paints the raw mask or looks the byte up
+// in its own digit table. The encoding is a mask, so it should paint — but no
+// capture can prove it (SSL never sends a letter). The format-name flash on the
+// time-display step is the probe: press it and the answer is on the panel.
+static uint8_t uf1Seg7Glyph_(char ch)
+{
+    switch (ch) {
+        // Digits. '9' keeps SSL's own 0x67 (no bottom segment) so a flashed
+        // number looks identical to the clock's.
+        case '0': return 0x3f; case '1': return 0x06; case '2': return 0x5b;
+        case '3': return 0x4f; case '4': return 0x66; case '5': return 0x6d;
+        case '6': return 0x7d; case '7': return 0x07; case '8': return 0x7f;
+        case '9': return 0x67;
+        // Letters that have a real shape. Some are only legible in lower case
+        // (b d n r t u), which is the standard calculator alphabet, so the table
+        // folds both cases onto the shape that READS rather than the one asked for.
+        case 'A': case 'a': return 0x77;
+        case 'B': case 'b': return 0x7c;   // lower-case b — an upper B is an 8
+        case 'C':           return 0x39;
+        case 'c':           return 0x58;
+        case 'D': case 'd': return 0x5e;   // lower-case d — an upper D is a 0
+        case 'E': case 'e': return 0x79;
+        case 'F': case 'f': return 0x71;
+        case 'G': case 'g': return 0x3d;
+        case 'H':           return 0x76;
+        case 'h':           return 0x74;
+        case 'I':           return 0x30;   // the left bar, so it is not a 1
+        case 'i':           return 0x10;
+        case 'J': case 'j': return 0x1e;
+        case 'L': case 'l': return 0x38;
+        case 'N': case 'n': return 0x54;   // lower-case n — an upper N is an H
+        case 'O':           return 0x3f;   // = 0
+        case 'o':           return 0x5c;
+        case 'P': case 'p': return 0x73;
+        case 'Q': case 'q': return 0x67;   // = 9
+        case 'R': case 'r': return 0x50;
+        case 'S': case 's': return 0x6d;   // = 5
+        case 'T': case 't': return 0x78;   // lower-case t
+        case 'U':           return 0x3e;
+        case 'u': case 'v': return 0x1c;
+        case 'Y': case 'y': return 0x6e;
+        case 'Z': case 'z': return 0x5b;   // = 2
+        // The impossible four, approximated. Say it out loud before shipping a
+        // word that needs one of them.
+        case 'K': case 'k': return 0x76;   // reads as H
+        case 'M': case 'm': return 0x37;   // top box, open at the bottom
+        case 'V':           return 0x3e;   // reads as U
+        case 'W': case 'w': return 0x3e;   // reads as U
+        case 'X': case 'x': return 0x76;   // reads as H
+        // Punctuation that costs nothing.
+        case '-': return 0x40; case '_': return 0x08; case '=': return 0x48;
+        case '\'': return 0x20; case '"': return 0x22; case '?': return 0x53;
+        case '[': case '(': return 0x39; case ']': case ')': return 0x0f;
+        case '^': return 0x01; case '*': return 0x63;   // degree ring
+        case ' ': return 0x00;
+    }
+    return 0x00;                            // unknown → blank, never garbage
+}
+
+// Text → the 11-byte 0x0119 field, LEFT-aligned (text reads left to right; the
+// clock right-aligns because a number does). '.' ':' and ',' fold into the dp of
+// the cell before them instead of eating one, exactly as the clock's separators
+// do. Anything past 11 cells is dropped — there is no scrolling here.
+static void uf1EncodeSeg7Text_(const char* s, uint8_t out[11])
+{
+    for (int k = 0; k < 11; ++k) out[k] = 0x00;
+    int n = 0;
+    for (const char* p = s; *p && n < 11; ++p) {
+        const char c = *p;
+        if ((c == '.' || c == ':' || c == ',') && n > 0) { out[n - 1] |= 0x01; continue; }
+        out[n++] = static_cast<uint8_t>(uf1Seg7Glyph_(c) << 1);
+    }
+}
+
+// A short message ON the time field, main thread only (the painter and whatever
+// it calls — never a USB worker; that is why the format flash below is triggered
+// from the painter's own edge detect and not from the button handler). The clock
+// comes back by itself when the deadline passes.
+static std::string g_uf1TcFlashText;
+static int64_t     g_uf1TcFlashUntilMs = 0;
+static void uf1FlashTimecode_(std::string_view text, int ms)
+{
+    g_uf1TcFlashText.assign(text);
+    g_uf1TcFlashUntilMs = nowMs_() + ms;
+}
+
 // Encode a REAPER position string (from format_timestr_pos) into the UF1's
 // 11-byte 0x0119 field. Each byte = (SEG7[digit] << 1) | dp; the separators
 // ':' '.' ',' set the dp (bit 0) on the PRECEDING digit — there is no colon or
@@ -27650,12 +27754,29 @@ void uf1PaintChannel_()
         const int    mode = g_uf1TcMode.load();
         char buf[64];
         format_timestr_pos(pos, buf, sizeof(buf), mode);
-        std::array<uint8_t, 11> tc;
-        uf1EncodeTimecode_(buf, tc.data());
 
         static std::array<uint8_t, 11> sTc{};
         static int sTcMode = INT_MIN;
         const bool modeChanged = (mode != sTcMode);
+        // The field NAMES ITS OWN FORMAT when the format changes. Triggered from
+        // this edge and not from uf1_time_display_step, because the builtin runs
+        // on the USB worker and the flash buffer is main-thread state. Skipped on
+        // the session's first paint (sTcMode == INT_MIN) — nothing changed then,
+        // we simply had not looked yet.
+        if (modeChanged && sTcMode != INT_MIN) {
+            // "HOURS", not "TIME": T and M are the two weakest shapes in the
+            // font, and the rule is to pick words the font can actually draw.
+            uf1FlashTimecode_(mode == 2 ? "BARS" : mode == 5 ? "HOURS" : "SAMPLE",
+                              1200);
+        }
+        // A flash owns the field until it expires; the clock then repaints itself
+        // because the encoded bytes differ from the flash pattern still in sTc.
+        std::array<uint8_t, 11> tc;
+        if (nowMs_() < g_uf1TcFlashUntilMs)
+            uf1EncodeSeg7Text_(g_uf1TcFlashText.c_str(), tc.data());
+        else
+            uf1EncodeTimecode_(buf, tc.data());
+
         if (changed || modeChanged || tc != sTc) {
             // Persist the format the moment it actually changes (not on the first
             // paint of the session — sTcMode == INT_MIN then). SetExtState is a
