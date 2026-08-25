@@ -30891,6 +30891,17 @@ void pushZonesForVisibleSlots()
             // Frank 2026-06-23). bankSk/domSk reflect the live CS/BC page.
             std::string sslFreeLabel;
             bool        sslFreeSlotPresent = false;
+            // ⇨ WHILE A SET IS HELD, THE WHOLE ROW IS THE USER'S — including
+            // the keys SSL filled. A user Quick already reads this way: hold
+            // Shift and the row shows the Shift set, blank wherever nothing is
+            // assigned. The SSL rows kept falling back to the plug-in's label
+            // and LED, so an empty set looked exactly like Plain and there was
+            // no way to see what you had put on Shift (Frank 2026-08-25:
+            // "bei den SSL eigenen auf Q1 und Q2 ist das noch nicht der fall").
+            const bool sslSetOwnsRow =
+                (curQuick < 0 && !pluginModeLocal && curLayer == 0
+                 && uf8::bindings::bankModifierSnapshot()
+                        != uf8::bindings::Modifier::Plain);
             // ⇨ PLAIN IS SSL'S WHERE SSL HAS SOMETHING; A MODIFIER SET IS
             // ALWAYS YOURS. The gate used to be "free slot only", so the eight
             // occupied CS keys had no second set at all. Frank 2026-08-25:
@@ -30898,9 +30909,7 @@ void pushZonesForVisibleSlots()
             // On Plain an occupied key still shows and fires the plug-in
             // parameter, unchanged; only the held-modifier sets open up.
             if (curQuick < 0 && !pluginModeLocal && curLayer == 0 && vSk.linkIdx
-                && (vSk.linkIdx[s] == softkey::kNoSlot
-                    || uf8::bindings::bankModifierSnapshot()
-                           != uf8::bindings::Modifier::Plain)) {
+                && (vSk.linkIdx[s] == softkey::kNoSlot || sslSetOwnsRow)) {
                 const int qd = (domSk == uf8::Domain::BusComp) ? 1 : 0;
                 const auto fslot = uf8::bindings::getUserQuickSlot(
                     0, qd, bankSk, s);
@@ -30966,9 +30975,12 @@ void pushZonesForVisibleSlots()
                 }
             }
             if (label.empty()) {
-                if (curQuick >= 0)            label = userLabel;
+                if (curQuick >= 0)              label = userLabel;
                 else if (!sslFreeLabel.empty()) label = sslFreeLabel;
-                else                          label = std::string(vSk.labels[s]);
+                // A held set with nothing on this key shows NOTHING. Handing the
+                // plug-in's own name back would announce that the key still does
+                // what Plain does — the rule the user Quicks already follow.
+                else if (!sslSetOwnsRow)        label = std::string(vSk.labels[s]);
             }
             // Fold UTF-8 → Latin-1 before padding so umlauts in user labels,
             // favourite names and dynamic-bank (send/track) names render on
@@ -30991,9 +31003,13 @@ void pushZonesForVisibleSlots()
                 label = std::string(lead, ' ') + label
                       + std::string(pad - lead, ' ');
             }
+            // Same for the LED: an unassigned key under a held set is empty,
+            // not "the plug-in's parameter, possibly focused" — kNoSlot drops it
+            // to the dim/idle rung the empty user-Quick slots sit on.
             const int slotLink = (curQuick >= 0)
                 ? (userBankSlotPresent ? 0 : softkey::kNoSlot)
-                : (sslFreeSlotPresent ? 0 : vSk.linkIdx[s]);
+                : (sslFreeSlotPresent ? 0
+                   : (sslSetOwnsRow ? softkey::kNoSlot : vSk.linkIdx[s]));
             // Synthetic toggle columns: read the per-strip state directly
             // (not the focused state) so each column's LED reflects the
             // toggle's actual on/off for THIS strip's track. Only ONE
