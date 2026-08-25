@@ -21362,7 +21362,17 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                                         0, softkey::maxBankFor(domain));
                 const int  slot   = id - 0x18;
                 const auto v      = softkey::viewFor(domain, bank);
-                if (v.linkIdx[slot] == softkey::kNoSlot) {
+                // Free slot, or ANY held modifier set: Plain belongs to the
+                // plug-in wherever the plug-in has a parameter, every other set
+                // belongs to the user on every key (Frank 2026-08-25, "shift als
+                // mod für ALLE bänke öffnen"). dispatchUserQuickSlot returns
+                // false on an empty slot, so Shift over a key you never assigned
+                // still falls through to ssl_softkey exactly as before.
+                const bool sslOwnsSlot = (v.linkIdx[slot] != softkey::kNoSlot);
+                const bool modHeld =
+                    uf8::bindings::bankModifierSnapshot()
+                        != uf8::bindings::Modifier::Plain;
+                if (!sslOwnsSlot || modHeld) {
                     const int q = isBc ? 1 : 0;   // Q2 = BC, Q1 = CS
                     if (uf8::bindings::dispatchUserQuickSlot(
                             0, q, bank, slot, pressed)) {
@@ -30861,8 +30871,16 @@ void pushZonesForVisibleSlots()
             // Frank 2026-06-23). bankSk/domSk reflect the live CS/BC page.
             std::string sslFreeLabel;
             bool        sslFreeSlotPresent = false;
-            if (curQuick < 0 && !pluginModeLocal && curLayer == 0
-                && vSk.linkIdx && vSk.linkIdx[s] == softkey::kNoSlot) {
+            // ⇨ PLAIN IS SSL'S WHERE SSL HAS SOMETHING; A MODIFIER SET IS
+            // ALWAYS YOURS. The gate used to be "free slot only", so the eight
+            // occupied CS keys had no second set at all. Frank 2026-08-25:
+            // "shift als mod für ALLE bänke öffnen (auch die SSL Factory)".
+            // On Plain an occupied key still shows and fires the plug-in
+            // parameter, unchanged; only the held-modifier sets open up.
+            if (curQuick < 0 && !pluginModeLocal && curLayer == 0 && vSk.linkIdx
+                && (vSk.linkIdx[s] == softkey::kNoSlot
+                    || uf8::bindings::bankModifierSnapshot()
+                           != uf8::bindings::Modifier::Plain)) {
                 const int qd = (domSk == uf8::Domain::BusComp) ? 1 : 0;
                 const auto fslot = uf8::bindings::getUserQuickSlot(
                     0, qd, bankSk, s);
@@ -39319,6 +39337,37 @@ int reasixty_activeUserBank()
 // Per-layer accessors so the Bindings editor can show a live-state
 // badge for whichever layer the user is editing (not just the
 // currently-active one). Out-of-range returns -1 / 0 defaults.
+// ⇨ IS THIS SSL SOFT-KEY SLOT SPOKEN FOR BY THE PLUG-IN?
+// The Layer-1 CS (Q1) and BC (Q2) rows are plug-in driven, but only where the
+// SSL tables actually put a parameter. Everything else on those rows is free
+// real estate, and has been dispatchable and paintable as a user slot since
+// 2026-06-23 ("Lets the user claim the unused BC banks 2-5"). The Settings
+// editor was the one place that still refused the whole Quick outright, so the
+// capability existed with no way to configure it (Frank 2026-08-25: "Haben wir
+// doch gesagt: frei belegbar nachdem die SSL Factory Slots durch sind?").
+//
+// Exposed so the editor asks the SAME question the input path asks, rather than
+// keeping a second copy of the rule. `isBc` picks the domain, `bank` is the
+// PAGE bank 0..5, `slot` the top-soft-key 0..7.
+bool reasixty_sslSoftKeySlotOccupied(bool isBc, int bank, int slot)
+{
+    if (slot < 0 || slot >= 8) return false;
+    const auto domain = isBc ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip;
+    if (bank < 0 || bank > softkey::maxBankFor(domain)) return false;
+    return softkey::viewFor(domain, bank).linkIdx[slot] != softkey::kNoSlot;
+}
+
+// True when the SSL tables leave EVERY slot of this bank empty, i.e. the whole
+// page is the user's. That is the condition for offering a dynamic bank there:
+// a dynamic bank computes all eight keys, so it can only go where SSL wants
+// none of them.
+bool reasixty_sslSoftKeyBankFullyFree(bool isBc, int bank)
+{
+    for (int s = 0; s < 8; ++s)
+        if (reasixty_sslSoftKeySlotOccupied(isBc, bank, s)) return false;
+    return true;
+}
+
 int reasixty_activeQuickFor(int layer)
 {
     if (layer < 0 || layer > 2) return -1;

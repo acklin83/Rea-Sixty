@@ -50,6 +50,10 @@ bool reasixty_uc1Connected();
 // Device filter — "ever attached to this machine", not "connected right now".
 // See main.cpp's g_devicesSeen.
 bool reasixty_settingsShowsDevice(int mask);
+// SSL soft-key occupancy, so the editor asks the same question the input
+// path does instead of keeping a second copy of the rule.
+bool reasixty_sslSoftKeySlotOccupied(bool isBc, int bank, int slot);
+bool reasixty_sslSoftKeyBankFullyFree(bool isBc, int bank);
 
 // True while a V-Pot is armed for Touch-to-Learn step-capture (set by main.cpp
 // via reasixty_setVpotCaptureActive). The UF8 learn tick reads it to route
@@ -4840,18 +4844,35 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                           slotIdx + 1, stock,
                           editQuick == 0 ? "Q1 = SSL CS" : "Q2 = SSL BC");
             ImGui_Text(ctx, hdr);
+            // ⇨ PLAIN IS THE PLUG-IN'S, EVERY OTHER SET IS YOURS.
+            // The whole key used to be refused here, which left the eight
+            // occupied CS keys with no second set at all (Frank 2026-08-25:
+            // "shift als mod für ALLE bänke öffnen (auch die SSL Factory)").
+            // The Plain slot stays the plug-in parameter, unchanged and
+            // uneditable; hold the modifier and the same key is a free slot.
+            // The modifier row is drawn by the caller just above, so switching
+            // sets is one click away from this message.
+            if (g_slotEditModIdx == 0) {
+                ImGui_TextDisabled(ctx,
+                    "Plain is fixed by the SSL plug-in on this page. Switch the "
+                    "Modifier above to Shift and this key is yours: the plug-in "
+                    "keeps the unmodified press, your action fires with FINE "
+                    "held.");
+                return;
+            }
             ImGui_TextDisabled(ctx,
-                "Fixed by the SSL plug-in on this page — not user-editable. "
-                "Empty slots on this page (and the unused BC banks 2-5) ARE "
-                "editable: pick one to assign your own action.");
-            return;
+                "The plug-in owns the unmodified press on this key. This set is "
+                "yours.");
+            ImGui_Spacing(ctx);
+        } else
+        {
+            // Empty SSL slot → editable on every set, Plain included.
+            ImGui_TextDisabled(ctx,
+                "Free SSL slot — unused by the plug-in on this page. Assign any "
+                "action; it fires when this Top Soft-Key is pressed in this "
+                "CS/BC page.");
+            ImGui_Spacing(ctx);
         }
-        // Empty SSL slot → editable. Make it clear this is a free slot.
-        ImGui_TextDisabled(ctx,
-            "Free SSL slot — unused by the plug-in on this page. Assign any "
-            "action; it fires when this Top Soft-Key is pressed in this "
-            "CS/BC page.");
-        ImGui_Spacing(ctx);
     }
 
     const int  qIdx  = editQuick;
@@ -5514,23 +5535,45 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     // Mode alike; see drawUserQuickSlotEditor_.
     const int engagedQ = editQuick;
 
-    // Layer 1 Q1/Q2 = SSL CS/BC focus — plug-in driven, not a free
-    // user-Quick context. Presets/LED here would be cosmetic garbage.
-    if (editLayer == 0 && editQuick <= 1) {
-        char hdr[160];
-        snprintf(hdr, sizeof(hdr),
-                      "%s   (Layer 1, %s)",
-                      sbLabels[sbIdx],
-                      editQuick == 0 ? "Q1 = SSL CS" : "Q2 = SSL BC");
+    // ⇨ LAYER 1 Q1/Q2 ARE SSL'S ROWS ONLY WHERE SSL PUT SOMETHING.
+    // This used to bail out for the whole Quick, which was wrong: the input
+    // path has dispatched the free slots of those rows to user bindings since
+    // 2026-06-23 and the painter lights them, so the capability was there with
+    // no way to configure it (Frank 2026-08-25). Now only the OCCUPIED slots
+    // stay SSL's; a page SSL leaves entirely empty (BC banks 2-5, and the gaps
+    // elsewhere) is a normal user Sub-Bank.
+    const bool sslRow  = (editLayer == 0 && editQuick <= 1);
+    const bool sslIsBc = (editQuick == 1);
+    // A dynamic bank computes all eight keys, so it can only be offered where
+    // SSL claims none of them.
+    const bool bankFullyFree =
+        !sslRow || reasixty_sslSoftKeyBankFullyFree(sslIsBc, sbIdx);
+    if (sslRow) {
+        char hdr[200];
+        snprintf(hdr, sizeof(hdr), "%s   (Layer 1, %s)", sbLabels[sbIdx],
+                      sslIsBc ? "Q2 = SSL BC" : "Q1 = SSL CS");
         ImGui_Text(ctx, hdr);
-        ImGui_TextDisabled(ctx, reasixty_sp(
-            "Layer 1 Q1 (SSL CS) and Q2 (SSL BC) are plug-in-driven and "
-            "carry no user Sub-Bank slots. Pick Q3 (or Layer 2/3) above "
-            "to edit Sub-Bank presets and LED colours.",
-            "Layer 1 Q1 (SSL CS) and Q2 (SSL BC) are plug-in-driven and "
-            "carry no user Sub-Bank slots. Pick Q3 (or Layer 2/3) above "
-            "to edit Sub-Bank presets and LED colors."));
-        return;
+        int occupied = 0;
+        for (int s = 0; s < 8; ++s)
+            if (reasixty_sslSoftKeySlotOccupied(sslIsBc, sbIdx, s)) ++occupied;
+        if (occupied == 8) {
+            ImGui_TextDisabled(ctx,
+                "Every key on this page carries an SSL parameter. Only the "
+                "Shift set is yours here; the Plain set stays plug-in-driven.");
+        } else if (occupied > 0) {
+            char note[220];
+            snprintf(note, sizeof(note),
+                     "%d of 8 keys carry an SSL parameter and stay "
+                     "plug-in-driven on Plain. The other %d are yours, and the "
+                     "Shift set is yours on all of them.",
+                     occupied, 8 - occupied);
+            ImGui_TextDisabled(ctx, note);
+        } else {
+            ImGui_TextDisabled(ctx,
+                "SSL leaves this whole page empty, so all eight keys are "
+                "yours, dynamic banks included.");
+        }
+        ImGui_Spacing(ctx);
     }
 
     // ---- Header + navigation hint -------------------------------------
@@ -5562,6 +5605,16 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         ImGui_TextDisabled(ctx,
             "Compute this Sub-Bank's 8 keys live from the focused track "
             "instead of fixed slots. The slots below are ignored while on.");
+        // ⛔ Not on a page where SSL owns even one key: a dynamic bank computes
+        // ALL eight, so it would paint over a plug-in parameter. Fully-empty
+        // pages (BC banks 2-5) are fair game.
+        if (!bankFullyFree) {
+            ImGui_TextDisabled(ctx,
+                "Unavailable here: SSL owns at least one key on this page, and "
+                "a dynamic bank would compute all eight. Use a page SSL leaves "
+                "empty, or the per-key slots below.");
+            ImGui_Spacing(ctx);
+        }
         ImGui_Spacing(ctx);
 
         struct DynOpt { DynamicBankKind kind; const char* label; };
@@ -5580,7 +5633,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             if (o.kind == curKind) curDynLabel = o.label;
 
         ImGui_SetNextItemWidth(ctx, 260.0);
-        if (ImGui_BeginCombo(ctx, "##dynbank", curDynLabel, /*flags*/ nullptr)) {
+        if (bankFullyFree
+            && ImGui_BeginCombo(ctx, "##dynbank", curDynLabel, /*flags*/ nullptr)) {
             for (const auto& o : kDynOpts) {
                 bool sel = (o.kind == curKind);
                 if (ImGui_Selectable(ctx, o.label, &sel,
