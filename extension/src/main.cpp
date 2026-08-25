@@ -6390,9 +6390,28 @@ std::atomic<int> g_fxBankOp[5] = {
     int(FxBankOp::FxSolo), int(FxBankOp::Offline),
 };
 // 8 user-configured RGB colours (0xRRGGBB) for the Track-Colours bank.
+//
+// ⛔ THE HARDWARE HAS TEN COLOURS AND THESE ARE EIGHT OF THEM.
+// The SSL button LEDs render a fixed palette, not free RGB: red, orange,
+// yellow, green, cyan, blue, violet, magenta, pink, white. It is written down
+// in Protocol.cpp `selPaletteRgb` and Frank confirmed it from the device
+// (2026-08-25, with a photo of the ten swatches: "es GIBT nur diese Farben bei
+// der SSL Hardware! Nichts dazu erfinden!").
+//
+// These defaults used to be Material Design tones, which are NOT in it, so the
+// hardware rounded each one to whatever it could show and the bank came out
+// wrong at both ends: 0x6D4C41 "brown" has no neighbour in the palette at all
+// and landed on white ("braun ist irgendein hellpink"), and 0x1E88E5 "blue"
+// landed on CYAN, one step from violet, which is why those two read as the same
+// key. Picking values that are already in the palette leaves nothing to round.
+//
+// Brown is gone because the hardware has no brown; cyan takes its slot, being
+// the one palette colour the old set never reached. Pink and white are the two
+// left out: white is "no colour" on a colour bank, and magenta already covers
+// that corner of the wheel. A user is free to set any of the ten per slot.
 std::atomic<uint32_t> g_trackBankColour[8] = {
-    0xE53935, 0xFB8C00, 0xFDD835, 0x43A047,
-    0x1E88E5, 0x5E35B1, 0xD81B60, 0x6D4C41,
+    0xFF0000, 0xFF8000, 0xFFFF00, 0x00FF00,   // red    orange  yellow  green
+    0x0000FF, 0x8000FF, 0xFF00FF, 0x00FFFF,   // blue   violet  magenta cyan
 };
 // Optional user names for the 8 Track-Colours keys. Empty → the accessor
 // defaults to "Col N". Read by dynamicBankSlot_ (main thread), written by
