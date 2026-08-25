@@ -165,6 +165,9 @@ bool        reasixty_hudUf8LearnTick();
 // FX-Learn page). Mirrored into g_uf8VpotLearnArmed each onTimer tick so the
 // input thread can turn a V-Pot push into the Toggle flag. Frank 2026-06-20.
 bool        reasixty_uf8VpotGuiLearnArmed();
+// True while a control in our Settings window has the keyboard (a label being
+// typed, a value being dragged). Gates the keyboard-modifier mirror below.
+bool        reasixty_settingsHasKeyboardFocus();
 int         reasixty_hudUf8LearnArmed();
 // UF1 plugin-mode learn (v11). pos = page*4 + idx of the V-Pot / soft-key stream.
 void        reasixty_uf1ArmLearn(bool softKeys, int pos, void* tr, int fx);
@@ -35812,8 +35815,25 @@ void onTimerBody_()
     // would. OR'd inside the bindings layer (see Bindings.cpp
     // `g_mod*KbHeld`). Gated by Settings → Behaviour → Keyboard.
     // Frank 2026-05-22.
+    //
+    // ⛔ NOT WHILE YOU ARE TYPING IN OUR OWN SETTINGS WINDOW.
+    // Shift is how you type a capital letter. Every modifier reader hangs off
+    // this ONE mirror, so while a field in the Settings window has the keyboard,
+    // naming a soft-key "EQ" walked the whole surface onto its Shift set: LEDs,
+    // scribble labels, the lot, flickering per keystroke (Frank 2026-08-25,
+    // "DIE FUCKING LED AUF DER SURFACE"). Suppressing it HERE covers the LEDs,
+    // the labels and the editor in one move; two earlier attempts patched single
+    // READERS in SettingsScreen and could never have covered the surface.
+    //
+    // Deliberately not the same thing as switching the feature off: the moment
+    // focus leaves the field the mirror is live again, and it is untouched when
+    // the window is closed. Holding SHIFT on the SURFACE is unaffected either
+    // way — that flag never passes through here. Frank 2026-08-18 ("SHIFT UND
+    // ALLE ANDEREN MODIFIERS SIND AUCH ÜBER DIE TASTATUR GÜLTIG!") stands; this
+    // only carves out the moment when the keystroke belongs to a text field.
+    const bool typingInSettings = reasixty_settingsHasKeyboardFocus();
     uf8::bindings::setKeyboardShiftHeld(
-        g_keyboardShiftModifier.load() && hostShiftHeld_());
+        g_keyboardShiftModifier.load() && hostShiftHeld_() && !typingInSettings);
 #ifdef _WIN32
     // Windows has no keyboard Cmd key (hostCmdHeld_ is always false), so the
     // "Cmd" modifier slot would be unreachable from the keyboard — drive it from
@@ -35827,15 +35847,15 @@ void onTimerBody_()
         bool       ctrlHeld = hostCtrlHeld_();
         if ((GetAsyncKeyState(VK_RMENU) & 0x8000) != 0) ctrlHeld = false; // AltGr → Alt
         uf8::bindings::setKeyboardCmdHeld(
-            g_keyboardCmdModifier.load()  && altHeld);
+            g_keyboardCmdModifier.load()  && altHeld && !typingInSettings);
         uf8::bindings::setKeyboardCtrlHeld(
-            g_keyboardCtrlModifier.load() && ctrlHeld);
+            g_keyboardCtrlModifier.load() && ctrlHeld && !typingInSettings);
     }
 #else
     uf8::bindings::setKeyboardCmdHeld(
-        g_keyboardCmdModifier.load()   && hostCmdHeld_());
+        g_keyboardCmdModifier.load()   && hostCmdHeld_()  && !typingInSettings);
     uf8::bindings::setKeyboardCtrlHeld(
-        g_keyboardCtrlModifier.load()  && hostCtrlHeld_());
+        g_keyboardCtrlModifier.load()  && hostCtrlHeld_() && !typingInSettings);
 #endif
 
     // Resolve the active FX-Learn modifier layer for this frame (Option /

@@ -4,6 +4,7 @@
 #include "LogPath.h"        // uf8::logPath — /tmp vs %TEMP%
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -3055,19 +3056,17 @@ static bool drawBankLayerRow_(ImGui_Context* ctx, const char* tag, int* modIdx)
         // used since 2026-07-21: press SHIFT to jump to the Shift set, press it
         // again to come back to Plain. Rising edge only, so releasing never
         // moves the picker and you can edit the set you jumped to with the mouse.
-        // ⛔ THE SURFACE'S SHIFT, NOT THE KEYBOARD'S — surfaceModifierSnapshot,
-        // not bankModifierSnapshot. Typing a capital letter into a label field
-        // is not a request to edit another set, and a first attempt that merely
-        // suppressed the jump while an ImGui item was active did not hold
-        // (Frank 2026-08-25: "shift springt immer noch"). Reading the hardware
-        // flag alone removes the keyboard from this ONE decision by
-        // construction, whatever ImGui reports about focus. The keyboard
-        // modifiers keep counting everywhere else, which is the point.
-        // The busy check stays as a second guard, for holding the surface's own
-        // SHIFT while a field has focus. The edge is still TRACKED either way,
-        // so a suppressed press leaves no stale "held" behind.
+        // Typing no longer reaches this at all: main.cpp's keyboard-modifier
+        // mirror stands down while this window owns the keyboard, so the whole
+        // surface AND this picker stay put. Two earlier attempts patched readers
+        // here instead and could never have covered the LEDs, which is where
+        // Frank was actually seeing it (2026-08-25).
+        // The busy check stays as the second guard, for holding the SURFACE's
+        // own SHIFT while a field has focus — that flag never passes through the
+        // mirror. The edge is still TRACKED, so a suppressed press leaves no
+        // stale "held" behind.
         static int s_lastHeld = 0;
-        const int held = static_cast<int>(surfaceModifierSnapshot());
+        const int held = static_cast<int>(bankModifierSnapshot());
         if (held != s_lastHeld && held != 0 && !settingsEditorBusy_(ctx))
             *modIdx = (*modIdx == held) ? 0 : held;
         s_lastHeld = held;
@@ -22309,6 +22308,29 @@ bool reasixty_hudUf1PushAdd(int pos, int param, double norm, void* tr, int fx)
 {
     return uf8::hudUf1PushAdd_(pos, param, norm, tr, fx);
 }
+// ⇨ DOES OUR SETTINGS WINDOW CURRENTLY OWN THE KEYBOARD?
+// Read once per tick by main.cpp's keyboard-modifier mirror, which is where the
+// whole surface gets its Shift/Cmd/Ctrl state from. While a field here is being
+// typed into, the mirror stays down so a capital letter cannot walk every LED
+// and scribble strip onto its Shift set (Frank 2026-08-25).
+//
+// Written from the ImGui draw (main thread) and read from the same tick, so a
+// plain bool is enough; it is an atomic only because the mirror also runs while
+// the window is closed and a torn read there would be a stale true forever.
+// ⛔ It MUST be cleared on the frames where the window does not draw. The setter
+// is called unconditionally from MixerWindow::onRunTick for exactly that reason:
+// closing the window mid-edit would otherwise leave the surface's keyboard
+// modifiers switched off until the next time it was opened.
+static std::atomic<bool> g_settingsKeyboardFocus{false};
+void reasixty_setSettingsHasKeyboardFocus(bool on)
+{
+    g_settingsKeyboardFocus.store(on, std::memory_order_relaxed);
+}
+bool reasixty_settingsHasKeyboardFocus()
+{
+    return g_settingsKeyboardFocus.load(std::memory_order_relaxed);
+}
+
 bool reasixty_uf8VpotGuiLearnArmed()
 {
     // HUD grid-click learn armed on a V-Pot cell (HUD kind 0), or the FX-Learn

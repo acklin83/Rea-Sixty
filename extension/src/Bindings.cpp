@@ -4107,12 +4107,6 @@ Modifier bankModifierSnapshot()
     return (m == Modifier::Shift) ? Modifier::Shift : Modifier::Plain;
 }
 
-// Hardware only — see the header. The keyboard mirrors (g_mod*KbHeld) are
-// deliberately absent from this one read.
-Modifier surfaceModifierSnapshot()
-{
-    return g_modShiftHeld.load() ? Modifier::Shift : Modifier::Plain;
-}
 
 // Long-press slot resolution with PLAIN fallback. The arm records the
 // modifier held AT PRESS, so a long-press whose action lives only in the

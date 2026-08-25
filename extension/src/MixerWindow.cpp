@@ -28,6 +28,9 @@ int reasixty_fontScale();
 // See main.cpp's g_devicesSeen: the gate is "ever attached to this machine",
 // not "connected right now".
 bool reasixty_settingsShowsDevice(int mask);
+// Publishes whether this window currently owns the keyboard, so main.cpp's
+// keyboard-modifier mirror can stand down while a field is being typed into.
+void reasixty_setSettingsHasKeyboardFocus(bool on);
 
 // Font + base-size accessors consumed by the Manual renderer (ManualView.cpp).
 // Refreshed each frame from the live Settings context so the renderer always
@@ -890,6 +893,16 @@ void MixerWindow::onRunTick()
         // next 360 toggle correctly moves false→true.
         impl_->visible = open;
     }
+
+    // ⇨ Publish whether this window has the keyboard, for main.cpp's
+    // keyboard-modifier mirror. IsAnyItemActive covers a field being typed into
+    // and a value being dragged; both are moments where a keystroke belongs to
+    // this window and must not walk the surface onto its Shift set.
+    // Set on EVERY tick, including the ones where nothing was drawn — the flag
+    // has to fall back to false when the window closes mid-edit, or the surface
+    // would lose its keyboard modifiers until the window was opened again.
+    reasixty_setSettingsHasKeyboardFocus(
+        impl_->visible && ImGui_IsAnyItemActive(impl_->ctx));
 
     ThemeBridge::popAll(impl_->ctx, pushed);
     if (impl_->font) {
