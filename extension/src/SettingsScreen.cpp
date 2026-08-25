@@ -4930,13 +4930,25 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                           "This Sub-Bank is dynamic: %s.",
                           dynKindLabel_(dynKind));
             ImGui_Text(ctx, note);
-            ImGui_TextDisabled(ctx,
-                "All 8 keys come from the focused track, so this slot never "
-                "fires. Its assignment is kept for when you switch back.");
-            if (dynKind == DynamicBankKind::FxBank) {
+            if (g_slotEditModIdx == 0) {
                 ImGui_TextDisabled(ctx,
-                    "Shift / Cmd / Ctrl / long-press run the FX-key gestures "
-                    "instead. They are set on the Sub-Bank cell.");
+                    "All 8 keys come from the focused track, so this slot "
+                    "never fires. Its assignment is kept for when you switch "
+                    "back.");
+                if (dynKind == DynamicBankKind::FxBank) {
+                    ImGui_TextDisabled(ctx,
+                        "Shift / Cmd / Ctrl / long-press run the FX-key "
+                        "gestures instead. They are set on the Sub-Bank cell.");
+                }
+            } else {
+                // Since 1a602ba a set is not dead over a dynamic bank: what you
+                // put here fires instead of that key's gesture, and what you
+                // leave empty keeps it. The old wording said the slot never
+                // fires, which is now only true of Plain.
+                ImGui_TextDisabled(ctx,
+                    "On Plain. What you assign in this set fires instead of "
+                    "this key's FX gesture; leave it empty and the gesture "
+                    "runs as before.");
             }
             ImGui_Spacing(ctx);
             ImGui_SetNextItemWidth(ctx, 260.0);
@@ -4953,8 +4965,14 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                                          /*flags*/ nullptr,
                                          /*size_w*/ nullptr,
                                          /*size_h*/ nullptr)) {
+                        // ⚠ kDynamicKindSet, NOT the picked set: the bank's
+                        // kind lives on Plain and every runtime path reads it
+                        // there. Writing it to the Shift set stored a value
+                        // nothing ever reads, so the combo did nothing at all
+                        // while the picker was off Plain. The Sub-Bank cell's
+                        // copy of this combo had it right.
                         setSubBankDynamic(editLayer, qIdx, sbIdx,
-                                          g_slotEditModIdx, k);
+                                          kDynamicKindSet, k);
                     }
                 }
                 ImGui_EndCombo(ctx);
@@ -6636,26 +6654,29 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             "10 banks of 4 soft-keys, active in DAW mode. The UF1 "
             "\xE2\x97\x82 \xE2\x96\xB8 keys page the same bank.");
         ImGui_Spacing(ctx);
-        // ⇨ NO MODIFIER PICKER ON A DYNAMIC BANK. There are no sets to pick
-        // between: the modifiers run the FX-key gestures instead, and the
-        // stored slots are ignored altogether. Offering the choice anyway put a
-        // control on screen that decided nothing (Frank 2026-08-18). Forced back
-        // to Plain, because the picker is what normally resets it and it drives
-        // the LED editors further down.
+        // ⇨ A DYNAMIC BANK HAS SETS TOO — the same correction the UF8 side got
+        // in 1a602ba, which this one did not (Frank 2026-08-25: "ja, UF1 auch
+        // nachziehen"). The row was taken away on the grounds that the modifiers
+        // over a dynamic bank run the FX-key gestures. True, and only half the
+        // picture: the gesture is what happens where the set is EMPTY. Assign
+        // something and it fires instead; leave it empty and the gesture runs as
+        // it always has, so nobody loses one they were using.
         const bool uf1BankIsDyn =
             uf8::bindings::getUf1SoftBankDynamic(
                 reasixty_uf1SoftBank(), uf8::bindings::kDynamicKindSet)
             != uf8::bindings::DynamicBankKind::None;
-        if (uf1BankIsDyn) {
-            g_slotEditModIdx = 0;
-        } else {
-            drawBankLayerRow_(ctx, "uf1bank", &g_slotEditModIdx);
+        drawBankLayerRow_(ctx, "uf1bank", &g_slotEditModIdx);
+        ImGui_TextDisabled(ctx,
+            "Follows the modifier you hold, and stays there when you let go "
+            "so you can edit it. Shift = the UF1 SHIFT key. While this pane "
+            "is open the surface shows and fires the set picked here.");
+        if (uf1BankIsDyn && g_slotEditModIdx != 0) {
             ImGui_TextDisabled(ctx,
-                "Follows the modifier you hold, and stays there when you let go "
-                "so you can edit it. Shift = the UF1 SHIFT key. While this pane "
-                "is open the surface shows and fires the set picked here.");
-            ImGui_Spacing(ctx);
+                "This bank is dynamic on Plain. A key you assign in this set "
+                "fires instead of that key's FX gesture; one you leave empty "
+                "keeps the gesture.");
         }
+        ImGui_Spacing(ctx);
 
         // ---- Dynamic bank (per bank) --------------------------------
         // Flag the whole bank as computed-from-context. Any non-Off kind
@@ -6749,7 +6770,13 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                             "Track-Colors palette (global — 8 keys = these colors):"));
                     drawTrackColourPalette_(ctx);
                 }
-            } else {
+            }
+            // ⇨ AND THE SLOT EDITOR STAYS REACHABLE ON A DYNAMIC BANK, as long
+            // as a modifier set is picked. On Plain the four slots really are
+            // dead text there, which is why they were hidden; on a set they are
+            // the only place to put the action that beats the gesture, so hiding
+            // them left the row you can now pick with nothing to fill it.
+            if (curKind == DynamicBankKind::None || g_slotEditModIdx != 0) {
                 drawUf1SoftBankSlotEditor_(ctx, uf1Bank, slotIdx);
             }
         }

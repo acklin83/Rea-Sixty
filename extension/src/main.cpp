@@ -6834,6 +6834,22 @@ static int dynamicBankItemCountUf1_(uf8::bindings::DynamicBankKind kind,
 // posts an encoded request for the main-thread drain. Momentary on release
 // so long-press can be distinguished. Safe on the input thread — no REAPER
 // track API here, only atomics.
+// ⇨ ONE RULE FOR "THE HELD SET OWNS THIS KEY" OVER A DYNAMIC BANK.
+// A dynamic bank computes its keys and hands Shift / Cmd / Ctrl / Long to the
+// FX-key gestures — except where you stored an action in the set that is
+// showing, which fires instead (1a602ba). The painters and the dispatch all ask
+// here, because a second copy of this rule is how the LCD ends up announcing one
+// thing while the press does another.
+// Plain is never "the set": that is the bank's own push, and the dynamic kind
+// lives there.
+static bool setOwnsDynamicKey_(const uf8::bindings::Binding& bd, int mIdx)
+{
+    if (mIdx <= static_cast<int>(uf8::bindings::Modifier::Plain)) return false;
+    if (mIdx >= uf8::bindings::kModifierCount) return false;
+    const auto& sp = bd.shortPress[mIdx];
+    return sp.type != uf8::bindings::ActionType::Noop || !sp.action.empty();
+}
+
 static void dispatchDynamicPress_(uf8::bindings::DynamicBankKind kind,
                                   int slot, bool pressed)
 {
@@ -22403,7 +22419,30 @@ void onUf1Event(const uf1::InputEvent& ev)
                     // ABSOLUTE page*4+slot index). Encoding: (1<<31)|(kind<<24)|
                     // (absIdx<<8)|gesture. Worker-thread safe (atomics only); the
                     // onTimer drain runs applyDynBankUf1Req_ on the main thread.
-                    dispatchUf1DynamicPress_(dk, slot, ev.pressed);
+                    //
+                    // ⇨ UNLESS THE HELD SET OWNS THE KEY (setOwnsDynamicKey_) — the
+                    // UF8's rule since 1a602ba, which the UF1 never got: here the
+                    // gesture always won and the stored slot was unreachable
+                    // (Frank 2026-08-25, "ja, UF1 auch nachziehen").
+                    // ⚠ DECIDED ON THE PRESS AND REMEMBERED. The modifier can be
+                    // let go while the key is down, so routing each edge on its own
+                    // would let the press arm a long-press gesture that the release
+                    // never disarms — tickUf1DynLongPress_ would then fire it under
+                    // a finger that is no longer there.
+                    static bool s_setTook[4] = { false, false, false, false };
+                    if (ev.pressed) {
+                        s_setTook[slot] = setOwnsDynamicKey_(
+                            uf8::bindings::getUf1SoftBankSlot(bank, slot),
+                            static_cast<int>(
+                                uf8::bindings::bankModifierSnapshot()));
+                    }
+                    if (s_setTook[slot]) {
+                        uf8::bindings::dispatchUf1SoftBankSlot(
+                            bank, slot, ev.pressed);
+                        if (!ev.pressed) s_setTook[slot] = false;
+                    } else {
+                        dispatchUf1DynamicPress_(dk, slot, ev.pressed);
+                    }
                 } else {
                     uf8::bindings::dispatchUf1SoftBankSlot(bank, slot, ev.pressed);
                 }
@@ -28718,15 +28757,44 @@ void uf1PaintChannel_()
                 // yields a blank label (present=false). Colour drives the FF38 GRB path
                 // (Frank HW-confirmed the display soft-key colour works); led 2=bright,
                 // 1=dim, 0=dark. Plain FX (no hasRgb) keep the state-only bytes.
-                const DynSlotInfo di =
-                    dynamicBankSlotUf1_(dawDynKind, dawDynTr, dawDynPage * 4 + i);
-                label = di.label;
-                haveLabel = true;
-                on = (di.led >= 2);   // bright when the slot's LED hint is "on"
-                if (di.present && di.hasRgb) {
+                // ⇨ EXCEPT WHERE THE HELD SET OWNS THE KEY. That is what the
+                // press does, so it is what the screen has to say — the dispatch
+                // learned this and the painter did not, which is the LCD saying
+                // one thing while the key does another, one bank type further
+                // along (Frank 2026-08-25). Painted exactly like a static bank
+                // slot below: the set's own label, its engaged state, its colour.
+                const int mIdxDyn =
+                    static_cast<int>(uf8::bindings::bankModifierSnapshot());
+                dawSlot = uf8::bindings::getUf1SoftBankSlot(bankNo, i);
+                if (setOwnsDynamicKey_(dawSlot, mIdxDyn)) {
+                    const auto& sp = dawSlot.shortPress[mIdxDyn];
+                    label = !sp.label.empty()
+                          ? sp.label
+                          : uf8::bindings::softKeyFallbackLabel(sp);
+                    haveLabel = true;
+                    on = bindingHasActiveSlotForSet_(dawSlot, mIdxDyn);
                     keyHasColour = true;
-                    keyColBright = (di.led >= 2);
-                    keyColRgb    = (di.led == 0) ? 0u : di.rgb;   // dark when bypassed/off
+                    uint8_t c[3];
+                    uf8::bindings::Brightness bri;
+                    if (on) uf8::bindings::effectiveLedActive  (dawSlot, sp, c, bri);
+                    else    uf8::bindings::effectiveLedInactive(dawSlot, sp, c, bri);
+                    keyColBright = (bri == uf8::bindings::Brightness::Bright);
+                    keyColRgb = (uint32_t(c[0]) << 16) | (uint32_t(c[1]) << 8)
+                              | static_cast<uint32_t>(c[2]);
+                    // Off is a third state, not "not bright" — same as below.
+                    if (bri == uf8::bindings::Brightness::Off) keyColRgb = 0;
+                } else {
+                    const DynSlotInfo di = dynamicBankSlotUf1_(
+                        dawDynKind, dawDynTr, dawDynPage * 4 + i);
+                    label = di.label;
+                    haveLabel = true;
+                    on = (di.led >= 2);   // bright when the LED hint is "on"
+                    if (di.present && di.hasRgb) {
+                        keyHasColour = true;
+                        keyColBright = (di.led >= 2);
+                        // dark when bypassed / off
+                        keyColRgb = (di.led == 0) ? 0u : di.rgb;
+                    }
                 }
             } else if (dawBanks) {
                 // Label from the bank slot (its own label, else the built-in's
@@ -30824,8 +30892,23 @@ void pushZonesForVisibleSlots()
             if (curQuick >= 0)
                 dynKind = uf8::bindings::getSubBankDynamic(
                     curLayer, curQuick, curSub, uf8::bindings::kDynamicKindSet);
+            // ⇨ AN ASSIGNED KEY IN THE HELD SET BEATS THE COMPUTED ONE, in the
+            // paint as well as in the press. The dispatcher learned this with
+            // 1a602ba and this painter did not, so a Shift key you had assigned
+            // fired your action while the LCD went on showing the FX / colour /
+            // group name it computed (Frank 2026-08-25). From here on the key is
+            // an ordinary set slot: same label rule, same LED, same colour.
+            const bool dynSetOwns =
+                (curQuick >= 0
+                 && dynKind != uf8::bindings::DynamicBankKind::None
+                 && setOwnsDynamicKey_(
+                        uf8::bindings::getUserQuickSlot(
+                            curLayer, curQuick, curSub, s),
+                        static_cast<int>(
+                            uf8::bindings::bankModifierSnapshot())));
             if (curQuick >= 0
-                && dynKind != uf8::bindings::DynamicBankKind::None) {
+                && dynKind != uf8::bindings::DynamicBankKind::None
+                && !dynSetOwns) {
                 dynInfo = dynamicBankSlot_(dynKind, favContextTrack_(), s);
                 userLabel = dynInfo.label;
                 userBankSlotPresent = dynInfo.present;
@@ -31097,7 +31180,8 @@ void pushZonesForVisibleSlots()
                 // bringen sie nicht auf dim") which made stateless one-
                 // shot bindings indistinguishable from latched toggles.
                 bool slotActive = false;
-                if (dynKind != uf8::bindings::DynamicBankKind::None) {
+                if (dynKind != uf8::bindings::DynamicBankKind::None
+                    && !dynSetOwns) {
                     // Dynamic bank LED: off when the slot is empty, else
                     // On (active) / Dim (inactive) per dynInfo.led.
                     tssk = dynInfo.led == 2 ? uf8::TopSoftKeyState::On
@@ -31185,7 +31269,7 @@ void pushZonesForVisibleSlots()
             };
             const bool wantActive = (tssk == uf8::TopSoftKeyState::On);
             if (dynKind != uf8::bindings::DynamicBankKind::None
-                && dynInfo.hasRgb) {
+                && !dynSetOwns && dynInfo.hasRgb) {
                 // Dynamic bank (Track Colours) supplies its own per-key LED
                 // colour; brightness still follows tssk (match = bright).
                 ledColRgb = dynInfo.rgb;

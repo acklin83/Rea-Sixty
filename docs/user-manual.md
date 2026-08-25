@@ -1161,7 +1161,7 @@ Layer 1's Q1 and Q2 are driven by the plug-in and carry no user slots, so they c
 
 The UF1's ten soft-key banks take the same setting, in **Settings → Bindings → UF1**. There a whole bank is dynamic rather than a Sub-Bank, its four keys show four items at a time, and a **long press** on the UF1's `◄ ►` keys pages through them. A long press on a dynamic key itself fires half a second after you press it, under the finger, the same as every other long press on the surface. (`5-8` is always the DAW channel group, never the bank.) The FX-key gestures are global, so the five you set on either surface drive both.
 
-On the UF1 a dynamic bank has no Shift set: the modifiers run those FX-key gestures and nothing else, so the modifier picker disappears from that editor. The UF8's dynamic Sub-Banks keep theirs, as described above. On the UF8, dynamic banks are inactive while UF8 Plug-in Mode is engaged.
+A dynamic bank keeps its Shift set on the UF1 too: assign a key there and it fires instead of that key's gesture, leave it empty and the gesture runs. The four slot editors stay reachable while a set is picked, which is where you put it. On the UF8, dynamic banks are inactive while UF8 Plug-in Mode is engaged.
 
 **Track colours and Parameter Groups apply to every selected track,** not just the focused one, so you can colour or group a whole selection with one press. The FX bank always acts on the focused track alone.
 
