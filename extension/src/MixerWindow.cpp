@@ -31,6 +31,10 @@ bool reasixty_settingsShowsDevice(int mask);
 // Publishes whether this window currently owns the keyboard, so main.cpp's
 // keyboard-modifier mirror can stand down while a field is being typed into.
 void reasixty_setSettingsHasKeyboardFocus(bool on);
+// Publishes "the Bindings pane is on screen", which pins the surface's soft-key
+// modifier to the set that pane is editing. Defined next to that pane, so it
+// lives in namespace uf8 unlike the main.cpp accessors above.
+namespace uf8 { void reasixty_publishSettingsModifierPin(bool bindingsPaneOpen); }
 
 // Font + base-size accessors consumed by the Manual renderer (ManualView.cpp).
 // Refreshed each frame from the live Settings context so the renderer always
@@ -903,6 +907,14 @@ void MixerWindow::onRunTick()
     // would lose its keyboard modifiers until the window was opened again.
     reasixty_setSettingsHasKeyboardFocus(
         impl_->visible && ImGui_IsAnyItemActive(impl_->ctx));
+
+    // ⇨ And whether the Bindings pane is the one on screen: while it is, the
+    // surface follows the SET THAT PANE IS EDITING rather than the modifier
+    // currently held, so what you see on the hardware is what you are editing
+    // and a press fires it. Same every-tick rule as above, and for the same
+    // reason: the pin has to be dropped when the window closes.
+    reasixty_publishSettingsModifierPin(
+        impl_->visible && impl_->selected == kSecBindings);
 
     ThemeBridge::popAll(impl_->ctx, pushed);
     if (impl_->font) {

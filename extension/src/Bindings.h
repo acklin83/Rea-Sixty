@@ -772,6 +772,23 @@ Modifier currentModifierSnapshot();
 // layer uses. One press, two meanings (Frank 2026-08-18: "Gibt ja nur Shift!").
 Modifier bankModifierSnapshot();
 
+// The same Plain/Shift fold with the pin below IGNORED — what the user is
+// physically holding right now. For the Settings editor's own edge detection:
+// it has to see the FINE press even while its pin is what everyone else reads,
+// or the key could never toggle the picker a second time.
+Modifier heldBankModifier();
+
+// ⇨ THE SETTINGS SOFT-KEY EDITOR PINS THE SET WHILE YOU WORK ON IT.
+// Pass Plain / Shift to pin, -1 to let go. While pinned, bankModifierSnapshot
+// returns the pinned set for EVERY reader — the surface paints that set and a
+// press fires it, so the hardware shows what the editor is editing instead of
+// snapping back to Plain the moment you let FINE go (Frank 2026-08-25: the
+// editor latches, "die anzeige geht aber wieder auf plain wenn shift
+// losgelassen wird", and he wants display and press together).
+// Published every tick by MixerWindow while the Bindings pane is open, so
+// closing the window cannot leave the surface stuck on a set.
+void setBankModifierPin(int mod);
+
 
 // Per-layer variants. exportLayerTo writes a single layer wrapped in a
 // {"version":1,"type":"layer","index":N,"layer":{…}} object so the

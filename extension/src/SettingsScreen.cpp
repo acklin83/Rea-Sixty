@@ -3082,8 +3082,11 @@ static bool settingsEditorBusy_(ImGui_Context* ctx)
 static void trackBankModifierEdge_(ImGui_Context* ctx, int* modIdx)
 {
     using namespace uf8::bindings;
+    // heldBankModifier, NOT bankModifierSnapshot: while this pane pins the set
+    // for the surface, the snapshot IS the pin, so its own edge would never fire
+    // again and FINE could not toggle the picker back.
     static int s_lastHeld = 0;
-    const int held = static_cast<int>(bankModifierSnapshot());
+    const int held = static_cast<int>(heldBankModifier());
     if (held != s_lastHeld && held != 0 && !settingsEditorBusy_(ctx))
         *modIdx = (*modIdx == held) ? 0 : held;
     s_lastHeld = held;
@@ -6227,6 +6230,30 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
 
 } // namespace
 
+// ⇨ THE SURFACE SHOWS THE SET YOU ARE EDITING, AND FIRES IT.
+// The picker latches so you can let FINE go and reach for the mouse, but the
+// hardware kept following the physically held key and fell back to Plain the
+// moment you released — editor on Shift, surface on Plain (Frank 2026-08-25).
+// Pinning the shared soft-key modifier takes labels, LEDs and the dispatch with
+// it in one move, because all three read bankModifierSnapshot; Frank's call was
+// display AND press, so the key you see under Shift is the key that fires.
+// Called by MixerWindow EVERY tick with "Bindings pane is on screen", including
+// the ticks that draw nothing — otherwise closing the window mid-edit would
+// leave the surface pinned to a set with no way back.
+// ⚠ "On screen" means DRAWN, not "the rail is on this entry". A collapsed
+// window still counts as visible and still reports its selected pane, but
+// nothing runs — including the edge tracker, so FINE could not move the pin and
+// the surface would sit on a set with no way back to Plain.
+static bool g_bindingsPaneDrew = false;
+
+void reasixty_publishSettingsModifierPin(bool bindingsPaneOpen)
+{
+    const bool drew = g_bindingsPaneDrew;
+    g_bindingsPaneDrew = false;
+    uf8::bindings::setBankModifierPin(
+        (bindingsPaneOpen && drew) ? g_slotEditModIdx : -1);
+}
+
 // Phase C UI — hardware-schematic view. Click a button on the schematic
 // to select it; the editor below reveals the binding details. Auto-saves
 // on every change (USB worker picks up the new binding on next press
@@ -6247,6 +6274,10 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // active Layer button is the single source of truth.
     const int       s_editLayer = getActiveLayer();
     static ButtonId s_selected  = ButtonId::None;
+
+    // This pane is painting: it owns the surface's set until it stops (see
+    // reasixty_publishSettingsModifierPin, which consumes and clears this).
+    g_bindingsPaneDrew = true;
 
     // The surface's modifier moves the edit set wherever you are in this pane —
     // see trackBankModifierEdge_. Runs before the schematic, which previews the

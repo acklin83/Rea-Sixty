@@ -4101,10 +4101,28 @@ Modifier currentModifierSnapshot()
 // keyboard out of this path; Frank corrected it the same hour. The audit
 // described a symptom correctly and diagnosed it wrongly — the switching is the
 // feature working.
-Modifier bankModifierSnapshot()
+Modifier heldBankModifier()
 {
     const Modifier m = currentModifierSnapshot();
     return (m == Modifier::Shift) ? Modifier::Shift : Modifier::Plain;
+}
+
+// -1 = nobody is pinning; otherwise the Settings editor's latched set. See the
+// header. Written from the render thread, read from the USB input thread.
+static std::atomic<int> g_bankModifierPin{-1};
+
+void setBankModifierPin(int mod)
+{
+    const bool valid = (mod == static_cast<int>(Modifier::Plain)
+                     || mod == static_cast<int>(Modifier::Shift));
+    g_bankModifierPin.store(valid ? mod : -1);
+}
+
+Modifier bankModifierSnapshot()
+{
+    const int pin = g_bankModifierPin.load();
+    if (pin >= 0) return static_cast<Modifier>(pin);
+    return heldBankModifier();
 }
 
 
