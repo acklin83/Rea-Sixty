@@ -3023,6 +3023,25 @@ static void refreshAutoLabel_(uf8::bindings::Binding& bd,
     bd.label = autoLabelForAction_(sp);
 }
 
+// ⛔ A KEYBOARD MODIFIER MUST NOT MOVE THE EDITOR WHILE YOU ARE WORKING IN IT.
+// The two editors below follow the HELD modifier so the surface can pick which
+// set / layer you edit — a genuinely good gesture on the hardware, and a trap at
+// the computer keyboard, where Shift is how you type a capital letter. Naming a
+// soft-key "EQ" jumped the picker to the Shift set on the E and edited the wrong
+// slot from there (forum 2026-08-25, "PLEASE disable shift from computer
+// keyboard to momentary switch between plain and shift when editing a soft key").
+// ImGui keeps one active item at a time — a text field being typed into, a
+// slider being dragged, an open combo — and while there is one, this window is
+// somebody's workspace and must hold still. The gesture is unchanged the moment
+// nothing is active, which is when the hand is actually on the surface.
+// (Turning the modifier off wholesale is the OTHER answer and it already exists:
+// Settings → Behaviour → Keyboard. Frank 2026-08-18 wants the keyboard modifiers
+// to keep counting everywhere else, so this stays a local suppression.)
+static bool settingsEditorBusy_(ImGui_Context* ctx)
+{
+    return ImGui_IsAnyItemActive(ctx);
+}
+
 static bool drawBankLayerRow_(ImGui_Context* ctx, const char* tag, int* modIdx)
 {
     using namespace uf8::bindings;
@@ -3036,9 +3055,13 @@ static bool drawBankLayerRow_(ImGui_Context* ctx, const char* tag, int* modIdx)
         // used since 2026-07-21: press SHIFT to jump to the Shift set, press it
         // again to come back to Plain. Rising edge only, so releasing never
         // moves the picker and you can edit the set you jumped to with the mouse.
+        // Suppressed while something in the window is active — see
+        // settingsEditorBusy_. The edge is still TRACKED, so releasing Shift
+        // after a capital letter does not leave a stale "held" behind that fires
+        // on the next real press.
         static int s_lastHeld = 0;
         const int held = static_cast<int>(bankModifierSnapshot());
-        if (held != s_lastHeld && held != 0)
+        if (held != s_lastHeld && held != 0 && !settingsEditorBusy_(ctx))
             *modIdx = (*modIdx == held) ? 0 : held;
         s_lastHeld = held;
     }
@@ -3363,10 +3386,14 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             // "Switch to Favourite N (Focused Domain)". Shared helper so all
             // Settings search fields behave identically (Frank 2026-06-26).
             const auto filterTokens = searchTokensLower_(searchBuf);
+            // The DESCRIPTION is searched too, so "faders" finds the routing
+            // actions that take the faders over even though not one of their
+            // names says so (forum 2026-08-25).
             auto matches = [&](const std::string& key) -> bool {
                 if (!filtering) return true;
                 return searchAllTokensCI_(filterTokens,
-                    builtinDisplayName(key) + ' ' + key);
+                    builtinDisplayName(key) + ' ' + key + ' '
+                    + uf8::bindings::builtinDescription(key));
             };
 
             // ---- Category buckets -------------------------------------
@@ -3439,6 +3466,13 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                                              nullptr, nullptr, nullptr)) {
                             *f.action = n;
                             dirty = true;
+                        }
+                        // What it does, for the ones somebody has written a
+                        // line for. Absent → no tooltip at all, rather than an
+                        // empty box that reads like a missing string.
+                        if (const char* d = uf8::bindings::builtinDescription(n);
+                            d && *d && ImGui_IsItemHovered(ctx, nullptr)) {
+                            ImGui_SetTooltip(ctx, d);
                         }
                         // Centre the selected row on first open so the
                         // user sees what's currently bound. Skip when
@@ -6739,6 +6773,36 @@ std::string g_lastSaveError;             // last persistence note, sticky until 
 // says which it is; it defaults to false, and every assignment below clears it
 // explicitly so a stale success cannot tint a later failure green.
 bool        g_lastSaveOk = false;
+
+// ⛔ ONE NOTE, ONCE PER FRAME, AND IT GOES AWAY BY ITSELF.
+// drawFxLearnEditor_ has THREE render sites for g_lastSaveError — under the
+// header buttons, further down past the instance combo, and inside the
+// no-map-selected branch — and at least two of them draw on the same frame. So
+// one export produced two identical "Exported to …" lines, which reads like the
+// file was written twice (forum report 2026-08-25). The sites are all in
+// sensible places on their own; what was missing is that they are the same note.
+// The frame guard lets the FIRST one that draws win and silences the rest, so
+// neither site has to know about the others, and a fourth one added later is
+// free. The 5 s expiry answers the second half of the same report: the string
+// was "sticky until next save", so a success stood there for the rest of the
+// session and started reading like current state.
+constexpr double kSaveNoteSeconds = 5.0;
+static void drawSaveNote_(ImGui_Context* ctx, bool leadingSpace)
+{
+    if (g_lastSaveError.empty()) return;
+    static std::string s_shown;      // the text whose clock is running
+    static double      s_since = 0.0;
+    static int         s_frame = -1;
+    const double now = ImGui_GetTime(ctx);
+    if (g_lastSaveError != s_shown) { s_shown = g_lastSaveError; s_since = now; }
+    if (now - s_since > kSaveNoteSeconds) { g_lastSaveError.clear(); return; }
+    const int frame = ImGui_GetFrameCount(ctx);
+    if (frame == s_frame) return;    // already said once this frame
+    s_frame = frame;
+    if (leadingSpace) ImGui_Spacing(ctx);
+    ImGui_TextColored(ctx, g_lastSaveOk ? 0x55BB55FF : 0xCC4444FF,
+                      g_lastSaveError.c_str());
+}
 
 // ⛔ An exception that escapes an editor button KILLS REAPER. Frank 2026-08-14:
 // "Fill: Replace" on a Pro-C UF1 mapping aborted the whole application. The crash
@@ -16724,10 +16788,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             "Load a single .rea60map into the catalog.\n"
             "Your other maps are left alone.");
     }
-    if (!g_lastSaveError.empty()) {
-        ImGui_TextColored(ctx, g_lastSaveOk ? 0x55BB55FF : 0xCC4444FF,
-                          g_lastSaveError.c_str());
-    }
+    drawSaveNote_(ctx, /*leadingSpace*/ false);
 
     // The map-picker / Default-toggle / Short-input may have just
     // changed g_editingMatch on this very frame. If so, bail and let
@@ -17314,11 +17375,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         }
     }
 
-    if (!g_lastSaveError.empty()) {
-        ImGui_Spacing(ctx);
-        ImGui_TextColored(ctx, g_lastSaveOk ? 0x55BB55FF : 0xCC4444FF,
-                          g_lastSaveError.c_str());
-    }
+    drawSaveNote_(ctx, /*leadingSpace*/ true);
 
     // ---- AutoLearn Setup pre-flight modal --------------------------------
     // Pops first; on Run, applies the domain switch (if any), builds the
@@ -18470,9 +18527,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         // Ctrl+Opt instead of stopping on whichever key landed first. Uses the same
         // live resolver the HUD badge reads, so a DISABLED layer (enable toggle
         // off) reports Normal and can't be tabbed to. Radios still work manually.
+        // Held while something in the window is active — same suppression as the
+        // soft-key bank row (settingsEditorBusy_): renaming a map or a parameter
+        // must not tab the editor onto another layer mid-word.
         static int s_prevLiveLayer = uf8::FxLayer::Normal;
         const int liveLayer = reasixty_fxLearnActiveLayer();
-        if (liveLayer > s_prevLiveLayer
+        if (liveLayer > s_prevLiveLayer && !settingsEditorBusy_(ctx)
             && liveLayer > uf8::FxLayer::Normal && liveLayer < kNumFxLayers) {
             g_fxLearnEditLayer = (g_fxLearnEditLayer == liveLayer)
                                ? uf8::FxLayer::Normal : liveLayer;
@@ -19189,11 +19249,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 g_lastSaveOk = false; g_lastSaveError = "Import failed: " + err;
             }
         }
-        if (!g_lastSaveError.empty()) {
-            ImGui_Spacing(ctx);
-            ImGui_TextColored(ctx, g_lastSaveOk ? 0x55BB55FF : 0xCC4444FF,
-                          g_lastSaveError.c_str());
-        }
+        drawSaveNote_(ctx, /*leadingSpace*/ true);
     } else {
         // Live-follow the focused FX (Frank 2026-06-20, "Learn FX soll
         // immer mit aktivem FX laden"): switch the editor's map + instance to
@@ -21618,8 +21674,16 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
         }
         ImGui_EndPopup(ctx);
     }
+    // Expires like the FX-Learn note (drawSaveNote_) — a confirmation that never
+    // leaves stops being a confirmation and starts reading like current state.
+    // Its own store and its own single render site, so no frame guard needed.
     if (!s_setupMsg.empty()) {
-        ImGui_Text(ctx, s_setupMsg.c_str());
+        static std::string s_setupShown;
+        static double      s_setupSince = 0.0;
+        const double now = ImGui_GetTime(ctx);
+        if (s_setupMsg != s_setupShown) { s_setupShown = s_setupMsg; s_setupSince = now; }
+        if (now - s_setupSince > kSaveNoteSeconds) s_setupMsg.clear();
+        else ImGui_Text(ctx, s_setupMsg.c_str());
     }
 
 #ifdef _WIN32

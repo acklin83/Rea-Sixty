@@ -5636,6 +5636,138 @@ const char* builtinCategory(const std::string& n)
     return "";
 }
 
+// One sentence on what an action DOES, for the picker's tooltip and its search.
+//
+// The display name is a label, not an explanation, and for a fair number of
+// these that is not enough to act on: "8 sends of focused track" says nothing
+// about the eight FADERS being taken over, and a UF1-only user reading it had no
+// way to find out short of binding it and pressing (forum 2026-08-25, "is there
+// a place to read explanations for native actions"). The names cannot carry the
+// answer — they are one line on a hardware LCD.
+//
+// ⛔ EVERY LINE HERE IS READ OFF THE HANDLER, never off the name. An action
+// whose behaviour has not been read out of the code gets no entry: an empty
+// string means the tooltip stays away, which is honest, while a plausible
+// invention is worse than the name it replaces. The table is meant to grow one
+// verified line at a time.
+const char* builtinDescription(const std::string& n)
+{
+    // ---- Sends / Receives on the eight strips -----------------------------
+    if (n.rfind("send_all_", 0) == 0)
+        return "UF8/UC1. All eight strips show the SAME send number, one per banked "
+               "track, instead of the tracks themselves. Param 0 = on the faders, "
+               "1 = on the V-Pots.";
+    if (n.rfind("recv_all_", 0) == 0)
+        return "UF8/UC1. All eight strips show the SAME receive number, one per "
+               "banked track. Param 0 = on the faders, 1 = on the V-Pots.";
+    if (n == "send_this")
+        return "UF8/UC1. The eight strips leave the track bank and become the "
+               "focused track's first eight SENDS. Param 0 = on the faders, "
+               "1 = on the V-Pots. Nothing on a one-strip surface.";
+    if (n == "recv_this")
+        return "UF8/UC1. The eight strips leave the track bank and become the "
+               "focused track's first eight RECEIVES. Param 0 = on the faders, "
+               "1 = on the V-Pots. Nothing on a one-strip surface.";
+
+    // ---- Fader / V-Pot roles ---------------------------------------------
+    if (n == "flip")
+        return "UF8/UC1. Faders and V-Pots swap jobs.";
+    if (n == "uf1_flip")
+        return "UF1. Fader and V-Pot swap jobs: the fader takes Pan, or in Plugin "
+               "mode the parameter of the V-Pot you last used.";
+    if (n == "pan_force")
+        return "UF8/UC1. The V-Pots leave their normal duty and ride track Pan.";
+    if (n.rfind("ssl_strip_mode_", 0) == 0 || n.rfind("uf1_strip_mode_", 0) == 0)
+        return "The fader drives the SSL channel strip's own Fader Level instead of "
+               "REAPER track volume. The _with_gui variant also opens the plug-in "
+               "window.";
+
+    // ---- Focus / instances ------------------------------------------------
+    if (n == "domain_cs")
+        return "Point the surfaces at the CHANNEL STRIP on the focused track, and "
+               "latch the soft-keys to it.";
+    if (n == "domain_bc")
+        return "Point the surfaces at the BUS COMPRESSOR on the focused track, and "
+               "latch the soft-keys to it.";
+    if (n == "instance_cycle")
+        return "Encoder action. Walks the plug-ins of the FOCUSED DOMAIN on the "
+               "current track.";
+    if (n == "fx_cycle")
+        return "Encoder action. Walks EVERY FX on the current track, not just the "
+               "focused domain.";
+    if (n == "fx_scroll_all" || n == "instance_scroll_all")
+        return "Encoder action, across tracks: at the end of one track's chain it "
+               "carries on into the next track's.";
+    if (n.rfind("focus_scope_", 0) == 0)
+        return "Where Pin Set puts the focused tracks: the UF8's leftmost strips, "
+               "the UF1, or both.";
+
+    // ---- Sticky Pot / learning -------------------------------------------
+    if (n == "sticky_pot_get_next")
+        return "Arm the pin: the next plug-in parameter you touch becomes that "
+               "track's V-Pot pin. Press the V-Pot while armed to clear it.";
+    if (n == "sticky_pot_toggle")
+        return "Suspend or resume every pinned parameter at once. The pins "
+               "themselves are kept.";
+    if (n == "touch_to_learn_toggle")
+        return "Arm learning without the HUD: touch a surface control, then wiggle "
+               "a plug-in parameter to bind the two.";
+    if (n == "quick_learn")
+        return "Sweep the whole PROJECT for plug-ins that can be mapped "
+               "automatically.";
+    if (n == "quick_learn_track")
+        return "Sweep the FOCUSED TRACK for plug-ins that can be mapped "
+               "automatically.";
+
+    // ---- Selection sets / groups -----------------------------------------
+    if (n == "selset_save")
+        return "Snapshot the current REAPER track selection into slot `param` "
+               "(1-8).";
+    if (n == "selset_recall")
+        return "Recall Selection Set `param` (1-8). Pressing the active slot again "
+               "switches the filter off.";
+    if (n == "selset_cycle")
+        return "Encoder action. Walks the Selection Sets that have something in "
+               "them.";
+    if (n == "param_group_remove_all")
+        return "Take the selected tracks out of every parameter group.";
+    if (n == "multi_select_as_temp_group_toggle")
+        return "While on, selecting several tracks behaves like a temporary "
+               "parameter group.";
+
+    // ---- Tracks / master --------------------------------------------------
+    if (n == "surface_mirror_tcp")
+        return "The surfaces show what the TRACK panel shows, hidden tracks "
+               "included.";
+    if (n == "surface_mirror_mcp")
+        return "The surfaces show what the MIXER shows.";
+    if (n.rfind("master_pin_", 0) == 0)
+        return "UF8. Park the Master bus on that physical strip. Firing the strip "
+               "that already holds it releases it.";
+
+    // ---- UF1 keys ---------------------------------------------------------
+    if (n == "uf1_five_to_eight")
+        return "UF1. DAW mode: swap between tracks 1-4 and 5-8 of the window. "
+               "Sends mode: page the window of four sends.";
+    if (n == "uf1_sends_receives_toggle")
+        return "UF1. Flip the routing view between the track's SENDS and its "
+               "RECEIVES. Also on Shift + 5-8.";
+    if (n == "uf1_bank_step")
+        return "UF1. Move the selection eight tracks at a time. Param sign picks "
+               "the direction.";
+    if (n == "uf1_page_step")
+        return "UF1. Steps the soft-key BANK in DAW mode and the plug-in's "
+               "parameter PAGE in Plugin mode. Param sign picks the direction.";
+    if (n == "uf1_dyn_bank_page")
+        return "UF1. Pages WITHIN the active dynamic soft-key bank (the FX list, "
+               "the colours). Does nothing on a static or single-page bank.";
+    if (n.rfind("uf1_view_", 0) == 0)
+        return "Put the UF1 straight into that mode. Bindable from any surface, so "
+               "one key per mode beats cycling through all four.";
+
+    return "";
+}
+
 const std::vector<const char*>& builtinCategoryOrder()
 {
     static const std::vector<const char*> kCats = {

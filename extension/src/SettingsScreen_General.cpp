@@ -87,6 +87,8 @@ int    reasixty_uc1CalActiveTest();
 void   reasixty_uc1SetCalActiveTest(int enc);
 bool reasixty_trackSelFollowsParam();
 void reasixty_setTrackSelFollowsParam(bool follow);
+bool reasixty_selModeResetOnStart();
+void reasixty_setSelModeResetOnStart(bool on);
 bool reasixty_touchSelectsChannel();
 void reasixty_setTouchSelectsChannel(bool on);
 bool reasixty_uc1ShowMasterAsTrack0();
@@ -1077,6 +1079,14 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
     if (ImGui_Checkbox(ctx, "Track selection follows parameter change",
                        &tsfp)) {
         reasixty_setTrackSelFollowsParam(tsfp);
+    }
+
+    // Selection Mode survives a restart otherwise, and REC re-arms the SEL keys
+    // on a session you did not open to track with (forum 2026-08-25).
+    bool selReset = reasixty_selModeResetOnStart();
+    if (ImGui_Checkbox(ctx, "Selection mode resets to Normal on startup",
+                       &selReset)) {
+        reasixty_setSelModeResetOnStart(selReset);
     }
 
     // Master track — surface-side handling of the REAPER Master bus.

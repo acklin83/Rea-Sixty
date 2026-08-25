@@ -231,6 +231,8 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Touch selects channel",                 kSecBehaviour, "Tracks" },
     { "Track selection follows parameter change",
                                                kSecBehaviour, "Tracks" },
+    { "Selection mode resets to Normal on startup",
+                                               kSecBehaviour, "Tracks" },
     { "Show Master as Track 0 on UC1",         kSecBehaviour, "Master track", kDevUc1 },
     { "Pinned Master",                         kSecBehaviour, "Master track" },
     { "Don't show offline FX",                 kSecBehaviour, "Plug-ins" },

@@ -522,11 +522,18 @@ enum class DynamicBankKind : uint8_t {
 
 struct UserQuickSubBank {
     Binding slots[kSlotsPerSubBank];   // top-soft-key positions
-    // ⇨ ONE PER MODIFIER SET, and a set is a FULL bank rather than just a second
-    // list of actions: Plain can be static while Shift is an FX bank. Presets
-    // and the dynamic kind used to hang off the sub-bank and know nothing about
-    // modifiers, which made the whole thing fall apart at its edges
-    // (Frank 2026-08-18).
+    // ⇨ ONE PER MODIFIER SET, because a set is a FULL bank rather than just a
+    // second list of actions — presets and the dynamic kind used to hang off the
+    // sub-bank and know nothing about modifiers, which made the whole thing fall
+    // apart at its edges (Frank 2026-08-18).
+    // ⛔ …but the RUNTIME only ever reads index kDynamicKindSet (= Plain), so a
+    // bank is dynamic or static as a whole. Read that constant's comment for why
+    // (the modifiers over a dynamic bank are already its FX-key gestures). This
+    // line used to claim "Plain can be static while Shift is an FX bank", which
+    // the code has never done: the editor writes the kind onto Plain from either
+    // set, and a forum user read the resulting behaviour as a bug because the
+    // manual repeated the same wrong sentence (2026-08-25). The array keeps its
+    // second slot so the on-disk format does not move.
     DynamicBankKind dynamic[kSoftKeyModifierSets] = {};   // non-None → computed
 };
 // LED appearance override for one Sub-Bank selector button (V-POT or
@@ -677,6 +684,13 @@ bool uf1ControlShowsLabel(ButtonId id);
 // source of truth shared by the picker (SettingsScreen) and the Stream Deck
 // bridge so the two never drift.
 const char* builtinCategory(const std::string& name);
+
+// One sentence on what a built-in DOES, or "" when nobody has written one yet.
+// Shown as the action picker's tooltip and searched alongside the name, so a
+// user can find "the one that puts sends on the faders" without knowing it is
+// called send_this. Read the definition before adding a line: every entry has to
+// come off the handler, never off the name.
+const char* builtinDescription(const std::string& name);
 
 // Category display order (top-to-bottom), matching the action picker.
 const std::vector<const char*>& builtinCategoryOrder();

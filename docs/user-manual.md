@@ -517,7 +517,7 @@ agree.
 | `SOLO` / `CUT` | Solo / mute the channel. Fixed, not rebindable. In REC + RME they fire their assigned TotalReaper actions instead, and their lamps show those states. |
 | `SEL` | Select the channel exclusively; **Shift +** `SEL` extends the selection. Double-press opens the FX chain by default. In REC / REC + MON it arms the channel instead, and its lamp turns red to show the arm state. |
 | `SOFT` (above the fader display) | **Pin This Ch** — one press puts the channel the UF1 is showing into the Focus Set *and* engages the pin; press again to release, and the channel stays in the set. While pinned, the **background behind the key's label lights up** on the channel display. Factory default since v0.5; it shipped unbound before that. Rebindable like every other key, and an assignment you had already made is kept — the backlight follows whatever you bind, as long as that action has an on/off state. |
-| `FLIP` | Swap the fader and V-Pot assignments. Factory default, rebindable. |
+| `FLIP` | Swap the fader and V-Pot assignments. Factory default, rebindable. In **Plugin view** the fader takes the parameter of the V-Pot you last turned or pushed, so you can reach for a control on the encoder and then move it on 100 mm of travel; the V-Pot above the fader rides Volume meanwhile. A Sticky-Pot pin, SSL Strip Mode and the send faders all keep their claim on the fader, and with the Extender running FLIP stays on Pan (the fader and the screen would otherwise be looking at two different tracks). |
 | `MASTER` | Put the Master bus on the channel. Factory default, rebindable. |
 | `CHANNEL` encoder | Step the UF1's channel through the track list. **Shift +** turn is always Instance Cycle, whatever mode is selected. **Push** opens the focused plug-in's GUI. Both are factory defaults and rebindable. |
 
@@ -990,7 +990,7 @@ The colour and geometry rows appear only while the helper that uses them is swit
 
 | Control | Effect |
 |---|---|
-| SEL LED follows REAPER track colour | Each strip's SEL LED renders the track's REAPER colour instead of monochrome. Off → SEL is white when selected. On by default. |
+| SEL LED follows REAPER track colour | The SEL LED renders the track's REAPER colour instead of monochrome. Off → SEL is white when selected. On by default. Applies to the UF8's eight strips and to the UF1's single SEL key alike; the UF1 ignored the setting until v0.5.6. |
 | Colour bar names the send / receive source track | In send and receive modes the colour bar's plug-in name is blanked — the strip is a route, not a plug-in chain. Turn this on and that zone reads `S:<track>` (send) or `R:<track>` (receive): the track the route belongs to. The scribble above already names the *other* end, so the pair reads "this send, of that track". The zone is twelve characters, so the name gets ten, shortened by the *Long track-name handling* mode; unnamed tracks read `CH <n>`. Off by default — with a one-channel side-mixer the source track is never in doubt. |
 | Long track-name handling (combo) | How track names longer than the 7-char scribble-strip slot are shortened. *Truncate* (default) keeps the legacy first-7-chars cut ("Background Vocals" → "Backgro"). *Smart abbreviate* drops separators, then vowels after the first letter of each token, then collapses repeated consonants, then proportionally distributes the remaining char budget across tokens ("Background Vocals" → "BckgVcl", "Drums Bus" → "DrmsBs"). Short all-caps tokens (DI / FX / EQ / …) survive untouched. Mode switch repaints all 8 strips immediately. |
 
@@ -1029,6 +1029,7 @@ Two-way radio: **British (Colour, Grey)** / **American (Color, Gray)**. Switches
 | Pinned tracks survive banking | On by default. Pinned tracks — Focus-Set members, plus REAPER's own TCP pins while *Surface mirrors* is TCP — sit on the leftmost strips and stay there while everything else banks past them. Switches itself off when the pinned head would fill every usable strip, since there would be nothing left to bank. MCP has no pin concept, so the setting is inert in MCP mode. |
 | Touch selects channel | Touching a UF8 fader exclusively selects that strip's track. Off by default. |
 | Track selection follows parameter change | V-Pot / CS / BC knob edits on a non-selected track auto-select that track. Off → the UC1 stays on the currently selected track no matter which strip was just edited. Off by default. |
+| Selection mode resets to Normal on startup | The active Selection Mode is remembered while you work, but comes back as NORM after a REAPER restart. On by default: a session that reopens with REC still engaged has its `SEL` keys arming tracks before you notice. Off → the mode is restored as it was. |
 
 ### Master track
 
@@ -1104,9 +1105,11 @@ Every Sub-Bank also holds **two sets of keys**: Plain and Shift. Holding the FIN
 
 There is no Cmd or Ctrl set. The surface carries one modifier key and no more, so those two would have to come from the computer keyboard, where they already belong to the FX-Learn modifier layers.
 
-Each set is a **full bank**, not just a second list of actions. Both have their own **Dynamic bank** setting and their own presets, so Plain can hold eight fixed assignments while Shift is an FX bank. Saving a preset captures the set you are on; recalling one lands on the set you are on, so a preset captured on Plain can be recalled into Shift.
+Each set is a **full bank**, not just a second list of actions: its own actions, its own labels, its own LED colours and its own presets. Saving a preset captures the set you are on; recalling one lands on the set you are on, so a preset captured on Plain can be recalled into Shift.
 
-When a modifier's set is **dynamic** its keys come from the focused track, and Shift, Cmd, Ctrl and long-press run the FX-key gestures instead.
+**The Dynamic bank setting is the one thing the two sets share, and it lives on Plain.** Switch a bank to a dynamic kind and the whole bank becomes dynamic, whichever set you were looking at. That is not an oversight: over a dynamic bank the modifiers are already spoken for, because Shift, Cmd and Ctrl are three of the five FX-key gestures. One key cannot both run a gesture and swap in another set, so a bank is dynamic or static, never one of each.
+
+When a bank is **dynamic** its keys come from the focused track, and Shift, Cmd, Ctrl and long-press run the FX-key gestures instead.
 
 **Clear whole key** does what it says: label, behaviour, LED and both sets. To empty a single set, pick *None (disabled)* in its action picker.
 
@@ -1154,7 +1157,7 @@ A dynamic Sub-Bank announces itself in three places, so you never edit slots tha
 
 Layer 1's Q1 and Q2 are driven by the plug-in and carry no user slots, so they cannot be made dynamic. Everything else can: Layer 1 Q3, and all three Quicks on Layers 2 and 3.
 
-The UF1's ten soft-key banks take the same setting, in **Settings → Bindings → UF1**. There a whole bank is dynamic rather than a Sub-Bank, its four keys show four items at a time, and a **long press** on the UF1's `◄ ►` keys pages through them. (`5-8` is always the DAW channel group, never the bank.) The FX-key gestures are global, so the five you set on either surface drive both.
+The UF1's ten soft-key banks take the same setting, in **Settings → Bindings → UF1**. There a whole bank is dynamic rather than a Sub-Bank, its four keys show four items at a time, and a **long press** on the UF1's `◄ ►` keys pages through them. A long press on a dynamic key itself fires half a second after you press it, under the finger, the same as every other long press on the surface. (`5-8` is always the DAW channel group, never the bank.) The FX-key gestures are global, so the five you set on either surface drive both.
 
 While a bank is dynamic it has no Shift set: the modifiers run those FX-key gestures instead, so the modifier picker disappears from the editor. On the UF8, dynamic banks are inactive while UF8 Plug-in Mode is engaged.
 

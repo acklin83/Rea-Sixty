@@ -459,6 +459,16 @@ std::atomic<bool>     g_uf1FaderTouched{false};// capacitive touch state (motor 
 // fader silently riding Pan. Read by the fader follow/writeback + the above-fader
 // V-Pot handler. Atomic store from the input worker; read on the main thread.
 std::atomic<bool>     g_uf1Flip{false};
+// ⇨ WHICH of the four channel V-Pots FLIP hands to the fader in Plugin mode.
+// The last one you turned or pushed, so choosing the parameter is the gesture you
+// were already making: reach for it on the encoder, then FLIP to get it on 100 mm
+// of travel instead of a detent. Answers "please allow flip mode in plugin mode,
+// so that we can adjust plugin parameters with the fader. It would be insanely
+// more precise. It's the only thing I miss from the FaderPort2" (forum
+// 2026-08-25). Survives page changes on purpose — the POSITION is what is
+// remembered, and it is re-resolved against whatever page is up, exactly like the
+// V-Pot itself. Written from the main-thread drain, read by the painter.
+std::atomic<int>      g_uf1FlipVpotIdx{0};
 // UF1-LOCAL SSL Strip Mode (PLUG-IN key). Was the SHARED g_pluginFaderMode so a
 // UF8+UF1 rig toggled together; Frank 2026-07-30 made it per-surface (like FLIP)
 // so UF8 can sit in Strip Mode while UF1 shows normal volume faders. Read ONLY by
@@ -1505,6 +1515,12 @@ inline std::string readTrackPExt_(MediaTrack* tr, const char* key)
 // `selection_mode_*` builtins (registered in registerBindingHandlers).
 enum class SelectionMode : uint8_t { Norm = 0, Rec, RecMon, Auto, Instance, InstanceCycle, DynaMount };
 std::atomic<SelectionMode> g_selectionMode{SelectionMode::Norm};
+// Come back as Normal after a REAPER restart (Settings → Behaviour → Selection
+// mode). The mode itself is still persisted; this only decides whether the
+// stored value is READ at startup — see the loader for why that distinction
+// matters. Default ON: a session that reopens with the SEL keys silently armed
+// for recording is the one failure mode here that costs a take.
+std::atomic<bool> g_selModeResetOnStart{true};
 
 // Master-pin: replace one physical UF8 strip with the REAPER Master bus.
 // Driven by the master_pin_strip1 / master_pin_strip8 built-ins and the
@@ -2077,6 +2093,20 @@ std::atomic<uint32_t> g_dynBankReq{0};
 // Encoding: 0 = none; else (1<<31) | (kind<<24) | (absIdx<<8) | gesture
 // (absIdx = 16-bit absolute item index; gesture 0 = plain push for v1).
 std::atomic<uint32_t> g_uf1DynBankReq{0};
+// ⇨ THE UF1 DYNAMIC BANK'S LONG PRESS FIRES AT 500 ms, NOT ON RELEASE.
+// The gesture used to be resolved entirely on the release edge, so a long press
+// did nothing until the finger came up — every OTHER long press on the surface
+// goes off under the finger, and that inconsistency is what got reported (forum
+// 2026-08-25, "it should apply as soon as 0,5 second has spent, as it is the
+// case for all other long-press actions").
+// One armed deadline per display soft-key: the input thread arms it on press
+// with the already-encoded long-press request, the main-thread drain fires it
+// when the clock passes, and whichever of the two gets there first clears the
+// slot with an exchange/CAS so the release can tell "already fired" from "still
+// short". Atomics only, so the input thread stays inside the threading rule.
+constexpr int64_t kUf1DynLongPressMs = 500;
+std::atomic<int64_t>  g_uf1DynLongDueMs[4] = {};   // 0 = nothing armed
+std::atomic<uint32_t> g_uf1DynLongReq[4]   = {};   // pre-encoded g_uf1DynBankReq word
 // Page-delta for a bankable dynamic bank (FX / Sends), posted from the input
 // thread (UF8 encoder / Bank buttons) and drained on the main thread.
 std::atomic<int> g_dynBankPageReq{0};
@@ -2086,6 +2116,7 @@ std::atomic<int> g_dynBankPageReq{0};
 std::atomic<int64_t> g_dynFxFocusLockUntilMs{0};
 static void applyDynBankReq_(uint32_t enc);          // main-thread executor
 static void applyDynBankUf1Req_(uint32_t enc);       // main-thread executor (UF1)
+static void tickUf1DynLongPress_();                  // main thread (drain), 500 ms edge
 MediaTrack* uf1FocusedTrack_();                      // main-thread; defined later
 // UF1 channel-strip target + page count — defined with the UF1 painter far below,
 // but publishHud_ (v11 UF1 HUD tab) needs them well before that.
@@ -2835,6 +2866,9 @@ void drainSelsets_() {
     // main thread; the input thread only posts the encoded request.
     if (const uint32_t dyn = g_dynBankReq.exchange(0); dyn != 0)
         applyDynBankReq_(dyn);
+    // A UF1 dynamic-bank key held past 500 ms fires its long press HERE, under the
+    // finger, before the exchange below picks the request up on this same tick.
+    tickUf1DynLongPress_();
     // UF1 dynamic soft-key bank press — absolute-index path (see applyDynBankUf1_).
     if (const uint32_t u1 = g_uf1DynBankReq.exchange(0); u1 != 0)
         applyDynBankUf1Req_(u1);
@@ -4455,9 +4489,20 @@ void loadBrightness()
         const int m = std::atoi(v) & kCycleCtrlMaskAll;
         g_cycleControlMask.store(static_cast<uint8_t>(m));
     }
-    const char* selm = GetExtState("ReaSixty", "selectionMode");
-    if (selm && *selm) {
-        g_selectionMode.store(parseSelectionMode(selm));
+    if (const char* v = GetExtState("rea_sixty", "sel_mode_reset_start"); v && *v) {
+        g_selModeResetOnStart.store(std::atoi(v) != 0);
+    }
+    // ⇨ SELECTION MODE COMES BACK AS NORMAL UNLESS YOU ASK IT NOT TO.
+    // The mode persists, which is right while you work and wrong across a
+    // restart: REC re-arms the SEL key on a session you did not open in order to
+    // track, and AUTO re-points it at the automation modes. Neither announces
+    // itself until you press the key (forum 2026-08-25, "please reset SEL mode on
+    // startup, I think it's important for safety reasons"). The stored value is
+    // left ALONE so turning the setting off restores the old behaviour on the
+    // next launch rather than having quietly lost the mode.
+    if (!g_selModeResetOnStart.load()) {
+        const char* selm = GetExtState("ReaSixty", "selectionMode");
+        if (selm && *selm) g_selectionMode.store(parseSelectionMode(selm));
     }
     // Per-meter peak fall rate (UC1 In / UC1 Out / UF8). Key: meterN_fall.
     for (int m = 0; m < MID_COUNT; ++m) {
@@ -6698,6 +6743,52 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
     }
 }
 
+// A key colour to the UF1's 4-bit LED nibbles, HUE-PRESERVING, in both states.
+//
+// ⛔ NEVER DIM BY SCALING THE 8-BIT CHANNELS. uf1::quantiseChannel applies a 2.2
+// gamma, so a quartered channel collapses to nibble 0 or 1 and the hue is gone
+// with it. The Track-Colours bank's own factory palette proved it: red, orange
+// and yellow all landed on (r1,g0,b0) and green on (0,0,0), i.e. "the three ones
+// are red and the last one is unlit" (forum report 2026-08-25). Dimming has to
+// happen in NIBBLE space, where a proportional cut keeps the ratios and a
+// non-zero channel can be floored at 1 instead of vanishing.
+//
+// Saturating first is the same move the SEL LED has made since 2026-08-05 and
+// for the same reason: a mid-tone colour otherwise quantises to a dim nibble, so
+// the palette's green (0x43A047, max channel 160) read washed-out next to its
+// yellow (0xFDD835, max 253) even at full brightness. Hue is the ratio between
+// channels; scaling all three by the same factor leaves it untouched.
+static void uf1KeyColourNibbles_(uint32_t rgb, bool bright,
+                                 uint8_t& g4, uint8_t& r4, uint8_t& b4)
+{
+    int r = static_cast<int>((rgb >> 16) & 0xFF);
+    int g = static_cast<int>((rgb >> 8)  & 0xFF);
+    int b = static_cast<int>( rgb        & 0xFF);
+    const int mx = std::max({r, g, b});
+    if (mx <= 0) { g4 = r4 = b4 = 0; return; }        // black stays black (dark key)
+    r = r * 255 / mx; g = g * 255 / mx; b = b * 255 / mx;
+    int rn = uf1::quantiseChannel(static_cast<uint8_t>(r));
+    int gn = uf1::quantiseChannel(static_cast<uint8_t>(g));
+    int bn = uf1::quantiseChannel(static_cast<uint8_t>(b));
+    if (!bright) {
+        // Resting level, out of 15. The brightest channel lands here and the
+        // others follow proportionally, so every inactive key glows at the same
+        // level in its OWN colour — which is what makes a colour bank readable
+        // before you press anything.
+        constexpr int kDimTop = 4;
+        const int top = std::max({rn, gn, bn});       // >= 15 after saturating
+        auto cut = [&](int n) {
+            if (n <= 0) return 0;
+            const int v = (n * kDimTop + top / 2) / top;
+            return v < 1 ? 1 : v;                     // present, so never rounded away
+        };
+        rn = cut(rn); gn = cut(gn); bn = cut(bn);
+    }
+    g4 = static_cast<uint8_t>(gn);
+    r4 = static_cast<uint8_t>(rn);
+    b4 = static_cast<uint8_t>(bn);
+}
+
 // UF1 dynamic-bank paint entry point — resolves an ABSOLUTE item index (page*4 +
 // key) with NO UF8 page base. FX uses the shared per-index body; ParamGroups /
 // TrackColours have exactly 8 items and no base, so the shared per-slot fn is
@@ -6758,39 +6849,64 @@ static void dispatchDynamicPress_(uf8::bindings::DynamicBankKind kind,
 // UF1 twin of dispatchDynamicPress_: the UF1 dynamic soft-key bank must fire the
 // SAME FX-key gestures (Push / +Shift / +Cmd / +Ctrl / Long-press → reasixty_fxBankOp)
 // as the UF8, not only Push (Frank 2026-08-02: "Dynamic Bank für FX hat die
-// modifikatoren-actions nicht drin"). Snapshot the modifier + page + time on PRESS,
-// resolve the gesture on RELEASE (so long-press is distinguishable), then post the
-// UF1's ABSOLUTE-index request (g_uf1DynBankReq, page*4+slot). Input-thread safe —
-// atomics + a local map only (sole accessor). 4 display soft-keys.
+// modifikatoren-actions nicht drin"). Snapshot the modifier + page on PRESS and
+// ARM the long-press deadline there; the modifier gestures still resolve on the
+// RELEASE edge, because until the finger comes up a short press and the start of
+// a long one are the same event. Posts the UF1's ABSOLUTE-index request
+// (g_uf1DynBankReq, page*4+slot). Input-thread safe — atomics + a local map only
+// (sole accessor). 4 display soft-keys.
+//
+// ⇨ The long press no longer waits for the release: the press arms
+// g_uf1DynLongDueMs[slot] with the finished request word, tickUf1DynLongPress_
+// fires it from the drain at kUf1DynLongPressMs, and whichever of the two gets
+// there first clears the slot. See that atomic's declaration for why.
 static void dispatchUf1DynamicPress_(uf8::bindings::DynamicBankKind kind,
                                      int slot, bool pressed)
 {
     if (slot < 0 || slot >= 4) return;
+    auto encode = [&](int page, int gesture) -> uint32_t {
+        const int absIdx = page * 4 + slot;
+        return (1u << 31)
+             | (static_cast<uint32_t>(kind) << 24)
+             | ((static_cast<uint32_t>(absIdx) & 0xFFFFu) << 8)
+             | static_cast<uint32_t>(gesture);
+    };
     struct Uf1DynPress {
-        std::chrono::steady_clock::time_point t;
-        uf8::bindings::Modifier               mod;
-        int                                   page;
+        uf8::bindings::Modifier mod;
+        int                     page;
     };
     static std::unordered_map<int, Uf1DynPress> s_press;
     if (pressed) {
-        s_press[slot] = { std::chrono::steady_clock::now(),
-                          uf8::bindings::currentModifierSnapshot(),
-                          g_uf1DynBankPage.load() };
+        const int page = g_uf1DynBankPage.load();
+        s_press[slot] = { uf8::bindings::currentModifierSnapshot(), page };
+        g_uf1DynLongReq[slot].store(encode(page, /*gesture*/ 4));   // 4 = long-press
+        g_uf1DynLongDueMs[slot].store(nowMs_() + kUf1DynLongPressMs);
         return;
     }
     auto it = s_press.find(slot);
     if (it == s_press.end()) return;
-    const auto held = std::chrono::steady_clock::now() - it->second.t;
-    const int  mod  = static_cast<int>(it->second.mod);
-    const int  page = it->second.page;
+    const int mod  = static_cast<int>(it->second.mod);
+    const int page = it->second.page;
     s_press.erase(it);
-    const int gesture =
-        (held >= std::chrono::milliseconds(500)) ? 4 : mod;  // 4 = long-press
-    const int absIdx = page * 4 + slot;
-    g_uf1DynBankReq.store((1u << 31)
-        | (static_cast<uint32_t>(kind) << 24)
-        | ((static_cast<uint32_t>(absIdx) & 0xFFFFu) << 8)
-        | static_cast<uint32_t>(gesture));
+    // Disarm. A zero here means the drain already fired the long press under the
+    // finger, so this release has nothing left to do — without the check the key
+    // would fire twice, once long and once short.
+    if (g_uf1DynLongDueMs[slot].exchange(0) == 0) return;
+    g_uf1DynBankReq.store(encode(page, /*gesture*/ mod));
+}
+
+// Fire any UF1 dynamic-bank long press whose deadline has passed. Called once per
+// drain (main thread). The CAS is what keeps this and the release edge from both
+// firing: exactly one of them observes a non-zero deadline.
+static void tickUf1DynLongPress_()
+{
+    const int64_t now = nowMs_();
+    for (int s = 0; s < 4; ++s) {
+        int64_t due = g_uf1DynLongDueMs[s].load();
+        if (due == 0 || now < due) continue;
+        if (!g_uf1DynLongDueMs[s].compare_exchange_strong(due, 0)) continue;
+        g_uf1DynBankReq.store(g_uf1DynLongReq[s].load());
+    }
 }
 
 // Execute an FX-bank op on an ABSOLUTE fx index. Shared by the UF8 path
@@ -25634,6 +25750,10 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
                    (id == uf1::enc::kVpot3) ? 2 :
                    (id == uf1::enc::kVpot4) ? 3 : -1;
     if (vi < 0) return;
+    // Remember which pot the hand last used — FLIP in Plugin mode puts THAT
+    // parameter on the fader (see g_uf1FlipVpotIdx). Recorded before any mode
+    // branch: the pot you were turning is the pot you meant, whatever it drove.
+    g_uf1FlipVpotIdx.store(vi);
 
     // DAW mode: V-Pot vi rides the volume of the window's track vi (dB nudge, same
     // taper + 0.25 dB/count as the FLIP-volume V-Pot). Independent of any plug-in.
@@ -25946,8 +26066,22 @@ const char* uf1SkSpecialLabel_(uf8::Uf1SkSpecial act)
 
 // How many DISTINCT settings does a discrete param actually offer, and what is
 // the next one? Answers "bei allen SSL strips checken" (Frank 2026-08-17) without
-// naming a single strip: ASK THE PLUG-IN. Sampling five normalised points and
-// keeping the distinct FORMATTED values gets every case right by itself —
+// naming a single strip: ASK THE PLUG-IN.
+//
+// ⛔ ASK FOR THE STEP SIZE FIRST. The sampling below is the FALLBACK, not the
+// method. It probes five normalised points and calls the param stepped only when
+// two ADJACENT samples format the same — which is sound for two or three
+// settings and silently wrong for more: a ten-setting param (Pro-Q's filter
+// Shape) yields five DIFFERENT strings, no repeat, so it was declared continuous
+// and the caller fell back to a hard 0<->1 flip. From the hardware that reads as
+// "the button is stuck with only two states, the first and the last, whatever
+// the current one is" (forum report 2026-08-25), and it is exactly right.
+// TrackFX_GetParameterStepSizes answers this without guessing AND without
+// writing the param five times to read it back — which is also why the probe is
+// now skipped whenever the plug-in does state its step.
+//
+// The sampling half, kept verbatim for plug-ins that report no step at all —
+// docs/ssl-native-params, columns for 0.0 / 0.5 / 1.0:
 // docs/ssl-native-params, columns for 0.0 / 0.5 / 1.0:
 //   4K E   EQ Colour   Brown · Black · Orange   -> 3 settings
 //   4K G   EQ Colour   Pink  · Black · Black    -> 2 (the UC1 special-cases this
@@ -25963,6 +26097,45 @@ const char* uf1SkSpecialLabel_(uf8::Uf1SkSpecial act)
 static bool uf1DiscreteCycleNext_(MediaTrack* tr, int fx, int param,
                                   double cur, double& outNext)
 {
+    // ---- The plug-in's own step count, when it states one ------------------
+    {
+        double pStep = 0.0, pSmall = 0.0, pLarge = 0.0; bool isToggle = false;
+        const bool stepped = TrackFX_GetParameterStepSizes(
+            tr, fx, param, &pStep, &pSmall, &pLarge, &isToggle);
+        // A declared toggle has two settings and needs no probing at all — the
+        // caller's 0<->1 flip IS the right answer, and five writes to find that
+        // out is five audible writes too many.
+        if (stepped && isToggle) return false;
+        // A JSFX reports its step in slider VALUE units, so a continuous fader
+        // looks "stepped" with a coarse quantum. Same classify + normalise the
+        // V-Pot path does (applyUf1ChannelVpot_); a bogus step falls through to
+        // the sampling below rather than inventing settings that do not exist.
+        bool useStep = stepped && !isToggle && pStep > 0.0;
+        if (useStep) {
+            double nrm = 0.0; bool cont = false;
+            if (uf8::jsfxStepClassify(tr, fx, param, pStep, nrm, cont)) {
+                if (cont)            useStep = false;
+                else if (nrm > 0.0)  pStep   = nrm;
+            }
+        }
+        if (useStep) {
+            // pStep is the normalised distance between neighbours, so the count
+            // is one more than the number of gaps. Rounded, because a step like
+            // 1/9 does not divide 1.0 exactly in binary.
+            const int settings = static_cast<int>(std::lround(1.0 / pStep)) + 1;
+            // 2 is the plain toggle the caller already does. The ceiling keeps a
+            // continuous-in-all-but-name param (128 MIDI values, a 0..1000 ppm
+            // dial) from turning one key into a hundred presses; those stay a
+            // two-way flip, which is at least predictable.
+            constexpr int kMaxCycle = 32;
+            if (settings < 3 || settings > kMaxCycle) return false;
+            const int idx  = static_cast<int>(std::lround(cur / pStep));
+            const int next = (idx + 1) % settings;
+            outNext = std::clamp(next * pStep, 0.0, 1.0);
+            return true;
+        }
+    }
+
     constexpr int kN = 5;
     std::array<std::string, kN> txt;
     char buf[128];
@@ -26226,6 +26399,7 @@ static double uf1CsDefaultNorm_(MediaTrack* tr, int fx, int p)
 void applyUf1ChannelVpotPush_(int idx)
 {
     if (idx < 0 || idx > 3) return;
+    g_uf1FlipVpotIdx.store(idx);   // a push counts as reaching for it too
 
     // DAW mode: push resets the window track's volume to unity (0 dB).
     if (g_uf1ChannelSubMode.load() == 1) {
@@ -26433,10 +26607,14 @@ static void uf1FlashTimecode_(std::string_view text, int ms)
 // 0x0119 field. Each byte = (SEG7[digit] << 1) | dp; the separators ':' '.' ','
 // set the dp (bit 0) on the PRECEDING digit — there is no colon or period glyph
 // on the field (decode 2026-07-24: "hatte nur punkte"). The result is
-// right-aligned into the TEN VISIBLE cells, left-padded with 0x00 (blank). A '-'
-// (negative positions) has no minus glyph, so it is dropped, clamping to the
-// digits alone. A longer string keeps the rightmost ten digits (the low-order
-// ones survive, matching a right-aligned field).
+// right-aligned into the TEN VISIBLE cells, left-padded with 0x00 (blank).
+// A leading '-' (negative bars / negative h:m:s:f) TAKES ITS OWN CELL, from the
+// same 7-segment font the text writer uses. It used to be dropped, so a negative
+// position rendered as its own absolute value with nothing to say so — the field
+// read −2.1.00 as 2.1.00 (forum report 2026-08-25). The sign is paid for out of
+// the ten cells, so the digits get nine when it is present.
+// A longer string keeps the rightmost digits (the low-order ones survive,
+// matching a right-aligned field) and the sign still leads them.
 // ⚠ Was eleven until 2026-08-22 — an eleven-digit sample count put its leading
 // digit in the invisible byte 0 and read an order of magnitude short. That the
 // dead cell went unnoticed for a month is right-align's doing: no clock string
@@ -26448,7 +26626,8 @@ static void uf1EncodeTimecode_(const char* s, uint8_t out[11])
     static const uint8_t SEG7[10] = {
         0x3f, 0x06, 0x5b, 0x4f, 0x66, 0x6d, 0x7d, 0x07, 0x7f, 0x67 };
     uint8_t digits[32];
-    int n = 0;
+    int  n   = 0;
+    bool neg = false;
     for (const char* p = s; *p; ++p) {
         const char c = *p;
         if (c >= '0' && c <= '9') {
@@ -26456,17 +26635,25 @@ static void uf1EncodeTimecode_(const char* s, uint8_t out[11])
                 digits[n++] = static_cast<uint8_t>(SEG7[c - '0'] << 1);
         } else if (c == ':' || c == '.' || c == ',') {
             if (n > 0) digits[n - 1] |= 0x01;   // dp on the preceding digit
+        } else if (c == '-' && n == 0) {
+            neg = true;                          // LEADING sign only, never a dash
+                                                 // inside the string
         }
-        // any other char (space, '-', …) is skipped — no glyph for it
+        // any other char (space, …) is skipped — no glyph for it
     }
-    if (n > kUf1TcCells) {                       // keep the rightmost ten digits
-        const int drop = n - kUf1TcCells;
-        for (int k = 0; k < kUf1TcCells; ++k) digits[k] = digits[k + drop];
-        n = kUf1TcCells;
+    // The sign costs one of the ten cells, so the digits get nine while it shows.
+    const int cells = kUf1TcCells - (neg ? 1 : 0);
+    if (n > cells) {                             // keep the rightmost digits
+        const int drop = n - cells;
+        for (int k = 0; k < cells; ++k) digits[k] = digits[k + drop];
+        n = cells;
     }
     for (int k = 0; k < 11; ++k) out[k] = 0x00;              // left-pad blanks
-    for (int k = 0; k < n; ++k)                              // right-align
-        out[kUf1TcFirst + kUf1TcCells - n + k] = digits[k];
+    const int at = kUf1TcFirst + kUf1TcCells - n;            // right-align
+    if (neg)                                                 // …sign just left of it
+        out[at - 1] = static_cast<uint8_t>(uf1Seg7Glyph_('-') << 1);
+    for (int k = 0; k < n; ++k)
+        out[at + k] = digits[k];
 }
 
 // Short display name of the ACTIVE FX for the CS-TYPE zone (0x0017), mirroring
@@ -26866,10 +27053,20 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         && GetMediaTrackInfo_Value(tr, "I_RECARM") > 0.5;
     // Mode + arm fold into the change key, or the LED would sit on the last colour
     // it was told about until something else happened to repaint.
+    // ⇨ "SEL LED follows REAPER track colour" (Settings → Appearance → Surface
+    // display) COUNTS HERE TOO. The setting has existed since long before the UF1
+    // had a SEL LED and only the UF8's eight ever read it, so the one surface
+    // where the key sits right under your hand ignored it — the forum asked for
+    // "an option to disable SEL LED according to track colour" without knowing
+    // there already was one (2026-08-25). Off = plain white, exactly the UF8's
+    // answer. In the colour key as well, or flipping the setting would leave the
+    // LED on its last colour until something else happened to repaint it.
+    const bool     selFollowsCol = g_selFollowsColor.load();
     const uint32_t selKey = (rgb & 0x00FFFFFFu)
-                          | (selSel   ? 0x01000000u : 0u)
-                          | (recLed   ? 0x02000000u : 0u)
-                          | (recArmed ? 0x04000000u : 0u);
+                          | (selSel        ? 0x01000000u : 0u)
+                          | (recLed        ? 0x02000000u : 0u)
+                          | (recArmed      ? 0x04000000u : 0u)
+                          | (selFollowsCol ? 0x08000000u : 0u);
     if (changed || selKey != sColor) {
         sColor = selKey;
         // SEL LED (0x07) is FULL RGB (Frank 2026-08-05: Solo/Cut are multi-colour too —
@@ -26888,9 +27085,10 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
             : ((static_cast<uint32_t>(cr * 255 / mx) << 16)
              | (static_cast<uint32_t>(cg * 255 / mx) << 8)
              |  static_cast<uint32_t>(cb * 255 / mx));
+        const uint32_t selRgb = selFollowsCol ? boosted : 0xFFFFFFu;
         const uint32_t ledRgb = recLed
             ? (recArmed ? kSelRecArmedRgb : kSelRecIdleRgb)   // REC: arm state
-            : (selSel   ? boosted         : 0x000000u);       // not selected → dark
+            : (selSel   ? selRgb          : 0x000000u);       // not selected → dark
         if (changed) g_uf1_dev->send(uf1::buildLed(uf1::led::kSel, true));            // FF3B enable
         g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, ledRgb));                 // FF38 full RGB (dark if unsel)
         g_uf1_dev->send(uf1::buildLedLevel(uf1::led::kSel, uf1::led::kFf39Lit));      // FF39 = 0x00 → LIT
@@ -28636,20 +28834,24 @@ void uf1PaintChannel_()
             // the UF8 FF38(+FF39, +FF3B enable) one. SOFT-KEY 1 (id 0x01) is FF38-ONLY
             // (cap106: sending FF39 to 0x01 sticks the rectangle). Two render paths:
             //  • keyHasColour (a DAW static-bank binding colour, or a dynamic bank's
-            //    class colour) → the FF38 GRB frame (buildColourRgb) scaled by brightness,
-            //    PLUS the FF39 state byte on keys 2-4. Frank HW-confirmed the display
-            //    soft-key colour renders (2026-07-30). The earlier "revert to state-only"
-            //    was WRONG: its bug was DROPPING the FF39 keys 2-4 need — here we send
-            //    BOTH (FF38 colour + FF39), so the colour shows and keys 2-4 stay lit.
+            //    class colour) → the FF38 GRB frame, saturated and level-set by
+            //    uf1KeyColourNibbles_ (see there: dimming in 8-bit space destroyed
+            //    the hue), PLUS the FF39 state byte on keys 2-4. Frank HW-confirmed
+            //    the display soft-key colour renders (2026-07-30). The earlier
+            //    "revert to state-only" was WRONG: its bug was DROPPING the FF39
+            //    keys 2-4 need — here we send BOTH, so the colour shows and keys
+            //    2-4 stay lit.
             //  • otherwise (Plugin/CS, Sends, learned) → the HW-verified state-only bytes
             //    (buildLedPrimary FF38 + buildLedLevel FF39, key-1-only rule), unchanged.
-            uint32_t scaled = keyColRgb;
-            if (!keyColBright)        // dim = quarter brightness, per channel
-                scaled = ((((keyColRgb >> 16) & 0xFF) / 4) << 16)
-                       | ((((keyColRgb >> 8)  & 0xFF) / 4) << 8)
-                       |  (( keyColRgb        & 0xFF) / 4);
+            uint8_t kg4 = 0, kr4 = 0, kb4 = 0;
+            if (keyHasColour)
+                uf1KeyColourNibbles_(keyColRgb, keyColBright, kg4, kr4, kb4);
+            // Change key carries the NIBBLES, not the source rgb: two colours that
+            // quantise the same must not re-send, and the same colour at two levels
+            // must (the old key hashed the 8-bit value and got both wrong by luck).
             const int ledState = keyHasColour
-                ? ((1 << 30) | (on ? (1 << 24) : 0) | static_cast<int>(scaled & 0xFFFFFF))
+                ? ((1 << 30) | (on ? (1 << 24) : 0)
+                   | (int(kg4) << 8) | (int(kr4) << 4) | int(kb4))
                 : (on ? 1 : 0);
             // While the BC-GR meter or the MODE menu owns these four LEDs, poison
             // the cache instead of sending: they paint them later this same tick,
@@ -28661,8 +28863,8 @@ void uf1PaintChannel_()
             // un-parked this block on the very tick the menu paints — so all four
             // LEDs got the channel state and then the menu's, two frame sets apart
             // in one tick. That is a visible flash, and key 1 shows it worst
-            // because it is FF38-only and swings 0xf0 <-> 0x11 (Frank: "kurzer
-            // flicker auf LED soft-key 1"). Same rule as the placeholder-then-real
+            // because it is FF38-only and swings lit <-> dim on its own send
+            // (Frank: "kurzer flicker auf LED soft-key 1"). Same rule as the placeholder-then-real
             // trap in [[uf1-mode-edge-must-not-relayout]]: ONE writer per tick.
             if (grOwnsSk || modeMenu) { sSkLed[i] = INT_MIN; }
             else if (changed || ledState != sSkLed[i]) {
@@ -28670,16 +28872,23 @@ void uf1PaintChannel_()
                 const uint8_t id = kUf1CsSoftKeyLedId[i];   // 0x01..0x04
                 if (changed) g_uf1_dev->send(uf1::buildLed(id, true));  // FF3B enable
                 if (keyHasColour) {
-                    g_uf1_dev->send(uf1::buildColourRgb(id, scaled));            // FF38 colour
-                    // No colour → not lit, whatever `on` says (Brightness::Off).
+                    g_uf1_dev->send(uf1::buildColour(id, kg4, kr4, kb4));        // FF38 colour
+                    // ⇨ FF39 STAYS LIT AND THE NIBBLES CARRY THE LEVEL — the SEL
+                    // LED's rule (uf1PaintChannelStrip_, kFf39Lit + a black rgb for
+                    // "off"), adopted here because the old dim FF39 stacked on top
+                    // of an already-dimmed colour and took the second bite out of
+                    // exactly the hue this key exists to show. A key with nothing to
+                    // show gets rgb 0 above, which is dark on its own.
                     if (i != 0)
-                        g_uf1_dev->send(uf1::buildLedLevel(id,
-                            (on && scaled) ? 0x00 : 0x11));                      // FF39 state
+                        g_uf1_dev->send(uf1::buildLedLevel(id, uf1::led::kFf39Lit));
                 } else if (i == 0) {
-                    // FF38-only. on = 0xf0 bright; off = 0x11 dim (Frank HW 2026-07-29).
-                    g_uf1_dev->send(uf1::buildLedPrimary(id, on ? 0xf0 : 0x11)); // FF38 only
+                    // FF38-only (Frank HW 2026-07-29). Same lit byte as keys 2-4 —
+                    // it was 0xf0 here, which is pure green (uf1::led::kPrimSoftKey*).
+                    g_uf1_dev->send(uf1::buildLedPrimary(id,
+                        on ? uf1::led::kPrimSoftKeyLit : uf1::led::kPrimSoftKeyDim));
                 } else {
-                    g_uf1_dev->send(uf1::buildLedPrimary(id, on ? 0xff : 0x11)); // FF38
+                    g_uf1_dev->send(uf1::buildLedPrimary(id,
+                        on ? uf1::led::kPrimSoftKeyLit : uf1::led::kPrimSoftKeyDim));
                     g_uf1_dev->send(uf1::buildLedLevel(id,   on ? 0x00 : 0x11)); // FF39
                 }
             }
@@ -28808,6 +29017,47 @@ void uf1PaintChannel_()
     const bool stickyFader = flip && !stripFader && !sendFader
         && g_stickyActive.load()
         && stickyResolveOnTrack_(ftr, &stickyFx, &stickyParam, &stickyTog);
+    // ⇨ PLUGIN MODE + FLIP: THE LAST-TOUCHED V-POT PARAMETER MOVES TO THE FADER.
+    // FLIP means "fader and V-Pot swap jobs", and in Plugin mode the V-Pots drive
+    // plug-in parameters — so that is what the fader should take. It used to land
+    // on Pan here, which is the DAW-mode reading of the same key and left no way
+    // to put a plug-in parameter on 100 mm of travel at all (forum 2026-08-25,
+    // "the only thing I miss from the FaderPort2"). WHICH parameter is
+    // g_uf1FlipVpotIdx: the pot you last reached for.
+    //
+    // ⛔ ONLY WHILE THE TWO PANEL HALVES ARE THE SAME TRACK (ftr == tr).
+    // The fader is the LEFT half and the V-Pots are the RIGHT one
+    // ([[uf1-panel-halves-rule]]); with the Extender on, those are different
+    // tracks, and handing the fader a parameter the small LCD next to it does not
+    // name is exactly the "shows track X, acts on track Y" bug that came back
+    // four times. In an Extender rig FLIP keeps its Pan meaning, unchanged.
+    // Without the Extender — every UF1-alone rig, the reporter's included —
+    // ftr == tr and the fader takes the parameter the screen is showing.
+    // The write goes to the instance uf1ResolveCsFx_ returns, i.e. the one the
+    // V-Pots are on, so the fader and the pot can never disagree about the target.
+    //
+    // Yields to Strip Mode, the send faders and a Sticky pin: all four mean "the
+    // fader carries something specific", and those three are explicit choices
+    // while this one is implicit. Nothing to resolve (no strip on the track, blank
+    // slot on this page) → falls through to FLIP's Pan, so nothing loses a
+    // behaviour it had.
+    MediaTrack* flipParamTr = nullptr;
+    int  flipParamFx = -1, flipParam = -1;
+    const bool flipParamFader =
+        flip && !stripFader && !sendFader && !extRouteActive && !stickyFader
+        && ftr == tr && g_uf1ChannelSubMode.load() == 0 && !meterView
+        && [&] {
+            MediaTrack* pt = nullptr; int pfx = -1;
+            const int pType = uf1ResolveCsFx_(tr, pt, pfx);
+            if (pType < 0 || !pt) return false;
+            const int pPage = std::clamp(g_uf1CsPage.load(), 0,
+                                         uf1CsPageCountFor_(pType, pt, pfx) - 1);
+            const int p = uf1CsVpotParam_(pt, pfx, pType, pPage,
+                                          std::clamp(g_uf1FlipVpotIdx.load(), 0, 3));
+            if (p < 0) return false;
+            flipParamTr = pt; flipParamFx = pfx; flipParam = p;
+            return true;
+        }();
     // End-of-edit finalise (finishRouteVolEdit_ isend=1) fired ONCE on touch-release,
     // so Touch-mode recording stops + snaps back like the surface send-fader path.
     static bool sSendFaderEditing = false;
@@ -28835,6 +29085,16 @@ void uf1PaintChannel_()
                 const double n = std::clamp(double(pos) / double(kUf1FaderMax), 0.0, 1.0);
                 TrackFX_SetParamNormalized(ftr, stickyFx, stickyParam, n);
                 g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // don't let the move steal focus
+            }
+            else if (flipParamFader) {
+                // Plugin mode + FLIP. LINEAR pos↔norm, like Strip Mode and Sticky
+                // Pot: a plug-in parameter is a plain 0..1 control, the dB curve
+                // belongs to volume alone. No curve / range from the learned slot
+                // here on purpose — those describe how the ENCODER should feel over
+                // its detents, and a 100 mm throw with an absolute position has no
+                // such problem to solve.
+                const double n = std::clamp(double(pos) / double(kUf1FaderMax), 0.0, 1.0);
+                TrackFX_SetParamNormalized(flipParamTr, flipParamFx, flipParam, n);
             }
             else if (flip && !sendFlip) CSurf_OnPanChange(ftr, uf1PosToPan_(pos), /*relative*/false);
             else      CSurf_OnVolumeChange(ftr, uf1PosToVol_(pos), false);
@@ -28877,6 +29137,9 @@ void uf1PaintChannel_()
             pos = uf1VolToPos_(readRouteVolumeLinear_(sendRoute, ftr));   // motor follows EFFECTIVE
         } else if (stickyFader) {
             const double n = TrackFX_GetParamNormalized(ftr, stickyFx, stickyParam);
+            pos = static_cast<uint16_t>(std::clamp(n, 0.0, 1.0) * double(kUf1FaderMax) + 0.5);
+        } else if (flipParamFader) {
+            const double n = TrackFX_GetParamNormalized(flipParamTr, flipParamFx, flipParam);
             pos = static_cast<uint16_t>(std::clamp(n, 0.0, 1.0) * double(kUf1FaderMax) + 0.5);
         } else if (flip && !sendFlip) {
             pos = uf1PanToPos_(GetMediaTrackInfo_Value(ftr, "D_PAN"));
@@ -28939,9 +29202,10 @@ void uf1PaintChannel_()
     // ---- Meter view owns its four soft-key LEDs (Frank 2026-08-11) ---------
     // The p188 block that drives these LEDs runs in the CHANNEL view only, so in
     // Meter view they just kept whatever the channel had last written — SK1 sat
-    // GREEN "ohne Grund". Green is precisely what the state-only path writes for
-    // key 1: FF38 0xf0, and buildColour packs xx = (g4<<4)|r4, so 0xf0 is g4=15,
-    // r4=0 = full green. Nobody was lying; nobody was repainting either.
+    // GREEN "ohne Grund". Green was what the state-only path wrote for key 1:
+    // FF38 0xf0, and buildColour packs xx = (g4<<4)|r4, so 0xf0 is g4=15, r4=0 =
+    // full green. Nobody was lying; nobody was repainting either. (That byte is
+    // gone — all four keys now take uf1::led::kPrimSoftKeyLit, which is yellow.)
     // Meter view now states them: FINE (SK3) and the PRESETS browser (SK4) light,
     // the rest dark. Stands down for the GR meter and the MODE menu, same as
     // everyone else on this row.
@@ -28959,11 +29223,13 @@ void uf1PaintChannel_()
                 sMtrLed[i] = want;
                 const uint8_t id = kUf1CsSoftKeyLedId[i];
                 g_uf1_dev->send(uf1::buildLed(id, true));                    // FF3B
+                const uint8_t prim = on[i] ? uf1::led::kPrimSoftKeyLit
+                                           : uf1::led::kPrimSoftKeyDim;
                 if (i == 0) {
                     // Key 1 is FF38-only — an FF39 to id 0x01 sticks the rectangle.
-                    g_uf1_dev->send(uf1::buildLedPrimary(id, on[i] ? 0xf0 : 0x11));
+                    g_uf1_dev->send(uf1::buildLedPrimary(id, prim));
                 } else {
-                    g_uf1_dev->send(uf1::buildLedPrimary(id, on[i] ? 0xff : 0x11));
+                    g_uf1_dev->send(uf1::buildLedPrimary(id, prim));
                     g_uf1_dev->send(uf1::buildLedLevel(id,   on[i] ? 0x00 : 0x11));
                 }
             }
@@ -29002,10 +29268,12 @@ void uf1PaintChannel_()
                     const bool    on = (i == sel);
                     const uint8_t id = kUf1CsSoftKeyLedId[i];   // 0x01..0x04
                     g_uf1_dev->send(uf1::buildLed(id, true));   // FF3B enable
+                    const uint8_t prim = on ? uf1::led::kPrimSoftKeyLit
+                                            : uf1::led::kPrimSoftKeyDim;
                     if (i == 0) {
-                        g_uf1_dev->send(uf1::buildLedPrimary(id, on ? 0xf0 : 0x11)); // FF38 only
+                        g_uf1_dev->send(uf1::buildLedPrimary(id, prim));         // FF38 only
                     } else {
-                        g_uf1_dev->send(uf1::buildLedPrimary(id, on ? 0xff : 0x11)); // FF38
+                        g_uf1_dev->send(uf1::buildLedPrimary(id, prim));         // FF38
                         g_uf1_dev->send(uf1::buildLedLevel(id,   on ? 0x00 : 0x11)); // FF39
                     }
                 }
@@ -41209,6 +41477,12 @@ void reasixty_setKeyboardShiftModifier(bool on)
     // press doesn't outlive the toggle flip.
     if (!on) uf8::bindings::setKeyboardShiftHeld(false);
 }
+bool reasixty_selModeResetOnStart()    { return g_selModeResetOnStart.load(); }
+void reasixty_setSelModeResetOnStart(bool on)
+{
+    g_selModeResetOnStart.store(on);
+    SetExtState("rea_sixty", "sel_mode_reset_start", on ? "1" : "0", true);
+}
 bool reasixty_keyboardCmdModifier()   { return g_keyboardCmdModifier.load(); }
 void reasixty_setKeyboardCmdModifier(bool on)
 {
@@ -45836,16 +46110,27 @@ void registerBindingHandlers()
             "", true
         };
     };
+    // ⛔ UF8 + UC1, NOT the UF1 — the same eight-strip scope send_all_N / recv_all_N
+    // already carry in builtinDeviceMask()'s exception list. These two write
+    // g_sendFaderThisTrack / g_recvVpotThisTrack and friends, which only the
+    // 8-strip render path reads; on a one-strip surface they are a pure no-op.
+    // They fell through to "universal" because the name-prefix table cannot see
+    // them (no uf8_ prefix, no send_all_ prefix), so a UF1-only user found "8
+    // sends of focused track" in the picker and it did nothing at all (forum
+    // report 2026-08-25). Exactly the hole pan_force sat in until the 2026-08-19
+    // audit — hence the explicit mask here rather than another table entry.
     {
         auto d = thisHandler(&g_sendFaderThisTrack, &g_sendVpotThisTrack,
                              &clearVpotRouting_, &clearFaderRouting_);
         d.displayName = "8 sends of focused track";
+        d.deviceMask  = 0b011;
         registerBuiltin("send_this", d);
     }
     {
         auto d = thisHandler(&g_recvFaderThisTrack, &g_recvVpotThisTrack,
                              &clearVpotRouting_, &clearFaderRouting_);
         d.displayName = "8 receives of focused track";
+        d.deviceMask  = 0b011;
         registerBuiltin("recv_this", d);
     }
 

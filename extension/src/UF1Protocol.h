@@ -172,6 +172,19 @@ constexpr uint8_t kDimSolo     = 0x22;  // g=2,r=2   → dim YELLOW (resting). F
                                         // colour. Was 0x20, dim green, left behind
                                         // when the lit state went yellow.
 constexpr uint8_t kDimCut      = 0x02;  // g=0,r=2   → dim red (resting, never fully off)
+
+// The four DISPLAY soft-key LEDs on the STATE-ONLY path (the keys that carry no
+// per-key colour of their own: Plugin/CS sections, Sends, learned plug-ins, the
+// Meter view's FINE/PRESETS pair and the MODE-hold menu). Same (green<<4)|red
+// byte as everything else here, so 0xff is YELLOW and 0xf0 is pure GREEN.
+// ⚠ Key 1 is FF38-ONLY — an FF39 to id 0x01 sticks the rectangle on (cap106) —
+// so it carries its own send and DRIFTED: it was hard-coded 0xf0 in all three
+// painters while keys 2-4 got 0xff. The row read "green, yellow, yellow, yellow"
+// on the hardware for as long as the state-only path existed (forum report
+// 2026-08-25, and the Meter-view comment had already named the byte without
+// noticing the other three keys disagreed). Use these constants, never a literal.
+constexpr uint8_t kPrimSoftKeyLit = 0xff;  // g=15,r=15 → yellow
+constexpr uint8_t kPrimSoftKeyDim = 0x11;  // g=1,r=1   → dim yellow (resting)
 }
 
 // Screen element addresses (FF 67) — the subset we drive natively first.
