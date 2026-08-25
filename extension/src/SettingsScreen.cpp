@@ -4336,14 +4336,15 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         int childFlags = ImGui_ChildFlags_Borders;
         char childId[32];
         snprintf(childId, sizeof(childId), "%s_col", tag);
-        // TEMP TRACE: cursor Y and remaining height are what decide culling, so
-        // log them BEFORE the call. A child asking for h at a Y where only
-        // availY < h is left is the off-screen case that reaps the window.
-        {
-            double curX = 0, curY = 0, availX = 0, availY = 0;
-            ImGui_GetCursorPos(ctx, &curX, &curY);
-            ImGui_GetContentRegionAvail(ctx, &availX, &availY);
-        }
+        // ⇨ These two columns are the ONE pair that has always been paired
+        // correctly: EndChild sits at the bottom of the lambda, outside the
+        // guard, so a culled column costs a frame of drawing and nothing else.
+        // Keep it that way — an EndChild inside the guard bricks the whole
+        // Settings window (see the fxl_slots EndChild, and learnings #31).
+        // (A dead instrumentation block sat here from the 2026-08-03 hunt: it
+        // read the cursor position and the remaining height and did nothing
+        // with either, because the logging call had been stripped and the
+        // scaffold left behind. Removed 2026-08-25 with the actual cause.)
         const bool colOpen = ImGui_BeginChild(ctx, childId, &w, &h, &childFlags, nullptr);
         if (colOpen) {
             ImGui_Text(ctx, title);
@@ -18844,8 +18845,16 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             }
         }
 
-        ImGui_EndChild(ctx);
     }
+    // ⛔ EndChild IS UNCONDITIONAL. BeginChild returns false when the child
+    // is culled (scrolled out of the parent pane), and skipping EndChild on
+    // that frame unbalances the window stack — after which EVERY Begin
+    // returns false and the Settings window is dead until REAPER restarts.
+    // That is the "auto-closing window" report, and it is the THIRD time
+    // this class has bitten (learnings #31, and the two Begin/End comments
+    // in MixerWindow::onRunTick that describe the same brick). The body
+    // stays guarded; only the End moves out.
+    ImGui_EndChild(ctx);
 
     ImGui_SameLine(ctx, nullptr, nullptr);
 
@@ -19101,8 +19110,9 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 ImGui_TextDisabled(ctx, overflow);
             }
         }
-        ImGui_EndChild(ctx);
     }
+    // ⛔ Unconditional — see the fxl_slots EndChild above for why.
+    ImGui_EndChild(ctx);
 
     // Mode-change confirm popup removed 2026-05-24 — Frank: switches
     // are reversible via csSlotCache / bcSlotCache, the confirm was a
@@ -19507,8 +19517,9 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     ImGui_TreePop(ctx);
                 }
             }
-            ImGui_EndChild(ctx);
         }
+        // ⛔ Unconditional — see the fxl_slots EndChild above for why.
+        ImGui_EndChild(ctx);
 
         ImGui_Spacing(ctx);
         ImGui_Separator(ctx);
