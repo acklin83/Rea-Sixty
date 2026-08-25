@@ -4782,6 +4782,28 @@ DynamicBankKind getUf1SoftBankDynamic(int bank, int mod)
     return g_cfg.uf1SoftBankDynamic[bank][mod];
 }
 
+// ⇨ THE KIND FOR ONE SET: ITS OWN IF IT HAS ONE, ELSE PLAIN'S.
+// A set is a full bank, so it can be its own dynamic bank — FX on Plain and
+// Track Colours on Shift, say (Frank 2026-08-25: "ich kann bei beiden nicht eine
+// dyn bank auf plain und eine andere auf shift legen"). None on a set means
+// "nothing of my own", NOT "static": it falls back to Plain, which is what keeps
+// a bank that is dynamic on Plain behaving exactly as it did under a held
+// modifier — same keys, same FX gestures.
+// *ownsSet says the answer came from the set itself. Callers need that to tell
+// "this set IS this bank" (its keys are that bank's own push) from "this set is
+// looking at Plain's bank" (where the modifiers are that bank's gestures).
+DynamicBankKind getUf1SoftBankDynamicFor(int bank, int mod, bool* ownsSet)
+{
+    if (ownsSet) *ownsSet = false;
+    const DynamicBankKind own = getUf1SoftBankDynamic(bank, mod);
+    if (own != DynamicBankKind::None && mod != kDynamicKindSet) {
+        if (ownsSet) *ownsSet = true;
+        return own;
+    }
+    if (mod == kDynamicKindSet) return own;
+    return getUf1SoftBankDynamic(bank, kDynamicKindSet);
+}
+
 // Number of UF1 soft-key banks actually IN USE = (highest in-use bank index
 // + 1), min 1. A bank is in use if it is DYNAMIC (FX / param-groups / colours)
 // or has any non-empty static slot. Used for the DAW-mode header "N/M" so the
@@ -4857,6 +4879,20 @@ DynamicBankKind getSubBankDynamic(int layer, int quick, int subBank, int mod)
     if (mod < 0 || mod >= kSoftKeyModifierSets)     return DynamicBankKind::None;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     return g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank].dynamic[mod];
+}
+
+// Sub-Bank twin of getUf1SoftBankDynamicFor — same rule, same reasoning.
+DynamicBankKind getSubBankDynamicFor(int layer, int quick, int subBank,
+                                     int mod, bool* ownsSet)
+{
+    if (ownsSet) *ownsSet = false;
+    const DynamicBankKind own = getSubBankDynamic(layer, quick, subBank, mod);
+    if (own != DynamicBankKind::None && mod != kDynamicKindSet) {
+        if (ownsSet) *ownsSet = true;
+        return own;
+    }
+    if (mod == kDynamicKindSet) return own;
+    return getSubBankDynamic(layer, quick, subBank, kDynamicKindSet);
 }
 
 void setSubBankDynamic(int layer, int quick, int subBank, int mod,

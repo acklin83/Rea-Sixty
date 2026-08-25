@@ -6531,8 +6531,10 @@ static int engagedBankableKind_()
     const int q = g_activeQuick[layer].load();
     if (q < 0) return -1;
     const int sb = g_activeSubBank[layer].load();
-    const auto dk = uf8::bindings::getSubBankDynamic(
-        layer, q, sb, uf8::bindings::kDynamicKindSet);
+    // The kind of the set that is SHOWING — a set with its own bank pages that
+    // one, not Plain's.
+    const auto dk = uf8::bindings::getSubBankDynamicFor(
+        layer, q, sb, static_cast<int>(uf8::bindings::bankModifierSnapshot()));
     return dynBankBankable_(dk) ? static_cast<int>(dk) : -1;
 }
 
@@ -6850,8 +6852,13 @@ static bool setOwnsDynamicKey_(const uf8::bindings::Binding& bd, int mIdx)
     return sp.type != uf8::bindings::ActionType::Noop || !sp.action.empty();
 }
 
+// setOwnsBank: this dynamic bank belongs to the HELD SET, not to Plain. Then the
+// modifier is how you got here and cannot also be a gesture, so the press is that
+// bank's plain push. Long-press still resolves to the long gesture: it costs no
+// modifier.
 static void dispatchDynamicPress_(uf8::bindings::DynamicBankKind kind,
-                                  int slot, bool pressed)
+                                  int slot, bool pressed,
+                                  bool setOwnsBank = false)
 {
     if (slot < 0 || slot >= 8) return;
     static std::unordered_map<int,
@@ -6867,8 +6874,9 @@ static void dispatchDynamicPress_(uf8::bindings::DynamicBankKind kind,
     const auto held = std::chrono::steady_clock::now() - it->second.first;
     const int  mod  = static_cast<int>(it->second.second);
     s_press.erase(it);
-    const int gesture =
-        (held >= std::chrono::milliseconds(500)) ? 4 : mod;  // 4 = long-press
+    const int gesture = (held >= std::chrono::milliseconds(500))
+                      ? 4                                  // 4 = long-press
+                      : (setOwnsBank ? 0 : mod);
     const uint32_t enc = (1u << 24)
                        | (static_cast<uint32_t>(kind) << 16)
                        | (static_cast<uint32_t>(slot) << 8)
@@ -6891,7 +6899,8 @@ static void dispatchDynamicPress_(uf8::bindings::DynamicBankKind kind,
 // fires it from the drain at kUf1DynLongPressMs, and whichever of the two gets
 // there first clears the slot. See that atomic's declaration for why.
 static void dispatchUf1DynamicPress_(uf8::bindings::DynamicBankKind kind,
-                                     int slot, bool pressed)
+                                     int slot, bool pressed,
+                                     bool setOwnsBank = false)
 {
     if (slot < 0 || slot >= 4) return;
     auto encode = [&](int page, int gesture) -> uint32_t {
@@ -6922,7 +6931,9 @@ static void dispatchUf1DynamicPress_(uf8::bindings::DynamicBankKind kind,
     // finger, so this release has nothing left to do — without the check the key
     // would fire twice, once long and once short.
     if (g_uf1DynLongDueMs[slot].exchange(0) == 0) return;
-    g_uf1DynBankReq.store(encode(page, /*gesture*/ mod));
+    // Same rule as the UF8: a bank the held set owns fires its plain push,
+    // because the modifier is what selected the set.
+    g_uf1DynBankReq.store(encode(page, /*gesture*/ setOwnsBank ? 0 : mod));
 }
 
 // Fire any UF1 dynamic-bank long press whose deadline has passed. Called once per
@@ -21342,9 +21353,16 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     // A dynamic Sub-Bank computes its keys live → route the
                     // press to the dynamic handler (posts to the main-thread
                     // drain) instead of the stored user-Quick binding.
+                    // ⇨ THE SET'S OWN BANK, ELSE PLAIN'S. `ownsSet` separates
+                    // "Shift IS a Track-Colours bank" from "Shift is looking at
+                    // Plain's FX bank", where the modifiers are its gestures.
+                    bool ownsSet = false;
                     const auto dk =
-                        uf8::bindings::getSubBankDynamic(
-                            layer, aq, sb, uf8::bindings::kDynamicKindSet);
+                        uf8::bindings::getSubBankDynamicFor(
+                            layer, aq, sb,
+                            static_cast<int>(
+                                uf8::bindings::bankModifierSnapshot()),
+                            &ownsSet);
                     // ⇨ ON A DYNAMIC BANK, AN ASSIGNED MODIFIER SLOT WINS OVER
                     // THE FX GESTURE. Holding a modifier here used to go
                     // straight to the gesture (Push / +Shift / +Cmd / +Ctrl /
@@ -21359,14 +21377,15 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         uf8::bindings::bankModifierSnapshot()
                             != uf8::bindings::Modifier::Plain;
                     bool tookSlot = false;
-                    if (dk != uf8::bindings::DynamicBankKind::None && modHeld) {
+                    if (dk != uf8::bindings::DynamicBankKind::None && modHeld
+                        && !ownsSet) {
                         tookSlot = uf8::bindings::dispatchUserQuickSlot(
                             layer, aq, sb, id - 0x18, pressed);
                     }
                     if (tookSlot) {
                         // handled by the user's slot
                     } else if (dk != uf8::bindings::DynamicBankKind::None) {
-                        dispatchDynamicPress_(dk, id - 0x18, pressed);
+                        dispatchDynamicPress_(dk, id - 0x18, pressed, ownsSet);
                     } else {
                         uf8::bindings::dispatchUserQuickSlot(
                             layer, aq, sb, id - 0x18, pressed);
@@ -22408,7 +22427,11 @@ void onUf1Event(const uf1::InputEvent& ev)
                 && !g_uf1ModeMenu.load()) {
                 const int bank = g_uf1SoftBank.load();
                 const int slot = static_cast<int>(ev.id - uf1::btn::kDisplaySoft1);
-                const auto dk  = uf8::bindings::getUf1SoftBankDynamic(bank, uf8::bindings::kDynamicKindSet);
+                bool       ownsSet = false;
+                const auto dk  = uf8::bindings::getUf1SoftBankDynamicFor(
+                    bank,
+                    static_cast<int>(uf8::bindings::bankModifierSnapshot()),
+                    &ownsSet);
                 if (dk != uf8::bindings::DynamicBankKind::None) {
                     // Dynamic bank: fire the SAME FX-key gestures as the UF8 (Push /
                     // +Shift / +Cmd / +Ctrl / Long-press → reasixty_fxBankOp), not
@@ -22431,7 +22454,7 @@ void onUf1Event(const uf1::InputEvent& ev)
                     // a finger that is no longer there.
                     static bool s_setTook[4] = { false, false, false, false };
                     if (ev.pressed) {
-                        s_setTook[slot] = setOwnsDynamicKey_(
+                        s_setTook[slot] = !ownsSet && setOwnsDynamicKey_(
                             uf8::bindings::getUf1SoftBankSlot(bank, slot),
                             static_cast<int>(
                                 uf8::bindings::bankModifierSnapshot()));
@@ -22441,7 +22464,7 @@ void onUf1Event(const uf1::InputEvent& ev)
                             bank, slot, ev.pressed);
                         if (!ev.pressed) s_setTook[slot] = false;
                     } else {
-                        dispatchUf1DynamicPress_(dk, slot, ev.pressed);
+                        dispatchUf1DynamicPress_(dk, slot, ev.pressed, ownsSet);
                     }
                 } else {
                     uf8::bindings::dispatchUf1SoftBankSlot(bank, slot, ev.pressed);
@@ -28685,8 +28708,12 @@ void uf1PaintChannel_()
         // BANKABLE in groups of 4 via the "5-8" key, exactly like SENDS mode:
         // g_uf1DynBankPage selects items [page*4 .. page*4+3] (ABSOLUTE — the UF1
         // path never uses UF8's dynBankSlotBase_).
+        bool dawDynOwnsSet = false;
         const auto dawDynKind = dawBanks
-            ? uf8::bindings::getUf1SoftBankDynamic(bankNo, uf8::bindings::kDynamicKindSet)
+            ? uf8::bindings::getUf1SoftBankDynamicFor(
+                  bankNo,
+                  static_cast<int>(uf8::bindings::bankModifierSnapshot()),
+                  &dawDynOwnsSet)
             : uf8::bindings::DynamicBankKind::None;
         const bool dawDyn = dawDynKind != uf8::bindings::DynamicBankKind::None;
         MediaTrack* dawDynTr = dawDyn ? uf1FocusedTrack_() : nullptr;
@@ -28766,7 +28793,7 @@ void uf1PaintChannel_()
                 const int mIdxDyn =
                     static_cast<int>(uf8::bindings::bankModifierSnapshot());
                 dawSlot = uf8::bindings::getUf1SoftBankSlot(bankNo, i);
-                if (setOwnsDynamicKey_(dawSlot, mIdxDyn)) {
+                if (!dawDynOwnsSet && setOwnsDynamicKey_(dawSlot, mIdxDyn)) {
                     const auto& sp = dawSlot.shortPress[mIdxDyn];
                     label = !sp.label.empty()
                           ? sp.label
@@ -30889,18 +30916,25 @@ void pushZonesForVisibleSlots()
             uf8::bindings::DynamicBankKind dynKind =
                 uf8::bindings::DynamicBankKind::None;
             DynSlotInfo dynInfo;
+            bool dynOwnsSet = false;
             if (curQuick >= 0)
-                dynKind = uf8::bindings::getSubBankDynamic(
-                    curLayer, curQuick, curSub, uf8::bindings::kDynamicKindSet);
+                dynKind = uf8::bindings::getSubBankDynamicFor(
+                    curLayer, curQuick, curSub,
+                    static_cast<int>(uf8::bindings::bankModifierSnapshot()),
+                    &dynOwnsSet);
             // ⇨ AN ASSIGNED KEY IN THE HELD SET BEATS THE COMPUTED ONE, in the
             // paint as well as in the press. The dispatcher learned this with
             // 1a602ba and this painter did not, so a Shift key you had assigned
             // fired your action while the LCD went on showing the FX / colour /
             // group name it computed (Frank 2026-08-25). From here on the key is
             // an ordinary set slot: same label rule, same LED, same colour.
+            // Only where the set is LOOKING at Plain's bank. A set with a bank of
+            // its own is that bank, exactly as Plain is, and its stored slots sit
+            // idle the same way.
             const bool dynSetOwns =
                 (curQuick >= 0
                  && dynKind != uf8::bindings::DynamicBankKind::None
+                 && !dynOwnsSet
                  && setOwnsDynamicKey_(
                         uf8::bindings::getUserQuickSlot(
                             curLayer, curQuick, curSub, s),
@@ -44721,7 +44755,9 @@ void registerBindingHandlers()
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing || g_uf1MeterView.load()) return;
             if (g_uf1ChannelSubMode.load() != 1) return;      // DAW mode only
-            if (uf8::bindings::getUf1SoftBankDynamic(g_uf1SoftBank.load(), uf8::bindings::kDynamicKindSet)
+            if (uf8::bindings::getUf1SoftBankDynamicFor(
+                    g_uf1SoftBank.load(),
+                    static_cast<int>(uf8::bindings::bankModifierSnapshot()))
                 == uf8::bindings::DynamicBankKind::None) return;
             const int cnt = std::max(1, g_uf1DynBankPageCount.load());
             if (cnt < 2) return;

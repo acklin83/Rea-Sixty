@@ -1109,9 +1109,9 @@ There is no Cmd or Ctrl set. The surface carries one modifier key and no more, s
 
 Each set is a **full bank**, not just a second list of actions: its own actions, its own labels, its own LED colours and its own presets. Saving a preset captures the set you are on; recalling one lands on the set you are on, so a preset captured on Plain can be recalled into Shift.
 
-**The Dynamic bank setting is the one thing the two sets share, and it lives on Plain.** Switch a bank to a dynamic kind and the whole bank becomes dynamic, whichever set you were looking at. The kind is a property of the bank, not of one set.
+**Each set can be its own dynamic bank.** Pick a kind with the Modifier row on Plain and Plain's bank becomes dynamic; pick one on Shift and that set becomes a bank of its own, so FX on Plain and Track Colours on Shift is a thing you can build. A set left on *Off (take Plain's bank)* does exactly that, which is how a set behaves out of the box.
 
-When a bank is **dynamic** its keys come from the focused track, and Shift, Cmd, Ctrl and long-press run the FX-key gestures. The Shift set still exists over a dynamic bank: a key you assign there fires instead of that key's gesture, and a key you leave empty keeps the gesture, so nothing you were already using goes away.
+When a bank is **dynamic** its keys come from the focused track. On Plain's bank the modifiers still run the FX-key gestures, except on a key you assigned in that set, which fires instead, so nothing you were already using goes away. A set with a bank of **its own** carries no gestures: holding the modifier is how you reached that bank, so pressing a key there is that bank's own push. A long press is still a long press either way.
 
 **Clear whole key** does what it says: label, behaviour, LED and both sets. To empty a single set, pick *None (disabled)* in its action picker.
 
@@ -1161,7 +1161,7 @@ Layer 1's Q1 and Q2 are driven by the plug-in and carry no user slots, so they c
 
 The UF1's ten soft-key banks take the same setting, in **Settings → Bindings → UF1**. There a whole bank is dynamic rather than a Sub-Bank, its four keys show four items at a time, and a **long press** on the UF1's `◄ ►` keys pages through them. A long press on a dynamic key itself fires half a second after you press it, under the finger, the same as every other long press on the surface. (`5-8` is always the DAW channel group, never the bank.) The FX-key gestures are global, so the five you set on either surface drive both.
 
-A dynamic bank keeps its Shift set on the UF1 too: assign a key there and it fires instead of that key's gesture, leave it empty and the gesture runs. The four slot editors stay reachable while a set is picked, which is where you put it. On the UF8, dynamic banks are inactive while UF8 Plug-in Mode is engaged.
+The UF1's banks work the same way, set for set: a set can take Plain's bank or carry one of its own, and while it takes Plain's, the four slot editors stay reachable because that is where you put the key that beats the gesture. On the UF8, dynamic banks are inactive while UF8 Plug-in Mode is engaged.
 
 **Track colours and Parameter Groups apply to every selected track,** not just the focused one, so you can colour or group a whole selection with one press. The FX bank always acts on the focused track alone.
 

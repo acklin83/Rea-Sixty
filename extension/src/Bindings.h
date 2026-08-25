@@ -419,16 +419,17 @@ constexpr int kModifierCount = 4;
 // is the generic per-button matrix and every ordinary key still uses it.
 constexpr int kSoftKeyModifierSets = 2;
 
-// ⇨ A DYNAMIC BANK'S KIND LIVES ON THE PLAIN SET ONLY.
-// Holding a modifier over a dynamic bank runs that bank's FX-key gesture
-// (Push / +Shift / +Cmd / +Ctrl / long → reasixty_fxBankOp); it does NOT swap in
-// a modifier set. The two readings of the same key cannot both win, and Frank
-// chose the gestures. So every RUNTIME path — dispatch and render alike — must
-// ask for the kind with this constant, never with bankModifierSnapshot():
-// reading it from the live snapshot answered "not dynamic" while Shift was
-// down, which sent the press into the empty static Shift slot and blanked the
-// keys (regression 2026-08-18). The editor writes the kind on Plain too, so a
-// bank cannot be dynamic on one set and static on the other.
+// ⇨ PLAIN IS WHERE A SET'S DYNAMIC KIND FALLS BACK TO, not where it must live.
+// Each set can carry its own kind, and a set that carries None inherits Plain's
+// (Frank 2026-08-25: "eine dyn bank auf plain und eine andere auf shift").
+// ⛔ NEVER read the raw dynamic[mod] at runtime — use getSubBankDynamicFor /
+// getUf1SoftBankDynamicFor, which apply that fallback. Reading the raw array
+// with the live snapshot answered "not dynamic" while Shift was down, which sent
+// the press into the empty static Shift slot and blanked the keys (regression
+// 2026-08-18); the fallback is exactly what stops that from coming back, because
+// a set with no kind of its own still sees Plain's bank and its FX gestures.
+// This constant is that fallback set, and the index the editor writes when you
+// pick a kind while the Modifier row is on Plain.
 constexpr int kDynamicKindSet = 0;
 
 struct Binding {
@@ -526,14 +527,9 @@ struct UserQuickSubBank {
     // second list of actions — presets and the dynamic kind used to hang off the
     // sub-bank and know nothing about modifiers, which made the whole thing fall
     // apart at its edges (Frank 2026-08-18).
-    // ⛔ …but the RUNTIME only ever reads index kDynamicKindSet (= Plain), so a
-    // bank is dynamic or static as a whole. Read that constant's comment for why
-    // (the modifiers over a dynamic bank are already its FX-key gestures). This
-    // line used to claim "Plain can be static while Shift is an FX bank", which
-    // the code has never done: the editor writes the kind onto Plain from either
-    // set, and a forum user read the resulting behaviour as a bug because the
-    // manual repeated the same wrong sentence (2026-08-25). The array keeps its
-    // second slot so the on-disk format does not move.
+    // A set with None here has no kind of its OWN and inherits Plain's; only
+    // getSubBankDynamicFor / getUf1SoftBankDynamicFor may be used at runtime, so
+    // that inheritance is applied in exactly one place (2026-08-25).
     DynamicBankKind dynamic[kSoftKeyModifierSets] = {};   // non-None → computed
 };
 // LED appearance override for one Sub-Bank selector button (V-POT or
@@ -905,6 +901,14 @@ void       setSubBankLed(int layer, int quick, int subBank, int mod,
 // its 8 static slots are then ignored. Out-of-range returns None /
 // ignores writes.
 DynamicBankKind getSubBankDynamic(int layer, int quick, int subBank, int mod);
+// Runtime resolvers: the set's own kind, else Plain's. *ownsSet (optional) tells
+// the caller the kind came from the set itself, which is the difference between
+// "this set IS this bank" (press = that bank's own push) and "this set is
+// looking at Plain's bank" (press = that bank's FX gesture). See kDynamicKindSet.
+DynamicBankKind getSubBankDynamicFor(int layer, int quick, int subBank,
+                                     int mod, bool* ownsSet = nullptr);
+DynamicBankKind getUf1SoftBankDynamicFor(int bank, int mod,
+                                         bool* ownsSet = nullptr);
 void            setSubBankDynamic(int layer, int quick, int subBank, int mod,
                                   DynamicBankKind kind);
 

@@ -1105,6 +1105,18 @@ static const char* dynKindLabel_(uf8::bindings::DynamicBankKind k)
     }
 }
 
+// The same label, but "Off" reads differently on a modifier set: there it does
+// not mean static slots, it means this set has no bank of its own and takes
+// Plain's (getSubBankDynamicFor). Naming both "Off (static slots)" made the
+// choice look like it turned the whole bank off.
+static const char* dynKindLabelForSet_(uf8::bindings::DynamicBankKind k,
+                                       int modIdx)
+{
+    if (k == uf8::bindings::DynamicBankKind::None && modIdx != 0)
+        return "Off (take Plain's bank)";
+    return dynKindLabel_(k);
+}
+
 // Same, short enough for a scribble cell (the strip LCDs are ~72 px wide).
 static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
 {
@@ -1415,9 +1427,9 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
         const auto editDynKind =
             (!editIsSslCsBc && editQuick >= 0 && editQuick <= 2
              && editSubBank >= 0 && editSubBank <= 5)
-                ? uf8::bindings::getSubBankDynamic(activeLayer, editQuick,
-                                                   editSubBank,
-                                                   uf8::bindings::kDynamicKindSet)
+                ? uf8::bindings::getSubBankDynamicFor(activeLayer, editQuick,
+                                                      editSubBank,
+                                                      g_slotEditModIdx)
                 : uf8::bindings::DynamicBankKind::None;
         if (editDynKind != uf8::bindings::DynamicBankKind::None) {
             scribble = dynKindShort_(editDynKind);
@@ -1715,8 +1727,8 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
             // cell to find that out, so a bank could look like eight editable
             // slots and be none (Frank 2026-08-18). Drawn as a filled triangle
             // in the top-right corner, clear of both rings.
-            if (uf8::bindings::getSubBankDynamic(activeLayer, editQuick, b.idx,
-                                                 uf8::bindings::kDynamicKindSet)
+            if (uf8::bindings::getSubBankDynamicFor(activeLayer, editQuick,
+                                                    b.idx, g_slotEditModIdx)
                 != uf8::bindings::DynamicBankKind::None) {
                 ImGui_DrawList_AddTriangleFilled(c.dl,
                     c.ox + b.x + b.w - 7, c.oy + b.y + 1,
@@ -2595,7 +2607,7 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     // Plain's stored names no matter what the editor or the bank was set to
     // (Frank 2026-08-18).
     const auto uf1DynKind =
-        getUf1SoftBankDynamic(uf1Bank, uf8::bindings::kDynamicKindSet);
+        getUf1SoftBankDynamicFor(uf1Bank, g_slotEditModIdx);
     for (int i = 0; i < 4; ++i) {
         std::string lbl;
         if (uf1DynKind != DynamicBankKind::None) {
@@ -4922,8 +4934,16 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     // this is the UF8 half it never got. The combo is repeated here on purpose,
     // so turning the bank back to static does not require finding the other page.
     {
+        // TWO answers, both needed: what the surface will DO on the set being
+        // edited (own kind, else Plain's), and what this set owns ITSELF, which
+        // is what the combo edits. Showing the inherited kind in the combo would
+        // make "Off" look like a no-op.
+        bool dynOwn = false;
         const DynamicBankKind dynKind =
-            getSubBankDynamic(editLayer, qIdx, sbIdx, kDynamicKindSet);
+            getSubBankDynamicFor(editLayer, qIdx, sbIdx, g_slotEditModIdx,
+                                 &dynOwn);
+        const DynamicBankKind dynMine =
+            getSubBankDynamic(editLayer, qIdx, sbIdx, g_slotEditModIdx);
         if (dynKind != DynamicBankKind::None) {
             char note[200];
             snprintf(note, sizeof(note),
@@ -4940,44 +4960,56 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                         "Shift / Cmd / Ctrl / long-press run the FX-key "
                         "gestures instead. They are set on the Sub-Bank cell.");
                 }
+            } else if (dynOwn) {
+                ImGui_TextDisabled(ctx,
+                    "This set has a bank of its own, so its 8 keys come from "
+                    "the focused track too and this slot never fires.");
             } else {
                 // Since 1a602ba a set is not dead over a dynamic bank: what you
                 // put here fires instead of that key's gesture, and what you
                 // leave empty keeps it. The old wording said the slot never
                 // fires, which is now only true of Plain.
                 ImGui_TextDisabled(ctx,
-                    "On Plain. What you assign in this set fires instead of "
-                    "this key's FX gesture; leave it empty and the gesture "
-                    "runs as before.");
+                    "Inherited from Plain. What you assign in this set fires "
+                    "instead of this key's FX gesture; leave it empty and the "
+                    "gesture runs as before.");
             }
             ImGui_Spacing(ctx);
             ImGui_SetNextItemWidth(ctx, 260.0);
+            // The combo edits THIS SET's own kind (dynMine), and on a set the
+            // empty choice means "follow Plain", not "static".
             if (ImGui_BeginCombo(ctx, "Dynamic bank##uqslot_dyn",
-                                 dynKindLabel_(dynKind), /*flags*/ nullptr)) {
+                                 dynKindLabelForSet_(dynMine,
+                                                     g_slotEditModIdx),
+                                 /*flags*/ nullptr)) {
                 static const DynamicBankKind kKinds[] = {
                     DynamicBankKind::None,        DynamicBankKind::FxBank,
                     DynamicBankKind::ParamGroups, DynamicBankKind::TrackColours,
                     DynamicBankKind::Favourites,
                 };
                 for (const auto k : kKinds) {
-                    bool sel = (k == dynKind);
-                    if (ImGui_Selectable(ctx, dynKindLabel_(k), &sel,
+                    bool sel = (k == dynMine);
+                    if (ImGui_Selectable(ctx,
+                                         dynKindLabelForSet_(
+                                             k, g_slotEditModIdx),
+                                         &sel,
                                          /*flags*/ nullptr,
                                          /*size_w*/ nullptr,
                                          /*size_h*/ nullptr)) {
-                        // ⚠ kDynamicKindSet, NOT the picked set: the bank's
-                        // kind lives on Plain and every runtime path reads it
-                        // there. Writing it to the Shift set stored a value
-                        // nothing ever reads, so the combo did nothing at all
-                        // while the picker was off Plain. The Sub-Bank cell's
-                        // copy of this combo had it right.
                         setSubBankDynamic(editLayer, qIdx, sbIdx,
-                                          kDynamicKindSet, k);
+                                          g_slotEditModIdx, k);
                     }
                 }
                 ImGui_EndCombo(ctx);
             }
-            return;
+            // ⇨ THE SLOTS ARE ONLY DEAD WHERE THE BANK IS THIS SET'S OWN.
+            // A set that merely inherits Plain's bank still fires what you put
+            // in it (setOwnsDynamicKey_), so hiding its editor would hide the
+            // only place to put it.
+            if (g_slotEditModIdx == 0 || dynOwn) return;
+            ImGui_Spacing(ctx);
+            ImGui_Separator(ctx);
+            ImGui_Spacing(ctx);
         }
     }
 
@@ -5665,23 +5697,31 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
               reasixty_sp("Track Colours", "Track Colors") },
             { DynamicBankKind::Favourites,   "CS / BC Favourites" },
         };
+        // This set's OWN kind: the combo is where you give a set a bank, and on a
+        // set the empty choice means "take Plain's", not "static".
         const DynamicBankKind curKind =
-            getSubBankDynamic(editLayer, engagedQ, sbIdx, kDynamicKindSet);
-        const char* curDynLabel = kDynOpts[0].label;
+            getSubBankDynamic(editLayer, engagedQ, sbIdx, g_slotEditModIdx);
+        const char* curDynLabel =
+            dynKindLabelForSet_(DynamicBankKind::None, g_slotEditModIdx);
         for (const auto& o : kDynOpts)
             if (o.kind == curKind) curDynLabel = o.label;
+        if (curKind == DynamicBankKind::None)
+            curDynLabel = dynKindLabelForSet_(curKind, g_slotEditModIdx);
 
         ImGui_SetNextItemWidth(ctx, 260.0);
         if (bankFullyFree
             && ImGui_BeginCombo(ctx, "##dynbank", curDynLabel, /*flags*/ nullptr)) {
             for (const auto& o : kDynOpts) {
                 bool sel = (o.kind == curKind);
-                if (ImGui_Selectable(ctx, o.label, &sel,
+                if (ImGui_Selectable(ctx,
+                                     dynKindLabelForSet_(o.kind,
+                                                         g_slotEditModIdx),
+                                     &sel,
                                      /*flags*/ nullptr,
                                      /*size_w*/ nullptr,
                                      /*size_h*/ nullptr)) {
                     setSubBankDynamic(editLayer, engagedQ, sbIdx,
-                                      kDynamicKindSet, o.kind);
+                                      g_slotEditModIdx, o.kind);
                 }
             }
             ImGui_EndCombo(ctx);
@@ -6553,11 +6593,12 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         // zugewiesen auch kein shift möglich. muss doch möglich sein?").
         // The three non-FX kinds (colours, groups, favourites) never had
         // gestures on Shift in the first place, so there the set is simply free.
+        bool uf8SubBankDynOwn = false;
         const bool uf8SubBankIsDyn =
             s_editQuick >= 0
-            && uf8::bindings::getSubBankDynamic(
+            && uf8::bindings::getSubBankDynamicFor(
                    s_editLayer, s_editQuick, s_editSubBank,
-                   uf8::bindings::kDynamicKindSet)
+                   g_slotEditModIdx, &uf8SubBankDynOwn)
                != uf8::bindings::DynamicBankKind::None;
         drawBankLayerRow_(ctx, "uf8bank", &g_slotEditModIdx);
         ImGui_TextDisabled(ctx,
@@ -6565,10 +6606,13 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             "so you can edit it. Shift = the FINE key. While this pane is "
             "open the surface shows and fires the set picked here.");
         if (uf8SubBankIsDyn && g_slotEditModIdx != 0) {
-            ImGui_TextDisabled(ctx,
-                "This bank is dynamic on Plain. A key you assign in this set "
-                "fires instead of that key's FX gesture; one you leave empty "
-                "keeps the gesture.");
+            ImGui_TextDisabled(ctx, uf8SubBankDynOwn
+                ? "This set is a dynamic bank of its own. Its 8 keys come from "
+                  "the focused track and the slots below are idle."
+                : "This bank is dynamic on Plain and this set takes it. A key "
+                  "you assign in this set fires instead of that key's FX "
+                  "gesture; one you leave empty keeps the gesture. Give the "
+                  "set a bank of its own in the slot editor below.");
         }
         ImGui_Spacing(ctx);
         ImGui_Separator(ctx);
@@ -6661,9 +6705,10 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         // picture: the gesture is what happens where the set is EMPTY. Assign
         // something and it fires instead; leave it empty and the gesture runs as
         // it always has, so nobody loses one they were using.
+        bool uf1BankDynOwn = false;
         const bool uf1BankIsDyn =
-            uf8::bindings::getUf1SoftBankDynamic(
-                reasixty_uf1SoftBank(), uf8::bindings::kDynamicKindSet)
+            uf8::bindings::getUf1SoftBankDynamicFor(
+                reasixty_uf1SoftBank(), g_slotEditModIdx, &uf1BankDynOwn)
             != uf8::bindings::DynamicBankKind::None;
         drawBankLayerRow_(ctx, "uf1bank", &g_slotEditModIdx);
         ImGui_TextDisabled(ctx,
@@ -6671,10 +6716,12 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             "so you can edit it. Shift = the UF1 SHIFT key. While this pane "
             "is open the surface shows and fires the set picked here.");
         if (uf1BankIsDyn && g_slotEditModIdx != 0) {
-            ImGui_TextDisabled(ctx,
-                "This bank is dynamic on Plain. A key you assign in this set "
-                "fires instead of that key's FX gesture; one you leave empty "
-                "keeps the gesture.");
+            ImGui_TextDisabled(ctx, uf1BankDynOwn
+                ? "This set is a dynamic bank of its own. Its 4 keys come from "
+                  "the focused track and the slots below are idle."
+                : "This bank is dynamic on Plain and this set takes it. A key "
+                  "you assign in this set fires instead of that key's FX "
+                  "gesture; one you leave empty keeps the gesture.");
         }
         ImGui_Spacing(ctx);
 
@@ -6695,12 +6742,16 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
               reasixty_sp("Track Colours", "Track Colors") },
                 { DynamicBankKind::Favourites,   "CS / BC Favourites" },
             };
+            // This set's OWN kind — "Off" on a set means "take Plain's bank".
             const DynamicBankKind curKind =
-                uf8::bindings::getUf1SoftBankDynamic(
-                    uf1Bank, uf8::bindings::kDynamicKindSet);
-            const char* curLabel = kUf1DynOpts[0].label;
+                uf8::bindings::getUf1SoftBankDynamic(uf1Bank,
+                                                     g_slotEditModIdx);
+            const char* curLabel =
+                dynKindLabelForSet_(DynamicBankKind::None, g_slotEditModIdx);
             for (const auto& o : kUf1DynOpts)
                 if (o.kind == curKind) curLabel = o.label;
+            if (curKind == DynamicBankKind::None)
+                curLabel = dynKindLabelForSet_(curKind, g_slotEditModIdx);
 
             ImGui_Text(ctx, "Dynamic bank");
             ImGui_SetNextItemWidth(ctx, 260.0);
@@ -6708,12 +6759,15 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                                  /*flags*/ nullptr)) {
                 for (const auto& o : kUf1DynOpts) {
                     bool sel = (o.kind == curKind);
-                    if (ImGui_Selectable(ctx, o.label, &sel,
+                    if (ImGui_Selectable(ctx,
+                                         dynKindLabelForSet_(
+                                             o.kind, g_slotEditModIdx),
+                                         &sel,
                                          /*flags*/ nullptr,
                                          /*size_w*/ nullptr,
                                          /*size_h*/ nullptr)) {
                         uf8::bindings::setUf1SoftBankDynamic(
-                            uf1Bank, uf8::bindings::kDynamicKindSet, o.kind);
+                            uf1Bank, g_slotEditModIdx, o.kind);
                     }
                 }
                 ImGui_EndCombo(ctx);
@@ -6771,12 +6825,12 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                     drawTrackColourPalette_(ctx);
                 }
             }
-            // ⇨ AND THE SLOT EDITOR STAYS REACHABLE ON A DYNAMIC BANK, as long
-            // as a modifier set is picked. On Plain the four slots really are
-            // dead text there, which is why they were hidden; on a set they are
-            // the only place to put the action that beats the gesture, so hiding
-            // them left the row you can now pick with nothing to fill it.
-            if (curKind == DynamicBankKind::None || g_slotEditModIdx != 0) {
+            // ⇨ THE SLOTS ARE DEAD ONLY WHERE THIS SET IS ITSELF THE BANK.
+            // curKind is the set's OWN kind, so None covers both "static bank"
+            // and "this set takes Plain's bank" — and in the second case the
+            // slots are exactly where you put the action that beats the gesture,
+            // so the editor has to be reachable there.
+            if (curKind == DynamicBankKind::None) {
                 drawUf1SoftBankSlotEditor_(ctx, uf1Bank, slotIdx);
             }
         }
