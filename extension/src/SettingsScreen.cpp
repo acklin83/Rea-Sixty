@@ -1450,17 +1450,25 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
             const char* const* el =
                 reasixty_softkeyStockLabels(editDomain, editSubBank);
             const char* stock = (el && el[i]) ? el[i] : "";
-            if (stock && *stock) {
-                // SSL-occupied slot: per-binding override wins, else stock.
+            if (stock && *stock && g_slotEditModIdx == 0) {
+                // SSL-occupied slot on PLAIN: per-binding override wins, else
+                // the stock parameter name. This is the plug-in's own key.
                 const auto bd =
                     uf8::bindings::getBinding(activeLayer, kStripTsk[i]);
                 const auto& sp = bd.shortPress[
                     static_cast<int>(uf8::bindings::Modifier::Plain)];
                 scribble = !sp.label.empty() ? sp.label : std::string(stock);
             } else {
-                // Free SSL slot → show the user's own action assigned at
-                // (L0, editQuick, editSubBank, i). Matches the runtime
-                // fall-through (Frank 2026-06-23).
+                // ⇨ Occupied OR free, once a modifier set is picked this is a
+                // user slot and the preview has to say so. It showed the stock
+                // SSL name on every set, so choosing Shift changed nothing on
+                // screen and the whole feature looked absent (Frank 2026-08-25:
+                // "bei SSL Banks weiterhin kein Shift möglich"). The device and
+                // the dispatcher were already set-aware; this panel was the last
+                // one reading Plain outright.
+                // The user's own action at (L0, editQuick, editSubBank, i),
+                // which is what the runtime dispatches here (2026-06-23 for the
+                // free slots, 2026-08-25 for the modifier sets on every slot).
                 const auto slot = uf8::bindings::getUserQuickSlot(
                     0, editQuick, editSubBank, i);
                 // Free SSL slots carry the modifier sets too, so preview the
@@ -6471,24 +6479,33 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         ImGui_Spacing(ctx);
         // The bank's two sets. Holding the modifier on the hardware shows
         // exactly what picking it here shows.
-        // ⇨ UNLESS THE ENGAGED SUB-BANK IS DYNAMIC — then there are no sets to
-        // pick between and the modifiers run the FX-key gestures instead. Same
-        // reasoning as the UF1 bank editor below.
+        // ⇨ A DYNAMIC BANK HAS SETS TOO, and used to have the row taken away.
+        // The reasoning was that the modifiers over a dynamic bank already run
+        // the FX-key gestures, which is true and is not the whole picture: the
+        // gesture only exists where you left the set EMPTY. Assign something to
+        // the Shift slot and it fires; leave it empty and the gesture runs, as
+        // it always has. Nobody loses a gesture they were using, and the sets
+        // stop being unreachable (Frank 2026-08-25: "wenn dynamic bank
+        // zugewiesen auch kein shift möglich. muss doch möglich sein?").
+        // The three non-FX kinds (colours, groups, favourites) never had
+        // gestures on Shift in the first place, so there the set is simply free.
         const bool uf8SubBankIsDyn =
             s_editQuick >= 0
             && uf8::bindings::getSubBankDynamic(
                    s_editLayer, s_editQuick, s_editSubBank,
                    uf8::bindings::kDynamicKindSet)
                != uf8::bindings::DynamicBankKind::None;
-        if (uf8SubBankIsDyn) {
-            g_slotEditModIdx = 0;
-        } else {
-            drawBankLayerRow_(ctx, "uf8bank", &g_slotEditModIdx);
+        drawBankLayerRow_(ctx, "uf8bank", &g_slotEditModIdx);
+        ImGui_TextDisabled(ctx,
+            "Follows the modifier you hold, and stays there when you let go "
+            "so you can edit it. Shift = the FINE key.");
+        if (uf8SubBankIsDyn && g_slotEditModIdx != 0) {
             ImGui_TextDisabled(ctx,
-                "Follows the modifier you hold, and stays there when you let go "
-                "so you can edit it. Shift = the FINE key.");
-            ImGui_Spacing(ctx);
+                "This bank is dynamic on Plain. A key you assign in this set "
+                "fires instead of that key's FX gesture; one you leave empty "
+                "keeps the gesture.");
         }
+        ImGui_Spacing(ctx);
         ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
     }

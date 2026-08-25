@@ -21329,7 +21329,27 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     const auto dk =
                         uf8::bindings::getSubBankDynamic(
                             layer, aq, sb, uf8::bindings::kDynamicKindSet);
-                    if (dk != uf8::bindings::DynamicBankKind::None) {
+                    // ⇨ ON A DYNAMIC BANK, AN ASSIGNED MODIFIER SLOT WINS OVER
+                    // THE FX GESTURE. Holding a modifier here used to go
+                    // straight to the gesture (Push / +Shift / +Cmd / +Ctrl /
+                    // Long → reasixty_fxBankOp) with no way to put your own
+                    // action on it. Try the stored slot first while a modifier
+                    // is held: dispatchUserQuickSlot returns false on an empty
+                    // one, so a set you never filled still runs its gesture,
+                    // exactly as before, and only what you assigned changes
+                    // (Frank 2026-08-25). Plain is untouched — that is the
+                    // bank's own push, and the dynamic kind lives on Plain.
+                    const bool modHeld =
+                        uf8::bindings::bankModifierSnapshot()
+                            != uf8::bindings::Modifier::Plain;
+                    bool tookSlot = false;
+                    if (dk != uf8::bindings::DynamicBankKind::None && modHeld) {
+                        tookSlot = uf8::bindings::dispatchUserQuickSlot(
+                            layer, aq, sb, id - 0x18, pressed);
+                    }
+                    if (tookSlot) {
+                        // handled by the user's slot
+                    } else if (dk != uf8::bindings::DynamicBankKind::None) {
                         dispatchDynamicPress_(dk, id - 0x18, pressed);
                     } else {
                         uf8::bindings::dispatchUserQuickSlot(
