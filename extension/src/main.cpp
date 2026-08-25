@@ -6746,46 +6746,38 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
     }
 }
 
-// A key colour to the UF1's 4-bit LED nibbles, HUE-PRESERVING, in both states.
+// A key colour to the UF1's 4-bit LED nibbles, in both states.
 //
-// ⛔ NEVER DIM BY SCALING THE 8-BIT CHANNELS. uf1::quantiseChannel applies a 2.2
-// gamma, so a quartered channel collapses to nibble 0 or 1 and the hue is gone
-// with it. The Track-Colours bank's own factory palette proved it: red, orange
-// and yellow all landed on (r1,g0,b0) and green on (0,0,0), i.e. "the three ones
-// are red and the last one is unlit" (forum report 2026-08-25). Dimming has to
-// happen in NIBBLE space, where a proportional cut keeps the ratios and a
-// non-zero channel can be floored at 1 instead of vanishing.
+// ⛔ DO NOT NORMALISE THE BRIGHTNESS. A first version pulled every colour's
+// brightest channel up to full before quantising, on the theory that a mid-tone
+// otherwise lands on a dim nibble. It does, and that is correct: BROWN IS DARK
+// ORANGE, and its darkness is the whole of its brownness. Scaled up it came out
+// light pink, and the palette's blue and violet, once scaled and then squeezed
+// into four levels, landed on the same nibbles (Frank 2026-08-25: "Blau und
+// Violet sind GENAU GLEICH und braun ist irgendein hellpink"). The colour the
+// user picked is the colour to show, as well as four bits per channel can.
 //
-// Saturating first is the same move the SEL LED has made since 2026-08-05 and
-// for the same reason: a mid-tone colour otherwise quantises to a dim nibble, so
-// the palette's green (0x43A047, max channel 160) read washed-out next to its
-// yellow (0xFDD835, max 253) even at full brightness. Hue is the ratio between
-// channels; scaling all three by the same factor leaves it untouched.
+// ⛔ AND DO NOT DIM IN 8-BIT SPACE EITHER, which is the mistake before that:
+// uf1::quantiseChannel applies a 2.2 gamma, so scaling the bytes down first
+// collapses distinct colours onto the same nibble. Red, orange and yellow all
+// became one near-black red and green went out entirely. Dimming happens after
+// quantising, in nibble space, where halving is exactly halving.
+//
+// Which leaves the honest arithmetic: quantise as-is, and for the resting state
+// halve the nibbles with a floor of 1 so a channel that is present never rounds
+// away to nothing. A dark colour reads dark. That is the palette, not a bug.
 static void uf1KeyColourNibbles_(uint32_t rgb, bool bright,
                                  uint8_t& g4, uint8_t& r4, uint8_t& b4)
 {
-    int r = static_cast<int>((rgb >> 16) & 0xFF);
-    int g = static_cast<int>((rgb >> 8)  & 0xFF);
-    int b = static_cast<int>( rgb        & 0xFF);
-    const int mx = std::max({r, g, b});
-    if (mx <= 0) { g4 = r4 = b4 = 0; return; }        // black stays black (dark key)
-    r = r * 255 / mx; g = g * 255 / mx; b = b * 255 / mx;
-    int rn = uf1::quantiseChannel(static_cast<uint8_t>(r));
-    int gn = uf1::quantiseChannel(static_cast<uint8_t>(g));
-    int bn = uf1::quantiseChannel(static_cast<uint8_t>(b));
+    const uint8_t r = static_cast<uint8_t>((rgb >> 16) & 0xFF);
+    const uint8_t g = static_cast<uint8_t>((rgb >> 8)  & 0xFF);
+    const uint8_t b = static_cast<uint8_t>( rgb        & 0xFF);
+    int rn = uf1::quantiseChannel(r);
+    int gn = uf1::quantiseChannel(g);
+    int bn = uf1::quantiseChannel(b);
     if (!bright) {
-        // Resting level, out of 15. The brightest channel lands here and the
-        // others follow proportionally, so every inactive key glows at the same
-        // level in its OWN colour — which is what makes a colour bank readable
-        // before you press anything.
-        constexpr int kDimTop = 4;
-        const int top = std::max({rn, gn, bn});       // >= 15 after saturating
-        auto cut = [&](int n) {
-            if (n <= 0) return 0;
-            const int v = (n * kDimTop + top / 2) / top;
-            return v < 1 ? 1 : v;                     // present, so never rounded away
-        };
-        rn = cut(rn); gn = cut(gn); bn = cut(bn);
+        auto half = [](int n) { return n <= 0 ? 0 : (n > 1 ? n / 2 : 1); };
+        rn = half(rn); gn = half(gn); bn = half(bn);
     }
     g4 = static_cast<uint8_t>(gn);
     r4 = static_cast<uint8_t>(rn);
