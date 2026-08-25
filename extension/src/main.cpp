@@ -21385,9 +21385,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // Free slot, or ANY held modifier set: Plain belongs to the
                 // plug-in wherever the plug-in has a parameter, every other set
                 // belongs to the user on every key (Frank 2026-08-25, "shift als
-                // mod für ALLE bänke öffnen"). dispatchUserQuickSlot returns
-                // false on an empty slot, so Shift over a key you never assigned
-                // still falls through to ssl_softkey exactly as before.
+                // mod für ALLE bänke öffnen").
                 const bool sslOwnsSlot = (v.linkIdx[slot] != softkey::kNoSlot);
                 const bool modHeld =
                     uf8::bindings::bankModifierSnapshot()
@@ -21396,6 +21394,16 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     const int q = isBc ? 1 : 0;   // Q2 = BC, Q1 = CS
                     if (uf8::bindings::dispatchUserQuickSlot(
                             0, q, bank, slot, pressed)) {
+                        handledNatively = true;
+                    } else if (modHeld) {
+                        // ⇨ A HELD SET OWNS THE KEY EVEN WHEN IT IS EMPTY.
+                        // This used to fall through to ssl_softkey so no gesture
+                        // would be lost, but since the row paints blank under a
+                        // held set (d43ff3d) that made the LCD say "nothing
+                        // here" while the press still moved the plug-in's focus.
+                        // Swallow it: an engaged user Quick has always eaten its
+                        // empty slots the same way (Frank 2026-08-25: "ja,
+                        // schluck das auch").
                         handledNatively = true;
                     }
                 }
