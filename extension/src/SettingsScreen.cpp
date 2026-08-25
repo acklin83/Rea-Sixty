@@ -6544,7 +6544,8 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         drawBankLayerRow_(ctx, "uf8bank", &g_slotEditModIdx);
         ImGui_TextDisabled(ctx,
             "Follows the modifier you hold, and stays there when you let go "
-            "so you can edit it. Shift = the FINE key.");
+            "so you can edit it. Shift = the FINE key. While this pane is "
+            "open the surface shows and fires the set picked here.");
         if (uf8SubBankIsDyn && g_slotEditModIdx != 0) {
             ImGui_TextDisabled(ctx,
                 "This bank is dynamic on Plain. A key you assign in this set "
@@ -6651,7 +6652,8 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             drawBankLayerRow_(ctx, "uf1bank", &g_slotEditModIdx);
             ImGui_TextDisabled(ctx,
                 "Follows the modifier you hold, and stays there when you let go "
-                "so you can edit it. Shift = the UF1 SHIFT key.");
+                "so you can edit it. Shift = the UF1 SHIFT key. While this pane "
+                "is open the surface shows and fires the set picked here.");
             ImGui_Spacing(ctx);
         }
 

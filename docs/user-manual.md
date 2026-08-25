@@ -569,7 +569,9 @@ picks which set you are looking at. Press SHIFT once to jump to the Shift set
 and press it again to come back to Plain, the same gesture the FX-Learn editor
 uses. Releasing never moves it, so you can edit the set you jumped to with the
 mouse. A set you left empty shows empty on the surface, it does not fall back to
-the Plain label.
+the Plain label. While the Bindings pane is open the surface follows the
+Modifier row rather than the key you are holding, so the four keys show and
+fire the set you are editing.
 
 There is no Cmd or Ctrl set, deliberately. The surface has exactly one modifier
 key, so those two could only come from the computer keyboard, where they already
@@ -1101,15 +1103,15 @@ When you click a Top-Soft-Key (or a Sub-Bank cell) in the schematic, a **Quick**
 
 Each slot carries a **Behavior** (*Momentary*, *Toggle* or *Hold*), the same setting a regular button has.
 
-Every Sub-Bank also holds **two sets of keys**: Plain and Shift. Holding the FINE key switches the whole row of eight, labels and all, and releasing returns to Plain. The **Modifier** row next to the Quick and Sub-Bank pickers chooses which set you are editing, and the scribble previews follow it. Like those two pickers it follows the hardware: press FINE to jump to the Shift set and press it again to come back to Plain. Releasing never moves it, so you can edit with the mouse. A set you left empty shows empty on the hardware, it does not borrow the Plain label.
+Every Sub-Bank also holds **two sets of keys**: Plain and Shift. Holding the FINE key switches the whole row of eight, labels and all, and releasing returns to Plain. The **Modifier** row next to the Quick and Sub-Bank pickers chooses which set you are editing, and the scribble previews follow it. Like those two pickers it follows the hardware: press FINE to jump to the Shift set and press it again to come back to Plain. Releasing never moves it, so you can edit with the mouse. A set you left empty shows empty on the hardware, it does not borrow the Plain label. **While the Bindings pane is open the surface follows the Modifier row** rather than the key you are holding: the eight keys show the set you are editing and a press fires that set, so what you see on the hardware is what you are working on. Close the pane or switch to another one and the surface goes back to following the held key.
 
 There is no Cmd or Ctrl set. The surface carries one modifier key and no more, so those two would have to come from the computer keyboard, where they already belong to the FX-Learn modifier layers.
 
 Each set is a **full bank**, not just a second list of actions: its own actions, its own labels, its own LED colours and its own presets. Saving a preset captures the set you are on; recalling one lands on the set you are on, so a preset captured on Plain can be recalled into Shift.
 
-**The Dynamic bank setting is the one thing the two sets share, and it lives on Plain.** Switch a bank to a dynamic kind and the whole bank becomes dynamic, whichever set you were looking at. That is not an oversight: over a dynamic bank the modifiers are already spoken for, because Shift, Cmd and Ctrl are three of the five FX-key gestures. One key cannot both run a gesture and swap in another set, so a bank is dynamic or static, never one of each.
+**The Dynamic bank setting is the one thing the two sets share, and it lives on Plain.** Switch a bank to a dynamic kind and the whole bank becomes dynamic, whichever set you were looking at. The kind is a property of the bank, not of one set.
 
-When a bank is **dynamic** its keys come from the focused track, and Shift, Cmd, Ctrl and long-press run the FX-key gestures instead.
+When a bank is **dynamic** its keys come from the focused track, and Shift, Cmd, Ctrl and long-press run the FX-key gestures. The Shift set still exists over a dynamic bank: a key you assign there fires instead of that key's gesture, and a key you leave empty keeps the gesture, so nothing you were already using goes away.
 
 **Clear whole key** does what it says: label, behaviour, LED and both sets. To empty a single set, pick *None (disabled)* in its action picker.
 
@@ -1159,7 +1161,7 @@ Layer 1's Q1 and Q2 are driven by the plug-in and carry no user slots, so they c
 
 The UF1's ten soft-key banks take the same setting, in **Settings → Bindings → UF1**. There a whole bank is dynamic rather than a Sub-Bank, its four keys show four items at a time, and a **long press** on the UF1's `◄ ►` keys pages through them. A long press on a dynamic key itself fires half a second after you press it, under the finger, the same as every other long press on the surface. (`5-8` is always the DAW channel group, never the bank.) The FX-key gestures are global, so the five you set on either surface drive both.
 
-While a bank is dynamic it has no Shift set: the modifiers run those FX-key gestures instead, so the modifier picker disappears from the editor. On the UF8, dynamic banks are inactive while UF8 Plug-in Mode is engaged.
+On the UF1 a dynamic bank has no Shift set: the modifiers run those FX-key gestures and nothing else, so the modifier picker disappears from that editor. The UF8's dynamic Sub-Banks keep theirs, as described above. On the UF8, dynamic banks are inactive while UF8 Plug-in Mode is engaged.
 
 **Track colours and Parameter Groups apply to every selected track,** not just the focused one, so you can colour or group a whole selection with one press. The FX bank always acts on the focused track alone.
 
