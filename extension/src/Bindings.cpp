@@ -4107,6 +4107,13 @@ Modifier bankModifierSnapshot()
     return (m == Modifier::Shift) ? Modifier::Shift : Modifier::Plain;
 }
 
+// Hardware only — see the header. The keyboard mirrors (g_mod*KbHeld) are
+// deliberately absent from this one read.
+Modifier surfaceModifierSnapshot()
+{
+    return g_modShiftHeld.load() ? Modifier::Shift : Modifier::Plain;
+}
+
 // Long-press slot resolution with PLAIN fallback. The arm records the
 // modifier held AT PRESS, so a long-press whose action lives only in the
 // Plain slot would resolve to an empty longPress[Shift] when the user
@@ -5638,133 +5645,651 @@ const char* builtinCategory(const std::string& n)
 
 // One sentence on what an action DOES, for the picker's tooltip and its search.
 //
-// The display name is a label, not an explanation, and for a fair number of
-// these that is not enough to act on: "8 sends of focused track" says nothing
-// about the eight FADERS being taken over, and a UF1-only user reading it had no
-// way to find out short of binding it and pressing (forum 2026-08-25, "is there
-// a place to read explanations for native actions"). The names cannot carry the
-// answer — they are one line on a hardware LCD.
+// The display name is a label, not an explanation. "8 sends of focused track"
+// says nothing about the eight FADERS being taken over, and a UF1-only user
+// reading it had no way to find out short of binding it and pressing (forum
+// 2026-08-25). The names cannot carry the answer: they are one line on a
+// hardware LCD.
 //
-// ⛔ EVERY LINE HERE IS READ OFF THE HANDLER, never off the name. An action
-// whose behaviour has not been read out of the code gets no entry: an empty
-// string means the tooltip stays away, which is honest, while a plausible
-// invention is worse than the name it replaces. The table is meant to grow one
-// verified line at a time.
+// ⛔ EVERY LINE HERE WAS READ OFF THE HANDLER, never off the name. That is the
+// whole cost of this table and the reason it is worth having. When you add a
+// builtin, open its registration and describe what the lambda does, including
+// what `param` means if it reads one. A plausible invention is worse than the
+// name it replaces, because the name at least does not claim to explain.
+//
+// Coverage is checked, not assumed: every registered builtin resolves here.
+// tools/check_builtin_docs.py walks main.cpp's registrations against this file
+// and fails on a gap, so a new action cannot ship without a line.
+struct BuiltinDoc { const char* name; const char* text; };
+
+// Exact names.
+static const BuiltinDoc kBuiltinDocs[] = {
+    { "flip",
+      "UF8/UC1. Faders and V-Pots swap jobs. Any fader touch in flight is "
+      "dropped so the release cannot write a pan value as a volume." },
+    { "pan_force",
+      "UF8/UC1. The V-Pots leave whatever they were doing and ride track "
+      "Pan. The escape hatch out of a cycle or REC mode." },
+    { "uf1_flip",
+      "UF1. Fader and V-Pot swap jobs: the fader takes Pan, or in Plugin "
+      "mode the parameter of the V-Pot you last used, and the knob above "
+      "it takes Volume." },
+    { "uf1_master",
+      "UF1. Puts the strip on the MASTER bus. The whole strip follows, "
+      "not just the fader." },
+    { "uf1_vpot_reset",
+      "UF1. Resets one channel V-Pot's parameter to its factory default. "
+      "Param 0 to 3 picks the pot. Channel view only." },
+    { "uf1_fine_toggle",
+      "UF1. Halves the V-Pot resolution for fine work. Follows the view: "
+      "Channel fines the four channel pots, Meter fines the meter pots." },
+    { "uf1_extender",
+      "UF1. Makes the UF1 the ninth strip of the UF8's bank instead of an "
+      "independent channel. Releases a Focus Set pin, the two are "
+      "mutually exclusive." },
+    { "uf1_extender_side",
+      "UF1. Whether the extender sits to the left or the right of the "
+      "UF8's eight." },
+    { "uf1_presets",
+      "UF1. Opens the preset browser for whichever plug-in the current "
+      "view resolves. Reads SSL's own library from disk, not REAPER's "
+      "preset list." },
+    { "uf1_time_display_step",
+      "UF1. Steps the big display's time format: Bars, then Time "
+      "(h:m:s:f), then Samples. The field flashes the name of the format "
+      "it just moved to." },
+    { "uf1_five_to_eight",
+      "UF1. DAW mode: swaps between tracks 1-4 and 5-8 of the window. "
+      "Sends mode: pages the window of four sends." },
+    { "uf1_sends_receives_toggle",
+      "UF1. Flips the routing view between the track's SENDS and its "
+      "RECEIVES. The window jumps back to the first group. Also on Shift "
+      "plus 5-8." },
+    { "uf1_bank_step",
+      "UF1. Moves the selection eight tracks at a time. Param sign picks "
+      "the direction." },
+    { "uf1_page_step",
+      "UF1. Steps the soft-key BANK in DAW mode, the plug-in's parameter "
+      "PAGE in Plugin mode, and the meter's page in Meter view. Param "
+      "sign picks the direction." },
+    { "uf1_dyn_bank_page",
+      "UF1. Pages WITHIN the active dynamic soft-key bank (the FX list, "
+      "the colours). Does nothing on a static or single-page bank, "
+      "deliberately, rather than moving something else." },
+    { "uf1_view_cycle",
+      "UF1. Steps through the four modes in order: Plugin, DAW, Meter, "
+      "Sends." },
+    { "ssl_strip_mode_toggle",
+      "UF8/UC1. The fader drives the SSL channel strip's own Fader Level "
+      "instead of REAPER's track volume." },
+    { "ssl_strip_mode_toggle_with_gui",
+      "UF8/UC1. As SSL Strip Mode, and opens the strip's plug-in window "
+      "with it." },
+    { "uf1_strip_mode_toggle",
+      "UF1. The fader drives the SSL channel strip's own Out-Gain instead "
+      "of REAPER's track volume." },
+    { "uf1_strip_mode_toggle_with_gui",
+      "UF1. As UF1 Strip Mode, and opens the strip's plug-in window with "
+      "it." },
+    { "uf8_plugin_mode_toggle",
+      "UF8. All eight strips become the controls of ONE learned plug-in "
+      "instead of eight tracks. Needs a plug-in that qualifies, or the "
+      "mode drops straight back out." },
+    { "uf8_plugin_mode_toggle_with_gui",
+      "UF8. As UF8 Plug-in Mode, and pops that plug-in's window on entry, "
+      "closing it on exit." },
+    { "uc1_outgain_fader_toggle",
+      "UC1. Switches the Out-Gain knob between the mapped strip parameter "
+      "and REAPER's track volume. Works on tracks with no channel strip "
+      "at all." },
+    { "restart",
+      "Re-opens the USB devices without the trip through REAPER's "
+      "Preferences. This restarts the DEVICES, not the extension: new "
+      "code still needs a REAPER restart." },
+    { "mixer_toggle",
+      "Opens or closes the Rea-Sixty Settings window." },
+    { "home",
+      "Clears every routing override at once and returns faders and "
+      "V-Pots to plain track volume and pan. Also drops the active Quick "
+      "on this layer." },
+    { "selection_mode_norm",
+      "Back to NORM: SEL selects, V-Pots pan. Always sets it, never "
+      "toggles, so it is a safe panic button." },
+    { "selection_mode_rec",
+      "SEL arms the track for recording and its LED shows the arm state. "
+      "Firing it again returns to NORM." },
+    { "selection_mode_rec_mon",
+      "SEL arms the track AND flips input monitoring. Firing it again "
+      "returns to NORM." },
+    { "selection_mode_auto",
+      "SEL colours by the track's automation mode and the V-Pot scrolls "
+      "through the modes. Leaving the mode reverts tracks the Selection "
+      "Set had armed." },
+    { "selection_mode_instance",
+      "Each strip's V-Pot walks EVERY FX on that strip's track. Push "
+      "toggles the active one's window. Called FX Cycle; the internal "
+      "name says instance for older config files." },
+    { "selection_mode_instance_cycle",
+      "Each strip's V-Pot walks only the SSL-mapped or learned instances "
+      "on that track, so Strip Mode and Plug-in Mode follow along. Does "
+      "nothing on a track with fewer than two." },
+    { "selection_mode_dynamount",
+      "The enabled robotic mic stands take over N strips: fader drives "
+      "distance or left-right, V-Pot nudges rotation. The rest stay "
+      "ordinary tracks." },
+    { "encoder_mode_dispatch",
+      "Runs whatever the Channel Encoder's current mode says. This is the "
+      "action the encoder itself carries; the modes below choose what it "
+      "does." },
+    { "encoder_nav",
+      "Channel Encoder selects the previous or next track. The home "
+      "position." },
+    { "encoder_nudge",
+      "Channel Encoder nudges the playhead. The step size follows "
+      "REAPER's own Nudge setting." },
+    { "encoder_focus",
+      "Channel Encoder acts as a mouse wheel under the cursor, so it "
+      "scrolls whatever you are pointing at." },
+    { "encoder_markers",
+      "Channel Encoder jumps to the previous or next marker." },
+    { "encoder_bank_by_1",
+      "Channel Encoder banks the surface one strip at a time instead of "
+      "eight." },
+    { "encoder_last_param",
+      "Channel Encoder drives the parameter you last touched, wherever it "
+      "lives." },
+    { "encoder_instance",
+      "Channel Encoder walks the SSL-mapped or learned instances on the "
+      "focused track." },
+    { "encoder_fx_cycle",
+      "Channel Encoder walks EVERY FX on the focused track, with no "
+      "instance filter." },
+    { "encoder_fx_scroll_all",
+      "As FX Cycle, but at the end of a track's chain it carries on into "
+      "the next track's." },
+    { "encoder_instance_scroll_all",
+      "As Instance Cycle, but at the end of a track's chain it carries on "
+      "into the next track's." },
+    { "encoder_fx_move",
+      "Channel Encoder moves the active FX up or down inside the focused "
+      "track's chain. Stops at the ends." },
+    { "encoder_cs_cycle",
+      "Channel Encoder steps the active Channel Strip through your "
+      "favourites, carrying shared values across each swap." },
+    { "encoder_bc_cycle",
+      "Channel Encoder steps the active Bus Compressor through your "
+      "favourites." },
+    { "encoder_fav_cycle",
+      "Channel Encoder steps through favourites of whichever class you "
+      "last worked on, Channel Strip or Bus Compressor." },
+    { "encoder_selset_cycle",
+      "Channel Encoder walks the Selection Sets that have something in "
+      "them, off included." },
+    { "select_relative",
+      "Encoder action. Selects the previous or next track." },
+    { "track_scroll",
+      "Encoder action. Scrolls the track view without changing the "
+      "selection." },
+    { "track_select_range",
+      "Encoder action. Extends the selection to the neighbouring track, "
+      "the way Shift with the arrow keys does." },
+    { "playhead_nudge",
+      "Encoder action. Nudges the playhead by REAPER's own Nudge setting." },
+    { "mouse_scroll",
+      "Encoder action. Sends a mouse wheel to whatever sits under the "
+      "cursor." },
+    { "instance_cycle",
+      "Encoder action. Walks the instances of the FOCUSED CLASS on the "
+      "current track." },
+    { "fx_cycle",
+      "Encoder action. Walks EVERY FX on the focused track, not just the "
+      "focused class." },
+    { "fx_scroll_all",
+      "Encoder action, across tracks: at the end of one chain it "
+      "continues into the next track's." },
+    { "instance_scroll_all",
+      "Encoder action, across tracks: at the end of one chain it "
+      "continues into the next track's instances." },
+    { "fx_move",
+      "Encoder action. Moves the active FX up or down inside its track's "
+      "chain." },
+    { "cs_cycle",
+      "Encoder action. Steps the active Channel Strip through your "
+      "favourites." },
+    { "bc_cycle",
+      "Encoder action. Steps the active Bus Compressor through your "
+      "favourites." },
+    { "fav_cycle",
+      "Encoder action. Steps through favourites of whichever class you "
+      "last worked on." },
+    { "selset_cycle",
+      "Encoder action. Walks the Selection Sets that have something in "
+      "them. Leaves the Channel Encoder Mode free for something else." },
+    { "temp_selset_scroll",
+      "Encoder action. Scrolls through the Focus Set's members." },
+    { "bc_track_scroll",
+      "Encoder action, UC1. Moves the Bus Compressor's anchor track "
+      "without changing the selection." },
+    { "bc_track_scroll_select",
+      "Encoder action, UC1. Moves the Bus Compressor's anchor track AND "
+      "selects it." },
+    { "instance_next",
+      "Next instance of the focused class on the current track. Wraps "
+      "around." },
+    { "instance_prev",
+      "Previous instance of the focused class on the current track. Wraps "
+      "around." },
+    { "plugin_bypass",
+      "Bypasses or un-bypasses the ACTIVE FX, the one the cycle cursor "
+      "points at. The LED is lit while it is bypassed." },
+    { "plugin_offline",
+      "Takes the ACTIVE FX offline or back online. Offline frees its CPU "
+      "and its state entirely." },
+    { "plugin_preset_next",
+      "Next preset on the ACTIVE FX." },
+    { "plugin_preset_prev",
+      "Previous preset on the ACTIVE FX." },
+    { "plugin_preset_cycle",
+      "Encoder action. Scrolls the ACTIVE FX's presets." },
+    { "plugin_move_up",
+      "Moves the ACTIVE FX one visible slot up its track's chain. Slides "
+      "into empty slots and reorders past real ones; the cursor follows "
+      "so the next press still targets it." },
+    { "plugin_move_down",
+      "Moves the ACTIVE FX one visible slot down its track's chain. The "
+      "cursor follows the plug-in." },
+    { "show_focused_plugin_gui",
+      "Opens or closes the floating window of the focused instance on the "
+      "focused track." },
+    { "show_fx_chain",
+      "Opens or closes the focused track's FX chain window." },
+    { "close_all_fx_guis",
+      "Closes every floating FX window and every chain window in the "
+      "project. The tidy-up after a long session of opening things." },
+    { "domain_cs",
+      "Points the surfaces at the CHANNEL STRIP on the focused track and "
+      "latches the soft-keys to it." },
+    { "domain_bc",
+      "Points the surfaces at the BUS COMPRESSOR on the focused track and "
+      "latches the soft-keys to it." },
+    { "cs_copy_own_toggle",
+      "Whether switching a Channel Strip favourite carries the current "
+      "values across or restores that favourite's own saved settings. Lit "
+      "means own settings." },
+    { "bc_copy_own_toggle",
+      "Whether switching a Bus Compressor favourite carries the current "
+      "values across or restores its own saved settings. Lit means own "
+      "settings." },
+    { "fav_copy_own_toggle",
+      "The same copy-or-own switch, for whichever class you last worked "
+      "on." },
+    { "quick_learn",
+      "Sweeps the whole PROJECT for plug-ins that can be mapped "
+      "automatically." },
+    { "quick_learn_track",
+      "Sweeps the FOCUSED TRACK for plug-ins that can be mapped "
+      "automatically." },
+    { "touch_to_learn_toggle",
+      "Arms learning without the HUD: touch a control on the surface, it "
+      "blinks, then wiggle a plug-in parameter to bind the two. Stays "
+      "armed for the next control until you switch it off." },
+    { "learn_hud_toggle",
+      "Shows or hides the Learn HUD, the on-screen map of the focused "
+      "plug-in's assignments." },
+    { "sticky_pot_get_next",
+      "Arms the pin: the next plug-in parameter you touch becomes that "
+      "track's V-Pot pin. Pressing the V-Pot while armed clears it "
+      "instead." },
+    { "sticky_pot_toggle",
+      "Suspends or resumes every pinned parameter at once. The pins "
+      "themselves are kept." },
+    { "selset_recall",
+      "Recalls Selection Set `param` (1 to 8). Firing the set that is "
+      "already active switches the filter off." },
+    { "selset_save",
+      "Snapshots the current REAPER track selection into slot `param` (1 "
+      "to 8)." },
+    { "temp_selset_add",
+      "Adds the selected tracks to the Focus Set. Members stick to the "
+      "leftmost strips; nothing is hidden." },
+    { "temp_selset_remove",
+      "Removes the selected tracks from the Focus Set." },
+    { "temp_selset_toggle_selected",
+      "Adds the selected tracks to the Focus Set, or removes them if they "
+      "are already in it." },
+    { "temp_selset_set_from_selection",
+      "Replaces the whole Focus Set with the current selection." },
+    { "temp_selset_clear",
+      "Empties the Focus Set." },
+    { "temp_selset_recall",
+      "Pins the Focus Set, or releases it. While pinned its members hold "
+      "the leftmost strips." },
+    { "temp_selset_pin_focused",
+      "Puts the focused track into the Focus Set and pins it in one "
+      "press." },
+    { "temp_selset_pin_uf1_channel",
+      "Puts the channel the UF1 is showing into the Focus Set and pins "
+      "it. The UF1's SOFT key carries this by default." },
+    { "focus_scope_cycle",
+      "Steps where the Focus Set pin applies: Both surfaces, UF1 only, "
+      "UF8 only." },
+    { "focus_scope_both",
+      "The Focus Set pin applies to both surfaces." },
+    { "focus_scope_uf1",
+      "The Focus Set pin applies to the UF1 only." },
+    { "focus_scope_uf8",
+      "The Focus Set pin applies to the UF8 only." },
+    { "param_group_remove_all",
+      "Takes the selected tracks out of every parameter group." },
+    { "multi_select_as_temp_group_toggle",
+      "While on, selecting several tracks behaves like a temporary "
+      "parameter group without setting one up." },
+    { "selection_clear_all",
+      "Deselects every track in the project." },
+    { "tracks_arm_all",
+      "Arms every track for recording, or unarms them all if they already "
+      "are. REAPER's own action only arms." },
+    { "automation_zero_all",
+      "Puts every track's automation mode back to Trim/Read." },
+    { "folder_mode",
+      "The surface shows folder parents only. Long-pressing SEL on a "
+      "parent spills its children." },
+    { "show_only_selected",
+      "The surface shows only the selected tracks." },
+    { "tcp_follows_selection_toggle",
+      "Whether REAPER's track panel scrolls to follow what you select on "
+      "the surface." },
+    { "surface_mirror_tcp",
+      "The surfaces show what the TRACK panel shows, hidden tracks "
+      "included." },
+    { "surface_mirror_mcp",
+      "The surfaces show what the MIXER shows." },
+    { "bank_left",
+      "Banks the surface left by a full window. In UF8 Plug-in Mode it "
+      "steps the fader bank instead, for plug-ins with more than eight "
+      "controls." },
+    { "bank_right",
+      "Banks the surface right by a full window. In UF8 Plug-in Mode it "
+      "steps the fader bank instead." },
+    { "bank_by_1_left",
+      "Banks the surface left by ONE strip. In a routing view it pages "
+      "one send instead." },
+    { "bank_by_1_right",
+      "Banks the surface right by ONE strip. In a routing view it pages "
+      "one send instead." },
+    { "page_left",
+      "Previous soft-key bank." },
+    { "page_right",
+      "Next soft-key bank." },
+    { "softkey_bank_select",
+      "Picks a soft-key bank outright: param 0 is V-POT, 1 to 5 are the "
+      "numbered banks. Also clears the Pan override." },
+    { "ssl_softkey",
+      "Fires the SSL soft-key at position `param` (0 to 7) in whatever "
+      "bank is showing, so the row changes meaning as you step banks." },
+    { "master_pin_strip1",
+      "UF8. Parks the Master bus on physical strip 1. Firing it again "
+      "releases it." },
+    { "master_pin_strip8",
+      "UF8. Parks the Master bus on physical strip 8. Firing it again "
+      "releases it." },
+    { "send_this",
+      "UF8/UC1. The eight strips leave the track bank and become the "
+      "focused track's first eight SENDS. Param 0 puts them on the "
+      "faders, 1 on the V-Pots. Nothing on a one-strip surface." },
+    { "recv_this",
+      "UF8/UC1. The eight strips leave the track bank and become the "
+      "focused track's first eight RECEIVES. Param 0 puts them on the "
+      "faders, 1 on the V-Pots. Nothing on a one-strip surface." },
+    { "marker_overlay_toggle",
+      "Turns the UF8's strips into a jump panel for markers AND regions." },
+    { "marker_overlay_markers_only_toggle",
+      "As Nav Mode, showing markers only, with no drilling into regions." },
+    { "marker_overlay_regions_only_toggle",
+      "As Nav Mode, showing regions only, with no drilling in." },
+    { "focused_panel_toggle",
+      "Shows or hides the frameless focused-track panel over the Arrange "
+      "view." },
+    { "mode_banner_toggle",
+      "Whether a banner flashes on screen when the Selection or Encoder "
+      "mode changes." },
+    { "brightness_leds_up",
+      "Button LEDs one step brighter, on every connected surface." },
+    { "brightness_leds_down",
+      "Button LEDs one step dimmer." },
+    { "brightness_lcds_up",
+      "Displays one step brighter." },
+    { "brightness_lcds_down",
+      "Displays one step dimmer." },
+    { "brightness_both_up",
+      "LEDs and displays together, one step brighter." },
+    { "brightness_both_down",
+      "LEDs and displays together, one step dimmer." },
+    { "mod_shift",
+      "Holds the Shift modifier while pressed, so other keys fire their "
+      "Shift assignment. Double-clicking latches it on; the next press "
+      "releases it. Param 1 makes it a plain toggle." },
+    { "mod_cmd",
+      "Holds the Cmd modifier while pressed. Param 1 makes it a toggle "
+      "instead." },
+    { "mod_ctrl",
+      "Holds the Ctrl modifier while pressed. Param 1 makes it a toggle "
+      "instead." },
+    { "jog_mode_cycle",
+      "UF1. Steps the jog wheel through its six modes." },
+    { "jog_mode_playhead",
+      "UF1. The jog wheel moves the playhead." },
+    { "jog_mode_scrub",
+      "UF1. The jog wheel scrubs the audio." },
+    { "jog_mode_items",
+      "UF1. The jog wheel works on media items." },
+    { "jog_mode_envelope",
+      "UF1. The jog wheel works on envelope points." },
+    { "jog_mode_razor",
+      "UF1. The jog wheel works on razor selections." },
+    { "jog_mode_fades",
+      "UF1. The jog wheel sets fade length. Which fade is decided by the "
+      "edge you aimed at and what lies next to it." },
+    { "jog_razor_whole",
+      "Razor mode: aim at the whole razor area rather than one edge." },
+    { "jog_razor_left",
+      "Razor mode: aim at the left edge, which is then what the wheel "
+      "moves." },
+    { "jog_razor_right",
+      "Razor mode: aim at the right edge." },
+    { "jog_razor_top",
+      "Razor mode: aim at the top edge." },
+    { "jog_razor_bottom",
+      "Razor mode: aim at the bottom edge." },
+    { "jog_env_point_prev",
+      "Envelope mode: move to the previous point." },
+    { "jog_env_point_next",
+      "Envelope mode: move to the next point." },
+    { "jog_env_point_prev_add",
+      "Envelope mode: previous point, adding it to the selection." },
+    { "jog_env_point_next_add",
+      "Envelope mode: next point, adding it to the selection." },
+    { "jog_env_lane_up",
+      "Envelope mode: move to the lane above." },
+    { "jog_env_lane_down",
+      "Envelope mode: move to the lane below." },
+    { "jog_env_target_toggle",
+      "Envelope mode: whether the wheel edits the selected points or "
+      "moves the playhead." },
+    { "jog_item_prev",
+      "Items mode: move to the previous item." },
+    { "jog_item_next",
+      "Items mode: move to the next item." },
+    { "jog_item_prev_add",
+      "Items mode: previous item, adding it to the selection." },
+    { "jog_item_next_add",
+      "Items mode: next item, adding it to the selection." },
+    { "jog_item_track_up",
+      "Items mode: move to the item on the track above." },
+    { "jog_item_track_down",
+      "Items mode: move to the item on the track below." },
+    { "jog_item_track_up_add",
+      "Items mode: item on the track above, adding it to the selection." },
+    { "jog_item_track_down_add",
+      "Items mode: item on the track below, adding it to the selection." },
+    { "jog_fade_left",
+      "Fades mode: aim at the fade-in, or step to the previous item when "
+      "the cross is set to walk." },
+    { "jog_fade_right",
+      "Fades mode: aim at the fade-out, or step to the next item when the "
+      "cross is set to walk." },
+    { "jog_fade_up",
+      "Fades mode: next fade shape, or the item above when the cross is "
+      "set to walk." },
+    { "jog_fade_down",
+      "Fades mode: previous fade shape, or the item below when the cross "
+      "is set to walk." },
+    { "jog_fade_left_add",
+      "Fades mode: as fade-in / previous item, adding to the selection." },
+    { "jog_fade_right_add",
+      "Fades mode: as fade-out / next item, adding to the selection." },
+    { "jog_fade_up_add",
+      "Fades mode: as next shape / item above, adding to the selection." },
+    { "jog_fade_down_add",
+      "Fades mode: as previous shape / item below, adding to the "
+      "selection." },
+    { "jog_fade_nav_toggle",
+      "Fades mode: whether the nav cross aims at fades or walks between "
+      "items." },
+    { "jog_fade_follow_toggle",
+      "Fades mode: whether the view follows the fade you are working on. "
+      "Switching it off restores the view you had." },
+    { "jog_zoom_selection",
+      "Zooms to the current selection, and back out on a second press." },
+    { "jog_content_drag",
+      "Hold to drag the content under the razor or the held item with the "
+      "wheel. Needs Hold behaviour on the key, which the factory binding "
+      "sets." },
+    { "jog_nav_left",
+      "The collective nav-cross action from before the cross became "
+      "bindable per mode. Kept so older configs keep working; bind the "
+      "per-mode actions instead." },
+    { "jog_nav_right",
+      "The collective nav-cross action from before the cross became "
+      "bindable per mode. Kept for older configs." },
+    { "jog_nav_up",
+      "The collective nav-cross action from before the cross became "
+      "bindable per mode. Kept for older configs." },
+    { "jog_nav_down",
+      "The collective nav-cross action from before the cross became "
+      "bindable per mode. Kept for older configs." },
+    { "jog_nav_center",
+      "The collective nav-cross centre from before the cross became "
+      "bindable per mode. Kept for older configs." },
+    { "zoom_up",
+      "Zoom in vertically." },
+    { "zoom_down",
+      "Zoom out vertically." },
+    { "zoom_left",
+      "Zoom out horizontally." },
+    { "zoom_right",
+      "Zoom in horizontally." },
+    { "zoom_center",
+      "Zoom to fit the whole project." },
+    { "fx_param_inc",
+      "Steps one learned FX-Learn slot up on the focused track's plug-in. "
+      "The slot, step size and wrap are set in the picker; the slot's own "
+      "range and curve apply." },
+    { "fx_param_dec",
+      "Steps one learned FX-Learn slot down. Same settings as step up, "
+      "opposite direction." },
+    { "__reaper_action__",
+      "Internal. Carries a plain REAPER action id; the picker offers "
+      "those through the Native list instead." },
+};
+
+// Name FAMILIES, matched on the prefix after the exact table misses. Order
+// matters where one prefix contains another: the longer, more specific entry
+// (auto_off_global) has to come before the shorter one (auto_off), which is why
+// this is an ordered list and not a map.
+static const BuiltinDoc kBuiltinDocPrefixes[] = {
+    { "send_all_",
+      "UF8/UC1. All eight strips show the SAME send number, one per "
+      "banked track, instead of the tracks themselves. Param 0 puts them "
+      "on the faders, 1 on the V-Pots." },
+    { "recv_all_",
+      "UF8/UC1. All eight strips show the SAME receive number, one per "
+      "banked track. Param 0 puts them on the faders, 1 on the V-Pots." },
+    { "switch_cs_",
+      "Replaces the active Channel Strip with this favourite, on every "
+      "selected track, or on the focused one if nothing is selected." },
+    { "copy_cs_",
+      "Inserts this Channel Strip favourite BELOW the active one with the "
+      "same settings and bypasses the original, so you can A/B them." },
+    { "switch_bc_",
+      "Replaces the active Bus Compressor with this favourite, on every "
+      "selected track, or on the focused one if nothing is selected." },
+    { "copy_bc_",
+      "Inserts this Bus Compressor favourite BELOW the active one with "
+      "the same settings and bypasses the original." },
+    { "switch_fav_",
+      "Replaces the active plug-in with this favourite, using whichever "
+      "class you last worked on. Lit when that favourite is already the "
+      "one on the track." },
+    { "copy_fav_",
+      "Inserts this favourite below the active plug-in with the same "
+      "settings and bypasses the original, using whichever class you last "
+      "worked on." },
+    { "param_group_add_",
+      "Adds every selected track to this parameter group." },
+    { "param_group_clear_",
+      "Strips every track in the project of membership in this parameter "
+      "group." },
+    { "param_group_toggle_",
+      "Switches this parameter group on or off. The LED is lit while it "
+      "is active." },
+    { "layer_select_",
+      "Switches the surface to this binding layer." },
+    { "softkey_bank_",
+      "Picks this soft-key bank directly. Bank 0 is the V-POT row." },
+    { "ssl_bank_",
+      "Focuses one fixed parameter of this SSL bank, whatever the current "
+      "PAGE bank is. The picker names the parameter." },
+    { "auto_off_global",
+      "Forces EVERY track to automation Off, overriding their own modes." },
+    { "auto_read_global",
+      "Forces every track to automation Read." },
+    { "auto_write_global",
+      "Forces every track to automation Write." },
+    { "auto_trim_global",
+      "Forces every track to automation Trim." },
+    { "auto_latch_global",
+      "Forces every track to automation Latch." },
+    { "auto_latch_prv_global",
+      "Forces every track to automation Latch Preview." },
+    { "auto_touch_global",
+      "Forces every track to automation Touch." },
+    { "auto_off",
+      "Sets the selected tracks to automation Off." },
+    { "auto_read",
+      "Sets the selected tracks to automation Read." },
+    { "auto_write",
+      "Sets the selected tracks to automation Write." },
+    { "auto_trim",
+      "Sets the selected tracks to automation Trim." },
+    { "auto_latch_prv",
+      "Sets the selected tracks to automation Latch Preview." },
+    { "auto_latch",
+      "Sets the selected tracks to automation Latch. The LED also reports "
+      "Latch Preview, which shares the lamp." },
+    { "auto_touch",
+      "Sets the selected tracks to automation Touch." },
+    { "uf1_view_",
+      "Puts the UF1 straight into that mode. Bindable from any surface, "
+      "so one key per mode beats cycling through all four." },
+};
+
 const char* builtinDescription(const std::string& n)
 {
-    // ---- Sends / Receives on the eight strips -----------------------------
-    if (n.rfind("send_all_", 0) == 0)
-        return "UF8/UC1. All eight strips show the SAME send number, one per banked "
-               "track, instead of the tracks themselves. Param 0 = on the faders, "
-               "1 = on the V-Pots.";
-    if (n.rfind("recv_all_", 0) == 0)
-        return "UF8/UC1. All eight strips show the SAME receive number, one per "
-               "banked track. Param 0 = on the faders, 1 = on the V-Pots.";
-    if (n == "send_this")
-        return "UF8/UC1. The eight strips leave the track bank and become the "
-               "focused track's first eight SENDS. Param 0 = on the faders, "
-               "1 = on the V-Pots. Nothing on a one-strip surface.";
-    if (n == "recv_this")
-        return "UF8/UC1. The eight strips leave the track bank and become the "
-               "focused track's first eight RECEIVES. Param 0 = on the faders, "
-               "1 = on the V-Pots. Nothing on a one-strip surface.";
-
-    // ---- Fader / V-Pot roles ---------------------------------------------
-    if (n == "flip")
-        return "UF8/UC1. Faders and V-Pots swap jobs.";
-    if (n == "uf1_flip")
-        return "UF1. Fader and V-Pot swap jobs: the fader takes Pan, or in Plugin "
-               "mode the parameter of the V-Pot you last used.";
-    if (n == "pan_force")
-        return "UF8/UC1. The V-Pots leave their normal duty and ride track Pan.";
-    if (n.rfind("ssl_strip_mode_", 0) == 0 || n.rfind("uf1_strip_mode_", 0) == 0)
-        return "The fader drives the SSL channel strip's own Fader Level instead of "
-               "REAPER track volume. The _with_gui variant also opens the plug-in "
-               "window.";
-
-    // ---- Focus / instances ------------------------------------------------
-    if (n == "domain_cs")
-        return "Point the surfaces at the CHANNEL STRIP on the focused track, and "
-               "latch the soft-keys to it.";
-    if (n == "domain_bc")
-        return "Point the surfaces at the BUS COMPRESSOR on the focused track, and "
-               "latch the soft-keys to it.";
-    if (n == "instance_cycle")
-        return "Encoder action. Walks the plug-ins of the FOCUSED DOMAIN on the "
-               "current track.";
-    if (n == "fx_cycle")
-        return "Encoder action. Walks EVERY FX on the current track, not just the "
-               "focused domain.";
-    if (n == "fx_scroll_all" || n == "instance_scroll_all")
-        return "Encoder action, across tracks: at the end of one track's chain it "
-               "carries on into the next track's.";
-    if (n.rfind("focus_scope_", 0) == 0)
-        return "Where Pin Set puts the focused tracks: the UF8's leftmost strips, "
-               "the UF1, or both.";
-
-    // ---- Sticky Pot / learning -------------------------------------------
-    if (n == "sticky_pot_get_next")
-        return "Arm the pin: the next plug-in parameter you touch becomes that "
-               "track's V-Pot pin. Press the V-Pot while armed to clear it.";
-    if (n == "sticky_pot_toggle")
-        return "Suspend or resume every pinned parameter at once. The pins "
-               "themselves are kept.";
-    if (n == "touch_to_learn_toggle")
-        return "Arm learning without the HUD: touch a surface control, then wiggle "
-               "a plug-in parameter to bind the two.";
-    if (n == "quick_learn")
-        return "Sweep the whole PROJECT for plug-ins that can be mapped "
-               "automatically.";
-    if (n == "quick_learn_track")
-        return "Sweep the FOCUSED TRACK for plug-ins that can be mapped "
-               "automatically.";
-
-    // ---- Selection sets / groups -----------------------------------------
-    if (n == "selset_save")
-        return "Snapshot the current REAPER track selection into slot `param` "
-               "(1-8).";
-    if (n == "selset_recall")
-        return "Recall Selection Set `param` (1-8). Pressing the active slot again "
-               "switches the filter off.";
-    if (n == "selset_cycle")
-        return "Encoder action. Walks the Selection Sets that have something in "
-               "them.";
-    if (n == "param_group_remove_all")
-        return "Take the selected tracks out of every parameter group.";
-    if (n == "multi_select_as_temp_group_toggle")
-        return "While on, selecting several tracks behaves like a temporary "
-               "parameter group.";
-
-    // ---- Tracks / master --------------------------------------------------
-    if (n == "surface_mirror_tcp")
-        return "The surfaces show what the TRACK panel shows, hidden tracks "
-               "included.";
-    if (n == "surface_mirror_mcp")
-        return "The surfaces show what the MIXER shows.";
-    if (n.rfind("master_pin_", 0) == 0)
-        return "UF8. Park the Master bus on that physical strip. Firing the strip "
-               "that already holds it releases it.";
-
-    // ---- UF1 keys ---------------------------------------------------------
-    if (n == "uf1_five_to_eight")
-        return "UF1. DAW mode: swap between tracks 1-4 and 5-8 of the window. "
-               "Sends mode: page the window of four sends.";
-    if (n == "uf1_sends_receives_toggle")
-        return "UF1. Flip the routing view between the track's SENDS and its "
-               "RECEIVES. Also on Shift + 5-8.";
-    if (n == "uf1_bank_step")
-        return "UF1. Move the selection eight tracks at a time. Param sign picks "
-               "the direction.";
-    if (n == "uf1_page_step")
-        return "UF1. Steps the soft-key BANK in DAW mode and the plug-in's "
-               "parameter PAGE in Plugin mode. Param sign picks the direction.";
-    if (n == "uf1_dyn_bank_page")
-        return "UF1. Pages WITHIN the active dynamic soft-key bank (the FX list, "
-               "the colours). Does nothing on a static or single-page bank.";
-    if (n.rfind("uf1_view_", 0) == 0)
-        return "Put the UF1 straight into that mode. Bindable from any surface, so "
-               "one key per mode beats cycling through all four.";
-
+    for (const auto& d : kBuiltinDocs)
+        if (n == d.name) return d.text;
+    for (const auto& d : kBuiltinDocPrefixes)
+        if (n.rfind(d.name, 0) == 0) return d.text;
     return "";
 }
 

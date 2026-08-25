@@ -772,6 +772,25 @@ Modifier currentModifierSnapshot();
 // layer uses. One press, two meanings (Frank 2026-08-18: "Gibt ja nur Shift!").
 Modifier bankModifierSnapshot();
 
+// ⇨ THE SURFACE ONLY. Same Plain/Shift fold as bankModifierSnapshot, but the
+// computer keyboard is NOT consulted — only a hardware `mod_*` binding (the
+// UF1's SHIFT, the UF8's FINE) counts.
+//
+// For the Settings EDITOR, and nothing else. Following the held modifier is a
+// good gesture on the hardware, where holding a key and reaching for the mouse
+// is a deliberate act. At the computer keyboard it is a trap: Shift is how you
+// type a capital letter, so naming a soft-key "EQ" jumped the picker to the
+// Shift set on the E and edited the wrong slot from there (Frank 2026-08-25,
+// after a first attempt that only suppressed the jump while an ImGui item was
+// active turned out not to hold).
+//
+// ⛔ Do NOT route dispatch, rendering or the bank painters through this. There
+// the keyboard modifiers count in full, deliberately and by Frank's explicit
+// call (2026-08-18: "SHIFT UND ALLE ANDEREN MODIFIERS SIND AUCH ÜBER DIE
+// TASTATUR GÜLTIG!"). This function exists so the editor can stand still while
+// you type INTO it, not to take the keyboard out of the feature.
+Modifier surfaceModifierSnapshot();
+
 // Per-layer variants. exportLayerTo writes a single layer wrapped in a
 // {"version":1,"type":"layer","index":N,"layer":{…}} object so the
 // importer can refuse a mismatched payload. importLayerFrom reads the
