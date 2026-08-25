@@ -3055,34 +3055,44 @@ static bool settingsEditorBusy_(ImGui_Context* ctx)
     return ImGui_IsAnyItemActive(ctx);
 }
 
+// ⇨ IT FOLLOWS THE HARDWARE, like the Quick and Sub-Bank pickers do.
+// Hold FINE and the editor shows that modifier's bank. It does NOT snap back on
+// release: you cannot hold a key on the surface and drive the mouse at the same
+// time, so releasing leaves the picker where you put it and you edit in peace
+// (Frank 2026-08-18). Click a radio to go back to Plain.
+//
+// TOGGLE on the rising edge, the same gesture the FX-Learn editor has used since
+// 2026-07-21: press SHIFT to jump to the Shift set, press it again to come back.
+// Rising edge only, so releasing never moves the picker.
+// Typing does not reach this at all: main.cpp's keyboard-modifier mirror stands
+// down while this window owns the keyboard, so the surface AND this picker stay
+// put. Two earlier attempts patched readers here instead and could never have
+// covered the LEDs, which is where Frank was actually seeing it (2026-08-25).
+// The busy check stays as the second guard, for holding the SURFACE's own SHIFT
+// while a field has focus — that flag never passes through the mirror. The edge
+// is still TRACKED, so a suppressed press leaves no stale "held" behind.
+//
+// ⛔ ONCE PER FRAME, AT THE TOP OF THE PANE — NOT INSIDE THE RADIO ROW.
+// It used to live in drawBankLayerRow_, which is only drawn once a top-soft-key
+// or a sub-bank cell is selected. With anything else selected the surface's FINE
+// moved the hardware and nothing else: the schematic above went on previewing
+// Plain until you clicked a bank and the row (and with it the tracker) came back
+// (Frank 2026-08-25: "die anzeige im UI scheint erst zu funktionieren, nachdem
+// nochmals eine soft-key bank gewählt wurde").
+static void trackBankModifierEdge_(ImGui_Context* ctx, int* modIdx)
+{
+    using namespace uf8::bindings;
+    static int s_lastHeld = 0;
+    const int held = static_cast<int>(bankModifierSnapshot());
+    if (held != s_lastHeld && held != 0 && !settingsEditorBusy_(ctx))
+        *modIdx = (*modIdx == held) ? 0 : held;
+    s_lastHeld = held;
+    if (*modIdx < 0 || *modIdx >= kSoftKeyModifierSets) *modIdx = 0;
+}
+
 static bool drawBankLayerRow_(ImGui_Context* ctx, const char* tag, int* modIdx)
 {
     using namespace uf8::bindings;
-    // ⇨ IT FOLLOWS THE HARDWARE, like the Quick and Sub-Bank pickers above it.
-    // Hold FINE and the editor shows that modifier's bank. It does NOT snap back
-    // on release: you cannot hold a key on the surface and drive the mouse at the
-    // same time, so releasing leaves the picker where you put it and you edit in
-    // peace (Frank 2026-08-18). Click a button to go back to Plain.
-    {
-        // TOGGLE on the rising edge, the same gesture the FX-Learn editor has
-        // used since 2026-07-21: press SHIFT to jump to the Shift set, press it
-        // again to come back to Plain. Rising edge only, so releasing never
-        // moves the picker and you can edit the set you jumped to with the mouse.
-        // Typing no longer reaches this at all: main.cpp's keyboard-modifier
-        // mirror stands down while this window owns the keyboard, so the whole
-        // surface AND this picker stay put. Two earlier attempts patched readers
-        // here instead and could never have covered the LEDs, which is where
-        // Frank was actually seeing it (2026-08-25).
-        // The busy check stays as the second guard, for holding the SURFACE's
-        // own SHIFT while a field has focus — that flag never passes through the
-        // mirror. The edge is still TRACKED, so a suppressed press leaves no
-        // stale "held" behind.
-        static int s_lastHeld = 0;
-        const int held = static_cast<int>(bankModifierSnapshot());
-        if (held != s_lastHeld && held != 0 && !settingsEditorBusy_(ctx))
-            *modIdx = (*modIdx == held) ? 0 : held;
-        s_lastHeld = held;
-    }
     if (*modIdx < 0 || *modIdx >= kSoftKeyModifierSets) *modIdx = 0;
     static const char* kModNames[kSoftKeyModifierSets] = { "Plain", "Shift" };
     bool changed = false;
@@ -6237,6 +6247,11 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // active Layer button is the single source of truth.
     const int       s_editLayer = getActiveLayer();
     static ButtonId s_selected  = ButtonId::None;
+
+    // The surface's modifier moves the edit set wherever you are in this pane —
+    // see trackBankModifierEdge_. Runs before the schematic, which previews the
+    // set it lands on.
+    trackBankModifierEdge_(ctx, &g_slotEditModIdx);
 
     // ⇨ WHAT YOU EDIT IS WHAT IS ENGAGED. NO SECOND TRUTH.
     // These used to be UI-local and merely *followed* the hardware on a change,
