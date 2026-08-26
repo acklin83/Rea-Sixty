@@ -8263,16 +8263,23 @@ void followFocusedPluginGuiAcrossCycle_(MediaTrack* tr, int targetFxIdx)
 // engaged. Per-channel callers must additionally gate on
 // "rotated channel == focused track" so rotations on non-focused strips
 // don't hijack the plugin-mode GUI.
+// ⇨ ANY plugin-mode-with-GUI, on EITHER surface. One predicate, because the two
+// callers used to answer differently: the selection callback tested the UF8's SSL
+// Strip Mode alone, so the UF1's twin never re-pointed its window when the channel
+// changed (Frank 2026-08-26: "uf1 strip mode folgt einem kanalwechsel nicht, strip
+// mode auf uf8 tut es"). The same class as [[uf1-panel-halves-rule]]: one caller
+// left behind at a rename, and the symptom is always "the other surface does it".
+bool anyPluginModeWithGui_()
+{
+    return (g_pluginFaderMode.load() && g_pluginFaderModeWithGui.load())   // UF8 SSL Strip
+        || (g_uf1StripMode.load()    && g_uf1StripModeWithGui.load())      // UF1 twin
+        || (g_uf8PluginMode.load()   && g_uf8PluginModeWithGui.load());    // UF8 Plugin
+}
+
 void triggerPluginModeFollowSync_()
 {
     if (!g_pluginGuiFollowsInstance.load()) return;
-    const bool sslGui = g_pluginFaderMode.load()
-                     && g_pluginFaderModeWithGui.load();
-    const bool uf1Gui = g_uf1StripMode.load()
-                     && g_uf1StripModeWithGui.load();
-    const bool uf8Gui = g_uf8PluginMode.load()
-                     && g_uf8PluginModeWithGui.load();
-    if (sslGui || uf1Gui || uf8Gui) g_pluginGuiSyncRequest.store(true);
+    if (anyPluginModeWithGui_()) g_pluginGuiSyncRequest.store(true);
 }
 
 // One learned-Instance hit on a track: FX index + its SSL domain + the
@@ -20333,7 +20340,10 @@ void ReaSixtySurface::SetSurfaceSelected(MediaTrack* tr, bool sel)
         // (g_inSelectionSwap) so neither clobbers the frozen anchor.
         g_selAnchorTrack.store(tr);
         g_selCursorTrack.store(tr);
-        if (g_pluginFaderMode.load() && g_pluginFaderModeWithGui.load()) {
+        // Re-point a plugin-mode GUI at the newly selected channel. ⛔ Every
+        // mode, not just the UF8's: asking only about g_pluginFaderMode here was
+        // why the UF1's Strip Mode window sat on the track you had left.
+        if (anyPluginModeWithGui_()) {
             g_pendingFocusGuiSync.store(true);
         }
     }
