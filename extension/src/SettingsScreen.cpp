@@ -16329,10 +16329,33 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
     const char* shownMatch = reasixty_uf1ShownMatch();
     const bool  pageLinked = shownMatch && *shownMatch
                           && g_editingMatch == shownMatch;
-    if (pageLinked) {
+    // ⇨ FOLLOW THE DEVICE'S MOVE, NOT THE MERE DIFFERENCE. Comparing the two
+    // positions every frame made the directions fight on exactly one page: the
+    // spare. A click parks the editor on it, we deliberately never send the device
+    // to a page it does not have (the painter clamps g_uf1CsPage to the map's page
+    // count anyway, main.cpp), and so the very next frame this pulled the editor
+    // back onto the device's page. "+" therefore looked dead whenever the UF1
+    // happened to be showing the plug-in being edited, and worked perfectly on any
+    // plug-in it was not — which is what made it read as a per-plug-in bug (Frank
+    // 2026-08-26: nothing on Pro-Q 4 and ValhallaVV, fine on Pro-C 3).
+    // ★ The Learn-HUD had this right from the start and says why in one line:
+    // "Only when it CHANGES, so clicking a page here still browses freely until the
+    // UF1 pages itself" (rea_sixty_assignment_hud_imgui.lua, renderUf1Tab). Two
+    // renderers, one rule — the other one was the reference all along.
+    static std::string s_linkedMatch;
+    static int         s_hwPageSeen = -1;
+    if (!pageLinked) {
+        s_linkedMatch.clear();
+        s_hwPageSeen = -1;
+    } else {
         const int hw = reasixty_uf1CsPage();
-        if (hw >= 0 && hw < shownPages && hw != g_uf1EditingPage)
-            g_uf1EditingPage = hw;                     // hardware → editor
+        // Adopted on the linking edge as well, so opening the editor on the plug-in
+        // the UF1 is showing still lands on the page it is showing.
+        if (s_linkedMatch != g_editingMatch || hw != s_hwPageSeen) {
+            s_linkedMatch = g_editingMatch;
+            s_hwPageSeen  = hw;
+            if (hw >= 0 && hw < shownPages) g_uf1EditingPage = hw;   // device → editor
+        }
     }
     for (int p = 0; p < shownPages; ++p) {
         // Wrap after 8 rather than one endless SameLine row. Even inside the
@@ -16358,8 +16381,13 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
         double bw = isSpare ? 28.0 : 76.0, bh = 22.0;
         if (ImGui_Button(ctx, lbl, &bw, &bh)) {
             g_uf1EditingPage = p;
-            // Never page the hardware onto the spare — it has no such page.
-            if (pageLinked && !isSpare) reasixty_setUf1CsPage(p);
+            // Never page the hardware onto the spare — it has no such page, and the
+            // painter clamps it straight back. The edge tracker keeps its previous
+            // reading then, so the device standing still is not read as a move.
+            if (pageLinked && !isSpare) {
+                reasixty_setUf1CsPage(p);
+                s_hwPageSeen = p;
+            }
         }
         if (isSpare && ImGui_IsItemHovered(ctx, nullptr))
             ImGui_SetTooltip(ctx, "New page — exists once you bind something here");
