@@ -27923,7 +27923,6 @@ void uf1PaintChannel_()
                     g_uf1PresetSel = 0;
                 }
                 put(0x0100, {0x04, 0x03});
-                put(0x0102, {0x09});
                 put(0x010d, {0x0a, 0x06, 0x06, 0x0a});
                 txt(0x0104, 0x02, "Navigate Back");
                 // ⚠ NOT the capture's "HARDWARE OUTPUT" (cap uf1_rp). That string
@@ -27937,6 +27936,13 @@ void uf1PaintChannel_()
                 uf1EmitMeterInstanceLabel_();
                 txt(0x010e, 0x03, "Select");            // V-Pot4 label
             }
+            // The browser's own highlight (SK3 "Navigate Back") — same rule as the
+            // channel row: dark while the MODE menu has the four keys. It lives out
+            // here and not in the entry burst above because that burst fires ONCE, on
+            // open, so nothing would ever put the highlight back after a MODE hold.
+            // The release edge is menuEdge.
+            if (enter || menuEdge)
+                put(0x0102, {static_cast<uint8_t>(modeMenu ? 0x00 : 0x09)});
             const int n   = (int)g_uf1PresetList.size();
             const int sel = std::clamp(g_uf1PresetSel, 0, n > 0 ? n - 1 : 0);
 
@@ -29070,12 +29076,19 @@ void uf1PaintChannel_()
         // The highlight is not part of that arbitration, so an engaged toggle stays
         // visible underneath the metering. Sent unconditionally for the same reason
         // — deliberately NOT gated on grOwnsSk.
+        // ⇨ …with ONE exception: the MODE-hold menu borrows all four keys, and it
+        // overrode their labels and their LEDs but never this third channel — so a
+        // dynamic bank's selected key kept its bar sitting under "PLUGIN / DAW /
+        // METER / SENDS" (Frank 2026-08-26). The row's own selection stands down
+        // while the menu is open. Nothing has to put it back: menuEdge folds into
+        // `changed`, so the release tick re-sends the real mask through this gate.
         {
+            const uint8_t out = modeMenu ? uint8_t{0} : skHighlight;
             static int sSkHi = INT_MIN;
-            if (changed || skHighlight != sSkHi) {
-                sSkHi = skHighlight;
+            if (changed || out != sSkHi) {
+                sSkHi = out;
                 g_uf1_dev->send(uf1::buildScreen(0x0102,
-                    std::span<const uint8_t>(&skHighlight, 1)));
+                    std::span<const uint8_t>(&out, 1)));
             }
         }
     }
