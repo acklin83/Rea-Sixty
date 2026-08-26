@@ -13646,7 +13646,17 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                 g_fxlLabelBuf[sizeof(g_fxlLabelBuf) - 1] = '\0';
             }
             int inputFlags = 0;
-            if (ImGui_InputText(ctx, "##fxl_label", g_fxlLabelBuf,
+            // ⛔ The control AND the layer live in the ID. An active InputText
+            // keeps its own copy of the text and writes it back next frame as an
+            // edit, so a seed from underneath it loses. The edit layer follows a
+            // HELD MODIFIER, which means it can change with no click to deactivate
+            // the field first — and the label of the layer you left would be
+            // stored onto the one you arrived at. Same trap as the UF1 bank name
+            // (2026-08-26); see [[reaimgui-index]].
+            char lblId[48];
+            snprintf(lblId, sizeof(lblId), "##fxl_label_%d_%d",
+                     ctrl.linkIdx, g_fxLearnEditLayer);
+            if (ImGui_InputText(ctx, lblId, g_fxlLabelBuf,
                                 sizeof(g_fxlLabelBuf), &inputFlags,
                                 nullptr))
             {
@@ -16448,7 +16458,13 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
         }
         int inputFlags = 0;
         ImGui_SetNextItemWidth(ctx, 150.0);
-        if (ImGui_InputText(ctx, "##uf1_label", s_uf1LabelBuf,
+        // ⛔ The cell lives in the ID, same trap as above: `pos` carries the PAGE,
+        // and the UF1's own ◄ ► move that page while this popup is open, with no
+        // click to deactivate the field. The old cell's label would be written
+        // onto the new one.
+        char lblId[48];
+        snprintf(lblId, sizeof(lblId), "##uf1_label_%d_%d", softKeys ? 1 : 0, pos);
+        if (ImGui_InputText(ctx, lblId, s_uf1LabelBuf,
                             sizeof(s_uf1LabelBuf), &inputFlags, nullptr))
             setUf1CustomLabel_(softKeys, pos, s_uf1LabelBuf);
         if (!snap().customLabel.empty()
