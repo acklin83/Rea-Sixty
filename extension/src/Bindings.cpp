@@ -5743,9 +5743,10 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "view resolves. Reads SSL's own library from disk, not REAPER's "
       "preset list." },
     { "uf1_time_display_step",
-      "UF1. Steps the big display's time format: Time, which is whatever "
-      "REAPER's own transport shows, then Bars, then Samples. The field "
-      "flashes the name of the format it just moved to." },
+      "UF1. Steps the big display's time format: Time (minutes:seconds), "
+      "then Bars, then Samples. Independent of the units REAPER's own ruler "
+      "and transport are set to. The field flashes the name of the format "
+      "it just moved to." },
     { "uf1_five_to_eight",
       "UF1. DAW mode: swaps between tracks 1-4 and 5-8 of the window. "
       "Sends mode: pages the window of four sends." },

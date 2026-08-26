@@ -671,22 +671,23 @@ int          g_uf1PresetPendingFx = -1;
 std::atomic<bool> g_uf1Master {false};
 
 // UF1 main-LCD time/position field (element 0x0119, Channel view only). Holds a
-// format_timestr_pos mode: -1 = follow REAPER's TRANSPORT (default, resolved by
-// uf1TcEffectiveMode_), 2 = Measures/Beats, 4 = Samples. Cycled Time->Measures->
-// Samples by the 360 button (worker thread, atomic store only — threading rule);
-// the format + send happen main-thread in uf1PaintChannel_.
-// ⚠ -1 is OUR sentinel for "the transport", NOT format_timestr_pos's project
-// default — see uf1TcEffectiveMode_, which is where the difference bit.
-// ⚠ TIME is that sentinel, NOT the fixed h:m:s:f it was until 2026-08-26. The field's
-// whole job is to read what REAPER's transport reads — that is what SSL 360 does
-// here (Frank 2026-07-24: "er zeigt das an, was reaper im transport anzeigt") and
-// what the 0x0119 decode session prescribed, before a fixed three-step cycle was
-// bolted on top of it. h:m:s:f could never do the job: REAPER decomposes a negative
-// position with floor, so a cursor 26 ms ahead of a negative project start time
-// came out as "-1:59:59:29" (Frank 2026-08-26) — and frames cannot spell 26 ms even
-// with the sign repaired.
+// format_timestr_pos mode: 0 = Time / Minutes:Seconds (default), 2 = Measures/Beats,
+// 4 = Samples. Cycled Time->Measures->Samples by the 360 button (worker thread,
+// atomic store only — threading rule); the format + send happen main-thread in
+// uf1PaintChannel_.
+// ⚠ The three steps are INDEPENDENT of REAPER's own time units, by request: "es
+// zeigt nur time an, wenn ich das in Reaper auch gewählt habe! Soll unabhängig davon
+// sein" (Frank 2026-08-26). The 360 key picks the reading, REAPER's ruler and
+// transport pick theirs, and neither overrules the other.
+// ⛔ So do NOT reach for the project's own unit here again — the road from 2026-08-26
+// went h:m:s:f (REAPER floor-decomposes a negative position, and a cursor 26 ms ahead
+// of a negative project start read "-1:59:59:29"), then format_timestr_pos's -1
+// (which is the RULER, not the transport), then "projtimemode2" (the transport, which
+// on a combined Measures.Beats/Minutes:Seconds unit hands over two readings for ten
+// cells). Each one made the field depend on a setting that has nothing to do with it.
+// Mode 0 is the reading Frank compares against: REAPER's own "-0:00.026".
 // Persisted as ExtState "uf1_tc_mode" (load main.cpp near nav_lower_row).
-std::atomic<int>  g_uf1TcMode {-1};     // -1 transport / 2 Measures / 4 Samples
+std::atomic<int>  g_uf1TcMode {0};      // 0 Time / 2 Measures / 4 Samples
 
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
@@ -4251,9 +4252,10 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "uf1_tc_mode"); v && *v) {
         int n = std::atoi(v);
-        if (n == 5) n = -1;                      // h:m:s:f retired 2026-08-26 — a
-                                                 // stored 5 becomes the project format
-        if (n != 2 && n != 4 && n != -1) n = -1; // transport / Measures / Samples
+        if (n != 2 && n != 4) n = 0;             // Time / Measures / Samples; the
+                                                 // retired h:m:s:f (5) and the
+                                                 // short-lived transport sentinel (-1)
+                                                 // both land on Time
         g_uf1TcMode.store(n);
     }
     if (const char* v = GetExtState("rea_sixty", "uf1_recv_view"); v && *v)
@@ -26783,69 +26785,6 @@ static void uf1EncodeTimecode_(const char* s, uint8_t out[11])
         out[at + k] = digits[k];
 }
 
-// REAPER keeps its time units in two project-config ints: "projtimemode" is the
-// RULER's unit (and what format_timestr_pos calls the project default), "projtimemode2"
-// is the TRANSPORT's own unit, negative while the transport is left on "Time unit to
-// ruler". REAPER's own surfaces read exactly this pair — its web interface hands
-// projtimemode2 straight to format_timestr_pos, no translation, and its MCU falls back
-// to projtimemode when it is negative (reaper-plugins/reaper_csurf/csurf_www.cpp,
-// csurf_mcu.cpp, which also masks with 0xff: low byte is the mode, high bits are
-// REAPER's own flags). Offsets are fixed for the process, so they are looked up once;
-// 0 is the failure return, exactly as REAPER's IMPVARP macro reads it.
-// Main thread only, like every projectconfig read.
-static bool uf1TcProjTimeMode_(bool secondary, int* out)
-{
-    if (!projectconfig_var_getoffs || !projectconfig_var_addr) return false;
-    static int  sOffs[2] = { -1, -1 };
-    static bool sLooked  = false;
-    if (!sLooked) {
-        sLooked = true;
-        const char* names[2] = { "projtimemode", "projtimemode2" };
-        for (int i = 0; i < 2; ++i) {
-            int sz = 0;
-            const int off = projectconfig_var_getoffs(names[i], &sz);
-            sOffs[i] = (off && sz == static_cast<int>(sizeof(int))) ? off : -1;
-        }
-    }
-    const int off = sOffs[secondary ? 1 : 0];
-    if (off < 0) return false;
-    const int* p = static_cast<const int*>(projectconfig_var_addr(nullptr, off));
-    if (!p) return false;
-    *out = *p;
-    return true;
-}
-
-// g_uf1TcMode -> the format_timestr_pos mode to actually format with. Bars (2) and
-// Samples (4) are modes already; -1 is OUR sentinel for "whatever REAPER's TRANSPORT
-// shows" and resolves to a CONCRETE mode here.
-// ⛔ Do NOT hand format_timestr_pos its own -1 for this. That is the RULER, not the
-// transport, so on a bars ruler the TIME step read bars (Frank 2026-08-26: "jetzt
-// zeigt er bei time die Bars"). Resolving it ourselves also means the caller below
-// can tell a combined unit apart from a plain one.
-static int uf1TcEffectiveMode_(int mode)
-{
-    if (mode != -1) return mode;                 // Bars / Samples: explicit already
-    int v = 0;
-    if (uf1TcProjTimeMode_(true,  &v) && v >= 0) return v & 0xff;  // transport's own
-    if (uf1TcProjTimeMode_(false, &v) && v >= 0) return v & 0xff;  // ...else the ruler
-    return 0;                                    // neither readable: plain time
-}
-
-// True when a position string carries TWO readings side by side — REAPER's combined
-// "Measures.Beats / Minutes:Seconds" units put bars and time in one string. Tested on
-// the string and not on the mode number, because REAPER offers several combined units
-// (plain and "minimal") and they do not share one number. A digit has to stand on BOTH
-// sides of the separator, so leading or trailing padding cannot trip it.
-static bool uf1TcHasTwoReadings_(const char* s)
-{
-    bool seenDigit = false, seenSep = false;
-    for (const char* p = s; *p; ++p) {
-        if (*p >= '0' && *p <= '9') { if (seenSep) return true; seenDigit = true; }
-        else if ((*p == '/' || *p == ' ') && seenDigit) seenSep = true;
-    }
-    return false;
-}
-
 // Short display name of the ACTIVE FX for the CS-TYPE zone (0x0017), mirroring
 // UF8/UC1: the SSL short type name (PluginMap.displayShort — "CS 2"/"4K E"/"BC 2"/…)
 // for SSL strips, the Short User Name (UserPluginMap.displayShort) for non-SSL
@@ -28148,7 +28087,7 @@ void uf1PaintChannel_()
     // 360 drives the UF1's Channel view (decoded 2026-07-24). Read the playhead
     // while running, else the edit cursor when stopped (mirrors the UF8 nav-row
     // path below). Format via format_timestr_pos with the user-cycled g_uf1TcMode
-    // (transport format / Measures / Samples, cycled by the 360 button on the worker),
+    // (Time / Measures / Samples, cycled by the 360 button on the worker),
     // then encode into the 11-byte 7-segment field. Send-on-change: only when the 11
     // bytes differ (forced on view/gen change via `changed`), so a stable stopped
     // string never spams. Meter view NEVER writes 0x0119 (kept in the meter branch).
@@ -28157,15 +28096,7 @@ void uf1PaintChannel_()
         const double pos  = (ps & 1) ? GetPlayPosition() : GetCursorPosition();
         const int    mode = g_uf1TcMode.load();
         char buf[64];
-        format_timestr_pos(pos, buf, sizeof(buf), uf1TcEffectiveMode_(mode));
-        // A combined unit hands over bars AND time in one string, and ten cells hold
-        // one reading. The TIME step takes the TIME half — BARS is its own step on the
-        // 360 cycle, so bars is the one thing this step must not show (Frank
-        // 2026-08-26: "er zeigt immer noch bars im time display mode"). Re-formatted
-        // as plain time rather than cut out of the combined string, so no guess about
-        // REAPER's separator gets baked in.
-        if (mode == -1 && uf1TcHasTwoReadings_(buf))
-            format_timestr_pos(pos, buf, sizeof(buf), 0);
+        format_timestr_pos(pos, buf, sizeof(buf), mode);
 
         static std::array<uint8_t, 11> sTc{};
         static int sTcMode = INT_MIN;
@@ -44449,9 +44380,8 @@ void registerBindingHandlers()
         "Mode-change banner: show / hide (flashes Sel / Encoder mode)", false
     });
 
-    // UF1 large-screen time display: step its format (Time, which is whatever
-    // REAPER's transport shows → Bars/Beats → Samples). This was the hardcoded
-    // 360-key behaviour; now a
+    // UF1 large-screen time display: step its format (Time → Bars/Beats →
+    // Samples). This was the hardcoded 360-key behaviour; now a
     // proper bindable built-in so the 360 key (or any UF1 key) can carry it
     // and the user can rebind it. g_uf1TcMode is an atomic (store is input-
     // thread safe); the painter formats + persists it on the main thread.
@@ -44460,7 +44390,7 @@ void registerBindingHandlers()
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing || g_uf1MeterView.load()) return;
             const int cur  = g_uf1TcMode.load();
-            const int next = (cur == -1) ? 2 : (cur == 2) ? 4 : -1;
+            const int next = (cur == 2) ? 4 : (cur == 4) ? 0 : 2;
             g_uf1TcMode.store(next);
         },
         nullptr,
