@@ -376,13 +376,18 @@ void HueManager::toggleOn(int i)
 void HueManager::nudgePot(int i, int clicks, bool flip)
 {
     if (i < 0 || i >= kMaxSlots || clicks == 0) return;
-    SlotLive& L = live_[static_cast<size_t>(i)];
-
     PotRole role;
     {
         std::lock_guard<std::mutex> lk(cfgMx_);
         role = flip ? controls_.potFlip : controls_.pot;
     }
+    nudgeAxis(i, clicks, role);
+}
+
+void HueManager::nudgeAxis(int i, int clicks, PotRole role)
+{
+    if (i < 0 || i >= kMaxSlots || clicks == 0) return;
+    SlotLive& L = live_[static_cast<size_t>(i)];
 
     switch (role) {
         case PotRole::Hue:
@@ -923,6 +928,21 @@ void HueManager::runRefresh()
         lights_ = std::move(lights);
         groups_ = std::move(groups);
         scenes_ = std::move(scenes);
+    }
+
+    // ⛔ EVERY enabled slot counts as reachable once the bridge answered, not
+    // only the ones the adopt loop below walks. That loop only visits single
+    // LIGHT slots (a group has no per-lamp state to adopt), so a zone slot never
+    // got its flag set and its value line read OFFLINE for ever, on a bridge that
+    // was answering perfectly well.
+    for (int i = 0; i < kMaxSlots; ++i) {
+        bool en;
+        {
+            std::lock_guard<std::mutex> lk(cfgMx_);
+            const SlotConfig& c = slots_[static_cast<size_t>(i)];
+            en = c.enabled && !c.rid.empty();
+        }
+        if (en) live_[static_cast<size_t>(i)].reachable.store(true);
     }
 
     setStatus(LinkState::Online,

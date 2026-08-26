@@ -27653,26 +27653,18 @@ void applyUf1HueVpot_(uint8_t id, int step)
     const int slot = uf1HueFocusSlot_();
     if (slot < 0) return;
 
-    auto& hm = uf8::hue::manager();
-    uf8::hue::Controls ctl = hm.controls();
     // ⇨ The UF1's pots are FIXED, unlike the UF8's one configurable pot. Three
-    // axes on three knobs needs no setting, and borrowing the UF8's pot role here
-    // would leave two of the three unreachable. So the role is passed by
-    // temporarily standing in for the configured one rather than by adding a
-    // second setter to the manager.
+    // axes on three knobs needs no setting, so the axis is named outright rather
+    // than read out of Controls. nudgeAxis exists for exactly this: borrowing the
+    // configured role and writing it back would make the UF8's V-Pot ring
+    // flicker, because its painter reads that role every tick.
     const uf8::hue::PotRole want =
         (id == uf1::enc::kVpot1) ? uf8::hue::PotRole::Hue
       : (id == uf1::enc::kVpot2) ? uf8::hue::PotRole::Saturation
       : (id == uf1::enc::kVpot3) ? uf8::hue::PotRole::Warmth
                                  : uf8::hue::PotRole::Off;
     if (want == uf8::hue::PotRole::Off) return;
-
-    const uf8::hue::PotRole saved = ctl.pot;
-    ctl.pot = want;
-    hm.setControls(ctl);
-    hm.nudgePot(slot, step, /*flip=*/false);
-    ctl.pot = saved;
-    hm.setControls(ctl);
+    uf8::hue::manager().nudgeAxis(slot, step, want);
 }
 
 // Paints the whole UF1 while Hue Mode is on, the way the meter view owns the

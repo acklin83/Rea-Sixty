@@ -2512,6 +2512,126 @@ Every enabled mount is probed once when REAPER starts, so Status is filled in be
 
 \newpage
 
+# Hue mode
+
+Philips Hue lamps on the strips. In Hue mode the UF8 faders are brightness, the V-Pots are colour, and the UF1 puts one lamp on its channel screen. Scenes go on any key you like, and the room can go red while you record.
+
+## Connecting the bridge
+
+**Settings → Modes → Hue.**
+
+1. **Find bridge** asks Philips where your bridge is. That needs an internet connection; if there is none, or the bridge is on a network the lookup cannot see, type the address into the **IP** field yourself.
+2. Press **Pair (press link button)**, then walk over and press the round button on top of the bridge. You have thirty seconds. The status line counts down.
+3. **Refresh lights + scenes** re-reads everything. Rea-Sixty does that by itself every two seconds while it is connected, so you only need this after adding a lamp.
+4. **Forget** drops the address and the key. Pairing again is the only way back.
+
+The status line reads green when everything is talking, amber while it is pairing or reading, and red when the bridge stopped answering. A bridge that drops off is retried every ten seconds on its own.
+
+> **About the certificate.** The Hue bridge only speaks over an encrypted connection, and it signs that connection itself rather than with a certificate your computer already trusts. Rea-Sixty therefore does not check the certificate for your bridge, and for your bridge only. Instead it remembers the bridge's own serial number when you pair and compares it every time it reconnects: if something else answers at that address, Hue mode goes offline and says so rather than talking to it.
+
+## Setting the lamps up
+
+Eight rows, one per strip:
+
+| Column | What it is |
+|---|---|
+| **On** | Include this lamp. Only enabled rows take a strip. |
+| **Label** | Shown on the scribble strip, seven characters |
+| **Target** | A single lamp, or a whole room or zone |
+| **Kind** | `lamp` or `zone`, filled in for you |
+| **Bar** | The strip's colour bar when the lamp is off |
+| **Rec light** | Include this row in the recording light |
+| **State** | What the lamp is doing right now |
+
+**Fill from left** / **Fill from right** decides which end of the surface the lamps occupy, exactly as in DynaMount mode.
+
+A room or zone appears in the list only if it has lamps in it. An empty room cannot be dimmed, so there is nothing to offer.
+
+> **Why the Kind column is there.** A single lamp accepts about ten changes a second. A whole room accepts about one, because the bridge sends a room change out as a broadcast over its radio network, and that is far more expensive. Rea-Sixty holds to those limits: a lamp on a fader feels immediate, a room feels like it is following you. That is the bridge, not the surface.
+
+## Engaging the mode
+
+Bind **Selection Mode → Hue** to a button. It toggles like every other Selection Mode, and there is no switch in Settings: the Hue tab configures the lamps, it does not turn the mode on.
+
+With no lamps enabled the mode does nothing and every strip stays a track. Enabled lamps pin to one end of the surface, and the tracks that would have sat under them shift onto the remaining strips rather than disappearing.
+
+## Driving a lamp from the UF8
+
+| Control | What it does |
+|---|---|
+| Fader | Brightness. At the very bottom the lamp switches off. |
+| V-Pot | Hue by default |
+| V-Pot with **FLIP** | Saturation by default |
+| V-Pot press | Switches between colour and white |
+| **CUT** | Lamp on and off |
+| **SOLO** | This lamp stays on, every other Hue strip goes dark |
+| **SEL** | Makes this the lamp on the UF1 screen |
+
+The three V-Pot roles are set under **Controls** in the Hue tab. You can put colour temperature on either of them, which is what a room of white-only lamps wants.
+
+The scribble strip shows the label, `LAMP` or `ZONE` in the type zone, the row number as the digit, brightness in the fader readout, and the full state in the value line. A lamp the bridge cannot reach reads **OFFLINE**.
+
+The colour bar shows what the lamp is actually showing. When the lamp is off the bar goes dark rather than keeping its last colour.
+
+> **The bottom of the fader is off, not one percent.** The bridge treats a brightness of zero as the dimmest setting it can manage, not as darkness, so switching a lamp off is a separate instruction. Rea-Sixty sends it when the fader reaches the last one percent of its travel. If you would rather the fader never switched anything off, turn off *bottom of travel switches the lamp off* under Controls.
+
+## Driving a lamp from the UF1
+
+Bind **UF1 Mode: Hue** to any key on any surface. The UF1 then shows one lamp: whichever one you last pressed **SEL** on, or the fourth V-Pot walks through them.
+
+| Control | What it does |
+|---|---|
+| Fader | Brightness |
+| V-Pot 1 | Hue |
+| V-Pot 2 | Saturation |
+| V-Pot 3 | Colour temperature |
+| V-Pot 4 | Picks the lamp |
+| V-Pot 1 press | Switches between colour and white |
+| V-Pot 4 press | Leaves Hue mode |
+| **CUT** | Lamp on and off |
+| **SOLO** | Light solo |
+
+The UF1's four pots are fixed. Three colour axes on three knobs needs no setting, and the fourth is how you change lamp without reaching for the UF8.
+
+## Scenes
+
+Eight slots under **Scenes** in the Hue tab. Each one points at a scene on your bridge, with a short label for the display and a colour for the key LED.
+
+Bind **Hue: recall scene** with parameter **1** to **8** to any key on any surface. A short press puts the room into that scene. A long press starts it moving, for the scenes that cycle.
+
+Two more actions come with it:
+
+- **Hue: all lamps off** switches off every enabled lamp at once.
+- **Hue: recording light on / off** arms or disarms the recording light without opening Settings, and lights up while it is armed.
+
+## Recording light
+
+The classic red light, only real. Under **Recording light**:
+
+- **Applies to** is either the rows you ticked under *Rec light* in the lamp table, or a whole room or zone. The two are separate on purpose: the lamp you ride on a fader is rarely the one that should go red.
+- **While recording** sets the colour and the brightness. **Test** holds it on so you can walk into the room and look at it; press it again to release.
+- **When it stops** either puts the lamps back exactly the way they were, or recalls a scene of your choosing.
+
+Only recording touches the lights. Play and stop leave them alone. If they did not, every scene you recalled by hand would be wiped the moment you pressed the space bar.
+
+The state of every affected lamp is read just before the light goes red and written back afterwards, lamp by lamp, so a room whose lamps sat on different colours comes back the way it was rather than flattened to one.
+
+Hue mode does not have to be engaged for this. The recording light works whether the strips are showing lamps or tracks.
+
+## Marker cues
+
+Name a marker `hue:Relax` and the scene called *Relax* is recalled when the playhead passes it.
+
+The prefix is yours to change, and the transition time is how long the room takes to arrive. Under the settings is a live list of every matching marker in the project, with the scene each one resolves to, or a red note if there is no scene by that name. Check it before the take rather than during it.
+
+Cues fire only while the transport is rolling, and only forwards. Dragging the cursor back past three cues fires nothing, and a stopped edit cursor fires nothing at all: the marker names a moment in the take, not a place on the ruler.
+
+## What this does not do
+
+Rea-Sixty talks to the bridge the ordinary way, which is fast enough for a fader and a scene but not for music. There is no meter-driven lighting and no lamp that flickers with the kick drum. That needs the streaming connection Philips built for televisions and games, which needs a piece of encryption software Rea-Sixty deliberately does not ship.
+
+\newpage
+
 # Stream Deck and Companion
 
 Rea-Sixty carries a small server — the **bridge** — that external control apps talk to. Two clients use it: an official **Stream Deck plugin**, and a community **Bitfocus Companion module**. Both let you fire any Rea-Sixty action from a button and read live meters back.

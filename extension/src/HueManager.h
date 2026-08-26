@@ -203,6 +203,12 @@ public:
     void setOn(int i, bool on);
     void toggleOn(int i);
     void nudgePot(int i, int clicks, bool flip);
+    // The same walk with the axis named outright, for a surface whose pots are
+    // FIXED (the UF1 has one knob per axis). Exists so such a caller never has
+    // to write the configured role, borrow it and write it back: the UF8 painter
+    // reads that role every tick to draw its ring, and the borrow would make the
+    // ring flicker on a surface nobody was touching.
+    void nudgeAxis(int i, int clicks, PotRole axis);
     void pushPot(int i);
     void soloLight(int i);          // this one stays on, every other slot goes dark
     void allOff();
