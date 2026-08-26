@@ -1423,8 +1423,8 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
     }
 
     // The soft-key bank names itself on the time field when you switch to it.
-    // Off by default: that field is a clock, and one that blinks words unasked is
-    // worse than one that does not. Name a bank in Bindings → UF1; a dynamic bank
+    // ON by default: the bank you are on is the one thing that field can tell you
+    // and the clock cannot. Name a bank in Bindings → UF1; a dynamic bank
     // announces its kind and an unnamed static one its number.
     if (showsDev(kDevUf1)) {
         bool bn = reasixty_uf1BankNameFlash();

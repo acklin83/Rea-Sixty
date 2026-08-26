@@ -697,10 +697,13 @@ std::atomic<bool> g_uf1Master {false};
 std::atomic<int>  g_uf1TcMode {0};      // 0 Time / 2 Measures / 4 Samples
 
 // Announce the soft-key bank on the time field when it changes (Settings →
-// Behaviour → UF1). Off by default: the field is a clock, and a clock that
-// blinks words at you unasked is worse than one that does not.
-// Persisted as ExtState "uf1_bank_name_flash".
-std::atomic<bool> g_uf1BankNameFlash {false};
+// Behaviour → UF1). ON by default (Frank 2026-08-26: "standardmässig on machen").
+// It shipped off for half an hour on the theory that a clock should not blink
+// words at you unasked — but the bank you are on is the one thing that field can
+// tell you and the clock cannot, and a feature nobody finds is a feature nobody
+// has. Persisted as ExtState "uf1_bank_name_flash"; the load below only fires
+// when the key exists, so an explicit Off still sticks.
+std::atomic<bool> g_uf1BankNameFlash {true};
 
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
@@ -28170,26 +28173,33 @@ void uf1PaintChannel_()
                               1200);
         }
         // ⇨ AND THE SOFT-KEY BANK NAMES ITSELF when you switch to it (Frank
-        // 2026-08-26), off by default. Same edge shape as the format flash above
+        // 2026-08-26), on by default. Same edge shape as the format flash above
         // and for the same reason: the bank step runs on the USB worker while the
         // flash buffer is main-thread state. Skipped on the session's first paint
         // (sBank == INT_MIN) — nothing changed then, we simply had not looked yet.
-        // ⚠ The BANK NUMBER is the trigger, not the modifier set, even though a
-        // set is a full bank of its own: Shift is held constantly for other
-        // gestures, and blinking a word over the clock on every press of it would
-        // make the feature a nuisance rather than a readout. The name is still
-        // resolved for the set being held, so holding Shift and stepping the bank
-        // announces the Shift set's name.
+        // ⇨ HOLDING SHIFT IS A BANK SWITCH TOO ("und für bank-wechsel mit shift
+        // auch anzeigen"), because a modifier set IS a full bank
+        // ([[softkey-modifier-sets]]) — so the set is part of the trigger, not
+        // just of the lookup.
+        // ★ And the guard against the noise that costs is the ANNOUNCEMENT ITSELF,
+        // not the gesture: a Shift set with no bank of its own takes Plain's, so
+        // its name is Plain's name, and blinking the same word again on every
+        // press of a key you hold constantly would be pure noise. Announce when
+        // the announcement would differ, and the no-op case falls away on its own.
         {
             const int bank = g_uf1SoftBank.load();
-            static int sBank = INT_MIN;
-            if (bank != sBank && sBank != INT_MIN && g_uf1BankNameFlash.load()) {
-                int mset = static_cast<int>(uf8::bindings::bankModifierSnapshot());
-                if (mset < 0 || mset >= uf8::bindings::kSoftKeyModifierSets)
-                    mset = 0;
-                uf1FlashTimecode_(uf1BankDisplayName_(bank, mset), 1200);
+            int mset = static_cast<int>(uf8::bindings::bankModifierSnapshot());
+            if (mset < 0 || mset >= uf8::bindings::kSoftKeyModifierSets) mset = 0;
+            static int         sBank = INT_MIN, sMset = -1;
+            static std::string sAnnounced;
+            if (bank != sBank || mset != sMset) {
+                const bool first = (sBank == INT_MIN);
+                sBank = bank; sMset = mset;
+                std::string nm = uf1BankDisplayName_(bank, mset);
+                if (!first && nm != sAnnounced && g_uf1BankNameFlash.load())
+                    uf1FlashTimecode_(nm, 1200);
+                sAnnounced = std::move(nm);
             }
-            sBank = bank;
         }
         // A flash owns the field until it expires; the clock then repaints itself
         // because the encoded bytes differ from the flash pattern still in sTc.

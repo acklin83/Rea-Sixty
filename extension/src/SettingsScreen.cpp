@@ -6799,29 +6799,49 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         // normal state: a dynamic bank then announces its kind and a static one
         // its number, so the field never needs filling to be useful.
         {
-            static char s_bankNameBuf[64] = {0};
-            static int  s_bankNameFor[2]  = { -1, -1 };   // bank, modifier set
-            if (s_bankNameFor[0] != uf1Bank
-                || s_bankNameFor[1] != g_slotEditModIdx) {
-                s_bankNameFor[0] = uf1Bank;
-                s_bankNameFor[1] = g_slotEditModIdx;
-                const std::string cur = uf8::bindings::getUf1SoftBankName(
-                                            uf1Bank, g_slotEditModIdx);
-                snprintf(s_bankNameBuf, sizeof(s_bankNameBuf), "%s", cur.c_str());
+            static char        s_bankNameBuf[64] = {0};
+            static int         s_forBank = -1, s_forMod = -1;
+            static std::string s_lastFill;    // what we last put in the box
+            static bool        s_editing = false;   // from the PREVIOUS frame
+
+            const std::string userName = uf8::bindings::getUf1SoftBankName(
+                                             uf1Bank, g_slotEditModIdx);
+            char def[64] = {0};
+            reasixty_uf1BankDisplayName(uf1Bank, g_slotEditModIdx,
+                                        def, sizeof(def));
+            // ⇨ NEVER AN EMPTY BOX (Frank 2026-08-26: "nie einfach leer lassen").
+            // With no name of its own the field carries the bank's DEFAULT name,
+            // which is what the panel will announce — so an empty box was the one
+            // thing that is never true of this bank. Clearing the field puts the
+            // default back, which is also how you undo a name.
+            // Refilled when the bank, the set, or the default itself changes, and
+            // ⛔ NEVER while the cursor is in the box: that would rewrite what the
+            // user is halfway through typing. s_editing is last frame's answer,
+            // because ImGui can only be asked about an item AFTER it is drawn.
+            const std::string want = userName.empty() ? std::string(def) : userName;
+            if (uf1Bank != s_forBank || g_slotEditModIdx != s_forMod
+                || (!s_editing && want != s_lastFill)) {
+                s_forBank  = uf1Bank;
+                s_forMod   = g_slotEditModIdx;
+                s_lastFill = want;
+                snprintf(s_bankNameBuf, sizeof(s_bankNameBuf), "%s", want.c_str());
             }
             ImGui_Text(ctx, "Bank name");
             ImGui_SetNextItemWidth(ctx, 260.0);
             int nameFlags = 0;
             if (ImGui_InputText(ctx, "##uf1bankname", s_bankNameBuf,
-                                sizeof(s_bankNameBuf), &nameFlags, nullptr))
+                                sizeof(s_bankNameBuf), &nameFlags, nullptr)) {
                 uf8::bindings::setUf1SoftBankName(uf1Bank, g_slotEditModIdx,
                                                   s_bankNameBuf);
+                s_lastFill = s_bankNameBuf;
+            }
+            s_editing = ImGui_IsItemActive(ctx);
             // ⇨ WHAT THE PANEL WILL ACTUALLY SHOW, not what was typed. Five
             // letters have no shape on seven segments (K M V W X) and the font
             // approximates them without saying so, so "Mix Keys" reaches the
             // glass as "MIH KEYS". Echoing the typed text back would hide that
             // until the user was standing at the hardware.
-            const bool editing = ImGui_IsItemActive(ctx);
+            const bool editing = s_editing;
             char shown[64] = {0};
             reasixty_uf1BankDisplayName(uf1Bank, g_slotEditModIdx,
                                         shown, sizeof(shown));
@@ -6838,14 +6858,13 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             if (!reasixty_uf1Connected())
                 drawUf1Seg7Preview_(ctx, shown);
             ImGui_TextDisabled(ctx,
-                (s_bankNameBuf[0] == '\0')
-                    ? "Empty: a dynamic bank announces its kind, a static one its "
-                      "number."
-                    : reasixty_uf1Connected()
-                        ? "Ten cells, shown on the UF1 while you type. K M V W X "
-                          "have no 7-segment shape and fall back to the nearest one."
-                        : "Ten cells. K M V W X have no 7-segment shape and fall "
-                          "back to the nearest one.");
+                reasixty_uf1Connected()
+                    ? "Ten cells, shown on the UF1 while you type. Clear the field "
+                      "to go back to the bank's own name. K M V W X have no "
+                      "7-segment shape and fall back to the nearest one."
+                    : "Ten cells. Clear the field to go back to the bank's own "
+                      "name. K M V W X have no 7-segment shape and fall back to "
+                      "the nearest one.");
             ImGui_Spacing(ctx);
         }
         {
