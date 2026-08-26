@@ -178,6 +178,9 @@ void               reasixty_setStartupBank(bool on, int layer, int quick, int su
 // in, which is what the control's own "Off:" line says.
 bool               reasixty_uf1StartupView(int* view);
 void               reasixty_setUf1StartupView(bool on, int view);
+// Announce the soft-key bank on the UF1's time display when it changes.
+bool               reasixty_uf1BankNameFlash();
+void               reasixty_setUf1BankNameFlash(bool on);
 int                reasixty_uf1ViewMode();
 // British / American spelling picked at render time (Appearance → Spelling).
 // Defined in main.cpp; same declaration as SettingsScreen.cpp carries.
@@ -1417,6 +1420,17 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
             }
             ImGui_Unindent(ctx, /*indent_w*/ nullptr);
         }
+    }
+
+    // The soft-key bank names itself on the time field when you switch to it.
+    // Off by default: that field is a clock, and one that blinks words unasked is
+    // worse than one that does not. Name a bank in Bindings → UF1; a dynamic bank
+    // announces its kind and an unnamed static one its number.
+    if (showsDev(kDevUf1)) {
+        bool bn = reasixty_uf1BankNameFlash();
+        if (ImGui_Checkbox(ctx, "Announce the soft-key bank on the time display",
+                           &bn))
+            reasixty_setUf1BankNameFlash(bn);
     }
 
     ImGui_Spacing(ctx);

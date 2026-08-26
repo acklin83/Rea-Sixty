@@ -432,6 +432,9 @@ const char* reasixty_uf1EncoderModeName(int modeInt);
 // Needed by the hud_cmd drain ("uf1page;"), which sits inside the anonymous
 // namespace below — a declaration in there would name an internal symbol.
 void        reasixty_setUf1CsPage(int page);
+// British / American spelling, chosen at render time (Appearance → Spelling).
+// Defined far below; uf1BankDisplayName_ needs it for Colours / Colors.
+const char* reasixty_sp(const char* uk, const char* us);
 
 
 namespace {
@@ -692,6 +695,12 @@ std::atomic<bool> g_uf1Master {false};
 // Mode 0 is the reading Frank compares against: REAPER's own "-0:00.026".
 // Persisted as ExtState "uf1_tc_mode" (load main.cpp near nav_lower_row).
 std::atomic<int>  g_uf1TcMode {0};      // 0 Time / 2 Measures / 4 Samples
+
+// Announce the soft-key bank on the time field when it changes (Settings →
+// Behaviour → UF1). Off by default: the field is a clock, and a clock that
+// blinks words at you unasked is worse than one that does not.
+// Persisted as ExtState "uf1_bank_name_flash".
+std::atomic<bool> g_uf1BankNameFlash {false};
 
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
@@ -4262,6 +4271,8 @@ void loadBrightness()
                                                  // both land on Time
         g_uf1TcMode.store(n);
     }
+    if (const char* v = GetExtState("rea_sixty", "uf1_bank_name_flash"); v && *v)
+        g_uf1BankNameFlash.store(std::atoi(v) != 0);
     if (const char* v = GetExtState("rea_sixty", "uf1_recv_view"); v && *v)
         g_uf1RecvView.store(std::atoi(v) != 0);
     if (const char* v = GetExtState("rea_sixty", "nav_color_bar"); v && *v) {
@@ -26737,6 +26748,36 @@ static void uf1FlashTimecode_(std::string_view text, int ms)
     g_uf1TcFlashUntilMs = nowMs_() + ms;
 }
 
+// What a UF1 soft-key bank is CALLED on the time field: the user's own name if it
+// has one, else the kind of bank it is, else its number. Main thread only (it
+// reads the bindings config and the live modifier set).
+// ⛔ These kind names are NOT dynKindShort_ from the Settings UI, and the reason
+// is the FONT rather than a second opinion. Seven segments have no X, so "FX"
+// draws as "FH"; Frank picked "EFFECTS" instead (2026-08-26). They have no V
+// either, so "FAVS" reads "FAUS" — the mildest of the five impossible letters,
+// accepted the same day, and the same class as the M in "SAMPLES" that has been
+// on this field since 22.08. K is impossible too, which is why an unnamed bank
+// announces "SOFT 3" and not "BANK 3" ([[uf1-timecode-seg7-text]]).
+// ★ Whoever adds a kind here: render the word first. A word the font cannot draw
+// does not fail loudly, it just reads as a different word.
+static std::string uf1BankDisplayName_(int bank, int mod)
+{
+    using namespace uf8::bindings;
+    std::string nm = getUf1SoftBankName(bank, mod);
+    if (!nm.empty()) return nm;
+    // The set's own kind, else Plain's — never the raw array ([[softkey-modifier-sets]]).
+    switch (getUf1SoftBankDynamicFor(bank, mod)) {
+        case DynamicBankKind::FxBank:       return "EFFECTS";
+        case DynamicBankKind::ParamGroups:  return "GROUPS";
+        case DynamicBankKind::TrackColours: return reasixty_sp("COLOURS", "COLORS");
+        case DynamicBankKind::Favourites:   return "FAVS";
+        default: break;
+    }
+    char b[16];
+    snprintf(b, sizeof(b), "SOFT %d", bank + 1);
+    return b;
+}
+
 // Encode a REAPER position string (from format_timestr_pos) into the UF1's
 // 0x0119 field. Each byte = (SEG7[digit] << 1) | dp; the separators ':' '.' ','
 // set the dp (bit 0) on the PRECEDING digit — there is no colon or period glyph
@@ -28127,6 +28168,28 @@ void uf1PaintChannel_()
             // is a better glyph, not a different word.
             uf1FlashTimecode_(mode == 2 ? "BARS" : mode == 4 ? "SAMPLES" : "TIME",
                               1200);
+        }
+        // ⇨ AND THE SOFT-KEY BANK NAMES ITSELF when you switch to it (Frank
+        // 2026-08-26), off by default. Same edge shape as the format flash above
+        // and for the same reason: the bank step runs on the USB worker while the
+        // flash buffer is main-thread state. Skipped on the session's first paint
+        // (sBank == INT_MIN) — nothing changed then, we simply had not looked yet.
+        // ⚠ The BANK NUMBER is the trigger, not the modifier set, even though a
+        // set is a full bank of its own: Shift is held constantly for other
+        // gestures, and blinking a word over the clock on every press of it would
+        // make the feature a nuisance rather than a readout. The name is still
+        // resolved for the set being held, so holding Shift and stepping the bank
+        // announces the Shift set's name.
+        {
+            const int bank = g_uf1SoftBank.load();
+            static int sBank = INT_MIN;
+            if (bank != sBank && sBank != INT_MIN && g_uf1BankNameFlash.load()) {
+                int mset = static_cast<int>(uf8::bindings::bankModifierSnapshot());
+                if (mset < 0 || mset >= uf8::bindings::kSoftKeyModifierSets)
+                    mset = 0;
+                uf1FlashTimecode_(uf1BankDisplayName_(bank, mset), 1200);
+            }
+            sBank = bank;
         }
         // A flash owns the field until it expires; the clock then repaints itself
         // because the encoded bytes differ from the flash pattern still in sTc.
@@ -40698,6 +40761,40 @@ void reasixty_setUf1StartupView(bool on, int view)
     SetExtState("rea_sixty", "uf1_startup_view", b, true);
 }
 int reasixty_uf1ViewMode() { return uf1ViewMode_(); }
+
+// ---- UF1 soft-key bank name on the time display ---------------------------
+// The Settings toggle (Behaviour → UF1) and the two readers the Bindings pane
+// needs for its live preview. Main thread only.
+bool reasixty_uf1BankNameFlash() { return g_uf1BankNameFlash.load(); }
+void reasixty_setUf1BankNameFlash(bool on)
+{
+    g_uf1BankNameFlash.store(on);
+    SetExtState("rea_sixty", "uf1_bank_name_flash", on ? "1" : "0", true);
+}
+// The TEN VISIBLE cells a text would occupy on the field, straight out of the
+// encoder the panel itself uses — byte = (segment mask << 1) | separator dot.
+// ⇨ The preview matters because five letters have no shape on seven segments
+// (K M V W X) and the font approximates them SILENTLY: "Mix Keys" arrives as
+// "MIH KEYS". A field that only echoed the typed text would hide that until the
+// user was standing at the hardware.
+// ⛔ It runs the real encoder rather than reimplementing it, so the preview cannot
+// drift from the panel — including byte 0, which is not on the glass, and the
+// left-alignment that text (unlike the clock) uses.
+void reasixty_uf1Seg7Encode(const char* text, unsigned char out[10])
+{
+    if (!out) return;
+    uint8_t full[11] = {0};
+    uf1EncodeSeg7Text_(text ? text : "", full);
+    for (int i = 0; i < 10; ++i) out[i] = full[kUf1TcFirst + i];
+}
+// The string that bank would actually announce: the user name, else the kind,
+// else the number. One resolver, so the preview cannot drift from the panel.
+void reasixty_uf1BankDisplayName(int bank, int mod, char* out, int outSz)
+{
+    if (!out || outSz <= 0) return;
+    const std::string s = uf1BankDisplayName_(bank, mod);
+    snprintf(out, static_cast<size_t>(outSz), "%s", s.c_str());
+}
 
 // Inserts overlay design (Settings → Inserts) — colours (0xRRGGBB) + fill /
 // border opacity for the MCP highlight AND the dock panel. Stored as ExtState

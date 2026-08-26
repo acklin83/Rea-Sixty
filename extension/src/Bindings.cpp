@@ -1701,6 +1701,30 @@ void serializeUf1SoftBankDynamic_(const Config& c, std::ostringstream& os)
     os << "\n  ]";
 }
 
+// Per-bank UF1 user name. Flat list, only non-empty entries written, same shape
+// as the dynamic-kind list above. Empty ⇒ nothing emitted, so a config that never
+// names a bank is byte-identical to one from before v32.
+void serializeUf1SoftBankNames_(const Config& c, std::ostringstream& os)
+{
+    bool any = false;
+    for (int b = 0; b < kUf1SoftBankCount && !any; ++b)
+        for (int m = 0; m < kSoftKeyModifierSets && !any; ++m)
+            if (!c.uf1SoftBankName[b][m].empty()) any = true;
+    if (!any) return;
+    os << ",\n  \"uf1_soft_bank_names\": [";
+    bool first = true;
+    for (int b = 0; b < kUf1SoftBankCount; ++b)
+        for (int m = 0; m < kSoftKeyModifierSets; ++m) {
+            if (c.uf1SoftBankName[b][m].empty()) continue;
+            if (!first) os << ",";
+            first = false;
+            os << "\n    {\"bank\": " << b << ", \"mod\": " << m << ", \"name\": ";
+            appendEscaped(os, c.uf1SoftBankName[b][m]);
+            os << "}";
+        }
+    os << "\n  ]";
+}
+
 std::string serialize(const Config& c)
 {
     std::ostringstream os;
@@ -1720,6 +1744,7 @@ std::string serialize(const Config& c)
     serializeBankPresets_(c, os);
     serializeUf1SoftBanks_(c, os);
     serializeUf1SoftBankDynamic_(c, os);
+    serializeUf1SoftBankNames_(c, os);
     os << "\n}\n";
     return os.str();
 }
@@ -2115,6 +2140,27 @@ void parseUf1SoftBankDynamic_(wdl_json_element* root, Config& out)
     }
 }
 
+void parseUf1SoftBankNames_(wdl_json_element* root, Config& out)
+{
+    auto* arr = root->get_item_by_name("uf1_soft_bank_names");
+    if (!arr || !arr->is_array() || !arr->m_array) return;
+    const int n = arr->m_array->GetSize();
+    for (int i = 0; i < n; ++i) {
+        wdl_json_element* eo = arr->enum_item(i);
+        if (!eo || !eo->is_object()) continue;
+        int bank = -1, mod = 0;
+        if (auto* v = eo->get_item_by_name("bank"))
+            if (auto* t = v->get_string_value(true)) bank = std::atoi(t);
+        if (auto* v = eo->get_item_by_name("mod"))
+            if (auto* t = v->get_string_value(true)) mod = std::atoi(t);
+        if (bank < 0 || bank >= kUf1SoftBankCount) continue;
+        if (mod  < 0 || mod  >= kSoftKeyModifierSets) continue;
+        if (auto* v = eo->get_item_by_name("name"))
+            if (auto* t = v->get_string_value(true))
+                out.uf1SoftBankName[bank][mod] = t;
+    }
+}
+
 bool parseLayer_(wdl_json_element* lobj, Layer& out)
 {
     if (!lobj || !lobj->is_object()) return false;
@@ -2404,6 +2450,7 @@ bool tryParse_(const std::string& json, Config& out)
     parseBankPresets_(root, out);
     parseUf1SoftBanks_(root, out);
     parseUf1SoftBankDynamic_(root, out);
+    parseUf1SoftBankNames_(root, out);
     return true;
 }
 
@@ -2522,7 +2569,11 @@ bool invokeBuiltin(const std::string& name, int param)
 // 28: the nav cross gained 25 per-mode ButtonIds. Dispatch resolves the cross
 // through the active Jog Mode, so an older config has NO binding for it until
 // upgradeBackfillUf1Buttons_ seeds them — that pass now runs for < 28 too.
-constexpr int kCurrentBindingsVersion = 31;
+// v32 (2026-08-26): uf1SoftBankName — a user name per UF1 soft-key bank and
+// modifier set, announced on the time display when the bank is switched. Purely
+// additive: an older config simply has none, and every reader treats an empty
+// name as "no name given", which is also the shipped state.
+constexpr int kCurrentBindingsVersion = 32;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4856,6 +4907,23 @@ void setUf1SoftBankDynamic(int bank, int mod, DynamicBankKind kind)
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     g_cfg.uf1SoftBankDynamic[bank][mod] = kind;
+    persistLocked_();
+}
+
+std::string getUf1SoftBankName(int bank, int mod)
+{
+    if (bank < 0 || bank >= kUf1SoftBankCount) return std::string();
+    if (mod  < 0 || mod  >= kSoftKeyModifierSets) return std::string();
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return g_cfg.uf1SoftBankName[bank][mod];
+}
+
+void setUf1SoftBankName(int bank, int mod, const std::string& name)
+{
+    if (bank < 0 || bank >= kUf1SoftBankCount) return;
+    if (mod  < 0 || mod  >= kSoftKeyModifierSets) return;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    g_cfg.uf1SoftBankName[bank][mod] = name;
     persistLocked_();
 }
 

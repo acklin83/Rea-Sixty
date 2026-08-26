@@ -117,6 +117,11 @@ void reasixty_setScribbleBrightnessLevel(int level);
 int  reasixty_uf1SoftBank();
 int  reasixty_uf1CsPage();                  // live plugin-mode page (◄ ►)
 void reasixty_setUf1CsPage(int page);
+// UF1 soft-key bank naming: the announced string for a bank, and the ten cells a
+// text occupies on the time field (the panel's own encoder, so the preview in the
+// editor is the same bytes rather than a second opinion).
+void reasixty_uf1BankDisplayName(int bank, int mod, char* out, int outSz);
+void reasixty_uf1Seg7Encode(const char* text, unsigned char out[10]);
 const char* reasixty_uf1ShownMatch();       // map match the UF1 shows, "" = none
 // Point the SURFACE's instance cursor at an FX — the same cursor Instance Cycle
 // and FX Cycle write. Picking an instance in the FX-Learn combo used to be
@@ -812,6 +817,47 @@ struct VCanvas {
 void drawText_(VCanvas& c, float x, float y, uint32_t col, const char* text)
 {
     ImGui_DrawList_AddText(c.dl, c.ox + x * c.scale, c.oy + y * c.scale, col, text);
+}
+
+// The ten cells of the UF1 time field, drawn as they will look. Fed by the
+// panel's OWN encoder (reasixty_uf1Seg7Encode), so this is a renderer for the
+// same bytes rather than a second implementation that could drift.
+// Unlit segments are drawn too, faintly: an LCD you can see the shape of reads as
+// a display, and a word that only lights three of ten cells still looks placed.
+// Bit 0 of a cell byte is the separator dot AFTER it, bits 1..7 the segments
+// (a b c d e f g), exactly as [[uf1-timecode-seg7-text]] records them.
+void drawUf1Seg7Preview_(ImGui_Context* ctx, const char* text)
+{
+    unsigned char cells[10] = {0};
+    reasixty_uf1Seg7Encode(text, cells);
+    double ox = 0.0, oy = 0.0;
+    ImGui_GetCursorScreenPos(ctx, &ox, &oy);
+    ImGui_DrawList* dl = ImGui_GetWindowDrawList(ctx);
+    const double cw = 13.0, chh = 22.0, gap = 5.0, t = 2.0;
+    const int    lit = 0xE6E9EEFF;
+    const int    dim = 0x2B2F38FF;
+    for (int i = 0; i < 10; ++i) {
+        const double x = ox + i * (cw + gap);
+        const double y = oy;
+        const unsigned m = static_cast<unsigned>(cells[i]) >> 1;
+        auto seg = [&](unsigned bit, double x0, double y0, double x1, double y1) {
+            ImGui_DrawList_AddRectFilled(dl, x + x0, y + y0, x + x1, y + y1,
+                                         (m & bit) ? lit : dim,
+                                         /*rounding*/ nullptr, /*flags*/ nullptr);
+        };
+        seg(0x01, t,      0.0,          cw - t, t);                 // a  top
+        seg(0x02, cw - t, t,            cw,     chh / 2);           // b  upper right
+        seg(0x04, cw - t, chh / 2,      cw,     chh - t);           // c  lower right
+        seg(0x08, t,      chh - t,      cw - t, chh);               // d  bottom
+        seg(0x10, 0.0,    chh / 2,      t,      chh - t);           // e  lower left
+        seg(0x20, 0.0,    t,            t,      chh / 2);           // f  upper left
+        seg(0x40, t,      chh / 2 - t / 2, cw - t, chh / 2 + t / 2);// g  middle
+        if (cells[i] & 0x01)                    // the separator dot after the cell
+            ImGui_DrawList_AddRectFilled(dl, x + cw + 1.0, y + chh - t,
+                                         x + cw + 1.0 + t, y + chh,
+                                         lit, nullptr, nullptr);
+    }
+    ImGui_Dummy(ctx, 10.0 * (cw + gap), chh + 4.0);
 }
 
 void drawTextCentered_(VCanvas& c, float cx, float cy, uint32_t col,
@@ -6744,6 +6790,47 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         // parameter groups, colours); the 4 static per-slot editors are
         // then hidden. Mirrors the UF8 Sub-Bank combo (drawSubBankCellEditor_).
         const int uf1Bank = reasixty_uf1SoftBank();
+
+        // ---- Bank name (per bank, per modifier set) -------------------
+        // What the bank is CALLED. Announced on the UF1's time display when you
+        // switch to it, if that is switched on in Behaviour → UF1. Empty is the
+        // normal state: a dynamic bank then announces its kind and a static one
+        // its number, so the field never needs filling to be useful.
+        {
+            static char s_bankNameBuf[64] = {0};
+            static int  s_bankNameFor[2]  = { -1, -1 };   // bank, modifier set
+            if (s_bankNameFor[0] != uf1Bank
+                || s_bankNameFor[1] != g_slotEditModIdx) {
+                s_bankNameFor[0] = uf1Bank;
+                s_bankNameFor[1] = g_slotEditModIdx;
+                const std::string cur = uf8::bindings::getUf1SoftBankName(
+                                            uf1Bank, g_slotEditModIdx);
+                snprintf(s_bankNameBuf, sizeof(s_bankNameBuf), "%s", cur.c_str());
+            }
+            ImGui_Text(ctx, "Bank name");
+            ImGui_SetNextItemWidth(ctx, 260.0);
+            int nameFlags = 0;
+            if (ImGui_InputText(ctx, "##uf1bankname", s_bankNameBuf,
+                                sizeof(s_bankNameBuf), &nameFlags, nullptr))
+                uf8::bindings::setUf1SoftBankName(uf1Bank, g_slotEditModIdx,
+                                                  s_bankNameBuf);
+            // ⇨ WHAT THE PANEL WILL ACTUALLY SHOW, not what was typed. Five
+            // letters have no shape on seven segments (K M V W X) and the font
+            // approximates them without saying so, so "Mix Keys" reaches the
+            // glass as "MIH KEYS". Echoing the typed text back would hide that
+            // until the user was standing at the hardware.
+            char shown[64] = {0};
+            reasixty_uf1BankDisplayName(uf1Bank, g_slotEditModIdx,
+                                        shown, sizeof(shown));
+            drawUf1Seg7Preview_(ctx, shown);
+            ImGui_TextDisabled(ctx,
+                (s_bankNameBuf[0] == '\0')
+                    ? "Empty: a dynamic bank announces its kind, a static one its "
+                      "number."
+                    : "Ten cells. K M V W X have no 7-segment shape and fall back "
+                      "to the nearest one.");
+            ImGui_Spacing(ctx);
+        }
         {
             using uf8::bindings::DynamicBankKind;
             struct DynOpt { DynamicBankKind kind; const char* label; };

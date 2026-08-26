@@ -578,6 +578,19 @@ There is no Cmd or Ctrl set, deliberately. The surface has exactly one modifier
 key, so those two could only come from the computer keyboard, where they already
 drive the FX-Learn modifier layers.
 
+A bank can carry a **name** of its own, typed in the same editor, one per set. It
+is what the UF1's time display announces when you switch to that bank, if
+*Settings → Behaviour → UF1 → Announce the soft-key bank on the time display* is
+on. Leaving it empty is the normal case and costs nothing: a dynamic bank then
+announces what kind it is and a static one announces its number.
+
+The time field is ten seven-segment cells, so it spells rather than prints, and
+**K M V W X have no shape on seven segments** — they fall back to the nearest one
+they do have, which is why a bank called `Mix Keys` arrives as `MIH KEYS`. The
+editor draws the ten cells live under the name field, so what you see there is
+what the panel will show. It is also why the built-in names read `EFFECTS` rather
+than `FX` and an unnamed bank reads `SOFT 3` rather than `BANK 3`.
+
 Soft-key labels are capped at **13 characters** and V-Pot labels at **11**; both
 are abbreviated rather than truncated, so every word stays readable.
 
@@ -1067,6 +1080,7 @@ Surface-side handling of the REAPER Master bus. See **Master track** (own chapte
 
 | Control | Effect |
 |---|---|
+| Announce the soft-key bank on the time display | Off by default. With it on, switching the UF1's soft-key bank flashes the bank's name across the ten-cell time field for about a second, the same way a format change flashes *BARS* / *TIME* / *SAMPLES*, and the clock comes back by itself. A bank you named in *Settings → Bindings → UF1* shows that name; a dynamic bank shows what kind it is (`EFFECTS`, `GROUPS`, `COLOURS`, `FAVS`); an unnamed static bank shows its number (`SOFT 3`). |
 | Start the UF1 in a fixed view | Off by default, and the UF1 comes back up in the view you last left it in. Ticking it pins whichever view the UF1 is showing at that moment instead; the combo below changes it to Plug-in, DAW, Meter or Sends. Either way the view is applied once, on the first timer tick that sees the UF1, so plugging the device in mid-session engages it too. The last-used view is remembered globally, not per project: which view the surface shows belongs to the surface, not to the session you happen to open. |
 
 ### Keyboard

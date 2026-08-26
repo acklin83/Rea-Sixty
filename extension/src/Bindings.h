@@ -597,6 +597,13 @@ struct Config {
     // Default None ⇒ classic static behaviour.
     // [bank][modifier set] — same rule as the UF8 above.
     DynamicBankKind uf1SoftBankDynamic[kUf1SoftBankCount][kSoftKeyModifierSets] = {};
+    // What the bank is CALLED, announced on the UF1's time display when you
+    // switch to it (Settings → Behaviour → UF1). Per modifier set, because a set
+    // is a full bank and not a second list of actions ([[softkey-modifier-sets]]),
+    // so Plain and Shift can be two differently named banks on one key.
+    // Empty is the normal state and NOT a hole: a dynamic bank then announces its
+    // own kind and a static one its number (uf1BankDisplayName_ in main.cpp).
+    std::string     uf1SoftBankName[kUf1SoftBankCount][kSoftKeyModifierSets];
 };
 
 // Builtin registry. Phase A registers from main.cpp at REAPER_PLUGIN_ENTRY
@@ -984,6 +991,13 @@ void     setUf1SoftBankSlot(int bank, int slot, const Binding& bd);
 // then ignored. Out-of-range returns None / ignores writes.
 DynamicBankKind getUf1SoftBankDynamic(int bank, int mod);
 void            setUf1SoftBankDynamic(int bank, int mod, DynamicBankKind kind);
+
+// The bank's user-given name, "" when it has none. Per (bank, modifier set).
+// ⇨ Only the NAME lives here. What is shown when it is empty (the dynamic kind,
+// or the bank number) is resolved in main.cpp, where the 7-segment font is —
+// two of the kind labels the Settings UI shows cannot be drawn on that field.
+std::string     getUf1SoftBankName(int bank, int mod);
+void            setUf1SoftBankName(int bank, int mod, const std::string& name);
 // Number of UF1 soft-key banks in use (highest assigned bank + 1, min 1) —
 // dynamic banks or banks with any non-empty slot count. Drives the DAW-mode
 // header denominator + bounds the DAW bank paging. Frank 2026-08-04.
