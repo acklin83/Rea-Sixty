@@ -50,6 +50,11 @@ enum : int {
     kOptPostFieldSize  = 60,      // CURLOPT_POSTFIELDSIZE     (long)
     kOptMaxRedirs      = 68,      // CURLOPT_MAXREDIRS         (long)
     kOptNoSignal       = 99,      // CURLOPT_NOSIGNAL          (long)
+    // Read out of curl.h on this machine, both CURLOPTTYPE_LONG:
+    //   CURLOPT(CURLOPT_SSL_VERIFYPEER, CURLOPTTYPE_LONG, 64)
+    //   CURLOPT(CURLOPT_SSL_VERIFYHOST, CURLOPTTYPE_LONG, 81)
+    kOptSslVerifyPeer  = 64,      // CURLOPT_SSL_VERIFYPEER    (long)
+    kOptSslVerifyHost  = 81,      // CURLOPT_SSL_VERIFYHOST    (long)
 };
 
 // CURLINFO_RESPONSE_CODE = CURLINFO_LONG (0x200000) + 2.
@@ -165,7 +170,8 @@ Response perform(const std::string& method,
                  const std::string& url,
                  const std::vector<std::string>& headers,
                  const std::string& body,
-                 int timeoutSeconds)
+                 int timeoutSeconds,
+                 bool allowUntrustedCert)
 {
     Response r;
 
@@ -199,6 +205,13 @@ Response perform(const std::string& method,
     // Without NOSIGNAL libcurl arms SIGALRM for its DNS timeout, which in a
     // host process we do not own is a way to kill REAPER, not to time out.
     c.easy_setopt(easy, kOptNoSignal, 1L);
+    // Certificate-blind mode for the Hue bridge (see HttpClient.h). VERIFYHOST
+    // has to go too: the bridge's common name is its bridge id, never the IP we
+    // dialled, so host verification would fail even with the chain accepted.
+    if (allowUntrustedCert) {
+        c.easy_setopt(easy, kOptSslVerifyPeer, 0L);
+        c.easy_setopt(easy, kOptSslVerifyHost, 0L);
+    }
     if (headerList) c.easy_setopt(easy, kOptHttpHeader, headerList);
 
     if (method == "POST") {
@@ -234,7 +247,8 @@ uint64_t begin(const std::string& method,
                const std::string& url,
                const std::vector<std::string>& headers,
                const std::string& body,
-               int timeoutSeconds)
+               int timeoutSeconds,
+               bool allowUntrustedCert)
 {
     const uint64_t id = g_nextId.fetch_add(1);
     {
@@ -244,8 +258,10 @@ uint64_t begin(const std::string& method,
 
     std::thread worker;
     try {
-        worker = std::thread([id, method, url, headers, body, timeoutSeconds] {
-            Response r = perform(method, url, headers, body, timeoutSeconds);
+        worker = std::thread([id, method, url, headers, body, timeoutSeconds,
+                              allowUntrustedCert] {
+            Response r = perform(method, url, headers, body, timeoutSeconds,
+                                 allowUntrustedCert);
             std::lock_guard<std::mutex> lk(g_mutex);
             auto it = g_requests.find(id);
             if (it != g_requests.end()) {   // still wanted (not cancelled)

@@ -35,14 +35,28 @@ struct Response {
     std::string error;        // non-empty only on transport failure (no TLS, DNS, timeout…)
 };
 
-// Start a request. `method` is "GET" or "POST". `headers` are full lines
-// ("Authorization: Bearer …"). `body` is sent for POST. Returns an opaque id
+// Start a request. `method` is any verb the server understands ("GET", "POST",
+// "PUT", …); all three backends pass it through and send `body` with it.
+// `headers` are full lines ("Authorization: Bearer …"). Returns an opaque id
 // (> 0) to poll on, or 0 if the request could not even be started.
+//
+// ⛔ `allowUntrustedCert` TURNS OFF TLS VERIFICATION for this one request.
+// It exists for exactly one caller: the Philips Hue bridge, which serves CLIP
+// API v2 over HTTPS with a Signify-signed certificate no system CA chains to,
+// and which offers no plaintext path to v2 at all. Every other caller must
+// leave it false — the mapping exchange talks to a public host with a public
+// certificate and has no business here.
+//
+// Turning verification off makes the transport blind to WHO answered, so the
+// Hue client re-establishes identity a layer up: it stores the bridge id at
+// pairing time and compares it on every reconnect (HueManager). Do not copy
+// this flag into a new caller without bringing an equivalent check with it.
 uint64_t begin(const std::string& method,
                const std::string& url,
                const std::vector<std::string>& headers = {},
                const std::string& body = {},
-               int timeoutSeconds = 20);
+               int timeoutSeconds = 20,
+               bool allowUntrustedCert = false);
 
 // If the request `id` has finished, fill `out` and return true (the result is
 // then forgotten — poll once). If still in flight, return false. An unknown id

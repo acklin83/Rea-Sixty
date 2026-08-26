@@ -15,6 +15,37 @@
 #include <map>
 #include <mutex>
 
+// Server-trust delegate for the untrusted-certificate session. A delegate-less
+// NSURLSession never asks anybody about the certificate, it just fails the task,
+// so the only way to accept the Hue bridge's Signify-signed certificate is a
+// second session that HAS a delegate. Name carries the ReaSixty prefix because
+// Objective-C classes live in one flat namespace shared with every other REAPER
+// extension in the process.
+@interface ReaSixtyTrustAnyServerDelegate : NSObject <NSURLSessionDelegate>
+@end
+
+@implementation ReaSixtyTrustAnyServerDelegate
+- (void)URLSession:(NSURLSession*)session
+    didReceiveChallenge:(NSURLAuthenticationChallenge*)challenge
+      completionHandler:(void (^)(NSURLSessionAuthChallengeDisposition,
+                                  NSURLCredential*))completionHandler
+{
+    // Only the server-trust challenge is answered blind. A proxy or HTTP-auth
+    // challenge still goes to the default handling — this session exists to
+    // skip a certificate chain, not to hand credentials to anyone who asks.
+    if ([challenge.protectionSpace.authenticationMethod
+            isEqualToString:NSURLAuthenticationMethodServerTrust]
+        && challenge.protectionSpace.serverTrust)
+    {
+        completionHandler(NSURLSessionAuthChallengeUseCredential,
+                          [NSURLCredential credentialForTrust:
+                              challenge.protectionSpace.serverTrust]);
+        return;
+    }
+    completionHandler(NSURLSessionAuthChallengePerformDefaultHandling, nil);
+}
+@end
+
 namespace reasixty::http {
 namespace {
 
@@ -44,13 +75,35 @@ NSURLSession* sharedSession() {
     return s_session;
 }
 
+// The same thing with the trust delegate attached. Separate session on purpose:
+// the delegate is per-session, so sharing one would make every request in the
+// extension certificate-blind instead of just the bridge's. Both the session and
+// its delegate are process-lifetime singletons and are never released.
+NSURLSession* untrustedCertSession() {
+    static NSURLSession* s_session = nil;
+    static std::once_flag s_once;
+    std::call_once(s_once, [] {
+        NSURLSessionConfiguration* cfg =
+            [NSURLSessionConfiguration ephemeralSessionConfiguration];
+        cfg.HTTPShouldSetCookies = NO;
+        cfg.URLCache = nil;
+        ReaSixtyTrustAnyServerDelegate* delegate =
+            [[ReaSixtyTrustAnyServerDelegate alloc] init];
+        s_session = [[NSURLSession sessionWithConfiguration:cfg
+                                                   delegate:delegate
+                                              delegateQueue:nil] retain];
+    });
+    return s_session;
+}
+
 } // namespace
 
 uint64_t begin(const std::string& method,
                const std::string& url,
                const std::vector<std::string>& headers,
                const std::string& body,
-               int timeoutSeconds)
+               int timeoutSeconds,
+               bool allowUntrustedCert)
 {
     @autoreleasepool {
         NSString* nsUrl = [NSString stringWithUTF8String:url.c_str()];
@@ -80,7 +133,9 @@ uint64_t begin(const std::string& method,
             g_requests[id] = Pending{};
         }
 
-        NSURLSessionDataTask* task = [sharedSession()
+        NSURLSession* session =
+            allowUntrustedCert ? untrustedCertSession() : sharedSession();
+        NSURLSessionDataTask* task = [session
             dataTaskWithRequest:req
               completionHandler:^(NSData* data, NSURLResponse* resp, NSError* err) {
             Response r;

@@ -11,7 +11,7 @@
 namespace reasixty::http {
 
 uint64_t begin(const std::string&, const std::string&,
-               const std::vector<std::string>&, const std::string&, int)
+               const std::vector<std::string>&, const std::string&, int, bool)
 {
     return 0;   // could not start — no client on this platform yet
 }

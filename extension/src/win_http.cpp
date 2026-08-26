@@ -92,7 +92,8 @@ Response perform(const std::string& method,
                  const std::string& url,
                  const std::vector<std::string>& headers,
                  const std::string& body,
-                 int timeoutSeconds)
+                 int timeoutSeconds,
+                 bool allowUntrustedCert)
 {
     Response r;
 
@@ -152,6 +153,20 @@ Response perform(const std::string& method,
         ::WinHttpCloseHandle(connect);
         ::WinHttpCloseHandle(session);
         return r;
+    }
+
+    // Certificate-blind mode for the Hue bridge (see HttpClient.h). Must be set
+    // on the REQUEST handle after WinHttpOpenRequest and before WinHttpSendRequest:
+    // WinHTTP validates during the send, and a flag set afterwards is never read.
+    // IGNORE_UNKNOWN_CA covers the Signify chain no system CA knows,
+    // IGNORE_CERT_CN_INVALID the common name (it is the bridge id, not the IP we
+    // dialled), IGNORE_CERT_DATE_INVALID a bridge whose clock has drifted.
+    if (secure && allowUntrustedCert) {
+        DWORD flags = SECURITY_FLAG_IGNORE_UNKNOWN_CA
+                    | SECURITY_FLAG_IGNORE_CERT_CN_INVALID
+                    | SECURITY_FLAG_IGNORE_CERT_DATE_INVALID;
+        ::WinHttpSetOption(request, WINHTTP_OPTION_SECURITY_FLAGS,
+                           &flags, (DWORD)sizeof(flags));
     }
 
     // Callers hand us full header lines; WinHTTP wants them CRLF-joined.
@@ -227,7 +242,8 @@ uint64_t begin(const std::string& method,
                const std::string& url,
                const std::vector<std::string>& headers,
                const std::string& body,
-               int timeoutSeconds)
+               int timeoutSeconds,
+               bool allowUntrustedCert)
 {
     const uint64_t id = g_nextId.fetch_add(1);
     {
@@ -237,8 +253,10 @@ uint64_t begin(const std::string& method,
 
     std::thread worker;
     try {
-        worker = std::thread([id, method, url, headers, body, timeoutSeconds] {
-            Response r = perform(method, url, headers, body, timeoutSeconds);
+        worker = std::thread([id, method, url, headers, body, timeoutSeconds,
+                              allowUntrustedCert] {
+            Response r = perform(method, url, headers, body, timeoutSeconds,
+                                 allowUntrustedCert);
             std::lock_guard<std::mutex> lk(g_mutex);
             auto it = g_requests.find(id);
             if (it != g_requests.end()) {   // still wanted (not cancelled)
