@@ -671,11 +671,13 @@ int          g_uf1PresetPendingFx = -1;
 std::atomic<bool> g_uf1Master {false};
 
 // UF1 main-LCD time/position field (element 0x0119, Channel view only). Holds a
-// format_timestr_pos mode: -1 = the project's own time format (default), 2 =
-// Measures/Beats, 4 = Samples. Cycled Time->Measures->Samples by the 360 button
-// (worker thread, atomic store only — threading rule); the format + send happen
-// main-thread in uf1PaintChannel_.
-// ⚠ TIME is mode -1, NOT the fixed h:m:s:f it was until 2026-08-26. The field's
+// format_timestr_pos mode: -1 = follow REAPER's TRANSPORT (default, resolved by
+// uf1TcEffectiveMode_), 2 = Measures/Beats, 4 = Samples. Cycled Time->Measures->
+// Samples by the 360 button (worker thread, atomic store only — threading rule);
+// the format + send happen main-thread in uf1PaintChannel_.
+// ⚠ -1 is OUR sentinel for "the transport", NOT format_timestr_pos's project
+// default — see uf1TcEffectiveMode_, which is where the difference bit.
+// ⚠ TIME is that sentinel, NOT the fixed h:m:s:f it was until 2026-08-26. The field's
 // whole job is to read what REAPER's transport reads — that is what SSL 360 does
 // here (Frank 2026-07-24: "er zeigt das an, was reaper im transport anzeigt") and
 // what the 0x0119 decode session prescribed, before a fixed three-step cycle was
@@ -684,7 +686,7 @@ std::atomic<bool> g_uf1Master {false};
 // came out as "-1:59:59:29" (Frank 2026-08-26) — and frames cannot spell 26 ms even
 // with the sign repaired.
 // Persisted as ExtState "uf1_tc_mode" (load main.cpp near nav_lower_row).
-std::atomic<int>  g_uf1TcMode {-1};     // -1 project format / 2 Measures / 4 Samples
+std::atomic<int>  g_uf1TcMode {-1};     // -1 transport / 2 Measures / 4 Samples
 
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
@@ -4251,7 +4253,7 @@ void loadBrightness()
         int n = std::atoi(v);
         if (n == 5) n = -1;                      // h:m:s:f retired 2026-08-26 — a
                                                  // stored 5 becomes the project format
-        if (n != 2 && n != 4 && n != -1) n = -1; // project format / Measures / Samples
+        if (n != 2 && n != 4 && n != -1) n = -1; // transport / Measures / Samples
         g_uf1TcMode.store(n);
     }
     if (const char* v = GetExtState("rea_sixty", "uf1_recv_view"); v && *v)
@@ -26788,6 +26790,40 @@ static void uf1EncodeTimecode_(const char* s, uint8_t out[11])
         out[at + k] = digits[k];
 }
 
+// g_uf1TcMode -> the format_timestr_pos mode to actually format with. Bars (2) and
+// Samples (4) are already modes; -1 is OUR sentinel for "whatever REAPER's TRANSPORT
+// shows", and resolving it takes a project-config read.
+// ⛔ format_timestr_pos's own -1 is NOT the transport. It is the RULER's time unit
+// ("projtimemode"), so on a bars ruler the TIME step read bars (Frank 2026-08-26:
+// "jetzt zeigt er bei time die Bars") — a fix that swapped one wrong format for
+// another. The transport keeps its OWN mode in "projtimemode2", and REAPER's own web
+// interface proves it: its TRANSPORT reply reads projtimemode2 and hands it straight
+// to format_timestr_pos, no translation (reaper-plugins/reaper_csurf/csurf_www.cpp).
+// projtimemode2 is negative while the transport is left on the project default, and
+// a negative goes back out as -1, which lands on the ruler — the same fallback
+// REAPER's own MCU surface makes (csurf_mcu.cpp, which also masks the value with
+// 0xff: the low byte is the mode, the high bits are REAPER's own flags).
+// Offset lookup is cached; it is fixed for the process. Main thread only, like every
+// projectconfig read.
+static int uf1TcEffectiveMode_(int mode)
+{
+    if (mode != -1) return mode;                 // Bars / Samples: explicit already
+    if (!projectconfig_var_getoffs || !projectconfig_var_addr) return -1;
+    static int  sOffs   = -1;
+    static bool sLooked = false;
+    if (!sLooked) {
+        sLooked = true;
+        int sz  = 0;
+        // 0 is the failure return, exactly as REAPER's own IMPVARP macro reads it.
+        const int off = projectconfig_var_getoffs("projtimemode2", &sz);
+        sOffs = (off && sz == static_cast<int>(sizeof(int))) ? off : -1;
+    }
+    if (sOffs < 0) return -1;
+    const int* tm = static_cast<const int*>(projectconfig_var_addr(nullptr, sOffs));
+    if (!tm) return -1;
+    return (*tm < 0) ? -1 : (*tm & 0xff);
+}
+
 // Short display name of the ACTIVE FX for the CS-TYPE zone (0x0017), mirroring
 // UF8/UC1: the SSL short type name (PluginMap.displayShort — "CS 2"/"4K E"/"BC 2"/…)
 // for SSL strips, the Short User Name (UserPluginMap.displayShort) for non-SSL
@@ -28090,7 +28126,7 @@ void uf1PaintChannel_()
     // 360 drives the UF1's Channel view (decoded 2026-07-24). Read the playhead
     // while running, else the edit cursor when stopped (mirrors the UF8 nav-row
     // path below). Format via format_timestr_pos with the user-cycled g_uf1TcMode
-    // (project format / Measures / Samples, cycled by the 360 button on the worker),
+    // (transport format / Measures / Samples, cycled by the 360 button on the worker),
     // then encode into the 11-byte 7-segment field. Send-on-change: only when the 11
     // bytes differ (forced on view/gen change via `changed`), so a stable stopped
     // string never spams. Meter view NEVER writes 0x0119 (kept in the meter branch).
@@ -28099,7 +28135,7 @@ void uf1PaintChannel_()
         const double pos  = (ps & 1) ? GetPlayPosition() : GetCursorPosition();
         const int    mode = g_uf1TcMode.load();
         char buf[64];
-        format_timestr_pos(pos, buf, sizeof(buf), mode);
+        format_timestr_pos(pos, buf, sizeof(buf), uf1TcEffectiveMode_(mode));
 
         static std::array<uint8_t, 11> sTc{};
         static int sTcMode = INT_MIN;
