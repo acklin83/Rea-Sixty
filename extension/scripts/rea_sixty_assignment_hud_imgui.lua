@@ -1633,6 +1633,17 @@ local function renderUf1Tab(u1)
   if uf1View.page >= shownPages then uf1View.page = shownPages - 1 end
   if uf1View.page < 0 then uf1View.page = 0 end
 
+  -- The spare stops being spare the moment something is bound on it. From then on
+  -- the page really exists, so the hardware is sent there once, the same trigger the
+  -- FX-Learn page row uses, so the two renderers of this row behave the same (Frank
+  -- 2026-08-26: "hud und learn gleich!"). Kept in uf1View rather than a new local:
+  -- the main chunk is at Lua's 200-local ceiling.
+  if uf1View.spare and uf1View.spare < u1.pages and uf1View.page == uf1View.spare then
+    sendCmd("uf1page;" .. uf1View.page)
+    uf1View.hw = uf1View.page
+  end
+  uf1View.spare = (uf1View.page >= u1.pages) and uf1View.page or nil
+
   -- WHICH plug-in this grid is. The Name field above belongs to the shared edit
   -- row (the CS/BC plug-in), and the UF1 can be focused on a different track —
   -- so without this an unmapped UF1 target looked like the named plug-in's map
@@ -3968,7 +3979,16 @@ local function loop()
             handleParamClick(lx, ly)
           else
             local p = uf1PageAt(lx, ly)
-            if p then uf1View.page = p
+            if p then
+              uf1View.page = p
+              -- A real page moves the HARDWARE too, exactly as the FX-Learn page
+              -- row does. Never the spare: the device has no such page and the
+              -- painter clamps it straight back, which would drag the view off it.
+              local u1p = readUf1()
+              if u1p and p < (u1p.pages or 0) then
+                sendCmd("uf1page;" .. p)
+                uf1View.hw = p
+              end
             else
               -- The whole-layer row under the assignments (Fill / Unbind all /
               -- Show EQ Graph) takes the click before any cell logic.

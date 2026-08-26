@@ -428,6 +428,9 @@ bool        reasixty_uf1EncoderModeVisible(int modeInt);
 void        reasixty_setUf1EncoderModeVisible(int modeInt, bool on);
 void        reasixty_uf1EncoderMoveSeq(int pos, int dir);
 const char* reasixty_uf1EncoderModeName(int modeInt);
+// Needed by the hud_cmd drain ("uf1page;"), which sits inside the anonymous
+// namespace below — a declaration in there would name an internal symbol.
+void        reasixty_setUf1CsPage(int page);
 
 
 namespace {
@@ -24629,6 +24632,7 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
 // render that TRACKS the real gain/freq/Q; the exact SSL proprietary curve
 // shape (E vs G proportional-Q etc.) can be refined against cap73 later — the
 // scale is already calibrated to cap73's 187 peak (~5.44 px/dB, +16 dB max).
+
 namespace {
 
 // Index of an FX on `tr` exposing SSL-channel-strip EQ params, or -1. Detected
@@ -36729,6 +36733,19 @@ void onTimerBody_()
                 if (uf1ResolveCsFx_(uf1FocusedTrack_(), u1Tr, u1Fx) >= 0
                     && reasixty_hudUf1EqGraph(u1Tr, u1Fx, on)) {
                     g_hudUf1AssignPublished.clear();
+                    g_pageDirty.store(true);
+                    publishHud_();
+                }
+            } else if (s.rfind("uf1page;", 0) == 0) {
+                // "uf1page;<n>" — page the UF1 onto page n. The Learn-HUD's page
+                // row moves the device exactly as the FX-Learn pane's does, so the
+                // two renderers of the same row behave the same (Frank 2026-08-26:
+                // "hud und learn gleich!"). The HUD never sends the SPARE page: the
+                // device has no such page and the painter clamps g_uf1CsPage back to
+                // the map's count, which is what used to drag the view off it.
+                const int pg = std::atoi(s.c_str() + 8);
+                if (pg >= 0) {
+                    reasixty_setUf1CsPage(pg);
                     g_pageDirty.store(true);
                     publishHud_();
                 }

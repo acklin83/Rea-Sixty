@@ -16357,6 +16357,19 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
             if (hw >= 0 && hw < shownPages) g_uf1EditingPage = hw;   // device → editor
         }
     }
+    // The spare stops being spare the moment something is bound on it. From then
+    // on the page really exists, so the device is sent to it ONCE — otherwise the
+    // editor would sit on a page the hardware has and is not showing, which is the
+    // split this row exists to prevent. The Learn-HUD does the same on the same
+    // trigger (Frank 2026-08-26: "hud und learn gleich!").
+    static int s_spareWas = -1;
+    if (pageLinked && s_spareWas >= 0 && s_spareWas < pages
+        && g_uf1EditingPage == s_spareWas) {
+        reasixty_setUf1CsPage(s_spareWas);
+        s_hwPageSeen = s_spareWas;
+    }
+    s_spareWas = (g_uf1EditingPage >= pages) ? g_uf1EditingPage : -1;
+
     for (int p = 0; p < shownPages; ++p) {
         // Wrap after 8 rather than one endless SameLine row. Even inside the
         // 16-page ceiling a single line of page buttons runs off the pane, and an
