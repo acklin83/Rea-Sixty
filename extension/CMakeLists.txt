@@ -361,6 +361,7 @@ add_library(reaper_uf8 MODULE
     # Hue Mode — Philips Hue lights on the strips, CLIP API v2 over the LAN
     src/HueColor.cpp
     src/HueClient.cpp
+    src/HueManager.cpp
     src/StreamDeckBridge.cpp
     # SSL 360°Core impersonator — meter data straight from the SSL plug-in.
     # Self-contained (std lib only, no REAPER API); this is what supplies the

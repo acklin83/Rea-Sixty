@@ -142,11 +142,17 @@ std::vector<Light> parseLights(const std::string& json);
 // A room or a zone. `groupedLightId` is the id to WRITE to; the room's own id
 // is not a thing you can dim. A room with no grouped_light service comes back
 // with that field empty and must not be offered as a target.
+// ⇨ `childRids` is what makes the recording light restorable. A grouped_light
+//   can be written in one broadcast but cannot be READ back per lamp, so the
+//   before-state has to be taken from the member lights: room children are
+//   device rids, and a light's `owner.rid` is its device. (A zone's children are
+//   the light services themselves, so the same list resolves both ways.)
 struct Group {
-    std::string id;
-    std::string name;
-    std::string groupedLightId;
-    bool        isZone = false;
+    std::string              id;
+    std::string              name;
+    std::string              groupedLightId;
+    std::vector<std::string> childRids;
+    bool                     isZone = false;
 };
 std::vector<Group> parseGroups(const std::string& json, bool zones);
 

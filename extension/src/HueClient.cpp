@@ -363,6 +363,18 @@ std::vector<Group> parseGroups(const std::string& json, bool zones)
         g.name   = text(child(e, "metadata"), "name");
         g.isZone = zones;
 
+        // Members: device rids for a room, light-service rids for a zone. Both
+        // shapes go in the same list; the caller resolves whichever matches.
+        if (const wdl_json_element* kids = e->get_item_by_name("children")) {
+            const int m = arraySize(kids);
+            for (int j = 0; j < m; ++j) {
+                const wdl_json_element* c = kids->enum_item(j);
+                if (!c || !c->is_object()) continue;
+                std::string rid = text(c, "rid");
+                if (!rid.empty()) g.childRids.push_back(std::move(rid));
+            }
+        }
+
         // ⇨ The writable id is NOT the room's. A room carries a `services` array
         //   and the grouped_light entry in it is the thing that dims. A room with
         //   no such service (no lights in it yet) stays unusable on purpose.

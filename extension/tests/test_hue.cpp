@@ -360,6 +360,11 @@ int main()
         EXPECT(rooms[0].name == "Studio");
         EXPECT(rooms[0].groupedLightId == "gl-9");
         EXPECT(!rooms[0].isZone);
+        // Members carry the recording light's restore path: device rids here,
+        // matched later against each light's owner.rid.
+        EXPECT(rooms[0].childRids.size() == 1);
+        EXPECT(rooms[0].childRids[0] == "dev-1");
+        EXPECT(rooms[1].childRids.empty());
         // A room with no grouped_light service cannot be dimmed, and the empty
         // id is how the settings list knows not to offer it.
         EXPECT(rooms[1].groupedLightId.empty());
