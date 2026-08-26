@@ -5679,6 +5679,12 @@ const char* builtinCategory(const std::string& n)
     if (n.rfind("selection_mode_", 0) == 0)
         return "Selection Modes";
 
+    // Hue Mode's own actions. uf1_hue is named here rather than under Hardware
+    // Modes so all of Hue sits in one place in the picker — the UF1 mode is not
+    // useful without the scene actions next to it.
+    if (n.rfind("hue_", 0) == 0 || n == "uf1_hue")
+        return "Hue";
+
     if (n.rfind("encoder_", 0) == 0 || n.rfind("uf1_encoder_", 0) == 0)
         return "Encoder Modes";
 
@@ -6444,7 +6450,7 @@ const std::vector<const char*>& builtinCategoryOrder()
         "Hardware Modes", "Plug-in", "Layer", "Soft-Key Bank", "SSL",
         "Bank / Page", "Automation", "Zoom", "Sends / Receives",
         "Selection Sets", "Parameter Groups", "Tracks", "Master",
-        "Brightness", "Modifiers", "FX Param", "Sticky Pot",
+        "Brightness", "Modifiers", "FX Param", "Sticky Pot", "Hue",
     };
     return kCats;
 }

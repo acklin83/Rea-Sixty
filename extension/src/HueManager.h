@@ -212,6 +212,7 @@ public:
     double   liveBri01(int i);      // 0..1 for the motor fader
     double   liveHueDeg(int i);
     double   liveSat(int i);
+    double   liveWarm(int i);       // 0 cold .. 1 warm
     bool     liveWhite(int i);
     uint32_t liveRgb24(int i);      // colour bar / LED
     bool     liveReachable(int i);

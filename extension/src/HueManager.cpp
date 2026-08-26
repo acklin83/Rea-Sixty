@@ -479,6 +479,12 @@ double HueManager::liveSat(int i)
     return live_[static_cast<size_t>(i)].sat.load();
 }
 
+double HueManager::liveWarm(int i)
+{
+    if (i < 0 || i >= kMaxSlots) return 0.0;
+    return live_[static_cast<size_t>(i)].warm.load();
+}
+
 bool HueManager::liveWhite(int i)
 {
     if (i < 0 || i >= kMaxSlots) return false;

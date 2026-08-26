@@ -90,6 +90,7 @@
 #include "MarkerOverlay.h"
 #include "MidiBridge.h"
 #include "DynaMountManager.h"
+#include "HueManager.h"
 #include "StreamDeckBridge.h"
 #include "SslCoreImpersonator.h"
 #include "uf1_loudness_chrome.h"
@@ -649,6 +650,17 @@ bool g_uf1PresetJustClosed = false;
 // LOADS the highlighted preset live. SK3="Navigate Back" exits. NB: SSL draws the full name
 // LIST as a 0x0122 bitmap — we show the CURRENT (highlighted) name as text instead.
 std::atomic<bool> g_uf1PresetsMode {false};
+
+// Hue Mode: the UF1's focus lamp, as a slot index into HueManager. SEL on a
+// UF8 lamp strip sets it, the UF1's fourth V-Pot walks it, and the UF1 paints
+// whichever slot it names. Kept here rather than inside HueManager because it is
+// a SURFACE fact (which lamp is on the UF1's screen), not a bridge fact — the
+// manager has no idea a UF1 exists.
+std::atomic<int>  g_hueFocusSlot {0};
+// UF1 Hue Mode. Same shape as g_uf1PresetsMode above: a flag, a toggle builtin
+// with a state lambda, one branch in the channel painter, one gate in the input
+// handler.
+std::atomic<bool> g_uf1HueMode {false};
 // Preset-browser working state — MAIN-THREAD ONLY (the painter in onTimer + the V-Pot4
 // drain in applyUf1MeterVpot_, both main-thread). Scanned once on entry, scrolled/loaded
 // on V-Pot4. g_uf1PresetSel indexes g_uf1PresetList.
@@ -1544,7 +1556,7 @@ inline std::string readTrackPExt_(MediaTrack* tr, const char* key)
 // & V-Pot rotation scrolls auto-modes; Instance = V-Pot rotation
 // cycles the plug-in instance on the strip's track. Bindable via the
 // `selection_mode_*` builtins (registered in registerBindingHandlers).
-enum class SelectionMode : uint8_t { Norm = 0, Rec, RecMon, Auto, Instance, InstanceCycle, DynaMount };
+enum class SelectionMode : uint8_t { Norm = 0, Rec, RecMon, Auto, Instance, InstanceCycle, DynaMount, Hue };
 std::atomic<SelectionMode> g_selectionMode{SelectionMode::Norm};
 // Come back as Normal after a REAPER restart (Settings → Behaviour → Selection
 // mode). The mode itself is still persisted; this only decides whether the
@@ -1581,6 +1593,7 @@ inline const char* selectionModeStr(SelectionMode m)
         case SelectionMode::Instance:      return "instance";
         case SelectionMode::InstanceCycle: return "instance_cycle";
         case SelectionMode::DynaMount:     return "dynamount";
+        case SelectionMode::Hue:           return "hue";
         case SelectionMode::Norm:
         default:                           return "norm";
     }
@@ -1596,6 +1609,7 @@ inline const char* selectionModeFriendly(SelectionMode m)
         case SelectionMode::Instance:      return "Instance";
         case SelectionMode::InstanceCycle: return "Instance Cycle";
         case SelectionMode::DynaMount:     return "DynaMount";
+        case SelectionMode::Hue:           return "Hue";
         case SelectionMode::Norm:
         default:                           return "Select";
     }
@@ -1610,6 +1624,7 @@ inline SelectionMode parseSelectionMode(const char* s)
     if (std::strcmp(s, "instance")       == 0) return SelectionMode::Instance;
     if (std::strcmp(s, "instance_cycle") == 0) return SelectionMode::InstanceCycle;
     if (std::strcmp(s, "dynamount")      == 0) return SelectionMode::DynaMount;
+    if (std::strcmp(s, "hue")            == 0) return SelectionMode::Hue;
     return SelectionMode::Norm;
 }
 
@@ -1905,6 +1920,23 @@ inline int stripToVisibleSlot(int strip, int bankOffset) {
             // Right-anchored mounts sit on strips 8-N..7, so the left strips
             // 0..7-N map 1:1 onto tracks. Left-anchored mounts sit on 0..N-1,
             // so track strips start at N and shift down by N.
+            const int tpos = right ? strip : (strip - n);
+            return tpos + bankOffset;
+        }
+    }
+    // Hue mode: the same reservation, one floor up. The defined lamp slots pin
+    // N strips to one side and those strips carry lights instead of tracks, so
+    // they return -1 here and the remaining strips show the bank pushed past
+    // the reserved block. Deliberately a copy of the DynaMount branch rather
+    // than a shared helper: the two modes are mutually exclusive (one
+    // SelectionMode) and folding them together would only hide which one is
+    // holding a strip when something goes wrong.
+    if (g_selectionMode.load() == SelectionMode::Hue) {
+        auto& hm = uf8::hue::manager();
+        const int n = hm.definedCount();
+        if (n > 0) {
+            if (hm.slotForStrip(strip) >= 0) return -1;   // lamp strip, no track
+            const bool right = hm.fillDir() == uf8::hue::HueManager::FillDir::Right;
             const int tpos = right ? strip : (strip - n);
             return tpos + bankOffset;
         }
@@ -21235,6 +21267,27 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         continue;
                     }
                 }
+                // Hue mode: a lamp strip's fader IS streamed, unlike a mount's.
+                // The manager coalesces to the newest value and lets at most one
+                // write per rate window through, and every write carries a
+                // transition time, so the lamp ramps instead of stepping. Held
+                // back to release the way DynaMount does it, the lamp would only
+                // move once you let go, which is exactly the feel this feature
+                // exists to avoid.
+                if (g_selectionMode.load() == SelectionMode::Hue) {
+                    const int hslot = uf8::hue::manager().slotForStrip(strip);
+                    if (hslot >= 0) {
+                        uf8::hue::manager().setFader(
+                            hslot,
+                            static_cast<double>(pb14)
+                                / static_cast<double>(kUf8FaderPbMax),
+                            /*released=*/false);
+                        if (g_dev)
+                            g_dev->send(uf8::buildFaderPosition(strip, lsb | 0x80, msb));
+                        i += frameSize;
+                        continue;
+                    }
+                }
                 // Always record the raw position so the touch-release
                 // commit can snap REAPER to where the fader physically
                 // ended up, even if every frame this touch was sub-deadband.
@@ -21706,6 +21759,19 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     if (pressed) {
                         const uint8_t strip =
                             static_cast<uint8_t>(id - 0x08);
+                        // Hue mode: a lamp strip's V-Pot push does whatever
+                        // Settings put on it (white/colour toggle by default).
+                        // Ahead of the learn intercept for the same reason the
+                        // strip keys are: no track, nothing to learn.
+                        if (g_selectionMode.load() == SelectionMode::Hue) {
+                            const int hslot =
+                                uf8::hue::manager().slotForStrip(strip);
+                            if (hslot >= 0) {
+                                uf8::hue::manager().pushPot(hslot);
+                                i += frameSize;
+                                continue;
+                            }
+                        }
                         // Learn intercept (Frank 2026-06-20): a V-Pot PRESS
                         // during learn means "bind this as a Toggle" (push
                         // flips 0↔1) rather than a continuous fader.
@@ -21777,7 +21843,27 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 } else if (id >= 0x20 && id <= 0x37) {
                     const uint8_t strip = static_cast<uint8_t>((id - 0x20) / 3);
                     const int which     = (id - 0x20) % 3;   // 0=SOLO 1=CUT 2=SEL
-                    if (pressed && uf8TouchLearnArm_(which + 2, strip)) {
+                    // Hue mode: a lamp strip's three keys belong to the lamp,
+                    // and this has to come BEFORE the learn arm — there is no
+                    // track under a lamp strip to learn anything against.
+                    // CUT = on/off, SOLO = light solo (everything else dark),
+                    // SEL = make this the UF1's focus lamp.
+                    bool hueTook = false;
+                    if (pressed && g_selectionMode.load() == SelectionMode::Hue) {
+                        const int hslot = uf8::hue::manager().slotForStrip(strip);
+                        if (hslot >= 0) {
+                            hueTook = true;
+                            if (which == 1)      uf8::hue::manager().toggleOn(hslot);
+                            else if (which == 0) uf8::hue::manager().soloLight(hslot);
+                            else                 g_hueFocusSlot.store(hslot);
+                        }
+                    } else if (!pressed && g_selectionMode.load() == SelectionMode::Hue
+                               && uf8::hue::manager().slotForStrip(strip) >= 0) {
+                        hueTook = true;   // swallow the release too
+                    }
+                    if (hueTook) {
+                        // nothing further: the lamp keys never reach a track
+                    } else if (pressed && uf8TouchLearnArm_(which + 2, strip)) {
                         // Touch-to-Learn armed this Solo/Cut/Sel cell (kind 2/3/4)
                         // → suppress the normal press.
                     } else if (pressed) {
@@ -21957,6 +22043,29 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     continue;
                 }
             }
+            // Hue mode: touch limps the motor the same way, but the release only
+            // has to say "send the final value now" — the drag was streaming all
+            // along. Without the flush the last position sits in the coalescer
+            // until the rate window rolls round, which reads as a lamp that
+            // lands a beat after the hand stops.
+            if (strip < 8 && g_selectionMode.load() == SelectionMode::Hue) {
+                const int hslot = uf8::hue::manager().slotForStrip(strip);
+                if (hslot >= 0) {
+                    if (state != 0) {
+                        g_touchReported[strip].store(true);
+                        if (g_dev) g_dev->sendPriority(
+                            uf8::buildMotorEnable(strip, false));
+                        g_faderMotorEngaged[strip].store(false);
+                    } else {
+                        g_touchReported[strip].store(false);
+                        uf8::hue::manager().setFader(
+                            hslot, uf8::hue::manager().liveBri01(hslot),
+                            /*released=*/true);
+                    }
+                    i += frameSize;
+                    continue;
+                }
+            }
             if (strip < 8) {
                 // Diag log — same path as f73201c. Append-mode, one line
                 // per touch event so we can correlate with FF 1B keepalive
@@ -22086,6 +22195,17 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 const int mnt = uf8::dynamount::manager().mountForStrip(strip);
                 if (mnt >= 0) {
                     uf8::dynamount::manager().nudgeRotation(mnt, signed6);
+                    i += frameSize;
+                    continue;
+                }
+            }
+            // Hue mode: a lamp strip's V-Pot walks whichever axis Settings put
+            // on it (hue by default, saturation under FLIP). Atomic setter, so
+            // it is safe from the input thread.
+            if (strip < 8 && g_selectionMode.load() == SelectionMode::Hue) {
+                const int hslot = uf8::hue::manager().slotForStrip(strip);
+                if (hslot >= 0) {
+                    uf8::hue::manager().nudgePot(hslot, signed6, g_flip.load());
                     i += frameSize;
                     continue;
                 }
@@ -29692,6 +29812,29 @@ uint32_t reaperColorForVisibleSlot(int slot)
             return 0;
         }
     }
+    // Hue strip — the colour bar shows the LAMP's live colour, not a palette
+    // slot picked in Settings. A mount has no colour of its own so it borrows
+    // one; a lamp IS a colour, and quantizing the real one is the whole point.
+    // The configured palette index is the fallback for a lamp that is off or
+    // whose colour we do not know yet.
+    if (g_selectionMode.load() == SelectionMode::Hue && slot >= 0 && slot < 8) {
+        auto& hm = uf8::hue::manager();
+        const int hslot = hm.slotForStrip(slot);
+        if (hslot >= 0) {
+            const uint32_t live = hm.liveRgb24(hslot);
+            if (live != 0u) return live;
+            int palCount = 0;
+            const uf8::PaletteRgb* pal = uf8::selPaletteRgb(&palCount);
+            int ci = hm.slot(hslot).colour;
+            if (ci < 0) ci = 0;
+            if (palCount > 0 && ci >= palCount) ci = palCount - 1;
+            if (palCount > 0) {
+                const uf8::PaletteRgb& p = pal[ci];
+                return (uint32_t(p.r) << 16) | (uint32_t(p.g) << 8) | uint32_t(p.b);
+            }
+            return 0;
+        }
+    }
 
     const int realSlot   = stripToVisibleSlot(slot, bankOffset);
 
@@ -29809,6 +29952,11 @@ std::string slotLabelForVisibleSlot(int slot)
             // the upper scribble text). Frank 2026-06-29: label = DYNAMOUNT.
             return "DYNAMOUNT";
         }
+    }
+    // Hue strip — same idea, the zone names the MODE and the per-lamp name goes
+    // in the upper scribble.
+    if (g_selectionMode.load() == SelectionMode::Hue && slot >= 0 && slot < 8) {
+        if (uf8::hue::manager().slotForStrip(slot) >= 0) return "HUE";
     }
     const int realSlot   = stripToVisibleSlot(slot, g_bankOffset.load());
     if (MediaTrack* mp = masterPinTrack_(slot)) {
@@ -31711,6 +31859,121 @@ void pushZonesForVisibleSlots()
                 vpotBar[s] = vpotPosFromUnipolar(
                     static_cast<double>(rVal) /
                     static_cast<double>(uf8::dynamount::kRMax));
+                continue;
+            }
+        }
+
+        // Hue strip — render the lamp and skip the track pipeline, exactly the
+        // way the mount branch above does. `tr` is null on a lamp strip, so the
+        // Solo/Cut/Sel LED blocks earlier already painted them off, and the
+        // colour bar plus the slot-label zone come from
+        // reaperColorForVisibleSlot / slotLabelForVisibleSlot. Everything else
+        // is ours.
+        if (g_selectionMode.load() == SelectionMode::Hue) {
+            auto& hm = uf8::hue::manager();
+            const int hslot = hm.slotForStrip(s);
+            if (hslot >= 0) {
+                const uf8::hue::SlotConfig cfg = hm.slot(hslot);
+
+                // Upper scribble — the lamp label, folded to Latin-1 like every
+                // other name that reaches this surface.
+                std::string nm = utf8ToLatin1(
+                    cfg.label.empty() ? cfg.bridgeName : cfg.label);
+                if (nm.empty()) nm = "LAMP";
+                if (nm.size() > 7) nm.resize(7);
+                if (bankChanged || g_lastTrackName[s] != nm) {
+                    g_lastTrackName[s] = nm;
+                    g_dev->send(uf8::buildStripTextUpper(
+                        static_cast<uint8_t>(s), nm));
+                }
+
+                // Channel-strip-type zone — tag the strip, and say WHICH kind
+                // it is: a zone answers once a second where a lamp answers ten
+                // times, and that is the whole difference in feel.
+                const std::string cs =
+                    (cfg.kind == uf8::hue::TargetKind::Group) ? "ZONE" : "LAMP";
+                if (bankChanged || g_lastCsType[s] != cs) {
+                    g_lastCsType[s] = cs;
+                    g_dev->send(uf8::buildChannelStripType(
+                        static_cast<uint8_t>(s), cs));
+                }
+
+                // Channel-number digit — the slot's 1-based config index.
+                char chbuf[8];
+                snprintf(chbuf, sizeof(chbuf), "%d", hslot + 1);
+                const std::string ch = chbuf;
+                if (!overlayActive && (bankChanged || g_lastChanNum[s] != ch)) {
+                    g_lastChanNum[s] = ch;
+                    g_dev->send(uf8::buildChannelNumber(
+                        static_cast<uint8_t>(s), ch));
+                }
+
+                // Fader readout — brightness in percent. No "dB": this is not a
+                // level, so the unit slot is blanked.
+                char dbbuf[8];
+                if (!hm.liveOn(hslot)) snprintf(dbbuf, sizeof(dbbuf), "OFF");
+                else snprintf(dbbuf, sizeof(dbbuf), "%d",
+                              static_cast<int>(hm.liveBri01(hslot) * 100.0 + 0.5));
+                const std::string db = dbbuf;
+                if (bankChanged || g_lastFaderDb[s] != db) {
+                    g_lastFaderDb[s] = db;
+                    g_dev->send(uf8::buildFaderDbReadout(
+                        static_cast<uint8_t>(s), db, ""));
+                }
+
+                // Value line — the full lamp state, or OFFLINE when the bridge
+                // is not answering for this one.
+                std::string vl = hm.liveValueLine(hslot);
+                if (vl.size() > 19) vl.resize(19);
+                if (bankChanged || g_lastValueLine[s] != vl) {
+                    g_lastValueLine[s] = vl;
+                    g_dev->send(uf8::buildValueLine(static_cast<uint8_t>(s), vl));
+                }
+
+                // Motor fader — brightness, parked while the user has hold of
+                // it. Same re-engage dance as the mount branch: after a touch
+                // the strip is left limp and the firmware discards plain drive
+                // frames, so the bit-7 echo has to load the limp buffer first.
+                if (!g_touchReported[s].load()) {
+                    const double fn = hm.liveBri01(hslot);
+                    uint16_t pb = static_cast<uint16_t>(
+                        fn * static_cast<double>(kUf8FaderPbMax) + 0.5);
+                    if (pb > kUf8FaderPbMax) pb = kUf8FaderPbMax;
+                    g_motorTargetPb[s].store(pb);
+                    if (!g_faderPbInit || g_lastFaderPb[s] != pb) {
+                        g_lastFaderPb[s] = pb;
+                        const uint8_t lsb = static_cast<uint8_t>(pb & 0x7F);
+                        const uint8_t msb = static_cast<uint8_t>((pb >> 7) & 0x7F);
+                        if (!g_faderMotorEngaged[s].load()) {
+                            g_dev->send(uf8::buildFaderPosition(
+                                static_cast<uint8_t>(s), (lsb | 0x80), msb));
+                            g_dev->send(uf8::buildMotorEnable(
+                                static_cast<uint8_t>(s), true));
+                            g_faderMotorEngaged[s].store(true);
+                        }
+                        g_dev->send(uf8::buildFaderPosition(
+                            static_cast<uint8_t>(s), lsb, msb));
+                    }
+                }
+
+                // V-Pot ring — whichever axis the pot is on. Hue is a CIRCLE,
+                // so its bar wraps at 360 and a unipolar ring is the honest
+                // picture of it; saturation and warmth are plain 0..1.
+                const uf8::hue::Controls ctl = hm.controls();
+                const uf8::hue::PotRole role =
+                    g_flip.load() ? ctl.potFlip : ctl.pot;
+                double ring = 0.0;
+                switch (role) {
+                    case uf8::hue::PotRole::Hue:
+                        ring = hm.liveHueDeg(hslot) / 360.0; break;
+                    case uf8::hue::PotRole::Saturation:
+                        ring = hm.liveSat(hslot); break;
+                    case uf8::hue::PotRole::Warmth:
+                        ring = hm.liveWarm(hslot); break;
+                    case uf8::hue::PotRole::Off:
+                    default: ring = 0.0; break;
+                }
+                vpotBar[s] = vpotPosFromUnipolar(ring);
                 continue;
             }
         }
@@ -44318,6 +44581,55 @@ void registerBindingHandlers()
                                 SelectionMode::DynaMount,
                                 "Selection Mode → DynaMount");
 
+    // Hue Mode — the defined lamp slots (Settings → Modes → Hue) pin N strips
+    // to one side; their faders are brightness, their V-Pots the colour axis,
+    // CUT is on/off, SOLO is a light solo and SEL picks the UF1's focus lamp.
+    // The remaining strips stay normal tracks.
+    registerSelectionModeToggle("selection_mode_hue",
+                                SelectionMode::Hue,
+                                "Selection Mode → Hue");
+
+    // Scene recall, parameter 1..8 = the slot in Settings → Modes → Hue. A
+    // plain builtin rather than a dynamic bank, so a scene goes on any key of
+    // any surface the bindings already reach. Long press starts the scene
+    // dynamically (dynamic_palette) instead of just recalling it.
+    registerBuiltin("hue_scene_recall", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            const int slot = (param > 0) ? (param - 1) : 0;
+            uf8::hue::manager().recallSceneSlot(slot, /*dynamic=*/false);
+        },
+        nullptr, "Hue: recall scene", true
+    });
+    registerBuiltin("hue_scene_recall_dynamic", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            const int slot = (param > 0) ? (param - 1) : 0;
+            uf8::hue::manager().recallSceneSlot(slot, /*dynamic=*/true);
+        },
+        nullptr, "Hue: start scene dynamically", true
+    });
+    registerBuiltin("hue_all_off", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) uf8::hue::manager().allOff();
+        },
+        nullptr, "Hue: all lamps off", false
+    });
+    // Arms the recording light without touching the Settings pane, and reads
+    // back its state so a bound key can light up while it is held.
+    registerBuiltin("hue_rec_light", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            uf8::hue::RecLightConfig rc = uf8::hue::manager().recLight();
+            rc.enabled = !rc.enabled;
+            uf8::hue::manager().setRecLight(rc);
+            SetExtState("rea_sixty", "hue_config",
+                        uf8::hue::manager().serialize().c_str(), true);
+        },
+        [](int) { return uf8::hue::manager().recLight().enabled; },
+        "Hue: recording light on / off", false
+    });
+
     // Explicit "back to Norm" — bind to the Norm/CLEAR hardware button.
     // Always sets Norm (no toggle); pressing it from Norm is a no-op
     // change but still forces a re-push so the LED layer stays in sync.
@@ -47457,6 +47769,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         // Stop the DynaMount worker thread + close its sockets (created in the
         // init path below, so it always exists here).
         uf8::dynamount::manager().stop();
+        // Same for the Hue worker: it may be mid-request against a bridge that
+        // is not answering, and stop() is what lets it out of the poll loop.
+        uf8::hue::manager().stop();
         // Stop the Stream Deck bridge server + join its worker thread.
         uf8::sdbridge::stop();
         // Stop the SSL Core impersonator worker (no-op if it never started).
@@ -47584,6 +47899,21 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         // Detect each time (Frank 2026-06-28). Worker is already running.
         for (int i = 0; i < uf8::dynamount::kMaxMounts; ++i)
             if (dm.mountEnabled(i)) dm.requestDetect(i);
+    }
+
+    initLog("step: init Hue manager");
+    // Same reasoning as DynaMount above: load the persisted slots so Hue Mode
+    // works without first opening Settings, and touch the singleton HERE, on the
+    // main thread, so the libusb input thread never trips the lazy init
+    // mid-frame. The application key lives in its own ExtState value so a shared
+    // setup bundle can carry the slots without the credentials.
+    {
+        uf8::hue::HueManager& hm = uf8::hue::manager();
+        if (const char* blob = GetExtState("rea_sixty", "hue_config");
+            blob && *blob)
+            hm.deserialize(blob);
+        if (const char* key = GetExtState("rea_sixty", "hue_key"); key && *key)
+            hm.deserializeCredentials(key);
     }
 
     initLog("step: deploy input-level JSFX");
