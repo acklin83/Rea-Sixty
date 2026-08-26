@@ -26742,11 +26742,6 @@ static void uf1FlashTimecode_(std::string_view text, int ms)
 // the ten cells, so the digits get nine when it is present.
 // A longer string keeps the rightmost digits (the low-order ones survive,
 // matching a right-aligned field) and the sign still leads them.
-// The project's combined "measures.beats + time" format hands over TWO readings in
-// one string and ten cells can only carry one, so encoding stops at the first '/'
-// or space once digits have started and keeps the leading (bars) half. ⚠ Which
-// separator REAPER puts between the two halves is NOT verified against a capture;
-// the other six formats contain neither character, so the stop cannot fire on them.
 // ⚠ Was eleven until 2026-08-22 — an eleven-digit sample count put its leading
 // digit in the invisible byte 0 and read an order of magnitude short. That the
 // dead cell went unnoticed for a month is right-align's doing: no clock string
@@ -26770,8 +26765,6 @@ static void uf1EncodeTimecode_(const char* s, uint8_t out[11])
         } else if (c == '-' && n == 0) {
             neg = true;                          // LEADING sign only, never a dash
                                                  // inside the string
-        } else if ((c == '/' || c == ' ') && n > 0) {
-            break;                               // combined format: keep the first half
         }
         // any other char is skipped — no glyph for it
     }
@@ -26790,38 +26783,67 @@ static void uf1EncodeTimecode_(const char* s, uint8_t out[11])
         out[at + k] = digits[k];
 }
 
+// REAPER keeps its time units in two project-config ints: "projtimemode" is the
+// RULER's unit (and what format_timestr_pos calls the project default), "projtimemode2"
+// is the TRANSPORT's own unit, negative while the transport is left on "Time unit to
+// ruler". REAPER's own surfaces read exactly this pair — its web interface hands
+// projtimemode2 straight to format_timestr_pos, no translation, and its MCU falls back
+// to projtimemode when it is negative (reaper-plugins/reaper_csurf/csurf_www.cpp,
+// csurf_mcu.cpp, which also masks with 0xff: low byte is the mode, high bits are
+// REAPER's own flags). Offsets are fixed for the process, so they are looked up once;
+// 0 is the failure return, exactly as REAPER's IMPVARP macro reads it.
+// Main thread only, like every projectconfig read.
+static bool uf1TcProjTimeMode_(bool secondary, int* out)
+{
+    if (!projectconfig_var_getoffs || !projectconfig_var_addr) return false;
+    static int  sOffs[2] = { -1, -1 };
+    static bool sLooked  = false;
+    if (!sLooked) {
+        sLooked = true;
+        const char* names[2] = { "projtimemode", "projtimemode2" };
+        for (int i = 0; i < 2; ++i) {
+            int sz = 0;
+            const int off = projectconfig_var_getoffs(names[i], &sz);
+            sOffs[i] = (off && sz == static_cast<int>(sizeof(int))) ? off : -1;
+        }
+    }
+    const int off = sOffs[secondary ? 1 : 0];
+    if (off < 0) return false;
+    const int* p = static_cast<const int*>(projectconfig_var_addr(nullptr, off));
+    if (!p) return false;
+    *out = *p;
+    return true;
+}
+
 // g_uf1TcMode -> the format_timestr_pos mode to actually format with. Bars (2) and
-// Samples (4) are already modes; -1 is OUR sentinel for "whatever REAPER's TRANSPORT
-// shows", and resolving it takes a project-config read.
-// ⛔ format_timestr_pos's own -1 is NOT the transport. It is the RULER's time unit
-// ("projtimemode"), so on a bars ruler the TIME step read bars (Frank 2026-08-26:
-// "jetzt zeigt er bei time die Bars") — a fix that swapped one wrong format for
-// another. The transport keeps its OWN mode in "projtimemode2", and REAPER's own web
-// interface proves it: its TRANSPORT reply reads projtimemode2 and hands it straight
-// to format_timestr_pos, no translation (reaper-plugins/reaper_csurf/csurf_www.cpp).
-// projtimemode2 is negative while the transport is left on the project default, and
-// a negative goes back out as -1, which lands on the ruler — the same fallback
-// REAPER's own MCU surface makes (csurf_mcu.cpp, which also masks the value with
-// 0xff: the low byte is the mode, the high bits are REAPER's own flags).
-// Offset lookup is cached; it is fixed for the process. Main thread only, like every
-// projectconfig read.
+// Samples (4) are modes already; -1 is OUR sentinel for "whatever REAPER's TRANSPORT
+// shows" and resolves to a CONCRETE mode here.
+// ⛔ Do NOT hand format_timestr_pos its own -1 for this. That is the RULER, not the
+// transport, so on a bars ruler the TIME step read bars (Frank 2026-08-26: "jetzt
+// zeigt er bei time die Bars"). Resolving it ourselves also means the caller below
+// can tell a combined unit apart from a plain one.
 static int uf1TcEffectiveMode_(int mode)
 {
     if (mode != -1) return mode;                 // Bars / Samples: explicit already
-    if (!projectconfig_var_getoffs || !projectconfig_var_addr) return -1;
-    static int  sOffs   = -1;
-    static bool sLooked = false;
-    if (!sLooked) {
-        sLooked = true;
-        int sz  = 0;
-        // 0 is the failure return, exactly as REAPER's own IMPVARP macro reads it.
-        const int off = projectconfig_var_getoffs("projtimemode2", &sz);
-        sOffs = (off && sz == static_cast<int>(sizeof(int))) ? off : -1;
+    int v = 0;
+    if (uf1TcProjTimeMode_(true,  &v) && v >= 0) return v & 0xff;  // transport's own
+    if (uf1TcProjTimeMode_(false, &v) && v >= 0) return v & 0xff;  // ...else the ruler
+    return 0;                                    // neither readable: plain time
+}
+
+// True when a position string carries TWO readings side by side — REAPER's combined
+// "Measures.Beats / Minutes:Seconds" units put bars and time in one string. Tested on
+// the string and not on the mode number, because REAPER offers several combined units
+// (plain and "minimal") and they do not share one number. A digit has to stand on BOTH
+// sides of the separator, so leading or trailing padding cannot trip it.
+static bool uf1TcHasTwoReadings_(const char* s)
+{
+    bool seenDigit = false, seenSep = false;
+    for (const char* p = s; *p; ++p) {
+        if (*p >= '0' && *p <= '9') { if (seenSep) return true; seenDigit = true; }
+        else if ((*p == '/' || *p == ' ') && seenDigit) seenSep = true;
     }
-    if (sOffs < 0) return -1;
-    const int* tm = static_cast<const int*>(projectconfig_var_addr(nullptr, sOffs));
-    if (!tm) return -1;
-    return (*tm < 0) ? -1 : (*tm & 0xff);
+    return false;
 }
 
 // Short display name of the ACTIVE FX for the CS-TYPE zone (0x0017), mirroring
@@ -28136,6 +28158,14 @@ void uf1PaintChannel_()
         const int    mode = g_uf1TcMode.load();
         char buf[64];
         format_timestr_pos(pos, buf, sizeof(buf), uf1TcEffectiveMode_(mode));
+        // A combined unit hands over bars AND time in one string, and ten cells hold
+        // one reading. The TIME step takes the TIME half — BARS is its own step on the
+        // 360 cycle, so bars is the one thing this step must not show (Frank
+        // 2026-08-26: "er zeigt immer noch bars im time display mode"). Re-formatted
+        // as plain time rather than cut out of the combined string, so no guess about
+        // REAPER's separator gets baked in.
+        if (mode == -1 && uf1TcHasTwoReadings_(buf))
+            format_timestr_pos(pos, buf, sizeof(buf), 0);
 
         static std::array<uint8_t, 11> sTc{};
         static int sTcMode = INT_MIN;
