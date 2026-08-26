@@ -35811,6 +35811,76 @@ void pushTouchLearnFeedback_()
 // stimmen sie immer, solange niemand mit der App arbeitet"). Main-thread only
 // (SetExtState); the input thread just moves the atomics. Format per enabled
 // mount: "idx,h,r,v;".
+// ---- Hue: the recording light and the marker cues ---------------------------
+//
+// Both are EDGE-driven and cost nothing per tick. The recording light diffs
+// GetPlayState's record bit; the marker cues diff the play position against the
+// project's markers. Neither ever writes to the bridge on a tick where nothing
+// crossed, which is what keeps a feature that watches the transport from
+// spending the rate limit the faders need.
+//
+// ⛔ ONLY THE RECORD BIT. Play and stop are deliberately not wired: a transport
+// run that repaints the room every time you hit space would make every scene
+// you recalled by hand pointless, which is the opposite of what the lights are
+// for (Frank 2026-08-26: "dann sind ja eh alle szenen hinfällig").
+static void tickHueTransport_()
+{
+    auto& hm = uf8::hue::manager();
+
+    // ---- recording light ---------------------------------------------------
+    {
+        static bool sWasRec = false;
+        const bool rec = (GetPlayState() & 4) != 0;
+        if (rec != sWasRec) {
+            sWasRec = rec;
+            // The manager decides whether it is enabled and what it applies to;
+            // both edges are idempotent there, so a Test press that already
+            // armed it is not doubled by hitting record.
+            if (rec) hm.recordingStarted();
+            else     hm.recordingStopped();
+        }
+    }
+
+    // ---- marker cues -------------------------------------------------------
+    // Forward crossings only, and only while the transport rolls. A cursor the
+    // user drags backwards past three cues must not fire all three, and a
+    // stopped edit cursor must not fire anything at all — the marker names a
+    // moment in the take, not a place on the ruler.
+    {
+        const uf8::hue::MarkerConfig mc = hm.markers();
+        static double sLastPos = -1.0;
+        const bool rolling = (GetPlayState() & 1) != 0;
+        if (!mc.enabled || !rolling) { sLastPos = rolling ? GetPlayPosition() : -1.0; return; }
+
+        const double pos = GetPlayPosition();
+        const double prev = sLastPos;
+        sLastPos = pos;
+        // First tick after the transport started, or a locate: take the new
+        // position as the baseline instead of sweeping everything between.
+        if (prev < 0.0 || pos < prev || (pos - prev) > 2.0) return;
+
+        for (int idx = 0; idx < 4096; ++idx) {
+            bool isrgn = false;
+            double mpos = 0.0, rgnend = 0.0;
+            const char* name = nullptr;
+            int num = 0;
+            if (!EnumProjectMarkers3(nullptr, idx, &isrgn, &mpos, &rgnend,
+                                     &name, &num, nullptr))
+                break;
+            if (isrgn || !name || !*name) continue;
+            if (mpos <= prev || mpos > pos) continue;      // not crossed this tick
+            const std::string n = name;
+            if (n.rfind(mc.prefix, 0) != 0) continue;
+            const std::string want = n.substr(mc.prefix.size());
+            if (want.empty()) continue;
+            // A name that matches no scene is silent on purpose: the settings
+            // pane already says so in red, and a log line per pass would be the
+            // only other place to put it.
+            hm.recallSceneByName(want, /*dynamic=*/false, mc.durationMs);
+        }
+    }
+}
+
 static void persistDynaState_()
 {
     auto& dm = uf8::dynamount::manager();
@@ -38252,6 +38322,7 @@ void onTimerBody_()
     }
     pushZonesForVisibleSlots();
     persistDynaState_();
+    tickHueTransport_();
     // Phase 2.8 Nav Mode — decorate three zones (slot label, channel
     // number, top-soft-key LED) when overlay active; runs after the
     // track-render pass so its writes win against any stale dedup
