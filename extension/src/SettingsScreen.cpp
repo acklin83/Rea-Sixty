@@ -19,6 +19,7 @@
 #include "Bindings.h"
 #include "KeyMacro.h"
 #include "DynaMountManager.h"
+#include "HueManager.h"
 #include "GrCalibration.h"
 #include "KnobFeelPresets.h"
 #include "ParameterGroups.h"
@@ -20630,6 +20631,798 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
         "is fixed (9).");
 }
 
+// --- Hue Mode settings tab ---------------------------------------------------
+//
+// Configures the bridge link, the eight strip slots, the eight scene slots, the
+// recording light and the marker cues. Backend: HueManager (own worker thread).
+// Persists to ExtState "rea_sixty"/"hue_config"; the application key lives apart
+// in "hue_key" so a shared setup bundle can carry the slots without carrying the
+// credentials.
+static void drawHueTab_(ImGui_Context* ctx)
+{
+    using namespace uf8::hue;
+    HueManager& mgr = manager();
+
+    static bool s_loaded = false;
+    if (!s_loaded) {
+        s_loaded = true;
+        if (const char* blob = GetExtState("rea_sixty", "hue_config"); blob && *blob)
+            mgr.deserialize(blob);
+        if (const char* key = GetExtState("rea_sixty", "hue_key"); key && *key)
+            mgr.deserializeCredentials(key);
+    }
+
+    auto persist = [&]() {
+        const std::string blob = mgr.serialize();
+        SetExtState("rea_sixty", "hue_config", blob.c_str(), true);
+    };
+    auto persistKey = [&]() {
+        const std::string key = mgr.serializeCredentials();
+        SetExtState("rea_sixty", "hue_key", key.c_str(), true);
+    };
+
+    ImGui_Text(ctx,
+        "Control Philips Hue lights from the UF8 strips and the UF1. Only the "
+        "defined slots become Hue strips; the rest stay tracks.");
+    ImGui_Spacing(ctx);
+
+    // ---- catalogue snapshots, taken once per frame ------------------------
+    // Every row below wants the same three lists, and each call copies them out
+    // from under the worker's mutex — pulling them once keeps a table of eight
+    // combos from taking that lock a hundred times a frame.
+    const std::vector<Light> lights = mgr.lights();
+    const std::vector<Group> groups = mgr.groups();
+    const std::vector<Scene> scenes = mgr.scenes();
+
+    // deviceRid → room name, so a light can be shown as "Studio > Spot links"
+    // instead of a bare name the user has to guess at.
+    auto roomNameForLight = [&](const Light& L) -> std::string {
+        for (const Group& g : groups) {
+            if (g.isZone) continue;
+            for (const std::string& rid : g.childRids)
+                if (rid == L.ownerRid || rid == L.id) return g.name;
+        }
+        return std::string();
+    };
+    auto lightLabel = [&](const Light& L) -> std::string {
+        const std::string room = roomNameForLight(L);
+        return room.empty() ? L.name : (room + " > " + L.name);
+    };
+    auto groupById = [&](const std::string& id) -> const Group* {
+        for (const Group& g : groups) if (g.id == id) return &g;
+        return nullptr;
+    };
+    auto sceneLabel = [&](const Scene& s) -> std::string {
+        if (const Group* g = groupById(s.groupRid))
+            return g->name + " > " + s.name;
+        return s.name;
+    };
+
+    // ================= BRIDGE ==============================================
+    ImGui_TextDisabled(ctx, "BRIDGE");
+
+    {
+        const LinkState st = mgr.linkState();
+        const char* dot = "\xE2\x97\x8F";          // filled circle
+        int colour = 0x808080FF;
+        switch (st) {
+            case LinkState::Online:      colour = 0x5EC27AFF; break;
+            case LinkState::Failed:      colour = 0xD97B6CFF; break;
+            case LinkState::Pairing:
+            case LinkState::Verifying:
+            case LinkState::Discovering: colour = 0xE8C33AFF; break;
+            default: break;
+        }
+        ImGui_TextColored(ctx, colour, dot);
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        std::string line = mgr.statusLine();
+        if (line.empty()) line = "No bridge";
+        ImGui_Text(ctx, line.c_str());
+
+        const std::string bid = mgr.bridgeId();
+        if (!bid.empty()) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_TextDisabled(ctx, ("  id " + bid).c_str());
+        }
+    }
+
+    ImGui_Spacing(ctx);
+    if (ImGui_Button(ctx, "Find bridge##hue_find", nullptr, nullptr))
+        mgr.requestDiscovery();
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (mgr.linkState() == LinkState::Pairing) {
+        if (ImGui_Button(ctx, "Cancel pairing##hue_paircancel", nullptr, nullptr))
+            mgr.cancelPairing();
+    } else {
+        if (ImGui_Button(ctx, "Pair (press link button)##hue_pair", nullptr, nullptr))
+            mgr.requestPairing();
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Refresh lights + scenes##hue_refresh", nullptr, nullptr))
+        mgr.requestRefresh();
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Forget##hue_forget", nullptr, nullptr)) {
+        mgr.forget();
+        persist();
+        persistKey();
+    }
+
+    // Pairing writes the key on the worker thread, so the pane has to notice it
+    // arriving rather than being told. Cheap string compare once a frame.
+    {
+        static std::string s_lastKey;
+        const std::string key = mgr.serializeCredentials();
+        if (key != s_lastKey) {
+            s_lastKey = key;
+            persistKey();
+            persist();          // pairing also fills in the ip + bridge id
+        }
+    }
+
+    // IP by hand — for a bridge discovery cannot see (VLAN, no internet).
+    {
+        static char s_ip[24]  = {0};
+        static std::string s_shown;
+        const std::string cur = mgr.bridgeIp();
+        if (cur != s_shown) {
+            s_shown = cur;
+            std::snprintf(s_ip, sizeof(s_ip), "%s", cur.c_str());
+        }
+        ImGui_Text(ctx, "IP");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 160.0));
+        int tf = 0;
+        if (ImGui_InputTextWithHint(ctx, "##hue_ip", "192.168.1.20", s_ip,
+                                    sizeof(s_ip), &tf, nullptr)) {
+            mgr.setBridgeIp(s_ip);
+            s_shown = s_ip;
+            persist();
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_TextDisabled(ctx,
+            "certificate check off for this bridge only, identity held by "
+            "bridge ID");
+    }
+
+    // Anything discovery turned up, as one-click rows.
+    {
+        const std::vector<DiscoveredBridge> found = mgr.discovered();
+        if (found.size() > 1) {
+            ImGui_TextDisabled(ctx, "Found on this network:");
+            for (size_t k = 0; k < found.size(); ++k) {
+                char bid[64];
+                std::snprintf(bid, sizeof(bid), "%s##hue_pick%zu",
+                              found[k].ip.c_str(), k);
+                if (ImGui_Button(ctx, bid, nullptr, nullptr)) {
+                    mgr.setBridgeIp(found[k].ip);
+                    persist();
+                }
+                if (k + 1 < found.size()) ImGui_SameLine(ctx, nullptr, nullptr);
+            }
+        }
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    // ================= STRIPS ==============================================
+    ImGui_TextDisabled(ctx, "STRIPS");
+
+    {
+        bool right = mgr.fillDir() == HueManager::FillDir::Right;
+        if (ImGui_RadioButton(ctx, "Fill from left##hue_fill_l", !right)) {
+            mgr.setFillDir(HueManager::FillDir::Left);
+            persist();
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "Fill from right##hue_fill_r", right)) {
+            mgr.setFillDir(HueManager::FillDir::Right);
+            persist();
+        }
+    }
+    ImGui_Spacing(ctx);
+
+    int palCount = 0;
+    const uf8::PaletteRgb* pal = uf8::selPaletteRgb(&palCount);
+
+    int tblFlags = 0;
+    if (ImGui_BeginTable(ctx, "##hue_slots", 7, &tblFlags,
+                         nullptr, nullptr, nullptr)) {
+        int    wFlag  = ImGui_TableColumnFlags_WidthFixed;
+        double wOn    = scaleW_(ctx, 30.0);
+        double wLabel = scaleW_(ctx, 90.0);
+        double wTgt   = scaleW_(ctx, 260.0);
+        double wKind  = scaleW_(ctx, 60.0);
+        double wBar   = scaleW_(ctx, 70.0);
+        double wRec   = scaleW_(ctx, 70.0);
+        double wState = scaleW_(ctx, 120.0);
+        ImGui_TableSetupColumn(ctx, "On",     &wFlag, &wOn,    nullptr);
+        ImGui_TableSetupColumn(ctx, "Label",  &wFlag, &wLabel, nullptr);
+        ImGui_TableSetupColumn(ctx, "Target", &wFlag, &wTgt,   nullptr);
+        ImGui_TableSetupColumn(ctx, "Kind",   &wFlag, &wKind,  nullptr);
+        ImGui_TableSetupColumn(ctx, "Bar",    &wFlag, &wBar,   nullptr);
+        ImGui_TableSetupColumn(ctx, "Rec light", &wFlag, &wRec, nullptr);
+        ImGui_TableSetupColumn(ctx, "State",  &wFlag, &wState, nullptr);
+        ImGui_TableHeadersRow(ctx);
+
+        for (int i = 0; i < kMaxSlots; ++i) {
+            SlotConfig c = mgr.slot(i);
+            char id[40];
+
+            // On.
+            ImGui_TableNextColumn(ctx);
+            bool en = c.enabled;
+            std::snprintf(id, sizeof(id), "##hue_en_%d", i);
+            if (ImGui_Checkbox(ctx, id, &en)) {
+                c.enabled = en;
+                mgr.setSlot(i, c);
+                persist();
+            }
+
+            // Label — what the scribble row shows, capped at the row width.
+            ImGui_TableNextColumn(ctx);
+            {
+                static char s_label[kMaxSlots][16] = {};
+                static std::string s_shown[kMaxSlots];
+                if (c.label != s_shown[i]) {
+                    s_shown[i] = c.label;
+                    std::snprintf(s_label[i], sizeof(s_label[i]), "%s",
+                                  c.label.c_str());
+                }
+                ImGui_SetNextItemWidth(ctx, -1.0);
+                std::snprintf(id, sizeof(id), "##hue_lbl_%d", i);
+                int tf = 0;
+                if (ImGui_InputTextWithHint(ctx, id, "label", s_label[i],
+                                            sizeof(s_label[i]), &tf, nullptr)) {
+                    c.label = s_label[i];
+                    s_shown[i] = c.label;
+                    mgr.setSlot(i, c);
+                    persist();
+                }
+            }
+
+            // Target — every light, then every room and zone that HAS a
+            // grouped_light service. A room with no lights in it cannot be
+            // dimmed, so it is not offered (HueClient.h says why).
+            ImGui_TableNextColumn(ctx);
+            {
+                std::string preview = mgr.targetNameFor(c);
+                if (preview.empty()) preview = "pick a lamp, room or zone";
+                ImGui_SetNextItemWidth(ctx, -1.0);
+                std::snprintf(id, sizeof(id), "##hue_tgt_%d", i);
+                if (ImGui_BeginCombo(ctx, id, preview.c_str(), nullptr)) {
+                    bool none = c.rid.empty();
+                    if (ImGui_Selectable(ctx, "(none)", &none, nullptr,
+                                         nullptr, nullptr)) {
+                        c.rid.clear(); c.groupId.clear(); c.bridgeName.clear();
+                        mgr.setSlot(i, c);
+                        persist();
+                    }
+                    for (const Light& L : lights) {
+                        bool sel = (c.kind == TargetKind::Light && c.rid == L.id);
+                        const std::string lbl = lightLabel(L);
+                        if (ImGui_Selectable(ctx, lbl.c_str(), &sel, nullptr,
+                                             nullptr, nullptr)) {
+                            c.kind = TargetKind::Light;
+                            c.rid  = L.id;
+                            c.groupId.clear();
+                            c.bridgeName = L.name;
+                            if (c.label.empty())
+                                c.label = L.name.substr(0, kLabelChars);
+                            mgr.setSlot(i, c);
+                            persist();
+                        }
+                    }
+                    for (const Group& g : groups) {
+                        if (g.groupedLightId.empty()) continue;
+                        bool sel = (c.kind == TargetKind::Group
+                                    && c.rid == g.groupedLightId);
+                        const std::string lbl =
+                            std::string(g.isZone ? "Zone > " : "Room > ") + g.name;
+                        if (ImGui_Selectable(ctx, lbl.c_str(), &sel, nullptr,
+                                             nullptr, nullptr)) {
+                            c.kind    = TargetKind::Group;
+                            c.rid     = g.groupedLightId;
+                            c.groupId = g.id;
+                            c.bridgeName = g.name;
+                            if (c.label.empty())
+                                c.label = g.name.substr(0, kLabelChars);
+                            mgr.setSlot(i, c);
+                            persist();
+                        }
+                    }
+                    ImGui_EndCombo(ctx);
+                }
+            }
+
+            // Kind — read-only, and the reason it is shown at all: it decides
+            // the rate limit (100 ms per lamp, 1000 ms per group).
+            ImGui_TableNextColumn(ctx);
+            if (c.rid.empty())                    ImGui_TextDisabled(ctx, "--");
+            else if (c.kind == TargetKind::Group) ImGui_Text(ctx, "zone");
+            else                                  ImGui_TextDisabled(ctx, "lamp");
+
+            // Colour bar palette index.
+            ImGui_TableNextColumn(ctx);
+            {
+                int ci = c.colour;
+                if (ci < 0) ci = 0;
+                if (palCount > 0 && ci >= palCount) ci = palCount - 1;
+                const uf8::PaletteRgb cur = (palCount > 0)
+                    ? pal[ci] : uf8::PaletteRgb{128, 128, 128};
+                const int curRgba = (int(cur.r) << 24) | (int(cur.g) << 16)
+                                  | (int(cur.b) << 8) | 0xFF;
+                std::snprintf(id, sizeof(id), "##hue_colbtn_%d", i);
+                int btnFlags = 0; double bw = scaleW_(ctx, 56.0), bh = 22.0;
+                char popId[24];
+                std::snprintf(popId, sizeof(popId), "hue_pal_%d", i);
+                if (ImGui_ColorButton(ctx, id, curRgba, &btnFlags, &bw, &bh))
+                    ImGui_OpenPopup(ctx, popId, nullptr);
+                if (ImGui_BeginPopup(ctx, popId, nullptr)) {
+                    const double sw = 26.0; const int perRow = 5;
+                    for (int k = 0; k < palCount; ++k) {
+                        const auto& p = pal[k];
+                        const int packed = (int(p.r) << 24) | (int(p.g) << 16)
+                                         | (int(p.b) << 8) | 0xFF;
+                        char swId[28];
+                        std::snprintf(swId, sizeof(swId), "##hue_sw%d_%d", i, k);
+                        int swFlags = 0; double w = sw, h = sw;
+                        if (ImGui_ColorButton(ctx, swId, packed, &swFlags, &w, &h)) {
+                            c.colour = k;
+                            mgr.setSlot(i, c);
+                            persist();
+                            ImGui_CloseCurrentPopup(ctx);
+                        }
+                        if ((k % perRow) != (perRow - 1) && k != palCount - 1)
+                            ImGui_SameLine(ctx, nullptr, nullptr);
+                    }
+                    ImGui_EndPopup(ctx);
+                }
+            }
+
+            // Rec light.
+            ImGui_TableNextColumn(ctx);
+            {
+                bool rec = c.recLight;
+                std::snprintf(id, sizeof(id), "##hue_rec_%d", i);
+                if (ImGui_Checkbox(ctx, id, &rec)) {
+                    c.recLight = rec;
+                    mgr.setSlot(i, c);
+                    persist();
+                }
+            }
+
+            // Live state.
+            ImGui_TableNextColumn(ctx);
+            if (!c.enabled || c.rid.empty()) ImGui_TextDisabled(ctx, "--");
+            else                             ImGui_Text(ctx, mgr.liveValueLine(i).c_str());
+        }
+        ImGui_EndTable(ctx);
+    }
+    ImGui_TextDisabled(ctx,
+        "  Zone slots update once a second, single lamps ten times a second: "
+        "that is the bridge, not us.");
+
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    // ================= CONTROLS ============================================
+    ImGui_TextDisabled(ctx, "CONTROLS");
+    {
+        Controls ctl = mgr.controls();
+        bool changed = false;
+
+        bool bottomOff = ctl.bottomOff;
+        if (ImGui_Checkbox(ctx,
+                "Fader = brightness; bottom of travel switches the lamp off"
+                "##hue_bottomoff", &bottomOff)) {
+            ctl.bottomOff = bottomOff;
+            changed = true;
+        }
+
+        static const char* kPotNames[] = { "Hue", "Saturation",
+                                           reasixty_sp("Colour temperature",
+                                                       "Color temperature"),
+                                           "Nothing" };
+        auto potCombo = [&](const char* label, const char* cid, PotRole* role) {
+            ImGui_Text(ctx, label);
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
+            if (ImGui_BeginCombo(ctx, cid, kPotNames[static_cast<int>(*role)],
+                                 nullptr)) {
+                for (int k = 0; k < 4; ++k) {
+                    bool sel = (static_cast<int>(*role) == k);
+                    if (ImGui_Selectable(ctx, kPotNames[k], &sel, nullptr,
+                                         nullptr, nullptr)) {
+                        *role = static_cast<PotRole>(k);
+                        changed = true;
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+        };
+        potCombo("V-Pot",        "##hue_pot",     &ctl.pot);
+        potCombo("V-Pot + FLIP", "##hue_potflip", &ctl.potFlip);
+
+        static const char* kPushNames[] = {
+            reasixty_sp("White / colour toggle", "White / color toggle"),
+            "Lamp on / off", "Nothing" };
+        ImGui_Text(ctx, "V-Pot push");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
+        if (ImGui_BeginCombo(ctx, "##hue_push",
+                             kPushNames[static_cast<int>(ctl.push)], nullptr)) {
+            for (int k = 0; k < 3; ++k) {
+                bool sel = (static_cast<int>(ctl.push) == k);
+                if (ImGui_Selectable(ctx, kPushNames[k], &sel, nullptr,
+                                     nullptr, nullptr)) {
+                    ctl.push = static_cast<PushRole>(k);
+                    changed = true;
+                }
+            }
+            ImGui_EndCombo(ctx);
+        }
+
+        int trans = ctl.transitionMs;
+        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 240.0));
+        if (ImGui_SliderInt(ctx, "Transition (ms)##hue_trans", &trans,
+                            0, 1000, nullptr, nullptr)) {
+            ctl.transitionMs = trans;
+            changed = true;
+        }
+
+        if (changed) { mgr.setControls(ctl); persist(); }
+
+        ImGui_TextDisabled(ctx,
+            "  Strip keys: CUT = on / off, SOLO = light solo, "
+            "SEL = focus lamp for the UF1.\n"
+            "  UF1 V-Pots: 1 hue, 2 saturation, 3 colour temperature, "
+            "4 picks the lamp.\n"
+            "  The transition is sent with every write, so the bridge fills in "
+            "between our packets and a fader ramp stays smooth at ten packets "
+            "a second.");
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    // ================= SCENES ==============================================
+    ImGui_TextDisabled(ctx, "SCENES");
+    ImGui_TextDisabled(ctx,
+        "  Eight slots. Bind the action \"Hue: recall scene\" with parameter "
+        "1 to 8 to any key on any surface. Short press recalls, long press "
+        "starts the scene dynamically.");
+    ImGui_Spacing(ctx);
+
+    int scTblFlags = 0;
+    if (ImGui_BeginTable(ctx, "##hue_scenes", 4, &scTblFlags,
+                         nullptr, nullptr, nullptr)) {
+        int    wFlag = ImGui_TableColumnFlags_WidthFixed;
+        double wNum  = scaleW_(ctx, 30.0);
+        double wScn  = scaleW_(ctx, 300.0);
+        double wLbl  = scaleW_(ctx, 110.0);
+        double wLed  = scaleW_(ctx, 160.0);
+        ImGui_TableSetupColumn(ctx, "#",         &wFlag, &wNum, nullptr);
+        ImGui_TableSetupColumn(ctx, "Scene",     &wFlag, &wScn, nullptr);
+        ImGui_TableSetupColumn(ctx, "Key label", &wFlag, &wLbl, nullptr);
+        ImGui_TableSetupColumn(ctx, reasixty_sp("LED colour", "LED color"),
+                               &wFlag, &wLed, nullptr);
+        ImGui_TableHeadersRow(ctx);
+
+        for (int i = 0; i < kMaxScenes; ++i) {
+            SceneSlot s = mgr.sceneSlot(i);
+            char id[40];
+
+            ImGui_TableNextColumn(ctx);
+            char num[8]; std::snprintf(num, sizeof(num), "%d", i + 1);
+            ImGui_TextDisabled(ctx, num);
+
+            ImGui_TableNextColumn(ctx);
+            {
+                std::string preview;
+                for (const Scene& sc : scenes)
+                    if (sc.id == s.id) { preview = sceneLabel(sc); break; }
+                if (preview.empty() && !s.bridgeName.empty()) preview = s.bridgeName;
+                if (preview.empty()) preview = "pick a scene";
+                ImGui_SetNextItemWidth(ctx, -1.0);
+                std::snprintf(id, sizeof(id), "##hue_scn_%d", i);
+                if (ImGui_BeginCombo(ctx, id, preview.c_str(), nullptr)) {
+                    bool none = s.id.empty();
+                    if (ImGui_Selectable(ctx, "(none)", &none, nullptr,
+                                         nullptr, nullptr)) {
+                        s = SceneSlot{};
+                        mgr.setSceneSlot(i, s);
+                        persist();
+                    }
+                    for (const Scene& sc : scenes) {
+                        bool sel = (s.id == sc.id);
+                        const std::string lbl = sceneLabel(sc);
+                        if (ImGui_Selectable(ctx, lbl.c_str(), &sel, nullptr,
+                                             nullptr, nullptr)) {
+                            s.id         = sc.id;
+                            s.bridgeName = sc.name;
+                            if (s.label.empty()) s.label = sc.name.substr(0, 12);
+                            mgr.setSceneSlot(i, s);
+                            persist();
+                        }
+                    }
+                    ImGui_EndCombo(ctx);
+                }
+            }
+
+            ImGui_TableNextColumn(ctx);
+            {
+                static char s_lbl[kMaxScenes][16] = {};
+                static std::string s_shown[kMaxScenes];
+                if (s.label != s_shown[i]) {
+                    s_shown[i] = s.label;
+                    std::snprintf(s_lbl[i], sizeof(s_lbl[i]), "%s", s.label.c_str());
+                }
+                ImGui_SetNextItemWidth(ctx, -1.0);
+                std::snprintf(id, sizeof(id), "##hue_scnlbl_%d", i);
+                int tf = 0;
+                if (ImGui_InputTextWithHint(ctx, id, "label", s_lbl[i],
+                                            sizeof(s_lbl[i]), &tf, nullptr)) {
+                    s.label = s_lbl[i];
+                    s_shown[i] = s.label;
+                    mgr.setSceneSlot(i, s);
+                    persist();
+                }
+            }
+
+            ImGui_TableNextColumn(ctx);
+            {
+                int col = static_cast<int>(s.rgb & 0xFFFFFFu);
+                int ceFlags = 0;
+                std::snprintf(id, sizeof(id), "##hue_scncol_%d", i);
+                ImGui_SetNextItemWidth(ctx, -1.0);
+                if (ImGui_ColorEdit3(ctx, id, &col, &ceFlags)) {
+                    s.rgb = static_cast<uint32_t>(col) & 0xFFFFFFu;
+                    mgr.setSceneSlot(i, s);
+                    persist();
+                }
+            }
+        }
+        ImGui_EndTable(ctx);
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    // ================= RECORDING LIGHT =====================================
+    ImGui_TextDisabled(ctx, "RECORDING LIGHT");
+    {
+        RecLightConfig rc = mgr.recLight();
+        bool changed = false;
+
+        bool on = rc.enabled;
+        if (ImGui_Checkbox(ctx, "On##hue_recon", &on)) {
+            rc.enabled = on;
+            changed = true;
+        }
+
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_Text(ctx, "  Applies to");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "the slots ticked under Rec light##hue_rt0",
+                              rc.target == RecTarget::MarkedSlots)) {
+            rc.target = RecTarget::MarkedSlots;
+            changed = true;
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_RadioButton(ctx, "a room or zone##hue_rt1",
+                              rc.target == RecTarget::Group)) {
+            rc.target = RecTarget::Group;
+            changed = true;
+        }
+        if (rc.target == RecTarget::Group) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            const Group* g = groupById(rc.groupId);
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
+            if (ImGui_BeginCombo(ctx, "##hue_recgrp",
+                                 g ? g->name.c_str() : "pick one", nullptr)) {
+                for (const Group& gg : groups) {
+                    if (gg.groupedLightId.empty()) continue;
+                    bool sel = (rc.groupId == gg.id);
+                    if (ImGui_Selectable(ctx, gg.name.c_str(), &sel, nullptr,
+                                         nullptr, nullptr)) {
+                        rc.groupId = gg.id;
+                        changed = true;
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+        }
+
+        ImGui_Text(ctx, "While recording");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        {
+            int col = static_cast<int>(rc.rgb & 0xFFFFFFu);
+            int ceFlags = 0;
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 160.0));
+            if (ImGui_ColorEdit3(ctx, "##hue_reccol", &col, &ceFlags)) {
+                rc.rgb = static_cast<uint32_t>(col) & 0xFFFFFFu;
+                changed = true;
+            }
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        {
+            int bri = static_cast<int>(rc.brightness + 0.5);
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
+            if (ImGui_SliderInt(ctx, "Brightness##hue_recbri", &bri, 1, 100,
+                                nullptr, nullptr)) {
+                rc.brightness = bri;
+                changed = true;
+            }
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Test##hue_rectest", nullptr, nullptr)) {
+            // Held until pressed again, so the user can walk into the room and
+            // look at it rather than watching a flash from the desk.
+            if (mgr.recordingLightHeld()) mgr.recordingStopped();
+            else                          mgr.recordingStarted();
+        }
+
+        ImGui_Text(ctx, "When it stops");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        {
+            static const char* kRestore[] = {
+                "put the lights back the way they were", "recall a scene" };
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 300.0));
+            if (ImGui_BeginCombo(ctx, "##hue_recrestore",
+                                 kRestore[static_cast<int>(rc.restore)], nullptr)) {
+                for (int k = 0; k < 2; ++k) {
+                    bool sel = (static_cast<int>(rc.restore) == k);
+                    if (ImGui_Selectable(ctx, kRestore[k], &sel, nullptr,
+                                         nullptr, nullptr)) {
+                        rc.restore = static_cast<RecRestore>(k);
+                        changed = true;
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+        }
+        if (rc.restore == RecRestore::Scene) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            std::string preview = "pick a scene";
+            for (const Scene& sc : scenes)
+                if (sc.id == rc.restoreSceneId) { preview = sceneLabel(sc); break; }
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 260.0));
+            if (ImGui_BeginCombo(ctx, "##hue_recscn", preview.c_str(), nullptr)) {
+                for (const Scene& sc : scenes) {
+                    bool sel = (rc.restoreSceneId == sc.id);
+                    const std::string lbl = sceneLabel(sc);
+                    if (ImGui_Selectable(ctx, lbl.c_str(), &sel, nullptr,
+                                         nullptr, nullptr)) {
+                        rc.restoreSceneId = sc.id;
+                        changed = true;
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+        }
+
+        if (changed) { mgr.setRecLight(rc); persist(); }
+
+        ImGui_TextDisabled(ctx,
+            "  Only the record state touches the lights. Play and stop leave "
+            "them alone, otherwise no scene would survive a transport run.\n"
+            "  The state of every affected lamp is read just before the "
+            "override and written back after, so a scene you recalled by hand "
+            "comes back untouched. Hue Mode does not have to be engaged.");
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    // ================= MARKER CUES =========================================
+    ImGui_TextDisabled(ctx, "MARKER CUES");
+    {
+        MarkerConfig mc = mgr.markers();
+        bool changed = false;
+
+        bool on = mc.enabled;
+        if (ImGui_Checkbox(ctx, "On##hue_mkon", &on)) {
+            mc.enabled = on;
+            changed = true;
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_Text(ctx, "  Prefix");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        {
+            static char s_prefix[24] = {0};
+            static std::string s_shown;
+            if (mc.prefix != s_shown) {
+                s_shown = mc.prefix;
+                std::snprintf(s_prefix, sizeof(s_prefix), "%s", mc.prefix.c_str());
+            }
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 90.0));
+            int tf = 0;
+            if (ImGui_InputTextWithHint(ctx, "##hue_mkprefix", "hue:", s_prefix,
+                                        sizeof(s_prefix), &tf, nullptr)) {
+                mc.prefix = s_prefix;
+                s_shown = mc.prefix;
+                changed = true;
+            }
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        {
+            int d = mc.durationMs;
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
+            if (ImGui_SliderInt(ctx, "Transition (ms)##hue_mkdur", &d, 0, 5000,
+                                nullptr, nullptr)) {
+                mc.durationMs = d;
+                changed = true;
+            }
+        }
+        if (changed) { mgr.setMarkers(mc); persist(); }
+
+        ImGui_TextDisabled(ctx,
+            "  A marker named hue:Relax recalls the scene Relax while the "
+            "transport rolls.");
+
+        // Live list of the markers that match, and whether the name behind the
+        // prefix actually resolves. Without it a typo only shows up mid-take.
+        int mkFlags = 0;
+        if (ImGui_BeginTable(ctx, "##hue_markers", 3, &mkFlags,
+                             nullptr, nullptr, nullptr)) {
+            int    wFlag = ImGui_TableColumnFlags_WidthFixed;
+            double wAt   = scaleW_(ctx, 90.0);
+            double wName = scaleW_(ctx, 200.0);
+            double wRes  = scaleW_(ctx, 300.0);
+            ImGui_TableSetupColumn(ctx, "At",          &wFlag, &wAt,   nullptr);
+            ImGui_TableSetupColumn(ctx, "Marker",      &wFlag, &wName, nullptr);
+            ImGui_TableSetupColumn(ctx, "Resolves to", &wFlag, &wRes,  nullptr);
+            ImGui_TableHeadersRow(ctx);
+
+            int shown = 0;
+            for (int idx = 0; idx < 4096 && shown < 24; ++idx) {
+                bool isrgn = false;
+                double pos = 0.0, rgnend = 0.0;
+                const char* name = nullptr;
+                int num = 0;
+                if (!EnumProjectMarkers3(nullptr, idx, &isrgn, &pos, &rgnend,
+                                         &name, &num, nullptr))
+                    break;
+                if (isrgn || !name) continue;
+                const std::string n = name;
+                if (n.rfind(mc.prefix, 0) != 0) continue;
+                const std::string want = n.substr(mc.prefix.size());
+                ++shown;
+
+                char tb[64];
+                format_timestr_pos(pos, tb, sizeof(tb), -1);
+
+                ImGui_TableNextColumn(ctx);
+                ImGui_TextDisabled(ctx, tb);
+                ImGui_TableNextColumn(ctx);
+                ImGui_Text(ctx, n.c_str());
+                ImGui_TableNextColumn(ctx);
+                std::string hit;
+                for (const Scene& sc : scenes)
+                    if (sc.name == want) { hit = sceneLabel(sc); break; }
+                if (hit.empty()) ImGui_TextColored(ctx, 0xE08B7CFF,
+                                                   "no scene of that name");
+                else             ImGui_TextColored(ctx, 0x9FD9A8FF, hit.c_str());
+            }
+            if (shown == 0) {
+                ImGui_TableNextColumn(ctx);
+                ImGui_TextDisabled(ctx, "--");
+                ImGui_TableNextColumn(ctx);
+                ImGui_TextDisabled(ctx, "no matching markers");
+                ImGui_TableNextColumn(ctx);
+                ImGui_TextDisabled(ctx, "");
+            }
+            ImGui_EndTable(ctx);
+        }
+    }
+}
+
 void SettingsScreen::drawModes(ImGui_Context* ctx)
 {
     ImGui_Text(ctx, "Modes");
@@ -20652,7 +21445,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     if (s_savedTab < 0) {
         const char* saved = GetExtState("rea_sixty", "modes_subtab");
         s_savedTab = (saved && *saved) ? std::atoi(saved) : 0;
-        if (s_savedTab < 0 || s_savedTab > 5) s_savedTab = 0;
+        if (s_savedTab < 0 || s_savedTab > 6) s_savedTab = 0;
         s_lastWritten   = s_savedTab;
         s_savedConsumed = false;
     }
@@ -21346,6 +22139,14 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     if (ImGui_BeginTabItem(ctx, "Dynamount", nullptr, &flagsDyna)) {
         persistActive(5);
         drawDynaMountTab_(ctx);
+        ImGui_EndTabItem(ctx);
+    }
+
+    // --- Hue Mode ---------------------------------------------------
+    int flagsHue = tabFlagsFor(6);
+    if (ImGui_BeginTabItem(ctx, "Hue", nullptr, &flagsHue)) {
+        persistActive(6);
+        drawHueTab_(ctx);
         ImGui_EndTabItem(ctx);
     }
 
