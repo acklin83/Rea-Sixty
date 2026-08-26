@@ -30,7 +30,7 @@ It now uses a mechanism with no such ceiling, and the number of connections it w
 
 Holding the modifier switches the whole row of eight, labels and all, and releasing returns to Plain. This is not a second list of actions hanging off the same bank: each set carries its own **Dynamic bank** setting, its own presets and its own LED colour, so Plain can hold eight fixed assignments while Shift is an FX bank on the same sub-bank.
 
-Slots also take a **Behavior** now (Momentary, Toggle, Hold) and all four modifier slots, the same settings every other key has had. The UF1's ten banks and the UF8's six sub-banks per Quick both work this way.
+Slots also take a **Behavior** now (Momentary, Toggle, Hold), the same setting every other key has had, so a bank key can latch instead of firing once. The UF1's ten banks and the UF8's six sub-banks per Quick both work this way.
 
 There is no Cmd or Ctrl set. The surface carries one modifier key, so those two would have to come from the computer keyboard, where they already belong to the FX-Learn modifier layers.
 
