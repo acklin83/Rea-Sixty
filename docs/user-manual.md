@@ -476,6 +476,7 @@ almost every key is rebindable in *Settings → Bindings → UF1*.
 
 Two keys are deliberately **not** rebindable: `MODE` and `SCRUB`. Both are held
 modifiers that open a picker, so a binding on them would have nothing to fire.
+Both are greyed out in the schematic, and hovering one says what it does instead.
 `SOLO` and `CUT` are also fixed — they act on the focused track through REAPER's
 own solo/mute, and Rea-Sixty does not reinvent those. `SEL` is a hybrid: a single
 press always selects the focused track exclusively (hold **Shift** to extend the

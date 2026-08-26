@@ -2678,6 +2678,10 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
 
     // (13) MODE (locked view toggle) + 5-8  |  (14) soft-key page arrows
     drawLocked(360, 266, 52, 24, "MODE");
+    if (inside(360, 266, 52, 24))
+        ImGui_SetTooltip(ctx,
+            "MODE picks the UF1 view: hold it and press a display soft-key.\n"
+            "Not bindable.");
     drawHwBtn(416, 266, 52, 24, ButtonId::Uf1FiveToEight, "5-8");
     drawHwBtn(490, 266, 38, 24, ButtonId::Uf1ArrowLeft,  "\xE2\x97\x84");   // (14)
     drawHwBtn(530, 266, 38, 24, ButtonId::Uf1ArrowRight, "\xE2\x96\xBA");
@@ -2686,7 +2690,16 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     drawHwBtn(400, 300, 38, 24, ButtonId::Uf1BankRight, "\xE2\x96\xBA");
     drawGroupLabelCentered(399, 330, "BANK");
     drawHwBtn(490, 300, 38, 24, ButtonId::Uf1Btn360, "360\xC2\xB0");
-    drawHwBtn(530, 300, 40, 24, ButtonId::Uf1Scrub,  "SCRUB");
+    // (18) SCRUB is LOCKED, like MODE. Holding it is the Jog-Mode picker (hold and
+    // turn the jog wheel), and onUf1Event consumes the key before the binding
+    // dispatch ever sees it — so an action put here could never fire. The tile used
+    // to look like any other: it took an action, saved it, and stayed silent (Frank
+    // 2026-08-26: "Sollte auch nicht bindbar sein weil es den jog-mode auswählt").
+    drawLocked(530, 300, 40, 24, "SCRUB");
+    if (inside(530, 300, 40, 24))
+        ImGui_SetTooltip(ctx,
+            "SCRUB picks the Jog Mode: hold it and turn the jog wheel.\n"
+            "Not bindable.");
     drawGroupLabelCentered(509, 330, "LAYER");
 
     // (17) Jog wheel — SELECTABLE (rotate-only, not bindable, but selecting it shows
