@@ -174,7 +174,8 @@ int                reasixty_activeSubBankFor(int layer);
 bool               reasixty_startupBank(int* layer, int* quick, int* sub);
 void               reasixty_setStartupBank(bool on, int layer, int quick, int sub);
 // Pinned UF1 startup view — 0 Plugin, 1 DAW, 2 Meter, 3 Sends (the kUf1View*
-// order in main.cpp). Unset = the UF1 comes up on Plugin.
+// order in main.cpp). Unset = the UF1 comes back up in the view it was last left
+// in, which is what the control's own "Off:" line says.
 bool               reasixty_uf1StartupView(int* view);
 void               reasixty_setUf1StartupView(bool on, int view);
 int                reasixty_uf1ViewMode();

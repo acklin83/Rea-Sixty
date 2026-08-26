@@ -411,7 +411,8 @@ bool     reasixty_startupBank(int* layer, int* quick, int* sub);
 void     reasixty_setStartupBank(bool on, int layer, int quick, int sub);
 // Pinned UF1 startup view (Plugin / DAW / Meter / Sends — the kUf1View* order).
 // Applied once the UF1 is up, same one-shot shape as the startup bank. get
-// returns true when a view is pinned; unset = the UF1 boots on Plugin as before.
+// returns true when a view is pinned; unset = the UF1 comes back up in the view it
+// was last left in ("uf1_last_view", global, not per project).
 bool     reasixty_uf1StartupView(int* view);
 void     reasixty_setUf1StartupView(bool on, int view);
 int      reasixty_uf1ViewMode();   // live view, so Settings can pin "this one"
