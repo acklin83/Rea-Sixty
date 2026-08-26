@@ -20869,29 +20869,30 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     auto navMirror = [&](const char* builtinName,
                          const char* friendly)
     {
-        int layer = 0;
-        uf8::bindings::ButtonId id = uf8::bindings::ButtonId::None;
-        uf8::bindings::Modifier m  = uf8::bindings::Modifier::Plain;
-        bool longPress = false;
-        std::string softKeyWhere;
-        const bool found = uf8::bindings::findFirstBoundTo(
-            builtinName, &layer, &id, &m, &longPress, &softKeyWhere);
-        char line[256];
-        if (found) {
+        // ⇨ EVERY key that fires it, not the first one found — the same lesson the
+        // dynamic-bank pager line learned (Frank 2026-08-26). Put a Nav toggle on
+        // two keys and this used to name one of them, which reads as "the other
+        // one does not do this".
+        // Silk-screen labels ("SOFT KEY 3"), not the internal binding ids, and the
+        // layer spelled out rather than "L1".
+        const auto hits = uf8::bindings::findAllBoundTo(builtinName);
+        std::string where;
+        for (const auto& h : hits) {
             // A soft-key hit has no ButtonId — it reports its bank coordinates.
-            const char* name = (id == uf8::bindings::ButtonId::None)
-                             ? softKeyWhere.c_str()
-                             : uf8::bindings::toName(id);
-            const char* lp   = longPress ? " (long press)" : "";
-            snprintf(line, sizeof(line), "%s — L%d %s%s%s",
-                          friendly,
-                          layer + 1,
-                          (name && *name) ? name : "?",
-                          modShort(m),
-                          lp);
-        } else {
-            snprintf(line, sizeof(line), "%s — (unbound)", friendly);
+            const char* name = (h.id == uf8::bindings::ButtonId::None)
+                             ? h.where.c_str()
+                             : hwFaceLabel(h.id);
+            if (!name || !*name) continue;
+            char one[192];
+            snprintf(one, sizeof(one), "Layer %d %s%s%s",
+                          h.layer + 1, name, modShort(h.mod),
+                          h.longPress ? " (long press)" : "");
+            if (!where.empty()) where += "; ";
+            where += one;
         }
+        char line[512];
+        snprintf(line, sizeof(line), "%s — %s", friendly,
+                      where.empty() ? "(unbound)" : where.c_str());
         ImGui_BulletText(ctx, line);
     };
     navMirror("marker_overlay_toggle",

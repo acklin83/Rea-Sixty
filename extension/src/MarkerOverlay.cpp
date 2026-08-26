@@ -18,6 +18,24 @@ namespace {
 constexpr int kPageSize = 8;
 
 // Resolve the colour REAPER actually DISPLAYS for the marker/region at
+// The label a marker or region carries when it has no name of its own.
+// ⇨ An unnamed one used to reach the surface as an EMPTY string, so the name row
+// went blank and the entry read as missing entirely — its number was sitting in
+// the channel-number zone all along, but the row you actually look at was empty
+// (Frank 2026-08-26: "werden gar nicht angezeigt"). REAPER's own ruler does the
+// same thing: an unnamed marker is drawn as its number.
+// ⛔ `idx` is markrgnindexnumber — the number REAPER SHOWS — not the enumeration
+// position. Deleting marker 2 leaves 1 and 3, so the two differ the moment anyone
+// deletes anything.
+// Filled HERE, at the one place an Item is built, so all three readers get it:
+// the UF8 name row, the UC1 LCD carousel and the region-name readout.
+inline std::string navFallbackName_(bool isRegion, int idx)
+{
+    char b[32];
+    snprintf(b, sizeof(b), "%s %d", isRegion ? "Region" : "Marker", idx);
+    return b;
+}
+
 // enumeration index `enumIndex`. EnumProjectMarkers3 returns the CUSTOM
 // colour, which is 0 when the user hasn't assigned one — the UF8 then drew
 // that strip grey (it only got a real colour once the user picked one;
@@ -206,7 +224,8 @@ void Overlay::enumerate()
         it.pos      = pos;
         it.rgnEnd   = rgnend;
         it.color    = resolveDisplayedColor_(i, color);
-        if (name) it.name = name;
+        it.name     = (name && *name) ? std::string(name)
+                                      : navFallbackName_(isrgn, idx);
         items_.push_back(std::move(it));
     }
 
@@ -281,7 +300,8 @@ void Overlay::enumerateFiltered(View v, int filterRegionIdx,
         it.pos      = pos;
         it.rgnEnd   = rgnend;
         it.color    = resolveDisplayedColor_(i, color);
-        if (name) it.name = name;
+        it.name     = (name && *name) ? std::string(name)
+                                      : navFallbackName_(isrgn, idx);
         out->push_back(std::move(it));
     }
 }

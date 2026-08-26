@@ -235,7 +235,7 @@ The default view on Nav-Mode entry is configurable (Settings → Modes → NAV �
 Per strip while Nav Mode is active:
 
 - **Top-soft-key** — press = jump (and, in Regions view, optionally drill). LED colour = the region / marker's REAPER colour (or grey if *Color-bar source: Force palette grey* is set).
-- **Scribble strip upper row** — the marker / region name.
+- **Scribble strip upper row** — the marker / region name. One without a name of its own reads `Region 3` / `Marker 7`, using the number REAPER shows in the ruler, so an unnamed entry is still an entry rather than a blank strip. The UC1's carousel and the region readout use the same fallback.
 - **Scribble strip lower row** — configurable: Off (V-Pot value preserved) / Index (`R03`, `M07`) / Timecode (`MM:SS`).
 - **Colour bar** — the marker / region's colour (or palette grey, per setting).
 
