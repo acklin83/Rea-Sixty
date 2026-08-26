@@ -6800,24 +6800,44 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                     // Where the paging action actually sits, rather than a
                     // second setting beside the binding that owns it: a long
                     // press on ◄ ► out of the factory, and yours to move.
-                    int layer = 0; bool lp = false;
-                    uf8::bindings::ButtonId bid = uf8::bindings::ButtonId::None;
-                    uf8::bindings::Modifier md = uf8::bindings::Modifier::Plain;
-                    std::string where;
-                    char line[200];
-                    if (uf8::bindings::findFirstBoundTo("uf1_dyn_bank_page",
-                            &layer, &bid, &md, &lp, &where)) {
-                        const char* nm = (bid == uf8::bindings::ButtonId::None)
-                            ? where.c_str() : uf8::bindings::toName(bid);
-                        snprintf(line, sizeof(line), "Pages with: %s%s",
-                                 (nm && *nm) ? nm : "?",
-                                 lp ? " (long press)" : "");
-                    } else {
-                        snprintf(line, sizeof(line),
-                                 "Pages with: nothing is bound to "
-                                 "\"UF1: Dynamic Bank Page\" right now.");
+                    // ⇨ EVERY key that pages, not the first one found. BOTH page
+                    // arrows carry it out of the factory, so naming one of them
+                    // read as "only this one pages" (Frank 2026-08-26: "Bullshit.
+                    // left und right!"). The question this line answers is "where
+                    // does this action live", and that is a SET — findFirstBoundTo
+                    // was the wrong question, not a wrong answer.
+                    // Silk-screen labels ("PAGE ◄"), not the internal binding ids.
+                    const auto hits =
+                        uf8::bindings::findAllBoundTo("uf1_dyn_bank_page");
+                    // The same control can carry it on more than one layer; name
+                    // it once. First hit decides its press kind.
+                    std::vector<std::pair<std::string, bool>> keys;
+                    for (const auto& h : hits) {
+                        const char* nm = (h.id == uf8::bindings::ButtonId::None)
+                            ? h.where.c_str() : hwFaceLabel(h.id);
+                        if (!nm || !*nm) continue;
+                        bool dup = false;
+                        for (const auto& k : keys)
+                            if (k.first == nm) { dup = true; break; }
+                        if (!dup) keys.emplace_back(nm, h.longPress);
                     }
-                    ImGui_TextDisabled(ctx, line);
+                    bool allLong = !keys.empty();
+                    for (const auto& k : keys) if (!k.second) allLong = false;
+                    std::string list;
+                    for (const auto& k : keys) {
+                        if (!list.empty()) list += ", ";
+                        list += k.first;
+                        // One suffix for the whole list when they agree, which is
+                        // the factory case: "PAGE ◄, PAGE ► (long press)".
+                        if (!allLong && k.second) list += " (long press)";
+                    }
+                    if (allLong) list += " (long press)";
+                    if (keys.empty())
+                        ImGui_TextDisabled(ctx,
+                            "Pages with: nothing is bound to "
+                            "\"UF1: Dynamic Bank Page\" right now.");
+                    else
+                        ImGui_TextDisabled(ctx, ("Pages with: " + list).c_str());
                 }
                 ImGui_Spacing(ctx);
                 if (curKind == DynamicBankKind::FxBank) {

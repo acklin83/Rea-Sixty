@@ -4545,12 +4545,15 @@ Binding getBinding(int layer, ButtonId id)
     return it->second;
 }
 
-bool findFirstBoundTo(const std::string& builtinName,
-                      int* layerOut, ButtonId* idOut, Modifier* modOut,
-                      bool* longPressOut, std::string* softKeyWhereOut)
+namespace {
+// The ONE traversal behind findFirstBoundTo and findAllBoundTo. `cb` returns true
+// to stop the walk. The caller holds g_cfgMutex.
+// Order is deliberate and stable: the layer map in kNames declaration order (NOT
+// the unordered bindings map, so the UI names the same control every time), then
+// the UF8 soft-key store, then the UF1 soft-key banks.
+void walkBoundTo_(const std::string& builtinName,
+                  const std::function<bool(const BoundRef&)>& cb)
 {
-    if (builtinName.empty()) return false;
-    std::lock_guard<std::mutex> lk(g_cfgMutex);
     auto matchStep = [&](const ActionStep& s) {
         return s.type == ActionType::Builtin && s.action == builtinName;
     };
@@ -4561,29 +4564,27 @@ bool findFirstBoundTo(const std::string& builtinName,
         }
         return false;
     };
-    // Iterate kNames (stable declaration order) instead of the
-    // bindings map (unordered) so the UI displays the same button
-    // every time when more than one binding fires the same builtin.
+    auto emit = [&](int layer, ButtonId id, int m, bool longPress,
+                    const char* where) {
+        BoundRef r;
+        r.layer     = layer;
+        r.id        = id;
+        r.mod       = static_cast<Modifier>(m);
+        r.longPress = longPress;
+        if (where) r.where = where;
+        return cb(r);
+    };
+
     for (int layer = 0; layer < 3; ++layer) {
         for (const auto& e : kNames) {
             auto it = g_cfg.layers[layer].bindings.find(e.id);
             if (it == g_cfg.layers[layer].bindings.end()) continue;
             const Binding& bd = it->second;
             for (int m = 0; m < kModifierCount; ++m) {
-                if (matchSlot(bd.shortPress[m])) {
-                    if (layerOut)      *layerOut      = layer;
-                    if (idOut)         *idOut         = e.id;
-                    if (modOut)        *modOut        = static_cast<Modifier>(m);
-                    if (longPressOut)  *longPressOut  = false;
-                    return true;
-                }
-                if (bd.hasLongPress && matchSlot(bd.longPress[m])) {
-                    if (layerOut)      *layerOut      = layer;
-                    if (idOut)         *idOut         = e.id;
-                    if (modOut)        *modOut        = static_cast<Modifier>(m);
-                    if (longPressOut)  *longPressOut  = true;
-                    return true;
-                }
+                if (matchSlot(bd.shortPress[m])
+                    && emit(layer, e.id, m, false, nullptr)) return;
+                if (bd.hasLongPress && matchSlot(bd.longPress[m])
+                    && emit(layer, e.id, m, true, nullptr)) return;
             }
         }
     }
@@ -4592,14 +4593,6 @@ bool findFirstBoundTo(const std::string& builtinName,
     // Nothing here has a ButtonId, so a hit reports its coordinates instead.
     static const char* kSubBankNames[kSubBanksPerQuick] = {
         "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
-    };
-    auto hit = [&](int layer, int m, bool longPress, const std::string& where) {
-        if (layerOut)        *layerOut        = layer;
-        if (idOut)           *idOut           = ButtonId::None;
-        if (modOut)          *modOut          = static_cast<Modifier>(m);
-        if (longPressOut)    *longPressOut    = longPress;
-        if (softKeyWhereOut) *softKeyWhereOut = where;
-        return true;
     };
     for (int layer = 0; layer < 3; ++layer) {
         for (int qi = 0; qi < kQuicksPerLayer; ++qi) {
@@ -4615,7 +4608,7 @@ bool findFirstBoundTo(const std::string& builtinName,
                         char buf[96];
                         snprintf(buf, sizeof(buf), "Q%d / %s / key %d",
                                       qi + 1, kSubBankNames[bi], si + 1);
-                        return hit(layer, m, !isShort, buf);
+                        if (emit(layer, ButtonId::None, m, !isShort, buf)) return;
                     }
                 }
             }
@@ -4632,11 +4625,44 @@ bool findFirstBoundTo(const std::string& builtinName,
                 char buf[96];
                 snprintf(buf, sizeof(buf), "UF1 bank %d / key %d",
                               b + 1, si + 1);
-                return hit(0, m, !isShort, buf);
+                if (emit(0, ButtonId::None, m, !isShort, buf)) return;
             }
         }
     }
-    return false;
+}
+}  // namespace
+
+bool findFirstBoundTo(const std::string& builtinName,
+                      int* layerOut, ButtonId* idOut, Modifier* modOut,
+                      bool* longPressOut, std::string* softKeyWhereOut)
+{
+    if (builtinName.empty()) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    bool found = false;
+    walkBoundTo_(builtinName, [&](const BoundRef& r) {
+        if (layerOut)     *layerOut     = r.layer;
+        if (idOut)        *idOut        = r.id;
+        if (modOut)       *modOut       = r.mod;
+        if (longPressOut) *longPressOut = r.longPress;
+        // Only a soft-key hit carries a location; the layer-map path leaves the
+        // caller's string untouched, exactly as it always did.
+        if (softKeyWhereOut && r.id == ButtonId::None) *softKeyWhereOut = r.where;
+        found = true;
+        return true;                       // first hit wins — stop the walk
+    });
+    return found;
+}
+
+std::vector<BoundRef> findAllBoundTo(const std::string& builtinName)
+{
+    std::vector<BoundRef> out;
+    if (builtinName.empty()) return out;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    walkBoundTo_(builtinName, [&](const BoundRef& r) {
+        out.push_back(r);
+        return false;                      // keep walking
+    });
+    return out;
 }
 
 bool hasBinding(int layer, ButtonId id)

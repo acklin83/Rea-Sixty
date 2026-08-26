@@ -867,6 +867,25 @@ bool findFirstBoundTo(const std::string& builtinName,
                       bool* longPressOut = nullptr,
                       std::string* softKeyWhereOut = nullptr);
 
+// One place a builtin is bound: a layer-map button, or a soft-key slot, which has
+// no ButtonId (id == ButtonId::None, and `where` names it: "Q1 / Soft 3 / key 5").
+struct BoundRef {
+    int         layer     = 0;
+    ButtonId    id        = ButtonId::None;
+    Modifier    mod       = Modifier::Plain;
+    bool        longPress = false;
+    std::string where;
+};
+
+// EVERY place the named builtin is bound, in the same stable order
+// findFirstBoundTo scans.
+// ⇨ Use THIS wherever the UI answers "where does this action live". That is a
+// SET, and naming only the first reads as a claim that the others do not exist:
+// the dynamic-bank pager sits on BOTH page arrows out of the factory and the
+// Settings line named the left one alone (Frank 2026-08-26: "Bullshit. left und
+// right!"). findFirstBoundTo stays for the callers that really do want one.
+std::vector<BoundRef> findAllBoundTo(const std::string& builtinName);
+
 // Whether the layer has an entry for this id at all. Distinguishes
 // "user has touched this binding" (entry exists, even if all fields
 // are at defaults) from "untouched" (no entry, getBinding would
