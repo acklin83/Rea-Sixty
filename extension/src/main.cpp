@@ -671,11 +671,20 @@ int          g_uf1PresetPendingFx = -1;
 std::atomic<bool> g_uf1Master {false};
 
 // UF1 main-LCD time/position field (element 0x0119, Channel view only). Holds a
-// format_timestr_pos mode: 2 = Measures/Beats (default), 5 = h:m:s:f, 4 = Samples.
-// Cycled Measures->Time->Samples by the 360 button (worker thread, atomic store
-// only — threading rule); the format + send happen main-thread in uf1PaintChannel_.
+// format_timestr_pos mode: -1 = the project's own time format (default), 2 =
+// Measures/Beats, 4 = Samples. Cycled Time->Measures->Samples by the 360 button
+// (worker thread, atomic store only — threading rule); the format + send happen
+// main-thread in uf1PaintChannel_.
+// ⚠ TIME is mode -1, NOT the fixed h:m:s:f it was until 2026-08-26. The field's
+// whole job is to read what REAPER's transport reads — that is what SSL 360 does
+// here (Frank 2026-07-24: "er zeigt das an, was reaper im transport anzeigt") and
+// what the 0x0119 decode session prescribed, before a fixed three-step cycle was
+// bolted on top of it. h:m:s:f could never do the job: REAPER decomposes a negative
+// position with floor, so a cursor 26 ms ahead of a negative project start time
+// came out as "-1:59:59:29" (Frank 2026-08-26) — and frames cannot spell 26 ms even
+// with the sign repaired.
 // Persisted as ExtState "uf1_tc_mode" (load main.cpp near nav_lower_row).
-std::atomic<int>  g_uf1TcMode {2};      // 2 Measures / 5 Time (h:m:s:f) / 4 Samples
+std::atomic<int>  g_uf1TcMode {-1};     // -1 project format / 2 Measures / 4 Samples
 
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
@@ -4240,7 +4249,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "uf1_tc_mode"); v && *v) {
         int n = std::atoi(v);
-        if (n != 2 && n != 4 && n != 5) n = 2;   // Measures / Samples / h:m:s:f only
+        if (n == 5) n = -1;                      // h:m:s:f retired 2026-08-26 — a
+                                                 // stored 5 becomes the project format
+        if (n != 2 && n != 4 && n != -1) n = -1; // project format / Measures / Samples
         g_uf1TcMode.store(n);
     }
     if (const char* v = GetExtState("rea_sixty", "uf1_recv_view"); v && *v)
@@ -26729,6 +26740,11 @@ static void uf1FlashTimecode_(std::string_view text, int ms)
 // the ten cells, so the digits get nine when it is present.
 // A longer string keeps the rightmost digits (the low-order ones survive,
 // matching a right-aligned field) and the sign still leads them.
+// The project's combined "measures.beats + time" format hands over TWO readings in
+// one string and ten cells can only carry one, so encoding stops at the first '/'
+// or space once digits have started and keeps the leading (bars) half. ⚠ Which
+// separator REAPER puts between the two halves is NOT verified against a capture;
+// the other six formats contain neither character, so the stop cannot fire on them.
 // ⚠ Was eleven until 2026-08-22 — an eleven-digit sample count put its leading
 // digit in the invisible byte 0 and read an order of magnitude short. That the
 // dead cell went unnoticed for a month is right-align's doing: no clock string
@@ -26752,8 +26768,10 @@ static void uf1EncodeTimecode_(const char* s, uint8_t out[11])
         } else if (c == '-' && n == 0) {
             neg = true;                          // LEADING sign only, never a dash
                                                  // inside the string
+        } else if ((c == '/' || c == ' ') && n > 0) {
+            break;                               // combined format: keep the first half
         }
-        // any other char (space, …) is skipped — no glyph for it
+        // any other char is skipped — no glyph for it
     }
     // The sign costs one of the ten cells, so the digits get nine while it shows.
     const int cells = kUf1TcCells - (neg ? 1 : 0);
@@ -28072,8 +28090,8 @@ void uf1PaintChannel_()
     // 360 drives the UF1's Channel view (decoded 2026-07-24). Read the playhead
     // while running, else the edit cursor when stopped (mirrors the UF8 nav-row
     // path below). Format via format_timestr_pos with the user-cycled g_uf1TcMode
-    // (Measures / h:m:s:f / Samples, cycled by the 360 button on the worker), then
-    // encode into the 11-byte 7-segment field. Send-on-change: only when the 11
+    // (project format / Measures / Samples, cycled by the 360 button on the worker),
+    // then encode into the 11-byte 7-segment field. Send-on-change: only when the 11
     // bytes differ (forced on view/gen change via `changed`), so a stable stopped
     // string never spams. Meter view NEVER writes 0x0119 (kept in the meter branch).
     {
@@ -28099,7 +28117,7 @@ void uf1PaintChannel_()
             // weakest glyphs in the font (t is the lower-case shape, M is one of
             // the impossible four) — if either reads badly on the panel, the fix
             // is a better glyph, not a different word.
-            uf1FlashTimecode_(mode == 2 ? "BARS" : mode == 5 ? "TIME" : "SAMPLES",
+            uf1FlashTimecode_(mode == 2 ? "BARS" : mode == 4 ? "SAMPLES" : "TIME",
                               1200);
         }
         // A flash owns the field until it expires; the clock then repaints itself
@@ -44365,8 +44383,9 @@ void registerBindingHandlers()
         "Mode-change banner: show / hide (flashes Sel / Encoder mode)", false
     });
 
-    // UF1 large-screen time display: step its format (Bars/Beats → Time
-    // h:m:s:f → Samples). This was the hardcoded 360-key behaviour; now a
+    // UF1 large-screen time display: step its format (Time, which is whatever
+    // REAPER's transport shows → Bars/Beats → Samples). This was the hardcoded
+    // 360-key behaviour; now a
     // proper bindable built-in so the 360 key (or any UF1 key) can carry it
     // and the user can rebind it. g_uf1TcMode is an atomic (store is input-
     // thread safe); the painter formats + persists it on the main thread.
@@ -44375,11 +44394,11 @@ void registerBindingHandlers()
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing || g_uf1MeterView.load()) return;
             const int cur  = g_uf1TcMode.load();
-            const int next = (cur == 2) ? 5 : (cur == 5) ? 4 : 2;
+            const int next = (cur == -1) ? 2 : (cur == 2) ? 4 : -1;
             g_uf1TcMode.store(next);
         },
         nullptr,
-        "UF1 time display: step format (Bars / Time / Samples)", false
+        "UF1 time display: step format (Time / Bars / Samples)", false
     });
 
     // ── UF1 factory-default builtins ─────────────────────────────────
