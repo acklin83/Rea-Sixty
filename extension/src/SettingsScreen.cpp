@@ -6829,7 +6829,20 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             ImGui_Text(ctx, "Bank name");
             ImGui_SetNextItemWidth(ctx, 260.0);
             int nameFlags = 0;
-            if (ImGui_InputText(ctx, "##uf1bankname", s_bankNameBuf,
+            // ⛔ THE ID CARRIES THE BANK AND THE SET, and that is load-bearing, not
+            // cosmetic. While an InputText is ACTIVE, ImGui keeps its own copy of
+            // the text and writes that copy back into our buffer on the next
+            // frame, reporting it as an edit. So switching bank with the cursor
+            // still in the field refilled our buffer, ImGui overwrote it with the
+            // text from the bank you LEFT, and we stored that into the bank you
+            // arrived at — the name walked from bank to bank as you paged (Frank
+            // 2026-08-26). With the bank in the ID the widget is a DIFFERENT one
+            // after the switch: the old one is never submitted again, so it can
+            // never write back, and the new one starts from our buffer.
+            char nameId[48];
+            snprintf(nameId, sizeof(nameId), "##uf1bankname_%d_%d",
+                     uf1Bank, g_slotEditModIdx);
+            if (ImGui_InputText(ctx, nameId, s_bankNameBuf,
                                 sizeof(s_bankNameBuf), &nameFlags, nullptr)) {
                 uf8::bindings::setUf1SoftBankName(uf1Bank, g_slotEditModIdx,
                                                   s_bankNameBuf);
