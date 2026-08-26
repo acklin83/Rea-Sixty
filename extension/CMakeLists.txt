@@ -358,6 +358,9 @@ add_library(reaper_uf8 MODULE
     # DynaMount Mode — robotic mic-stand control over the LAN
     src/DynaMountClient.cpp
     src/DynaMountManager.cpp
+    # Hue Mode — Philips Hue lights on the strips, CLIP API v2 over the LAN
+    src/HueColor.cpp
+    src/HueClient.cpp
     src/StreamDeckBridge.cpp
     # SSL 360°Core impersonator — meter data straight from the SSL plug-in.
     # Self-contained (std lib only, no REAPER API); this is what supplies the
@@ -725,6 +728,11 @@ if(NOT WIN32)
     find_package(Threads REQUIRED)
     target_link_libraries(test_dynamount PRIVATE Threads::Threads)
     add_test(NAME dynamount COMMAND test_dynamount)
+
+    # Hue: colour maths + the CLIP v2 wire. Needs WDL for the JSON parser.
+    add_executable(test_hue tests/test_hue.cpp src/HueColor.cpp src/HueClient.cpp)
+    target_include_directories(test_hue PRIVATE src "${WDL_DIR}")
+    add_test(NAME hue COMMAND test_hue)
 
     add_executable(test_ssl_meter tests/test_ssl_meter.cpp src/SslMeterProtocol.cpp)
     target_include_directories(test_ssl_meter PRIVATE src)
