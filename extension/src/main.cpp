@@ -17208,6 +17208,10 @@ void applyUf1MeterVpot_(uint8_t id, int step)
 // forward-declared here so the encoder drain (kVpot1..4) can call it in
 // Channel view. Main-thread only.
 void applyUf1ChannelVpot_(uint8_t id, int step);
+void applyUf1HueVpot_(uint8_t id, int step);   // Hue Mode twin, defined by the painter
+// The UF1's focus lamp, clamped onto an enabled slot. Reads HueManager config
+// only (its own mutex), no REAPER API — so the input worker may call it.
+int  uf1HueFocusSlot_();
 
 // Channel-view soft-key handler (p188 tables): TOGGLE the current-page soft-key
 // param on the focused SSL channel-strip plug-in. DEFINED far below next to the
@@ -17818,7 +17822,11 @@ void drainInputQueue()
                     // The preset browser owns the V-Pots in EITHER view — it
                     // is the same browser, and V-Pot4 scrolls it. Its handler
                     // lives in the meter path, which is where it started.
-                    if (g_uf1MeterView.load() || g_uf1PresetsMode.load())
+                    // Hue Mode owns all four outright — it owns the screen, so
+                    // the pots have to follow or the labels lie.
+                    if (g_uf1HueMode.load())
+                         applyUf1HueVpot_(id, step);
+                    else if (g_uf1MeterView.load() || g_uf1PresetsMode.load())
                          applyUf1MeterVpot_(id, step);
                     else applyUf1ChannelVpot_(id, step);
                     break;
@@ -22489,6 +22497,37 @@ void onUf1Event(const uf1::InputEvent& ev)
                 g_uf1PresetsMode.load()) {
                 g_uf1PresetLoadReq.store(true);
                 break;
+            }
+            // Hue Mode owns its four V-Pot pushes and the three channel keys.
+            // Claimed here, ahead of the binding-first check, for the same reason
+            // the preset browser claims V-Pot4: the factory uf1_vpot_reset would
+            // otherwise eat a push that means something else in this mode.
+            //   V-Pot 1 push = white / colour toggle    CUT  = lamp on / off
+            //   V-Pot 4 push = leave Hue Mode           SOLO = light solo
+            //                                          SEL  = nothing (the UF1 IS
+            //                                                 the focus)
+            if (g_uf1HueMode.load() && ev.pressed) {
+                if (ev.id == uf1::btn::kVpot4Push) {
+                    g_uf1HueMode.store(false);
+                    break;
+                }
+                // Direct, not through the PendingInput queue: these three touch
+                // only HueManager atomics and its config mutex, never the REAPER
+                // API, so they are legal on this worker exactly like the
+                // DynaMount rotation nudge is.
+                const int hs = uf1HueFocusSlot_();
+                if (hs >= 0 && ev.id == uf1::btn::kVpot1Push) {
+                    uf8::hue::manager().pushPot(hs);
+                    break;
+                }
+                if (hs >= 0 && ev.id == uf1::btn::kCut) {
+                    uf8::hue::manager().toggleOn(hs);
+                    break;
+                }
+                if (hs >= 0 && ev.id == uf1::btn::kSolo) {
+                    uf8::hue::manager().soloLight(hs);
+                    break;
+                }
             }
             // ── User bindings take precedence over the factory defaults ──
             // Everything below (meter selector, arrows, 360, 5-8, soft-keys,
@@ -27571,9 +27610,245 @@ static uint32_t uf1BindingLedColour_(const uf8::bindings::Binding& bd,
           |  (( rgb        & 0xFF) / 4));
 }
 
+// ---- UF1 Hue Mode -----------------------------------------------------------
+//
+// The focus slot, clamped onto something that exists. SEL on a UF8 lamp strip and
+// the UF1's fourth V-Pot both write g_hueFocusSlot, and neither knows whether the
+// slot it names is still enabled — a slot can be switched off in Settings while
+// the UF1 is looking at it. Returns -1 when no slot is defined at all.
+int uf1HueFocusSlot_()
+{
+    auto& hm = uf8::hue::manager();
+    const int want = g_hueFocusSlot.load();
+    if (want >= 0 && want < uf8::hue::kMaxSlots && hm.slotEnabled(want))
+        return want;
+    for (int i = 0; i < uf8::hue::kMaxSlots; ++i)
+        if (hm.slotEnabled(i)) { g_hueFocusSlot.store(i); return i; }
+    return -1;
+}
+
+// Walk the focus to the next / previous ENABLED slot, wrapping. Main thread.
+static void uf1HueStepFocus_(int delta)
+{
+    if (delta == 0) return;
+    auto& hm = uf8::hue::manager();
+    std::vector<int> on;
+    for (int i = 0; i < uf8::hue::kMaxSlots; ++i)
+        if (hm.slotEnabled(i)) on.push_back(i);
+    if (on.empty()) return;
+    const int cur = uf1HueFocusSlot_();
+    int at = 0;
+    for (size_t k = 0; k < on.size(); ++k) if (on[k] == cur) { at = static_cast<int>(k); break; }
+    const int n = static_cast<int>(on.size());
+    at = ((at + delta) % n + n) % n;
+    g_hueFocusSlot.store(on[static_cast<size_t>(at)]);
+}
+
+// The UF1's four V-Pots in Hue Mode: 1 hue, 2 saturation, 3 colour temperature,
+// 4 walks the lamp. Main thread (the drain), so the focus walk is safe here.
+void applyUf1HueVpot_(uint8_t id, int step)
+{
+    if (step == 0) return;
+    if (id == uf1::enc::kVpot4) { uf1HueStepFocus_(step > 0 ? 1 : -1); return; }
+    const int slot = uf1HueFocusSlot_();
+    if (slot < 0) return;
+
+    auto& hm = uf8::hue::manager();
+    uf8::hue::Controls ctl = hm.controls();
+    // ⇨ The UF1's pots are FIXED, unlike the UF8's one configurable pot. Three
+    // axes on three knobs needs no setting, and borrowing the UF8's pot role here
+    // would leave two of the three unreachable. So the role is passed by
+    // temporarily standing in for the configured one rather than by adding a
+    // second setter to the manager.
+    const uf8::hue::PotRole want =
+        (id == uf1::enc::kVpot1) ? uf8::hue::PotRole::Hue
+      : (id == uf1::enc::kVpot2) ? uf8::hue::PotRole::Saturation
+      : (id == uf1::enc::kVpot3) ? uf8::hue::PotRole::Warmth
+                                 : uf8::hue::PotRole::Off;
+    if (want == uf8::hue::PotRole::Off) return;
+
+    const uf8::hue::PotRole saved = ctl.pot;
+    ctl.pot = want;
+    hm.setControls(ctl);
+    hm.nudgePot(slot, step, /*flip=*/false);
+    ctl.pot = saved;
+    hm.setControls(ctl);
+}
+
+// Paints the whole UF1 while Hue Mode is on, the way the meter view owns the
+// screen: uf1PaintChannel_ hands over at the top and returns, so nothing below
+// can half-repaint a channel that is not being shown.
+static void uf1PaintHue_()
+{
+    auto& hm = uf8::hue::manager();
+    const int slot = uf1HueFocusSlot_();
+
+    // Force a full repaint when the device was reopened or the focus moved —
+    // ⛔ and ONLY on those two. Anything else in this flag drags the layout with
+    // it and the screen flickers (see uf1-mode-edge-must-not-relayout).
+    static uint32_t sGen   = 0xFFFFFFFFu;
+    static int      sSlot  = -2;
+    static bool     sWasOn = false;
+    const uint32_t gen = g_uf1Gen.load();
+    const bool force = (gen != sGen) || (slot != sSlot) || !sWasOn;
+    sGen = gen; sSlot = slot; sWasOn = true;
+
+    auto sendText = [&](uint16_t addr, const std::string& s) {
+        std::vector<uint8_t> p(s.begin(), s.end());
+        g_uf1_dev->send(uf1::buildScreen(addr, p));
+    };
+
+    const uf8::hue::SlotConfig cfg =
+        (slot >= 0) ? hm.slot(slot) : uf8::hue::SlotConfig{};
+
+    // ---- channel zone ------------------------------------------------------
+    {
+        std::string nm = utf8ToLatin1(
+            cfg.label.empty() ? cfg.bridgeName : cfg.label);
+        if (nm.empty()) nm = (slot < 0) ? "NO LAMP" : "LAMP";
+        if (nm.size() > 12) nm.resize(12);
+        static std::string sName;
+        if (force || nm != sName) { sName = nm; sendText(uf1::scr::kTrackName, nm); }
+
+        const std::string cs = (slot < 0) ? "HUE"
+            : (cfg.kind == uf8::hue::TargetKind::Group ? "ZONE" : "LAMP");
+        static std::string sCs;
+        if (force || cs != sCs) { sCs = cs; sendText(uf1::scr::kCsType, cs); }
+
+        char chb[8];
+        std::snprintf(chb, sizeof(chb), "%d", (slot < 0) ? 0 : slot + 1);
+        static std::string sCh;
+        if (force || chb != sCh) { sCh = chb; sendText(uf1::scr::kChNumber, sCh); }
+
+        char db[12];
+        if (slot < 0 || !hm.liveOn(slot)) std::snprintf(db, sizeof(db), "OFF");
+        else std::snprintf(db, sizeof(db), "%d%%",
+                           static_cast<int>(hm.liveBri01(slot) * 100.0 + 0.5));
+        static std::string sDb;
+        if (force || db != sDb) { sDb = db; sendText(uf1::scr::kOutputDb, sDb); }
+
+        const std::string vl = (slot < 0) ? std::string("no lamp defined")
+                                          : hm.liveValueLine(slot);
+        static std::string sVl;
+        if (force || vl != sVl) { sVl = vl; sendText(uf1::scr::kValueLine, vl); }
+
+        // Colour bar — the lamp's live colour through the same quantizer the UF8
+        // strips use, so both surfaces land on the same palette entry.
+        const uint8_t idx = (slot < 0)
+            ? uint8_t(0) : uf8::quantize(hm.liveRgb24(slot));
+        static uint8_t sBar = 0xFF;
+        if (force || idx != sBar) {
+            sBar = idx;
+            const uint8_t one = idx;
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar,
+                            std::span<const uint8_t>(&one, 1)));
+        }
+    }
+
+    // ---- the four V-Pots ---------------------------------------------------
+    {
+        std::array<uint8_t, 8> bars{};
+        std::array<uint8_t, 4> styles{};
+        static std::array<std::string, 4> sVpot{};
+
+        auto sendVpot = [&](uint8_t idx, const std::string& label,
+                            const std::string& value, double norm, bool empty) {
+            const std::string line = utf8ToLatin1(uf1ValueLine(label, value));
+            if (force || line != sVpot[idx]) {
+                sVpot[idx] = line;
+                std::vector<uint8_t> p;
+                p.reserve(1 + line.size());
+                p.push_back(idx);
+                p.insert(p.end(), line.begin(), line.end());
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kFocusedParam, p));
+            }
+            const int pos = std::clamp(
+                static_cast<int>(std::lround(norm * 100.0)), 0, 100);
+            bars[idx * 2]     = static_cast<uint8_t>(pos);
+            bars[idx * 2 + 1] = 0x80;
+            // Every axis here is unipolar, so the travelling line (0x01) is the
+            // right look on all four — the same rule the channel painter uses.
+            styles[idx] = empty ? 0x03 : 0x01;
+        };
+
+        if (slot < 0) {
+            for (uint8_t i = 0; i < 4; ++i) sendVpot(i, "", "", 0.0, true);
+        } else {
+            char v[24];
+            const double hue = hm.liveHueDeg(slot);
+            std::snprintf(v, sizeof(v), "%d", static_cast<int>(hue + 0.5));
+            sendVpot(0, "Hue", v, hue / 360.0, false);
+
+            const double sat = hm.liveSat(slot);
+            std::snprintf(v, sizeof(v), "%d%%", static_cast<int>(sat * 100.0 + 0.5));
+            sendVpot(1, "Sat", v, sat, false);
+
+            const double warm = hm.liveWarm(slot);
+            std::snprintf(v, sizeof(v), "%dK",
+                          static_cast<int>(1000000.0
+                              / static_cast<double>(
+                                  uf8::hue::mirekFromWarmth(warm))));
+            sendVpot(2, reasixty_sp("Colour", "Color"), v, warm, false);
+
+            std::snprintf(v, sizeof(v), "%d", slot + 1);
+            sendVpot(3, "Lamp", v,
+                     static_cast<double>(slot) / double(uf8::hue::kMaxSlots - 1),
+                     false);
+        }
+
+        static std::array<uint8_t, 8> sBars{};
+        static bool sBarsValid = false;
+        if (force || !sBarsValid || bars != sBars) {
+            sBars = bars; sBarsValid = true;
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
+        }
+        static std::array<uint8_t, 4> sStyles{};
+        static bool sStylesValid = false;
+        if (force || !sStylesValid || styles != sStyles) {
+            sStyles = styles; sStylesValid = true;
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, styles));
+        }
+    }
+
+    // ---- the fader ---------------------------------------------------------
+    // While the finger is on it the position drives the lamp and the motor stays
+    // limp; on release the painter takes the target back. Same shape as the
+    // channel path, minus the automation.
+    static bool sMotorEngaged = false;
+    if (g_uf1FaderTouched.load()) {
+        if (slot >= 0 && g_uf1FaderHasPos.load()) {
+            const uint16_t pos = g_uf1FaderPos.load();
+            hm.setFader(slot,
+                        static_cast<double>(pos) / static_cast<double>(kUf1FaderMax),
+                        /*released=*/false);
+            g_uf1_dev->send(uf1::buildMotorPosition(pos));
+        }
+        sMotorEngaged = false;
+    } else if (slot >= 0) {
+        const double n = hm.liveBri01(slot);
+        uint16_t pos = static_cast<uint16_t>(
+            n * static_cast<double>(kUf1FaderMax) + 0.5);
+        if (pos > kUf1FaderMax) pos = kUf1FaderMax;
+        static uint16_t sLast = 0xFFFF;
+        if (force || pos != sLast) {
+            sLast = pos;
+            if (!sMotorEngaged) {
+                g_uf1_dev->send(uf1::buildMotorPosition(pos));
+                g_uf1_dev->send(uf1::buildMotorEnable(true));
+                sMotorEngaged = true;
+            }
+            g_uf1_dev->send(uf1::buildMotorPosition(pos));
+        }
+    }
+}
+
 void uf1PaintChannel_()
 {
     if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
+
+    // Hue Mode owns the screen outright. Handing over here rather than branching
+    // further down is what keeps a half-painted channel off the glass.
+    if (g_uf1HueMode.load()) { uf1PaintHue_(); return; }
 
     // Follow the user's focus: last-touched track, else the first selected.
     MediaTrack* tr = uf1FocusedTrack_();
@@ -45187,6 +45462,17 @@ void registerBindingHandlers()
         },
         [](int) { return g_uf1PresetsMode.load(); },
         "UF1: Preset browser", false
+    });
+
+    // UF1 Hue Mode. Bindable from ANY surface (not just the UF1) the way the
+    // uf1_view_* modes are: the point of a lamp screen is to reach it from
+    // wherever your hand already is.
+    registerBuiltin("uf1_hue", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) g_uf1HueMode.store(!g_uf1HueMode.load());
+        },
+        [](int) { return g_uf1HueMode.load(); },
+        "UF1 Mode: Hue", false
     });
     registerBuiltin("uf1_view_cycle", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
