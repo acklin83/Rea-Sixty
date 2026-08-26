@@ -35577,8 +35577,22 @@ static void uf1NavCrossSyncLeds_()
             marked = kByTarget[std::clamp(
                 static_cast<int>(g_uf1RazorTarget.load()), 0, 4)];
             break;
-        case Uf1JogMode::Envelope:                 // marked = points, not playhead
-            if (!g_uf1EnvJogPlayhead.load()) marked = kCentreIdx;
+        case Uf1JogMode::Envelope:
+            // ⛔ NOTHING IS MARKED HERE, deliberately. The centre's own binding
+            // already says the state: jog_env_target_toggle is stateful and its
+            // stateOf IS g_uf1EnvJogPlayhead, which bindingHasActiveSlot_ reads.
+            // This case used to mark the centre on POINTS — the exact inverse of
+            // that state — so the two lit it in opposite halves of the toggle and
+            // between them it was lit always. The key never changed, and the LED
+            // settings had nothing to show (Frank 2026-08-26: "respektiert LED
+            // settings nicht ... bei cross fades / walk items tut er das").
+            // ★ Fades and Items mark in the SAME polarity as their own state,
+            // which is why only this one was stuck. A mark that contradicts the
+            // binding it lights is not a second opinion, it is an OR — and an OR
+            // of a thing and its negation is a constant.
+            // Dropping it rather than flipping it also means the key still reads
+            // correctly when it is bound to something else entirely, which is the
+            // whole point of the cross being per-mode assignable (2026-08-20).
             break;
         case Uf1JogMode::Items:                    // marked = the drag is "mouse-down"
             if (g_uf1JogItemsHeld.load()) marked = kCentreIdx;

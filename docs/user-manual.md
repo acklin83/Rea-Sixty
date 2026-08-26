@@ -2027,7 +2027,10 @@ Envelope:
 - **Envelope: lane above** and **Envelope: lane below** select the previous or
   next visible track envelope. Hidden lanes are stepped over.
 - **Envelope: jog edits points / playhead** is a toggle. The wheel either moves
-  the selected points or nudges the play cursor.
+  the selected points or nudges the play cursor. Being a toggle, the key it sits
+  on lights in its **active** colour while the wheel is on the playhead and in its
+  inactive one while it is on the points, so the nav cross shows which of the two
+  you are in, in the colours you gave that key.
 
 Items:
 
