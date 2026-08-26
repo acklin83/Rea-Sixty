@@ -122,6 +122,8 @@ void reasixty_setUf1CsPage(int page);
 // editor is the same bytes rather than a second opinion).
 void reasixty_uf1BankDisplayName(int bank, int mod, char* out, int outSz);
 void reasixty_uf1Seg7Encode(const char* text, unsigned char out[10]);
+void reasixty_uf1PreviewOnPanel(const char* text);
+bool reasixty_uf1Connected();
 const char* reasixty_uf1ShownMatch();       // map match the UF1 shows, "" = none
 // Point the SURFACE's instance cursor at an FX — the same cursor Instance Cycle
 // and FX Cycle write. Picking an instance in the FX-Learn combo used to be
@@ -6819,16 +6821,31 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             // approximates them without saying so, so "Mix Keys" reaches the
             // glass as "MIH KEYS". Echoing the typed text back would hide that
             // until the user was standing at the hardware.
+            const bool editing = ImGui_IsItemActive(ctx);
             char shown[64] = {0};
             reasixty_uf1BankDisplayName(uf1Bank, g_slotEditModIdx,
                                         shown, sizeof(shown));
-            drawUf1Seg7Preview_(ctx, shown);
+            // ★ The panel IS the preview while you type (Frank 2026-08-26). Not a
+            // drawing of the panel: the real cells, the real font, every
+            // approximation simply present. Re-armed every frame the field is
+            // active; the clock returns by itself half a second after you stop.
+            if (editing && reasixty_uf1Connected())
+                reasixty_uf1PreviewOnPanel(shown);
+            // The drawn cells stay for the case the panel cannot cover: no UF1
+            // attached. Offline editing of these banks is supported, and a preview
+            // that only exists with the hardware present would be missing exactly
+            // when the guessing starts.
+            if (!reasixty_uf1Connected())
+                drawUf1Seg7Preview_(ctx, shown);
             ImGui_TextDisabled(ctx,
                 (s_bankNameBuf[0] == '\0')
                     ? "Empty: a dynamic bank announces its kind, a static one its "
                       "number."
-                    : "Ten cells. K M V W X have no 7-segment shape and fall back "
-                      "to the nearest one.");
+                    : reasixty_uf1Connected()
+                        ? "Ten cells, shown on the UF1 while you type. K M V W X "
+                          "have no 7-segment shape and fall back to the nearest one."
+                        : "Ten cells. K M V W X have no 7-segment shape and fall "
+                          "back to the nearest one.");
             ImGui_Spacing(ctx);
         }
         {

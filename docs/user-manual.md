@@ -586,9 +586,12 @@ announces what kind it is and a static one announces its number.
 
 The time field is ten seven-segment cells, so it spells rather than prints, and
 **K M V W X have no shape on seven segments** — they fall back to the nearest one
-they do have, which is why a bank called `Mix Keys` arrives as `MIH KEYS`. The
-editor draws the ten cells live under the name field, so what you see there is
-what the panel will show. It is also why the built-in names read `EFFECTS` rather
+they do have, which is why a bank called `Mix Keys` arrives as `MIH KEYS`. **The
+UF1 itself is the preview**: while you are typing in the name field the time
+display shows the name, so you are reading the real cells in the real font rather
+than a drawing of them, and every approximation is simply there. Stop typing and
+the clock comes back on its own. With no UF1 attached the editor draws the ten
+cells under the field instead, so offline editing is not guesswork. It is also why the built-in names read `EFFECTS` rather
 than `FX` and an unnamed bank reads `SOFT 3` rather than `BANK 3`.
 
 Soft-key labels are capped at **13 characters** and V-Pot labels at **11**; both

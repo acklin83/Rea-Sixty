@@ -40780,6 +40780,17 @@ void reasixty_setUf1BankNameFlash(bool on)
 // ⛔ It runs the real encoder rather than reimplementing it, so the preview cannot
 // drift from the panel — including byte 0, which is not on the glass, and the
 // left-alignment that text (unlike the clock) uses.
+// ⇨ THE PREVIEW BELONGS ON THE PANEL (Frank 2026-08-26: "ich hätte die vorschau
+// lieber direkt auf dem gerät"). While the name field is being edited, the UF1
+// shows the name itself, so what you are reading IS the thing rather than a
+// drawing of it — every approximation the font makes is simply there.
+// Held rather than flashed: the caller re-arms it every frame the field is
+// active, and the short deadline lets the clock come back on its own the moment
+// editing stops. Main thread only, like uf1FlashTimecode_ itself.
+void reasixty_uf1PreviewOnPanel(const char* text)
+{
+    uf1FlashTimecode_(text ? text : "", 500);
+}
 void reasixty_uf1Seg7Encode(const char* text, unsigned char out[10])
 {
     if (!out) return;
