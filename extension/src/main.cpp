@@ -9390,12 +9390,25 @@ static void uf1SelectAdjacentEnvPoint_(int dir, bool add)
             lastSel = i;
         }
     }
-    const int anchor = (dir > 0) ? lastSel : firstSel;   // extend from the edge in `dir`
+    // ⇨ THE PLAY CURSOR RE-ANCHORS THE WALK. Envelope's centre hands the wheel to
+    // the playhead; having moved it there, the arrows should carry on from where the
+    // cursor now IS, not from a point that was selected before the move (Frank
+    // 2026-08-26: "wenn playhead mittels mittlerem button neu gesetzt wird, sollen
+    // die pfeile die punkte relativ zur neuen position des playheads wählen").
+    // ★ Detected on the CURSOR itself rather than on a flag raised by the jog path,
+    // which buys two things for free: a click in the arrange re-anchors it just the
+    // same, and there is no flag to leave stale. Selecting a point does not move the
+    // cursor, so walking on with the arrows still steps by index as before.
+    static double sLastCursor = -1.0;
+    const double cur = GetCursorPosition();
+    const bool moved = std::fabs(cur - sLastCursor) > 1e-9;
+    sLastCursor = cur;
+    const int anchor = moved ? -1                       // start from the playhead
+                             : ((dir > 0) ? lastSel : firstSel);   // extend from the edge in `dir`
     int target = -1;
     if (anchor >= 0) {
         target = anchor + dir;
-    } else {                                  // no selection → nearest point in dir of cursor
-        const double cur = GetCursorPosition();
+    } else {                                  // nearest point in dir of the cursor
         double best = 0;
         for (int i = 0; i < n; ++i) {
             double t = 0;
@@ -11588,6 +11601,22 @@ static void uf1JogMovePlayhead_(double delta, Uf1JogUnit unit, double step)
     SetEditCurPos(np, true, false);
 }
 
+// ⇨ IS THE WHEEL DRIVING THE PLAY CURSOR RIGHT NOW? Not "which mode is it in":
+// Envelope's centre hands the wheel back and forth between the envelope's points
+// and the playhead, so the answer changes without the mode changing. Asking the
+// mode alone is what limited the Cmd time-selection pull to Playhead mode (Frank
+// 2026-08-26: "soll mit cmd immer time-selection machen wenn es in einem Playhead
+// Mode ist, z.B. playhead toggle bei envelope mode").
+// ⚠ Scrub is deliberately NOT in here. It moves the play cursor too, but through
+// CSurf_ScrubAmt, and whether GetCursorPosition() tracks that is not something the
+// code says — the pull would read an anchor it cannot trust. It can join once that
+// is measured at the hardware rather than assumed.
+static bool uf1JogOnPlayhead_(Uf1JogMode m)
+{
+    return m == Uf1JogMode::Playhead
+        || (m == Uf1JogMode::Envelope && g_uf1EnvJogPlayhead.load());
+}
+
 // Write the time selection between the gesture's anchor and wherever the far end
 // has got to. Sorted, because you can pull either way, and a collapsed range is
 // passed through rather than suppressed — that is how REAPER clears one, so
@@ -11626,7 +11655,7 @@ void uf1JogDispatch_(int count)
     // Cmd in Playhead = pull a time selection instead of just moving the cursor.
     // Latched, not held by a key: the first detent drops the anchor, the rest
     // drag the far end, and releasing Cmd leaves the selection alone.
-    const bool pulling = (mode == Uf1JogMode::Playhead)
+    const bool pulling = uf1JogOnPlayhead_(mode)
                       && uf8::bindings::modifierHeld(uf8::bindings::Modifier::Cmd);
     if (!pulling) g_uf1TimeSelArmed.store(false);
     else if (!g_uf1TimeSelArmed.exchange(true)) g_uf1TimeSelAnchor = GetCursorPosition();
@@ -11704,8 +11733,14 @@ void uf1JogDispatch_(int count)
         case Uf1JogMode::Envelope:
             // NAV-centre picks the target: playhead (nudge the cursor without leaving
             // Envelope editing) or the selected envelope's points (Frank 2026-08-08).
-            if (g_uf1EnvJogPlayhead.load()) uf1JogMovePlayhead_(delta, unit, step);
-            else                            applyUf1JogEnvelope_(count, delta);
+            if (g_uf1EnvJogPlayhead.load()) {
+                uf1JogMovePlayhead_(delta, unit, step);
+                // Same Cmd pull as Playhead mode — the wheel is on the cursor here,
+                // so the gesture is the same gesture.
+                if (pulling) uf1TimeSelSet_(GetCursorPosition());
+            } else {
+                applyUf1JogEnvelope_(count, delta);
+            }
             break;
         case Uf1JogMode::Razor:    applyUf1JogRazor_(count, delta);    break;
         case Uf1JogMode::Fades:    applyUf1JogFades_(count, delta);    break;

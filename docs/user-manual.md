@@ -718,7 +718,7 @@ The cross is not one thing either — it follows the object, exactly like the wh
 | **Playhead** | Zoom out / in horizontally. | Zoom in / out vertically. | Zoom to fit the project. |
 | **Scrub** | As Playhead. | As Playhead. | As Playhead. |
 | **Items** | Select the previous / next item on the track. | Select the item on the track above / below. | **Hold** it and the wheel drags the selected items as one move; release drops them. Press and let go without turning and it zooms to the selected items instead, press again to come back. |
-| **Envelope** | Select the previous / next point. | Switch envelope lane. | Toggle what the jog edits: the selected **points** or the **playhead**. No zoom here, nudging the cursor while shaping an envelope is worth more. |
+| **Envelope** | Select the previous / next point. Once the play cursor has moved, the next arrow starts from where the cursor now is rather than from the point that was selected before it moved, so nudging the playhead and reaching for an arrow lands where you are looking. | Switch envelope lane. | Toggle what the jog edits: the selected **points** or the **playhead**. No zoom here, nudging the cursor while shaping an envelope is worth more. |
 | **Razor** | Aim at the **left** / **right** edge. | Aim at the **top** / **bottom** edge. | **Hold** it to take the **whole area** and drag its content. See *Razor* below. |
 | **Fades**, aiming | Aim at the **fade-in** / **fade-out**. | Next / previous fade type. | Switch the cross over to walking the items. |
 | **Fades**, walking | Select the previous / next item on the track. | Select the item on the track above / below. | Switch the cross back to aiming. |
@@ -777,16 +777,20 @@ Three modifiers stack on the jog:
 
 - **Shift** — fine. Divides the step (default ÷4).
 - **Cmd** — copy instead of move. In Fades it means move instead of resize, and
-  in Playhead it pulls a time selection.
+  wherever the wheel is on the play cursor it pulls a time selection.
 - **Ctrl** — cross axis. In Items, that means moving track by track rather than in
   time; the vertical axis is discrete, so it steps one track at a time. In Fades
   it takes the fade curve rather than its length.
 
 ## Pulling a time selection
 
-In **Playhead**, hold **Cmd** and turn: the first click drops an anchor where the
-cursor is and every one after it drags the other end, so a time selection grows
-out of the wheel. Let Cmd go and the selection stays. Press again and a new one
+Wherever the wheel is driving the play cursor, hold **Cmd** and turn: the first
+click drops an anchor where the cursor is and every one after it drags the other
+end, so a time selection grows out of the wheel. That is **Playhead** mode, and
+**Envelope** once its centre key has handed the wheel to the playhead, because
+there the wheel is on the cursor too. Scrub is not included: it moves the cursor
+through REAPER's scrub engine rather than by setting it, so the anchor would not
+be reliable. Let Cmd go and the selection stays. Press again and a new one
 starts from wherever you are. Turn back onto the anchor and it collapses, which
 is how you clear one without reaching for anything.
 
@@ -2027,7 +2031,10 @@ Envelope:
 - **Envelope: lane above** and **Envelope: lane below** select the previous or
   next visible track envelope. Hidden lanes are stepped over.
 - **Envelope: jog edits points / playhead** is a toggle. The wheel either moves
-  the selected points or nudges the play cursor. Being a toggle, the key it sits
+  the selected points or nudges the play cursor. On the playhead, **Cmd** pulls a
+  time selection exactly as it does in Playhead mode: the first detent drops an
+  anchor at the cursor, the rest drag the far end, and releasing Cmd leaves the
+  selection standing. Being a toggle, the key it sits
   on lights in its **active** colour while the wheel is on the playhead and in its
   inactive one while it is on the points, so the nav cross shows which of the two
   you are in, in the colours you gave that key.
