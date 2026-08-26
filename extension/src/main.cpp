@@ -35858,14 +35858,21 @@ void onTimerBody_()
         const SelectionMode sm = g_selectionMode.load();
         const EncoderMode   em = g_encoderMode.load();
         const EncoderMode   uf1em = g_uf1EncoderMode.load();
-        // Persistent current-mode readout ("<sel>\t<enc>") for the focused panel's
-        // always-on mode indicator — the banner below is transient/on-change only,
-        // so a panel started mid-session needs the live state too. Diff-guarded.
-        // Frank 2026-06-27.
+        // Persistent current-mode readout for the focused panel's always-on mode
+        // elements — the banner below is transient/on-change only, so a panel started
+        // mid-session needs the live state too. Diff-guarded. Frank 2026-06-27.
+        // "<sel>\t<enc>\t<uf1 enc>\t<jog>". The UF1's own encoder mode and the jog
+        // mode joined on 2026-08-26 as two more panel elements (Frank): both are rings
+        // you scroll blind on the surface, and the UF1 encoder is a DIFFERENT ring from
+        // the UF8's <enc> — the panel showed the UF8's and named it just "Enc".
+        // Appended, never reordered: a panel from an older build reads the first two
+        // fields and simply does not know about the rest.
         {
             static std::string msPub;
             std::string ms = std::string(selectionModeFriendly(sm)) + "\t"
-                           + encoderModeFriendly(em);
+                           + encoderModeFriendly(em) + "\t"
+                           + encoderModeFriendly(uf1em) + "\t"
+                           + uf1JogModeFriendly(g_uf1JogMode.load());
             if (ms != msPub) { msPub = ms;
                 SetExtState("rea_sixty", "mode_state", ms.c_str(), false); }
         }

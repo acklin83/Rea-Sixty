@@ -1733,6 +1733,8 @@ Enable via *Settings → Appearance → On-screen → "Show focused-track panel"
 - **Layout** — Two lines (CS / BC) or One line.
 - **Track name** — *Show track name*; **Use track colour** (draws the track name in the track's REAPER colour — falls back to grey if the track has no custom colour assigned); *Full name* / *Smart abbreviate* / *Abbreviation length*; **Before / After CS/BC** (whether the track name sits before or after the plug-in tag).
 - **Customize** — Font size, Corner radius, Background / Border / CS / BC colour.
+- **Elements** — what the panel shows besides the track name and the plug-in tags. *Mode indicator (Sel / Encoder)* — the UF8's Selection Mode and Channel-Encoder Mode. *UF1 encoder mode* and *UF1 jog mode* — the UF1's own two rings, which are separate from the UF8's and are scrolled blind under a held key, so this is the only always-on readout of them. *Flash mode changes* — the transient banner, in the panel instead of its own window. *Settings + HUD buttons*, *CS / BC cycle buttons*, and *Click plug-in name to open*. All off by default except the last.
+- **Align** — centre the box horizontally or vertically on screen.
 - **Load on startup** — auto-launch the panel when REAPER starts (writes a marked one-liner into `Scripts/__startup.lua`; untick to remove it).
 - **Close panel**.
 

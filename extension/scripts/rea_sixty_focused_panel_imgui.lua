@@ -430,17 +430,47 @@ local function pollModeBanner()
   end
 end
 
--- Persistent current-mode line ("mode_state" = "<sel>\t<enc>").
+-- Persistent current-mode state: "mode_state" = "<sel>\t<enc>\t<uf1 enc>\t<jog>".
+-- Fields are appended, never reordered, so a panel running against an older
+-- extension just gets nil for the ones that build never published.
+local function modeState()
+  local raw = reaper.GetExtState(SECT, "mode_state")
+  if raw == "" then return nil end
+  local f = {}
+  for s in (raw .. "\t"):gmatch("(.-)\t") do f[#f + 1] = s end
+  return f
+end
+
+-- One dimmed label + its value, the look every mode element shares.
+local function labelled(label, value)
+  reaper.ImGui_TextColored(ctx, rgba(0x8890A0), label .. " ")
+  reaper.ImGui_SameLine(ctx, 0, 0)
+  reaper.ImGui_TextColored(ctx, rgba(0xC8D0E0), value)
+end
+
 local function drawModeIndicator()
-  local sel, enc = reaper.GetExtState(SECT, "mode_state"):match("^(.-)\t(.*)$")
-  if not sel then return end
-  reaper.ImGui_TextColored(ctx, rgba(0x8890A0), "Sel ")
-  reaper.ImGui_SameLine(ctx, 0, 0)
-  reaper.ImGui_TextColored(ctx, rgba(0xC8D0E0), sel)
+  local f = modeState()
+  if not f or not f[2] then return end
+  labelled("Sel", f[1])
   reaper.ImGui_SameLine(ctx, 0, font_px)
-  reaper.ImGui_TextColored(ctx, rgba(0x8890A0), "Enc ")
-  reaper.ImGui_SameLine(ctx, 0, 0)
-  reaper.ImGui_TextColored(ctx, rgba(0xC8D0E0), enc)
+  labelled("Enc", f[2])
+end
+
+-- The UF1's channel encoder runs its OWN mode ring, not the UF8's — hence its own
+-- element rather than a second value on the line above (Frank 2026-08-26).
+local function drawUf1Enc()
+  local f = modeState()
+  if not f or not f[3] or f[3] == "" then return end
+  labelled("UF1 Enc", f[3])
+end
+
+-- The UF1 jog wheel's mode ring (Playhead / Scrub / Items / Envelope / Razor Edit /
+-- Fades). Both rings are scrolled blind under a held key, so an always-on readout is
+-- the point of putting them here.
+local function drawJog()
+  local f = modeState()
+  if not f or not f[4] or f[4] == "" then return end
+  labelled("Jog", f[4])
 end
 
 local function drawButtons()
@@ -467,7 +497,7 @@ end
 -- default; a block flagged "new line" starts a fresh row. Arrange mode shows a
 -- drag grip per block so the order can be rearranged by dragging. Frank 2026-06-27.
 ------------------------------------------------------------------------
-local BLOCK_IDS = { "params", "fav", "mode", "cycle", "buttons" }
+local BLOCK_IDS = { "params", "fav", "mode", "uf1enc", "jog", "cycle", "buttons" }
 local has_dnd = reaper.APIExists("ImGui_BeginDragDropSource")
   and reaper.APIExists("ImGui_AcceptDragDropPayload")
 
@@ -603,6 +633,8 @@ local function drawContent()
     params  = { draw = drawParams,        show = reaper.GetExtState(SECT, "focused_panel_params") ~= "0" },
     fav     = { draw = drawFav,           show = anyFav },
     mode    = { draw = drawModeIndicator, show = reaper.GetExtState(SECT, "focused_panel_mode")    == "1" },
+    uf1enc  = { draw = drawUf1Enc,        show = reaper.GetExtState(SECT, "focused_panel_uf1enc")  == "1" },
+    jog     = { draw = drawJog,           show = reaper.GetExtState(SECT, "focused_panel_jog")     == "1" },
     cycle   = { draw = drawCycle,         show = reaper.GetExtState(SECT, "focused_panel_cycle")   == "1" },
     buttons = { draw = drawButtons,       show = reaper.GetExtState(SECT, "focused_panel_buttons") == "1" },
   }
@@ -861,6 +893,8 @@ local function drawContextMenu()
       if reaper.ImGui_MenuItem(ctx, label, nil, on) then toggleKey(key, def) end
     end
     item("Mode indicator (Sel / Encoder)",        "focused_panel_mode",       false)
+    item("UF1 encoder mode",                      "focused_panel_uf1enc",     false)
+    item("UF1 jog mode",                          "focused_panel_jog",        false)
     item("Flash mode changes",                    "focused_panel_banner",     false)
     item("Settings + HUD buttons",                "focused_panel_buttons",    false)
     item("CS / BC cycle buttons",                 "focused_panel_cycle",      false)
