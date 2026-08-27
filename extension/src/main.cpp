@@ -27610,6 +27610,163 @@ static uint32_t uf1BindingLedColour_(const uf8::bindings::Binding& bd,
           |  (( rgb        & 0xFF) / 4));
 }
 
+
+// ---- The UF1's four display soft keys: ONE writer for the whole row ---------
+//
+// ⛔ THIS EXISTS BECAUSE A MODE THAT OWNS THE SCREEN LOST THE ROW. Hue Mode
+// takes over uf1PaintChannel_ at the top and returns; the labels, the four LEDs
+// and the 0x0102 highlight all lived further down inside that function, so in
+// Hue Mode nobody painted them and the keys sat there dead (Frank 2026-08-27:
+// "Soft-Key LED nimmt wieder active/inactive nicht an! Und highlight macht er
+// auch nicht!"). Copying the emit into the new painter was the obvious fix and
+// the wrong one: the key-1 rule below is exactly the kind of detail that drifted
+// between two copies once already (it sat on 0xf0, pure green, in one of them
+// for as long as that path existed).
+//
+// So the row has one function. Any painter that owns the screen fills four cells
+// and calls this. The change-detection statics live here too, because there is
+// one physical row and its cache describes what the DEVICE shows.
+//
+// `ledsBorrowed` is the arbitration the BC-GR meter needs: it paints these LEDs
+// later in the same tick, so this poisons the cache instead of sending — one
+// writer per tick, and the poisoned entry is what makes them all re-send the
+// moment they are handed back. `menuOpen` is the MODE-hold overlay doing the
+// same for labels, LEDs and, since 2026-08-26, the highlight.
+struct Uf1SkCell {
+    std::string label;
+    bool        haveLabel = false;
+    bool        on        = false;
+    bool        hasColour = false;
+    uint32_t    colRgb    = 0;
+    bool        colBright = false;
+};
+
+static void uf1EmitSoftKeyRow_(const std::array<Uf1SkCell, 4>& cells,
+                               bool force, bool ledsBorrowed, bool menuOpen)
+{
+    if (!g_uf1_dev) return;
+    static std::array<std::string, 4> sSkLabel{};
+    static std::array<int, 4>         sSkLed{ -1, -1, -1, -1 };
+
+    uint8_t skHighlight = 0;
+    for (int i = 0; i < 4; ++i) {
+        const Uf1SkCell& c = cells[static_cast<size_t>(i)];
+        // Label (0x0104, <idx> + text) — SSL strip only; change-detected.
+        // 13 chars is the field; abbreviate past it (see kUf1SoftKeyChars).
+        // Fold to Latin-1 FIRST, for two reasons: the UF1 panel is one byte per
+        // glyph (see the sendZoneText comment), and folding before the length
+        // check makes that check and the byte-wise abbreviation character-safe
+        // instead of counting an umlaut as two and possibly cutting one in half.
+        // abbreviateTrackName_ therefore keeps foldLatin1=false — folding twice
+        // would re-decode the high bytes.
+        std::string label = utf8ToLatin1(c.label);
+        if (label.size() > kUf1SoftKeyChars)
+            label = abbreviateTrackName_(label,
+                                 static_cast<int>(kUf1SoftKeyChars),
+                                 TNM_SmartAbbrev, /*foldLatin1*/ false);
+        if (c.haveLabel && (force || label != sSkLabel[i])) {
+            sSkLabel[i] = label;
+            std::vector<uint8_t> pb;
+            pb.reserve(1 + label.size());
+            pb.push_back(uint8_t(i));
+            pb.insert(pb.end(), label.begin(), label.end());
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kSoftKeyLabel, pb));
+        }
+        // Soft-key LED. IDs 0x01-0x04 = btn − 0x18 (cap106, HW-CONFIRMED). Scheme =
+        // the UF8 FF38(+FF39, +FF3B enable) one. SOFT-KEY 1 (id 0x01) is FF38-ONLY
+        // (cap106: sending FF39 to 0x01 sticks the rectangle). Two render paths:
+        //  • keyHasColour (a DAW static-bank binding colour, or a dynamic bank's
+        //    class colour) → the FF38 GRB frame, saturated and level-set by
+        //    uf1KeyColourNibbles_ (see there: dimming in 8-bit space destroyed
+        //    the hue), PLUS the FF39 state byte on keys 2-4. Frank HW-confirmed
+        //    the display soft-key colour renders (2026-07-30). The earlier
+        //    "revert to state-only" was WRONG: its bug was DROPPING the FF39
+        //    keys 2-4 need — here we send BOTH, so the colour shows and keys
+        //    2-4 stay lit.
+        //  • otherwise (Plugin/CS, Sends, learned) → the HW-verified state-only bytes
+        //    (buildLedPrimary FF38 + buildLedLevel FF39, key-1-only rule), unchanged.
+        uint8_t kg4 = 0, kr4 = 0, kb4 = 0;
+        if (c.hasColour)
+            uf1KeyColourNibbles_(c.colRgb, c.colBright, kg4, kr4, kb4);
+        // Change key carries the NIBBLES, not the source rgb: two colours that
+        // quantise the same must not re-send, and the same colour at two levels
+        // must (the old key hashed the 8-bit value and got both wrong by luck).
+        const int ledState = c.hasColour
+            ? ((1 << 30) | (c.on ? (1 << 24) : 0)
+               | (int(kg4) << 8) | (int(kr4) << 4) | int(kb4))
+            : (c.on ? 1 : 0);
+        // While the BC-GR meter or the MODE menu owns these four LEDs, poison
+        // the cache instead of sending: they paint them later this same tick,
+        // so a send here is pure churn — and the poisoned entry is what makes
+        // every LED re-send the moment they hand them back.
+        //
+        // ⚠ `modeMenu` joined this on 2026-08-11. Pressing MODE flips
+        // grOwnsSk OFF (the BC meter stands down while the menu is up), which
+        // un-parked this block on the very tick the menu paints — so all four
+        // LEDs got the channel state and then the menu's, two frame sets apart
+        // in one tick. That is a visible flash, and key 1 shows it worst
+        // because it is FF38-only and swings lit <-> dim on its own send
+        // (Frank: "kurzer flicker auf LED soft-key 1"). Same rule as the placeholder-then-real
+        // trap in [[uf1-mode-edge-must-not-relayout]]: ONE writer per tick.
+        if (ledsBorrowed || menuOpen) { sSkLed[i] = INT_MIN; }
+        else if (force || ledState != sSkLed[i]) {
+            sSkLed[i] = ledState;
+            const uint8_t id = kUf1CsSoftKeyLedId[i];   // 0x01..0x04
+            if (force) g_uf1_dev->send(uf1::buildLed(id, true));  // FF3B enable
+            if (c.hasColour) {
+                g_uf1_dev->send(uf1::buildColour(id, kg4, kr4, kb4));        // FF38 colour
+                // ⇨ FF39 STAYS LIT AND THE NIBBLES CARRY THE LEVEL — the SEL
+                // LED's rule (uf1PaintChannelStrip_, kFf39Lit + a black rgb for
+                // "off"), adopted here because the old dim FF39 stacked on top
+                // of an already-dimmed colour and took the second bite out of
+                // exactly the hue this key exists to show. A key with nothing to
+                // show gets rgb 0 above, which is dark on its own.
+                if (i != 0)
+                g_uf1_dev->send(uf1::buildLedLevel(id, uf1::led::kFf39Lit));
+            } else if (i == 0) {
+                // FF38-only (Frank HW 2026-07-29). Same lit byte as keys 2-4 —
+                // it was 0xf0 here, which is pure green (uf1::led::kPrimSoftKey*).
+                g_uf1_dev->send(uf1::buildLedPrimary(id,
+                c.on ? uf1::led::kPrimSoftKeyLit : uf1::led::kPrimSoftKeyDim));
+            } else {
+                g_uf1_dev->send(uf1::buildLedPrimary(id,
+                c.on ? uf1::led::kPrimSoftKeyLit : uf1::led::kPrimSoftKeyDim));
+                g_uf1_dev->send(uf1::buildLedLevel(id,   c.on ? 0x00 : 0x11)); // FF39
+            }
+        }
+        if (c.on) skHighlight |= static_cast<uint8_t>(1u << i);
+    }
+
+    // ⇨ 0x0102 — the on-screen highlight, one bit per key, bit0 = SK1.
+    // HW-decoded 2026-08-17 (Frank walked 1/2/4/8/9/10/11/12/15 and every
+    // combination landed exactly where the bits say). Two corpus readings had
+    // failed before that, both because this element and the labels are
+    // change-gated on the wire, so pairing them after the fact compares values
+    // from different moments.
+    //
+    // ★ This is a SECOND channel, and that is the point (Frank's idea): the four
+    // soft-key LEDs have three owners, and when the Bus-Comp GR meter takes them
+    // the keys' own on/off state used to vanish for as long as the meter ran.
+    // The highlight is not part of that arbitration, so an engaged toggle stays
+    // visible underneath the metering. Sent unconditionally for the same reason
+    // — deliberately NOT gated on grOwnsSk.
+    // ⇨ …with ONE exception: the MODE-hold menu borrows all four keys, and it
+    // overrode their labels and their LEDs but never this third channel — so a
+    // dynamic bank's selected key kept its bar sitting under "PLUGIN / DAW /
+    // METER / SENDS" (Frank 2026-08-26). The row's own selection stands down
+    // while the menu is open. Nothing has to put it back: menuEdge folds into
+    // `changed`, so the release tick re-sends the real mask through this gate.
+    {
+        const uint8_t out = menuOpen ? uint8_t{0} : skHighlight;
+        static int sSkHi = INT_MIN;
+        if (force || out != sSkHi) {
+        sSkHi = out;
+        g_uf1_dev->send(uf1::buildScreen(0x0102,
+            std::span<const uint8_t>(&out, 1)));
+        }
+    }
+}
+
 // ---- UF1 Hue Mode -----------------------------------------------------------
 //
 // The focus slot, clamped onto something that exists. SEL on a UF8 lamp strip and
@@ -27824,6 +27981,53 @@ static void uf1PaintHue_()
             sStyles = styles; sStylesValid = true;
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, styles));
         }
+    }
+
+    // ---- the four display soft keys ----------------------------------------
+    // In Hue Mode the keys carry the user's UF1 soft-key bank — that is where
+    // hue_scene_recall goes — so the row is resolved from the bindings exactly
+    // as the channel painter's DAW branch does, and emitted through the ONE row
+    // writer. Not a copy: the key-1 rule and the highlight live there, and a
+    // second copy of them is what drifted last time.
+    {
+        std::array<Uf1SkCell, 4> cells{};
+        const int bankNo = g_uf1SoftBank.load();
+        const int mIdx   = static_cast<int>(uf8::bindings::bankModifierSnapshot());
+        const bool plainLayer =
+            (mIdx == static_cast<int>(uf8::bindings::Modifier::Plain));
+        for (int i = 0; i < 4; ++i) {
+            const auto sl = uf8::bindings::getUf1SoftBankSlot(bankNo, i);
+            const auto& sp = sl.shortPress[mIdx];
+            std::string label;
+            if (!sp.label.empty())                       label = sp.label;
+            else if (plainLayer && !sl.label.empty())     label = sl.label;
+            else if (!sp.action.empty())
+                label = uf8::bindings::softKeyFallbackLabel(sp);
+            Uf1SkCell& c = cells[static_cast<size_t>(i)];
+            c.label     = label;
+            c.haveLabel = true;
+            c.on        = bindingHasActiveSlotForSet_(sl, mIdx);
+            c.hasColour = true;
+            if (label.empty() && !sl.ledShowWhenEmpty) {
+                c.colRgb = 0u;             // nothing bound → dark
+            } else {
+                // Same resolver the channel painter's DAW branch uses: the
+                // modifier SET's own override if it has one, else the key's.
+                uint8_t rgb[3];
+                uf8::bindings::Brightness bri;
+                if (c.on) uf8::bindings::effectiveLedActive  (sl, sp, rgb, bri);
+                else      uf8::bindings::effectiveLedInactive(sl, sp, rgb, bri);
+                c.colBright = (bri == uf8::bindings::Brightness::Bright);
+                c.colRgb = (uint32_t(rgb[0]) << 16) | (uint32_t(rgb[1]) << 8)
+                         | static_cast<uint32_t>(rgb[2]);
+                // Off is a third state, not "not bright".
+                if (bri == uf8::bindings::Brightness::Off) c.colRgb = 0;
+            }
+        }
+        // Nobody borrows the row here: the BC-GR meter and the MODE menu belong
+        // to the channel view, which is not running.
+        uf1EmitSoftKeyRow_(cells, force, /*ledsBorrowed=*/false,
+                           /*menuOpen=*/g_uf1ModeMenu.load());
     }
 
     // ---- the fader ---------------------------------------------------------
@@ -29318,7 +29522,7 @@ void uf1PaintChannel_()
         const int dawDynPage = dawDyn ? g_uf1DynBankPage.load() : 0;
         // The on-screen HIGHLIGHT mask (0x0102) collected across the four keys —
         // see the send just after the loop for why it is worth having.
-        uint8_t skHighlight = 0;
+        std::array<Uf1SkCell, 4> skCells{};
         for (int i = 0; i < 4; ++i) {
             std::string label;
             bool haveLabel = false, on = false;
@@ -29537,120 +29741,15 @@ void uf1PaintChannel_()
                 label = kFakeCsSk[i];
                 haveLabel = true;
             }
-            // Label (0x0104, <idx> + text) — SSL strip only; change-detected.
-            // 13 chars is the field; abbreviate past it (see kUf1SoftKeyChars).
-            // Fold to Latin-1 FIRST, for two reasons: the UF1 panel is one byte per
-            // glyph (see the sendZoneText comment), and folding before the length
-            // check makes that check and the byte-wise abbreviation character-safe
-            // instead of counting an umlaut as two and possibly cutting one in half.
-            // abbreviateTrackName_ therefore keeps foldLatin1=false — folding twice
-            // would re-decode the high bytes.
-            label = utf8ToLatin1(label);
-            if (label.size() > kUf1SoftKeyChars)
-                label = abbreviateTrackName_(label,
-                                             static_cast<int>(kUf1SoftKeyChars),
-                                             TNM_SmartAbbrev, /*foldLatin1*/ false);
-            if (haveLabel && (changed || label != sSkLabel[i])) {
-                sSkLabel[i] = label;
-                std::vector<uint8_t> pb;
-                pb.reserve(1 + label.size());
-                pb.push_back(uint8_t(i));
-                pb.insert(pb.end(), label.begin(), label.end());
-                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kSoftKeyLabel, pb));
-            }
-            // Soft-key LED. IDs 0x01-0x04 = btn − 0x18 (cap106, HW-CONFIRMED). Scheme =
-            // the UF8 FF38(+FF39, +FF3B enable) one. SOFT-KEY 1 (id 0x01) is FF38-ONLY
-            // (cap106: sending FF39 to 0x01 sticks the rectangle). Two render paths:
-            //  • keyHasColour (a DAW static-bank binding colour, or a dynamic bank's
-            //    class colour) → the FF38 GRB frame, saturated and level-set by
-            //    uf1KeyColourNibbles_ (see there: dimming in 8-bit space destroyed
-            //    the hue), PLUS the FF39 state byte on keys 2-4. Frank HW-confirmed
-            //    the display soft-key colour renders (2026-07-30). The earlier
-            //    "revert to state-only" was WRONG: its bug was DROPPING the FF39
-            //    keys 2-4 need — here we send BOTH, so the colour shows and keys
-            //    2-4 stay lit.
-            //  • otherwise (Plugin/CS, Sends, learned) → the HW-verified state-only bytes
-            //    (buildLedPrimary FF38 + buildLedLevel FF39, key-1-only rule), unchanged.
-            uint8_t kg4 = 0, kr4 = 0, kb4 = 0;
-            if (keyHasColour)
-                uf1KeyColourNibbles_(keyColRgb, keyColBright, kg4, kr4, kb4);
-            // Change key carries the NIBBLES, not the source rgb: two colours that
-            // quantise the same must not re-send, and the same colour at two levels
-            // must (the old key hashed the 8-bit value and got both wrong by luck).
-            const int ledState = keyHasColour
-                ? ((1 << 30) | (on ? (1 << 24) : 0)
-                   | (int(kg4) << 8) | (int(kr4) << 4) | int(kb4))
-                : (on ? 1 : 0);
-            // While the BC-GR meter or the MODE menu owns these four LEDs, poison
-            // the cache instead of sending: they paint them later this same tick,
-            // so a send here is pure churn — and the poisoned entry is what makes
-            // every LED re-send the moment they hand them back.
-            //
-            // ⚠ `modeMenu` joined this on 2026-08-11. Pressing MODE flips
-            // grOwnsSk OFF (the BC meter stands down while the menu is up), which
-            // un-parked this block on the very tick the menu paints — so all four
-            // LEDs got the channel state and then the menu's, two frame sets apart
-            // in one tick. That is a visible flash, and key 1 shows it worst
-            // because it is FF38-only and swings lit <-> dim on its own send
-            // (Frank: "kurzer flicker auf LED soft-key 1"). Same rule as the placeholder-then-real
-            // trap in [[uf1-mode-edge-must-not-relayout]]: ONE writer per tick.
-            if (grOwnsSk || modeMenu) { sSkLed[i] = INT_MIN; }
-            else if (changed || ledState != sSkLed[i]) {
-                sSkLed[i] = ledState;
-                const uint8_t id = kUf1CsSoftKeyLedId[i];   // 0x01..0x04
-                if (changed) g_uf1_dev->send(uf1::buildLed(id, true));  // FF3B enable
-                if (keyHasColour) {
-                    g_uf1_dev->send(uf1::buildColour(id, kg4, kr4, kb4));        // FF38 colour
-                    // ⇨ FF39 STAYS LIT AND THE NIBBLES CARRY THE LEVEL — the SEL
-                    // LED's rule (uf1PaintChannelStrip_, kFf39Lit + a black rgb for
-                    // "off"), adopted here because the old dim FF39 stacked on top
-                    // of an already-dimmed colour and took the second bite out of
-                    // exactly the hue this key exists to show. A key with nothing to
-                    // show gets rgb 0 above, which is dark on its own.
-                    if (i != 0)
-                        g_uf1_dev->send(uf1::buildLedLevel(id, uf1::led::kFf39Lit));
-                } else if (i == 0) {
-                    // FF38-only (Frank HW 2026-07-29). Same lit byte as keys 2-4 —
-                    // it was 0xf0 here, which is pure green (uf1::led::kPrimSoftKey*).
-                    g_uf1_dev->send(uf1::buildLedPrimary(id,
-                        on ? uf1::led::kPrimSoftKeyLit : uf1::led::kPrimSoftKeyDim));
-                } else {
-                    g_uf1_dev->send(uf1::buildLedPrimary(id,
-                        on ? uf1::led::kPrimSoftKeyLit : uf1::led::kPrimSoftKeyDim));
-                    g_uf1_dev->send(uf1::buildLedLevel(id,   on ? 0x00 : 0x11)); // FF39
-                }
-            }
-            if (on) skHighlight |= static_cast<uint8_t>(1u << i);
+            // ⇨ THE ROW IS EMITTED IN ONE PLACE. Fill the cell, do not write —
+            // uf1EmitSoftKeyRow_ owns the labels, the LEDs and the highlight, and
+            // is shared with every mode that takes the screen.
+            skCells[static_cast<size_t>(i)] =
+                Uf1SkCell{ label, haveLabel, on, keyHasColour, keyColRgb,
+                           keyColBright };
         }
 
-        // ⇨ 0x0102 — the on-screen highlight, one bit per key, bit0 = SK1.
-        // HW-decoded 2026-08-17 (Frank walked 1/2/4/8/9/10/11/12/15 and every
-        // combination landed exactly where the bits say). Two corpus readings had
-        // failed before that, both because this element and the labels are
-        // change-gated on the wire, so pairing them after the fact compares values
-        // from different moments.
-        //
-        // ★ This is a SECOND channel, and that is the point (Frank's idea): the four
-        // soft-key LEDs have three owners, and when the Bus-Comp GR meter takes them
-        // the keys' own on/off state used to vanish for as long as the meter ran.
-        // The highlight is not part of that arbitration, so an engaged toggle stays
-        // visible underneath the metering. Sent unconditionally for the same reason
-        // — deliberately NOT gated on grOwnsSk.
-        // ⇨ …with ONE exception: the MODE-hold menu borrows all four keys, and it
-        // overrode their labels and their LEDs but never this third channel — so a
-        // dynamic bank's selected key kept its bar sitting under "PLUGIN / DAW /
-        // METER / SENDS" (Frank 2026-08-26). The row's own selection stands down
-        // while the menu is open. Nothing has to put it back: menuEdge folds into
-        // `changed`, so the release tick re-sends the real mask through this gate.
-        {
-            const uint8_t out = modeMenu ? uint8_t{0} : skHighlight;
-            static int sSkHi = INT_MIN;
-            if (changed || out != sSkHi) {
-                sSkHi = out;
-                g_uf1_dev->send(uf1::buildScreen(0x0102,
-                    std::span<const uint8_t>(&out, 1)));
-            }
-        }
+        uf1EmitSoftKeyRow_(skCells, changed, grOwnsSk, modeMenu);
     }
 
     // 0x0122 EQ graph: rendered natively from the focused track's SSL
