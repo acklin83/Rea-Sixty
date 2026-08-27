@@ -30054,8 +30054,25 @@ void uf1PaintChannel_()
         } else {
             pos = uf1VolToPos_(GetMediaTrackInfo_Value(ftr, "D_VOL"));
         }
-        if (pos != sLastMotorPos) { g_uf1_dev->send(uf1::buildMotorPosition(pos)); sLastMotorPos = pos; }
-        if (!sMotorEngaged) { g_uf1_dev->send(uf1::buildMotorEnable(true)); sMotorEngaged = true; }
+        // ⛔ FORCED ON `changed`, and that is not a nicety. These two statics say
+        // where the CHANNEL painter last drove the motor and whether IT engaged
+        // it — and Hue Mode drives the same physical fader from its own painter
+        // with its own pair. Coming back, the track's volume had not moved, so
+        // `pos == sLastMotorPos` and nothing was sent: the fader stayed wherever
+        // the lamp left it while the screen said the channel (Frank 2026-08-27,
+        // "stimmt der fader nicht mehr mit dem kanal"). `changed` carries the
+        // mode edge through g_uf1Gen, which is exactly what it is for.
+        //
+        // Third time today that two painters shared one control and neither
+        // reconciled at the edge — see the soft-key row and the channel zones.
+        if (changed || pos != sLastMotorPos) {
+            g_uf1_dev->send(uf1::buildMotorPosition(pos));
+            sLastMotorPos = pos;
+        }
+        if (changed || !sMotorEngaged) {
+            g_uf1_dev->send(uf1::buildMotorEnable(true));
+            sMotorEngaged = true;
+        }
     }
 
     // ---- Bus-Comp GR meter on the display soft-key LEDs (Frank 2026-08-10) --
