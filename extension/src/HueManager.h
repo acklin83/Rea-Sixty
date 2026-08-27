@@ -256,7 +256,12 @@ private:
     void runDiscovery();
     void runPairing();
     void runVerify();
-    void runRefresh();
+    // `full` also re-reads rooms, zones and scenes. Those change when somebody
+    // rearranges their house, not while you are mixing, so the fast path leaves
+    // them alone and polls only what actually moves: the lights and the grouped
+    // lights. The catalogue rides along once every ten passes and on demand.
+    void runRefresh(bool full);
+    void adoptFromBridge(double* sentBri, Xy* sentXy);
     void pushSlot(int i, bool flushing);
     void applyRecLight(bool on);
     std::vector<std::string> recLightLightIds();
@@ -279,9 +284,10 @@ private:
     std::string status_;
 
     std::vector<DiscoveredBridge> found_;
-    std::vector<Light> lights_;
-    std::vector<Group> groups_;
-    std::vector<Scene> scenes_;
+    std::vector<Light>        lights_;
+    std::vector<Group>        groups_;
+    std::vector<GroupedLight> groupedLights_;
+    std::vector<Scene>        scenes_;
 
     // A recall the worker still has to make: scene id, dynamic, duration.
     struct SceneReq { std::string id; bool dynamic; int durationMs; };

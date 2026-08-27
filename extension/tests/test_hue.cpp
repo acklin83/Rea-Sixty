@@ -374,6 +374,54 @@ int main()
     }
 
     {
+        // A grouped_light is the ONLY readable state a room or zone has: the
+        // room resource itself carries none. It reports on + dimming and no
+        // colour at all, which is why a zone slot takes its colour from a member
+        // lamp instead.
+        const std::string json =
+            "{\"errors\":[],\"data\":["
+            "{\"id\":\"gl-9\",\"type\":\"grouped_light\","
+            "\"owner\":{\"rid\":\"room-1\",\"rtype\":\"room\"},"
+            "\"on\":{\"on\":true},\"dimming\":{\"brightness\":63.5},"
+            "\"alert\":{\"action_values\":[\"breathe\"]}},"
+            "{\"id\":\"gl-10\",\"on\":{\"on\":false}}"
+            "]}";
+        const auto gls = parseGroupedLights(json);
+        EXPECT(gls.size() == 2);
+        EXPECT(gls[0].id == "gl-9");
+        EXPECT(gls[0].on);
+        EXPECT(gls[0].dimmable);
+        EXPECT(near(gls[0].briPercent, 63.5, 1e-9));
+        // A group that is entirely off reports no dimming at all.
+        EXPECT(!gls[1].on);
+        EXPECT(!gls[1].dimmable);
+
+        EXPECT(parseGroupedLights("{\"data\":[]}").empty());
+        EXPECT(parseGroupedLights("rubbish").empty());
+    }
+
+    {
+        // ⛔ mirek_valid DECIDES white mode, not the presence of an xy. A colour
+        // lamp in white mode reports BOTH: the mirek it is on, and the xy that
+        // colour temperature happens to sit at. A reader that tests the xy first
+        // can never see white mode at all.
+        const std::string json =
+            "{\"errors\":[],\"data\":["
+            "{\"id\":\"l-3\",\"metadata\":{\"name\":\"Warm\"},"
+            "\"on\":{\"on\":true},\"dimming\":{\"brightness\":80},"
+            "\"color_temperature\":{\"mirek\":366,\"mirek_valid\":true},"
+            "\"color\":{\"xy\":{\"x\":0.46,\"y\":0.41}}}"
+            "]}";
+        const auto lights = parseLights(json);
+        EXPECT(lights.size() == 1);
+        // Both are present on the wire, and both survive parsing — deciding
+        // between them is the caller's job, and it must use mirek.
+        EXPECT(lights[0].hasMirek && lights[0].mirek == 366);
+        EXPECT(lights[0].hasXy);
+        EXPECT(near(lights[0].xy.x, 0.46, 1e-9));
+    }
+
+    {
         const std::string json =
             "{\"errors\":[],\"data\":["
             "{\"id\":\"sc-1\",\"type\":\"scene\","

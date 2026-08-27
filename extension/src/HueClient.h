@@ -156,6 +156,23 @@ struct Group {
 };
 std::vector<Group> parseGroups(const std::string& json, bool zones);
 
+// The live state of a room's or zone's grouped_light service, which is the ONLY
+// way to read a zone back: a room resource carries no state of its own.
+//
+// ⛔ IT REPORTS NO COLOUR, and the spec is explicit about what the two fields it
+// does report mean: `on` is true when ANY light in the group is on, and
+// `dimming.brightness` is the average over the lights that are ON, ignoring the
+// dark ones. So this is an aggregate, not a reading — a caller that diffs it
+// against what it last sent needs slack, because a room whose lamps sit at
+// different levels will never average back to the single number we wrote.
+struct GroupedLight {
+    std::string id;
+    bool        on         = false;
+    bool        dimmable   = false;
+    double      briPercent = 0.0;
+};
+std::vector<GroupedLight> parseGroupedLights(const std::string& json);
+
 struct Scene {
     std::string id;
     std::string name;

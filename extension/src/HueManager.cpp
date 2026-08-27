@@ -894,10 +894,10 @@ void HueManager::runVerify()
     }
     { std::lock_guard<std::mutex> lk(cfgMx_); bridgeId_ = id; }
 
-    runRefresh();
+    runRefresh(/*full=*/true);
 }
 
-void HueManager::runRefresh()
+void HueManager::runRefresh(bool full)
 {
     const std::string ip = bridgeIp();
     if (ip.empty() || !haveAppKey()) return;
@@ -910,24 +910,37 @@ void HueManager::runRefresh()
     }
     std::vector<Light> lights = parseLights(body);
 
+    // The grouped lights come along on EVERY pass, not only the full ones: a
+    // zone slot has no other source of truth, and leaving it out is what froze
+    // those strips whenever anything moved the room from outside.
+    std::vector<GroupedLight> glights;
+    if (request("GET", resourceUrl(ip, kTypeGroupedLight), std::string(), &body))
+        glights = parseGroupedLights(body);
+
     std::vector<Group> groups;
-    if (request("GET", resourceUrl(ip, kTypeRoom), std::string(), &body))
-        groups = parseGroups(body, /*zones=*/false);
-    if (request("GET", resourceUrl(ip, kTypeZone), std::string(), &body)) {
-        std::vector<Group> zones = parseGroups(body, /*zones=*/true);
-        groups.insert(groups.end(), zones.begin(), zones.end());
+    std::vector<Scene> scenes;
+    if (full) {
+        if (request("GET", resourceUrl(ip, kTypeRoom), std::string(), &body))
+            groups = parseGroups(body, /*zones=*/false);
+        if (request("GET", resourceUrl(ip, kTypeZone), std::string(), &body)) {
+            std::vector<Group> zones = parseGroups(body, /*zones=*/true);
+            groups.insert(groups.end(), zones.begin(), zones.end());
+        }
+        if (request("GET", resourceUrl(ip, kTypeScene), std::string(), &body))
+            scenes = parseScenes(body);
     }
 
-    std::vector<Scene> scenes;
-    if (request("GET", resourceUrl(ip, kTypeScene), std::string(), &body))
-        scenes = parseScenes(body);
-
-    const size_t nl = lights.size(), ng = groups.size();
+    const size_t nl = lights.size();
+    size_t ng = 0;
     {
         std::lock_guard<std::mutex> lk(cfgMx_);
-        lights_ = std::move(lights);
-        groups_ = std::move(groups);
-        scenes_ = std::move(scenes);
+        lights_        = std::move(lights);
+        groupedLights_ = std::move(glights);
+        if (full) {
+            groups_ = std::move(groups);
+            scenes_ = std::move(scenes);
+        }
+        ng = groups_.size();
     }
 
     // ⛔ EVERY enabled slot counts as reachable once the bridge answered, not
@@ -947,6 +960,112 @@ void HueManager::runRefresh()
 
     setStatus(LinkState::Online,
               std::to_string(nl) + " lights, " + std::to_string(ng) + " rooms");
+}
+
+// ---- worker: taking the bridge's word ---------------------------------------
+//
+// Runs after every state poll. `sentBri` / `sentXy` are what the worker last put
+// on the wire per slot; a reported value that AGREES with them is our own echo
+// and is left alone, because feeding it back through xyToHueSat (which is lossy)
+// would make the V-Pot creep on its own every poll. Only a disagreement is an
+// outside change — the Hue app, a wall switch, a scene from a Stream Deck.
+void HueManager::adoptFromBridge(double* sentBri, Xy* sentXy)
+{
+    std::vector<Light>        lightSnap;
+    std::vector<GroupedLight> groupSnap;
+    std::vector<Group>        roomSnap;
+    std::array<SlotConfig, kMaxSlots> cfgs;
+    {
+        std::lock_guard<std::mutex> lk(cfgMx_);
+        lightSnap = lights_;
+        groupSnap = groupedLights_;
+        roomSnap  = groups_;
+        cfgs      = slots_;
+    }
+
+    // Colour of one light, applied to a slot unless it is our own echo.
+    auto adoptColour = [&](int i, const Light& L) {
+        SlotLive& S = live_[static_cast<size_t>(i)];
+        // ⛔ mirek_valid DECIDES, not the presence of an xy. A colour lamp always
+        // reports an xy — in white mode it is simply the point that colour
+        // temperature sits on — so testing hasXy first meant white mode could
+        // never win, and a scene that went to warm white came back to the surface
+        // as a colour. mirek_valid is the bridge saying which mode the lamp is
+        // actually in, and it is the only field that does.
+        if (L.hasMirek) {
+            S.warm.store(warmthFromMirek(L.mirek));
+            S.white.store(true);
+            return;
+        }
+        if (!L.hasXy) return;
+        const Xy& s = sentXy[i];
+        if (std::fabs(L.xy.x - s.x) > 0.01 || std::fabs(L.xy.y - s.y) > 0.01) {
+            double h = 0.0, sat = 0.0;
+            xyToHueSat(L.xy, &h, &sat);
+            S.hueDeg.store(h);
+            S.sat.store(sat);
+            S.white.store(false);
+            sentXy[i] = L.xy;
+        }
+    };
+
+    for (int i = 0; i < kMaxSlots; ++i) {
+        const SlotConfig& cfg = cfgs[static_cast<size_t>(i)];
+        if (!cfg.enabled || cfg.rid.empty()) continue;
+
+        SlotLive& S = live_[static_cast<size_t>(i)];
+        if (S.dirty.load()) continue;      // a pending edit outranks the bridge
+
+        if (cfg.kind == TargetKind::Light) {
+            for (const Light& L : lightSnap) {
+                if (L.id != cfg.rid) continue;
+                S.reachable.store(true);
+                const double want = sentBri[i];
+                if (want < 0.0 || std::fabs(L.briPercent - want) > 1.0) {
+                    S.on.store(L.on);
+                    if (L.dimmable && L.briPercent > 0.0) S.bri.store(L.briPercent);
+                }
+                adoptColour(i, L);
+                break;
+            }
+            continue;
+        }
+
+        // ---- a room or zone ------------------------------------------------
+        for (const GroupedLight& G : groupSnap) {
+            if (G.id != cfg.rid) continue;
+            S.reachable.store(true);
+            // Three percent of slack, not one. The reported brightness is the
+            // AVERAGE over the lamps that are on, so a room whose lamps sit at
+            // different levels never averages back to the single number we wrote
+            // — with a tight window the slot would adopt its own echo every poll
+            // and fight the fader.
+            const double want = sentBri[i];
+            if (want < 0.0 || std::fabs(G.briPercent - want) > 3.0) {
+                S.on.store(G.on);
+                if (G.dimmable && G.briPercent > 0.0) S.bri.store(G.briPercent);
+            }
+            // A grouped_light reports NO colour (see HueClient.h), so the colour
+            // comes from the first member lamp that has one. That is what a
+            // person walking into the room would call the room's colour, and it
+            // beats a bar frozen on whatever we last sent.
+            for (const Group& room : roomSnap) {
+                if (room.id != cfg.groupId) continue;
+                for (const Light& L : lightSnap) {
+                    const bool member =
+                        std::find(room.childRids.begin(), room.childRids.end(),
+                                  L.ownerRid) != room.childRids.end()
+                     || std::find(room.childRids.begin(), room.childRids.end(),
+                                  L.id) != room.childRids.end();
+                    if (!member || !L.on) continue;
+                    adoptColour(i, L);
+                    break;
+                }
+                break;
+            }
+            break;
+        }
+    }
 }
 
 // ---- worker: pushing a slot -------------------------------------------------
@@ -1049,9 +1168,9 @@ void HueManager::applyRecLight(bool on)
     if (!cfg.enabled || ip.empty()) return;
 
     if (on) {
-        // Fresh read first: the cached list is up to two seconds old, and this
+        // Fresh read first: the cached list is up to a second old, and this
         // snapshot is the only thing the restore has to work from.
-        runRefresh();
+        runRefresh(/*full=*/false);
 
         const std::vector<std::string> ids = recLightLightIds();
         std::vector<Saved> saved;
@@ -1152,7 +1271,9 @@ void HueManager::workerLoop()
     std::array<double, kMaxSlots> sentBri{};
     sentBri.fill(-1.0);
 
-    int64_t nextRefresh = 0;
+    int64_t nextRefresh  = 0;
+    int     refreshCount = 0;      // state polls since the last catalogue read
+    bool    fullNext     = true;   // first pass after connecting reads everything
 
     while (run_.load()) {
         const int64_t t = nowMs();
@@ -1182,6 +1303,16 @@ void HueManager::workerLoop()
             if (!reqs.empty()) nextRefresh = nowMs() + 300;
         }
 
+        // ⛔ THIS WAS SET AND NEVER READ. "Refresh lights + scenes" in Settings
+        // stored the flag and nothing in the loop ever looked at it, so the
+        // button did nothing at all — a newly added lamp only appeared when the
+        // ten-pass catalogue tick came round on its own.
+        if (refreshReq_.exchange(false)) {
+            fullNext     = true;
+            refreshCount = 0;
+            nextRefresh  = 0;    // now, not at the next second boundary
+        }
+
         if (link_.load() == LinkState::Online) {
             for (int i = 0; i < kMaxSlots; ++i) {
                 SlotLive& S = live_[static_cast<size_t>(i)];
@@ -1209,52 +1340,19 @@ void HueManager::workerLoop()
             }
 
             if (t >= nextRefresh) {
-                nextRefresh = t + 2000;
-                runRefresh();
-
-                // Adopt what the bridge reports, but only where it disagrees
-                // with what we sent — see the note on sentXy above.
-                std::vector<Light> snap = lights();
-                for (int i = 0; i < kMaxSlots; ++i) {
-                    SlotConfig cfg;
-                    {
-                        std::lock_guard<std::mutex> lk(cfgMx_);
-                        cfg = slots_[static_cast<size_t>(i)];
-                    }
-                    if (!cfg.enabled || cfg.kind != TargetKind::Light) continue;
-
-                    SlotLive& S = live_[static_cast<size_t>(i)];
-                    if (S.dirty.load()) continue;   // a pending edit outranks the bridge
-
-                    for (const Light& L : snap) {
-                        if (L.id != cfg.rid) continue;
-                        S.reachable.store(true);
-
-                        const double want = sentBri[static_cast<size_t>(i)];
-                        if (want < 0.0 || std::fabs(L.briPercent - want) > 1.0) {
-                            S.on.store(L.on);
-                            if (L.dimmable && L.briPercent > 0.0)
-                                S.bri.store(L.briPercent);
-                        }
-
-                        if (L.hasXy) {
-                            const Xy& s = sentXy[static_cast<size_t>(i)];
-                            if (std::fabs(L.xy.x - s.x) > 0.01
-                             || std::fabs(L.xy.y - s.y) > 0.01) {
-                                double h = 0.0, sat = 0.0;
-                                xyToHueSat(L.xy, &h, &sat);
-                                S.hueDeg.store(h);
-                                S.sat.store(sat);
-                                S.white.store(false);
-                                sentXy[static_cast<size_t>(i)] = L.xy;
-                            }
-                        } else if (L.hasMirek) {
-                            S.warm.store(warmthFromMirek(L.mirek));
-                            S.white.store(true);
-                        }
-                        break;
-                    }
-                }
+                // One second, not two. This poll is how the surface finds out
+                // that anything moved the lamps from outside, and two seconds of
+                // lag reads as "it does not follow" rather than as a delay. A GET
+                // is not what the bridge rate-limits — that budget is for
+                // commands sent TO lamps — so one a second costs nothing.
+                nextRefresh = t + 1000;
+                // The catalogue rides along every tenth pass. Rooms, zones and
+                // scenes change when somebody rearranges the house, not while
+                // you are mixing.
+                if (++refreshCount >= 10) { refreshCount = 0; fullNext = true; }
+                runRefresh(fullNext);
+                fullNext = false;
+                adoptFromBridge(sentBri.data(), sentXy.data());
             }
         } else if (link_.load() == LinkState::Failed && t >= nextRefresh) {
             // A bridge that dropped off comes back on its own; retrying every

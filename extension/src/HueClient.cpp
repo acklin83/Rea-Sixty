@@ -394,6 +394,33 @@ std::vector<Group> parseGroups(const std::string& json, bool zones)
     return out;
 }
 
+std::vector<GroupedLight> parseGroupedLights(const std::string& json)
+{
+    std::vector<GroupedLight> out;
+    wdl_json_parser p;
+    const wdl_json_element* root = p.parse(json.c_str(),
+                                           static_cast<int>(json.size()));
+    const wdl_json_element* data = dataArray(root);
+    if (!data) return out;
+
+    const int n = arraySize(data);
+    for (int i = 0; i < n; ++i) {
+        const wdl_json_element* e = data->enum_item(i);
+        if (!e || !e->is_object()) continue;
+
+        GroupedLight g;
+        g.id = text(e, "id");
+        if (g.id.empty()) continue;
+        g.on = boolean(child(e, "on"), "on");
+        if (const wdl_json_element* dim = child(e, "dimming")) {
+            g.dimmable   = true;
+            g.briPercent = dbl(dim, "brightness", 0.0);
+        }
+        out.push_back(std::move(g));
+    }
+    return out;
+}
+
 std::vector<Scene> parseScenes(const std::string& json)
 {
     std::vector<Scene> out;
