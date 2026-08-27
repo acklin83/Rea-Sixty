@@ -2604,7 +2604,7 @@ There are two ways to reach them.
 
 **One key per scene.** Bind **Hue: recall scene** with parameter **1** to **8** to any key on any surface. A short press puts the room into that scene. A long press starts it moving, for the scenes that cycle.
 
-**All eight at once.** Set a soft-key bank's type to **Hue Scenes**: on the UF8 that is the Sub-Bank's *Dynamic* setting under Settings, Bindings; on the UF1 the same setting on one of its ten soft-key banks. The bank then shows the eight slots in order, each key wearing its slot's LED colour and lighting while the bridge reports that scene as the one showing. Push recalls, long press starts it moving, exactly as the action does. On the UF1 the bank names itself `SCENES` on the time field, and a recall flashes the scene's name there.
+**All eight at once.** Set a soft-key bank's type to **Hue Scenes**: on the UF8 that is the Sub-Bank's *Dynamic* setting under Settings, Bindings; on the UF1 the same setting on one of its ten soft-key banks. The bank then shows the eight slots in order, each key wearing its slot's LED colour and lighting while the bridge reports that scene as the one showing. Push recalls, long press starts it moving, exactly as the action does. On the UF1 the bank names itself `HUE` on the time field, and a recall flashes the scene's name there.
 
 Both routes read the same eight slots, so there is one list to keep.
 

@@ -27042,9 +27042,10 @@ static std::string uf1BankDisplayName_(int bank, int mod)
         case DynamicBankKind::ParamGroups:  return "GROUPS";
         case DynamicBankKind::TrackColours: return reasixty_sp("COLOURS", "COLORS");
         case DynamicBankKind::Favourites:   return "FAVS";
-        // S C E N E S — every letter of it exists in the 7-segment font. K, M,
-        // V, W and X do not, so "SCENES" was checked before it was chosen.
-        case DynamicBankKind::HueScenes:    return "SCENES";
+        // H U E — checked in the font before it was chosen (0x76 / 0x3e / 0x79).
+        // K, M, V, W and X do not exist there, and a word this field cannot draw
+        // does not fail loudly, it just reads as a different word.
+        case DynamicBankKind::HueScenes:    return "HUE";
         default: break;
     }
     char b[16];
