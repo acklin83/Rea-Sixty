@@ -6483,6 +6483,33 @@ std::atomic<uint32_t> g_trackBankColour[8] = {
 // Settings (main thread); std::string can't be atomic, so guard with a mutex.
 std::mutex  g_trackBankColourNameMx;
 std::string g_trackBankColourName[8];
+// The ten hardware colours by name. A slot with no name of its own wears the
+// name of the colour it shows, and the loader below repairs names that were
+// left standing when the palette moved under them.
+struct TrackColourName { uint32_t rgb; const char* name; };
+static constexpr TrackColourName kTrackColourNames[] = {
+    {0xFF0000, "RED"},    {0xFF8000, "ORANGE"},  {0xFFFF00, "YELLOW"},
+    {0x00FF00, "GREEN"},  {0x00FFFF, "TEAL"},    {0x0000FF, "BLUE"},
+    {0x8000FF, "VIOLET"}, {0xFF00FF, "MAGENTA"}, {0xFF0080, "PINK"},
+    {0xFFFFFF, "WHITE"},
+};
+// nullptr for a colour the user picked off the palette: it has no name to wear.
+static const char* trackColourNameFor_(uint32_t rgb)
+{
+    for (const auto& c : kTrackColourNames)
+        if (c.rgb == (rgb & 0xFFFFFFu)) return c.name;
+    return nullptr;
+}
+static bool sameWordCi_(const std::string& a, const char* b)
+{
+    if (!b) return false;
+    size_t i = 0;
+    for (; i < a.size() && b[i]; ++i) {
+        if (std::tolower(static_cast<unsigned char>(a[i]))
+            != std::tolower(static_cast<unsigned char>(b[i]))) return false;
+    }
+    return i == a.size() && b[i] == '\0';
+}
 // Which control pages a bankable dynamic bank (FX / Sends). One setting per
 // dynamic kind, indexed by DynamicBankKind int (only FxBank / Sends use it).
 enum class BankControl : int {
@@ -6519,6 +6546,39 @@ static void ensureDynCfgLoaded_()
             std::lock_guard<std::mutex> lk(g_trackBankColourNameMx);
             g_trackBankColourName[i] = nv;
         }
+    }
+    // ⛔ A NAME THAT OUTLIVES ITS COLOUR IS A LIE THE KEY TELLS. The defaults
+    // above were Material tones until 2026-08-25, and moving them to palette
+    // colours left every name Frank had typed sitting on someone else's
+    // swatch: "BROWN" on the teal key, "PINK" on the magenta one, on BOTH
+    // colour banks at once because the palette is global (Frank 2026-08-27:
+    // "du schreibst als letzte farbe brown. Total falsch. Das ist Teal!").
+    // Runs once, and only over a name that is still the old palette's own word
+    // for that slot, so a name the user chose is never touched.
+    if (const char* fixed = GetExtState("rea_sixty", "track_bank_col_names_fixed");
+        !(fixed && fixed[0])) {
+        static const char* kOldPaletteName[8] = {
+            "RED", "ORANGE", "YELLOW", "GREEN",
+            "BLUE", "VIOLET", "PINK", "BROWN",
+        };
+        for (int i = 0; i < 8; ++i) {
+            std::string cur;
+            {
+                std::lock_guard<std::mutex> lk(g_trackBankColourNameMx);
+                cur = g_trackBankColourName[i];
+            }
+            if (cur.empty() || !sameWordCi_(cur, kOldPaletteName[i])) continue;
+            const char* now = trackColourNameFor_(g_trackBankColour[i].load());
+            if (!now || sameWordCi_(cur, now)) continue;
+            {
+                std::lock_guard<std::mutex> lk(g_trackBankColourNameMx);
+                g_trackBankColourName[i] = now;
+            }
+            char nk2[40];
+            std::snprintf(nk2, sizeof(nk2), "track_bank_col_name_%d", i);
+            SetExtState("rea_sixty", nk2, now, true);
+        }
+        SetExtState("rea_sixty", "track_bank_col_names_fixed", "1", true);
     }
     for (int i = 0; i < 8; ++i) {
         char k[32]; std::snprintf(k, sizeof(k), "dyn_bank_ctrl_%d", i);
@@ -41597,9 +41657,15 @@ std::string reasixty_trackBankColourName(int i)
 {
     ensureDynCfgLoaded_();
     if (i >= 0 && i < 8) {
-        std::lock_guard<std::mutex> lk(g_trackBankColourNameMx);
-        if (!g_trackBankColourName[i].empty())
-            return g_trackBankColourName[i];
+        {
+            std::lock_guard<std::mutex> lk(g_trackBankColourNameMx);
+            if (!g_trackBankColourName[i].empty())
+                return g_trackBankColourName[i];
+        }
+        // An unnamed slot wears its colour's name, so a key can never disagree
+        // with the swatch above it. Off-palette colours fall through to Col N.
+        if (const char* cn = trackColourNameFor_(g_trackBankColour[i].load()))
+            return cn;
     }
     char b[16]; std::snprintf(b, sizeof(b), "Col %d",
                               (i >= 0 && i < 8) ? i + 1 : 1);

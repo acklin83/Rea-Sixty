@@ -5577,8 +5577,10 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
 
 // ---- Track-Colours palette editor (shared UF8 + UF1) --------------------
 // One global palette: 8 rows, each a colour swatch + an editable name. The
-// name defaults to "Col N" (empty stored name) and drives the surface key
-// label. Called from both the UF8 and the UF1 dynamic-bank editors.
+// name drives the surface key label; leave it empty and the key wears the
+// colour's own name (RED, ORANGE, ... TEAL), or "Col N" for a colour that
+// isn't one of the ten the hardware can render.
+// Called from both the UF8 and the UF1 dynamic-bank editors.
 void drawTrackColourPalette_(ImGui_Context* ctx)
 {
     static char nameBuf[8][64];
