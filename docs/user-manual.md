@@ -191,7 +191,7 @@ The large notched CHANNEL encoder (right of the strips, pushable, surrounded by 
 | Mode | Rotation acts on | Notes |
 |---|---|---|
 | Channel Select | Move REAPER track selection ± | Default mode. Strips re-bank to keep selection visible. |
-| Nudge | Playhead nudge | Step size from REAPER's nudge setting |
+| Nudge | Playhead nudge | Step size is Rea-Sixty's own, under Settings → Modes → Nudge: an amount plus a unit, one grid step by default |
 | Mousewheel | Synthesised scroll-wheel under the mouse cursor | Use to scroll plug-in windows or Project Browser |
 | Markers | Step prev / next marker | Stops playback while seeking |
 | Bank by 1ch | Shift the surface 1 strip left/right | Sub-bank precision |
@@ -1359,7 +1359,7 @@ The UF1 has no Polarity key, so it has three assignable buttons rather than four
 
 ### NAV
 
-The NAV sub-tab is divided into five sections.
+The NAV sub-tab has five sections: Activation, Per-surface, UF8 strip display, Encoder push actions and Behaviour.
 
 **Activation** — read-only list of which physical button currently fires each of the three Nav-mode toggle builtins:
 
@@ -1369,22 +1369,17 @@ The NAV sub-tab is divided into five sections.
 
 Each line shows the bound layer + button + modifier + long-press flag, or "(unbound)". Edit via Settings → Bindings.
 
-**View defaults**
+**Per-surface** — a small table, one row per setting and one column per surface.
 
-- **Default view on Nav Mode entry** (radio): `Regions` / `Markers in current region` / `Markers (all)` / `Last used`. Applied by **Nav Mode (Markers & Regions): toggle** only. *Markers in current region* snaps to the region under the playhead; falls back to Regions if the playhead is in a gap.
-- **Region-press behaviour** (radio): `Jump + Drill` / `Jump only` / `Drill only`. Jump = move transport to region start; Drill = enter the region's marker list. RegionsOnly view-lock always suppresses Drill.
+- **Show overlay** — UF8: `On 8 strips`. UC1: `Take over LCD`. The UC1 box covers Encoder 2 as well: with it off the encoder keeps its normal action (**Encoder: scroll BC anchor track** by default), the LCD never switches to the carousel, and only the UF8 reflects Nav Mode.
+- **Mode** — UF8: `Regions` / `Markers`. UC1: `Mirror UF8` / `Regions` / `Markers`. The UF8 picker doubles as the view you land in when Nav Mode is switched on. The two independent UC1 modes carry their own cursor, so the UC1 can walk the markers of whichever region the UF8 is sitting on while the UF8 stays in Regions. Drilling is implicit there, which costs the push actions: Drill and Back become no-ops and Jump + Drill collapses to Jump only.
 
 **UF8 strip display**
 
 - **Lower-row format** (radio): `Off (V-Pot value)` / `Index (R03 / M07)` / `Timecode (MM:SS)`. Off keeps the V-Pot value visible; Index / Timecode overlay marker metadata on the lower row.
-- **Color-bar source** (radio): `REAPER marker colour` / `Force palette grey`. REAPER honours the colour override set on each marker / region; Force grey suppresses it.
+- **Colour-bar source** (radio): `REAPER marker colour` / `Force palette grey`. REAPER honours the colour override set on each marker / region; Force grey suppresses it.
 
-**UC1 Encoder 2**
-
-- **Take over UC1 Encoder 2 while Nav Mode is active** (checkbox). When off, Encoder 2 rotation stays bound to its normal action (**Encoder: scroll BC anchor track** by default) and the UC1 LCD does not switch to the marker carousel — only UF8 reflects Nav Mode.
-- **Carousel scope** — currently single option *Mirror UF8 view*. Independent UC1 scopes (Always Regions / Always Markers / Always Markers-in-UF8-region) are not yet implemented.
-
-**Push actions** — Plain push, Shift + push, and Long-press each pick any of the same 7 actions via dropdown:
+**Encoder push actions (UC1 Encoder 2 + UF8 Channel encoder)** — Plain push, Shift + push and Long-press each pick any of the same 7 actions via dropdown. The three are shared between the two surfaces:
 
 | Action | Effect |
 |---|---|
@@ -1400,9 +1395,10 @@ Defaults: Plain = Jump+Drill, Shift = Drill only, Long = Back.
 
 View-locks (Markers-only / Regions-only) suppress **Drill only** specifically (Jump+Drill collapses to Jump only; Drill only becomes a no-op). Every other action fires regardless of lock. Long-press threshold ~500 ms.
 
-**Auto-Follow**
+**Behaviour**
 
-- **Auto-Follow playhead / edit cursor** (checkbox). While Nav Mode is active, the cursor strip tracks whichever marker / region the playhead is on (or the edit cursor when stopped). In Markers-in-Region view, the overlay auto-rolls into the next region when the playhead crosses out.
+- **Region press (UF8 top-soft-key)** (radio): `Jump + Drill` / `Jump only` / `Drill only`. Jump = move transport to the region start; Drill = enter the region's marker list. A Regions-only view lock always suppresses Drill.
+- **Auto-follow playhead / edit cursor** (checkbox). While Nav Mode is active, the cursor strip tracks whichever marker / region the playhead is on (or the edit cursor when stopped). In Markers-in-Region view, the overlay auto-rolls into the next region when the playhead crosses out.
 
 \newpage
 
