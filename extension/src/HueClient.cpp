@@ -2,6 +2,14 @@
 
 #include "WDL/jsonparse.h"
 
+// ⛔ NO QUALIFIED std::snprintf IN THIS FILE. WDL defines snprintf as a macro
+// expanding to WDL_snprintf on MSVC, so `snprintf(...)` is rewritten to
+// `std::WDL_snprintf(...)`, which is not a member of std and fails only on the
+// Windows job — the Mac and Linux builds are perfectly happy (CI 2026-08-27).
+// Same class as the min/max macro trap already recorded for this project: an
+// MSVC macro poisoning a qualified name. Call it unqualified and let the macro
+// do its job. Applies to any file that includes a WDL header.
+
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -24,7 +32,7 @@ std::string jsonEscape(const std::string& in)
             default:
                 if (static_cast<unsigned char>(c) < 0x20) {
                     char b[8];
-                    std::snprintf(b, sizeof(b), "\\u%04x",
+                    snprintf(b, sizeof(b), "\\u%04x",
                                   static_cast<unsigned>(static_cast<unsigned char>(c)));
                     out += b;
                 } else {
@@ -40,7 +48,7 @@ std::string jsonEscape(const std::string& in)
 std::string num(double v, int decimals)
 {
     char b[64];
-    std::snprintf(b, sizeof(b), "%.*f", decimals, v);
+    snprintf(b, sizeof(b), "%.*f", decimals, v);
     return b;
 }
 

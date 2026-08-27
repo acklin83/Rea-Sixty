@@ -9,6 +9,13 @@
 #include <cstdlib>
 #include <cstring>
 
+// snprintf is called unqualified throughout, not as std::snprintf. This file
+// includes no WDL header today, but any file that does gets snprintf rewritten
+// to WDL_snprintf by an MSVC-only macro, and a qualified call then becomes
+// std::WDL_snprintf and fails on the Windows job alone. Keeping the whole
+// feature on one spelling means adding a WDL include here can never reopen that
+// (see HueClient.cpp, where it did — CI 2026-08-27).
+
 namespace uf8::hue {
 namespace {
 
@@ -551,15 +558,15 @@ std::string HueManager::liveValueLine(int i)
     const SlotLive& L = live_[static_cast<size_t>(i)];
     char b[32];
     if (!L.reachable.load()) {
-        std::snprintf(b, sizeof(b), "OFFLINE");
+        snprintf(b, sizeof(b), "OFFLINE");
     } else if (!L.on.load()) {
-        std::snprintf(b, sizeof(b), "OFF");
+        snprintf(b, sizeof(b), "OFF");
     } else if (L.white.load()) {
-        std::snprintf(b, sizeof(b), "B%-3d CT%d",
+        snprintf(b, sizeof(b), "B%-3d CT%d",
                       static_cast<int>(L.bri.load() + 0.5),
                       mirekFromWarmth(L.warm.load()));
     } else {
-        std::snprintf(b, sizeof(b), "B%-3d H%-3d S%d",
+        snprintf(b, sizeof(b), "B%-3d H%-3d S%d",
                       static_cast<int>(L.bri.load() + 0.5),
                       static_cast<int>(L.hueDeg.load() + 0.5),
                       static_cast<int>(L.sat.load() * 100.0 + 0.5));
@@ -697,7 +704,7 @@ std::string HueManager::serialize()
          + (fill_.load() == FillDir::Right ? "1" : "0") + kRecordSep;
 
     char b[256];
-    std::snprintf(b, sizeof(b), "ctl\t%d\t%d\t%d\t%d\t%d%c",
+    snprintf(b, sizeof(b), "ctl\t%d\t%d\t%d\t%d\t%d%c",
                   static_cast<int>(controls_.pot),
                   static_cast<int>(controls_.potFlip),
                   static_cast<int>(controls_.push),
@@ -705,7 +712,7 @@ std::string HueManager::serialize()
                   controls_.transitionMs, kRecordSep);
     out += b;
 
-    std::snprintf(b, sizeof(b), "rec\t%d\t%d\t%u\t%d\t%d\t",
+    snprintf(b, sizeof(b), "rec\t%d\t%d\t%u\t%d\t%d\t",
                   recCfg_.enabled ? 1 : 0,
                   static_cast<int>(recCfg_.target),
                   recCfg_.rgb,
@@ -715,14 +722,14 @@ std::string HueManager::serialize()
     out += sanitize(recCfg_.groupId) + "\t"
          + sanitize(recCfg_.restoreSceneId) + kRecordSep;
 
-    std::snprintf(b, sizeof(b), "mrk\t%d\t%d\t",
+    snprintf(b, sizeof(b), "mrk\t%d\t%d\t",
                   markerCfg_.enabled ? 1 : 0, markerCfg_.durationMs);
     out += b;
     out += sanitize(markerCfg_.prefix) + kRecordSep;
 
     for (int i = 0; i < kMaxSlots; ++i) {
         const SlotConfig& c = slots_[static_cast<size_t>(i)];
-        std::snprintf(b, sizeof(b), "slot\t%d\t%d\t%d\t%d\t%d\t",
+        snprintf(b, sizeof(b), "slot\t%d\t%d\t%d\t%d\t%d\t",
                       i, c.enabled ? 1 : 0, static_cast<int>(c.kind),
                       c.colour, c.recLight ? 1 : 0);
         out += b;
@@ -732,7 +739,7 @@ std::string HueManager::serialize()
 
     for (int i = 0; i < kMaxScenes; ++i) {
         const SceneSlot& s = sceneSlots_[static_cast<size_t>(i)];
-        std::snprintf(b, sizeof(b), "scene\t%d\t%u\t", i, s.rgb);
+        snprintf(b, sizeof(b), "scene\t%d\t%u\t", i, s.rgb);
         out += b;
         out += sanitize(s.id) + "\t" + sanitize(s.label) + "\t"
              + sanitize(s.bridgeName) + kRecordSep;
