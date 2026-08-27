@@ -2416,6 +2416,42 @@ Requires the **TotalReaper** extension (separate ReaPack package, same repositor
 
 Master switch: Settings → Modes → REC → "Enable RME / TotalReaper integration".
 
+## What has to be in place first
+
+Three things stand between a knob on the surface and a preamp in the interface. Rea-Sixty
+runs a TotalReaper action, TotalReaper talks to TotalMix over the network, and TotalMix
+drives the hardware. Each part has to be set up, and none of them tells the other two when
+it is not.
+
+**TotalMix FX 2.1 or later, with Global OSC.** Global OSC is the protocol everything here
+rests on and it arrived with 2.1. RME's ordinary downloads page still lists 2.03 at the time
+of writing; 2.1 is a public preview, announced at rme-audio.de/totalmix-fx-beta.html, and the
+build itself sits in the forum thread that page points at.
+
+**Switch OSC on in TotalMix.** Under Settings, OSC, set Compatibility Mode to Global OSC.
+Then switch Enable OSC Control on under Options.
+
+**Tick "Receive to hidden channels"** under Settings, OSC, Details. This is the setting that
+wastes an evening: with it off, TotalMix quietly ignores anything addressed to a channel that
+is not in the layout you happen to be looking at, so the integration seems completely dead
+while every message is in fact arriving. Some TotalMix versions ship with it switched off.
+
+**The ports are 7001 and 7002.** TotalMix receives on 7001 and answers on 7002, which is what
+TotalReaper expects out of the box. Change them in TotalMix and you have to set the same two
+numbers in TotalReaper's settings window, where they take effect without a restart. Both are
+ordinary network traffic on your own machine, so a firewall that filters local traffic will
+stop the integration cold. Rea-Sixty listens on neither: it only asks TotalReaper to act.
+
+**TotalReaper 0.2.2 or later.** Point a track at a different input on an older version and the
+gain, 48V, pad and phase you read on the surface keep describing the input you left, until
+something on the new one moves. Settings, Modes, REC says whether TotalReaper was found and
+offers a button that fetches it through ReaPack.
+
+A quick check that the chain is alive, before you go looking at Rea-Sixty: select a track
+recording from a mic input, run TotalReaper's own 48V action from the action list, and watch
+the strip in TotalMix. If that does nothing, the problem is behind TotalReaper, not in front
+of it.
+
 The three surfaces have separate assignments in that tab, so you can opt one in
 without the others. What follows describes the UF8 strips; the UC1 uses Encoder 2,
 Cut, Solo and Polarity on the focused track, and the UF1 uses the V-Pot above the
@@ -2434,7 +2470,7 @@ The channel-strip type cell shows the input channel name ("Mic 1", "Line 3") ins
 
 Hardware inputs only — MIDI / multichannel inputs leave the original label intact.
 
-The TotalReaper action names are looked up via `NamedCommandLookup`; if TotalReaper isn't installed the integration silently no-ops and every key keeps its normal behaviour, so turning the mode on can never leave a control dead.
+If TotalReaper isn't installed, the integration does nothing at all and every key keeps its normal behaviour, so turning the mode on can never leave a control dead.
 
 The UF1 reads out exactly as a UF8 strip does, down to the same zones: flags on
 the left of the value line, gain on the right, the readout bar on the gain, and
@@ -2890,7 +2926,7 @@ Every bound button can override its LED colour and brightness, independent of th
 
 Pick any action from REAPER's Action List by name or command ID. Supports filtering and ReaScript loading (Load ReaScript button drops a `.lua` file into the catalog).
 
-Named commands (_-prefixed) resolve via REAPER's `NamedCommandLookup` so ReaScripts stay bound across re-numberings.
+Named commands (the ones starting with an underscore) are resolved by name rather than by number, so ReaScripts stay bound when REAPER re-numbers its action list.
 
 ## MIDI Command bindings
 
