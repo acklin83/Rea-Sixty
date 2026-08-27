@@ -191,7 +191,7 @@ public:
     // Mirrors DynaMount: the k-th enabled slot takes strip k from the left, or
     // 8-N+k from the right. -1 when that strip is a normal track strip.
     enum class FillDir : uint8_t { Left = 0, Right };
-    void    setFillDir(FillDir d) { fill_.store(d); }
+    void    setFillDir(FillDir d) { fill_.store(d); cfgDirty_.store(true); }
     FillDir fillDir() const       { return fill_.load(); }
     int     slotForStrip(int strip);
     bool    isHueStrip(int strip) { return slotForStrip(strip) >= 0; }
@@ -242,7 +242,15 @@ public:
 
     // ---- persistence --------------------------------------------------------
     std::string serialize();
-    void        deserialize(const std::string& s);
+    // Returns false and CHANGES NOTHING when `s` does not parse as a
+    // configuration. See the definition for why that matters more than it
+    // sounds: a reader that fails silently followed by a writer that saves the
+    // failure is how a configuration disappears for good.
+    bool        deserialize(const std::string& s);
+    // True once since the last call: something the user (or pairing) changed
+    // needs writing out. Lets the settings pane save worker-side changes without
+    // saving a configuration nobody has touched over one that is already there.
+    bool        takeConfigDirty() { return cfgDirty_.exchange(false); }
     // The key material lives in its own ExtState value so a shared setup bundle
     // can carry the slots without carrying the credentials.
     std::string serializeCredentials();
@@ -303,6 +311,7 @@ private:
 
     std::atomic<LinkState> link_{LinkState::Idle};
     std::atomic<FillDir>   fill_{FillDir::Left};
+    std::atomic<bool>      cfgDirty_{false};
     std::atomic<bool>      run_{false};
     std::atomic<bool>      discoverReq_{false};
     std::atomic<bool>      pairReq_{false};

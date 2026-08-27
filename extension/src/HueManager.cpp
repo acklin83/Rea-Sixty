@@ -166,6 +166,7 @@ void HueManager::setBridgeIp(const std::string& ip)
         groups_.clear();
         scenes_.clear();
     }
+    cfgDirty_.store(true);
     link_.store(LinkState::Idle);
     if (haveAppKey()) verifyReq_.store(true);
 }
@@ -204,6 +205,7 @@ void HueManager::forget()
         scenes_.clear();
         found_.clear();
     }
+    cfgDirty_.store(true);
     setStatus(LinkState::Idle, "No bridge");
 }
 
@@ -266,6 +268,7 @@ void HueManager::setSlot(int i, const SlotConfig& c)
     if (cfg.label.size() > static_cast<size_t>(kLabelChars))
         cfg.label.resize(static_cast<size_t>(kLabelChars));
     slots_[static_cast<size_t>(i)] = std::move(cfg);
+    cfgDirty_.store(true);
 }
 
 SceneSlot HueManager::sceneSlot(int i)
@@ -280,6 +283,7 @@ void HueManager::setSceneSlot(int i, const SceneSlot& s)
     if (i < 0 || i >= kMaxScenes) return;
     std::lock_guard<std::mutex> lk(cfgMx_);
     sceneSlots_[static_cast<size_t>(i)] = s;
+    cfgDirty_.store(true);
 }
 
 Controls HueManager::controls()
@@ -294,6 +298,7 @@ void HueManager::setControls(const Controls& c)
     controls_ = c;
     if (controls_.transitionMs < 0)    controls_.transitionMs = 0;
     if (controls_.transitionMs > 5000) controls_.transitionMs = 5000;
+    cfgDirty_.store(true);
 }
 
 RecLightConfig HueManager::recLight()
@@ -306,6 +311,7 @@ void HueManager::setRecLight(const RecLightConfig& r)
 {
     std::lock_guard<std::mutex> lk(cfgMx_);
     recCfg_ = r;
+    cfgDirty_.store(true);
 }
 
 MarkerConfig HueManager::markers()
@@ -319,6 +325,7 @@ void HueManager::setMarkers(const MarkerConfig& m)
     std::lock_guard<std::mutex> lk(cfgMx_);
     markerCfg_ = m;
     if (markerCfg_.prefix.empty()) markerCfg_.prefix = "hue:";
+    cfgDirty_.store(true);
 }
 
 int HueManager::definedCount()
@@ -677,14 +684,30 @@ std::string HueManager::serialize()
     return out;
 }
 
-void HueManager::deserialize(const std::string& s)
+// ⛔ PARSE INTO A TEMPORARY, COMMIT ONLY WHAT PARSED.
+//
+// The old version wiped the live configuration first and filled it in as it
+// read. On a blob that did not parse — a truncated one, say, of exactly the kind
+// the newline bug produced — that left everything empty, and the settings pane
+// then wrote the empty result straight back over the stored value. A silent read
+// failure followed by a save is how a configuration disappears for good rather
+// than for one session, and it is what cost Frank his settings twice on
+// 2026-08-27.
+//
+// So: nothing is touched until at least one record has been recognised, and the
+// caller is told whether that happened.
+bool HueManager::deserialize(const std::string& s)
 {
-    if (s.empty()) return;
-    {
-        std::lock_guard<std::mutex> lk(cfgMx_);
-        slots_.fill(SlotConfig{});
-        sceneSlots_.fill(SceneSlot{});
-    }
+    if (s.empty()) return false;
+
+    std::array<SlotConfig, kMaxSlots>  slots{};
+    std::array<SceneSlot,  kMaxScenes> sceneSlots{};
+    Controls       controls;
+    RecLightConfig recCfg;
+    MarkerConfig   markerCfg;
+    std::string    ip, bridgeId;
+    FillDir        fill = FillDir::Left;
+    int            recognised = 0;
 
     // Records end at ';'. '\n' is still accepted as a separator so a blob left
     // over from the version that used newlines still parses — whatever of it
@@ -698,36 +721,40 @@ void HueManager::deserialize(const std::string& s)
         if (line.empty()) continue;
 
         const std::vector<std::string> f = splitTabs(line);
-        std::lock_guard<std::mutex> lk(cfgMx_);
 
         if (f[0] == "ip" && f.size() >= 3) {
-            ip_       = f[1];
-            bridgeId_ = f[2];
+            ip       = f[1];
+            bridgeId = f[2];
+            ++recognised;
         } else if (f[0] == "fill" && f.size() >= 2) {
-            fill_.store(toInt(f[1]) ? FillDir::Right : FillDir::Left);
+            fill = toInt(f[1]) ? FillDir::Right : FillDir::Left;
+            ++recognised;
         } else if (f[0] == "ctl" && f.size() >= 6) {
-            controls_.pot          = static_cast<PotRole>(toInt(f[1]));
-            controls_.potFlip      = static_cast<PotRole>(toInt(f[2]));
-            controls_.push         = static_cast<PushRole>(toInt(f[3]));
-            controls_.bottomOff    = toInt(f[4]) != 0;
-            controls_.transitionMs = toInt(f[5], 100);
+            controls.pot          = static_cast<PotRole>(toInt(f[1]));
+            controls.potFlip      = static_cast<PotRole>(toInt(f[2]));
+            controls.push         = static_cast<PushRole>(toInt(f[3]));
+            controls.bottomOff    = toInt(f[4]) != 0;
+            controls.transitionMs = toInt(f[5], 100);
+            ++recognised;
         } else if (f[0] == "rec" && f.size() >= 8) {
-            recCfg_.enabled        = toInt(f[1]) != 0;
-            recCfg_.target         = static_cast<RecTarget>(toInt(f[2]));
-            recCfg_.rgb            = static_cast<uint32_t>(
+            recCfg.enabled        = toInt(f[1]) != 0;
+            recCfg.target         = static_cast<RecTarget>(toInt(f[2]));
+            recCfg.rgb            = static_cast<uint32_t>(
                                         std::strtoul(f[3].c_str(), nullptr, 10));
-            recCfg_.brightness     = toInt(f[4], 100);
-            recCfg_.restore        = static_cast<RecRestore>(toInt(f[5]));
-            recCfg_.groupId        = f[6];
-            recCfg_.restoreSceneId = f[7];
+            recCfg.brightness     = toInt(f[4], 100);
+            recCfg.restore        = static_cast<RecRestore>(toInt(f[5]));
+            recCfg.groupId        = f[6];
+            recCfg.restoreSceneId = f[7];
+            ++recognised;
         } else if (f[0] == "mrk" && f.size() >= 4) {
-            markerCfg_.enabled    = toInt(f[1]) != 0;
-            markerCfg_.durationMs = toInt(f[2], 400);
-            markerCfg_.prefix     = f[3].empty() ? "hue:" : f[3];
+            markerCfg.enabled    = toInt(f[1]) != 0;
+            markerCfg.durationMs = toInt(f[2], 400);
+            markerCfg.prefix     = f[3].empty() ? "hue:" : f[3];
+            ++recognised;
         } else if (f[0] == "slot" && f.size() >= 10) {
             const int i = toInt(f[1]);
             if (i < 0 || i >= kMaxSlots) continue;
-            SlotConfig& c = slots_[static_cast<size_t>(i)];
+            SlotConfig& c = slots[static_cast<size_t>(i)];
             c.enabled    = toInt(f[2]) != 0;
             c.kind       = static_cast<TargetKind>(toInt(f[3]));
             c.colour     = toInt(f[4]);
@@ -736,19 +763,38 @@ void HueManager::deserialize(const std::string& s)
             c.groupId    = f[7];
             c.label      = f[8];
             c.bridgeName = f[9];
+            ++recognised;
         } else if (f[0] == "scene" && f.size() >= 6) {
             const int i = toInt(f[1]);
             if (i < 0 || i >= kMaxScenes) continue;
-            SceneSlot& sl = sceneSlots_[static_cast<size_t>(i)];
+            SceneSlot& sl = sceneSlots[static_cast<size_t>(i)];
             sl.rgb        = static_cast<uint32_t>(
                                 std::strtoul(f[2].c_str(), nullptr, 10));
             sl.id         = f[3];
             sl.label      = f[4];
             sl.bridgeName = f[5];
+            ++recognised;
         }
     }
 
+    // "V1" on its own is exactly what the truncated blob looked like. Refuse it
+    // and leave whatever is already loaded alone.
+    if (recognised == 0) return false;
+
+    {
+        std::lock_guard<std::mutex> lk(cfgMx_);
+        slots_      = slots;
+        sceneSlots_ = sceneSlots;
+        controls_   = controls;
+        recCfg_     = recCfg;
+        markerCfg_  = markerCfg;
+        ip_         = ip;
+        bridgeId_   = bridgeId;
+    }
+    fill_.store(fill);
+
     if (haveAppKey() && !bridgeIp().empty()) verifyReq_.store(true);
+    return true;
 }
 
 std::string HueManager::serializeCredentials()
@@ -827,6 +873,8 @@ void HueManager::runDiscovery()
         if (found_.size() == 1 && ip_.empty()) {
             ip_       = found_[0].ip;
             bridgeId_ = found_[0].id;
+            // The worker just changed something the settings file has to carry.
+            cfgDirty_.store(true);
         }
     }
     if (n == 0) {
@@ -922,6 +970,7 @@ void HueManager::runVerify()
         return;
     }
     { std::lock_guard<std::mutex> lk(cfgMx_); bridgeId_ = id; }
+    cfgDirty_.store(true);   // the id is persisted state, and it just arrived
 
     runRefresh(/*full=*/true);
 }

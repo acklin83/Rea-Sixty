@@ -602,6 +602,62 @@ int main()
     }
 
     {
+        // ⛔ A BLOB THAT DOES NOT PARSE MUST CHANGE NOTHING. This is the second
+        // half of the settings loss: the reader wiped the live config before it
+        // started reading, so a truncated blob left everything empty, and the
+        // settings pane then saved that emptiness back over the stored value. A
+        // silent read failure followed by a save is the difference between
+        // losing a configuration for one session and losing it for good.
+        HueManager mgr;
+        SlotConfig c;
+        c.enabled = true;
+        c.label   = "KEEP";
+        c.rid     = "l-7";
+        mgr.setSlot(0, c);
+        const std::string good = mgr.serialize();
+
+        // Exactly what the newline version left behind: the header and nothing.
+        EXPECT(!mgr.deserialize("V1"));
+        EXPECT(mgr.slot(0).enabled && mgr.slot(0).label == "KEEP");
+        EXPECT(mgr.serialize() == good);
+
+        EXPECT(!mgr.deserialize(""));
+        EXPECT(mgr.slot(0).rid == "l-7");
+        EXPECT(!mgr.deserialize("total nonsense;more nonsense;"));
+        EXPECT(mgr.slot(0).rid == "l-7");
+
+        // …and a blob that DOES parse still replaces everything, including
+        // clearing a slot that the new blob does not mention.
+        HueManager other;
+        SlotConfig d;
+        d.enabled = true;
+        d.rid     = "l-99";
+        other.setSlot(3, d);
+        EXPECT(mgr.deserialize(other.serialize()));
+        EXPECT(!mgr.slot(0).enabled);              // gone, as it should be
+        EXPECT(mgr.slot(3).rid == "l-99");
+    }
+
+    {
+        // takeConfigDirty is one-shot: it says "somebody changed something since
+        // you last asked", which is what lets the pane save worker-side edits
+        // without saving an untouched configuration over a stored one.
+        HueManager mgr;
+        EXPECT(!mgr.takeConfigDirty());            // fresh, nothing touched
+        SlotConfig c;
+        c.enabled = true;
+        mgr.setSlot(0, c);
+        EXPECT(mgr.takeConfigDirty());
+        EXPECT(!mgr.takeConfigDirty());            // consumed
+
+        // Loading is not a change. A pane that opens right after a load must not
+        // find a reason to write.
+        HueManager fresh;
+        EXPECT(fresh.deserialize(mgr.serialize()));
+        EXPECT(!fresh.takeConfigDirty());
+    }
+
+    {
         // Credentials live apart so a shared setup bundle can carry the slots
         // without them, and they round-trip on their own.
         HueManager mgr;

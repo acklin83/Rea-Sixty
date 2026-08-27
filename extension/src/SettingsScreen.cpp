@@ -20755,9 +20755,18 @@ static void drawHueTab_(ImGui_Context* ctx)
         if (key != s_lastKey) {
             s_lastKey = key;
             persistKey();
-            persist();          // pairing also fills in the ip + bridge id
         }
     }
+
+    // ⛔ AND THE CONFIG IS SAVED ONLY WHEN SOMETHING ACTUALLY CHANGED IT.
+    // This block used to call persist() alongside persistKey() above, to catch
+    // the ip + bridge id that pairing fills in on the worker thread. On the
+    // first frame after a restart s_lastKey is empty and the stored key is not,
+    // so it fired every time the pane opened — and if the config had failed to
+    // load for any reason, that wrote the empty result straight back over the
+    // stored one. takeConfigDirty is true only when a setter ran, so a pane that
+    // opens on a configuration nobody has touched now writes nothing at all.
+    if (mgr.takeConfigDirty()) persist();
 
     // IP by hand — for a bridge discovery cannot see (VLAN, no internet).
     {
