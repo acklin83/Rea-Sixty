@@ -237,6 +237,9 @@ public:
     // a caller copy the whole scene list eight times a frame.
     bool        sceneSlotActive(int slot);
     bool        sceneSlotFilled(int slot);
+    // Test seam. The scene list is normally filled by the worker off the bridge;
+    // the "which one is showing" rule is worth pinning without one in the room.
+    void        injectScenesForTest(std::vector<Scene> s);
 
     // ---- recording light ----------------------------------------------------
     // Called from the transport edge in onTimerBody_. Idempotent: calling

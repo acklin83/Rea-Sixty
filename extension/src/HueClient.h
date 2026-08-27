@@ -173,11 +173,19 @@ struct GroupedLight {
 };
 std::vector<GroupedLight> parseGroupedLights(const std::string& json);
 
+// ⛔ `active` IS NOT A USABLE "WHICH SCENE IS SHOWING" SIGNAL, whatever the spec
+// says. Read off Frank's bridge on 2026-08-27: every scene reported
+// "active": "inactive", including one recalled twenty minutes earlier. What the
+// bridge really keeps is `status.last_recall`, an ISO-8601 timestamp that the
+// spec does not document at all — the device is the authority here, not the
+// schema. So the caller decides "showing" from the newest last_recall WITHIN a
+// group, and `active` only gets to say yes on top of that.
 struct Scene {
     std::string id;
     std::string name;
     std::string groupRid;    // the room or zone the scene belongs to
     bool        active = false;
+    std::string lastRecall;  // ISO 8601, empty when never recalled
 };
 std::vector<Scene> parseScenes(const std::string& json);
 

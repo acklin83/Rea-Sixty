@@ -447,6 +447,8 @@ std::vector<Scene> parseScenes(const std::string& json)
         if (const wdl_json_element* st = child(e, "status")) {
             const std::string a = text(st, "active");
             s.active = !a.empty() && a != "inactive";
+            // Undocumented but sent, and in practice the only signal there is.
+            s.lastRecall = text(st, "last_recall");
         }
         out.push_back(std::move(s));
     }

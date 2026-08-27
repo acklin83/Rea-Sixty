@@ -614,15 +614,47 @@ std::string HueManager::sceneSlotName(int slot)
     return s.bridgeName;
 }
 
+// ⛔ `status.active` IS NOT THE SIGNAL. Read off the bridge on 2026-08-27: every
+// scene came back "inactive", including one recalled twenty minutes earlier, so a
+// key wired to that flag can never light. What the bridge really keeps is
+// `status.last_recall`, which the spec does not document at all — the device
+// wins over the schema here.
+//
+// So "showing" means: this scene was the last one recalled IN ITS OWN ROOM. Per
+// room, not globally: a bridge with six rooms has six scenes showing at once, and
+// scoping it globally would light exactly one key out of eight. (Frank's bridge
+// has "Entspannen" and "Konzentrieren" twice over, once per room — that
+// duplication is what makes the scoping visible.)
+//
+// `active` is still ORed in, so if a firmware does maintain it we take the
+// stronger answer.
 bool HueManager::sceneSlotActive(int slot)
 {
     if (slot < 0 || slot >= kMaxScenes) return false;
     std::lock_guard<std::mutex> lk(cfgMx_);
     const std::string& id = sceneSlots_[static_cast<size_t>(slot)].id;
     if (id.empty()) return false;
+
+    const Scene* mine = nullptr;
     for (const Scene& s : scenes_)
-        if (s.id == id) return s.active;
-    return false;
+        if (s.id == id) { mine = &s; break; }
+    if (!mine) return false;
+    if (mine->active) return true;
+    if (mine->lastRecall.empty()) return false;
+
+    // Newest last_recall among the scenes of the same group wins. ISO 8601 with a
+    // trailing Z is fixed-width through the seconds, so comparing the first 19
+    // characters orders them correctly without parsing a date — and it does not
+    // care how many fractional digits a firmware chooses to send.
+    auto stamp = [](const std::string& t) { return t.substr(0, 19); };
+    const std::string mineAt = stamp(mine->lastRecall);
+    for (const Scene& s : scenes_) {
+        if (s.id == mine->id) continue;
+        if (s.groupRid != mine->groupRid) continue;
+        if (s.lastRecall.empty()) continue;
+        if (stamp(s.lastRecall) > mineAt) return false;   // a newer one showing
+    }
+    return true;
 }
 
 bool HueManager::sceneSlotFilled(int slot)
@@ -630,6 +662,12 @@ bool HueManager::sceneSlotFilled(int slot)
     if (slot < 0 || slot >= kMaxScenes) return false;
     std::lock_guard<std::mutex> lk(cfgMx_);
     return !sceneSlots_[static_cast<size_t>(slot)].id.empty();
+}
+
+void HueManager::injectScenesForTest(std::vector<Scene> s)
+{
+    std::lock_guard<std::mutex> lk(cfgMx_);
+    scenes_ = std::move(s);
 }
 
 // ---- recording light --------------------------------------------------------
