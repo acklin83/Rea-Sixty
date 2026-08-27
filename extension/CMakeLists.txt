@@ -35,6 +35,45 @@ if(NOT EXISTS "${WDL_DIR}/WDL/swell/swell.h")
     FetchContent_MakeAvailable(wdl)
 endif()
 
+# ----- WDL patch: jsonparse.h leaks one element per object key ----------------
+# ⛔ THIS IS NOT OUR BUG AND IT IS STILL OURS TO CARRY. In
+# wdl_json_parser::parse_internal, an object member parses its KEY into a fresh
+# element, keeps only that element's string pointer (m_object_names->Add), adds
+# the VALUE to the tree, and drops the key element on the floor. It is reachable
+# from nothing, so dispose_element(root) cannot find it and ~wdl_json_parser
+# cannot free it: 32 bytes leaked per key, per parse, for ever.
+#
+# One-shot parses hid it for years. The Hue worker parses the bridge once a
+# second and it came to 10'000 leaked elements a second, about a gigabyte an
+# hour, measured on 2026-08-27 (the same day the tree leak in JsonTree.h took
+# the machine down; that one was ours, this one is upstream's).
+#
+# vendor/ is gitignored and CMake fetches WDL fresh, so an edit in the working
+# copy would work here and be gone on CI. Hence the patch lives here, runs on
+# every configure, is idempotent via its marker, and FAILS THE BUILD if the
+# anchor line ever moves, rather than silently leaking again.
+set(REASIXTY_JSONPARSE "${WDL_DIR}/WDL/jsonparse.h")
+if(EXISTS "${REASIXTY_JSONPARSE}")
+    file(READ "${REASIXTY_JSONPARSE}" _reasixty_jp)
+    string(FIND "${_reasixty_jp}" "rea-sixty: key element" _reasixty_jp_marker)
+    if(_reasixty_jp_marker EQUAL -1)
+        string(FIND "${_reasixty_jp}" "obj->m_array->Add(obj2);" _reasixty_jp_anchor)
+        if(_reasixty_jp_anchor EQUAL -1)
+            message(FATAL_ERROR
+                "WDL jsonparse.h no longer has the object-member line this build "
+                "patches for its key-element leak. Check upstream: if it is fixed "
+                "there, drop this block; if it only moved, re-point the anchor. "
+                "Do NOT ship without one or the other.")
+        endif()
+        string(REPLACE
+            "obj->m_array->Add(obj2);"
+            "obj->m_array->Add(obj2);\n            dispose_element(obj1); // rea-sixty: key element belongs to nobody"
+            _reasixty_jp "${_reasixty_jp}")
+        file(WRITE "${REASIXTY_JSONPARSE}" "${_reasixty_jp}")
+        message(STATUS "Patched WDL jsonparse.h (object-key element leak)")
+    endif()
+endif()
+
 # reaper_plugin.h does `#include "../WDL/swell/swell.h"` — expects WDL to
 # live as a sibling of the sdk/ directory. POSIX uses a symlink; Windows
 # falls back to a copy because symbolic links there need admin / dev mode.
