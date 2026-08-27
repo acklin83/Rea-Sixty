@@ -2587,13 +2587,14 @@ Bind **UF1 Mode: Hue** to any key on any surface. The UF1 then shows one lamp: w
 | V-Pot 3 | Colour temperature |
 | CHANNEL encoder | Picks the lamp |
 | V-Pot 1 press | Switches between colour and white |
-| V-Pot 4 press | Leaves Hue mode |
 | **CUT** | Lamp on and off |
 | **SOLO** | Light solo |
 
-The UF1's three colour pots are fixed: three axes on three knobs needs no setting. The fourth rotates nothing, and its label says what its press does.
+The UF1's three colour pots are fixed: three axes on three knobs needs no setting. The fourth is blank, because there is no fourth thing for it to be.
 
 The lamp itself is on the CHANNEL encoder, where "which channel am I on" already lives.
+
+You leave the mode with the key you came in on: **UF1 Mode: Hue** is a toggle.
 
 ## Scenes
 

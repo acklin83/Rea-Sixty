@@ -22517,10 +22517,21 @@ void onUf1Event(const uf1::InputEvent& ev)
             //                                          SEL  = nothing (the UF1 IS
             //                                                 the focus)
             if (g_uf1HueMode.load() && ev.pressed) {
-                if (ev.id == uf1::btn::kVpot4Push) {
-                    g_uf1HueMode.store(false);
-                    break;
-                }
+                // ⇨ ALL FOUR V-POT PUSHES ARE CLAIMED, even the three that do
+                // nothing. Left unclaimed they fall through to the factory
+                // uf1_vpot_reset, which resolves a plug-in parameter on the
+                // focused track — a control that is not on this screen at all.
+                // Swallowing them is what keeps a lamp screen from writing to a
+                // track.
+                //
+                // There is no Exit push. The mode is only reachable through a
+                // bound action, so the way out is the key you came in on, and a
+                // second door on a pot is a control that has to be explained
+                // without earning it (Frank 2026-08-27: "Wieso Exit button wenn
+                // man einfach die Mode toggeln kann?").
+                if (ev.id == uf1::btn::kVpot2Push
+                 || ev.id == uf1::btn::kVpot3Push
+                 || ev.id == uf1::btn::kVpot4Push) break;
                 // Direct, not through the PendingInput queue: these three touch
                 // only HueManager atomics and its config mutex, never the REAPER
                 // API, so they are legal on this worker exactly like the
@@ -27816,11 +27827,10 @@ void uf1HueStepFocus_(int delta)
 void applyUf1HueVpot_(uint8_t id, int step)
 {
     if (step == 0) return;
-    // ⇨ V-POT 4 NO LONGER PICKS THE LAMP — the CHANNEL ENCODER does, because
-    // that is the control which already means "which channel am I on" and
-    // reaching for a V-Pot to change channel reads wrong (Frank 2026-08-27:
-    // "V-Pot 4 um zwischen Lampen umzustellen ist doof"). Its push still leaves
-    // the mode, so the pot keeps a label; its rotation does nothing.
+    // ⇨ V-POT 4 DOES NOTHING — the CHANNEL ENCODER picks the lamp, because that
+    // is the control which already means "which channel am I on" and reaching
+    // for a V-Pot to change channel reads wrong (Frank 2026-08-27). The pot is
+    // left blank rather than given a job to justify it.
     if (id == uf1::enc::kVpot4) return;
     const int slot = uf1HueFocusSlot_();
     if (slot < 0) return;
@@ -27978,10 +27988,12 @@ static void uf1PaintHue_()
                                   uf8::hue::mirekFromWarmth(warm))));
             sendVpot(2, reasixty_sp("Colour", "Color"), v, warm, false);
 
-            // V-Pot 4 rotates nothing; the label names what its PUSH does, so
-            // the way out of the mode is written on the screen instead of being
-            // a gesture you have to remember.
-            sendVpot(3, "Exit", "", 0.0, true);
+            // ⛔ V-Pot 4 IS BLANK, not labelled with something it does not do.
+            // Three colour axes fill three pots and the fourth has no fourth
+            // thing to be: "a control that displays something it does not drive
+            // is worse than an empty one" (Frank 2026-08-17, about this very
+            // screen). Empty style, no label, no value.
+            sendVpot(3, "", "", 0.0, /*empty=*/true);
         }
 
         static std::array<uint8_t, 8> sBars{};
