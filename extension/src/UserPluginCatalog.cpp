@@ -37,6 +37,7 @@
 #include "reaper_plugin_functions.h"
 
 #include "WDL/jsonparse.h"
+#include "JsonTree.h"
 
 namespace uf8::user_plugins {
 
@@ -743,6 +744,7 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
 {
     wdl_json_parser p;
     wdl_json_element* root = p.parse(json.c_str(), static_cast<int>(json.size()));
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_object()) return false;
 
     int fv = 1;
@@ -1621,6 +1623,7 @@ bool importMapFromString(const std::string& contents, MapShare& out,
     wdl_json_parser p;
     wdl_json_element* root = p.parse(contents.c_str(),
                                      static_cast<int>(contents.size()));
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_object()) {
         if (errOut) *errOut = "not a JSON object";
         return false;

@@ -37,6 +37,7 @@
 #endif
 
 #include "WDL/jsonparse.h"
+#include "JsonTree.h"
 
 #include <atomic>
 #include <mutex>
@@ -105,6 +106,7 @@ SdCommand parseLine(const char* data, int len) {
     SdCommand c;
     wdl_json_parser p;
     wdl_json_element* root = p.parse(data, len);
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_object()) return c;
 
     const char* cmd = root->get_string_by_name("cmd", true);

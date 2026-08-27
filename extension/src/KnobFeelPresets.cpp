@@ -7,6 +7,7 @@
 
 #include "reaper_plugin_functions.h"   // GetExtState / SetExtState
 #include "WDL/jsonparse.h"
+#include "JsonTree.h"
 
 namespace uf8 {
 namespace feel_presets {
@@ -97,6 +98,7 @@ void load_()
     std::string json = raw;
     wdl_json_parser p;
     wdl_json_element* root = p.parse(json.c_str(), static_cast<int>(json.size()));
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_object()) return;
     auto* arr = root->get_item_by_name("presets");
     if (!arr || !arr->is_array() || !arr->m_array) return;

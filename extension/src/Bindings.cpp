@@ -36,6 +36,7 @@
 #include "reaper_plugin_functions.h"
 
 #include "WDL/jsonparse.h"
+#include "JsonTree.h"
 
 #include "KeyMacro.h"
 
@@ -2430,6 +2431,7 @@ bool tryParse_(const std::string& json, Config& out)
 {
     wdl_json_parser p;
     wdl_json_element* root = p.parse(json.c_str(), static_cast<int>(json.size()));
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_object()) return false;
 
     if (auto* v = root->get_item_by_name("version"))
@@ -3657,6 +3659,7 @@ bool importLayerFrom(int layer, const std::string& path)
     wdl_json_parser p;
     wdl_json_element* root = p.parse(contents.c_str(),
                                      static_cast<int>(contents.size()));
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_object()) return false;
 
     // Accept both the wrapped {"type":"layer", ...} form and a bare layer
@@ -3751,6 +3754,7 @@ bool importUc1From(int layer, const std::string& path)
     wdl_json_parser p;
     wdl_json_element* root = p.parse(contents.c_str(),
                                      static_cast<int>(contents.size()));
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_object()) return false;
 
     auto* t = root->get_item_by_name("type");

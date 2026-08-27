@@ -1,6 +1,7 @@
 #include "HueClient.h"
 
 #include "WDL/jsonparse.h"
+#include "JsonTree.h"
 
 // ⛔ NO QUALIFIED std::snprintf IN THIS FILE. WDL defines snprintf as a macro
 // expanding to WDL_snprintf on MSVC, so `snprintf(...)` is rewritten to
@@ -244,6 +245,7 @@ std::vector<DiscoveredBridge> parseDiscovery(const std::string& json)
     wdl_json_parser p;
     const wdl_json_element* root = p.parse(json.c_str(),
                                            static_cast<int>(json.size()));
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_array()) return out;
 
     const int n = arraySize(root);
@@ -264,6 +266,7 @@ PairResult parsePairResponse(const std::string& json)
     wdl_json_parser p;
     const wdl_json_element* root = p.parse(json.c_str(),
                                            static_cast<int>(json.size()));
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_array() || arraySize(root) < 1) {
         r.error = "the bridge answered something that is not a pairing reply";
         return r;
@@ -303,6 +306,7 @@ std::vector<Light> parseLights(const std::string& json)
     wdl_json_parser p;
     const wdl_json_element* root = p.parse(json.c_str(),
                                            static_cast<int>(json.size()));
+    JsonTreeGuard rootGuard{p, root};
     const wdl_json_element* data = dataArray(root);
     if (!data) return out;
 
@@ -357,6 +361,7 @@ std::vector<Group> parseGroups(const std::string& json, bool zones)
     wdl_json_parser p;
     const wdl_json_element* root = p.parse(json.c_str(),
                                            static_cast<int>(json.size()));
+    JsonTreeGuard rootGuard{p, root};
     const wdl_json_element* data = dataArray(root);
     if (!data) return out;
 
@@ -408,6 +413,7 @@ std::vector<GroupedLight> parseGroupedLights(const std::string& json)
     wdl_json_parser p;
     const wdl_json_element* root = p.parse(json.c_str(),
                                            static_cast<int>(json.size()));
+    JsonTreeGuard rootGuard{p, root};
     const wdl_json_element* data = dataArray(root);
     if (!data) return out;
 
@@ -435,6 +441,7 @@ std::vector<Scene> parseScenes(const std::string& json)
     wdl_json_parser p;
     const wdl_json_element* root = p.parse(json.c_str(),
                                            static_cast<int>(json.size()));
+    JsonTreeGuard rootGuard{p, root};
     const wdl_json_element* data = dataArray(root);
     if (!data) return out;
 
@@ -468,6 +475,7 @@ std::string parseBridgeId(const std::string& json)
     wdl_json_parser p;
     const wdl_json_element* root = p.parse(json.c_str(),
                                            static_cast<int>(json.size()));
+    JsonTreeGuard rootGuard{p, root};
     const wdl_json_element* data = dataArray(root);
     if (!data || arraySize(data) < 1) return std::string();
     return text(data->enum_item(0), "bridge_id");
@@ -478,6 +486,7 @@ bool hasApiError(const std::string& json, std::string* firstMessage)
     wdl_json_parser p;
     const wdl_json_element* root = p.parse(json.c_str(),
                                            static_cast<int>(json.size()));
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_object()) return false;
     const wdl_json_element* errs = root->get_item_by_name("errors");
     if (!errs || !errs->is_array() || arraySize(errs) < 1) return false;

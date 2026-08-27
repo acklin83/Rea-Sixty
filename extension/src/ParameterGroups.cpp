@@ -30,6 +30,7 @@
 #include "PluginMap.h"
 #include "UserPluginCatalog.h"
 #include "WDL/jsonparse.h"
+#include "JsonTree.h"
 
 // Defined in main.cpp -- diagnostic write to %TEMP%\rea_sixty_setparam.log
 // on Windows, no-op stub on macOS / Linux.
@@ -556,6 +557,7 @@ void load()
     wdl_json_parser p;
     wdl_json_element* root = p.parse(contents.c_str(),
                                      static_cast<int>(contents.size()));
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_object()) return;
 
     bool b = false;

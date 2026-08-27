@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "WDL/jsonparse.h"
+#include "JsonTree.h"
 
 #include "Bindings.h"
 #include "ParameterGroups.h"
@@ -241,6 +242,7 @@ bool importFromJson(const std::string& contents, std::string* errOut)
     wdl_json_parser p;
     wdl_json_element* root = p.parse(
         contents.c_str(), static_cast<int>(contents.size()));
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_object()) {
         if (errOut) *errOut = "bundle is not valid JSON";
         return false;

@@ -19,6 +19,7 @@
 #include "HttpClient.h"
 #include "UserPluginCatalog.h"
 #include "WDL/jsonparse.h"
+#include "JsonTree.h"
 
 // jsonparse.h drags in wdlcstring.h, which on MSVC does `#define snprintf
 // WDL_snprintf` to paper over pre-2015 MSVC's non-terminating _snprintf. Every
@@ -330,6 +331,7 @@ void pumpLinkStart() {
 
     wdl_json_parser p;
     wdl_json_element* root = p.parse(r.body.c_str(), (int)r.body.size());
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_object()) { stopLink("Bad response from server.", 0xCC4444FF); return; }
 
     g_linkDeviceCode = jstr(root, "deviceCode");
@@ -379,6 +381,7 @@ void pumpLink() {
 
     wdl_json_parser p;
     wdl_json_element* root = p.parse(r.body.c_str(), (int)r.body.size());
+    JsonTreeGuard rootGuard{p, root};
     const std::string state = (root && root->is_object()) ? jstr(root, "status") : "";
 
     if (state == "pending") return;
@@ -482,6 +485,7 @@ void pumpList() {
     if (r.status != 200)  { g_listError = "Server returned HTTP " + std::to_string(r.status); return; }
     wdl_json_parser p;
     wdl_json_element* root = p.parse(r.body.c_str(), (int)r.body.size());
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_object()) { g_listError = "Bad response from server."; return; }
     auto* rows = root->get_item_by_name("rows");
     g_plugins.clear();
@@ -513,6 +517,7 @@ void pumpPlugin() {
     if (r.status != 200)  { g_pluginError = "Server returned HTTP " + std::to_string(r.status); return; }
     wdl_json_parser p;
     wdl_json_element* root = p.parse(r.body.c_str(), (int)r.body.size());
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_object()) { g_pluginError = "Bad response from server."; return; }
     g_pluginName   = jstr(root, "name");
     g_pluginVendor = jstr(root, "vendor");
@@ -550,6 +555,7 @@ void pumpMap() {
     if (r.status != 200)  { g_mapError = "Server returned HTTP " + std::to_string(r.status); return; }
     wdl_json_parser p;
     wdl_json_element* root = p.parse(r.body.c_str(), (int)r.body.size());
+    JsonTreeGuard rootGuard{p, root};
     if (!root || !root->is_object()) { g_mapError = "Bad response from server."; return; }
 
     MapDetail d;
@@ -699,6 +705,7 @@ void pumpWorks() {
     // refetching the whole map.
     wdl_json_parser p;
     wdl_json_element* root = p.parse(r.body.c_str(), (int)r.body.size());
+    JsonTreeGuard rootGuard{p, root};
     if (root && root->is_object()) g_mapDetail.works = jint(root, "worksCount");
     g_mapDetail.worksMine = g_worksUndo ? 0 : 1;
 
