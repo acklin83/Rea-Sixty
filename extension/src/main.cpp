@@ -17212,6 +17212,9 @@ void applyUf1HueVpot_(uint8_t id, int step);   // Hue Mode twin, defined by the 
 // The UF1's focus lamp, clamped onto an enabled slot. Reads HueManager config
 // only (its own mutex), no REAPER API — so the input worker may call it.
 int  uf1HueFocusSlot_();
+// Walk the focus to the next / previous ENABLED lamp, wrapping. Main thread
+// (the encoder drain).
+void uf1HueStepFocus_(int delta);
 
 // Channel-view soft-key handler (p188 tables): TOGGLE the current-page soft-key
 // param on the focused SSL channel-strip plug-in. DEFINED far below next to the
@@ -17782,7 +17785,14 @@ void drainInputQueue()
                     if (g_uf1ChanEncAccum >=  1.0) { tracks = static_cast<int>(g_uf1ChanEncAccum); g_uf1ChanEncAccum -= tracks; }
                     if (g_uf1ChanEncAccum <= -1.0) { tracks = static_cast<int>(g_uf1ChanEncAccum); g_uf1ChanEncAccum -= tracks; }
                     if (tracks != 0) {
-                        if (g_uf1ModeMenu.load()) {
+                        // Hue Mode: the channel encoder walks the LAMP, which is
+                        // what "which channel am I on" means while the screen is
+                        // showing one. Ahead of the MODE / Shift layers because
+                        // neither has anything to step through here — there is no
+                        // track under this screen to cycle instances on.
+                        if (g_uf1HueMode.load()) {
+                            uf1HueStepFocus_(tracks);
+                        } else if (g_uf1ModeMenu.load()) {
                             // MODE held → the channel encoder is the encoder-mode
                             // PICKER: step g_uf1EncoderMode through the VISIBLE modes
                             // in the user-configured ring order (wrap), don't nav
@@ -27785,7 +27795,7 @@ int uf1HueFocusSlot_()
 }
 
 // Walk the focus to the next / previous ENABLED slot, wrapping. Main thread.
-static void uf1HueStepFocus_(int delta)
+void uf1HueStepFocus_(int delta)
 {
     if (delta == 0) return;
     auto& hm = uf8::hue::manager();
@@ -27806,7 +27816,12 @@ static void uf1HueStepFocus_(int delta)
 void applyUf1HueVpot_(uint8_t id, int step)
 {
     if (step == 0) return;
-    if (id == uf1::enc::kVpot4) { uf1HueStepFocus_(step > 0 ? 1 : -1); return; }
+    // ⇨ V-POT 4 NO LONGER PICKS THE LAMP — the CHANNEL ENCODER does, because
+    // that is the control which already means "which channel am I on" and
+    // reaching for a V-Pot to change channel reads wrong (Frank 2026-08-27:
+    // "V-Pot 4 um zwischen Lampen umzustellen ist doof"). Its push still leaves
+    // the mode, so the pot keeps a label; its rotation does nothing.
+    if (id == uf1::enc::kVpot4) return;
     const int slot = uf1HueFocusSlot_();
     if (slot < 0) return;
 
@@ -27963,10 +27978,10 @@ static void uf1PaintHue_()
                                   uf8::hue::mirekFromWarmth(warm))));
             sendVpot(2, reasixty_sp("Colour", "Color"), v, warm, false);
 
-            std::snprintf(v, sizeof(v), "%d", slot + 1);
-            sendVpot(3, "Lamp", v,
-                     static_cast<double>(slot) / double(uf8::hue::kMaxSlots - 1),
-                     false);
+            // V-Pot 4 rotates nothing; the label names what its PUSH does, so
+            // the way out of the mode is written on the screen instead of being
+            // a gesture you have to remember.
+            sendVpot(3, "Exit", "", 0.0, true);
         }
 
         static std::array<uint8_t, 8> sBars{};

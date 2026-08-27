@@ -2577,7 +2577,7 @@ The colour bar shows what the lamp is actually showing. When the lamp is off the
 
 ## Driving a lamp from the UF1
 
-Bind **UF1 Mode: Hue** to any key on any surface. The UF1 then shows one lamp: whichever one you last pressed **SEL** on, or the fourth V-Pot walks through them.
+Bind **UF1 Mode: Hue** to any key on any surface. The UF1 then shows one lamp: whichever one you last pressed **SEL** on, or turn the CHANNEL encoder to walk through them.
 
 | Control | What it does |
 |---|---|
@@ -2585,13 +2585,15 @@ Bind **UF1 Mode: Hue** to any key on any surface. The UF1 then shows one lamp: w
 | V-Pot 1 | Hue |
 | V-Pot 2 | Saturation |
 | V-Pot 3 | Colour temperature |
-| V-Pot 4 | Picks the lamp |
+| CHANNEL encoder | Picks the lamp |
 | V-Pot 1 press | Switches between colour and white |
 | V-Pot 4 press | Leaves Hue mode |
 | **CUT** | Lamp on and off |
 | **SOLO** | Light solo |
 
-The UF1's four pots are fixed. Three colour axes on three knobs needs no setting, and the fourth is how you change lamp without reaching for the UF8.
+The UF1's three colour pots are fixed: three axes on three knobs needs no setting. The fourth rotates nothing, and its label says what its press does.
+
+The lamp itself is on the CHANNEL encoder, where "which channel am I on" already lives.
 
 ## Scenes
 

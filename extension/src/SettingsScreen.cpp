@@ -21073,8 +21073,8 @@ static void drawHueTab_(ImGui_Context* ctx)
         ImGui_TextDisabled(ctx,
             "  Strip keys: CUT = on / off, SOLO = light solo, "
             "SEL = focus lamp for the UF1.\n"
-            "  UF1 V-Pots: 1 hue, 2 saturation, 3 colour temperature, "
-            "4 picks the lamp.\n"
+            "  UF1: V-Pots 1 hue, 2 saturation, 3 colour temperature; the "
+            "CHANNEL encoder picks the lamp.\n"
             "  The transition is sent with every write, so the bridge fills in "
             "between our packets and a fader ramp stays smooth at ten packets "
             "a second.");
