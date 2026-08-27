@@ -27685,8 +27685,21 @@ static void uf1PaintHue_()
     const bool force = (gen != sGen) || (slot != sSlot) || !sWasOn;
     sGen = gen; sSlot = slot; sWasOn = true;
 
+    // ⛔ EVERY 0x00xx CHANNEL ZONE TAKES A LEADING 0x00 BEFORE THE TEXT, and the
+    // firmware eats whatever byte sits in that slot. Sending "ZONE" raw put the
+    // Z in the index byte and the panel read "ONE" (Frank 2026-08-27); the lamp
+    // name lost its first letter the same way. This is what sendZoneText in the
+    // channel painter has always done — I wrote a second, shorter writer instead
+    // of reusing the shape, and lost the byte with it.
+    //
+    // Latin-1 at the emit for the same reason it happens there: a lamp called
+    // "Küche" is UTF-8 and the panel is one byte per glyph.
     auto sendText = [&](uint16_t addr, const std::string& s) {
-        std::vector<uint8_t> p(s.begin(), s.end());
+        const std::string folded = utf8ToLatin1(s);
+        std::vector<uint8_t> p;
+        p.reserve(folded.size() + 1);
+        p.push_back(0x00);
+        p.insert(p.end(), folded.begin(), folded.end());
         g_uf1_dev->send(uf1::buildScreen(addr, p));
     };
 
@@ -27712,12 +27725,23 @@ static void uf1PaintHue_()
         static std::string sCh;
         if (force || chb != sCh) { sCh = chb; sendText(uf1::scr::kChNumber, sCh); }
 
+        // The dB zone is not free-form text: 0x00, six value bytes NUL-padded,
+        // then two unit bytes the channel painter fills with 'd' and 'B'. Two
+        // spaces here — a brightness is not a level and must not read as one.
         char db[12];
         if (slot < 0 || !hm.liveOn(slot)) std::snprintf(db, sizeof(db), "OFF");
         else std::snprintf(db, sizeof(db), "%d%%",
                            static_cast<int>(hm.liveBri01(slot) * 100.0 + 0.5));
         static std::string sDb;
-        if (force || db != sDb) { sDb = db; sendText(uf1::scr::kOutputDb, sDb); }
+        if (force || db != sDb) {
+            sDb = db;
+            std::vector<uint8_t> p;
+            p.push_back(0x00);
+            for (size_t k = 0; k < 6; ++k)
+                p.push_back(k < sDb.size() ? static_cast<uint8_t>(sDb[k]) : 0x00);
+            p.push_back(' '); p.push_back(' ');
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kOutputDb, p));
+        }
 
         const std::string vl = (slot < 0) ? std::string("no lamp defined")
                                           : hm.liveValueLine(slot);
@@ -27807,6 +27831,7 @@ static void uf1PaintHue_()
     // limp; on release the painter takes the target back. Same shape as the
     // channel path, minus the automation.
     static bool sMotorEngaged = false;
+    static bool sWasTouched   = false;
     if (g_uf1FaderTouched.load()) {
         if (slot >= 0 && g_uf1FaderHasPos.load()) {
             const uint16_t pos = g_uf1FaderPos.load();
@@ -27816,7 +27841,14 @@ static void uf1PaintHue_()
             g_uf1_dev->send(uf1::buildMotorPosition(pos));
         }
         sMotorEngaged = false;
+        sWasTouched   = true;
     } else if (slot >= 0) {
+        // Release edge: ask for the final value NOW instead of letting it wait
+        // out the rate window, the same flush the UF8 strip does on touch-off.
+        if (sWasTouched) {
+            sWasTouched = false;
+            hm.setFader(slot, hm.liveBri01(slot), /*released=*/true);
+        }
         const double n = hm.liveBri01(slot);
         uint16_t pos = static_cast<uint16_t>(
             n * static_cast<double>(kUf1FaderMax) + 0.5);
@@ -27840,7 +27872,25 @@ void uf1PaintChannel_()
 
     // Hue Mode owns the screen outright. Handing over here rather than branching
     // further down is what keeps a half-painted channel off the glass.
-    if (g_uf1HueMode.load()) { uf1PaintHue_(); return; }
+    //
+    // ⛔ AND THE MODE EDGE HAS TO INVALIDATE BOTH PAINTERS. Each one dedupes
+    // against statics that describe what the DEVICE shows, and the two write the
+    // same cells. Without this, LEAVING Hue Mode left the lamp's text on the
+    // glass for good: the channel painter's statics still said "already showing
+    // that", so it never re-sent, and the mode looked like it had no exit at all
+    // (Frank 2026-08-27: "raus aus dem Mode komm ich auch nicht"). Bumping
+    // g_uf1Gen is exactly the channel the reopen path uses for the same reason,
+    // and both painters already read it — this is the one place that knows the
+    // edge, so it is the one place that bumps.
+    {
+        static bool sHueWas = false;
+        const bool hueNow = g_uf1HueMode.load();
+        if (hueNow != sHueWas) {
+            sHueWas = hueNow;
+            g_uf1Gen.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (hueNow) { uf1PaintHue_(); return; }
+    }
 
     // Follow the user's focus: last-touched track, else the first selected.
     MediaTrack* tr = uf1FocusedTrack_();
