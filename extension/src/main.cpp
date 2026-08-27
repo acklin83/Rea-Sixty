@@ -6946,9 +6946,20 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
 // became one near-black red and green went out entirely. Dimming happens after
 // quantising, in nibble space, where halving is exactly halving.
 //
-// Which leaves the honest arithmetic: quantise as-is, and for the resting state
-// halve the nibbles with a floor of 1 so a channel that is present never rounds
-// away to nothing. A dark colour reads dark. That is the palette, not a bug.
+// ⛔ AND THE RESTING STATE IS ONE STEP, NOT HALF THE COLOUR. Halving the
+// nibbles looked like the honest arithmetic and was not: the nibble drives the
+// LED roughly linearly, so half of a saturated channel is 7 of 15 and the key
+// rests at nearly half power. Next to a UF8 resting at nibble 1 that reads as a
+// lamp someone forgot to turn off (Frank 2026-08-27: "wieso sind inactive LEDs
+// auf dem UF1 etwa eine Milliarde Lumen heller als auf dem UF8?").
+//
+// SSL's own dim bytes say the same thing: every entry in selPaletteRgb's table
+// rests on nibble 1 per channel (orange and pink take a 2 on their strongest),
+// bright or dark, so the resting level is a PROPERTY OF THE ROW, not a fraction
+// of the colour. Hence: quantise as-is for lit, and for resting light every
+// channel the colour actually has at the hardware's lowest step. What survives
+// is which channels are on, which is all the hue a nibble-1 LED can carry
+// anyway. Dimming still happens in nibble space, never in 8-bit space.
 static void uf1KeyColourNibbles_(uint32_t rgb, bool bright,
                                  uint8_t& g4, uint8_t& r4, uint8_t& b4)
 {
@@ -6959,8 +6970,8 @@ static void uf1KeyColourNibbles_(uint32_t rgb, bool bright,
     int gn = uf1::quantiseChannel(g);
     int bn = uf1::quantiseChannel(b);
     if (!bright) {
-        auto half = [](int n) { return n <= 0 ? 0 : (n > 1 ? n / 2 : 1); };
-        rn = half(rn); gn = half(gn); bn = half(bn);
+        auto rest = [](int n) { return n > 0 ? 1 : 0; };
+        rn = rest(rn); gn = rest(gn); bn = rest(bn);
     }
     g4 = static_cast<uint8_t>(gn);
     r4 = static_cast<uint8_t>(rn);
