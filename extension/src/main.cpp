@@ -18546,7 +18546,9 @@ void drainInputQueue()
                 break;
             case PendingInput::TouchSelectExclusive:
                 // Plain track select on fader-touch; no UF8 Plugin Mode
-                // hijack (cf. SelectExclusive above).
+                // hijack (cf. SelectExclusive above). In UF8 Plugin Mode the
+                // event is never queued in the first place — see the touch-ON
+                // edge in the input thread.
                 if (!tr) break;
                 if (GetMediaTrackInfo_Value(tr, "I_SELECTED") < 0.5) {
                     SetOnlyTrackSelected(tr);
@@ -22311,7 +22313,18 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     // an exclusive selection for this strip's track. Runs
                     // through the main-thread drain (SetOnlyTrackSelected
                     // is not safe from the libusb input thread).
-                    if (g_touchSelectsChannel.load()) {
+                    //
+                    // ⛔ NOT IN UF8 PLUGIN MODE. There the eight strips are not
+                    // eight tracks: they are eight parameters of ONE plug-in on
+                    // the focused track. Selecting "this strip's track" then
+                    // moves the focus out from under the plug-in you are editing,
+                    // mid-gesture, and the next fader you touch edits something
+                    // else (Frank 2026-08-27). The setting is about strips that
+                    // stand for tracks, and in this mode none of them does.
+                    // Gated here rather than in the drain so the event is never
+                    // queued at all.
+                    if (g_touchSelectsChannel.load()
+                        && !g_uf8PluginMode.load()) {
                         queueInput({PendingInput::TouchSelectExclusive,
                                     strip, 0.0});
                     }
