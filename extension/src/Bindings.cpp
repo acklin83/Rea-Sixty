@@ -4967,6 +4967,14 @@ void setSubBankLed(int layer, int quick, int subBank, int mod,
     persistLocked_();
 }
 
+bool setOwnsDynamicKey(const Binding& bd, int mIdx)
+{
+    if (mIdx <= static_cast<int>(Modifier::Plain)) return false;
+    if (mIdx >= kModifierCount)                    return false;
+    const auto& sp = bd.shortPress[mIdx];
+    return sp.type != ActionType::Noop || !sp.action.empty();
+}
+
 DynamicBankKind getSubBankDynamic(int layer, int quick, int subBank, int mod)
 {
     if (!subBankLedInRange_(layer, quick, subBank)) return DynamicBankKind::None;

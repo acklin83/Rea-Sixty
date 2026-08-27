@@ -913,6 +913,14 @@ bool hasBinding(int layer, ButtonId id);
 // User-Quick slot accessors. layer 0..2, quick 0..2, subBank 0..5,
 // slot 0..7. Out-of-range returns defaults / silently ignores writes.
 Binding  getUserQuickSlot(int layer, int quick, int subBank, int slot);
+
+// ⛔ ONE PREDICATE FOR "THE HELD SET OWNS THIS KEY", because it decides what the
+// hardware DOES and what the settings mockup SHOWS, and those two disagreeing is
+// the whole complaint. Over a dynamic bank a key you assigned in the held set
+// fires instead of the computed one — and the editor has to draw that, or it
+// tells you the bank is Hue while the surface fires an old favourite
+// (Frank 2026-08-27). Plain is never "the set": that is the bank's own push.
+bool     setOwnsDynamicKey(const Binding& bd, int mIdx);
 void     setUserQuickSlot(int layer, int quick, int subBank, int slot,
                           const Binding& bd);
 

@@ -6928,12 +6928,12 @@ static int dynamicBankItemCountUf1_(uf8::bindings::DynamicBankKind kind,
 // thing while the press does another.
 // Plain is never "the set": that is the bank's own push, and the dynamic kind
 // lives there.
-static bool setOwnsDynamicKey_(const uf8::bindings::Binding& bd, int mIdx)
+// Forwards to the ONE predicate in Bindings, which the settings mockup reads too.
+// Two copies of this decided what the surface does and what the editor shows, and
+// they disagreed (Frank 2026-08-27) — see the declaration for the story.
+static inline bool setOwnsDynamicKey_(const uf8::bindings::Binding& bd, int mIdx)
 {
-    if (mIdx <= static_cast<int>(uf8::bindings::Modifier::Plain)) return false;
-    if (mIdx >= uf8::bindings::kModifierCount) return false;
-    const auto& sp = bd.shortPress[mIdx];
-    return sp.type != uf8::bindings::ActionType::Noop || !sp.action.empty();
+    return uf8::bindings::setOwnsDynamicKey(bd, mIdx);
 }
 
 // setOwnsBank: this dynamic bank belongs to the HELD SET, not to Plain. Then the

@@ -1475,14 +1475,30 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
         // lie about what the hardware would display (Frank 2026-08-18) — worse
         // than showing nothing, because the labels look plausible. Name the kind
         // instead; the live labels need track context this panel does not have.
+        bool editDynOwnsSet = false;
         const auto editDynKind =
             (!editIsSslCsBc && editQuick >= 0 && editQuick <= 2
              && editSubBank >= 0 && editSubBank <= 5)
                 ? uf8::bindings::getSubBankDynamicFor(activeLayer, editQuick,
                                                       editSubBank,
-                                                      g_slotEditModIdx)
+                                                      g_slotEditModIdx,
+                                                      &editDynOwnsSet)
                 : uf8::bindings::DynamicBankKind::None;
-        if (editDynKind != uf8::bindings::DynamicBankKind::None) {
+        // ⛔ AND THE ASSIGNED KEY IN THE HELD SET WINS HERE TOO. The surface has
+        // obeyed that since 1a602ba; this panel did not, so a sub-bank switched
+        // to a dynamic kind drew the kind's name on all eight keys while the
+        // hardware went on firing whatever the old bank had left on Shift. Frank
+        // read "HUE" across the row, pressed, and got a favourite — and the
+        // panel was the reason he could not see why (2026-08-27).
+        const bool editSetOwnsKey =
+            editDynKind != uf8::bindings::DynamicBankKind::None
+            && !editDynOwnsSet
+            && uf8::bindings::setOwnsDynamicKey(
+                   uf8::bindings::getUserQuickSlot(activeLayer, editQuick,
+                                                   editSubBank, i),
+                   g_slotEditModIdx);
+        if (editDynKind != uf8::bindings::DynamicBankKind::None
+            && !editSetOwnsKey) {
             scribble = dynKindShort_(editDynKind);
         } else if (!editIsSslCsBc
             && editQuick >= 0 && editQuick <= 2
@@ -5737,9 +5753,17 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     // the static slots below are then ignored.
     {
         ImGui_Text(ctx, "Dynamic bank");
+        // ⛔ "The slots below are ignored while on" was true until 2026-08-25 and
+        // has been wrong since: a slot stored under a HELD MODIFIER beats the
+        // computed key, in the paint and in the press, which is the whole point
+        // of that change. Saying otherwise sent Frank hunting a phantom bug when
+        // an old favourites bank left switch_bc_* on Shift underneath a Hue
+        // Scenes bank (2026-08-27).
         ImGui_TextDisabled(ctx,
             "Compute this Sub-Bank's 8 keys live from the focused track "
-            "instead of fixed slots. The slots below are ignored while on.");
+            "instead of fixed slots. The Plain slots below are then ignored, "
+            "but a slot stored under a held modifier still wins over the "
+            "computed key.");
         // ⛔ Not on a page where SSL owns even one key: a dynamic bank computes
         // ALL eight, so it would paint over a plug-in parameter. Fully-empty
         // pages (BC banks 2-5) are fair game.
@@ -5823,6 +5847,60 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                 "Only while this bank is the engaged Sub-Bank; the control "
                 "keeps its normal function otherwise.");
             ImGui_Spacing(ctx);
+        }
+
+        // ⛔ THE LEFTOVERS THAT NOTHING USED TO MENTION. A sub-bank switched to a
+        // dynamic kind keeps whatever static slots it already had, and any of
+        // them stored under a HELD MODIFIER still beats the computed key. So an
+        // old favourites bank turned into a Hue Scenes bank went on firing
+        // switch_bc_* under Shift, and both the labels and the press followed it
+        // — which reads as the new bank being broken (Frank 2026-08-27: "mit
+        // Shift kommt IRGENDWAS (Favorites?) obwohl auf Shift ebene gar nichts
+        // ist!"). It was there; nothing showed it.
+        //
+        // Named, not deleted: those slots are the user's, and the same overlay is
+        // a feature when it is deliberate. The button is the tidy-up, and it
+        // clears ONLY the modifier layers — Plain stays, because a dynamic bank
+        // ignores it anyway and switching the kind back off must find the bank
+        // as it was.
+        // ⛔ THE EFFECTIVE KIND, not the set's own. On a modifier set curKind is
+        // None (the set inherits Plain's bank), so keying the warning on it hid
+        // it from the exact screen where the leftovers bite.
+        const auto effKind = uf8::bindings::getSubBankDynamicFor(
+            editLayer, engagedQ, sbIdx, g_slotEditModIdx);
+        if (effKind != DynamicBankKind::None) {
+            int shadowed = 0;
+            for (int s = 0; s < 8; ++s) {
+                const auto bd = uf8::bindings::getUserQuickSlot(
+                    editLayer, engagedQ, sbIdx, s);
+                for (int m = 1; m < uf8::bindings::kModifierCount; ++m) {
+                    const auto& sp = bd.shortPress[m];
+                    if (sp.type != uf8::bindings::ActionType::Noop
+                        || !sp.action.empty()) { ++shadowed; break; }
+                }
+            }
+            if (shadowed > 0) {
+                char msg[220];
+                std::snprintf(msg, sizeof(msg),
+                    "%d of the 8 keys still carry a stored action under a held "
+                    "modifier. Those win over the computed key, label and press "
+                    "both, so holding Shift here shows the old bank, "
+                    "not this one.", shadowed);
+                ImGui_TextColored(ctx, 0xE8C33AFF, msg);
+                if (ImGui_Button(ctx,
+                        "Clear the modifier slots on these 8 keys##dyn_clear_mods",
+                        nullptr, nullptr)) {
+                    for (int s = 0; s < 8; ++s) {
+                        auto bd = uf8::bindings::getUserQuickSlot(
+                            editLayer, engagedQ, sbIdx, s);
+                        for (int m = 1; m < uf8::bindings::kModifierCount; ++m)
+                            bd.shortPress[m] = uf8::bindings::ActionSlot{};
+                        uf8::bindings::setUserQuickSlot(
+                            editLayer, engagedQ, sbIdx, s, bd);
+                    }
+                }
+                ImGui_Spacing(ctx);
+            }
         }
 
         if (curKind == DynamicBankKind::Favourites) {
