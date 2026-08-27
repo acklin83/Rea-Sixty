@@ -6486,11 +6486,21 @@ std::string g_trackBankColourName[8];
 // The ten hardware colours by name. A slot with no name of its own wears the
 // name of the colour it shows, and the loader below repairs names that were
 // left standing when the palette moved under them.
+//
+// ⛔ THESE ARE SSL'S OWN WORDS, NOT OURS. They are the `LedColourType` enum
+// out of SSL 360 itself (strings in Contents/MacOS/SSL360Gui, and the same
+// enum in analysis/ssl360-protobuf/AssignerArgsTypes.reconstructed.proto.txt):
+// White, Red, Green, Blue, Cyan, Magenta, Yellow, Orange, Purple, LightGreen,
+// Pink, LightBlue, Lamp, Black. So 00FFFF is CYAN (not teal), 8000FF is PURPLE
+// (not violet), FF00FF is MAGENTA and PINK is the separate FF0080. Naming a
+// colour ourselves is how the key ended up saying BROWN; the device's own
+// vocabulary can't drift away from the device (Frank 2026-08-27: "SUCH DOCH
+// EINFACH BEI SSL WIE DIE BEI DENEN HEISSEN").
 struct TrackColourName { uint32_t rgb; const char* name; };
 static constexpr TrackColourName kTrackColourNames[] = {
     {0xFF0000, "RED"},    {0xFF8000, "ORANGE"},  {0xFFFF00, "YELLOW"},
-    {0x00FF00, "GREEN"},  {0x00FFFF, "TEAL"},    {0x0000FF, "BLUE"},
-    {0x8000FF, "VIOLET"}, {0xFF00FF, "MAGENTA"}, {0xFF0080, "PINK"},
+    {0x00FF00, "GREEN"},  {0x00FFFF, "CYAN"},    {0x0000FF, "BLUE"},
+    {0x8000FF, "PURPLE"}, {0xFF00FF, "MAGENTA"}, {0xFF0080, "PINK"},
     {0xFFFFFF, "WHITE"},
 };
 // nullptr for a colour the user picked off the palette: it has no name to wear.
@@ -6550,16 +6560,23 @@ static void ensureDynCfgLoaded_()
     // ⛔ A NAME THAT OUTLIVES ITS COLOUR IS A LIE THE KEY TELLS. The defaults
     // above were Material tones until 2026-08-25, and moving them to palette
     // colours left every name Frank had typed sitting on someone else's
-    // swatch: "BROWN" on the teal key, "PINK" on the magenta one, on BOTH
+    // swatch: "BROWN" on the cyan key, "PINK" on the magenta one, on BOTH
     // colour banks at once because the palette is global (Frank 2026-08-27:
-    // "du schreibst als letzte farbe brown. Total falsch. Das ist Teal!").
+    // "du schreibst als letzte farbe brown. Total falsch").
     // Runs once, and only over a name that is still the old palette's own word
     // for that slot, so a name the user chose is never touched.
+    // Version 2 of the repair: version 1 invented its own words (TEAL, VIOLET)
+    // instead of reading SSL's, so a config it already touched needs a second
+    // pass onto the names in kTrackColourNames.
     if (const char* fixed = GetExtState("rea_sixty", "track_bank_col_names_fixed");
-        !(fixed && fixed[0])) {
-        static const char* kOldPaletteName[8] = {
-            "RED", "ORANGE", "YELLOW", "GREEN",
-            "BLUE", "VIOLET", "PINK", "BROWN",
+        !(fixed && fixed[0] == '2')) {
+        // Per slot: the words this slot may have been left holding — the old
+        // Material palette's own word, plus anything an earlier repair wrote.
+        static const char* kStaleName[8][2] = {
+            {"RED",    nullptr}, {"ORANGE", nullptr},
+            {"YELLOW", nullptr}, {"GREEN",  nullptr},
+            {"BLUE",   nullptr}, {"VIOLET", nullptr},
+            {"PINK",   nullptr}, {"BROWN",  "TEAL"},
         };
         for (int i = 0; i < 8; ++i) {
             std::string cur;
@@ -6567,7 +6584,10 @@ static void ensureDynCfgLoaded_()
                 std::lock_guard<std::mutex> lk(g_trackBankColourNameMx);
                 cur = g_trackBankColourName[i];
             }
-            if (cur.empty() || !sameWordCi_(cur, kOldPaletteName[i])) continue;
+            if (cur.empty()) continue;
+            bool stale = false;
+            for (const char* w : kStaleName[i]) stale = stale || sameWordCi_(cur, w);
+            if (!stale) continue;
             const char* now = trackColourNameFor_(g_trackBankColour[i].load());
             if (!now || sameWordCi_(cur, now)) continue;
             {
@@ -6578,7 +6598,7 @@ static void ensureDynCfgLoaded_()
             std::snprintf(nk2, sizeof(nk2), "track_bank_col_name_%d", i);
             SetExtState("rea_sixty", nk2, now, true);
         }
-        SetExtState("rea_sixty", "track_bank_col_names_fixed", "1", true);
+        SetExtState("rea_sixty", "track_bank_col_names_fixed", "2", true);
     }
     for (int i = 0; i < 8; ++i) {
         char k[32]; std::snprintf(k, sizeof(k), "dyn_bank_ctrl_%d", i);
