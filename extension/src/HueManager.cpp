@@ -1013,8 +1013,17 @@ void HueManager::runRefresh(bool full)
     if (request("GET", resourceUrl(ip, kTypeGroupedLight), std::string(), &body))
         glights = parseGroupedLights(body);
 
-    std::vector<Group> groups;
+    // ⛔ SCENES RIDE EVERY PASS, not with the catalogue. Their `status.active` is
+    // what lights a Hue Scenes soft-key, and that changes the moment anybody
+    // recalls one — us, the Hue app, a wall switch. Parked on the ten-pass
+    // catalogue tick it meant pressing a scene key left the LED dark for up to
+    // ten seconds. Rooms and zones are the genuinely static ones: they change
+    // when somebody rearranges the house.
     std::vector<Scene> scenes;
+    if (request("GET", resourceUrl(ip, kTypeScene), std::string(), &body))
+        scenes = parseScenes(body);
+
+    std::vector<Group> groups;
     if (full) {
         if (request("GET", resourceUrl(ip, kTypeRoom), std::string(), &body))
             groups = parseGroups(body, /*zones=*/false);
@@ -1022,8 +1031,6 @@ void HueManager::runRefresh(bool full)
             std::vector<Group> zones = parseGroups(body, /*zones=*/true);
             groups.insert(groups.end(), zones.begin(), zones.end());
         }
-        if (request("GET", resourceUrl(ip, kTypeScene), std::string(), &body))
-            scenes = parseScenes(body);
     }
 
     const size_t nl = lights.size();
@@ -1032,10 +1039,8 @@ void HueManager::runRefresh(bool full)
         std::lock_guard<std::mutex> lk(cfgMx_);
         lights_        = std::move(lights);
         groupedLights_ = std::move(glights);
-        if (full) {
-            groups_ = std::move(groups);
-            scenes_ = std::move(scenes);
-        }
+        scenes_        = std::move(scenes);
+        if (full) groups_ = std::move(groups);
         ng = groups_.size();
     }
 
