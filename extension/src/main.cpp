@@ -35819,6 +35819,21 @@ static void tickHueTransport_()
 {
     auto& hm = uf8::hue::manager();
 
+    // ---- saving the configuration -----------------------------------------
+    // ⛔ THE SINGLE OWNER, AND IT IS NOT THE SETTINGS PANE. Two things go wrong
+    // when the pane saves: it saved on the first frame after every restart
+    // (a watcher for the arriving key called persist() alongside it), so a
+    // configuration that had failed to load was written back empty over the
+    // stored one — and the WORKER changes persisted state too, filling in the
+    // address on discovery and the bridge id on verification, which a
+    // pane-driven save loses whenever the pane is closed.
+    //
+    // takeConfigDirty() is true only when a setter actually ran, so an untouched
+    // configuration is never written, and this runs whether Settings is open or
+    // not. Costs one atomic exchange per tick when nothing changed.
+    if (hm.takeConfigDirty())
+        SetExtState("rea_sixty", "hue_config", hm.serialize().c_str(), true);
+
     // ---- recording light ---------------------------------------------------
     {
         static bool sWasRec = false;
@@ -44960,9 +44975,9 @@ void registerBindingHandlers()
             if (!firing) return;
             uf8::hue::RecLightConfig rc = uf8::hue::manager().recLight();
             rc.enabled = !rc.enabled;
+            // No write here: setRecLight marks the config dirty and
+            // tickHueTransport_ flushes it, which is the one place that saves.
             uf8::hue::manager().setRecLight(rc);
-            SetExtState("rea_sixty", "hue_config",
-                        uf8::hue::manager().serialize().c_str(), true);
         },
         [](int) { return uf8::hue::manager().recLight().enabled; },
         "Hue: recording light on / off", false

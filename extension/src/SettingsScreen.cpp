@@ -20652,10 +20652,6 @@ static void drawHueTab_(ImGui_Context* ctx)
             mgr.deserializeCredentials(key);
     }
 
-    auto persist = [&]() {
-        const std::string blob = mgr.serialize();
-        SetExtState("rea_sixty", "hue_config", blob.c_str(), true);
-    };
     auto persistKey = [&]() {
         const std::string key = mgr.serializeCredentials();
         SetExtState("rea_sixty", "hue_key", key.c_str(), true);
@@ -20743,7 +20739,6 @@ static void drawHueTab_(ImGui_Context* ctx)
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_Button(ctx, "Forget##hue_forget", nullptr, nullptr)) {
         mgr.forget();
-        persist();
         persistKey();
     }
 
@@ -20758,15 +20753,17 @@ static void drawHueTab_(ImGui_Context* ctx)
         }
     }
 
-    // ⛔ AND THE CONFIG IS SAVED ONLY WHEN SOMETHING ACTUALLY CHANGED IT.
-    // This block used to call persist() alongside persistKey() above, to catch
-    // the ip + bridge id that pairing fills in on the worker thread. On the
-    // first frame after a restart s_lastKey is empty and the stored key is not,
-    // so it fired every time the pane opened — and if the config had failed to
-    // load for any reason, that wrote the empty result straight back over the
-    // stored one. takeConfigDirty is true only when a setter ran, so a pane that
-    // opens on a configuration nobody has touched now writes nothing at all.
-    if (mgr.takeConfigDirty()) persist();
+    // ⛔ THE PANE DOES NOT SAVE THE CONFIGURATION. tickHueTransport_() in
+    // main.cpp owns that, on every onTimer tick: it flushes whenever
+    // takeConfigDirty() says a setter actually ran.
+    //
+    // Two reasons it does not live here. The pane used to save on the first
+    // frame after every restart — a watcher for the arriving key called
+    // persist() alongside persistKey(), and the remembered key starts empty — so
+    // a configuration that had failed to load got written back empty over the
+    // stored one. And the worker changes persisted state too (discovery fills in
+    // the address, verification stores the bridge id); tying the save to a pane
+    // being open would lose those whenever it is not.
 
     // IP by hand — for a bridge discovery cannot see (VLAN, no internet).
     {
@@ -20785,7 +20782,6 @@ static void drawHueTab_(ImGui_Context* ctx)
                                     sizeof(s_ip), &tf, nullptr)) {
             mgr.setBridgeIp(s_ip);
             s_shown = s_ip;
-            persist();
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
         ImGui_TextDisabled(ctx,
@@ -20804,7 +20800,6 @@ static void drawHueTab_(ImGui_Context* ctx)
                               found[k].ip.c_str(), k);
                 if (ImGui_Button(ctx, bid, nullptr, nullptr)) {
                     mgr.setBridgeIp(found[k].ip);
-                    persist();
                 }
                 if (k + 1 < found.size()) ImGui_SameLine(ctx, nullptr, nullptr);
             }
@@ -20822,12 +20817,10 @@ static void drawHueTab_(ImGui_Context* ctx)
         bool right = mgr.fillDir() == HueManager::FillDir::Right;
         if (ImGui_RadioButton(ctx, "Fill from left##hue_fill_l", !right)) {
             mgr.setFillDir(HueManager::FillDir::Left);
-            persist();
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_RadioButton(ctx, "Fill from right##hue_fill_r", right)) {
             mgr.setFillDir(HueManager::FillDir::Right);
-            persist();
         }
     }
     ImGui_Spacing(ctx);
@@ -20866,7 +20859,6 @@ static void drawHueTab_(ImGui_Context* ctx)
             if (ImGui_Checkbox(ctx, id, &en)) {
                 c.enabled = en;
                 mgr.setSlot(i, c);
-                persist();
             }
 
             // Label — what the scribble row shows, capped at the row width.
@@ -20887,7 +20879,6 @@ static void drawHueTab_(ImGui_Context* ctx)
                     c.label = s_label[i];
                     s_shown[i] = c.label;
                     mgr.setSlot(i, c);
-                    persist();
                 }
             }
 
@@ -20906,7 +20897,6 @@ static void drawHueTab_(ImGui_Context* ctx)
                                          nullptr, nullptr)) {
                         c.rid.clear(); c.groupId.clear(); c.bridgeName.clear();
                         mgr.setSlot(i, c);
-                        persist();
                     }
                     for (const Light& L : lights) {
                         bool sel = (c.kind == TargetKind::Light && c.rid == L.id);
@@ -20920,7 +20910,6 @@ static void drawHueTab_(ImGui_Context* ctx)
                             if (c.label.empty())
                                 c.label = L.name.substr(0, kLabelChars);
                             mgr.setSlot(i, c);
-                            persist();
                         }
                     }
                     for (const Group& g : groups) {
@@ -20938,7 +20927,6 @@ static void drawHueTab_(ImGui_Context* ctx)
                             if (c.label.empty())
                                 c.label = g.name.substr(0, kLabelChars);
                             mgr.setSlot(i, c);
-                            persist();
                         }
                     }
                     ImGui_EndCombo(ctx);
@@ -20980,7 +20968,6 @@ static void drawHueTab_(ImGui_Context* ctx)
                         if (ImGui_ColorButton(ctx, swId, packed, &swFlags, &w, &h)) {
                             c.colour = k;
                             mgr.setSlot(i, c);
-                            persist();
                             ImGui_CloseCurrentPopup(ctx);
                         }
                         if ((k % perRow) != (perRow - 1) && k != palCount - 1)
@@ -20998,7 +20985,6 @@ static void drawHueTab_(ImGui_Context* ctx)
                 if (ImGui_Checkbox(ctx, id, &rec)) {
                     c.recLight = rec;
                     mgr.setSlot(i, c);
-                    persist();
                 }
             }
 
@@ -21082,7 +21068,7 @@ static void drawHueTab_(ImGui_Context* ctx)
             changed = true;
         }
 
-        if (changed) { mgr.setControls(ctl); persist(); }
+        if (changed) { mgr.setControls(ctl); }
 
         ImGui_TextDisabled(ctx,
             "  Strip keys: CUT = on / off, SOLO = light solo, "
@@ -21144,7 +21130,6 @@ static void drawHueTab_(ImGui_Context* ctx)
                                          nullptr, nullptr)) {
                         s = SceneSlot{};
                         mgr.setSceneSlot(i, s);
-                        persist();
                     }
                     for (const Scene& sc : scenes) {
                         bool sel = (s.id == sc.id);
@@ -21155,7 +21140,6 @@ static void drawHueTab_(ImGui_Context* ctx)
                             s.bridgeName = sc.name;
                             if (s.label.empty()) s.label = sc.name.substr(0, 12);
                             mgr.setSceneSlot(i, s);
-                            persist();
                         }
                     }
                     ImGui_EndCombo(ctx);
@@ -21178,7 +21162,6 @@ static void drawHueTab_(ImGui_Context* ctx)
                     s.label = s_lbl[i];
                     s_shown[i] = s.label;
                     mgr.setSceneSlot(i, s);
-                    persist();
                 }
             }
 
@@ -21191,7 +21174,6 @@ static void drawHueTab_(ImGui_Context* ctx)
                 if (ImGui_ColorEdit3(ctx, id, &col, &ceFlags)) {
                     s.rgb = static_cast<uint32_t>(col) & 0xFFFFFFu;
                     mgr.setSceneSlot(i, s);
-                    persist();
                 }
             }
         }
@@ -21315,7 +21297,7 @@ static void drawHueTab_(ImGui_Context* ctx)
             }
         }
 
-        if (changed) { mgr.setRecLight(rc); persist(); }
+        if (changed) { mgr.setRecLight(rc); }
 
         ImGui_TextDisabled(ctx,
             "  Only the record state touches the lights. Play and stop leave "
@@ -21369,7 +21351,7 @@ static void drawHueTab_(ImGui_Context* ctx)
                 changed = true;
             }
         }
-        if (changed) { mgr.setMarkers(mc); persist(); }
+        if (changed) { mgr.setMarkers(mc); }
 
         ImGui_TextDisabled(ctx,
             "  A marker named hue:Relax recalls the scene Relax while the "
