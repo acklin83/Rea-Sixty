@@ -32,13 +32,23 @@ double wrapDeg(double d)
     return d;
 }
 
-// Tabs and newlines are the field and record separators of the persisted form,
-// so a light called "Spot\tlinks" would otherwise shift every later column.
+// ⛔ NO NEWLINE MAY EVER REACH THE PERSISTED FORM. ExtState is backed by an INI
+// file, and a value containing a newline does not survive the round trip: the
+// write succeeds, the read comes back cut at the first line, and the whole
+// configuration is silently gone on the next REAPER start. The first version of
+// this serialiser used '\n' between records and cost Frank his settings
+// (2026-08-27). DynaMount got this right from the beginning and uses ';', which
+// is why its config has always come back.
+//
+// So: '\t' between fields, ';' between records, and all three characters are
+// scrubbed out of every stored string.
+constexpr char kRecordSep = ';';
+
 std::string sanitize(const std::string& in)
 {
     std::string out = in;
     for (char& c : out)
-        if (c == '\t' || c == '\n' || c == '\r') c = ' ';
+        if (c == '\t' || c == '\n' || c == '\r' || c == kRecordSep) c = ' ';
     return out;
 }
 
@@ -59,6 +69,21 @@ int toInt(const std::string& s, int dflt = 0)
 {
     return s.empty() ? dflt : std::atoi(s.c_str());
 }
+
+// ⇨ SPACING FOR A BURST ACROSS DIFFERENT TARGETS, which is a different problem
+// from the per-target rate limit and was wrongly solved with the same number.
+//
+// kLightMinGapMs (100 ms) governs how fast you may write to ONE lamp again. A
+// burst never does that: it writes lamp A, then lamp B, then lamp C. What bounds
+// it is the Zigbee network as a whole, about 25 commands a second in practice.
+// Pacing a burst at 100 ms per lamp therefore paid a bill nobody had sent, and it
+// is why the recording light snapped on in one broadcast but took three or four
+// seconds to release: coming back is one write per lamp, and fourteen lamps at
+// 100 ms is a second and a half of pure sleeping on top of the round trips.
+//
+// The gap is measured from the last write rather than slept after each one, so
+// the request's own round trip counts towards it.
+constexpr int64_t kBurstGapMs = 40;   // 25 writes/s across the network
 
 // The fader's very bottom is a dead zone that means "off" rather than "1 %".
 // One percent of travel: wide enough to reach with a motor fader, narrow enough
@@ -601,19 +626,20 @@ void HueManager::recordingStopped()
 std::string HueManager::serialize()
 {
     std::lock_guard<std::mutex> lk(cfgMx_);
-    std::string out = "V1\n";
+    std::string out = "V1";
+    out += kRecordSep;
 
-    out += "ip\t" + sanitize(ip_) + "\t" + sanitize(bridgeId_) + "\n";
+    out += "ip\t" + sanitize(ip_) + "\t" + sanitize(bridgeId_) + kRecordSep;
     out += std::string("fill\t")
-         + (fill_.load() == FillDir::Right ? "1" : "0") + "\n";
+         + (fill_.load() == FillDir::Right ? "1" : "0") + kRecordSep;
 
     char b[256];
-    std::snprintf(b, sizeof(b), "ctl\t%d\t%d\t%d\t%d\t%d\n",
+    std::snprintf(b, sizeof(b), "ctl\t%d\t%d\t%d\t%d\t%d%c",
                   static_cast<int>(controls_.pot),
                   static_cast<int>(controls_.potFlip),
                   static_cast<int>(controls_.push),
                   controls_.bottomOff ? 1 : 0,
-                  controls_.transitionMs);
+                  controls_.transitionMs, kRecordSep);
     out += b;
 
     std::snprintf(b, sizeof(b), "rec\t%d\t%d\t%u\t%d\t%d\t",
@@ -624,12 +650,12 @@ std::string HueManager::serialize()
                   static_cast<int>(recCfg_.restore));
     out += b;
     out += sanitize(recCfg_.groupId) + "\t"
-         + sanitize(recCfg_.restoreSceneId) + "\n";
+         + sanitize(recCfg_.restoreSceneId) + kRecordSep;
 
     std::snprintf(b, sizeof(b), "mrk\t%d\t%d\t",
                   markerCfg_.enabled ? 1 : 0, markerCfg_.durationMs);
     out += b;
-    out += sanitize(markerCfg_.prefix) + "\n";
+    out += sanitize(markerCfg_.prefix) + kRecordSep;
 
     for (int i = 0; i < kMaxSlots; ++i) {
         const SlotConfig& c = slots_[static_cast<size_t>(i)];
@@ -638,7 +664,7 @@ std::string HueManager::serialize()
                       c.colour, c.recLight ? 1 : 0);
         out += b;
         out += sanitize(c.rid) + "\t" + sanitize(c.groupId) + "\t"
-             + sanitize(c.label) + "\t" + sanitize(c.bridgeName) + "\n";
+             + sanitize(c.label) + "\t" + sanitize(c.bridgeName) + kRecordSep;
     }
 
     for (int i = 0; i < kMaxScenes; ++i) {
@@ -646,7 +672,7 @@ std::string HueManager::serialize()
         std::snprintf(b, sizeof(b), "scene\t%d\t%u\t", i, s.rgb);
         out += b;
         out += sanitize(s.id) + "\t" + sanitize(s.label) + "\t"
-             + sanitize(s.bridgeName) + "\n";
+             + sanitize(s.bridgeName) + kRecordSep;
     }
     return out;
 }
@@ -660,12 +686,15 @@ void HueManager::deserialize(const std::string& s)
         sceneSlots_.fill(SceneSlot{});
     }
 
+    // Records end at ';'. '\n' is still accepted as a separator so a blob left
+    // over from the version that used newlines still parses — whatever of it
+    // survived the INI round trip, which was the first line and nothing else.
     size_t pos = 0;
     while (pos <= s.size()) {
-        const size_t nl = s.find('\n', pos);
+        const size_t end = s.find_first_of(";\n", pos);
         const std::string line =
-            s.substr(pos, (nl == std::string::npos) ? std::string::npos : nl - pos);
-        pos = (nl == std::string::npos) ? s.size() + 1 : nl + 1;
+            s.substr(pos, (end == std::string::npos) ? std::string::npos : end - pos);
+        pos = (end == std::string::npos) ? s.size() + 1 : end + 1;
         if (line.empty()) continue;
 
         const std::vector<std::string> f = splitTabs(line);
@@ -1046,11 +1075,22 @@ void HueManager::adoptFromBridge(double* sentBri, Xy* sentXy)
                 if (G.dimmable && G.briPercent > 0.0) S.bri.store(G.briPercent);
             }
             // A grouped_light reports NO colour (see HueClient.h), so the colour
-            // comes from the first member lamp that has one. That is what a
-            // person walking into the room would call the room's colour, and it
-            // beats a bar frozen on whatever we last sent.
+            // comes from a member lamp.
+            //
+            // ⛔ AND IT MUST BE A COLOUR-CAPABLE ONE. Taking the first member
+            // that happened to be on is what made a scene's colour never appear
+            // on a room: most rooms mix colour lamps with white-ambiance ones,
+            // and a white lamp reports mirek_valid, which puts the slot into
+            // white mode — where liveRgb24 ignores hue and saturation outright.
+            // One white lamp early in the bridge's ordering was enough to freeze
+            // the whole room in white for good. A lamp that reports a gamut can
+            // do colour; that is the one worth asking. Only when the room has no
+            // such lamp at all does a white one get to answer, and then white
+            // really is the room's colour.
             for (const Group& room : roomSnap) {
                 if (room.id != cfg.groupId) continue;
+                const Light* colourLamp = nullptr;
+                const Light* anyLamp    = nullptr;
                 for (const Light& L : lightSnap) {
                     const bool member =
                         std::find(room.childRids.begin(), room.childRids.end(),
@@ -1058,9 +1098,11 @@ void HueManager::adoptFromBridge(double* sentBri, Xy* sentXy)
                      || std::find(room.childRids.begin(), room.childRids.end(),
                                   L.id) != room.childRids.end();
                     if (!member || !L.on) continue;
-                    adoptColour(i, L);
-                    break;
+                    if (!anyLamp) anyLamp = &L;
+                    if (L.gamut.valid) { colourLamp = &L; break; }
                 }
+                if (const Light* pick = colourLamp ? colourLamp : anyLamp)
+                    adoptColour(i, *pick);
                 break;
             }
             break;
@@ -1218,11 +1260,13 @@ void HueManager::applyRecLight(bool on)
                     if (c.enabled && c.recLight && !c.rid.empty())
                         marked.push_back(c);
             }
+            int64_t nextAt = 0;
             for (const SlotConfig& c : marked) {
+                if (const int64_t wait = nextAt - nowMs(); wait > 0)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(wait));
+                nextAt = nowMs() + kBurstGapMs;
                 request("PUT", resourceUrl(ip, typeForKind(c.kind), c.rid), body,
                         nullptr);
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(minGapMsForKind(c.kind)));
             }
         }
         return;
@@ -1242,7 +1286,9 @@ void HueManager::applyRecLight(bool on)
 
     // Per LIGHT, not per group: a grouped_light can be written in one broadcast
     // but never read back per lamp, so restoring through it would flatten a room
-    // whose lamps were on different colours.
+    // whose lamps were on different colours. Paced at the network budget, not at
+    // the per-lamp rate — see kBurstGapMs.
+    int64_t nextAt = 0;
     for (const Saved& s : saved) {
         LightWrite w;
         w.setOn = true; w.on = s.on;
@@ -1252,8 +1298,10 @@ void HueManager::applyRecLight(bool on)
             else if (s.hasMirek) { w.setMirek = true; w.mirek = s.mirek; }
         }
         w.durationMs = transition;
+        if (const int64_t wait = nextAt - nowMs(); wait > 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(wait));
+        nextAt = nowMs() + kBurstGapMs;
         request("PUT", resourceUrl(ip, kTypeLight, s.id), lightBody(w), nullptr);
-        std::this_thread::sleep_for(std::chrono::milliseconds(kLightMinGapMs));
     }
 }
 

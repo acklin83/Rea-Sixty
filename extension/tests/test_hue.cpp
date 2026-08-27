@@ -13,6 +13,7 @@
 
 #include "HueClient.h"
 #include "HueColor.h"
+#include "HueManager.h"
 
 #include <cmath>
 #include <cstdio>
@@ -463,6 +464,153 @@ int main()
             "{\"errors\":[{\"description\":\"device (light) has communication "
             "issues\"}],\"data\":[]}", &msg));
         EXPECT(msg.find("communication") != std::string::npos);
+    }
+
+    // ======================= persistence ====================================
+    //
+    // ⛔ THE ONE THAT COST FRANK HIS SETTINGS (2026-08-27). The first serialiser
+    // put a newline between records. ExtState is backed by an INI file: the write
+    // succeeded, the read came back cut at the first line, and every slot was
+    // silently gone on the next REAPER start. There is no error anywhere in that
+    // sequence, which is why it needs a test rather than a code review.
+    {
+        HueManager mgr;
+
+        SlotConfig lamp;
+        lamp.enabled    = true;
+        lamp.label      = "DRUMS";
+        lamp.kind       = TargetKind::Light;
+        lamp.rid        = "l-1";
+        lamp.bridgeName = "Spot links";
+        lamp.colour     = 3;
+        lamp.recLight   = true;
+        mgr.setSlot(0, lamp);
+
+        SlotConfig zone;
+        zone.enabled    = true;
+        zone.label      = "DECKE";
+        zone.kind       = TargetKind::Group;
+        zone.rid        = "gl-9";
+        zone.groupId    = "room-1";     // the zone colour lookup needs this one
+        zone.bridgeName = "Studio";
+        mgr.setSlot(2, zone);
+
+        SceneSlot sc;
+        sc.id         = "sc-1";
+        sc.label      = "TRACK";
+        sc.bridgeName = "Tracking";
+        sc.rgb        = 0xE04A3Cu;
+        mgr.setSceneSlot(1, sc);
+
+        Controls ctl;
+        ctl.pot          = PotRole::Saturation;
+        ctl.potFlip      = PotRole::Warmth;
+        ctl.push         = PushRole::OnOff;
+        ctl.bottomOff    = false;
+        ctl.transitionMs = 250;
+        mgr.setControls(ctl);
+
+        RecLightConfig rc;
+        rc.enabled        = true;
+        rc.target         = RecTarget::Group;
+        rc.groupId        = "room-1";
+        rc.rgb            = 0xFF0000u;
+        rc.brightness     = 90.0;
+        rc.restore        = RecRestore::Scene;
+        rc.restoreSceneId = "sc-2";
+        mgr.setRecLight(rc);
+
+        MarkerConfig mc;
+        mc.enabled    = true;
+        mc.prefix     = "licht:";
+        mc.durationMs = 800;
+        mgr.setMarkers(mc);
+
+        mgr.setFillDir(HueManager::FillDir::Right);
+
+        const std::string blob = mgr.serialize();
+
+        // The invariant, stated on its own so a failure names the cause.
+        EXPECT(blob.find('\n') == std::string::npos);
+        EXPECT(blob.find('\r') == std::string::npos);
+
+        HueManager back;
+        back.deserialize(blob);
+
+        const SlotConfig l2 = back.slot(0);
+        EXPECT(l2.enabled && l2.label == "DRUMS");
+        EXPECT(l2.kind == TargetKind::Light && l2.rid == "l-1");
+        EXPECT(l2.bridgeName == "Spot links");   // a name WITH A SPACE in it
+        EXPECT(l2.colour == 3 && l2.recLight);
+
+        const SlotConfig z2 = back.slot(2);
+        EXPECT(z2.enabled && z2.kind == TargetKind::Group);
+        EXPECT(z2.rid == "gl-9");
+        // Without this the zone's colour lookup finds no room and the strip
+        // never follows a scene.
+        EXPECT(z2.groupId == "room-1");
+
+        // A slot that was never filled stays empty rather than inheriting.
+        EXPECT(!back.slot(1).enabled && back.slot(1).rid.empty());
+
+        const SceneSlot s2 = back.sceneSlot(1);
+        EXPECT(s2.id == "sc-1" && s2.label == "TRACK");
+        EXPECT(s2.bridgeName == "Tracking" && s2.rgb == 0xE04A3Cu);
+
+        const Controls c2 = back.controls();
+        EXPECT(c2.pot == PotRole::Saturation && c2.potFlip == PotRole::Warmth);
+        EXPECT(c2.push == PushRole::OnOff && !c2.bottomOff);
+        EXPECT(c2.transitionMs == 250);
+
+        const RecLightConfig r2 = back.recLight();
+        EXPECT(r2.enabled && r2.target == RecTarget::Group);
+        EXPECT(r2.groupId == "room-1" && r2.rgb == 0xFF0000u);
+        EXPECT(static_cast<int>(r2.brightness + 0.5) == 90);
+        EXPECT(r2.restore == RecRestore::Scene && r2.restoreSceneId == "sc-2");
+
+        const MarkerConfig m2 = back.markers();
+        EXPECT(m2.enabled && m2.prefix == "licht:" && m2.durationMs == 800);
+
+        EXPECT(back.fillDir() == HueManager::FillDir::Right);
+
+        // Serialising what came back has to give the same bytes, or a config
+        // loses a little more of itself on every REAPER start.
+        EXPECT(back.serialize() == blob);
+    }
+
+    {
+        // A name carrying a separator must not shift every later column.
+        HueManager mgr;
+        SlotConfig c;
+        c.enabled    = true;
+        c.rid        = "l-9";
+        c.bridgeName = "Spot;\trechts\nhinten";
+        c.label      = "A;B";
+        mgr.setSlot(0, c);
+
+        const std::string blob = mgr.serialize();
+        EXPECT(blob.find('\n') == std::string::npos);
+
+        HueManager back;
+        back.deserialize(blob);
+        const SlotConfig r = back.slot(0);
+        EXPECT(r.enabled && r.rid == "l-9");
+        // Scrubbed one-for-one, not truncated: ';' and '\t' each become a space,
+        // so "Spot;\trechts" keeps both gaps and the row stays aligned.
+        EXPECT(r.bridgeName == "Spot  rechts hinten");
+        EXPECT(r.label == "A B");
+    }
+
+    {
+        // Credentials live apart so a shared setup bundle can carry the slots
+        // without them, and they round-trip on their own.
+        HueManager mgr;
+        EXPECT(!mgr.haveAppKey());
+        mgr.deserializeCredentials("APPKEY123\tCLIENTKEY456");
+        EXPECT(mgr.haveAppKey());
+        const std::string k = mgr.serializeCredentials();
+        EXPECT(k == "APPKEY123\tCLIENTKEY456");
+        EXPECT(k.find('\n') == std::string::npos);
     }
 
     std::printf("test_hue: all good\n");

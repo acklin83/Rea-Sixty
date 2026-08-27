@@ -730,9 +730,22 @@ if(NOT WIN32)
     target_link_libraries(test_dynamount PRIVATE Threads::Threads)
     add_test(NAME dynamount COMMAND test_dynamount)
 
-    # Hue: colour maths + the CLIP v2 wire. Needs WDL for the JSON parser.
-    add_executable(test_hue tests/test_hue.cpp src/HueColor.cpp src/HueClient.cpp)
+    # Hue: colour maths, the CLIP v2 wire, and the manager's persistence.
+    # HueManager is in here for ONE reason: serialize/deserialize. A newline in
+    # that blob silently empties the whole configuration on the next REAPER start
+    # (ExtState is an INI file), and no code path anywhere reports an error — so
+    # the round trip needs a test, and that drags in the HTTP client behind it.
+    add_executable(test_hue tests/test_hue.cpp
+        src/HueColor.cpp src/HueClient.cpp src/HueManager.cpp)
     target_include_directories(test_hue PRIVATE src "${WDL_DIR}")
+    target_link_libraries(test_hue PRIVATE Threads::Threads)
+    if(APPLE)
+        target_sources(test_hue PRIVATE src/macos_http.mm)
+        target_link_libraries(test_hue PRIVATE "-framework Foundation")
+    else()
+        target_sources(test_hue PRIVATE src/linux_http.cpp)
+        target_link_libraries(test_hue PRIVATE ${CMAKE_DL_LIBS})
+    endif()
     add_test(NAME hue COMMAND test_hue)
 
     add_executable(test_ssl_meter tests/test_ssl_meter.cpp src/SslMeterProtocol.cpp)
