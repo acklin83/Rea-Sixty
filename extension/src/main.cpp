@@ -27639,11 +27639,15 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive, active));
     }
 
-    // Solo / Cut button LEDs (cap64/cap65 ground truth). FF39 level byte: 0x11 =
-    // green (soloed), 0x12 = bright red (muted), 0x00 = dim/off. Change-detected
-    // against the focused track's I_SOLO / B_MUTE. FACTORY solo/cut meaning; a user
-    // rebind supersedes this later. Re-enable (FF3B) on `changed` because the
-    // layout mode frames re-latch the button-LED bank.
+    // Solo / Cut button LEDs (cap64/cap65 ground truth). The scheme is the UF8's
+    // (buildLedColourPair, Protocol.cpp): LIT sends FF38 = the colour and FF39 =
+    // 0x00; RESTING sends the dim colour in BOTH frames. The bytes themselves
+    // live next to the scheme in UF1Protocol.h — an early reading of the capture
+    // that called 0x11 "green (soloed)" and 0x00 "dim/off" had the two frames'
+    // roles the wrong way round and is gone. Change-detected against the focused
+    // track's I_SOLO / B_MUTE. FACTORY solo/cut meaning; a user rebind supersedes
+    // this later. Re-enable (FF3B) on `changed` because the layout mode frames
+    // re-latch the button-LED bank.
     {
         static int sSolo = -1, sMute = -1;
         // Extender send mode: CUT reflects (+ toggles) the 9th SEND's mute; the

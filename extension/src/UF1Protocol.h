@@ -166,12 +166,21 @@ constexpr uint8_t kEqGraph = 0x03;   // EQ-graph tint (via "EQ Colour")
 constexpr uint8_t kPrimSoloLit = 0xff;  // g=15,r=15 → yellow, like REAPER's solo
 constexpr uint8_t kPrimCutLit  = 0x0f;  // g=0,r=15  → pure bright red
 constexpr uint8_t kFf39Lit     = 0x00;  // FF39 carries 0x00 on the lit transition
-constexpr uint8_t kDimSolo     = 0x22;  // g=2,r=2   → dim YELLOW (resting). Follows
+// ⇨ THE RESTING LEVEL IS THE UF8'S, BYTE FOR BYTE. Both surfaces send the same
+// pair of frames for an unlit LED (FF38 = FF39 = the dim colour, see the scheme
+// above and buildLedColourPair in Protocol.cpp), so "the same as the UF8" is a
+// question with an exact answer: ledColourYellow's dim pair is (0x11, 0xF0) and
+// ledColourRed's is (0x01, 0xF0). These were a nibble higher, which is twice the
+// current through the LED and reads as twice the lamp (Frank 2026-08-27: "uf1
+// gleich wie uf8"). Follows the lit colour's hue, one step up from off.
+constexpr uint8_t kDimSolo     = 0x11;  // g=1,r=1   → dim YELLOW (resting). Follows
                                         // kPrimSoloLit: the resting state is the
                                         // same hue at low level, not a different
                                         // colour. Was 0x20, dim green, left behind
-                                        // when the lit state went yellow.
-constexpr uint8_t kDimCut      = 0x02;  // g=0,r=2   → dim red (resting, never fully off)
+                                        // when the lit state went yellow; then 0x22,
+                                        // a step above the UF8's yellow dim byte.
+constexpr uint8_t kDimCut      = 0x01;  // g=0,r=1   → dim red (resting, never fully
+                                        // off). Was 0x02, a step above the UF8's.
 
 // The four DISPLAY soft-key LEDs on the STATE-ONLY path (the keys that carry no
 // per-key colour of their own: Plugin/CS sections, Sends, learned plug-ins, the
