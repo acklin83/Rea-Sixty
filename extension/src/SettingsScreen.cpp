@@ -1150,6 +1150,7 @@ static const char* dynKindLabel_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::TrackColours:
             return reasixty_sp("Track Colours", "Track Colors");
         case DynamicBankKind::Favourites:  return "CS / BC Favourites";
+        case DynamicBankKind::HueScenes:   return "Hue Scenes";
         default:                           return "Off (static slots)";
     }
 }
@@ -1176,6 +1177,7 @@ static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::TrackColours:
             return reasixty_sp("COLOURS", "COLORS");
         case DynamicBankKind::Favourites:  return "FAVS";
+        case DynamicBankKind::HueScenes:   return "HUE";
         default:                           return "";
     }
 }
@@ -5047,7 +5049,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                 static const DynamicBankKind kKinds[] = {
                     DynamicBankKind::None,        DynamicBankKind::FxBank,
                     DynamicBankKind::ParamGroups, DynamicBankKind::TrackColours,
-                    DynamicBankKind::Favourites,
+                    DynamicBankKind::Favourites,  DynamicBankKind::HueScenes,
                 };
                 for (const auto k : kKinds) {
                     bool sel = (k == dynMine);
@@ -5758,6 +5760,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             { DynamicBankKind::TrackColours,
               reasixty_sp("Track Colours", "Track Colors") },
             { DynamicBankKind::Favourites,   "CS / BC Favourites" },
+                { DynamicBankKind::HueScenes,    "Hue Scenes" },
         };
         // This set's OWN kind: the combo is where you give a set a bank, and on a
         // set the empty choice means "take Plain's", not "static".
@@ -5826,6 +5829,16 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             ImGui_TextDisabled(ctx, "CS or BC, whichever you last touched.");
             ImGui_Spacing(ctx);
         }
+
+        if (curKind == DynamicBankKind::HueScenes) {
+            ImGui_TextDisabled(ctx,
+                "The eight scene slots from Settings \xE2\x86\x92 Modes \xE2\x86\x92 Hue, in that "
+                "order. Each key wears its slot's LED colour and lights while "
+                "the bridge reports that scene as the one showing. Push recalls "
+                "it; a long press starts it moving.");
+            ImGui_Spacing(ctx);
+        }
+
 
         if (curKind == DynamicBankKind::FxBank) {
             drawFxBankGestures_(ctx);
@@ -6891,6 +6904,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 { DynamicBankKind::TrackColours,
               reasixty_sp("Track Colours", "Track Colors") },
                 { DynamicBankKind::Favourites,   "CS / BC Favourites" },
+                { DynamicBankKind::HueScenes,    "Hue Scenes" },
             };
             // This set's OWN kind — "Off" on a set means "take Plain's bank".
             const DynamicBankKind curKind =

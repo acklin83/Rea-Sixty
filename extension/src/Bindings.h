@@ -519,6 +519,12 @@ enum class DynamicBankKind : uint8_t {
     // one bank serves both and follows whichever instance you last worked on
     // (Frank 2026-08-18). Keys wear the CS/BC class colour from Appearance.
     Favourites   = 5,
+    // The eight Hue scene slots from Settings → Modes → Hue. Curated on purpose:
+    // a bridge carries dozens of scenes and five of them belong on keys, so the
+    // bank shows the slots the user already picked rather than everything the
+    // house can do. Keys wear each slot's LED colour and light while the bridge
+    // reports that scene as the one showing.
+    HueScenes    = 6,
 };
 
 struct UserQuickSubBank {

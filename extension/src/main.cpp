@@ -6743,8 +6743,25 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
                                     MediaTrack* tr, int slot)
 {
     DynSlotInfo info;
-    if (!tr || slot < 0 || slot >= 8) return info;
+    if (slot < 0 || slot >= 8) return info;
     using DK = uf8::bindings::DynamicBankKind;
+    // ⛔ HUE SCENES RESOLVE WITHOUT A TRACK, so this sits AHEAD of the !tr guard
+    // below. Every other kind describes something ON the focused track; a light
+    // scene belongs to the room. Leaving it after the guard would have made the
+    // whole bank blank on a project with nothing selected.
+    if (kind == DK::HueScenes) {
+        auto& hm = uf8::hue::manager();
+        if (!hm.sceneSlotFilled(slot)) return info;   // empty slot → dark key
+        info.present = true;
+        info.label   = hm.sceneSlotName(slot);
+        if (info.label.empty()) info.label = "Scene";
+        const bool active = hm.sceneSlotActive(slot);
+        info.led    = active ? 2 : 1;
+        info.hasRgb = true;
+        info.rgb    = hm.sceneSlot(slot).rgb;
+        return info;
+    }
+    if (!tr) return info;
     switch (kind) {
         case DK::FxBank:
             return fxBankSlotInfo_(tr, dynBankSlotBase_(kind) + slot);
@@ -6881,6 +6898,8 @@ static DynSlotInfo dynamicBankSlotUf1_(uf8::bindings::DynamicBankKind kind,
     if (kind == DK::FxBank)
         return fxBankSlotInfo_(tr, absIdx);
     if (absIdx < 0 || absIdx >= 8) return DynSlotInfo{};
+    // Hue scenes need no track — dynamicBankSlot_ handles that itself now, and
+    // passing nullptr through is fine for every other kind (they return empty).
     return dynamicBankSlot_(kind, tr, absIdx);
 }
 
@@ -6892,7 +6911,7 @@ static int dynamicBankItemCountUf1_(uf8::bindings::DynamicBankKind kind,
     using DK = uf8::bindings::DynamicBankKind;
     if (kind == DK::FxBank) return tr ? TrackFX_GetCount(tr) : 0;
     if (kind == DK::ParamGroups || kind == DK::TrackColours
-        || kind == DK::Favourites) return 8;
+        || kind == DK::Favourites || kind == DK::HueScenes) return 8;
     return 0;
 }
 
@@ -7151,6 +7170,23 @@ static void applyDynBankColourOp_(MediaTrack* tr, int slot, int gesture)
 // can never disagree with the actions or with the overlay's setting.
 // Gesture 0 (plain push) only: the other four stay free, because on this bank
 // there is no second reading of a favourite to offer (Frank 2026-08-18).
+void uf1FlashTimecode_(std::string_view text, int ms);   // defined with the painter
+
+// Hue scene bank press. Plain push recalls the scene; the LONG press starts it
+// dynamically, which is the same pair the hue_scene_recall actions offer — the
+// two ways in must not disagree about what a long press means. The three
+// modifier gestures stay free: there is no third reading of a scene to offer.
+static void applyDynBankHueSceneOp_(int slot, int gesture)
+{
+    if (slot < 0 || slot >= uf8::hue::kMaxScenes) return;
+    if (gesture != 0 && gesture != 4) return;
+    uf8::hue::manager().recallSceneSlot(slot, /*dynamic=*/gesture == 4);
+    // Flash the name on the UF1's time field, the way a bank change announces
+    // itself — a scene recall is otherwise silent on the surface.
+    if (const std::string nm = uf8::hue::manager().sceneSlotName(slot); !nm.empty())
+        uf1FlashTimecode_(nm, 1200);
+}
+
 static void applyDynBankFavouriteOp_(int slot, int gesture)
 {
     if (slot < 0 || slot >= 8 || gesture != 0) return;
@@ -7165,9 +7201,12 @@ static void applyDynBankReq_(uint32_t enc)
                              (enc >> 16) & 0xFF);
     const int  slot    = (enc >> 8) & 0xFF;
     const int  gesture = enc & 0xFF;
+    using DK = uf8::bindings::DynamicBankKind;
+    // Ahead of the track guard, same reason as the resolver: a scene is not a
+    // property of the focused track.
+    if (kind == DK::HueScenes) { applyDynBankHueSceneOp_(slot, gesture); return; }
     MediaTrack* tr = favContextTrack_();
     if (!tr) return;
-    using DK = uf8::bindings::DynamicBankKind;
     switch (kind) {
         case DK::FxBank:
             applyDynBankFxOp_(tr, dynBankSlotBase_(kind) + slot, gesture);
@@ -7190,8 +7229,12 @@ static void applyDynBankReq_(uint32_t enc)
 static void applyDynBankUf1_(uf8::bindings::DynamicBankKind kind,
                              MediaTrack* tr, int absIdx, int gesture)
 {
-    if (!tr) return;
     using DK = uf8::bindings::DynamicBankKind;
+    if (kind == DK::HueScenes) {
+        if (absIdx >= 0 && absIdx < 8) applyDynBankHueSceneOp_(absIdx, gesture);
+        return;
+    }
+    if (!tr) return;
     switch (kind) {
         case DK::FxBank:
             applyDynBankFxOp_(tr, absIdx, gesture);
@@ -26970,7 +27013,7 @@ static void uf1EncodeSeg7Text_(const char* s, uint8_t out[11])
 // comes back by itself when the deadline passes.
 static std::string g_uf1TcFlashText;
 static int64_t     g_uf1TcFlashUntilMs = 0;
-static void uf1FlashTimecode_(std::string_view text, int ms)
+void uf1FlashTimecode_(std::string_view text, int ms)
 {
     g_uf1TcFlashText.assign(text);
     g_uf1TcFlashUntilMs = nowMs_() + ms;
@@ -26999,6 +27042,9 @@ static std::string uf1BankDisplayName_(int bank, int mod)
         case DynamicBankKind::ParamGroups:  return "GROUPS";
         case DynamicBankKind::TrackColours: return reasixty_sp("COLOURS", "COLORS");
         case DynamicBankKind::Favourites:   return "FAVS";
+        // S C E N E S — every letter of it exists in the 7-segment font. K, M,
+        // V, W and X do not, so "SCENES" was checked before it was chosen.
+        case DynamicBankKind::HueScenes:    return "SCENES";
         default: break;
     }
     char b[16];

@@ -2056,7 +2056,7 @@ void parseSubBankDynamic_(wdl_json_element* root, Config& out, int forceLayer = 
         if (layer   < 0 || layer   >= 3)                 continue;
         if (quick   < 0 || quick   >= kQuicksPerLayer)   continue;
         if (subBank < 0 || subBank >= kSubBanksPerQuick) continue;
-        if (kind < 0 || kind > static_cast<int>(DynamicBankKind::Favourites))
+        if (kind < 0 || kind > static_cast<int>(DynamicBankKind::HueScenes))
             continue;
         int mod = 0;   // absent = Plain (pre-v26 shape)
         if (auto* v = eo->get_item_by_name("mod"))
@@ -2130,7 +2130,7 @@ void parseUf1SoftBankDynamic_(wdl_json_element* root, Config& out)
         if (auto* v = eo->get_item_by_name("kind"))
             if (auto* s = v->get_string_value(true)) kind = std::atoi(s);
         if (bank < 0 || bank >= kUf1SoftBankCount) continue;
-        if (kind < 0 || kind > static_cast<int>(DynamicBankKind::Favourites))
+        if (kind < 0 || kind > static_cast<int>(DynamicBankKind::HueScenes))
             continue;
         int mod = 0;   // absent = Plain (pre-v26 shape)
         if (auto* v = eo->get_item_by_name("mod"))

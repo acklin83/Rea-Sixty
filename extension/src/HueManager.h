@@ -232,6 +232,11 @@ public:
     bool recallSceneByName(const std::string& name, bool dynamic, int durationMs);
     // Name of the scene in a slot, for the display flash. Empty when unset.
     std::string sceneSlotName(int slot);
+    // Is the scene in this slot the one the bridge currently reports as showing?
+    // Drives the soft-key LED, so it resolves under one lock rather than making
+    // a caller copy the whole scene list eight times a frame.
+    bool        sceneSlotActive(int slot);
+    bool        sceneSlotFilled(int slot);
 
     // ---- recording light ----------------------------------------------------
     // Called from the transport edge in onTimerBody_. Idempotent: calling

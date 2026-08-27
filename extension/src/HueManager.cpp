@@ -614,6 +614,24 @@ std::string HueManager::sceneSlotName(int slot)
     return s.bridgeName;
 }
 
+bool HueManager::sceneSlotActive(int slot)
+{
+    if (slot < 0 || slot >= kMaxScenes) return false;
+    std::lock_guard<std::mutex> lk(cfgMx_);
+    const std::string& id = sceneSlots_[static_cast<size_t>(slot)].id;
+    if (id.empty()) return false;
+    for (const Scene& s : scenes_)
+        if (s.id == id) return s.active;
+    return false;
+}
+
+bool HueManager::sceneSlotFilled(int slot)
+{
+    if (slot < 0 || slot >= kMaxScenes) return false;
+    std::lock_guard<std::mutex> lk(cfgMx_);
+    return !sceneSlots_[static_cast<size_t>(slot)].id.empty();
+}
+
 // ---- recording light --------------------------------------------------------
 
 void HueManager::recordingStarted()
