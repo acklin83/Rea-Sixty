@@ -1683,13 +1683,44 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                     // big session track 130 announced itself as
                                     // track 2 and the meter followed the wrong
                                     // one. Sessions that large are ordinary here.
-                                    int v = 0, shift = 0; size_t k = 9;
-                                    while (k < avail && shift <= 28) {
-                                        v |= int(pay[k] & 0x7f) << shift;
+                                    // ⛔ AND A NEGATIVE INDEX IS TEN BYTES, NOT FIVE.
+                                    // The master announces -1, and protobuf encodes a
+                                    // negative int32 sign-extended to 64 bits: the wire
+                                    // carries `08 ff ff ff ff ff ff ff ff ff 01`,
+                                    // measured on both platforms 2026-08-28. Stopping
+                                    // at `shift <= 28` reads FIVE of those ten bytes
+                                    // and leaves the loop mid-number, and the last
+                                    // accumulate, `int(0x7f) << 28`, is signed overflow
+                                    // — undefined, so the two compilers were free to
+                                    // disagree, and on Windows one of two identical
+                                    // streams came out as 127 (0x7f = exactly one byte
+                                    // of it) while the other read -1. Two instances of
+                                    // the same thing landed in different track spaces,
+                                    // liveMeterPorts_ then saw one of each, and the
+                                    // resolver said "sole instance" and could not tell
+                                    // them apart at all.
+                                    // Accumulate in uint64_t over the full ten bytes
+                                    // and narrow at the end: no overflow, no UB, and
+                                    // the sign extension lands where it belongs.
+                                    uint64_t u = 0; int shift = 0; size_t k = 9;
+                                    while (k < avail && shift <= 63) {
+                                        u |= uint64_t(pay[k] & 0x7f) << shift;
                                         if (!(pay[k] & 0x80)) { ++k; break; }
                                         ++k; shift += 7;
                                     }
+                                    const int v = int(int64_t(u));
                                     g_clientIndex[c] = v;             // 1-based track idx
+                                    // The bytes that produced it, so a disagreement
+                                    // like the one above is one grep away instead of a
+                                    // round of guessing across two machines.
+                                    {
+                                        char hex[64] = {0}; int o = 0;
+                                        for (size_t q = 9; q < avail && q < 19 && o < 57; ++q)
+                                            o += std::snprintf(hex + o, sizeof(hex) - o,
+                                                               "%02x", unsigned(pay[q]));
+                                        slogAlways("index varint: avail=%zu bytes=%s -> %d",
+                                                   avail, hex, v);
+                                    }
                                 }
                                 // Queue once this client has announced BOTH; the
                                 // port claim below ties them to the next new port.
