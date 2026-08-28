@@ -24062,6 +24062,25 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // the bars fall like SSL AND switching to an already-frozen instance blanks
     // immediately (no 1 s phantom flash). Set before the getMeter reads below.
     { const int ps = GetPlayState(); sslcore::setTransportStopped(!(ps & 1) && !(ps & 4)); }
+    // ⛔ A TRACK IS NOT AN INSTANCE IDENTITY.
+    // Every peak hold below re-arms on `force || tr != s…Tr` — sFallbackHold,
+    // sBarHold and the needle holds all key off the TRACK. The master's own
+    // chain and its monitoring chain are the SAME track (GetMasterTrack returns
+    // one pointer for both), so switching V-Pot1 between them changed the
+    // stream underneath while every hold kept the previous instance's numbers.
+    // Frank 2026-08-28: "mir friert die ganze zeit der overview peak meter etc.
+    // ein wenn ich zwischen master und mon fx switche" — nothing was frozen,
+    // the holds were simply never told the source had changed. It shows up on
+    // the master first because that is the one track that can carry two
+    // instances the surface calls by different names.
+    // The instance IS the UDP port ([[uf1-meter-instance-identity]]), so make
+    // the edge here, once, and let the existing force-gated resets do the rest
+    // rather than repeating the same comparison at three sites.
+    {
+        static int sMeterPortSeen = 0;
+        const int nowPort = sslcore::currentMeterPort();
+        if (nowPort && nowPort != sMeterPortSeen) { sMeterPortSeen = nowPort; force = true; }
+    }
     // RESET (SK2) request: flash 0x0102=03 for ~150 ms (capture 2026-08-02) and clear
     // our peak-hold statics by forcing a full repaint (the force-gated resets below zero
     // sFallbackHold + sBarHold). The plug-in's OWN held peak needs a Core→plug-in reset
