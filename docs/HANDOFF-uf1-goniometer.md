@@ -56,7 +56,7 @@ the cycle chain never breaks — SSL never stops it (cap84, cap101 pre-entry).
   the box cannot see the UF1 until its driver is reinstalled. **The in-repo
   INF (`extension/resources/rea_sixty_winusb.inf`) + the Settings-button
   installer still lack PID_0025 — TODO.**
-- Windows builds: `ssh claude@192.168.177.197`, repo `C:\Users\claude\
+- Windows builds: `ssh claude@$STOERPC` (the IP is DHCP and moves — resolve it, see `.local-docs/release-process.md`), repo `C:\Users\claude\
   reaper-uf8`, `build_rea.bat`; deploy to **sunny**'s UserPlugins. REAPER must
   be closed (DLL lock — a silently-failed copy cost a round; ALWAYS verify
   deployed timestamp == build timestamp).
