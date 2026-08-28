@@ -2363,23 +2363,46 @@ int meterPortForFx(int trackIndex, bool isPro, bool monitorChain,
     };
     if (live.size() == 1) return say(0, live.front());   // nothing to tell apart
 
-    // ⛔ THERE IS NO "CHAIN" RUNG, AND THERE MUST NOT BE ONE.
-    // A rung sat here that matched the announced NAME against the FX index's
-    // 0x1000000 flag: "HARDWARE OUTPUT" was taken to mean the monitoring chain,
-    // anything else the track's own. It looked like the host stating a fact
-    // instead of us inferring one, which is why it was placed AHEAD of settings.
-    // It was neither. Frank 2026-08-28: *"die hocken doch beide auf hardware
-    // out! ist ja logisch! master IST hardware out in reaper"* — the master IS
-    // the hardware output, so that name does not separate its two chains; it can
-    // describe either. The rung was ranking a convention above the one rung that
-    // actually measures something, and on the master it could hand back the
-    // opposite instance with full confidence.
+    // 0 — CHAIN. The master's two FX chains announce DIFFERENT names, and that
+    // is measured, not assumed. Frank muted the master and let both stream
+    // (2026-08-28), which makes them tell each other apart on the wire:
     //
-    // What remains is what can be checked: settings (the values the instance
-    // really streamed), pro-ness (positive evidence only), and last the ordinal.
-    // The name stays useful for LABELLING, where being descriptive is the whole
-    // job — the label reads the FX index's own flag, not this.
-    (void)monitorChain;
+    //   53148 "MASTER"           0[2]=1.5 1[2]=1.5   goniometer nonzero=185 (59/63)
+    //   53140 "HARDWARE OUTPUT"  0[2]=-36 1[2]=-139  goniometer nonzero=1   (77/81)
+    //
+    // With the master muted the TRACK chain still sees the signal and the
+    // HARDWARE OUTPUT does not, so "MASTER" is the track's own chain and
+    // "HARDWARE OUTPUT" is the monitoring one. The FX index carries the same
+    // split in its 0x1000000 flag, so the two sides can simply be matched.
+    //
+    // ⚠ THIS RUNG WAS REMOVED ONCE TODAY AND HAD TO COME BACK. Frank said "die
+    // hocken doch beide auf hardware out! master IST hardware out in reaper",
+    // which is true about the SIGNAL PATH and says nothing about the two names
+    // REAPER hands the plug-ins. I read it as "the name cannot separate them",
+    // deleted the rung, and the ordinal underneath swapped the instances. Do not
+    // delete it again without a capture showing both chains announcing the SAME
+    // name.
+    bool narrowed = false;
+    {
+        int named = 0;
+        for (uint16_t port : live) {
+            auto it = g_portName.find(port);
+            if (it != g_portName.end() && it->second == "HARDWARE OUTPUT") ++named;
+        }
+        // Only meaningful once some live stream actually carries that name — on
+        // an ordinary track none does and this rung must stay silent.
+        if (named > 0 && named < int(live.size())) {
+            std::vector<uint16_t> f;
+            for (uint16_t port : live) {
+                auto it = g_portName.find(port);
+                const bool isMon = (it != g_portName.end() &&
+                                    it->second == "HARDWARE OUTPUT");
+                if (isMon == monitorChain) f.push_back(port);
+            }
+            if (f.size() == 1) return say(4, f.front());
+            if (!f.empty()) { live.swap(f); narrowed = true; }
+        }
+    }
 
     // 1 — settings.
     if (fp && nfp > 0) {
@@ -2402,6 +2425,24 @@ int meterPortForFx(int trackIndex, bool isPro, bool monitorChain,
             else if (score == bestScore && score > 0) ++bestCount;
         }
         if (bestScore > 0 && bestCount == 1) return say(1, best);
+        // WHY it did not decide. This is the rung that ought to answer -- it is
+        // the only one comparing values both sides can read independently -- and
+        // when it defers everything below is a weaker guess. Frank 2026-08-28:
+        // "ssl unterscheidet die ja auch, also finds raus." Two ways to defer,
+        // and they need opposite fixes: score 0 means nothing matched (the
+        // instance never streamed these ids, or we read the wrong ones out of
+        // REAPER), while count > 1 means several instances matched equally well
+        // (the fingerprint is too coarse to separate them). Deduped on the pair
+        // so a steady state prints once, not per paint.
+        {
+            static int sScore = -1, sCount = -1;
+            if (bestScore != sScore || bestCount != sCount) {
+                sScore = bestScore; sCount = bestCount;
+                slog("[meter] settings rung deferred: bestScore=%d matched-by=%d of %d live"
+                     " (0 = nothing matched, >1 = fingerprint too coarse)",
+                     bestScore, bestCount, int(live.size()));
+            }
+        }
     }
 
     // 2 — Pro-ness. POSITIVE evidence only: isPro is set the first time an
