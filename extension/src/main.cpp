@@ -1694,6 +1694,13 @@ inline std::string abbrevInputChanName_(std::string name)
     return name;
 }
 
+// Full-scale for the preamp gain, for the readout bar AND for the number beside
+// it. RME pres typically run to +75 dB (Frank 2026-08-19: "rme interfaces gain
+// gehen gewöhnlich bis +75dB"); Global OSC reports no per-channel maximum, so
+// the number has to come from the hardware. Declared here, above the readout
+// that clamps with it, rather than beside the bar further down.
+constexpr double kRmeGainFullScaleDb = 75.0;
+
 bool recRmeReadoutText_(MediaTrack* tr, bool flashInputName, bool latin1,
                         std::string* outLabel, std::string* outValue)
 {
@@ -1762,8 +1769,16 @@ bool recRmeReadoutText_(MediaTrack* tr, bool flashInputName, bool latin1,
     } else {
         // RME preamp gain is always >= 0 dB (no attenuator on the mic-pre side;
         // that lives on `pad`). Clamp and drop the sign so it never reads signed.
+        //
+        // ⛔ AND IT HAS A CEILING. The bar under this number has always been
+        // scaled to kRmeGainFullScaleDb, the number was not, so a value that ran
+        // past the hardware printed itself: the preamp sat at 75 in TotalMix
+        // while the strip read 128 dB and climbing (reported 2026-08-28). The
+        // count came from TotalReaper, which is fixed there too, but the readout
+        // is not the place to trust a number it can check.
         double db = std::atof(gainStr.c_str());
         if (db < 0.0) db = 0.0;
+        if (db > kRmeGainFullScaleDb) db = kRmeGainFullScaleDb;
         snprintf(gbuf, sizeof(gbuf), "%4.1fdB", db);
     }
     *outValue = gbuf;
@@ -15678,10 +15693,6 @@ void recRmeStepInputChannel_(MediaTrack* tr, int delta)
 
 void runReaperActionOnTrack_(int cmdId, MediaTrack* tr);   // defined just below
 
-// Full-scale for the preamp-gain readout bar. RME pres typically run to +75 dB
-// (Frank 2026-08-19: "rme interfaces gain gehen gewöhnlich bis +75dB");
-// TotalReaper reports no maximum, so the number has to come from the hardware.
-constexpr double kRmeGainFullScaleDb = 75.0;
 
 // The V-Pot readout bar's position while REC + RME drives the knob, 0..1.
 // Negative when there is nothing to show (mode off, or TotalReaper has not
@@ -26772,6 +26783,17 @@ void applyUf1ChannelSoftKey_(int idx)
     // taken it off), which overrides both the built-in table and the param
     // toggle. Frank 2026-08-09 — the PLUG-IN key was welded to soft-key 4 of
     // page 1. Applies to learned plug-ins too: the action doesn't touch params.
+    // ⛔ AN EXPLICIT SLOT OWNS ITS KEY, WHATEVER THE BUILT-IN TABLE SAYS.
+    // `learned` below means "a user CS/BC map", which a UF1-ONLY map is not: its
+    // domain is neither. So a plug-in mapped on the UF1 layer alone fell through
+    // to kUf1CsSoftKeys[type], and since uf1CsPluginType_ hands such a map the
+    // CS2 layout (type 0), its page-0 slot 4 is PLUG-IN — a fixed action that
+    // fires and returns before the user's parameter is ever read. Soft-key 4 was
+    // therefore dead for EVERY plug-in and every parameter, while soft-key 3
+    // ("SOLO SAFE", no action, no param) fell through and worked. Page 1 hid the
+    // same trap on keys 3 and 4 (HQ MODE, A/B). Reported with three plug-ins and
+    // five parameters each, 2026-08-28.
+    bool userOwnsKey = false;
     if (const auto* u1s = uf1ExplicitMapAt_(tr, fx)) {
         const uf8::UserUf1Slot* s =
             uf8::uf1SlotAt(u1s->softKeys, page * uf8::kUserUf1PerPage + idx);
@@ -26779,11 +26801,12 @@ void applyUf1ChannelSoftKey_(int idx)
             uf1FireSkSpecial_(static_cast<uf8::Uf1SkSpecial>(s->special), tr);
             return;
         }
+        userOwnsKey = (s && s->vst3Param >= 0);
     }
 
     char lnm[256];
     const bool learned = uf1IsLearnedCsBc_(tr, fx, lnm, sizeof(lnm));
-    if (!learned) {
+    if (!learned && !userOwnsKey) {
         const Uf1CsSoftKey& sk = kUf1CsSoftKeys[type][page].slot(idx);
         // HQ MODE / A/B compare live in the plug-in state chunk, not as VST3 params
         // — toggle via the shared PluginChunkPatch hook on the resolved strip's
