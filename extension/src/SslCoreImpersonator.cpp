@@ -2363,33 +2363,23 @@ int meterPortForFx(int trackIndex, bool isPro, bool monitorChain,
     };
     if (live.size() == 1) return say(0, live.front());   // nothing to tell apart
 
-    // 0 — CHAIN, and it beats every rung below because the host itself says it.
-    // The master's two FX chains announce different names: the track's own chain
-    // says "MASTER" (the track name), the monitoring chain says "HARDWARE
-    // OUTPUT". The FX index carries the same distinction in its 0x1000000 flag,
-    // so the two sides can simply be matched. Nothing here is inferred from
-    // order, which is what rung 3 has to do.
-    bool narrowed = false;
-    {
-        int named = 0;
-        for (uint16_t port : live) {
-            auto it = g_portName.find(port);
-            if (it != g_portName.end() && it->second == "HARDWARE OUTPUT") ++named;
-        }
-        // Only meaningful once some live stream actually carries that name — on
-        // an ordinary track none does and this rung must stay silent.
-        if (named > 0 && named < int(live.size())) {
-            std::vector<uint16_t> f;
-            for (uint16_t port : live) {
-                auto it = g_portName.find(port);
-                const bool isMon = (it != g_portName.end() &&
-                                    it->second == "HARDWARE OUTPUT");
-                if (isMon == monitorChain) f.push_back(port);
-            }
-            if (f.size() == 1) return say(4, f.front());
-            if (!f.empty()) { live.swap(f); narrowed = true; }
-        }
-    }
+    // ⛔ THERE IS NO "CHAIN" RUNG, AND THERE MUST NOT BE ONE.
+    // A rung sat here that matched the announced NAME against the FX index's
+    // 0x1000000 flag: "HARDWARE OUTPUT" was taken to mean the monitoring chain,
+    // anything else the track's own. It looked like the host stating a fact
+    // instead of us inferring one, which is why it was placed AHEAD of settings.
+    // It was neither. Frank 2026-08-28: *"die hocken doch beide auf hardware
+    // out! ist ja logisch! master IST hardware out in reaper"* — the master IS
+    // the hardware output, so that name does not separate its two chains; it can
+    // describe either. The rung was ranking a convention above the one rung that
+    // actually measures something, and on the master it could hand back the
+    // opposite instance with full confidence.
+    //
+    // What remains is what can be checked: settings (the values the instance
+    // really streamed), pro-ness (positive evidence only), and last the ordinal.
+    // The name stays useful for LABELLING, where being descriptive is the whole
+    // job — the label reads the FX index's own flag, not this.
+    (void)monitorChain;
 
     // 1 — settings.
     if (fp && nfp > 0) {
@@ -2432,11 +2422,11 @@ int meterPortForFx(int trackIndex, bool isPro, bool monitorChain,
         }
     }
 
-    // 3 — ordinal. NOT after rung 0 narrowed the list: the ordinal the caller
-    // passes counts the track's Meters across BOTH chains, so indexing a
-    // single-chain list with it would point at a neighbour. Deferring is the
-    // house rule here — a tie never quietly routes to the wrong instance.
-    if (!narrowed && instanceOrdinal >= 0 && size_t(instanceOrdinal) < live.size())
+    // 3 — ordinal. The caller counts the track's Meters across BOTH chains
+    // (normal first, then monitoring), and `live` is in connect order, so this
+    // only holds while those two orders agree. It is the last rung for that
+    // reason.
+    if (instanceOrdinal >= 0 && size_t(instanceOrdinal) < live.size())
         return say(3, live[size_t(instanceOrdinal)]);
     return 0;
 }
