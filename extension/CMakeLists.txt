@@ -162,7 +162,7 @@ add_custom_target(reasixty_commit_count_gen ALL
 # REASIXTY_VERSION_STR / REASIXTY_COMMIT_COUNT actually update in the
 # binary. (Without this the new header could exist on disk but cached
 # .o files would keep the old macro values.)
-set_source_files_properties(src/SettingsScreen.cpp
+set_source_files_properties(src/SettingsScreen.cpp src/BuildId.cpp
     PROPERTIES OBJECT_DEPENDS ${REASIXTY_COMMIT_HEADER})
 
 # Bake extension/resources/factory.rea60config into a header so a
@@ -377,6 +377,8 @@ add_library(reaper_uf8 MODULE
     src/MixerWindow.cpp
     src/ManualView.cpp
     src/KnobFeelPresets.cpp
+    # Build identity, own TU so commit_count.h does not rebuild main.cpp
+    src/BuildId.cpp
     src/SettingsScreen.cpp
     # Devices / Appearance / Behaviour panes, split out of SettingsScreen.cpp
     src/SettingsScreen_General.cpp
@@ -803,8 +805,12 @@ if(NOT WIN32)
     # and needs no REAPER API. Exits 77 = skipped when the ports are taken.
     if(NOT WIN32)
         add_executable(test_sslcore_fd_reclaim tests/test_sslcore_fd_reclaim.cpp
-            src/SslCoreImpersonator.cpp src/SslMeterProtocol.cpp src/LogPath.cpp)
-        target_include_directories(test_sslcore_fd_reclaim PRIVATE src)
+            src/SslCoreImpersonator.cpp src/SslMeterProtocol.cpp src/LogPath.cpp
+            src/BuildId.cpp)
+        # BuildId.cpp needs the generated commit_count.h, which lands in the
+        # build tree, not in src/.
+        target_include_directories(test_sslcore_fd_reclaim PRIVATE src
+            ${CMAKE_CURRENT_BINARY_DIR}/generated)
         target_link_libraries(test_sslcore_fd_reclaim PRIVATE Threads::Threads)
         add_test(NAME sslcore_fd_reclaim COMMAND test_sslcore_fd_reclaim)
         set_tests_properties(sslcore_fd_reclaim PROPERTIES SKIP_RETURN_CODE 77)

@@ -1,5 +1,6 @@
 #include "SslCoreImpersonator.h"
 #include "LogPath.h"
+#include "BuildId.h"
 
 // Socket plumbing mirrors StreamDeckBridge.cpp — socket headers FIRST so Winsock2
 // wins over the legacy <winsock.h> that WDL pulls in transitively.
@@ -815,7 +816,13 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
     // everything else looks normal. Name what we hold, so a missing port is one
     // grep away instead of a guess about the plug-in.
     { std::string ps; for (auto p : dataPorts) ps += " " + std::to_string(p);
-      slogAlways("worker up: TCP :%u  UDP data:%s (%d of 6)  announcing on 16008/16009",
+      // ⇨ THE BUILD ID BELONGS IN THE FIRST LINE OF EVERY RUN.
+      // Deploying while REAPER runs means the DLL on disk and the DLL in memory
+      // can differ, and on 2026-08-28 a whole test round was spent on a fix that
+      // had never been loaded -- the log looked normal, because a log cannot say
+      // which binary wrote it. Now it can.
+      slogAlways("worker up: build %s  TCP :%u  UDP data:%s (%d of 6)  announcing on 16008/16009",
+                 uf8::reasixtyBuildId(),
                  unsigned(actualTcp), ps.c_str(), int(dataFds.size())); }
     socket_t annFd = makeUdp(0, false);
 

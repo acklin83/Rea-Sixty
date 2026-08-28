@@ -24542,6 +24542,9 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // The plug-in's own frame number for this array — the pacer emits one
         // cycle per distinct value, which is how SSL's motion stays clean.
         parts->seq = lseq;
+        static size_t  sLissCells = 0;
+        static int64_t sLissMs    = 0;
+        if (haveLiss && !liss.empty()) { sLissCells = liss.size(); sLissMs = nowMs_(); }
         if (haveLiss) {
             // Diagnostic replay of cap101's own images when the replay file
             // exists (see uf1GonioReplayNext_); live rendering otherwise. The
@@ -24550,6 +24553,21 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             // t10 raster `liss` — nothing for us to read or apply here.
             if (!uf1GonioReplayNext_(parts->img))
                 uf1PaintGoniometer_(liss, parts->img);
+        }
+        // ⇨ NO DATA MUST DRAW EMPTY, NOT DRAW NOTHING.
+        // Leaving parts->img empty sends a cycle with no image in it, and the
+        // device simply keeps the last one — so a stream that stops mid-motion
+        // freezes its final frame on the glass. Frank 2026-08-28: mute the
+        // master and the Overview sat there until a channel-encoder move
+        // repainted it. An instance with no signal has an empty goniometer, and
+        // that is what it should show.
+        // ⚠ HYSTERESIS, NOT PER-TICK. The plug-in sends NaN in roughly every
+        // fifth message (see the BarPeak note above), so blanking on a single
+        // miss would flash the face empty at ~5 Hz — worse than the freeze.
+        // Only after the data has really stopped.
+        else if (sLissCells && sLissMs && nowMs_() - sLissMs > 400) {
+            const std::vector<float> blank(sLissCells, 0.0f);
+            uf1PaintGoniometer_(blank, parts->img);
         }
         // LIVE small-LCD channel meter (was the captured ff placeholder). The
         // group rides the cycle so it animates at the plug-in's own rate, exactly
