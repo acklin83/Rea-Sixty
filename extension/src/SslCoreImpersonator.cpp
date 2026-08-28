@@ -1819,7 +1819,7 @@ static std::vector<uint16_t> liveMeterPorts_(int trackIndex);
 static void steerAutoPort_() {
     if (g_meterSel >= 0) return;                     // manual V-Pot1 pin wins
     const int want = g_autoTrackIdx.load();
-    if (want <= 0) return;
+    if (want == 0) return;                           // 0 = nothing selected; -1 IS the master
     // The track's Meters in CONNECT order, and take the first. Iterating g_inst
     // instead handed out whichever UDP port number happened to sort first, so on
     // a track with two Meters the view could land on either one — and the FX the
@@ -1921,7 +1921,21 @@ int currentMeterInstanceOnTrack(int* countOut) {
     const uint16_t port = currentMeterPortLocked_();
     auto ti = g_portIndex.find(port);
     if (ti == g_portIndex.end()) return -1;
-    const std::vector<uint16_t> live = liveMeterPorts_(ti->second);
+    // ⇨ COUNT ONLY THE ONES THAT WOULD READ THE SAME.
+    // The number exists for one reason: two Meters that announce the SAME name
+    // label identically, so cycling V-Pot1 looks stuck. The master's two chains
+    // announce DIFFERENT names ("MASTER" vs "HARDWARE OUTPUT") and the label
+    // shows that difference, so numbering them adds a digit that means nothing
+    // (Frank 2026-08-28: "das muss MASTER und MON FX heissen, keine NR hinten").
+    // Same track index, same announced name → same label → number them.
+    auto nameOf = [](uint16_t p) -> std::string {
+        auto it = g_portName.find(p);
+        return (it != g_portName.end()) ? it->second : std::string();
+    };
+    const std::string mine = nameOf(port);
+    std::vector<uint16_t> live;
+    for (uint16_t p : liveMeterPorts_(ti->second))
+        if (nameOf(p) == mine) live.push_back(p);
     if (countOut) *countOut = int(live.size());
     for (size_t i = 0; i < live.size(); ++i)
         if (live[i] == port) return int(i);
@@ -2194,12 +2208,22 @@ static std::vector<uint16_t> liveMeterPorts_(int trackIndex)
     return out;
 }
 
-int meterPortForFx(int trackIndex, bool isPro,
+int meterPortForFx(int trackIndex, bool isPro, bool monitorChain,
                    const StripParam* fp, int nfp, int instanceOrdinal)
 {
-    if (trackIndex <= 0) return 0;
+    // ⇨ -1 IS A TRACK, 0 IS "THE HOST DID NOT SAY".
+    // The announcement uses REAPER's IP_TRACKNUMBER convention, and the master
+    // reports -1 there. Measured in Frank's own log, 2026-08-28:
+    //   instance announced: track=-1 name="MASTER"
+    //   instance announced: track=-1 name="HARDWARE OUTPUT"
+    // Rejecting everything <= 0 therefore switched this whole resolver off for
+    // the master, so a Meter on the master and one in the monitoring chain were
+    // never told apart: the caller kept its first-match fallback and V-Pot1's pin
+    // moved the DATA while the labels, the V-Pot2/3/4 edits and the preset
+    // browser stayed on the first one ("kann am Gerät nicht mehr umschalten").
+    if (trackIndex == 0) return 0;
     std::lock_guard<std::mutex> lk(g_meterMx);
-    const std::vector<uint16_t> live = liveMeterPorts_(trackIndex);
+    std::vector<uint16_t> live = liveMeterPorts_(trackIndex);
     if (live.empty()) return 0;
     // Which rung answered, logged once per changed answer — this is the whole
     // diagnosis when the surface edits the wrong Meter, and it is not derivable
@@ -2210,10 +2234,39 @@ int meterPortForFx(int trackIndex, bool isPro,
         sRung = rung; sPort = port; sTrack = trackIndex;
         slog("[meter] track %d fx#%d -> port %u by %s", trackIndex, instanceOrdinal,
              unsigned(port), rung == 0 ? "sole instance" : rung == 1 ? "settings"
-                          : rung == 2 ? "pro-ness"      : "ordinal");
+                          : rung == 2 ? "pro-ness"
+                          : rung == 4 ? "chain"         : "ordinal");
         return int(port);
     };
     if (live.size() == 1) return say(0, live.front());   // nothing to tell apart
+
+    // 0 — CHAIN, and it beats every rung below because the host itself says it.
+    // The master's two FX chains announce different names: the track's own chain
+    // says "MASTER" (the track name), the monitoring chain says "HARDWARE
+    // OUTPUT". The FX index carries the same distinction in its 0x1000000 flag,
+    // so the two sides can simply be matched. Nothing here is inferred from
+    // order, which is what rung 3 has to do.
+    bool narrowed = false;
+    {
+        int named = 0;
+        for (uint16_t port : live) {
+            auto it = g_portName.find(port);
+            if (it != g_portName.end() && it->second == "HARDWARE OUTPUT") ++named;
+        }
+        // Only meaningful once some live stream actually carries that name — on
+        // an ordinary track none does and this rung must stay silent.
+        if (named > 0 && named < int(live.size())) {
+            std::vector<uint16_t> f;
+            for (uint16_t port : live) {
+                auto it = g_portName.find(port);
+                const bool isMon = (it != g_portName.end() &&
+                                    it->second == "HARDWARE OUTPUT");
+                if (isMon == monitorChain) f.push_back(port);
+            }
+            if (f.size() == 1) return say(4, f.front());
+            if (!f.empty()) { live.swap(f); narrowed = true; }
+        }
+    }
 
     // 1 — settings.
     if (fp && nfp > 0) {
@@ -2256,8 +2309,11 @@ int meterPortForFx(int trackIndex, bool isPro,
         }
     }
 
-    // 3 — ordinal.
-    if (instanceOrdinal >= 0 && size_t(instanceOrdinal) < live.size())
+    // 3 — ordinal. NOT after rung 0 narrowed the list: the ordinal the caller
+    // passes counts the track's Meters across BOTH chains, so indexing a
+    // single-chain list with it would point at a neighbour. Deferring is the
+    // house rule here — a tie never quietly routes to the wrong instance.
+    if (!narrowed && instanceOrdinal >= 0 && size_t(instanceOrdinal) < live.size())
         return say(3, live[size_t(instanceOrdinal)]);
     return 0;
 }

@@ -17047,7 +17047,13 @@ bool uf1PinnedMeterTrackFx_(MediaTrack*& trOut, int& fxOut)
                 const int nfp = uf8::sslMeterFingerprint(tr, fx, fpId, fpVal, 16);
                 sslcore::StripParam fp[16];
                 for (int i = 0; i < nfp; ++i) fp[i] = { fpId[i], fpVal[i] };
-                if (sslcore::meterPortForFx(trackIdx, isPro, fp, nfp, sel) == port) {
+                // 0x1000000 on the index = the monitoring / record-input chain.
+                // That flag IS the chain the host names "HARDWARE OUTPUT" when it
+                // announces the instance, so the resolver can match the two sides
+                // instead of guessing by order.
+                const bool monChain = (fx & 0x1000000) != 0;
+                if (sslcore::meterPortForFx(trackIdx, isPro, monChain,
+                                            fp, nfp, sel) == port) {
                     fxOut = fx;
                     break;
                 }
@@ -17084,6 +17090,12 @@ void uf1EmitMeterInstanceLabel_(bool force = true)
             char buf[256] = {0};
             GetSetMediaTrackInfo_String(mtr, "P_NAME", buf, false);
             nm = buf;
+            // The master's MONITORING chain is a second, separate place a Meter
+            // can sit, and it is NOT the master's own chain — the host announces
+            // it under its own name ("HARDWARE OUTPUT"). Naming both "MASTER"
+            // is what made cycling V-Pot1 between them look like it had stuck
+            // (Frank 2026-08-28). The FX index says which chain it is.
+            if (mtr == GetMasterTrack(nullptr) && (mfx & 0x1000000)) nm = "MON FX";
             // Same fallbacks the channel strip uses, so one instance never reads
             // "MASTER" on one screen and blank on the other.
             if (nm.empty()) {
@@ -24003,6 +24015,16 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         int selIdx = 0;
         if (MediaTrack* selTr = GetSelectedTrack(nullptr, 0))
             selIdx = int(GetMediaTrackInfo_Value(selTr, "IP_TRACKNUMBER"));
+        // GetSelectedTrack IGNORES the master (SDK, reaper_plugin_functions.h:
+        // "This function ignores the master track, see GetSelectedTrack2"), so
+        // selecting the master left this at 0 and auto-mode could never follow a
+        // Meter on the master or in the monitoring chain. -1 is what the master
+        // reports as IP_TRACKNUMBER and what the plug-ins announce for both of
+        // its chains. Only consulted when no ordinary track is selected, so a
+        // normal selection behaves exactly as before.
+        else if (MediaTrack* mst = GetMasterTrack(nullptr)) {
+            if (GetMediaTrackInfo_Value(mst, "I_SELECTED") > 0.5) selIdx = -1;
+        }
         sslcore::setAutoTrackIndex(selIdx);
     }
     // Transport state → the impersonator's frozen-at-stop blanking: a LEVEL meter

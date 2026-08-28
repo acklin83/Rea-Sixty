@@ -255,11 +255,18 @@ int currentMeterInstanceOnTrack(int* countOut);
 //   2. PRO-NESS — a Meter Pro streams Loudness data types, a plain Meter never
 //                 does. Positive evidence only: it separates them only once some
 //                 instance on the track has actually shown Loudness.
-//   3. ORDINAL  — position among the track's Meters in connect order.
+//   0. CHAIN    — `monitorChain` (the FX index's 0x1000000 flag) against the
+//                 name the host announced: the master's own chain says "MASTER",
+//                 its monitoring chain says "HARDWARE OUTPUT". Checked FIRST,
+//                 because the host states it instead of us inferring it.
+//   3. ORDINAL  — position among the track's Meters in connect order. Skipped
+//                 once rung 0 narrowed the list (the ordinal spans both chains).
+// `trackIndex` is the announced HostTrackIndex in REAPER's IP_TRACKNUMBER
+// convention: -1 IS THE MASTER, only 0 means "not known".
 // Returns the UDP port, or 0 for "cannot say" — each rung DEFERS when ambiguous
 // rather than picking, so a tie never quietly routes to the neighbour.
 // Thread-safe.
-int meterPortForFx(int trackIndex, bool isPro,
+int meterPortForFx(int trackIndex, bool isPro, bool monitorChain,
                    const StripParam* fp, int nfp, int instanceOrdinal);
 
 // ★★ THE ONE TO CALL. Resolves the stream by narrowing, most specific first:
