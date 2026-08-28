@@ -24076,22 +24076,9 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // The instance IS the UDP port ([[uf1-meter-instance-identity]]), so make
     // the edge here, once, and let the existing force-gated resets do the rest
     // rather than repeating the same comparison at three sites.
-    {
-        static int sMeterPortSeen = 0;
-        const int nowPort = sslcore::currentMeterPort();
-        if (nowPort && nowPort != sMeterPortSeen) {
-            // Logged next to the V-Pot1 line in the impersonator: together they
-            // say whether a turn of the knob reached the painter at all. A cycle
-            // line with no edge line here means the paint never saw the change.
-            if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
-                std::fprintf(lg, "[uf1] meter instance edge: port %d -> %d, full repaint\n",
-                             sMeterPortSeen, nowPort);
-                std::fclose(lg);
-            }
-            sMeterPortSeen = nowPort;
-            force = true;
-        }
-    }
+    // (The instance edge itself is taken ONCE, in uf1PaintChannel_, and arrives
+    // here as `force` together with every other state change. Detecting it a
+    // second time here would be a second owner of the same question.)
     // RESET (SK2) request: flash 0x0102=03 for ~150 ms (capture 2026-08-02) and clear
     // our peak-hold statics by forcing a full repaint (the force-gated resets below zero
     // sFallbackHold + sBarHold). The plug-in's OWN held peak needs a Core→plug-in reset
@@ -28497,9 +28484,35 @@ void uf1PaintChannel_()
     sMod = modNow;
     const bool presetClosed = g_uf1PresetJustClosed;
     g_uf1PresetJustClosed = false;
+    // ⇨ THE METER INSTANCE IS A STATE CHANGE LIKE THE OTHERS, AND IT WAS MISSING.
+    // V-Pot1 swaps the stream the whole meter view reads, but none of the nine
+    // inputs above notice: the track does not change (the master's two chains
+    // are one track), the view, screen and ident do not either. So every
+    // change-gated emitter kept sending the previous instance's state, and with
+    // the transport muted -- nothing else moving -- the surface simply sat there
+    // (Frank 2026-08-28: "sobald ich mute, hängt er"). Moving the channel
+    // encoder "fixed" it because that DOES trip `tr != sTr`.
+    // Measured first: the log showed hundreds of "vpot1 cycle: sel 0 -> 1" with
+    // no repaint following, which is what pointed here.
+    // ⛔ NOT into layoutChanged — the plane does not change, only what feeds it
+    // ([[uf1-mode-edge-must-not-relayout]]: a MODE hold re-asserting 0x0100
+    // slammed the meters to 0xff every detent). Same discipline here.
+    static int sInstPort = 0;
+    bool instanceChanged = false;
+    if (g_uf1MeterView.load()) {
+        const int nowInst = sslcore::currentMeterPort();
+        if (nowInst && nowInst != sInstPort) {
+            if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                std::fprintf(lg, "[uf1] meter instance edge: port %d -> %d, repaint\n",
+                             sInstPort, nowInst);
+                std::fclose(lg);
+            }
+            sInstPort = nowInst; instanceChanged = true;
+        }
+    }
     const bool changed = (tr != sTr) || viewChanged || screenChanged || menuEdge
                        || modeFieldChanged || identChanged || shiftChanged
-                       || modChanged || presetClosed;
+                       || modChanged || presetClosed || instanceChanged;
     // Bus-Comp GR meter on the four display soft-key LEDs (Settings → Devices →
     // Metering). Read ONCE per tick, here, because two places need it: the p188
     // soft-key block must know whether to leave those LEDs alone, and the meter
