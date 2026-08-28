@@ -24253,10 +24253,28 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             // plug-in is running but no instance is resolved yet (auto mode, before
             // the first V-Pot1 step), leave the bars EMPTY rather than borrow the
             // focused track; only use the focused track when the plug-in is off.
+            // ⛔ AND THE TRACK'S PEAK ONLY STANDS IN FOR THE INSTANCE WHILE THE
+            // TRACK HAS EXACTLY ONE. The reasoning above ("its peak matches the
+            // instance, silent → empty") holds on an ordinary track. On the
+            // MASTER it does not: the track's own chain and its monitoring chain
+            // are two instances on ONE track, so Track_GetPeakInfo hands both of
+            // them the SAME number and they stop being distinguishable at all.
+            // Frank 2026-08-28, master muted: the silent instance showed "pegel
+            // ohne hellen rms teil und kein gonio" — that is this branch exactly,
+            // REAPER's peak with no RMS and no goniometer, because both of those
+            // only exist in the plug-in stream. It reads as a stuck display.
+            // A silent instance must read EMPTY, which is the honest answer and
+            // the same rule the stream resolver follows: defer rather than
+            // borrow the neighbour's number.
             MediaTrack* ptr = nullptr; int pfx = -1;
-            if (uf1PinnedMeterTrackFx_(ptr, pfx)) {
+            int pcnt = 0, pdummy = -1;
+            const bool havePin = uf1PinnedMeterTrackFx_(ptr, pfx);
+            if (havePin && ptr) uf1FindMeterFx_(ptr, 0, pdummy, pcnt);
+            if (havePin && pcnt <= 1) {
                 dbL = peakToDb(Track_GetPeakInfo(ptr, 0));
                 dbR = peakToDb(Track_GetPeakInfo(ptr, 1));
+            } else if (havePin) {
+                // Two or more instances share this track — leave the bars empty.
             } else if (!sslcore::isRunning()) {
                 dbL = peakToDb(Track_GetPeakInfo(tr, 0));
                 dbR = peakToDb(Track_GetPeakInfo(tr, 1));
