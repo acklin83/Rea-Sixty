@@ -24205,6 +24205,15 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     //     −10.44..−4.32, BarRms −129.6..−20.5; current[0]=L current[1]=R).
     //  2. REAPER's own Track_GetPeakInfo (peak only) when the impersonator is off
     //     or hasn't received meter data yet. Non-regressive fallback.
+    // ⇨ -120 MEANS TWO DIFFERENT THINGS, AND ONE OF THEM IS NOT SILENCE.
+    // It is both the "measured floor" and the initial value we keep when no
+    // source can answer for this instance. The VU needle's rest-at-silence gate
+    // reads `peak` and cannot tell those apart: once the master's two-instance
+    // case stopped substituting REAPER's track peak, `peak` stayed at -120 and
+    // the needle was pinned to its rest byte no matter what VuPpm said (Frank
+    // 2026-08-28: "vu bewegt sich nicht"; PPM was fine because that branch has
+    // no such gate). Carry the distinction explicitly.
+    bool  havePeak = false;              // dbL/dbR came from a real source
     float dbL = -120.f, dbR = -120.f;    // peak L/R (dBFS)
     float rmsL = -120.f, rmsR = -120.f;  // RMS  L/R (dBFS)
     float holdL = -120.f, holdR = -120.f; // PEAK HOLD L/R (dBFS), from the plugin
@@ -24226,7 +24235,7 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             sslcore::getMeter(int(sslmeter::DataType::BarPeak), cur, pk) &&
             cur.size() >= 2 && (ok(cur[0]) || ok(cur[1]));
         if (pluginPeak) {
-            dbL = cur[0]; dbR = cur[1];
+            dbL = cur[0]; dbR = cur[1]; havePeak = true;
             // THE PEAK HOLD IS f4 PeakValues — the plugin computes and holds it
             // for us (schema: repeated float PeakValues = 4). Do NOT re-derive it.
             // cap87: f4 sits at -4.32 rock steady while f3 wanders -6.9..-9.2, and
@@ -24273,11 +24282,13 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             if (havePin && pcnt <= 1) {
                 dbL = peakToDb(Track_GetPeakInfo(ptr, 0));
                 dbR = peakToDb(Track_GetPeakInfo(ptr, 1));
+                havePeak = true;
             } else if (havePin) {
                 // Two or more instances share this track — leave the bars empty.
             } else if (!sslcore::isRunning()) {
                 dbL = peakToDb(Track_GetPeakInfo(tr, 0));
                 dbR = peakToDb(Track_GetPeakInfo(tr, 1));
+                havePeak = true;
             }
         }
     }
@@ -24781,7 +24792,11 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             // peak dBFS, which collapses to the -120 floor at true silence unlike
             // VuPpm; -100 is below any audible signal (16-bit floor -96), so no
             // needle motion is swallowed. kUf1VuScale stays untouched (byte-exact).
-            if (peak <= -100.f) { nL = nR = 4; hL = hR = 4; }
+            // Only when a real peak measurement says silence. Without a
+            // measurement the needle follows VuPpm, which is the honest source
+            // here -- clamping on a value that means "nobody answered" is what
+            // froze it.
+            if (havePeak && peak <= -100.f) { nL = nR = 4; hL = hR = 4; }
         }
 
         const std::array<uint8_t, 2> ndl{ nL, nR }, hld{ hL, hR };
