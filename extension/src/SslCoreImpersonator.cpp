@@ -1924,12 +1924,26 @@ int meterSelection() {
 
 void cycleMeterSelection(int delta) {
     std::lock_guard<std::mutex> lk(g_meterMx);
-    const int n = int(aliveMeterPorts_().size());
-    if (n <= 1) { g_meterSel = -1; return; }   // nothing to choose between
-    // States [auto(-1), 0, 1, .., n-1] map to indices 0..n; advance and wrap.
-    int idx = (g_meterSel < 0) ? 0 : (g_meterSel + 1);
-    idx = ((idx + delta) % (n + 1) + (n + 1)) % (n + 1);
-    g_meterSel = (idx == 0) ? -1 : (idx - 1);
+    const auto alive = aliveMeterPorts_();
+    const int n = int(alive.size());
+    const int was = g_meterSel;
+    if (n <= 1) { g_meterSel = -1; }
+    else {
+        // States [auto(-1), 0, 1, .., n-1] map to indices 0..n; advance and wrap.
+        int idx = (g_meterSel < 0) ? 0 : (g_meterSel + 1);
+        idx = ((idx + delta) % (n + 1) + (n + 1)) % (n + 1);
+        g_meterSel = (idx == 0) ? -1 : (idx - 1);
+    }
+    // ⇨ SAY WHAT THE KNOB DID. Frank has reported twice that the meter "hangs"
+    // until he moves the channel encoder, and both times the reports were
+    // equally consistent with "the pin does not move" and with "the pin moves
+    // and the display does not follow" — two different bugs needing opposite
+    // fixes, and no way to tell them apart from outside. This line separates
+    // them: if the pin advances here and the surface still shows the old
+    // instance, the fault is downstream of the selection, not in it.
+    slogAlways("vpot1 cycle: delta=%d alive=%d sel %d -> %d (port %u)",
+               delta, n, was, g_meterSel,
+               unsigned((g_meterSel >= 0 && g_meterSel < n) ? alive[g_meterSel] : 0));
 }
 
 // AUTO-MODE source steering (g_autoTrackIdx). Caller MUST hold g_meterMx. When

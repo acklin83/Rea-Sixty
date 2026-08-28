@@ -24079,7 +24079,18 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     {
         static int sMeterPortSeen = 0;
         const int nowPort = sslcore::currentMeterPort();
-        if (nowPort && nowPort != sMeterPortSeen) { sMeterPortSeen = nowPort; force = true; }
+        if (nowPort && nowPort != sMeterPortSeen) {
+            // Logged next to the V-Pot1 line in the impersonator: together they
+            // say whether a turn of the knob reached the painter at all. A cycle
+            // line with no edge line here means the paint never saw the change.
+            if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                std::fprintf(lg, "[uf1] meter instance edge: port %d -> %d, full repaint\n",
+                             sMeterPortSeen, nowPort);
+                std::fclose(lg);
+            }
+            sMeterPortSeen = nowPort;
+            force = true;
+        }
     }
     // RESET (SK2) request: flash 0x0102=03 for ~150 ms (capture 2026-08-02) and clear
     // our peak-hold statics by forcing a full repaint (the force-gated resets below zero
