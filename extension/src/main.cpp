@@ -21068,6 +21068,36 @@ static void uf1CyclePacerLoop_()
             std::this_thread::sleep_until(slot + kTailOff);
             if (!snap->tail.empty())
                 g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->tail));
+            // ⇨ DOES THE OS ACTUALLY SLEEP THIS FINELY? Report it once per run,
+            // because the whole cycle is built on sub-millisecond offsets (18.0 ms
+            // and 40.3 ms inside a 40.8 ms slot) and one platform is known not to
+            // grant them: a Windows thread sleeps on the scheduler tick, which is
+            // 15.6 ms unless some process raised the timer resolution. There, the
+            // 18 ms mark lands near 31 ms and the tail — the VU needles (0x0125)
+            // and the bargraphs (0x0126-28) — misses its slot entirely, while the
+            // per-tick elements around it keep going. That is a claim about a
+            // machine we cannot see, so MEASURE it instead of assuming either way:
+            // this prints the real overshoot and the log settles it.
+            static int      sMeasN   = 0;
+            static long long sMeasSum = 0, sMeasMax = 0;
+            if (sMeasN >= 0) {
+                const auto over = duration_cast<microseconds>(
+                                      steady_clock::now() - (slot + kTailOff)).count();
+                sMeasSum += over;
+                if (over > sMeasMax) sMeasMax = over;
+                if (++sMeasN >= 100) {
+                    if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                        std::fprintf(lg, "[uf1] cycle pacer: tail slot overshoot avg %.2f ms, "
+                                         "max %.2f ms over 100 cycles (budget ~0.5 ms; a "
+                                         "15 ms figure means the OS timer resolution is "
+                                         "coarse and the tail burst is late)\n",
+                                     double(sMeasSum) / 100.0 / 1000.0,
+                                     double(sMeasMax) / 1000.0);
+                        std::fclose(lg);
+                    }
+                    sMeasN = -1;                  // once per run, then never again
+                }
+            }
         }
         // No `slot += kSpacing` — `slot` is stamped at the top of each cycle
         // from the arrival, so the loop follows the plug-in instead of running

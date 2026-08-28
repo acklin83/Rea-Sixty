@@ -100,6 +100,27 @@ void objLog(const char* fmt, ...) {
     std::fclose(f);
 }
 
+// ⇨ THE THINGS THAT EXPLAIN A DEAD METER MUST NOT BE BEHIND THE TRACE SWITCH.
+// Whether the worker came up, whether a port was already taken, and what each
+// plug-in announced are not firehose material — they are three or four lines per
+// session, and without them a surface that shows nothing looks identical to one
+// that is working on the wrong stream. They went to reaper_sslcore.log through
+// slog(), which writes nothing unless REASIXTY_SSLCORE_TRACE is on, so on a
+// machine where the meter is broken there was no record at all. These go to the
+// ordinary rea_sixty.log, where the rest of the session already is.
+void slogAlways(const char* fmt, ...) {
+    static std::mutex mx;
+    std::lock_guard<std::mutex> lk(mx);
+    FILE* f = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a");
+    if (!f) return;
+    std::fputs("[sslcore] ", f);
+    va_list ap; va_start(ap, fmt);
+    std::vfprintf(f, fmt, ap);
+    va_end(ap);
+    std::fputc('\n', f);
+    std::fclose(f);
+}
+
 void  slog(const char* fmt, ...) {
     if (!g_trace) return;
     const std::string path = uf8::logPath("reaper_sslcore.log");
@@ -678,14 +699,74 @@ bool setNonBlocking(socket_t s) {
 #endif
 }
 
+// The last socket error, as a number, for the log. errno and WSAGetLastError are
+// different wells and the wrong one reads as 0 = "no error" on the other platform.
+int sockErr() {
+#if defined(_WIN32)
+    return WSAGetLastError();
+#else
+    return errno;
+#endif
+}
+
+// ⛔ SO_REUSEADDR MEANS SOMETHING ELSE ON WINDOWS, AND IT IS NOT WHAT THIS FILE
+// WANTS. On macOS/Linux it only lets a listener past a TIME_WAIT leftover: a
+// second bind next to a LIVE listener still fails with EADDRINUSE, which is
+// exactly the signal the caller below reports as "in use? 360 running?".
+// On Windows the same flag "allows a socket to forcibly bind to a port in use by
+// another socket", and then, in Microsoft's own words, "the behavior for all
+// sockets bound to that port is indeterminate […] incoming TCP connection
+// requests over the port cannot be guaranteed to be handled by the correct
+// socket" — the second bind "will 'hijack' the port and the application will be
+// unable to determine which of the two sockets received specific packets"
+// (learn.microsoft.com, "Using SO_REUSEADDR and SO_EXCLUSIVEADDRUSE", read
+// 2026-08-28). Same user account, so nothing stops it.
+//
+// ⇨ So with a real SSL 360 Core (or a second REAPER) already holding these
+// ports, Windows does NOT report the conflict the way every other platform
+// does. We bind alongside it and the plug-in connections and meter datagrams
+// split between the two receivers at random — some instances stream to us, some
+// to the other process. That is a per-instance, per-restart failure, which is
+// what "auf Windows stimmt beim Meter Mode gar nichts" looks like from outside.
+//
+// ⇨ On Windows the fix is to set NOTHING. Windows' DEFAULT bind is already the
+// behaviour this code was written against: a port someone else is actively bound
+// to comes back WSAEADDRINUSE, and TIME_WAIT leftovers from our own previous run
+// do not block a fresh LISTEN, so a REAPER restart is unaffected.
+// ⛔ NOT SO_EXCLUSIVEADDRUSE, tempting as Microsoft's advice is — it carries its
+// own trap on exactly our path: "if a listening socket with SO_EXCLUSIVEADDRUSE
+// set accepts a connection and is then subsequently closed, another socket (also
+// with SO_EXCLUSIVEADDRUSE) cannot bind to the same port … until the original
+// connection becomes inactive". We accept a connection per plug-in and close on
+// every reload, so that would have traded a silent hijack for a minutes-long
+// dead port after each restart. Its only extra benefit is keeping a HOSTILE
+// process off the port, which is not the problem here.
+bool setPortExclusive(socket_t s) {
+#if defined(_WIN32)
+    (void)s;
+    return true;      // default bind = fail-on-conflict, which is what we want
+#else
+    int y = 1;
+    return setsockopt(s, SOL_SOCKET, SO_REUSEADDR,
+                      reinterpret_cast<char*>(&y), sizeof(y)) == 0;
+#endif
+}
+
 socket_t makeUdp(uint16_t port, bool reuse) {
     socket_t s = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (s == kInvalid) return kInvalid;
-    if (reuse) { int y = 1; setsockopt(s, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<char*>(&y), sizeof(y)); }
+    // `reuse` only ever means the FIXED data ports; the ephemeral ones (port 0)
+    // never ask for it, and must not — see setPortExclusive.
+    if (reuse) setPortExclusive(s);
     sockaddr_in a{}; a.sin_family = AF_INET; a.sin_port = htons(port); a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     // Always bind — port 0 lets the OS assign an ephemeral port (used for the
     // per-connection dedicated data sockets; getsockname reads back the number).
-    if (::bind(s, reinterpret_cast<sockaddr*>(&a), sizeof(a)) != 0) { SC_CLOSE(s); return kInvalid; }
+    if (::bind(s, reinterpret_cast<sockaddr*>(&a), sizeof(a)) != 0) {
+        if (port) slogAlways("[err] UDP bind :%u failed (err %d) — port in use? SSL 360 running?",
+                             unsigned(port), sockErr());
+        SC_CLOSE(s);
+        return kInvalid;
+    }
     setNonBlocking(s);
     return s;
 }
@@ -695,11 +776,14 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
     netInit();
 
     socket_t listenFd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (listenFd == kInvalid) { slog("[err] TCP socket() failed"); g_running = false; return; }
-    int yes = 1; setsockopt(listenFd, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<char*>(&yes), sizeof(yes));
+    if (listenFd == kInvalid) { slogAlways("[err] TCP socket() failed (err %d)", sockErr());
+                                g_running = false; return; }
+    setPortExclusive(listenFd);
     sockaddr_in la{}; la.sin_family = AF_INET; la.sin_port = htons(tcpPort); la.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (::bind(listenFd, reinterpret_cast<sockaddr*>(&la), sizeof(la)) != 0 || ::listen(listenFd, 8) != 0) {
-        slog("[err] TCP bind/listen on port %u failed (in use? 360 running?)", unsigned(tcpPort));
+        slogAlways("[err] TCP bind/listen :%u failed (err %d) — port in use? "
+                   "SSL 360 running, or a second REAPER? The impersonator is OFF, "
+                   "so no meter, no strip data.", unsigned(tcpPort), sockErr());
         SC_CLOSE(listenFd); g_running = false; return;
     }
     // Read back the actual TCP port (if tcpPort was 0) to announce it.
@@ -722,12 +806,17 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
         if (fd != kInvalid) { dataFds.push_back(fd); dataPorts.push_back(dp); }
     }
     if (dataFds.empty()) {
-        slog("[err] no UDP data port could bind (in use? 360 running?)");
+        slogAlways("[err] no UDP data port could bind — port in use? SSL 360 running? "
+                   "The impersonator is OFF, so no meter data at all.");
         SC_CLOSE(listenFd); g_running = false; return;
     }
+    // A PARTIAL bind is the interesting case and used to be invisible: the meter
+    // instance that streams to a port we did not get simply never appears, and
+    // everything else looks normal. Name what we hold, so a missing port is one
+    // grep away instead of a guess about the plug-in.
     { std::string ps; for (auto p : dataPorts) ps += " " + std::to_string(p);
-      slog("[worker] up: TCP :%u  UDP data:%s  announcing on 16008/16009",
-           unsigned(actualTcp), ps.c_str()); }
+      slogAlways("worker up: TCP :%u  UDP data:%s (%d of 6)  announcing on 16008/16009",
+                 unsigned(actualTcp), ps.c_str(), int(dataFds.size())); }
     socket_t annFd = makeUdp(0, false);
 
     std::vector<socket_t> clients;
@@ -1614,8 +1703,11 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                     // record of what the host calls an instance.
                                     // Needed to tell a master / monitoring-chain
                                     // Meter from a plain track one without guessing.
-                                    slog("[%.1f] instance announced: track=%d name=\"%s\"",
-                                         t, itI->second, itN->second.c_str());
+                                    // (It said that and still used slog(), which is
+                                    // trace-gated — so on a machine with tracing off
+                                    // this record did not exist. slogAlways now.)
+                                    slogAlways("instance announced: track=%d name=\"%s\"",
+                                               itI->second, itN->second.c_str());
                                     // KEEP g_clientName/g_clientIndex keyed by this
                                     // connection fd — the dedicated-port correlation
                                     // reads them by fd; they are no longer a
