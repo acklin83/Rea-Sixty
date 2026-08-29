@@ -419,13 +419,41 @@ void UF1Device::workerLoop_()
         // mid-image in ~11% of images (cap100). The 500 ms override keeps the
         // liveness beat under a hypothetical sustained backlog (normal bursts
         // are ~7 ms, so deferral is invisible).
+        // ⛔ THE CONTENT FRAMES WERE THE ONLY ONES NOT REPORTING THEIR RESULT.
+        // recordRc() is what escalates a dead endpoint into needsReopen_, and it
+        // was called for the keepalive alone — so every frame that actually
+        // carries the display could fail, forever, in silence. On 2026-08-28 the
+        // painter, the pacer and the plug-in stream were all measured healthy
+        // while the surface sat frozen, which leaves exactly this stage.
+        int failed = 0; int lastRc = 0;
         for (auto& frame : batch) {
             int transferred = 0;
             int rc = libusb_bulk_transfer(handle_, kEpOut, frame.data(),
                                           static_cast<int>(frame.size()),
                                           &transferred, 500);
-            if (rc < 0) lastError_ = std::string("bulk OUT failed: ") + libusb_error_name(rc);
+            if (rc < 0) {
+                lastError_ = std::string("bulk OUT failed: ") + libusb_error_name(rc);
+                ++failed; lastRc = rc;
+            }
+            recordRc(rc);
             traceFrame_('O', frame.data(), frame.size(), rc);
+        }
+        // Report a failing wire, deduped on (error, batch size) so a steady
+        // fault prints once rather than 25 times a second. `queued` is the
+        // backlog left behind: a wire that cannot keep up shows up here as a
+        // number that keeps growing.
+        if (failed) {
+            static int sRc = 0; static size_t sQ = 0;
+            size_t queued = 0;
+            { std::lock_guard<std::mutex> lk(pending_->mu); queued = pending_->q.size(); }
+            if (lastRc != sRc || queued / 64 != sQ / 64) {
+                sRc = lastRc; sQ = queued;
+                if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                    std::fprintf(lg, "[uf1] bulk OUT failing: %d of %zu frames, %s, %zu queued\n",
+                                 failed, batch.size(), libusb_error_name(lastRc), queued);
+                    std::fclose(lg);
+                }
+            }
         }
 
         auto now = std::chrono::steady_clock::now();
