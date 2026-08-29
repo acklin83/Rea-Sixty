@@ -333,7 +333,28 @@ void UF1Device::send(std::vector<uint8_t> frame)
 {
     {
         std::lock_guard<std::mutex> lk(pending_->mu);
+        if (cycleDepth_ > 0) { held_.push_back(std::move(frame)); return; }
         pending_->q.push_back(std::move(frame));
+    }
+    pending_->cv.notify_one();
+}
+
+void UF1Device::beginCycle()
+{
+    std::lock_guard<std::mutex> lk(pending_->mu);
+    ++cycleDepth_;
+}
+
+void UF1Device::endCycle()
+{
+    {
+        std::lock_guard<std::mutex> lk(pending_->mu);
+        if (cycleDepth_ > 0) --cycleDepth_;
+        if (cycleDepth_ > 0 || held_.empty()) return;
+        // Released as one block, right after the trailer closes the cycle --
+        // the same place SSL puts everything that is not cycle content.
+        for (auto& f : held_) pending_->q.push_back(std::move(f));
+        held_.clear();
     }
     pending_->cv.notify_one();
 }

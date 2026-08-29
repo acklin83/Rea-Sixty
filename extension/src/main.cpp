@@ -21086,6 +21086,10 @@ static void uf1CyclePacerLoop_()
             g_uf1CyclesEmitted.fetch_add(1, std::memory_order_relaxed);
         }
         if (snap && g_uf1_dev) {
+            // The three groups plus the silences between them are ONE unit to
+            // the firmware. Hold everything else out of it; the painter's own
+            // sends are released as a block once the trailer has closed it.
+            g_uf1_dev->beginCycle();
             g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->img));
             std::this_thread::sleep_until(slot + kMetersOff);
             if (!snap->meters.empty())
@@ -21093,6 +21097,7 @@ static void uf1CyclePacerLoop_()
             std::this_thread::sleep_until(slot + kTailOff);
             if (!snap->tail.empty())
                 g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->tail));
+            g_uf1_dev->endCycle();
             // ⇨ DOES THE OS ACTUALLY SLEEP THIS FINELY? Report it once per run,
             // because the whole cycle is built on sub-millisecond offsets (18.0 ms
             // and 40.3 ms inside a 40.8 ms slot) and one platform is known not to

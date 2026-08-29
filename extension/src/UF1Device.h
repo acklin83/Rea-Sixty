@@ -51,6 +51,21 @@ public:
     // land between them. Used for the 35-chunk goniometer image: SSL never
     // emits anything inside an image burst (cap89/cap100 diff).
     void sendBurst(std::vector<std::vector<uint8_t>> frames);
+    // ⇨ HOLD ORDINARY SENDS FOR THE DURATION OF A CYCLE.
+    // sendBurst keeps ONE group atomic, but the Overview cycle is THREE groups
+    // with deliberate silences between them (image, meters, trailer), and those
+    // silences are the device's render windows. A send() landing in one is a
+    // frame inside the image burst, which cap89/cap100 show SSL never does --
+    // and the firmware answers by dropping to lazy render-on-idle, i.e. the
+    // whole display stops updating until a 0x0100 layout re-assert wakes it.
+    // Frank 2026-08-29: everything froze, including the channel peak meter that
+    // has nothing to do with the meter view, and a channel-encoder move (the one
+    // path that re-sends 0x0100) always fixed it.
+    // Between begin and end, send() queues into a holding area that is released
+    // in one go afterwards. sendPriority and sendBurst are unaffected.
+    void beginCycle();
+    void endCycle();
+
     // Front-of-queue send for latency-sensitive frames (e.g. motor-limp on touch).
     void sendPriority(std::vector<uint8_t> frame);
 
@@ -78,6 +93,11 @@ private:
     void startBulkRead_();
     static void readCallback_(libusb_transfer* xfer);
     void traceFrame_(char dir, const uint8_t* data, size_t len, int rc) const;
+
+    // Guarded by pending_->mu. cycleDepth_ > 0 means a cycle is mid-flight and
+    // ordinary sends wait in held_ until it closes.
+    int                              cycleDepth_ = 0;
+    std::vector<std::vector<uint8_t>> held_;
 
     libusb_context*       ctx_    = nullptr;
     libusb_device_handle* handle_ = nullptr;
