@@ -458,6 +458,27 @@ void UF1Device::workerLoop_()
 
         auto now = std::chrono::steady_clock::now();
         const bool overdue = (now - lastKeepalive) >= std::chrono::milliseconds(500);
+        // ⇨ IS THE OVERRIDE ACTUALLY FIRING? The comment above calls the 500 ms
+        // override a guard for a "hypothetical sustained backlog" and argues it
+        // is invisible because normal bursts are ~7 ms. If that backlog is real,
+        // this sends the keepalive INSIDE an image burst -- and the capture is
+        // explicit that SSL never puts anything there, which is exactly the kind
+        // of stream break that drops the firmware to lazy render-on-idle.
+        // Frank confirmed a channel-encoder move (the one path that re-sends the
+        // 0x0100 layout) heals the freeze, so the device is losing its plane.
+        // Deduped per 32 occurrences: if this is silent, the theory is dead.
+        if (overdue && !queueDrained) {
+            static unsigned sKaMid = 0;
+            if ((sKaMid++ % 32) == 0) {
+                size_t queued = 0;
+                { std::lock_guard<std::mutex> lk(pending_->mu); queued = pending_->q.size(); }
+                if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                    std::fprintf(lg, "[uf1] keepalive forced mid-burst (#%u, %zu queued)\n",
+                                 sKaMid, queued);
+                    std::fclose(lg);
+                }
+            }
+        }
         if ((queueDrained || overdue) && now - lastKeepalive >= kKeepaliveInterval) {
             std::vector<uint8_t> ka = buildKeepalive(kaCounter);
             int t = 0;
