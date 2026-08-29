@@ -36966,6 +36966,41 @@ bool g_throwCameFromImGuiFrame = false;
 // afternoon.
 void onTimer()
 {
+    // ⇨ THE WHOLE TICK, NOT JUST OUR PAINTER.
+    // Measured 2026-08-29: the Overview froze for seconds while the pacer kept
+    // emitting, so the PAINTER had stopped running -- but timing
+    // uf1PaintChannel_ itself showed zero blocked paints. It is therefore not
+    // blocking inside; it is not being CALLED. Something ahead of it in the tick
+    // holds the main thread, or REAPER's timer itself stops. This measures the
+    // whole tick and the gap between ticks, and reports only ever-worse cases,
+    // so a healthy session stays silent.
+    {
+        static int64_t sPrevEnd = 0, sWorstGap = 0, sWorstRun = 0;
+        const int64_t t0 = nowMs_();
+        if (sPrevEnd && t0 - sPrevEnd > 300 && t0 - sPrevEnd > sWorstGap) {
+            sWorstGap = t0 - sPrevEnd;
+            if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                std::fprintf(lg, "[uf1] onTimer GAP %lld ms (nothing ran between ticks)\n",
+                             (long long)sWorstGap);
+                std::fclose(lg);
+            }
+        }
+        struct End {
+            int64_t t0; int64_t* prevEnd; int64_t* worstRun;
+            ~End() {
+                const int64_t t1 = nowMs_();
+                *prevEnd = t1;
+                const int64_t run = t1 - t0;
+                if (run > 300 && run > *worstRun) {
+                    *worstRun = run;
+                    if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                        std::fprintf(lg, "[uf1] onTimer RAN %lld ms (tick itself is slow)\n",
+                                     (long long)run);
+                        std::fclose(lg);
+                    }
+                }
+            }
+        } end{ t0, &sPrevEnd, &sWorstRun };
     g_throwCameFromImGuiFrame = false;
     try {
         onTimerBody_();
@@ -36975,6 +37010,7 @@ void onTimer()
     } catch (...) {
         logEscapingException_("onTimer", nullptr);
         if (g_throwCameFromImGuiFrame) throw;
+    }
     }
 }
 
