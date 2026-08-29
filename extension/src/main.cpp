@@ -28674,9 +28674,18 @@ void uf1PaintChannel_()
             sInstPort = nowInst; instanceChanged = true;
         }
     }
+    // ⛔ A STALL RECOVERY MUST DO WHAT A TRACK CHANGE DOES, WHICH IS BOTH GATES.
+    // The heal Frank performs by hand is a channel-encoder move, and that works
+    // through `tr != sTr` -- which sets layoutChanged AND changed. Feeding this
+    // into layoutChanged alone re-established the plane and left everything
+    // hanging off `changed` unsent: the header, the labels, the meter screen
+    // burst, and the painter's `force`. Measured 2026-08-29: the stall was
+    // detected (onTimer GAP 1091 ms), the plane went out, and the surface stayed
+    // dead anyway. Half of a fix is not a fix.
+    const bool planeLost = g_uf1PlaneLost.exchange(false, std::memory_order_relaxed);
     const bool changed = (tr != sTr) || viewChanged || screenChanged || menuEdge
                        || modeFieldChanged || identChanged || shiftChanged
-                       || modChanged || presetClosed || instanceChanged;
+                       || modChanged || presetClosed || instanceChanged || planeLost;
     // Bus-Comp GR meter on the four display soft-key LEDs (Settings → Devices →
     // Metering). Read ONCE per tick, here, because two places need it: the p188
     // soft-key block must know whether to leave those LEDs alone, and the meter
@@ -28695,9 +28704,6 @@ void uf1PaintChannel_()
     // burst re-sends 0x0100 (the large-LCD LAYOUT SELECTOR) and slams the small-LCD
     // meters to their idle 0xff state, which the pacer then undoes a frame later.
     // Layout-establishing sends use THIS gate; text/label repaints keep `changed`.
-    // A main-thread stall long enough to break the stream leaves the surface
-    // without its plane, and re-establishing it is exactly what this gate does.
-    const bool planeLost = g_uf1PlaneLost.exchange(false, std::memory_order_relaxed);
     const bool layoutChanged = (tr != sTr) || viewChanged || screenChanged
                              || identChanged || presetClosed || planeLost;
     sTr = tr;
