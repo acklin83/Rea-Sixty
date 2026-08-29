@@ -28474,8 +28474,34 @@ static void uf1PaintHue_()
     }
 }
 
+// ⇨ HOW LONG DID THE PAINT ITSELF TAKE?
+// Measured 2026-08-29: the Overview freezes while the pacer keeps emitting, and
+// the heartbeat's `emitted` counter showed 353 cycles between two heartbeats --
+// i.e. the PAINTER stopped for ~14 seconds while everything downstream stayed
+// healthy. Freezes coincide with muting or merely SELECTING the master, both of
+// which make the plug-in send a burst of property updates, so the suspicion is
+// the shared g_meterMx: the impersonator worker holds it while parsing, and the
+// painter takes it on its very first call (currentMeterPort). This says whether
+// the paint is blocked and for how long.
+struct Uf1PaintTimer_ {
+    int64_t t0;
+    Uf1PaintTimer_() : t0(nowMs_()) {}
+    ~Uf1PaintTimer_() {
+        const int64_t ms = nowMs_() - t0;
+        if (ms < 200) return;
+        static int64_t sWorst = 0;
+        if (ms <= sWorst) return;          // only ever-worse cases, keeps it quiet
+        sWorst = ms;
+        if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+            std::fprintf(lg, "[uf1] paint BLOCKED %lld ms\n", (long long)ms);
+            std::fclose(lg);
+        }
+    }
+};
+
 void uf1PaintChannel_()
 {
+    Uf1PaintTimer_ paintTimer_;
     if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
 
     // Hue Mode owns the screen outright. Handing over here rather than branching
