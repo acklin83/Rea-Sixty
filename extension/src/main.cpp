@@ -20648,6 +20648,26 @@ void logEscapingException_(const char* where, const char* what);
 
 int ReaSixtySurface::Extended(int call, void* parm1, void* parm2, void* parm3)
 {
+    // ⇨ AND `Extended` MOST OF ALL. REAPER fires it for every FX-param change
+    // and a family of notifications, so it is by far the most-called callback we
+    // own -- and it was not in the first round of timing. Tagged with `call` so a
+    // slow one names WHICH notification is doing it.
+    struct ExtTimer_ {
+        int call; int64_t t0;
+        explicit ExtTimer_(int c) : call(c), t0(nowMs_()) {}
+        ~ExtTimer_() {
+            const int64_t ms = nowMs_() - t0;
+            if (ms < 200) return;
+            static int64_t sWorst = 0;
+            if (ms <= sWorst) return;
+            sWorst = ms;
+            if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                std::fprintf(lg, "[uf1] CSurf Extended(call=%d) took %lld ms\n",
+                             call, (long long)ms);
+                std::fclose(lg);
+            }
+        }
+    } extTimer_(call);
     // REAPER calls this OUTSIDE our timer, for every FX-param change from any
     // source, so it is a second way into our code from the run loop — and the
     // first abort left an empty log precisely because only the timer path was
