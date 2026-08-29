@@ -1991,12 +1991,34 @@ static bool isLevelMeter_(int dt) {
         || dt == int(sslmeter::DataType::BarPeak)
         || dt == int(sslmeter::DataType::BarRms);
 }
+// A value counts as "the floor" when every channel sits at or below this. The
+// plug-in's silence is around -129 dBFS; -100 is far below anything audible
+// (16-bit noise floor is -96) so no real signal is mistaken for it.
+static constexpr float kFloorDb = -100.0f;
+static bool atFloor_(const Slot& s) {
+    if (s.current.empty()) return false;
+    for (float v : s.current)
+        if (std::isfinite(v) && v > kFloorDb) return false;
+    return true;
+}
 static bool slotUsable_(const Slot& s, int dataType) {
     if (!s.have) return false;
     if (isLevelMeter_(dataType)) {
         const long long now = nowMs();
         if (s.lastMs < now - kSlotStaleMs) return false;          // plug-in stopped sending
-        if (g_transportStopped.load() && s.lastChangedMs < now - kFrozenMs)
+        // ⛔ "FROZEN" IS NOT "SILENT", AND THE COMMENT ABOVE ALREADY SAID SO.
+        // kFrozenMs is documented as "a frozen scale FLOOR", but the test only
+        // asked whether the value had stopped moving -- never whether it had
+        // stopped at the bottom. A steady tone with the transport stopped is
+        // exactly that: unchanging and nowhere near the floor. After 300 ms all
+        // three level types were declared silence and vanished, so the bars, the
+        // needle and the readouts stopped dead while the goniometer (not a level
+        // type) kept moving. Frank 2026-08-29: "hing, transport lief nicht,
+        // konstanter ton drauf" -- and it healed on a channel-encoder move
+        // because that lands on a track whose value DOES move.
+        // Require the floor the comment always described.
+        if (g_transportStopped.load() && s.lastChangedMs < now - kFrozenMs
+            && atFloor_(s))
             return false;                                         // frozen at stop → silence
     }
     return true;
