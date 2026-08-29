@@ -28593,6 +28593,50 @@ struct Uf1PaintTimer_ {
     }
 };
 
+// ⇨ AN EMPTY PROJECT HAS TO LOOK EMPTY. Delete the last track and the resolver
+// has nothing left to hand out (the track it was holding fails ValidatePtr2), so
+// uf1PaintChannel_ returned on the spot -- and the pacer went on restating the
+// LAST snapshot forever, which left the strip sitting on "CH 1" and the meter
+// face on its final frame (Frank 2026-08-29). Same mechanism as the master
+// freeze, one step further out: the painter stopping is what freezes the glass,
+// never the wire.
+// Blank the channel zone ONCE on the edge, and note what this deliberately does
+// NOT do: it does not stop the cycle. The firmware drops to lazy render-on-idle
+// when the cycle chain breaks (see the pacer's metronome note), so the idle
+// snapshot keeps streaming with zeroed levels instead.
+// Every frame here is one the strip painter already sends for an unselected,
+// unsoloed, unmuted track -- this is not a second scheme for the same lamps.
+static void uf1PaintEmptyChannel_()
+{
+    if (!g_uf1_dev) return;
+    const uint8_t none = 0x00;
+    auto zoneText = [&](uint16_t addr) {
+        // 0x00-prefixed text cell with no glyphs after the prefix.
+        g_uf1_dev->send(uf1::buildScreen(addr, std::span<const uint8_t>(&none, 1)));
+    };
+    zoneText(uf1::scr::kTrackName);
+    zoneText(uf1::scr::kOutputDb);
+    zoneText(uf1::scr::kValueLine);
+    zoneText(uf1::scr::kChNumber);
+    const uint8_t bar[] = { 0x00, 0x00 };
+    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVPotReadoutBar, bar));
+    // 0x0006 is the firmware's OWN "channel populated" flag (it gates the colour
+    // bar), so an empty slot is a state the device already knows how to show.
+    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive,
+                                     std::span<const uint8_t>(&none, 1)));
+    g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, 0x000000u));   // unselected → dark
+    g_uf1_dev->send(uf1::buildLedLevel (uf1::led::kSel, uf1::led::kFf39Lit));
+    g_uf1_dev->send(uf1::buildLedPrimary(uf1::led::kSolo, uf1::led::kDimSolo));
+    g_uf1_dev->send(uf1::buildLedLevel  (uf1::led::kSolo, uf1::led::kDimSolo));
+    g_uf1_dev->send(uf1::buildLedPrimary(uf1::led::kCut,  uf1::led::kDimCut));
+    g_uf1_dev->send(uf1::buildLedLevel  (uf1::led::kCut,  uf1::led::kDimCut));
+    // The large plane keeps its last image when no image chunks arrive (the
+    // pacer's own rule), so wipe it explicitly -- the same 0x0122 clear the
+    // preset browser uses when it takes the display.
+    std::array<uint8_t, 251> z{};
+    g_uf1_dev->send(uf1::buildScreen(0x0122, z));
+}
+
 void uf1PaintChannel_()
 {
     Uf1PaintTimer_ paintTimer_;
@@ -28641,6 +28685,7 @@ void uf1PaintChannel_()
     static bool        sMeterView = false;
     static int         sMeterScreen = -1;   // −1 = unset, forces the first burst
     static int         sMeterPage = -1;     // −1 = unset, forces the first labels
+    static bool        sEmptyPainted = false;  // the no-track zone is already up
 
     // ★ A REOPENED DEVICE IS A BLANK DEVICE (2026-07-18). Every static above is
     // "what the UF1 already shows", and everything here is send-on-change. They
@@ -28659,9 +28704,46 @@ void uf1PaintChannel_()
         sGen = gen;
         sTr = nullptr;                            // → changed=true → strip force-repaints
         sMeterView = false; sMeterScreen = -1;   // forces the entry burst
+        sEmptyPainted = false;                    // …and the no-track zone, if it is up
     }
 
-    if (!tr) { sTr = nullptr; return; }
+    if (!tr) {
+        // No track to show (the last one was deleted, or the project is empty).
+        // Paint the empty zone once, then keep the idle cycle running so the
+        // firmware stays in continuous-refresh mode and the face is BLANK rather
+        // than frozen on whatever it last showed.
+        if (!sEmptyPainted) {
+            sEmptyPainted = true;
+            uf1PaintEmptyChannel_();
+            // Invalidate both painters' change-detect statics, exactly the way
+            // the Hue-mode edge and the reopen path do: when a track comes back
+            // the meter view has to re-send its entry burst (we just wiped
+            // 0x0122) instead of believing it is still on the glass.
+            g_uf1Gen.fetch_add(1, std::memory_order_relaxed);
+        }
+        {
+            auto parts = std::make_shared<Uf1CycleParts>();
+            const uint8_t z4[] = { 0x00, 0x00, 0x00, 0x00 };
+            const uint8_t z1   = 0x00;
+            parts->meters.push_back(uf1::buildScreen(0x0009, z4));   // LEVEL L/R
+            parts->meters.push_back(uf1::buildScreen(0x000a, z4));
+            parts->meters.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&z1, 1)));
+            parts->meters.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&z1, 1)));
+            // The header is the surface's, not the track's (mode field + N/M), so
+            // it keeps being restated while there is nothing to show.
+            auto hdr = uf1BuildLiveHeader_();
+            parts->tail.push_back(uf1::buildScreen(uf1::scr::kHeaderRow,
+                std::span<const uint8_t>(hdr.data(), hdr.size())));
+            parts->tail.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&z1, 1)));
+            std::lock_guard<std::mutex> lk(g_uf1CycleMx);
+            g_uf1CycleSnap = std::shared_ptr<const Uf1CycleParts>(std::move(parts));
+        }
+        g_uf1CycleActive.store(true, std::memory_order_relaxed);
+        uf1EnsurePacer_();
+        sTr = nullptr;
+        return;
+    }
+    sEmptyPainted = false;
 
     // ★ THE FADER SIDE HAS ITS OWN TRACK. The UF1 is split down the middle: the
     // LEFT half (fader, level meter, small channel LCD, Solo, Cut, Sel, the
