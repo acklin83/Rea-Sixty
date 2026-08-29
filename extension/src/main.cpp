@@ -21060,6 +21060,22 @@ static void uf1CyclePacerLoop_()
         }
         slot = steady_clock::now();
         if (snap) sentSeq = snap->seq;
+        // ⇨ AND THE WIRE SIDE REPORTS ITS OWN STALLS. The pacer is supposed to
+        // emit every ~41 ms no matter what; if the gap ever runs long, the
+        // freeze is HERE and not in the data. Deduped to gaps only, so a healthy
+        // run prints nothing at all.
+        {
+            static auto sLastEmit = steady_clock::now();
+            const auto gap = duration_cast<milliseconds>(slot - sLastEmit).count();
+            sLastEmit = slot;
+            if (gap > 250) {
+                if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                    std::fprintf(lg, "[uf1] cycle pacer STALL: %lld ms since last emit\n",
+                                 (long long)gap);
+                    std::fclose(lg);
+                }
+            }
+        }
         if (snap && g_uf1_dev) {
             g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->img));
             std::this_thread::sleep_until(slot + kMetersOff);
@@ -24642,6 +24658,29 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             parts->tail.push_back(uf1::buildScreen(0x0128, std::span<const uint8_t>(&mask, 1)));
         }
         parts->tail.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kZero, 1)));
+        // ⇨ ONE HEARTBEAT PER SECOND WHILE THE OVERVIEW IS UP.
+        // "It freezes when I mute" has survived three fixes, and each of those
+        // was a guess about WHICH stage stopped: the data, the snapshot, or the
+        // wire. This says which. seq is the plug-in's own frame number, so a
+        // frozen seq means the DATA stopped; a moving seq with a frozen face
+        // means we stopped sending. Costs one line a second and only in the
+        // meter view.
+        {
+            static int64_t sHb = 0;
+            const int64_t nowH = nowMs_();
+            if (nowH - sHb >= 1000) {
+                sHb = nowH;
+                if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                    std::fprintf(lg,
+                        "[uf1] meter hb: seq=%llu liss=%d peak=%d db=%.1f "
+                        "stopped=%d img=%zu tail=%zu\n",
+                        (unsigned long long)lseq, haveLiss ? 1 : 0, havePeak ? 1 : 0,
+                        double(dbL), (GetPlayState() & 1) ? 0 : 1,
+                        parts->img.size(), parts->tail.size());
+                    std::fclose(lg);
+                }
+            }
+        }
         {
             std::lock_guard<std::mutex> lk(g_uf1CycleMx);
             g_uf1CycleSnap = std::shared_ptr<const Uf1CycleParts>(std::move(parts));
