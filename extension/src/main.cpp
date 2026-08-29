@@ -24136,16 +24136,15 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         int selIdx = 0;
         if (MediaTrack* selTr = GetSelectedTrack(nullptr, 0))
             selIdx = int(GetMediaTrackInfo_Value(selTr, "IP_TRACKNUMBER"));
-        // GetSelectedTrack IGNORES the master (SDK, reaper_plugin_functions.h:
-        // "This function ignores the master track, see GetSelectedTrack2"), so
-        // selecting the master left this at 0 and auto-mode could never follow a
-        // Meter on the master or in the monitoring chain. -1 is what the master
-        // reports as IP_TRACKNUMBER and what the plug-ins announce for both of
-        // its chains. Only consulted when no ordinary track is selected, so a
-        // normal selection behaves exactly as before.
-        else if (MediaTrack* mst = GetMasterTrack(nullptr)) {
-            if (GetMediaTrackInfo_Value(mst, "I_SELECTED") > 0.5) selIdx = -1;
-        }
+        // ⛔ THE METER VIEW DOES NOT AUTO-FOLLOW THE MASTER. REVERTED 2026-08-29.
+        // I added that this morning: GetSelectedTrack ignores the master, so
+        // auto-mode could not follow a Meter on it, and this fed -1 instead.
+        // It is also the ONLY code that does anything special when the master is
+        // selected -- and selecting the master is exactly what freezes the
+        // surface, every time, until a channel-encoder move. Whatever the
+        // mechanism, this is the trigger I introduced, so it goes. V-Pot1 still
+        // pins either master instance by hand, which is what was actually asked
+        // for; only the automatic follow is gone.
         sslcore::setAutoTrackIndex(selIdx);
     }
     // Transport state → the impersonator's frozen-at-stop blanking: a LEVEL meter

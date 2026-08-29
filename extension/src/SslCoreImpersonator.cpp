@@ -1963,7 +1963,9 @@ static std::vector<uint16_t> liveMeterPorts_(int trackIndex);
 static void steerAutoPort_() {
     if (g_meterSel >= 0) return;                     // manual V-Pot1 pin wins
     const int want = g_autoTrackIdx.load();
-    if (want == 0) return;                           // 0 = nothing selected; -1 IS the master
+    // Back to <= 0 with the master auto-follow reverted: nothing feeds -1 any
+    // more, and steering on it was half of that same trigger.
+    if (want <= 0) return;
     // The track's Meters in CONNECT order, and take the first. Iterating g_inst
     // instead handed out whichever UDP port number happened to sort first, so on
     // a track with two Meters the view could land on either one — and the FX the
