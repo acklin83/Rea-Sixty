@@ -21009,6 +21009,9 @@ static std::mutex g_uf1CycleMx;
 static std::shared_ptr<const Uf1CycleParts> g_uf1CycleSnap;
 static std::atomic<bool> g_uf1CycleActive{false};   // painter: screen 0 visible
 static std::atomic<bool> g_uf1PacerRun{false};
+// Set when REAPER's timer stopped firing long enough that the surface can have
+// lost its plane; consumed by the painter to re-assert the layout.
+static std::atomic<bool> g_uf1PlaneLost{false};
 // Cycles actually put on the wire, read by the painter's heartbeat. A
 // healthy Overview emits ~24-25 per second; a number that collapses says
 // the pacer stopped feeding the device even though nothing errored.
@@ -28692,8 +28695,11 @@ void uf1PaintChannel_()
     // burst re-sends 0x0100 (the large-LCD LAYOUT SELECTOR) and slams the small-LCD
     // meters to their idle 0xff state, which the pacer then undoes a frame later.
     // Layout-establishing sends use THIS gate; text/label repaints keep `changed`.
+    // A main-thread stall long enough to break the stream leaves the surface
+    // without its plane, and re-establishing it is exactly what this gate does.
+    const bool planeLost = g_uf1PlaneLost.exchange(false, std::memory_order_relaxed);
     const bool layoutChanged = (tr != sTr) || viewChanged || screenChanged
-                             || identChanged || presetClosed;
+                             || identChanged || presetClosed || planeLost;
     sTr = tr;
     // The meter INSTANCE the view reads can change with NO UF1 action: the
     // auto-follow tracks the SELECTED REAPER track (Frank 2026-07-29). When it
@@ -36982,6 +36988,16 @@ void onTimer()
     {
         static int64_t sPrevEnd = 0, sWorstGap = 0, sWorstRun = 0;
         const int64_t t0 = nowMs_();
+        // ⇨ AND RECOVER FROM IT. Measured 2026-08-29: selecting the master
+        // stalls REAPER's timer (onTimer GAP 1085 ms) while the pacer keeps
+        // emitting from its own thread. The surface comes back with its plane
+        // lost and stays frozen -- everything, including the channel peak meter
+        // that has nothing to do with the meter view -- until a channel-encoder
+        // move, the only action that re-sends 0x0100. That heal IS
+        // `layoutChanged`, so trigger the same path from the stall itself
+        // instead of leaving it to Frank's hand. Rare by construction.
+        if (sPrevEnd && t0 - sPrevEnd > 300)
+            g_uf1PlaneLost.store(true, std::memory_order_relaxed);
         if (sPrevEnd && t0 - sPrevEnd > 300 && t0 - sPrevEnd > sWorstGap) {
             sWorstGap = t0 - sPrevEnd;
             if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
