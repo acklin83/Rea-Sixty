@@ -21065,6 +21065,10 @@ static std::atomic<bool> g_uf1PlaneLost{false};
 // diverge: the tick is alive and the meter block is being skipped.
 static std::atomic<unsigned> g_uf1PaintRuns{0};
 static std::atomic<unsigned> g_uf1MeterRuns{0};
+// Which of the two ways the painter can skip the meter block took it: the
+// preset browser owning the display, or meterView simply not being set.
+static std::atomic<unsigned> g_uf1SkipPreset{0};
+static std::atomic<unsigned> g_uf1SkipNotMeter{0};
 // Cycles actually put on the wire, read by the painter's heartbeat. A
 // healthy Overview emits ~24-25 per second; a number that collapses says
 // the pacer stopped feeding the device even though nothing errored.
@@ -24744,13 +24748,15 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
                     std::fprintf(lg,
                         "[uf1] meter hb: seq=%llu liss=%d peak=%d db=%.1f "
-                        "stopped=%d img=%zu tail=%zu emitted=%u paint=%u meter=%u\n",
+                        "stopped=%d img=%zu tail=%zu emitted=%u paint=%u meter=%u skipPre=%u skipNM=%u\n",
                         (unsigned long long)lseq, haveLiss ? 1 : 0, havePeak ? 1 : 0,
                         double(dbL), (GetPlayState() & 1) ? 0 : 1,
                         parts->img.size(), parts->tail.size(),
                         g_uf1CyclesEmitted.exchange(0, std::memory_order_relaxed),
                         g_uf1PaintRuns.exchange(0, std::memory_order_relaxed),
-                        g_uf1MeterRuns.exchange(0, std::memory_order_relaxed));
+                        g_uf1MeterRuns.exchange(0, std::memory_order_relaxed),
+                        g_uf1SkipPreset.exchange(0, std::memory_order_relaxed),
+                        g_uf1SkipNotMeter.exchange(0, std::memory_order_relaxed));
                     std::fclose(lg);
                 }
             }
@@ -29263,6 +29269,7 @@ void uf1PaintChannel_()
                 g_uf1_dev->send(uf1::buildScreen(0x011f, std::span<const uint8_t>(&cur, 1)));
             }
             sPresets = true;
+            g_uf1SkipPreset.fetch_add(1, std::memory_order_relaxed);
             return;   // browsing → this owns the display, paint nothing else
         }
         if (!presets && sPresets) {
@@ -29281,6 +29288,7 @@ void uf1PaintChannel_()
     if (meterView) {
         uf1PaintMeter_(tr, changed);
     } else {
+        g_uf1SkipNotMeter.fetch_add(1, std::memory_order_relaxed);
     // Channel view: keep the cycle CHAIN running — SSL streams the idle cycle
     // (0009 000a 0015 0016 011c 011d @ ~25 Hz) from connect onward and NEVER
     // breaks it (cap84 plugin-idle, cap101 t=26.6..35.8). The full-session
