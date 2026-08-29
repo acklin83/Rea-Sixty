@@ -24229,11 +24229,28 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // used to fail the > -120 test and silently flip the whole readout over
         // to REAPER's peak for that tick — two different numbers alternating at
         // 25 Hz. Skip those messages instead; the previous good value stands.
-        auto ok = [](float v) { return std::isfinite(v) && v > -120.f; };
-        const bool pluginPeak =
+        // ⛔ "STREAMS SILENCE" IS NOT "STREAMS NOTHING", AND THE TEST ABOVE
+        // CONFLATES THEM. A loaded Meter sends ~25 Hz whether or not there is
+        // signal; at silence it sends its floor (-129 dBFS). Demanding a
+        // non-floor value before believing the plug-in therefore treats a
+        // correctly measuring instance as absent and substitutes REAPER's track
+        // peak — a number from a DIFFERENT point in the signal path. On the
+        // master's monitoring chain that is simply the wrong meter: Frank
+        // 2026-08-28 muted the master with ONE instance on MON FX and still got
+        // a reading, "den falschen peakmeter auf overview (ohne gonio)", a VU
+        // needle pinned at the top from that foreign level, and a PPM doing
+        // "irgendwas" — three symptoms, one substituted number.
+        // The floor is a MEASUREMENT. Take it.
+        // What still must not be taken is a NaN: cap87 shows roughly every 5th
+        // BarPeak carrying 0xffc00000 in both f3 and f4, and those frames are
+        // skipped so the previous good value stands. That is the only reason to
+        // look at the values at all here.
+        auto usable = [](float v) { return std::isfinite(v); };
+        const bool streamed =
             sslcore::isRunning() &&
             sslcore::getMeter(int(sslmeter::DataType::BarPeak), cur, pk) &&
-            cur.size() >= 2 && (ok(cur[0]) || ok(cur[1]));
+            cur.size() >= 2;
+        const bool pluginPeak = streamed && (usable(cur[0]) || usable(cur[1]));
         if (pluginPeak) {
             dbL = cur[0]; dbR = cur[1]; havePeak = true;
             // THE PEAK HOLD IS f4 PeakValues — the plugin computes and holds it
@@ -24248,13 +24265,14 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 holdR = std::isfinite(pk[1]) ? pk[1] : -120.f;
                 haveHold = true;
             }
+            // Same rule for RMS: a floor reading is a reading, only NaN is not.
             std::vector<float> rc, rp;
             if (sslcore::getMeter(int(sslmeter::DataType::BarRms), rc, rp) &&
-                rc.size() >= 2 && (ok(rc[0]) || ok(rc[1]))) {
+                rc.size() >= 2 && (usable(rc[0]) || usable(rc[1]))) {
                 rmsL = rc[0]; rmsR = rc[1]; haveRms = true;
             }
         } else {
-            // Silent/absent BarPeak (fails the ok() test above). Read REAPER's own
+            // The plug-in sent no usable BarPeak this tick. Read REAPER's own
             // peaks off the SELECTED instance's track — its peak matches the
             // instance (silent → empty) and is stable across the plug-in's ~1-in-5
             // NaN ticks. Reading the FOCUSED track here painted its signal on a
@@ -24275,16 +24293,28 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             // A silent instance must read EMPTY, which is the honest answer and
             // the same rule the stream resolver follows: defer rather than
             // borrow the neighbour's number.
+            // Reached only when the plug-in sent NO BarPeak at all (or only
+            // NaN this tick). An instance that streamed a real number, floor
+            // included, was taken above and never lands here.
+            // ⛔ AND THE TRACK'S PEAK IS NOT A STAND-IN FOR AN ARBITRARY
+            // INSTANCE. It is the right answer only where the instance and the
+            // track measure the same point: an ordinary track's own FX chain,
+            // carrying one Meter. Not the master (two chains, one track), and
+            // not a monitoring-chain instance, which sits after the master's
+            // mute and measures something the track peak knows nothing about.
             MediaTrack* ptr = nullptr; int pfx = -1;
             int pcnt = 0, pdummy = -1;
             const bool havePin = uf1PinnedMeterTrackFx_(ptr, pfx);
             if (havePin && ptr) uf1FindMeterFx_(ptr, 0, pdummy, pcnt);
-            if (havePin && pcnt <= 1) {
+            const bool monChainFx = (pfx & 0x1000000) != 0;
+            const bool trackSpeaksForIt =
+                havePin && pcnt <= 1 && !monChainFx && ptr != GetMasterTrack(nullptr);
+            if (trackSpeaksForIt) {
                 dbL = peakToDb(Track_GetPeakInfo(ptr, 0));
                 dbR = peakToDb(Track_GetPeakInfo(ptr, 1));
                 havePeak = true;
             } else if (havePin) {
-                // Two or more instances share this track — leave the bars empty.
+                // Nothing here can answer for this instance — leave it empty.
             } else if (!sslcore::isRunning()) {
                 dbL = peakToDb(Track_GetPeakInfo(tr, 0));
                 dbR = peakToDb(Track_GetPeakInfo(tr, 1));
