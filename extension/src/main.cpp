@@ -21060,6 +21060,11 @@ static std::atomic<bool> g_uf1PacerRun{false};
 // Set when REAPER's timer stopped firing long enough that the surface can have
 // lost its plane; consumed by the painter to re-assert the layout.
 static std::atomic<bool> g_uf1PlaneLost{false};
+// How often the painter ran, and how often it reached the meter block, since
+// the last heartbeat. emitted=188 with onTimer GAP only 1090 ms says the two
+// diverge: the tick is alive and the meter block is being skipped.
+static std::atomic<unsigned> g_uf1PaintRuns{0};
+static std::atomic<unsigned> g_uf1MeterRuns{0};
 // Cycles actually put on the wire, read by the painter's heartbeat. A
 // healthy Overview emits ~24-25 per second; a number that collapses says
 // the pacer stopped feeding the device even though nothing errored.
@@ -24117,6 +24122,7 @@ static bool uf1PresetBrowserFx_(MediaTrack*& outTr, int& outFx)
 
 void uf1PaintMeter_(MediaTrack* tr, bool force)
 {
+    g_uf1MeterRuns.fetch_add(1, std::memory_order_relaxed);
     // AUTO-MODE instance follow (Frank 2026-07-29 "der selektierten Spur folgen"):
     // tell the impersonator which track is selected so that, with NO V-Pot1 pin,
     // the meter view reads THAT track's Meter instance instead of sticking to
@@ -24738,11 +24744,13 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
                     std::fprintf(lg,
                         "[uf1] meter hb: seq=%llu liss=%d peak=%d db=%.1f "
-                        "stopped=%d img=%zu tail=%zu emitted=%u\n",
+                        "stopped=%d img=%zu tail=%zu emitted=%u paint=%u meter=%u\n",
                         (unsigned long long)lseq, haveLiss ? 1 : 0, havePeak ? 1 : 0,
                         double(dbL), (GetPlayState() & 1) ? 0 : 1,
                         parts->img.size(), parts->tail.size(),
-                        g_uf1CyclesEmitted.exchange(0, std::memory_order_relaxed));
+                        g_uf1CyclesEmitted.exchange(0, std::memory_order_relaxed),
+                        g_uf1PaintRuns.exchange(0, std::memory_order_relaxed),
+                        g_uf1MeterRuns.exchange(0, std::memory_order_relaxed));
                     std::fclose(lg);
                 }
             }
@@ -28558,6 +28566,7 @@ struct Uf1PaintTimer_ {
 void uf1PaintChannel_()
 {
     Uf1PaintTimer_ paintTimer_;
+    g_uf1PaintRuns.fetch_add(1, std::memory_order_relaxed);
     if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
 
     // Hue Mode owns the screen outright. Handing over here rather than branching
