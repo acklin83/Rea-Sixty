@@ -16488,7 +16488,32 @@ MediaTrack* uf1FocusedTrack_()
     // not in MASTER mode, ignore the master as last-touched and fall to the selection.
     if (tr == master) tr = nullptr;
     if (!tr) tr = GetSelectedTrack(nullptr, 0);
-    return tr;
+    // ⛔ NO FOCUS IS NOT A REASON TO STOP PAINTING — THIS IS THE MASTER FREEZE.
+    // Select the master in REAPER and all three answers above go blank in the
+    // same tick: GetSelectedTrack ignores the master by definition (SDK: "This
+    // function ignores the master track"), GetLastTouchedTrack points AT it, and
+    // the line right above nulls exactly that. The resolver returned nullptr,
+    // and uf1PaintChannel_'s `if (!tr) return` then dropped the ENTIRE paint —
+    // strip, meter block, and the cycle snapshot with them. The pacer kept
+    // re-sending its LAST snapshot at 25 Hz, which is why every stage measured
+    // healthy (plug-in data, snapshot size, pacer, USB, the device itself) while
+    // the glass stood still, why the frame trace showed identical frames, and
+    // why the one run that caught it read paint=148 meter=4: g_uf1PaintRuns
+    // counts ABOVE that return, g_uf1MeterRuns below it, and neither skip
+    // counter sits there. The channel encoder healed it every time because it
+    // puts a real track back in the selection — it never had to send anything,
+    // which is why the trace of the heal showed nothing but keepalives.
+    // So hold the last valid track rather than go blank: the surface keeps
+    // showing, and acting on, the channel it showed the tick before, so display
+    // and action still agree ([[uf1-panel-halves-rule]]). The master is
+    // deliberately NOT followed here — that auto-follow was reverted (0afa296);
+    // V-Pot1 pins a master instance by hand.
+    static MediaTrack* sLastFocus = nullptr;
+    if (tr) { sLastFocus = tr; return tr; }
+    if (sLastFocus && ValidatePtr2(nullptr, sLastFocus, "MediaTrack*"))
+        return sLastFocus;
+    sLastFocus = nullptr;      // deleted, or another project — nothing to hold
+    return nullptr;
 }
 
 // The track the UF1's MOTOR FADER belongs to — the ONLY thing the Extender
