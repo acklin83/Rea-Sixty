@@ -20522,8 +20522,33 @@ void sendLed(LedClass cls, MediaTrack* tr, bool on)
     }
 }
 
+// ⇨ TIME THE SURFACE CALLBACKS, NOT JUST THE TIMER.
+// Measured 2026-08-29: selecting the master stalls REAPER's main thread for
+// ~1.1 s (onTimer GAP), while our own tick is never slow and the painter never
+// blocks. The second passes BETWEEN ticks, which is where REAPER runs -- and
+// where our CSurf callbacks run. Those have never been measured. SetSurfaceMute
+// and SetSurfaceSelected are exactly the two events Frank can trigger, so if one
+// of them is holding the main thread, this names it and the stall stops being a
+// mystery to be papered over with a recovery.
+struct ReaSixtyCbTimer_ {
+    const char* what; int64_t t0;
+    explicit ReaSixtyCbTimer_(const char* w) : what(w), t0(nowMs_()) {}
+    ~ReaSixtyCbTimer_() {
+        const int64_t ms = nowMs_() - t0;
+        if (ms < 200) return;
+        static int64_t sWorst = 0;
+        if (ms <= sWorst) return;
+        sWorst = ms;
+        if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+            std::fprintf(lg, "[uf1] CSurf %s took %lld ms\n", what, (long long)ms);
+            std::fclose(lg);
+        }
+    }
+};
+
 void ReaSixtySurface::SetSurfaceSolo(MediaTrack* tr, bool solo)
 {
+    ReaSixtyCbTimer_ cbt_("solo");
     sendLed(LedClass::Solo, tr, solo);
     // UC1's Solo / Solo Clear LEDs track REAPER state. Solo Clear
     // reflects "any track soloed anywhere", so every SetSurfaceSolo
@@ -20533,6 +20558,7 @@ void ReaSixtySurface::SetSurfaceSolo(MediaTrack* tr, bool solo)
 }
 void ReaSixtySurface::SetSurfaceMute(MediaTrack* tr, bool mute)
 {
+    ReaSixtyCbTimer_ cbt_("mute");
     sendLed(LedClass::Mute, tr, mute);
     // Only the focused track's Cut LED matters on UC1 — skip refresh
     // when REAPER reports a different track's mute change.
@@ -20543,6 +20569,7 @@ void ReaSixtySurface::SetSurfaceMute(MediaTrack* tr, bool mute)
 }
 void ReaSixtySurface::SetSurfaceSelected(MediaTrack* tr, bool sel)
 {
+    ReaSixtyCbTimer_ cbt_("selected");
     // Load-sweep freeze (SYNCHRONOUS). While the SSL plug-ins connect in a burst
     // at project load, each selects its OWN track → the selection would count
     // through the channels (Frank 2026-07-26). Revert HERE — inside the
@@ -20594,6 +20621,7 @@ void ReaSixtySurface::SetSurfaceSelected(MediaTrack* tr, bool sel)
 }
 void ReaSixtySurface::SetSurfaceRecArm(MediaTrack* tr, bool arm)
 {
+    ReaSixtyCbTimer_ cbt_("recarm");
     // Rec-arm doesn't have its own dedicated LED on the UF8 — SSL360
     // repaints the SEL LED in red when the track is armed and back to
     // track-colour/white when disarmed. Push a SEL refresh so the
