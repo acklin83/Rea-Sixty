@@ -455,6 +455,26 @@ void UF1Device::workerLoop_()
             if (rc < 0) {
                 lastError_ = std::string("bulk OUT failed: ") + libusb_error_name(rc);
                 ++failed; lastRc = rc;
+                // ⇨ WHICH FRAME WAS REJECTED. Frank, 2026-08-29: "Bei SSL
+                // funktioniert das auch" -- same device, same machine, same USB
+                // stack, and SSL never freezes. So a frame the endpoint refuses
+                // is OUR frame being wrong, not the hardware being flaky, and
+                // the only useful question is which one. Log its head: byte 1 is
+                // the command (0x67 screen, 0x38 LED, 0x1B keepalive, ...) and
+                // for a screen frame bytes 3-4 are the element address.
+                static int sShown = 0;
+                if (sShown < 12) {
+                    ++sShown;
+                    char hex[64] = {0}; int o = 0;
+                    for (size_t q = 0; q < frame.size() && q < 12 && o < 58; ++q)
+                        o += std::snprintf(hex + o, sizeof(hex) - o, "%02x ",
+                                           unsigned(frame[q]));
+                    if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                        std::fprintf(lg, "[uf1] REJECTED (%s) len=%zu head: %s\n",
+                                     libusb_error_name(rc), frame.size(), hex);
+                        std::fclose(lg);
+                    }
+                }
             }
             recordRc(rc);
             traceFrame_('O', frame.data(), frame.size(), rc);
