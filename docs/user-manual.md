@@ -1250,7 +1250,9 @@ For these two the FX gesture table does not apply. Only short versus long press 
 
 **Parameter Groups** — the eight keys are the eight groups, labelled with your group names (falling back to `Grp 1`…`Grp 8`). A key is bright when the focused track belongs to that group. A short press toggles membership across every selected track; a long press toggles whether the group is broadcasting at all. Group names are edited in the separate **Parameter Groups** Settings section, not here. Membership is stored in the project; group names and their on/off state are global.
 
-**Track Colours** — the keys are labelled `Col 1`…`Col 8` and each glows its own palette colour, brightening when the focused track wears it. A short press paints every selected track; a long press clears the custom colour instead. The palette itself is edited right below the dropdown as eight swatches, and is global.
+**Track Colours** — each key glows its own palette colour, brightening when the focused track wears it, and wears the name of the colour it shows: `RED`, `ORANGE`, `YELLOW`, `GREEN`, `CYAN`, `BLUE`, `PURPLE`, `MAGENTA`, `PINK`, `WHITE`. Those are the words SSL 360° itself uses for the same ten colours, so a key and the hardware always agree. A colour you mixed yourself is none of the ten and has no name to wear, so that key reads `Col 1`…`Col 8` instead; a name you typed into the slot beats both. A short press paints every selected track; a long press clears the custom colour instead. The palette itself is edited right below the dropdown as eight swatches, and is global.
+
+If you had named these keys before the palette moved to the hardware colours, those names described the colours the slots used to carry. They are corrected once, on load, and only where the name is still the old palette's own word for that slot. A name you chose yourself is never touched.
 
 **If a bank stays blank**
 
