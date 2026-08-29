@@ -21009,6 +21009,10 @@ static std::mutex g_uf1CycleMx;
 static std::shared_ptr<const Uf1CycleParts> g_uf1CycleSnap;
 static std::atomic<bool> g_uf1CycleActive{false};   // painter: screen 0 visible
 static std::atomic<bool> g_uf1PacerRun{false};
+// Cycles actually put on the wire, read by the painter's heartbeat. A
+// healthy Overview emits ~24-25 per second; a number that collapses says
+// the pacer stopped feeding the device even though nothing errored.
+static std::atomic<unsigned> g_uf1CyclesEmitted{0};
 static std::thread g_uf1PacerThread;
 
 static void uf1CyclePacerLoop_()
@@ -21068,13 +21072,18 @@ static void uf1CyclePacerLoop_()
             static auto sLastEmit = steady_clock::now();
             const auto gap = duration_cast<milliseconds>(slot - sLastEmit).count();
             sLastEmit = slot;
-            if (gap > 250) {
+            // 100 ms, not 250: the device switches to lazy render-on-idle when
+            // the cycle stream breaks, and it does not need a long break to do
+            // it. SSL's own spacing is 40.8 ms, so anything past ~2 missed slots
+            // is already a gap the firmware can notice.
+            if (gap > 100) {
                 if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
-                    std::fprintf(lg, "[uf1] cycle pacer STALL: %lld ms since last emit\n",
+                    std::fprintf(lg, "[uf1] cycle pacer GAP: %lld ms since last emit\n",
                                  (long long)gap);
                     std::fclose(lg);
                 }
             }
+            g_uf1CyclesEmitted.fetch_add(1, std::memory_order_relaxed);
         }
         if (snap && g_uf1_dev) {
             g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->img));
@@ -24673,10 +24682,11 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
                     std::fprintf(lg,
                         "[uf1] meter hb: seq=%llu liss=%d peak=%d db=%.1f "
-                        "stopped=%d img=%zu tail=%zu\n",
+                        "stopped=%d img=%zu tail=%zu emitted=%u\n",
                         (unsigned long long)lseq, haveLiss ? 1 : 0, havePeak ? 1 : 0,
                         double(dbL), (GetPlayState() & 1) ? 0 : 1,
-                        parts->img.size(), parts->tail.size());
+                        parts->img.size(), parts->tail.size(),
+                        g_uf1CyclesEmitted.exchange(0, std::memory_order_relaxed));
                     std::fclose(lg);
                 }
             }
