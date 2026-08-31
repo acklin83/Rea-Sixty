@@ -6832,6 +6832,27 @@ static DynSlotInfo fxBankSlotInfo_(MediaTrack* tr, int fxIdx)
 static int csFavSlotForName_(const char* addName);
 static int bcFavSlotForName_(const char* addName);
 
+// The name a FAVOURITE shows on any surface — the UC1 carousel, a dynamic bank
+// key, a soft-key label, the HUD dropdowns.
+// ⇨ THE FAVOURITE'S STORED "label" IS AN IDENTITY STRING, not a display name.
+// It is filled from the add-name when the slot is defined ("VST3: bx_console
+// SSL 4000 G (Plugin Alliance)") and it never learns about a Kurzname set
+// afterwards, so ask the plug-in map for the SHORT name instead: the user map's
+// displayShort for a learned plug-in, the built-in short name otherwise — the
+// same source the FX-Cycle colour bar reads. Three display paths had each grown
+// their own copy of these five lines since 2026-06-23 and the UC1 carousel had
+// none, which is why cycling CS / BC / Favourites was the one place still
+// reading out the identity (Frank 2026-08-31: "Namen werden auf UC1 als 'VST3:
+// Langer Name' angezeigt anstatt z.B. 'TAM'"). One helper now, four callers.
+static std::string favDisplayName_(const std::string& addName,
+                                   const std::string& storedLabel)
+{
+    if (const auto* pb = uc1::lookupBindingsByName(addName);
+        pb && pb->shortName && *pb->shortName)
+        return pb->shortName;
+    return !storedLabel.empty() ? storedLabel : addName;
+}
+
 // Resolve key `slot` (0..7) of a dynamic bank against `tr`. Main-thread only
 // (touches REAPER track/send API). Empty/out-of-range → present=false.
 static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
@@ -6882,14 +6903,7 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
             const bool taken = isBc ? resolveBcFav(slot, addName, favLbl)
                                     : resolveCsFav(slot, addName, favLbl);
             if (taken) {
-                // The plug-in's SHORT name, same source as the FX-Cycle colour
-                // bar; the favourite's stored "label" is its identity string.
-                if (const auto* pb = uc1::lookupBindingsByName(addName);
-                    pb && pb->shortName && *pb->shortName) {
-                    info.label = pb->shortName;
-                } else {
-                    info.label = !favLbl.empty() ? favLbl : addName;
-                }
+                info.label = favDisplayName_(addName, favLbl);
             } else {
                 char b[12];
                 std::snprintf(b, sizeof(b), "%s Fav %d", isBc ? "BC" : "CS",
@@ -8365,8 +8379,8 @@ void showFavCarousel_(MediaTrack* tr, const std::vector<int>& slots, int curK,
         const bool ok = isBc ? resolveBcFav(slots[k], add, lbl)
                              : resolveCsFav(slots[k], add, lbl);
         if (!ok) return {};
-        // UC1 LCD = Latin-1; fold the favourite label once at source.
-        return utf8ToLatin1(!lbl.empty() ? lbl : add);
+        // UC1 LCD = Latin-1; fold the favourite name once at source.
+        return utf8ToLatin1(favDisplayName_(add, lbl));
     };
     const bool wrap = g_wrapPluginCycle.load();
     const int prevK = wrap ? ((curK - 1 + sz) % sz) : (curK - 1);
@@ -15340,16 +15354,10 @@ void publishHud_()
         for (int i = 0; i < 8; ++i) {
             std::string a, l;
             const bool used = resolveCsFav(i, a, l);
-            // Show the plug-in SHORT name, not the raw identity stored as the
-            // favourite's label (mirrors the Settings FX-Learn combo). Frank
-            // 2026-06-24 — the long "VST3: bx_console SSL 4000 G (…)" strings
-            // blew the dropdown full-width.
-            std::string disp = l;
-            if (used) {
-                if (const auto* pb = uc1::lookupBindingsByName(a);
-                    pb && pb->shortName && *pb->shortName)
-                    disp = pb->shortName;
-            }
+            // The plug-in's SHORT name, not the raw identity the favourite
+            // stores as its label — the long "VST3: bx_console SSL 4000 G (…)"
+            // strings blew the dropdown full-width (Frank 2026-06-24).
+            const std::string disp = used ? favDisplayName_(a, l) : l;
             fav += std::to_string(i) + ';' + (used ? "1" : "0") + ';' + disp + '\n';
         }
         if (fav != g_hudCsFavPublished) {
@@ -15381,12 +15389,7 @@ void publishHud_()
         for (int i = 0; i < 8; ++i) {
             std::string a, l;
             const bool used = resolveBcFav(i, a, l);
-            std::string disp = l;
-            if (used) {
-                if (const auto* pb = uc1::lookupBindingsByName(a);
-                    pb && pb->shortName && *pb->shortName)
-                    disp = pb->shortName;
-            }
+            const std::string disp = used ? favDisplayName_(a, l) : l;
             fav += std::to_string(i) + ';' + (used ? "1" : "0") + ';' + disp + '\n';
         }
         if (fav != g_hudBcFavPublished) {
@@ -32375,21 +32378,10 @@ void pushZonesForVisibleSlots()
                         && (isCsFavSk ? resolveCsFav(favSlot, favAdd, favLbl)
                                       : resolveBcFav(favSlot, favAdd, favLbl));
                     if (taken) {
-                        // Show the plug-in's SHORT name (displayShort: "CS 2",
-                        // user-defined short, …) — same source as the FX-Cycle
-                        // colour-bar — NOT the raw identity. The favourite's
-                        // stored "label" is the identity string, so resolve via
-                        // the plug-in map instead (Frank 2026-06-23).
-                        std::string dyn;
-                        if (const auto* pb =
-                                uc1::lookupBindingsByName(favAdd);
-                            pb && pb->shortName && *pb->shortName) {
-                            dyn = pb->shortName;
-                        } else if (!favLbl.empty()) {
-                            dyn = favLbl;
-                        } else {
-                            dyn = favAdd;
-                        }
+                        // The plug-in's SHORT name (displayShort: "CS 2", the
+                        // user-defined short, …), NOT the raw identity the
+                        // favourite stores (Frank 2026-06-23).
+                        std::string dyn = favDisplayName_(favAdd, favLbl);
                         if (!dyn.empty()) {
                             if (dyn.size() > 12) dyn.resize(12);
                             userLabel = dyn;
