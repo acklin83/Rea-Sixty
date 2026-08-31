@@ -1873,6 +1873,29 @@ void setView(int view)
     if (g_view.exchange(view) != view) g_viewDirty.store(true);
 }
 
+// Where an instance belongs in the V-Pot1 cycle: the numbered tracks first, in
+// track order, then the master's own chain, then the monitoring chain.
+// ⇨ THE MASTER IS NOT A NUMBERED TRACK, AND ITS INDEX IS NOT WHAT SAYS SO.
+// It announces REAPER's IP_TRACKNUMBER of -1, which happened to sort it ahead of
+// track 1 — an accident of that number, not a rule. Any announcement that does
+// not read as -1 (a truncated index varint; the 127 Windows produced from a
+// negative one, see the parser) dropped MASTER / MON FX in among the numbered
+// tracks, which is what Frank hit on 2026-08-31: "Master und Mon FX entweder
+// ganz am anfang oder ende der liste, nicht unter normale tracks mischen". The
+// NAME the host announces is the sturdier tell of the two, so it is asked first
+// and the index only backs it up. Caller holds g_meterMx.
+static int meterOrderGroup_(uint16_t port)
+{
+    auto n = g_portName.find(port);
+    if (n != g_portName.end()) {
+        if (n->second == "HARDWARE OUTPUT") return 2;          // monitoring chain
+        if (n->second == "MASTER")          return 1;          // the master's own
+    }
+    auto i = g_portIndex.find(port);
+    if (i != g_portIndex.end() && i->second <= 0) return 1;    // not a track number
+    return 0;
+}
+
 // Alive Meter instances — those that streamed within the last 3 s — in port
 // order. A loaded Meter plug-in streams ~25 Hz even when silent, so a STALE
 // entry (a plug-in that changed socket, was removed, or a port g_inst never
@@ -1889,6 +1912,9 @@ static std::vector<uint16_t> aliveMeterPorts_() {
     // by the arbitrary UDP source-port number (that was "content right, ORDER
     // wrong"). Ports with no known index sort last.
     //
+    // The master's two chains are a GROUP, not two more track numbers: they go
+    // behind every numbered track, MASTER before MON FX (meterOrderGroup_).
+    //
     // WITHIN one track, order by CONNECT SEQUENCE — the port number is as
     // arbitrary here as it was across tracks. It has to be the same order
     // liveMeterPorts_ uses, or the pin and the FX resolution walk two different
@@ -1896,6 +1922,8 @@ static std::vector<uint16_t> aliveMeterPorts_() {
     // "Track 4 1" second, because the label counts in connect order and the
     // cycle counted in port order. One ordering, or the numbering is a lie.
     std::sort(out.begin(), out.end(), [](uint16_t a, uint16_t b) {
+        const int ga = meterOrderGroup_(a), gb = meterOrderGroup_(b);
+        if (ga != gb) return ga < gb;
         auto ia = g_portIndex.find(a), ib = g_portIndex.find(b);
         const int va = (ia != g_portIndex.end()) ? ia->second : INT_MAX;
         const int vb = (ib != g_portIndex.end()) ? ib->second : INT_MAX;
