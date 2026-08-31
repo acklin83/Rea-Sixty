@@ -2112,25 +2112,21 @@ int currentMeterInstanceOnTrack(int* countOut) {
 
 bool meterProAvailable() {
     std::lock_guard<std::mutex> lk(g_meterMx);
-    steerAutoPort_();   // auto-mode: follow the selected track
-    // Prefer the instance the meter view is actually reading (pin, else the sticky
-    // source, else the first alive Meter) — same resolution as currentMeterTrackIndex.
-    uint16_t port = 0;
-    if (g_meterSel >= 0) {
-        const auto ports = aliveMeterPorts_();
-        if (g_meterSel < int(ports.size())) port = ports[g_meterSel];
-    } else {
-        port = g_srcPort;
-        if (!port) { const auto ports = aliveMeterPorts_(); if (!ports.empty()) port = ports.front(); }
-    }
+    // ⇨ ONLY THE INSTANCE ON SCREEN CAN ANSWER THIS.
+    // The question is "does the plug-in the view is reading have a Loudness
+    // screen", and it used to fall back to "is ANY Meter Pro streaming" so the
+    // screen would be offered before the pin/sticky settled. That fallback made
+    // one Pro anywhere in the project put Loudness into the cycle of every plain
+    // Meter as well (Frank 2026-08-31: "Loudness sollte nur bei Meter Pro, nicht
+    // bei Meter (ohne Pro) plugins erscheinen") — measured in his own session, a
+    // Meter Pro on the monitoring chain and a plain Meter on track 1.
+    // It is not needed either: the resolver below already names an instance from
+    // the first datagram on (currentMeterPortLocked_ falls back to the first
+    // alive Meter), and a Pro declares itself in ITS first datagram — the log has
+    // it opening with DataType 17, a Loudness type, before any level arrives.
+    const uint16_t port = currentMeterPortLocked_();   // pin → sticky → first alive
     auto it = g_inst.find(port);
-    if (it != g_inst.end() && it->second.isPro) return true;
-    // Fallback so the Loudness screen is offered even before the pin/sticky settles:
-    // any Meter Pro instance that is still streaming.
-    const long long cut = nowMs() - 2000;
-    for (const auto& kv : g_inst)
-        if (kv.second.isPro && kv.second.lastMs >= cut) return true;
-    return false;
+    return it != g_inst.end() && it->second.isPro;
 }
 
 bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& peak,

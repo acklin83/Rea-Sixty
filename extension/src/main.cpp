@@ -28767,6 +28767,18 @@ void uf1PaintChannel_()
     // The Meter Screen Selector soft-key only moves an atomic; the repaint that
     // actually switches the screen happens here. A screen change re-sends that
     // screen's setup burst, which is what makes the device swap layout.
+    // ⇨ LOUDNESS IS A METER PRO SCREEN, AND THE INSTANCE CHANGES UNDER IT.
+    // The Screen-Selector only offers Loudness while a Pro is being read, but
+    // V-Pot1 — and the auto-follow behind it — can hand the view a plain Meter
+    // afterwards, and the screen then stayed on Loudness with nothing to draw.
+    // Send it back to Overview; that is a screen change like any other, so the
+    // entry burst below re-lays the device. Gated on an instance actually being
+    // alive, so a plug-in that stops streaming for a moment does not move the
+    // screen out from under Frank. The soft-key handler is the other writer of
+    // this atomic — a press landing in the same tick just cycles on from here.
+    if (meterView && g_uf1MeterScreen.load() == 3 &&
+        sslcore::meterInstanceCount() > 0 && !sslcore::meterProAvailable())
+        g_uf1MeterScreen.store(0);
     const int  meterScreen   = g_uf1MeterScreen.load();
     const bool screenChanged = meterView && (meterScreen != sMeterScreen);
     sMeterScreen = meterScreen;
