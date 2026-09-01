@@ -483,7 +483,8 @@ end
 -- separate entries, tabs separate fields, never a newline. The extension lists
 -- the banks that hold something, plus the one you are on even if it is empty, and
 -- rebuilds it about once a second. <set> is 0 for Plain and 1 for Shift: a bank
--- has two full sets and each can carry its own name, so both are listed.
+-- has two full sets and each can carry its own name, so both are listed, and the
+-- set travels back with the jump so the extension can pin it.
 local function readUf8Banks()
   local raw = reaper.GetExtState(SECT, "uf8_banks")
   if raw == "" then return nil end
@@ -512,21 +513,18 @@ local function drawUf8Bank()
     labelled("UF8 SK-Bank", f[5])
     return
   end
-  -- A Shift row is the same coordinate as its Plain twin, so it says which half
-  -- it is rather than pretending to be a stop of its own.
-  local function rowLabel(b)
-    if b.set == 1 then return b.name .. "  (Shift)" end
-    return b.name
-  end
-  local cur = (active >= 0 and list[active + 1]) and rowLabel(list[active + 1])
+  -- Every row is just its name. Picking one engages that bank AND its set, so a
+  -- Shift bank needs neither a marker in the list nor the key held down: the
+  -- extension pins the set until the bank is changed by hand.
+  local cur = (active >= 0 and list[active + 1]) and list[active + 1].name
               or "(none)"
   reaper.ImGui_TextColored(ctx, rgba(0x8890A0), "UF8 SK-Bank ")
   reaper.ImGui_SameLine(ctx, 0, 0)
   reaper.ImGui_SetNextItemWidth(ctx, 170)
   if reaper.ImGui_BeginCombo(ctx, "##u8bank", cur) then
     for i, b in ipairs(list) do
-      if reaper.ImGui_Selectable(ctx, rowLabel(b) .. "##u8b" .. i, i == active + 1) then
-        sendPanelCmd("u8bank;" .. b.l .. ";" .. b.q .. ";" .. b.sb)
+      if reaper.ImGui_Selectable(ctx, b.name .. "##u8b" .. i, i == active + 1) then
+        sendPanelCmd("u8bank;" .. b.l .. ";" .. b.q .. ";" .. b.sb .. ";" .. b.set)
       end
     end
     reaper.ImGui_EndCombo(ctx)

@@ -724,14 +724,22 @@ std::atomic<bool> g_uf1BankNameFlash {true};
 // feature that does not work.
 // Persisted as ExtState "uf8_bank_name_banner".
 std::atomic<bool> g_uf8BankNameBanner {true};
-// ⇨ FOLGT DIE ANZEIGE DEM MODIFIER-SATZ? A soft-key bank has two full sets, Plain
-// and Shift, and each can carry its own name. On, the banner and the panel show
-// the set you are HOLDING, so Shift announces the Shift bank; off, both stay on
-// the Plain name however long you hold. Frank 2026-09-01, next to the switch that
-// turns the announcement on at all: someone who works with Shift down most of the
-// time wants the bank's identity, not a readout that changes under their thumb.
+// ⇨ FOLGT DER BANNER DEM MODIFIER-SATZ? A soft-key bank has two full sets, Plain
+// and Shift, and each can carry its own name. On, holding Shift announces that
+// bank's Shift set; off, the banner stays on the Plain name however long you hold,
+// which is what someone who works with Shift down wants.
+// ⛔ THE BANNER ONLY (Frank 2026-09-01, correcting the first build). The panel's
+// drop-down always shows the set you are actually in: a banner is a message and
+// you must be able to switch it off, a menu is a readout and lying about where
+// you stand is not an option it should offer.
 // Persisted as ExtState "uf8_bank_name_shift".
 std::atomic<bool> g_uf8BankNameShift {true};
+// Where the panel's drop-down pinned a modifier set, packed as (layer<<8 |
+// quick<<4 | sub), or -1 when nothing is pinned by it. Picking a Shift bank from
+// the menu engages that set without holding the key; switching bank by any other
+// route lets it go again, which is the whole contract (Frank 2026-09-01: "bis
+// manuell auf andere soft-key bank geschaltet wird").
+std::atomic<int> g_u8PinAddr {-1};
 
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
@@ -27507,9 +27515,9 @@ static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod)
 // engaged — then the top soft-keys are the layer's own default (on layer 1 the
 // SSL plug-in rows), which is not a bank the user named and has no name to give.
 // Main-thread only (reads the config through the accessors).
-// Which modifier set the on-screen bank readouts speak for: the one being held,
-// or always Plain when "follow Shift" is off. One answer for the banner and the
-// panel, so the two can never disagree about which bank you are on.
+// Which modifier set the BANNER speaks for: the one being held, or always Plain
+// when "follow Shift" is off. The panel's list does not go through here — it
+// always follows the real set (see the publish block).
 static int uf8BankReadoutSet_()
 {
     using namespace uf8::bindings;
@@ -37579,6 +37587,20 @@ void onTimerBody_()
             if (ms != msPub) { msPub = ms;
                 SetExtState("rea_sixty", "mode_state", ms.c_str(), false); }
         }
+        // The menu's modifier pin lives exactly as long as its bank does. Any
+        // other way of changing bank — the hardware row, a Quick key, a layer, the
+        // startup pin — moves the address and releases it. Checked here rather
+        // than at each of those sites: there are many ways to change bank and only
+        // one thing to notice, which is that it changed.
+        if (const int pinned = g_u8PinAddr.load(); pinned >= 0) {
+            const int pl = uf8::bindings::getActiveLayer();
+            const int pq = (pl >= 0 && pl <= 2) ? g_activeQuick[pl].load()   : -1;
+            const int ps = (pl >= 0 && pl <= 2) ? g_activeSubBank[pl].load() : -1;
+            if (((pl << 8) | (pq << 4) | ps) != pinned) {
+                uf8::bindings::setBankModifierPin(-1);
+                g_u8PinAddr.store(-1);
+            }
+        }
         // ⇨ EVERY BANK THERE IS, for the panel's jump menu (Frank 2026-09-01:
         // "mach aus dem element ein drop down wo alle aufgelistet sind").
         // "<activeIdx>;<layer>\t<quick>\t<sub>\t<name>;…" — semicolons separate
@@ -37606,7 +37628,13 @@ void onTimerBody_()
                 // COORDINATE, so picking one goes to the same place; holding Shift
                 // is what puts you on that half once you are there, which is why
                 // the entry says so rather than pretending to be its own stop.
-                const int aSet = uf8BankReadoutSet_();
+                // ⇨ DIE LISTE FOLGT IMMER DEM ECHTEN SATZ. "Bank names follow
+                // Shift" gilt nur dem Banner (Frank 2026-09-01): der Banner ist
+                // eine Meldung, die man abstellen können muss, das Menü dagegen
+                // ist ein Readout — es soll zeigen, wo du wirklich stehst, auch
+                // während du Shift hältst.
+                int aSet = static_cast<int>(uf8::bindings::bankModifierSnapshot());
+                if (aSet < 0 || aSet >= uf8::bindings::kSoftKeyModifierSets) aSet = 0;
                 std::string body; int idx = 0, active = -1;
                 for (int l = 0; l < 3; ++l)
                   for (int q = 0; q < uf8::bindings::kQuicksPerLayer; ++q) {
@@ -37621,15 +37649,25 @@ void onTimerBody_()
                         if (!isActive && !(here && m == 0)
                             && !uf8::bindings::subBankHasContent(l, q, sb, m))
                             continue;
-                        if (isActive) active = idx;
                         std::string nm = uf8BankDisplayName_(l, q, sb, m);
+                        // ⇨ KEIN "(Shift)" AM NAMEN (Frank 2026-09-01). Ein Satz
+                        // ohne eigenen Namen erbt den von Plain, und zwei gleich
+                        // heissende Zeilen sind keine Auswahl, sondern eine Frage.
+                        // Also fällt so ein Shift-Eintrag weg: dieselbe Bank ist
+                        // über die Plain-Zeile erreichbar, denn es ist derselbe
+                        // Ort. Wer den Shift-Satz im Menü haben will, gibt ihm
+                        // einen Namen, und dann steht er mit dem da.
+                        if (m == 1 && !isActive
+                            && nm == uf8BankDisplayName_(l, q, sb, 0))
+                            continue;
+                        if (isActive) active = idx;
                         for (char& c : nm)
                             if (c == ';' || c == '\t' || c == '\n' || c == '\r') c = ' ';
                         body += ";" + std::to_string(l) + "\t" + std::to_string(q)
                               + "\t" + std::to_string(sb) + "\t" + nm
                               // Field 5, appended: which set the row is. The Lua
-                              // marks the Shift ones; an older panel reads the
-                              // first four and simply does not mark them.
+                              // sends it back so the jump can pin that set; an
+                              // older panel omits it and lands on Plain.
                               + "\t" + std::to_string(m);
                         ++idx;
                       }
@@ -37925,12 +37963,23 @@ void onTimerBody_()
             } else if (s.rfind("favset_bc_track;", 0) == 0) {
                 assignSet(false, s.substr(16));
             } else if (s.rfind("u8bank;", 0) == 0) {
-                // "u8bank;<layer>;<quick>;<sub>" — jump to a soft-key bank from
-                // the panel's drop-down. Same guards as the pinned startup bank,
-                // because it is the same move (engageUserBank_).
-                int l = -1, q = -1, sb = -1;
-                if (std::sscanf(s.c_str() + 7, "%d;%d;%d", &l, &q, &sb) == 3)
-                    engageUserBank_(l, q, sb);
+                // "u8bank;<layer>;<quick>;<sub>[;<set>]" — jump to a soft-key bank
+                // from the panel's drop-down. Same guards as the pinned startup
+                // bank, because it is the same move (engageUserBank_).
+                // ⇨ PICKING A SHIFT BANK ENGAGES IT, IT DOES NOT ASK YOU TO HOLD
+                // SHIFT (Frank 2026-09-01). The set is PINNED through the same
+                // API the Bindings editor uses, so the surface paints it and a
+                // press fires it with nothing held. The pin is released as soon as
+                // the bank is changed by hand — see the release below.
+                int l = -1, q = -1, sb = -1, m = 0;
+                const int got = std::sscanf(s.c_str() + 7, "%d;%d;%d;%d",
+                                            &l, &q, &sb, &m);
+                if (got >= 3 && engageUserBank_(l, q, sb)) {
+                    if (got < 4 || m < 0 || m >= uf8::bindings::kSoftKeyModifierSets)
+                        m = 0;
+                    uf8::bindings::setBankModifierPin(m > 0 ? m : -1);
+                    g_u8PinAddr.store((m > 0) ? ((l << 8) | (q << 4) | sb) : -1);
+                }
             }
         }
     }
