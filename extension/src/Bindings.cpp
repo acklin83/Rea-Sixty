@@ -4226,6 +4226,17 @@ Modifier heldBankModifier()
 // header. Written from the render thread, read from the USB input thread.
 static std::atomic<int> g_bankModifierPin{-1};
 
+// ⇨ ZWEI QUELLEN, EINE ARBITRIERUNG. The Settings editor pins the set it is
+// editing, and the focused panel's bank menu pins the set you picked. They are
+// separate stores on purpose: the editor republishes ITS answer on every frame
+// the window draws, including -1 when the Bindings pane is not the one on screen,
+// so a menu pin written into the same store was wiped within a frame of being set
+// (Frank 2026-09-01, "schaltet auch nicht auf die shift-einträge"). One store,
+// two writers, and the loud one won every time.
+// Priority: the editor while it is up, then the menu, then the key you hold.
+// Whoever edits a set is looking straight at it, so that one comes first.
+static std::atomic<int> g_bankModifierPinMenu{-1};
+
 void setBankModifierPin(int mod)
 {
     const bool valid = (mod == static_cast<int>(Modifier::Plain)
@@ -4233,10 +4244,19 @@ void setBankModifierPin(int mod)
     g_bankModifierPin.store(valid ? mod : -1);
 }
 
+void setBankModifierPinMenu(int mod)
+{
+    const bool valid = (mod == static_cast<int>(Modifier::Plain)
+                     || mod == static_cast<int>(Modifier::Shift));
+    g_bankModifierPinMenu.store(valid ? mod : -1);
+}
+
 Modifier bankModifierSnapshot()
 {
     const int pin = g_bankModifierPin.load();
     if (pin >= 0) return static_cast<Modifier>(pin);
+    const int menu = g_bankModifierPinMenu.load();
+    if (menu >= 0) return static_cast<Modifier>(menu);
     return heldBankModifier();
 }
 

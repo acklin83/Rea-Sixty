@@ -805,6 +805,12 @@ Modifier heldBankModifier();
 // closing the window cannot leave the surface stuck on a set.
 void setBankModifierPin(int mod);
 
+// The focused panel's bank menu pins the set you picked there, until the bank is
+// changed by hand. Its own store: the editor's pin above is republished every
+// frame the Settings window draws and would otherwise wipe this one. The editor
+// wins while it is up, then this, then the held key (bankModifierSnapshot).
+void setBankModifierPinMenu(int mod);
+
 
 // Per-layer variants. exportLayerTo writes a single layer wrapped in a
 // {"version":1,"type":"layer","index":N,"layer":{…}} object so the

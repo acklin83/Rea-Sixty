@@ -15061,7 +15061,25 @@ void publishOverlayState_()
             appendOverlayEntry_(bcTr, -1, bcFx, -1, body);
         }
     }
-    const std::string sig = (on ? "1|" : "0|") + body;
+    // ⛔ THE DIFF HAS TO SEE A SLOT MOVE, and the body cannot show it. The body
+    // carries CHAIN INDICES because that is what the overlay script resolves into
+    // a row. But FX Move slides an FX into an empty slot by writing a display
+    // HINT and leaving the chain index alone — the FX is a row lower and every
+    // number here is identical, so the diff said "nothing changed" and the
+    // highlight stayed on the row the FX had just left (Frank 2026-09-01: "unser
+    // MCP overlay wandert nicht mit einem FX-Slot bei FX Move").
+    // The slots go into the signature only, never into the body: sending them
+    // instead of the index once put the highlight an insert too low on any chain
+    // with a gap (2026-07-19), and that is not a lesson worth relearning.
+    std::string sig = (on ? "1|" : "0|") + body;
+    {
+        char sl[64];
+        std::snprintf(sl, sizeof(sl), "|%d,%d,%d",
+                      (csTr && csFx >= 0) ? fxChainIndexToSlot_(csTr, csFx) : -1,
+                      (bcTr && bcFx >= 0) ? fxChainIndexToSlot_(bcTr, bcFx) : -1,
+                      (csTr && selFx >= 0) ? fxChainIndexToSlot_(csTr, selFx) : -1);
+        sig += sl;
+    }
     if (sig == g_overlayPublishedSig) return;   // nothing changed
     g_overlayPublishedSig = sig;
     char head[48];
@@ -37597,7 +37615,7 @@ void onTimerBody_()
             const int pq = (pl >= 0 && pl <= 2) ? g_activeQuick[pl].load()   : -1;
             const int ps = (pl >= 0 && pl <= 2) ? g_activeSubBank[pl].load() : -1;
             if (((pl << 8) | (pq << 4) | ps) != pinned) {
-                uf8::bindings::setBankModifierPin(-1);
+                uf8::bindings::setBankModifierPinMenu(-1);
                 g_u8PinAddr.store(-1);
             }
         }
@@ -37611,12 +37629,21 @@ void onTimerBody_()
         // same destination, and holding Shift is what picks it once you are there.
         // Rebuilt at most once a second — it walks the coordinates and each one
         // takes the config mutex, which is not a per-tick price.
+        // ⛔ DIE LISTE IST TEUER, DIE MARKIERUNG NICHT. Both used to sit behind the
+        // same one-second throttle, so holding Shift moved the active row only if
+        // you held it long enough for the rebuild to come round — usually not at
+        // all (Frank 2026-09-01, "das dropdown wechselt nicht mit shift"). The
+        // WALK over the coordinates stays throttled, because each step takes the
+        // config mutex; which row is active is three atomics and is answered every
+        // tick, from the rows the walk left behind.
         {
+            struct UbRow { int l, q, sb, m; std::string name; };
+            static std::vector<UbRow> ubRows;
             static std::string ubLast;
             static int64_t     ubAtMs = 0;
             const int64_t ubNow = nowMs_();
-            if (ubNow - ubAtMs >= 1000) {
-                ubAtMs = ubNow;
+            const bool ubRebuild = (ubAtMs == 0) || (ubNow - ubAtMs >= 1000);
+            {
                 const int aLayer = uf8::bindings::getActiveLayer();
                 const int aQuick = (aLayer >= 0 && aLayer <= 2)
                                  ? g_activeQuick[aLayer].load() : -1;
@@ -37635,19 +37662,20 @@ void onTimerBody_()
                 // während du Shift hältst.
                 int aSet = static_cast<int>(uf8::bindings::bankModifierSnapshot());
                 if (aSet < 0 || aSet >= uf8::bindings::kSoftKeyModifierSets) aSet = 0;
-                std::string body; int idx = 0, active = -1;
+                if (ubRebuild) {
+                ubAtMs = ubNow;
+                ubRows.clear();
                 for (int l = 0; l < 3; ++l)
                   for (int q = 0; q < uf8::bindings::kQuicksPerLayer; ++q) {
                     if (l == 0 && q <= 1) continue;      // SSL CS/BC rows, not user banks
                     for (int sb = 0; sb < uf8::bindings::kSubBanksPerQuick; ++sb)
                       for (int m = 0; m < uf8::bindings::kSoftKeyModifierSets; ++m) {
                         const bool here = (l == aLayer && q == aQuick && sb == aSub);
-                        const bool isActive = here && (m == aSet);
-                        // The Plain row of the bank you are on is always listed, so
-                        // the menu can never be empty where you are standing. A
-                        // Shift row only when it holds something of its own.
-                        if (!isActive && !(here && m == 0)
-                            && !uf8::bindings::subBankHasContent(l, q, sb, m))
+                        // The bank you are standing on is always listed, both sets,
+                        // so the menu can never be empty where you are and holding
+                        // Shift always has a row to land on. Everywhere else a row
+                        // needs content of its own.
+                        if (!here && !uf8::bindings::subBankHasContent(l, q, sb, m))
                             continue;
                         std::string nm = uf8BankDisplayName_(l, q, sb, m);
                         // ⇨ KEIN "(Shift)" AM NAMEN (Frank 2026-09-01). Ein Satz
@@ -37657,21 +37685,28 @@ void onTimerBody_()
                         // über die Plain-Zeile erreichbar, denn es ist derselbe
                         // Ort. Wer den Shift-Satz im Menü haben will, gibt ihm
                         // einen Namen, und dann steht er mit dem da.
-                        if (m == 1 && !isActive
+                        if (m == 1 && !here
                             && nm == uf8BankDisplayName_(l, q, sb, 0))
                             continue;
-                        if (isActive) active = idx;
                         for (char& c : nm)
                             if (c == ';' || c == '\t' || c == '\n' || c == '\r') c = ' ';
-                        body += ";" + std::to_string(l) + "\t" + std::to_string(q)
-                              + "\t" + std::to_string(sb) + "\t" + nm
-                              // Field 5, appended: which set the row is. The Lua
-                              // sends it back so the jump can pin that set; an
-                              // older panel omits it and lands on Plain.
-                              + "\t" + std::to_string(m);
-                        ++idx;
+                        ubRows.push_back({ l, q, sb, m, nm });
                       }
                   }
+                }   // ubRebuild
+                // Which row is active, and the payload, every tick.
+                std::string body; int active = -1;
+                for (size_t i = 0; i < ubRows.size(); ++i) {
+                    const UbRow& r = ubRows[i];
+                    if (r.l == aLayer && r.q == aQuick && r.sb == aSub && r.m == aSet)
+                        active = static_cast<int>(i);
+                    body += ";" + std::to_string(r.l) + "\t" + std::to_string(r.q)
+                          + "\t" + std::to_string(r.sb) + "\t" + r.name
+                          // Field 5, appended: which set the row is. The Lua sends
+                          // it back so the jump can pin that set; an older panel
+                          // omits it and lands on Plain.
+                          + "\t" + std::to_string(r.m);
+                }
                 const std::string ub = std::to_string(active) + body;
                 if (ub != ubLast) {
                     ubLast = ub;
@@ -37977,7 +38012,7 @@ void onTimerBody_()
                 if (got >= 3 && engageUserBank_(l, q, sb)) {
                     if (got < 4 || m < 0 || m >= uf8::bindings::kSoftKeyModifierSets)
                         m = 0;
-                    uf8::bindings::setBankModifierPin(m > 0 ? m : -1);
+                    uf8::bindings::setBankModifierPinMenu(m > 0 ? m : -1);
                     g_u8PinAddr.store((m > 0) ? ((l << 8) | (q << 4) | sb) : -1);
                 }
             }
