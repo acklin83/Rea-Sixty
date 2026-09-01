@@ -474,15 +474,54 @@ local function drawJog()
   labelled("Jog", f[4])
 end
 
--- The UF8's soft-key bank, by the name it goes by. The UF8 has no display to
--- announce a bank switch on the way the UF1 writes it across its time field, so
--- this readout and the mode-change banner are the two places it can be seen.
--- Empty when no user Quick is engaged: the top soft-keys are then the layer's own
--- default, which is not a bank anyone named.
+-- Every UF8 soft-key bank there is, as a drop-down you can jump with. The UF8 has
+-- no display to announce a bank switch on the way the UF1 writes it across its
+-- time field, so this and the mode-change banner are the two places it can be
+-- seen — and here you can also go somewhere.
+--
+-- "uf8_banks" = "<activeIdx>;<layer>\t<quick>\t<sub>\t<name>;…". Semicolons
+-- separate entries, tabs separate fields, never a newline. The extension lists
+-- the banks that hold something, plus the one you are on even if it is empty, and
+-- rebuilds it about once a second.
+local function readUf8Banks()
+  local raw = reaper.GetExtState(SECT, "uf8_banks")
+  if raw == "" then return nil end
+  local parts = {}
+  for seg in (raw .. ";"):gmatch("(.-);") do parts[#parts + 1] = seg end
+  local active = tonumber(parts[1] or "-1") or -1
+  local list = {}
+  for i = 2, #parts do
+    local f = {}
+    for x in (parts[i] .. "\t"):gmatch("(.-)\t") do f[#f + 1] = x end
+    if #f >= 4 then
+      list[#list + 1] = { l = f[1], q = f[2], sb = f[3], name = f[4] }
+    end
+  end
+  return list, active
+end
+
 local function drawUf8Bank()
-  local f = modeState()
-  if not f or not f[5] or f[5] == "" then return end
-  labelled("Bank", f[5])
+  local list, active = readUf8Banks()
+  -- Before the first publish, or with nothing to list, fall back to the plain
+  -- readout from mode_state so the element is never an empty box.
+  if not list or #list == 0 then
+    local f = modeState()
+    if not f or not f[5] or f[5] == "" then return end
+    labelled("Bank", f[5])
+    return
+  end
+  local cur = (active >= 0 and list[active + 1]) and list[active + 1].name or "(none)"
+  reaper.ImGui_TextColored(ctx, rgba(0x8890A0), "Bank ")
+  reaper.ImGui_SameLine(ctx, 0, 0)
+  reaper.ImGui_SetNextItemWidth(ctx, 150)
+  if reaper.ImGui_BeginCombo(ctx, "##u8bank", cur) then
+    for i, b in ipairs(list) do
+      if reaper.ImGui_Selectable(ctx, b.name .. "##u8b" .. i, i == active + 1) then
+        sendPanelCmd("u8bank;" .. b.l .. ";" .. b.q .. ";" .. b.sb)
+      end
+    end
+    reaper.ImGui_EndCombo(ctx)
+  end
 end
 
 local function drawButtons()

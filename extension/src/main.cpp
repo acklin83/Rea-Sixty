@@ -37020,13 +37020,16 @@ static void sdBridgeTick_()
 // onTimer after the UF8 is up. No-op when unset, when UF8 Plugin Mode owns
 // the soft-keys, or for Layer-1 Q1/Q2 (hardcoded SSL CS/BC focus, which carry
 // no user-Quick slots). Mirrors the softkey_bank_N builtin's engage path.
-static void applyStartupBank_()
+// Engage one user Sub-Bank: switch the layer if needed, then the Quick and the
+// Sub-Bank under it. Two callers now — the pinned startup bank and the focused
+// panel's jump menu — so the guards live here rather than in each of them.
+// Returns false when the coordinate is one no user bank can live at.
+static bool engageUserBank_(int layer, int quick, int sub)
 {
-    int layer = -1, quick = -1, sub = 0;
-    if (!reasixty_startupBank(&layer, &quick, &sub)) return;
-    if (layer < 0 || layer > 2 || quick < 0 || quick > 2) return;
-    if (layer == 0 && quick <= 1) return;            // L1 Q1/Q2 = SSL CS/BC
-    if (g_uf8PluginMode.load()) return;
+    if (layer < 0 || layer > 2 || quick < 0 || quick > 2) return false;
+    if (sub < 0 || sub >= uf8::bindings::kSubBanksPerQuick) return false;
+    if (layer == 0 && quick <= 1) return false;      // L1 Q1/Q2 = SSL CS/BC
+    if (g_uf8PluginMode.load()) return false;        // that mode owns the soft-keys
     if (uf8::bindings::getActiveLayer() != layer) {
         uf8::bindings::setActiveLayer(layer);
         pushLayerLeds(layer);
@@ -37035,6 +37038,14 @@ static void applyStartupBank_()
     g_activeSubBank[layer].store(sub);
     g_bankDirty.store(true);
     g_softKeyDirty.store(true);
+    return true;
+}
+
+static void applyStartupBank_()
+{
+    int layer = -1, quick = -1, sub = 0;
+    if (!reasixty_startupBank(&layer, &quick, &sub)) return;
+    engageUserBank_(layer, quick, sub);
 }
 
 // Engage the user's pinned UF1 startup view (Settings → Behaviour → UF1), the
@@ -37548,6 +37559,51 @@ void onTimerBody_()
             if (ms != msPub) { msPub = ms;
                 SetExtState("rea_sixty", "mode_state", ms.c_str(), false); }
         }
+        // ⇨ EVERY BANK THERE IS, for the panel's jump menu (Frank 2026-09-01:
+        // "mach aus dem element ein drop down wo alle aufgelistet sind").
+        // "<activeIdx>;<layer>\t<quick>\t<sub>\t<name>;…" — semicolons separate
+        // entries, tabs separate fields, and NEVER a newline: an ExtState value
+        // with one in it comes back cut at the first line ([[extstate-no-newlines]]).
+        // A typed name can contain either separator, so it is scrubbed here.
+        // Listed at the PLAIN set: a Shift set is the same coordinate, so it is the
+        // same destination, and holding Shift is what picks it once you are there.
+        // Rebuilt at most once a second — it walks the coordinates and each one
+        // takes the config mutex, which is not a per-tick price.
+        {
+            static std::string ubLast;
+            static int64_t     ubAtMs = 0;
+            const int64_t ubNow = nowMs_();
+            if (ubNow - ubAtMs >= 1000) {
+                ubAtMs = ubNow;
+                const int aLayer = uf8::bindings::getActiveLayer();
+                const int aQuick = (aLayer >= 0 && aLayer <= 2)
+                                 ? g_activeQuick[aLayer].load() : -1;
+                const int aSub   = (aLayer >= 0 && aLayer <= 2)
+                                 ? g_activeSubBank[aLayer].load() : -1;
+                std::string body; int idx = 0, active = -1;
+                for (int l = 0; l < 3; ++l)
+                  for (int q = 0; q < uf8::bindings::kQuicksPerLayer; ++q) {
+                    if (l == 0 && q <= 1) continue;      // SSL CS/BC rows, not user banks
+                    for (int sb = 0; sb < uf8::bindings::kSubBanksPerQuick; ++sb) {
+                        const bool isActive = (l == aLayer && q == aQuick && sb == aSub);
+                        if (!isActive && !uf8::bindings::subBankHasContent(l, q, sb, 0))
+                            continue;
+                        if (isActive) active = idx;
+                        std::string nm = uf8BankDisplayName_(l, q, sb, 0);
+                        for (char& c : nm)
+                            if (c == ';' || c == '\t' || c == '\n' || c == '\r') c = ' ';
+                        body += ";" + std::to_string(l) + "\t" + std::to_string(q)
+                              + "\t" + std::to_string(sb) + "\t" + nm;
+                        ++idx;
+                    }
+                  }
+                const std::string ub = std::to_string(active) + body;
+                if (ub != ubLast) {
+                    ubLast = ub;
+                    SetExtState("rea_sixty", "uf8_banks", ub.c_str(), false);
+                }
+            }
+        }
         // ⇨ THE MODE RING, WHILE YOU ARE SCROLLING IT (Frank 2026-08-20).
         // Both pickers are rings you scroll blind: the surface shows the mode you
         // are ON and nothing about what is coming. So while MODE or SCRUB is
@@ -37831,6 +37887,13 @@ void onTimerBody_()
                 assignSet(true, s.substr(16));
             } else if (s.rfind("favset_bc_track;", 0) == 0) {
                 assignSet(false, s.substr(16));
+            } else if (s.rfind("u8bank;", 0) == 0) {
+                // "u8bank;<layer>;<quick>;<sub>" — jump to a soft-key bank from
+                // the panel's drop-down. Same guards as the pinned startup bank,
+                // because it is the same move (engageUserBank_).
+                int l = -1, q = -1, sb = -1;
+                if (std::sscanf(s.c_str() + 7, "%d;%d;%d", &l, &q, &sb) == 3)
+                    engageUserBank_(l, q, sb);
             }
         }
     }

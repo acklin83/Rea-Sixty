@@ -4974,6 +4974,28 @@ void setUf1SoftBankDynamic(int bank, int mod, DynamicBankKind kind)
     persistLocked_();
 }
 
+// Does this Sub-Bank hold anything at all — a name, a dynamic kind, or a slot
+// with data in it? For the focused-track panel's jump menu, which lists the banks
+// that exist rather than all 54 coordinates.
+// ⇨ Uses the SERIALISER's predicate (bindingHasNoData_), not the dispatch one:
+// the question here is "is there something here the user put there", which is
+// exactly what the serialiser asks, and a label-only bank is a real bank
+// ([[softkey-modifier-sets]]). Never hand this to a dispatch path.
+bool subBankHasContent(int layer, int quick, int sub, int mod)
+{
+    if (layer < 0 || layer >= 3) return false;
+    if (quick < 0 || quick >= kQuicksPerLayer) return false;
+    if (sub   < 0 || sub   >= kSubBanksPerQuick) return false;
+    if (mod   < 0 || mod   >= kSoftKeyModifierSets) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    const UserQuickSubBank& sb = g_cfg.userQuicks[layer].quicks[quick].subBanks[sub];
+    if (!sb.name[mod].empty())                       return true;
+    if (sb.dynamic[mod] != DynamicBankKind::None)    return true;
+    for (int i = 0; i < kSlotsPerSubBank; ++i)
+        if (!bindingHasNoData_(sb.slots[i]))         return true;
+    return false;
+}
+
 std::string getSubBankName(int layer, int quick, int sub, int mod)
 {
     if (layer < 0 || layer >= 3) return std::string();

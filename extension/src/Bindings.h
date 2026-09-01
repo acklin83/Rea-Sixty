@@ -1020,6 +1020,7 @@ void            setUf1SoftBankDynamic(int bank, int mod, DynamicBankKind kind);
 // The UF8 Sub-Bank's user name, by its full address. Empty = unnamed, which is
 // the normal state; the display name falls back to the dynamic kind, else the
 // coordinates (uf8BankDisplayName_ in main.cpp).
+bool            subBankHasContent(int layer, int quick, int sub, int mod);
 std::string     getSubBankName(int layer, int quick, int sub, int mod);
 void            setSubBankName(int layer, int quick, int sub, int mod,
                                const std::string& name);
