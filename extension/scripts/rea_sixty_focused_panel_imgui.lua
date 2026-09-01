@@ -430,7 +430,8 @@ local function pollModeBanner()
   end
 end
 
--- Persistent current-mode state: "mode_state" = "<sel>\t<enc>\t<uf1 enc>\t<jog>".
+-- Persistent current-mode state: "mode_state" =
+-- "<sel>\t<enc>\t<uf1 enc>\t<jog>\t<uf8 bank>".
 -- Fields are appended, never reordered, so a panel running against an older
 -- extension just gets nil for the ones that build never published.
 local function modeState()
@@ -473,6 +474,17 @@ local function drawJog()
   labelled("Jog", f[4])
 end
 
+-- The UF8's soft-key bank, by the name it goes by. The UF8 has no display to
+-- announce a bank switch on the way the UF1 writes it across its time field, so
+-- this readout and the mode-change banner are the two places it can be seen.
+-- Empty when no user Quick is engaged: the top soft-keys are then the layer's own
+-- default, which is not a bank anyone named.
+local function drawUf8Bank()
+  local f = modeState()
+  if not f or not f[5] or f[5] == "" then return end
+  labelled("Bank", f[5])
+end
+
 local function drawButtons()
   if reaper.ImGui_Button(ctx, "Settings") then runAction("_REASIXTY_TOGGLE_SETTINGS") end
   reaper.ImGui_SameLine(ctx, 0, math.max(4, font_px * 0.5))
@@ -497,7 +509,7 @@ end
 -- default; a block flagged "new line" starts a fresh row. Arrange mode shows a
 -- drag grip per block so the order can be rearranged by dragging. Frank 2026-06-27.
 ------------------------------------------------------------------------
-local BLOCK_IDS = { "params", "fav", "mode", "uf1enc", "jog", "cycle", "buttons" }
+local BLOCK_IDS = { "params", "fav", "mode", "uf1enc", "jog", "u8bank", "cycle", "buttons" }
 local has_dnd = reaper.APIExists("ImGui_BeginDragDropSource")
   and reaper.APIExists("ImGui_AcceptDragDropPayload")
 
@@ -635,6 +647,7 @@ local function drawContent()
     mode    = { draw = drawModeIndicator, show = reaper.GetExtState(SECT, "focused_panel_mode")    == "1" },
     uf1enc  = { draw = drawUf1Enc,        show = reaper.GetExtState(SECT, "focused_panel_uf1enc")  == "1" },
     jog     = { draw = drawJog,           show = reaper.GetExtState(SECT, "focused_panel_jog")     == "1" },
+    u8bank  = { draw = drawUf8Bank,       show = reaper.GetExtState(SECT, "focused_panel_u8bank")  == "1" },
     cycle   = { draw = drawCycle,         show = reaper.GetExtState(SECT, "focused_panel_cycle")   == "1" },
     buttons = { draw = drawButtons,       show = reaper.GetExtState(SECT, "focused_panel_buttons") == "1" },
   }
@@ -895,6 +908,7 @@ local function drawContextMenu()
     item("Mode indicator (Sel / Encoder)",        "focused_panel_mode",       false)
     item("UF1 encoder mode",                      "focused_panel_uf1enc",     false)
     item("UF1 jog mode",                          "focused_panel_jog",        false)
+    item("UF8 soft-key bank name",                "focused_panel_u8bank",     false)
     item("Flash mode changes",                    "focused_panel_banner",     false)
     item("Settings + HUD buttons",                "focused_panel_buttons",    false)
     item("CS / BC cycle buttons",                 "focused_panel_cycle",      false)

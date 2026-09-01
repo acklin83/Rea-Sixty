@@ -61,6 +61,8 @@ bool reasixty_focusedPanel();
 void reasixty_setFocusedPanel(bool on);
 bool reasixty_focusedPanelRunning();
 bool reasixty_modeBanner();
+bool reasixty_uf8BankNameBanner();
+void reasixty_setUf8BankNameBanner(bool on);
 void reasixty_setModeBanner(bool on);
 bool reasixty_modeBannerRunning();
 int    reasixty_overlayCsColor();
@@ -312,6 +314,19 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
         ImGui_TextDisabled(ctx, reasixty_modeBannerRunning()
                                 ? "  Banner companion running"
                                 : "  Banner companion starting\xE2\x80\xA6");
+        // The UF8 has no display of its own to announce a bank switch on, the way
+        // the UF1 writes the name across its time field. Nested under the banner
+        // because that is the thing it writes into; the focused-track panel has
+        // its own tick for the same name, in the panel's Elements menu.
+        ImGui_Indent(ctx, nullptr);
+        bool ubn = reasixty_uf8BankNameBanner();
+        if (ImGui_Checkbox(ctx, "Show UF8 soft-key bank names", &ubn)) {
+            reasixty_setUf8BankNameBanner(ubn);
+        }
+        ImGui_TextDisabled(ctx,
+            "Flash the bank's name when the UF8 switches soft-key bank. Name the "
+            "banks in Bindings, on the Sub-Bank you want to name.");
+        ImGui_Unindent(ctx, nullptr);
     }
 
     if (insMark) {

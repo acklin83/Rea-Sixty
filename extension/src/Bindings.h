@@ -537,6 +537,13 @@ struct UserQuickSubBank {
     // getSubBankDynamicFor / getUf1SoftBankDynamicFor may be used at runtime, so
     // that inheritance is applied in exactly one place (2026-08-25).
     DynamicBankKind dynamic[kSoftKeyModifierSets] = {};   // non-None → computed
+    // What this Sub-Bank is CALLED. Same rule and same reason as the UF1's
+    // uf1SoftBankName below: one per modifier set, because a set is a full bank.
+    // Empty is the normal state and not a hole — uf8BankDisplayName_ then falls
+    // back to the dynamic kind, else to the bank's own coordinates.
+    // Shown in the mode-change banner and in the focused-track panel; the UF8
+    // has no display of its own to announce it on.
+    std::string     name[kSoftKeyModifierSets];
 };
 // LED appearance override for one Sub-Bank selector button (V-POT or
 // Soft 1..5) under a specific (Layer, Quick) context. Lets the user
@@ -1010,6 +1017,12 @@ void            setUf1SoftBankDynamic(int bank, int mod, DynamicBankKind kind);
 // ⇨ Only the NAME lives here. What is shown when it is empty (the dynamic kind,
 // or the bank number) is resolved in main.cpp, where the 7-segment font is —
 // two of the kind labels the Settings UI shows cannot be drawn on that field.
+// The UF8 Sub-Bank's user name, by its full address. Empty = unnamed, which is
+// the normal state; the display name falls back to the dynamic kind, else the
+// coordinates (uf8BankDisplayName_ in main.cpp).
+std::string     getSubBankName(int layer, int quick, int sub, int mod);
+void            setSubBankName(int layer, int quick, int sub, int mod,
+                               const std::string& name);
 std::string     getUf1SoftBankName(int bank, int mod);
 void            setUf1SoftBankName(int bank, int mod, const std::string& name);
 // Number of UF1 soft-key banks in use (highest assigned bank + 1, min 1) —

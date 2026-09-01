@@ -716,6 +716,14 @@ std::atomic<int>  g_uf1TcMode {0};      // 0 Time / 2 Measures / 4 Samples
 // has. Persisted as ExtState "uf1_bank_name_flash"; the load below only fires
 // when the key exists, so an explicit Off still sticks.
 std::atomic<bool> g_uf1BankNameFlash {true};
+// The UF8 has no display to announce its soft-key bank on, so the announcement is
+// the on-screen one: the mode-change banner, and the focused-track panel element.
+// This switch is the banner half (Settings → Appearance → On-screen); the panel
+// element has its own tick in the panel's Elements menu, like every other block
+// there. On by default, like the UF1's flash: a switch that ships off reads as a
+// feature that does not work.
+// Persisted as ExtState "uf8_bank_name_banner".
+std::atomic<bool> g_uf8BankNameBanner {true};
 
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
@@ -4323,6 +4331,8 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "uf1_bank_name_flash"); v && *v)
         g_uf1BankNameFlash.store(std::atoi(v) != 0);
+    if (const char* v = GetExtState("rea_sixty", "uf8_bank_name_banner"); v && *v)
+        g_uf8BankNameBanner.store(std::atoi(v) != 0);
     if (const char* v = GetExtState("rea_sixty", "uf1_recv_view"); v && *v)
         g_uf1RecvView.store(std::atoi(v) != 0);
     if (const char* v = GetExtState("rea_sixty", "nav_color_bar"); v && *v) {
@@ -27454,6 +27464,52 @@ void uf1FlashTimecode_(std::string_view text, int ms)
 // announces "SOFT 3" and not "BANK 3" ([[uf1-timecode-seg7-text]]).
 // ★ Whoever adds a kind here: render the word first. A word the font cannot draw
 // does not fail loudly, it just reads as a different word.
+// What a UF8 Sub-Bank is CALLED. Same three rungs as the UF1's resolver below,
+// one address wider: the UF8 addresses a bank by (layer, quick, sub-bank) where
+// the UF1 has a flat number. Typed name wins, else the dynamic kind, else the
+// coordinates in the words that are printed on the hardware.
+static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod)
+{
+    using namespace uf8::bindings;
+    std::string nm = getSubBankName(layer, quick, sub, mod);
+    if (!nm.empty()) return nm;
+    // The set's own kind, else Plain's — never the raw array ([[softkey-modifier-sets]]).
+    switch (getSubBankDynamicFor(layer, quick, sub, mod)) {
+        case DynamicBankKind::FxBank:       return "FX";
+        case DynamicBankKind::ParamGroups:  return "Groups";
+        case DynamicBankKind::TrackColours: return reasixty_sp("Colours", "Colors");
+        case DynamicBankKind::Favourites:   return "Favourites";
+        case DynamicBankKind::HueScenes:    return "Hue";
+        default: break;
+    }
+    // ⇨ THE FALLBACK IS THE ADDRESS, IN THE WORDS ON THE BOX. The UF1 falls back
+    // to "SOFT 3" because its banks are numbered; a UF8 bank is a coordinate, and
+    // the only reading of it a user can act on is the one printed on the keys.
+    static const char* kSb[6] = { "V-POT", "Soft 1", "Soft 2",
+                                  "Soft 3", "Soft 4", "Soft 5" };
+    if (sub < 0 || sub >= 6) return std::string();
+    char b[32];
+    snprintf(b, sizeof(b), "Q%d %s", quick + 1, kSb[sub]);
+    return b;
+}
+
+// The name of the bank the UF8 is ON right now, or empty when no user Quick is
+// engaged — then the top soft-keys are the layer's own default (on layer 1 the
+// SSL plug-in rows), which is not a bank the user named and has no name to give.
+// Main-thread only (reads the config through the accessors).
+static std::string uf8CurrentBankName_()
+{
+    using namespace uf8::bindings;
+    const int layer = getActiveLayer();
+    if (layer < 0 || layer > 2) return std::string();
+    const int quick = g_activeQuick[layer].load();
+    if (quick < 0) return std::string();          // SSL / layer default, not a user bank
+    const int sub = g_activeSubBank[layer].load();
+    int mset = static_cast<int>(bankModifierSnapshot());
+    if (mset < 0 || mset >= kSoftKeyModifierSets) mset = 0;
+    return uf8BankDisplayName_(layer, quick, sub, mset);
+}
+
 static std::string uf1BankDisplayName_(int bank, int mod)
 {
     using namespace uf8::bindings;
@@ -37456,6 +37512,7 @@ void onTimerBody_()
         // also the one mode with no dedicated LED anywhere, which makes the
         // on-screen announcement the only sign that it is armed.
         static bool          mbTouch = false;
+        static std::string   mbU8Bank;
         static int           mbExtSide = 1;
         // UF1 view / hardware mode (Plugin / DAW / Meter / Sends). Reachable from
         // three places now — the MODE-hold soft-keys, the uf1_view_* builtins and
@@ -37484,7 +37541,10 @@ void onTimerBody_()
             std::string ms = std::string(selectionModeFriendly(sm)) + "\t"
                            + encoderModeFriendly(em) + "\t"
                            + encoderModeFriendly(uf1em) + "\t"
-                           + uf1JogModeFriendly(g_uf1JogMode.load());
+                           + uf1JogModeFriendly(g_uf1JogMode.load()) + "\t"
+                           // Field 5 (2026-09-01): the UF8 soft-key bank's name.
+                           // Appended, never reordered — see the rule above.
+                           + uf8CurrentBankName_();
             if (ms != msPub) { msPub = ms;
                 SetExtState("rea_sixty", "mode_state", ms.c_str(), false); }
         }
@@ -37558,6 +37618,12 @@ void onTimerBody_()
         const bool u8s  = g_pluginFaderMode.load();
         const bool u8p  = g_uf8PluginMode.load();
         const bool tch  = g_hudTouchLearn.load();
+        // The UF8 soft-key bank, by the name it goes by. Diffed on the NAME and
+        // not on the coordinates: a modifier set with no bank of its own takes
+        // Plain's, so holding Shift would otherwise announce the same words again
+        // (the UF1's announce path settled this the same way, 2026-08-26).
+        const std::string u8bn = g_uf8BankNameBanner.load() ? uf8CurrentBankName_()
+                                                            : std::string();
         // ⇨ A PROJECT LOAD IS A NEW BASELINE, NOT A SERIES OF USER ACTIONS.
         // Several of these live in the project file — the Sticky Pot's active flag
         // is written by our project_config_extension and restored on load — so a
@@ -37577,6 +37643,7 @@ void onTimerBody_()
             mbView = ufv; mbJog = jm; mbEnvPh = eph;
             mbFadeOut = fdo; mbFadeWalk = fdw;
             mbUf8Strip = u8s; mbUf8Plugin = u8p; mbTouch = tch;
+            mbU8Bank = u8bn;
         };
         if (!mbInit || mbProjChanged
             || g_modeBannerReseed.exchange(false)) {
@@ -37635,6 +37702,17 @@ void onTimerBody_()
             if (u8s != mbUf8Strip)  { chg.push_back(std::string("UF8 Strip \xE2\x80\xA2 ") + onOff(u8s)); mbUf8Strip = u8s; }
             if (u8p != mbUf8Plugin) { chg.push_back(std::string("UF8 Plugin \xE2\x80\xA2 ") + onOff(u8p)); mbUf8Plugin = u8p; }
             if (tch != mbTouch) { chg.push_back(std::string("Touch to Learn \xE2\x80\xA2 ") + onOff(tch)); mbTouch = tch; }
+            // The UF8 soft-key bank. Last in the chain on purpose: a bank switch
+            // often rides along with something else (engaging a Quick moves both),
+            // and the mode that caused it reads better first.
+            // An empty name means no user Quick is engaged, which is a real state
+            // and worth announcing once — but never as the FIRST thing after a
+            // reseed, which mbSeed already covers.
+            if (u8bn != mbU8Bank) {
+                if (!u8bn.empty())
+                    chg.push_back(std::string("Bank \xE2\x80\xA2 ") + u8bn);
+                mbU8Bank = u8bn;
+            }
             if (!chg.empty()) {
                 std::string joined = chg[0];
                 for (size_t i = 1; i < chg.size(); ++i) joined += "  |  " + chg[i];
@@ -42316,6 +42394,13 @@ int reasixty_uf1ViewMode() { return uf1ViewMode_(); }
 // ---- UF1 soft-key bank name on the time display ---------------------------
 // The Settings toggle (Behaviour → UF1) and the two readers the Bindings pane
 // needs for its live preview. Main thread only.
+bool reasixty_uf8BankNameBanner() { return g_uf8BankNameBanner.load(); }
+void reasixty_setUf8BankNameBanner(bool on)
+{
+    g_uf8BankNameBanner.store(on);
+    SetExtState("rea_sixty", "uf8_bank_name_banner", on ? "1" : "0", true);
+}
+
 bool reasixty_uf1BankNameFlash() { return g_uf1BankNameFlash.load(); }
 void reasixty_setUf1BankNameFlash(bool on)
 {
@@ -42351,6 +42436,16 @@ void reasixty_uf1Seg7Encode(const char* text, unsigned char out[10])
 }
 // The string that bank would actually announce: the user name, else the kind,
 // else the number. One resolver, so the preview cannot drift from the panel.
+// The UF8 Sub-Bank's display name, for the editor's name field: what the banner
+// and the panel would say for this bank right now, typed or fallen back to.
+void reasixty_uf8BankDisplayName(int layer, int quick, int sub, int mod,
+                                 char* out, int outSz)
+{
+    if (!out || outSz <= 0) return;
+    const std::string s = uf8BankDisplayName_(layer, quick, sub, mod);
+    snprintf(out, static_cast<size_t>(outSz), "%s", s.c_str());
+}
+
 void reasixty_uf1BankDisplayName(int bank, int mod, char* out, int outSz)
 {
     if (!out || outSz <= 0) return;

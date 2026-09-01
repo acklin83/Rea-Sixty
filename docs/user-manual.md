@@ -1000,6 +1000,7 @@ The optional helpers Rea-Sixty draws over REAPER's own windows. Each is rendered
 | Show MCP Inserts overlay | Highlights the active Channel Strip and Bus Comp plug-in on REAPER's Mixer Inserts list. |
 | Show focused-track panel | The frameless floating panel showing the surface-focused track, its CS / BC plug-ins, and the last-touched parameter per domain. |
 | Show mode-change banner | Flashes the new Selection- / Channel-Encoder Mode on screen for ~2 s, then hides. Off by default. |
+| Show UF8 soft-key bank names | Nested under the banner. Also flash the soft-key bank's name when the UF8 switches bank, the way the UF1 writes it across its time display. Name the banks in *Bindings*, on the Sub-Bank itself. On by default, and only visible while the banner is on. |
 
 The colour and geometry rows appear only while the helper that uses them is switched on:
 
@@ -1160,6 +1161,14 @@ The seven factory banks are:
 - **Brightness** — Both / LCDs / LEDs × up / down.
 
 These are built only from Rea-Sixty's own actions; generic DAW actions (deselect, arm, zoom, etc.) you bind yourself to a free slot.
+
+### Naming a Sub-Bank
+
+Open a Sub-Bank cell in the UF8 schematic and the editor starts with a **Bank name** field. What you type there is what the bank is called on screen: in the mode-change banner when you switch to it, and in the focused-track panel's *UF8 soft-key bank name* element. The UF8 has no display of its own to announce it on, which is why both of those are on screen rather than on the surface.
+
+The name belongs to one **modifier set**, like everything else about a Sub-Bank, so Plain and Shift can be two differently named banks on one key.
+
+The field is never empty: with no name of your own it carries the name the bank would announce anyway — its dynamic kind (`FX`, `Groups`, `Colours`, `Favourites`, `Hue`), else its position (`Q2 Soft 3`). Clearing the field puts that default back, which is also how you undo a name.
 
 ### Dynamic sub-banks
 
@@ -1757,7 +1766,7 @@ Enable via *Settings → Appearance → On-screen → "Show focused-track panel"
 - **Layout** — Two lines (CS / BC) or One line.
 - **Track name** — *Show track name*; **Use track colour** (draws the track name in the track's REAPER colour — falls back to grey if the track has no custom colour assigned); *Full name* / *Smart abbreviate* / *Abbreviation length*; **Before / After CS/BC** (whether the track name sits before or after the plug-in tag).
 - **Customize** — Font size, Corner radius, Background / Border / CS / BC colour.
-- **Elements** — what the panel shows besides the track name and the plug-in tags. *Mode indicator (Sel / Encoder)* — the UF8's Selection Mode and Channel-Encoder Mode. *UF1 encoder mode* and *UF1 jog mode* — the UF1's own two rings, which are separate from the UF8's and are scrolled blind under a held key, so this is the only always-on readout of them. *Flash mode changes* — the transient banner, in the panel instead of its own window. *Settings + HUD buttons*, *CS / BC cycle buttons*, and *Click plug-in name to open*. All off by default except the last.
+- **Elements** — what the panel shows besides the track name and the plug-in tags. *Mode indicator (Sel / Encoder)* — the UF8's Selection Mode and Channel-Encoder Mode. *UF1 encoder mode* and *UF1 jog mode* — the UF1's own two rings, which are separate from the UF8's and are scrolled blind under a held key, so this is the only always-on readout of them. *Flash mode changes* — the transient banner, in the panel instead of its own window. *UF8 soft-key bank name* — the bank the UF8 is on, by the name you gave it in *Bindings* (empty while no user Quick is engaged, since the top soft-keys are then the layer's own default). *Settings + HUD buttons*, *CS / BC cycle buttons*, and *Click plug-in name to open*. All off by default except the last.
 - **Align** — centre the box horizontally or vertically on screen.
 - **Load on startup** — auto-launch the panel when REAPER starts (writes a marked one-liner into `Scripts/__startup.lua`; untick to remove it).
 - **Close panel**.

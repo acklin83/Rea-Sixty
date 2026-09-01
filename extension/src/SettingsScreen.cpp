@@ -122,6 +122,8 @@ void reasixty_setUf1CsPage(int page);
 // text occupies on the time field (the panel's own encoder, so the preview in the
 // editor is the same bytes rather than a second opinion).
 void reasixty_uf1BankDisplayName(int bank, int mod, char* out, int outSz);
+void reasixty_uf8BankDisplayName(int layer, int quick, int sub, int mod,
+                                 char* out, int outSz);
 void reasixty_uf1Seg7Encode(const char* text, unsigned char out[10]);
 void reasixty_uf1PreviewOnPanel(const char* text);
 bool reasixty_uf1Connected();
@@ -5745,6 +5747,67 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                   "this Sub-Bank's slots (Layer %d, Quick %d, %s).",
                   editLayer + 1, engagedQ + 1, sbLabels[sbIdx]);
     ImGui_Text(ctx, nav);
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    // ---- Bank name (per Sub-Bank, per modifier set) --------------------
+    // What this bank is CALLED. The UF8 has no display to announce it on, so it
+    // surfaces on screen: in the mode-change banner (Appearance → On-screen →
+    // "Show UF8 soft-key bank names") and as an element of the focused-track
+    // panel. Empty is the normal state — the name then falls back to the dynamic
+    // kind, else to the bank's coordinates.
+    {
+        static char        s_u8NameBuf[64] = {0};
+        static int         s_forL = -1, s_forQ = -1, s_forSb = -1, s_forMod = -1;
+        static std::string s_lastFill;
+        static bool        s_editing = false;   // from the PREVIOUS frame
+
+        const std::string userName =
+            uf8::bindings::getSubBankName(editLayer, engagedQ, sbIdx, g_slotEditModIdx);
+        char def[64] = {0};
+        reasixty_uf8BankDisplayName(editLayer, engagedQ, sbIdx, g_slotEditModIdx,
+                                    def, sizeof(def));
+        // ⇨ NEVER AN EMPTY BOX, same rule as the UF1's field: with no name of its
+        // own the box carries the DEFAULT name, which is what will be announced.
+        // Clearing the field puts the default back, which is also how you undo.
+        // ⛔ Never refilled while the cursor is in the box — that would rewrite
+        // what is being typed. s_editing is last frame's answer, because ImGui can
+        // only be asked about an item after it is drawn.
+        const std::string want = userName.empty() ? std::string(def) : userName;
+        if (editLayer != s_forL || engagedQ != s_forQ || sbIdx != s_forSb
+            || g_slotEditModIdx != s_forMod
+            || (!s_editing && want != s_lastFill)) {
+            s_forL = editLayer; s_forQ = engagedQ; s_forSb = sbIdx;
+            s_forMod = g_slotEditModIdx;
+            s_lastFill = want;
+            snprintf(s_u8NameBuf, sizeof(s_u8NameBuf), "%s", want.c_str());
+        }
+        ImGui_Text(ctx, "Bank name");
+        ImGui_SetNextItemWidth(ctx, 260.0);
+        int nameFlags = 0;
+        // ⛔ THE ID CARRIES THE WHOLE ADDRESS, and that is load-bearing. While an
+        // InputText is ACTIVE, ImGui keeps its own copy and writes it back on the
+        // next frame as an edit — so switching bank with the cursor still in the
+        // field would store the text from the bank you LEFT into the one you
+        // arrived at, and the name walks along as you page. The UF1's field learned
+        // this the hard way (Frank 2026-08-26); a different ID makes the widget a
+        // different one, so the old copy is never submitted again.
+        char nameId[64];
+        snprintf(nameId, sizeof(nameId), "##u8bankname_%d_%d_%d_%d",
+                 editLayer, engagedQ, sbIdx, g_slotEditModIdx);
+        if (ImGui_InputText(ctx, nameId, s_u8NameBuf,
+                            sizeof(s_u8NameBuf), &nameFlags, nullptr)) {
+            uf8::bindings::setSubBankName(editLayer, engagedQ, sbIdx,
+                                          g_slotEditModIdx, s_u8NameBuf);
+            s_lastFill = s_u8NameBuf;
+        }
+        s_editing = ImGui_IsItemActive(ctx);
+        ImGui_TextDisabled(ctx,
+            "Shown in the mode-change banner and in the focused-track panel. "
+            "Leave it empty and the bank announces its dynamic kind, or its "
+            "position.");
+    }
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);

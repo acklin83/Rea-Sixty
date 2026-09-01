@@ -1702,6 +1702,36 @@ void serializeUf1SoftBankDynamic_(const Config& c, std::ostringstream& os)
     os << "\n  ]";
 }
 
+// Per-Sub-Bank UF8 user name. Flat list keyed by the bank's full address, only
+// non-empty entries written, so a config that never names a bank is byte-identical
+// to one from before v33.
+void serializeUf8SubBankNames_(const Config& c, std::ostringstream& os)
+{
+    bool any = false;
+    for (int l = 0; l < 3 && !any; ++l)
+      for (int q = 0; q < kQuicksPerLayer && !any; ++q)
+        for (int sb = 0; sb < kSubBanksPerQuick && !any; ++sb)
+          for (int m = 0; m < kSoftKeyModifierSets && !any; ++m)
+            if (!c.userQuicks[l].quicks[q].subBanks[sb].name[m].empty()) any = true;
+    if (!any) return;
+    os << ",\n  \"uf8_sub_bank_names\": [";
+    bool first = true;
+    for (int l = 0; l < 3; ++l)
+      for (int q = 0; q < kQuicksPerLayer; ++q)
+        for (int sb = 0; sb < kSubBanksPerQuick; ++sb)
+          for (int m = 0; m < kSoftKeyModifierSets; ++m) {
+            const std::string& nm = c.userQuicks[l].quicks[q].subBanks[sb].name[m];
+            if (nm.empty()) continue;
+            if (!first) os << ",";
+            first = false;
+            os << "\n    {\"layer\": " << l << ", \"quick\": " << q
+               << ", \"sub\": " << sb << ", \"mod\": " << m << ", \"name\": ";
+            appendEscaped(os, nm);
+            os << "}";
+          }
+    os << "\n  ]";
+}
+
 // Per-bank UF1 user name. Flat list, only non-empty entries written, same shape
 // as the dynamic-kind list above. Empty ⇒ nothing emitted, so a config that never
 // names a bank is byte-identical to one from before v32.
@@ -1745,6 +1775,7 @@ std::string serialize(const Config& c)
     serializeBankPresets_(c, os);
     serializeUf1SoftBanks_(c, os);
     serializeUf1SoftBankDynamic_(c, os);
+    serializeUf8SubBankNames_(c, os);
     serializeUf1SoftBankNames_(c, os);
     os << "\n}\n";
     return os.str();
@@ -2141,6 +2172,30 @@ void parseUf1SoftBankDynamic_(wdl_json_element* root, Config& out)
     }
 }
 
+void parseUf8SubBankNames_(wdl_json_element* root, Config& out)
+{
+    auto* arr = root->get_item_by_name("uf8_sub_bank_names");
+    if (!arr || !arr->is_array() || !arr->m_array) return;
+    const int n = arr->m_array->GetSize();
+    for (int i = 0; i < n; ++i) {
+        wdl_json_element* eo = arr->enum_item(i);
+        if (!eo || !eo->is_object()) continue;
+        int layer = -1, quick = -1, sub = -1, mod = 0;
+        auto num = [&](const char* key, int& dst) {
+            if (auto* v = eo->get_item_by_name(key))
+                if (auto* t = v->get_string_value(true)) dst = std::atoi(t);
+        };
+        num("layer", layer); num("quick", quick); num("sub", sub); num("mod", mod);
+        if (layer < 0 || layer >= 3) continue;
+        if (quick < 0 || quick >= kQuicksPerLayer) continue;
+        if (sub   < 0 || sub   >= kSubBanksPerQuick) continue;
+        if (mod   < 0 || mod   >= kSoftKeyModifierSets) continue;
+        if (auto* v = eo->get_item_by_name("name"))
+            if (auto* t = v->get_string_value(true))
+                out.userQuicks[layer].quicks[quick].subBanks[sub].name[mod] = t;
+    }
+}
+
 void parseUf1SoftBankNames_(wdl_json_element* root, Config& out)
 {
     auto* arr = root->get_item_by_name("uf1_soft_bank_names");
@@ -2452,6 +2507,7 @@ bool tryParse_(const std::string& json, Config& out)
     parseBankPresets_(root, out);
     parseUf1SoftBanks_(root, out);
     parseUf1SoftBankDynamic_(root, out);
+    parseUf8SubBankNames_(root, out);
     parseUf1SoftBankNames_(root, out);
     return true;
 }
@@ -2571,11 +2627,15 @@ bool invokeBuiltin(const std::string& name, int param)
 // 28: the nav cross gained 25 per-mode ButtonIds. Dispatch resolves the cross
 // through the active Jog Mode, so an older config has NO binding for it until
 // upgradeBackfillUf1Buttons_ seeds them — that pass now runs for < 28 too.
+// v33 (2026-09-01): UserQuickSubBank::name — the UF1's bank name, now for the
+// UF8's Sub-Banks too, keyed by (layer, quick, sub-bank, modifier set). The UF8
+// has no display to announce it on, so it surfaces in the mode-change banner and
+// in the focused-track panel instead. Purely additive, same as v32 below.
 // v32 (2026-08-26): uf1SoftBankName — a user name per UF1 soft-key bank and
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
-constexpr int kCurrentBindingsVersion = 32;
+constexpr int kCurrentBindingsVersion = 33;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4911,6 +4971,27 @@ void setUf1SoftBankDynamic(int bank, int mod, DynamicBankKind kind)
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     g_cfg.uf1SoftBankDynamic[bank][mod] = kind;
+    persistLocked_();
+}
+
+std::string getSubBankName(int layer, int quick, int sub, int mod)
+{
+    if (layer < 0 || layer >= 3) return std::string();
+    if (quick < 0 || quick >= kQuicksPerLayer) return std::string();
+    if (sub   < 0 || sub   >= kSubBanksPerQuick) return std::string();
+    if (mod   < 0 || mod   >= kSoftKeyModifierSets) return std::string();
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return g_cfg.userQuicks[layer].quicks[quick].subBanks[sub].name[mod];
+}
+
+void setSubBankName(int layer, int quick, int sub, int mod, const std::string& name)
+{
+    if (layer < 0 || layer >= 3) return;
+    if (quick < 0 || quick >= kQuicksPerLayer) return;
+    if (sub   < 0 || sub   >= kSubBanksPerQuick) return;
+    if (mod   < 0 || mod   >= kSoftKeyModifierSets) return;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    g_cfg.userQuicks[layer].quicks[quick].subBanks[sub].name[mod] = name;
     persistLocked_();
 }
 
