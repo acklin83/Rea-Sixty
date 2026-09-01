@@ -327,7 +327,7 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
         }
         ImGui_TextDisabled(ctx,
             "Flash the bank's name when the UF8 switches soft-key bank. Name the "
-            "banks in Bindings, on the Sub-Bank you want to name.");
+            "banks in Bindings, on the bank you want to name.");
         // A bank has two full sets, Plain and Shift, each able to carry its own
         // name. This decides whether the BANNER follows the set you are HOLDING or
         // stays on the Plain name. The panel's drop-down is not governed by it and

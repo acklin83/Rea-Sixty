@@ -194,7 +194,7 @@ The large notched CHANNEL encoder (right of the strips, pushable, surrounded by 
 | Nudge | Playhead nudge | Step size is Rea-Sixty's own, under Settings → Modes → Nudge: an amount plus a unit, one grid step by default |
 | Mousewheel | Synthesised scroll-wheel under the mouse cursor | Use to scroll plug-in windows or Project Browser |
 | Markers | Step prev / next marker | Stops playback while seeking |
-| Bank by 1ch | Shift the surface 1 strip left/right | Sub-bank precision |
+| Bank by 1ch | Shift the surface 1 strip left/right | Sub-strip precision |
 | Last Touched Param | Step the last-touched REAPER param ± | Fine increments |
 | Instance (Instance Cycle) | Walk Instances on the focused track | Same behaviour as the V-Pot Sel-Mode Instance Cycle, focused-track scope |
 | FX Cycle | Walk every FX on the focused track | Focused-track scope |
@@ -1000,7 +1000,7 @@ The optional helpers Rea-Sixty draws over REAPER's own windows. Each is rendered
 | Show MCP Inserts overlay | Highlights the active Channel Strip and Bus Comp plug-in on REAPER's Mixer Inserts list. |
 | Show focused-track panel | The frameless floating panel showing the surface-focused track, its CS / BC plug-ins, and the last-touched parameter per domain. |
 | Show mode-change banner | Flashes the new Selection- / Channel-Encoder Mode on screen for ~2 s, then hides. Off by default. |
-| Show UF8 soft-key bank names | Nested under the banner. Also flash the soft-key bank's name when the UF8 switches bank, the way the UF1 writes it across its time display. Name the banks in *Bindings*, on the Sub-Bank itself. On by default, and only visible while the banner is on. |
+| Show UF8 soft-key bank names | Nested under the banner. Also flash the soft-key bank's name when the UF8 switches bank, the way the UF1 writes it across its time display. Name the banks in *Bindings*, on the bank itself. On by default, and only visible while the banner is on. |
 | Bank names follow Shift | A bank has two full sets, Plain and Shift, and each can carry its own name. On, the banner shows the set you are **holding**, so Shift announces that bank's Shift set. Off, it stays on the Plain name however long you hold, which is what you want if you work with Shift down. **Banner only** — the focused-track panel's bank menu always shows the set you are actually in. On by default. |
 
 The colour and geometry rows appear only while the helper that uses them is switched on:
@@ -1087,7 +1087,7 @@ Surface-side handling of the REAPER Master bus. See **Master track** (own chapte
 | Control | Effect |
 |---|---|
 | Parameter change switches soft-key bank | On by default. A focused-parameter change switches the SSL soft-key bank to whichever bank holds that parameter. Off → the bank stays put when you touch a parameter. The UF8 parameter display follows the parameter either way. |
-| Engage a fixed soft-key bank at startup | Off by default. Ticking it reveals three combos — **Layer** (1-3), **Quick** (Q1-Q3), **Sub-bank** (V-POT / Soft 1-5) — and that user-Quick is engaged once on the first timer tick of every fresh REAPER session, instead of the plug-in-driven default. **Use current hardware bank** fills the three combos from whatever is engaged on the UF8 right now. Layer 1's Q1 / Q2 are greyed out: they are the hardcoded SSL CS / BC focus and carry no user-Quick slots. Ignored while UF8 Plug-in Mode is on — that mode owns the soft-keys. |
+| Engage a fixed soft-key bank at startup | Off by default. Ticking it reveals three combos — **Layer** (1-3), **Quick** (Q1-Q3), **Soft-key bank** (V-POT / Soft 1-5) — and that user-Quick is engaged once on the first timer tick of every fresh REAPER session, instead of the plug-in-driven default. **Use current hardware bank** fills the three combos from whatever is engaged on the UF8 right now. Layer 1's Q1 / Q2 are greyed out: they are the hardcoded SSL CS / BC focus and carry no user-Quick slots. Ignored while UF8 Plug-in Mode is on — that mode owns the soft-keys. |
 
 ### UF1
 
@@ -1117,17 +1117,17 @@ The "current layer" follows whichever Layer button (1 / 2 / 3) is highlighted in
 
 Five click-to-edit special cases:
 
-- **Top-soft-keys** (the 8 buttons above the V-Pots) open the **user-Quick slot editor** for the (Layer, Quick, Sub-Bank) coordinate you are editing instead of the regular per-button editor — top-soft-keys are slot pickers, not direct actions.
-- **Sub-bank selectors** (V-POT + 1..5) open the **sub-bank cell editor** with a Per-Quick LED override so the user can distinguish (Layer, Quick) contexts visually.
+- **Top-soft-keys** (the 8 buttons above the V-Pots) open the **user-Quick slot editor** for the (Layer, Quick, soft-key bank) coordinate you are editing instead of the regular per-button editor — top-soft-keys are slot pickers, not direct actions.
+- **Soft-key bank selectors** (V-POT + 1..5) open the **bank cell editor** with a Per-Quick LED override so the user can distinguish (Layer, Quick) contexts visually.
 - **The UF1 nav cross** (the four arrows and the centre key around the jog wheel) opens the regular editor with a **Jog Mode** picker above it. Each of those five keys holds a separate binding per object, and the picker says which one you are editing. It follows the surface and moves it: change the object there and the wheel changes with it, so what you edit is always what you are holding. See the chapter *Jog Mode*.
 - **The UF1 jog wheel** is selectable but fires nothing, so clicking it opens the wheel's own settings (picker speed, fine divisor, the step for the object you are in, and its time axis) with no action picker at all. Only the settings the live object actually uses are shown.
 - Everything else uses the regular per-button binding editor.
 
 ### Offline soft-key editing + edit selector
 
-You can view and edit the Top-Soft-Key slots **without a UF8 connected**. The engaged bank is a value Rea-Sixty holds either way, so clicking a Quick or Sub-Bank still moves it and the editor still follows.
+You can view and edit the Top-Soft-Key slots **without a UF8 connected**. The engaged bank is a value Rea-Sixty holds either way, so clicking a set or a bank still moves it and the editor still follows.
 
-When you click a Top-Soft-Key (or a Sub-Bank cell) in the schematic, the **Soft-Key Sets** matrix appears under it. It is not a second setting beside the hardware: it shows the bank that is engaged, and clicking one engages another, exactly as pressing those keys would. What you edit is always what the surface is on.
+When you click a Top-Soft-Key (or a bank cell) in the schematic, the **Soft-Key Sets** matrix appears under it. It is not a second setting beside the hardware: it shows the bank that is engaged, and clicking one engages another, exactly as pressing those keys would. What you edit is always what the surface is on.
 
 ### Soft-Key Sets
 
@@ -1141,7 +1141,7 @@ A **set** is the six soft-key banks under one Quick key, and it has a number of 
 
 Layer 1's Q1 and Q2 are SSL's own CS and BC rows and are not sets.
 
-The number matters because it is an address. **Soft-Key Set: engage (param 1-7)** is a bindable action, so a set sits on any key, foot-switch, Stream Deck tile or keyboard shortcut you like — the Quick button is one way in, not the only one. Engaging a set leaves the sub-bank where that layer had it, so coming back puts you on the bank you were using.
+The number matters because it is an address. **Soft-Key Set: engage (param 1-7)** is a bindable action, so a set sits on any key, foot-switch, Stream Deck tile or keyboard shortcut you like — the Quick button is one way in, not the only one. Engaging a set leaves the soft-key bank where that layer had it, so coming back puts you on the bank you were using.
 
 The matrix is seven rows by six columns. Each row is a set, with a **name** you can type in its first column; each cell is one of its banks, showing that bank's name, or its dynamic kind, or a dash when it holds nothing. The engaged cell is marked, and clicking a cell engages that bank and opens it in the editor below. The **Modifier** row switches the whole matrix between the Plain and Shift sets.
 
@@ -1149,7 +1149,7 @@ The set's name is what the mode-change banner and the focused-track panel say wh
 
 Each slot carries a **Behavior** (*Momentary*, *Toggle* or *Hold*), the same setting a regular button has.
 
-Every Sub-Bank also holds **two sets of keys**: Plain and Shift. Holding the FINE key switches the whole row of eight, labels and all, and releasing returns to Plain. The **Modifier** row next to the Quick and Sub-Bank pickers chooses which set you are editing, and the scribble previews follow it. Like those two pickers it follows the hardware: press FINE to jump to the Shift set and press it again to come back to Plain. Releasing never moves it, so you can edit with the mouse. A set you left empty shows empty on the hardware, it does not borrow the Plain label. **While the Bindings pane is open the surface follows the Modifier row** rather than the key you are holding: the eight keys show the set you are editing and a press fires that set, so what you see on the hardware is what you are working on. Close the pane or switch to another one and the surface goes back to following the held key.
+Every soft-key bank also holds **two sets of keys**: Plain and Shift. Holding the FINE key switches the whole row of eight, labels and all, and releasing returns to Plain. The **Modifier** row beside the matrix chooses which set you are editing, and the scribble previews follow it. Like those two pickers it follows the hardware: press FINE to jump to the Shift set and press it again to come back to Plain. Releasing never moves it, so you can edit with the mouse. A set you left empty shows empty on the hardware, it does not borrow the Plain label. **While the Bindings pane is open the surface follows the Modifier row** rather than the key you are holding: the eight keys show the set you are editing and a press fires that set, so what you see on the hardware is what you are working on. Close the pane or switch to another one and the surface goes back to following the held key.
 
 There is no Cmd or Ctrl set. The surface carries one modifier key and no more, so those two would have to come from the computer keyboard, where they already belong to the FX-Learn modifier layers.
 
@@ -1161,13 +1161,13 @@ When a bank is **dynamic** its keys come from the focused track. On Plain's bank
 
 **Clear whole key** does what it says: label, behaviour, LED and both sets. To empty a single set, pick *None (disabled)* in its action picker.
 
-What you edit is what is engaged. Clicking a Quick or Sub-Bank tile in the schematic **engages** that bank, and the editor follows it, so the pane can never sit on a different bank than the surface. A **green ring** marks the engaged Quick / Sub-Bank.
+What you edit is what is engaged. Clicking a cell in the matrix **engages** that bank, and the editor follows it, so the pane can never sit on a different bank than the surface. The engaged cell is marked.
 
-This works with no UF8 attached, so you can still walk through every Quick / Sub-Bank page offline — the Top-Soft-Key labels in the schematic show the bank you just engaged.
+This works with no UF8 attached, so you can still walk through every set and bank offline — the Top-Soft-Key labels in the schematic show the bank you just engaged.
 
 ### Factory Rea-Sixty soft-key banks
 
-In the Sub-Bank editor there is a **Rea-Sixty factory banks** section. Pick a curated bank from the combo and **Recall into this Sub-Bank**, or **Load full set → Layer 1 / Quick 3** to drop banks into Layer 1 / Quick 3's six sub-banks at once. A Quick holds six sub-banks and there are seven banks, so the set loads the first six and the last one (Brightness) stays out; recall that one into a sub-bank of its own.
+In the bank editor there is a **Rea-Sixty factory banks** section. Pick a curated bank from the combo and **Recall into this bank**, or **Load full set → Layer 1 / Quick 3** to drop banks into Layer 1 / Quick 3's six soft-key banks at once. A set holds six banks and there are seven factory banks, so the set loads the first six and the last one (Brightness) stays out; recall that one into a bank of its own.
 
 The seven factory banks are:
 
@@ -1181,19 +1181,19 @@ The seven factory banks are:
 
 These are built only from Rea-Sixty's own actions; generic DAW actions (deselect, arm, zoom, etc.) you bind yourself to a free slot.
 
-### Naming a Sub-Bank
+### Naming a soft-key bank
 
-Open a Sub-Bank cell in the UF8 schematic and the editor starts with a **Bank name** field. What you type there is what the bank is called on screen: in the mode-change banner when you switch to it, and in the focused-track panel's *UF8 soft-key bank name* element. The UF8 has no display of its own to announce it on, which is why both of those are on screen rather than on the surface.
+Open a bank cell in the matrix and the editor starts with a **Bank name** field. What you type there is what the bank is called on screen: in the mode-change banner when you switch to it, and in the focused-track panel's *UF8 soft-key bank name* element. The UF8 has no display of its own to announce it on, which is why both of those are on screen rather than on the surface.
 
-The name belongs to one **modifier set**, like everything else about a Sub-Bank, so Plain and Shift can be two differently named banks on one key.
+The name belongs to one **modifier set**, like everything else about a soft-key bank, so Plain and Shift can be two differently named banks on one key.
 
 The field is never empty: with no name of your own it carries the name the bank would announce anyway — its dynamic kind (`FX`, `Groups`, `Colours`, `Favourites`, `Hue`), else its position (`Q2 Soft 3`). Clearing the field puts that default back, which is also how you undo a name.
 
-### Dynamic sub-banks
+### Dynamic soft-key banks
 
-A normal Sub-Bank holds eight fixed assignments. A **dynamic** Sub-Bank computes its eight keys live from whatever track you are looking at — its plug-ins, for instance — so the keys change as you move around the session.
+A normal soft-key bank holds eight fixed assignments. A **dynamic** bank computes its eight keys live from whatever track you are looking at — its plug-ins, for instance — so the keys change as you move around the session.
 
-Open a Sub-Bank cell in the UF8 schematic and look for the **Dynamic bank** section. The dropdown offers:
+Open a bank cell in the matrix and look for the **Dynamic bank** section. The dropdown offers:
 
 | Setting | What the eight keys become |
 |---|---|
@@ -1203,17 +1203,17 @@ Open a Sub-Bank cell in the UF8 schematic and look for the **Dynamic bank** sect
 | `Track Colours` | Your eight-colour palette |
 | `CS / BC Favourites` | Your eight Channel Strip or Bus Compressor favourites |
 
-The choice is stored per Sub-Bank, so each of the six Sub-Banks under each Quick can be dynamic or static independently. While a bank is dynamic its eight stored slots are ignored — they are not lost, and turning the bank back to `Off` restores them.
+The choice is stored per bank, so each of the six banks in a set can be dynamic or static independently. While a bank is dynamic its eight stored slots are ignored — they are not lost, and turning the bank back to `Off` restores them.
 
-A dynamic Sub-Bank announces itself in three places, so you never edit slots that cannot fire:
+A dynamic bank announces itself in three places, so you never edit slots that cannot fire:
 
-- The Sub-Bank cell in the schematic carries an **amber tick** in its top-right corner.
+- The bank's cell in the matrix carries an **amber tick** in its top-right corner.
 - The eight scribble strips above it read the bank's kind (`FX`, `GROUPS`, `COLOURS`, `FAVS`) rather than the stored slot labels, because those labels never reach the hardware while the bank is dynamic.
 - Clicking any of the eight keys shows what the bank computes instead of a slot editor, with the same **Dynamic bank** dropdown, so you can switch it back to static without hunting for the cell.
 
 Layer 1's Q1 and Q2 are driven by the plug-in and carry no user slots, so they cannot be made dynamic. Everything else can: Layer 1 Q3, and all three Quicks on Layers 2 and 3.
 
-The UF1's ten soft-key banks take the same setting, in **Settings → Bindings → UF1**. There a whole bank is dynamic rather than a Sub-Bank, its four keys show four items at a time, and a **long press** on the UF1's `◄ ►` keys pages through them. A long press on a dynamic key itself fires half a second after you press it, under the finger, the same as every other long press on the surface. (`5-8` is always the DAW channel group, never the bank.) The FX-key gestures are global, so the five you set on either surface drive both.
+The UF1's ten soft-key banks take the same setting, in **Settings → Bindings → UF1**. There a whole bank is dynamic the same way, its four keys show four items at a time, and a **long press** on the UF1's `◄ ►` keys pages through them. A long press on a dynamic key itself fires half a second after you press it, under the finger, the same as every other long press on the surface. (`5-8` is always the DAW channel group, never the bank.) The FX-key gestures are global, so the five you set on either surface drive both.
 
 The UF1's banks work the same way, set for set: a set can take Plain's bank or carry one of its own, and while it takes Plain's, the four slot editors stay reachable because that is where you put the key that beats the gesture. On the UF8, dynamic banks are inactive while UF8 Plug-in Mode is engaged.
 
@@ -1254,7 +1254,7 @@ Populated keys take their colour from the colour stored on the underlying static
 | `UC1 Encoder 1` / `UC1 Encoder 2` | Either UC1 encoder |
 | `UF8 Bank ◄ ►` | The UF8 bank keys |
 
-Note the default: **out of the box an FX bank does not page**, so a track with twelve plug-ins shows only the first eight until you pick a paging control. The chosen control only pages while this Sub-Bank is the engaged one; the rest of the time it does its normal job. Paging returns to the first page whenever the focused track changes.
+Note the default: **out of the box an FX bank does not page**, so a track with twelve plug-ins shows only the first eight until you pick a paging control. The chosen control only pages while this bank is the engaged one; the rest of the time it does its normal job. Paging returns to the first page whenever the focused track changes.
 
 **What a key press does** is configurable per gesture, and the setting is **global — it applies to every FX bank you create**, not to one bank:
 
@@ -2672,7 +2672,7 @@ There are two ways to reach them.
 
 **One key per scene.** Bind **Hue: recall scene** with parameter **1** to **8** to any key on any surface. A short press puts the room into that scene. A long press starts it moving, for the scenes that cycle.
 
-**All eight at once.** Set a soft-key bank's type to **Hue Scenes**: on the UF8 that is the Sub-Bank's *Dynamic* setting under Settings, Bindings; on the UF1 the same setting on one of its ten soft-key banks. The bank then shows the eight slots in order, each key wearing its slot's LED colour and lighting while the bridge reports that scene as the one showing. Push recalls, long press starts it moving, exactly as the action does. On the UF1 the bank names itself `HUE` on the time field, and a recall flashes the scene's name there.
+**All eight at once.** Set a soft-key bank's type to **Hue Scenes**: on the UF8 that is the bank's *Dynamic* setting under Settings, Bindings; on the UF1 the same setting on one of its ten soft-key banks. The bank then shows the eight slots in order, each key wearing its slot's LED colour and lighting while the bridge reports that scene as the one showing. Push recalls, long press starts it moving, exactly as the action does. On the UF1 the bank names itself `HUE` on the time field, and a recall flashes the scene's name there.
 
 Both routes read the same eight slots, so there is one list to keep.
 

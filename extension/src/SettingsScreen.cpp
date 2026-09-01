@@ -5030,7 +5030,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
         if (dynKind != DynamicBankKind::None) {
             char note[200];
             snprintf(note, sizeof(note),
-                          "This Sub-Bank is dynamic: %s.",
+                          "This soft-key bank is dynamic: %s.",
                           dynKindLabel_(dynKind));
             ImGui_Text(ctx, note);
             if (g_slotEditModIdx == 0) {
@@ -5041,7 +5041,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                 if (dynKind == DynamicBankKind::FxBank) {
                     ImGui_TextDisabled(ctx,
                         "Shift / Cmd / Ctrl / long-press run the FX-key "
-                        "gestures instead. They are set on the Sub-Bank cell.");
+                        "gestures instead. They are set on the bank cell.");
                 }
             } else if (dynOwn) {
                 ImGui_TextDisabled(ctx,
@@ -5735,7 +5735,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     // ---- Header + navigation hint -------------------------------------
     char hdr[160];
     snprintf(hdr, sizeof(hdr),
-                  "Editing: Sub-Bank %s, %s   (Layer %d, Quick %d)",
+                  "Editing: soft-key bank %s, %s   (Layer %d, Quick %d)",
                   sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
                   editLayer + 1, engagedQ + 1);
     ImGui_Text(ctx, hdr);
@@ -5745,7 +5745,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     char nav[160];
     snprintf(nav, sizeof(nav),
                   "Click any of the 8 Top-Soft-Keys above to configure "
-                  "this Sub-Bank's slots (Layer %d, Quick %d, %s).",
+                  "this bank's slots (Layer %d, Quick %d, %s).",
                   editLayer + 1, engagedQ + 1, sbLabels[sbIdx]);
     ImGui_Text(ctx, nav);
     ImGui_Spacing(ctx);
@@ -5826,7 +5826,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         // an old favourites bank left switch_bc_* on Shift underneath a Hue
         // Scenes bank (2026-08-27).
         ImGui_TextDisabled(ctx,
-            "Compute this Sub-Bank's 8 keys live from the focused track "
+            "Compute this soft-key bank's 8 keys live from the focused track "
             "instead of fixed slots. The Plain slots below are then ignored, "
             "but a slot stored under a held modifier still wins over the "
             "computed key.");
@@ -5910,7 +5910,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                 ImGui_EndCombo(ctx);
             }
             ImGui_TextDisabled(ctx,
-                "Only while this bank is the engaged Sub-Bank; the control "
+                "Only while this is the engaged soft-key bank; the control "
                 "keeps its normal function otherwise.");
             ImGui_Spacing(ctx);
         }
@@ -6006,14 +6006,14 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     {
         char presetHdr[160];
         snprintf(presetHdr, sizeof(presetHdr),
-                      "Soft-key preset for Sub-Bank %s, %s"
+                      "Soft-key preset for bank %s, %s"
                       "   (Layer %d, Quick %d)",
                       sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
                       editLayer + 1, engagedQ + 1);
         ImGui_Text(ctx, presetHdr);
         ImGui_TextDisabled(ctx,
             "Snapshot this modifier's 8 Top-Soft-Key slots as a "
-            "named preset, or recall one into this Sub-Bank.");
+            "named preset, or recall one into this bank.");
         ImGui_Spacing(ctx);
 
         // Per (L, Q, SB) selection — different sub-bank cells keep
@@ -6286,7 +6286,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         ImGui_Text(ctx, "Rea-Sixty factory banks");
         ImGui_TextDisabled(ctx,
             "Curated from Rea-Sixty's own built-ins. Recall one into this "
-            "Sub-Bank, or load the full set into Layer 1 / Quick 3.");
+            "bank, or load the full set into Layer 1 / Quick 3.");
         ImGui_Spacing(ctx);
 
         const int nFac = factoryBankPresetCount();
@@ -6329,7 +6329,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         static int s_facOp = FacNone;
 
         ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_Button(ctx, "Recall into this Sub-Bank##fac_recall",
+        if (ImGui_Button(ctx, "Recall into this bank##fac_recall",
                          nullptr, nullptr)) {
             s_facOp = FacRecall;
         }
@@ -6347,11 +6347,11 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                 ? facDisplay(factoryBankPresetAt(nFac - 1).name) : std::string();
             std::snprintf(facNote, sizeof(facNote),
                 "Full set = the first %d banks into L1/Q3's V-POT + Soft 1-5 "
-                "sub-banks (overwrites those 48 slots).%s%s%s",
+                "soft-key banks (overwrites those 48 slots).%s%s%s",
                 (nFac < kSubBanksPerQuick) ? nFac : kSubBanksPerQuick,
                 lastName.empty() ? "" : " A Quick holds six, so ",
                 lastName.c_str(),
-                lastName.empty() ? "" : " stays out; recall it into a sub-bank "
+                lastName.empty() ? "" : " stays out; recall it into a soft-key bank "
                                         "of its own.");
             ImGui_TextDisabled(ctx, facNote);
         }
@@ -6402,7 +6402,7 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                                   nullptr, nullptr)) {
             ImGui_TextWrapped(ctx,
                 "Overwrite all 48 slots of Layer 1 / Quick 3 on the "
-                "selected modifier set? A Quick holds six sub-banks, so the "
+                "selected modifier set? A set holds six soft-key banks, so the "
                 "last factory bank is not part of this.");
             ImGui_Spacing(ctx);
             if (ImGui_Button(ctx, "Load set##fac_loadset_ok",
@@ -6426,13 +6426,13 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     // ---- Per-(Layer, Quick) LED override -----------------------------
     char ledHdr[160];
     snprintf(ledHdr, sizeof(ledHdr),
-                  reasixty_sp("LED colours for Sub-Bank %s on (Layer %d, Quick %d)",
-                              "LED colors for Sub-Bank %s on (Layer %d, Quick %d)"),
+                  reasixty_sp("LED colours for soft-key bank %s on (Layer %d, Quick %d)",
+                              "LED colors for soft-key bank %s on (Layer %d, Quick %d)"),
                   sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
     ImGui_Text(ctx, ledHdr);
     ImGui_TextDisabled(ctx,
-        "Active = this Sub-Bank is the selected one. Inactive = "
-        "another Sub-Bank is selected in this Quick.");
+        "Active = this soft-key bank is the selected one. Inactive = "
+        "another soft-key bank is selected in this set.");
     if (g_slotEditModIdx != 0)
         ImGui_TextDisabled(ctx, "Shift set. Inherits Plain until changed.");
     ImGui_Spacing(ctx);
