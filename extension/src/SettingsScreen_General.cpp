@@ -62,6 +62,8 @@ void reasixty_setFocusedPanel(bool on);
 bool reasixty_focusedPanelRunning();
 bool reasixty_modeBanner();
 bool reasixty_uf8BankNameBanner();
+bool reasixty_uf8BankNameShift();
+void reasixty_setUf8BankNameShift(bool on);
 void reasixty_setUf8BankNameBanner(bool on);
 void reasixty_setModeBanner(bool on);
 bool reasixty_modeBannerRunning();
@@ -326,6 +328,17 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
         ImGui_TextDisabled(ctx,
             "Flash the bank's name when the UF8 switches soft-key bank. Name the "
             "banks in Bindings, on the Sub-Bank you want to name.");
+        // A bank has two full sets, Plain and Shift, each able to carry its own
+        // name. This decides whether the readouts follow the set you are HOLDING
+        // or stay on the Plain name. Applies to the banner and to the panel's
+        // drop-down alike: one question, one answer, so the two can never disagree.
+        bool ubs = reasixty_uf8BankNameShift();
+        if (ImGui_Checkbox(ctx, "Bank names follow Shift", &ubs)) {
+            reasixty_setUf8BankNameShift(ubs);
+        }
+        ImGui_TextDisabled(ctx,
+            "Holding Shift shows that bank's Shift set. Off keeps the Plain name "
+            "however long you hold. Also applies to the panel's bank menu.");
         ImGui_Unindent(ctx, nullptr);
     }
 

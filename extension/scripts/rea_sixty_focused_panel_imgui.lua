@@ -479,10 +479,11 @@ end
 -- time field, so this and the mode-change banner are the two places it can be
 -- seen — and here you can also go somewhere.
 --
--- "uf8_banks" = "<activeIdx>;<layer>\t<quick>\t<sub>\t<name>;…". Semicolons
+-- "uf8_banks" = "<activeIdx>;<layer>\t<quick>\t<sub>\t<name>\t<set>;…". Semicolons
 -- separate entries, tabs separate fields, never a newline. The extension lists
 -- the banks that hold something, plus the one you are on even if it is empty, and
--- rebuilds it about once a second.
+-- rebuilds it about once a second. <set> is 0 for Plain and 1 for Shift: a bank
+-- has two full sets and each can carry its own name, so both are listed.
 local function readUf8Banks()
   local raw = reaper.GetExtState(SECT, "uf8_banks")
   if raw == "" then return nil end
@@ -494,7 +495,8 @@ local function readUf8Banks()
     local f = {}
     for x in (parts[i] .. "\t"):gmatch("(.-)\t") do f[#f + 1] = x end
     if #f >= 4 then
-      list[#list + 1] = { l = f[1], q = f[2], sb = f[3], name = f[4] }
+      list[#list + 1] = { l = f[1], q = f[2], sb = f[3], name = f[4],
+                          set = tonumber(f[5] or "0") or 0 }
     end
   end
   return list, active
@@ -507,16 +509,23 @@ local function drawUf8Bank()
   if not list or #list == 0 then
     local f = modeState()
     if not f or not f[5] or f[5] == "" then return end
-    labelled("Bank", f[5])
+    labelled("UF8 SK-Bank", f[5])
     return
   end
-  local cur = (active >= 0 and list[active + 1]) and list[active + 1].name or "(none)"
-  reaper.ImGui_TextColored(ctx, rgba(0x8890A0), "Bank ")
+  -- A Shift row is the same coordinate as its Plain twin, so it says which half
+  -- it is rather than pretending to be a stop of its own.
+  local function rowLabel(b)
+    if b.set == 1 then return b.name .. "  (Shift)" end
+    return b.name
+  end
+  local cur = (active >= 0 and list[active + 1]) and rowLabel(list[active + 1])
+              or "(none)"
+  reaper.ImGui_TextColored(ctx, rgba(0x8890A0), "UF8 SK-Bank ")
   reaper.ImGui_SameLine(ctx, 0, 0)
-  reaper.ImGui_SetNextItemWidth(ctx, 150)
+  reaper.ImGui_SetNextItemWidth(ctx, 170)
   if reaper.ImGui_BeginCombo(ctx, "##u8bank", cur) then
     for i, b in ipairs(list) do
-      if reaper.ImGui_Selectable(ctx, b.name .. "##u8b" .. i, i == active + 1) then
+      if reaper.ImGui_Selectable(ctx, rowLabel(b) .. "##u8b" .. i, i == active + 1) then
         sendPanelCmd("u8bank;" .. b.l .. ";" .. b.q .. ";" .. b.sb)
       end
     end

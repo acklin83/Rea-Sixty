@@ -724,6 +724,14 @@ std::atomic<bool> g_uf1BankNameFlash {true};
 // feature that does not work.
 // Persisted as ExtState "uf8_bank_name_banner".
 std::atomic<bool> g_uf8BankNameBanner {true};
+// ⇨ FOLGT DIE ANZEIGE DEM MODIFIER-SATZ? A soft-key bank has two full sets, Plain
+// and Shift, and each can carry its own name. On, the banner and the panel show
+// the set you are HOLDING, so Shift announces the Shift bank; off, both stay on
+// the Plain name however long you hold. Frank 2026-09-01, next to the switch that
+// turns the announcement on at all: someone who works with Shift down most of the
+// time wants the bank's identity, not a readout that changes under their thumb.
+// Persisted as ExtState "uf8_bank_name_shift".
+std::atomic<bool> g_uf8BankNameShift {true};
 
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
@@ -4333,6 +4341,8 @@ void loadBrightness()
         g_uf1BankNameFlash.store(std::atoi(v) != 0);
     if (const char* v = GetExtState("rea_sixty", "uf8_bank_name_banner"); v && *v)
         g_uf8BankNameBanner.store(std::atoi(v) != 0);
+    if (const char* v = GetExtState("rea_sixty", "uf8_bank_name_shift"); v && *v)
+        g_uf8BankNameShift.store(std::atoi(v) != 0);
     if (const char* v = GetExtState("rea_sixty", "uf1_recv_view"); v && *v)
         g_uf1RecvView.store(std::atoi(v) != 0);
     if (const char* v = GetExtState("rea_sixty", "nav_color_bar"); v && *v) {
@@ -27497,6 +27507,18 @@ static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod)
 // engaged — then the top soft-keys are the layer's own default (on layer 1 the
 // SSL plug-in rows), which is not a bank the user named and has no name to give.
 // Main-thread only (reads the config through the accessors).
+// Which modifier set the on-screen bank readouts speak for: the one being held,
+// or always Plain when "follow Shift" is off. One answer for the banner and the
+// panel, so the two can never disagree about which bank you are on.
+static int uf8BankReadoutSet_()
+{
+    using namespace uf8::bindings;
+    if (!g_uf8BankNameShift.load()) return 0;
+    int m = static_cast<int>(bankModifierSnapshot());
+    if (m < 0 || m >= kSoftKeyModifierSets) m = 0;
+    return m;
+}
+
 static std::string uf8CurrentBankName_()
 {
     using namespace uf8::bindings;
@@ -27505,9 +27527,7 @@ static std::string uf8CurrentBankName_()
     const int quick = g_activeQuick[layer].load();
     if (quick < 0) return std::string();          // SSL / layer default, not a user bank
     const int sub = g_activeSubBank[layer].load();
-    int mset = static_cast<int>(bankModifierSnapshot());
-    if (mset < 0 || mset >= kSoftKeyModifierSets) mset = 0;
-    return uf8BankDisplayName_(layer, quick, sub, mset);
+    return uf8BankDisplayName_(layer, quick, sub, uf8BankReadoutSet_());
 }
 
 static std::string uf1BankDisplayName_(int bank, int mod)
@@ -37580,22 +37600,39 @@ void onTimerBody_()
                                  ? g_activeQuick[aLayer].load() : -1;
                 const int aSub   = (aLayer >= 0 && aLayer <= 2)
                                  ? g_activeSubBank[aLayer].load() : -1;
+                // BOTH SETS ARE LISTED. A Shift set is a full bank with its own
+                // name, and leaving it out meant half the banks a user builds were
+                // missing from the menu (Frank 2026-09-01). It is the same
+                // COORDINATE, so picking one goes to the same place; holding Shift
+                // is what puts you on that half once you are there, which is why
+                // the entry says so rather than pretending to be its own stop.
+                const int aSet = uf8BankReadoutSet_();
                 std::string body; int idx = 0, active = -1;
                 for (int l = 0; l < 3; ++l)
                   for (int q = 0; q < uf8::bindings::kQuicksPerLayer; ++q) {
                     if (l == 0 && q <= 1) continue;      // SSL CS/BC rows, not user banks
-                    for (int sb = 0; sb < uf8::bindings::kSubBanksPerQuick; ++sb) {
-                        const bool isActive = (l == aLayer && q == aQuick && sb == aSub);
-                        if (!isActive && !uf8::bindings::subBankHasContent(l, q, sb, 0))
+                    for (int sb = 0; sb < uf8::bindings::kSubBanksPerQuick; ++sb)
+                      for (int m = 0; m < uf8::bindings::kSoftKeyModifierSets; ++m) {
+                        const bool here = (l == aLayer && q == aQuick && sb == aSub);
+                        const bool isActive = here && (m == aSet);
+                        // The Plain row of the bank you are on is always listed, so
+                        // the menu can never be empty where you are standing. A
+                        // Shift row only when it holds something of its own.
+                        if (!isActive && !(here && m == 0)
+                            && !uf8::bindings::subBankHasContent(l, q, sb, m))
                             continue;
                         if (isActive) active = idx;
-                        std::string nm = uf8BankDisplayName_(l, q, sb, 0);
+                        std::string nm = uf8BankDisplayName_(l, q, sb, m);
                         for (char& c : nm)
                             if (c == ';' || c == '\t' || c == '\n' || c == '\r') c = ' ';
                         body += ";" + std::to_string(l) + "\t" + std::to_string(q)
-                              + "\t" + std::to_string(sb) + "\t" + nm;
+                              + "\t" + std::to_string(sb) + "\t" + nm
+                              // Field 5, appended: which set the row is. The Lua
+                              // marks the Shift ones; an older panel reads the
+                              // first four and simply does not mark them.
+                              + "\t" + std::to_string(m);
                         ++idx;
-                    }
+                      }
                   }
                 const std::string ub = std::to_string(active) + body;
                 if (ub != ubLast) {
@@ -42457,6 +42494,13 @@ int reasixty_uf1ViewMode() { return uf1ViewMode_(); }
 // ---- UF1 soft-key bank name on the time display ---------------------------
 // The Settings toggle (Behaviour → UF1) and the two readers the Bindings pane
 // needs for its live preview. Main thread only.
+bool reasixty_uf8BankNameShift() { return g_uf8BankNameShift.load(); }
+void reasixty_setUf8BankNameShift(bool on)
+{
+    g_uf8BankNameShift.store(on);
+    SetExtState("rea_sixty", "uf8_bank_name_shift", on ? "1" : "0", true);
+}
+
 bool reasixty_uf8BankNameBanner() { return g_uf8BankNameBanner.load(); }
 void reasixty_setUf8BankNameBanner(bool on)
 {
