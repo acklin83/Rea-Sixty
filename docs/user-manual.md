@@ -1149,7 +1149,7 @@ This works with no UF8 attached, so you can still walk through every Quick / Sub
 
 ### Factory Rea-Sixty soft-key banks
 
-In the Sub-Bank editor there is a **Rea-Sixty factory banks** section. Pick a curated bank from the combo and **Recall into this Sub-Bank**, or **Load full set → Layer 1 / Quick 3** to drop all banks into Layer 1 / Quick 3's six sub-banks at once.
+In the Sub-Bank editor there is a **Rea-Sixty factory banks** section. Pick a curated bank from the combo and **Recall into this Sub-Bank**, or **Load full set → Layer 1 / Quick 3** to drop banks into Layer 1 / Quick 3's six sub-banks at once. A Quick holds six sub-banks and there are seven banks, so the set loads the first six and the last one (Brightness) stays out; recall that one into a sub-bank of its own.
 
 The seven factory banks are:
 

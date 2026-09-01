@@ -5340,11 +5340,21 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             {"temp_selset_remove",          "Rem from Set"},
             {"temp_selset_toggle_selected", "Toggle Sel"},
             {"temp_selset_set_from_selection", "Set frm Sel"},
-            {"temp_selset_pin_uf1_channel", "Pin This Ch"},
             {"temp_selset_pin_focused",     "Pin Focused"},
             {"temp_selset_clear",           "Clear Set"},
             {"selset_cycle",                "Cycle Sets"},
         }));
+        // ⛔ NINE ENTRIES IN AN EIGHT-SLOT BANK IS A SILENT LOSS. This list used
+        // to carry temp_selset_pin_uf1_channel ("Pin This Ch") in sixth place,
+        // which put it at nine, and the loop above stops at kSlotsPerSubBank — so
+        // the NINTH, Cycle Sets, was dropped without a word. The manual described
+        // the bank that was meant (it lists Cycle Sets and not Pin This Ch), so
+        // the code was the one that was wrong.
+        // And that entry did not belong here twice over: it pins the channel the
+        // UF1 is SHOWING, which is nothing a UF8 key can mean on a rig without a
+        // UF1. It lives where it makes sense, on the UF1's own SOFT key, out of
+        // the box (Frank 2026-09-01: "wieso ist im focus set factory set eine
+        // action für uf1 drin?").
         v.push_back(bank("Plug-in Ops", {
             {"show_focused_plugin_gui",      "FX GUI"},
             {"show_fx_chain",                "FX Chain"},

@@ -6337,9 +6337,23 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                          "##fac_loadset", nullptr, nullptr)) {
             s_facOp = FacLoadSet;
         }
-        ImGui_TextDisabled(ctx,
-            "Full set = all 6 banks into L1/Q3's V-POT + Soft 1-5 "
-            "sub-banks (overwrites those 48 slots).");
+        // ⇨ SEVEN BANKS, SIX SUB-BANKS. A Quick holds six, so the set loads the
+        // first six and the seventh stays behind — say which one, or the button
+        // quietly does less than it claims.
+        {
+            char facNote[192];
+            const std::string lastName = (nFac > kSubBanksPerQuick)
+                ? facDisplay(factoryBankPresetAt(nFac - 1).name) : std::string();
+            std::snprintf(facNote, sizeof(facNote),
+                "Full set = the first %d banks into L1/Q3's V-POT + Soft 1-5 "
+                "sub-banks (overwrites those 48 slots).%s%s%s",
+                (nFac < kSubBanksPerQuick) ? nFac : kSubBanksPerQuick,
+                lastName.empty() ? "" : " A Quick holds six, so ",
+                lastName.c_str(),
+                lastName.empty() ? "" : " stays out; recall it into a sub-bank "
+                                        "of its own.");
+            ImGui_TextDisabled(ctx, facNote);
+        }
 
         if (s_facOp == FacRecall)
             ImGui_OpenPopup(ctx, "Recall factory bank?###fac_recall_confirm",
@@ -6387,7 +6401,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                                   nullptr, nullptr)) {
             ImGui_TextWrapped(ctx,
                 "Overwrite all 48 slots of Layer 1 / Quick 3 on the "
-                "selected modifier set?");
+                "selected modifier set? A Quick holds six sub-banks, so the "
+                "last factory bank is not part of this.");
             ImGui_Spacing(ctx);
             if (ImGui_Button(ctx, "Load set##fac_loadset_ok",
                              nullptr, nullptr)) {
