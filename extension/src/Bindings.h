@@ -502,6 +502,39 @@ constexpr int kQuicksPerLayer    = 3;
 constexpr int kSubBanksPerQuick  = 6;
 constexpr int kSlotsPerSubBank   = 8;
 
+// ⇨ EIN SOFT-KEY SET SIND DIE SECHS SOFT-KEY BÄNKE UNTER EINER (Layer, Quick)-
+// KOORDINATE, und es hat eine eigene Nummer, damit es eine eigene Adresse hat.
+// Ohne die kommt man nur dorthin, indem man Layer und Quick drückt — das schreibt
+// dem Nutzer vor, wofür seine drei Quick-Tasten draufgehen (Frank 2026-09-01:
+// "es muss als Set X bindbar sein sonst schreiben wir den User ein binding auf
+// Quick vor"). Mit ihr sitzt ein Set auf jeder Taste, jedem Fussschalter, jeder
+// Stream-Deck-Kachel, und der Quick-Knopf ist nur noch einer der Wege dorthin.
+//
+// Layer 1's Q1 and Q2 are SSL's CS / BC rows and are not sets. The order is
+// FIXED and additive: should those two ever open up they become 8 and 9 rather
+// than shifting everything, because bindings point at these numbers.
+constexpr int kSoftKeySetCount = 7;
+
+// Set number (1..7) → (layer, quick). Returns false for anything else.
+constexpr bool softKeySetToLayerQuick(int setNo, int& layer, int& quick)
+{
+    if (setNo < 1 || setNo > kSoftKeySetCount) return false;
+    if (setNo == 1) { layer = 0; quick = 2; return true; }   // L1 Q3
+    const int n = setNo - 2;                                  // 0..5
+    layer = 1 + n / kQuicksPerLayer;                          // L2, L3
+    quick = n % kQuicksPerLayer;
+    return true;
+}
+
+// The other way. 0 = this coordinate is not a set (Layer 1's Q1 / Q2).
+constexpr int layerQuickToSoftKeySet(int layer, int quick)
+{
+    if (layer < 0 || layer >= 3) return 0;
+    if (quick < 0 || quick >= kQuicksPerLayer) return 0;
+    if (layer == 0) return (quick == 2) ? 1 : 0;
+    return 2 + (layer - 1) * kQuicksPerLayer + quick;
+}
+
 // Dynamic soft-key bank kinds. A Sub-Bank flagged with a non-None kind
 // IGNORES its 8 static slots; labels / LEDs / dispatch are computed live
 // from the focused track's context instead (FX list, sends, parameter
@@ -565,6 +598,10 @@ struct SubBankLed {
 };
 struct UserQuick {
     UserQuickSubBank subBanks[kSubBanksPerQuick];     // V-POT, Soft 1..5
+    // What this SET is called. The name belongs to the set, not to the Quick key
+    // it currently hangs on: the key is a way in, the set is the thing. Empty is
+    // the normal state and the display falls back to "Set N".
+    std::string      name;
     // per-(L,Q) LED override, one per modifier set (see SubBankLed::isSet).
     SubBankLed       subBankLeds[kSubBanksPerQuick][kSoftKeyModifierSets];
 };
@@ -1026,6 +1063,10 @@ void            setUf1SoftBankDynamic(int bank, int mod, DynamicBankKind kind);
 // The UF8 Sub-Bank's user name, by its full address. Empty = unnamed, which is
 // the normal state; the display name falls back to the dynamic kind, else the
 // coordinates (uf8BankDisplayName_ in main.cpp).
+// The Soft-Key Set's user name, by set number (1..7). Empty = unnamed.
+std::string     getSoftKeySetName(int setNo);
+void            setSoftKeySetName(int setNo, const std::string& name);
+
 bool            subBankHasContent(int layer, int quick, int sub, int mod);
 std::string     getSubBankName(int layer, int quick, int sub, int mod);
 void            setSubBankName(int layer, int quick, int sub, int mod,

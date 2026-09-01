@@ -27518,14 +27518,23 @@ static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod)
         case DynamicBankKind::HueScenes:    return "Hue";
         default: break;
     }
-    // ⇨ THE FALLBACK IS THE ADDRESS, IN THE WORDS ON THE BOX. The UF1 falls back
-    // to "SOFT 3" because its banks are numbered; a UF8 bank is a coordinate, and
-    // the only reading of it a user can act on is the one printed on the keys.
+    // ⇨ THE FALLBACK NAMES THE SET AND THE BANK. The UF1 falls back to "SOFT 3"
+    // because its banks are numbered; a UF8 bank sits in a SET, and the set is
+    // the half a user recognises — its own name if it has one, else "Set 4".
+    // The bank half uses the words printed on the selector keys.
     static const char* kSb[6] = { "V-POT", "Soft 1", "Soft 2",
                                   "Soft 3", "Soft 4", "Soft 5" };
     if (sub < 0 || sub >= 6) return std::string();
-    char b[32];
-    snprintf(b, sizeof(b), "Q%d %s", quick + 1, kSb[sub]);
+    const int setNo = uf8::bindings::layerQuickToSoftKeySet(layer, quick);
+    std::string setName = (setNo > 0) ? uf8::bindings::getSoftKeySetName(setNo)
+                                      : std::string();
+    char b[80];
+    if (setName.empty()) {
+        if (setNo > 0) snprintf(b, sizeof(b), "Set %d, %s", setNo, kSb[sub]);
+        else           snprintf(b, sizeof(b), "Q%d %s", quick + 1, kSb[sub]);
+    } else {
+        snprintf(b, sizeof(b), "%s, %s", setName.c_str(), kSb[sub]);
+    }
     return b;
 }
 
@@ -42629,6 +42638,13 @@ void reasixty_uf1Seg7Encode(const char* text, unsigned char out[10])
 // else the number. One resolver, so the preview cannot drift from the panel.
 // The UF8 Sub-Bank's display name, for the editor's name field: what the banner
 // and the panel would say for this bank right now, typed or fallen back to.
+// Engage one Soft-Key bank from the Settings matrix. Same guards and the same
+// body the pinned startup bank and the panel's jump menu use.
+bool reasixty_engageSoftKeyBank(int layer, int quick, int sub)
+{
+    return engageUserBank_(layer, quick, sub);
+}
+
 void reasixty_uf8BankDisplayName(int layer, int quick, int sub, int mod,
                                  char* out, int outSz)
 {
@@ -47151,6 +47167,27 @@ void registerBindingHandlers()
                                          : g_uf1CsFine.load();
         },
         "UF1: Fine resolution (toggle)", true
+    });
+    // ⇨ EIN SET IST EINE ADRESSE, KEIN TASTENPAAR. Engage Soft-Key Set N (1..7)
+    // from anywhere: a soft-key, a foot-switch, a Stream Deck tile, a keyboard
+    // shortcut. Without this the only way into a set is Layer plus Quick, which
+    // silently reserves the three Quick keys for banking (Frank 2026-09-01).
+    // The sub-bank is left where that layer had it, so returning to a set puts
+    // you back on the bank you were using in it.
+    registerBuiltin("softkey_set_engage", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            int l = 0, q = 0;
+            if (!uf8::bindings::softKeySetToLayerQuick(param, l, q)) return;
+            engageUserBank_(l, q, g_activeSubBank[l].load());
+        },
+        [](int param) {
+            int l = 0, q = 0;
+            if (!uf8::bindings::softKeySetToLayerQuick(param, l, q)) return false;
+            return uf8::bindings::getActiveLayer() == l
+                && g_activeQuick[l].load() == q;
+        },
+        "Soft-Key Set: engage (param 1-7)", true
     });
     registerBuiltin("temp_selset_pin_uf1_channel", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {

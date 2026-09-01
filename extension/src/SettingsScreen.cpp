@@ -124,6 +124,7 @@ void reasixty_setUf1CsPage(int page);
 void reasixty_uf1BankDisplayName(int bank, int mod, char* out, int outSz);
 void reasixty_uf8BankDisplayName(int layer, int quick, int sub, int mod,
                                  char* out, int outSz);
+bool reasixty_engageSoftKeyBank(int layer, int quick, int sub);
 void reasixty_uf1Seg7Encode(const char* text, unsigned char out[10]);
 void reasixty_uf1PreviewOnPanel(const char* text);
 bool reasixty_uf1Connected();
@@ -6779,41 +6780,97 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // So the selected radio is always the engaged one, by construction, and the
     // old "engaged live" dot has nothing left to mark.
     if (isTopSoftKey || isSubBankCell) {
-        const char* qLabels[3]  = { "Q1", "Q2", "Q3" };
         const char* sbLabels[6] = {
             "V-POT", "Soft 1", "Soft 2", "Soft 3", "Soft 4", "Soft 5"
         };
-        static const ButtonId kQuickBtn[3] =
-            { ButtonId::Quick1, ButtonId::Quick2, ButtonId::Quick3 };
-        static const ButtonId kBankBtn[6] = {
-            ButtonId::VPotBank,     ButtonId::SoftKey1Bank, ButtonId::SoftKey2Bank,
-            ButtonId::SoftKey3Bank, ButtonId::SoftKey4Bank, ButtonId::SoftKey5Bank };
-        ImGui_Text(ctx, "Quick:");
-        for (int qi = 0; qi < 3; ++qi) {
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            char tag[40];
-            snprintf(tag, sizeof(tag), "%s##bind_editq_%d", qLabels[qi], qi);
-            if (ImGui_RadioButton(ctx, tag, s_editQuick == qi)) {
-                uf8::bindings::dispatch(kQuickBtn[qi], /*pressed*/ true);
-                uf8::bindings::dispatch(kQuickBtn[qi], /*pressed*/ false);
-            }
-        }
-        if (isTopSoftKey) {
-            ImGui_Text(ctx, "Sub-bank:");
-            for (int bi = 0; bi < 6; ++bi) {
-                ImGui_SameLine(ctx, nullptr, nullptr);
-                char tag[48];
-                snprintf(tag, sizeof(tag), "%s##bind_editsb_%d", sbLabels[bi], bi);
-                if (ImGui_RadioButton(ctx, tag, s_editSubBank == bi)) {
-                    uf8::bindings::dispatch(kBankBtn[bi], /*pressed*/ true);
-                    uf8::bindings::dispatch(kBankBtn[bi], /*pressed*/ false);
+        // ⇨ DIE MATRIX IST DER SELEKTOR. Sie ersetzt die zwei Radioreihen (Quick
+        // und Sub-bank), die vorher hier standen: dieselbe Funktion, aber als
+        // Landkarte statt als zwei Zeilen Knöpfe, so dass man die ganze Soft-Key-
+        // Konfiguration auf einmal sieht (Frank 2026-09-01, "Übersicht wäre schön
+        // wo wir in einer Matrix alle Sets und ihre banks sehen").
+        // Ein Klick ENGAGIERT, wie vorher: was du editierst, ist immer das, was
+        // auf der Fläche liegt.
+        // ⚠ Nur auf dem UF8-Tab. Höhe hat diesen Tab schon einmal umgebracht
+        // ([[learnings]] #31), und der UF1 hat keine Sets.
+        if (s_deviceTab == 0) {
+            ImGui_Text(ctx, "Soft-Key Sets");
+            ImGui_TextDisabled(ctx,
+                "A set is the six soft-key banks under one Quick key. Click a "
+                "bank to engage and edit it. Name a set here; the name is what "
+                "the banner and the panel say, and a set can be engaged from any "
+                "key with the Soft-Key Set action.");
+            ImGui_Spacing(ctx);
+            static char s_setNameBuf[uf8::bindings::kSoftKeySetCount][64] = {};
+            static bool s_setNameEditing[uf8::bindings::kSoftKeySetCount] = {};
+            int mtFlags = 0;
+            if (ImGui_BeginTable(ctx, "##sk_set_matrix", 7, &mtFlags,
+                                 nullptr, nullptr, nullptr)) {
+                const int wFixedCol = ImGui_TableColumnFlags_WidthFixed;
+                int wSet = wFixedCol; double cwSet = scaleW_(ctx, 150.0);
+                ImGui_TableSetupColumn(ctx, "Set", &wSet, &cwSet, nullptr);
+                int   wB[6]; double cwB[6];
+                for (int c = 0; c < 6; ++c) {
+                    wB[c] = wFixedCol; cwB[c] = scaleW_(ctx, 104.0);
+                    ImGui_TableSetupColumn(ctx, sbLabels[c], &wB[c], &cwB[c],
+                                           nullptr);
                 }
+                ImGui_TableHeadersRow(ctx);
+                for (int setNo = 1; setNo <= uf8::bindings::kSoftKeySetCount;
+                     ++setNo) {
+                    int sl = 0, sq = 0;
+                    if (!uf8::bindings::softKeySetToLayerQuick(setNo, sl, sq))
+                        continue;
+                    ImGui_TableNextRow(ctx, nullptr, nullptr);
+                    ImGui_TableSetColumnIndex(ctx, 0);
+                    // The set's name, typed here. Its own buffer per row, so the
+                    // walking-text trap the bank-name field documents cannot
+                    // happen: every widget keeps its own storage for its own set.
+                    const std::string stored =
+                        uf8::bindings::getSoftKeySetName(setNo);
+                    const int bi = setNo - 1;
+                    if (!s_setNameEditing[bi] && stored != s_setNameBuf[bi])
+                        snprintf(s_setNameBuf[bi], sizeof(s_setNameBuf[bi]),
+                                 "%s", stored.c_str());
+                    char hint[24]; snprintf(hint, sizeof(hint), "Set %d", setNo);
+                    char nid[32];  snprintf(nid, sizeof(nid), "##skset_%d", setNo);
+                    ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 140.0));
+                    int nFlags = 0;
+                    if (ImGui_InputTextWithHint(ctx, nid, hint, s_setNameBuf[bi],
+                                                sizeof(s_setNameBuf[bi]),
+                                                &nFlags, nullptr))
+                        uf8::bindings::setSoftKeySetName(setNo, s_setNameBuf[bi]);
+                    s_setNameEditing[bi] = ImGui_IsItemActive(ctx);
+                    for (int c = 0; c < 6; ++c) {
+                        ImGui_TableSetColumnIndex(ctx, c + 1);
+                        char cell[80] = {0};
+                        reasixty_uf8BankDisplayName(sl, sq, c, g_slotEditModIdx,
+                                                    cell, sizeof(cell));
+                        // An unnamed, empty bank reads as its own coordinates,
+                        // which in a matrix that already says both is noise. Show
+                        // a dash there and let the eye find what is filled.
+                        const bool filled =
+                            uf8::bindings::subBankHasContent(sl, sq, c,
+                                                             g_slotEditModIdx);
+                        std::string txt = filled ? cell : std::string("\xE2\x80\x94");
+                        const bool here = (sl == s_editLayer && sq == s_editQuick
+                                        && c == s_editSubBank);
+                        char cid[40];
+                        snprintf(cid, sizeof(cid), "%s##skcell_%d_%d",
+                                 txt.c_str(), setNo, c);
+                        bool selCell = here;
+                        if (ImGui_Selectable(ctx, cid, &selCell,
+                                             nullptr, nullptr, nullptr))
+                            reasixty_engageSoftKeyBank(sl, sq, c);
+                    }
+                }
+                ImGui_EndTable(ctx);
             }
+            ImGui_TextDisabled(ctx,
+                "Layer 1's Q1 and Q2 are SSL's own CS and BC rows and are not "
+                "sets. Clicking a bank engages it, exactly like pressing the "
+                "keys would.");
+            ImGui_Spacing(ctx);
         }
-        ImGui_TextDisabled(ctx,
-            "This is the bank engaged on the surface. Clicking here engages "
-            "another one, exactly like pressing the key would.");
-        ImGui_Spacing(ctx);
         // The bank's two sets. Holding the modifier on the hardware shows
         // exactly what picking it here shows.
         // ⇨ A DYNAMIC BANK HAS SETS TOO, and used to have the row taken away.

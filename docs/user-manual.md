@@ -1127,7 +1127,25 @@ Five click-to-edit special cases:
 
 You can view and edit the Top-Soft-Key slots **without a UF8 connected**. The engaged bank is a value Rea-Sixty holds either way, so clicking a Quick or Sub-Bank still moves it and the editor still follows.
 
-When you click a Top-Soft-Key (or a Sub-Bank cell) in the schematic, a **Quick** (Q1 / Q2 / Q3) and **Sub-bank** (V-POT / Soft 1-5) selector appears. It is not a second setting beside the hardware: it shows the bank that is engaged, and clicking one engages another, exactly as pressing that key would. What you edit is always what the surface is on.
+When you click a Top-Soft-Key (or a Sub-Bank cell) in the schematic, the **Soft-Key Sets** matrix appears under it. It is not a second setting beside the hardware: it shows the bank that is engaged, and clicking one engages another, exactly as pressing those keys would. What you edit is always what the surface is on.
+
+### Soft-Key Sets
+
+A **set** is the six soft-key banks under one Quick key, and it has a number of its own, 1 to 7:
+
+| Set | Layer | Quick |
+|---|---|---|
+| 1 | 1 | Q3 |
+| 2 – 4 | 2 | Q1 – Q3 |
+| 5 – 7 | 3 | Q1 – Q3 |
+
+Layer 1's Q1 and Q2 are SSL's own CS and BC rows and are not sets.
+
+The number matters because it is an address. **Soft-Key Set: engage (param 1-7)** is a bindable action, so a set sits on any key, foot-switch, Stream Deck tile or keyboard shortcut you like — the Quick button is one way in, not the only one. Engaging a set leaves the sub-bank where that layer had it, so coming back puts you on the bank you were using.
+
+The matrix is seven rows by six columns. Each row is a set, with a **name** you can type in its first column; each cell is one of its banks, showing that bank's name, or its dynamic kind, or a dash when it holds nothing. The engaged cell is marked, and clicking a cell engages that bank and opens it in the editor below. The **Modifier** row switches the whole matrix between the Plain and Shift sets.
+
+The set's name is what the mode-change banner and the focused-track panel say when a bank in it has no name of its own: an unnamed bank in a set called *Editing* reads `Editing, Soft 3` instead of `Set 2, Soft 3`.
 
 Each slot carries a **Behavior** (*Momentary*, *Toggle* or *Hold*), the same setting a regular button has.
 
