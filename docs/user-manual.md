@@ -186,7 +186,7 @@ When the cycle lands on a learned Instance the per-domain Instance index updates
 
 # Channel Encoder modes
 
-The large notched CHANNEL encoder (right of the strips, pushable, surrounded by the cursor pad) runs one of twelve modes. Switch with the corresponding **Encoder Mode → …** action. The current mode persists across REAPER restarts.
+The large notched CHANNEL encoder (right of the strips, pushable, surrounded by the cursor pad) runs one of fifteen modes. Switch with the corresponding **Encoder Mode → …** action. The current mode persists across REAPER restarts.
 
 | Mode | Rotation acts on | Notes |
 |---|---|---|
@@ -200,7 +200,11 @@ The large notched CHANNEL encoder (right of the strips, pushable, surrounded by 
 | FX Cycle | Walk every FX on the focused track | Focused-track scope |
 | Cycle Instance (across tracks) | Walk Instances on the focused track, then cross to the next track | One detent per track boundary; lands on the neighbour's first (fwd) / last (back) Instance. Empty neighbour is still selected (dead detent). Hard-stops at the project edge, no within-track wrap. |
 | Cycle FX (across tracks) | Walk every FX on the focused track, then cross to the next track | Same cross-track behaviour as above, for all FX. SSL 360°-native feel. |
+| FX Move (in chain) | Move the active FX up / down inside the focused track's chain | Within-chain only, hard-stop at both ends. |
 | Selset Cycle | Step through populated Selection Set slots (off → 1 → 2 … → off) | Skips empty slots |
+| CS Cycle (Favourites) | Step the active Channel Strip through the CS favourite slots | Carries values across the swap, or restores each favourite's own settings (see chapter *Favourites*). Empty slots are skipped; wrapping follows *Wrap Plug-in Cycle*. |
+| BC Cycle (Favourites) | The same for the Bus Compressor | Uses the BC favourite slots and the BC copy/own setting. |
+| Favourite Cycle (Focused Domain) | Whichever of the two the focused parameter belongs to | Falls back to the domain you last touched. Saves binding both cycles when one encoder should follow whatever is under your hand. |
 
 `Shift` + rotation re-banks ±1 strip in every mode (alias for Bank by 1ch).
 
@@ -1815,7 +1819,9 @@ Change which job the large CHANNEL encoder does. The current mode persists acros
 - **Encoder Mode → FX Cycle (across tracks)** — Cycle FX across tracks: same cross-track behaviour for every FX.
 - **Encoder Mode → FX Move (in chain)** — move the active FX up / down within the focused track's chain on rotation (within-chain only; hard-stop at the ends).
 - **Encoder Mode → Selection Set Cycle** — step through populated Selection Set slots (off → 1 → 2 → … → off).
-- **Encoder Mode → CS Cycle (favourites)** — cycle the active CS through the favourite slots (see chapter *Favourites*).
+- **Encoder Mode → CS Cycle (Favourites)** — cycle the active CS through the favourite slots (see chapter *Favourites*).
+- **Encoder Mode → BC Cycle (Favourites)** — the same for the Bus Compressor, using the BC favourite slots.
+- **Encoder Mode → Favourite Cycle (Focused Domain)** — cycle whichever domain the focused parameter belongs to, falling back to the domain you last touched. Respects each domain's copy/own setting.
 - **Encoder: dispatch by current mode** — routes rotation to whichever encoder mode is currently set. Bound by default to the CHANNEL encoder so rotation just "does the right thing"; rebind if you want a fixed behaviour.
 
 ## Direct encoder rotation handlers
