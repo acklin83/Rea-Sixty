@@ -6148,12 +6148,24 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                                   "Recall preset?###bp_recall_confirm",
                                   nullptr, nullptr)) {
             SoftKeyBankPreset p = bankPresetAt(s_pendingIdx);
+            const bool bothSets = bankPresetSpills(s_pendingIdx);
             char line[256];
-            snprintf(line, sizeof(line),
-                "Overwrite the 8 slots of %s (%s) on (Layer %d, Quick %d) "
-                "with preset '%s'?",
-                sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
-                editLayer + 1, engagedQ + 1, p.name.c_str());
+            // A preset that carries both sets replaces both, whichever set you
+            // happen to be editing — say so before the press, the same way the
+            // factory dialog does.
+            if (bothSets)
+                snprintf(line, sizeof(line),
+                    "Overwrite BOTH sets of %s on (Layer %d, Quick %d) with "
+                    "preset '%s'? It was saved with a Shift bank, so Plain and "
+                    "Shift are both replaced.",
+                    sbLabels[sbIdx], editLayer + 1, engagedQ + 1,
+                    p.name.c_str());
+            else
+                snprintf(line, sizeof(line),
+                    "Overwrite the 8 slots of %s (%s) on (Layer %d, Quick %d) "
+                    "with preset '%s'?",
+                    sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
+                    editLayer + 1, engagedQ + 1, p.name.c_str());
             ImGui_TextWrapped(ctx, line);
             ImGui_Spacing(ctx);
             if (ImGui_Button(ctx, "Recall##bp_recall_ok",
@@ -6175,7 +6187,15 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         ImGui_SetNextWindowSize(ctx, kBpPopupW, 0.0, &condAlways);
         if (ImGui_BeginPopupModal(ctx, "Save preset###bp_save_as",
                                   nullptr, nullptr)) {
-            ImGui_Text(ctx, "Save current 8 slots as preset");
+            // Saving from Plain takes the Shift set along when it holds
+            // anything, so the line has to say which of the two it is.
+            const bool willTakeShift =
+                (g_slotEditModIdx == 0)
+                && uf8::bindings::subBankSetHasContent(editLayer, engagedQ,
+                                                       sbIdx, 1);
+            ImGui_Text(ctx, willTakeShift
+                ? "Save this bank as a preset, Plain and Shift"
+                : "Save current 8 slots as preset");
             ImGui_Spacing(ctx);
             ImGui_PushItemWidth(ctx, 280);
             ImGui_InputTextWithHint(ctx, "Name##bp_saveas_name",

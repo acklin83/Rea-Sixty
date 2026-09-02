@@ -640,12 +640,13 @@ struct Layer {
 struct SoftKeyBankPreset {
     std::string name;                              // unique, user-editable
     Binding     slots[kSlotsPerSubBank];           // 8 top-soft-key bindings
-    // ⇨ A PRESET THAT DOES NOT FIT IN EIGHT SPILLS INTO SHIFT. A bank has two
-    // full sets, so a curated list longer than eight keys belongs on both rather
-    // than being cut at eight (the Encoder Modes bank lost seven of fifteen that
-    // way, and Focus Set lost its last entry silently). Only the factory banks
-    // set this; user presets are captured from one set and leave it false, so
-    // their serialisation is unchanged.
+    // ⇨ A BANK IS TWO FULL SETS, AND A PRESET OF IT CARRIES BOTH. Two ways in:
+    // a factory list longer than eight keys spills its tail into Shift rather
+    // than being cut at eight (the Encoder Modes bank lost seven of fifteen
+    // that way, and Focus Set lost its last entry silently), and a user preset
+    // saved from Plain takes the bank's Shift set with it when that set holds
+    // anything. Saving while on Shift is still one set's worth, and a preset
+    // without this half recalls into whichever set you choose, as before.
     Binding     shiftSlots[kSlotsPerSubBank];
     bool        hasShift = false;
 };
@@ -1033,7 +1034,8 @@ SoftKeyBankPreset bankPresetAt(int idx);                 // copy; out-of-range =
 int               findBankPreset(const std::string& name); // -1 if not found
 // Snapshot the 8 slots currently in (layer, quick, subBank) under
 // `name`. Overwrites an existing preset with the same name. Returns
-// false on out-of-range coords or empty name.
+// false on out-of-range coords or empty name. Saving from Plain also
+// captures the bank's Shift set when that set holds anything.
 bool              saveBankPreset(const std::string& name,
                                  int layer, int quick, int subBank, int mod);
 // Replace an existing preset's name. Returns false on duplicate name,
@@ -1042,10 +1044,12 @@ bool              renameBankPreset(int idx, const std::string& newName);
 bool              deleteBankPreset(int idx);
 // Copy the named preset's 8 slots into (layer, quick, subBank),
 // overwriting whatever was there. Returns false on out-of-range.
-// Presets carry ONE layer's eight slots, and recall lands in the layer you
-// are on. A preset saved from Plain can be recalled into Shift.
+// A preset of one set lands in the set you are on, so one saved from Plain can
+// be recalled into Shift. A preset that carries both sets writes both and
+// ignores `mod` — bankPresetSpills says which kind you have, for the dialog.
 bool              recallBankPreset(int idx, int layer, int quick, int subBank,
                                   int mod);
+bool              bankPresetSpills(int idx);
 
 // ---- Factory Rea-Sixty soft-key bank presets ----------------------------
 // Read-only curated banks built ONLY from Rea-Sixty's own built-ins (the
@@ -1094,6 +1098,12 @@ std::string     getSoftKeySetName(int setNo);
 void            setSoftKeySetName(int setNo, const std::string& name);
 
 bool            subBankHasContent(int layer, int quick, int sub, int mod);
+// ⚠ NARROWER, AND NOT INTERCHANGEABLE WITH THE ABOVE. subBankHasContent asks
+// whether the bank has anything at this coordinate and reads the whole Binding,
+// so it says yes for an empty Shift set sitting next to a filled Plain one.
+// This one asks whether THAT SET holds something, which is the question
+// saveBankPreset answers when it decides to take Shift along.
+bool            subBankSetHasContent(int layer, int quick, int sub, int mod);
 std::string     getSubBankName(int layer, int quick, int sub, int mod);
 void            setSubBankName(int layer, int quick, int sub, int mod,
                                const std::string& name);

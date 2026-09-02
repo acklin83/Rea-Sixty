@@ -1635,7 +1635,21 @@ void serializeBankPresets_(const Config& c, std::ostringstream& os)
             serializeBindingBody_(p.slots[s], os);
             os << "}";
         }
-        os << "\n    ]}";
+        os << "\n    ]";
+        // The Shift half, present only on a preset captured from a bank that
+        // had one. Its absence IS hasShift=false on the way back in, so an
+        // older file reads exactly as it did and needs no version bump.
+        if (p.hasShift) {
+            os << ", \"shift_slots\": [";
+            for (int s = 0; s < kSlotsPerSubBank; ++s) {
+                if (s) os << ",";
+                os << "\n      {";
+                serializeBindingBody_(p.shiftSlots[s], os);
+                os << "}";
+            }
+            os << "\n    ]";
+        }
+        os << "}";
     }
     os << "\n  ]";
 }
@@ -2145,6 +2159,17 @@ void parseBankPresets_(wdl_json_element* root, Config& out)
                 wdl_json_element* sl = slots->enum_item(s);
                 if (sl && sl->is_object()) {
                     parseBindingBody_(sl, p.slots[s]);
+                }
+            }
+        }
+        auto* shift = eo->get_item_by_name("shift_slots");
+        if (shift && shift->is_array() && shift->m_array) {
+            const int sn = shift->m_array->GetSize();
+            for (int s = 0; s < sn && s < kSlotsPerSubBank; ++s) {
+                wdl_json_element* sl = shift->enum_item(s);
+                if (sl && sl->is_object()) {
+                    parseBindingBody_(sl, p.shiftSlots[s]);
+                    p.hasShift = true;
                 }
             }
         }
@@ -2873,8 +2898,16 @@ void forEachActionSlot_(Config& c, F&& fn)
         for (int si = 0; si < kUf1SoftBankSlots; ++si)
             doBinding(0, c.uf1SoftBanks[b][si]);
     for (auto& p : c.bankPresets)
-        for (int si = 0; si < kSlotsPerSubBank; ++si)
+        for (int si = 0; si < kSlotsPerSubBank; ++si) {
             doBinding(0, p.slots[si]);
+            // A preset's Shift half is bindings like any other, and this walk
+            // is not a version-gated migration: both of its callers also run
+            // unconditionally on every load as the belt-and-suspenders scrub
+            // for retired builtins. Without this line a dead action in a
+            // preset's Shift half would survive every sanitize there is
+            // (Frank 2026-09-02).
+            if (p.hasShift) doBinding(0, p.shiftSlots[si]);
+        }
 }
 
 // v9 → v10: scrub the dead builtins out of every binding slot
@@ -5228,6 +5261,64 @@ int findBankPreset(const std::string& name)
     return -1;
 }
 
+// Read modifier set `mod` of `src` into a preset slot. The mirror image of
+// applyPresetSlotLocked_, and the one place that knows what a preset slot
+// carries: capturing Plain and Shift for the same preset would otherwise be
+// these forty lines twice, and the second copy is the one that rots.
+// Caller holds g_cfgMutex.
+static void capturePresetSlotLocked_(const Binding& src, int mod, Binding& dst)
+{
+    // ONE layer's worth. A Binding carries all four; copying the lot would
+    // make "save the Shift bank" quietly capture Plain, Cmd and Ctrl too.
+    dst = Binding{};
+    dst.behavior       = src.behavior;
+    dst.label          = src.label;
+    dst.labelIsUserSet = src.labelIsUserSet;
+    // ⇨ ALL THREE GESTURES, NOT JUST THE SHORT PRESS. Saving only
+    // shortPress[mod] meant recalling preset A over a bank that held B left
+    // B's long- and double-press in place: the key then did A on a tap and B
+    // on a hold, a combination the user never configured anywhere
+    // (Frank 2026-08-18).
+    dst.hasLongPress   = src.hasLongPress;
+    dst.hasDoublePress = src.hasDoublePress;
+    dst.longPress[0]   = src.longPress[mod];
+    dst.doublePress[0] = src.doublePress[mod];
+    dst.color[0] = src.color[0];
+    dst.color[1] = src.color[1];
+    dst.color[2] = src.color[2];
+    dst.brightness = src.brightness;
+    dst.inactiveColor[0] = src.inactiveColor[0];
+    dst.inactiveColor[1] = src.inactiveColor[1];
+    dst.inactiveColor[2] = src.inactiveColor[2];
+    dst.inactiveBrightness = src.inactiveBrightness;
+    dst.ledShowWhenEmpty   = src.ledShowWhenEmpty;
+    dst.shortPress[0] = src.shortPress[mod];
+    // Store the label this SET actually shows: its own if it has one, the
+    // key's name only when saving Plain. Otherwise saving the Shift set
+    // would quietly capture the Plain name.
+    if (!src.shortPress[mod].label.empty())
+        dst.label = src.shortPress[mod].label;
+    else if (mod != 0)
+        dst.label.clear();
+}
+
+// Does modifier set `mod` of this sub-bank hold anything worth capturing?
+// ⚠ NOT subBankHasContent, for two reasons: that one asks the question of the
+// WHOLE Binding, so it calls an empty Shift set occupied whenever the Plain set
+// beside it is not — and it takes g_cfgMutex, which every caller here already
+// holds. Same writer's-eye predicate (slotHasNoData_), narrowed to one set.
+static bool subBankSetHasContentLocked_(const UserQuickSubBank& sb, int mod)
+{
+    if (!sb.name[mod].empty())                    return true;
+    if (sb.dynamic[mod] != DynamicBankKind::None) return true;
+    for (int i = 0; i < kSlotsPerSubBank; ++i) {
+        if (!slotHasNoData_(sb.slots[i].shortPress[mod]))  return true;
+        if (!slotHasNoData_(sb.slots[i].longPress[mod]))   return true;
+        if (!slotHasNoData_(sb.slots[i].doublePress[mod])) return true;
+    }
+    return false;
+}
+
 bool saveBankPreset(const std::string& name,
                     int layer, int quick, int subBank, int mod)
 {
@@ -5235,44 +5326,23 @@ bool saveBankPreset(const std::string& name,
     if (!userQuickSlotInRange_(layer, quick, subBank, 0)) return false;
     if (mod < 0 || mod >= kSoftKeyModifierSets) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
+    const UserQuickSubBank& sb =
+        g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank];
     SoftKeyBankPreset p;
     p.name = name;
+    // ⇨ SAVING PLAIN TAKES SHIFT WITH IT. A bank is two full sets of keys, so a
+    // preset of "this bank" that dropped the Shift half rebuilt half a bank and
+    // left whatever the target had on Shift standing next to it (Frank
+    // 2026-09-02). Only from Plain, and only when Shift actually holds
+    // something: saving while you are ON Shift still means that one set, and a
+    // preset with no Shift half keeps recalling into whichever set you choose.
+    const bool takeShift = (mod == 0) && subBankSetHasContentLocked_(sb, 1);
     for (int s = 0; s < kSlotsPerSubBank; ++s) {
-        // ONE layer's worth. A Binding carries all four; copying the lot would
-        // make "save the Shift bank" quietly capture Plain, Cmd and Ctrl too.
-        const Binding& src = g_cfg.userQuicks[layer].quicks[quick]
-                                .subBanks[subBank].slots[s];
-        p.slots[s] = Binding{};
-        p.slots[s].behavior       = src.behavior;
-        p.slots[s].label          = src.label;
-        p.slots[s].labelIsUserSet = src.labelIsUserSet;
-        // ⇨ ALL THREE GESTURES, NOT JUST THE SHORT PRESS. Saving only
-        // shortPress[mod] meant recalling preset A over a bank that held B left
-        // B's long- and double-press in place: the key then did A on a tap and B
-        // on a hold, a combination the user never configured anywhere
-        // (Frank 2026-08-18).
-        p.slots[s].hasLongPress   = src.hasLongPress;
-        p.slots[s].hasDoublePress = src.hasDoublePress;
-        p.slots[s].longPress[0]   = src.longPress[mod];
-        p.slots[s].doublePress[0] = src.doublePress[mod];
-        p.slots[s].color[0] = src.color[0];
-        p.slots[s].color[1] = src.color[1];
-        p.slots[s].color[2] = src.color[2];
-        p.slots[s].brightness = src.brightness;
-        p.slots[s].inactiveColor[0] = src.inactiveColor[0];
-        p.slots[s].inactiveColor[1] = src.inactiveColor[1];
-        p.slots[s].inactiveColor[2] = src.inactiveColor[2];
-        p.slots[s].inactiveBrightness = src.inactiveBrightness;
-        p.slots[s].ledShowWhenEmpty   = src.ledShowWhenEmpty;
-        p.slots[s].shortPress[0] = src.shortPress[mod];
-        // Store the label this SET actually shows: its own if it has one, the
-        // key's name only when saving Plain. Otherwise saving the Shift set
-        // would quietly capture the Plain name.
-        if (!src.shortPress[mod].label.empty())
-            p.slots[s].label = src.shortPress[mod].label;
-        else if (mod != 0)
-            p.slots[s].label.clear();
+        capturePresetSlotLocked_(sb.slots[s], mod, p.slots[s]);
+        if (takeShift)
+            capturePresetSlotLocked_(sb.slots[s], 1, p.shiftSlots[s]);
     }
+    p.hasShift = takeShift;
     int existing = -1;
     for (int i = 0; i < static_cast<int>(g_cfg.bankPresets.size()); ++i) {
         if (g_cfg.bankPresets[i].name == name) { existing = i; break; }
@@ -5281,6 +5351,29 @@ bool saveBankPreset(const std::string& name,
     else               g_cfg.bankPresets.push_back(std::move(p));
     persistLocked_();
     return true;
+}
+
+// Does this user preset carry a Shift half? For the confirm dialogs, which have
+// to name what they are about to overwrite. Sibling of factoryBankSpills.
+// Public face of subBankSetHasContentLocked_. The save dialog has to predict
+// exactly what saveBankPreset will decide — asking subBankHasContent instead
+// would have it promise "Plain and Shift" over an empty Shift set, because that
+// one answers for the whole Binding and Plain beside it is not empty.
+bool subBankSetHasContent(int layer, int quick, int sub, int mod)
+{
+    if (!userQuickSlotInRange_(layer, quick, sub, 0)) return false;
+    if (mod < 0 || mod >= kSoftKeyModifierSets) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return subBankSetHasContentLocked_(
+        g_cfg.userQuicks[layer].quicks[quick].subBanks[sub], mod);
+}
+
+bool bankPresetSpills(int idx)
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (idx < 0 || idx >= static_cast<int>(g_cfg.bankPresets.size()))
+        return false;
+    return g_cfg.bankPresets[idx].hasShift;
 }
 
 bool renameBankPreset(int idx, const std::string& newName)
@@ -5356,13 +5449,18 @@ bool recallBankPreset(int idx, int layer, int quick, int subBank, int mod)
     if (idx < 0 || idx >= static_cast<int>(g_cfg.bankPresets.size()))
         return false;
     const SoftKeyBankPreset& p = g_cfg.bankPresets[idx];
+    auto& sb = g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank];
     for (int s = 0; s < kSlotsPerSubBank; ++s) {
-        // Lands in the set you are editing, leaving the other one alone.
-        // A preset captured on Plain recalls into Shift unchanged — the stored
-        // slot is one set's worth of gestures, not a fixed Plain/Shift pair.
-        applyPresetSlotLocked_(p.slots[s], mod,
-                               g_cfg.userQuicks[layer].quicks[quick]
-                                   .subBanks[subBank].slots[s]);
+        // A preset with no Shift half lands in the set you are editing and
+        // leaves the other one alone. A preset captured on Plain recalls into
+        // Shift unchanged — the stored slot is one set's worth of gestures,
+        // not a fixed Plain/Shift pair.
+        // ⇨ ONE THAT CARRIES BOTH OWNS BOTH, exactly as a spilling factory bank
+        // does: it was captured as a whole bank, so recalling it into a single
+        // set would be the same half-a-bank the capture was fixed to avoid.
+        applyPresetSlotLocked_(p.slots[s], p.hasShift ? 0 : mod, sb.slots[s]);
+        if (p.hasShift)
+            applyPresetSlotLocked_(p.shiftSlots[s], 1, sb.slots[s]);
     }
     persistLocked_();
     return true;

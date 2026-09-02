@@ -1153,7 +1153,9 @@ Every soft-key bank also holds **two sets of keys**: Plain and Shift. Holding th
 
 There is no Cmd or Ctrl set. The surface carries one modifier key and no more, so those two would have to come from the computer keyboard, where they already belong to the FX-Learn modifier layers.
 
-Each set is a **full bank**, not just a second list of actions: its own actions, its own labels, its own LED colours and its own presets. Saving a preset captures the set you are on; recalling one lands on the set you are on, so a preset captured on Plain can be recalled into Shift.
+Each set is a **full bank**, not just a second list of actions: its own actions, its own labels, its own LED colours and its own presets.
+
+**A preset saved from Plain takes the Shift set with it**, whenever that set holds anything, because a bank is both sets and a preset of half of it would rebuild half a bank. Such a preset replaces **both** sets when you recall it, whichever one you happen to be editing, and the confirm dialog says so before you press it, the same rule a factory bank longer than eight keys follows. Save while you are on Shift and you get that one set, as before; a preset with no Shift half still lands in whichever set you recall it into, so a Plain preset can be recalled into Shift.
 
 **Each set can be its own dynamic bank.** Pick a kind with the Modifier row on Plain and Plain's bank becomes dynamic; pick one on Shift and that set becomes a bank of its own, so FX on Plain and Track Colours on Shift is a thing you can build. A set left on *Off (take Plain's bank)* does exactly that, which is how a set behaves out of the box.
 
