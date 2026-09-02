@@ -69,8 +69,14 @@ def doc_tables(bindings_cpp: str):
         return re.findall(r'\{\s*"([a-z0-9_]+)"\s*,', blk)
     exact = entries("static const BuiltinDoc kBuiltinDocs[]",
                     "static const BuiltinDoc kBuiltinDocPrefixes[]")
+    # ⚠ END AT THE LABEL TABLE, NOT AT builtinDescription. kBuiltinLabels was
+    # added between them on 2026-09-02, and reading to the function swallowed all
+    # 321 labels as prefix entries — after which every builtin "resolved" and
+    # this check reported success on anything. Found because softkey_set_engage
+    # has no description and was passing (Frank: the picker tooltip for
+    # "Soft-Key Set 1" talks about banks).
     pref = entries("static const BuiltinDoc kBuiltinDocPrefixes[]",
-                   "const char* builtinDescription")
+                   "// Default soft-key label per builtin")
     return set(exact), pref
 
 

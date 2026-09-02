@@ -6566,6 +6566,28 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "Previous soft-key bank." },
     { "page_right",
       "Next soft-key bank." },
+    { "softkey_set_engage",
+      "Engages one of the nine Soft-Key Sets by NUMBER, given as the "
+      "action's parameter. The Quick key is one way into a set; this is the "
+      "other, so a set can sit on any key, foot-switch or Stream Deck tile." },
+    { "hue_all_off",
+      "Turns every lamp Rea-Sixty knows about off in one press." },
+    { "hue_rec_light",
+      "The recording light. Before it goes red it reads every lamp it is "
+      "about to touch, and puts them back when the take ends." },
+    { "hue_scene_recall",
+      "Recalls the Hue scene given as the parameter, 1 to 8. It always "
+      "recalls statically - for a scene that keeps moving, bind Hue: start "
+      "scene dynamically instead." },
+    { "hue_scene_recall_dynamic",
+      "Starts the Hue scene given as the parameter, 1 to 8, and lets it keep "
+      "moving rather than landing on one still state." },
+    { "selection_mode_hue",
+      "Selection Mode where the strips drive the lamps: the V-Pots take hue, "
+      "saturation and brightness, and the SEL keys pick which lamp." },
+    { "uf1_hue",
+      "Puts the UF1's own controls on the lamps - its V-Pots take the three "
+      "axes, so the light is adjustable without the UF8." },
     { "softkey_bank_select",
       "Picks a soft-key bank outright: param 0 is V-POT, 1 to 5 are the "
       "numbered banks. Also clears the Pan override." },
