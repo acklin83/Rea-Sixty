@@ -1978,7 +1978,7 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 
 ## SSL Soft-keys
 
-- **Select soft-key bank (param 0..5)** — select Soft-Key bank N (CS banks 0..5; in Bus-Comp mode, 0..1).
+- **Select soft-key bank (param 0..5)** — select Soft-Key bank N. Six pages in either domain (`kCsMaxBank` and `kBcMaxBank` are both 5); the bus comp's plug-in only *fills* the first two, and the four it leaves empty are ordinary user banks.
 - **SSL Soft-Key (current bank, slot 0..7)** — fire SSL Soft-Key cell N in the currently selected bank.
 - **Focus SSL param (V-POT row) (param: 0..7)** — focus SSL V-Pot N in whichever row the surface is on. The native bindings the Top Soft-Keys use to map to the active CS/BC bank's parameters. Siblings **Focus SSL param (row 1)** … **(row 5)** name a fixed row instead, so a key can always land on the same parameter whatever page you are on. **None of these switch a bank** — the old name, *SSL Standard Bank N*, read as though they did.
 
