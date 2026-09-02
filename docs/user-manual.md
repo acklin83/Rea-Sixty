@@ -1982,7 +1982,7 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 
 - **Select soft-key bank (param 0..5)** — select Soft-Key bank N. Six pages in either domain (`kCsMaxBank` and `kBcMaxBank` are both 5); the bus comp's plug-in only *fills* the first two, and the four it leaves empty are ordinary user banks.
 - **SSL Soft-Key (current bank, slot 0..7)** — fire SSL Soft-Key cell N in the currently selected bank.
-- **Focus SSL param (V-POT row) (param: 0..7)** — focus SSL V-Pot N in whichever row the surface is on. The native bindings the Top Soft-Keys use to map to the active CS/BC bank's parameters. Siblings **Focus SSL param (row 1)** … **(row 5)** name a fixed row instead, so a key can always land on the same parameter whatever page you are on. **None of these switch a bank** — the old name, *SSL Standard Bank N*, read as though they did.
+- **Focus SSL param (V-POT row) (param: 0..7)** — focus SSL V-Pot N in the V-POT row, whatever page the surface is on — the row is fixed, like every sibling. Siblings **Focus SSL param (row 1)** … **(row 5)** name a fixed row instead, so a key can always land on the same parameter whatever page you are on. **None of these switch a bank**, and none of them follow the page — the old name, *SSL Standard Bank N*, read as though they did both. The page-following action is **SSL Soft-Key (current bank, slot 0..7)** (`ssl_softkey`), which is what the Top Soft-Keys carry out of the box.
 
 ## Send / Receive
 
@@ -2141,10 +2141,10 @@ Per-slot actions also exist for slots 1..8: **Param Group N → Add Selected Tra
 
 ## Modifier keys
 
-When held, these shift every other binding to its modifier slot. The three matching UF8 keys (Shift / Cmd / Ctrl, or FINE for Shift) are bound to them by default but you can rebind to any other button to relocate the modifier.
+When held, these shift every other binding to its modifier slot. The UF8 has one modifier key, **FINE**, and it carries Shift out of the box; the UF1's **SHIFT** key does the same. There is no hardware key for Cmd or Ctrl and none is bound by default — put them on any button you like, or use the computer keyboard (*Settings → Behaviour → Keyboard*, on by default).
 
 - **Modifier: Shift / Fine (double-click latches)** — Shift modifier. Double-click latches (press once more to unlatch). The SSL `FINE` key uses this builtin.
-- **Modifier: Cmd** — Cmd modifier (macOS) / Windows key (Win) / Super (Linux).
+- **Modifier: Cmd** — Cmd modifier. From the computer keyboard this is **macOS only**: the Windows key is OS-reserved and not claimed, so on Windows and Linux the Cmd slot is reachable only from a surface button you bind to this action.
 - **Modifier: Ctrl** — Ctrl modifier.
 
 ## Surface-state toggles
@@ -2205,7 +2205,7 @@ While UF8 Plug-in Mode is on:
 
 The active plug-in is the focused track's first UF8-Mode-mapped instance, or the Instance the cursor is currently on.
 
-Per-V-Pot customisation lives in Settings → FX Learn → (right-click the V-Pot on the schematic). Each `(fader-bank, soft-key bank, strip)` V-Pot carries its own *V-Pot mode* (Value / Toggle), *Polarity* (Unipolar / Bipolar — Bipolar renders the LCD ring centre-out, like SSL Pan), *Push reset* value, *display label*, *strip colour*, and *knob travel* (Min / Max range + response curve + sensitivity — see *Knob travel + curve editor* under FX Learn pane). Fill Sequential propagates every one of these fields to the strips to the right.
+Per-V-Pot customisation lives in Settings → FX Learn → (right-click the V-Pot on the schematic). Each `(fader-bank, soft-key bank, strip)` V-Pot carries its own *V-Pot mode* (Value / Toggle / Step Cycle), *Polarity* (Unipolar / Bipolar — Bipolar renders the LCD ring centre-out, like SSL Pan), *Push reset* value, *display label*, *strip colour*, and *knob travel* (Min / Max range + response curve + sensitivity — see *Knob travel + curve editor* under FX Learn pane). Fill Sequential propagates every one of these fields to the strips to the right.
 
 ## 360° Link
 
@@ -2232,7 +2232,7 @@ Favourite switching works through the **UC1 / SSL-Link control map**: it finds t
 - The **built-in maps** (SSL CS 2, 4K B / E / G, BC 2, 360 Link) work out of the box — nothing to set up.
 - Any **other** strip (API, bx, a JSFX strip…) needs a **Channel-Strip FX-Learn map** with its controls assigned to the UC1 knobs / buttons (*Settings → FX Learn*, or learn from the Learn-HUD). That map is what tells Rea-Sixty which parameter shares each control.
 
-Without a map: a track whose active plug-in isn't a recognised Channel Strip is **skipped** (treated as having no CS), and value transfer to / from an unmapped favourite can only fall back to matching by parameter **name** — so map your favourites for reliable, value-accurate switching.
+Without a map: a track whose active plug-in isn't a recognised Channel Strip **gets the favourite inserted at the end of its chain**, arriving on its own defaults — only *Copy to Favourite* declines on such a track. Value transfer to / from an unmapped favourite can only fall back to matching by parameter **name** — so map your favourites for reliable, value-accurate switching.
 
 ## Setting favourites
 
@@ -2288,7 +2288,7 @@ Three things you can do with a favourite, each available for CS, for BC, and for
 
 Cycling starts from wherever the track already sits: if its plug-in is favourite 3, the next detent goes to 4. If its plug-in is not a favourite at all, the first forward step lands on the first favourite. Empty slots are skipped, and whether it wraps at the ends follows the global cycle-wrap setting.
 
-A track with no plug-in in that domain is skipped. The swap preserves the old plug-in's **bypass state**, and if its window was open the new one opens the same way.
+A track with no plug-in in that domain gets the favourite inserted instead of being passed over; only *Copy* declines. The swap preserves the old plug-in's **bypass state**, and if its window was open the new one opens the same way.
 
 ## Copy to Favourite N — the A/B
 
@@ -2334,7 +2334,7 @@ When the selected tracks carry different sets, **Multi-select: unify sets to foc
 
 ## On the surface
 
-Two factory soft-key banks exist, **CS Favourites** and **BC Favourites**, each filling eight keys with that domain's Switch actions. The key labels show each favourite's plug-in short name — resolved through the focused track's assigned set — falling back to `CS Fav N` when a slot is empty.
+**CS Favourites** and **BC Favourites** are dynamic bank *kinds* — pick one for any soft-key bank and its eight keys are that domain's favourites, resolved live. They used to be two static factory banks; those were removed on 2026-09-02 because a snapshot went stale and a kind does not. The key labels show each favourite's plug-in short name — resolved through the focused track's assigned set — falling back to `CS Fav N` when a slot is empty.
 
 Cycling on the UC1 shows the same **previous / current / next** carousel the FX and Instance cycles use, headed with the track name, so you can see what you are stepping into. At the ends of a non-wrapping cycle it still shows, sitting on the current favourite.
 
@@ -2412,7 +2412,7 @@ The view follows the focused track live.
 
 **Sel is deliberately not routing-aware** — it still selects the track sitting on that strip, so you can change focus without leaving the view.
 
-On the scribble strips the upper line shows the route's name — the destination track for a send, the source track for a receive, abbreviated to fit. The value line shows the send's pan. The colour bar takes the colour of the *other end* of the route, so a strip's colour tells you where the signal is going, not where it came from.
+On the scribble strips the upper line shows the route's name — the destination track for a send, the source track for a receive, abbreviated to fit. With the route on the faders, the value line shows the send's pan; with it on the V-Pots the line shows the route's name instead, so the strip still says what it is. The colour bar takes the colour of the *other end* of the route, so a strip's colour tells you where the signal is going, not where it came from.
 
 ## Paging a long send list
 
