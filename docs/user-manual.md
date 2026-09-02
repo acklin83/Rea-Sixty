@@ -544,6 +544,17 @@ EQ curve is drawn on the screen and the four V-Pots carry that page's parameters
 | Quick-key `2` (bottom row) | Toggle **Fine** resolution — the channel V-Pots in Channel view, the meter V-Pots in Meter view. The **FINE CTRL** readout next to it follows the toggle. Factory default, and rebindable — but think twice: the UF1 prints **FINE CTRL 2** over that key itself, and that text is drawn by the device, so anything else you put there will be labelled wrongly by the hardware. |
 | V-Pot push (V1-V4) | Reset that parameter to its default. |
 
+### Presets in this view
+
+The preset browser is one browser, and which plug-in it lists follows the view: in
+Meter view the pinned Meter instance, everywhere else the **Channel Strip on the
+focused track**. It reads SSL's own on-disk library, the same one the UC1 browses,
+because these plug-ins expose no presets to REAPER's own list.
+
+The four keys under the display are all channel-strip toggles here, so the browser
+needs a key of your own: bind **UF1 Presets** (*Hardware Modes*) wherever you like.
+While it is open, **SK3** is *Navigate Back* and **V4** scrolls, with a push to load.
+
 ## Meter view
 
 | Control | Function |
@@ -551,7 +562,7 @@ EQ curve is drawn on the screen and the four V-Pots carry that page's parameters
 | SK1 | **Meter Screen Selector** — cycles Overview → Analogue → RTA. A Meter **Pro** adds Loudness as a fourth screen; a plain Meter never streams that data, so it is not offered. |
 | SK2 | **Reset** — clears the peak hold. |
 | SK3 | **Fine** — finer V-Pot resolution. In the preset browser it is *Navigate Back* instead. Not on the Loudness screen, where SK3 is *Play*. |
-| SK4 | **Presets** — open / close the preset browser for the pinned Meter instance. |
+| SK4 | **Presets** — open / close the preset browser for the pinned Meter instance. Leaving the Meter view closes it again. |
 | V4 | In the preset browser, scroll to highlight. **Push V4** loads the highlighted preset — browsing never loads on its own. |
 | `◄` `►` | Page the meter V-Pots. |
 | Quick-key `2` | Toggle Fine, same as SK3. |
