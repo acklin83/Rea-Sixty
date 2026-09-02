@@ -1331,35 +1331,43 @@ void HueManager::applyRecLight(bool on)
     if (!cfg.enabled || ip.empty()) return;
 
     if (on) {
-        // Fresh read first: the cached list is up to a second old, and this
-        // snapshot is the only thing the restore has to work from.
-        runRefresh(/*full=*/false);
-
-        // ⇨ A SCENE DECIDES ITS OWN LAMPS, so the snapshot has to be wider than
-        // the target. With a colour we know exactly which lights we are about to
-        // touch and save those; a scene can reach anything in the bridge, and a
-        // lamp we did not save is a lamp that never comes back. So: everything,
-        // when a scene is what goes on (Frank 2026-09-02).
         const bool useScene = !cfg.sceneId.empty();
-        const std::vector<std::string> ids = recLightLightIds();
-        std::vector<Saved> saved;
-        {
-            std::lock_guard<std::mutex> lk(cfgMx_);
-            if (useScene) {
-                for (const Light& L : lights_)
+
+        // ⇨ THE SNAPSHOT BELONGS TO THE RESTORE, NOT TO THE LIGHT. It exists so
+        // "put the lights back the way they were" has something to work from —
+        // so when the restore is a SCENE, none of it is needed: the scene is
+        // already on the bridge, which is what makes it a scene. Skipping it
+        // skips a full bridge read as well, and that read is what stood between
+        // pressing record and the room going red (Frank 2026-09-02: "die szene
+        // SIND gespeichert ... das muss zack-zack").
+        // ⚠ MIRROR THE RESTORE'S OWN TEST, not just its mode. "Scene" with no
+        // scene picked falls through to the snapshot path down there, so it
+        // still needs one — otherwise the lights would simply stay red.
+        const bool needSnapshot = (cfg.restore == RecRestore::Previous)
+                               || cfg.restoreSceneId.empty();
+        if (needSnapshot) {
+            // Fresh read first: the cached list is up to a second old, and this
+            // snapshot is the only thing the restore has to work from.
+            runRefresh(/*full=*/false);
+            // A scene decides its own lamps, so a snapshot taken for one has to
+            // be wider than the target: a lamp we did not save is a lamp that
+            // never comes back.
+            const std::vector<std::string> ids = recLightLightIds();
+            std::vector<Saved> saved;
+            {
+                std::lock_guard<std::mutex> lk(cfgMx_);
+                for (const Light& L : lights_) {
+                    if (!useScene
+                        && std::find(ids.begin(), ids.end(), L.id) == ids.end())
+                        continue;
                     saved.push_back(Saved{ L.id, L.on, L.briPercent,
                                            L.hasXy, L.xy, L.hasMirek, L.mirek });
-            } else {
-                for (const std::string& id : ids) {
-                    for (const Light& L : lights_) {
-                        if (L.id != id) continue;
-                        saved.push_back(Saved{ L.id, L.on, L.briPercent,
-                                               L.hasXy, L.xy, L.hasMirek, L.mirek });
-                        break;
-                    }
                 }
+                recSaved_ = saved;
             }
-            recSaved_ = saved;
+        } else {
+            std::lock_guard<std::mutex> lk(cfgMx_);
+            recSaved_.clear();
         }
 
         // A scene replaces the whole apply below: it carries its own lights,

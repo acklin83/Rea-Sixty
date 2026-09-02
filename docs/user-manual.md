@@ -2692,7 +2692,9 @@ Two more actions come with it:
 The classic red light, only real. Under **Recording light**:
 
 - **Applies to** is either the rows you ticked under *Rec light* in the lamp table, or a whole room or zone. The two are separate on purpose: the lamp you ride on a fader is rarely the one that should go red.
-- **While recording** is either **a colour** or **a scene**. A colour uses the brightness beside it and lands on whatever *Applies to* names. A scene carries its own lights, colours and brightness, so those three controls go away while one is picked — and because a scene can reach any lamp on the bridge, the snapshot taken for the restore widens to every lamp rather than only the targeted ones. It recalls statically; a recording light that keeps moving is one nobody trusts. **Test** holds it on so you can walk into the room and look at it; press it again to release.
+- **While recording** is either **a colour** or **a scene**. A colour uses the brightness beside it and lands on whatever *Applies to* names. A scene carries its own lights, colours and brightness, so those three controls go away while one is picked — It recalls statically; a recording light that keeps moving is one nobody trusts.
+
+**Set the restore to a scene as well and nothing is read from the bridge at all** — the light is one request and the way back is another, which is as fast as this gets. The snapshot below only exists for *put the lights back the way they were*, so it is taken only when that is what you asked for. It does widen to every lamp when the light is a scene, because a scene can reach any of them and a lamp that was not saved is one that never comes back. **Test** holds it on so you can walk into the room and look at it; press it again to release.
 - **When it stops** either puts the lamps back exactly the way they were, or recalls a scene of your choosing.
 
 Only recording touches the lights. Play and stop leave them alone. If they did not, every scene you recalled by hand would be wiped the moment you pressed the space bar.
