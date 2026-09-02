@@ -1184,7 +1184,7 @@ In the bank editor there is a **Rea-Sixty factory banks** section. Pick a curate
 The five factory banks are:
 
 - **Encoder Modes** — all fifteen Channel-Encoder modes. Eight on Plain (Ch Select / Instance / FX Cycle / FX Move / CS Cycle / Markers / Nudge / Mousewheel) and seven on Shift (BC Cycle / Fav Cycle / Selset Cycle / Bank by 1 / Last Param / FX Scroll / Inst Scroll).
-- **Focus Set & Selsets** — pin / add / remove / toggle / set-from-selection / pin-focused / clear, plus Cycle Sets. On **Shift**, the two Sticky Pot actions: *Pin Param* and *Pins On/Off*. Pinning one parameter to a strip is the same trade as pinning one track to the surface, so they sit on the same bank.
+- **Focus Set & Selsets** — pin / add / remove / toggle / set-from-selection / pin-focused / clear, plus Cycle Sets. On **Shift**, the two Sticky Pot actions: *Pin Sticky* and *Sticky On/Off*. Pinning one parameter to a strip is the same trade as pinning one track to the surface, so they sit on the same bank.
 - **Plug-in Ops** — FX GUI / FX Chain / Close All FX / Bypass / Offline / Preset prev-next / SSL Strip.
 - **Learn / Master** — Learn-HUD / Quick Learn (project + track) / Touch-Learn / Master pin left-right / focused-track panel / Out-Gain.
 - **Brightness** — Both / LCDs / LEDs × up / down.

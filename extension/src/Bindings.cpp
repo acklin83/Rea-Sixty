@@ -5560,8 +5560,8 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             {"temp_selset_pin_focused",     "Pin Focused"},
             {"temp_selset_clear",           "Clear Set"},
             {"selset_cycle",                "Cycle Sets"},
-            {"sticky_pot_get_next",         "Pin Param"},
-            {"sticky_pot_toggle",           "Pins On/Off"},
+            {"sticky_pot_get_next",         "Pin Sticky"},
+            {"sticky_pot_toggle",           "Sticky On/Off"},
         }));
         // ⛔ NINE ENTRIES IN AN EIGHT-SLOT BANK IS A SILENT LOSS. This list used
         // to carry temp_selset_pin_uf1_channel ("Pin This Ch") in sixth place,
