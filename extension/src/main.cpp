@@ -45794,15 +45794,31 @@ void reasixty_actionPickerPoll()
     // Only where the surface can show it. Writing an auto-label onto a UF1 key
     // that prints nothing left invisible data behind AND latched the label away
     // from the action (Frank 2026-08-18).
+    // ⇨ AND THE UF8'S SOFT-KEY SLOTS TOO, since 2026-09-02. They were left out
+    // because they "have their own label with its own LCD fallback" — true, but
+    // the fallback is the SSL stock name, so a user bank that had never been
+    // named showed nothing at all for the action on it.
     const bool labelFollowsAction =
         (g_pickerMode == PickerMode::Uf1Bank)
+     || (g_pickerMode == PickerMode::UserQuick)
      || (g_pickerMode == PickerMode::Layer
          && uf8::bindings::uf1ControlShowsLabel(g_pickerId));
     if (labelFollowsAction && !bd.labelIsUserSet
         && !g_pickerDouble && !g_pickerLongPress
         && modIdx == static_cast<int>(Modifier::Plain) && stepIdx == 0) {
-        const std::string n = reasixty_resolveActionName(actionStr);
-        bd.label = (n == "(unresolved)" || n == "(no name)") ? std::string() : n;
+        // A builtin gets its curated twelve-character name; a REAPER action has
+        // only the one REAPER gives it, and both sentinels say less than nothing
+        // on a hardware key.
+        std::string n;
+        if (target.type == uf8::bindings::ActionType::Builtin) {
+            if (const char* sh = uf8::bindings::builtinShortLabel(actionStr);
+                sh && *sh) n = sh;
+        }
+        if (n.empty()) {
+            n = reasixty_resolveActionName(actionStr);
+            if (n == "(unresolved)" || n == "(no name)") n.clear();
+        }
+        bd.label = n;
     }
     if (g_pickerMode == PickerMode::UserQuick) {
         setUserQuickSlot(g_pickerUQLayer, g_pickerUQQuick,

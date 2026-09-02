@@ -33,7 +33,11 @@ def registered_names(main_cpp: str) -> set:
         (r'"switch_bc_%d"', 1, 8), (r'"copy_bc_%d"', 1, 8),
         (r'"switch_fav_%d"', 1, 8), (r'"copy_fav_%d"', 1, 8),
         (r'"send_all_%d"', 1, 8), (r'"recv_all_%d"', 1, 8),
-        (r'"softkey_bank_%d"', 0, 5), (r'"ssl_bank_%d"', 1, 5),
+        # softkey_bank_N is 1..9, one per (layer, Quick) — the 0..5 here was the
+        # RANGE OF A DIFFERENT LOOP (the bank selectors' param), so the checker
+        # was asking about a softkey_bank_0 that does not exist and never asked
+        # about 6 to 9 (found 2026-09-02 while filling the label table).
+        (r'"softkey_bank_%d"', 1, 9), (r'"ssl_bank_%d"', 1, 5),
         (r'"param_group_add_%d"', 1, 8), (r'"param_group_clear_%d"', 1, 8),
         (r'"param_group_toggle_%d"', 1, 8),
     ]:

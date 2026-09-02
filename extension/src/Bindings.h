@@ -1153,6 +1153,12 @@ void resetLayerToDefaults(int layer);
 // with `__`) are filtered out.
 std::vector<std::string> builtinNames();
 
+// The default soft-key label for a builtin: what goes into the Label field when
+// the action is assigned and the user has not named the key. Twelve characters
+// or fewer, which is the surface's cap. Empty for a builtin with no entry —
+// every new builtin should get one (see kBuiltinLabels in Bindings.cpp).
+const char* builtinShortLabel(const std::string& name);
+
 // LED resolution helpers — slot's override wins, else falls back to
 // the binding's top-level LED config. Out-params are written
 // unconditionally so callers don't need to branch.

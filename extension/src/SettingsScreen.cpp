@@ -3167,9 +3167,20 @@ static std::string autoLabelForAction_(const uf8::bindings::ActionSlot& sp)
 {
     using namespace uf8::bindings;
     switch (sp.type) {
-        case ActionType::Builtin:
-            return sp.action.empty() ? std::string()
-                                     : builtinDisplayName(sp.action);
+        case ActionType::Builtin: {
+            if (sp.action.empty()) return {};
+            // ⇨ THE CURATED SHORT NAME FIRST. builtinDisplayName is the picker's
+            // sentence ("Encoder Mode → Nudge") and it does not fit a key: the
+            // surface caps labels at twelve, so it arrived cut mid-word. Every
+            // builtin has a twelve-character name in kBuiltinLabels for exactly
+            // this moment (Frank 2026-09-02). The long name stays as the
+            // fallback for anything the table has not caught up with yet.
+            if (const char* sh = builtinShortLabel(sp.action); sh && *sh)
+                return sh;
+            std::string d = builtinDisplayName(sp.action);
+            if (d.size() > 12) d.resize(12);
+            return d;
+        }
         case ActionType::Reaper: {
             std::string n = reasixty_resolveActionName(sp.action);
             // Both sentinels are worse than saying nothing on a hardware label.
