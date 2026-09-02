@@ -1076,7 +1076,7 @@ Surface-side handling of the REAPER Master bus. See **Master track** (own chapte
 |---|---|
 | Don't show offline FX | Cycle rings (FX Cycle, Instance Cycle, per-strip variants) and the UF8 colour-bar default cursor skip FX slots that are set offline. A track whose FX are all offline shows an empty colour bar rather than a placeholder. Off by default. |
 | Wrap Plug-in Cycle | Default on (legacy behaviour) — cycle rings wrap from last FX back to first. When off, both ends of the FX chain hard-stop on every cycle path (Channel-Encoder FX/Instance Cycle, per-strip V-Pot FX/Instance Cycle), and the UC1 carousel shows no neighbour name past the first/last FX. |
-| SSL Strip Mode follows focused plug-in window | When REAPER's last-focused FX is a CS Instance, SSL Strip Mode auto-engages. Off by default. |
+| SSL Strip Mode follows focused plug-in window | **While SSL Strip Mode or UF8 Plug-in Mode is already engaged**, bringing a mapped plug-in window to the front re-points the surface at that instance. It does not engage the mode. Off by default. |
 | Plug-in GUI follows active Instance | When an Instance Cycle / FX Cycle lands on a new target, an already-open floating plug-in GUI re-points to the new target. Off → the cycle moves the surface but leaves the window pinned to its current FX. On by default. |
 | UF1 PLUG-IN key opens the plug-in GUI | Whether the UF1's `PLUG-IN` soft-key on a **native** SSL strip page opens the plug-in's GUI as well as claiming the surface. Off by default (surface only). An explicit UF1 map picks this per key instead (FX Learn → UF1 cell → Action); the built-in strip pages have no per-key storage, so they follow this one setting. |
 | Auto-engage UF8 Plug-in Mode for UF8-mapped plug-ins | When SEL-Mode cycle V-Pot push OR a **Plug-in: toggle focused GUI** binding lands on a UF8-mapped plug-in, also engage UF8 Plug-in Mode with GUI. Off by default. |
@@ -2158,19 +2158,22 @@ When held, these shift every other binding to its modifier slot. The UF8 has one
 
 ## SSL Strip Mode
 
-Engage with the Plug-in button (default), via the **Toggle SSL Strip Mode** / **Toggle SSL Strip Mode (with GUI)** actions, or via "SSL Strip Mode follows focused plug-in window" auto-engage on a CS plug-in.
+Engage with the Plug-in button (factory default; Shift+Plug-in is the with-GUI variant) or via the **Toggle SSL Strip Mode** / **Toggle SSL Strip Mode (with GUI)** actions. There is no auto-engage: nothing else turns the mode on. Mutually exclusive with UF8 Plug-in Mode (engaging either drops the other), and the state is remembered across REAPER restarts.
 
 While SSL Strip Mode is on:
 
-- Fader → CS Fader Level (the CS plug-in's own fader parameter, not REAPER's track volume)
-- V-Pots → CS controls (per SSL's standard 6 soft-key banks)
-- Soft-keys → CS bypass / EQ-In / Filter-In etc.
-- The colour-bar Type zone shows the CS variant name (CS2, 4K B, 4K E, 4K G) or the user rename
-- UC1 follows the same CS Instance
+- **Fader** → CS Fader Level (the CS plug-in's own fader parameter, rather than REAPER's track volume). A strip whose track carries no CS plug-in keeps track volume on the fader. FLIP wins per strip, and a user-mapped UF8 fader wins over the built-in CS fader.
+- **V-Pot** → the CS plug-in's own **Pan** (linkIdx 3) wherever the V-Pot would otherwise show REAPER track pan; the readout ring and the Value Line follow that param. A focused parameter still wins, exactly as outside the mode.
+- **Colour-bar Type zone** → the label of the CS instance the fader is routed to (CS2, 4K B, 4K E, 4K G, or the user rename). It beats the FX-Cycle label while the mode is on.
+- **Sticky Pot steps aside** while the mode owns the V-Pot layer.
+
+That is the whole mode. Soft-keys, Solo / Cut / Sel, meters, scribble names and banking are untouched by it. The CS soft-key rows and their six pages are the **SSL Soft-Key Sets** (Layer 1, Q1 / Q2) and work the same whether or not SSL Strip Mode is engaged; `Page ←` / `Page →` are the generic soft-key bank keys, so on those sets they step SSL's six pages.
+
+The Strip-Mode target is resolved by `csForStripModeOnTrack_`, which applies the isDefault tiebreak. On a track carrying several CS plug-ins that can be a **different instance** from the one the Instance cycle (and with it the UC1) is currently on.
 
 The `with_gui` variant also opens the CS plug-in's floating GUI alongside, pinning it via the pin-position settings.
 
-`Page ←` / `Page →` step through the 6 SSL-defined Channel Strip soft-key banks. `Plug-in` again (or any other Plug-in Mode toggle) exits.
+`Plug-in` again (or any other Plug-in Mode toggle) exits.
 
 ### Free soft-key slots (CS / BC)
 
@@ -2798,7 +2801,7 @@ While the bridge is unreachable, meter keys show a dim dash and **no REAPER** ra
 
 # Master track
 
-The REAPER Master bus isn't a normal track — it's excluded from banking and has no track number. Rea-Sixty surfaces it in four places. A Channel Strip on the Master is treated exactly like one on any track (it drops into SSL Strip Mode automatically), and its scribble reads **MASTER**.
+The REAPER Master bus isn't a normal track — it's excluded from banking and has no track number. Rea-Sixty surfaces it in four places. A Channel Strip on the Master is treated exactly like one on any track, SSL Strip Mode included, and its scribble reads **MASTER**.
 
 ## On the UC1
 
