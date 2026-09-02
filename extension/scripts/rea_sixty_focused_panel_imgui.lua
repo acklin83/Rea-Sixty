@@ -449,12 +449,66 @@ local function labelled(label, value)
   reaper.ImGui_TextColored(ctx, rgba(0xC8D0E0), value)
 end
 
+-- ⇨ ONE FIXED WIDTH FOR EVERY DROP-DOWN IN THIS PANEL. The readouts used to be
+-- plain text, so the panel re-flowed on every mode change and whatever sat to the
+-- right of them moved under the mouse (Frank 2026-09-02). A combo of a fixed
+-- width does not care how long "Instance Scroll (all)" is.
+local COMBO_W = 168
+
+-- "<activeIdx>;<name>\t<builtin>;…" — the extension publishes both mode rings in
+-- this shape. The builtin travels with the row rather than being derived here:
+-- the mode → builtin mapping lives once, in main.cpp.
+local function readModeList(key)
+  local raw = reaper.GetExtState(SECT, key)
+  if raw == "" then return nil end
+  local parts = {}
+  for seg in (raw .. ";"):gmatch("(.-);") do parts[#parts + 1] = seg end
+  local active = tonumber(parts[1] or "-1") or -1
+  local list = {}
+  for i = 2, #parts do
+    local f = {}
+    for x in (parts[i] .. "\t"):gmatch("(.-)\t") do f[#f + 1] = x end
+    if f[1] and f[1] ~= "" then
+      list[#list + 1] = { name = f[1], builtin = f[2] or "" }
+    end
+  end
+  return list, active
+end
+
+-- One mode drop-down. Picking the row you are already on does nothing: every one
+-- of these builtins toggles, so re-firing it would drop you to the default.
+-- Picking a row that has no builtin (Select / Channel Select) fires the ACTIVE
+-- row's builtin instead, which is exactly what toggling off means.
+local function drawModeCombo(label, key, fallback)
+  local list, active = readModeList(key)
+  if not list or #list == 0 then
+    if fallback and fallback ~= "" then labelled(label, fallback) end
+    return
+  end
+  local cur = (active >= 0 and list[active + 1]) and list[active + 1].name or "—"
+  reaper.ImGui_TextColored(ctx, rgba(0x8890A0), label .. " ")
+  reaper.ImGui_SameLine(ctx, 0, 0)
+  reaper.ImGui_SetNextItemWidth(ctx, COMBO_W)
+  if reaper.ImGui_BeginCombo(ctx, "##" .. key, cur) then
+    for i, m in ipairs(list) do
+      local isCur = (i == active + 1)
+      if reaper.ImGui_Selectable(ctx, m.name .. "##" .. key .. i, isCur) and not isCur then
+        local b = m.builtin
+        if b == "" and active >= 0 and list[active + 1] then
+          b = list[active + 1].builtin        -- toggle the active one off
+        end
+        if b ~= "" then sendPanelCmd("mode;" .. b) end
+      end
+    end
+    reaper.ImGui_EndCombo(ctx)
+  end
+end
+
 local function drawModeIndicator()
   local f = modeState()
-  if not f or not f[2] then return end
-  labelled("Sel", f[1])
+  drawModeCombo("Sel", "uf8_selmodes", f and f[1])
   reaper.ImGui_SameLine(ctx, 0, font_px)
-  labelled("Enc", f[2])
+  drawModeCombo("Enc", "uf8_encmodes", f and f[2])
 end
 
 -- The UF1's channel encoder runs its OWN mode ring, not the UF8's — hence its own
@@ -520,7 +574,7 @@ local function drawUf8Bank()
               or "(none)"
   reaper.ImGui_TextColored(ctx, rgba(0x8890A0), "UF8 SK-Bank ")
   reaper.ImGui_SameLine(ctx, 0, 0)
-  reaper.ImGui_SetNextItemWidth(ctx, 170)
+  reaper.ImGui_SetNextItemWidth(ctx, COMBO_W)
   if reaper.ImGui_BeginCombo(ctx, "##u8bank", cur) then
     for i, b in ipairs(list) do
       if reaper.ImGui_Selectable(ctx, b.name .. "##u8b" .. i, i == active + 1) then

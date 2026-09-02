@@ -37769,10 +37769,72 @@ void onTimerBody_()
                           // omits it and lands on Plain.
                           + "\t" + std::to_string(r.m);
                 }
+                static std::string smLast, emLast;
                 const std::string ub = std::to_string(active) + body;
                 if (ub != ubLast) {
                     ubLast = ub;
                     SetExtState("rea_sixty", "uf8_banks", ub.c_str(), false);
+                }
+                // ⇨ THE TWO MODE RINGS AS LISTS, for the panel's drop-downs.
+                // Same shape as uf8_banks: "<activeIdx>;<name>\t<builtin>;…".
+                // The builtin is carried per row rather than derived in Lua,
+                // because the mapping mode → builtin lives in one place here
+                // and a second copy over there would drift the first time a
+                // mode is added (Frank 2026-09-02).
+                // ⚠ Every one of these builtins TOGGLES: firing the mode you
+                // are already in drops you back to Select / Channel Select.
+                // The panel therefore never re-fires the active row, and the
+                // rows that ARE those defaults carry an empty builtin, which
+                // the handler reads as "toggle whatever is active off".
+                {
+                    static const struct { SelectionMode m; const char* b; } kSel[] = {
+                        { SelectionMode::Norm,          "selection_mode_norm" },
+                        { SelectionMode::Rec,           "selection_mode_rec" },
+                        { SelectionMode::RecMon,        "selection_mode_rec_mon" },
+                        { SelectionMode::Auto,          "selection_mode_auto" },
+                        { SelectionMode::Instance,      "selection_mode_instance" },
+                        { SelectionMode::InstanceCycle, "selection_mode_instance_cycle" },
+                        { SelectionMode::DynaMount,     "selection_mode_dynamount" },
+                        { SelectionMode::Hue,           "selection_mode_hue" },
+                    };
+                    const auto curSel = g_selectionMode.load();
+                    std::string sm; int si = 0;
+                    for (size_t k = 0; k < sizeof(kSel)/sizeof(kSel[0]); ++k) {
+                        if (kSel[k].m == curSel) si = static_cast<int>(k);
+                        sm += ";"; sm += selectionModeFriendly(kSel[k].m);
+                        sm += "\t"; sm += kSel[k].b;
+                    }
+                    sm = std::to_string(si) + sm;
+                    if (sm != smLast) { smLast = sm;
+                        SetExtState("rea_sixty", "uf8_selmodes", sm.c_str(), false); }
+
+                    static const struct { EncoderMode m; const char* b; } kEnc[] = {
+                        { EncoderMode::ChSelect,          "" },
+                        { EncoderMode::Instance,          "encoder_instance" },
+                        { EncoderMode::FxCycle,           "encoder_fx_cycle" },
+                        { EncoderMode::FxMove,            "encoder_fx_move" },
+                        { EncoderMode::CsCycle,           "encoder_cs_cycle" },
+                        { EncoderMode::BcCycle,           "encoder_bc_cycle" },
+                        { EncoderMode::FavCycle,          "encoder_fav_cycle" },
+                        { EncoderMode::SelsetCycle,       "encoder_selset_cycle" },
+                        { EncoderMode::Markers,           "encoder_markers" },
+                        { EncoderMode::Nudge,             "encoder_nudge" },
+                        { EncoderMode::Mousewheel,        "encoder_focus" },
+                        { EncoderMode::BankBy1,           "encoder_bank_by_1" },
+                        { EncoderMode::LastParam,         "encoder_last_param" },
+                        { EncoderMode::FxScrollAll,       "encoder_fx_scroll_all" },
+                        { EncoderMode::InstanceScrollAll, "encoder_instance_scroll_all" },
+                    };
+                    const auto curEnc = g_encoderMode.load();
+                    std::string em; int ei = 0;
+                    for (size_t k = 0; k < sizeof(kEnc)/sizeof(kEnc[0]); ++k) {
+                        if (kEnc[k].m == curEnc) ei = static_cast<int>(k);
+                        em += ";"; em += encoderModeFriendly(kEnc[k].m);
+                        em += "\t"; em += kEnc[k].b;
+                    }
+                    em = std::to_string(ei) + em;
+                    if (em != emLast) { emLast = em;
+                        SetExtState("rea_sixty", "uf8_encmodes", em.c_str(), false); }
                 }
             }
         }
@@ -38059,6 +38121,13 @@ void onTimerBody_()
                 assignSet(true, s.substr(16));
             } else if (s.rfind("favset_bc_track;", 0) == 0) {
                 assignSet(false, s.substr(16));
+            } else if (s.rfind("mode;", 0) == 0) {
+                // Panel drop-down picked a Selection or Encoder mode. An empty
+                // name means the row IS the default (Select / Channel Select),
+                // which has no builtin of its own — getting there means firing
+                // the active mode's builtin, because they all toggle.
+                const std::string b = s.substr(5);
+                if (!b.empty()) uf8::bindings::invokeBuiltin(b, 0);
             } else if (s.rfind("u8bank;", 0) == 0) {
                 // "u8bank;<layer>;<quick>;<sub>[;<set>]" — jump to a soft-key bank
                 // from the panel's drop-down. Same guards as the pinned startup
