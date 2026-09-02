@@ -21568,9 +21568,52 @@ static void drawHueTab_(ImGui_Context* ctx)
             }
         }
 
+        // ⇨ A COLOUR OR A SCENE, the same choice the restore has had all along.
+        // A scene carries its own lights and their colours, so the target, the
+        // colour and the brightness stop applying when one is picked — they are
+        // hidden rather than left there looking live (Frank 2026-09-02).
         ImGui_Text(ctx, "While recording");
         ImGui_SameLine(ctx, nullptr, nullptr);
         {
+            const bool useScene = !rc.sceneId.empty();
+            static const char* kWhat[2] = { "a colour", "a scene" };
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 120.0));
+            if (ImGui_BeginCombo(ctx, "##hue_recwhat", kWhat[useScene ? 1 : 0],
+                                 nullptr)) {
+                for (int k = 0; k < 2; ++k) {
+                    bool sel = (useScene == (k == 1));
+                    if (ImGui_Selectable(ctx, kWhat[k], &sel, nullptr, nullptr,
+                                         nullptr)) {
+                        if (k == 0) rc.sceneId.clear();
+                        else if (rc.sceneId.empty() && !scenes.empty())
+                            rc.sceneId = scenes.front().id;
+                        changed = true;
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+        }
+        if (!rc.sceneId.empty()) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            std::string preview = "pick a scene";
+            for (const Scene& sc : scenes)
+                if (sc.id == rc.sceneId) { preview = sceneLabel(sc); break; }
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 260.0));
+            if (ImGui_BeginCombo(ctx, "##hue_reconscn", preview.c_str(), nullptr)) {
+                for (const Scene& sc : scenes) {
+                    bool sel = (rc.sceneId == sc.id);
+                    const std::string lbl = sceneLabel(sc);
+                    if (ImGui_Selectable(ctx, lbl.c_str(), &sel, nullptr,
+                                         nullptr, nullptr)) {
+                        rc.sceneId = sc.id;
+                        changed = true;
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+        }
+        if (rc.sceneId.empty()) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
             int col = static_cast<int>(rc.rgb & 0xFFFFFFu);
             int ceFlags = 0;
             ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 160.0));
@@ -21579,8 +21622,10 @@ static void drawHueTab_(ImGui_Context* ctx)
                 changed = true;
             }
         }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        {
+        // The scene brings its own brightness with it, so this goes with the
+        // colour it belongs to.
+        if (rc.sceneId.empty()) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
             int bri = static_cast<int>(rc.brightness + 0.5);
             ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
             if (ImGui_SliderInt(ctx, "Brightness##hue_recbri", &bri, 1, 100,

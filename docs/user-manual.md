@@ -2692,7 +2692,7 @@ Two more actions come with it:
 The classic red light, only real. Under **Recording light**:
 
 - **Applies to** is either the rows you ticked under *Rec light* in the lamp table, or a whole room or zone. The two are separate on purpose: the lamp you ride on a fader is rarely the one that should go red.
-- **While recording** sets the colour and the brightness. **Test** holds it on so you can walk into the room and look at it; press it again to release.
+- **While recording** is either **a colour** or **a scene**. A colour uses the brightness beside it and lands on whatever *Applies to* names. A scene carries its own lights, colours and brightness, so those three controls go away while one is picked — and because a scene can reach any lamp on the bridge, the snapshot taken for the restore widens to every lamp rather than only the targeted ones. It recalls statically; a recording light that keeps moving is one nobody trusts. **Test** holds it on so you can walk into the room and look at it; press it again to release.
 - **When it stops** either puts the lamps back exactly the way they were, or recalls a scene of your choosing.
 
 Only recording touches the lights. Play and stop leave them alone. If they did not, every scene you recalled by hand would be wiped the moment you pressed the space bar.

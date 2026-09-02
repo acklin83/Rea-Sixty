@@ -110,6 +110,11 @@ struct RecLightConfig {
     double      brightness = 100.0;  // percent
     RecRestore  restore   = RecRestore::Previous;
     std::string restoreSceneId;
+    // ⇨ THE LIGHT CAN BE A SCENE, not just one colour. Empty = use rgb and
+    // brightness above, which is what it always did. Set = recall this scene
+    // instead, and then the colour fields are ignored (Frank 2026-09-02).
+    // The restore already worked this way; this is the same choice on the way in.
+    std::string sceneId;
 };
 
 struct MarkerConfig {

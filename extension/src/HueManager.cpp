@@ -720,7 +720,10 @@ std::string HueManager::serialize()
                   static_cast<int>(recCfg_.restore));
     out += b;
     out += sanitize(recCfg_.groupId) + "\t"
-         + sanitize(recCfg_.restoreSceneId) + kRecordSep;
+         + sanitize(recCfg_.restoreSceneId) + "\t"
+         // Field 9, appended: the scene the light itself recalls. An older file
+         // stops at 8 and reads exactly as before — the parser gates on size.
+         + sanitize(recCfg_.sceneId) + kRecordSep;
 
     snprintf(b, sizeof(b), "mrk\t%d\t%d\t",
                   markerCfg_.enabled ? 1 : 0, markerCfg_.durationMs);
@@ -808,6 +811,7 @@ bool HueManager::deserialize(const std::string& s)
             recCfg.restore        = static_cast<RecRestore>(toInt(f[5]));
             recCfg.groupId        = f[6];
             recCfg.restoreSceneId = f[7];
+            if (f.size() >= 9) recCfg.sceneId = f[8];
             ++recognised;
         } else if (f[0] == "mrk" && f.size() >= 4) {
             markerCfg.enabled    = toInt(f[1]) != 0;
@@ -1331,19 +1335,44 @@ void HueManager::applyRecLight(bool on)
         // snapshot is the only thing the restore has to work from.
         runRefresh(/*full=*/false);
 
+        // ⇨ A SCENE DECIDES ITS OWN LAMPS, so the snapshot has to be wider than
+        // the target. With a colour we know exactly which lights we are about to
+        // touch and save those; a scene can reach anything in the bridge, and a
+        // lamp we did not save is a lamp that never comes back. So: everything,
+        // when a scene is what goes on (Frank 2026-09-02).
+        const bool useScene = !cfg.sceneId.empty();
         const std::vector<std::string> ids = recLightLightIds();
         std::vector<Saved> saved;
         {
             std::lock_guard<std::mutex> lk(cfgMx_);
-            for (const std::string& id : ids) {
-                for (const Light& L : lights_) {
-                    if (L.id != id) continue;
+            if (useScene) {
+                for (const Light& L : lights_)
                     saved.push_back(Saved{ L.id, L.on, L.briPercent,
                                            L.hasXy, L.xy, L.hasMirek, L.mirek });
-                    break;
+            } else {
+                for (const std::string& id : ids) {
+                    for (const Light& L : lights_) {
+                        if (L.id != id) continue;
+                        saved.push_back(Saved{ L.id, L.on, L.briPercent,
+                                               L.hasXy, L.xy, L.hasMirek, L.mirek });
+                        break;
+                    }
                 }
             }
             recSaved_ = saved;
+        }
+
+        // A scene replaces the whole apply below: it carries its own lights,
+        // their colours and their brightness, so target, rgb and brightness have
+        // nothing left to say. Static, not dynamic — a recording light that
+        // keeps moving is a recording light nobody trusts.
+        if (useScene) {
+            {
+                std::lock_guard<std::mutex> lk(cfgMx_);
+                sceneQueue_.push_back(SceneReq{ cfg.sceneId, false, transition });
+            }
+            sceneReq_.store(true);
+            return;
         }
 
         // Apply: one broadcast for a group target (instant, which is what a red
