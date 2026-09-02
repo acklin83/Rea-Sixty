@@ -5546,6 +5546,11 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             {"encoder_fx_scroll_all",      "FX Scroll"},
             {"encoder_instance_scroll_all","Inst Scroll"},
         }));
+        // Nine to sixteen fill the SHIFT set, which is how the Sticky Pot pair
+        // gets in: pinning one parameter to a strip is the same trade as pinning
+        // one track to the surface, so they belong on the same bank rather than
+        // on one of their own (Frank 2026-09-02). Slot 9 is deliberately empty so
+        // the two land on Shift's first two keys, under the two they belong with.
         v.push_back(bank("Focus Set & Selsets", {
             {"temp_selset_recall",          "Pin Set"},
             {"temp_selset_add",             "Add to Set"},
@@ -5555,6 +5560,8 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             {"temp_selset_pin_focused",     "Pin Focused"},
             {"temp_selset_clear",           "Clear Set"},
             {"selset_cycle",                "Cycle Sets"},
+            {"sticky_pot_get_next",         "Pin Param"},
+            {"sticky_pot_toggle",           "Pins On/Off"},
         }));
         // ⛔ NINE ENTRIES IN AN EIGHT-SLOT BANK IS A SILENT LOSS. This list used
         // to carry temp_selset_pin_uf1_channel ("Pin This Ch") in sixth place,
@@ -5642,8 +5649,14 @@ bool recallFactoryBankPreset(int idx, int layer, int quick, int subBank, int mod
     for (int s = 0; s < kSlotsPerSubBank; ++s) {
         // Same writer as the user recall, one slot and one set at a time.
         applyPresetSlotLocked_(p.slots[s], p.hasShift ? 0 : mod, sb.slots[s]);
-        if (p.hasShift)
-            applyPresetSlotLocked_(p.shiftSlots[s], 1, sb.slots[s]);
+        // ⇨ A FACTORY BANK OWNS BOTH HALVES, INCLUDING THE ONE IT DOES NOT FILL.
+        // It used to write Shift only when it had one, so recalling a short bank
+        // over a spilling one left the previous bank's Shift half standing under
+        // the new Plain half — Frank loaded Focus Set over Encoder Modes and kept
+        // the encoder modes on Shift (2026-09-02). A curated bank is the whole
+        // bank: what it does not fill, it clears.
+        applyPresetSlotLocked_(p.hasShift ? p.shiftSlots[s] : Binding{},
+                               1, sb.slots[s]);
     }
     // Same rule as the user recall: a bank is called what it was recalled from.
     // "Encoder Modes" in the banner, not "Q3 Soft 1".

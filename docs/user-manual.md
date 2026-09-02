@@ -1177,12 +1177,14 @@ This works with no UF8 attached, so you can still walk through every set and ban
 
 In the bank editor there is a **Rea-Sixty factory banks** section. Pick a curated bank from the combo and **Recall into this bank**, or **Load full set → Layer 1 / Quick 3** to drop all five into Layer 1 / Quick 3's six soft-key banks at once, leaving one place free.
 
-**A bank with more than eight entries fills both sets.** Eight keys is one set, and a curated list longer than that would otherwise be cut off — which is how the Encoder Modes bank used to show eight of the fifteen modes. Such a bank writes Plain from its first eight and Shift from the rest, so recalling it replaces **both** sets of that bank, and the confirm dialog says so. A bank of eight or fewer touches only the set you are on, as before.
+**A bank with more than eight entries fills both sets.** Eight keys is one set, and a curated list longer than that would otherwise be cut off — which is how the Encoder Modes bank used to show eight of the fifteen modes. Such a bank writes Plain from its first eight and Shift from the rest, so recalling it replaces **both** sets of that bank, and the confirm dialog says so.
+
+**A factory bank always owns both halves, including the one it does not fill.** A shorter bank used to write only the set you were on, which left the previous bank's Shift half standing under the new Plain half — recall *Focus Set & Selsets* over *Encoder Modes* and the encoder modes stayed on Shift. A curated bank is the whole bank: what it does not fill, it clears.
 
 The five factory banks are:
 
 - **Encoder Modes** — all fifteen Channel-Encoder modes. Eight on Plain (Ch Select / Instance / FX Cycle / FX Move / CS Cycle / Markers / Nudge / Mousewheel) and seven on Shift (BC Cycle / Fav Cycle / Selset Cycle / Bank by 1 / Last Param / FX Scroll / Inst Scroll).
-- **Focus Set & Selsets** — pin / add / remove / toggle / set-from-selection / pin-focused / clear, plus Cycle Sets.
+- **Focus Set & Selsets** — pin / add / remove / toggle / set-from-selection / pin-focused / clear, plus Cycle Sets. On **Shift**, the two Sticky Pot actions: *Pin Param* and *Pins On/Off*. Pinning one parameter to a strip is the same trade as pinning one track to the surface, so they sit on the same bank.
 - **Plug-in Ops** — FX GUI / FX Chain / Close All FX / Bypass / Offline / Preset prev-next / SSL Strip.
 - **Learn / Master** — Learn-HUD / Quick Learn (project + track) / Touch-Learn / Master pin left-right / focused-track panel / Out-Gain.
 - **Brightness** — Both / LCDs / LEDs × up / down.
