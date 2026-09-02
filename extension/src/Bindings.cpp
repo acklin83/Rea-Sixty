@@ -5494,13 +5494,19 @@ bool recallBankPreset(int idx, int layer, int quick, int subBank, int mod)
 
 // ---- Factory Rea-Sixty soft-key bank presets -----------------------------
 // Curated from Rea-Sixty's own built-ins only (Frank's locked curation,
-// backlog 2026-06-22). Labels ≤8 chars (firmware top-soft-key cap). Built
+// backlog 2026-06-22). Labels ≤12 chars — the old note here said 8, which
+// has not been the cap for some time (Frank 2026-09-02). Built
 // once, lazily, into a static table (uses mkBuiltin from this TU).
 
 static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
 {
     static const std::vector<SoftKeyBankPreset> kBanks = []() {
-        using SlotDef = std::pair<const char*, const char*>;   // action, label
+        // action, label, param. ⇨ THE PARAM IS NOT DECORATION. selset_cycle
+        // returns immediately on param == 0 — it is an encoder action and the
+        // param is the direction — so "Cycle Sets" sat on a key that could
+        // never do anything (Frank 2026-09-02, "Cycle Sets macht nix").
+        // Anything registered with an `int param` that it reads needs one here.
+        struct SlotDef { const char* action; const char* label; int param; };
         // Up to sixteen: the first eight are Plain, the rest are Shift, and a
         // list of eight or fewer leaves the Shift set alone entirely. Anything
         // past sixteen would be a bank that does not exist, so it is dropped —
@@ -5513,7 +5519,8 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             int i = 0;
             for (const auto& s : slots) {
                 if (i >= kSlotsPerSubBank * 2) break;
-                Binding b = mkBuiltin(s.first, Behavior::Momentary, s.second);
+                Binding b = mkBuiltin(s.action, Behavior::Momentary, s.label,
+                                      255, 255, 255, s.param);
                 if (i < kSlotsPerSubBank) p.slots[i] = b;
                 else { p.shiftSlots[i - kSlotsPerSubBank] = b; p.hasShift = true; }
                 ++i;
@@ -5529,22 +5536,22 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
         // MOUSEWHEEL — every other readout in the program calls it that. The old
         // name is a leftover and named the one mode nobody could find.
         v.push_back(bank("Encoder Modes", {
-            {"encoder_nav",       "Ch Select"},
-            {"encoder_instance",  "Instance"},
-            {"encoder_fx_cycle",  "FX Cycle"},
-            {"encoder_fx_move",   "FX Move"},
-            {"encoder_cs_cycle",  "CS Cycle"},
-            {"encoder_markers",   "Markers"},
-            {"encoder_nudge",     "Nudge"},
-            {"encoder_focus",     "Mousewheel"},
+            {"encoder_nav",       "Ch Select", 0},
+            {"encoder_instance",  "Instance", 0},
+            {"encoder_fx_cycle",  "FX Cycle", 0},
+            {"encoder_fx_move",   "FX Move", 0},
+            {"encoder_cs_cycle",  "CS Cycle", 0},
+            {"encoder_markers",   "Markers", 0},
+            {"encoder_nudge",     "Nudge", 0},
+            {"encoder_focus",     "Mousewheel", 0},
             // Shift
-            {"encoder_bc_cycle",           "BC Cycle"},
-            {"encoder_fav_cycle",          "Fav Cycle"},
-            {"encoder_selset_cycle",       "Selset Cycle"},
-            {"encoder_bank_by_1",          "Bank by 1"},
-            {"encoder_last_param",         "Last Param"},
-            {"encoder_fx_scroll_all",      "FX Scroll"},
-            {"encoder_instance_scroll_all","Inst Scroll"},
+            {"encoder_bc_cycle",           "BC Cycle", 0},
+            {"encoder_fav_cycle",          "Fav Cycle", 0},
+            {"encoder_selset_cycle",       "Selset Cycle", 0},
+            {"encoder_bank_by_1",          "Bank by 1", 0},
+            {"encoder_last_param",         "Last Param", 0},
+            {"encoder_fx_scroll_all",      "FX Scroll", 0},
+            {"encoder_instance_scroll_all","Inst Scroll", 0},
         }));
         // Nine to sixteen fill the SHIFT set, which is how the Sticky Pot pair
         // gets in: pinning one parameter to a strip is the same trade as pinning
@@ -5552,16 +5559,16 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
         // on one of their own (Frank 2026-09-02). Slot 9 is deliberately empty so
         // the two land on Shift's first two keys, under the two they belong with.
         v.push_back(bank("Focus Set & Selsets", {
-            {"temp_selset_recall",          "Pin Set"},
-            {"temp_selset_add",             "Add to Set"},
-            {"temp_selset_remove",          "Rem from Set"},
-            {"temp_selset_toggle_selected", "Toggle Sel"},
-            {"temp_selset_set_from_selection", "Set frm Sel"},
-            {"temp_selset_pin_focused",     "Pin Focused"},
-            {"temp_selset_clear",           "Clear Set"},
-            {"selset_cycle",                "Cycle Sets"},
-            {"sticky_pot_get_next",         "Pin Sticky"},
-            {"sticky_pot_toggle",           "Sticky On/Off"},
+            {"temp_selset_recall",          "Pin Set", 0},
+            {"temp_selset_add",             "Add to Set", 0},
+            {"temp_selset_remove",          "Rem from Set", 0},
+            {"temp_selset_toggle_selected", "Toggle Sel", 0},
+            {"temp_selset_set_from_selection", "Set frm Sel", 0},
+            {"temp_selset_pin_focused",     "Pin Focused", 0},
+            {"temp_selset_clear",           "Clear Set", 0},
+            {"selset_cycle",                "Cycle Sets", 1},
+            {"sticky_pot_get_next",         "Pin Sticky", 0},
+            {"sticky_pot_toggle",           "Sticky OnOff", 0},
         }));
         // ⛔ NINE ENTRIES IN AN EIGHT-SLOT BANK IS A SILENT LOSS. This list used
         // to carry temp_selset_pin_uf1_channel ("Pin This Ch") in sixth place,
@@ -5575,24 +5582,24 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
         // the box (Frank 2026-09-01: "wieso ist im focus set factory set eine
         // action für uf1 drin?").
         v.push_back(bank("Plug-in Ops", {
-            {"show_focused_plugin_gui",      "FX GUI"},
-            {"show_fx_chain",                "FX Chain"},
-            {"close_all_fx_guis",            "Close All FX"},
-            {"plugin_bypass",                "Bypass"},
-            {"plugin_offline",               "Offline"},
-            {"plugin_preset_prev",           "Preset Prev"},
-            {"plugin_preset_next",           "Preset Next"},
-            {"ssl_strip_mode_toggle_with_gui", "SSL Strip"},
+            {"show_focused_plugin_gui",      "FX GUI", 0},
+            {"show_fx_chain",                "FX Chain", 0},
+            {"close_all_fx_guis",            "Close All FX", 0},
+            {"plugin_bypass",                "Bypass", 0},
+            {"plugin_offline",               "Offline", 0},
+            {"plugin_preset_prev",           "Preset Prev", 0},
+            {"plugin_preset_next",           "Preset Next", 0},
+            {"ssl_strip_mode_toggle_with_gui", "SSL Strip", 0},
         }));
         v.push_back(bank("Learn / Master", {
-            {"learn_hud_toggle",        "Learn HUD"},
-            {"quick_learn",             "Quick Learn"},
-            {"quick_learn_track",       "QLearn Trk"},
-            {"touch_to_learn_toggle",   "Touch Learn"},
-            {"master_pin_strip1",       "Master Left"},
-            {"master_pin_strip8",       "Master Right"},
-            {"focused_panel_toggle",    "Panel"},
-            {"uc1_outgain_fader_toggle","Out Gain"},
+            {"learn_hud_toggle",        "Learn HUD", 0},
+            {"quick_learn",             "Quick Learn", 0},
+            {"quick_learn_track",       "QLearn Trk", 0},
+            {"touch_to_learn_toggle",   "Touch Learn", 0},
+            {"master_pin_strip1",       "Master Left", 0},
+            {"master_pin_strip8",       "Master Right", 0},
+            {"focused_panel_toggle",    "Panel", 0},
+            {"uc1_outgain_fader_toggle","Out Gain", 0},
         }));
         // ⛔ CS Favourites und BC Favourites standen hier als statische Bänke aus
         // acht switch_cs_N / switch_bc_N. Sie sind seit 2026-09-02 DYNAMISCHE
@@ -5607,12 +5614,12 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
         // up / down (Frank 2026-06-23). Generic DAW actions (deselect, arm,
         // zoom) the user binds himself to a free Quick.
         v.push_back(bank("Brightness", {
-            {"brightness_both_up",   "Bright +"},
-            {"brightness_both_down", "Bright -"},
-            {"brightness_lcds_up",   "LCDs +"},
-            {"brightness_lcds_down", "LCDs -"},
-            {"brightness_leds_up",   "LEDs +"},
-            {"brightness_leds_down", "LEDs -"},
+            {"brightness_both_up",   "Bright +", 0},
+            {"brightness_both_down", "Bright -", 0},
+            {"brightness_lcds_up",   "LCDs +", 0},
+            {"brightness_lcds_down", "LCDs -", 0},
+            {"brightness_leds_up",   "LEDs +", 0},
+            {"brightness_leds_down", "LEDs -", 0},
         }));
         return v;
     }();
