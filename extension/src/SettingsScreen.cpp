@@ -5268,8 +5268,6 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
         bd = Binding{};
         dirty = true;
     }
-    ImGui_TextDisabled(ctx,
-        "Clears the label, behaviour, LED and both modifier sets.");
 
     // LED appearance for this slot. Same Active / Inactive split the
     // regular binding editor exposes, scoped to this user-Quick slot.
@@ -5277,8 +5275,6 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
     ImGui_Text(ctx, "LED");
-    ImGui_TextDisabled(ctx,
-        "Active = slot's bound action is engaged. Inactive = idle.");
     ImGui_Spacing(ctx);
 
     auto drawSlotLedRow = [&](const char* label, uint8_t (&rgb)[3],
@@ -5889,10 +5885,6 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             s_lastFill = s_u8NameBuf;
         }
         s_editing = ImGui_IsItemActive(ctx);
-        ImGui_TextDisabled(ctx,
-            "Shown in the mode-change banner and in the focused-track panel. "
-            "Leave it empty and the bank announces its dynamic kind, or its "
-            "position.");
     }
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
@@ -5910,11 +5902,6 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         // of that change. Saying otherwise sent Frank hunting a phantom bug when
         // an old favourites bank left switch_bc_* on Shift underneath a Hue
         // Scenes bank (2026-08-27).
-        ImGui_TextDisabled(ctx,
-            "Compute this soft-key bank's 8 keys live from the focused track "
-            "instead of fixed slots. The Plain slots below are then ignored, "
-            "but a slot stored under a held modifier still wins over the "
-            "computed key.");
         // ⛔ Not on a page where SSL owns even one key: a dynamic bank computes
         // ALL eight, so it would paint over a plug-in parameter. Fully-empty
         // pages (BC banks 2-5) are fair game.
@@ -5996,9 +5983,6 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                 }
                 ImGui_EndCombo(ctx);
             }
-            ImGui_TextDisabled(ctx,
-                "Only while this is the engaged soft-key bank; the control "
-                "keeps its normal function otherwise.");
             ImGui_Spacing(ctx);
         }
 
@@ -6057,23 +6041,14 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         }
 
         if (curKind == DynamicBankKind::Favourites) {
-            ImGui_TextDisabled(ctx, "CS or BC, whichever you last touched.");
             ImGui_Spacing(ctx);
         }
         if (curKind == DynamicBankKind::CsFavourites
          || curKind == DynamicBankKind::BcFavourites) {
-            ImGui_TextDisabled(ctx,
-                "This one domain, whatever you are focused on. Put the other on "
-                "a second bank and both are always what they say.");
             ImGui_Spacing(ctx);
         }
 
         if (curKind == DynamicBankKind::HueScenes) {
-            ImGui_TextDisabled(ctx,
-                "The eight scene slots from Settings \xE2\x86\x92 Modes \xE2\x86\x92 Hue, in that "
-                "order. Each key wears its slot's LED colour and lights while "
-                "the bridge reports that scene as the one showing. Push recalls "
-                "it; a long press starts it moving.");
             ImGui_Spacing(ctx);
         }
 
@@ -6081,9 +6056,6 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         if (curKind == DynamicBankKind::FxBank) {
             drawFxBankGestures_(ctx);
         } else if (curKind == DynamicBankKind::TrackColours) {
-            ImGui_TextDisabled(ctx,
-                reasixty_sp("Track-Colours palette (global — 8 keys = these colours):",
-                            "Track-Colors palette (global — 8 keys = these colors):"));
             drawTrackColourPalette_(ctx);
         }
 
@@ -6105,9 +6077,6 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                       sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
                       editLayer + 1, engagedQ + 1);
         ImGui_Text(ctx, presetHdr);
-        ImGui_TextDisabled(ctx,
-            "Snapshot this modifier's 8 Top-Soft-Key slots as a "
-            "named preset, or recall one into this bank.");
         ImGui_Spacing(ctx);
 
         // Per (L, Q, SB) selection — different sub-bank cells keep
@@ -6398,9 +6367,6 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     // six sub-banks at once (their intended home). Backlog A 2026-06-22.
     {
         ImGui_Text(ctx, "Rea-Sixty factory banks");
-        ImGui_TextDisabled(ctx,
-            "Curated from Rea-Sixty's own built-ins. Recall one into this "
-            "bank, or load the full set into Layer 1 / Quick 3.");
         ImGui_Spacing(ctx);
 
         const int nFac = factoryBankPresetCount();
@@ -6572,9 +6538,6 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                               "LED colors for soft-key bank %s on (Layer %d, Quick %d)"),
                   sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
     ImGui_Text(ctx, ledHdr);
-    ImGui_TextDisabled(ctx,
-        "Active = this soft-key bank is the selected one. Inactive = "
-        "another soft-key bank is selected in this set.");
     if (g_slotEditModIdx != 0)
         ImGui_TextDisabled(ctx, "Shift set. Inherits Plain until changed.");
     ImGui_Spacing(ctx);
@@ -6844,9 +6807,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             if (ImGui_RadioButtonEx(ctx, "by 1", &byOne, 1)) {
                 reasixty_setBankScrollByOne(true);
             }
-            ImGui_TextDisabled(ctx,
-                "When the selection scrolls past the surface edge: "
-                "by 8 = jump to the next bank, by 1 = slide one channel.");
             ImGui_EndTabItem(ctx);
         }
         int flagsUc1 = tabFlagsForDevice(1);
@@ -6936,11 +6896,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         // ([[learnings]] #31), und der UF1 hat keine Sets.
         if (s_deviceTab == 0) {
             ImGui_Text(ctx, "Soft-Key Sets");
-            ImGui_TextDisabled(ctx,
-                "A set is the six soft-key banks under one Quick key. Click a "
-                "bank to engage and edit it. Name a set here; the name is what "
-                "the banner and the panel say, and a set can be engaged from any "
-                "key with the Soft-Key Set action.");
             ImGui_Spacing(ctx);
             static char s_setNameBuf[uf8::bindings::kSoftKeySetCount][64] = {};
             static bool s_setNameEditing[uf8::bindings::kSoftKeySetCount] = {};
@@ -7053,12 +7008,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 }
                 ImGui_EndTable(ctx);
             }
-            ImGui_TextDisabled(ctx,
-                "Sets 8 and 9 are SSL's own CS and BC rows, and their six banks "
-                "are the plug-in's six pages. On Plain the keys it fills stay "
-                "its own; the ones it leaves free are yours, and the whole "
-                "Shift set is yours. Clicking a bank engages it, exactly like "
-                "pressing the keys would.");
             ImGui_Spacing(ctx);
         }
         // The bank's two sets. Holding the modifier on the hardware shows
@@ -7083,11 +7032,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         // The Plain/Shift switch itself lives in the matrix header now, where
         // the cells it governs are. This line is the explanation that went with
         // it, kept here beside the schematic it also describes.
-        ImGui_TextDisabled(ctx,
-            "The Plain/Shift switch is in the matrix header. It follows the "
-            "modifier you hold and stays there when you let go so you can edit "
-            "it. Shift = the FINE key. While this pane is open the surface "
-            "shows and fires the set picked there.");
         if (uf8SubBankIsDyn && g_slotEditModIdx != 0) {
             ImGui_TextDisabled(ctx, uf8SubBankDynOwn
                 ? "This set is a dynamic bank of its own. Its 8 keys come from "
@@ -7177,9 +7121,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             reasixty_setUf1SoftBank(bank1 - 1);
         }
         ImGui_PopItemWidth(ctx);
-        ImGui_TextDisabled(ctx,
-            "10 banks of 4 soft-keys, active in DAW mode. The UF1 "
-            "\xE2\x97\x82 \xE2\x96\xB8 keys page the same bank.");
         ImGui_Spacing(ctx);
         // ⇨ A DYNAMIC BANK HAS SETS TOO — the same correction the UF8 side got
         // in 1a602ba, which this one did not (Frank 2026-08-25: "ja, UF1 auch
@@ -7194,10 +7135,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 reasixty_uf1SoftBank(), g_slotEditModIdx, &uf1BankDynOwn)
             != uf8::bindings::DynamicBankKind::None;
         drawBankLayerRow_(ctx, "uf1bank", &g_slotEditModIdx);
-        ImGui_TextDisabled(ctx,
-            "Follows the modifier you hold, and stays there when you let go "
-            "so you can edit it. Shift = the UF1 SHIFT key. While this pane "
-            "is open the surface shows and fires the set picked here.");
         if (uf1BankIsDyn && g_slotEditModIdx != 0) {
             ImGui_TextDisabled(ctx, uf1BankDynOwn
                 ? "This set is a dynamic bank of its own. Its 4 keys come from "
@@ -7292,14 +7229,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             // when the guessing starts.
             if (!reasixty_uf1Connected())
                 drawUf1Seg7Preview_(ctx, shown);
-            ImGui_TextDisabled(ctx,
-                reasixty_uf1Connected()
-                    ? "Ten cells, shown on the UF1 while you type. Clear the field "
-                      "to go back to the bank's own name. K M V W X have no "
-                      "7-segment shape and fall back to the nearest one."
-                    : "Ten cells. Clear the field to go back to the bank's own "
-                      "name. K M V W X have no 7-segment shape and fall back to "
-                      "the nearest one.");
             ImGui_Spacing(ctx);
         }
         {
@@ -7354,9 +7283,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 // 2026-08-18: "5-8 ist immer die nächsten 5-8 kanäle"); paging
                 // inside a dynamic bank moved to the arrows' long press in the
                 // same breath. This text still described the old arrangement.
-                ImGui_TextDisabled(ctx,
-                    "Keys computed live from the focused track (4 at a time). "
-                    "The 4 static slots are ignored while this is on.");
                 {
                     // Where the paging action actually sits, rather than a
                     // second setting beside the binding that owns it: a long
@@ -7406,22 +7332,13 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                     ImGui_Spacing(ctx);
                 }
                 if (curKind == DynamicBankKind::Favourites) {
-                    ImGui_TextDisabled(ctx,
-                        "CS or BC, whichever you last touched.");
                     ImGui_Spacing(ctx);
                 }
                 if (curKind == DynamicBankKind::CsFavourites
                  || curKind == DynamicBankKind::BcFavourites) {
-                    ImGui_TextDisabled(ctx,
-                        "This one domain, whatever you are focused on.");
                     ImGui_Spacing(ctx);
                 }
                 if (curKind == DynamicBankKind::TrackColours) {
-                    ImGui_Spacing(ctx);
-                    ImGui_TextDisabled(ctx,
-                        reasixty_sp(
-                            "Track-Colours palette (global — 8 keys = these colours):",
-                            "Track-Colors palette (global — 8 keys = these colors):"));
                     drawTrackColourPalette_(ctx);
                 }
             }
@@ -7452,7 +7369,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             bool sendsFollow = reasixty_uf1SendsFollowHeld();
             if (ImGui_Checkbox(ctx, "UF8 sends follow the UF1 Focus Set track", &sendsFollow))
                 reasixty_setUf1SendsFollowHeld(sendsFollow);
-            ImGui_TextDisabled(ctx, "Off: UF8 sends stay on the last-touched track.");
             ImGui_Spacing(ctx);
         }
         // Focus Set scope — where Pin Set applies (UF8 head vs UF1 park).
@@ -7467,10 +7383,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_RadioButton(ctx, "UF8 only##focus_scope", scope == 2))
             reasixty_setFocusSetScope(2);
-        ImGui_TextDisabled(ctx,
-            "Where Pin Set applies. UF1 only: the UF1 parks/scrolls the set, UF8 "
-            "bank untouched. UF8 only: members pin the UF8 head, UF1 follows the "
-            "selection.");
         ImGui_Spacing(ctx);
         bool extender = reasixty_uf1Extender();
         if (showsDev(kDevUf8)
@@ -7485,9 +7397,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             ImGui_SameLine(ctx, nullptr, nullptr);
             if (ImGui_RadioButton(ctx, "Right##uf1ext_side", side == 1))
                 reasixty_setUf1ExtenderSide(1);
-            ImGui_TextDisabled(ctx,
-                "Right: UF1 is strip 9 (UF8 = 1-8).  Left: UF1 is strip 1 "
-                "(UF8 = 2-9).  Turning Extender on releases Pin Set.");
         }
     }
 
