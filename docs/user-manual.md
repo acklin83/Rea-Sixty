@@ -166,7 +166,7 @@ While REC + RME is engaged, the UF1's Cut and Solo LEDs show the TotalMix state 
 
 The strip's `SEL` cycles through automation modes (Off → Read → Touch → Latch → Write → Trim, then back). V-Pots become read-only automation-mode indicators.
 
-When **Settings → Modes → AUTO → "Hide Trim/Read tracks while in AUTO mode"** is on, tracks set to Trim or Read disappear from the surface so only writing-armed tracks remain visible.
+When **Settings → Modes → AUTO → "Show only tracks armed for automation writing (hide Trim / Read)"** is on, tracks set to Trim or Read disappear from the surface so only writing-armed tracks remain visible.
 
 Leaving AUTO restores the previously-visible track list and refocuses the surface on the selected track.
 
@@ -893,15 +893,15 @@ The first three hold the general settings, split by what they touch: **Devices**
 
 ## Search settings
 
-A filter field sits at the top of the sidebar, above the tab list. Leave it empty and the sidebar is the normal tab list. Type into it and the tab list is replaced by matching settings, each row reading *Pane › Section › Setting*.
+A filter field sits at the top of the sidebar, above the tab list. Leave it empty and the sidebar is the normal tab list. Type into it and the tab list is replaced by matching settings. A row is two lines: the setting's own label, then *Pane › Section* a size smaller underneath it.
 
 - Matching is **additive** and case-insensitive — the query is split on spaces and a setting has to contain **every** word, in any order. "notch hold" and "hold notch" both find *Notch hold*.
 - Words are matched against the whole trail, not just the setting's name, so "devices meter" lists everything in Devices → Metering.
 - Click a result to switch to its pane; the pane scrolls to the section that setting sits in.
-- The sidebar is narrow, so long rows are shortened — the full trail when it fits, otherwise pane + setting, otherwise the setting alone. Hover a row to read the untruncated trail as a tooltip.
+- The sidebar is narrow, so each of the two lines is shortened on its own with an ellipsis. Hover a row to read it in full as a tooltip.
 - Nothing matches → **No matches**.
 
-Devices, Appearance and Behaviour are indexed setting by setting. The other nine tabs are indexed by name only — searching "bindings" jumps to the Bindings pane, but the individual controls inside it are not in the index. The query is not remembered between sessions.
+All twelve panes are indexed control by control, not just the first three: searching "focus set" finds the control inside Bindings, not only the pane. The query is not remembered between sessions.
 
 ## Devices pane
 
@@ -1074,7 +1074,7 @@ Surface-side handling of the REAPER Master bus. See **Master track** (own chapte
 
 | Toggle | Effect |
 |---|---|
-| Don't show offline FX | Cycle rings (FX Cycle, Instance Cycle, per-strip variants) and the UF8 colour-bar default cursor skip FX slots that are set offline. Offline-only tracks show a `-`. Off by default. |
+| Don't show offline FX | Cycle rings (FX Cycle, Instance Cycle, per-strip variants) and the UF8 colour-bar default cursor skip FX slots that are set offline. A track whose FX are all offline shows an empty colour bar rather than a placeholder. Off by default. |
 | Wrap Plug-in Cycle | Default on (legacy behaviour) — cycle rings wrap from last FX back to first. When off, both ends of the FX chain hard-stop on every cycle path (Channel-Encoder FX/Instance Cycle, per-strip V-Pot FX/Instance Cycle), and the UC1 carousel shows no neighbour name past the first/last FX. |
 | SSL Strip Mode follows focused plug-in window | When REAPER's last-focused FX is a CS Instance, SSL Strip Mode auto-engages. Off by default. |
 | Plug-in GUI follows active Instance | When an Instance Cycle / FX Cycle lands on a new target, an already-open floating plug-in GUI re-points to the new target. Off → the cycle moves the surface but leaves the window pinned to its current FX. On by default. |
@@ -1225,7 +1225,7 @@ The choice is stored per bank, so each of the six banks in a set can be dynamic 
 
 A dynamic bank announces itself in three places, so you never edit slots that cannot fire:
 
-- The bank's cell in the matrix carries an **amber tick** in its top-right corner.
+- The bank's selector key on the schematic (V-POT / Soft 1-5) carries an **amber tick** in its top-right corner. The matrix cell itself stays plain.
 - The eight scribble strips above it read the bank's kind (`FX`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`) rather than the stored slot labels, because those labels never reach the hardware while the bank is dynamic.
 - Clicking any of the eight keys shows what the bank computes instead of a slot editor, with the same **Dynamic bank** dropdown, so you can switch it back to static without hunting for the cell.
 
@@ -1298,7 +1298,7 @@ A long press is half a second and fires when you let go. Long-press *replaces* t
 
 For these two the FX gesture table does not apply. Only short versus long press matters, and modifiers make no difference.
 
-**Parameter Groups** — the eight keys are the eight groups, labelled with your group names (falling back to `Grp 1`…`Grp 8`). A key is bright when the focused track belongs to that group. A short press toggles membership across every selected track; a long press toggles whether the group is broadcasting at all. Group names are edited in the separate **Parameter Groups** Settings section, not here. Membership is stored in the project; group names and their on/off state are global.
+**Parameter Groups** — the eight keys are the eight groups, labelled with your group names (falling back to `Grp 1`…`Grp 8`). A key is bright when the focused track belongs to that group. A short press toggles membership across every selected track; a long press toggles whether the group is broadcasting at all. Group names are edited in the separate **Parameter Groups** Settings section, not here. Membership, the group names and their on/off state are all stored in the project. Only the multi-select toggle is global.
 
 **Track Colours** — each key glows its own palette colour, brightening when the focused track wears it, and wears the name of the colour it shows: `RED`, `ORANGE`, `YELLOW`, `GREEN`, `CYAN`, `BLUE`, `PURPLE`, `MAGENTA`, `PINK`, `WHITE`. Those are the words SSL 360° itself uses for the same ten colours, so a key and the hardware always agree. A colour you mixed yourself is none of the ten and has no name to wear, so that key reads `Col 1`…`Col 8` instead; a name you typed into the slot beats both. A short press paints every selected track; a long press clears the custom colour instead. The palette itself is edited right below the dropdown as eight swatches, and is global.
 
@@ -1306,7 +1306,7 @@ If you had named these keys before the palette moved to the hardware colours, th
 
 **If a bank stays blank**
 
-With no track focused or selected, every dynamic bank goes blank and dark and its keys do nothing — there is no context to compute from.
+With no track focused or selected, a dynamic bank goes blank and dark and its keys do nothing — there is no context to compute from. Hue Scenes is the exception: a scene has nothing to do with a track, so that kind resolves and fires either way.
 
 One historical case: Rea-Sixty briefly had a **Sends** dynamic bank, which was removed. A configuration saved while it existed still loads, but the bank stays permanently blank. Set it to something else, or back to `Off (static slots)`.
 
@@ -1350,7 +1350,7 @@ Bindings storage paths:
 
 **This pane configures how the Selection Modes behave when they are active.** Each sub-tab corresponds to one Selection Mode (or one cycle behaviour) — switching Selection Modes on the hardware uses the modes themselves; this pane only sets their per-mode options.
 
-Four sub-tabs: AUTO · FX / Cycle · REC · NAV.
+Seven sub-tabs: AUTO · FX / Cycle · REC · NAV · Nudge · DynaMount · Hue.
 
 ### AUTO
 
@@ -1429,7 +1429,7 @@ Each line shows the bound layer + button + modifier + long-press flag, or "(unbo
 **UF8 strip display**
 
 - **Lower-row format** (radio): `Off (V-Pot value)` / `Index (R03 / M07)` / `Timecode (MM:SS)`. Off keeps the V-Pot value visible; Index / Timecode overlay marker metadata on the lower row.
-- **Colour-bar source** (radio): `REAPER marker colour` / `Force palette grey`. REAPER honours the colour override set on each marker / region; Force grey suppresses it.
+- **Colour-bar source** (radio): `REAPER marker colour` / `Keep track colour` / `Force palette grey`. REAPER honours the colour override set on each marker / region; Force grey suppresses it.
 
 **Encoder push actions (UC1 Encoder 2 + UF8 Channel encoder)** — Plain push, Shift + push and Long-press each pick any of the same 7 actions via dropdown. The three are shared between the two surfaces:
 
@@ -1458,39 +1458,23 @@ View-locks (Markers-only / Regions-only) suppress **Drill only** specifically (J
 
 The FX Learn pane teaches third-party plug-ins to behave as virtual Channel-Strip or Bus-Comp Instances. Built-in maps (SSL CS 2 / 4K B/E/G / BC 2 / 360 Link) always win — user maps can't shadow them.
 
-The pane has two views:
-
-### Master view (default)
-
-Toolbar:
-
-- **+ New** — opens the "new map" picker (browses your installed-FX catalog by name, lets you choose primary mode + UF8-Mode flag).
-- **Export…** — write the full user-plug-in catalog to a JSON file.
-- **Import…** — read a catalog JSON back in.
-
-Below the toolbar:
-
-- Search field (case-insensitive match against FX name or derived developer string).
-- Table of user maps. Per row: display short, FX-name match, developer, domain, variant count, mapped-param count, last-edit date, **Edit** button, **Delete** button.
-
-### Editor view (entered via Edit)
+**The pane is the editor.** There is no separate list of maps to come back to: a **map picker** in the header row is the navigation, and **+ New**, **Export…** and **Import…** sit beside it. New opens a picker over your installed-FX catalog; Export and Import write and read the whole user catalog as JSON.
 
 The editor **live-follows the active FX** — open it and it loads the map + instance for the plug-in you're currently looking at (the last-touched FX), so you don't have to find it in the list first. Manually picking a different map / instance still sticks until you touch another plug-in.
 
 Top bar:
 
-- **Domain** picker — `Channel Strip` / `Bus Comp` / `None (UF8-only)`. UF8-only maps the FX into the per-strip view without claiming a CS/BC slot.
-- **UF8 Mode** checkbox (UF8-only domain) — drives Instance Cycle / Plug-in Mode.
+- **Mode** radio row — `CS` / `BC` / `UF8 only` / `UF1 only`. UF8-only maps the FX into the per-strip view without claiming a CS/BC slot.
+- **UF8 layer** checkbox — drives Instance Cycle / Plug-in Mode. In `UF8 only` mode there is nothing to tick: the line reads *UF8 layer: on (required)* and is greyed, because that mode is the UF8 layer.
 - **Primary mode** picker (CS variant family) and other domain-specific options.
 - **CS Favourite** dropdown (Channel-Strip domain only) — assign this plug-in to one of the 8 CS favourite slots, or clear it. See chapter *Favourites*.
 - **Mockup toggle** — visualises the UC1 layout via a UC1 mockup PNG instead of the strip-bar schematic. Persisted in ExtState `ReaSixty/fxLearnMockup`.
 - **AutoLearn** button — runs the pattern-matching engine (hardcoded SSL seeds + user-map dictionary; three-pass: exact / substring / token) against either the live FX on the focused track or the catalog's stored param snapshot. Confidence-scored suggestions open in an *AutoLearn Preview* modal with a per-row checkbox + confidence %, plus All / None bulk helpers. UF8 V-Pot suggestions auto-group by category (EQ / Comp / Gate / Filter / I-O / Misc). Accept applies every checked mapping into the active map.
-- Breadcrumb **`← All maps`** to leave the editor.
 
 Editor body — depends on the domain:
 
 - **CS / BC domain:** the UC1 / strip schematic. Click a control to learn it to a plug-in parameter; the active row's combo lists every plug-in parameter (with current value if a live instance is on the focused track).
-- **None (UF8-only):** the UF8 strip-bar schematic. Drag a strip slot (V-Pot, top soft-key, etc.) onto a plug-in parameter.
+- **UF8 only:** the UF8 strip-bar schematic. Drag a parameter onto a strip slot (V-Pot, top soft-key, etc.) — the slot is the drop target, and an empty one says so: *unmapped — drag a param here or click to listen*.
 
 ### UC1 EXT FUNCS list (CS mode)
 
@@ -1581,7 +1565,7 @@ In the per-slot right-click menu:
 
 The Curve editor popup:
 
-- **Sensitivity** — a single labelled row (label on its own line, then slider + numeric input + **1x** reset button). Range 0.1× .. 4×, encoder-delta multiplier. Combines multiplicatively with Shift = Fine (Shift still quarters on top of the user-set value). Hidden when editing a fader target.
+- **Sensitivity** — a labelled row with a typeable value box and a **1x** reset button, no slider. Range 0.01× .. 4×, encoder-delta multiplier. Combines multiplicatively with Shift = Fine (Shift still quarters on top of the user-set value). Hidden when editing a fader target.
 - **Canvas** — draw a piecewise-linear response curve. Click empty space to add a breakpoint, drag to move, right-click to remove. The Y axis is normalised within [Min..Max], so the Linear preset is always a 45° diagonal regardless of how the range is trimmed.
 - **Presets** — **Linear** (clears all breakpoints), **Log** (param rushes to the top — fine control near 0; on a Bipolar V-Pot the curve mirrors around 0.5 for a gentle ramp near centre + coarse at the edges), **Exp** (param stays small longer — fine control near 1; Bipolar mirrors for fine control at centre + rush to extremes), **Reset all** (clears curve + resets sensitivity to 1×). Bipolar polarity is re-read on every preset click so flipping it in the parent menu takes effect without re-opening the editor.
 - **Close** dismisses the popup; all edits persist live as you make them.
@@ -1605,7 +1589,7 @@ The ten slots are **global** — shared across UC1 knobs, UF8 V-Pots, and every 
 
 When the bound parameter is a discrete-stepped enum (e.g. PSP Townhouse attack/release time selectors, HPF slope pickers, oversampling toggles) — anything REAPER reports as having discrete steps — the editor automatically switches to a stepped-aware layout. Sensitivity, range, and push-reset still apply; curve does not.
 
-- **Sensitivity** label flips to **Detent speed**. The default 1.0× means *2 detents per step* on V-Pots and UC1 knobs (matches the legacy UC1 stepped feel). 2.0× → 1 detent per step. 0.5× → 4 detents per step. 4.0× and above fire multiple steps per detent. Shift-Fine still applies on top — at slider min (0.1×) Shift gives an effective 0.025× (≈40 detents per step) for ultra-precise crawling.
+- **Sensitivity** label flips to **Detent speed**. The default 1.0× means *2 detents per step* on V-Pots and UC1 knobs (matches the legacy UC1 stepped feel). 2.0× → 1 detent per step. 0.5× → 4 detents per step. 4.0× and above fire multiple steps per detent. Shift-Fine still applies on top — at the minimum (0.01×) Shift gives an effective 0.0025×, which is 800 detents per step. The old figure in this line, 0.025× and forty detents, was computed from a minimum of 0.1× that the box has not had for some time.
 - **Canvas + preset row hidden.** A single info line replaces them: `Stepped parameter — N values (~X.XXX per step). Curve disabled; Min/Max snap to the step grid.`
 - **Min / Max** in the right-click menu snap on commit to the nearest step boundary, so the encoder always traverses real values. Below the table a hint line reads `~K steps reachable in this range`.
 - **Push reset** (Value-mode V-Pots) snaps the chosen default to the nearest step.
@@ -1636,7 +1620,7 @@ On UC1, build step cycles through the **editor** rather than by touch capture. R
 
 ### Multi-instance picker
 
-When the focused track has multiple FX matching the map's name, the editor surfaces a combo to choose which Instance's live readouts feed the editor. Picked index is per plug-in.
+When more than one FX anywhere in the project matches the map's name, the editor surfaces a combo to choose which instance's live readouts feed it. The list spans the master and every track, not just the focused one. Picked index is per plug-in.
 
 ### GR meter override
 
@@ -1648,7 +1632,7 @@ When a plug-in doesn't expose the host-extension (or exposes a wrong value), a s
 - **Offset (dB)** slider — added before |abs| at render time. Lets you calibrate compressors whose GR reads negative-going (e.g. -6 dB at peak reduction → set offset −6 so the meter reads +6).
 - **(none)** / **Use host extension** clears the override and restores the default behaviour.
 
-When set, the button shows a tick mark next to the **GR** label. The override flows through to both the UC1 BC VU motor calibration tables and the DYN GR LED strip. Per-map; saved in `user_plugins.json` under `metering.grVst3Param` + `metering.grOffsetDb`.
+When set, the button shows a tick mark next to the **GR** label. The override flows through to both the UC1 BC VU motor calibration tables and the DYN GR LED strip. Per-map; saved in `user_plugins.json` under `metering.gainReduction.vst3Param` + `metering.gainReduction.offsetDb`.
 
 ### Param snapshot
 
@@ -1656,7 +1640,7 @@ When a catalog entry is created with the FX live on a track, parameter names + v
 
 ### Storage
 
-Catalog file at `~/Library/Application Support/REAPER/rea_sixty/user_plugins.json` (and equivalent paths on Windows / Linux). Versioned schema (currently v7). Old v5 / v6 files auto-migrate on first load.
+Catalog file at `~/Library/Application Support/REAPER/rea_sixty/user_plugins.json` (and equivalent paths on Windows / Linux). Versioned schema (currently v16). Old v5 / v6 files auto-migrate on first load.
 
 \newpage
 
@@ -1719,7 +1703,7 @@ Bottom of the pane:
 
 ### Storage
 
-Per-track slot membership lives in `P_EXT:rea_sixty:param_groups` as an 8-bit bitmask (one bit per slot). Slot metadata (names, active flag) lives in a project-scoped JSON sidecar (`param_groups.json`).
+Per-track slot membership lives in `P_EXT:reasixty:pg_mask` as an 8-bit bitmask (one bit per slot). Slot names and the active flag live in the project itself, written through REAPER's project-config hook. The JSON file next to it (`parameter_groups.json`, in the resource folder) is global and holds only the multi-select toggle.
 
 \newpage
 
@@ -1752,7 +1736,7 @@ A single bundled file format covering: bindings, learned plug-in maps, and every
 
 - **Export setup…** — save the bundle to a chosen JSON file.
 - **Import setup…** — load a bundle (replaces in-memory state immediately; warnings reported inline).
-- **Reset to factory defaults** — confirmation popup. Replaces bindings + learned FX + parameter-group slot meta + every Settings preference with the baked-in factory configuration. Per-project Selection Sets and Parameter Group memberships are untouched.
+- **Reset to factory defaults** — confirmation popup. Replaces bindings + learned FX + every Settings preference with the baked-in factory configuration. Per-project Selection Sets and Parameter Group memberships are untouched.
 
 ### Windows USB driver (Windows only)
 
@@ -1761,7 +1745,7 @@ Section appears only when the build is Windows.
 - Text: binds UF8, UC1 and UF1 to WinUSB so libusb can claim them without Zadig. One-time setup, requires admin. **Plug the devices in before pressing**, because the rebind only reaches devices attached at the moment it runs. SSL 360° stops seeing them after install; reinstall SSL 360° to revert.
 - **Current driver binding**: one line per device saying what it is bound to right now, with a **Refresh** button. `WinUSB / Rea-Sixty` means ours and the device will be picked up; anything else means another driver still owns it. It only reads, so it raises no admin prompt, and it re-reads itself when an install or uninstall finishes.
 - **Install UF8/UC1/UF1 WinUSB driver** button: runs the in-product installer with a UAC and publisher prompt, then reports what actually happened. Either *installed*, or *failed* with the path of a log you can paste, or *cancelled at the permission prompt*. Cancelling is not a failure and is named as such. While it runs, both buttons disappear so a second press cannot race the first. After it finishes, unplug and replug the devices.
-- **Where the devices go afterwards.** Our INF puts them in class `USBDevice`, so in Device Manager they move out of *Universal Serial Bus controllers* into *Universal Serial Bus devices*, and they are renamed to `SSL UF1 (Rea-Sixty / WinUSB)` or `SSL UF8 / UC1 (Rea-Sixty / WinUSB)`. Looking for the old name in the old category and finding nothing does not mean the unit is dead.
+- **Where the devices go afterwards.** Our INF puts them in class `USBDevice`, so in Device Manager they move out of *Universal Serial Bus controllers* into *Universal Serial Bus devices*, and each is renamed for itself: `SSL UF8 (Rea-Sixty / WinUSB)`, `SSL UC1 (Rea-Sixty / WinUSB)`, `SSL UF1 (Rea-Sixty / WinUSB)`. Looking for the old name in the old category and finding nothing does not mean the unit is dead.
 - **Uninstall** button: runs `pnputil /delete-driver /uninstall` (UAC prompt), removes **every** copy of `rea_sixty_winusb.inf` from the driver store, and clears the Rea-Sixty signing cert from the My / Root / TrustedPublisher stores. After uninstall, unplug and replug devices; the SSL 360° driver (or whatever was previously bound) takes over again. If a copy is ever left behind, the supported cleanup is `pnputil /delete-driver oemNN.inf /uninstall /force` in an admin prompt, never regedit, which Windows refuses.
 
 ### Linux udev rule (Linux only)
@@ -1821,7 +1805,7 @@ Drag the banner (while it's visible) to reposition it — position persists. Rig
 A dockable window showing the focused plug-in's **UC1 control → parameter assignments** as a grouped, readable text list — so you can see what each knob / button does without opening Settings.
 
 - Toggle with the **Learn-HUD: show / hide (focused plug-in assignments)** action (bind it to a surface button) or the REAPER action **"Rea-Sixty: Toggle Learn-HUD"** (`REASIXTY_LEARN_HUD_TOGGLE`). There is no Settings checkbox.
-- **CS / BC / UF8 tabs** at the top, auto-following the focused domain (click to pin one). The BC tab follows the BC anchor / BC-encoder selection, and a CS-mapped plug-in only ever shows on CS (and BC on BC) — the two domains never cross. The **UF8 tab** shows the per-strip UF8 assignments (V-Pot / fader / soft-keys) for the focused plug-in and offers the same learn / tuning controls.
+- **CS / BC / UF8 / UF1 tabs** at the top, auto-following the focused domain (click to pin one). The BC tab follows the BC anchor / BC-encoder selection, and a CS-mapped plug-in only ever shows on CS (and BC on BC) — the two domains never cross. The **UF8 tab** shows the per-strip UF8 assignments (V-Pot / fader / soft-keys) for the focused plug-in and offers the same learn / tuning controls.
 - Each row = the SSL slot name + the bound parameter's name (or your custom Display label). Rows are grouped by section (Filter / EQ / Dynamics / Gate / I-O for CS; the Bus-Comp knobs for BC), with Dynamics + Gate in a right-hand column to mirror the hardware.
 - A **layer badge** (NORM / OPT / CTRL / C+O) shows the held FX-Learn modifier layer; the list follows it live. On a modifier layer the list shows **only the controls you actually overlaid on that layer** — controls that fall through to their Normal mapping read as unmapped, so you can see at a glance what's layer-specific.
 - **Right-click → View** switches between the grouped text **List** and a hardware **Mockup** (the UC1/UF8 face). **Right-click → Text size** (Small … Huge); the menus themselves honour your *Appearance → Font Size*. The window size persists globally.
@@ -2514,13 +2498,13 @@ When on AND REC / REC+MON selection mode is active:
 - V-Pot push → action of choice (`None` / 48V / Pad / Phase invert / AutoLevel)
 - Cut button → action of choice (same enum)
 - Solo button → action of choice
-- Polarity (if mapped) → action of choice
+- Polarity (if mapped) → action of choice *(UC1 only — the UF8 half offers V-Pot push, Cut and Solo)*
 
 The channel-strip type cell shows the input channel name ("Mic 1", "Line 3") instead of the CS variant label, and the V-Pot readout bar shows the preamp gain instead of pan, since that is what the knob above it is turning. Full scale is +75 dB, which is as far as RME pres usually go.
 
 Hardware inputs only — MIDI / multichannel inputs leave the original label intact.
 
-If TotalReaper isn't installed, the integration does nothing at all and every key keeps its normal behaviour, so turning the mode on can never leave a control dead.
+If TotalReaper isn't installed the keys keep their normal behaviour, because a missing action falls through to the old solo and mute. **The gain knob is the exception**: with the gain toggle on, the rotation is consumed and sent to an action that is not there, so the pot moves nothing at all rather than falling back to pan.
 
 The UF1 reads out exactly as a UF8 strip does, down to the same zones: flags on
 the left of the value line, gain on the right, the readout bar on the gain, and
@@ -2608,7 +2592,7 @@ Philips Hue lamps on the strips. In Hue mode the UF8 faders are brightness, the 
 
 1. **Find bridge** asks Philips where your bridge is. That needs an internet connection; if there is none, or the bridge is on a network the lookup cannot see, type the address into the **IP** field yourself.
 2. Press **Pair (press link button)**, then walk over and press the round button on top of the bridge. You have thirty seconds. The status line counts down.
-3. **Refresh lights + scenes** re-reads everything. Rea-Sixty does that by itself every two seconds while it is connected, so you only need this after adding a lamp.
+3. **Refresh lights + scenes** re-reads everything. Rea-Sixty does that by itself every second while it is connected, and re-reads rooms and zones on every tenth pass, so you only need this after adding a lamp.
 4. **Forget** drops the address and the key. Pairing again is the only way back.
 
 The status line reads green when everything is talking, amber while it is pairing or reading, and red when the bridge stopped answering. A bridge that drops off is retried every ten seconds on its own.
@@ -2657,7 +2641,7 @@ The three V-Pot roles are set under **Controls** in the Hue tab. You can put col
 
 The scribble strip shows the label, `LAMP` or `ZONE` in the type zone, the row number as the digit, brightness in the fader readout, and the full state in the value line. A lamp the bridge cannot reach reads **OFFLINE**.
 
-The colour bar shows what the lamp is actually showing. When the lamp is off the bar goes dark rather than keeping its last colour.
+The colour bar shows what the lamp is actually showing. When the lamp is off the bar falls back to the configured **Bar** colour rather than keeping the lamp's last one.
 
 > **The bottom of the fader is off, not one percent.** The bridge treats a brightness of zero as the dimmest setting it can manage, not as darkness, so switching a lamp off is a separate instruction. Rea-Sixty sends it when the fader reaches the last one percent of its travel. If you would rather the fader never switched anything off, turn off *bottom of travel switches the lamp off* under Controls.
 
@@ -2688,7 +2672,7 @@ Eight slots under **Scenes** in the Hue tab. Each one points at a scene on your 
 
 There are two ways to reach them.
 
-**One key per scene.** Bind **Hue: recall scene** with parameter **1** to **8** to any key on any surface. A short press puts the room into that scene. A long press starts it moving, for the scenes that cycle.
+**One key per scene.** Bind **Hue: recall scene** with parameter **1** to **8** to any key on any surface. It always recalls statically; for a scene that keeps moving, bind **Hue: start scene dynamically** instead. A short press puts the room into that scene. A long press starts it moving, for the scenes that cycle.
 
 **All eight at once.** Set a soft-key bank's type to **Hue Scenes**: on the UF8 that is the bank's *Dynamic* setting under Settings, Bindings; on the UF1 the same setting on one of its ten soft-key banks. The bank then shows the eight slots in order, each key wearing its slot's LED colour and lighting while the bridge reports that scene as the one showing. Push recalls, long press starts it moving, exactly as the action does. On the UF1 the bank names itself `HUE` on the time field, and a recall flashes the scene's name there.
 
@@ -2858,7 +2842,7 @@ A ninth, ad-hoc set living alongside the 8 numbered slots — no Settings UI, no
 
 - **Focus Set: add selected** — add every REAPER-selected track to the set.
 - **Focus Set: remove selected** — remove every REAPER-selected track.
-- **Focus Set: pin (toggle)** — toggle pinning on / off. Coexists with the 1..8 slot recall — a slot filters the list, the Focus Set pins members within it.
+- **Focus Set: pin (toggle)** — toggle pinning on / off. It coexists with an active slot in one direction only: pinning while a slot is up is fine, but recalling a numbered slot drops the pin.
 - **Focus Set: clear** — empty the set in one shot.
 - **Focus Set: toggle selected** — flip membership of the selected tracks (in → out, out → in).
 - **Focus Set: set from selection** — replace the set contents with the current selection.
@@ -2877,14 +2861,14 @@ Persists per-project (saved into the RPP via the same project-config hook the nu
 
 # Parameter Groups
 
-Eight slots + a per-slot member list of REAPER tracks. The Active group's members all receive the same parameter edit when you twist a UF8 V-Pot, a UC1 knob, or move a fader on any one of them.
+Eight slots + a per-slot member list of REAPER tracks. Every member of every active group receives the same parameter edit when you twist a UF8 V-Pot or a UC1 knob. A fader broadcasts only when it is driving a plug-in parameter: ordinary track volume is deliberately left alone, so a group never moves levels you did not mean to move.
 
 Slot management UI in Settings → Parameter Groups. Each slot:
 
 - Name
 - Member tracks (Add Selection, Remove, Clear)
 
-Active group switch via the per-slot Active radio.
+Each slot has its own **Active** checkbox, and several can be active at once — an edit fans out to every member of every active slot.
 
 Temp-group mode: when `Multi-Select acts as Temp Group` is on, the active group is derived live from the current REAPER multi-track selection.
 
@@ -2895,7 +2879,7 @@ Which edits travel — and onto which tracks:
 
 This deliberately does **not** copy across *different* plug-ins: the same internal value rarely means the same thing on another plug-in, so only identical plug-ins mirror.
 
-Storage: each track's member-of-which-slots state is a bitmask in P_EXT (`P_EXT:rea_sixty:param_groups`). Slot metadata is in a project-scoped JSON sidecar.
+Storage: each track's member-of-which-slots state is a bitmask in P_EXT (`P_EXT:reasixty:pg_mask`). Slot names and active flags ride in the project file; the global JSON holds only the multi-select toggle.
 
 \newpage
 
@@ -2946,7 +2930,7 @@ The Bindings tab renders the UF8 + UC1 hardware as schematics. Every button / kn
 
 - **Action type:** Native / REAPER Action / MIDI Command
 - **Action name** (Native + REAPER Action) / MIDI message (MIDI Command)
-- **Modifier:** None / Shift / Cmd / Ctrl / combinations
+- **Modifier:** None / Shift / Cmd / Ctrl. There are four, and no combinations.
 - **Trigger:** Press / Hold / Long-press
 - **LED override:** colour + brightness
 
@@ -2956,7 +2940,7 @@ The three modifier-key actions (**Modifier: Shift / Fine (double-click latches)*
 
 Double-clicking `Shift` (= the SSL `FINE` key) latches it on. Press once more to unlatch.
 
-Modifier slots are per-modifier-combination, so a button can have up to 8 separate bindings.
+A button carries four short-press slots, four long-press and four double-press, one per modifier — twelve in all, and none of them a combination.
 
 ## Long-press
 
@@ -2965,7 +2949,7 @@ A long-press binding fires after the long-press threshold elapses. The short-pre
 ## Toggle / Hold semantics
 
 - **Press**: fires once per press edge
-- **Hold**: keeps firing while held (for repeats like bank-shift)
+- **Hold**: fires once when pressed and once when released, so the action can mirror the key. Nothing repeats while you hold it
 - **Long-press**: fires once when the long-press threshold elapses
 
 ## LED override
@@ -3012,7 +2996,7 @@ Settings → Behaviour → Tracks → "Surface mirrors: TCP / MCP" (default TCP)
 
 ## Auto-hide Trim/Read
 
-Settings → Modes → AUTO → "Hide Trim/Read tracks while in AUTO mode" — within AUTO selection mode only, hides tracks whose automation mode is Off/Trim (0) or Read (1).
+Settings → Modes → AUTO → "Show only tracks armed for automation writing (hide Trim / Read)" — within AUTO selection mode only, hides tracks whose automation mode is Off/Trim (0) or Read (1).
 
 \newpage
 
