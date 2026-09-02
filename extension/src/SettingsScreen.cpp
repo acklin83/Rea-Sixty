@@ -23238,14 +23238,19 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     ImGui_Spacing(ctx);
     ImGui_Text(ctx, "Setup");
     ImGui_Separator(ctx);
+    // ⚠ NOT parameter-group slot names: those moved into the project
+    // (ParameterGroups.cpp's save() writes only the multi-select toggle to the
+    // global file). The line said otherwise until 2026-09-02.
     ImGui_Text(ctx,
-        "  Export bundles bindings, plug-in maps, parameter-group");
+        "  Export bundles bindings, plug-in maps and every Settings");
     ImGui_Text(ctx,
-        "  slot names and every Settings preference into one file.");
+        "  preference into one file.");
     ImGui_Text(ctx,
-        "  Selection Sets + Parameter Group track membership stay");
+        "  Parameter Groups and project-scoped Selection Sets stay");
     ImGui_Text(ctx,
-        "  per-project and travel with the .RPP.");
+        "  per-project and travel with the .RPP. A Selection Set");
+    ImGui_Text(ctx,
+        "  ticked Global lives in the workspace and is exported.");
     ImGui_Spacing(ctx);
     static std::string s_setupMsg;
     if (ImGui_Button(ctx, "Export setup…##setup_export",

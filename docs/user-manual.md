@@ -206,7 +206,7 @@ The large notched CHANNEL encoder (right of the strips, pushable, surrounded by 
 | BC Cycle (Favourites) | The same for the Bus Compressor | Uses the BC favourite slots and the BC copy/own setting. |
 | Favourite Cycle (Focused Domain) | Whichever of the two the focused parameter belongs to | Falls back to the domain you last touched. Saves binding both cycles when one encoder should follow whatever is under your hand. |
 
-`Shift` + rotation re-banks ±1 strip in every mode (alias for Bank by 1ch).
+`Shift` + rotation is the encoder's Shift binding, which factory-defaults to **Instance Cycle**, not to Bank by 1ch. Rebind it in *Settings → Bindings → Channel Encoder* like any other slot.
 
 The encoder also drives **SEL-Mode cycle** when **Settings → Modes → FX / Cycle → "UF8 Channel Encoder"** is ticked AND a cycle-kind Selection Mode is engaged. In that override the encoder steps the active Selection-Mode cycle instead of its normal mode.
 
@@ -884,7 +884,7 @@ wheel's own page, or put **Fades: follow the fade with the view** on a key.
 
 # Settings window
 
-The Settings window is a dockable ReaImGui context. Open with the `360°` key (default), the **Open / Close Rea-Sixty Settings** action, or REAPER's Action `Rea-Sixty: Toggle Settings window`.
+The Settings window is a dockable ReaImGui context. Open with the `360°` key (default) or REAPER's action `Rea-Sixty: Open / Close Rea-Sixty Settings` (`REASIXTY_TOGGLE_SETTINGS`).
 
 Twelve sidebar tabs: Devices · Appearance · Behaviour · Bindings · Modes · FX Learn · Favourites · Selection Sets · Parameter Groups · Exchange · Manual · About.
 
@@ -1333,7 +1333,7 @@ Right-clicking a button in the schematic opens **Copy binding** / **Paste bindin
 
 ### Export / Import / Reset
 
-Bindings are bundled into the **Setup** export available from the **About** pane (single file covers bindings + plug-in maps + Settings preferences + Parameter Group slot names).
+Bindings are bundled into the **Setup** export available from the **About** pane (single file covers bindings + plug-in maps + Settings preferences).
 
 The Bindings pane itself offers **Save UC1 bindings…** and **Load UC1 bindings…** — these cover only the five UC1 controls. Loading replaces the UC1 bindings and leaves the UF8 bindings untouched.
 
@@ -1747,7 +1747,7 @@ The pane stacks several sections from top to bottom.
 
 ### Setup (Export / Import / Reset)
 
-A single bundled file format covering: bindings, learned plug-in maps, Parameter Group slot names, and every Settings preference. *Selection Sets + Parameter Group track memberships stay per-project and travel with the .RPP*.
+A single bundled file format covering: bindings, learned plug-in maps, and every Settings preference. *Parameter Group names and memberships are per-project and travel with the .RPP, as do Selection Sets you left project-scoped — a slot ticked **Global** lives in the workspace and does ride along in this file.*
 
 - **Export setup…** — save the bundle to a chosen JSON file.
 - **Import setup…** — load a bundle (replaces in-memory state immediately; warnings reported inline).
@@ -2193,7 +2193,7 @@ In the Bindings schematic the Top-Soft-Key labels for CS (Q1) / BC (Q2) **follow
 
 ## UF8 Plug-in Mode
 
-Engage with the **Toggle UF8 Plug-in Mode** (or **Toggle UF8 Plug-in Mode (with GUI)**) action. Default binding: long-press the Plug-in button.
+Engage with the **Toggle UF8 Plug-in Mode** (or **Toggle UF8 Plug-in Mode (with GUI)**) action. **No default binding** — put it on a key of your choosing. The Plug-in button's factory slots are SSL Strip Mode on Plain and SSL Strip Mode with GUI on Shift.
 
 While UF8 Plug-in Mode is on:
 
