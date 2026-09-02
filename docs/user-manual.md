@@ -152,11 +152,11 @@ Each strip's `SEL` toggles arm + monitor. Otherwise like REC. Same on the UF1.
 A sub-mode of REC / REC+MON. When **Settings → Modes → REC → "Enable RME / TotalReaper integration"** is on and TotalReaper is installed:
 
 - V-Pot rotation = preamp gain ±1 dB (per the *V-Pot rotation → Preamp gain* toggle)
-- V-Pot push / Cut / Solo / Polarity = configurable TotalReaper actions (48V toggle, pad toggle, phase invert, AutoLevel toggle).
+- V-Pot push / Cut / Solo = configurable TotalReaper actions (48V toggle, pad toggle, phase invert, AutoLevel toggle). Polarity is a UC1 assignment; the UF8 half has three pickers, not four.
 - Shift+V-Pot rotation = change input channel
 - The strip's colour bar shows the input name ("Mic 1", "Line 3") instead of the CS variant label
 
-The UC1 and the UF1 get the same thing on their own controls, with their own assignments in Settings, so you can opt one surface in without the other. On the UC1 it is Encoder 2, Cut, Solo and Polarity. On the UF1 it is the V-Pot above the fader (rotation and push), Cut and Solo, all acting on the channel the fader side is showing. Out of the box all three surfaces come set up the same way: 48V on the push, pad on Cut, phase on Solo.
+The UC1 and the UF1 get the same thing on their own controls, with their own assignments in Settings, so you can opt one surface in without the other. On the UC1 it is Encoder 2, Cut, Solo and Polarity. On the UF1 it is the V-Pot above the fader (rotation and push), Cut and Solo, all acting on the channel the fader side is showing. Out of the box only the UF1 is set up that way — 48V on the push, pad on Cut, phase on Solo. The UC1 puts phase on its POLARITY key and leaves Solo unassigned, and the UF8's three pickers all start on None.
 
 Every surface reads out the same way, because a UF8 strip and the UF1 channel are the same channel strip: `48V Pd Ph` on the left of the value line, the preamp gain on the right, the V-Pot readout bar under it riding the gain from 0 to +75 dB, and the channel-strip type cell naming the hardware input ("MA 5", "An 1") in place of the plug-in name. A track TotalReaper has said nothing about keeps its normal readout rather than showing a made-up 0.0 dB.
 
@@ -164,7 +164,7 @@ While REC + RME is engaged, the UF1's Cut and Solo LEDs show the TotalMix state 
 
 ## AUTO
 
-The strip's `SEL` cycles through automation modes (Off → Read → Touch → Latch → Write → Trim, then back). V-Pots become read-only automation-mode indicators.
+The strip's `SEL` steps the track's automation mode, one REAPER mode per press, wrapping at the end: Trim/Read → Read → Touch → Write → Latch → Latch Preview → back to the start. The V-Pots are not taken over — since 2026-06-24 they keep doing whatever they were doing.
 
 When **Settings → Modes → AUTO → "Show only tracks armed for automation writing (hide Trim / Read)"** is on, tracks set to Trim or Read disappear from the surface so only writing-armed tracks remain visible.
 
@@ -186,14 +186,14 @@ When the cycle lands on a learned Instance the per-domain Instance index updates
 
 # Channel Encoder modes
 
-The large notched CHANNEL encoder (right of the strips, pushable, surrounded by the cursor pad) runs one of fifteen modes. Switch with the corresponding **Encoder Mode → …** action. The current mode persists across REAPER restarts.
+The large notched CHANNEL encoder (in the right-hand panel, pushable, with the cursor pad well below it rather than around it) runs one of fifteen modes. Switch with the corresponding **Encoder Mode → …** action. The current mode persists across REAPER restarts.
 
 | Mode | Rotation acts on | Notes |
 |---|---|---|
 | Channel Select | Move REAPER track selection ± | Default mode. Strips re-bank to keep selection visible. |
 | Nudge | Playhead nudge | Step size is Rea-Sixty's own, under Settings → Modes → Nudge: an amount plus a unit, one grid step by default |
 | Mousewheel | Synthesised scroll-wheel under the mouse cursor | Use to scroll plug-in windows or Project Browser |
-| Markers | Step prev / next marker | Stops playback while seeking |
+| Markers | Step prev / next marker | Seeks with playback following, it does not stop the transport |
 | Bank by 1ch | Shift the surface 1 strip left/right | Sub-strip precision |
 | Last Touched Param | Step the last-touched REAPER param ± | Fine increments |
 | Instance (Instance Cycle) | Walk Instances on the focused track | Same behaviour as the V-Pot Sel-Mode Instance Cycle, focused-track scope |
@@ -232,7 +232,7 @@ Bind any of these to a UF8 / UC1 button in Settings → Bindings. The same butto
 - **MarkersInRegion** — markers inside the region the playhead is in. Auto-rolls into the next region when the playhead crosses out.
 - **MarkersAll** — flat list of every marker in the project.
 
-The default view on Nav-Mode entry is configurable (Settings → Modes → NAV → *Default view*): Regions / MarkersInRegion / MarkersAll / Last used.
+Which view a surface opens on is set per surface in *Settings → Modes → NAV*: the UF8 picks Regions or Markers, the UC1 adds *Mirror UF8*. The old single *Default view* setting, with its *Last used* option, went away on 2026-05-28.
 
 ## What the UF8 strips show
 
@@ -251,7 +251,7 @@ When the project has more items than 8 strips, the overlay pages 8 at a time. Pa
 
 ## UC1 Encoder 2 takeover
 
-Off by default. When Settings → Modes → NAV → *Take over UC1 Encoder 2* is on:
+On by default. While *Settings → Modes → NAV → Take over LCD* is on, and Encoder 2 comes with it:
 
 - **Rotation** moves the cursor through items (sets a cursor pin that suppresses auto-follow until the playhead catches up or you push).
 - **Plain push** — Jump + Drill / Jump only / Drill only (configurable).
@@ -295,40 +295,40 @@ Per strip, from top to bottom:
 | Colour TFT (scribble strip) | Upper zone = track name / mode-dependent. Lower zone = parameter readout. Track-colour bar at the bottom. | Hijacked by Plug-in Modes for parameter / FX names. |
 | V-Pot rotation | Pan | Re-maps per Selection Mode (REC + RME → preamp gain; AUTO → automation indicator; FX Cycle / Instance Cycle → walk FX/Instances). In Pan, turning records track-pan automation in Touch mode and holds on release. |
 | V-Pot push | Centre Pan | In FX Cycle / Instance Cycle Sel-Modes → open the active FX's GUI. |
-| `SOLO` | Solo | LED colour follows REAPER track colour when *Settings → Appearance → Surface display → "SEL LED follows REAPER track colour"* is on. |
+| `SOLO` | Solo | Yellow, the class colour. The track-colour setting in *Appearance → Surface display* drives the SEL LED, not this one. |
 | `CUT` | Mute |  |
 | `SEL` | Selection-Mode dependent | NORM = exclusive select; REC = arm; REC+MON = arm + monitor; AUTO = cycle automation mode. Long-press on a folder parent toggles spill. |
 | Capacitive touch (fader) | Drives REAPER's "touch" automation | Alt/Option held during touch → snap back on release (Settings → Behaviour → Keyboard). |
-| 100 mm motorised fader | Track volume | Full 16-bit pitch-bend protocol. |
+| 100 mm motorised fader | Track volume | 14-bit MCU pitch-bend, two 7-bit halves, 0 to 0x3FFF. |
 
 ## Above the strips: 8 Top Soft-Keys + bank selectors
 
 A row of 8 buttons above the V-Pots = **Top Soft-Keys 1..8**. By default each one focuses the SSL plug-in parameter at its strip position within the current PAGE bank (SSL 360° factory behaviour). Rebindable per-button.
 
-Left of the soft-keys: 6 small bank-selector buttons — **V-POT** + **1 / 2 / 3 / 4 / 5**. Each picks one of the 6 soft-key pages, in either domain. The bus comp's plug-in fills only the first two; the other four are ordinary user banks. Default action **Select soft-key bank (param 0..5)**.
+In the right-hand panel: 6 small bank-selector buttons — **V-POT** + **1 / 2 / 3 / 4 / 5**. Each picks one of the 6 soft-key pages, in either domain. The bus comp's plug-in fills only the first two; the other four are ordinary user banks. Default action **Select soft-key bank (param 0..5)**.
 
 ## Right of the strips: CHANNEL encoder + cursor pad
 
 A single block:
 
 - **Large notched CHANNEL encoder** (push-button rotary). Rotation drives the active Channel Encoder mode (see chapter Channel Encoder modes). Push = mode-specific.
-- **Cursor pad** — 5 buttons (4 arrows + central circle) **surrounding the encoder**.
+- **Cursor pad** — 5 buttons (4 arrows + central circle), in the right-hand panel below the BANK row. They do not surround the encoder.
   - Default behaviour: **zoom** via the **Zoom in vertically** / **Zoom out vertically** / **Zoom out horizontally** / **Zoom in horizontally** / **Zoom to fit project** actions (REAPER actions 40111 / 40112 / 1011 / 1012 / 40295).
   - SSL's reference UG also documents a "Cursor-Transport" mode (press-and-hold CHANNEL encoder to enter; ↓=Stop ↑=Play ←=Rew →=FF centre=Rec). Rea-Sixty leaves these as the standard zoom bindings — rebind them to transport actions via Settings → Bindings if you want SSL's behaviour.
 - **NAV / NUDGE / FOCUS** mode buttons (around the encoder; ButtonId entries `Nav`, `Nudge`, `EncFocus`). NAV carries **Nav Mode (Markers & Regions): toggle**, NUDGE carries **Encoder Mode → Nudge**, FOCUS carries **Encoder Mode → Last Touched Param**. They shipped unbound between 2026-05-19 and 2026-09-02.
 - **CHANNEL encoder push** (`ChannelPush`) — **Plug-in: toggle focused GUI**, the same thing the UC1's Encoder-2 push and the UF1's encoder push do. Also unbound until 2026-09-02.
 
-Above the encoder block: **Q1 / Q2 / Q3** ("Quick" user keys). Default bindings — Q1 = CS, Q2 = BC, Q3 = I/O meter (matches SSL's locked Plug-in Mixer assignment).
+Top left of the unit, beside the LAYER keys: **Q1 / Q2 / Q3** ("Quick" user keys). Factory bindings — Q1 = *Soft-Key Set 8 (SSL Channel Strip)*, Q2 = *Soft-Key Set 9 (SSL Bus Comp)*, Q3 = *Soft-Key Set 1*, the first of your own.
 
-## Right of the encoder column: NORM / REC / AUTO
+## Top of the right-hand panel, above the encoder: NORM / REC / AUTO
 
 Three buttons (Selection Mode block), each carrying the mode its silk-screen names: **Selection Mode → NORM (SEL Button)**, **Selection Mode → REC + MON (SEL Button)** and **Selection Mode → AUTO (V-Pot)**. REC gets REC + MON rather than plain REC, because arm plus monitor is the one you reach for. Rebind to any other Selection Mode action, including **FX Cycle** and **Instance Cycle**, via Settings → Bindings. They shipped unbound between 2026-05-14 and 2026-09-02.
 
-## Above NORM/REC/AUTO: AUTOMATION row
+## Left panel: AUTOMATION row
 
 Six buttons — **Read / Write / Touch / Latch / Trim / Off**. Default actions **Automation: Read**, **Automation: Write**, **Automation: Touch**, **Automation: Latch**, **Automation: Trim**, **Automation: Off / Trim** (set the automation mode of the focused track).
 
-## Below the strips: PLUGIN / CHANNEL / mode row
+## Left panel: PLUGIN / CHANNEL, PAGE and the SEND/PLUGIN grid
 
 | Button | Default |
 |---|---|
@@ -340,17 +340,17 @@ Six buttons — **Read / Write / Touch / Latch / Trim / Off**. Default actions *
 
 ## FLIP / PAN / FINE
 
-Three buttons in their own cluster:
+Three buttons, and not together: FLIP sits in the left panel, PAN and FINE at the top of the right one.
 
 | Key | Default action |
 |---|---|
 | `FLIP` | **Toggle FLIP (fader ↔ V-Pot)** — swap fader and V-Pot values for the active mode. |
-| `PAN` | **Toggle V-Pots → Pan** — force V-Pots to Pan regardless of the active Selection Mode. Escape hatch from cycle / REC / AUTO modes. |
+| `PAN` | **Toggle V-Pots → Pan** — force V-Pots to Pan regardless of the active Selection Mode. Escape hatch from cycle / REC / AUTO modes. It carried the Nav-Mode toggle between Phase 2.8 and 2026-09-02, while the NAV key itself was unbound. |
 | `FINE` | **Modifier: Shift / Fine (double-click latches)** (the SSL "FINE" = "Shift" key). Double-click latches it on; press again to unlatch. With *Settings → Devices → V-Pot / encoder feel → Shift activates Fine mode* on, holding this also drops V-Pot / encoder step size to ×0.25 (faders unaffected). |
 
 ## Layer keys
 
-`LAYER 1 / 2 / 3` — three SSL DAW layers. Bindable. Layer 3 LED on certain UF8 units does not light up — confirmed hardware quirk, not a Rea-Sixty bug. Layer functionality itself works.
+`LAYER 1 / 2 / 3` — three SSL DAW layers. Bindable, though Layer 3 is drawn locked in the editor and cannot be navigated there; the hardware key still switches to it. Layer 3 LED on certain UF8 units does not light up — confirmed hardware quirk, not a Rea-Sixty bug. Layer functionality itself works.
 
 ## 360° key
 

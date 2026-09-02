@@ -787,11 +787,12 @@ void seedFactoryDefaults_(Config& c)
     L1[ButtonId::Flip]      = mkBuiltin("flip",                  Behavior::Toggle,    "FLIP");
     L1[ButtonId::PluginBtn] = mkBuiltin("ssl_strip_mode_toggle", Behavior::Toggle,    "PLUGIN");
     L1[ButtonId::Btn360]    = mkBuiltin("mixer_toggle",          Behavior::Momentary, "360");
-    // PAN → Nav Mode (Markers & Regions) — ROADMAP Phase 2.8 factory
-    // default. pan_force stays available as a builtin; users who'd
-    // rather keep PAN forcing V-Pot Pan can rebind via Settings →
-    // Bindings.
-    L1[ButtonId::Pan]       = mkBuiltin("marker_overlay_toggle", Behavior::Toggle,    "NAV");
+    // ⇨ PAN IS PAN AGAIN, since 2026-09-02. It carried the Nav-Mode toggle from
+    // Phase 2.8 onward, for the good reason that nothing else did — the NAV key
+    // beside the encoder shipped unbound. Now that NAV carries it, two keys were
+    // doing the same thing and the one with PAN printed on it was the wrong one
+    // (Frank: "das ist V-Pot zu Pan bei mir! Muss es auch ab werk sein").
+    L1[ButtonId::Pan]       = mkBuiltin("pan_force", Behavior::Toggle, "PAN");
 
     // Shift+Plugin: same toggle plus open/close the focused track's
     // user-mapped plug-in GUI.
