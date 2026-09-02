@@ -305,7 +305,7 @@ Per strip, from top to bottom:
 
 A row of 8 buttons above the V-Pots = **Top Soft-Keys 1..8**. By default each one focuses the SSL plug-in parameter at its strip position within the current PAGE bank (SSL 360° factory behaviour). Rebindable per-button.
 
-Left of the soft-keys: 6 small bank-selector buttons — **V-POT** + **1 / 2 / 3 / 4 / 5**. Each picks one of the 6 SSL CS soft-key banks (or 2 BC banks while in Bus-Comp). Default action **Select soft-key bank (param 0..5)**.
+Left of the soft-keys: 6 small bank-selector buttons — **V-POT** + **1 / 2 / 3 / 4 / 5**. Each picks one of the 6 soft-key pages, in either domain. The bus comp's plug-in fills only the first two; the other four are ordinary user banks. Default action **Select soft-key bank (param 0..5)**.
 
 ## Right of the strips: CHANNEL encoder + cursor pad
 
@@ -334,7 +334,7 @@ Six buttons — **Read / Write / Touch / Latch / Trim / Off**. Default actions *
 | `PLUGIN` | Toggles SSL Strip Mode (**Toggle SSL Strip Mode**). With Shift held: **Toggle SSL Strip Mode (with GUI)**. |
 | `CHANNEL` | **Home (clear routing toggles)** — clear send / receive routing toggles so V-Pots / faders return to track volume + pan. |
 | `BANK ←` / `BANK →` | Scroll ±8 strips. In UF8 Plug-in Mode → flip between fader-banks A / B (for 16-strip plug-ins). In a **"of focused track"** routing view → page the send / receive list by 8 (see *Send and Receive views*). |
-| `PAGE ←` / `PAGE →` | Step the SSL Soft-Key PAGE bank prev / next (6 CS banks + 2 BC banks). |
+| `PAGE ←` / `PAGE →` | Step the SSL Soft-Key PAGE bank prev / next, six pages in either domain. |
 | `SEND / PLUGIN 1..8` | 8 buttons. Default **8 sends of focused track** / **8 receives of focused track** (param N) — toggle the matching send / receive view. |
 
 ## FLIP / PAN / FINE
@@ -1133,7 +1133,7 @@ When you click a Top-Soft-Key (or a bank cell) in the schematic, the **Soft-Key 
 
 ### Soft-Key Sets
 
-A **set** is the six soft-key banks under one Quick key, and it has a number of its own, 1 to 7:
+A **set** is the six soft-key banks under one Quick key, and it has a number of its own, 1 to 9:
 
 | Set | Layer | Quick |
 |---|---|---|
@@ -1142,7 +1142,7 @@ A **set** is the six soft-key banks under one Quick key, and it has a number of 
 | 5 – 7 | 3 | Q1 – Q3 |
 | 8 – 9 | 1 | Q1 – Q2 |
 
-**Sets 8 and 9 are SSL's own CS and BC rows.** They are sets like the others and sit in the matrix with six banks each, named *SSL CS Bank 1* to *6* wherever the plug-in actually fills one. The channel strip fills all six. The bus comp fills two and leaves four completely empty, and those four are ordinary user banks: they read as a dash until you put something in them, and take a name and a dynamic kind like any other. On Plain, the keys SSL occupies stay SSL's and cannot be edited; the ones it leaves free are yours, and the whole Shift set is yours on every page. Engaging one of them means *dis*engaging: SSL's row is what the layer shows when no set is engaged, so picking Set 8 drops the set, points the domain at Channel Strip and selects the page. That is the same thing *Soft-Key Set 8 (SSL Channel Strip)* does from a key.
+**Sets 8 and 9 are SSL's own CS and BC rows.** They are sets like the others and sit in the matrix with six banks each, named *SSL CS Bank 1* to *6* and *SSL BC Bank 1* to *6* wherever the plug-in actually fills one. The channel strip fills all six. The bus comp fills two and leaves four completely empty, and those four are ordinary user banks: they read as a dash until you put something in them, and take a name and a dynamic kind like any other. On Plain, the keys SSL occupies stay SSL's and cannot be edited; the ones it leaves free are yours, and the whole Shift set is yours on every page. Engaging one of them means *dis*engaging: SSL's row is what the layer shows when no set is engaged, so picking Set 8 drops the set, points the domain at Channel Strip and selects the page. The action *Soft-Key Set 8 (SSL Channel Strip)* gets you the same row from a key, with two differences: it acts on the layer you are on rather than moving you to Layer 1, and it leaves the page where it was instead of selecting one. Only on Layer 1 does the editor recognise the row and mark it in the matrix.
 
 They were numbered 8 and 9 rather than 1 and 2 because set numbers are addresses that bindings point at, and renumbering would have moved everyone else's.
 
@@ -1154,7 +1154,7 @@ The set's name is what the mode-change banner and the focused-track panel say wh
 
 Each slot carries a **Behavior** (*Momentary*, *Toggle* or *Hold*), the same setting a regular button has.
 
-Every soft-key bank also holds **two sets of keys**: Plain and Shift. Holding the FINE key switches the whole row of eight, labels and all, and releasing returns to Plain. The **Plain / Shift** switch in the matrix header chooses which set you are editing, and the matrix cells and the scribble previews follow it. Like those two pickers it follows the hardware: press FINE to jump to the Shift set and press it again to come back to Plain. Releasing never moves it, so you can edit with the mouse. A set you left empty shows empty on the hardware, it does not borrow the Plain label. **While the Bindings pane is open the surface follows the Modifier row** rather than the key you are holding: the eight keys show the set you are editing and a press fires that set, so what you see on the hardware is what you are working on. Close the pane or switch to another one and the surface goes back to following the held key.
+Every soft-key bank also holds **two sets of keys**: Plain and Shift. Holding the FINE key switches the whole row of eight, labels and all, and releasing returns to Plain. The **Plain / Shift** switch in the matrix header chooses which set you are editing, and the matrix cells and the scribble previews follow it. Like those two pickers it follows the hardware: press FINE to jump to the Shift set and press it again to come back to Plain. Releasing never moves it, so you can edit with the mouse. A set you left empty shows empty on the hardware, it does not borrow the Plain label. **While the Bindings pane is open the surface follows the Plain / Shift switch** rather than the key you are holding: the eight keys show the set you are editing and a press fires that set, so what you see on the hardware is what you are working on. Close the pane or switch to another one and the surface goes back to following the held key.
 
 There is no Cmd or Ctrl set. The surface carries one modifier key and no more, so those two would have to come from the computer keyboard, where they already belong to the FX-Learn modifier layers.
 
@@ -1162,7 +1162,7 @@ Each set is a **full bank**, not just a second list of actions: its own actions,
 
 **A preset saved from Plain takes the Shift set with it**, whenever that set holds anything, because a bank is both sets and a preset of half of it would rebuild half a bank. Such a preset replaces **both** sets when you recall it, whichever one you happen to be editing, and the confirm dialog says so before you press it, the same rule a factory bank longer than eight keys follows. Save while you are on Shift and you get that one set, as before; a preset with no Shift half still lands in whichever set you recall it into, so a Plain preset can be recalled into Shift.
 
-**Each set can be its own dynamic bank.** Pick a kind with the Modifier row on Plain and Plain's bank becomes dynamic; pick one on Shift and that set becomes a bank of its own, so FX on Plain and Track Colours on Shift is a thing you can build. A set left on *Off (take Plain's bank)* does exactly that, which is how a set behaves out of the box.
+**Each set can be its own dynamic bank.** Pick a kind with the header switch on Plain and Plain's bank becomes dynamic; pick one on Shift and that set becomes a bank of its own, so FX on Plain and Track Colours on Shift is a thing you can build. A set left on *Off (take Plain's bank)* does exactly that, which is how a set behaves out of the box.
 
 When a bank is **dynamic** its keys come from the focused track. On Plain's bank the modifiers still run the FX-key gestures, except on a key you assigned in that set, which fires instead, so nothing you were already using goes away. A set with a bank of **its own** carries no gestures: holding the modifier is how you reached that bank, so pressing a key there is that bank's own push. A long press is still a long press either way.
 
@@ -1200,7 +1200,7 @@ Recalling a preset also turns the bank back into a static one. A **dynamic** ban
 
 **Recalling a preset names the bank after it.** Load *Drum compression* into a bank and that is what the bank is called, in the banner and in the panel's menu, without typing it a second time. Factory banks do the same, so a recalled *Encoder Modes* announces itself by name. Type over it whenever you want something else; the name is yours from then on.
 
-The field is never empty: with no name of your own it carries the name the bank would announce anyway — its dynamic kind (`FX`, `Groups`, `Colours`, `Favourites`, `Hue`), else its position (`Q2 Soft 3`). Clearing the field puts that default back, which is also how you undo a name.
+The field is never empty: with no name of your own it carries the name the bank would announce anyway — its dynamic kind (`FX`, `Groups`, `Colours`, `Favourites`, `CS Favourites`, `BC Favourites`, `Hue`), else its set and position (`Set 2, Soft 3`, or the set's own name in place of `Set 2`). On Sets 8 and 9 the default is the page the plug-in fills, `SSL CS Bank 3`. Clearing the field puts that default back, which is also how you undo a name.
 
 ### Dynamic soft-key banks
 
@@ -1228,7 +1228,7 @@ A dynamic bank announces itself in three places, so you never edit slots that ca
 - The eight scribble strips above it read the bank's kind (`FX`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`) rather than the stored slot labels, because those labels never reach the hardware while the bank is dynamic.
 - Clicking any of the eight keys shows what the bank computes instead of a slot editor, with the same **Dynamic bank** dropdown, so you can switch it back to static without hunting for the cell.
 
-Layer 1's Q1 and Q2 are driven by the plug-in and carry no user slots, so they cannot be made dynamic. Everything else can: Layer 1 Q3, and all three Quicks on Layers 2 and 3.
+On Sets 8 and 9 it depends on the page. A dynamic bank computes all eight keys, so it can only go where the plug-in claims none of them: the bus comp's four empty pages take one, the pages SSL fills do not. Every page of the other seven sets can.
 
 The UF1's ten soft-key banks take the same setting, in **Settings → Bindings → UF1**. There a whole bank is dynamic the same way, its four keys show four items at a time, and a **long press** on the UF1's `◄ ►` keys pages through them. A long press on a dynamic key itself fires half a second after you press it, under the finger, the same as every other long press on the surface. (`5-8` is always the DAW channel group, never the bank.) The FX-key gestures are global, so the five you set on either surface drive both.
 
@@ -1944,7 +1944,7 @@ These step *only* the Instance index (CS / BC / UF8-Mode-mapped). They are the f
 - **Instance: next (focused domain)** — next Instance in the focused domain on the focused track. Wraps.
 - **Instance: previous (focused domain)** — previous Instance in the focused domain.
 - **Soft-Key Set 8 (SSL Channel Strip)** — bring SSL's own channel-strip row back to the top soft-keys, which also sets the focused domain to Channel Strip (so a subsequent *Instance: next* walks CS Instances and the UC1's CS section refreshes). It drops whichever set was engaged on this layer, which is how the SSL row reappears. Named for the row you see rather than for the focus change underneath it.
-- **Soft-Key Set 9 (SSL Bus Comp)** — the same for SSL's bus-comp row. Both have a plain-numbered twin, *Soft-Key Set 8* and *Soft-Key Set 9*, which does the same thing.
+- **Soft-Key Set 9 (SSL Bus Comp)** — the same for SSL's bus-comp row. Both have a plain-numbered twin, *Soft-Key Set 8* and *Soft-Key Set 9*. Those go the matrix's way: they move you to Layer 1 and select the page, so from Layer 2 or 3 the two are not interchangeable.
 
 The focused parameter slot is **preserved across an Instance Cycle** when the new instance offers the same LinkSlot (same domain, same parameter convention). Stops the focused-param surfaces (UC1 BC/CS encoder, V-Pot mirroring) from snapping back to slot 0 — typically the Bypass / FX In toggle — on every cycle step. Cross-domain cycles (CS → BC) and UF8-only user maps still reset to slot 0 because the slot position isn't meaningful there.
 
@@ -1972,7 +1972,7 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 - **Bank → (UF8 Plug-in Mode: fader-bank; else ±strip scroll)** — scroll 8 strips right (same fader-bank flip in UF8 Plug-in Mode).
 - **Bank by 1ch ← (one strip)** / **Bank by 1ch → (one strip)** — scroll one strip at a time.
 - **Home (clear routing toggles)** — clear all routing toggles (send / receive views) so V-Pots and faders return to track volume + pan. Also resets the send-list page to the start.
-- **Page ← (soft-key bank prev)** / **Page → (soft-key bank next)** — step the SSL Soft-Key PAGE bank (prev / next of the 6 CS banks + 2 BC banks).
+- **Page ← (soft-key bank prev)** / **Page → (soft-key bank next)** — step the SSL Soft-Key PAGE bank, prev / next of the six pages, in either domain.
 
 ## DAW Layer keys
 
