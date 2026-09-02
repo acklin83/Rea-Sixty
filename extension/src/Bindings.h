@@ -558,7 +558,22 @@ enum class DynamicBankKind : uint8_t {
     // house can do. Keys wear each slot's LED colour and light while the bridge
     // reports that scene as the one showing.
     HueScenes    = 6,
+    // ⇨ THE SAME EIGHT, PINNED TO ONE DOMAIN. Favourites above follows whatever
+    // you last touched, which is what you want on one bank. These two do not, so
+    // a rig can carry its channel strips on one bank and its bus comps on
+    // another, both always what they say (Frank 2026-09-02). They replace the CS
+    // and BC factory banks, which did the same as a static snapshot and cost two
+    // of the six places in a set.
+    CsFavourites = 7,
+    BcFavourites = 8,
 };
+
+// ⛔ THE PARSER'S UPPER BOUND LIVES HERE, NOT IN THE PARSER. Both loaders check
+// the stored number against it, and when that check named the last kind directly
+// a new kind was accepted by the editor, written to disk, and then silently
+// dropped on the next load — the bank came back static and nothing said why.
+// Adding a kind means moving this line, and only this line.
+constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::BcFavourites;
 
 struct UserQuickSubBank {
     Binding slots[kSlotsPerSubBank];   // top-soft-key positions

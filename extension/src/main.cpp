@@ -3214,6 +3214,16 @@ static bool favDomainIsBc_()
     return g_softKeyDomain.load() == 1;
 }
 
+// Which domain a favourites bank speaks for. THE ONE PLACE that answers it, so
+// the label, the LED and the press can never disagree about what the key does.
+static bool favKindIsBc_(uf8::bindings::DynamicBankKind kind)
+{
+    using DK = uf8::bindings::DynamicBankKind;
+    if (kind == DK::CsFavourites) return false;
+    if (kind == DK::BcFavourites) return true;
+    return favDomainIsBc_();          // DK::Favourites — follows the focus
+}
+
 // The domain the SSL soft-key row currently represents. With "Parameter change
 // switches soft-key bank" ON it tracks the focused param's domain; with it OFF
 // it stays on the latched g_softKeyDomain so a param touch in the other domain
@@ -6921,11 +6931,14 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
             info.led = member ? 2 : 1;   // bright = focused track is a member
             return info;
         }
-        case DK::Favourites: {
-            // The 8 favourites of whichever domain is live. favDomainIsBc_ is the
-            // SAME resolver switch_cs_N / fav_cycle use, so the bank can never
-            // disagree with the actions about which class you are on.
-            const bool isBc = favDomainIsBc_();
+        case DK::Favourites:
+        case DK::CsFavourites:
+        case DK::BcFavourites: {
+            // The 8 favourites of one domain. Which one comes from favKindIsBc_:
+            // the plain kind follows whatever you last touched (the SAME resolver
+            // switch_cs_N and fav_cycle use, so the bank can never disagree with
+            // the actions), the two fixed kinds say so outright.
+            const bool isBc = favKindIsBc_(kind);
             info.present = true;
             std::string addName, favLbl;
             const bool taken = isBc ? resolveBcFav(slot, addName, favLbl)
@@ -7059,7 +7072,8 @@ static int dynamicBankItemCountUf1_(uf8::bindings::DynamicBankKind kind,
     using DK = uf8::bindings::DynamicBankKind;
     if (kind == DK::FxBank) return tr ? TrackFX_GetCount(tr) : 0;
     if (kind == DK::ParamGroups || kind == DK::TrackColours
-        || kind == DK::Favourites || kind == DK::HueScenes) return 8;
+        || kind == DK::Favourites || kind == DK::HueScenes
+        || kind == DK::CsFavourites || kind == DK::BcFavourites) return 8;
     return 0;
 }
 
@@ -7335,11 +7349,12 @@ static void applyDynBankHueSceneOp_(int slot, int gesture)
         uf1FlashTimecode_(nm, 1200);
 }
 
-static void applyDynBankFavouriteOp_(int slot, int gesture)
+static void applyDynBankFavouriteOp_(int slot, int gesture,
+                                     uf8::bindings::DynamicBankKind kind)
 {
     if (slot < 0 || slot >= 8 || gesture != 0) return;
-    if (favDomainIsBc_()) g_bcSwitchReq.store(slot);
-    else                  g_csSwitchReq.store(slot);
+    if (favKindIsBc_(kind)) g_bcSwitchReq.store(slot);
+    else                    g_csSwitchReq.store(slot);
 }
 
 // Main-thread executor for a UF8 dynamic bank press (drained in onTimer).
@@ -7366,7 +7381,9 @@ static void applyDynBankReq_(uint32_t enc)
             applyDynBankColourOp_(tr, slot, gesture);
             break;
         case DK::Favourites:
-            applyDynBankFavouriteOp_(slot, gesture);
+        case DK::CsFavourites:
+        case DK::BcFavourites:
+            applyDynBankFavouriteOp_(slot, gesture, kind);
             break;
         default: break;
     }
@@ -7394,7 +7411,9 @@ static void applyDynBankUf1_(uf8::bindings::DynamicBankKind kind,
             if (absIdx < 8) applyDynBankColourOp_(tr, absIdx, gesture);
             break;
         case DK::Favourites:
-            if (absIdx < 8) applyDynBankFavouriteOp_(absIdx, gesture);
+        case DK::CsFavourites:
+        case DK::BcFavourites:
+            if (absIdx < 8) applyDynBankFavouriteOp_(absIdx, gesture, kind);
             break;
         default: break;
     }
@@ -27515,6 +27534,8 @@ static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod)
         case DynamicBankKind::ParamGroups:  return "Groups";
         case DynamicBankKind::TrackColours: return reasixty_sp("Colours", "Colors");
         case DynamicBankKind::Favourites:   return "Favourites";
+        case DynamicBankKind::CsFavourites: return "CS Favourites";
+        case DynamicBankKind::BcFavourites: return "BC Favourites";
         case DynamicBankKind::HueScenes:    return "Hue";
         default: break;
     }
@@ -27576,6 +27597,9 @@ static std::string uf1BankDisplayName_(int bank, int mod)
         case DynamicBankKind::ParamGroups:  return "GROUPS";
         case DynamicBankKind::TrackColours: return reasixty_sp("COLOURS", "COLORS");
         case DynamicBankKind::Favourites:   return "FAVS";
+        // Seven segments: C, S, B and F all exist in that font.
+        case DynamicBankKind::CsFavourites: return "CS FAVS";
+        case DynamicBankKind::BcFavourites: return "BC FAVS";
         // H U E — checked in the font before it was chosen (0x76 / 0x3e / 0x79).
         // K, M, V, W and X do not exist there, and a word this field cannot draw
         // does not fail loudly, it just reads as a different word.

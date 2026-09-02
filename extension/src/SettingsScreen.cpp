@@ -1153,6 +1153,8 @@ static const char* dynKindLabel_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::TrackColours:
             return reasixty_sp("Track Colours", "Track Colors");
         case DynamicBankKind::Favourites:  return "CS / BC Favourites";
+        case DynamicBankKind::CsFavourites: return "CS Favourites";
+        case DynamicBankKind::BcFavourites: return "BC Favourites";
         case DynamicBankKind::HueScenes:   return "Hue Scenes";
         default:                           return "Off (static slots)";
     }
@@ -1180,6 +1182,8 @@ static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::TrackColours:
             return reasixty_sp("COLOURS", "COLORS");
         case DynamicBankKind::Favourites:  return "FAVS";
+        case DynamicBankKind::CsFavourites: return "CS FAVS";
+        case DynamicBankKind::BcFavourites: return "BC FAVS";
         case DynamicBankKind::HueScenes:   return "HUE";
         default:                           return "";
     }
@@ -5069,6 +5073,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                     DynamicBankKind::None,        DynamicBankKind::FxBank,
                     DynamicBankKind::ParamGroups, DynamicBankKind::TrackColours,
                     DynamicBankKind::Favourites,  DynamicBankKind::HueScenes,
+                    DynamicBankKind::CsFavourites, DynamicBankKind::BcFavourites,
                 };
                 for (const auto k : kKinds) {
                     bool sel = (k == dynMine);
@@ -5849,7 +5854,9 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
             { DynamicBankKind::ParamGroups,  "Parameter Groups" },
             { DynamicBankKind::TrackColours,
               reasixty_sp("Track Colours", "Track Colors") },
-            { DynamicBankKind::Favourites,   "CS / BC Favourites" },
+            { DynamicBankKind::Favourites,   "CS / BC Favourites (follows focus)" },
+            { DynamicBankKind::CsFavourites, "CS Favourites" },
+            { DynamicBankKind::BcFavourites, "BC Favourites" },
                 { DynamicBankKind::HueScenes,    "Hue Scenes" },
         };
         // This set's OWN kind: the combo is where you give a set a bank, and on a
@@ -5971,6 +5978,13 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
 
         if (curKind == DynamicBankKind::Favourites) {
             ImGui_TextDisabled(ctx, "CS or BC, whichever you last touched.");
+            ImGui_Spacing(ctx);
+        }
+        if (curKind == DynamicBankKind::CsFavourites
+         || curKind == DynamicBankKind::BcFavourites) {
+            ImGui_TextDisabled(ctx,
+                "This one domain, whatever you are focused on. Put the other on "
+                "a second bank and both are always what they say.");
             ImGui_Spacing(ctx);
         }
 
@@ -6400,10 +6414,19 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         if (ImGui_BeginPopupModal(ctx,
                                   "Load factory set?###fac_loadset_confirm",
                                   nullptr, nullptr)) {
-            ImGui_TextWrapped(ctx,
-                "Overwrite all 48 slots of Layer 1 / Quick 3 on the "
-                "selected modifier set? A set holds six soft-key banks, so the "
-                "last factory bank is not part of this.");
+            {
+                // Say it only while it is true: with five factory banks and six
+                // places they all fit, and that warning was about a seventh.
+                char q[220];
+                std::snprintf(q, sizeof(q),
+                    "Overwrite all 48 slots of Layer 1 / Quick 3 on the selected "
+                    "modifier set?%s",
+                    (factoryBankPresetCount() > kSubBanksPerQuick)
+                        ? " A set holds six soft-key banks, so the last factory "
+                          "bank is not part of this."
+                        : "");
+                ImGui_TextWrapped(ctx, q);
+            }
             ImGui_Spacing(ctx);
             if (ImGui_Button(ctx, "Load set##fac_loadset_ok",
                              nullptr, nullptr)) {
@@ -7118,7 +7141,9 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 { DynamicBankKind::ParamGroups,  "Parameter Groups" },
                 { DynamicBankKind::TrackColours,
               reasixty_sp("Track Colours", "Track Colors") },
-                { DynamicBankKind::Favourites,   "CS / BC Favourites" },
+                { DynamicBankKind::Favourites,   "CS / BC Favourites (follows focus)" },
+                { DynamicBankKind::CsFavourites, "CS Favourites" },
+                { DynamicBankKind::BcFavourites, "BC Favourites" },
                 { DynamicBankKind::HueScenes,    "Hue Scenes" },
             };
             // This set's OWN kind — "Off" on a set means "take Plain's bank".
@@ -7213,6 +7238,12 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 if (curKind == DynamicBankKind::Favourites) {
                     ImGui_TextDisabled(ctx,
                         "CS or BC, whichever you last touched.");
+                    ImGui_Spacing(ctx);
+                }
+                if (curKind == DynamicBankKind::CsFavourites
+                 || curKind == DynamicBankKind::BcFavourites) {
+                    ImGui_TextDisabled(ctx,
+                        "This one domain, whatever you are focused on.");
                     ImGui_Spacing(ctx);
                 }
                 if (curKind == DynamicBankKind::TrackColours) {

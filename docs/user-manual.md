@@ -1167,17 +1167,17 @@ This works with no UF8 attached, so you can still walk through every set and ban
 
 ### Factory Rea-Sixty soft-key banks
 
-In the bank editor there is a **Rea-Sixty factory banks** section. Pick a curated bank from the combo and **Recall into this bank**, or **Load full set → Layer 1 / Quick 3** to drop banks into Layer 1 / Quick 3's six soft-key banks at once. A set holds six banks and there are seven factory banks, so the set loads the first six and the last one (Brightness) stays out; recall that one into a bank of its own.
+In the bank editor there is a **Rea-Sixty factory banks** section. Pick a curated bank from the combo and **Recall into this bank**, or **Load full set → Layer 1 / Quick 3** to drop all five into Layer 1 / Quick 3's six soft-key banks at once, leaving one place free.
 
-The seven factory banks are:
+The five factory banks are:
 
 - **Encoder Modes** — Channel-Encoder mode switches (Ch Select / Instance / FX Cycle / FX Move / CS Cycle / Markers / Nudge / Focus Wheel).
 - **Focus Set & Selsets** — pin / add / remove / toggle / set-from-selection / pin-focused / clear, plus Cycle Sets.
 - **Plug-in Ops** — FX GUI / FX Chain / Close All FX / Bypass / Offline / Preset prev-next / SSL Strip.
 - **Learn / Master** — Learn-HUD / Quick Learn (project + track) / Touch-Learn / Master pin left-right / focused-track panel / Out-Gain.
-- **CS Favourites** — the eight *Switch to CS Favourite N* actions; the labels show each favourite's plug-in short name live (falling back to "CS Fav N" when a slot is empty).
-- **BC Favourites** — the same for the eight Bus-Compressor favourites.
 - **Brightness** — Both / LCDs / LEDs × up / down.
+
+The favourites used to be here as two more banks, one for CS and one for BC. They are **dynamic kinds** instead now (see *Dynamic soft-key banks*), which does the same thing and stays live rather than being a snapshot. Five banks also fit the six places in a set, so the full-set load leaves nothing behind.
 
 These are built only from Rea-Sixty's own actions; generic DAW actions (deselect, arm, zoom, etc.) you bind yourself to a free slot.
 
@@ -1201,14 +1201,18 @@ Open a bank cell in the matrix and look for the **Dynamic bank** section. The dr
 | `FX (focused track, paged)` | The focused track's plug-ins |
 | `Parameter Groups` | Parameter Groups 1–8 |
 | `Track Colours` | Your eight-colour palette |
-| `CS / BC Favourites` | Your eight Channel Strip or Bus Compressor favourites |
+| `CS / BC Favourites (follows focus)` | Your eight favourites of whichever domain you last touched |
+| `CS Favourites` | The eight Channel Strip favourites, whatever you are focused on |
+| `BC Favourites` | The eight Bus Compressor favourites, the same way |
+
+The three favourite kinds differ in one thing only. The first follows the focus, which is what you want when one bank should serve both. The other two do not, so a rig can carry its channel strips on one bank and its bus comps on another and both are always what they say. All three read the plug-in's short name onto the key, live, and light the key that is on the track.
 
 The choice is stored per bank, so each of the six banks in a set can be dynamic or static independently. While a bank is dynamic its eight stored slots are ignored — they are not lost, and turning the bank back to `Off` restores them.
 
 A dynamic bank announces itself in three places, so you never edit slots that cannot fire:
 
 - The bank's cell in the matrix carries an **amber tick** in its top-right corner.
-- The eight scribble strips above it read the bank's kind (`FX`, `GROUPS`, `COLOURS`, `FAVS`) rather than the stored slot labels, because those labels never reach the hardware while the bank is dynamic.
+- The eight scribble strips above it read the bank's kind (`FX`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`) rather than the stored slot labels, because those labels never reach the hardware while the bank is dynamic.
 - Clicking any of the eight keys shows what the bank computes instead of a slot editor, with the same **Dynamic bank** dropdown, so you can switch it back to static without hunting for the cell.
 
 Layer 1's Q1 and Q2 are driven by the plug-in and carry no user slots, so they cannot be made dynamic. Everything else can: Layer 1 Q3, and all three Quicks on Layers 2 and 3.

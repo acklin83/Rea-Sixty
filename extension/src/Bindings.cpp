@@ -2115,7 +2115,7 @@ void parseSubBankDynamic_(wdl_json_element* root, Config& out, int forceLayer = 
         if (layer   < 0 || layer   >= 3)                 continue;
         if (quick   < 0 || quick   >= kQuicksPerLayer)   continue;
         if (subBank < 0 || subBank >= kSubBanksPerQuick) continue;
-        if (kind < 0 || kind > static_cast<int>(DynamicBankKind::HueScenes))
+        if (kind < 0 || kind > static_cast<int>(kDynamicBankKindLast))
             continue;
         int mod = 0;   // absent = Plain (pre-v26 shape)
         if (auto* v = eo->get_item_by_name("mod"))
@@ -2189,7 +2189,7 @@ void parseUf1SoftBankDynamic_(wdl_json_element* root, Config& out)
         if (auto* v = eo->get_item_by_name("kind"))
             if (auto* s = v->get_string_value(true)) kind = std::atoi(s);
         if (bank < 0 || bank >= kUf1SoftBankCount) continue;
-        if (kind < 0 || kind > static_cast<int>(DynamicBankKind::HueScenes))
+        if (kind < 0 || kind > static_cast<int>(kDynamicBankKindLast))
             continue;
         int mod = 0;   // absent = Plain (pre-v26 shape)
         if (auto* v = eo->get_item_by_name("mod"))
@@ -5443,30 +5443,13 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             {"focused_panel_toggle",    "Panel"},
             {"uc1_outgain_fader_toggle","Out Gain"},
         }));
-        // CS Favourites — switch_cs_1..8. Static "CS Fav N" labels here; the
-        // top-soft-key resolver overrides them with the favourite's name
-        // at render time (main.cpp), falling back to "CS Fav N" when empty.
-        v.push_back(bank("CS Favourites", {
-            {"switch_cs_1", "CS Fav 1"},
-            {"switch_cs_2", "CS Fav 2"},
-            {"switch_cs_3", "CS Fav 3"},
-            {"switch_cs_4", "CS Fav 4"},
-            {"switch_cs_5", "CS Fav 5"},
-            {"switch_cs_6", "CS Fav 6"},
-            {"switch_cs_7", "CS Fav 7"},
-            {"switch_cs_8", "CS Fav 8"},
-        }));
-        // BC Favourites — switch_bc_1..8. Same render-time label override as CS.
-        v.push_back(bank("BC Favourites", {
-            {"switch_bc_1", "BC Fav 1"},
-            {"switch_bc_2", "BC Fav 2"},
-            {"switch_bc_3", "BC Fav 3"},
-            {"switch_bc_4", "BC Fav 4"},
-            {"switch_bc_5", "BC Fav 5"},
-            {"switch_bc_6", "BC Fav 6"},
-            {"switch_bc_7", "BC Fav 7"},
-            {"switch_bc_8", "BC Fav 8"},
-        }));
+        // ⛔ CS Favourites und BC Favourites standen hier als statische Bänke aus
+        // acht switch_cs_N / switch_bc_N. Sie sind seit 2026-09-02 DYNAMISCHE
+        // ARTEN (DynamicBankKind::CsFavourites / BcFavourites), was dasselbe tut
+        // und dabei live bleibt statt eine Momentaufnahme zu sein. Zwei Bänke
+        // weniger heisst ausserdem: fünf passen in die sechs Plätze eines Sets,
+        // und "Load full set" lässt nichts mehr liegen (Frank 2026-09-02:
+        // "Die haben wir doch schon als dynamic banks?").
         // Brightness — replaces the old "View / Utility" filler bank (Focus
         // CS/BC did nothing, the rest was junk). Only brightness is genuinely
         // useful here, so make the whole bank coherent: all / LCDs / LEDs ×
