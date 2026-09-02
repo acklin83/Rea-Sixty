@@ -5566,7 +5566,14 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             {"temp_selset_set_from_selection", "Set frm Sel", 0},
             {"temp_selset_pin_focused",     "Pin Focused", 0},
             {"temp_selset_clear",           "Clear Set", 0},
-            {"selset_cycle",                "Cycle Sets", 1},
+            // ⇨ SCOPE, NOT CYCLE. selset_cycle sat here as "Cycle Sets" and was
+            // the wrong kind of thing for this bank twice over: it is an ENCODER
+            // action whose param is a direction, and stepping the numbered slots
+            // is not what a Focus Set bank is for. What belongs here is the
+            // scope, because setting it on one surface and pressing on the other
+            // is the failure this bank invites — Frank set UF1 and then wondered
+            // why the UF8 did nothing (2026-09-02).
+            {"focus_scope_cycle",           "Set Scope", 0},
             {"sticky_pot_get_next",         "Pin Sticky", 0},
             {"sticky_pot_toggle",           "Sticky OnOff", 0},
         }));
