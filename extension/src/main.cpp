@@ -3323,6 +3323,13 @@ namespace softkey {
         return d == uf8::Domain::BusComp ? kBcMaxBank : kCsMaxBank;
     }
 
+    // Does the plug-in leave EVERY slot of this page empty? Both domains have
+    // six page slots, but the bus comp only fills two — the other four arrive
+    // as ordinary user banks, and several places need to tell the two apart.
+    // The rule lives in this namespace, so the display name, the matrix and
+    // the exported reasixty_sslSoftKeyBankFullyFree all ask the same one.
+    // (Defined below viewFor.)
+
     // Resolve the current 8-slot view (linkIdx + label arrays) for a
     // given domain + bank. Caller clamps bank to maxBankFor(domain).
     struct View {
@@ -3348,6 +3355,14 @@ namespace softkey {
             }
         }
         return -1;
+    }
+
+    inline bool bankFullyFree(uf8::Domain d, int bank) {
+        if (bank < 0 || bank > maxBankFor(d)) return false;
+        const View v = viewFor(d, bank);
+        for (size_t s = 0; s < kStrips; ++s)
+            if (v.linkIdx[s] != kNoSlot) return false;
+        return true;
     }
 }
 
@@ -27552,7 +27567,16 @@ static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod)
     // calls them pages 1 to 6 — "SSL Factory CS, V-POT" was the set's name
     // plus a key name, twice as long and neither of the two words a user
     // looking for page 3 would search for (Frank 2026-09-02).
-    if (setNo == 8 || setNo == 9) {
+    if ((setNo == 8 || setNo == 9)
+        && !softkey::bankFullyFree(setNo == 9 ? uf8::Domain::BusComp
+                                              : uf8::Domain::ChannelStrip,
+                                   sub)) {
+        // ⚠ ONLY THE PAGES THE PLUG-IN ACTUALLY FILLS. Both domains have six
+        // page SLOTS (kCsMaxBank and kBcMaxBank are both 5), and I took that
+        // for six SSL pages — the bus comp fills two and leaves four
+        // completely empty (Frank 2026-09-02: "dabei sind es doch nur 2").
+        // An empty one is an ordinary user bank and reads like every other:
+        // its own name, its dynamic kind, or a dash.
         char sb[32];
         snprintf(sb, sizeof(sb), "SSL %s Bank %d",
                  setNo == 9 ? "BC" : "CS", sub + 1);
@@ -41511,9 +41535,8 @@ bool reasixty_sslSoftKeySlotOccupied(bool isBc, int bank, int slot)
 // none of them.
 bool reasixty_sslSoftKeyBankFullyFree(bool isBc, int bank)
 {
-    for (int s = 0; s < 8; ++s)
-        if (reasixty_sslSoftKeySlotOccupied(isBc, bank, s)) return false;
-    return true;
+    return softkey::bankFullyFree(
+        isBc ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip, bank);
 }
 
 int reasixty_activeQuickFor(int layer)

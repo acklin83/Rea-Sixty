@@ -1120,12 +1120,21 @@ static uint32_t softKeyLedTint_(int layer, int quick, int sub, int slotIdx,
         return 0;
     // ⇨ A KEY THAT DOES NOTHING SHOWS NOTHING. A colour sits on the Binding
     // whether or not anything is assigned, so reading it unconditionally
-    // painted every unassigned key in whatever the bank's colour happened to
-    // be — four red tiles on SSL's V-POT page and a red row across an
-    // unfinished bank (Frank 2026-09-02). slotIsEmpty is the dispatch
-    // question, "does this key DO anything", which is exactly the one worth
-    // colouring; the serialisation predicates would say yes to a colour alone.
+    // painted a red row across an unfinished bank (Frank 2026-09-02).
+    // slotIsEmpty is the dispatch question, "does this key DO anything",
+    // which is exactly the one worth colouring; the serialisation predicates
+    // would say yes to a colour alone.
     if (slotIsEmpty(bd.shortPress[mod])) return 0;
+    // ⇨ AND A KEY THAT IS NOT YOURS SHOWS NOTHING EITHER. On Plain, the keys
+    // SSL's own rows fill belong to the plug-in, and the hardware lights them
+    // from the plug-in's own state, not from this binding's colour. Reading it
+    // anyway put four red tiles across SSL's first CS page — a colour that
+    // exists in the store and never reaches the surface (Frank 2026-09-02).
+    // Every free key there, and the whole Shift set, IS yours and is coloured.
+    const int setNo = layerQuickToSoftKeySet(layer, quick);
+    if ((setNo == 8 || setNo == 9) && mod == 0
+        && reasixty_sslSoftKeySlotOccupied(setNo == 9, sub, slotIdx))
+        return 0;
     uint8_t rgb[3] = { 0xFF, 0xFF, 0xFF };
     Brightness bri = Brightness::Bright;
     effectiveLedActive(bd, bd.shortPress[mod], rgb, bri);
@@ -7003,7 +7012,12 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                         // happened to carry an override, while the pages the
                         // plug-in actually fills read as nothing at all
                         // (Frank 2026-09-02). Those six exist by definition.
-                        const bool sslSet = (setNo == 8 || setNo == 9);
+                        // ⚠ Only the pages the plug-in FILLS are always there.
+                        // The bus comp fills two of its six and leaves four
+                        // empty; those four are ordinary user banks and show a
+                        // dash until something is in them, like anywhere else.
+                        const bool sslSet = (setNo == 8 || setNo == 9)
+                            && !reasixty_sslSoftKeyBankFullyFree(setNo == 9, c);
                         const bool filled = sslSet
                             || uf8::bindings::subBankHasContent(
                                    sl, sq, c, g_slotEditModIdx);
