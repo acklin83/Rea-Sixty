@@ -734,13 +734,6 @@ std::atomic<bool> g_uf8BankNameBanner {true};
 // you stand is not an option it should offer.
 // Persisted as ExtState "uf8_bank_name_shift".
 std::atomic<bool> g_uf8BankNameShift {true};
-// Where the panel's drop-down pinned a modifier set, packed as (layer<<8 |
-// quick<<4 | sub), or -1 when nothing is pinned by it. Picking a Shift bank from
-// the menu engages that set without holding the key; switching bank by any other
-// route lets it go again, which is the whole contract (Frank 2026-09-01: "bis
-// manuell auf andere soft-key bank geschaltet wird").
-std::atomic<int> g_u8PinAddr {-1};
-
 // Plugin Mixer / Settings window (Phase 2.6 + 2.7). Rendered from
 // onTimer() so REAPER-API reads stay main-thread. Toggle is requested
 // via the atomic flag below — never call toggle() directly from any
@@ -37692,20 +37685,6 @@ void onTimerBody_()
             if (ms != msPub) { msPub = ms;
                 SetExtState("rea_sixty", "mode_state", ms.c_str(), false); }
         }
-        // The menu's modifier pin lives exactly as long as its bank does. Any
-        // other way of changing bank — the hardware row, a Quick key, a layer, the
-        // startup pin — moves the address and releases it. Checked here rather
-        // than at each of those sites: there are many ways to change bank and only
-        // one thing to notice, which is that it changed.
-        if (const int pinned = g_u8PinAddr.load(); pinned >= 0) {
-            const int pl = uf8::bindings::getActiveLayer();
-            const int pq = (pl >= 0 && pl <= 2) ? g_activeQuick[pl].load()   : -1;
-            const int ps = (pl >= 0 && pl <= 2) ? g_activeSubBank[pl].load() : -1;
-            if (((pl << 8) | (pq << 4) | ps) != pinned) {
-                uf8::bindings::setBankModifierPinMenu(-1);
-                g_u8PinAddr.store(-1);
-            }
-        }
         // ⇨ EVERY BANK THERE IS, for the panel's jump menu (Frank 2026-09-01:
         // "mach aus dem element ein drop down wo alle aufgelistet sind").
         // "<activeIdx>;<layer>\t<quick>\t<sub>\t<name>;…" — semicolons separate
@@ -38085,20 +38064,17 @@ void onTimerBody_()
                 // from the panel's drop-down. Same guards as the pinned startup
                 // bank, because it is the same move (engageUserBank_).
                 // ⇨ THE MENU IS PLAIN ONLY, so a jump never pins a set. Picking
-                // a Shift bank used to engage it outright, pinned through the
-                // same API the Bindings editor uses; those rows came out again on
-                // 2026-09-02 because the pin did not reliably land, and a menu
-                // entry that does not go where it says is worse than no entry.
-                // The fourth field is still parsed and still ignored, so an older
-                // panel sending it is harmless. Any pin left over from before is
-                // cleared here rather than surviving a jump.
+                // a Shift bank used to engage it outright, pinned through its own
+                // store; those rows and the pin both came out on 2026-09-02,
+                // because the pin did not reliably land and a menu entry that
+                // does not go where it says is worse than no entry.
+                // The fourth field is still parsed and ignored, so an older panel
+                // sending it is harmless.
                 int l = -1, q = -1, sb = -1, m = 0;
                 const int got = std::sscanf(s.c_str() + 7, "%d;%d;%d;%d",
                                             &l, &q, &sb, &m);
-                if (got >= 3 && engageUserBank_(l, q, sb)) {
-                    uf8::bindings::setBankModifierPinMenu(-1);
-                    g_u8PinAddr.store(-1);
-                }
+                (void)m;
+                if (got >= 3) engageUserBank_(l, q, sb);
             }
         }
     }
