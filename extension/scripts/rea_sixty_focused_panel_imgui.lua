@@ -513,9 +513,9 @@ local function drawUf8Bank()
     labelled("UF8 SK-Bank", f[5])
     return
   end
-  -- Every row is just its name. Picking one engages that bank AND its set, so a
-  -- Shift bank needs neither a marker in the list nor the key held down: the
-  -- extension pins the set until the bank is changed by hand.
+  -- Every row is just its name, and every row is a Plain bank. Shift rows were
+  -- listed for a day and taken out again: picking one could not reliably put the
+  -- surface on that set. Hold the modifier to reach it, as before.
   local cur = (active >= 0 and list[active + 1]) and list[active + 1].name
               or "(none)"
   reaper.ImGui_TextColored(ctx, rgba(0x8890A0), "UF8 SK-Bank ")

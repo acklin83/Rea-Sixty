@@ -37738,43 +37738,34 @@ void onTimerBody_()
                                  ? g_activeSubBank[aLayer].load() : -1;
                 // BOTH SETS ARE LISTED. A Shift set is a full bank with its own
                 // name, and leaving it out meant half the banks a user builds were
-                // missing from the menu (Frank 2026-09-01). It is the same
-                // COORDINATE, so picking one goes to the same place; holding Shift
-                // is what puts you on that half once you are there, which is why
-                // the entry says so rather than pretending to be its own stop.
-                // ⇨ DIE LISTE FOLGT IMMER DEM ECHTEN SATZ. "Bank names follow
-                // Shift" gilt nur dem Banner (Frank 2026-09-01): der Banner ist
-                // eine Meldung, die man abstellen können muss, das Menü dagegen
-                // ist ein Readout — es soll zeigen, wo du wirklich stehst, auch
-                // während du Shift hältst.
-                int aSet = static_cast<int>(uf8::bindings::bankModifierSnapshot());
-                if (aSet < 0 || aSet >= uf8::bindings::kSoftKeyModifierSets) aSet = 0;
+                // missing from the menu (Frank 2026-09-01) — and then out again
+                // on 2026-09-02, see the Plain-only note below.
                 if (ubRebuild) {
                 ubAtMs = ubNow;
                 ubRows.clear();
                 for (int l = 0; l < 3; ++l)
                   for (int q = 0; q < uf8::bindings::kQuicksPerLayer; ++q) {
-                    if (l == 0 && q <= 1) continue;      // SSL CS/BC rows, not user banks
-                    for (int sb = 0; sb < uf8::bindings::kSubBanksPerQuick; ++sb)
-                      for (int m = 0; m < uf8::bindings::kSoftKeyModifierSets; ++m) {
+                    // Layer 1's Q1/Q2 are Sets 8 and 9 now, so "not user banks"
+                    // stopped being the reason. They stay out because engaging
+                    // them is a domain move, which is not what a jump menu of
+                    // your own banks is for.
+                    if (l == 0 && q <= 1) continue;      // Sets 8/9, SSL's rows
+                    for (int sb = 0; sb < uf8::bindings::kSubBanksPerQuick; ++sb) {
+                        // ⛔ PLAIN ONLY. Shift rows were listed for a while and
+                        // taken out again on 2026-09-02: picking one could not
+                        // reliably put the surface on that set, and a menu entry
+                        // that does not go where it says is worse than no entry
+                        // (Frank: "das bringt so nix wenn man nicht drauf
+                        // wechseln kann"). The set is still reached the way it
+                        // always was, by holding the modifier.
+                        const int m = 0;
                         const bool here = (l == aLayer && q == aQuick && sb == aSub);
-                        // The bank you are standing on is always listed, both sets,
-                        // so the menu can never be empty where you are and holding
-                        // Shift always has a row to land on. Everywhere else a row
-                        // needs content of its own.
+                        // The bank you are standing on is always listed, so the
+                        // menu can never be empty where you are. Everywhere else
+                        // a row needs content of its own.
                         if (!here && !uf8::bindings::subBankHasContent(l, q, sb, m))
                             continue;
                         std::string nm = uf8BankDisplayName_(l, q, sb, m);
-                        // ⇨ KEIN "(Shift)" AM NAMEN (Frank 2026-09-01). Ein Satz
-                        // ohne eigenen Namen erbt den von Plain, und zwei gleich
-                        // heissende Zeilen sind keine Auswahl, sondern eine Frage.
-                        // Also fällt so ein Shift-Eintrag weg: dieselbe Bank ist
-                        // über die Plain-Zeile erreichbar, denn es ist derselbe
-                        // Ort. Wer den Shift-Satz im Menü haben will, gibt ihm
-                        // einen Namen, und dann steht er mit dem da.
-                        if (m == 1 && !here
-                            && nm == uf8BankDisplayName_(l, q, sb, 0))
-                            continue;
                         for (char& c : nm)
                             if (c == ';' || c == '\t' || c == '\n' || c == '\r') c = ' ';
                         ubRows.push_back({ l, q, sb, m, nm });
@@ -37785,7 +37776,12 @@ void onTimerBody_()
                 std::string body; int active = -1;
                 for (size_t i = 0; i < ubRows.size(); ++i) {
                     const UbRow& r = ubRows[i];
-                    if (r.l == aLayer && r.q == aQuick && r.sb == aSub && r.m == aSet)
+                    // The active row is the BANK you are on. It used to also
+                    // require the modifier set to match, which was right while
+                    // Shift had rows of its own; with Plain-only rows that test
+                    // would leave the menu showing nothing whenever you held
+                    // Shift.
+                    if (r.l == aLayer && r.q == aQuick && r.sb == aSub)
                         active = static_cast<int>(i);
                     body += ";" + std::to_string(r.l) + "\t" + std::to_string(r.q)
                           + "\t" + std::to_string(r.sb) + "\t" + r.name
@@ -38088,19 +38084,20 @@ void onTimerBody_()
                 // "u8bank;<layer>;<quick>;<sub>[;<set>]" — jump to a soft-key bank
                 // from the panel's drop-down. Same guards as the pinned startup
                 // bank, because it is the same move (engageUserBank_).
-                // ⇨ PICKING A SHIFT BANK ENGAGES IT, IT DOES NOT ASK YOU TO HOLD
-                // SHIFT (Frank 2026-09-01). The set is PINNED through the same
-                // API the Bindings editor uses, so the surface paints it and a
-                // press fires it with nothing held. The pin is released as soon as
-                // the bank is changed by hand — see the release below.
+                // ⇨ THE MENU IS PLAIN ONLY, so a jump never pins a set. Picking
+                // a Shift bank used to engage it outright, pinned through the
+                // same API the Bindings editor uses; those rows came out again on
+                // 2026-09-02 because the pin did not reliably land, and a menu
+                // entry that does not go where it says is worse than no entry.
+                // The fourth field is still parsed and still ignored, so an older
+                // panel sending it is harmless. Any pin left over from before is
+                // cleared here rather than surviving a jump.
                 int l = -1, q = -1, sb = -1, m = 0;
                 const int got = std::sscanf(s.c_str() + 7, "%d;%d;%d;%d",
                                             &l, &q, &sb, &m);
                 if (got >= 3 && engageUserBank_(l, q, sb)) {
-                    if (got < 4 || m < 0 || m >= uf8::bindings::kSoftKeyModifierSets)
-                        m = 0;
-                    uf8::bindings::setBankModifierPinMenu(m > 0 ? m : -1);
-                    g_u8PinAddr.store((m > 0) ? ((l << 8) | (q << 4) | sb) : -1);
+                    uf8::bindings::setBankModifierPinMenu(-1);
+                    g_u8PinAddr.store(-1);
                 }
             }
         }
