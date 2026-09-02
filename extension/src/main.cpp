@@ -27531,20 +27531,44 @@ void uf1FlashTimecode_(std::string_view text, int ms)
 // one address wider: the UF8 addresses a bank by (layer, quick, sub-bank) where
 // the UF1 has a flat number. Typed name wins, else the dynamic kind, else the
 // coordinates in the words that are printed on the hardware.
+// The set half of a bank's name: the set's own name if it has one, else "Set N".
+// Empty for a coordinate that is not a set, which is nothing today but was
+// Layer 1's Q1/Q2 until 2026-09-02.
+static std::string uf8SetPrefix_(int layer, int quick)
+{
+    const int setNo = uf8::bindings::layerQuickToSoftKeySet(layer, quick);
+    if (setNo <= 0) return std::string();
+    std::string n = uf8::bindings::getSoftKeySetName(setNo);
+    if (!n.empty()) return n;
+    char b[16]; snprintf(b, sizeof(b), "Set %d", setNo);
+    return b;
+}
+
 static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod)
 {
     using namespace uf8::bindings;
+    // ⇨ THE SET IS ALWAYS IN FRONT. A named bank used to answer on its own, so
+    // the set it lives in never appeared anywhere — the banner said "KHE Amps"
+    // and nothing told you which of the nine sets you had landed in (Frank
+    // 2026-09-02, "soft-key set name wird bei wechsel nie angezeigt"). The set
+    // half comes first now, the bank half after it, and the fallback that used
+    // to be the ONLY place a set name showed up is just this rule with an
+    // unnamed bank.
+    const std::string setPfx = uf8SetPrefix_(layer, quick);
+    auto withSet = [&setPfx](const std::string& bank) {
+        return setPfx.empty() ? bank : setPfx + ", " + bank;
+    };
     std::string nm = getSubBankName(layer, quick, sub, mod);
-    if (!nm.empty()) return nm;
+    if (!nm.empty()) return withSet(nm);
     // The set's own kind, else Plain's — never the raw array ([[softkey-modifier-sets]]).
     switch (getSubBankDynamicFor(layer, quick, sub, mod)) {
-        case DynamicBankKind::FxBank:       return "FX";
-        case DynamicBankKind::ParamGroups:  return "Groups";
-        case DynamicBankKind::TrackColours: return reasixty_sp("Colours", "Colors");
-        case DynamicBankKind::Favourites:   return "Favourites";
-        case DynamicBankKind::CsFavourites: return "CS Favourites";
-        case DynamicBankKind::BcFavourites: return "BC Favourites";
-        case DynamicBankKind::HueScenes:    return "Hue";
+        case DynamicBankKind::FxBank:       return withSet("FX");
+        case DynamicBankKind::ParamGroups:  return withSet("Groups");
+        case DynamicBankKind::TrackColours: return withSet(reasixty_sp("Colours", "Colors"));
+        case DynamicBankKind::Favourites:   return withSet("Favourites");
+        case DynamicBankKind::CsFavourites: return withSet("CS Favourites");
+        case DynamicBankKind::BcFavourites: return withSet("BC Favourites");
+        case DynamicBankKind::HueScenes:    return withSet("Hue");
         default: break;
     }
     // ⇨ THE FALLBACK NAMES THE SET AND THE BANK. The UF1 falls back to "SOFT 3"
@@ -27570,21 +27594,19 @@ static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod)
         // completely empty (Frank 2026-09-02: "dabei sind es doch nur 2").
         // An empty one is an ordinary user bank and reads like every other:
         // its own name, its dynamic kind, or a dash.
+        // No withSet here: the set's own default name IS "SSL Factory CS", and
+        // "SSL Factory CS, SSL CS Bank 3" says it twice. A set the user renamed
+        // does come through, because withSet reads that name.
         char sb[32];
         snprintf(sb, sizeof(sb), "SSL %s Bank %d",
                  setNo == 9 ? "BC" : "CS", sub + 1);
-        return sb;
+        return uf8::bindings::getSoftKeySetName(setNo).empty()
+             ? std::string(sb) : withSet(sb);
     }
-    std::string setName = (setNo > 0) ? uf8::bindings::getSoftKeySetName(setNo)
-                                      : std::string();
-    char b[80];
-    if (setName.empty()) {
-        if (setNo > 0) snprintf(b, sizeof(b), "Set %d, %s", setNo, kSb[sub]);
-        else           snprintf(b, sizeof(b), "Q%d %s", quick + 1, kSb[sub]);
-    } else {
-        snprintf(b, sizeof(b), "%s, %s", setName.c_str(), kSb[sub]);
-    }
-    return b;
+    // Nothing typed anywhere: the set half is already in setPfx, so this only
+    // has to add which of the six keys it is.
+    if (sub < 0 || sub >= 6) return std::string();
+    return withSet(kSb[sub]);
 }
 
 // The name of the bank the UF8 is ON right now, or empty when no user Quick is

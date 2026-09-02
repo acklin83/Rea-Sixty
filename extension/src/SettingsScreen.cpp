@@ -6988,9 +6988,16 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                     if (!s_setNameEditing[bi] && stored != s_setNameBuf[bi])
                         snprintf(s_setNameBuf[bi], sizeof(s_setNameBuf[bi]),
                                  "%s", stored.c_str());
+                    // ⇨ THE NUMBER STAYS VISIBLE EVEN WHEN THE SET HAS A NAME.
+                    // It used to be only the input's hint, so typing a name hid
+                    // the one thing a binding points at — Soft-Key Set: engage
+                    // takes the NUMBER as its parameter (Frank 2026-09-02).
+                    char num[8]; snprintf(num, sizeof(num), "%d", setNo);
+                    ImGui_TextDisabled(ctx, num);
+                    ImGui_SameLine(ctx, nullptr, nullptr);
                     char hint[24]; snprintf(hint, sizeof(hint), "Set %d", setNo);
                     char nid[32];  snprintf(nid, sizeof(nid), "##skset_%d", setNo);
-                    ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 140.0));
+                    ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 122.0));
                     int nFlags = 0;
                     if (ImGui_InputTextWithHint(ctx, nid, hint, s_setNameBuf[bi],
                                                 sizeof(s_setNameBuf[bi]),

@@ -1149,9 +1149,9 @@ They were numbered 8 and 9 rather than 1 and 2 because set numbers are addresses
 
 The number matters because it is an address. **Soft-Key Set: engage (param 1-9)** is a bindable action, so a set sits on any key, foot-switch, Stream Deck tile or keyboard shortcut you like — the Quick button is one way in, not the only one. Engaging a set leaves the soft-key bank where that layer had it, so coming back puts you on the bank you were using.
 
-The matrix is nine rows by six columns. Each row is a set, with a **name** you can type in its first column; each cell is one of its banks, showing that bank's name, or its dynamic kind, or a dash when it holds nothing. The engaged cell is marked, and clicking a cell engages that bank and opens it in the editor below. **Plain and Shift sit in the matrix header**, to the right of the last bank column, because the matrix shows one of the two sets at a time and which one has to be readable inside it.
+The matrix is nine rows by six columns. Each row is a set, with its **number** in front and a **name** you can type beside it — the number stays visible once you have named it, because *Soft-Key Set: engage* takes the number as its parameter; each cell is one of its banks, showing that bank's name, or its dynamic kind, or a dash when it holds nothing. The engaged cell is marked, and clicking a cell engages that bank and opens it in the editor below. **Plain and Shift sit in the matrix header**, to the right of the last bank column, because the matrix shows one of the two sets at a time and which one has to be readable inside it.
 
-The set's name is what the mode-change banner and the focused-track panel say when a bank in it has no name of its own: an unnamed bank in a set called *Editing* reads `Editing, Soft 3` instead of `Set 2, Soft 3`.
+**The set comes first in every name the surface announces**, so you always know which of the nine you are in: a bank called *KHE Amps* in a set called *Editing* reads `Editing, KHE Amps`. Name neither and it reads `Set 2, Soft 3`. The one exception is Sets 8 and 9, where the set's own default name is already *SSL Factory CS* and repeating it would say the same thing twice — rename the set and it comes through like any other.
 
 Each slot carries a **Behavior** (*Momentary*, *Toggle* or *Hold*), the same setting a regular button has.
 
