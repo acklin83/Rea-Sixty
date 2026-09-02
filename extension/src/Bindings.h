@@ -510,28 +510,37 @@ constexpr int kSlotsPerSubBank   = 8;
 // Quick vor"). Mit ihr sitzt ein Set auf jeder Taste, jedem Fussschalter, jeder
 // Stream-Deck-Kachel, und der Quick-Knopf ist nur noch einer der Wege dorthin.
 //
-// Layer 1's Q1 and Q2 are SSL's CS / BC rows and are not sets. The order is
-// FIXED and additive: should those two ever open up they become 8 and 9 rather
-// than shifting everything, because bindings point at these numbers.
-constexpr int kSoftKeySetCount = 7;
+// ⇨ NINE SETS: three Quick keys on each of three layers, all of them yours.
+// Layer 1's Q1 and Q2 used to be walled off as "SSL's CS / BC rows", but the
+// SSL row was never stored there: it is the state of having NO set engaged
+// (g_activeQuick[layer] == -1) and appears on whichever layer you drop the set
+// on. The wall therefore reserved two of nine slots for something that does not
+// live in them, and their storage existed and was serialised all along
+// (Frank 2026-09-02: "NICHTS engaged einen User-Quick! Die Quick Taste ist nur
+// die Taste, die halt zufällig das Set engaged").
+// The order is FIXED and ADDITIVE: the two newcomers are 8 and 9, they did not
+// renumber 1..7, because bindings point at these numbers.
+constexpr int kSoftKeySetCount = 9;
 
-// Set number (1..7) → (layer, quick). Returns false for anything else.
+// Set number (1..9) → (layer, quick). Returns false for anything else.
 constexpr bool softKeySetToLayerQuick(int setNo, int& layer, int& quick)
 {
     if (setNo < 1 || setNo > kSoftKeySetCount) return false;
     if (setNo == 1) { layer = 0; quick = 2; return true; }   // L1 Q3
+    if (setNo == 8) { layer = 0; quick = 0; return true; }   // L1 Q1, added 09/26
+    if (setNo == 9) { layer = 0; quick = 1; return true; }   // L1 Q2, added 09/26
     const int n = setNo - 2;                                  // 0..5
     layer = 1 + n / kQuicksPerLayer;                          // L2, L3
     quick = n % kQuicksPerLayer;
     return true;
 }
 
-// The other way. 0 = this coordinate is not a set (Layer 1's Q1 / Q2).
+// The other way. 0 = not a coordinate at all; every one of the nine IS a set now.
 constexpr int layerQuickToSoftKeySet(int layer, int quick)
 {
     if (layer < 0 || layer >= 3) return 0;
     if (quick < 0 || quick >= kQuicksPerLayer) return 0;
-    if (layer == 0) return (quick == 2) ? 1 : 0;
+    if (layer == 0) return (quick == 2) ? 1 : (quick == 0 ? 8 : 9);
     return 2 + (layer - 1) * kQuicksPerLayer + quick;
 }
 
@@ -1093,7 +1102,8 @@ void            setUf1SoftBankDynamic(int bank, int mod, DynamicBankKind kind);
 // The UF8 Sub-Bank's user name, by its full address. Empty = unnamed, which is
 // the normal state; the display name falls back to the dynamic kind, else the
 // coordinates (uf8BankDisplayName_ in main.cpp).
-// The Soft-Key Set's user name, by set number (1..7). Empty = unnamed.
+// The Soft-Key Set's user name, by set number (1..9). Unnamed sets 8/9 answer
+// with SSL's row name; every other unnamed set answers empty.
 std::string     getSoftKeySetName(int setNo);
 void            setSoftKeySetName(int setNo, const std::string& name);
 

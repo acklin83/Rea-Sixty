@@ -1113,6 +1113,8 @@ The three FX-Learn modifier-layer switches used to sit here. They now live in *F
 
 Top of the pane: a tab bar with **UF8**, **UC1** and **UF1**, each rendering its hardware as a vector schematic. Click any button, knob, encoder, or fader to select it; the per-button editor opens below the schematic.
 
+**The eight top soft-keys wear their LED colour** in the schematic, so a bank you coloured reads as that bank at a glance. It is the *active* colour, the one the key shows when it is lit, and it follows the Plain / Shift switch, because a key can be one colour on Plain and another on Shift. White is left alone: it is the factory colour on every key nobody has touched, and eight white tiles would say less than the grey they replaced. A **dynamic** bank is not coloured at all, for the same reason its labels are not shown: its colours come from the focused track, and this panel has no track.
+
 The "current layer" follows whichever Layer button (1 / 2 / 3) is highlighted in the schematic — click a Layer button to switch the live layer; the green outline indicates which one is active. There is no separate layer-tab strip.
 
 Five click-to-edit special cases:
@@ -1138,12 +1140,15 @@ A **set** is the six soft-key banks under one Quick key, and it has a number of 
 | 1 | 1 | Q3 |
 | 2 – 4 | 2 | Q1 – Q3 |
 | 5 – 7 | 3 | Q1 – Q3 |
+| 8 – 9 | 1 | Q1 – Q2 |
 
-Layer 1's Q1 and Q2 are SSL's own CS and BC rows and are not sets.
+**Sets 8 and 9 are SSL's own CS and BC rows.** They are sets like the others and sit in the matrix with their six banks, which are SSL's six pages. On Plain, the keys SSL occupies stay SSL's and cannot be edited; the ones it leaves free are yours, and the whole Shift set is yours on every page. Engaging one of them means *dis*engaging: SSL's row is what the layer shows when no set is engaged, so picking Set 8 drops the set, points the domain at Channel Strip and selects the page. That is the same thing *Soft-Key Bank 1 (SSL Channel Strip)* does from a key.
 
-The number matters because it is an address. **Soft-Key Set: engage (param 1-7)** is a bindable action, so a set sits on any key, foot-switch, Stream Deck tile or keyboard shortcut you like — the Quick button is one way in, not the only one. Engaging a set leaves the soft-key bank where that layer had it, so coming back puts you on the bank you were using.
+They were numbered 8 and 9 rather than 1 and 2 because set numbers are addresses that bindings point at, and renumbering would have moved everyone else's.
 
-The matrix is seven rows by six columns. Each row is a set, with a **name** you can type in its first column; each cell is one of its banks, showing that bank's name, or its dynamic kind, or a dash when it holds nothing. The engaged cell is marked, and clicking a cell engages that bank and opens it in the editor below. **Plain and Shift sit in the matrix header**, to the right of the last bank column, because the matrix shows one of the two sets at a time and which one has to be readable inside it.
+The number matters because it is an address. **Soft-Key Set: engage (param 1-9)** is a bindable action, so a set sits on any key, foot-switch, Stream Deck tile or keyboard shortcut you like — the Quick button is one way in, not the only one. Engaging a set leaves the soft-key bank where that layer had it, so coming back puts you on the bank you were using.
+
+The matrix is nine rows by six columns. Each row is a set, with a **name** you can type in its first column; each cell is one of its banks, showing that bank's name, or its dynamic kind, or a dash when it holds nothing. The engaged cell is marked, and clicking a cell engages that bank and opens it in the editor below. **Plain and Shift sit in the matrix header**, to the right of the last bank column, because the matrix shows one of the two sets at a time and which one has to be readable inside it.
 
 The set's name is what the mode-change banner and the focused-track panel say when a bank in it has no name of its own: an unnamed bank in a set called *Editing* reads `Editing, Soft 3` instead of `Set 2, Soft 3`.
 

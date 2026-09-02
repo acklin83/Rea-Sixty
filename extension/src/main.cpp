@@ -37107,11 +37107,30 @@ static bool engageUserBank_(int layer, int quick, int sub)
 {
     if (layer < 0 || layer > 2 || quick < 0 || quick > 2) return false;
     if (sub < 0 || sub >= uf8::bindings::kSubBanksPerQuick) return false;
-    if (layer == 0 && quick <= 1) return false;      // L1 Q1/Q2 = SSL CS/BC
     if (g_uf8PluginMode.load()) return false;        // that mode owns the soft-keys
     if (uf8::bindings::getActiveLayer() != layer) {
         uf8::bindings::setActiveLayer(layer);
         pushLayerLeds(layer);
+    }
+    // ⇨ SETS 8 AND 9 ARE THE SSL ROWS, AND ENGAGING THEM MEANS DISENGAGING.
+    // Their storage at (L1, Q1/Q2, page, slot) is where the SSL rows' free
+    // slots already live — the painter reads exactly this coordinate, with the
+    // sub-bank as SSL's PAGE bank. So they are not a coordinate the SSL row
+    // merely sits next to; they ARE it. But the row only shows while NO set is
+    // engaged on the layer, so storing quick here would hide the very thing the
+    // set is. Engage them the way the SSL row is reached: drop the set, point
+    // the domain, and select the page (Frank 2026-09-02).
+    const int setNo = uf8::bindings::layerQuickToSoftKeySet(layer, quick);
+    if (setNo == 8 || setNo == 9) {
+        const auto dom = (setNo == 9) ? uf8::Domain::BusComp
+                                      : uf8::Domain::ChannelStrip;
+        if (uf8::getFocusedParam().domain != dom) uf8::setFocus({dom, 0});
+        g_softKeyDomain.store(setNo == 9 ? 1 : 0);
+        g_activeQuick[layer].store(-1);
+        g_softKeyBank.store(std::clamp(sub, 0, softkey::maxBankFor(dom)));
+        g_bankDirty.store(true);
+        g_softKeyDirty.store(true);
+        return true;
     }
     g_activeQuick[layer].store(quick);
     g_activeSubBank[layer].store(sub);
@@ -41534,9 +41553,10 @@ int reasixty_engagedQuickFor(int layer)
 // These two set the engaged bank directly and ONLY while the lock-out is in
 // force; otherwise the dispatch the caller already issued did the work. The
 // hardware rule is untouched: the surface still refuses to switch.
-// Layer 1 Q1/Q2 are deliberately NOT handled — those are the SSL CS/BC domains,
-// reached by moving the focused param, which is the very thing Plugin Mode must
-// not do. They carry no user slots either, so there is nothing to edit there.
+// Sets 8 and 9 (L1 Q1/Q2) stay out of this one. They ARE the SSL CS/BC rows,
+// and reaching them means moving the focused param — which is the one thing
+// Plugin Mode must not do, since that is what would cut the learned parameters
+// loose. The other seven engage normally.
 void reasixty_editorEngageQuickIfLocked(int layer, int quick)
 {
     if (!g_uf8PluginMode.load()) return;
@@ -47203,15 +47223,32 @@ void registerBindingHandlers()
             if (!firing) return;
             int l = 0, q = 0;
             if (!uf8::bindings::softKeySetToLayerQuick(param, l, q)) return;
-            engageUserBank_(l, q, g_activeSubBank[l].load());
+            // Sets 8/9 are the SSL rows, and their page lives in g_softKeyBank,
+            // not in g_activeSubBank — that one is the user-set page and stands
+            // still while an SSL row is showing.
+            const int page = (param >= 8) ? g_softKeyBank.load()
+                                          : g_activeSubBank[l].load();
+            engageUserBank_(l, q, page);
         },
         [](int param) {
             int l = 0, q = 0;
             if (!uf8::bindings::softKeySetToLayerQuick(param, l, q)) return false;
+            // ⇨ AND THEY READ AS ENGAGED WHEN NOTHING IS. Sets 8/9 ARE the SSL
+            // rows, which show precisely while no set is engaged, so asking
+            // "is quick == q" would leave their toggle dark forever. Same test
+            // the Soft-Key Bank 1/2 actions use: right domain, no set.
+            if (param >= 8) {
+                const auto want = (param == 9) ? uf8::Domain::BusComp
+                                               : uf8::Domain::ChannelStrip;
+                if (uf8::getFocusedParam().domain != want) return false;
+                const int cur = uf8::bindings::getActiveLayer();
+                if (cur < 0 || cur > 2) return true;
+                return g_activeQuick[cur].load() < 0;
+            }
             return uf8::bindings::getActiveLayer() == l
                 && g_activeQuick[l].load() == q;
         },
-        "Soft-Key Set: engage (param 1-7)", true
+        "Soft-Key Set: engage (param 1-9)", true
     });
     registerBuiltin("temp_selset_pin_uf1_channel", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {

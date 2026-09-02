@@ -1094,6 +1094,41 @@ void renderBindingContextMenu_(ImGui_Context* ctx, int layer,
     ImGui_EndPopup(ctx);
 }
 
+// LED colour of one top-soft-key, as the hardware would light it, or 0 when the
+// tile should stay the schematic's neutral grey. Four rules, all Frank's
+// (2026-09-02):
+//   • the ACTIVE colour, the one you see when the key is lit;
+//   • it follows the modifier set the matrix is showing, because a key can be
+//     red on Plain and blue on Shift — the override lives on the ActionSlot;
+//   • white is "no colour": it is the factory default on every unset key, and
+//     eight white tiles would be louder than the grey they replace;
+//   • a DYNAMIC bank computes its colours from the focused track, which this
+//     panel has no access to, so it colours nothing rather than guessing —
+//     the same reason it draws the kind's name instead of stale labels.
+static uint32_t softKeyLedTint_(int layer, int quick, int sub, int slotIdx,
+                                int mod)
+{
+    using namespace uf8::bindings;
+    if (layer < 0 || layer > 2 || quick < 0 || quick > 2) return 0;
+    if (sub < 0 || sub >= kSubBanksPerQuick) return 0;
+    if (mod < 0 || mod >= kSoftKeyModifierSets) return 0;
+    bool dynOwnsSet = false;
+    const auto kind = getSubBankDynamicFor(layer, quick, sub, mod, &dynOwnsSet);
+    const Binding bd = getUserQuickSlot(layer, quick, sub, slotIdx);
+    if (kind != DynamicBankKind::None
+        && (dynOwnsSet || !setOwnsDynamicKey(bd, mod)))
+        return 0;
+    uint8_t rgb[3] = { 0xFF, 0xFF, 0xFF };
+    Brightness bri = Brightness::Bright;
+    effectiveLedActive(bd, bd.shortPress[mod], rgb, bri);
+    if (rgb[0] == 0xFF && rgb[1] == 0xFF && rgb[2] == 0xFF) return 0;
+    // Dim is the hardware's half-lit state, so the tile halves its colour too.
+    const int div = (bri == Brightness::Dim) ? 2 : 1;
+    return (static_cast<uint32_t>(rgb[0] / div) << 24)
+         | (static_cast<uint32_t>(rgb[1] / div) << 16)
+         | (static_cast<uint32_t>(rgb[2] / div) << 8) | 0xFF;
+}
+
 // True when ANY of the binding's slots (any modifier, short or long)
 // carries an action. Used by the schematic to tint bound vs empty tiles.
 bool bindingHasAnyAction_(const uf8::bindings::Binding& bd)
@@ -1355,8 +1390,10 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
     // optionally fire the binding's action (used by the V-POT/Bank
     // tiles so clicking them in the schematic actually switches the
     // SSL PAGE bank — a hardware proxy for that one row).
+    // ledTint: 0 = neutral, else the key's LED colour (see softKeyLedTint_).
     auto drawHwBtn = [&](float x, float y, float w, float h,
-                         ButtonId id, const char* label) -> bool
+                         ButtonId id, const char* label,
+                         uint32_t ledTint = 0) -> bool
     {
         const bool hot      = inside(x, y, w, h);
         const bool selected = (id == sel);
@@ -1376,11 +1413,24 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
         const bool reg   = regularBindable_(id);
         const bool bound = reg && bindingHasAnyAction_(
                                uf8::bindings::getBinding(bindLayer, id));
+        // An LED colour takes the tile's face, at a third of its intensity so
+        // the silk-screen number stays readable, and the full colour on the
+        // border. Selection and hover still win: they say where you ARE, and
+        // losing that to a colour you chose would be a bad trade.
+        const uint8_t lr = static_cast<uint8_t>((ledTint >> 24) & 0xFF);
+        const uint8_t lg = static_cast<uint8_t>((ledTint >> 16) & 0xFF);
+        const uint8_t lb = static_cast<uint8_t>((ledTint >>  8) & 0xFF);
+        const uint32_t ledFace =
+            (static_cast<uint32_t>(lr / 3 + 0x1C) << 24)
+          | (static_cast<uint32_t>(lg / 3 + 0x1C) << 16)
+          | (static_cast<uint32_t>(lb / 3 + 0x1C) <<  8) | 0xFF;
         const uint32_t fill   = selected ? 0x4477CCFF
                                 : hot     ? 0x3A4253FF
+                                : ledTint ? ledFace
                                 : bound   ? 0x2C3A2EFF
                                           : 0x252A33FF;
         const uint32_t border = selected ? 0xAACCFFFF
+                                : ledTint ? ledTint
                                 : bound   ? 0x6FA86FFF
                                           : 0x4A5060FF;
         const uint32_t txt    = selected ? 0xFFFFFFFF : 0xD0D4DAFF;
@@ -1460,7 +1510,9 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
         // binding directly from the schematic.
         char tlbl[4];
         snprintf(tlbl, sizeof(tlbl), "%d", i + 1);
-        drawHwBtn(sx + 6, 12, kStripW - 12, 22, kStripTsk[i], tlbl);
+        drawHwBtn(sx + 6, 12, kStripW - 12, 22, kStripTsk[i], tlbl,
+                  softKeyLedTint_(activeLayer, editQuick, editSubBank, i,
+                                  g_slotEditModIdx));
         // Scribble LCD — show the live top-soft-key label. Resolution
         // mirrors the runtime render path:
         //   1. binding.shortPress[Plain].label   (user override)

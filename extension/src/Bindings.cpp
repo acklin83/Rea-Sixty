@@ -5090,7 +5090,14 @@ std::string getSoftKeySetName(int setNo)
     int l = 0, q = 0;
     if (!softKeySetToLayerQuick(setNo, l, q)) return std::string();
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    return g_cfg.userQuicks[l].quicks[q].name;
+    const std::string& own = g_cfg.userQuicks[l].quicks[q].name;
+    if (!own.empty()) return own;
+    // Sets 8 and 9 ARE SSL's two rows, so they say so when unnamed rather than
+    // coming up blank like a set nobody has filled in. Type over it and the
+    // name is yours, exactly as with the other seven.
+    if (setNo == 8) return "SSL Factory CS";
+    if (setNo == 9) return "SSL Factory BC";
+    return own;
 }
 
 void setSoftKeySetName(int setNo, const std::string& name)
