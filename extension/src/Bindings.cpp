@@ -669,12 +669,27 @@ void seedFactoryDefaults_(Config& c)
     L1[ButtonId::Fine] = mkBuiltin("fine_modifier", Behavior::Hold, "FINE");
 
     // Encoder modes (momentary press = enter mode).
-    // Nav / Nudge / EncFocus / ChannelPush ship UNBOUND post-2026-05-19
-    // so the factory layout matches SSL 360°: no encoder-mode LED lit by
-    // default, the channel encoder behaves as Channel-Select (prev / next
-    // strip) which is the default EncoderMode. Users can rebind these
-    // buttons in Settings → Bindings to any of the new modes (Markers /
-    // Bank by 1ch / Last Param / Mousewheel / etc.).
+    // ⇨ BOUND AGAIN SINCE 2026-09-02. These four shipped UNBOUND from
+    // 2026-05-19 so the factory layout matched SSL 360° — no encoder-mode LED
+    // lit, the encoder on Channel-Select. The cost was three printed keys and
+    // an encoder push that did nothing at all out of the box, which reads as
+    // broken rather than as clean (Frank 2026-09-02). Each now carries the mode
+    // its silk-screen names, and the push opens the focused plug-in like the
+    // UC1's and the UF1's pushes already did.
+    L1[ButtonId::Nav]         = mkBuiltin("marker_overlay_toggle", Behavior::Toggle,    "NAV");
+    L1[ButtonId::Nudge]       = mkBuiltin("encoder_nudge",         Behavior::Momentary, "NUDGE");
+    L1[ButtonId::EncFocus]    = mkBuiltin("encoder_last_param",    Behavior::Momentary, "FOCUS");
+    L1[ButtonId::ChannelPush] = mkBuiltin("show_focused_plugin_gui", Behavior::Momentary, "ENC PUSH");
+
+    // ⇨ AND THE SELECTION-MODE ROW. Same story: NORM / REC / AUTO are printed
+    // on the unit and shipped unbound "so users opt in", which meant three keys
+    // that did nothing. REC gets REC + MON rather than plain REC: arm plus
+    // monitor is the one people reach for (Frank 2026-09-02). Momentary, not
+    // Toggle — each builtin owns the mode state and reports it back for the
+    // LED, so a second state in the binding would be a second writer.
+    L1[ButtonId::SelectionNorm] = mkBuiltin("selection_mode_norm",    Behavior::Momentary, "NORM");
+    L1[ButtonId::SelectionRec]  = mkBuiltin("selection_mode_rec_mon", Behavior::Momentary, "REC");
+    L1[ButtonId::SelectionAuto] = mkBuiltin("selection_mode_auto",    Behavior::Momentary, "AUTO");
 
     // Channel encoder rotation. Plain = mode-dispatch (preserves the
     // legacy Nav/Nudge/Focus/Instance mode system). Shift = direct

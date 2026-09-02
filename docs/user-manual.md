@@ -315,13 +315,14 @@ A single block:
 - **Cursor pad** — 5 buttons (4 arrows + central circle) **surrounding the encoder**.
   - Default behaviour: **zoom** via the **Zoom in vertically** / **Zoom out vertically** / **Zoom out horizontally** / **Zoom in horizontally** / **Zoom to fit project** actions (REAPER actions 40111 / 40112 / 1011 / 1012 / 40295).
   - SSL's reference UG also documents a "Cursor-Transport" mode (press-and-hold CHANNEL encoder to enter; ↓=Stop ↑=Play ←=Rew →=FF centre=Rec). Rea-Sixty leaves these as the standard zoom bindings — rebind them to transport actions via Settings → Bindings if you want SSL's behaviour.
-- **NAV / NUDGE / FOCUS** mode buttons (around the encoder; ButtonId entries `Nav`, `Nudge`, `EncFocus`). Default builtins switch the encoder to that mode.
+- **NAV / NUDGE / FOCUS** mode buttons (around the encoder; ButtonId entries `Nav`, `Nudge`, `EncFocus`). NAV carries **Nav Mode (Markers & Regions): toggle**, NUDGE carries **Encoder Mode → Nudge**, FOCUS carries **Encoder Mode → Last Touched Param**. They shipped unbound between 2026-05-19 and 2026-09-02.
+- **CHANNEL encoder push** (`ChannelPush`) — **Plug-in: toggle focused GUI**, the same thing the UC1's Encoder-2 push and the UF1's encoder push do. Also unbound until 2026-09-02.
 
 Above the encoder block: **Q1 / Q2 / Q3** ("Quick" user keys). Default bindings — Q1 = CS, Q2 = BC, Q3 = I/O meter (matches SSL's locked Plug-in Mixer assignment).
 
 ## Right of the encoder column: NORM / REC / AUTO
 
-Three buttons (Selection Mode block). Default unbound — assign **Selection Mode → NORM (SEL Button)** / **Selection Mode → REC (SEL Button)** / **Selection Mode → AUTO (V-Pot)** (or any other Selection Mode action, including **Selection Mode → FX Cycle (V-Pot)** / **Selection Mode → Instance Cycle (V-Pot)**) via Settings → Bindings.
+Three buttons (Selection Mode block), each carrying the mode its silk-screen names: **Selection Mode → NORM (SEL Button)**, **Selection Mode → REC + MON (SEL Button)** and **Selection Mode → AUTO (V-Pot)**. REC gets REC + MON rather than plain REC, because arm plus monitor is the one you reach for. Rebind to any other Selection Mode action, including **FX Cycle** and **Instance Cycle**, via Settings → Bindings. They shipped unbound between 2026-05-14 and 2026-09-02.
 
 ## Above NORM/REC/AUTO: AUTOMATION row
 
