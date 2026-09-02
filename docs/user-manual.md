@@ -1196,6 +1196,8 @@ Open a bank cell in the matrix and the editor starts with a **Bank name** field.
 
 The name belongs to one **modifier set**, like everything else about a soft-key bank, so Plain and Shift can be two differently named banks on one key.
 
+Recalling a preset also turns the bank back into a static one. A **dynamic** bank computes all eight keys from the track and ignores whatever is stored in its slots, so a preset recalled onto one would otherwise write eight actions no key could reach.
+
 **Recalling a preset names the bank after it.** Load *Drum compression* into a bank and that is what the bank is called, in the banner and in the panel's menu, without typing it a second time. Factory banks do the same, so a recalled *Encoder Modes* announces itself by name. Type over it whenever you want something else; the name is yours from then on.
 
 The field is never empty: with no name of your own it carries the name the bank would announce anyway — its dynamic kind (`FX`, `Groups`, `Colours`, `Favourites`, `Hue`), else its position (`Q2 Soft 3`). Clearing the field puts that default back, which is also how you undo a name.

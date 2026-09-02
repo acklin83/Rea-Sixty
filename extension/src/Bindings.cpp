@@ -5475,6 +5475,14 @@ bool recallBankPreset(int idx, int layer, int quick, int subBank, int mod)
     // recall actually wrote, so a Plain-only preset does not rename Shift.
     sb.name[p.hasShift ? 0 : mod] = p.name;
     if (p.hasShift) sb.name[1] = p.name;
+    // ⇨ AND IT STOPS BEING A DYNAMIC BANK. A bank with a kind IGNORES its eight
+    // static slots — it computes them from the track — so recalling a preset
+    // onto one wrote eight actions nobody could reach: the keys went on saying
+    // FX while the matrix, reading the freshly written name, said the preset.
+    // The set being written goes back to None; a set left untouched keeps
+    // whatever it had (Frank 2026-09-02, Focus Set & Selsets onto an FX bank).
+    sb.dynamic[p.hasShift ? 0 : mod] = DynamicBankKind::None;
+    if (p.hasShift) sb.dynamic[1] = DynamicBankKind::None;
     persistLocked_();
     return true;
 }
@@ -5636,6 +5644,14 @@ bool recallFactoryBankPreset(int idx, int layer, int quick, int subBank, int mod
     // "Encoder Modes" in the banner, not "Q3 Soft 1".
     sb.name[p.hasShift ? 0 : mod] = p.name;
     if (p.hasShift) sb.name[1] = p.name;
+    // ⇨ AND IT STOPS BEING A DYNAMIC BANK. A bank with a kind IGNORES its eight
+    // static slots — it computes them from the track — so recalling a preset
+    // onto one wrote eight actions nobody could reach: the keys went on saying
+    // FX while the matrix, reading the freshly written name, said the preset.
+    // The set being written goes back to None; a set left untouched keeps
+    // whatever it had (Frank 2026-09-02, Focus Set & Selsets onto an FX bank).
+    sb.dynamic[p.hasShift ? 0 : mod] = DynamicBankKind::None;
+    if (p.hasShift) sb.dynamic[1] = DynamicBankKind::None;
     persistLocked_();
     return true;
 }
