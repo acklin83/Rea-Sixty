@@ -118,6 +118,14 @@ jobs:
       - name: Build
         run: cmake --build extension/build --config Release --parallel
 
+      # Source-only, so one platform is enough: every builtin needs a picker
+      # description AND a soft-key label of at most twelve characters. Without
+      # the first it can be bound and not looked up; without the second the key
+      # ships nameless, because the label field auto-fills from this table.
+      - name: Verify builtin descriptions and labels
+        if: matrix.container == '' && runner.os == 'macOS'
+        run: python3 extension/tools/check_builtin_docs.py
+
       # Fail here rather than in a user's REAPER. Checks the symbol versions
       # the .so and the two bundled libs demand of the system, against the
       # oldest distro we support. Catches a bumped container image, a dropped
