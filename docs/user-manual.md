@@ -1143,13 +1143,13 @@ Layer 1's Q1 and Q2 are SSL's own CS and BC rows and are not sets.
 
 The number matters because it is an address. **Soft-Key Set: engage (param 1-7)** is a bindable action, so a set sits on any key, foot-switch, Stream Deck tile or keyboard shortcut you like — the Quick button is one way in, not the only one. Engaging a set leaves the soft-key bank where that layer had it, so coming back puts you on the bank you were using.
 
-The matrix is seven rows by six columns. Each row is a set, with a **name** you can type in its first column; each cell is one of its banks, showing that bank's name, or its dynamic kind, or a dash when it holds nothing. The engaged cell is marked, and clicking a cell engages that bank and opens it in the editor below. The **Modifier** row switches the whole matrix between the Plain and Shift sets.
+The matrix is seven rows by six columns. Each row is a set, with a **name** you can type in its first column; each cell is one of its banks, showing that bank's name, or its dynamic kind, or a dash when it holds nothing. The engaged cell is marked, and clicking a cell engages that bank and opens it in the editor below. **Plain and Shift sit in the matrix header**, to the right of the last bank column, because the matrix shows one of the two sets at a time and which one has to be readable inside it.
 
 The set's name is what the mode-change banner and the focused-track panel say when a bank in it has no name of its own: an unnamed bank in a set called *Editing* reads `Editing, Soft 3` instead of `Set 2, Soft 3`.
 
 Each slot carries a **Behavior** (*Momentary*, *Toggle* or *Hold*), the same setting a regular button has.
 
-Every soft-key bank also holds **two sets of keys**: Plain and Shift. Holding the FINE key switches the whole row of eight, labels and all, and releasing returns to Plain. The **Modifier** row beside the matrix chooses which set you are editing, and the scribble previews follow it. Like those two pickers it follows the hardware: press FINE to jump to the Shift set and press it again to come back to Plain. Releasing never moves it, so you can edit with the mouse. A set you left empty shows empty on the hardware, it does not borrow the Plain label. **While the Bindings pane is open the surface follows the Modifier row** rather than the key you are holding: the eight keys show the set you are editing and a press fires that set, so what you see on the hardware is what you are working on. Close the pane or switch to another one and the surface goes back to following the held key.
+Every soft-key bank also holds **two sets of keys**: Plain and Shift. Holding the FINE key switches the whole row of eight, labels and all, and releasing returns to Plain. The **Plain / Shift** switch in the matrix header chooses which set you are editing, and the matrix cells and the scribble previews follow it. Like those two pickers it follows the hardware: press FINE to jump to the Shift set and press it again to come back to Plain. Releasing never moves it, so you can edit with the mouse. A set you left empty shows empty on the hardware, it does not borrow the Plain label. **While the Bindings pane is open the surface follows the Modifier row** rather than the key you are holding: the eight keys show the set you are editing and a press fires that set, so what you see on the hardware is what you are working on. Close the pane or switch to another one and the surface goes back to following the held key.
 
 There is no Cmd or Ctrl set. The surface carries one modifier key and no more, so those two would have to come from the computer keyboard, where they already belong to the FX-Learn modifier layers.
 
@@ -1190,6 +1190,8 @@ These are built only from Rea-Sixty's own actions; generic DAW actions (deselect
 Open a bank cell in the matrix and the editor starts with a **Bank name** field. What you type there is what the bank is called on screen: in the mode-change banner when you switch to it, and in the focused-track panel's *UF8 soft-key bank name* element. The UF8 has no display of its own to announce it on, which is why both of those are on screen rather than on the surface.
 
 The name belongs to one **modifier set**, like everything else about a soft-key bank, so Plain and Shift can be two differently named banks on one key.
+
+**Recalling a preset names the bank after it.** Load *Drum compression* into a bank and that is what the bank is called, in the banner and in the panel's menu, without typing it a second time. Factory banks do the same, so a recalled *Encoder Modes* announces itself by name. Type over it whenever you want something else; the name is yours from then on.
 
 The field is never empty: with no name of your own it carries the name the bank would announce anyway — its dynamic kind (`FX`, `Groups`, `Colours`, `Favourites`, `Hue`), else its position (`Q2 Soft 3`). Clearing the field puts that default back, which is also how you undo a name.
 
@@ -1934,8 +1936,8 @@ These step *only* the Instance index (CS / BC / UF8-Mode-mapped). They are the f
 
 - **Instance: next (focused domain)** — next Instance in the focused domain on the focused track. Wraps.
 - **Instance: previous (focused domain)** — previous Instance in the focused domain.
-- **Focus → Channel Strip** — set the focused domain to Channel Strip (so subsequent *Instance: next* walks CS Instances, UC1 CS section refreshes).
-- **Focus → Bus Comp** — set the focused domain to Bus Comp.
+- **Soft-Key Bank 1 (SSL Channel Strip)** — bring SSL's own channel-strip row back to the top soft-keys, which also sets the focused domain to Channel Strip (so a subsequent *Instance: next* walks CS Instances and the UC1's CS section refreshes). It drops whichever set was engaged on this layer, which is how the SSL row reappears. Named for the row you see rather than for the focus change underneath it.
+- **Soft-Key Bank 2 (SSL Bus Comp)** — the same for SSL's bus-comp row.
 
 The focused parameter slot is **preserved across an Instance Cycle** when the new instance offers the same LinkSlot (same domain, same parameter convention). Stops the focused-param surfaces (UC1 BC/CS encoder, V-Pot mirroring) from snapping back to slot 0 — typically the Bypass / FX In toggle — on every cycle step. Cross-domain cycles (CS → BC) and UF8-only user maps still reset to slot 0 because the slot position isn't meaningful there.
 
@@ -1973,7 +1975,7 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 
 - **Select soft-key bank (param 0..5)** — select Soft-Key bank N (CS banks 0..5; in Bus-Comp mode, 0..1).
 - **SSL Soft-Key (current bank, slot 0..7)** — fire SSL Soft-Key cell N in the currently selected bank.
-- **SSL Standard Bank: V-POT (param: 0..7)** — fire SSL V-Pot N (bank-current). The native bindings the Top Soft-Keys use to map to the active CS/BC bank's parameters. (Explicit-bank siblings **SSL Standard Bank 1** … **SSL Standard Bank 5** target a fixed bank.)
+- **Focus SSL param (V-POT row) (param: 0..7)** — focus SSL V-Pot N in whichever row the surface is on. The native bindings the Top Soft-Keys use to map to the active CS/BC bank's parameters. Siblings **Focus SSL param (row 1)** … **(row 5)** name a fixed row instead, so a key can always land on the same parameter whatever page you are on. **None of these switch a bank** — the old name, *SSL Standard Bank N*, read as though they did.
 
 ## Send / Receive
 

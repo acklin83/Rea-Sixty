@@ -47716,12 +47716,15 @@ void registerBindingHandlers()
     };
     {
         auto d = domainFocus(uf8::Domain::ChannelStrip);
-        d.displayName = "Focus → Channel Strip";
+        // Named as the row the user SEES, not as the internal focus change.
+        // Pressing it is how SSL's own channel-strip row comes back, and that
+        // is the only thing anyone picks it for (Frank 2026-09-02).
+        d.displayName = "Soft-Key Bank 1 (SSL Channel Strip)";
         registerBuiltin("domain_cs", d);
     }
     {
         auto d = domainFocus(uf8::Domain::BusComp);
-        d.displayName = "Focus → Bus Comp";
+        d.displayName = "Soft-Key Bank 2 (SSL Bus Comp)";
         registerBuiltin("domain_bc", d);
     }
 
@@ -47760,10 +47763,23 @@ void registerBindingHandlers()
             "", false
         };
     };
+    // ⇨ NAMED BY THE SET, NOT BY THE COORDINATE. These nine used to read
+    // "Soft-Key Bank 1..9", which was the flat pre-set model: a "bank" is now
+    // one of the SIX under a set, so the old label pointed at the wrong noun and
+    // at the wrong number (Layer 1 Quick 3 read "Bank 3" and IS Set 1).
+    // The ACTION NAMES stay softkey_bank_N — they are persisted in every
+    // binding, and renaming them would break existing configs. Display only.
+    // Layer 1's Q1/Q2 carry no set (SSL owns those two rows), so 1 and 2 say
+    // what they really are instead of borrowing a set number.
     for (int n = 1; n <= 9; ++n) {
         auto d = softKeyBank(n);
+        const int layer = (n - 1) / 3, quick = (n - 1) % 3;
+        const int setNo = uf8::bindings::layerQuickToSoftKeySet(layer, quick);
         char name[32]; snprintf(name, sizeof(name), "softkey_bank_%d", n);
-        char dn[40];   snprintf(dn,   sizeof(dn),   "Soft-Key Bank %d", n);
+        char dn[56];
+        if (setNo > 0) snprintf(dn, sizeof(dn), "Soft-Key Set %d", setNo);
+        else           snprintf(dn, sizeof(dn),
+                                "Layer 1 Quick %d (SSL's row, no set)", quick + 1);
         d.displayName = dn;
         registerBuiltin(name, d);
     }
@@ -48610,14 +48626,19 @@ void registerBindingHandlers()
         };
     };
     {
+        // ⇨ THESE DO NOT SWITCH A BANK. Each one FOCUSES one SSL parameter,
+        // named by the bank it lives in, whatever page the surface is on: the
+        // point is "always land on HMF Q" without depending on the page state.
+        // "SSL Standard Bank 3" read like a bank change and is not one
+        // (Frank 2026-09-02).
         auto d = sslBankHandler(0);
-        d.displayName = "SSL Standard Bank: V-POT";
+        d.displayName = "Focus SSL param (V-POT row)";
         registerBuiltin("ssl_bank_vpot", d);
     }
     for (int b = 1; b <= 5; ++b) {
-        char name[24], desc[40];
+        char name[24], desc[48];
         snprintf(name, sizeof(name), "ssl_bank_%d", b);
-        snprintf(desc, sizeof(desc), "SSL Standard Bank %d", b);
+        snprintf(desc, sizeof(desc), "Focus SSL param (row %d)", b);
         auto d = sslBankHandler(b);
         d.displayName = desc;
         registerBuiltin(name, d);

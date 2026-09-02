@@ -5462,6 +5462,12 @@ bool recallBankPreset(int idx, int layer, int quick, int subBank, int mod)
         if (p.hasShift)
             applyPresetSlotLocked_(p.shiftSlots[s], 1, sb.slots[s]);
     }
+    // ⇨ THE PRESET'S NAME BECOMES THE BANK'S NAME. Recalling "Drum compression"
+    // and then reading "Q2 Soft 3" in the banner is the bank telling you the one
+    // thing you already knew (Frank 2026-09-02). Written only to the sets this
+    // recall actually wrote, so a Plain-only preset does not rename Shift.
+    sb.name[p.hasShift ? 0 : mod] = p.name;
+    if (p.hasShift) sb.name[1] = p.name;
     persistLocked_();
     return true;
 }
@@ -5619,6 +5625,10 @@ bool recallFactoryBankPreset(int idx, int layer, int quick, int subBank, int mod
         if (p.hasShift)
             applyPresetSlotLocked_(p.shiftSlots[s], 1, sb.slots[s]);
     }
+    // Same rule as the user recall: a bank is called what it was recalled from.
+    // "Encoder Modes" in the banner, not "Q3 Soft 1".
+    sb.name[p.hasShift ? 0 : mod] = p.name;
+    if (p.hasShift) sb.name[1] = p.name;
     persistLocked_();
     return true;
 }

@@ -6865,7 +6865,12 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             static char s_setNameBuf[uf8::bindings::kSoftKeySetCount][64] = {};
             static bool s_setNameEditing[uf8::bindings::kSoftKeySetCount] = {};
             int mtFlags = 0;
-            if (ImGui_BeginTable(ctx, "##sk_set_matrix", 7, &mtFlags,
+            // Eight columns: the set name, its six banks, and a last one that
+            // exists only to carry the Plain/Shift switch in its header. The
+            // matrix shows ONE set at a time, so which one it is has to be
+            // readable inside it — it used to sit in a row underneath, far
+            // from the cells it governs (Frank 2026-09-02).
+            if (ImGui_BeginTable(ctx, "##sk_set_matrix", 8, &mtFlags,
                                  nullptr, nullptr, nullptr)) {
                 const int wFixedCol = ImGui_TableColumnFlags_WidthFixed;
                 int wSet = wFixedCol; double cwSet = scaleW_(ctx, 150.0);
@@ -6876,7 +6881,28 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                     ImGui_TableSetupColumn(ctx, sbLabels[c], &wB[c], &cwB[c],
                                            nullptr);
                 }
-                ImGui_TableHeadersRow(ctx);
+                int wMod = wFixedCol; double cwMod = scaleW_(ctx, 132.0);
+                ImGui_TableSetupColumn(ctx, "##sk_mod_col", &wMod, &cwMod,
+                                       nullptr);
+                // Hand-drawn header row rather than TableHeadersRow: the last
+                // cell holds two radio buttons, not a title.
+                int headerRow = ImGui_TableRowFlags_Headers;
+                ImGui_TableNextRow(ctx, &headerRow, nullptr);
+                ImGui_TableSetColumnIndex(ctx, 0);
+                ImGui_TableHeader(ctx, "Set");
+                for (int c = 0; c < 6; ++c) {
+                    ImGui_TableSetColumnIndex(ctx, c + 1);
+                    ImGui_TableHeader(ctx, sbLabels[c]);
+                }
+                ImGui_TableSetColumnIndex(ctx, 7);
+                for (int m = 0; m < uf8::bindings::kSoftKeyModifierSets; ++m) {
+                    char rid[48];
+                    snprintf(rid, sizeof(rid), "%s##skmx_mod%d",
+                             kModifierName_[m], m);
+                    if (ImGui_RadioButton(ctx, rid, g_slotEditModIdx == m))
+                        g_slotEditModIdx = m;
+                    if (m == 0) ImGui_SameLine(ctx, nullptr, nullptr);
+                }
                 for (int setNo = 1; setNo <= uf8::bindings::kSoftKeySetCount;
                      ++setNo) {
                     int sl = 0, sq = 0;
@@ -6952,11 +6978,14 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                    s_editLayer, s_editQuick, s_editSubBank,
                    g_slotEditModIdx, &uf8SubBankDynOwn)
                != uf8::bindings::DynamicBankKind::None;
-        drawBankLayerRow_(ctx, "uf8bank", &g_slotEditModIdx);
+        // The Plain/Shift switch itself lives in the matrix header now, where
+        // the cells it governs are. This line is the explanation that went with
+        // it, kept here beside the schematic it also describes.
         ImGui_TextDisabled(ctx,
-            "Follows the modifier you hold, and stays there when you let go "
-            "so you can edit it. Shift = the FINE key. While this pane is "
-            "open the surface shows and fires the set picked here.");
+            "The Plain/Shift switch is in the matrix header. It follows the "
+            "modifier you hold and stays there when you let go so you can edit "
+            "it. Shift = the FINE key. While this pane is open the surface "
+            "shows and fires the set picked there.");
         if (uf8SubBankIsDyn && g_slotEditModIdx != 0) {
             ImGui_TextDisabled(ctx, uf8SubBankDynOwn
                 ? "This set is a dynamic bank of its own. Its 8 keys come from "
