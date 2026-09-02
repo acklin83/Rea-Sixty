@@ -1142,7 +1142,7 @@ A **set** is the six soft-key banks under one Quick key, and it has a number of 
 | 5 – 7 | 3 | Q1 – Q3 |
 | 8 – 9 | 1 | Q1 – Q2 |
 
-**Sets 8 and 9 are SSL's own CS and BC rows.** They are sets like the others and sit in the matrix with their six banks, which are SSL's six pages. On Plain, the keys SSL occupies stay SSL's and cannot be edited; the ones it leaves free are yours, and the whole Shift set is yours on every page. Engaging one of them means *dis*engaging: SSL's row is what the layer shows when no set is engaged, so picking Set 8 drops the set, points the domain at Channel Strip and selects the page. That is the same thing *Soft-Key Bank 1 (SSL Channel Strip)* does from a key.
+**Sets 8 and 9 are SSL's own CS and BC rows.** They are sets like the others and sit in the matrix with their six banks, which are the plug-in's six pages, named *SSL CS Bank 1* to *6*. All six are always there, because those pages exist whether or not you have put anything in them. On Plain, the keys SSL occupies stay SSL's and cannot be edited; the ones it leaves free are yours, and the whole Shift set is yours on every page. Engaging one of them means *dis*engaging: SSL's row is what the layer shows when no set is engaged, so picking Set 8 drops the set, points the domain at Channel Strip and selects the page. That is the same thing *Soft-Key Set 8 (SSL Channel Strip)* does from a key.
 
 They were numbered 8 and 9 rather than 1 and 2 because set numbers are addresses that bindings point at, and renumbering would have moved everyone else's.
 
@@ -1941,8 +1941,8 @@ These step *only* the Instance index (CS / BC / UF8-Mode-mapped). They are the f
 
 - **Instance: next (focused domain)** — next Instance in the focused domain on the focused track. Wraps.
 - **Instance: previous (focused domain)** — previous Instance in the focused domain.
-- **Soft-Key Bank 1 (SSL Channel Strip)** — bring SSL's own channel-strip row back to the top soft-keys, which also sets the focused domain to Channel Strip (so a subsequent *Instance: next* walks CS Instances and the UC1's CS section refreshes). It drops whichever set was engaged on this layer, which is how the SSL row reappears. Named for the row you see rather than for the focus change underneath it.
-- **Soft-Key Bank 2 (SSL Bus Comp)** — the same for SSL's bus-comp row.
+- **Soft-Key Set 8 (SSL Channel Strip)** — bring SSL's own channel-strip row back to the top soft-keys, which also sets the focused domain to Channel Strip (so a subsequent *Instance: next* walks CS Instances and the UC1's CS section refreshes). It drops whichever set was engaged on this layer, which is how the SSL row reappears. Named for the row you see rather than for the focus change underneath it.
+- **Soft-Key Set 9 (SSL Bus Comp)** — the same for SSL's bus-comp row. Both have a plain-numbered twin, *Soft-Key Set 8* and *Soft-Key Set 9*, which does the same thing.
 
 The focused parameter slot is **preserved across an Instance Cycle** when the new instance offers the same LinkSlot (same domain, same parameter convention). Stops the focused-param surfaces (UC1 BC/CS encoder, V-Pot mirroring) from snapping back to slot 0 — typically the Bypass / FX In toggle — on every cycle step. Cross-domain cycles (CS → BC) and UF8-only user maps still reset to slot 0 because the slot position isn't meaningful there.
 

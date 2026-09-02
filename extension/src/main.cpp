@@ -27547,6 +27547,17 @@ static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod)
                                   "Soft 3", "Soft 4", "Soft 5" };
     if (sub < 0 || sub >= 6) return std::string();
     const int setNo = uf8::bindings::layerQuickToSoftKeySet(layer, quick);
+    // ⇨ SSL'S TWO SETS COUNT THEIR BANKS, they do not name them after the
+    // selector key. Those six ARE the plug-in's six pages, and the plug-in
+    // calls them pages 1 to 6 — "SSL Factory CS, V-POT" was the set's name
+    // plus a key name, twice as long and neither of the two words a user
+    // looking for page 3 would search for (Frank 2026-09-02).
+    if (setNo == 8 || setNo == 9) {
+        char sb[32];
+        snprintf(sb, sizeof(sb), "SSL %s Bank %d",
+                 setNo == 9 ? "BC" : "CS", sub + 1);
+        return sb;
+    }
     std::string setName = (setNo > 0) ? uf8::bindings::getSoftKeySetName(setNo)
                                       : std::string();
     char b[80];
@@ -47756,12 +47767,12 @@ void registerBindingHandlers()
         // Named as the row the user SEES, not as the internal focus change.
         // Pressing it is how SSL's own channel-strip row comes back, and that
         // is the only thing anyone picks it for (Frank 2026-09-02).
-        d.displayName = "Soft-Key Bank 1 (SSL Channel Strip)";
+        d.displayName = "Soft-Key Set 8 (SSL Channel Strip)";
         registerBuiltin("domain_cs", d);
     }
     {
         auto d = domainFocus(uf8::Domain::BusComp);
-        d.displayName = "Soft-Key Bank 2 (SSL Bus Comp)";
+        d.displayName = "Soft-Key Set 9 (SSL Bus Comp)";
         registerBuiltin("domain_bc", d);
     }
 
@@ -47775,8 +47786,9 @@ void registerBindingHandlers()
     auto softKeyBank = [](int bankN) {
         const int layer = (bankN - 1) / 3;
         const int quick = (bankN - 1) % 3;
+        const int setNo = uf8::bindings::layerQuickToSoftKeySet(layer, quick);
         return DescBuilder{
-            [layer, quick](bool firing, bool /*pressed*/, int /*param*/) {
+            [layer, quick, setNo](bool firing, bool /*pressed*/, int /*param*/) {
                 if (!firing) return;
                 // UF8 Plugin Mode: locked out — same reason as
                 // domain_cs/bc above. The Quick-jump would engage a
@@ -47784,16 +47796,27 @@ void registerBindingHandlers()
                 // top-soft-key labels and break access to gelearnte
                 // Parameter (Frank 2026-05-13).
                 if (g_uf8PluginMode.load()) return;
-                if (uf8::bindings::getActiveLayer() != layer) {
-                    uf8::bindings::setActiveLayer(layer);
-                    pushLayerLeds(layer);
-                }
-                if (g_activeQuick[layer].exchange(quick) != quick) {
-                    g_bankDirty.store(true);
-                    g_softKeyDirty.store(true);
-                }
+                // ⇨ THROUGH engageUserBank_, NOT PAST IT. This used to store
+                // the quick itself, which is right for seven of the nine and
+                // exactly wrong for Sets 8 and 9: those ARE the SSL rows, which
+                // show while NO set is engaged, so storing the quick hid the row
+                // the key was pressed to get. Same body as the matrix click and
+                // the Soft-Key Set action, so all three agree (Frank 2026-09-02).
+                const int page = (setNo >= 8) ? g_softKeyBank.load()
+                                              : g_activeSubBank[layer].load();
+                engageUserBank_(layer, quick, page);
             },
-            [layer, quick](int) {
+            [layer, quick, setNo](int) {
+                // Sets 8/9 read as engaged when nothing is: their row IS the
+                // no-set state. Same test the SSL Set actions use.
+                if (setNo >= 8) {
+                    const auto want = (setNo == 9) ? uf8::Domain::BusComp
+                                                   : uf8::Domain::ChannelStrip;
+                    if (uf8::getFocusedParam().domain != want) return false;
+                    const int cur = uf8::bindings::getActiveLayer();
+                    if (cur < 0 || cur > 2) return true;
+                    return g_activeQuick[cur].load() < 0;
+                }
                 return uf8::bindings::getActiveLayer() == layer
                     && g_activeQuick[layer].load() == quick;
             },
@@ -47814,9 +47837,7 @@ void registerBindingHandlers()
         const int setNo = uf8::bindings::layerQuickToSoftKeySet(layer, quick);
         char name[32]; snprintf(name, sizeof(name), "softkey_bank_%d", n);
         char dn[56];
-        if (setNo > 0) snprintf(dn, sizeof(dn), "Soft-Key Set %d", setNo);
-        else           snprintf(dn, sizeof(dn),
-                                "Layer 1 Quick %d (SSL's row, no set)", quick + 1);
+        snprintf(dn, sizeof(dn), "Soft-Key Set %d", setNo);
         d.displayName = dn;
         registerBuiltin(name, d);
     }

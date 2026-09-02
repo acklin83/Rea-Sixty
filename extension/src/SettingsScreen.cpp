@@ -1118,6 +1118,14 @@ static uint32_t softKeyLedTint_(int layer, int quick, int sub, int slotIdx,
     if (kind != DynamicBankKind::None
         && (dynOwnsSet || !setOwnsDynamicKey(bd, mod)))
         return 0;
+    // ⇨ A KEY THAT DOES NOTHING SHOWS NOTHING. A colour sits on the Binding
+    // whether or not anything is assigned, so reading it unconditionally
+    // painted every unassigned key in whatever the bank's colour happened to
+    // be — four red tiles on SSL's V-POT page and a red row across an
+    // unfinished bank (Frank 2026-09-02). slotIsEmpty is the dispatch
+    // question, "does this key DO anything", which is exactly the one worth
+    // colouring; the serialisation predicates would say yes to a colour alone.
+    if (slotIsEmpty(bd.shortPress[mod])) return 0;
     uint8_t rgb[3] = { 0xFF, 0xFF, 0xFF };
     Brightness bri = Brightness::Bright;
     effectiveLedActive(bd, bd.shortPress[mod], rgb, bri);
@@ -6988,9 +6996,17 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                         // An unnamed, empty bank reads as its own coordinates,
                         // which in a matrix that already says both is noise. Show
                         // a dash there and let the eye find what is filled.
-                        const bool filled =
-                            uf8::bindings::subBankHasContent(sl, sq, c,
-                                                             g_slotEditModIdx);
+                        // ⇨ SSL'S SIX PAGES ARE NEVER EMPTY. subBankHasContent
+                        // answers for the USER store, and on Sets 8/9 that store
+                        // holds only the free-slot overrides — so the two rows
+                        // came up as five dashes and one cell, in whichever page
+                        // happened to carry an override, while the pages the
+                        // plug-in actually fills read as nothing at all
+                        // (Frank 2026-09-02). Those six exist by definition.
+                        const bool sslSet = (setNo == 8 || setNo == 9);
+                        const bool filled = sslSet
+                            || uf8::bindings::subBankHasContent(
+                                   sl, sq, c, g_slotEditModIdx);
                         std::string txt = filled ? cell : std::string("\xE2\x80\x94");
                         const bool here = (sl == s_editLayer && sq == s_editQuick
                                         && c == s_editSubBank);
@@ -7006,9 +7022,11 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 ImGui_EndTable(ctx);
             }
             ImGui_TextDisabled(ctx,
-                "Layer 1's Q1 and Q2 are SSL's own CS and BC rows and are not "
-                "sets. Clicking a bank engages it, exactly like pressing the "
-                "keys would.");
+                "Sets 8 and 9 are SSL's own CS and BC rows, and their six banks "
+                "are the plug-in's six pages. On Plain the keys it fills stay "
+                "its own; the ones it leaves free are yours, and the whole "
+                "Shift set is yours. Clicking a bank engages it, exactly like "
+                "pressing the keys would.");
             ImGui_Spacing(ctx);
         }
         // The bank's two sets. Holding the modifier on the hardware shows
