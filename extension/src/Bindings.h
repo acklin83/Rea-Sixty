@@ -640,6 +640,14 @@ struct Layer {
 struct SoftKeyBankPreset {
     std::string name;                              // unique, user-editable
     Binding     slots[kSlotsPerSubBank];           // 8 top-soft-key bindings
+    // ⇨ A PRESET THAT DOES NOT FIT IN EIGHT SPILLS INTO SHIFT. A bank has two
+    // full sets, so a curated list longer than eight keys belongs on both rather
+    // than being cut at eight (the Encoder Modes bank lost seven of fifteen that
+    // way, and Focus Set lost its last entry silently). Only the factory banks
+    // set this; user presets are captured from one set and leave it false, so
+    // their serialisation is unchanged.
+    Binding     shiftSlots[kSlotsPerSubBank];
+    bool        hasShift = false;
 };
 
 // UF1 soft-key banks: the 4 large-screen display soft-keys × 10 pages =
@@ -1048,6 +1056,9 @@ bool              recallBankPreset(int idx, int layer, int quick, int subBank,
 int               factoryBankPresetCount();
 SoftKeyBankPreset factoryBankPresetAt(int idx);          // copy; OOR = empty
 // Copy factory bank `idx`'s 8 slots into (layer, quick, subBank).
+// True when factory bank `idx` fills both modifier sets (more than eight
+// entries). The confirm dialogs name that before overwriting.
+bool              factoryBankSpills(int idx);
 bool              recallFactoryBankPreset(int idx, int layer, int quick,
                                           int subBank, int mod);
 // Bulk: fill the 6 sub-banks of (layer, quick) with factory banks 0..5 in

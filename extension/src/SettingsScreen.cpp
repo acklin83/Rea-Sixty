@@ -6387,12 +6387,24 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                                   "Recall factory bank?###fac_recall_confirm",
                                   nullptr, nullptr)) {
             SoftKeyBankPreset p = factoryBankPresetAt(facRef);
-            char line[256];
-            snprintf(line, sizeof(line),
-                "Overwrite the 8 slots of %s (%s) on (Layer %d, Quick %d) with "
-                "factory bank '%s'?",
-                sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
-                editLayer + 1, engagedQ + 1, p.name.c_str());
+            // ⛔ SAY WHICH SETS. A bank with more than eight entries fills Plain
+            // AND Shift, so it overwrites sixteen slots and not the eight you are
+            // looking at. The last time a dialog undercounted what a recall
+            // touched it cost a Shift set nobody had been warned about
+            // (2026-08-18), and this one can do it on purpose.
+            char line[320];
+            if (factoryBankSpills(facRef))
+                snprintf(line, sizeof(line),
+                    "Factory bank '%s' has more than eight entries, so it fills "
+                    "BOTH sets of %s on (Layer %d, Quick %d): Plain and Shift, "
+                    "16 slots. Overwrite them?",
+                    p.name.c_str(), sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
+            else
+                snprintf(line, sizeof(line),
+                    "Overwrite the 8 slots of %s (%s) on (Layer %d, Quick %d) with "
+                    "factory bank '%s'?",
+                    sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
+                    editLayer + 1, engagedQ + 1, p.name.c_str());
             ImGui_TextWrapped(ctx, line);
             ImGui_Spacing(ctx);
             if (ImGui_Button(ctx, "Recall##fac_recall_ok",
@@ -6418,9 +6430,16 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                 // Say it only while it is true: with five factory banks and six
                 // places they all fit, and that warning was about a seventh.
                 char q[220];
+                bool anySpill = false;
+                for (int i = 0; i < factoryBankPresetCount(); ++i)
+                    if (factoryBankSpills(i)) { anySpill = true; break; }
                 std::snprintf(q, sizeof(q),
-                    "Overwrite all 48 slots of Layer 1 / Quick 3 on the selected "
-                    "modifier set?%s",
+                    "Overwrite Layer 1 / Quick 3?%s%s",
+                    anySpill
+                        ? " Banks with more than eight entries fill both sets, "
+                          "Plain and Shift, so this touches more than the 48 "
+                          "slots of one set."
+                        : " That is 48 slots on the selected modifier set.",
                     (factoryBankPresetCount() > kSubBanksPerQuick)
                         ? " A set holds six soft-key banks, so the last factory "
                           "bank is not part of this."

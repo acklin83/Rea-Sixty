@@ -5377,30 +5377,50 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
 {
     static const std::vector<SoftKeyBankPreset> kBanks = []() {
         using SlotDef = std::pair<const char*, const char*>;   // action, label
+        // Up to sixteen: the first eight are Plain, the rest are Shift, and a
+        // list of eight or fewer leaves the Shift set alone entirely. Anything
+        // past sixteen would be a bank that does not exist, so it is dropped —
+        // and unlike the old cut at eight, that cannot happen unnoticed, because
+        // every list here is right above this line.
         auto bank = [](const char* presetName,
                        std::initializer_list<SlotDef> slots) {
             SoftKeyBankPreset p;
             p.name = presetName;
             int i = 0;
             for (const auto& s : slots) {
-                if (i >= kSlotsPerSubBank) break;
-                p.slots[i++] = mkBuiltin(s.first, Behavior::Momentary,
-                                         s.second);
+                if (i >= kSlotsPerSubBank * 2) break;
+                Binding b = mkBuiltin(s.first, Behavior::Momentary, s.second);
+                if (i < kSlotsPerSubBank) p.slots[i] = b;
+                else { p.shiftSlots[i - kSlotsPerSubBank] = b; p.hasShift = true; }
+                ++i;
             }
             return p;
         };
         // Labels up to 12 chars — the UF8 top-soft-key LCD width
         // (buildPluginSlotName caps at 12; the resolver centre-pads to 12).
         std::vector<SoftKeyBankPreset> v;
+        // All fifteen encoder modes: eight on Plain, seven on Shift. The bank
+        // used to stop at eight and the other seven were unreachable from it.
+        // ⚠ "Focus Wheel" was the label on encoder_focus, and that builtin is
+        // MOUSEWHEEL — every other readout in the program calls it that. The old
+        // name is a leftover and named the one mode nobody could find.
         v.push_back(bank("Encoder Modes", {
-            {"encoder_nav",      "Ch Select"},
-            {"encoder_instance", "Instance"},
-            {"encoder_fx_cycle", "FX Cycle"},
-            {"encoder_fx_move",  "FX Move"},
-            {"encoder_cs_cycle", "CS Cycle"},
-            {"encoder_markers",  "Markers"},
-            {"encoder_nudge",    "Nudge"},
-            {"encoder_focus",    "Focus Wheel"},
+            {"encoder_nav",       "Ch Select"},
+            {"encoder_instance",  "Instance"},
+            {"encoder_fx_cycle",  "FX Cycle"},
+            {"encoder_fx_move",   "FX Move"},
+            {"encoder_cs_cycle",  "CS Cycle"},
+            {"encoder_markers",   "Markers"},
+            {"encoder_nudge",     "Nudge"},
+            {"encoder_focus",     "Mousewheel"},
+            // Shift
+            {"encoder_bc_cycle",           "BC Cycle"},
+            {"encoder_fav_cycle",          "Fav Cycle"},
+            {"encoder_selset_cycle",       "Selset Cycle"},
+            {"encoder_bank_by_1",          "Bank by 1"},
+            {"encoder_last_param",         "Last Param"},
+            {"encoder_fx_scroll_all",      "FX Scroll"},
+            {"encoder_instance_scroll_all","Inst Scroll"},
         }));
         v.push_back(bank("Focus Set & Selsets", {
             {"temp_selset_recall",          "Pin Set"},
@@ -5488,17 +5508,30 @@ bool recallFactoryBankPreset(int idx, int layer, int quick, int subBank, int mod
     if (idx < 0 || idx >= static_cast<int>(banks.size())) return false;
     const SoftKeyBankPreset p = banks[idx];   // copy before taking the lock
     std::lock_guard<std::mutex> lk(g_cfgMutex);
+    auto& sb = g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank];
+    // ⇨ A SPILLING BANK OWNS BOTH SETS. With eight or fewer entries the recall
+    // touches only the set you are on, which is the 2026-08-18 fix and stays:
+    // assigning the whole Binding took the other set and the long/double presses
+    // with it. A bank that spills is a different thing — it was built as sixteen
+    // keys — so it writes Plain from slots and Shift from shiftSlots, and the
+    // dialog says so before you press it (Frank 2026-09-02).
     for (int s = 0; s < kSlotsPerSubBank; ++s) {
-        // Same writer as the user recall. On Plain this used to assign the whole
-        // Binding (`dst = p.slots[s]`), which took the OTHER modifier set and the
-        // long/double presses down with it — so the two recall buttons in one
-        // window behaved differently (Frank 2026-08-18).
-        applyPresetSlotLocked_(p.slots[s], mod,
-                               g_cfg.userQuicks[layer].quicks[quick]
-                                   .subBanks[subBank].slots[s]);
+        // Same writer as the user recall, one slot and one set at a time.
+        applyPresetSlotLocked_(p.slots[s], p.hasShift ? 0 : mod, sb.slots[s]);
+        if (p.hasShift)
+            applyPresetSlotLocked_(p.shiftSlots[s], 1, sb.slots[s]);
     }
     persistLocked_();
     return true;
+}
+
+// Does this factory bank fill both sets? For the confirm dialogs, which have to
+// name what they are about to overwrite.
+bool factoryBankSpills(int idx)
+{
+    const auto& banks = factoryReaSixtyBanks_();
+    if (idx < 0 || idx >= static_cast<int>(banks.size())) return false;
+    return banks[idx].hasShift;
 }
 
 int loadFactoryReaSixtySet(int layer, int quick, int mod)
@@ -5522,9 +5555,12 @@ int loadFactoryReaSixtySet(int layer, int quick, int mod)
                 // (Frank 2026-08-18). Its sibling recallFactoryBankPreset has
                 // taken a `mod` since modifier sets existed; this one never got
                 // the parameter.
-                applyPresetSlotLocked_(banks[sb].slots[s], mod,
-                                       g_cfg.userQuicks[layer].quicks[quick]
-                                           .subBanks[sb].slots[s]);
+                auto& dst = g_cfg.userQuicks[layer].quicks[quick]
+                                .subBanks[sb].slots[s];
+                applyPresetSlotLocked_(banks[sb].slots[s],
+                                       banks[sb].hasShift ? 0 : mod, dst);
+                if (banks[sb].hasShift)
+                    applyPresetSlotLocked_(banks[sb].shiftSlots[s], 1, dst);
             }
         }
         persistLocked_();
