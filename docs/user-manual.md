@@ -659,6 +659,14 @@ caption above it, and its `SOLO ACTIVE` lamp lights on its own), and key `2`
 toggles Fine (the `FINE CTRL 2` caption). `CYCLE` and `CLICK` carry repeat and
 metronome. Everything here is rebindable.
 
+## Foot-switch jacks
+
+Two on the back, the same 1/4" momentary switches the UF8 takes, and bindable the
+same way: `FOOT 1` / `FOOT 2` on the UF1 tab in *Settings → Bindings* (ButtonId
+`uf1_foot_1` / `uf1_foot_2`). No factory assignment, and each one carries the full
+set of slots, so plain, **Shift**, **Cmd**, **Ctrl** and a long press can be five
+different actions on one pedal.
+
 ## Extender — the UF1 as a 9th fader
 
 Off by default. Turn it on and the UF1's fader joins the UF8's bank as one

@@ -212,6 +212,8 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf1Stop,          "uf1_stop"            },
     { ButtonId::Uf1Play,          "uf1_play"            },
     { ButtonId::Uf1Rec,           "uf1_rec"             },
+    { ButtonId::Uf1Foot1,         "uf1_foot_1"          },
+    { ButtonId::Uf1Foot2,         "uf1_foot_2"          },
     { ButtonId::Uf1Jog,           "uf1_jog"             },
 };
 
@@ -324,6 +326,11 @@ ButtonId fromUf8DeviceId(uint8_t id)
 ButtonId fromUf1DeviceId(uint8_t id)
 {
     switch (id) {
+        // Footswitch jacks. ⚠ UNCONFIRMED — mapped on the UF8's ids (0x00 /
+        // 0x01, same FF 22 button frame) because 0x00..0x07 are unclaimed here.
+        // One tap with uf1_trace on says whether the analogy holds.
+        case 0x00: return ButtonId::Uf1Foot1;
+        case 0x01: return ButtonId::Uf1Foot2;
         // V-Pot + channel-encoder pushes 0x08..0x0D.
         case 0x08: return ButtonId::Uf1VpotAbovePush;
         case 0x09: return ButtonId::Uf1Vpot1Push;

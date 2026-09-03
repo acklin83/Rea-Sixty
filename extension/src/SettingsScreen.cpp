@@ -797,6 +797,8 @@ const char* hwFaceLabel(ButtonId id)
         case ButtonId::Uf1Vpot4Push:   return "V-POT 4 PUSH";
         case ButtonId::Uf1ChannelPush: return "ENC PUSH";
         case ButtonId::Uf1Jog:         return "JOG";
+        case ButtonId::Uf1Foot1:       return "FOOT 1";
+        case ButtonId::Uf1Foot2:       return "FOOT 2";
         default:                     return uf8::bindings::toName(id);
     }
 }
@@ -2718,6 +2720,13 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     // (6) FLIP  (7) MASTER
     drawHwBtn(26, 492, 56, 26, ButtonId::Uf1Flip,   "FLIP");
     drawHwBtn(26, 522, 56, 26, ButtonId::Uf1Master, "MASTER");
+
+    // Foot-switch jacks on the back panel — the UF1 has two, like the UF8.
+    // Bindable, no factory assignment. Device ids still unconfirmed (see
+    // Bindings.h): the schematic is live either way, a tap is what proves it.
+    drawGroupLabelCentered(54, 578, "FOOT SWITCHES");
+    drawHwBtn(16, 592, 52, 24, ButtonId::Uf1Foot1, "FOOT 1");
+    drawHwBtn(72, 592, 52, 24, ButtonId::Uf1Foot2, "FOOT 2");
 
     // ======================================================================
     // RIGHT SECTION — main display, navigation, transport (UG callouts 8–21)
