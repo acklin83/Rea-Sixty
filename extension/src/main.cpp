@@ -29281,7 +29281,19 @@ void uf1PaintChannel_()
             // a layout reset SSL never sends while streaming — the device
             // never settled while the transport ran, and rendered exactly one
             // frame the moment it stopped ("zeichnet erst wenn cursor steht").
-            if (viewChanged || screenChanged) {
+            // ⛔ AND THE MODE MENU'S RELEASE IS A RESTORE, HERE TOO.
+            // The MODE-hold overlay writes the four view names straight into
+            // 0x0104 and relies on the view underneath repainting its own labels
+            // on the release tick. The Channel view does: its soft-key row writer
+            // runs on `changed`. The Meter view did NOT — its labels live in this
+            // burst, and this burst only fired on a view or screen change. So the
+            // picker's words stayed on the meter's keys after MODE was let go, and
+            // pressing MODE again changed nothing visible because they were still
+            // there (Frank 2026-09-03: "wieso kommen die views nicht mehr wenn ich
+            // MODE drücke" and "wieso gehen die views nicht mehr weg"). Same shape
+            // as the preset browser's presetClosed restore.
+            const bool menuJustClosed = menuEdge && !modeMenu;
+            if (viewChanged || screenChanged || menuJustClosed) {
                 // Pause the pacer while the entry frames queue individually — a
                 // cycle burst must not interleave into the entry group. The
                 // Overview cycle re-activates it in this same tick.
