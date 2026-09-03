@@ -509,6 +509,19 @@ order, is set in *Settings → Bindings → UF1*.
 The view survives until you change it. Everything below is described per view,
 because the same physical key does different work in each.
 
+**Only the four display soft-keys belong to the view.** They are where your own
+UF1 soft-key banks live, and they carry them in **DAW view** alone: in Plugin and
+Sends view the surface owns those four keys (the channel strip's section toggles,
+the send modes) and in Meter view they are the meter's own. That is also why they
+are not editable as ordinary bindings — their assignments sit in the ten UF1
+banks, not in the layer map. Everything else you bind on the UF1 fires in every
+view: transport, the secondary row, FLIP, MASTER, SEL, the nav cross, the bank
+arrows, `360°`, `SCRUB`, the CHANNEL encoder's rotation and push, the `SOFT` key
+above the fader and the two foot-switches. A few of those change JOB with the
+view (`5-8` pages the send window in Sends view and toggles the channel group in
+DAW view), and the four V-Pots are not bindable at all — they always belong to
+the mode that is showing.
+
 ## The channel (all views)
 
 These are the controls down the left of the panel, and they all address the same
