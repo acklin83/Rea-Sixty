@@ -389,7 +389,7 @@ Top to bottom on the left half:
 
 Plus the EQ-section buttons: **HF Bell** (HF shape), **EQ Type** (E vs G EQ curve), **EQ In** (EQ section bypass), **LF Bell** (LF shape).
 
-## Channel Strip section — right side (Dynamics + Channel, 7 knobs + 7 buttons)
+## Channel Strip section — right side (Dynamics + Channel, 7 knobs + 12 buttons)
 
 - **Compressor:** Threshold + Ratio + Release (3 knobs).
 - **Gate / Expander:** Threshold + Range + Hold + Release (4 knobs).
@@ -465,7 +465,7 @@ Three addressable zones:
 
 ## Brightness
 
-Set independently per channel (UC1 LEDs / UC1 LCDs / UF8 LEDs / UF8 LCDs) under Settings → Devices → Brightness. Six **Brightness …** actions (LEDs +/-, LCDs +/-, Both +/-) drive these from a hardware button.
+Two sliders of five steps under Settings → Devices → Brightness, **LEDs** and **LCDs**, and both apply to every attached surface: there is one LED level and one display level, not a pair per device. Six **Brightness …** actions (LEDs +/-, LCDs +/-, Both +/-) drive them from a hardware button.
 
 ## UC1 GR Calibration
 
