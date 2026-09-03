@@ -7512,6 +7512,23 @@ std::atomic<FollowMode> g_followMode{FollowMode::BucketSnap};
 // each modifier is a single bool.
 std::atomic<bool> g_shiftHeld{false};
 
+// ⛔ "IST SHIFT GEHALTEN" HAT EINE ANTWORT, NICHT ZWEI.
+// g_shiftHeld is what the SURFACE's own SHIFT key sets (mod_shift mirrors it).
+// The host keyboard does NOT go through it: it feeds the bindings modifier via
+// setKeyboardShiftHeld, and modifierHeld() merges the two. So every decision
+// that read g_shiftHeld directly obeyed the UF1's key and ignored the keyboard —
+// which is how a pan on the sends V-Pot, a mute on its soft-key and a fine fader
+// move all "did not work" for someone holding Shift on the keyboard, the way
+// Frank does (Frank 2026-09-03: "genau DORT macht er einen unterschied zwischen
+// keyboard shift und UF1 shift? das ist doch nur noch schlampig", and his rule
+// from 2026-08-18 that every modifier counts from the keyboard too).
+// Use this for BEHAVIOUR. g_shiftHeld itself stays for the one thing it is: the
+// state of the mod_shift binding, which its own toggle reports.
+inline bool shiftHeldAnywhere_()
+{
+    return uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift);
+}
+
 // Shift double-click latch. A second press within kShiftDoubleClickMs of
 // the previous release latches Shift on — it then stays active until the
 // next press, which clears the latch. Single press+release is plain
@@ -19069,7 +19086,7 @@ void drainInputQueue()
                                 writePan(vr, delta, e.strip);
                             } else {
                                 double dPb = e.value;
-                                if (g_shiftHeld.load()) dPb *= 0.25;
+                                if (shiftHeldAnywhere_()) dPb *= 0.25;
                                 writeRouteVolDelta(vr, dPb);
                             }
                         }
@@ -19357,7 +19374,7 @@ void drainInputQueue()
                     // feel as the V-Pot driving the param). Fine quarters.
                     const uint16_t curPb = linearVolumeToPb(uiVolLinear(tr));
                     double dPb = e.value * 16383.0;
-                    if (g_shiftHeld.load()) dPb *= 0.25;
+                    if (shiftHeldAnywhere_()) dPb *= 0.25;
                     int newPb = static_cast<int>(std::round(
                         static_cast<double>(curPb) + dPb));
                     if (newPb < 0) newPb = 0;
@@ -19374,7 +19391,7 @@ void drainInputQueue()
                 if (g_flip.load() && forcePan) {
                     const uint16_t curPb = linearVolumeToPb(uiVolLinear(tr));
                     double dPb = e.value * 16383.0;
-                    if (g_shiftHeld.load()) dPb *= 0.25;
+                    if (shiftHeldAnywhere_()) dPb *= 0.25;
                     int newPb = static_cast<int>(std::round(
                         static_cast<double>(curPb) + dPb));
                     if (newPb < 0) newPb = 0;
@@ -26799,7 +26816,7 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
         // write that records automation. Sharing the gesture slot with the volume is
         // deliberate — a send's combined index is the same for both, and the two
         // gestures are mutually exclusive by the modifier.
-        if (g_shiftHeld.load()) {
+        if (shiftHeldAnywhere_()) {
             const int64_t     pnow = nowMs_();
             const std::string pkey = routeCacheKey_(r);
             if (pnow - g_sendPanVpotMs[strip] > 300 || g_sendPanVpotKey[strip] != pkey) {
@@ -27436,7 +27453,7 @@ void applyUf1ChannelVpotPush_(int idx)
         // (Frank 2026-08-17). Same UI-path write as the turn, so the reset lands in
         // the envelope like every other pan move, and the accumulator is dropped so
         // the next gesture re-seeds from centre instead of from where it left off.
-        if (g_shiftHeld.load()) {
+        if (shiftHeldAnywhere_()) {
             writeRoutePanAutomation_(r, strip, 0.0);
             finishRoutePanEdit_(strip);
             g_sendPanEditUntilMs[strip]  = 0;
@@ -29122,7 +29139,7 @@ void uf1PaintChannel_()
     // showing dB until some unrelated change happens to repaint (same class as the
     // mode-banner rule — a new mode toggle belongs in the onTimer diff).
     static bool sShift = false;
-    const bool shiftNow     = g_shiftHeld.load();
+    const bool shiftNow     = shiftHeldAnywhere_();
     const bool shiftChanged = (shiftNow != sShift);
     sShift = shiftNow;
     // The four DAW soft-keys show the held modifier's layer, so a modifier edge
@@ -30120,7 +30137,7 @@ void uf1PaintChannel_()
                 // While SHIFT is held the V-Pot rides this send's PAN, so the
                 // readout has to follow it. A control that shows one value and moves
                 // another is the same trap as the dead Pan/Vol pots in plugin mode.
-                if (g_shiftHeld.load()) {
+                if (shiftHeldAnywhere_()) {
                     const double pn = readRoutePanEffective_(r);   // EFFECTIVE pan
                     sendVpotParam(uint8_t(i), routeName_(r), formatPanReadout(pn));
                     setBar(i, (pn + 1.0) * 0.5, /*bipolar*/true);
@@ -35389,7 +35406,7 @@ static SoloMuteMod soloMuteModFromHost_()
 bool shiftFineActive_()
 {
     if (!g_shiftFineMode.load()) return false;
-    return g_shiftHeld.load() || hostShiftHeld_();
+    return shiftHeldAnywhere_() || hostShiftHeld_();
 }
 
 bool vpotFineActive_()
@@ -36552,7 +36569,7 @@ void pushUf8GlobalLeds()
 
     const bool forcePan        = g_forcePan.load();
     const bool flip            = g_flip.load();
-    const bool shiftHeld       = g_shiftHeld.load();
+    const bool shiftHeld       = shiftHeldAnywhere_();
     const EncoderMode encMode  = g_encoderMode.load();
     const int  softKeyBank     = g_softKeyBank.load();
     const int  domainLed       = (uf8::getFocusedParam().domain == uf8::Domain::BusComp)
