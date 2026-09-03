@@ -6350,6 +6350,10 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "Runs whatever the Channel Encoder's current mode says. This is the "
       "action the encoder itself carries; the modes below choose what it "
       "does." },
+    { "uf1_encoder_mode_dispatch",
+      "UF1. The same for the UF1's CHANNEL encoder, which keeps its own mode "
+      "independently of the UF8's. Factory action of that rotation's Plain "
+      "slot; its Shift slot carries Instance Cycle." },
     { "encoder_nav",
       "Channel Encoder selects the previous or next track. The home "
       "position." },
@@ -6958,6 +6962,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "encoder_last_param", "Enc LastPrm" },
     { "encoder_markers", "Enc Markers" },
     { "encoder_mode_dispatch", "Enc Dispatch" },
+    { "uf1_encoder_mode_dispatch", "UF1 Enc Disp" },
     { "encoder_nav", "Enc Nav" },
     { "encoder_nudge", "Enc Nudge" },
     { "encoder_selset_cycle", "Enc Selset" },
