@@ -1554,19 +1554,34 @@ local function renderParamPanel(st, asn)
           for pos, c in pairs(cells) do
             if c.param and c.param >= 0 then
               note(mappedIdx, c.param,
-                   ("UF1 %s p%d.%d"):format(sk == 1 and "Soft-key" or "V-Pot",
-                                            floor(pos / 4) + 1, (pos % 4) + 1))
+                   ("%s p%d.%d"):format(sk == 1 and "Soft-key" or "V-Pot",
+                                        floor(pos / 4) + 1, (pos % 4) + 1))
             end
           end
         end
       end
     elseif activeTab == "uf8" then
-      -- UF8 assign is uasn[strip][kind] = { name, ... }.
+      -- UF8 assign is uasn[strip][kind] = { name, ... }, and it describes the
+      -- banks that are LIVE right now — the payload carries no bank of its own,
+      -- so the address comes from the state header.
+      --
+      -- ⇨ THE BANK BELONGS IN THE ADDRESS. A V-Pot slot is (fader bank, V-Pot
+      -- bank, strip) — 2 x 8 x 8 = 64 of them — so "str 8" alone points at eight
+      -- places at once, which is a confusion rather than an answer. Written
+      -- compactly as fb.bk.str because the drawer is 240 px wide and the
+      -- spelled-out Settings form ("UF8 V-Pot fb 2 bk 3 str 8") would be
+      -- truncated to nothing else. Fader / Solo / Cut / Sel live on
+      -- uf8.strips[fb][strip] and have no V-Pot bank, so they take two numbers.
+      local ust8 = readUf8State()
+      local fb   = (ust8 and ust8.faderBank or 0) + 1
+      local bk   = (ust8 and ust8.vpotBank  or 0) + 1
       for strip, kinds in pairs(asn) do
         for kind, a in pairs(kinds) do
           if a.name and a.name ~= "" then
             local kn = kindName[kind] or "?"
-            note(mappedNames, a.name, ("UF8 %s str %d"):format(kn, strip + 1))
+            note(mappedNames, a.name, (kind == 0)
+                   and ("%s %d.%d.%d"):format(kn, fb, bk, strip + 1)
+                   or  ("%s %d.%d"):format(kn, fb, strip + 1))
           end
         end
       end
