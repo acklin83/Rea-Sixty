@@ -149,6 +149,10 @@ bool        reasixty_hudRename(int idx, int layer, const char* label,
 std::string reasixty_hudBuildDetail(void* csTr, int csFx, void* bcTr, int bcFx,
                                     int layer);
 std::string reasixty_hudBuildFeel();
+// Complete "where is this param used" map for the HUD's parameter list — see
+// hudBuildUsedBy_ for the record format and why the HUD cannot build it itself.
+std::string reasixty_hudBuildUsedBy(void* csTr, int csFx, void* bcTr, int bcFx,
+                                    void* u8Tr, int u8Fx);
 bool        reasixty_hudSetField(int idx, int layer, int field, double v,
                                  void* csTr, int csFx, void* bcTr, int bcFx);
 bool        reasixty_hudSetCurve(int idx, int layer, const char* csv,
@@ -15204,6 +15208,7 @@ std::string g_hudLearnPublished;   // last-published "hud_learn" armed-idx strin
 std::string g_hudLcdPublished;     // last-published "hud_lcd" (focused-track LCD)
 std::string g_hudTargetPublished;  // last-published "hud_target" (active CS/BC FX)
 std::string g_hudUf8TargetPublished;  // last-published "hud_uf8_target" (UF8 param-list FX)
+std::string g_hudUsedByPublished;      // last-published "hud_usedby"
 std::string g_hudUf8StatePublished, g_hudUf8AssignPublished;  // UF8 device tab
 std::string g_hudUf8StripColsPublished;  // last-published "hud_uf8_stripcols"
 std::string g_hudUf8BanksPublished;  // last-published "hud_uf8_banks" (8 V-Pot bank labels)
@@ -15623,6 +15628,17 @@ void publishHud_()
             if (ut != g_hudUf8TargetPublished) {
                 g_hudUf8TargetPublished = ut;
                 SetExtState("rea_sixty", "hud_uf8_target", ut, false);
+            }
+        }
+        // Where-used map for the parameter list. Published HERE because this is
+        // the one place all three targets are resolved at once (CS, BC and the
+        // UF8 param-list FX). Diff-guarded like every other payload.
+        {
+            const std::string ub = reasixty_hudBuildUsedBy(
+                csTr, csFx, bcTr, bcFx, uf8TgtTr, uf8TgtFx);
+            if (ub != g_hudUsedByPublished) {
+                g_hudUsedByPublished = ub;
+                SetExtState("rea_sixty", "hud_usedby", ub.c_str(), false);
             }
         }
         std::string uf8State, uf8Assign, uf8Banks, uf8StripCols;

@@ -13998,6 +13998,111 @@ std::string hudBuildDetail_(void* csTrV, int csFx, void* bcTrV, int bcFx,
 }
 
 // Build hud_feel: the ten global feel-preset slots — "slot;used;name" per line.
+// ⇨ WHERE IS THIS PARAM USED — the complete answer, which the HUD cannot work
+// out for itself. Its param list used to tint bound rows green by matching
+// param NAMES against the assign payloads, and those payloads only describe the
+// banks that are LIVE: of the 64 V-Pot places (2 fader banks x 8 V-Pot banks x
+// 8 strips) it could see eight, so a param bound on any other bank read as
+// free. EXT FUNCS it never saw at all — the same defect the FX-Learn page had
+// until 2026-07-21, where curated EXT params showed as free and got bound twice.
+//
+// So the extension answers instead: it holds the whole map. Keyed by PARAM
+// INDEX (exact) rather than by name (a guess), one record per binding:
+//
+//   <scope>\t<param>\t<label>   scope: 'c' CS target, 'b' BC, '8' UF8
+//
+// records joined by ';'. The label vocabulary is the FX-Learn page's, shortened
+// for a 240 px drawer: the canonical slot name on the UC1 ("Fader Level"),
+// "V-Pot fb.bk.str", "Fader fb.str", "EXT: <name>". A param bound more than
+// once keeps the FIRST label and gains " (+)", as in Settings.
+//
+// ⛔ NO NEWLINES, and the separators are scrubbed out of user-typed EXT FUNCS
+// names: this travels through ExtState, where a newline truncates the value at
+// the first line and the rest is silently lost.
+// The UF1 tab is deliberately absent — the HUD has the complete UF1 cell list
+// already and builds those labels itself.
+std::string hudBuildUsedBy_(void* csTrV, int csFx, void* bcTrV, int bcFx,
+                            void* u8TrV, int u8Fx)
+{
+    std::string out;
+    auto scrub = [](std::string v) {
+        for (char& ch : v) if (ch == ';' || ch == '\t' || ch == '\n') ch = ' ';
+        return v;
+    };
+    auto emitMap = [&](char scope, MediaTrack* tr, int fx) {
+        if (!tr || fx < 0) return;
+        char nm[512] = {0};
+        if (!fxIdentityName(tr, fx, nm, sizeof(nm))) return;
+        const UserPluginMap* m = user_plugins::lookupOwnedByName(nm);
+        if (!m) return;
+        // Insertion-ordered on purpose: the payload is diff-guarded against the
+        // last publish, and an unordered container would reshuffle it between
+        // ticks and re-send an identical map forever. Sizes here are dozens, so
+        // the linear find costs nothing.
+        std::vector<std::pair<int, std::string>> used;
+        auto note = [&](int vp, std::string lbl) {
+            if (vp < 0) return;
+            for (auto& kv : used) {
+                if (kv.first != vp) continue;
+                if (kv.second.find("(+)") == std::string::npos)
+                    kv.second += " (+)";
+                return;
+            }
+            used.emplace_back(vp, std::move(lbl));
+        };
+        // UC1 slots — canonical name from the map's own domain topology.
+        if (const PluginMap* topo = canonicalTopology_(m->domain)) {
+            for (const auto& sl : m->slots) {
+                const LinkSlot* bs = findSlotByLinkIdx(*topo, sl.linkIdx);
+                note(sl.vst3Param, bs && bs->name ? bs->name : "(slot)");
+            }
+        }
+        char buf[64];
+        for (int fb = 0; fb < kUserUf8FaderBankCount; ++fb) {
+            for (int vb = 0; vb < kUserUf8VpotBankCount; ++vb) {
+                for (int st = 0; st < 8; ++st) {
+                    const auto& bs = m->uf8.banks.banks[fb][vb][st];
+                    if (bs.vst3Param < 0) continue;
+                    std::snprintf(buf, sizeof(buf), "V-Pot %d.%d.%d",
+                                  fb + 1, vb + 1, st + 1);
+                    note(bs.vst3Param, buf);
+                }
+            }
+        }
+        for (int fb = 0; fb < kUserUf8FaderBankCount; ++fb) {
+            for (int st = 0; st < 8; ++st) {
+                const auto& sb = m->uf8.strips[fb][st];
+                std::snprintf(buf, sizeof(buf), "Fader %d.%d", fb + 1, st + 1);
+                note(sb.faderVst3Param, buf);
+                std::snprintf(buf, sizeof(buf), "Solo %d.%d",  fb + 1, st + 1);
+                note(sb.soloVst3Param, buf);
+                std::snprintf(buf, sizeof(buf), "Cut %d.%d",   fb + 1, st + 1);
+                note(sb.cutVst3Param,  buf);
+                std::snprintf(buf, sizeof(buf), "Sel %d.%d",   fb + 1, st + 1);
+                note(sb.selVst3Param,  buf);
+            }
+        }
+        // EXT FUNCS — decoupled from `slots`, so nothing above covers them.
+        for (const auto& e : m->extFuncs) {
+            if (e.vst3Param < 0) continue;
+            note(e.vst3Param, e.name.empty() ? std::string("EXT FUNCS")
+                                             : ("EXT: " + scrub(e.name)));
+        }
+        for (const auto& kv : used) {
+            if (!out.empty()) out += ';';
+            out += scope;
+            out += '\t';
+            out += std::to_string(kv.first);
+            out += '\t';
+            out += kv.second;
+        }
+    };
+    emitMap('c', static_cast<MediaTrack*>(csTrV), csFx);
+    emitMap('b', static_cast<MediaTrack*>(bcTrV), bcFx);
+    emitMap('8', static_cast<MediaTrack*>(u8TrV), u8Fx);
+    return out;
+}
+
 std::string hudBuildFeel_()
 {
     std::string out;
@@ -23434,6 +23539,11 @@ std::string reasixty_hudBuildDetail(void* csTr, int csFx, void* bcTr, int bcFx,
 std::string reasixty_hudBuildFeel()
 {
     return uf8::hudBuildFeel_();
+}
+std::string reasixty_hudBuildUsedBy(void* csTr, int csFx, void* bcTr, int bcFx,
+                                    void* u8Tr, int u8Fx)
+{
+    return uf8::hudBuildUsedBy_(csTr, csFx, bcTr, bcFx, u8Tr, u8Fx);
 }
 bool reasixty_hudSetField(int idx, int layer, int field, double v,
                           void* csTr, int csFx, void* bcTr, int bcFx)

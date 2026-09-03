@@ -1522,77 +1522,40 @@ local function renderParamPanel(st, asn)
   dtext(x0 + pad, fy, col(0x8890A0, paramFilter ~= "" and 1 or 0.6),
     fit(ftxt, PW - 2 * pad, hf), hf)
 
-  -- Active-domain bindings, as WHERE-USED LABELS rather than a plain flag. The
-  -- list used to answer only "is this param bound" (green tint + a dot), so the
-  -- one thing you actually want — WHERE it sits — meant hunting through the
-  -- mockup. The FX-Learn page in Settings has carried exactly this column for
-  -- ages (its `usedBy` / `noteUse_` map); this is the HUD catching up, and the
-  -- label vocabulary is copied from there verbatim so both lists read the same.
-  -- Multi-bound params keep the FIRST label and gain " (+)", same as Settings.
-  -- hud_assign only carries names, so CS/BC/UF8 match on name — exact enough
-  -- for a visual hint; UF1 cells carry param INDICES instead.
-  local mappedNames = {}
-  local mappedIdx   = nil
-  do
-    -- Same order as UF8_KINDS further down (that table is defined after this
-    -- function, so the names live here rather than as a second top-level local
-    -- — this file is at the 200-local ceiling).
-    local kindName = { [0] = "V-Pot", [1] = "Fader", [2] = "Solo",
-                       [3] = "Cut",   [4] = "Sel" }
-    local function note(t, k, lbl)
-      if k == nil or lbl == nil or lbl == "" then return end
-      if t[k] == nil then t[k] = lbl
-      elseif not t[k]:find("(+)", 1, true) then t[k] = t[k] .. " (+)" end
-    end
-    if activeTab == "uf1" then
-      mappedIdx = {}
-      local u1 = readUf1()
-      if u1 then
-        -- sk 0 = V-Pots, sk 1 = Soft-keys (the row table further down owns that
-        -- mapping); pos counts across pages, four per page.
-        for sk, cells in pairs(u1.cells) do
-          for pos, c in pairs(cells) do
-            if c.param and c.param >= 0 then
-              note(mappedIdx, c.param,
-                   ("%s p%d.%d"):format(sk == 1 and "Soft-key" or "V-Pot",
-                                        floor(pos / 4) + 1, (pos % 4) + 1))
+  -- WHERE a param is bound, not just THAT it is. The labels come from the
+  -- extension (`hud_usedby`), because the HUD cannot work them out for itself:
+  -- the assign payloads describe only the banks that are LIVE, so of the 64
+  -- V-Pot places (2 fader banks x 8 V-Pot banks x 8 strips) it sees eight, and
+  -- a param bound on any other bank would read as free. EXT FUNCS it never
+  -- receives at all. Keyed by param INDEX, so this is exact rather than the
+  -- name-matching guess the green dot used to do.
+  --   record: <scope>\t<param>\t<label>, joined by ";"   scope: c CS, b BC, 8 UF8
+  -- The UF1 tab builds its own labels: its cell list is complete here.
+  local mappedIdx = {}
+  if activeTab == "uf1" then
+    local u1 = readUf1()
+    if u1 then
+      -- sk 0 = V-Pots, sk 1 = Soft-keys (the row table further down owns that
+      -- mapping); pos counts across pages, four per page.
+      for sk, cells in pairs(u1.cells) do
+        for pos, c in pairs(cells) do
+          if c.param and c.param >= 0 then
+            local l = ("%s p%d.%d"):format(sk == 1 and "Soft-key" or "V-Pot",
+                                           floor(pos / 4) + 1, (pos % 4) + 1)
+            if mappedIdx[c.param] == nil then mappedIdx[c.param] = l
+            elseif not mappedIdx[c.param]:find("(+)", 1, true) then
+              mappedIdx[c.param] = mappedIdx[c.param] .. " (+)"
             end
           end
         end
       end
-    elseif activeTab == "uf8" then
-      -- UF8 assign is uasn[strip][kind] = { name, ... }, and it describes the
-      -- banks that are LIVE right now — the payload carries no bank of its own,
-      -- so the address comes from the state header.
-      --
-      -- ⇨ THE BANK BELONGS IN THE ADDRESS. A V-Pot slot is (fader bank, V-Pot
-      -- bank, strip) — 2 x 8 x 8 = 64 of them — so "str 8" alone points at eight
-      -- places at once, which is a confusion rather than an answer. Written
-      -- compactly as fb.bk.str because the drawer is 240 px wide and the
-      -- spelled-out Settings form ("UF8 V-Pot fb 2 bk 3 str 8") would be
-      -- truncated to nothing else. Fader / Solo / Cut / Sel live on
-      -- uf8.strips[fb][strip] and have no V-Pot bank, so they take two numbers.
-      local ust8 = readUf8State()
-      local fb   = (ust8 and ust8.faderBank or 0) + 1
-      local bk   = (ust8 and ust8.vpotBank  or 0) + 1
-      for strip, kinds in pairs(asn) do
-        for kind, a in pairs(kinds) do
-          if a.name and a.name ~= "" then
-            local kn = kindName[kind] or "?"
-            note(mappedNames, a.name, (kind == 0)
-                   and ("%s %d.%d.%d"):format(kn, fb, bk, strip + 1)
-                   or  ("%s %d.%d"):format(kn, fb, strip + 1))
-          end
-        end
-      end
-    else
-      for idx, a in pairs(asn) do
-        local g = geom.ctrl[idx]
-        if g and ((activeTab == "cs" and g.dom == "c")
-               or (activeTab == "bc" and g.dom == "b")) then
-          note(mappedNames, a.name, g.label)
-        end
-      end
+    end
+  else
+    local want = (activeTab == "uf8") and "8"
+              or (activeTab == "bc")  and "b" or "c"
+    for rec in (reaper.GetExtState(SECT, "hud_usedby") .. ";"):gmatch("([^;]*);") do
+      local sc, pi, lbl = rec:match("^(.)\t(%d+)\t(.*)$")
+      if sc == want then mappedIdx[tonumber(pi)] = lbl end
     end
   end
 
@@ -1614,7 +1577,7 @@ local function renderParamPanel(st, asn)
   for _, pr in ipairs(rows) do
     if y + lineH >= listTop and y <= listBot then
       local sel    = (pr.p == selectedParam)
-      local mapped = mappedIdx and mappedIdx[pr.p] or mappedNames[pr.name]
+      local mapped = mappedIdx[pr.p]
       if sel then rect(x0 + 2, y - 1, PW - 4, lineH, col(rgb, 0.34)) end
       local tc = sel and 0xFFFFFF or (mapped and 0x78C898 or 0xC0C4CC)
       -- Two columns: the param on the left, WHERE it is bound on the right.
