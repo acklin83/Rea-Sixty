@@ -7125,8 +7125,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             }
             ImGui_EndCombo(ctx);
         }
-        ImGui_TextDisabled(ctx,
-            "Empty here = this key keeps the binding it has everywhere else.");
         ImGui_Spacing(ctx);
     }
 

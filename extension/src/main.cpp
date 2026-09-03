@@ -17566,7 +17566,7 @@ void uf1HueStepFocus_(int delta);
 // V-Pot handler (shares uf1ResolveCsFx_ / uf1ParamByName_ + the kUf1CsSoftKeys
 // table); forward-declared here so the soft-key drain can call it. idx = 0..3.
 // Main-thread only.
-void applyUf1ChannelSoftKey_(int idx);
+void applyUf1ChannelSoftKey_(int idx, bool shiftAtPress);
 
 // Channel-view V-Pot push handler: reset the current-page V-Pot param to its
 // default on the focused SSL strip (CS or BC). DEFINED next to the V-Pot handler;
@@ -18195,7 +18195,7 @@ void drainInputQueue()
         if (e.kind == PendingInput::Uf1CsSoftKey) {
             // Channel-view soft-key press (0x19-0x1C): toggle the current-page
             // p188 soft-key param on the on-screen SSL strip (main thread).
-            applyUf1ChannelSoftKey_(static_cast<int>(e.strip));
+            applyUf1ChannelSoftKey_(static_cast<int>(e.strip), e.value > 0.5);
             continue;
         }
         if (e.kind == PendingInput::Uf1CsVpotPush) {
@@ -23212,8 +23212,16 @@ void onUf1Event(const uf1::InputEvent& ev)
             if ((ev.id == uf1::btn::kDisplaySoft1 || ev.id == uf1::btn::kDisplaySoft2 ||
                  ev.id == uf1::btn::kDisplaySoft3 || ev.id == uf1::btn::kDisplaySoft4)
                 && ev.pressed && !g_uf1MeterView.load() && g_uf1ModeMenu.load() == false) {
+                // ⛔ THE MODIFIER BELONGS TO THE PRESS, NOT TO THE DRAIN.
+                // The handler read g_shiftHeld when the main thread got round to
+                // it, up to a timer tick later — so a Shift+key you let go of
+                // quickly arrived as a plain press and stepped the send mode
+                // instead of muting (Frank 2026-09-03). Snapshot it here, on the
+                // worker, in the same event that carries the key.
                 queueInput({PendingInput::Uf1CsSoftKey,
-                            static_cast<uint8_t>(ev.id - uf1::btn::kDisplaySoft1), 0.0});
+                            static_cast<uint8_t>(ev.id - uf1::btn::kDisplaySoft1),
+                            uf8::bindings::modifierHeld(
+                                uf8::bindings::Modifier::Shift) ? 1.0 : 0.0});
                 break;
             }
             // "5-8" (0x22), ENC push (0x0D), Bank ◄ ► (0x21/0x23), channel
@@ -27178,7 +27186,7 @@ static bool uf1DiscreteCycleNext_(MediaTrack* tr, int fx, int param,
 // Colour" = Brown/Black/Orange) flip between the extremes only — a plain toggle
 // never selects the middle state. Main-thread only (drained). The soft-key LED
 // follows via uf1PaintChannel_ (change-detected), like Pan / Vol / the V-Pots.
-void applyUf1ChannelSoftKey_(int idx)
+void applyUf1ChannelSoftKey_(int idx, bool shiftAtPress)
 {
     if (idx < 0 || idx > 3) return;
 
@@ -27197,7 +27205,7 @@ void applyUf1ChannelSoftKey_(int idx)
         // button rides it), we just never wrote it, so a send could not be silenced
         // from the UF1 at all (forum report 2026-08-17, item 3.19; the suggestion to
         // hang it off this very key is his too).
-        if (g_shiftHeld.load()) {
+        if (shiftAtPress) {
             const bool muted = GetTrackSendInfo_Value(
                 sTr, cs.category, cs.apiIndex, "B_MUTE") > 0.5;
             SetTrackSendInfo_Value(sTr, cs.category, cs.apiIndex, "B_MUTE",
