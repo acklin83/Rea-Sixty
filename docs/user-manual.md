@@ -715,6 +715,11 @@ behaves: the colour screen, the four V-Pots, the four display soft-keys and the
 EQ graph. You can therefore keep working on one channel's plug-in while the fader
 rides a different track in the bank.
 
+When the bank is not full, the ninth slot has no track in it. The left half then
+shows an empty channel: blank display, dark **SOLO**, **CUT** and **SEL**, and a
+fader that is parked and does nothing, the same as the empty strips beside it on
+the UF8. The right half carries on with the selected track.
+
 Pressing **SEL** selects the track the fader is on, which brings the right half
 over to it as well.
 

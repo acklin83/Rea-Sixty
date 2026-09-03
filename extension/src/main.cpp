@@ -16691,10 +16691,12 @@ MediaTrack* uf1FocusedTrack_()
 // The track the UF1's MOTOR FADER belongs to — the ONLY thing the Extender
 // repoints. In Extender mode the UF1 is the 9th strip of the UF8 bank: the slot
 // to the RIGHT of the UF8 (bankOffset + physical UF8 count) or to the LEFT
-// (bankOffset + 0; the UF8 strips shift +1 in stripToVisibleSlot). Slot past the
-// track list → fall through to the focused track. Suppressed in a FADER route
-// mode: there the UF8 faders show the focused track's SENDS, so the UF1's +1
-// strip is the 9th SEND, not a 9th track — the Extender send block drives it.
+// (bankOffset + 0; the UF8 strips shift +1 in stripToVisibleSlot). Suppressed in a
+// FADER route mode: there the UF8 faders show the focused track's SENDS, so the
+// UF1's +1 strip is the 9th SEND, not a 9th track — the Extender send block
+// drives it.
+// ⛔ AN EMPTY 9th SLOT RETURNS NULL, IT DOES NOT FALL BACK. Every caller of this
+// resolver must handle nullptr; see the branch body for why.
 // ⇨ THE FADER SIDE, not just the fader (Frank 2026-08-19). The UF1 has two
 // halves, and the Extender splits them: the LEFT half (fader, level meter, small
 // channel LCD, Solo, Cut, Sel, the above-fader V-Pot and the soft-key above the
@@ -16717,7 +16719,22 @@ MediaTrack* uf1FaderTrack_()
         && g_uf1Extender.load() && !uf1ExtenderRouteFader_()) {
         const int slot = g_bankOffset.load()
                        + (g_uf1ExtenderSide.load() ? effectiveStripCount_() : 0);
-        if (MediaTrack* et = visibleTrackAt(slot)) return et;
+        // ⛔ THE 9th SLOT IS EMPTY EXACTLY WHEN THE UF8 IS NOT FULL, AND THEN THE
+        // LEFT HALF HAS NO TRACK — NOT "the selection". visibleTrackAt returns
+        // nullptr past the end of the list, and this used to fall through to
+        // uf1FocusedTrack_(), i.e. to the RIGHT half's resolver. So a short bank
+        // silently un-extended the surface: the fader side went back to the
+        // selection, which in a short bank is normally a track the UF8 already
+        // has a strip for, and the UF1 duplicated it (Frank 2026-09-03, "wieso
+        // zeigt das UF1 dann einfach den Kanal ganz rechts"). Worse than
+        // cosmetic — Solo, Cut, SEL, the above-fader V-Pot and the fader itself
+        // all resolve through here, so they acted on a track that had its own
+        // strip two inches to the left.
+        // The SENDS case has behaved correctly since Step 4 (an absent 9th send
+        // leaves extRoute invalid → fader inert, strip blank); this is the same
+        // rule for the TRACK case, which never got it. An empty 9th slot is an
+        // empty STRIP, exactly like the blank UF8 strips beside it.
+        return visibleTrackAt(slot);
     }
     return uf1FocusedTrack_();
 }
@@ -24786,9 +24803,11 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // Overview (screen 0) streams it in the per-image cycle below (replacing the
     // captured ff placeholder); the other screens have no cycle → send per tick here.
     uint8_t chLvL = 0, chLvR = 0, chComp = 0, chGate = 0;
-    MediaTrack* const chMeterFtr = uf1FaderTrack_();
-    MediaTrack* const chMeterTr  = chMeterFtr ? chMeterFtr : tr;
-    uf1ChannelMeterBytes_(chMeterTr, chLvL, chLvR, chComp, chGate);
+    // ⛔ NO `: tr` FALLBACK. An empty 9th Extender slot means this meter has no
+    // track, and borrowing the big screen's one would put the selection's level
+    // over a fader that is parked and inert (see uf1FaderTrack_).
+    // uf1ChannelMeterBytes_ zeroes on nullptr.
+    uf1ChannelMeterBytes_(uf1FaderTrack_(), chLvL, chLvR, chComp, chGate);
     if (screen != 0) {
         const uint8_t m0009[] = {chLvL, chLvR, 0x00, 0x00};
         const uint8_t m000a[] = {0x00, 0x00, 0x00, 0x00};
@@ -27916,6 +27935,10 @@ uint8_t dbToVuByte_(double dbfs);
 static void uf1ChannelMeterBytes_(MediaTrack* tr, uint8_t& lvL, uint8_t& lvR,
                                   uint8_t& compByte, uint8_t& gateByte)
 {
+    // No track on the fader side (UF1 Extender, 9th bank slot past the end of the
+    // list) → a dead meter, not a stale one. The callers pass uf1FaderTrack_()
+    // straight through and that resolver returns nullptr for an empty slot.
+    if (!tr) { lvL = lvR = compByte = gateByte = 0x00; return; }
     // Level (0x0009 [L,R,0,0]): the UF8's own peak-dB → byte (0x00..0x1F). Guard
     // pk<=0 before log10 (dbToVuByte_ maps -inf/-55 → 0).
     auto peakByte = [](double pk) -> uint8_t {
@@ -28031,6 +28054,40 @@ static double uf1BcGrDb_()
     return v < 0 ? -v : v;
 }
 
+// Blank the small-LCD channel zone + the three fader-side button LEDs. TWO
+// callers, one scheme: an EMPTY PROJECT (uf1PaintEmptyChannel_, which adds the
+// large-plane wipe because the whole device has nothing to show) and an EMPTY 9th
+// EXTENDER SLOT (uf1PaintChannelStrip_ below, where the RIGHT half keeps painting
+// the selection and the large plane must be left alone). Factored out rather than
+// copied so the "no channel here" look cannot drift apart between the two.
+// Every frame here is one the strip painter already sends for an unselected,
+// unsoloed, unmuted track — this is not a second scheme for the same lamps.
+static void uf1BlankChannelZone_()
+{
+    if (!g_uf1_dev) return;
+    const uint8_t none = 0x00;
+    auto zoneText = [&](uint16_t addr) {
+        // 0x00-prefixed text cell with no glyphs after the prefix.
+        g_uf1_dev->send(uf1::buildScreen(addr, std::span<const uint8_t>(&none, 1)));
+    };
+    zoneText(uf1::scr::kTrackName);
+    zoneText(uf1::scr::kOutputDb);
+    zoneText(uf1::scr::kValueLine);
+    zoneText(uf1::scr::kChNumber);
+    const uint8_t bar[] = { 0x00, 0x00 };
+    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVPotReadoutBar, bar));
+    // 0x0006 is the firmware's OWN "channel populated" flag (it gates the colour
+    // bar), so an empty slot is a state the device already knows how to show.
+    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive,
+                                     std::span<const uint8_t>(&none, 1)));
+    g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, 0x000000u));   // unselected → dark
+    g_uf1_dev->send(uf1::buildLedLevel (uf1::led::kSel, uf1::led::kFf39Lit));
+    g_uf1_dev->send(uf1::buildLedPrimary(uf1::led::kSolo, uf1::led::kDimSolo));
+    g_uf1_dev->send(uf1::buildLedLevel  (uf1::led::kSolo, uf1::led::kDimSolo));
+    g_uf1_dev->send(uf1::buildLedPrimary(uf1::led::kCut,  uf1::led::kDimCut));
+    g_uf1_dev->send(uf1::buildLedLevel  (uf1::led::kCut,  uf1::led::kDimCut));
+}
+
 // Small-LCD channel-strip zone (0x00xx): track name, output dB, pan line + bar,
 // channel number, colour bar / SEL colour / populated flag, and the Solo/Cut
 // button LEDs. This is the manual's separate "small LCD" above the fader — it is
@@ -28043,7 +28100,34 @@ static double uf1BcGrDb_()
 static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
                                   const StripRoute* sendOverride = nullptr)
 {
-    if (!g_uf1_dev || !tr) return;
+    if (!g_uf1_dev) return;
+
+    // ⇨ NO TRACK ON THE FADER SIDE IS A STATE THIS ZONE HAS TO SHOW, NOT A REASON
+    // TO RETURN. `tr` here is uf1FaderTrack_(), and that is null when the UF1 is
+    // the Extender's 9th bank slot and the slot sits past the end of the track
+    // list — i.e. whenever the UF8 is not full. Returning left the zone on its
+    // last content (everything here is send-on-change, and the firmware holds
+    // what it was last told), so the UF1 kept naming a track it no longer
+    // addressed. Blank it ONCE on the edge instead, exactly the way an empty
+    // project blanks the whole face — same helper, so the two look identical.
+    // The large plane is deliberately NOT wiped: the RIGHT half of the panel
+    // still follows the selection and has something to show.
+    static bool sZoneBlank = false;
+    if (!tr) {
+        if (!sZoneBlank || changed) {
+            sZoneBlank = true;
+            uf1BlankChannelZone_();
+        }
+        return;
+    }
+    // Leaving the blank state repaints EVERY element: the statics below still
+    // describe the track that was here before the slot went empty, and the blank
+    // above went out behind their backs. `changed` is the file's existing channel
+    // for exactly that ("what the DEVICE shows is no longer what we think").
+    if (sZoneBlank) {
+        sZoneBlank = false;
+        changed    = true;
+    }
 
     // UF1 Extender send fader (Step 4): the strip's NAME + dB read out the 9th
     // SEND, not tr. Name = the send's dest / hw-out (routeName_ — ground truth),
@@ -28928,32 +29012,14 @@ struct Uf1PaintTimer_ {
 // NOT do: it does not stop the cycle. The firmware drops to lazy render-on-idle
 // when the cycle chain breaks (see the pacer's metronome note), so the idle
 // snapshot keeps streaming with zeroed levels instead.
-// Every frame here is one the strip painter already sends for an unselected,
-// unsoloed, unmuted track -- this is not a second scheme for the same lamps.
+// The channel zone itself is uf1BlankChannelZone_ (shared with the Extender's
+// empty 9th slot); the large-plane wipe below belongs to THIS caller alone —
+// there the whole device has nothing to show, while an empty Extender slot still
+// has a selection on the big screen.
 static void uf1PaintEmptyChannel_()
 {
     if (!g_uf1_dev) return;
-    const uint8_t none = 0x00;
-    auto zoneText = [&](uint16_t addr) {
-        // 0x00-prefixed text cell with no glyphs after the prefix.
-        g_uf1_dev->send(uf1::buildScreen(addr, std::span<const uint8_t>(&none, 1)));
-    };
-    zoneText(uf1::scr::kTrackName);
-    zoneText(uf1::scr::kOutputDb);
-    zoneText(uf1::scr::kValueLine);
-    zoneText(uf1::scr::kChNumber);
-    const uint8_t bar[] = { 0x00, 0x00 };
-    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVPotReadoutBar, bar));
-    // 0x0006 is the firmware's OWN "channel populated" flag (it gates the colour
-    // bar), so an empty slot is a state the device already knows how to show.
-    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive,
-                                     std::span<const uint8_t>(&none, 1)));
-    g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, 0x000000u));   // unselected → dark
-    g_uf1_dev->send(uf1::buildLedLevel (uf1::led::kSel, uf1::led::kFf39Lit));
-    g_uf1_dev->send(uf1::buildLedPrimary(uf1::led::kSolo, uf1::led::kDimSolo));
-    g_uf1_dev->send(uf1::buildLedLevel  (uf1::led::kSolo, uf1::led::kDimSolo));
-    g_uf1_dev->send(uf1::buildLedPrimary(uf1::led::kCut,  uf1::led::kDimCut));
-    g_uf1_dev->send(uf1::buildLedLevel  (uf1::led::kCut,  uf1::led::kDimCut));
+    uf1BlankChannelZone_();
     // The large plane keeps its last image when no image chunks arrive (the
     // pacer's own rule), so wipe it explicitly -- the same 0x0122 clear the
     // preset browser uses when it takes the display.
@@ -29077,11 +29143,15 @@ void uf1PaintChannel_()
     // otherwise, so nothing changes without it. Do not mix them — a left-half
     // element on `tr` shows one track and acts on another, which is exactly the
     // bug Frank hit on 2026-08-19.
-    // Never null: tr is non-null past the guard above and uf1FaderTrack_ falls
-    // back to it. Resolved HERE rather than further down because both the meter
-    // block and the small-LCD paint need it.
-    MediaTrack* const extFtr = uf1FaderTrack_();
-    MediaTrack* const ftr    = extFtr ? extFtr : tr;
+    // ⛔ ftr CAN BE NULL, AND THAT IS A STATE, NOT AN ERROR. It is null in exactly
+    // one case: the Extender's 9th bank slot sits past the end of the track list,
+    // i.e. the UF8 is not full. Then the LEFT half has no track — the strip zone
+    // blanks, the meter zeroes, the fader parks inert, the buttons eat their
+    // presses — while the RIGHT half carries on with `tr`. It must NOT fall back
+    // to `tr`: that made a short bank un-extend the surface and duplicate a UF8
+    // strip (Frank 2026-09-03). Resolved HERE rather than further down because
+    // both the meter block and the small-LCD paint need it.
+    MediaTrack* const ftr = uf1FaderTrack_();
     // The MODE button flips the firmware view; a switch forces a full repaint
     // of the newly-shown plane (its change-detect statics went stale while
     // hidden). The fader follows volume in BOTH views (handled below).
@@ -30901,7 +30971,9 @@ void uf1PaintChannel_()
     // the fader still does something. (UF8-mode learned plug-ins with a faderVst3Param
     // are a follow-up — csFaderForTrack already covers SSL + user-CS maps.)
     const bool stripMode = g_uf1StripMode.load();
-    const CsFaderHandle csf = stripMode ? csFaderForTrack(ftr) : CsFaderHandle{ -1, -1 };
+    // ftr null = empty 9th Extender slot; there is no strip to look for on it.
+    const CsFaderHandle csf = (stripMode && ftr) ? csFaderForTrack(ftr)
+                                                 : CsFaderHandle{ -1, -1 };
     const bool stripFader = stripMode && csf.vst3Param >= 0;
     // SENDS + FLIP send-on-fader: the fader rides the FIRST of the 4 shown sends
     // (7.75 mixer slot g_uf1SendGroup*4 + 0, combinedSendSlot_) of the focused
@@ -30914,7 +30986,7 @@ void uf1PaintChannel_()
     constexpr int kSendFaderStrip = 12;   // reserved UF1 SENDS FLIP-fader gesture slot
     const bool sendFlip = (g_uf1ChannelSubMode.load() == 2) && flip && !stripFader;
     StripRoute sendRoute;
-    if (sendFlip) {
+    if (sendFlip && ftr) {
         const CombinedSlot cs = uf1RouteSlot_(ftr, g_uf1SendGroup.load() * 4);
         if (cs.apiIndex >= 0) {
             sendRoute.track = ftr; sendRoute.sendCategory = cs.category;
@@ -30939,7 +31011,7 @@ void uf1PaintChannel_()
     // flip (those own the fader). Frank 2026-08-02: FLIP must carry the sticky param,
     // not fall back to Pan / the CS V-Pot value.
     int  stickyFx = -1, stickyParam = -1; bool stickyTog = false;
-    const bool stickyFader = flip && !stripFader && !sendFader
+    const bool stickyFader = flip && !stripFader && !sendFader && ftr
         && g_stickyActive.load()
         && stickyResolveOnTrack_(ftr, &stickyFx, &stickyParam, &stickyTog);
     // ⇨ PLUGIN MODE + FLIP: THE LAST-TOUCHED V-POT PARAMETER MOVES TO THE FADER.
@@ -30989,7 +31061,16 @@ void uf1PaintChannel_()
     if (touched) {
         const uint16_t pos = g_uf1FaderPos.load();
         if (g_uf1FaderHasPos.load()) {
-            if (stripFader) {
+            if (!ftr) {
+                // Empty 9th Extender slot → the fader has no target and stays
+                // INERT, like a blank UF8 strip (and like the empty-send slot
+                // below). It must NOT fall through to the CSurf_On*Change tail:
+                // that writes `ftr`, and reaching for the selection there is the
+                // whole bug this branch exists to close. The motor echo after the
+                // chain still runs, so the hand keeps the target in sync and the
+                // re-enable on release lands clean.
+            }
+            else if (stripFader) {
                 const double n = std::clamp(double(pos) / double(kUf1FaderMax), 0.0, 1.0);
                 TrackFX_SetParamNormalized(ftr, csf.fxIndex, csf.vst3Param, n);
             }
@@ -31051,7 +31132,9 @@ void uf1PaintChannel_()
             sExtFaderEditing = false;
         }
         uint16_t pos;
-        if (stripFader) {
+        if (!ftr) {
+            pos = 0;   // empty 9th Extender slot → park low, like a blank strip
+        } else if (stripFader) {
             const double n = TrackFX_GetParamNormalized(ftr, csf.fxIndex, csf.vst3Param);
             pos = static_cast<uint16_t>(std::clamp(n, 0.0, 1.0) * double(kUf1FaderMax) + 0.5);
         } else if (extSendFader) {
