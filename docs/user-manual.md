@@ -516,8 +516,10 @@ the binding editor (it switches the UF1 too, so what you edit is what you are
 looking at). A view you leave empty changes nothing — the key then fires the
 binding it has everywhere else, which is why every configuration written before
 this existed behaves exactly as it did. Put something into a view and that view
-owns the key: out of the box only the Sends view is filled, with paging on the
-plain press and **Sends / Receives** on `Shift`.
+owns the key: out of the box two of them are filled, both on `5-8`. In **Sends**
+view it pages on the plain press and flips **Sends / Receives** on `Shift`; in
+**Plugin** view, where that key has no job of its own, `Shift` opens the **preset
+browser** — which in that view lists the channel strip on the focused track.
 
 **And the four display soft-keys belong to the view outright.** They are where your own
 UF1 soft-key banks live, and they carry them in **DAW view** alone: in Plugin and

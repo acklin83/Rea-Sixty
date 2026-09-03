@@ -1149,6 +1149,27 @@ void seedFactoryDefaults_(Config& c)
         ss.action = "uf1_sends_receives_toggle";
         ss.label  = "RECEIVES";
     }
+    // ⇨ AND THE PLUGIN VIEW'S 5-8 OPENS THE PRESET BROWSER on Shift.
+    // The browser lists whatever the view resolves — in the channel views that
+    // is the strip on the focused track — and in the Plugin view the four keys
+    // under the display are all plug-in parameters, so it had nowhere to live
+    // and shipped on no key at all. 5-8 does nothing at all in this view, so the
+    // key is free, and Shift on it is free too. ONLY here: in DAW the key holds
+    // the channel group, in Sends the paging and the receives flip, in Meter
+    // SK4 already opens the browser (Frank 2026-09-03: "NUR AUF DEN VIEWS WO DER
+    // SINN MACHT - ALSO PLUGIN, SONST GAR NIRGENDS").
+    {
+        auto& b = L1[ButtonId::Uf1FiveToEightPlugin];
+        b.behavior = Behavior::Momentary;
+        b.label    = "5-8";
+        auto& sp = b.shortPress[static_cast<int>(Modifier::Plain)];
+        sp.type   = ActionType::Builtin;
+        sp.action = "uf1_five_to_eight";
+        auto& ss = b.shortPress[static_cast<int>(Modifier::Shift)];
+        ss.type   = ActionType::Builtin;
+        ss.action = "uf1_presets";
+        ss.label  = "PRESETS";
+    }
     // UF1 CHANNEL encoder ROTATION — the UF8's channel-encoder split, on the
     // UF1 (Frank 2026-09-03: "wieso ist shift+encoder = instance walk nicht in
     // den bindings?"). It was hardcoded in the drain since 2026-07-30; the
