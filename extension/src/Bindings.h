@@ -239,11 +239,9 @@ enum class ButtonId : uint16_t {
     Uf1NavDownFades,
     // UF1 1/4" footswitch jacks on the back panel, the twin of the UF8's
     // Foot1/Foot2. No factory binding — user assigns via Settings → Bindings.
-    // ⚠ THE DEVICE IDS ARE NOT CAPTURED YET. The UF8 sends its two on ids
-    // 0x00 / 0x01 in the same FF 22 03 <id> 00 <state> frame, and 0x00..0x07
-    // are unclaimed in the UF1's id space, so fromUf1DeviceId maps those two
-    // on that analogy. Confirm with one tap per pedal: set ExtState
-    // rea_sixty/uf1_trace=1 and read `BTN 0x?? down` in reaper_uf1_input.log.
+    // Device ids 0x00 / 0x01, the same pair the UF8 uses, in the same
+    // FF 22 03 <id> 00 <state> frame. Predicted from the UF8 and CONFIRMED
+    // at the device by Frank on 2026-09-03, one tap per pedal.
     Uf1Foot1, Uf1Foot2,
     // Jog wheel (0x06, rotate-only) — NOT bindable (mode-driven), but SELECTABLE in
     // the UF1 vector so its Jog Mode settings show below the editor (Frank 2026-08-06).

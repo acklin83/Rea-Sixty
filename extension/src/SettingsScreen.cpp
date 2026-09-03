@@ -2721,9 +2721,8 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     drawHwBtn(26, 492, 56, 26, ButtonId::Uf1Flip,   "FLIP");
     drawHwBtn(26, 522, 56, 26, ButtonId::Uf1Master, "MASTER");
 
-    // Foot-switch jacks on the back panel — the UF1 has two, like the UF8.
-    // Bindable, no factory assignment. Device ids still unconfirmed (see
-    // Bindings.h): the schematic is live either way, a tap is what proves it.
+    // Foot-switch jacks on the back panel — the UF1 has two, like the UF8,
+    // on the same ids. Bindable, no factory assignment.
     drawGroupLabelCentered(54, 578, "FOOT SWITCHES");
     drawHwBtn(16, 592, 52, 24, ButtonId::Uf1Foot1, "FOOT 1");
     drawHwBtn(72, 592, 52, 24, ButtonId::Uf1Foot2, "FOOT 2");

@@ -326,9 +326,8 @@ ButtonId fromUf8DeviceId(uint8_t id)
 ButtonId fromUf1DeviceId(uint8_t id)
 {
     switch (id) {
-        // Footswitch jacks. ⚠ UNCONFIRMED — mapped on the UF8's ids (0x00 /
-        // 0x01, same FF 22 button frame) because 0x00..0x07 are unclaimed here.
-        // One tap with uf1_trace on says whether the analogy holds.
+        // Footswitch jacks — the UF8's ids, and the UF1 really does use them
+        // (tapped at the device 2026-09-03). Same FF 22 button frame.
         case 0x00: return ButtonId::Uf1Foot1;
         case 0x01: return ButtonId::Uf1Foot2;
         // V-Pot + channel-encoder pushes 0x08..0x0D.
