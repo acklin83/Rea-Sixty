@@ -321,19 +321,6 @@ bool reasixty_uc1CommitSingleParam(const std::string& match, int layer,
 void reasixty_setVpotCaptureActive(bool active);
 
 // Quick-Learn sweep entry point. Defined in SettingsScreen.cpp; called from
-// the main-thread drain after the Settings window is opened to FX Learn.
-// Resolves the focused / next-unlearned FX in the project, primes the +New
-// dialog, and arms the auto-advance sweep. No-op-with-status when every
-// project plug-in is already mapped or skipped.
-void reasixty_startQuickLearn();
-// Track-scoped Quick Learn — limits the sweep to the focused/selected track.
-void reasixty_startQuickLearnTrack();
-// True when that track actually has a learnable FX — used to avoid opening
-// the FX-Learn window for nothing.
-bool reasixty_quickLearnTrackHasTarget();
-// Same, project scope.
-bool reasixty_quickLearnHasTarget();
-
 // Forward-declared so the encoder-rotation drain (further up) and
 // UC1Surface.cpp can both route physical-control deltas through the same
 // focused-track helper. Defined further down with the other reasixty_*
@@ -743,8 +730,6 @@ std::atomic<bool> g_uf8BankNameShift {true};
 // device, fixed by routing through onTimer().
 uf8::MixerWindow g_mixerWindow;
 std::atomic<bool> g_mixerToggleRequest{false};
-std::atomic<bool> g_quickLearnRequest{false};
-std::atomic<bool> g_quickLearnTrackRequest{false};  // Track-scoped variant
 // Drained on the main thread — UI ops (TrackFX_Show, AppKit windows) MUST
 // run on main thread or AppKit raises NSException. Set by
 // ssl_strip_mode_toggle_with_gui from the libusb input thread, and by
@@ -40488,24 +40473,6 @@ void onTimerBody_()
         g_mixerWindow.toggle();
     }
 
-    // Quick-Learn — drained on the main thread (TrackFX_Show + ImGui ctx
-    // are main-thread-only). Open Settings to FX Learn, then let
-    // SettingsScreen resolve the target FX and prime the +New dialog.
-    if (g_quickLearnRequest.exchange(false)) {
-        // Don't pop the FX-Learn window if the project has nothing to learn.
-        if (reasixty_quickLearnHasTarget()) {
-            g_mixerWindow.openToFxLearn();
-            reasixty_startQuickLearn();
-        }
-    }
-    if (g_quickLearnTrackRequest.exchange(false)) {
-        // Don't pop the FX-Learn window if this track has nothing to learn.
-        if (reasixty_quickLearnTrackHasTarget()) {
-            g_mixerWindow.openToFxLearn();
-            reasixty_startQuickLearnTrack();
-        }
-    }
-
     // Plug-in GUI request flags — all main-thread because TrackFX_Show
     // creates AppKit windows. Set by the show_focused_plugin_gui /
     // show_fx_chain / close_all_fx_guis builtins which may fire on the
@@ -40931,14 +40898,6 @@ custom_action_register_t g_actionRestart{
 };
 int g_cmdRestart = 0;
 
-custom_action_register_t g_actionQuickLearn{
-    0, "REASIXTY_QUICK_LEARN", "Rea-Sixty: Quick Learn Project", nullptr,
-};
-int g_cmdQuickLearn = 0;
-custom_action_register_t g_actionQuickLearnTrack{
-    0, "REASIXTY_QUICK_LEARN_TRACK", "Rea-Sixty: Quick Learn Track", nullptr,
-};
-int g_cmdQuickLearnTrack = 0;
 custom_action_register_t g_actionUc1OutGainFader{
     0, "REASIXTY_UC1_OUTGAIN_FADER_TOGGLE",
     "Rea-Sixty: Toggle UC1 Out-Gain (Mapped \xE2\x86\x94 REAPER Fader)", nullptr,
@@ -41407,8 +41366,6 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == g_cmdBrightnessDown) { brightnessDown(); return true; }
     if (command == g_cmdToggleMixer)    { g_mixerToggleRequest.store(true); return true; }
     if (command == g_cmdRestart)        { g_restartRequest.store(true); return true; }
-    if (command == g_cmdQuickLearn)     { g_quickLearnRequest.store(true);  return true; }
-    if (command == g_cmdQuickLearnTrack){ g_quickLearnTrackRequest.store(true); return true; }
     if (command == g_cmdUc1OutGainFader){ reasixty_toggleUc1OutGainFaderMode(); return true; }
     if (command == g_cmdMasterPinStrip1){ reasixty_toggleMasterPin(1); return true; }
     if (command == g_cmdMasterPinStrip8){ reasixty_toggleMasterPin(8); return true; }
@@ -47506,23 +47463,6 @@ void registerBindingHandlers()
         "Open / Close Rea-Sixty Settings", false
     });
 
-    // Quick-Learn project sweep — same request flag as the native action
-    // REASIXTY_QUICK_LEARN, exposed as a builtin so it can be put on a UF8 /
-    // UC1 button from the Bindings editor. One-shot (fires on press edge);
-    // nullptr stateOf like the other one-shot actions.
-    registerBuiltin("quick_learn", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (firing) g_quickLearnRequest.store(true);
-        },
-        nullptr, "FX: Quick Learn Project", false
-    });
-    registerBuiltin("quick_learn_track", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (firing) g_quickLearnTrackRequest.store(true);
-        },
-        nullptr, "FX: Quick Learn Track", false
-    });
-
     // ---- Phase 2.5 surface-filter modes ----------------------------------
     // Toggles only — actual filter/expand/selection-set logic lands in a
     // follow-up phase. Bind-able now so users can wire them to hardware
@@ -50310,8 +50250,6 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdBrightnessDown = plugin_register("custom_action", &g_actionBrightnessDown);
     g_cmdToggleMixer    = plugin_register("custom_action", &g_actionToggleMixer);
     g_cmdRestart        = plugin_register("custom_action", &g_actionRestart);
-    g_cmdQuickLearn     = plugin_register("custom_action", &g_actionQuickLearn);
-    g_cmdQuickLearnTrack = plugin_register("custom_action", &g_actionQuickLearnTrack);
     g_cmdUc1OutGainFader = plugin_register("custom_action", &g_actionUc1OutGainFader);
     g_cmdMasterPinStrip1 = plugin_register("custom_action", &g_actionMasterPinStrip1);
     g_cmdMasterPinStrip8 = plugin_register("custom_action", &g_actionMasterPinStrip8);

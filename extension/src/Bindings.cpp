@@ -5714,8 +5714,6 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
         }));
         v.push_back(bank("Learn / Master", {
             {"learn_hud_toggle",        "Learn HUD", 0},
-            {"quick_learn",             "Quick Learn", 0},
-            {"quick_learn_track",       "QLearn Trk", 0},
             {"touch_to_learn_toggle",   "Touch Learn", 0},
             {"master_pin_strip1",       "Master Left", 0},
             {"master_pin_strip8",       "Master Right", 0},
@@ -6242,8 +6240,6 @@ const char* builtinCategory(const std::string& n)
     if (n == "show_focused_plugin_gui"
      || n == "show_fx_chain"
      || n == "close_all_fx_guis"
-     || n == "quick_learn"
-     || n == "quick_learn_track"
      || n.rfind("plugin_", 0) == 0)
         return "Plug-in";
 
@@ -6587,12 +6583,6 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "fav_copy_own_toggle",
       "The same copy-or-own switch, for whichever class you last worked "
       "on." },
-    { "quick_learn",
-      "Sweeps the whole PROJECT for plug-ins that can be mapped "
-      "automatically." },
-    { "quick_learn_track",
-      "Sweeps the FOCUSED TRACK for plug-ins that can be mapped "
-      "automatically." },
     { "touch_to_learn_toggle",
       "Arms learning without the HUD: touch a control on the surface, it "
       "blinks, then wiggle a plug-in parameter to bind the two. Stays "
@@ -7176,8 +7166,6 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "plugin_preset_cycle", "Preset Cyc" },
     { "plugin_preset_next", "Preset >" },
     { "plugin_preset_prev", "Preset <" },
-    { "quick_learn", "Quick Learn" },
-    { "quick_learn_track", "Learn Track" },
     { "recv_all_1", "Recv 1 All" },
     { "recv_all_2", "Recv 2 All" },
     { "recv_all_3", "Recv 3 All" },

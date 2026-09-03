@@ -1244,7 +1244,7 @@ The five factory banks are:
 - **Encoder Modes** — all fifteen Channel-Encoder modes. Eight on Plain (Ch Select / Instance / FX Cycle / FX Move / CS Cycle / Markers / Nudge / Mousewheel) and seven on Shift (BC Cycle / Fav Cycle / Selset Cycle / Bank by 1 / Last Param / FX Scroll / Inst Scroll).
 - **Focus Set & Selsets** — pin / add / remove / toggle / set-from-selection / pin-focused / clear, plus **Set Scope**, which cycles Both / UF1 / UF8. The scope is on the bank because setting it on one surface and then pressing on the other is the mistake this bank invites. On **Shift**, the two Sticky Pot actions: *Pin Sticky* and *Sticky OnOff* — pinning one parameter to a strip is the same trade as pinning one track to the surface.
 - **Plug-in Ops** — FX GUI / FX Chain / Close All FX / Bypass / Offline / Preset prev-next / SSL Strip.
-- **Learn / Master** — Learn-HUD / Quick Learn (project + track) / Touch-Learn / Master pin left-right / focused-track panel / Out-Gain.
+- **Learn / Master** — Learn-HUD / Touch-Learn / Master pin left-right / focused-track panel / Out-Gain. Two of the eight keys are free.
 - **Brightness** — Both / LCDs / LEDs × up / down.
 
 The favourites used to be here as two more banks, one for CS and one for BC. They are **dynamic kinds** instead now (see *Dynamic soft-key banks*), which does the same thing and stays live rather than being a snapshot. Five banks also fit the six places in a set, so the full-set load leaves nothing behind.
@@ -1529,7 +1529,7 @@ Top bar:
 - **Primary mode** picker (CS variant family) and other domain-specific options.
 - **CS Favourite** dropdown (Channel-Strip domain only) — assign this plug-in to one of the 8 CS favourite slots, or clear it. See chapter *Favourites*.
 - **Mockup toggle** — visualises the UC1 layout via a UC1 mockup PNG instead of the strip-bar schematic. Persisted in ExtState `ReaSixty/fxLearnMockup`.
-- **AutoLearn** button — runs the pattern-matching engine (hardcoded SSL seeds + user-map dictionary; three-pass: exact / substring / token) against either the live FX on the focused track or the catalog's stored param snapshot. Confidence-scored suggestions open in an *AutoLearn Preview* modal with a per-row checkbox + confidence %, plus All / None bulk helpers. UF8 V-Pot suggestions auto-group by category (EQ / Comp / Gate / Filter / I-O / Misc). Accept applies every checked mapping into the active map.
+- **AutoLearn** button — runs the pattern-matching engine (hardcoded SSL seeds + user-map dictionary; three-pass: exact / substring / token) against either the live FX on the focused track or the catalog's stored param snapshot. Confidence-scored suggestions open in an *AutoLearn Preview* modal with a per-row checkbox + confidence %, plus All / None bulk helpers. UF8 V-Pot suggestions auto-group by category (EQ / Comp / Gate / Filter / I-O / Misc). Accept applies every checked mapping into the active map, on the **Normal** layer only: a control that carries an Option / Control / Ctrl+Opt overlay keeps it, and so does a push-cycle you built on it.
 
 Editor body — depends on the domain:
 
@@ -2203,7 +2203,6 @@ When held, these shift every other binding to its modifier slot. The UF8 has one
 - **Mode-change banner: show / hide (flashes Sel / Encoder mode)** — show / hide the transient **mode-change banner**. See *On-Screen Display → Mode-change banner*.
 - **Touch-to-Learn: arm / disarm (touch a control, wiggle a param)** — arm / disarm **Touch-to-Learn**. While armed, touch a control on the surface and wiggle a plug-in parameter to learn it to that control on the fly — FX-Learn without opening Settings. Disarming cancels and clears the pending learn. Bindable here (category *Hardware Modes*); the soft-keys switch to the V-Pot layer while armed, and a V-Pot **press** learns as a Toggle binding. Pressing several of the plug-in's buttons in a row while a V-Pot is armed builds a **step cycle** on it (see *FX Learn → Step cycle*).
 - **Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)** — flip the UC1 **Out Gain** knob between its mapped SSL Channel-Strip *Fader Level* parameter and **REAPER's track volume fader**. While engaged, the knob drives track volume even on tracks with no channel-strip plug-in, and the LED ring + readout follow the track fader. Bindable from the Bindings picker (under *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)* (`REASIXTY_UC1_OUTGAIN_FADER_TOGGLE`) for the keyboard / toolbar.
-- **FX: Quick Learn Project** / **FX: Quick Learn Track** — run the AutoLearn sweep over the whole project / the focused track. Same one-shot as the REAPER actions *Rea-Sixty: Quick Learn …*.
 - **Restart Rea-Sixty (re-open devices)** — close the UF8, UC1 and MIDI ports and open them again, so a surface that has stopped responding can be revived without the trip through Preferences → Control Surface. Bindable here (category *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Restart Rea-Sixty (re-open devices)* (`REASIXTY_RESTART`) — worth a keyboard shortcut, since a hardware key is no help when the hardware is the thing that needs re-opening. This re-opens the **devices**, not the extension: REAPER holds the plug-in for the life of the process, so a new build still needs REAPER restarted.
 
 ## Internal (not user-bindable)
@@ -2798,7 +2797,7 @@ Nine tile types:
 | **Layer** | Select binding layer 1 / 2 / 3 |
 | **Hardware Mode** | Surface-wide toggles — Flip, Home, Settings, mirrors, overlays, learn |
 | **Navigation** | Bank and page navigation, zoom |
-| **Plug-in** | FX windows, chain, close-all, Quick-Learn, bypass, offline |
+| **Plug-in** | FX windows, chain, close-all, bypass, offline |
 | **Selection Set** | Recall selection sets |
 | **Surface Target** | What the surface drives — Selection and Encoder modes, sends, Parameter Groups, soft-key banks, SSL |
 | **Any Rea-Sixty Action** | Any built-in at all, or a raw REAPER command |
