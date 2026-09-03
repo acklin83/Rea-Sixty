@@ -1623,7 +1623,14 @@ inline const char* selectionModeFriendly(SelectionMode m)
         case SelectionMode::Rec:           return "Rec Arm";
         case SelectionMode::RecMon:        return "Rec / Monitor";
         case SelectionMode::Auto:          return "Automation";
-        case SelectionMode::Instance:      return "Instance";
+        // ⛔ THIS MODE WALKS EVERY FX, SO IT IS CALLED FX CYCLE. The enum keeps
+        // the old word because the config files do (selectionModeToKey writes
+        // "instance"), but the surface said "Instance" for a ring that is not
+        // the Instance ring, while the manual and the action list both said FX
+        // Cycle — the very distinction this project teaches, broken by its own
+        // mode banner (Frank 2026-09-03). The name the user reads is the name of
+        // what it does; the key on disk stays untouched.
+        case SelectionMode::Instance:      return "FX Cycle";
         case SelectionMode::InstanceCycle: return "Instance Cycle";
         case SelectionMode::DynaMount:     return "DynaMount";
         case SelectionMode::Hue:           return "Hue";
@@ -27559,10 +27566,29 @@ static void uf1EncodeSeg7Text_(const char* s, uint8_t out[11])
 // comes back by itself when the deadline passes.
 static std::string g_uf1TcFlashText;
 static int64_t     g_uf1TcFlashUntilMs = 0;
+// ⛔ A FLASH CAN NEVER OWN THE FIELD FOR LONGER THAN ITS OWN WINDOW.
+// Every caller here is a one-shot ("bank switched", "scene recalled"), but one of
+// them used to fire every frame, and re-arming a 500 ms flash at 30 Hz pins the
+// word on the glass for as long as the caller keeps calling: the panel sat on
+// EFFECTS until a channel change forced something else through (Frank
+// 2026-09-03). The arming site is fixed, and this is the floor under it: the SAME
+// text is never extended past kUf1TcFlashCeilMs from when it first appeared, so
+// however a future caller misbehaves, the clock comes back. A DIFFERENT word is a
+// new event and starts its own window.
+constexpr int64_t kUf1TcFlashCeilMs = 3000;
 void uf1FlashTimecode_(std::string_view text, int ms)
 {
+    static std::string s_since;          // the text that opened the current run
+    static int64_t     s_sinceMs = 0;
+    const int64_t now = nowMs_();
+    if (text != s_since || now >= g_uf1TcFlashUntilMs) {
+        s_since.assign(text);            // new word, or the last run had lapsed
+        s_sinceMs = now;
+    }
     g_uf1TcFlashText.assign(text);
-    g_uf1TcFlashUntilMs = nowMs_() + ms;
+    const int64_t want = now + ms;
+    const int64_t ceil = s_sinceMs + kUf1TcFlashCeilMs;
+    g_uf1TcFlashUntilMs = (want < ceil) ? want : ceil;
 }
 
 // What a UF1 soft-key bank is CALLED on the time field: the user's own name if it

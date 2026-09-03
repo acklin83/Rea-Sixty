@@ -7216,8 +7216,10 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             char nameId[48];
             snprintf(nameId, sizeof(nameId), "##uf1bankname_%d_%d",
                      uf1Bank, g_slotEditModIdx);
-            if (ImGui_InputText(ctx, nameId, s_bankNameBuf,
-                                sizeof(s_bankNameBuf), &nameFlags, nullptr)) {
+            const bool nameChanged =
+                ImGui_InputText(ctx, nameId, s_bankNameBuf,
+                                sizeof(s_bankNameBuf), &nameFlags, nullptr);
+            if (nameChanged) {
                 uf8::bindings::setUf1SoftBankName(uf1Bank, g_slotEditModIdx,
                                                   s_bankNameBuf);
                 s_lastFill = s_bankNameBuf;
@@ -7234,10 +7236,17 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                                         shown, sizeof(shown));
             // ★ The panel IS the preview while you type (Frank 2026-08-26). Not a
             // drawing of the panel: the real cells, the real font, every
-            // approximation simply present. Re-armed every frame the field is
-            // active; the clock returns by itself half a second after you stop.
-            if (editing && reasixty_uf1Connected())
+            // approximation simply present.
+            // ⛔ ARMED BY A KEYSTROKE, NOT BY THE CARET. This re-armed every frame
+            // the field was ACTIVE, and active in ImGui means the caret sits
+            // there, not that anyone is typing — so clicking into a bank name and
+            // leaving it stuck the panel on that name for as long as the field
+            // kept focus (Frank 2026-09-03: "mein UF1 ist auf EFFECTS hängen
+            // geblieben"). One arm per keystroke, long enough to read, and the
+            // clock comes back on its own whatever the caret does.
+            if (nameChanged && reasixty_uf1Connected())
                 reasixty_uf1PreviewOnPanel(shown);
+            (void)editing;
             // The drawn cells stay for the case the panel cannot cover: no UF1
             // attached. Offline editing of these banks is supported, and a preview
             // that only exists with the hardware present would be missing exactly
