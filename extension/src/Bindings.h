@@ -249,6 +249,28 @@ enum class ButtonId : uint16_t {
     // mode) and Shift instance_cycle, which is what the drain used to do
     // hardcoded. The PUSH stays Uf1ChannelPush.
     Uf1ChannelEncoder,
+    // ⇨ THE FOUR KEYS WHOSE JOB CHANGES WITH THE VIEW, ONCE PER VIEW.
+    // 5-8 pages the send window in Sends view, toggles the channel group in DAW
+    // view and does nothing in Plugin; the arrows page strip pages, soft-key
+    // banks or meter V-Pot pages; the channel SOFT key is the one key above the
+    // fader. Same construction as the nav cross's per-jog-object ids: the
+    // physical id is what fromUf1DeviceId returns, and every dispatch, label and
+    // LED path remaps it to the id of the ACTIVE view before it looks a binding
+    // up. Frank 2026-09-03: "bindings per view mode" — because a binding was
+    // view-blind while the code's own behaviour was not, so the two collided on
+    // the same key (his preset browser on Shift+5-8 versus the hidden
+    // sends/receives flip that only fired in Sends view).
+    // ⚠ Order is view-minor and MUST match the kUf1View* order in main.cpp
+    // (Plugin, DAW, Meter, Sends) so perViewUf1Id(base, view) = groupStart+view.
+    // An EMPTY per-view binding falls back to the physical key's own binding
+    // (uf1RemapForView_), so every configuration written before this existed
+    // keeps working untouched — unlike the cross, whose thirty slots are all
+    // seeded at the factory.
+    Uf1FiveToEightPlugin, Uf1FiveToEightDaw, Uf1FiveToEightMeter, Uf1FiveToEightSends,
+    Uf1ArrowLeftPlugin,   Uf1ArrowLeftDaw,   Uf1ArrowLeftMeter,   Uf1ArrowLeftSends,
+    Uf1ArrowRightPlugin,  Uf1ArrowRightDaw,  Uf1ArrowRightMeter,  Uf1ArrowRightSends,
+    Uf1ChannelSoftKeyPlugin, Uf1ChannelSoftKeyDaw,
+    Uf1ChannelSoftKeyMeter,  Uf1ChannelSoftKeySends,
     // Jog wheel (0x06, rotate-only) — NOT bindable (mode-driven), but SELECTABLE in
     // the UF1 vector so its Jog Mode settings show below the editor (Frank 2026-08-06).
     // KEEP LAST in the UF1 block: four range checks read `<= Uf1Jog` to mean
@@ -261,6 +283,35 @@ enum class ButtonId : uint16_t {
 // enum (Uf1JogMode) and static_asserts that the two agree — Bindings.h cannot
 // see it, and a silent mismatch would map keys onto the wrong mode's ids.
 constexpr int kUf1JogModeCountForNav = 6;
+
+// How many UF1 views the per-view key block above is sized for. main.cpp owns
+// the real constants (kUf1ViewPlugin..kUf1ViewSends) and static_asserts that the
+// two agree, exactly as the jog-mode count does below.
+constexpr int kUf1ViewCountForKeys = 4;
+
+// The per-view id for one of the four keys whose job the view decides. Out of
+// range, or any other button, → the base id back, so a caller that has not been
+// taught about views still resolves to something.
+inline ButtonId perViewUf1Id(ButtonId base, int view)
+{
+    if (view < 0 || view >= kUf1ViewCountForKeys) return base;
+    switch (base) {
+        case ButtonId::Uf1FiveToEight:
+            return static_cast<ButtonId>(static_cast<int>(ButtonId::Uf1FiveToEightPlugin) + view);
+        case ButtonId::Uf1ArrowLeft:
+            return static_cast<ButtonId>(static_cast<int>(ButtonId::Uf1ArrowLeftPlugin) + view);
+        case ButtonId::Uf1ArrowRight:
+            return static_cast<ButtonId>(static_cast<int>(ButtonId::Uf1ArrowRightPlugin) + view);
+        case ButtonId::Uf1ChannelSoftKey:
+            return static_cast<ButtonId>(static_cast<int>(ButtonId::Uf1ChannelSoftKeyPlugin) + view);
+        default: return base;
+    }
+}
+
+// The reverse: which physical key and which view a per-view id stands for.
+// Returns false for anything else. The editor needs it because the schematic
+// tile IS the per-view id, and the view picker reads back out of the selection.
+bool splitPerViewUf1Id(ButtonId id, ButtonId* baseOut, int* viewOut);
 
 // The reverse of perModeNavId: which physical key and which mode a per-mode nav
 // id stands for. Returns false for anything else. The editor needs it because
@@ -998,6 +1049,12 @@ std::vector<BoundRef> findAllBoundTo(const std::string& builtinName);
 // picks white deliberately on a non-white-table cell can't get
 // white because Binding{} also has white as default.
 bool hasBinding(int layer, ButtonId id);
+
+// Does this binding carry ANY action, in any slot? The editor writes an entry
+// into the map the moment a key is touched, so hasBinding above answers "has a
+// row", not "does something" — and the per-view fallback needs the second
+// question: an empty view binding hands the key back to its physical id.
+bool bindingHasAnyAction(const Binding& bd);
 
 // User-Quick slot accessors. layer 0..2, quick 0..2, subBank 0..5,
 // slot 0..7. Out-of-range returns defaults / silently ignores writes.

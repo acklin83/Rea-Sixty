@@ -213,12 +213,49 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf1Play,          "uf1_play"            },
     { ButtonId::Uf1Rec,           "uf1_rec"             },
     { ButtonId::Uf1ChannelEncoder,"uf1_channel_encoder" },
+    { ButtonId::Uf1FiveToEightPlugin,      "uf1_5_to_8_plugin" },
+    { ButtonId::Uf1FiveToEightDaw,         "uf1_5_to_8_daw" },
+    { ButtonId::Uf1FiveToEightMeter,       "uf1_5_to_8_meter" },
+    { ButtonId::Uf1FiveToEightSends,       "uf1_5_to_8_sends" },
+    { ButtonId::Uf1ArrowLeftPlugin,        "uf1_arrow_left_plugin" },
+    { ButtonId::Uf1ArrowLeftDaw,           "uf1_arrow_left_daw" },
+    { ButtonId::Uf1ArrowLeftMeter,         "uf1_arrow_left_meter" },
+    { ButtonId::Uf1ArrowLeftSends,         "uf1_arrow_left_sends" },
+    { ButtonId::Uf1ArrowRightPlugin,       "uf1_arrow_right_plugin" },
+    { ButtonId::Uf1ArrowRightDaw,          "uf1_arrow_right_daw" },
+    { ButtonId::Uf1ArrowRightMeter,        "uf1_arrow_right_meter" },
+    { ButtonId::Uf1ArrowRightSends,        "uf1_arrow_right_sends" },
+    { ButtonId::Uf1ChannelSoftKeyPlugin,   "uf1_channel_soft_plugin" },
+    { ButtonId::Uf1ChannelSoftKeyDaw,      "uf1_channel_soft_daw" },
+    { ButtonId::Uf1ChannelSoftKeyMeter,    "uf1_channel_soft_meter" },
+    { ButtonId::Uf1ChannelSoftKeySends,    "uf1_channel_soft_sends" },
     { ButtonId::Uf1Foot1,         "uf1_foot_1"          },
     { ButtonId::Uf1Foot2,         "uf1_foot_2"          },
     { ButtonId::Uf1Jog,           "uf1_jog"             },
 };
 
 } // namespace
+
+bool splitPerViewUf1Id(ButtonId id, ButtonId* baseOut, int* viewOut)
+{
+    struct Grp { ButtonId first; ButtonId base; };
+    static const Grp kGrp[] = {
+        { ButtonId::Uf1FiveToEightPlugin,    ButtonId::Uf1FiveToEight    },
+        { ButtonId::Uf1ArrowLeftPlugin,      ButtonId::Uf1ArrowLeft      },
+        { ButtonId::Uf1ArrowRightPlugin,     ButtonId::Uf1ArrowRight     },
+        { ButtonId::Uf1ChannelSoftKeyPlugin, ButtonId::Uf1ChannelSoftKey },
+    };
+    for (const auto& g : kGrp) {
+        const int lo = static_cast<int>(g.first);
+        const int v  = static_cast<int>(id);
+        if (v >= lo && v < lo + kUf1ViewCountForKeys) {
+            if (baseOut) *baseOut = g.base;
+            if (viewOut) *viewOut = v - lo;
+            return true;
+        }
+    }
+    return false;
+}
 
 bool splitPerModeNavId(ButtonId id, ButtonId* baseOut, int* modeOut)
 {
@@ -1091,6 +1128,26 @@ void seedFactoryDefaults_(Config& c)
             sp.param  = 0;
             sp.label  = a.label;
         }
+    }
+    // ⇨ THE SENDS VIEW'S OWN 5-8, and the reason this whole per-view block
+    // exists. The sends/receives flip used to be a HIDDEN branch inside the
+    // uf1_five_to_eight builtin: it fired only in the Sends view, sat in no
+    // slot, showed in no editor, and could not be removed — so a user binding on
+    // Shift+5-8 (Frank's preset browser) worked in three views and collided in
+    // the fourth. Now the flip is a normal action in a normal slot: the Sends
+    // view's own binding carries paging on Plain and the flip on Shift, which is
+    // byte-for-byte what the hidden branch did, and both are movable.
+    {
+        auto& b = L1[ButtonId::Uf1FiveToEightSends];
+        b.behavior = Behavior::Momentary;
+        b.label    = "5-8";
+        auto& sp = b.shortPress[static_cast<int>(Modifier::Plain)];
+        sp.type   = ActionType::Builtin;
+        sp.action = "uf1_five_to_eight";
+        auto& ss = b.shortPress[static_cast<int>(Modifier::Shift)];
+        ss.type   = ActionType::Builtin;
+        ss.action = "uf1_sends_receives_toggle";
+        ss.label  = "RECEIVES";
     }
     // UF1 CHANNEL encoder ROTATION — the UF8's channel-encoder split, on the
     // UF1 (Frank 2026-09-03: "wieso ist shift+encoder = instance walk nicht in
@@ -4918,6 +4975,19 @@ bool hasBinding(int layer, ButtonId id)
     if (layer < 0 || layer > 2 || id == ButtonId::None) return false;
     return g_cfg.layers[layer].bindings.find(id)
         != g_cfg.layers[layer].bindings.end();
+}
+
+bool bindingHasAnyAction(const Binding& bd)
+{
+    for (int m = 0; m < kModifierCount; ++m) {
+        if (bd.shortPress[m].type  != ActionType::Noop
+         || !bd.shortPress[m].action.empty())  return true;
+        if (bd.longPress[m].type   != ActionType::Noop
+         || !bd.longPress[m].action.empty())   return true;
+        if (bd.doublePress[m].type != ActionType::Noop
+         || !bd.doublePress[m].action.empty()) return true;
+    }
+    return false;
 }
 
 void setBinding(int layer, ButtonId id, const Binding& bd)

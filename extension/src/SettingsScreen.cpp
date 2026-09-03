@@ -196,6 +196,11 @@ void        reasixty_uf1JogMoveSeq(int pos, int dir);
 // Live jog mode — the nav-cross editor follows it and switching there switches
 // the surface, like clicking a Sub-Bank tile engages that bank.
 int         reasixty_uf1JogMode();
+// The UF1's live view (Plugin / DAW / Meter / Sends). Four keys carry a binding
+// per view, and the editor follows the surface the way the jog picker does.
+int         reasixty_uf1ViewMode();
+void        reasixty_setUf1ViewMode(int view);
+const char* reasixty_uf1ViewName(int view);
 void        reasixty_setUf1JogMode(int mode);
 void reasixty_identifyUf8();
 void reasixty_identifyUc1();
@@ -2689,7 +2694,15 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     // LEFT COLUMN — channel strip (UG callouts 1–7)
     // ======================================================================
     // (1) Small-screen soft key
-    drawHwBtn(34, 22, 54, 20, ButtonId::Uf1ChannelSoftKey, "SOFT");
+    // ⇨ THE FOUR VIEW-OWNED KEYS CARRY THE ID OF THE LIVE VIEW, exactly as the
+    // cross tiles carry the id of the live jog object: the tile's tint, its
+    // tooltip and what the editor opens all describe what the key does RIGHT
+    // NOW. The view picker below the schematic switches the surface.
+    const int uf1View = reasixty_uf1ViewMode();
+    auto viewId = [&](ButtonId base) {
+        return uf8::bindings::perViewUf1Id(base, uf1View);
+    };
+    drawHwBtn(34, 22, 54, 20, viewId(ButtonId::Uf1ChannelSoftKey), "SOFT");
 
     // (2) Small colour screen — plain scribble LCD (track name), UF8-style.
     rect_(c, 26, 48, 124, 106, 0x080C12FF, 0x444A55FF, 3.0);
@@ -2838,9 +2851,9 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
         ImGui_SetTooltip(ctx,
             "MODE picks the UF1 view: hold it and press a display soft-key.\n"
             "Not bindable.");
-    drawHwBtn(416, 266, 52, 24, ButtonId::Uf1FiveToEight, "5-8");
-    drawHwBtn(490, 266, 38, 24, ButtonId::Uf1ArrowLeft,  "\xE2\x97\x84");   // (14)
-    drawHwBtn(530, 266, 38, 24, ButtonId::Uf1ArrowRight, "\xE2\x96\xBA");
+    drawHwBtn(416, 266, 52, 24, viewId(ButtonId::Uf1FiveToEight), "5-8");
+    drawHwBtn(490, 266, 38, 24, viewId(ButtonId::Uf1ArrowLeft),  "\xE2\x97\x84");   // (14)
+    drawHwBtn(530, 266, 38, 24, viewId(ButtonId::Uf1ArrowRight), "\xE2\x96\xBA");
     // (12) BANK arrows + (11) 360°/LAYER + (18) SCRUB — all on one line
     drawHwBtn(360, 300, 38, 24, ButtonId::Uf1BankLeft,  "\xE2\x97\x84");
     drawHwBtn(400, 300, 38, 24, ButtonId::Uf1BankRight, "\xE2\x96\xBA");
@@ -6737,6 +6750,14 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         s_selected = uf8::bindings::perModeNavId(navBase, reasixty_uf1JogMode());
     }
 
+    // ⇨ AND THE FOUR VIEW-OWNED KEYS FOLLOW THE VIEW, for the same reason: a
+    // stale selection would leave the editor on the view you left while the
+    // schematic already shows the one you are in.
+    if (uf8::bindings::ButtonId viewBase;
+        uf8::bindings::splitPerViewUf1Id(s_selected, &viewBase, nullptr)) {
+        s_selected = uf8::bindings::perViewUf1Id(viewBase, reasixty_uf1ViewMode());
+    }
+
     // ---- Hardware schematic (vector, mirrors SSL UF8 page-14 layout) ----
     // Click → selects the button for editing AND, for Layer / Quick /
     // Sub-Bank tiles, dispatches the binding so the hardware engages
@@ -7076,6 +7097,31 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // window a defer cycle later). So this block appears for the five cross
     // tiles and the jog wheel, the two things it governs, and adds no height
     // anywhere else (Frank 2026-08-18: settings crash on the SCRUB tile).
+    // ⇨ THE VIEW PICKER, next to the jog-object one and built the same way: it
+    // switches the SURFACE, so there is no edit-only view that could drift from
+    // what the UF1 is showing. Shown for the four keys the view owns.
+    if (uf8::bindings::ButtonId vBase;
+        s_deviceTab == 2
+        && uf8::bindings::splitPerViewUf1Id(editSel, &vBase, nullptr)) {
+        const int liveView = reasixty_uf1ViewMode();
+        ImGui_Text(ctx, "View:");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_SetNextItemWidth(ctx, 170.0);
+        if (ImGui_BeginCombo(ctx, "##uf1keyview",
+                             reasixty_uf1ViewName(liveView), nullptr)) {
+            for (int v = 0; v < uf8::bindings::kUf1ViewCountForKeys; ++v) {
+                bool sel = (v == liveView);
+                if (ImGui_Selectable(ctx, reasixty_uf1ViewName(v), &sel,
+                                     nullptr, nullptr, nullptr))
+                    reasixty_setUf1ViewMode(v);
+            }
+            ImGui_EndCombo(ctx);
+        }
+        ImGui_TextDisabled(ctx,
+            "Empty here = this key keeps the binding it has everywhere else.");
+        ImGui_Spacing(ctx);
+    }
+
     const bool jogModeRelevant =
         editSel == ButtonId::Uf1Jog
         || uf8::bindings::splitPerModeNavId(editSel, nullptr, nullptr);

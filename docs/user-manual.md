@@ -509,7 +509,17 @@ order, is set in *Settings → Bindings → UF1*.
 The view survives until you change it. Everything below is described per view,
 because the same physical key does different work in each.
 
-**Only the four display soft-keys belong to the view.** They are where your own
+**Four keys carry a binding per view.** `5-8`, the two page arrows and the
+`SOFT` key above the channel do a different job in each view, so each of them
+holds four bindings: one per view, edited with the **View** picker at the top of
+the binding editor (it switches the UF1 too, so what you edit is what you are
+looking at). A view you leave empty changes nothing — the key then fires the
+binding it has everywhere else, which is why every configuration written before
+this existed behaves exactly as it did. Put something into a view and that view
+owns the key: out of the box only the Sends view is filled, with paging on the
+plain press and **Sends / Receives** on `Shift`.
+
+**And the four display soft-keys belong to the view outright.** They are where your own
 UF1 soft-key banks live, and they carry them in **DAW view** alone: in Plugin and
 Sends view the surface owns those four keys (the channel strip's section toggles,
 the send modes) and in Meter view they are the meter's own. That is also why they

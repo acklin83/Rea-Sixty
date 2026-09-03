@@ -1055,6 +1055,11 @@ std::atomic<bool> g_pageDirty{false};
 // can pass the key index straight in, and it is the cycle order.
 enum : int { kUf1ViewPlugin = 0, kUf1ViewDaw = 1, kUf1ViewMeter = 2, kUf1ViewSends = 3,
              kUf1ViewCount = 4 };
+// Bindings.h sizes the per-view key block from its own copy of this number and
+// cannot see the enum. A silent mismatch would map a key onto the wrong view's
+// slot, so let the compiler hold the two together.
+static_assert(kUf1ViewCount == uf8::bindings::kUf1ViewCountForKeys,
+              "per-view ButtonId block and the UF1 view enum disagree");
 inline void uf1SetViewMode_(int v)
 {
     switch (v) {
@@ -5122,6 +5127,28 @@ static uf8::bindings::ButtonId uf1RemapNavForJogMode_(uf8::bindings::ButtonId id
 {
     return uf8::bindings::perModeNavId(
         id, static_cast<int>(g_uf1JogMode.load()));
+}
+
+// ⇨ THE FOUR KEYS WHOSE JOB THE VIEW DECIDES, RESOLVED TO THE VIEW YOU ARE IN.
+// Same shape as the jog remap above and the same rule about call sites: every
+// path that looks a binding up for one of these keys — both dispatch sites, the
+// label and the LED — must run the id through here, or the surface fires one
+// thing and says another.
+// ⚠ THE FALLBACK IS WHAT KEEPS EXISTING CONFIGURATIONS ALIVE. The cross seeds
+// all thirty of its per-mode slots at the factory; these keys have one binding
+// each in every configuration written before today. So an EMPTY per-view binding
+// hands the key straight back to its physical id, and a per-view binding only
+// takes over once something is actually in it. Filling one slot of a view
+// therefore takes that key FOR that view — the view owns the key from then on,
+// which is the same all-or-nothing a modifier set has.
+static uf8::bindings::ButtonId uf1RemapForView_(uf8::bindings::ButtonId id)
+{
+    const uf8::bindings::ButtonId v =
+        uf8::bindings::perViewUf1Id(id, uf1ViewMode_());
+    if (v == id) return id;
+    const int layer = uf8::bindings::getActiveLayer();
+    return uf8::bindings::bindingHasAnyAction(uf8::bindings::getBinding(layer, v))
+         ? v : id;
 }
 // USER-ADJUSTABLE jog feel (Frank 2026-08-06 "alle speeds sollen einstellbar sein").
 // All ExtState-persisted + Settings-editable (UF1 tab). NOT g_nudgeAmount — the jog
@@ -23016,8 +23043,8 @@ void onUf1Event(const uf1::InputEvent& ev)
             // below). Release edges still reach the final dispatch() so a
             // Momentary binding's press/release stays balanced. Frank
             // 2026-07-30 ("noch nicht wirklich bindable").
-            if (const auto uBid = uf1RemapNavForJogMode_(
-                    uf8::bindings::fromUf1DeviceId(ev.id));
+            if (const auto uBid = uf1RemapForView_(uf1RemapNavForJogMode_(
+                    uf8::bindings::fromUf1DeviceId(ev.id)));
                 uBid != uf8::bindings::ButtonId::None
                 && uBid != uf8::bindings::ButtonId::Uf1Solo
                 && uBid != uf8::bindings::ButtonId::Uf1Cut
@@ -23276,8 +23303,11 @@ void onUf1Event(const uf1::InputEvent& ev)
             // shipped transport + Solo/Cut/Sel behaviour; unbound buttons
             // (NAV, arrows, secondary transport, …) are user-assignable.
             // dispatch handles both press and release edges itself.
-            if (auto bId = uf1RemapNavForJogMode_(
-                    uf8::bindings::fromUf1DeviceId(ev.id));
+            // ⚠ BOTH dispatch sites, both remaps. The comment on
+            // uf1RemapNavForJogMode_ says why: miss one and the key silently
+            // falls back to the physical id's binding, in some modes only.
+            if (auto bId = uf1RemapForView_(uf1RemapNavForJogMode_(
+                    uf8::bindings::fromUf1DeviceId(ev.id)));
                 bId != uf8::bindings::ButtonId::None) {
                 uf8::bindings::dispatch(bId, ev.pressed);
             }
@@ -29437,8 +29467,14 @@ void uf1PaintChannel_()
             const auto mod = uf8::bindings::currentModifierSnapshot();
             const int  mi  = static_cast<int>(mod);
             for (size_t k = 0; k < kUf1BtnLedN; ++k) {
+                // ⚠ THE LED READS THE SAME BINDING THE PRESS WILL FIRE. Four of
+                // these keys resolve per view, so without the remap the lamp
+                // would wear the colour of the physical key's binding while the
+                // press ran the view's — the surface saying one thing and doing
+                // another, which is the trap this codebase keeps falling into.
                 const uf8::bindings::Binding bd =
-                    uf8::bindings::getBinding(layer, kUf1BtnLeds[k].id);
+                    uf8::bindings::getBinding(
+                        layer, uf1RemapForView_(kUf1BtnLeds[k].id));
                 // Per-modifier resolution, mirroring the UF8 (resolveLed_ ~25394):
                 // pick the slot for the held modifier, decide state, then take that
                 // slot's effective LED (slot override wins, else binding-level).
@@ -30318,9 +30354,11 @@ void uf1PaintChannel_()
         // layer 0 outright, so renaming the SOFT key on Layer 2 changed what it
         // fired and what its LED did, while the channel display kept showing
         // Layer 1's name.
+        // Per view as well as per layer: this key is one of the four the view
+        // decides, so the label has to name the action the view will fire.
         const auto bdSoft = uf8::bindings::getBinding(
             uf8::bindings::getActiveLayer(),
-            uf8::bindings::ButtonId::Uf1ChannelSoftKey);
+            uf1RemapForView_(uf8::bindings::ButtonId::Uf1ChannelSoftKey));
         // The user types this label in Settings, so it is arbitrary UTF-8; fold it
         // like every other UF1 text zone.
         const std::string lbl = utf8ToLatin1(bdSoft.label);
@@ -42887,6 +42925,24 @@ void reasixty_setUf1StartupView(bool on, int view)
     SetExtState("rea_sixty", "uf1_startup_view", b, true);
 }
 int reasixty_uf1ViewMode() { return uf1ViewMode_(); }
+// The editor's view picker switches the SURFACE, exactly as its jog-object
+// picker does: there is no edit-only view, so what you edit is always what the
+// UF1 is showing and the two cannot drift apart.
+void reasixty_setUf1ViewMode(int view)
+{
+    if (view < 0 || view >= kUf1ViewCount) return;
+    uf1SetViewMode_(view);
+}
+const char* reasixty_uf1ViewName(int view)
+{
+    switch (view) {
+        case kUf1ViewPlugin: return "Plugin";
+        case kUf1ViewDaw:    return "DAW";
+        case kUf1ViewMeter:  return "Meter";
+        case kUf1ViewSends:  return "Sends";
+        default:             return "?";
+    }
+}
 
 // ---- UF1 soft-key bank name on the time display ---------------------------
 // The Settings toggle (Behaviour → UF1) and the two readers the Bindings pane
@@ -47065,11 +47121,14 @@ void registerBindingHandlers()
             if (sub == 1) {
                 g_uf1DawGroup.store(g_uf1DawGroup.load() ? 0 : 1);
             } else if (sub == 2) {
-                // SHIFT flips the routing view between the track's SENDS and its
-                // RECEIVES (Frank 2026-08-17; forum item 3.9). Without a modifier
-                // the key keeps paging the window of four, as before. Reachable as
-                // its own builtin too, for anyone who would rather bind it.
-                if (g_shiftHeld.load()) { uf1ToggleRecvView_(); return; }
+                // ⛔ THE SHIFT BRANCH THAT USED TO LIVE HERE IS A BINDING NOW.
+                // It flipped Sends/Receives, but only in this view, and it sat in
+                // no slot — so it was invisible in the editor, could not be moved,
+                // and quietly ate the Shift slot of anyone who had put their own
+                // action on this key (Frank 2026-09-03). The Sends view's own
+                // per-view binding carries it on Shift now
+                // (Uf1FiveToEightSends), which does the same thing and can be
+                // seen and moved. This builtin only pages.
                 const int cnt = std::max(1, g_uf1SendGroupCount.load());
                 g_uf1SendGroup.store((g_uf1SendGroup.load() + 1) % cnt);
             }
