@@ -5040,7 +5040,12 @@ inline const char* encoderModeFriendly(EncoderMode m)
         case EncoderMode::ChSelect:          return "Channel Select";
         case EncoderMode::Nudge:             return "Nudge";
         case EncoderMode::Mousewheel:        return "Mousewheel";
-        case EncoderMode::Instance:          return "Instance";
+        // The ring here is the INSTANCE ring, and the name says so — "Instance"
+        // alone left the reader to guess which of the two rings this was, next
+        // to an "FX Cycle" two lines down (Frank 2026-09-03). The persisted
+        // string is a separate literal at the builtin's call site, so nothing on
+        // disk changes with the label.
+        case EncoderMode::Instance:          return "Instance Cycle";
         case EncoderMode::FxCycle:           return "FX Cycle";
         case EncoderMode::SelsetCycle:       return "Selset Cycle";
         case EncoderMode::Markers:           return "Markers";
@@ -5474,7 +5479,7 @@ inline const char* uf1EncoderModeHdr_(EncoderMode m)
         case EncoderMode::ChSelect:          return "Select";
         case EncoderMode::Nudge:             return "Nudge";
         case EncoderMode::Mousewheel:        return "Wheel";
-        case EncoderMode::Instance:          return "Instance";
+        case EncoderMode::Instance:          return "Inst Cycl";
         case EncoderMode::FxCycle:           return "FX Cycle";
         case EncoderMode::SelsetCycle:       return "Selsets";
         case EncoderMode::Markers:           return "Markers";

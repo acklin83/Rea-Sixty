@@ -5560,7 +5560,7 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
         // name is a leftover and named the one mode nobody could find.
         v.push_back(bank("Encoder Modes", {
             {"encoder_nav",       "Ch Select", 0},
-            {"encoder_instance",  "Instance", 0},
+            {"encoder_instance",  "Inst Cycle", 0},
             {"encoder_fx_cycle",  "FX Cycle", 0},
             {"encoder_fx_move",   "FX Move", 0},
             {"encoder_cs_cycle",  "CS Cycle", 0},

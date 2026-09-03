@@ -196,7 +196,7 @@ The large notched CHANNEL encoder (in the right-hand panel, pushable, with the c
 | Markers | Step prev / next marker | Seeks with playback following, it does not stop the transport |
 | Bank by 1ch | Shift the surface 1 strip left/right | Sub-strip precision |
 | Last Touched Param | Step the last-touched REAPER param ± | Fine increments |
-| Instance (Instance Cycle) | Walk Instances on the focused track | Same behaviour as the V-Pot Sel-Mode Instance Cycle, focused-track scope |
+| Instance Cycle | Walk Instances on the focused track | Same behaviour as the V-Pot Sel-Mode Instance Cycle, focused-track scope. The UF1's header shortens it to `Inst Cycl`. |
 | FX Cycle | Walk every FX on the focused track | Focused-track scope |
 | Cycle Instance (across tracks) | Walk Instances on the focused track, then cross to the next track | One detent per track boundary; lands on the neighbour's first (fwd) / last (back) Instance. Empty neighbour is still selected (dead detent). Hard-stops at the project edge, no within-track wrap. |
 | Cycle FX (across tracks) | Walk every FX on the focused track, then cross to the next track | Same cross-track behaviour as above, for all FX. SSL 360°-native feel. |
