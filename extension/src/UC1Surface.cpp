@@ -2166,9 +2166,9 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
                                 return;             // not a load, not an exit
                             }
                             if (r.entry >= 0)
-                                sslpreset::load(
+                                sslpreset::loadEntry(
                                     static_cast<MediaTrack*>(presetTrack_), presetFx_,
-                                    presetList_[static_cast<size_t>(r.entry)].path);
+                                    presetList_[static_cast<size_t>(r.entry)]);
                         }
                     }
                     setMode(Uc1Mode::Main);
@@ -3447,15 +3447,23 @@ void UC1Surface::refreshPresetList_()
         return;
     presetTrack_ = domTrack;
     presetFx_    = match.fxIndex;
-    presetList_  = sslpreset::listFor(
+    // ⇨ SSL'S LIBRARY WHEN THERE IS ONE, REAPER'S OTHERWISE — the same rule the
+    // UF1 browser follows. Which PLUG-IN we are on is decided above and stays
+    // decided by the CS / BC selection on this screen; only the SOURCE of the
+    // list changes here (Frank 2026-09-03).
+    presetList_  = sslpreset::listAnyFor(
         static_cast<MediaTrack*>(domTrack), match.fxIndex);
     // Start ON what the instance has loaded, so the list opens where the user
     // already is instead of at the top. The plug-in keeps that name itself.
     presetSel_   = 0;
     presetGroup_.clear();
     char loaded[512] = {0};
-    if (uf8::sslLoadedPresetName(static_cast<MediaTrack*>(domTrack),
-                                 match.fxIndex, loaded, sizeof(loaded))) {
+    {   // SSL's own attribute, or TrackFX_GetPreset for a host-preset plug-in.
+        const std::string cur = sslpreset::currentNameFor(
+            static_cast<MediaTrack*>(domTrack), match.fxIndex);
+        snprintf(loaded, sizeof(loaded), "%s", cur.c_str());
+    }
+    if (*loaded) {
         for (size_t i = 0; i < presetList_.size(); ++i) {
             if (presetList_[i].name != loaded) continue;
             // Open IN the folder that holds it, on it.

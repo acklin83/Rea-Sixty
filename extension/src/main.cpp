@@ -6790,12 +6790,32 @@ static void tickDynBankPaging_()
 // when the passive "Plug-in GUI follows active Instance" setting is OFF (that
 // gate only governs cycle/param chasing). Never POPS a window open unprompted
 // — only re-targets an already-open one. Main-thread only.
+// ⛔ "ALREADY SHOWING IT" IS A CLAIM ABOUT THE SCREEN, SO ASK THE SCREEN.
+// Both follow paths below tracked the window they opened as a (track, fx) pair
+// and skipped the work whenever the pair already matched. The pair goes stale
+// the moment the window closes behind our back — REAPER's Esc closes every
+// floating FX window and tells us nothing — and from then on the cached pair
+// said "it is up" while the screen was empty, so every following press did
+// NOTHING. That is Frank's 2026-09-03 report: "wenn ich DANN mit esc alle GUIs
+// schliesse reagiert die FX DynBank nicht mehr, muss channel wechseln bis sie
+// wieder funktioniert" — the channel change only helped because it re-targets
+// the pair. TrackFX_GetFloatingWindow is the ground truth and costs one call.
+static bool fxFloatingOpen_(void* tr, int fxIdx)
+{
+    if (!tr || fxIdx < 0) return false;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    return TrackFX_GetFloatingWindow(static_cast<MediaTrack*>(tr), fxIdx)
+           != nullptr;
+}
+
 static void fxBankRetargetFocusGui_(MediaTrack* tr, int fxIdx)
 {
     if (!g_focusedGuiShownTr || !tr || fxIdx < 0) return;
     if (uf8::fxIsAcustica(tr, fxIdx)) return;   // host-open faults Acustica
     if (g_focusedGuiShownTr == static_cast<void*>(tr)
-        && g_focusedGuiShownFx == fxIdx) return;     // already showing it
+        && g_focusedGuiShownFx == fxIdx
+        && fxFloatingOpen_(g_focusedGuiShownTr, g_focusedGuiShownFx))
+        return;                                      // really is on screen
     if (ValidatePtr2(nullptr, g_focusedGuiShownTr, "MediaTrack*"))
         TrackFX_Show(static_cast<MediaTrack*>(g_focusedGuiShownTr),
                      g_focusedGuiShownFx, /*hide floating*/ 2);
@@ -8481,8 +8501,12 @@ void followFocusedPluginGuiAcrossCycle_(MediaTrack* tr, int targetFxIdx)
         return;
     }
     // Same track, different FX → close old, open new on same track.
+    // Same FX → nothing to do ONLY if the window is genuinely still up; see
+    // fxFloatingOpen_ for why the cached pair is not evidence.
     if (g_focusedGuiShownTr == tr) {
-        if (g_focusedGuiShownFx == targetFxIdx) return;
+        if (g_focusedGuiShownFx == targetFxIdx
+            && fxFloatingOpen_(g_focusedGuiShownTr, g_focusedGuiShownFx))
+            return;
         TrackFX_Show(tr, g_focusedGuiShownFx, 2);
         TrackFX_Show(tr, targetFxIdx, 3);
         pinFxGuiIfEnabled_(tr, targetFxIdx);
@@ -14291,8 +14315,15 @@ void applyShowFocusedPluginGui_()
     // and refocusFocusedPluginGuiToCurrentSelection_ would keep
     // following selection across track changes. Frank 2026-05-22:
     // "press zum schliessen, nicht zum aufmachen eines neuen".
+    // ⛔ ONLY A WINDOW THAT IS REALLY THERE IS A WINDOW TO CLOSE. This branch
+    // read the tracked pair as "one is open, so this press closes it". After
+    // Esc that pair lies, and the press then closed nothing and opened nothing:
+    // the toggle had silently swapped its meaning (Frank 2026-09-03: "ein
+    // Plugin-Fenster öffnet nicht weil sich irgendein toggle verschiebt und
+    // denkt, es sei offen wenn es zu ist"). Ask REAPER; a stale pair falls
+    // through to the open path below, which is what the press meant.
     if (g_focusedGuiShownTr
-        && ValidatePtr2(nullptr, g_focusedGuiShownTr, "MediaTrack*"))
+        && fxFloatingOpen_(g_focusedGuiShownTr, g_focusedGuiShownFx))
     {
         TrackFX_Show(static_cast<MediaTrack*>(g_focusedGuiShownTr),
                      g_focusedGuiShownFx, /*hide floating*/ 2);
@@ -14373,6 +14404,15 @@ void refocusFocusedPluginGuiToCurrentSelection_()
 {
     if (!g_pluginGuiFollowsInstance.load()) return;
     if (!g_focusedGuiShownTr) return;     // nothing open → nothing to follow
+    // …and the pair alone does not prove one is open. If the user closed it
+    // (Esc, or the window's own X), following would POP A NEW ONE on the next
+    // track they select — a window nobody asked for. Drop the stale pair
+    // instead; the next explicit press opens what it is meant to open.
+    if (!fxFloatingOpen_(g_focusedGuiShownTr, g_focusedGuiShownFx)) {
+        g_focusedGuiShownTr = nullptr;
+        g_focusedGuiShownFx = -1;
+        return;
+    }
 
     MediaTrack* newTr = GetSelectedTrack(nullptr, 0);
     if (!newTr) return;
@@ -17347,7 +17387,11 @@ void uf1EmitMeterParamLabels_(MediaTrack* tr, int fx, int screen, int page)
 static void uf1RefreshMeterPresetList_(MediaTrack* tr, int fx)
 {
     g_uf1PresetDir  = sslpreset::presetDir(tr, fx);
-    g_uf1PresetList = sslpreset::scan(g_uf1PresetDir);
+    // ⇨ SSL'S LIBRARY WHEN THERE IS ONE, REAPER'S OTHERWISE. The browser used to
+    // be SSL-only, so it stood empty on every other plug-in (Frank 2026-09-03:
+    // "der preset browser funktioniert nur für ssl plugins"). listAnyFor picks
+    // the source; nothing else in here has to know which kind it got.
+    g_uf1PresetList = sslpreset::listAnyFor(tr, fx);
     // Open ON the preset the instance actually has loaded — the browser is there
     // to change it, and a list that always starts at the top says nothing about
     // where you are (Frank 2026-08-20: "ich will sehen, was aktuell geladen
@@ -17356,7 +17400,11 @@ static void uf1RefreshMeterPresetList_(MediaTrack* tr, int fx)
     // (or one loaded before we ever ran) shows up just the same.
     g_uf1PresetSel = 0;
     char loaded[512] = {0};
-    if (uf8::sslLoadedPresetName(tr, fx, loaded, sizeof(loaded))) {
+    {   // SSL's own attribute, or TrackFX_GetPreset for a host-preset plug-in.
+        const std::string cur = sslpreset::currentNameFor(tr, fx);
+        std::snprintf(loaded, sizeof(loaded), "%s", cur.c_str());
+    }
+    if (*loaded) {
         for (size_t i = 0; i < g_uf1PresetList.size(); ++i) {
             // The instance reports a base name; a grouped entry shows as
             // "Group/Name", so match on the tail.
@@ -18060,16 +18108,18 @@ void drainInputQueue()
                             // helper persists uf1EncoderMode. Drain runs on the main
                             // thread → SetExtState is safe here.
                             uf1EncoderStepVisible_(tracks);
-                        } else if (uf8::bindings::modifierHeld(
-                                       uf8::bindings::Modifier::Shift)) {
-                            // SHIFT = always-on Instance-Cycle quick layer, whatever
-                            // the selected mode is (Frank 2026-07-30). Reads the
-                            // SHARED Shift so ANY source (UF1/UF8/UC1/keyboard) counts.
-                            applyInstanceCycle_(tracks);
                         } else {
-                            // Otherwise dispatch by the UF1's OWN encoder mode
-                            // (default ChSelect = track nav) — independent of UF8.
-                            uf1EncoderDispatch_(tracks);
+                            // BINDINGS, exactly like the UF8's ChannelEncoder
+                            // (Frank 2026-09-03). The two branches that used to
+                            // stand here — Shift = Instance Cycle, plain = the
+                            // UF1's own encoder mode — are now the factory Shift
+                            // and Plain slots, so the behaviour is unchanged and
+                            // the user can move either. Hue and the MODE menu stay
+                            // ahead of this: they own the screen, and a binding
+                            // must not steer a lamp screen.
+                            uf8::bindings::dispatchEncoder(
+                                uf8::bindings::ButtonId::Uf1ChannelEncoder,
+                                tracks);
                         }
                     }
                     break;
@@ -29469,14 +29519,19 @@ void uf1PaintChannel_()
                                      ? sslcore::currentMeterTrackIndex() : -1;
                     MediaTrack* annTr = (annIdx > 0)
                                       ? GetTrack(nullptr, annIdx - 1) : nullptr;
-                    if (annTr == ptr && sslcore::presetSelection() != path &&
+                    // …and never for a host preset: that route names an SSL
+                    // instance by UDP port, and a REAPER preset has nothing to do
+                    // with it. loadEntry takes the plug-in's own way in.
+                    const bool hostPreset = g_uf1PresetList[s].host;
+                    if (!hostPreset && annTr == ptr
+                        && sslcore::presetSelection() != path &&
                         sslcore::setPresetSelection(path)) {
                         g_uf1PresetPending      = path;
                         g_uf1PresetPendingUntil = nowMs_() + 600;
                         g_uf1PresetPendingTr    = ptr;
                         g_uf1PresetPendingFx    = pfx;
                     } else {
-                        sslpreset::load(ptr, pfx, path);
+                        sslpreset::loadEntry(ptr, pfx, g_uf1PresetList[s]);
                     }
                 }
                 g_uf1PresetsMode.store(false);
@@ -29501,7 +29556,41 @@ void uf1PaintChannel_()
                 }
                 put(0x0100, {0x04, 0x03});
                 put(0x010d, {0x0a, 0x06, 0x06, 0x0a});
+                // ⛔ THE BROWSER MUST NOT INHERIT THE VIEW IT CAME FROM.
+                // Opened from the Meter view it renders one selected row, which
+                // is right; opened from the Channel view a SECOND row came up
+                // green as well (Frank 2026-09-03: "beim meter preset browser
+                // stimmts, für plugins nicht"). The list frame is identical in
+                // both cases — what differs is the element state each view
+                // leaves behind. The meter's own entry burst zeroes 0x010f (the
+                // per-row position/brightness the plug-in V-Pots write) and
+                // holds 0x0101=03, 0x011a=07, 0x011e=10; the channel layout
+                // leaves 0x010f carrying the strip's bar values and 0x0101=05,
+                // 0x011a=02, 0x011e=18. The browser owns the whole screen while
+                // it is up, so it establishes the state it is known to render
+                // correctly in rather than borrowing the caller's.
+                // Leaving repaints both views from their own bursts, gated on
+                // presetClosed, so nothing has to be put back here.
+                put(0x010f, {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+                put(0x0101, {0x03});
+                put(0x011a, {0x07});
+                put(0x011e, {0x10});
                 txt(0x0104, 0x02, "Navigate Back");
+                // ⛔ THE SOFT-KEY ROW HAS EXACTLY ONE WRITER, uf1EmitSoftKeyRow_,
+                // and while the browser is up that writer never runs — this block
+                // owns the screen and returns. So the three cells the browser does
+                // not write keep whatever the view underneath last put there. In the
+                // Meter view that is OVERVIEW / RESET / PRESETS, which is what SSL
+                // leaves standing too. In the Channel views it is the DAW bank's
+                // labels, and with SHIFT held the SHIFT set's: Frank opened the
+                // browser on Shift+5-8 and read his own Shift bank back off the row
+                // (2026-09-03). Blank them here; the row writer repaints on exit
+                // because presetClosed forces it.
+                if (!g_uf1MeterView.load()) {
+                    txt(0x0104, 0x00, "");
+                    txt(0x0104, 0x01, "");
+                    txt(0x0104, 0x03, "");
+                }
                 // ⚠ NOT the capture's "HARDWARE OUTPUT" (cap uf1_rp). That string
                 // is not a browser caption, it is the INSTANCE the capture
                 // session happened to be metering — replaying it renamed Frank's
@@ -29510,7 +29599,20 @@ void uf1PaintChannel_()
                 // class as the Loudness axis numbers earlier today: text inside a
                 // captured frame carries that session's state. The live label is
                 // the one the meter view already computes.
-                uf1EmitMeterInstanceLabel_();
+                // ⛔ AND THE V-POT LABELS ARE THE METER'S TOO. V-Pot 1 carried the
+                // meter INSTANCE name (uf1EmitMeterInstanceLabel_) and 2 and 3
+                // whatever the meter screen had put there — in the Meter view that
+                // is the browser SSL draws, outside it they are three labels for
+                // knobs that do nothing here (Frank 2026-09-03: "bei V-Pot 1 und 2
+                // noch Überbleibsel von der Meter view die keinen Sinn machen").
+                // Only V-Pot 4 has a job in the browser, and it says so.
+                if (g_uf1MeterView.load()) {
+                    uf1EmitMeterInstanceLabel_();
+                } else {
+                    txt(0x010e, 0x00, "");
+                    txt(0x010e, 0x01, "");
+                    txt(0x010e, 0x02, "");
+                }
                 txt(0x010e, 0x03, "Select");            // V-Pot4 label
             }
             // The browser's own highlight (SK3 "Navigate Back") — same rule as the
@@ -29518,8 +29620,19 @@ void uf1PaintChannel_()
             // here and not in the entry burst above because that burst fires ONCE, on
             // open, so nothing would ever put the highlight back after a MODE hold.
             // The release edge is menuEdge.
-            if (enter || menuEdge)
-                put(0x0102, {static_cast<uint8_t>(modeMenu ? 0x00 : 0x09)});
+            // ⛔ NO KEY HIGHLIGHT WHILE THE BROWSER IS UP outside the Meter view.
+            // 0x0102 is a per-key BITMASK (bit0 = SK1 … bit3 = SK4), and 0x09 is
+            // SSL's own browser value: SK1, its screen-name key, plus SK4. In the
+            // Meter view that reads right and Frank confirmed it. Opened from a
+            // Channel view there is no screen-name key and no PRESETS key, so the
+            // same mask just lights two keys that mean nothing (Frank 2026-09-03:
+            // "sind die highlights für SK1 und SK2 an. Alle highlights raus bevor
+            // browser öffnet"). Clear the mask there instead.
+            if (enter || menuEdge) {
+                const uint8_t hl = (modeMenu || !g_uf1MeterView.load())
+                                 ? 0x00 : 0x09;
+                put(0x0102, {hl});
+            }
             const int n   = (int)g_uf1PresetList.size();
             const int sel = std::clamp(g_uf1PresetSel, 0, n > 0 ? n - 1 : 0);
 
@@ -29542,8 +29655,26 @@ void uf1PaintChannel_()
             // counts bytes. Same rule as every other UF1 name emit
             // ([[surface-lcd-latin1-umlauts]]); the ASCII callers below are
             // unaffected by the fold.
+            // ⛔ A ROW THAT DOES NOT FIT LOSES ITS FOLDER, NEVER ITS NAME.
+            // The field is 24 bytes and this used to hard-cut at 24. A preset
+            // reads "<deepest folder>/<name>" (Entry::display), so the cut ate
+            // the NAME — the one part you are choosing by — and the panel, which
+            // right-aligns, showed a stub (Frank 2026-09-03: "die namen werden
+            // abgeschnitten"). Drop the folder first, and only if the bare name
+            // is still too long abbreviate it the way every other UF1 label is
+            // abbreviated, so words stay readable instead of being sliced.
+            auto fitField = [&](const std::string& s) -> std::string {
+                std::string t = utf8ToLatin1(s);
+                if (t.size() <= 24) return t;
+                const size_t sl = t.find_last_of('/');
+                if (sl != std::string::npos && t.size() - sl - 1 <= 24)
+                    return t.substr(sl + 1);           // folder off, name whole
+                if (sl != std::string::npos) t = t.substr(sl + 1);
+                return abbreviateTrackName_(t, 24, TNM_SmartAbbrev,
+                                            /*foldLatin1*/ false);
+            };
             auto setField = [&](int f, const std::string& s) {
-                const std::string t = utf8ToLatin1(s);
+                const std::string t = fitField(s);
                 for (size_t k = 0; k < t.size() && k < 24; ++k)
                     row[(size_t)f * 25 + k] = (uint8_t)t[k];
             };
@@ -47721,6 +47852,17 @@ void registerBindingHandlers()
         nullptr,
         "Encoder: dispatch by current mode",
         false
+    });
+    // The UF1's own encoder-mode dispatch — the twin of encoder_mode_dispatch
+    // above, reading g_uf1EncoderMode instead of g_encoderMode. Exists so the
+    // UF1's CHANNEL rotation can be a BINDING like the UF8's rather than a
+    // hardcoded branch in the drain (Frank 2026-09-03).
+    registerBuiltin("uf1_encoder_mode_dispatch", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            uf1EncoderDispatch_(param);
+        },
+        nullptr, "UF1 Encoder: dispatch by current mode", false
     });
     registerBuiltin("instance_cycle", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {

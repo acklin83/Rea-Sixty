@@ -797,6 +797,7 @@ const char* hwFaceLabel(ButtonId id)
         case ButtonId::Uf1Vpot4Push:   return "V-POT 4 PUSH";
         case ButtonId::Uf1ChannelPush: return "ENC PUSH";
         case ButtonId::Uf1Jog:         return "JOG";
+        case ButtonId::Uf1ChannelEncoder: return "Channel Encoder";
         case ButtonId::Uf1Foot1:       return "FOOT 1";
         case ButtonId::Uf1Foot2:       return "FOOT 2";
         default:                     return uf8::bindings::toName(id);
@@ -2809,6 +2810,10 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     // the encoder, jog (17) below the keys.
     drawDial(268, 336, 40, ButtonId::Uf1ChannelPush, "CHANNEL",        // (15)
              /*ticks*/ true);
+    // The rotation is its own bindable surface, split off from the push the way
+    // the UF8's encoder is (PUSH / ROTATE). Factory: Plain = the UF1's encoder
+    // mode, Shift = Instance Cycle.
+    drawHwBtn(150, 327, 60, 18, ButtonId::Uf1ChannelEncoder, "ROTATE");
     // (16) NAV cross — Up / Left / Centre / Right / Down (0x28..0x2C).
     // ⇨ DRAWN AS THE ID OF THE LIVE JOG MODE, not the physical one, so the
     // assigned-tint and the hover tooltip describe what the key does RIGHT NOW.
@@ -4365,7 +4370,8 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     // These 6 ids sit contiguously at the head of the UF1 block.
     const bool idIsUf1NoLed =
         (id >= ButtonId::Uf1VpotAbovePush && id <= ButtonId::Uf1ChannelPush)
-        || id == ButtonId::Uf1Jog;   // jog is rotary — no physical LED
+        || id == ButtonId::Uf1Jog            // jog is rotary — no physical LED
+        || id == ButtonId::Uf1ChannelEncoder;  // …and so is the CHANNEL rotation
     const int  quickNum =
         (id == ButtonId::Quick1) ? 1
       : (id == ButtonId::Quick2) ? 2
@@ -4526,7 +4532,8 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     // on press then long additively on hold-and-release past threshold.
     const bool isEncoder = (id == ButtonId::ChannelEncoder
                           || id == ButtonId::Uc1Encoder1
-                          || id == ButtonId::Uc1Encoder2);
+                          || id == ButtonId::Uc1Encoder2
+                          || id == ButtonId::Uf1ChannelEncoder);
     const bool longPressAvailable = !plainIsModifier && !isEncoder;
     // Controls with no addressable button LED → hide the LED-appearance block.
     // The rotate-gesture encoders (isEncoder) PLUS the channel-encoder PUSH —

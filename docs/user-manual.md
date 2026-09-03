@@ -435,7 +435,7 @@ A column of buttons + the central LCD + the two encoders:
 
 - **Back** / **Confirm** — navigate the on-screen menus (Routing / Presets / etc.). From the main screen, **Back** opens the **EXT FUNCS** menu — a hidden list of channel-strip parameters that don't have a dedicated knob. Scroll it with the secondary encoder; push the encoder to switch from scrolling to adjusting the selected parameter. For SSL channel-strip plug-ins the list is the fixed SSL set; for user-mapped (non-SSL) channel strips it's whatever you curate (see *FX Learn pane → UC1 EXT FUNCS list*).
 - **Routing** — opens the Routing menu on the LCD.
-- **Presets** — opens the Presets menu.
+- **Presets** — opens the Presets menu for the instance the **Channel Strip / Bus Compressor** selection on that screen points at. An SSL plug-in lists SSL's own library in its folders; anything else lists REAPER's presets for it, your own and the factory list. Browsing loads nothing; **Confirm** does.
 - **360°** — default **Open / Close Rea-Sixty Settings** (bindable on its own UC1 entry so it can diverge from the UF8 360° key).
 - **Magnifier** — no factory action; bindable.
 
@@ -525,7 +525,7 @@ agree.
 | `SOFT` (above the fader display) | **Pin This Ch** — one press puts the channel the UF1 is showing into the Focus Set *and* engages the pin; press again to release, and the channel stays in the set. While pinned, the **background behind the key's label lights up** on the channel display. Factory default since v0.5; it shipped unbound before that. Rebindable like every other key, and an assignment you had already made is kept — the backlight follows whatever you bind, as long as that action has an on/off state. |
 | `FLIP` | Swap the fader and V-Pot assignments. Factory default, rebindable. In **Plugin view** the fader takes the parameter of the V-Pot you last turned or pushed, so you can reach for a control on the encoder and then move it on 100 mm of travel; the V-Pot above the fader rides Volume meanwhile. A Sticky-Pot pin, SSL Strip Mode and the send faders all keep their claim on the fader, and with the Extender running FLIP stays on Pan (the fader and the screen would otherwise be looking at two different tracks). |
 | `MASTER` | Put the Master bus on the channel. Factory default, rebindable. |
-| `CHANNEL` encoder | Step the UF1's channel through the track list. **Shift +** turn is always Instance Cycle, whatever mode is selected. **Push** opens the focused plug-in's GUI. Both are factory defaults and rebindable. |
+| `CHANNEL` encoder | Step the UF1's channel through the track list. The ROTATION carries its own modifier slots, like the UF8's: **Plain** dispatches by the UF1's encoder mode, **Shift** is Instance Cycle whatever mode is selected. Both are factory defaults and rebindable in *Settings → Bindings → UF1* (the `ROTATE` tile beside the dial). **Push** opens the focused plug-in's GUI, and is its own binding. |
 
 ## Plugin view
 
@@ -548,8 +548,15 @@ EQ curve is drawn on the screen and the four V-Pots carry that page's parameters
 
 The preset browser is one browser, and which plug-in it lists follows the view: in
 Meter view the pinned Meter instance, everywhere else the **Channel Strip on the
-focused track**. It reads SSL's own on-disk library, the same one the UC1 browses,
-because these plug-ins expose no presets to REAPER's own list.
+focused track**.
+
+Where the presets come from depends on the plug-in, and the browser picks for you.
+For an SSL plug-in it reads **SSL's own on-disk library**, the same one the UC1
+browses, because those plug-ins expose no presets to REAPER's list at all. For
+every other plug-in it reads **REAPER's own preset library**: your saved presets
+plus the factory list, from the `.ini` files REAPER keeps beside each plug-in.
+Either way the names are read off disk and nothing is loaded until you press, so
+browsing stays free.
 
 The four keys under the display are all channel-strip toggles here, so the browser
 needs a key of your own: bind **UF1 Presets** (*Hardware Modes*) wherever you like.

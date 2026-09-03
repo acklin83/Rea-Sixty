@@ -484,4 +484,115 @@ std::vector<Entry> listFor(MediaTrack* tr, int fx)
     return scan(presetDir(tr, fx));
 }
 
+// ---- REAPER's own preset library -------------------------------------------
+
+namespace {
+
+// Append one of REAPER's preset .ini files to `out`. Three shapes live in these
+// files and they differ in what the VALUE is, not in how the file is read:
+//   [PresetN]   Name=…     the user's own presets      → load by NAME
+//   [factory]   00001=…    VST2 program names          → load by NAME
+//   [aufactory] 00001=…    AU factory presets          → load by NAME
+//   [vstpreset] 00001=…    VST3: the .vstpreset PATH   → load by PATH, and show
+//                          the file's own name, which is what REAPER shows too
+// Anything else in the file (preset_cnt, NbPresets, the Data= blobs) is skipped.
+void readPresetIni_(const std::string& file, std::vector<Entry>& out)
+{
+    FILE* f = fopen(file.c_str(), "rb");
+    if (!f) return;
+    std::string section;
+    char line[8192];
+    while (fgets(line, sizeof(line), f)) {
+        std::string s(line);
+        while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+        if (s.empty()) continue;
+        if (s.front() == '[') {
+            const size_t close = s.find(']');
+            section = (close == std::string::npos) ? std::string()
+                                                   : s.substr(1, close - 1);
+            continue;
+        }
+        const size_t eq = s.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string key = s.substr(0, eq);
+        const std::string val = s.substr(eq + 1);
+        if (val.empty()) continue;
+
+        Entry e;
+        e.host = true;
+        if (section.rfind("Preset", 0) == 0) {          // user preset block
+            if (key != "Name") continue;
+            e.name = val;
+            e.path = val;
+        } else if (section == "factory" || section == "aufactory") {
+            if (key == "preset_cnt") continue;
+            e.name = val;
+            e.path = val;
+        } else if (section == "vstpreset") {
+            // The value is a full path; REAPER lists the file's own name.
+            size_t sl = val.find_last_of("/\\");
+            std::string base = (sl == std::string::npos) ? val : val.substr(sl + 1);
+            const size_t dot = base.rfind(".vstpreset");
+            if (dot != std::string::npos) base.erase(dot);
+            if (base.empty()) continue;
+            e.name = base;
+            e.path = val;                               // TrackFX_SetPreset takes it
+        } else {
+            continue;
+        }
+        out.push_back(std::move(e));
+    }
+    fclose(f);
+}
+
+}  // namespace
+
+std::vector<Entry> reaperListFor(MediaTrack* tr, int fx)
+{
+    std::vector<Entry> out;
+    if (!tr || fx < 0) return out;
+    // ⇨ ASK REAPER WHERE ITS OWN FILE IS. The name is built from the plug-in's
+    // type and its vendor+product string ("vst-FabFilter Pro-Q 3.ini",
+    // "au-Relab Development: Sonsig Rev-A.ini"), which is not something to
+    // reconstruct from TrackFX_GetFXName by hand.
+    char fn[2048] = {0};
+    TrackFX_GetUserPresetFilename(tr, fx, fn, int(sizeof(fn)));
+    if (!*fn) return out;
+    readPresetIni_(fn, out);                       // the user's own first
+    std::string b(fn);                             // …then the factory list
+    const size_t dot = b.rfind(".ini");
+    if (dot != std::string::npos && dot + 4 == b.size())
+        b = b.substr(0, dot) + "-builtin.ini";
+    readPresetIni_(b, out);
+    return out;
+}
+
+std::vector<Entry> listAnyFor(MediaTrack* tr, int fx)
+{
+    std::vector<Entry> v = listFor(tr, fx);
+    if (!v.empty()) return v;
+    return reaperListFor(tr, fx);
+}
+
+int loadEntry(MediaTrack* tr, int fx, const Entry& e)
+{
+    if (!tr || fx < 0) return 0;
+    if (!e.host) return load(tr, fx, e.path);
+    // The host route: by name for VST2 / AU / user presets, by .vstpreset path
+    // for VST3 — TrackFX_SetPreset takes either, and both sit in e.path.
+    return TrackFX_SetPreset(tr, fx, e.path.c_str()) ? 1 : 0;
+}
+
+std::string currentNameFor(MediaTrack* tr, int fx)
+{
+    if (!tr || fx < 0) return std::string();
+    char ssl[512] = {0};
+    if (uf8::sslLoadedPresetName(tr, fx, ssl, int(sizeof(ssl))) && *ssl)
+        return ssl;
+    char cur[512] = {0};
+    if (TrackFX_GetPreset(tr, fx, cur, int(sizeof(cur))) && *cur)
+        return cur;
+    return std::string();
+}
+
 }  // namespace sslpreset

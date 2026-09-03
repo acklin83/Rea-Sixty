@@ -212,6 +212,7 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf1Stop,          "uf1_stop"            },
     { ButtonId::Uf1Play,          "uf1_play"            },
     { ButtonId::Uf1Rec,           "uf1_rec"             },
+    { ButtonId::Uf1ChannelEncoder,"uf1_channel_encoder" },
     { ButtonId::Uf1Foot1,         "uf1_foot_1"          },
     { ButtonId::Uf1Foot2,         "uf1_foot_2"          },
     { ButtonId::Uf1Jog,           "uf1_jog"             },
@@ -1090,6 +1091,22 @@ void seedFactoryDefaults_(Config& c)
             sp.param  = 0;
             sp.label  = a.label;
         }
+    }
+    // UF1 CHANNEL encoder ROTATION — the UF8's channel-encoder split, on the
+    // UF1 (Frank 2026-09-03: "wieso ist shift+encoder = instance walk nicht in
+    // den bindings?"). It was hardcoded in the drain since 2026-07-30; the
+    // factory slots reproduce exactly what that code did, so nothing moves
+    // until the user rebinds it.
+    {
+        auto& ce = L1[ButtonId::Uf1ChannelEncoder];
+        ce.behavior = Behavior::Momentary;
+        ce.label    = "Encoder";
+        auto& spPlain = ce.shortPress[static_cast<int>(Modifier::Plain)];
+        spPlain.type   = ActionType::Builtin;
+        spPlain.action = "uf1_encoder_mode_dispatch";
+        auto& spShift = ce.shortPress[static_cast<int>(Modifier::Shift)];
+        spShift.type   = ActionType::Builtin;
+        spShift.action = "instance_cycle";
     }
     // Key 2 PLAIN = Fine. Not a free choice: the UF1's firmware prints
     // "FINE CTRL 2" over this key with its own On/Off readout, and that caption
@@ -6123,6 +6140,7 @@ const char* builtinCategory(const std::string& n)
      || n == "uf1_time_display_step"
      || n == "uf1_flip" || n == "uf1_master"
      || n == "uf1_five_to_eight" || n == "uf1_vpot_reset"
+     || n == "uf1_encoder_mode_dispatch"
      || n == "uf1_presets"
      || n.rfind("uf1_strip_mode_", 0) == 0
      || n.rfind("uf1_view_", 0) == 0

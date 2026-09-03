@@ -243,6 +243,12 @@ enum class ButtonId : uint16_t {
     // FF 22 03 <id> 00 <state> frame. Predicted from the UF8 and CONFIRMED
     // at the device by Frank on 2026-09-03, one tap per pedal.
     Uf1Foot1, Uf1Foot2,
+    // The CHANNEL encoder's ROTATION, the twin of the UF8's ChannelEncoder:
+    // four modifier slots, dispatched via dispatchEncoder with the step as
+    // param. Factory = Plain uf1_encoder_mode_dispatch (the UF1's own encoder
+    // mode) and Shift instance_cycle, which is what the drain used to do
+    // hardcoded. The PUSH stays Uf1ChannelPush.
+    Uf1ChannelEncoder,
     // Jog wheel (0x06, rotate-only) — NOT bindable (mode-driven), but SELECTABLE in
     // the UF1 vector so its Jog Mode settings show below the editor (Frank 2026-08-06).
     // KEEP LAST in the UF1 block: four range checks read `<= Uf1Jog` to mean
