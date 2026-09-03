@@ -2826,7 +2826,15 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     // The rotation is its own bindable surface, split off from the push the way
     // the UF8's encoder is (PUSH / ROTATE). Factory: Plain = the UF1's encoder
     // mode, Shift = Instance Cycle.
-    drawHwBtn(150, 327, 60, 18, ButtonId::Uf1ChannelEncoder, "ROTATE");
+    // ⇨ TO THE RIGHT OF THE DIAL, not the left (Frank 2026-09-03), and BELOW the
+    // BANK arrows rather than beside them.
+    // ⚠ My first go at "right" put it at x=314, which measured clean and looked
+    // jammed: the rect test used the dial's RADIUS, and drawDial's detent marks
+    // run to r+7 while its caption sits under it — so the tile sat on the tick
+    // ring with the arrow beside it. The extents to test against are what the
+    // function DRAWS, not the numbers passed in, and eight pixels of air is part
+    // of the requirement, not a nicety.
+    drawHwBtn(324, 354, 54, 18, ButtonId::Uf1ChannelEncoder, "ROTATE");
     // (16) NAV cross — Up / Left / Centre / Right / Down (0x28..0x2C).
     // ⇨ DRAWN AS THE ID OF THE LIVE JOG MODE, not the physical one, so the
     // assigned-tint and the hover tooltip describe what the key does RIGHT NOW.

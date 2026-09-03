@@ -29920,11 +29920,21 @@ void uf1PaintChannel_()
             if (mset < 0 || mset >= uf8::bindings::kSoftKeyModifierSets) mset = 0;
             static int         sBank = INT_MIN, sMset = -1;
             static std::string sAnnounced;
+            // ⛔ THE BANKS ARE THE DAW VIEW'S, SO THE ANNOUNCEMENT IS TOO.
+            // This block ran in every channel view, so holding SHIFT in the
+            // Sends view flashed the name of the DAW bank's Shift set — a bank
+            // that is not even on the keys there, since Sends gives the four
+            // soft-keys to the send modes (Frank 2026-09-03: "shift in der sends
+            // view zeigt immer noch den shift-name von der bank in DAW view").
+            // Outside DAW the state is still tracked, silently, so coming back
+            // does not fire a stale announcement for a change you never saw.
+            const bool banksLive = (g_uf1ChannelSubMode.load() == 1);
             if (bank != sBank || mset != sMset) {
                 const bool first = (sBank == INT_MIN);
                 sBank = bank; sMset = mset;
                 std::string nm = uf1BankDisplayName_(bank, mset);
-                if (!first && nm != sAnnounced && g_uf1BankNameFlash.load())
+                if (banksLive && !first && nm != sAnnounced
+                    && g_uf1BankNameFlash.load())
                     uf1FlashTimecode_(nm, 1200);
                 sAnnounced = std::move(nm);
             }
