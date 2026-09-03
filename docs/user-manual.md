@@ -519,7 +519,7 @@ agree.
 | Control | Function |
 |---|---|
 | Fader | Volume of the UF1's channel. Touch-sensitive, drives touch automation. |
-| V-Pot above the fader | Pan by default, or whatever the Sticky Pot is pinned to. **Push** clears an armed pin, resets a live pin, or — with no pin — centres Pan. In REC + RME it rides the preamp gain, and **Shift +** turn changes the input channel. |
+| V-Pot above the fader | Pan by default, or whatever the Sticky Pot is pinned to. **Push** sends the pinned parameter to its middle (a pin set as a toggle flips instead); the pin itself stays. While *Get next touched Parameter* is armed the same push **clears** that track's pin, and with no pin at all it centres Pan. In REC + RME it rides the preamp gain, **Shift +** turn changes the input channel, and the push fires its assigned action instead. |
 | `SOLO` / `CUT` | Solo / mute the channel. Fixed, not rebindable. In REC + RME they fire their assigned TotalReaper actions instead, and their lamps show those states. |
 | `SEL` | Select the channel exclusively; **Shift +** `SEL` extends the selection. Double-press opens the FX chain by default. In REC / REC + MON it arms the channel instead, and its lamp turns red to show the arm state. |
 | `SOFT` (above the fader display) | **Pin This Ch** — one press puts the channel the UF1 is showing into the Focus Set *and* engages the pin; press again to release, and the channel stays in the set. While pinned, the **background behind the key's label lights up** on the channel display. Factory default since v0.5; it shipped unbound before that. Rebindable like every other key, and an assignment you had already made is kept — the backlight follows whatever you bind, as long as that action has an on/off state. |
