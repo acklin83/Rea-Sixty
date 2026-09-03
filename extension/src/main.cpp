@@ -153,6 +153,12 @@ std::string reasixty_hudBuildFeel();
 // hudBuildUsedBy_ for the record format and why the HUD cannot build it itself.
 std::string reasixty_hudBuildUsedBy(void* csTr, int csFx, void* bcTr, int bcFx,
                                     void* u8Tr, int u8Fx);
+// The UC1's ten hidden BACK-menu slots, so the HUD can draw and edit them like
+// any other control — they have no knob on any mockup, which is precisely why
+// they need to be visible somewhere other than the Settings page.
+std::string reasixty_hudBuildExtFuncs(void* csTr, int csFx);
+bool reasixty_hudSetExtFunc(void* csTr, int csFx, int slot, int param,
+                            const char* name);
 bool        reasixty_hudSetField(int idx, int layer, int field, double v,
                                  void* csTr, int csFx, void* bcTr, int bcFx);
 bool        reasixty_hudSetCurve(int idx, int layer, const char* csv,
@@ -15209,6 +15215,7 @@ std::string g_hudLcdPublished;     // last-published "hud_lcd" (focused-track LC
 std::string g_hudTargetPublished;  // last-published "hud_target" (active CS/BC FX)
 std::string g_hudUf8TargetPublished;  // last-published "hud_uf8_target" (UF8 param-list FX)
 std::string g_hudUsedByPublished;      // last-published "hud_usedby"
+std::string g_hudExtFuncsPublished;    // last-published "hud_extfuncs"
 std::string g_hudUf8StatePublished, g_hudUf8AssignPublished;  // UF8 device tab
 std::string g_hudUf8StripColsPublished;  // last-published "hud_uf8_stripcols"
 std::string g_hudUf8BanksPublished;  // last-published "hud_uf8_banks" (8 V-Pot bank labels)
@@ -15639,6 +15646,11 @@ void publishHud_()
             if (ub != g_hudUsedByPublished) {
                 g_hudUsedByPublished = ub;
                 SetExtState("rea_sixty", "hud_usedby", ub.c_str(), false);
+            }
+            const std::string ef = reasixty_hudBuildExtFuncs(csTr, csFx);
+            if (ef != g_hudExtFuncsPublished) {
+                g_hudExtFuncsPublished = ef;
+                SetExtState("rea_sixty", "hud_extfuncs", ef.c_str(), false);
             }
         }
         std::string uf8State, uf8Assign, uf8Banks, uf8StripCols;
@@ -38690,6 +38702,42 @@ void onTimerBody_()
                                        csTr, csFx, bcTr, bcFx)) {
                     g_hudAssignPublished.clear();   // force re-publish
                     publishHud_();
+                }
+            } else if (s.rfind("extfunc;", 0) == 0) {
+                // "extfunc;<slot>;<param>" — assign (or clear, param -1) one of
+                // the ten EXT FUNCS slots on the CS target's map. The HUD picks
+                // a param in its list and clicks the cell, the same two-step the
+                // mockup's controls already use; no wiggle, because an EXT FUNC
+                // has no physical control to touch.
+                const auto semi = s.find(';', 8);
+                if (semi != std::string::npos) {
+                    MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                    int csFx = -1, bcFx = -1;
+                    activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                    const int slot  = std::atoi(s.c_str() + 8);
+                    const int param = std::atoi(s.c_str() + semi + 1);
+                    if (reasixty_hudSetExtFunc(csTr, csFx, slot, param, nullptr)) {
+                        g_hudExtFuncsPublished.clear();   // force re-publish
+                        g_hudUsedByPublished.clear();     // the column changed too
+                        publishHud_();
+                    }
+                }
+            } else if (s.rfind("extfuncname;", 0) == 0) {
+                // "extfuncname;<slot>;<name>" — the user label, which is also the
+                // LCD header and (truncated) the carousel entry. Everything after
+                // the second ';' is the name, so it may contain semicolons.
+                const auto semi = s.find(';', 12);
+                if (semi != std::string::npos) {
+                    MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                    int csFx = -1, bcFx = -1;
+                    activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                    const int slot = std::atoi(s.c_str() + 12);
+                    const std::string nm = s.substr(semi + 1);
+                    if (reasixty_hudSetExtFunc(csTr, csFx, slot, -2, nm.c_str())) {
+                        g_hudExtFuncsPublished.clear();
+                        g_hudUsedByPublished.clear();
+                        publishHud_();
+                    }
                 }
             } else if (s.rfind("rename;", 0) == 0) {
                 // "rename;<idx>;<layer>;<label>" — set the control's display

@@ -14103,6 +14103,85 @@ std::string hudBuildUsedBy_(void* csTrV, int csFx, void* bcTrV, int bcFx,
     return out;
 }
 
+// ⇨ THE EXT FUNCS ARE TEN CONTROLS WITH NO KNOB. They live only in the UC1's
+// hidden BACK menu, so nothing on any mockup draws them — which is exactly why
+// they need to be visible somewhere, and until now that somewhere was the
+// Settings page alone. Published so the HUD can draw and edit them the way it
+// draws every other control (Frank 2026-09-03: "die ext func müssten doch
+// zuweisbar sein wie die pots und buttons und dementsprechend sichtbar").
+//
+//   record: <slot>\t<param>\t<name>\t<paramName>   joined by ';'
+//
+// Empty when the CS target has no user map or the map is not a Channel Strip —
+// EXT FUNCS are a CS-mode thing, the same gate the Settings grid uses. `param`
+// is -1 for an empty slot; every one of the ten is emitted so the HUD can draw
+// the full grid without inventing the gaps. paramName is resolved from the map's
+// snapshot so the grid reads even with no live instance, exactly like the
+// Settings combo. ⛔ Separators scrubbed, no newlines: ExtState truncates a
+// value at the first line break and loses the rest without a word.
+std::string hudBuildExtFuncs_(void* csTrV, int csFx)
+{
+    MediaTrack* tr = static_cast<MediaTrack*>(csTrV);
+    if (!tr || csFx < 0) return {};
+    char nm[512] = {0};
+    if (!fxIdentityName(tr, csFx, nm, sizeof(nm))) return {};
+    const UserPluginMap* m = user_plugins::lookupOwnedByName(nm);
+    if (!m || m->domain != Domain::ChannelStrip) return {};
+    auto scrub = [](std::string v) {
+        for (char& ch : v) if (ch == ';' || ch == '\t' || ch == '\n') ch = ' ';
+        return v;
+    };
+    std::string out;
+    for (int slot = 0; slot < kUserExtFuncsCount; ++slot) {
+        const auto& e = m->extFuncs[slot];
+        std::string pn;
+        if (e.vst3Param >= 0) {
+            for (const auto& pi : m->paramSnapshot)
+                if (pi.vst3Param == e.vst3Param) { pn = pi.name; break; }
+            if (pn.empty()) pn = "#" + std::to_string(e.vst3Param);
+        }
+        if (!out.empty()) out += ';';
+        out += std::to_string(slot);
+        out += '\t';
+        out += std::to_string(e.vst3Param);
+        out += '\t';
+        out += scrub(e.name);
+        out += '\t';
+        out += scrub(pn);
+    }
+    return out;
+}
+
+// Write one EXT FUNCS slot from the HUD. Unlike setExtFunc_ this does NOT go
+// through g_editingMatch — the HUD edits whatever the CS target resolves to,
+// with no Settings window in the picture. `name` nullptr = leave the name alone,
+
+bool hudSetExtFunc_(void* csTrV, int csFx, int slot, int param, const char* name)
+{
+    MediaTrack* tr = static_cast<MediaTrack*>(csTrV);
+    if (!tr || csFx < 0) return false;
+    if (slot < 0 || slot >= kUserExtFuncsCount) return false;
+    char nm[512] = {0};
+    if (!fxIdentityName(tr, csFx, nm, sizeof(nm))) return false;
+    const UserPluginMap* om = user_plugins::lookupOwnedByName(nm);
+    if (!om || om->domain != Domain::ChannelStrip) return false;
+    const std::string match = om->match;
+    auto cat = user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        auto& e = m.extFuncs[slot];
+        const std::string newName = name ? std::string(name) : e.name;
+        const int newParam = (param == -2) ? e.vst3Param : param;
+        if (e.name == newName && e.vst3Param == newParam) return true;
+        e.name      = newName;
+        e.vst3Param = newParam;
+        user_plugins::upsert(m);
+        user_plugins::save();
+        return true;
+    }
+    return false;
+}
+
 std::string hudBuildFeel_()
 {
     std::string out;
@@ -23544,6 +23623,15 @@ std::string reasixty_hudBuildUsedBy(void* csTr, int csFx, void* bcTr, int bcFx,
                                     void* u8Tr, int u8Fx)
 {
     return uf8::hudBuildUsedBy_(csTr, csFx, bcTr, bcFx, u8Tr, u8Fx);
+}
+std::string reasixty_hudBuildExtFuncs(void* csTr, int csFx)
+{
+    return uf8::hudBuildExtFuncs_(csTr, csFx);
+}
+bool reasixty_hudSetExtFunc(void* csTr, int csFx, int slot, int param,
+                            const char* name)
+{
+    return uf8::hudSetExtFunc_(csTr, csFx, slot, param, name);
 }
 bool reasixty_hudSetField(int idx, int layer, int field, double v,
                           void* csTr, int csFx, void* bcTr, int bcFx)

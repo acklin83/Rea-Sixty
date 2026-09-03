@@ -160,7 +160,10 @@ end
 local activeTab    = "cs"
 local lastFocusDom = "n"
 local tabRects     = {}
-local learnBtnRect = nil
+-- ⚠ The two toggle hit-rects live in ONE table on purpose: this file is at
+-- Lua's 200-local ceiling, so a third toggle (EXT FUNCS) could not have its own
+-- top-level local. Fields, not locals — see the warning block at the top.
+local btnR = { learn = nil, param = nil, ext = nil }
 local ctrlRects    = {}
 local learnIdx     = -1
 local learnLayer   = 0     -- modifier overlay the armed learn will bind to
@@ -204,9 +207,15 @@ local maxScroll    = 0
 -- opens (see loop()) so the mockup keeps its size; RW reserves that strip on the
 -- right. PARAM_PW is fixed so the grow delta and the reserve match exactly.
 local PARAM_PW         = 240
+-- UC1 EXT FUNCS strip. Ten slots that exist ONLY in the UC1's hidden BACK menu,
+-- so no mockup draws them and, until now, the Settings page was the only place
+-- they were visible at all (Frank 2026-09-03: "die ext func müssten doch
+-- zuweisbar sein wie die pots und buttons und dementsprechend sichtbar").
+-- Same two-step as every control here: pick a param in the list, click a cell.
+-- Packed into ONE table because the file is at Lua's 200-local ceiling.
+local EXT = { H = 96, open = false, rects = {}, last = nil, btn = nil }
 local paramPanelOpen   = false
 local RW               = 0
-local paramBtnRect     = nil
 local paramRects       = {}
 local selectedParam    = -1
 local selectedParamNm  = ""
@@ -846,9 +855,9 @@ local function drawTabs(st, ust)
       rx = tx - 6
       return { x = tx, y = by, w = w, h = bh }
     end
-    learnBtnRect = uf8Toggle("Touch to Learn",
+    btnR.learn = uf8Toggle("Touch to Learn",
       reaper.GetExtState(SECT, "hud_touch_learn") == "1", 0xE0A838)   -- amber
-    paramBtnRect = uf8Toggle("Parameter List",
+    btnR.param = uf8Toggle("Parameter List",
       reaper.GetExtState(SECT, "hud_imgui_params") == "1", 0x4A90D8)  -- blue
     return
   end
@@ -892,10 +901,14 @@ local function drawTabs(st, ust)
     return { x = tx, y = by, w = w, h = bh }
   end
 
-  learnBtnRect = rightToggle("Touch to Learn",
+  btnR.learn = rightToggle("Touch to Learn",
     reaper.GetExtState(SECT, "hud_touch_learn") == "1", 0xE0A838)   -- amber
-  paramBtnRect = rightToggle("Parameter List",
+  btnR.param = rightToggle("Parameter List",
     reaper.GetExtState(SECT, "hud_imgui_params") == "1", 0x4A90D8)  -- blue
+  -- EXT FUNCS only on the Channel-Strip tab: the ten slots are a CS-mode thing,
+  -- and a toggle for something that cannot exist here would be a lie.
+  btnR.ext = (activeTab == "cs") and rightToggle("EXT FUNCS",
+    reaper.GetExtState(SECT, "hud_imgui_ext") == "1", 0x8A78C8) or nil
 end
 
 local function hitRect(r, mx, my)
@@ -903,7 +916,7 @@ local function hitRect(r, mx, my)
 end
 
 local function handleLearnBtnClick(mx, my)
-  if hitRect(learnBtnRect, mx, my) then
+  if hitRect(btnR.learn, mx, my) then
     local on = (reaper.GetExtState(SECT, "hud_touch_learn") == "1")
     reaper.SetExtState(SECT, "hud_touch_learn", on and "0" or "1", false)
     return true
@@ -911,8 +924,35 @@ local function handleLearnBtnClick(mx, my)
   return false
 end
 
+-- A FIELD, not a local function: 200-local ceiling (see the top of the file).
+EXT.click = function(mx, my)
+  if hitRect(btnR.ext, mx, my) then
+    local on = (reaper.GetExtState(SECT, "hud_imgui_ext") == "1")
+    reaper.SetExtState(SECT, "hud_imgui_ext", on and "0" or "1", true)
+    return true
+  end
+  -- A cell: with a param PICKED in the list this assigns it, exactly the
+  -- two-step the mockup's controls use. Without one there is nothing to assign,
+  -- so the click is swallowed rather than doing something surprising.
+  if EXT.open then
+    for _, r in ipairs(EXT.rects) do
+      if hitRect(r, mx, my) then
+        if selectedParam >= 0 then
+          sendCmd("extfunc;" .. r.slot .. ";" .. selectedParam)
+          hintText, hintFrames = "EXT " .. (r.slot + 1) .. " \xE2\x86\x90 "
+                                 .. selectedParamNm, 90
+        else
+          hintText, hintFrames = "Pick a parameter in the list first", 90
+        end
+        return true
+      end
+    end
+  end
+  return false
+end
+
 local function handleParamBtnClick(mx, my)
-  if hitRect(paramBtnRect, mx, my) then
+  if hitRect(btnR.param, mx, my) then
     local on = (reaper.GetExtState(SECT, "hud_imgui_params") == "1")
     reaper.SetExtState(SECT, "hud_imgui_params", on and "0" or "1", true)
     return true
@@ -1467,6 +1507,60 @@ local function renderFace(st, asn)
     local t = tipSlot
     if tipParam then t = t .. "  \xE2\x80\x94  " .. tipParam end
     reaper.ImGui_SetTooltip(ctx, t)
+  end
+end
+
+-- ===================================================================
+-- UC1 EXT FUNCS strip (CS only). A 2x5 grid along the bottom, mirroring the
+-- grid the FX-Learn page draws under its mockup. The window GROWS by EXT.H when
+-- the strip opens (see loop()), the same bargain the param drawer makes, so the
+-- face keeps its size instead of being squeezed.
+--   payload: <slot>\t<param>\t<name>\t<paramName>, joined by ";", ten records
+-- ===================================================================
+EXT.render = function()
+  local top = WH - EXT.H
+  local w   = WW - RW
+  local fs  = fontScale()
+  local hf  = floor(12 * fs + 0.5)
+  local rf  = floor(13 * fs + 0.5)
+  rect(0, top, w, EXT.H, col(0x16171A, 0.97))
+  rect(0, top, w, 2, col(0x303440, 1))
+  EXT.rects = {}
+  local raw = reaper.GetExtState(SECT, "hud_extfuncs")
+  if raw == "" then
+    dtext(10, top + floor(EXT.H / 2) - hf,
+          col(0x808890, 0.9),
+          "EXT FUNCS: only on a Channel-Strip map of your own", hf)
+    return
+  end
+  dtext(10, top + 6, col(0x9A9AA2, 1),
+        "UC1 EXT FUNCS  \xE2\x80\x94  hidden BACK menu"
+        .. (selectedParam >= 0 and ("   \xE2\x80\xA2  click a cell to assign "
+            .. selectedParamNm) or "   \xE2\x80\xA2  pick a param to assign"), hf)
+  local gy = top + 6 + hf + 6
+  local gh = (WH - 6) - gy
+  local cw = (w - 20) / 5
+  local ch = gh / 2
+  for rec in (raw .. ";"):gmatch("([^;]*);") do
+    local slot, param, nm, pn = rec:match("^(%d+)\t(%-?%d+)\t([^\t]*)\t(.*)$")
+    if slot then
+      slot = tonumber(slot); param = tonumber(param)
+      local cx = 10 + (slot % 5) * cw
+      local cy = gy + floor(slot / 5) * ch
+      local bound = param >= 0
+      rect(cx, cy, cw - 6, ch - 6, col(bound and 0x23262C or 0x1B1C1F, 1))
+      reaper.ImGui_DrawList_AddRect(dl, OX + cx, OY + cy,
+        OX + cx + cw - 6, OY + cy + ch - 6,
+        col(bound and 0x4A5060 or 0x2A2C32, 1), 0, 0, 1)
+      dtext(cx + 6, cy + 4, col(bound and 0xC8CCD4 or 0x707680, 1),
+            fit(nm ~= "" and nm or ("Slot " .. (slot + 1)), cw - 16, rf), rf)
+      dtext(cx + 6, cy + 4 + rf + 3,
+            col(bound and 0x78C898 or 0x5A5E66, bound and 0.9 or 1),
+            fit(bound and pn or "\xE2\x80\x94", cw - 16, hf), hf)
+      EXT.rects[#EXT.rects + 1] =
+        { slot = slot, param = param, name = nm,
+          x = cx, y = cy, w = cw - 6, h = ch - 6 }
+    end
   end
 end
 
@@ -2233,6 +2327,12 @@ local function render()
   else
     RW, paramRects, selectedParam = 0, {}, -1
   end
+  -- EXT FUNCS strip: same bargain along the bottom, and only where the slots
+  -- exist at all — they are a Channel-Strip thing (the Settings grid gates on
+  -- exactly the same condition).
+  EXT.open = (activeTab == "cs")
+             and (reaper.GetExtState(SECT, "hud_imgui_ext") == "1")
+  if not EXT.open then EXT.rects = {} end
 
   frame = frame + 1
   -- "idx" (legacy) or "idx;layer" — the layer is the modifier overlay the bind
@@ -2362,6 +2462,7 @@ local function render()
   end
 
   if paramPanelOpen then renderParamPanel(st, asn) end
+  if EXT.open then EXT.render() end
 
   local function banner(msg, bgRgb, bgA, fgRgb)
     local px = floor(14 * fontScale() + 0.5)
@@ -2533,6 +2634,12 @@ local function drawContextMenu()
   local pPanel = (reaper.GetExtState(SECT, "hud_imgui_params") == "1")
   if reaper.ImGui_MenuItem(ctx, "Parameter List", nil, pPanel) then
     reaper.SetExtState(SECT, "hud_imgui_params", pPanel and "0" or "1", true)
+  end
+  if activeTab == "cs" then
+    local eOpen = (reaper.GetExtState(SECT, "hud_imgui_ext") == "1")
+    if reaper.ImGui_MenuItem(ctx, "UC1 EXT FUNCS", nil, eOpen) then
+      reaper.SetExtState(SECT, "hud_imgui_ext", eOpen and "0" or "1", true)
+    end
   end
 
   -- Touch-to-Learn: move a UC1 control to arm it (instead of clicking the
@@ -3909,6 +4016,18 @@ local function loop()
     end
     lastParamPanelOpen = paramOpenNow
   end
+  -- Same edge-detect for the EXT FUNCS strip, on the vertical axis.
+  local extOpenNow = (reaper.GetExtState(SECT, "hud_imgui_ext") == "1")
+  if EXT.last == nil then
+    EXT.last = extOpenNow
+  elseif extOpenNow ~= EXT.last then
+    if last_w and last_h then
+      local nh = extOpenNow and (last_h + EXT.H)
+                            or  math.max(200, last_h - EXT.H)
+      reaper.ImGui_SetNextWindowSize(ctx, last_w, nh)
+    end
+    EXT.last = extOpenNow
+  end
 
   -- Edge-to-edge content (we draw our own margins, like the gfx HUD).
   reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 0, 0)
@@ -4065,7 +4184,8 @@ local function loop()
             end
           end
         -- Top toggle buttons first, then param-panel row, then tab, then control.
-        elseif handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly) then
+        elseif handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly)
+            or EXT.click(lx, ly) then
         elseif paramPanelOpen and lx >= WW - RW and ly >= bodyTop() then
           handleParamClick(lx, ly)
         elseif not handleTabClick(lx, ly) then
