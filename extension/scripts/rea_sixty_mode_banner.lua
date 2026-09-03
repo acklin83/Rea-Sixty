@@ -108,6 +108,22 @@ local cur_text   = ""
 local last_seq   = nil
 local show_until = 0.0
 
+-- ⇨ THE POINTER OVERRIDES THE HIDE TIMER. The right-click menu used to be
+-- unreachable in practice: `showing` was the hold timer alone, and BOTH the
+-- right-click detection and the menu's own Begin/End hang off it. So you had to
+-- hit a box that appears for mode_banner_secs (2 s by default) after a mode
+-- change, and be finished inside the rest of those two seconds -- ImGui keeps a
+-- popup only while its Begin/End is reached each frame, so the menu vanished
+-- mid-read when the timer ran out (Frank 2026-09-03).
+-- Set INSIDE the frame (hover and the popup are only knowable once the window
+-- exists), read on the NEXT one. The one-frame lag cannot show a gap: the
+-- earliest either can become true is a frame in which the banner is already up.
+-- Deliberately does NOT resurrect a hidden banner -- hover is read from the
+-- window, which is click-through (NoInputs) while hidden, so passing the pointer
+-- over that patch of screen does nothing. Alive while you are on it, gone when
+-- you leave.
+local keep_alive = false
+
 -- The RING carousel: live while MODE or SCRUB is held on the UF1. Published as
 -- "<kind>\t<idx>\t<name>\t<name>..." and cleared on release. Unlike the banner
 -- this has NO timer: it is visible exactly as long as the key is down, because
@@ -315,8 +331,12 @@ local function setStartup(on)
   f:write(content); f:close()
 end
 
+-- Returns whether the popup is open THIS frame, which is what holds the banner
+-- on screen (keep_alive). Read from BeginPopup rather than IsPopupOpen: the popup
+-- id is registered in this window's id stack, so an IsPopupOpen from outside the
+-- Begin/End would hash a different id and silently answer for nothing.
 local function drawContextMenu()
-  if not reaper.ImGui_BeginPopup(ctx, POPUP_ID) then return end
+  if not reaper.ImGui_BeginPopup(ctx, POPUP_ID) then return false end
   if reaper.ImGui_MenuItem(ctx, "Font size\xE2\x80\xA6")  then setFontSize() end
   if reaper.ImGui_MenuItem(ctx, "Duration\xE2\x80\xA6")   then setHold() end
   if reaper.ImGui_MenuItem(ctx, "Ring neighbours\xE2\x80\xA6") then setWings() end
@@ -336,6 +356,7 @@ local function drawContextMenu()
     reaper.SetExtState(SECT, RUNKEY, "0", false)
   end
   reaper.ImGui_EndPopup(ctx)
+  return true
 end
 
 ------------------------------------------------------------------------
@@ -363,7 +384,13 @@ local function loop()
   -- for the same change, and the carousel already says it, better. Without this
   -- the two would stack up in the same little window while you scroll.
   local ringing = ring_kind ~= nil
+  -- Re-earned every frame, never merely inherited: if a frame does not reach the
+  -- visible branch below (Begin reports the window as not visible), the override
+  -- expires instead of pinning the banner on screen for good.
+  local was_alive = keep_alive
+  keep_alive = false
   local showing = ringing
+    or was_alive                                    -- pointer on it, or menu open
     or (reaper.time_precise() < show_until and cur_text ~= "")
 
   -- Placement. The banner is left alone after the first frame so it stays
@@ -424,11 +451,15 @@ local function loop()
     if showing then
       if ringing then drawRing(fg)
       else            reaper.ImGui_TextColored(ctx, rgba(fg), cur_text) end
-      if reaper.ImGui_IsWindowHovered(ctx)
-         and reaper.ImGui_IsMouseClicked(ctx, 1) then
+      local hovered = reaper.ImGui_IsWindowHovered(ctx)
+      if hovered and reaper.ImGui_IsMouseClicked(ctx, 1) then
         reaper.ImGui_OpenPopup(ctx, POPUP_ID)
       end
-      drawContextMenu()
+      -- An open popup blocks the mouse, so `hovered` reads false underneath it;
+      -- the menu's own answer covers exactly that case. Together they mean "the
+      -- user is busy with this window".
+      local menuOpen = drawContextMenu()
+      keep_alive = hovered or menuOpen
       local px, py = reaper.ImGui_GetWindowPos(ctx)
       local pw, ph = reaper.ImGui_GetWindowSize(ctx)
       if ringing then

@@ -1858,7 +1858,9 @@ A transient on-screen banner that flashes the new mode for ~2 s whenever you swi
 
 Enable via *Settings → Appearance → On-screen → "Show mode-change banner"*, or bind / run the **Mode-change banner: show / hide (flashes Sel / Encoder mode)** action. It is **off by default** and remembers its on / off state across restarts.
 
-Drag the banner (while it's visible) to reposition it — position persists. Right-click it for **font size**, **duration**, and **colours**.
+Drag the banner while it is visible to reposition it; the position persists. Right-click it for **font size**, **duration**, **ring neighbours**, **colours**, *Load on startup* and *Close banner*.
+
+**Point at it and it waits.** While the mouse is over the banner, and for as long as its right-click menu is open, the hide timer is suspended, so you can drag it or work the menu without racing the two seconds. Move the pointer off and it goes. Pointing at the empty spot where it usually appears does nothing: a hidden banner is click-through, so it never catches a click meant for the arrange view.
 
 ## Learn-HUD
 
