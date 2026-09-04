@@ -48437,10 +48437,18 @@ void registerBindingHandlers()
     // binding, and renaming them would break existing configs. Display only.
     // Layer 1's Q1/Q2 carry no set (SSL owns those two rows), so 1 and 2 say
     // what they really are instead of borrowing a set number.
-    for (int n = 1; n <= 9; ++n) {
+    // ⇨ REGISTERED IN SET ORDER, NAMED BY COORDINATE. The picker lists builtins
+    // in registration order, and walking the COORDINATES 1..9 printed the sets
+    // as 8, 9, 1, 2, 3, 4, 5, 6, 7, because Layer 1's Q1/Q2 are Sets 8 and 9
+    // (Frank 2026-09-04: "warum ist die reihenfolge so durcheinander?"). So the
+    // loop walks the SET numbers and looks their coordinate up. The action NAME
+    // stays softkey_bank_<coordinate> — it is persisted in every binding that
+    // points at one, and renaming it would silently unbind them.
+    for (int setNo = 1; setNo <= uf8::bindings::kSoftKeySetCount; ++setNo) {
+        int layer = 0, quick = 0;
+        if (!uf8::bindings::softKeySetToLayerQuick(setNo, layer, quick)) continue;
+        const int n = layer * 3 + quick + 1;         // the coordinate 1..9
         auto d = softKeyBank(n);
-        const int layer = (n - 1) / 3, quick = (n - 1) % 3;
-        const int setNo = uf8::bindings::layerQuickToSoftKeySet(layer, quick);
         char name[32]; snprintf(name, sizeof(name), "softkey_bank_%d", n);
         char dn[56];
         snprintf(dn, sizeof(dn), "Soft-Key Set %d", setNo);
