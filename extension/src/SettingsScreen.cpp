@@ -7538,6 +7538,10 @@ namespace {
 
 // Inline form state for "+ New" / per-row error reporting. File-scope
 // statics — same pattern as the bindings editor's transient buffers.
+// The active plug-in when it has NO user map — shown as a banner on the FX-Learn
+// page so the editor never silently pretends the map it is on is the one you are
+// looking at. Empty = the active FX is mapped, or there is none.
+std::string g_activeUnmappedFx;
 char        g_newMatch[128]      = {};
 char        g_newDisplay[16]     = {};   // up to 12 chars + NUL + slack
 // Mode picker for the "+ New" popup. 1=CS-primary, 2=BC-primary,
@@ -20326,13 +20330,20 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             MediaTrack* ftr = nullptr;
             int fxIdx = -1, trIdxKey = -2;   // -1 = master, >=0 track
             // Accept only FX that resolve to a USER map (the editable kind).
+            // ⇨ AN UNMAPPED PLUG-IN IS STILL THE ACTIVE PLUG-IN. This used to
+            // require a user map, so the editor skipped straight past whatever
+            // you were actually looking at and sat on the last map you had open
+            // — which the user never chose, it was simply still there (Frank
+            // 2026-09-03: "Ich war NIE absichtlich auf FG-Dyn … er soll doch
+            // bitte einfach DAS plugin anzeigen, das aktiv ist, gemappt oder
+            // nicht"). Accept any FX with an identity; the caller decides what
+            // to do with one that has no map.
             auto tryFx = [&](MediaTrack* tr, int fx, int keyIdx) -> bool {
                 if (!tr || fx < 0) return false;
                 if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
                 if (fx >= TrackFX_GetCount(tr)) return false;
                 char nm[512] = {0};
                 if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return false;
-                if (!uf8::user_plugins::lookupOwnedByName(nm)) return false;
                 ftr = tr; fxIdx = fx; trIdxKey = keyIdx; return true;
             };
             // 0) The FX the SURFACE is currently driving (rea-sixty's "active
@@ -20392,8 +20403,18 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 s_lastFollowFx = fxIdx;
                 char fxName[512] = {0};
                 if (uf8::fxIdentityName(ftr, fxIdx, fxName, sizeof(fxName))) {
-                    if (const auto* um =
-                            uf8::user_plugins::lookupOwnedByName(fxName)) {
+                    const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+                    if (!um) {
+                        // No map: keep the editor where it is, but say what is
+                        // in front of you and offer to map it. Silently sitting
+                        // on an unrelated map is what made this look broken.
+                        char shortNm[512] = {0};
+                        TrackFX_GetFXName(ftr, fxIdx, shortNm, sizeof(shortNm));
+                        g_activeUnmappedFx = shortNm[0] ? shortNm : fxName;
+                    } else {
+                        g_activeUnmappedFx.clear();
+                    }
+                    if (um) {
                         g_editingMatch = um->match;
                         // `fxName` IS the live original_name here (fxIdentityName
                         // returns it) and `um` is the owned map — the one moment
@@ -20410,9 +20431,40 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     }
                 }
             }
+            if (!ftr) g_activeUnmappedFx.clear();
         }
 
-        // Restore last-edited map from ExtState when no map is active
+            // The banner: what is actually in front of you, and one click to map
+        // it. Sits above the editor so it cannot be missed, and only when the
+        // active plug-in has no map of its own.
+        if (!g_activeUnmappedFx.empty()) {
+            ImGui_TextColored(ctx, 0x66CCFFFF,
+                ("Active plug-in: " + g_activeUnmappedFx
+                 + "  \xE2\x80\x94  no map yet").c_str());
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Map this plug-in##fxl_map_active",
+                             nullptr, nullptr)) {
+                // Prefill +New from the live FX, exactly as picking it out of
+                // the browser would.
+                std::memset(g_newMatch,   0, sizeof(g_newMatch));
+                std::memset(g_newDisplay, 0, sizeof(g_newDisplay));
+                const std::string root = deriveMatchRoot_(g_activeUnmappedFx);
+                std::strncpy(g_newMatch, root.c_str(), sizeof(g_newMatch) - 1);
+                const std::string shrt = deriveShortLabel_(g_activeUnmappedFx);
+                std::strncpy(g_newDisplay, shrt.c_str(), sizeof(g_newDisplay) - 1);
+                g_newPrimaryMode = 1;
+                g_newUf8Mode     = false;
+                g_newError.clear();
+                std::memset(g_pickerFilter, 0, sizeof(g_pickerFilter));
+                g_pickerSelectedIdx = -1;
+                if (g_installedFx.empty()) loadInstalledFx_();
+                ImGui_OpenPopup(ctx, "New User Plug-in Map###fxl_new_popup",
+                                nullptr);
+            }
+            ImGui_Spacing(ctx);
+        }
+
+    // Restore last-edited map from ExtState when no map is active
         // (fresh Settings-open, or user returned from a deleted map).
         // Fall back to the first catalog entry if the persisted match
         // no longer exists (deletion, rename via Import, etc.).
