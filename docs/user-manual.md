@@ -1833,7 +1833,7 @@ Enable via *Settings → Appearance → On-screen → "Show MCP Inserts overlay"
 
 - **CS colour / BC colour** pickers.
 - **Fill opacity** (0 = outline only) and **Border opacity**.
-- **Inserts row height** and **Inserts top offset** — a fallback. The MCP overlay measures each row of the FX list and draws on the measured row, which is why it lines up on any theme and any UI scale without tuning; these two are only read when that measurement is unavailable (`rea_sixty_inserts_overlay.lua`, the `block.rows` branch). The TCP overlay has its own geometry (`overlay_rowh_tcp` / `overlay_toppad_tcp`) that no control writes.
+- **Inserts row height** and **Inserts top offset** — a fallback. The overlay measures each row of the FX list and draws on the measured row, which is why it lines up on any theme and any UI scale; these two are only read if that measurement fails.
 
 ## Focused-track panel
 
