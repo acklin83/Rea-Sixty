@@ -35600,7 +35600,9 @@ void refreshFxActiveLayer_()
     // Both modifiers held = the Control+Option layer (when enabled). With it
     // disabled, both-held stays the neutral Normal — the pre-2026-06-17
     // behaviour. NOTE (Windows): the AltGr drop above forces AltGr→Option, so
-    // ControlOption is reachable there only via LEFT-Ctrl + LEFT-Alt (RMENU up).
+    // ControlOption there needs the LEFT Alt (RMENU up). The Ctrl may be either
+    // one: only the right ALT is tested by side (VK_RMENU), while ctrl and alt
+    // come from VK_CONTROL / VK_MENU, which do not distinguish sides.
     if (ctrl && opt)      L = g_fxLayerCtrlOptEnable.load()
                                 ? uf8::FxLayer::ControlOption
                                 : uf8::FxLayer::Normal;
