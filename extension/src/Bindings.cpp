@@ -6355,6 +6355,17 @@ const char* builtinCategory(const std::string& n)
 
     if (n.rfind("layer_select", 0) == 0)
         return "Layer";
+    // ⇨ SETS 8 AND 9 ARE OFFERED ONCE, UNDER SSL. softkey_bank_1 / _2 are the
+    // coordinate jumps onto Layer 1's Q1/Q2, which ARE the SSL rows, so the
+    // picker listed each of those two sets twice under the same words: once
+    // here and once as domain_cs / domain_bc (Frank 2026-09-04 "8 und 9
+    // entdoppeln"). The SSL pair is the one that stays visible — it is the
+    // FACTORY binding of the two Quick keys and upgradeSanitize rewrites it
+    // there on every load, so it has to remain pickable to be restorable.
+    // Both keep firing wherever they are already bound; only the picker entry
+    // goes, which is what an empty category means here.
+    if (n == "softkey_bank_1" || n == "softkey_bank_2")
+        return "";
     if (n.rfind("softkey_bank_", 0) == 0
      || n.rfind("softkey_set_", 0) == 0)
         return "Soft-Key Bank";

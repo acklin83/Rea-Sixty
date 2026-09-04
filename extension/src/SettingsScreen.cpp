@@ -3668,7 +3668,20 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 if (!uf8::bindings::builtinShownForId(n, id)) continue;
                 bucket[cat].emplace_back(n);
             }
-            for (auto& v : bucket) std::sort(v.second.begin(), v.second.end());
+            // ⇨ SORTED BY WHAT THE USER READS, NOT BY THE INTERNAL NAME.
+            // The bucket used to sort on the action id, which is why the
+            // Soft-Key Bank group read 8, 9, 1, 2, 3, 4, 5, 6, 7: the ids run
+            // softkey_bank_1..9 by COORDINATE and Layer 1's Q1/Q2 are Sets 8
+            // and 9 (Frank 2026-09-04). The display name is the only order a
+            // reader can predict.
+            for (auto& v : bucket)
+                std::sort(v.second.begin(), v.second.end(),
+                          [](const std::string& a, const std::string& b) {
+                              const std::string da = builtinDisplayName(a);
+                              const std::string db = builtinDisplayName(b);
+                              if (da != db) return da < db;
+                              return a < b;
+                          });
 
             // Default-open: when not filtering, the top three categories
             // (Cycle Actions / V-Pot Sel-Modes / Encoder Modes) open so

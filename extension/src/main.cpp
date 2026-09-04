@@ -37461,6 +37461,12 @@ static void sdBridgeTick_()
                 f = true;
                 for (const auto& n : uf8::bindings::builtinNames()) {
                     const char* cat = uf8::bindings::builtinCategory(n);
+                    // Same filter the Settings picker applies: no category means
+                    // the action is not offered. Without this the two lists
+                    // disagreed the moment one was hidden — Companion buckets a
+                    // category-less action under "Other" and would have shown
+                    // exactly the duplicate the picker had just dropped.
+                    if (!cat || !*cat) continue;
                     if (!f) out += ",";
                     f = false;
                     out += "{\"n\":\"" + sdJsonEsc_(n) + "\",\"d\":\""
