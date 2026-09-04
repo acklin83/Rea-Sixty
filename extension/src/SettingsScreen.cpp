@@ -7984,12 +7984,27 @@ const char* modeLabel_(uf8::Domain d, bool uf8Mode)
     return uf8Mode ? "UF8" : "—";
 }
 
+// ⇨ MARKS, DOES NOT WRITE. Every editor change came through here and wrote the
+// whole catalog — a step ticked, a slider dragged, once per frame while the
+// mouse moved. The write is deferred to the timer now (saveFlush), which does
+// it once the edits stop; reasixty_flushCatalogSave() below is the one that
+// reports what happened.
 void persistAndReport_()
 {
+    uf8::user_plugins::saveSoon();
+}
+
+// Called from the timer. Writes when the edits have been quiet, and carries the
+// outcome into the same two globals the pane already shows.
+void flushCatalogSave_(bool force)
+{
     using uf8::user_plugins::SaveResult;
-    g_lastSaveOk = false; g_lastSaveError.clear();
-    switch (uf8::user_plugins::save()) {
-        case SaveResult::Ok:        break;
+    if (!uf8::user_plugins::savePending()) return;
+    const auto res = uf8::user_plugins::saveFlush(force);
+    if (uf8::user_plugins::savePending()) return;   // nothing written yet
+    g_lastSaveOk = true; g_lastSaveError.clear();
+    switch (res) {
+        case SaveResult::Ok:        g_lastSaveOk = true; break;
         case SaveResult::Collision: g_lastSaveOk = false; g_lastSaveError = "Save refused: a match collides with a built-in plug-in map."; break;
         case SaveResult::IoError:   g_lastSaveOk = false; g_lastSaveError = "Save failed: could not write user_plugins.json (see "
                                                       + uf8::logPath("rea_sixty.log") + ")."; break;
@@ -24040,6 +24055,12 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
 }
 
 } // namespace uf8
+// The timer's door to the deferred catalog write (see persistAndReport_).
+void reasixty_flushCatalogSave(bool force)
+{
+    uf8::flushCatalogSave_(force);
+}
+
 
 // Commit a captured Touch-to-Learn rotary step-cycle onto a UF8 V-Pot slot.
 // Global scope (matches the external-linkage decl in main.cpp). Mirrors

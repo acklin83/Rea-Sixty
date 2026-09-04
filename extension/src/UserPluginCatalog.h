@@ -785,6 +785,22 @@ void load();
 // would resolve to a built-in PluginMap.
 SaveResult save();
 
+// ---- Deferred save -------------------------------------------------------
+// ⇨ THE CATALOG IS ONE FILE, AND IT IS BIG. save() serialises every map and
+// writes the lot atomically; on a mapped session that is three quarters of a
+// megabyte. The editor calls it on every change — every step you tick, every
+// frame of a slider drag — so the write, not the work, was what the user felt
+// (Frank 2026-09-04). saveSoon() records that a write is owed; saveFlush()
+// performs it once the edits have stopped for `quietMs`, from the timer.
+// ⚠ THE TRADE, SAID OUT LOUD: a crash between the last edit and the flush
+// loses that edit. That is why the quiet window is short, why every flush path
+// (timer, unload) forces one, and why nothing else was made lazy.
+void       saveSoon();
+bool       savePending();
+// force = write now if anything is owed. Otherwise write only after quietMs of
+// quiet. Returns Ok when there was nothing to do.
+SaveResult saveFlush(bool force, int quietMs = 350);
+
 // Export the current in-memory catalog to an arbitrary path (file
 // dialog target). Same on-disk format as user_plugins.json. Returns
 // true on success; on failure fills `*errOut` (if non-null) with a

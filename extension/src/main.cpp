@@ -234,6 +234,7 @@ bool        reasixty_hudUf8SetCurve(int strip, int fb, int vb, const char* csv, 
 bool        reasixty_hudUf8FeelSave(int strip, int fb, int vb, int slot, const char* name, void* tr, int fx);
 bool        reasixty_hudUf8FeelApply(int strip, int fb, int vb, int slot, void* tr, int fx);
 // HUD button push-cycle editor (Frank 2026-06-20).
+void        reasixty_flushCatalogSave(bool force);
 std::string reasixty_hudBuildPushBtns();
 std::string reasixty_hudBuildPush(int idx, void* csTr, void* bcTr, int layer);
 bool        reasixty_hudPushToggle(int idx, int layer, int stepIdx, void* csTr, void* bcTr);
@@ -40690,6 +40691,10 @@ void onTimerBody_()
             TickSection_ sec(&g_secHudMs);
             publishHud_();
         }
+        // The deferred catalog write: done here once the edits have been quiet
+        // for a moment, so a slider drag writes one file instead of one per
+        // frame. Cheap when nothing is owed (one atomic read).
+        reasixty_flushCatalogSave(/*force*/ false);
     }
 
     // Phase 2.8b — UC1 LCD takeover for Nav Mode. Runs after poll() so
@@ -50100,6 +50105,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         // Best-effort: strip any Inserts-list markers we wrote so a project
         // saved after unload doesn't bake them in (the REAPER track API is
         // still live during this callback). No-op when the feature is off.
+        // ⛔ FLUSH THE CATALOG FIRST. Saves are deferred to the timer, and the
+        // timer is about to stop — an edit made in the last moments before a
+        // quit would otherwise never reach the disk.
+        reasixty_flushCatalogSave(/*force*/ true);
         if (g_insertMarkersEnabled.load()) clearAllInsertMarkers_();
         // Tell the companion overlay to stop drawing (extension going away).
         SetExtState("rea_sixty", "overlay", "0;0;", false);

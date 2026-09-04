@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -1644,6 +1645,39 @@ bool importMapFromString(const std::string& contents, MapShare& out,
         if (const char* s = el->get_string_value(true)) out.createdAt = atoll(s);
     }
     return true;
+}
+
+namespace {
+std::atomic<bool>    g_saveDirty{false};
+std::atomic<int64_t> g_saveMarkedAt{0};
+int64_t nowMsCat_()
+{
+    return static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+}  // namespace
+
+void saveSoon()
+{
+    g_saveMarkedAt.store(nowMsCat_(), std::memory_order_relaxed);
+    g_saveDirty.store(true, std::memory_order_release);
+}
+
+bool savePending() { return g_saveDirty.load(std::memory_order_acquire); }
+
+SaveResult saveFlush(bool force, int quietMs)
+{
+    if (!g_saveDirty.load(std::memory_order_acquire)) return SaveResult::Ok;
+    if (!force) {
+        const int64_t since =
+            nowMsCat_() - g_saveMarkedAt.load(std::memory_order_relaxed);
+        if (since < quietMs) return SaveResult::Ok;
+    }
+    // Cleared BEFORE the write: an edit landing during the write marks the flag
+    // again and the next flush picks it up. Clearing after would swallow it.
+    g_saveDirty.store(false, std::memory_order_release);
+    return save();
 }
 
 SaveResult save()
