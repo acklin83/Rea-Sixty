@@ -967,6 +967,7 @@ EXT.alClick = function(mx, my)
     local on = (reaper.GetExtState(SECT, "hud_imgui_al") == "1")
     reaper.SetExtState(SECT, "hud_imgui_al", on and "0" or "1", true)
     if not on then reaper.SetExtState(SECT, "hud_imgui_params", "1", true) end
+    paramScroll = 0   -- the two contents share the scroll; start at the top
     return true
   end
   if not EXT.al then return false end
@@ -1040,6 +1041,7 @@ local function handleParamBtnClick(mx, my)
     -- surprising effect for one click.
     if reaper.GetExtState(SECT, "hud_imgui_al") == "1" then
       reaper.SetExtState(SECT, "hud_imgui_al", "0", true)
+      paramScroll = 0
       return true
     end
     local on = (reaper.GetExtState(SECT, "hud_imgui_params") == "1")
@@ -1738,25 +1740,46 @@ EXT.alDraw = function(x0, top, PW)
     dtext(bx + (bw - tw) / 2, fy + 3, col(on and 0xE8FFF4 or 0x9098A4, 1), b.l, hf)
     EXT.alBtns[#EXT.alBtns + 1] = { id = b.id, x = bx, y = fy, w = bw, h = 20 }
   end
-  local y = top + pad + hf + 8
+  -- Scrolls on the SAME pair the parameter list uses (paramScroll /
+  -- paramMaxScroll), because the wheel handler in loop() already routes to
+  -- those whenever the pointer is over the drawer — and AutoLearn is the
+  -- drawer. Building a second scroll value here would have meant a second
+  -- wheel branch to keep in step with the first (Frank 2026-09-04: the list
+  -- was not scrollable at all; it drew until it ran out of room and stopped).
+  local listTop = top + pad + hf + 8
+  local listBot = fy - 4
+  local rowH    = rf + 6
+  -- Height of everything, including the divider block the unmatched rows get.
+  local nU = 0
+  for _, r in ipairs(EXT.alRows) do if r.kind == "u" then nU = nU + 1 end end
+  local content = #EXT.alRows * rowH + (nU > 0 and (hf + 13) or 0)
+  paramMaxScroll = math.max(0, content - (listBot - listTop))
+  paramScroll    = clamp(paramScroll, 0, paramMaxScroll)
+
+  local y = listTop - paramScroll
   local sawUnmatched = false
   for _, r in ipairs(EXT.alRows) do
-    if y + rf + 8 > fy - 4 then break end
+    if y > listBot then break end
     if r.kind == "u" then
       -- One divider before the unmatched block, then the plain names.
       if not sawUnmatched then
         sawUnmatched = true
         y = y + 4
-        rect(x0 + pad, y, PW - 2 * pad, 1, col(0x303440, 1))
+        if y >= listTop and y <= listBot then
+          rect(x0 + pad, y, PW - 2 * pad, 1, col(0x303440, 1))
+        end
         y = y + 5
-        dtext(x0 + pad, y, col(0x707680, 1),
-              fit("not matched", PW - 2 * pad, hf), hf)
+        if y >= listTop and y + hf <= listBot then
+          dtext(x0 + pad, y, col(0x707680, 1),
+                fit("not matched", PW - 2 * pad, hf), hf)
+        end
         y = y + hf + 4
-        if y + rf + 8 > fy - 4 then return end
       end
-      dtext(x0 + pad + 18, y, col(0x707680, 1),
-            fit(r.pname, PW - 2 * pad - 18, rf), rf)
-    else
+      if y >= listTop and y + rowH <= listBot + rowH then
+        dtext(x0 + pad + 18, y, col(0x707680, 1),
+              fit(r.pname, PW - 2 * pad - 18, rf), rf)
+      end
+    elseif y + rowH >= listTop and y <= listBot then
       local tick = EXT.alTick[r.key]
       rect(x0 + pad, y + 2, 11, 11, col(tick and 0x78C898 or 0x2A2C32, 1))
       dtext(x0 + pad + 18, y, col(tick and 0xC8CCD4 or 0x9098A4, 1),
@@ -1768,8 +1791,10 @@ EXT.alDraw = function(x0, top, PW)
                 0.95), ct, hf)
       local tw2 = measure(r.target, hf)
       dtext(x0 + PW - pad - cw - 8 - tw2, y + 1, col(0x8A9BC8, 0.95), r.target, hf)
+      -- Hit rect only for a row that is actually on screen, or a click in the
+      -- footer area would tick something scrolled out of sight.
       EXT.alRects[#EXT.alRects + 1] =
-        { key = r.key, x = x0, y = y, w = PW, h = rf + 6 }
+        { key = r.key, x = x0, y = y, w = PW, h = rowH }
     end
     y = y + rf + 6
   end
