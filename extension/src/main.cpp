@@ -15688,6 +15688,17 @@ void publishHud_()
                         alFx = tf;
                     }
                 }
+                // ⛔ AND THE VIRGIN FX IS NOT A CS/BC TARGET AT ALL. activeCsBcTargets_
+                // resolves a plug-in that already HAS a map, so on an unmapped one it
+                // hands back nothing — which is exactly the plug-in the bootstrap was
+                // built for. The rest of the HUD reaches it through hudCursorUnlearnedFx_
+                // (that is where the "Map bx_console 4000 E" banner comes from); the
+                // proposals have to use the same resolver or they answer for a plug-in
+                // nobody is looking at. Frank, on a 4000 E with the panel open and empty:
+                // "geht nicht".
+                if (alMode >= 0 && alMode != 2 && (!alTr || alFx < 0) && boot) {
+                    alTr = bootTr; alFx = bootFx;
+                }
                 const std::string al = (alMode >= 0)
                     ? reasixty_hudBuildAutoLearn(alTr, alFx, alMode) : std::string();
                 if (al != g_hudAutoLearnPublished) {
@@ -38761,6 +38772,12 @@ void onTimerBody_()
                 const auto alSemi = s.find(';', 8);
                 MediaTrack* alTr = csTr; int alFx = csFx;
                 if (alMode == 1) { alTr = bcTr; alFx = bcFx; }
+                // Same hole as in the publisher: an unmapped plug-in is not a
+                // CS/BC target, and it is the one the proposals were made for.
+                if (alMode != 2 && (!alTr || alFx < 0)) {
+                    MediaTrack* vTr = nullptr; int vFx = -1;
+                    if (hudCursorUnlearnedFx_(vTr, vFx)) { alTr = vTr; alFx = vFx; }
+                }
                 else if (alMode >= 2) {
                     // The UF8 / UF1 targets are published for the HUD; read them
                     // back rather than resolving them a second, divergent way.
