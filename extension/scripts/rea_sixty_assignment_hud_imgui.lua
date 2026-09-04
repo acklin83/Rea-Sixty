@@ -927,8 +927,10 @@ local function drawTabs(st, ust)
 
   btnR.learn = rightToggle("Touch to Learn",
     reaper.GetExtState(SECT, "hud_touch_learn") == "1", 0xE0A838)   -- amber
+  -- Lit = the content the drawer is SHOWING, so the pair reads as a choice.
   btnR.param = rightToggle("Parameter List",
-    reaper.GetExtState(SECT, "hud_imgui_params") == "1", 0x4A90D8)  -- blue
+    reaper.GetExtState(SECT, "hud_imgui_params") == "1"
+      and reaper.GetExtState(SECT, "hud_imgui_al") ~= "1", 0x4A90D8)  -- blue
   -- On every tab, for the geometry reason above — and because the ten slots
   -- belong to the CS map whichever tab you happen to be looking at.
   btnR.ext = rightToggle("EXT FUNCS",
@@ -954,16 +956,26 @@ end
 
 -- A FIELD, not a local function: 200-local ceiling (see the top of the file).
 EXT.alClick = function(mx, my)
+  -- ⛔ ONE DRAWER, TWO CONTENTS. AutoLearn does not open a panel of its own, it
+  -- takes over the parameter drawer — so with both toggles lit the window just
+  -- got wider and showed one of them, which reads as a bug (Frank 2026-09-03:
+  -- "Parameter List mit AutoLearn macht einfach das Fenster breiter?"). The
+  -- buttons pick the CONTENT: AutoLearn on opens the drawer and claims it, off
+  -- hands it back to the parameter list, and the list button takes it back
+  -- without closing the drawer.
   if hitRect(btnR.al, mx, my) then
     local on = (reaper.GetExtState(SECT, "hud_imgui_al") == "1")
     reaper.SetExtState(SECT, "hud_imgui_al", on and "0" or "1", true)
+    if not on then reaper.SetExtState(SECT, "hud_imgui_params", "1", true) end
     return true
   end
   if not EXT.al then return false end
   for _, b in ipairs(EXT.alBtns) do
     if hitRect(b, mx, my) then
       if b.id == "all" then
-        for _, r in ipairs(EXT.alRows) do EXT.alTick[r.key] = true end
+        for _, r in ipairs(EXT.alRows) do
+          if r.kind ~= "u" then EXT.alTick[r.key] = true end
+        end
       elseif b.id == "none" then
         EXT.alTick = {}
       else
@@ -1023,6 +1035,13 @@ end
 
 local function handleParamBtnClick(mx, my)
   if hitRect(btnR.param, mx, my) then
+    -- While AutoLearn owns the drawer this button means "give it back", not
+    -- "close" — the drawer is already open and shutting it would be a second,
+    -- surprising effect for one click.
+    if reaper.GetExtState(SECT, "hud_imgui_al") == "1" then
+      reaper.SetExtState(SECT, "hud_imgui_al", "0", true)
+      return true
+    end
     local on = (reaper.GetExtState(SECT, "hud_imgui_params") == "1")
     reaper.SetExtState(SECT, "hud_imgui_params", on and "0" or "1", true)
     return true
@@ -1664,6 +1683,12 @@ EXT.alDraw = function(x0, top, PW)
         EXT.alRows[#EXT.alRows + 1] =
           { key = rec, kind = "c", spec = "c:" .. f[2] .. ":" .. f[3],
             pname = f[4], target = f[5], conf = tonumber(f[6]) or 0 }
+      elseif f[1] == "u" and #f >= 3 then
+        -- Matched nothing. Listed, not tickable: there is nothing to accept,
+        -- and a proposal list that shows only its hits reads as complete when
+        -- it is not.
+        EXT.alRows[#EXT.alRows + 1] =
+          { key = rec, kind = "u", pname = f[3], target = "", conf = -1 }
       elseif f[1] == "s" and #f >= 7 then
         -- Per-strip control: Fader / Cut / Solo / Sel on (fader bank, strip).
         -- The kind arrives as a number so the apply spec stays numeric.
@@ -1685,9 +1710,13 @@ EXT.alDraw = function(x0, top, PW)
       end
     end
   end
+  local nProp, nMiss = 0, 0
+  for _, r in ipairs(EXT.alRows) do
+    if r.kind == "u" then nMiss = nMiss + 1 else nProp = nProp + 1 end
+  end
   dtext(x0 + pad, top + pad, col(0xC8CCD4, 1),
-        fit("AutoLearn \xE2\x80\x94 " .. #EXT.alRows .. " proposals",
-            PW - 2 * pad, hf), hf)
+        fit(("AutoLearn \xE2\x80\x94 %d proposals, %d not matched")
+              :format(nProp, nMiss), PW - 2 * pad, hf), hf)
   if #EXT.alRows == 0 then
     -- Since the bootstrap landed, an empty answer no longer means "no map":
     -- an unmapped plug-in is read straight off the live instance. So the only
@@ -1710,21 +1739,38 @@ EXT.alDraw = function(x0, top, PW)
     EXT.alBtns[#EXT.alBtns + 1] = { id = b.id, x = bx, y = fy, w = bw, h = 20 }
   end
   local y = top + pad + hf + 8
-  for i, r in ipairs(EXT.alRows) do
+  local sawUnmatched = false
+  for _, r in ipairs(EXT.alRows) do
     if y + rf + 8 > fy - 4 then break end
-    local tick = EXT.alTick[r.key]
-    rect(x0 + pad, y + 2, 11, 11, col(tick and 0x78C898 or 0x2A2C32, 1))
-    dtext(x0 + pad + 18, y, col(tick and 0xC8CCD4 or 0x9098A4, 1),
-          fit(r.pname, PW - 2 * pad - 18 - 96, rf), rf)
-    local ct = r.conf .. "%"
-    local cw = measure(ct, hf)
-    dtext(x0 + PW - pad - cw, y + 1,
-          col(r.conf >= 90 and 0x78C898 or (r.conf >= 75 and 0xE0C070 or 0x9098A4),
-              0.95), ct, hf)
-    local tw2 = measure(r.target, hf)
-    dtext(x0 + PW - pad - cw - 8 - tw2, y + 1, col(0x8A9BC8, 0.95), r.target, hf)
-    EXT.alRects[#EXT.alRects + 1] =
-      { key = r.key, x = x0, y = y, w = PW, h = rf + 6 }
+    if r.kind == "u" then
+      -- One divider before the unmatched block, then the plain names.
+      if not sawUnmatched then
+        sawUnmatched = true
+        y = y + 4
+        rect(x0 + pad, y, PW - 2 * pad, 1, col(0x303440, 1))
+        y = y + 5
+        dtext(x0 + pad, y, col(0x707680, 1),
+              fit("not matched", PW - 2 * pad, hf), hf)
+        y = y + hf + 4
+        if y + rf + 8 > fy - 4 then return end
+      end
+      dtext(x0 + pad + 18, y, col(0x707680, 1),
+            fit(r.pname, PW - 2 * pad - 18, rf), rf)
+    else
+      local tick = EXT.alTick[r.key]
+      rect(x0 + pad, y + 2, 11, 11, col(tick and 0x78C898 or 0x2A2C32, 1))
+      dtext(x0 + pad + 18, y, col(tick and 0xC8CCD4 or 0x9098A4, 1),
+            fit(r.pname, PW - 2 * pad - 18 - 96, rf), rf)
+      local ct = r.conf .. "%"
+      local cw = measure(ct, hf)
+      dtext(x0 + PW - pad - cw, y + 1,
+            col(r.conf >= 90 and 0x78C898 or (r.conf >= 75 and 0xE0C070 or 0x9098A4),
+                0.95), ct, hf)
+      local tw2 = measure(r.target, hf)
+      dtext(x0 + PW - pad - cw - 8 - tw2, y + 1, col(0x8A9BC8, 0.95), r.target, hf)
+      EXT.alRects[#EXT.alRects + 1] =
+        { key = r.key, x = x0, y = y, w = PW, h = rf + 6 }
+    end
     y = y + rf + 6
   end
 end

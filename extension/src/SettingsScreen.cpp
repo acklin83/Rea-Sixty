@@ -14191,6 +14191,11 @@ bool hudSetExtFunc_(void* csTrV, int csFx, int slot, int param, const char* name
 //   c\t<linkIdx>\t<param>\t<paramName>\t<slotName>\t<confidence 0..100>
 //   8\t<fb>\t<vb>\t<strip>\t<param>\t<paramName>\t<confidence 0..100>
 //   s\t<kind 0=Fader 1=Cut 2=Solo 3=Sel>\t<fb>\t<strip>\t<param>\t<paramName>\t<conf>
+//   u\t<param>\t<paramName>          — matched NOTHING; listed so the user can
+//                                      see what the pass leaves out (Frank
+//                                      2026-09-03: "woher will ich sonst wissen
+//                                      was er auslässt?"). Not tickable: there
+//                                      is nothing to accept, it is a report.
 //
 // The kind travels as a NUMBER, not a letter, so the apply spec stays entirely
 // numeric after its leading kind char and the parser has one job.
@@ -14266,6 +14271,8 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx, int mode)
         return std::to_string(v < 0 ? 0 : (v > 100 ? 100 : v));
     };
     std::string out;
+    std::vector<int> usedParams;   // every param a row already speaks for
+    auto used = [&](int p) { usedParams.push_back(p); };
     if (srcDom != Domain::None) {
         for (const auto& sg : autolearn::suggestSlots(src, srcDom)) {
             if (sg.vst3Param < 0) continue;
@@ -14275,6 +14282,7 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx, int mode)
                  + "\t" + scrub(sg.paramName)
                  + "\t" + scrub(sg.slotName)
                  + "\t" + pct(sg.confidence);
+            used(sg.vst3Param);
         }
     }
     // ⛔ THE PASSES ARE OPT-IN, and this must mirror the FX-Learn page or the two
@@ -14301,6 +14309,7 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx, int mode)
              + "\t" + std::to_string(u.vst3Param)
              + "\t" + scrub(u.paramName)
              + "\t" + pct(u.confidence);
+        used(u.vst3Param);
     }
     // Per-strip controls. The CH<N> pass first, then the generic
     // params-onto-faders pass with the faders that pass already claimed removed
@@ -14337,7 +14346,17 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx, int mode)
                  + "\t" + std::to_string(sg.vst3Param)
                  + "\t" + scrub(sg.paramName)
                  + "\t" + pct(sg.confidence);
+            used(sg.vst3Param);
         }
+    }
+    // What the pass did NOT touch. A proposal list that only shows its hits
+    // reads as complete when it is not — and the parameters it drops are
+    // exactly the ones you then have to find by hand.
+    for (const auto& pi : src) {
+        if (std::find(usedParams.begin(), usedParams.end(), pi.vst3Param)
+            != usedParams.end()) continue;
+        if (!out.empty()) out += ';';
+        out += "u\t" + std::to_string(pi.vst3Param) + "\t" + scrub(pi.name);
     }
     return out;
 }
