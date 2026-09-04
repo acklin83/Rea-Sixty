@@ -41,6 +41,46 @@ std::string toLower(const std::string& s)
 // the 1-based channel index. Returns 0 when no prefix is found. Tolerates a
 // space, hyphen, dot or underscore between prefix and digits ("CH 1",
 // "Ch-1", "ch.1", "Ch_1"). Pass a lowercased name in.
+// "band 3 gain" → 3, anything else → 0. Only a LEADING "band <n>" counts: a
+// parameter that merely mentions a band somewhere is not a band control.
+int extractBandIndex(const std::string& lower)
+{
+    static const char kPfx[] = "band";
+    const size_t L = sizeof(kPfx) - 1;
+    if (lower.size() <= L) return 0;
+    if (lower.compare(0, L, kPfx) != 0) return 0;
+    size_t i = L;
+    while (i < lower.size() && (lower[i] == ' ' || lower[i] == '-'
+                             || lower[i] == '.' || lower[i] == '_')) ++i;
+    if (i >= lower.size() || !std::isdigit(static_cast<unsigned char>(lower[i])))
+        return 0;
+    int n = 0;
+    while (i < lower.size() && std::isdigit(static_cast<unsigned char>(lower[i])))
+        n = n * 10 + (lower[i++] - '0');
+    return n;
+}
+
+// What a numbered band's parameter controls, in the strip's own words. Only the
+// three an SSL band has; everything else returns empty and the parameter is left
+// alone. "frequency" and "freq" both land on "freq", which is what the slot
+// names use.
+std::string bandRole(const std::string& lower)
+{
+    size_t i = 4;                                    // past "band"
+    while (i < lower.size() && !std::isdigit(static_cast<unsigned char>(lower[i])))
+        ++i;
+    while (i < lower.size() && std::isdigit(static_cast<unsigned char>(lower[i])))
+        ++i;                                         // past the number itself
+    while (i < lower.size() && (lower[i] == ' ' || lower[i] == '-'
+                             || lower[i] == '.' || lower[i] == '_')) ++i;
+    if (i >= lower.size()) return {};
+    const std::string rest = lower.substr(i);
+    if (rest == "gain")                            return "gain";
+    if (rest == "freq" || rest == "frequency")     return "freq";
+    if (rest == "q")                               return "q";
+    return {};
+}
+
 int extractChannelIndex(const std::string& lower)
 {
     const char* prefixes[] = { "channel", "chan", "ch" };
@@ -278,7 +318,6 @@ static const SeedRow kBcSeeds[] = {
     {"dry/wet",           7, Domain::BusComp, "Comp", "Mix"},
     {"dry wet",           7, Domain::BusComp, "Comp", "Mix"},
     {"wet",               7, Domain::BusComp, "Comp", "Mix"},
-    {"knee",              7, Domain::BusComp, "Comp", "Mix"},  // fallback if no mix
 };
 
 // Generic patterns that apply when no domain-specific match is found.
@@ -604,6 +643,33 @@ std::vector<Suggestion> suggestSlots(
         // In" / "Pan" slots gives Frank's "wrong-channel" mismatch
         // (2026-05-24).
         if (extractChannelIndex(norm) >= 1) continue;
+
+        // ⇨ A NUMBERED BAND IS A POSITION, NOT A NAME. FabFilter's Pro-Q calls
+        // its bands "Band 1 Gain", "Band 17 Shape", "Band 12 Side Chain Low
+        // Frequency" — twenty-four of everything, in no order the plug-in
+        // reveals. Fed to the name matcher those read as fragments and produced
+        // nonsense with a confident number on it: "Band 1 Gain → HF Gain 82%",
+        // "Band 12 Side Chain … → HF Freq 87%" (Frank 2026-09-04).
+        // So the number decides: band 1 is the LF, 2 the LMF, 3 the HMF, 4 the
+        // HF, which is the order an engineer reads a strip in, and the rest of
+        // the name says which control of that band it is. Anything the strip has
+        // no slot for — band 5 and up, a Shape, a side-chain filter — is SKIPPED
+        // rather than handed to the fuzzy passes, because that is where the
+        // nonsense came from. Confidence 0.9: the mapping is structurally sound
+        // and still a guess about which band you want where.
+        if (int bandNo = extractBandIndex(norm); bandNo >= 1) {
+            static const char* kBandName[4] = { "lf", "lmf", "hmf", "hf" };
+            if (bandNo > 4) continue;
+            const std::string role = bandRole(norm);
+            if (role.empty()) continue;
+            Match bm{};
+            if (!tryExact(dict, std::string(kBandName[bandNo - 1]) + ' ' + role,
+                          bm))
+                continue;
+            candidates.push_back({pi.vst3Param, bm.linkIdx, 0.9f,
+                                  pi.name, bm.slotName});
+            continue;
+        }
 
         // ⛔ THE BEST OF THE THREE, NOT THE FIRST THAT ANSWERS. Short-circuiting
         // meant an EXACT hit was taken even when it scored lower than a
