@@ -39080,10 +39080,23 @@ void onTimerBody_()
                         changed = reasixty_hudPushAdd(idx, layer, param, norm,
                                                       csTr, bcTr);
                 }
+                // ⇨ AND TIME THE ROUND TRIP, because "it takes two seconds"
+                // has to be pinned on one side of the wire. This logs what the
+                // EXTENSION spent: from the command arriving to the fresh
+                // payload being published. If this says 30 ms and the tick is
+                // healthy, the wait is on the companion's side.
+                const int64_t cmdT0 = nowMs_();
                 if (changed) {
                     g_hudAssignPublished.clear();   // ring/label may change
                     g_hudPushPublished.clear();     // re-publish the editor data
                     publishHud_();
+                }
+                if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                    std::fprintf(lg,
+                        "[push] cmd '%s' changed=%d handled+published in %lld ms\n",
+                        s.c_str(), changed ? 1 : 0,
+                        (long long)(nowMs_() - cmdT0));
+                    std::fclose(lg);
                 }
             } else if (s.rfind("uf8learn;", 0) == 0) {
                 // "uf8learn;<kind>;<strip>" — arm a UF8 cell learn. kind = HUD
