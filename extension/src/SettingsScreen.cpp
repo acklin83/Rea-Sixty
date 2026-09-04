@@ -20477,9 +20477,46 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 g_newPrimaryMode = 1;
                 g_newUf8Mode     = false;
                 g_newError.clear();
-                std::memset(g_pickerFilter, 0, sizeof(g_pickerFilter));
-                g_pickerSelectedIdx = -1;
+                // ⇨ AND THE PLUG-IN IS ALREADY PICKED. This button exists
+                // because the answer is not in question: the banner names the
+                // plug-in in front of you. Clearing the picker sent Frank into a
+                // tree of 970 to find the one he had just clicked on
+                // (2026-09-04: "anstatt genau das plugin zu laden schickt er
+                // mich in die auswahl"). The selection is not cosmetic either —
+                // Create inserts an instance by the picked FULL name, and falls
+                // back to the match substring only when nothing is picked.
                 if (g_installedFx.empty()) loadInstalledFx_();
+                g_pickerSelectedIdx = -1;
+                for (size_t i = 0; i < g_installedFx.size(); ++i) {
+                    if (g_installedFx[i].name == g_activeUnmappedFx) {
+                        g_pickerSelectedIdx = static_cast<int>(i);
+                        break;
+                    }
+                }
+                if (g_pickerSelectedIdx < 0 && !root.empty()) {
+                    // The banner carries REAPER's identity name, which is not
+                    // always spelled the way the installed list does. The match
+                    // root is the part both agree on.
+                    auto lc = [](std::string v) {
+                        for (auto& c : v)
+                            c = static_cast<char>(std::tolower(
+                                static_cast<unsigned char>(c)));
+                        return v;
+                    };
+                    const std::string want = lc(root);
+                    for (size_t i = 0; i < g_installedFx.size(); ++i) {
+                        if (lc(g_installedFx[i].name).find(want)
+                            != std::string::npos) {
+                            g_pickerSelectedIdx = static_cast<int>(i);
+                            break;
+                        }
+                    }
+                }
+                // Filter the tree down to it as well, so the row is visible
+                // instead of merely selected somewhere below the fold.
+                std::memset(g_pickerFilter, 0, sizeof(g_pickerFilter));
+                std::strncpy(g_pickerFilter, root.c_str(),
+                             sizeof(g_pickerFilter) - 1);
                 ImGui_OpenPopup(ctx, "New User Plug-in Map###fxl_new_popup",
                                 nullptr);
             }
