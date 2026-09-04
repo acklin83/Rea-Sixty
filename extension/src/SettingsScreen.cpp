@@ -14293,7 +14293,43 @@ bool hudSetExtFunc_(void* csTrV, int csFx, int slot, int param, const char* name
 // wenn ich auf UF8 mappen will? … und für BC muss das natürlich auch gehen").
 // The HUD says which one it wants in hud_al_req; the caller resolves the target
 // that goes with it.
+// Forward: the builder itself, wrapped by the cache below.
+static std::string hudBuildAutoLearnUncached_(void* csTrV, int csFx, int mode);
+
+// ⛔ ONCE PER ANSWER, NOT ONCE PER TICK. "hud_al_req" is sticky like
+// "hud_push_req": while the drawer is open the builder runs on EVERY timer
+// tick, and it is the most expensive thing in this file — the whole matcher
+// over every parameter of the plug-in, three dictionary passes each, plus a row
+// for every parameter it did not match. On a Pro-Q that is six hundred
+// parameters per tick, the tick stops keeping time, and the user meets it as a
+// surface that has stopped answering (Frank 2026-09-04).
+// The answer depends on the plug-in, the tab, and the catalog the dictionary
+// learns from, so those are the key. Applying a proposal bumps the catalog
+// generation and invalidates this by itself.
+// ⚠ The cache wraps the builder rather than sitting inside it: that function
+// has several early returns, and a cache that covers only the last one is a
+// cache that lies (learnings #34).
 std::string hudBuildAutoLearn_(void* csTrV, int csFx, int mode)
+{
+    MediaTrack* tr = static_cast<MediaTrack*>(csTrV);
+    if (!tr || csFx < 0) return {};
+    static MediaTrack* s_tr   = nullptr;
+    static int         s_fx   = -1;
+    static int         s_mode = -99;
+    static int         s_gen  = -1;
+    static int         s_pc   = -1;
+    static std::string s_cached;
+    const int gen = user_plugins::generation();
+    const int pc  = TrackFX_GetNumParams(tr, csFx);
+    if (s_tr == tr && s_fx == csFx && s_mode == mode
+        && s_gen == gen && s_pc == pc)
+        return s_cached;
+    s_cached = hudBuildAutoLearnUncached_(csTrV, csFx, mode);
+    s_tr = tr; s_fx = csFx; s_mode = mode; s_gen = gen; s_pc = pc;
+    return s_cached;
+}
+
+static std::string hudBuildAutoLearnUncached_(void* csTrV, int csFx, int mode)
 {
     MediaTrack* tr = static_cast<MediaTrack*>(csTrV);
     if (!tr || csFx < 0) return {};

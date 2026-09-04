@@ -37799,6 +37799,15 @@ bool g_throwCameFromImGuiFrame = false;
 // with an unreadable crash report. The 2026-08-14 abort was exactly that — a
 // size_t underflow in composeValueLine, three lines of arithmetic, one lost
 // afternoon.
+// Per-section timings for the slow-tick line below. Main thread only, reset at
+// the top of every tick.
+static int64_t g_secHudMs = 0;
+struct TickSection_ {
+    int64_t* dst; int64_t t0;
+    explicit TickSection_(int64_t* d) : dst(d), t0(nowMs_()) {}
+    ~TickSection_() { *dst += nowMs_() - t0; }
+};
+
 void onTimer()
 {
     // ⇨ THE WHOLE TICK, NOT JUST OUR PAINTER.
@@ -37812,6 +37821,12 @@ void onTimer()
     {
         static int64_t sPrevEnd = 0, sWorstGap = 0, sWorstRun = 0;
         const int64_t t0 = nowMs_();
+        // ⇨ AND WHICH PART OF IT. "the tick is slow" names the symptom and not
+        // the cause; twice this week that cost a round of guessing. The few
+        // blocks that can plausibly take hundreds of milliseconds report their
+        // own time, and the slow-tick line prints the breakdown. Zeroed here,
+        // so the numbers always belong to the tick being reported.
+        g_secHudMs = 0;
         // ⇨ AND RECOVER FROM IT. Measured 2026-08-29: selecting the master
         // stalls REAPER's timer (onTimer GAP 1085 ms) while the pacer keeps
         // emitting from its own thread. The surface comes back with its plane
@@ -37839,8 +37854,10 @@ void onTimer()
                 if (run > 300 && run > *worstRun) {
                     *worstRun = run;
                     if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
-                        std::fprintf(lg, "[uf1] onTimer RAN %lld ms (tick itself is slow)\n",
-                                     (long long)run);
+                        std::fprintf(lg,
+                            "[uf1] onTimer RAN %lld ms (tick itself is slow; "
+                            "HUD publish %lld ms)\n",
+                            (long long)run, (long long)g_secHudMs);
                         std::fclose(lg);
                     }
                 }
@@ -40628,7 +40645,11 @@ void onTimerBody_()
     // of the project-change branch above.
     {
         static int s_hudTick = 0;
-        if (++s_hudTick >= 6) { s_hudTick = 0; publishHud_(); }
+        if (++s_hudTick >= 6) {
+            s_hudTick = 0;
+            TickSection_ sec(&g_secHudMs);
+            publishHud_();
+        }
     }
 
     // Phase 2.8b — UC1 LCD takeover for Nav Mode. Runs after poll() so
