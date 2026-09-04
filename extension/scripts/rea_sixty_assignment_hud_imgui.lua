@@ -972,7 +972,9 @@ EXT.alClick = function(mx, my)
           if EXT.alTick[r.key] then spec[#spec + 1] = r.spec; n = n + 1 end
         end
         if n > 0 then
-          sendCmd("alapply;" .. table.concat(spec, ","))
+          local mode = (activeTab == "bc") and 1 or (activeTab == "uf8") and 2
+                    or (activeTab == "uf1") and 3 or 0
+          sendCmd("alapply;" .. mode .. ";" .. table.concat(spec, ","))
           EXT.alTick = {}
           hintText, hintFrames = n .. " proposals applied", 90
         else
@@ -2506,7 +2508,10 @@ local function render()
   else
     EXT.alRects, EXT.alBtns = {}, {}
   end
-  reaper.SetExtState(SECT, "hud_al_req", EXT.al and "1" or "", false)
+  -- The request names the TAB, not just "on": each tab has its own target, and
+  -- the UF8 / UF1 ones can sit on a different track than the UC1's. Proposing
+  -- for the wrong plug-in is worse than proposing nothing.
+  reaper.SetExtState(SECT, "hud_al_req", EXT.al and activeTab or "", false)
 
   frame = frame + 1
   -- "idx" (legacy) or "idx;layer" — the layer is the modifier overlay the bind

@@ -161,8 +161,10 @@ bool reasixty_hudSetExtFunc(void* csTr, int csFx, int slot, int param,
                             const char* name);
 // AutoLearn's proposals for the HUD, and the apply path for the rows it ticked.
 // Built only on request (hud_al_req) — the matcher is not free.
-std::string reasixty_hudBuildAutoLearn(void* csTr, int csFx);
-bool reasixty_hudApplyAutoLearn(void* csTr, int csFx, const char* spec);
+// mode: 0 CS, 1 BC, 2 UF8, 3 UF1 — the panel builds for the tab you are on, so
+// the caller resolves the target that goes with it.
+std::string reasixty_hudBuildAutoLearn(void* tr, int fx, int mode);
+bool reasixty_hudApplyAutoLearn(void* tr, int fx, int mode, const char* spec);
 bool        reasixty_hudSetField(int idx, int layer, int field, double v,
                                  void* csTr, int csFx, void* bcTr, int bcFx);
 bool        reasixty_hudSetCurve(int idx, int layer, const char* csv,
@@ -15661,9 +15663,33 @@ void publishHud_()
             // The panel writes hud_al_req while it is open; with it clear we
             // publish nothing and the matcher never runs.
             {
+                // The request names the TAB: "cs" | "bc" | "uf8" | "uf1". Each
+                // resolves its own target — the UF8 and UF1 tabs can be on a
+                // different track than the UC1's, and proposing for the wrong
+                // plug-in is worse than proposing nothing.
                 const char* rq = GetExtState("rea_sixty", "hud_al_req");
-                const std::string al = (rq && *rq == '1')
-                    ? reasixty_hudBuildAutoLearn(csTr, csFx) : std::string();
+                const std::string rqs = rq ? rq : "";
+                int alMode = -1;
+                MediaTrack* alTr = nullptr; int alFx = -1;
+                if      (rqs == "cs")  { alMode = 0; alTr = csTr;     alFx = csFx; }
+                else if (rqs == "bc")  { alMode = 1; alTr = bcTr;     alFx = bcFx; }
+                else if (rqs == "uf8") { alMode = 2; alTr = uf8TgtTr; alFx = uf8TgtFx; }
+                else if (rqs == "uf1") {
+                    // The UF1 target is resolved further down this function, so
+                    // take the last one we published — that is precisely what
+                    // the HUD's UF1 tab is showing. One tick behind at worst,
+                    // and this panel is opened by hand.
+                    alMode = 3;
+                    int tn = -1, tf = -1;
+                    if (std::sscanf(g_hudUf1TargetPublished.c_str(), "%d;%d",
+                                    &tn, &tf) == 2 && tn >= 0 && tf >= 0) {
+                        alTr = (tn == 0) ? GetMasterTrack(nullptr)
+                                         : GetTrack(nullptr, tn - 1);
+                        alFx = tf;
+                    }
+                }
+                const std::string al = (alMode >= 0)
+                    ? reasixty_hudBuildAutoLearn(alTr, alFx, alMode) : std::string();
                 if (al != g_hudAutoLearnPublished) {
                     g_hudAutoLearnPublished = al;
                     SetExtState("rea_sixty", "hud_al", al.c_str(), false);
@@ -38725,10 +38751,31 @@ void onTimerBody_()
                 // The spec carries the bindings themselves, not row indices, so
                 // a map that moved under the panel cannot shift what a tick
                 // meant. See hudApplyAutoLearn_.
+                // "alapply;<mode>;<spec>" — the mode is the tab the proposals
+                // were made for, so the apply lands on the same plug-in the
+                // panel was describing.
                 MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
                 int csFx = -1, bcFx = -1;
                 activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
-                if (reasixty_hudApplyAutoLearn(csTr, csFx, s.c_str() + 8)) {
+                const int alMode = std::atoi(s.c_str() + 8);
+                const auto alSemi = s.find(';', 8);
+                MediaTrack* alTr = csTr; int alFx = csFx;
+                if (alMode == 1) { alTr = bcTr; alFx = bcFx; }
+                else if (alMode >= 2) {
+                    // The UF8 / UF1 targets are published for the HUD; read them
+                    // back rather than resolving them a second, divergent way.
+                    const char* t = GetExtState("rea_sixty",
+                        alMode == 2 ? "hud_uf8_target" : "hud_uf1_target");
+                    int tn = -1, tf = -1;
+                    if (t && std::sscanf(t, "%d;%d", &tn, &tf) == 2 && tn >= 0 && tf >= 0) {
+                        alTr = (tn == 0) ? GetMasterTrack(nullptr)
+                                         : GetTrack(nullptr, tn - 1);
+                        alFx = tf;
+                    } else { alTr = nullptr; alFx = -1; }
+                }
+                if (alSemi != std::string::npos
+                    && reasixty_hudApplyAutoLearn(alTr, alFx, alMode,
+                                                  s.c_str() + alSemi + 1)) {
                     g_hudAssignPublished.clear();     // the mockup changed
                     g_hudUsedByPublished.clear();     // and the where-used column
                     g_hudAutoLearnPublished.clear();  // and the proposals age out
