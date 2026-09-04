@@ -222,6 +222,13 @@ local EXT = { H = 96, open = false, rects = {}, last = nil, btn = nil }
 -- Verhältnis des Mockups" (2026-09-03). Growing the window and forgetting to
 -- reserve is the same bug in both directions; RW was simply written first.
 EXT.bh = function() return EXT.open and EXT.H or 0 end
+-- Cell context menu. The slot and its current contents are captured at
+-- right-click time, not read from EXT.rects when the menu draws: the rects are
+-- rebuilt every frame and a rename dialog can outlive several of them.
+EXT.popup = "##hud_ext_ctx"
+EXT.ctx   = -1
+EXT.ctxName  = ""
+EXT.ctxParam = -1
 local paramPanelOpen   = false
 local RW               = 0
 local paramRects       = {}
@@ -3851,6 +3858,37 @@ end
 
 -- V-Pot bank right-click menu: rename / clear the bank's display name (the
 -- hardware Top-Soft-Key label). Acts on ctxUf8Bank via the hud_cmd channel.
+EXT.menu = function()
+  if not reaper.ImGui_BeginPopup(ctx, EXT.popup) then return end
+  if EXT.ctx >= 0 then
+    reaper.ImGui_Text(ctx, "EXT FUNCS " .. (EXT.ctx + 1))
+    reaper.ImGui_Separator(ctx)
+    if reaper.ImGui_MenuItem(ctx, "Rename\xE2\x80\xA6") then
+      -- The name is the LCD header on the UC1 and, truncated, the carousel
+      -- entry — so an empty one is legal and just leaves the slot unlabelled.
+      local ok, val = reaper.GetUserInputs("EXT FUNCS name", 1,
+        "Name (empty = none):,extrawidth=160", (EXT.ctxName or ""):gsub(",", " "))
+      if ok then
+        sendCmd("extfuncname;" .. EXT.ctx .. ";" .. (val:gsub("[;\n]", " ")))
+      end
+    end
+    if EXT.ctxParam >= 0 then
+      if reaper.ImGui_MenuItem(ctx, "Clear parameter") then
+        sendCmd("extfunc;" .. EXT.ctx .. ";-1")
+      end
+    else
+      reaper.ImGui_BeginDisabled(ctx)
+      reaper.ImGui_MenuItem(ctx, "Clear parameter")
+      reaper.ImGui_EndDisabled(ctx)
+    end
+    reaper.ImGui_Separator(ctx)
+    reaper.ImGui_BeginDisabled(ctx)
+    reaper.ImGui_MenuItem(ctx, "Pick a param in the list, then click a cell")
+    reaper.ImGui_EndDisabled(ctx)
+  end
+  reaper.ImGui_EndPopup(ctx)
+end
+
 local function drawUf8BankContextMenu()
   if ctxUf8Bank < 0 then return end
   reaper.ImGui_PushStyleVar(ctx, reaper.ImGui_StyleVar_WindowPadding(), 10, 8)
@@ -4056,7 +4094,16 @@ local function loop()
       if reaper.ImGui_IsMouseClicked(ctx, 1) and ly >= 0 then
         -- Content-area right-click only; the title bar keeps ReaImGui's own
         -- dock menu (negative ly = title bar, since OY is the content origin).
-        if activeTab == "uf1" then
+        local extHit = nil
+        if EXT.open then
+          for _, r in ipairs(EXT.rects) do
+            if hitRect(r, lx, ly) then extHit = r end
+          end
+        end
+        if extHit then
+          EXT.ctx, EXT.ctxName, EXT.ctxParam = extHit.slot, extHit.name, extHit.param
+          reaper.ImGui_OpenPopup(ctx, EXT.popup)
+        elseif activeTab == "uf1" then
           local sk, pos = uf1CellAt(lx, ly)
           if sk then
             ctxUf1Sk, ctxUf1Pos = sk, pos
@@ -4258,6 +4305,7 @@ local function loop()
     drawUf1ControlContextMenu()
     drawUf8BankContextMenu()
     drawUf8StripColPopups()
+    EXT.menu()
 
     -- Persist geometry on change.
     local px, py = reaper.ImGui_GetWindowPos(ctx)
