@@ -35594,7 +35594,14 @@ void refreshFxActiveLayer_()
     // When right-Alt is down, drop the synthetic Ctrl so AltGr resolves to the
     // Option modifier alone. Frank 2026-06-16.
     if ((GetAsyncKeyState(VK_RMENU) & 0x8000) != 0) ctrl = false;
-    // ⇨ AND THE COMBINED LAYER IS THE TWO LEFT KEYS, SAID PLAINLY. The rule
+    // ⇨ AND THE COMBINED LAYER IS THE TWO LEFT KEYS, SAID PLAINLY. Note what
+    // is NOT side-specific: hostAltHeld_/hostCtrlHeld_ read VK_MENU/VK_CONTROL,
+    // so the Option and Control layers answer to EITHER side. All three layers
+    // therefore live in the bottom-left corner and are held with one hand,
+    // which is the whole point: the other hand is on the UC1. AltGr is an
+    // extra route to Option, never a requirement. Say it that way round in the
+    // docs (Frank 2026-09-04: "WIE SOLL ICH EIN UC1 MIT EINER HAND BEDIENEN?").
+    // The rule
     // used to be "the left Alt, because the right one is spoken for, plus any
     // Control" — true, and useless to a person: it describes what the API
     // happens to test rather than a gesture anyone can learn. Frank 2026-09-04:
