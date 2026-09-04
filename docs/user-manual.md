@@ -1350,6 +1350,8 @@ The full set also includes **Delete FX**, **Move FX up** and **Move FX down**.
 
 A long press is half a second and fires when you let go. Long-press *replaces* the modifier rather than combining with it — Shift plus a long press runs the Long-press action, not the +Shift one.
 
+A row that cannot reach this particular bank is shown greyed out with the reason instead of a drop-down. That happens when the modifier is already spent getting to the bank: if the bank's Shift set carries a dynamic bank of its own, Shift switches to that bank rather than reaching this one, and if you are editing a bank that *is* a modifier set, all three modifier rows are out. Push and Long-press always work. The setting itself stays global; only the row is unavailable here.
+
 > **Delete FX removes the plug-in immediately, with no confirmation.** Think before you put it on Push.
 
 *Focus FX* moves the surface onto that plug-in and re-points an already-open plug-in window at it. It does not open a window that was closed — use *Float* for that.

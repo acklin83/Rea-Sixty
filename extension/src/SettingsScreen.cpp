@@ -5784,7 +5784,15 @@ void drawTrackColourPalette_(ImGui_Context* ctx)
 // surface silently inheriting settings it never displays: the UF1's dynamic FX
 // bank fires these exact gestures and had no way to reach them
 // (Frank 2026-08-18). One function, so the two can never drift apart.
-static void drawFxBankGestures_(ImGui_Context* ctx)
+// setOwnsThisBank: the bank being edited belongs to a MODIFIER SET, so that
+// modifier is spent getting here and the press fires the bank's plain push
+// (dispatchDynamicPress_ forces gesture 0). shiftSetIsItsOwn: we are editing
+// Plain and the Shift set of the same bank carries its own dynamic kind, so
+// Shift switches banks instead of reaching this one. Either way the row would
+// promise something the surface cannot do, so it says so instead.
+static void drawFxBankGestures_(ImGui_Context* ctx,
+                                bool setOwnsThisBank = false,
+                                bool shiftSetIsItsOwn = false)
 {
     ImGui_TextDisabled(ctx,
         "FX-key gestures (global — applies to every FX bank):");
@@ -5798,6 +5806,18 @@ static void drawFxBankGestures_(ImGui_Context* ctx)
         "Push", "+Shift", "+Cmd", "+Ctrl", "Long-press",
     };
     for (int g = 0; g < 5; ++g) {
+        const char* why = nullptr;
+        if (setOwnsThisBank && g >= 1 && g <= 3)
+            why = "the modifier already got you to this bank";
+        else if (shiftSetIsItsOwn && g == 1)
+            why = "this bank's Shift set is a bank of its own";
+        if (why) {
+            char line[160];
+            std::snprintf(line, sizeof(line), "%s   not on this bank: %s",
+                          kGesture[g], why);
+            ImGui_TextDisabled(ctx, line);
+            continue;
+        }
         const int cur = reasixty_fxBankOp(g);
         char cid[24]; std::snprintf(cid, sizeof(cid), "##fxop%d", g);
         ImGui_Text(ctx, kGesture[g]);
@@ -5937,7 +5957,11 @@ static void drawDynamicBankSettings_(ImGui_Context* ctx, int layer, int quick,
 
 
         if (curKind == DynamicBankKind::FxBank) {
-            drawFxBankGestures_(ctx);
+            drawFxBankGestures_(ctx,
+                mod != 0 && uf8::bindings::getSubBankDynamic(layer, quick, sub, mod)
+                              != DynamicBankKind::None,
+                mod == 0 && uf8::bindings::getSubBankDynamic(layer, quick, sub, 1)
+                              != DynamicBankKind::None);
         } else if (curKind == DynamicBankKind::TrackColours) {
             drawTrackColourPalette_(ctx);
         }
@@ -7433,7 +7457,14 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 }
                 ImGui_Spacing(ctx);
                 if (curKind == DynamicBankKind::FxBank) {
-                    drawFxBankGestures_(ctx);
+                    drawFxBankGestures_(ctx,
+                        g_slotEditModIdx != 0
+                            && uf8::bindings::getUf1SoftBankDynamic(
+                                   uf1Bank, g_slotEditModIdx)
+                                 != DynamicBankKind::None,
+                        g_slotEditModIdx == 0
+                            && uf8::bindings::getUf1SoftBankDynamic(uf1Bank, 1)
+                                 != DynamicBankKind::None);
                     ImGui_Spacing(ctx);
                 }
                 if (curKind == DynamicBankKind::Favourites) {
