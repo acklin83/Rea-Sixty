@@ -201,6 +201,18 @@ static const SeedRow kCsSeeds[] = {
     {"low mid q",        18, Domain::ChannelStrip, "EQ", "LMF Q"},
     {"lo mid q",         18, Domain::ChannelStrip, "EQ", "LMF Q"},
     // -- EQ LF --
+    // SSL silk names and their spelled-out synonyms (Frank 2026-09-03):
+    // LF = Low, Bass · LMF = Low Mid · HMF = High Mid · HF = High, Treble.
+    // Third-party strips name the bands either way, and a plug-in that says
+    // "Treble Gain" means the same knob SSL prints "HF".
+    {"treble gain",       9, Domain::ChannelStrip, "EQ", "HF Gain"},
+    {"treble freq",      10, Domain::ChannelStrip, "EQ", "HF Freq"},
+    {"treble frequency", 10, Domain::ChannelStrip, "EQ", "HF Freq"},
+    {"treble type",       8, Domain::ChannelStrip, "EQ", "HF Type"},
+    {"bass gain",        20, Domain::ChannelStrip, "EQ", "LF Gain"},
+    {"bass freq",        19, Domain::ChannelStrip, "EQ", "LF Freq"},
+    {"bass frequency",   19, Domain::ChannelStrip, "EQ", "LF Freq"},
+    {"bass type",        21, Domain::ChannelStrip, "EQ", "LF Type"},
     {"lf freq",          19, Domain::ChannelStrip, "EQ", "LF Freq"},
     {"lf frequency",     19, Domain::ChannelStrip, "EQ", "LF Freq"},
     {"low frequency",    19, Domain::ChannelStrip, "EQ", "LF Freq"},
@@ -447,6 +459,12 @@ bool trySubstring(const Dict& dict, const std::string& norm, Match& out)
         if (pat.size() < 3) continue;  // skip very short patterns for substring
         if (norm.find(pat) != std::string::npos) {
             // Prefer longer pattern matches (more specific).
+            // ⚠ Scoring by COVERAGE of the name instead of pattern length was
+            // tried on 2026-09-03 and reverted: it fixed "EQ High Gain" but
+            // took Input Trim, Fader Level and HMF Freq away from the params
+            // that had them, and gave HMF Freq to "HPF Frequency". Measured, not
+            // guessed — the real defect was the pass chain short-circuiting, and
+            // that is fixed where it lives, in suggestSlots.
             float conf = 0.8f + static_cast<float>(pat.size()) * 0.005f;
             if (entry.sourceCount >= 3) conf += 0.05f;
             if (conf > best.confidence) {
@@ -587,10 +605,21 @@ std::vector<Suggestion> suggestSlots(
         // (2026-05-24).
         if (extractChannelIndex(norm) >= 1) continue;
 
-        Match m{};
-        if (tryExact(dict, norm, m) ||
-            trySubstring(dict, norm, m) ||
-            tryToken(dict, tokenise(norm), m))
+        // ⛔ THE BEST OF THE THREE, NOT THE FIRST THAT ANSWERS. Short-circuiting
+        // meant an EXACT hit was taken even when it scored lower than a
+        // substring one — and an exact hit learned from the user's own map is
+        // capped at 0.75 on purpose, so a perfect name match routinely lost to
+        // a fragment of an unrelated parameter (Frank's "EQ High Gain", 2026-09-03).
+        // Each pass reports its own confidence; picking the highest is what
+        // those numbers were for.
+        Match m{}, cand{};
+        bool have = false;
+        if (tryExact(dict, norm, cand)) { m = cand; have = true; }
+        if (trySubstring(dict, norm, cand)
+            && (!have || cand.confidence > m.confidence)) { m = cand; have = true; }
+        if (tryToken(dict, tokenise(norm), cand)
+            && (!have || cand.confidence > m.confidence)) { m = cand; have = true; }
+        if (have)
         {
             // Semantic-keyword guard. Some words are too distinctive
             // to ignore: when one side carries the keyword and the

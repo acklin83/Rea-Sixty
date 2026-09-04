@@ -14294,13 +14294,24 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx, int mode)
     // against Frank's ValhallaPlate and EchoBoy maps, 2026-09-03.
     // No map yet → UC1 slots only (see above); the UF8 passes need a map that
     // says it wants a UF8 layer.
-    // With a map: as the FX-Learn page gates it. Without one: the UF8 tab (or a
-    // detected matrix) wants the UF8 passes, the UC1 tabs want the slots only.
-    const bool wantVpots  = live.empty() ? m->uf8Mode  : (mode == 2);
-    const bool wantFaders = live.empty() ? !m->uf8Mode : (mode == 2);
+    // ⛔ THE TAB DECIDES, for a mapped plug-in exactly as for a virgin one. This
+    // copied the FX-Learn page's gating at first (V-Pots for a UF8 map, generic
+    // param-faders for one without) — and that page has no tabs, so on the
+    // Channel Strip tab it proposed UF8 faders for a channel strip (Frank
+    // 2026-09-03: "wieso will AutoLearn Sachen auf UF8 Fader mappen wenn ich im
+    // Channel Strip bin?"). Standing on the CS tab means the UC1's channel
+    // strip; the UF8 passes belong to the UF8 tab and nowhere else.
+    const bool uf8Tab     = (mode == 2);
+    const bool wantVpots  = uf8Tab;
+    // The generic params-onto-faders pass is a FALLBACK, not a partner: it lays
+    // every usable param on a fader, and the V-Pot pass has just laid the same
+    // ones on knobs. Measured on ValhallaPlate and EchoBoy — every parameter
+    // twice. So it runs only when the V-Pot pass came back empty.
+    bool anyVpot = false;
     for (const auto& u : wantVpots
              ? autolearn::suggestUf8Banks(src, 1)
              : std::vector<autolearn::Uf8Suggestion>{}) {
+        anyVpot = true;
         if (u.vst3Param < 0) continue;
         if (!out.empty()) out += ';';
         out += "8\t" + std::to_string(u.faderBank)
@@ -14326,7 +14337,8 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx, int mode)
             if (sg.kind == StKind::Fader && sg.faderBank >= 0 && sg.faderBank < 2
                 && sg.strip >= 0 && sg.strip < 8)
                 takenFader[sg.faderBank][sg.strip] = true;
-        for (const auto& sg : wantFaders
+        const bool fadersAsFallback = uf8Tab && !anyVpot;
+        for (const auto& sg : fadersAsFallback
                  ? autolearn::suggestUf8ParamFaders(src, kUserUf8FaderBankCount)
                  : std::vector<autolearn::Uf8StripSuggestion>{}) {
             if (sg.faderBank < 0 || sg.faderBank >= 2) continue;
