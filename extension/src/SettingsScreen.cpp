@@ -14190,6 +14190,10 @@ bool hudSetExtFunc_(void* csTrV, int csFx, int slot, int param, const char* name
 //
 //   c\t<linkIdx>\t<param>\t<paramName>\t<slotName>\t<confidence 0..100>
 //   8\t<fb>\t<vb>\t<strip>\t<param>\t<paramName>\t<confidence 0..100>
+//   s\t<kind 0=Fader 1=Cut 2=Solo 3=Sel>\t<fb>\t<strip>\t<param>\t<paramName>\t<conf>
+//
+// The kind travels as a NUMBER, not a letter, so the apply spec stays entirely
+// numeric after its leading kind char and the parser has one job.
 //
 // Confidence travels as an INTEGER PERCENT, not a float: the value is only ever
 // shown as "82%", and a decimal point that follows the machine's locale is a
@@ -14233,6 +14237,40 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx)
              + "\t" + std::to_string(u.vst3Param)
              + "\t" + scrub(u.paramName)
              + "\t" + pct(u.confidence);
+    }
+    // Per-strip controls. The CH<N> pass first, then the generic
+    // params-onto-faders pass with the faders that pass already claimed removed
+    // — the same merge the FX-Learn page does, so the two never fight over one
+    // physical fader.
+    {
+        using StKind = autolearn::Uf8StripSuggestion::Kind;
+        auto strips = autolearn::suggestUf8Strips(m->paramSnapshot,
+                                                  kUserUf8FaderBankCount);
+        bool takenFader[2][8] = {};
+        for (const auto& sg : strips)
+            if (sg.kind == StKind::Fader && sg.faderBank >= 0 && sg.faderBank < 2
+                && sg.strip >= 0 && sg.strip < 8)
+                takenFader[sg.faderBank][sg.strip] = true;
+        for (const auto& sg : autolearn::suggestUf8ParamFaders(
+                 m->paramSnapshot, kUserUf8FaderBankCount)) {
+            if (sg.faderBank < 0 || sg.faderBank >= 2) continue;
+            if (sg.strip < 0 || sg.strip >= 8) continue;
+            if (takenFader[sg.faderBank][sg.strip]) continue;
+            strips.push_back(sg);
+        }
+        for (const auto& sg : strips) {
+            if (sg.vst3Param < 0) continue;
+            const int kind = (sg.kind == StKind::Fader) ? 0
+                           : (sg.kind == StKind::Cut)   ? 1
+                           : (sg.kind == StKind::Solo)  ? 2 : 3;
+            if (!out.empty()) out += ';';
+            out += "s\t" + std::to_string(kind)
+                 + "\t" + std::to_string(sg.faderBank)
+                 + "\t" + std::to_string(sg.strip)
+                 + "\t" + std::to_string(sg.vst3Param)
+                 + "\t" + scrub(sg.paramName)
+                 + "\t" + pct(sg.confidence);
+        }
     }
     return out;
 }
@@ -14289,6 +14327,18 @@ bool hudApplyAutoLearn_(void* csTrV, int csFx, const char* spec)
                 }
                 it->vst3Param = param;
                 it->inverted  = false;
+                any = true;
+            } else if (rec[0] == 's' && f.size() >= 4) {
+                const int kind = f[0];
+                const int fb = std::clamp(f[1], 0, kUserUf8FaderBankCount - 1);
+                const int st = std::clamp(f[2], 0, 7);
+                auto& sb = m.uf8.strips[fb][st];
+                switch (kind) {
+                    case 0: sb.faderVst3Param = f[3]; break;
+                    case 1: sb.cutVst3Param   = f[3]; break;
+                    case 2: sb.soloVst3Param  = f[3]; break;
+                    default: sb.selVst3Param  = f[3]; break;
+                }
                 any = true;
             } else if (rec[0] == '8' && f.size() >= 4) {
                 const int fb = std::clamp(f[0], 0, kUserUf8FaderBankCount - 1);

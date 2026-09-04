@@ -1662,6 +1662,17 @@ EXT.alDraw = function(x0, top, PW)
         EXT.alRows[#EXT.alRows + 1] =
           { key = rec, kind = "c", spec = "c:" .. f[2] .. ":" .. f[3],
             pname = f[4], target = f[5], conf = tonumber(f[6]) or 0 }
+      elseif f[1] == "s" and #f >= 7 then
+        -- Per-strip control: Fader / Cut / Solo / Sel on (fader bank, strip).
+        -- The kind arrives as a number so the apply spec stays numeric.
+        local kn = ({ [0] = "Fader", [1] = "Cut", [2] = "Solo", [3] = "Sel" })
+                     [tonumber(f[2])] or "?"
+        EXT.alRows[#EXT.alRows + 1] =
+          { key = rec, kind = "s",
+            spec = "s:" .. f[2] .. ":" .. f[3] .. ":" .. f[4] .. ":" .. f[5],
+            pname = f[6],
+            target = ("%s %d.%d"):format(kn, f[3] + 1, f[4] + 1),
+            conf = tonumber(f[7]) or 0 }
       elseif f[1] == "8" and #f >= 7 then
         EXT.alRows[#EXT.alRows + 1] =
           { key = rec, kind = "8",
