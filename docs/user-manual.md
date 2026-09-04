@@ -1205,7 +1205,7 @@ They were numbered 8 and 9 rather than 1 and 2 because set numbers are addresses
 
 The number matters because it is an address. **Soft-Key Set: engage (param 1-9)** is a bindable action, so a set sits on any key, foot-switch, Stream Deck tile or keyboard shortcut you like — the Quick button is one way in, not the only one. Engaging a set leaves the soft-key bank where that layer had it, so coming back puts you on the bank you were using.
 
-The matrix is nine rows by six columns. Each row is a set, with its **number** in front and a **name** you can type beside it — the number stays visible once you have named it, because *Soft-Key Set: engage* takes the number as its parameter; each cell is one of its banks, showing that bank's name, or its dynamic kind, or a dash when it holds nothing. The engaged cell is marked, and clicking a cell engages that bank and opens it in the editor below. **Plain and Shift sit in the matrix header**, to the right of the last bank column, because the matrix shows one of the two sets at a time and which one has to be readable inside it.
+The matrix is nine rows by six columns. Each row is a set, with its **number** in front and a **name** you can type beside it — the number stays visible once you have named it, because *Soft-Key Set: engage* takes the number as its parameter; each cell is one of its banks, showing that bank's name, or its dynamic kind, or a dash when it holds nothing. The engaged cell is marked, and clicking a cell engages that bank. **The cell is where you work on the bank**: double-click it to rename it in place, right-click it for everything else — copy, cut, paste and clear the bank, its dynamic kind, the presets and the factory banks. The right-click engages the cell first, so what you edit is always what the surface is showing. What stays in the editor below the matrix are the *settings* of a dynamic bank (its paging control, the FX gestures, the colour palette) and the bank's LED colours. **Plain and Shift sit in the matrix header**, to the right of the last bank column, because the matrix shows one of the two sets at a time and which one has to be readable inside it.
 
 **The set comes first in every name the surface announces**, so you always know which of the nine you are in: a bank called *KHE Amps* in a set called *Editing* reads `Editing, KHE Amps`. Name neither and it reads `Set 2, Soft 3`. The one exception is Sets 8 and 9, where the set's own default name is already *SSL Factory CS* and repeating it would say the same thing twice — rename the set and it comes through like any other.
 
@@ -1221,6 +1221,8 @@ Each set is a **full bank**, not just a second list of actions: its own actions,
 
 **A preset saved from Plain takes the Shift set with it**, whenever that set holds anything, because a bank is both sets and a preset of half of it would rebuild half a bank. Such a preset replaces **both** sets when you recall it, whichever one you happen to be editing, and the confirm dialog says so before you press it, the same rule a factory bank longer than eight keys follows. Save while you are on Shift and you get that one set, as before; a preset with no Shift half still lands in whichever set you recall it into, so a Plain preset can be recalled into Shift.
 
+**Copy, cut and paste a whole bank.** The cell's right-click menu moves a bank the way the preset does, without naming it: copy takes the eight slots, the bank's name and its dynamic kind, cut takes them and empties the cell, paste writes them into the cell you clicked. Copying from Plain takes the Shift set along when that set holds something, exactly as saving a preset does, and cut then clears both. Pasting reproduces a dynamic bank as a dynamic bank, which is where a copy differs from a preset recall. The clipboard lives for the session, not in the config.
+
 **Each set can be its own dynamic bank.** Pick a kind with the header switch on Plain and Plain's bank becomes dynamic; pick one on Shift and that set becomes a bank of its own, so FX on Plain and Track Colours on Shift is a thing you can build. A set left on *Off (take Plain's bank)* does exactly that, which is how a set behaves out of the box.
 
 When a bank is **dynamic** its keys come from the focused track. On Plain's bank the modifiers still run the FX-key gestures, except on a key you assigned in that set, which fires instead, so nothing you were already using goes away. A set with a bank of **its own** carries no gestures: holding the modifier is how you reached that bank, so pressing a key there is that bank's own push. A long press is still a long press either way.
@@ -1233,7 +1235,7 @@ This works with no UF8 attached, so you can still walk through every set and ban
 
 ### Factory Rea-Sixty soft-key banks
 
-In the bank editor there is a **Rea-Sixty factory banks** section. Pick a curated bank from the combo and **Recall into this bank**, or **Load full set → Layer 1 / Quick 3** to drop all five into Layer 1 / Quick 3's six soft-key banks at once, leaving one place free.
+Right-click the bank's cell in the matrix and open **Rea-Sixty factory banks**. Picking one recalls it into that cell, and **Load the full set into Layer 1 / Quick 3** drops all five into Layer 1 / Quick 3's six soft-key banks at once, leaving one place free. A bank that fills both sets is marked *(Plain + Shift)* in the menu.
 
 **A bank with more than eight entries fills both sets.** Eight keys is one set, and a curated list longer than that would otherwise be cut off — which is how the Encoder Modes bank used to show eight of the fifteen modes. Such a bank writes Plain from its first eight and Shift from the rest, so recalling it replaces **both** sets of that bank, and the confirm dialog says so.
 
@@ -1253,7 +1255,7 @@ These are built only from Rea-Sixty's own actions; generic DAW actions (deselect
 
 ### Naming a soft-key bank
 
-Open a bank cell in the matrix and the editor starts with a **Bank name** field. What you type there is what the bank is called on screen: in the mode-change banner when you switch to it, and in the focused-track panel's *UF8 soft-key bank name* element. The UF8 has no display of its own to announce it on, which is why both of those are on screen rather than on the surface.
+**Double-click the bank's cell** in the matrix and type. (*Rename…* in the cell's right-click menu does the same thing.) Enter or a click elsewhere commits, Escape leaves the name alone. What you type is what the bank is called on screen: in the mode-change banner when you switch to it, and in the focused-track panel's *UF8 soft-key bank name* element. The UF8 has no display of its own to announce it on, which is why both of those are on screen rather than on the surface.
 
 The name belongs to one **modifier set**, like everything else about a soft-key bank, so Plain and Shift can be two differently named banks on one key.
 
@@ -1267,7 +1269,7 @@ The field is never empty: with no name of your own it carries the name the bank 
 
 A normal soft-key bank holds eight fixed assignments. A **dynamic** bank computes its eight keys live from whatever track you are looking at — its plug-ins, for instance — so the keys change as you move around the session.
 
-Open a bank cell in the matrix and look for the **Dynamic bank** section. The dropdown offers:
+Right-click the bank's cell in the matrix and open **Dynamic bank**. The kinds are:
 
 | Setting | What the eight keys become |
 |---|---|
@@ -1281,7 +1283,7 @@ Open a bank cell in the matrix and look for the **Dynamic bank** section. The dr
 
 The three favourite kinds differ in one thing only. The first follows the focus, which is what you want when one bank should serve both. The other two do not, so a rig can carry its channel strips on one bank and its bus comps on another and both are always what they say. All three read the plug-in's short name onto the key, live, and light the key that is on the track.
 
-The choice is stored per bank, so each of the six banks in a set can be dynamic or static independently. While a bank is dynamic its eight stored slots are ignored — they are not lost, and turning the bank back to `Off` restores them.
+The choice is stored per bank, so each of the six banks in a set can be dynamic or static independently. While a bank is dynamic its eight stored slots are ignored — they are not lost, and turning the bank back to `Off` restores them. Everything a kind can be *tuned* with stays under the matrix: the FX bank's paging control, the colour palette, and the warning about slots you left under a held modifier, which beat the computed key.
 
 A dynamic bank announces itself in three places, so you never edit slots that cannot fire:
 
