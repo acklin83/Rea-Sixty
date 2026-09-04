@@ -8442,7 +8442,12 @@ paramNamesFor_(const UserPluginMap& map, const EditingFx& fx, int pcount)
     static std::string s_match;
     static int64_t     s_at = 0;
     static std::vector<std::string> s_names;
-    const int     gen = user_plugins::generation();
+    // ⚠ The catalog generation belongs in the key ONLY on the snapshot path.
+    // A live plug-in's parameter names have nothing to do with our catalog, and
+    // keying on the generation there meant every push-cycle tick — which saves
+    // the catalog and bumps it — threw away six hundred names and read them
+    // again. That was the hitch left after a radio button (Frank 2026-09-04).
+    const int     gen = fx.ok ? -1 : user_plugins::generation();
     const int64_t now = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
