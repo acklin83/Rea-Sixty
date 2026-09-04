@@ -5832,10 +5832,6 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     // elsewhere) is a normal user Sub-Bank.
     const bool sslRow  = (editLayer == 0 && editQuick <= 1);
     const bool sslIsBc = (editQuick == 1);
-    // A dynamic bank computes all eight keys, so it can only be offered where
-    // SSL claims none of them.
-    const bool bankFullyFree =
-        !sslRow || reasixty_sslSoftKeyBankFullyFree(sslIsBc, sbIdx);
     if (sslRow) {
         char hdr[200];
         snprintf(hdr, sizeof(hdr), "%s   (Layer 1, %s)", sbLabels[sbIdx],
@@ -5874,69 +5870,9 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
-    char nav[160];
-    snprintf(nav, sizeof(nav),
-                  "Click any of the 8 Top-Soft-Keys above to configure "
-                  "this bank's slots (Layer %d, Quick %d, %s).",
-                  editLayer + 1, engagedQ + 1, sbLabels[sbIdx]);
-    ImGui_Text(ctx, nav);
-    ImGui_Spacing(ctx);
-    ImGui_Separator(ctx);
-    ImGui_Spacing(ctx);
-
-    // ---- Bank name (per Sub-Bank, per modifier set) --------------------
-    // What this bank is CALLED. The UF8 has no display to announce it on, so it
-    // surfaces on screen: in the mode-change banner (Appearance → On-screen →
-    // "Show UF8 soft-key bank names") and as an element of the focused-track
-    // panel. Empty is the normal state — the name then falls back to the dynamic
-    // kind, else to the bank's coordinates.
-    {
-        static char        s_u8NameBuf[64] = {0};
-        static int         s_forL = -1, s_forQ = -1, s_forSb = -1, s_forMod = -1;
-        static std::string s_lastFill;
-        static bool        s_editing = false;   // from the PREVIOUS frame
-
-        const std::string userName =
-            uf8::bindings::getSubBankName(editLayer, engagedQ, sbIdx, g_slotEditModIdx);
-        char def[64] = {0};
-        reasixty_uf8BankDisplayName(editLayer, engagedQ, sbIdx, g_slotEditModIdx,
-                                    def, sizeof(def));
-        // ⇨ NEVER AN EMPTY BOX, same rule as the UF1's field: with no name of its
-        // own the box carries the DEFAULT name, which is what will be announced.
-        // Clearing the field puts the default back, which is also how you undo.
-        // ⛔ Never refilled while the cursor is in the box — that would rewrite
-        // what is being typed. s_editing is last frame's answer, because ImGui can
-        // only be asked about an item after it is drawn.
-        const std::string want = userName.empty() ? std::string(def) : userName;
-        if (editLayer != s_forL || engagedQ != s_forQ || sbIdx != s_forSb
-            || g_slotEditModIdx != s_forMod
-            || (!s_editing && want != s_lastFill)) {
-            s_forL = editLayer; s_forQ = engagedQ; s_forSb = sbIdx;
-            s_forMod = g_slotEditModIdx;
-            s_lastFill = want;
-            snprintf(s_u8NameBuf, sizeof(s_u8NameBuf), "%s", want.c_str());
-        }
-        ImGui_Text(ctx, "Bank name");
-        ImGui_SetNextItemWidth(ctx, 260.0);
-        int nameFlags = 0;
-        // ⛔ THE ID CARRIES THE WHOLE ADDRESS, and that is load-bearing. While an
-        // InputText is ACTIVE, ImGui keeps its own copy and writes it back on the
-        // next frame as an edit — so switching bank with the cursor still in the
-        // field would store the text from the bank you LEFT into the one you
-        // arrived at, and the name walks along as you page. The UF1's field learned
-        // this the hard way (Frank 2026-08-26); a different ID makes the widget a
-        // different one, so the old copy is never submitted again.
-        char nameId[64];
-        snprintf(nameId, sizeof(nameId), "##u8bankname_%d_%d_%d_%d",
-                 editLayer, engagedQ, sbIdx, g_slotEditModIdx);
-        if (ImGui_InputText(ctx, nameId, s_u8NameBuf,
-                            sizeof(s_u8NameBuf), &nameFlags, nullptr)) {
-            uf8::bindings::setSubBankName(editLayer, engagedQ, sbIdx,
-                                          g_slotEditModIdx, s_u8NameBuf);
-            s_lastFill = s_u8NameBuf;
-        }
-        s_editing = ImGui_IsItemActive(ctx);
-    }
+    ImGui_TextDisabled(ctx,
+        "Name, dynamic kind, presets and the factory banks are on the cell "
+        "itself: double-click to rename, right-click for the rest.");
     ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
@@ -5946,67 +5882,19 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
     // the 8 keys derive live from the focused track (its sends, FX, …);
     // the static slots below are then ignored.
     {
-        ImGui_Text(ctx, "Dynamic bank");
+        // ⇨ THE KIND IS PICKED ON THE CELL, in the matrix's right-click
+        // menu. What stays here are its SETTINGS: the paging control, the
+        // leftovers warning, the FX gestures and the colour palette. Reading
+        // the kind is still needed for exactly that.
         // ⛔ "The slots below are ignored while on" was true until 2026-08-25 and
         // has been wrong since: a slot stored under a HELD MODIFIER beats the
         // computed key, in the paint and in the press, which is the whole point
-        // of that change. Saying otherwise sent Frank hunting a phantom bug when
-        // an old favourites bank left switch_bc_* on Shift underneath a Hue
-        // Scenes bank (2026-08-27).
-        // ⛔ Not on a page where SSL owns even one key: a dynamic bank computes
-        // ALL eight, so it would paint over a plug-in parameter. Fully-empty
-        // pages (BC banks 2-5) are fair game.
-        if (!bankFullyFree) {
-            ImGui_TextDisabled(ctx,
-                "Unavailable here: SSL owns at least one key on this page, and "
-                "a dynamic bank would compute all eight. Use a page SSL leaves "
-                "empty, or the per-key slots below.");
-            ImGui_Spacing(ctx);
-        }
-        ImGui_Spacing(ctx);
-
-        struct DynOpt { DynamicBankKind kind; const char* label; };
-        static const DynOpt kDynOpts[] = {
-            { DynamicBankKind::None,         "Off (static slots)" },
-            { DynamicBankKind::FxBank,       "FX (focused track, paged)" },
-            { DynamicBankKind::ParamGroups,  "Parameter Groups" },
-            { DynamicBankKind::TrackColours,
-              reasixty_sp("Track Colours", "Track Colors") },
-            { DynamicBankKind::Favourites,   "CS / BC Favourites (follows focus)" },
-            { DynamicBankKind::CsFavourites, "CS Favourites" },
-            { DynamicBankKind::BcFavourites, "BC Favourites" },
-                { DynamicBankKind::HueScenes,    "Hue Scenes" },
-        };
-        // This set's OWN kind: the combo is where you give a set a bank, and on a
-        // set the empty choice means "take Plain's", not "static".
+        // of that change (Frank 2026-08-27, the Hue bank with switch_bc_* still
+        // on Shift underneath).
+        // This set's OWN kind: on a set the empty choice means "take Plain's",
+        // not "static".
         const DynamicBankKind curKind =
             getSubBankDynamic(editLayer, engagedQ, sbIdx, g_slotEditModIdx);
-        const char* curDynLabel =
-            dynKindLabelForSet_(DynamicBankKind::None, g_slotEditModIdx);
-        for (const auto& o : kDynOpts)
-            if (o.kind == curKind) curDynLabel = o.label;
-        if (curKind == DynamicBankKind::None)
-            curDynLabel = dynKindLabelForSet_(curKind, g_slotEditModIdx);
-
-        ImGui_SetNextItemWidth(ctx, 260.0);
-        if (bankFullyFree
-            && ImGui_BeginCombo(ctx, "##dynbank", curDynLabel, /*flags*/ nullptr)) {
-            for (const auto& o : kDynOpts) {
-                bool sel = (o.kind == curKind);
-                if (ImGui_Selectable(ctx,
-                                     dynKindLabelForSet_(o.kind,
-                                                         g_slotEditModIdx),
-                                     &sel,
-                                     /*flags*/ nullptr,
-                                     /*size_w*/ nullptr,
-                                     /*size_h*/ nullptr)) {
-                    setSubBankDynamic(editLayer, engagedQ, sbIdx,
-                                      g_slotEditModIdx, o.kind);
-                }
-            }
-            ImGui_EndCombo(ctx);
-        }
-        ImGui_Spacing(ctx);
 
         // Contextual editor for the selected kind. The config is GLOBAL
         // (shared by every FX / colour bank), edited here for convenience.
@@ -6114,473 +6002,6 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
     }
-
-    // ---- Soft-Key Bank preset save/recall -----------------------------
-    // Snapshot all 8 top-soft-key slots in the current (L, Q, SB)
-    // tuple as a named preset; recall a preset into any (L, Q, SB).
-    // LED-override is NOT part of the preset — it belongs to the
-    // engaged-Quick context, not the bank's identity.
-    {
-        char presetHdr[160];
-        snprintf(presetHdr, sizeof(presetHdr),
-                      "Soft-key preset for bank %s, %s"
-                      "   (Layer %d, Quick %d)",
-                      sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
-                      editLayer + 1, engagedQ + 1);
-        ImGui_Text(ctx, presetHdr);
-        ImGui_Spacing(ctx);
-
-        // Per (L, Q, SB) selection — different sub-bank cells keep
-        // their own combo state so navigating between them doesn't
-        // reset the user's choice.
-        static int s_selPreset[3][kQuicksPerLayer][kSubBanksPerQuick]
-            = {};
-        int& selRef = s_selPreset[editLayer][engagedQ][sbIdx];
-
-        const int nPresets = bankPresetCount();
-        if (selRef >= nPresets) selRef = -1;
-        if (selRef < -1)        selRef = -1;
-
-        std::string preview = "(none)";
-        if (selRef >= 0 && selRef < nPresets) {
-            preview = bankPresetAt(selRef).name;
-        }
-
-        double comboW = 240;
-        ImGui_PushItemWidth(ctx, comboW);
-        if (ImGui_BeginCombo(ctx, "##bp_combo", preview.c_str(),
-                             nullptr)) {
-            bool selNone = (selRef < 0);
-            if (ImGui_Selectable(ctx, "(none)##bp_none", &selNone,
-                                 nullptr, nullptr, nullptr)) {
-                selRef = -1;
-            }
-            for (int i = 0; i < nPresets; ++i) {
-                SoftKeyBankPreset p = bankPresetAt(i);
-                char rowId[160];
-                snprintf(rowId, sizeof(rowId), "%s##bp_row_%d",
-                              p.name.c_str(), i);
-                bool sel = (i == selRef);
-                if (ImGui_Selectable(ctx, rowId, &sel, nullptr,
-                                     nullptr, nullptr)) {
-                    selRef = i;
-                }
-            }
-            ImGui_EndCombo(ctx);
-        }
-        ImGui_PopItemWidth(ctx);
-
-        const bool hasSel = (selRef >= 0 && selRef < nPresets);
-
-        // Deferred-open: button click only sets s_pendingOp; the
-        // OpenPopup call lives at the bottom of this block so the
-        // ID-stack matches the BeginPopupModal site exactly. Same
-        // pattern the FX-Learn editor uses for its mode/del popups.
-        static char s_nameBuf[64] = {};
-        enum Op { OpNone, OpRecall, OpSaveAs, OpRename, OpDelete };
-        static int s_pendingOp  = OpNone;
-        static int s_pendingIdx = -1;
-
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_Button(ctx, "Save as…##bp_saveas",
-                         nullptr, nullptr)) {
-            s_nameBuf[0] = '\0';
-            s_pendingOp  = OpSaveAs;
-        }
-        if (hasSel) {
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (ImGui_Button(ctx, "Recall##bp_recall",
-                             nullptr, nullptr)) {
-                s_pendingOp  = OpRecall;
-                s_pendingIdx = selRef;
-            }
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (ImGui_Button(ctx, "Rename…##bp_rename",
-                             nullptr, nullptr)) {
-                SoftKeyBankPreset p = bankPresetAt(selRef);
-                std::strncpy(s_nameBuf, p.name.c_str(),
-                             sizeof(s_nameBuf) - 1);
-                s_nameBuf[sizeof(s_nameBuf) - 1] = '\0';
-                s_pendingOp  = OpRename;
-                s_pendingIdx = selRef;
-            }
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (ImGui_Button(ctx, "Delete##bp_delete",
-                             nullptr, nullptr)) {
-                s_pendingOp  = OpDelete;
-                s_pendingIdx = selRef;
-            }
-        } else {
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            ImGui_TextDisabled(ctx,
-                "  (pick a preset to Recall / Rename / Delete)");
-        }
-
-        if (s_pendingOp == OpRecall)
-            ImGui_OpenPopup(ctx, "Recall preset?###bp_recall_confirm",
-                            nullptr);
-        else if (s_pendingOp == OpSaveAs)
-            ImGui_OpenPopup(ctx, "Save preset###bp_save_as",   nullptr);
-        else if (s_pendingOp == OpRename)
-            ImGui_OpenPopup(ctx, "Rename preset###bp_rename",  nullptr);
-        else if (s_pendingOp == OpDelete)
-            ImGui_OpenPopup(ctx, "Delete preset?###bp_delete_confirm",
-                            nullptr);
-        s_pendingOp = OpNone;
-
-        // Fixed popup width so wrapped text doesn't collapse the modal
-        // to a 2-pixel tower (same trick as fxl_mode_popup).
-        const double kBpPopupW = 420.0;
-        int condAlways = ImGui_Cond_Always;
-
-        // Helper: trim leading/trailing spaces from s_nameBuf.
-        auto trimmedName = []() {
-            std::string t = s_nameBuf;
-            while (!t.empty() && t.back()  == ' ') t.pop_back();
-            while (!t.empty() && t.front() == ' ') t.erase(t.begin());
-            return t;
-        };
-
-        // ---- Recall confirm -------------------------------------
-        centerNextPopupOnDisplay_(ctx);
-        ImGui_SetNextWindowSize(ctx, kBpPopupW, 0.0, &condAlways);
-        if (ImGui_BeginPopupModal(ctx,
-                                  "Recall preset?###bp_recall_confirm",
-                                  nullptr, nullptr)) {
-            SoftKeyBankPreset p = bankPresetAt(s_pendingIdx);
-            const bool bothSets = bankPresetSpills(s_pendingIdx);
-            char line[256];
-            // A preset that carries both sets replaces both, whichever set you
-            // happen to be editing — say so before the press, the same way the
-            // factory dialog does.
-            if (bothSets)
-                snprintf(line, sizeof(line),
-                    "Overwrite BOTH sets of %s on (Layer %d, Quick %d) with "
-                    "preset '%s'? It was saved with a Shift bank, so Plain and "
-                    "Shift are both replaced.",
-                    sbLabels[sbIdx], editLayer + 1, engagedQ + 1,
-                    p.name.c_str());
-            else
-                snprintf(line, sizeof(line),
-                    "Overwrite the 8 slots of %s (%s) on (Layer %d, Quick %d) "
-                    "with preset '%s'?",
-                    sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
-                    editLayer + 1, engagedQ + 1, p.name.c_str());
-            ImGui_TextWrapped(ctx, line);
-            ImGui_Spacing(ctx);
-            if (ImGui_Button(ctx, "Recall##bp_recall_ok",
-                             nullptr, nullptr)) {
-                recallBankPreset(s_pendingIdx, editLayer, engagedQ,
-                                 sbIdx, g_slotEditModIdx);
-                ImGui_CloseCurrentPopup(ctx);
-            }
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (ImGui_Button(ctx, "Cancel##bp_recall_cancel",
-                             nullptr, nullptr)) {
-                ImGui_CloseCurrentPopup(ctx);
-            }
-            ImGui_EndPopup(ctx);
-        }
-
-        // ---- Save as … ------------------------------------------
-        centerNextPopupOnDisplay_(ctx);
-        ImGui_SetNextWindowSize(ctx, kBpPopupW, 0.0, &condAlways);
-        if (ImGui_BeginPopupModal(ctx, "Save preset###bp_save_as",
-                                  nullptr, nullptr)) {
-            // Saving from Plain takes the Shift set along when it holds
-            // anything, so the line has to say which of the two it is.
-            const bool willTakeShift =
-                (g_slotEditModIdx == 0)
-                && uf8::bindings::subBankSetHasContent(editLayer, engagedQ,
-                                                       sbIdx, 1);
-            ImGui_Text(ctx, willTakeShift
-                ? "Save this bank as a preset, Plain and Shift"
-                : "Save current 8 slots as preset");
-            ImGui_Spacing(ctx);
-            ImGui_PushItemWidth(ctx, 280);
-            ImGui_InputTextWithHint(ctx, "Name##bp_saveas_name",
-                "e.g. 'Drum compression'",
-                s_nameBuf, static_cast<int>(sizeof(s_nameBuf)),
-                nullptr, nullptr);
-            ImGui_PopItemWidth(ctx);
-            ImGui_Spacing(ctx);
-            std::string nm = trimmedName();
-            const bool nameOk = !nm.empty();
-            const int  existing = nameOk ? findBankPreset(nm) : -1;
-            if (!nameOk) {
-                ImGui_TextDisabled(ctx, "Enter a name.");
-            } else if (existing >= 0) {
-                ImGui_TextDisabled(ctx,
-                    "A preset with that name exists — Save will "
-                    "overwrite it.");
-            } else {
-                ImGui_TextDisabled(ctx, "New preset.");
-            }
-            ImGui_Spacing(ctx);
-            if (nameOk) {
-                const char* label = (existing >= 0)
-                    ? "Save (overwrite)##bp_saveas_ok"
-                    : "Save##bp_saveas_ok";
-                if (ImGui_Button(ctx, label, nullptr, nullptr)) {
-                    saveBankPreset(nm, editLayer, engagedQ, sbIdx,
-                                   g_slotEditModIdx);
-                    selRef = findBankPreset(nm);
-                    ImGui_CloseCurrentPopup(ctx);
-                }
-            } else {
-                ImGui_TextDisabled(ctx, "Save");
-            }
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (ImGui_Button(ctx, "Cancel##bp_saveas_cancel",
-                             nullptr, nullptr)) {
-                ImGui_CloseCurrentPopup(ctx);
-            }
-            ImGui_EndPopup(ctx);
-        }
-
-        // ---- Rename ---------------------------------------------
-        centerNextPopupOnDisplay_(ctx);
-        ImGui_SetNextWindowSize(ctx, kBpPopupW, 0.0, &condAlways);
-        if (ImGui_BeginPopupModal(ctx, "Rename preset###bp_rename",
-                                  nullptr, nullptr)) {
-            ImGui_Text(ctx, "Rename preset");
-            ImGui_Spacing(ctx);
-            ImGui_PushItemWidth(ctx, 280);
-            ImGui_InputTextWithHint(ctx, "Name##bp_rename_name",
-                "preset name",
-                s_nameBuf, static_cast<int>(sizeof(s_nameBuf)),
-                nullptr, nullptr);
-            ImGui_PopItemWidth(ctx);
-            ImGui_Spacing(ctx);
-            std::string nm = trimmedName();
-            const bool nameOk = !nm.empty();
-            const int  dup    = nameOk ? findBankPreset(nm) : -1;
-            const bool valid  =
-                nameOk && (dup < 0 || dup == s_pendingIdx);
-            if (!nameOk) {
-                ImGui_TextDisabled(ctx, "Enter a name.");
-            } else if (!valid) {
-                ImGui_TextDisabled(ctx,
-                    "Another preset already has that name.");
-            }
-            ImGui_Spacing(ctx);
-            if (valid) {
-                if (ImGui_Button(ctx, "Rename##bp_rename_ok",
-                                 nullptr, nullptr)) {
-                    renameBankPreset(s_pendingIdx, nm);
-                    ImGui_CloseCurrentPopup(ctx);
-                }
-            } else {
-                ImGui_TextDisabled(ctx, "Rename");
-            }
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (ImGui_Button(ctx, "Cancel##bp_rename_cancel",
-                             nullptr, nullptr)) {
-                ImGui_CloseCurrentPopup(ctx);
-            }
-            ImGui_EndPopup(ctx);
-        }
-
-        // ---- Delete confirm -------------------------------------
-        centerNextPopupOnDisplay_(ctx);
-        ImGui_SetNextWindowSize(ctx, kBpPopupW, 0.0, &condAlways);
-        if (ImGui_BeginPopupModal(ctx,
-                                  "Delete preset?###bp_delete_confirm",
-                                  nullptr, nullptr)) {
-            SoftKeyBankPreset p = bankPresetAt(s_pendingIdx);
-            char line[256];
-            snprintf(line, sizeof(line),
-                "Delete preset '%s'? This cannot be undone.",
-                p.name.c_str());
-            ImGui_TextWrapped(ctx, line);
-            ImGui_Spacing(ctx);
-            if (ImGui_Button(ctx, "Delete##bp_delete_ok",
-                             nullptr, nullptr)) {
-                deleteBankPreset(s_pendingIdx);
-                if (selRef >= bankPresetCount()) selRef = -1;
-                ImGui_CloseCurrentPopup(ctx);
-            }
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (ImGui_Button(ctx, "Cancel##bp_delete_cancel",
-                             nullptr, nullptr)) {
-                ImGui_CloseCurrentPopup(ctx);
-            }
-            ImGui_EndPopup(ctx);
-        }
-    }
-    ImGui_Spacing(ctx);
-    ImGui_Separator(ctx);
-    ImGui_Spacing(ctx);
-
-    // ---- Factory Rea-Sixty banks --------------------------------------
-    // Curated banks of Rea-Sixty's own built-ins. Recall one into THIS
-    // Sub-Bank, or drop the whole 6-bank set into Layer 1 / Quick 3's
-    // six sub-banks at once (their intended home). Backlog A 2026-06-22.
-    {
-        ImGui_Text(ctx, "Rea-Sixty factory banks");
-        ImGui_Spacing(ctx);
-
-        const int nFac = factoryBankPresetCount();
-        static int s_facSel[3][kQuicksPerLayer][kSubBanksPerQuick] = {};
-        int& facRef = s_facSel[editLayer][engagedQ][sbIdx];
-        if (facRef < 0 || facRef >= nFac) facRef = 0;
-
-        // Honour the British/American spelling toggle on the displayed bank
-        // name ("CS Favourites" → "CS Favorites" in American mode). The
-        // stored preset name stays British so recall identity is stable.
-        auto facDisplay = [](std::string n) -> std::string {
-            if (std::string(reasixty_sp("u", "a")) == "a") {
-                for (size_t p; (p = n.find("Favourite")) != std::string::npos;)
-                    n.replace(p, 9, "Favorite");
-            }
-            return n;
-        };
-
-        std::string facPrev = (nFac > 0)
-            ? facDisplay(factoryBankPresetAt(facRef).name) : std::string("(none)");
-        double comboW = 240;
-        ImGui_PushItemWidth(ctx, comboW);
-        if (ImGui_BeginCombo(ctx, "##fac_combo", facPrev.c_str(), nullptr)) {
-            for (int i = 0; i < nFac; ++i) {
-                SoftKeyBankPreset p = factoryBankPresetAt(i);
-                char rowId[160];
-                snprintf(rowId, sizeof(rowId), "%s##fac_row_%d",
-                              facDisplay(p.name).c_str(), i);
-                bool sel = (i == facRef);
-                if (ImGui_Selectable(ctx, rowId, &sel, nullptr,
-                                     nullptr, nullptr)) {
-                    facRef = i;
-                }
-            }
-            ImGui_EndCombo(ctx);
-        }
-        ImGui_PopItemWidth(ctx);
-
-        enum FacOp { FacNone, FacRecall, FacLoadSet };
-        static int s_facOp = FacNone;
-
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_Button(ctx, "Recall into this bank##fac_recall",
-                         nullptr, nullptr)) {
-            s_facOp = FacRecall;
-        }
-        ImGui_Spacing(ctx);
-        if (ImGui_Button(ctx, "Load full set \xE2\x86\x92 Layer 1 / Quick 3"
-                         "##fac_loadset", nullptr, nullptr)) {
-            s_facOp = FacLoadSet;
-        }
-        // ⇨ SEVEN BANKS, SIX SUB-BANKS. A Quick holds six, so the set loads the
-        // first six and the seventh stays behind — say which one, or the button
-        // quietly does less than it claims.
-        {
-            char facNote[192];
-            const std::string lastName = (nFac > kSubBanksPerQuick)
-                ? facDisplay(factoryBankPresetAt(nFac - 1).name) : std::string();
-            std::snprintf(facNote, sizeof(facNote),
-                "Full set = the first %d banks into L1/Q3's V-POT + Soft 1-5 "
-                "soft-key banks (overwrites those 48 slots).%s%s%s",
-                (nFac < kSubBanksPerQuick) ? nFac : kSubBanksPerQuick,
-                lastName.empty() ? "" : " A Quick holds six, so ",
-                lastName.c_str(),
-                lastName.empty() ? "" : " stays out; recall it into a soft-key bank "
-                                        "of its own.");
-            ImGui_TextDisabled(ctx, facNote);
-        }
-
-        if (s_facOp == FacRecall)
-            ImGui_OpenPopup(ctx, "Recall factory bank?###fac_recall_confirm",
-                            nullptr);
-        else if (s_facOp == FacLoadSet)
-            ImGui_OpenPopup(ctx, "Load factory set?###fac_loadset_confirm",
-                            nullptr);
-        s_facOp = FacNone;
-
-        const double kFacPopupW = 440.0;
-        int condAlways2 = ImGui_Cond_Always;
-
-        centerNextPopupOnDisplay_(ctx);
-        ImGui_SetNextWindowSize(ctx, kFacPopupW, 0.0, &condAlways2);
-        if (ImGui_BeginPopupModal(ctx,
-                                  "Recall factory bank?###fac_recall_confirm",
-                                  nullptr, nullptr)) {
-            SoftKeyBankPreset p = factoryBankPresetAt(facRef);
-            // ⛔ SAY WHICH SETS. A bank with more than eight entries fills Plain
-            // AND Shift, so it overwrites sixteen slots and not the eight you are
-            // looking at. The last time a dialog undercounted what a recall
-            // touched it cost a Shift set nobody had been warned about
-            // (2026-08-18), and this one can do it on purpose.
-            char line[320];
-            if (factoryBankSpills(facRef))
-                snprintf(line, sizeof(line),
-                    "Factory bank '%s' has more than eight entries, so it fills "
-                    "BOTH sets of %s on (Layer %d, Quick %d): Plain and Shift, "
-                    "16 slots. Overwrite them?",
-                    p.name.c_str(), sbLabels[sbIdx], editLayer + 1, engagedQ + 1);
-            else
-                snprintf(line, sizeof(line),
-                    "Overwrite the 8 slots of %s (%s) on (Layer %d, Quick %d) with "
-                    "factory bank '%s'?",
-                    sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
-                    editLayer + 1, engagedQ + 1, p.name.c_str());
-            ImGui_TextWrapped(ctx, line);
-            ImGui_Spacing(ctx);
-            if (ImGui_Button(ctx, "Recall##fac_recall_ok",
-                             nullptr, nullptr)) {
-                recallFactoryBankPreset(facRef, editLayer, engagedQ, sbIdx,
-                                        g_slotEditModIdx);
-                ImGui_CloseCurrentPopup(ctx);
-            }
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (ImGui_Button(ctx, "Cancel##fac_recall_cancel",
-                             nullptr, nullptr)) {
-                ImGui_CloseCurrentPopup(ctx);
-            }
-            ImGui_EndPopup(ctx);
-        }
-
-        centerNextPopupOnDisplay_(ctx);
-        ImGui_SetNextWindowSize(ctx, kFacPopupW, 0.0, &condAlways2);
-        if (ImGui_BeginPopupModal(ctx,
-                                  "Load factory set?###fac_loadset_confirm",
-                                  nullptr, nullptr)) {
-            {
-                // Say it only while it is true: with five factory banks and six
-                // places they all fit, and that warning was about a seventh.
-                char q[220];
-                bool anySpill = false;
-                for (int i = 0; i < factoryBankPresetCount(); ++i)
-                    if (factoryBankSpills(i)) { anySpill = true; break; }
-                std::snprintf(q, sizeof(q),
-                    "Overwrite Layer 1 / Quick 3?%s%s",
-                    anySpill
-                        ? " Banks with more than eight entries fill both sets, "
-                          "Plain and Shift, so this touches more than the 48 "
-                          "slots of one set."
-                        : " That is 48 slots on the selected modifier set.",
-                    (factoryBankPresetCount() > kSubBanksPerQuick)
-                        ? " A set holds six soft-key banks, so the last factory "
-                          "bank is not part of this."
-                        : "");
-                ImGui_TextWrapped(ctx, q);
-            }
-            ImGui_Spacing(ctx);
-            if (ImGui_Button(ctx, "Load set##fac_loadset_ok",
-                             nullptr, nullptr)) {
-                loadFactoryReaSixtySet(/*layer*/ 0, /*quick*/ 2,
-                                       g_slotEditModIdx);
-                ImGui_CloseCurrentPopup(ctx);
-            }
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (ImGui_Button(ctx, "Cancel##fac_loadset_cancel",
-                             nullptr, nullptr)) {
-                ImGui_CloseCurrentPopup(ctx);
-            }
-            ImGui_EndPopup(ctx);
-        }
-    }
-    ImGui_Spacing(ctx);
-    ImGui_Separator(ctx);
-    ImGui_Spacing(ctx);
 
     // ---- Per-(Layer, Quick) LED override -----------------------------
     char ledHdr[160];
@@ -6710,15 +6131,60 @@ void reasixty_publishSettingsModifierPin(bool bindingsPaneOpen)
 // Per-strip Sel/Cut/Solo/Rec, V-Pot push, top soft-keys, and soft-key
 // bank selectors are shown greyed/locked — they stay hardcoded in v1
 // (resolved Q2). Phase D widens the catalogue.
-// ---- Bank-matrix context menu (Copy / Cut / Paste a whole bank) ----------
-// A cell in the matrix IS a bank, so the menu works on the bank rather than on
-// a key: the eight slots, the bank's name and its dynamic kind, for the
-// modifier set the matrix is showing. Copying from Plain takes Shift along
-// when Shift holds something — the same rule the bank presets follow, so the
-// two never disagree about what "this bank" means.
+// ---- Bank-matrix context menu --------------------------------------------
+// ⇨ THE CELL IS THE BANK, SO THE CELL IS WHERE YOU WORK ON IT. Naming, the
+// dynamic kind, the presets and the factory banks used to live in four blocks
+// under the matrix, each of which had to explain in a paragraph WHICH bank it
+// was talking about, because the answer was "the engaged one" and that is a
+// fact you had to hold in your head (Frank 2026-09-04: "könnten wir nicht fast
+// alles über die matrix machen? und die ganzen hilfstexte fallen dann auch grad
+// weg"). Opening the menu ON a cell answers it by pointing.
+// What stays below: the SETTINGS of a dynamic bank (its paging control, the
+// FX gestures, the colour palette) and the per-bank LED colours.
+// The right-click ENGAGES the cell first, so "what you edit" and "what the
+// surface shows" stay the same thing, which is the rule the whole pane is
+// built on.
 static int  s_bankCtxL = -1, s_bankCtxQ = -1, s_bankCtxSb = -1, s_bankCtxSet = 0;
 static bool s_bankCtxFilled = false;
 static bool s_bankCtxOpen   = false;
+// Rename in place (double-click a cell, or the menu's Rename): which cell is
+// being typed into, and the buffer. -1 = nobody.
+static int  s_bankRenL = -1, s_bankRenQ = -1, s_bankRenSb = -1, s_bankRenMod = -1;
+static char s_bankRenBuf[64] = {0};
+static bool s_bankRenFocus = false;
+// A modal cannot be opened from inside a popup — the popup closes and takes the
+// OpenPopup with it. The menu therefore only records an intent, and
+// renderBankMatrixModals_ opens and draws it on the next pass.
+enum BankMenuOp_ { BmNone = 0, BmPresetRecall, BmPresetSaveAs, BmPresetRename,
+                   BmPresetDelete, BmFacRecall, BmFacLoadSet };
+static int  s_bankMenuOp  = BmNone;
+static int  s_bankMenuIdx = -1;
+static char s_bankMenuName[64] = {0};
+
+static const char* const kBankSbName_[6] = { "V-POT", "Soft 1", "Soft 2",
+                                             "Soft 3", "Soft 4", "Soft 5" };
+
+// "Set 4, Soft 2" / "Set 4, Soft 2 (Shift)" — the cell, said the way the matrix
+// says it. Every dialog below names its target with this, so a menu opened on
+// the wrong cell is obvious before anything is overwritten.
+static std::string bankCellLabel_(int setNo, int sb, int mod)
+{
+    char b[96];
+    snprintf(b, sizeof(b), "Set %d, %s%s", setNo,
+             kBankSbName_[(sb < 0 || sb > 5) ? 0 : sb],
+             mod == 0 ? "" : " (Shift)");
+    return std::string(b);
+}
+
+// Turn "Favourites" into "Favorites" for the American spelling, the same way
+// the factory list did when it lived under the matrix.
+static std::string bankFacDisplay_(std::string n)
+{
+    if (std::string(reasixty_sp("u", "a")) == "a")
+        for (size_t q; (q = n.find("Favourite")) != std::string::npos;)
+            n.replace(q, 9, "Favorite");
+    return n;
+}
 
 static void renderBankMatrixContextMenu_(ImGui_Context* ctx)
 {
@@ -6732,17 +6198,24 @@ static void renderBankMatrixContextMenu_(ImGui_Context* ctx)
         return;
     }
     using namespace uf8::bindings;
-    static const char* kSbName[6] = { "V-POT", "Soft 1", "Soft 2",
-                                      "Soft 3", "Soft 4", "Soft 5" };
     const int mod = g_slotEditModIdx;
+    const std::string here = bankCellLabel_(s_bankCtxSet, s_bankCtxSb, mod);
 
-    char here[96];
-    snprintf(here, sizeof(here), "Set %d, %s%s", s_bankCtxSet,
-             kSbName[s_bankCtxSb < 0 || s_bankCtxSb > 5 ? 0 : s_bankCtxSb],
-             mod == 0 ? "" : "  (Shift)");
-    ImGui_TextDisabled(ctx, here);
+    ImGui_TextDisabled(ctx, here.c_str());
     ImGui_Separator(ctx);
 
+    // ---- Name ------------------------------------------------------------
+    if (ImGui_MenuItem(ctx, "Rename…", nullptr, nullptr, nullptr)) {
+        s_bankRenL = s_bankCtxL; s_bankRenQ = s_bankCtxQ;
+        s_bankRenSb = s_bankCtxSb; s_bankRenMod = mod;
+        const std::string own = getSubBankName(s_bankCtxL, s_bankCtxQ,
+                                               s_bankCtxSb, mod);
+        snprintf(s_bankRenBuf, sizeof(s_bankRenBuf), "%s", own.c_str());
+        s_bankRenFocus = true;
+    }
+
+    // ---- Clipboard -------------------------------------------------------
+    ImGui_Separator(ctx);
     bool canCopy = s_bankCtxFilled;
     if (ImGui_MenuItem(ctx, "Copy bank", nullptr, nullptr, &canCopy))
         copyBankToClipboard(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod, here);
@@ -6751,8 +6224,6 @@ static void renderBankMatrixContextMenu_(ImGui_Context* ctx)
             clearBank(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod,
                       /*bothSets*/ bankClipboardHasShift());
     }
-    // The paste item names what is on the clipboard, so a menu opened on the
-    // wrong cell is obvious before it is clicked.
     const std::string clip = bankClipboardLabel();
     char pasteLbl[160];
     if (clip.empty()) snprintf(pasteLbl, sizeof(pasteLbl), "Paste bank");
@@ -6763,12 +6234,355 @@ static void renderBankMatrixContextMenu_(ImGui_Context* ctx)
         pasteBankFromClipboard(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod);
     if (bankClipboardHasShift())
         ImGui_TextDisabled(ctx, "The clipboard carries Plain and Shift.");
-    ImGui_Separator(ctx);
     bool canClear = s_bankCtxFilled;
     if (ImGui_MenuItem(ctx, "Clear bank", nullptr, nullptr, &canClear))
         clearBank(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod, /*bothSets*/ false);
+
+    // ---- Dynamic bank ----------------------------------------------------
+    // A dynamic bank computes all eight keys, so it is only offered where SSL
+    // claims none of them. That used to be a paragraph; here it is one greyed
+    // line under a disabled submenu, on the cell it is true of.
+    ImGui_Separator(ctx);
+    const bool sslRow  = (s_bankCtxL == 0 && s_bankCtxQ <= 1);
+    const bool sslIsBc = (s_bankCtxQ == 1);
+    const bool fullyFree = !sslRow
+        || reasixty_sslSoftKeyBankFullyFree(sslIsBc, s_bankCtxSb);
+    if (!fullyFree) {
+        bool never = false;
+        ImGui_MenuItem(ctx, "Dynamic bank", nullptr, nullptr, &never);
+        ImGui_TextDisabled(ctx, "SSL owns a key on this page.");
+    } else if (ImGui_BeginMenu(ctx, "Dynamic bank", nullptr)) {
+        struct DynOpt { DynamicBankKind kind; const char* label; };
+        static const DynOpt kOpts[] = {
+            { DynamicBankKind::None,         "Off (static slots)" },
+            { DynamicBankKind::FxBank,       "FX (focused track, paged)" },
+            { DynamicBankKind::ParamGroups,  "Parameter Groups" },
+            { DynamicBankKind::TrackColours,
+              reasixty_sp("Track Colours", "Track Colors") },
+            { DynamicBankKind::Favourites,   "CS / BC Favourites (follows focus)" },
+            { DynamicBankKind::CsFavourites, "CS Favourites" },
+            { DynamicBankKind::BcFavourites, "BC Favourites" },
+            { DynamicBankKind::HueScenes,    "Hue Scenes" },
+        };
+        const DynamicBankKind cur =
+            getSubBankDynamic(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod);
+        for (const auto& o : kOpts) {
+            bool sel = (o.kind == cur);
+            if (ImGui_MenuItem(ctx, dynKindLabelForSet_(o.kind, mod),
+                               nullptr, &sel, nullptr))
+                setSubBankDynamic(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod,
+                                  o.kind);
+        }
+        ImGui_EndMenu(ctx);
+    }
+
+    // ---- Presets ---------------------------------------------------------
+    if (ImGui_BeginMenu(ctx, "Presets", nullptr)) {
+        const int n = bankPresetCount();
+        if (n <= 0) ImGui_TextDisabled(ctx, "No presets saved yet.");
+        for (int i = 0; i < n; ++i) {
+            const SoftKeyBankPreset p = bankPresetAt(i);
+            char row[96];
+            snprintf(row, sizeof(row), "%s%s##bp_m_%d", p.name.c_str(),
+                     bankPresetSpills(i) ? "  (Plain + Shift)" : "", i);
+            if (ImGui_MenuItem(ctx, row, nullptr, nullptr, nullptr)) {
+                s_bankMenuOp  = BmPresetRecall;
+                s_bankMenuIdx = i;
+            }
+        }
+        ImGui_Separator(ctx);
+        if (ImGui_MenuItem(ctx, "Save this bank as…", nullptr, nullptr, nullptr)) {
+            s_bankMenuOp = BmPresetSaveAs;
+            s_bankMenuName[0] = '\0';
+        }
+        if (n > 0 && ImGui_BeginMenu(ctx, "Rename preset", nullptr)) {
+            for (int i = 0; i < n; ++i) {
+                char row[96];
+                snprintf(row, sizeof(row), "%s##bp_rn_%d",
+                         bankPresetAt(i).name.c_str(), i);
+                if (ImGui_MenuItem(ctx, row, nullptr, nullptr, nullptr)) {
+                    s_bankMenuOp  = BmPresetRename;
+                    s_bankMenuIdx = i;
+                    snprintf(s_bankMenuName, sizeof(s_bankMenuName), "%s",
+                             bankPresetAt(i).name.c_str());
+                }
+            }
+            ImGui_EndMenu(ctx);
+        }
+        if (n > 0 && ImGui_BeginMenu(ctx, "Delete preset", nullptr)) {
+            for (int i = 0; i < n; ++i) {
+                char row[96];
+                snprintf(row, sizeof(row), "%s##bp_dl_%d",
+                         bankPresetAt(i).name.c_str(), i);
+                if (ImGui_MenuItem(ctx, row, nullptr, nullptr, nullptr)) {
+                    s_bankMenuOp  = BmPresetDelete;
+                    s_bankMenuIdx = i;
+                }
+            }
+            ImGui_EndMenu(ctx);
+        }
+        ImGui_EndMenu(ctx);
+    }
+
+    // ---- Factory banks ---------------------------------------------------
+    if (ImGui_BeginMenu(ctx, "Rea-Sixty factory banks", nullptr)) {
+        const int nFac = factoryBankPresetCount();
+        for (int i = 0; i < nFac; ++i) {
+            char row[96];
+            snprintf(row, sizeof(row), "%s%s##fac_m_%d",
+                     bankFacDisplay_(factoryBankPresetAt(i).name).c_str(),
+                     factoryBankSpills(i) ? "  (Plain + Shift)" : "", i);
+            if (ImGui_MenuItem(ctx, row, nullptr, nullptr, nullptr)) {
+                s_bankMenuOp  = BmFacRecall;
+                s_bankMenuIdx = i;
+            }
+        }
+        ImGui_Separator(ctx);
+        if (ImGui_MenuItem(ctx, "Load the full set into Layer 1 / Quick 3",
+                           nullptr, nullptr, nullptr))
+            s_bankMenuOp = BmFacLoadSet;
+        ImGui_EndMenu(ctx);
+    }
     ImGui_EndPopup(ctx);
 }
+
+// The dialogs the menu asks for. Drawn right after the matrix, never inside the
+// popup: everything here can overwrite slots that have no undo, so each one
+// names the cell and says when both sets go.
+static void renderBankMatrixModals_(ImGui_Context* ctx)
+{
+    using namespace uf8::bindings;
+    if (s_bankCtxL < 0) return;
+    const int mod = g_slotEditModIdx;
+    const std::string here = bankCellLabel_(s_bankCtxSet, s_bankCtxSb, mod);
+
+    switch (s_bankMenuOp) {
+        case BmPresetRecall:
+            ImGui_OpenPopup(ctx, "Recall preset?###bp_recall_confirm", nullptr);
+            break;
+        case BmPresetSaveAs:
+            ImGui_OpenPopup(ctx, "Save preset###bp_save_as", nullptr);   break;
+        case BmPresetRename:
+            ImGui_OpenPopup(ctx, "Rename preset###bp_rename", nullptr);  break;
+        case BmPresetDelete:
+            ImGui_OpenPopup(ctx, "Delete preset?###bp_delete_confirm", nullptr);
+            break;
+        case BmFacRecall:
+            ImGui_OpenPopup(ctx, "Recall factory bank?###fac_recall_confirm",
+                            nullptr);
+            break;
+        case BmFacLoadSet:
+            ImGui_OpenPopup(ctx, "Load factory set?###fac_loadset_confirm",
+                            nullptr);
+            break;
+        default: break;
+    }
+    s_bankMenuOp = BmNone;
+
+    const double kW = 440.0;
+    int condAlways = ImGui_Cond_Always;
+    auto trimmed = []() {
+        std::string t = s_bankMenuName;
+        while (!t.empty() && t.back()  == ' ') t.pop_back();
+        while (!t.empty() && t.front() == ' ') t.erase(t.begin());
+        return t;
+    };
+
+    // ---- Recall a user preset -------------------------------------------
+    centerNextPopupOnDisplay_(ctx);
+    ImGui_SetNextWindowSize(ctx, kW, 0.0, &condAlways);
+    if (ImGui_BeginPopupModal(ctx, "Recall preset?###bp_recall_confirm",
+                              nullptr, nullptr)) {
+        const SoftKeyBankPreset p = bankPresetAt(s_bankMenuIdx);
+        const bool bothSets = bankPresetSpills(s_bankMenuIdx);
+        char line[320];
+        if (bothSets)
+            snprintf(line, sizeof(line),
+                "Overwrite BOTH sets of %s with preset '%s'? It was saved with "
+                "a Shift bank, so Plain and Shift are both replaced.",
+                here.c_str(), p.name.c_str());
+        else
+            snprintf(line, sizeof(line),
+                "Overwrite the 8 slots of %s with preset '%s'?",
+                here.c_str(), p.name.c_str());
+        ImGui_TextWrapped(ctx, line);
+        ImGui_Spacing(ctx);
+        if (ImGui_Button(ctx, "Recall##bp_recall_ok", nullptr, nullptr)) {
+            recallBankPreset(s_bankMenuIdx, s_bankCtxL, s_bankCtxQ,
+                             s_bankCtxSb, mod);
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##bp_recall_cancel", nullptr, nullptr))
+            ImGui_CloseCurrentPopup(ctx);
+        ImGui_EndPopup(ctx);
+    }
+
+    // ---- Save as ---------------------------------------------------------
+    centerNextPopupOnDisplay_(ctx);
+    ImGui_SetNextWindowSize(ctx, kW, 0.0, &condAlways);
+    if (ImGui_BeginPopupModal(ctx, "Save preset###bp_save_as",
+                              nullptr, nullptr)) {
+        // Saving from Plain takes the Shift set along when it holds anything,
+        // so the line has to say which of the two it is.
+        const bool willTakeShift = (mod == 0)
+            && subBankSetHasContent(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, 1);
+        char hdr[160];
+        snprintf(hdr, sizeof(hdr), willTakeShift
+                 ? "Save %s as a preset, Plain and Shift"
+                 : "Save the 8 slots of %s as a preset", here.c_str());
+        ImGui_Text(ctx, hdr);
+        ImGui_Spacing(ctx);
+        ImGui_PushItemWidth(ctx, 280);
+        ImGui_InputTextWithHint(ctx, "Name##bp_saveas_name",
+            "e.g. 'Drum compression'", s_bankMenuName,
+            static_cast<int>(sizeof(s_bankMenuName)), nullptr, nullptr);
+        ImGui_PopItemWidth(ctx);
+        ImGui_Spacing(ctx);
+        const std::string nm = trimmed();
+        const bool nameOk   = !nm.empty();
+        const int  existing = nameOk ? findBankPreset(nm) : -1;
+        if (!nameOk)            ImGui_TextDisabled(ctx, "Enter a name.");
+        else if (existing >= 0) ImGui_TextDisabled(ctx,
+            "A preset with that name exists — Save will overwrite it.");
+        else                    ImGui_TextDisabled(ctx, "New preset.");
+        ImGui_Spacing(ctx);
+        if (nameOk) {
+            const char* label = (existing >= 0) ? "Save (overwrite)##bp_saveas_ok"
+                                                : "Save##bp_saveas_ok";
+            if (ImGui_Button(ctx, label, nullptr, nullptr)) {
+                saveBankPreset(nm, s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod);
+                ImGui_CloseCurrentPopup(ctx);
+            }
+        } else {
+            ImGui_TextDisabled(ctx, "Save");
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##bp_saveas_cancel", nullptr, nullptr))
+            ImGui_CloseCurrentPopup(ctx);
+        ImGui_EndPopup(ctx);
+    }
+
+    // ---- Rename a preset -------------------------------------------------
+    centerNextPopupOnDisplay_(ctx);
+    ImGui_SetNextWindowSize(ctx, kW, 0.0, &condAlways);
+    if (ImGui_BeginPopupModal(ctx, "Rename preset###bp_rename",
+                              nullptr, nullptr)) {
+        ImGui_Text(ctx, "Rename preset");
+        ImGui_Spacing(ctx);
+        ImGui_PushItemWidth(ctx, 280);
+        ImGui_InputTextWithHint(ctx, "Name##bp_rename_name", "preset name",
+            s_bankMenuName, static_cast<int>(sizeof(s_bankMenuName)),
+            nullptr, nullptr);
+        ImGui_PopItemWidth(ctx);
+        ImGui_Spacing(ctx);
+        const std::string nm = trimmed();
+        const bool nameOk = !nm.empty();
+        const int  dup    = nameOk ? findBankPreset(nm) : -1;
+        const bool valid  = nameOk && (dup < 0 || dup == s_bankMenuIdx);
+        if (!nameOk)     ImGui_TextDisabled(ctx, "Enter a name.");
+        else if (!valid) ImGui_TextDisabled(ctx,
+            "Another preset already has that name.");
+        ImGui_Spacing(ctx);
+        if (valid) {
+            if (ImGui_Button(ctx, "Rename##bp_rename_ok", nullptr, nullptr)) {
+                renameBankPreset(s_bankMenuIdx, nm);
+                ImGui_CloseCurrentPopup(ctx);
+            }
+        } else {
+            ImGui_TextDisabled(ctx, "Rename");
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##bp_rename_cancel", nullptr, nullptr))
+            ImGui_CloseCurrentPopup(ctx);
+        ImGui_EndPopup(ctx);
+    }
+
+    // ---- Delete a preset -------------------------------------------------
+    centerNextPopupOnDisplay_(ctx);
+    ImGui_SetNextWindowSize(ctx, kW, 0.0, &condAlways);
+    if (ImGui_BeginPopupModal(ctx, "Delete preset?###bp_delete_confirm",
+                              nullptr, nullptr)) {
+        char line[256];
+        snprintf(line, sizeof(line), "Delete preset '%s'? This cannot be undone.",
+                 bankPresetAt(s_bankMenuIdx).name.c_str());
+        ImGui_TextWrapped(ctx, line);
+        ImGui_Spacing(ctx);
+        if (ImGui_Button(ctx, "Delete##bp_delete_ok", nullptr, nullptr)) {
+            deleteBankPreset(s_bankMenuIdx);
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##bp_delete_cancel", nullptr, nullptr))
+            ImGui_CloseCurrentPopup(ctx);
+        ImGui_EndPopup(ctx);
+    }
+
+    // ---- Recall a factory bank -------------------------------------------
+    centerNextPopupOnDisplay_(ctx);
+    ImGui_SetNextWindowSize(ctx, kW, 0.0, &condAlways);
+    if (ImGui_BeginPopupModal(ctx, "Recall factory bank?###fac_recall_confirm",
+                              nullptr, nullptr)) {
+        const SoftKeyBankPreset p = factoryBankPresetAt(s_bankMenuIdx);
+        // ⛔ SAY WHICH SETS. A bank with more than eight entries fills Plain AND
+        // Shift, so it overwrites sixteen slots and not the eight you are
+        // looking at. The last time a dialog undercounted what a recall touched
+        // it cost a Shift set nobody had been warned about (2026-08-18).
+        char line[360];
+        if (factoryBankSpills(s_bankMenuIdx))
+            snprintf(line, sizeof(line),
+                "Factory bank '%s' has more than eight entries, so it fills "
+                "BOTH sets of %s: Plain and Shift, 16 slots. Overwrite them?",
+                p.name.c_str(), here.c_str());
+        else
+            snprintf(line, sizeof(line),
+                "Overwrite the 8 slots of %s with factory bank '%s'?",
+                here.c_str(), p.name.c_str());
+        ImGui_TextWrapped(ctx, line);
+        ImGui_Spacing(ctx);
+        if (ImGui_Button(ctx, "Recall##fac_recall_ok", nullptr, nullptr)) {
+            recallFactoryBankPreset(s_bankMenuIdx, s_bankCtxL, s_bankCtxQ,
+                                    s_bankCtxSb, mod);
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##fac_recall_cancel", nullptr, nullptr))
+            ImGui_CloseCurrentPopup(ctx);
+        ImGui_EndPopup(ctx);
+    }
+
+    // ---- Load the whole factory set --------------------------------------
+    centerNextPopupOnDisplay_(ctx);
+    ImGui_SetNextWindowSize(ctx, kW, 0.0, &condAlways);
+    if (ImGui_BeginPopupModal(ctx, "Load factory set?###fac_loadset_confirm",
+                              nullptr, nullptr)) {
+        // ⇨ SEVEN BANKS, SIX SUB-BANKS. A Quick holds six, so the set loads the
+        // first six and the seventh stays behind. Said only while it is true.
+        char q[280];
+        bool anySpill = false;
+        for (int i = 0; i < factoryBankPresetCount(); ++i)
+            if (factoryBankSpills(i)) { anySpill = true; break; }
+        snprintf(q, sizeof(q), "Overwrite Layer 1 / Quick 3?%s%s",
+            anySpill ? " Banks with more than eight entries fill both sets, "
+                       "Plain and Shift, so this touches more than the 48 slots "
+                       "of one set."
+                     : " That is 48 slots on the selected modifier set.",
+            (factoryBankPresetCount() > kSubBanksPerQuick)
+                ? " A set holds six soft-key banks, so the last factory bank is "
+                  "not part of this." : "");
+        ImGui_TextWrapped(ctx, q);
+        ImGui_Spacing(ctx);
+        if (ImGui_Button(ctx, "Load set##fac_loadset_ok", nullptr, nullptr)) {
+            loadFactoryReaSixtySet(/*layer*/ 0, /*quick*/ 2, mod);
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##fac_loadset_cancel", nullptr, nullptr))
+            ImGui_CloseCurrentPopup(ctx);
+        ImGui_EndPopup(ctx);
+    }
+}
+
 
 void SettingsScreen::drawBindings(ImGui_Context* ctx)
 {
@@ -7122,27 +6936,91 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                         char cid[40];
                         snprintf(cid, sizeof(cid), "%s##skcell_%d_%d",
                                  txt.c_str(), setNo, c);
-                        bool selCell = here;
-                        if (ImGui_Selectable(ctx, cid, &selCell,
-                                             nullptr, nullptr, nullptr))
-                            reasixty_engageSoftKeyBank(sl, sq, c);
-                        // Right-click → Copy / Cut / Paste for the whole bank
-                        // (Frank 2026-09-04). The request is consumed after the
-                        // table so the popup lives outside the cell's ID scope,
-                        // the same shape renderBindingContextMenu_ uses.
-                        int rmb = 1;
-                        if (ImGui_IsItemClicked(ctx, &rmb)) {
-                            s_bankCtxL   = sl;
-                            s_bankCtxQ   = sq;
-                            s_bankCtxSb  = c;
-                            s_bankCtxSet = setNo;
-                            s_bankCtxFilled = filled;
-                            s_bankCtxOpen   = true;
+                        // ---- The cell is the bank's whole editor ----
+                        // Double-click renames in place, right-click opens the
+                        // menu, single click engages, as before.
+                        const bool renaming =
+                            (s_bankRenL == sl && s_bankRenQ == sq
+                             && s_bankRenSb == c
+                             && s_bankRenMod == g_slotEditModIdx);
+                        if (renaming) {
+                            // ⛔ THE ID CARRIES THE WHOLE ADDRESS. An active
+                            // InputText keeps its own copy and submits it on the
+                            // next frame, so a field that stayed "the same
+                            // widget" across a cell change would write the text
+                            // from the cell you left into the one you arrived
+                            // at. The UF8 bank-name field learned that in
+                            // August; a different ID makes it a different
+                            // widget.
+                            char rid[64];
+                            snprintf(rid, sizeof(rid), "##skren_%d_%d_%d_%d",
+                                     sl, sq, c, g_slotEditModIdx);
+                            ImGui_SetNextItemWidth(ctx, -1.0);
+                            if (s_bankRenFocus) {
+                                ImGui_SetKeyboardFocusHere(ctx, nullptr);
+                                s_bankRenFocus = false;
+                            }
+                            int rflags = ImGui_InputTextFlags_EnterReturnsTrue;
+                            const bool committed =
+                                ImGui_InputTextWithHint(ctx, rid,
+                                    "name this bank", s_bankRenBuf,
+                                    sizeof(s_bankRenBuf), &rflags, nullptr);
+                            // Enter commits, clicking away commits, Escape
+                            // leaves it alone. Empty puts the default name back,
+                            // which is also how you undo a name.
+                            int escKey = ImGui_Key_Escape;
+                            if (ImGui_IsKeyPressed(ctx, escKey, nullptr)) {
+                                s_bankRenL = s_bankRenQ = s_bankRenSb = -1;
+                            } else if (committed
+                                       || ImGui_IsItemDeactivatedAfterEdit(ctx)
+                                       || ImGui_IsItemDeactivated(ctx)) {
+                                uf8::bindings::setSubBankName(
+                                    sl, sq, c, g_slotEditModIdx, s_bankRenBuf);
+                                s_bankRenL = s_bankRenQ = s_bankRenSb = -1;
+                            }
+                        } else {
+                            bool selCell = here;
+                            int selFlags = ImGui_SelectableFlags_AllowDoubleClick;
+                            if (ImGui_Selectable(ctx, cid, &selCell, &selFlags,
+                                                 nullptr, nullptr)) {
+                                int lmb = 0;
+                                if (ImGui_IsMouseDoubleClicked(ctx, lmb)) {
+                                    s_bankRenL = sl; s_bankRenQ = sq;
+                                    s_bankRenSb = c;
+                                    s_bankRenMod = g_slotEditModIdx;
+                                    const std::string own =
+                                        uf8::bindings::getSubBankName(
+                                            sl, sq, c, g_slotEditModIdx);
+                                    snprintf(s_bankRenBuf,
+                                             sizeof(s_bankRenBuf), "%s",
+                                             own.c_str());
+                                    s_bankRenFocus = true;
+                                } else {
+                                    reasixty_engageSoftKeyBank(sl, sq, c);
+                                }
+                            }
+                            // ⇨ THE RIGHT-CLICK ENGAGES THE CELL FIRST, so the
+                            // bank you are working on is the bank the surface is
+                            // showing — the rule the whole pane rests on. The
+                            // menu itself is drawn after the table, outside the
+                            // cell's ID scope, the shape
+                            // renderBindingContextMenu_ uses.
+                            int rmb = 1;
+                            if (ImGui_IsItemClicked(ctx, &rmb)) {
+                                reasixty_engageSoftKeyBank(sl, sq, c);
+                                s_bankCtxL   = sl;
+                                s_bankCtxQ   = sq;
+                                s_bankCtxSb  = c;
+                                s_bankCtxSet = setNo;
+                                s_bankCtxFilled = filled;
+                                s_bankCtxOpen   = true;
+                            }
                         }
                     }
                 }
                 ImGui_EndTable(ctx);
                 renderBankMatrixContextMenu_(ctx);
+                renderBankMatrixModals_(ctx);
             }
             ImGui_Spacing(ctx);
         }
