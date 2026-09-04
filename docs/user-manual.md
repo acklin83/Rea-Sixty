@@ -1747,7 +1747,7 @@ Top of the pane:
 Slot rows are laid out as a fixed-width 6-column table (so columns stay aligned across rows). Per row, left to right:
 
 - **`• Slot N`** — `•` prefix marks an active slot.
-- **Active** checkbox — toggle this slot's active state. Multiple slots can be active simultaneously (the fan-out is union-of-all-active-slot-members).
+- **Active** checkbox — toggle this slot's active state. Several slots can be active at once, and a track is a target if it belongs to **any** of them (`resolveBroadcastTargets` tests the track's membership mask against the active-group bits). Membership in two active groups changes nothing; a track never has to be in all of them.
 - **Name** text field.
 - Member count display: `(N members)`.
 - **Add Selected** button — add currently-selected REAPER tracks to this slot's membership.
