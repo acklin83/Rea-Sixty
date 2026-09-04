@@ -15696,7 +15696,19 @@ void publishHud_()
                 // proposals have to use the same resolver or they answer for a plug-in
                 // nobody is looking at. Frank, on a 4000 E with the panel open and empty:
                 // "geht nicht".
-                if (alMode >= 0 && alMode != 2 && (!alTr || alFx < 0) && boot) {
+                // ⛔ AND THE VIRGIN FX WINS, IT IS NOT A FALLBACK. This asked
+                // for the bootstrap only when there was no CS/BC target at all,
+                // so with any mapped channel strip alive in the session the CS
+                // tab kept proposing for THAT one while every other part of the
+                // HUD — the banner, the mockup, the title — was on the unmapped
+                // plug-in the user is looking at. The proposals then read as
+                // somebody else's plug-in and would not go away: Frank, with a
+                // Pro-Q in front and an SSL 4000 in the session, "hat im
+                // autolearn alte werte erwischt von einem ssl 4k die ich nicht
+                // rausbringe" (2026-09-04). reasixty_hudPublishUc1 above already
+                // passes nulls while `boot` is true; this is the same rule,
+                // applied where it was missing.
+                if (alMode >= 0 && alMode != 2 && boot) {
                     alTr = bootTr; alFx = bootFx;
                 }
                 const std::string al = (alMode >= 0)
