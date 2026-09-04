@@ -5777,11 +5777,11 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             {"encoder_fx_scroll_all",      "FX Scroll", 0},
             {"encoder_instance_scroll_all","Inst Scroll", 0},
         }));
-        // Nine to sixteen fill the SHIFT set, which is how the Sticky Pot pair
-        // gets in: pinning one parameter to a strip is the same trade as pinning
+        // Nine to sixteen fill the SHIFT set, which is how the Sticky Pot keys
+        // get in: pinning one parameter to a strip is the same trade as pinning
         // one track to the surface, so they belong on the same bank rather than
-        // on one of their own (Frank 2026-09-02). Slot 9 is deliberately empty so
-        // the two land on Shift's first two keys, under the two they belong with.
+        // on one of their own (Frank 2026-09-02). Entry nine is Shift's first key,
+        // so the three land side by side under the ones they belong with.
         v.push_back(bank("Focus Set & Selsets", {
             {"temp_selset_recall",          "Pin Set", 0},
             {"temp_selset_add",             "Add to Set", 0},
@@ -5799,6 +5799,7 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             // why the UF8 did nothing (2026-09-02).
             {"focus_scope_cycle",           "Set Scope", 0},
             {"sticky_pot_get_next",         "Pin Sticky", 0},
+            {"sticky_pot_pair",             "Pair Sticky", 0},
             {"sticky_pot_toggle",           "Sticky OnOff", 0},
         }));
         // ⛔ NINE ENTRIES IN AN EIGHT-SLOT BANK IS A SILENT LOSS. This list used
@@ -6715,6 +6716,10 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "Arms the pin: the next plug-in parameter you touch becomes that "
       "track's V-Pot pin. Pressing the V-Pot while armed clears it "
       "instead." },
+    { "sticky_pot_pair",
+      "Arms the pairing: the next plug-in parameter you touch joins the "
+      "pin on its own track, so one pot moves both. Counter-running "
+      "until you change the ratio in Settings." },
     { "sticky_pot_toggle",
       "Suspends or resumes every pinned parameter at once. The pins "
       "themselves are kept." },
@@ -7343,6 +7348,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "ssl_strip_mode_toggle", "Strip Mode" },
     { "ssl_strip_mode_toggle_with_gui", "Strip + GUI" },
     { "sticky_pot_get_next", "Pin Sticky" },
+    { "sticky_pot_pair", "Pair Sticky" },
     { "sticky_pot_toggle", "Sticky OnOff" },
     { "surface_mirror_mcp", "Mirror MCP" },
     { "surface_mirror_tcp", "Mirror TCP" },

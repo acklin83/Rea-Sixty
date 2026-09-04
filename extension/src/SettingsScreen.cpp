@@ -342,6 +342,7 @@ void        reasixty_stickyClearMacroByGuid(const char* guid);
 void        reasixty_stickySetRatioByGuid(const char* guid, double ratio);
 void        reasixty_stickyArmSecond(const char* guid);   // "" or nullptr disarms
 bool        reasixty_stickyArmedSecond(std::string& guidOut);
+bool        reasixty_stickyArmedPairAny();               // armed from a surface key
 int         reasixty_selsetAutoMode();                          // global: -1 = off, 0..5 = REAPER mode
 void        reasixty_setSelsetAutoMode(int mode);
 int         reasixty_focusSetAutoMode();                        // Focus Set: -1 = off, 0..5 = REAPER mode
@@ -23645,6 +23646,15 @@ void SettingsScreen::drawStickyPot(ImGui_Context* ctx)
 
     std::string armedGuid;
     const bool  arming = reasixty_stickyArmedSecond(armedGuid);
+
+    // The same pairing can be armed from a surface key, where no row was named.
+    // Say so, or the pane looks idle while the surface is waiting for a touch.
+    if (reasixty_stickyArmedPairAny()) {
+        ImGui_Text(ctx,
+            "Pairing armed from the surface: touch the second parameter on a "
+            "pinned track.");
+        ImGui_Spacing(ctx);
+    }
 
     if (rows == 0) {
         ImGui_Text(ctx, "No pins in this project.");

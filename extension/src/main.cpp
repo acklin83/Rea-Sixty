@@ -17851,6 +17851,15 @@ std::atomic<bool> g_stickyArmGetNext{false};  // "get next touched" armed (worke
 // ends are main-thread — armed from the Settings pane, consumed in stickyPotTick_
 // — unlike the two builtins above, which are fired from the input worker.
 std::string g_stickyArmSecondGuid;
+// The same pairing arm from a HARDWARE key, where there is no row to point at:
+// the next touched parameter joins the pin of whichever track it lives on. An
+// atomic because the builtin fires on the input worker, which must not touch the
+// string above.
+std::atomic<bool> g_stickyArmPairAny{false};
+// A successful capture, for the mode banner: the falling edge of an arm flag
+// cannot tell a capture from a twenty-second timeout. 1 = pinned, 2 = paired;
+// the banner block consumes it with exchange(0).
+std::atomic<int> g_stickyCaptureAnnounce{0};
 // Set to nowMs_()+window after every sticky param WRITE. chaseLastTouchedFx absorbs
 // while it's live so a sticky move doesn't hijack the GLOBAL focused param (which
 // would drag every OTHER strip's V-Pot onto the equivalent slot). Same pattern as
@@ -17946,6 +17955,7 @@ void stickyPotAssign_(MediaTrack* tr, int fx, int param)
     pin.vst3Param = param;
     pin.toggle    = isToggle;
     g_stickyPins[trackGuidStr_(tr)] = std::move(pin);
+    g_stickyCaptureAnnounce.store(1);  // banner: "Sticky • Pinned"
     g_stickyActive.store(true);        // assigning implies active
     g_pageDirty.store(true);
     if (ReaProject* pr = EnumProjects(-1, nullptr, 0)) MarkProjectDirty(pr);
@@ -18059,6 +18069,7 @@ bool stickyPotAssignSecond_(MediaTrack* tr, int fx2, int param2)
     pin.ratio      = -1.0;                           // counter-running until told otherwise
     pin.lastN1     = pin.anchor1;
     pin.lastN2     = pin.anchor2;
+    g_stickyCaptureAnnounce.store(2);                // banner: "Sticky • Paired"
     g_pageDirty.store(true);
     if (ReaProject* pr = EnumProjects(-1, nullptr, 0)) MarkProjectDirty(pr);
     return true;
@@ -18150,12 +18161,17 @@ void stickyPotTick_()
     static double  baseVal = -1e9;
     static int64_t armMs = 0;
 
-    // The pin arm (a hardware action) always wins over the macro arm (a button in
-    // the Settings pane), so the two can never both be live.
-    if (g_stickyArmGetNext.load() && !g_stickyArmSecondGuid.empty())
-        g_stickyArmSecondGuid.clear();
-    const bool armSecond = !g_stickyArmSecondGuid.empty();
-    if (!g_stickyArmGetNext.load() && !armSecond) { wasArmed = false; return; }
+    // Three arms, one capture. The pin arm always wins over a pairing arm, and the
+    // two ways to arm a pairing cancel each other so the last one you fired is the
+    // one that is live: the pane arms ONE track's row, the hardware key arms
+    // whichever pinned track you touch. The pane's setter clears the atomic; the
+    // atomic can only be set from the worker, so the string is cleared here.
+    const bool armPin = g_stickyArmGetNext.load();
+    if (armPin) { g_stickyArmSecondGuid.clear(); g_stickyArmPairAny.store(false); }
+    const bool armPairAny = g_stickyArmPairAny.load();
+    if (armPairAny && !g_stickyArmSecondGuid.empty()) g_stickyArmSecondGuid.clear();
+    const bool armSecond = armPairAny || !g_stickyArmSecondGuid.empty();
+    if (!armPin && !armSecond) { wasArmed = false; return; }
     if (wasArmed && wasSecond != armSecond) wasArmed = false;   // kind changed → fresh edge
 
     int trWord=-1, fxWord=-1, paramIdx=-1;
@@ -18172,6 +18188,7 @@ void stickyPotTick_()
     if (nowMs_() - armMs > 20000) {
         g_stickyArmGetNext.store(false);
         g_stickyArmSecondGuid.clear();
+        g_stickyArmPairAny.store(false);
         return;
     }
     if (!have) return;
@@ -18192,12 +18209,15 @@ void stickyPotTick_()
                               && curVal != baseVal && !(GetPlayState() & 1));
     if (tupleChanged || valueWiggle) {
         if (armSecond) {
-            // Only the armed track's own parameters may become its second target.
-            // A touch anywhere else re-baselines instead of cancelling, so grabbing
-            // the wrong plug-in first does not cost the arm.
-            if (trackGuidStr_(tr) == g_stickyArmSecondGuid
-                && stickyPotAssignSecond_(tr, fxIdx, paramIdx)) {
+            // Armed from the pane: only that track's own parameters may join it.
+            // Armed from the key: any track that already carries a pin. Either way
+            // a touch that does not fit re-baselines instead of cancelling, so
+            // grabbing the wrong plug-in first does not cost the arm.
+            const bool trackOk = armPairAny
+                              || trackGuidStr_(tr) == g_stickyArmSecondGuid;
+            if (trackOk && stickyPotAssignSecond_(tr, fxIdx, paramIdx)) {
                 g_stickyArmSecondGuid.clear();
+                g_stickyArmPairAny.store(false);
                 wasArmed = false;
             } else {
                 baseTr = trWord; baseFx = fxWord; baseParam = paramIdx; baseVal = -1e9;
@@ -38367,6 +38387,7 @@ void onTimerBody_()
         // flash the banner too, not just sel/encoder). Each is an INDEPENDENT diff
         // → its own label; the shared mbSeq restarts the companion's hide timer.
         static bool          mbSticky = false, mbStickyArm = false, mbFocusPin = false;
+        static bool          mbStickyPairArm = false;
         static int           mbFocusScope = 0;
         static bool          mbFlip = false, mbMaster = false, mbStrip = false, mbExt = false;
         // UF8/UC1 side of the SAME feature. SSL Strip Mode is per-device: the UF8
@@ -38625,6 +38646,10 @@ void onTimerBody_()
         auto onOff = [](bool b) -> const char* { return b ? "On" : "Off"; };
         const bool sa   = g_stickyActive.load();
         const bool sarm = g_stickyArmGetNext.load();
+        const bool sprm = g_stickyArmPairAny.load() || !g_stickyArmSecondGuid.empty();
+        // Consumed unconditionally: a capture announced on the tick a project
+        // loads would otherwise sit in the flag and fire much later.
+        const int  scap = g_stickyCaptureAnnounce.exchange(0);
         const bool fp   = g_tempSelsetActive.load();
         const int  fsc  = g_focusSetScope.load();
         const bool ufl  = g_uf1Flip.load();
@@ -38661,6 +38686,7 @@ void onTimerBody_()
         auto mbSeed = [&] {
             mbLastSel = sm; mbLastEnc = em; mbLastUf1Enc = uf1em;
             mbSticky = sa; mbStickyArm = sarm; mbFocusPin = fp; mbFocusScope = fsc;
+            mbStickyPairArm = sprm;
             mbFlip = ufl; mbMaster = ufm; mbStrip = ufs; mbExt = ufe; mbExtSide = ufes;
             mbView = ufv; mbJog = jm; mbEnvPh = eph;
             mbFadeOut = fdo; mbFadeWalk = fdw;
@@ -38691,6 +38717,11 @@ void onTimerBody_()
             // Sticky Pot: active/suspended + "arm next parameter".
             if (sa != mbSticky)     { chg.push_back(std::string("Sticky \xE2\x80\xA2 ") + onOff(sa)); mbSticky = sa; }
             if (sarm != mbStickyArm){ if (sarm) chg.push_back("Sticky \xE2\x80\xA2 Arm"); mbStickyArm = sarm; }
+            if (sprm != mbStickyPairArm){ if (sprm) chg.push_back("Sticky \xE2\x80\xA2 Pair Arm"); mbStickyPairArm = sprm; }
+            // Arming says what it is waiting for; this says it got it. Without it
+            // the arm simply goes dark and a timeout looks like a capture.
+            if (scap == 1)      chg.push_back("Sticky \xE2\x80\xA2 Pinned");
+            else if (scap == 2) chg.push_back("Sticky \xE2\x80\xA2 Paired");
             // Focus Set: pin + scope.
             if (fp != mbFocusPin)   { chg.push_back(std::string("Focus Set \xE2\x80\xA2 ") + (fp ? "Pinned" : "Off")); mbFocusPin = fp; }
             if (fsc != mbFocusScope){ const char* n = (fsc == 1) ? "UF1" : (fsc == 2) ? "UF8" : "Both";
@@ -44404,6 +44435,7 @@ void reasixty_stickySetRatioByGuid(const char* guid, double ratio)
 void reasixty_stickyArmSecond(const char* guid)
 {
     g_stickyArmSecondGuid = (guid && *guid) ? guid : "";
+    g_stickyArmPairAny.store(false);   // a row was named; the "any track" arm is off
 }
 
 bool reasixty_stickyArmedSecond(std::string& guidOut)
@@ -44411,6 +44443,10 @@ bool reasixty_stickyArmedSecond(std::string& guidOut)
     guidOut = g_stickyArmSecondGuid;
     return !g_stickyArmSecondGuid.empty();
 }
+
+// The hardware pairing arm, so the pane can show that one is running even
+// though no row asked for it.
+bool reasixty_stickyArmedPairAny() { return g_stickyArmPairAny.load(); }
 
 bool reasixty_uf1SendsFollowHeld() { return g_uf1SendsFollowHeld.load(); }
 void reasixty_setUf1SendsFollowHeld(bool on)
@@ -47092,6 +47128,17 @@ void registerBindingHandlers()
         },
         [](int) { return g_stickyArmGetNext.load(); },
         "Sticky Pot: Get next touched Parameter", false
+    });
+    // Pairing from the surface: no row to point at, so the next touched parameter
+    // joins the pin of whichever track it lives on. A touch on a track with no pin
+    // is ignored and the arm keeps waiting.
+    registerBuiltin("sticky_pot_pair", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_stickyArmPairAny.store(true);
+        },
+        [](int) { return g_stickyArmPairAny.load(); },
+        "Sticky Pot: Pair next touched Parameter", false
     });
     registerBuiltin("sticky_pot_toggle", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
