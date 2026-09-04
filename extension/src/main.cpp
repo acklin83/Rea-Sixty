@@ -38852,13 +38852,19 @@ void onTimerBody_()
                 const auto alSemi = s.find(';', 8);
                 MediaTrack* alTr = csTr; int alFx = csFx;
                 if (alMode == 1) { alTr = bcTr; alFx = bcFx; }
-                // Same hole as in the publisher: an unmapped plug-in is not a
-                // CS/BC target, and it is the one the proposals were made for.
-                if (alMode != 2 && (!alTr || alFx < 0)) {
-                    MediaTrack* vTr = nullptr; int vFx = -1;
-                    if (hudCursorUnlearnedFx_(vTr, vFx)) { alTr = vTr; alFx = vFx; }
-                }
-                else if (alMode >= 2) {
+                // ⛔ THE VIRGIN FX WINS HERE TOO — THIRD TIME TODAY. The
+                // publisher had this exact hole (proposals for a plug-in nobody
+                // was looking at) and so did this apply: it took the bootstrap
+                // only when NO CS/BC target existed, so with any mapped strip
+                // alive in the session the ticked rows were written into THAT
+                // map. The HUD, correctly on the unmapped plug-in, then showed
+                // an empty mockup and the work looked lost (Frank 2026-09-04:
+                // "nach AutoLearn apply keine zuordnungen"). Whenever the HUD is
+                // bootstrapping, every path that resolves a target must resolve
+                // the same one.
+                MediaTrack* vTr = nullptr; int vFx = -1;
+                const bool alBoot = hudCursorUnlearnedFx_(vTr, vFx);
+                if (alMode >= 2) {
                     // The UF8 / UF1 targets are published for the HUD; read them
                     // back rather than resolving them a second, divergent way.
                     const char* t = GetExtState("rea_sixty",
@@ -38869,6 +38875,8 @@ void onTimerBody_()
                                          : GetTrack(nullptr, tn - 1);
                         alFx = tf;
                     } else { alTr = nullptr; alFx = -1; }
+                } else if (alBoot) {
+                    alTr = vTr; alFx = vFx;
                 }
                 if (alSemi != std::string::npos
                     && reasixty_hudApplyAutoLearn(alTr, alFx, alMode,
