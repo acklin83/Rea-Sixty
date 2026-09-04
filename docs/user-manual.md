@@ -1553,7 +1553,7 @@ Note: a parameter you put in EXT FUNCS that's also on a physical V-Pot uses the 
 Right-clicking a mapped control on the UF8 / UC1 schematic opens per-control options:
 
 - **Copy / Paste / Clear** the binding.
-- **Fill sequential (right)** on a V-Pot / Fader / Solo / Cut / Sel — propagates the source-strip's attributes onto every strip to the right. Carried fields: faderInverted; V-Pot inverted / vpotMode / polarity / defaultNorm / stripColour / travel (range + curve + sensitivity); Solo / Cut / Sel colour; Reverse LED flag.
+- **Fill sequential (right)** on a V-Pot / Fader / Solo / Cut / Sel — **UF8 only**, there being no row of strips to fill on the UC1 — propagates the source-strip's attributes onto every strip to the right. Carried fields: faderInverted; V-Pot inverted / vpotMode / polarity / defaultNorm / stripColour / travel (range + curve + sensitivity); Solo / Cut / Sel colour; Reverse LED flag.
 - **Inverted [off/on]** on a Fader / V-Pot — flips the rotation / direction-to-value mapping.
 - **Reverse LED [off/on]** on a Solo / Cut / Sel button — XORs the LED on/off bit before painting. Use this for plug-ins whose Cut/Bypass param reports `1 = inactive` so the LED would otherwise stay bright while the function is off. Saved per `(fader-bank, strip, button)` in `user_plugins.json`.
 - **V-Pot mode: Value / Toggle** on a V-Pot — Value = continuous (rotate scrubs, push resets to *Push reset*); Toggle = binary (rotate ignored, push flips 0↔1).
