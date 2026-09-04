@@ -15378,6 +15378,20 @@ static std::string hudLcdString_(MediaTrack* tr, int line3Fx)
 void resolveFocusedUf8Target_(MediaTrack*& trOut, int& fxOut, const void*& mapOut,
                               bool* focusOut = nullptr);
 
+// Per-section timings for the slow-tick line below. Main thread only, reset at
+// the top of every tick.
+static int64_t g_secHudMs = 0;
+// Breakdown of the HUD publish, printed with the slow-tick line. Named so the
+// log says WHICH builder is expensive instead of "the publish is".
+static int64_t g_hudPartUc1 = 0, g_hudPartDetail = 0, g_hudPartFeel = 0,
+               g_hudPartPush = 0, g_hudPartUsedBy = 0, g_hudPartAl = 0,
+               g_hudPartUf8 = 0, g_hudPartUf1 = 0;
+struct TickSection_ {
+    int64_t* dst; int64_t t0;
+    explicit TickSection_(int64_t* d) : dst(d), t0(nowMs_()) {}
+    ~TickSection_() { *dst += nowMs_() - t0; }
+};
+
 void publishHud_()
 {
     if (!g_hudEnabled.load()) return;
@@ -15400,8 +15414,11 @@ void publishHud_()
     MediaTrack* bootTr = nullptr; int bootFx = -1;
     const bool boot = hudCursorUnlearnedFx_(bootTr, bootFx);
     std::string state, assign;
-    if (boot) reasixty_hudPublishUc1(nullptr, -1, nullptr, -1, focusDom, state, assign);
-    else      reasixty_hudPublishUc1(csTr, csFx, bcTr, bcFx, focusDom, state, assign);
+    {
+        TickSection_ sec(&g_hudPartUc1);
+        if (boot) reasixty_hudPublishUc1(nullptr, -1, nullptr, -1, focusDom, state, assign);
+        else      reasixty_hudPublishUc1(csTr, csFx, bcTr, bcFx, focusDom, state, assign);
+    }
     if (state != g_hudStatePublished) {
         g_hudStatePublished = state;
         SetExtState("rea_sixty", "hud_state", state.c_str(), false);
@@ -15424,13 +15441,18 @@ void publishHud_()
         const int frozenLayer = (fl && *fl) ? std::atoi(fl) : -1;
         const int curLayer = (frozenLayer >= 0 && frozenLayer <= 3)
             ? frozenLayer : reasixty_fxLearnActiveLayer();
-        const std::string detail = boot ? std::string()
-            : reasixty_hudBuildDetail(csTr, csFx, bcTr, bcFx, curLayer);
+        std::string detail;
+        {
+            TickSection_ sec(&g_hudPartDetail);
+            detail = boot ? std::string()
+                : reasixty_hudBuildDetail(csTr, csFx, bcTr, bcFx, curLayer);
+        }
         if (detail != g_hudDetailPublished) {
             g_hudDetailPublished = detail;
             SetExtState("rea_sixty", "hud_detail", detail.c_str(), false);
         }
-        const std::string feel = reasixty_hudBuildFeel();
+        std::string feel;
+        { TickSection_ sec(&g_hudPartFeel); feel = reasixty_hudBuildFeel(); }
         if (feel != g_hudFeelPublished) {
             g_hudFeelPublished = feel;
             SetExtState("rea_sixty", "hud_feel", feel.c_str(), false);
@@ -15445,9 +15467,13 @@ void publishHud_()
         }
         const char* pr = GetExtState("rea_sixty", "hud_push_req");
         const int pReqIdx = (pr && *pr) ? std::atoi(pr) : -1;
-        const std::string push = (pReqIdx >= 0 && !boot)
-            ? reasixty_hudBuildPush(pReqIdx, csTr, bcTr, curLayer)
-            : std::string();
+        std::string push;
+        {
+            TickSection_ sec(&g_hudPartPush);
+            push = (pReqIdx >= 0 && !boot)
+                 ? reasixty_hudBuildPush(pReqIdx, csTr, bcTr, curLayer)
+                 : std::string();
+        }
         if (push != g_hudPushPublished) {
             g_hudPushPublished = push;
             SetExtState("rea_sixty", "hud_push", push.c_str(), false);
@@ -15669,6 +15695,7 @@ void publishHud_()
         // the one place all three targets are resolved at once (CS, BC and the
         // UF8 param-list FX). Diff-guarded like every other payload.
         {
+            TickSection_ secU(&g_hudPartUsedBy);
             const std::string ub = reasixty_hudBuildUsedBy(
                 csTr, csFx, bcTr, bcFx, uf8TgtTr, uf8TgtFx);
             if (ub != g_hudUsedByPublished) {
@@ -15732,8 +15759,13 @@ void publishHud_()
                 if (alMode >= 0 && alMode != 2 && boot) {
                     alTr = bootTr; alFx = bootFx;
                 }
-                const std::string al = (alMode >= 0)
-                    ? reasixty_hudBuildAutoLearn(alTr, alFx, alMode) : std::string();
+                std::string al;
+                {
+                    TickSection_ sec(&g_hudPartAl);
+                    al = (alMode >= 0)
+                       ? reasixty_hudBuildAutoLearn(alTr, alFx, alMode)
+                       : std::string();
+                }
                 if (al != g_hudAutoLearnPublished) {
                     g_hudAutoLearnPublished = al;
                     SetExtState("rea_sixty", "hud_al", al.c_str(), false);
@@ -15741,6 +15773,7 @@ void publishHud_()
             }
         }
         std::string uf8State, uf8Assign, uf8Banks, uf8StripCols;
+        TickSection_ secU8(&g_hudPartUf8);
         reasixty_hudPublishUf8(uf8Tr, uf8Fx, uf8Map, faderBank, vpotBank,
                                uf8Boot.c_str(), uf8Focus, uf8State, uf8Assign,
                                uf8Banks, uf8StripCols);
@@ -15774,6 +15807,7 @@ void publishHud_()
                 // Per-V-Pot tuning for the tab's full-parity menu. Same target,
                 // so the menu can never describe a different plug-in than the
                 // cells above it.
+                TickSection_ sec(&g_hudPartUf1);
                 uf1Detail = reasixty_hudBuildUf1Detail(u1Tr, u1Fx);
             }
             if (uf1Assign != g_hudUf1AssignPublished) {
@@ -37832,14 +37866,6 @@ bool g_throwCameFromImGuiFrame = false;
 // with an unreadable crash report. The 2026-08-14 abort was exactly that — a
 // size_t underflow in composeValueLine, three lines of arithmetic, one lost
 // afternoon.
-// Per-section timings for the slow-tick line below. Main thread only, reset at
-// the top of every tick.
-static int64_t g_secHudMs = 0;
-struct TickSection_ {
-    int64_t* dst; int64_t t0;
-    explicit TickSection_(int64_t* d) : dst(d), t0(nowMs_()) {}
-    ~TickSection_() { *dst += nowMs_() - t0; }
-};
 
 void onTimer()
 {
@@ -37860,6 +37886,8 @@ void onTimer()
         // own time, and the slow-tick line prints the breakdown. Zeroed here,
         // so the numbers always belong to the tick being reported.
         g_secHudMs = 0;
+        g_hudPartUc1 = g_hudPartDetail = g_hudPartFeel = g_hudPartPush = 0;
+        g_hudPartUsedBy = g_hudPartAl = g_hudPartUf8 = g_hudPartUf1 = 0;
         // ⇨ AND RECOVER FROM IT. Measured 2026-08-29: selecting the master
         // stalls REAPER's timer (onTimer GAP 1085 ms) while the pacer keeps
         // emitting from its own thread. The surface comes back with its plane
@@ -37888,9 +37916,14 @@ void onTimer()
                     *worstRun = run;
                     if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
                         std::fprintf(lg,
-                            "[uf1] onTimer RAN %lld ms (tick itself is slow; "
-                            "HUD publish %lld ms)\n",
-                            (long long)run, (long long)g_secHudMs);
+                            "[uf1] onTimer RAN %lld ms (tick slow; HUD %lld ms"
+                            " = uc1 %lld, detail %lld, feel %lld, push %lld,"
+                            " usedby %lld, autolearn %lld, uf8 %lld, uf1 %lld)\n",
+                            (long long)run, (long long)g_secHudMs,
+                            (long long)g_hudPartUc1, (long long)g_hudPartDetail,
+                            (long long)g_hudPartFeel, (long long)g_hudPartPush,
+                            (long long)g_hudPartUsedBy, (long long)g_hudPartAl,
+                            (long long)g_hudPartUf8, (long long)g_hudPartUf1);
                         std::fclose(lg);
                     }
                 }
