@@ -23760,6 +23760,9 @@ void SettingsScreen::drawStickyPot(ImGui_Context* ctx)
         "The follower stops at its end of travel; the pot itself never blocks. "
         "The surface keeps showing the first parameter.");
     ImGui_Text(ctx,
+        "Move either parameter by hand and the pot picks it up from there: the "
+        "ratio stays, the zero point moves with you.");
+    ImGui_Text(ctx,
         "Pinning a new parameter to a track drops that track's pairing.");
 }
 

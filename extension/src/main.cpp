@@ -17830,6 +17830,14 @@ struct StickyPin {
     double      anchor1    = 0.0;
     double      anchor2    = 0.0;
     double      ratio      = -1.0;   // -1 = counter-running one to one
+    // What we last LEFT the pair at (param 2 read back, so a plug-in's own
+    // quantisation does not look like a hand move). Anything that differs from
+    // these two on the next turn was moved behind our back — by hand in the
+    // plug-in, by another controller — and becomes the new anchor. Runtime only:
+    // after a project load the first turn adopts whatever is on screen, which is
+    // exactly the same rule.
+    double      lastN1     = -1.0;
+    double      lastN2     = -1.0;
 };
 std::unordered_map<std::string /*track GUID*/, StickyPin> g_stickyPins;
 std::atomic<bool> g_stickyActive{true};       // global active / suspended
@@ -17981,24 +17989,49 @@ bool stickyResolveMacroOnTrack_(MediaTrack* tr, const StickyPin& pin,
 
 // Drag the macro's second parameter along. Called right AFTER every path that
 // writes the pinned (first) parameter — rotation, push, and both FLIP-to-fader
-// writes. No-op without a macro, so the plain single-param pin costs one map
-// lookup and nothing else. Reads param 1's resulting value rather than the delta
-// that produced it, so it is correct no matter which of those paths wrote it.
-void stickyApplyMacro_(MediaTrack* tr)
+// writes — with `prevN1` = param 1's value BEFORE that write. No-op without a
+// macro, so the plain single-param pin costs one map lookup and nothing else.
+// Works off param 1's VALUE rather than the delta that produced it, so one helper
+// is correct for all four paths.
+//
+// Re-anchoring (Frank 2026-09-04): whatever either side is at when we arrive, if
+// it is not where WE left it, somebody moved it by hand — in the plug-in, from
+// another controller — and that position becomes the new zero. The ratio stays;
+// only the point it counts from moves. Without this the next detent would yank
+// the follower back onto the old line and throw the hand correction away.
+void stickyApplyMacro_(MediaTrack* tr, double prevN1)
 {
-    const StickyPin* pin = stickyPinFor_(tr);
-    if (!pin || pin->fxGuid2.empty()) return;
+    if (!tr || g_stickyPins.empty()) return;
+    auto it = g_stickyPins.find(trackGuidStr_(tr));
+    if (it == g_stickyPins.end() || it->second.fxGuid2.empty()) return;
+    StickyPin& pin = it->second;
+
     int fx1 = -1, p1 = -1, fx2 = -1, p2 = -1;
-    if (!stickyResolveOnTrack_(tr, &fx1, &p1, nullptr))    return;
-    if (!stickyResolveMacroOnTrack_(tr, *pin, &fx2, &p2))  return;
-    const double n1 = TrackFX_GetParamNormalized(tr, fx1, p1);
-    double n2 = pin->anchor2 + (n1 - pin->anchor1) * pin->ratio;
+    if (!stickyResolveOnTrack_(tr, &fx1, &p1, nullptr))   return;
+    if (!stickyResolveMacroOnTrack_(tr, pin, &fx2, &p2))  return;
+
+    const double n1   = TrackFX_GetParamNormalized(tr, fx1, p1);   // after our write
+    const double cur2 = TrackFX_GetParamNormalized(tr, fx2, p2);
+
+    const bool drifted = pin.lastN1 < 0.0 || pin.lastN2 < 0.0
+                      || std::fabs(prevN1 - pin.lastN1) > 1e-4
+                      || std::fabs(cur2   - pin.lastN2) > 1e-4;
+    if (drifted) {
+        pin.anchor1 = prevN1;   // the pin where this move started
+        pin.anchor2 = cur2;     // the follower where the hand left it
+    }
+
+    double n2 = pin.anchor2 + (n1 - pin.anchor1) * pin.ratio;
     if (n2 < 0.0) n2 = 0.0;      // ran out of travel: clamp the follower,
     if (n2 > 1.0) n2 = 1.0;      // the pot itself never blocks
-    const double cur2 = TrackFX_GetParamNormalized(tr, fx2, p2);
-    if (std::fabs(cur2 - n2) < 1e-6) return;   // nothing to write, nothing to lock
-    TrackFX_SetParamNormalized(tr, fx2, p2, n2);
-    g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // same absorb as the pin write
+    if (std::fabs(cur2 - n2) >= 1e-6) {
+        TrackFX_SetParamNormalized(tr, fx2, p2, n2);
+        g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // same absorb as the pin write
+    }
+    pin.lastN1 = n1;
+    // Read back rather than trusting n2: a stepped param quantises what we wrote,
+    // and the difference would look like a hand move on the very next detent.
+    pin.lastN2 = TrackFX_GetParamNormalized(tr, fx2, p2);
 }
 
 // Pair a SECOND parameter onto an existing pin. Anchors BOTH current values, so
@@ -18024,6 +18057,8 @@ bool stickyPotAssignSecond_(MediaTrack* tr, int fx2, int param2)
     pin.anchor1    = TrackFX_GetParamNormalized(tr, fx1, p1);
     pin.anchor2    = TrackFX_GetParamNormalized(tr, fx2, param2);
     pin.ratio      = -1.0;                           // counter-running until told otherwise
+    pin.lastN1     = pin.anchor1;
+    pin.lastN2     = pin.anchor2;
     g_pageDirty.store(true);
     if (ReaProject* pr = EnumProjects(-1, nullptr, 0)) MarkProjectDirty(pr);
     return true;
@@ -18083,7 +18118,7 @@ void stickyWriteRotation_(MediaTrack* tr, int fx, int param, int strip, double d
     if (next > 1.0) next = 1.0;
     TrackFX_SetParamNormalized(tr, fx, param, next);
     g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // don't let the move steal focus
-    stickyApplyMacro_(tr);                            // no-op unless this pin has a second target
+    stickyApplyMacro_(tr, cur);                       // no-op unless this pin has a second target
 }
 
 // V-Pot push on a pinned param: toggle flips 0/1, else reset to midpoint (0.5 —
@@ -18091,6 +18126,7 @@ void stickyWriteRotation_(MediaTrack* tr, int fx, int param, int strip, double d
 // 0 dB for bipolar params, midpoint otherwise, same convention as CS push).
 void stickyPushDefault_(MediaTrack* tr, int fx, int param, bool toggle)
 {
+    const double prev = TrackFX_GetParamNormalized(tr, fx, param);
     if (toggle) {
         const double cur = TrackFX_GetParamNormalized(tr, fx, param);
         TrackFX_SetParamNormalized(tr, fx, param, cur >= 0.5 ? 0.0 : 1.0);
@@ -18098,7 +18134,7 @@ void stickyPushDefault_(MediaTrack* tr, int fx, int param, bool toggle)
         TrackFX_SetParamNormalized(tr, fx, param, 0.5);
     }
     g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // don't let the reset steal focus
-    stickyApplyMacro_(tr);
+    stickyApplyMacro_(tr, prev);
 }
 
 // "Get next touched" poll — runs each onTimer (main thread). On the arm edge it
@@ -19147,9 +19183,10 @@ void drainInputQueue()
                                    static_cast<double>(kUf8FaderPbMax);
                         if (n < 0.0) n = 0.0;
                         if (n > 1.0) n = 1.0;
+                        const double prevN = TrackFX_GetParamNormalized(tr, sfx, sp);
                         TrackFX_SetParamNormalized(tr, sfx, sp, n);
                         g_stickyFocusLockUntilMs.store(nowMs_() + 400);
-                        stickyApplyMacro_(tr);
+                        stickyApplyMacro_(tr, prevN);
                         break;
                     }
                 }
@@ -31391,9 +31428,10 @@ void uf1PaintChannel_()
             }
             else if (stickyFader) {
                 const double n = std::clamp(double(pos) / double(kUf1FaderMax), 0.0, 1.0);
+                const double prevN = TrackFX_GetParamNormalized(ftr, stickyFx, stickyParam);
                 TrackFX_SetParamNormalized(ftr, stickyFx, stickyParam, n);
                 g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // don't let the move steal focus
-                stickyApplyMacro_(ftr);
+                stickyApplyMacro_(ftr, prevN);
             }
             else if (flipParamFader) {
                 // Plugin mode + FLIP. LINEAR pos↔norm, like Strip Mode and Sticky
@@ -44353,6 +44391,11 @@ void reasixty_stickySetRatioByGuid(const char* guid, double ratio)
     if (std::fabs(ratio) < 0.05) ratio = (ratio < 0.0) ? -0.05 : 0.05;
     if (std::fabs(it->second.ratio - ratio) < 1e-9) return;
     it->second.ratio = ratio;
+    // A new slope has to pivot around where the pair stands NOW, not around the
+    // anchor it was paired at, or the next detent would jump the follower onto
+    // the new line. Forgetting the last state makes the next turn re-anchor.
+    it->second.lastN1 = -1.0;
+    it->second.lastN2 = -1.0;
     stickyTouchProject_();
 }
 
