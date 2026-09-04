@@ -377,22 +377,22 @@ The UC1 mirrors the SSL Channel Strip 2 + Bus Compressor 2 controls on a dedicat
 
 The UC1 has no hardware mode-switch — the Channel Strip and Bus Compressor sections are always live, each driving whichever CS or BC Instance is currently in focus on the focused track.
 
-## Channel Strip section — left side (EQ + Filters, 12 knobs)
+## Channel Strip section — left side (EQ + Filters, 12 pots)
 
 Top to bottom on the left half:
 
-- **LPF / HPF** — two filter knobs (low-pass + high-pass frequency).
-- **HF** — Gain + Freq (2 knobs).
-- **HMF** — Gain + Freq + Q (3 knobs).
-- **LMF** — Gain + Freq + Q (3 knobs).
-- **LF** — Gain + Freq (2 knobs).
+- **LPF / HPF** — two filter pots (low-pass + high-pass frequency).
+- **HF** — Gain + Freq (2 pots).
+- **HMF** — Gain + Freq + Q (3 pots).
+- **LMF** — Gain + Freq + Q (3 pots).
+- **LF** — Gain + Freq (2 pots).
 
 Plus the EQ-section buttons: **HF Bell** (HF shape), **EQ Type** (E vs G EQ curve), **EQ In** (EQ section bypass), **LF Bell** (LF shape).
 
-## Channel Strip section — right side (Dynamics + Channel, 7 knobs + 12 buttons)
+## Channel Strip section — right side (Dynamics + Channel, 7 pots + 12 buttons)
 
-- **Compressor:** Threshold + Ratio + Release (3 knobs).
-- **Gate / Expander:** Threshold + Range + Hold + Release (4 knobs).
+- **Compressor:** Threshold + Ratio + Release (3 pots).
+- **Gate / Expander:** Threshold + Range + Hold + Release (4 pots).
 
 Buttons:
 
@@ -411,18 +411,18 @@ Channel section (lowest row of buttons):
 - **Channel In** (channel input enable)
 - **Fine** (FINE / Shift modifier on UC1)
 
-## Channel Strip top row (2 knobs)
+## Channel Strip top row (2 pots)
 
 - **Input Trim** (CS input gain)
 - **Channel Fader Level** / **Output Gain** (CS fader stage)
 
 When SSL Strip Mode is engaged on the UF8, the **Channel Fader Level** parameter is what the UF8 motorised faders drive.
 
-The Output Gain knob can be flipped to drive **REAPER's track volume fader** instead of the CS Fader Level parameter — see *Native actions → Surface-state toggles → UC1 Out-Gain to REAPER fader*. Handy when the track has no SSL channel strip but you still want a hardware volume knob; the LED ring and readout follow the track fader while engaged. When the UC1 is focused on the **Master** track and there is no Channel Strip on it, the knob drives the Master fader automatically — no toggle needed (see *Master track*).
+The Output Gain pot can be flipped to drive **REAPER's track volume fader** instead of the CS Fader Level parameter — see *Native actions → Surface-state toggles → UC1 Out-Gain to REAPER fader*. Handy when the track has no SSL channel strip but you still want a hardware volume pot; the LED ring and readout follow the track fader while engaged. When the UC1 is focused on the **Master** track and there is no Channel Strip on it, the pot drives the Master fader automatically — no toggle needed (see *Master track*).
 
-## Bus Compressor section (7 knobs + 1 button)
+## Bus Compressor section (7 pots + 1 button)
 
-- **Threshold** / **Ratio** / **Attack** / **Release** / **Make-Up** / **Mix** / **SC HPF** — 7 knobs across the top centre.
+- **Threshold** / **Ratio** / **Attack** / **Release** / **Make-Up** / **Mix** / **SC HPF** — 7 pots across the top centre.
 - **Bus Comp In** — single button enabling the BC section.
 
 The BC controls drive the BC Instance on the **BC anchor track** — the track UC1 has currently pinned for Bus-Comp display. Encoder 2 (the *Secondary encoder* right of the central screen) scrolls the anchor between BC-bearing tracks.
@@ -433,7 +433,7 @@ The mechanical BC VU meter is driven from REAPER via the PreSonus standard `Gain
 
 A column of buttons + the central LCD + the two encoders:
 
-- **Back** / **Confirm** — navigate the on-screen menus (Routing / Presets / etc.). From the main screen, **Back** opens the **EXT FUNCS** menu — a hidden list of channel-strip parameters that don't have a dedicated knob. Scroll it with the secondary encoder; push the encoder to switch from scrolling to adjusting the selected parameter. For SSL channel-strip plug-ins the list is the fixed SSL set; for user-mapped (non-SSL) channel strips it's whatever you curate (see *FX Learn pane → UC1 EXT FUNCS list*).
+- **Back** / **Confirm** — navigate the on-screen menus (Routing / Presets / etc.). From the main screen, **Back** opens the **EXT FUNCS** menu — a hidden list of channel-strip parameters that don't have a dedicated pot. Scroll it with the secondary encoder; push the encoder to switch from scrolling to adjusting the selected parameter. For SSL channel-strip plug-ins the list is the fixed SSL set; for user-mapped (non-SSL) channel strips it's whatever you curate (see *FX Learn pane → UC1 EXT FUNCS list*).
 - **Routing** — opens the Routing menu on the LCD.
 - **Presets** — opens the Presets menu for the instance the **Channel Strip / Bus Compressor** selection on that screen points at. An SSL plug-in lists SSL's own library in its folders; anything else lists REAPER's presets for it, your own and the factory list. Browsing loads nothing; **Confirm** does.
 - **360°** — default **Open / Close Rea-Sixty Settings** (bindable on its own UC1 entry so it can diverge from the UF8 360° key).
@@ -1021,7 +1021,7 @@ Below the two toggles, per-surface speed and 0 dB / centre-pan detent feel for *
 |---|---|---|
 | UF8 V-Pot speed | 1.00× | Linear multiplier on every UF8 V-Pot rotation delta. Higher = faster / coarser, lower = slower / finer. 1.00× = the historic feel. |
 | UF8 Fine factor | 0.25× | How much the UF8 step shrinks while Fine is engaged (Shift / `FINE` / UC1 `Fine`). Lower = finer. |
-| UC1 encoder speed | 1.00× | Same as UF8 V-Pot speed, for the UC1 knobs / encoders. Independent so the two surfaces can be tuned separately. |
+| UC1 encoder speed | 1.00× | Same as UF8 V-Pot speed, for the UC1 pots / encoders. Independent so the two surfaces can be tuned separately. |
 | UC1 Fine factor | 0.25× | UC1 equivalent of the UF8 Fine factor. |
 | UF1 V-Pot speed | 1.00× | The UF1's four channel V-Pots **and** the V-Pot above the fader — whatever that one is driving (pan, a Sticky-Pot parameter, volume under FLIP, the 9th send's pan as an Extender). Its own value since v0.5 — before that the UF1 borrowed the UF8's, so tuning the UF8 silently retuned the UF1. On upgrade it is seeded from whatever your UF8 was set to, so nothing moves until you change it. |
 | UF1 Fine factor | 0.25× | How much the UF1 step shrinks while its Fine is on. The UF1's Fine is **Quick-Key 2**, the bottom `2` key — not the Shift / `FINE` the other two surfaces use. |
@@ -1038,7 +1038,7 @@ The same section also tunes the **virtual notch** — the SSL-style magnet that 
 | Notch fine step | 0.50× | Step multiplier applied while the value sits within 2× the zone of centre — finer moves around 0 dB plus a more reliable catch. 1.00× = off. |
 | Notch hold | 1.0 % | Soft-detent: once the value snaps to 0 dB it **parks** there and absorbs this much rotation before releasing — stops an endless encoder sailing past 0. 0 % = off (pure magnet, can overshoot). A mouse / automation move larger than the zone releases the hold. Range 0 – 10 %. |
 
-Applies identically to UF8 V-Pots and UC1 knobs. Unipolar params (frequency, Q, threshold) have no neutral point and get no notch.
+Applies identically to UF8 V-Pots and UC1 pots. Unipolar params (frequency, Q, threshold) have no neutral point and get no notch.
 
 ### UC1 GR calibration
 
@@ -1114,7 +1114,7 @@ Two-way radio: **British (Colour, Grey)** / **American (Color, Gray)**. Switches
 | Surface mirrors: TCP / MCP (radio) | Which of REAPER's two views the surface's track list mirrors. **TCP** (default) — the surface shows what the arrange view's track panel shows, so a track hidden in the TCP drops off the surface, and so do the children of a fully-collapsed folder whenever REAPER's own *Hide children of collapsed folders* preference is on. **MCP** — the surface follows the Mixer instead, hiding whatever the Mixer hides. Also available as the bindable **Surface mirrors: TCP** and **Surface mirrors: MCP** actions. |
 | Pinned tracks survive banking | On by default. Pinned tracks — Focus-Set members, plus REAPER's own TCP pins while *Surface mirrors* is TCP — sit on the leftmost strips and stay there while everything else banks past them. Switches itself off when the pinned head would fill every usable strip, since there would be nothing left to bank. MCP has no pin concept, so the setting is inert in MCP mode. |
 | Touch selects channel | Touching a UF8 fader exclusively selects that strip's track. Off by default. |
-| Track selection follows parameter change | V-Pot / CS / BC knob edits on a non-selected track auto-select that track. Off → the UC1 stays on the currently selected track no matter which strip was just edited. Off by default. |
+| Track selection follows parameter change | V-Pot / CS / BC pot edits on a non-selected track auto-select that track. Off → the UC1 stays on the currently selected track no matter which strip was just edited. Off by default. |
 | Selection mode resets to Normal on startup | The active Selection Mode is remembered while you work, but comes back as NORM after a REAPER restart. On by default: a session that reopens with REC still engaged has its `SEL` keys arming tracks before you notice. Off → the mode is restored as it was. |
 
 ### Master track
@@ -1561,7 +1561,7 @@ Right-clicking a mapped control on the UF8 / UC1 schematic opens per-control opt
 - **Knob travel** (V-Pot only — see *Knob travel + curve editor* below) — inline Min / Max sliders + **Advanced…** opens the curve editor.
 - **Push reset** slider (Value-mode V-Pot) — the value the V-Pot snaps to when pushed. On a Bipolar V-Pot, a small "0.5" quick-set button + hint appears when the slider isn't already at centre.
 - **Display label** (inline text field) — per-slot override for the scribble-strip name (1..12 ASCII chars; a longer stored label is trimmed, never blanked). Empty = falls back to the parameter's default short name. Persisted as `UserLinkSlot.customLabel` (FX-Learn slot) or `UserUf8BankSlot.label` (UF8 V-Pot) / `UserUf8StripBinding.faderLabel` (UF8 fader) in `user_plugins.json` — no schema bump. Re-binding a slot to a *different* parameter clears its custom label (the label named the old param), so the field and the readout stay in agreement.
-- **Save feel to** / **Apply feel from** / **Clear preset** (UC1 knobs + UF8 V-Pots only) — reusable tuning presets; see *Feel presets* below.
+- **Save feel to** / **Apply feel from** / **Clear preset** (UC1 pots + UF8 V-Pots only) — reusable tuning presets; see *Feel presets* below.
 
 ### UF1 layer
 
@@ -1606,7 +1606,7 @@ SSL strip is the plug-in's own, not our reconstruction of it.
 
 ### Modifier layers (Normal / Option / Control / Control+Option)
 
-A user-mapped UC1 control can carry **four independent layers** — *Normal* plus three held-modifier overlays, *Option*, *Control* and *Control+Option* — so the same physical knob or button drives a different parameter (with its own invert, knob-travel, push-cycle, and Display label) depending on which modifier you hold.
+A user-mapped UC1 control can carry **four independent layers** — *Normal* plus three held-modifier overlays, *Option*, *Control* and *Control+Option* — so the same physical pot or button drives a different parameter (with its own invert, knob-travel, push-cycle, and Display label) depending on which modifier you hold.
 
 - **Editing:** the editor's layer tab strip (*Normal* / *Option* / *Control* / *Ctrl+Opt*) selects which layer you're editing; every per-control edit (bind, invert, Display label, knob travel, push-cycle) applies to the selected layer. Controls with no overlay on the active layer show a dim "ghost" ring — at runtime they inherit their Normal mapping.
 - **Enabling at runtime:** three switches under *Settings → FX Learn → Modifier layers* — *"Hold Option for the FX-Learn Option layer"*, *"Hold Control for the FX-Learn Control layer"* and *"Hold Control+Option for the combined FX-Learn layer"*. All three are on by default. Holding **Option/Alt** selects the Option layer, **Control** the Control layer, and **both together** the Control+Option layer; with the combined switch off, both-held falls back to Normal, and holding neither is always Normal. The held modifier takes effect live — on the bound control, the UC1 LCD readout, and the Learn-HUD's layer badge. *(Windows: **left Alt** is the Option layer, **left Control** the Control layer, the two together the combined one. **AltGr** also gives Option: Windows reports it as Ctrl+Alt and the synthetic Ctrl is dropped. Any pairing that is not the two left keys gives Option alone.)*
@@ -1636,20 +1636,20 @@ A tuned "feel" — the bundle of per-control tuning values, independent of which
 
 The preset carries: **invert · Min/Max range · sensitivity · curve · polarity · push-reset**. It deliberately does **not** carry the binding (which parameter) or the display label (which names a specific parameter).
 
-At the bottom of the right-click menu on a **UC1 knob** or **UF8 V-Pot**:
+At the bottom of the right-click menu on a **UC1 pot** or **UF8 V-Pot**:
 
 - **Save feel to ▸** — pick a slot (`1: (empty)` … or an existing name to overwrite); a small dialog asks for a name. The current control's feel is captured into that slot.
 - **Apply feel from ▸** — lists the saved presets by name; picking one writes its feel onto the right-clicked control.
 - **Clear preset ▸** — lists the saved presets; picking one empties that slot.
 - **Apply this feel to all mappings** — takes the right-clicked control's current feel (invert · Min/Max range · sensitivity · curve · polarity · push-reset) and writes it onto **every mapped control in this plug-in's map**, on the layer you're editing — one action instead of re-applying a preset control by control. Knobs / V-Pots only (toggles have no travel). The same action is on the on-screen **Learn HUD** (Feel presets ▸ *Apply this feel to all mappings*).
 
-The ten slots are **global** — shared across UC1 knobs, UF8 V-Pots, and every plug-in, and they survive a REAPER restart. Because both surfaces draw from the same store, a feel saved from a UC1 knob can be applied to a UF8 V-Pot and vice-versa. Persisted to REAPER's global ExtState (`rea_sixty` / `knob_feel_presets`) as JSON, separate from `user_plugins.json`. Toggles, buttons, and faders have no continuous travel, so the menu only appears on knobs and V-Pots.
+The ten slots are **global** — shared across UC1 pots, UF8 V-Pots, and every plug-in, and they survive a REAPER restart. Because both surfaces draw from the same store, a feel saved from a UC1 pot can be applied to a UF8 V-Pot and vice-versa. Persisted to REAPER's global ExtState (`rea_sixty` / `knob_feel_presets`) as JSON, separate from `user_plugins.json`. Toggles, buttons, and faders have no continuous travel, so the menu only appears on pots and V-Pots.
 
 ### Stepped parameters
 
 When the bound parameter is a discrete-stepped enum (e.g. PSP Townhouse attack/release time selectors, HPF slope pickers, oversampling toggles) — anything REAPER reports as having discrete steps — the editor automatically switches to a stepped-aware layout. Sensitivity, range, and push-reset still apply; curve does not.
 
-- **Sensitivity** label flips to **Detent speed**. The default 1.0× means *2 detents per step* on V-Pots and UC1 knobs (matches the legacy UC1 stepped feel). 2.0× → 1 detent per step. 0.5× → 4 detents per step. 4.0× and above fire multiple steps per detent. Shift-Fine still applies on top — at the minimum (0.01×) Shift gives an effective 0.0025×, which is 800 detents per step. The old figure in this line, 0.025× and forty detents, was computed from a minimum of 0.1× that the box has not had for some time.
+- **Sensitivity** label flips to **Detent speed**. The default 1.0× means *2 detents per step* on V-Pots and UC1 pots (matches the legacy UC1 stepped feel). 2.0× → 1 detent per step. 0.5× → 4 detents per step. 4.0× and above fire multiple steps per detent. Shift-Fine still applies on top — at the minimum (0.01×) Shift gives an effective 0.0025×, which is 800 detents per step. The old figure in this line, 0.025× and forty detents, was computed from a minimum of 0.1× that the box has not had for some time.
 - **Canvas + preset row hidden.** A single info line replaces them: `Stepped parameter — N values (~X.XXX per step). Curve disabled; Min/Max snap to the step grid.`
 - **Min / Max** in the right-click menu snap on commit to the nearest step boundary, so the encoder always traverses real values. Below the table a hint line reads `~K steps reachable in this range`.
 - **Push reset** (Value-mode V-Pots) snaps the chosen default to the nearest step.
@@ -1663,20 +1663,20 @@ In the FX-Learn schematic, slots with customised knob travel show:
 - Two radial ticks at the Min / Max angles on the on-screen knob (7 o'clock → 12 → 5).
 - A small centre dot when a curve is set.
 
-UF8 V-Pots apply the same sensitivity → curve → step math on every encoder movement, so external automation writes stay coherent. UC1 channel-strip / bus-comp knobs and the EXT_FUNCS encoder honour the same path — a UC1 knob and a UF8 V-Pot bound to the same parameter stay in lock-step. Built-in SSL CS / BC slots are intentionally untouched and keep the legacy linear + EQ-gain virtual-notch path; knob travel only kicks in when a user-learned slot is present for the focused plug-in.
+UF8 V-Pots apply the same sensitivity → curve → step math on every encoder movement, so external automation writes stay coherent. UC1 channel-strip / bus-comp pots and the EXT_FUNCS encoder honour the same path — a UC1 pot and a UF8 V-Pot bound to the same parameter stay in lock-step. Built-in SSL CS / BC slots are intentionally untouched and keep the legacy linear + EQ-gain virtual-notch path; knob travel only kicks in when a user-learned slot is present for the focused plug-in.
 
 > **UF8 faders intentionally exclude knob travel.** Absolute-position + motor feedback creates round-trip races with plug-in quantisation (fader jumps during user motion, snaps on release). The plug-in's own taper is the right place for fader-side shaping.
 
 ### Step cycle (rotary)
 
-A V-Pot or UC1 knob can step through a curated list of a plug-in's button / enum options instead of moving a continuous parameter — for example walking an EQ type A → B → C, or a saturation mode, from a single rotary. **Turning** scrubs the list and stops at the ends; **pressing** advances one step and wraps around.
+A V-Pot or UC1 pot can step through a curated list of a plug-in's button / enum options instead of moving a continuous parameter — for example walking an EQ type A → B → C, or a saturation mode, from a single rotary. **Turning** scrubs the list and stops at the ends; **pressing** advances one step and wraps around.
 
 There are two ways to build a step cycle:
 
 - **Capture by touch** (UF8 V-Pots): with **Touch-to-Learn** armed, wiggle the V-Pot you want, then click the plug-in's buttons in the order you want them — each press is recorded as a step. Wiggle the next V-Pot, or turn Touch-to-Learn off, to finish. The plug-in must already be mapped. Continuous controls keep binding the normal way, so a knob wiggle is not captured as steps.
-- **Curate in the editor**: in the FX-Learn V-Pot right-click menu (or the on-screen Learn-HUD), pick **Step cycle (turn)** and edit the list — drag to reorder, untick to exclude an option, **+ Add step** to add one by name. The same editor opens for UC1 knobs.
+- **Curate in the editor**: in the FX-Learn V-Pot right-click menu (or the on-screen Learn-HUD), pick **Step cycle (turn)** and edit the list — drag to reorder, untick to exclude an option, **+ Add step** to add one by name. The same editor opens for UC1 pots.
 
-On UC1, build step cycles through the **editor** rather than by touch capture. Re-learning a knob the normal way clears any step cycle on it, so a continuous pot is one re-learn away.
+On UC1, build step cycles through the **editor** rather than by touch capture. Re-learning a pot the normal way clears any step cycle on it, so a continuous pot is one re-learn away.
 
 ### Multi-instance picker
 
@@ -1864,7 +1864,7 @@ Drag the banner while it is visible to reposition it; the position persists. Rig
 
 ## Learn-HUD
 
-A dockable window showing the focused plug-in's **UC1 control → parameter assignments** as a grouped, readable text list — so you can see what each knob / button does without opening Settings.
+A dockable window showing the focused plug-in's **UC1 control → parameter assignments** as a grouped, readable text list — so you can see what each pot / button does without opening Settings.
 
 - Toggle with the **Learn-HUD: show / hide (focused plug-in assignments)** action (bind it to a surface button) or the REAPER action **"Rea-Sixty: Toggle Learn-HUD"** (`REASIXTY_LEARN_HUD_TOGGLE`). There is no Settings checkbox.
 - **CS / BC / UF8 / UF1 tabs** at the top, auto-following the focused domain (click to pin one). The BC tab follows the BC anchor / BC-encoder selection, and a CS-mapped plug-in only ever shows on CS (and BC on BC) — the two domains never cross. The **UF8 tab** shows the per-strip UF8 assignments (V-Pot / fader / soft-keys) for the focused plug-in and offers the same learn / tuning controls.
@@ -2202,7 +2202,7 @@ When held, these shift every other binding to its modifier slot. The UF8 has one
 - **Focused-track panel: show / hide (frameless, on Arrange)** — show / hide the frameless **focused-track panel**. See *On-Screen Display → Focused-track panel*.
 - **Mode-change banner: show / hide (flashes Sel / Encoder mode)** — show / hide the transient **mode-change banner**. See *On-Screen Display → Mode-change banner*.
 - **Touch-to-Learn: arm / disarm (touch a control, wiggle a param)** — arm / disarm **Touch-to-Learn**. While armed, touch a control on the surface and wiggle a plug-in parameter to learn it to that control on the fly — FX-Learn without opening Settings. Disarming cancels and clears the pending learn. Bindable here (category *Hardware Modes*); the soft-keys switch to the V-Pot layer while armed, and a V-Pot **press** learns as a Toggle binding. Pressing several of the plug-in's buttons in a row while a V-Pot is armed builds a **step cycle** on it (see *FX Learn → Step cycle*).
-- **Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)** — flip the UC1 **Out Gain** knob between its mapped SSL Channel-Strip *Fader Level* parameter and **REAPER's track volume fader**. While engaged, the knob drives track volume even on tracks with no channel-strip plug-in, and the LED ring + readout follow the track fader. Bindable from the Bindings picker (under *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)* (`REASIXTY_UC1_OUTGAIN_FADER_TOGGLE`) for the keyboard / toolbar.
+- **Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)** — flip the UC1 **Out Gain** pot between its mapped SSL Channel-Strip *Fader Level* parameter and **REAPER's track volume fader**. While engaged, the pot drives track volume even on tracks with no channel-strip plug-in, and the LED ring + readout follow the track fader. Bindable from the Bindings picker (under *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)* (`REASIXTY_UC1_OUTGAIN_FADER_TOGGLE`) for the keyboard / toolbar.
 - **Restart Rea-Sixty (re-open devices)** — close the UF8, UC1 and MIDI ports and open them again, so a surface that has stopped responding can be revived without the trip through Preferences → Control Surface. Bindable here (category *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Restart Rea-Sixty (re-open devices)* (`REASIXTY_RESTART`) — worth a keyboard shortcut, since a hardware key is no help when the hardware is the thing that needs re-opening. This re-opens the **devices**, not the extension: REAPER holds the plug-in for the life of the process, so a new build still needs REAPER restarted.
 
 ## Internal (not user-bindable)
@@ -2281,7 +2281,7 @@ Most actions come in three flavours — an explicit CS one, an explicit BC one, 
 Favourite switching works through the **UC1 / SSL-Link control map**: it finds the active Channel Strip on a track, and transfers values, by the shared control each parameter is mapped to (the same control you would map in FX Learn). So every channel strip you switch **between** must be recognised by Rea-Sixty:
 
 - The **built-in maps** (SSL CS 2, 4K B / E / G, BC 2, 360 Link) work out of the box — nothing to set up.
-- Any **other** strip (API, bx, a JSFX strip…) needs a **Channel-Strip FX-Learn map** with its controls assigned to the UC1 knobs / buttons (*Settings → FX Learn*, or learn from the Learn-HUD). That map is what tells Rea-Sixty which parameter shares each control.
+- Any **other** strip (API, bx, a JSFX strip…) needs a **Channel-Strip FX-Learn map** with its controls assigned to the UC1 pots / buttons (*Settings → FX Learn*, or learn from the Learn-HUD). That map is what tells Rea-Sixty which parameter shares each control.
 
 Without a map: a track whose active plug-in isn't a recognised Channel Strip **gets the favourite inserted at the end of its chain**, arriving on its own defaults — only *Copy to Favourite* declines on such a track. Value transfer to / from an unmapped favourite can only fall back to matching by parameter **name** — so map your favourites for reliable, value-accurate switching.
 
@@ -2866,7 +2866,7 @@ The REAPER Master bus isn't a normal track — it's excluded from banking and ha
 
 - **Bus Compressor on the Master** — a BC plug-in inserted on the Master always shows in the UC1's Bus Comp context, sitting at the **far left** of the BC carousel (the Master is "track 0"). It also becomes the default BC anchor when no other track carries a BC. This is always on; it does not depend on the *Show Master as Track 0* toggle.
 - **Show Master as Track 0 on UC1** (Settings → Behaviour → Master track) — with this on, rotating the CHANNEL encoder left past track 1 lands on the Master, so the channel-strip section drives the Master bus. Rotate right to return to track 1. UC1-only.
-- **Out-Gain → Master fader** — when the UC1 is focused on the Master and there is **no** Channel Strip on it, the **Out-Gain** knob automatically drives REAPER's Master fader (readout reads *Mst Vol*). No toggle needed — if there's no CS Fader-Level parameter to ride, the knob falls back to master volume. (With a CS on the Master, Out-Gain rides the CS Fader Level as usual; the global *UC1 Out-Gain → REAPER fader* toggle still forces track volume on any track.)
+- **Out-Gain → Master fader** — when the UC1 is focused on the Master and there is **no** Channel Strip on it, the **Out-Gain** pot automatically drives REAPER's Master fader (readout reads *Mst Vol*). No toggle needed — if there's no CS Fader-Level parameter to ride, the pot falls back to master volume. (With a CS on the Master, Out-Gain rides the CS Fader Level as usual; the global *UC1 Out-Gain → REAPER fader* toggle still forces track volume on any track.)
 
 ## On the UF8
 
@@ -2929,7 +2929,7 @@ Persists per-project (saved into the RPP via the same project-config hook the nu
 
 # Parameter Groups
 
-Eight slots + a per-slot member list of REAPER tracks. Every member of every active group receives the same parameter edit when you twist a UF8 V-Pot or a UC1 knob. A fader broadcasts only when it is driving a plug-in parameter: ordinary track volume is deliberately left alone, so a group never moves levels you did not mean to move.
+Eight slots + a per-slot member list of REAPER tracks. Every member of every active group receives the same parameter edit when you twist a UF8 V-Pot or a UC1 pot. A fader broadcasts only when it is driving a plug-in parameter: ordinary track volume is deliberately left alone, so a group never moves levels you did not mean to move.
 
 Slot management UI in Settings → Parameter Groups. Each slot:
 
