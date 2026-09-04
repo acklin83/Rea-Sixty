@@ -8428,6 +8428,41 @@ bool paramNameFor_(const UserPluginMap& map, const EditingFx& fx,
     }
 }
 
+// ⇨ ALL THE NAMES AT ONCE, FOR THE LISTS THAT DRAW ALL OF THEM. The parameter
+// list and the GR picker ask for every parameter on every frame; on a live
+// six-hundred-parameter plug-in that is six hundred REAPER calls per frame just
+// to fill a list whose contents change when the plug-in does. Cached per
+// (track, FX, count, map, catalog generation), and re-read every two seconds so
+// a plug-in that renames its parameters under us still catches up.
+static const std::vector<std::string>&
+paramNamesFor_(const UserPluginMap& map, const EditingFx& fx, int pcount)
+{
+    static MediaTrack* s_tr = nullptr;
+    static int         s_fx = -1, s_pc = -1, s_gen = -1;
+    static std::string s_match;
+    static int64_t     s_at = 0;
+    static std::vector<std::string> s_names;
+    const int     gen = user_plugins::generation();
+    const int64_t now = static_cast<int64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    if (s_tr == (fx.ok ? fx.tr : nullptr) && s_fx == (fx.ok ? fx.fxIdx : -1)
+        && s_pc == pcount && s_gen == gen && s_match == map.match
+        && (now - s_at) < 2000)
+        return s_names;
+    s_tr = fx.ok ? fx.tr : nullptr; s_fx = fx.ok ? fx.fxIdx : -1;
+    s_pc = pcount; s_gen = gen; s_match = map.match; s_at = now;
+    s_names.assign(static_cast<size_t>(pcount < 0 ? 0 : pcount), std::string());
+    char nm[128];
+    for (int p = 0; p < pcount; ++p) {
+        nm[0] = 0;
+        paramNameFor_(map, fx, p, nm, sizeof(nm));
+        s_names[static_cast<size_t>(p)] = nm;
+    }
+    return s_names;
+}
+
+
 int paramCountFor_(const UserPluginMap& map, const EditingFx& fx)
 {
     if (fx.ok) return TrackFX_GetNumParams(fx.tr, fx.fxIdx);
@@ -18493,9 +18528,10 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             const int paramCount = paramCountFor_(*editing, fx);
             const int kMaxParams = 1024;
             const int n = (paramCount < kMaxParams) ? paramCount : kMaxParams;
+            const auto& grNames = paramNamesFor_(*editing, fx, n);
             for (int p = 0; p < n; ++p) {
-                char pname[128] = {0};
-                paramNameFor_(*editing, fx, p, pname, sizeof(pname));
+                const char* pname = (p < (int)grNames.size())
+                                  ? grNames[(size_t)p].c_str() : "";
                 char rowLbl[200];
                 snprintf(rowLbl, sizeof(rowLbl),
                               "[%4d] %s##fxl_gr_p_%d", p, pname, p);
@@ -20297,10 +20333,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             // and "out" alone still finds it (every token must be present).
             const auto fltToks = searchTokensLower_(g_paramFilter);
 
+            const auto& plNames = paramNamesFor_(*editing, fx, n);
             char pname[128];
             for (int p = 0; p < n; ++p) {
-                pname[0] = 0;
-                paramNameFor_(*editing, fx, p, pname, sizeof(pname));
+                snprintf(pname, sizeof(pname), "%s",
+                         (p < (int)plNames.size()) ? plNames[(size_t)p].c_str()
+                                                   : "");
 
                 // Hide REAPER's injected MIDI-learn params (MIDI CC … /
                 // Pitch / Program / Channel Pressure) — never real

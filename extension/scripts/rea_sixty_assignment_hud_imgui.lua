@@ -1908,12 +1908,24 @@ local function renderParamPanel(st, asn)
     end
   end
 
+  -- ⛔ FILTERED ONCE PER CHANGE, NOT PER FRAME. This ran over every parameter on
+  -- every frame and lower-cased each name to test it: six hundred string
+  -- allocations a frame on a Pro-Q, for a list whose content only changes when
+  -- the plug-in or the filter does (Frank 2026-09-04). Cached on EXT because
+  -- this file is at Lua's 200-local ceiling.
   local params = getParams(tr, fx)
   local flo    = paramFilter:lower()
-  local rows   = {}
-  for _, pr in ipairs(params) do
-    if flo == "" or pr.name:lower():find(flo, 1, true) then rows[#rows + 1] = pr end
+  local rowsKey = tostring(tr) .. ";" .. fx .. ";" .. flo .. ";" .. #params
+  if EXT.rowsKey ~= rowsKey then
+    EXT.rowsKey = rowsKey
+    EXT.rows = {}
+    for _, pr in ipairs(params) do
+      if flo == "" or pr.name:lower():find(flo, 1, true) then
+        EXT.rows[#EXT.rows + 1] = pr
+      end
+    end
   end
+  local rows = EXT.rows
 
   local _, rowTH  = measure("Ag", rf)
   local lineH     = rowTH + floor(5 * fs + 0.5)
