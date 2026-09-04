@@ -8401,13 +8401,31 @@ bool paramNameFor_(const UserPluginMap& map, const EditingFx& fx,
     if (fx.ok) {
         return TrackFX_GetParamName(fx.tr, fx.fxIdx, p, out, outSize);
     }
-    for (const auto& pi : map.paramSnapshot) {
-        if (pi.vst3Param != p) continue;
-        std::strncpy(out, pi.name.c_str(), outSize - 1);
+    // ⛔ THE SNAPSHOT PATH IS INDEXED, BECAUSE THE CALLER IS A LOOP. The
+    // FX-Learn parameter list calls this once per parameter on every frame, and
+    // a linear scan per call makes that quadratic: six hundred parameters is
+    // 360,000 comparisons per frame, which is what "FX Learn is slow on a
+    // Pro-Q" turned out to be while editing from a stored snapshot. Built once
+    // per map and rebuilt when the catalog changes.
+    {
+        static std::string s_forMatch;
+        static int         s_forGen = -1;
+        static std::unordered_map<int, std::string> s_idx;
+        const int gen = user_plugins::generation();
+        if (s_forMatch != map.match || s_forGen != gen) {
+            s_forMatch = map.match;
+            s_forGen   = gen;
+            s_idx.clear();
+            s_idx.reserve(map.paramSnapshot.size());
+            for (const auto& pi : map.paramSnapshot)
+                s_idx.emplace(pi.vst3Param, pi.name);
+        }
+        const auto it = s_idx.find(p);
+        if (it == s_idx.end()) return false;
+        std::strncpy(out, it->second.c_str(), outSize - 1);
         out[outSize - 1] = '\0';
         return true;
     }
-    return false;
 }
 
 int paramCountFor_(const UserPluginMap& map, const EditingFx& fx)
