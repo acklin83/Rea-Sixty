@@ -35592,17 +35592,25 @@ void refreshFxActiveLayer_()
     // ctrl&&opt rule below would cancel it to Normal, so the Option layer never
     // engaged from AltGr — "the Alt layer doesn't work, Ctrl does" on Windows.
     // When right-Alt is down, drop the synthetic Ctrl so AltGr resolves to the
-    // Option modifier alone. Plain left-Ctrl+left-Alt (RMENU up) is unaffected
-    // and still resolves to Normal. Frank 2026-06-16.
+    // Option modifier alone. Frank 2026-06-16.
     if ((GetAsyncKeyState(VK_RMENU) & 0x8000) != 0) ctrl = false;
+    // ⇨ AND THE COMBINED LAYER IS THE TWO LEFT KEYS, SAID PLAINLY. The rule
+    // used to be "the left Alt, because the right one is spoken for, plus any
+    // Control" — true, and useless to a person: it describes what the API
+    // happens to test rather than a gesture anyone can learn. Frank 2026-09-04:
+    // "nimm doch einfach linkes alt und linkes ctrl!" They sit next to each
+    // other in the bottom row, so it is one comfortable grip, and it is the
+    // same sentence in the manual, in the film and here.
+    if (ctrl && opt) {
+        const bool lAlt  = (GetAsyncKeyState(VK_LMENU)    & 0x8000) != 0;
+        const bool lCtrl = (GetAsyncKeyState(VK_LCONTROL) & 0x8000) != 0;
+        if (!lAlt || !lCtrl) { ctrl = false; }   // not the grip → Option alone
+    }
 #endif
     int L = uf8::FxLayer::Normal;
     // Both modifiers held = the Control+Option layer (when enabled). With it
     // disabled, both-held stays the neutral Normal — the pre-2026-06-17
-    // behaviour. NOTE (Windows): the AltGr drop above forces AltGr→Option, so
-    // ControlOption there needs the LEFT Alt (RMENU up). The Ctrl may be either
-    // one: only the right ALT is tested by side (VK_RMENU), while ctrl and alt
-    // come from VK_CONTROL / VK_MENU, which do not distinguish sides.
+    // behaviour.
     if (ctrl && opt)      L = g_fxLayerCtrlOptEnable.load()
                                 ? uf8::FxLayer::ControlOption
                                 : uf8::FxLayer::Normal;
