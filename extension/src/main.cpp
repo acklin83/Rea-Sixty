@@ -17815,6 +17815,21 @@ struct StickyPin {
     std::string fxGuid;         // uf8::fxGuidString — stable FX identity across reorder
     int         vst3Param = -1;
     bool        toggle    = false;   // push flips 0/1 (else push → midpoint)
+    // OPTIONAL macro second target (Frank 2026-09-04). Empty fxGuid2 = no macro,
+    // and every path then behaves exactly as it did before. The pot always drives
+    // the FIRST param; the second is DERIVED from param 1's VALUE, never from the
+    // rotation delta — that keeps the stepped accumulator in stickyWriteRotation_
+    // (keyed by strip & 7) and the single-pair stickyResolveOnTrack_ untouched.
+    // anchor1/anchor2 are both params' values at pairing time, so pairing itself
+    // moves nothing: norm2 = clamp(anchor2 + (norm1 - anchor1) * ratio, 0, 1).
+    // The second param stays an ordinary parameter — we only write it in the
+    // moment the pot moves the first one, never continuously.
+    std::string fxGuid2;
+    int         vst3Param2 = -1;
+    int         macroKind  = 1;      // 1 = linear (anchor + ratio); 2 = measured curve (not built)
+    double      anchor1    = 0.0;
+    double      anchor2    = 0.0;
+    double      ratio      = -1.0;   // -1 = counter-running one to one
 };
 std::unordered_map<std::string /*track GUID*/, StickyPin> g_stickyPins;
 std::atomic<bool> g_stickyActive{true};       // global active / suspended
@@ -17823,6 +17838,11 @@ std::atomic<bool> g_stickyActive{true};       // global active / suspended
 // the next tick, so restoring a saved state never flashes a banner.
 std::atomic<bool> g_modeBannerReseed{false};
 std::atomic<bool> g_stickyArmGetNext{false};  // "get next touched" armed (worker→main)
+// Same capture, but for a pin's SECOND (macro) target: holds the track GUID the
+// arm belongs to, empty = disarmed. Plain string, not an atomic, because both
+// ends are main-thread — armed from the Settings pane, consumed in stickyPotTick_
+// — unlike the two builtins above, which are fired from the input worker.
+std::string g_stickyArmSecondGuid;
 // Set to nowMs_()+window after every sticky param WRITE. chaseLastTouchedFx absorbs
 // while it's live so a sticky move doesn't hijack the GLOBAL focused param (which
 // would drag every OTHER strip's V-Pot onto the equivalent slot). Same pattern as
@@ -17933,6 +17953,82 @@ void stickyClearForTrack_(MediaTrack* tr)
     }
 }
 
+// Drop only the macro, keep the pin itself.
+void stickyClearMacroForTrack_(MediaTrack* tr)
+{
+    if (!tr) return;
+    auto it = g_stickyPins.find(trackGuidStr_(tr));
+    if (it == g_stickyPins.end() || it->second.fxGuid2.empty()) return;
+    it->second.fxGuid2.clear();
+    it->second.vst3Param2 = -1;
+    g_pageDirty.store(true);
+    if (ReaProject* pr = EnumProjects(-1, nullptr, 0)) MarkProjectDirty(pr);
+}
+
+// Resolve a pin's SECOND target to a live (fx, param). Same contract as
+// stickyResolveOnTrack_: false when there is no macro or the FX is gone.
+bool stickyResolveMacroOnTrack_(MediaTrack* tr, const StickyPin& pin,
+                                int* fxOut, int* paramOut)
+{
+    if (pin.fxGuid2.empty() || pin.vst3Param2 < 0) return false;
+    const int fx = uf8::findFxIndexByGuid(tr, pin.fxGuid2);
+    if (fx < 0) return false;
+    if (pin.vst3Param2 >= TrackFX_GetNumParams(tr, fx)) return false;
+    if (fxOut)    *fxOut    = fx;
+    if (paramOut) *paramOut = pin.vst3Param2;
+    return true;
+}
+
+// Drag the macro's second parameter along. Called right AFTER every path that
+// writes the pinned (first) parameter — rotation, push, and both FLIP-to-fader
+// writes. No-op without a macro, so the plain single-param pin costs one map
+// lookup and nothing else. Reads param 1's resulting value rather than the delta
+// that produced it, so it is correct no matter which of those paths wrote it.
+void stickyApplyMacro_(MediaTrack* tr)
+{
+    const StickyPin* pin = stickyPinFor_(tr);
+    if (!pin || pin->fxGuid2.empty()) return;
+    int fx1 = -1, p1 = -1, fx2 = -1, p2 = -1;
+    if (!stickyResolveOnTrack_(tr, &fx1, &p1, nullptr))    return;
+    if (!stickyResolveMacroOnTrack_(tr, *pin, &fx2, &p2))  return;
+    const double n1 = TrackFX_GetParamNormalized(tr, fx1, p1);
+    double n2 = pin->anchor2 + (n1 - pin->anchor1) * pin->ratio;
+    if (n2 < 0.0) n2 = 0.0;      // ran out of travel: clamp the follower,
+    if (n2 > 1.0) n2 = 1.0;      // the pot itself never blocks
+    const double cur2 = TrackFX_GetParamNormalized(tr, fx2, p2);
+    if (std::fabs(cur2 - n2) < 1e-6) return;   // nothing to write, nothing to lock
+    TrackFX_SetParamNormalized(tr, fx2, p2, n2);
+    g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // same absorb as the pin write
+}
+
+// Pair a SECOND parameter onto an existing pin. Anchors BOTH current values, so
+// the act of pairing moves nothing — only the next turn of the pot does.
+bool stickyPotAssignSecond_(MediaTrack* tr, int fx2, int param2)
+{
+    if (!tr || fx2 < 0 || param2 < 0) return false;
+    auto it = g_stickyPins.find(trackGuidStr_(tr));
+    if (it == g_stickyPins.end()) return false;      // no pin to hang it on
+    StickyPin& pin = it->second;
+    if (pin.toggle) return false;                    // a switch has no sweep to follow
+    int fx1 = -1, p1 = -1;
+    if (!stickyResolveOnTrack_(tr, &fx1, &p1, nullptr)) return false;
+    if (fx1 == fx2 && p1 == param2) return false;    // itself
+    const std::string g2 = uf8::fxGuidString(tr, fx2);
+    if (g2.empty()) return false;
+    double s0=0.0, s1=0.0, s2=0.0; bool isToggle=false;
+    TrackFX_GetParameterStepSizes(tr, fx2, param2, &s0, &s1, &s2, &isToggle);
+    if (isToggle) return false;                      // a switch can't follow a sweep
+    pin.fxGuid2    = g2;
+    pin.vst3Param2 = param2;
+    pin.macroKind  = 1;
+    pin.anchor1    = TrackFX_GetParamNormalized(tr, fx1, p1);
+    pin.anchor2    = TrackFX_GetParamNormalized(tr, fx2, param2);
+    pin.ratio      = -1.0;                           // counter-running until told otherwise
+    g_pageDirty.store(true);
+    if (ReaProject* pr = EnumProjects(-1, nullptr, 0)) MarkProjectDirty(pr);
+    return true;
+}
+
 // V-Pot rotation on a pinned param — generic plug-in-param feel (arbitrary
 // third-party params carry no learned curve/sensitivity): toggle ignores
 // rotation (push flips it), stepped params step by their quantum, continuous
@@ -17987,6 +18083,7 @@ void stickyWriteRotation_(MediaTrack* tr, int fx, int param, int strip, double d
     if (next > 1.0) next = 1.0;
     TrackFX_SetParamNormalized(tr, fx, param, next);
     g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // don't let the move steal focus
+    stickyApplyMacro_(tr);                            // no-op unless this pin has a second target
 }
 
 // V-Pot push on a pinned param: toggle flips 0/1, else reset to midpoint (0.5 —
@@ -18001,6 +18098,7 @@ void stickyPushDefault_(MediaTrack* tr, int fx, int param, bool toggle)
         TrackFX_SetParamNormalized(tr, fx, param, 0.5);
     }
     g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // don't let the reset steal focus
+    stickyApplyMacro_(tr);
 }
 
 // "Get next touched" poll — runs each onTimer (main thread). On the arm edge it
@@ -18011,11 +18109,18 @@ void stickyPushDefault_(MediaTrack* tr, int fx, int param, bool toggle)
 void stickyPotTick_()
 {
     static bool    wasArmed = false;
+    static bool    wasSecond = false;
     static int     baseTr=-2, baseFx=-2, baseParam=-2;
     static double  baseVal = -1e9;
     static int64_t armMs = 0;
 
-    if (!g_stickyArmGetNext.load()) { wasArmed = false; return; }
+    // The pin arm (a hardware action) always wins over the macro arm (a button in
+    // the Settings pane), so the two can never both be live.
+    if (g_stickyArmGetNext.load() && !g_stickyArmSecondGuid.empty())
+        g_stickyArmSecondGuid.clear();
+    const bool armSecond = !g_stickyArmSecondGuid.empty();
+    if (!g_stickyArmGetNext.load() && !armSecond) { wasArmed = false; return; }
+    if (wasArmed && wasSecond != armSecond) wasArmed = false;   // kind changed → fresh edge
 
     int trWord=-1, fxWord=-1, paramIdx=-1;
     const bool have = GetLastTouchedFX(&trWord, &fxWord, &paramIdx);
@@ -18025,9 +18130,14 @@ void stickyPotTick_()
         baseVal = -1e9;
         armMs = nowMs_();
         wasArmed = true;
+        wasSecond = armSecond;
         return;
     }
-    if (nowMs_() - armMs > 20000) { g_stickyArmGetNext.store(false); return; }
+    if (nowMs_() - armMs > 20000) {
+        g_stickyArmGetNext.store(false);
+        g_stickyArmSecondGuid.clear();
+        return;
+    }
     if (!have) return;
 
     if ((trWord & 0xFFFF0000) != 0) return;       // take-FX
@@ -18045,14 +18155,33 @@ void stickyPotTick_()
     const bool valueWiggle = (!tupleChanged && baseVal > -1e8
                               && curVal != baseVal && !(GetPlayState() & 1));
     if (tupleChanged || valueWiggle) {
-        stickyPotAssign_(tr, fxIdx, paramIdx);
-        g_stickyArmGetNext.store(false);
+        if (armSecond) {
+            // Only the armed track's own parameters may become its second target.
+            // A touch anywhere else re-baselines instead of cancelling, so grabbing
+            // the wrong plug-in first does not cost the arm.
+            if (trackGuidStr_(tr) == g_stickyArmSecondGuid
+                && stickyPotAssignSecond_(tr, fxIdx, paramIdx)) {
+                g_stickyArmSecondGuid.clear();
+                wasArmed = false;
+            } else {
+                baseTr = trWord; baseFx = fxWord; baseParam = paramIdx; baseVal = -1e9;
+            }
+        } else {
+            stickyPotAssign_(tr, fxIdx, paramIdx);
+            g_stickyArmGetNext.store(false);
+        }
     }
 }
 
-// projectconfig — one line per pinned track plus the global-active flag:
-//   STICKY_PIN "<trackGUID>;<fxGUID>;<param>;<toggle01>"
+// projectconfig — one line per pinned track, one more for a pin that carries a
+// macro, plus the global-active flag:
+//   STICKY_PIN   "<trackGUID>;<fxGUID>;<param>;<toggle01>"
+//   STICKY_MACRO "<trackGUID>;<fx2GUID>;<param2>;<kind>;<anchor1>;<anchor2>;<ratio>"
 //   STICKY_ACTIVE 0            (only written when suspended; default = active)
+// The macro lives on its own line on purpose: STICKY_PIN's split clamps at the
+// fourth field and packs any remainder into it, so appending there would need the
+// parser changed on both sides of the version gap. A separate line leaves old
+// projects reading exactly as before, and an older build simply ignores it.
 void stickySaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
                     struct project_config_extension_t* /*reg*/)
 {
@@ -18062,6 +18191,11 @@ void stickySaveExt_(ProjectStateContext* ctx, bool /*isUndo*/,
         ctx->AddLine("STICKY_PIN \"%s;%s;%d;%d\"",
                      kv.first.c_str(), p.fxGuid.c_str(),
                      p.vst3Param, p.toggle ? 1 : 0);
+        if (!p.fxGuid2.empty() && p.vst3Param2 >= 0) {
+            ctx->AddLine("STICKY_MACRO \"%s;%s;%d;%d;%.6f;%.6f;%.4f\"",
+                         kv.first.c_str(), p.fxGuid2.c_str(), p.vst3Param2,
+                         p.macroKind, p.anchor1, p.anchor2, p.ratio);
+        }
     }
     if (!g_stickyActive.load()) ctx->AddLine("STICKY_ACTIVE 0");
 }
@@ -18076,6 +18210,31 @@ bool stickyProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
         p += 13; while (*p == ' ' || *p == '\t') ++p;
         g_stickyActive.store(*p != '0');
         g_modeBannerReseed.store(true);   // restored state, not a user flip
+        return true;
+    }
+    if (std::strncmp(p, "STICKY_MACRO", 12) == 0) {
+        p += 12; while (*p == ' ' || *p == '\t') ++p;
+        if (*p == '"') ++p;
+        std::string field;
+        while (*p && *p != '"') field += *p++;
+        // "trackGUID;fx2GUID;param2;kind;anchor1;anchor2;ratio" — GUIDs carry no ';'
+        std::string m[7];
+        int mn = 0;
+        for (char c : field) {
+            if (c == ';' && mn < 6) { ++mn; continue; }
+            m[mn] += c;
+        }
+        if (m[0].empty() || m[1].empty()) return true;
+        auto it = g_stickyPins.find(m[0]);
+        if (it == g_stickyPins.end()) return true;   // macro without its pin: drop it
+        StickyPin& pin = it->second;
+        pin.fxGuid2    = m[1];
+        pin.vst3Param2 = std::atoi(m[2].c_str());
+        pin.macroKind  = m[3].empty() ? 1 : std::atoi(m[3].c_str());
+        pin.anchor1    = std::atof(m[4].c_str());
+        pin.anchor2    = std::atof(m[5].c_str());
+        pin.ratio      = m[6].empty() ? -1.0 : std::atof(m[6].c_str());
+        if (pin.vst3Param2 < 0) { pin.fxGuid2.clear(); pin.vst3Param2 = -1; }
         return true;
     }
     if (std::strncmp(p, "STICKY_PIN", 10) != 0) return false;
@@ -18990,6 +19149,7 @@ void drainInputQueue()
                         if (n > 1.0) n = 1.0;
                         TrackFX_SetParamNormalized(tr, sfx, sp, n);
                         g_stickyFocusLockUntilMs.store(nowMs_() + 400);
+                        stickyApplyMacro_(tr);
                         break;
                     }
                 }
@@ -31233,6 +31393,7 @@ void uf1PaintChannel_()
                 const double n = std::clamp(double(pos) / double(kUf1FaderMax), 0.0, 1.0);
                 TrackFX_SetParamNormalized(ftr, stickyFx, stickyParam, n);
                 g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // don't let the move steal focus
+                stickyApplyMacro_(ftr);
             }
             else if (flipParamFader) {
                 // Plugin mode + FLIP. LINEAR pos↔norm, like Strip Mode and Sticky
@@ -44038,6 +44199,174 @@ void reasixty_setFocusSetAutoMode(int mode)
     if (!g_tempSelsetActive.load()) return;
     if (mode >= 0)        tempSelsetApplyAutoMode_(mode);
     else if (prev >= 0)   tempSelsetApplyAutoMode_(0);
+}
+
+// ---- Sticky Pot list (Settings -> Sticky Pot) --------------------------
+// One call builds the whole table. g_stickyPins is keyed by track GUID and has
+// no order of its own, so rows come out sorted by track number with dead pins
+// last (nothing prunes a pin when its track goes away). Every action below is
+// addressed BY GUID, never by row index: a Clear pressed inside the draw loop
+// would otherwise renumber the rows beneath it in the same frame.
+// Main thread only, like the map itself.
+int reasixty_stickyList(std::vector<std::string>& guids,
+                        std::vector<std::string>& trackNames,
+                        std::vector<std::string>& fxNames,
+                        std::vector<std::string>& paramNames,
+                        std::vector<std::string>& values,
+                        std::vector<std::string>& macroNames,
+                        std::vector<double>&      ratios)
+{
+    guids.clear(); trackNames.clear(); fxNames.clear();
+    paramNames.clear(); values.clear(); macroNames.clear(); ratios.clear();
+    if (g_stickyPins.empty()) return 0;
+
+    // GUID -> live track in one walk; REAPER has no reverse lookup.
+    std::unordered_map<std::string, MediaTrack*> live;
+    const int nTr = CountTracks(nullptr);
+    for (int i = 0; i < nTr; ++i) {
+        MediaTrack* tr = GetTrack(nullptr, i);
+        if (!tr) continue;
+        std::string g = trackGuidStr_(tr);
+        if (!g.empty()) live.emplace(std::move(g), tr);
+    }
+
+    struct Row { std::string guid; MediaTrack* tr; int num; };
+    std::vector<Row> rows;
+    rows.reserve(g_stickyPins.size());
+    for (const auto& kv : g_stickyPins) {
+        auto it = live.find(kv.first);
+        MediaTrack* tr = (it == live.end()) ? nullptr : it->second;
+        const int num = tr ? static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"))
+                           : (1 << 20);
+        rows.push_back({kv.first, tr, num});
+    }
+    std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+        if (a.num != b.num) return a.num < b.num;
+        return a.guid < b.guid;
+    });
+
+    char buf[512];
+    for (const Row& r : rows) {
+        auto pit = g_stickyPins.find(r.guid);
+        if (pit == g_stickyPins.end()) continue;
+        const StickyPin& pin = pit->second;
+
+        guids.push_back(r.guid);
+        ratios.push_back(pin.ratio);
+
+        if (!r.tr) {                       // the pin outlived its track
+            trackNames.push_back("track gone");
+            fxNames.push_back("");
+            paramNames.push_back("");
+            values.push_back("");
+            macroNames.push_back("");
+            continue;
+        }
+
+        buf[0] = 0;
+        GetTrackName(r.tr, buf, sizeof(buf));
+        trackNames.push_back(std::to_string(r.num) + " " + buf);
+
+        int fx1 = -1, p1 = -1;
+        if (!stickyResolveOnTrack_(r.tr, &fx1, &p1, nullptr)) {
+            fxNames.push_back("plug-in gone");
+            paramNames.push_back("");
+            values.push_back("");
+            macroNames.push_back("");
+            continue;
+        }
+        fxNames.push_back(shortFxName_(r.tr, fx1));
+
+        std::string pn = userParamLabel_(r.tr, fx1, p1);
+        if (pn.empty()) {
+            buf[0] = 0;
+            TrackFX_GetParamName(r.tr, fx1, p1, buf, sizeof(buf));
+            pn = buf;
+        }
+        paramNames.push_back(pn);
+
+        buf[0] = 0;
+        TrackFX_GetFormattedParamValue(r.tr, fx1, p1, buf, sizeof(buf));
+        values.push_back(buf);
+
+        if (pin.fxGuid2.empty()) {
+            macroNames.push_back("");
+        } else {
+            int fx2 = -1, p2 = -1;
+            if (!stickyResolveMacroOnTrack_(r.tr, pin, &fx2, &p2)) {
+                macroNames.push_back("plug-in gone");
+            } else {
+                std::string n2 = userParamLabel_(r.tr, fx2, p2);
+                if (n2.empty()) {
+                    buf[0] = 0;
+                    TrackFX_GetParamName(r.tr, fx2, p2, buf, sizeof(buf));
+                    n2 = buf;
+                }
+                macroNames.push_back(shortFxName_(r.tr, fx2) + " / " + n2);
+            }
+        }
+    }
+    return static_cast<int>(guids.size());
+}
+
+// The global suspend, mirrored into the Settings pane. Same effect as the
+// sticky_pot_toggle builtin, which is where it normally lives.
+bool reasixty_stickyActive() { return g_stickyActive.load(); }
+void reasixty_setStickyActive(bool on)
+{
+    if (g_stickyActive.load() == on) return;
+    g_stickyActive.store(on);
+    g_pageDirty.store(true);
+}
+
+static void stickyTouchProject_()
+{
+    g_pageDirty.store(true);
+    if (ReaProject* pr = EnumProjects(-1, nullptr, 0)) MarkProjectDirty(pr);
+}
+
+void reasixty_stickyClearByGuid(const char* guid)
+{
+    if (!guid || !*guid) return;
+    if (g_stickyPins.erase(guid) > 0) stickyTouchProject_();
+}
+
+void reasixty_stickyClearMacroByGuid(const char* guid)
+{
+    if (!guid || !*guid) return;
+    auto it = g_stickyPins.find(guid);
+    if (it == g_stickyPins.end() || it->second.fxGuid2.empty()) return;
+    it->second.fxGuid2.clear();
+    it->second.vst3Param2 = -1;
+    stickyTouchProject_();
+}
+
+// The follower's slope. 0 would freeze it mid-travel and look like a bug, so the
+// value skips over zero; the sign decides counter-running or in step.
+void reasixty_stickySetRatioByGuid(const char* guid, double ratio)
+{
+    if (!guid || !*guid) return;
+    auto it = g_stickyPins.find(guid);
+    if (it == g_stickyPins.end() || it->second.fxGuid2.empty()) return;
+    if (ratio >  4.0) ratio =  4.0;
+    if (ratio < -4.0) ratio = -4.0;
+    if (std::fabs(ratio) < 0.05) ratio = (ratio < 0.0) ? -0.05 : 0.05;
+    if (std::fabs(it->second.ratio - ratio) < 1e-9) return;
+    it->second.ratio = ratio;
+    stickyTouchProject_();
+}
+
+// Arm the "next touched parameter becomes this pin's second target" capture.
+// Empty or null disarms. Same 20 s timeout as the pin capture (stickyPotTick_).
+void reasixty_stickyArmSecond(const char* guid)
+{
+    g_stickyArmSecondGuid = (guid && *guid) ? guid : "";
+}
+
+bool reasixty_stickyArmedSecond(std::string& guidOut)
+{
+    guidOut = g_stickyArmSecondGuid;
+    return !g_stickyArmSecondGuid.empty();
 }
 
 bool reasixty_uf1SendsFollowHeld() { return g_uf1SendsFollowHeld.load(); }

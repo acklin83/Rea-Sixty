@@ -217,9 +217,9 @@ void settingsRequestSectionScroll(const char* title)
     g_scrollPending = (title && *title) ? title : "";
 }
 // Called by MixerWindow's rail dispatch immediately before EVERY pane's draw
-// (MixerWindow.cpp), not from inside the panes: only three of the twelve panes
+// (MixerWindow.cpp), not from inside the panes: only three of the thirteen panes
 // own headings, so latching in those three would leave a request armed
-// indefinitely whenever any of the other nine drew instead. Taking it here
+// indefinitely whenever any of the other ten drew instead. Taking it here
 // gives the request a true one-pane-draw lifetime — whatever the headings
 // below don't consume dies on the next pane draw, whichever pane that is.
 void settingsLatchSectionScroll()

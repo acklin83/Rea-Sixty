@@ -6,9 +6,9 @@
 // view, which does NOT exist: its scaffold (MixerLayout) was never reachable
 // and was removed 2026-08-14. What this window actually hosts is the Settings
 // rail:
-// a left-hand list of twelve panes (Devices, Appearance, Behaviour, Bindings,
-// Modes, FX Learn, Favourites, Selection Sets, Parameter Groups, Exchange,
-// Manual, About) with the selected pane drawn in the content area. The rail
+// a left-hand list of thirteen panes (Devices, Appearance, Behaviour, Bindings,
+// Modes, FX Learn, Favourites, Selection Sets, Sticky Pot, Parameter Groups,
+// Exchange, Manual, About) with the selected pane drawn in the content area. The rail
 // table is kRail in MixerWindow.cpp; add panes there, not here.
 //
 // Rendering goes through ReaImGui, REAPER's own ImGui binding, reached via

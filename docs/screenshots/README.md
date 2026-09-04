@@ -48,10 +48,11 @@ on all three device rows.
 ### Settings window
 
 Eight files were re-captured 2026-08-10 against the Settings reorganisation
-(`e52b288`, branch `uf1-native-build`): the rail now reads **Devices ·
+(`e52b288`, branch `uf1-native-build`): the rail read **Devices ·
 Appearance · Behaviour · Bindings · Modes · FX Learn · Favourites · Selection
 Sets · Parameter Groups · Exchange · Manual · About** — twelve entries — with a
-**Search settings** field above it. `settings-device-1/2/3.png` were removed in
+**Search settings** field above it. A thirteenth, **Sticky Pot**, was added
+after Selection Sets on 2026-09-04 and is not in any shot yet. `settings-device-1/2/3.png` were removed in
 the same commit; that pane no longer exists and there is nothing to re-point
 them at.
 

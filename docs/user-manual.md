@@ -943,7 +943,7 @@ wheel's own page, or put **Fades: follow the fade with the view** on a key.
 
 The Settings window is a dockable ReaImGui context. Open with the `360°` key (default) or REAPER's action `Rea-Sixty: Open / Close Rea-Sixty Settings` (`REASIXTY_TOGGLE_SETTINGS`).
 
-Twelve sidebar tabs: Devices · Appearance · Behaviour · Bindings · Modes · FX Learn · Favourites · Selection Sets · Parameter Groups · Exchange · Manual · About.
+Thirteen sidebar tabs: Devices · Appearance · Behaviour · Bindings · Modes · FX Learn · Favourites · Selection Sets · Sticky Pot · Parameter Groups · Exchange · Manual · About.
 
 The first three hold the general settings, split by what they touch: **Devices** is the hardware itself, **Appearance** is what you look at, **Behaviour** is what the surface does.
 
@@ -957,7 +957,7 @@ A filter field sits at the top of the sidebar, above the tab list. Leave it empt
 - The sidebar is narrow, so each of the two lines is shortened on its own with an ellipsis. Hover a row to read it in full as a tooltip.
 - Nothing matches → **No matches**.
 
-All twelve panes are indexed control by control, not just the first three: searching "focus set" finds the control inside Bindings, not only the pane. The query is not remembered between sessions.
+All thirteen panes are indexed control by control, not just the first three: searching "focus set" finds the control inside Bindings, not only the pane. The query is not remembered between sessions.
 
 ## Devices pane
 
@@ -1738,6 +1738,18 @@ Bind buttons to **Recall Selection Slot (toggle)** with param 1..8, and **Save c
 
 \newpage
 
+## Sticky Pot pane
+
+Every Sticky Pot pin in the project, one row per pinned track: track, plug-in, parameter and its live value. Pins themselves are made on the hardware, with *Sticky Pot: Get next touched Parameter*. This pane is where you see what is pinned, drop one, and give a pin a second parameter.
+
+- **Sticky Pot active** (checkbox) — the same global suspend the *Sticky Pot: Toggle active/inactive* action does. Off means every pin steps aside and the V-Pots go back to their normal view; the pins are kept.
+- **Pair** — press it, then touch a second parameter on that same track. It joins the same pot. Both values are noted at that moment, so pairing itself moves nothing; only the next turn of the pot does. A parameter on another track is ignored, so grabbing the wrong plug-in first costs nothing. The capture gives up after twenty seconds, like the pin capture.
+- **Ratio** — how far the second parameter travels for a given move of the first, and in which direction. `-1.00` is counter-running one to one, which is what an 1176 wants: input up, output down, level unchanged. A positive value runs both the same way, a smaller number moves the second one less. The second parameter stops at its own end of travel while the pot keeps going.
+- **Unlink** — drop the second parameter, keep the pin.
+- **Clear** — drop the pin.
+
+A row whose track is gone shows `track gone`, and one whose plug-in is gone shows `plug-in gone`. Both can still be cleared here. Pinning a new parameter to a track drops that track's pairing.
+
 ## Parameter Groups pane
 
 Parallel parameter control across multiple tracks: while a slot is active, plug-in tweaks on the focused track copy to every member track of the slot. This works for the SSL Channel Strip / Bus Comp, for learned FX, **and now for any other plug-in with no mapping required** — as long as the member track hosts the exact same plug-in. (See the Parameter Groups reference section for the full rules.)
@@ -1967,6 +1979,8 @@ Pin one plug-in parameter to a track's V-Pot. The pin stays on that track — it
 - **Sticky Pot: Toggle active/inactive** — suspend every pin at once (so the V-Pots return to their normal view), then bring them all back. The pins themselves are kept. Lit while active.
 
 A **V-Pot press** on a pinned strip resets its parameter to the centre (a two-state parameter flips instead). Pins are **saved with the project** and restored on reload — keyed to the track and the plug-in, so they survive re-banking and FX-chain reorders.
+
+A pin can carry a **second parameter**, so one pot moves two. Set it up in *Settings, Sticky Pot* with **Pair**: press it, touch the second parameter on the same track, and from then on it follows the pinned one at the ratio you give it. `-1.00`, the default, runs it exactly counter to the pin, which is how you hold an 1176 at one level while you drive it harder. Both values are anchored when you pair them, so nothing jumps at that moment. The surface keeps showing the first parameter, and the second stays an ordinary parameter you can still reach in the plug-in or from anywhere else: it only moves when the pot moves the pin.
 
 Under **FLIP**, the pin moves onto the **fader** instead of stepping aside. FLIP assigns the current V-Pot parameter to the fader, and the pin *is* that parameter — so the fader's value, motor follow and touch all track the pinned parameter, while the V-Pot rides Volume as it normally does under FLIP.
 

@@ -325,6 +325,23 @@ int         reasixty_selsetTrackCount(int slot);
 void        reasixty_selsetSaveCurrent(int slot);
 void        reasixty_selsetRecallToggle(int slot);
 void        reasixty_selsetClear(int slot);
+// Sticky Pot pane. One list call per frame builds the whole table; every action
+// is addressed by track GUID, never by row index, because a Clear pressed inside
+// the draw loop renumbers the rows beneath it in the same frame.
+int         reasixty_stickyList(std::vector<std::string>& guids,
+                                std::vector<std::string>& trackNames,
+                                std::vector<std::string>& fxNames,
+                                std::vector<std::string>& paramNames,
+                                std::vector<std::string>& values,
+                                std::vector<std::string>& macroNames,
+                                std::vector<double>&      ratios);
+bool        reasixty_stickyActive();
+void        reasixty_setStickyActive(bool on);
+void        reasixty_stickyClearByGuid(const char* guid);
+void        reasixty_stickyClearMacroByGuid(const char* guid);
+void        reasixty_stickySetRatioByGuid(const char* guid, double ratio);
+void        reasixty_stickyArmSecond(const char* guid);   // "" or nullptr disarms
+bool        reasixty_stickyArmedSecond(std::string& guidOut);
 int         reasixty_selsetAutoMode();                          // global: -1 = off, 0..5 = REAPER mode
 void        reasixty_setSelsetAutoMode(int mode);
 int         reasixty_focusSetAutoMode();                        // Focus Set: -1 = off, 0..5 = REAPER mode
@@ -23596,6 +23613,154 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
         "(ANY category).");
     ImGui_Text(ctx,
         "Selection-Set Auto-Mode is configured globally in Modes \xe2\x86\x92 Auto.");
+}
+
+// Every Sticky Pot pin in the project, one row per pinned track. Pins are made
+// on the hardware (Sticky Pot: Get next touched Parameter); this pane is where
+// you see what is pinned, drop one, and give a pin its optional second
+// parameter. Rows are addressed by track GUID for the whole frame — see the
+// forward declarations above.
+void SettingsScreen::drawStickyPot(ImGui_Context* ctx)
+{
+    ImGui_Text(ctx, "Sticky Pot");
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx,
+        "One plug-in parameter pinned to a track's V-Pot. The pin travels with "
+        "the track across banks.");
+    ImGui_Text(ctx,
+        "Pins are made on the hardware: bind \"Sticky Pot: Get next touched "
+        "Parameter\", fire it, touch the parameter.");
+    ImGui_Spacing(ctx);
+
+    bool act = reasixty_stickyActive();
+    if (ImGui_Checkbox(ctx, "Sticky Pot active", &act))
+        reasixty_setStickyActive(act);
+    ImGui_Spacing(ctx);
+
+    static std::vector<std::string> guids, trks, fxs, prms, vals, macros;
+    static std::vector<double>      ratios;
+    const int rows = reasixty_stickyList(guids, trks, fxs, prms, vals, macros, ratios);
+
+    std::string armedGuid;
+    const bool  arming = reasixty_stickyArmedSecond(armedGuid);
+
+    if (rows == 0) {
+        ImGui_Text(ctx, "No pins in this project.");
+        return;
+    }
+
+    int tblFlags = 0;
+    if (ImGui_BeginTable(ctx, "sticky_tbl", 8, &tblFlags,
+                         nullptr, nullptr, nullptr)) {
+        int    wFlag  = ImGui_TableColumnFlags_WidthFixed;
+        double wTrk   = scaleW_(ctx, 170.0);
+        double wFx    = scaleW_(ctx, 130.0);
+        double wPrm   = scaleW_(ctx, 130.0);
+        double wVal   = scaleW_(ctx,  90.0);
+        double wSec   = scaleW_(ctx, 230.0);
+        double wRat   = scaleW_(ctx,  90.0);
+        double wUnl   = scaleW_(ctx,  80.0);
+        double wClr   = scaleW_(ctx,  80.0);
+        ImGui_TableSetupColumn(ctx, "track",  &wFlag, &wTrk, nullptr);
+        ImGui_TableSetupColumn(ctx, "fx",     &wFlag, &wFx,  nullptr);
+        ImGui_TableSetupColumn(ctx, "param",  &wFlag, &wPrm, nullptr);
+        ImGui_TableSetupColumn(ctx, "value",  &wFlag, &wVal, nullptr);
+        ImGui_TableSetupColumn(ctx, "second", &wFlag, &wSec, nullptr);
+        ImGui_TableSetupColumn(ctx, "ratio",  &wFlag, &wRat, nullptr);
+        ImGui_TableSetupColumn(ctx, "unlink", &wFlag, &wUnl, nullptr);
+        ImGui_TableSetupColumn(ctx, "clear",  &wFlag, &wClr, nullptr);
+
+        double kBtnW = scaleW_(ctx, 74.0);
+        double kBtnH = 0.0;
+
+        for (int i = 0; i < rows; ++i) {
+            char idtag[48];
+            snprintf(idtag, sizeof(idtag), "sticky_row_%d", i);
+            ImGui_PushID(ctx, idtag);
+
+            const char* guid    = guids[i].c_str();
+            const bool  hasMac  = !macros[i].empty();
+            const bool  armedMe = arming && armedGuid == guids[i];
+
+            ImGui_TableNextColumn(ctx);
+            ImGui_Text(ctx, trks[i].c_str());
+
+            ImGui_TableNextColumn(ctx);
+            ImGui_Text(ctx, fxs[i].c_str());
+
+            ImGui_TableNextColumn(ctx);
+            ImGui_Text(ctx, prms[i].c_str());
+
+            ImGui_TableNextColumn(ctx);
+            ImGui_Text(ctx, vals[i].c_str());
+
+            // Second parameter: the pairing button while there is none, the
+            // resolved name once there is. Arming shows on its own row only —
+            // the capture belongs to one track.
+            ImGui_TableNextColumn(ctx);
+            if (hasMac) {
+                ImGui_Text(ctx, macros[i].c_str());
+            } else if (armedMe) {
+                double wCan = scaleW_(ctx, 74.0);
+                if (ImGui_Button(ctx, "Cancel##sc", &wCan, &kBtnH))
+                    reasixty_stickyArmSecond(nullptr);
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                ImGui_Text(ctx, "touch it now");
+            } else {
+                double wPair = scaleW_(ctx, 74.0);
+                if (ImGui_Button(ctx, "Pair##sp", &wPair, &kBtnH))
+                    reasixty_stickyArmSecond(guid);
+            }
+
+            // Ratio: how far the follower travels per unit of the pin, and in
+            // which direction. Only meaningful once a second parameter exists.
+            ImGui_TableNextColumn(ctx);
+            if (hasMac) {
+                double r  = ratios[i];
+                double d1 = 0.05, f1 = 0.25;
+                int    fl = 0;
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 84.0));
+                if (ImGui_InputDouble(ctx, "##sr", &r, &d1, &f1, "%.2f", &fl))
+                    reasixty_stickySetRatioByGuid(guid, r);
+            }
+
+            ImGui_TableNextColumn(ctx);
+            if (hasMac) {
+                double w = kBtnW;
+                if (ImGui_Button(ctx, "Unlink##su", &w, &kBtnH))
+                    reasixty_stickyClearMacroByGuid(guid);
+            }
+
+            ImGui_TableNextColumn(ctx);
+            {
+                double w = kBtnW;
+                if (ImGui_Button(ctx, "Clear##sx", &w, &kBtnH))
+                    reasixty_stickyClearByGuid(guid);
+            }
+
+            ImGui_PopID(ctx);
+        }
+        ImGui_EndTable(ctx);
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx,
+        "Pair adds a second parameter on the same track to the same pot. Press "
+        "it, then touch that parameter.");
+    ImGui_Text(ctx,
+        "Both values are anchored at that moment, so pairing itself moves "
+        "nothing \xe2\x80\x94 only the next turn does.");
+    ImGui_Text(ctx,
+        "Ratio -1.00 is counter-running one to one, as an 1176 wants it. A "
+        "positive ratio runs both the same way.");
+    ImGui_Text(ctx,
+        "The follower stops at its end of travel; the pot itself never blocks. "
+        "The surface keeps showing the first parameter.");
+    ImGui_Text(ctx,
+        "Pinning a new parameter to a track drops that track's pairing.");
 }
 
 // ---- Parameter Groups -----------------------------------------------------

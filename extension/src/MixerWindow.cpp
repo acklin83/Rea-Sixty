@@ -75,6 +75,7 @@ enum Section : int {
     kSecManual,
     kSecAbout,
     kSecBehaviour,
+    kSecStickyPot,
 };
 
 struct RailEntry {
@@ -96,13 +97,14 @@ constexpr RailEntry kRail[] = {
     { "FX Learn",        "fxlearn",         kSecFxLearn,        false, &SettingsScreen::drawFxLearn         },
     { "Favourites",      "favourites",      kSecFavourites,     false, &SettingsScreen::drawFavourites      },
     { "Selection Sets",  "selectionsets",   kSecSelectionSets,  false, &SettingsScreen::drawSelectionSets   },
+    { "Sticky Pot",      "stickypot",       kSecStickyPot,      false, &SettingsScreen::drawStickyPot       },
     { "Parameter Groups","parametergroups", kSecParameterGroups,false, &SettingsScreen::drawParameterGroups },
     { "Exchange",        "exchange",        kSecExchange,       true,  &ExchangeView::draw                  },
     { "Manual",          "manual",          kSecManual,         false, &ManualView::draw                    },
     { "About",           "about",           kSecAbout,          false, &SettingsScreen::drawAbout           },
 };
 
-// Section ⇄ stable id. Twelve entries, scanned on a rail click and on
+// Section ⇄ stable id. Thirteen entries, scanned on a rail click and on
 // window open — a linear scan is the whole implementation.
 const char* railIdFor(int section)
 {
@@ -145,7 +147,7 @@ constexpr double kRailWidthPx = 160.0;
 // normal persistSelected path) and asks it to scroll to the owning heading.
 //
 // Every label below is copied verbatim out of SettingsScreen.cpp — the index
-// is a mirror of the code, not a description of it. All twelve panes are
+// is a mirror of the code, not a description of it. All thirteen panes are
 // indexed control by control. They were not at first, and "rme" (Modes → REC →
 // Enable RME / TotalReaper integration) found nothing, so the scope note that
 // used to sit here was wrong in practice. Still headings-only: the per-slot and
@@ -289,6 +291,8 @@ constexpr SearchEntry kSearchIndex[] = {
                                                kSecFxLearn, "Modifier layers" },
     { "Favourites",                            kSecFavourites,      "" },
     { "Selection Sets",                        kSecSelectionSets,   "" },
+    { "Sticky Pot",                            kSecStickyPot,       "" },
+    { "Sticky Pot active",                     kSecStickyPot,       "" },
     { "Parameter Groups",                      kSecParameterGroups, "" },
     { "Exchange",                              kSecExchange,        "" },
     { "Mapping Exchange",                      kSecExchange,        "" },
