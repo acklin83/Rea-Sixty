@@ -1123,6 +1123,25 @@ bool              recallBankPreset(int idx, int layer, int quick, int subBank,
                                   int mod);
 bool              bankPresetSpills(int idx);
 
+// ---- Soft-Key bank clipboard (Copy / Cut / Paste in the bank matrix) ------
+// Session-only, deliberately NOT in Config: a clipboard that survived a restart
+// would offer to paste a bank the user copied last week. It carries what makes
+// a cell that cell — the eight slots, the bank's name and its dynamic kind —
+// and follows saveBankPreset's rule about the two sets: copying from Plain
+// takes Shift along when Shift holds something, copying while on Shift is that
+// one set. Paste writes the kind back (unlike recallBankPreset, which clears
+// it): copying a Favourites bank and pasting a static one would not be a copy.
+bool              bankClipboardFull();
+bool              bankClipboardHasShift();
+std::string       bankClipboardLabel();      // "Q3 Soft 1 - KHE Amps", for the menu
+bool              copyBankToClipboard(int layer, int quick, int subBank, int mod,
+                                      const std::string& label);
+bool              pasteBankFromClipboard(int layer, int quick, int subBank, int mod);
+// Empty a bank. `bothSets` clears Plain and Shift, else just `mod`. Used by Cut
+// and on its own; the name and the dynamic kind of the cleared set(s) go too.
+bool              clearBank(int layer, int quick, int subBank, int mod,
+                            bool bothSets);
+
 // ---- Factory Rea-Sixty soft-key bank presets ----------------------------
 // Read-only curated banks built ONLY from Rea-Sixty's own built-ins (the
 // many that have no dedicated UF8 key). Six banks of 8 slots each; their

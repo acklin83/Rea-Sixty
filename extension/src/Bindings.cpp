@@ -5614,6 +5614,108 @@ bool recallBankPreset(int idx, int layer, int quick, int subBank, int mod)
     return true;
 }
 
+// ---- Soft-Key bank clipboard --------------------------------------------
+// Session-only by design (see Bindings.h). The capture / apply helpers are the
+// preset ones, so a copied bank carries exactly what a saved preset carries —
+// all three gestures per set, the label rule, the LED and behaviour on Plain —
+// and cannot drift from it.
+namespace {
+struct BankClipboard_ {
+    bool            full     = false;
+    bool            hasShift = false;
+    Binding         slots[kSlotsPerSubBank];
+    Binding         shiftSlots[kSlotsPerSubBank];
+    std::string     name;                       // the copied set's bank name
+    std::string     nameShift;
+    DynamicBankKind dyn      = DynamicBankKind::None;   // the set's OWN kind
+    DynamicBankKind dynShift = DynamicBankKind::None;
+    std::string     label;                      // human text for the menu
+};
+BankClipboard_ g_bankClip;
+}  // namespace
+
+bool bankClipboardFull()     { std::lock_guard<std::mutex> lk(g_cfgMutex);
+                               return g_bankClip.full; }
+bool bankClipboardHasShift() { std::lock_guard<std::mutex> lk(g_cfgMutex);
+                               return g_bankClip.full && g_bankClip.hasShift; }
+std::string bankClipboardLabel() { std::lock_guard<std::mutex> lk(g_cfgMutex);
+                                   return g_bankClip.full ? g_bankClip.label
+                                                          : std::string(); }
+
+bool copyBankToClipboard(int layer, int quick, int subBank, int mod,
+                         const std::string& label)
+{
+    if (!userQuickSlotInRange_(layer, quick, subBank, 0)) return false;
+    if (mod < 0 || mod >= kSoftKeyModifierSets) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    const UserQuickSubBank& sb =
+        g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank];
+    // Same rule as saveBankPreset: copying Plain takes Shift along when Shift
+    // holds something, copying while ON Shift is that one set.
+    const bool takeShift = (mod == 0) && subBankSetHasContentLocked_(sb, 1);
+    BankClipboard_ c;
+    for (int s = 0; s < kSlotsPerSubBank; ++s) {
+        capturePresetSlotLocked_(sb.slots[s], mod, c.slots[s]);
+        if (takeShift) capturePresetSlotLocked_(sb.slots[s], 1, c.shiftSlots[s]);
+    }
+    c.hasShift  = takeShift;
+    c.name      = sb.name[mod];
+    c.dyn       = sb.dynamic[mod];
+    if (takeShift) { c.nameShift = sb.name[1]; c.dynShift = sb.dynamic[1]; }
+    c.label     = label;
+    c.full      = true;
+    g_bankClip  = std::move(c);
+    return true;
+}
+
+bool pasteBankFromClipboard(int layer, int quick, int subBank, int mod)
+{
+    if (!userQuickSlotInRange_(layer, quick, subBank, 0)) return false;
+    if (mod < 0 || mod >= kSoftKeyModifierSets) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (!g_bankClip.full) return false;
+    auto& sb = g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank];
+    const int dstMod = g_bankClip.hasShift ? 0 : mod;
+    for (int s = 0; s < kSlotsPerSubBank; ++s) {
+        applyPresetSlotLocked_(g_bankClip.slots[s], dstMod, sb.slots[s]);
+        if (g_bankClip.hasShift)
+            applyPresetSlotLocked_(g_bankClip.shiftSlots[s], 1, sb.slots[s]);
+    }
+    sb.name[dstMod]    = g_bankClip.name;
+    // ⇨ AND THE KIND COMES ALONG, unlike recallBankPreset which clears it. A
+    // preset is eight static slots, so recalling one onto a dynamic bank has to
+    // make it static or the slots would be unreachable. A COPY is the cell
+    // itself: copying a Favourites bank and pasting a static one would not be a
+    // copy of anything (Frank 2026-09-04).
+    sb.dynamic[dstMod] = g_bankClip.dyn;
+    if (g_bankClip.hasShift) {
+        sb.name[1]    = g_bankClip.nameShift;
+        sb.dynamic[1] = g_bankClip.dynShift;
+    }
+    persistLocked_();
+    return true;
+}
+
+bool clearBank(int layer, int quick, int subBank, int mod, bool bothSets)
+{
+    if (!userQuickSlotInRange_(layer, quick, subBank, 0)) return false;
+    if (mod < 0 || mod >= kSoftKeyModifierSets) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    auto& sb = g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank];
+    const Binding empty{};
+    auto wipe = [&](int m) {
+        for (int s = 0; s < kSlotsPerSubBank; ++s)
+            applyPresetSlotLocked_(empty, m, sb.slots[s]);
+        sb.name[m]    = std::string();
+        sb.dynamic[m] = DynamicBankKind::None;
+    };
+    wipe(bothSets ? 0 : mod);
+    if (bothSets) wipe(1);
+    persistLocked_();
+    return true;
+}
+
+
 // ---- Factory Rea-Sixty soft-key bank presets -----------------------------
 // Curated from Rea-Sixty's own built-ins only (Frank's locked curation,
 // backlog 2026-06-22). Labels ≤12 chars — the old note here said 8, which

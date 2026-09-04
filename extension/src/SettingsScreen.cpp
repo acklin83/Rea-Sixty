@@ -6697,6 +6697,66 @@ void reasixty_publishSettingsModifierPin(bool bindingsPaneOpen)
 // Per-strip Sel/Cut/Solo/Rec, V-Pot push, top soft-keys, and soft-key
 // bank selectors are shown greyed/locked — they stay hardcoded in v1
 // (resolved Q2). Phase D widens the catalogue.
+// ---- Bank-matrix context menu (Copy / Cut / Paste a whole bank) ----------
+// A cell in the matrix IS a bank, so the menu works on the bank rather than on
+// a key: the eight slots, the bank's name and its dynamic kind, for the
+// modifier set the matrix is showing. Copying from Plain takes Shift along
+// when Shift holds something — the same rule the bank presets follow, so the
+// two never disagree about what "this bank" means.
+static int  s_bankCtxL = -1, s_bankCtxQ = -1, s_bankCtxSb = -1, s_bankCtxSet = 0;
+static bool s_bankCtxFilled = false;
+static bool s_bankCtxOpen   = false;
+
+static void renderBankMatrixContextMenu_(ImGui_Context* ctx)
+{
+    if (s_bankCtxOpen) {
+        ImGui_OpenPopup(ctx, "##skbank_ctx", nullptr);
+        s_bankCtxOpen = false;
+    }
+    if (!ImGui_BeginPopup(ctx, "##skbank_ctx", nullptr)) return;
+    if (s_bankCtxL < 0 || s_bankCtxQ < 0 || s_bankCtxSb < 0) {
+        ImGui_EndPopup(ctx);
+        return;
+    }
+    using namespace uf8::bindings;
+    static const char* kSbName[6] = { "V-POT", "Soft 1", "Soft 2",
+                                      "Soft 3", "Soft 4", "Soft 5" };
+    const int mod = g_slotEditModIdx;
+
+    char here[96];
+    snprintf(here, sizeof(here), "Set %d, %s%s", s_bankCtxSet,
+             kSbName[s_bankCtxSb < 0 || s_bankCtxSb > 5 ? 0 : s_bankCtxSb],
+             mod == 0 ? "" : "  (Shift)");
+    ImGui_TextDisabled(ctx, here);
+    ImGui_Separator(ctx);
+
+    bool canCopy = s_bankCtxFilled;
+    if (ImGui_MenuItem(ctx, "Copy bank", nullptr, nullptr, &canCopy))
+        copyBankToClipboard(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod, here);
+    if (ImGui_MenuItem(ctx, "Cut bank", nullptr, nullptr, &canCopy)) {
+        if (copyBankToClipboard(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod, here))
+            clearBank(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod,
+                      /*bothSets*/ bankClipboardHasShift());
+    }
+    // The paste item names what is on the clipboard, so a menu opened on the
+    // wrong cell is obvious before it is clicked.
+    const std::string clip = bankClipboardLabel();
+    char pasteLbl[160];
+    if (clip.empty()) snprintf(pasteLbl, sizeof(pasteLbl), "Paste bank");
+    else              snprintf(pasteLbl, sizeof(pasteLbl), "Paste bank (%s)",
+                               clip.c_str());
+    bool canPaste = bankClipboardFull();
+    if (ImGui_MenuItem(ctx, pasteLbl, nullptr, nullptr, &canPaste))
+        pasteBankFromClipboard(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod);
+    if (bankClipboardHasShift())
+        ImGui_TextDisabled(ctx, "The clipboard carries Plain and Shift.");
+    ImGui_Separator(ctx);
+    bool canClear = s_bankCtxFilled;
+    if (ImGui_MenuItem(ctx, "Clear bank", nullptr, nullptr, &canClear))
+        clearBank(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod, /*bothSets*/ false);
+    ImGui_EndPopup(ctx);
+}
+
 void SettingsScreen::drawBindings(ImGui_Context* ctx)
 {
     using namespace uf8::bindings;
@@ -7053,9 +7113,23 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                         if (ImGui_Selectable(ctx, cid, &selCell,
                                              nullptr, nullptr, nullptr))
                             reasixty_engageSoftKeyBank(sl, sq, c);
+                        // Right-click → Copy / Cut / Paste for the whole bank
+                        // (Frank 2026-09-04). The request is consumed after the
+                        // table so the popup lives outside the cell's ID scope,
+                        // the same shape renderBindingContextMenu_ uses.
+                        int rmb = 1;
+                        if (ImGui_IsItemClicked(ctx, &rmb)) {
+                            s_bankCtxL   = sl;
+                            s_bankCtxQ   = sq;
+                            s_bankCtxSb  = c;
+                            s_bankCtxSet = setNo;
+                            s_bankCtxFilled = filled;
+                            s_bankCtxOpen   = true;
+                        }
                     }
                 }
                 ImGui_EndTable(ctx);
+                renderBankMatrixContextMenu_(ctx);
             }
             ImGui_Spacing(ctx);
         }
