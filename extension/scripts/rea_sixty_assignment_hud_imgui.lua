@@ -365,6 +365,15 @@ end
 local function readPush()
   local raw = reaper.GetExtState(SECT, "hud_push")
   if raw == "" then return nil end
+  -- ⛔ PARSED ONCE PER PAYLOAD, NOT ONCE PER FRAME. drawPushCycle calls this on
+  -- every frame the submenu is open, and the payload carries the whole "+ Add
+  -- step" catalog: on a Pro-Q that is hundreds of P-lines with all their
+  -- options, so the parse built thousands of tables per frame and the menu
+  -- crawled (Frank 2026-09-04: "extrem langsam in allen push-cycle
+  -- untermenues"). Keyed by the raw string, the same trick refreshPushBtns
+  -- uses, so a fresh answer from the extension still lands immediately.
+  -- On EXT rather than in a local: this file is at Lua's 200-local ceiling.
+  if raw == EXT.pushRaw then return EXT.pushData end
   local first = true
   local pd = { idx = -1, steps = {}, params = {} }
   for ln in raw:gmatch("[^\n]+") do
@@ -390,7 +399,8 @@ local function readPush()
       end
     end
   end
-  if pd.idx < 0 then return nil end
+  if pd.idx < 0 then EXT.pushRaw, EXT.pushData = raw, nil; return nil end
+  EXT.pushRaw, EXT.pushData = raw, pd
   return pd
 end
 

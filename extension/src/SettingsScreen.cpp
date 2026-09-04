@@ -12960,6 +12960,23 @@ std::string hudShortLabel_(const char* name)
 // upsert + save. Mirrors the Settings "+New" create path + snapshotParamsFor_.
 // Refuses SSL/built-in collisions and Acustica (whose engine faults under
 // param enumeration — [[acustica-crash-setdefaultdlldirectories]]).
+// ⇨ AND STAY ON WHAT YOU JUST MAPPED. The moment a plug-in gets a map it stops
+// being "the unmapped one under the cursor", the HUD's bootstrap ends, and the
+// CS/BC target falls back to the track's instance cursor — which still points at
+// whatever was mapped before. Map a Pro-Q on a track that also carries a 4K E
+// and the panel jumps to the 4K E the instant the work lands (Frank 2026-09-04:
+// "nach dem mapping schaltet er gleich auf das 4k e. muss manuel zurück auf
+// pro-q4"). Moving the cursor onto the new instance is the whole fix, and it is
+// the same cursor Instance Cycle writes, so nothing else has to learn about it.
+static void pointInstanceCursorAt_(MediaTrack* tr, int fx, uf8::Domain dom)
+{
+    if (!tr || fx < 0 || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+    const int ord = uc1::instanceIndexForFx(tr, fx);
+    if (ord < 0) return;                       // not a recognised CS/BC binding
+    if      (dom == uf8::Domain::ChannelStrip) uc1::setCsInstanceIndex(tr, ord);
+    else if (dom == uf8::Domain::BusComp)      uc1::setBcInstanceIndex(tr, ord);
+}
+
 bool hudLearnCreateAndBind_(MediaTrack* tr, int fx, uf8::Domain domain,
                             int linkIdx, int layer, int vst3Param)
 {
@@ -13014,8 +13031,10 @@ bool hudLearnCreateAndBind_(MediaTrack* tr, int fx, uf8::Domain domain,
     lay.inverted  = false;
     m.slots.push_back(std::move(sl));
 
+    const uf8::Domain createdDom = m.domain;
     user_plugins::upsert(std::move(m));
     user_plugins::save();
+    pointInstanceCursorAt_(tr, fx, createdDom);
     return true;
 }
 
@@ -14536,6 +14555,9 @@ bool hudApplyAutoLearn_(void* csTrV, int csFx, int mode, const char* spec)
         match = fresh.match;
         EditingFx efx{ tr, csFx, true };
         snapshotParamsFor_(match, efx);
+        // Stay on the plug-in the proposals were for, same reason as the learn
+        // path: the bootstrap ends the moment this map exists.
+        pointInstanceCursorAt_(tr, csFx, fresh.domain);
     } else {
         match = om->match;
     }
