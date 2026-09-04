@@ -838,15 +838,23 @@ void seedFactoryDefaults_(Config& c)
     // (Frank: "das ist V-Pot zu Pan bei mir! Muss es auch ab werk sein").
     L1[ButtonId::Pan]       = mkBuiltin("pan_force", Behavior::Toggle, "PAN");
 
-    // Shift+Plugin: same toggle plus open/close the focused track's
-    // user-mapped plug-in GUI.
+    // Shift+Plugin: UF8 Plug-in Mode — the eight strips become the strips of a
+    // single learned plug-in. It shipped on no key at all, which meant the one
+    // mode that turns the whole surface into an instrument was the one you had
+    // to go and bind yourself (Frank 2026-09-04). The PLUGIN key is where it
+    // belongs: plain is the SSL strip on the UC1's terms, Shift is the whole UF8
+    // given over to one plug-in.
+    // ⚠ This TAKES the slot from ssl_strip_mode_toggle_with_gui, which had it
+    // and is still reachable from the Bindings editor and the Plug-in Ops
+    // factory bank. Frank's own bindings.json is not the factory state, so an
+    // existing install keeps whatever is on that key until it is reset.
     {
         auto& spShift = L1[ButtonId::PluginBtn]
             .shortPress[static_cast<int>(Modifier::Shift)];
         spShift.type   = ActionType::Builtin;
-        spShift.action = "ssl_strip_mode_toggle_with_gui";
+        spShift.action = "uf8_plugin_mode_toggle";
         spShift.param  = 0;
-        spShift.label  = "PLUG+UI";
+        spShift.label  = "UF8 PLG";
     }
 
     // Shift+360 → toggle the Learn-HUD (focused plug-in's assignments). Plain

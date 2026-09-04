@@ -2242,7 +2242,7 @@ In the Bindings schematic the Top-Soft-Key labels for CS (Q1) / BC (Q2) **follow
 
 ## UF8 Plug-in Mode
 
-Engage with the **Toggle UF8 Plug-in Mode** (or **Toggle UF8 Plug-in Mode (with GUI)**) action. **No default binding** — put it on a key of your choosing. The Plug-in button's factory slots are SSL Strip Mode on Plain and SSL Strip Mode with GUI on Shift.
+Engage with **Shift + PLUGIN** on the UF8, which is where it sits from the factory. The Plug-in button's two slots are SSL Strip Mode on Plain and UF8 Plug-in Mode on Shift: plain is the SSL strip on the UC1's terms, Shift hands the whole UF8 to one plug-in. The **Toggle UF8 Plug-in Mode (with GUI)** variant, and SSL Strip Mode's own GUI variant, are in the Bindings picker and in the *Plug-in Ops* factory bank for a key of your choosing.
 
 While UF8 Plug-in Mode is on:
 
@@ -2258,7 +2258,9 @@ Per-V-Pot customisation lives in Settings → FX Learn → (right-click the V-Po
 
 ## 360° Link
 
-The SSL 360° Link plug-in (a wrapper that mirrors third-party VSTs into the 360° surface) is recognised natively. When the focused track has a 360° Link instance pointing at a learned plug-in, SSL Strip Mode / UF8 Plug-in Mode drive the linked plug-in transparently.
+The SSL 360° Link plug-in (a wrapper that mirrors third-party VSTs into the 360° surface) is recognised natively as a built-in channel strip, so the UC1 and **SSL Strip Mode** drive the linked plug-in transparently.
+
+**UF8 Plug-in Mode does not reach a Link.** That mode lays the eight strips out from a map's own UF8 block, which only a map you made yourself carries; the 360° Link is one of the shipped built-in strips and has none. Map the plug-in itself if you want it on the UF8's strips.
 
 User-renamed 360° Link instances show the rename instead of the generic "Link" / "L-BC" abbreviation.
 
