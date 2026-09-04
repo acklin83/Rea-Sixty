@@ -1069,8 +1069,8 @@ The colour and geometry rows appear only while the helper that uses them is swit
 | Selected FX colour | Overlay on | Colour of the surface-focused plug-in that is neither CS nor BC. MCP overlay only. Default blue. |
 | Fill opacity | Overlay on | 0.00 (default) = outline only … 1.00 = solid fill. |
 | Border opacity | Overlay on | Opacity of the box outline. Default 0.90. |
-| Inserts row height | Overlay on | 8 – 48 px, default 17. Match it to your theme's FX-list row height. |
-| Inserts top offset | Overlay on | -20 – 40 px, default 1. Nudges the first row up or down until the boxes line up. |
+| Inserts row height | Overlay on | 8 – 48 px, default 17. **Fallback only:** the overlay measures the real rows of the FX list and draws on those, so this slider does nothing unless that measurement fails. |
+| Inserts top offset | Overlay on | -20 – 40 px, default 1. Fallback only, like the row height above. |
 
 ### Surface display
 
@@ -1833,7 +1833,7 @@ Enable via *Settings → Appearance → On-screen → "Show MCP Inserts overlay"
 
 - **CS colour / BC colour** pickers.
 - **Fill opacity** (0 = outline only) and **Border opacity**.
-- **Inserts row height** and **Inserts top offset** — fine-tune the box to line up with your theme's FX-list rows.
+- **Inserts row height** and **Inserts top offset** — a fallback. The MCP overlay measures each row of the FX list and draws on the measured row, which is why it lines up on any theme and any UI scale without tuning; these two are only read when that measurement is unavailable (`rea_sixty_inserts_overlay.lua`, the `block.rows` branch). The TCP overlay has its own geometry (`overlay_rowh_tcp` / `overlay_toppad_tcp`) that no control writes.
 
 ## Focused-track panel
 
