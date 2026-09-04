@@ -9925,6 +9925,64 @@ void setUf8VpotSteps_(int strip, int bank, std::vector<uf8::PushStep> steps)
 // `boundParam` (-1 = none) is the control's own param — its discrete options
 // are materialised as the starting list so the cycle is visible and orderable
 // from the first frame. read/write own the persistence.
+// ⇨ THE DISCRETE-PARAM LIST IS BUILT ONCE, NOT PER FRAME. "+ Add step" walked
+// every parameter of the plug-in on every single frame the menu was open, asking
+// REAPER for each one's name and step sizes. On a FabFilter Pro-Q that is six
+// hundred parameters times two API calls, sixty times a second, and the whole
+// window went to treacle while the menu stood open — plus a visible wait the
+// first time it opened (Frank 2026-09-04: "alles wird total unresponsive").
+// Cached per (track, FX, parameter count, map), which covers every way the
+// answer can change: another plug-in, another instance, a reloaded map.
+struct AddStepCatalog_ {
+    MediaTrack* tr     = nullptr;
+    int         fxIdx  = -1;
+    int         pcount = -1;
+    std::string match;
+    bool        live   = false;
+    std::vector<std::pair<int, std::string>> params;   // discrete only, with names
+};
+static AddStepCatalog_ g_addStepCatalog;
+
+static const std::vector<std::pair<int, std::string>>&
+discreteParamsFor_(const EditingFx& fx, const uf8::UserPluginMap* editing,
+                   int pcount)
+{
+    const std::string match = editing ? editing->match : std::string();
+    if (g_addStepCatalog.tr == (fx.ok ? fx.tr : nullptr)
+        && g_addStepCatalog.fxIdx  == (fx.ok ? fx.fxIdx : -1)
+        && g_addStepCatalog.pcount == pcount
+        && g_addStepCatalog.live   == fx.ok
+        && g_addStepCatalog.match  == match)
+        return g_addStepCatalog.params;
+
+    g_addStepCatalog.tr     = fx.ok ? fx.tr : nullptr;
+    g_addStepCatalog.fxIdx  = fx.ok ? fx.fxIdx : -1;
+    g_addStepCatalog.pcount = pcount;
+    g_addStepCatalog.live   = fx.ok;
+    g_addStepCatalog.match  = match;
+    g_addStepCatalog.params.clear();
+    for (int p = 0; p < pcount; ++p) {
+        int opts = 0;
+        if (fx.ok) {
+            double sz = 0.0, a = 0.0, b = 0.0; bool isT = false;
+            if (TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx, p,
+                                              &sz, &a, &b, &isT)) {
+                if (isT)                        opts = 2;
+                else if (sz > 0.0 && sz < 1.0)  opts = uf8::numStepsFor((float)sz);
+            }
+        } else if (editing) {
+            for (const auto& pi : editing->paramSnapshot)
+                if (pi.vst3Param == p) { opts = pi.wasEnum ? 2 : 0; break; }
+        }
+        if (opts < 2) continue;
+        char pn[96] = {0};
+        if (editing) paramNameFor_(*editing, fx, p, pn, sizeof(pn));
+        if (isReaperMidiParam_(pn)) continue;
+        g_addStepCatalog.params.emplace_back(p, pn[0] ? pn : "(param)");
+    }
+    return g_addStepCatalog.params;
+}
+
 void drawPushStepEditor_(ImGui_Context* ctx, const char* idScope, int addKey,
                          const EditingFx& fx, const UserPluginMap* editing,
                          int boundParam,
@@ -10080,18 +10138,15 @@ void drawPushStepEditor_(ImGui_Context* ctx, const char* idScope, int addKey,
                                    : "Choose param\xE2\x80\xA6",
                 nullptr)) {
             int shown = 0;
-            for (int p = 0; p < pcount && shown < 1024; ++p) {
-                char pn[96] = {0};
-                if (editing) paramNameFor_(*editing, fx, p, pn, sizeof(pn));
-                if (isReaperMidiParam_(pn)) continue;
+            for (const auto& ent : discreteParamsFor_(fx, editing, pcount)) {
+                const int   p  = ent.first;
+                const char* pn = ent.second.c_str();
+                if (shown >= 1024) break;
                 if (!icontains(pn, g_fxlAddFilter)) continue;
-                double dummyStep = 1.0;
-                if (optionCountFor(p, dummyStep) < 2) continue;
                 ++shown;
                 bool sel = (g_fxlAddParam == p);
                 char rid[128];
-                snprintf(rid, sizeof(rid), "%s##%s_p_%d",
-                         pn[0] ? pn : "(param)", idScope, p);
+                snprintf(rid, sizeof(rid), "%s##%s_p_%d", pn, idScope, p);
                 if (ImGui_Selectable(ctx, rid, &sel, nullptr, nullptr, nullptr))
                     g_fxlAddParam = p;
             }
@@ -13563,19 +13618,16 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                                                : "Choose param…",
                             nullptr)) {
                         int shown = 0;
-                        for (int p = 0; p < pcount && shown < 1024; ++p) {
-                            char pn[96] = {0};
-                            if (editing)
-                                paramNameFor_(*editing, fx, p, pn, sizeof(pn));
-                            if (isReaperMidiParam_(pn)) continue;
+                        for (const auto& ent :
+                                 discreteParamsFor_(fx, editing, pcount)) {
+                            const int   p  = ent.first;
+                            const char* pn = ent.second.c_str();
+                            if (shown >= 1024) break;
                             if (!icontains(pn, g_fxlAddFilter)) continue;
-                            double dummyStep = 1.0;
-                            if (optionCountFor(p, dummyStep) < 2) continue;
                             ++shown;
                             bool sel = (g_fxlAddParam == p);
                             char rid[112];
-                            snprintf(rid, sizeof(rid), "%s##fxl_ps_p_%d",
-                                     pn[0] ? pn : "(param)", p);
+                            snprintf(rid, sizeof(rid), "%s##fxl_ps_p_%d", pn, p);
                             if (ImGui_Selectable(ctx, rid, &sel, nullptr,
                                                  nullptr, nullptr)) {
                                 g_fxlAddParam = p;
@@ -14913,8 +14965,26 @@ std::string hudBuildPush_(int idx, void* csTrV, void* bcTrV, int layer)
     }
     // Discrete-param catalog for "+ Add step" — skipped for Acustica (param
     // enumeration faults its engine; [[acustica-crash-setdefaultdlldirectories]]).
+    // ⛔ AND CACHED, BECAUSE THIS RUNS ON THE TIMER. "hud_push_req" is sticky:
+    // once the HUD has asked for a button's catalog this function is called on
+    // EVERY tick, and the loop below walks every parameter of the plug-in and
+    // formats every option of every discrete one. On a FabFilter Pro-Q that is
+    // six hundred parameters and thousands of REAPER calls per tick — the tick
+    // measured 794 ms and the log filled with "onTimer GAP 2519 ms", which a
+    // user meets as a surface whose keys have stopped answering rather than as
+    // a slow menu (Frank 2026-09-04: "kann ich meine soft-key banks und sets
+    // nicht mehr über q1-3 und die soft-keys ändern"). The catalog only changes
+    // when the plug-in does, so it is built once per (track, FX, parameter
+    // count); the step list above stays live and is rebuilt on every call.
     if (tr && fx >= 0 && !uf8::fxIsAcustica(tr, fx)) {
         const int pcount = TrackFX_GetNumParams(tr, fx);
+        static MediaTrack* s_catTr    = nullptr;
+        static int         s_catFx    = -1;
+        static int         s_catCount = -1;
+        static std::string s_catCached;
+        if (s_catTr == tr && s_catFx == fx && s_catCount == pcount)
+            return out + s_catCached;
+        std::string cat;
         for (int p = 0; p < pcount; ++p) {
             double step = 1.0;
             const int n = hudParamOptions_(tr, fx, p, step);
@@ -14934,8 +15004,13 @@ std::string hudBuildPush_(int idx, void* csTrV, void* bcTrV, int layer)
                          nrm, sanitize(vb[0] ? vb : "?").c_str());
                 line += opt;
             }
-            out += line + "\n";
+            cat += line + "\n";
         }
+        s_catTr     = tr;
+        s_catFx     = fx;
+        s_catCount  = pcount;
+        s_catCached = cat;
+        out += cat;
     }
     return out;
 }
