@@ -124,6 +124,8 @@ void reasixty_setUf1CsPage(int page);
 void reasixty_uf1BankDisplayName(int bank, int mod, char* out, int outSz);
 void reasixty_uf8BankDisplayName(int layer, int quick, int sub, int mod,
                                  char* out, int outSz);
+void reasixty_uf8BankDisplayNameBare(int layer, int quick, int sub, int mod,
+                                     char* out, int outSz);
 bool reasixty_engageSoftKeyBank(int layer, int quick, int sub);
 void reasixty_uf1Seg7Encode(const char* text, unsigned char out[10]);
 void reasixty_uf1PreviewOnPanel(const char* text);
@@ -7017,8 +7019,11 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                     for (int c = 0; c < 6; ++c) {
                         ImGui_TableSetColumnIndex(ctx, c + 1);
                         char cell[80] = {0};
-                        reasixty_uf8BankDisplayName(sl, sq, c, g_slotEditModIdx,
-                                                    cell, sizeof(cell));
+                        // The row's first column IS the set, so the cell says
+                        // the bank half only.
+                        reasixty_uf8BankDisplayNameBare(sl, sq, c,
+                                                        g_slotEditModIdx,
+                                                        cell, sizeof(cell));
                         // An unnamed, empty bank reads as its own coordinates,
                         // which in a matrix that already says both is noise. Show
                         // a dash there and let the eye find what is filled.

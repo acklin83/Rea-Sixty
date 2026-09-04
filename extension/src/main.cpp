@@ -27766,7 +27766,14 @@ static std::string uf8SetPrefix_(int layer, int quick)
     return b;
 }
 
-static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod)
+// `withSetName` false = the BANK half alone. The Settings matrix draws the set
+// in its own first column and one row per set, so repeating it in all six cells
+// only ate the width and truncated the half that differs — "User 1, Encoder M…"
+// (Frank 2026-09-04: "wieso wird hier das Set in der Zelle überhaupt erwähnt?
+// Stehen ja schon alle!"). Everywhere the name travels ALONE — the banner, the
+// panel's bank list, the default in the rename box — the set stays in front.
+static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod,
+                                       bool withSetName = true)
 {
     using namespace uf8::bindings;
     // ⇨ THE SET IS ALWAYS IN FRONT. A named bank used to answer on its own, so
@@ -27776,7 +27783,8 @@ static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod)
     // half comes first now, the bank half after it, and the fallback that used
     // to be the ONLY place a set name showed up is just this rule with an
     // unnamed bank.
-    const std::string setPfx = uf8SetPrefix_(layer, quick);
+    const std::string setPfx = withSetName ? uf8SetPrefix_(layer, quick)
+                                           : std::string();
     auto withSet = [&setPfx](const std::string& bank) {
         return setPfx.empty() ? bank : setPfx + ", " + bank;
     };
@@ -27822,7 +27830,7 @@ static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod)
         char sb[32];
         snprintf(sb, sizeof(sb), "SSL %s Bank %d",
                  setNo == 9 ? "BC" : "CS", sub + 1);
-        return uf8::bindings::getSoftKeySetName(setNo).empty()
+        return (!withSetName || uf8::bindings::getSoftKeySetName(setNo).empty())
              ? std::string(sb) : withSet(sb);
     }
     // Nothing typed anywhere: the set half is already in setPfx, so this only
@@ -43280,6 +43288,16 @@ void reasixty_uf8BankDisplayName(int layer, int quick, int sub, int mod,
 {
     if (!out || outSz <= 0) return;
     const std::string s = uf8BankDisplayName_(layer, quick, sub, mod);
+    snprintf(out, static_cast<size_t>(outSz), "%s", s.c_str());
+}
+
+// The bank half alone, for a caller that already says which set it is in.
+void reasixty_uf8BankDisplayNameBare(int layer, int quick, int sub, int mod,
+                                     char* out, int outSz)
+{
+    if (!out || outSz <= 0) return;
+    const std::string s = uf8BankDisplayName_(layer, quick, sub, mod,
+                                              /*withSetName*/ false);
     snprintf(out, static_cast<size_t>(outSz), "%s", s.c_str());
 }
 
