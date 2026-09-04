@@ -159,6 +159,10 @@ std::string reasixty_hudBuildUsedBy(void* csTr, int csFx, void* bcTr, int bcFx,
 std::string reasixty_hudBuildExtFuncs(void* csTr, int csFx);
 bool reasixty_hudSetExtFunc(void* csTr, int csFx, int slot, int param,
                             const char* name);
+// AutoLearn's proposals for the HUD, and the apply path for the rows it ticked.
+// Built only on request (hud_al_req) — the matcher is not free.
+std::string reasixty_hudBuildAutoLearn(void* csTr, int csFx);
+bool reasixty_hudApplyAutoLearn(void* csTr, int csFx, const char* spec);
 bool        reasixty_hudSetField(int idx, int layer, int field, double v,
                                  void* csTr, int csFx, void* bcTr, int bcFx);
 bool        reasixty_hudSetCurve(int idx, int layer, const char* csv,
@@ -15216,6 +15220,7 @@ std::string g_hudTargetPublished;  // last-published "hud_target" (active CS/BC 
 std::string g_hudUf8TargetPublished;  // last-published "hud_uf8_target" (UF8 param-list FX)
 std::string g_hudUsedByPublished;      // last-published "hud_usedby"
 std::string g_hudExtFuncsPublished;    // last-published "hud_extfuncs"
+std::string g_hudAutoLearnPublished;   // last-published "hud_al"
 std::string g_hudUf8StatePublished, g_hudUf8AssignPublished;  // UF8 device tab
 std::string g_hudUf8StripColsPublished;  // last-published "hud_uf8_stripcols"
 std::string g_hudUf8BanksPublished;  // last-published "hud_uf8_banks" (8 V-Pot bank labels)
@@ -15651,6 +15656,18 @@ void publishHud_()
             if (ef != g_hudExtFuncsPublished) {
                 g_hudExtFuncsPublished = ef;
                 SetExtState("rea_sixty", "hud_extfuncs", ef.c_str(), false);
+            }
+            // AutoLearn proposals — request/response, like the push catalog.
+            // The panel writes hud_al_req while it is open; with it clear we
+            // publish nothing and the matcher never runs.
+            {
+                const char* rq = GetExtState("rea_sixty", "hud_al_req");
+                const std::string al = (rq && *rq == '1')
+                    ? reasixty_hudBuildAutoLearn(csTr, csFx) : std::string();
+                if (al != g_hudAutoLearnPublished) {
+                    g_hudAutoLearnPublished = al;
+                    SetExtState("rea_sixty", "hud_al", al.c_str(), false);
+                }
             }
         }
         std::string uf8State, uf8Assign, uf8Banks, uf8StripCols;
@@ -38701,6 +38718,20 @@ void onTimerBody_()
                 if (reasixty_hudInvert(idx, layer,
                                        csTr, csFx, bcTr, bcFx)) {
                     g_hudAssignPublished.clear();   // force re-publish
+                    publishHud_();
+                }
+            } else if (s.rfind("alapply;", 0) == 0) {
+                // "alapply;<spec>" — apply the AutoLearn rows the user ticked.
+                // The spec carries the bindings themselves, not row indices, so
+                // a map that moved under the panel cannot shift what a tick
+                // meant. See hudApplyAutoLearn_.
+                MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                int csFx = -1, bcFx = -1;
+                activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                if (reasixty_hudApplyAutoLearn(csTr, csFx, s.c_str() + 8)) {
+                    g_hudAssignPublished.clear();     // the mockup changed
+                    g_hudUsedByPublished.clear();     // and the where-used column
+                    g_hudAutoLearnPublished.clear();  // and the proposals age out
                     publishHud_();
                 }
             } else if (s.rfind("extfunc;", 0) == 0) {

@@ -14182,6 +14182,132 @@ bool hudSetExtFunc_(void* csTrV, int csFx, int slot, int param, const char* name
     return false;
 }
 
+// ⇨ AUTOLEARN'S PROPOSALS, FOR THE HUD. The engine is C++ and the map lives
+// here, so the HUD cannot run it; it asks (hud_al_req) and this answers. Kept
+// behind that request flag on purpose — the matcher walks the dictionary against
+// every parameter, which is nothing to do 30 times a second for a panel nobody
+// has open.
+//
+//   c\t<linkIdx>\t<param>\t<paramName>\t<slotName>\t<confidence 0..100>
+//   8\t<fb>\t<vb>\t<strip>\t<param>\t<paramName>\t<confidence 0..100>
+//
+// Confidence travels as an INTEGER PERCENT, not a float: the value is only ever
+// shown as "82%", and a decimal point that follows the machine's locale is a
+// bug waiting for a German REAPER to find it.
+// Fed from the map's paramSnapshot, exactly like the FX-Learn page, so the
+// proposals work with no live instance loaded.
+std::string hudBuildAutoLearn_(void* csTrV, int csFx)
+{
+    MediaTrack* tr = static_cast<MediaTrack*>(csTrV);
+    if (!tr || csFx < 0) return {};
+    char nm[512] = {0};
+    if (!fxIdentityName(tr, csFx, nm, sizeof(nm))) return {};
+    const UserPluginMap* m = user_plugins::lookupOwnedByName(nm);
+    if (!m || m->paramSnapshot.empty()) return {};
+    auto scrub = [](std::string v) {
+        for (char& ch : v) if (ch == ';' || ch == '\t' || ch == '\n') ch = ' ';
+        return v;
+    };
+    auto pct = [](float c) {
+        int v = static_cast<int>(c * 100.0f + 0.5f);
+        return std::to_string(v < 0 ? 0 : (v > 100 ? 100 : v));
+    };
+    std::string out;
+    if (m->domain != Domain::None) {
+        for (const auto& sg : autolearn::suggestSlots(m->paramSnapshot, m->domain)) {
+            if (sg.vst3Param < 0) continue;
+            if (!out.empty()) out += ';';
+            out += "c\t" + std::to_string(sg.linkIdx)
+                 + "\t" + std::to_string(sg.vst3Param)
+                 + "\t" + scrub(sg.paramName)
+                 + "\t" + scrub(sg.slotName)
+                 + "\t" + pct(sg.confidence);
+        }
+    }
+    for (const auto& u : autolearn::suggestUf8Banks(m->paramSnapshot, 1)) {
+        if (u.vst3Param < 0) continue;
+        if (!out.empty()) out += ';';
+        out += "8\t" + std::to_string(u.faderBank)
+             + "\t" + std::to_string(u.vpotBank)
+             + "\t" + std::to_string(u.strip)
+             + "\t" + std::to_string(u.vst3Param)
+             + "\t" + scrub(u.paramName)
+             + "\t" + pct(u.confidence);
+    }
+    return out;
+}
+
+// Apply the rows the user ticked. The HUD sends the BINDINGS, not row indices
+// into the list it was shown: the engine is deterministic, but a map that
+// changed under the panel would silently shift what index 7 means, and this is
+// the one place where being off by one writes to the wrong knob.
+//   spec: c:<linkIdx>:<param>,8:<fb>:<vb>:<strip>:<param>,…
+// ⛔ Slots are updated IN PLACE — never erased and re-pushed — so a control's
+// Option / Control / Ctrl+Opt overlays and its push-cycle survive. That was a
+// real defect in the Settings Apply until 2026-09-03; do not reintroduce it here.
+bool hudApplyAutoLearn_(void* csTrV, int csFx, const char* spec)
+{
+    MediaTrack* tr = static_cast<MediaTrack*>(csTrV);
+    if (!tr || csFx < 0 || !spec || !*spec) return false;
+    char nm[512] = {0};
+    if (!fxIdentityName(tr, csFx, nm, sizeof(nm))) return false;
+    const UserPluginMap* om = user_plugins::lookupOwnedByName(nm);
+    if (!om) return false;
+    const std::string match = om->match;
+    auto cat = user_plugins::get();
+    bool any = false;
+    for (auto& m : cat.maps) {
+        if (m.match != match) continue;
+        std::string sp(spec);
+        size_t pos = 0;
+        while (pos <= sp.size()) {
+            const size_t comma = sp.find(',', pos);
+            std::string rec = sp.substr(pos, comma == std::string::npos
+                                            ? std::string::npos : comma - pos);
+            pos = (comma == std::string::npos) ? sp.size() + 1 : comma + 1;
+            if (rec.empty()) continue;
+            // Plain split on ':' after the kind char. Written straight rather
+            // than clever: this is the one path that decides which knob gets
+            // written, and an off-by-one here is silent.
+            std::vector<int> f;
+            for (size_t q = rec.find(':'); q != std::string::npos; ) {
+                const size_t nxt = rec.find(':', q + 1);
+                f.push_back(std::atoi(rec.substr(q + 1,
+                    nxt == std::string::npos ? std::string::npos : nxt - q - 1)
+                    .c_str()));
+                q = nxt;
+            }
+            if (rec[0] == 'c' && f.size() >= 2) {
+                const int linkIdx = f[0], param = f[1];
+                auto it = std::find_if(m.slots.begin(), m.slots.end(),
+                    [&](const UserLinkSlot& us) { return us.linkIdx == linkIdx; });
+                if (it == m.slots.end()) {
+                    uf8::UserLinkSlot ns{};
+                    ns.linkIdx = linkIdx;
+                    m.slots.push_back(std::move(ns));
+                    it = m.slots.end() - 1;
+                }
+                it->vst3Param = param;
+                it->inverted  = false;
+                any = true;
+            } else if (rec[0] == '8' && f.size() >= 4) {
+                const int fb = std::clamp(f[0], 0, kUserUf8FaderBankCount - 1);
+                const int vb = std::clamp(f[1], 0, kUserUf8VpotBankCount - 1);
+                const int st = std::clamp(f[2], 0, 7);
+                auto& bs = m.uf8.banks.banks[fb][vb][st];
+                bs.vst3Param = f[3];
+                any = true;
+            }
+        }
+        if (any) {
+            user_plugins::upsert(m);
+            user_plugins::save();
+        }
+        break;
+    }
+    return any;
+}
+
 std::string hudBuildFeel_()
 {
     std::string out;
@@ -23632,6 +23758,14 @@ bool reasixty_hudSetExtFunc(void* csTr, int csFx, int slot, int param,
                             const char* name)
 {
     return uf8::hudSetExtFunc_(csTr, csFx, slot, param, name);
+}
+std::string reasixty_hudBuildAutoLearn(void* csTr, int csFx)
+{
+    return uf8::hudBuildAutoLearn_(csTr, csFx);
+}
+bool reasixty_hudApplyAutoLearn(void* csTr, int csFx, const char* spec)
+{
+    return uf8::hudApplyAutoLearn_(csTr, csFx, spec);
 }
 bool reasixty_hudSetField(int idx, int layer, int field, double v,
                           void* csTr, int csFx, void* bcTr, int bcFx)

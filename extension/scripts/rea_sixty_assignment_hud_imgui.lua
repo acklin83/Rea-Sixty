@@ -225,6 +225,15 @@ EXT.bh = function() return EXT.open and EXT.H or 0 end
 -- Cell context menu. The slot and its current contents are captured at
 -- right-click time, not read from EXT.rects when the menu draws: the rects are
 -- rebuilt every frame and a rename dialog can outlive several of them.
+-- ⚠ The AutoLearn panel's state lives on this table too. Not because it belongs
+-- to EXT FUNCS — it does not — but because the file is at Lua's 200-local
+-- ceiling and a second table would have to be paid for by folding two unrelated
+-- locals together, which reads worse than this line of explanation.
+EXT.al      = false   -- drawer shows AutoLearn's proposals instead of the params
+EXT.alRows  = {}      -- parsed hud_al
+EXT.alTick  = {}      -- [rowIndex] = true when accepted
+EXT.alRects = {}
+EXT.alBtns  = {}
 EXT.popup = "##hud_ext_ctx"
 EXT.ctx   = -1
 EXT.ctxName  = ""
@@ -924,6 +933,10 @@ local function drawTabs(st, ust)
   -- belong to the CS map whichever tab you happen to be looking at.
   btnR.ext = rightToggle("EXT FUNCS",
     reaper.GetExtState(SECT, "hud_imgui_ext") == "1", 0x8A78C8)
+  -- AutoLearn borrows the parameter drawer rather than opening a second one:
+  -- both are a list of this plug-in's params, one picked by you and one proposed.
+  btnR.al = rightToggle("AutoLearn",
+    reaper.GetExtState(SECT, "hud_imgui_al") == "1", 0x2E9E7A)
 end
 
 local function hitRect(r, mx, my)
@@ -940,6 +953,46 @@ local function handleLearnBtnClick(mx, my)
 end
 
 -- A FIELD, not a local function: 200-local ceiling (see the top of the file).
+EXT.alClick = function(mx, my)
+  if hitRect(btnR.al, mx, my) then
+    local on = (reaper.GetExtState(SECT, "hud_imgui_al") == "1")
+    reaper.SetExtState(SECT, "hud_imgui_al", on and "0" or "1", true)
+    return true
+  end
+  if not EXT.al then return false end
+  for _, b in ipairs(EXT.alBtns) do
+    if hitRect(b, mx, my) then
+      if b.id == "all" then
+        for _, r in ipairs(EXT.alRows) do EXT.alTick[r.key] = true end
+      elseif b.id == "none" then
+        EXT.alTick = {}
+      else
+        local spec, n = {}, 0
+        for _, r in ipairs(EXT.alRows) do
+          if EXT.alTick[r.key] then spec[#spec + 1] = r.spec; n = n + 1 end
+        end
+        if n > 0 then
+          sendCmd("alapply;" .. table.concat(spec, ","))
+          EXT.alTick = {}
+          hintText, hintFrames = n .. " proposals applied", 90
+        else
+          hintText, hintFrames = "Tick a proposal first", 90
+        end
+      end
+      return true
+    end
+  end
+  for _, r in ipairs(EXT.alRects) do
+    if hitRect(r, mx, my) then
+      EXT.alTick[r.key] = (not EXT.alTick[r.key]) or nil
+      return true
+    end
+  end
+  -- Inside the drawer while AutoLearn owns it: swallow, so a stray click cannot
+  -- fall through to the param list that is not being shown.
+  return mx >= WW - RW and my >= bodyTop()
+end
+
 EXT.click = function(mx, my)
   if hitRect(btnR.ext, mx, my) then
     local on = (reaper.GetExtState(SECT, "hud_imgui_ext") == "1")
@@ -1586,7 +1639,85 @@ end
 -- Type-to-filter (no InputText widget — fits the DrawList draw model + dodges
 -- the standalone-focus InputText trap). Mapped params get a green dot.
 -- ===================================================================
+-- AutoLearn's proposals, in the parameter drawer's own furniture: same strip,
+-- same rows, one extra column for the target and one for the confidence, and a
+-- tick per row. Returns true when it has drawn, so renderParamPanel steps aside.
+EXT.alDraw = function(x0, top, PW)
+  local fs  = fontScale()
+  local hf  = floor(12 * fs + 0.5)
+  local rf  = floor(13 * fs + 0.5)
+  local pad = 8
+  rect(x0, top, PW, WH - top, col(0x16171A, 0.97))
+  rect(x0, top, 2, WH - top, col(0x303440, 1))
+  EXT.alRects, EXT.alBtns = {}, {}
+  -- Re-parse every frame: the payload only changes when the extension answers a
+  -- request, and a stale tick list against fresh rows would accept the wrong
+  -- bindings. Ticks are keyed by the row's own content for that reason.
+  EXT.alRows = {}
+  for rec in (reaper.GetExtState(SECT, "hud_al") .. ";"):gmatch("([^;]*);") do
+    if rec ~= "" then
+      local f = {}
+      for fld in (rec .. "\t"):gmatch("([^\t]*)\t") do f[#f + 1] = fld end
+      if f[1] == "c" and #f >= 6 then
+        EXT.alRows[#EXT.alRows + 1] =
+          { key = rec, kind = "c", spec = "c:" .. f[2] .. ":" .. f[3],
+            pname = f[4], target = f[5], conf = tonumber(f[6]) or 0 }
+      elseif f[1] == "8" and #f >= 7 then
+        EXT.alRows[#EXT.alRows + 1] =
+          { key = rec, kind = "8",
+            spec = "8:" .. f[2] .. ":" .. f[3] .. ":" .. f[4] .. ":" .. f[5],
+            pname = f[6],
+            target = ("V-Pot %d.%d.%d"):format(f[2] + 1, f[3] + 1, f[4] + 1),
+            conf = tonumber(f[7]) or 0 }
+      end
+    end
+  end
+  dtext(x0 + pad, top + pad, col(0xC8CCD4, 1),
+        fit("AutoLearn \xE2\x80\x94 " .. #EXT.alRows .. " proposals",
+            PW - 2 * pad, hf), hf)
+  if #EXT.alRows == 0 then
+    dtext(x0 + pad, top + pad + hf + 8, col(0x808890, 0.9),
+          fit("Nothing matched. The map needs a param snapshot.",
+              PW - 2 * pad, hf), hf)
+    return
+  end
+  -- Footer first, so the list knows where to stop.
+  local fy = WH - 26
+  local bw = (PW - 2 * pad - 12) / 3
+  for i, b in ipairs({ { l = "All", id = "all" }, { l = "None", id = "none" },
+                       { l = "Apply", id = "apply" } }) do
+    local bx = x0 + pad + (i - 1) * (bw + 6)
+    local on = (b.id == "apply")
+    rect(bx, fy, bw, 20, col(on and 0x2E7D5B or 0x29292E, 1))
+    local tw = measure(b.l, hf)
+    dtext(bx + (bw - tw) / 2, fy + 3, col(on and 0xE8FFF4 or 0x9098A4, 1), b.l, hf)
+    EXT.alBtns[#EXT.alBtns + 1] = { id = b.id, x = bx, y = fy, w = bw, h = 20 }
+  end
+  local y = top + pad + hf + 8
+  for i, r in ipairs(EXT.alRows) do
+    if y + rf + 8 > fy - 4 then break end
+    local tick = EXT.alTick[r.key]
+    rect(x0 + pad, y + 2, 11, 11, col(tick and 0x78C898 or 0x2A2C32, 1))
+    dtext(x0 + pad + 18, y, col(tick and 0xC8CCD4 or 0x9098A4, 1),
+          fit(r.pname, PW - 2 * pad - 18 - 96, rf), rf)
+    local ct = r.conf .. "%"
+    local cw = measure(ct, hf)
+    dtext(x0 + PW - pad - cw, y + 1,
+          col(r.conf >= 90 and 0x78C898 or (r.conf >= 75 and 0xE0C070 or 0x9098A4),
+              0.95), ct, hf)
+    local tw2 = measure(r.target, hf)
+    dtext(x0 + PW - pad - cw - 8 - tw2, y + 1, col(0x8A9BC8, 0.95), r.target, hf)
+    EXT.alRects[#EXT.alRects + 1] =
+      { key = r.key, x = x0, y = y, w = PW, h = rf + 6 }
+    y = y + rf + 6
+  end
+end
+
 local function renderParamPanel(st, asn)
+  if EXT.al then
+    EXT.alDraw(WW - RW, bodyTop(), RW)
+    return
+  end
   local PW = RW
   local x0  = WW - PW
   local top = bodyTop()
@@ -2352,6 +2483,16 @@ local function render()
   -- The strip explains itself instead when there is nothing to show.
   EXT.open = (reaper.GetExtState(SECT, "hud_imgui_ext") == "1")
   if not EXT.open then EXT.rects = {} end
+  -- AutoLearn takes over the drawer, so it needs the drawer open. The request
+  -- flag is what makes the extension run the matcher at all — clear it the
+  -- moment the panel closes, or it runs forever for a panel nobody sees.
+  EXT.al = (reaper.GetExtState(SECT, "hud_imgui_al") == "1")
+  if EXT.al then
+    paramPanelOpen, RW = true, PARAM_PW
+  else
+    EXT.alRects, EXT.alBtns = {}, {}
+  end
+  reaper.SetExtState(SECT, "hud_al_req", EXT.al and "1" or "", false)
 
   frame = frame + 1
   -- "idx" (legacy) or "idx;layer" — the layer is the modifier overlay the bind
@@ -4164,7 +4305,8 @@ local function loop()
           -- cell. With a param PICKED in the list a cell click binds it in
           -- software; otherwise it arms a learn on the hardware position.
           if handleTabClick(lx, ly) then
-          elseif handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly) then
+          elseif handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly)
+              or EXT.alClick(lx, ly) or EXT.click(lx, ly) then
           elseif paramPanelOpen and lx >= WW - RW and ly >= bodyTop() then
             handleParamClick(lx, ly)
           else
@@ -4225,7 +4367,8 @@ local function loop()
           -- row → grid cell. A click that misses everything cancels any armed
           -- learn (an easy mouse "escape").
           if handleTabClick(lx, ly) then
-          elseif handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly) then
+          elseif handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly)
+              or EXT.alClick(lx, ly) or EXT.click(lx, ly) then
           elseif paramPanelOpen and lx >= WW - RW and ly >= bodyTop() then
             handleParamClick(lx, ly)
           else
@@ -4242,7 +4385,7 @@ local function loop()
           end
         -- Top toggle buttons first, then param-panel row, then tab, then control.
         elseif handleLearnBtnClick(lx, ly) or handleParamBtnClick(lx, ly)
-            or EXT.click(lx, ly) then
+            or EXT.alClick(lx, ly) or EXT.click(lx, ly) then
         elseif paramPanelOpen and lx >= WW - RW and ly >= bodyTop() then
           handleParamClick(lx, ly)
         elseif not handleTabClick(lx, ly) then
