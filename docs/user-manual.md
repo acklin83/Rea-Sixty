@@ -1289,7 +1289,7 @@ A dynamic bank announces itself in three places, so you never edit slots that ca
 
 - The bank's selector key on the schematic (V-POT / Soft 1-5) carries an **amber tick** in its top-right corner. The matrix cell itself stays plain.
 - The eight scribble strips above it read the bank's kind (`FX`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`) rather than the stored slot labels, because those labels never reach the hardware while the bank is dynamic.
-- Clicking any of the eight keys shows what the bank computes instead of a slot editor, with the same **Dynamic bank** dropdown, so you can switch it back to static without hunting for the cell.
+- Clicking any of the eight keys shows what the bank computes instead of a slot editor, with the same **Dynamic bank** dropdown and the same settings the cell shows, so you can switch it back to static, or tune the palette or the FX paging, without hunting for the cell.
 
 On Sets 8 and 9 it depends on the page. A dynamic bank computes all eight keys, so it can only go where the plug-in claims none of them: the bus comp's four empty pages take one, the pages SSL fills do not. Every page of the other seven sets can.
 

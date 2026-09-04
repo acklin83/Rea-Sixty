@@ -5065,6 +5065,10 @@ namespace {
 // Layer 1 Q1/Q2 = SSL CS/BC are plug-in-driven; their slots are filled
 // by the SSL plug-in's stock soft-key labels and not user-editable.
 // Pop a clear notice instead of pretending an editor.
+// Defined below, next to the bank-cell editor it also serves.
+static void drawDynamicBankSettings_(ImGui_Context* ctx, int layer,
+                                     int quick, int sub, int mod);
+
 void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                               int editQuick, int editSubBank, int slotIdx)
 {
@@ -5221,6 +5225,13 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                 }
                 ImGui_EndCombo(ctx);
             }
+            // The kind's own settings, the same ones the bank cell shows: the
+            // FX bank's paging and gestures, the colour palette, the warning
+            // about slots left under a held modifier. Reached from a key, they
+            // used to be invisible.
+            ImGui_Spacing(ctx);
+            drawDynamicBankSettings_(ctx, editLayer, qIdx, sbIdx,
+                                     g_slotEditModIdx);
             // ⇨ THE SLOTS ARE ONLY DEAD WHERE THE BANK IS THIS SET'S OWN.
             // A set that merely inherits Plain's bank still fires what you put
             // in it (setOwnsDynamicKey_), so hiding its editor would hide the
@@ -5798,6 +5809,123 @@ static void drawFxBankGestures_(ImGui_Context* ctx)
 // "Dort soll nichts eingestellt werden können, sondern einfach
 // stehen: Click Soft-Keys 1-8 to configure Soft-Key Bank N.
 // LED-optionen einblenden für V-POT (oder whatever selected)".
+// ⇨ THE SETTINGS OF A DYNAMIC BANK, WHEREVER YOU CAME FROM. They used to be
+// drawn only by the bank-cell editor, so selecting one of the eight KEYS of a
+// Track Colours bank showed "this bank is dynamic" and then nothing to tune —
+// the palette was two clicks away with no sign it existed (Frank 2026-09-04:
+// "die colours details verschwinden, wenn statt der bank ein soft-key direkt
+// gewählt ist"). One function, called from the cell editor AND from the slot
+// editor, so every kind that has settings shows them in both places.
+static void drawDynamicBankSettings_(ImGui_Context* ctx, int layer, int quick,
+                                     int sub, int mod)
+{
+    using namespace uf8::bindings;
+    const DynamicBankKind curKind = getSubBankDynamic(layer, quick, sub, mod);
+    {
+        // Contextual editor for the selected kind. The config is GLOBAL
+        // (shared by every FX / colour bank), edited here for convenience.
+
+        // "Page with" — the FX bank pages 1-8 / 9-16 / … via a chosen control.
+        if (curKind == DynamicBankKind::FxBank) {
+            static const char* kCtrlNames[] = {
+                "(no paging — stays on 1-8)", "UF8 encoder",
+                "UC1 Encoder 1", "UC1 Encoder 2", "UF8 Bank ◄ ►",
+            };
+            const int kindI = static_cast<int>(curKind);
+            const int cur = reasixty_dynBankCtrl(kindI);
+            ImGui_Text(ctx, "Page with");
+            double offs = 90.0;
+            ImGui_SameLine(ctx, &offs, nullptr);
+            ImGui_SetNextItemWidth(ctx, 220.0);
+            if (ImGui_BeginCombo(ctx, "##dynpagectrl",
+                    kCtrlNames[(cur >= 0 && cur < 5) ? cur : 0],
+                    /*flags*/ nullptr)) {
+                for (int o = 0; o < 5; ++o) {
+                    bool sel = (o == cur);
+                    if (ImGui_Selectable(ctx, kCtrlNames[o], &sel,
+                                         nullptr, nullptr, nullptr))
+                        reasixty_setDynBankCtrl(kindI, o);
+                }
+                ImGui_EndCombo(ctx);
+            }
+            ImGui_Spacing(ctx);
+        }
+
+        // ⛔ THE LEFTOVERS THAT NOTHING USED TO MENTION. A sub-bank switched to a
+        // dynamic kind keeps whatever static slots it already had, and any of
+        // them stored under a HELD MODIFIER still beats the computed key. So an
+        // old favourites bank turned into a Hue Scenes bank went on firing
+        // switch_bc_* under Shift, and both the labels and the press followed it
+        // — which reads as the new bank being broken (Frank 2026-08-27: "mit
+        // Shift kommt IRGENDWAS (Favorites?) obwohl auf Shift ebene gar nichts
+        // ist!"). It was there; nothing showed it.
+        //
+        // Named, not deleted: those slots are the user's, and the same overlay is
+        // a feature when it is deliberate. The button is the tidy-up, and it
+        // clears ONLY the modifier layers — Plain stays, because a dynamic bank
+        // ignores it anyway and switching the kind back off must find the bank
+        // as it was.
+        // ⛔ THE EFFECTIVE KIND, not the set's own. On a modifier set curKind is
+        // None (the set inherits Plain's bank), so keying the warning on it hid
+        // it from the exact screen where the leftovers bite.
+        const auto effKind = uf8::bindings::getSubBankDynamicFor(
+            layer, quick, sub, mod);
+        if (effKind != DynamicBankKind::None) {
+            int shadowed = 0;
+            for (int s = 0; s < 8; ++s) {
+                const auto bd = uf8::bindings::getUserQuickSlot(
+                    layer, quick, sub, s);
+                for (int m = 1; m < uf8::bindings::kModifierCount; ++m) {
+                    const auto& sp = bd.shortPress[m];
+                    if (sp.type != uf8::bindings::ActionType::Noop
+                        || !sp.action.empty()) { ++shadowed; break; }
+                }
+            }
+            if (shadowed > 0) {
+                char msg[220];
+                std::snprintf(msg, sizeof(msg),
+                    "%d of the 8 keys still carry a stored action under a held "
+                    "modifier. Those win over the computed key, label and press "
+                    "both, so holding Shift here shows the old bank, "
+                    "not this one.", shadowed);
+                ImGui_TextColored(ctx, 0xE8C33AFF, msg);
+                if (ImGui_Button(ctx,
+                        "Clear the modifier slots on these 8 keys##dyn_clear_mods",
+                        nullptr, nullptr)) {
+                    for (int s = 0; s < 8; ++s) {
+                        auto bd = uf8::bindings::getUserQuickSlot(
+                            layer, quick, sub, s);
+                        for (int m = 1; m < uf8::bindings::kModifierCount; ++m)
+                            bd.shortPress[m] = uf8::bindings::ActionSlot{};
+                        uf8::bindings::setUserQuickSlot(
+                            layer, quick, sub, s, bd);
+                    }
+                }
+                ImGui_Spacing(ctx);
+            }
+        }
+
+        if (curKind == DynamicBankKind::Favourites) {
+            ImGui_Spacing(ctx);
+        }
+        if (curKind == DynamicBankKind::CsFavourites
+         || curKind == DynamicBankKind::BcFavourites) {
+            ImGui_Spacing(ctx);
+        }
+
+        if (curKind == DynamicBankKind::HueScenes) {
+            ImGui_Spacing(ctx);
+        }
+
+
+        if (curKind == DynamicBankKind::FxBank) {
+            drawFxBankGestures_(ctx);
+        } else if (curKind == DynamicBankKind::TrackColours) {
+            drawTrackColourPalette_(ctx);
+        }
+    }
+}
+
 void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
                             int editQuick, uf8::bindings::ButtonId id)
 {
@@ -5896,107 +6024,8 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         const DynamicBankKind curKind =
             getSubBankDynamic(editLayer, engagedQ, sbIdx, g_slotEditModIdx);
 
-        // Contextual editor for the selected kind. The config is GLOBAL
-        // (shared by every FX / colour bank), edited here for convenience.
-
-        // "Page with" — the FX bank pages 1-8 / 9-16 / … via a chosen control.
-        if (curKind == DynamicBankKind::FxBank) {
-            static const char* kCtrlNames[] = {
-                "(no paging — stays on 1-8)", "UF8 encoder",
-                "UC1 Encoder 1", "UC1 Encoder 2", "UF8 Bank ◄ ►",
-            };
-            const int kindI = static_cast<int>(curKind);
-            const int cur = reasixty_dynBankCtrl(kindI);
-            ImGui_Text(ctx, "Page with");
-            double offs = 90.0;
-            ImGui_SameLine(ctx, &offs, nullptr);
-            ImGui_SetNextItemWidth(ctx, 220.0);
-            if (ImGui_BeginCombo(ctx, "##dynpagectrl",
-                    kCtrlNames[(cur >= 0 && cur < 5) ? cur : 0],
-                    /*flags*/ nullptr)) {
-                for (int o = 0; o < 5; ++o) {
-                    bool sel = (o == cur);
-                    if (ImGui_Selectable(ctx, kCtrlNames[o], &sel,
-                                         nullptr, nullptr, nullptr))
-                        reasixty_setDynBankCtrl(kindI, o);
-                }
-                ImGui_EndCombo(ctx);
-            }
-            ImGui_Spacing(ctx);
-        }
-
-        // ⛔ THE LEFTOVERS THAT NOTHING USED TO MENTION. A sub-bank switched to a
-        // dynamic kind keeps whatever static slots it already had, and any of
-        // them stored under a HELD MODIFIER still beats the computed key. So an
-        // old favourites bank turned into a Hue Scenes bank went on firing
-        // switch_bc_* under Shift, and both the labels and the press followed it
-        // — which reads as the new bank being broken (Frank 2026-08-27: "mit
-        // Shift kommt IRGENDWAS (Favorites?) obwohl auf Shift ebene gar nichts
-        // ist!"). It was there; nothing showed it.
-        //
-        // Named, not deleted: those slots are the user's, and the same overlay is
-        // a feature when it is deliberate. The button is the tidy-up, and it
-        // clears ONLY the modifier layers — Plain stays, because a dynamic bank
-        // ignores it anyway and switching the kind back off must find the bank
-        // as it was.
-        // ⛔ THE EFFECTIVE KIND, not the set's own. On a modifier set curKind is
-        // None (the set inherits Plain's bank), so keying the warning on it hid
-        // it from the exact screen where the leftovers bite.
-        const auto effKind = uf8::bindings::getSubBankDynamicFor(
-            editLayer, engagedQ, sbIdx, g_slotEditModIdx);
-        if (effKind != DynamicBankKind::None) {
-            int shadowed = 0;
-            for (int s = 0; s < 8; ++s) {
-                const auto bd = uf8::bindings::getUserQuickSlot(
-                    editLayer, engagedQ, sbIdx, s);
-                for (int m = 1; m < uf8::bindings::kModifierCount; ++m) {
-                    const auto& sp = bd.shortPress[m];
-                    if (sp.type != uf8::bindings::ActionType::Noop
-                        || !sp.action.empty()) { ++shadowed; break; }
-                }
-            }
-            if (shadowed > 0) {
-                char msg[220];
-                std::snprintf(msg, sizeof(msg),
-                    "%d of the 8 keys still carry a stored action under a held "
-                    "modifier. Those win over the computed key, label and press "
-                    "both, so holding Shift here shows the old bank, "
-                    "not this one.", shadowed);
-                ImGui_TextColored(ctx, 0xE8C33AFF, msg);
-                if (ImGui_Button(ctx,
-                        "Clear the modifier slots on these 8 keys##dyn_clear_mods",
-                        nullptr, nullptr)) {
-                    for (int s = 0; s < 8; ++s) {
-                        auto bd = uf8::bindings::getUserQuickSlot(
-                            editLayer, engagedQ, sbIdx, s);
-                        for (int m = 1; m < uf8::bindings::kModifierCount; ++m)
-                            bd.shortPress[m] = uf8::bindings::ActionSlot{};
-                        uf8::bindings::setUserQuickSlot(
-                            editLayer, engagedQ, sbIdx, s, bd);
-                    }
-                }
-                ImGui_Spacing(ctx);
-            }
-        }
-
-        if (curKind == DynamicBankKind::Favourites) {
-            ImGui_Spacing(ctx);
-        }
-        if (curKind == DynamicBankKind::CsFavourites
-         || curKind == DynamicBankKind::BcFavourites) {
-            ImGui_Spacing(ctx);
-        }
-
-        if (curKind == DynamicBankKind::HueScenes) {
-            ImGui_Spacing(ctx);
-        }
-
-
-        if (curKind == DynamicBankKind::FxBank) {
-            drawFxBankGestures_(ctx);
-        } else if (curKind == DynamicBankKind::TrackColours) {
-            drawTrackColourPalette_(ctx);
-        }
+        drawDynamicBankSettings_(ctx, editLayer, engagedQ, sbIdx,
+                                 g_slotEditModIdx);
 
         ImGui_Spacing(ctx);
         ImGui_Separator(ctx);
