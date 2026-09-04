@@ -6173,6 +6173,8 @@ void reasixty_publishSettingsModifierPin(bool bindingsPaneOpen)
 // The right-click ENGAGES the cell first, so "what you edit" and "what the
 // surface shows" stay the same thing, which is the rule the whole pane is
 // built on.
+// Scroll offset to restore after a cell click swapped the editor. -1 = none.
+static double s_bankKeepScroll = -1.0;
 static int  s_bankCtxL = -1, s_bankCtxQ = -1, s_bankCtxSb = -1, s_bankCtxSet = 0;
 static bool s_bankCtxFilled = false;
 static bool s_bankCtxOpen   = false;
@@ -7012,6 +7014,15 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                             int selFlags = ImGui_SelectableFlags_AllowDoubleClick;
                             if (ImGui_Selectable(ctx, cid, &selCell, &selFlags,
                                                  nullptr, nullptr)) {
+                                // ⇨ AND THE PAGE STAYS WHERE IT WAS. Clicking a
+                                // cell swaps the editor under the matrix, and the
+                                // two editors are not the same height, so the
+                                // window's scroll got clamped to the shorter
+                                // content and the whole pane jumped upwards under
+                                // the mouse (Frank 2026-09-04). Remember the
+                                // offset here and put it back once this frame's
+                                // real height is known.
+                                s_bankKeepScroll = ImGui_GetScrollY(ctx);
                                 int lmb = 0;
                                 if (ImGui_IsMouseDoubleClicked(ctx, lmb)) {
                                     s_bankRenL = sl; s_bankRenQ = sq;
@@ -7036,6 +7047,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                             // renderBindingContextMenu_ uses.
                             int rmb = 1;
                             if (ImGui_IsItemClicked(ctx, &rmb)) {
+                                s_bankKeepScroll = ImGui_GetScrollY(ctx);
                                 reasixty_engageSoftKeyBank(sl, sq, c);
                                 s_bankCtxL   = sl;
                                 s_bankCtxQ   = sq;
@@ -7523,6 +7535,15 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     }
     if (!s_portMsg.empty()) {
         ImGui_TextDisabled(ctx, s_portMsg.c_str());
+    }
+    // ⇨ PUT THE SCROLL BACK, LAST. Set at the end of the frame, when the pane's
+    // real height for THIS content is known, so the value is clamped against the
+    // new maximum rather than the old one. A cell click can still shorten the
+    // page below where you were standing, and then the clamp is the honest
+    // answer — but it no longer throws you to the top on every click.
+    if (s_bankKeepScroll >= 0.0) {
+        ImGui_SetScrollY(ctx, s_bankKeepScroll);
+        s_bankKeepScroll = -1.0;
     }
 }
 
