@@ -14228,7 +14228,18 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx)
                  + "\t" + pct(sg.confidence);
         }
     }
-    for (const auto& u : autolearn::suggestUf8Banks(m->paramSnapshot, 1)) {
+    // ⛔ THE PASSES ARE OPT-IN, and this must mirror the FX-Learn page or the two
+    // disagree about the same plug-in. Settings defaults to V-Pots for a UF8 map
+    // and the generic params-onto-faders pass for one without a UF8 layer
+    // (g_autoLearnSetupVpots / …ParamFaders, SettingsScreen.cpp ~18096); the
+    // CH<N> strip pass is off unless asked for. Running all three unconditionally
+    // put every parameter of a reverb on a fader AND on a V-Pot — measured
+    // against Frank's ValhallaPlate and EchoBoy maps, 2026-09-03.
+    const bool wantVpots  = m->uf8Mode;
+    const bool wantFaders = !m->uf8Mode;
+    for (const auto& u : wantVpots
+             ? autolearn::suggestUf8Banks(m->paramSnapshot, 1)
+             : std::vector<autolearn::Uf8Suggestion>{}) {
         if (u.vst3Param < 0) continue;
         if (!out.empty()) out += ';';
         out += "8\t" + std::to_string(u.faderBank)
@@ -14244,6 +14255,9 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx)
     // physical fader.
     {
         using StKind = autolearn::Uf8StripSuggestion::Kind;
+        // The CH<N> pass always runs: on a channel MATRIX it is the whole point
+        // (it returns the matrix layout), and on anything else it finds nothing,
+        // which costs one walk over the names.
         auto strips = autolearn::suggestUf8Strips(m->paramSnapshot,
                                                   kUserUf8FaderBankCount);
         bool takenFader[2][8] = {};
@@ -14251,8 +14265,10 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx)
             if (sg.kind == StKind::Fader && sg.faderBank >= 0 && sg.faderBank < 2
                 && sg.strip >= 0 && sg.strip < 8)
                 takenFader[sg.faderBank][sg.strip] = true;
-        for (const auto& sg : autolearn::suggestUf8ParamFaders(
-                 m->paramSnapshot, kUserUf8FaderBankCount)) {
+        for (const auto& sg : wantFaders
+                 ? autolearn::suggestUf8ParamFaders(
+                       m->paramSnapshot, kUserUf8FaderBankCount)
+                 : std::vector<autolearn::Uf8StripSuggestion>{}) {
             if (sg.faderBank < 0 || sg.faderBank >= 2) continue;
             if (sg.strip < 0 || sg.strip >= 8) continue;
             if (takenFader[sg.faderBank][sg.strip]) continue;

@@ -673,12 +673,183 @@ std::string extractChannelControlKind(const std::string& lower)
     return {};
 }
 
+namespace {
+// ---- Channel MATRIX detection ---------------------------------------------
+// ⇨ THE STRUCTURE TELLS YOU WHAT THE PLUG-IN IS, no dictionary needed. A channel
+// matrix (SSL Delta Control 16, a summing mixer, a multiband strip) names its
+// parameters as a STEM plus an INDEX: "Volume 1..16", "Solo 1..16", "Pan 1..16".
+// Several stems, each running 1..N, same N. Nothing else in a normal plug-in
+// looks like that, which is why this can be decided rather than guessed.
+//
+// Frank 2026-09-03: "UF8 sollte eigene autolearn regel haben weil auf UF8
+// üblicherweise keine Channel Strips gemappt werden … idealerweise würde
+// autolearn delta 16 in einem rutsch so mappen aber nicht dass andere plugins
+// völlig schief rauskommen." Measured against his 24 learned maps: this fires on
+// exactly ONE, the Delta Control 16. The Delta Control Mix Bus falls through
+// correctly — it names its params "Volume A" / "Volume B", which is not a matrix.
+//
+// ⛔ THRESHOLD: at least three complete stems at the same width, and the width a
+// multiple of 8. Three keeps a plug-in with one "Band 1..4" run out; the
+// multiple of 8 is what makes the thing fit the surface at all.
+struct MatrixStem {
+    std::string name;      // normalised stem, e.g. "volume"
+    std::vector<int>         param;  // param index per channel, [0] = channel 1
+    std::vector<std::string> pname;  // ⚠ the plug-in's OWN name per channel.
+        // Not the stem: the suggestion rows are what the user reads, and one
+        // stem name repeated sixteen times ("MixB 1" on every strip) tells them
+        // nothing about which channel they are looking at.
+    int firstSeen = 0;     // position in the param list, for ordering
+};
+
+// Split "Volume 1" / "CH1 Volume" / "Ch-3 Pan" into (stem, 1-based index).
+// Returns false when the name carries no index at all.
+bool splitStemIndex(const std::string& name, std::string& stem, int& idx)
+{
+    // Trailing number: "Volume 16", "Volume16", "Volume_3".
+    size_t e = name.size();
+    while (e > 0 && std::isdigit(static_cast<unsigned char>(name[e - 1]))) --e;
+    if (e < name.size() && e > 0) {
+        idx = std::atoi(name.c_str() + e);
+        size_t cut = e;
+        while (cut > 0 && (name[cut - 1] == ' ' || name[cut - 1] == '_'
+                        || name[cut - 1] == '-')) --cut;
+        if (cut > 0 && idx > 0) {
+            stem = normalise(name.substr(0, cut));
+            return !stem.empty();
+        }
+    }
+    // Leading channel prefix: "CH1 Volume", "Channel 3 Pan".
+    const std::string low = normalise(name);
+    for (const char* pfx : { "channel", "chan", "ch" }) {
+        const size_t pl = std::strlen(pfx);
+        if (low.size() <= pl || low.compare(0, pl, pfx) != 0) continue;
+        size_t i = pl;
+        while (i < low.size() && (low[i] == ' ' || low[i] == '.' || low[i] == '-'
+                               || low[i] == '_')) ++i;
+        if (i >= low.size() || !std::isdigit(static_cast<unsigned char>(low[i])))
+            continue;
+        int n = 0;
+        while (i < low.size() && std::isdigit(static_cast<unsigned char>(low[i])))
+            n = n * 10 + (low[i++] - '0');
+        while (i < low.size() && (low[i] == ' ' || low[i] == '_' || low[i] == '-'))
+            ++i;
+        if (n <= 0 || i >= low.size()) continue;
+        idx  = n;
+        stem = low.substr(i);
+        return !stem.empty();
+    }
+    return false;
+}
+
+// The detected width (0 = not a matrix) and the stems that make it up, in the
+// order the plug-in lists them.
+int detectMatrix(const std::vector<UserParamInfo>& params,
+                 std::vector<MatrixStem>& out)
+{
+    std::map<std::string, MatrixStem> byStem;
+    std::map<std::string, std::map<int, int>> idxToParam;   // stem -> idx -> param
+    std::map<std::string, std::map<int, std::string>> idxToName;
+    int seen = 0;
+    for (const auto& pi : params) {
+        std::string stem; int idx = 0;
+        if (!splitStemIndex(pi.name, stem, idx)) { ++seen; continue; }
+        auto& st = byStem[stem];
+        if (st.name.empty()) { st.name = stem; st.firstSeen = seen; }
+        idxToParam[stem][idx] = pi.vst3Param;
+        idxToName[stem][idx]  = pi.name;
+        ++seen;
+    }
+    // A stem counts when its indices are exactly 1..N.
+    std::map<int, int> widthVotes;
+    for (auto& kv : idxToParam) {
+        const auto& m = kv.second;
+        const int n = static_cast<int>(m.size());
+        if (n < 8) continue;
+        bool complete = true;
+        for (int i = 1; i <= n && complete; ++i) complete = (m.count(i) != 0);
+        if (complete) ++widthVotes[n];
+    }
+    int width = 0, best = 0;
+    for (const auto& kv : widthVotes)
+        if (kv.second > best) { best = kv.second; width = kv.first; }
+    if (width <= 0 || (width % 8) != 0 || best < 3) return 0;
+
+    out.clear();
+    for (auto& kv : idxToParam) {
+        const auto& m = kv.second;
+        if (static_cast<int>(m.size()) != width) continue;
+        bool complete = true;
+        for (int i = 1; i <= width && complete; ++i) complete = (m.count(i) != 0);
+        if (!complete) continue;
+        MatrixStem st = byStem[kv.first];
+        st.param.resize(width);
+        st.pname.resize(width);
+        for (int i = 1; i <= width; ++i) {
+            st.param[i - 1] = m.at(i);
+            st.pname[i - 1] = idxToName[kv.first].at(i);
+        }
+        out.push_back(std::move(st));
+    }
+    std::sort(out.begin(), out.end(),
+        [](const MatrixStem& a, const MatrixStem& b) {
+            return a.firstSeen < b.firstSeen;
+        });
+    return width;
+}
+
+// Which physical control a stem owns. ⛔ ONLY the unambiguous words (Frank
+// 2026-09-03: an empty Sel is more honest than a guessed one) — "Mono" is not
+// a Sel, it is just another stem and gets a V-Pot bank like the rest.
+int matrixRoleFor(const std::string& stem)   // 0 fader 1 cut 2 solo 3 sel, -1 none
+{
+    if (stem == "volume" || stem == "level" || stem == "fader" || stem == "gain")
+        return 0;
+    if (stem == "cut" || stem == "mute")   return 1;
+    if (stem == "solo")                    return 2;
+    if (stem == "sel" || stem == "select") return 3;
+    return -1;
+}
+} // anonymous namespace
+
 std::vector<Uf8Suggestion> suggestUf8Banks(
     const std::vector<UserParamInfo>& params,
     int faderBankCount)
 {
     if (faderBankCount < 1) faderBankCount = 1;
     if (faderBankCount > 2) faderBankCount = 2;
+
+    // A channel matrix answers this question completely, so it answers it
+    // instead: one STEM per V-Pot bank, in the plug-in's own order, and the
+    // channels laid across the fader banks eight at a time. The generic
+    // category grouping below never runs for such a plug-in — grouping "Pan 1"
+    // with "Pan 2" by category is exactly the wrong axis for a matrix.
+    // ⚠ The caller's faderBankCount describes the GENERIC layout; the matrix's
+    // own width decides how many fader banks it needs (16 channels = both).
+    {
+        std::vector<MatrixStem> stems;
+        if (const int width = detectMatrix(params, stems)) {
+            std::vector<Uf8Suggestion> out;
+            int vb = 0;
+            for (const auto& st : stems) {
+                if (matrixRoleFor(st.name) >= 0) continue;   // owns a control
+                if (vb >= 8) break;                          // 8 V-Pot banks
+                for (int ch = 0; ch < width && ch < 16; ++ch) {
+                    Uf8Suggestion sg{};
+                    sg.faderBank = ch / 8;
+                    sg.vpotBank  = vb;
+                    sg.strip     = ch % 8;
+                    sg.vst3Param = st.param[ch];
+                    sg.paramName = st.pname[ch];
+                    sg.category  = "Matrix";
+                    sg.confidence = 0.9f;
+                    sg.accepted  = true;
+                    out.push_back(std::move(sg));
+                }
+                ++vb;
+            }
+            return out;
+        }
+    }
 
     auto lowerOf = [](const std::string& s) {
         std::string out = s;
@@ -807,6 +978,34 @@ std::vector<Uf8StripSuggestion> suggestUf8Strips(
 {
     if (faderBankCount < 1) faderBankCount = 1;
     if (faderBankCount > 2) faderBankCount = 2;
+
+    // Matrix first, for the same reason as in suggestUf8Banks. Only the stems
+    // whose NAME is unambiguous take a physical control; everything else stays
+    // a V-Pot bank. An empty Sel is more honest than a guessed one.
+    {
+        std::vector<MatrixStem> stems;
+        if (const int width = detectMatrix(params, stems)) {
+            std::vector<Uf8StripSuggestion> out;
+            using K = Uf8StripSuggestion::Kind;
+            for (const auto& st : stems) {
+                const int role = matrixRoleFor(st.name);
+                if (role < 0) continue;
+                for (int ch = 0; ch < width && ch < 16; ++ch) {
+                    Uf8StripSuggestion sg{};
+                    sg.kind = (role == 0) ? K::Fader : (role == 1) ? K::Cut
+                            : (role == 2) ? K::Solo  : K::Sel;
+                    sg.faderBank = ch / 8;
+                    sg.strip     = ch % 8;
+                    sg.vst3Param = st.param[ch];
+                    sg.paramName = st.pname[ch];
+                    sg.confidence = 0.95f;   // structural, not a name guess
+                    sg.accepted  = true;
+                    out.push_back(std::move(sg));
+                }
+            }
+            return out;
+        }
+    }
 
     auto lowerOf = [](const std::string& s) {
         std::string out = s;
