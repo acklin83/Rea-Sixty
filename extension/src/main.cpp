@@ -35417,9 +35417,17 @@ void chaseLastTouchedFx()
     // absorb regardless of timing (covers a GUI touch of the pinned param, not
     // just a surface move). Narrow — only the EXACT pinned (track, fx, param) is
     // decoupled; the same param on another track focuses normally.
+    // Both targets, not just the pin: the macro's follower is written by us on
+    // every turn, so letting it take the focus hands the global focused param to a
+    // control the user never reached for — and the fader's release writeback then
+    // aims at it. Same narrow rule as the pin: only this track's exact tuples.
     if (const StickyPin* sp = stickyPinFor_(tr)) {
-        if (sp->vst3Param == paramIdx
-            && uf8::findFxIndexByGuid(tr, sp->fxGuid) == fxIdx) {
+        const bool isPin = sp->vst3Param == paramIdx
+                        && uf8::findFxIndexByGuid(tr, sp->fxGuid) == fxIdx;
+        const bool isFollower = !sp->fxGuid2.empty()
+                        && sp->vst3Param2 == paramIdx
+                        && uf8::findFxIndexByGuid(tr, sp->fxGuid2) == fxIdx;
+        if (isPin || isFollower) {
             lastTr = trWord; lastFx = fxWord; lastParam = paramIdx;
             return;
         }
@@ -36013,7 +36021,28 @@ void commitDebouncedTouchReleases()
                     : nullptr;
                 if (isVPotPanFocus(focusedT)) slT = nullptr;
                 const auto csT = csFaderForTrack(tr);
-                if (g_flip.load() && slT) {
+                // ⛔ STICKY BELONGS HERE, ABOVE THE FOCUSED PARAM. This block is
+                // supposed to mirror the live handler's precedence (routes >
+                // sticky > focused-param > pan) and it skipped the sticky rung:
+                // releasing the fader under FLIP with a pin wrote the FOCUSED
+                // parameter, or pan, i.e. a different control from the one the
+                // whole drag had been moving. Invisible while a pin was alone and
+                // the focused param happened to be the same slot; a pin with a
+                // second parameter made it plain, because the follower is what the
+                // focus had most recently landed on (Frank 2026-09-04).
+                int sfxR = -1, sprR = -1;
+                const bool stickyRel = stickyFlipFaderEnabled_()
+                    && stickyResolveOnTrack_(tr, &sfxR, &sprR, nullptr);
+                if (stickyRel) {
+                    double n = static_cast<double>(touchPb) /
+                               static_cast<double>(kUf8FaderPbMax);
+                    if (n < 0.0) n = 0.0;
+                    if (n > 1.0) n = 1.0;
+                    const double prevN = TrackFX_GetParamNormalized(tr, sfxR, sprR);
+                    TrackFX_SetParamNormalized(tr, sfxR, sprR, n);
+                    g_stickyFocusLockUntilMs.store(nowMs_() + 400);
+                    stickyApplyMacro_(tr, prevN);
+                } else if (g_flip.load() && slT) {
                     double normT = static_cast<double>(touchPb) /
                                    static_cast<double>(kUf8FaderPbMax);
                     if (slT->inverted) normT = 1.0 - normT;
