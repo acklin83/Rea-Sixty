@@ -39124,13 +39124,12 @@ void onTimerBody_()
                     g_hudPushPublished.clear();     // re-publish the editor data
                     publishHud_();
                 }
-                if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
-                    std::fprintf(lg,
-                        "[push] cmd '%s' changed=%d handled+published in %lld ms\n",
-                        s.c_str(), changed ? 1 : 0,
-                        (long long)(nowMs_() - cmdT0));
-                    std::fclose(lg);
-                }
+                // The per-click line that measured this is gone: it did its
+                // job (11 ms handled, 790 ms waiting for the tick) and a log
+                // entry per click is noise once the answer is known. The
+                // slow-tick breakdown stays — it only writes above 300 ms, so a
+                // healthy session is silent.
+                (void)cmdT0;
             } else if (s.rfind("uf8learn;", 0) == 0) {
                 // "uf8learn;<kind>;<strip>" — arm a UF8 cell learn. kind = HUD
                 // encoding (0=V-Pot 1=Fader 2=Solo 3=Cut 4=Sel). Banks live.
