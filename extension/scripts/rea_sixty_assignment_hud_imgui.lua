@@ -214,6 +214,14 @@ local PARAM_PW         = 240
 -- Same two-step as every control here: pick a param in the list, click a cell.
 -- Packed into ONE table because the file is at Lua's 200-local ceiling.
 local EXT = { H = 96, open = false, rects = {}, last = nil, btn = nil }
+-- ⛔ THE STRIP RESERVES ITS HEIGHT, exactly the way the param drawer reserves RW
+-- on the other axis. The window grows by EXT.H when the strip opens, so every
+-- layout that sizes itself off WH must subtract the same amount — otherwise the
+-- face keeps the whole (now taller) box, rescales, and the strip draws over its
+-- bottom edge. That is what Frank saw: "beim Aufklappen verändert sich das
+-- Verhältnis des Mockups" (2026-09-03). Growing the window and forgetting to
+-- reserve is the same bug in both directions; RW was simply written first.
+EXT.bh = function() return EXT.open and EXT.H or 0 end
 local paramPanelOpen   = false
 local RW               = 0
 local paramRects       = {}
@@ -905,10 +913,10 @@ local function drawTabs(st, ust)
     reaper.GetExtState(SECT, "hud_touch_learn") == "1", 0xE0A838)   -- amber
   btnR.param = rightToggle("Parameter List",
     reaper.GetExtState(SECT, "hud_imgui_params") == "1", 0x4A90D8)  -- blue
-  -- EXT FUNCS only on the Channel-Strip tab: the ten slots are a CS-mode thing,
-  -- and a toggle for something that cannot exist here would be a lie.
-  btnR.ext = (activeTab == "cs") and rightToggle("EXT FUNCS",
-    reaper.GetExtState(SECT, "hud_imgui_ext") == "1", 0x8A78C8) or nil
+  -- On every tab, for the geometry reason above — and because the ten slots
+  -- belong to the CS map whichever tab you happen to be looking at.
+  btnR.ext = rightToggle("EXT FUNCS",
+    reaper.GetExtState(SECT, "hud_imgui_ext") == "1", 0x8A78C8)
 end
 
 local function hitRect(r, mx, my)
@@ -1104,7 +1112,7 @@ local function renderList(st, asn)
 
   local M      = 14
   local top    = bodyTop() + 10
-  local bottom = WH - 8
+  local bottom = WH - EXT.bh() - 8
   if (WW - RW) - 2 * M < 60 or bottom - top < 40 then return end
 
   local _, rowTH = measure("Ag", rowFont)
@@ -1241,7 +1249,7 @@ end
 local function renderFace(st, asn)
   local DW, DH = geom.w or 860, geom.h or 660
   local M, top = 8, bodyTop() + 6
-  local availW, availH = (WW - RW) - 2 * M, WH - top - M
+  local availW, availH = (WW - RW) - 2 * M, WH - EXT.bh() - top - M
   if availW < 60 or availH < 60 then return end
   local scale = math.min(availW / DW, availH / DH)
   local ox = M + (availW - DW * scale) / 2
@@ -1530,7 +1538,8 @@ EXT.render = function()
   if raw == "" then
     dtext(10, top + floor(EXT.H / 2) - hf,
           col(0x808890, 0.9),
-          "EXT FUNCS: only on a Channel-Strip map of your own", hf)
+          "EXT FUNCS: the ten BACK-menu slots of a Channel-Strip map of your "
+          .. "own. Nothing to show for the plug-in the CS tab is on.", hf)
     return
   end
   dtext(10, top + 6, col(0x9A9AA2, 1),
@@ -2012,10 +2021,11 @@ local function renderUf8Face(ust, uasn)
   uf8StripCols = readUf8StripCols()
 
   -- Same sizing as the CS/BC mockup (renderFace): design face centred in the
-  -- full content area, scaled to fit, accounting for the param-list strip (RW).
+  -- full content area, scaled to fit, accounting for the param-list strip (RW)
+  -- and the EXT FUNCS strip (EXT.bh) — both reserve, neither squeezes.
   local FW, FH = 860, 520
   local M, top = 8, bodyTop() + 6
-  local availW, availH = (WW - RW) - 2 * M, WH - top - M
+  local availW, availH = (WW - RW) - 2 * M, WH - EXT.bh() - top - M
   if availW < 60 or availH < 60 then return end
 
   if not ust.present and not ust.boot then
@@ -2327,11 +2337,13 @@ local function render()
   else
     RW, paramRects, selectedParam = 0, {}, -1
   end
-  -- EXT FUNCS strip: same bargain along the bottom, and only where the slots
-  -- exist at all — they are a Channel-Strip thing (the Settings grid gates on
-  -- exactly the same condition).
-  EXT.open = (activeTab == "cs")
-             and (reaper.GetExtState(SECT, "hud_imgui_ext") == "1")
+  -- EXT FUNCS strip: same bargain along the bottom.
+  -- ⛔ NOT gated on the active tab, deliberately. The window grows on the
+  -- toggle's edge, so a tab-scoped strip would leave the window 96 px taller
+  -- with nothing reserving that space as soon as you left the CS tab: the face
+  -- would rescale on every tab switch and the saved rect would never settle.
+  -- The strip explains itself instead when there is nothing to show.
+  EXT.open = (reaper.GetExtState(SECT, "hud_imgui_ext") == "1")
   if not EXT.open then EXT.rects = {} end
 
   frame = frame + 1
@@ -2422,7 +2434,7 @@ local function render()
       local px = floor(14 * fontScale() + 0.5)
       local tw, th = measure(msg, px)
       local bw, bh = tw + 20, th + 8
-      local bx, by = (WW - RW - bw) / 2, WH - bh - 8
+      local bx, by = (WW - RW - bw) / 2, WH - EXT.bh() - bh - 8
       rect(bx, by, bw, bh, col(bgRgb, bgA))
       dtext(bx + 10, by + 4, col(fgRgb, 1), msg, px)
     end
@@ -2635,11 +2647,9 @@ local function drawContextMenu()
   if reaper.ImGui_MenuItem(ctx, "Parameter List", nil, pPanel) then
     reaper.SetExtState(SECT, "hud_imgui_params", pPanel and "0" or "1", true)
   end
-  if activeTab == "cs" then
-    local eOpen = (reaper.GetExtState(SECT, "hud_imgui_ext") == "1")
-    if reaper.ImGui_MenuItem(ctx, "UC1 EXT FUNCS", nil, eOpen) then
-      reaper.SetExtState(SECT, "hud_imgui_ext", eOpen and "0" or "1", true)
-    end
+  local eOpen = (reaper.GetExtState(SECT, "hud_imgui_ext") == "1")
+  if reaper.ImGui_MenuItem(ctx, "UC1 EXT FUNCS", nil, eOpen) then
+    reaper.SetExtState(SECT, "hud_imgui_ext", eOpen and "0" or "1", true)
   end
 
   -- Touch-to-Learn: move a UC1 control to arm it (instead of clicking the
