@@ -10041,7 +10041,10 @@ discreteParamsFor_(const EditingFx& fx, const uf8::UserPluginMap* editing,
             if (TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx, p,
                                               &sz, &a, &b, &isT)) {
                 if (isT)                        opts = 2;
-                else if (sz > 0.0 && sz < 1.0)  opts = uf8::numStepsFor((float)sz);
+                else if (sz > 0.0 && sz < 1.0) {
+                    opts = uf8::numStepsFor((float)sz);
+                    if (opts > 64) opts = 0;    // continuous, not an option list
+                }
             }
         } else if (editing) {
             for (const auto& pi : editing->paramSnapshot)
@@ -10079,8 +10082,12 @@ void drawPushStepEditor_(ImGui_Context* ctx, const char* idScope, int addKey,
                 return 0;
             if (isT) { pStepOut = 1.0; return 2; }          // on/off
             if (s > 0.0 && s < 1.0) {
+                // Same ceiling as hudParamOptions_: a reported step size does
+                // not make a continuous parameter an option list.
+                const int n = uf8::numStepsFor(static_cast<float>(s));
+                if (n > 64) return 0;
                 pStepOut = s;
-                return uf8::numStepsFor(static_cast<float>(s));
+                return n;
             }
             return 0;
         }
@@ -15006,6 +15013,16 @@ bool hudIsPushCycleBtn_(int idx)
 
 // Discrete option count (>=2) + normalised step for a live param. 0 = not
 // discrete. Mirrors optionCountFor in drawUc1Control_.
+// ⛔ A THOUSAND "OPTIONS" IS NOT AN OPTION LIST. REAPER reports a step size for
+// plenty of CONTINUOUS parameters — a Pro-Q frequency comes back as 0.001, which
+// numStepsFor turns into 1001 discrete values. Every one of them was then
+// formatted through the plug-in, on every timer tick, for a submenu nobody could
+// use with a thousand entries: that is the 787 ms this function was measured at
+// (Frank 2026-09-04, "2s bis der haken da ist"). A step cycle is a curated list
+// of a handful of modes; anything past kMaxOpts is a continuous control and is
+// reported as having no options at all.
+static constexpr int kMaxPushOptions_ = 64;
+
 int hudParamOptions_(MediaTrack* tr, int fx, int param, double& stepOut)
 {
     stepOut = 1.0;
@@ -15014,7 +15031,12 @@ int hudParamOptions_(MediaTrack* tr, int fx, int param, double& stepOut)
     if (!TrackFX_GetParameterStepSizes(tr, fx, param, &s, &a, &b, &isT))
         return 0;
     if (isT) { stepOut = 1.0; return 2; }
-    if (s > 0.0 && s < 1.0) { stepOut = s; return uf8::numStepsFor((float)s); }
+    if (s > 0.0 && s < 1.0) {
+        const int n = uf8::numStepsFor((float)s);
+        if (n > kMaxPushOptions_) return 0;
+        stepOut = s;
+        return n;
+    }
     return 0;
 }
 
