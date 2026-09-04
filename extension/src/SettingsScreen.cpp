@@ -20056,6 +20056,13 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                              bs && bs->name ? bs->name : "(slot)");
                 }
             }
+            // ⇨ EIN FORMAT FÜR BEIDE LISTEN. Diese Spalte und die des Learn-HUD
+            // beantworten dieselbe Frage, also lesen sie sich gleich:
+            // "V-Pot fb.bank.strip", "Fader fb.strip" (hudBuildUsedBy_,
+            // SettingsScreen.cpp:14028). Vorher stand hier "UF8 Fader fb 1 str 1"
+            // und im HUD "Fader 1.1" — zwei Schreibweisen für eine Sache, an zwei
+            // Fenstern desselben Features (Frank 2026-09-04: "KONSISTENZ").
+            // Wer eine der beiden anfasst, fasst die andere mit an.
             for (int fb = 0; fb < uf8::kUserUf8FaderBankCount; ++fb) {
                 for (int vb = 0; vb < uf8::kUserUf8VpotBankCount; ++vb) {
                     for (int s = 0; s < 8; ++s) {
@@ -20063,8 +20070,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                             editing->uf8.banks.banks[fb][vb][s];
                         if (bs.vst3Param < 0) continue;
                         char buf[64];
-                        snprintf(buf, sizeof(buf),
-                                      "UF8 V-Pot fb %d bk %d str %d",
+                        snprintf(buf, sizeof(buf), "V-Pot %d.%d.%d",
                                       fb + 1, vb + 1, s + 1);
                         noteUse_(bs.vst3Param, buf);
                     }
@@ -20074,17 +20080,13 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 for (int s = 0; s < 8; ++s) {
                     const auto& sb = editing->uf8.strips[fb][s];
                     char buf[64];
-                    snprintf(buf, sizeof(buf),
-                                  "UF8 Fader fb %d str %d", fb + 1, s + 1);
+                    snprintf(buf, sizeof(buf), "Fader %d.%d", fb + 1, s + 1);
                     noteUse_(sb.faderVst3Param, buf);
-                    snprintf(buf, sizeof(buf),
-                                  "UF8 Solo fb %d str %d",  fb + 1, s + 1);
+                    snprintf(buf, sizeof(buf), "Solo %d.%d",  fb + 1, s + 1);
                     noteUse_(sb.soloVst3Param, buf);
-                    snprintf(buf, sizeof(buf),
-                                  "UF8 Cut fb %d str %d",   fb + 1, s + 1);
+                    snprintf(buf, sizeof(buf), "Cut %d.%d",   fb + 1, s + 1);
                     noteUse_(sb.cutVst3Param,  buf);
-                    snprintf(buf, sizeof(buf),
-                                  "UF8 Sel fb %d str %d",   fb + 1, s + 1);
+                    snprintf(buf, sizeof(buf), "Sel %d.%d",   fb + 1, s + 1);
                     noteUse_(sb.selVst3Param,  buf);
                 }
             }

@@ -39659,10 +39659,17 @@ void onTimerBody_()
                                       0, uf8::kUserUf8VpotBankCount - 1);
             if (mp) {
                 reasixty_hudUf8ArmLearn(kind, strip, fb, vb, tr, fx, false);
-                // V-Pot armed on a mapped plug-in → (re)start StepCycle
-                // capture for it. Commit any previous capture first so each
-                // new wiggle delimits the prior control's step list.
-                if (kind == 0 && tr && fx >= 0
+                // ⛔ STEP CAPTURE BY TOUCH IS OFF ON THE UF8 TOO (2026-09-04).
+                // It was disabled on the UC1 on 2026-06-23 because the always-on
+                // capture lingered after a normal bind and committed bogus step
+                // cycles ("normale potis snappen auf gelernte Werte"), with a
+                // note to re-enable it behind a bounded window. That window was
+                // never built, so the UF8 kept a half-working feature the UC1
+                // did not have, and the docs had to explain the difference.
+                // Frank: "DANN SCHALT DIE FUCKING UF8 STEPS AUCH AUS WENN ES
+                // NICHT GEKLAPPT HAT!" Step cycles are built in the FX-Learn
+                // editor, on both surfaces. Re-enable both together or neither.
+                if (false && kind == 0 && tr && fx >= 0
                     && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
                     vpotStepCaptureCommit_();
                     char nm[256];
