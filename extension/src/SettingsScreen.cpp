@@ -14500,6 +14500,18 @@ bool hudApplyAutoLearn_(void* csTrV, int csFx, int mode, const char* spec)
     char nm[512] = {0};
     if (!fxIdentityName(tr, csFx, nm, sizeof(nm))) return false;
     const UserPluginMap* om = user_plugins::lookupOwnedByName(nm);
+    // ⛔ NOT ONTO A FACTORY STRIP. hudArmLearn_ has refused this since it was
+    // written — "recognised but no USER map = SSL built-in → factory-fixed" —
+    // and this path, which arrived later, never got the same guard. So the one
+    // gesture that writes eight controls at once was also the one way past it
+    // (Frank 2026-09-04: "apply über autolearn GEHT auf factory plugins!").
+    // A user map created here would carry the same identity as the built-in and
+    // quietly take over the UC1's layout for SSL's own strip.
+    if (!om && lookupPluginMapByName(nm)) {
+        SetExtState("rea_sixty", "hud_hint",
+                    "Factory map \xE2\x80\x94 not editable", false);
+        return false;
+    }
     // No map yet: accepting a proposal is what creates it. Same shape the +New
     // dialog builds — match root from the FX name, a short label, the domain the
     // proposals were made for, and a snapshot of the live parameter list so the
