@@ -721,7 +721,15 @@ std::string serialize_(const UserPluginCatalog& c)
         os << "\n    }";
     }
     if (!firstPlugin) os << "\n  ";
-    os << "]";
+    // ⛔ ONE closer for "plugins", one for the object. The removal of the
+    // Quick-Learn skip list (2026-09-03) took out the block BETWEEN these two
+    // lines, and the second line had been closing the SKIP array — so what was
+    // left wrote "]]" and every save produced a catalog the loader refuses.
+    // Frank's file was unreadable within the hour. Deleting a block whose
+    // neighbours share a bracket means re-reading the brackets, not the block.
+    // ⚠ And the first cut of THIS fix removed both, leaving "plugins" unclosed —
+    // caught immediately by test_user_catalog_uf1's round trip, which is what
+    // that test is for.
     os << "]\n}\n";
     return os.str();
 }
