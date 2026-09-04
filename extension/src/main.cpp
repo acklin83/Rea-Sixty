@@ -15474,8 +15474,28 @@ void publishHud_()
     }
     // Bootstrap banner signal for the companion: "1;<short>" when a virgin FX is
     // under the cursor, else "0;". Drives the "Map <name> — click + wiggle" hint.
+    // ⇨ AND THE COORDINATES, NOT JUST THE NAME. The companion could name the
+    // virgin plug-in in the banner but had no way to REACH it, so its parameter
+    // list — which resolves through hud_target, and hud_target is deliberately
+    // empty while bootstrapping — said "No editable plug-in on the focused
+    // track" with the plug-in sitting right there (Frank 2026-09-04: "findet
+    // keine parameter von pro-q4"). Format: "1;<trackIdx>;<fx>;<short>", where
+    // trackIdx is 0 for the master and 1-based otherwise, the same encoding
+    // hud_target uses.
+    int bootTrIdx = -1;
+    if (boot && bootTr) {
+        if (bootTr == GetMasterTrack(nullptr)) bootTrIdx = 0;
+        else {
+            const int n = CountTracks(nullptr);
+            for (int i = 0; i < n; ++i)
+                if (GetTrack(nullptr, i) == bootTr) { bootTrIdx = i + 1; break; }
+        }
+    }
     const std::string hudBoot =
-        boot ? ("1;" + shortFxName_(bootTr, bootFx)) : std::string("0;");
+        boot ? ("1;" + std::to_string(bootTrIdx) + ";"
+                     + std::to_string(bootFx) + ";"
+                     + shortFxName_(bootTr, bootFx))
+             : std::string("0;");
     if (hudBoot != g_hudBootPublished) {
         g_hudBootPublished = hudBoot;
         SetExtState("rea_sixty", "hud_boot", hudBoot.c_str(), false);

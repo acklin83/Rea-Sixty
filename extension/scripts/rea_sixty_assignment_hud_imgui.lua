@@ -249,6 +249,9 @@ local paramMaxScroll   = 0
 local paramCacheKey    = nil
 local paramList        = {}
 local escDownPrev      = false   -- global-Escape rising-edge tracker (js API)
+-- Where the virgin plug-in is, from hud_boot (EXT fields, not file-scope
+-- locals: this file sits at the 200-local ceiling and two more would break the
+-- whole script at load time).
 
 local function sendCmd(s) reaper.SetExtState(SECT, "hud_cmd", s, false) end
 
@@ -271,9 +274,17 @@ local function resolveTarget()
   else
     local raw = reaper.GetExtState(SECT, "hud_target")
     local csN, csFx, bcN, bcFx = raw:match("^(%-?%d+);(%-?%d+);(%-?%d+);(%-?%d+)$")
-    if not csN then return nil end
-    if activeTab == "cs" then trN, fx = tonumber(csN), tonumber(csFx)
-    else                      trN, fx = tonumber(bcN), tonumber(bcFx) end
+    if csN then
+      if activeTab == "cs" then trN, fx = tonumber(csN), tonumber(csFx)
+      else                      trN, fx = tonumber(bcN), tonumber(bcFx) end
+    end
+    -- ⇨ THE VIRGIN PLUG-IN IS THE TARGET WHILE WE ARE BOOTSTRAPPING IT. The
+    -- extension publishes hud_target empty then, on purpose, so without this the
+    -- parameter list refused to show the very plug-in the banner offers to map.
+    if (not trN or trN < 0 or fx < 0) and EXT.bootTr and EXT.bootFx then
+      trN, fx = EXT.bootTr, EXT.bootFx
+    end
+    if not trN then return nil end
   end
   if trN < 0 or fx < 0 then return nil end
   local tr = (trN == 0) and reaper.GetMasterTrack(0) or reaper.GetTrack(0, trN - 1)
@@ -2601,7 +2612,17 @@ local function render()
   -- published empty + the LCD shows <name>; surface a "Map <name>" hint.
   local bootRaw    = reaper.GetExtState(SECT, "hud_boot")
   local bootActive = (bootRaw:sub(1, 2) == "1;")
-  local bootName   = bootActive and bootRaw:sub(3) or ""
+  -- "1;<trackIdx>;<fx>;<short>". The older two-field form ("1;<short>") is still
+  -- read, so a stale ExtState from before this build cannot blank the banner.
+  local bootName   = ""
+  local bTr, bFx   = bootRaw:match("^1;(%-?%d+);(%-?%d+);")
+  if bTr then
+    EXT.bootTr, EXT.bootFx = tonumber(bTr), tonumber(bFx)
+    bootName = bootRaw:match("^1;%-?%d+;%-?%d+;(.*)$") or ""
+  else
+    EXT.bootTr, EXT.bootFx = nil, nil
+    bootName = bootActive and bootRaw:sub(3) or ""
+  end
 
   -- Auto-follow focus to the matching tab. CS/BC win (focusDom c/b); otherwise a
   -- UF8-mapped plug-in under the cursor (ust.focus) switches to the UF8 tab.
@@ -4520,10 +4541,15 @@ local function loop()
       escDownPrev = down
     end
     if escPressed then
-      if selectedParam >= 0 then selectedParam = -1
-      elseif paramFilter ~= "" then paramFilter = ""
-      elseif uf8Learn >= 0 then sendCmd("uf8cancel")
-      elseif learnIdx >= 0 then sendCmd("cancel") end
+      -- ⇨ THE ARMED LEARN GOES FIRST. The hint under an armed control says
+      -- "Esc to cancel", and Esc used to clear a selected parameter or the
+      -- filter before it ever reached the learn — so the promised key appeared
+      -- to do nothing (Frank 2026-09-04: "esc zum learn abbrechen hat noch nie
+      -- funktioniert"). What the screen promises is what the key does.
+      if uf8Learn >= 0 then sendCmd("uf8cancel")
+      elseif learnIdx >= 0 then sendCmd("cancel")
+      elseif selectedParam >= 0 then selectedParam = -1
+      elseif paramFilter ~= "" then paramFilter = "" end
     end
 
     refreshGeom()
