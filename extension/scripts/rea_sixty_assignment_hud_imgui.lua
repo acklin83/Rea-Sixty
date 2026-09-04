@@ -1687,9 +1687,12 @@ EXT.alDraw = function(x0, top, PW)
         fit("AutoLearn \xE2\x80\x94 " .. #EXT.alRows .. " proposals",
             PW - 2 * pad, hf), hf)
   if #EXT.alRows == 0 then
+    -- Since the bootstrap landed, an empty answer no longer means "no map":
+    -- an unmapped plug-in is read straight off the live instance. So the only
+    -- ways to get here are no plug-in at all, or a parameter list the matcher
+    -- recognised nothing in.
     dtext(x0 + pad, top + pad + hf + 8, col(0x808890, 0.9),
-          fit("Nothing matched. The map needs a param snapshot.",
-              PW - 2 * pad, hf), hf)
+          fit("No proposals for this plug-in.", PW - 2 * pad, hf), hf)
     return
   end
   -- Footer first, so the list knows where to stop.

@@ -14207,7 +14207,34 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx)
     char nm[512] = {0};
     if (!fxIdentityName(tr, csFx, nm, sizeof(nm))) return {};
     const UserPluginMap* m = user_plugins::lookupOwnedByName(nm);
-    if (!m || m->paramSnapshot.empty()) return {};
+    // ⇨ A PLUG-IN WITH NO MAP IS THE CASE THAT NEEDS AUTOLEARN MOST, and until
+    // 2026-09-03 it was the one case it could not serve: the matcher feeds on a
+    // map's paramSnapshot, and a plug-in nobody has mapped has neither. Frank,
+    // looking at a bx_console 4000 E while his catalog held the 4000 G: "macht
+    // ja nicht wirklich sinn wenn ungemappte plugins nicht per autolearn
+    // gemappt werden können, oder?"
+    // So read the parameters off the LIVE instance instead. The proposals are
+    // UC1 slots only — this is the Channel Strip tab bootstrapping a strip, and
+    // UF8 banks would need a UF8 map, which is a different act. Applying such a
+    // row creates the map (see hudApplyAutoLearn_).
+    std::vector<UserParamInfo> live;
+    if (!m || m->paramSnapshot.empty()) {
+        const int np = TrackFX_GetNumParams(tr, csFx);
+        char pn[256];
+        for (int i = 0; i < np; ++i) {
+            pn[0] = 0;
+            if (!TrackFX_GetParamName(tr, csFx, i, pn, sizeof(pn))) continue;
+            if (isReaperMidiParam_(pn)) continue;
+            if (isWrapperParam_(tr, csFx, i)) continue;
+            UserParamInfo pi{};
+            pi.vst3Param = i;
+            pi.name      = pn;
+            live.push_back(std::move(pi));
+        }
+        if (live.empty()) return {};
+    }
+    const std::vector<UserParamInfo>& src = live.empty() ? m->paramSnapshot : live;
+    const Domain srcDom = live.empty() ? m->domain : Domain::ChannelStrip;
     auto scrub = [](std::string v) {
         for (char& ch : v) if (ch == ';' || ch == '\t' || ch == '\n') ch = ' ';
         return v;
@@ -14217,8 +14244,8 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx)
         return std::to_string(v < 0 ? 0 : (v > 100 ? 100 : v));
     };
     std::string out;
-    if (m->domain != Domain::None) {
-        for (const auto& sg : autolearn::suggestSlots(m->paramSnapshot, m->domain)) {
+    if (srcDom != Domain::None) {
+        for (const auto& sg : autolearn::suggestSlots(src, srcDom)) {
             if (sg.vst3Param < 0) continue;
             if (!out.empty()) out += ';';
             out += "c\t" + std::to_string(sg.linkIdx)
@@ -14235,10 +14262,12 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx)
     // CH<N> strip pass is off unless asked for. Running all three unconditionally
     // put every parameter of a reverb on a fader AND on a V-Pot — measured
     // against Frank's ValhallaPlate and EchoBoy maps, 2026-09-03.
-    const bool wantVpots  = m->uf8Mode;
-    const bool wantFaders = !m->uf8Mode;
+    // No map yet → UC1 slots only (see above); the UF8 passes need a map that
+    // says it wants a UF8 layer.
+    const bool wantVpots  = live.empty() && m->uf8Mode;
+    const bool wantFaders = live.empty() && !m->uf8Mode;
     for (const auto& u : wantVpots
-             ? autolearn::suggestUf8Banks(m->paramSnapshot, 1)
+             ? autolearn::suggestUf8Banks(src, 1)
              : std::vector<autolearn::Uf8Suggestion>{}) {
         if (u.vst3Param < 0) continue;
         if (!out.empty()) out += ';';
@@ -14258,16 +14287,14 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx)
         // The CH<N> pass always runs: on a channel MATRIX it is the whole point
         // (it returns the matrix layout), and on anything else it finds nothing,
         // which costs one walk over the names.
-        auto strips = autolearn::suggestUf8Strips(m->paramSnapshot,
-                                                  kUserUf8FaderBankCount);
+        auto strips = autolearn::suggestUf8Strips(src, kUserUf8FaderBankCount);
         bool takenFader[2][8] = {};
         for (const auto& sg : strips)
             if (sg.kind == StKind::Fader && sg.faderBank >= 0 && sg.faderBank < 2
                 && sg.strip >= 0 && sg.strip < 8)
                 takenFader[sg.faderBank][sg.strip] = true;
         for (const auto& sg : wantFaders
-                 ? autolearn::suggestUf8ParamFaders(
-                       m->paramSnapshot, kUserUf8FaderBankCount)
+                 ? autolearn::suggestUf8ParamFaders(src, kUserUf8FaderBankCount)
                  : std::vector<autolearn::Uf8StripSuggestion>{}) {
             if (sg.faderBank < 0 || sg.faderBank >= 2) continue;
             if (sg.strip < 0 || sg.strip >= 8) continue;
@@ -14306,8 +14333,26 @@ bool hudApplyAutoLearn_(void* csTrV, int csFx, const char* spec)
     char nm[512] = {0};
     if (!fxIdentityName(tr, csFx, nm, sizeof(nm))) return false;
     const UserPluginMap* om = user_plugins::lookupOwnedByName(nm);
-    if (!om) return false;
-    const std::string match = om->match;
+    // No map yet: accepting a proposal is what creates it. Same shape the +New
+    // dialog builds — match root from the FX name, a short label, the domain the
+    // proposals were made for, and a snapshot of the live parameter list so the
+    // editor stays usable with no instance loaded.
+    std::string match;
+    if (!om) {
+        char fxn[512] = {0};
+        TrackFX_GetFXName(tr, csFx, fxn, sizeof(fxn));
+        UserPluginMap fresh{};
+        fresh.match        = deriveMatchRoot_(fxn[0] ? fxn : nm);
+        fresh.displayShort = deriveShortLabel_(fxn[0] ? fxn : nm);
+        fresh.domain       = Domain::ChannelStrip;
+        if (fresh.match.empty()) return false;
+        user_plugins::upsert(fresh);
+        match = fresh.match;
+        EditingFx efx{ tr, csFx, true };
+        snapshotParamsFor_(match, efx);
+    } else {
+        match = om->match;
+    }
     auto cat = user_plugins::get();
     bool any = false;
     for (auto& m : cat.maps) {
