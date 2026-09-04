@@ -811,12 +811,6 @@ int matrixRoleFor(const std::string& stem)   // 0 fader 1 cut 2 solo 3 sel, -1 n
 }
 } // anonymous namespace
 
-bool isChannelMatrix(const std::vector<UserParamInfo>& params)
-{
-    std::vector<MatrixStem> stems;
-    return detectMatrix(params, stems) > 0;
-}
-
 std::vector<Uf8Suggestion> suggestUf8Banks(
     const std::vector<UserParamInfo>& params,
     int faderBankCount)

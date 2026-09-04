@@ -14229,11 +14229,6 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx, int mode)
     // UC1 slots only — this is the Channel Strip tab bootstrapping a strip, and
     // UF8 banks would need a UF8 map, which is a different act. Applying such a
     // row creates the map (see hudApplyAutoLearn_).
-    // ⇨ A CHANNEL MATRIX BELONGS ON THE UF8, whatever tab asked. The same
-    // detector that lays the Delta 16 out also answers "which surface does this
-    // plug-in want": sixteen channels of Volume/Pan/Solo are not a channel
-    // strip, and proposing UC1 slots for them would be the CS tab being polite
-    // rather than useful.
     std::vector<UserParamInfo> live;
     if (!m || m->paramSnapshot.empty()) {
         const int np = TrackFX_GetNumParams(tr, csFx);
@@ -14251,12 +14246,16 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx, int mode)
         if (live.empty()) return {};
     }
     const std::vector<UserParamInfo>& src = live.empty() ? m->paramSnapshot : live;
-    // With a map, its own domain rules. Without one, the tab asked and the
-    // structure can overrule: a matrix goes to the UF8 (domain None + banks).
-    const bool virginMatrix = !live.empty() && autolearn::isChannelMatrix(src);
+    // With a map, its own domain rules. Without one, THE TAB DECIDES — and only
+    // the tab. An earlier cut let the matrix detector overrule it, so a fresh
+    // Delta 16 got UF8 proposals even from the Channel Strip tab. Frank: "wenn
+    // ich im CS Tab bin, dann will ich offensichtlich für die UC1 den CS part
+    // mappen." Standing on a tab is a statement of intent; a heuristic does not
+    // get to overrule one. The matrix rule still does its work where it belongs,
+    // inside the UF8 suggestors, so mapping that same plug-in from the UF8 tab
+    // lays it out as a matrix.
     const Domain srcDom = !live.empty()
-        ? (virginMatrix ? Domain::None
-                        : (mode == 1 ? Domain::BusComp : Domain::ChannelStrip))
+        ? (mode == 1 ? Domain::BusComp : Domain::ChannelStrip)
         : m->domain;
     auto scrub = [](std::string v) {
         for (char& ch : v) if (ch == ';' || ch == '\t' || ch == '\n') ch = ' ';
@@ -14289,9 +14288,8 @@ std::string hudBuildAutoLearn_(void* csTrV, int csFx, int mode)
     // says it wants a UF8 layer.
     // With a map: as the FX-Learn page gates it. Without one: the UF8 tab (or a
     // detected matrix) wants the UF8 passes, the UC1 tabs want the slots only.
-    const bool uf8Wanted  = (mode == 2) || virginMatrix;
-    const bool wantVpots  = live.empty() ? m->uf8Mode  : uf8Wanted;
-    const bool wantFaders = live.empty() ? !m->uf8Mode : uf8Wanted;
+    const bool wantVpots  = live.empty() ? m->uf8Mode  : (mode == 2);
+    const bool wantFaders = live.empty() ? !m->uf8Mode : (mode == 2);
     for (const auto& u : wantVpots
              ? autolearn::suggestUf8Banks(src, 1)
              : std::vector<autolearn::Uf8Suggestion>{}) {
@@ -14370,23 +14368,11 @@ bool hudApplyAutoLearn_(void* csTrV, int csFx, int mode, const char* spec)
         UserPluginMap fresh{};
         fresh.match        = deriveMatchRoot_(fxn[0] ? fxn : nm);
         fresh.displayShort = deriveShortLabel_(fxn[0] ? fxn : nm);
-        // The map is born as what the proposals were made for. A UF8 map is
-        // (domain None, uf8Mode true) per the encoding in UserPluginCatalog.h —
-        // domain None with uf8Mode false is the invalid combination the loader
-        // drops, so this must set both.
-        const bool uf8Map  = (mode == 2)
-            || (mode != 1 && [&]{ std::vector<UserParamInfo> pv;
-                    const int np = TrackFX_GetNumParams(tr, csFx);
-                    char pn2[256];
-                    for (int i = 0; i < np; ++i) {
-                        pn2[0] = 0;
-                        if (!TrackFX_GetParamName(tr, csFx, i, pn2, sizeof(pn2)))
-                            continue;
-                        if (isReaperMidiParam_(pn2)) continue;
-                        UserParamInfo pi{}; pi.vst3Param = i; pi.name = pn2;
-                        pv.push_back(std::move(pi));
-                    }
-                    return autolearn::isChannelMatrix(pv); }());
+        // The map is born as the TAB asked for. A UF8 map is (domain None,
+        // uf8Mode true) per the encoding in UserPluginCatalog.h — domain None
+        // with uf8Mode false is the invalid combination the loader drops, so
+        // this must set both.
+        const bool uf8Map = (mode == 2);
         fresh.domain  = uf8Map ? Domain::None
                       : (mode == 1 ? Domain::BusComp : Domain::ChannelStrip);
         fresh.uf8Mode = uf8Map;

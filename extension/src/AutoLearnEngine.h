@@ -66,13 +66,6 @@ std::vector<Suggestion> suggestSlots(
     const std::vector<UserParamInfo>& params,
     Domain domain);
 
-// True when the parameter list is a CHANNEL MATRIX — several complete "stem +
-// index" runs of the same width, the width a multiple of 8 ("Volume 1..16",
-// "Solo 1..16"). Such a plug-in belongs on the UF8 whatever tab is asking: it is
-// not a channel strip, and suggestSlots would lay sixteen channels onto a UC1
-// faceplate that has one of each control.
-bool isChannelMatrix(const std::vector<UserParamInfo>& params);
-
 // Build suggestions for UF8 V-Pot banks. Groups matched params by category
 // (EQ, Comp, Gate, Filter, I/O, Misc) into banks of 8. When faderBankCount
 // is 2 and params > 8, overflow goes to faderBank 1.
