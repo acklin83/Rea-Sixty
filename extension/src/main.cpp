@@ -18183,11 +18183,6 @@ void stickyPotTick_()
         armMs = nowMs_();
         wasArmed = true;
         wasSecond = armSecond;
-        if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
-            std::fprintf(lg, "[sticky] arm edge: pin=%d pair=%d\n",
-                         armPin ? 1 : 0, armSecond ? 1 : 0);
-            std::fclose(lg);
-        }
         return;
     }
     if (nowMs_() - armMs > 20000) {
@@ -38676,12 +38671,6 @@ void onTimerBody_()
             char buf[160];   // mbSeq is a static local → referenced directly (not captured)
             snprintf(buf, sizeof(buf), "%s\t%u", text.c_str(), ++mbSeq);
             SetExtState("rea_sixty", "mode_banner", buf, false);
-            // Traced: a banner that does not appear can fail on either side of the
-            // ExtState, and the log says which. Fires only on a mode change.
-            if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
-                std::fprintf(lg, "[banner] %s\n", text.c_str());
-                std::fclose(lg);
-            }
         };
         auto onOff = [](bool b) -> const char* { return b ? "On" : "Off"; };
         const bool sa   = g_stickyActive.load();
