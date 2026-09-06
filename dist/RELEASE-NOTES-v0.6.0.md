@@ -1,6 +1,6 @@
 # Rea-Sixty v0.6.0, "Six Seasons and a Movie"
 
-**The release where a soft-key set became a thing you own, and where the surface started talking past REAPER.** Nine sets, each with a number and a name, all of them in one matrix you edit in place: double-click renames a bank, right-click copies, cuts, pastes, or turns it into a dynamic bank. Two of the nine are SSL's own channel-strip and bus-comp rows, sitting in the matrix like the rest. Next to that, two things that reach outside: **OBS** on the keys, with recording, chapter marks and scenes by name, and a **Sticky Pot that can carry two parameters at once**, counter-running, which is how you drive an 1176 harder without the level moving. The Learn HUD grew a column that says where every parameter already sits, AutoLearn stopped proposing for the wrong plug-in, and the push-cycle menus that took two seconds to answer now answer at once.
+**The release where a soft-key set became a thing you own, and where the surface started talking past REAPER.** Nine sets, each with a number and a name, all of them in one matrix you edit in place: double-click renames a bank, right-click copies, cuts, pastes, or turns it into a dynamic bank. Two of the nine were walled off until now, the coordinates SSL's own channel-strip and bus-comp rows sit on; they are in the matrix like the rest, editable wherever the plug-in leaves a key free. Next to that, two things that reach outside: **OBS** on the keys, with recording, chapter marks and scenes by name, and a **Sticky Pot that can carry two parameters at once**, counter-running, which is how you drive an 1176 harder without the level moving. The Learn HUD grew a column that says where every parameter already sits, AutoLearn stopped proposing for the wrong plug-in, and the push-cycle menus that took two seconds to answer now answer at once.
 
 ## Install via ReaPack (recommended)
 
@@ -20,7 +20,7 @@ First-run setup buttons live under Settings, About:
 
 ## Soft-key sets
 
-**Nine sets, and each one has a number.** Three Quick keys on three layers is nine sets of six banks, and every one of them is now addressable: *Soft-Key Set, engage* takes the set number as its parameter, so a set sits on any key you like, a foot switch, a Stream Deck tile. The Quick key is one way in, not the only one. Sets 8 and 9 are SSL's own channel-strip and bus-comp rows; they were added as 8 and 9 rather than renumbering 1 to 7, because bindings point at these numbers.
+**Nine sets, and each one has a number.** Three Quick keys on three layers is nine sets of six banks, and every one of them is now addressable: *Soft-Key Set, engage* takes the set number as its parameter, so a set sits on any key you like, a foot switch, a Stream Deck tile. The Quick key is one way in, not the only one. Sets 8 and 9 are the two Layer 1 coordinates that carry SSL's own channel-strip and bus-comp rows. The editor used to refuse those two outright, although the free keys on them have been dispatchable and paintable for months: where the SSL tables put a parameter the plug-in keeps the key, and everything else on those rows, plus the whole Shift half, is yours. They were added as 8 and 9 rather than renumbering 1 to 7, because bindings point at these numbers.
 
 **The matrix is the editor.** Nine rows, six columns, every set with its banks. Click a cell and you are on that bank, on the surface and in the editor below. Double-click renames it. Right-click gives you copy, cut and paste of the whole bank, its dynamic kind, your saved presets and the factory banks. The set's name is typed in the row, and Plain or Shift is picked in the header, because the matrix shows one of the two at a time.
 
@@ -66,7 +66,7 @@ The password is kept in its own settings value, apart from host and port, so a s
 
 **Both footswitches are bindable** like the UF8's, with the ids measured rather than guessed.
 
-**The preset browser owns its screen** and lists REAPER's presets alongside SSL's own; Shift with 5 to 8 opens it from the Plugin view.
+**The preset browser owns its screen**, and it reads whichever library the plug-in has: SSL's own on-disk library for an SSL plug-in, which exposes nothing to REAPER's list, and REAPER's own for everything else. `Shift` on the `5-8` key opens it in the Plugin view, where that key is otherwise idle.
 
 **Four keys carry a binding per view**, so the same key can mean different things in Plugin, DAW, Meter and Sends.
 

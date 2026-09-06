@@ -584,8 +584,10 @@ Either way the names are read off disk and nothing is loaded until you press, so
 browsing stays free.
 
 The four keys under the display are all channel-strip toggles here, so the browser
-needs a key of your own: bind **UF1 Presets** (*Hardware Modes*) wherever you like.
-While it is open, **SK3** is *Navigate Back* and **V4** scrolls, with a push to load.
+sits on `Shift` + `5-8`, which is where it ships: that key has no job of its own in
+this view. **UF1 Presets** (*Hardware Modes*) is in the picker as well, for a key of
+your choosing. While it is open, **SK3** is *Navigate Back* and **V4** scrolls, with a
+push to load.
 
 ## Meter view
 
@@ -1159,7 +1161,7 @@ Surface-side handling of the REAPER Master bus. See **Master track** (own chapte
 
 | Control | Effect |
 |---|---|
-| Announce the soft-key bank on the time display | On by default. Switching the UF1's soft-key bank flashes the bank's name across the ten-cell time field for about a second, the same way a format change flashes *BARS* / *TIME* / *SAMPLES*, and the clock comes back by itself. Holding SHIFT counts as a switch, because a modifier set is a bank of its own; if that set simply takes Plain's bank its name is the same one, and nothing flashes. A bank you named in *Settings → Bindings → UF1* shows that name; a dynamic bank shows what kind it is (`EFFECTS`, `GROUPS`, `COLOURS`, `FAVS`); an unnamed static bank shows its number (`SOFT 3`). |
+| Announce the soft-key bank on the time display | On by default. Switching the UF1's soft-key bank flashes the bank's name across the ten-cell time field for about a second, the same way a format change flashes *BARS* / *TIME* / *SAMPLES*, and the clock comes back by itself. Holding SHIFT counts as a switch, because a modifier set is a bank of its own; if that set simply takes Plain's bank its name is the same one, and nothing flashes. A bank you named in *Settings → Bindings → UF1* shows that name; a dynamic bank shows what kind it is (`EFFECTS`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`, `HUE`, `OBS`); an unnamed static bank shows its number (`SOFT 3`). |
 | Start the UF1 in a fixed view | Off by default, and the UF1 comes back up in the view you last left it in. Ticking it pins whichever view the UF1 is showing at that moment instead; the combo below changes it to Plug-in, DAW, Meter or Sends. Either way the view is applied once, on the first timer tick that sees the UF1, so plugging the device in mid-session engages it too. The last-used view is remembered globally, not per project: which view the surface shows belongs to the surface, not to the session you happen to open. |
 
 ### Keyboard
