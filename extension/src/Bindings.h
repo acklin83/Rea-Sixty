@@ -386,6 +386,13 @@ struct ActionStep {
     // the one a press will fire. Empty = fall back to the binding's
     // top-level Binding::label.
     std::string label;
+    // A NAME instead of a number, for the actions that would rather have one.
+    // `param` counts positions, and a position moves the moment the thing it
+    // counts is reordered somewhere else — an OBS scene dragged up the list in
+    // OBS takes every key bound to its number with it. A name survives that.
+    // Only read by builtins that ask for the whole step (runWithStep) and say
+    // so with BuiltinDescriptor::usesText; everything else ignores it.
+    std::string textParam;
     // MIDI command fields — read only when `type == Midi`.
     //   midiDevice  output device name (REAPER GetMIDIOutputName, "" = all)
     //   midiChannel 1..16 (stored 1-based for human-readability)
@@ -789,6 +796,16 @@ struct BuiltinDescriptor {
     std::string displayName;   // human-friendly label for the picker UI
     bool        usesParam = false;  // hide param field in UI when false
     RunWithStep runWithStep;
+    // The editor shows a text field for this action, and the action reads it
+    // through runWithStep as ActionStep::textParam. Placed after runWithStep so
+    // the positional initializers already in main.cpp keep working.
+    bool        usesText = false;
+    // The LED twin of runWithStep: a builtin whose meaning depends on the
+    // step's text cannot answer "am I on" from the int alone. Optional; when
+    // it is empty the int stateOf is asked, which is what every existing
+    // builtin does.
+    using StateOfStep = std::function<bool(const ActionStep& step)>;
+    StateOfStep stateOfStep;
 
     // Device scope, stated at the REGISTRATION site: bit0 = UF8, bit1 = UC1,
     // bit2 = UF1. 0 = not stated, fall back to builtinDeviceMask()'s
@@ -863,6 +880,13 @@ bool    builtinShownForId(const std::string& name, ButtonId id);
 // Whether this builtin reads its `param` arg. UI uses this to hide the
 // param column for buttons whose action is param-less.
 bool builtinUsesParam(const std::string& name);
+// True for builtins that read ActionStep::textParam through runWithStep — the
+// editor shows a name field for those.
+bool builtinUsesText(const std::string& name);
+// State for a slot whose step is at hand: asks stateOfStep when the builtin has
+// one, else the int stateOf with the step's param. Prefer this wherever the
+// caller holds the step — a name-bound action needs it to light correctly.
+bool builtinStateOfStep(const std::string& name, const ActionStep& step);
 
 // Resolve a builtin's "is currently active?" state — used by the LED
 // pusher so a button bound to e.g. `encoder_instance` lights bright

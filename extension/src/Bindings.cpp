@@ -1392,6 +1392,10 @@ void serializeStepFields_(const ActionStep& s, std::ostringstream& os)
         os << ", \"label\": ";
         appendEscaped(os, s.label);
     }
+    if (!s.textParam.empty()) {
+        os << ", \"text\": ";
+        appendEscaped(os, s.textParam);
+    }
     // ⇨ KEEP THE MIDI FIELDS EVEN WHEN THE STEP IS NOT (CURRENTLY) MIDI.
     // The editor saves on every keystroke, so flipping a configured MIDI step to
     // REAPER for a moment wrote the step without its midi block and the device,
@@ -1984,6 +1988,8 @@ bool parseStepFields_(wdl_json_element* obj, ActionStep& out)
         if (auto* s = v->get_string_value(true)) out.param = std::atoi(s);
     if (auto* v = obj->get_item_by_name("label"))
         if (auto* s = v->get_string_value()) out.label = s;
+    if (auto* v = obj->get_item_by_name("text"))
+        if (auto* s = v->get_string_value()) out.textParam = s;
     if (auto* v = obj->get_item_by_name("wait_ms"))
         if (auto* s = v->get_string_value(true)) out.wait_ms = std::atoi(s);
     if (auto* v = obj->get_item_by_name("fire_on_inactive"))
@@ -6263,6 +6269,13 @@ bool builtinUsesParam(const std::string& name)
     return it->second.usesParam;
 }
 
+bool builtinUsesText(const std::string& name)
+{
+    auto it = g_builtins.find(name);
+    if (it == g_builtins.end()) return false;
+    return it->second.usesText;
+}
+
 // Single source of truth for built-in → category grouping. The Settings
 // action picker (SettingsScreen) and the Stream Deck bridge both call this so
 // the two can never drift. Keep in sync with builtinCategoryOrder() below.
@@ -7544,11 +7557,21 @@ bool builtinStateOf(const std::string& name, int param)
     return it->second.stateOf(param);
 }
 
+bool builtinStateOfStep(const std::string& name, const ActionStep& step)
+{
+    auto it = g_builtins.find(name);
+    if (it == g_builtins.end()) return false;
+    if (it->second.stateOfStep) return it->second.stateOfStep(step);
+    if (it->second.stateOf)     return it->second.stateOf(step.param);
+    return false;
+}
+
 bool builtinHasState(const std::string& name)
 {
     auto it = g_builtins.find(name);
     if (it == g_builtins.end()) return false;
-    return static_cast<bool>(it->second.stateOf);
+    return static_cast<bool>(it->second.stateOf)
+        || static_cast<bool>(it->second.stateOfStep);
 }
 
 void setActiveLayer(int layer)

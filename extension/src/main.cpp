@@ -28928,7 +28928,7 @@ static bool uf1BindingLedState_(const uf8::bindings::Binding& bd,
         if (modSlot.type == uf8::bindings::ActionType::Builtin
             && uf8::bindings::builtinHasState(modSlot.action)) {
             stateful = true;
-            active = uf8::bindings::builtinStateOf(modSlot.action, modSlot.param);
+            active = uf8::bindings::builtinStateOfStep(modSlot.action, modSlot);
         } else if (modSlot.type == uf8::bindings::ActionType::Reaper
                    && !modSlot.action.empty()) {
             int aid = std::atoi(modSlot.action.c_str());
@@ -36834,7 +36834,7 @@ static bool actionSlotActive_(const uf8::bindings::ActionSlot& s)
             case AT::Noop: return false;
             case AT::Builtin:
                 return uf8::bindings::builtinHasState(s.action)
-                    && uf8::bindings::builtinStateOf(s.action, s.param);
+                    && uf8::bindings::builtinStateOfStep(s.action, s);
             case AT::Reaper: {
                 if (s.action.empty()) return false;
                 int aid = std::atoi(s.action.c_str());
@@ -37464,7 +37464,7 @@ void pushUf8GlobalLeds()
             const auto& sp = bd.shortPress[
                 static_cast<int>(uf8::bindings::Modifier::Plain)];
             if (sp.type != uf8::bindings::ActionType::Builtin) return false;
-            return uf8::bindings::builtinStateOf(sp.action, sp.param);
+            return uf8::bindings::builtinStateOfStep(sp.action, sp);
         };
         static int sLastNav   = -1;
         static int sLastNudge = -1;
@@ -47555,20 +47555,36 @@ void registerBindingHandlers()
         },
         nullptr, "OBS: chapter mark in the recording", false
     });
-    registerBuiltin("obs_scene_recall", DescBuilder{
-        [](bool firing, bool /*pressed*/, int param) {
+    // ⇨ A NAME BEATS A NUMBER, and both are kept. The number counts positions
+    // in OBS's scene list, and a position moves the moment the list is
+    // reordered in OBS — every key bound to it then fires the wrong scene
+    // without a word. A name survives that, so the step's text field wins when
+    // it is filled and the number stays for the bindings that already use it.
+    // The LED asks the same question the press does, so the two can never
+    // disagree about which scene the key means.
+    {
+        auto obsSceneName = [](const uf8::bindings::ActionStep& st) {
+            if (!st.textParam.empty()) return st.textParam;
+            return reasixty::obs::manager().sceneAt(st.param - 1);  // 1-based
+        };
+        BuiltinDescriptor d{
+            [](bool /*firing*/, bool /*pressed*/, int /*param*/) {},  // see runWithStep
+            nullptr,                                                  // see stateOfStep
+            "OBS: switch to scene", true
+        };
+        d.runWithStep = [obsSceneName](bool firing, bool /*pressed*/,
+                                       const uf8::bindings::ActionStep& st) {
             if (!firing) return;
-            auto& om = reasixty::obs::manager();
-            const std::string nm = om.sceneAt(param - 1);   // param is 1-based
-            if (!nm.empty()) om.switchScene(nm);
-        },
-        [](int param) {
-            auto& om = reasixty::obs::manager();
-            const std::string nm = om.sceneAt(param - 1);
-            return !nm.empty() && nm == om.currentScene();
-        },
-        "OBS: switch to scene", true
-    });
+            const std::string nm = obsSceneName(st);
+            if (!nm.empty()) reasixty::obs::manager().switchScene(nm);
+        };
+        d.usesText = true;
+        d.stateOfStep = [obsSceneName](const uf8::bindings::ActionStep& st) {
+            const std::string nm = obsSceneName(st);
+            return !nm.empty() && nm == reasixty::obs::manager().currentScene();
+        };
+        registerBuiltin("obs_scene_recall", std::move(d));
+    }
 
     // Explicit "back to Norm" — bind to the Norm/CLEAR hardware button.
     // Always sets Norm (no toggle); pressing it from Norm is a no-op

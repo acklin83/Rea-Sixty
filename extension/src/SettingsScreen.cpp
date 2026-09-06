@@ -3012,6 +3012,9 @@ struct ActionFieldsRef {
     // null; the picker hides the step/wrap widgets in that case.
     float*                      stepValue      = nullptr;
     bool*                       wrap           = nullptr;
+    // A NAME instead of a number, for the builtins that ask for one
+    // (builtinUsesText). Optional like the two above.
+    std::string*                textParam      = nullptr;
 };
 
 // ---- Keyboard-macro capture ------------------------------------------------
@@ -4038,6 +4041,54 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 ImGui_PopItemWidth(ctx);
             }
         }
+        // ---- a NAME instead of a number --------------------------------
+        // For builtins that declare usesText. The field is free text on
+        // purpose: OBS is usually not running while a rig is being set up, and
+        // a scene that does not exist yet still has to be bindable. When the
+        // link IS up, the combo above it fills the field from what OBS reports,
+        // so nobody has to spell a scene name by hand.
+        if (f.textParam && uf8::bindings::builtinUsesText(*f.action)) {
+            if (*f.action == "obs_scene_recall") {
+                const std::vector<std::string> sc = reasixty::obs::manager().scenes();
+                snprintf(idbuf, sizeof(idbuf), "Scene##%s_obspick", prefix);
+                const std::string preview =
+                    f.textParam->empty() ? std::string("(by number)") : *f.textParam;
+                double cw = 220;
+                ImGui_PushItemWidth(ctx, cw);
+                if (ImGui_BeginCombo(ctx, idbuf, preview.c_str(), nullptr)) {
+                    bool none = f.textParam->empty();
+                    if (ImGui_Selectable(ctx, "(by number)", &none,
+                                         nullptr, nullptr, nullptr)) {
+                        f.textParam->clear();
+                        dirty = true;
+                    }
+                    for (const std::string& nm : sc) {
+                        bool sel = (*f.textParam == nm);
+                        if (ImGui_Selectable(ctx, nm.c_str(), &sel,
+                                             nullptr, nullptr, nullptr)) {
+                            *f.textParam = nm;
+                            dirty = true;
+                        }
+                    }
+                    if (sc.empty())
+                        ImGui_TextDisabled(ctx, "OBS is not connected");
+                    ImGui_EndCombo(ctx);
+                }
+                ImGui_PopItemWidth(ctx);
+            }
+            char tbuf[128];
+            snprintf(tbuf, sizeof(tbuf), "%s", f.textParam->c_str());
+            snprintf(idbuf, sizeof(idbuf), "Name##%s_btext", prefix);
+            int tflags = 0;
+            double tw = 220;
+            ImGui_PushItemWidth(ctx, tw);
+            if (ImGui_InputText(ctx, idbuf, tbuf, sizeof(tbuf), &tflags, nullptr)) {
+                *f.textParam = tbuf;
+                dirty = true;
+            }
+            ImGui_PopItemWidth(ctx);
+            ImGui_TextDisabled(ctx, "Empty = use the number above.");
+        }
         ImGui_Unindent(ctx, nullptr);
     }
 
@@ -4185,7 +4236,7 @@ bool drawStepPicker_(ImGui_Context* ctx, const char* prefix,
         &st.midiDevice, &st.midiChannel, &st.midiMsgType,
         &st.midiData1, &st.midiData2,
         &st.fireOnInactive,
-        &st.stepValue, &st.wrap,
+        &st.stepValue, &st.wrap, &st.textParam,
     };
     return drawActionPicker(ctx, prefix, ref, layer, id, isLongPress,
                             modIdx, stepIdx,
@@ -5340,7 +5391,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
         &sp.midiDevice, &sp.midiChannel, &sp.midiMsgType,
         &sp.midiData1, &sp.midiData2,
         &sp.fireOnInactive,
-        &sp.stepValue, &sp.wrap,
+        &sp.stepValue, &sp.wrap, &sp.textParam,
     };
     if (drawActionPicker(ctx, idtag, ref,
                          /*layer*/ -1, ButtonId::None,
@@ -5593,7 +5644,7 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
         &sp.midiDevice, &sp.midiChannel, &sp.midiMsgType,
         &sp.midiData1, &sp.midiData2,
         &sp.fireOnInactive,
-        &sp.stepValue, &sp.wrap,
+        &sp.stepValue, &sp.wrap, &sp.textParam,
     };
     if (drawActionPicker(ctx, idtag, ref,
                          // Real id, not None: builtinDeviceForId(None) falls through

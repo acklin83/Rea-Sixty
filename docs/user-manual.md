@@ -2828,7 +2828,7 @@ The password is stored the way every other setting is, in clear text in REAPER's
 - **OBS: start / stop recording** — the lamp follows what OBS reports, not what the key asked for. Stop the recording in OBS itself and the lamp goes out on its own.
 - **OBS: pause / resume recording** — the file stays one file.
 - **OBS: chapter mark in the recording** — drops a chapter mark so the take is findable in the edit. OBS numbers them. Chapter marks want one of the Hybrid formats; on anything else OBS refuses and the status line says so.
-- **OBS: switch to scene**, with the scene number as its parameter, counted in OBS's own order.
+- **OBS: switch to scene** — pick the scene **by name** in the editor's drop-down, which lists what OBS is showing right now, or type a name if OBS is not running yet. The number underneath still works and is what older bindings use, but a number counts positions, and positions move the moment you reorder the scene list in OBS. A name does not.
 
 ## Scenes on eight keys
 
