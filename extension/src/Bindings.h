@@ -638,6 +638,12 @@ enum class DynamicBankKind : uint8_t {
     // of the six places in a set.
     CsFavourites = 7,
     BcFavourites = 8,
+    // The scenes OBS is showing, live from obs-websocket. Not curated like the
+    // Hue slots: OBS's scene list IS the row, in OBS's own order, and the key
+    // that is lit is the scene on air. A rig with more than eight scenes shows
+    // the first eight — the surface has eight keys and OBS has no notion of a
+    // page.
+    ObsScenes    = 9,
 };
 
 // ⛔ THE PARSER'S UPPER BOUND LIVES HERE, NOT IN THE PARSER. Both loaders check
@@ -645,7 +651,7 @@ enum class DynamicBankKind : uint8_t {
 // a new kind was accepted by the editor, written to disk, and then silently
 // dropped on the next load — the bank came back static and nothing said why.
 // Adding a kind means moving this line, and only this line.
-constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::BcFavourites;
+constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::ObsScenes;
 
 struct UserQuickSubBank {
     Binding slots[kSlotsPerSubBank];   // top-soft-key positions

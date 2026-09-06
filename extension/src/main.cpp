@@ -91,6 +91,7 @@
 #include "MidiBridge.h"
 #include "DynaMountManager.h"
 #include "HueManager.h"
+#include "ObsManager.h"
 #include "StreamDeckBridge.h"
 #include "SslCoreImpersonator.h"
 #include "uf1_loudness_chrome.h"
@@ -6994,6 +6995,17 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
         info.rgb    = hm.sceneSlot(slot).rgb;
         return info;
     }
+    // ⛔ SAME REASON, SAME PLACE: an OBS scene has nothing to do with the
+    // focused track either, so it resolves before the guard below.
+    if (kind == DK::ObsScenes) {
+        auto& om = reasixty::obs::manager();
+        const std::string nm = om.sceneAt(slot);
+        if (nm.empty()) return info;                 // fewer scenes than keys
+        info.present = true;
+        info.label   = nm;
+        info.led     = (nm == om.currentScene()) ? 2 : 1;
+        return info;
+    }
     if (!tr) return info;
     switch (kind) {
         case DK::FxBank:
@@ -7447,6 +7459,18 @@ static void applyDynBankReq_(uint32_t enc)
     // Ahead of the track guard, same reason as the resolver: a scene is not a
     // property of the focused track.
     if (kind == DK::HueScenes) { applyDynBankHueSceneOp_(slot, gesture); return; }
+    if (kind == DK::ObsScenes) {
+        // Plain push only. The other gestures stay free: a scene has one
+        // reading, and OBS's own second one (preview) belongs to studio mode,
+        // which this bank does not pretend to drive.
+        if (gesture != 0) return;
+        auto& om = reasixty::obs::manager();
+        const std::string nm = om.sceneAt(slot);
+        if (nm.empty()) return;
+        om.switchScene(nm);
+        uf1FlashTimecode_(nm, 1200);
+        return;
+    }
     MediaTrack* tr = favContextTrack_();
     if (!tr) return;
     switch (kind) {
@@ -28155,6 +28179,7 @@ static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod,
         case DynamicBankKind::CsFavourites: return withSet("CS Favourites");
         case DynamicBankKind::BcFavourites: return withSet("BC Favourites");
         case DynamicBankKind::HueScenes:    return withSet("Hue");
+        case DynamicBankKind::ObsScenes:    return withSet("OBS");
         default: break;
     }
     // ⇨ THE FALLBACK NAMES THE SET AND THE BANK. The UF1 falls back to "SOFT 3"
@@ -28240,6 +28265,7 @@ static std::string uf1BankDisplayName_(int bank, int mod)
         // K, M, V, W and X do not exist there, and a word this field cannot draw
         // does not fail loudly, it just reads as a different word.
         case DynamicBankKind::HueScenes:    return "HUE";
+        case DynamicBankKind::ObsScenes:    return "OBS";
         default: break;
     }
     char b[16];
@@ -37623,6 +37649,8 @@ void pushTouchLearnFeedback_()
 // run that repaints the room every time you hit space would make every scene
 // you recalled by hand pointless, which is the opposite of what the lights are
 // for (Frank 2026-08-26: "dann sind ja eh alle szenen hinfällig").
+// Also carries the OBS marker cues now: the same crossing, read once (see the
+// marker block below).
 static void tickHueTransport_()
 {
     auto& hm = uf8::hue::manager();
@@ -37641,6 +37669,18 @@ static void tickHueTransport_()
     // not. Costs one atomic exchange per tick when nothing changed.
     if (hm.takeConfigDirty())
         SetExtState("rea_sixty", "hue_config", hm.serialize().c_str(), true);
+
+    // The OBS link saves the same way and for the same reason: its worker
+    // changes persisted state too (a failed connection is not a reason to
+    // forget the host), and the pane must not be the one that writes.
+    {
+        auto& om = reasixty::obs::manager();
+        if (om.takeConfigDirty()) {
+            SetExtState("rea_sixty", "obs_config", om.serialize().c_str(), true);
+            SetExtState("rea_sixty", "obs_key",
+                        om.serializeCredentials().c_str(), true);
+        }
+    }
 
     // ---- recording light ---------------------------------------------------
     {
@@ -37663,9 +37703,21 @@ static void tickHueTransport_()
     // moment in the take, not a place on the ruler.
     {
         const uf8::hue::MarkerConfig mc = hm.markers();
+        // ⇨ ONE WALK, TWO CONSUMERS. A marker named "obs: Wide" switches the OBS
+        // scene the same way "hue: Relax" recalls a room, and both read the same
+        // crossing on the same tick. Two loops would mean two answers to "did we
+        // just pass it", and the second one would drift.
+        // The link atomic stands in for "is OBS switched on": the worker parks
+        // it at Off whenever the feature is disabled, and reading it costs no
+        // lock, which a per-tick config() would.
+        auto&      om      = reasixty::obs::manager();
+        const bool obsCues = om.link() != reasixty::obs::LinkState::Off;
         static double sLastPos = -1.0;
         const bool rolling = (GetPlayState() & 1) != 0;
-        if (!mc.enabled || !rolling) { sLastPos = rolling ? GetPlayPosition() : -1.0; return; }
+        if ((!mc.enabled && !obsCues) || !rolling) {
+            sLastPos = rolling ? GetPlayPosition() : -1.0;
+            return;
+        }
 
         const double pos = GetPlayPosition();
         const double prev = sLastPos;
@@ -37685,6 +37737,17 @@ static void tickHueTransport_()
             if (isrgn || !name || !*name) continue;
             if (mpos <= prev || mpos > pos) continue;      // not crossed this tick
             const std::string n = name;
+            if (obsCues && n.rfind("obs:", 0) == 0) {
+                std::string want = n.substr(4);
+                while (!want.empty() && want.front() == ' ') want.erase(0, 1);
+                while (!want.empty() && want.back() == ' ')  want.pop_back();
+                if (!want.empty()) {
+                    om.switchScene(want);
+                    uf1FlashTimecode_(want, 1200);
+                }
+                continue;                       // an OBS cue is not a Hue cue
+            }
+            if (!mc.enabled) continue;
             if (n.rfind(mc.prefix, 0) != 0) continue;
             const std::string want = n.substr(mc.prefix.size());
             if (want.empty()) continue;
@@ -47462,6 +47525,51 @@ void registerBindingHandlers()
         "Hue: recording light on / off", false
     });
 
+    // ---- OBS ---------------------------------------------------------------
+    // Everything here only POSTS: the manager's queue is drained by its own
+    // worker, so a key press never waits for a socket. The LED reads the state
+    // OBS reports, not the state we asked for — pressing record while OBS is
+    // busy leaves the lamp dark, which is the honest answer.
+    registerBuiltin("obs_record_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            reasixty::obs::manager().toggleRecord();
+        },
+        [](int) { return reasixty::obs::manager().recording(); },
+        "OBS: start / stop recording", false
+    });
+    registerBuiltin("obs_record_pause", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            reasixty::obs::manager().toggleRecordPause();
+        },
+        [](int) { return reasixty::obs::manager().paused(); },
+        "OBS: pause / resume recording", false
+    });
+    registerBuiltin("obs_chapter_marker", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            // No name: OBS numbers them itself, and the input thread has no
+            // business asking REAPER what the current marker is called.
+            reasixty::obs::manager().chapter(std::string());
+        },
+        nullptr, "OBS: chapter mark in the recording", false
+    });
+    registerBuiltin("obs_scene_recall", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            auto& om = reasixty::obs::manager();
+            const std::string nm = om.sceneAt(param - 1);   // param is 1-based
+            if (!nm.empty()) om.switchScene(nm);
+        },
+        [](int param) {
+            auto& om = reasixty::obs::manager();
+            const std::string nm = om.sceneAt(param - 1);
+            return !nm.empty() && nm == om.currentScene();
+        },
+        "OBS: switch to scene", true
+    });
+
     // Explicit "back to Norm" — bind to the Norm/CLEAR hardware button.
     // Always sets Norm (no toggle); pressing it from Norm is a no-op
     // change but still forces a re-push so the LED layer stays in sync.
@@ -50706,6 +50814,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         // Same for the Hue worker: it may be mid-request against a bridge that
         // is not answering, and stop() is what lets it out of the poll loop.
         uf8::hue::manager().stop();
+        // Same again for the OBS link: the worker may be sitting in a socket
+        // read, and run_ going false is what ends the pass.
+        reasixty::obs::manager().stop();
         // Stop the Stream Deck bridge server + join its worker thread.
         uf8::sdbridge::stop();
         // Stop the SSL Core impersonator worker (no-op if it never started).
@@ -50848,6 +50959,21 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
             hm.deserialize(blob);
         if (const char* key = GetExtState("rea_sixty", "hue_key"); key && *key)
             hm.deserializeCredentials(key);
+    }
+
+    initLog("step: load OBS config");
+    // Same split and the same reason: the password lives in its own value so a
+    // shared setup bundle can carry the host and port without it. The worker is
+    // started either way and idles while the feature is off, so switching it on
+    // in Settings needs no restart.
+    {
+        auto& om = reasixty::obs::manager();
+        if (const char* blob = GetExtState("rea_sixty", "obs_config");
+            blob && *blob)
+            om.deserialize(blob);
+        if (const char* key = GetExtState("rea_sixty", "obs_key"); key && *key)
+            om.deserializeCredentials(key);
+        om.start();
     }
 
     initLog("step: deploy input-level JSFX");

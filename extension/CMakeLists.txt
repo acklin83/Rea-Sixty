@@ -403,6 +403,13 @@ add_library(reaper_uf8 MODULE
     src/HueColor.cpp
     src/HueClient.cpp
     src/HueManager.cpp
+    # OBS Mode — recording, chapter marks and scenes over obs-websocket v5.
+    # Own WebSocket and own SHA-256 because the tree has neither and a vendored
+    # library would cost notarisation and ReaPack what this costs in lines.
+    src/Sha256.cpp
+    src/WsClient.cpp
+    src/ObsProto.cpp
+    src/ObsManager.cpp
     src/StreamDeckBridge.cpp
     # SSL 360°Core impersonator — meter data straight from the SSL plug-in.
     # Self-contained (std lib only, no REAPER API); this is what supplies the
@@ -788,6 +795,14 @@ if(NOT WIN32)
         target_link_libraries(test_hue PRIVATE ${CMAKE_DL_LIBS})
     endif()
     add_test(NAME hue COMMAND test_hue)
+
+    # SHA-256 against the FIPS vectors, the login string against the shape the
+    # obs-websocket document spells out, and the message parsers against real
+    # frames. All of it pure: no socket is opened by this test.
+    add_executable(test_obs tests/test_obs.cpp
+        src/Sha256.cpp src/ObsProto.cpp)
+    target_include_directories(test_obs PRIVATE src "${WDL_DIR}")
+    add_test(NAME obs COMMAND test_obs)
 
     add_executable(test_ssl_meter tests/test_ssl_meter.cpp src/SslMeterProtocol.cpp)
     target_include_directories(test_ssl_meter PRIVATE src)

@@ -20,6 +20,7 @@
 #include "KeyMacro.h"
 #include "DynaMountManager.h"
 #include "HueManager.h"
+#include "ObsManager.h"
 #include "GrCalibration.h"
 #include "KnobFeelPresets.h"
 #include "ParameterGroups.h"
@@ -1238,6 +1239,7 @@ static const char* dynKindLabel_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::CsFavourites: return "CS Favourites";
         case DynamicBankKind::BcFavourites: return "BC Favourites";
         case DynamicBankKind::HueScenes:   return "Hue Scenes";
+        case DynamicBankKind::ObsScenes:   return "OBS Scenes";
         default:                           return "Off (static slots)";
     }
 }
@@ -1267,6 +1269,7 @@ static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::CsFavourites: return "CS FAVS";
         case DynamicBankKind::BcFavourites: return "BC FAVS";
         case DynamicBankKind::HueScenes:   return "HUE";
+        case DynamicBankKind::ObsScenes:   return "OBS";
         default:                           return "";
     }
 }
@@ -5235,6 +5238,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                     DynamicBankKind::ParamGroups, DynamicBankKind::TrackColours,
                     DynamicBankKind::Favourites,  DynamicBankKind::HueScenes,
                     DynamicBankKind::CsFavourites, DynamicBankKind::BcFavourites,
+                    DynamicBankKind::ObsScenes,
                 };
                 for (const auto k : kKinds) {
                     bool sel = (k == dynMine);
@@ -6344,6 +6348,7 @@ static void renderBankMatrixContextMenu_(ImGui_Context* ctx)
             { DynamicBankKind::CsFavourites, "CS Favourites" },
             { DynamicBankKind::BcFavourites, "BC Favourites" },
             { DynamicBankKind::HueScenes,    "Hue Scenes" },
+            { DynamicBankKind::ObsScenes,    "OBS Scenes" },
         };
         const DynamicBankKind cur =
             getSubBankDynamic(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod);
@@ -7381,6 +7386,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 { DynamicBankKind::CsFavourites, "CS Favourites" },
                 { DynamicBankKind::BcFavourites, "BC Favourites" },
                 { DynamicBankKind::HueScenes,    "Hue Scenes" },
+                { DynamicBankKind::ObsScenes,    "OBS Scenes" },
             };
             // This set's OWN kind — "Off" on a set means "take Plain's bank".
             const DynamicBankKind curKind =
@@ -21628,6 +21634,131 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
 // Persists to ExtState "rea_sixty"/"hue_config"; the application key lives apart
 // in "hue_key" so a shared setup bundle can carry the slots without carrying the
 // credentials.
+// ---- OBS Mode -------------------------------------------------------------
+// Host, port, password, and what the link is doing. Everything else about OBS
+// lives on the keys: the actions in Bindings and the scene row as a dynamic
+// bank. Same division as Hue, and the same rule about saving — the pane never
+// writes ExtState, tickHueTransport_ does when takeConfigDirty() says so.
+static void drawObsTab_(ImGui_Context* ctx)
+{
+    using namespace reasixty::obs;
+    auto& om = manager();
+
+    ImGui_Text(ctx, "OBS Studio");
+    ImGui_Spacing(ctx);
+    ImGui_TextDisabled(ctx,
+        "Recording, chapter marks and scene switching over obs-websocket. "
+        "Switch the server on in OBS under Tools, WebSocket Server Settings.");
+    ImGui_Spacing(ctx);
+
+    Config cfg = om.config();
+
+    bool on = cfg.enabled;
+    if (ImGui_Checkbox(ctx, "Talk to OBS##obs_on", &on)) {
+        cfg.enabled = on;
+        om.setConfig(cfg);
+    }
+
+    // The link says what it is doing, in the same three colours the Hue pane
+    // uses: green connected, yellow trying, red gave up.
+    {
+        const LinkState st = om.link();
+        int colour = 0x808080FF;
+        switch (st) {
+            case LinkState::Ready:      colour = 0x5EC27AFF; break;
+            case LinkState::Failed:     colour = 0xD97B6CFF; break;
+            case LinkState::Connecting: colour = 0xE8C33AFF; break;
+            default: break;
+        }
+        ImGui_TextColored(ctx, colour, "\xE2\x97\x8F");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        std::string line = om.status();
+        if (line.empty()) line = "off";
+        ImGui_Text(ctx, line.c_str());
+    }
+
+    ImGui_Spacing(ctx);
+
+    {
+        static char  s_host[128] = {0};
+        static std::string s_hostSeen;
+        if (s_hostSeen != cfg.host) {          // adopt what the config holds
+            s_hostSeen = cfg.host;
+            std::snprintf(s_host, sizeof(s_host), "%s", cfg.host.c_str());
+        }
+        int f = 0;
+        ImGui_SetNextItemWidth(ctx, 200.0);
+        if (ImGui_InputText(ctx, "Host##obs_host", s_host, sizeof(s_host),
+                            &f, nullptr)) {
+            cfg.host   = s_host;
+            s_hostSeen = cfg.host;
+            om.setConfig(cfg);
+        }
+        int port = cfg.port;
+        ImGui_SetNextItemWidth(ctx, 140.0);
+        if (ImGui_InputInt(ctx, "Port##obs_port", &port, nullptr, nullptr, nullptr)) {
+            cfg.port = port;
+            om.setConfig(cfg);
+        }
+    }
+
+    {
+        static char  s_pw[128] = {0};
+        static std::string s_pwSeen;
+        const std::string pw = om.password();
+        if (s_pwSeen != pw) {
+            s_pwSeen = pw;
+            std::snprintf(s_pw, sizeof(s_pw), "%s", pw.c_str());
+        }
+        int f = ImGui_InputTextFlags_Password;   // enum, not a getter here
+        ImGui_SetNextItemWidth(ctx, 200.0);
+        if (ImGui_InputText(ctx, "Password##obs_pw", s_pw, sizeof(s_pw),
+                            &f, nullptr)) {
+            om.setPassword(s_pw);
+            s_pwSeen = s_pw;
+        }
+        ImGui_TextDisabled(ctx,
+            "Kept in the same place as every other setting, in clear text. "
+            "Leave it empty if you switch authentication off in OBS.");
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    // What OBS says back, so a wrong password or a missing scene is visible
+    // here rather than only on the keys.
+    {
+        const std::vector<std::string> sc = om.scenes();
+        const std::string cur = om.currentScene();
+        char hdr[64];
+        std::snprintf(hdr, sizeof(hdr), "Scenes (%d)", static_cast<int>(sc.size()));
+        ImGui_Text(ctx, hdr);
+        if (sc.empty()) {
+            ImGui_TextDisabled(ctx, "None yet. They arrive when the link is up.");
+        } else {
+            for (size_t i = 0; i < sc.size(); ++i) {
+                const bool live = (sc[i] == cur);
+                char row[160];
+                std::snprintf(row, sizeof(row), "%s %d  %s",
+                              live ? "\xE2\x96\xB6" : " ",
+                              static_cast<int>(i) + 1, sc[i].c_str());
+                if (live) ImGui_TextColored(ctx, 0x5EC27AFF, row);
+                else      ImGui_Text(ctx, row);
+            }
+        }
+        ImGui_Spacing(ctx);
+        if (ImGui_Button(ctx, "Read the scenes again##obs_refresh", nullptr, nullptr))
+            om.refreshScenes();
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_TextDisabled(ctx,
+        "Put the scenes on eight keys with a dynamic bank of kind OBS Scenes. "
+        "A marker named \"obs: Wide\" switches to that scene as the playhead "
+        "passes it, forwards and only while rolling.");
+}
+
 static void drawHueTab_(ImGui_Context* ctx)
 {
     using namespace uf8::hue;
@@ -22471,7 +22602,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     if (s_savedTab < 0) {
         const char* saved = GetExtState("rea_sixty", "modes_subtab");
         s_savedTab = (saved && *saved) ? std::atoi(saved) : 0;
-        if (s_savedTab < 0 || s_savedTab > 6) s_savedTab = 0;
+        if (s_savedTab < 0 || s_savedTab > 7) s_savedTab = 0;
         s_lastWritten   = s_savedTab;
         s_savedConsumed = false;
     }
@@ -23173,6 +23304,14 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     if (ImGui_BeginTabItem(ctx, "Hue", nullptr, &flagsHue)) {
         persistActive(6);
         drawHueTab_(ctx);
+        ImGui_EndTabItem(ctx);
+    }
+
+    // --- OBS Mode ---------------------------------------------------
+    int flagsObs = tabFlagsFor(7);
+    if (ImGui_BeginTabItem(ctx, "OBS", nullptr, &flagsObs)) {
+        persistActive(7);
+        drawObsTab_(ctx);
         ImGui_EndTabItem(ctx);
     }
 

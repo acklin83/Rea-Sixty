@@ -6417,6 +6417,9 @@ const char* builtinCategory(const std::string& n)
     if (n.rfind("sticky_pot_", 0) == 0)
         return "Sticky Pot";
 
+    if (n.rfind("obs_", 0) == 0)
+        return "OBS";
+
     return "";
 }
 
@@ -6712,6 +6715,19 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "learn_hud_toggle",
       "Shows or hides the Learn HUD, the on-screen map of the focused "
       "plug-in's assignments." },
+    { "obs_record_toggle",
+      "Starts or stops the recording in OBS. The lamp follows what OBS "
+      "reports, so it lights when OBS is really running, not when the key "
+      "was pressed." },
+    { "obs_record_pause",
+      "Pauses the OBS recording, or lets it run on. The file stays one "
+      "file." },
+    { "obs_chapter_marker",
+      "Drops a chapter mark into the recording OBS is writing, so the take "
+      "is findable in the edit. OBS numbers them." },
+    { "obs_scene_recall",
+      "Switches OBS to scene `param` (1 for the first in OBS's list). Lit "
+      "while that scene is the one on air." },
     { "sticky_pot_get_next",
       "Arms the pin: the next plug-in parameter you touch becomes that "
       "track's V-Pot pin. Pressing the V-Pot while armed clears it "
@@ -6961,6 +6977,9 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "jog_fade_follow_toggle",
       "Fades mode: whether the view follows the fade you are working on. "
       "Switching it off restores the view you had." },
+    { "jog_fade_xfade_editor_toggle",
+      "Fades mode: whether REAPER's crossfade editor comes up while the edge "
+      "you aim at is a crossfade. It closes again on a plain fade." },
     { "jog_zoom_selection",
       "Zooms to the current selection, and back out on a second press." },
     { "jog_content_drag",
@@ -7207,6 +7226,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "jog_fade_down", "Fade Down" },
     { "jog_fade_down_add", "FadeDwn Add" },
     { "jog_fade_follow_toggle", "Fade Follow" },
+    { "jog_fade_xfade_editor_toggle", "XFade Edit" },
     { "jog_fade_left", "Fade <" },
     { "jog_fade_left_add", "Fade < Add" },
     { "jog_fade_nav_toggle", "Fade Nav" },
@@ -7347,6 +7367,10 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "ssl_softkey", "SSL Soft-Key" },
     { "ssl_strip_mode_toggle", "Strip Mode" },
     { "ssl_strip_mode_toggle_with_gui", "Strip + GUI" },
+    { "obs_record_toggle", "OBS Rec" },
+    { "obs_record_pause", "OBS Pause" },
+    { "obs_chapter_marker", "OBS Chapter" },
+    { "obs_scene_recall", "OBS Scene" },
     { "sticky_pot_get_next", "Pin Sticky" },
     { "sticky_pot_pair", "Pair Sticky" },
     { "sticky_pot_toggle", "Sticky OnOff" },
@@ -7445,7 +7469,7 @@ const std::vector<const char*>& builtinCategoryOrder()
         "Hardware Modes", "Plug-in", "Layer", "Soft-Key Bank", "SSL",
         "Bank / Page", "Automation", "Zoom", "Sends / Receives",
         "Selection Sets", "Parameter Groups", "Tracks", "Master",
-        "Brightness", "Modifiers", "FX Param", "Sticky Pot", "Hue",
+        "Brightness", "Modifiers", "FX Param", "Sticky Pot", "Hue", "OBS",
     };
     return kCats;
 }

@@ -2809,6 +2809,43 @@ Rea-Sixty talks to the bridge the ordinary way, which is fast enough for a fader
 
 \newpage
 
+# OBS
+
+Recording, chapter marks and scene switching from the surface, so a take starts and ends with a key instead of a trip to the keyboard.
+
+## Connecting
+
+**Settings → Modes → OBS.**
+
+In OBS, open *Tools → WebSocket Server Settings* and switch the server on. Note the port and the password it shows you. Then, in Rea-Sixty: tick **Talk to OBS**, put in the host (`127.0.0.1` when OBS runs on the same computer), the port, and the password. The dot goes green when the two are talking, amber while it is trying, red when OBS stopped answering. A link that drops is retried every few seconds on its own.
+
+If you switch authentication off in OBS, leave the password field empty.
+
+The password is stored the way every other setting is, in clear text in REAPER's settings file, and it is kept apart from the rest so a shared setup does not carry it.
+
+## The actions
+
+- **OBS: start / stop recording** — the lamp follows what OBS reports, not what the key asked for. Stop the recording in OBS itself and the lamp goes out on its own.
+- **OBS: pause / resume recording** — the file stays one file.
+- **OBS: chapter mark in the recording** — drops a chapter mark so the take is findable in the edit. OBS numbers them. Chapter marks want one of the Hybrid formats; on anything else OBS refuses and the status line says so.
+- **OBS: switch to scene**, with the scene number as its parameter, counted in OBS's own order.
+
+## Scenes on eight keys
+
+Give a soft-key bank the dynamic kind **OBS Scenes**. The keys then read your scene names, live, and the one on air is lit. Pressing one switches. More than eight scenes means the first eight are on the keys; the surface has eight and OBS has no notion of a page.
+
+## Marker cues
+
+Name a marker `obs: Wide` and OBS switches to the scene called *Wide* when the playhead passes it. The name flashes on the UF1's time field as it happens.
+
+Same rules as the Hue cues, and for the same reason: forwards only, and only while the transport rolls. Dragging back past three cues fires nothing.
+
+## What this does not do
+
+Streaming, the replay buffer, the virtual camera and muting single sources are not wired. The link is there, so they are a small job each, but nothing is bound to them today.
+
+\newpage
+
 # Stream Deck and Companion
 
 Rea-Sixty carries a small server — the **bridge** — that external control apps talk to. Two clients use it: an official **Stream Deck plugin**, and a community **Bitfocus Companion module**. Both let you fire any Rea-Sixty action from a button and read live meters back.

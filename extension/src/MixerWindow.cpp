@@ -278,6 +278,7 @@ constexpr SearchEntry kSearchIndex[] = {
     { "NAV",                                   kSecModes,           "" },
     { "Nudge",                                 kSecModes,           "" },
     { "Dynamount",                             kSecModes,           "" },
+    { "OBS",                                   kSecModes,           "" },
     { "FX Learn",                              kSecFxLearn,         "" },
     // The three modifier-layer flags moved out of Behaviour → Keyboard into
     // the FX Learn pane (2026-08-09), so they are indexed control-deep even
