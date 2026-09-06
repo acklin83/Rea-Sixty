@@ -2831,7 +2831,8 @@ bool invokeBuiltin(const std::string& name, int param)
 // through the active Jog Mode, so an older config has NO binding for it until
 // upgradeBackfillUf1Buttons_ seeds them — that pass now runs for < 28 too.
 // v34 (2026-09-01): UserQuick::name — a Soft-Key SET now has a name and a number
-// of its own (1..7, softKeySetToLayerQuick). The number is what a binding points
+// of its own (1..9 since the SSL rows joined as 8 and 9, softKeySetToLayerQuick;
+// this line said 1..7 until they did). The number is what a binding points
 // at, so a set can be engaged from any key instead of only from its Quick button.
 // Additive: an unnamed set reads as "Set N", which is what every set was before.
 // v33 (2026-09-01): UserQuickSubBank::name — the UF1's bank name, now for the
