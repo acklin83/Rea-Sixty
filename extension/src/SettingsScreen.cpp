@@ -183,6 +183,8 @@ double      reasixty_uf1JogFadeCurveStep();
 void        reasixty_setUf1JogFadeCurveStep(double v);
 bool        reasixty_uf1FadeFollow();
 void        reasixty_setUf1FadeFollow(bool on);
+bool        reasixty_uf1FadeXfadeEditor();
+void        reasixty_setUf1FadeXfadeEditor(bool on);
 double      reasixty_uf1FadeFollowMin();
 void        reasixty_setUf1FadeFollowMin(double v);
 double      reasixty_uf1JogStep(int mode);
@@ -4537,6 +4539,12 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                 if (ImGui_InputDouble(ctx, "Closest view (s)##jog", &fm, &md, &mf, "%.2f", &fl))
                     reasixty_setUf1FadeFollowMin(fm);
             }
+            bool xe = reasixty_uf1FadeXfadeEditor();
+            if (ImGui_Checkbox(ctx, "Show REAPER's crossfade editor##jog", &xe))
+                reasixty_setUf1FadeXfadeEditor(xe);
+            ImGui_TextDisabled(ctx,
+                "Only while the edge you aim at has a neighbour. It shows the "
+                "selected items' crossfade, so with none selected it stays empty.");
         }
         // Per-mode TIME axis unit + amount, for the live mode only. Razor (4)
         // has no time axis at the wheel, so it shows none of this.

@@ -4996,6 +4996,9 @@ enum class Uf1JogActionOp : uint8_t {
     // Switching the follow zoom OFF has to give the view back, and the arrange
     // view is main-thread-only, so the toggle posts this instead of touching it.
     FadeFollowRestore,
+    // Same shape for the crossfade editor: closing it creates/destroys a REAPER
+    // window, which the input thread must not do.
+    FadeXfadeEditorClose,
 };
 constexpr uint8_t kUf1JogActionShiftBit = 0x80;
 
@@ -5292,6 +5295,13 @@ std::atomic<bool>   g_uf1FadeFollow{true};
 // you completely, so the window never gets tighter than this whatever the fade
 // measures. ExtState "uf1FadeFollowMin".
 std::atomic<double> g_uf1FadeFollowMinSec{0.5};
+// REAPER'S OWN CROSSFADE EDITOR, optional (Frank 2026-09-06). The wheel changes
+// a crossfade blind; REAPER has a window that draws exactly the thing being
+// changed. Shown only while the AIMED EDGE is a crossfade, which is the rule the
+// whole mode runs on: the edge decides, there is no separate crossfade target.
+// Default OFF, because it takes screen away from the arrange view the follow
+// zoom just framed. ExtState "uf1FadeXfadeEditor".
+std::atomic<bool>   g_uf1FadeXfadeEditor{false};
 // The view we took over, given back when the mode is left or the option goes
 // off. Same contract as the nav-centre spotlight zoom.
 std::atomic<bool>   g_uf1FadeFollowStashed{false};
@@ -9835,7 +9845,9 @@ static void uf1JogNavCenterToggle_(Uf1JogMode mode)
 
 static void uf1FadeStepShapeSelection_(int dir);   // defined with the Fades core, below
 static void uf1FadeFollowFrame_(bool force);      //   "
+static void uf1FadeAimChanged_(bool force);       //   "
 void        uf1FadeFollowRestore_();              //   "
+void        uf1XfadeEditorClose_();               //   "
 
 // Walking to another TRACK also has a vertical axis to keep in the picture, and
 // REAPER has the action for it. Horizontal framing follows, in that order, so
@@ -9843,7 +9855,7 @@ void        uf1FadeFollowRestore_();              //   "
 static void uf1FadeFollowTrack_()
 {
     if (g_uf1FadeFollow.load()) Main_OnCommand(40913, 0);   // scroll selected tracks into view
-    uf1FadeFollowFrame_(true);
+    uf1FadeAimChanged_(true);
 }
 
 // Route a NAV-cross press by the active Jog Mode. code = strip byte: bits0-1 axis
@@ -9872,11 +9884,11 @@ void applyUf1JogNav_(uint8_t code, int dir)
         if (axis == 2) {
             g_uf1FadeCrossWalks.store(!g_uf1FadeCrossWalks.load());
         } else if (g_uf1FadeCrossWalks.load()) {
-            if (axis == 0) { uf1SelectAdjacentItem_(dir, shift); uf1FadeFollowFrame_(true); }
+            if (axis == 0) { uf1SelectAdjacentItem_(dir, shift); uf1FadeAimChanged_(true); }
             else           { uf1SelectItemAdjacentTrack_(dir, shift); uf1FadeFollowTrack_(); }
         } else if (axis == 0) {
             g_uf1FadeOutEdge.store(dir > 0);
-            uf1FadeFollowFrame_(true);
+            uf1FadeAimChanged_(true);
         } else {
             uf1FadeStepShapeSelection_(dir);
         }
@@ -9959,12 +9971,12 @@ static void applyUf1JogAction_(uint8_t op8, double value)
         case Op::FadeLeft:
             if (g_uf1FadeCrossWalks.load()) uf1SelectAdjacentItem_(-1, shift);
             else { g_uf1FadeOutEdge.store(false); g_pageDirty.store(true); }
-            uf1FadeFollowFrame_(true);
+            uf1FadeAimChanged_(true);
             break;
         case Op::FadeRight:
             if (g_uf1FadeCrossWalks.load()) uf1SelectAdjacentItem_(+1, shift);
             else { g_uf1FadeOutEdge.store(true); g_pageDirty.store(true); }
-            uf1FadeFollowFrame_(true);
+            uf1FadeAimChanged_(true);
             break;
         case Op::FadeUp:
             if (g_uf1FadeCrossWalks.load()) { uf1SelectItemAdjacentTrack_(+1, shift);
@@ -9981,6 +9993,7 @@ static void applyUf1JogAction_(uint8_t op8, double value)
             g_pageDirty.store(true);
             break;
         case Op::FadeFollowRestore: uf1FadeFollowRestore_(); break;
+        case Op::FadeXfadeEditorClose: uf1XfadeEditorClose_(); break;
 
         case Op::ZoomSelection:
             uf1JogNavCenterToggle_(g_uf1JogMode.load());
@@ -11764,6 +11777,65 @@ void uf1FadeFollowRestore_()
     if (b > a) GetSet_ArrangeView2(nullptr, true, 0, 0, &a, &b);
 }
 
+// ---- REAPER's crossfade editor -------------------------------------------
+// ⛔ WE CLOSE ONLY WHAT WE OPENED, and this flag is the WHOLE truth about that.
+// REAPER has no "is the crossfade editor open" query — GetToggleCommandState2's
+// section 32065 answers for the editor's own ACTIONS, not for its window — so
+// there is nothing to reconcile against. Consequences, both harmless and both
+// deliberate: a window the user had open before we arrived is never touched
+// (we never opened it, so we never close it), and if the user closes ours by
+// hand our next close is a no-op until we open one again.
+// Main thread only: CrossfadeEditor_Show creates a window.
+static bool g_uf1XfadeEditorOwned = false;
+
+static void uf1XfadeEditorShow_(bool show)
+{
+    if (show == g_uf1XfadeEditorOwned) return;
+    // The pointer is null on a REAPER too old to have the graphical crossfade
+    // editor. REAPERAPI_LoadAPI proceeds past missing symbols by design (it had
+    // to, see the note at its call site), so an unguarded call there is a crash,
+    // not a no-op. The option then simply does nothing.
+    if (!CrossfadeEditor_Show) return;
+    CrossfadeEditor_Show(show);
+    g_uf1XfadeEditorOwned = show;
+}
+
+// Non-static: the settings setter, the bindable toggle and the mode edge all
+// need it, and they live thousands of lines away. Same reason uf1FadeFollowRestore_
+// is not static.
+void uf1XfadeEditorClose_() { uf1XfadeEditorShow_(false); }
+
+// Is the aimed edge a crossfade? Then the editor belongs on screen, else not.
+// uf1FadeSite_ already answers it: b != nullptr IS "there is a neighbour at this
+// edge", which is the definition of a crossfade in this mode.
+//
+// ⛔ EVENT-DRIVEN, NEVER PER TICK. Resolving the site walks every item on the
+// track (uf1FadeNeighbourAt_), and paying that thirty times a second so a window
+// can appear a few milliseconds earlier is the wrong trade. It runs where the
+// follow zoom re-frames, which is exactly where the aim changed.
+static void uf1FadeXfadeEditorSync_()
+{
+    if (!g_uf1FadeXfadeEditor.load()) return;       // option off: never touch the window
+    if (g_uf1JogMode.load() != Uf1JogMode::Fades) { uf1XfadeEditorShow_(false); return; }
+    bool cross = false;
+    const bool outEdge = g_uf1FadeOutEdge.load();
+    for (MediaItem* it : uf1FadeItems_()) {
+        if (!it || !ValidatePtr2(nullptr, it, "MediaItem*")) continue;
+        MediaItem *a = nullptr, *b = nullptr;
+        uf1FadeSite_(it, outEdge, &a, &b);
+        if (b) { cross = true; break; }
+    }
+    uf1XfadeEditorShow_(cross);
+}
+
+// "I am aimed at something else now" — one name for the two consequences, so a
+// new call site cannot pick up the framing and forget the window.
+static void uf1FadeAimChanged_(bool force)
+{
+    uf1FadeFollowFrame_(force);
+    uf1FadeXfadeEditorSync_();
+}
+
 // Fade SHAPE stepping from the nav cross (↑ ↓), across the whole target set.
 // Its own entry point rather than a branch in the wheel dispatch, because the
 // cross fires once per press while the wheel arrives in detents.
@@ -11825,7 +11897,7 @@ void applyUf1JogFades_(int count, double timeDelta)
         if (b) uf1FadeResizeCross_(a, b, lenDelta);
         else   uf1FadeResizeManual_(a, outEdge, lenDelta);
     }
-    uf1FadeFollowFrame_(false);
+    uf1FadeAimChanged_(false);
     UpdateArrange();
 }
 
@@ -40444,6 +40516,7 @@ void onTimerBody_()
             if (sPrevJogMode != jmNow) {
                 if (sPrevJogMode == static_cast<int>(Uf1JogMode::Fades))
                     uf1FadeFollowRestore_();
+                uf1XfadeEditorClose_();     // the window goes with the mode
                 sPrevJogMode = jmNow;
             }
         }
@@ -44541,6 +44614,15 @@ void reasixty_setUf1FadeFollow(bool on)
     g_uf1FadeFollow.store(on);
     SetExtState("rea_sixty", "uf1FadeFollow", on ? "1" : "0", true);
     if (!on) uf1FadeFollowRestore_();   // Settings runs on the main thread
+}
+bool reasixty_uf1FadeXfadeEditor() { return g_uf1FadeXfadeEditor.load(); }
+void reasixty_setUf1FadeXfadeEditor(bool on)
+{
+    g_uf1FadeXfadeEditor.store(on);
+    SetExtState("rea_sixty", "uf1FadeXfadeEditor", on ? "1" : "0", true);
+    // Switching it off takes the window with it, the same way switching the
+    // follow zoom off gives the view back. Settings runs on the main thread.
+    if (!on) uf1XfadeEditorClose_();
 }
 double reasixty_uf1FadeFollowMin() { return g_uf1FadeFollowMinSec.load(); }
 void   reasixty_setUf1FadeFollowMin(double v)
@@ -50094,6 +50176,19 @@ void registerBindingHandlers()
         [](int) { return g_uf1FadeFollow.load(); },
         "Fades: follow the fade with the view", true
     });
+    registerBuiltin("jog_fade_xfade_editor_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const bool on = !g_uf1FadeXfadeEditor.load();
+            g_uf1FadeXfadeEditor.store(on);
+            SetExtState("rea_sixty", "uf1FadeXfadeEditor", on ? "1" : "0", true);
+            if (!on) queueInput({PendingInput::Uf1JogAction,
+                                 static_cast<uint8_t>(JA::FadeXfadeEditorClose), 1.0});
+            g_pageDirty.store(true);
+        },
+        [](int) { return g_uf1FadeXfadeEditor.load(); },
+        "Fades: show REAPER's crossfade editor", true
+    });
     registerBuiltin("jog_zoom_selection", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
@@ -50948,6 +51043,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     }
     if (const char* v = GetExtState("rea_sixty", "uf1FadeFollow"); v && *v)
         g_uf1FadeFollow.store(std::atoi(v) != 0);
+    if (const char* v = GetExtState("rea_sixty", "uf1FadeXfadeEditor"); v && *v)
+        g_uf1FadeXfadeEditor.store(std::atoi(v) != 0);
     if (const char* v = GetExtState("rea_sixty", "uf1FadeFollowMin"); v && *v) {
         const double d = std::atof(v); if (d > 0.0) g_uf1FadeFollowMinSec.store(d);
     }

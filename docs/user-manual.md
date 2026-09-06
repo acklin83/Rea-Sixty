@@ -937,6 +937,15 @@ put back.
 This is on out of the box. Turn it off in *Settings → Bindings → UF1*, on the jog
 wheel's own page, or put **Fades: follow the fade with the view** on a key.
 
+On the same page sits **Show REAPER's crossfade editor**, off by default. With it
+on, REAPER's own crossfade window comes up whenever the edge you are aiming at
+has a neighbour, which is what makes that fade a crossfade, and goes away again
+when you aim at a plain fade. It shows the crossfade of the **selected items**,
+so it fills when you are working from a selection and stays empty when you are
+working from the edit cursor. A window you had open yourself is never closed by
+this: only the one it opened goes when you leave the mode or switch the option
+off. It is on a key as well, as **Fades: show REAPER's crossfade editor**.
+
 \newpage
 
 # Settings window
@@ -2178,6 +2187,9 @@ actions rather than beside them.
   LED is lit while the cross is walking.
 - **Fades: follow the fade with the view** turns the following view on and off.
   It is on by default, and switching it off puts back the view you started from.
+- **Fades: show REAPER's crossfade editor** turns that window on and off. Off by
+  default; it appears only while the aimed edge is a crossfade, and switching it
+  off closes the one it opened.
 
 Two that are not tied to a single object:
 
