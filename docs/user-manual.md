@@ -1289,6 +1289,8 @@ Right-click the bank's cell in the matrix and open **Dynamic bank**. The kinds a
 | `CS / BC Favourites (follows focus)` | Your eight favourites of whichever domain you last touched |
 | `CS Favourites` | The eight Channel Strip favourites, whatever you are focused on |
 | `BC Favourites` | The eight Bus Compressor favourites, the same way |
+| `Hue Scenes` | Your eight Hue scene slots, each key in its scene's colour |
+| `OBS Scenes` | The scenes OBS is showing, by name, the one on air lit |
 
 The three favourite kinds differ in one thing only. The first follows the focus, which is what you want when one bank should serve both. The other two do not, so a rig can carry its channel strips on one bank and its bus comps on another and both are always what they say. All three read the plug-in's short name onto the key, live, and light the key that is on the track.
 
@@ -1297,7 +1299,7 @@ The choice is stored per bank, so each of the six banks in a set can be dynamic 
 A dynamic bank announces itself in three places, so you never edit slots that cannot fire:
 
 - The bank's selector key on the schematic (V-POT / Soft 1-5) carries an **amber tick** in its top-right corner. The matrix cell itself stays plain.
-- The eight scribble strips above it read the bank's kind (`FX`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`) rather than the stored slot labels, because those labels never reach the hardware while the bank is dynamic.
+- The eight scribble strips above it read the bank's kind (`FX`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`, `HUE`, `OBS`) rather than the stored slot labels, because those labels never reach the hardware while the bank is dynamic.
 - Clicking any of the eight keys shows what the bank computes instead of a slot editor, with the same **Dynamic bank** dropdown and the same settings the cell shows, so you can switch it back to static, or tune the palette or the FX paging, without hunting for the cell.
 
 On Sets 8 and 9 it depends on the page. A dynamic bank computes all eight keys, so it can only go where the plug-in claims none of them: the bus comp's four empty pages take one, the pages SSL fills do not. Every page of the other seven sets can.
@@ -1379,7 +1381,7 @@ If you had named these keys before the palette moved to the hardware colours, th
 
 **If a bank stays blank**
 
-With no track focused or selected, a dynamic bank goes blank and dark and its keys do nothing — there is no context to compute from. Hue Scenes is the exception: a scene has nothing to do with a track, so that kind resolves and fires either way.
+With no track focused or selected, a dynamic bank goes blank and dark and its keys do nothing — there is no context to compute from. The two scene kinds are the exception: a Hue scene belongs to a room and an OBS scene to OBS, neither to a track, so those two resolve and fire either way.
 
 One historical case: Rea-Sixty briefly had a **Sends** dynamic bank, which was removed. A configuration saved while it existed still loads, but the bank stays permanently blank. Set it to something else, or back to `Off (static slots)`.
 
@@ -1423,7 +1425,7 @@ Bindings storage paths:
 
 **This pane configures how the Selection Modes behave when they are active.** Each sub-tab corresponds to one Selection Mode (or one cycle behaviour) — switching Selection Modes on the hardware uses the modes themselves; this pane only sets their per-mode options.
 
-Seven sub-tabs: AUTO · FX / Cycle · REC · NAV · Nudge · DynaMount · Hue.
+Eight sub-tabs: AUTO · FX / Cycle · REC · NAV · Nudge · DynaMount · Hue · OBS.
 
 ### AUTO
 
