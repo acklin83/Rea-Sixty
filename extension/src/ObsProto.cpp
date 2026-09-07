@@ -1,3 +1,7 @@
+// ⛔ NO QUALIFIED std::snprintf IN THIS FILE. WDL defines snprintf as a macro
+// expanding to WDL_snprintf on MSVC, so `std::snprintf(...)` is rewritten to
+// `std::WDL_snprintf(...)`, which is not a member of std and fails only on the
+// Windows build. Same note, same reason, as at the top of HueClient.cpp.
 #include "ObsProto.h"
 
 #include "JsonTree.h"
@@ -65,7 +69,7 @@ std::string jsonEscape(const std::string& s)
                 // UTF-8 included, travels as itself.
                 if (static_cast<unsigned char>(c) < 0x20) {
                     char b[8];
-                    std::snprintf(b, sizeof(b), "\\u%04x", c & 0xFF);
+                    snprintf(b, sizeof(b), "\\u%04x", c & 0xFF);
                     o += b;
                 } else {
                     o += c;

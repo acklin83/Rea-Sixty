@@ -21762,17 +21762,21 @@ static void drawObsTab_(ImGui_Context* ctx)
     ImGui_Spacing(ctx);
 
     {
-        static char  s_host[128] = {0};
+        // ⛔ NOT s_host. winsock's <in_addr> carries `#define s_host S_un.S_un_b`,
+        // and this file sees windows.h through the REAPER/SWELL headers — so the
+        // declaration expanded to `static char S_un.S_un_b[128]` and only the
+        // MSVC build died. Same family as s_addr, s_net, s_imp, s_impno, s_lh.
+        static char  s_obsHost[128] = {0};
         static std::string s_hostSeen;
         if (s_hostSeen != cfg.host) {          // adopt what the config holds
             s_hostSeen = cfg.host;
-            std::snprintf(s_host, sizeof(s_host), "%s", cfg.host.c_str());
+            std::snprintf(s_obsHost, sizeof(s_obsHost), "%s", cfg.host.c_str());
         }
         int f = 0;
         ImGui_SetNextItemWidth(ctx, 200.0);
-        if (ImGui_InputText(ctx, "Host##obs_host", s_host, sizeof(s_host),
+        if (ImGui_InputText(ctx, "Host##obs_host", s_obsHost, sizeof(s_obsHost),
                             &f, nullptr)) {
-            cfg.host   = s_host;
+            cfg.host   = s_obsHost;
             s_hostSeen = cfg.host;
             om.setConfig(cfg);
         }
