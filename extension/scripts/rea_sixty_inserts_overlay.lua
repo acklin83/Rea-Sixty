@@ -137,13 +137,20 @@ local function readActive()
   if raw == "" then return false, 0, {} end
   local on  = (raw:match("^(%d);") == "1")
   local rev = tonumber(raw:match("^%d;(%d+);")) or 0
+  -- Third field: bumped ONLY when a published FX slot moved. `rev` counts every
+  -- mute, solo and touch during mixing, which is why a bare rev bump does not
+  -- rescan (see the want-set trigger below) — but an FX sliding into an empty
+  -- slot keeps its chain index and changes its ROW, so the map has to be
+  -- re-measured or the highlight stays on the row the FX left. Absent on an
+  -- older extension, which then behaves exactly as before.
+  local lrev = tonumber(raw:match("^%d;%d+;(%d+);")) or 0
   local byGuid = {}
   -- Per-track entry: guid,csSlot,bcSlot,selSlot. selSlot = the surface-focused
   -- FX that is NOT a CS/BC (-1 when none) → the blue "selected FX" box.
   for guid, cs, bc, sel in raw:gmatch("({[%x%-]+}),(%-?%d+),(%-?%d+),(%-?%d+)") do
     byGuid[guid] = { cs = tonumber(cs), bc = tonumber(bc), sel = tonumber(sel) }
   end
-  return on, rev, byGuid
+  return on, rev, byGuid, lrev
 end
 
 ------------------------------------------------------------------------
@@ -704,6 +711,7 @@ end
 local g_lastSig, g_blocks, g_lastRev = nil, {}, -1
 local g_lastWant = nil                      -- want-set fingerprint at last scan
 local g_blockCache = {}                     -- guid → block list (positional cache)
+local g_lastLayoutRev = -1                  -- last seen slot-move counter
 local g_lastScroll, g_lastCount = nil, -1   -- cheap rescan triggers
 local g_emptyTick = 0                       -- slow retry while no target found
 local g_liveTick  = 0                       -- throttle for the block-liveness check
@@ -785,7 +793,7 @@ local shutdown
 local function loop()
   if reaper.GetExtState("rea_sixty", RUNKEY) ~= "1" then return shutdown() end
   g_tickCounter = g_tickCounter + 1
-  local on, rev, byGuid = readActive()
+  local on, rev, byGuid, lrev = readActive()
   if not on or next(byGuid) == nil then
     if g_lastSig ~= "off" then clearDrawn(); g_lastSig = "off" end
   else
@@ -828,6 +836,16 @@ local function loop()
         -- those don't move fxlist windows. See wantFp(). Frank 2026-06-27.
         local wantNow = wantFp(byGuid)
         need = wantNow ~= g_lastWant or ntrk ~= g_lastCount
+        -- ⇨ AND ON A SLOT MOVE. lrev moves only when a published FX changed its
+        -- visual slot, so this is rare and always warranted — unlike `rev`. The
+        -- cached block carries the stale row map, so the entry has to go as well
+        -- or the rescan reuses it and nothing is re-measured (the same trap the
+        -- rowsStale_ branch below documents).
+        if lrev ~= g_lastLayoutRev then
+          g_lastLayoutRev = lrev
+          g_blockCache = {}
+          need = true
+        end
         -- No target yet (mixer hidden / strip scrolled off) → slow ~1 Hz retry,
         -- never per-tick, so a closed mixer can't re-introduce lag.
         if next(g_blocks) == nil then

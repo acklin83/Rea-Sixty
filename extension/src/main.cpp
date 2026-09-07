@@ -15174,6 +15174,8 @@ void clearAllInsertMarkers_()
 // Main-thread-only (same path as the marker engine).
 std::string g_overlayPublishedSig;   // last on-flag + entries, sans rev
 int         g_overlayRev = 0;
+// Bumped only when a published FX SLOT changed — the overlay rescans on it.
+int g_overlayLayoutRev = 0;
 
 // Separate, lightweight publisher for the dockable readout panel: the GUID of
 // the surface-focused track (section "rea_sixty", key "overlay_focus",
@@ -15528,18 +15530,31 @@ void publishOverlayState_()
     // instead of the index once put the highlight an insert too low on any chain
     // with a gap (2026-07-19), and that is not a lesson worth relearning.
     std::string sig = (on ? "1|" : "0|") + body;
-    {
-        char sl[64];
-        std::snprintf(sl, sizeof(sl), "|%d,%d,%d",
-                      (csTr && csFx >= 0) ? fxChainIndexToSlot_(csTr, csFx) : -1,
-                      (bcTr && bcFx >= 0) ? fxChainIndexToSlot_(bcTr, bcFx) : -1,
-                      (csTr && selFx >= 0) ? fxChainIndexToSlot_(csTr, selFx) : -1);
-        sig += sl;
-    }
+    char sl[64];
+    std::snprintf(sl, sizeof(sl), "|%d,%d,%d",
+                  (csTr && csFx >= 0) ? fxChainIndexToSlot_(csTr, csFx) : -1,
+                  (bcTr && bcFx >= 0) ? fxChainIndexToSlot_(bcTr, bcFx) : -1,
+                  (csTr && selFx >= 0) ? fxChainIndexToSlot_(csTr, selFx) : -1);
+    sig += sl;
+    // ⇨ AND A SECOND COUNTER, FOR THE ROWS THEMSELVES. Knowing the slot moved is
+    // enough to REPUBLISH, which the signature above already achieves, but not
+    // enough for the overlay to draw it in the right place: the body carries
+    // chain indices and the script looks them up in a row map it measured once.
+    // Slide an FX into an empty slot and the index is unchanged while its ROW is
+    // not, so the highlight was drawn over the row the FX had left, and only a
+    // later rescan put it right (Frank 2026-09-07, screenshots).
+    //
+    // `rev` cannot carry this: it counts every mute, solo and touch during
+    // mixing, and the script deliberately does not rescan on a bare rev bump.
+    // This one moves only when a slot actually moved, so a rescan on it is rare
+    // and always warranted.
+    static std::string s_lastSlotSig;
+    if (s_lastSlotSig != sl) { s_lastSlotSig = sl; ++g_overlayLayoutRev; }
     if (sig == g_overlayPublishedSig) return;   // nothing changed
     g_overlayPublishedSig = sig;
-    char head[48];
-    std::snprintf(head, sizeof(head), "%d;%d;", on ? 1 : 0, ++g_overlayRev);
+    char head[64];
+    std::snprintf(head, sizeof(head), "%d;%d;%d;", on ? 1 : 0, ++g_overlayRev,
+                  g_overlayLayoutRev);
     SetExtState("rea_sixty", "overlay", (std::string(head) + body).c_str(), false);
 }
 
