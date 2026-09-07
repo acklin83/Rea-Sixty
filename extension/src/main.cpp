@@ -42043,6 +42043,70 @@ int g_cmdJogModeCycle = 0, g_cmdJogModePlayhead = 0, g_cmdJogModeScrub = 0,
 // on the main thread, so uf1EncoderStepVisible_ (main-thread only) is safe here.
 // The register_t needs stable idStr/name storage: the tables hold the literals
 // and the register step fills the arrays from them.
+// ---- UF8 channel-encoder mode, one body for both routes -------------------
+// Leaving Nav Mode when the encoder is given another job: the overlay owns the
+// encoder while it is up, so switching mode has to take it down or the new mode
+// never gets a detent. Lifted to file scope so the REAPER actions below run the
+// same code as the encoder_* builtins instead of an "inline mirror" of it —
+// the UF1 pair has two copies and this is what that costs.
+static void uf8ExitNavModeIfActive_()
+{
+    auto& ov = uf8::nav::Overlay::instance();
+    if (!ov.active()) return;
+    ov.setActive(false);
+    ov.setViewLock(uf8::nav::ViewLock::None);
+    g_pageDirty.store(true);
+    g_bankDirty.store(true);
+    g_navOverlayDirty.store(true);
+    if (g_sync) g_sync->invalidate();
+}
+
+// Tapping a mode while it is already live returns to Channel Select — SSL 360°
+// behaviour (Frank 2026-05-19). Channel Select itself never toggles away.
+static void uf8SetEncoderMode_(EncoderMode target, const char* extKey)
+{
+    const bool already = (target != EncoderMode::ChSelect
+                          && g_encoderMode.load() == target);
+    const EncoderMode next = already ? EncoderMode::ChSelect : target;
+    g_encoderMode.store(next);
+    SetExtState("ReaSixty", "encoderMode", already ? "ChSelect" : extKey, true);
+    uf8ExitNavModeIfActive_();
+}
+
+// ⇨ THE UF8 ENCODER MODES AS REAPER ACTIONS TOO (Frank 2026-09-07). The UF1 has
+// had them since 2026-08-10; the UF8 only ever had the builtins, so its modes
+// were reachable from the surface but not from a keyboard shortcut, a foot
+// switch or a Stream Deck tile. The handlers already existed — this is the
+// registration they were missing.
+//
+// ⚠ No "next / previous" pair here, unlike the UF1's. That one steps the ring
+// the user configured for the UF1 (uf1EncoderStepVisible_); the UF8 has no such
+// visible order to step, its ring is the "Encoder Modes" factory soft-key bank.
+// Inventing an order for it would be a feature, not a registration.
+struct Uf8EncActionDef { EncoderMode mode; const char* extKey;
+                         const char* idStr; const char* name; };
+static const Uf8EncActionDef kUf8EncActions[] = {
+    { EncoderMode::ChSelect,          "ChSelect",          "REASIXTY_UF8_ENCODER_CH_SELECT",           "Rea-Sixty: UF8 Encoder \xE2\x86\x92 Channel Select" },
+    { EncoderMode::Instance,          "Instance",          "REASIXTY_UF8_ENCODER_INSTANCE",            "Rea-Sixty: UF8 Encoder \xE2\x86\x92 Instance Cycle" },
+    { EncoderMode::FxCycle,           "FxCycle",           "REASIXTY_UF8_ENCODER_FX_CYCLE",            "Rea-Sixty: UF8 Encoder \xE2\x86\x92 FX Cycle" },
+    { EncoderMode::FxMove,            "FxMove",            "REASIXTY_UF8_ENCODER_FX_MOVE",             "Rea-Sixty: UF8 Encoder \xE2\x86\x92 FX Move (in chain)" },
+    { EncoderMode::CsCycle,           "CsCycle",           "REASIXTY_UF8_ENCODER_CS_CYCLE",            "Rea-Sixty: UF8 Encoder \xE2\x86\x92 CS Cycle (Favourites)" },
+    { EncoderMode::BcCycle,           "BcCycle",           "REASIXTY_UF8_ENCODER_BC_CYCLE",            "Rea-Sixty: UF8 Encoder \xE2\x86\x92 BC Cycle (Favourites)" },
+    { EncoderMode::FavCycle,          "FavCycle",          "REASIXTY_UF8_ENCODER_FAV_CYCLE",           "Rea-Sixty: UF8 Encoder \xE2\x86\x92 Favourite Cycle (Focused Domain)" },
+    { EncoderMode::SelsetCycle,       "SelsetCycle",       "REASIXTY_UF8_ENCODER_SELSET_CYCLE",        "Rea-Sixty: UF8 Encoder \xE2\x86\x92 Selection Set Cycle" },
+    { EncoderMode::Markers,           "Markers",           "REASIXTY_UF8_ENCODER_MARKERS",             "Rea-Sixty: UF8 Encoder \xE2\x86\x92 Markers (prev / next)" },
+    { EncoderMode::Nudge,             "Nudge",             "REASIXTY_UF8_ENCODER_NUDGE",               "Rea-Sixty: UF8 Encoder \xE2\x86\x92 Nudge" },
+    { EncoderMode::Mousewheel,        "Mousewheel",        "REASIXTY_UF8_ENCODER_MOUSEWHEEL",          "Rea-Sixty: UF8 Encoder \xE2\x86\x92 Mousewheel" },
+    { EncoderMode::BankBy1,           "BankBy1",           "REASIXTY_UF8_ENCODER_BANK_BY_1",           "Rea-Sixty: UF8 Encoder \xE2\x86\x92 Bank by 1" },
+    { EncoderMode::LastParam,         "LastParam",         "REASIXTY_UF8_ENCODER_LAST_PARAM",          "Rea-Sixty: UF8 Encoder \xE2\x86\x92 Last Touched Param" },
+    { EncoderMode::FxScrollAll,       "FxScrollAll",       "REASIXTY_UF8_ENCODER_FX_SCROLL_ALL",       "Rea-Sixty: UF8 Encoder \xE2\x86\x92 FX Cycle (across tracks)" },
+    { EncoderMode::InstanceScrollAll, "InstanceScrollAll", "REASIXTY_UF8_ENCODER_INSTANCE_SCROLL_ALL", "Rea-Sixty: UF8 Encoder \xE2\x86\x92 Instance Cycle (across tracks)" },
+};
+constexpr int kUf8EncActionCount =
+    static_cast<int>(sizeof(kUf8EncActions) / sizeof(kUf8EncActions[0]));
+custom_action_register_t g_actionUf8Enc[kUf8EncActionCount];
+int g_cmdUf8Enc[kUf8EncActionCount] = { 0 };
+
 struct Uf1EncActionDef { EncoderMode mode; const char* idStr; const char* name; };
 static const Uf1EncActionDef kUf1EncActions[] = {
     { EncoderMode::ChSelect,          "REASIXTY_UF1_ENCODER_CH_SELECT",          "Rea-Sixty: UF1 Encoder \xE2\x86\x92 Channel Select" },
@@ -42474,6 +42538,14 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
         }
     }
     {
+        // UF8 channel-encoder mode. Calls the same body the encoder_* builtins
+        // call, so a shortcut and a surface key cannot drift apart.
+        for (int i = 0; i < kUf8EncActionCount; ++i) {
+            if (command != g_cmdUf8Enc[i] || command == 0) continue;
+            uf8SetEncoderMode_(kUf8EncActions[i].mode, kUf8EncActions[i].extKey);
+            g_pageDirty.store(true);
+            return true;
+        }
         // UF1 channel-encoder mode — inline mirror of the uf1_encoder_* builtins,
         // toggle semantics included (re-firing the live mode returns to Channel
         // Select; ChSelect itself never toggles away).
@@ -42580,6 +42652,9 @@ int toggleActionState(int command)
     for (int i = 0; i < kUf1EncActionCount; ++i)
         if (command == g_cmdUf1Enc[i] && command != 0)
             return g_uf1EncoderMode.load() == kUf1EncActions[i].mode ? 1 : 0;
+    for (int i = 0; i < kUf8EncActionCount; ++i)
+        if (command == g_cmdUf8Enc[i] && command != 0)
+            return g_encoderMode.load() == kUf8EncActions[i].mode ? 1 : 0;
     return -1;
 }
 
@@ -49193,22 +49268,14 @@ void registerBindingHandlers()
     // sollte aus dem Nav Mode exited werden"). Project-load /
     // setup-bundle paths bypass this — they restore saved state, not
     // user intent.
-    auto exitNavModeIfActive = []() {
-        auto& ov = uf8::nav::Overlay::instance();
-        if (!ov.active()) return;
-        ov.setActive(false);
-        ov.setViewLock(uf8::nav::ViewLock::None);
-        g_pageDirty.store(true);
-        g_bankDirty.store(true);
-        g_navOverlayDirty.store(true);
-        if (g_sync) g_sync->invalidate();
-    };
+    // Both bodies live at file scope now (uf8ExitNavModeIfActive_ /
+    // uf8SetEncoderMode_), because the REASIXTY_UF8_ENCODER_* actions run them
+    // too. One rule, two routes.
+    auto exitNavModeIfActive = []() { uf8ExitNavModeIfActive_(); };
     registerBuiltin("encoder_nav", DescBuilder{
-        [exitNavModeIfActive](bool firing, bool /*pressed*/, int /*param*/) {
+        [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            g_encoderMode.store(EncoderMode::ChSelect);
-            SetExtState("ReaSixty", "encoderMode", "ChSelect", true);
-            exitNavModeIfActive();
+            uf8SetEncoderMode_(EncoderMode::ChSelect, "ChSelect");
         },
         [](int) { return g_encoderMode.load() == EncoderMode::ChSelect; },
         "Encoder Mode → Channel Select", false
@@ -49218,13 +49285,8 @@ void registerBindingHandlers()
     // 2026-05-19 "push auf nav wenn aktiv schaltet ihn nicht aus").
     // Re-tap toggles off; the next physical encoder rotation lands on
     // Channel-Select again.
-    auto setOrToggleMode = [exitNavModeIfActive](EncoderMode target, const char* extKey) {
-        const bool already = (g_encoderMode.load() == target);
-        const EncoderMode next = already ? EncoderMode::ChSelect : target;
-        g_encoderMode.store(next);
-        SetExtState("ReaSixty", "encoderMode",
-                    already ? "ChSelect" : extKey, true);
-        exitNavModeIfActive();
+    auto setOrToggleMode = [](EncoderMode target, const char* extKey) {
+        uf8SetEncoderMode_(target, extKey);
     };
     registerBuiltin("encoder_nudge", DescBuilder{
         [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
@@ -51490,6 +51552,11 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         else if (std::strcmp(m, "FxCycle") == 0)       g_encoderMode.store(EncoderMode::FxCycle);
         else if (std::strcmp(m, "FxScrollAll") == 0)       g_encoderMode.store(EncoderMode::FxScrollAll);
         else if (std::strcmp(m, "InstanceScrollAll") == 0) g_encoderMode.store(EncoderMode::InstanceScrollAll);
+        // ⚠ FxMove was missing here while encoder_fx_move has always PERSISTED
+        // "FxMove" — so the mode fell through to the else and came back as
+        // Channel Select after every restart. Found while listing the modes for
+        // the REAPER actions (2026-09-07).
+        else if (std::strcmp(m, "FxMove") == 0)        g_encoderMode.store(EncoderMode::FxMove);
         else if (std::strcmp(m, "CsCycle") == 0)       g_encoderMode.store(EncoderMode::CsCycle);
         else if (std::strcmp(m, "BcCycle") == 0)       g_encoderMode.store(EncoderMode::BcCycle);
         else if (std::strcmp(m, "FavCycle") == 0)      g_encoderMode.store(EncoderMode::FavCycle);
@@ -51725,6 +51792,13 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         g_actionUf1Enc[i].name  = kUf1EncActions[i].name;
         g_actionUf1Enc[i].extra = nullptr;
         g_cmdUf1Enc[i] = plugin_register("custom_action", &g_actionUf1Enc[i]);
+    }
+    for (int i = 0; i < kUf8EncActionCount; ++i) {
+        g_actionUf8Enc[i].uniqueSectionId = 0;
+        g_actionUf8Enc[i].idStr = kUf8EncActions[i].idStr;
+        g_actionUf8Enc[i].name  = kUf8EncActions[i].name;
+        g_actionUf8Enc[i].extra = nullptr;
+        g_cmdUf8Enc[i] = plugin_register("custom_action", &g_actionUf8Enc[i]);
     }
     g_cmdUf1EncCycle = plugin_register("custom_action", &g_actionUf1EncCycle);
     g_cmdUf1EncPrev  = plugin_register("custom_action", &g_actionUf1EncPrev);

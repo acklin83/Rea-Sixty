@@ -186,7 +186,9 @@ When the cycle lands on a learned Instance the per-domain Instance index updates
 
 # Channel Encoder modes
 
-The large notched CHANNEL encoder (in the right-hand panel, pushable, with the cursor pad well below it rather than around it) runs one of fifteen modes. Switch with the corresponding **Encoder Mode → …** action. The current mode persists across REAPER restarts.
+The large notched CHANNEL encoder (in the right-hand panel, pushable, with the cursor pad well below it rather than around it) runs one of fifteen modes. Switch with the corresponding **Encoder Mode → …** action on a surface key, or from REAPER's own action list, where each mode has a **Rea-Sixty: UF8 Encoder → …** action for a keyboard shortcut, a foot switch or a Stream Deck tile. Either route shows the live mode as a ticked action. The current mode persists across REAPER restarts.
+
+Tapping the mode that is already live returns the encoder to Channel Select, which is what SSL 360° does. Channel Select itself does not toggle away.
 
 | Mode | Rotation acts on | Notes |
 |---|---|---|
