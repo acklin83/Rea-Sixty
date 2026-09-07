@@ -162,10 +162,10 @@ std::vector<uint8_t> buildLcdBrightness(uint8_t level) {
     return seal({kFrameMagic, 0x4F, 0x02, level, 0x00});
 }
 
-// Level 0x10 reproduces uf1_init_sequence.inc:157 including its 0x31 checksum.
-// See the header: this one is a candidate, not a decoded fact.
+// Level 0xff reproduces uf1_init_sequence.inc:160 including its 0x47 checksum.
+// See the header: a candidate, not a decoded fact, and the second one tried.
 std::vector<uint8_t> buildSmallLcdBrightness(uint8_t level) {
-    return seal({kFrameMagic, 0x1F, 0x02, level, 0x00});
+    return seal({kFrameMagic, 0x47, 0x01, level});
 }
 
 std::vector<uint8_t> buildScreen(uint16_t elementAddr, std::span<const uint8_t> payload) {

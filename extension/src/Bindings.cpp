@@ -6283,7 +6283,9 @@ std::string builtinDisplayName(const std::string& name)
 // name — a set deliberately does not, and rightly so.
 // Favourite switches get the same wording the factory bank uses ("BC Fav 8"),
 // so an unassigned favourite reads the same on either set. Everything else gets
-// its registered display name. Capped to the 12-char LCD width by the caller.
+// its curated twelve-character name, and only then the registered display
+// name, trimmed. The old comment said the caller caps it, which is true and
+// was not enough: a cap cuts a sentence mid-word, it does not shorten it.
 bool uf1ControlShowsLabel(ButtonId id)
 {
     return id == ButtonId::Uf1ChannelSoftKey
@@ -6303,8 +6305,21 @@ std::string softKeyFallbackLabel(const ActionSlot& sp)
             return buf;
         }
     }
-    if (sp.type == ActionType::Builtin)
-        return builtinDisplayName(sp.action);
+    if (sp.type == ActionType::Builtin) {
+        // ⇨ THE CURATED SHORT NAME FIRST, and this is the SECOND time that
+        // sentence has had to be written. autoLabelForAction_ in
+        // SettingsScreen.cpp learned it on 2026-09-02; this function, which
+        // feeds seven paint sites on three surfaces, was left on the long name
+        // and the OBS actions made it obvious ("OBS: start / stop recording"
+        // arrives as "OBS: start " on a twelve-character cell, Frank
+        // 2026-09-07). builtinDisplayName is the PICKER's sentence. Every
+        // builtin carries a twelve-character name in kBuiltinLabels for exactly
+        // this moment.
+        if (const char* sh = builtinShortLabel(sp.action); sh && *sh) return sh;
+        std::string d = builtinDisplayName(sp.action);
+        if (d.size() > 12) d.resize(12);
+        return d;
+    }
     return sp.action;   // REAPER command ids etc. — the user can name those
 }
 

@@ -159,23 +159,28 @@ std::vector<uint8_t> buildLedBrightness(uint8_t level);
 //   FF 4F 02 <b> 00 <ck>                         colour screen backlight
 std::vector<uint8_t> buildLcdBrightness(uint8_t level);
 
-// ⚠ CANDIDATE, NOT PROVEN. The UF1 has a second display, the small channel LCD
-// beside the fader, and 0x4F above does not touch it: at backlight 0 the big
-// screen and every LED went dark and that one stayed lit (Frank, at the device,
-// 2026-09-07).
+// ⚠ CANDIDATE, NOT PROVEN — second attempt.
+// The UF1 has a second display, the small channel LCD beside the fader, and
+// 0x4F above does not touch it: at backlight 0 the big screen and every LED go
+// dark and that one stays lit (Frank, at the device, 2026-09-07).
 //
-// What is actually known about this frame:
-//   · uf1_init_sequence.inc:157 sends `ff 1f 02 10 00 31` once, three frames
-//     before the LED master and the screen backlight — the shape of a third
-//     "set a brightness" in a group of them.
-//   · Its payload has the SAME shape as the proven 0x4F backlight, <b> 00.
-//   · Its init value 0x10 is the same level the LED master is set to.
-// What is NOT known: that it is a backlight at all. `ff 1f 02` occurs exactly
-// ONCE in the whole capture corpus, in cap66_uf1_init, and SSL never varies it
-// in any captured session, so nothing in the corpus can confirm the byte is a
-// level. The device is the only thing that can answer it.
+// ⛔ 0x1F IS NOT IT. `ff 1f 02 10 00` sits three frames before the LED master in
+// the init and has the same <b> 00 payload shape as the proven 0x4F, which made
+// it the obvious guess. Sending it as 0 changed nothing at the device. Recorded
+// here so nobody spends the same round again.
 //
-//   FF 1F 02 <b> 00 <ck>                         channel LCD backlight?
+// This is what is left in the init sequence that could carry a level:
+// uf1_init_sequence.inc:160 sends `ff 47 01 ff 47` once, directly after the two
+// known brightness frames, one payload byte at full scale. That adjacency and
+// that value are the whole case for it; the corpus cannot confirm more, because
+// a raw search for `ff 47 01` across the captures returns mostly coincidental
+// byte runs inside other payloads.
+//
+// If this one is wrong too, the small LCD has no brightness of its own and sleep
+// has to blank its CONTENT instead — which means a screen-owning mode and the
+// whole checklist that comes with it, not another opcode.
+//
+//   FF 47 01 <b> <ck>                            channel LCD backlight?
 std::vector<uint8_t> buildSmallLcdBrightness(uint8_t level);
 
 // Screen element write:

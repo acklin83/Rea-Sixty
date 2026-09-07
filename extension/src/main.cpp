@@ -4095,7 +4095,7 @@ int clampLevel_(int level)
 // does not go through the table or BL_Dark.
 constexpr uint8_t kUf1LedBrightnessInit = 0x10;   // uf1_init_sequence.inc:158
 constexpr uint8_t kUf1LcdBrightnessInit = 0x32;   // uf1_init_sequence.inc:159
-constexpr uint8_t kUf1SmallLcdBrightnessInit = 0x10;  // uf1_init_sequence.inc:157
+constexpr uint8_t kUf1SmallLcdBrightnessInit = 0xFF;  // uf1_init_sequence.inc:160
 
 constexpr int kSleepMinutesMin = 1;               // SSL's own range is 1..99
 constexpr int kSleepMinutesMax = 99;              // (uf8-manual-reference.md:55)
@@ -4828,9 +4828,9 @@ void pushSleepBrightness_(bool asleep)
         g_uf1_dev->send(uf1::buildLcdBrightness(
             asleep ? 0x00 : kUf1LcdBrightnessInit));
         // ⚠ The UF1 has a SECOND display. 0x4F above takes the big colour
-        // screen; the small channel LCD beside the fader stayed lit through the
-        // first device test. This is the candidate for it — see the note at
-        // buildSmallLcdBrightness. Restoring the init value on wake means a
+        // screen; the small channel LCD beside the fader stays lit. Candidate
+        // two for it — 0x1F was tried and disproven at the device. See the note
+        // at buildSmallLcdBrightness. Restoring the init value on wake means a
         // wrong guess reverts itself.
         g_uf1_dev->send(uf1::buildSmallLcdBrightness(
             asleep ? 0x00 : kUf1SmallLcdBrightnessInit));
