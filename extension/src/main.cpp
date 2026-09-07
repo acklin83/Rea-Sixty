@@ -4072,22 +4072,30 @@ struct BrightnessBytes {
     // those frames and found them, so the sliders get them as well (Frank asked
     // for it the moment sleep worked).
     //
-    // The LED master and the big screen take the UF8's own opcodes and scale, so
-    // they reuse uf8_led / uf8_lcd rather than repeating them.
+    // The LED master shares the UF8's opcode AND its scale, so it reuses uf8_led.
     //
-    // ⚠ uf1_small is the SMALL channel LCD (opcode 0x47, one byte, init 0xff)
-    // and its scale is the one thing here that was not measured: these are
-    // uf8_lcd scaled into 0..0xff by proportion. It is full-scale at the top and
-    // dark at the bottom, which is what matters; the three steps between are a
-    // straight line through a curve nobody has plotted.
-    uint8_t uf1_small;
+    // ⚠ BOTH UF1 DISPLAYS NEED THEIR OWN COLUMN. Driving them off uf8_lcd read a
+    // full step darker than the other surfaces at every setting, and the bottom
+    // step went out altogether where the UF8 and UC1 keep a visible glow (Frank,
+    // at the device, 2026-09-07). So uf1_lcd is uf8_lcd moved up one step, with
+    // the top opened to near full scale, and uf1_small the same shape on its own
+    // 0..0xff range.
+    //
+    // ⛔ THE BOTTOM STEP IS NOT OFF. "Dark" is the dimmest a user can dial, and
+    // it has to stay legible — going out at 0 makes the surface look broken and
+    // takes the panel away for a setting that is meant to keep it. Only SLEEP
+    // sends a real 0, and it does that outside this table.
+    //
+    // The five steps between top and bottom are still a straight line through a
+    // curve nobody has plotted; they are corrected by eye, not measured.
+    uint8_t uf1_lcd; uint8_t uf1_small;
 };
 constexpr BrightnessBytes kBrightnessTable[5] = {
-    {0x05, 0x18, 0x0A, 0x18, 0x08, 0x26},  // dark
-    {0x0A, 0x30, 0x13, 0x30, 0x0F, 0x4C},  // dim
-    {0x10, 0x50, 0x20, 0x50, 0x19, 0x80},  // half
-    {0x13, 0x60, 0x26, 0x60, 0x1E, 0x99},  // bright
-    {0x20, 0xA0, 0x40, 0xA0, 0x32, 0xFF},  // full
+    {0x05, 0x18, 0x0A, 0x18, 0x08, 0x30, 0x4C},  // dark
+    {0x0A, 0x30, 0x13, 0x30, 0x0F, 0x50, 0x80},  // dim
+    {0x10, 0x50, 0x20, 0x50, 0x19, 0x60, 0x99},  // half
+    {0x13, 0x60, 0x26, 0x60, 0x1E, 0xA0, 0xCC},  // bright
+    {0x20, 0xA0, 0x40, 0xA0, 0x32, 0xE0, 0xFF},  // full
 };
 
 int clampLevel_(int level)
@@ -4164,7 +4172,7 @@ void pushUf1Brightness(int ledLevel, int scribbleLevel)
     const auto& bs = kBrightnessTable[scribbleLevel];
     if (g_uf1_dev && g_uf1_dev->isOpen()) {
         g_uf1_dev->send(uf1::buildLedBrightness(bl.uf8_led));
-        g_uf1_dev->send(uf1::buildLcdBrightness(bs.uf8_lcd));
+        g_uf1_dev->send(uf1::buildLcdBrightness(bs.uf1_lcd));
         g_uf1_dev->send(uf1::buildSmallLcdBrightness(bs.uf1_small));
     }
 }
