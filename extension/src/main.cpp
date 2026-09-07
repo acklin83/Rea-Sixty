@@ -9554,19 +9554,44 @@ static void applyFxMoveSlotAware_(int step, bool carousel)
             fxSetSlotHint_(t.tr, cur, target);              // display-only move
             changed = true;                                 // cur (chain idx) unchanged
         } else {
-            // Real FX at the adjacent slot — cross it. REAPER 7.75's CopyToTrack is
-            // slot-aware: a DOWN move with dest=cur+1 is a chain no-op, so REAPER
-            // only HINT-shifts (no cross). dest=cur+2 down / cur-1 up truly crosses
-            // the one neighbour; REAPER pins the mover to the dest slot, so clear
-            // THAT hint (found via GUID) to seat it tight. (Verified on 7.75 incl.
-            // gap layouts, probe 2026-06-25.)
-            const int dest = (dir > 0) ? cur + 2 : cur - 1;
-            if (dest < 0 || dest > n) break;
-            TrackFX_CopyToTrack(t.tr, cur, t.tr, dest, /*is_move*/ true);
-            const int gi = movingGuid.empty()
-                ? ((dir > 0) ? cur + 1 : cur - 1)           // no-GUID fallback
-                : uf8::findFxIndexByGuid(t.tr, movingGuid);
-            if (gi < 0) break;
+            // Real FX at the adjacent slot — cross it.
+            //
+            // ⛔ THE DOWN DESTINATION IS NOT A CONSTANT, AND IT CHANGED UNDER US.
+            // On 7.75 a DOWN move with dest=cur+1 was a chain no-op (REAPER only
+            // HINT-shifted, no cross), so this compensated with cur+2 and that was
+            // verified against 7.75 including gap layouts. REAPER 7.79 changed
+            // exactly that quirk: "FX reordering: improve default behavior when
+            // dragging down and empty slots enabled, provide alternate (7.75-7.77)
+            // behavior by holding shift while reordering". With the quirk gone the
+            // compensation counts twice, and one detent moved the FX two slots
+            // down while UP, which never needed compensating, stayed correct
+            // (Frank 2026-09-07: "vorwärts überspringt praktisch immer einen slot").
+            //
+            // So the destination is no longer assumed. Try the natural one, ask the
+            // CHAIN whether the neighbour was actually crossed, and only then fall
+            // back to the old compensation. That is right on both sides of the
+            // change and does not need to know which REAPER this is.
+            const std::string crossedGuid = uf8::fxGuidString(t.tr, idxAtTarget);
+            const int destA = (dir > 0) ? cur + 1 : cur - 1;
+            const int destB = (dir > 0) ? cur + 2 : -1;     // 7.75-7.77 down only
+            int gi = -1;
+            bool crossed = false;
+            for (const int dest : { destA, destB }) {
+                if (dest < 0 || dest > n) continue;
+                TrackFX_CopyToTrack(t.tr, cur, t.tr, dest, /*is_move*/ true);
+                gi = movingGuid.empty()
+                    ? ((dir > 0) ? cur + 1 : cur - 1)       // no-GUID fallback
+                    : uf8::findFxIndexByGuid(t.tr, movingGuid);
+                const int ci = crossedGuid.empty()
+                    ? -1 : uf8::findFxIndexByGuid(t.tr, crossedGuid);
+                // Without a GUID on either side there is nothing to check against,
+                // so take the move at its word rather than firing a second one.
+                if (gi < 0 || ci < 0) { crossed = true; break; }
+                crossed = (dir > 0) ? (gi > ci) : (gi < ci);
+                if (crossed) break;
+                cur = gi;                                   // no-op: retry from here
+            }
+            if (!crossed || gi < 0) break;
             // Seat the mover TIGHT against the FX it just crossed, on the side it
             // moved to — NOT its natural minimum slot. Clearing the hint (-1) let it
             // overshoot UP past empty slots: cross Pro-Q upward and it jumped to slot
