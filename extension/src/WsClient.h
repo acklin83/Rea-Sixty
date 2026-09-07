@@ -56,6 +56,16 @@ class Client {
     // Why the last connect() or poll() failed, for the status line.
     const std::string& lastError() const { return err_; }
 
+    // ⇨ THE CLOSE FRAME CARRIES A REASON AND IT IS THE ONLY ONE ANYBODY GETS.
+    // A server that hangs up says why: two big-endian bytes of status code and
+    // an optional UTF-8 sentence. Dropping those made "closed the connection"
+    // the answer to every question, including "is the password right" — the
+    // one case where the server had already spelled it out (4009,
+    // "Authentication failed.", seen from OBS 32.2.2 on 2026-09-07).
+    // 0 = it closed without a code, or nothing has closed yet.
+    int closeCode() const { return closeCode_; }
+    const std::string& closeReason() const { return closeReason_; }
+
   private:
     bool handshake(const std::string& host, int port, const std::string& path,
                    int timeoutMs);
@@ -68,6 +78,8 @@ class Client {
     std::string msg_;          // message being reassembled across continuations
     bool        msgIsText_ = false;
     std::string err_;
+    int         closeCode_ = 0;
+    std::string closeReason_;
 };
 
 }  // namespace reasixty::ws

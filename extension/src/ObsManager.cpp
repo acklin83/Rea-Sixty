@@ -263,7 +263,21 @@ void Manager::workerLoop()
         std::string text;
         const int r = sock.poll(text, kPollMs);
         if (r < 0) {
-            drop(sock.lastError().empty() ? "connection lost" : sock.lastError());
+            // ⇨ SAY WHAT OBS SAID. Code 4009 is the one a user can act on, and
+            // it is the one that looks least like itself: host and port are
+            // right, the connection is made and upgraded, and then it ends. The
+            // password is simply not the one OBS has. OBS regenerates it, so a
+            // setup that worked last month can fail with nothing touched at
+            // this end (proven against OBS 32.2.2, 2026-09-07).
+            std::string why = sock.lastError();
+            if (sock.closeCode() == 4009) {
+                why = "OBS says the password is wrong. Copy the current one "
+                      "from OBS under Tools, WebSocket Server Settings, Show "
+                      "Connect Info — OBS generates it and can change it.";
+            } else if (why.empty()) {
+                why = "connection lost";
+            }
+            drop(why);
             continue;
         }
         if (r > 0) {

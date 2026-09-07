@@ -159,6 +159,25 @@ std::vector<uint8_t> buildLedBrightness(uint8_t level);
 //   FF 4F 02 <b> 00 <ck>                         colour screen backlight
 std::vector<uint8_t> buildLcdBrightness(uint8_t level);
 
+// ⚠ CANDIDATE, NOT PROVEN. The UF1 has a second display, the small channel LCD
+// beside the fader, and 0x4F above does not touch it: at backlight 0 the big
+// screen and every LED went dark and that one stayed lit (Frank, at the device,
+// 2026-09-07).
+//
+// What is actually known about this frame:
+//   · uf1_init_sequence.inc:157 sends `ff 1f 02 10 00 31` once, three frames
+//     before the LED master and the screen backlight — the shape of a third
+//     "set a brightness" in a group of them.
+//   · Its payload has the SAME shape as the proven 0x4F backlight, <b> 00.
+//   · Its init value 0x10 is the same level the LED master is set to.
+// What is NOT known: that it is a backlight at all. `ff 1f 02` occurs exactly
+// ONCE in the whole capture corpus, in cap66_uf1_init, and SSL never varies it
+// in any captured session, so nothing in the corpus can confirm the byte is a
+// level. The device is the only thing that can answer it.
+//
+//   FF 1F 02 <b> 00 <ck>                         channel LCD backlight?
+std::vector<uint8_t> buildSmallLcdBrightness(uint8_t level);
+
 // Screen element write:
 //   FF 67 <len> <addrHi> <addrLo> <payload...> <ck>     len = payload.size() + 2
 // Writes payload bytes to the 16-bit element address (see protocol-notes-uf1).

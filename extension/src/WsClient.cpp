@@ -301,10 +301,23 @@ int Client::poll(std::string& out, int timeoutMs)
                 continue;
             case 0xA:                                     // pong, nothing to do
                 continue;
-            case 0x8:                                     // close
+            case 0x8: {                                   // close
                 sendFrame(0x8, std::string());
-                err_ = "OBS closed the connection";
+                // Payload: 2-byte big-endian status code, then an optional
+                // UTF-8 reason. Both are kept — see closeCode() in the header.
+                if (payload.size() >= 2) {
+                    closeCode_ = (static_cast<unsigned char>(payload[0]) << 8)
+                               |  static_cast<unsigned char>(payload[1]);
+                    closeReason_.assign(payload, 2, std::string::npos);
+                }
+                err_ = "closed by the server";
+                if (closeCode_) {
+                    err_ += " (" + std::to_string(closeCode_);
+                    if (!closeReason_.empty()) err_ += ": " + closeReason_;
+                    err_ += ")";
+                }
                 return -1;
+            }
             case 0x0:                                     // continuation
                 msg_ += payload;
                 break;
