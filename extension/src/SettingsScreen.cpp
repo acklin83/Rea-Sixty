@@ -221,6 +221,9 @@ bool reasixty_csFav(int slot, std::string& addName, std::string& label);
 int  reasixty_csFavSlotOf(const char* addName);
 void reasixty_setCsFav(int slot, const char* addName, const char* label);
 void reasixty_clearCsFavByName(const char* addName);
+// Clears favourite slots whose plug-in no longer has a map. Returns the
+// count, so deleting a mapping can say what else it took with it.
+int  reasixty_pruneDanglingFavourites();
 int  reasixty_csFavSlotMatching(const char* addName);
 bool reasixty_bcFav(int slot, std::string& addName, std::string& label);
 void reasixty_setBcFav(int slot, const char* addName, const char* label);
@@ -21284,12 +21287,19 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         ImGui_Text(ctx, line);
         ImGui_Spacing(ctx);
         ImGui_TextWrapped(ctx,
-            "Tracks hosting this plug-in fall back to no mapping.");
+            "Tracks hosting this plug-in fall back to no mapping, and any "
+            "Channel Strip or Bus Comp favourite pointing at it is cleared: "
+            "without a mapping it is not a strip any more, and switching to it "
+            "would just add another copy of the plug-in.");
         ImGui_Spacing(ctx);
 
         if (ImGui_Button(ctx, "Delete##fxl_del_ok", nullptr, nullptr)) {
-            if (!g_pendingDeleteMatch.empty())
+            if (!g_pendingDeleteMatch.empty()) {
                 user_plugins::removeByMatch(g_pendingDeleteMatch);
+                // AFTER the removal: the sweep asks which favourites no longer
+                // resolve to a map, so it needs the map already gone.
+                reasixty_pruneDanglingFavourites();
+            }
             g_pendingDeleteMatch.clear();
             persistAndReport_();
             ImGui_CloseCurrentPopup(ctx);

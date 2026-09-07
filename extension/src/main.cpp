@@ -13573,6 +13573,24 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
         // memory to restore, so the plug-in arrives on its own defaults.
         // Copy mode still needs an original to A/B against and keeps bailing out.
         if (copyMode) return false;
+        // ⛔ BUT NOT A SECOND COPY OF ONE THAT IS ALREADY THERE. "No strip on the
+        // track" means no MAPPED strip, and un-learning a plug-in makes the very
+        // instance sitting here unmapped — so this branch fired for a plug-in
+        // that was already on the track and added another, once per detent of a
+        // Cycle (Frank 2026-09-07: "added sich selbst bei jedem dreh"). The
+        // don't-replace-a-strip-with-itself guard below never got its chance,
+        // because it lives past the point where this branch returns.
+        for (int i = 0, nfx = TrackFX_GetCount(tr); i < nfx; ++i) {
+            char have[256];
+            if (!uf8::fxIdentityName(tr, i, have, sizeof(have))) continue;
+            if (std::strcmp(have, addName) != 0) continue;
+            if (focusResult) {
+                syncInstanceFromFxIdx_(tr, i, /*setFocusedDomain*/ true,
+                                       /*setBcAnchor*/ false);
+                setStripInstanceFx_(tr, i);
+            }
+            return true;                       // adopt it, do not add a twin
+        }
         const int idx = addFavByName_(tr, addName);
         if (idx < 0) return false;
         TrackFX_Show(tr, idx, 2);   // close the window REAPER auto-floats on add
@@ -14087,6 +14105,24 @@ static bool switchBcTo_(MediaTrack* tr, const char* addName,
         // memory to restore, so the plug-in arrives on its own defaults.
         // Copy mode still needs an original to A/B against and keeps bailing out.
         if (copyMode) return false;
+        // ⛔ BUT NOT A SECOND COPY OF ONE THAT IS ALREADY THERE. "No strip on the
+        // track" means no MAPPED strip, and un-learning a plug-in makes the very
+        // instance sitting here unmapped — so this branch fired for a plug-in
+        // that was already on the track and added another, once per detent of a
+        // Cycle (Frank 2026-09-07: "added sich selbst bei jedem dreh"). The
+        // don't-replace-a-strip-with-itself guard below never got its chance,
+        // because it lives past the point where this branch returns.
+        for (int i = 0, nfx = TrackFX_GetCount(tr); i < nfx; ++i) {
+            char have[256];
+            if (!uf8::fxIdentityName(tr, i, have, sizeof(have))) continue;
+            if (std::strcmp(have, addName) != 0) continue;
+            if (focusResult) {
+                syncInstanceFromFxIdx_(tr, i, /*setFocusedDomain*/ true,
+                                       /*setBcAnchor*/ true);
+                setStripInstanceFx_(tr, i);
+            }
+            return true;                       // adopt it, do not add a twin
+        }
         const int idx = addFavByName_(tr, addName);
         if (idx < 0) return false;
         TrackFX_Show(tr, idx, 2);   // close the window REAPER auto-floats on add
@@ -43600,6 +43636,35 @@ bool resolveBcFavForTrack(MediaTrack* tr, int slot, std::string& addName, std::s
         return !addName.empty();
     }
     return baseBcFav(slot, addName, label);
+}
+
+// ⇨ A FAVOURITE THAT LOST ITS MAP IS A DANGLING ONE. Deleting a learned plug-in
+// map left every favourite slot pointing at it in place, and a CS favourite whose
+// plug-in is no longer a channel strip cannot be switched TO — the switch reads
+// "no strip here" and used to insert another copy on every detent
+// (Frank 2026-09-07). The insert is guarded now; this removes the cause.
+// Called right after a map is removed. Returns how many slots were cleared, so
+// the dialog can say so rather than doing it behind the user's back.
+int reasixty_pruneDanglingFavourites()
+{
+    int cleared = 0;
+    for (int i = 0; i < 8; ++i) {
+        std::string a, l;
+        if (resolveCsFav(i, a, l) && !a.empty()
+            && !uc1::lookupBindingsByName(a.c_str())) {
+            reasixty_clearCsFavByName(a.c_str());
+            ++cleared;
+        }
+    }
+    for (int i = 0; i < 8; ++i) {
+        std::string a, l;
+        if (resolveBcFav(i, a, l) && !a.empty()
+            && !uc1::lookupBindingsByName(a.c_str())) {
+            reasixty_clearBcFavByName(a.c_str());
+            ++cleared;
+        }
+    }
+    return cleared;
 }
 
 bool resolveCsFav(int slot, std::string& addName, std::string& label)
