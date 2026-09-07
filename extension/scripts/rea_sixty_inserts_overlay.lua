@@ -62,7 +62,7 @@ local is_windows = reaper.GetOS():find("Win") ~= nil
 -- "did my fix even load?" is unanswerable, and I wasted Frank's time on exactly
 -- that question. Bump BUILD on every behavioural change to this file.
 -- (SECT is declared further down; this runs before it, so name the section here.)
-local BUILD = "2026-07-19-rowmap"
+local BUILD = "2026-09-07-layoutrev"
 reaper.SetExtState("rea_sixty", "overlay_build", BUILD, true)   -- persist: readable from outside
 
 -- Diagnostic: set ExtState rea_sixty/overlay_debug=1 and this writes what the
@@ -842,6 +842,8 @@ local function loop()
         -- or the rescan reuses it and nothing is re-measured (the same trap the
         -- rowsStale_ branch below documents).
         if lrev ~= g_lastLayoutRev then
+          dbg("layoutRev %s -> %s  (drop cache + RESCAN)",
+              tostring(g_lastLayoutRev), tostring(lrev))
           g_lastLayoutRev = lrev
           g_blockCache = {}
           need = true
