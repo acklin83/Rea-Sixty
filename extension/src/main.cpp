@@ -9595,12 +9595,25 @@ static void applyFxMoveSlotAware_(int step, bool carousel)
             // Seat the mover TIGHT against the FX it just crossed, on the side it
             // moved to — NOT its natural minimum slot. Clearing the hint (-1) let it
             // overshoot UP past empty slots: cross Pro-Q upward and it jumped to slot
-            // 2 instead of the gap directly above Pro-Q (slot 4). The crossed FX is
-            // the immediate neighbour on the far side (gi-1 down / gi+1 up); pin the
-            // mover one slot beyond it. (Down to a natural last slot this equals the
-            // old clear, so no regression.) Frank 2026-06-25.
-            const int crossedSlot = fxChainIndexToSlot_(t.tr, (dir > 0) ? gi - 1 : gi + 1);
-            fxSetSlotHint_(t.tr, gi, (dir > 0) ? crossedSlot + 1 : crossedSlot - 1);
+            // 2 instead of the gap directly above Pro-Q (slot 4). Frank 2026-06-25.
+            //
+            // ⛔ BUT DO NOT DERIVE THE SEAT FROM THE CROSSED FX'S SLOT. That read
+            // `crossedSlot + 1`, which is only right while REAPER has already
+            // pulled the crossed FX up into the slot the mover vacated. Crossing
+            // the LAST FX in the chain it does not: the crossed one keeps its own
+            // slot, so +1 pointed one past it. The mover landed correctly at the
+            // end of the chain and left an empty row in front of the now
+            // second-to-last FX (Frank 2026-09-07).
+            //
+            // A cross is a SWAP of two visual slots, and both of them were known
+            // before either call: the mover goes to `target`, the FX it crossed
+            // takes the mover's old slot `sM`. Writing both says exactly that and
+            // stops depending on REAPER's own hint bookkeeping — which is also
+            // what makes it safe now that the retry above can fire two moves.
+            const int ci = crossedGuid.empty()
+                ? -1 : uf8::findFxIndexByGuid(t.tr, crossedGuid);
+            fxSetSlotHint_(t.tr, gi, target);
+            if (ci >= 0 && ci != gi) fxSetSlotHint_(t.tr, ci, sM);
             cur = gi;
             changed = true;
         }
