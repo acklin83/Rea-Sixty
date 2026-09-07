@@ -4668,9 +4668,16 @@ void UC1Surface::refresh()
         {
             return nameBuf;
         }
-        int idx = static_cast<int>(GetMediaTrackInfo_Value(t, "IP_TRACKNUMBER"));
+        // ⇨ "CH <n>" IS THE ONE FALLBACK FOR AN UNNAMED TRACK, everywhere.
+        // This file used to say "Track %d" here and "Trk %d" in the carousel
+        // below, so the UC1 disagreed with the UF8, with the UF1 and with
+        // itself depending on whether the carousel happened to be up
+        // (Frank 2026-09-07). main.cpp already keeps its seven sites in step;
+        // the UC1 lives in its own translation unit and was never joined in.
+        const int trkNo = static_cast<int>(
+            GetMediaTrackInfo_Value(t, "IP_TRACKNUMBER"));
         char fallback[32];
-        snprintf(fallback, sizeof(fallback), "Track %d", idx);
+        snprintf(fallback, sizeof(fallback), "CH %d", trkNo > 0 ? trkNo : 0);
         return fallback;
     };
     auto resolveTrackName = [&]() -> std::string {
@@ -4729,8 +4736,15 @@ void UC1Surface::refresh()
         MediaTrack* t = GetTrack(nullptr, idx);
         char buf[128] = {0};
         if (GetSetMediaTrackInfo_String(t, "P_NAME", buf, false) && buf[0]) return buf;
+        // Same fallback as the name slot above and as main.cpp: "CH <n>", and
+        // the number is REAPER's own track number rather than this walk's
+        // enumeration index, so it still reads right beside the channel-number
+        // zone when folders are collapsed.
+        const int trkNo = static_cast<int>(
+            GetMediaTrackInfo_Value(t, "IP_TRACKNUMBER"));
         char fallback[16];
-        snprintf(fallback, sizeof(fallback), "Trk %d", idx + 1);
+        snprintf(fallback, sizeof(fallback), "CH %d",
+                 trkNo > 0 ? trkNo : idx + 1);
         return fallback;
     };
     // BC carousel: 3-slot [prev, curr, next] across BC-bearing tracks
