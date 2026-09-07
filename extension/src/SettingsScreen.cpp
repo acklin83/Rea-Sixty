@@ -7680,6 +7680,9 @@ namespace {
 // page so the editor never silently pretends the map it is on is the one you are
 // looking at. Empty = the active FX is mapped, or there is none.
 std::string g_activeUnmappedFx;
+// Same plug-in, but it already has a FACTORY map. Kept apart so the banner can
+// say which of the two it is instead of calling both "no map yet".
+std::string g_activeFactoryFx;
 char        g_newMatch[128]      = {};
 char        g_newDisplay[16]     = {};   // up to 12 chars + NUL + slack
 // Mode picker for the "+ New" popup. 1=CS-primary, 2=BC-primary,
@@ -20787,15 +20790,23 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 char fxName[512] = {0};
                 if (uf8::fxIdentityName(ftr, fxIdx, fxName, sizeof(fxName))) {
                     const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+                    g_activeUnmappedFx.clear();
+                    g_activeFactoryFx.clear();
                     if (!um) {
-                        // No map: keep the editor where it is, but say what is
-                        // in front of you and offer to map it. Silently sitting
-                        // on an unrelated map is what made this look broken.
+                        // No map OF YOUR OWN: keep the editor where it is, but
+                        // say what is in front of you. Silently sitting on an
+                        // unrelated map is what made this look broken.
                         char shortNm[512] = {0};
                         TrackFX_GetFXName(ftr, fxIdx, shortNm, sizeof(shortNm));
-                        g_activeUnmappedFx = shortNm[0] ? shortNm : fxName;
-                    } else {
-                        g_activeUnmappedFx.clear();
+                        const std::string nm = shortNm[0] ? shortNm : fxName;
+                        // ⛔ lookupOwnedByName ONLY KNOWS USER MAPS. An SSL 4K E
+                        // has a built-in one, so it landed here and the banner
+                        // announced "no map yet" and offered to map a factory
+                        // plug-in — which the Learn-HUD then refuses to arm on
+                        // ("Factory map — not editable"). Two answers to one
+                        // question (Frank 2026-09-07).
+                        if (uc1::lookupBindingsByName(fxName)) g_activeFactoryFx = nm;
+                        else                                   g_activeUnmappedFx = nm;
                     }
                     if (um) {
                         g_editingMatch = um->match;
@@ -20814,12 +20825,21 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     }
                 }
             }
-            if (!ftr) g_activeUnmappedFx.clear();
+            if (!ftr) { g_activeUnmappedFx.clear(); g_activeFactoryFx.clear(); }
         }
 
             // The banner: what is actually in front of you, and one click to map
         // it. Sits above the editor so it cannot be missed, and only when the
         // active plug-in has no map of its own.
+        // A factory plug-in is not "unmapped" — it has a built-in map, and the
+        // Learn-HUD refuses to arm on one. Say that, and offer nothing: making
+        // your own map for it still works from the plug-in list below.
+        if (!g_activeFactoryFx.empty()) {
+            ImGui_TextColored(ctx, 0x66CCFFFF,
+                ("Active plug-in: " + g_activeFactoryFx
+                 + "  \xE2\x80\x94  factory map, not editable").c_str());
+            ImGui_Spacing(ctx);
+        }
         if (!g_activeUnmappedFx.empty()) {
             ImGui_TextColored(ctx, 0x66CCFFFF,
                 ("Active plug-in: " + g_activeUnmappedFx

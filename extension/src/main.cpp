@@ -45479,6 +45479,27 @@ bool reasixty_activeFocusedFx(int* outTrIdx, int* outFxIdx)
         else if (bcTr && bcFx >= 0)             { tr = bcTr; fx = bcFx; }
     };
 
+    // ⛔ THE HUD'S BOOTSTRAP TARGET WINS, BEFORE ANY OF THIS.
+    // When the Learn-HUD sits on an UNMAPPED plug-in ("Map Pro-Q 4"), that is
+    // the plug-in the user is looking at, and it is the answer in every path
+    // ([[hud-boot-target-must-win]]). Both resolvers below answer "which plug-in
+    // is MAPPED as CS/BC/UF8", so they hand back a mapped strip somewhere else
+    // in the session and the FX Learn pane then announced that one as the active
+    // plug-in while the HUD offered to map Pro-Q 4 (Frank 2026-09-07).
+    //
+    // ⚠ This is the FOURTH place with the same gap — publisher, apply and the
+    // parameter list were the other three, all on 2026-09-04. Fixing it in the
+    // exporter rather than in the pane is why it is the last: every caller of
+    // reasixty_activeFocusedFx gets it, and that is the entry point the panes
+    // use. NOT as a fallback either: "only when there is no CS target" was the
+    // exact shape of the earlier three, and a mapped strip nearly always exists.
+    {
+        MediaTrack* bootTr = nullptr; int bootFx = -1;
+        if (hudCursorUnlearnedFx_(bootTr, bootFx) && bootTr && bootFx >= 0) {
+            tr = bootTr; fx = bootFx;
+        }
+    }
+
     // Prefer the UF8 target when the surface is on a UF8 plug-in (UF8 Plugin
     // Mode active, or the focused domain is None); otherwise CS/BC first.
     if (g_uf8PluginMode.load() || dom == 0) { tryUf8(); tryCsBc(); }
