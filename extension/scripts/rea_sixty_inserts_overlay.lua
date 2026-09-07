@@ -734,6 +734,25 @@ local function blockSig(b)
   else return string.format("t%s,%d,%d,%d", tostring(b.hwnd), b.sl, b.st, b.sw) end
 end
 
+-- ⛔ THE SIGNATURE HAS TO DESCRIBE WHAT WILL BE DRAWN, and a chain index does
+-- not. Sliding an FX into an empty slot leaves its index, the FX count and every
+-- window measurement identical, so the signature matched, rebuildDraw was
+-- skipped, and the frame composited earlier stayed exactly where it was. That is
+-- also why unloading and reloading the script put it right: g_lastSig starts
+-- empty (Frank 2026-09-07). The measured row IS the thing that moved, so it goes
+-- into the signature. No row map means the fallback draws from index arithmetic,
+-- which the index already covers.
+local function rowSig_(list, idx)
+  if not list or not idx or idx < 0 then return "" end
+  for _, b in ipairs(list) do
+    if b.rows then
+      local e = b.rows[idx]
+      return "," .. idx .. "@" .. (e and e.top or "x")
+    end
+  end
+  return ""
+end
+
 local function drawSig(byGuid, blocks)
   local parts = {}
   for guid, a in pairs(byGuid) do
@@ -744,8 +763,9 @@ local function drawSig(byGuid, blocks)
       for _, b in ipairs(list) do t[#t + 1] = blockSig(b) end
       table.sort(t); bs = table.concat(t, ";")
     end
-    parts[#parts + 1] = string.format("%s:%s:%s:%s:%s", guid,
-      tostring(a.cs), tostring(a.bc), tostring(a.sel), bs)
+    parts[#parts + 1] = string.format("%s:%s:%s:%s:%s%s%s%s", guid,
+      tostring(a.cs), tostring(a.bc), tostring(a.sel), bs,
+      rowSig_(list, a.cs), rowSig_(list, a.bc), rowSig_(list, a.sel))
   end
   table.sort(parts)
   return table.concat(parts, "|") .. "|" .. num("overlay_rowh", 17) .. "," .. num("overlay_toppad", 1)
