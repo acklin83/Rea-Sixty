@@ -14889,6 +14889,32 @@ void refocusFocusedPluginGuiToCurrentSelection_()
 
 constexpr double kChannelEncoderScale = 4.0;
 
+// ⇨ FINE COUNTS INTO WHOLE DETENTS, AND THE LEFTOVER DIES AT A REVERSAL.
+// The encoder sends ~4 counts per physical click, so the remainder between
+// clicks is normal and has to be carried. What must NOT be carried is a
+// remainder from the OTHER direction: a partial click clockwise left, say,
+// +0.4 sitting there, and the first counter-clockwise click then only brought
+// it to -0.1, under the threshold. The click did nothing, and the one after it
+// did the work — "bei Richtungswechsel wird immer der erste click verschluckt"
+// (Frank 2026-09-07), on every mode alike because they all come through here.
+//
+// ⚠ The UF1's channel encoder has had this since 2026-08-02 and its comment says
+// "same fix the UF8 channel encoder got". The UF8 never had it. One helper now,
+// so the next copy cannot drift away from the others again.
+//
+// ⚠ Three more accumulators use the same scale WITHOUT the reversal reset:
+// sPresetAcc, sSelAccum and sAccum[] in the UF1 meter V-Pot path. Same class,
+// different control, and not reported — left alone deliberately.
+static int encoderStepFrom_(double& accum, double raw)
+{
+    const double inc = raw / kChannelEncoderScale;
+    if ((inc > 0.0 && accum < 0.0) || (inc < 0.0 && accum > 0.0)) accum = 0.0;
+    accum += inc;
+    int step = 0;
+    if (accum >= 1.0 || accum <= -1.0) { step = static_cast<int>(accum); accum -= step; }
+    return step;
+}
+
 // When set, the Channel-Encoder Select also shifts the UF8 bank and the
 // REAPER MCP scroll so the newly-selected track stays visible. Planned
 // as a user-facing settings option (see memory backlog); currently
@@ -18886,7 +18912,10 @@ void drainInputQueue()
                     // like the UF8/UC1 channel encoder (kChannelEncoderScale).
                     // Direction reversal: drop the leftover fraction from the OLD
                     // direction so reversing doesn't need an extra click to unwind it
-                    // (Frank 2026-08-02 — same fix the UF8 channel encoder got).
+                    // (Frank 2026-08-02). ⚠ The old wording here said the UF8
+                    // channel encoder "got the same fix". It had not — it got it
+                    // on 2026-09-07, and only because Frank noticed the two
+                    // encoders behaving differently.
                     if ((step > 0 && g_uf1ChanEncAccum < 0.0) ||
                         (step < 0 && g_uf1ChanEncAccum > 0.0))
                         g_uf1ChanEncAccum = 0.0;
@@ -19092,10 +19121,7 @@ void drainInputQueue()
             continue;
         }
         if (e.kind == PendingInput::PlayheadNudge) {
-            g_nudgeAccum += e.value / kChannelEncoderScale;
-            int step = 0;
-            if (g_nudgeAccum >=  1.0) { step = static_cast<int>(g_nudgeAccum); g_nudgeAccum -= step; }
-            if (g_nudgeAccum <= -1.0) { step = static_cast<int>(g_nudgeAccum); g_nudgeAccum -= step; }
+            const int step = encoderStepFrom_(g_nudgeAccum, e.value);
             if (step != 0) applyPlayheadNudge_(step);
             continue;
         }
@@ -19120,10 +19146,7 @@ void drainInputQueue()
             // builtin runs. Builtin gets `param = step` (signed) so
             // delta-aware actions (cycle, scroll) can react in
             // proportion to user input.
-            g_encoderAccum += e.value / kChannelEncoderScale;
-            int step = 0;
-            if (g_encoderAccum >=  1.0) { step = static_cast<int>(g_encoderAccum); g_encoderAccum -= step; }
-            if (g_encoderAccum <= -1.0) { step = static_cast<int>(g_encoderAccum); g_encoderAccum -= step; }
+            const int step = encoderStepFrom_(g_encoderAccum, e.value);
             if (step != 0) {
                 // Phase 2.8 Nav Mode — encoder rotation interception.
                 // Default: pages the overlay 8 items at a time (legacy
