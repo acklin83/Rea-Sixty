@@ -467,6 +467,8 @@ Three addressable zones:
 
 Two sliders of five steps under Settings → Devices → Brightness, **LEDs** and **LCDs**, and both apply to every attached surface: there is one LED level and one display level, not a pair per device. Six **Brightness …** actions (LEDs +/-, LCDs +/-, Both +/-) drive them from a hardware button.
 
+The same pane carries **Sleep**, which takes every surface dark after a set number of idle minutes and brings it back on the first thing you touch. Off out of the box.
+
 ## UC1 GR Calibration
 
 If the UC1's mechanical VU meter or the CS Dynamics GR LEDs drift from their printed scale, a per-tick offset table at the very bottom of **Settings → Devices** corrects each printed dB tick individually. The workflow mirrors SSL 360°'s own BC VU calibration tool — click `Test` next to a tick, then `+` / `-` until the UC1 lines up with the printed marking. Auto-saved per-tick. `Stop test` resumes normal GR.
@@ -997,6 +999,18 @@ Two 5-step sliders (Dark / Dim / Half / Bright / Full):
 - **LCDs** — drives the UF8 LCD strips + UC1 LCD + UC1 status displays
 
 Set independently so you can crank the displays while keeping the LED ring dim, or vice versa. Six **Brightness …** actions (LEDs +/-, LCDs +/-, Both +/-) drive these from any button binding.
+
+### Sleep
+
+Off out of the box. Switch on **Sleep the surfaces when idle** and set **After** to anything from 1 to 99 minutes, and every attached surface goes dark once that long has passed with nobody touching it.
+
+Dark means the brightness goes to zero, not that the surface stops. Everything carries on behind the unlit panel, so waking shows the same picture it had before rather than redrawing it.
+
+Playing and recording count as activity: nothing sleeps while the transport is rolling, and the countdown starts when you stop. Moving a fader by hand counts, and so does any key or knob, but a fader the motor moves does not, so selecting a track will not keep the surfaces awake.
+
+Whatever you touch first only wakes them. That press, or that turn of a knob, does nothing else, so reaching for an unlit panel cannot solo a track you cannot see. The next press works normally.
+
+**Sleep the surfaces now** is an action you can put on a key, for the moment before a take when three lit panels are the brightest thing in the room. Press it again, or touch anything, to bring them back.
 
 ### Metering
 
@@ -2110,6 +2124,7 @@ Each press steps one level (Dark → Dim → Half → Bright → Full). The "Bot
 - **Brightness LEDs +** / **Brightness LEDs -** — LED ring + button-LED brightness.
 - **Brightness LCDs +** / **Brightness LCDs -** — UF8 LCD + UC1 LCD brightness.
 - **Brightness Both (LEDs+LCDs) +** / **Brightness Both (LEDs+LCDs) -** — combined.
+- **Sleep the surfaces now** — takes every surface dark at once, and lights them again on the next press. Anything you touch on any surface wakes them too. See *Devices → Sleep*.
 
 ## Zoom
 

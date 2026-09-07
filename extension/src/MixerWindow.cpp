@@ -207,6 +207,9 @@ constexpr SearchEntry kSearchIndex[] = {
     // indent, not part of the name.
     { "LEDs",                                  kSecDevices, "Brightness" },
     { "LCDs",                                  kSecDevices, "Brightness" },
+    { "Sleep the surfaces when idle",          kSecDevices, "Sleep" },
+    // Drawn as "  After" — the leading spaces are indent, not part of the name.
+    { "After",                                 kSecDevices, "Sleep" },
     { "GR meter source",                       kSecDevices, "Metering" },
     { "Combine GR across plug-ins (UF8 strips)", kSecDevices, "Metering", kDevUf8 },
     { "Combine GR across plug-ins (UC1 Comp)", kSecDevices, "Metering", kDevUc1 },

@@ -138,6 +138,27 @@ std::vector<uint8_t> buildMotorEnable(bool enable);
 //   FF 1E 03 00 <lo> <hi> <ck>                   15-bit LE, 0x0000 bottom .. 0x7FFF top
 std::vector<uint8_t> buildMotorPosition(uint16_t pos15);
 
+// ⇨ THE UF1 DOES HAVE GLOBAL BRIGHTNESS. docs/uf1-builtin-action-list.md called
+// it "BLOCKED — no decoded global brightness frame"; it was never blocked, it
+// was never looked for. SSL's own cold-start replay sends both opcodes, and we
+// have been replaying them verbatim since the UF1 came up:
+//   uf1_init_sequence.inc:158  ff 2d 08 00 00 10 00 10 00 10 00 65   LED master
+//   uf1_init_sequence.inc:159  ff 4f 02 32 00 83                     LCD backlight
+// so the init values are 0x10 and 0x32 and both builders below reproduce those
+// two frames byte for byte (checked against the .inc, not assumed).
+//
+// ⚠ These are the UF8's opcodes, and the two checksum rules happen to agree:
+// UF8 sums the bytes AFTER the FF, the UF1 sums FROM the FF and adds one, and
+// 0xFF + 1 = 0x100, which falls out of the byte. That coincidence is NOT a
+// licence to call uf8::buildLedBrightness from UF1 code — the note at the top
+// of this file is right that the dialects are separate, and the next opcode we
+// share may not be so lucky. Own builders, own checksum.
+//
+//   FF 2D 08 00 00 <b> 00 <b> 00 <b> 00 <ck>     all non-LCD LEDs, 0x00 = off
+std::vector<uint8_t> buildLedBrightness(uint8_t level);
+//   FF 4F 02 <b> 00 <ck>                         colour screen backlight
+std::vector<uint8_t> buildLcdBrightness(uint8_t level);
+
 // Screen element write:
 //   FF 67 <len> <addrHi> <addrLo> <payload...> <ck>     len = payload.size() + 2
 // Writes payload bytes to the 16-bit element address (see protocol-notes-uf1).

@@ -257,9 +257,20 @@ NAV-cross factory default (alternative: track/time navigation — offer both, zo
 **MASTER button** (already shows the master track) — that fully covers the intent.
 
 ### Brightness — `brightness_leds/lcds/both_up/down`
-**DROP for now — BLOCKED.** UF1 has no decoded global brightness frame (only per-LED
-2-level bright/dim; screen intensity undecoded). Needs a capture before it can drive UF1.
-Partial option: scale the 3 button LEDs with the LED step. Flag: capture required.
+**Not blocked after all — corrected 2026-09-07.** This entry said the UF1 had no decoded
+global brightness frame and that a capture was needed. It never was: SSL's own cold-start
+replay carries both opcodes, and we have been sending them verbatim since the UF1 came
+up. `uf1_init_sequence.inc:158` is `ff 2d 08 00 00 10 00 10 00 10 00 65` (LED master,
+level 0x10) and `:159` is `ff 4f 02 32 00 83` (screen backlight, 0x32). They are the
+UF8's opcodes, and the two checksum rules agree because UF1 sums from the `FF` and adds
+one while UF8 sums after it, and `0xFF + 1` falls out of the byte.
+
+`uf1::buildLedBrightness` / `uf1::buildLcdBrightness` (UF1Protocol) build them with the
+UF1's own checksum, and Sleep uses them to take all three surfaces to zero.
+
+⚠ Still open, and a separate job: the `brightness_*` step actions and the Brightness
+sliders in Settings do not reach the UF1 — `pushBrightness` calls only the UF8 and UC1
+paths. Nothing blocks it any more; nobody has asked for it.
 
 ### Modifiers — `mod_shift`, `mod_cmd`, `mod_ctrl`
 **KEEP.** UF1 SHIFT (0x36) already feeds the shared modifier; binding SHIFT → `mod_shift`

@@ -35,6 +35,10 @@ void reasixty_forgetAbsentDevices();
 const char* reasixty_uf8Serial();
 const char* reasixty_uc1Serial();
 const char* reasixty_uf1Serial();
+bool reasixty_sleepEnabled();
+int  reasixty_sleepMinutes();
+void reasixty_setSleepEnabled(bool on);
+void reasixty_setSleepMinutes(int minutes);
 int  reasixty_brightnessLevel();
 int  reasixty_scribbleBrightnessLevel();
 void reasixty_setBrightnessLevel(int level);
@@ -635,6 +639,37 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
     ImGui_Text(ctx, kLevelNames[scr]);
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    sectionHeader("Sleep");
+
+    // Sleep sits under Brightness because that is what it is: the surfaces go
+    // to zero brightness and everything else keeps running, so the picture is
+    // still there when they light up again. Range 1..99 matches SSL 360's own
+    // sleep timeout, which is the behaviour a UF8 owner already knows.
+    bool sleepOn = reasixty_sleepEnabled();
+    if (ImGui_Checkbox(ctx, "Sleep the surfaces when idle", &sleepOn)) {
+        reasixty_setSleepEnabled(sleepOn);
+    }
+    // ⚠ NOT ImGui_BeginDisabled — this ReaImGui function set has no such call
+    // (checked against vendor/reaimgui/reaper_imgui_functions.h, and there is a
+    // second note saying the same beside the WinUSB buttons). The minutes are
+    // simply not drawn while the feature is off.
+    if (sleepOn) {
+        int sleepMin = reasixty_sleepMinutes();
+        ImGui_Text(ctx, "  After");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_SetNextItemWidth(ctx, 200.0);
+        if (ImGui_SliderInt(ctx, "##sleep_minutes", &sleepMin,
+                            /*v_min*/ 1, /*v_max*/ 99,
+                            /*format*/ "%d min", /*flags*/ nullptr)) {
+            reasixty_setSleepMinutes(sleepMin);
+        }
+        ImGui_TextDisabled(ctx,
+            "Playing or recording counts as activity. Any key, fader or knob "
+            "wakes them, and that first touch only wakes.");
+    }
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);

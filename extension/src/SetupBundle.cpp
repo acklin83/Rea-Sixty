@@ -83,6 +83,8 @@ constexpr ExtKey kKeys[] = {
     { "rea_sixty", "scribble_brightness" },
     { "rea_sixty", "sel_follows_color" },
     { "rea_sixty", "selset_auto_mode" },
+    { "rea_sixty", "sleep_enabled" },
+    { "rea_sixty", "sleep_minutes" },
     { "rea_sixty", "strip_follows_focused_fx" },
     { "rea_sixty", "track_sel_follows_param" },
     { "rea_sixty", "uc1_cal_factory_v" },

@@ -33,6 +33,9 @@ extern void diagSetParamLog_(const char* site, MediaTrack* tr, int fx,
                              int param, double n, bool setRet,
                              double after);
 
+// Sleep (defined in main.cpp). Stamps surface activity and returns true when
+// THIS event is the one that woke a sleeping surface, so the caller drops it.
+bool reasixty_surfaceWake();
 // Shift-Fine mode check (defined in main.cpp). Returns true when the
 // Settings toggle is on AND Shift is held (keyboard or UF8 hardware).
 bool reasixty_shiftFineActive();
@@ -356,11 +359,18 @@ UC1Surface::UC1Surface()
 void UC1Surface::attach(UC1Device& device)
 {
     device_ = &device;
+    // Both handlers run on the libusb worker thread and only see frames whose
+    // checksum parsed, so every event here is a real one to stamp against the
+    // sleep timer. A knob turn that wakes the surface is dropped outright (no
+    // release edge to keep in step); a button is stamped here and swallowed in
+    // uf8::bindings::dispatch together with its release.
     device_->setKnobHandler([this](const KnobEvent& ev) {
+        if (reasixty_surfaceWake()) return;
         std::lock_guard<std::mutex> lk(queueMu_);
         knobQueue_.push_back(ev);
     });
     device_->setButtonHandler([this](const ButtonEvent& ev) {
+        (void)reasixty_surfaceWake();
         std::lock_guard<std::mutex> lk(queueMu_);
         buttonQueue_.push_back(ev);
     });

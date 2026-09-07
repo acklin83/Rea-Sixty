@@ -4082,6 +4082,42 @@ int clampLevel_(int level)
     return level;
 }
 
+// ---- Sleep ----------------------------------------------------------------
+// ⇨ SCHLAF IST DUNKELSTELLEN, NICHT ABSCHALTEN. All three firmwares fall back
+// to their splash screen the moment the heartbeat stops (UF8Device.cpp:386,
+// UC1Protocol.h:186, UF1Protocol.h:6), so sleep may not stop writing. It sets
+// the global brightness to zero and lets every other stream run untouched.
+// That is also why waking needs no repaint: the picture was never cleared, only
+// unlit, so there is no dedup cache to flush and no g_uf1Gen to bump.
+//
+// ⚠ kBrightnessTable does not reach zero — its darkest step is 0x05/0x18, which
+// is dim, not off. Sleep therefore writes a raw 0 straight to the builders and
+// does not go through the table or BL_Dark.
+constexpr uint8_t kUf1LedBrightnessInit = 0x10;   // uf1_init_sequence.inc:158
+constexpr uint8_t kUf1LcdBrightnessInit = 0x32;   // uf1_init_sequence.inc:159
+
+constexpr int kSleepMinutesMin = 1;               // SSL's own range is 1..99
+constexpr int kSleepMinutesMax = 99;              // (uf8-manual-reference.md:55)
+
+std::atomic<bool> g_sleepEnabled{false};
+std::atomic<int>  g_sleepMinutes{15};
+
+// Written by the three input threads, read by onTimer. int64 ms from nowMs_().
+std::atomic<int64_t> g_lastInputMs{0};
+// True while the surfaces are dark. Read on the input threads too — it is the
+// thing surfaceWake_ swaps.
+std::atomic<bool> g_asleep{false};
+// Set by whichever input event won the wake, drained on the next tick.
+std::atomic<bool> g_wakeRequest{false};
+// Set by the sleep_now builtin, drained on the next tick. The builtin runs on
+// the INPUT thread (see the threading note at the top of this file), and the
+// device pointers it would otherwise push through are reset by the main thread
+// on a stale-handle reopen, so the push belongs to the tick and not to the key.
+std::atomic<bool> g_sleepToggleRequest{false};
+
+// Defined below with the rest of the sleep code; applyBrightness needs it.
+void pushSleepBrightness_(bool asleep);
+
 void pushUf8Brightness(int ledLevel, int scribbleLevel)
 {
     ledLevel      = clampLevel_(ledLevel);
@@ -4117,7 +4153,14 @@ void applyBrightness()
 {
     const int led = g_brightness.load();
     const int scr = g_scribbleBrightness.load();
-    pushBrightness(led, scr);
+    // ⛔ A SLEEPING SURFACE STAYS DARK. Two callers reach this while asleep and
+    // both would otherwise light the panel with g_asleep still true, leaving it
+    // lit until something happened to wake it: moving the Brightness sliders,
+    // and the stale-handle reopen, which calls applyBrightness on a device that
+    // just came up at its own firmware default. Re-asserting the dark here
+    // covers both, and the stored value is what the next wake pushes.
+    if (g_asleep.load()) pushSleepBrightness_(true);
+    else                 pushBrightness(led, scr);
     char buf[8];
     snprintf(buf, sizeof(buf), "%d", led);
     SetExtState("rea_sixty", "brightness", buf, true);
@@ -4517,6 +4560,13 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "notch_hold"); v && *v) {
         g_notchHold.store(std::clamp(std::atof(v), 0.0, 0.10));
     }
+    if (const char* v = GetExtState("rea_sixty", "sleep_enabled"); v && *v) {
+        g_sleepEnabled.store(*v == '1');
+    }
+    if (const char* v = GetExtState("rea_sixty", "sleep_minutes"); v && *v) {
+        g_sleepMinutes.store(std::clamp(std::atoi(v),
+                                        kSleepMinutesMin, kSleepMinutesMax));
+    }
     if (const char* v = GetExtState("rea_sixty", "theme"); v && *v) {
         g_themeSelection.store(std::atoi(v));
     }
@@ -4751,6 +4801,89 @@ void tickIdentify()
             }
         }
     }
+}
+
+// Dark or lit, on every device that is open. Waking restores the UF8 and UC1 to
+// the user's Brightness steps and the UF1 to the levels its own init sequence
+// set, because the UF1 is not on the Brightness sliders (see pushBrightness).
+void pushSleepBrightness_(bool asleep)
+{
+    if (g_dev && g_dev->isOpen()) {
+        g_dev->send(uf8::buildLedBrightness(
+            asleep ? 0x00 : kBrightnessTable[clampLevel_(g_brightness.load())].uf8_led));
+        g_dev->send(uf8::buildLcdBrightness(
+            asleep ? 0x00 : kBrightnessTable[clampLevel_(g_scribbleBrightness.load())].uf8_lcd));
+    }
+    if (g_uc1_dev && g_uc1_dev->isOpen()) {
+        const auto& bl = kBrightnessTable[clampLevel_(g_brightness.load())];
+        const auto& bs = kBrightnessTable[clampLevel_(g_scribbleBrightness.load())];
+        g_uc1_dev->send(uc1::buildLedBrightness(asleep ? 0x00 : bl.uc1_led));
+        g_uc1_dev->send(uc1::buildLcdBrightness(asleep ? 0x00 : bs.uc1_lcd));
+        g_uc1_dev->send(uc1::buildStatusBrightness(asleep ? 0x00 : bs.uc1_status));
+    }
+    if (g_uf1_dev && g_uf1_dev->isOpen()) {
+        g_uf1_dev->send(uf1::buildLedBrightness(
+            asleep ? 0x00 : kUf1LedBrightnessInit));
+        g_uf1_dev->send(uf1::buildLcdBrightness(
+            asleep ? 0x00 : kUf1LcdBrightnessInit));
+    }
+}
+
+// ⇨ CALLED ON THE THREE INPUT THREADS. Stamps activity, and returns true when
+// THIS event is the one that woke the surface, in which case the caller drops
+// it: a hand reaching for a dark panel must not solo a track it cannot see.
+// The exchange elects exactly one waker, so the press after it dispatches
+// normally even though the light is up to a tick behind.
+// Atomics only, no REAPER API here ([[feedback-reaper-api-input-thread]]).
+bool surfaceWake_()
+{
+    g_lastInputMs.store(nowMs_());
+    if (!g_asleep.exchange(false)) return false;
+    g_wakeRequest.store(true);
+    // Buttons are swallowed one layer down, as a press/release pair.
+    uf8::bindings::armWakeSwallow();
+    return true;
+}
+
+// Put the surfaces to sleep, or wake them, from an action rather than the clock.
+// MAIN THREAD ONLY — it pushes. Anything on an input thread asks for it through
+// g_sleepToggleRequest instead.
+void setAsleep_(bool asleep)
+{
+    if (g_asleep.exchange(asleep) == asleep) return;
+    g_lastInputMs.store(nowMs_());
+    pushSleepBrightness_(asleep);
+}
+
+// Main thread, from onTimerBody_. Mirrors tickIdentify: a deadline, an edge,
+// and a push only when the edge is crossed.
+void tickSleep_()
+{
+    if (g_wakeRequest.exchange(false)) pushSleepBrightness_(false);
+    // Deliberately above the transport check: asking for the dark by hand wins
+    // over a rolling transport, which is the whole point of having the key
+    // during a take. Only the CLOCK is held off while it rolls.
+    if (g_sleepToggleRequest.exchange(false)) setAsleep_(!g_asleep.load());
+
+    // ⇨ A ROLLING TRANSPORT IS ACTIVITY. Frank asked for this explicitly: a take
+    // must not go dark under his hands because he did not touch anything for
+    // twenty minutes. Carrying the stamp forward while it rolls also means the
+    // countdown starts at zero on stop rather than firing the instant he stops.
+    const int ps = GetPlayState();
+    if ((ps & 1) || (ps & 4)) {
+        g_lastInputMs.store(nowMs_());
+        return;
+    }
+
+    if (!g_sleepEnabled.load() || g_asleep.load()) return;
+
+    const int64_t last = g_lastInputMs.load();
+    if (last == 0) { g_lastInputMs.store(nowMs_()); return; }   // first tick
+    const int64_t idleMs = nowMs_() - last;
+    if (idleMs < static_cast<int64_t>(g_sleepMinutes.load()) * 60000) return;
+
+    g_asleep.store(true);
+    pushSleepBrightness_(true);
 }
 
 bool brightnessUp()
@@ -22342,6 +22475,10 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 }
             }
         } else if (cmd == 0x22 && data[i + 2] == 0x03) {
+            // Activity, and the wake edge if the surface was dark. The press
+            // itself is dropped one layer down, in dispatch(), together with
+            // its release — see armWakeSwallow.
+            (void)surfaceWake_();
             // Button: FF 22 03 id 00 state cksum
             //
             // UF8 PM-mode button ID map (see docs/protocol-notes.md). The
@@ -22953,6 +23090,12 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 g_midi->send(std::span<const uint8_t>(mcu, 3));
             }
         } else if (cmd == 0x20 && data[i + 2] == 0x02) {
+            // ⚠ STAMPED, NOT SWALLOWED. A touch on its own writes nothing — the
+            // value only moves on FF 21, which needs the hand to actually push
+            // the fader — and the debounce below tracks touch as press/release
+            // PAIRS (g_touchReported / g_touchReleasePending). Dropping the
+            // down edge here would hand it a release it never saw a press for.
+            (void)surfaceWake_();
             // Fader touch: FF 20 02 strip state cksum
             //
             // Capacitive touch — hardware-debounced. We track the state so
@@ -23147,6 +23290,10 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 }
             }
         } else if (cmd == 0x24 && data[i + 2] == 0x02) {
+            // A turn on a dark surface wakes it and moves nothing. Encoders
+            // have no release edge, so this one is swallowed right here rather
+            // than in the bindings layer.
+            if (surfaceWake_()) { i += frameSize; continue; }
             // V-pot rotation: FF 24 02 strip raw cksum
             //
             // `raw` is a 6-bit signed detent delta (two's complement) in
@@ -23376,6 +23523,11 @@ bool uf1HasActionForCurrentMod_(uf8::bindings::ButtonId id)
 void onUf1Event(const uf1::InputEvent& ev)
 {
     FILE* f = g_uf1Trace ? std::fopen(uf8::logPath("reaper_uf1_input.log").c_str(), "a") : nullptr;
+    // ⇨ EVERY KIND HERE IS A REAL EVENT — parseInputStream only calls us for
+    // frames that passed length and checksum, so unlike the UF8 path there is no
+    // idle poll to filter out. FaderPosition is the one exception and is handled
+    // in its own case: that is the motor reporting back, not a hand.
+    const bool woke = (ev.kind != uf1::InputKind::FaderPosition) && surfaceWake_();
     switch (ev.kind) {
         case uf1::InputKind::FaderTouch:
             if (f) std::fprintf(f, "FADER TOUCH %s\n", ev.pressed ? "down" : "up");
@@ -23399,8 +23551,12 @@ void onUf1Event(const uf1::InputEvent& ev)
             // dispatches by encoder id: channel-enc → track nav, jog → playhead,
             // V-pots → focused-plugin params (wired in step 3b). Mirrors the UF1
             // button path which routes through Bindings::dispatch.
-            queueInput({PendingInput::Uf1Encoder, ev.id,
-                        static_cast<double>(ev.delta)});
+            // The detent that woke the surface moves nothing; the jog wheel in
+            // particular would otherwise drag the playhead on the way out of
+            // the dark. No release edge on an encoder, so it stops here.
+            if (!woke)
+                queueInput({PendingInput::Uf1Encoder, ev.id,
+                            static_cast<double>(ev.delta)});
             break;
         case uf1::InputKind::EncoderTouch:
             if (f) std::fprintf(f, "ENC 0x%02x touch %s\n", ev.id, ev.pressed ? "down" : "up");
@@ -40363,6 +40519,10 @@ void onTimerBody_()
                 g_uf1_dev->close();
                 g_uf1_dev.reset();
                 openUf1BringUp_();
+                // The bring-up replays SSL's init sequence, and two of its
+                // frames set the UF1's brightness back to 0x10 / 0x32. A unit
+                // that reappears mid-sleep would come up lit.
+                if (g_asleep.load()) pushSleepBrightness_(true);
             }
             // Skip the rest of this tick — pointers may have shifted
             // under code that already cached them above this block.
@@ -41507,6 +41667,7 @@ void onTimerBody_()
     reasixty_actionPickerPoll();
 
     tickIdentify();
+    tickSleep_();
 
     // UF1 channel-zone + track-colour painter (Phase 1 + 2). Main-thread
     // REAPER-API reads; change-detected sends. No-op if the UF1 is absent.
@@ -45175,6 +45336,32 @@ void reasixty_setShiftFineMode(bool on)
 bool reasixty_shiftFineActive()       { return shiftFineActive_(); }
 double reasixty_knobSpeedUf8()        { return g_knobSpeedUf8.load(); }
 double reasixty_knobSpeedUc1()        { return g_knobSpeedUc1.load(); }
+// ---- Sleep ----------------------------------------------------------------
+// surfaceWake_ itself has internal linkage; UC1Surface.cpp is its own
+// translation unit and reaches it through here.
+bool reasixty_surfaceWake()           { return surfaceWake_(); }
+bool reasixty_isAsleep()              { return g_asleep.load(); }
+bool reasixty_sleepEnabled()          { return g_sleepEnabled.load(); }
+int  reasixty_sleepMinutes()          { return g_sleepMinutes.load(); }
+
+void reasixty_setSleepEnabled(bool on)
+{
+    g_sleepEnabled.store(on);
+    // Switching it on must not fire immediately on a surface nobody has touched
+    // since REAPER started: the countdown begins now.
+    g_lastInputMs.store(nowMs_());
+    if (!on && g_asleep.load()) setAsleep_(false);
+    SetExtState("rea_sixty", "sleep_enabled", on ? "1" : "0", true);
+}
+
+void reasixty_setSleepMinutes(int m)
+{
+    m = std::clamp(m, kSleepMinutesMin, kSleepMinutesMax);
+    g_sleepMinutes.store(m);
+    char b[16]; snprintf(b, sizeof(b), "%d", m);
+    SetExtState("rea_sixty", "sleep_minutes", b, true);
+}
+
 double reasixty_fineFactorUf8()       { return g_fineFactorUf8.load(); }
 double reasixty_fineFactorUc1()       { return g_fineFactorUc1.load(); }
 double reasixty_knobSpeedUf1()        { return g_knobSpeedUf1.load(); }
@@ -49096,6 +49283,21 @@ void registerBindingHandlers()
             brightnessBothDown();
         },
         nullptr, "Brightness Both (LEDs+LCDs) -", false
+    });
+
+    // ⇨ SLEEP ON A KEY, not only on the clock — for the moment before a take
+    // when three lit panels are the brightest thing in the room. Second press
+    // wakes, and so does anything else on any surface: the wake path does not
+    // care which of the two put it to sleep.
+    // ⚠ This body runs on the INPUT thread like every other builtin, so it only
+    // posts a request; tickSleep_ does the pushing on the main thread.
+    registerBuiltin("sleep_now", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_sleepToggleRequest.store(true);
+        },
+        [](int) { return g_asleep.load(); },
+        "Sleep the surfaces now", false
     });
 
     // domain_cs / domain_bc — SSL CS/BC focus buttons. EXACT pre-Quick-

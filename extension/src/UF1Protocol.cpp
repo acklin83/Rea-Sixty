@@ -151,6 +151,17 @@ std::vector<uint8_t> buildMotorPosition(uint16_t pos15) {
                  static_cast<uint8_t>((pos15 >> 8) & 0xFF)});
 }
 
+// Level 0x10 reproduces uf1_init_sequence.inc:158 including its 0x65 checksum.
+std::vector<uint8_t> buildLedBrightness(uint8_t level) {
+    return seal({kFrameMagic, 0x2D, 0x08, 0x00, 0x00,
+                 level, 0x00, level, 0x00, level, 0x00});
+}
+
+// Level 0x32 reproduces uf1_init_sequence.inc:159 including its 0x83 checksum.
+std::vector<uint8_t> buildLcdBrightness(uint8_t level) {
+    return seal({kFrameMagic, 0x4F, 0x02, level, 0x00});
+}
+
 std::vector<uint8_t> buildScreen(uint16_t elementAddr, std::span<const uint8_t> payload) {
     const uint8_t len = static_cast<uint8_t>(payload.size() + 2);  // 2 addr bytes + payload
     std::vector<uint8_t> f{kFrameMagic, 0x67, len,

@@ -26,6 +26,7 @@
 #include <tuple>
 #include <sys/stat.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -529,6 +530,41 @@ struct PressRecord {
     ButtonId                              id        = ButtonId::None;
 };
 std::unordered_map<uint32_t, PressRecord> g_pressStart;
+
+// ---- Wake swallow (see armWakeSwallow in Bindings.h) -----------------------
+// The window only has to outlive the microseconds between the surface waking
+// and this button's own dispatch call, and stay well under a deliberate second
+// press. Both maps below are guarded by g_pressMx like the press maps.
+constexpr int64_t kWakeSwallowMs = 250;
+std::atomic<int64_t> g_wakeSwallowUntilMs{0};
+std::unordered_set<int> g_wakeSwallowed;      // raw ButtonId of swallowed presses
+
+int64_t steadyNowMs_()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// True when this event belongs to the wake and must not reach a binding.
+bool wakeSwallow_(ButtonId id, bool pressed)
+{
+    const int key = static_cast<int>(id);
+    std::lock_guard<std::mutex> lk(g_pressMx);
+    if (pressed) {
+        if (steadyNowMs_() >= g_wakeSwallowUntilMs.load()) {
+            // ⚠ A press outside the window also clears any stale latch for this
+            // button. The UF1 is known to drop button releases (see the
+            // release-edge guard in dispatch), so without this a lost release
+            // would arm the swallow forever and eat the NEXT real release,
+            // leaving a Momentary binding stuck on.
+            g_wakeSwallowed.erase(key);
+            return false;
+        }
+        g_wakeSwallowed.insert(key);
+        return true;
+    }
+    return g_wakeSwallowed.erase(key) > 0;
+}
 
 // Separate tracker for Toggle / Hold + long-press. The Momentary path
 // reuses g_pressStart (deferred-primary semantics); Toggle and Hold need
@@ -4491,9 +4527,18 @@ static const ActionSlot& effectiveDoubleSlot_(const Binding& bd, int m)
     return bd.doublePress[static_cast<int>(Modifier::Plain)];
 }
 
+void armWakeSwallow()
+{
+    g_wakeSwallowUntilMs.store(steadyNowMs_() + kWakeSwallowMs);
+}
+
 bool dispatch(ButtonId id, bool pressed)
 {
     if (id == ButtonId::None) return false;
+
+    // Woke the surface: this press and its release do nothing else. Reported as
+    // handled so the caller does not fall through to the MCU passthrough.
+    if (wakeSwallow_(id, pressed)) return true;
 
     Binding bd;
     int layer;
@@ -6420,6 +6465,10 @@ const char* builtinCategory(const std::string& n)
 
     if (n.rfind("master_pin_", 0) == 0) return "Master";
     if (n.rfind("brightness_", 0) == 0) return "Brightness";
+    // Sleep is the same family as the brightness steps — it is where a
+    // user looks for "make the panel go dark" — so it shares the category
+    // rather than adding one for a single action.
+    if (n == "sleep_now") return "Brightness";
 
     if (n == "mod_shift" || n == "mod_cmd" || n == "mod_ctrl"
      || n == "uf1_fine_toggle")
@@ -6897,6 +6946,10 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "LEDs and displays together, one step brighter." },
     { "brightness_both_down",
       "LEDs and displays together, one step dimmer." },
+    { "sleep_now",
+      "Darkens every connected surface at once. Press again, or touch "
+      "anything on any surface, to bring them back; that first press or "
+      "turn only wakes and does nothing else." },
     { "mod_shift",
       "Holds the Shift modifier while pressed, so other keys fire their "
       "Shift assignment. Double-clicking latches it on; the next press "
@@ -7358,6 +7411,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "send_all_7", "Send 7 All" },
     { "send_all_8", "Send 8 All" },
     { "send_this", "Track Sends" },
+    { "sleep_now", "Sleep" },
     { "show_focused_plugin_gui", "Plug-in GUI" },
     { "show_fx_chain", "FX Chain" },
     { "show_only_selected", "Only Sel" },

@@ -998,6 +998,17 @@ void setActiveLayer(int layer);
 // falls through to legacy paths).
 bool dispatch(ButtonId id, bool pressed);
 
+// ⇨ THE PRESS THAT WAKES A DARK SURFACE MUST NOT ALSO DO ITS JOB. Called by the
+// sleep code the instant a surface wakes; for a short window after that, the
+// next press of each button is swallowed here, and so is its release, so a hand
+// reaching for an unlit panel cannot solo or clear something it cannot see.
+//
+// It lives down here rather than in main.cpp because this is the one place all
+// three surfaces' buttons converge, and because a press and its release have to
+// be swallowed as a PAIR — dropping only the press would hand the release to a
+// Momentary binding that never saw a press and leave it stuck on.
+void armWakeSwallow();
+
 // Fire a button's double-press / short-press slot ON DEMAND (no press-
 // timing, no LED bookkeeping) — used by the UF8 per-strip SEL handler,
 // which owns its own PER-STRIP double-tap detection (the shared
