@@ -660,6 +660,23 @@ enum class DynamicBankKind : uint8_t {
 // Adding a kind means moving this line, and only this line.
 constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::ObsScenes;
 
+// ⇨ DOES THIS KIND SPEND THE MODIFIERS ON ITS OWN GESTURES?
+// Only the FX bank does. Its five key gestures are Push, +Shift, +Cmd, +Ctrl and
+// Long-press (drawFxBankGestures_), so on an FX bank a modifier is already
+// spoken for and a second set would fight it — that is the decision behind
+// "a dynamic bank has no Shift set" (Frank 2026-08-18).
+//
+// Every other kind reads at most gesture 0 and gesture 4, and long-press is not
+// a modifier: parameter groups and track colours act on 4 only, Hue scenes on 0
+// and 4, favourites on 0, OBS scenes on 0 (applyDynBank*Op_ in main.cpp, checked
+// one by one). On those the modifier sets do nothing at all, so inheriting the
+// kind onto them spends a whole bank of keys to show the same eight labels that
+// Plain already shows and fire nothing (Frank 2026-09-07, on the OBS bank).
+constexpr bool dynamicKindUsesModifiers(DynamicBankKind k)
+{
+    return k == DynamicBankKind::FxBank;
+}
+
 struct UserQuickSubBank {
     Binding slots[kSlotsPerSubBank];   // top-soft-key positions
     // ⇨ ONE PER MODIFIER SET, because a set is a FULL bank rather than just a

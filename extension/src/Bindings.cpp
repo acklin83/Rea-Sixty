@@ -5225,7 +5225,15 @@ DynamicBankKind getUf1SoftBankDynamicFor(int bank, int mod, bool* ownsSet)
         return own;
     }
     if (mod == kDynamicKindSet) return own;
-    return getUf1SoftBankDynamic(bank, kDynamicKindSet);
+    // ⇨ AND THE INHERITANCE ONLY MAKES SENSE WHERE THE MODIFIERS ARE BUSY.
+    // A set with no kind of its own still sees Plain's FX bank, because there the
+    // modifier IS the gesture and calling the set "not dynamic" is what sent the
+    // press into an empty static slot and blanked the keys (regression
+    // 2026-08-18). On every other kind the modifiers do nothing, so inheriting
+    // only duplicated Plain's eight labels onto a set that fires nothing — the
+    // set is the user's there, empty and dim like any other unassigned bank.
+    const DynamicBankKind plain = getUf1SoftBankDynamic(bank, kDynamicKindSet);
+    return dynamicKindUsesModifiers(plain) ? plain : DynamicBankKind::None;
 }
 
 // Number of UF1 soft-key banks actually IN USE = (highest in-use bank index
@@ -5408,7 +5416,16 @@ DynamicBankKind getSubBankDynamicFor(int layer, int quick, int subBank,
         return own;
     }
     if (mod == kDynamicKindSet) return own;
-    return getSubBankDynamic(layer, quick, subBank, kDynamicKindSet);
+    // ⇨ AND THE INHERITANCE ONLY MAKES SENSE WHERE THE MODIFIERS ARE BUSY.
+    // A set with no kind of its own still sees Plain's FX bank, because there the
+    // modifier IS the gesture and calling the set "not dynamic" is what sent the
+    // press into an empty static slot and blanked the keys (regression
+    // 2026-08-18). On every other kind the modifiers do nothing, so inheriting
+    // only duplicated Plain's eight labels onto a set that fires nothing — the
+    // set is the user's there, empty and dim like any other unassigned bank.
+    const DynamicBankKind plain =
+        getSubBankDynamic(layer, quick, subBank, kDynamicKindSet);
+    return dynamicKindUsesModifiers(plain) ? plain : DynamicBankKind::None;
 }
 
 void setSubBankDynamic(int layer, int quick, int subBank, int mod,

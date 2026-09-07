@@ -4066,13 +4066,28 @@ MeterCfg g_meter[MID_COUNT];
 struct BrightnessBytes {
     uint8_t uf8_led; uint8_t uf8_lcd;
     uint8_t uc1_led; uint8_t uc1_lcd; uint8_t uc1_status;
+    // ⇨ THE UF1 IS ON THE SLIDERS TOO, since 2026-09-07. It never was: the
+    // action list had brightness down as blocked for want of a decoded frame,
+    // and pushBrightness only ever called the UF8 and UC1 paths. Sleep needed
+    // those frames and found them, so the sliders get them as well (Frank asked
+    // for it the moment sleep worked).
+    //
+    // The LED master and the big screen take the UF8's own opcodes and scale, so
+    // they reuse uf8_led / uf8_lcd rather than repeating them.
+    //
+    // ⚠ uf1_small is the SMALL channel LCD (opcode 0x47, one byte, init 0xff)
+    // and its scale is the one thing here that was not measured: these are
+    // uf8_lcd scaled into 0..0xff by proportion. It is full-scale at the top and
+    // dark at the bottom, which is what matters; the three steps between are a
+    // straight line through a curve nobody has plotted.
+    uint8_t uf1_small;
 };
 constexpr BrightnessBytes kBrightnessTable[5] = {
-    {0x05, 0x18, 0x0A, 0x18, 0x08},  // dark
-    {0x0A, 0x30, 0x13, 0x30, 0x0F},  // dim
-    {0x10, 0x50, 0x20, 0x50, 0x19},  // half
-    {0x13, 0x60, 0x26, 0x60, 0x1E},  // bright
-    {0x20, 0xA0, 0x40, 0xA0, 0x32},  // full
+    {0x05, 0x18, 0x0A, 0x18, 0x08, 0x26},  // dark
+    {0x0A, 0x30, 0x13, 0x30, 0x0F, 0x4C},  // dim
+    {0x10, 0x50, 0x20, 0x50, 0x19, 0x80},  // half
+    {0x13, 0x60, 0x26, 0x60, 0x1E, 0x99},  // bright
+    {0x20, 0xA0, 0x40, 0xA0, 0x32, 0xFF},  // full
 };
 
 int clampLevel_(int level)
@@ -4093,9 +4108,6 @@ int clampLevel_(int level)
 // ⚠ kBrightnessTable does not reach zero — its darkest step is 0x05/0x18, which
 // is dim, not off. Sleep therefore writes a raw 0 straight to the builders and
 // does not go through the table or BL_Dark.
-constexpr uint8_t kUf1LedBrightnessInit = 0x10;   // uf1_init_sequence.inc:158
-constexpr uint8_t kUf1LcdBrightnessInit = 0x32;   // uf1_init_sequence.inc:159
-constexpr uint8_t kUf1SmallLcdBrightnessInit = 0xFF;  // uf1_init_sequence.inc:160
 
 constexpr int kSleepMinutesMin = 1;               // SSL's own range is 1..99
 constexpr int kSleepMinutesMax = 99;              // (uf8-manual-reference.md:55)
@@ -4144,10 +4156,24 @@ void pushUc1Brightness(int ledLevel, int scribbleLevel)
     }
 }
 
+void pushUf1Brightness(int ledLevel, int scribbleLevel)
+{
+    ledLevel      = clampLevel_(ledLevel);
+    scribbleLevel = clampLevel_(scribbleLevel);
+    const auto& bl = kBrightnessTable[ledLevel];
+    const auto& bs = kBrightnessTable[scribbleLevel];
+    if (g_uf1_dev && g_uf1_dev->isOpen()) {
+        g_uf1_dev->send(uf1::buildLedBrightness(bl.uf8_led));
+        g_uf1_dev->send(uf1::buildLcdBrightness(bs.uf8_lcd));
+        g_uf1_dev->send(uf1::buildSmallLcdBrightness(bs.uf1_small));
+    }
+}
+
 void pushBrightness(int ledLevel, int scribbleLevel)
 {
     pushUf8Brightness(ledLevel, scribbleLevel);
     pushUc1Brightness(ledLevel, scribbleLevel);
+    pushUf1Brightness(ledLevel, scribbleLevel);
 }
 
 void applyBrightness()
@@ -4822,18 +4848,17 @@ void pushSleepBrightness_(bool asleep)
         g_uc1_dev->send(uc1::buildLcdBrightness(asleep ? 0x00 : bs.uc1_lcd));
         g_uc1_dev->send(uc1::buildStatusBrightness(asleep ? 0x00 : bs.uc1_status));
     }
-    if (g_uf1_dev && g_uf1_dev->isOpen()) {
-        g_uf1_dev->send(uf1::buildLedBrightness(
-            asleep ? 0x00 : kUf1LedBrightnessInit));
-        g_uf1_dev->send(uf1::buildLcdBrightness(
-            asleep ? 0x00 : kUf1LcdBrightnessInit));
-        // ⚠ The UF1 has a SECOND display. 0x4F above takes the big colour
-        // screen; the small channel LCD beside the fader stays lit. Candidate
-        // two for it — 0x1F was tried and disproven at the device. See the note
-        // at buildSmallLcdBrightness. Restoring the init value on wake means a
-        // wrong guess reverts itself.
-        g_uf1_dev->send(uf1::buildSmallLcdBrightness(
-            asleep ? 0x00 : kUf1SmallLcdBrightnessInit));
+    // The UF1 needs all THREE: the LED master, the big colour screen and the
+    // small channel LCD beside the fader, which has its own backlight (0x47) and
+    // was the one thing still lit after the first device test.
+    if (asleep) {
+        if (g_uf1_dev && g_uf1_dev->isOpen()) {
+            g_uf1_dev->send(uf1::buildLedBrightness(0x00));
+            g_uf1_dev->send(uf1::buildLcdBrightness(0x00));
+            g_uf1_dev->send(uf1::buildSmallLcdBrightness(0x00));
+        }
+    } else {
+        pushUf1Brightness(g_brightness.load(), g_scribbleBrightness.load());
     }
 }
 

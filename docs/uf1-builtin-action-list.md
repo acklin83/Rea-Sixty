@@ -268,9 +268,11 @@ one while UF8 sums after it, and `0xFF + 1` falls out of the byte.
 `uf1::buildLedBrightness` / `uf1::buildLcdBrightness` (UF1Protocol) build them with the
 UF1's own checksum, and Sleep uses them to take all three surfaces to zero.
 
-⚠ Still open, and a separate job: the `brightness_*` step actions and the Brightness
-sliders in Settings do not reach the UF1 — `pushBrightness` calls only the UF8 and UC1
-paths. Nothing blocks it any more; nobody has asked for it.
+**Done 2026-09-07:** `pushBrightness` now calls `pushUf1Brightness` too, so the
+Brightness sliders and all six `brightness_*` step actions reach the UF1. It takes
+three frames, not two — the small channel LCD beside the fader has its own
+backlight on opcode `0x47` (proven at the device; `0x1F`, which looks much more
+like it, is not it).
 
 ### Modifiers — `mod_shift`, `mod_cmd`, `mod_ctrl`
 **KEEP.** UF1 SHIFT (0x36) already feeds the shared modifier; binding SHIFT → `mod_shift`

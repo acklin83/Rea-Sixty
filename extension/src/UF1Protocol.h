@@ -159,28 +159,19 @@ std::vector<uint8_t> buildLedBrightness(uint8_t level);
 //   FF 4F 02 <b> 00 <ck>                         colour screen backlight
 std::vector<uint8_t> buildLcdBrightness(uint8_t level);
 
-// ⚠ CANDIDATE, NOT PROVEN — second attempt.
-// The UF1 has a second display, the small channel LCD beside the fader, and
-// 0x4F above does not touch it: at backlight 0 the big screen and every LED go
-// dark and that one stays lit (Frank, at the device, 2026-09-07).
+// ⇨ AND THE UF1 HAS A SECOND DISPLAY. The small channel LCD beside the fader has
+// its own backlight, and 0x4F does not touch it: at 0x4F = 0 the big screen and
+// every LED go dark and that one stays lit. This is the frame for it, PROVEN at
+// the device 2026-09-07 — sending 0 turns it off and the init value brings it
+// back. uf1_init_sequence.inc:160 sends `ff 47 01 ff 47`, one payload byte at
+// full scale, directly after the two brightness frames above.
 //
-// ⛔ 0x1F IS NOT IT. `ff 1f 02 10 00` sits three frames before the LED master in
-// the init and has the same <b> 00 payload shape as the proven 0x4F, which made
-// it the obvious guess. Sending it as 0 changed nothing at the device. Recorded
-// here so nobody spends the same round again.
+// ⛔ 0x1F IS NOT IT, though it looks far more like it: `ff 1f 02 10 00` sits
+// three frames earlier with the same <b> 00 payload shape as the proven 0x4F.
+// Sending it as 0 changed nothing at the device. Recorded so nobody spends the
+// same round again.
 //
-// This is what is left in the init sequence that could carry a level:
-// uf1_init_sequence.inc:160 sends `ff 47 01 ff 47` once, directly after the two
-// known brightness frames, one payload byte at full scale. That adjacency and
-// that value are the whole case for it; the corpus cannot confirm more, because
-// a raw search for `ff 47 01` across the captures returns mostly coincidental
-// byte runs inside other payloads.
-//
-// If this one is wrong too, the small LCD has no brightness of its own and sleep
-// has to blank its CONTENT instead — which means a screen-owning mode and the
-// whole checklist that comes with it, not another opcode.
-//
-//   FF 47 01 <b> <ck>                            channel LCD backlight?
+//   FF 47 01 <b> <ck>                            channel LCD backlight, 0 = off
 std::vector<uint8_t> buildSmallLcdBrightness(uint8_t level);
 
 // Screen element write:
