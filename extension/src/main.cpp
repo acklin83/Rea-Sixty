@@ -9624,6 +9624,19 @@ static void applyFxMoveSlotAware_(int step, bool carousel)
         const int gi = uf8::findFxIndexByGuid(t.tr, movingGuid);
         if (gi >= 0) cur = gi;
     }
+    // ⛔ A SLOT HINT DOES NOT REDRAW THE MCP, and that is what made a move into
+    // an empty slot look like no move at all. Crossing a real FX reorders the
+    // chain, so REAPER repaints the FX list by itself and those steps always
+    // looked right; the gap step only writes an attribute, nothing repaints, and
+    // the plug-in stayed drawn where it was. The next detent that crossed
+    // something then repainted BOTH steps at once, which read as "it skips the
+    // gap and moves two" — and in between, the overlay sat on the correct slot
+    // over a stale row, which is exactly what Frank described first
+    // (2026-09-07, screenshots: two identical frames, then a double jump).
+    //
+    // The SDK says so at the top of the named-config section: writing these
+    // attributes means updating the arrange and the track panels yourself.
+    TrackList_AdjustWindows(false);
     setStripInstanceFx_(t.tr, cur);   // re-anchor the Instance cursor (GUID-based)
     // Also re-rank the CS/BC DOMAIN instance onto the moved FX — mirrors
     // landFxCursor_. Without this the domain active-instance kept its old ordinal,
