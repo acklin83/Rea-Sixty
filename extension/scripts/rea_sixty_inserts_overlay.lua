@@ -633,6 +633,31 @@ local function rowsStale_(block)
       if tonumber(seen) ~= fx then return true end
     end
   end
+  -- ⇨ AND ONE ROW PAST THE END, or a plug-in ADDED never counts as stale.
+  -- lo/hi only re-verify what the map already knows. Adding an FX leaves every
+  -- known row exactly where it was, so both probes agreed, the cache was kept,
+  -- and the map simply had no entry for the new slot: the overlay stopped
+  -- drawing from that slot number on until the script was restarted
+  -- (Frank 2026-09-07, "muss ich oft das MCP overlay neu starten").
+  --
+  -- The step comes from the map, not from overlay_rowh: these are SCREEN y, the
+  -- axis points UP on macOS (see the geometry notes at refineMcpColumn), and a
+  -- measured delta carries the right sign on either platform. With a single
+  -- known row there is no delta to measure, so this simply does not fire —
+  -- fail open, like every other test in this file.
+  if hi > lo then
+    local eLo, eHi = rows[lo], rows[hi]
+    if eLo and eHi and eLo.sy and eHi.sy then
+      local step = (eHi.sy - eLo.sy) / (hi - lo)
+      local py = math.floor(eHi.sy + step + 0.5)
+      local _, info = reaper.GetThingFromPoint(block.probeX, py)
+      local seen = info and not info:match("param:")
+                   and info:match("^mcp%.fxlist%s+%d+%s+fx:(%d+)")
+      -- Exactly hi+1, not merely "some fx row": anything else means the list
+      -- moved rather than grew, and the two probes above already own that case.
+      if tonumber(seen) == hi + 1 then return true end
+    end
+  end
   return false
 end
 
