@@ -43643,28 +43643,27 @@ bool resolveBcFavForTrack(MediaTrack* tr, int slot, std::string& addName, std::s
 // plug-in is no longer a channel strip cannot be switched TO — the switch reads
 // "no strip here" and used to insert another copy on every detent
 // (Frank 2026-09-07). The insert is guarded now; this removes the cause.
-// Called right after a map is removed. Returns how many slots were cleared, so
-// the dialog can say so rather than doing it behind the user's back.
-int reasixty_pruneDanglingFavourites()
+// Called right after a map is removed. Returns how many slots are (or would be)
+// affected, so the dialog can say so rather than doing it behind the user's
+// back, and so the Favourites pane can offer the same clean-up for the ones that
+// went dangling before this existed. `apply` false only counts.
+int reasixty_pruneDanglingFavourites(bool apply)
 {
-    int cleared = 0;
-    for (int i = 0; i < 8; ++i) {
-        std::string a, l;
-        if (resolveCsFav(i, a, l) && !a.empty()
-            && !uc1::lookupBindingsByName(a.c_str())) {
-            reasixty_clearCsFavByName(a.c_str());
-            ++cleared;
+    int hits = 0;
+    for (int dom = 0; dom < 2; ++dom) {
+        for (int i = 0; i < 8; ++i) {
+            std::string a, l;
+            const bool have = dom == 0 ? resolveCsFav(i, a, l)
+                                       : resolveBcFav(i, a, l);
+            if (!have || a.empty()) continue;
+            if (uc1::lookupBindingsByName(a.c_str())) continue;   // still mapped
+            ++hits;
+            if (!apply) continue;
+            if (dom == 0) reasixty_clearCsFavByName(a.c_str());
+            else          reasixty_clearBcFavByName(a.c_str());
         }
     }
-    for (int i = 0; i < 8; ++i) {
-        std::string a, l;
-        if (resolveBcFav(i, a, l) && !a.empty()
-            && !uc1::lookupBindingsByName(a.c_str())) {
-            reasixty_clearBcFavByName(a.c_str());
-            ++cleared;
-        }
-    }
-    return cleared;
+    return hits;
 }
 
 bool resolveCsFav(int slot, std::string& addName, std::string& label)

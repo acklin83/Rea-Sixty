@@ -221,9 +221,10 @@ bool reasixty_csFav(int slot, std::string& addName, std::string& label);
 int  reasixty_csFavSlotOf(const char* addName);
 void reasixty_setCsFav(int slot, const char* addName, const char* label);
 void reasixty_clearCsFavByName(const char* addName);
-// Clears favourite slots whose plug-in no longer has a map. Returns the
-// count, so deleting a mapping can say what else it took with it.
-int  reasixty_pruneDanglingFavourites();
+// Favourite slots whose plug-in no longer has a map. Returns the count; clears
+// them only when `apply`. Lets the delete dialog say what it took with it, and
+// the Favourites pane offer the same clean-up after the fact.
+int  reasixty_pruneDanglingFavourites(bool apply);
 int  reasixty_csFavSlotMatching(const char* addName);
 bool reasixty_bcFav(int slot, std::string& addName, std::string& label);
 void reasixty_setBcFav(int slot, const char* addName, const char* label);
@@ -21298,7 +21299,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 user_plugins::removeByMatch(g_pendingDeleteMatch);
                 // AFTER the removal: the sweep asks which favourites no longer
                 // resolve to a map, so it needs the map already gone.
-                reasixty_pruneDanglingFavourites();
+                reasixty_pruneDanglingFavourites(/*apply*/ true);
             }
             g_pendingDeleteMatch.clear();
             persistAndReport_();
@@ -23416,6 +23417,25 @@ void SettingsScreen::drawFavourites(ImGui_Context* ctx)
     ImGui_Text(ctx, "Favourites");
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
+
+    // ⇨ FAVOURITES THAT LOST THEIR PLUG-IN'S MAPPING. Un-learning a plug-in used
+    // to leave its favourite slot behind, and the slot cannot switch a strip
+    // without a mapping. Deleting a mapping clears them at the source now; this
+    // is for the ones that went dangling before that existed. Shown only when
+    // there is something to clear.
+    if (const int dangling = reasixty_pruneDanglingFavourites(/*apply*/ false);
+        dangling > 0) {
+        char msg[220];
+        std::snprintf(msg, sizeof(msg),
+            "%d favourite %s at a plug-in with no mapping, usually one that was "
+            "un-learned. Without a mapping it is not a strip, so the slot "
+            "cannot switch to it.",
+            dangling, dangling == 1 ? "points" : "slots point");
+        ImGui_TextColored(ctx, 0xE8C33AFF, msg);
+        if (ImGui_Button(ctx, "Clear them##fav_prune_dangling", nullptr, nullptr))
+            reasixty_pruneDanglingFavourites(/*apply*/ true);
+        ImGui_Spacing(ctx);
+    }
 
     // --- Copy / own mode (per domain) ---------------------------------------
     bool csOwn = reasixty_csFavOwnSettings();

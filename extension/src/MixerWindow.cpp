@@ -342,6 +342,7 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Copy only mapped parameters",                       kSecFavourites, "" },
     { "Favourites remember non-copied sections",           kSecFavourites, "" },
     { "This project uses its own Favourites",              kSecFavourites, "" },
+    { "Clear them (favourites with no mapping)",            kSecFavourites, "" },
     { "Multi-select: unify sets to focused track",         kSecFavourites, "" },
     { "Channel Strip: use own settings (vs copy values)",  kSecFavourites, "" },
     { "Bus Compressor: use own settings (vs copy values)", kSecFavourites, "" },
