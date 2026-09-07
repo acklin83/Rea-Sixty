@@ -163,8 +163,9 @@ std::vector<uint8_t> buildLcdBrightness(uint8_t level) {
 }
 
 // Level 0xff reproduces uf1_init_sequence.inc:160 including its 0x47 checksum.
-// Proven at the device 2026-09-07; see the header, including why 0x1F is not it.
-std::vector<uint8_t> buildSmallLcdBrightness(uint8_t level) {
+// Proven at the device 2026-09-07; see the header, including why 0x1F is not it
+// and why this is a master rather than one display's backlight.
+std::vector<uint8_t> buildMasterBrightness(uint8_t level) {
     return seal({kFrameMagic, 0x47, 0x01, level});
 }
 

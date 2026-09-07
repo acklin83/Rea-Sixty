@@ -996,7 +996,7 @@ If no surface has ever been attached, everything is shown.
 Two 5-step sliders (Dark / Dim / Half / Bright / Full):
 
 - **LEDs** — drives buttons + V-Pot rings + UC1 LEDs + the UF1's LEDs
-- **LCDs** — drives the UF8 LCD strips + UC1 LCD + UC1 status displays + both of the UF1's displays
+- **LCDs** — drives the UF8 LCD strips + UC1 LCD + UC1 status displays + the UF1's colour screen
 
 Set independently so you can crank the displays while keeping the LED ring dim, or vice versa. Six **Brightness …** actions (LEDs +/-, LCDs +/-, Both +/-) drive these from any button binding.
 

@@ -269,10 +269,19 @@ one while UF8 sums after it, and `0xFF + 1` falls out of the byte.
 UF1's own checksum, and Sleep uses them to take all three surfaces to zero.
 
 **Done 2026-09-07:** `pushBrightness` now calls `pushUf1Brightness` too, so the
-Brightness sliders and all six `brightness_*` step actions reach the UF1. It takes
-three frames, not two — the small channel LCD beside the fader has its own
-backlight on opcode `0x47` (proven at the device; `0x1F`, which looks much more
-like it, is not it).
+Brightness sliders and all six `brightness_*` step actions reach the UF1.
+
+Two frames, not three. `0x2D` is the LED master and `0x4F` the big screen, both
+the UF8's opcodes on the UF8's scale, though the screen needed a column of its
+own because uf8_lcd read a step too dark on this panel.
+
+`0x47` is a **panel master over the LEDs as well**, not the small channel LCD's
+own backlight as first assumed: driving it from the LCD slider dimmed the button
+LEDs with it. With the checksum verified it appears 15 times across the whole
+capture corpus and is `0xff` every time, which is what SSL does with a master and
+not what anyone does with a level. It belongs to Sleep alone, which is also the
+only thing that darkens the small channel LCD. (`0x1F`, which looks far more like
+a backlight than either, is not one.)
 
 ### Modifiers — `mod_shift`, `mod_cmd`, `mod_ctrl`
 **KEEP.** UF1 SHIFT (0x36) already feeds the shared modifier; binding SHIFT → `mod_shift`

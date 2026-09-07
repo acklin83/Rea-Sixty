@@ -159,20 +159,24 @@ std::vector<uint8_t> buildLedBrightness(uint8_t level);
 //   FF 4F 02 <b> 00 <ck>                         colour screen backlight
 std::vector<uint8_t> buildLcdBrightness(uint8_t level);
 
-// ⇨ AND THE UF1 HAS A SECOND DISPLAY. The small channel LCD beside the fader has
-// its own backlight, and 0x4F does not touch it: at 0x4F = 0 the big screen and
-// every LED go dark and that one stays lit. This is the frame for it, PROVEN at
-// the device 2026-09-07 — sending 0 turns it off and the init value brings it
-// back. uf1_init_sequence.inc:160 sends `ff 47 01 ff 47`, one payload byte at
-// full scale, directly after the two brightness frames above.
+// ⇨ AND A PANEL MASTER OVER ALL OF IT. 0x2D and 0x4F leave one thing lit: the
+// small channel LCD beside the fader. This frame takes the whole panel down,
+// that display included, and 0 turns it off (proven at the device 2026-09-07).
 //
-// ⛔ 0x1F IS NOT IT, though it looks far more like it: `ff 1f 02 10 00` sits
-// three frames earlier with the same <b> 00 payload shape as the proven 0x4F.
-// Sending it as 0 changed nothing at the device. Recorded so nobody spends the
-// same round again.
+// ⛔ IT IS A MASTER, NOT THAT DISPLAY'S OWN LEVEL, and the difference is visible:
+// driving it from the LCD slider dimmed the BUTTON LEDs along with it (Frank
+// 2026-09-07). The corpus says the same thing more quietly — with the checksum
+// verified, `ff 47 01` occurs 15 times across every capture we have and carries
+// 0xff every single time. SSL sets it to full once at init and never touches it
+// again, which is what you do with a master and not what you do with a level.
+// (An unchecked byte search suggests it varies; those extra hits are random runs
+// inside other payloads. Verify the checksum before believing a corpus count.)
 //
-//   FF 47 01 <b> <ck>                            channel LCD backlight, 0 = off
-std::vector<uint8_t> buildSmallLcdBrightness(uint8_t level);
+// So it belongs to sleep and to nothing else: full while awake, 0 while asleep.
+// The small channel LCD has no level of its own that anyone has found.
+//
+//   FF 47 01 <b> <ck>                            panel master, 0xff = full
+std::vector<uint8_t> buildMasterBrightness(uint8_t level);
 
 // Screen element write:
 //   FF 67 <len> <addrHi> <addrLo> <payload...> <ck>     len = payload.size() + 2

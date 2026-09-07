@@ -4074,29 +4074,33 @@ struct BrightnessBytes {
     //
     // The LED master shares the UF8's opcode AND its scale, so it reuses uf8_led.
     //
-    // ⚠ BOTH UF1 DISPLAYS NEED THEIR OWN COLUMN. Driving them off uf8_lcd read a
+    // ⚠ THE UF1's BIG SCREEN NEEDS ITS OWN COLUMN. Driving it off uf8_lcd read a
     // full step darker than the other surfaces at every setting, and the bottom
     // step went out altogether where the UF8 and UC1 keep a visible glow (Frank,
-    // at the device, 2026-09-07). So uf1_lcd is uf8_lcd moved up one step, with
-    // the top opened to near full scale, and uf1_small the same shape on its own
-    // 0..0xff range.
+    // at the device, 2026-09-07). uf1_lcd is uf8_lcd moved up one step with the
+    // top opened toward full scale. Corrected by eye, not measured.
     //
     // ⛔ THE BOTTOM STEP IS NOT OFF. "Dark" is the dimmest a user can dial, and
     // it has to stay legible — going out at 0 makes the surface look broken and
     // takes the panel away for a setting that is meant to keep it. Only SLEEP
     // sends a real 0, and it does that outside this table.
     //
-    // The five steps between top and bottom are still a straight line through a
-    // curve nobody has plotted; they are corrected by eye, not measured.
-    uint8_t uf1_lcd; uint8_t uf1_small;
+    // There is no column for the small channel LCD: the only frame that reaches
+    // it (0x47) turned out to be a panel master over the LEDs as well, so it is
+    // not a slider's to move. See buildMasterBrightness.
+    uint8_t uf1_lcd;
 };
 constexpr BrightnessBytes kBrightnessTable[5] = {
-    {0x05, 0x18, 0x0A, 0x18, 0x08, 0x30, 0x4C},  // dark
-    {0x0A, 0x30, 0x13, 0x30, 0x0F, 0x50, 0x80},  // dim
-    {0x10, 0x50, 0x20, 0x50, 0x19, 0x60, 0x99},  // half
-    {0x13, 0x60, 0x26, 0x60, 0x1E, 0xA0, 0xCC},  // bright
-    {0x20, 0xA0, 0x40, 0xA0, 0x32, 0xE0, 0xFF},  // full
+    {0x05, 0x18, 0x0A, 0x18, 0x08, 0x30},  // dark
+    {0x0A, 0x30, 0x13, 0x30, 0x0F, 0x50},  // dim
+    {0x10, 0x50, 0x20, 0x50, 0x19, 0x60},  // half
+    {0x13, 0x60, 0x26, 0x60, 0x1E, 0xA0},  // bright
+    {0x20, 0xA0, 0x40, 0xA0, 0x32, 0xE0},  // full
 };
+
+// What the UF1's panel master sits at while the surface is awake: full, the way
+// SSL's own init leaves it and never changes it.
+constexpr uint8_t kUf1MasterFull = 0xFF;
 
 int clampLevel_(int level)
 {
@@ -4171,9 +4175,11 @@ void pushUf1Brightness(int ledLevel, int scribbleLevel)
     const auto& bl = kBrightnessTable[ledLevel];
     const auto& bs = kBrightnessTable[scribbleLevel];
     if (g_uf1_dev && g_uf1_dev->isOpen()) {
+        // ⛔ THE MASTER (0x47) IS NOT SENT HERE. It dims the button LEDs too, so
+        // driving it from the LCD slider took the LEDs down with the displays
+        // (Frank 2026-09-07). Sleep owns it; the sliders own these two.
         g_uf1_dev->send(uf1::buildLedBrightness(bl.uf8_led));
         g_uf1_dev->send(uf1::buildLcdBrightness(bs.uf1_lcd));
-        g_uf1_dev->send(uf1::buildSmallLcdBrightness(bs.uf1_small));
     }
 }
 
@@ -4859,11 +4865,15 @@ void pushSleepBrightness_(bool asleep)
     // The UF1 needs all THREE: the LED master, the big colour screen and the
     // small channel LCD beside the fader, which has its own backlight (0x47) and
     // was the one thing still lit after the first device test.
+    // ⇨ SLEEP IS THE ONE OWNER OF THE UF1's PANEL MASTER. Taking it to 0 is what
+    // finally darkens the small channel LCD, which 0x2D and 0x4F leave lit; on
+    // wake it goes back to full and the two sliders paint over it.
+    if (g_uf1_dev && g_uf1_dev->isOpen())
+        g_uf1_dev->send(uf1::buildMasterBrightness(asleep ? 0x00 : kUf1MasterFull));
     if (asleep) {
         if (g_uf1_dev && g_uf1_dev->isOpen()) {
             g_uf1_dev->send(uf1::buildLedBrightness(0x00));
             g_uf1_dev->send(uf1::buildLcdBrightness(0x00));
-            g_uf1_dev->send(uf1::buildSmallLcdBrightness(0x00));
         }
     } else {
         pushUf1Brightness(g_brightness.load(), g_scribbleBrightness.load());
