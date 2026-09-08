@@ -1207,7 +1207,6 @@ Surface-side handling of the REAPER Master bus. See **Master track** (own chapte
 | Control | Effect |
 |---|---|
 | Parameter change switches soft-key bank | On by default. A focused-parameter change switches the SSL soft-key bank to whichever bank holds that parameter. Off → the bank stays put when you touch a parameter. The UF8 parameter display follows the parameter either way. |
-| Layers switch Quicks only | Off by default, where `LAYER 1 / 2 / 3` re-bind the whole surface and every key can carry a different action per layer. On, the surface keeps Layer 1's bindings everywhere and the layer key only selects which group of Quicks and soft-key banks is live: three sets of banks rather than three surfaces. The LAYER lamps and the ring in the bindings schema follow the layer either way, since that is what the hardware is on, and bindings stored on Layers 2 and 3 stay stored for when you switch it off again. |
 | Engage a fixed soft-key bank at startup | Off by default. Ticking it reveals three combos — **Layer** (1-3), **Quick** (Q1-Q3), **Soft-key bank** (V-POT / Soft 1-5) — and that user-Quick is engaged once on the first timer tick of every fresh REAPER session, instead of the plug-in-driven default. **Use current hardware bank** fills the three combos from whatever is engaged on the UF8 right now. Layer 1's Q1 / Q2 are greyed out: they are the hardcoded SSL CS / BC focus and carry no user-Quick slots. Ignored while UF8 Plug-in Mode is on — that mode owns the soft-keys. |
 
 ### UF1
@@ -1237,6 +1236,8 @@ Top of the pane: a tab bar with **UF8**, **UC1** and **UF1**, each rendering its
 **The eight top soft-keys wear their LED colour** in the schematic, so a bank you coloured reads as that bank at a glance. It is the *active* colour, the one the key shows when it is lit, and it follows the Plain / Shift switch, because a key can be one colour on Plain and another on Shift. White is left alone: it is the factory colour on every key nobody has touched, and eight white tiles would say less than the grey they replaced. A **dynamic** bank is not coloured at all, for the same reason its labels are not shown: its colours come from the focused track, and this panel has no track.
 
 The "current layer" follows whichever Layer button (1 / 2 / 3) is highlighted in the schematic — click a Layer button to switch the live layer; the green outline indicates which one is active. There is no separate layer-tab strip.
+
+**Layers switch Quicks only** (checkbox at the top of the pane, off by default). Off, a layer key re-binds the whole surface and every key can carry a different action per layer. On, the surface keeps Layer 1's bindings everywhere and the layer key only selects which group of Quicks and soft-key banks is live: three sets of banks rather than three surfaces. Quick 1 to 3 and the sub-bank row are the exception either way, since their bindings are how a layer's sets are reached. The LAYER lamps and the green ring follow the layer regardless, because that is what the hardware is on, and bindings stored on Layers 2 and 3 are left alone for when you switch it off again.
 
 Five click-to-edit special cases:
 

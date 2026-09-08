@@ -37419,7 +37419,7 @@ ResolvedLed resolveLed_(uf8::Uf8GlobalLed cell,
                       : uf8::GlobalLedState::Dim;
     const auto bid = buttonIdForGlobalLed(cell);
     if (bid == uf8::bindings::ButtonId::None) return r;
-    const int activeLayer = uf8::bindings::getActiveLayer();
+    const int activeLayer = uf8::bindings::layerForButton(bid);
 
     // Layer indicator LEDs (Layer1/2/3) are system state indicators,
     // NOT user-chosen feature LEDs — they have to follow activeLayer
@@ -37629,8 +37629,13 @@ bool bindingHasActiveSlot_(const uf8::bindings::Binding& bd)
 bool boundActionIsActive_(uf8::bindings::ButtonId bid)
 {
     if (bid == uf8::bindings::ButtonId::None) return false;
+    // ⛔ layerForButton, NOT getActiveLayer. Under "Layers switch Quicks only"
+    // the Quick keys keep following the surface's layer, and a lamp that asked
+    // Layer 1 instead asked about domain_cs while the key was engaging Layer
+    // 3's set: banks switched, the frame in Settings moved, and no Quick lit
+    // (Frank 2026-09-08).
     return bindingHasActiveSlot_(uf8::bindings::getBinding(
-        uf8::bindings::getActiveLayer(), bid));
+        uf8::bindings::layerForButton(bid), bid));
 }
 
 
@@ -37644,7 +37649,7 @@ bool modifierSlotArmed_(uf8::Uf8GlobalLed cell, uf8::bindings::Modifier mod)
     const auto bid = buttonIdForGlobalLed(cell);
     if (bid == uf8::bindings::ButtonId::None) return false;
     const auto bd = uf8::bindings::getBinding(
-        uf8::bindings::getActiveLayer(), bid);
+        uf8::bindings::layerForButton(bid), bid);
     const auto& slot = bd.shortPress[static_cast<int>(mod)];
     // slotIsEmpty (vs type != Noop) so a half-edited slot (e.g. type
     // = Reaper but action = "") doesn't preview an LED for an action
@@ -37740,7 +37745,7 @@ void sendUf8GlobalLed(uf8::Uf8GlobalLed cell, uf8::GlobalLedState callerState)
                 if (mod == uf8::bindings::Modifier::Plain
                     && resolveMod != uf8::bindings::Modifier::Plain) {
                     const auto bd = uf8::bindings::getBinding(
-                        uf8::bindings::getActiveLayer(), bid);
+                        uf8::bindings::layerForButton(bid), bid);
                     const auto& plain = bd.shortPress[
                         static_cast<int>(uf8::bindings::Modifier::Plain)];
                     const bool plainHasLed =

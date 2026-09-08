@@ -382,6 +382,7 @@ bool reasixty_bcFavOwnSettings(); void reasixty_setBcFavOwnSettings(bool on);
 bool reasixty_favMultiUnify(); void reasixty_setFavMultiUnify(bool on);
 bool reasixty_favCopyMappedOnly(); void reasixty_setFavCopyMappedOnly(bool on);
 bool reasixty_paramSwitchesSoftKeyBank(); void reasixty_setParamSwitchesSoftKeyBank(bool on);
+bool reasixty_layersQuicksOnly(); void reasixty_setLayersQuicksOnly(bool on);
 bool reasixty_keyboardShiftModifier();
 void reasixty_setKeyboardShiftModifier(bool on);
 bool reasixty_keyboardCmdModifier();
@@ -6758,6 +6759,16 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // This pane is painting: it owns the surface's set until it stops (see
     // reasixty_publishSettingsModifierPin, which consumes and clears this).
     g_bindingsPaneDrew = true;
+
+    // What a layer key does, next to the layer keys themselves.
+    {
+        bool lqo = reasixty_layersQuicksOnly();
+        if (ImGui_Checkbox(ctx, "Layers switch Quicks only", &lqo)) {
+            reasixty_setLayersQuicksOnly(lqo);
+        }
+        ImGui_TextDisabled(ctx, "Off: a layer re-binds the whole surface.");
+        ImGui_Spacing(ctx);
+    }
 
     // The surface's modifier moves the edit set wherever you are in this pane —
     // see trackBankModifierEdge_. Runs before the schematic, which previews the

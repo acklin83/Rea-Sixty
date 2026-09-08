@@ -4533,7 +4533,8 @@ void armWakeSwallow()
 }
 
 // Defined with getQuickLayer further down; used by all three dispatch paths.
-static bool layerSelectorButton_(ButtonId id);
+bool isLayerSelectorButton(ButtonId id);
+int  applyLayerOption(int rawLayer, ButtonId id);
 
 bool dispatch(ButtonId id, bool pressed)
 {
@@ -4553,7 +4554,7 @@ bool dispatch(ButtonId id, bool pressed)
         // call getActiveLayer (they could not: it takes g_cfgMutex again), so the
         // option has to be applied here or it does nothing to the one thing it is
         // about. Layer-selector keys are exempt — see layerSelectorButton_.
-        if (g_layersQuicksOnly.load() && !layerSelectorButton_(id)) layer = 0;
+        layer = applyLayerOption(layer, id);
         auto it = g_cfg.layers[layer].bindings.find(id);
         // Release-edge stuck-key guard: when the active layer changes
         // mid-hold (mixer-visibility auto-switch, manual layer flip,
@@ -4847,7 +4848,7 @@ static bool fireResolvedSlot_(ButtonId id, bool wantDouble)
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         int layer = g_cfg.activeLayer;
         if (layer < 0 || layer > 2) layer = 0;
-        if (g_layersQuicksOnly.load() && !layerSelectorButton_(id)) layer = 0;
+        layer = applyLayerOption(layer, id);
         auto it = g_cfg.layers[layer].bindings.find(id);
         if (it == g_cfg.layers[layer].bindings.end()) return false;
         bd = it->second;
@@ -4931,7 +4932,20 @@ std::atomic<bool> g_layersQuicksOnly{false};
 // enter — Frank 2026-09-08: "dann kann ich auf L2+3 die Quicks nicht mehr
 // wechseln." The sub-bank row is in for the same reason: it picks the page
 // inside the engaged set.
-static bool layerSelectorButton_(ButtonId id)
+// The rule itself, lock-free so the dispatch paths can use it while they hold
+// g_cfgMutex and the LED paths can use it through layerForButton below.
+int applyLayerOption(int rawLayer, ButtonId id)
+{
+    if (!g_layersQuicksOnly.load()) return rawLayer;
+    return isLayerSelectorButton(id) ? rawLayer : 0;
+}
+
+int layerForButton(ButtonId id)
+{
+    return applyLayerOption(getQuickLayer(), id);
+}
+
+bool isLayerSelectorButton(ButtonId id)
 {
     switch (id) {
         case ButtonId::Quick1: case ButtonId::Quick2: case ButtonId::Quick3:
@@ -5177,7 +5191,7 @@ bool dispatchEncoder(ButtonId id, int stepDelta)
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         layer = g_cfg.activeLayer;
         if (layer < 0 || layer > 2) layer = 0;
-        if (g_layersQuicksOnly.load() && !layerSelectorButton_(id)) layer = 0;
+        layer = applyLayerOption(layer, id);
         auto it = g_cfg.layers[layer].bindings.find(id);
         if (it == g_cfg.layers[layer].bindings.end()) return false;
         bd = it->second;

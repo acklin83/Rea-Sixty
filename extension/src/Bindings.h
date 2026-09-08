@@ -1112,6 +1112,13 @@ bool hasBinding(int layer, ButtonId id);
 // LAYER lamps. Equal to getActiveLayer unless "Layers switch Quicks only" is
 // on, in which case bindings stay on Layer 1 and only this one moves.
 int getQuickLayer();
+// The layer THIS button's binding resolves against. Equal to getActiveLayer
+// except for the keys that are the layer mechanism itself (Quick 1-3 and the
+// sub-bank row), which always follow the layer the surface is on. Use this
+// anywhere a LED or a label asks "what is this key bound to right now".
+int  layerForButton(ButtonId id);
+bool isLayerSelectorButton(ButtonId id);
+int  applyLayerOption(int rawLayer, ButtonId id);
 // The option itself. Session state mirrors the persisted setting.
 extern std::atomic<bool> g_layersQuicksOnly;
 
