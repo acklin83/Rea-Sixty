@@ -960,6 +960,13 @@ std::atomic<int>  g_navRegionPress{0};
 //
 //   g_navUf8Mode  0 = Regions       1 = Markers (all)
 //   g_navUc1Mode  0 = Mirror UF8    1 = Regions    2 = Markers
+//                 3 = Markers in region
+//
+// ⇨ 2 UND 3 WAREN EINE WAHL. Modus 2 hiess "Marker, und wenn der UF8 gerade
+// Regionen zeigt, dann nur die aus seiner Region" — ein Eintrag, dessen
+// Bedeutung davon abhing, was eine ANDERE Fläche gerade tat. Frank am
+// 08.09.2026: daraus zwei Einträge machen. 2 ist ab jetzt immer alle Marker,
+// 3 ist die Verschachtelung, und man sieht in der Pane, welche man hat.
 //
 // Drill-down is unchanged in Mirror mode; in independent UC1 modes
 // drill becomes implicit (the UF8-cursor → UC1-scope coupling does
@@ -968,6 +975,11 @@ std::atomic<int>  g_navUf8Mode{0};
 std::atomic<int>  g_navUc1Mode{0};
 // UC1-local cursor for independent modes. Session-only (not persisted).
 std::atomic<int>  g_navUc1Cursor{0};
+// Welche Marker-Sorte zuletzt gewählt war (2 oder 3). Toggle View springt aus
+// Regionen dorthin zurück, statt die Wahl des Nutzers stillschweigend auf 2 zu
+// setzen. Session-only, aus dem geladenen Modus vorbelegt.
+std::atomic<int>  g_navUc1MarkersFlavour{2};
+std::atomic<int>  g_navUf1MarkersFlavour{2};
 
 // Playhead-nudge step size (Encoder Nudge mode). g_nudgeUnit is an
 // ApplyNudge nudgeunits value (0=ms, 1=sec, 2=grid, 16=measures.beats/
@@ -4452,8 +4464,25 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "nav_uc1_mode"); v && *v) {
         int n = std::atoi(v);
-        if (n < 0 || n > 2) n = 0;
+        if (n < 0 || n > 3) n = 0;
         g_navUc1Mode.store(n);
+        if (n == 2 || n == 3) g_navUc1MarkersFlavour.store(n);
+    }
+    // ⇨ MIGRATION AUF DIE GETRENNTEN MARKER-MODI. Wer "Markers" (2) stehen
+    // hatte, hatte damit die VERSCHACHTELTE Liste, sobald der UF8 Regionen
+    // zeigte — das ist ab jetzt Modus 3. Einmalig umgeschrieben, damit sich
+    // für ihn nichts ändert; der Merker verhindert, dass eine spätere bewusste
+    // Wahl von "Markers" wieder verbogen wird.
+    {
+        const char* done = GetExtState("rea_sixty", "nav_uc1_mode_split");
+        if (!(done && *done)) {
+            if (g_navUc1Mode.load() == 2) {
+                g_navUc1Mode.store(3);
+                g_navUc1MarkersFlavour.store(3);
+                SetExtState("rea_sixty", "nav_uc1_mode", "3", true);
+            }
+            SetExtState("rea_sixty", "nav_uc1_mode_split", "1", true);
+        }
     }
     if (const char* v = GetExtState("rea_sixty", "nav_region_press"); v && *v) {
         int n = std::atoi(v);
@@ -4505,8 +4534,9 @@ void loadBrightness()
     }
     if (const char* v = GetExtState("rea_sixty", "nav_uf1_mode"); v && *v) {
         int n = std::atoi(v);
-        if (n < 0 || n > 2) n = 0;
+        if (n < 0 || n > 3) n = 0;
         g_navUf1Mode.store(n);
+        if (n == 2 || n == 3) g_navUf1MarkersFlavour.store(n);
     }
     {
         const char* v = GetExtState("rea_sixty", "nav_uf1_takeover");
@@ -19190,7 +19220,7 @@ void drainInputQueue()
             // degradation the push takes and the pane warns about.
             if (pane == Pane::Uf1 && g_navUf1Mode.load() != 0) {
                 std::vector<uf8::nav::Item> own;
-                uf8::nav::buildUf1List(own);
+                uf8::nav::buildFollowerList(g_navUf1Mode.load(), own);
                 const int last = static_cast<int>(own.size()) - 1;
                 if (last < 0) continue;
                 int cur = g_navUf1Cursor.load();
@@ -32007,7 +32037,15 @@ void uf1PaintChannel_()
             // outlive the pointers in `win`, so it is declared out here.
             std::vector<uf8::nav::Item> own;
             if (g_navUf1Mode.load() != 0) {
-                uf8::nav::buildUf1List(own);
+                const int uf1Mode = g_navUf1Mode.load();
+                uf8::nav::buildFollowerList(uf1Mode, own);
+                // Same cursor snap as the UC1's: in "Markers in region" the
+                // list changes under us whenever the UF8's region cursor moves.
+                if (uf1Mode == 3) {
+                    static int s_lastRgn = -2;
+                    const int rgn = uf8::nav::uf8ScopedRegion();
+                    if (rgn != s_lastRgn) { s_lastRgn = rgn; g_navUf1Cursor.store(0); }
+                }
                 // ⛔ The upper clamp lives HERE, on the main thread: the input
                 // thread moves this cursor without knowing how long the list
                 // is (same split as the UC1's carousel).
@@ -33420,47 +33458,31 @@ void pushUc1NavCarousel()
         }
     } else {
         // Independent UC1 scope. Build into uc1Items.
+        // ⛔ Die Liste baut der gemeinsame Bauer, nicht diese Stelle. Sie stand
+        // hier und nochmal in dispatchPushActionUc1 — zwei Kopien einer Regel,
+        // und die Anzeige und der Druck hätten jederzeit auseinanderlaufen
+        // können. Hier bleibt nur, was wirklich der Anzeige gehört: die
+        // Kopfzeile und der Cursor-Sprung.
+        std::string rgnName;
+        const int scopedRegionIdx =
+            (uc1Mode == 3) ? uf8::nav::uf8ScopedRegion(&rgnName) : -1;
+        uf8::nav::buildFollowerList(uc1Mode, uc1Items);
         if (uc1Mode == 1) {
-            // Always Regions.
-            uf8::nav::Overlay::enumerateFiltered(
-                uf8::nav::View::Regions, -1, &uc1Items);
             header = "REGIONS";
+        } else if (scopedRegionIdx >= 0) {
+            header = "IN: " + utf8ToLatin1(rgnName);  // UC1 LCD = Latin-1
+            if (header.size() > 14) header.resize(14);
         } else {
-            // uc1Mode == 2: Always Markers, optionally scoped to UF8's
-            // currently-selected region.
-            int scopedRegionIdx = -1;
-            std::string rgnName;
-            if (ov.view() == uf8::nav::View::Regions) {
-                const auto& uf8Items = ov.items();
-                const int uf8Ci      = ov.cursorIdx();
-                if (uf8Ci >= 0
-                    && uf8Ci < static_cast<int>(uf8Items.size())
-                    && uf8Items[uf8Ci].isRegion)
-                {
-                    scopedRegionIdx = uf8Items[uf8Ci].idx;
-                    rgnName         = uf8Items[uf8Ci].name;
-                }
-            }
-            // Snap UC1 cursor to the first marker of the new region
-            // whenever the UF8 region cursor moves to a different one.
-            // Without this the UC1 stays parked at the old index (which
-            // is meaningless in the new list), and the user has to spin
-            // back to 0 manually after every UF8 region change.
+            header = "MARKERS";
+        }
+        // Snap the UC1 cursor to the top whenever the scoped region changes:
+        // the old index means nothing in the new list, and without this you
+        // spin back to 0 by hand after every UF8 region change.
+        {
             static int s_lastScopedRegionIdx = -2;   // -2 = uninit
             if (scopedRegionIdx != s_lastScopedRegionIdx) {
                 s_lastScopedRegionIdx = scopedRegionIdx;
                 g_navUc1Cursor.store(0);
-            }
-            if (scopedRegionIdx >= 0) {
-                uf8::nav::Overlay::enumerateFiltered(
-                    uf8::nav::View::MarkersInRegion,
-                    scopedRegionIdx, &uc1Items);
-                header = "IN: " + utf8ToLatin1(rgnName);  // UC1 LCD = Latin-1
-                if (header.size() > 14) header.resize(14);
-            } else {
-                uf8::nav::Overlay::enumerateFiltered(
-                    uf8::nav::View::MarkersAll, -1, &uc1Items);
-                header = "MARKERS";
             }
         }
         itemsPtr = &uc1Items;
@@ -44923,7 +44945,8 @@ void reasixty_setNavUf8Mode(int v)
 int  reasixty_navUc1Mode()             { return g_navUc1Mode.load(); }
 void reasixty_setNavUc1Mode(int v)
 {
-    if (v < 0 || v > 2) v = 0;
+    if (v < 0 || v > 3) v = 0;
+    if (v == 2 || v == 3) g_navUc1MarkersFlavour.store(v);
     g_navUc1Mode.store(v);
     // Switching out of Mirror or between independent modes invalidates
     // the UC1 cursor (different items list); snap it back to 0.
@@ -45084,9 +45107,12 @@ void reasixty_setNavUf1Takeover(bool on)
     g_navUf1Takeover.store(on);
     SetExtState("rea_sixty", "nav_uf1_takeover", on ? "1" : "0", true);
 }
+extern "C" int reasixty_navUc1MarkersFlavour() { return g_navUc1MarkersFlavour.load(); }
+extern "C" int reasixty_navUf1MarkersFlavour() { return g_navUf1MarkersFlavour.load(); }
 void reasixty_setNavUf1Mode(int v)
 {
-    writeNavSetting_("nav_uf1_mode", g_navUf1Mode, v, 2);
+    if (v == 2 || v == 3) g_navUf1MarkersFlavour.store(v);
+    writeNavSetting_("nav_uf1_mode", g_navUf1Mode, v, 3);
     // Another mode is another list, so the old index means nothing — same
     // reason setNavUc1Mode snaps its cursor back.
     g_navUf1Cursor.store(0);

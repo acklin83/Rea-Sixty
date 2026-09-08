@@ -31,22 +31,25 @@ bool dispatchPushAction(int actionEnum);
 // dispatchPushAction so legacy behaviour is preserved.
 bool dispatchPushActionUc1(int actionEnum);
 
-// The UF1's independent list, and the ONE place that decides what
-// "Regions" / "Markers" mean on that surface. The paint, the soft-key
-// jump and the push all call this, so they can never disagree about
-// which item sits under the cursor.
+// The region the UF8's cursor is sitting on, or -1 when the UF8 is not
+// showing regions or has no region under the cursor. `nameOut`, when
+// given, receives that region's name. THE ONE PLACE that decides what
+// "in region" is scoped to — it used to be inlined in three.
+int uf8ScopedRegion(std::string* nameOut = nullptr);
+
+// The list a following surface (UC1, UF1) shows for `mode`:
+//   1 Regions           every region
+//   2 Markers           every marker in the project, never scoped
+//   3 Markers in region the markers inside uf8ScopedRegion(), and every
+//                       marker when the UF8 is not on a region
+// Mode 0 (Mirror) leaves `out` empty; that surface reads Overlay::items().
 //
-// ⚠ Unlike the UC1's Markers mode, this one is NOT scoped to the UF8's
-// region cursor. The UC1 coupling exists because the UC1 shows a single
-// LCD line and needs the context; the UF1 shows four keys and pages, and
-// a second coupling would make the two surfaces move each other in ways
-// nobody asked for. Markers here means every marker in the project.
-// Returns an empty list when g_navUf1Mode == 0 (Mirror shares the
-// Overlay's own list — call Overlay::items() for that).
-void buildUf1List(std::vector<Item>& out);
+// ⚠ Modes 2 and 3 used to be one entry whose meaning depended on what the
+// UF8 happened to be showing. Frank, 2026-09-08: make it a choice.
+void buildFollowerList(int mode, std::vector<Item>& out);
 
 // UF1 variant of the push dispatch, same contract as the UC1's: Mirror
-// delegates, independent modes jump within buildUf1List and make Drill /
+// delegates, independent modes jump within buildFollowerList and make Drill /
 // Back no-ops.
 bool dispatchPushActionUf1(int actionEnum);
 

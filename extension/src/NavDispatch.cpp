@@ -15,6 +15,8 @@ extern "C" int  reasixty_navUf1Mode();
 void reasixty_setNavUf1Mode(int v);
 extern "C" int  reasixty_navUf1CursorGet();
 extern "C" void reasixty_navUf1CursorSet(int v);
+extern "C" int  reasixty_navUc1MarkersFlavour();
+extern "C" int  reasixty_navUf1MarkersFlavour();
 
 namespace uf8::nav {
 
@@ -115,32 +117,10 @@ bool dispatchPushActionUc1(int act)
     auto& ov = Overlay::instance();
     if (!ov.active()) return false;
 
-    // Rebuild the UC1 filtered list exactly as pushUc1NavCarousel did.
-    // We re-enumerate here (rather than caching) so the push is always
-    // dispatched against a fresh REAPER snapshot — the carousel + push
-    // share the same source of truth on every press.
+    // Re-enumerated on every press rather than cached, so the carousel and
+    // the push always dispatch against the same fresh REAPER snapshot.
     std::vector<Item> items;
-    if (uc1Mode == 1) {
-        Overlay::enumerateFiltered(View::Regions, -1, &items);
-    } else {
-        int scopedRegionIdx = -1;
-        if (ov.view() == View::Regions) {
-            const auto& uf8Items = ov.items();
-            const int uf8Ci      = ov.cursorIdx();
-            if (uf8Ci >= 0
-                && uf8Ci < static_cast<int>(uf8Items.size())
-                && uf8Items[uf8Ci].isRegion)
-            {
-                scopedRegionIdx = uf8Items[uf8Ci].idx;
-            }
-        }
-        if (scopedRegionIdx >= 0) {
-            Overlay::enumerateFiltered(View::MarkersInRegion,
-                                       scopedRegionIdx, &items);
-        } else {
-            Overlay::enumerateFiltered(View::MarkersAll, -1, &items);
-        }
-    }
+    buildFollowerList(uc1Mode, items);
 
     int ci = reasixty_navUc1CursorGet();
     const int last = static_cast<int>(items.size()) - 1;
@@ -184,8 +164,10 @@ bool dispatchPushActionUc1(int act)
     case 2: // Drill only — no-op in independent mode
     case 3: // Back — no-op in independent mode
         return false;
-    case 4: // Toggle View: flip Regions ↔ Markers within UC1 scope
-        reasixty_setNavUc1Mode(uc1Mode == 1 ? 2 : 1);
+    case 4: // Toggle View: flip Regions ↔ the markers flavour the user picked,
+            // so a round trip does not silently turn "Markers in region" into
+            // plain "Markers" behind their back.
+        reasixty_setNavUc1Mode(uc1Mode == 1 ? reasixty_navUc1MarkersFlavour() : 1);
         markDirty();
         return true;
     case 5: { // Add marker at playhead / edit cursor (project-global)
@@ -201,13 +183,37 @@ bool dispatchPushActionUc1(int act)
     }
 }
 
-void buildUf1List(std::vector<Item>& out)
+int uf8ScopedRegion(std::string* nameOut)
+{
+    if (nameOut) nameOut->clear();
+    auto& ov = Overlay::instance();
+    if (ov.view() != View::Regions) return -1;
+    const auto& items = ov.items();
+    const int ci = ov.cursorIdx();
+    if (ci < 0 || ci >= static_cast<int>(items.size())) return -1;
+    if (!items[ci].isRegion) return -1;
+    if (nameOut) *nameOut = items[ci].name;
+    return items[ci].idx;
+}
+
+void buildFollowerList(int mode, std::vector<Item>& out)
 {
     out.clear();
-    switch (reasixty_navUf1Mode()) {
-    case 1: Overlay::enumerateFiltered(View::Regions,    -1, &out); break;
-    case 2: Overlay::enumerateFiltered(View::MarkersAll, -1, &out); break;
-    default: break;   // Mirror — the Overlay's own list, not ours to build
+    switch (mode) {
+    case 1:
+        Overlay::enumerateFiltered(View::Regions, -1, &out);
+        break;
+    case 2:
+        Overlay::enumerateFiltered(View::MarkersAll, -1, &out);
+        break;
+    case 3: {
+        const int rgn = uf8ScopedRegion();
+        if (rgn >= 0) Overlay::enumerateFiltered(View::MarkersInRegion, rgn, &out);
+        else          Overlay::enumerateFiltered(View::MarkersAll, -1, &out);
+        break;
+    }
+    default:
+        break;   // Mirror — the Overlay's own list, not ours to build
     }
 }
 
@@ -223,7 +229,7 @@ bool dispatchPushActionUf1(int act)
     if (!ov.active()) return false;
 
     std::vector<Item> items;
-    buildUf1List(items);
+    buildFollowerList(uf1Mode, items);
 
     int ci = reasixty_navUf1CursorGet();
     const int last = static_cast<int>(items.size()) - 1;
@@ -254,8 +260,8 @@ bool dispatchPushActionUf1(int act)
     case 2: // Drill only — no-op in independent mode
     case 3: // Back — no-op in independent mode
         return false;
-    case 4: // Toggle View: flip Regions ↔ Markers within the UF1's own scope
-        reasixty_setNavUf1Mode(uf1Mode == 1 ? 2 : 1);
+    case 4: // Toggle View, same rule as the UC1's above
+        reasixty_setNavUf1Mode(uf1Mode == 1 ? reasixty_navUf1MarkersFlavour() : 1);
         reasixty_markNavOverlayDirty();
         return true;
     case 5: { // Add marker at playhead / edit cursor (project-global)

@@ -249,7 +249,15 @@ Per strip while Nav Mode is active:
 
 The NAV pane in Settings, under Modes, asks each surface the same two questions, and they are independent of each other.
 
-**Shows** says what the surface displays while Nav Mode is on. `Off` leaves it in its normal view. `Mirror UF8` follows the UF8's list. `Regions` and `Markers` give that surface a list of its own. The UF8 is the view authority, so it has no Mirror.
+**Shows** says what the surface displays while Nav Mode is on.
+
+* `Off` leaves the surface in its normal view.
+* `Mirror UF8` follows the UF8's list.
+* `Regions` is every region, whatever the UF8 is doing.
+* `Markers` is every marker in the project, whatever the UF8 is doing.
+* `Markers in region` is the markers inside the region the UF8's cursor is on, and falls back to every marker while the UF8 is not showing regions.
+
+The UF8 is the view authority, so it has no Mirror, and it has no `Markers in region` either: its own view moves there when you drill.
 
 **Encoder drives Nav** says whether that surface's encoder steers. On, rotation moves the cursor and the push fires that surface's three actions. Off, Nav Mode does not touch the encoder at all: rotation keeps doing whatever Encoder Mode you have selected, and the push keeps its binding.
 
@@ -275,7 +283,7 @@ All of that applies only while the UF8's *Shows* is something other than `Off`. 
 
 The central LCD becomes a marker carousel showing previous, current and next. Encoder 2 steers it when *Encoder drives Nav* is on: rotation moves the cursor, the push fires the UC1's three actions.
 
-**The coupling.** Set the UC1 to `Markers` and the UF8 to `Regions`, and the UC1 shows the markers inside whichever region the UF8's cursor sits on, following it as you turn. That coupling is what replaces drilling on a surface with a list of its own.
+**The coupling.** Set the UC1 to `Markers in region` and the UF8 to `Regions`, and the UC1 shows the markers inside whichever region the UF8's cursor sits on, following it as you turn. That coupling is what replaces drilling on a surface with a list of its own. Until September 2026 it was what plain `Markers` did whenever the UF8 happened to be showing regions, which meant one entry with two meanings. Your old setting was carried over to the new entry, so nothing changed under you.
 
 ## Nav Mode on the UF1
 
@@ -285,7 +293,7 @@ The central LCD becomes a marker carousel showing previous, current and next. En
 
 **Mirror means the same list, not the same window.** The UF1 can sit on entries 9 to 12 while the UF8 shows 1 to 8. The cursor is shared, since that is what the push and the auto-follow act on. Only the window is per surface, and each surface's window follows the cursor when it moves out of view.
 
-**Its own list is genuinely its own.** Set to `Regions` or `Markers`, the UF1 builds and pages its own list with its own cursor. Unlike the UC1's Markers it is not scoped to the UF8's region: `Markers` there means every marker in the project.
+**Its own list is genuinely its own.** Set to `Regions`, `Markers` or `Markers in region`, the UF1 builds and pages its own list with its own cursor, on the same three rules as the UC1.
 
 Nav Mode takes the soft-key row and nothing else, so the rest of the UF1 screen keeps painting. Holding MODE still gets you the encoder-mode picker, and the preset browser still takes the screen when you open it. The markers come back when you leave either.
 
@@ -1542,7 +1550,7 @@ Each line shows the bound layer + button + modifier + long-press flag, or "(unbo
 
 **Per-surface** — a small table, one row per setting and one column per surface.
 
-- **Shows**. UF8: `Off`, `Regions`, `Markers`. UC1 and UF1 add `Mirror UF8`. `Off` keeps the surface in its normal view. The UF8 picker doubles as the view you land in when Nav Mode is switched on. An independent mode carries its own cursor, which costs the push actions on that surface: Drill and Back become no-ops, and Jump + Drill collapses to Jump only.
+- **Shows**. UF8: `Off`, `Regions`, `Markers`. UC1 and UF1 add `Mirror UF8` and `Markers in region`. `Off` keeps the surface in its normal view. The UF8 picker doubles as the view you land in when Nav Mode is switched on. An independent mode carries its own cursor, which costs the push actions on that surface: Drill and Back become no-ops, and Jump + Drill collapses to Jump only. Toggle View flips such a surface between `Regions` and whichever markers entry you last picked.
 - **Encoder drives Nav**. The Channel encoder on the UF8 and UF1, Encoder 2 on the UC1. Off, the encoder keeps its normal action (the UC1's is **Encoder: scroll BC anchor track** by default) and its push keeps its binding.
 
 **UF8 strip display**

@@ -23124,7 +23124,8 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     // IS the switch, and "Off" is one of its values. Two settings behind it, so
     // no stored value changes meaning.
     static const char* kShowsUf8[3] = { "Off", "Regions", "Markers" };
-    static const char* kShowsOth[4] = { "Off", "Mirror UF8", "Regions", "Markers" };
+    static const char* kShowsOth[5] = { "Off", "Mirror UF8", "Regions", "Markers",
+                                       "Markers in region" };
 
     int matrixFlags = 0;
     if (ImGui_BeginTable(ctx, "nav_per_surface", 4, &matrixFlags,
@@ -23176,7 +23177,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
             const int  cur = on ? (uc1Mode + 1) : 0;
             ImGui_SetNextItemWidth(ctx, -1.0);
             if (ImGui_BeginCombo(ctx, "##nav_uc1_shows", kShowsOth[cur], nullptr)) {
-                for (int i = 0; i < 4; ++i) {
+                for (int i = 0; i < 5; ++i) {
                     bool sel = (i == cur);
                     if (ImGui_Selectable(ctx, kShowsOth[i], &sel, nullptr,
                                          nullptr, nullptr)) {
@@ -23193,7 +23194,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
             const int  cur = on ? (uf1Mode + 1) : 0;
             ImGui_SetNextItemWidth(ctx, -1.0);
             if (ImGui_BeginCombo(ctx, "##nav_uf1_shows", kShowsOth[cur], nullptr)) {
-                for (int i = 0; i < 4; ++i) {
+                for (int i = 0; i < 5; ++i) {
                     bool sel = (i == cur);
                     if (ImGui_Selectable(ctx, kShowsOth[i], &sel, nullptr,
                                          nullptr, nullptr)) {
