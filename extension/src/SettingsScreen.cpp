@@ -23386,12 +23386,21 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         if (ImGui_RadioButton(ctx, "Drill only##nav_rp_drill", rp == 2)) {
             reasixty_setNavRegionPress(2);
         }
-        if (uc1Mode != 0) {
+        // Nur noch, wenn wirklich eine Liste am UF8 hängt (Markers in region).
+        if (uc1Mode == 3 || uf1Mode == 3) {
+            const char* who = (uc1Mode == 3 && uf1Mode == 3) ? "UC1 and UF1"
+                            : (uc1Mode == 3)                 ? "UC1" : "UF1";
+            char line[112];
             if (rp == 2) {
-                ImGui_TextColored(ctx, 0xE8C33AFF,
-                    "  Dead key: Drill only, and the UC1 suppresses the drill.");
+                snprintf(line, sizeof(line),
+                         "  Dead key: Drill only, and %s is scoped to the drill.",
+                         who);
+                ImGui_TextColored(ctx, 0xE8C33AFF, line);
             } else {
-                ImGui_TextDisabled(ctx, "  The UC1 suppresses the drill half.");
+                snprintf(line, sizeof(line),
+                         "  %s is scoped to the region, so the drill stands down.",
+                         who);
+                ImGui_TextDisabled(ctx, line);
             }
         }
     }

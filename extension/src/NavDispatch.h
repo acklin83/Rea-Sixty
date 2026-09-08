@@ -37,6 +37,18 @@ bool dispatchPushActionUc1(int actionEnum);
 // "in region" is scoped to — it used to be inlined in three.
 int uf8ScopedRegion(std::string* nameOut = nullptr);
 
+// True while another surface's list is scoped to the UF8's region cursor,
+// which today means some surface is on "Markers in region".
+//
+// ⛔ THE ONE RULE FOR SUPPRESSING THE DRILL. Drilling moves the UF8 out of
+// Regions view, and a scoped surface then has nothing left to scope to, so
+// the coupling IS the drill in that setup and the drill itself has to stand
+// down. Every path that drills asks this, and only this: the soft-key press
+// used to ask "does the UC1 have any list of its own", which also stopped the
+// drill for Regions and Markers where nothing can break, and the encoder push
+// asked nothing at all and tore the coupling up. Frank 2026-09-08: one rule.
+bool couplingHoldsDrill();
+
 // The list a following surface (UC1, UF1) shows for `mode`:
 //   1 Regions           every region
 //   2 Markers           every marker in the project, never scoped

@@ -65,6 +65,7 @@ bool dispatchPushAction(int act)
     };
     auto doDrill = [&]() {
         if (lock != ViewLock::None) return;
+        if (couplingHoldsDrill()) return;
         if (!inRegions) return;
         if (ci < 0) return;
         ov.drillIntoRegion(ci);
@@ -181,6 +182,11 @@ bool dispatchPushActionUc1(int act)
     default:
         return false;
     }
+}
+
+bool couplingHoldsDrill()
+{
+    return reasixty_navUc1Mode() == 3 || reasixty_navUf1Mode() == 3;
 }
 
 int uf8ScopedRegion(std::string* nameOut)

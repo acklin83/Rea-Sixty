@@ -283,7 +283,7 @@ All of that applies only while the UF8's *Shows* is something other than `Off`. 
 
 The central LCD becomes a marker carousel showing previous, current and next. Encoder 2 steers it when *Encoder drives Nav* is on: rotation moves the cursor, the push fires the UC1's three actions.
 
-**The coupling.** Set the UC1 to `Markers in region` and the UF8 to `Regions`, and the UC1 shows the markers inside whichever region the UF8's cursor sits on, following it as you turn. That coupling is what replaces drilling on a surface with a list of its own. Until September 2026 it was what plain `Markers` did whenever the UF8 happened to be showing regions, which meant one entry with two meanings. Your old setting was carried over to the new entry, so nothing changed under you.
+**The coupling.** Set the UC1 to `Markers in region` and the UF8 to `Regions`, and the UC1 shows the markers inside whichever region the UF8's cursor sits on, following it as you turn. That coupling replaces drilling, and while it is on, drilling stands down everywhere so it cannot pull the region away from under the UC1. Until September 2026 it was what plain `Markers` did whenever the UF8 happened to be showing regions, which meant one entry with two meanings. Your old setting was carried over to the new entry, so nothing changed under you.
 
 ## Nav Mode on the UF1
 
@@ -314,6 +314,8 @@ Settings → Modes → NAV → *Region-press behaviour*:
 - **Drill only** — overlay drills; transport stays put.
 
 RegionsOnly view-lock always suppresses Drill regardless of this setting.
+
+**And so does a surface set to `Markers in region`.** That surface is scoped to the region the UF8's cursor is on, so drilling would move the UF8 out of the region list and leave it with nothing to scope to. In that setup the coupling is the drill: you move over the regions on the UF8, the other surface shows what is inside. One rule, and every path that drills obeys it, the top-soft-key press and the encoder push alike.
 
 \newpage
 
@@ -1576,7 +1578,7 @@ View-locks (Markers-only / Regions-only) suppress **Drill only** specifically (J
 
 **Behaviour**
 
-- **Region press (UF8 top-soft-key)** (radio): `Jump + Drill` / `Jump only` / `Drill only`. Jump = move transport to the region start; Drill = enter the region's marker list. A Regions-only view lock always suppresses Drill.
+- **Region press (UF8 top-soft-key)** (radio): `Jump + Drill` / `Jump only` / `Drill only`. Jump = move transport to the region start; Drill = enter the region's marker list. A Regions-only view lock suppresses Drill, and so does any surface set to `Markers in region`; with `Drill only` picked, that combination leaves the key doing nothing, and the pane says so.
 - **Auto-follow playhead / edit cursor** (checkbox). While Nav Mode is active, the cursor strip tracks whichever marker / region the playhead is on (or the edit cursor when stopped). In Markers-in-Region view, the overlay auto-rolls into the next region when the playhead crosses out.
 
 \newpage

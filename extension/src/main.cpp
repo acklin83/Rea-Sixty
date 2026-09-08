@@ -19265,15 +19265,13 @@ void drainInputQueue()
                 // (its items are regions; drill would invalidate them).
                 const int  press     = g_navRegionPress.load();
                 const bool doJump    = (press != 2);
-                // Suppress drill when UC1 is in an independent Mode —
-                // UC1's Markers carousel auto-scopes to UF8's region
-                // cursor, so drilling on UF8 would replace UF8's region
-                // list with markers and break the coupling (UC1 needs
-                // UF8 in Regions view to know which region to scope to).
-                const bool uc1Indep  = g_navUc1Mode.load() != 0;
+                // ⇨ EINE REGEL, und sie steht in NavDispatch. Hier stand
+                // "der UC1 hat irgendeine eigene Liste", was auch bei Regions
+                // und Markers bremste, wo nichts kaputtgehen kann; der
+                // Encoder-Push fragte gar nicht und riss die Kopplung auf.
                 const bool doDrill   = (press != 1)
                     && (ov.viewLock() == uf8::nav::ViewLock::None)
-                    && !uc1Indep;
+                    && !uf8::nav::couplingHoldsDrill();
                 if (doJump) {
                     // GoToRegion only smooth-seeks during PLAYBACK; stopped it
                     // does nothing, so the soft-key region jump looked dead.
