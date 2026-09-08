@@ -234,7 +234,7 @@ Bind any of these to a UF8 / UC1 button in Settings → Bindings. The same butto
 - **MarkersInRegion** — markers inside the region the playhead is in. Auto-rolls into the next region when the playhead crosses out.
 - **MarkersAll** — flat list of every marker in the project.
 
-Which view a surface opens on is set per surface in *Settings → Modes → NAV* — see the next chapter. The old single *Default view* setting, with its *Last used* option, went away on 2026-05-28.
+Which view a surface opens on is set per surface in *Settings → Modes → NAV*, see the next chapter. The old single *Default view* setting, with its *Last used* option, went away on 2026-05-28.
 
 ## What the UF8 strips show
 
