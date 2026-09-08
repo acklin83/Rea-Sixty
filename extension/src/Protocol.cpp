@@ -687,13 +687,29 @@ constexpr LedColour kColourRed    {0x0F, 0xF0, 0x01, 0xF0};
 constexpr LedColour kColourOrange {0x3F, 0xF0, 0x12, 0xF0};
 constexpr LedColour kColourYellow {0xEF, 0xF0, 0x11, 0xF0};
 constexpr Uf8GlobalLedDef kUf8GlobalLedTable[] = {
-    // Layer / Quick / 360 cells fully confirmed via probe 2026-04-30:
-    // physical button order along the row (left → right) is
+    // Layer / Quick / 360 cells, probe 2026-04-30: physical button order
+    // along the row (left → right) is
     //   360 (0x39)  Quick3 (0x3A)  Quick2 (0x3B)  Quick1 (0x3C)
     //   Layer3 (0x3D)  Layer2 (0x3E)  Layer1 (0x3F)
     // — descending button-position vs ascending cell-id. Earlier
     // cap35/36 decoding put Layer 1/2 at 0x39/0x3A which turned out
     // to be 360/Quick3.
+    //
+    // ⚠ SIX OF THE SEVEN WERE SEEN. LAYER 3 (0x3D) IS THE ONE THAT WAS
+    // NOT, and this comment used to call the whole row "fully confirmed".
+    // It is the only slot left between Quick1 and Layer2, so it was filled
+    // in by position, and `docs/uf8-global-led-map.md` still carries it as
+    // TBD — the two have disagreed since April.
+    // What the corpus says (scanned 2026-09-08): in cap35, the capture made
+    // for exactly this row, 0x3D is never written at all, while 0x3E/0x3F
+    // carry live traffic (F4F1 bright, 21F1 dim, 00F0 off). In cap36 it gets
+    // the two-frame init blank and nothing more, the same as 0x38, 0x40,
+    // 0x41 and 0x42. SSL 360 lights Layer 1 and Layer 2 and never lights
+    // anything for Layer 3.
+    // ⚠ And the row is NOT white in SSL's own traffic: F4F1/21F1, where the
+    // table below sends FFFF/11F1. Layer 1 and 2 accept the white, so this
+    // is not the reason Layer 3 stays dark, but it is the first thing to
+    // vary if anyone probes 0x3D.
     /* Layer1       */ {0x3F, kColourWhite},
     /* Layer2       */ {0x3E, kColourWhite},
     /* Layer3       */ {0x3D, kColourWhite},

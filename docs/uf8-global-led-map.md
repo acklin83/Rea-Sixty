@@ -8,13 +8,30 @@ Per-strip LEDs use cells `0x00..0x17`. Global button LEDs use cells
 **`0x18..0x60`** (same bank, same frame family — different cell
 range).
 
+## Layer 3 has no known LED cell
+
+Corpus scan, 2026-09-08. In `cap35`, the capture made for this row, cell
+`0x3D` is never written. In `cap36` it receives the two-frame init blank
+and nothing else, exactly like `0x38`, `0x40`, `0x41` and `0x42`. The two
+cells beside it carry live traffic the whole time: `0x3E` and `0x3F`
+(Layer 2 and Layer 1) go `F4 F1` bright, `21 F1` dim, `00 F0` off.
+
+So SSL 360 lights Layer 1 and Layer 2 and never lights anything for Layer
+3. `Protocol.cpp` carries `0x3D` for it, which is the only free slot
+between Quick 1 and Layer 2 and was filled in by position rather than
+observed. Whether a Layer 3 LED exists at all is open; the surface
+behaves as though it does not.
+
+Also worth knowing before anyone probes: this row is not white in SSL's
+own traffic. `F4 F1` / `21 F1`, where our table sends `FF FF` / `11 F1`.
+
 ## Confirmed cell + colour map
 
 | Button | Button-ID | LED cell | ON-colour `<a><b>` |
 |---|---|---|---|
 | Layer 1 | `0x40` | `0x39` | white (`FF FF`) |
 | Layer 2 | `0x41` | `0x3A` | white |
-| Layer 3 | `0x42` | TBD | (inactive in test session) |
+| Layer 3 | `0x42` | unknown, see below | never lit by SSL 360 in any capture |
 | 360 (Settings) | `0x46` | TBD | white (always lit) |
 | Send/Plugin 1 | `0x48` | `0x37` | white |
 | Send/Plugin 2 | `0x49` | `0x36` | white |
