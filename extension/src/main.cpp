@@ -19203,6 +19203,11 @@ void drainInputQueue()
                     GoToRegion(nullptr, oit.idx, false);
                 else
                     SetEditCurPos(oit.pos, true, true);
+                // Say where it went. The four keys are narrow, so the name they
+                // carry is clipped; the time field is the wider readout the
+                // surface already uses for "this just happened".
+                // ⚠ Seven segments have no K, M, V, W or X.
+                uf1FlashTimecode_(oit.name, 1200);
                 g_navOverlayDirty.store(true);
                 if (g_sync) g_sync->invalidate();
                 continue;
@@ -19266,6 +19271,8 @@ void drainInputQueue()
                 // smooth-seek; cross-region marker jumps now work too.
                 SetEditCurPos(it.pos, true, true);
             }
+            // Same readout for the mirroring UF1 — its keys are the narrow ones.
+            if (pane == Pane::Uf1) uf1FlashTimecode_(it.name, 1200);
             g_navOverlayDirty.store(true);
             if (g_sync) g_sync->invalidate();
             continue;
