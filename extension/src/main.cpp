@@ -19057,7 +19057,7 @@ void drainInputQueue()
             auto& ov = uf8::nav::Overlay::instance();
             if (!ov.active()) continue;
             const int s = (e.strip < 8) ? e.strip : 0;
-            const int idx = ov.pageOffset() * 8 + s;
+            const int idx = ov.pageOffset(uf8::nav::Overlay::Pane::Uf8) * 8 + s;
             const auto& items = ov.items();
             if (idx < 0 || idx >= static_cast<int>(items.size())) continue;
             const auto& it = items[idx];
@@ -22906,14 +22906,14 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 bool handledOv = false;
                 if (id == 0x52) {
                     if (pressed) {
-                        ov.pagePrev();
+                        ov.pagePrev(uf8::nav::Overlay::Pane::Uf8);
                         g_navOverlayDirty.store(true);
                         if (g_sync) g_sync->invalidate();
                     }
                     handledOv = true;
                 } else if (id == 0x53) {
                     if (pressed) {
-                        ov.pageNext();
+                        ov.pageNext(uf8::nav::Overlay::Pane::Uf8);
                         g_navOverlayDirty.store(true);
                         if (g_sync) g_sync->invalidate();
                     }
@@ -32703,7 +32703,7 @@ uint32_t navColorForStrip(int slot)
 {
     auto& ov = uf8::nav::Overlay::instance();
     const auto& items = ov.items();
-    const int idx = ov.pageOffset() * 8 + slot;
+    const int idx = ov.pageOffset(uf8::nav::Overlay::Pane::Uf8) * 8 + slot;
     if (idx < 0 || idx >= static_cast<int>(items.size())) return 0;
     const int cbMode = g_navColorBar.load();
     // 'Force palette grey' suppresses per-marker colour so the cursor
@@ -32795,7 +32795,7 @@ void pushNavOverlayDecorations()
 
     uf8::nav::Item const* win[8] = {};
     int n = 0;
-    ov.window(win, n);
+    ov.window(uf8::nav::Overlay::Pane::Uf8, win, n);
 
     for (int s = 0; s < 8; ++s) {
         const uf8::nav::Item* it = win[s];
@@ -32873,7 +32873,7 @@ void pushNavOverlayDecorations()
         // Without auto-follow every populated strip stays bright (the
         // user-paced browsing case).
         const uint32_t rgb = it ? navColorForStrip(s) : 0;
-        const int cursorStrip = ov.cursorIdx() - ov.pageOffset() * 8;
+        const int cursorStrip = ov.cursorIdx() - ov.pageOffset(uf8::nav::Overlay::Pane::Uf8) * 8;
         const bool isCursor   = (s == cursorStrip);
         uf8::TopSoftKeyState tssk;
         if (!it) {

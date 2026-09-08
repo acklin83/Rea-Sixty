@@ -73,8 +73,19 @@ public:
     // tick when drainPending() runs.
     void setViewLock(ViewLock l);
 
+    // ⇨ TWO SURFACES, TWO WINDOW SIZES. The UF8 shows eight items on its
+    // strips, the UF1 four on its display soft-keys, so one page index cannot
+    // serve both: paging the UF8 by eight would drag the UF1 four past its own
+    // list. Each pane therefore carries its own offset over the SAME items and
+    // the SAME cursor — the cursor is the state that push and auto-follow act
+    // on, and it must not fork (Frank 2026-09-08, "gleiche Liste, eigenes
+    // Fenster").
+    enum class Pane : uint8_t { Uf8 = 0, Uf1 = 1 };
+    static constexpr int kPaneCount = 2;
+    static constexpr int paneSize(Pane p) { return p == Pane::Uf8 ? 8 : 4; }
+
     int  filterRegionIdx() const { return filterRegionIdx_; }
-    int  pageOffset()      const { return pageOffset_;      }
+    int  pageOffset(Pane p) const { return pageOffset_[static_cast<int>(p)]; }
     int  cursorIdx()       const { return cursorIdx_;       }
     bool autoFollow()      const { return autoFollow_;      }
     void setAutoFollow(bool on)  { autoFollow_ = on;        }
@@ -100,13 +111,14 @@ public:
     static void enumerateFiltered(View v, int filterRegionIdx,
                                   std::vector<Item>* out);
 
-    // The 8-window for the strips (may be shorter than 8 near list end).
-    void window(Item const** out, int& outCount) const;
+    // The pane's window (may be shorter than paneSize near the list end).
+    // `out` must hold at least paneSize(p) pointers.
+    void window(Pane p, Item const** out, int& outCount) const;
 
-    // Paging.
-    int  pageCount() const;
-    void pageNext();
-    void pagePrev();
+    // Paging, per pane.
+    int  pageCount(Pane p) const;
+    void pageNext(Pane p);
+    void pagePrev(Pane p);
 
     // Drill helpers.
     void drillIntoRegion(int enumPos);   // switch to MarkersInRegion for items_[enumPos]
@@ -150,7 +162,7 @@ private:
     std::atomic<bool> lockDirty_{false};       // set by setViewLock; drained main-thread
     View              view_         = View::Regions;
     int               filterRegionIdx_ = -1;   // REAPER region idx (not enumPos)
-    int               pageOffset_   = 0;
+    int               pageOffset_[kPaneCount] = { 0, 0 };
     int               cursorIdx_    = 0;       // within items_
     bool              autoFollow_   = false;
 
@@ -175,7 +187,9 @@ private:
     // section "Cursor model" for the rationale.
     bool              cursorPinned_ = false;
 
-    // Slide pageOffset_ so cursorIdx_ is on the visible 8-window.
+    void              resetPages_();
+
+    // Slide every pane's offset so cursorIdx_ is on its visible window.
     // Helper factored out of tickAutoFollow so moveCursor() can share
     // the logic.
     void              slidePageToCursor_();

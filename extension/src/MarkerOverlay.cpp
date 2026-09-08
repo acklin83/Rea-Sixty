@@ -15,7 +15,9 @@
 namespace uf8::nav {
 
 namespace {
-constexpr int kPageSize = 8;
+// Window sizes now live with the Pane enum (MarkerOverlay.h: paneSize) —
+// the UF8 shows eight, the UF1 four, and a single file-scope constant
+// could only ever be one of them.
 
 // Resolve the colour REAPER actually DISPLAYS for the marker/region at
 // The label a marker or region carries when it has no name of its own.
@@ -90,7 +92,7 @@ void Overlay::setView(View v)
     view_ = v;
     // Switching views invalidates the cursor — different items_ list.
     cursorIdx_ = 0;
-    pageOffset_ = 0;
+    resetPages_();
     cursorPinned_ = false;
     enumerate();
 }
@@ -125,7 +127,7 @@ void Overlay::drainPendingLock_()
         break;
     }
     cursorIdx_  = 0;
-    pageOffset_ = 0;
+    resetPages_();
     wasInFilter_ = false;
 }
 
@@ -156,7 +158,7 @@ void Overlay::enumerate()
         // a project change is rare and a clean reset is more honest
         // than guessing which region survived.
         cursorIdx_       = 0;
-        pageOffset_      = 0;
+        resetPages_();
         filterRegionIdx_ = -1;
         cursorPinned_    = false;
         if (view_ == View::MarkersInRegion) {
@@ -191,7 +193,7 @@ void Overlay::enumerate()
             view_ = View::Regions;
             filterRegionIdx_ = -1;
             cursorIdx_ = 0;
-            pageOffset_ = 0;
+            resetPages_();
         }
     }
 
@@ -232,15 +234,18 @@ void Overlay::enumerate()
     // Clamp cursor and page to the new list size.
     if (items_.empty()) {
         cursorIdx_ = 0;
-        pageOffset_ = 0;
+        resetPages_();
     } else {
         if (cursorIdx_ >= static_cast<int>(items_.size())) {
             cursorIdx_ = static_cast<int>(items_.size()) - 1;
         }
         // SWELL defines max/min as macros — keep the math inline.
         const int last = static_cast<int>(items_.size()) - 1;
-        const int maxPage = (last < 0) ? 0 : (last / kPageSize);
-        if (pageOffset_ > maxPage) pageOffset_ = maxPage;
+        for (int i = 0; i < kPaneCount; ++i) {
+            const int size = paneSize(static_cast<Pane>(i));
+            const int maxPage = (last < 0) ? 0 : (last / size);
+            if (pageOffset_[i] > maxPage) pageOffset_[i] = maxPage;
+        }
     }
 }
 
@@ -306,11 +311,12 @@ void Overlay::enumerateFiltered(View v, int filterRegionIdx,
     }
 }
 
-void Overlay::window(Item const** out, int& outCount) const
+void Overlay::window(Pane p, Item const** out, int& outCount) const
 {
     outCount = 0;
-    const int start = pageOffset_ * kPageSize;
-    for (int s = 0; s < kPageSize; ++s) {
+    const int size  = paneSize(p);
+    const int start = pageOffset_[static_cast<int>(p)] * size;
+    for (int s = 0; s < size; ++s) {
         const int idx = start + s;
         if (idx >= static_cast<int>(items_.size())) {
             out[s] = nullptr;
@@ -321,20 +327,23 @@ void Overlay::window(Item const** out, int& outCount) const
     }
 }
 
-int Overlay::pageCount() const
+int Overlay::pageCount(Pane p) const
 {
     if (items_.empty()) return 1;
-    return (static_cast<int>(items_.size()) + kPageSize - 1) / kPageSize;
+    const int size = paneSize(p);
+    return (static_cast<int>(items_.size()) + size - 1) / size;
 }
 
-void Overlay::pageNext()
+void Overlay::pageNext(Pane p)
 {
-    if (pageOffset_ + 1 < pageCount()) ++pageOffset_;
+    int& ofs = pageOffset_[static_cast<int>(p)];
+    if (ofs + 1 < pageCount(p)) ++ofs;
 }
 
-void Overlay::pagePrev()
+void Overlay::pagePrev(Pane p)
 {
-    if (pageOffset_ > 0) --pageOffset_;
+    int& ofs = pageOffset_[static_cast<int>(p)];
+    if (ofs > 0) --ofs;
 }
 
 void Overlay::drillIntoRegion(int enumPos)
@@ -345,7 +354,7 @@ void Overlay::drillIntoRegion(int enumPos)
     filterRegionIdx_ = it.idx;
     view_ = View::MarkersInRegion;
     cursorIdx_  = 0;
-    pageOffset_ = 0;
+    resetPages_();
     // User-driven drill: disarm auto-roll until the playhead actually
     // arrives in this region. Without this the next tick would
     // observe playhead-still-in-previous-region and roll us back.
@@ -362,7 +371,7 @@ void Overlay::drillIntoRegionByIdx(int reaperRegionIdx)
     filterRegionIdx_ = reaperRegionIdx;
     view_ = View::MarkersInRegion;
     cursorIdx_   = 0;
-    pageOffset_  = 0;
+    resetPages_();
     wasInFilter_ = false;
     cursorPinned_ = false;
     enumerate();
@@ -373,7 +382,7 @@ void Overlay::backToRegions()
     view_ = View::Regions;
     filterRegionIdx_ = -1;
     cursorIdx_  = 0;
-    pageOffset_ = 0;
+    resetPages_();
     wasInFilter_ = false;
     cursorPinned_ = false;
     enumerate();
@@ -392,11 +401,20 @@ void Overlay::moveCursor(int delta)
     slidePageToCursor_();
 }
 
+// ⇨ EVERY PANE FOLLOWS THE CURSOR, not just the UF8's. A pane whose window has
+// drifted off the cursor shows four or eight entries the push does not act on —
+// the press would jump somewhere the user cannot see.
+void Overlay::resetPages_()
+{
+    for (int i = 0; i < kPaneCount; ++i) pageOffset_[i] = 0;
+}
+
 void Overlay::slidePageToCursor_()
 {
-    const int cursorPage = cursorIdx_ / kPageSize;
-    if (cursorPage != pageOffset_) {
-        pageOffset_ = cursorPage;
+    for (int i = 0; i < kPaneCount; ++i) {
+        const int size = paneSize(static_cast<Pane>(i));
+        const int cursorPage = (size > 0) ? (cursorIdx_ / size) : 0;
+        if (cursorPage != pageOffset_[i]) pageOffset_[i] = cursorPage;
     }
 }
 
@@ -443,7 +461,7 @@ bool Overlay::tickAutoFollow(double playPos)
             // in a different region. Roll.
             filterRegionIdx_ = playingRgnIdx;
             cursorIdx_  = 0;
-            pageOffset_ = 0;
+            resetPages_();
             wasInFilter_ = true;     // we just entered the new filter
             enumerate();
             changed = true;
@@ -502,16 +520,16 @@ void Overlay::dumpWindow() const
     snprintf(hdr, sizeof(hdr),
         "[Nav] view=%s items=%zu page=%d/%d cursor=%d filterRgn=%d "
         "active=%d autoFollow=%d pin=%d\n",
-        viewName, items_.size(), pageOffset_ + 1, pageCount(),
+        viewName, items_.size(), pageOffset(Pane::Uf8) + 1, pageCount(Pane::Uf8),
         cursorIdx_, filterRegionIdx_,
         active_.load() ? 1 : 0, autoFollow_ ? 1 : 0,
         cursorPinned_ ? 1 : 0);
     ShowConsoleMsg(hdr);
 
-    Item const* win[kPageSize] = {};
+    Item const* win[paneSize(Pane::Uf8)] = {};
     int n = 0;
-    window(win, n);
-    for (int s = 0; s < kPageSize; ++s) {
+    window(Pane::Uf8, win, n);
+    for (int s = 0; s < paneSize(Pane::Uf8); ++s) {
         char line[256];
         if (!win[s]) {
             snprintf(line, sizeof(line), "  strip %d: --\n", s);
