@@ -328,7 +328,12 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Above-fader V-Pot rotation \xE2\x86\x92 Preamp gain \xC2\xB1" "1 dB",
                                                            kSecModes, "REC", kDevUf1 },
     { "Auto-follow playhead / edit cursor",                kSecModes, "NAV" },
-    { "Take over LCD",                                     kSecModes, "NAV" },
+    // The per-surface table: one row per question, one column per surface.
+    { "Shows",                                             kSecModes, "NAV" },
+    { "Encoder drives Nav",                                kSecModes, "NAV" },
+    { "Plain push",                                        kSecModes, "NAV" },
+    { "Shift + push",                                      kSecModes, "NAV" },
+    { "Long-press",                                        kSecModes, "NAV" },
     { "Lower-row format:",                                 kSecModes, "NAV" },
     { "Region press (UF8 top-soft-key):",                  kSecModes, "NAV", kDevUf8 },
     { "Playhead nudge step",                               kSecModes, "Nudge" },
