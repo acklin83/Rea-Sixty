@@ -983,6 +983,23 @@ std::atomic<double> g_nudgeAmount{1.0};
 // even while Nav Mode is active on UF8.
 std::atomic<bool> g_navUc1Takeover{true};
 
+// ⇨ ANZEIGE UND BEDIENUNG SIND ZWEI FRAGEN, auf jeder Fläche.
+// nav_uc1_takeover schaltete beides zusammen: LCD-Übernahme, Encoder-2-Drehung
+// UND deren Push. Beim UF8 waren sie längst getrennt (nav_uf8_show /
+// nav_uf8_takeover), und die Schieflage war ein Teil dessen, was Nav
+// unverständlich machte (Frank 2026-09-08). Ab jetzt trägt g_navUc1Show die
+// Anzeige und g_navUc1Takeover nur noch den Encoder.
+// ⚠ MIGRATION: fehlt der Schlüssel beim Laden, wird er aus dem Takeover
+// geseedet — wer beides an hatte, behält beides.
+std::atomic<bool> g_navUc1Show{true};
+
+// Der UF1, seit 2026-09-08 dabei: vier Display-Soft-Keys statt acht Strips,
+// sonst dieselben zwei Fragen wie bei den anderen beiden.
+//   g_navUf1Mode  0 = Mirror UF8    1 = Regions    2 = Markers
+std::atomic<bool> g_navUf1Show{false};
+std::atomic<int>  g_navUf1Mode{0};
+std::atomic<bool> g_navUf1Takeover{false};
+
 // Phase 2.8c — UC1 push gesture actions. The table is parsed by the
 // gesture-dispatch path in UC1Surface::handleButton_. All three gestures
 // share the unified action enum (Frank 2026-05-22):
@@ -996,6 +1013,18 @@ std::atomic<bool> g_navUc1Takeover{true};
 std::atomic<int>  g_navUc1Push{0};       // default Jump+Drill
 std::atomic<int>  g_navUc1PushShift{2};  // default Drill only
 std::atomic<int>  g_navUc1LongPress{3};  // default Back
+
+// ⇨ EIN SATZ PRO FLÄCHE. Die drei oben galten für UC1 UND UF8, hiessen aber
+// navUc1* — und *Drill* / *Back* sind auf einem UC1 mit eigenem Modus
+// wirkungslos, während sie auf dem UF8 arbeiten. Ein gemeinsamer Satz kann das
+// nicht abbilden, also hat jede Fläche ihren eigenen (Frank 2026-09-08).
+// ⚠ MIGRATION: fehlen die Schlüssel, werden sie aus dem UC1-Satz geseedet.
+std::atomic<int>  g_navUf8Push{0};
+std::atomic<int>  g_navUf8PushShift{2};
+std::atomic<int>  g_navUf8LongPress{3};
+std::atomic<int>  g_navUf1Push{0};
+std::atomic<int>  g_navUf1PushShift{2};
+std::atomic<int>  g_navUf1LongPress{3};
 
 // Phase 2.8c — UF8 strip display preferences.
 //   nav_lower_row     0=Off (V-Pot value), 1=Index (R03/M07), 2=Timecode
@@ -1033,6 +1062,14 @@ std::atomic<int>  g_uiSpelling{0};
 // the bottom of this file — needed by the UF8 push-gesture branch in
 // the input drain loop above the definition site.
 extern "C" int reasixty_navUc1Push();
+// Per-surface sets (2026-09-08). Declared here for the same reason the UC1
+// trio is: the input paths above use them long before the definitions.
+extern "C" int reasixty_navUf8Push();
+extern "C" int reasixty_navUf8PushShift();
+extern "C" int reasixty_navUf8LongPress();
+extern "C" int reasixty_navUf1Push();
+extern "C" int reasixty_navUf1PushShift();
+extern "C" int reasixty_navUf1LongPress();
 extern "C" int reasixty_navUc1PushShift();
 extern "C" int reasixty_navUc1LongPress();
 
@@ -4448,6 +4485,49 @@ void loadBrightness()
         int n = std::atoi(v);
         if (n < 0 || n > 6) n = 3;
         g_navUc1LongPress.store(n);
+    }
+    // ⇨ DIE MIGRATION, und sie muss NACH dem UC1-Satz stehen, weil sie daraus
+    // seedet. Wer die Schlüssel schon hat, wird nicht angefasst.
+    {
+        const char* v = GetExtState("rea_sixty", "nav_uc1_show");
+        // Fehlt der Schlüssel, trug das Takeover die Anzeige mit — also von dort.
+        g_navUc1Show.store((v && *v) ? (std::atoi(v) != 0)
+                                     : g_navUc1Takeover.load());
+    }
+    {
+        const char* v = GetExtState("rea_sixty", "nav_uf1_show");
+        g_navUf1Show.store((v && *v) ? (std::atoi(v) != 0) : false);
+    }
+    if (const char* v = GetExtState("rea_sixty", "nav_uf1_mode"); v && *v) {
+        int n = std::atoi(v);
+        if (n < 0 || n > 2) n = 0;
+        g_navUf1Mode.store(n);
+    }
+    {
+        const char* v = GetExtState("rea_sixty", "nav_uf1_takeover");
+        g_navUf1Takeover.store((v && *v) ? (std::atoi(v) != 0) : false);
+    }
+    {
+        // Die zwei neuen Push-Sätze: vorhanden lesen, sonst aus dem UC1-Satz.
+        struct { const char* key; std::atomic<int>* dst; std::atomic<int>* seed; }
+        kPushSeed[] = {
+            { "nav_uf8_push",           &g_navUf8Push,      &g_navUc1Push      },
+            { "nav_uf8_push_shift",     &g_navUf8PushShift, &g_navUc1PushShift },
+            { "nav_uf8_long_press",     &g_navUf8LongPress, &g_navUc1LongPress },
+            { "nav_uf1_push",           &g_navUf1Push,      &g_navUc1Push      },
+            { "nav_uf1_push_shift",     &g_navUf1PushShift, &g_navUc1PushShift },
+            { "nav_uf1_long_press",     &g_navUf1LongPress, &g_navUc1LongPress },
+        };
+        for (const auto& e : kPushSeed) {
+            const char* v = GetExtState("rea_sixty", e.key);
+            if (v && *v) {
+                int n = std::atoi(v);
+                if (n < 0 || n > 6) n = e.seed->load();
+                e.dst->store(n);
+            } else {
+                e.dst->store(e.seed->load());
+            }
+        }
     }
     if (const char* v = GetExtState("rea_sixty", "nav_lower_row"); v && *v) {
         int n = std::atoi(v);
@@ -22945,9 +23025,14 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                             const bool isLong  = held > 500;
                             const bool isShift = (uf8::bindings::currentModifierSnapshot()
                                                   == uf8::bindings::Modifier::Shift);
-                            const int plainAct = reasixty_navUc1Push();
-                            const int shiftAct = reasixty_navUc1PushShift();
-                            const int longAct  = reasixty_navUc1LongPress();
+                            // The UF8's OWN set. These used to be the UC1's,
+                            // under names that said so — one config for two
+                            // surfaces, on which the same entry does different
+                            // things (Drill works here, and is a no-op on a UC1
+                            // with its own mode).
+                            const int plainAct = reasixty_navUf8Push();
+                            const int shiftAct = reasixty_navUf8PushShift();
+                            const int longAct  = reasixty_navUf8LongPress();
                             const int act = isLong ? longAct
                                           : (isShift ? shiftAct : plainAct);
                             uf8::nav::dispatchPushAction(act);
@@ -32929,11 +33014,17 @@ void pushUc1NavCarousel()
     static uc1::Uc1Mode s_priorMode        = uc1::Uc1Mode::Main;
 
     const uc1::Uc1Mode curMode    = g_uc1_surface->mode();
-    const bool         takeoverPref = g_navUc1Takeover.load();
+    // ⇨ THE LCD FOLLOWS "SHOWS", NOT THE ENCODER SWITCH. This read used to be
+    // g_navUc1Takeover, which also decided whether Encoder 2 was taken — so a
+    // user could not watch the list without also giving up the encoder, or
+    // steer with the encoder while the LCD stayed on its normal content. The
+    // UF8 has had the two apart since Phase 2.8d; this is the UC1 catching up
+    // (Frank 2026-09-08).
+    const bool         takeoverPref = g_navUc1Show.load();
 
     if (overlayOn && !s_wasOverlayActive) {
         // Activation edge. Only force Main + flag LCD takeover when
-        // the user's takeover preference is on. Otherwise leave UC1
+        // the user asked the UC1 to SHOW the list. Otherwise leave UC1
         // alone — only UF8 reflects Nav Mode (Phase 2.8c).
         if (takeoverPref) {
             s_priorMode = curMode;
@@ -44690,6 +44781,58 @@ void reasixty_setNavUf8Takeover(bool on)
     g_navUf8Takeover.store(on);
     SetExtState("rea_sixty", "nav_uf8_takeover", on ? "1" : "0", true);
 }
+
+// ---- UC1 display, split off from its takeover (2026-09-08) ----------------
+extern "C" int  reasixty_navUc1Show() { return g_navUc1Show.load() ? 1 : 0; }
+void reasixty_setNavUc1Show(bool on)
+{
+    g_navUc1Show.store(on);
+    SetExtState("rea_sixty", "nav_uc1_show", on ? "1" : "0", true);
+    g_navOverlayDirty.store(true);
+}
+
+// ---- UF1 ------------------------------------------------------------------
+extern "C" int  reasixty_navUf1Show()     { return g_navUf1Show.load() ? 1 : 0; }
+extern "C" int  reasixty_navUf1Takeover() { return g_navUf1Takeover.load() ? 1 : 0; }
+extern "C" int  reasixty_navUf1Mode()     { return g_navUf1Mode.load(); }
+void reasixty_setNavUf1Show(bool on)
+{
+    g_navUf1Show.store(on);
+    SetExtState("rea_sixty", "nav_uf1_show", on ? "1" : "0", true);
+    // The soft-key row dedups against what the device shows, so the edge has to
+    // force a rewrite — see uf1PaintChannel_'s nav branch.
+    g_pageDirty.store(true);
+}
+void reasixty_setNavUf1Takeover(bool on)
+{
+    g_navUf1Takeover.store(on);
+    SetExtState("rea_sixty", "nav_uf1_takeover", on ? "1" : "0", true);
+}
+void reasixty_setNavUf1Mode(int v)
+{
+    writeNavSetting_("nav_uf1_mode", g_navUf1Mode, v, 2);
+    g_pageDirty.store(true);
+}
+
+// ---- Push actions, one set per surface -------------------------------------
+extern "C" int reasixty_navUf8Push()      { return g_navUf8Push.load(); }
+extern "C" int reasixty_navUf8PushShift() { return g_navUf8PushShift.load(); }
+extern "C" int reasixty_navUf8LongPress() { return g_navUf8LongPress.load(); }
+extern "C" int reasixty_navUf1Push()      { return g_navUf1Push.load(); }
+extern "C" int reasixty_navUf1PushShift() { return g_navUf1PushShift.load(); }
+extern "C" int reasixty_navUf1LongPress() { return g_navUf1LongPress.load(); }
+void reasixty_setNavUf8Push(int v)
+    { writeNavSetting_("nav_uf8_push", g_navUf8Push, v, 6); }
+void reasixty_setNavUf8PushShift(int v)
+    { writeNavSetting_("nav_uf8_push_shift", g_navUf8PushShift, v, 6); }
+void reasixty_setNavUf8LongPress(int v)
+    { writeNavSetting_("nav_uf8_long_press", g_navUf8LongPress, v, 6); }
+void reasixty_setNavUf1Push(int v)
+    { writeNavSetting_("nav_uf1_push", g_navUf1Push, v, 6); }
+void reasixty_setNavUf1PushShift(int v)
+    { writeNavSetting_("nav_uf1_push_shift", g_navUf1PushShift, v, 6); }
+void reasixty_setNavUf1LongPress(int v)
+    { writeNavSetting_("nav_uf1_long_press", g_navUf1LongPress, v, 6); }
 
 int  reasixty_uiSpelling() { return g_uiSpelling.load(); }
 void reasixty_setUiSpelling(int v)
