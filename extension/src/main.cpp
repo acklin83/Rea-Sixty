@@ -33363,11 +33363,20 @@ void pushUc1NavCarousel()
     // currently-selected region. Runs BEFORE the takeover-gated early
     // return because UF8 needs the updated Overlay view even when UC1
     // LCD takeover is off (e.g. user navigates only via UF8).
-    if (overlayOn
+    // ⛔ NUR ZURÜCKNEHMEN, WAS DIESE KOPPLUNG SELBST GESETZT HAT.
+    // Der Rückfall unten prüfte ausschliesslich "die Ansicht ist
+    // MarkersInRegion" — ohne zu wissen, WER sie dorthin gebracht hat. Also
+    // wurde JEDER Drill von Hand im nächsten Tick weggeräumt: Soft-Key-Druck,
+    // Jump + Drill auf dem Push, auf jeder Fläche, sobald die Rückkopplung
+    // nicht gerade lief. Und sie läuft nur bei UF8=Markers UND UC1=Regions,
+    // also praktisch nie. Der Drill war damit auf jeder Kiste mit UC1 tot.
+    // Frank 2026-09-08: "bei UF8 geht er ganz kurz rein und grad wieder raus."
+    static bool s_couplingDrilled = false;
+    const bool couplingOn = overlayOn
         && ov.viewLock() == uf8::nav::ViewLock::None
         && g_navUf8Mode.load() == 1
-        && g_navUc1Mode.load() == 1)
-    {
+        && g_navUc1Mode.load() == 1;
+    if (couplingOn) {
         std::vector<uf8::nav::Item> uc1Regions;
         uf8::nav::Overlay::enumerateFiltered(
             uf8::nav::View::Regions, -1, &uc1Regions);
@@ -33380,17 +33389,21 @@ void pushUc1NavCarousel()
                       ? uc1Regions[cur].idx : -1;
         if (rId >= 0) {
             ov.drillIntoRegionByIdx(rId);
+            s_couplingDrilled = true;
         }
-    } else if (overlayOn
-               && ov.viewLock() == uf8::nav::ViewLock::None
-               && ov.view() == uf8::nav::View::MarkersInRegion)
-    {
-        // Coupling condition no longer holds (user changed a Mode or
-        // UC1 left Regions) → revert Overlay to plain MarkersAll or
-        // Regions per the UF8 Mode setting.
-        ov.setView(g_navUf8Mode.load() == 1
-                       ? uf8::nav::View::MarkersAll
-                       : uf8::nav::View::Regions);
+    } else if (s_couplingDrilled) {
+        // Die Kopplung ist gerade ausgegangen (ein Modus geändert, oder der
+        // UC1 hat die Regionen verlassen). EINMAL zurücksetzen, dann ist die
+        // Ansicht wieder Sache dessen, der sie anfasst.
+        s_couplingDrilled = false;
+        if (overlayOn
+            && ov.viewLock() == uf8::nav::ViewLock::None
+            && ov.view() == uf8::nav::View::MarkersInRegion)
+        {
+            ov.setView(g_navUf8Mode.load() == 1
+                           ? uf8::nav::View::MarkersAll
+                           : uf8::nav::View::Regions);
+        }
     }
 
     const bool takeoverOn = g_uc1NavLcdActive.load();
