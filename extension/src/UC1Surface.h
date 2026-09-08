@@ -458,6 +458,10 @@ private:
     std::string                           navCarouselPrev_;
     std::string                           navCarouselCurr_;
     std::string                           navCarouselNext_;
+    // Die eigene LARGE-Triple des Nav-Karussells, wie das Instanz-Karussell
+    // sie hat. refresh() braucht sie, um die LCD nach einem Spurwechsel
+    // wiederherzustellen, statt Kanalinhalt darüberzumalen.
+    std::vector<uint8_t>                  navCarouselTripleFrame_;
     std::string                           navCarouselHeader_;
     uint8_t                               navCarouselPalette_ = 0xFF;  // 0xFF = "never sent"
 

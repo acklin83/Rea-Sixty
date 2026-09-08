@@ -643,7 +643,8 @@ void UC1Surface::showNavCarousel(const std::string& prev,
         navCarouselNext_ = next;
         auto frame = buildTrackNameTripleLarge(prev, curr, next);
         device_->send(std::vector<uint8_t>(frame));
-        lastLargeTripleFrame_ = std::move(frame);
+        navCarouselTripleFrame_ = frame;
+        lastLargeTripleFrame_   = std::move(frame);
         device_->send(buildDisplayInvalidate(0x0F));
     }
 
@@ -746,6 +747,7 @@ void UC1Surface::hideNavCarousel()
     navCarouselCurr_.clear();
     navCarouselNext_.clear();
     navCarouselHeader_.clear();
+    navCarouselTripleFrame_.clear();
     navCarouselPalette_ = 0xFF;
     if (!device_ || mode_ != Uc1Mode::Main) return;
     // Match the instance-carousel revert: reset sub=0x00 then refresh()
@@ -4866,7 +4868,24 @@ void UC1Surface::refresh()
         lastZone05Text_.clear();
         device_->send(buildDisplayInvalidate(zone::kBusCompReadout));
     }
-    if (instanceCarouselActive_) {
+    if (navCarouselActive_) {
+        // ⛔ NAV OWNS THE LCD, AND refresh() DID NOT KNOW IT. The chain below
+        // lists the instance carousel and the BC-scroll overlay, and everything
+        // else falls through to the channel content. The Nav carousel was never
+        // added, so any refresh while it was up (a track change on the UF8
+        // channel encoder is one, and that encoder is not even driving Nav)
+        // painted channels over the markers. It stayed there: refresh also
+        // overwrites lastLargeTripleFrame_, while showNavCarousel's dedup still
+        // held the strings it had sent, so nothing pushed the carousel back
+        // until an item changed. Frank 2026-09-08.
+        // Re-assert what Nav owns, exactly as the instance carousel does.
+        device_->send(buildCentralMode(CentralMode::Main, 0x02));
+        device_->send(buildLcdHeader(navCarouselHeader_));
+        if (!navCarouselTripleFrame_.empty()) {
+            device_->send(std::vector<uint8_t>(navCarouselTripleFrame_));
+            lastLargeTripleFrame_ = navCarouselTripleFrame_;
+        }
+    } else if (instanceCarouselActive_) {
         // Instance / FX cycle carousel — claim the same layout slot
         // as the BC-scroll overlay but with the caller-supplied
         // header (e.g. track name) and our own LARGE triple. The
