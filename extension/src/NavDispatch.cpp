@@ -48,8 +48,16 @@ bool dispatchPushAction(int act)
 
     auto doJump = [&]() {
         if (jumpIdx < 0) return;
-        if (inRegions) GoToRegion(nullptr, jumpIdx, false);
-        else            SetEditCurPos(jumpPos, true, true);
+        // ⛔ GoToRegion ONLY SMOOTH-SEEKS DURING PLAYBACK. Stopped it queues
+        // "seek at the end of the current region" and nothing happens, so the
+        // push looked dead. Measured on 2026-07-27 with a cursor before/after
+        // trace: SetEditCurPos moves and sticks, GoToRegion stopped does not.
+        // The soft-key path and the UC1 path were fixed then; THIS one, the
+        // shared push, kept the old line and was still broken on 2026-09-08.
+        // Four jump sites, three fixed, and the one left over is the one Frank
+        // was pressing.
+        if (inRegions && (GetPlayState() & 1)) GoToRegion(nullptr, jumpIdx, false);
+        else                                   SetEditCurPos(jumpPos, true, true);
         ov.clearCursorPin();
         markDirty();
     };
