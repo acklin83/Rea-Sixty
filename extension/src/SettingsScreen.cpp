@@ -6115,20 +6115,13 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
         ImGui_Spacing(ctx);
     }
 
-    // ---- Header + navigation hint -------------------------------------
+    // ---- Header -------------------------------------------------------
     char hdr[160];
     snprintf(hdr, sizeof(hdr),
                   "Editing: soft-key bank %s, %s   (Layer %d, Quick %d)",
                   sbLabels[sbIdx], kModifierName_[g_slotEditModIdx],
                   editLayer + 1, engagedQ + 1);
     ImGui_Text(ctx, hdr);
-    ImGui_Separator(ctx);
-    ImGui_Spacing(ctx);
-
-    ImGui_TextDisabled(ctx,
-        "Name, dynamic kind, presets and the factory banks are on the cell "
-        "itself: double-click to rename, right-click for the rest.");
-    ImGui_Spacing(ctx);
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
 
