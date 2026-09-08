@@ -450,6 +450,27 @@ void reasixty_setNavLowerRow(int v);
 void reasixty_setNavColorBar(int v);
 extern "C" int  reasixty_navUf8Show();
 extern "C" int  reasixty_navUf8Takeover();
+// Per-surface Nav display + encoder + push sets (2026-09-08).
+extern "C" int  reasixty_navUc1Show();
+void reasixty_setNavUc1Show(bool on);
+extern "C" int  reasixty_navUf1Show();
+extern "C" int  reasixty_navUf1Takeover();
+extern "C" int  reasixty_navUf1Mode();
+void reasixty_setNavUf1Show(bool on);
+void reasixty_setNavUf1Takeover(bool on);
+void reasixty_setNavUf1Mode(int v);
+extern "C" int reasixty_navUf8Push();
+extern "C" int reasixty_navUf8PushShift();
+extern "C" int reasixty_navUf8LongPress();
+extern "C" int reasixty_navUf1Push();
+extern "C" int reasixty_navUf1PushShift();
+extern "C" int reasixty_navUf1LongPress();
+void reasixty_setNavUf8Push(int v);
+void reasixty_setNavUf8PushShift(int v);
+void reasixty_setNavUf8LongPress(int v);
+void reasixty_setNavUf1Push(int v);
+void reasixty_setNavUf1PushShift(int v);
+void reasixty_setNavUf1LongPress(int v);
 void reasixty_setNavUf8Show(bool on);
 void reasixty_setNavUf8Takeover(bool on);
 int  reasixty_uiSpelling();
@@ -23091,6 +23112,12 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
               "Nav Mode: Regions only (no drill)");
 
     // -- Per-surface matrix ------------------------------------------
+    // ⇨ ONE ROW PER QUESTION, ONE COLUMN PER SURFACE, and every cell answers the
+    // same question for its surface. It used to be two rows whose cells meant
+    // different things per column ("On 8 strips" was display only, "Take over
+    // LCD" was display AND the encoder), plus a loose checkbox under the table
+    // for the UF8's encoder. Frank could not tell from the pane what "off"
+    // would do, twice in two days (2026-09-08).
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
     ImGui_Text(ctx, "Per-surface");
@@ -23098,17 +23125,25 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
 
     const int uc1Mode = reasixty_navUc1Mode();
     const int uf8Mode = reasixty_navUf8Mode();
+    const int uf1Mode = reasixty_navUf1Mode();
+
+    // "Shows" folds the display switch and the mode into one control: the mode
+    // IS the switch, and "Off" is one of its values. Two settings behind it, so
+    // no stored value changes meaning.
+    static const char* kShowsUf8[3] = { "Off", "Regions", "Markers" };
+    static const char* kShowsOth[4] = { "Off", "Mirror UF8", "Regions", "Markers" };
 
     int matrixFlags = 0;
-    if (ImGui_BeginTable(ctx, "nav_per_surface", 3, &matrixFlags,
+    if (ImGui_BeginTable(ctx, "nav_per_surface", 4, &matrixFlags,
                          nullptr, nullptr, nullptr))
     {
         int    wFlag  = ImGui_TableColumnFlags_WidthFixed;
         double wLabel = scaleW_(ctx, 180.0);
-        double wCol   = scaleW_(ctx, 260.0);
+        double wCol   = scaleW_(ctx, 200.0);
         ImGui_TableSetupColumn(ctx, "label", &wFlag, &wLabel, nullptr);
         ImGui_TableSetupColumn(ctx, "uf8",   &wFlag, &wCol,   nullptr);
         ImGui_TableSetupColumn(ctx, "uc1",   &wFlag, &wCol,   nullptr);
+        ImGui_TableSetupColumn(ctx, "uf1",   &wFlag, &wCol,   nullptr);
 
         // Header row
         ImGui_TableNextColumn(ctx);
@@ -23117,65 +23152,104 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         ImGui_Text(ctx, "UF8");
         ImGui_TableNextColumn(ctx);
         ImGui_Text(ctx, "UC1");
+        ImGui_TableNextColumn(ctx);
+        ImGui_Text(ctx, "UF1");
 
-        // Show overlay
+        // ---- Shows -----------------------------------------------------
         ImGui_TableNextColumn(ctx);
-        ImGui_Text(ctx, "Show overlay");
+        ImGui_Text(ctx, "Shows");
+
+        // UF8: no "Mirror" — it IS the view authority the other two mirror.
         ImGui_TableNextColumn(ctx);
-        bool uf8Show = reasixty_navUf8Show() != 0;
-        if (ImGui_Checkbox(ctx, "On 8 strips##nav_uf8_show", &uf8Show)) {
-            reasixty_setNavUf8Show(uf8Show);
+        {
+            const bool on  = reasixty_navUf8Show() != 0;
+            const int  cur = on ? (uf8Mode + 1) : 0;
+            ImGui_SetNextItemWidth(ctx, -1.0);
+            if (ImGui_BeginCombo(ctx, "##nav_uf8_shows", kShowsUf8[cur], nullptr)) {
+                for (int i = 0; i < 3; ++i) {
+                    bool sel = (i == cur);
+                    if (ImGui_Selectable(ctx, kShowsUf8[i], &sel, nullptr,
+                                         nullptr, nullptr)) {
+                        reasixty_setNavUf8Show(i != 0);
+                        if (i != 0) reasixty_setNavUf8Mode(i - 1);
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
         }
         ImGui_TableNextColumn(ctx);
-        bool uc1Show = reasixty_navUc1Takeover() != 0;
-        if (ImGui_Checkbox(ctx, "Take over LCD##nav_uc1_show", &uc1Show)) {
-            reasixty_setNavUc1Takeover(uc1Show);
+        {
+            const bool on  = reasixty_navUc1Show() != 0;
+            const int  cur = on ? (uc1Mode + 1) : 0;
+            ImGui_SetNextItemWidth(ctx, -1.0);
+            if (ImGui_BeginCombo(ctx, "##nav_uc1_shows", kShowsOth[cur], nullptr)) {
+                for (int i = 0; i < 4; ++i) {
+                    bool sel = (i == cur);
+                    if (ImGui_Selectable(ctx, kShowsOth[i], &sel, nullptr,
+                                         nullptr, nullptr)) {
+                        reasixty_setNavUc1Show(i != 0);
+                        if (i != 0) reasixty_setNavUc1Mode(i - 1);
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+        }
+        ImGui_TableNextColumn(ctx);
+        {
+            const bool on  = reasixty_navUf1Show() != 0;
+            const int  cur = on ? (uf1Mode + 1) : 0;
+            ImGui_SetNextItemWidth(ctx, -1.0);
+            if (ImGui_BeginCombo(ctx, "##nav_uf1_shows", kShowsOth[cur], nullptr)) {
+                for (int i = 0; i < 4; ++i) {
+                    bool sel = (i == cur);
+                    if (ImGui_Selectable(ctx, kShowsOth[i], &sel, nullptr,
+                                         nullptr, nullptr)) {
+                        reasixty_setNavUf1Show(i != 0);
+                        if (i != 0) reasixty_setNavUf1Mode(i - 1);
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
         }
 
-        // Mode
+        // ---- Encoder ---------------------------------------------------
         ImGui_TableNextColumn(ctx);
-        ImGui_Text(ctx, "Mode");
+        ImGui_Text(ctx, "Encoder drives Nav");
         ImGui_TableNextColumn(ctx);
-        if (ImGui_RadioButton(ctx, "Regions##nav_uf8_mode_r", uf8Mode == 0)) {
-            reasixty_setNavUf8Mode(0);
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_RadioButton(ctx, "Markers##nav_uf8_mode_m", uf8Mode == 1)) {
-            reasixty_setNavUf8Mode(1);
+        {
+            bool on = reasixty_navUf8Takeover() != 0;
+            if (ImGui_Checkbox(ctx, "Channel encoder##nav_uf8_enc", &on))
+                reasixty_setNavUf8Takeover(on);
         }
         ImGui_TableNextColumn(ctx);
-        if (ImGui_RadioButton(ctx, "Mirror UF8##nav_uc1_mode_mir", uc1Mode == 0)) {
-            reasixty_setNavUc1Mode(0);
+        {
+            bool on = reasixty_navUc1Takeover() != 0;
+            if (ImGui_Checkbox(ctx, "Encoder 2##nav_uc1_enc", &on))
+                reasixty_setNavUc1Takeover(on);
         }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_RadioButton(ctx, "Regions##nav_uc1_mode_r", uc1Mode == 1)) {
-            reasixty_setNavUc1Mode(1);
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_RadioButton(ctx, "Markers##nav_uc1_mode_m", uc1Mode == 2)) {
-            reasixty_setNavUc1Mode(2);
+        ImGui_TableNextColumn(ctx);
+        {
+            bool on = reasixty_navUf1Takeover() != 0;
+            if (ImGui_Checkbox(ctx, "Channel encoder##nav_uf1_enc", &on))
+                reasixty_setNavUf1Takeover(on);
         }
 
         ImGui_EndTable(ctx);
     }
-    ImGui_Text(ctx,
-        "  When UC1=Markers and UF8=Regions, UC1 shows the markers "
-        "within UF8's currently-selected region (live, follows UF8's "
-        "cursor). Drill is implicit through this coupling.");
-
-    ImGui_Spacing(ctx);
-    bool uf8TakeNav = reasixty_navUf8Takeover() != 0;
-    if (ImGui_Checkbox(ctx,
-            "UF8 Channel encoder drives Nav Mode",
-            &uf8TakeNav))
-    {
-        reasixty_setNavUf8Takeover(uf8TakeNav);
-    }
     ImGui_TextDisabled(ctx,
-        "On: rotation moves the Nav cursor and the push fires the action set "
-        "below, the same as UC1 Encoder 2. Off: Nav Mode leaves this encoder "
-        "alone and it keeps its Encoder Mode. Paging stays on the Page Left "
-        "and Page Right keys either way, and Quick 1 stays Back.");
+        "Shows: what the surface displays while Nav Mode is on. Off leaves it in "
+        "its normal view. Mirror UF8 follows the UF8's list; Regions and Markers "
+        "give the surface a list of its own. The UF8 is the view authority, so it "
+        "has no Mirror.");
+    ImGui_TextDisabled(ctx,
+        "Encoder drives Nav: on, the encoder moves the cursor and its push fires "
+        "that surface's actions below. Off, Nav Mode leaves the encoder alone and "
+        "it keeps its normal job. The two are independent: you can watch without "
+        "steering, or steer without the display changing.");
+    ImGui_TextDisabled(ctx,
+        "When UC1 = Markers and UF8 = Regions, the UC1 shows the markers inside "
+        "the UF8's selected region and follows its cursor. That coupling is what "
+        "replaces drilling on a surface with a list of its own.");
 
     // -- UF8 strip display -------------------------------------------
     ImGui_Spacing(ctx);
@@ -23223,12 +23297,12 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     // -- UC1 Encoder 2 push actions ----------------------------------
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Encoder push actions (UC1 Encoder 2 + UF8 Channel encoder)");
+    ImGui_Text(ctx, "Encoder push actions");
     ImGui_Separator(ctx);
-    ImGui_Text(ctx,
-        "  Shared between both surfaces. UF8 Channel encoder dispatches "
-        "the same plain / shift / long-press actions when its takeover "
-        "checkbox above is on.");
+    ImGui_TextDisabled(ctx,
+        "One set per surface, under the surface it belongs to. They used to be "
+        "one set for all, which could not be right: Drill works on the UF8 and "
+        "does nothing on a surface with a list of its own.");
 
     static const char* kNavActionNames[7] = {
         "Jump + Drill",
@@ -23239,14 +23313,10 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         "Add marker at playhead",
         "Disabled",
     };
-    auto drawNavActionRow = [&](const char* label,
-                                const char* comboId,
-                                int  current,
-                                void (*setter)(int)) {
+    auto navActionCombo = [&](const char* comboId, int current,
+                              void (*setter)(int)) {
         ImGui_TableNextColumn(ctx);
-        ImGui_Text(ctx, label);
-        ImGui_TableNextColumn(ctx);
-        ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
+        ImGui_SetNextItemWidth(ctx, -1.0);
         if (ImGui_BeginCombo(ctx, comboId, kNavActionNames[current], nullptr)) {
             for (int j = 0; j < 7; ++j) {
                 bool sel = (j == current);
@@ -23261,25 +23331,58 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     };
 
     int navTblFlags = 0;
-    if (ImGui_BeginTable(ctx, "nav_push_actions", 2, &navTblFlags,
+    if (ImGui_BeginTable(ctx, "nav_push_actions", 4, &navTblFlags,
                          nullptr, nullptr, nullptr)) {
         int    wFlag  = ImGui_TableColumnFlags_WidthFixed;
-        double wLabel = scaleW_(ctx, 160.0);
-        double wCombo = scaleW_(ctx, 210.0);
+        double wLabel = scaleW_(ctx, 180.0);
+        double wCombo = scaleW_(ctx, 200.0);
         ImGui_TableSetupColumn(ctx, "label", &wFlag, &wLabel, nullptr);
-        ImGui_TableSetupColumn(ctx, "combo", &wFlag, &wCombo, nullptr);
-        drawNavActionRow("Plain push action", "##nav_uc1_push_combo",
-                         reasixty_navUc1Push(), reasixty_setNavUc1Push);
-        drawNavActionRow("Shift + push action", "##nav_uc1_pshift_combo",
-                         reasixty_navUc1PushShift(), reasixty_setNavUc1PushShift);
-        drawNavActionRow("Long-press action", "##nav_uc1_long_combo",
-                         reasixty_navUc1LongPress(), reasixty_setNavUc1LongPress);
+        ImGui_TableSetupColumn(ctx, "uf8",   &wFlag, &wCombo, nullptr);
+        ImGui_TableSetupColumn(ctx, "uc1",   &wFlag, &wCombo, nullptr);
+        ImGui_TableSetupColumn(ctx, "uf1",   &wFlag, &wCombo, nullptr);
+
+        ImGui_TableNextColumn(ctx); ImGui_Text(ctx, "");
+        ImGui_TableNextColumn(ctx); ImGui_Text(ctx, "UF8");
+        ImGui_TableNextColumn(ctx); ImGui_Text(ctx, "UC1");
+        ImGui_TableNextColumn(ctx); ImGui_Text(ctx, "UF1");
+
+        ImGui_TableNextColumn(ctx); ImGui_Text(ctx, "Plain push");
+        navActionCombo("##nav_uf8_push_combo",
+                       reasixty_navUf8Push(), reasixty_setNavUf8Push);
+        navActionCombo("##nav_uc1_push_combo",
+                       reasixty_navUc1Push(), reasixty_setNavUc1Push);
+        navActionCombo("##nav_uf1_push_combo",
+                       reasixty_navUf1Push(), reasixty_setNavUf1Push);
+
+        ImGui_TableNextColumn(ctx); ImGui_Text(ctx, "Shift + push");
+        navActionCombo("##nav_uf8_pshift_combo",
+                       reasixty_navUf8PushShift(), reasixty_setNavUf8PushShift);
+        navActionCombo("##nav_uc1_pshift_combo",
+                       reasixty_navUc1PushShift(), reasixty_setNavUc1PushShift);
+        navActionCombo("##nav_uf1_pshift_combo",
+                       reasixty_navUf1PushShift(), reasixty_setNavUf1PushShift);
+
+        ImGui_TableNextColumn(ctx); ImGui_Text(ctx, "Long-press");
+        navActionCombo("##nav_uf8_long_combo",
+                       reasixty_navUf8LongPress(), reasixty_setNavUf8LongPress);
+        navActionCombo("##nav_uc1_long_combo",
+                       reasixty_navUc1LongPress(), reasixty_setNavUc1LongPress);
+        navActionCombo("##nav_uf1_long_combo",
+                       reasixty_navUf1LongPress(), reasixty_setNavUf1LongPress);
+
         ImGui_EndTable(ctx);
     }
+    // The note now names the column it is about, instead of standing under all
+    // three and leaving the reader to work out which one it means.
     if (uc1Mode != 0) {
         ImGui_TextDisabled(ctx,
-            "  In independent UC1 mode: Drill / Back are no-ops; "
-            "Jump+Drill degrades to Jump only.");
+            "UC1 has a list of its own, so its Drill and Back do nothing and "
+            "Jump + Drill is just Jump. The coupling above drills for it.");
+    }
+    if (uf1Mode != 0) {
+        ImGui_TextDisabled(ctx,
+            "UF1 has a list of its own, so its Drill and Back do nothing and "
+            "Jump + Drill is just Jump.");
     }
 
     // -- Behaviour ---------------------------------------------------
@@ -23288,10 +23391,13 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     ImGui_Text(ctx, "Behaviour");
     ImGui_Separator(ctx);
 
-    // Region-press radio is only meaningful when UC1 mirrors UF8 (in
-    // independent modes drill on a region tap doesn't fire). Hide
-    // entirely rather than grey to keep the page short.
-    if (uc1Mode == 0 && showsDev(kDevUf8)) {
+    // ⛔ ALWAYS SHOWN, and this is the fix for the worst hiding place in the
+    // pane. "Drill only" plus a UC1 with a list of its own makes the UF8's
+    // top-soft-key do NOTHING at all (main.cpp: doJump false, doDrill false) —
+    // and the radio that says so was hidden in exactly that configuration, so
+    // the user could not see, let alone change, the setting killing the key
+    // (Frank 2026-09-08).
+    if (showsDev(kDevUf8)) {
         ImGui_Text(ctx, "Region press (UF8 top-soft-key):");
         int rp = reasixty_navRegionPress();
         if (ImGui_RadioButton(ctx, "Jump + Drill##nav_rp_both", rp == 0)) {
@@ -23304,6 +23410,18 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_RadioButton(ctx, "Drill only##nav_rp_drill", rp == 2)) {
             reasixty_setNavRegionPress(2);
+        }
+        if (uc1Mode != 0) {
+            if (rp == 2) {
+                ImGui_TextColored(ctx, 0xE8C33AFF,
+                    "  The key does nothing right now: Drill only, and the UC1 "
+                    "has a list of its own, which suppresses the drill. Pick "
+                    "Jump, or set the UC1 back to Mirror UF8.");
+            } else {
+                ImGui_TextDisabled(ctx,
+                    "  The UC1 has a list of its own, so the drill half does "
+                    "nothing; the coupling above drills instead.");
+            }
         }
     }
     bool autoFollow = reasixty_navAutoFollow();
