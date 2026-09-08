@@ -19,8 +19,20 @@ cells beside it carry live traffic the whole time: `0x3E` and `0x3F`
 So SSL 360 lights Layer 1 and Layer 2 and never lights anything for Layer
 3. `Protocol.cpp` carries `0x3D` for it, which is the only free slot
 between Quick 1 and Layer 2 and was filled in by position rather than
-observed. Whether a Layer 3 LED exists at all is open; the surface
-behaves as though it does not.
+observed.
+
+**Probed at the device on 2026-09-08, and the answer is no.** Nineteen
+cells were driven one at a time with `F4 F1` on FF38 and `00 F0` on FF39,
+which is what SSL sends for this row: `0x3D`, then `0x38`, `0x40`, `0x41`,
+`0x42`, then everything else unclaimed in `0x18..0x60` apart from the top
+soft keys (`0x20`, `0x21`, `0x28`, `0x29`, `0x2A`, `0x43`..`0x48`, `0x50`,
+`0x51`, `0x60`). **Not one of them lit anything.**
+
+Taken with the corpus, that closes it: there is no addressable LED behind
+the Layer 3 button. Nothing in the protocol is missing, and the entry in
+`Protocol.cpp` should be read as a placeholder rather than a finding. The
+manual's line about it being a hardware quirk rather than a Rea-Sixty bug
+now rests on a measurement.
 
 Also worth knowing before anyone probes: this row is not white in SSL's
 own traffic. `F4 F1` / `21 F1`, where our table sends `FF FF` / `11 F1`.
