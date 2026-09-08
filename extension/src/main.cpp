@@ -23022,8 +23022,9 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             //
             //   PageLeft (0x52)  → ov.pagePrev()
             //   PageRight (0x53) → ov.pageNext()
-            //   ChannelPush (0x76) → "back" — leave MarkersInRegion for
-            //     Regions; also acts as escape from Markers-all view.
+            //   ChannelPush (0x76) → the surface's push actions, and ONLY
+            //     while its encoder is handed over. It used to be a hard-coded
+            //     "back" regardless; that went on 2026-09-07 (b7cfb1e).
             //   Quick1 (0x43)    → same as ChannelPush: Back
             //   Quick2 (0x44)    → switch to MarkersAll view (escape
             //     region filter while in drill mode — no-op under
@@ -23036,8 +23037,15 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             //
             // Releases are swallowed so the underlying bindings (e.g.
             // factory page_left LED feedback) don't fire mid-overlay.
+            // ⛔ AND ONLY WHILE THIS SURFACE SHOWS THE LIST. This asked just
+            // whether Nav was active, so Page ◄/►, Quick 1 and Quick 2 were
+            // taken even with the UF8's display off — four keys gone, and
+            // nothing on the surface to explain why, because the surface was
+            // showing tracks (Frank 2026-09-08, found in the audit). The
+            // encoder learned the same lesson the day before.
             if (!handledNatively
-                && uf8::nav::Overlay::instance().active())
+                && uf8::nav::Overlay::instance().active()
+                && g_navUf8Show.load())
             {
                 auto& ov = uf8::nav::Overlay::instance();
                 bool handledOv = false;
@@ -23143,7 +23151,29 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     // Plugin-Modes! Für 2x8kanäle!"). The other paging controls
                     // (UF8 encoder, UC1 encoders) are unaffected.
                     if (isBankBtn && g_uf8PluginMode.load()) bk = -1;
-                    if (isBankBtn && bk >= 0
+                    // ⇨ IN NAV MODE THE BANK KEYS PAGE THE MARKER LIST. The
+                    // strips show markers, so the control that shifts the window
+                    // over the strips shifts the window over the markers — the
+                    // same gesture, applied to what is actually on the surface
+                    // (Frank 2026-09-08). Ahead of the dynamic-bank claim and
+                    // ahead of Plugin Mode's, because Nav is the thing the user
+                    // is looking at. Gated on THIS surface showing the list: if
+                    // the UF8 is not displaying markers, its bank keys still
+                    // bank tracks.
+                    if (isBankBtn && uf8::nav::Overlay::instance().active()
+                        && g_navUf8Show.load()) {
+                        if (pressed) {
+                            auto& ov = uf8::nav::Overlay::instance();
+                            const auto pane = uf8::nav::Overlay::Pane::Uf8;
+                            if (bid == uf8::bindings::ButtonId::BankRight)
+                                ov.pageNext(pane);
+                            else
+                                ov.pagePrev(pane);
+                            g_navOverlayDirty.store(true);
+                            if (g_sync) g_sync->invalidate();
+                        }
+                        handledNatively = true;
+                    } else if (isBankBtn && bk >= 0
                         && g_dynBankCtrl[bk].load()
                                == static_cast<int>(BankControl::Uf8Bank)) {
                         if (pressed)
@@ -23964,6 +23994,24 @@ void onUf1Event(const uf1::InputEvent& ev)
                     // pane rides in `value` — 0 = UF8, 1 = UF1.
                     queueInput({PendingInput::NavJumpStrip,
                                 static_cast<uint8_t>(slot), 1.0});
+                }
+                break;
+            }
+            // ⇨ AND BANK ◄/► PAGE THE LIST, same reasoning as on the UF8: the
+            // soft-keys show markers, so the control that shifts the window
+            // shifts it over markers. Four at a time here, eight there — each
+            // surface pages its own window over the shared list.
+            if (uf8::nav::Overlay::instance().active() && g_navUf1Show.load()
+                && (ev.id == uf1::btn::kBankLeft
+                 || ev.id == uf1::btn::kBankRight))
+            {
+                if (ev.pressed) {
+                    auto& ov = uf8::nav::Overlay::instance();
+                    const auto pane = uf8::nav::Overlay::Pane::Uf1;
+                    if (ev.id == uf1::btn::kBankRight) ov.pageNext(pane);
+                    else                               ov.pagePrev(pane);
+                    g_navOverlayDirty.store(true);
+                    g_pageDirty.store(true);
                 }
                 break;
             }
@@ -35814,8 +35862,14 @@ void pushZonesForVisibleSlots()
         // and the same firmware zone. The Nav-decoration pass writes
         // its own content afterwards. nav_lower_row=Off keeps the
         // pre-2.8c behaviour where V-Pot value stays visible.
+        // ⛔ AND ON "SHOWS". The suppression asked only whether Nav was active,
+        // while the code that WRITES the replacement text is gated on
+        // g_navUf8Show — so with the UF8's display off and a lower-row format
+        // set, nobody wrote the row and nobody let the V-Pot value back in. It
+        // just stood there (Frank 2026-09-08, found in the audit).
         const bool navOwnsLower =
             uf8::nav::Overlay::instance().active()
+         && g_navUf8Show.load()
          && g_navLowerRow.load() != 0;
         if (!navOwnsLower && valLine != g_lastValueLine[s]) {
             g_lastValueLine[s] = valLine;
