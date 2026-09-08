@@ -358,15 +358,6 @@ std::array<std::vector<uint8_t>, 2> buildSelColour(uint8_t strip, uint8_t byteA,
 // colour lookup needed.
 std::array<std::vector<uint8_t>, 2> buildSelWhite(uint8_t strip, bool bright);
 
-// Raw {FF38, FF39} colour pair for ANY cell. For probing cells nobody has
-// mapped. Everything that knows its cell goes through buildUf8GlobalLed.
-// ⚠ Some UF8 LEDs do not answer to this family AT ALL (the Send/Plugin row,
-// Channel, Plugin): those are mono LEDs on buildLedCommand's FF 3B frame,
-// and a few need both frames together. A dark cell after a colour-pair
-// write therefore proves nothing on its own.
-std::array<std::vector<uint8_t>, 2> buildRawLedCell(uint8_t cell,
-                                                    uint8_t a38, uint8_t b38,
-                                                    uint8_t a39, uint8_t b39);
 
 // Verify a frame's checksum. Returns true if frame starts with FF and the
 // last byte matches sum(middle bytes) mod 256.

@@ -658,14 +658,6 @@ static std::vector<uint8_t> buildSelFrame(uint8_t cmd, uint8_t cell, uint8_t a, 
     return f;
 }
 
-std::array<std::vector<uint8_t>, 2> buildRawLedCell(uint8_t cell,
-                                                    uint8_t a38, uint8_t b38,
-                                                    uint8_t a39, uint8_t b39)
-{
-    return {buildSelFrame(0x38, cell, a38, b38),
-            buildSelFrame(0x39, cell, a39, b39)};
-}
-
 std::array<std::vector<uint8_t>, 2> buildSelColour(uint8_t strip, uint8_t byteA, uint8_t byteB)
 {
     const uint8_t cell = selCellForStrip(strip);
