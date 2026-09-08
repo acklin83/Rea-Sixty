@@ -5887,13 +5887,20 @@ std::atomic<bool> g_routingDirty{false};
 //                          (top-soft-keys behave as the layer's default —
 //                          on Layer 1 that's the SSL plug-in maps).
 //                          0..2 = Q1/Q2/Q3 engaged.
+// ⛔ ONLY LAYER 1 HAS A DEFAULT TO FALL BACK TO. layerQuickToSoftKeySet maps
+// L1's Q1/Q2 to sets 8 and 9, which are SSL's own CS and BC rows, so -1 there
+// is a real state: the SSL row is showing. On Layer 2 and 3 the quicks map to
+// ordinary sets (2..4 and 5..7) and -1 means NO SET AT ALL — the top soft-keys
+// carry nothing and the schema shows no engaged Quick. Frank 2026-09-08:
+// "wenn ein Layer anders als 1 zum ersten Mal gewählt wird, ist u.U. kein
+// Quick aktiv, sollte nicht sein." So those two start on Q1.
 //   g_activeSubBank[layer] = 0..5 — V-POT default + Soft 1..5. The
 //                          hardware bank-select row mutates this in
 //                          user-Quick context (in SSL CS/BC context it
 //                          mutates g_softKeyBank instead).
 // Replaces the legacy g_activeUserBank (flat 12-bank model) and
 // g_activeUserDomain (global radio without per-layer scope).
-std::atomic<int> g_activeQuick[3]   = { -1, -1, -1 };
+std::atomic<int> g_activeQuick[3]   = { -1,  0,  0 };
 std::atomic<int> g_activeSubBank[3] = {  0,  0,  0 };
 
 // Helper: clear every other Send/Receive mode on the same physical
