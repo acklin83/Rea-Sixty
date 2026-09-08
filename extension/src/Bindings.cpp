@@ -6361,6 +6361,8 @@ const char* builtinCategory(const std::string& n)
 {
     if (n.rfind("__", 0) == 0) return "";
 
+    if (n == "uf8_led_probe_step") return "Diagnostics";
+
     if (n.rfind("switch_fav_", 0) == 0 || n.rfind("copy_fav_", 0) == 0
      || n == "fav_cycle"
      || n.rfind("switch_cs_", 0) == 0 || n.rfind("copy_cs_", 0) == 0
@@ -6954,6 +6956,9 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "UF8/UC1. The eight strips leave the track bank and become the "
       "focused track's first eight RECEIVES. Param 0 puts them on the "
       "faders, 1 on the V-Pots. Nothing on a one-strip surface." },
+    { "uf8_led_probe_step",
+      "Lights the next unmapped UF8 LED cell, one per press, in both frame "
+      "families, and names it in REAPER's console. Temporary tool." },
     { "marker_overlay_toggle",
       "Turns the UF8's strips into a jump panel for markers AND regions." },
     { "marker_overlay_markers_only_toggle",
@@ -7366,6 +7371,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "marker_overlay_markers_only_toggle", "Nav Markers" },
     { "marker_overlay_regions_only_toggle", "Nav Regions" },
     { "marker_overlay_toggle", "Nav Mode" },
+    { "uf8_led_probe_step", "LED Probe" },
     { "master_pin_strip1", "Master L" },
     { "master_pin_strip8", "Master R" },
     { "mixer_toggle", "Settings" },
@@ -7570,6 +7576,7 @@ const std::vector<const char*>& builtinCategoryOrder()
         "Bank / Page", "Automation", "Zoom", "Sends / Receives",
         "Selection Sets", "Parameter Groups", "Tracks", "Master",
         "Brightness", "Modifiers", "FX Param", "Sticky Pot", "Hue", "OBS",
+        "Diagnostics",
     };
     return kCats;
 }

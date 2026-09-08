@@ -5212,6 +5212,9 @@ struct PendingInput {
                               //   preserved; only the lower-10-bit
                               //   channel index changes. value =
                               //   signed detent count.
+        Uf8LedProbeStep,      // LED probe: next cell + frame family. Queued
+                              // because the report goes to REAPER's console
+                              // and the lambda can run on the input thread.
         NavPushUf1,           // Nav Mode: UF1 channel-encoder push, already
                               //   resolved to a push action on the input
                               //   thread. value = the action (NavDispatch.h
@@ -19187,6 +19190,77 @@ void drainInputQueue()
             // Bank ◄ ► (0x21/0x23): move the track selection by ±kUf1BankStep
             // (main thread — track select). Reuses the channel-encoder nav path.
             applySelectRelative_(static_cast<int>(e.value));
+            continue;
+        }
+        if (e.kind == PendingInput::Uf8LedProbeStep) {
+            // ⛔ THE FIRST PASS USED THE WRONG FRAME FAMILY. It wrote only the
+            // FF38/FF39 colour pair, and this surface has LEDs that family
+            // cannot address at all: the Send/Plugin row, Channel and Plugin
+            // are mono LEDs on FF 3B, and Page Left/Right need both frames
+            // together. A dark cell after a colour-pair write proves nothing.
+            // So every candidate is tried mono first, then both.
+            //
+            // The cell itself is not in doubt: button + cell = 0x7F holds for
+            // all 26 LEDs in the upper block and 0xC7 for all 17 below, with
+            // no exception, which fixes Layer 3 at 0x3D.
+            enum class Mode : uint8_t { Mono, Both };
+            struct Step { uint8_t cell; Mode mode; };
+            static const Step kSteps[] = {
+                // The five SSL 360 only ever blanks, mono then both.
+                {0x3D, Mode::Mono}, {0x3D, Mode::Both},
+                {0x38, Mode::Mono}, {0x38, Mode::Both},
+                {0x40, Mode::Mono}, {0x40, Mode::Both},
+                {0x41, Mode::Mono}, {0x41, Mode::Both},
+                {0x42, Mode::Mono}, {0x42, Mode::Both},
+                // Everything else unclaimed in 0x18..0x60, minus the top
+                // soft keys. Both only: the colour pair alone already came
+                // back dark for all of these.
+                {0x20, Mode::Both}, {0x21, Mode::Both},
+                {0x28, Mode::Both}, {0x29, Mode::Both}, {0x2A, Mode::Both},
+                {0x43, Mode::Both}, {0x44, Mode::Both}, {0x45, Mode::Both},
+                {0x46, Mode::Both}, {0x47, Mode::Both}, {0x48, Mode::Both},
+                {0x50, Mode::Both}, {0x51, Mode::Both}, {0x60, Mode::Both},
+            };
+            constexpr int kProbeN =
+                static_cast<int>(sizeof(kSteps) / sizeof(kSteps[0]));
+            static int sProbeIdx = -1;
+            if (!g_dev || !g_dev->isOpen()) {
+                ShowConsoleMsg("LED probe: no UF8 open.\n");
+                continue;
+            }
+            auto clearCell = [](uint8_t c) {
+                auto off = uf8::buildRawLedCell(c, 0x00, 0xF0, 0x00, 0xF0);
+                g_dev->send(off[0]);
+                g_dev->send(off[1]);
+                g_dev->send(uf8::buildLedCommand(c, false));
+            };
+            if (sProbeIdx >= 0 && sProbeIdx < kProbeN) {
+                clearCell(kSteps[sProbeIdx].cell);
+            }
+            ++sProbeIdx;
+            if (sProbeIdx >= kProbeN) {
+                sProbeIdx = -1;
+                ShowConsoleMsg("LED probe: end of the list, everything cleared. "
+                               "Press again to start over.\n");
+            } else {
+                const auto& st = kSteps[sProbeIdx];
+                if (st.mode == Mode::Both) {
+                    // SSL's own bytes for this row: bright on FF38, 00 F0 on
+                    // FF39. Not the white the table sends.
+                    auto on = uf8::buildRawLedCell(st.cell, 0xF4, 0xF1, 0x00, 0xF0);
+                    g_dev->send(on[0]);
+                    g_dev->send(on[1]);
+                }
+                g_dev->send(uf8::buildLedCommand(st.cell, true));
+                char msg[144];
+                snprintf(msg, sizeof(msg),
+                         "LED probe %d/%d: cell 0x%02X, %s. "
+                         "Look at the surface, then press again.\n",
+                         sProbeIdx + 1, kProbeN, st.cell,
+                         st.mode == Mode::Mono ? "mono FF3B only"
+                                               : "colour pair + mono");
+                ShowConsoleMsg(msg);
+            }
             continue;
         }
         if (e.kind == PendingInput::NavPushUf1) {
@@ -48728,6 +48802,15 @@ void registerBindingHandlers()
         g_navOverlayDirty.store(true);
         if (g_sync) g_sync->invalidate();
     };
+
+    registerBuiltin("uf8_led_probe_step", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            // ⛔ Nothing but the queue: this can run on the libusb input
+            // thread, and the step talks to REAPER's console.
+            queueInput({PendingInput::Uf8LedProbeStep, 0, 0.0});
+        },
+    });
 
     registerBuiltin("marker_overlay_toggle", DescBuilder{
         [navToggle](bool firing, bool /*pressed*/, int /*param*/) {
