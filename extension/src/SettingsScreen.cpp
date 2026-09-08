@@ -6812,7 +6812,14 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // layer_select_* bindings via the schematic-proxy click). No
     // separate tab strip; the mockup's green outline ring around the
     // active Layer button is the single source of truth.
-    const int       s_editLayer = getActiveLayer();
+    // ⛔ THE QUICK LAYER. Everything this feeds is set-and-bank business: the
+    // matrix highlight, the engaged Quick, the slot editor. With "Layers switch
+    // Quicks only" on, getActiveLayer is pinned to Layer 1, so the highlight
+    // could only ever land on the rows that live there and clicking a set on
+    // Layer 2 or 3 marked nothing (Frank 2026-09-08). The per-button editor
+    // below keeps getActiveLayer, because that one really is about which
+    // binding fires.
+    const int       s_editLayer = getQuickLayer();
     static ButtonId s_selected  = ButtonId::None;
 
     // This pane is painting: it owns the surface's set until it stops (see
