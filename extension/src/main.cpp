@@ -403,6 +403,8 @@ int      reasixty_fxBankOp(int gesture);
 void     reasixty_setFxBankOp(int gesture, int op);
 int      reasixty_pgBankOp(int gesture);            // Parameter-Groups bank
 void     reasixty_setPgBankOp(int gesture, int op);
+uint32_t reasixty_paramGroupColour(int i);          // per-group key colour
+void     reasixty_setParamGroupColour(int i, uint32_t rgb);
 uint32_t reasixty_trackBankColour(int i);
 void     reasixty_setTrackBankColour(int i, uint32_t rgb);
 std::string reasixty_trackBankColourName(int i);
@@ -6888,6 +6890,16 @@ static const char* fxBankOpName_(FxBankOp op)
 constexpr int kPgBankOpCount = 3;
 std::atomic<int> g_pgBankOp[5] = { 1, 0, 0, 0, 2 };
 
+// One colour per group, for the bank's keys. GLOBAL, like the track-colour
+// bank's palette: names and the on/off flag belong to the project, but what a
+// group LOOKS like on the surface is the same wherever you open it.
+// ⇨ WHITE MEANS UNTOUCHED, the same convention the binding LED colours use, so
+// a factory setup keeps the key colour it has always had.
+std::atomic<uint32_t> g_paramGroupColour[8] = {
+    0xFFFFFFu, 0xFFFFFFu, 0xFFFFFFu, 0xFFFFFFu,
+    0xFFFFFFu, 0xFFFFFFu, 0xFFFFFFu, 0xFFFFFFu,
+};
+
 std::atomic<int> g_fxBankOp[5] = {
     int(FxBankOp::Focus), int(FxBankOp::Float), int(FxBankOp::Bypass),
     int(FxBankOp::FxSolo), int(FxBankOp::Offline),
@@ -6977,6 +6989,13 @@ static void ensureDynCfgLoaded_()
     static bool done = false;
     if (done) return;
     done = true;
+    for (int i = 0; i < 8; ++i) {
+        char k[32]; std::snprintf(k, sizeof(k), "pg_col_%d", i);
+        if (const char* v = GetExtState("rea_sixty", k); v && v[0]) {
+            const long c = std::strtol(v, nullptr, 16);
+            g_paramGroupColour[i].store(static_cast<uint32_t>(c) & 0xFFFFFFu);
+        }
+    }
     if (const char* v = GetExtState("rea_sixty", "pg_bank_ops"); v && v[0]) {
         int o[5]; int got = std::sscanf(v, "%d,%d,%d,%d,%d",
                                         &o[0], &o[1], &o[2], &o[3], &o[4]);
@@ -7351,6 +7370,10 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
             const uint8_t mask = uf8::param_groups::getMaskForTrack(tr);
             const bool member = (mask & (1u << slot)) != 0;
             info.led = member ? 2 : 1;   // bright = focused track is a member
+            // The group's own colour, when it has been given one. White is the
+            // untouched value and leaves the key looking as it always did.
+            const uint32_t rgb = reasixty_paramGroupColour(slot);
+            if (rgb != 0xFFFFFFu) { info.hasRgb = true; info.rgb = rgb; }
             return info;
         }
         case DK::Favourites:
@@ -44494,6 +44517,22 @@ void reasixty_setFxBankOp(int gesture, int op)
                   g_fxBankOp[2].load(), g_fxBankOp[3].load(),
                   g_fxBankOp[4].load());
     SetExtState("rea_sixty", "fx_bank_ops", buf, true);
+}
+uint32_t reasixty_paramGroupColour(int i)
+{
+    ensureDynCfgLoaded_();
+    return (i >= 0 && i < 8) ? g_paramGroupColour[i].load() : 0xFFFFFFu;
+}
+void reasixty_setParamGroupColour(int i, uint32_t rgb)
+{
+    if (i < 0 || i >= 8) return;
+    ensureDynCfgLoaded_();
+    g_paramGroupColour[i].store(rgb & 0xFFFFFFu);
+    char k[32]; std::snprintf(k, sizeof(k), "pg_col_%d", i);
+    char v[16]; std::snprintf(v, sizeof(v), "%06X", rgb & 0xFFFFFFu);
+    SetExtState("rea_sixty", k, v, true);
+    g_softKeyDirty.store(true);
+    g_pageDirty.store(true);
 }
 int  reasixty_pgBankOp(int gesture)
 {

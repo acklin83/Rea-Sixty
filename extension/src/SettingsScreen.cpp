@@ -279,6 +279,8 @@ int      reasixty_fxBankOp(int gesture);
 void     reasixty_setFxBankOp(int gesture, int op);
 int      reasixty_pgBankOp(int gesture);
 void     reasixty_setPgBankOp(int gesture, int op);
+uint32_t reasixty_paramGroupColour(int i);
+void     reasixty_setParamGroupColour(int i, uint32_t rgb);
 uint32_t reasixty_trackBankColour(int i);
 void     reasixty_setTrackBankColour(int i, uint32_t rgb);
 std::string reasixty_trackBankColourName(int i);
@@ -24284,7 +24286,7 @@ void SettingsScreen::drawParameterGroups(ImGui_Context* ctx)
 
     auto& st = uf8::param_groups::state();
     int tblFlags = 0;
-    if (ImGui_BeginTable(ctx, "pg_tbl", 6, &tblFlags,
+    if (ImGui_BeginTable(ctx, "pg_tbl", 7, &tblFlags,
                          nullptr, nullptr, nullptr)) {
         int    wFlag   = ImGui_TableColumnFlags_WidthFixed;
         double wSlot   = scaleW_(ctx,  70.0);
@@ -24298,6 +24300,8 @@ void SettingsScreen::drawParameterGroups(ImGui_Context* ctx)
         ImGui_TableSetupColumn(ctx, "slot",   &wFlag, &wSlot,   nullptr);
         ImGui_TableSetupColumn(ctx, "active", &wFlag, &wActive, nullptr);
         ImGui_TableSetupColumn(ctx, "name",   &wFlag, &wName,   nullptr);
+        double wCol = scaleW_(ctx, 90.0);
+        ImGui_TableSetupColumn(ctx, "colour", &wFlag, &wCol,    nullptr);
         ImGui_TableSetupColumn(ctx, "mid",    &wFlag, &wMid,    nullptr);
         ImGui_TableSetupColumn(ctx, "add",    &wFlag, &wAdd,    nullptr);
         ImGui_TableSetupColumn(ctx, "clear",  &wFlag, &wClear,  nullptr);
@@ -24337,7 +24341,19 @@ void SettingsScreen::drawParameterGroups(ImGui_Context* ctx)
                 uf8::param_groups::setGroupName(slot, nameBuf);
             }
 
-            // Col 4 — Member count.
+            // Col 4 — Key colour on the surface. White is untouched and leaves
+            // the Parameter-Groups bank's keys the colour they always had.
+            ImGui_TableNextColumn(ctx);
+            {
+                int col = static_cast<int>(reasixty_paramGroupColour(slot));
+                int ceFlags = ImGui_ColorEditFlags_NoInputs;
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 80.0));
+                if (ImGui_ColorEdit3(ctx, "##pgcol", &col, &ceFlags))
+                    reasixty_setParamGroupColour(
+                        slot, static_cast<uint32_t>(col) & 0xFFFFFFu);
+            }
+
+            // Col 5 — Member count.
             ImGui_TableNextColumn(ctx);
             char info[40];
             snprintf(info, sizeof(info), "(%d members)", memberCount[slot]);

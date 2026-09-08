@@ -354,6 +354,7 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Bus Compressor: use own settings (vs copy values)", kSecFavourites, "" },
     // -- Parameter Groups --
     { "Multi-Select acts as temporary Parameter Group",    kSecParameterGroups, "" },
+    { "Group key colour",                                  kSecParameterGroups, "" },
 };
 
 // Breadcrumb separator, shared by the tooltip trail and a row's second line.
