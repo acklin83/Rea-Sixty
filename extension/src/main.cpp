@@ -9569,8 +9569,16 @@ ActiveFxTarget resolveActiveFx_()
     // section is pinned.
     const auto fp = uf8::getFocusedParam();
     if (fp.domain != uf8::Domain::None) {
+        // ⛔ g_uc1_surface CAN BE NULL HERE. bcAnchorTrackPublic is inline
+        // and reads a member straight off the object, so a missing UC1 is a
+        // segfault at offset 0x128 rather than a wrong answer — and this runs
+        // from the UF1's paint, on the timer, so it takes REAPER down with it
+        // (Frank 2026-09-08, crash report: effectiveBcTrack_ ← resolveActiveFx_
+        // ← uf1ResolveCsFx_ ← uf1PaintChannel_). Every other UC1 access in
+        // this file checks first; this one branch did not. No UC1, no BC
+        // anchor, and the lookup below already handles a null track.
         void* lookupTrack = (fp.domain == uf8::Domain::BusComp)
-            ? g_uc1_surface->bcAnchorTrackPublic()
+            ? (g_uc1_surface ? g_uc1_surface->bcAnchorTrackPublic() : nullptr)
             : static_cast<void*>(tr);
         if (lookupTrack && ValidatePtr2(nullptr, lookupTrack, "MediaTrack*")) {
             MediaTrack* ltr = static_cast<MediaTrack*>(lookupTrack);

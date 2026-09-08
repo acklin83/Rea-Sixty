@@ -4532,6 +4532,9 @@ void armWakeSwallow()
     g_wakeSwallowUntilMs.store(steadyNowMs_() + kWakeSwallowMs);
 }
 
+// Defined with getQuickLayer further down; used by all three dispatch paths.
+static bool layerSelectorButton_(ButtonId id);
+
 bool dispatch(ButtonId id, bool pressed)
 {
     if (id == ButtonId::None) return false;
@@ -4546,6 +4549,11 @@ bool dispatch(ButtonId id, bool pressed)
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         layer = g_cfg.activeLayer;
         if (layer < 0 || layer > 2) layer = 0;
+        // ⛔ THIS is where a binding picks its layer. dispatch and friends never
+        // call getActiveLayer (they could not: it takes g_cfgMutex again), so the
+        // option has to be applied here or it does nothing to the one thing it is
+        // about. Layer-selector keys are exempt — see layerSelectorButton_.
+        if (g_layersQuicksOnly.load() && !layerSelectorButton_(id)) layer = 0;
         auto it = g_cfg.layers[layer].bindings.find(id);
         // Release-edge stuck-key guard: when the active layer changes
         // mid-hold (mixer-visibility auto-switch, manual layer flip,
@@ -4839,6 +4847,7 @@ static bool fireResolvedSlot_(ButtonId id, bool wantDouble)
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         int layer = g_cfg.activeLayer;
         if (layer < 0 || layer > 2) layer = 0;
+        if (g_layersQuicksOnly.load() && !layerSelectorButton_(id)) layer = 0;
         auto it = g_cfg.layers[layer].bindings.find(id);
         if (it == g_cfg.layers[layer].bindings.end()) return false;
         bd = it->second;
@@ -4913,6 +4922,28 @@ void tickLongPressThreshold()
 // change. Everything that indexes g_activeQuick / g_activeSubBank /
 // userQuicks, and the LAYER lamps and the schema ring, must call getQuickLayer.
 std::atomic<bool> g_layersQuicksOnly{false};
+
+// ⇨ THE KEYS THAT ARE THE LAYER MECHANISM ITSELF. Under "Layers switch Quicks
+// only" every other button keeps Layer 1's binding, but these must follow the
+// layer the surface is on, because their bindings ARE how a layer's sets are
+// reached: L2 Q1 is softkey_bank_4, L3 Q1 is softkey_bank_7, and so on. Send
+// them to Layer 1 as well and the layer key selects a group you then cannot
+// enter — Frank 2026-09-08: "dann kann ich auf L2+3 die Quicks nicht mehr
+// wechseln." The sub-bank row is in for the same reason: it picks the page
+// inside the engaged set.
+static bool layerSelectorButton_(ButtonId id)
+{
+    switch (id) {
+        case ButtonId::Quick1: case ButtonId::Quick2: case ButtonId::Quick3:
+        case ButtonId::VPotBank:
+        case ButtonId::SoftKey1Bank: case ButtonId::SoftKey2Bank:
+        case ButtonId::SoftKey3Bank: case ButtonId::SoftKey4Bank:
+        case ButtonId::SoftKey5Bank:
+            return true;
+        default:
+            return false;
+    }
+}
 
 int getQuickLayer()
 {
@@ -5146,6 +5177,7 @@ bool dispatchEncoder(ButtonId id, int stepDelta)
         std::lock_guard<std::mutex> lk(g_cfgMutex);
         layer = g_cfg.activeLayer;
         if (layer < 0 || layer > 2) layer = 0;
+        if (g_layersQuicksOnly.load() && !layerSelectorButton_(id)) layer = 0;
         auto it = g_cfg.layers[layer].bindings.find(id);
         if (it == g_cfg.layers[layer].bindings.end()) return false;
         bd = it->second;
