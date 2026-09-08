@@ -4657,6 +4657,9 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "param_switches_softkey"); v && *v) {
         g_paramSwitchesSoftKeyBank.store(std::atoi(v) != 0);
     }
+    if (const char* v = GetExtState("rea_sixty", "layers_quicks_only"); v && *v) {
+        uf8::bindings::g_layersQuicksOnly.store(std::atoi(v) != 0);
+    }
     if (const char* v = GetExtState("rea_sixty", "kb_shift_modifier"); v && *v) {
         g_keyboardShiftModifier.store(std::atoi(v) != 0);
     }
@@ -7095,7 +7098,7 @@ static int dynBankSlotBase_(uf8::bindings::DynamicBankKind kind)
 // else -1. Reads atomics + the config mutex only → safe on any thread.
 static int engagedBankableKind_()
 {
-    const int layer = uf8::bindings::getActiveLayer();
+    const int layer = uf8::bindings::getQuickLayer();
     if (layer < 0 || layer > 2) return -1;
     const int q = g_activeQuick[layer].load();
     if (q < 0) return -1;
@@ -22980,7 +22983,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                  && g_navUf8Show.load());
             if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()
                 && !handledNatively && !navOwnsSoftKey) {
-                const int layer = uf8::bindings::getActiveLayer();
+                const int layer = uf8::bindings::getQuickLayer();
                 const int aq = (layer >= 0 && layer <= 2)
                                ? g_activeQuick[layer].load() : -1;
                 if (aq >= 0) {
@@ -28894,7 +28897,7 @@ static int uf8BankReadoutSet_()
 static std::string uf8CurrentBankName_()
 {
     using namespace uf8::bindings;
-    const int layer = getActiveLayer();
+    const int layer = getQuickLayer();
     if (layer < 0 || layer > 2) return std::string();
     const int quick = g_activeQuick[layer].load();
     if (quick < 0) return std::string();          // SSL / layer default, not a user bank
@@ -33997,7 +34000,7 @@ void pushZonesForVisibleSlots()
             // key row hosts the FX-Learn-mapped plug-in's params, and
             // letting a stale activeQuick paint over them would hide
             // the user's gelearnte parameter (Frank 2026-05-13).
-            const int curLayer  = uf8::bindings::getActiveLayer();
+            const int curLayer  = uf8::bindings::getQuickLayer();
             const bool pluginModeLocal = g_uf8PluginMode.load();
             const int curQuick  = (!pluginModeLocal
                                    && curLayer >= 0 && curLayer <= 2)
@@ -37910,7 +37913,11 @@ void pushUf8GlobalLeds()
     const int  softKeyBank     = g_softKeyBank.load();
     const int  domainLed       = (uf8::getFocusedParam().domain == uf8::Domain::BusComp)
                                      ? 1 : 0;
-    const int  activeLayer     = uf8::bindings::getActiveLayer();
+    // ⇨ The LAYER lamps show which layer the SURFACE is on, which is the Quick
+    // layer. With "Layers switch Quicks only" the bindings all sit on Layer 1,
+    // and lamps that followed THAT would sit on 1 forever while the user is
+    // demonstrably on 3.
+    const int  activeLayer     = uf8::bindings::getQuickLayer();
 
     // Send/Receive routing state — drives the Send/Plugin row LEDs and
     // the Flip LED colour override.
@@ -39363,7 +39370,7 @@ void onTimerBody_()
             const int64_t ubNow = nowMs_();
             const bool ubRebuild = (ubAtMs == 0) || (ubNow - ubAtMs >= 1000);
             {
-                const int aLayer = uf8::bindings::getActiveLayer();
+                const int aLayer = uf8::bindings::getQuickLayer();
                 const int aQuick = (aLayer >= 0 && aLayer <= 2)
                                  ? g_activeQuick[aLayer].load() : -1;
                 const int aSub   = (aLayer >= 0 && aLayer <= 2)
@@ -43371,7 +43378,7 @@ int reasixty_focusedDomain()
 // current Quick + sub-bank when this is >= 0.
 int reasixty_activeUserBank()
 {
-    const int layer = uf8::bindings::getActiveLayer();
+    const int layer = uf8::bindings::getQuickLayer();
     if (layer < 0 || layer > 2) return -1;
     return g_activeQuick[layer].load();
 }
@@ -43467,7 +43474,7 @@ void reasixty_editorEngageQuickIfLocked(int layer, int quick)
     if (layer < 0 || layer > 2) return;
     if (quick < 0 || quick >= uf8::bindings::kQuicksPerLayer) return;
     if (layer == 0 && quick <= 1) return;
-    if (uf8::bindings::getActiveLayer() != layer) {
+    if (uf8::bindings::getQuickLayer() != layer) {
         uf8::bindings::setActiveLayer(layer);
         pushLayerLeds(layer);
     }
@@ -43480,7 +43487,7 @@ void reasixty_editorEngageQuickIfLocked(int layer, int quick)
 void reasixty_editorEngageSubBankIfLocked(int subBank)
 {
     if (!g_uf8PluginMode.load()) return;
-    const int layer = uf8::bindings::getActiveLayer();
+    const int layer = uf8::bindings::getQuickLayer();
     if (layer < 0 || layer > 2) return;
     const int target =
         std::clamp(subBank, 0, uf8::bindings::kSubBanksPerQuick - 1);
@@ -43520,7 +43527,7 @@ const char* reasixty_userBankSlotLabel(int bank, int slot)
 {
     if (bank < 0 || bank >= uf8::bindings::kQuicksPerLayer) return nullptr;
     if (slot < 0 || slot >= uf8::bindings::kSlotsPerSubBank) return nullptr;
-    const int layer = uf8::bindings::getActiveLayer();
+    const int layer = uf8::bindings::getQuickLayer();
     if (layer < 0 || layer > 2) return nullptr;
     const int sub = g_activeSubBank[layer].load();
     static thread_local std::string s_buf;
@@ -43603,7 +43610,7 @@ int reasixty_softkeyCurrentBank()
     // user-Quick branch the ring would stick to g_softKeyBank even
     // after the user navigated sub-banks in a Quick (Frank 2026-05-13
     // "UF8 → Bindings doesn't reflect sub-bank press").
-    const int layer = uf8::bindings::getActiveLayer();
+    const int layer = uf8::bindings::getQuickLayer();
     if (layer >= 0 && layer <= 2) {
         const int q = g_activeQuick[layer].load();
         if (q >= 0) {
@@ -45974,6 +45981,16 @@ void reasixty_setFavCopyMappedOnly(bool on)
 {
     g_favCopyMappedOnly.store(on);
     SetExtState("rea_sixty", "fav_copy_mapped_only", on ? "1" : "0", true);
+}
+bool reasixty_layersQuicksOnly() { return uf8::bindings::g_layersQuicksOnly.load(); }
+void reasixty_setLayersQuicksOnly(bool on)
+{
+    uf8::bindings::g_layersQuicksOnly.store(on);
+    SetExtState("rea_sixty", "layers_quicks_only", on ? "1" : "0", true);
+    // Every button's binding just changed meaning, so nothing cached is valid.
+    g_bankDirty.store(true);
+    g_softKeyDirty.store(true);
+    g_pageDirty.store(true);
 }
 bool reasixty_paramSwitchesSoftKeyBank() { return g_paramSwitchesSoftKeyBank.load(); }
 void reasixty_setParamSwitchesSoftKeyBank(bool on)
@@ -49575,11 +49592,11 @@ void registerBindingHandlers()
                 const auto want = (param == 9) ? uf8::Domain::BusComp
                                                : uf8::Domain::ChannelStrip;
                 if (uf8::getFocusedParam().domain != want) return false;
-                const int cur = uf8::bindings::getActiveLayer();
+                const int cur = uf8::bindings::getQuickLayer();
                 if (cur < 0 || cur > 2) return true;
                 return g_activeQuick[cur].load() < 0;
             }
-            return uf8::bindings::getActiveLayer() == l
+            return uf8::bindings::getQuickLayer() == l
                 && g_activeQuick[l].load() == q;
         },
         "Soft-Key Set: engage (param 1-9)", true
@@ -50082,7 +50099,7 @@ void registerBindingHandlers()
                 g_softKeyDomain.store(target == uf8::Domain::BusComp ? 1 : 0);
                 // Drop user-Quick on this layer so the SSL plug-in
                 // row reappears immediately.
-                const int layer = uf8::bindings::getActiveLayer();
+                const int layer = uf8::bindings::getQuickLayer();
                 if (layer >= 0 && layer <= 2
                     && g_activeQuick[layer].exchange(-1) != -1) {
                     g_bankDirty.store(true);
@@ -50091,7 +50108,7 @@ void registerBindingHandlers()
             },
             [target](int) {
                 if (uf8::getFocusedParam().domain != target) return false;
-                const int layer = uf8::bindings::getActiveLayer();
+                const int layer = uf8::bindings::getQuickLayer();
                 if (layer < 0 || layer > 2) return true;
                 return g_activeQuick[layer].load() < 0;
             },
@@ -50149,11 +50166,11 @@ void registerBindingHandlers()
                     const auto want = (setNo == 9) ? uf8::Domain::BusComp
                                                    : uf8::Domain::ChannelStrip;
                     if (uf8::getFocusedParam().domain != want) return false;
-                    const int cur = uf8::bindings::getActiveLayer();
+                    const int cur = uf8::bindings::getQuickLayer();
                     if (cur < 0 || cur > 2) return true;
                     return g_activeQuick[cur].load() < 0;
                 }
-                return uf8::bindings::getActiveLayer() == layer
+                return uf8::bindings::getQuickLayer() == layer
                     && g_activeQuick[layer].load() == quick;
             },
             "", false
@@ -50929,7 +50946,7 @@ void registerBindingHandlers()
             // TopSoftKeys (Frank 2026-05-13: "Soft-Key Banks
             // no-function in UF8 plugin mode").
             if (g_uf8PluginMode.load()) return;
-            const int layer = uf8::bindings::getActiveLayer();
+            const int layer = uf8::bindings::getQuickLayer();
             const int activeQuick = (layer >= 0 && layer <= 2)
                 ? g_activeQuick[layer].load() : -1;
             // User-Quick context: the same hardware bank-row keys now
@@ -50968,7 +50985,7 @@ void registerBindingHandlers()
             }
         },
         [](int param) {
-            const int layer = uf8::bindings::getActiveLayer();
+            const int layer = uf8::bindings::getQuickLayer();
             const int activeQuick =
                 (layer >= 0 && layer <= 2) ? g_activeQuick[layer].load() : -1;
             if (activeQuick >= 0) {
@@ -51057,7 +51074,7 @@ void registerBindingHandlers()
             if (!firing) return;
             clearVpotRouting_();
             clearFaderRouting_();
-            const int layer = uf8::bindings::getActiveLayer();
+            const int layer = uf8::bindings::getQuickLayer();
             if (layer >= 0 && layer <= 2
                 && g_activeQuick[layer].exchange(-1) != -1) {
                 g_bankDirty.store(true);
@@ -51068,7 +51085,7 @@ void registerBindingHandlers()
     });
 
     auto pageStep = [](int delta) {
-        const int layer = uf8::bindings::getActiveLayer();
+        const int layer = uf8::bindings::getQuickLayer();
         const int activeQuick = (layer >= 0 && layer <= 2)
             ? g_activeQuick[layer].load() : -1;
         // User-Quick context (e.g. Q3 = I/O): the top-soft-key "page" is the

@@ -1578,7 +1578,9 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
     // with the bank's slot labels. Mirror that here so the preview is
     // truly WYSIWYG.
     const int activeUserBank = reasixty_activeUserBank();
-    const int activeLayer = uf8::bindings::getActiveLayer();
+    // The schema's green ring marks the layer the hardware is on, so it reads
+    // the Quick layer for the same reason the lamps do.
+    const int activeLayer = uf8::bindings::getQuickLayer();
     for (int i = 0; i < 8; ++i) {
         const float sx = kStripX0 + i * (kStripW + kStripGap);
         // Top soft-key — clickable so the user can edit the per-strip

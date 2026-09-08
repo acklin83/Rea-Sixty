@@ -1108,6 +1108,13 @@ std::vector<BoundRef> findAllBoundTo(const std::string& builtinName);
 // white because Binding{} also has white as default.
 bool hasBinding(int layer, ButtonId id);
 
+// The layer the SURFACE is on, for Quick / soft-key-set grouping and for the
+// LAYER lamps. Equal to getActiveLayer unless "Layers switch Quicks only" is
+// on, in which case bindings stay on Layer 1 and only this one moves.
+int getQuickLayer();
+// The option itself. Session state mirrors the persisted setting.
+extern std::atomic<bool> g_layersQuicksOnly;
+
 // Does this binding carry ANY action, in any slot? The editor writes an entry
 // into the map the moment a key is touched, so hasBinding above answers "has a
 // row", not "does something" — and the per-view fallback needs the second

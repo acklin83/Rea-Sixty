@@ -4902,12 +4902,30 @@ void tickLongPressThreshold()
     }
 }
 
-int getActiveLayer()
+// ⇨ TWO QUESTIONS, ONE LAYER KEY. getActiveLayer answers "which layer do
+// bindings resolve against", getQuickLayer answers "which Quick and soft-key
+// group is the surface in". They are the same number until the user turns on
+// "Layers switch Quicks only", and then the whole surface keeps Layer 1's
+// bindings while LAYER 1/2/3 still group the Quicks and their banks.
+// Frank 2026-09-08: some people want three surfaces, some want one surface
+// with three sets of banks, and both are reasonable.
+// ⛔ Everything that reads a BINDING keeps calling getActiveLayer and needs no
+// change. Everything that indexes g_activeQuick / g_activeSubBank /
+// userQuicks, and the LAYER lamps and the schema ring, must call getQuickLayer.
+std::atomic<bool> g_layersQuicksOnly{false};
+
+int getQuickLayer()
 {
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     int n = g_cfg.activeLayer;
     if (n < 0 || n > 2) n = 0;
     return n;
+}
+
+int getActiveLayer()
+{
+    if (g_layersQuicksOnly.load()) return 0;
+    return getQuickLayer();
 }
 
 namespace {

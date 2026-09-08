@@ -259,6 +259,7 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Pin FX-chain GUI position",             kSecBehaviour, "Plug-ins" },
     { "Parameter change switches soft-key bank",
                                                kSecBehaviour, "Soft-keys" },
+    { "Layers switch Quicks only",             kSecBehaviour, "Soft-keys" },
     { "Engage a fixed soft-key bank at startup",
                                                kSecBehaviour, "Soft-keys" },
     { "Use current hardware bank",             kSecBehaviour, "Soft-keys" },

@@ -114,6 +114,7 @@ void reasixty_setWrapPluginCycle(bool on);
 bool reasixty_jsfxGridFine();
 void reasixty_setJsfxGridFine(bool on);
 bool reasixty_paramSwitchesSoftKeyBank(); void reasixty_setParamSwitchesSoftKeyBank(bool on);
+bool reasixty_layersQuicksOnly(); void reasixty_setLayersQuicksOnly(bool on);
 bool reasixty_keyboardShiftModifier();
 void reasixty_setKeyboardShiftModifier(bool on);
 bool reasixty_keyboardCmdModifier();
@@ -1344,6 +1345,12 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
                        &pssb)) {
         reasixty_setParamSwitchesSoftKeyBank(pssb);
     }
+
+    bool lqo = reasixty_layersQuicksOnly();
+    if (ImGui_Checkbox(ctx, "Layers switch Quicks only", &lqo)) {
+        reasixty_setLayersQuicksOnly(lqo);
+    }
+    ImGui_TextDisabled(ctx, "Off: a layer re-binds the whole surface.");
 
     // Startup soft-key bank — engage a fixed user-Quick (Layer + Quick +
     // Sub-bank) on every fresh REAPER session instead of the plug-in-driven
