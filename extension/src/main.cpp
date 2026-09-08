@@ -23051,7 +23051,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // through to the normal bindings::dispatch (ssl_softkey).
             if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()
                 && !handledNatively && !navOwnsSoftKey
-                && uf8::bindings::getActiveLayer() == 0)
+                && uf8::bindings::getQuickLayer() == 0)
             {
                 // Use the latched soft-key domain (not the raw focused param)
                 // when bank-follow is off, so the dispatched Quick (Q1=CS /
@@ -38792,7 +38792,13 @@ static bool engageUserBank_(int layer, int quick, int sub)
     if (layer < 0 || layer > 2 || quick < 0 || quick > 2) return false;
     if (sub < 0 || sub >= uf8::bindings::kSubBanksPerQuick) return false;
     if (g_uf8PluginMode.load()) return false;        // that mode owns the soft-keys
-    if (uf8::bindings::getActiveLayer() != layer) {
+    // ⛔ getQuickLayer, NOT getActiveLayer. This asks "is the surface already
+    // on that layer", which is the Quick layer's question. With "Layers switch
+    // Quicks only" on, getActiveLayer is pinned to 1, so after the matrix took
+    // you to Layer 2 every later click compared 1 against 1, found nothing to
+    // do, and left the surface on 2: from then on only the hardware LAYER 1 key
+    // came back, because it sets the layer directly (Frank 2026-09-08).
+    if (uf8::bindings::getQuickLayer() != layer) {
         uf8::bindings::setActiveLayer(layer);
         pushLayerLeds(layer);
     }
@@ -47156,7 +47162,8 @@ static std::string reasixtySaveDialog_(const char* title, const char* defaultNam
 void reasixty_onActiveLayerChanged()
 {
     g_lastActiveLayer = -1;
-    pushLayerLeds(uf8::bindings::getActiveLayer());
+    // The lamps show the layer the SURFACE is on, like everywhere else.
+    pushLayerLeds(uf8::bindings::getQuickLayer());
 }
 
 // Per-layer export — Save-As dialog → write the single layer as a
