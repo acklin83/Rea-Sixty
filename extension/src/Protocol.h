@@ -358,6 +358,17 @@ std::array<std::vector<uint8_t>, 2> buildSelColour(uint8_t strip, uint8_t byteA,
 // colour lookup needed.
 std::array<std::vector<uint8_t>, 2> buildSelWhite(uint8_t strip, bool bright);
 
+// Raw {FF38, FF39} pair for ANY LED cell, with both frames' bytes given
+// separately. For probing cells that are not in the global-LED table, where
+// the point is to try a cell nobody has mapped yet. Everything that knows
+// its cell should go through buildUf8GlobalLed instead.
+// ⚠ The on-encoding is asymmetric: bright rides FF38 while FF39 carries
+// `00 F0`, dim puts the dim bytes in both. Get that backwards and the LED
+// stays dark, which on an unmapped cell reads as "no LED here".
+std::array<std::vector<uint8_t>, 2> buildRawLedCell(uint8_t cell,
+                                                    uint8_t a38, uint8_t b38,
+                                                    uint8_t a39, uint8_t b39);
+
 // Verify a frame's checksum. Returns true if frame starts with FF and the
 // last byte matches sum(middle bytes) mod 256.
 bool verifyFrame(std::span<const uint8_t> frame);

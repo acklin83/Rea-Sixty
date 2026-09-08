@@ -5212,6 +5212,10 @@ struct PendingInput {
                               //   preserved; only the lower-10-bit
                               //   channel index changes. value =
                               //   signed detent count.
+        Uf8LedProbeStep,      // LED probe: light the next unmapped cell.
+                              // Through the queue because the report goes to
+                              // REAPER's console, and a builtin lambda can
+                              // fire from the libusb input thread.
         NavPushUf1,           // Nav Mode: UF1 channel-encoder push, already
                               //   resolved to a push action on the input
                               //   thread. value = the action (NavDispatch.h
@@ -19187,6 +19191,58 @@ void drainInputQueue()
             // Bank ◄ ► (0x21/0x23): move the track selection by ±kUf1BankStep
             // (main thread — track select). Reuses the channel-encoder nav path.
             applySelectRelative_(static_cast<int>(e.value));
+            continue;
+        }
+        if (e.kind == PendingInput::Uf8LedProbeStep) {
+            // ⇨ ONE PRESS, ONE CELL. Walks the cells nothing has claimed, so
+            // the answer to "is there an LED behind this button" is read off
+            // the surface rather than argued about. 0x3D goes first: the
+            // global-LED table calls it Layer 3, but that was interpolated
+            // from its position and SSL 360 never writes it (see the note in
+            // Protocol.cpp and docs/uf8-global-led-map.md).
+            // The four after it are the others SSL only ever blanks; the rest
+            // is everything unclaimed in 0x18..0x60, minus 0x18..0x1F, which
+            // are the top soft keys.
+            static const uint8_t kProbeCells[] = {
+                0x3D,
+                0x38, 0x40, 0x41, 0x42,
+                0x20, 0x21, 0x28, 0x29, 0x2A,
+                0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+                0x50, 0x51, 0x60,
+            };
+            constexpr int kProbeN =
+                static_cast<int>(sizeof(kProbeCells) / sizeof(kProbeCells[0]));
+            static int sProbeIdx = -1;   // -1 = nothing lit
+            if (!g_dev || !g_dev->isOpen()) {
+                ShowConsoleMsg("LED probe: no UF8 open.\n");
+                continue;
+            }
+            if (sProbeIdx >= 0 && sProbeIdx < kProbeN) {
+                auto off = uf8::buildRawLedCell(kProbeCells[sProbeIdx],
+                                                0x00, 0xF0, 0x00, 0xF0);
+                g_dev->send(off[0]);
+                g_dev->send(off[1]);
+            }
+            ++sProbeIdx;
+            if (sProbeIdx >= kProbeN) {
+                sProbeIdx = -1;
+                ShowConsoleMsg("LED probe: end of the list, everything cleared. "
+                               "Press again to start over.\n");
+            } else {
+                const uint8_t c = kProbeCells[sProbeIdx];
+                // SSL's own bytes for this row: F4 F1 bright on FF38, 00 F0 on
+                // FF39. Not the white the table sends, because if a cell only
+                // answers to its own colour, white would read as "no LED".
+                auto on = uf8::buildRawLedCell(c, 0xF4, 0xF1, 0x00, 0xF0);
+                g_dev->send(on[0]);
+                g_dev->send(on[1]);
+                char msg[128];
+                snprintf(msg, sizeof(msg),
+                         "LED probe %d/%d: cell 0x%02X is lit. "
+                         "Look at the surface, then press again.\n",
+                         sProbeIdx + 1, kProbeN, c);
+                ShowConsoleMsg(msg);
+            }
             continue;
         }
         if (e.kind == PendingInput::NavPushUf1) {
@@ -48728,6 +48784,15 @@ void registerBindingHandlers()
         g_navOverlayDirty.store(true);
         if (g_sync) g_sync->invalidate();
     };
+
+    registerBuiltin("uf8_led_probe_step", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            // ⛔ Nothing here but the queue. This lambda can run on the libusb
+            // input thread, and the step below talks to REAPER's console.
+            queueInput({PendingInput::Uf8LedProbeStep, 0, 0.0});
+        },
+    });
 
     registerBuiltin("marker_overlay_toggle", DescBuilder{
         [navToggle](bool firing, bool /*pressed*/, int /*param*/) {
