@@ -6893,11 +6893,13 @@ std::atomic<int> g_pgBankOp[5] = { 1, 0, 0, 0, 2 };
 // One colour per group, for the bank's keys. GLOBAL, like the track-colour
 // bank's palette: names and the on/off flag belong to the project, but what a
 // group LOOKS like on the surface is the same wherever you open it.
-// ⇨ WHITE MEANS UNTOUCHED, the same convention the binding LED colours use, so
-// a factory setup keeps the key colour it has always had.
+// ⇨ COLOURED FROM THE START, the same eight as the Track-Colours bank. Eight
+// white keys would have made the feature invisible until somebody went looking
+// for it, and telling the groups apart at a glance is the whole point
+// (Frank 2026-09-08).
 std::atomic<uint32_t> g_paramGroupColour[8] = {
-    0xFFFFFFu, 0xFFFFFFu, 0xFFFFFFu, 0xFFFFFFu,
-    0xFFFFFFu, 0xFFFFFFu, 0xFFFFFFu, 0xFFFFFFu,
+    0xFF0000, 0xFF8000, 0xFFFF00, 0x00FF00,   // red    orange  yellow  green
+    0x0000FF, 0x8000FF, 0xFF00FF, 0x00FFFF,   // blue   violet  magenta cyan
 };
 
 std::atomic<int> g_fxBankOp[5] = {
@@ -7370,10 +7372,10 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
             const uint8_t mask = uf8::param_groups::getMaskForTrack(tr);
             const bool member = (mask & (1u << slot)) != 0;
             info.led = member ? 2 : 1;   // bright = focused track is a member
-            // The group's own colour, when it has been given one. White is the
-            // untouched value and leaves the key looking as it always did.
-            const uint32_t rgb = reasixty_paramGroupColour(slot);
-            if (rgb != 0xFFFFFFu) { info.hasRgb = true; info.rgb = rgb; }
+            // The group's own colour. Always set: the palette ships coloured,
+            // so a key never has to fall back to the generic look.
+            info.hasRgb = true;
+            info.rgb = reasixty_paramGroupColour(slot);
             return info;
         }
         case DK::Favourites:
