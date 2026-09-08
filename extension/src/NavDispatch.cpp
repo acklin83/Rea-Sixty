@@ -11,6 +11,10 @@ int  reasixty_navUc1Mode();
 void reasixty_setNavUc1Mode(int v);
 extern "C" int reasixty_navUc1CursorGet();
 extern "C" void reasixty_navUc1CursorSet(int v);
+extern "C" int  reasixty_navUf1Mode();
+void reasixty_setNavUf1Mode(int v);
+extern "C" int  reasixty_navUf1CursorGet();
+extern "C" void reasixty_navUf1CursorSet(int v);
 
 namespace uf8::nav {
 
@@ -181,6 +185,76 @@ bool dispatchPushActionUc1(int act)
         const double pos = (ps & 1) ? GetPlayPosition() : GetCursorPosition();
         AddProjectMarker(nullptr, false, pos, 0.0, "", -1);
         markDirty();
+        return true;
+    }
+    case 6: // Disabled
+    default:
+        return false;
+    }
+}
+
+void buildUf1List(std::vector<Item>& out)
+{
+    out.clear();
+    switch (reasixty_navUf1Mode()) {
+    case 1: Overlay::enumerateFiltered(View::Regions,    -1, &out); break;
+    case 2: Overlay::enumerateFiltered(View::MarkersAll, -1, &out); break;
+    default: break;   // Mirror — the Overlay's own list, not ours to build
+    }
+}
+
+bool dispatchPushActionUf1(int act)
+{
+    const int uf1Mode = reasixty_navUf1Mode();
+    if (uf1Mode == 0) {
+        // Mirror UF8 — the shared cursor, the shared rules.
+        return dispatchPushAction(act);
+    }
+
+    auto& ov = Overlay::instance();
+    if (!ov.active()) return false;
+
+    std::vector<Item> items;
+    buildUf1List(items);
+
+    int ci = reasixty_navUf1CursorGet();
+    const int last = static_cast<int>(items.size()) - 1;
+    if (last < 0) ci = -1;
+    else if (ci < 0) ci = 0;
+    else if (ci > last) ci = last;
+
+    int    jumpIdx = -1;
+    double jumpPos = 0.0;
+    bool   isRgn   = false;
+    if (ci >= 0) {
+        jumpIdx = items[ci].idx;
+        jumpPos = items[ci].pos;
+        isRgn   = items[ci].isRegion;
+    }
+
+    switch (act) {
+    case 0: // Jump + Drill → Jump only: there is nothing to drill into when
+            // the list is already filtered to one kind.
+    case 1: // Jump only
+        if (jumpIdx < 0) return false;
+        // Same stopped-transport rule as everywhere else: GoToRegion only
+        // smooth-seeks during playback, so move the edit cursor when stopped.
+        if (isRgn && (GetPlayState() & 1)) GoToRegion(nullptr, jumpIdx, false);
+        else                               SetEditCurPos(jumpPos, true, true);
+        reasixty_markNavOverlayDirty();
+        return true;
+    case 2: // Drill only — no-op in independent mode
+    case 3: // Back — no-op in independent mode
+        return false;
+    case 4: // Toggle View: flip Regions ↔ Markers within the UF1's own scope
+        reasixty_setNavUf1Mode(uf1Mode == 1 ? 2 : 1);
+        reasixty_markNavOverlayDirty();
+        return true;
+    case 5: { // Add marker at playhead / edit cursor (project-global)
+        const int    ps  = GetPlayState();
+        const double pos = (ps & 1) ? GetPlayPosition() : GetCursorPosition();
+        AddProjectMarker(nullptr, false, pos, 0.0, "", -1);
+        reasixty_markNavOverlayDirty();
         return true;
     }
     case 6: // Disabled

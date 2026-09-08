@@ -12,6 +12,10 @@
 
 #pragma once
 
+#include <vector>
+
+#include "MarkerOverlay.h"
+
 namespace uf8::nav {
 
 // Returns true if a meaningful action ran (false for no-op cases like
@@ -26,5 +30,24 @@ bool dispatchPushAction(int actionEnum);
 // In Mirror mode (g_navUc1Mode == 0) this delegates directly to
 // dispatchPushAction so legacy behaviour is preserved.
 bool dispatchPushActionUc1(int actionEnum);
+
+// The UF1's independent list, and the ONE place that decides what
+// "Regions" / "Markers" mean on that surface. The paint, the soft-key
+// jump and the push all call this, so they can never disagree about
+// which item sits under the cursor.
+//
+// ⚠ Unlike the UC1's Markers mode, this one is NOT scoped to the UF8's
+// region cursor. The UC1 coupling exists because the UC1 shows a single
+// LCD line and needs the context; the UF1 shows four keys and pages, and
+// a second coupling would make the two surfaces move each other in ways
+// nobody asked for. Markers here means every marker in the project.
+// Returns an empty list when g_navUf1Mode == 0 (Mirror shares the
+// Overlay's own list — call Overlay::items() for that).
+void buildUf1List(std::vector<Item>& out);
+
+// UF1 variant of the push dispatch, same contract as the UC1's: Mirror
+// delegates, independent modes jump within buildUf1List and make Drill /
+// Back no-ops.
+bool dispatchPushActionUf1(int actionEnum);
 
 } // namespace uf8::nav

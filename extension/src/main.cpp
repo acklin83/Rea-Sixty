@@ -999,6 +999,11 @@ std::atomic<bool> g_navUc1Show{true};
 std::atomic<bool> g_navUf1Show{false};
 std::atomic<int>  g_navUf1Mode{0};
 std::atomic<bool> g_navUf1Takeover{false};
+// UF1-local cursor for its independent modes, session-only like the UC1's.
+// ⚠ In those modes the UF1 does NOT use Overlay::pageOffset: its window is
+// derived from this cursor (base = cursor/4*4), so it always follows itself.
+// Only Mirror mode pages through the Overlay.
+std::atomic<int>  g_navUf1Cursor{0};
 
 // Phase 2.8c — UC1 push gesture actions. The table is parsed by the
 // gesture-dispatch path in UC1Surface::handleButton_. All three gestures
@@ -19025,7 +19030,16 @@ void drainInputQueue()
                             // moveCursor pins the cursor (auto-follow stops)
                             // and slides every pane's window to it, so the UF1
                             // window follows even while the UF8 shows another.
-                            uf8::nav::Overlay::instance().moveCursor(tracks);
+                            // In an independent mode it is the UF1's OWN cursor
+                            // that moves — the shared one belongs to the UF8's
+                            // list, which is not what this surface is showing.
+                            if (g_navUf1Mode.load() != 0) {
+                                int cur = g_navUf1Cursor.load() + tracks;
+                                if (cur < 0) cur = 0;   // top clamp: the paint
+                                g_navUf1Cursor.store(cur);
+                            } else {
+                                uf8::nav::Overlay::instance().moveCursor(tracks);
+                            }
                             g_navOverlayDirty.store(true);
                             g_pageDirty.store(true);
                         } else if (g_uf1ModeMenu.load()) {
@@ -19146,7 +19160,9 @@ void drainInputQueue()
             continue;
         }
         if (e.kind == PendingInput::NavPushUf1) {
-            uf8::nav::dispatchPushAction(static_cast<int>(e.value + 0.5));
+            // The UF1 variant: Mirror delegates to the shared dispatch, the
+            // independent modes act on the UF1's own list and cursor.
+            uf8::nav::dispatchPushActionUf1(static_cast<int>(e.value + 0.5));
             g_navOverlayDirty.store(true);
             g_pageDirty.store(true);
             continue;
@@ -19166,6 +19182,31 @@ void drainInputQueue()
             const Pane pane = (e.value > 0.5) ? Pane::Uf1 : Pane::Uf8;
             const int  size = uf8::nav::Overlay::paneSize(pane);
             const int  s    = (e.strip < size) ? e.strip : 0;
+            // ⇨ THE UF1 HAS ITS OWN LIST in Regions / Markers, and its window
+            // hangs off its own cursor instead of a page offset — so the item
+            // under a key is found the same way the paint found it, not through
+            // the Overlay. Jump only: inside a list that is already filtered to
+            // one kind there is nothing to drill into, which is exactly the
+            // degradation the push takes and the pane warns about.
+            if (pane == Pane::Uf1 && g_navUf1Mode.load() != 0) {
+                std::vector<uf8::nav::Item> own;
+                uf8::nav::buildUf1List(own);
+                const int last = static_cast<int>(own.size()) - 1;
+                if (last < 0) continue;
+                int cur = g_navUf1Cursor.load();
+                if (cur < 0) cur = 0; else if (cur > last) cur = last;
+                const int oi = (cur / size) * size + s;
+                if (oi > last) continue;      // an empty key does nothing
+                g_navUf1Cursor.store(oi);
+                const auto& oit = own[oi];
+                if (oit.isRegion && (GetPlayState() & 1))
+                    GoToRegion(nullptr, oit.idx, false);
+                else
+                    SetEditCurPos(oit.pos, true, true);
+                g_navOverlayDirty.store(true);
+                if (g_sync) g_sync->invalidate();
+                continue;
+            }
             const int  idx  = ov.pageOffset(pane) * size + s;
             const auto& items = ov.items();
             if (idx < 0 || idx >= static_cast<int>(items.size())) continue;
@@ -24008,8 +24049,19 @@ void onUf1Event(const uf1::InputEvent& ev)
                 if (ev.pressed) {
                     auto& ov = uf8::nav::Overlay::instance();
                     const auto pane = uf8::nav::Overlay::Pane::Uf1;
-                    if (ev.id == uf1::btn::kBankRight) ov.pageNext(pane);
-                    else                               ov.pagePrev(pane);
+                    const int step = uf8::nav::Overlay::paneSize(pane);
+                    if (g_navUf1Mode.load() != 0) {
+                        // Independent: the window IS the cursor here, so a page
+                        // is four cursor steps. Top clamp in the paint.
+                        int cur = g_navUf1Cursor.load()
+                                + (ev.id == uf1::btn::kBankRight ? step : -step);
+                        if (cur < 0) cur = 0;
+                        g_navUf1Cursor.store(cur);
+                    } else if (ev.id == uf1::btn::kBankRight) {
+                        ov.pageNext(pane);
+                    } else {
+                        ov.pagePrev(pane);
+                    }
                     g_navOverlayDirty.store(true);
                     g_pageDirty.store(true);
                 }
@@ -31938,12 +31990,39 @@ void uf1PaintChannel_()
         if (uf8::nav::Overlay::instance().active() && g_navUf1Show.load()) {
             auto& ov = uf8::nav::Overlay::instance();
             using Pane = uf8::nav::Overlay::Pane;
-            const uf8::nav::Item* win[uf8::nav::Overlay::paneSize(Pane::Uf1)] = {};
-            int n = 0;
-            ov.window(Pane::Uf1, win, n);
-            const int cursor = ov.cursorIdx();
-            const int base   = ov.pageOffset(Pane::Uf1)
-                             * uf8::nav::Overlay::paneSize(Pane::Uf1);
+            constexpr int kNavN = uf8::nav::Overlay::paneSize(Pane::Uf1);
+            const uf8::nav::Item* win[kNavN] = {};
+            int cursor = -1;
+            int base   = 0;
+            // ⇨ TWO SOURCES, ONE ROW. Mirror reads the Overlay's shared list
+            // through its own pane window; Regions / Markers build the UF1's
+            // own list and window it around the UF1's own cursor. `own` has to
+            // outlive the pointers in `win`, so it is declared out here.
+            std::vector<uf8::nav::Item> own;
+            if (g_navUf1Mode.load() != 0) {
+                uf8::nav::buildUf1List(own);
+                // ⛔ The upper clamp lives HERE, on the main thread: the input
+                // thread moves this cursor without knowing how long the list
+                // is (same split as the UC1's carousel).
+                cursor = g_navUf1Cursor.load();
+                const int last = static_cast<int>(own.size()) - 1;
+                if (last < 0)         cursor = -1;
+                else if (cursor < 0)  cursor = 0;
+                else if (cursor > last) cursor = last;
+                g_navUf1Cursor.store(cursor < 0 ? 0 : cursor);
+                // The window follows the cursor by construction — no page
+                // offset to keep in sync, so it can never show the wrong four.
+                base = (cursor < 0) ? 0 : (cursor / kNavN) * kNavN;
+                for (int i = 0; i < kNavN; ++i) {
+                    const int idx = base + i;
+                    if (idx < static_cast<int>(own.size())) win[i] = &own[idx];
+                }
+            } else {
+                int n = 0;
+                ov.window(Pane::Uf1, win, n);
+                cursor = ov.cursorIdx();
+                base   = ov.pageOffset(Pane::Uf1) * kNavN;
+            }
             for (int i = 0; i < 4; ++i) {
                 Uf1SkCell c{};
                 if (win[i]) {
@@ -44872,6 +44951,12 @@ extern "C" int reasixty_navUc1CursorDelta(int delta)
 extern "C" int  reasixty_navUc1CursorGet()      { return g_navUc1Cursor.load(); }
 extern "C" void reasixty_navUc1CursorSet(int v) { g_navUc1Cursor.store(v); }
 
+// UF1 Nav cursor — same contract as the UC1's above: independent of the
+// Overlay cursor while g_navUf1Mode != 0, clamped on the main thread by the
+// paint (which is the only place that knows how long the list is).
+extern "C" int  reasixty_navUf1CursorGet()      { return g_navUf1Cursor.load(); }
+extern "C" void reasixty_navUf1CursorSet(int v) { g_navUf1Cursor.store(v); }
+
 int  reasixty_navRegionPress()         { return g_navRegionPress.load(); }
 void reasixty_setNavRegionPress(int v)
 {
@@ -44995,7 +45080,11 @@ void reasixty_setNavUf1Takeover(bool on)
 void reasixty_setNavUf1Mode(int v)
 {
     writeNavSetting_("nav_uf1_mode", g_navUf1Mode, v, 2);
+    // Another mode is another list, so the old index means nothing — same
+    // reason setNavUc1Mode snaps its cursor back.
+    g_navUf1Cursor.store(0);
     g_pageDirty.store(true);
+    g_navOverlayDirty.store(true);
 }
 
 // ---- Push actions, one set per surface -------------------------------------
