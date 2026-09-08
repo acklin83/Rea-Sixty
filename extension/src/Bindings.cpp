@@ -5498,7 +5498,17 @@ void setSubBankDynamic(int layer, int quick, int subBank, int mod,
     if (!subBankLedInRange_(layer, quick, subBank)) return;
     if (mod < 0 || mod >= kSoftKeyModifierSets)     return;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank].dynamic[mod] = kind;
+    auto& sb = g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank];
+    sb.dynamic[mod] = kind;
+    // ⇨ THE KIND REPLACES THE NAME, because the display prefers the name and a
+    // named bank would otherwise keep saying the old thing after you made it a
+    // Groups bank (Frank 2026-09-08: "banks machen rename nicht wenn ich z.B.
+    // parameter dyn bank auswähle"). Clearing it here rather than letting the
+    // kind win in the painter keeps the rule symmetric: rename after picking a
+    // kind and your name shows again. Whatever you did last is what you see.
+    // Both callers are a user picking from a menu, so nothing clears a name
+    // behind the user's back.
+    if (kind != DynamicBankKind::None) sb.name[mod].clear();
     persistLocked_();
 }
 
