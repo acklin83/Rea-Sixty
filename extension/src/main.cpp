@@ -5177,11 +5177,16 @@ struct PendingInput {
                               //   preserved; only the lower-10-bit
                               //   channel index changes. value =
                               //   signed detent count.
-        NavJumpStrip,         // Phase 2.8 Nav Mode: top-soft-key press on
-                              //   the overlay maps strip → window item;
-                              //   region items jump + drill, marker
-                              //   items just jump the edit cursor. strip
-                              //   = 0..7, value unused.
+        NavPushUf1,           // Nav Mode: UF1 channel-encoder push, already
+                              //   resolved to a push action on the input
+                              //   thread. value = the action (NavDispatch.h
+                              //   0..6); the dispatch happens on the tick.
+        NavJumpStrip,         // Phase 2.8 Nav Mode: soft-key press on the
+                              //   overlay maps slot → window item; region
+                              //   items jump + drill, marker items just jump
+                              //   the edit cursor. strip = slot within the
+                              //   surface's window; value = which surface
+                              //   (0 = UF8's eight, 1 = UF1's four).
         FxParamStep,          // fx_param_inc / fx_param_dec builtins:
                               //   step the focused-domain FX slot identified
                               //   by `strip` (linkIdx, low 7 bits) on the
@@ -19011,6 +19016,18 @@ void drainInputQueue()
                         // track under this screen to cycle instances on.
                         if (g_uf1HueMode.load()) {
                             uf1HueStepFocus_(tracks);
+                        } else if (uf8::nav::Overlay::instance().active()
+                                   && g_navUf1Takeover.load()) {
+                            // Nav Mode, and only when the user handed this
+                            // encoder over. Off, nothing here changes and it
+                            // keeps its Encoder Mode — the lesson the UF8's
+                            // equivalent learned on 2026-09-08.
+                            // moveCursor pins the cursor (auto-follow stops)
+                            // and slides every pane's window to it, so the UF1
+                            // window follows even while the UF8 shows another.
+                            uf8::nav::Overlay::instance().moveCursor(tracks);
+                            g_navOverlayDirty.store(true);
+                            g_pageDirty.store(true);
                         } else if (g_uf1ModeMenu.load()) {
                             // MODE held → the channel encoder is the encoder-mode
                             // PICKER: step g_uf1EncoderMode through the VISIBLE modes
@@ -19128,6 +19145,12 @@ void drainInputQueue()
             applySelectRelative_(static_cast<int>(e.value));
             continue;
         }
+        if (e.kind == PendingInput::NavPushUf1) {
+            uf8::nav::dispatchPushAction(static_cast<int>(e.value + 0.5));
+            g_navOverlayDirty.store(true);
+            g_pageDirty.store(true);
+            continue;
+        }
         if (e.kind == PendingInput::NavJumpStrip) {
             // Phase 2.8: top-soft-key press on the marker/region overlay.
             // Map strip → window item. Regions jump the playhead AND
@@ -19136,8 +19159,14 @@ void drainInputQueue()
             // Settings → Modes → NAV). Markers jump the edit cursor.
             auto& ov = uf8::nav::Overlay::instance();
             if (!ov.active()) continue;
-            const int s = (e.strip < 8) ? e.strip : 0;
-            const int idx = ov.pageOffset(uf8::nav::Overlay::Pane::Uf8) * 8 + s;
+            using Pane = uf8::nav::Overlay::Pane;
+            // `value` picks the pane: the two surfaces show different-sized
+            // windows over the same list, so the slot alone does not identify
+            // an item (2026-09-08).
+            const Pane pane = (e.value > 0.5) ? Pane::Uf1 : Pane::Uf8;
+            const int  size = uf8::nav::Overlay::paneSize(pane);
+            const int  s    = (e.strip < size) ? e.strip : 0;
+            const int  idx  = ov.pageOffset(pane) * size + s;
             const auto& items = ov.items();
             if (idx < 0 || idx >= static_cast<int>(items.size())) continue;
             const auto& it = items[idx];
@@ -22449,6 +22478,34 @@ static bool uf8TouchLearnArm_(int kind, int strip)
     return true;
 }
 
+// ⇨ ONE GESTURE READER FOR THE NAV PUSHES. Press stores the time, release
+// resolves plain / shift / long-press against the surface's own action set.
+// The UF8 and the UC1 each carried a verbatim copy of these eight lines; the
+// UF1 would have made three. Each caller owns its own state, because the two
+// encoders can be held independently.
+// Worker-thread safe: steady_clock and an atomic modifier snapshot, no REAPER.
+struct NavPushGesture {
+    std::chrono::steady_clock::time_point start{};
+    bool down = false;
+};
+static int navPushGestureAct_(NavPushGesture& g, bool pressed,
+                              int plain, int shift, int lng)
+{
+    if (pressed) {
+        g.start = std::chrono::steady_clock::now();
+        g.down  = true;
+        return -1;
+    }
+    if (!g.down) return -1;
+    g.down = false;
+    const auto held = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - g.start).count();
+    const bool isLong  = held > 500;
+    const bool isShift = (uf8::bindings::currentModifierSnapshot()
+                          == uf8::bindings::Modifier::Shift);
+    return isLong ? lng : (isShift ? shift : plain);
+}
+
 void onUf8Input(const uint8_t* dataIn, size_t lenIn)
 {
     // NOTE: do NOT add per-packet file logging here. This runs on the libusb
@@ -23013,28 +23070,17 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     // encoder at all — neither its rotation nor its push.
                     {
                         using namespace std::chrono;
-                        static steady_clock::time_point sPressTime{};
-                        static bool sPressed = false;
-                        if (pressed) {
-                            sPressTime = steady_clock::now();
-                            sPressed   = true;
-                        } else if (sPressed) {
-                            sPressed = false;
-                            const auto held = duration_cast<milliseconds>(
-                                steady_clock::now() - sPressTime).count();
-                            const bool isLong  = held > 500;
-                            const bool isShift = (uf8::bindings::currentModifierSnapshot()
-                                                  == uf8::bindings::Modifier::Shift);
-                            // The UF8's OWN set. These used to be the UC1's,
-                            // under names that said so — one config for two
-                            // surfaces, on which the same entry does different
-                            // things (Drill works here, and is a no-op on a UC1
-                            // with its own mode).
-                            const int plainAct = reasixty_navUf8Push();
-                            const int shiftAct = reasixty_navUf8PushShift();
-                            const int longAct  = reasixty_navUf8LongPress();
-                            const int act = isLong ? longAct
-                                          : (isShift ? shiftAct : plainAct);
+                        // The UF8's OWN set. These used to be the UC1's, under
+                        // names that said so — one config for two surfaces, on
+                        // which the same entry does different things (Drill
+                        // works here and is a no-op on a UC1 with its own mode).
+                        static NavPushGesture sGesture;
+                        const int act = navPushGestureAct_(
+                            sGesture, pressed,
+                            reasixty_navUf8Push(),
+                            reasixty_navUf8PushShift(),
+                            reasixty_navUf8LongPress());
+                        if (act >= 0) {
                             uf8::nav::dispatchPushAction(act);
                             g_navOverlayDirty.store(true);
                             if (g_sync) g_sync->invalidate();
@@ -23897,6 +23943,53 @@ void onUf1Event(const uf1::InputEvent& ev)
             //   V-Pot 4 push = leave Hue Mode           SOLO = light solo
             //                                          SEL  = nothing (the UF1 IS
             //                                                 the focus)
+            // ⇨ NAV OWNS THE FOUR DISPLAY SOFT-KEYS while it is showing on this
+            // surface, and it has to claim them AHEAD of the binding-first check
+            // below — otherwise the DAW bank's factory binding eats the press
+            // and the key does its normal job while the label says a marker.
+            // Same reason Hue Mode claims its pushes just below.
+            // ⚠ All four are claimed, including cells with no item: a key that
+            // shows nothing must do nothing, not fall through to whatever was
+            // underneath.
+            if (uf8::nav::Overlay::instance().active() && g_navUf1Show.load()
+                && ev.id >= uf1::btn::kDisplaySoft1
+                && ev.id <= uf1::btn::kDisplaySoft4)
+            {
+                if (ev.pressed) {
+                    const int slot = ev.id - uf1::btn::kDisplaySoft1;
+                    // REAPER API on this worker is illegal, so the jump goes
+                    // through the queue like every other UF1 press.
+                    // Same kind as the UF8's top-soft-key press: the drill
+                    // rules below it are involved and must not be copied. The
+                    // pane rides in `value` — 0 = UF8, 1 = UF1.
+                    queueInput({PendingInput::NavJumpStrip,
+                                static_cast<uint8_t>(slot), 1.0});
+                }
+                break;
+            }
+            // ⇨ AND THE CHANNEL-ENCODER PUSH, but only while this surface's
+            // encoder is handed over. Off, it keeps its binding (the factory one
+            // shows the focused plug-in's GUI) — the same rule the rotation
+            // follows further down.
+            if (uf8::nav::Overlay::instance().active()
+                && g_navUf1Takeover.load()
+                && ev.id == uf1::btn::kChannelPush)
+            {
+                static NavPushGesture sUf1Gesture;
+                const int act = navPushGestureAct_(
+                    sUf1Gesture, ev.pressed,
+                    reasixty_navUf1Push(),
+                    reasixty_navUf1PushShift(),
+                    reasixty_navUf1LongPress());
+                if (act >= 0) {
+                    // ⛔ dispatchPushAction walks the REAPER marker table and
+                    // moves the edit cursor, so it may not run on this worker.
+                    // Through the queue, like the jump above.
+                    queueInput({PendingInput::NavPushUf1, 0,
+                                static_cast<double>(act)});
+                }
+                break;
+            }
             if (g_uf1HueMode.load() && ev.pressed) {
                 // ⇨ ALL FOUR V-POT PUSHES ARE CLAIMED, even the three that do
                 // nothing. Left unclaimed they fall through to the factory
@@ -31787,7 +31880,44 @@ void uf1PaintChannel_()
                            keyColBright };
         }
 
-        uf1EmitSoftKeyRow_(skCells, changed, grOwnsSk, modeMenu);
+        // ⇨ NAV TAKES THE ROW, exactly the way it takes the UF8's top soft-keys.
+        // Placed AFTER the per-view fill so it overrides whatever the view put
+        // there, and BEFORE the emit so the row still has its one writer. The
+        // MODE-hold menu overwrites 0x0104 further down and therefore still
+        // wins; the preset browser returns long before this and also still
+        // wins. That is the arbitration, in the order the code already had.
+        bool navRow = false;
+        if (uf8::nav::Overlay::instance().active() && g_navUf1Show.load()) {
+            auto& ov = uf8::nav::Overlay::instance();
+            using Pane = uf8::nav::Overlay::Pane;
+            const uf8::nav::Item* win[uf8::nav::Overlay::paneSize(Pane::Uf1)] = {};
+            int n = 0;
+            ov.window(Pane::Uf1, win, n);
+            const int cursor = ov.cursorIdx();
+            const int base   = ov.pageOffset(Pane::Uf1)
+                             * uf8::nav::Overlay::paneSize(Pane::Uf1);
+            for (int i = 0; i < 4; ++i) {
+                Uf1SkCell c{};
+                if (win[i]) {
+                    c.label     = win[i]->name;
+                    c.haveLabel = true;
+                    // Lit = the cursor sits on this one, so the push has a
+                    // visible target. Same idea as the UF8's cursor strip.
+                    c.on        = (base + i == cursor);
+                }
+                skCells[static_cast<size_t>(i)] = c;
+            }
+            navRow = true;
+        }
+        // The Nav edge has to rewrite the row: the emitter dedups against what
+        // the device shows. ⛔ Not by widening `changed` and not by bumping
+        // g_uf1Gen — both drag the layout along and the screen flickers
+        // ([[uf1-mode-edge-must-not-relayout]]). Only the row is forced.
+        static bool sNavRowWas = false;
+        const bool navRowEdge = (navRow != sNavRowWas);
+        sNavRowWas = navRow;
+
+        uf1EmitSoftKeyRow_(skCells, changed || navRowEdge, grOwnsSk, modeMenu);
     }
 
     // 0x0122 EQ graph: rendered natively from the focused track's SSL
