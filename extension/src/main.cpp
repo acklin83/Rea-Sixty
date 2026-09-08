@@ -19148,21 +19148,24 @@ void drainInputQueue()
             // proportion to user input.
             const int step = encoderStepFrom_(g_encoderAccum, e.value);
             if (step != 0) {
-                // Phase 2.8 Nav Mode — encoder rotation interception.
-                // Default: pages the overlay 8 items at a time (legacy
-                // PageLeft/Right redundancy). With g_navUf8Takeover on
-                // (Settings → Modes → NAV), each detent moves the drill
-                // cursor one item instead — mirrors UC1 Encoder 2 and
-                // keeps the UC1 carousel + UF8 strips in sync because
-                // both render from overlay.cursor.
-                if (uf8::nav::Overlay::instance().active()) {
-                    auto& ov = uf8::nav::Overlay::instance();
-                    if (g_navUf8Takeover.load()) {
-                        ov.moveCursor(step);
-                    } else {
-                        for (int i = 0; i <  step; ++i) ov.pageNext();
-                        for (int i = 0; i > step;  --i) ov.pagePrev();
-                    }
+                // Phase 2.8 Nav Mode — encoder rotation interception, but ONLY
+                // when the user asked for it. With g_navUf8Takeover on
+                // (Settings → Modes → NAV) each detent moves the drill cursor
+                // one item, mirroring UC1 Encoder 2 and keeping the UC1
+                // carousel and the UF8 strips in sync, because both render
+                // from overlay.cursor.
+                //
+                // ⛔ OFF USED TO MEAN "PAGE THE OVERLAY", NOT "LEAVE IT ALONE".
+                // So Nav Mode swallowed the encoder either way and the user's
+                // chosen Encoder Mode never ran in it — while the checkbox says
+                // "moves Nav cursor", which reads as on or off, not as one job
+                // or another (Frank 2026-09-08). The paging was documented as
+                // "legacy PageLeft/Right redundancy" in this very comment: the
+                // hardware PageLeft (0x52) and PageRight (0x53) do it, so
+                // nothing is lost by giving the encoder back.
+                if (uf8::nav::Overlay::instance().active()
+                    && g_navUf8Takeover.load()) {
+                    uf8::nav::Overlay::instance().moveCursor(step);
                     g_navOverlayDirty.store(true);
                     if (g_sync) g_sync->invalidate();
                     continue;
@@ -22915,13 +22918,20 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         if (g_sync) g_sync->invalidate();
                     }
                     handledOv = true;
-                } else if (id == 0x76) {
-                    // Channel-encoder push. With UF8 Takeover on, this
-                    // becomes a gesture trigger (press → store time;
-                    // release → plain/shift/long action via the shared
-                    // dispatcher, same trio of settings as UC1 Encoder
-                    // 2). Otherwise stays at the legacy hard-coded Back.
-                    if (g_navUf8Takeover.load()) {
+                } else if (id == 0x76 && g_navUf8Takeover.load()) {
+                    // Channel-encoder push, and only while Takeover is on: a
+                    // gesture trigger (press → store time; release →
+                    // plain/shift/long action via the shared dispatcher, the
+                    // same trio of settings as UC1 Encoder 2).
+                    //
+                    // ⛔ WITH TAKEOVER OFF IT IS NOT OURS. It used to fire a
+                    // hard-coded Back, so a user who had configured the push to
+                    // drill got Back instead and the encoder's own binding
+                    // never ran (Frank 2026-09-08). Back is not lost: Quick1
+                    // (0x43) carries it hard-coded, deliberately independent of
+                    // this toggle. Off now means Nav Mode does not touch this
+                    // encoder at all — neither its rotation nor its push.
+                    {
                         using namespace std::chrono;
                         static steady_clock::time_point sPressTime{};
                         static bool sPressed = false;
@@ -22944,13 +22954,6 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                             g_navOverlayDirty.store(true);
                             if (g_sync) g_sync->invalidate();
                         }
-                    } else if (pressed
-                               && ov.viewLock() == uf8::nav::ViewLock::None
-                               && ov.view() != uf8::nav::View::Regions)
-                    {
-                        ov.backToRegions();
-                        g_navOverlayDirty.store(true);
-                        if (g_sync) g_sync->invalidate();
                     }
                     handledOv = true;
                 } else if (id == 0x43) {

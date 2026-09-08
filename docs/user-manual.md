@@ -263,6 +263,17 @@ On by default. While *Settings → Modes → NAV → Take over LCD* is on, and E
 
 While a view-lock toggle (Markers-only / Regions-only) is engaged, shift and long-press are suppressed — only plain push fires.
 
+**Drill only works while the UC1 mirrors the UF8.** Give the UC1 a mode of its own (*Settings → Modes → NAV*, UC1 = Markers or Regions) and Drill and Back do nothing on its push, because there is nothing to drill into: the UC1's list is fixed to the mode you gave it. That configuration replaces drilling with a live coupling instead. Set UC1 to Markers and UF8 to Regions, and the UC1 shows the markers inside whichever region the UF8 cursor is on, following it as you turn.
+
+## UF8 Channel encoder in Nav Mode
+
+Off by default. *Settings → Modes → NAV → UF8 Channel encoder drives Nav Mode*.
+
+- **On** — rotation moves the Nav cursor one item per detent, and the push fires the same plain / shift / long-press actions the UC1's Encoder 2 uses. The two surfaces share one set of push settings.
+- **Off** — Nav Mode leaves the encoder alone. Rotation keeps doing whatever Channel Encoder mode you have selected, and the push keeps its own binding.
+
+Paging the overlay eight at a time sits on the **Page Left** and **Page Right** keys either way, and **Quick 1** is Back either way, so neither depends on this toggle.
+
 ## Auto-Follow
 
 Settings → Modes → NAV → *Auto-Follow playhead / edit cursor* (checkbox).

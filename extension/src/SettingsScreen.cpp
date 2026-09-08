@@ -23166,12 +23166,16 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     ImGui_Spacing(ctx);
     bool uf8TakeNav = reasixty_navUf8Takeover() != 0;
     if (ImGui_Checkbox(ctx,
-            "UF8 Channel encoder moves Nav cursor (asymmetric — UC1 "
-            "Encoder 2 always does this when LCD takeover is on)",
+            "UF8 Channel encoder drives Nav Mode",
             &uf8TakeNav))
     {
         reasixty_setNavUf8Takeover(uf8TakeNav);
     }
+    ImGui_TextDisabled(ctx,
+        "On: rotation moves the Nav cursor and the push fires the action set "
+        "below, the same as UC1 Encoder 2. Off: Nav Mode leaves this encoder "
+        "alone and it keeps its Encoder Mode. Paging stays on the Page Left "
+        "and Page Right keys either way, and Quick 1 stays Back.");
 
     // -- UF8 strip display -------------------------------------------
     ImGui_Spacing(ctx);
