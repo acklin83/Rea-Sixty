@@ -4621,9 +4621,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             bool xe = reasixty_uf1FadeXfadeEditor();
             if (ImGui_Checkbox(ctx, "Show REAPER's crossfade editor##jog", &xe))
                 reasixty_setUf1FadeXfadeEditor(xe);
-            ImGui_TextDisabled(ctx,
-                "Only while the edge you aim at has a neighbour. It shows the "
-                "selected items' crossfade, so with none selected it stays empty.");
+            ImGui_TextDisabled(ctx, "Empty with nothing selected.");
         }
         // Per-mode TIME axis unit + amount, for the live mode only. Razor (4)
         // has no time axis at the wheel, so it shows none of this.
@@ -21750,8 +21748,7 @@ static void drawObsTab_(ImGui_Context* ctx)
     ImGui_Text(ctx, "OBS Studio");
     ImGui_Spacing(ctx);
     ImGui_TextDisabled(ctx,
-        "Recording, chapter marks and scene switching over obs-websocket. "
-        "Switch the server on in OBS under Tools, WebSocket Server Settings.");
+        "Server on in OBS under Tools, WebSocket Server Settings.");
     ImGui_Spacing(ctx);
 
     Config cfg = om.config();
@@ -21824,9 +21821,7 @@ static void drawObsTab_(ImGui_Context* ctx)
             om.setPassword(s_pw);
             s_pwSeen = s_pw;
         }
-        ImGui_TextDisabled(ctx,
-            "Kept in the same place as every other setting, in clear text. "
-            "Leave it empty if you switch authentication off in OBS.");
+        ImGui_TextDisabled(ctx, "Stored in clear text.");
     }
 
     ImGui_Spacing(ctx);
@@ -21842,7 +21837,7 @@ static void drawObsTab_(ImGui_Context* ctx)
         std::snprintf(hdr, sizeof(hdr), "Scenes (%d)", static_cast<int>(sc.size()));
         ImGui_Text(ctx, hdr);
         if (sc.empty()) {
-            ImGui_TextDisabled(ctx, "None yet. They arrive when the link is up.");
+            ImGui_TextDisabled(ctx, "None yet, they arrive when the link is up.");
         } else {
             for (size_t i = 0; i < sc.size(); ++i) {
                 const bool live = (sc[i] == cur);
@@ -21861,9 +21856,7 @@ static void drawObsTab_(ImGui_Context* ctx)
 
     ImGui_Spacing(ctx);
     ImGui_TextDisabled(ctx,
-        "Put the scenes on eight keys with a dynamic bank of kind OBS Scenes. "
-        "A marker named \"obs: Wide\" switches to that scene as the playhead "
-        "passes it, forwards and only while rolling.");
+        "A marker named \"obs: Wide\" switches to that scene while rolling.");
 }
 
 static void drawHueTab_(ImGui_Context* ctx)
@@ -23236,20 +23229,8 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
 
         ImGui_EndTable(ctx);
     }
-    ImGui_TextDisabled(ctx,
-        "Shows: what the surface displays while Nav Mode is on. Off leaves it in "
-        "its normal view. Mirror UF8 follows the UF8's list; Regions and Markers "
-        "give the surface a list of its own. The UF8 is the view authority, so it "
-        "has no Mirror.");
-    ImGui_TextDisabled(ctx,
-        "Encoder drives Nav: on, the encoder moves the cursor and its push fires "
-        "that surface's actions below. Off, Nav Mode leaves the encoder alone and "
-        "it keeps its normal job. The two are independent: you can watch without "
-        "steering, or steer without the display changing.");
-    ImGui_TextDisabled(ctx,
-        "When UC1 = Markers and UF8 = Regions, the UC1 shows the markers inside "
-        "the UF8's selected region and follows its cursor. That coupling is what "
-        "replaces drilling on a surface with a list of its own.");
+    // Kein Erklärabsatz hier. Die Spaltenköpfe, die Zeilenlabels und die
+    // Combo-Einträge sagen es; das Warum steht im Handbuch, Kapitel Nav Mode.
 
     // -- UF8 strip display -------------------------------------------
     ImGui_Spacing(ctx);
@@ -23299,10 +23280,6 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     ImGui_Spacing(ctx);
     ImGui_Text(ctx, "Encoder push actions");
     ImGui_Separator(ctx);
-    ImGui_TextDisabled(ctx,
-        "One set per surface, under the surface it belongs to. They used to be "
-        "one set for all, which could not be right: Drill works on the UF8 and "
-        "does nothing on a surface with a list of its own.");
 
     static const char* kNavActionNames[7] = {
         "Jump + Drill",
@@ -23372,17 +23349,14 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
 
         ImGui_EndTable(ctx);
     }
-    // The note now names the column it is about, instead of standing under all
-    // three and leaving the reader to work out which one it means.
-    if (uc1Mode != 0) {
-        ImGui_TextDisabled(ctx,
-            "UC1 has a list of its own, so its Drill and Back do nothing and "
-            "Jump + Drill is just Jump. The coupling above drills for it.");
-    }
-    if (uf1Mode != 0) {
-        ImGui_TextDisabled(ctx,
-            "UF1 has a list of its own, so its Drill and Back do nothing and "
-            "Jump + Drill is just Jump.");
+    // Eine Zeile, die die betroffenen Spalten NENNT. Ohne sie wählt man eine
+    // Aktion, die auf dieser Fläche nichts tut, und sieht nirgends warum.
+    if (uc1Mode != 0 || uf1Mode != 0) {
+        const char* who = (uc1Mode != 0 && uf1Mode != 0) ? "UC1 and UF1"
+                        : (uc1Mode != 0)                 ? "UC1" : "UF1";
+        char line[96];
+        snprintf(line, sizeof(line), "Drill and Back do nothing on %s.", who);
+        ImGui_TextDisabled(ctx, line);
     }
 
     // -- Behaviour ---------------------------------------------------
@@ -23414,13 +23388,9 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
         if (uc1Mode != 0) {
             if (rp == 2) {
                 ImGui_TextColored(ctx, 0xE8C33AFF,
-                    "  The key does nothing right now: Drill only, and the UC1 "
-                    "has a list of its own, which suppresses the drill. Pick "
-                    "Jump, or set the UC1 back to Mirror UF8.");
+                    "  Dead key: Drill only, and the UC1 suppresses the drill.");
             } else {
-                ImGui_TextDisabled(ctx,
-                    "  The UC1 has a list of its own, so the drill half does "
-                    "nothing; the coupling above drills instead.");
+                ImGui_TextDisabled(ctx, "  The UC1 suppresses the drill half.");
             }
         }
     }
