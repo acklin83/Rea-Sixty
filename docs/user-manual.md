@@ -321,7 +321,7 @@ RegionsOnly view-lock always suppresses Drill regardless of this setting.
 
 # UF8 hardware
 
-The UF8 has **no transport keys, no Layer LED on Layer 3 on some units, no jog wheel**. The layout below mirrors SSL's published reference (User Guide Rev 11, p.14-17).
+The UF8 has **no transport keys and no jog wheel**. The layout below mirrors SSL's published reference (User Guide Rev 11, p.14-17).
 
 ## Strips (×8)
 
@@ -388,7 +388,7 @@ Three buttons, and not together: FLIP sits in the left panel, PAN and FINE at th
 
 ## Layer keys
 
-`LAYER 1 / 2 / 3` — three SSL DAW layers. Bindable, though Layer 3 is drawn locked in the editor and cannot be navigated there; the hardware key still switches to it. Layer 3 LED on certain UF8 units does not light up — confirmed hardware quirk, not a Rea-Sixty bug. Layer functionality itself works.
+`LAYER 1 / 2 / 3` — three SSL DAW layers. Bindable, though Layer 3 is drawn locked in the editor and cannot be navigated there; the hardware key still switches to it. All three LEDs light. Layer 3's was dark until September 2026, and the reason was ours: that LED answers to a different frame family than Layer 1 and 2, and everything we sent it was in the family it ignores.
 
 ## 360° key
 

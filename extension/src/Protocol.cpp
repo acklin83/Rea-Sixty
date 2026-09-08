@@ -703,29 +703,27 @@ constexpr Uf8GlobalLedDef kUf8GlobalLedTable[] = {
     // cap35/36 decoding put Layer 1/2 at 0x39/0x3A which turned out
     // to be 360/Quick3.
     //
-    // ⚠ SIX OF THE SEVEN WERE SEEN. LAYER 3 (0x3D) IS THE ONE THAT WAS
-    // NOT, and this comment used to call the whole row "fully confirmed".
-    // It is the only slot left between Quick1 and Layer2, so it was filled
-    // in by position, and `docs/uf8-global-led-map.md` still carries it as
-    // TBD — the two have disagreed since April.
-    // What the corpus says (scanned 2026-09-08): in cap35, the capture made
-    // for exactly this row, 0x3D is never written at all, while 0x3E/0x3F
-    // carry live traffic (F4F1 bright, 21F1 dim, 00F0 off). In cap36 it gets
-    // the two-frame init blank and nothing more, the same as 0x38, 0x40,
-    // 0x41 and 0x42. SSL 360 lights Layer 1 and Layer 2 and never lights
-    // anything for Layer 3.
-    // ⚠ And the row is NOT white in SSL's own traffic: F4F1/21F1, where the
-    // table below sends FFFF/11F1. Layer 1 and 2 accept the white, so this
-    // is not the reason Layer 3 stays dark, but it is the first thing to
-    // vary if anyone probes 0x3D.
+    // ⚠ SSL 360 NEVER LIGHTS LAYER 3, in any capture, including cap35 which
+    // was made for this row: 0x3D gets the init blank and nothing else, while
+    // 0x3E/0x3F carry live traffic throughout. That absence was read for
+    // months as "there is no LED there". It is not evidence of anything: 360
+    // simply never puts a third layer on this rig. The LED is real, and it is
+    // a legacy 3-state one (see Layer3 below).
+    // ⚠ And the row is NOT white in SSL's own traffic: bright is F4 F1,
+    // which is green in the nibble encoding (g=F, r=4, b=1), dim is 21 F1.
+    // The table below sends white for all three, which is our own choice and
+    // works; SSL's layer LEDs are green. Changing that changes Layer 1 and 2
+    // as well, so it stays as it is until someone asks for it.
     /* Layer1       */ {0x3F, kColourWhite},
     /* Layer2       */ {0x3E, kColourWhite},
-    // ⚠ Layer3's `legacy` flag is the inherited default, not a finding. The
-    // cell is right (button + cell = 0x7F holds for all 26 LEDs in this
-    // block), but nothing ever confirmed WHICH frame family it answers to,
-    // because it has never been seen lit. Channel and the Send/Plugin row
-    // right below are mono LEDs the colour pair cannot address at all.
-    /* Layer3       */ {0x3D, kColourWhite},
+    // ⇨ LAYER 3 IS A LEGACY 3-STATE LED, probed at the device 2026-09-08.
+    // Mono FF3B alone lights it dim; colour pair plus mono lights it bright.
+    // Exactly Page Left / Right, and exactly why five months of "there is no
+    // LED there" were wrong: every earlier attempt sent the colour pair only,
+    // which this cell ignores, and a dark cell was read as a missing LED.
+    // The cell was never the problem. Button + cell = 0x7F holds for all 26
+    // LEDs in this block without exception, so 0x3D was always the address.
+    /* Layer3       */ {0x3D, kColourWhite, true},
     /* Quick1       */ {0x3C, kColourWhite},
     /* Quick2       */ {0x3B, kColourWhite},
     /* Quick3       */ {0x3A, kColourWhite},

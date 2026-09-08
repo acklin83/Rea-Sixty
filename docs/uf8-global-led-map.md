@@ -8,34 +8,45 @@ Per-strip LEDs use cells `0x00..0x17`. Global button LEDs use cells
 **`0x18..0x60`** (same bank, same frame family — different cell
 range).
 
-## Layer 3 has no known LED cell
+## Layer 3: the LED was always there, we addressed it wrongly
 
-Corpus scan, 2026-09-08. In `cap35`, the capture made for this row, cell
-`0x3D` is never written. In `cap36` it receives the two-frame init blank
-and nothing else, exactly like `0x38`, `0x40`, `0x41` and `0x42`. The two
-cells beside it carry live traffic the whole time: `0x3E` and `0x3F`
-(Layer 2 and Layer 1) go `F4 F1` bright, `21 F1` dim, `00 F0` off.
+Settled at the device on 2026-09-08, after five months of "that button has
+no LED".
 
-So SSL 360 lights Layer 1 and Layer 2 and never lights anything for Layer
-3. `Protocol.cpp` carries `0x3D` for it, which is the only free slot
-between Quick 1 and Layer 2 and was filled in by position rather than
-observed.
+**The cell was never in doubt.** Button id and LED cell are complements:
+`button + cell = 0x7F` for all 26 LEDs in the upper block, and `= 0xC7`
+for all 17 below, without a single exception. Layer 3's button is `0x42`,
+so its cell is `0x3D`, by rule rather than by guesswork.
 
-**Probed at the device on 2026-09-08, and the answer is no.** Nineteen
-cells were driven one at a time with `F4 F1` on FF38 and `00 F0` on FF39,
-which is what SSL sends for this row: `0x3D`, then `0x38`, `0x40`, `0x41`,
-`0x42`, then everything else unclaimed in `0x18..0x60` apart from the top
-soft keys (`0x20`, `0x21`, `0x28`, `0x29`, `0x2A`, `0x43`..`0x48`, `0x50`,
-`0x51`, `0x60`). **Not one of them lit anything.**
+**What was wrong is the frame family.** `0x3D` is a legacy 3-state LED,
+like Page Left / Right, Channel, Plugin and the Send/Plugin row. Probed
+one frame at a time:
 
-Taken with the corpus, that closes it: there is no addressable LED behind
-the Layer 3 button. Nothing in the protocol is missing, and the entry in
-`Protocol.cpp` should be read as a placeholder rather than a finding. The
-manual's line about it being a hardware quirk rather than a Rea-Sixty bug
-now rests on a measurement.
+| Sent | Result |
+|---|---|
+| colour pair `FF38`/`FF39` alone | nothing, the cell ignores it |
+| mono `FF 3B 03 3D 00 01` alone | dim |
+| colour pair plus mono | bright |
 
-Also worth knowing before anyone probes: this row is not white in SSL's
-own traffic. `F4 F1` / `21 F1`, where our table sends `FF FF` / `11 F1`.
+Every earlier attempt sent the colour pair on its own, so the LED stayed
+dark and the dark was read as absence. `Protocol.cpp` now carries
+`legacy = true` for it and the LED lights in normal use.
+
+**SSL 360 never lights it either**, in any capture, including `cap35`
+which was made for this row: `0x3D` gets the init blank and nothing more,
+while `0x3E` and `0x3F` carry traffic throughout. That is not evidence
+about the hardware. 360 simply never puts a third layer on this rig, and
+an absence in a capture says nothing about what a cell can do.
+
+**One more thing this turned up:** the layer row is not white in SSL's own
+traffic. Bright is `F4 F1`, which is green in the nibble encoding (g=F,
+r=4, b=1), and dim is `21 F1`. Our table sends white for all three layers.
+That is our choice and it works; changing it would change Layer 1 and 2
+too, so it stays until someone asks.
+
+**The other eighteen cells probed that day lit nothing**, in either
+family: `0x38`, `0x40`, `0x41`, `0x42`, `0x20`, `0x21`, `0x28`, `0x29`,
+`0x2A`, `0x43`..`0x48`, `0x50`, `0x51`, `0x60`.
 
 ## Confirmed cell + colour map
 
@@ -43,7 +54,7 @@ own traffic. `F4 F1` / `21 F1`, where our table sends `FF FF` / `11 F1`.
 |---|---|---|---|
 | Layer 1 | `0x40` | `0x39` | white (`FF FF`) |
 | Layer 2 | `0x41` | `0x3A` | white |
-| Layer 3 | `0x42` | unknown, see below | never lit by SSL 360 in any capture |
+| Layer 3 | `0x42` | `0x3D` | white, **legacy 3-state** (see below) |
 | 360 (Settings) | `0x46` | TBD | white (always lit) |
 | Send/Plugin 1 | `0x48` | `0x37` | white |
 | Send/Plugin 2 | `0x49` | `0x36` | white |
