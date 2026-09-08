@@ -388,7 +388,7 @@ Three buttons, and not together: FLIP sits in the left panel, PAN and FINE at th
 
 ## Layer keys
 
-`LAYER 1 / 2 / 3` — three SSL DAW layers. Bindable, though Layer 3 is drawn locked in the editor and cannot be navigated there; the hardware key still switches to it. All three LEDs light. Layer 3's was dark until September 2026, and the reason was ours: that LED answers to a different frame family than Layer 1 and 2, and everything we sent it was in the family it ignores.
+`LAYER 1 / 2 / 3` — three SSL DAW layers. All three are bindable and all three sit in the surface schema, so clicking one switches the layer and selects the key for editing, and the live ring follows whichever layer the hardware is on. All three LEDs light. Layer 3's was dark until September 2026, and the reason was ours: that LED answers to a different frame family than Layer 1 and 2, and everything we sent it was in the family it ignores.
 
 ## 360° key
 
