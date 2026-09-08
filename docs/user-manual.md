@@ -2108,10 +2108,6 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 
 - **Switch to Layer 1** / **Switch to Layer 2** / **Switch to Layer 3** — switch SSL DAW layer.
 
-## Diagnostics
-
-- **LED Probe** (`uf8_led_probe_step`). Each press lights the next UF8 LED cell that nothing has claimed and names it in REAPER's console, so you can look at the surface and see which button, if any, answered. Nineteen cells, then it clears and starts over. It exists because the Layer 3 LED cell was never observed: `docs/uf8-global-led-map.md` has the detail, including that SSL 360 never lights anything for Layer 3 either. Cell `0x3D` comes first, and note that switching DAW layer repaints that one from the normal LED path.
-
 ## SSL Soft-keys
 
 - **Select soft-key bank (param 0..5)** — select Soft-Key bank N. Six pages in either domain (`kCsMaxBank` and `kBcMaxBank` are both 5); the bus comp's plug-in only *fills* the first two, and the four it leaves empty are ordinary user banks.
