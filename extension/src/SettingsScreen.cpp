@@ -277,6 +277,8 @@ void   reasixty_setOverlaySelColor(int rgb);
 // Dynamic-bank config: FX-bank gesture scheme + Track-Colours palette.
 int      reasixty_fxBankOp(int gesture);
 void     reasixty_setFxBankOp(int gesture, int op);
+int      reasixty_pgBankOp(int gesture);
+void     reasixty_setPgBankOp(int gesture, int op);
 uint32_t reasixty_trackBankColour(int i);
 void     reasixty_setTrackBankColour(int i, uint32_t rgb);
 std::string reasixty_trackBankColourName(int i);
@@ -5923,6 +5925,62 @@ static void drawFxBankGestures_(ImGui_Context* ctx,
     }
 }
 
+// The Parameter-Groups bank's five gestures. Same shape and the same global
+// scope as drawFxBankGestures_ above, and the same reason for existing: the
+// bank does two different jobs, joining a group and arming it, and which
+// gesture does which was hard-coded where nobody could see it
+// (Frank 2026-09-08, "das muss aber in die details der dyn bank mit optionen").
+static void drawParamGroupBankGestures_(ImGui_Context* ctx,
+                                        bool setOwnsThisBank = false,
+                                        bool shiftSetIsItsOwn = false)
+{
+    ImGui_TextDisabled(ctx,
+        "Group-key gestures (global). The keys are the eight groups; a lit key "
+        "means the focused track is in that one.");
+    static const char* kOpNames[] = {
+        "(nothing)",
+        "Join / leave the group",
+        "Group on / off",
+    };
+    static const char* kGesture[5] = {
+        "Push", "+Shift", "+Cmd", "+Ctrl", "Long-press",
+    };
+    for (int g = 0; g < 5; ++g) {
+        const char* why = nullptr;
+        if (setOwnsThisBank && g >= 1 && g <= 3)
+            why = "the modifier already got you to this bank";
+        else if (shiftSetIsItsOwn && g == 1)
+            why = "this bank's Shift set is a bank of its own";
+        if (why) {
+            char line[160];
+            std::snprintf(line, sizeof(line), "%s   not on this bank: %s",
+                          kGesture[g], why);
+            ImGui_TextDisabled(ctx, line);
+            continue;
+        }
+        const int cur = reasixty_pgBankOp(g);
+        char cid[24]; std::snprintf(cid, sizeof(cid), "##pgop%d", g);
+        ImGui_Text(ctx, kGesture[g]);
+        double sameOffs = 90.0;
+        ImGui_SameLine(ctx, &sameOffs, nullptr);
+        ImGui_SetNextItemWidth(ctx, 220.0);
+        if (ImGui_BeginCombo(ctx, cid,
+                kOpNames[(cur >= 0 && cur < 3) ? cur : 0],
+                /*flags*/ nullptr)) {
+            for (int o = 0; o < 3; ++o) {
+                bool sel = (o == cur);
+                if (ImGui_Selectable(ctx, kOpNames[o], &sel,
+                                     nullptr, nullptr, nullptr))
+                    reasixty_setPgBankOp(g, o);
+            }
+            ImGui_EndCombo(ctx);
+        }
+    }
+    ImGui_TextDisabled(ctx,
+        "Join / leave applies to every selected track. Names, membership and "
+        "the on/off flag are in Settings, Parameter Groups.");
+}
+
 // ---- Sub-Bank cell editor (V-POT / Soft 1-5 in the mockup) --------------
 // Replaces the regular drawBindingEditor for these cells — they don't
 // carry a user-editable action (the binding is always
@@ -6043,6 +6101,12 @@ static void drawDynamicBankSettings_(ImGui_Context* ctx, int layer, int quick,
 
         if (curKind == DynamicBankKind::FxBank) {
             drawFxBankGestures_(ctx,
+                mod != 0 && uf8::bindings::getSubBankDynamic(layer, quick, sub, mod)
+                              != DynamicBankKind::None,
+                mod == 0 && uf8::bindings::getSubBankDynamic(layer, quick, sub, 1)
+                              != DynamicBankKind::None);
+        } else if (curKind == DynamicBankKind::ParamGroups) {
+            drawParamGroupBankGestures_(ctx,
                 mod != 0 && uf8::bindings::getSubBankDynamic(layer, quick, sub, mod)
                               != DynamicBankKind::None,
                 mod == 0 && uf8::bindings::getSubBankDynamic(layer, quick, sub, 1)
@@ -7548,6 +7612,17 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 ImGui_Spacing(ctx);
                 if (curKind == DynamicBankKind::FxBank) {
                     drawFxBankGestures_(ctx,
+                        g_slotEditModIdx != 0
+                            && uf8::bindings::getUf1SoftBankDynamic(
+                                   uf1Bank, g_slotEditModIdx)
+                                 != DynamicBankKind::None,
+                        g_slotEditModIdx == 0
+                            && uf8::bindings::getUf1SoftBankDynamic(uf1Bank, 1)
+                                 != DynamicBankKind::None);
+                    ImGui_Spacing(ctx);
+                }
+                if (curKind == DynamicBankKind::ParamGroups) {
+                    drawParamGroupBankGestures_(ctx,
                         g_slotEditModIdx != 0
                             && uf8::bindings::getUf1SoftBankDynamic(
                                    uf1Bank, g_slotEditModIdx)

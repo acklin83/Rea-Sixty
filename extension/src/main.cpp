@@ -401,6 +401,8 @@ uint32_t trackColorRgb(MediaTrack* tr);
 // namespace too.
 int      reasixty_fxBankOp(int gesture);
 void     reasixty_setFxBankOp(int gesture, int op);
+int      reasixty_pgBankOp(int gesture);            // Parameter-Groups bank
+void     reasixty_setPgBankOp(int gesture, int op);
 uint32_t reasixty_trackBankColour(int i);
 void     reasixty_setTrackBankColour(int i, uint32_t rgb);
 std::string reasixty_trackBankColourName(int i);
@@ -6877,6 +6879,15 @@ static const char* fxBankOpName_(FxBankOp op)
     return "?";
 }
 // gesture index 0=Push 1=Shift 2=Cmd 3=Ctrl 4=Long
+// The Parameter-Groups bank's five gestures, same shape as g_fxBankOp above and
+// for the same reason: the bank fires a gesture, and which job that gesture does
+// belongs to the user rather than to a hard-coded short/long split. Ops:
+//   0 nothing   1 toggle the track's membership   2 toggle the group on and off
+// Defaults are what the bank did before it was settable: push joins or leaves,
+// long-press arms or disarms.
+constexpr int kPgBankOpCount = 3;
+std::atomic<int> g_pgBankOp[5] = { 1, 0, 0, 0, 2 };
+
 std::atomic<int> g_fxBankOp[5] = {
     int(FxBankOp::Focus), int(FxBankOp::Float), int(FxBankOp::Bypass),
     int(FxBankOp::FxSolo), int(FxBankOp::Offline),
@@ -6966,6 +6977,12 @@ static void ensureDynCfgLoaded_()
     static bool done = false;
     if (done) return;
     done = true;
+    if (const char* v = GetExtState("rea_sixty", "pg_bank_ops"); v && v[0]) {
+        int o[5]; int got = std::sscanf(v, "%d,%d,%d,%d,%d",
+                                        &o[0], &o[1], &o[2], &o[3], &o[4]);
+        for (int i = 0; i < got && i < 5; ++i)
+            if (o[i] >= 0 && o[i] < kPgBankOpCount) g_pgBankOp[i].store(o[i]);
+    }
     if (const char* v = GetExtState("rea_sixty", "fx_bank_ops"); v && v[0]) {
         int o[5]; int got = std::sscanf(v, "%d,%d,%d,%d,%d",
                                         &o[0], &o[1], &o[2], &o[3], &o[4]);
@@ -7676,7 +7693,13 @@ static void applyDynBankFxOp_(MediaTrack* tr, int fxIdx, int gesture)
 static void applyDynBankParamGroupsOp_(MediaTrack* tr, int slot, int gesture)
 {
     if (!tr || slot < 0 || slot >= 8) return;
-    if (gesture == 4) {                 // long: toggle group broadcast
+    // ⇨ THE GESTURE DECIDES NOTHING BY ITSELF ANY MORE. Which job a gesture
+    // does is a setting, like the FX bank's, so push can arm a group and
+    // long-press can join it if that suits the way you work. Defaults are the
+    // old hard-coded split (Frank 2026-09-08).
+    const int op = reasixty_pgBankOp(gesture);
+    if (op == 0) return;                // this gesture is switched off
+    if (op == 2) {                      // toggle the group on and off
         uf8::param_groups::toggleGroupActive(slot);
     } else {
         // Toggle membership. Multi-select: derive the target state
@@ -44471,6 +44494,23 @@ void reasixty_setFxBankOp(int gesture, int op)
                   g_fxBankOp[2].load(), g_fxBankOp[3].load(),
                   g_fxBankOp[4].load());
     SetExtState("rea_sixty", "fx_bank_ops", buf, true);
+}
+int  reasixty_pgBankOp(int gesture)
+{
+    ensureDynCfgLoaded_();
+    return (gesture >= 0 && gesture < 5) ? g_pgBankOp[gesture].load() : 0;
+}
+void reasixty_setPgBankOp(int gesture, int op)
+{
+    if (gesture < 0 || gesture >= 5 || op < 0 || op >= kPgBankOpCount) return;
+    ensureDynCfgLoaded_();
+    g_pgBankOp[gesture].store(op);
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "%d,%d,%d,%d,%d",
+                  g_pgBankOp[0].load(), g_pgBankOp[1].load(),
+                  g_pgBankOp[2].load(), g_pgBankOp[3].load(),
+                  g_pgBankOp[4].load());
+    SetExtState("rea_sixty", "pg_bank_ops", buf, true);
 }
 uint32_t reasixty_trackBankColour(int i)
 {
