@@ -5360,6 +5360,19 @@ void setSoftKeySetName(int setNo, const std::string& name)
     persistLocked_();
 }
 
+// ⇨ ONE SET'S WORTH, and it has to mirror exactly what clearBank wipes.
+// A modifier set maps straight onto the slot Binding's modifier index (see
+// capturePresetSlotLocked_), so a set holds something when one of its three
+// gestures does. Label, colour and behaviour are per KEY and shared by both
+// sets, so they say nothing about which set you are looking at.
+static bool slotSetHasData_(const Binding& bd, int m)
+{
+    if (m < 0 || m >= kModifierCount) return false;
+    return !slotHasNoData_(bd.shortPress[m])
+        || !slotHasNoData_(bd.longPress[m])
+        || !slotHasNoData_(bd.doublePress[m]);
+}
+
 bool subBankHasContent(int layer, int quick, int sub, int mod)
 {
     if (layer < 0 || layer >= 3) return false;
@@ -5370,8 +5383,14 @@ bool subBankHasContent(int layer, int quick, int sub, int mod)
     const UserQuickSubBank& sb = g_cfg.userQuicks[layer].quicks[quick].subBanks[sub];
     if (!sb.name[mod].empty())                       return true;
     if (sb.dynamic[mod] != DynamicBankKind::None)    return true;
+    // ⛔ PER SET. This took `mod` and then asked bindingHasNoData_, which reads
+    // ALL four modifier slots of every key at once. So a bank with something on
+    // Shift read as filled on Plain, the cell showed its fallback coordinate
+    // name instead of a dash, and Clear could not make it a dash because Clear
+    // only wipes the set you are on (Frank 2026-09-08: "wieso kann ich die
+    // soft 1 und soft 3 namen mit clear nicht löschen").
     for (int i = 0; i < kSlotsPerSubBank; ++i)
-        if (!bindingHasNoData_(sb.slots[i]))         return true;
+        if (slotSetHasData_(sb.slots[i], mod))       return true;
     return false;
 }
 
