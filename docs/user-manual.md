@@ -216,7 +216,7 @@ The encoder also drives **SEL-Mode cycle** when **Settings → Modes → FX / Cy
 
 # Nav Mode (Markers + Regions)
 
-Nav Mode is a surface overlay — separate from the Selection Modes — that turns the UF8 strips into a live marker / region jump panel. It can be active alongside any Selection Mode; toggling it does not change the active Selection Mode.
+Nav Mode is a surface overlay, separate from the Selection Modes, that turns your surfaces into a live marker and region jump panel: eight strips on the UF8, the central LCD on the UC1, the four display soft-keys on the UF1. Each surface decides for itself whether it joins in. Nav Mode can be active alongside any Selection Mode, and toggling it does not change the active Selection Mode.
 
 ## Engaging Nav Mode
 
@@ -234,7 +234,7 @@ Bind any of these to a UF8 / UC1 button in Settings → Bindings. The same butto
 - **MarkersInRegion** — markers inside the region the playhead is in. Auto-rolls into the next region when the playhead crosses out.
 - **MarkersAll** — flat list of every marker in the project.
 
-Which view a surface opens on is set per surface in *Settings → Modes → NAV*: the UF8 picks Regions or Markers, the UC1 adds *Mirror UF8*. The old single *Default view* setting, with its *Last used* option, went away on 2026-05-28.
+Which view a surface opens on is set per surface in *Settings → Modes → NAV* — see the next chapter. The old single *Default view* setting, with its *Last used* option, went away on 2026-05-28.
 
 ## What the UF8 strips show
 
@@ -245,34 +245,49 @@ Per strip while Nav Mode is active:
 - **Scribble strip lower row** — configurable: Off (V-Pot value preserved) / Index (`R03`, `M07`) / Timecode (`MM:SS`).
 - **Colour bar** — the marker / region's colour (or palette grey, per setting).
 
-## Paging
+## Two settings per surface
 
-When the project has more items than 8 strips, the overlay pages 8 at a time. Pagination via:
+The NAV pane in Settings, under Modes, asks each surface the same two questions, and they are independent of each other.
 
-- **CHANNEL encoder rotation** while Nav Mode is active — pages forward / backward.
+**Shows** says what the surface displays while Nav Mode is on. `Off` leaves it in its normal view. `Mirror UF8` follows the UF8's list. `Regions` and `Markers` give that surface a list of its own. The UF8 is the view authority, so it has no Mirror.
 
-## UC1 Encoder 2 takeover
+**Encoder drives Nav** says whether that surface's encoder steers. On, rotation moves the cursor and the push fires that surface's three actions. Off, Nav Mode does not touch the encoder at all: rotation keeps doing whatever Encoder Mode you have selected, and the push keeps its binding.
 
-On by default. While *Settings → Modes → NAV → Take over LCD* is on, and Encoder 2 comes with it:
+Because the two are separate, a surface can show the list without steering it, or steer it without its display changing.
 
-- **Rotation** moves the cursor through items (sets a cursor pin that suppresses auto-follow until the playhead catches up or you push).
-- **Plain push** — Jump + Drill / Jump only / Drill only (configurable).
-- **Shift + push** — Drill / Back / Toggle View (configurable).
-- **Long-press** (~500 ms) — Back / Add marker at playhead / Disabled (configurable).
-- The UC1 central LCD switches to a marker carousel showing prev / curr / next items.
+Each surface also has its own set of three push actions (plain, shift, long-press). They used to be one set shared by all, which could not be right, because Drill works on the UF8 and does nothing on a surface with a list of its own.
 
-While a view-lock toggle (Markers-only / Regions-only) is engaged, shift and long-press are suppressed — only plain push fires.
+**A list of its own costs the drill.** On a surface set to `Regions` or `Markers`, Drill and Back do nothing and Jump + Drill collapses to Jump only. There is nothing to drill into inside a list that is already filtered to one kind, and the pane says so under the action table.
 
-**Drill only works while the UC1 mirrors the UF8.** Give the UC1 a mode of its own (*Settings → Modes → NAV*, UC1 = Markers or Regions) and Drill and Back do nothing on its push, because there is nothing to drill into: the UC1's list is fixed to the mode you gave it. That configuration replaces drilling with a live coupling instead. Set UC1 to Markers and UF8 to Regions, and the UC1 shows the markers inside whichever region the UF8 cursor is on, following it as you turn.
+## Nav Mode on the UF8
 
-## UF8 Channel encoder in Nav Mode
+The eight strips, as described above, plus:
 
-Off by default. *Settings → Modes → NAV → UF8 Channel encoder drives Nav Mode*.
+* **Top soft-key**: jump. In Regions view it follows the *Region press* setting.
+* **Bank Left / Bank Right** and **Page Left / Page Right**: both page the strips eight at a time.
+* **Quick 1**: back to Regions. Hard-coded, so it works whether or not the encoder is handed over. It does nothing under a view lock, or when you are already in Regions.
+* **Quick 2**: switch to the flat MarkersAll view, with the same lock gating.
+* **CHANNEL encoder**, when *Encoder drives Nav* is on: rotation moves the cursor one item per detent, and the push fires the UF8's three actions.
 
-- **On** — rotation moves the Nav cursor one item per detent, and the push fires the same plain / shift / long-press actions the UC1's Encoder 2 uses. The two surfaces share one set of push settings.
-- **Off** — Nav Mode leaves the encoder alone. Rotation keeps doing whatever Channel Encoder mode you have selected, and the push keeps its own binding.
+All of that applies only while the UF8's *Shows* is something other than `Off`. With it `Off` the surface is out of Nav Mode entirely and every one of those keys does its normal job.
 
-Paging the overlay eight at a time sits on the **Page Left** and **Page Right** keys either way, and **Quick 1** is Back either way, so neither depends on this toggle.
+## Nav Mode on the UC1
+
+The central LCD becomes a marker carousel showing previous, current and next. Encoder 2 steers it when *Encoder drives Nav* is on: rotation moves the cursor, the push fires the UC1's three actions.
+
+**The coupling.** Set the UC1 to `Markers` and the UF8 to `Regions`, and the UC1 shows the markers inside whichever region the UF8's cursor sits on, following it as you turn. That coupling is what replaces drilling on a surface with a list of its own.
+
+## Nav Mode on the UF1
+
+* The **four display soft-keys** carry four entries, with the one under the cursor lit. Press one to jump, and the name flashes on the time field. Seven-segment digits have no K, M, V, W or X, so a name using those letters reads only approximately there.
+* **Bank Left / Bank Right** move the window four at a time.
+* The **CHANNEL encoder** steers when *Encoder drives Nav* is on: rotation moves the cursor, the push fires the UF1's three actions. Off, the push keeps its binding, which from the factory shows the focused plug-in's GUI.
+
+**Mirror means the same list, not the same window.** The UF1 can sit on entries 9 to 12 while the UF8 shows 1 to 8. The cursor is shared, since that is what the push and the auto-follow act on. Only the window is per surface, and each surface's window follows the cursor when it moves out of view.
+
+**Its own list is genuinely its own.** Set to `Regions` or `Markers`, the UF1 builds and pages its own list with its own cursor. Unlike the UC1's Markers it is not scoped to the UF8's region: `Markers` there means every marker in the project.
+
+Nav Mode takes the soft-key row and nothing else, so the rest of the UF1 screen keeps painting. Holding MODE still gets you the encoder-mode picker, and the preset browser still takes the screen when you open it. The markers come back when you leave either.
 
 ## Auto-Follow
 
@@ -280,7 +295,7 @@ Settings → Modes → NAV → *Auto-Follow playhead / edit cursor* (checkbox).
 
 When on, the cursor strip tracks whichever marker / region the playhead is on. In MarkersInRegion view, the overlay auto-rolls into the next region when the playhead crosses out (only after the playhead was first observed inside the current filter region — suppresses the snap-back when you drill manually during playback).
 
-Manual cursor movement (UC1 Encoder 2 rotation) pins the cursor and pauses auto-follow until the playhead catches up, or you commit (push), exit Nav Mode, drill, or change view.
+Moving the cursor by hand, on any surface whose encoder is driving Nav, pins it and pauses auto-follow until the playhead catches up, or until you commit (push), exit Nav Mode, drill, or change view.
 
 ## Region-press behaviour
 
@@ -1527,15 +1542,15 @@ Each line shows the bound layer + button + modifier + long-press flag, or "(unbo
 
 **Per-surface** — a small table, one row per setting and one column per surface.
 
-- **Show overlay** — UF8: `On 8 strips`. UC1: `Take over LCD`. The UC1 box covers Encoder 2 as well: with it off the encoder keeps its normal action (**Encoder: scroll BC anchor track** by default), the LCD never switches to the carousel, and only the UF8 reflects Nav Mode.
-- **Mode** — UF8: `Regions` / `Markers`. UC1: `Mirror UF8` / `Regions` / `Markers`. The UF8 picker doubles as the view you land in when Nav Mode is switched on. The two independent UC1 modes carry their own cursor, so the UC1 can walk the markers of whichever region the UF8 is sitting on while the UF8 stays in Regions. Drilling is implicit there, which costs the push actions: Drill and Back become no-ops and Jump + Drill collapses to Jump only.
+- **Shows**. UF8: `Off`, `Regions`, `Markers`. UC1 and UF1 add `Mirror UF8`. `Off` keeps the surface in its normal view. The UF8 picker doubles as the view you land in when Nav Mode is switched on. An independent mode carries its own cursor, which costs the push actions on that surface: Drill and Back become no-ops, and Jump + Drill collapses to Jump only.
+- **Encoder drives Nav**. The Channel encoder on the UF8 and UF1, Encoder 2 on the UC1. Off, the encoder keeps its normal action (the UC1's is **Encoder: scroll BC anchor track** by default) and its push keeps its binding.
 
 **UF8 strip display**
 
 - **Lower-row format** (radio): `Off (V-Pot value)` / `Index (R03 / M07)` / `Timecode (MM:SS)`. Off keeps the V-Pot value visible; Index / Timecode overlay marker metadata on the lower row.
 - **Colour-bar source** (radio): `REAPER marker colour` / `Keep track colour` / `Force palette grey`. REAPER honours the colour override set on each marker / region; Force grey suppresses it.
 
-**Encoder push actions (UC1 Encoder 2 + UF8 Channel encoder)** — Plain push, Shift + push and Long-press each pick any of the same 7 actions via dropdown. The three are shared between the two surfaces:
+**Encoder push actions**. Plain push, Shift + push and Long-press each pick any of the same 7 actions via dropdown, one column per surface:
 
 | Action | Effect |
 |---|---|
@@ -1547,7 +1562,7 @@ Each line shows the bound layer + button + modifier + long-press flag, or "(unbo
 | Add marker at playhead | Insert an empty marker at the playhead (or edit cursor when stopped). |
 | Disabled | No-op. |
 
-Defaults: Plain = Jump+Drill, Shift = Drill only, Long = Back.
+Defaults: Plain = Jump+Drill, Shift = Drill only, Long = Back. Setups from before the split carry their old shared values into all three columns.
 
 View-locks (Markers-only / Regions-only) suppress **Drill only** specifically (Jump+Drill collapses to Jump only; Drill only becomes a no-op). Every other action fires regardless of lock. Long-press threshold ~500 ms.
 
