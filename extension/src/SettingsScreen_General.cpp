@@ -248,6 +248,20 @@ static void consumeSectionScroll_(ImGui_Context* ctx, const char* title)
 // Duplicate of the static helper in SettingsScreen.cpp (which still has 79
 // call sites of its own) — small, pure, and a shared copy would mean a new
 // header for four lines of arithmetic.
+// Explanation for the widget just drawn: a hover box instead of a line of grey
+// text under it (Frank 2026-09-09, "SÄMTLICHE kleinen grauen hilfstexte in
+// mouse-over info boxes"). Status lines stay visible — they are what the pane
+// is telling you right now, not what a control means.
+//
+// ⚠ IsItemHovered asks about the LAST item drawn, so this call belongs
+// immediately after the widget it explains. An `if (ImGui_Checkbox(...)) { … }`
+// body draws nothing, so sitting after its closing brace is still correct;
+// anything that draws in between is not.
+static inline void help_(ImGui_Context* ctx, const char* text)
+{
+    if (ImGui_IsItemHovered(ctx, nullptr)) ImGui_SetTooltip(ctx, text);
+}
+
 static inline double scaleW_(ImGui_Context* ctx, double designWidth)
 {
     constexpr double kRefSize = 14.0;
@@ -272,9 +286,13 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
     // Consistent, roomy section header: a gap above, the title, a rule,
     // and a little air below. Keeps the panes from feeling cramped — use
     // for every section after the first. Frank 2026-06-12.
-    auto sectionHeader = [&](const char* title) {
+    // `help` explains the SECTION, and hangs off its title: a heading is a text
+    // item and therefore hoverable, which gives a section-wide explanation the
+    // one thing it otherwise lacks, something to hover.
+    auto sectionHeader = [&](const char* title, const char* help = nullptr) {
         ImGui_Dummy(ctx, 0.0, 8.0);
         ImGui_Text(ctx, title);
+        if (help) help_(ctx, help);
         consumeSectionScroll_(ctx, title);
         ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
@@ -331,9 +349,9 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
         if (ImGui_Checkbox(ctx, "Show UF8 soft-key bank names", &ubn)) {
             reasixty_setUf8BankNameBanner(ubn);
         }
-        ImGui_TextDisabled(ctx,
-            "Flash the bank's name when the UF8 switches soft-key bank. Name the "
-            "banks in Bindings, on the bank you want to name.");
+        help_(ctx,
+            "Flash the bank's name when the UF8 switches soft-key bank.\n"
+            "Name the banks in Bindings, on the bank you want to name.");
         // A bank has two full sets, Plain and Shift, each able to carry its own
         // name. This decides whether the BANNER follows the set you are HOLDING or
         // stays on the Plain name. The panel's drop-down is not governed by it and
@@ -342,10 +360,10 @@ void SettingsScreen::drawAppearance(ImGui_Context* ctx)
         if (ImGui_Checkbox(ctx, "Bank names follow Shift", &ubs)) {
             reasixty_setUf8BankNameShift(ubs);
         }
-        ImGui_TextDisabled(ctx,
-            "Holding Shift announces that bank's Shift set. Off keeps the Plain "
-            "name however long you hold. Banner only: the panel's bank menu always "
-            "shows the set you are in.");
+        help_(ctx,
+            "Holding Shift announces that bank's Shift set. Off keeps the\n"
+            "Plain name however long you hold.\n"
+            "Banner only: the panel's bank menu always shows the set you are in.");
         ImGui_Unindent(ctx, nullptr);
     }
 
@@ -530,9 +548,13 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
     // Consistent, roomy section header: a gap above, the title, a rule,
     // and a little air below. Keeps the panes from feeling cramped — use
     // for every section after the first. Frank 2026-06-12.
-    auto sectionHeader = [&](const char* title) {
+    // `help` explains the SECTION, and hangs off its title: a heading is a text
+    // item and therefore hoverable, which gives a section-wide explanation the
+    // one thing it otherwise lacks, something to hover.
+    auto sectionHeader = [&](const char* title, const char* help = nullptr) {
         ImGui_Dummy(ctx, 0.0, 8.0);
         ImGui_Text(ctx, title);
+        if (help) help_(ctx, help);
         consumeSectionScroll_(ctx, title);
         ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
@@ -668,8 +690,8 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
                             /*format*/ "%d min", /*flags*/ nullptr)) {
             reasixty_setSleepMinutes(sleepMin);
         }
-        ImGui_TextDisabled(ctx,
-            "Playing or recording counts as activity. Any key, fader or knob "
+        help_(ctx,
+            "Playing or recording counts as activity. Any key, fader or knob\n"
             "wakes them, and that first touch only wakes.");
     }
 
@@ -972,15 +994,12 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
     if (!showsDev(kDevUc1)) return;
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);
-    sectionHeader("UC1 GR calibration");
-    ImGui_TextDisabled(ctx,
-        "Hardware-trim — per-tick offsets that nudge the UC1 to match its");
-    ImGui_TextDisabled(ctx,
-        "printed scale. Same workflow as SSL 360°'s BC VU calibration tool.");
-    ImGui_TextDisabled(ctx,
-        "Click \"Test\" on a row, then ± until the UC1 lines up with the");
-    ImGui_TextDisabled(ctx,
-        "marking. Auto-saved. Stop test to resume normal GR.");
+    sectionHeader("UC1 GR calibration",
+        "Hardware trim: per-tick offsets that nudge the UC1 to match its\n"
+        "printed scale. Same workflow as SSL 360's BC VU calibration tool.\n"
+        "\n"
+        "Click \"Test\" on a row, then \xc2\xb1 until the UC1 lines up with\n"
+        "the marking. Auto-saved. Stop test to resume normal GR.");
     ImGui_Spacing(ctx);
 
     auto drawCalSection = [&](const char* title, int section) {
@@ -1080,9 +1099,13 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
     // Consistent, roomy section header: a gap above, the title, a rule,
     // and a little air below. Keeps the panes from feeling cramped — use
     // for every section after the first. Frank 2026-06-12.
-    auto sectionHeader = [&](const char* title) {
+    // `help` explains the SECTION, and hangs off its title: a heading is a text
+    // item and therefore hoverable, which gives a section-wide explanation the
+    // one thing it otherwise lacks, something to hover.
+    auto sectionHeader = [&](const char* title, const char* help = nullptr) {
         ImGui_Dummy(ctx, 0.0, 8.0);
         ImGui_Text(ctx, title);
+        if (help) help_(ctx, help);
         consumeSectionScroll_(ctx, title);
         ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
@@ -1111,16 +1134,19 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
     int visFollow = reasixty_visibilityFollow();
     ImGui_Text(ctx, "Surface mirrors:");
     ImGui_SameLine(ctx, nullptr, nullptr);
+    // One note for the pair, so hovering either radio answers the question.
+    static const char* kVisFollowHelp =
+        "TCP hides children of collapsed folders when REAPER's\n"
+        "'Hide children of collapsed folders' preference is on.";
     if (ImGui_RadioButtonEx(ctx, "TCP", &visFollow, 0)) {
         reasixty_setVisibilityFollow(visFollow);
     }
+    help_(ctx, kVisFollowHelp);
     ImGui_SameLine(ctx, nullptr, nullptr);
     if (ImGui_RadioButtonEx(ctx, "MCP", &visFollow, 1)) {
         reasixty_setVisibilityFollow(visFollow);
     }
-    ImGui_TextDisabled(ctx,
-        "TCP hides children of collapsed folders when REAPER's "
-        "'Hide children of collapsed folders' preference is on.");
+    help_(ctx, kVisFollowHelp);
 
     // Pinned-tracks behaviour. Only effective in TCP-mode (MCP has
     // no pin concept) — rebuildVisibleTrackList silently skips the
@@ -1446,7 +1472,7 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
                 sbL = lv; sbQ = lq; sbS = ls;
                 reasixty_setStartupBank(true, sbL, sbQ, sbS);
             }
-            ImGui_TextDisabled(ctx,
+            help_(ctx,
                 "Ignored while UF8 Plugin Mode is on (it owns the soft-keys).");
             ImGui_Unindent(ctx, /*indent_w*/ nullptr);
         }
@@ -1474,8 +1500,7 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
             reasixty_setUf1StartupView(on, on ? reasixty_uf1ViewMode() : 0);
             if (on) sv = reasixty_uf1ViewMode();
         }
-        if (!on)
-            ImGui_TextDisabled(ctx, "Off: comes back up where you left it.");
+        help_(ctx, "Off: comes back up where you left it.");
         if (on) {
             ImGui_Indent(ctx, /*indent_w*/ nullptr);
             ImGui_SetNextItemWidth(ctx, 110.0);

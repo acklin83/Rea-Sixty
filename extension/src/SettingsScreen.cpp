@@ -679,6 +679,20 @@ bool settingsSearchMatches(const std::vector<std::string>& tokens,
     return searchAllTokensCI_(tokens, hay);
 }
 
+// Explanation for the widget just drawn: a hover box instead of a line of grey
+// text under it (Frank 2026-09-09, "SÄMTLICHE kleinen grauen hilfstexte in
+// mouse-over info boxes"). Status lines stay visible — they are what the pane
+// is telling you right now, not what a control means.
+//
+// ⚠ IsItemHovered asks about the LAST item drawn, so this call belongs
+// immediately after the widget it explains. An `if (ImGui_Checkbox(...)) { … }`
+// body draws nothing, so sitting after its closing brace is still correct;
+// anything that draws in between is not.
+static inline void help_(ImGui_Context* ctx, const char* text)
+{
+    if (ImGui_IsItemHovered(ctx, nullptr)) ImGui_SetTooltip(ctx, text);
+}
+
 static inline double scaleW_(ImGui_Context* ctx, double designWidth)
 {
     constexpr double kRefSize = 14.0;
@@ -4118,7 +4132,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 dirty = true;
             }
             ImGui_PopItemWidth(ctx);
-            ImGui_TextDisabled(ctx, "Empty = use the number above.");
+            help_(ctx, "Empty = use the number above.");
         }
         ImGui_Unindent(ctx, nullptr);
     }
@@ -4627,7 +4641,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             bool xe = reasixty_uf1FadeXfadeEditor();
             if (ImGui_Checkbox(ctx, "Show REAPER's crossfade editor##jog", &xe))
                 reasixty_setUf1FadeXfadeEditor(xe);
-            ImGui_TextDisabled(ctx, "Empty with nothing selected.");
+            help_(ctx, "Empty with nothing selected.");
         }
         // Per-mode TIME axis unit + amount, for the live mode only. Razor (4)
         // has no time axis at the wheel, so it shows none of this.
@@ -4779,10 +4793,9 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                     }
                     dirty = true;
                 }
-                ImGui_TextDisabled(ctx,
-                    "Long-press auto-sets Behavior to Momentary so the");
-                ImGui_TextDisabled(ctx,
-                    "short action doesn't also fire on release.");
+                help_(ctx,
+                    "Long-press auto-sets Behavior to Momentary so theshort action\n"
+                    "doesn't also fire on release.");
                 if (!bd.hasLongPress) {
                     renderSlots = false;
                 } else {
@@ -4884,8 +4897,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             uf8::bindings::save();
         }
         ImGui_PopItemWidth(ctx);
-        ImGui_TextDisabled(ctx,
-            "Empty = follow the assigned action.");
+        help_(ctx, "Empty = follow the assigned action.");
         ImGui_Spacing(ctx);
     }
 
@@ -5639,7 +5651,7 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
         dirty = true;
     }
     ImGui_PopItemWidth(ctx);
-    ImGui_TextDisabled(ctx, "Empty = follow the assigned action.");
+    help_(ctx, "Empty = follow the assigned action.");
 
     // Behaviour. dispatchUf1SoftBankSlot has always honoured this field — both
     // press edges reach it (main.cpp, the DAW-mode display-soft-key block) — but
@@ -5691,8 +5703,7 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
         bd = Binding{};
         dirty = true;
     }
-    ImGui_TextDisabled(ctx,
-        "Clears the label, behaviour, LED and both modifier sets.");
+    help_(ctx, "Clears the label, behaviour, LED and both modifier sets.");
 
     // LED — Active / Inactive colour + brightness, exactly like the UF8
     // soft-key slots. The DAW-mode soft-key painter reads these back to
@@ -5939,9 +5950,9 @@ static void drawParamGroupBankGestures_(ImGui_Context* ctx,
                                         bool setOwnsThisBank = false,
                                         bool shiftSetIsItsOwn = false)
 {
-    ImGui_TextDisabled(ctx,
-        "Group-key gestures (global). The keys are the eight groups; a lit key "
-        "means the focused track is in that one.");
+    help_(ctx,
+        "Group-key gestures (global). The keys are the eight groups; a\n"
+        "lit key means the focused track is in that one.");
     static const char* kOpNames[] = {
         "(nothing)",
         "Join / leave the group",
@@ -5981,9 +5992,10 @@ static void drawParamGroupBankGestures_(ImGui_Context* ctx,
             ImGui_EndCombo(ctx);
         }
     }
-    ImGui_TextDisabled(ctx,
-        "Join / leave applies to every selected track. Names, membership and "
-        "the on/off flag are in Settings, Parameter Groups.");
+    help_(ctx,
+        "Join / leave applies to every selected track. Names,\n"
+        "membership and the on/off flag are in Settings, Parameter\n"
+        "Groups.");
 }
 
 // ---- Sub-Bank cell editor (V-POT / Soft 1-5 in the mockup) --------------
@@ -6663,10 +6675,9 @@ static void renderBankMatrixModals_(ImGui_Context* ctx)
         const std::string nm = trimmed();
         const bool nameOk   = !nm.empty();
         const int  existing = nameOk ? findBankPreset(nm) : -1;
-        if (!nameOk)            ImGui_TextDisabled(ctx, "Enter a name.");
-        else if (existing >= 0) ImGui_TextDisabled(ctx,
-            "A preset with that name exists — Save will overwrite it.");
-        else                    ImGui_TextDisabled(ctx, "New preset.");
+        help_(ctx,
+            "Enter a name.A preset with that name exists — Save will\n"
+            "overwrite it.New preset.");
         ImGui_Spacing(ctx);
         if (nameOk) {
             const char* label = (existing >= 0) ? "Save (overwrite)##bp_saveas_ok"
@@ -6701,9 +6712,7 @@ static void renderBankMatrixModals_(ImGui_Context* ctx)
         const bool nameOk = !nm.empty();
         const int  dup    = nameOk ? findBankPreset(nm) : -1;
         const bool valid  = nameOk && (dup < 0 || dup == s_bankMenuIdx);
-        if (!nameOk)     ImGui_TextDisabled(ctx, "Enter a name.");
-        else if (!valid) ImGui_TextDisabled(ctx,
-            "Another preset already has that name.");
+        help_(ctx, "Enter a name.Another preset already has that name.");
         ImGui_Spacing(ctx);
         if (valid) {
             if (ImGui_Button(ctx, "Rename##bp_rename_ok", nullptr, nullptr)) {
@@ -6977,7 +6986,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             if (ImGui_Checkbox(ctx, "Layers switch Quicks only", &lqo)) {
                 reasixty_setLayersQuicksOnly(lqo);
             }
-            ImGui_TextDisabled(ctx, "Off: a layer re-binds the whole surface.");
+            help_(ctx, "Off: a layer re-binds the whole surface.");
             ImGui_EndTabItem(ctx);
         }
         int flagsUc1 = tabFlagsForDevice(1);
@@ -9633,8 +9642,9 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
         }
     }
 
-    ImGui_TextDisabled(ctx,
-        "Click empty canvas: add point. Drag: move. Right-click: remove.");
+    help_(ctx,
+        "Click empty canvas: add point. Drag: move. Right-click:\n"
+        "remove.");
 
     ImGui_Separator(ctx);
     // ESC closes the editor (Frank 2026-06-17). ReaImGui's modal popups
@@ -17507,8 +17517,7 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
                     ImGui_EndCombo(ctx);
                 }
                 if (curSpecial)
-                    ImGui_TextDisabled(ctx, "Fires this action \xE2\x80\x94 "
-                                            "the parameter below is ignored.");
+                    help_(ctx, "Fires this action \xE2\x80\x94 the parameter below is ignored.");
             }
 
             ImGui_Separator(ctx);
@@ -17891,9 +17900,10 @@ void drawFxLearnUf1Schematic_(ImGui_Context* ctx, const EditingFx& fx)
                 "start there.");
     }
     ImGui_Spacing(ctx);
-    ImGui_TextDisabled(ctx,
-        "Click a control to learn it, or drag a parameter from the list. Leave "
-        "the UF1 layer off and the UF1 keeps filling itself from the UC1 mapping.");
+    help_(ctx,
+        "Click a control to learn it, or drag a parameter from the\n"
+        "list. Leave the UF1 layer off and the UF1 keeps filling itself\n"
+        "from the UC1 mapping.");
 }
 
 void drawFxLearnUf8Schematic_(ImGui_Context* ctx, const EditingFx& fx)
@@ -18882,9 +18892,9 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         // moves the reading towards zero and shrinks the meter. Say so rather
         // than let the slider read as broken (Frank 2026-09-09, "der offset
         // hat nichts bewirkt").
-        ImGui_TextDisabled(ctx,
-            "Added before the sign is dropped. A plug-in that reports GR as a "
-            "negative number needs a NEGATIVE offset to read higher.");
+        help_(ctx,
+            "Added before the sign is dropped. A plug-in that reports GR as\n"
+            "a negative number needs a NEGATIVE offset to read higher.");
 
         // Live readout — only meaningful when a live FX is present and
         // a manual param is set. Helps verify the override is reading
@@ -20370,9 +20380,9 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             };
 
             if (editing->paramSnapshot.empty()) {
-                ImGui_TextDisabled(ctx,
-                    "Insert a matching FX (or build the param snapshot) to "
-                    "assign params.");
+                help_(ctx,
+                    "Insert a matching FX (or build the param snapshot) to assign\n"
+                    "params.");
             }
             // Two 5-row groups side by side: slots 0..4 | 5..9.
             for (int r = 0; r < 5; ++r) {
@@ -21474,7 +21484,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
         // is CS or BC — UF8-only locks it on (handled above).
         ImGui_Spacing(ctx);
         if (g_newPrimaryMode == 3) {
-            ImGui_TextDisabled(ctx, "UF8 strip layer: enabled (required for UF8-only)");
+            help_(ctx, "UF8 strip layer: enabled (required for UF8-only)");
         } else {
             ImGui_Checkbox(ctx, "Enable UF8 strip layer##fxl_new_uf8",
                            &g_newUf8Mode);
@@ -22215,8 +22225,9 @@ static void drawObsTab_(ImGui_Context* ctx)
     }
 
     ImGui_Spacing(ctx);
-    ImGui_TextDisabled(ctx,
-        "A marker named \"obs: Wide\" switches to that scene while rolling.");
+    help_(ctx,
+        "A marker named \"obs: Wide\" switches to that scene while\n"
+        "rolling.");
 }
 
 static void drawHueTab_(ImGui_Context* ctx)
@@ -22365,8 +22376,8 @@ static void drawHueTab_(ImGui_Context* ctx)
             s_shown = s_ip;
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
-        ImGui_TextDisabled(ctx,
-            "certificate check off for this bridge only, identity held by "
+        help_(ctx,
+            "certificate check off for this bridge only, identity held by\n"
             "bridge ID");
     }
 
@@ -22651,14 +22662,13 @@ static void drawHueTab_(ImGui_Context* ctx)
 
         if (changed) { mgr.setControls(ctl); }
 
-        ImGui_TextDisabled(ctx,
-            "  Strip keys: CUT = on / off, SOLO = light solo, "
-            "SEL = focus lamp for the UF1.\n"
-            "  UF1: V-Pots 1 hue, 2 saturation, 3 colour temperature; the "
-            "CHANNEL encoder picks the lamp.\n"
-            "  The transition is sent with every write, so the bridge fills in "
-            "between our packets and a fader ramp stays smooth at ten packets "
-            "a second.");
+        help_(ctx,
+            "Strip keys: CUT = on / off, SOLO = light solo, SEL = focus\n"
+            "lamp for the UF1.\n UF1: V-Pots 1 hue, 2 saturation, 3 colour\n"
+            "temperature; the CHANNEL encoder picks the lamp.\n The\n"
+            "transition is sent with every write, so the bridge fills in\n"
+            "between our packets and a fader ramp stays smooth at ten\n"
+            "packets a second.");
     }
 
     ImGui_Spacing(ctx);
@@ -22925,12 +22935,13 @@ static void drawHueTab_(ImGui_Context* ctx)
 
         if (changed) { mgr.setRecLight(rc); }
 
-        ImGui_TextDisabled(ctx,
-            "  Only the record state touches the lights. Play and stop leave "
-            "them alone, otherwise no scene would survive a transport run.\n"
-            "  The state of every affected lamp is read just before the "
-            "override and written back after, so a scene you recalled by hand "
-            "comes back untouched. Hue Mode does not have to be engaged.");
+        help_(ctx,
+            "Only the record state touches the lights. Play and stop leave\n"
+            "them alone, otherwise no scene would survive a transport\n"
+            "run.\n The state of every affected lamp is read just before\n"
+            "the override and written back after, so a scene you recalled\n"
+            "by hand comes back untouched. Hue Mode does not have to be\n"
+            "engaged.");
     }
 
     ImGui_Spacing(ctx);
@@ -22979,8 +22990,8 @@ static void drawHueTab_(ImGui_Context* ctx)
         }
         if (changed) { mgr.setMarkers(mc); }
 
-        ImGui_TextDisabled(ctx,
-            "  A marker named hue:Relax recalls the scene Relax while the "
+        help_(ctx,
+            "A marker named hue:Relax recalls the scene Relax while the\n"
             "transport rolls.");
 
         // Live list of the markers that match, and whether the name behind the
@@ -23930,9 +23941,10 @@ void SettingsScreen::drawFavourites(ImGui_Context* ctx)
     bool bcOwn = reasixty_bcFavOwnSettings();
     if (ImGui_Checkbox(ctx, "Bus Compressor: use own settings (vs copy values)", &bcOwn))
         reasixty_setBcFavOwnSettings(bcOwn);
-    ImGui_TextDisabled(ctx, "Copy carries the live values onto the next Favourite; own "
-                            "settings restores each Favourite's own per-channel values. "
-                            "Defaults: Channel Strip copies, Bus Comp uses own.");
+    help_(ctx,
+        "Copy carries the live values onto the next Favourite; own\n"
+        "settings restores each Favourite's own per-channel values.\n"
+        "Defaults: Channel Strip copies, Bus Comp uses own.");
 
     // Which Channel-Strip sections carry across in copy mode (Switch/Cycle/Copy).
     ImGui_Spacing(ctx);
@@ -23957,17 +23969,19 @@ void SettingsScreen::drawFavourites(ImGui_Context* ctx)
     bool mappedOnly = reasixty_favCopyMappedOnly();
     if (ImGui_Checkbox(ctx, "Copy only mapped parameters", &mappedOnly))
         reasixty_setFavCopyMappedOnly(mappedOnly);
-    ImGui_TextDisabled(ctx, "On: carry only parameters mapped to a UC1 control. Off: also "
-                            "match unmapped parameters by name (can drag plug-in internals "
-                            "like Auto Makeup Gain).");
+    help_(ctx,
+        "On: carry only parameters mapped to a UC1 control. Off: also\n"
+        "match unmapped parameters by name (can drag plug-in internals\n"
+        "like Auto Makeup Gain).");
 
     // Multi-select with differing assigned sets: unify to the focused track's set,
     // or keep each track on its own. Default on (mirrors the parameter ganging).
     bool multiUnify = reasixty_favMultiUnify();
     if (ImGui_Checkbox(ctx, "Multi-select: unify sets to focused track", &multiUnify))
         reasixty_setFavMultiUnify(multiUnify);
-    ImGui_TextDisabled(ctx, "On: switching several tracks with different sets re-assigns "
-                            "them all to the focused track's set. Off: each keeps its own.");
+    help_(ctx,
+        "On: switching several tracks with different sets re-assigns\n"
+        "them all to the focused track's set. Off: each keeps its own.");
 
     // Per-project favourite bank (overrides the global set for this project).
     bool projBank = reasixty_favProjectBank();
@@ -24195,8 +24209,9 @@ void SettingsScreen::drawFavourites(ImGui_Context* ctx)
         };
         assignCombo(true);
         assignCombo(false);
-        ImGui_TextDisabled(ctx, "When assigned, each track's Switch / Cycle / soft-keys "
-                                "use its set's Favourites instead of the base.");
+        help_(ctx,
+            "When assigned, each track's Switch / Cycle / soft-keys use its\n"
+            "set's Favourites instead of the base.");
     }
 }
 
