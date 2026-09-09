@@ -1609,6 +1609,17 @@ Editor body — depends on the domain:
 - **CS / BC domain:** the UC1 / strip schematic. Click a control to learn it to a plug-in parameter; the active row's combo lists every plug-in parameter (with current value if a live instance is on the focused track).
 - **UF8 only:** the UF8 strip-bar schematic. Drag a parameter onto a strip slot (V-Pot, top soft-key, etc.) — the slot is the drop target, and an empty one says so: *unmapped — drag a param here or click to listen*.
 
+### SSL Strip Mode fader (CS mode)
+
+Under the mockup, **Channel Strip domain only**, one dropdown: the parameter the fader drives while **SSL Strip Mode** is engaged, instead of REAPER's track volume. It is the plug-in's own output fader, whatever the maker called it.
+
+This is the same slot as the **OUT G** knob on the UC1 face, named here because it decides more than one thing and none of it is guessable from a knob on a picture of a device you may not own:
+
+- Without it, SSL Strip Mode does nothing on this plug-in. The mode resolves a learned Channel Strip through this slot, and a strip that has none is skipped when the mode looks for a target.
+- The UF1 leaves out its `PLUG-IN` soft-key on a learned strip that has no fader here, since the key would toggle a mode with nothing to move.
+
+**AutoLearn** fills it by itself when the plug-in names its output in the usual ways (*Fader Level*, *Output Gain*, *Out Gain*, *Output Level*). *Makeup Gain* is deliberately not one of them: on a channel strip that is the compressor's make-up, not the strip fader.
+
 ### UC1 EXT FUNCS list (CS mode)
 
 Below the UC1 mockup, **Channel Strip domain only**, a 4-column grid lets you fill the UC1's hidden **EXT FUNCS** menu (opened with the UC1's **Back** button) with up to 10 of this plug-in's parameters. The grid is two side-by-side groups of five rows; each row is a **Name** field plus a **parameter** dropdown.

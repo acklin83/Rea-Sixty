@@ -292,6 +292,22 @@ static const SeedRow kCsSeeds[] = {
     {"phase",             5, Domain::ChannelStrip, "I/O", "Polarity"},
     {"output trim",      37, Domain::ChannelStrip, "I/O", "Out Trim"},
     {"output",           37, Domain::ChannelStrip, "I/O", "Out Trim"},
+    // FaderLevel (linkIdx 1) is the strip's own fader, and the ONE slot SSL
+    // Strip Mode needs: csFaderForTrack resolves a user CS through it, and
+    // without it the mode has nothing to move (and the UF1 withholds its
+    // PLUG-IN soft-key). It had no seed at all, so a plug-in whose output is
+    // called "Output Gain" matched the generic "output" and landed on Out
+    // Trim instead, and Strip Mode stayed unreachable on it. The wording comes
+    // from kCtrlAliases in UC1PluginMap.cpp, which has carried this same list
+    // for the CS-switch value transfer all along.
+    // "makeup gain" is deliberately NOT here: on a channel strip that is the
+    // compressor's make-up, not the strip fader, and a plug-in that has one
+    // usually has a real output too.
+    {"fader level",       1, Domain::ChannelStrip, "I/O", "Fader Level"},
+    {"fader",             1, Domain::ChannelStrip, "I/O", "Fader Level"},
+    {"output gain",       1, Domain::ChannelStrip, "I/O", "Fader Level"},
+    {"out gain",          1, Domain::ChannelStrip, "I/O", "Fader Level"},
+    {"output level",      1, Domain::ChannelStrip, "I/O", "Fader Level"},
     {"pan",               3, Domain::ChannelStrip, "I/O", "Pan"},
     {"width",             2, Domain::ChannelStrip, "I/O", "Width"},
     {"s/c listen",       36, Domain::ChannelStrip, "Comp", "S/C Listen"},
