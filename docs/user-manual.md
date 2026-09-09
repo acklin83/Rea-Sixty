@@ -1752,6 +1752,18 @@ You build a step cycle **in the editor**: in the FX-Learn V-Pot right-click menu
 
 When more than one FX anywhere in the project matches the map's name, the editor surfaces a combo to choose which instance's live readouts feed it. The list spans the master and every track, not just the focused one. Picked index is per plug-in.
 
+### GR calibration: capture, don't type
+
+Both calibration tables, the **BC VU** needle (6 columns) and the **DYN GR LEDs** with the UF8 GR row (5 columns), work the same way and each column carries a **Set** button.
+
+Drive a sine into the plug-in and set its threshold so the plug-in's own meter reads the column's dB, then press **Set** on that column. Under the button it then says **at 2.20**, or whatever the plug-in was actually reporting at that moment, and the column reads back the correction it derived.
+
+That difference is the reason the button exists. A column corrects the reading, and the reading is not always the number on the plug-in's face: the PreSonus interface asks for the instantaneous reduction in dB and forbids the host to add ballistics, while a drawn needle has its own inertia and its own scale, and a plug-in with several stages is asked to report their sum. Typing a number into a column corrected the value at the column's dB, which on such a plug-in is a level you were never looking at. Capturing records both halves: *when it reports this, show that.*
+
+Columns you never capture stay where they always were, at their own tick, so a plug-in that already lined up needs nothing. The small **x** under a captured column forgets that point. **Reset** clears the whole table.
+
+Two capture points are usually enough to see what kind of error you have. If a plug-in reports half of what it shows, the two land on a straight line through the origin and the rest of the scale follows; if they do not, capture the ticks you actually work at.
+
 ### GR meter override
 
 Default GR meter behaviour is to read the host-extension `GainReduction_dB` value REAPER exposes for any plug-in implementing the PreSonus VST3 convention. That works for most modern compressors out of the box, with no setup.
@@ -1770,7 +1782,7 @@ When a catalog entry is created with the FX live on a track, parameter names + v
 
 ### Storage
 
-Catalog file at `~/Library/Application Support/REAPER/rea_sixty/user_plugins.json` (and equivalent paths on Windows / Linux). Versioned schema (currently v17). Old files auto-migrate on first load; v17 is the one migration that edits rather than adds, writing the UF1's `PLUG-IN` key into a hand-made UF1 map and shifting the soft-keys at and after it one place along.
+Catalog file at `~/Library/Application Support/REAPER/rea_sixty/user_plugins.json` (and equivalent paths on Windows / Linux). Versioned schema (currently v18). Old files auto-migrate on first load; v17 is the one migration that edits rather than adds, writing the UF1's `PLUG-IN` key into a hand-made UF1 map and shifting the soft-keys at and after it one place along.
 
 \newpage
 

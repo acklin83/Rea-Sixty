@@ -17,6 +17,7 @@
 // resolve at link time.
 #define REAPERAPI_IMPLEMENT
 #include "UserPluginCatalog.cpp"
+#include "GrCalibration.h"      // kBcVuBpDb + applyGrCalibration (v18 case)
 
 // seedUf1FromSlots splits the UC1 slots by uc1::linkIdxIsButton. Linking the
 // real one drags in most of the UC1 stack, and a unit test wants a rule it
@@ -396,6 +397,45 @@ int main()
         UserPluginCatalog back2{};
         EXPECT(parse_(serialize_(c2), back2));
         EXPECT(back2.maps[0].uf1.softKeys.empty());
+    }
+
+    // --- v18: a captured GR breakpoint round-trips, and moves the curve -----
+    // The pair (reading, tick) is what makes a plug-in calibratable when its
+    // needle and its host reading disagree. Losing the reading half on a save
+    // would silently move every correction back onto the tick.
+    {
+        UserPluginCatalog c{};
+        EXPECT(parse_(kV10, c));
+        c.formatVersion = kCurrentFormatVersion;
+        auto& m = c.maps[0];
+        // "when it reports 2.2, show 4" — Frank's bx_townhouse case.
+        m.metering.grBcVuRawDb[1] = 2.2;
+        m.metering.grBcVuCalDb[1] = 4.0 - 2.2;
+
+        UserPluginCatalog back{};
+        EXPECT(parse_(serialize_(c), back));
+        const auto& r = back.maps[0].metering;
+        EXPECT(r.grBcVuRawDb[1] > 2.19 && r.grBcVuRawDb[1] < 2.21);
+        EXPECT(r.grBcVuCalDb[1] > 1.79 && r.grBcVuCalDb[1] < 1.81);
+        EXPECT(r.grBcVuRawDb[0] < 0.0);          // untouched stays "at the tick"
+
+        // The effective scale puts the correction where it was measured, and
+        // an uncaptured point keeps its own tick.
+        double eff[6];
+        grEffectiveBreakpoints(kBcVuBpDb, r.grBcVuRawDb, 6, eff);
+        EXPECT(eff[0] == 0.0);
+        EXPECT(eff[1] > 2.19 && eff[1] < 2.21);
+        EXPECT(eff[2] == 8.0);
+        // …so a reading of 2.2 now displays as 4.0, which is the whole point.
+        const double shown = applyGrCalibration(2.2, eff, r.grBcVuCalDb, 6);
+        EXPECT(shown > 3.99 && shown < 4.01);
+
+        // Out-of-order captures must not break the strictly-increasing
+        // precondition: such a point falls back to its own tick.
+        double raw2[6] = { -1.0, 9.0, 3.0, -1.0, -1.0, -1.0 };
+        double eff2[6];
+        grEffectiveBreakpoints(kBcVuBpDb, raw2, 6, eff2);
+        for (int i = 1; i < 6; ++i) EXPECT(eff2[i] > eff2[i - 1]);
     }
 
     std::printf("test_user_catalog_uf1: all passed\n");

@@ -312,7 +312,39 @@ struct UserMetering {
     // native scales.
     double grBcVuCalDb[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
     double grLedsCalDb[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+    // WHERE each correction sits on the incoming scale (v18). Empty (< 0) means
+    // "at the tick itself", which is what the tables did on their own and what
+    // every older file loads as, so behaviour is unchanged without a capture.
+    //
+    // ⛔ THE TICK IS WHAT THE PLUG-IN SHOWS. THE STÜTZSTELLE IS WHAT IT REPORTS.
+    // Those are not the same number, and treating them as one is why a plug-in
+    // whose needle and host reading disagree could not be calibrated by typing:
+    // the column headed "4 dB" corrected the reading at 4, while the user was
+    // watching a needle at 4 that reported 2.2 (bx_townhouse, Frank
+    // 2026-09-09). Capturing fills this in with the value actually read, and
+    // then the pair says the whole truth: "when it reports 2.2, show 4".
+    double grBcVuRawDb[6] = {-1.0, -1.0, -1.0, -1.0, -1.0, -1.0};
+    double grLedsRawDb[5] = {-1.0, -1.0, -1.0, -1.0, -1.0};
 };
+
+// The effective breakpoint scale for one calibration table: the captured
+// reading where there is one, the tick itself where there is not. `ticks` is
+// the renderer's own scale (kBcVuBpDb / kLedsBpDb in GrCalibration.h).
+//
+// Strictly increasing is a PRECONDITION of applyGrCalibration, and captured
+// readings are measurements, so they can arrive out of order or equal. Anything
+// that would not increase falls back to its tick, which is always ordered.
+inline void grEffectiveBreakpoints(const double* ticks, const double* raw,
+                                   int n, double* out)
+{
+    double prev = -1e9;
+    for (int i = 0; i < n; ++i) {
+        const double v = (raw && raw[i] >= 0.0) ? raw[i] : ticks[i];
+        out[i] = (v > prev) ? v : ticks[i];
+        if (out[i] <= prev) out[i] = prev + 1e-6;   // last resort, keep it sane
+        prev = out[i];
+    }
+}
 
 // V-Pot push behaviour for a UF8 bank slot. User chooses since user plug-in
 // params don't carry SSL-style step-size hints we trust.
@@ -806,7 +838,11 @@ namespace user_plugins {
 // The rule every entry above follows: additive and emitted-only-when-set, so
 // an older reader ignores the key and an older file loads byte-identical.
 // (v17 breaks the second half of that on purpose, see above.)
-constexpr int kCurrentFormatVersion = 17;
+// v18 (2026-09-09): the GR calibration tables gained `bcVuRawDb` / `ledsRawDb`,
+//     the reading each correction was captured at. Absent = at the tick, which
+//     is exactly what v17 did, so an older file loads byte-identical. Additive
+//     again; v17 remains the only entry that edits.
+constexpr int kCurrentFormatVersion = 18;
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused

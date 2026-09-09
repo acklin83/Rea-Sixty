@@ -479,8 +479,18 @@ std::string serialize_(const UserPluginCatalog& c)
             for (int i = 0; i < n; ++i) if (a[i] != 0.0) return true;
             return false;
         };
-        const bool bcCalDirty   = anyCalNonZero(m.metering.grBcVuCalDb, 6);
-        const bool ledsCalDirty = anyCalNonZero(m.metering.grLedsCalDb, 5);
+        // A captured breakpoint counts as content of its own: a table can be
+        // all-zero offsets and still carry where those zeros were measured.
+        auto anyRawSet = [](const double* a, int n) {
+            for (int i = 0; i < n; ++i) if (a[i] >= 0.0) return true;
+            return false;
+        };
+        const bool bcRawDirty   = anyRawSet(m.metering.grBcVuRawDb, 6);
+        const bool ledsRawDirty = anyRawSet(m.metering.grLedsRawDb, 5);
+        const bool bcCalDirty   = anyCalNonZero(m.metering.grBcVuCalDb, 6)
+                               || bcRawDirty;
+        const bool ledsCalDirty = anyCalNonZero(m.metering.grLedsCalDb, 5)
+                               || ledsRawDirty;
         const bool meteringDirty =
             m.metering.grVst3Param >= 0 ||
             m.metering.grOffsetDb  != 0.0 ||
@@ -497,11 +507,27 @@ std::string serialize_(const UserPluginCatalog& c)
                 }
                 os << "]";
             }
+            if (bcRawDirty) {
+                os << ", \"bcVuRawDb\": [";
+                for (int i = 0; i < 6; ++i) {
+                    if (i) os << ", ";
+                    os << m.metering.grBcVuRawDb[i];
+                }
+                os << "]";
+            }
             if (ledsCalDirty) {
                 os << ", \"ledsCalDb\": [";
                 for (int i = 0; i < 5; ++i) {
                     if (i) os << ", ";
                     os << m.metering.grLedsCalDb[i];
+                }
+                os << "]";
+            }
+            if (ledsRawDirty) {
+                os << ", \"ledsRawDb\": [";
+                for (int i = 0; i < 5; ++i) {
+                    if (i) os << ", ";
+                    os << m.metering.grLedsRawDb[i];
                 }
                 os << "]";
             }
@@ -964,6 +990,9 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
                 };
                 readCalArr(gr, "bcVuCalDb", m.metering.grBcVuCalDb, 6);
                 readCalArr(gr, "ledsCalDb", m.metering.grLedsCalDb, 5);
+                // v18. Absent leaves the -1 default = "at the tick".
+                readCalArr(gr, "bcVuRawDb", m.metering.grBcVuRawDb, 6);
+                readCalArr(gr, "ledsRawDb", m.metering.grLedsRawDb, 5);
             }
         }
 

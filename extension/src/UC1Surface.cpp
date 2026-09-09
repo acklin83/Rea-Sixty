@@ -4364,8 +4364,9 @@ void UC1Surface::pollGainReduction_()
         if (b.busCompMap) {
             bcAnchorFxIdx = b.busCompFxIdx;
             bcGr = readGr(bcTr, b.busCompFxIdx, b.busCompGrParam,
-                          b.busCompGrOffsetDb,
-                          b.busCompGrBcVuCal, uf8::kBcVuBpDb, uf8::kBcVuBpCount);
+                          b.busCompGrOffsetDb, b.busCompGrBcVuCal,
+                          b.busCompGrBcVuBp ? b.busCompGrBcVuBp : uf8::kBcVuBpDb,
+                          uf8::kBcVuBpCount);
         }
     }
 
@@ -4395,8 +4396,9 @@ void UC1Surface::pollGainReduction_()
         if (b.channelMap) {
             csModel = b.channelMap->shortName;
             csCompGr = readGr(csTr, b.channelFxIdx, b.channelGrParam,
-                              b.channelGrOffsetDb,
-                              b.channelGrLedsCal, uf8::kLedsBpDb, uf8::kLedsBpCount);
+                              b.channelGrOffsetDb, b.channelGrLedsCal,
+                              b.channelGrLedsBp ? b.channelGrLedsBp : uf8::kLedsBpDb,
+                              uf8::kLedsBpCount);
             csFxIdx = b.channelFxIdx;
         }
         if (::reasixty_grAnyFx()) {

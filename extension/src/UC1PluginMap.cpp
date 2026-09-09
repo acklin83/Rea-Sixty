@@ -15,6 +15,7 @@
 #include "FocusedParam.h"        // uf8::Domain
 #include "PluginMap.h"           // uf8::fxIdentityName
 #include "UserPluginCatalog.h"   // uf8::user_plugins
+#include "GrCalibration.h"       // uf8::kBcVuBpDb / kLedsBpDb (the renderer ticks)
 
 // Active FX-Learn modifier layer (0=Normal,1=Option,2=Control), resolved from
 // held keyboard modifiers once per onTimer tick. Defined in main.cpp.
@@ -540,6 +541,12 @@ struct UserBindingEntry {
     // (rebuilt on user_plugins generation bump, main-thread only).
     double         bcVuCalDb[6] = {0,0,0,0,0,0};
     double         ledsCalDb[5] = {0,0,0,0,0};
+    // Where those corrections sit on the INCOMING scale (v18). Resolved once
+    // here, from the captured readings where the user took any, so every reader
+    // gets a ready-made strictly-increasing pair and none of them has to know
+    // that a tick and a breakpoint are different things.
+    double         bcVuBpDb[6]  = {0,0,0,0,0,0};
+    double         ledsBpDb[5]  = {0,0,0,0,0};
     // Per-button push-cycle step lists (keyed by UC1 button id). Empty =>
     // legacy auto-cycle of the bound param. Lives here (not in
     // PluginBindings) so PluginBindings stays a constexpr-buildable literal
@@ -600,6 +607,10 @@ void rebuildUserCache_locked_()
         e->grOffsetDb     = um.metering.grOffsetDb;
         for (int i = 0; i < 6; ++i) e->bcVuCalDb[i] = um.metering.grBcVuCalDb[i];
         for (int i = 0; i < 5; ++i) e->ledsCalDb[i] = um.metering.grLedsCalDb[i];
+        uf8::grEffectiveBreakpoints(uf8::kBcVuBpDb, um.metering.grBcVuRawDb,
+                                    6, e->bcVuBpDb);
+        uf8::grEffectiveBreakpoints(uf8::kLedsBpDb, um.metering.grLedsRawDb,
+                                    5, e->ledsBpDb);
         for (int l = 0; l < uf8::kNumFxLayers; ++l) {
             e->bindings[l].match     = e->matchOwned.c_str();
             e->bindings[l].shortName = e->shortNameOwned.c_str();
@@ -1027,6 +1038,8 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
         double        grOff     = 0.0;
         const double* bcVuCal   = nullptr;
         const double* ledsCal   = nullptr;
+        const double* bcVuBp    = nullptr;
+        const double* ledsBp    = nullptr;
         {
             std::lock_guard<std::mutex> lk(g_userCacheMutex);
             for (const auto& e : g_userCache) {
@@ -1035,6 +1048,8 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
                     grOff   = e->grOffsetDb;
                     bcVuCal = e->bcVuCalDb;
                     ledsCal = e->ledsCalDb;
+                    bcVuBp  = e->bcVuBpDb;
+                    ledsBp  = e->ledsBpDb;
                     break;
                 }
             }
@@ -1048,6 +1063,7 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
                     result.busCompGrParam    = grParam;
                     result.busCompGrOffsetDb = grOff;
                     result.busCompGrBcVuCal  = bcVuCal;
+                    result.busCompGrBcVuBp   = bcVuBp;
                 }
                 ++seenBc;
             }
@@ -1059,6 +1075,7 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
                     result.channelGrParam    = grParam;
                     result.channelGrOffsetDb = grOff;
                     result.channelGrLedsCal  = ledsCal;
+                    result.channelGrLedsBp   = ledsBp;
                 }
                 ++seenCs;
             }
@@ -1084,6 +1101,8 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
                 // Look up GR override for this entry.
                 int           grParam = -1;
                 double        grOff   = 0.0;
+                const double* bcVuBp  = nullptr;
+                const double* ledsBp  = nullptr;
                 const double* bcVuCal = nullptr;
                 const double* ledsCal = nullptr;
                 {
@@ -1094,6 +1113,8 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
                             grOff   = e->grOffsetDb;
                             bcVuCal = e->bcVuCalDb;
                             ledsCal = e->ledsCalDb;
+                            bcVuBp  = e->bcVuBpDb;
+                            ledsBp  = e->ledsBpDb;
                             break;
                         }
                     }
@@ -1104,12 +1125,14 @@ UC1Bindings lookupBindingsOnTrack(void* trackRaw)
                     result.busCompGrParam    = grParam;
                     result.busCompGrOffsetDb = grOff;
                     result.busCompGrBcVuCal  = bcVuCal;
+                    result.busCompGrBcVuBp   = bcVuBp;
                 } else {
                     result.channelMap        = bb;
                     result.channelFxIdx      = i;
                     result.channelGrParam    = grParam;
                     result.channelGrOffsetDb = grOff;
                     result.channelGrLedsCal  = ledsCal;
+                    result.channelGrLedsBp   = ledsBp;
                 }
                 return;
             }

@@ -110,10 +110,16 @@ struct UC1Bindings {
     // bound; nullptr for built-ins (which apply identity calibration).
     // Lifetime: stable until the user_plugins generation bumps, which
     // only happens on the main thread between polls.
-    //   busCompGrBcVuCal: 6 doubles at 0/4/8/12/16/20 dB (BC VU motor)
-    //   channelGrLedsCal: 5 doubles at 3/6/10/14/20 dB (DYN GR LEDs + UF8 GR byte)
+    //   busCompGrBcVuCal: 6 doubles for the BC VU motor
+    //   channelGrLedsCal: 5 doubles for the DYN GR LEDs + UF8 GR byte
     const double*         busCompGrBcVuCal  = nullptr;
     const double*         channelGrLedsCal  = nullptr;
+    // …and WHERE each of those corrections sits on the incoming scale (v18).
+    // The renderer's own ticks (0/4/8/12/16/20 and 3/6/10/14/20) were assumed
+    // to be the breakpoints too, which only holds while a plug-in reports the
+    // same number it displays. nullptr = use the ticks, as before.
+    const double*         busCompGrBcVuBp   = nullptr;
+    const double*         channelGrLedsBp   = nullptr;
 };
 
 // Walk TrackFX_GetCount on a track and return both the Bus Comp and

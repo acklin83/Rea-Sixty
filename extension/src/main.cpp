@@ -41796,9 +41796,11 @@ void onTimerBody_()
                     bool gotIt = false;
                     double gr = 0.0;  // accumulated magnitude (dB)
                     const double* ledsCal = nullptr;  // per-breakpoint correction
+                    const double* ledsBp  = nullptr;  // …and where it sits (v18)
                     int csFxIdx = -1;
                     if (b.channelMap && b.channelFxIdx >= 0) {
                         ledsCal  = b.channelGrLedsCal;
+                        ledsBp   = b.channelGrLedsBp;
                         csFxIdx  = b.channelFxIdx;
                         // Pre-abs additive shift (user FX-Learn calibration),
                         // applied to the mapped-channel read only — mirrors
@@ -41877,7 +41879,8 @@ void onTimerBody_()
                         // applied here so UF8 and UC1 stay in lock-step.
                         if (ledsCal) {
                             gr = uf8::applyGrCalibration(
-                                gr, uf8::kLedsBpDb, ledsCal, uf8::kLedsBpCount);
+                                gr, ledsBp ? ledsBp : uf8::kLedsBpDb,
+                                ledsCal, uf8::kLedsBpCount);
                             if (gr < 0) gr = 0;
                         }
                         // Device-level per-tick calibration (Settings →
