@@ -1602,23 +1602,12 @@ Top bar:
 - **Primary mode** picker (CS variant family) and other domain-specific options.
 - **CS Favourite** dropdown (Channel-Strip domain only) — assign this plug-in to one of the 8 CS favourite slots, or clear it. See chapter *Favourites*.
 - **Mockup toggle** — visualises the UC1 layout via a UC1 mockup PNG instead of the strip-bar schematic. Persisted in ExtState `ReaSixty/fxLearnMockup`.
-- **AutoLearn** button — runs the pattern-matching engine (hardcoded SSL seeds + user-map dictionary; three-pass: exact / substring / token) against either the live FX on the focused track or the catalog's stored param snapshot. Confidence-scored suggestions open in an *AutoLearn Preview* modal with a per-row checkbox + confidence %, plus All / None bulk helpers. UF8 V-Pot suggestions auto-group by category (EQ / Comp / Gate / Filter / I-O / Misc). Accept applies every checked mapping into the active map, on the **Normal** layer only: a control that carries an Option / Control / Ctrl+Opt overlay keeps it, and so does a push-cycle you built on it.
+- **AutoLearn** button — runs the pattern-matching engine (hardcoded SSL seeds + user-map dictionary; three-pass: exact / substring / token) against either the live FX on the focused track or the catalog's stored param snapshot. Confidence-scored suggestions open in an *AutoLearn Preview* modal with a per-row checkbox + confidence %, plus All / None bulk helpers. UF8 V-Pot suggestions auto-group by category (EQ / Comp / Gate / Filter / I-O / Misc). Accept applies every checked mapping into the active map, on the **Normal** layer only: a control that carries an Option / Control / Ctrl+Opt overlay keeps it, and so does a push-cycle you built on it. Among the patterns it knows is the strip's own output fader (*Fader Level*, *Output Gain*, *Out Gain*, *Output Level*), which is the slot **SSL Strip Mode** drives and the one the UF1 wants before it offers its `PLUG-IN` soft-key on a learned strip. *Makeup Gain* is deliberately not one of them: on a channel strip that is the compressor's make-up, not the strip fader.
 
 Editor body — depends on the domain:
 
 - **CS / BC domain:** the UC1 / strip schematic. Click a control to learn it to a plug-in parameter; the active row's combo lists every plug-in parameter (with current value if a live instance is on the focused track).
 - **UF8 only:** the UF8 strip-bar schematic. Drag a parameter onto a strip slot (V-Pot, top soft-key, etc.) — the slot is the drop target, and an empty one says so: *unmapped — drag a param here or click to listen*.
-
-### SSL Strip Mode fader (CS mode)
-
-Under the mockup, **Channel Strip domain only**, one dropdown: the parameter the fader drives while **SSL Strip Mode** is engaged, instead of REAPER's track volume. It is the plug-in's own output fader, whatever the maker called it.
-
-This is the same slot as the **OUT G** knob on the UC1 face, named here because it decides more than one thing and none of it is guessable from a knob on a picture of a device you may not own:
-
-- Without it, SSL Strip Mode does nothing on this plug-in. The mode resolves a learned Channel Strip through this slot, and a strip that has none is skipped when the mode looks for a target.
-- The UF1 leaves out its `PLUG-IN` soft-key on a learned strip that has no fader here, since the key would toggle a mode with nothing to move.
-
-**AutoLearn** fills it by itself when the plug-in names its output in the usual ways (*Fader Level*, *Output Gain*, *Out Gain*, *Output Level*). *Makeup Gain* is deliberately not one of them: on a channel strip that is the compressor's make-up, not the strip fader.
 
 ### UC1 EXT FUNCS list (CS mode)
 

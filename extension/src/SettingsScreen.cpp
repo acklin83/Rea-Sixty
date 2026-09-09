@@ -20163,69 +20163,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             drawFxLearnSchematic_(ctx, *topo, editing->domain, fx);
         }
 
-        // -------- SSL Strip Mode fader (Frank 2026-09-09) ------------------
-        // The one slot that decides whether SSL Strip Mode can do anything on
-        // this plug-in: csFaderForTrack resolves a user CS through FaderLevel
-        // (linkIdx 1), and csPluginHasFader_ skips a CS without it entirely.
-        // It IS bindable on the UC1 face (the OUT G knob) and that face is
-        // drawn for every CS map, hardware or not — but it is called OUT G on
-        // a picture of a device a UF8- or UF1-only owner does not have, so
-        // nobody could guess that it is what turns the mode on. Named here,
-        // surface-independent, right under whichever mockup is showing.
-        if (editing->domain == uf8::Domain::ChannelStrip) {
-            int curParam = -1;
-            for (const auto& slt : editing->slots)
-                if (slt.linkIdx == 1) { curParam = slt.vst3Param; break; }
-            std::string curLabel = "(none)";
-            if (curParam >= 0) {
-                curLabel = "#" + std::to_string(curParam);
-                for (const auto& pi : editing->paramSnapshot)
-                    if (pi.vst3Param == curParam) { curLabel = pi.name; break; }
-            }
-            ImGui_Spacing(ctx);
-            ImGui_Separator(ctx);
-            ImGui_Spacing(ctx);
-            ImGui_Text(ctx, "SSL Strip Mode fader");
-            ImGui_TextDisabled(ctx,
-                "What the fader drives in SSL Strip Mode instead of track "
-                "volume. Same slot as OUT G on the UC1 face. Without it the "
-                "mode does nothing here, and the UF1 leaves out its PLUG-IN "
-                "soft-key.");
-            // Chosen inside the combo, applied AFTER it closes: bindSlot_
-            // upserts the catalog, and `editing` points into it.
-            constexpr int kNoPick = -2;
-            int pick = kNoPick;
-            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 300.0));
-            if (ImGui_BeginCombo(ctx, "##fxl_stripfader", curLabel.c_str(), nullptr)) {
-                bool selNone = (curParam < 0);
-                if (ImGui_Selectable(ctx, "(none)##fxl_sf_none", &selNone,
-                        nullptr, nullptr, nullptr))
-                    pick = -1;
-                for (const auto& pi : editing->paramSnapshot) {
-                    char itId[160];
-                    snprintf(itId, sizeof(itId), "%s##fxl_sf_%d",
-                             pi.name.c_str(), pi.vst3Param);
-                    bool sel = (pi.vst3Param == curParam);
-                    if (ImGui_Selectable(ctx, itId, &sel, nullptr, nullptr, nullptr))
-                        pick = pi.vst3Param;
-                }
-                ImGui_EndCombo(ctx);
-            }
-            if (editing->paramSnapshot.empty())
-                ImGui_TextDisabled(ctx,
-                    "Insert a matching FX to build the parameter list.");
-            if (pick != kNoPick) {
-                // Always the base layer. A modifier overlay on this slot would
-                // be read by nothing: Strip Mode asks the map for linkIdx 1 and
-                // takes the Normal layer's param, held keys or not.
-                const int savedLayer = g_fxLearnEditLayer;
-                g_fxLearnEditLayer = uf8::FxLayer::Normal;
-                if (pick < 0) unbindSlot_(1);
-                else          bindSlot_(1, pick);
-                g_fxLearnEditLayer = savedLayer;
-            }
-        }
-
         // -------- Off-face "also mapped" bindings (Frank 2026-07-21) -------
         // SSL 360 Link slots with NO control on the UC1 face — Fader, Pan, the
         // quick-access buttons, Comp Mix, SAT, GRP… They bind legitimately but
