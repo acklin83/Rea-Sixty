@@ -22,16 +22,16 @@ colorlinks: true
 
 ## What Rea-Sixty is
 
-Rea-Sixty is a REAPER extension that drives the SSL UF8 and UC1 control surfaces directly from REAPER. It replaces SSL 360° on the host side. One extension file installs into REAPER's `UserPlugins` directory; SSL 360° no longer needs to run, the surface is no longer behind a virtual MIDI port, and the per-track SSL plug-in that SSL 360° requires for track colours is no longer needed.
+Rea-Sixty is a REAPER extension that drives the SSL UF8, UC1 and UF1 control surfaces directly from REAPER. It replaces SSL 360° on the host side. One extension file installs into REAPER's `UserPlugins` directory; SSL 360° no longer needs to run, the surface is no longer behind a virtual MIDI port, and the per-track SSL plug-in that SSL 360° requires for track colours is no longer needed.
 
 What goes out on the USB wire is the same byte protocol SSL 360° uses, re-emitted by REAPER. No SSL binaries, firmware, or trademarks are redistributed.
 
 ## What you need
 
 - REAPER on macOS (Apple Silicon or Intel), Windows (x64), or Linux (x86_64). Tested against REAPER 6 and 7 through 7.75.
-- An SSL UF8 plugged in over USB-C. UC1 is supported optionally; UF8-only or UC1-only rigs are fine.
+- An SSL UF8, UC1 or UF1 plugged in over USB-C. Any combination works, and so does a single surface on its own.
 - **ReaImGui** (install via ReaPack from Extensions → ReaPack → Browse packages → ReaImGui). Without ReaImGui the Settings window stays empty, but hardware control still works.
-- **SSL 360° must not be running.** It claims the UF8/UC1 vendor interface exclusively. If it is running when REAPER starts, the surface will not appear and REAPER's Console shows an error.
+- **SSL 360° must not be running.** It claims the vendor interface of every SSL surface exclusively. If it is running when REAPER starts, the surface will not appear and REAPER's Console shows an error.
 
 Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no separate install needed.
 
@@ -77,7 +77,7 @@ After install, restart REAPER, then:
 
 **Preferences → Control/OSC/Web → Add → Rea-Sixty**
 
-No MIDI device assignment needed — the extension claims the UF8/UC1 over USB on its own.
+No MIDI device assignment needed — the extension claims the surfaces over USB on its own.
 
 ## Uninstall
 
@@ -226,7 +226,7 @@ Three bindable builtins:
 - **Nav Mode: Markers only (no drill)** — toggle on / off, locks the view to **MarkersAll** (no drill into regions).
 - **Nav Mode: Regions only (no drill)** — toggle on / off, locks the view to **Regions** (region presses jump only, no drill).
 
-Bind any of these to a UF8 / UC1 button in Settings → Bindings. The same button toggles Nav Mode off again.
+Bind any of these to a UF8 / UC1 / UF1 button in Settings → Bindings. The same button toggles Nav Mode off again.
 
 ## Three views
 
@@ -1623,7 +1623,7 @@ Note: a parameter you put in EXT FUNCS that's also on a physical V-Pot uses the 
 
 ### Right-click context menu
 
-Right-clicking a mapped control on the UF8 / UC1 schematic opens per-control options:
+Right-clicking a mapped control on the UF8 / UC1 / UF1 schematic opens per-control options:
 
 - **Copy / Paste / Clear** the binding.
 - **Fill sequential (right)** on a V-Pot / Fader / Solo / Cut / Sel — **UF8 only**, there being no row of strips to fill on the UC1 — propagates the source-strip's attributes onto every strip to the right. Carried fields: faderInverted; V-Pot inverted / vpotMode / polarity / defaultNorm / stripColour / travel (range + curve + sensitivity); Solo / Cut / Sel colour; Reverse LED flag.
@@ -1909,7 +1909,7 @@ Section appears only when the build is Windows.
 Section appears only when the build is Linux.
 
 - Text: grants non-root USB access by installing `/etc/udev/rules.d/99-rea-sixty.rules`. One-time setup, requires sudo (graphical password prompt).
-- **Install Linux udev rule** button — runs pkexec, writes the rule, reloads udev. After install, unplug + replug UF8 + UC1, then restart REAPER.
+- **Install Linux udev rule** button — runs pkexec, writes the rule, reloads udev. After install, unplug + replug the surfaces, then restart REAPER.
 - **Uninstall** button — pkexec removes `/etc/udev/rules.d/99-rea-sixty.rules`, then reloads + triggers udev. After uninstall the surface drops back to root-only USB access until a rule is reinstalled.
 
 ### Logs
@@ -1975,7 +1975,7 @@ A dockable window showing the focused plug-in's **UC1 control → parameter assi
 
 # Native actions
 
-Bind any of these to a UF8 / UC1 control in Settings → Bindings → *(button)* → Native. Actions that take a parameter (slot number, soft-key index, etc.) are flagged below.
+Bind any of these to a UF8 / UC1 / UF1 control in Settings → Bindings → *(button)* → Native. Actions that take a parameter (slot number, soft-key index, etc.) are flagged below.
 
 The picker groups them into categories — Selection Modes, Encoder Modes, Cycle Actions, Plug-in, Layer, Soft-Key Bank, SSL, Master, and so on. **Hardware Modes** is the largest: it collects everything that changes what the surface *is doing* rather than acting on a track — FLIP and PAN, Folder Mode and Show Only Selected, Home, SSL Strip and UF8 Plug-in Mode, the on-screen panel toggles, Touch-to-Learn, the mirror and follow settings below, and Restart. The sections in this chapter are grouped by function rather than by category, so a single category's actions appear in several places.
 
@@ -2306,7 +2306,7 @@ When held, these shift every other binding to its modifier slot. The UF8 has one
 - **Mode-change banner: show / hide (flashes Sel / Encoder mode)** — show / hide the transient **mode-change banner**. See *On-Screen Display → Mode-change banner*.
 - **Touch-to-Learn: arm / disarm (touch a control, wiggle a param)** — arm / disarm **Touch-to-Learn**. While armed, touch a control on the surface and wiggle a plug-in parameter to learn it to that control on the fly — FX-Learn without opening Settings. Disarming cancels and clears the pending learn. Bindable here (category *Hardware Modes*); the soft-keys switch to the V-Pot layer while armed, and a V-Pot **press** learns as a Toggle binding. Step cycles are built in the editor, not by touch (see *FX Learn → Step cycle*).
 - **Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)** — flip the UC1 **Out Gain** pot between its mapped SSL Channel-Strip *Fader Level* parameter and **REAPER's track volume fader**. While engaged, the pot drives track volume even on tracks with no channel-strip plug-in, and the LED ring + readout follow the track fader. Bindable from the Bindings picker (under *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)* (`REASIXTY_UC1_OUTGAIN_FADER_TOGGLE`) for the keyboard / toolbar.
-- **Restart Rea-Sixty (re-open devices)** — close the UF8, UC1 and MIDI ports and open them again, so a surface that has stopped responding can be revived without the trip through Preferences → Control Surface. Bindable here (category *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Restart Rea-Sixty (re-open devices)* (`REASIXTY_RESTART`) — worth a keyboard shortcut, since a hardware key is no help when the hardware is the thing that needs re-opening. This re-opens the **devices**, not the extension: REAPER holds the plug-in for the life of the process, so a new build still needs REAPER restarted.
+- **Restart Rea-Sixty (re-open devices)** — close the UF8, UC1, UF1 and MIDI ports and open them again, so a surface that has stopped responding can be revived without the trip through Preferences → Control Surface. Bindable here (category *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Restart Rea-Sixty (re-open devices)* (`REASIXTY_RESTART`) — worth a keyboard shortcut, since a hardware key is no help when the hardware is the thing that needs re-opening. This re-opens the **devices**, not the extension: REAPER holds the plug-in for the life of the process, so a new build still needs REAPER restarted.
 
 ## Internal (not user-bindable)
 
@@ -3134,7 +3134,7 @@ that needs it.
 
 # Bindings
 
-The Bindings tab renders the UF8 + UC1 hardware as schematics. Every button / knob / fader is editable.
+The Bindings tab renders the UF8, UC1 and UF1 hardware as schematics. Every button / knob / fader is editable.
 
 ## Per-binding fields
 
@@ -3228,7 +3228,7 @@ Make sure the runtime libraries are in the same directory as `reaper_rea-sixty.{
 
 ## Surface does not respond / "SSL360Core owns the device"
 
-SSL 360° is running and has claimed the UF8/UC1 vendor interface exclusively. Quit SSL 360° and restart REAPER.
+SSL 360° is running and has claimed the SSL vendor interface exclusively. Quit SSL 360° and restart REAPER.
 
 ## Disconnect after sleep / wake or sustained idle (macOS)
 
@@ -3270,5 +3270,5 @@ Not affiliated with Solid State Logic. SSL ACP Support replied to the project au
 
 Protocol stays self-decoded; documented in `docs/protocol-notes.md` and adjacent capture notes in the repo.
 
-No SSL binaries, firmware, or trademarks are redistributed. "SSL", "UF8", "UC1", "360°" are property of Solid State Logic Ltd.
+No SSL binaries, firmware, or trademarks are redistributed. "SSL", "UF8", "UC1", "UF1", "360°" are property of Solid State Logic Ltd.
 

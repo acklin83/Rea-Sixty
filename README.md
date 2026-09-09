@@ -57,7 +57,7 @@ docs/                 Living protocol notes, capture workflows, architecture, pl
 captures/             Reference .pcap captures (most gitignored, large binary blobs)
 analysis/             Python parsers / diffing tools for USB captures (pyshark)
 extension/            The C++ REAPER extension
-  src/                Protocol, Palette, UF8Device, UC1Device, ColorSync, Bindings,
+  src/                Protocol, Palette, UF8Device, UC1Device, UF1Device, ColorSync, Bindings,
                       MixerWindow, MixerLayout, ThemeBridge, SettingsScreen,
                       PluginMap, FocusedParam, HidDevice, …
   tools/              Standalone CLI probes (libusb-only, no REAPER): color test, palette
@@ -94,12 +94,12 @@ Pre-built releases for Mac (Apple Silicon, Developer-ID signed + Apple-notarised
 
 ## Contributing
 
-If you own a UF8 or UC1 and want to help, whether that is capture work for layer-switch edge cases or extra plugins for the Bus-Comp / Channel-Strip parameter map, open an issue. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the capture-and-decode workflow.
+If you own a UF8, UC1 or UF1 and want to help, whether that is capture work for layer-switch edge cases or extra plugins for the Bus-Comp / Channel-Strip parameter map, open an issue. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the capture-and-decode workflow.
 
 ## Legal & Safety
 
 ### Trademarks
-Not affiliated with, endorsed by, or sponsored by Solid State Logic Ltd. "SSL", "Solid State Logic", "SSL 360°", "UF8", and "UC1" are trademarks of Solid State Logic and are used here solely to identify the hardware and software this project interoperates with (nominative fair use).
+Not affiliated with, endorsed by, or sponsored by Solid State Logic Ltd. "SSL", "Solid State Logic", "SSL 360°", "UF8", "UC1", and "UF1" are trademarks of Solid State Logic and are used here solely to identify the hardware and software this project interoperates with (nominative fair use).
 
 ### SSL's position on this project
 SSL's ACP Support replied to an outreach email from the project author on 2026-05-18:
@@ -109,7 +109,7 @@ SSL's ACP Support replied to an outreach email from the project author on 2026-0
 So: no vendor partnership and no protocol disclosure, but no objection to the project existing. Firmware updates that change the wire format are on us to re-decode. See [`docs/capture-workflow.md`](docs/capture-workflow.md) and [`docs/windows-capture-workflow.md`](docs/windows-capture-workflow.md).
 
 ### Interoperability basis
-Developed via independent, passive observation of the USB wire protocol between legally purchased SSL UF8 / UC1 hardware and legally licensed SSL 360° software, for the sole purpose of achieving interoperability with REAPER. No SSL code, firmware, binaries, or proprietary creative content is decompiled, reproduced, or redistributed.
+Developed via independent, passive observation of the USB wire protocol between legally purchased SSL UF8 / UC1 / UF1 hardware and legally licensed SSL 360° software, for the sole purpose of achieving interoperability with REAPER. No SSL code, firmware, binaries, or proprietary creative content is decompiled, reproduced, or redistributed.
 
 Legal footing: EU Software Directive [2009/24/EC](https://eur-lex.europa.eu/eli/dir/2009/24/oj) Art. 6 (interoperability exception); §69e UrhG (Germany); 17 USC §1201(f) (US interoperability exception). Rationale recorded in [`docs/interop-rationale.md`](docs/interop-rationale.md).
 
