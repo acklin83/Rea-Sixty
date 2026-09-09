@@ -6826,16 +6826,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // reasixty_publishSettingsModifierPin, which consumes and clears this).
     g_bindingsPaneDrew = true;
 
-    // What a layer key does, next to the layer keys themselves.
-    {
-        bool lqo = reasixty_layersQuicksOnly();
-        if (ImGui_Checkbox(ctx, "Layers switch Quicks only", &lqo)) {
-            reasixty_setLayersQuicksOnly(lqo);
-        }
-        ImGui_TextDisabled(ctx, "Off: a layer re-binds the whole surface.");
-        ImGui_Spacing(ctx);
-    }
-
     // The surface's modifier moves the edit set wherever you are in this pane —
     // see trackBankModifierEdge_. Runs before the schematic, which previews the
     // set it lands on.
@@ -6975,6 +6965,16 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             if (ImGui_RadioButtonEx(ctx, "by 1", &byOne, 1)) {
                 reasixty_setBankScrollByOne(true);
             }
+            // ⇨ ON THE UF8 TAB, where the layer keys are. It sat above the tab
+            // bar and therefore on all three, but only the UF8 has the Quick
+            // keys the setting is about: the UC1 has no user-facing layer at
+            // all, and the UF1 shares the layer map without the Quick concept.
+            ImGui_Spacing(ctx);
+            bool lqo = reasixty_layersQuicksOnly();
+            if (ImGui_Checkbox(ctx, "Layers switch Quicks only", &lqo)) {
+                reasixty_setLayersQuicksOnly(lqo);
+            }
+            ImGui_TextDisabled(ctx, "Off: a layer re-binds the whole surface.");
             ImGui_EndTabItem(ctx);
         }
         int flagsUc1 = tabFlagsForDevice(1);

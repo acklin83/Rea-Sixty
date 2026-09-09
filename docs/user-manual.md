@@ -1237,7 +1237,7 @@ Top of the pane: a tab bar with **UF8**, **UC1** and **UF1**, each rendering its
 
 The "current layer" follows whichever Layer button (1 / 2 / 3) is highlighted in the schematic — click a Layer button to switch the live layer; the green outline indicates which one is active. There is no separate layer-tab strip.
 
-**Layers switch Quicks only** (checkbox at the top of the pane, off by default). Off, a layer key re-binds the whole surface and every key can carry a different action per layer. On, the surface keeps Layer 1's bindings everywhere and the layer key only selects which group of Quicks and soft-key banks is live: three sets of banks rather than three surfaces. Quick 1 to 3 and the sub-bank row are the exception either way, since their bindings are how a layer's sets are reached. The LAYER lamps and the green ring follow the layer regardless, because that is what the hardware is on, and bindings stored on Layers 2 and 3 are left alone for when you switch it off again.
+**Layers switch Quicks only** (checkbox on the UF8 tab, under the schematic, off by default). Off, a layer key re-binds the whole surface and every key can carry a different action per layer. On, the surface keeps Layer 1's bindings everywhere and the layer key only selects which group of Quicks and soft-key banks is live: three sets of banks rather than three surfaces. Quick 1 to 3 and the sub-bank row are the exception either way, since their bindings are how a layer's sets are reached. The LAYER lamps and the green ring follow the layer regardless, because that is what the hardware is on, and bindings stored on Layers 2 and 3 are left alone for when you switch it off again.
 
 Five click-to-edit special cases:
 
