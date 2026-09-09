@@ -7404,6 +7404,11 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                     - static_cast<int>(ButtonId::Uf1DisplaySoft1);
         {
             using namespace uf8::bindings;
+            // Rename in place (double-click a bank's header): which bank is
+            // being typed into, for which set, and the buffer. -1 = nobody.
+            static int  s_uf1BankRen = -1, s_uf1BankRenMod = -1;
+            static char s_uf1BankRenBuf[64] = {0};
+            static bool s_uf1BankRenFocus = false;
             // Held for the whole table: a click writes both of these, and the
             // rows after it would otherwise mark a different cell than the rows
             // before it in the same frame.
@@ -7468,7 +7473,86 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                     } else {
                         snprintf(hdr, sizeof(hdr), "%d##uf1mxh%d", b + 1, b);
                     }
-                    ImGui_TableHeader(ctx, hdr);
+                    // ⇨ THE NAME IS TYPED IN THE HEADER IT NAMES (Frank
+                    // 2026-09-09). Double-click a bank's header to rename it,
+                    // the same gesture that renames a UF8 bank cell. The
+                    // double-click ENGAGES the bank first, so the field under
+                    // the matrix, its seven-segment preview and the panel are
+                    // all talking about the bank being typed into — the rule
+                    // the whole pane rests on.
+                    if (s_uf1BankRen == b
+                        && s_uf1BankRenMod == g_slotEditModIdx) {
+                        // ⛔ THE ID CARRIES THE BANK AND THE SET. An active
+                        // InputText keeps its own copy of the text and submits
+                        // it on the next frame, so a field that stayed "the
+                        // same widget" across a bank change would write the
+                        // name from the bank you left into the one you arrived
+                        // at. Both the UF8 cell and the bank-name field below
+                        // learned that in August.
+                        char rid[64];
+                        snprintf(rid, sizeof(rid), "##uf1bkren_%d_%d",
+                                 b, g_slotEditModIdx);
+                        ImGui_SetNextItemWidth(ctx, -1.0);
+                        if (s_uf1BankRenFocus) {
+                            ImGui_SetKeyboardFocusHere(ctx, nullptr);
+                            s_uf1BankRenFocus = false;
+                        }
+                        // The hint is the name the bank already answers to, so
+                        // an empty box still says what the panel will show.
+                        // Enter commits, clicking away commits, Escape leaves
+                        // it alone. Empty puts the default back, which is also
+                        // how you take a name away again.
+                        char defNm[64] = {0};
+                        reasixty_uf1BankDisplayName(b, g_slotEditModIdx,
+                                                    defNm, sizeof(defNm));
+                        int rflags = ImGui_InputTextFlags_EnterReturnsTrue;
+                        const bool committed =
+                            ImGui_InputTextWithHint(ctx, rid, defNm,
+                                s_uf1BankRenBuf, sizeof(s_uf1BankRenBuf),
+                                &rflags, nullptr);
+                        int escKey = ImGui_Key_Escape;
+                        if (ImGui_IsKeyPressed(ctx, escKey, nullptr)) {
+                            s_uf1BankRen = -1;
+                        } else if (committed
+                                   || ImGui_IsItemDeactivatedAfterEdit(ctx)
+                                   || ImGui_IsItemDeactivated(ctx)) {
+                            setUf1SoftBankName(b, g_slotEditModIdx,
+                                               s_uf1BankRenBuf);
+                            s_uf1BankRen = -1;
+                            // ⇨ AND THE PANEL SHOWS WHAT IT WILL SHOW. Five
+                            // letters have no shape on seven segments (K M V W
+                            // X) and the font approximates them without saying
+                            // so, which is why the field below previews on the
+                            // panel while you type. Renaming from up here must
+                            // not lose that, so the committed name goes to the
+                            // glass the same way.
+                            if (reasixty_uf1Connected()) {
+                                char shown[64] = {0};
+                                reasixty_uf1BankDisplayName(b, g_slotEditModIdx,
+                                                            shown,
+                                                            sizeof(shown));
+                                reasixty_uf1PreviewOnPanel(shown);
+                            }
+                        }
+                    } else {
+                        ImGui_TableHeader(ctx, hdr);
+                        int lmb = 0;
+                        if (ImGui_IsItemHovered(ctx, nullptr)
+                            && ImGui_IsMouseDoubleClicked(ctx, lmb)) {
+                            s_bankKeepScroll = ImGui_GetScrollY(ctx);
+                            reasixty_setUf1SoftBank(b);
+                            s_uf1BankRen      = b;
+                            s_uf1BankRenMod   = g_slotEditModIdx;
+                            s_uf1BankRenFocus = true;
+                            // The bank's OWN name, not the display name: empty
+                            // means unnamed, and that is what the box has to
+                            // show so that leaving it empty keeps it unnamed.
+                            snprintf(s_uf1BankRenBuf, sizeof(s_uf1BankRenBuf),
+                                     "%s",
+                                     getUf1SoftBankName(b, g_slotEditModIdx)
+                                         .c_str());
+                        }
+                    }
                 }
                 for (int s = 0; s < kUf1SoftBankSlots; ++s) {
                     ImGui_TableNextRow(ctx, nullptr, nullptr);
