@@ -39393,7 +39393,12 @@ void onTimerBody_()
         --g_restartAttemptsLeft;
         shutdownDevices_();          // no-op once already shut — like press 2
         initDevices_();
-        if (g_dev || g_uc1_dev) {
+        // ⛔ ASK ABOUT EVERY DEVICE THE RESTART TOUCHED. shutdownDevices_ closes
+        // all three and initDevices_ opens all three, but this test named two,
+        // so on a UF1-only rig a perfectly successful restart read as a failure
+        // and retried the full attempt count against hardware that was already
+        // back (Frank 2026-09-09).
+        if (g_dev || g_uc1_dev || g_uf1_dev) {
             g_restartAttemptsLeft = 0;   // something came back — done
             g_pageDirty.store(true);     // repaint everything from scratch
         } else {
