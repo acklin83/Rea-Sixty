@@ -293,8 +293,17 @@ local function resolveTarget()
 end
 
 -- Enumerate the target plug-in's params (cached; names are static per plug-in).
+--
+-- ⛔ THE KEY CARRIES THE PLUG-IN, NOT ONLY ITS SLOT. A CS/BC Switch (favourite,
+-- Copy, Cycle) replaces the plug-in at the SAME track and the SAME fx index, so
+-- a (tr, fx) key stays equal across the swap and this cache kept serving the old
+-- plug-in's parameter names until something else moved the focus (Frank
+-- 2026-09-09: "bei favorite switch zieht die anzeige des fx nicht mit, erst bei
+-- wechsel"). The extension warns about exactly this class next to
+-- g_fxIdentityGen. One extra GetFXName per call is the price of being right.
 local function getParams(tr, fx)
-  local key = tostring(tr) .. ";" .. fx
+  local _, fxNm = reaper.TrackFX_GetFXName(tr, fx, "")
+  local key = tostring(tr) .. ";" .. fx .. ";" .. (fxNm or "")
   if key ~= paramCacheKey then
     paramCacheKey = key
     paramList = {}

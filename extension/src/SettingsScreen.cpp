@@ -21148,12 +21148,24 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                         if (TrackFX_GetOpen(tr, i)) tryFx(tr, i, ti);
                 }
             }
+            // ⛔ THE GUARD HAS TO ASK WHICH PLUG-IN, NOT ONLY WHICH SLOT. A
+            // CS/BC Switch (favourite, Copy, Cycle) puts a different plug-in at
+            // the SAME track and the SAME fx index, so a position-only guard
+            // never fired and the editor sat on the previous plug-in until the
+            // user focused something else (Frank 2026-09-09: "erst bei
+            // wechsel"). This is the class g_fxIdentityGen exists to warn about.
             static MediaTrack* s_lastFollowTr = nullptr;
             static int         s_lastFollowFx = -1;
+            static std::string s_lastFollowId;
+            char followId[512] = {0};
+            if (ftr && fxIdx >= 0)
+                uf8::fxIdentityName(ftr, fxIdx, followId, sizeof(followId));
             if (ftr && fxIdx >= 0
-                && (ftr != s_lastFollowTr || fxIdx != s_lastFollowFx)) {
+                && (ftr != s_lastFollowTr || fxIdx != s_lastFollowFx
+                    || s_lastFollowId != followId)) {
                 s_lastFollowTr = ftr;
                 s_lastFollowFx = fxIdx;
+                s_lastFollowId = followId;
                 char fxName[512] = {0};
                 if (uf8::fxIdentityName(ftr, fxIdx, fxName, sizeof(fxName))) {
                     const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
