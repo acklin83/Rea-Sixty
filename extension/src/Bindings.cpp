@@ -6396,6 +6396,144 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
     return kBanks;
 }
 
+// ---- Factory Rea-Sixty UF1 bank presets ---------------------------------
+// Five curated banks of four keys, Frank's pick 2026-09-09. Same shape as the
+// UF8 table above and the same rules: up to EIGHT entries, the first four on
+// Plain and the rest on Shift, anything past eight dropped because it would be
+// a bank that does not exist.
+// ⚠ WHAT IS NOT HERE IS THE POINT. Nothing that already has a key of its own on
+// the UF1 (FLIP, MASTER, 5-8, SCRUB, CYCLE, CLICK), and no scene lists: Hue and
+// OBS scenes are DYNAMIC kinds, which stay live where a snapshot would not —
+// the same reason CS / BC Favourites left the UF8 table on 2026-09-02.
+static const std::vector<Uf1BankPreset>& factoryUf1Banks_()
+{
+    static const std::vector<Uf1BankPreset> kBanks = []() {
+        struct SlotDef { const char* action; const char* label; int param; };
+        auto bank = [](const char* presetName,
+                       std::initializer_list<SlotDef> slots) {
+            Uf1BankPreset p;
+            p.name = presetName;
+            int i = 0;
+            for (const auto& sd : slots) {
+                if (i >= kUf1SoftBankSlots * 2) break;
+                Binding b = mkBuiltin(sd.action, Behavior::Momentary, sd.label,
+                                      255, 255, 255, sd.param);
+                if (i < kUf1SoftBankSlots) p.slots[i] = b;
+                else { p.shiftSlots[i - kUf1SoftBankSlots] = b; p.hasShift = true; }
+                ++i;
+            }
+            return p;
+        };
+        std::vector<Uf1BankPreset> v;
+        // The jog wheel is the UF1's own thing and its seven modes are otherwise
+        // reachable only one at a time through the cycle.
+        v.push_back(bank("Jog Modes", {
+            {"jog_mode_playhead", "PLAYHEAD", 0},
+            {"jog_mode_scrub",    "SCRUB",    0},
+            {"jog_mode_items",    "ITEMS",    0},
+            {"jog_mode_envelope", "ENVELOPE", 0},
+            // Shift
+            {"jog_mode_razor",    "RAZOR",     0},
+            {"jog_mode_fades",    "FADES",     0},
+            {"jog_mode_cycle",    "JOG CYCLE", 0},
+        }));
+        // The UF8's Plug-in Ops bank, cut to four. ssl_strip_mode_toggle is not
+        // in it: the UF1 has the 360 key for that. The preset browser is.
+        v.push_back(bank("Plug-in Ops", {
+            {"show_focused_plugin_gui", "FX GUI",    0},
+            {"show_fx_chain",           "FX CHAIN",  0},
+            {"plugin_bypass",           "BYPASS",    0},
+            {"close_all_fx_guis",       "CLOSE ALL", 0},
+            // Shift
+            {"plugin_preset_prev",      "PRESET -",  0},
+            {"plugin_preset_next",      "PRESET +",  0},
+            {"plugin_offline",          "OFFLINE",   0},
+            {"uf1_presets",             "PRESETS",   0},
+        }));
+        // "Pin This Ch" pins the channel the UF1 is SHOWING, which is why it
+        // left the UF8's Focus Set bank on 2026-09-01. This is where it belongs.
+        v.push_back(bank("Focus Set", {
+            {"temp_selset_pin_uf1_channel",    "PIN THIS CH", 0},
+            {"temp_selset_recall",             "PIN SET",     0},
+            {"temp_selset_add",                "ADD SEL",     0},
+            {"temp_selset_clear",              "CLEAR SET",   0},
+            // Shift
+            {"temp_selset_remove",             "REM SEL",     0},
+            {"temp_selset_toggle_selected",    "TOGGLE SEL",  0},
+            {"temp_selset_set_from_selection", "SET FRM SEL", 0},
+            {"focus_scope_cycle",              "SET SCOPE",   0},
+        }));
+        // Recording control only. The scenes themselves are the ObsScenes
+        // dynamic kind; a bank of three is the honest size of what is left.
+        v.push_back(bank("OBS", {
+            {"obs_record_toggle",  "OBS REC",   0},
+            {"obs_record_pause",   "OBS PAUSE", 0},
+            {"obs_chapter_marker", "CHAPTER",   0},
+        }));
+        // As on the UF8, plus sleep_now, which is in no bank there and has no
+        // key of its own anywhere.
+        v.push_back(bank("Brightness", {
+            {"brightness_both_up",   "BRIGHT +", 0},
+            {"brightness_both_down", "BRIGHT -", 0},
+            {"brightness_lcds_up",   "LCDS +",   0},
+            {"brightness_lcds_down", "LCDS -",   0},
+            // Shift
+            {"brightness_leds_up",   "LEDS +",   0},
+            {"brightness_leds_down", "LEDS -",   0},
+            {"sleep_now",            "SLEEP",    0},
+        }));
+        return v;
+    }();
+    return kBanks;
+}
+
+int factoryUf1BankPresetCount()
+{
+    return static_cast<int>(factoryUf1Banks_().size());
+}
+
+Uf1BankPreset factoryUf1BankPresetAt(int idx)
+{
+    const auto& banks = factoryUf1Banks_();
+    if (idx < 0 || idx >= static_cast<int>(banks.size())) return {};
+    return banks[idx];
+}
+
+bool factoryUf1BankSpills(int idx)
+{
+    const auto& banks = factoryUf1Banks_();
+    if (idx < 0 || idx >= static_cast<int>(banks.size())) return false;
+    return banks[idx].hasShift;
+}
+
+bool recallFactoryUf1BankPreset(int idx, int bank, int mod)
+{
+    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
+    const auto& banks = factoryUf1Banks_();
+    if (idx < 0 || idx >= static_cast<int>(banks.size())) return false;
+    const Uf1BankPreset p = banks[idx];   // copy before taking the lock
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    for (int s = 0; s < kUf1SoftBankSlots; ++s) {
+        applyPresetSlotLocked_(p.slots[s], p.hasShift ? 0 : mod,
+                               g_cfg.uf1SoftBanks[bank][s]);
+        // ⇨ A CURATED BANK IS THE WHOLE BANK: WHAT IT DOES NOT FILL, IT CLEARS.
+        // Writing Shift only where the bank has one left the previous bank's
+        // Shift half standing under the new Plain half (the UF8 learned that on
+        // 2026-09-02, recalling Focus Set over Encoder Modes).
+        applyPresetSlotLocked_(p.hasShift ? p.shiftSlots[s] : Binding{},
+                               1, g_cfg.uf1SoftBanks[bank][s]);
+    }
+    g_cfg.uf1SoftBankName[bank][p.hasShift ? 0 : mod]    = p.name;
+    g_cfg.uf1SoftBankDynamic[bank][p.hasShift ? 0 : mod] = DynamicBankKind::None;
+    if (p.hasShift) {
+        g_cfg.uf1SoftBankName[bank][1]    = p.name;
+        g_cfg.uf1SoftBankDynamic[bank][1] = DynamicBankKind::None;
+    }
+    persistLocked_();
+    return true;
+}
+
 int factoryBankPresetCount()
 {
     return static_cast<int>(factoryReaSixtyBanks_().size());
@@ -6930,7 +7068,10 @@ const char* builtinCategory(const std::string& n)
     if (n == "softkey_bank_1" || n == "softkey_bank_2")
         return "";
     if (n.rfind("softkey_bank_", 0) == 0
-     || n.rfind("softkey_set_", 0) == 0)
+     || n.rfind("softkey_set_", 0) == 0
+     // Not "Bank / Page" where uf1_bank_step lives: that category is about
+     // MOVING, and this one names a bank the way softkey_bank_select does.
+     || n == "uf1_bank_select")
         return "Soft-Key Bank";
 
     if (n == "domain_cs" || n == "domain_bc"
@@ -7052,6 +7193,9 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "UF1. Flips the routing view between the track's SENDS and its "
       "RECEIVES. The window jumps back to the first group. Also on Shift "
       "plus 5-8." },
+    { "uf1_bank_select",
+      "UF1. Engages one soft-key bank outright, param 1 to 10, instead of "
+      "stepping towards it. Lights up while that bank is the one showing." },
     { "uf1_bank_step",
       "UF1. Moves the selection eight tracks at a time. Param sign picks "
       "the direction." },

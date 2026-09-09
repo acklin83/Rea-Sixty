@@ -7562,6 +7562,10 @@ static int dynamicBankItemCountUf1_(uf8::bindings::DynamicBankKind kind,
     if (kind == DK::ParamGroups || kind == DK::TrackColours
         || kind == DK::Favourites || kind == DK::HueScenes
         || kind == DK::CsFavourites || kind == DK::BcFavourites) return 8;
+    // However many scenes OBS reports, not a fixed eight: this drives the page
+    // count, so a fixed number would page onto keys that resolve to nothing.
+    if (kind == DK::ObsScenes)
+        return static_cast<int>(reasixty::obs::manager().scenes().size());
     return 0;
 }
 
@@ -7903,6 +7907,22 @@ static void applyDynBankUf1_(uf8::bindings::DynamicBankKind kind,
     using DK = uf8::bindings::DynamicBankKind;
     if (kind == DK::HueScenes) {
         if (absIdx >= 0 && absIdx < 8) applyDynBankHueSceneOp_(absIdx, gesture);
+        return;
+    }
+    // ⛔ OBS SCENES WERE PICKABLE AND DEAD ON THE UF1. The kind is in the UF1's
+    // dynamic-bank list and dynamicBankSlot_ resolves its labels, so the four
+    // keys came up with the scene names on them — and the press fell through
+    // this switch's default, then through the `if (!tr)` above it, and did
+    // nothing at all (Frank 2026-09-09: "OBS Scenes als DynBank gibts das schon
+    // für UF1 oder?"). Ahead of the track guard, same reason as Hue: a scene is
+    // not a property of the focused track.
+    if (kind == DK::ObsScenes) {
+        if (gesture != 0) return;   // plain push only, as on the UF8
+        auto& om = reasixty::obs::manager();
+        const std::string nm = om.sceneAt(absIdx);
+        if (nm.empty()) return;
+        om.switchScene(nm);
+        uf1FlashTimecode_(nm, 1200);
         return;
     }
     if (!tr) return;
@@ -49481,6 +49501,28 @@ void registerBindingHandlers()
     // Bank ◄ / ► (0x21 / 0x23) — coarse track select, ±8 tracks. param
     // sign = direction (>=0 → right/+, else left/-). queueInput only
     // (applySelectRelative_ runs main-thread) → worker-safe. All views.
+    // ⇨ STRAIGHT TO ONE BANK, not a step towards it. uf1_bank_step and
+    // uf1_page_step both walk, so reaching bank 7 meant pressing something six
+    // times; the UF8 has had softkey_set_engage for a set and softkey_bank_select
+    // for a page since long before (Frank 2026-09-09). Param is 1-based because
+    // that is how the matrix, the panel and the settings all number the banks.
+    // Lit while its bank is the one showing, so a row of these reads like the
+    // bank row it is.
+    registerBuiltin("uf1_bank_select", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            const int b = param - 1;
+            if (b < 0 || b >= uf8::bindings::kUf1SoftBankCount) return;
+            g_uf1SoftBank.store(b);
+        },
+        [](int param) {
+            const int b = param - 1;
+            if (b < 0 || b >= uf8::bindings::kUf1SoftBankCount) return false;
+            return g_uf1SoftBank.load() == b;
+        },
+        "UF1: Soft-Key Bank engage (param 1-10)", true
+    });
+
     registerBuiltin("uf1_bank_step", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing) return;

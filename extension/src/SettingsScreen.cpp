@@ -6817,7 +6817,7 @@ static bool s_uf1BankCtxOpen   = false;
 // OpenPopup with it. The menu records an intent, renderUf1BankMatrixModals_
 // opens and draws it on the next pass. Same shape as the UF8 side.
 enum Uf1BankMenuOp_ { UbNone = 0, UbPresetRecall, UbPresetSaveAs,
-                      UbPresetRename, UbPresetDelete };
+                      UbPresetRename, UbPresetDelete, UbFacRecall };
 static int  s_uf1BankMenuOp  = UbNone;
 static int  s_uf1BankMenuIdx = -1;
 static char s_uf1BankMenuName[64] = {0};
@@ -6963,6 +6963,24 @@ static void renderUf1BankMatrixContextMenu_(ImGui_Context* ctx)
         }
         ImGui_EndMenu(ctx);
     }
+
+    // ---- Factory banks ---------------------------------------------------
+    // No "load the full set" twin: the UF8's six sub-banks ARE a set, the UF1's
+    // ten banks are not, so there is no obvious place to put five.
+    if (ImGui_BeginMenu(ctx, "Rea-Sixty factory banks", nullptr)) {
+        const int nFac = factoryUf1BankPresetCount();
+        for (int i = 0; i < nFac; ++i) {
+            char row[96];
+            snprintf(row, sizeof(row), "%s%s##ufac_m_%d",
+                     factoryUf1BankPresetAt(i).name.c_str(),
+                     factoryUf1BankSpills(i) ? "  (Plain + Shift)" : "", i);
+            if (ImGui_MenuItem(ctx, row, nullptr, nullptr, nullptr)) {
+                s_uf1BankMenuOp  = UbFacRecall;
+                s_uf1BankMenuIdx = i;
+            }
+        }
+        ImGui_EndMenu(ctx);
+    }
     ImGui_EndPopup(ctx);
 }
 
@@ -6987,6 +7005,10 @@ static void renderUf1BankMatrixModals_(ImGui_Context* ctx)
             ImGui_OpenPopup(ctx, "Rename preset###ubp_rename", nullptr);  break;
         case UbPresetDelete:
             ImGui_OpenPopup(ctx, "Delete preset?###ubp_delete_confirm", nullptr);
+            break;
+        case UbFacRecall:
+            ImGui_OpenPopup(ctx, "Recall factory bank?###ufac_recall_confirm",
+                            nullptr);
             break;
         default: break;
     }
@@ -7105,6 +7127,37 @@ static void renderUf1BankMatrixModals_(ImGui_Context* ctx)
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_Button(ctx, "Cancel##ubp_rename_cancel", nullptr, nullptr))
+            ImGui_CloseCurrentPopup(ctx);
+        ImGui_EndPopup(ctx);
+    }
+
+    // ---- Recall a factory bank -------------------------------------------
+    centerNextPopupOnDisplay_(ctx);
+    ImGui_SetNextWindowSize(ctx, kW, 0.0, &condAlways);
+    if (ImGui_BeginPopupModal(ctx, "Recall factory bank?###ufac_recall_confirm",
+                              nullptr, nullptr)) {
+        const Uf1BankPreset p = factoryUf1BankPresetAt(s_uf1BankMenuIdx);
+        char line[320];
+        // A factory bank owns both sets whether or not it fills both, so the
+        // line says so rather than only naming the four slots on screen.
+        if (factoryUf1BankSpills(s_uf1BankMenuIdx))
+            snprintf(line, sizeof(line),
+                "Overwrite BOTH sets of %s with the factory bank '%s'? It has "
+                "more than four keys, so Plain and Shift are both replaced.",
+                here.c_str(), p.name.c_str());
+        else
+            snprintf(line, sizeof(line),
+                "Overwrite %s with the factory bank '%s'? Its Shift set is "
+                "cleared: a curated bank is the whole bank.",
+                here.c_str(), p.name.c_str());
+        ImGui_TextWrapped(ctx, line);
+        ImGui_Spacing(ctx);
+        if (ImGui_Button(ctx, "Recall##ufac_recall_ok", nullptr, nullptr)) {
+            recallFactoryUf1BankPreset(s_uf1BankMenuIdx, b, mod);
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##ufac_recall_cancel", nullptr, nullptr))
             ImGui_CloseCurrentPopup(ctx);
         ImGui_EndPopup(ctx);
     }

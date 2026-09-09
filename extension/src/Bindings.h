@@ -1327,6 +1327,17 @@ bool            renameUf1BankPreset(int idx, const std::string& newName);
 bool            deleteUf1BankPreset(int idx);
 bool            recallUf1BankPreset(int idx, int bank, int mod);
 bool            uf1BankPresetSpills(int idx);
+
+// ---- Factory Rea-Sixty UF1 bank presets ---------------------------------
+// Read-only curated banks of four keys, built only from Rea-Sixty's own
+// built-ins and deliberately excluding anything the UF1 already has a key for.
+// A bank of more than four entries fills Shift with the rest; recalling one
+// OWNS both sets, so what it does not fill it clears. No "load the full set"
+// twin here: the UF1's ten banks are not a set the way a Quick's six are.
+int             factoryUf1BankPresetCount();
+Uf1BankPreset   factoryUf1BankPresetAt(int idx);          // copy; OOR = empty
+bool            factoryUf1BankSpills(int idx);
+bool            recallFactoryUf1BankPreset(int idx, int bank, int mod);
 // Number of UF1 soft-key banks in use (highest assigned bank + 1, min 1) —
 // dynamic banks or banks with any non-empty slot count. Drives the DAW-mode
 // header denominator + bounds the DAW bank paging. Frank 2026-08-04.
