@@ -300,6 +300,9 @@ bool   reasixty_insertsOverlayRunning();
 int    reasixty_uc1CalCount(int section);
 double reasixty_uc1CalTickDb(int section, int idx);
 double reasixty_uc1CalGet(int section, int idx);
+// Factory baseline + user delta: what the DEVICE actually applies, so the
+// FX-Learn live readout can show the same number the needle gets.
+double reasixty_uc1CalEffective(int section, int idx);
 void   reasixty_uc1CalSet(int section, int idx, double newVal);
 void   reasixty_uc1CalResetSection(int section);
 int    reasixty_uc1CalActiveTest();
@@ -18770,7 +18773,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         char grPreview[160];
         if (curGrParam < 0) {
             snprintf(grPreview, sizeof(grPreview),
-                          "(none — host GainReduction_dB)");
+                          "Host standard (GainReduction_dB)");
         } else {
             char pname[128] = {0};
             paramNameFor_(*editing, fx, curGrParam, pname, sizeof(pname));
@@ -18783,12 +18786,15 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         int grComboFlags = ImGui_ComboFlags_HeightLargest;
         if (ImGui_BeginCombo(ctx, "##fxl_gr_combo",
                               grPreview, &grComboFlags)) {
-            // (none) row first.
+            // The default row first. It used to say "(none)", which reads as
+            // "nothing is set, this is broken" for what is in fact the normal
+            // case: almost every compressor answers the host extension and
+            // needs no parameter picked at all (Frank 2026-09-09).
             {
                 bool sel = (curGrParam < 0);
                 int sf = 0;
                 if (ImGui_Selectable(ctx,
-                        "(none — host GainReduction_dB)##fxl_gr_none",
+                        "Host standard (GainReduction_dB)##fxl_gr_none",
                         &sel, &sf, nullptr, nullptr)) {
                     clearGrMeter_();
                 }
@@ -18829,6 +18835,15 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         if (ImGui_SmallButton(ctx, "0 dB##fxl_gr_off_reset")) {
             setGrOffset_(0.0);
         }
+        // ⚠ SIGN TRAP, and it is not guessable from the word "offset": the
+        // shift lands BEFORE |abs|, so on a plug-in that reports gain
+        // reduction as a NEGATIVE number (most of them) a positive offset
+        // moves the reading towards zero and shrinks the meter. Say so rather
+        // than let the slider read as broken (Frank 2026-09-09, "der offset
+        // hat nichts bewirkt").
+        ImGui_TextDisabled(ctx,
+            "Added before the sign is dropped. A plug-in that reports GR as a "
+            "negative number needs a NEGATIVE offset to read higher.");
 
         // Live readout — only meaningful when a live FX is present and
         // a manual param is set. Helps verify the override is reading
@@ -20391,28 +20406,103 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             }
             ImGui_Spacing(ctx);
 
-            // Live readout — what we're actually reading from the
-            // plug-in and what gets pushed to the renderer after
-            // |abs| + cal. Uses the PreSonus GainReduction_dB host
-            // extension, same path as UC1Surface::readGr, so the
-            // displayed numbers match the on-device meter exactly.
+            // Live readout — what we read from the plug-in and what the
+            // renderer is handed.
+            //
+            // ⛔ IT HAS TO BE THE SAME ARITHMETIC AS THE DEVICE, or it is worse
+            // than no readout: the user calibrates against it. It claimed to be
+            // "the same path as UC1Surface::readGr" and was not — it skipped
+            // grOffsetDb, skipped a learned GR parameter (always reading the
+            // host extension), and skipped the device-level UC1 calibration
+            // that rides on top. So the Offset slider moved and this line did
+            // not, which reads as a dead control (Frank 2026-09-09). Mirrors
+            // readGr step for step now: source, +offset, |abs|, per-plug-in
+            // cal, then the device table.
             if (fx.ok) {
-                char buf[64] = {0};
-                if (TrackFX_GetNamedConfigParm(fx.tr, fx.fxIdx,
-                        "GainReduction_dB", buf, sizeof(buf))) {
-                    const double rawDb = std::atof(buf);
-                    const double absV  = (rawDb < 0) ? -rawDb : rawDb;
+                bool  haveRaw = false;
+                double rawDb  = 0.0;
+                const int grParam = editing->metering.grVst3Param;
+                if (grParam >= 0) {
+                    char fbuf[64] = {0};
+                    if (TrackFX_GetFormattedParamValue(fx.tr, fx.fxIdx, grParam,
+                                                       fbuf, sizeof(fbuf))
+                        && fbuf[0]) {
+                        rawDb = std::atof(fbuf);
+                    } else {
+                        double mn = 0.0, mx = 0.0;
+                        rawDb = TrackFX_GetParam(fx.tr, fx.fxIdx, grParam, &mn, &mx);
+                    }
+                    haveRaw = true;
+                } else {
+                    char buf[64] = {0};
+                    if (TrackFX_GetNamedConfigParm(fx.tr, fx.fxIdx,
+                            "GainReduction_dB", buf, sizeof(buf))) {
+                        rawDb = std::atof(buf);
+                        haveRaw = true;
+                    }
+                }
+                if (haveRaw) {
+                    const double offDb = editing->metering.grOffsetDb;
+                    const double shifted = rawDb + offDb;
+                    const double absV  = (shifted < 0) ? -shifted : shifted;
                     const double calV  = uf8::applyGrCalibration(
                         absV, bp, curArr, nCal);
-                    char liveBuf[200];
+                    // The device table applies to the BC needle only; the LED /
+                    // UF8-row scale has its own, on the other section.
+                    double devCal[6];
+                    const int devSec = isBc ? 0 : 1;
+                    for (int i = 0; i < nCal; ++i)
+                        devCal[i] = reasixty_uc1CalEffective(devSec, i);
+                    const double outV = uf8::applyGrCalibration(
+                        calV, bp, devCal, nCal);
+                    char liveBuf[240];
                     snprintf(liveBuf, sizeof(liveBuf),
-                        "Live:  plug-in %+.2f  →  |abs| %.2f  →  on-device %.2f dB",
-                        rawDb, absV, calV);
+                        "Live:  plug-in %+.2f  %s|abs| %.2f  ->  map cal %.2f  "
+                        "->  on-device %.2f dB",
+                        rawDb,
+                        (offDb != 0.0) ? "-> offset " : "-> ",
+                        absV, calV, outV);
                     ImGui_TextColored(ctx, 0xFFC080FF, liveBuf);
                 } else {
-                    ImGui_TextDisabled(ctx,
-                        "Live: no GR reading (plug-in doesn't expose "
-                        "the PreSonus GainReduction_dB host extension).");
+                    // ⛔ NAME THE INSTANCE WE ASKED. "Doesn't expose the host
+                    // extension" is a claim about the PLUG-IN, and we are in no
+                    // position to make it: the editor reads whichever instance
+                    // the selector points at, which is the FIRST match on the
+                    // master or any track, not necessarily the one whose window
+                    // is open. Frank 2026-09-09 had REAPER's own meter showing
+                    // gain reduction in yellow while this line said the plug-in
+                    // had none, and the message gave him nothing to go on.
+                    char where[256] = {};
+                    const int trNo = static_cast<int>(
+                        GetMediaTrackInfo_Value(fx.tr, "IP_TRACKNUMBER"));
+                    if (trNo > 0) {
+                        char trName[128] = {};
+                        GetTrackName(fx.tr, trName, sizeof(trName));
+                        if (trName[0])
+                            snprintf(where, sizeof(where), "Track %d '%s'",
+                                     trNo, trName);
+                        else
+                            snprintf(where, sizeof(where), "Track %d", trNo);
+                    } else {
+                        snprintf(where, sizeof(where), "Master");
+                    }
+                    char fxName[512] = {};
+                    uf8::fxIdentityName(fx.tr, fx.fxIdx, fxName, sizeof(fxName));
+                    // An OFFLINE or bypassed FX has no live instance to ask, so
+                    // the host extension answers nothing — indistinguishable
+                    // from "this plug-in cannot do GR" unless we say so.
+                    const char* state =
+                        TrackFX_GetOffline(fx.tr, fx.fxIdx)  ? " It is OFFLINE."
+                      : !TrackFX_GetEnabled(fx.tr, fx.fxIdx) ? " It is bypassed."
+                      :                                        "";
+                    char msg[1000];
+                    snprintf(msg, sizeof(msg),
+                        "Live: no GR reading from %s / FX %d  '%s'.%s "
+                        "That instance answers no GainReduction_dB; if the one "
+                        "you are watching is elsewhere, pick it in the instance "
+                        "selector above.",
+                        where, fx.fxIdx + 1, fxName, state);
+                    ImGui_TextDisabled(ctx, msg);
                 }
             } else {
                 ImGui_TextDisabled(ctx,

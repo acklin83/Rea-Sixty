@@ -1759,8 +1759,8 @@ Default GR meter behaviour is to read the host-extension `GainReduction_dB` valu
 When a plug-in doesn't expose the host-extension (or exposes a wrong value), a small **GR** button next to **AutoLearn** in the editor header opens a compact override popup:
 
 - Combo lists every VST3 parameter on the editing map; pick the one that reads the plug-in's gain-reduction value.
-- **Offset (dB)** slider — added before |abs| at render time. Lets you calibrate compressors whose GR reads negative-going (e.g. -6 dB at peak reduction → set offset −6 so the meter reads +6).
-- **(none)** / **Use host extension** clears the override and restores the default behaviour.
+- **Offset (dB)** slider, added to the reading **before the sign is dropped**. It is there for a plug-in that does not sit at zero when it is not compressing. Mind the direction, it is the opposite of what the word suggests on most compressors: they report gain reduction as a negative number, so a **negative** offset makes the meter read **higher** and a positive one pulls it towards zero.
+- **Host standard (GainReduction_dB)** is the first entry and the normal case, not an empty setting. Picking it clears any parameter override.
 
 When set, the button shows a tick mark next to the **GR** label. The override flows through to both the UC1 BC VU motor calibration tables and the DYN GR LED strip. Per-map; saved in `user_plugins.json` under `metering.gainReduction.vst3Param` + `metering.gainReduction.offsetDb`.
 
@@ -1770,7 +1770,7 @@ When a catalog entry is created with the FX live on a track, parameter names + v
 
 ### Storage
 
-Catalog file at `~/Library/Application Support/REAPER/rea_sixty/user_plugins.json` (and equivalent paths on Windows / Linux). Versioned schema (currently v16). Old v5 / v6 files auto-migrate on first load.
+Catalog file at `~/Library/Application Support/REAPER/rea_sixty/user_plugins.json` (and equivalent paths on Windows / Linux). Versioned schema (currently v17). Old files auto-migrate on first load; v17 is the one migration that edits rather than adds, writing the UF1's `PLUG-IN` key into a hand-made UF1 map and shifting the soft-keys at and after it one place along.
 
 \newpage
 
