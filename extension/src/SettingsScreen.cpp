@@ -20472,53 +20472,92 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             double effBp[6], effOff[6];
             uf8::grResolveCalibration(bp, rawArr, curArr, nCal, effBp, effOff);
 
-            for (int i = 0; i < nCal; ++i) {
-                if (i) ImGui_SameLine(ctx, nullptr, nullptr);
-                ImGui_BeginGroup(ctx);
-                char hdrLbl[32];
-                snprintf(hdrLbl, sizeof(hdrLbl), "%g dB plug-in", bp[i]);
-                ImGui_Text(ctx, hdrLbl);
-
-                const bool captured = (rawArr[i] >= 0.0);
-                // Capture. Enabled only with a live reading — without one there
-                // is nothing to record, and a button that writes a zero would
-                // look like it worked.
-                char capId[48];
-                snprintf(capId, sizeof(capId), "%s##fxl_grcap_%d_%d",
-                         captured ? "Set again" : "Set", which, i);
-                if (s_grSmooth >= 0.0) {
-                    if (ImGui_Button(ctx, capId, nullptr, nullptr))
-                        captureGrCal_(which, i, s_grSmooth);
-                    if (ImGui_IsItemHovered(ctx, nullptr)) {
-                        char tip[240];
-                        snprintf(tip, sizeof(tip),
-                            "Press while the plug-in's own meter shows %g dB.\n"
-                            "It is reporting %.2f dB right now.", bp[i], s_grSmooth);
-                        ImGui_SetTooltip(ctx, tip);
+            // ⛔ A TABLE, because the cells change width as you use them:
+            // "Set" becomes "Set again", "at tick" becomes "at 4.40 (from
+            // others)", and on a SameLine row every one of those shoved its
+            // neighbours sideways (Frank 2026-09-09). Fixed-width columns hold
+            // the grid still whatever the labels do.
+            //
+            // ⚠ Pixel width REQUIRES WidthFixed. Without it the number is read
+            // as a stretch weight, the layout overflows and the Settings window
+            // renders once and then goes dark for good — see
+            // [[reaimgui-tablesetupcolumn-trap]], an afternoon lost to it.
+            {
+                const int    wFixed = ImGui_TableColumnFlags_WidthFixed;
+                const double colW   = scaleW_(ctx, 118.0);
+                int tblFlags = 0;
+                char tblId[40];
+                snprintf(tblId, sizeof(tblId), "##fxl_grcal_tbl_%d", which);
+                if (ImGui_BeginTable(ctx, tblId, nCal, &tblFlags,
+                                     nullptr, nullptr, nullptr))
+                {
+                    for (int i = 0; i < nCal; ++i) {
+                        char hdrLbl[32];
+                        snprintf(hdrLbl, sizeof(hdrLbl), "%g dB", bp[i]);
+                        int    wf = wFixed;
+                        double cw = colW;
+                        ImGui_TableSetupColumn(ctx, hdrLbl, &wf, &cw, nullptr);
                     }
-                } else {
-                    ImGui_TextDisabled(ctx, "Set");
-                }
+                    ImGui_TableHeadersRow(ctx);
 
-                // State of this column, in the terms the mechanism works in:
-                // the reading it sits at, and whether that was measured here or
-                // followed from another column.
-                char stateTxt[64];
-                snprintf(stateTxt, sizeof(stateTxt), "at %.2f%s",
-                         effBp[i], captured ? "" : " (from others)");
-                ImGui_TextDisabled(ctx, stateTxt);
-                if (captured) {
-                    ImGui_SameLine(ctx, nullptr, nullptr);
-                    char clrId[48];
-                    snprintf(clrId, sizeof(clrId), "x##fxl_grclr_%d_%d", which, i);
-                    if (ImGui_SmallButton(ctx, clrId))
-                        clearGrCapture_(which, i);
-                    if (ImGui_IsItemHovered(ctx, nullptr))
-                        ImGui_SetTooltip(ctx,
-                            "Forget this measurement. The column then follows "
-                            "the other captures again.");
+                    // Row 1: the capture buttons. Full-width so the two labels
+                    // ("Set" / "Set again") occupy the same box.
+                    ImGui_TableNextRow(ctx, nullptr, nullptr);
+                    for (int i = 0; i < nCal; ++i) {
+                        ImGui_TableSetColumnIndex(ctx, i);
+                        const bool captured = (rawArr[i] >= 0.0);
+                        char capId[48];
+                        snprintf(capId, sizeof(capId), "%s##fxl_grcap_%d_%d",
+                                 captured ? "Set again" : "Set", which, i);
+                        if (s_grSmooth >= 0.0) {
+                            double bw = colW - scaleW_(ctx, 8.0), bh = 0.0;
+                            if (ImGui_Button(ctx, capId, &bw, &bh))
+                                captureGrCal_(which, i, s_grSmooth);
+                            if (ImGui_IsItemHovered(ctx, nullptr)) {
+                                char tip[240];
+                                snprintf(tip, sizeof(tip),
+                                    "Press while the plug-in's own meter shows "
+                                    "%g dB.\nIt is reporting %.2f dB right now.",
+                                    bp[i], s_grSmooth);
+                                ImGui_SetTooltip(ctx, tip);
+                            }
+                        } else {
+                            ImGui_TextDisabled(ctx, "Set");
+                        }
+                    }
+
+                    // Row 2: where the column sits, and whether that was
+                    // measured here or followed from another column.
+                    ImGui_TableNextRow(ctx, nullptr, nullptr);
+                    for (int i = 0; i < nCal; ++i) {
+                        ImGui_TableSetColumnIndex(ctx, i);
+                        char stateTxt[48];
+                        snprintf(stateTxt, sizeof(stateTxt), "at %.2f", effBp[i]);
+                        ImGui_TextDisabled(ctx, stateTxt);
+                    }
+
+                    // Row 3: measured columns get their forget button, derived
+                    // ones say so. Its own row, or the button would move the
+                    // text above it around.
+                    ImGui_TableNextRow(ctx, nullptr, nullptr);
+                    for (int i = 0; i < nCal; ++i) {
+                        ImGui_TableSetColumnIndex(ctx, i);
+                        if (rawArr[i] >= 0.0) {
+                            char clrId[52];
+                            snprintf(clrId, sizeof(clrId),
+                                     "forget##fxl_grclr_%d_%d", which, i);
+                            if (ImGui_SmallButton(ctx, clrId))
+                                clearGrCapture_(which, i);
+                            if (ImGui_IsItemHovered(ctx, nullptr))
+                                ImGui_SetTooltip(ctx,
+                                    "Forget this measurement. The column then "
+                                    "follows the other captures again.");
+                        } else {
+                            ImGui_TextDisabled(ctx, "from others");
+                        }
+                    }
+                    ImGui_EndTable(ctx);
                 }
-                ImGui_EndGroup(ctx);
             }
             ImGui_Spacing(ctx);
 

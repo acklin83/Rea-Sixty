@@ -1760,9 +1760,9 @@ Drive a sine into the plug-in and set its threshold so the plug-in's own meter r
 
 That difference is the reason the button exists. A column corrects the reading, and the reading is not always the number on the plug-in's face: the PreSonus interface asks for the instantaneous reduction in dB and forbids the host to add ballistics, while a drawn needle has its own inertia and its own scale, and a plug-in with several stages is asked to report their sum. Capturing records both halves at once: *when it reports this, show that.*
 
-**One column is enough to start.** A plug-in that reports 2.2 where it shows 4 is reporting a fraction, not a fixed error, so the columns you have not captured follow the same proportion and say **(from others)** under themselves. Capture a higher one and it stops guessing there: that measurement replaces the estimate, the span between the two captures is interpolated, and everything above extends the newer slope. So the low end is one press and the high end is refinement, not a second full pass.
+**One column is enough to start.** A plug-in that reports 2.2 where it shows 4 is reporting a fraction, not a fixed error, so the columns you have not captured follow the same proportion and say **from others** under themselves. Capture a higher one and it stops guessing there: that measurement replaces the estimate, the span between the two captures is interpolated, and everything above extends the newer slope. So the low end is one press and the high end is refinement, not a second full pass.
 
-The small **x** under a captured column forgets that measurement; the column then follows the others again. **Reset** clears the table, and a table with nothing captured behaves exactly as it did before this existed.
+Each column reads back the reading it sits at, and a captured one carries a **forget** button that drops the measurement so the column follows the others again. **Reset** clears the table, and a table with nothing captured behaves exactly as it did before this existed.
 
 ### GR meter override
 
