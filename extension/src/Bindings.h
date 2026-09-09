@@ -41,6 +41,9 @@
 // directly; see registerBindingHandlers there for the catalogue.
 //
 
+#include <atomic>       // g_layersQuicksOnly — declared below, and libc++ pulls
+                        // this in behind the scenes while libstdc++ and MSVC
+                        // do not, so the header built on macOS and nowhere else
 #include <cstdint>
 #include <functional>
 #include <string>
