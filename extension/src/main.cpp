@@ -425,6 +425,11 @@ void     reasixty_setStartupBank(bool on, int layer, int quick, int sub);
 // was last left in ("uf1_last_view", global, not per project).
 bool     reasixty_uf1StartupView(int* view);
 void     reasixty_setUf1StartupView(bool on, int view);
+// Pinned UF1 startup soft-key bank (0..9), the UF1 twin of the startup bank
+// above. Applied once the UF1 is up. get returns true when a bank is pinned;
+// unset = the UF1 comes up on whichever bank it was left on.
+bool     reasixty_uf1StartupBank(int* bank);
+void     reasixty_setUf1StartupBank(bool on, int bank);
 int      reasixty_uf1ViewMode();   // live view, so Settings can pin "this one"
 // Page a bankable dynamic bank from a UC1 encoder (main thread). Returns true
 // when the engaged sub-bank is bankable AND its configured control matches —
@@ -39024,6 +39029,21 @@ static void applyUf1StartupView_()
     }
 }
 
+// Engage the user's pinned UF1 startup soft-key bank, the same one-shot shape as
+// the view above. Unpinned is the old behaviour: the bank the UF1 was left on
+// survives in the config, so it simply comes back.
+// ⚠ Runs BEFORE the view is applied, so a rig that boots into DAW paints the
+// pinned bank on its first frame rather than the old one for a tick.
+static void applyUf1StartupBank_()
+{
+    int bank = -1;
+    if (!reasixty_uf1StartupBank(&bank)) return;
+    // The store direct, not reasixty_setUf1SoftBank: that one is defined far
+    // below this point, and the paging code here writes the same atomic the
+    // same way. reasixty_uf1StartupBank has already range-checked the value.
+    g_uf1SoftBank.store(bank);
+}
+
 // Razor nav-cross LEDs: light the ONE arrow/centre matching the active target, dark the
 // others — only while Jog Mode == Razor (Frank 2026-08-06). Addresses 0x10-0x14 derived
 // from led = code − 0x18 (see [[uf1-led-reference-uf8-protocol]]); confirm on HW. Deduped
@@ -39309,6 +39329,9 @@ void onTimerBody_()
         static bool s_startupViewDone = false;
         if (!s_startupViewDone && g_uf1_dev) {
             s_startupViewDone = true;
+            // Bank first: the view decides what is drawn, the bank decides what
+            // is in it, and DAW's first paint should not show the old one.
+            applyUf1StartupBank_();
             applyUf1StartupView_();
         }
         // Remember the view for the next session. Diffed here rather than
@@ -44797,6 +44820,27 @@ void reasixty_setUf1StartupView(bool on, int view)
     if (view < 0 || view >= kUf1ViewCount) return;
     char b[16]; std::snprintf(b, sizeof(b), "%d", view);
     SetExtState("rea_sixty", "uf1_startup_view", b, true);
+}
+
+// Pinned UF1 startup soft-key bank (Settings → Behaviour → UF1). Stored as the
+// bank index; empty/absent = unpinned, and the UF1 comes up on whatever bank it
+// was left on, which is what it always did. Applied once by
+// applyUf1StartupBank_ on the first tick that sees the device.
+bool reasixty_uf1StartupBank(int* bank)
+{
+    const char* v = GetExtState("rea_sixty", "uf1_startup_bank");
+    if (!v || !*v) return false;
+    const int n = std::atoi(v);
+    if (n < 0 || n >= uf8::bindings::kUf1SoftBankCount) return false;
+    if (bank) *bank = n;
+    return true;
+}
+void reasixty_setUf1StartupBank(bool on, int bank)
+{
+    if (!on) { SetExtState("rea_sixty", "uf1_startup_bank", "", true); return; }
+    if (bank < 0 || bank >= uf8::bindings::kUf1SoftBankCount) return;
+    char b[16]; std::snprintf(b, sizeof(b), "%d", bank);
+    SetExtState("rea_sixty", "uf1_startup_bank", b, true);
 }
 int reasixty_uf1ViewMode() { return uf1ViewMode_(); }
 // The editor's view picker switches the SURFACE, exactly as its jog-object

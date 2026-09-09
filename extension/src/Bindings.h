@@ -762,12 +762,25 @@ struct SoftKeyBankPreset {
 constexpr int kUf1SoftBankCount = 10;
 constexpr int kUf1SoftBankSlots = 4;
 
+// A named snapshot of one UF1 bank. Its own type rather than SoftKeyBankPreset
+// with four of eight slots filled: a preset that could be half-empty by design
+// would leave every reader deciding for itself what the other four mean.
+// The Shift half follows the UF8 rule exactly — present only when the bank it
+// was saved from had one, and its absence IS hasShift=false on the way back in.
+struct Uf1BankPreset {
+    std::string name;                              // unique, user-editable
+    Binding     slots[kUf1SoftBankSlots];
+    Binding     shiftSlots[kUf1SoftBankSlots];
+    bool        hasShift = false;
+};
+
 struct Config {
     int                            version     = 1;
     int                            activeLayer = 0;
     Layer                          layers[3];
     LayerUserQuicks                userQuicks[3];     // per-layer user-Quick data
     std::vector<SoftKeyBankPreset> bankPresets;       // named Sub-Bank snapshots
+    std::vector<Uf1BankPreset>     uf1BankPresets;    // named UF1 bank snapshots
     // UF1 soft-key banks (global). [bank 0..9][slot 0..3].
     Binding uf1SoftBanks[kUf1SoftBankCount][kUf1SoftBankSlots];
     // Per-bank dynamic kind. Non-None turns the whole bank into a computed
@@ -1298,6 +1311,22 @@ bool            pasteUf1BankFromClipboard(int bank, int mod);
 // Empty a bank. `bothSets` clears Plain and Shift, else just `mod`; the name
 // and the dynamic kind of the cleared set(s) go too.
 bool            clearUf1Bank(int bank, int mod, bool bothSets);
+
+// ---- UF1 soft-key bank presets ------------------------------------------
+// Named snapshots of one UF1 bank's 4 slots, recallable into any bank. Their
+// own list, not the UF8 one, for the reason Uf1BankPreset documents. Every
+// rule below is the UF8 twin's: saving from Plain takes Shift along when Shift
+// holds something, a preset that carries both sets writes both and ignores
+// `mod`, and uf1BankPresetSpills says which kind you have so the dialog can
+// name what it is about to overwrite. All writes persist via configPath_().
+int             uf1BankPresetCount();
+Uf1BankPreset   uf1BankPresetAt(int idx);                 // copy; OOR = empty
+int             findUf1BankPreset(const std::string& name);  // -1 if not found
+bool            saveUf1BankPreset(const std::string& name, int bank, int mod);
+bool            renameUf1BankPreset(int idx, const std::string& newName);
+bool            deleteUf1BankPreset(int idx);
+bool            recallUf1BankPreset(int idx, int bank, int mod);
+bool            uf1BankPresetSpills(int idx);
 // Number of UF1 soft-key banks in use (highest assigned bank + 1, min 1) —
 // dynamic banks or banks with any non-empty slot count. Drives the DAW-mode
 // header denominator + bounds the DAW bank paging. Frank 2026-08-04.

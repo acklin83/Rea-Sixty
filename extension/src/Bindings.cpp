@@ -1819,6 +1819,43 @@ void serializeBankPresets_(const Config& c, std::ostringstream& os)
     os << "\n  ]";
 }
 
+// Named UF1 bank snapshots. Same shape as bank_presets above, four slots
+// instead of eight, and its own key so the two lists cannot be read into each
+// other. Empty list writes nothing, so a config that has none is byte-identical
+// to one from before this existed and needs no version bump.
+void serializeUf1BankPresets_(const Config& c, std::ostringstream& os)
+{
+    if (c.uf1BankPresets.empty()) return;
+    os << ",\n  \"uf1_bank_presets\": [";
+    bool first = true;
+    for (const auto& p : c.uf1BankPresets) {
+        if (!first) os << ",";
+        first = false;
+        os << "\n    {\"name\": ";
+        appendEscaped(os, p.name);
+        os << ", \"slots\": [";
+        for (int s = 0; s < kUf1SoftBankSlots; ++s) {
+            if (s) os << ",";
+            os << "\n      {";
+            serializeBindingBody_(p.slots[s], os);
+            os << "}";
+        }
+        os << "\n    ]";
+        if (p.hasShift) {
+            os << ", \"shift_slots\": [";
+            for (int s = 0; s < kUf1SoftBankSlots; ++s) {
+                if (s) os << ",";
+                os << "\n      {";
+                serializeBindingBody_(p.shiftSlots[s], os);
+                os << "}";
+            }
+            os << "\n    ]";
+        }
+        os << "}";
+    }
+    os << "\n  ]";
+}
+
 // True when a UF1 soft-key bank slot carries nothing (all modifier
 // short/long slots Noop + no label) — such slots are skipped on save.
 static bool uf1BankSlotEmpty_(const Binding& bd)
@@ -1978,6 +2015,7 @@ std::string serialize(const Config& c)
     serializeSubBankLeds_(c, os);
     serializeSubBankDynamic_(c, os);
     serializeBankPresets_(c, os);
+    serializeUf1BankPresets_(c, os);
     serializeUf1SoftBanks_(c, os);
     serializeUf1SoftBankDynamic_(c, os);
     serializeSoftKeySetNames_(c, os);
@@ -2341,6 +2379,41 @@ void parseBankPresets_(wdl_json_element* root, Config& out)
             }
         }
         out.bankPresets.push_back(std::move(p));
+    }
+}
+
+void parseUf1BankPresets_(wdl_json_element* root, Config& out)
+{
+    auto* arr = root->get_item_by_name("uf1_bank_presets");
+    if (!arr || !arr->is_array() || !arr->m_array) return;
+    const int n = arr->m_array->GetSize();
+    for (int i = 0; i < n; ++i) {
+        wdl_json_element* eo = arr->enum_item(i);
+        if (!eo || !eo->is_object()) continue;
+        Uf1BankPreset p;
+        if (auto* v = eo->get_item_by_name("name"))
+            if (auto* str = v->get_string_value()) p.name = str;
+        if (p.name.empty()) continue;     // skip nameless garbage
+        auto* slots = eo->get_item_by_name("slots");
+        if (slots && slots->is_array() && slots->m_array) {
+            const int sn = slots->m_array->GetSize();
+            for (int s = 0; s < sn && s < kUf1SoftBankSlots; ++s) {
+                wdl_json_element* sl = slots->enum_item(s);
+                if (sl && sl->is_object()) parseBindingBody_(sl, p.slots[s]);
+            }
+        }
+        auto* shift = eo->get_item_by_name("shift_slots");
+        if (shift && shift->is_array() && shift->m_array) {
+            const int sn = shift->m_array->GetSize();
+            for (int s = 0; s < sn && s < kUf1SoftBankSlots; ++s) {
+                wdl_json_element* sl = shift->enum_item(s);
+                if (sl && sl->is_object()) {
+                    parseBindingBody_(sl, p.shiftSlots[s]);
+                    p.hasShift = true;
+                }
+            }
+        }
+        out.uf1BankPresets.push_back(std::move(p));
     }
 }
 
@@ -2743,6 +2816,7 @@ bool tryParse_(const std::string& json, Config& out)
     parseSubBankLeds_(root, out);
     parseSubBankDynamic_(root, out);
     parseBankPresets_(root, out);
+    parseUf1BankPresets_(root, out);
     parseUf1SoftBanks_(root, out);
     parseUf1SoftBankDynamic_(root, out);
     parseSoftKeySetNames_(root, out);
@@ -3112,6 +3186,13 @@ void forEachActionSlot_(Config& c, F&& fn)
             // for retired builtins. Without this line a dead action in a
             // preset's Shift half would survive every sanitize there is
             // (Frank 2026-09-02).
+            if (p.hasShift) doBinding(0, p.shiftSlots[si]);
+        }
+    // The UF1 preset list is bindings like any other, and for the same reason:
+    // a dead builtin sitting in one would otherwise outlive every scrub.
+    for (auto& p : c.uf1BankPresets)
+        for (int si = 0; si < kUf1SoftBankSlots; ++si) {
+            doBinding(0, p.slots[si]);
             if (p.hasShift) doBinding(0, p.shiftSlots[si]);
         }
 }
@@ -5672,6 +5753,32 @@ static bool subBankSetHasContentLocked_(const UserQuickSubBank& sb, int mod)
     return false;
 }
 
+// Does modifier set `mod` of this bank hold anything worth capturing? The UF1
+// twin of subBankSetHasContentLocked_, and narrow for the same reason: the
+// whole-Binding question would call an empty Shift set occupied whenever the
+// Plain set beside it is not. Caller holds g_cfgMutex.
+static bool uf1BankSetHasContentLocked_(int bank, int mod)
+{
+    if (!g_cfg.uf1SoftBankName[bank][mod].empty()) return true;
+    if (g_cfg.uf1SoftBankDynamic[bank][mod] != DynamicBankKind::None)
+        return true;
+    for (int s = 0; s < kUf1SoftBankSlots; ++s) {
+        const Binding& bd = g_cfg.uf1SoftBanks[bank][s];
+        if (!slotHasNoData_(bd.shortPress[mod]))  return true;
+        if (!slotHasNoData_(bd.longPress[mod]))   return true;
+        if (!slotHasNoData_(bd.doublePress[mod])) return true;
+    }
+    return false;
+}
+
+bool uf1BankSetHasContent(int bank, int mod)
+{
+    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return uf1BankSetHasContentLocked_(bank, mod);
+}
+
 bool saveBankPreset(const std::string& name,
                     int layer, int quick, int subBank, int mod)
 {
@@ -5833,6 +5940,118 @@ bool recallBankPreset(int idx, int layer, int quick, int subBank, int mod)
     return true;
 }
 
+// ---- UF1 soft-key bank presets ------------------------------------------
+// The UF1 twin of the six above. Same helpers, same two-set rule, its own list.
+
+int uf1BankPresetCount()
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return static_cast<int>(g_cfg.uf1BankPresets.size());
+}
+
+Uf1BankPreset uf1BankPresetAt(int idx)
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (idx < 0 || idx >= static_cast<int>(g_cfg.uf1BankPresets.size()))
+        return {};
+    return g_cfg.uf1BankPresets[idx];
+}
+
+int findUf1BankPreset(const std::string& name)
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    for (int i = 0; i < static_cast<int>(g_cfg.uf1BankPresets.size()); ++i)
+        if (g_cfg.uf1BankPresets[i].name == name) return i;
+    return -1;
+}
+
+bool saveUf1BankPreset(const std::string& name, int bank, int mod)
+{
+    if (name.empty()) return false;
+    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    Uf1BankPreset p;
+    p.name = name;
+    // Saving Plain takes Shift with it when Shift holds something; saving while
+    // ON Shift is that one set. Same rule as saveBankPreset.
+    const bool takeShift = (mod == 0) && uf1BankSetHasContentLocked_(bank, 1);
+    for (int s = 0; s < kUf1SoftBankSlots; ++s) {
+        capturePresetSlotLocked_(g_cfg.uf1SoftBanks[bank][s], mod, p.slots[s]);
+        if (takeShift)
+            capturePresetSlotLocked_(g_cfg.uf1SoftBanks[bank][s], 1,
+                                     p.shiftSlots[s]);
+    }
+    p.hasShift = takeShift;
+    int existing = -1;
+    for (int i = 0; i < static_cast<int>(g_cfg.uf1BankPresets.size()); ++i)
+        if (g_cfg.uf1BankPresets[i].name == name) { existing = i; break; }
+    if (existing >= 0) g_cfg.uf1BankPresets[existing] = std::move(p);
+    else               g_cfg.uf1BankPresets.push_back(std::move(p));
+    persistLocked_();
+    return true;
+}
+
+bool renameUf1BankPreset(int idx, const std::string& newName)
+{
+    if (newName.empty()) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (idx < 0 || idx >= static_cast<int>(g_cfg.uf1BankPresets.size()))
+        return false;
+    for (int i = 0; i < static_cast<int>(g_cfg.uf1BankPresets.size()); ++i)
+        if (i != idx && g_cfg.uf1BankPresets[i].name == newName) return false;
+    g_cfg.uf1BankPresets[idx].name = newName;
+    persistLocked_();
+    return true;
+}
+
+bool deleteUf1BankPreset(int idx)
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (idx < 0 || idx >= static_cast<int>(g_cfg.uf1BankPresets.size()))
+        return false;
+    g_cfg.uf1BankPresets.erase(g_cfg.uf1BankPresets.begin() + idx);
+    persistLocked_();
+    return true;
+}
+
+bool uf1BankPresetSpills(int idx)
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (idx < 0 || idx >= static_cast<int>(g_cfg.uf1BankPresets.size()))
+        return false;
+    return g_cfg.uf1BankPresets[idx].hasShift;
+}
+
+bool recallUf1BankPreset(int idx, int bank, int mod)
+{
+    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (idx < 0 || idx >= static_cast<int>(g_cfg.uf1BankPresets.size()))
+        return false;
+    const Uf1BankPreset& p = g_cfg.uf1BankPresets[idx];
+    const int dstMod = p.hasShift ? 0 : mod;
+    for (int s = 0; s < kUf1SoftBankSlots; ++s) {
+        applyPresetSlotLocked_(p.slots[s], dstMod, g_cfg.uf1SoftBanks[bank][s]);
+        if (p.hasShift)
+            applyPresetSlotLocked_(p.shiftSlots[s], 1,
+                                   g_cfg.uf1SoftBanks[bank][s]);
+    }
+    // The preset's name becomes the bank's name, and the bank stops being a
+    // dynamic one — both for the reasons recallBankPreset spells out: a bank
+    // with a kind ignores its static slots, so recalling onto one would write
+    // four actions nobody could reach while the panel went on announcing FX.
+    g_cfg.uf1SoftBankName[bank][dstMod]    = p.name;
+    g_cfg.uf1SoftBankDynamic[bank][dstMod] = DynamicBankKind::None;
+    if (p.hasShift) {
+        g_cfg.uf1SoftBankName[bank][1]    = p.name;
+        g_cfg.uf1SoftBankDynamic[bank][1] = DynamicBankKind::None;
+    }
+    persistLocked_();
+    return true;
+}
+
 // ---- Soft-Key bank clipboard --------------------------------------------
 // Session-only by design (see Bindings.h). The capture / apply helpers are the
 // preset ones, so a copied bank carries exactly what a saved preset carries —
@@ -5956,32 +6175,6 @@ struct Uf1BankClipboard_ {
 };
 Uf1BankClipboard_ g_uf1BankClip;
 }  // namespace
-
-// Does modifier set `mod` of this bank hold anything worth capturing? The UF1
-// twin of subBankSetHasContentLocked_, and narrow for the same reason: the
-// whole-Binding question would call an empty Shift set occupied whenever the
-// Plain set beside it is not. Caller holds g_cfgMutex.
-static bool uf1BankSetHasContentLocked_(int bank, int mod)
-{
-    if (!g_cfg.uf1SoftBankName[bank][mod].empty()) return true;
-    if (g_cfg.uf1SoftBankDynamic[bank][mod] != DynamicBankKind::None)
-        return true;
-    for (int s = 0; s < kUf1SoftBankSlots; ++s) {
-        const Binding& bd = g_cfg.uf1SoftBanks[bank][s];
-        if (!slotHasNoData_(bd.shortPress[mod]))  return true;
-        if (!slotHasNoData_(bd.longPress[mod]))   return true;
-        if (!slotHasNoData_(bd.doublePress[mod])) return true;
-    }
-    return false;
-}
-
-bool uf1BankSetHasContent(int bank, int mod)
-{
-    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
-    if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
-    std::lock_guard<std::mutex> lk(g_cfgMutex);
-    return uf1BankSetHasContentLocked_(bank, mod);
-}
 
 bool uf1BankClipboardFull()     { std::lock_guard<std::mutex> lk(g_cfgMutex);
                                   return g_uf1BankClip.full; }

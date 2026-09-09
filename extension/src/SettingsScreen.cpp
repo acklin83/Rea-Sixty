@@ -6657,9 +6657,16 @@ static void renderBankMatrixModals_(ImGui_Context* ctx)
         const std::string nm = trimmed();
         const bool nameOk   = !nm.empty();
         const int  existing = nameOk ? findBankPreset(nm) : -1;
-        help_(ctx,
-            "Enter a name.A preset with that name exists — Save will\n"
-            "overwrite it.New preset.");
+        // ⚠ ONE of the three, not all three. This carried the whole set of
+        // alternatives glued together ("Enter a name.A preset with that name
+        // exists…New preset."), which is what a three-way conditional looks
+        // like after its conditions are dropped. The button below already picks
+        // between Save and Save (overwrite) from the same two facts.
+        help_(ctx, !nameOk
+            ? "Enter a name."
+            : (existing >= 0
+                   ? "A preset with that name exists — Save will overwrite it."
+                   : "New preset."));
         ImGui_Spacing(ctx);
         if (nameOk) {
             const char* label = (existing >= 0) ? "Save (overwrite)##bp_saveas_ok"
@@ -6694,7 +6701,9 @@ static void renderBankMatrixModals_(ImGui_Context* ctx)
         const bool nameOk = !nm.empty();
         const int  dup    = nameOk ? findBankPreset(nm) : -1;
         const bool valid  = nameOk && (dup < 0 || dup == s_bankMenuIdx);
-        help_(ctx, "Enter a name.Another preset already has that name.");
+        help_(ctx, !nameOk ? "Enter a name."
+                           : (valid ? "Rename it."
+                                    : "Another preset already has that name."));
         ImGui_Spacing(ctx);
         if (valid) {
             if (ImGui_Button(ctx, "Rename##bp_rename_ok", nullptr, nullptr)) {
@@ -6804,6 +6813,14 @@ static int  s_uf1BankCtx       = -1;    // which bank the menu is about
 static int  s_uf1BankCtxSet    = 0;     // which set it was opened on
 static bool s_uf1BankCtxFilled = false;
 static bool s_uf1BankCtxOpen   = false;
+// A modal cannot be opened from inside a popup — the popup closes and takes the
+// OpenPopup with it. The menu records an intent, renderUf1BankMatrixModals_
+// opens and draws it on the next pass. Same shape as the UF8 side.
+enum Uf1BankMenuOp_ { UbNone = 0, UbPresetRecall, UbPresetSaveAs,
+                      UbPresetRename, UbPresetDelete };
+static int  s_uf1BankMenuOp  = UbNone;
+static int  s_uf1BankMenuIdx = -1;
+static char s_uf1BankMenuName[64] = {0};
 // Rename in place (double-click a header, or the menu's Rename): which bank is
 // being typed into, for which set, and the buffer. -1 = nobody.
 static int  s_uf1BankRen = -1, s_uf1BankRenMod = -1;
@@ -6897,7 +6914,221 @@ static void renderUf1BankMatrixContextMenu_(ImGui_Context* ctx)
         }
         ImGui_EndMenu(ctx);
     }
+
+    // ---- Presets ---------------------------------------------------------
+    if (ImGui_BeginMenu(ctx, "Presets", nullptr)) {
+        const int n = uf1BankPresetCount();
+        if (n <= 0) ImGui_TextDisabled(ctx, "No presets saved yet.");
+        for (int i = 0; i < n; ++i) {
+            const Uf1BankPreset p = uf1BankPresetAt(i);
+            char row[96];
+            snprintf(row, sizeof(row), "%s%s##ubp_m_%d", p.name.c_str(),
+                     uf1BankPresetSpills(i) ? "  (Plain + Shift)" : "", i);
+            if (ImGui_MenuItem(ctx, row, nullptr, nullptr, nullptr)) {
+                s_uf1BankMenuOp  = UbPresetRecall;
+                s_uf1BankMenuIdx = i;
+            }
+        }
+        ImGui_Separator(ctx);
+        if (ImGui_MenuItem(ctx, "Save this bank as…", nullptr, nullptr,
+                           nullptr)) {
+            s_uf1BankMenuOp = UbPresetSaveAs;
+            s_uf1BankMenuName[0] = '\0';
+        }
+        if (n > 0 && ImGui_BeginMenu(ctx, "Rename preset", nullptr)) {
+            for (int i = 0; i < n; ++i) {
+                char row[96];
+                snprintf(row, sizeof(row), "%s##ubp_rn_%d",
+                         uf1BankPresetAt(i).name.c_str(), i);
+                if (ImGui_MenuItem(ctx, row, nullptr, nullptr, nullptr)) {
+                    s_uf1BankMenuOp  = UbPresetRename;
+                    s_uf1BankMenuIdx = i;
+                    snprintf(s_uf1BankMenuName, sizeof(s_uf1BankMenuName), "%s",
+                             uf1BankPresetAt(i).name.c_str());
+                }
+            }
+            ImGui_EndMenu(ctx);
+        }
+        if (n > 0 && ImGui_BeginMenu(ctx, "Delete preset", nullptr)) {
+            for (int i = 0; i < n; ++i) {
+                char row[96];
+                snprintf(row, sizeof(row), "%s##ubp_dl_%d",
+                         uf1BankPresetAt(i).name.c_str(), i);
+                if (ImGui_MenuItem(ctx, row, nullptr, nullptr, nullptr)) {
+                    s_uf1BankMenuOp  = UbPresetDelete;
+                    s_uf1BankMenuIdx = i;
+                }
+            }
+            ImGui_EndMenu(ctx);
+        }
+        ImGui_EndMenu(ctx);
+    }
     ImGui_EndPopup(ctx);
+}
+
+// The dialogs the menu asks for, drawn right after the matrix and never inside
+// the popup. Everything here overwrites slots that have no undo, so each one
+// names the bank and says when both sets go.
+static void renderUf1BankMatrixModals_(ImGui_Context* ctx)
+{
+    using namespace uf8::bindings;
+    if (s_uf1BankCtx < 0) return;
+    const int b   = s_uf1BankCtx;
+    const int mod = s_uf1BankCtxSet;
+    const std::string here = uf1BankCellLabel_(b, mod);
+
+    switch (s_uf1BankMenuOp) {
+        case UbPresetRecall:
+            ImGui_OpenPopup(ctx, "Recall preset?###ubp_recall_confirm", nullptr);
+            break;
+        case UbPresetSaveAs:
+            ImGui_OpenPopup(ctx, "Save preset###ubp_save_as", nullptr);   break;
+        case UbPresetRename:
+            ImGui_OpenPopup(ctx, "Rename preset###ubp_rename", nullptr);  break;
+        case UbPresetDelete:
+            ImGui_OpenPopup(ctx, "Delete preset?###ubp_delete_confirm", nullptr);
+            break;
+        default: break;
+    }
+    s_uf1BankMenuOp = UbNone;
+
+    const double kW = 440.0;
+    int condAlways = ImGui_Cond_Always;
+    auto trimmed = []() {
+        std::string t = s_uf1BankMenuName;
+        while (!t.empty() && t.back()  == ' ') t.pop_back();
+        while (!t.empty() && t.front() == ' ') t.erase(t.begin());
+        return t;
+    };
+
+    // ---- Recall ----------------------------------------------------------
+    centerNextPopupOnDisplay_(ctx);
+    ImGui_SetNextWindowSize(ctx, kW, 0.0, &condAlways);
+    if (ImGui_BeginPopupModal(ctx, "Recall preset?###ubp_recall_confirm",
+                              nullptr, nullptr)) {
+        const Uf1BankPreset p = uf1BankPresetAt(s_uf1BankMenuIdx);
+        char line[320];
+        if (uf1BankPresetSpills(s_uf1BankMenuIdx))
+            snprintf(line, sizeof(line),
+                "Overwrite BOTH sets of %s with preset '%s'? It was saved with "
+                "a Shift bank, so Plain and Shift are both replaced.",
+                here.c_str(), p.name.c_str());
+        else
+            snprintf(line, sizeof(line),
+                "Overwrite the 4 slots of %s with preset '%s'?",
+                here.c_str(), p.name.c_str());
+        ImGui_TextWrapped(ctx, line);
+        ImGui_Spacing(ctx);
+        if (ImGui_Button(ctx, "Recall##ubp_recall_ok", nullptr, nullptr)) {
+            recallUf1BankPreset(s_uf1BankMenuIdx, b, mod);
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##ubp_recall_cancel", nullptr, nullptr))
+            ImGui_CloseCurrentPopup(ctx);
+        ImGui_EndPopup(ctx);
+    }
+
+    // ---- Save as ---------------------------------------------------------
+    centerNextPopupOnDisplay_(ctx);
+    ImGui_SetNextWindowSize(ctx, kW, 0.0, &condAlways);
+    if (ImGui_BeginPopupModal(ctx, "Save preset###ubp_save_as",
+                              nullptr, nullptr)) {
+        // Saving from Plain takes Shift along when it holds anything, so the
+        // line has to say which of the two it is.
+        const bool willTakeShift = (mod == 0) && uf1BankSetHasContent(b, 1);
+        char hdr[160];
+        snprintf(hdr, sizeof(hdr), willTakeShift
+                 ? "Save %s as a preset, Plain and Shift"
+                 : "Save the 4 slots of %s as a preset", here.c_str());
+        ImGui_Text(ctx, hdr);
+        ImGui_Spacing(ctx);
+        ImGui_PushItemWidth(ctx, 280);
+        ImGui_InputTextWithHint(ctx, "Name##ubp_saveas_name",
+            "e.g. 'Mix keys'", s_uf1BankMenuName,
+            static_cast<int>(sizeof(s_uf1BankMenuName)), nullptr, nullptr);
+        ImGui_PopItemWidth(ctx);
+        ImGui_Spacing(ctx);
+        const std::string nm = trimmed();
+        const bool nameOk   = !nm.empty();
+        const int  existing = nameOk ? findUf1BankPreset(nm) : -1;
+        help_(ctx, !nameOk
+            ? "Enter a name."
+            : (existing >= 0
+                   ? "A preset with that name exists — Save will overwrite it."
+                   : "New preset."));
+        ImGui_Spacing(ctx);
+        if (nameOk) {
+            const char* label = (existing >= 0)
+                ? "Save (overwrite)##ubp_saveas_ok" : "Save##ubp_saveas_ok";
+            if (ImGui_Button(ctx, label, nullptr, nullptr)) {
+                saveUf1BankPreset(nm, b, mod);
+                ImGui_CloseCurrentPopup(ctx);
+            }
+        } else {
+            ImGui_TextDisabled(ctx, "Save");
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##ubp_saveas_cancel", nullptr, nullptr))
+            ImGui_CloseCurrentPopup(ctx);
+        ImGui_EndPopup(ctx);
+    }
+
+    // ---- Rename ----------------------------------------------------------
+    centerNextPopupOnDisplay_(ctx);
+    ImGui_SetNextWindowSize(ctx, kW, 0.0, &condAlways);
+    if (ImGui_BeginPopupModal(ctx, "Rename preset###ubp_rename",
+                              nullptr, nullptr)) {
+        ImGui_Text(ctx, "Rename preset");
+        ImGui_Spacing(ctx);
+        ImGui_PushItemWidth(ctx, 280);
+        ImGui_InputTextWithHint(ctx, "Name##ubp_rename_name", "preset name",
+            s_uf1BankMenuName, static_cast<int>(sizeof(s_uf1BankMenuName)),
+            nullptr, nullptr);
+        ImGui_PopItemWidth(ctx);
+        ImGui_Spacing(ctx);
+        const std::string nm = trimmed();
+        const bool nameOk = !nm.empty();
+        const int  dup    = nameOk ? findUf1BankPreset(nm) : -1;
+        const bool valid  = nameOk && (dup < 0 || dup == s_uf1BankMenuIdx);
+        help_(ctx, !nameOk ? "Enter a name."
+                           : (valid ? "Rename it."
+                                    : "Another preset already has that name."));
+        ImGui_Spacing(ctx);
+        if (valid) {
+            if (ImGui_Button(ctx, "Rename##ubp_rename_ok", nullptr, nullptr)) {
+                renameUf1BankPreset(s_uf1BankMenuIdx, nm);
+                ImGui_CloseCurrentPopup(ctx);
+            }
+        } else {
+            ImGui_TextDisabled(ctx, "Rename");
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##ubp_rename_cancel", nullptr, nullptr))
+            ImGui_CloseCurrentPopup(ctx);
+        ImGui_EndPopup(ctx);
+    }
+
+    // ---- Delete ----------------------------------------------------------
+    centerNextPopupOnDisplay_(ctx);
+    ImGui_SetNextWindowSize(ctx, kW, 0.0, &condAlways);
+    if (ImGui_BeginPopupModal(ctx, "Delete preset?###ubp_delete_confirm",
+                              nullptr, nullptr)) {
+        char line[256];
+        snprintf(line, sizeof(line),
+                 "Delete preset '%s'? This cannot be undone.",
+                 uf1BankPresetAt(s_uf1BankMenuIdx).name.c_str());
+        ImGui_TextWrapped(ctx, line);
+        ImGui_Spacing(ctx);
+        if (ImGui_Button(ctx, "Delete##ubp_delete_ok", nullptr, nullptr)) {
+            deleteUf1BankPreset(s_uf1BankMenuIdx);
+            ImGui_CloseCurrentPopup(ctx);
+        }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Cancel##ubp_delete_cancel", nullptr, nullptr))
+            ImGui_CloseCurrentPopup(ctx);
+        ImGui_EndPopup(ctx);
+    }
 }
 
 
@@ -7749,6 +7980,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 }
                 ImGui_EndTable(ctx);
                 renderUf1BankMatrixContextMenu_(ctx);
+                renderUf1BankMatrixModals_(ctx);
             }
             ImGui_Spacing(ctx);
         }

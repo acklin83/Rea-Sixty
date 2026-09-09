@@ -188,6 +188,15 @@ void               reasixty_setStartupBank(bool on, int layer, int quick, int su
 // in, which is what the control's own "Off:" line says.
 bool               reasixty_uf1StartupView(int* view);
 void               reasixty_setUf1StartupView(bool on, int view);
+// Pinned UF1 startup soft-key bank (0..kUf1SoftBankCount-1). Unset = the UF1
+// comes up on the bank it was left on, which is what the control's "Off:" says.
+bool               reasixty_uf1StartupBank(int* bank);
+void               reasixty_setUf1StartupBank(bool on, int bank);
+int                reasixty_uf1SoftBank();
+// The bank's display name: its own if it has one, else the dynamic kind, else
+// "SOFT n". Resolved in main.cpp, where the 7-segment font lives.
+void               reasixty_uf1BankDisplayName(int bank, int mod,
+                                               char* out, int outSz);
 // Announce the soft-key bank on the UF1's time display when it changes.
 bool               reasixty_uf1BankNameFlash();
 void               reasixty_setUf1BankNameFlash(bool on);
@@ -1514,6 +1523,44 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
                                          nullptr, nullptr, nullptr)) {
                         sv = i;
                         reasixty_setUf1StartupView(true, sv);
+                    }
+                }
+                ImGui_EndCombo(ctx);
+            }
+            ImGui_Unindent(ctx, /*indent_w*/ nullptr);
+        }
+    }
+
+    // Startup soft-key bank. Same shape as the view above and pinned the same
+    // way: ticking the box takes the bank the UF1 is on right now.
+    if (showsDev(kDevUf1)) {
+        int sb = 0;
+        const bool sbOn = reasixty_uf1StartupBank(&sb);
+        bool on = sbOn;
+        if (ImGui_Checkbox(ctx, "Start the UF1 on a fixed soft-key bank", &on)) {
+            reasixty_setUf1StartupBank(on, on ? reasixty_uf1SoftBank() : 0);
+            if (on) sb = reasixty_uf1SoftBank();
+        }
+        help_(ctx, "Off: comes back up on the bank you left it on.");
+        if (on) {
+            // The bank's own name where it has one, so the list reads the way
+            // the matrix and the panel do rather than as ten numbers.
+            auto bankLabel = [](int b, char* out, int outSz) {
+                char nm[64] = {0};
+                reasixty_uf1BankDisplayName(b, /*mod*/ 0, nm, sizeof(nm));
+                snprintf(out, static_cast<size_t>(outSz), "%d  %s", b + 1, nm);
+            };
+            ImGui_Indent(ctx, /*indent_w*/ nullptr);
+            ImGui_SetNextItemWidth(ctx, 170.0);
+            char cur[80]; bankLabel(sb, cur, sizeof(cur));
+            if (ImGui_BeginCombo(ctx, "##uf1_startup_bank", cur, nullptr)) {
+                for (int i = 0; i < uf8::bindings::kUf1SoftBankCount; ++i) {
+                    char row[80]; bankLabel(i, row, sizeof(row));
+                    bool sel = (sb == i);
+                    if (ImGui_Selectable(ctx, row, &sel,
+                                         nullptr, nullptr, nullptr)) {
+                        sb = i;
+                        reasixty_setUf1StartupBank(true, sb);
                     }
                 }
                 ImGui_EndCombo(ctx);
