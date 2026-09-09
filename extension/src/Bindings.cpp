@@ -2913,6 +2913,44 @@ void upgradeRestoreLayer1Quicks_(Layer& L1)
 // canonical user-Quick toggles. Layer-1 user customisations survive
 // because we only touch L1 Q1/Q2 if they're already the v7-style
 // quick_select_* (handled by v7→v8 above) — v9 doesn't re-touch L1.
+// ⛔ ON A TOP SOFT-KEY, ssl_softkey's PARAM IS THE KEY, not a choice. It says
+// which of the eight slots of the current SSL row the key selects, so key N must
+// carry N. Anything else and the key picks a neighbour's parameter, silently: the
+// label above it still reads its own name.
+//
+// It got out of step because Copy/Paste in the schematic used to write the layer
+// binding for every tile, including these — closed on 2026-08-18 when the two
+// kinds of soft-key were routed to their own stores, but nothing repaired the
+// configs it had already touched. Frank's key 2 carried param 0 and key 1's
+// label, so In Trim, HMF Gain and Comp Mix, all of them slot 1 in their row,
+// were dead on the second V-Pot (2026-09-09).
+//
+// Runs on EVERY load, not behind a version gate: the invariant is permanent and
+// the damage predates any version we could key on. A user who wants a key to
+// hold a fixed SSL parameter has the ssl_bank_* builtins, which exist for it.
+void enforceSslSoftKeySlotParam_(Config& c)
+{
+    for (int li = 0; li < 3; ++li) {
+        auto& L = c.layers[li];
+        for (int i = 0; i < 8; ++i) {
+            const ButtonId id = static_cast<ButtonId>(
+                static_cast<int>(ButtonId::TopSoftKey1) + i);
+            auto it = L.bindings.find(id);
+            if (it == L.bindings.end()) continue;
+            for (int m = 0; m < kModifierCount; ++m) {
+                auto fix = [i](ActionSlot& s) {
+                    if (s.type == ActionType::Builtin
+                        && s.action == "ssl_softkey")
+                        s.param = i;
+                };
+                fix(it->second.shortPress[m]);
+                fix(it->second.longPress[m]);
+                fix(it->second.doublePress[m]);
+            }
+        }
+    }
+}
+
 void upgradeBackfillQuickAndLayerLeds_(Config& c)
 {
     auto fillIfMissing = [](Layer& L, ButtonId id, const char* action,
@@ -3850,6 +3888,9 @@ void load()
             // jumps produced by the quick_select_N migration. See
             // upgradeSanitizeBankAndQuickActions_ above for rules.
             upgradeSanitizeBankAndQuickActions_(tmp);
+
+            // Not an upgrade, an invariant: see enforceSslSoftKeySlotParam_.
+            enforceSslSoftKeySlotParam_(tmp);
 
             // Diagnostic snapshot. Dumps the resolved bindings for the
             // load-bearing buttons so "press did nothing" / "LED dark"
@@ -5148,6 +5189,22 @@ void setBinding(int layer, ButtonId id, const Binding& bd)
     // migration handles any legacy corrupt entries on disk.
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     g_cfg.layers[layer].bindings[id] = bd;
+    // The one thing that IS coerced on write, for the reason in
+    // enforceSslSoftKeySlotParam_: a top soft-key's ssl_softkey param is the
+    // key's own position, so it can never be written to a foreign slot.
+    if (id >= ButtonId::TopSoftKey1 && id <= ButtonId::TopSoftKey8) {
+        const int i = static_cast<int>(id) - static_cast<int>(ButtonId::TopSoftKey1);
+        auto& b = g_cfg.layers[layer].bindings[id];
+        for (int m = 0; m < kModifierCount; ++m) {
+            auto fix = [i](ActionSlot& s) {
+                if (s.type == ActionType::Builtin && s.action == "ssl_softkey")
+                    s.param = i;
+            };
+            fix(b.shortPress[m]);
+            fix(b.longPress[m]);
+            fix(b.doublePress[m]);
+        }
+    }
     persistLocked_();
 }
 
