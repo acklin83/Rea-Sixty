@@ -5935,6 +5935,134 @@ bool clearBank(int layer, int quick, int subBank, int mod, bool bothSets)
 }
 
 
+// ---- UF1 soft-key bank clipboard ----------------------------------------
+// ⚠ ITS OWN BUFFER, NOT THE UF8's. A UF8 bank is eight keys, a UF1 bank is
+// four: one shared clipboard would either drop half a bank on the floor or
+// fill four slots out of eight, and neither of those is a copy. Everything
+// else follows the UF8 rules exactly — session-only, the same preset
+// capture/apply helpers so a copied bank carries what a saved one carries,
+// and copying Plain takes Shift along when Shift holds something.
+namespace {
+struct Uf1BankClipboard_ {
+    bool            full     = false;
+    bool            hasShift = false;
+    Binding         slots[kUf1SoftBankSlots];
+    Binding         shiftSlots[kUf1SoftBankSlots];
+    std::string     name;                       // the copied set's bank name
+    std::string     nameShift;
+    DynamicBankKind dyn      = DynamicBankKind::None;   // the set's OWN kind
+    DynamicBankKind dynShift = DynamicBankKind::None;
+    std::string     label;                      // human text for the menu
+};
+Uf1BankClipboard_ g_uf1BankClip;
+}  // namespace
+
+// Does modifier set `mod` of this bank hold anything worth capturing? The UF1
+// twin of subBankSetHasContentLocked_, and narrow for the same reason: the
+// whole-Binding question would call an empty Shift set occupied whenever the
+// Plain set beside it is not. Caller holds g_cfgMutex.
+static bool uf1BankSetHasContentLocked_(int bank, int mod)
+{
+    if (!g_cfg.uf1SoftBankName[bank][mod].empty()) return true;
+    if (g_cfg.uf1SoftBankDynamic[bank][mod] != DynamicBankKind::None)
+        return true;
+    for (int s = 0; s < kUf1SoftBankSlots; ++s) {
+        const Binding& bd = g_cfg.uf1SoftBanks[bank][s];
+        if (!slotHasNoData_(bd.shortPress[mod]))  return true;
+        if (!slotHasNoData_(bd.longPress[mod]))   return true;
+        if (!slotHasNoData_(bd.doublePress[mod])) return true;
+    }
+    return false;
+}
+
+bool uf1BankSetHasContent(int bank, int mod)
+{
+    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return uf1BankSetHasContentLocked_(bank, mod);
+}
+
+bool uf1BankClipboardFull()     { std::lock_guard<std::mutex> lk(g_cfgMutex);
+                                  return g_uf1BankClip.full; }
+bool uf1BankClipboardHasShift() { std::lock_guard<std::mutex> lk(g_cfgMutex);
+                                  return g_uf1BankClip.full
+                                      && g_uf1BankClip.hasShift; }
+std::string uf1BankClipboardLabel() {
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return g_uf1BankClip.full ? g_uf1BankClip.label : std::string();
+}
+
+bool copyUf1BankToClipboard(int bank, int mod, const std::string& label)
+{
+    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    const bool takeShift = (mod == 0) && uf1BankSetHasContentLocked_(bank, 1);
+    Uf1BankClipboard_ c;
+    for (int s = 0; s < kUf1SoftBankSlots; ++s) {
+        capturePresetSlotLocked_(g_cfg.uf1SoftBanks[bank][s], mod, c.slots[s]);
+        if (takeShift)
+            capturePresetSlotLocked_(g_cfg.uf1SoftBanks[bank][s], 1,
+                                     c.shiftSlots[s]);
+    }
+    c.hasShift = takeShift;
+    c.name     = g_cfg.uf1SoftBankName[bank][mod];
+    c.dyn      = g_cfg.uf1SoftBankDynamic[bank][mod];
+    if (takeShift) {
+        c.nameShift = g_cfg.uf1SoftBankName[bank][1];
+        c.dynShift  = g_cfg.uf1SoftBankDynamic[bank][1];
+    }
+    c.label       = label;
+    c.full        = true;
+    g_uf1BankClip = std::move(c);
+    return true;
+}
+
+bool pasteUf1BankFromClipboard(int bank, int mod)
+{
+    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (!g_uf1BankClip.full) return false;
+    const int dstMod = g_uf1BankClip.hasShift ? 0 : mod;
+    for (int s = 0; s < kUf1SoftBankSlots; ++s) {
+        applyPresetSlotLocked_(g_uf1BankClip.slots[s], dstMod,
+                               g_cfg.uf1SoftBanks[bank][s]);
+        if (g_uf1BankClip.hasShift)
+            applyPresetSlotLocked_(g_uf1BankClip.shiftSlots[s], 1,
+                                   g_cfg.uf1SoftBanks[bank][s]);
+    }
+    // The kind comes along, for the reason the UF8 paste documents: a copy that
+    // turned a Favourites bank into a static one would not be a copy.
+    g_cfg.uf1SoftBankName[bank][dstMod]    = g_uf1BankClip.name;
+    g_cfg.uf1SoftBankDynamic[bank][dstMod] = g_uf1BankClip.dyn;
+    if (g_uf1BankClip.hasShift) {
+        g_cfg.uf1SoftBankName[bank][1]    = g_uf1BankClip.nameShift;
+        g_cfg.uf1SoftBankDynamic[bank][1] = g_uf1BankClip.dynShift;
+    }
+    persistLocked_();
+    return true;
+}
+
+bool clearUf1Bank(int bank, int mod, bool bothSets)
+{
+    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    const Binding empty{};
+    auto wipe = [&](int m) {
+        for (int s = 0; s < kUf1SoftBankSlots; ++s)
+            applyPresetSlotLocked_(empty, m, g_cfg.uf1SoftBanks[bank][s]);
+        g_cfg.uf1SoftBankName[bank][m]    = std::string();
+        g_cfg.uf1SoftBankDynamic[bank][m] = DynamicBankKind::None;
+    };
+    wipe(bothSets ? 0 : mod);
+    if (bothSets) wipe(1);
+    persistLocked_();
+    return true;
+}
+
 // ---- Factory Rea-Sixty soft-key bank presets -----------------------------
 // Curated from Rea-Sixty's own built-ins only (Frank's locked curation,
 // backlog 2026-06-22). Labels ≤12 chars — the old note here said 8, which

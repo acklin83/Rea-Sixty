@@ -6796,6 +6796,111 @@ static void renderBankMatrixModals_(ImGui_Context* ctx)
 }
 
 
+// ---- UF1 soft-key bank matrix: right-click menu + in-place rename ---------
+// The UF1 twin of the block above. Its own state and its own function because
+// the two matrices address different things: over there a cell IS a bank, here
+// a bank is a COLUMN and a cell is one key inside it.
+static int  s_uf1BankCtx       = -1;    // which bank the menu is about
+static int  s_uf1BankCtxSet    = 0;     // which set it was opened on
+static bool s_uf1BankCtxFilled = false;
+static bool s_uf1BankCtxOpen   = false;
+// Rename in place (double-click a header, or the menu's Rename): which bank is
+// being typed into, for which set, and the buffer. -1 = nobody.
+static int  s_uf1BankRen = -1, s_uf1BankRenMod = -1;
+static char s_uf1BankRenBuf[64] = {0};
+static bool s_uf1BankRenFocus = false;
+
+// "Bank 3" / "Bank 3 (Shift)" — the bank, said the way the matrix says it.
+static std::string uf1BankCellLabel_(int bank, int mod)
+{
+    char b[64];
+    snprintf(b, sizeof(b), "Bank %d%s", bank + 1, mod == 0 ? "" : " (Shift)");
+    return std::string(b);
+}
+
+// Is there anything here to copy or clear? On Plain that includes a filled
+// Shift set, because copying Plain takes Shift along (copyUf1BankToClipboard).
+static bool uf1BankMenuFilled_(int bank, int mod)
+{
+    using namespace uf8::bindings;
+    return uf1BankSetHasContent(bank, mod)
+        || (mod == 0 && uf1BankSetHasContent(bank, 1));
+}
+
+static void renderUf1BankMatrixContextMenu_(ImGui_Context* ctx)
+{
+    if (s_uf1BankCtxOpen) {
+        ImGui_OpenPopup(ctx, "##uf1bank_ctx", nullptr);
+        s_uf1BankCtxOpen = false;
+    }
+    if (!ImGui_BeginPopup(ctx, "##uf1bank_ctx", nullptr)) return;
+    if (s_uf1BankCtx < 0) { ImGui_EndPopup(ctx); return; }
+    using namespace uf8::bindings;
+    const int b   = s_uf1BankCtx;
+    const int mod = s_uf1BankCtxSet;
+    const std::string here = uf1BankCellLabel_(b, mod);
+
+    ImGui_TextDisabled(ctx, here.c_str());
+    ImGui_Separator(ctx);
+
+    // ---- Name ------------------------------------------------------------
+    if (ImGui_MenuItem(ctx, "Rename…", nullptr, nullptr, nullptr)) {
+        s_uf1BankRen      = b;
+        s_uf1BankRenMod   = mod;
+        s_uf1BankRenFocus = true;
+        snprintf(s_uf1BankRenBuf, sizeof(s_uf1BankRenBuf), "%s",
+                 getUf1SoftBankName(b, mod).c_str());
+    }
+
+    // ---- Clipboard -------------------------------------------------------
+    ImGui_Separator(ctx);
+    bool canCopy = s_uf1BankCtxFilled;
+    if (ImGui_MenuItem(ctx, "Copy bank", nullptr, nullptr, &canCopy))
+        copyUf1BankToClipboard(b, mod, here);
+    if (ImGui_MenuItem(ctx, "Cut bank", nullptr, nullptr, &canCopy)) {
+        if (copyUf1BankToClipboard(b, mod, here))
+            clearUf1Bank(b, mod, /*bothSets*/ uf1BankClipboardHasShift());
+    }
+    const std::string clip = uf1BankClipboardLabel();
+    char pasteLbl[160];
+    if (clip.empty()) snprintf(pasteLbl, sizeof(pasteLbl), "Paste bank");
+    else              snprintf(pasteLbl, sizeof(pasteLbl), "Paste bank (%s)",
+                               clip.c_str());
+    bool canPaste = uf1BankClipboardFull();
+    if (ImGui_MenuItem(ctx, pasteLbl, nullptr, nullptr, &canPaste))
+        pasteUf1BankFromClipboard(b, mod);
+    if (uf1BankClipboardHasShift())
+        ImGui_TextDisabled(ctx, "The clipboard carries Plain and Shift.");
+    bool canClear = s_uf1BankCtxFilled;
+    if (ImGui_MenuItem(ctx, "Clear bank", nullptr, nullptr, &canClear))
+        clearUf1Bank(b, mod, /*bothSets*/ false);
+
+    // ---- Dynamic bank ----------------------------------------------------
+    // The kinds, in the order the combo under the matrix lists them. Only the
+    // ORDER lives here: the wording is dynKindLabelForSet_'s, which is also
+    // what makes "Off" read as "take Plain's bank" on a modifier set.
+    ImGui_Separator(ctx);
+    if (ImGui_BeginMenu(ctx, "Dynamic bank", nullptr)) {
+        static const DynamicBankKind kKinds[] = {
+            DynamicBankKind::None,         DynamicBankKind::FxBank,
+            DynamicBankKind::ParamGroups,  DynamicBankKind::TrackColours,
+            DynamicBankKind::Favourites,   DynamicBankKind::CsFavourites,
+            DynamicBankKind::BcFavourites, DynamicBankKind::HueScenes,
+            DynamicBankKind::ObsScenes,
+        };
+        const DynamicBankKind cur = getUf1SoftBankDynamic(b, mod);
+        for (const auto k : kKinds) {
+            bool sel = (k == cur);
+            if (ImGui_MenuItem(ctx, dynKindLabelForSet_(k, mod), nullptr, &sel,
+                               nullptr))
+                setUf1SoftBankDynamic(b, mod, k);
+        }
+        ImGui_EndMenu(ctx);
+    }
+    ImGui_EndPopup(ctx);
+}
+
+
 void SettingsScreen::drawBindings(ImGui_Context* ctx)
 {
     using namespace uf8::bindings;
@@ -7404,11 +7509,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                     - static_cast<int>(ButtonId::Uf1DisplaySoft1);
         {
             using namespace uf8::bindings;
-            // Rename in place (double-click a bank's header): which bank is
-            // being typed into, for which set, and the buffer. -1 = nobody.
-            static int  s_uf1BankRen = -1, s_uf1BankRenMod = -1;
-            static char s_uf1BankRenBuf[64] = {0};
-            static bool s_uf1BankRenFocus = false;
             // Held for the whole table: a click writes both of these, and the
             // rows after it would otherwise mark a different cell than the rows
             // before it in the same frame.
@@ -7536,6 +7636,20 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                         }
                     } else {
                         ImGui_TableHeader(ctx, hdr);
+                        // ⇨ THE RIGHT-CLICK ENGAGES THE BANK FIRST, so the bank
+                        // you are working on is the bank the surface is showing.
+                        // The menu itself is drawn after the table, outside this
+                        // cell's ID scope.
+                        int rmb = 1;
+                        if (ImGui_IsItemClicked(ctx, &rmb)) {
+                            s_bankKeepScroll   = ImGui_GetScrollY(ctx);
+                            reasixty_setUf1SoftBank(b);
+                            s_uf1BankCtx       = b;
+                            s_uf1BankCtxSet    = g_slotEditModIdx;
+                            s_uf1BankCtxFilled =
+                                uf1BankMenuFilled_(b, g_slotEditModIdx);
+                            s_uf1BankCtxOpen   = true;
+                        }
                         int lmb = 0;
                         if (ImGui_IsItemHovered(ctx, nullptr)
                             && ImGui_IsMouseDoubleClicked(ctx, lmb)) {
@@ -7612,9 +7726,29 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                             // beneath the newly marked cell.
                             slotIdx = s;
                         }
+                        // ⇨ THE WHOLE COLUMN ANSWERS THE RIGHT-CLICK, not just
+                        // the header strip. The column IS the bank, the menu
+                        // says which bank it is on its first line, and a menu
+                        // that only opened on one thin row would mostly be
+                        // hunted for. Selecting the slot as well keeps the
+                        // editor below pointing at what was clicked.
+                        int rmbCell = 1;
+                        if (ImGui_IsItemClicked(ctx, &rmbCell)) {
+                            s_bankKeepScroll   = ImGui_GetScrollY(ctx);
+                            reasixty_setUf1SoftBank(b);
+                            s_selected = static_cast<ButtonId>(
+                                static_cast<int>(ButtonId::Uf1DisplaySoft1) + s);
+                            slotIdx            = s;
+                            s_uf1BankCtx       = b;
+                            s_uf1BankCtxSet    = g_slotEditModIdx;
+                            s_uf1BankCtxFilled =
+                                uf1BankMenuFilled_(b, g_slotEditModIdx);
+                            s_uf1BankCtxOpen   = true;
+                        }
                     }
                 }
                 ImGui_EndTable(ctx);
+                renderUf1BankMatrixContextMenu_(ctx);
             }
             ImGui_Spacing(ctx);
         }

@@ -1276,6 +1276,28 @@ void            setSubBankName(int layer, int quick, int sub, int mod,
                                const std::string& name);
 std::string     getUf1SoftBankName(int bank, int mod);
 void            setUf1SoftBankName(int bank, int mod, const std::string& name);
+// Does THAT SET of this bank hold anything? The UF1 twin of
+// subBankSetHasContent, and narrow in the same way: it answers for the one set,
+// not for the whole Binding, which is the question "does copying Plain take
+// Shift along" needs answered.
+bool            uf1BankSetHasContent(int bank, int mod);
+
+// ---- UF1 soft-key bank clipboard (Copy / Cut / Paste in the bank matrix) --
+// ⚠ SEPARATE FROM THE UF8 CLIPBOARD ABOVE. A UF8 bank is eight keys and a UF1
+// bank is four, so one shared buffer would drop half a bank or fill half a
+// bank, and neither is a copy. Session-only and set-aware exactly like its UF8
+// twin: it carries the four slots, the bank's name and its dynamic kind,
+// copying from Plain takes Shift along when Shift holds something, and paste
+// writes the kind back.
+bool            uf1BankClipboardFull();
+bool            uf1BankClipboardHasShift();
+std::string     uf1BankClipboardLabel();   // "Bank 3 - MIX KEYS", for the menu
+bool            copyUf1BankToClipboard(int bank, int mod,
+                                       const std::string& label);
+bool            pasteUf1BankFromClipboard(int bank, int mod);
+// Empty a bank. `bothSets` clears Plain and Shift, else just `mod`; the name
+// and the dynamic kind of the cleared set(s) go too.
+bool            clearUf1Bank(int bank, int mod, bool bothSets);
 // Number of UF1 soft-key banks in use (highest assigned bank + 1, min 1) —
 // dynamic banks or banks with any non-empty slot count. Drives the DAW-mode
 // header denominator + bounds the DAW bank paging. Frank 2026-08-04.
