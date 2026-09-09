@@ -111,7 +111,10 @@ int main()
         const auto& r = back.maps[0];
         EXPECT(r.uf1Mode == true);
         EXPECT(r.uf1.vpots.size() == 2);
-        EXPECT(r.uf1.softKeys.size() == 1);
+        // Two, not one: kV10 is a Channel Strip with a FaderLevel slot and an
+        // explicit UF1 layer, so the v17 migration writes the PLUG-IN key in.
+        // Its own case is below; here it only has to not disturb the rest.
+        EXPECT(r.uf1.softKeys.size() == 2);
         // Sparse positions are keyed, not implied by array order.
         const UserUf1Slot* s0 = uf1SlotAt(r.uf1.vpots, 0);
         const UserUf1Slot* s7 = uf1SlotAt(r.uf1.vpots, 7);
@@ -137,6 +140,12 @@ int main()
         EXPECT(parse_(kV10, c));
         auto& m = c.maps[0];
         m.uf1Mode = true;
+        // Current-version document: what this case pins is writer/parser
+        // symmetry, and a MIGRATION legitimately breaks byte-idempotence (v17
+        // adds the PLUG-IN key to an old CS map). Only an out-of-date document
+        // gets migrated, so stamp this one as current and keep the two concerns
+        // apart — the v17 shift has its own case at the end.
+        c.formatVersion = kCurrentFormatVersion;
         UserUf1Slot lit{};  lit.pos = 0; lit.vst3Param = 21; lit.ledRgb = 0xFF8000;
         UserUf1Slot dark{}; dark.pos = 1; dark.vst3Param = 22;   // no colour set
         m.uf1.softKeys.push_back(lit);
@@ -341,6 +350,52 @@ int main()
         seedUf1FromSlots(m2);
         EXPECT(m2.uf1.softKeys.size() == 1);
         EXPECT(uf1SlotAt(m2.uf1.softKeys, 0)->vst3Param == 30);
+    }
+
+    // --- v17: the PLUG-IN key is written into an EXISTING explicit map ------
+    // The runtime reserves the position in the packed stream, but a map with an
+    // explicit UF1 layer has no stream — and withholding the key there turned
+    // the feature off for exactly the strips someone mapped by hand. So the
+    // migration writes it in and shifts what sat at or past the position.
+    {
+        UserPluginCatalog c{};
+        EXPECT(parse_(kV10, c));                 // CS domain, FaderLevel slot
+        auto& m = c.maps[0];
+        m.uf1Mode = true;
+        auto sk = [&](int pos, int param) {
+            UserUf1Slot s{}; s.pos = pos; s.vst3Param = param;
+            m.uf1.softKeys.push_back(s);
+        };
+        sk(0, 100); sk(1, 101); sk(2, 102); sk(3, 103); sk(4, 104);
+
+        UserPluginCatalog back{};
+        EXPECT(parse_(serialize_(c), back));
+        const auto& r = back.maps[0];
+        EXPECT(r.uf1.softKeys.size() == 6);
+        EXPECT(uf1SlotAt(r.uf1.softKeys, 0)->vst3Param == 100);   // below: put
+        EXPECT(uf1SlotAt(r.uf1.softKeys, 2)->vst3Param == 102);
+        const UserUf1Slot* key = uf1SlotAt(r.uf1.softKeys, 3);
+        EXPECT(key && key->special == uint8_t(Uf1SkSpecial::StripMode));
+        EXPECT(uf1SlotAt(r.uf1.softKeys, 4)->vst3Param == 103);   // and past: moved
+        EXPECT(uf1SlotAt(r.uf1.softKeys, 5)->vst3Param == 104);
+
+        // Idempotent even before the first save at v17: re-parsing the same
+        // old-version payload must not shift a second time, or a user who never
+        // saves walks their layout one key further on every launch.
+        UserPluginCatalog again{};
+        EXPECT(parse_(serialize_(back), again));
+        EXPECT(again.maps[0].uf1.softKeys.size() == 6);
+        EXPECT(uf1SlotAt(again.maps[0].uf1.softKeys, 4)->vst3Param == 103);
+
+        // A map WITHOUT the explicit layer is left alone: the runtime reserves
+        // the position in its packed stream instead, and writing a slot here
+        // would switch the layer on behind the user's back.
+        UserPluginCatalog c2{};
+        EXPECT(parse_(kV10, c2));
+        c2.maps[0].uf1Mode = false;
+        UserPluginCatalog back2{};
+        EXPECT(parse_(serialize_(c2), back2));
+        EXPECT(back2.maps[0].uf1.softKeys.empty());
     }
 
     std::printf("test_user_catalog_uf1: all passed\n");

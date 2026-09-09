@@ -795,9 +795,18 @@ namespace user_plugins {
 //     setting / 1 always on / 2 never). A v15 `true` loads as 1: back when
 //     there was no global switch it WAS an explicit choice, so it stays one.
 //
+// v17 (2026-09-09): the UF1's PLUG-IN soft-key on a LEARNED Channel Strip takes
+//     soft-key 4 of page 1 (kUf1LearnedStripKeyPos), the same place every
+//     factory strip has it. A map with NO explicit UF1 layer gets it at
+//     runtime, from the packed stream. A map WITH one gets it written in, and
+//     that is what this bump is for: the shift of every soft-key at or past
+//     that position is a one-time edit of stored data, so it must happen
+//     exactly once. The first entry above that is not purely additive.
+//
 // The rule every entry above follows: additive and emitted-only-when-set, so
 // an older reader ignores the key and an older file loads byte-identical.
-constexpr int kCurrentFormatVersion = 16;
+// (v17 breaks the second half of that on purpose, see above.)
+constexpr int kCurrentFormatVersion = 17;
 
 // Result of a save attempt. `Collision` means at least one map's `match`
 // would also hit a built-in plugin's match string — the save is refused

@@ -27851,10 +27851,21 @@ static const uf8::UserUf1Map* uf1ExplicitMapAt_(MediaTrack* tr, int fx)
 bool uf1LearnedStripKeyAt_(MediaTrack* tr, int fx, int flat)
 {
     if (flat != uf8::kUf1LearnedStripKeyPos) return false;
-    if (uf1ExplicitMapAt_(tr, fx))            return false;
     char nm[256];
     if (!uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm))) return false;
-    return uf1LearnedHasStripKey_(nm);
+    if (!uf1LearnedHasStripKey_(nm))                return false;
+    // ⛔ AN EXPLICIT MAP OWNS A KEY IT ACTUALLY FILLED, not one it merely could
+    // have. Reading an empty position as a claim withheld the key from every
+    // hand-mapped strip, which is the opposite of who wants it (Frank
+    // 2026-09-09). The v17 migration writes the key into the maps that existed
+    // then; this covers the rest — a map that gains a Fader Level slot later,
+    // or one the migration skipped.
+    if (const auto* u1 = uf1ExplicitMapAt_(tr, fx)) {
+        const uf8::UserUf1Slot* s = uf8::uf1SlotAt(u1->softKeys, flat);
+        if (s && (s->vst3Param >= 0 || s->special || !s->pushSteps.empty()))
+            return false;
+    }
+    return true;
 }
 
 int uf1CsVpotParam_(MediaTrack* tr, int fx, int type, int page, int idx)
@@ -32096,6 +32107,12 @@ void uf1PaintChannel_()
                 const uf8::UserUf1Slot* s = uf8::uf1SlotAt(
                     skXmap->softKeys, skPage * uf8::kUserUf1PerPage + i);
                 haveLabel = true;          // blank when the position is empty
+                // …except the reserved PLUG-IN key on an EMPTY position, which
+                // uf1LearnedStripKeyAt_ answers for both maps and streams.
+                if (!s && uf1LearnedStripKeyAt_(skTr, skFx, skPage * 4 + i)) {
+                    label = uf1SkSpecialLabel_(uf8::Uf1SkSpecial::StripMode);
+                    on    = g_uf1StripMode.load();
+                } else
                 // v14: a special (non-parameter) action wins over the param —
                 // same precedence the press path uses. Its label is the p188
                 // wording unless the user named the key themselves.
@@ -43952,17 +43969,15 @@ const char* reasixty_uf1FactoryLabel(void* trV, int fx, bool softKeys,
     if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return "";
     const int type = uf1CsPluginType_(tr, fx);
     if (type < 0) return "";
+    // The reserved PLUG-IN key carries no param, so the editors — which list
+    // positions by what they are bound to — would show it as free while the
+    // hardware prints it. Asked FIRST, because it also applies on an explicit
+    // map whose position is empty, and that map returns early below.
+    if (softKeys && uf1LearnedStripKeyAt_(tr, fx, page * uf8::kUserUf1PerPage + idx))
+        return uf1SkSpecialLabel_(uf8::Uf1SkSpecial::StripMode);
     if (uf1ExplicitMapAt_(tr, fx)) return "";        // explicit map owns its labels
     char nm[256];
-    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm))) {
-        // A learned strip's positions are params and already listed — except the
-        // ONE reserved PLUG-IN key, which carries no param either and would
-        // otherwise be exactly as invisible in the editors as the factory keys
-        // were before this function existed.
-        if (softKeys && uf1LearnedStripKeyAt_(tr, fx, page * uf8::kUserUf1PerPage + idx))
-            return uf1SkSpecialLabel_(uf8::Uf1SkSpecial::StripMode);
-        return "";
-    }
+    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm))) return "";   // learned: params only
     if (page >= uf1CsPageCountFor_(type, tr, fx)) return "";
     if (softKeys) {
         const Uf1CsSoftKey& sk = kUf1CsSoftKeys[type][page].slot(idx);

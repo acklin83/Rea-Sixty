@@ -1286,6 +1286,45 @@ bool parse_(const std::string& json, UserPluginCatalog& out)
         out.maps.push_back(std::move(m));
     }
 
+    // ---- v16 -> v17: the PLUG-IN soft-key on a learned Channel Strip -------
+    // A map with no explicit UF1 layer has the key reserved at runtime, in the
+    // packed stream (uf1LearnedStreamSlots_). A map WITH one had it withheld:
+    // the rule "an explicit slot owns its key" was applied to a key the user had
+    // never had the chance to place, so the feature was off for exactly the
+    // plug-ins somebody cared enough about to map by hand (Frank 2026-09-09,
+    // four of his six channel strips). Write it in, and shift what sat at or
+    // past that position one place along so nothing is lost.
+    //
+    // Once, hence the version bump: this edits stored positions. It stays
+    // idempotent even before the first save (a map that already carries either
+    // Strip Mode variant is left alone), so a user who deletes the key again
+    // does not get it back on the next launch.
+    if (fv < 17) {
+        for (auto& m : out.maps) {
+            if (!m.uf1Mode || !uf1MapWantsStripKey(m)) continue;
+            bool have = false;
+            for (const auto& sk : m.uf1.softKeys)
+                if (sk.special == static_cast<uint8_t>(Uf1SkSpecial::StripMode)
+                 || sk.special == static_cast<uint8_t>(Uf1SkSpecial::StripModeGui))
+                { have = true; break; }
+            if (have) continue;
+            // Refuse rather than corrupt: a map packed right up to the ceiling
+            // would push its last soft-key off the end, and two slots would
+            // land on one position. Leaves the runtime path to it.
+            bool wouldOverflow = false;
+            for (const auto& sk : m.uf1.softKeys)
+                if (sk.pos >= kUf1LearnedStripKeyPos && sk.pos + 1 > kUserUf1MaxPos)
+                { wouldOverflow = true; break; }
+            if (wouldOverflow) continue;
+            for (auto& sk : m.uf1.softKeys)
+                if (sk.pos >= kUf1LearnedStripKeyPos) ++sk.pos;
+            UserUf1Slot pk{};
+            pk.pos     = kUf1LearnedStripKeyPos;
+            pk.special = static_cast<uint8_t>(Uf1SkSpecial::StripMode);
+            m.uf1.softKeys.push_back(std::move(pk));
+        }
+    }
+
     // Enforce isDefault one-of per "primary mode" (highest-index wins on
     // conflict). Primary modes are CS, BC, and UF8-only — a CS+UF8 map
     // shares the CS default slot with a CS-only map.
