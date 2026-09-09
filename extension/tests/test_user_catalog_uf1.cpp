@@ -419,23 +419,70 @@ int main()
         EXPECT(r.grBcVuCalDb[1] > 1.79 && r.grBcVuCalDb[1] < 1.81);
         EXPECT(r.grBcVuRawDb[0] < 0.0);          // untouched stays "at the tick"
 
-        // The effective scale puts the correction where it was measured, and
-        // an uncaptured point keeps its own tick.
+        // The effective scale puts the correction where it was measured. The
+        // uncaptured ticks FOLLOW it rather than staying at themselves — the
+        // pull-along case has its own block below.
         double eff[6];
         grEffectiveBreakpoints(kBcVuBpDb, r.grBcVuRawDb, 6, eff);
         EXPECT(eff[0] == 0.0);
         EXPECT(eff[1] > 2.19 && eff[1] < 2.21);
-        EXPECT(eff[2] == 8.0);
+        EXPECT(eff[2] > 4.39 && eff[2] < 4.41);        // 8 * (2.2/4)
         // …so a reading of 2.2 now displays as 4.0, which is the whole point.
-        const double shown = applyGrCalibration(2.2, eff, r.grBcVuCalDb, 6);
+        double effOff[6];
+        grResolveCalibration(kBcVuBpDb, r.grBcVuRawDb, r.grBcVuCalDb, 6,
+                             eff, effOff);
+        const double shown = applyGrCalibration(2.2, eff, effOff, 6);
         EXPECT(shown > 3.99 && shown < 4.01);
 
         // Out-of-order captures must not break the strictly-increasing
-        // precondition: such a point falls back to its own tick.
+        // precondition of applyGrCalibration.
         double raw2[6] = { -1.0, 9.0, 3.0, -1.0, -1.0, -1.0 };
         double eff2[6];
         grEffectiveBreakpoints(kBcVuBpDb, raw2, 6, eff2);
         for (int i = 1; i < 6; ++i) EXPECT(eff2[i] > eff2[i - 1]);
+    }
+
+    // --- v18: ONE capture pulls the whole scale with it ---------------------
+    // A plug-in reporting a fraction of what it shows is off by a fraction
+    // everywhere, so the ticks nobody captured follow the one that was
+    // captured. Without this a single measurement fixed 4 dB and left 8, 12
+    // and 20 exactly as wrong as before.
+    {
+        const double ticks[6] = {0, 4, 8, 12, 16, 20};
+        double raw[6] = {-1, 2.2, -1, -1, -1, -1};      // needle 4, reports 2.2
+        double off[6] = {0, 0, 0, 0, 0, 0};
+        double bp[6], eo[6];
+        grResolveCalibration(ticks, raw, off, 6, bp, eo);
+
+        // Slope 2.2/4 = 0.55 through the origin, so 8 sits at 4.4, 20 at 11.
+        EXPECT(bp[0] == 0.0);
+        EXPECT(bp[1] > 2.19 && bp[1] < 2.21);
+        EXPECT(bp[2] > 4.39 && bp[2] < 4.41);
+        EXPECT(bp[5] > 10.99 && bp[5] < 11.01);
+        // …and each still lands on its own tick when that reading comes in.
+        for (int i = 0; i < 6; ++i) {
+            const double shown = applyGrCalibration(bp[i], bp, eo, 6);
+            EXPECT(shown > ticks[i] - 0.01 && shown < ticks[i] + 0.01);
+        }
+
+        // A second capture higher up is fine-tuning: it REPLACES the guess
+        // there, the segment below it interpolates between the two, and above
+        // it the new slope extends.
+        raw[2] = 5.0;                                   // measured, not 4.4
+        grResolveCalibration(ticks, raw, off, 6, bp, eo);
+        EXPECT(bp[1] > 2.19 && bp[1] < 2.21);           // untouched
+        EXPECT(bp[2] > 4.99 && bp[2] < 5.01);           // measured wins
+        // slope of the last segment = (5.0-2.2)/4 = 0.7 → 12 sits at 5.0+2.8
+        EXPECT(bp[3] > 7.79 && bp[3] < 7.81);
+
+        // Nothing captured = the legacy table, offsets typed at the ticks.
+        double none[6] = {-1, -1, -1, -1, -1, -1};
+        double typed[6] = {0, 4.1, 4.7, 4.2, 0, 0};     // Frank's townhouse row
+        grResolveCalibration(ticks, none, typed, 6, bp, eo);
+        for (int i = 0; i < 6; ++i) {
+            EXPECT(bp[i] == ticks[i]);
+            EXPECT(eo[i] == typed[i]);
+        }
     }
 
     std::printf("test_user_catalog_uf1: all passed\n");

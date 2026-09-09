@@ -1756,13 +1756,13 @@ When more than one FX anywhere in the project matches the map's name, the editor
 
 Both calibration tables, the **BC VU** needle (6 columns) and the **DYN GR LEDs** with the UF8 GR row (5 columns), work the same way and each column carries a **Set** button.
 
-Drive a sine into the plug-in and set its threshold so the plug-in's own meter reads the column's dB, then press **Set** on that column. Under the button it then says **at 2.20**, or whatever the plug-in was actually reporting at that moment, and the column reads back the correction it derived.
+Drive a sine into the plug-in and set its threshold so the plug-in's own meter reads the column's dB, then press **Set** on that column. Under the button it then says **at 2.20**, or whatever the plug-in was actually reporting at that moment. There is nothing to type and nowhere to type it.
 
-That difference is the reason the button exists. A column corrects the reading, and the reading is not always the number on the plug-in's face: the PreSonus interface asks for the instantaneous reduction in dB and forbids the host to add ballistics, while a drawn needle has its own inertia and its own scale, and a plug-in with several stages is asked to report their sum. Typing a number into a column corrected the value at the column's dB, which on such a plug-in is a level you were never looking at. Capturing records both halves: *when it reports this, show that.*
+That difference is the reason the button exists. A column corrects the reading, and the reading is not always the number on the plug-in's face: the PreSonus interface asks for the instantaneous reduction in dB and forbids the host to add ballistics, while a drawn needle has its own inertia and its own scale, and a plug-in with several stages is asked to report their sum. Capturing records both halves at once: *when it reports this, show that.*
 
-Columns you never capture stay where they always were, at their own tick, so a plug-in that already lined up needs nothing. The small **x** under a captured column forgets that point. **Reset** clears the whole table.
+**One column is enough to start.** A plug-in that reports 2.2 where it shows 4 is reporting a fraction, not a fixed error, so the columns you have not captured follow the same proportion and say **(from others)** under themselves. Capture a higher one and it stops guessing there: that measurement replaces the estimate, the span between the two captures is interpolated, and everything above extends the newer slope. So the low end is one press and the high end is refinement, not a second full pass.
 
-Two capture points are usually enough to see what kind of error you have. If a plug-in reports half of what it shows, the two land on a straight line through the origin and the rest of the scale follows; if they do not, capture the ticks you actually work at.
+The small **x** under a captured column forgets that measurement; the column then follows the others again. **Reset** clears the table, and a table with nothing captured behaves exactly as it did before this existed.
 
 ### GR meter override
 

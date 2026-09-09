@@ -327,23 +327,90 @@ struct UserMetering {
     double grLedsRawDb[5] = {-1.0, -1.0, -1.0, -1.0, -1.0};
 };
 
-// The effective breakpoint scale for one calibration table: the captured
-// reading where there is one, the tick itself where there is not. `ticks` is
-// the renderer's own scale (kBcVuBpDb / kLedsBpDb in GrCalibration.h).
+// Resolve one calibration table into the pair applyGrCalibration wants: the
+// breakpoints on the INCOMING scale, and the correction at each.
 //
-// Strictly increasing is a PRECONDITION of applyGrCalibration, and captured
-// readings are measurements, so they can arrive out of order or equal. Anything
-// that would not increase falls back to its tick, which is always ordered.
+// ⇨ ONE CAPTURED POINT DESCRIBES THE WHOLE SCALE, and that is the point of
+// capturing. A plug-in that reports 2.2 where it shows 4 is reporting a
+// fraction, not an offset, so the same fraction is the best available guess at
+// 8, 12 and 20 (Frank 2026-09-09: "wenn ich doch bei 4dB schon 6 daneben liege
+// dann sollen die gegen höhere GR werte schon stehen"). Uncaptured ticks are
+// therefore DERIVED from the captured ones rather than left at themselves, and
+// capturing further up replaces the guess with a measurement, which is what
+// makes the higher end fine-tuning rather than a second full pass.
+//
+// The map runs "reported -> shown". Known pairs are the origin (0,0), which
+// every compressor agrees on, plus each captured (reading, tick). An
+// uncaptured tick is placed by interpolating between the neighbouring known
+// pairs, and above the highest by extending the last segment's slope.
+//
+// LEGACY: with nothing captured at all, the table is what it always was —
+// offsets typed at the ticks — and this returns exactly that, so every map
+// written before v18 behaves identically.
+//
+// Strictly increasing breakpoints are a PRECONDITION of applyGrCalibration and
+// captured readings are measurements, so anything that would not increase is
+// nudged past its predecessor rather than trusted.
+inline void grResolveCalibration(const double* ticks, const double* raw,
+                                 const double* offIn, int n,
+                                 double* bpOut, double* offOut)
+{
+    bool anyMeasured = false;
+    if (raw) for (int i = 0; i < n; ++i) if (raw[i] >= 0.0) { anyMeasured = true; break; }
+
+    if (!anyMeasured) {
+        for (int i = 0; i < n; ++i) {
+            bpOut[i]  = ticks[i];
+            offOut[i] = offIn ? offIn[i] : 0.0;
+        }
+        return;
+    }
+
+    // Known pairs, ascending in tick. The origin anchors the low end so a
+    // single capture already defines a slope.
+    double kTick[17], kRaw[17];
+    int kn = 0;
+    kTick[kn] = 0.0; kRaw[kn] = 0.0; ++kn;
+    for (int i = 0; i < n && kn < 16; ++i) {
+        if (raw[i] < 0.0)      continue;
+        if (ticks[i] <= 0.0)   { kRaw[0] = raw[i]; continue; }   // captured at 0
+        kTick[kn] = ticks[i]; kRaw[kn] = raw[i]; ++kn;
+    }
+
+    auto readingFor = [&](double tick) {
+        if (kn == 1) return tick;                 // only the origin: identity
+        if (tick <= kTick[0]) return kRaw[0];
+        for (int j = 0; j < kn - 1; ++j) {
+            if (tick <= kTick[j + 1]) {
+                const double span = kTick[j + 1] - kTick[j];
+                const double t = (span > 0.0) ? (tick - kTick[j]) / span : 0.0;
+                return kRaw[j] + t * (kRaw[j + 1] - kRaw[j]);
+            }
+        }
+        // Above the highest capture: extend the last segment.
+        const double span = kTick[kn - 1] - kTick[kn - 2];
+        const double slope = (span > 0.0)
+            ? (kRaw[kn - 1] - kRaw[kn - 2]) / span : 1.0;
+        return kRaw[kn - 1] + (tick - kTick[kn - 1]) * slope;
+    };
+
+    double prev = -1e9;
+    for (int i = 0; i < n; ++i) {
+        double bp = (raw[i] >= 0.0) ? raw[i] : readingFor(ticks[i]);
+        if (bp < 0.0)     bp = 0.0;
+        if (bp <= prev)   bp = prev + 1e-6;
+        bpOut[i]  = bp;
+        offOut[i] = ticks[i] - bp;    // land on the tick when that comes in
+        prev = bp;
+    }
+}
+
+// Breakpoints only, for callers that already hold the offsets.
 inline void grEffectiveBreakpoints(const double* ticks, const double* raw,
                                    int n, double* out)
 {
-    double prev = -1e9;
-    for (int i = 0; i < n; ++i) {
-        const double v = (raw && raw[i] >= 0.0) ? raw[i] : ticks[i];
-        out[i] = (v > prev) ? v : ticks[i];
-        if (out[i] <= prev) out[i] = prev + 1e-6;   // last resort, keep it sane
-        prev = out[i];
-    }
+    double off[17];
+    grResolveCalibration(ticks, raw, nullptr, n, out, off);
 }
 
 // V-Pot push behaviour for a UF8 bank slot. User chooses since user plug-in

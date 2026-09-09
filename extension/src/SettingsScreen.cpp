@@ -8478,26 +8478,6 @@ void setGrOffset_(double offsetDb)
 // Clamped to ±20 dB hard cap so a misclick can't dial the meter off
 // scale (full hardware range is 20 dB; ±20 is enough headroom for
 // any practical correction).
-void setGrCal_(int which, int idx, double newValue)
-{
-    if (g_editingMatch.empty()) return;
-    const int n = (which == 0) ? 6 : 5;
-    if (idx < 0 || idx >= n) return;
-    if (newValue >  20.0) newValue =  20.0;
-    if (newValue < -20.0) newValue = -20.0;
-    auto cat = uf8::user_plugins::get();
-    for (auto& m : cat.maps) {
-        if (m.match != g_editingMatch) continue;
-        double* arr = (which == 0) ? m.metering.grBcVuCalDb
-                                    : m.metering.grLedsCalDb;
-        if (arr[idx] == newValue) return;
-        arr[idx] = newValue;
-        uf8::user_plugins::upsert(m);
-        persistAndReport_();
-        break;
-    }
-}
-
 // Capture one calibration point from the live reading (v18). `rawDb` is what
 // the plug-in is reporting right now, after offset and |abs| — the exact number
 // the renderer is about to correct. The tick is what the user says the plug-in
@@ -8521,7 +8501,13 @@ void captureGrCal_(int which, int idx, double rawDb)
         double* off = (which == 0) ? m.metering.grBcVuCalDb : m.metering.grLedsCalDb;
         double* raw = (which == 0) ? m.metering.grBcVuRawDb : m.metering.grLedsRawDb;
         raw[idx] = rawDb;
-        off[idx] = tick - rawDb;      // at that reading, land on the tick
+        // The offsets are DERIVED from the captured pairs (grResolveCalibration)
+        // the moment any capture exists, so the stored ones would be dead
+        // numbers that still show up in the file. Clear them on the first
+        // capture: measuring replaces whatever was typed, which is also the
+        // only thing that can be meant once the typing fields are gone.
+        for (int i = 0; i < n; ++i) off[i] = 0.0;
+        (void)tick;
         uf8::user_plugins::upsert(m);
         persistAndReport_();
         break;
@@ -20413,19 +20399,20 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             const int     nCal   = isBc ? uf8::kBcVuBpCount : uf8::kLedsBpCount;
             const double* curArr = isBc ? editing->metering.grBcVuCalDb
                                         : editing->metering.grLedsCalDb;
+            const double* rawArr = isBc ? editing->metering.grBcVuRawDb
+                                        : editing->metering.grLedsRawDb;
             const char*   title  = isBc
                 ? "VU Cal — BC mechanical needle ticks"
                 : "GR Cal — DYN LEDs + UF8 GR row segments";
 
             ImGui_Text(ctx, title);
             ImGui_TextDisabled(ctx,
-                "Drive a sine into the plug-in and set its threshold so the "
-                "plug-in's own meter reads exactly the column's dB.");
+                "Drive a sine into the plug-in, set its threshold so the "
+                "plug-in's own meter reads a column's dB, then press Set on "
+                "that column.");
             ImGui_TextDisabled(ctx,
-                // Split literal: the digit after a hex escape is eaten by it
-                // ([[settings-pane-structure]], same trap as the search index).
-                "Values are correction offsets in dB. Ctrl-click +/\xe2\x88\x92 = "
-                "\xc2\xb1" "1.0.");
+                "One column is enough to start: the others follow the same "
+                "proportion. Set a higher one to refine that end.");
             ImGui_Spacing(ctx);
 
             // 110 base — fits "+0.00" with breathing room at Normal,
@@ -20478,38 +20465,24 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 }
             }
 
-            ImGui_TextDisabled(ctx,
-                "Or drive the plug-in to a tick and press Set on that column: "
-                "the reading is captured where it actually is, which is not "
-                "always the number on the plug-in's own meter.");
             ImGui_Spacing(ctx);
 
-            const double kInputW = scaleW_(ctx, 110.0);
+            // Resolved once for the whole row: what each tick sits at now,
+            // measured or derived, so the columns can say which they are.
+            double effBp[6], effOff[6];
+            uf8::grResolveCalibration(bp, rawArr, curArr, nCal, effBp, effOff);
+
             for (int i = 0; i < nCal; ++i) {
                 if (i) ImGui_SameLine(ctx, nullptr, nullptr);
                 ImGui_BeginGroup(ctx);
                 char hdrLbl[32];
                 snprintf(hdrLbl, sizeof(hdrLbl), "%g dB plug-in", bp[i]);
                 ImGui_Text(ctx, hdrLbl);
-                char inputId[64];
-                snprintf(inputId, sizeof(inputId),
-                    "dB##fxl_grcal_bot_%d_in_%d", which, i);
-                double v = curArr[i];
-                double step = 0.1, fast = 1.0;
-                int    flags = 0;
-                double w = kInputW;
-                ImGui_SetNextItemWidth(ctx, w);
-                if (ImGui_InputDouble(ctx, inputId, &v, &step, &fast,
-                                      "%+.2f", &flags)) {
-                    setGrCal_(which, i, v);
-                }
+
+                const bool captured = (rawArr[i] >= 0.0);
                 // Capture. Enabled only with a live reading — without one there
                 // is nothing to record, and a button that writes a zero would
                 // look like it worked.
-                const double* rawArr = (which == 0)
-                    ? editing->metering.grBcVuRawDb
-                    : editing->metering.grLedsRawDb;
-                const bool captured = (rawArr[i] >= 0.0);
                 char capId[48];
                 snprintf(capId, sizeof(capId), "%s##fxl_grcap_%d_%d",
                          captured ? "Set again" : "Set", which, i);
@@ -20517,29 +20490,33 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     if (ImGui_Button(ctx, capId, nullptr, nullptr))
                         captureGrCal_(which, i, s_grSmooth);
                     if (ImGui_IsItemHovered(ctx, nullptr)) {
-                        char tip[220];
+                        char tip[240];
                         snprintf(tip, sizeof(tip),
-                            "Press while the plug-in shows %g dB.\n"
-                            "Reading right now: %.2f dB.", bp[i], s_grSmooth);
+                            "Press while the plug-in's own meter shows %g dB.\n"
+                            "It is reporting %.2f dB right now.", bp[i], s_grSmooth);
                         ImGui_SetTooltip(ctx, tip);
                     }
                 } else {
                     ImGui_TextDisabled(ctx, "Set");
                 }
-                // What was captured, so the pair is visible rather than implied.
+
+                // State of this column, in the terms the mechanism works in:
+                // the reading it sits at, and whether that was measured here or
+                // followed from another column.
+                char stateTxt[64];
+                snprintf(stateTxt, sizeof(stateTxt), "at %.2f%s",
+                         effBp[i], captured ? "" : " (from others)");
+                ImGui_TextDisabled(ctx, stateTxt);
                 if (captured) {
-                    char capTxt[64];
-                    snprintf(capTxt, sizeof(capTxt), "at %.2f", rawArr[i]);
-                    ImGui_TextDisabled(ctx, capTxt);
                     ImGui_SameLine(ctx, nullptr, nullptr);
                     char clrId[48];
                     snprintf(clrId, sizeof(clrId), "x##fxl_grclr_%d_%d", which, i);
                     if (ImGui_SmallButton(ctx, clrId))
                         clearGrCapture_(which, i);
                     if (ImGui_IsItemHovered(ctx, nullptr))
-                        ImGui_SetTooltip(ctx, "Forget this captured point");
-                } else {
-                    ImGui_TextDisabled(ctx, "at tick");
+                        ImGui_SetTooltip(ctx,
+                            "Forget this measurement. The column then follows "
+                            "the other captures again.");
                 }
                 ImGui_EndGroup(ctx);
             }
@@ -20592,17 +20569,17 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     const double offDb = editing->metering.grOffsetDb;
                     const double shifted = rawDb + offDb;
                     const double absV  = (shifted < 0) ? -shifted : shifted;
-                    // Same breakpoints the device resolves (captured reading
-                    // where there is one, tick where there is not) — the whole
-                    // point of this line is that it agrees with the hardware.
-                    double effBp[6];
-                    uf8::grEffectiveBreakpoints(
+                    // Resolved exactly as the device cache resolves it, both
+                    // halves together — the whole point of this line is that it
+                    // agrees with the hardware.
+                    double effBp[6], effOff[6];
+                    uf8::grResolveCalibration(
                         bp,
                         isBc ? editing->metering.grBcVuRawDb
                              : editing->metering.grLedsRawDb,
-                        nCal, effBp);
+                        curArr, nCal, effBp, effOff);
                     const double calV  = uf8::applyGrCalibration(
-                        absV, effBp, curArr, nCal);
+                        absV, effBp, effOff, nCal);
                     // The device table applies to the BC needle only; the LED /
                     // UF8-row scale has its own, on the other section.
                     double devCal[6];

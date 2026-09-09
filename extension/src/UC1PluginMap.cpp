@@ -605,12 +605,16 @@ void rebuildUserCache_locked_()
         // popup next to the AutoLearn button in the FX Learn editor.
         e->grVst3Param    = um.metering.grVst3Param;
         e->grOffsetDb     = um.metering.grOffsetDb;
-        for (int i = 0; i < 6; ++i) e->bcVuCalDb[i] = um.metering.grBcVuCalDb[i];
-        for (int i = 0; i < 5; ++i) e->ledsCalDb[i] = um.metering.grLedsCalDb[i];
-        uf8::grEffectiveBreakpoints(uf8::kBcVuBpDb, um.metering.grBcVuRawDb,
-                                    6, e->bcVuBpDb);
-        uf8::grEffectiveBreakpoints(uf8::kLedsBpDb, um.metering.grLedsRawDb,
-                                    5, e->ledsBpDb);
+        // ⛔ RESOLVE BOTH HALVES TOGETHER, HERE, ONCE. With a captured point the
+        // offsets are DERIVED from the pairs, so taking the breakpoints from the
+        // resolver and the offsets from the stored table would mix two different
+        // curves. Every reader downstream takes what this cache holds.
+        uf8::grResolveCalibration(uf8::kBcVuBpDb, um.metering.grBcVuRawDb,
+                                  um.metering.grBcVuCalDb, 6,
+                                  e->bcVuBpDb, e->bcVuCalDb);
+        uf8::grResolveCalibration(uf8::kLedsBpDb, um.metering.grLedsRawDb,
+                                  um.metering.grLedsCalDb, 5,
+                                  e->ledsBpDb, e->ledsCalDb);
         for (int l = 0; l < uf8::kNumFxLayers; ++l) {
             e->bindings[l].match     = e->matchOwned.c_str();
             e->bindings[l].shortName = e->shortNameOwned.c_str();
