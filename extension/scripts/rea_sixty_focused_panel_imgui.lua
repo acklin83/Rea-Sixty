@@ -475,11 +475,18 @@ local function readModeList(key)
   return list, active
 end
 
--- One mode drop-down. Picking the row you are already on does nothing: every one
--- of these builtins toggles, so re-firing it would drop you to the default.
--- Picking a row that has no builtin (Select / Channel Select) fires the ACTIVE
--- row's builtin instead, which is exactly what toggling off means.
-local function drawModeCombo(label, key, fallback)
+-- One mode drop-down. Picking the row you are already on does nothing: the UF8
+-- builtins all toggle, so re-firing one would drop you to the default. Picking a
+-- row that has no payload (Select / Channel Select) fires the ACTIVE row's
+-- instead, which is exactly what toggling off means.
+--
+-- `prefix` is what the payload gets sent under, "mode;" by default — the UF8
+-- rings and the UF1 jog ring carry a builtin name there. The UF1 ENCODER ring
+-- carries a mode number instead and comes with "uf1enc;", because those modes
+-- have REAPER actions but no builtins of their own. The row's payload is
+-- whatever the extension put in field 2; this end never decides what it means.
+local function drawModeCombo(label, key, fallback, prefix)
+  prefix = prefix or "mode;"
   local list, active = readModeList(key)
   if not list or #list == 0 then
     if fallback and fallback ~= "" then labelled(label, fallback) end
@@ -497,7 +504,7 @@ local function drawModeCombo(label, key, fallback)
         if b == "" and active >= 0 and list[active + 1] then
           b = list[active + 1].builtin        -- toggle the active one off
         end
-        if b ~= "" then sendPanelCmd("mode;" .. b) end
+        if b ~= "" then sendPanelCmd(prefix .. b) end
       end
     end
     reaper.ImGui_EndCombo(ctx)
@@ -513,19 +520,20 @@ end
 
 -- The UF1's channel encoder runs its OWN mode ring, not the UF8's — hence its own
 -- element rather than a second value on the line above (Frank 2026-08-26).
+-- A drop-down since 2026-09-09, in the same style as Sel and Enc above: the ring
+-- is scrolled blind under a held key, so being able to go straight to a mode is
+-- worth more here than anywhere. mode_state's field 3 is the fallback for an
+-- extension too old to publish the list.
 local function drawUf1Enc()
   local f = modeState()
-  if not f or not f[3] or f[3] == "" then return end
-  labelled("UF1 Enc", f[3])
+  drawModeCombo("UF1 Enc", "uf1_encmodes", f and f[3], "uf1enc;")
 end
 
 -- The UF1 jog wheel's mode ring (Playhead / Scrub / Items / Envelope / Razor Edit /
--- Fades). Both rings are scrolled blind under a held key, so an always-on readout is
--- the point of putting them here.
+-- Fades). Same drop-down, and its rows carry builtins, so the default prefix does.
 local function drawJog()
   local f = modeState()
-  if not f or not f[4] or f[4] == "" then return end
-  labelled("Jog", f[4])
+  drawModeCombo("Jog", "uf1_jogmodes", f and f[4])
 end
 
 -- Every UF8 soft-key bank there is, as a drop-down you can jump with. The UF8 has

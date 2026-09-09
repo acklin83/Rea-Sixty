@@ -8209,6 +8209,9 @@ uint8_t builtinDeviceMask(const std::string& n)
     // Same reasoning as uf1_view_* right above: the UF1's lamp screen is a place
     // you want to reach from whatever surface your hand is already on.
     if (n == "uf1_hue") return 0b111;
+    // Same again: which UF1 bank is up is a place, and reaching it from a UF8
+    // key is no stranger than reaching a UF1 view from one (Frank 2026-09-09).
+    if (n == "uf1_bank_select") return 0b111;
     if (n.rfind("uf1_", 0) == 0) return 0b100;   // UF1-only (uf1_flip/master/uf1_encoder_*/…)
     if (n.rfind("uf8_", 0) == 0) return 0b001;   // UF8-only (uf8_plugin_mode_*)
     if (n.rfind("uc1_", 0) == 0) return 0b010;   // UC1-only (uc1_outgain_fader_toggle)

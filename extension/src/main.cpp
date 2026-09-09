@@ -444,6 +444,11 @@ bool        reasixty_uf1EncoderModeVisible(int modeInt);
 void        reasixty_setUf1EncoderModeVisible(int modeInt, bool on);
 void        reasixty_uf1EncoderMoveSeq(int pos, int dir);
 const char* reasixty_uf1EncoderModeName(int modeInt);
+// UF1 jog-mode ring, same story: defined at global scope far below, and the
+// focused panel's ring publisher up here needs the visible ones in user order.
+int         reasixty_uf1JogModeCount();
+int         reasixty_uf1JogSeqAt(int pos);
+bool        reasixty_uf1JogModeVisible(int mode);
 // Needed by the hud_cmd drain ("uf1page;"), which sits inside the anonymous
 // namespace below — a declaration in there would name an internal symbol.
 void        reasixty_setUf1CsPage(int page);
@@ -39729,6 +39734,68 @@ void onTimerBody_()
                     em = std::to_string(ei) + em;
                     if (em != emLast) { emLast = em;
                         SetExtState("rea_sixty", "uf8_encmodes", em.c_str(), false); }
+
+                    // ⇨ AND THE UF1'S TWO RINGS, same shape, same drop-down.
+                    // They were read-only lines on the panel while the UF8's two
+                    // had been pickable since 2026-09-02 (Frank 2026-09-09).
+                    // ⚠ THE VISIBLE ONES, IN THE USER'S ORDER. Both rings are
+                    // user-ordered and user-filterable, and a mode its own picker
+                    // skips cannot be reached on the device — offering it here
+                    // would make the panel the only way to a mode the surface
+                    // then cannot show you the way back out of.
+                    static std::string ueLast, ujLast;
+                    {
+                        const int curU = static_cast<int>(g_uf1EncoderMode.load());
+                        std::string ue; int ui = 0, row = 0;
+                        for (int pos = 0; pos < reasixty_uf1EncoderModeTotal(); ++pos) {
+                            const int m = reasixty_uf1EncoderSeqAt(pos);
+                            if (!reasixty_uf1EncoderModeVisible(m)) continue;
+                            if (m == curU) ui = row;
+                            ++row;
+                            // Field 2 is the MODE INT, not a builtin: the UF1
+                            // encoder modes have REAPER actions but no built-ins
+                            // of their own, so the panel sends "uf1enc;<n>" and
+                            // the drain sets the ring. See the cmd handler.
+                            ue += ";"; ue += reasixty_uf1EncoderModeName(m);
+                            ue += "\t"; ue += std::to_string(m);
+                        }
+                        ue = std::to_string(ui) + ue;
+                        if (ue != ueLast) { ueLast = ue;
+                            SetExtState("rea_sixty", "uf1_encmodes", ue.c_str(),
+                                        false); }
+                    }
+                    {
+                        // The jog modes DO have built-ins, one each, and they set
+                        // rather than toggle — so the row carries the built-in
+                        // name like the UF8 rows do, and no row is ever empty.
+                        static const struct { Uf1JogMode m; const char* b; } kJog[] = {
+                            { Uf1JogMode::Playhead, "jog_mode_playhead" },
+                            { Uf1JogMode::Scrub,    "jog_mode_scrub" },
+                            { Uf1JogMode::Items,    "jog_mode_items" },
+                            { Uf1JogMode::Envelope, "jog_mode_envelope" },
+                            { Uf1JogMode::Razor,    "jog_mode_razor" },
+                            { Uf1JogMode::Fades,    "jog_mode_fades" },
+                        };
+                        const auto curJ = g_uf1JogMode.load();
+                        std::string uj; int ji = 0, row = 0;
+                        for (int pos = 0; pos < reasixty_uf1JogModeCount(); ++pos) {
+                            const int m = reasixty_uf1JogSeqAt(pos);
+                            if (!reasixty_uf1JogModeVisible(m)) continue;
+                            const char* b = "";
+                            for (const auto& e : kJog)
+                                if (static_cast<int>(e.m) == m) { b = e.b; break; }
+                            if (!*b) continue;
+                            if (static_cast<int>(curJ) == m) ji = row;
+                            ++row;
+                            uj += ";"; uj += uf1JogModeFriendly(
+                                                 static_cast<Uf1JogMode>(m));
+                            uj += "\t"; uj += b;
+                        }
+                        uj = std::to_string(ji) + uj;
+                        if (uj != ujLast) { ujLast = uj;
+                            SetExtState("rea_sixty", "uf1_jogmodes", uj.c_str(),
+                                        false); }
+                    }
                 }
             }
         }
@@ -40032,6 +40099,20 @@ void onTimerBody_()
                 // the active mode's builtin, because they all toggle.
                 const std::string b = s.substr(5);
                 if (!b.empty()) uf8::bindings::invokeBuiltin(b, 0);
+            } else if (s.rfind("uf1enc;", 0) == 0) {
+                // "uf1enc;<modeInt>" — the panel's UF1 encoder drop-down. Its
+                // own command rather than "mode;<builtin>": the UF1 encoder
+                // modes have REAPER actions but no built-ins, and adding
+                // fourteen of those to carry one drop-down would be the tail
+                // wagging the dog. Sets outright, no toggle — a drop-down picks.
+                // Same three steps every other setter here takes.
+                const int m = std::atoi(s.c_str() + 7);
+                if (m >= 0 && m < reasixty_uf1EncoderModeTotal()
+                    && reasixty_uf1EncoderModeVisible(m)) {
+                    g_uf1EncoderMode.store(static_cast<EncoderMode>(m));
+                    uf1EncoderPersistMode_(static_cast<EncoderMode>(m));
+                    g_pageDirty.store(true);
+                }
             } else if (s.rfind("u8bank;", 0) == 0) {
                 // "u8bank;<layer>;<quick>;<sub>[;<set>]" — jump to a soft-key bank
                 // from the panel's drop-down. Same guards as the pinned startup
