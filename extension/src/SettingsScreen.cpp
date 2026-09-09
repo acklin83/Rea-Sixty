@@ -3359,12 +3359,13 @@ static bool settingsEditorBusy_(ImGui_Context* ctx)
 // is still TRACKED, so a suppressed press leaves no stale "held" behind.
 //
 // ⛔ ONCE PER FRAME, AT THE TOP OF THE PANE — NOT INSIDE THE RADIO ROW.
-// It used to live in drawBankLayerRow_, which is only drawn once a top-soft-key
-// or a sub-bank cell is selected. With anything else selected the surface's FINE
-// moved the hardware and nothing else: the schematic above went on previewing
-// Plain until you clicked a bank and the row (and with it the tracker) came back
-// (Frank 2026-08-25: "die anzeige im UI scheint erst zu funktionieren, nachdem
-// nochmals eine soft-key bank gewählt wurde").
+// It used to live in the Plain/Shift radio row, which is only drawn once a
+// soft-key or a bank cell is selected. With anything else selected the surface's
+// FINE moved the hardware and nothing else: the schematic above went on
+// previewing Plain until you clicked a bank and the row (and with it the
+// tracker) came back (Frank 2026-08-25: "die anzeige im UI scheint erst zu
+// funktionieren, nachdem nochmals eine soft-key bank gewählt wurde"). Both
+// matrices carry those radios in their header now; this stays where it is.
 static void trackBankModifierEdge_(ImGui_Context* ctx, int* modIdx)
 {
     using namespace uf8::bindings;
@@ -3379,25 +3380,6 @@ static void trackBankModifierEdge_(ImGui_Context* ctx, int* modIdx)
     if (*modIdx < 0 || *modIdx >= kSoftKeyModifierSets) *modIdx = 0;
 }
 
-static bool drawBankLayerRow_(ImGui_Context* ctx, const char* tag, int* modIdx)
-{
-    using namespace uf8::bindings;
-    if (*modIdx < 0 || *modIdx >= kSoftKeyModifierSets) *modIdx = 0;
-    static const char* kModNames[kSoftKeyModifierSets] = { "Plain", "Shift" };
-    bool changed = false;
-    ImGui_Text(ctx, "Modifier");
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    for (int m = 0; m < kSoftKeyModifierSets; ++m) {
-        char idbuf[64];
-        snprintf(idbuf, sizeof(idbuf), "%s##%s_lay%d", kModNames[m], tag, m);
-        if (ImGui_RadioButton(ctx, idbuf, *modIdx == m)) {
-            *modIdx = m;
-            changed = true;
-        }
-        if (m < kSoftKeyModifierSets - 1) ImGui_SameLine(ctx, nullptr, nullptr);
-    }
-    return changed;
-}
 
 // Behaviour wording, shared by the per-button editor and the UF1 soft-key bank
 // slot editor so the two cannot drift. Order IS the Behavior enum.
@@ -7402,20 +7384,156 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         drawSubBankCellEditor_(ctx, s_editLayer, s_editQuick, editSel);
     } else if (editSel >= ButtonId::Uf1DisplaySoft1
                && editSel <= ButtonId::Uf1DisplaySoft4) {
-        // UF1 display soft-key → the 10-bank soft-key store (DAW mode). The
-        // Bank slider drives the LIVE bank (reasixty_uf1SoftBank), so picking
-        // here and paging ← → on the UF1 stay in lockstep.
-        const int slotIdx = static_cast<int>(editSel)
-                          - static_cast<int>(ButtonId::Uf1DisplaySoft1);
-        int bank1 = reasixty_uf1SoftBank() + 1;   // 1-based for the slider
-        ImGui_PushItemWidth(ctx, 240);
-        if (ImGui_SliderInt(ctx, "Soft-Key Bank##uf1_bank", &bank1,
-                            1, uf8::bindings::kUf1SoftBankCount,
-                            /*format*/ nullptr, /*flags*/ nullptr)) {
-            reasixty_setUf1SoftBank(bank1 - 1);
+        // UF1 display soft-key → the 10-bank soft-key store (DAW mode).
+        // ⇨ THE MATRIX IS THE SELECTOR, the way it is on the UF8 (Frank
+        // 2026-09-09). It replaces the Bank slider, which only ever showed the
+        // bank you were standing on: ten columns (the banks) by four rows (the
+        // soft-keys), so all forty places are on the page at once. Clicking a
+        // cell ENGAGES that bank on the surface and selects that slot, so the
+        // rule the UF8 matrix rests on holds here too: what you edit is what
+        // the device is showing.
+        // ⚠ A CELL HERE IS A SLOT; on the UF8 a cell is a whole BANK. The
+        // UF8 has sets by sub-banks with eight keys inside, which fits in no
+        // cell; the UF1 has one dimension and four keys, so the key IS the cell.
+        // ⚠ THE MATRIX LIVES INSIDE THIS BRANCH AND NOWHERE ELSE. This is the
+        // arm that draws drawUf1SoftBankSlotEditor_, which has no child windows;
+        // the two 480 px BeginChild columns that height kills ([[learnings]] #31)
+        // belong to drawBindingEditor, the else-arm below. Hoisting the table
+        // above the branch would put it over those columns.
+        int slotIdx = static_cast<int>(editSel)
+                    - static_cast<int>(ButtonId::Uf1DisplaySoft1);
+        {
+            using namespace uf8::bindings;
+            // Held for the whole table: a click writes both of these, and the
+            // rows after it would otherwise mark a different cell than the rows
+            // before it in the same frame.
+            const int selBank = reasixty_uf1SoftBank();
+            const int selSlot = slotIdx;
+            ImGui_Text(ctx, "Soft-Key Banks");
+            ImGui_Spacing(ctx);
+            int mtFlags = 0;
+            // Eleven columns: the slot names and the ten banks. The Plain/Shift
+            // switch sits in the first one's header for the reason the UF8 one
+            // does: the matrix shows ONE set at a time, so which one it is has
+            // to be readable inside it.
+            if (ImGui_BeginTable(ctx, "##uf1_bank_matrix", 1 + kUf1SoftBankCount,
+                                 &mtFlags, nullptr, nullptr, nullptr)) {
+                const int wFixedCol = ImGui_TableColumnFlags_WidthFixed;
+                int wSlot = wFixedCol; double cwSlot = scaleW_(ctx, 132.0);
+                ImGui_TableSetupColumn(ctx, "##uf1mx_slot", &wSlot, &cwSlot,
+                                       nullptr);
+                int    wB [kUf1SoftBankCount];
+                double cwB[kUf1SoftBankCount];
+                char   colId[kUf1SoftBankCount][16];
+                for (int b = 0; b < kUf1SoftBankCount; ++b) {
+                    wB[b] = wFixedCol; cwB[b] = scaleW_(ctx, 78.0);
+                    snprintf(colId[b], sizeof(colId[b]), "##uf1mx_c%d", b);
+                    ImGui_TableSetupColumn(ctx, colId[b], &wB[b], &cwB[b],
+                                           nullptr);
+                }
+                // Hand-drawn header row rather than TableHeadersRow: the first
+                // cell holds two radio buttons, not a title.
+                int headerRow = ImGui_TableRowFlags_Headers;
+                ImGui_TableNextRow(ctx, &headerRow, nullptr);
+                ImGui_TableSetColumnIndex(ctx, 0);
+                for (int m = 0; m < kSoftKeyModifierSets; ++m) {
+                    char rid[48];
+                    snprintf(rid, sizeof(rid), "%s##uf1mx_mod%d",
+                             kModifierName_[m], m);
+                    if (ImGui_RadioButton(ctx, rid, g_slotEditModIdx == m))
+                        g_slotEditModIdx = m;
+                    if (m == 0) ImGui_SameLine(ctx, nullptr, nullptr);
+                }
+                for (int b = 0; b < kUf1SoftBankCount; ++b) {
+                    ImGui_TableSetColumnIndex(ctx, b + 1);
+                    // ⇨ THE NUMBER IS ALWAYS THERE, the name only when there is
+                    // one to say. reasixty_uf1BankDisplayName falls back to
+                    // "SOFT n" for an unnamed static bank, which in a column
+                    // already headed by its number says nothing twice — so the
+                    // two questions it answers are asked here directly: did the
+                    // user name it, and is it dynamic. Everywhere it is neither,
+                    // the header is the bare number.
+                    const bool named =
+                        !getUf1SoftBankName(b, g_slotEditModIdx).empty();
+                    const bool dyn =
+                        getUf1SoftBankDynamicFor(b, g_slotEditModIdx)
+                            != DynamicBankKind::None;
+                    char hdr[96];
+                    if (named || dyn) {
+                        char nm[64] = {0};
+                        reasixty_uf1BankDisplayName(b, g_slotEditModIdx,
+                                                    nm, sizeof(nm));
+                        snprintf(hdr, sizeof(hdr), "%d %s##uf1mxh%d",
+                                 b + 1, nm, b);
+                    } else {
+                        snprintf(hdr, sizeof(hdr), "%d##uf1mxh%d", b + 1, b);
+                    }
+                    ImGui_TableHeader(ctx, hdr);
+                }
+                for (int s = 0; s < kUf1SoftBankSlots; ++s) {
+                    ImGui_TableNextRow(ctx, nullptr, nullptr);
+                    ImGui_TableSetColumnIndex(ctx, 0);
+                    char rowName[24];
+                    snprintf(rowName, sizeof(rowName), "Soft-Key %d", s + 1);
+                    ImGui_Text(ctx, rowName);
+                    for (int b = 0; b < kUf1SoftBankCount; ++b) {
+                        ImGui_TableSetColumnIndex(ctx, b + 1);
+                        // What the cell says, by the surface's own label rule
+                        // (the same cascade the mock LCD above uses): the set's
+                        // own name, Plain's key name on Plain, else the action's
+                        // fallback label. A dynamic bank computes all four keys,
+                        // so its stored slots are dead text and the column
+                        // carries the kind instead.
+                        std::string txt;
+                        const DynamicBankKind kind =
+                            getUf1SoftBankDynamicFor(b, g_slotEditModIdx);
+                        if (kind != DynamicBankKind::None) {
+                            txt = dynKindShort_(kind);
+                        } else {
+                            const Binding sb = getUf1SoftBankSlot(b, s);
+                            const auto& sp = sb.shortPress[g_slotEditModIdx];
+                            if (!sp.label.empty())
+                                txt = sp.label;
+                            else if (g_slotEditModIdx == 0 && !sb.label.empty())
+                                txt = sb.label;
+                            else if (!sp.action.empty())
+                                txt = softKeyFallbackLabel(sp);
+                        }
+                        if (txt.size() > 12) txt.resize(12);
+                        // ⇨ AN EMPTY SLOT IS A DASH, NOT "SOFT n". The mock LCD
+                        // shows what the hardware will show and so fills that in;
+                        // this table answers "where is anything", and a grid of
+                        // forty placeholder names answers it the wrong way. Same
+                        // dash the UF8 matrix uses for an empty bank.
+                        if (txt.empty()) txt = "\xE2\x80\x94";
+                        char cid[64];
+                        snprintf(cid, sizeof(cid), "%s##uf1mxcell_%d_%d",
+                                 txt.c_str(), b, s);
+                        bool selCell = (b == selBank && s == selSlot);
+                        int selFlags = 0;
+                        if (ImGui_Selectable(ctx, cid, &selCell, &selFlags,
+                                             nullptr, nullptr)) {
+                            // ⇨ AND THE PAGE STAYS WHERE IT WAS — the editor
+                            // under the matrix is not the same height for a
+                            // static bank as for a dynamic one, and the window's
+                            // scroll would clamp to the shorter content and jump
+                            // under the mouse. Same remedy as the UF8 matrix.
+                            s_bankKeepScroll = ImGui_GetScrollY(ctx);
+                            reasixty_setUf1SoftBank(b);
+                            s_selected = static_cast<ButtonId>(
+                                static_cast<int>(ButtonId::Uf1DisplaySoft1) + s);
+                            // The editor below reads slotIdx, which was derived
+                            // from editSel before this click; carry the new slot
+                            // into this frame rather than showing the old one
+                            // beneath the newly marked cell.
+                            slotIdx = s;
+                        }
+                    }
+                }
+                ImGui_EndTable(ctx);
+            }
+            ImGui_Spacing(ctx);
         }
-        ImGui_PopItemWidth(ctx);
-        ImGui_Spacing(ctx);
         // ⇨ A DYNAMIC BANK HAS SETS TOO — the same correction the UF8 side got
         // in 1a602ba, which this one did not (Frank 2026-08-25: "ja, UF1 auch
         // nachziehen"). The row was taken away on the grounds that the modifiers
@@ -7428,7 +7546,10 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             uf8::bindings::getUf1SoftBankDynamicFor(
                 reasixty_uf1SoftBank(), g_slotEditModIdx, &uf1BankDynOwn)
             != uf8::bindings::DynamicBankKind::None;
-        drawBankLayerRow_(ctx, "uf1bank", &g_slotEditModIdx);
+        // The Plain/Shift radios that used to sit here moved into the matrix
+        // header, beside the cells they govern. trackBankModifierEdge_ is
+        // unaffected: it runs once per frame at the top of the pane, not from
+        // inside the row (see its own comment).
         if (uf1BankIsDyn && g_slotEditModIdx != 0) {
             ImGui_TextDisabled(ctx, uf1BankDynOwn
                 ? "This set is a dynamic bank of its own. Its 4 keys come from "
