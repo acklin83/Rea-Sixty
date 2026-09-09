@@ -47967,7 +47967,10 @@ exit 0
 bool reasixty_installLinuxUdevRule(std::string* errOut)
 {
     static const char* kRuleContent =
-        "# Solid State Logic UF8 / UC1 - libusb + hidraw access for Rea-Sixty\n"
+        // The rule itself matches the SSL vendor id, so it has always covered
+        // the UF1 too; only this comment, which is what the user reads in
+        // /etc/udev/rules.d, left it out.
+        "# Solid State Logic UF8 / UC1 / UF1 - libusb + hidraw access for Rea-Sixty\n"
         "SUBSYSTEM==\"usb\",    ATTRS{idVendor}==\"31e9\", MODE=\"0666\", TAG+=\"uaccess\"\n"
         "SUBSYSTEM==\"hidraw\", ATTRS{idVendor}==\"31e9\", MODE=\"0666\", TAG+=\"uaccess\"\n";
 

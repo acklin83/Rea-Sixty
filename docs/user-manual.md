@@ -1,6 +1,6 @@
 ---
 title: Rea-Sixty User Manual
-subtitle: Native REAPER ↔ SSL UF8 / UC1 driver
+subtitle: Native REAPER ↔ SSL UF8 / UC1 / UF1 driver
 author: |
   Frank Acklin
   \
@@ -1869,7 +1869,7 @@ The pane stacks several sections from top to bottom.
 
 ### Header
 
-- Title + tagline ("Open-source SSL 360 replacement for UF8 / UC1").
+- Title + tagline ("Open-source SSL 360 replacement for UF8 / UC1 / UF1").
 - Author byline: "Made by Frank Acklin @ Stoersender Studio, Switzerland".
 - Button **stoersender-studio.ch** — opens the studio website in the system browser.
 - Commit-count blurb ("This project took N commits so far").

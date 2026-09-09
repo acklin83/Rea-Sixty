@@ -24681,7 +24681,10 @@ void SettingsScreen::drawParameterGroups(ImGui_Context* ctx)
 void SettingsScreen::drawAbout(ImGui_Context* ctx)
 {
     ImGui_Text(ctx, "Rea-Sixty");
-    ImGui_Text(ctx, "Open-source SSL 360 replacement for UF8 / UC1");
+    // The UF1 has been in for a year and was still missing here, so the one
+    // pane that says what this thing is named two thirds of it (Frank
+    // 2026-09-09). Same order as the README, so the two agree.
+    ImGui_Text(ctx, "Open-source SSL 360 replacement for UF8 / UC1 / UF1");
     ImGui_Spacing(ctx);
     static const char* kAuthorUrl = "https://stoersender-studio.ch";
     static const char* kBeerUrl   = "https://paypal.me/FrankAcklin";
@@ -25010,7 +25013,7 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
     ImGui_Separator(ctx);
     ImGui_Text(ctx, "  Built without affiliation with Solid State Logic.");
     ImGui_Text(ctx, "  ReaImGui (cfillion) handles all on-screen rendering.");
-    ImGui_Text(ctx, "  libusb drives the UF8 / UC1 vendor-USB endpoints.");
+    ImGui_Text(ctx, "  libusb drives the UF8 / UC1 / UF1 vendor-USB endpoints.");
 }
 
 } // namespace uf8
