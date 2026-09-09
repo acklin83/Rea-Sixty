@@ -589,6 +589,31 @@ inline int uf1MapPageCount(const UserUf1Map& u)
     return pages > kUserUf1MaxPages ? kUserUf1MaxPages : pages;
 }
 
+// ---- The PLUG-IN soft-key on a LEARNED channel strip (Frank 2026-09-09) -----
+// SSL's own p188 pages weld PLUG-IN to page 1, soft-key 4 (kUf1CsSoftKeys in
+// main.cpp), and a learned plug-in skips that table entirely — it packs the
+// user's own button params onto the four keys. So a user-learned CS had no way
+// to reach SSL Strip Mode from the strip view at all, while every factory strip
+// has it one press away.
+//
+// Same position on a learned strip, so the muscle memory carries over. The
+// packed param stream moves ONE place along rather than losing a slot: nothing
+// the user mapped disappears, it just sits one key further on.
+//
+// ⇨ ONE DEFINITION, FOUR READERS. uf1LearnedStreamSlots_ reserves the position,
+// the UF1 press and paint paths in main.cpp answer "is this key the PLUG-IN
+// key?" from it, and seedUf1FromSlots below places the same key as a real slot
+// so switching the explicit UF1 layer on changes nothing visible.
+constexpr int kUf1LearnedStripKeyPos = 3;     // flat pos = page 0, soft-key 4
+
+// Does this learned map get the key at all? Only when the plug-in could BE the
+// strip: CS domain (a Bus Compressor has no strip fader to take over) and a
+// FaderLevel slot actually mapped — which is exactly what SSL Strip Mode needs
+// to do anything (csPluginHasFader_ / csFaderForTrack in main.cpp resolve a
+// user CS through this same linkIdx 1). Without the slot the key would toggle a
+// mode that changes nothing, which is worse than no key. Defined just below
+// UserPluginMap, which it needs whole.
+
 // Snapshot of one VST3 parameter on the learned plug-in. Captured when an
 // instance is present so the editor can offer the param list (V-Pot picker,
 // GR-meter picker, listening fallback) even on sessions where the plug-in
@@ -704,6 +729,16 @@ struct UserPluginMap {
     // the pruned paramSnapshot can't provide. -1 = not captured. Frank 2026-07-20.
     int functionalParamCount = -1;
 };
+
+// Does this learned map get the UF1's PLUG-IN soft-key? See
+// kUf1LearnedStripKeyPos above for what the key is and who asks.
+inline bool uf1MapWantsStripKey(const UserPluginMap& m)
+{
+    if (m.domain != Domain::ChannelStrip) return false;
+    for (const auto& s : m.slots)
+        if (s.linkIdx == 1 /*FaderLevel*/ && s.vst3Param >= 0) return true;
+    return false;
+}
 
 struct UserPluginCatalog {
     int                         formatVersion = 1;

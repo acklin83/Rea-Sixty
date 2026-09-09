@@ -156,6 +156,8 @@ bool reasixty_stripFollowsFocusedFx();
 void reasixty_setStripFollowsFocusedFx(bool follow);
 bool reasixty_pluginGuiFollowsInstance();
 bool reasixty_uf1StripKeyWithGui();
+void reasixty_setUf1StripFollowsUf8(bool follow);
+bool reasixty_uf1StripFollowsUf8();
 void reasixty_setUf1StripKeyWithGui(bool withGui);
 void reasixty_setPluginGuiFollowsInstance(bool follow);
 bool reasixty_pluginGuiPinPos();
@@ -1239,6 +1241,14 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
         bool uskg = reasixty_uf1StripKeyWithGui();
         if (ImGui_Checkbox(ctx, "UF1 PLUG-IN key opens the plug-in GUI", &uskg)) {
             reasixty_setUf1StripKeyWithGui(uskg);
+        }
+        // Off = the two surfaces keep their own Strip Mode, as they have since
+        // 2026-07-30. On = the UF8 leads and the UF1 goes with it, including
+        // when UF8 Plug-in Mode pushes Strip Mode back out. One way: the UF1's
+        // own PLUG-IN key stays a local override until the next UF8 toggle.
+        bool usfu = reasixty_uf1StripFollowsUf8();
+        if (ImGui_Checkbox(ctx, "UF1 follows UF8 SSL Strip Mode", &usfu)) {
+            reasixty_setUf1StripFollowsUf8(usfu);
         }
     }
 

@@ -291,6 +291,58 @@ int main()
         EXPECT(uf1SlotAt(m.uf1.vpots, 0)->vst3Param == 999);
     }
 
+    // --- seeding a CS with a fader: the PLUG-IN key takes soft-key 4 ---------
+    // The runtime reserves kUf1LearnedStripKeyPos in the packed soft-key stream
+    // for a CS that has a FaderLevel slot. The seed has to place the same key,
+    // or switching the explicit layer on would shift every soft-key back by one
+    // and lose it — the exact visible change this seeder exists to prevent.
+    {
+        UserPluginCatalog c{};
+        EXPECT(parse_(kV10, c));
+        auto& m = c.maps[0];              // domain ChannelStrip
+        m.slots.clear();
+        auto add = [&](int linkIdx, int param) {
+            UserLinkSlot s{}; s.linkIdx = linkIdx; s.vst3Param = param;
+            m.slots.push_back(s);
+        };
+        add(1, 10);   // FaderLevel → this is what earns the key
+        add(3, 30);   // odd → soft-key stream (per the stub above)
+        add(5, 50);
+        add(7, 70);
+        add(9, 90);
+        EXPECT(uf1MapWantsStripKey(m));
+        seedUf1FromSlots(m);
+
+        // Positions 0..2 keep their params, 3 is the key, the rest moved along.
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 0)->vst3Param == 10);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 1)->vst3Param == 30);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 2)->vst3Param == 50);
+        const UserUf1Slot* key = uf1SlotAt(m.uf1.softKeys, 3);
+        EXPECT(key && key->special == uint8_t(Uf1SkSpecial::StripMode));
+        EXPECT(key->vst3Param < 0);       // it is an action, not a param
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 4)->vst3Param == 70);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 5)->vst3Param == 90);
+
+        // …and it survives a round trip, or the key would vanish on restart.
+        c.maps[0] = m;
+        UserPluginCatalog back{};
+        EXPECT(parse_(serialize_(c).c_str(), back));
+        const UserUf1Slot* k2 = uf1SlotAt(back.maps[0].uf1.softKeys, 3);
+        EXPECT(k2 && k2->special == uint8_t(Uf1SkSpecial::StripMode));
+
+        // No FaderLevel slot → no key, and nothing shifts.
+        UserPluginCatalog c2{};
+        EXPECT(parse_(kV10, c2));
+        auto& m2 = c2.maps[0];
+        m2.slots.clear();
+        UserLinkSlot only{}; only.linkIdx = 3; only.vst3Param = 30;
+        m2.slots.push_back(only);
+        EXPECT(!uf1MapWantsStripKey(m2));
+        seedUf1FromSlots(m2);
+        EXPECT(m2.uf1.softKeys.size() == 1);
+        EXPECT(uf1SlotAt(m2.uf1.softKeys, 0)->vst3Param == 30);
+    }
+
     std::printf("test_user_catalog_uf1: all passed\n");
     return 0;
 }

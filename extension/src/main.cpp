@@ -3960,6 +3960,39 @@ std::atomic<bool> g_pluginGuiFollowsInstance{true};
 // entscheiden können, ob mit oder ohne GUI"). Default off = what it always did.
 std::atomic<bool> g_uf1StripKeyWithGui{false};
 
+// SSL Strip Mode is per device: the UF8/UC1 toggle flips g_pluginFaderMode, the
+// UF1's PLUG-IN key flips the UF1-local g_uf1StripMode (split on 2026-07-30 so
+// the two surfaces stop dragging each other around). This setting hands the
+// UF1 back to the UF8 for the people who work the two as one desk (Frank
+// 2026-09-09). Default off = the split behaviour, unchanged.
+//
+// ONE WAY, deliberately. The UF8's toggle is mutually exclusive with UF8
+// Plug-in Mode; making the link symmetric would mean the UF1's PLUG-IN key
+// drops the UF8 out of Plug-in Mode, which is a big thing to hang off a small
+// key. So the UF8 leads and the UF1's own key stays a local override until the
+// next UF8 toggle.
+std::atomic<bool> g_uf1StripFollowsUf8{false};
+
+// Mirror an UF8 SSL-Strip-Mode change onto the UF1. Called from EVERY writer of
+// g_pluginFaderMode, the mutex exits included — a link that only followed the
+// toggle would leave the UF1 in Strip Mode while the UF8 walked into Plug-in
+// Mode, which is the half-coupled state this feature exists to avoid.
+//
+// Headless on purpose: the GUI half belongs to whichever surface asked for the
+// window (`_with_gui`), and a follower opening a plug-in window the UF8's plain
+// toggle deliberately did not open would be a surprise, not a convenience.
+void uf1FollowUf8StripMode_(bool on)
+{
+    if (!g_uf1StripFollowsUf8.load())  return;
+    if (g_uf1StripMode.load() == on)   return;   // already there: leave its GUI alone
+    g_uf1StripMode.store(on);
+    g_uf1StripModeWithGui.store(false);
+    SetExtState("rea_sixty", "uf1StripMode",    on ? "1" : "0", true);
+    SetExtState("rea_sixty", "uf1StripModeGui", "0", true);
+    g_pluginGuiSyncRequest.store(true);
+    g_pageDirty.store(true);
+}
+
 // Pin plug-in GUI position — when on, every TrackFX_Show(..., 3) we run
 // on a managed path is followed by a SetWindowPos to (pinX, pinY). Size
 // is left alone (SWP_NOSIZE). User captures the position by dragging a
@@ -4074,6 +4107,7 @@ inline void engageUf8PluginMode_(bool withGui)
         g_pluginFaderMode.store(false);
         g_pluginFaderModeWithGui.store(false);
         SetExtState("ReaSixty", "pluginFaderMode", "0", true);
+        uf1FollowUf8StripMode_(false);
     }
     parkSelModeForUf8PluginMode_();
     g_uf8PluginModeSnapRequest.store(true);
@@ -4816,6 +4850,8 @@ void loadBrightness()
     }
     const char* uskg = GetExtState("rea_sixty", "uf1_strip_key_with_gui");
     if (uskg && *uskg) g_uf1StripKeyWithGui.store(std::atoi(uskg) != 0);
+    const char* usfu = GetExtState("rea_sixty", "uf1_strip_follows_uf8");
+    if (usfu && *usfu) g_uf1StripFollowsUf8.store(std::atoi(usfu) != 0);
     const char* pgpp = GetExtState("rea_sixty", "plugin_gui_pin_pos");
     if (pgpp && *pgpp) g_pluginGuiPinPos.store(std::atoi(pgpp) != 0);
     const char* pgpx = GetExtState("rea_sixty", "plugin_gui_pin_x");
@@ -14903,6 +14939,7 @@ void applyShowFocusedPluginGui_()
         g_pluginFaderMode.store(false);
         g_pluginFaderModeWithGui.store(false);
         SetExtState("ReaSixty", "pluginFaderMode", "0", true);
+        uf1FollowUf8StripMode_(false);
         g_pageDirty.store(true);
         g_bankDirty.store(true);
         g_pluginGuiSyncRequest.store(true);
@@ -27555,6 +27592,15 @@ bool uf1IsLearnedCsBc_(MediaTrack* tr, int fx, char* fxName, size_t n)
 // (knobs + any linkIdx not in the UC1 table). Only slots with a bound vst3Param
 // count; sorted by linkIdx (SSL reading order). busComp selects the CS vs BC
 // link space (type 4 = BC). Main-thread only (walks the owned catalog).
+// Does this learned plug-in carry the PLUG-IN soft-key? The rule itself lives in
+// UserPluginCatalog.h (uf1MapWantsStripKey) so the stream, the press/paint pair
+// and the explicit-map seeder all answer it the same way.
+bool uf1LearnedHasStripKey_(const char* fxName)
+{
+    const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
+    return um && uf8::uf1MapWantsStripKey(*um);
+}
+
 void uf1LearnedStreamSlots_(const char* fxName, bool busComp, bool wantButton,
                             std::vector<const uf8::UserLinkSlot*>& out)
 {
@@ -27570,6 +27616,18 @@ void uf1LearnedStreamSlots_(const char* fxName, bool busComp, bool wantButton,
               [](const uf8::UserLinkSlot* a, const uf8::UserLinkSlot* b) {
                   return a->linkIdx < b->linkIdx;
               });
+    // Reserve the PLUG-IN position in the SOFT-KEY stream, pushing the packed
+    // params one place along. A nullptr here reads as "no param" to every
+    // existing consumer (blank label, no toggle) — what the position actually
+    // DOES is answered by uf1LearnedStripKeyAt_, which the press and paint paths
+    // ask before they look at the stream at all. The padding matters for a strip
+    // with fewer than three button params: the key still lands on soft-key 4,
+    // not on the first free slot.
+    if (wantButton && uf8::uf1MapWantsStripKey(*um)) {
+        if (static_cast<int>(out.size()) < uf8::kUf1LearnedStripKeyPos)
+            out.resize(uf8::kUf1LearnedStripKeyPos, nullptr);
+        out.insert(out.begin() + uf8::kUf1LearnedStripKeyPos, nullptr);
+    }
 }
 // The learned plug-in's mapped slot at flat UF1 position page*4+idx of a stream,
 // or nullptr when that position is past the last mapped slot (→ blank).
@@ -27784,6 +27842,21 @@ static const uf8::UserUf1Map* uf1ExplicitMapAt_(MediaTrack* tr, int fx)
     if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) return nullptr;
     return uf1ExplicitMap_(nm);
 }
+// Is the soft-key at flat position `flat` the learned strip's PLUG-IN key?
+// THE single question both the press path and the painter ask — they must never
+// answer it from their own copy of the rule, or the key lights in one place and
+// fires in another. False for a built-in strip (kUf1CsSoftKeys carries its own
+// PLUG-IN entry) and false whenever an explicit UF1 map exists, because an
+// explicit slot owns its key, whatever anything else says.
+bool uf1LearnedStripKeyAt_(MediaTrack* tr, int fx, int flat)
+{
+    if (flat != uf8::kUf1LearnedStripKeyPos) return false;
+    if (uf1ExplicitMapAt_(tr, fx))            return false;
+    char nm[256];
+    if (!uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm))) return false;
+    return uf1LearnedHasStripKey_(nm);
+}
+
 int uf1CsVpotParam_(MediaTrack* tr, int fx, int type, int page, int idx)
 {
     if (const auto* u1 = uf1ExplicitMapAt_(tr, fx))   // explicit map wins, any domain
@@ -28477,6 +28550,18 @@ void applyUf1ChannelSoftKey_(int idx, bool shiftAtPress)
             return;
         }
         userOwnsKey = (s && s->vst3Param >= 0);
+    }
+
+    // The learned strip's own PLUG-IN key (Frank 2026-09-09). A learned plug-in
+    // skips the kUf1CsSoftKeys table below, so without this it had no way to
+    // reach SSL Strip Mode from the strip view; the built-in strips have it on
+    // this very key. Same GUI choice as a native strip's key — per key on an
+    // explicit map, otherwise the one setting.
+    if (uf1LearnedStripKeyAt_(tr, fx, page * uf8::kUserUf1PerPage + idx)) {
+        uf1FireSkSpecial_(g_uf1StripKeyWithGui.load()
+                              ? uf8::Uf1SkSpecial::StripModeGui
+                              : uf8::Uf1SkSpecial::StripMode, tr);
+        return;
     }
 
     char lnm[256];
@@ -32043,14 +32128,22 @@ void uf1PaintChannel_()
                 const uf8::UserLinkSlot* sl =
                     (flat < static_cast<int>(skSlots.size())) ? skSlots[flat] : nullptr;
                 haveLabel = true;   // owns its labels (blank when the fill runs out)
-                // Resolve through the held FX-Learn layer (Ctrl / Opt / Ctrl+Opt).
-                const uf8::SlotLayer* eff = sl
-                    ? &uf8::fxEffectiveLayer(*sl, reasixty_fxLearnActiveLayer())
-                    : nullptr;
-                if (eff && eff->vst3Param >= 0) {
-                    label = uf1ParamDisplayName_(skTr, skFx, eff->vst3Param,
-                                                 eff->customLabel);
-                    on = TrackFX_GetParamNormalized(skTr, skFx, eff->vst3Param) > 0.5;
+                // The reserved PLUG-IN key. The stream holds a nullptr at that
+                // position, so ask the same question the press path asks rather
+                // than reading the hole as "blank".
+                if (uf1LearnedStripKeyAt_(skTr, skFx, flat)) {
+                    label = uf1SkSpecialLabel_(uf8::Uf1SkSpecial::StripMode);
+                    on    = g_uf1StripMode.load();
+                } else {
+                    // Resolve through the held FX-Learn layer (Ctrl / Opt / Ctrl+Opt).
+                    const uf8::SlotLayer* eff = sl
+                        ? &uf8::fxEffectiveLayer(*sl, reasixty_fxLearnActiveLayer())
+                        : nullptr;
+                    if (eff && eff->vst3Param >= 0) {
+                        label = uf1ParamDisplayName_(skTr, skFx, eff->vst3Param,
+                                                     eff->customLabel);
+                        on = TrackFX_GetParamNormalized(skTr, skFx, eff->vst3Param) > 0.5;
+                    }
                 }
             } else if (skType >= 0) {
                 const Uf1CsSoftKey& sk = kUf1CsSoftKeys[skType][skPage].slot(i);
@@ -43861,7 +43954,15 @@ const char* reasixty_uf1FactoryLabel(void* trV, int fx, bool softKeys,
     if (type < 0) return "";
     if (uf1ExplicitMapAt_(tr, fx)) return "";        // explicit map owns its labels
     char nm[256];
-    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm))) return "";   // learned: params only
+    if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm))) {
+        // A learned strip's positions are params and already listed — except the
+        // ONE reserved PLUG-IN key, which carries no param either and would
+        // otherwise be exactly as invisible in the editors as the factory keys
+        // were before this function existed.
+        if (softKeys && uf1LearnedStripKeyAt_(tr, fx, page * uf8::kUserUf1PerPage + idx))
+            return uf1SkSpecialLabel_(uf8::Uf1SkSpecial::StripMode);
+        return "";
+    }
     if (page >= uf1CsPageCountFor_(type, tr, fx)) return "";
     if (softKeys) {
         const Uf1CsSoftKey& sk = kUf1CsSoftKeys[type][page].slot(idx);
@@ -46688,6 +46789,21 @@ void reasixty_setUf1StripKeyWithGui(bool withGui)
     SetExtState("rea_sixty", "uf1_strip_key_with_gui", withGui ? "1" : "0", true);
 }
 
+bool reasixty_uf1StripFollowsUf8()
+{
+    return g_uf1StripFollowsUf8.load();
+}
+
+void reasixty_setUf1StripFollowsUf8(bool follow)
+{
+    g_uf1StripFollowsUf8.store(follow);
+    SetExtState("rea_sixty", "uf1_strip_follows_uf8", follow ? "1" : "0", true);
+    // Take effect on the spot rather than at the next UF8 toggle: switching the
+    // link on while the UF8 already sits in Strip Mode should line the UF1 up,
+    // not wait for the user to toggle twice.
+    if (follow) uf1FollowUf8StripMode_(g_pluginFaderMode.load());
+}
+
 // Request a "View active plug-in" follow — if the focused-FX floating
 // window (`show_focused_plugin_gui`) is open on the same track but on
 // a DIFFERENT FX, swap it to (tr, fxIdx) on the next timer tick. The
@@ -48763,6 +48879,7 @@ void registerBindingHandlers()
             if (!firing) return;
             const bool next = !g_pluginFaderMode.load();
             g_pluginFaderMode.store(next);
+            uf1FollowUf8StripMode_(next);
             // Plain variant is headless — drop the with-GUI flag so a
             // user switching from the GUI builtin to the plain one stops
             // following the GUI. The sync drain then closes any window
@@ -48809,6 +48926,7 @@ void registerBindingHandlers()
             if (!firing) return;
             const bool next = !g_pluginFaderMode.load();
             g_pluginFaderMode.store(next);
+            uf1FollowUf8StripMode_(next);
             g_pluginFaderModeWithGui.store(next);
             // See ssl_strip_mode_toggle for the mutex rationale.
             if (next && g_uf8PluginMode.load()) {
@@ -49420,6 +49538,7 @@ void registerBindingHandlers()
                 g_pluginFaderMode.store(false);
                 g_pluginFaderModeWithGui.store(false);
                 SetExtState("ReaSixty", "pluginFaderMode", "0", true);
+                uf1FollowUf8StripMode_(false);
             }
             // Park Sel-Mode on entry (so V-Pots can drive plug-in
             // params instead of routing through the Sel-Mode handler),
@@ -49461,6 +49580,7 @@ void registerBindingHandlers()
                 g_pluginFaderMode.store(false);
                 g_pluginFaderModeWithGui.store(false);
                 SetExtState("ReaSixty", "pluginFaderMode", "0", true);
+                uf1FollowUf8StripMode_(false);
             }
             // Park Sel-Mode on entry, restore on exit — see plain
             // variant above for the rationale.

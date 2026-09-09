@@ -253,6 +253,7 @@ constexpr SearchEntry kSearchIndex[] = {
                                                kSecBehaviour, "Plug-ins" },
     { "Plug-in GUI follows active Instance",   kSecBehaviour, "Plug-ins" },
     { "UF1 PLUG-IN key opens the plug-in GUI", kSecBehaviour, "Plug-ins", kDevUf1 },
+    { "UF1 follows UF8 SSL Strip Mode",        kSecBehaviour, "Plug-ins", kDevUf1 },
     { "Auto-engage UF8 Plug-in Mode for UF8-mapped plug-ins",
                                                kSecBehaviour, "Plug-ins", kDevUf8 },
     { "Pin plug-in GUI position",              kSecBehaviour, "Plug-ins" },

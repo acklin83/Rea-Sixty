@@ -1815,6 +1815,21 @@ void seedUf1FromSlots(UserPluginMap& m)
     };
     fill(vp, m.uf1.vpots);
     fill(sk, m.uf1.softKeys);
+    // The learned strip's PLUG-IN key sits at kUf1LearnedStripKeyPos and pushes
+    // the packed stream one place along — mirror BOTH halves of that here, or
+    // enabling the explicit layer would move every soft-key back by one and drop
+    // the key, which is exactly the visible change this seeder exists to avoid.
+    // Seeded as the plain variant; the editor's own picker offers "+ GUI" per key
+    // (the g_uf1StripKeyWithGui setting only steers keys that have no slot to
+    // carry the choice).
+    if (uf1MapWantsStripKey(m)) {
+        for (auto& s : m.uf1.softKeys)
+            if (s.pos >= kUf1LearnedStripKeyPos) ++s.pos;
+        UserUf1Slot pk{};
+        pk.pos     = kUf1LearnedStripKeyPos;
+        pk.special = static_cast<uint8_t>(Uf1SkSpecial::StripMode);
+        m.uf1.softKeys.push_back(std::move(pk));   // sparse: uf1SlotAt keys on pos
+    }
 }
 // Turn the UF1 layer on for `match`, seeding it on the way. Returns true when
 // the catalog changed. Safe to call repeatedly — a populated map is left alone.

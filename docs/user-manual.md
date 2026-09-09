@@ -601,6 +601,7 @@ EQ curve is drawn on the screen and the four V-Pots carry that page's parameters
 | Control | Function |
 |---|---|
 | SK1-SK4 | The channel-strip section toggles for the current page (EQ In, HF Type, …). A blank slot does nothing. An engaged toggle **lights its key and highlights it on screen**. The highlight matters when the Bus-Comp GR meter is using the four key LEDs: the LEDs are then showing gain reduction, and the highlight is what still tells you which sections are in. |
+| SK4, page 1 | `PLUG-IN`, the SSL Strip Mode toggle, on a **native** SSL strip and on a **learned** channel strip alike. A learned strip packs your own parameters onto the four keys, and this one position is held back for the toggle, so the packed parameters start on the key after it. You get the key when the plug-in is learned as a Channel Strip and has a **Fader Level** slot mapped, since that is the parameter Strip Mode hands the fader; without it there would be nothing for the mode to drive. Put it somewhere else, or take it off, by giving the plug-in its own UF1 map (*FX Learn*, UF1 cell, Action). |
 | V1-V4 | The current page's four parameters. |
 | `◄` `►` (page arrows) | Step the strip page. |
 | `5-8` | Jump to V-Pots 5-8 of the page. |
@@ -1198,6 +1199,7 @@ Surface-side handling of the REAPER Master bus. See **Master track** (own chapte
 | SSL Strip Mode follows focused plug-in window | **While SSL Strip Mode or UF8 Plug-in Mode is already engaged**, bringing a mapped plug-in window to the front re-points the surface at that instance. It does not engage the mode. Off by default. |
 | Plug-in GUI follows active Instance | When an Instance Cycle / FX Cycle lands on a new target, an already-open floating plug-in GUI re-points to the new target. Off → the cycle moves the surface but leaves the window pinned to its current FX. On by default. |
 | UF1 PLUG-IN key opens the plug-in GUI | Whether the UF1's `PLUG-IN` soft-key on a **native** SSL strip page opens the plug-in's GUI as well as claiming the surface. Off by default (surface only). An explicit UF1 map picks this per key instead (FX Learn → UF1 cell → Action); the built-in strip pages have no per-key storage, so they follow this one setting. |
+| UF1 follows UF8 SSL Strip Mode | The two surfaces keep their own Strip Mode by default, so the UF1's `PLUG-IN` key and the UF8's Plug-in button do not disturb each other. Tick this and the UF8 leads: engaging or dropping SSL Strip Mode there takes the UF1 with it, including when UF8 Plug-in Mode pushes Strip Mode back out. It goes one way only, so the UF1's own key stays a local override until the next toggle on the UF8, and pressing it can never drop the UF8 out of Plug-in Mode. The follower is always headless, whatever opened a plug-in window on the UF8 side. Off by default. |
 | Auto-engage UF8 Plug-in Mode for UF8-mapped plug-ins | When SEL-Mode cycle V-Pot push OR a **Plug-in: toggle focused GUI** binding lands on a UF8-mapped plug-in, also engage UF8 Plug-in Mode with GUI. Off by default. |
 | Pin plug-in GUI position | Every plug-in window Rea-Sixty subsequently opens snaps to a fixed position (size is left alone). Drag a window where you want it and click **Capture current**, or click **Center on Screen** for the middle of the display. The line above the buttons reads back the captured pin, or `(none captured yet)` — until something is captured the toggle does nothing. |
 | Pin FX-chain GUI position | The same pattern for FX-chain windows, with its own captured position. Title matching looks for "FX:" on macOS. |
@@ -2320,6 +2322,8 @@ The Strip-Mode target is resolved by `csForStripModeOnTrack_`, which applies the
 The `with_gui` variant also opens the CS plug-in's floating GUI alongside, pinning it via the pin-position settings.
 
 `Plug-in` again (or any other Plug-in Mode toggle) exits.
+
+The UF1 has its own Strip Mode, on its own `PLUG-IN` key, and the two are separate: neither surface follows the other. If you would rather work them as one desk, tick **UF1 follows UF8 SSL Strip Mode** under *Behaviour*, *Plug-ins*.
 
 ### Free soft-key slots (CS / BC)
 
