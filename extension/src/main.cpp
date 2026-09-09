@@ -20592,11 +20592,18 @@ void drainInputQueue()
                         tr, mm.fxIndex, sl.vst3Param, next, slOk, slAfter);
                     uf8::param_groups::broadcastBuiltinSlot(
                         tr, focused.domain, focused.slotIdx, next);
-                } else if (g_pluginFaderMode.load() && !forcePan) {
+                } else if (g_pluginFaderMode.load()) {
                     // Plugin mode + no focused slot → V-Pot drives the
                     // SSL strip's own Pan param (linkIdx 3) instead of
                     // REAPER track pan, so the plug-in remains the
                     // surface's source of truth for the strip's panorama.
+                    // ⛔ FORCE PAN DOES NOT SWITCH THIS OFF. It is the quick
+                    // way TO the pan, so in this mode it belongs on the CS
+                    // pan, and only on REAPER's when the strip has none
+                    // (Frank 2026-09-09). It used to carry `&& !forcePan`,
+                    // which left the ring and the value line showing the
+                    // plug-in's pan — those two never had the condition —
+                    // while the knob moved REAPER's.
                     const auto pn = csPanForTrack(tr);
                     if (pn.vst3Param >= 0) {
                         const double cur = TrackFX_GetParamNormalized(
@@ -20905,10 +20912,12 @@ void drainInputQueue()
                         slPtr->vst3Param, pushNext);
                     uf8::param_groups::broadcastBuiltinSlot(
                         tr, focused.domain, focused.slotIdx, pushNext);
-                } else if (g_pluginFaderMode.load() && !forcePan) {
+                } else if (g_pluginFaderMode.load()) {
                     // Plugin mode → reset SSL strip's own Pan to centre
-                    // (norm 0.5 = C). forcePan overrides this so PAN
-                    // button always resets REAPER track pan instead.
+                    // (norm 0.5 = C). Force Pan does not divert this either:
+                    // the push resets whatever the knob moves, and in this
+                    // mode that is the strip's pan. The fall-through below
+                    // still resets REAPER's when the strip has no pan.
                     const auto pn = csPanForTrack(tr);
                     if (pn.vst3Param >= 0) {
                         TrackFX_SetParamNormalized(tr, pn.fxIndex,
