@@ -24822,6 +24822,28 @@ uint16_t uf1VolToPos_(double linear)
     return static_cast<uint16_t>(pos + 0.5);
 }
 
+// ⛔ THE TOP OF THE TRAVEL HAS TO REACH 1.0, AND THE BOTTOM 0.0.
+// A fader position straight into TrackFX_SetParamNormalized never quite got
+// there: the hardware reports a hair under 0x7FFF at the stop, so a percentage
+// parameter sat at 99.9 with the fader hard against the top and no way to close
+// the gap by hand (Frank 2026-09-10, comp mix under FLIP). On volume it hid,
+// because a fraction of a dB at the top of the throw is invisible; on a
+// parameter the number is right there.
+// So both ends snap. The zone is ~0.2 % of the travel, which on a 100 mm fader
+// is a fifth of a millimetre — under what a finger can place, and far under
+// what the ear could hear in the parameter it swallows.
+// ⚠ THIS IS THE ARITHMETIC, NOT THE PROTOCOL. Nothing here touches the input
+// handler, the motor builder or the init sequence — those still need a capture
+// before anyone edits them ([[feedback-fader-no-speculation]]).
+constexpr uint16_t kUf1FaderEndSnap = 64;
+inline double uf1PosToNorm_(uint16_t pos)
+{
+    if (pos >= kUf1FaderMax - kUf1FaderEndSnap) return 1.0;
+    if (pos <= kUf1FaderEndSnap)                return 0.0;
+    return std::clamp(static_cast<double>(pos)
+                      / static_cast<double>(kUf1FaderMax), 0.0, 1.0);
+}
+
 // FLIP mode fader <-> Pan mapping. The fader travel (0..kUf1FaderMax) maps
 // LINEARLY to pan (−1..+1): bottom = hard L, centre = 0, top = hard R. No dB
 // curve — pan is already a linear −1..+1 control. Twin of uf1PosToVol_/…VolToPos_
@@ -32650,7 +32672,7 @@ void uf1PaintChannel_()
                 // re-enable on release lands clean.
             }
             else if (stripFader) {
-                const double n = std::clamp(double(pos) / double(kUf1FaderMax), 0.0, 1.0);
+                const double n = uf1PosToNorm_(pos);
                 TrackFX_SetParamNormalized(ftr, csf.fxIndex, csf.vst3Param, n);
             }
             else if (extSendFader) {
@@ -32667,7 +32689,7 @@ void uf1PaintChannel_()
                 sSendFaderEditing = true;
             }
             else if (stickyFader) {
-                const double n = std::clamp(double(pos) / double(kUf1FaderMax), 0.0, 1.0);
+                const double n = uf1PosToNorm_(pos);
                 const double prevN = TrackFX_GetParamNormalized(ftr, stickyFx, stickyParam);
                 TrackFX_SetParamNormalized(ftr, stickyFx, stickyParam, n);
                 g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // don't let the move steal focus
@@ -32680,7 +32702,7 @@ void uf1PaintChannel_()
                 // here on purpose — those describe how the ENCODER should feel over
                 // its detents, and a 100 mm throw with an absolute position has no
                 // such problem to solve.
-                const double n = std::clamp(double(pos) / double(kUf1FaderMax), 0.0, 1.0);
+                const double n = uf1PosToNorm_(pos);
                 TrackFX_SetParamNormalized(flipParamTr, flipParamFx, flipParam, n);
             }
             else if (flip && !sendFlip) CSurf_OnPanChange(ftr, uf1PosToPan_(pos), /*relative*/false);
