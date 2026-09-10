@@ -1172,7 +1172,7 @@ void seedFactoryDefaults_(Config& c)
     // User-rebindable like every other key; see upgradeBackfillUf1SoftKey_
     // for why an existing config gets it without losing an own assignment.
     L1[ButtonId::Uf1ChannelSoftKey] =
-        mkBuiltin("focus_set_toggle_uf1_channel", Behavior::Toggle, "FOCUS CHAN");
+        mkBuiltin("focus_set_toggle_uf1_channel", Behavior::Toggle, "Focus Chan");
     L1[ButtonId::Uf1Flip]        = mkBuiltin("uf1_flip",              Behavior::Toggle,    "FLIP");
     L1[ButtonId::Uf1Master]      = mkBuiltin("uf1_master",            Behavior::Toggle,    "MASTER");
     L1[ButtonId::Uf1FiveToEight] = mkBuiltin("uf1_five_to_eight",     Behavior::Momentary, "5-8");
@@ -3638,7 +3638,7 @@ void upgradeBackfillUf1SoftKey_(Config& c)
     // auto-label refresh then had nothing of its own to replace, so rebinding
     // the key left "PIN SET" on the display over an action it no longer fires:
     // forum 4.2 all over again, for pre-v20 configs only.
-    bd.label    = "FOCUS CHAN";
+    bd.label    = "Focus Chan";
     bd.behavior = Behavior::Toggle;
 }
 
@@ -6498,11 +6498,11 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
         // on one of their own (Frank 2026-09-02). Entry nine is Shift's first key,
         // so the three land side by side under the ones they belong with.
         v.push_back(bank("Focus Set & Selsets", {
-            {"focus_set_pin",          "PIN FOCUSED", 0},
-            {"focus_set_add",             "FOCUS ADD", 0},
-            {"focus_set_remove",          "FOCUS REMOVE", 0},
-            {"focus_set_toggle", "FOCUS TOGGLE", 0},
-            {"focus_set_replace", "FOCUS = SEL", 0},
+            {"focus_set_pin",          "Pin Focused", 0},
+            {"focus_set_add",             "Focus Add", 0},
+            {"focus_set_remove",          "Focus Remove", 0},
+            {"focus_set_toggle", "Focus Toggle", 0},
+            {"focus_set_replace", "Focus = Sel", 0},
             // ⇨ SLOT 6 IS DELIBERATELY EMPTY. It carried "Pin Focused", which
             // took REAPER's last-touched track — a second idea of "which track"
             // beside the selection, and the thing that made this whole family
@@ -6512,7 +6512,7 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             // below are placed by POSITION: entry nine is Shift's first key, and
             // shifting everything up by one would scatter them onto Plain.
             {"", "", 0},
-            {"focus_set_clear",           "FOCUS CLEAR", 0},
+            {"focus_set_clear",           "Focus Clear", 0},
             // ⇨ SCOPE, NOT CYCLE. selset_cycle sat here as "Cycle Sets" and was
             // the wrong kind of thing for this bank twice over: it is an ENCODER
             // action whose param is a direction, and stepping the numbered slots
@@ -6520,7 +6520,7 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             // scope, because setting it on one surface and pressing on the other
             // is the failure this bank invites — Frank set UF1 and then wondered
             // why the UF8 did nothing (2026-09-02).
-            {"focus_scope_cycle",           "FOCUS SCOPE", 0},
+            {"focus_scope_cycle",           "Focus Scope", 0},
             {"sticky_pot_get_next",         "Pin Sticky", 0},
             {"sticky_pot_pair",             "Pair Sticky", 0},
             {"sticky_pot_toggle",           "Sticky OnOff", 0},
@@ -6636,15 +6636,15 @@ static const std::vector<Uf1BankPreset>& factoryUf1Banks_()
         // "Pin This Ch" pins the channel the UF1 is SHOWING, which is why it
         // left the UF8's Focus Set bank on 2026-09-01. This is where it belongs.
         v.push_back(bank("Focus Set", {
-            {"focus_set_toggle_uf1_channel",    "FOCUS CHAN", 0},
-            {"focus_set_pin",             "PIN FOCUSED", 0},
-            {"focus_set_add",                "FOCUS ADD",   0},
-            {"focus_set_clear",              "FOCUS CLEAR", 0},
+            {"focus_set_toggle_uf1_channel",    "Focus Chan", 0},
+            {"focus_set_pin",             "Pin Focused", 0},
+            {"focus_set_add",                "Focus Add",   0},
+            {"focus_set_clear",              "Focus Clear", 0},
             // Shift
-            {"focus_set_remove",             "FOCUS REMOVE",0},
-            {"focus_set_toggle",    "FOCUS TOGGLE",0},
-            {"focus_set_replace", "FOCUS = SEL", 0},
-            {"focus_scope_cycle",              "FOCUS SCOPE", 0},
+            {"focus_set_remove",             "Focus Remove",0},
+            {"focus_set_toggle",    "Focus Toggle",0},
+            {"focus_set_replace", "Focus = Sel", 0},
+            {"focus_scope_cycle",              "Focus Scope", 0},
         }));
         // Recording control only. The scenes themselves are the ObsScenes
         // dynamic kind; a bank of three is the honest size of what is left.
@@ -8097,10 +8097,10 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "fav_copy_own_toggle", "Fav Cpy/Own" },
     { "fav_cycle", "Fav Cycle" },
     { "flip", "Flip" },
-    { "focus_scope_both", "FOCUS BOTH" },
-    { "focus_scope_cycle", "FOCUS SCOPE" },
-    { "focus_scope_uf1", "FOCUS UF1" },
-    { "focus_scope_uf8", "FOCUS UF8" },
+    { "focus_scope_both", "Focus Both" },
+    { "focus_scope_cycle", "Focus Scope" },
+    { "focus_scope_uf1", "Focus UF1" },
+    { "focus_scope_uf8", "Focus UF8" },
     { "focused_panel_toggle", "Focus Panel" },
     { "folder_mode", "Folder Mode" },
     { "fx_cycle", "FX Cycle" },
@@ -8304,16 +8304,16 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "switch_fav_7", "Fav 7" },
     { "switch_fav_8", "Fav 8" },
     { "tcp_follows_selection_toggle", "TCP Follow" },
-    { "focus_set_add", "FOCUS ADD" },
-    { "focus_set_clear", "FOCUS CLEAR" },
+    { "focus_set_add", "Focus Add" },
+    { "focus_set_clear", "Focus Clear" },
     
 
-    { "focus_set_toggle_uf1_channel", "FOCUS CHAN" },
-    { "focus_set_pin", "PIN FOCUSED" },
-    { "focus_set_remove", "FOCUS REMOVE" },
-    { "focus_set_scroll", "FOCUS SCROLL" },
-    { "focus_set_replace", "FOCUS = SEL" },
-    { "focus_set_toggle", "FOCUS TOGGLE" },
+    { "focus_set_toggle_uf1_channel", "Focus Chan" },
+    { "focus_set_pin", "Pin Focused" },
+    { "focus_set_remove", "Focus Remove" },
+    { "focus_set_scroll", "Focus Scroll" },
+    { "focus_set_replace", "Focus = Sel" },
+    { "focus_set_toggle", "Focus Toggle" },
     { "touch_to_learn_toggle", "Touch Learn" },
     { "track_scroll", "Track Scrl" },
     { "track_select_range", "Extend Sel" },
