@@ -29315,8 +29315,59 @@ static void uf1ChannelMeterBytes_(MediaTrack* tr, uint8_t& lvL, uint8_t& lvR,
                         : static_cast<uint8_t>(std::lround(0x02 + sub * (22.0 / 30.0)));
     };
 
-    // Comp GR (→ 0x0015): |GainReduction_dB| of the strip's comp, like the UF8.
-    compByte = grByte(sdGrDb_(tr, uf8::Domain::ChannelStrip));
+    // Comp GR (→ 0x0015): the strip's comp, THROUGH THE USER'S FX-LEARN
+    // CALIBRATION, like the UF8 GR row and the UC1 DYN LEDs.
+    // ⛔ IT USED TO BE sdGrDb_ ALONE, which is the raw PreSonus reading: no
+    // FX-Learn GR param, no offset, no breakpoint table. So calibrating a
+    // compressor moved the UC1's LEDs and left this display where it was
+    // (Frank 2026-09-10). The three corrections are the same three the UF8 row
+    // applies, in the same order — read the designated param FORMATTED (raw is
+    // often normalised, e.g. Brainworx 0..1 for 0..20 dB), shift before taking
+    // the magnitude, then bend by the per-plug-in breakpoints.
+    // Falls back to sdGrDb_ when the track has no mapped channel strip: that is
+    // the "any compressor on the chain" path the UF8 walks too, and there is no
+    // calibration to apply to a plug-in nobody has learned.
+    {
+        double gr = -1.0;
+        const auto b = uc1::lookupBindingsOnTrack(tr);
+        if (b.channelMap && b.channelFxIdx >= 0) {
+            bool got = false;
+            double v = 0.0;
+            if (b.channelGrParam >= 0) {
+                char fbuf[64] = {0};
+                if (TrackFX_GetFormattedParamValue(tr, b.channelFxIdx,
+                                                   b.channelGrParam,
+                                                   fbuf, sizeof(fbuf))
+                    && fbuf[0]) { v = std::atof(fbuf); got = true; }
+                else {
+                    double mn = 0.0, mx = 0.0;
+                    v = TrackFX_GetParam(tr, b.channelFxIdx, b.channelGrParam,
+                                         &mn, &mx);
+                    got = true;
+                }
+            } else {
+                char buf[64] = {0};
+                if (TrackFX_GetNamedConfigParm(tr, b.channelFxIdx,
+                                               "GainReduction_dB",
+                                               buf, sizeof(buf))) {
+                    v = std::atof(buf); got = true;
+                }
+            }
+            if (got) {
+                v += b.channelGrOffsetDb;          // pre-abs shift
+                gr = (v < 0) ? -v : v;
+                if (b.channelGrLedsCal) {
+                    gr = uf8::applyGrCalibration(
+                        gr,
+                        b.channelGrLedsBp ? b.channelGrLedsBp : uf8::kLedsBpDb,
+                        b.channelGrLedsCal, uf8::kLedsBpCount);
+                    if (gr < 0) gr = 0;
+                }
+            }
+        }
+        if (gr < 0) gr = sdGrDb_(tr, uf8::Domain::ChannelStrip);
+        compByte = grByte(gr);
+    }
 
     // Gate GR (→ 0x0016): the SSL impersonator's GateGain (SSL-only source),
     // read from the ACTIVE CS instance — with two SSL strips on one channel the
