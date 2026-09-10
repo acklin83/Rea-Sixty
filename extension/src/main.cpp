@@ -32643,6 +32643,13 @@ void uf1PaintChannel_()
     int  flipParamFx = -1, flipParam = -1;
     const bool flipParamFader =
         flip && !stripFader && !sendFader && !extRouteActive && !stickyFader
+        // ⛔ ONLY WHILE THE KNOB IS ACTUALLY ON THE PARAMETER. FLIP means the
+        // two swap, so the fader takes what the knob has — and a long press on
+        // the knob puts it back on Pan. Without this test the fader kept taking
+        // the parameter while the knob showed Pan, which is the swap claiming to
+        // move something that was not there (found 2026-09-10 checking the
+        // script against the code, right after the long press was built).
+        && g_uf1AboveFaderMode.load() == Uf1AboveFaderMode::Param
         && ftr == tr && g_uf1ChannelSubMode.load() == 0 && !meterView
         && [&] {
             MediaTrack* pt = nullptr; int pfx = -1;
