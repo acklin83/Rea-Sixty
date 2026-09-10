@@ -2314,6 +2314,12 @@ static void applyDynBankReq_(uint32_t enc);          // main-thread executor
 static void applyDynBankUf1Req_(uint32_t enc);       // main-thread executor (UF1)
 static void tickUf1DynLongPress_();                  // main thread (drain), 500 ms edge
 MediaTrack* uf1FocusedTrack_();                      // main-thread; defined later
+// The one writer for a UF1 knob driving a plug-in parameter (stepped, toggle,
+// bipolar, Fine, travel). Defined with the V-Pot handler far below; the
+// above-fader knob calls it from the drain well before that.
+static void uf1WriteParamNotches_(MediaTrack* tr, int fx, int p, int notches,
+                                  int vi, bool bipolar,
+                                  const uf8::UserUf1Slot* uslUf1, int notchSlot);
 // UF1 channel-strip target + page count — defined with the UF1 painter far below,
 // but publishHud_ (v11 UF1 HUD tab) needs them well before that.
 int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx);
@@ -17784,20 +17790,29 @@ void applyUf1AboveFaderVpot_(int step)
         CSurf_OnVolumeChange(tr, uf1VpotVolLinear_(nDb), false);
         return;
     }
-    // Extender: the ninth strip's V-Pot rides the focused parameter.
-    // ⚠ THE UF8's KNOB FEEL DOES NOT COME WITH IT. Travel curves, step cycles
-    // and toggle slots live inline in the UF8 V-Pot block, and lifting them out
-    // is a refactor of the code that has cost two sessions already
-    // ([[feedback-fader-curve-dont-retry]]). This writes the same relative
-    // detent the UF1's own four V-Pots write, so Fine and the UF1 speed setting
-    // apply; a stepped or toggle parameter sweeps rather than stepping.
+    // Extender: the ninth strip's V-Pot rides the focused parameter, and it
+    // writes it through the SAME writer the UF1's own four V-Pots use — stepped
+    // params advance one value, toggles flip, bipolar keeps its magnet, Fine
+    // quarters the move. A linear delta here made the ninth strip sweep a
+    // parameter the eight beside it were stepping (Frank 2026-09-10).
+    // Its own detent-hold slot (12), clear of the four display pots' 8..11.
     {
         int efx = -1, eprm = -1; bool einv = false;
         if (uf1ExtenderFocusedParam_(tr, &efx, &eprm, &einv)) {
-            const double cur = TrackFX_GetParamNormalized(tr, efx, eprm);
-            const double d   = step / 128.0 * kScale * (einv ? -1.0 : 1.0);
-            TrackFX_SetParamNormalized(tr, efx, eprm,
-                                       std::clamp(cur + d, 0.0, 1.0));
+            static double sAccumAbove = 0.0;
+            sAccumAbove += step / kChannelEncoderScale;
+            int notches = 0;
+            if (sAccumAbove >= 1.0 || sAccumAbove <= -1.0)
+                notches = static_cast<int>(sAccumAbove);
+            if (notches == 0) return;
+            sAccumAbove -= notches;
+            if (einv) notches = -notches;
+            // No explicit UF1 slot here: the parameter comes from the UF8's
+            // focus, not from a UF1 map, so there is no per-knob range or curve
+            // to honour — the linear path, like a built-in strip's knob.
+            uf1WriteParamNotches_(tr, efx, eprm, notches, /*vi*/0,
+                                  /*bipolar*/false, /*uslUf1*/nullptr,
+                                  /*notchSlot*/12);
             return;
         }
     }
@@ -28203,6 +28218,97 @@ static int uf1DawWindowStart_()
 // others move linearly. In DAW mode the 4 V-Pots ride the window tracks' volume
 // instead. No-op when not a known SSL strip or the slot is blank on this page.
 // Main-thread only (drained). The screen readout follows via uf1PaintChannel_.
+// ⇨ ONE WRITER FOR EVERY UF1 KNOB THAT DRIVES A PLUG-IN PARAMETER.
+// Lifted out of applyUf1ChannelVpot_ on 2026-09-10, when the above-fader knob
+// became the UF8's ninth strip as an Extender and promptly wrote its parameter
+// with a plain linear delta — so a stepped parameter swept on the UF1 and
+// stepped on the eight strips beside it (Frank: "das müsste schon konsistent
+// sein"). Everything a detent has to respect lives here: stepped params advance
+// one value, toggles flip, JSFX's fake steps are classified out, bipolar params
+// keep their centre magnet, Fine quarters the move, and an explicit slot's
+// range / curve / sensitivity are honoured.
+// `notchSlot` is the detent-hold key: the four display V-Pots own 8..11, the
+// above-fader knob 12; UF8 owns 0..7 and UC1 16..31, so nothing collides.
+static void uf1WriteParamNotches_(MediaTrack* tr, int fx, int p, int notches,
+                                  int vi, bool bipolar,
+                                  const uf8::UserUf1Slot* uslUf1, int notchSlot)
+{
+    if (!tr || fx < 0 || p < 0 || notches == 0) return;
+    // STEPPED params (e.g. Townhouse Attack/Release, comp Ratio) advance by ONE
+    // discrete step per detent: a fixed continuous delta rounds back to the same
+    // value and never moves (Frank 2026-07-30 "gesteppte parameter sind noch nicht
+    // verstellbar"). Toggles flip; everything else keeps the smooth delta + bipolar
+    // magnet. pStep is REAPER's per-step size in normalised [0..1] space.
+    double pStep = 0.0, pSmall = 0.0, pLarge = 0.0; bool isToggle = false;
+    const bool stepped = TrackFX_GetParameterStepSizes(tr, fx, p,
+                                                       &pStep, &pSmall, &pLarge, &isToggle);
+    // JSFX reports step in slider VALUE units, not normalised — a continuous JSFX
+    // fader looks "stepped" with a coarse quantum. Classify: a bogus (continuous)
+    // step falls through to the smooth path; a real enum uses the native increment.
+    bool jsfxBogusStep = false;
+    if (stepped && !isToggle) {
+        double nrm = 0.0; bool cont = false;
+        if (uf8::jsfxStepClassify(tr, fx, p, pStep, nrm, cont)) {
+            jsfxBogusStep = cont;
+            if (!cont && nrm > 0.0) pStep = nrm;
+        }
+    }
+    const double cur = TrackFX_GetParamNormalized(tr, fx, p);
+    double nv;
+    if (stepped && isToggle && !bipolar) {
+        nv = (cur >= 0.5) ? 0.0 : 1.0;
+    } else if (stepped && pStep > 0.0 && !jsfxBogusStep && !bipolar) {
+        // !bipolar: a centre-detent param (EQ gain/trim) is continuous by design —
+        // keep its magnet, never treat it as stepped even if it reports a step.
+        nv = cur + notches * pStep;          // one detent = one discrete step
+        if (nv < 0.0) nv = 0.0;
+        if (nv > 1.0) nv = 1.0;
+    } else {
+        // Fine (Quick-Key-2) quarters the step via the shared knob scale, mirroring
+        // the UF8 V-Pot path (reasixty_uf8KnobScale). g_uf1CsFine is the UF1's own
+        // Fine flag (NOT vpotFineActive_, which is UF8/UC1's).
+        double delta = notches * kUf1CsVPotStep
+                     * reasixty_uf1KnobScale(g_uf1CsFine.load());
+        // Knob travel from the explicit UF1 slot (v11): sensitivity scales the
+        // delta BEFORE the curve (keeping the inverse exact — see applyCurve's
+        // contract), then the move happens in ENCODER space and is re-mapped
+        // through range + curve. Absent slot ⇒ untouched linear path, so the
+        // built-in strips and the sequential fallback behave exactly as before.
+        if (uslUf1) {
+            if (uslUf1->sensitivity > 0.0f) delta *= uslUf1->sensitivity;
+            const float t  = uf8::inverseCurve(*uslUf1, static_cast<float>(cur));
+            float       nt = t + static_cast<float>(delta);
+            if (nt < 0.0f) nt = 0.0f;
+            if (nt > 1.0f) nt = 1.0f;
+            double mapped = uf8::applyCurve(*uslUf1, nt);
+            if (uslUf1->inverted) {
+                // Invert within the slot's own range, not the raw 0..1 — else an
+                // inverted knob with a custom range would jump outside it.
+                const double lo = std::min(uslUf1->rangeMin, uslUf1->rangeMax);
+                const double hi = std::max(uslUf1->rangeMin, uslUf1->rangeMax);
+                mapped = lo + hi - mapped;
+            }
+            nv = mapped;
+            if (nv != cur) TrackFX_SetParamNormalized(tr, fx, p, nv);
+            return;
+        }
+        if (bipolar) {
+            // Finer step inside the notch zone, then the magnet — as the UF8 path.
+            // Notch state uses slots 8..11 (UF8 owns 0..7, UC1 owns 16..31), so the
+            // UF1 channel V-Pots can't collide with either surface's detent state.
+            if (std::abs(cur - 0.5) <= 2.0 * g_notchZone.load())
+                delta *= g_notchFineStep.load();
+            nv = uf8::applyNotchHold(notchSlot, cur, delta, /*center*/0.5,
+                                     g_notchZone.load(), g_notchHold.load(), 0.0, 1.0);
+        } else {
+            nv = cur + delta;
+            if (nv < 0.0) nv = 0.0;
+            if (nv > 1.0) nv = 1.0;
+        }
+    }
+    if (nv != cur) TrackFX_SetParamNormalized(tr, fx, p, nv);
+}
+
 void applyUf1ChannelVpot_(uint8_t id, int step)
 {
     if (step == 0) return;
@@ -28377,79 +28483,7 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
     if (notches == 0) return;
     sAccum[vi] -= notches;
 
-    // STEPPED params (e.g. Townhouse Attack/Release, comp Ratio) advance by ONE
-    // discrete step per detent: a fixed continuous delta rounds back to the same
-    // value and never moves (Frank 2026-07-30 "gesteppte parameter sind noch nicht
-    // verstellbar"). Toggles flip; everything else keeps the smooth delta + bipolar
-    // magnet. pStep is REAPER's per-step size in normalised [0..1] space.
-    double pStep = 0.0, pSmall = 0.0, pLarge = 0.0; bool isToggle = false;
-    const bool stepped = TrackFX_GetParameterStepSizes(tr, fx, p,
-                                                       &pStep, &pSmall, &pLarge, &isToggle);
-    // JSFX reports step in slider VALUE units, not normalised — a continuous JSFX
-    // fader looks "stepped" with a coarse quantum. Classify: a bogus (continuous)
-    // step falls through to the smooth path; a real enum uses the native increment.
-    bool jsfxBogusStep = false;
-    if (stepped && !isToggle) {
-        double nrm = 0.0; bool cont = false;
-        if (uf8::jsfxStepClassify(tr, fx, p, pStep, nrm, cont)) {
-            jsfxBogusStep = cont;
-            if (!cont && nrm > 0.0) pStep = nrm;
-        }
-    }
-    const double cur = TrackFX_GetParamNormalized(tr, fx, p);
-    double nv;
-    if (stepped && isToggle && !bipolar) {
-        nv = (cur >= 0.5) ? 0.0 : 1.0;
-    } else if (stepped && pStep > 0.0 && !jsfxBogusStep && !bipolar) {
-        // !bipolar: a centre-detent param (EQ gain/trim) is continuous by design —
-        // keep its magnet, never treat it as stepped even if it reports a step.
-        nv = cur + notches * pStep;          // one detent = one discrete step
-        if (nv < 0.0) nv = 0.0;
-        if (nv > 1.0) nv = 1.0;
-    } else {
-        // Fine (Quick-Key-2) quarters the step via the shared knob scale, mirroring
-        // the UF8 V-Pot path (reasixty_uf8KnobScale). g_uf1CsFine is the UF1's own
-        // Fine flag (NOT vpotFineActive_, which is UF8/UC1's).
-        double delta = notches * kUf1CsVPotStep
-                     * reasixty_uf1KnobScale(g_uf1CsFine.load());
-        // Knob travel from the explicit UF1 slot (v11): sensitivity scales the
-        // delta BEFORE the curve (keeping the inverse exact — see applyCurve's
-        // contract), then the move happens in ENCODER space and is re-mapped
-        // through range + curve. Absent slot ⇒ untouched linear path, so the
-        // built-in strips and the sequential fallback behave exactly as before.
-        if (uslUf1) {
-            if (uslUf1->sensitivity > 0.0f) delta *= uslUf1->sensitivity;
-            const float t  = uf8::inverseCurve(*uslUf1, static_cast<float>(cur));
-            float       nt = t + static_cast<float>(delta);
-            if (nt < 0.0f) nt = 0.0f;
-            if (nt > 1.0f) nt = 1.0f;
-            double mapped = uf8::applyCurve(*uslUf1, nt);
-            if (uslUf1->inverted) {
-                // Invert within the slot's own range, not the raw 0..1 — else an
-                // inverted knob with a custom range would jump outside it.
-                const double lo = std::min(uslUf1->rangeMin, uslUf1->rangeMax);
-                const double hi = std::max(uslUf1->rangeMin, uslUf1->rangeMax);
-                mapped = lo + hi - mapped;
-            }
-            nv = mapped;
-            if (nv != cur) TrackFX_SetParamNormalized(tr, fx, p, nv);
-            return;
-        }
-        if (bipolar) {
-            // Finer step inside the notch zone, then the magnet — as the UF8 path.
-            // Notch state uses slots 8..11 (UF8 owns 0..7, UC1 owns 16..31), so the
-            // UF1 channel V-Pots can't collide with either surface's detent state.
-            if (std::abs(cur - 0.5) <= 2.0 * g_notchZone.load())
-                delta *= g_notchFineStep.load();
-            nv = uf8::applyNotchHold(8 + vi, cur, delta, /*center*/0.5,
-                                     g_notchZone.load(), g_notchHold.load(), 0.0, 1.0);
-        } else {
-            nv = cur + delta;
-            if (nv < 0.0) nv = 0.0;
-            if (nv > 1.0) nv = 1.0;
-        }
-    }
-    if (nv != cur) TrackFX_SetParamNormalized(tr, fx, p, nv);
+    uf1WriteParamNotches_(tr, fx, p, notches, vi, bipolar, uslUf1, 8 + vi);
 }
 
 // The fixed non-parameter soft-key actions, in ONE place: the built-in p188
