@@ -8070,92 +8070,27 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         // then hidden. Mirrors the UF8 Sub-Bank combo (drawSubBankCellEditor_).
         const int uf1Bank = reasixty_uf1SoftBank();
 
-        // ---- Bank name (per bank, per modifier set) -------------------
-        // What the bank is CALLED. Announced on the UF1's time display when you
-        // switch to it, if that is switched on in Behaviour → UF1. Empty is the
-        // normal state: a dynamic bank then announces its kind and a static one
-        // its number, so the field never needs filling to be useful.
-        {
-            static char        s_bankNameBuf[64] = {0};
-            static int         s_forBank = -1, s_forMod = -1;
-            static std::string s_lastFill;    // what we last put in the box
-            static bool        s_editing = false;   // from the PREVIOUS frame
-
-            const std::string userName = uf8::bindings::getUf1SoftBankName(
-                                             uf1Bank, g_slotEditModIdx);
-            char def[64] = {0};
-            reasixty_uf1BankDisplayName(uf1Bank, g_slotEditModIdx,
-                                        def, sizeof(def));
-            // ⇨ NEVER AN EMPTY BOX (Frank 2026-08-26: "nie einfach leer lassen").
-            // With no name of its own the field carries the bank's DEFAULT name,
-            // which is what the panel will announce — so an empty box was the one
-            // thing that is never true of this bank. Clearing the field puts the
-            // default back, which is also how you undo a name.
-            // Refilled when the bank, the set, or the default itself changes, and
-            // ⛔ NEVER while the cursor is in the box: that would rewrite what the
-            // user is halfway through typing. s_editing is last frame's answer,
-            // because ImGui can only be asked about an item AFTER it is drawn.
-            const std::string want = userName.empty() ? std::string(def) : userName;
-            if (uf1Bank != s_forBank || g_slotEditModIdx != s_forMod
-                || (!s_editing && want != s_lastFill)) {
-                s_forBank  = uf1Bank;
-                s_forMod   = g_slotEditModIdx;
-                s_lastFill = want;
-                snprintf(s_bankNameBuf, sizeof(s_bankNameBuf), "%s", want.c_str());
-            }
-            ImGui_Text(ctx, "Bank name");
-            ImGui_SetNextItemWidth(ctx, 260.0);
-            int nameFlags = 0;
-            // ⛔ THE ID CARRIES THE BANK AND THE SET, and that is load-bearing, not
-            // cosmetic. While an InputText is ACTIVE, ImGui keeps its own copy of
-            // the text and writes that copy back into our buffer on the next
-            // frame, reporting it as an edit. So switching bank with the cursor
-            // still in the field refilled our buffer, ImGui overwrote it with the
-            // text from the bank you LEFT, and we stored that into the bank you
-            // arrived at — the name walked from bank to bank as you paged (Frank
-            // 2026-08-26). With the bank in the ID the widget is a DIFFERENT one
-            // after the switch: the old one is never submitted again, so it can
-            // never write back, and the new one starts from our buffer.
-            char nameId[48];
-            snprintf(nameId, sizeof(nameId), "##uf1bankname_%d_%d",
-                     uf1Bank, g_slotEditModIdx);
-            const bool nameChanged =
-                ImGui_InputText(ctx, nameId, s_bankNameBuf,
-                                sizeof(s_bankNameBuf), &nameFlags, nullptr);
-            if (nameChanged) {
-                uf8::bindings::setUf1SoftBankName(uf1Bank, g_slotEditModIdx,
-                                                  s_bankNameBuf);
-                s_lastFill = s_bankNameBuf;
-            }
-            s_editing = ImGui_IsItemActive(ctx);
-            // ⇨ WHAT THE PANEL WILL ACTUALLY SHOW, not what was typed. Five
-            // letters have no shape on seven segments (K M V W X) and the font
-            // approximates them without saying so, so "Mix Keys" reaches the
-            // glass as "MIH KEYS". Echoing the typed text back would hide that
-            // until the user was standing at the hardware.
-            const bool editing = s_editing;
+        // ⛔ NO SECOND NAME FIELD. The bank is named by double-clicking its
+        // column header, so a text box down here was a second way in to one
+        // value — and the two even disagreed on what the bank was called,
+        // because the header shows the bare number for a bank with no name of
+        // its own while the box always filled in the default ("5" up there,
+        // "SOFT 5" down here — Frank 2026-09-10: "wieso haben wir noch ein
+        // namensfeld wenns doch im titel eingegeben wird? Haben wir beim UF8
+        // auch nicht!"). The UF8 matrix never had one either.
+        // What survives is the part the header cannot do: showing what the
+        // SEVEN-SEGMENT field will make of the name. Five letters have no shape
+        // there (K M V W X) and the font approximates them silently, so
+        // "Mix Keys" reaches the glass as "MIH KEYS". With a UF1 attached the
+        // rename flashes the real panel, which is a better preview than any
+        // drawing; without one, these cells are the only way to see it before
+        // standing at the hardware.
+        if (!reasixty_uf1Connected()) {
             char shown[64] = {0};
             reasixty_uf1BankDisplayName(uf1Bank, g_slotEditModIdx,
                                         shown, sizeof(shown));
-            // ★ The panel IS the preview while you type (Frank 2026-08-26). Not a
-            // drawing of the panel: the real cells, the real font, every
-            // approximation simply present.
-            // ⛔ ARMED BY A KEYSTROKE, NOT BY THE CARET. This re-armed every frame
-            // the field was ACTIVE, and active in ImGui means the caret sits
-            // there, not that anyone is typing — so clicking into a bank name and
-            // leaving it stuck the panel on that name for as long as the field
-            // kept focus (Frank 2026-09-03: "mein UF1 ist auf EFFECTS hängen
-            // geblieben"). One arm per keystroke, long enough to read, and the
-            // clock comes back on its own whatever the caret does.
-            if (nameChanged && reasixty_uf1Connected())
-                reasixty_uf1PreviewOnPanel(shown);
-            (void)editing;
-            // The drawn cells stay for the case the panel cannot cover: no UF1
-            // attached. Offline editing of these banks is supported, and a preview
-            // that only exists with the hardware present would be missing exactly
-            // when the guessing starts.
-            if (!reasixty_uf1Connected())
-                drawUf1Seg7Preview_(ctx, shown);
+            ImGui_TextDisabled(ctx, "On the UF1's time field:");
+            drawUf1Seg7Preview_(ctx, shown);
             ImGui_Spacing(ctx);
         }
         {
