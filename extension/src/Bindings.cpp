@@ -6611,27 +6611,27 @@ static const std::vector<Uf1BankPreset>& factoryUf1Banks_()
         // The jog wheel is the UF1's own thing and its seven modes are otherwise
         // reachable only one at a time through the cycle.
         v.push_back(bank("Jog Modes", {
-            {"jog_mode_playhead", "PLAYHEAD", 0},
-            {"jog_mode_scrub",    "SCRUB",    0},
-            {"jog_mode_items",    "ITEMS",    0},
-            {"jog_mode_envelope", "ENVELOPE", 0},
+            {"jog_mode_playhead", "Playhead", 0},
+            {"jog_mode_scrub",    "Scrub",    0},
+            {"jog_mode_items",    "Items",    0},
+            {"jog_mode_envelope", "Envelope", 0},
             // Shift
-            {"jog_mode_razor",    "RAZOR",     0},
-            {"jog_mode_fades",    "FADES",     0},
-            {"jog_mode_cycle",    "JOG CYCLE", 0},
+            {"jog_mode_razor",    "Razor",     0},
+            {"jog_mode_fades",    "Fades",     0},
+            {"jog_mode_cycle",    "Jog Mode", 0},
         }));
         // The UF8's Plug-in Ops bank, cut to four. ssl_strip_mode_toggle is not
         // in it: the UF1 has the 360 key for that. The preset browser is.
         v.push_back(bank("Plug-in Ops", {
-            {"show_focused_plugin_gui", "FX GUI",    0},
-            {"show_fx_chain",           "FX CHAIN",  0},
-            {"plugin_bypass",           "BYPASS",    0},
-            {"close_all_fx_guis",       "CLOSE ALL", 0},
+            {"show_focused_plugin_gui", "Plug-in GUI",    0},
+            {"show_fx_chain",           "FX Chain",  0},
+            {"plugin_bypass",           "FX Bypass",    0},
+            {"close_all_fx_guis",       "Close All", 0},
             // Shift
-            {"plugin_preset_prev",      "PRESET -",  0},
-            {"plugin_preset_next",      "PRESET +",  0},
-            {"plugin_offline",          "OFFLINE",   0},
-            {"uf1_presets",             "PRESETS",   0},
+            {"plugin_preset_prev",      "Preset <",  0},
+            {"plugin_preset_next",      "Preset >",  0},
+            {"plugin_offline",          "FX Offline",   0},
+            {"uf1_presets",             "UF1 Presets",   0},
         }));
         // "Pin This Ch" pins the channel the UF1 is SHOWING, which is why it
         // left the UF8's Focus Set bank on 2026-09-01. This is where it belongs.
@@ -6649,21 +6649,21 @@ static const std::vector<Uf1BankPreset>& factoryUf1Banks_()
         // Recording control only. The scenes themselves are the ObsScenes
         // dynamic kind; a bank of three is the honest size of what is left.
         v.push_back(bank("OBS", {
-            {"obs_record_toggle",  "OBS REC",   0},
-            {"obs_record_pause",   "OBS PAUSE", 0},
-            {"obs_chapter_marker", "CHAPTER",   0},
+            {"obs_record_toggle",  "OBS Rec",   0},
+            {"obs_record_pause",   "OBS Pause", 0},
+            {"obs_chapter_marker", "OBS Chapter",   0},
         }));
         // As on the UF8, plus sleep_now, which is in no bank there and has no
         // key of its own anywhere.
         v.push_back(bank("Brightness", {
-            {"brightness_both_up",   "BRIGHT +", 0},
-            {"brightness_both_down", "BRIGHT -", 0},
-            {"brightness_lcds_up",   "LCDS +",   0},
-            {"brightness_lcds_down", "LCDS -",   0},
+            {"brightness_both_up",   "Bright +", 0},
+            {"brightness_both_down", "Bright -", 0},
+            {"brightness_lcds_up",   "LCD +",   0},
+            {"brightness_lcds_down", "LCD -",   0},
             // Shift
-            {"brightness_leds_up",   "LEDS +",   0},
-            {"brightness_leds_down", "LEDS -",   0},
-            {"sleep_now",            "SLEEP",    0},
+            {"brightness_leds_up",   "LED +",   0},
+            {"brightness_leds_down", "LED -",   0},
+            {"sleep_now",            "Sleep",    0},
         }));
         return v;
     }();
