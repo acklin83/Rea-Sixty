@@ -710,6 +710,54 @@ Binding mkBuiltin(const char* name, Behavior b, const char* label,
     return bd;
 }
 
+// ⛔ A DERIVED SLOT SHOWS WHAT THE KEY DOES — IT DOES NOT SIT THERE EMPTY.
+// The UF1's per-view keys (5-8, the two page arrows, the SOFT key × Plugin /
+// DAW / Meter / Sends) and the per-mode nav cross (five keys × six jog modes)
+// fall back to the physical key when their own slot is empty — uf1RemapForView_
+// and its jog twin. That fallback works and stays. What it did to the EDITOR is
+// the problem: fourteen of the sixteen per-view slots shipped empty, so the
+// pane said "None (disabled)" over keys that page the channel group and pin the
+// channel every day, and the only way to learn otherwise was to read the source
+// (Frank 2026-09-10: "5-8 ist LEER in DAW View obwohl doch dann channels 5-8
+// auf die v-pots kommen! MACH DAS SAUBER", and on being offered a hover box
+// instead: "WIESO WIRD … EIN BESCHISSENER HELP TEXT IM MOUSE OVER GEZEIGT WENN
+// DU EINFACH DIE VERFICKTE VALUE EINTRAGEN SOLLT IN DEN FUCKING BUTTON").
+//
+// So every derived slot is seeded with a COPY of its base. Behaviour does not
+// move by a hair: the copy is what the fallback was already resolving to.
+// ⚠ COPY, NOT REFERENCE, and that is the trade: once a derived slot holds
+// something, that view (or that jog mode) OWNS the key, so a later edit to the
+// physical key no longer reaches it. That is the same all-or-nothing a modifier
+// set has, and it is the price of the slot being able to show you anything.
+// ⚠ ONLY WHERE THE SLOT IS EMPTY. A view that carries its own binding from the
+// factory (Plugin's 5-8 opens the preset browser on Shift, Sends' flips to the
+// receives) or one the user filled is never touched.
+void fillDerivedUf1Slots_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    auto seed = [&L1](ButtonId derived, ButtonId base) {
+        auto b = L1.bindings.find(base);
+        if (b == L1.bindings.end() || !bindingHasAnyAction(b->second)) return;
+        Binding& dst = L1.bindings[derived];      // default-creates
+        if (bindingHasAnyAction(dst)) return;     // its own, or already seeded
+        dst = b->second;
+    };
+    static const ButtonId kViewBases[] = {
+        ButtonId::Uf1FiveToEight, ButtonId::Uf1ArrowLeft,
+        ButtonId::Uf1ArrowRight,  ButtonId::Uf1ChannelSoftKey,
+    };
+    for (const ButtonId base : kViewBases)
+        for (int v = 0; v < kUf1ViewCountForKeys; ++v)
+            seed(perViewUf1Id(base, v), base);
+    static const ButtonId kNavBases[] = {
+        ButtonId::Uf1NavUp,    ButtonId::Uf1NavLeft, ButtonId::Uf1NavCentre,
+        ButtonId::Uf1NavRight, ButtonId::Uf1NavDown,
+    };
+    for (const ButtonId base : kNavBases)
+        for (int m = 0; m < kUf1JogModeCountForNav; ++m)
+            seed(perModeNavId(base, m), base);
+}
+
 void seedFactoryDefaults_(Config& c)
 {
     crumb_("seed: enter");
@@ -1278,6 +1326,11 @@ void seedFactoryDefaults_(Config& c)
         seedSelDouble(ButtonId::Uf1Sel);
         seedSelDouble(ButtonId::Uf8Select);
     }
+    // LAST, deliberately: it copies every base binding into the per-view and
+    // per-jog-mode slots that have none of their own, so it has to run after
+    // every base above is final — including the arrows' long press and the two
+    // views that seed their own 5-8. See fillDerivedUf1Slots_.
+    fillDerivedUf1Slots_(c);
 }
 
 // ---- JSON serialization ---------------------------------------------------
@@ -2953,7 +3006,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
-constexpr int kCurrentBindingsVersion = 34;
+constexpr int kCurrentBindingsVersion = 35;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -3948,6 +4001,9 @@ void load()
             }
             if (tmp.version < 25) {
                 upgradeMarkUserLabels_(tmp);
+            }
+            if (tmp.version < 35) {
+                fillDerivedUf1Slots_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins

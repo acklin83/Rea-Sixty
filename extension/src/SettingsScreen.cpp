@@ -7723,36 +7723,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             }
             ImGui_EndCombo(ctx);
         }
-        // ⛔ AN EMPTY PER-VIEW SLOT IS NOT AN UNBOUND KEY — IT INHERITS, and the
-        // editor said "None (disabled)" over keys that page the channel group
-        // and pin the channel every day: only Plugin and Sends carry their own
-        // 5-8 from the factory, and the SOFT key carries none of the four
-        // (Frank 2026-09-10). The fallback itself is deliberate and stays —
-        // uf1RemapForView_ hands an empty per-view id back to the physical key,
-        // which is what keeps pre-view configurations alive.
-        // ⚠ A HOVER BOX, NOT A LINE IN THE PANE. `ab9d505` moved every grey
-        // helper line into one of these, and a new line here would be the first
-        // one back (Frank 2026-09-10: "KEINE EINZIGE MESSAGE IN IRGENDEINEN
-        // DIALOG"). It also costs no height, which this tab cannot spare
-        // ([[learnings]] #31).
-        {
-            const Binding here = getBinding(s_editLayer, editSel);
-            if (!bindingHasAnyAction(here)) {
-                const Binding base = getBinding(s_editLayer, vBase);
-                const std::string what = describeActionStep_(
-                    base.shortPress[static_cast<int>(Modifier::Plain)]);
-                char line[256];
-                snprintf(line, sizeof(line),
-                         what.empty()
-                             ? "Empty here, and %s has no binding of its own "
-                               "either, so the key does nothing in this view."
-                             : "Empty here, so this view uses what %s does "
-                               "everywhere: %s. Assign something and this view "
-                               "takes the key.",
-                         hwFaceLabel(vBase), what.c_str());
-                help_(ctx, line);
-            }
-        }
         ImGui_Spacing(ctx);
     }
 
