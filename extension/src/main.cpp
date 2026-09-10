@@ -42182,265 +42182,256 @@ void onTimerBody_()
     {
         std::array<uint8_t, 8> targetBytes{};  // all zero by default
         std::array<uint8_t, 8> gateBytes{};    // gate GR row (FF 66 09 16)
-        int focStrip = -1;
-        // ⇨ THE FOCUSED TRACK, NOT THE UC1's. This block used to sit inside
-        // `if (g_uc1_surface)` and take its track from g_uc1_surface->
-        // focusedTrack(), so a rig with no UC1 got no GR row at all, and no gate
-        // GR row either — not an uncalibrated one, none (2026-09-10).
-        // activeFocusTrack_ asks in the right order: the UC1's focus first, then
-        // the UF1's, then the selected track.
-        {
-            if (auto* tr = activeFocusTrack_()) {
-                if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
-                // ⛔ ASK THE STRIPS, DO NOT DO THE ARITHMETIC AGAIN.
-                // This used to find the track's index in the visible list and
-                // subtract the bank offset, which is the mapping MINUS every
-                // shift stripToVisibleSlot applies. With the UF1 Extender on the
-                // LEFT the UF1 takes bank slot 0 and the UF8 shows slots 1..8
-                // (uf8StripBase_), so the GR landed one strip to the right of
-                // the channel it belonged to — right value, wrong place (Frank
-                // 2026-09-10). DynaMount reserves strips the same way, and any
-                // future shift would have needed a third copy of the sum here.
-                // Walking the eight strips through the one resolver cannot drift
-                // from what the surface actually draws.
-                const int bankOffset = g_bankOffset.load();
-                if (tr) for (int st = 0; st < 8; ++st) {
-                    const int slot = stripToVisibleSlot(st, bankOffset);
-                    if (slot >= 0 && visibleTrackAt(slot) == tr) {
-                        focStrip = st;
+        // ⇨ ALL EIGHT STRIPS, NOT JUST THE FOCUSED ONE.
+        // Until 2026-09-10 this resolved exactly one track and blanked the other
+        // seven, which is how it had worked since 5dc644c in April: eight GR
+        // displays and seven of them dark (Frank: "würde ja NULL sinn machen wenn
+        // die GR nur beim selektierten kanal angezeigt wird bei 8 anzeigen").
+        // Each strip now answers for its own track: its own compressor, its own
+        // per-plug-in calibration, its own gate.
+        // ⚠ THE COST IS PER STRIP. Where the track has no mapped channel strip
+        // the reading walks its whole FX chain (g_grAnyFx), and that now happens
+        // up to eight times a tick instead of once. It is the same walk the
+        // surface already does for names and colours, but if this ever shows up
+        // in a profile, this is the loop it is in.
+        const int bankOffset = g_bankOffset.load();
+        for (int st = 0; st < 8; ++st) {
+            const int slot = stripToVisibleSlot(st, bankOffset);
+            MediaTrack* tr = (slot >= 0) ? visibleTrackAt(slot) : nullptr;
+            if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
+            // Blank strip (past the end of the list, or a mount / lamp strip):
+            // both rows dark, holders cleared so nothing ramps down later.
+            if (!tr) { g_uf8GrBytes[st] = 0; g_uf8GateGrBytes[st] = 0; continue; }
+            {
+            uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(tr);
+            // GR readback mirrors UC1Surface::readGr: raw
+            // TrackFX_GetParam for user-picked GR params
+            // (most VST3 meter outputs are exposed there
+            // directly), GainReduction_dB named-config-parm
+            // as the built-in fallback. When the track has
+            // no SSL CS / user-mapped CS plug-in, walk the
+            // FX chain and use the first FX exposing the
+            // PreSonus GainReduction_dB convention (Frank
+            // 2026-05-06: ReaComp / FabFilter Pro-C2 etc.
+            // should still drive the UF8 strip).
+            bool gotIt = false;
+            double gr = 0.0;  // accumulated magnitude (dB)
+            const double* ledsCal = nullptr;  // per-breakpoint correction
+            const double* ledsBp  = nullptr;  // …and where it sits (v18)
+            int csFxIdx = -1;
+            if (b.channelMap && b.channelFxIdx >= 0) {
+                ledsCal  = b.channelGrLedsCal;
+                ledsBp   = b.channelGrLedsBp;
+                csFxIdx  = b.channelFxIdx;
+                // Pre-abs additive shift (user FX-Learn calibration),
+                // applied to the mapped-channel read only — mirrors
+                // UC1Surface readGr. The combine/walk paths below add
+                // other compressors' magnitudes offset-free.
+                const double grOff = b.channelGrOffsetDb;
+                if (b.channelGrParam >= 0) {
+                    // Read the plug-in's FORMATTED value
+                    // ("3.45 dB") rather than the raw param —
+                    // see UC1Surface readGr for rationale
+                    // (Brainworx SSL 9000J Frank 2026-05-15).
+                    char fbuf[64] = {0};
+                    if (TrackFX_GetFormattedParamValue(
+                            tr, b.channelFxIdx, b.channelGrParam,
+                            fbuf, sizeof(fbuf)) && fbuf[0])
+                    {
+                        gr = std::fabs(std::atof(fbuf) + grOff);
+                        gotIt = true;
+                    } else {
+                        double mn = 0.0, mx = 0.0;
+                        gr = std::fabs(TrackFX_GetParam(tr, b.channelFxIdx,
+                                              b.channelGrParam, &mn, &mx)
+                                       + grOff);
+                        gotIt = true;
+                    }
+                } else {
+                    char buf[64] = {0};
+                    if (TrackFX_GetNamedConfigParm(
+                            tr, b.channelFxIdx, "GainReduction_dB",
+                            buf, sizeof(buf))) {
+                        gr = std::fabs(std::atof(buf) + grOff);
+                        gotIt = true;
+                    }
+                }
+            }
+            if (g_grAnyFx.load()) {
+                const int fxCount = TrackFX_GetCount(tr);
+                if (g_grCombineUf8.load()) {
+                    // Combined channel GR: add every OTHER compressor
+                    // on the chain exposing the PreSonus
+                    // GainReduction_dB convention to the CS reading
+                    // above (csFxIdx already counted). In-series GR
+                    // sums in dB, so [ReaComp → SSL CS] reads the
+                    // total reduction, not just the CS. Frank
+                    // 2026-06-12. Acustica skipped — its engine faults
+                    // under host config-parm polling (see fxIsAcustica).
+                    for (int fx = 0; fx < fxCount; ++fx) {
+                        if (fx == csFxIdx) continue;
+                        if (uf8::fxIsAcustica(tr, fx)) continue;
+                        char buf[64] = {0};
+                        if (!TrackFX_GetNamedConfigParm(
+                                tr, fx, "GainReduction_dB",
+                                buf, sizeof(buf))) continue;
+                        gr += std::fabs(std::atof(buf));
+                        gotIt = true;
+                    }
+                } else if (!gotIt) {
+                    // Single source: first FX on the chain exposing
+                    // GainReduction_dB (legacy behaviour when no CS).
+                    for (int fx = 0; fx < fxCount; ++fx) {
+                        if (uf8::fxIsAcustica(tr, fx)) continue;
+                        char buf[64] = {0};
+                        if (!TrackFX_GetNamedConfigParm(
+                                tr, fx, "GainReduction_dB",
+                                buf, sizeof(buf))) continue;
+                        gr = std::fabs(std::atof(buf));
+                        gotIt = true;
                         break;
                     }
                 }
-                if (focStrip >= 0) {
-                    uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(tr);
-                    // GR readback mirrors UC1Surface::readGr: raw
-                    // TrackFX_GetParam for user-picked GR params
-                    // (most VST3 meter outputs are exposed there
-                    // directly), GainReduction_dB named-config-parm
-                    // as the built-in fallback. When the track has
-                    // no SSL CS / user-mapped CS plug-in, walk the
-                    // FX chain and use the first FX exposing the
-                    // PreSonus GainReduction_dB convention (Frank
-                    // 2026-05-06: ReaComp / FabFilter Pro-C2 etc.
-                    // should still drive the UF8 strip).
-                    bool gotIt = false;
-                    double gr = 0.0;  // accumulated magnitude (dB)
-                    const double* ledsCal = nullptr;  // per-breakpoint correction
-                    const double* ledsBp  = nullptr;  // …and where it sits (v18)
-                    int csFxIdx = -1;
-                    if (b.channelMap && b.channelFxIdx >= 0) {
-                        ledsCal  = b.channelGrLedsCal;
-                        ledsBp   = b.channelGrLedsBp;
-                        csFxIdx  = b.channelFxIdx;
-                        // Pre-abs additive shift (user FX-Learn calibration),
-                        // applied to the mapped-channel read only — mirrors
-                        // UC1Surface readGr. The combine/walk paths below add
-                        // other compressors' magnitudes offset-free.
-                        const double grOff = b.channelGrOffsetDb;
-                        if (b.channelGrParam >= 0) {
-                            // Read the plug-in's FORMATTED value
-                            // ("3.45 dB") rather than the raw param —
-                            // see UC1Surface readGr for rationale
-                            // (Brainworx SSL 9000J Frank 2026-05-15).
-                            char fbuf[64] = {0};
-                            if (TrackFX_GetFormattedParamValue(
-                                    tr, b.channelFxIdx, b.channelGrParam,
-                                    fbuf, sizeof(fbuf)) && fbuf[0])
-                            {
-                                gr = std::fabs(std::atof(fbuf) + grOff);
-                                gotIt = true;
-                            } else {
-                                double mn = 0.0, mx = 0.0;
-                                gr = std::fabs(TrackFX_GetParam(tr, b.channelFxIdx,
-                                                      b.channelGrParam, &mn, &mx)
-                                               + grOff);
-                                gotIt = true;
-                            }
-                        } else {
-                            char buf[64] = {0};
-                            if (TrackFX_GetNamedConfigParm(
-                                    tr, b.channelFxIdx, "GainReduction_dB",
-                                    buf, sizeof(buf))) {
-                                gr = std::fabs(std::atof(buf) + grOff);
-                                gotIt = true;
-                            }
-                        }
-                    }
-                    if (g_grAnyFx.load()) {
-                        const int fxCount = TrackFX_GetCount(tr);
-                        if (g_grCombineUf8.load()) {
-                            // Combined channel GR: add every OTHER compressor
-                            // on the chain exposing the PreSonus
-                            // GainReduction_dB convention to the CS reading
-                            // above (csFxIdx already counted). In-series GR
-                            // sums in dB, so [ReaComp → SSL CS] reads the
-                            // total reduction, not just the CS. Frank
-                            // 2026-06-12. Acustica skipped — its engine faults
-                            // under host config-parm polling (see fxIsAcustica).
-                            for (int fx = 0; fx < fxCount; ++fx) {
-                                if (fx == csFxIdx) continue;
-                                if (uf8::fxIsAcustica(tr, fx)) continue;
-                                char buf[64] = {0};
-                                if (!TrackFX_GetNamedConfigParm(
-                                        tr, fx, "GainReduction_dB",
-                                        buf, sizeof(buf))) continue;
-                                gr += std::fabs(std::atof(buf));
-                                gotIt = true;
-                            }
-                        } else if (!gotIt) {
-                            // Single source: first FX on the chain exposing
-                            // GainReduction_dB (legacy behaviour when no CS).
-                            for (int fx = 0; fx < fxCount; ++fx) {
-                                if (uf8::fxIsAcustica(tr, fx)) continue;
-                                char buf[64] = {0};
-                                if (!TrackFX_GetNamedConfigParm(
-                                        tr, fx, "GainReduction_dB",
-                                        buf, sizeof(buf))) continue;
-                                gr = std::fabs(std::atof(buf));
-                                gotIt = true;
-                                break;
-                            }
-                        }
-                    }
-                    if (gotIt) {
-                        if (gr < 0) gr = -gr;
-                        // Per-plugin breakpoint calibration (v5 schema).
-                        // Same table the UC1 DYN GR LED renderer uses,
-                        // applied here so UF8 and UC1 stay in lock-step.
-                        if (ledsCal) {
-                            gr = uf8::applyGrCalibration(
-                                gr, ledsBp ? ledsBp : uf8::kLedsBpDb,
-                                ledsCal, uf8::kLedsBpCount);
-                            if (gr < 0) gr = 0;
-                        }
-                        // Device-level per-tick calibration (Settings →
-                        // Devices → UC1 GR calibration, CS DYN GR LEDs).
-                        // Hardware trim, applied after the per-plug-in cal so UF8 and
-                        // UC1 LED strip stay aligned. Effective =
-                        // factory baseline + user delta.
-                        double devCal[5];
-                        for (int i = 0; i < 5; ++i)
-                            devCal[i] = kUc1CsLedsFactory[i] +
-                                        g_uc1CsLedsCal[i].load();
-                        gr = uf8::applyGrCalibration(
-                            gr, uf8::kLedsBpDb, devCal, 5);
-                        if (gr < 0) gr = 0;
-                        // Test-tick override (Settings → Devices → UC1
-                        // GR calibration). When active, force the matching
-                        // tick value so the user sees what the renderer
-                        // would draw at exactly that tick.
-                        const int testT = g_uc1CalActiveTest.load();
-                        if (testT >= 100 && testT < 105) {
-                            const int ti = testT - 100;
-                            gr = uf8::kLedsBpDb[ti]
-                                 + kUc1CsLedsFactory[ti]
-                                 + g_uc1CsLedsCal[ti].load();
-                        } else if (testT >= 0 && testT < 6) {
-                            // BC test active — silence UF8 GR row so
-                            // the user only sees the BC needle moving.
-                            gr = 0.0;
-                        }
-                        if (gr > 20.0) gr = 20.0;
-                        // Piecewise dB → sub-step matching the SSL
-                        // plug-in's GR meter (3/6/10/14/20 dB segments).
-                        // Identical to UC1Surface::subStepFromDb so
-                        // both meters render in lock-step.
-                        double s;
-                        if      (gr <=  3.0) s =        (gr       ) * (6.0 / 3.0);
-                        else if (gr <=  6.0) s =  6.0 + (gr -  3.0) * (6.0 / 3.0);
-                        else if (gr <= 10.0) s = 12.0 + (gr -  6.0) * (6.0 / 4.0);
-                        else if (gr <= 14.0) s = 18.0 + (gr - 10.0) * (6.0 / 4.0);
-                        else                  s = 24.0 + (gr - 14.0) * (6.0 / 6.0);
-                        int sub = static_cast<int>(std::lround(s));
-                        if (sub < 0)  sub = 0;
-                        if (sub > 30) sub = 30;
-                        const uint8_t newByte = (sub == 0)
-                            ? uint8_t(0x00)
-                            : static_cast<uint8_t>(
-                                std::lround(0x02 + sub * (22.0 / 30.0)));
-                        uint8_t& held = g_uf8GrBytes[focStrip];
-                        if (newByte > held) held = newByte;
-                        else if (held > newByte) --held;
-                        targetBytes[focStrip] = held;
-                    }
-                    // Gate GR row (FF 66 09 16) — the focused track's SSL gate
-                    // attenuation from the impersonator (ChannelStripMeterType_
-                    // GateGain), rendered on the same focused strip as Comp GR
-                    // and in lock-step with the UC1 gate strip. Independent of
-                    // the comp `gotIt` above (a gate can close with no comp
-                    // reduction). Dark unless the impersonator runs and the
-                    // focused track has a correlated SSL channel strip.
-                    double ggr = 0.0;
-                    if (sslcore::isRunning()) {
-                        const int trackIdx = static_cast<int>(
-                            GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
-                        // Keyed to the ACTIVE CS instance (csFxIdx above), not to
-                        // the track: two SSL strips on one channel disagree about
-                        // the gate, and reading "the freshest of them" made the row
-                        // flicker between them (Frank 2026-08-09). No mapped CS →
-                        // first strip, as before; a mapped non-SSL CS → dark.
-                        // …and by MODEL first: port order drifts out of FX-chain
-                        // order on a plug-in reconnect, which put the 4K B's gate
-                        // on the 4K E (Frank 2026-08-10). Ordinal = fallback.
-                        const char* csModel = b.channelMap ? b.channelMap->shortName
-                                                           : nullptr;
-                        const char* fpId[12]; double fpVal[12];
-                        const int nfp = (csFxIdx >= 0)
-                            ? uf8::sslStripFingerprint(tr, csFxIdx, fpId, fpVal, 12) : 0;
-                        sslcore::StripParam fp[12];
-                        for (int i = 0; i < nfp; ++i) fp[i] = { fpId[i], fpVal[i] };
-                        const int inst = (csFxIdx >= 0)
-                                           ? uf8::sslCoreInstanceOrdinal(tr, csFxIdx) : 0;
-                        std::vector<float> gg;
-                        if (trackIdx > 0 && inst >= 0 &&
-                            sslcore::getChannelStripMeterForTrackStrip(
-                                static_cast<int>(sslcore::ChannelStripMeter::GateGain),
-                                trackIdx, csModel, fp, nfp, inst, gg) && !gg.empty()) {
-                            ggr = std::fabs(gg[0]);
-                        }
-                    }
-                    // Device CS-LED trim (same as Comp GR) so both rows align;
-                    // BC calibration test silences the GR rows.
-                    {
-                        double devCalG[5];
-                        for (int i = 0; i < 5; ++i)
-                            devCalG[i] = kUc1CsLedsFactory[i] + g_uc1CsLedsCal[i].load();
-                        ggr = uf8::applyGrCalibration(ggr, uf8::kLedsBpDb, devCalG, 5);
-                        if (ggr < 0) ggr = 0;
-                        const int testT = g_uc1CalActiveTest.load();
-                        if (testT >= 0 && testT < 6) ggr = 0.0;
-                    }
-                    if (ggr > 20.0) ggr = 20.0;
-                    double sg;
-                    if      (ggr <=  3.0) sg =        (ggr       ) * (6.0 / 3.0);
-                    else if (ggr <=  6.0) sg =  6.0 + (ggr -  3.0) * (6.0 / 3.0);
-                    else if (ggr <= 10.0) sg = 12.0 + (ggr -  6.0) * (6.0 / 4.0);
-                    else if (ggr <= 14.0) sg = 18.0 + (ggr - 10.0) * (6.0 / 4.0);
-                    else                   sg = 24.0 + (ggr - 14.0) * (6.0 / 6.0);
-                    int subg = static_cast<int>(std::lround(sg));
-                    if (subg < 0)  subg = 0;
-                    if (subg > 30) subg = 30;
-                    const uint8_t newByteG = (subg == 0)
-                        ? uint8_t(0x00)
-                        : static_cast<uint8_t>(
-                            std::lround(0x02 + subg * (22.0 / 30.0)));
-                    // Follow the gate value DIRECTLY (up AND down, no ramp) so
-                    // the row tracks the plug-in's fast gate attack/release in
-                    // lock-step with the UC1 gate LEDs — pushGainReduction renders
-                    // the dB value each tick with no decay. The comp row's
-                    // 1-byte/tick down-smoothing (inherited here at first) lagged
-                    // badly on the snappy gate (Frank 2026-07-27: "viel langsamer
-                    // als die UC1 LED"). The gate's own ballistics are already in
-                    // the GateGain value, so no extra smoothing is wanted.
-                    g_uf8GateGrBytes[focStrip] = newByteG;
-                    gateBytes[focStrip] = newByteG;
+            }
+            if (gotIt) {
+                if (gr < 0) gr = -gr;
+                // Per-plugin breakpoint calibration (v5 schema).
+                // Same table the UC1 DYN GR LED renderer uses,
+                // applied here so UF8 and UC1 stay in lock-step.
+                if (ledsCal) {
+                    gr = uf8::applyGrCalibration(
+                        gr, ledsBp ? ledsBp : uf8::kLedsBpDb,
+                        ledsCal, uf8::kLedsBpCount);
+                    if (gr < 0) gr = 0;
+                }
+                // Device-level per-tick calibration (Settings →
+                // Devices → UC1 GR calibration, CS DYN GR LEDs).
+                // Hardware trim, applied after the per-plug-in cal so UF8 and
+                // UC1 LED strip stay aligned. Effective =
+                // factory baseline + user delta.
+                double devCal[5];
+                for (int i = 0; i < 5; ++i)
+                    devCal[i] = kUc1CsLedsFactory[i] +
+                                g_uc1CsLedsCal[i].load();
+                gr = uf8::applyGrCalibration(
+                    gr, uf8::kLedsBpDb, devCal, 5);
+                if (gr < 0) gr = 0;
+                // Test-tick override (Settings → Devices → UC1
+                // GR calibration). When active, force the matching
+                // tick value so the user sees what the renderer
+                // would draw at exactly that tick.
+                const int testT = g_uc1CalActiveTest.load();
+                if (testT >= 100 && testT < 105) {
+                    const int ti = testT - 100;
+                    gr = uf8::kLedsBpDb[ti]
+                         + kUc1CsLedsFactory[ti]
+                         + g_uc1CsLedsCal[ti].load();
+                } else if (testT >= 0 && testT < 6) {
+                    // BC test active — silence UF8 GR row so
+                    // the user only sees the BC needle moving.
+                    gr = 0.0;
+                }
+                if (gr > 20.0) gr = 20.0;
+                // Piecewise dB → sub-step matching the SSL
+                // plug-in's GR meter (3/6/10/14/20 dB segments).
+                // Identical to UC1Surface::subStepFromDb so
+                // both meters render in lock-step.
+                double s;
+                if      (gr <=  3.0) s =        (gr       ) * (6.0 / 3.0);
+                else if (gr <=  6.0) s =  6.0 + (gr -  3.0) * (6.0 / 3.0);
+                else if (gr <= 10.0) s = 12.0 + (gr -  6.0) * (6.0 / 4.0);
+                else if (gr <= 14.0) s = 18.0 + (gr - 10.0) * (6.0 / 4.0);
+                else                  s = 24.0 + (gr - 14.0) * (6.0 / 6.0);
+                int sub = static_cast<int>(std::lround(s));
+                if (sub < 0)  sub = 0;
+                if (sub > 30) sub = 30;
+                const uint8_t newByte = (sub == 0)
+                    ? uint8_t(0x00)
+                    : static_cast<uint8_t>(
+                        std::lround(0x02 + sub * (22.0 / 30.0)));
+                uint8_t& held = g_uf8GrBytes[st];
+                if (newByte > held) held = newByte;
+                else if (held > newByte) --held;
+                targetBytes[st] = held;
+            } else {
+                // No compressor on this strip → dark. The holder has to be
+                // CLEARED, not merely left out of targetBytes: it is the
+                // ballistics store, and a stale value would ramp down from
+                // wherever the last reading left it the next time this strip
+                // gets one.
+                g_uf8GrBytes[st] = 0;
+            }
+            // Gate GR row (FF 66 09 16) — this strip's track's SSL gate
+            // attenuation from the impersonator (ChannelStripMeterType_
+            // GateGain), on the same strip as its Comp GR and in lock-step
+            // with the UC1 gate strip. Independent of the comp `gotIt` above
+            // (a gate can close with no comp reduction). Dark unless the
+            // impersonator runs and this track has a correlated SSL strip.
+            double ggr = 0.0;
+            if (sslcore::isRunning()) {
+                const int trackIdx = static_cast<int>(
+                    GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+                // Keyed to the ACTIVE CS instance (csFxIdx above), not to
+                // the track: two SSL strips on one channel disagree about
+                // the gate, and reading "the freshest of them" made the row
+                // flicker between them (Frank 2026-08-09). No mapped CS →
+                // first strip, as before; a mapped non-SSL CS → dark.
+                // …and by MODEL first: port order drifts out of FX-chain
+                // order on a plug-in reconnect, which put the 4K B's gate
+                // on the 4K E (Frank 2026-08-10). Ordinal = fallback.
+                const char* csModel = b.channelMap ? b.channelMap->shortName
+                                                   : nullptr;
+                const char* fpId[12]; double fpVal[12];
+                const int nfp = (csFxIdx >= 0)
+                    ? uf8::sslStripFingerprint(tr, csFxIdx, fpId, fpVal, 12) : 0;
+                sslcore::StripParam fp[12];
+                for (int i = 0; i < nfp; ++i) fp[i] = { fpId[i], fpVal[i] };
+                const int inst = (csFxIdx >= 0)
+                                   ? uf8::sslCoreInstanceOrdinal(tr, csFxIdx) : 0;
+                std::vector<float> gg;
+                if (trackIdx > 0 && inst >= 0 &&
+                    sslcore::getChannelStripMeterForTrackStrip(
+                        static_cast<int>(sslcore::ChannelStripMeter::GateGain),
+                        trackIdx, csModel, fp, nfp, inst, gg) && !gg.empty()) {
+                    ggr = std::fabs(gg[0]);
                 }
             }
-        }
-        // Clear holders for non-focused strips so a previously-focused
-        // strip doesn't keep displaying its last GR after focus moves.
-        for (int s = 0; s < 8; ++s) {
-            if (s != focStrip) { g_uf8GrBytes[s] = 0; g_uf8GateGrBytes[s] = 0; }
+            // Device CS-LED trim (same as Comp GR) so both rows align;
+            // BC calibration test silences the GR rows.
+            {
+                double devCalG[5];
+                for (int i = 0; i < 5; ++i)
+                    devCalG[i] = kUc1CsLedsFactory[i] + g_uc1CsLedsCal[i].load();
+                ggr = uf8::applyGrCalibration(ggr, uf8::kLedsBpDb, devCalG, 5);
+                if (ggr < 0) ggr = 0;
+                const int testT = g_uc1CalActiveTest.load();
+                if (testT >= 0 && testT < 6) ggr = 0.0;
+            }
+            if (ggr > 20.0) ggr = 20.0;
+            double sg;
+            if      (ggr <=  3.0) sg =        (ggr       ) * (6.0 / 3.0);
+            else if (ggr <=  6.0) sg =  6.0 + (ggr -  3.0) * (6.0 / 3.0);
+            else if (ggr <= 10.0) sg = 12.0 + (ggr -  6.0) * (6.0 / 4.0);
+            else if (ggr <= 14.0) sg = 18.0 + (ggr - 10.0) * (6.0 / 4.0);
+            else                   sg = 24.0 + (ggr - 14.0) * (6.0 / 6.0);
+            int subg = static_cast<int>(std::lround(sg));
+            if (subg < 0)  subg = 0;
+            if (subg > 30) subg = 30;
+            const uint8_t newByteG = (subg == 0)
+                ? uint8_t(0x00)
+                : static_cast<uint8_t>(
+                    std::lround(0x02 + subg * (22.0 / 30.0)));
+            // Follow the gate value DIRECTLY (up AND down, no ramp) so
+            // the row tracks the plug-in's fast gate attack/release in
+            // lock-step with the UC1 gate LEDs — pushGainReduction renders
+            // the dB value each tick with no decay. The comp row's
+            // 1-byte/tick down-smoothing (inherited here at first) lagged
+            // badly on the snappy gate (Frank 2026-07-27: "viel langsamer
+            // als die UC1 LED"). The gate's own ballistics are already in
+            // the GateGain value, so no extra smoothing is wanted.
+            g_uf8GateGrBytes[st] = newByteG;
+            gateBytes[st] = newByteG;
+            }
         }
         if (g_dev && g_dev->isOpen()) {
             g_dev->setGrBytes(targetBytes);
