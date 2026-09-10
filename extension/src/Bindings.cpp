@@ -1172,7 +1172,7 @@ void seedFactoryDefaults_(Config& c)
     // User-rebindable like every other key; see upgradeBackfillUf1SoftKey_
     // for why an existing config gets it without losing an own assignment.
     L1[ButtonId::Uf1ChannelSoftKey] =
-        mkBuiltin("temp_selset_pin_uf1_channel", Behavior::Toggle, "PIN THIS CH");
+        mkBuiltin("focus_set_toggle_uf1_channel", Behavior::Toggle, "FOCUS CHAN");
     L1[ButtonId::Uf1Flip]        = mkBuiltin("uf1_flip",              Behavior::Toggle,    "FLIP");
     L1[ButtonId::Uf1Master]      = mkBuiltin("uf1_master",            Behavior::Toggle,    "MASTER");
     L1[ButtonId::Uf1FiveToEight] = mkBuiltin("uf1_five_to_eight",     Behavior::Momentary, "5-8");
@@ -3014,7 +3014,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
-constexpr int kCurrentBindingsVersion = 38;
+constexpr int kCurrentBindingsVersion = 39;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -3583,12 +3583,44 @@ void upgradeUf1SoftKeyPinLabel_(Config& c)
         if (bd.label != "PIN SET") return;
         const auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
         if (sp.type != ActionType::Builtin
-            || sp.action != "temp_selset_pin_uf1_channel") return;
+            || sp.action != "focus_set_toggle_uf1_channel") return;
         bd.label = "PIN THIS CH";
     };
     fix(ButtonId::Uf1ChannelSoftKey);
     for (int v = 0; v < kUf1ViewCountForKeys; ++v)
         fix(perViewUf1Id(ButtonId::Uf1ChannelSoftKey, v));
+}
+
+// v38→v39: the Focus Set family is renamed. "temp_selset_*" said nothing about
+// what it belongs to, "pin" meant both the clutch AND taking a track in, and
+// "focused" was a third idea of "which track" beside the selection — three
+// reasons the same eight actions kept being mistaken for each other (Frank
+// 2026-09-10: "die ganze funktion ist einfach TOTAL FUCKING VERWIRREND gebaut
+// und benannt"). The identifiers move with the names so nothing keeps the old
+// vocabulary alive; every binding is rewritten here.
+// ⚠ pin_focused is GONE, not renamed. It took REAPER's last-touched track,
+// which is the idea being retired; a binding on it becomes focus_set_add, which
+// takes the selection and pins in the same press, i.e. what it was reached for.
+// ⚠ THE REAPER ACTION IDS DO NOT MOVE. REASIXTY_FOCUS_* are bound in keyboards
+// and other scripts and are not ours to rename.
+void upgradeRenameFocusSet_(Config& c)
+{
+    static const struct { const char* from; const char* to; } kRen[] = {
+        { "temp_selset_recall",             "focus_set_pin" },
+        { "temp_selset_add",                "focus_set_add" },
+        { "temp_selset_remove",             "focus_set_remove" },
+        { "temp_selset_toggle_selected",    "focus_set_toggle" },
+        { "temp_selset_set_from_selection", "focus_set_replace" },
+        { "temp_selset_clear",              "focus_set_clear" },
+        { "temp_selset_pin_uf1_channel",    "focus_set_toggle_uf1_channel" },
+        { "temp_selset_scroll",             "focus_set_scroll" },
+        { "temp_selset_pin_focused",        "focus_set_add" },
+    };
+    forEachActionSlot_(c, [](int, ActionStep& sp) {
+        if (sp.type != ActionType::Builtin || sp.action.empty()) return;
+        for (const auto& r : kRen)
+            if (sp.action == r.from) { sp.action = r.to; return; }
+    });
 }
 
 void upgradeBackfillUf1SoftKey_(Config& c)
@@ -3598,7 +3630,7 @@ void upgradeBackfillUf1SoftKey_(Config& c)
     auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
     if (sp.type != ActionType::Noop || !sp.action.empty()) return;
     sp.type     = ActionType::Builtin;
-    sp.action   = "temp_selset_pin_uf1_channel";
+    sp.action   = "focus_set_toggle_uf1_channel";
     // ⇨ THE KEY'S NAME, NOT THE SET'S. The factory seed puts it in
     // Binding::label (mkBuiltin does), this backfill put it in ActionSlot::label
     // — and the two mean different things: a slot label belongs to a modifier
@@ -3606,7 +3638,7 @@ void upgradeBackfillUf1SoftKey_(Config& c)
     // auto-label refresh then had nothing of its own to replace, so rebinding
     // the key left "PIN SET" on the display over an action it no longer fires:
     // forum 4.2 all over again, for pre-v20 configs only.
-    bd.label    = "PIN THIS CH";
+    bd.label    = "FOCUS CHAN";
     bd.behavior = Behavior::Toggle;
 }
 
@@ -3624,8 +3656,8 @@ void upgradeUf1SoftKeyPinChannel_(Config& c)
     if (it == L1.bindings.end()) return;
     auto& sp = it->second.shortPress[static_cast<int>(Modifier::Plain)];
     if (sp.type != ActionType::Builtin) return;
-    if (sp.action != "temp_selset_recall") return;
-    sp.action = "temp_selset_pin_uf1_channel";
+    if (sp.action != "focus_set_pin") return;
+    sp.action = "focus_set_toggle_uf1_channel";
 }
 
 // v21→v22 (2026-08-10): key 1 (the one under the SOLO CLR caption) gains its
@@ -4088,6 +4120,9 @@ void load()
             }
             if (tmp.version < 38) {
                 upgradeUf1AboveVpotDropPanLong_(tmp);
+            }
+            if (tmp.version < 39) {
+                upgradeRenameFocusSet_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -6463,13 +6498,21 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
         // on one of their own (Frank 2026-09-02). Entry nine is Shift's first key,
         // so the three land side by side under the ones they belong with.
         v.push_back(bank("Focus Set & Selsets", {
-            {"temp_selset_recall",          "Pin Set", 0},
-            {"temp_selset_add",             "Add to Set", 0},
-            {"temp_selset_remove",          "Rem from Set", 0},
-            {"temp_selset_toggle_selected", "Toggle Sel", 0},
-            {"temp_selset_set_from_selection", "Set frm Sel", 0},
-            {"temp_selset_pin_focused",     "Pin Focused", 0},
-            {"temp_selset_clear",           "Clear Set", 0},
+            {"focus_set_pin",          "PIN FOCUSED", 0},
+            {"focus_set_add",             "FOCUS ADD", 0},
+            {"focus_set_remove",          "FOCUS REMOVE", 0},
+            {"focus_set_toggle", "FOCUS TOGGLE", 0},
+            {"focus_set_replace", "FOCUS = SEL", 0},
+            // ⇨ SLOT 6 IS DELIBERATELY EMPTY. It carried "Pin Focused", which
+            // took REAPER's last-touched track — a second idea of "which track"
+            // beside the selection, and the thing that made this whole family
+            // confusing (Frank 2026-09-10: "klar brauchen wir NICHT beide! nur
+            // selected"). Its work is FOCUS ADD's now. The slot stays blank
+            // rather than being closed up, because the three Sticky Pot keys
+            // below are placed by POSITION: entry nine is Shift's first key, and
+            // shifting everything up by one would scatter them onto Plain.
+            {"", "", 0},
+            {"focus_set_clear",           "FOCUS CLEAR", 0},
             // ⇨ SCOPE, NOT CYCLE. selset_cycle sat here as "Cycle Sets" and was
             // the wrong kind of thing for this bank twice over: it is an ENCODER
             // action whose param is a direction, and stepping the numbered slots
@@ -6477,7 +6520,7 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             // scope, because setting it on one surface and pressing on the other
             // is the failure this bank invites — Frank set UF1 and then wondered
             // why the UF8 did nothing (2026-09-02).
-            {"focus_scope_cycle",           "Set Scope", 0},
+            {"focus_scope_cycle",           "FOCUS SCOPE", 0},
             {"sticky_pot_get_next",         "Pin Sticky", 0},
             {"sticky_pot_pair",             "Pair Sticky", 0},
             {"sticky_pot_toggle",           "Sticky OnOff", 0},
@@ -6593,15 +6636,15 @@ static const std::vector<Uf1BankPreset>& factoryUf1Banks_()
         // "Pin This Ch" pins the channel the UF1 is SHOWING, which is why it
         // left the UF8's Focus Set bank on 2026-09-01. This is where it belongs.
         v.push_back(bank("Focus Set", {
-            {"temp_selset_pin_uf1_channel",    "PIN THIS CH", 0},
-            {"temp_selset_recall",             "PIN SET",     0},
-            {"temp_selset_add",                "ADD SEL",     0},
-            {"temp_selset_clear",              "CLEAR SET",   0},
+            {"focus_set_toggle_uf1_channel",    "FOCUS CHAN", 0},
+            {"focus_set_pin",             "PIN FOCUSED", 0},
+            {"focus_set_add",                "FOCUS ADD",   0},
+            {"focus_set_clear",              "FOCUS CLEAR", 0},
             // Shift
-            {"temp_selset_remove",             "REM SEL",     0},
-            {"temp_selset_toggle_selected",    "TOGGLE SEL",  0},
-            {"temp_selset_set_from_selection", "SET FRM SEL", 0},
-            {"focus_scope_cycle",              "SET SCOPE",   0},
+            {"focus_set_remove",             "FOCUS REMOVE",0},
+            {"focus_set_toggle",    "FOCUS TOGGLE",0},
+            {"focus_set_replace", "FOCUS = SEL", 0},
+            {"focus_scope_cycle",              "FOCUS SCOPE", 0},
         }));
         // Recording control only. The scenes themselves are the ObsScenes
         // dynamic kind; a bank of three is the honest size of what is left.
@@ -7129,7 +7172,7 @@ const char* builtinCategory(const std::string& n)
      || n == "select_relative"
      || n == "track_scroll"
      || n == "track_select_range"
-     || n == "temp_selset_scroll"
+     || n == "focus_set_scroll"
      || n == "playhead_nudge"
      || n == "mouse_scroll")
         return "Cycle Actions";
@@ -7235,7 +7278,11 @@ const char* builtinCategory(const std::string& n)
         return "Sends / Receives";
 
     if (n.rfind("selset_", 0) == 0
-     || n.rfind("temp_selset_", 0) == 0
+     // The Focus Set family lives in the same picker category as the numbered
+     // Selection Sets — they are the same idea at two lifetimes, one saved and
+     // one built on the fly. The temp_selset_ prefix is gone (v39); the rename
+     // migration is the only thing that still knows those names.
+     || n.rfind("focus_set_", 0) == 0
      || n.rfind("focus_scope_", 0) == 0) return "Selection Sets";
 
     if (n.rfind("param_group_", 0) == 0
@@ -7500,7 +7547,7 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "selset_cycle",
       "Encoder action. Walks the Selection Sets that have something in "
       "them. Leaves the Channel Encoder Mode free for something else." },
-    { "temp_selset_scroll",
+    { "focus_set_scroll",
       "Encoder action. Scrolls through the Focus Set's members." },
     { "bc_track_scroll",
       "Encoder action, UC1. Moves the Bus Compressor's anchor track "
@@ -7595,27 +7642,28 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "selset_save",
       "Snapshots the current REAPER track selection into slot `param` (1 "
       "to 8)." },
-    { "temp_selset_add",
-      "Adds the selected tracks to the Focus Set. Members stick to the "
-      "leftmost strips; nothing is hidden." },
-    { "temp_selset_remove",
-      "Removes the selected tracks from the Focus Set." },
-    { "temp_selset_toggle_selected",
+    { "focus_set_add",
+      "Adds the selected tracks to the Focus Set, and pins it if it was "
+      "not pinned. Members stick to the leftmost strips; nothing is "
+      "hidden." },
+    { "focus_set_remove",
+      "Removes the selected tracks from the Focus Set. Leaves the pin as "
+      "it is." },
+    { "focus_set_toggle",
       "Adds the selected tracks to the Focus Set, or removes them if they "
-      "are already in it." },
-    { "temp_selset_set_from_selection",
-      "Replaces the whole Focus Set with the current selection." },
-    { "temp_selset_clear",
+      "are already in it. Pins the set when something goes in." },
+    { "focus_set_replace",
+      "Replaces the whole Focus Set with the current selection, and pins "
+      "it." },
+    { "focus_set_clear",
       "Empties the Focus Set." },
-    { "temp_selset_recall",
+    { "focus_set_pin",
       "Pins the Focus Set, or releases it. While pinned its members hold "
-      "the leftmost strips." },
-    { "temp_selset_pin_focused",
-      "Puts the focused track into the Focus Set and pins it in one "
-      "press." },
-    { "temp_selset_pin_uf1_channel",
-      "Puts the channel the UF1 is showing into the Focus Set and pins "
-      "it. The UF1's SOFT key carries this by default." },
+      "the leftmost strips. This is the only action that un-pins." },
+    { "focus_set_toggle_uf1_channel",
+      "Puts the channel the UF1 is showing into the Focus Set, or takes "
+      "it back out. Pins the set when it goes in. The UF1's SOFT key "
+      "carries this by default." },
     { "focus_scope_cycle",
       "Steps where the Focus Set pin applies: Both surfaces, UF1 only, "
       "UF8 only." },
@@ -8049,10 +8097,10 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "fav_copy_own_toggle", "Fav Cpy/Own" },
     { "fav_cycle", "Fav Cycle" },
     { "flip", "Flip" },
-    { "focus_scope_both", "Scope Both" },
-    { "focus_scope_cycle", "Set Scope" },
-    { "focus_scope_uf1", "Scope UF1" },
-    { "focus_scope_uf8", "Scope UF8" },
+    { "focus_scope_both", "FOCUS BOTH" },
+    { "focus_scope_cycle", "FOCUS SCOPE" },
+    { "focus_scope_uf1", "FOCUS UF1" },
+    { "focus_scope_uf8", "FOCUS UF8" },
     { "focused_panel_toggle", "Focus Panel" },
     { "folder_mode", "Folder Mode" },
     { "fx_cycle", "FX Cycle" },
@@ -8256,15 +8304,16 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "switch_fav_7", "Fav 7" },
     { "switch_fav_8", "Fav 8" },
     { "tcp_follows_selection_toggle", "TCP Follow" },
-    { "temp_selset_add", "Add to Set" },
-    { "temp_selset_clear", "Clear Set" },
-    { "temp_selset_pin_focused", "Pin Focused" },
-    { "temp_selset_pin_uf1_channel", "Pin This Ch" },
-    { "temp_selset_recall", "Pin Set" },
-    { "temp_selset_remove", "Rem from Set" },
-    { "temp_selset_scroll", "Set Scroll" },
-    { "temp_selset_set_from_selection", "Set frm Sel" },
-    { "temp_selset_toggle_selected", "Toggle Sel" },
+    { "focus_set_add", "FOCUS ADD" },
+    { "focus_set_clear", "FOCUS CLEAR" },
+    
+
+    { "focus_set_toggle_uf1_channel", "FOCUS CHAN" },
+    { "focus_set_pin", "PIN FOCUSED" },
+    { "focus_set_remove", "FOCUS REMOVE" },
+    { "focus_set_scroll", "FOCUS SCROLL" },
+    { "focus_set_replace", "FOCUS = SEL" },
+    { "focus_set_toggle", "FOCUS TOGGLE" },
     { "touch_to_learn_toggle", "Touch Learn" },
     { "track_scroll", "Track Scrl" },
     { "track_select_range", "Extend Sel" },
