@@ -41997,8 +41997,19 @@ void onTimerBody_()
         std::array<uint8_t, 8> targetBytes{};  // all zero by default
         std::array<uint8_t, 8> gateBytes{};    // gate GR row (FF 66 09 16)
         int focStrip = -1;
-        if (g_uc1_surface) {
-            if (auto* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())) {
+        // ⇨ THE FOCUSED TRACK, NOT THE UC1's. This whole block used to sit
+        // inside `if (g_uc1_surface)` and take its track from
+        // g_uc1_surface->focusedTrack(), so on a rig with no UC1 focStrip stayed
+        // -1, the byte arrays stayed zero, and setGrBytes shipped them anyway:
+        // the UF8 had no GR row at all, and no gate GR row either — not an
+        // uncalibrated one, none (found 2026-09-10 while checking whether the
+        // FX-Learn calibration reaches the UF8; it does, but only where this
+        // ran). It went unnoticed because a UC1 has always been plugged in here.
+        // activeFocusTrack_ already asks in the right order — the UC1's focus
+        // first, then the UF1's, then the selected track — so nothing changes
+        // for a rig that has one.
+        {
+            if (auto* tr = activeFocusTrack_()) {
                 if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
                 const int trackCount = visibleTrackCount();
                 const int bankOffset = g_bankOffset.load();
