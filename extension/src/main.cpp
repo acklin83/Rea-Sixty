@@ -2256,6 +2256,24 @@ std::atomic<int>  g_csCycleReq{0};
 std::atomic<int>  g_bcSwitchReq{-1};
 std::atomic<int>  g_bcCopyReq{-1};
 std::atomic<int>  g_bcCycleReq{0};
+// ⛔ PLUG-IN OPS THAT CHANGE STATE, POSTED FOR THE MAIN THREAD.
+// bypass / offline / preset-step all write an UNDO POINT, and REAPER answers an
+// undo point by rewriting the project caption — SetCaption → NSWindow setTitle →
+// AppKit, on whatever thread called it. From the UF1's libusb worker that is an
+// abort with no C++ exception to catch (Frank 2026-09-10, SIGABRT on the
+// Plug-in Ops factory bank's BYPASS key: dispatchUf1SoftBankSlot → runStep_ →
+// TrackFX_SetEnabled → Undo_OnStateChange → SetCaption → -[NSWindow setTitle:]).
+// ⚠ THIS WIDENS [[feedback-reaper-api-input-thread]]: the old reading was
+// "window creation aborts, reading FX is tolerated". Nothing here creates a
+// window. Anything that writes an UNDO POINT touches AppKit just as surely.
+// The two toggles collapse within a tick, which is what a toggle means; the
+// preset step accumulates, because two presses are two presets.
+// Drained on the main thread, next to resolveActiveFx_ which it needs and which
+// lives far below — same shape as applyDynBankReq_'s forward declaration.
+static void drainPluginOpsReq_();
+std::atomic<bool> g_pluginBypassReq{false};
+std::atomic<bool> g_pluginOfflineReq{false};
+std::atomic<int>  g_pluginPresetStepReq{0};
 // FX move-in-chain req: accumulated signed detents (0 = none). Posted by the
 // REAPER-action route (hookCommand2); the surface builtins call the worker
 // directly. Drained on the main thread (TrackFX_CopyToTrack).
@@ -3040,6 +3058,11 @@ void drainSelsets_() {
         applyBcCopy_(bcCopySlot);
     if (const int bcSteps = g_bcCycleReq.exchange(0); bcSteps != 0)
         applyBcCycle_(bcSteps, bcFavOwn);
+    // Plug-in ops that write an undo point (see the request atomics). The FX is
+    // resolved HERE, not where the key was pressed: by the time this runs the
+    // press is over anyway, and resolving on the main thread keeps the whole
+    // operation on it.
+    drainPluginOpsReq_();
     // Dynamic soft-key bank press (sends/FX/groups/colours) — executed on the
     // main thread; the input thread only posts the encoded request.
     if (const uint32_t dyn = g_dynBankReq.exchange(0); dyn != 0)
@@ -9709,6 +9732,29 @@ ActiveFxTarget resolveActiveFx_()
     const int defaulted = stripInstanceActiveFx_(tr);
     if (defaulted >= 0) return {tr, defaulted};
     return {nullptr, -1};
+}
+
+// The plug-in ops that write an undo point, run where undo points are allowed to
+// be written. The FX is resolved HERE rather than where the key was pressed: by
+// the time this runs the press is over anyway, and resolving on the main thread
+// keeps the whole operation on it.
+static void drainPluginOpsReq_()
+{
+    if (g_pluginBypassReq.exchange(false)) {
+        if (auto t = resolveActiveFx_(); t.tr)
+            TrackFX_SetEnabled(t.tr, t.fxIdx, !TrackFX_GetEnabled(t.tr, t.fxIdx));
+    }
+    if (g_pluginOfflineReq.exchange(false)) {
+        if (auto t = resolveActiveFx_(); t.tr)
+            TrackFX_SetOffline(t.tr, t.fxIdx, !TrackFX_GetOffline(t.tr, t.fxIdx));
+    }
+    if (const int pstep = g_pluginPresetStepReq.exchange(0); pstep != 0) {
+        if (auto t = resolveActiveFx_(); t.tr) {
+            const int dir = (pstep > 0) ? 1 : -1;
+            for (int i = 0, n = (pstep > 0) ? pstep : -pstep; i < n; ++i)
+                TrackFX_NavigatePresets(t.tr, t.fxIdx, dir);
+        }
+    }
 }
 
 // ── REAPER 7.75 FX-slot helpers (chain index ↔ visual slot) ──────────
@@ -50924,12 +50970,12 @@ void registerBindingHandlers()
     // Frank 2026-05-15: "A — eine Action-Reihe operiert auf Cursor."
 
     registerBuiltin("plugin_bypass", DescBuilder{
+        // Posts only — see g_pluginBypassReq for why this cannot touch the FX
+        // from here. The state read below stays: reading is tolerated off the
+        // main thread, it is the WRITE that ends up in AppKit.
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            auto t = resolveActiveFx_();
-            if (!t.tr) return;
-            const bool enabled = TrackFX_GetEnabled(t.tr, t.fxIdx);
-            TrackFX_SetEnabled(t.tr, t.fxIdx, !enabled);
+            g_pluginBypassReq.store(true);
         },
         [](int) {
             auto t = resolveActiveFx_();
@@ -50945,10 +50991,7 @@ void registerBindingHandlers()
     registerBuiltin("plugin_offline", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            auto t = resolveActiveFx_();
-            if (!t.tr) return;
-            const bool offline = TrackFX_GetOffline(t.tr, t.fxIdx);
-            TrackFX_SetOffline(t.tr, t.fxIdx, !offline);
+            g_pluginOfflineReq.store(true);
         },
         [](int) {
             auto t = resolveActiveFx_();
@@ -50961,9 +51004,7 @@ void registerBindingHandlers()
     registerBuiltin("plugin_preset_next", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            auto t = resolveActiveFx_();
-            if (!t.tr) return;
-            TrackFX_NavigatePresets(t.tr, t.fxIdx, +1);
+            g_pluginPresetStepReq.fetch_add(+1);
         },
         nullptr, "Plug-in: next preset (active FX)", false
     });
@@ -50971,9 +51012,7 @@ void registerBindingHandlers()
     registerBuiltin("plugin_preset_prev", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            auto t = resolveActiveFx_();
-            if (!t.tr) return;
-            TrackFX_NavigatePresets(t.tr, t.fxIdx, -1);
+            g_pluginPresetStepReq.fetch_add(-1);
         },
         nullptr, "Plug-in: previous preset (active FX)", false
     });
