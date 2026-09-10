@@ -42183,28 +42183,35 @@ void onTimerBody_()
         std::array<uint8_t, 8> targetBytes{};  // all zero by default
         std::array<uint8_t, 8> gateBytes{};    // gate GR row (FF 66 09 16)
         int focStrip = -1;
-        // ⇨ THE FOCUSED TRACK, NOT THE UC1's. This whole block used to sit
-        // inside `if (g_uc1_surface)` and take its track from
-        // g_uc1_surface->focusedTrack(), so on a rig with no UC1 focStrip stayed
-        // -1, the byte arrays stayed zero, and setGrBytes shipped them anyway:
-        // the UF8 had no GR row at all, and no gate GR row either — not an
-        // uncalibrated one, none (found 2026-09-10 while checking whether the
-        // FX-Learn calibration reaches the UF8; it does, but only where this
-        // ran). It went unnoticed because a UC1 has always been plugged in here.
-        // activeFocusTrack_ already asks in the right order — the UC1's focus
-        // first, then the UF1's, then the selected track — so nothing changes
-        // for a rig that has one.
+        // ⇨ THE FOCUSED TRACK, NOT THE UC1's. This block used to sit inside
+        // `if (g_uc1_surface)` and take its track from g_uc1_surface->
+        // focusedTrack(), so a rig with no UC1 got no GR row at all, and no gate
+        // GR row either — not an uncalibrated one, none (2026-09-10).
+        // activeFocusTrack_ asks in the right order: the UC1's focus first, then
+        // the UF1's, then the selected track.
         {
             if (auto* tr = activeFocusTrack_()) {
                 if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
-                const int trackCount = visibleTrackCount();
+                // ⛔ ASK THE STRIPS, DO NOT DO THE ARITHMETIC AGAIN.
+                // This used to find the track's index in the visible list and
+                // subtract the bank offset, which is the mapping MINUS every
+                // shift stripToVisibleSlot applies. With the UF1 Extender on the
+                // LEFT the UF1 takes bank slot 0 and the UF8 shows slots 1..8
+                // (uf8StripBase_), so the GR landed one strip to the right of
+                // the channel it belonged to — right value, wrong place (Frank
+                // 2026-09-10). DynaMount reserves strips the same way, and any
+                // future shift would have needed a third copy of the sum here.
+                // Walking the eight strips through the one resolver cannot drift
+                // from what the surface actually draws.
                 const int bankOffset = g_bankOffset.load();
-                int focIdx = -1;
-                if (tr) for (int i = 0; i < trackCount; ++i) {
-                    if (visibleTrackAt(i) == tr) { focIdx = i; break; }
+                if (tr) for (int st = 0; st < 8; ++st) {
+                    const int slot = stripToVisibleSlot(st, bankOffset);
+                    if (slot >= 0 && visibleTrackAt(slot) == tr) {
+                        focStrip = st;
+                        break;
+                    }
                 }
-                if (focIdx >= bankOffset && focIdx < bankOffset + 8) {
-                    focStrip = focIdx - bankOffset;
+                if (focStrip >= 0) {
                     uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(tr);
                     // GR readback mirrors UC1Surface::readGr: raw
                     // TrackFX_GetParam for user-picked GR params
