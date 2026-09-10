@@ -28213,15 +28213,7 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
     // Remember which pot the hand last used — FLIP in Plugin mode puts THAT
     // parameter on the fader (see g_uf1FlipVpotIdx). Recorded before any mode
     // branch: the pot you were turning is the pot you meant, whatever it drove.
-    // ⇨ AND REACHING FOR A POT IS THE WAY BACK FROM PAN. The knob above the
-    // fader rides this parameter, and a long press on it parks the knob on Pan.
-    // Toggling back with a second long press was the wrong gesture: with Pan on
-    // the display there is nothing there to say WHICH parameter would come back
-    // (Frank 2026-09-10: "wieso soll er auf den parameter zurück WENN FUCKING
-    // PAN ANGEZEIGT WIRD"). Touching one of the four says it outright — this
-    // one — so the mode follows the hand and needs no second gesture.
     g_uf1FlipVpotIdx.store(vi);
-    g_uf1AboveFaderMode.store(Uf1AboveFaderMode::Param);
 
     // DAW mode: V-Pot vi rides the volume of the window's track vi (dB nudge, same
     // taper + 0.25 dB/count as the FLIP-volume V-Pot). Independent of any plug-in.
@@ -28892,7 +28884,6 @@ void applyUf1ChannelVpotPush_(int idx)
 {
     if (idx < 0 || idx > 3) return;
     g_uf1FlipVpotIdx.store(idx);   // a push counts as reaching for it too
-    g_uf1AboveFaderMode.store(Uf1AboveFaderMode::Param);   // …and as the way back
 
     // DAW mode: push resets the window track's volume to unity (0 dB).
     if (g_uf1ChannelSubMode.load() == 1) {
@@ -49519,22 +49510,20 @@ void registerBindingHandlers()
     // without a way out, pan would be unreachable there (Frank 2026-09-10:
     // "HAST DU ÜBERHAUPT ÜBERLEGT WIE WIR WIEDER AUF PAN ZURÜCK KOMMEN?").
     // On the LONG press of the same knob, so it costs no key and sits where the
-    // hand already is.
-    // ⛔ ONE WAY, NOT A TOGGLE. Pressing it again while Pan is showing must not
-    // guess a parameter back: with Pan on the display there is nothing there to
-    // say WHICH one it would be (Frank, same exchange). The way back is reaching
-    // for one of the four display V-Pots, which names the parameter by touching
-    // it — see the two g_uf1FlipVpotIdx writers.
+    // hand already is. Lit while the knob is on Pan.
     registerBuiltin("uf1_above_vpot_pan", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            g_uf1AboveFaderMode.store(Uf1AboveFaderMode::Pan);
+            const bool toPan =
+                g_uf1AboveFaderMode.load() != Uf1AboveFaderMode::Pan;
+            g_uf1AboveFaderMode.store(toPan ? Uf1AboveFaderMode::Pan
+                                            : Uf1AboveFaderMode::Param);
             g_pageDirty.store(true);
         },
         [](int) {
             return g_uf1AboveFaderMode.load() == Uf1AboveFaderMode::Pan;
         },
-        "UF1: V-Pot above fader \xE2\x86\x92 Pan", true
+        "UF1: V-Pot above fader \xE2\x86\x92 Pan / plug-in parameter (toggle)", true
     });
 
     registerBuiltin("uf1_vpot_reset", DescBuilder{
