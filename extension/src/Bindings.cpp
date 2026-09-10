@@ -1176,23 +1176,14 @@ void seedFactoryDefaults_(Config& c)
     L1[ButtonId::Uf1Flip]        = mkBuiltin("uf1_flip",              Behavior::Toggle,    "FLIP");
     L1[ButtonId::Uf1Master]      = mkBuiltin("uf1_master",            Behavior::Toggle,    "MASTER");
     L1[ButtonId::Uf1FiveToEight] = mkBuiltin("uf1_five_to_eight",     Behavior::Momentary, "5-8");
-    // The knob above the fader: short = its push (centre pan, or reset whatever
-    // the knob is riding), long = put it back on Pan and take it off again. It
-    // was hardcoded and UNBOUND until 2026-09-10, which is why the editor showed
-    // an empty SHORT PRESS over a key that works every day.
-    {
-        auto& av = L1[ButtonId::Uf1VpotAbovePush];
-        av.behavior = Behavior::Momentary;
-        av.label    = "V-POT PUSH";
-        auto& sp = av.shortPress[static_cast<int>(Modifier::Plain)];
-        sp.type   = ActionType::Builtin;
-        sp.action = "uf1_above_vpot_push";
-        av.hasLongPress = true;
-        auto& lp = av.longPress[static_cast<int>(Modifier::Plain)];
-        lp.type   = ActionType::Builtin;
-        lp.action = "uf1_above_vpot_pan";
-        lp.label  = "PAN";
-    }
+    // The knob above the fader: its push centres pan, or resets the Sticky pin
+    // sitting there. Hardcoded and UNBOUND until 2026-09-10, which is why the
+    // editor showed an empty SHORT PRESS over a key that works every day.
+    // (A long press briefly carried a Pan/parameter toggle the same day; the
+    // parameter mirroring it switched came straight back out, so the long press
+    // is free again.)
+    L1[ButtonId::Uf1VpotAbovePush] =
+        mkBuiltin("uf1_above_vpot_push", Behavior::Momentary, "V-POT PUSH");
     L1[ButtonId::Uf1Vpot1Push]   = mkBuiltin("uf1_vpot_reset", Behavior::Momentary, "V-POT 1 PUSH", 255, 255, 255, 0);
     L1[ButtonId::Uf1Vpot2Push]   = mkBuiltin("uf1_vpot_reset", Behavior::Momentary, "V-POT 2 PUSH", 255, 255, 255, 1);
     L1[ButtonId::Uf1Vpot3Push]   = mkBuiltin("uf1_vpot_reset", Behavior::Momentary, "V-POT 3 PUSH", 255, 255, 255, 2);
@@ -3023,7 +3014,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
-constexpr int kCurrentBindingsVersion = 37;
+constexpr int kCurrentBindingsVersion = 38;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -3560,13 +3551,26 @@ void upgradeUf1AboveVpotPush_(Config& c)
     sp.action = "uf1_above_vpot_push";
     bd.label    = "V-POT PUSH";
     bd.behavior = Behavior::Momentary;
+}
+
+// v37→v38: uf1_above_vpot_pan is gone with the parameter mirroring it toggled,
+// so a v37 config carries a long press on a built-in that no longer exists —
+// a dead action the editor would still list. Removed, and only where it is
+// still exactly that seed.
+void upgradeUf1AboveVpotDropPanLong_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    auto it = L1.bindings.find(ButtonId::Uf1VpotAbovePush);
+    if (it == L1.bindings.end()) return;
+    Binding& bd = it->second;
     auto& lp = bd.longPress[static_cast<int>(Modifier::Plain)];
-    if (lp.type == ActionType::Noop && lp.action.empty()) {
-        bd.hasLongPress = true;
-        lp.type   = ActionType::Builtin;
-        lp.action = "uf1_above_vpot_pan";
-        lp.label  = "PAN";
-    }
+    if (lp.type != ActionType::Builtin || lp.action != "uf1_above_vpot_pan")
+        return;
+    lp.type   = ActionType::Noop;
+    lp.action.clear();
+    lp.label.clear();
+    lp.param  = 0;
+    bd.hasLongPress = false;
 }
 
 void upgradeUf1SoftKeyPinLabel_(Config& c)
@@ -4081,6 +4085,9 @@ void load()
             }
             if (tmp.version < 37) {
                 upgradeUf1AboveVpotPush_(tmp);
+            }
+            if (tmp.version < 38) {
+                upgradeUf1AboveVpotDropPanLong_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
