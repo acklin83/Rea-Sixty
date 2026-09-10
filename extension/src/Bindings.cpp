@@ -1172,7 +1172,7 @@ void seedFactoryDefaults_(Config& c)
     // User-rebindable like every other key; see upgradeBackfillUf1SoftKey_
     // for why an existing config gets it without losing an own assignment.
     L1[ButtonId::Uf1ChannelSoftKey] =
-        mkBuiltin("temp_selset_pin_uf1_channel", Behavior::Toggle, "PIN SET");
+        mkBuiltin("temp_selset_pin_uf1_channel", Behavior::Toggle, "PIN THIS CH");
     L1[ButtonId::Uf1Flip]        = mkBuiltin("uf1_flip",              Behavior::Toggle,    "FLIP");
     L1[ButtonId::Uf1Master]      = mkBuiltin("uf1_master",            Behavior::Toggle,    "MASTER");
     L1[ButtonId::Uf1FiveToEight] = mkBuiltin("uf1_five_to_eight",     Behavior::Momentary, "5-8");
@@ -3006,7 +3006,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
-constexpr int kCurrentBindingsVersion = 35;
+constexpr int kCurrentBindingsVersion = 36;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -3516,6 +3516,36 @@ void upgradeBackfillUf1EncoderLong_(Config& c)
 // before today carries either nothing for it or an assignment its owner made
 // on purpose. Fill ONLY the empty case — an own binding, or a slot deliberately
 // cleared to Noop with an action string, is left exactly as it is.
+// ⛔ THE SOFT KEY WORE THE NAME OF A DIFFERENT ACTION. It fires
+// temp_selset_pin_uf1_channel — the UF8 factory bank calls that one "Pin
+// Focused"'s sibling and calls temp_selset_recall "Pin Set" — but its factory
+// LABEL said "PIN SET", which is the recall. So the same two words named two
+// different things on the same rig, and the UF1 bank built on 2026-09-09 put
+// the correct pair ("PIN THIS CH" / "PIN SET") right next to the wrong one
+// (Frank 2026-09-10: "wie heisst denn die scheisse auf uf8? du verwirrst mich
+// maximal").
+// Rewrites only where the label is still exactly the old factory string on a
+// key still bound to that action — a name the user typed is never touched.
+// ⚠ ALL FIVE SLOTS: the physical key and the four per-view copies, because
+// fillDerivedUf1Slots_ (v35, the day before) copied the wrong label into them.
+void upgradeUf1SoftKeyPinLabel_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    auto fix = [&L1](ButtonId id) {
+        auto it = L1.bindings.find(id);
+        if (it == L1.bindings.end()) return;
+        Binding& bd = it->second;
+        if (bd.label != "PIN SET") return;
+        const auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+        if (sp.type != ActionType::Builtin
+            || sp.action != "temp_selset_pin_uf1_channel") return;
+        bd.label = "PIN THIS CH";
+    };
+    fix(ButtonId::Uf1ChannelSoftKey);
+    for (int v = 0; v < kUf1ViewCountForKeys; ++v)
+        fix(perViewUf1Id(ButtonId::Uf1ChannelSoftKey, v));
+}
+
 void upgradeBackfillUf1SoftKey_(Config& c)
 {
     Layer& L1 = c.layers[0];
@@ -3531,7 +3561,7 @@ void upgradeBackfillUf1SoftKey_(Config& c)
     // auto-label refresh then had nothing of its own to replace, so rebinding
     // the key left "PIN SET" on the display over an action it no longer fires:
     // forum 4.2 all over again, for pre-v20 configs only.
-    bd.label    = "PIN SET";
+    bd.label    = "PIN THIS CH";
     bd.behavior = Behavior::Toggle;
 }
 
@@ -4004,6 +4034,9 @@ void load()
             }
             if (tmp.version < 35) {
                 fillDerivedUf1Slots_(tmp);
+            }
+            if (tmp.version < 36) {
+                upgradeUf1SoftKeyPinLabel_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
