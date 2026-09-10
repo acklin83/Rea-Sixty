@@ -5213,6 +5213,11 @@ double uiVolLinear(MediaTrack* tr)
 // Forward decls — full definitions live near the LCD helpers below;
 // PanDelta/PanCenter handlers consume them earlier in the file.
 bool isBinarySlot(const uf8::LinkSlot& s);
+// The value a V-Pot push puts on the focused slot (step-cycle or reset).
+// Defined next to isBinarySlot far below; both V-Pot push paths call it.
+static double uf8FocusedPushValue_(MediaTrack* tr, int fxIdx,
+                                   const uf8::LinkSlot& slot,
+                                   int focusedSlotIdx);
 bool isBipolarSlot(const uf8::LinkSlot& s);
 
 struct PendingInput {
@@ -17633,7 +17638,9 @@ std::atomic<Uf1AboveFaderMode> g_uf1AboveFaderMode{Uf1AboveFaderMode::Pan};
 // Extender's own send-pan mode, which owns the knob when it is engaged.
 // Main-thread only (REAPER API).
 static bool uf1ExtenderFocusedParam_(MediaTrack* tr, int* fxOut, int* paramOut,
-                                     bool* invOut = nullptr)
+                                     bool* invOut = nullptr,
+                                     const uf8::LinkSlot** slotOut = nullptr,
+                                     int* focusIdxOut = nullptr)
 {
     if (!tr || !g_uf1Extender.load()) return false;
     if (g_forcePan.load()) return false;
@@ -17643,9 +17650,11 @@ static bool uf1ExtenderFocusedParam_(MediaTrack* tr, int* fxOut, int* paramOut,
     if (!mm.map) return false;
     const uf8::LinkSlot* sl = uf8::findSlotByLinkIdx(*mm.map, focused.slotIdx);
     if (!sl) return false;
-    if (fxOut)    *fxOut    = mm.fxIndex;
-    if (paramOut) *paramOut = sl->vst3Param;
-    if (invOut)   *invOut   = sl->inverted;
+    if (fxOut)       *fxOut       = mm.fxIndex;
+    if (paramOut)    *paramOut    = sl->vst3Param;
+    if (invOut)      *invOut      = sl->inverted;
+    if (slotOut)     *slotOut     = sl;
+    if (focusIdxOut) *focusIdxOut = focused.slotIdx;
     return true;
 }
 
@@ -19425,15 +19434,24 @@ void drainInputQueue()
                     g_stickyArmGetNext.store(false);
                 } else {
                     int sfx = -1, sparam = -1; bool stg = false;
-                    int efx = -1, eprm = -1;
+                    int efx = -1, eprm = -1, efocus = -1;
                     if (stickyUf1AboveEnabled_()
                         && stickyResolveOnTrack_(tr, &sfx, &sparam, &stg))
                         stickyPushDefault_(tr, sfx, sparam, stg);
-                    // Extender: the push belongs to whatever the knob is on, so
-                    // it centres the focused parameter rather than the pan of a
-                    // track whose pan this knob is not driving.
-                    else if (uf1ExtenderFocusedParam_(tr, &efx, &eprm))
-                        TrackFX_SetParamNormalized(tr, efx, eprm, 0.5);
+                    // Extender: the push belongs to whatever the knob is on, and
+                    // it does what the eight strips beside it do — step-cycle an
+                    // enumerated slot, reset anything else to its default. Same
+                    // helper, so the ninth strip cannot drift from the other
+                    // eight, and the same broadcast so parameter groups follow.
+                    else if (const uf8::LinkSlot* esl = nullptr;
+                             uf1ExtenderFocusedParam_(tr, &efx, &eprm, nullptr,
+                                                      &esl, &efocus) && esl) {
+                        const double pv =
+                            uf8FocusedPushValue_(tr, efx, *esl, efocus);
+                        TrackFX_SetParamNormalized(tr, efx, eprm, pv);
+                        uf8::param_groups::broadcastBuiltinSlot(
+                            tr, uf8::getFocusedParam().domain, efocus, pv);
+                    }
                     else
                         CSurf_OnPanChange(tr, 0.0, /*relative*/false);   // centre Pan
                 }
@@ -21035,76 +21053,8 @@ void drainInputQueue()
                     break;
                 }
                 if (slPtr) {
-                    double pushNext;
-                    if (isBinarySlot(*slPtr)) {
-                        // V-Pot push cycles to next discrete step. For a
-                        // 2-state toggle (EQ In, Dyn In, S/C Listen) this
-                        // collapses to 0↔1. For a multi-step enumeration
-                        // (4K G EQ Colour: Black/Pink — VST3 reports 2
-                        // steps but plain 0↔1 was hitting an unused 3rd
-                        // value, hence the user's "3 push" complaint),
-                        // step-size cycling lands on each defined value.
-                        double step = 0.0, smallstep = 0.0, largestep = 0.0;
-                        bool istoggle = false;
-                        const bool haveSteps = TrackFX_GetParameterStepSizes(
-                            tr, mm.fxIndex, slPtr->vst3Param,
-                            &step, &smallstep, &largestep, &istoggle);
-                        const double cur = TrackFX_GetParamNormalized(
-                            tr, mm.fxIndex, slPtr->vst3Param);
-                        if (!haveSteps || istoggle || step <= 0.0 || step >= 1.0) {
-                            pushNext = (cur < 0.5) ? 1.0 : 0.0;
-                        } else {
-                            pushNext = cur + step;
-                            if (pushNext > 1.0 + step * 0.5) pushNext = 0.0;
-                            if (pushNext > 1.0) pushNext = 1.0;
-                        }
-                    } else {
-                        // User-learned slot override: when a UserLinkSlot
-                        // exists for (FX name, linkIdx), its defaultNorm
-                        // wins over the canonical slot's deflt. UC1 has
-                        // no push so the UserLinkSlot.defaultNorm is
-                        // otherwise dormant — this is the path that lets
-                        // a UF8 V-Pot mirroring a CS/BC user-learned slot
-                        // honour the reset value set in the FX-Learn
-                        // editor (Frank 2026-05-26). Falls back to the
-                        // canonical deflt when no UserLinkSlot is owned,
-                        // and to 0.5 when neither exists (ext::* slots).
-                        char fxBuf[256] = {0};
-                        uf8::fxIdentityName(tr, mm.fxIndex,   // rename-proof
-                                            fxBuf, sizeof(fxBuf));
-                        const uf8::UserLinkSlot* usl =
-                            uf8::user_plugins::lookupOwnedSlot(
-                                fxBuf, focused.slotIdx);
-                        if (usl) {
-                            pushNext = usl->defaultNorm;
-                            if (pushNext < 0.0) pushNext = 0.0;
-                            if (pushNext > 1.0) pushNext = 1.0;
-                        } else {
-                            pushNext = slPtr->deflt.value_or(0.5);
-                        }
-                        // Stepped param → snap to nearest step grid.
-                        double pStep=0.0, pSmall=0.0, pLarge=0.0;
-                        bool isToggle = false;
-                        // Skip snap for continuous JSFX params; small JSFX
-                        // enums snap to the normalised step, VST3/AU to pStep.
-                        if (TrackFX_GetParameterStepSizes(tr, mm.fxIndex,
-                                slPtr->vst3Param,
-                                &pStep, &pSmall, &pLarge, &isToggle)
-                            && !isToggle && pStep > 0.0)
-                        {
-                            double snapStep = pStep, jn = 0.0;
-                            bool jc = false;
-                            const bool isJ = uf8::jsfxStepClassify(
-                                tr, mm.fxIndex, slPtr->vst3Param,
-                                pStep, jn, jc);
-                            if (!isJ || !jc) {
-                                if (isJ) snapStep = jn;
-                                pushNext = static_cast<double>(uf8::snapToStep(
-                                    static_cast<float>(pushNext),
-                                    static_cast<float>(snapStep)));
-                            }
-                        }
-                    }
+                    const double pushNext = uf8FocusedPushValue_(
+                        tr, mm.fxIndex, *slPtr, focused.slotIdx);
                     TrackFX_SetParamNormalized(tr, mm.fxIndex,
                         slPtr->vst3Param, pushNext);
                     uf8::param_groups::broadcastBuiltinSlot(
@@ -33288,6 +33238,97 @@ bool isBinarySlot(const uf8::LinkSlot& s)
         // walks all three values per push.
         || id == "AutoMakeup"      || id == "WidthMode"
         || id == "FiltersIn";
+}
+
+// ⇨ WHAT A V-POT PUSH PUTS ON THE FOCUSED SLOT, in one place.
+// A binary or enumerated slot STEPS: the push walks to the next discrete value
+// and wraps, which is how a 4K G's EQ Colour lands on each of its values instead
+// of flipping 0↔1 past an unused third one. Anything else RESETS: the FX-Learn
+// slot's own default when the user set one, else the canonical default, else
+// centre, snapped onto the step grid where the parameter has one.
+// ⚠ Extracted 2026-09-10 so the UF1's above-fader knob can push the same way
+// when it stands in as the UF8's ninth strip. It had been resetting to a flat
+// 0.5, so a stepped parameter stepped on eight strips and jumped to the middle
+// on the ninth (Frank: "die machen doch dabei einfach bei v-pot push den step
+// cycle"). Two copies of this would have drifted the first time either changed.
+// Main-thread only.
+static double uf8FocusedPushValue_(MediaTrack* tr, int fxIdx,
+                                   const uf8::LinkSlot& slot, int focusedSlotIdx)
+{
+    const uf8::LinkSlot* slPtr = &slot;
+    const int mmFxIndex = fxIdx;
+    double pushNext;
+
+    if (isBinarySlot(*slPtr)) {
+        // V-Pot push cycles to next discrete step. For a
+        // 2-state toggle (EQ In, Dyn In, S/C Listen) this
+        // collapses to 0↔1. For a multi-step enumeration
+        // (4K G EQ Colour: Black/Pink — VST3 reports 2
+        // steps but plain 0↔1 was hitting an unused 3rd
+        // value, hence the user's "3 push" complaint),
+        // step-size cycling lands on each defined value.
+        double step = 0.0, smallstep = 0.0, largestep = 0.0;
+        bool istoggle = false;
+        const bool haveSteps = TrackFX_GetParameterStepSizes(
+            tr, mmFxIndex, slPtr->vst3Param,
+            &step, &smallstep, &largestep, &istoggle);
+        const double cur = TrackFX_GetParamNormalized(
+            tr, mmFxIndex, slPtr->vst3Param);
+        if (!haveSteps || istoggle || step <= 0.0 || step >= 1.0) {
+            pushNext = (cur < 0.5) ? 1.0 : 0.0;
+        } else {
+            pushNext = cur + step;
+            if (pushNext > 1.0 + step * 0.5) pushNext = 0.0;
+            if (pushNext > 1.0) pushNext = 1.0;
+        }
+    } else {
+        // User-learned slot override: when a UserLinkSlot
+        // exists for (FX name, linkIdx), its defaultNorm
+        // wins over the canonical slot's deflt. UC1 has
+        // no push so the UserLinkSlot.defaultNorm is
+        // otherwise dormant — this is the path that lets
+        // a UF8 V-Pot mirroring a CS/BC user-learned slot
+        // honour the reset value set in the FX-Learn
+        // editor (Frank 2026-05-26). Falls back to the
+        // canonical deflt when no UserLinkSlot is owned,
+        // and to 0.5 when neither exists (ext::* slots).
+        char fxBuf[256] = {0};
+        uf8::fxIdentityName(tr, mmFxIndex,   // rename-proof
+                            fxBuf, sizeof(fxBuf));
+        const uf8::UserLinkSlot* usl =
+            uf8::user_plugins::lookupOwnedSlot(
+                fxBuf, focusedSlotIdx);
+        if (usl) {
+            pushNext = usl->defaultNorm;
+            if (pushNext < 0.0) pushNext = 0.0;
+            if (pushNext > 1.0) pushNext = 1.0;
+        } else {
+            pushNext = slPtr->deflt.value_or(0.5);
+        }
+        // Stepped param → snap to nearest step grid.
+        double pStep=0.0, pSmall=0.0, pLarge=0.0;
+        bool isToggle = false;
+        // Skip snap for continuous JSFX params; small JSFX
+        // enums snap to the normalised step, VST3/AU to pStep.
+        if (TrackFX_GetParameterStepSizes(tr, mmFxIndex,
+                slPtr->vst3Param,
+                &pStep, &pSmall, &pLarge, &isToggle)
+            && !isToggle && pStep > 0.0)
+        {
+            double snapStep = pStep, jn = 0.0;
+            bool jc = false;
+            const bool isJ = uf8::jsfxStepClassify(
+                tr, mmFxIndex, slPtr->vst3Param,
+                pStep, jn, jc);
+            if (!isJ || !jc) {
+                if (isJ) snapStep = jn;
+                pushNext = static_cast<double>(uf8::snapToStep(
+                    static_cast<float>(pushNext),
+                    static_cast<float>(snapStep)));
+            }
+        }
+    }
+    return pushNext;
 }
 
 // Is this slot a bipolar param with a meaningful centre detent (0 dB
