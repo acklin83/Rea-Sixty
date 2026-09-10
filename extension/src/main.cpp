@@ -2318,6 +2318,10 @@ MediaTrack* uf1FocusedTrack_();                      // main-thread; defined lat
 // but publishHud_ (v11 UF1 HUD tab) needs them well before that.
 int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx);
 int uf1CsPageCountFor_(int type, MediaTrack* tr, int fx);
+// …and the per-V-Pot param on a page plus its stored default, which the
+// above-fader knob now needs too (it rides that parameter in Plug-in view).
+int uf1CsVpotParam_(MediaTrack* tr, int fx, int type, int page, int idx);
+static double uf1CsDefaultNorm_(MediaTrack* tr, int fx, int p);
 static int  engagedBankableKind_();                  // any thread
 static void pageDynBank_(int kind, int delta);       // main thread
 static void tickDynBankPaging_();                    // main thread (onTimer)
@@ -17593,8 +17597,52 @@ bool stickyUf1AboveEnabled_();
 // track. The enum + dispatch is the extension seam Frank asked for — later modes
 // (a bound FX param, a send level, etc.) slot in as new cases without touching
 // the encoder-routing foundation. g_uf1AboveFaderMode would become a setting.
-enum class Uf1AboveFaderMode : uint8_t { Pan /*, Param, SendLevel, … */ };
-std::atomic<Uf1AboveFaderMode> g_uf1AboveFaderMode{Uf1AboveFaderMode::Pan};
+// ⇨ THE KNOB ABOVE THE FADER CARRIES THE PLUG-IN PARAMETER IN PLUG-IN VIEW.
+// FLIP means "the fader and this knob swap jobs", and a swap only means anything
+// if the thing is ON the knob first — putting a parameter on the fader that was
+// never on the pot is not a swap, it is a second, unrelated trick (Frank
+// 2026-09-10: "FLIP FÜR VALUE MACHT DOCH KEINEN FUCKING SINN WENN DIE VERDAMMTE
+// VALUE NICHT ERST AUF DEM PAN-POT IST"). So in Plug-in view this knob rides the
+// parameter of whichever of the four display V-Pots you last turned or pushed —
+// the same g_uf1FlipVpotIdx the fader takes under FLIP, so the two can never
+// disagree about which parameter is meant.
+// Param is the DEFAULT because that is what the view is for; a LONG press on the
+// knob puts it back on Pan and another one brings the parameter back, which is
+// the answer to "how do we get back to pan" (Frank, same exchange).
+enum class Uf1AboveFaderMode : uint8_t { Pan, Param /*, SendLevel, … */ };
+std::atomic<Uf1AboveFaderMode> g_uf1AboveFaderMode{Uf1AboveFaderMode::Param};
+
+// Does the above-fader knob currently ride a plug-in parameter, and which one?
+// ⛔ ONLY WHILE BOTH PANEL HALVES ARE THE SAME TRACK. The knob is the LEFT half
+// (it sits on the fader) and the parameter belongs to the RIGHT one; with the
+// Extender on those are different tracks, and driving one track's parameter from
+// the other's knob is the "shows X, acts on Y" bug that came back four times
+// ([[uf1-panel-halves-rule]]). Then it stays Pan, unchanged.
+// Main-thread only (walks the FX chain).
+static bool uf1AboveParam_(MediaTrack* tr, int* fxOut, int* paramOut)
+{
+    if (!tr) return false;
+    if (g_uf1AboveFaderMode.load() != Uf1AboveFaderMode::Param) return false;
+    if (g_uf1MeterView.load() || g_uf1PresetsMode.load()
+        || g_uf1HueMode.load()) return false;
+    if (g_uf1ChannelSubMode.load() != 0) return false;   // 0 = the plug-in view
+    if (uf1FocusedTrack_() != tr) return false;          // the two halves agree
+    MediaTrack* pt = nullptr; int pfx = -1;
+    const int pType = uf1ResolveCsFx_(tr, pt, pfx);
+    if (pType < 0 || !pt) return false;
+    const int pageCount = uf1CsPageCountFor_(pType, pt, pfx);
+    if (pageCount < 1) return false;
+    const int page = std::clamp(g_uf1CsPage.load(), 0, pageCount - 1);
+    const int prm  = uf1CsVpotParam_(pt, pfx, pType, page,
+                                     std::clamp(g_uf1FlipVpotIdx.load(), 0, 3));
+    if (prm < 0) return false;
+    if (fxOut)    *fxOut    = pfx;
+    if (paramOut) *paramOut = prm;
+    // The parameter lives on the instance uf1ResolveCsFx_ returned, which is the
+    // one the four V-Pots are on. Callers write there, never on `tr` blind.
+    if (pt != tr) return false;
+    return true;
+}
 
 
 // One detent ≈ 1/64 of the full pan sweep (−1..+1). Conservative; HW-tunable.
@@ -17738,8 +17786,21 @@ void applyUf1AboveFaderVpot_(int step)
         CSurf_OnVolumeChange(tr, uf1VpotVolLinear_(nDb), false);
         return;
     }
+    // Plug-in view: the knob rides the last-reached-for V-Pot's parameter. Same
+    // relative feel as the four V-Pots themselves — the detent unit is the UF8's
+    // signed6/128, so Fine and the UF1 speed setting apply here as they do there.
+    {
+        int pfx = -1, prm = -1;
+        if (uf1AboveParam_(tr, &pfx, &prm)) {
+            const double cur = TrackFX_GetParamNormalized(tr, pfx, prm);
+            const double n   = std::clamp(cur + step / 128.0 * kScale, 0.0, 1.0);
+            TrackFX_SetParamNormalized(tr, pfx, prm, n);
+            return;
+        }
+    }
     switch (g_uf1AboveFaderMode.load()) {
         case Uf1AboveFaderMode::Pan:
+        case Uf1AboveFaderMode::Param:   // no parameter to ride → Pan, as before
             // Relative pan write — canonical surface path (applies + automation +
             // notifies the painter, which repaints the Pan label/bar).
             CSurf_OnPanChange(tr, step * kUf1AboveFaderPanPerDetent * kScale,
@@ -19347,9 +19408,16 @@ void drainInputQueue()
                     g_stickyArmGetNext.store(false);
                 } else {
                     int sfx = -1, sparam = -1; bool stg = false;
+                    int apFx = -1, apPrm = -1;
                     if (stickyUf1AboveEnabled_()
                         && stickyResolveOnTrack_(tr, &sfx, &sparam, &stg))
                         stickyPushDefault_(tr, sfx, sparam, stg);
+                    // The knob rides a plug-in parameter in Plug-in view, so its
+                    // push resets THAT, the same way a push on one of the four
+                    // display V-Pots resets the parameter it is on.
+                    else if (uf1AboveParam_(tr, &apFx, &apPrm))
+                        TrackFX_SetParamNormalized(tr, apFx, apPrm,
+                            uf1CsDefaultNorm_(tr, apFx, apPrm));
                     else
                         CSurf_OnPanChange(tr, 0.0, /*relative*/false);   // centre Pan
                 }
@@ -24455,10 +24523,12 @@ void onUf1Event(const uf1::InputEvent& ev)
             // is the per-track knob in Plugin/DAW/Meter alike). queueInput only →
             // worker-safe; the main-thread drain reads the pin + touches the REAPER
             // API. This key shipped UNBOUND with no default, so nothing is superseded.
-            if (ev.id == uf1::btn::kVpotAboveFaderPush && ev.pressed) {
-                queueInput({PendingInput::Uf1AboveVpotPush, 0, 0.0});
-                break;
-            }
+            // (0x08 used to be handled right here, hardcoded and UNBOUND, so the
+            // bindings editor showed an empty SHORT PRESS over a key that centres
+            // pan every day — Frank 2026-09-10: "wieso ist SHORT PUSH AUF DEM
+            // FUCKING V-POT ÜBERHAUPT LEER?". It is a factory binding now
+            // (uf1_above_vpot_push short, uf1_above_vpot_pan long) and goes
+            // through the dispatch below like every other key.)
             // Channel view: the 4 display soft keys (0x19-0x1C) are the SSL
             // channel-strip section/toggle soft keys (p188). Display soft-key 1
             // is the Meter Screen Selector in Meter view (block above, gated on
@@ -24549,7 +24619,9 @@ void onUf1Event(const uf1::InputEvent& ev)
             // param), FLIP → uf1_flip, MASTER → uf1_master. They fire through
             // the binding-first check above / the final dispatch below, so the
             // bindings editor shows their action and the user can rebind them.
-            // (The above-fader push 0x08 stays UNBOUND — no default.)
+            // The above-fader push 0x08 joined them on 2026-09-10:
+            // uf1_above_vpot_push on the short press, uf1_above_vpot_pan on the
+            // long one. It was the last hardcoded, unbound UF1 key.
             // Solo / Cut / Sel — fixed native functions on the FOCUSED track
             // (Frank 2026-07-30: REAPER owns solo/mute/select, so UF1 doesn't
             // reinvent them; always focused, "immer auf fokusiert"). Handled
@@ -29644,6 +29716,24 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         valLine = uf1ValueLine(std::string("*") + nm, val);       // '*' = pinned marker
         const double nrm = TrackFX_GetParamNormalized(tr, spFx, spParam);
         barPos = std::clamp(static_cast<int>(std::lround(nrm * 100.0)), 0, 100);
+    } else if (int apFx = -1, apPrm = -1; uf1AboveParam_(tr, &apFx, &apPrm)) {
+        // ⇨ THE KNOB SAYS WHAT IT DRIVES. Without this the line still read "Pan"
+        // while the knob moved a plug-in parameter, which is the one thing this
+        // readout exists to prevent. No '*' — that marker means a Sticky PIN,
+        // and this is not pinned, it follows whichever V-Pot you last reached
+        // for and changes with it.
+        char v[64] = {0};
+        TrackFX_GetFormattedParamValue(tr, apFx, apPrm, v, sizeof(v));
+        std::string nm = uf1ParamDisplayName_(tr, apFx, apPrm, std::string());
+        if (nm.empty()) {
+            char pn[64] = {0};
+            TrackFX_GetParamName(tr, apFx, apPrm, pn, sizeof(pn));
+            nm = pn;
+        }
+        valLine = uf1ValueLine(nm, v);
+        const double nrm = TrackFX_GetParamNormalized(tr, apFx, apPrm);
+        barPos    = std::clamp(static_cast<int>(std::lround(nrm * 100.0)), 0, 100);
+        barCentre = 0x00;
     } else {
         const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
         valLine   = composeValueLine("Pan", formatPanReadout(pan));
@@ -49375,6 +49465,38 @@ void registerBindingHandlers()
     // only (mirrors the removed !g_uf1MeterView gate; the drain resolves
     // the on-screen CS/BC strip + page param on the main thread and no-ops
     // on a non-SSL strip). queueInput only → worker-safe.
+    // The knob above the fader. Its push was hardcoded and unbound until
+    // 2026-09-10; both of these are what that code did, plus the parameter case
+    // the knob gained the same day.
+    registerBuiltin("uf1_above_vpot_push", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            queueInput({PendingInput::Uf1AboveVpotPush, 0, 0.0});
+        },
+        nullptr,
+        "UF1: V-Pot above fader push (centre pan / reset the parameter)", false
+    });
+    // ⇨ AND THIS IS THE WAY BACK TO PAN. In Plug-in view the knob rides the
+    // last-reached-for V-Pot's parameter, which is what makes FLIP a real swap;
+    // without a way out, pan would be unreachable there (Frank 2026-09-10:
+    // "HAST DU ÜBERHAUPT ÜBERLEGT WIE WIR WIEDER AUF PAN ZURÜCK KOMMEN?").
+    // On the LONG press of the same knob, so it costs no key and sits where the
+    // hand already is. Lit while the knob is on Pan.
+    registerBuiltin("uf1_above_vpot_pan", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const bool toPan =
+                g_uf1AboveFaderMode.load() != Uf1AboveFaderMode::Pan;
+            g_uf1AboveFaderMode.store(toPan ? Uf1AboveFaderMode::Pan
+                                            : Uf1AboveFaderMode::Param);
+            g_pageDirty.store(true);
+        },
+        [](int) {
+            return g_uf1AboveFaderMode.load() == Uf1AboveFaderMode::Pan;
+        },
+        "UF1: V-Pot above fader \xE2\x86\x92 Pan / plug-in parameter (toggle)", true
+    });
+
     registerBuiltin("uf1_vpot_reset", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {
             if (!firing || g_uf1MeterView.load()) return;

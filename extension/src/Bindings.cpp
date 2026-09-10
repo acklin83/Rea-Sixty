@@ -1176,6 +1176,23 @@ void seedFactoryDefaults_(Config& c)
     L1[ButtonId::Uf1Flip]        = mkBuiltin("uf1_flip",              Behavior::Toggle,    "FLIP");
     L1[ButtonId::Uf1Master]      = mkBuiltin("uf1_master",            Behavior::Toggle,    "MASTER");
     L1[ButtonId::Uf1FiveToEight] = mkBuiltin("uf1_five_to_eight",     Behavior::Momentary, "5-8");
+    // The knob above the fader: short = its push (centre pan, or reset whatever
+    // the knob is riding), long = put it back on Pan and take it off again. It
+    // was hardcoded and UNBOUND until 2026-09-10, which is why the editor showed
+    // an empty SHORT PRESS over a key that works every day.
+    {
+        auto& av = L1[ButtonId::Uf1VpotAbovePush];
+        av.behavior = Behavior::Momentary;
+        av.label    = "V-POT PUSH";
+        auto& sp = av.shortPress[static_cast<int>(Modifier::Plain)];
+        sp.type   = ActionType::Builtin;
+        sp.action = "uf1_above_vpot_push";
+        av.hasLongPress = true;
+        auto& lp = av.longPress[static_cast<int>(Modifier::Plain)];
+        lp.type   = ActionType::Builtin;
+        lp.action = "uf1_above_vpot_pan";
+        lp.label  = "PAN";
+    }
     L1[ButtonId::Uf1Vpot1Push]   = mkBuiltin("uf1_vpot_reset", Behavior::Momentary, "V-POT 1 PUSH", 255, 255, 255, 0);
     L1[ButtonId::Uf1Vpot2Push]   = mkBuiltin("uf1_vpot_reset", Behavior::Momentary, "V-POT 2 PUSH", 255, 255, 255, 1);
     L1[ButtonId::Uf1Vpot3Push]   = mkBuiltin("uf1_vpot_reset", Behavior::Momentary, "V-POT 3 PUSH", 255, 255, 255, 2);
@@ -3006,7 +3023,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
-constexpr int kCurrentBindingsVersion = 36;
+constexpr int kCurrentBindingsVersion = 37;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -3528,6 +3545,30 @@ void upgradeBackfillUf1EncoderLong_(Config& c)
 // key still bound to that action — a name the user typed is never touched.
 // ⚠ ALL FIVE SLOTS: the physical key and the four per-view copies, because
 // fillDerivedUf1Slots_ (v35, the day before) copied the wrong label into them.
+// v36→v37: the above-fader V-Pot push becomes a real binding. It was hardcoded
+// in the input path and shipped with no slot at all, so the editor showed an
+// empty SHORT PRESS over a key that centres pan every day (Frank 2026-09-10).
+// Fills ONLY an untouched slot — a user who bound this key kept nothing to lose
+// before, but one who bound it since is not overwritten.
+void upgradeUf1AboveVpotPush_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    Binding& bd = L1.bindings[ButtonId::Uf1VpotAbovePush];   // default-creates
+    auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+    if (sp.type != ActionType::Noop || !sp.action.empty()) return;
+    sp.type   = ActionType::Builtin;
+    sp.action = "uf1_above_vpot_push";
+    bd.label    = "V-POT PUSH";
+    bd.behavior = Behavior::Momentary;
+    auto& lp = bd.longPress[static_cast<int>(Modifier::Plain)];
+    if (lp.type == ActionType::Noop && lp.action.empty()) {
+        bd.hasLongPress = true;
+        lp.type   = ActionType::Builtin;
+        lp.action = "uf1_above_vpot_pan";
+        lp.label  = "PAN";
+    }
+}
+
 void upgradeUf1SoftKeyPinLabel_(Config& c)
 {
     Layer& L1 = c.layers[0];
@@ -4037,6 +4078,9 @@ void load()
             }
             if (tmp.version < 36) {
                 upgradeUf1SoftKeyPinLabel_(tmp);
+            }
+            if (tmp.version < 37) {
+                upgradeUf1AboveVpotPush_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
