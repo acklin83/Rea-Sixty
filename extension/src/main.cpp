@@ -42257,19 +42257,54 @@ void onTimerBody_()
                     }
                 }
             }
+            // ⇨ THE TWO SETTINGS SAY DIFFERENT THINGS, so they compose.
+            // The drop-down picks WHICH plug-ins count as a source — mapped
+            // channel strips only, or anything on the chain that reports GR.
+            // The checkbox picks whether they are SUMMED. Four combinations,
+            // and "channel strip + combine" is the one that was missing: two
+            // mapped strips in series showed one of them, because the CS path
+            // resolves exactly one FX (Frank 2026-09-10: "was wenn ich 2
+            // hintereinander hab?"). It also left the checkbox inert under that
+            // source, which is how we both lost ten minutes to it.
+            // ⚠ Only the ACTIVE strip brings its calibration and offset; the
+            // others are added raw, as they always were for the any-FX walk.
+            // Per-plug-in calibration is a property of one reading, and summing
+            // two differently-bent curves is not one.
+            if (g_grCombineUf8.load() && !g_grAnyFx.load()) {
+                // Source: channel strips. Add every OTHER mapped strip.
+                const int fxCount = TrackFX_GetCount(tr);
+                char nb[512];
+                for (int fx = 0; fx < fxCount; ++fx) {
+                    if (fx == csFxIdx && gotIt) continue;   // already counted
+                    if (uf8::fxIsAcustica(tr, fx)) continue;
+                    if (!uf8::fxIdentityName(tr, fx, nb, sizeof(nb))) continue;
+                    const uf8::PluginMap* m = uf8::lookupPluginMapByName(nb);
+                    if (!m || m->domain != uf8::Domain::ChannelStrip) continue;
+                    char buf[64] = {0};
+                    if (!TrackFX_GetNamedConfigParm(
+                            tr, fx, "GainReduction_dB",
+                            buf, sizeof(buf))) continue;
+                    gr += std::fabs(std::atof(buf));
+                    gotIt = true;
+                }
+            }
             if (g_grAnyFx.load()) {
                 const int fxCount = TrackFX_GetCount(tr);
                 if (g_grCombineUf8.load()) {
-                    // Combined channel GR: add every OTHER compressor
-                    // on the chain exposing the PreSonus
-                    // GainReduction_dB convention to the CS reading
-                    // above (csFxIdx already counted). In-series GR
-                    // sums in dB, so [ReaComp → SSL CS] reads the
-                    // total reduction, not just the CS. Frank
-                    // 2026-06-12. Acustica skipped — its engine faults
-                    // under host config-parm polling (see fxIsAcustica).
+                    // Combined channel GR: add every compressor on the chain
+                    // exposing the PreSonus GainReduction_dB convention to the
+                    // CS reading above. In-series GR sums in dB, so
+                    // [ReaComp → SSL CS] reads the total reduction, not just
+                    // the CS. Frank 2026-06-12. Acustica skipped — its engine
+                    // faults under host config-parm polling (see fxIsAcustica).
+                    // ⛔ SKIP THE MAPPED STRIP ONLY IF IT WAS ACTUALLY COUNTED.
+                    // It used to be skipped for being the CS, full stop — so a
+                    // strip that is mapped but reports nothing through the path
+                    // above (a learned GR param that reads zero, a plug-in that
+                    // does not serve the convention) fell out of the sum without
+                    // ever having been added (found 2026-09-10).
                     for (int fx = 0; fx < fxCount; ++fx) {
-                        if (fx == csFxIdx) continue;
+                        if (fx == csFxIdx && gotIt) continue;
                         if (uf8::fxIsAcustica(tr, fx)) continue;
                         char buf[64] = {0};
                         if (!TrackFX_GetNamedConfigParm(

@@ -738,12 +738,17 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
         ImGui_EndCombo(ctx);
     }
 
-    // Combine GR across the channel — with "Show any GR Data", sum the
-    // gain reduction of every compressor on the track (CS + ReaComp + …)
-    // instead of showing a single source. In-series GR adds in dB, so the
+    // Combine GR across the channel — sum the gain reduction of every source
+    // on the track instead of showing one. In-series GR adds in dB, so the
     // meter reads the channel's total reduction. Separate per surface so
-    // e.g. the UF8 strip can show combined while the UC1 shows the CS only.
-    // No effect unless "Show any GR Data" is selected. Frank 2026-06-12.
+    // e.g. the UF8 strip can show combined while the UC1 shows one only.
+    // ⇨ IT COMPOSES WITH THE SOURCE ABOVE, it is not gated by it. The
+    // drop-down says WHICH plug-ins count (mapped channel strips, or anything
+    // reporting GR), this says whether they are SUMMED. Under "Only Show
+    // Channel Strip GR" that means every mapped strip on the chain, which is
+    // what two strips in series need (Frank 2026-09-10). It used to do nothing
+    // at all under that source, while staying tickable — worth remembering
+    // before anyone "simplifies" it back. Frank 2026-06-12.
     if (showsDev(kDevUf8)) {
         bool cUf8 = reasixty_grCombineUf8();
         if (ImGui_Checkbox(ctx, "Combine GR across plug-ins (UF8 strips)",
