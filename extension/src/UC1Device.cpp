@@ -146,13 +146,16 @@ bool UC1Device::open()
     {
         libusb_device_descriptor desc{};
         if (libusb_device* d = libusb_get_device(handle_)) {
-            if (libusb_get_device_descriptor(d, &desc) >= 0
-                && desc.iSerialNumber != 0)
-            {
-                unsigned char sbuf[256] = {0};
-                const int n = libusb_get_string_descriptor_ascii(
-                    handle_, desc.iSerialNumber, sbuf, sizeof(sbuf));
-                if (n > 0) serial_.assign(reinterpret_cast<char*>(sbuf), n);
+            if (libusb_get_device_descriptor(d, &desc) >= 0) {
+                if (desc.iSerialNumber != 0) {
+                    unsigned char sbuf[256] = {0};
+                    const int n = libusb_get_string_descriptor_ascii(
+                        handle_, desc.iSerialNumber, sbuf, sizeof(sbuf));
+                    if (n > 0) serial_.assign(reinterpret_cast<char*>(sbuf), n);
+                }
+                // The device revision, out of the descriptor we already have
+                // (see logDeviceRevision in LogPath.h). Not gated on the serial.
+                uf8::logDeviceRevision("UC1", desc.bcdDevice, serial_);
             }
         }
     }

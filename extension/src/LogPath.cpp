@@ -1,5 +1,7 @@
 #include "LogPath.h"
 
+#include <cstdio>
+
 #if defined(_WIN32)
 #  ifndef WIN32_LEAN_AND_MEAN
 #    define WIN32_LEAN_AND_MEAN
@@ -22,6 +24,17 @@ std::string logPath(const char* filename)
 #else
     return std::string("/tmp/") + filename;
 #endif
+}
+
+void logDeviceRevision(const char* device, uint16_t bcdDevice,
+                       const std::string& serial)
+{
+    FILE* lg = std::fopen(logPath("rea_sixty.log").c_str(), "a");
+    if (!lg) return;
+    std::fprintf(lg, "[usbdev] %s bcdDevice=0x%04X serial=%s\n",
+                 device ? device : "?", bcdDevice,
+                 serial.empty() ? "-" : serial.c_str());
+    std::fclose(lg);
 }
 
 }  // namespace uf8

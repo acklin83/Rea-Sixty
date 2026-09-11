@@ -91,13 +91,18 @@ bool UF8Device::open()
     {
         libusb_device_descriptor desc{};
         if (libusb_device* d = libusb_get_device(handle_)) {
-            if (libusb_get_device_descriptor(d, &desc) >= 0
-                && desc.iSerialNumber != 0)
-            {
-                unsigned char sbuf[256] = {0};
-                const int n = libusb_get_string_descriptor_ascii(
-                    handle_, desc.iSerialNumber, sbuf, sizeof(sbuf));
-                if (n > 0) serial_.assign(reinterpret_cast<char*>(sbuf), n);
+            if (libusb_get_device_descriptor(d, &desc) >= 0) {
+                if (desc.iSerialNumber != 0) {
+                    unsigned char sbuf[256] = {0};
+                    const int n = libusb_get_string_descriptor_ascii(
+                        handle_, desc.iSerialNumber, sbuf, sizeof(sbuf));
+                    if (n > 0) serial_.assign(reinterpret_cast<char*>(sbuf), n);
+                }
+                // ⇨ AND THE DEVICE REVISION OUT OF THE SAME DESCRIPTOR — see
+                // logDeviceRevision in LogPath.h for what bcdDevice is and is
+                // NOT. The serial read is no longer a gate on this: a device
+                // that advertises no serial still has a revision.
+                uf8::logDeviceRevision("UF8", desc.bcdDevice, serial_);
             }
         }
     }
