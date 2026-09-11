@@ -25,7 +25,26 @@ param-name strings still need confirming per plugin during the build.
 | 7 | FAST ATTACK | PEAK | S/C LISTEN | DYNAMICS | Ratio | Threshold | Release | |
 | 8 | EXPAND | FAST ATTACK | | DYNAMICS | Range | Threshold | Release | Hold |
 
-## 4K B
+## 4K B — SSL 360 2.1.12, MEASURED (cap136, 2026-09-11)
+What 360 2.1.12 sends with a 4K B focused, and what `kUf1CsSoftKeys[1]` /
+`kUf1CsVPots[1]` implement: the 4K E pages without EQ COLOUR and without the
+compressor's FAST ATTACK key.
+
+| Page | Soft Key 1 | Soft Key 2 | Soft Key 3 | Soft Key 4 | V-Pot 1 | V-Pot 2 | V-Pot 3 | V-Pot 4 |
+|---|---|---|---|---|---|---|---|---|
+| 1 | Ø | PRE | SOLO SAFE | PLUG-IN | Width | Mic | Out Trim | Mix |
+| 2 | FILTERS | | HQ MODE | A/B | In Trim | | High Pass | Low Pass |
+| 3 | LF BELL | | | EQ | LF Gain | LF Freq | | |
+| 4 | | | | EQ | LMF Gain | LMF Freq | LMF Q | |
+| 5 | | | | EQ | HMF Gain | HMF Freq | HMF Q | |
+| 6 | HF BELL | | | EQ | HF Gain | HF Freq | | |
+| 7 | | | | DYN | Ratio | Threshold | | Release |
+| 8 | | EXPANDER | S/C LISTEN | DYN | Range | Threshold | Release | |
+| 9 | AUTO MAKEUP | | | | | | | |
+| 10 | EXPANDER | | | | | | | |
+
+The p188 (2.0.6-era) 4K B table, for the record:
+
 | Page | Soft Key 1 | Soft Key 2 | Soft Key 3 | Soft Key 4 | V-Pot 1 | V-Pot 2 | V-Pot 3 | V-Pot 4 |
 |---|---|---|---|---|---|---|---|---|
 | 1 | Ø | PRE | SOLO SAFE | PLUG-IN | Width | Mic | Out Trim | Comp Mix |
@@ -42,7 +61,8 @@ This is what 360 2.1.12 sends to the UF1 with a 4K E focused, page by page
 (`analysis/…/pages.py` over cap133), and what `kUf1CsSoftKeys[2]` /
 `kUf1CsVPots[2]` implement since 2026-09-11 (Frank: "diese param-reihenfolge
 für unsere version übernehmen"). Home is page 1 of ours; SSL numbers the eight
-after it. The 4K G row copies this layout (same params) until it is captured.
+after it. The 4K G (cap135) is this layout plus IMP IN / Impedance on page 2, and
+its soft key 1 on the LF and HF pages follows the EQ colour (`uf1CsSoftKeyAt_`).
 
 | Page | Soft Key 1 | Soft Key 2 | Soft Key 3 | Soft Key 4 | V-Pot 1 | V-Pot 2 | V-Pot 3 | V-Pot 4 |
 |---|---|---|---|---|---|---|---|---|
@@ -55,6 +75,14 @@ after it. The 4K G row copies this layout (same params) until it is captured.
 | 7 | FAST ATTACK | | | DYN | Ratio | Threshold | | Release |
 | 8 | FAST ATTACK (gate) | EXPANDER | S/C LISTEN | DYN | Range | Threshold | Release | |
 | 9 | AUTO MAKEUP | | | | | | | |
+| 10 | EXPANDER | | | | | | | |
+
+Page 10 is one ► past AUTO MAKEUP, on all three 4K strips (cap133 t=37.06,
+cap135 t=55.66, cap136 t=44.94). Its key toggles LED bit 0 of `0x0102`
+(cap135/136), ► on it moves nothing, ◄ goes back to AUTO MAKEUP. It was first
+read as a label swap on page 9 because every run reached it exactly once. That
+the key drives "Gate Expander" is read from the name: it is the only Expander
+param of each 4K (4K B #37, 4K E #46, 4K G #50).
 
 The p188 (2.0.6-era) table it replaces, for the record:
 

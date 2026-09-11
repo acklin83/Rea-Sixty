@@ -13,7 +13,9 @@ p3 LF `LF BELL / – / – / EQ`; p4 LMF and p5 HMF `– / – / – / EQ`; p6 H
 (the B has none). Comp Release sits on V-Pot 4 on all three 4K strips
 (cap133/135/136); ours had it on V-Pot 3.
 
-Page 9's key read `AUTO MAKEUP` on entry and `EXPANDER` once mid-page, as on
-the E and the G; the trigger is not established.
+One ► past page 9 there is a tenth page, key 1 `EXPANDER`, no V-Pots (► down
+t=44.94, label 44.97). Its key toggles LED bit 0 of 0x0102 (45.69, 46.07), ► on
+it at 46.71 moves nothing, ◄ at 47.41 returns to AUTO MAKEUP. Same on the E and
+the G.
 
 **Decode:** as cap133.

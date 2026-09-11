@@ -624,13 +624,16 @@ constexpr int     kUf1CsPageCount = 10; // max pages (channel-strip types); work
 // 3 360 Link = the 8 p188 channel-strip pages; 4 = SSL Bus Compressor 2, a
 // Rea-Sixty extra (NOT in SSL's UF1 manual — the UF1 guide covers only the four
 // channel strips + Meter) with just 2 V-Pot/soft-key pages of its own params.
-// ⇨ 4K B, 4K E and 4K G have NINE since SSL 360 2.1.12 — MEASURED (cap133/135/
+// ⇨ 4K B, 4K E and 4K G have TEN since SSL 360 2.1.12 — MEASURED (cap133/135/
 // 136, 2026-09-11): after the gate page SSL shows a page with no V-Pots and one
-// soft key, AUTO MAKEUP. CS2 and 360 Link were not captured on 2.1.12 and keep
-// the p188 eight.
+// soft key, AUTO MAKEUP, and one ► further a tenth with one soft key, EXPANDER
+// (the key toggles its LED; ► on it moves nothing, ◄ goes back). The tenth page
+// was first read as a label swap on page 9, because each capture run reached it
+// exactly once. CS2 and 360 Link were not captured on 2.1.12 and keep the p188
+// eight.
 // 7 = Harrison 32C: SSL gives it TEN (cap134, 2026-09-11) — home + filters + four
 // EQ bands + comp + gate + a makeup/emphasis page + a hysteresis page.
-constexpr int     kUf1CsTypePageCount[8] = { 8, 9, 9, 8, 2, 9, 2, 10 };  // …1=4K B(9p), 4=BC(2p), 5=4K G(9p), 6=L-BC(2p), 7=32C(10p)
+constexpr int     kUf1CsTypePageCount[8] = { 8, 10, 10, 8, 2, 10, 2, 10 };  // …1=4K B(10p), 2=4K E(10p), 4=BC(2p), 5=4K G(10p), 6=L-BC(2p), 7=32C(10p)
 constexpr int     kUf1CsTypeCount = 8;
 std::atomic<int>  g_uf1CsPage {0};      // active page (arrows page it; 0..count-1 per type)
 // Strip type currently under the channel V-Pots (uf1CsPluginType_), or -1 = none.
@@ -27762,7 +27765,7 @@ constexpr Uf1CsPage kUf1CsVPots[8][10] = {
         { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {"Compressor Release","Release"}, {} },
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {"Gate Hold","Hold"} },
         { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
-        { {}, {}, {}, {} },   // page 10 (32C only)
+        { {}, {}, {}, {} },   // page 10: the 4K strips' EXPANDER page has no V-Pots (cap133/135/136); unreachable for 2/8-page types
     },
     { // 1 — 4K B
         { {"Width","Width"}, {"Mic","Mic"}, {"Output Trim","Out Trim",true}, {"Compressor Mix","Comp Mix"} },
@@ -27774,7 +27777,7 @@ constexpr Uf1CsPage kUf1CsVPots[8][10] = {
         { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {}, {"Compressor Release","Release"} },   // Release on V-Pot 4: cap133/135/136
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {} },  // 4K B has no Gate Hold
         { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
-        { {}, {}, {}, {} },   // page 10 (32C only)
+        { {}, {}, {}, {} },   // page 10: the 4K strips' EXPANDER page has no V-Pots (cap133/135/136); unreachable for 2/8-page types
     },
     { // 2 — 4K E
         { {"Width","Width"}, {"Mic","Mic"}, {"Output Trim","Out Trim",true}, {"Compressor Mix","Mix"} },
@@ -27786,7 +27789,7 @@ constexpr Uf1CsPage kUf1CsVPots[8][10] = {
         { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {}, {"Compressor Release","Release"} },   // Release on V-Pot 4: cap133/135/136
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {} },  // 4K E has no Gate Hold
         { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
-        { {}, {}, {}, {} },   // page 10 (32C only)
+        { {}, {}, {}, {} },   // page 10: the 4K strips' EXPANDER page has no V-Pots (cap133/135/136); unreachable for 2/8-page types
     },
     { // 3 — 360 Link (param names are the wrapper's shorter "Comp …" forms)
         { {"Width","Width"}, {"Saturation Amount","Sat Amt"}, {"Output Trim","Out Trim",true}, {"Comp Mix","Comp Mix"} },
@@ -27798,7 +27801,7 @@ constexpr Uf1CsPage kUf1CsVPots[8][10] = {
         { {"Comp Ratio","Ratio"}, {"Comp Threshold","Thresh"}, {"Comp Release","Release"}, {} },
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {"Gate Hold","Hold"} },
         { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
-        { {}, {}, {}, {} },   // page 10 (32C only)
+        { {}, {}, {}, {} },   // page 10: the 4K strips' EXPANDER page has no V-Pots (cap133/135/136); unreachable for 2/8-page types
     },
     { // 4 — SSL Bus Compressor 2 (Rea-Sixty extra; standalone plug-in, NOT in the
       //     UF1 manual). Names verified vs the BC2 dump docs/ssl-native-params/
@@ -27815,7 +27818,7 @@ constexpr Uf1CsPage kUf1CsVPots[8][10] = {
         { {}, {}, {}, {} },
         { {}, {}, {}, {} },
         { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
-        { {}, {}, {}, {} },   // page 10 (32C only)
+        { {}, {}, {}, {} },   // page 10: the 4K strips' EXPANDER page has no V-Pots (cap133/135/136); unreachable for 2/8-page types
     },
     { // 5 — SSL 4K G (Rea-Sixty extra; NOT in the p188 tables). Layout = 4K E (both
       //     4000-series) — every param name verified vs the 4K G dump; exact-first
@@ -27830,7 +27833,7 @@ constexpr Uf1CsPage kUf1CsVPots[8][10] = {
         { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {}, {"Compressor Release","Release"} },   // Release on V-Pot 4: cap133/135/136
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {} },
         { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
-        { {}, {}, {}, {} },   // page 10 (32C only)
+        { {}, {}, {}, {} },   // page 10: the 4K strips' EXPANDER page has no V-Pots (cap133/135/136); unreachable for 2/8-page types
     },
     { // 6 — SSL 360 Link Bus Compressor ("L-BC"). Same BC semantics as BC 2 but the
       //     360-Link wrapper NAMES them "MIX" / "S/C HPF" (not BC 2's "Dry/Wet" /
@@ -27846,7 +27849,7 @@ constexpr Uf1CsPage kUf1CsVPots[8][10] = {
         { {}, {}, {}, {} },
         { {}, {}, {}, {} },
         { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
-        { {}, {}, {}, {} },   // page 10 (32C only)
+        { {}, {}, {}, {} },   // page 10: the 4K strips' EXPANDER page has no V-Pots (cap133/135/136); unreachable for 2/8-page types
     },
     { // 7 — Harrison 32Classic Channel Strip v2  ⇨ LAYOUT = SSL 360 2.1.12, MEASURED page
       //     by page on the UF1 (cap134, 2026-09-11). Every param name is exact in
@@ -27920,7 +27923,7 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[8][10] = {
         { {"Compressor Fast Attack","FAST ATTACK"}, {"Compressor Peak","PEAK"}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYNAMICS"} },
         { {"Gate Expander","EXPAND"}, {"Gate Attack","FAST ATTACK"}, {nullptr,""}, {"Dynamics In","DYNAMICS"} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 9 (unreachable: 8-page type)
-        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (32C only)
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (unreachable for this type)
     },
     { // 1 — 4K B  ⇨ LAYOUT = SSL 360 2.1.12, MEASURED (cap136, 2026-09-11): the 4K E
       //     pages without EQ COLOUR (the B has none) and without the compressor's
@@ -27936,14 +27939,15 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[8][10] = {
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {"Dynamics In","DYN"} },
         { {nullptr,""}, {"Gate Expander","EXPANDER"}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYN"} },
         { {"Compressor Auto Make-up","AUTO MAKEUP"}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
-        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (32C only)
+        { {"Gate Expander","EXPANDER"}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10, one ► past AUTO MAKEUP (cap133/135/136); the only Expander param on each 4K
     },
     { // 2 — 4K E  ⇨ LAYOUT = SSL 360 2.1.12, MEASURED page by page (cap133, 2026-09-11).
       //     Frank 2026-09-11: "diese param-reihenfolge für unsere version übernehmen".
       //     Against the p188 table this moves S/C LISTEN off page 1 onto the gate
       //     page, puts FILTERS (the "Filters In" toggle) on page 1, orders the gate
       //     page FAST ATTACK / EXPANDER / S/C LISTEN / DYN, shows EQ COLOUR + EQ on
-      //     every EQ page, and adds a ninth page whose only key is AUTO MAKEUP.
+      //     every EQ page, and adds a ninth page whose only key is AUTO MAKEUP and a
+      //     tenth whose only key is EXPANDER (one ► further, cap133 t=37.07).
       //     Every param name is exact in docs/ssl-native-params/VST3__4K_E.md.
         { {"Polarity","\xd8"}, {"Pre","PRE"}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },
         { {"Filters In","FILTERS"}, {nullptr,""}, {nullptr,"HQ MODE",Uf1CsSkAct::HQ}, {nullptr,"A/B",Uf1CsSkAct::AB} },
@@ -27954,7 +27958,7 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[8][10] = {
         { {"Compressor Fast Attack","FAST ATTACK"}, {nullptr,""}, {nullptr,""}, {"Dynamics In","DYN"} },
         { {"Gate Fast Attack","FAST ATTACK"}, {"Gate Expander","EXPANDER"}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYN"} },
         { {"Compressor Auto Make-up","AUTO MAKEUP"}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
-        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (32C only)
+        { {"Gate Expander","EXPANDER"}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10, one ► past AUTO MAKEUP (cap133/135/136); the only Expander param on each 4K
     },
     { // 3 — 360 Link  (params: SSL 360 Link wrapper; "Phase"/"Listen"; no solo-safe)
         { {"Phase","\xd8"}, {"Saturation In","SATURATION IN"}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },
@@ -27966,7 +27970,7 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[8][10] = {
         { {"Comp Fast Attack","CMP FST ATTK"}, {"Comp Peak","COMP PEAK"}, {"Listen","LISTEN"}, {"Dynamics In","DYNAMICS IN"} },
         { {"Gate Expander","GTE EXPANDR"}, {"Gate Attack","GATE ATTACK"}, {nullptr,""}, {"Dynamics In","DYNAMICS IN"} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 9 (unreachable: 8-page type)
-        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (32C only)
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (unreachable for this type)
     },
     { // 4 — SSL Bus Compressor 2 (Rea-Sixty extra). Toggles verified vs the BC2
       //     dump: "External S/C" (idx 0, 2-state), "Oversampling" (idx 1, OFF/2x/4x
@@ -27981,7 +27985,7 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[8][10] = {
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 9 (unreachable: 8-page type)
-        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (32C only)
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (unreachable for this type)
     },
     { // 5 — SSL 4K G  ⇨ LAYOUT = SSL 360 2.1.12, MEASURED (cap135, 2026-09-11): the
       //     4K E's pages plus IMP IN on page 2 (params "Impedance In" 7, "Impedance"
@@ -27997,7 +28001,7 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[8][10] = {
         { {"Compressor Fast Attack","FAST ATTACK"}, {nullptr,""}, {nullptr,""}, {"Dynamics In","DYN"} },
         { {"Gate Fast Attack","FAST ATTACK"}, {"Gate Expander","EXPANDER"}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYN"} },
         { {"Compressor Auto Make-up","AUTO MAKEUP"}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
-        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (32C only)
+        { {"Gate Expander","EXPANDER"}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10, one ► past AUTO MAKEUP (cap133/135/136); the only Expander param on each 4K
     },
     { // 6 — L-BC (360 Link Bus Compressor). Blank soft-keys: the wrapper exposes no
       //     External-S/C / Oversampling / HQ / A-B params (verified vs the dump), so
@@ -28011,7 +28015,7 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[8][10] = {
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 9 (unreachable: 8-page type)
-        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (32C only)
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (unreachable for this type)
     },
     { // 7 — Harrison 32Classic Channel Strip v2  ⇨ LAYOUT = SSL 360 2.1.12, MEASURED
       //     (cap134). Labels are SSL's own strings from the wire. HQ MODE is a REAL

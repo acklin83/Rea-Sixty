@@ -8,14 +8,16 @@ Pages as sent (analysis/…/pages.py): Home `Width/Mic/Out Trim/Mix`; p2 `In
 Trim / Impedance / High Pass / Low Pass` with `FILTERS / IMP IN / HQ MODE / A/B`;
 p3 LF, p4 LMF, p5 HMF, p6 HF with `EQ COLOUR / EQ` on keys 3-4; p7 comp
 `FAST ATTACK / – / – / DYN`; p8 gate `FAST ATTACK / EXPANDER / S/C LISTEN / DYN`;
-p9 `AUTO MAKEUP`, no V-Pots — the 4K E layout (cap133) plus Impedance.
+p9 `AUTO MAKEUP`, no V-Pots; p10 `EXPANDER`, no V-Pots — the 4K E layout
+(cap133) plus Impedance.
 
 **Soft key 1 on the LF and HF pages depends on the EQ colour:** with the EQ
 COLOUR LED lit (0x0102 = 0x0c) it reads `LF BELL` / `HF BELL`; with it unlit
 (0x08) it reads `LMF DIV3` / `HMF X3` — the G-series EQ's ÷3 / ×3 switches.
 Observed three times each at the moment the colour changed (t=20.6/24.7/25.0
-and 36.6/38.2/38.5). On page 9 the single key read `AUTO MAKEUP` on entry and
-`EXPANDER` once mid-page (also seen on the 4K E, cap133 t=37.07) — what
-triggered that swap is not established.
+and 36.6/38.2/38.5). One ► past page 9 there is a tenth page whose only key is
+`EXPANDER` (► down t=55.66, label 55.70); the key toggles LED bit 0 of 0x0102
+(56.53 and 56.87). First read as a label swap on page 9, because the run
+reached that page exactly once (same on cap133 and cap136).
 
 **Decode:** as cap133.
