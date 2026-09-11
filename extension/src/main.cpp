@@ -583,6 +583,11 @@ std::atomic<bool>     g_uf1ScrubHeld{false};
 // store only), read by the main-thread painter. Overview = the layout the
 // firmware lands in (cap75/cap76 0x0100 = 04 00).
 std::atomic<int>      g_uf1MeterScreen{0};
+// The instance the meter view reads is a Meter Pro BY NAME (set by the meter
+// painter, main thread). Loudness is offered on this OR on the stream's own
+// evidence: a whole session had four instances send DataTypes 1-10 only, the
+// Pro among them never counted as one, and Loudness was gone (2026-09-11).
+std::atomic<bool>     g_uf1MeterProByName{false};
 
 // How many screens the selector cycles through for a PLAIN Meter — the first three
 // of kUf1MeterScreens (Overview/Analogue/RTA), the set the UF1 User Guide Rev4.0
@@ -24649,9 +24654,10 @@ void onUf1Event(const uf1::InputEvent& ev)
                 // — a plain Meter never streams the Loudness DataTypes, so there is
                 // nothing to show. meterProAvailable() is thread-safe (read from this
                 // input worker). Plain Meter → 3 screens; Meter Pro → 4.
-                const int cycle = sslcore::meterProAvailable()
-                                      ? kUf1MeterScreenCycle + 1 : kUf1MeterScreenCycle;
-                g_uf1MeterScreen.store((g_uf1MeterScreen.load() + 1) % cycle);
+                const bool proAvail = sslcore::meterProAvailable() || g_uf1MeterProByName.load();
+                const int cycle = proAvail ? kUf1MeterScreenCycle + 1 : kUf1MeterScreenCycle;
+                const int was = g_uf1MeterScreen.load();
+                g_uf1MeterScreen.store((was + 1) % cycle);
                 g_uf1MeterPage.store(0);   // new screen → back to its first V-Pot page
                 break;
             }
@@ -31302,8 +31308,16 @@ void uf1PaintChannel_()
     // alive, so a plug-in that stops streaming for a moment does not move the
     // screen out from under Frank. The soft-key handler is the other writer of
     // this atomic — a press landing in the same tick just cycles on from here.
+    if (meterView) {
+        bool proByName = false;
+        MediaTrack* mtr = nullptr; int mfx = -1; char nm[256] = {0};
+        if (uf1PinnedMeterTrackFx_(mtr, mfx) && uf8::fxIdentityName(mtr, mfx, nm, sizeof(nm)))
+            proByName = std::strstr(nm, "Meter Pro") != nullptr;
+        g_uf1MeterProByName.store(proByName);
+    }
     if (meterView && g_uf1MeterScreen.load() == 3 &&
-        sslcore::meterInstanceCount() > 0 && !sslcore::meterProAvailable())
+        sslcore::meterInstanceCount() > 0 && !sslcore::meterProAvailable()
+        && !g_uf1MeterProByName.load())
         g_uf1MeterScreen.store(0);
     const int  meterScreen   = g_uf1MeterScreen.load();
     const bool screenChanged = meterView && (meterScreen != sMeterScreen);
