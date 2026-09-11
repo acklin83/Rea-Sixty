@@ -1148,6 +1148,27 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                     }
                     for (auto& u : ups) {
                         if (u.dataType < 0 || u.dataType >= int(sslmeter::DataType::Count)) continue;
+                        // ⛔ A MESSAGE OF NOTHING BUT NaN IS NOT A VALUE.
+                        // /tmp/ssl360.pcap (this Mac, 10.09.): everything on our port
+                        // 16010 comes from ONE source port, 54613, yet under three
+                        // PluginTypes: 9 (Meter Pro, 12 floats, dt 1..27), 4 (SSL
+                        // Meter, 2 floats, dt 1..6) and 3, which sends dt=1 and dt=2
+                        // with 43 floats, every one NaN, at ~20 Hz: 1821 of them next
+                        // to 1753 real dt=1 messages, each 3 to 11 ms AFTER a real one.
+                        // Keyed by source port they all land in this one Instance, and
+                        // the chunk path below (chunkSize 43, maxCount 1) turned the
+                        // NaN message into a one-element [NaN] that sat in the Meter
+                        // Pro's dt=1 and dt=2 slots for the 10 to 20 ms until the next
+                        // real message. A paint in that window read no needle value
+                        // (cur.size() < 2), fell to the fallback and sent an empty
+                        // readout row (Frank 2026-09-11: "immer noch zu stockig").
+                        // Silence on this wire is -inf, never NaN, so a message without
+                        // a single non-NaN value carries nothing: leave the slot alone.
+                        if (!u.current.empty()) {
+                            bool anyValue = false;
+                            for (float v : u.current) if (!std::isnan(v)) { anyValue = true; break; }
+                            if (!anyValue) continue;
+                        }
                         classify_(inst, u.dataType, u.current.size());
                         Slot& s = inst.meter[u.dataType];
                         bool completed = false;   // this message finished an array
