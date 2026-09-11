@@ -31267,6 +31267,113 @@ static void uf1PaintEmptyChannel_()
     g_uf1_dev->send(uf1::buildScreen(0x0122, z));
 }
 
+// Time/position (0x0119), the 7-segment field on the main LCD. Painted from
+// BOTH views: SSL 360 2.1.12 keeps it running in the Meter view (cap130,
+// Analogue, 1010 frames at ~12 Hz while the transport played; constant while it
+// stood); the old build had "Meter view NEVER writes 0x0119" from a capture of
+// an older 360. Not on the Overview screen: cap101 (Overview) carries no 0x0119
+// and that screen's stream belongs to the pacer's image cycle.
+static void uf1PaintTimeField_(bool changed)
+{
+    // Mirror REAPER's transport display, exactly as SSL
+    // 360 drives the UF1's Channel view (decoded 2026-07-24). Read the playhead
+    // while running, else the edit cursor when stopped (mirrors the UF8 nav-row
+    // path below). Format via format_timestr_pos with the user-cycled g_uf1TcMode
+    // (Time / Measures / Samples, cycled by the 360 button on the worker),
+    // then encode into the 11-byte 7-segment field. Send-on-change: only when the 11
+    // bytes differ (forced on view/gen change via `changed`), so a stable stopped
+    // string never spams. Meter view NEVER writes 0x0119 (kept in the meter branch).
+    {
+        const int    ps   = GetPlayState();
+        const double pos  = (ps & 1) ? GetPlayPosition() : GetCursorPosition();
+        const int    mode = g_uf1TcMode.load();
+        char buf[64];
+        format_timestr_pos(pos, buf, sizeof(buf), mode);
+
+        static std::array<uint8_t, 11> sTc{};
+        static int sTcMode = INT_MIN;
+        const bool modeChanged = (mode != sTcMode);
+        // The field NAMES ITS OWN FORMAT when the format changes. Triggered from
+        // this edge and not from uf1_time_display_step, because the builtin runs
+        // on the USB worker and the flash buffer is main-thread state. Skipped on
+        // the session's first paint (sTcMode == INT_MIN) — nothing changed then,
+        // we simply had not looked yet.
+        if (modeChanged && sTcMode != INT_MIN) {
+            // The three names the builtin itself uses — Bars / Time / Samples
+            // (Frank 2026-08-22: "sollte es nicht time anstatt hours heissen").
+            // The label has to match what the format is CALLED; my earlier
+            // "HOURS" was typography talking over naming. It does cost the two
+            // weakest glyphs in the font (t is the lower-case shape, M is one of
+            // the impossible four) — if either reads badly on the panel, the fix
+            // is a better glyph, not a different word.
+            uf1FlashTimecode_(mode == 2 ? "BARS" : mode == 4 ? "SAMPLES" : "TIME",
+                              1200);
+        }
+        // ⇨ AND THE SOFT-KEY BANK NAMES ITSELF when you switch to it (Frank
+        // 2026-08-26), on by default. Same edge shape as the format flash above
+        // and for the same reason: the bank step runs on the USB worker while the
+        // flash buffer is main-thread state. Skipped on the session's first paint
+        // (sBank == INT_MIN) — nothing changed then, we simply had not looked yet.
+        // ⇨ HOLDING SHIFT IS A BANK SWITCH TOO ("und für bank-wechsel mit shift
+        // auch anzeigen"), because a modifier set IS a full bank
+        // ([[softkey-modifier-sets]]) — so the set is part of the trigger, not
+        // just of the lookup.
+        // ★ And the guard against the noise that costs is the ANNOUNCEMENT ITSELF,
+        // not the gesture: a Shift set with no bank of its own takes Plain's, so
+        // its name is Plain's name, and blinking the same word again on every
+        // press of a key you hold constantly would be pure noise. Announce when
+        // the announcement would differ, and the no-op case falls away on its own.
+        {
+            const int bank = g_uf1SoftBank.load();
+            int mset = static_cast<int>(uf8::bindings::bankModifierSnapshot());
+            if (mset < 0 || mset >= uf8::bindings::kSoftKeyModifierSets) mset = 0;
+            static int         sBank = INT_MIN, sMset = -1;
+            static std::string sAnnounced;
+            // ⛔ THE BANKS ARE THE DAW VIEW'S, SO THE ANNOUNCEMENT IS TOO.
+            // This block ran in every channel view, so holding SHIFT in the
+            // Sends view flashed the name of the DAW bank's Shift set — a bank
+            // that is not even on the keys there, since Sends gives the four
+            // soft-keys to the send modes (Frank 2026-09-03: "shift in der sends
+            // view zeigt immer noch den shift-name von der bank in DAW view").
+            // Outside DAW the state is still tracked, silently, so coming back
+            // does not fire a stale announcement for a change you never saw.
+            const bool banksLive = (g_uf1ChannelSubMode.load() == 1);
+            if (bank != sBank || mset != sMset) {
+                const bool first = (sBank == INT_MIN);
+                sBank = bank; sMset = mset;
+                std::string nm = uf1BankDisplayName_(bank, mset);
+                if (banksLive && !first && nm != sAnnounced
+                    && g_uf1BankNameFlash.load())
+                    uf1FlashTimecode_(nm, 1200);
+                sAnnounced = std::move(nm);
+            }
+        }
+        // A flash owns the field until it expires; the clock then repaints itself
+        // because the encoded bytes differ from the flash pattern still in sTc.
+        std::array<uint8_t, 11> tc;
+        if (nowMs_() < g_uf1TcFlashUntilMs)
+            uf1EncodeSeg7Text_(g_uf1TcFlashText.c_str(), tc.data());
+        else
+            uf1EncodeTimecode_(buf, tc.data());
+
+        if (changed || modeChanged || tc != sTc) {
+            // Persist the format the moment it actually changes (not on the first
+            // paint of the session — sTcMode == INT_MIN then). SetExtState is a
+            // REAPER API, so this stays on the main thread; the worker only stored
+            // the atomic. Loaded at startup next to nav_lower_row.
+            if (modeChanged && sTcMode != INT_MIN) {
+                char mb[8];
+                snprintf(mb, sizeof(mb), "%d", mode);
+                SetExtState("rea_sixty", "uf1_tc_mode", mb, true);
+            }
+            sTc = tc;
+            sTcMode = mode;
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kTimecode, tc));
+        }
+    }
+
+}
+
 void uf1PaintChannel_()
 {
     Uf1PaintTimer_ paintTimer_;
@@ -32187,6 +32294,9 @@ void uf1PaintChannel_()
     }
     if (meterView) {
         uf1PaintMeter_(tr, changed);
+        // The time field keeps running here too, as under SSL 360 2.1.12 (cap130,
+        // Analogue): every screen but the Overview, whose stream is the pacer's.
+        if (g_uf1MeterScreen.load() != 0) uf1PaintTimeField_(changed);
     } else {
         g_uf1SkipNotMeter.fetch_add(1, std::memory_order_relaxed);
         // The list opens and closes with MODE or SCRUB (uf1SetEncoderList_ /
@@ -32287,102 +32397,7 @@ void uf1PaintChannel_()
         g_uf1_dev->send(uf1::buildScreen(addr, p));
     };
 
-    // Time/position (0x0119) — mirror REAPER's transport display, exactly as SSL
-    // 360 drives the UF1's Channel view (decoded 2026-07-24). Read the playhead
-    // while running, else the edit cursor when stopped (mirrors the UF8 nav-row
-    // path below). Format via format_timestr_pos with the user-cycled g_uf1TcMode
-    // (Time / Measures / Samples, cycled by the 360 button on the worker),
-    // then encode into the 11-byte 7-segment field. Send-on-change: only when the 11
-    // bytes differ (forced on view/gen change via `changed`), so a stable stopped
-    // string never spams. Meter view NEVER writes 0x0119 (kept in the meter branch).
-    {
-        const int    ps   = GetPlayState();
-        const double pos  = (ps & 1) ? GetPlayPosition() : GetCursorPosition();
-        const int    mode = g_uf1TcMode.load();
-        char buf[64];
-        format_timestr_pos(pos, buf, sizeof(buf), mode);
-
-        static std::array<uint8_t, 11> sTc{};
-        static int sTcMode = INT_MIN;
-        const bool modeChanged = (mode != sTcMode);
-        // The field NAMES ITS OWN FORMAT when the format changes. Triggered from
-        // this edge and not from uf1_time_display_step, because the builtin runs
-        // on the USB worker and the flash buffer is main-thread state. Skipped on
-        // the session's first paint (sTcMode == INT_MIN) — nothing changed then,
-        // we simply had not looked yet.
-        if (modeChanged && sTcMode != INT_MIN) {
-            // The three names the builtin itself uses — Bars / Time / Samples
-            // (Frank 2026-08-22: "sollte es nicht time anstatt hours heissen").
-            // The label has to match what the format is CALLED; my earlier
-            // "HOURS" was typography talking over naming. It does cost the two
-            // weakest glyphs in the font (t is the lower-case shape, M is one of
-            // the impossible four) — if either reads badly on the panel, the fix
-            // is a better glyph, not a different word.
-            uf1FlashTimecode_(mode == 2 ? "BARS" : mode == 4 ? "SAMPLES" : "TIME",
-                              1200);
-        }
-        // ⇨ AND THE SOFT-KEY BANK NAMES ITSELF when you switch to it (Frank
-        // 2026-08-26), on by default. Same edge shape as the format flash above
-        // and for the same reason: the bank step runs on the USB worker while the
-        // flash buffer is main-thread state. Skipped on the session's first paint
-        // (sBank == INT_MIN) — nothing changed then, we simply had not looked yet.
-        // ⇨ HOLDING SHIFT IS A BANK SWITCH TOO ("und für bank-wechsel mit shift
-        // auch anzeigen"), because a modifier set IS a full bank
-        // ([[softkey-modifier-sets]]) — so the set is part of the trigger, not
-        // just of the lookup.
-        // ★ And the guard against the noise that costs is the ANNOUNCEMENT ITSELF,
-        // not the gesture: a Shift set with no bank of its own takes Plain's, so
-        // its name is Plain's name, and blinking the same word again on every
-        // press of a key you hold constantly would be pure noise. Announce when
-        // the announcement would differ, and the no-op case falls away on its own.
-        {
-            const int bank = g_uf1SoftBank.load();
-            int mset = static_cast<int>(uf8::bindings::bankModifierSnapshot());
-            if (mset < 0 || mset >= uf8::bindings::kSoftKeyModifierSets) mset = 0;
-            static int         sBank = INT_MIN, sMset = -1;
-            static std::string sAnnounced;
-            // ⛔ THE BANKS ARE THE DAW VIEW'S, SO THE ANNOUNCEMENT IS TOO.
-            // This block ran in every channel view, so holding SHIFT in the
-            // Sends view flashed the name of the DAW bank's Shift set — a bank
-            // that is not even on the keys there, since Sends gives the four
-            // soft-keys to the send modes (Frank 2026-09-03: "shift in der sends
-            // view zeigt immer noch den shift-name von der bank in DAW view").
-            // Outside DAW the state is still tracked, silently, so coming back
-            // does not fire a stale announcement for a change you never saw.
-            const bool banksLive = (g_uf1ChannelSubMode.load() == 1);
-            if (bank != sBank || mset != sMset) {
-                const bool first = (sBank == INT_MIN);
-                sBank = bank; sMset = mset;
-                std::string nm = uf1BankDisplayName_(bank, mset);
-                if (banksLive && !first && nm != sAnnounced
-                    && g_uf1BankNameFlash.load())
-                    uf1FlashTimecode_(nm, 1200);
-                sAnnounced = std::move(nm);
-            }
-        }
-        // A flash owns the field until it expires; the clock then repaints itself
-        // because the encoded bytes differ from the flash pattern still in sTc.
-        std::array<uint8_t, 11> tc;
-        if (nowMs_() < g_uf1TcFlashUntilMs)
-            uf1EncodeSeg7Text_(g_uf1TcFlashText.c_str(), tc.data());
-        else
-            uf1EncodeTimecode_(buf, tc.data());
-
-        if (changed || modeChanged || tc != sTc) {
-            // Persist the format the moment it actually changes (not on the first
-            // paint of the session — sTcMode == INT_MIN then). SetExtState is a
-            // REAPER API, so this stays on the main thread; the worker only stored
-            // the atomic. Loaded at startup next to nav_lower_row.
-            if (modeChanged && sTcMode != INT_MIN) {
-                char mb[8];
-                snprintf(mb, sizeof(mb), "%d", mode);
-                SetExtState("rea_sixty", "uf1_tc_mode", mb, true);
-            }
-            sTc = tc;
-            sTcMode = mode;
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kTimecode, tc));
-        }
-    }
+    uf1PaintTimeField_(changed);
 
     // (Track colour + Solo/Cut LEDs moved to uf1PaintChannelStrip_ — painted in
     //  BOTH views so the small-LCD zone follows the channel selection.)
