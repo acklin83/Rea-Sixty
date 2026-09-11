@@ -24278,7 +24278,17 @@ void onUf1Event(const uf1::InputEvent& ev)
                 // (shared with the uf1_view_* builtins + the REASIXTY_UF1_MODE_*
                 // actions) — do not re-inline them here.
                 uf1SetViewMode_(ev.id - uf1::btn::kDisplaySoft1);
-                g_uf1ModeMenu.store(false);
+                // ⇨ THE MENU STAYS OPEN UNTIL MODE IS LET GO. It used to close
+                // here, on select — and that left the picker with no way to show
+                // what you had just picked: the overlay paints the active cell
+                // from g_uf1ChannelSubMode, but it only paints while the menu is
+                // open, so closing in the same handler meant the new selection
+                // was never drawn. The next MODE hold showed it, which reads as
+                // the LED lagging one gesture behind (Frank 2026-09-10: "die LED
+                // für Mode auswahl gibt kein immediate feedback wenn ich sie
+                // drücke - erst wenn ich wieder über mode wechsle wird die aktive
+                // korrekt angezeigt"). MODE's own release already closes it
+                // (kMode stores ev.pressed), so nothing else has to.
                 break;
             }
             // PRESETS browser: V-Pot4 PUSH = "Select" → load the highlighted preset
@@ -30689,6 +30699,24 @@ void uf1PaintChannel_()
     const bool meterView   = g_uf1MeterView.load();
     const bool viewChanged = (meterView != sMeterView);
     sMeterView = meterView;
+    // ⇨ AND THE CHANNEL SUB-MODE IS A VIEW CHANGE TOO. Plugin, DAW and Sends all
+    // run with meterView == false, so `viewChanged` — the only gate that asked —
+    // was blind to every switch between them: the STATE flipped (banner, soft-key
+    // banks, the builtins' LED state) while the large LCD kept the previous
+    // sub-mode's content until something unrelated repainted it. In practice that
+    // was `tr != sTr`, which is why the display only caught up once a channel was
+    // selected by hand (Frank 2026-09-10: "muss einen kanal manuell anwählen bevor
+    // uf1 etwas anzeigt"). Leaving the Meter view always worked, because there
+    // meterView itself moves — which is exactly what hid this.
+    // ⛔ `changed`, NOT `layoutChanged`: all three sub-modes share ONE LCD plane
+    // (0x0100 = {0x03,0x00}). Re-asserting the plane here would slam the small-LCD
+    // meters to their idle state on every switch — the flicker the two gates were
+    // split apart to avoid ([[uf1-mode-edge-must-not-relayout]]). The content and
+    // the labels hang off `changed`, and that is all a sub-mode switch needs.
+    static int sSubMode    = -1;
+    const int  channelSub  = g_uf1ChannelSubMode.load();
+    const bool subModeChanged = !meterView && (channelSub != sSubMode);
+    sSubMode = channelSub;
     // The Meter Screen Selector soft-key only moves an atomic; the repaint that
     // actually switches the screen happens here. A screen change re-sends that
     // screen's setup burst, which is what makes the device swap layout.
@@ -30788,8 +30816,26 @@ void uf1PaintChannel_()
     // burst, and the painter's `force`. Measured 2026-08-29: the stall was
     // detected (onTimer GAP 1091 ms), the plane went out, and the surface stayed
     // dead anyway. Half of a fix is not a fix.
+    // ⇨ AND A PROJECT SWITCH IS A LOST PLANE TOO. Every change-detect static in
+    // this painter still holds the project that just closed — sTr above all,
+    // a MediaTrack* the new project will not match except by accident. So
+    // nothing tripped either gate after a load and the UF1 stayed blank until a
+    // track was selected by hand (Frank 2026-09-10: "nach projekt load muss ich
+    // einen track selecten bevor irgendwas auf dem uf1 erscheint"). Raised
+    // rather than handled inline because planeLost is exactly the "do what a
+    // track change does, on BOTH gates" signal — see its note just above.
+    // Main thread (onTimer), so EnumProjects is legal here.
+    {
+        static ReaProject* sPaintProj = nullptr;
+        ReaProject* const nowProj = EnumProjects(-1, nullptr, 0);
+        if (nowProj != sPaintProj) {
+            sPaintProj = nowProj;
+            g_uf1PlaneLost.store(true, std::memory_order_relaxed);
+        }
+    }
     const bool planeLost = g_uf1PlaneLost.exchange(false, std::memory_order_relaxed);
-    const bool changed = (tr != sTr) || viewChanged || screenChanged || menuEdge
+    const bool changed = (tr != sTr) || viewChanged || subModeChanged
+                       || screenChanged || menuEdge
                        || modeFieldChanged || identChanged || shiftChanged
                        || modChanged || presetClosed || instanceChanged || planeLost;
     // Bus-Comp GR meter on the four display soft-key LEDs (Settings → Devices →
