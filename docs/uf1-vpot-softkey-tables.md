@@ -37,7 +37,27 @@ param-name strings still need confirming per plugin during the build.
 | 7 | | | S/C LISTEN | DYNAMICS | Ratio | Threshold | Release | |
 | 8 | EXPAND | | | DYNAMICS | Range | Threshold | Release | |
 
-## 4K E
+## 4K E — SSL 360 2.1.12, MEASURED (cap133, 2026-09-11)
+This is what 360 2.1.12 sends to the UF1 with a 4K E focused, page by page
+(`analysis/…/pages.py` over cap133), and what `kUf1CsSoftKeys[2]` /
+`kUf1CsVPots[2]` implement since 2026-09-11 (Frank: "diese param-reihenfolge
+für unsere version übernehmen"). Home is page 1 of ours; SSL numbers the eight
+after it. The 4K G row copies this layout (same params) until it is captured.
+
+| Page | Soft Key 1 | Soft Key 2 | Soft Key 3 | Soft Key 4 | V-Pot 1 | V-Pot 2 | V-Pot 3 | V-Pot 4 |
+|---|---|---|---|---|---|---|---|---|
+| 1 | Ø | PRE | SOLO SAFE | PLUG-IN | Width | Mic | Out Trim | Mix |
+| 2 | FILTERS | | HQ MODE | A/B | In Trim | | High Pass | Low Pass |
+| 3 | LF BELL | | EQ COLOUR | EQ | LF Gain | LF Freq | | |
+| 4 | | | EQ COLOUR | EQ | LMF Gain | LMF Freq | LMF Q | |
+| 5 | | | EQ COLOUR | EQ | HMF Gain | HMF Freq | HMF Q | |
+| 6 | HF BELL | | EQ COLOUR | EQ | HF Gain | HF Freq | | |
+| 7 | FAST ATTACK | | | DYN | Ratio | Threshold | | Release |
+| 8 | FAST ATTACK (gate) | EXPANDER | S/C LISTEN | DYN | Range | Threshold | Release | |
+| 9 | AUTO MAKEUP | | | | | | | |
+
+The p188 (2.0.6-era) table it replaces, for the record:
+
 | Page | Soft Key 1 | Soft Key 2 | Soft Key 3 | Soft Key 4 | V-Pot 1 | V-Pot 2 | V-Pot 3 | V-Pot 4 |
 |---|---|---|---|---|---|---|---|---|
 | 1 | Ø | PRE | SOLO SAFE | PLUG-IN | Width | Mic | Out Trim | Mix |
