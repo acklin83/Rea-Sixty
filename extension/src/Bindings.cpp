@@ -7380,6 +7380,9 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "UF1. Flips the routing view between the track's SENDS and its "
       "RECEIVES. The window jumps back to the first group. Also on Shift "
       "plus 5-8." },
+    { "uf1_above_vpot_push",
+      "UF1. The push on the V-Pot above the fader: centres the pan, or resets "
+      "the parameter the pot is on to its default." },
     { "uf1_bank_select",
       "UF1. Engages one soft-key bank outright, param 1 to 10, instead of "
       "stepping towards it. Lights up while that bank is the one showing." },
@@ -8319,6 +8322,8 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "track_select_range", "Extend Sel" },
     { "tracks_arm_all", "Arm All Trks" },
     { "uc1_outgain_fader_toggle", "Out Gain" },
+    { "uf1_above_vpot_push", "UF1 VPotPush" },
+    { "uf1_bank_select", "UF1 Bank Sel" },
     { "uf1_bank_step", "UF1 Bank" },
     { "uf1_dyn_bank_page", "UF1 DynPage" },
     { "uf1_extender", "UF1 Extender" },
