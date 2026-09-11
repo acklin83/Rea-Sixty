@@ -2967,7 +2967,8 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
 
     // (20) Secondary transport — printed silk labels are the automation
     //      modes reached with (21) SHIFT + SEL. All 6 are user-bindable.
-    drawGroupLabelCentered(355, 556, "SECONDARY TRANSPORT  \xC2\xB7  +SHIFT = AUTOMATION");
+    //      No group caption over the row (Frank 2026-09-11: the
+    //      "SECONDARY TRANSPORT · +SHIFT = AUTOMATION" line is gone).
     struct SecBtn { float x; ButtonId id; const char* lbl; };
     const SecBtn sec[6] = {
         { 204, ButtonId::Uf1SecLeft,  "OFF"  },
