@@ -28073,7 +28073,7 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[8][10] = {
       //     because the chunk walker only knows SSL plug-ins. PRE is label-only too
       //     (SSL prints it on every strip's home page; the 32C has no Pre).
         { {"Polarity","\xd8"}, {"Saturator In","PRE"}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },   // PRE = Saturator In: the 32C declares SaturationIn/SaturationAmount on Core and "Mic" is the Drive (inferred, Frank 2026-09-11: "PRE macht nichts")
-        { {"EQ Filters In","FILTERS"}, {nullptr,""}, {"HQ","HQ MODE"}, {nullptr,"A/B"} },
+        { {"EQ Filters In","FILTERS"}, {nullptr,""}, {"HQ","HQ MODE"}, {nullptr,"A/B",Uf1CsSkAct::AB} },   // A/B = StateASelected in the chunk, as on the 4K strips
         { {"Low Bell Mode","LOW BELL MODE"}, {nullptr,""}, {nullptr,""}, {"EQ Bands In","EQ"} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {"EQ Bands In","EQ"} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {"EQ Bands In","EQ"} },

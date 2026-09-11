@@ -207,8 +207,13 @@ size_t nextSslVstHead(const std::string& chunk, size_t from) {
         const size_t h = chunk.find(kVstPrefix, p);
         if (h == std::string::npos) return std::string::npos;
         const size_t nameStart = h + kVstPrefix.size();
+        // …and the Harrison 32C ("VST3: Harrison 32Classic Channel Strip …"),
+        // built on SSL's plug-in library: its binary carries the same
+        // SSL_PLUGIN_STATE / StateASelected / PARAM_NON_AUTO / HighQuality
+        // strings as the 4K E (checked 2026-09-11), so A/B patches it alike.
         if (chunk.compare(nameStart, 4, "SSL ") == 0 ||
-            chunk.compare(nameStart, 3, "4K ")  == 0)
+            chunk.compare(nameStart, 3, "4K ")  == 0 ||
+            chunk.compare(nameStart, 18, "Harrison 32Classic") == 0)
             return h;
         p = nameStart;   // not an SSL/4K block — keep looking
     }

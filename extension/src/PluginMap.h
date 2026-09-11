@@ -151,7 +151,7 @@ bool fxIsAcustica(void* track /*MediaTrack**/, int fx);
 // starts with "SSL " (Channel Strip 2 / 4K G / 360 Link / Bus Compressor) or with
 // "4K " (4K B / 4K E, whose names carry no "SSL" at all), or contains
 // "32Classic" (the Harrison 32C, a Core client built on SSL's library). The
-// chunk patcher (nextSslVstHead) has only the first two. A "VST3: "/"VST: "/
+// chunk patcher (nextSslVstHead) takes the same three. A "VST3: "/"VST: "/
 // "AU: " prefix is skipped first, so it works on both fxIdentityName spellings.
 bool fxIsSsl360(void* track /*MediaTrack**/, int fx);
 

@@ -315,6 +315,7 @@ private:
         int         vst3Param = -1;  // -1 = label only, nothing to read/adjust
         int         linkIdx   = -1;  // >=0 = SSL slot (enables usl knob-travel
                                      // + param-group broadcast); -1 = free param
+        int         special   = 0;   // 1 = A/B: the plug-in's state, not a param
     };
     // Resolve the active EXT FUNCS list for the focused CS plug-in. Empty when
     // a user-mapped CS plug-in has no curated entries (caller shows "(none)").
@@ -559,6 +560,16 @@ private:
     // plug-in's track colour so the bar follows the active edit (CS or
     // BC), not just the UC1-selected track.
     int  lastFocusedPalette_ = -1;
+    // Which plug-in the CS and BC sections were last painted for: track, map and
+    // FX index. A plug-in swapped in REAPER itself (Replace, drag, delete +
+    // insert) changes the map under the SAME track, which nothing else here
+    // notices; poll() compares these every tick (Frank 2026-09-11).
+    const void* paintedCsTrack_ = nullptr;
+    const void* paintedCsMap_   = nullptr;
+    int         paintedCsFx_    = -2;      // -2 = nothing painted yet
+    const void* paintedBcTrack_ = nullptr;
+    const void* paintedBcMap_   = nullptr;
+    int         paintedBcFx_    = -2;
     // Per-zone "last value-change" timestamp. SSL 360° fires a zone-
     // invalidate burst (precursor + LARGE triple + FF 66 01 <zone>) ~3s
     // after the user stops turning a CS/BC knob to release the LCD's

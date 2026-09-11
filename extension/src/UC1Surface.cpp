@@ -254,6 +254,51 @@ constexpr ExtFuncsEntry kExtFuncs[] = {
     { "CompMix",      "COMP MIX",  "Comp Mix"        },
 };
 
+// Harrison 32C: SSL 360 2.1.12's OWN list for this strip, MEASURED (cap137
+// t=70-85, 2026-09-11, Frank walked the whole menu on the UC1). Short and long
+// labels exactly as SSL sends them, in SSL's order; VST3 indices from the 32C
+// dump, and every value SSL showed matches that param's dump value. All 32
+// entries, like SSL. Six are not plug-in parameters: A/B flips the plug-in's
+// StateASelected (togglePluginAB, the 4K strips' A/B); PLUG-IN, RESET EQ /
+// RST COMP / RST GATE (360's section resets) and SOLO SAFE (SSL itself shows
+// "N/A") are listed without a function yet. HYST/KNEE reads Gate Hysteresis:
+// the capture ran with the expander off.
+struct ExtFuncsParam { const char* shortLabel; const char* longLabel; int vst3Param; int special = 0; };
+constexpr ExtFuncsParam kExtFuncs32c[] = {
+    { "PLUG-IN",   "PLUG-IN",            -1 },
+    { "COMP MIX",  "Mix",                55 },
+    { "PRE",       "Pre",                10 },   // Saturator In, as the UF1's PRE key
+    { "MIC",       "Mic",                11 },   // Saturator Drive
+    { "FILT IN",   "Filters",            49 },
+    { "RESET EQ",  "EQ RESET",           -1 },
+    { "EQ SOLO",   "Equalizer Solo",      5 },
+    { "EQ ONLY",   "Equalizer In",        4 },
+    { "RST COMP",  "COMP RESET",         -1 },
+    { "COMP SOLO", "Compressor Solo",     3 },
+    { "CMP ONLY",  "Compressor In",       2 },
+    { "COMP GAIN", "Compressor Makeup",  32 },
+    { "CMP EM IN", "Comp Emphasis In",   31 },
+    { "COMP EMPH", "Comp Emphasis Freq", 30 },
+    { "CM SC SRC", "Comp SC Source",     54 },
+    { "RST GATE",  "GATE RESET",         -1 },
+    { "GATE SOLO", "Gate Solo",           1 },
+    { "GATE ONLY", "Gate In",             0 },
+    { "GTSCFLIN",  "Gate SC Filter In",  22 },
+    { "GTSC FREQ", "GSFq",               21 },
+    { "HYST/KNEE", "Gate Hysteresis",    16 },
+    { "GT SC LST", "Gate SC Listen",     23 },
+    { "GT SC SRC", "Gate SC Source",     53 },
+    { "PAN",       "Pan",                62 },
+    { "WIDTH",     "Width",              59 },
+    { "OUT TRIM",  "Out Trim",            8 },
+    { "SOLO SAFE", "EXTENDED FUNCTIONS", -1 },   // SSL's header and "N/A" for this one
+    { "A/B",       "A/B",                -1, 1 },
+    { "HQ",        "HQ Mode",            63 },
+    { "WIDTH MD",  "Width Mode",         60 },
+    { "WIDTH FQ",  "Width Freq",         61 },
+    { "AUTO MKP",  "Auto Makeup",        56 },
+};
+
 // Label for the zone-0x03/0x05 readout based on which knob was touched.
 // Kept short here — the surface clips/pads to 22 chars before sending.
 // Matches the labels SSL 360° pushes in our captures (uc1_04 etc.).
@@ -865,6 +910,30 @@ int UC1Surface::poll()
         }
     }
 
+    // A plug-in swapped under the focused track or the BC anchor (REAPER's own
+    // Replace, a drag, a delete + insert) changes nothing this surface listened
+    // to: the track stays the same, and refresh() ran only on a focus change and
+    // on our own CS/BC switches. UF8 and UF1 re-resolve every tick, so they
+    // followed at once while the UC1 LCD kept the old strip (Frank 2026-09-11:
+    // "wieso merkt UC1 nicht SOFORT bei plugin-wechsel"). lookupBindingsOnTrack is
+    // uncached, so LEDs and GR already followed; the LCD is what needs this. A
+    // track change only updates the record: setFocusedTrack has repainted.
+    if (device_ && mode_ == Uc1Mode::Main) {
+        void* const csTrRaw = focusedTrack_;
+        void* const bcTrRaw = effectiveBcTrack_();
+        const UC1Bindings cb = csTrRaw ? lookupBindingsOnTrack(csTrRaw) : UC1Bindings{};
+        const UC1Bindings bb = bcTrRaw
+            ? ((bcTrRaw == csTrRaw) ? cb : lookupBindingsOnTrack(bcTrRaw))
+            : UC1Bindings{};
+        const bool sameTracks = (csTrRaw == paintedCsTrack_ && bcTrRaw == paintedBcTrack_);
+        const bool swapped = sameTracks && paintedCsFx_ != -2
+            && (cb.channelMap != paintedCsMap_ || cb.channelFxIdx != paintedCsFx_
+                || bb.busCompMap != paintedBcMap_ || bb.busCompFxIdx != paintedBcFx_);
+        paintedCsTrack_ = csTrRaw;  paintedCsMap_ = cb.channelMap;  paintedCsFx_ = cb.channelFxIdx;
+        paintedBcTrack_ = bcTrRaw;  paintedBcMap_ = bb.busCompMap;  paintedBcFx_ = bb.busCompFxIdx;
+        if (swapped) { invalidateCache(); refresh(); }
+    }
+
     // Per-tick value poll. Catches every cause of focused-param change:
     //   - UF8 Page <-/-> shifted slotIdx (text changes)
     //   - UF8 V-Pot rotation on the focused track (value changes)
@@ -1094,6 +1163,12 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         }
         if (extFuncsIdx_ < 0 || extFuncsIdx_ >= n) extFuncsIdx_ = 0;
         const auto& item = items[extFuncsIdx_];
+        if (item.special == 1) {    // A/B: the plug-in's StateASelected (chunk)
+            uf8::togglePluginAB(static_cast<MediaTrack*>(focusedTrack_));
+            renderExtFuncsSubscreen_();
+            ++stats_.knobEventsHandled;
+            return;
+        }
         if (item.vst3Param < 0) {   // label-only (SSL slot absent on plug-in)
             renderExtFuncsSubscreen_();
             ++stats_.knobEventsHandled;
@@ -3219,6 +3294,24 @@ std::vector<UC1Surface::ExtFuncItem> UC1Surface::activeExtFuncs_()
         return out;   // possibly empty → caller renders "(none)"
     }
 
+    // Harrison 32C: SSL's own list for this strip (kExtFuncs32c), not the shared
+    // one, which only knows the 4K/CS slots (Frank 2026-09-11, "EXT FUNCS vom 32C").
+    if (match.map && match.fxIndex >= 0 && std::strstr(fxBuf, "32Classic")) {
+        for (const auto& k : kExtFuncs32c) {
+            ExtFuncItem it;
+            it.shortLabel = k.shortLabel;
+            it.longLabel  = k.longLabel;
+            it.vst3Param  = k.vst3Param;
+            it.linkIdx    = -1;
+            it.special    = k.special;
+            if (k.vst3Param >= 0)
+                for (const auto& s : match.map->slots)
+                    if (s.vst3Param == k.vst3Param) { it.linkIdx = s.linkIdx; break; }
+            out.push_back(std::move(it));
+        }
+        return out;
+    }
+
     // SSL / built-in default — all 10 labels always shown; value resolves per
     // slotId where the slot exists on the focused plug-in (prior behaviour).
     for (const auto& k : kExtFuncs) {
@@ -3326,6 +3419,14 @@ void UC1Surface::renderExtFuncsSubscreen_()
             device_->send(buildLcdUnit(""));
             device_->send(buildLcdRoundIndicator(v));
         }
+    } else if (focusedTrack_ && cur.special == 1) {
+        // A/B has no param: its value is the plug-in's StateASelected. SSL shows
+        // "On" there for the 32C in its default state (cap137 t=84.15), read as
+        // A selected.
+        int ab = -1, hq = -1;
+        uf8::readPluginToggleStates(static_cast<MediaTrack*>(focusedTrack_), ab, hq);
+        device_->send(buildLcdValue(ab == 1 ? "On" : ab == 0 ? "Off" : ""));
+        device_->send(buildLcdUnit(""));
     }
     // Commit (FF 66 02 09 <flag>) is NOT sent per scroll step —
     // SSL360 only emits it on push toggles to flip the green-name

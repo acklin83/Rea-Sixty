@@ -571,8 +571,8 @@ bool fxIsAcustica(void* trackOpaque, int fx)
 // CompGain/GateGain (sslcore trace + rea_sixty.log, 2026-09-11). Without this arm
 // its ordinal was -1 and every gate-GR reader (UC1, UF1, UF8) stayed dark on it.
 // The match string is its PluginMap entry's. PluginChunkPatch::nextSslVstHead
-// keeps the SSL/4K test on purpose: it edits SSL's chunk layout, and the 32C's
-// chunk has never been checked against it.
+// accepts the 32C too: its binary carries SSL's plug-in state strings
+// (SSL_PLUGIN_STATE, StateASelected, HighQuality), same as the 4K E.
 bool fxIsSsl360(void* trackOpaque, int fx)
 {
     auto* tr = static_cast<MediaTrack*>(trackOpaque);
