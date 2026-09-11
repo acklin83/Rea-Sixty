@@ -25257,6 +25257,21 @@ uint8_t uf1VuByte_(float vu)
 // fallen" (2026-07-14).
 constexpr double kUf1HoldResetSec = 3.0;
 
+// How fast the plug-in's own VU value falls, in dB per second — MEASURED, and
+// the only number the Analogue VU needle is allowed to move down by since Meter
+// Pro 1.3.7 replaced the live VuPpm stream with the TextVuPpm READOUT.
+//
+// Two sources, same numbers. (1) Our probe run 2026-09-11 (all-types [ndl]
+// trace, VU faceplate, analysis/gen_uf1_needle_wav.py, three tone stops):
+// eleven continuous falls, 43.3 dB/s over 139 steps on the long ones, every
+// hard stop inside 42.2–43.5, 46 dB/s only below -56 VU; linear in dB all the
+// way to the -139.2 floor. (2) SSL 360's own localhost capture 2026-09-10: the
+// Meter Pro instance streaming to 360 on the Analogue view falls -4.40 → -55.18
+// in 2.42 s on decaying music — the audio's own tail, slower than this, never
+// faster. What this constant is NOT: a VU norm, a time constant, a guess. It is
+// the ceiling the plug-in itself never exceeds.
+constexpr float kUf1VuReadoutFallDbPerS = 43.f;
+
 // ---- Goniometer: plug-in raster (t10) -> UF1 diamond (0x0122) --------------
 //
 // BOTH SIDES ARE DIAMONDS, at different resolutions. Resampling one onto the
@@ -26494,6 +26509,9 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         float vuL, vuR;
         float vuHoldL = -120.f, vuHoldR = -120.f;
         bool  haveVuHold = false;
+        // True while the needle value comes from the TextVuPpm READOUT (dt=1),
+        // which carries a 500 ms hold the VU branch below has to undo.
+        bool  haveVuReadout = false;
         {
             std::vector<float> cur, pk;
             // Use the plug-in's VuPpm whenever it STREAMS it (getMeter true) — even
@@ -26526,6 +26544,8 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 cur.size() >= 2;
             if (haveVu) {
                 vuL = cur[0]; vuR = cur[1];
+                haveVuReadout =
+                    uf1NeedleDataType_() == int(sslmeter::DataType::TextVuPpm);
                 // The lagging needle is VuPpm's OWN f4 — measured (cap98): a
                 // -30/-20/-10 dBFS tone gives pk = -11.88 / -1.83 / 8.17 while cur
                 // is clamped at +3.0. Do not re-derive it.
@@ -26659,11 +26679,56 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             hL = uf1PpmByte_(havePpmHold ? mhL : sNdlHold.l);
             hR = uf1PpmByte_(havePpmHold ? mhR : sNdlHold.r);
         } else {
-            // VU — unchanged: curved dial, rest byte 4, VuPpm(0) already ballistic.
+            // VU: curved dial, rest byte 4. The value arrives ballistic — but since
+            // Meter Pro 1.3.7 it arrives as the READOUT, and the readout HOLDS.
+            // ⇨ MEASURED, two independent sources, same numbers. SSL 360's own
+            // localhost capture (2026-09-10, the Meter Pro instance streaming to
+            // 360 on the Analogue view) and our probe run (2026-09-11, [ndl], three
+            // tone stops): after every local maximum dt=1 stands still for
+            // 0.50–0.52 s, then jumps to the current value and follows it
+            // continuously at 60 Hz. Underneath, the VU falls linearly in dB at
+            // 43.3 dB/s on a hard stop (kUf1VuReadoutFallDbPerS), slower only when
+            // the audio itself decays slower. 360 receives the identical frames —
+            // on the Analogue view the plug-in streams NOTHING but dt=1, to 360 as
+            // to us (dt 2..5 stop entirely). So Frank's objection stands: the
+            // ballistic IS shipped ready-made, for VU as for PPM. What sits on top
+            // is a 500 ms peak-hold, and rendered raw that hold ends in ONE FRAME
+            // of ~20 dB: the needle sits at the peak, then snaps to the end stop
+            // (Frank 2026-09-11: "unsere nadel fällt SOFORT aufs minimum"). PPM
+            // shows the same hold, but its 10 dB/s fall hides only 1.3 marks
+            // behind it, which is why that faceplate reads fine and this one does
+            // not.
+            // ⇨ THE RULE: NEVER FALL FASTER THAN THE PLUG-IN'S OWN METER. Downward
+            // motion is limited to the measured rate; upward is immediate, as the
+            // readout's is. The needle never shows a value the plug-in did not
+            // publish — it can only trail the readout, by at most the hold — and it
+            // cannot bounce, because it is never ahead of what arrives. No time
+            // constant of ours is in it. dt=1 only: dt=0 was the live needle with
+            // no hold, and a plug-in still sending it keeps it untouched.
+            static float sGlideL = -139.2f, sGlideR = -139.2f;
+            static std::chrono::steady_clock::time_point sGlideT{};
+            const bool silent  = (havePeak && peak <= -100.f);
+            const bool readout = haveVuReadout;
             if (force || tr != sNdlTr || sNdlPpm != ppmMode) {
                 sNdlTr = tr; sNdlPpm = ppmMode; sNdlHold.reset(vuL, vuR, now);
+                sGlideL = vuL; sGlideR = vuR; sGlideT = now;
             }
             sNdlHold.step(vuL, vuR, now);
+            if (readout) {
+                // Silence (the gate below) is a target like any other here: the
+                // needle glides to the floor instead of snapping to rest. The
+                // hard rest was measured on dt=0 (cap107), which had no hold to
+                // undo. Ticks longer than the hold itself (a stall) count as one.
+                const float  tgtL = silent ? -139.2f : vuL;
+                const float  tgtR = silent ? -139.2f : vuR;
+                const double dtS  = std::chrono::duration<double>(now - sGlideT).count();
+                sGlideT = now;
+                const float drop = kUf1VuReadoutFallDbPerS
+                                 * float(std::clamp(dtS, 0.0, 0.5));
+                sGlideL = std::max(tgtL, sGlideL - drop);
+                sGlideR = std::max(tgtR, sGlideR - drop);
+                vuL = sGlideL; vuR = sGlideR;
+            }
             nL = uf1VuByte_(vuL); nR = uf1VuByte_(vuR);
             hL = uf1VuByte_(haveVuHold ? vuHoldL : sNdlHold.l);
             hR = uf1VuByte_(haveVuHold ? vuHoldR : sNdlHold.r);
@@ -26680,7 +26745,10 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             // measurement the needle follows VuPpm, which is the honest source
             // here -- clamping on a value that means "nobody answered" is what
             // froze it.
-            if (havePeak && peak <= -100.f) { nL = nR = 4; hL = hR = 4; }
+            if (silent) {
+                if (readout) { hL = std::max<uint8_t>(4, nL); hR = std::max<uint8_t>(4, nR); }
+                else         { nL = nR = 4; hL = hR = 4; }
+            }
         }
 
         const std::array<uint8_t, 2> ndl{ nL, nR }, hld{ hL, hR };
