@@ -25143,19 +25143,22 @@ const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
         {
             {0x0100, {0x04,0x01}},
             {0x0102, {0x01}},
-            // 0x0009 / 0x0015 / 0x0016: values matched to cap80 (SSL, Analogue,
-            // clipping). These do NOT control the VU number colour — PROVEN
-            // 2026-07-22: streaming SSL's exact cap80 bytes (1e1e / 00 / 00) still
-            // reddens the numbers at high level. The "current-number colour" /
-            // "peak-number colour" labels an earlier pass gave them are WRONG. The
-            // red is the hardware's own VU red-zone tint on the value; PARKED as
-            // cosmetic. Do not chase these three again — see the memory note.
+            // 0x0009 / 0x0015 / 0x0016: SSL 360 2.1.12's Analogue values, cap130
+            // (2708 cycles, constant): 0009=ffff0000, 000a=0, 0015=ff, 0016=ff.
+            // Frank at the device, 2026-09-11: under SSL 360 the readout stays
+            // WHITE with these bytes and the same 0x0128 bits we send. cap80's
+            // 1e1e / 00 / 00 (old 360, old firmware) were seeded here since July;
+            // with them, and with the live small-LCD level streamed per cycle
+            // since 02.08., the numbers went red with the level and the hold
+            // number latched red with the LED. The 2026-07-22 "proven inert"
+            // verdict compared 1e1e against 00, never ff against the eye. Same
+            // group per cycle in uf1PaintMeter_ (screen 1).
             // 0x000c is an extra dB readout seeded at rest (live wiring TODO).
-            {0x0009, {0x1e,0x1e,0x00,0x00}},
+            {0x0009, {0xff,0xff,0x00,0x00}},
             {0x000a, {0x00,0x00,0x00,0x00}},
             {0x000c, {0x00,0x2d,0x33,0x31,0x2e,0x31,0x00,0x64,0x42}},   // "-31.1" / "dB"
-            {0x0015, {0x00}},
-            {0x0016, {0x00}},
+            {0x0015, {0xff}},
+            {0x0016, {0xff}},
             {0x0104, {0x00,0x41,0x4e,0x41,0x4c,0x4f,0x47,0x55,0x45}},   // "ANALOGUE"
             {0x0104, {0x01,0x52,0x45,0x53,0x45,0x54}},                  // "RESET"
             {0x0104, {0x02,0x46,0x49,0x4e,0x45}},                       // "FINE"
@@ -26460,7 +26463,27 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // over a fader that is parked and inert (see uf1FaderTrack_).
     // uf1ChannelMeterBytes_ zeroes on nullptr.
     uf1ChannelMeterBytes_(uf1FaderTrack_(), chLvL, chLvR, chComp, chGate);
-    if (screen != 0) {
+    if (screen == 1) {
+        // ⛔ ANALOGUE STREAMS SSL 360 2.1.12's GROUP, NOT THE LIVE LEVEL.
+        // cap130 (2.1.12, Analogue, 2708 cycles): 0x0009=ffff0000, 0x000a=0,
+        // 0x0015=ff, 0x0016=ff, constant; Frank at the device 2026-09-11: the
+        // readout stays white under SSL, with the same 0x0128 bits we send.
+        // With the live level bytes here the numbers went red with the level
+        // and the hold number latched red with the LED (reported 2026-09-11,
+        // the same symptom since July). The "0x00xx zone is inert on the big
+        // display" claim above rests on the 2026-07-22 test, which compared
+        // cap80's 1e1e/00 against 00 and never sent ff with an eye on the
+        // result ([[uf1-vu-red-numbers-parked]]). So this screen carries SSL's
+        // bytes; the strip above the fader shows what SSL shows here.
+        static const uint8_t k0009Ff[] = {0xff, 0xff, 0x00, 0x00};
+        static const uint8_t k000aZero[] = {0x00, 0x00, 0x00, 0x00};
+        static const uint8_t kFf = 0xff;
+        g_uf1_dev->send(uf1::buildScreen(0x0009, k0009Ff));
+        g_uf1_dev->send(uf1::buildScreen(0x000a, k000aZero));
+        g_uf1_dev->send(uf1::buildScreen(0x0015, std::span<const uint8_t>(&kFf, 1)));
+        g_uf1_dev->send(uf1::buildScreen(0x0016, std::span<const uint8_t>(&kFf, 1)));
+    }
+    else if (screen != 0) {
         const uint8_t m0009[] = {chLvL, chLvR, 0x00, 0x00};
         const uint8_t m000a[] = {0x00, 0x00, 0x00, 0x00};
         g_uf1_dev->send(uf1::buildScreen(0x0009, m0009));
