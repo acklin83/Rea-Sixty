@@ -147,11 +147,12 @@ bool fxIdentityName(void* track /*MediaTrack**/, int fx, char* buf, int bufSize)
 bool fxIsAcustica(void* track /*MediaTrack**/, int fx);
 
 // True when `fx` is an SSL 360°-family plug-in, i.e. one that streams its
-// meters to SSL 360° Core (and therefore to our impersonator). Same name test
-// the chunk patcher uses (nextSslVstHead): the plug-in name starts with "SSL "
-// (Channel Strip 2 / 4K G / 360 Link / Bus Compressor) or with "4K " (4K B /
-// 4K E, whose names carry no "SSL" at all). A "VST3: "/"VST: "/"AU: " prefix is
-// skipped first, so it works on both fxIdentityName spellings.
+// meters to SSL 360° Core (and therefore to our impersonator): the plug-in name
+// starts with "SSL " (Channel Strip 2 / 4K G / 360 Link / Bus Compressor) or with
+// "4K " (4K B / 4K E, whose names carry no "SSL" at all), or contains
+// "32Classic" (the Harrison 32C, a Core client built on SSL's library). The
+// chunk patcher (nextSslVstHead) has only the first two. A "VST3: "/"VST: "/
+// "AU: " prefix is skipped first, so it works on both fxIdentityName spellings.
 bool fxIsSsl360(void* track /*MediaTrack**/, int fx);
 
 // Position of `fx` among the track's SSL 360° plug-ins in FX-chain order

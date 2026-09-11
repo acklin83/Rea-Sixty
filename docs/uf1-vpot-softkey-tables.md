@@ -111,6 +111,13 @@ Params from `docs/ssl-native-params/VST3__Harrison_32Classic_Channel_Strip_(Harr
 | 9 | | COMP EMPHASIS IN | GSFT (Gate SC Filter In) | | CpMu (Makeup) | CEFq (Emphasis Freq) | GSFq (Gate SC Filter Freq) | Gate Attack |
 | 10 | EXPANDER | GATE SC LISTEN | | | GtHs (Hysteresis) · XpKn when Expander on | | | |
 
-Not wired yet: the UC1 GR meters from the 32C's "Comp Reduction Meter" /
-"Gate Reduction Meter" params (0..1, dB law unmeasured); presets (no SSL
-preset folder).
+GR on UC1, UF1 and UF8 comes the way it does for a 4K: comp from REAPER's
+`GainReduction_dB` (the 32C binary carries the same PreSonus
+`IGainReductionInfo` as SSL 4K E/B/G), gate from the impersonator's `GateGain`.
+The 32C connects to SSL 360 Core itself: it is built on SSL's plug-in library,
+declares `32CEQCurveData`, announces its track and streams `CompGain` /
+`GateGain` (sslcore trace and `rea_sixty.log`, 2026-09-11). Its "Comp Reduction
+Meter" / "Gate Reduction Meter" params (0..1, no dB law) are not used.
+
+Not wired yet: presets (no SSL preset folder). Over its Core connection the 32C
+does send a preset list (XML) and a Harrison preset path (same trace).

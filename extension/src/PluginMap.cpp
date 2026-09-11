@@ -563,10 +563,16 @@ bool fxIsAcustica(void* trackOpaque, int fx)
     return false;
 }
 
-// An SSL 360° plug-in is one whose name starts with "SSL " or "4K " once the
-// format prefix is stripped — the same test PluginChunkPatch::nextSslVstHead
-// uses, and the same reason the "4K " arm exists (4K B / 4K E carry no "SSL"
-// in their names at all, Frank HW 2026-07-29).
+// An SSL 360° plug-in is one that connects to SSL 360° Core. By name: it starts
+// with "SSL " or "4K " once the format prefix is stripped (4K B / 4K E carry no
+// "SSL" in their names at all, Frank HW 2026-07-29), or it is the Harrison
+// 32Classic. That one is built on SSL's own plug-in library and connects to Core
+// like a 4K: it declares "32CEQCurveData", announces its track and streams
+// CompGain/GateGain (sslcore trace + rea_sixty.log, 2026-09-11). Without this arm
+// its ordinal was -1 and every gate-GR reader (UC1, UF1, UF8) stayed dark on it.
+// The match string is its PluginMap entry's. PluginChunkPatch::nextSslVstHead
+// keeps the SSL/4K test on purpose: it edits SSL's chunk layout, and the 32C's
+// chunk has never been checked against it.
 bool fxIsSsl360(void* trackOpaque, int fx)
 {
     auto* tr = static_cast<MediaTrack*>(trackOpaque);
@@ -579,7 +585,8 @@ bool fxIsSsl360(void* trackOpaque, int fx)
     for (std::string_view p : { "VST3: ", "VST: ", "AU: ", "CLAP: ", "AUi: " }) {
         if (n.rfind(p, 0) == 0) { n.remove_prefix(p.size()); break; }
     }
-    return n.rfind("SSL ", 0) == 0 || n.rfind("4K ", 0) == 0;
+    return n.rfind("SSL ", 0) == 0 || n.rfind("4K ", 0) == 0
+        || n.find("32Classic") != std::string_view::npos;
 }
 
 // Read the FX's current settings for the ids the impersonator captures, so a

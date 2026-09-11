@@ -344,9 +344,11 @@ PluginBindings make4kBBindings()
 // which UC1 pot SSL 360 gives which param is what cap137 shows on the UC1 LCD.
 // No HMF/LMF Q (proportional-Q EQ), no Fast-Attack toggles (continuous
 // attacks), no EQ Type; Gate "Range" is the 32C's Gate Depth, S/C Listen the
-// compressor's. GR: the 32C exposes "Comp Reduction Meter" (35) and "Gate
-// Reduction Meter" (25) as 0..1 params without a dB law — not wired until
-// measured.
+// compressor's. GR needs neither of the 32C's "Comp Reduction Meter" (35) /
+// "Gate Reduction Meter" (25) params (0..1, no dB law): the comp reads REAPER's
+// GainReduction_dB like the 4K strips (the binary carries the same PreSonus
+// IGainReductionInfo), the gate reads the impersonator's GateGain, because the
+// 32C is a Core client like a 4K (see uf8::fxIsSsl360).
 PluginBindings make32cBindings()
 {
     auto b = makeEmpty("32Classic", "32C");
