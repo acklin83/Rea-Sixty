@@ -128,7 +128,7 @@ Params from `docs/ssl-native-params/VST3__Harrison_32Classic_Channel_Strip_(Harr
 
 | Page | Soft Key 1 | Soft Key 2 | Soft Key 3 | Soft Key 4 | V-Pot 1 | V-Pot 2 | V-Pot 3 | V-Pot 4 |
 |---|---|---|---|---|---|---|---|---|
-| 1 | Ø | PRE (label only) | SOLO SAFE | PLUG-IN | Width | Mic (= Saturator Drive) | Out Trim | Mix |
+| 1 | Ø | PRE (= Saturator In) | SOLO SAFE | PLUG-IN | Width | Mic (= Saturator Drive) | Out Trim | Mix |
 | 2 | FILTERS (EQ Filters In) | | HQ MODE (HQ param) | A/B (label only) | In Trim | | High Pass | Low Pass |
 | 3 | LOW BELL MODE | | | EQ (EQ Bands In) | Low Gain | Low Freq | | |
 | 4 | | | | EQ | Low-Mid Gain | Low-Mid Freq | | |

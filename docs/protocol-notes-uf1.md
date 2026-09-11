@@ -169,6 +169,15 @@ diff static snapshots, timing irrelevant). Analyse with `analysis/uf1_screen_dum
 Pages cycled by **Left/Right nav buttons** (← 0x24 / → 0x26). 8 pages in Plugin Mode (DAW mode
 shows a different "1/10"). Per-page content is in 0x00xx param-zone + 0x0104, not 0x011c.
 
+**Encoder list — SSL 360 2.1.12 (cap132, 2026-09-11).** Channel view, SSL idle: `0x011c` =
+`<SEL> | · | · | 1/10 | OFF`, `0x011d` = 19, `0x011e` = 19. A push on the CHANNEL encoder
+(button 0x0d) fills fields 1/2 (`FOCUS`, `VOLUME`) and switches `0x0110` 0f→07, `0x011a` 02→03,
+`0x011e` 19→1f; turning moves the highlight in `0x011d` = 0x18 | (1 << row) (19, 1a, 1c); the
+next push writes it all back. On older firmware fields 1/2 never rendered (hardware, 2026-08-10).
+`0x012b` (4 B) is the only zone 2.1.12 added to the init (cap129, all 00) and is never written in
+the Plug-in Mixer; since `94d2360`+1 it carries the four DAW-window track colours as a probe for
+the manual's "Colour Bar Area" (unconfirmed).
+
 **Colour — SOLVED (cap70, ground-truth RGB sweep).** Element/track colour rides **FF38** frames
 (id-addressed; SEL=id 0x07), sent **on-change only**. The 2nd FF38 frame per change is the colour
 (FF39's 2nd value is constant `0000f0`):

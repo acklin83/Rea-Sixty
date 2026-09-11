@@ -22457,12 +22457,13 @@ static std::array<uint8_t, sizeof(kUf1PluginHeader)> uf1PageHeader_(int cur, int
     // tracks the toggle live (Frank 2026-08-04: was stuck "OFF" in every
     // channel mode). ON = "ON" + clear the 3rd byte so no stray 'F' remains.
     if (g_uf1CsFine.load()) { h[100] = 'O'; h[101] = 'N'; h[102] = 0x00; }
-    // Cells 1, 2 and 5-7 are deliberately left at zero: in Channel-Strip mode the
-    // firmware binds only 0 (HOST), 3 (SOFT KEYS page) and 4 (FINE CTRL) to screen
-    // regions. Proven on hardware 2026-08-10 by writing markers into the other five
-    // — nothing rendered, while the marker in cell 0 of the SAME frame did. SSL's
-    // "-------" in cells 1/2 is a leftover from the MCU layout, where they DO show
-    // ("1/10" @1, "FOCUS" @2 in cap58). Don't go looking there again.
+    // Cells 1, 2 and 5-7 are left at zero here: in Channel-Strip mode the firmware
+    // bound only 0, 3 (SOFT KEYS page) and 4 (FINE CTRL) to screen regions. Proven
+    // on hardware 2026-08-10 by writing markers into the other five — nothing
+    // rendered, while the marker in cell 0 of the SAME frame did (firmware before
+    // SSL 360 2.1.12). ⇨ On 2.1.12 cells 1 and 2 ARE drawn: they are rows 2 and 3
+    // of the encoder list under the CHANNEL label, cell 0 is row 1, shown while
+    // 0x011e = 0x1f (cap132). See uf1SetEncoderList_.
     return h;
 }
 
@@ -22489,6 +22490,53 @@ static void uf1SetJogField_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h,
     if (s.size() > 25) s.resize(25);
     for (size_t k = 0; k < 25; ++k)
         h[k] = (k < s.size()) ? static_cast<uint8_t>(s[k]) : 0;
+}
+
+// ---- Encoder list (SSL 360 2.1.12 firmware) --------------------------------
+// MEASURED (cap132, 2026-09-11): a push on the CHANNEL encoder makes SSL fill
+// cells 1 and 2 of 0x011c next to cell 0 ("<SEL>", "FOCUS", "VOLUME"), switch
+// 0x0110 0f→07, 0x011a 02→03, 0x011e 19→1f, and mark the highlighted row in
+// 0x011d as 0x18 | (1 << row): turning the encoder stepped it 19, 1a, 1c, 1a, 19.
+// A second push wrote everything back. Ours opens with the existing picker (MODE
+// held, the encoder steps the mode, uf1EncoderStepVisible_) and lists the user's
+// VISIBLE modes in ring order. SSL's list is three rows and we have up to fifteen
+// modes, so the live mode sits in row 1, highlighted, with the next two below,
+// and the list scrolls through it (Frank 2026-09-11: "meine sichtbaren Modi").
+// Row 1 = cell 0 is also what firmware before 2.1.12 shows, so it still reads the
+// live mode there. Main + pacer thread, atomics only.
+static bool uf1EncListOpen_()
+{
+    return g_uf1ModeMenu.load() && !g_uf1ScrubHeld.load();   // SCRUB owns cell 0
+}
+static void uf1SetEncoderList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h)
+{
+    int vis[kEncoderModeCount];
+    int n = 0;
+    for (int k = 0; k < kEncoderModeCount; ++k) {
+        const int m = g_uf1EncoderSeq[k].load();
+        if (m >= 0 && m < kEncoderModeCount && g_uf1EncoderVisible[m].load())
+            vis[n++] = m;
+    }
+    const int cur = static_cast<int>(g_uf1EncoderMode.load());
+    int ci = -1;
+    for (int i = 0; i < n; ++i) if (vis[i] == cur) { ci = i; break; }
+    if (ci < 0) {                          // live mode hidden: it still leads
+        if (n < kEncoderModeCount) { vis[n] = cur; ci = n++; }
+        else ci = 0;
+    }
+    for (int r = 0; r < 3; ++r) {
+        const char* s = (r < n)
+            ? uf1EncoderModeHdr_(static_cast<EncoderMode>(vis[(ci + r) % n])) : "";
+        const size_t len = std::strlen(s);
+        for (size_t k = 0; k < 25; ++k)
+            h[r * 25 + k] = (k < len) ? static_cast<uint8_t>(s[k]) : 0;
+    }
+}
+// 0x011d: row 1 highlighted while the list is open, 00 otherwise (ours as before;
+// SSL's idle is 0x19).
+static uint8_t uf1HeaderHighlight_()
+{
+    return uf1EncListOpen_() ? 0x19 : 0x00;
 }
 
 // The live header row — the "REAPER | N/M | OFF" cell set, with N/M for whatever
@@ -22530,7 +22578,9 @@ static std::array<uint8_t, sizeof(kUf1PluginHeader)> uf1BuildLiveHeader_()
     const Uf1JogMode  jgm = g_uf1JogMode.load();
     if (g_uf1ScrubHeld.load())
         uf1SetJogField_(hdr, jgm);
-    else if (g_uf1ModeMenu.load() || em != EncoderMode::ChSelect)
+    else if (uf1EncListOpen_())
+        uf1SetEncoderList_(hdr);          // the 2.1.12 list in cells 0-2, see above
+    else if (em != EncoderMode::ChSelect)
         uf1SetEncoderField_(hdr, em);
     else if (jgm != Uf1JogMode::Playhead)
         uf1SetJogField_(hdr, jgm);
@@ -28022,7 +28072,7 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[8][10] = {
       //     param on this strip ("HQ" 63), not the SSL chunk toggle; A/B is label-only
       //     because the chunk walker only knows SSL plug-ins. PRE is label-only too
       //     (SSL prints it on every strip's home page; the 32C has no Pre).
-        { {"Polarity","\xd8"}, {nullptr,"PRE"}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },
+        { {"Polarity","\xd8"}, {"Saturator In","PRE"}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },   // PRE = Saturator In: the 32C declares SaturationIn/SaturationAmount on Core and "Mic" is the Drive (inferred, Frank 2026-09-11: "PRE macht nichts")
         { {"EQ Filters In","FILTERS"}, {nullptr,""}, {"HQ","HQ MODE"}, {nullptr,"A/B"} },
         { {"Low Bell Mode","LOW BELL MODE"}, {nullptr,""}, {nullptr,""}, {"EQ Bands In","EQ"} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {"EQ Bands In","EQ"} },
@@ -31078,7 +31128,8 @@ void uf1PaintChannel_()
             auto hdr = uf1BuildLiveHeader_();
             parts->tail.push_back(uf1::buildScreen(uf1::scr::kHeaderRow,
                 std::span<const uint8_t>(hdr.data(), hdr.size())));
-            parts->tail.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&z1, 1)));
+            const uint8_t hl = uf1HeaderHighlight_();
+            parts->tail.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&hl, 1)));
             std::lock_guard<std::mutex> lk(g_uf1CycleMx);
             g_uf1CycleSnap = std::shared_ptr<const Uf1CycleParts>(std::move(parts));
         }
@@ -31383,13 +31434,17 @@ void uf1PaintChannel_()
             put(0x0100, {0x03, 0x00});                 // LAYOUT = plugin/channel
             put(0x0101, {0x05});
             put(0x010d, {0x02, 0x02, 0x08, 0x02});
-            put(0x0110, {0x0f});
-            put(0x011a, {0x02});
+            // The encoder list (SSL 360 2.1.12, uf1SetEncoderList_) changes
+            // 0x0110 / 0x011a / 0x011e while it is open, so a layout re-assert
+            // during a MODE hold writes the open values instead of closing it.
+            const bool encList = uf1EncListOpen_();
+            put(0x0110, {static_cast<uint8_t>(encList ? 0x07 : 0x0f)});
+            put(0x011a, {static_cast<uint8_t>(encList ? 0x03 : 0x02)});
             // 00, not 0x19 (cap77's session value): 0x011d is the cycle-closing
             // view-state byte; SSL's channel state going into a meter-view entry
-            // is 00 (cap101).
-            put(0x011d, {0x00});
-            put(0x011e, {0x18});
+            // is 00 (cap101). 0x19 while the encoder list is open.
+            put(0x011d, {uf1HeaderHighlight_()});
+            put(0x011e, {static_cast<uint8_t>(encList ? 0x1f : 0x18)});
             // The ff-state: SSL holds 0x0009=ffff0000, 0x0015/16=ff in the
             // channel state (cap101 t=26.62 and the whole idle stream). Our
             // cap66 init replay left 0009=00000000, so we entered the meter
@@ -31890,6 +31945,19 @@ void uf1PaintChannel_()
         uf1PaintMeter_(tr, changed);
     } else {
         g_uf1SkipNotMeter.fetch_add(1, std::memory_order_relaxed);
+        // The encoder list opens and closes with MODE (uf1SetEncoderList_). Its
+        // three state bytes are not in the pacer's cycle, and a MODE edge must not
+        // re-assert the layout ([[uf1-mode-edge-must-not-relayout]]), so they go
+        // out here, once per edge. With a layout change the burst above writes them.
+        if (menuEdge && !layoutChanged) {
+            const bool open = uf1EncListOpen_();
+            const uint8_t s0110 = open ? 0x07 : 0x0f;
+            const uint8_t s011a = open ? 0x03 : 0x02;
+            const uint8_t s011e = open ? 0x1f : 0x18;
+            g_uf1_dev->send(uf1::buildScreen(0x0110, std::span<const uint8_t>(&s0110, 1)));
+            g_uf1_dev->send(uf1::buildScreen(0x011a, std::span<const uint8_t>(&s011a, 1)));
+            g_uf1_dev->send(uf1::buildScreen(0x011e, std::span<const uint8_t>(&s011e, 1)));
+        }
     // Channel view: keep the cycle CHAIN running — SSL streams the idle cycle
     // (0009 000a 0015 0016 011c 011d @ ~25 Hz) from connect onward and NEVER
     // breaks it (cap84 plugin-idle, cap101 t=26.6..35.8). The full-session
@@ -31930,7 +31998,24 @@ void uf1PaintChannel_()
             parts->tail.push_back(uf1::buildScreen(uf1::scr::kHeaderRow,
                 std::span<const uint8_t>(hdr.data(), hdr.size())));
         }
-        parts->tail.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&kZeroi, 1)));
+        const uint8_t hl = uf1HeaderHighlight_();
+        parts->tail.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&hl, 1)));
+        // 0x012b, 4 bytes: the ONLY zone SSL 360 2.1.12 added to the UF1 init
+        // (cap129, 4 x 00), never written in the Plug-in Mixer. Taken as the colour
+        // bars above the four V-Pot channels, which the UF1 guide Rev9.1 gives to
+        // 360 v2.1 with Pro Tools 2025. A PROBE (Frank 2026-09-11, "Ja, 0x012b
+        // probieren"): the four DAW-window tracks' palette indices, quantised like
+        // the fader bar 0x0018; zeros outside the DAW view.
+        {
+            uint8_t cb[4] = {0, 0, 0, 0};
+            if (g_uf1ChannelSubMode.load() == 1) {
+                const int base = uf1DawWindowStart_();
+                for (int i = 0; i < 4; ++i)
+                    if (MediaTrack* t = GetTrack(nullptr, base + i))
+                        cb[i] = uf8::quantize(trackColorRgb(t));
+            }
+            parts->tail.push_back(uf1::buildScreen(0x012b, cb));
+        }
         {
             std::lock_guard<std::mutex> lk(g_uf1CycleMx);
             g_uf1CycleSnap = std::shared_ptr<const Uf1CycleParts>(std::move(parts));
