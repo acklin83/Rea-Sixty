@@ -62,6 +62,21 @@ std::array<std::vector<uint8_t>, 2> buildPluginMixerHeartbeat();
 //
 // `text` longer than 7 chars is truncated. Upper-row is not space-padded
 // (sent at natural length); lower-row is always 7 chars.
+// How many characters the UF8's UPPER scribble (the track-name line) carries.
+//
+// ⚠ SEVEN WAS NEVER MEASURED. It is simply what SSL 360 sent in the captures
+// this frame was rebuilt from, and SSL's own Pro-Tools HUI layer carried only
+// FOUR until 2.1.12 raised it to eight — so their "8 characters" announcement is
+// about their layer catching up, and says nothing about the cell count the
+// firmware actually renders. buildStripTextUpper computes its own length byte,
+// so the wire takes whatever stands here; the open question is the DISPLAY
+// (Frank 2026-09-11, "meinst du die können wir ansteuern").
+// ✅ EIGHT, MEASURED AT THE DEVICE — 9 was tried and does NOT render
+// (Frank 2026-09-11: "8 ist max. auf UF8 und UF1"). Seven was only ever a
+// transcription of what SSL 360 happened to send; the cell count is eight, and
+// has been all along. The UC1's LCD is a different device and takes TWELVE.
+inline constexpr size_t kUf8ScribbleChars = 8;
+
 std::vector<uint8_t> buildStripTextUpper(uint8_t strip, std::string_view text);
 std::vector<uint8_t> buildStripTextLower(uint8_t strip, std::string_view text);
 

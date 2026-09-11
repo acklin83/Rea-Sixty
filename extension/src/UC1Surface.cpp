@@ -4818,9 +4818,14 @@ void UC1Surface::refresh()
     auto smallTriple = buildTrackNameTripleSmall(prevName, currName, nextName);
     lastSmallTripleFrame_ = smallTriple;
     auto largeTriple = buildTrackNameTripleLarge(
-        abbreviateTrackName_(bcNameAtRank(bcRank - 1), 14, -1, true),
-        abbreviateTrackName_(bcNameAtRank(bcRank),     14, -1, true),
-        abbreviateTrackName_(bcNameAtRank(bcRank + 1), 14, -1, true));
+        // ⚠ TWELVE, NOT FOURTEEN. The frame carries 14-byte slots, so 14 went
+        // out cleanly — but the LCD renders TWELVE (measured 2026-09-11,
+        // alongside the UF8/UF1 probe). Abbreviating to 14 and letting the
+        // display cut at 12 loses the tail of the abbreviation itself; the CS
+        // triple three lines up has used the real width since 2026-05-25.
+        abbreviateTrackName_(bcNameAtRank(bcRank - 1), 12, -1, true),
+        abbreviateTrackName_(bcNameAtRank(bcRank),     12, -1, true),
+        abbreviateTrackName_(bcNameAtRank(bcRank + 1), 12, -1, true));
     lastLargeTripleFrame_ = largeTriple;
 
     // 7-segment push moved to the end of refresh() — see below. Several

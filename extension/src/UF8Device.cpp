@@ -168,7 +168,8 @@ void UF8Device::runInit_()
         for (uint8_t s = 0; s < 8; ++s) {
             if (shuttingDown_.load()) return;
             sendFrame(buildPluginSlotName(s,    "        "));
-            sendFrame(buildStripTextUpper(s,    "       "));
+            sendFrame(buildStripTextUpper(s,
+                          std::string(kUf8ScribbleChars, ' ')));
             sendFrame(buildStripTextLower(s,    "       "));
             sendFrame(buildChannelStripType(s,  "    "));
             sendFrame(buildFaderDbReadout(s,    "    "));

@@ -17467,6 +17467,16 @@ void queueInput(PendingInput e)
 // selected track. Shared by uf1PaintChannel_ (display) and the UF1 button
 // dispatch in drainInputQueue (solo / cut / sel). Main-thread only — queries
 // REAPER track API, so it must never run on the libusb worker thread.
+// How many characters the UF1's large-display TRACK-NAME zone shows.
+// ✅ MEASURED AT THE DEVICE 2026-09-11: eight, same as the UF8 scribble — the
+// probe string "123456789" came back as "12345678" on both. Twelve stood here
+// because nobody had counted; the extra four were sent and silently dropped,
+// which is worse than it sounds: abbreviateTrackName_ was shortening to a width
+// the display never had, so a long name got smart-abbreviated to 12 and then
+// hard-cut to 8, losing the end of the very abbreviation that was meant to save
+// it. Abbreviating to the REAL width is what makes it readable.
+// (The UC1's LCD is a different device and shows twelve — see UC1Surface.)
+inline constexpr int kUf1TrackNameChars = 8;
 MediaTrack* uf1FocusedTrack_()
 {
     MediaTrack* master = GetMasterTrack(nullptr);
@@ -29640,7 +29650,9 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     std::string ovName, ovDb;
     double ovPan = 0.0; bool ovMuted = false;
     if (sendValid) {
-        ovName  = abbreviateTrackName_(routeName_(*sendOverride), 12, -1, /*foldLatin1*/ false);
+        ovName  = abbreviateTrackName_(routeName_(*sendOverride),
+                                       kUf1TrackNameChars, -1,
+                                       /*foldLatin1*/ false);
         ovDb    = formatDbReadout(readRouteVolumeLinear_(*sendOverride, tr));
         ovPan   = readRoutePanEffective_(*sendOverride);   // V-Pot drives this
         ovMuted = GetTrackSendInfo_Value(sendOverride->track, sendOverride->sendCategory,
@@ -29687,7 +29699,8 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
             snprintf(fb, sizeof(fb), "CH %d", trkNo > 0 ? trkNo : 0);
             name = fb;
         }
-        name = abbreviateTrackName_(name, 12, -1, /*foldLatin1*/ false);
+        name = abbreviateTrackName_(name, kUf1TrackNameChars, -1,
+                                   /*foldLatin1*/ false);
     }
     if (sendZone) name = ovName;   // Extender: the 9th send's dest, not the track
     if (changed || name != sName) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
@@ -30289,7 +30302,8 @@ static void uf1PaintHue_()
         std::string nm = utf8ToLatin1(
             cfg.label.empty() ? cfg.bridgeName : cfg.label);
         if (nm.empty()) nm = (slot < 0) ? "NO LAMP" : "LAMP";
-        if (nm.size() > 12) nm.resize(12);
+        if (nm.size() > size_t(kUf1TrackNameChars))
+            nm.resize(size_t(kUf1TrackNameChars));
         static std::string sName;
         if (force || nm != sName) { sName = nm; sendText(uf1::scr::kTrackName, nm); }
 
@@ -35070,7 +35084,8 @@ void pushZonesForVisibleSlots()
                 // Upper scribble — mount name (≤7 chars, folded to Latin-1).
                 std::string nm = utf8ToLatin1(info.name);
                 if (nm.empty()) nm = "MOUNT";
-                if (nm.size() > 7) nm.resize(7);
+                if (nm.size() > uf8::kUf8ScribbleChars)
+                    nm.resize(uf8::kUf8ScribbleChars);
                 if (bankChanged || g_lastTrackName[s] != nm) {
                     g_lastTrackName[s] = nm;
                     g_dev->send(uf8::buildStripTextUpper(static_cast<uint8_t>(s), nm));
@@ -35175,7 +35190,8 @@ void pushZonesForVisibleSlots()
                 std::string nm = utf8ToLatin1(
                     cfg.label.empty() ? cfg.bridgeName : cfg.label);
                 if (nm.empty()) nm = "LAMP";
-                if (nm.size() > 7) nm.resize(7);
+                if (nm.size() > uf8::kUf8ScribbleChars)
+                    nm.resize(uf8::kUf8ScribbleChars);
                 if (bankChanged || g_lastTrackName[s] != nm) {
                     g_lastTrackName[s] = nm;
                     g_dev->send(uf8::buildStripTextUpper(
@@ -35276,7 +35292,7 @@ void pushZonesForVisibleSlots()
         if (!tr || routedButInvalid) {
             const std::string blankCs   = "";   // empty → NUL-padded to width
             const std::string blankDb   = "    ";
-            const std::string blankName = "       ";   // 7 spaces — overwrites any
+            const std::string blankName(uf8::kUf8ScribbleChars, ' ');  // overwrites any
                                                         // residual text. Empty payload
                                                         // doesn't reliably clear the
                                                         // StripTextUpper zone (the
@@ -35941,9 +35957,12 @@ void pushZonesForVisibleSlots()
                 n = fallback;
             }
             if (blankStrip) {
-                n = "       ";   // 7 spaces, matches blank-strip path
+                // Spaces, one per cell — a SHORT blank leaves the last cell
+                // holding whatever stood there before.
+                n = std::string(uf8::kUf8ScribbleChars, ' ');
             }
-            n = abbreviateTrackName_(n, 7, -1, /*foldLatin1*/ true);
+            n = abbreviateTrackName_(n, int(uf8::kUf8ScribbleChars), -1,
+                                    /*foldLatin1*/ true);
             if (n != g_lastTrackName[s]) {
                 g_lastTrackName[s] = n;
                 g_dev->send(uf8::buildStripTextUpper(static_cast<uint8_t>(s), n));

@@ -38,7 +38,7 @@ std::vector<uint8_t> buildStripTextUpper(uint8_t strip, std::string_view text)
     // Frame: FF 66 <len> 0B <strip> <N chars> CKSUM
     // where len = N + 2 (strip byte + N text bytes... wait: len = count of bytes between
     // len and cksum, which is 0B + strip + N chars = 2 + N).
-    const size_t N = std::min(text.size(), size_t{7});
+    const size_t N = std::min(text.size(), kUf8ScribbleChars);
     const uint8_t len = static_cast<uint8_t>(N + 2);
 
     std::vector<uint8_t> frame;
