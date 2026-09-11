@@ -25601,9 +25601,10 @@ bool uf1GonioReplayNext_(std::vector<std::vector<uint8_t>>& burst)
 // otherwise samples only once a SECOND — the full-rate log shows the shape
 // holding still while it dims). Accumulating again just fades everything twice.
 // The Lissajous-Fade-Time V-Pot sets the plug-in param, which flows into t10 and
-// thus into our render for free — so there is nothing to read or apply here.
-// (The dead uf1GonioTrail_ accumulator + a no-op fade read were removed
-// 2026-07-22.)
+// thus into our render for free — so there is no fade to read or apply here.
+// What IS ours is the transfer from float to byte: light, not the raw float
+// (see the resampling loop). (The dead uf1GonioTrail_ accumulator + a no-op
+// fade read were removed 2026-07-22.)
 void uf1PaintGoniometer_(const std::vector<float>& src,
                          std::vector<std::vector<uint8_t>>& burst)
 {
@@ -25674,28 +25675,47 @@ void uf1PaintGoniometer_(const std::vector<float>& src,
         if (sr < 0 || sr >= rows) { dst += wu; continue; }
         const int ws = sg.w[size_t(sr)];
         const int s0 = sg.start[size_t(sr)];
-        // AREA-WEIGHTED, not max over integer spans (2026-07-18). 185 source
-        // columns onto 93 pixels is a ratio of 1.989, so integer spans cover
-        // mostly 2 cells but one per row covers only 1 — and a pixel taking the
-        // max of ONE cell is systematically darker than its neighbours taking
-        // the max of two. Those outliers sit at a similar place in every row, so
-        // they line up: "dunkle vertikale linien die auf dem plugin nicht sind".
-        // A max also cannot produce intermediate values at all, which is why our
-        // images had 2% of pixels in the faintest byte class where SSL's have
-        // 14% — a source cell straddling two pixels should become two half-lit
-        // pixels, and that faint population IS the visible trail.
+        // AREA-WEIGHTED (2026-07-18), and since 2026-09-11 a SUM OF LIGHT rather
+        // than an average of the floats. The coverage arithmetic stays: 185
+        // source columns onto 93 pixels is a ratio of 1.989, and a max over
+        // integer spans left one pixel per row covering a single cell, darker
+        // than its two-cell neighbours and lined up across rows ("dunkle
+        // vertikale linien die auf dem plugin nicht sind"). A cell straddling
+        // two pixels still becomes two part-lit pixels.
+        //
+        // What changed is the value. The plug-in's floats are a ramp: every
+        // trail cell loses exactly 0.01 a frame (/tmp/ssl360.pcap, 600 frames,
+        // 1.7 million decrements of 0.01, 0.02 in one frame of fourteen, nothing
+        // else). The UF1 byte is light. Sent as they are, the floats keep the
+        // trail bright for most of the ramp and the eye sees it cut off at the
+        // end (Frank 2026-09-11: "klingt zu plötzlich ab, das ist im plugin
+        // smoother"); the plug-in's own window shows the same ramp through a
+        // monitor's 2.2 gamma, which is where its even fade comes from. So a
+        // float becomes light through that same 2.2 before it is integrated.
+        // SSL 360 does the like: its bytes (cap101, 2179 images) are convex in
+        // the floats, quantile for quantile an exponent of 2.2 to 3 over the
+        // upper half, and 14.5 % of its lit pixels sit below 16 where only
+        // 1.2 % of the floats sit below 0.06.
+        // And the average halved every one-cell trace (a 1.0 cell beside a
+        // dark one came out 0.5): our lit bytes spread flat over the sixteen
+        // classes while SSL's pile up at 0xEE, its most common byte. The sum
+        // keeps a fully covered cell at full brightness; two lit cells clamp.
+        constexpr double kUf1GonioGamma = 2.2;
         const double scale = double(ws) / double(wu);
         for (int c = 0; c < wu; ++c) {
             const double x0 = c * scale, x1 = (c + 1) * scale;
-            double acc = 0.0;
+            double acc = 0.0;   // light, in units of one fully lit cell
             for (int k = int(x0); k < ws && double(k) < x1; ++k) {
                 const double lo = double(k) > x0 ? double(k) : x0;
                 const double hi = double(k + 1) < x1 ? double(k + 1) : x1;
                 if (hi <= lo) continue;
                 const size_t idx = size_t(s0 + k);
-                if (idx < src.size()) acc += double(src[idx]) * (hi - lo);
+                if (idx >= src.size()) continue;
+                const float v = src[idx];
+                if (!(v > 0.f)) continue;              // dark, or the NaN sentinel
+                acc += std::pow(double(v), kUf1GonioGamma) * (hi - lo);
             }
-            const float m = float(acc / (x1 - x0));
+            const float m = float(acc);
             if (m > 0.f) {
                 ++litCells;
                 if (m > vmax) vmax = m;
