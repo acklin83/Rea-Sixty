@@ -632,6 +632,9 @@ std::atomic<int>  g_uf1CsPage {0};      // active page (arrows page it; 0..count
 // so it wraps within the ACTIVE type's page count (BC has 2, strips have 8) without
 // the worker touching the REAPER API (threading rule).
 std::atomic<int>  g_uf1CsActiveType {-1};
+// RESET pressed on the meter screen: the Analogue overload LEDs' latch (kept by
+// us since Meter Pro 1.3.7 stopped carrying it) clears on the next paint.
+std::atomic<bool> g_uf1OvlLatchClear {false};
 // Page count for the ACTIVE strip — the fixed per-type count for a built-in SSL
 // strip, or the dynamic packed count for a learned plug-in (which shrinks to fit
 // the user's mapped params). Written by the main-thread painter each tick; read
@@ -25687,6 +25690,42 @@ struct Uf1PeakHold {
     }
 };
 
+// The Analogue screen's SECOND needle (0x0127), as SSL 360 2.1.12 draws it —
+// MEASURED on cap130 (VU, 14 episodes) and cap131 (PPM, 11 episodes), 2026-09-11:
+//   · it rides the running MAXIMUM of the main needle's value;
+//   · it stands for ~1.9 s after the value last reached that maximum (the Meter
+//     Pro's "Analogue Max Needle", param 10: Off / 2 sec / Infinite);
+//   · then it RELEASES continuously, linear in the faceplate's own unit, until
+//     it lands on the main needle and rides it again — VU 72 dB/s (median,
+//     range 61-82, the whole dial in ~0.25 s), PPM 2.9 marks/s (median, range
+//     2.2-3.8, ~2 s from mark 7 down).
+// Uf1PeakHold above is the OVERVIEW bar marker's law (hold, then SNAP, cap89);
+// on the needle that snap was Frank's "zweite Nadel bleibt jerky" (2026-09-11).
+struct Uf1MaxNeedle {
+    float l = -120.f, r = -120.f;
+    std::chrono::steady_clock::time_point tl{}, tr{}, last{};
+    void reset(float vl, float vr, std::chrono::steady_clock::time_point now)
+    { l = vl; r = vr; tl = tr = last = now; }
+    // holdSec: 0 = Off (the needle sits on the main one), < 0 = Infinite.
+    void step(float vl, float vr, std::chrono::steady_clock::time_point now,
+              double holdSec, float releasePerS)
+    {
+        const double dt = std::clamp(
+            std::chrono::duration<double>(now - last).count(), 0.0, 0.5);
+        last = now;
+        auto one = [&](float v, float& h, std::chrono::steady_clock::time_point& t0) {
+            if (holdSec == 0.0 || v >= h) { h = v; t0 = now; return; }
+            if (holdSec < 0.0) return;
+            if (std::chrono::duration<double>(now - t0).count() < holdSec) return;
+            h = std::max(v, h - float(releasePerS * dt));
+        };
+        one(vl, l, tl); one(vr, r, tr);
+    }
+};
+constexpr double kUf1MaxNeedleHoldSec              = 2.0;    // param 10 "2 sec"; measured 1.8-1.95 s
+constexpr float  kUf1VuMaxNeedleReleaseDbPerS      = 72.f;   // cap130 median
+constexpr float  kUf1PpmMaxNeedleReleaseMarksPerS  = 2.9f;   // cap131 median
+
 // PPM Type-II is linear in marks (cap94, verified vs IEC 60268-10): byte = 9 +
 // (mark-1)*27.3, clamped [0,180]. mark relates to dBFS via the reference.
 uint8_t uf1PpmByte_(float mark)
@@ -25888,6 +25927,7 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // declares to the Core, and we are the Core. The loudness measurement
         // only resets where it is displayed.
         sslcore::resetMeter(true, g_uf1MeterScreen.load() == 3);
+        g_uf1OvlLatchClear.store(true);   // the Analogue LEDs' latch is ours since 1.3.7
     }
     // Did the plug-in take the preset we asked it to load? Its own
     // re-announcement of PresetSelection is the receipt; silence means the
@@ -26602,14 +26642,25 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 ppmMode = uf1MeterParamNorm_(mtr, mfx, 8, 0.0) >= 0.5;   // kAnalogueModeSel: 0.5+ = 04 = PPM
         }
         uint8_t nL, nR, hL, hR;
-        // Peak-hold "second needle" — held max, snaps to current every 3 s
-        // (cap88 line 33: 0x0127 holds while 0x0125 has fallen). The fallback
-        // whenever the stream has no real second needle: REAPER peaks, and dt=1
-        // since Meter Pro 1.3.7 (its f4 latches — see the VU branch). Only a
-        // stream that still sends dt=0 rides the plug-in's own f4.
-        static bool        sNdlPpm = false;
-        static MediaTrack* sNdlTr  = nullptr;
-        static Uf1PeakHold sNdlHold;
+        // The value the overload LEDs judge, in dB above the reference (VU dB,
+        // or PPM marks re-expressed at 4 dB/mark) — set by whichever branch runs.
+        float ovlDbL = -120.f, ovlDbR = -120.f;
+        // The second needle — SSL's measured law (Uf1MaxNeedle), driven by the
+        // plug-in's "Analogue Max Needle" setting (param 10: Off / 2 sec /
+        // Infinite). The fallback whenever the stream has no real second needle:
+        // REAPER peaks, and dt=1 since Meter Pro 1.3.7 (its f4 latches — see the
+        // VU branch). Only a stream that still sends dt=0 rides the plug-in's own f4.
+        static bool         sNdlPpm = false;
+        static MediaTrack*  sNdlTr  = nullptr;
+        static Uf1MaxNeedle sNdlHold;
+        double maxNeedleHoldSec = kUf1MaxNeedleHoldSec;
+        {
+            MediaTrack* mtr = nullptr; int mfx = -1;
+            if (uf1PinnedMeterTrackFx_(mtr, mfx)) {
+                const double n = uf1MeterParamNorm_(mtr, mfx, 10, 0.5);   // Off / 2 sec / Infinite
+                maxNeedleHoldSec = (n < 0.25) ? 0.0 : (n > 0.75) ? -1.0 : kUf1MaxNeedleHoldSec;
+            }
+        }
         if (ppmMode) {
             // ★ THE RULE, measured 2026-08-11 with a known signal: the plug-in
             // streams the value FOR THE FACEPLATE IT IS DRAWING. In PPM mode that
@@ -26674,7 +26725,8 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             if (force || tr != sNdlTr || sNdlPpm != ppmMode) {
                 sNdlTr = tr; sNdlPpm = ppmMode; sNdlHold.reset(mL, mR, now);
             }
-            sNdlHold.step(mL, mR, now);
+            sNdlHold.step(mL, mR, now, maxNeedleHoldSec, kUf1PpmMaxNeedleReleaseMarksPerS);
+            ovlDbL = (mL - 4.f) * 4.f; ovlDbR = (mR - 4.f) * 4.f;   // 4 dB per mark, mark 4 = Ref
             nL = uf1PpmByte_(mL); nR = uf1PpmByte_(mR);
             hL = uf1PpmByte_(havePpmHold ? mhL : sNdlHold.l);
             hR = uf1PpmByte_(havePpmHold ? mhR : sNdlHold.r);
@@ -26713,7 +26765,10 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 sNdlTr = tr; sNdlPpm = ppmMode; sNdlHold.reset(vuL, vuR, now);
                 sGlideL = vuL; sGlideR = vuR; sGlideT = now;
             }
-            sNdlHold.step(vuL, vuR, now);
+            // The max needle and the LEDs judge the RAW value: what the plug-in
+            // says, before the glide below trails it.
+            sNdlHold.step(vuL, vuR, now, maxNeedleHoldSec, kUf1VuMaxNeedleReleaseDbPerS);
+            ovlDbL = vuL; ovlDbR = vuR;
             if (readout) {
                 // Silence (the gate below) is a target like any other here: the
                 // needle glides to the floor instead of snapping to rest. The
@@ -26745,10 +26800,9 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             // measurement the needle follows VuPpm, which is the honest source
             // here -- clamping on a value that means "nobody answered" is what
             // froze it.
-            if (silent) {
-                if (readout) { hL = std::max<uint8_t>(4, nL); hR = std::max<uint8_t>(4, nR); }
-                else         { nL = nR = 4; hL = hR = 4; }
-            }
+            // On the readout path the second needle already releases to the
+            // floor by its own law, so only the dt=0 path still needs the snap.
+            if (silent && !readout) { nL = nR = 4; hL = hR = 4; }
         }
 
         const std::array<uint8_t, 2> ndl{ nL, nR }, hld{ hL, hR };
@@ -26799,23 +26853,25 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         {
             std::vector<uint8_t> ovl, ovlHold;
             uint8_t mask = 0x00;
-            // ⇨ ON THIS SCREEN ONLY THE NEEDLE'S OWN TYPE CAN CARRY THE BIT.
-            // SSL removed dt=0 in Meter Pro 1.3.7, so the old hard-coded VuPpm
-            // asked a type that no longer arrives and the red LEDs went dark in
-            // both VU and PPM (Frank 2026-09-11). The first cut asked BarPeak
-            // FIRST — in the 360 capture it carries f5 AND the f6 latch (5482 /
-            // 7815 frames) — but on the Analogue screen dt=2 sits FROZEN at its
-            // floor while still `have`, so the `||` short-circuited on it and
-            // dt=1 was never read: five REAPER starts of probe log, mask 0x00
-            // every time, BarPeak bits [0,0|0,0]. In the same capture dt=1 sets
-            // f5 9622 times and f6 never, so this screen gets the flash and no
-            // latch. Needle type first (dt=0 where it still exists, else dt=1);
-            // BarPeak stays as the fallback for a stream with no needle type.
-            // ⚠ Param 15 "Analogue Meters LED Overload" defaults to 9 dB above
-            // the reference, and analysis/gen_uf1_needle_wav.py tops out at
-            // Ref+8 — that file can never light this LED.
-            if (sslcore::getOverload(uf1NeedleDataType_(), ovl, ovlHold)
-                || sslcore::getOverload(int(sslmeter::DataType::BarPeak), ovl, ovlHold)) {
+            // ⇨ THE LEDs ARE 360's OWN ARITHMETIC, NOT A BIT FROM THE PLUG-IN.
+            // MEASURED 2026-09-11 (cap130 VU, cap131 PPM, SSL 360 2.1.12 on the
+            // UF1): 0x0128 reads 0x0f — flash AND latch, L and R — for the whole
+            // length of every hit above the threshold, then 0x0a (latch only)
+            // until a RESET; and in the plug-in's own stream dt=1 sets f5 in 0 of
+            // 1052 frames while its value sits above +9 dB in 85 of them. So 360
+            // compares the VALUE with the Meter Pro's "Analogue Meters LED
+            // Overload" (param 15: 0..24 dB above Ref, or Off) and keeps the
+            // latch itself. We do the same: flash while over, latch until the
+            // RESET soft key (the same press that resets the plug-in's holds).
+            // A plug-in that still sends dt=0 carried real f5/f6 there and keeps
+            // them (that path was measured before 1.3.7).
+            static bool sLatchL = false, sLatchR = false;
+            static MediaTrack* sLatchTr = nullptr;
+            if (g_uf1OvlLatchClear.exchange(false) || tr != sLatchTr) {
+                sLatchL = sLatchR = false; sLatchTr = tr;
+            }
+            if (uf1NeedleDataType_() == int(sslmeter::DataType::VuPpm)
+                && sslcore::getOverload(int(sslmeter::DataType::VuPpm), ovl, ovlHold)) {
                 if (ovl.size() >= 2) {
                     if (ovl[0]) mask |= 0x01;      // L overload
                     if (ovl[1]) mask |= 0x04;      // R overload
@@ -26824,6 +26880,21 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                     if (ovlHold[0]) mask |= 0x02;  // L latched
                     if (ovlHold[1]) mask |= 0x08;  // R latched
                 }
+            } else {
+                // Param 15 is an enum on the wire: 0.36 = "9 dB" (the default),
+                // 0.5 = "13 dB", 1.0 = "Off" — 25 dB per unit, rounded, Off at
+                // the top (docs/ssl-native-params/VST3__SSL_Meter_Pro_(SSL).md).
+                float thrDb = 9.f;
+                MediaTrack* mtr = nullptr; int mfx = -1;
+                if (uf1PinnedMeterTrackFx_(mtr, mfx)) {
+                    const double n = uf1MeterParamNorm_(mtr, mfx, 15, 0.36);
+                    thrDb = (n >= 0.99) ? 1e9f : float(std::lround(n * 25.0));
+                }
+                const bool overL = ovlDbL > thrDb, overR = ovlDbR > thrDb;
+                if (overL) { mask |= 0x01; sLatchL = true; }
+                if (overR) { mask |= 0x04; sLatchR = true; }
+                if (sLatchL) mask |= 0x02;
+                if (sLatchR) mask |= 0x08;
             }
             g_uf1_dev->send(uf1::buildScreen(0x0128, std::span<const uint8_t>(&mask, 1)));
         }
