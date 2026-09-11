@@ -99,6 +99,7 @@ The track REAPER considers "selected first" — `GetSelectedTrack(nullptr, 0)`. 
 - **FX** = any audio effect on a REAPER track.
 - **Instance** = the surface-mapped subset only:
   - SSL Channel Strip 2 + 4K B/E/G variants
+  - Harrison 32Classic Channel Strip (32C)
   - SSL Bus Compressor 2
   - SSL 360° Link
   - Combo plug-ins of the above
@@ -473,7 +474,7 @@ A column of buttons + the central LCD + the two encoders:
 
 - **Back** / **Confirm** — navigate the on-screen menus (Routing / Presets / etc.). From the main screen, **Back** opens the **EXT FUNCS** menu — a hidden list of channel-strip parameters that don't have a dedicated pot. Scroll it with the secondary encoder; push the encoder to switch from scrolling to adjusting the selected parameter. For SSL channel-strip plug-ins the list is the fixed SSL set; for user-mapped (non-SSL) channel strips it's whatever you curate (see *FX Learn pane → UC1 EXT FUNCS list*).
 - **Routing** — opens the Routing menu on the LCD.
-- **Presets** — opens the Presets menu for the instance the **Channel Strip / Bus Compressor** selection on that screen points at. An SSL plug-in lists SSL's own library in its folders; anything else lists REAPER's presets for it, your own and the factory list. Browsing loads nothing; **Confirm** does.
+- **Presets** — opens the Presets menu for the instance the **Channel Strip / Bus Compressor** selection on that screen points at. An SSL plug-in lists SSL's own library in its folders, the Harrison 32C its own in Harrison's; anything else lists REAPER's presets for it, your own and the factory list. Browsing loads nothing; **Confirm** does.
 - **360°** — default **Open / Close Rea-Sixty Settings** (bindable on its own UC1 entry so it can diverge from the UF8 360° key).
 - **Magnifier** — no factory action; bindable.
 
@@ -544,7 +545,9 @@ While `MODE` is held the **`CHANNEL` encoder** does a second job: it steps the
 **Encoder Mode** through the ring you configured, and SK4's label shows the live
 mode name as you turn. So one held key gives you both pickers — soft-keys for the
 view, encoder for the encoder mode. Which modes appear in the ring, and in what
-order, is set in *Settings → Bindings → UF1*.
+order, is set in *Settings → Bindings → UF1*. On the firmware that comes with SSL
+360 2.1.12 the screen also lists the ring while `MODE` is held: the live mode on
+top, highlighted, the next two below it, scrolling as you turn.
 
 The view survives until you change it. Everything below is described per view,
 because the same physical key does different work in each.
@@ -595,15 +598,15 @@ agree.
 ## Plugin view
 
 The channel strip of the plug-in on the focused track. When the plug-in is an SSL
-channel strip — or a third-party plug-in you have taught through *FX Learn* — the
-EQ curve is drawn on the screen and the four V-Pots carry that page's parameters.
+channel strip or the Harrison 32C — or a third-party plug-in you have taught
+through *FX Learn* — the EQ curve is drawn on the screen and the four V-Pots carry that page's parameters.
 
 | Control | Function |
 |---|---|
 | SK1-SK4 | The channel-strip section toggles for the current page (EQ In, HF Type, …). A blank slot does nothing. An engaged toggle **lights its key and highlights it on screen**. The highlight matters when the Bus-Comp GR meter is using the four key LEDs: the LEDs are then showing gain reduction, and the highlight is what still tells you which sections are in. |
 | SK4, page 1 | `PLUG-IN`, the SSL Strip Mode toggle, on a **native** SSL strip and on a **learned** channel strip alike, so the key is in the same place whatever the track is carrying. On a learned strip the packed parameters step one key along to make room, and a strip with its own UF1 map gets the key written into that map the first time this version reads it, shifting what sat on soft-key 4 and after. You get the key when the plug-in is learned as a Channel Strip and has a **Fader Level** slot mapped, since that is the parameter Strip Mode hands the fader; without it there would be nothing for the mode to drive. It is an ordinary slot, so move it or clear it in *FX Learn* like any other. |
 | V1-V4 | The current page's four parameters. |
-| `◄` `►` (page arrows) | Step the strip page. |
+| `◄` `►` (page arrows) | Step the strip page: eight on Channel Strip 2 and 360 Link, ten on the 4K B, E and G and the 32C, two on a bus compressor. |
 | `5-8` | Jump to V-Pots 5-8 of the page. |
 | `BANK ◄` `►` | Step one parameter left / right. |
 | Quick-key `1` (bottom row) | **Clear every solo** in the project (REAPER's *Unsolo all tracks*). Factory default; rebindable. The **SOLO ACTIVE** indication above it lights by itself whenever anything is soloed — that part is the UF1's own wording and is not ours to change. |
@@ -618,7 +621,8 @@ focused track**.
 
 Where the presets come from depends on the plug-in, and the browser picks for you.
 For an SSL plug-in it reads **SSL's own on-disk library**, the same one the UC1
-browses, because those plug-ins expose no presets to REAPER's list at all. For
+browses, because those plug-ins expose no presets to REAPER's list at all. The
+Harrison 32C works the same way, with its library in Harrison's own folder. For
 every other plug-in it reads **REAPER's own preset library**: your saved presets
 plus the factory list, from the `.ini` files REAPER keeps beside each plug-in.
 Either way the names are read off disk and nothing is loaded until you press, so
@@ -866,7 +870,9 @@ Both pickers are rings, and until now you scrolled them blind: the surface named
 the object you were on and said nothing about what was coming. Hold `MODE` or
 `SCRUB` and the on-screen banner turns into that ring instead: the live one
 marked, its neighbours above and below, wrapping round the ends because a ring is
-what it is. Let go and it disappears.
+what it is. Let go and it disappears. On the firmware that comes with SSL 360
+2.1.12 the UF1's own screen lists the ring too while you hold: the live one on
+top, highlighted, the next two below it.
 
 It is the same little window the mode banner uses, so it sits where you put that
 and takes its colours and font from the same right-click menu. **Ring
@@ -1142,7 +1148,7 @@ The colour and geometry rows appear only while the helper that uses them is swit
 |---|---|
 | SEL LED follows REAPER track colour | The SEL LED renders the track's REAPER colour instead of monochrome. Off → SEL is white when selected. On by default. Applies to the UF8's eight strips and to the UF1's single SEL key alike; the UF1 ignored the setting until v0.5.6. |
 | Colour bar names the send / receive source track | In send and receive modes the colour bar's plug-in name is blanked — the strip is a route, not a plug-in chain. Turn this on and that zone reads `S:<track>` (send) or `R:<track>` (receive): the track the route belongs to. The scribble above already names the *other* end, so the pair reads "this send, of that track". The zone is twelve characters, so the name gets ten, shortened by the *Long track-name handling* mode; unnamed tracks read `CH <n>`. Off by default — with a one-channel side-mixer the source track is never in doubt. |
-| Long track-name handling (combo) | How track names longer than the 7-char scribble-strip slot are shortened. *Truncate* (default) keeps the legacy first-7-chars cut ("Background Vocals" → "Backgro"). *Smart abbreviate* drops separators, then vowels after the first letter of each token, then collapses repeated consonants, then proportionally distributes the remaining char budget across tokens ("Background Vocals" → "BckgVcl", "Drums Bus" → "DrmsBs"). Short all-caps tokens (DI / FX / EQ / …) survive untouched. Mode switch repaints all 8 strips immediately. |
+| Long track-name handling (combo) | How track names longer than the 8-char scribble-strip slot are shortened. *Truncate* (default) keeps the first-8-chars cut ("Background Vocals" → "Backgrou"). *Smart abbreviate* drops separators, then vowels after the first letter of each token, then collapses repeated consonants, then proportionally distributes the remaining char budget across tokens ("Background Vocals" → "BckgrVcl", "Drums Bus" → "DrumsBus"). Short all-caps tokens (DI / FX / EQ / …) survive untouched. Mode switch repaints all 8 strips immediately. |
 
 ### Theme
 
@@ -1616,7 +1622,7 @@ Below the UC1 mockup, **Channel Strip domain only**, a 4-column grid lets you fi
 - The **Name** is shown on the UC1 LCD — the carousel shows up to **11 characters**, the header line shows the full name.
 - Empty rows are skipped on the surface; the order on the device follows the grid (left column top-to-bottom, then right column).
 - The dropdown lists this plug-in's parameters (from the FX-Learn param snapshot); pick **(none)** to clear a slot.
-- This applies to **user-mapped (non-SSL) channel-strip plug-ins only**. SSL channel strips keep their fixed built-in EXT FUNCS list and are not edited here.
+- This applies to **user-mapped (non-SSL) channel-strip plug-ins only**. SSL channel strips and the Harrison 32C keep their fixed built-in EXT FUNCS list and are not edited here.
 - Saved per plug-in in `user_plugins.json` (`extFuncs`, schema v8).
 
 Note: a parameter you put in EXT FUNCS that's also on a physical V-Pot uses the plain encoder path — it doesn't share that V-Pot's range / curve / sensitivity. (SSL built-in EXT FUNCS slots keep full knob travel.)
@@ -1662,7 +1668,8 @@ inheriting.
 Rea-Sixty normally finds the fifteen EQ parameters by SSL's own parameter names,
 which a third-party plug-in does not use; when this is on it resolves each one
 through the map instead. It only makes sense on a map whose domain is a channel
-strip.
+strip. ReaEQ states its band widths in octaves, and the graph converts them to Q
+before it draws.
 
 Two controls, one above the other:
 
@@ -1673,7 +1680,7 @@ Two controls, one above the other:
   with it. The same three-way sits on the Learn-HUD's UF1 tab: the button reads
   *EQ Graph: global / on / off* and cycles through them.
 
-The built-in SSL strips ignore all of this — they find their parameters by name
+The built-in SSL strips and the Harrison 32C ignore all of this — they find their parameters by name
 and always draw the curve. And when the impersonator is running, the curve on an
 SSL strip is the plug-in's own, not our reconstruction of it.
 
@@ -2324,7 +2331,7 @@ While SSL Strip Mode is on:
 
 - **Fader** → CS Fader Level (the CS plug-in's own fader parameter, rather than REAPER's track volume). A strip whose track carries no CS plug-in keeps track volume on the fader. FLIP wins per strip, and a user-mapped UF8 fader wins over the built-in CS fader.
 - **V-Pot** → the CS plug-in's own **Pan** (linkIdx 3) wherever the V-Pot would otherwise show REAPER track pan; the readout ring and the Value Line follow that param. A focused parameter still wins, exactly as outside the mode.
-- **Colour-bar Type zone** → the label of the CS instance the fader is routed to (CS2, 4K B, 4K E, 4K G, or the user rename). It beats the FX-Cycle label while the mode is on.
+- **Colour-bar Type zone** → the label of the CS instance the fader is routed to (CS2, 4K B, 4K E, 4K G, 32C, or the user rename). It beats the FX-Cycle label while the mode is on.
 - **Sticky Pot steps aside** while the mode owns the V-Pot layer.
 
 That is the whole mode. Soft-keys, Solo / Cut / Sel, meters, scribble names and banking are untouched by it. The CS soft-key rows and their six pages are the **SSL Soft-Key Sets** (Layer 1, Q1 / Q2) and work the same whether or not SSL Strip Mode is engaged; `Page ←` / `Page →` are the generic soft-key bank keys, so on those sets they step SSL's six pages.
@@ -2477,6 +2484,7 @@ Each control carries its value to the matching control on the new plug-in, match
 - A control the **new** plug-in lacks is remembered, so the value survives a round-trip through a simpler strip and is restored when you cycle back.
 - **The SSL routing order and the EXT FUNCS carry too** — the EQ / filter / dynamics arrangement and the free function assignments follow the swap, matched by what each control *is*, so they survive a move between different strips whose internals are numbered differently.
 - A filter parked **fully open** lands on the destination's own "out" position where it has one, rather than arriving as a real 20 kHz.
+- **ReaEQ states a band's width in octaves**, the other strips state Q. The width travels as Q and is converted into and out of ReaEQ, so an SSL Q of 1.5 lands on ReaEQ as about 0.94 octaves.
 
 **Copy only mapped parameters** (Settings → Favourites, on by default) decides how far the matching goes. On, only parameters mapped to a control carry. Off, Rea-Sixty also matches unmapped parameters by name — which can be useful for an unmapped strip, but can also drag across things you did not mean, such as an auto-makeup-gain control that happens to be named like a makeup gain.
 
@@ -2777,7 +2785,7 @@ Eight rows, one per strip:
 | Column | What it is |
 |---|---|
 | **On** | Include this lamp. Only enabled rows take a strip. |
-| **Label** | Shown on the scribble strip, seven characters |
+| **Label** | Shown on the scribble strip, eight characters |
 | **Target** | A single lamp, or a whole room or zone |
 | **Kind** | `lamp` or `zone`, filled in for you |
 | **Bar** | The strip's colour bar when the lamp is off |
