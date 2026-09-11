@@ -25704,21 +25704,31 @@ void uf1PaintGoniometer_(const std::vector<float>& src,
         // classes while SSL's pile up at 0xEE, its most common byte. The sum
         // keeps a fully covered cell at full brightness; two lit cells clamp.
         constexpr double kUf1GonioGamma = 2.2;
+        // ⇨ ONE CELL, ONE PIXEL, THE BRIGHTEST WINS (2026-09-11, later). The sum
+        // of light above saturated two lit cells into one block and split a
+        // straddling cell into two part-lit pixels; Frank: "wirkt eher körnig
+        // gegen plugin", the fade "macht nicht so schön alpha". Measured on
+        // SSL's own images (cap101, 2179) against our pipeline run on the
+        // plug-in's floats (/tmp/ssl360.pcap): of a bright pixel's horizontal
+        // neighbours SSL has 59 % bright and 8 % faint, the sum 79 % and 4 %,
+        // the max per pixel 47 % and 5 %. So each source cell goes to exactly
+        // one pixel, by its centre, and a pixel shows the brightest cell it
+        // was given: no doubling, no split, a one-cell trace stays one line at
+        // full brightness and its anti-aliased edge cells keep their own value.
         const double scale = double(ws) / double(wu);
+        std::array<float, 93> px{};
+        for (int k = 0; k < ws; ++k) {
+            const size_t idx = size_t(s0 + k);
+            if (idx >= src.size()) break;
+            const float v = src[idx];
+            if (!(v > 0.f)) continue;              // dark, or the NaN sentinel
+            int c = int((double(k) + 0.5) / scale);
+            if (c >= wu) c = wu - 1;
+            const float lv = float(std::pow(double(v), kUf1GonioGamma));
+            if (lv > px[size_t(c)]) px[size_t(c)] = lv;
+        }
         for (int c = 0; c < wu; ++c) {
-            const double x0 = c * scale, x1 = (c + 1) * scale;
-            double acc = 0.0;   // light, in units of one fully lit cell
-            for (int k = int(x0); k < ws && double(k) < x1; ++k) {
-                const double lo = double(k) > x0 ? double(k) : x0;
-                const double hi = double(k + 1) < x1 ? double(k + 1) : x1;
-                if (hi <= lo) continue;
-                const size_t idx = size_t(s0 + k);
-                if (idx >= src.size()) continue;
-                const float v = src[idx];
-                if (!(v > 0.f)) continue;              // dark, or the NaN sentinel
-                acc += std::pow(double(v), kUf1GonioGamma) * (hi - lo);
-            }
-            const float m = float(acc);
+            const float m = px[size_t(c)];
             if (m > 0.f) {
                 ++litCells;
                 if (m > vmax) vmax = m;
