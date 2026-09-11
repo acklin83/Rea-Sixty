@@ -30331,6 +30331,21 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         sZoneBlank = false;
         changed    = true;
     }
+    // ⛔ THE METER VIEW LEAVES THIS PLANE ALONE, AS SSL 360 DOES.
+    // cap75 (360 entering the Meter view) and cap130 (2.1.12, Analogue, 110 s):
+    // SSL writes nothing to 0x00xx in the Meter view but 0009/000a/0015/0016.
+    // Our own frame trace of 2026-09-11 (22:49) showed name, dB, pan line, bar,
+    // channel number, colour bar (0x0018 = the track's palette index) and the
+    // populated flag going out every few seconds on the Analogue screen, on top
+    // of SSL's nine elements, while the readout text stays red where SSL's is
+    // white. Frank: the strip above the fader is to show "ausschliesslich das
+    // von ssl". So the text and colour writes wait for the channel view; the
+    // SEL / Solo / Cut LEDs below keep following the fader's track. Coming
+    // back repaints everything: the statics still describe the pre-meter state.
+    static bool sPlaneHeld = false;
+    const bool meterView = g_uf1MeterView.load();
+    if (meterView) sPlaneHeld = true;
+    else if (sPlaneHeld) { sPlaneHeld = false; changed = true; }
 
     // UF1 Extender send fader (Step 4): the strip's NAME + dB read out the 9th
     // SEND, not tr. Name = the send's dest / hw-out (routeName_ — ground truth),
@@ -30395,13 +30410,13 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
                                    /*foldLatin1*/ false);
     }
     if (sendZone) name = ovName;   // Extender: the 9th send's dest, not the track
-    if (changed || name != sName) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
+    if (!meterView && (changed || name != sName)) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
 
     // Output dB (0x000c): 0x00 + value left-justified, NUL-padded to 6, + "dB"
     const double volLin = GetMediaTrackInfo_Value(tr, "D_VOL");
     std::string dbv = formatDbReadout(volLin);
     if (sendZone) dbv = ovDb;      // Extender: the 9th send's EFFECTIVE level
-    if (changed || dbv != sDb) {
+    if (!meterView && (changed || dbv != sDb)) {
         sDb = dbv;
         std::vector<uint8_t> p;
         p.push_back(0x00);
@@ -30491,7 +30506,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
             barCentre = 0x00;   // unipolar, no centre detent
         }
     }
-    if (changed || valLine != sValLine) { sValLine = valLine; sendZoneText(uf1::scr::kValueLine, valLine); }
+    if (!meterView && (changed || valLine != sValLine)) { sValLine = valLine; sendZoneText(uf1::scr::kValueLine, valLine); }
     // The bar's STYLE, which the init replay leaves at 0x03 = "off". Nothing
     // corrected it afterwards, so every position we sent to the bar below drew
     // nothing at all — not the Pan bar, not a Sticky Pot, not the preamp gain
@@ -30506,7 +30521,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     {
         static uint8_t sBarStyle = 0;
         constexpr uint8_t kStylePointer = 0x01;
-        if (changed || sBarStyle != kStylePointer) {
+        if (!meterView && (changed || sBarStyle != kStylePointer)) {
             sBarStyle = kStylePointer;
             g_uf1_dev->send(uf1::buildScreen(
                 uf1::scr::kBarStyle,
@@ -30515,7 +30530,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         }
     }
     const int barKey = barPos * 2 + (barCentre ? 1 : 0);
-    if (changed || barKey != sBarKey) {
+    if (!meterView && (changed || barKey != sBarKey)) {
         sBarKey = barKey;
         const std::vector<uint8_t> pb = { static_cast<uint8_t>(barPos), barCentre };
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVPotReadoutBar, pb));
@@ -30524,7 +30539,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     // Channel number (0x0014)
     const int idx = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
     const std::string ch = std::to_string(idx);
-    if (changed || ch != sCh) { sCh = ch; sendZoneText(uf1::scr::kChNumber, ch); }
+    if (!meterView && (changed || ch != sCh)) { sCh = ch; sendZoneText(uf1::scr::kChNumber, ch); }
 
     // Track colour: SEL / track-colour element 0x07 (FF38 GRB) + the fader colour
     // BAR (0x0018, palette index), gated by the 0x0006 "channel populated" flag.
@@ -30594,8 +30609,10 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         g_uf1_dev->send(uf1::buildLedLevel(uf1::led::kSel, uf1::led::kFf39Lit));      // FF39 = 0x00 → LIT
         const std::array<uint8_t, 1> active{0x01};
         const std::array<uint8_t, 1> barIdx{uf8::quantize(rgb)};   // BAR = TRACK colour (always)
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive, active));
+        if (!meterView) {   // the plane, not the LED: see the gate at the top
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive, active));
+        }
     }
 
     // Solo / Cut button LEDs (cap64/cap65 ground truth). The scheme is the UF8's
