@@ -380,6 +380,15 @@ void broadcastBuiltinSlot(MediaTrack* leader,
                      normValue, !targets.empty(),
                      static_cast<double>(targets.size()));
     if (targets.empty()) return;
+    // A learned map can run a control the other way round (the FX-Learn invert
+    // box, e.g. a plug-in whose EQ In reads 1 = OUT). The value handed in is the
+    // LEADER's raw position, so each member gets it in its own sense: flipped
+    // where exactly one of the two slots is inverted. Without this an inverted
+    // slot landed on every member upside down (2026-09-11).
+    bool leaderInv = false;
+    if (auto lm = lookupPluginOnTrack(leader, domain); lm.map)
+        if (const LinkSlot* ls = findSlotByLinkIdx(*lm.map, slotLinkIdx))
+            leaderInv = ls->inverted;
     ScopedSuppress guard;
     for (auto* t : targets) {
         auto match = lookupPluginOnTrack(t, domain);
@@ -394,12 +403,13 @@ void broadcastBuiltinSlot(MediaTrack* leader,
                              slotLinkIdx, normValue, false, 0);
             continue;
         }
+        const double tv = (sl->inverted != leaderInv) ? 1.0 - normValue : normValue;
         const bool tOk = TrackFX_SetParamNormalized(
-            t, match.fxIndex, sl->vst3Param, normValue);
+            t, match.fxIndex, sl->vst3Param, tv);
         const double tAfter = TrackFX_GetParamNormalized(
             t, match.fxIndex, sl->vst3Param);
         diagSetParamLog_("BROADCAST/target", t, match.fxIndex,
-                         sl->vst3Param, normValue, tOk, tAfter);
+                         sl->vst3Param, tv, tOk, tAfter);
     }
     // Cement leader as last-touched-FX so chaseLastTouchedFx doesn't
     // chase the last member we just wrote and jump focus around. The
