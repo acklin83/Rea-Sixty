@@ -8135,6 +8135,38 @@ int64_t     g_uf1TouchChangeMs   = 0;
 MediaTrack* g_uf1LastSeenSel     = nullptr;
 MediaTrack* g_uf1LastSeenTouched = nullptr;
 
+// ⛔ A UF8 FADER IS NOT A TOUCH THE UF1 SHOULD FOLLOW.
+// Set by the UF8 fader's VolumeAbs drain to the track it just wrote; the
+// recency poll below absorbs THAT track's last-touched change without stamping
+// it. Why it has to exist at all: writing a track's volume makes it REAPER's
+// last-touched track, and uf1FocusedTrack_ returns last-touched in every view
+// but DAW — so grabbing a fader on the UF8 dragged the whole UF1 onto that
+// channel, both panel halves, because uf1FaderTrack_ falls through to the same
+// resolver without an Extender or a Focus-Set pin (Frank 2026-09-10: "das ganze
+// uf1 wechselt auf den track bei berührung").
+// ⇨ AND THE TOUCH ALONE DID IT, with no movement at all: the touch-down edge
+// queues a VolumeAbs seed so Touch/Latch opens the envelope where the fader
+// stood. "Touch selects channel" could never stop this — that setting sits on
+// the SELECTION path, which this view does not read.
+// What last-touched is FOR here stays: reaching for a plug-in parameter on an
+// unselected track still pulls the UF1 over. A fader on the bank surface is not
+// that gesture.
+// The TRACK, not a bool: a stale flag would swallow whatever the user touched
+// next. This only ever absorbs a change that lands on the exact track our own
+// fader wrote.
+std::atomic<void*> g_uf8FaderVolumeTrack{nullptr};
+
+// ⛔ AND NOT STAMPING IT IS NOT ENOUGH — THE RESOLVER MUST NOT READ IT EITHER.
+// Withholding the timestamp leaves last-touched POINTING at the absorbed track,
+// and the recency test is `selMs > touchMs`: a tie goes to TOUCH. Selecting a
+// channel and then grabbing a UF8 fader under the same stamp does exactly that,
+// so the UF1 still jumped to the fader's track with absorbed=1 sitting in the
+// probe line (Frank 2026-09-10, measured — the reason the first cut of this
+// changed nothing at the surface). True while the CURRENT last-touched track is
+// one our own fader put there; any other move of last-touched clears it,
+// because then the value is a real gesture again.
+std::atomic<bool> g_uf1TouchWasOurs{false};
+
 // Main thread, once per tick.
 void uf1TrackFocusRecency_()
 {
@@ -8145,8 +8177,13 @@ void uf1TrackFocusRecency_()
     }
     MediaTrack* tch = GetLastTouchedTrack();
     if (tch != g_uf1LastSeenTouched) {
+        // Consumed either way — the note above is one tick old at most, because
+        // drainInputQueue runs AFTER this poll in onTimerBody_.
+        void* const ours = g_uf8FaderVolumeTrack.exchange(nullptr);
         g_uf1LastSeenTouched = tch;
-        g_uf1TouchChangeMs   = nowMs_();
+        const bool absorbed = (static_cast<void*>(tch) == ours);
+        g_uf1TouchWasOurs.store(absorbed, std::memory_order_relaxed);
+        if (!absorbed) g_uf1TouchChangeMs = nowMs_();
     }
 }
 
@@ -17522,7 +17559,11 @@ MediaTrack* uf1FocusedTrack_()
     // chose is what you meant. Covers SEL, the channel encoder, the mouse and
     // anything added later, because it compares the two signals rather than
     // trusting a flag someone remembered to set. See uf1TrackFocusRecency_.
-    if (g_uf1SelChangeMs > g_uf1TouchChangeMs) {
+    // The absorbed case first: when last-touched is only there because our own
+    // UF8 fader wrote it, it is not a gesture at all and the selection stands.
+    // See g_uf1TouchWasOurs for why withholding the timestamp alone did not do it.
+    if (g_uf1TouchWasOurs.load(std::memory_order_relaxed)
+        || g_uf1SelChangeMs > g_uf1TouchChangeMs) {
         if (MediaTrack* sel = GetSelectedTrack(nullptr, 0)) return sel;
     }
     MediaTrack* tr = GetLastTouchedTrack();
@@ -20055,6 +20096,11 @@ void drainInputQueue()
                 }
                 break;
             case PendingInput::VolumeAbs: {
+                // Every branch below writes something on `tr`, and every one of
+                // those writes makes it REAPER's last-touched track. Note it so
+                // the UF1's focus recency can ignore its own surface's fader —
+                // see g_uf8FaderVolumeTrack.
+                if (tr) g_uf8FaderVolumeTrack.store(tr, std::memory_order_relaxed);
                 // Diag (Frank 2026-05-19): unconditional snapshot of the
                 // state that decides which fader-write branch fires, so
                 // when the SetParam log doesn't get hit we can see WHY.
