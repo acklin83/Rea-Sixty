@@ -315,7 +315,7 @@ private:
         int         vst3Param = -1;  // -1 = label only, nothing to read/adjust
         int         linkIdx   = -1;  // >=0 = SSL slot (enables usl knob-travel
                                      // + param-group broadcast); -1 = free param
-        int         special   = 0;   // 1 = A/B: the plug-in's state, not a param
+        int         special   = 0;   // not a param: 1 = A/B (plug-in state), 2 = PLUG-IN (SSL Strip Mode)
     };
     // Resolve the active EXT FUNCS list for the focused CS plug-in. Empty when
     // a user-mapped CS plug-in has no curated entries (caller shows "(none)").

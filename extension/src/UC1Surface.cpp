@@ -105,6 +105,8 @@ bool reasixty_dynBankPageControl(int control, int delta);
 int reasixty_stripInstanceActiveFx(MediaTrack* tr);
 std::string reasixty_fxCycleDisplayName(MediaTrack* tr, int fxIdx);
 void reasixty_toggleMixerWindow();
+void reasixty_toggleSslStripMode();   // the ssl_strip_mode_toggle builtin
+bool reasixty_sslStripModeOn();
 bool reasixty_grAnyFx();   // GR-source toggle (Settings → Devices → Metering)
 bool reasixty_grCombineUc1();  // UC1 combined-GR toggle (Settings → Devices → Metering)
 bool reasixty_uc1ShowMasterAsTrack0();  // Master-as-track-0 (Settings → Behaviour → Master track)
@@ -257,30 +259,27 @@ constexpr ExtFuncsEntry kExtFuncs[] = {
 // Harrison 32C: SSL 360 2.1.12's OWN list for this strip, MEASURED (cap137
 // t=70-85, 2026-09-11, Frank walked the whole menu on the UC1). Short and long
 // labels exactly as SSL sends them, in SSL's order; VST3 indices from the 32C
-// dump, and every value SSL showed matches that param's dump value. All 32
-// entries, like SSL. Six are not plug-in parameters: A/B flips the plug-in's
-// StateASelected (togglePluginAB, the 4K strips' A/B); PLUG-IN, RESET EQ /
-// RST COMP / RST GATE (360's section resets) and SOLO SAFE (SSL itself shows
-// "N/A") are listed without a function yet. HYST/KNEE reads Gate Hysteresis:
-// the capture ran with the expander off.
+// dump, and every value SSL showed matches that param's dump value. SSL lists
+// 32 entries; its three section resets and SOLO SAFE are left out (Frank
+// 2026-09-11), 28 remain. Two are not plug-in parameters: PLUG-IN toggles SSL
+// Strip Mode (the UF8/UC1 one, the UF8's PLUG-IN key), and A/B flips the
+// plug-in's StateASelected (togglePluginAB, the 4K strips' A/B). HYST/KNEE
+// reads Gate Hysteresis: the capture ran with the expander off.
 struct ExtFuncsParam { const char* shortLabel; const char* longLabel; int vst3Param; int special = 0; };
 constexpr ExtFuncsParam kExtFuncs32c[] = {
-    { "PLUG-IN",   "PLUG-IN",            -1 },
+    { "PLUG-IN",   "PLUG-IN",            -1, 2 },   // SSL Strip Mode
     { "COMP MIX",  "Mix",                55 },
     { "PRE",       "Pre",                10 },   // Saturator In, as the UF1's PRE key
     { "MIC",       "Mic",                11 },   // Saturator Drive
     { "FILT IN",   "Filters",            49 },
-    { "RESET EQ",  "EQ RESET",           -1 },
     { "EQ SOLO",   "Equalizer Solo",      5 },
     { "EQ ONLY",   "Equalizer In",        4 },
-    { "RST COMP",  "COMP RESET",         -1 },
     { "COMP SOLO", "Compressor Solo",     3 },
     { "CMP ONLY",  "Compressor In",       2 },
     { "COMP GAIN", "Compressor Makeup",  32 },
     { "CMP EM IN", "Comp Emphasis In",   31 },
     { "COMP EMPH", "Comp Emphasis Freq", 30 },
     { "CM SC SRC", "Comp SC Source",     54 },
-    { "RST GATE",  "GATE RESET",         -1 },
     { "GATE SOLO", "Gate Solo",           1 },
     { "GATE ONLY", "Gate In",             0 },
     { "GTSCFLIN",  "Gate SC Filter In",  22 },
@@ -291,7 +290,6 @@ constexpr ExtFuncsParam kExtFuncs32c[] = {
     { "PAN",       "Pan",                62 },
     { "WIDTH",     "Width",              59 },
     { "OUT TRIM",  "Out Trim",            8 },
-    { "SOLO SAFE", "EXTENDED FUNCTIONS", -1 },   // SSL's header and "N/A" for this one
     { "A/B",       "A/B",                -1, 1 },
     { "HQ",        "HQ Mode",            63 },
     { "WIDTH MD",  "Width Mode",         60 },
@@ -1165,6 +1163,12 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         const auto& item = items[extFuncsIdx_];
         if (item.special == 1) {    // A/B: the plug-in's StateASelected (chunk)
             uf8::togglePluginAB(static_cast<MediaTrack*>(focusedTrack_));
+            renderExtFuncsSubscreen_();
+            ++stats_.knobEventsHandled;
+            return;
+        }
+        if (item.special == 2) {    // PLUG-IN: SSL Strip Mode, the UF8/UC1 toggle
+            reasixty_toggleSslStripMode();
             renderExtFuncsSubscreen_();
             ++stats_.knobEventsHandled;
             return;
@@ -3426,6 +3430,10 @@ void UC1Surface::renderExtFuncsSubscreen_()
         int ab = -1, hq = -1;
         uf8::readPluginToggleStates(static_cast<MediaTrack*>(focusedTrack_), ab, hq);
         device_->send(buildLcdValue(ab == 1 ? "On" : ab == 0 ? "Off" : ""));
+        device_->send(buildLcdUnit(""));
+    } else if (cur.special == 2) {
+        // PLUG-IN: SSL Strip Mode, the UF8/UC1 one.
+        device_->send(buildLcdValue(reasixty_sslStripModeOn() ? "On" : "Off"));
         device_->send(buildLcdUnit(""));
     }
     // Commit (FF 66 02 09 <flag>) is NOT sent per scroll step —

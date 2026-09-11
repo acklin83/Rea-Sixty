@@ -22537,14 +22537,12 @@ static bool uf1EncListOpen_()
 {
     return g_uf1ModeMenu.load() || g_uf1ScrubHeld.load();
 }
-// Cells 0-2 = rows 1-3: `vis` in ring order, the live mode `cur` first. Cell 5
-// gets the list's name as a PROBE for the title the firmware draws as "CHANNEL"
-// (Frank 2026-09-11: "Channel soll ENC MODE bzw. JOG MODE anzeigen"). SSL leaves
-// cells 5-7 empty and no capture shows another title there, so whether the
-// firmware draws cell 5 at all (0x011e bit 5 set while open) is what it tests.
+// Cells 0-2 = rows 1-3: `vis` in ring order, the live mode `cur` first. Cells 5-7
+// stay empty as SSL leaves them: the "CHANNEL" above the list is the firmware's
+// own title and cannot be set (probed 2026-09-11, Frank: "firmware").
 static void uf1FillModeList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h,
                              int* vis, int n, int cap, int cur,
-                             const char* (*nameOf)(int), const char* title)
+                             const char* (*nameOf)(int))
 {
     int ci = -1;
     for (int i = 0; i < n; ++i) if (vis[i] == cur) { ci = i; break; }
@@ -22559,7 +22557,6 @@ static void uf1FillModeList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h,
     };
     for (int r = 0; r < 3; ++r)
         put(r, (r < n) ? nameOf(vis[(ci + r) % n]) : "");
-    put(5, title);
 }
 static void uf1SetEncoderList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h)
 {
@@ -22572,8 +22569,7 @@ static void uf1SetEncoderList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h)
     }
     uf1FillModeList_(h, vis, n, kEncoderModeCount,
                      static_cast<int>(g_uf1EncoderMode.load()),
-                     [](int m) { return uf1EncoderModeHdr_(static_cast<EncoderMode>(m)); },
-                     "ENC MODE");
+                     [](int m) { return uf1EncoderModeHdr_(static_cast<EncoderMode>(m)); });
 }
 // The jog picker (SCRUB held + wheel, uf1JogModeStep_) draws the same list over
 // the jog ring, g_uf1JogSeq / g_uf1JogVisible (Frank 2026-09-11: "wieso zeichnet
@@ -22589,8 +22585,7 @@ static void uf1SetJogList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h)
     }
     uf1FillModeList_(h, vis, n, kUf1JogModeCount,
                      static_cast<int>(g_uf1JogMode.load()),
-                     [](int m) { return uf1JogModeHdr_(static_cast<Uf1JogMode>(m)); },
-                     "JOG MODE");
+                     [](int m) { return uf1JogModeHdr_(static_cast<Uf1JogMode>(m)); });
 }
 // 0x011d: row 1 highlighted while the list is open, 00 otherwise (ours as before;
 // SSL's idle is 0x19).
@@ -31558,7 +31553,7 @@ void uf1PaintChannel_()
             // view-state byte; SSL's channel state going into a meter-view entry
             // is 00 (cap101). 0x19 while the encoder list is open.
             put(0x011d, {uf1HeaderHighlight_()});
-            put(0x011e, {static_cast<uint8_t>(encList ? 0x3f : 0x18)});   // 0x3f: see the list edge below
+            put(0x011e, {static_cast<uint8_t>(encList ? 0x1f : 0x18)});
             // The ff-state: SSL holds 0x0009=ffff0000, 0x0015/16=ff in the
             // channel state (cap101 t=26.62 and the whole idle stream). Our
             // cap66 init replay left 0009=00000000, so we entered the meter
@@ -32072,7 +32067,7 @@ void uf1PaintChannel_()
             const bool open = listOpen;
             const uint8_t s0110 = open ? 0x07 : 0x0f;
             const uint8_t s011a = open ? 0x03 : 0x02;
-            const uint8_t s011e = open ? 0x3f : 0x18;   // SSL's 0x1f + bit 5, the cell-5 title probe
+            const uint8_t s011e = open ? 0x1f : 0x18;   // SSL's value (cap132)
             g_uf1_dev->send(uf1::buildScreen(0x0110, std::span<const uint8_t>(&s0110, 1)));
             g_uf1_dev->send(uf1::buildScreen(0x011a, std::span<const uint8_t>(&s011a, 1)));
             g_uf1_dev->send(uf1::buildScreen(0x011e, std::span<const uint8_t>(&s011e, 1)));
@@ -47341,6 +47336,10 @@ void reasixty_uc1KnobCensus(int id, int mag, bool wire)
         g_uc1KnobHandFrames[i].fetch_add(1, std::memory_order_relaxed);
     }
 }
+// The UC1's EXT FUNCS "PLUG-IN" (the 32C's list) fires the UF8's own SSL Strip
+// Mode builtin, so the toggle keeps one writer.
+void reasixty_toggleSslStripMode()    { uf8::bindings::invokeBuiltin("ssl_strip_mode_toggle", 0); }
+bool reasixty_sslStripModeOn()        { return g_pluginFaderMode.load(); }
 bool reasixty_uf1EqGraphLearned()     { return g_uf1EqGraphLearned.load(); }
 void reasixty_setUf1EqGraphLearned(bool on)
 {
