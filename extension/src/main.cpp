@@ -25870,6 +25870,12 @@ struct Uf1MaxNeedle {
 constexpr double kUf1MaxNeedleHoldSec              = 2.0;    // param 10 "2 sec"; measured 1.8-1.95 s
 constexpr float  kUf1VuMaxNeedleReleaseDbPerS      = 72.f;   // cap130 median
 constexpr float  kUf1PpmMaxNeedleReleaseMarksPerS  = 2.9f;   // cap131 median
+// The plug-in's dt=1 hold, as SSL 360 bridges it (see the VU glide in
+// uf1PaintMeter_): a value frozen bit for bit this long is being held, and no
+// hold lasts longer than the second figure (cap130/131 and /tmp/ssl360.pcap:
+// 0.48 to 0.52 s, then the jump to the current value).
+constexpr double kUf1VuHoldDetectS = 0.10;
+constexpr double kUf1VuHoldMaxS    = 0.60;
 
 // PPM Type-II is linear in marks (cap94, verified vs IEC 60268-10): byte = 9 +
 // (mark-1)*27.3, clamped [0,180]. mark relates to dBFS via the reference.
@@ -26920,11 +26926,16 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             // no hold, and a plug-in still sending it keeps it untouched.
             static float sGlideL = -139.2f, sGlideR = -139.2f;
             static std::chrono::steady_clock::time_point sGlideT{};
+            // The last RAW dt=1 value per channel and when it last changed: the
+            // plug-in's hold shows up as a value frozen bit for bit.
+            static float sRawL = NAN, sRawR = NAN;
+            static std::chrono::steady_clock::time_point sRawSinceL{}, sRawSinceR{};
             const bool silent  = (havePeak && peak <= -100.f);
             const bool readout = haveVuReadout;
             if (force || tr != sNdlTr || sNdlPpm != ppmMode) {
                 sNdlTr = tr; sNdlPpm = ppmMode; sNdlHold.reset(vuL, vuR, now);
                 sGlideL = vuL; sGlideR = vuR; sGlideT = now;
+                sRawL = sRawR = NAN; sRawSinceL = sRawSinceR = now;
             }
             // The max needle judges the RAW value: what the plug-in says, before
             // the glide below trails it.
@@ -26940,8 +26951,32 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 sGlideT = now;
                 const float drop = kUf1VuReadoutFallDbPerS
                                  * float(std::clamp(dtS, 0.0, 0.5));
-                sGlideL = std::max(tgtL, sGlideL - drop);
-                sGlideR = std::max(tgtR, sGlideR - drop);
+                // ⇨ THE HOLD IS BRIDGED, THE WAY SSL 360 BRIDGES IT.
+                // dt=1 freezes every local maximum for 0.5 s, bit for bit, then
+                // jumps to the current value (/tmp/ssl360.pcap: both cores get
+                // the same frozen floats). Waiting it out kept our needle on the
+                // peak for those 0.5 s and only then let it glide: Frank
+                // 2026-09-11, "unsere ist immer noch zu lange auf dem höchstwert
+                // pro ausschlag", against SSL, whose needle "bleibt viel weniger
+                // lang auf dem peak stehen". cap130 (VU) and cap131 (PPM): 360's
+                // needle equals the readout in every frame EXCEPT inside those
+                // holds, where it goes on falling at the faceplate's release
+                // (a clean 2 dB per 40 ms frame) from about 0.1 s after the
+                // freeze and lands where the readout resumes. 360 has no other
+                // source (on the Analogue view it streams dt=1 alone, and no TCP
+                // runs at needle rate), so it does what this does: a value frozen
+                // for kUf1VuHoldDetectS is a hold and the needle keeps falling
+                // below it. A value that moves, up or down, takes the needle back
+                // at once; a freeze past kUf1VuHoldMaxS is a steady tone, not a
+                // hold (none measured over 0.52 s), and the value rules again.
+                if (!(vuL == sRawL)) { sRawL = vuL; sRawSinceL = now; }
+                if (!(vuR == sRawR)) { sRawR = vuR; sRawSinceR = now; }
+                auto held = [&](std::chrono::steady_clock::time_point since) {
+                    const double frozen = std::chrono::duration<double>(now - since).count();
+                    return frozen >= kUf1VuHoldDetectS && frozen <= kUf1VuHoldMaxS;
+                };
+                sGlideL = std::max(held(sRawSinceL) ? -139.2f : tgtL, sGlideL - drop);
+                sGlideR = std::max(held(sRawSinceR) ? -139.2f : tgtR, sGlideR - drop);
                 vuL = sGlideL; vuR = sGlideR;
             }
             nL = uf1VuByte_(vuL); nR = uf1VuByte_(vuR);
