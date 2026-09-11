@@ -26985,16 +26985,27 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             // that tail kept the LED lit (peak - threshold) / 26.5 s after every
             // hit (Frank: "viel zu lange"). A falling meter is REAPER's decay, not
             // signal, so only a value that held or rose since the last paint
-            // lights the flash. The latch is ours, cleared by the RESET soft key.
+            // arms the flash. The latch is ours, cleared by the RESET soft key.
+            // A fresh paint alone is one 33 ms tick: Frank's run of 11.09. logged
+            // the flash bit in 5 to 17 of 34 paints a second with the peak 11 to
+            // 13 dB over the threshold ("[uf1ovl] 1s ... flash=8/34"), a blink
+            // where 360 holds 0x0f for the whole hit. The signal is there between
+            // two rises; only REAPER's reading dips. So the flash HOLDS for 100 ms
+            // after the last fresh over-threshold paint: cap130 keeps 0x0f from
+            // 26.862 to 27.960 s for a 1.0 s hit, 0.1 s past its end, and cap80's
+            // flashes on music run 0.04 to 0.33 s, median 0.08.
             // Limit: REAPER meters the track OUTPUT, after every FX behind the
             // Meter and after the fader; the plug-in measures at its own slot.
+            constexpr double kUf1OvlFlashHoldS = 0.10;
             static bool sLatchL = false, sLatchR = false;
             static MediaTrack* sLatchTr = nullptr;
             static float sPrevL = -200.f, sPrevR = -200.f;
             static auto sPrevT = std::chrono::steady_clock::now();
+            static std::chrono::steady_clock::time_point sFlashL{}, sFlashR{};
             if (g_uf1OvlLatchClear.exchange(false) || tr != sLatchTr) {
                 sLatchL = sLatchR = false; sLatchTr = tr;
                 sPrevL = sPrevR = -200.f;
+                sFlashL = sFlashR = std::chrono::steady_clock::time_point{};
             }
             // [[reaper-peakinfo-decay-rate]]: linear in dB, steady, both channels.
             constexpr double kReaperMeterDecayDbPerS = 26.5;
@@ -27024,8 +27035,13 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                     pkReL = dbL - refDb; pkReR = dbR - refDb;
                 }
             }
-            if (freshL && pkReL > thrDb) { mask |= 0x01; sLatchL = true; }
-            if (freshR && pkReR > thrDb) { mask |= 0x04; sLatchR = true; }
+            if (freshL && pkReL > thrDb) { sFlashL = tNowLed; sLatchL = true; }
+            if (freshR && pkReR > thrDb) { sFlashR = tNowLed; sLatchR = true; }
+            auto flashing = [&](std::chrono::steady_clock::time_point t) {
+                return std::chrono::duration<double>(tNowLed - t).count() < kUf1OvlFlashHoldS;
+            };
+            if (flashing(sFlashL)) mask |= 0x01;
+            if (flashing(sFlashR)) mask |= 0x04;
             if (sLatchL) mask |= 0x02;
             if (sLatchR) mask |= 0x08;
             g_uf1_dev->send(uf1::buildScreen(0x0128, std::span<const uint8_t>(&mask, 1)));
