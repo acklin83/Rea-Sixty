@@ -17514,6 +17514,33 @@ void queueInput(PendingInput e)
 // it. Abbreviating to the REAL width is what makes it readable.
 // (The UC1's LCD is a different device and shows twelve — see UC1Surface.)
 inline constexpr int kUf1TrackNameChars = 8;
+
+// Which DataType carries the analogue needle on whatever we are reading.
+// dt=0 (VuPpm) where it still exists, dt=1 (TextVuPpm) otherwise — SSL removed
+// dt=0 in Meter Pro 1.3.7, see the paint block.
+// ⛔ ASKED ON A TIMER, NOT PER PAINT. A miss on dt=0 is not free: getMeter walks
+// every instance TWICE under g_meterMx, and that is the same mutex the UDP
+// worker takes for every datagram it receives. Doing that at paint rate, on a
+// session with twenty Meter and strip instances, throttles the receive side and
+// the needle moves in steps (Frank 2026-09-10, "sie stocken in der bewegung").
+// Two seconds is far below any plug-in swap a user would notice and turns a
+// per-frame full scan into one every few hundred frames.
+static int uf1NeedleDataType_()
+{
+    static int       dt   = int(sslmeter::DataType::VuPpm);
+    static long long next = 0;
+    const long long now = nowMs_();
+    if (now >= next) {
+        next = now + 2000;
+        std::vector<float> c, k;
+        dt = (sslcore::getMeter(int(sslmeter::DataType::VuPpm), c, k)
+              && c.size() >= 2)
+           ? int(sslmeter::DataType::VuPpm)
+           : int(sslmeter::DataType::TextVuPpm);
+    }
+    return dt;
+}
+
 MediaTrack* uf1FocusedTrack_()
 {
     MediaTrack* master = GetMasterTrack(nullptr);
@@ -26389,8 +26416,10 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             // on the Analogue view.
             std::vector<uint8_t> ovl, ovlHold;
             uint8_t mask = 0x00;
+            // Same substitution as the Analogue block below: the second
+            // call named dt=0, which 1.3.7 no longer sends.
             if (sslcore::getOverload(int(sslmeter::DataType::BarPeak), ovl, ovlHold) ||
-                sslcore::getOverload(int(sslmeter::DataType::VuPpm), ovl, ovlHold)) {
+                sslcore::getOverload(uf1NeedleDataType_(), ovl, ovlHold)) {
                 if (ovl.size() >= 2)     { if (ovl[0]) mask |= 0x01;     if (ovl[1]) mask |= 0x04; }
                 if (ovlHold.size() >= 2) { if (ovlHold[0]) mask |= 0x02; if (ovlHold[1]) mask |= 0x08; }
             }
@@ -26475,15 +26504,49 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             // "not live" → dropped into the BarPeak fallback, which pegged a silent
             // track (Frank 2026-07-23, instance A). Fall back only when the plug-in
             // sends NO VuPpm at all (impersonator off / REAPER-peaks mode).
+            // ⛔ SSL REMOVED VuPpm IN METER PRO 1.3.7 (SSL 360 2.1.12).
+            // MEASURED, not guessed: a localhost capture of SSL 360 itself
+            // driving the UF1 (451704 packets, 2026-09-10) carries DataTypes
+            // 1..27 and NOT ONE frame of DataType 0 — in the stream to 360 just
+            // as in the stream to us. 360 still draws the needle, so it reads
+            // the same replacement we do here. Before the update dt=0 arrived
+            // continuously; after it, never.
+            // TextVuPpm carries the same units — the capture's dt=1 spans
+            // -139.20 to +10.72, and a POSITIVE value rules out dBFS: it is
+            // already VU relative to the plug-in's own reference, which is what
+            // the needle wants. The two differ in delivery, not in scale: dt=1
+            // is unclamped where dt=0 pegged at the dial's +3 (uf1VuByte_ pegs
+            // it anyway) and rests at -139.2 instead of -36.
+            // ⚠ THE ORDER MATTERS AND STAYS: dt=0 FIRST. It is the live needle
+            // and dt=1 the holding readout ([[uf1-analogue-needle-unit]]), so on
+            // any plug-in that still sends dt=0 nothing changes. This is a
+            // fallback for a source that went away, not a new preference.
             const bool haveVu =
-                sslcore::getMeter(int(sslmeter::DataType::VuPpm), cur, pk) &&
+                sslcore::getMeter(uf1NeedleDataType_(), cur, pk) &&
                 cur.size() >= 2;
             if (haveVu) {
                 vuL = cur[0]; vuR = cur[1];
                 // The lagging needle is VuPpm's OWN f4 — measured (cap98): a
                 // -30/-20/-10 dBFS tone gives pk = -11.88 / -1.83 / 8.17 while cur
                 // is clamped at +3.0. Do not re-derive it.
-                if (pk.size() >= 2 && (std::isfinite(pk[0]) || std::isfinite(pk[1]))) {
+                // ⛔ f4 FROM TextVuPpm IS A LATCHING PEAK-HOLD, NOT A LAGGING NEEDLE.
+                // MEASURED on a live capture: dt=1's f4 sat at 10.36 for thirteen
+                // seconds while f3 fell to -58 — it only moves up, and only a RESET
+                // brings it back. dt=0's f4 was the plug-in's own second needle and
+                // fell by itself (cap98: -11.88 / -1.83 / 8.17 across three tones),
+                // which is why taking f4 blind after the substitution left the
+                // second needle hanging (Frank 2026-09-11, "zweite nadel kommt bei
+                // beiden zu spät zurück"). So: honour f4 ONLY while it is the real
+                // thing, and otherwise fall to Uf1PeakHold below (3 s hold, snap).
+                // ⚠ BarPeak's f4 does fall, but dt=2 is frozen at its floor on the
+                // Analogue screen (all-types probe, VU run: 2=-129.60 throughout
+                // while dt=1 moved), and reading it here changed nothing at the
+                // device (Frank 2026-09-11: "NULL UNTERSCHIED"). The plug-in's
+                // gliding second needle stays OPEN — see
+                // [[HANDOFF-2026-09-11-ssl-2112-fallout]].
+                if (uf1NeedleDataType_() == int(sslmeter::DataType::VuPpm)
+                    && pk.size() >= 2
+                    && (std::isfinite(pk[0]) || std::isfinite(pk[1]))) {
                     vuHoldL = std::isfinite(pk[0]) ? pk[0] : -120.f;
                     vuHoldR = std::isfinite(pk[1]) ? pk[1] : -120.f;
                     haveVuHold = true;
@@ -26520,8 +26583,10 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         }
         uint8_t nL, nR, hL, hR;
         // Peak-hold "second needle" — held max, snaps to current every 3 s
-        // (cap88 line 33: 0x0127 holds while 0x0125 has fallen). Used only as the
-        // REAPER-peak fallback; the live path rides the plug-in's own f4 hold.
+        // (cap88 line 33: 0x0127 holds while 0x0125 has fallen). The fallback
+        // whenever the stream has no real second needle: REAPER peaks, and dt=1
+        // since Meter Pro 1.3.7 (its f4 latches — see the VU branch). Only a
+        // stream that still sends dt=0 rides the plug-in's own f4.
         static bool        sNdlPpm = false;
         static MediaTrack* sNdlTr  = nullptr;
         static Uf1PeakHold sNdlHold;
@@ -26556,14 +26621,20 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
             // 5.97. pk is the plug-in's own lagging needle (same unit).
             float mL, mR, mhL = 0.f, mhR = 0.f; bool havePpmHold = false;
             std::vector<float> c, k;
+            // Same substitution as the VU branch above, same reason: 1.3.7
+            // stopped sending dt=0 to anyone. dt=0 is still asked for first, so
+            // a plug-in that has it keeps the live needle it always had.
             const bool havePpm =
                 sslcore::isRunning() &&
-                sslcore::getMeter(int(sslmeter::DataType::VuPpm), c, k) &&
+                sslcore::getMeter(uf1NeedleDataType_(), c, k) &&
                 c.size() >= 2;
             if (havePpm) {
                 mL = std::isfinite(c[0]) ? c[0] : 0.f;
                 mR = std::isfinite(c[1]) ? c[1] : 0.f;
-                if (k.size() >= 2 && (std::isfinite(k[0]) || std::isfinite(k[1]))) {
+                // Same rule as the VU branch above — see the f4 note there.
+                if (uf1NeedleDataType_() == int(sslmeter::DataType::VuPpm)
+                    && k.size() >= 2
+                    && (std::isfinite(k[0]) || std::isfinite(k[1]))) {
                     mhL = std::isfinite(k[0]) ? k[0] : 0.f;
                     mhR = std::isfinite(k[1]) ? k[1] : 0.f;
                     havePpmHold = true;
@@ -26660,7 +26731,23 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         {
             std::vector<uint8_t> ovl, ovlHold;
             uint8_t mask = 0x00;
-            if (sslcore::getOverload(int(sslmeter::DataType::VuPpm), ovl, ovlHold)) {
+            // ⇨ ON THIS SCREEN ONLY THE NEEDLE'S OWN TYPE CAN CARRY THE BIT.
+            // SSL removed dt=0 in Meter Pro 1.3.7, so the old hard-coded VuPpm
+            // asked a type that no longer arrives and the red LEDs went dark in
+            // both VU and PPM (Frank 2026-09-11). The first cut asked BarPeak
+            // FIRST — in the 360 capture it carries f5 AND the f6 latch (5482 /
+            // 7815 frames) — but on the Analogue screen dt=2 sits FROZEN at its
+            // floor while still `have`, so the `||` short-circuited on it and
+            // dt=1 was never read: five REAPER starts of probe log, mask 0x00
+            // every time, BarPeak bits [0,0|0,0]. In the same capture dt=1 sets
+            // f5 9622 times and f6 never, so this screen gets the flash and no
+            // latch. Needle type first (dt=0 where it still exists, else dt=1);
+            // BarPeak stays as the fallback for a stream with no needle type.
+            // ⚠ Param 15 "Analogue Meters LED Overload" defaults to 9 dB above
+            // the reference, and analysis/gen_uf1_needle_wav.py tops out at
+            // Ref+8 — that file can never light this LED.
+            if (sslcore::getOverload(uf1NeedleDataType_(), ovl, ovlHold)
+                || sslcore::getOverload(int(sslmeter::DataType::BarPeak), ovl, ovlHold)) {
                 if (ovl.size() >= 2) {
                     if (ovl[0]) mask |= 0x01;      // L overload
                     if (ovl[1]) mask |= 0x04;      // R overload

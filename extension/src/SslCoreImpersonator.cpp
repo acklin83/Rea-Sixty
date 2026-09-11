@@ -1086,8 +1086,14 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                         auto itI = g_clientIndex.find(dc->second);
                         if (itN != g_clientName.end() && itI != g_clientIndex.end()) {
                             if (g_portName.find(sp) == g_portName.end())
-                                slog("[corr] UDP src=%u on dedicated port -> track %d (%s)",
-                                     unsigned(sp), itI->second, itN->second.c_str());
+                                // slogAlways, not slog: this line is the ONLY
+                                // record tying a UDP stream to a track, and
+                                // every other meter line in the log is keyed by
+                                // port. Without it a trace is unreadable — the
+                                // same argument that moved "instance announced"
+                                // off the trace gate. Once per instance connect.
+                                slogAlways("[corr] UDP src=%u on dedicated port -> track %d (%s)",
+                                           unsigned(sp), itI->second, itN->second.c_str());
                             g_portName[sp]  = itN->second;   // authoritative; overrides any guess
                             g_portIndex[sp] = itI->second;
                             // …and the model, from the same connection, so the
@@ -2018,6 +2024,16 @@ static constexpr long long kFrozenMs    = 300;   // value unchanged this long wh
                                                  // stopped = a frozen scale floor
 static bool isLevelMeter_(int dt) {
     return dt == int(sslmeter::DataType::VuPpm)
+        // ⛔ TextVuPpm DOES NOT BELONG HERE, and I put it here on 2026-09-10
+        // reasoning about a freeze nobody had reported. It cost the next round:
+        // dt=1 is CHANGE-DRIVEN — a steady tone holds one value for a minute
+        // straight (66 s in Frank's own probe log) — so the 400 ms expiry below
+        // declared the needle dead between updates and it slammed to the floor
+        // after every signal. Frank 2026-09-11: "unsere nadel fällt SOFORT aufs
+        // minimum nach einem signal, die nadel im Plugin fällt viel langsamer".
+        // The expiry exists for meters that stream CONTINUOUSLY and therefore
+        // freeze visibly when they stop; a change-driven type is stale-looking
+        // by design. Do not add one here again.
         || dt == int(sslmeter::DataType::BarPeak)
         || dt == int(sslmeter::DataType::BarRms);
 }
