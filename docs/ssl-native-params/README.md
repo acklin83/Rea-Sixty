@@ -1,9 +1,18 @@
 # SSL native plugin parameter dumps
 
 Each file in this directory is the output of `analysis/dump_fx_params.lua`
-against one track hosting exactly one SSL plugin. They are the source
-material for `extension/data/sslnative/<plugin>.json` — the UF8 V-Pot ↔
-VST3 parameter mapping files.
+against one track hosting exactly one SSL (or 360°-enabled) plugin. They are
+the source material for the factory strip tables: `k…Slots` in
+`extension/src/PluginMap.cpp` (UF8), `make…Bindings()` in
+`extension/src/UC1PluginMap.cpp` (UC1) and `kUf1CsVPots` / `kUf1CsSoftKeys`
+in `extension/src/main.cpp` (UF1). (The old `extension/data/sslnative/*.json`
+files no longer exist.)
+
+⛔ Frank runs the script himself, and scripts for Frank live on `~/Desktop`
+(memory: feedback-scripts-on-desktop). The script is gitignored since
+`aeb803b` (RE probe scripts stay local); a copy sits in `analysis/` on the
+Mac Studio and on Frank's Desktop, where the 2026-09-11 copy writes into
+this folder by absolute path. If it is missing: `git show aeb803b^:analysis/dump_fx_params.lua`.
 
 Procedure (one plugin at a time):
 

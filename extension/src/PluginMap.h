@@ -72,6 +72,20 @@ namespace ext {
     constexpr int TrackPhase      = 117;  // REAPER B_PHASE
     constexpr int PluginAB        = 118;  // SSL StateASelected
     constexpr int PluginHQ        = 119;  // SSL HighQuality (PARAM_NON_AUTO)
+    // Harrison 32Classic Channel Strip v2 — continuous / extra params SSL's
+    // virtual strip has no slot for (cap134 + cap137, 2026-09-11). Same rule:
+    // synthetic, stable, referenced by name.
+    constexpr int CompAttack       = 120;
+    constexpr int CompMakeup       = 121;
+    constexpr int CompEmphasisFreq = 122;
+    constexpr int CompEmphasisIn   = 123;
+    constexpr int GateScFilterFreq = 124;
+    constexpr int GateScFilterIn   = 125;
+    constexpr int GateHysteresis   = 126;
+    constexpr int GateExpRatio     = 127;
+    constexpr int GateExpKnee      = 128;
+    constexpr int GateScListen     = 129;
+    constexpr int HqParam          = 130;  // a REAL HQ param (the 32C), unlike SSL's chunk-only PluginHQ
 }
 
 struct LinkSlot {

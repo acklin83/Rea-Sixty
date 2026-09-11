@@ -217,6 +217,72 @@ constexpr LinkSlot k4kBSlots[] = {
     { 46, "GroupSense",                       "GroupSense",     "GRP",   42,  false },
 };
 
+// Harrison 32Classic Channel Strip v2 — Rea-Sixty factory strip since
+// 2026-09-11 (Frank: "die harrison 32c als ssl factory strip reinnehmen wie
+// 4ke, 4kb"). VST3 indices from docs/ssl-native-params/
+// VST3__Harrison_32Classic_Channel_Strip_(Harrison_Audio).md (68 params); the
+// section layout SSL 360 2.1.12 gives it on the UF1/UC1 is in cap134/cap137.
+// No LMF/HMF Q (proportional-Q EQ), no Fast Attack toggles (continuous
+// Attack instead), Gate "Range" is the 32C's Gate Depth, S/C Listen is the
+// compressor's. "Mic" on SSL's home page is read as the Saturator Drive: the
+// only other input-stage dB param besides In Trim, which has its own V-Pot.
+constexpr LinkSlot k32cSlots[] = {
+    {  0, "Bypass",             "Bypass",           "BYP",   50,  false },
+    {  1, "FaderLevel",         "Fader Level",      "FDR",   58,  false },
+    {  4, "InputTrim",          "Input Trim",       "IN",     7,  false },
+    {  7, "HighPassFreq",       "HPF",              "HPF",   46,  false, 0.0 },
+    {  6, "LowPassFreq",        "LPF",              "LPF",   47,  false, 1.0 },
+    { 15, "EqIn",               "EQ Bands In",      "EQ",    48,  false },
+    { 22, "DynamicsIn",         "Dynamics In",      "DYN",   52,  false },
+    { 37, "OutputTrim",         "Out Trim",         "OUT",    8,  false },
+    { 36, "Listen",             "Comp SC Listen",   "LST",   57,  false },
+    { 10, "HighEqFreq",         "Hi Freq",          "FREQ",  36,  false },
+    {  9, "HighEqGain",         "Hi Gain",          "GAIN",  37,  false },
+    {  8, "HighEqBell",         "Hi Bell",          "BELL",  44,  false },
+    { 12, "HighMidEqFreq",      "Hi-Mid Freq",      "FREQ",  38,  false },
+    { 11, "HighMidEqGain",      "Hi-Mid Gain",      "GAIN",  39,  false },
+    { 17, "LowMidEqFreq",       "Low-Mid Freq",     "FREQ",  40,  false },
+    { 16, "LowMidEqGain",       "Low-Mid Gain",     "GAIN",  41,  false },
+    { 19, "LowEqFreq",          "Low Freq",         "FREQ",  42,  false },
+    { 20, "LowEqGain",          "Low Gain",         "GAIN",  43,  false },
+    { 21, "LowEqBell",          "Low Bell",         "BELL",  45,  false },
+    { 27, "CompThreshold",      "Comp Thr",         "THR",   26,  false },
+    { 26, "CompRatio",          "Comp Ratio",       "RATIO", 27,  false },
+    { 28, "CompRelease",        "Comp Rel",         "REL",   29,  false },
+    { 23, "CompMix",            "Comp Mix",         "MIX",   55,  false, 1.0 },
+    { 30, "GateThreshold",      "Gate Thr",         "THR",   12,  false },
+    { 29, "GateRange",          "Gate Depth",       "RNG",   13,  false },
+    { 31, "GateRelease",        "Gate Rel",         "REL",   15,  false },
+    { 32, "GateHold",           "Gate Hold",        "HOLD",  17,  false },
+    { 34, "GateAttack",         "Gate Attack",      "ATK",   14,  false },
+    { 33, "GateExpander",       "Gate/Exp",         "G/E",   20,  false },
+    // 32C-only sections
+    { ext::CompAttack,       "CompAttack",       "Comp Attack",     "ATK",   28,  false },
+    { ext::CompMakeup,       "CompMakeup",       "Comp Makeup",     "MAKE",  32,  false, 0.0 },
+    { ext::CompEmphasisFreq, "CompEmphasisFreq", "Comp Emph Freq",  "CEFQ",  30,  false },
+    { ext::CompEmphasisIn,   "CompEmphasisIn",   "Comp Emph In",    "CEIN",  31,  false },
+    { ext::GateScFilterFreq, "GateScFilterFreq", "Gate S/C Freq",   "GSFQ",  21,  false },
+    { ext::GateScFilterIn,   "GateScFilterIn",   "Gate S/C Filt",   "GSFT",  22,  false },
+    { ext::GateScListen,     "GateScListen",     "Gate S/C Lstn",   "GLST",  23,  false },
+    { ext::GateHysteresis,   "GateHysteresis",   "Gate Hyst",       "HYST",  16,  false },
+    { ext::GateExpRatio,     "GateExpRatio",     "Exp Ratio",       "XRAT",  18,  false },
+    { ext::GateExpKnee,      "GateExpKnee",      "Exp Knee",        "XKNE",  19,  false },
+    { ext::HqParam,          "HQ",               "HQ",              "HQ",    63,  false },
+    // Routing / topology
+    {  5, "Phase",                            "Polarity",       "POL",    6,  false },
+    { ext::FiltersIn,      "FiltersIn",      "EQ Filters In",  "FILT",  49,  false },
+    // Compressor extension
+    { ext::AutoMakeup,     "AutoMakeup",     "Auto Mkp",       "A.MU",  56,  false },
+    // Preamp section — see the note above on "Mic"
+    { ext::MicDrive,       "MicDrive",       "Saturator Drive","DRV",   11,  false, 0.5 },
+    // Output stage
+    {  2, "Width",                            "Width",          "WID",   59,  false },
+    { ext::WidthMode,      "WidthMode",      "Width Mode",     "W.MOD", 60,  false },
+    { ext::WidthFreq,      "WidthFreq",      "Width Freq",     "W.FRQ", 61,  false, 0.0 },
+    {  3, "Pan",                              "Pan",            "PAN",   62,  false },
+    { 46, "GroupSense",                       "GroupSense",     "GRP",   64,  false },
+};
+
 // 4K G — full-featured G-series strip.
 constexpr LinkSlot k4kGSlots[] = {
     {  0, "Bypass",             "Bypass",           "BYP",    0,  false },
@@ -380,6 +446,9 @@ constexpr LinkSlot kBusComp2Slots[] = {
 // against these `match` strings.
 
 constexpr PluginMap kMaps[] = {
+    // "Harrison 32Classic Channel Strip (Harrison Audio)" — matched on the one
+    // token no SSL name carries. First, so "Channel Strip" never claims it.
+    { "32Classic",              "32C",   Domain::ChannelStrip, k32cSlots,          "32C CHANNEL"     },
     { "Channel Strip 2",        "CS 2",  Domain::ChannelStrip, kCs2Slots,          "CHANNEL STRIP 2" },
     { "4K G",                   "4K G",  Domain::ChannelStrip, k4kGSlots,          "4K G CHANNEL"    },
     { "4K E",                   "4K E",  Domain::ChannelStrip, k4kESlots,          "4K E CHANNEL"    },

@@ -338,6 +338,47 @@ PluginBindings make4kBBindings()
     return b;
 }
 
+// ---- Harrison 32Classic Channel Strip v2 -----------------------------------
+// Rea-Sixty factory strip since 2026-09-11 (Frank). VST3 indices from the
+// dump docs/ssl-native-params/VST3__Harrison_32Classic_Channel_Strip_(Harrison_Audio).md;
+// which UC1 pot SSL 360 gives which param is what cap137 shows on the UC1 LCD.
+// No HMF/LMF Q (proportional-Q EQ), no Fast-Attack toggles (continuous
+// attacks), no EQ Type; Gate "Range" is the 32C's Gate Depth, S/C Listen the
+// compressor's. GR: the 32C exposes "Comp Reduction Meter" (35) and "Gate
+// Reduction Meter" (25) as 0..1 params without a dB law — not wired until
+// measured.
+PluginBindings make32cBindings()
+{
+    auto b = makeEmpty("32Classic", "32C");
+    b.knobParam[knob::kCSLowPass]       = 47;
+    b.knobParam[knob::kCSHighPass]      = 46;
+    b.knobParam[knob::kCSHfGain]        = 37;
+    b.knobParam[knob::kCSHfFreq]        = 36;
+    b.knobParam[knob::kCSHmfGain]       = 39;
+    b.knobParam[knob::kCSHmfFreq]       = 38;
+    b.knobParam[knob::kCSLmfGain]       = 41;
+    b.knobParam[knob::kCSLmfFreq]       = 40;
+    b.knobParam[knob::kCSLfFreq]        = 42;
+    b.knobParam[knob::kCSLfGain]        = 43;
+    b.knobParam[knob::kCSInputTrim]     =  7;
+    b.knobParam[knob::kCSFaderLevel]    = 58;
+    b.knobParam[knob::kCSCompThreshold] = 26;
+    b.knobParam[knob::kCSCompRatio]     = 27;
+    b.knobParam[knob::kCSCompRelease]   = 29;
+    b.knobParam[knob::kCSGateThreshold] = 12;
+    b.knobParam[knob::kCSGateRange]     = 13;   // Gate Depth
+    b.knobParam[knob::kCSGateRelease]   = 15;
+    b.knobParam[knob::kCSGateHold]      = 17;
+    b.buttonParam[button::kHfBell]      = 44;   // Hi Bell Mode
+    b.buttonParam[button::kEqIn]        = 48;   // EQ Bands In
+    b.buttonParam[button::kLfBell]      = 45;   // Low Bell Mode
+    b.buttonParam[button::kDynIn]       = 52;
+    b.buttonParam[button::kExpand]      = 20;   // Gate Expander Mode
+    b.buttonParam[button::kScListen]    = 57;   // Comp SC Listen
+    b.bypassParam = 50;
+    return b;
+}
+
 // Registry. Order: most-specific substring first (same convention as the
 // UF8 PluginMap). BC 2's match string wouldn't collide with any of the
 // Channel Strip variants so ordering there isn't critical, but the 4K
@@ -350,9 +391,10 @@ const PluginBindings& linkBcReg(){static auto v = makeSsl360LinkBcBindings();   
 const PluginBindings& e4Reg()   { static auto v = make4kEBindings();             return v; }
 const PluginBindings& g4Reg()   { static auto v = make4kGBindings();             return v; }
 const PluginBindings& b4Reg()   { static auto v = make4kBBindings();             return v; }
+const PluginBindings& c32Reg()  { static auto v = make32cBindings();             return v; }
 
 const PluginBindings* kChannelStripCandidates[] = {
-    &csReg(), &g4Reg(), &e4Reg(), &b4Reg(), &linkReg(),
+    &c32Reg(), &csReg(), &g4Reg(), &e4Reg(), &b4Reg(), &linkReg(),
 };
 
 // BC variants — order matters for substring matching: "SSL 360 Link Bus

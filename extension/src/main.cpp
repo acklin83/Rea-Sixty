@@ -619,7 +619,7 @@ constexpr int kUf1MeterPageCount[4] = { 3, 3, 3, 10 };
 // encoder resolution. Both are set from the input worker (atomic store only),
 // read by the main-thread V-Pot handler + painter (threading rule). See
 // docs/uf1-vpot-softkey-tables.md + docs/uf1-control-buildout-blueprint.md.
-constexpr int     kUf1CsPageCount = 9;  // max pages (channel-strip types); worker fallback
+constexpr int     kUf1CsPageCount = 10; // max pages (channel-strip types); worker fallback
 // Pages per strip TYPE (index = uf1CsPluginType_): 0 CS2, 1 4K B, 2 4K E,
 // 3 360 Link = the 8 p188 channel-strip pages; 4 = SSL Bus Compressor 2, a
 // Rea-Sixty extra (NOT in SSL's UF1 manual — the UF1 guide covers only the four
@@ -628,8 +628,10 @@ constexpr int     kUf1CsPageCount = 9;  // max pages (channel-strip types); work
 // 136, 2026-09-11): after the gate page SSL shows a page with no V-Pots and one
 // soft key, AUTO MAKEUP. CS2 and 360 Link were not captured on 2.1.12 and keep
 // the p188 eight.
-constexpr int     kUf1CsTypePageCount[7] = { 8, 9, 9, 8, 2, 9, 2 };  // …1=4K B(9p), 4=BC(2p), 5=4K G(9p), 6=L-BC(2p)
-constexpr int     kUf1CsTypeCount = 7;
+// 7 = Harrison 32C: SSL gives it TEN (cap134, 2026-09-11) — home + filters + four
+// EQ bands + comp + gate + a makeup/emphasis page + a hysteresis page.
+constexpr int     kUf1CsTypePageCount[8] = { 8, 9, 9, 8, 2, 9, 2, 10 };  // …1=4K B(9p), 4=BC(2p), 5=4K G(9p), 6=L-BC(2p), 7=32C(10p)
+constexpr int     kUf1CsTypeCount = 8;
 std::atomic<int>  g_uf1CsPage {0};      // active page (arrows page it; 0..count-1 per type)
 // Strip type currently under the channel V-Pots (uf1CsPluginType_), or -1 = none.
 // Written by the main-thread painter each tick; read by the input-worker ◄ ► handler
@@ -644,7 +646,7 @@ std::atomic<bool> g_uf1OvlLatchClear {false};
 // the user's mapped params). Written by the main-thread painter each tick; read
 // by the input-worker ◄ ► handler so it wraps without the REAPER API. Default 8
 // (the pre-first-paint fallback, matching kUf1CsPageCount).
-std::atomic<int>  g_uf1CsActivePages {9};
+std::atomic<int>  g_uf1CsActivePages {10};
 std::atomic<bool> g_uf1CsFine {false};  // Quick-Key-2: Normal(false) / Fine(true)
 // Draw our EQ curve on the UF1 for LEARNED Channel Strips (the built-in SSL
 // strips always draw it — their parameters are found by SSL's own names). One
@@ -17240,7 +17242,8 @@ bool csPluginHasFader_(const uf8::PluginMap& m)
     if (std::strcmp(sn, "CS 2") == 0
      || std::strcmp(sn, "4K G") == 0
      || std::strcmp(sn, "4K E") == 0
-     || std::strcmp(sn, "4K B") == 0) return true;
+     || std::strcmp(sn, "4K B") == 0
+     || std::strcmp(sn, "32C")  == 0) return true;
     const auto* sl = uf8::findSlotByLinkIdx(m, 1 /*FaderLevel*/);
     return sl && sl->vst3Param >= 0;
 }
@@ -17333,6 +17336,7 @@ CsFaderHandle csFaderForTrack(MediaTrack* tr)
     else if (std::strcmp(sn, "4K G") == 0) p = 12;
     else if (std::strcmp(sn, "4K E") == 0) p = 6;
     else if (std::strcmp(sn, "4K B") == 0) p = 6;
+    else if (std::strcmp(sn, "32C")  == 0) p = 58;   // "Fader Level", 32C dump
     else {
         // SSL 360 Link CS + all user-CS maps: slot lookup.
         if (const auto* sl = uf8::findSlotByLinkIdx(*pick.map, 1 /*FaderLevel*/))
@@ -27347,6 +27351,8 @@ static int uf1FindStripFx_(MediaTrack* tr);   // defined next to uf1ResolveCsFx_
 // still rebuilding the layout for that view, and a dropped set is
 // indistinguishable from a drawn one on this side. Eight at ~30 Hz is a quarter
 // of a second of insistence, which nobody can see and no device can miss.
+int uf1CsPluginType_(MediaTrack* tr, int fx);   // defined with the tables below
+
 void uf1PaintEqGraph_(MediaTrack* tr, bool force)
 {
     static MediaTrack* sFxTr = nullptr;
@@ -27377,6 +27383,14 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         "HF Gain","HF Freq","HF Type","HMF Gain","HMF Freq","HMF Q",
         "LMF Gain","LMF Freq","LMF Q","LF Freq","LF Gain","LF Type",
         "LPF","HPF","EQ In" };
+    // The Harrison 32C names its bands differently and has no Q (proportional-Q
+    // EQ → the render's Q default of 1.0 stands in); its filters resolve by their
+    // exact names, the "Low Pass"/"High Pass" substring hunt below cannot see the
+    // hyphen. Same slot order as `names`.
+    const char* names32c[15] = {
+        "Hi Gain","Hi Freq","Hi Bell Mode","Hi-Mid Gain","Hi-Mid Freq",nullptr,
+        "Low-Mid Gain","Low-Mid Freq",nullptr,"Low Freq","Low Gain","Low Bell Mode",
+        "Low-Pass Filter Freq","High-Pass Filter Freq","EQ Bands In" };
 
     // ══ THE GRAPH DRAWS THE STRIP ON SCREEN. ONE LINE, NO SECOND PATH. ══════
     // uf1ResolveCsFx_ is the single answer to "which FX is the UF1 showing" — it
@@ -27453,10 +27467,12 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
             // A learned CS resolves through its UC1 link slots (v15 opt-in);
             // everything else by SSL's own parameter names.
             const uf8::UserPluginMap* eqMap = uf1EqGraphMapAt_(eqTr, sFx);
+            const bool is32c = !eqMap && uf1CsPluginType_(eqTr, sFx) == 7;
+            const char* const* nm = is32c ? names32c : names;
             for (int k = 0; k < 15; ++k)
                 ix[k] = eqMap ? userParamForCanonicalName_(*eqMap, names[k])
-                              : uf1ParamByName_(eqTr, sFx, names[k]);
-            if (!eqMap) {
+                              : (nm[k] ? uf1ParamByName_(eqTr, sFx, nm[k]) : -1);
+            if (!eqMap && !is32c) {
             // LPF/HPF: the SSL CS params are "Low Pass" (kHz) / "High Pass" (Hz),
             // not "LPF"/"HPF" — resolve by the documented names, preferring the
             // param whose value reads as a frequency (skip a "...Pass In" toggle).
@@ -27735,7 +27751,7 @@ struct Uf1CsPage {
 // docs/uf1-vpot-softkey-tables.md), 4 = SSL Bus Compressor 2 (Rea-Sixty extra —
 // the standalone BC is NOT in SSL's UF1 manual; 2 pages). param strings resolved
 // against docs/ssl-native-params/.
-constexpr Uf1CsPage kUf1CsVPots[7][9] = {
+constexpr Uf1CsPage kUf1CsVPots[8][10] = {
     { // 0 — Channel Strip 2
         { {"Width","Width"}, {}, {"Output Trim","Out Trim",true}, {"Compressor Mix","Comp Mix"} },
         { {"Input Trim","In Trim",true}, {}, {"High Pass","HighPass"}, {"Low Pass","Low Pass"} },
@@ -27746,6 +27762,7 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
         { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {"Compressor Release","Release"}, {} },
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {"Gate Hold","Hold"} },
         { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
+        { {}, {}, {}, {} },   // page 10 (32C only)
     },
     { // 1 — 4K B
         { {"Width","Width"}, {"Mic","Mic"}, {"Output Trim","Out Trim",true}, {"Compressor Mix","Comp Mix"} },
@@ -27757,6 +27774,7 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
         { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {}, {"Compressor Release","Release"} },   // Release on V-Pot 4: cap133/135/136
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {} },  // 4K B has no Gate Hold
         { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
+        { {}, {}, {}, {} },   // page 10 (32C only)
     },
     { // 2 — 4K E
         { {"Width","Width"}, {"Mic","Mic"}, {"Output Trim","Out Trim",true}, {"Compressor Mix","Mix"} },
@@ -27768,6 +27786,7 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
         { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {}, {"Compressor Release","Release"} },   // Release on V-Pot 4: cap133/135/136
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {} },  // 4K E has no Gate Hold
         { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
+        { {}, {}, {}, {} },   // page 10 (32C only)
     },
     { // 3 — 360 Link (param names are the wrapper's shorter "Comp …" forms)
         { {"Width","Width"}, {"Saturation Amount","Sat Amt"}, {"Output Trim","Out Trim",true}, {"Comp Mix","Comp Mix"} },
@@ -27779,6 +27798,7 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
         { {"Comp Ratio","Ratio"}, {"Comp Threshold","Thresh"}, {"Comp Release","Release"}, {} },
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {"Gate Hold","Hold"} },
         { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
+        { {}, {}, {}, {} },   // page 10 (32C only)
     },
     { // 4 — SSL Bus Compressor 2 (Rea-Sixty extra; standalone plug-in, NOT in the
       //     UF1 manual). Names verified vs the BC2 dump docs/ssl-native-params/
@@ -27795,6 +27815,7 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
         { {}, {}, {}, {} },
         { {}, {}, {}, {} },
         { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
+        { {}, {}, {}, {} },   // page 10 (32C only)
     },
     { // 5 — SSL 4K G (Rea-Sixty extra; NOT in the p188 tables). Layout = 4K E (both
       //     4000-series) — every param name verified vs the 4K G dump; exact-first
@@ -27809,6 +27830,7 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
         { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {}, {"Compressor Release","Release"} },   // Release on V-Pot 4: cap133/135/136
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {} },
         { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
+        { {}, {}, {}, {} },   // page 10 (32C only)
     },
     { // 6 — SSL 360 Link Bus Compressor ("L-BC"). Same BC semantics as BC 2 but the
       //     360-Link wrapper NAMES them "MIX" / "S/C HPF" (not BC 2's "Dry/Wet" /
@@ -27824,6 +27846,27 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
         { {}, {}, {}, {} },
         { {}, {}, {}, {} },
         { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
+        { {}, {}, {}, {} },   // page 10 (32C only)
+    },
+    { // 7 — Harrison 32Classic Channel Strip v2  ⇨ LAYOUT = SSL 360 2.1.12, MEASURED page
+      //     by page on the UF1 (cap134, 2026-09-11). Every param name is exact in
+      //     docs/ssl-native-params/VST3__Harrison_32Classic_Channel_Strip_(Harrison_Audio).md.
+      //     SSL's own V-Pot labels are kept where they are the plug-in's short names
+      //     (CpRt, CpAt, CpRl, CpMu, CEFq, GSFq, GtHs). "Mic" on the home page is read
+      //     as the Saturator Drive — the only other input-stage dB param besides In
+      //     Trim, which has its own V-Pot on page 2 (inferred, the wire carries no
+      //     param name). Pages 8 and 10 swap a V-Pot with the Expander mode: see
+      //     uf1CsPageAt_ (this row holds the Expander-OFF reading).
+        { {"Width","Width"}, {"Saturator Drive","Mic"}, {"Output Trim","Out Trim",true}, {"Compressor Mix","Mix"} },
+        { {"Input Trim","In Trim",true}, {}, {"High-Pass Filter Freq","High Pass"}, {"Low-Pass Filter Freq","Low Pass"} },
+        { {"Low Gain","Low Gain",true}, {"Low Freq","Low Freq"}, {}, {} },
+        { {"Low-Mid Gain","Low-MidGain",true}, {"Low-Mid Freq","Low-MidFreq"}, {}, {} },
+        { {"Hi-Mid Gain","Hi-Mid Gain",true}, {"Hi-Mid Freq","Hi-Mid Freq"}, {}, {} },
+        { {"Hi Gain","Hi Gain",true}, {"Hi Freq","Hi Freq"}, {}, {} },
+        { {"Compressor Ratio","CpRt"}, {"Compressor Threshold","Threshold"}, {"Compressor Attack","CpAt"}, {"Compressor Release","CpRl"} },
+        { {}, {"Gate Threshold","Threshold"}, {"Gate Release","Release"}, {"Gate Hold","Gate Hold"} },
+        { {"Compressor Makeup","CpMu"}, {"Comp Emphasis Freq","CEFq"}, {"Gate SC Filter Freq","GSFq"}, {"Gate Attack","Gate Attack"} },
+        { {"Gate Hysteresis","GtHs"}, {}, {}, {} },
     },
 };
 // One physical detent = this much normalised movement (fine dial; ~50 clicks a
@@ -27866,7 +27909,7 @@ struct Uf1CsSkPage {
 // SSL paints on soft-key 1 (cap77 idx0 = 0xd8; surface font is Latin-1, 0xd8 = Ø).
 // Channel-strip rows transcribed verbatim from the p188 SOFT-KEY columns; param
 // strings resolved against docs/ssl-native-params/.
-constexpr Uf1CsSkPage kUf1CsSoftKeys[7][9] = {
+constexpr Uf1CsSkPage kUf1CsSoftKeys[8][10] = {
     { // 0 — Channel Strip 2  (params: SSL Native Channel Strip 2)
         { {"Polarity","\xd8"}, {nullptr,""}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },
         { {nullptr,"S/C MODE"}, {nullptr,""}, {nullptr,"HQ MODE",Uf1CsSkAct::HQ}, {nullptr,"A/B",Uf1CsSkAct::AB} },
@@ -27877,6 +27920,7 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[7][9] = {
         { {"Compressor Fast Attack","FAST ATTACK"}, {"Compressor Peak","PEAK"}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYNAMICS"} },
         { {"Gate Expander","EXPAND"}, {"Gate Attack","FAST ATTACK"}, {nullptr,""}, {"Dynamics In","DYNAMICS"} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 9 (unreachable: 8-page type)
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (32C only)
     },
     { // 1 — 4K B  ⇨ LAYOUT = SSL 360 2.1.12, MEASURED (cap136, 2026-09-11): the 4K E
       //     pages without EQ COLOUR (the B has none) and without the compressor's
@@ -27892,6 +27936,7 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[7][9] = {
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {"Dynamics In","DYN"} },
         { {nullptr,""}, {"Gate Expander","EXPANDER"}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYN"} },
         { {"Compressor Auto Make-up","AUTO MAKEUP"}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (32C only)
     },
     { // 2 — 4K E  ⇨ LAYOUT = SSL 360 2.1.12, MEASURED page by page (cap133, 2026-09-11).
       //     Frank 2026-09-11: "diese param-reihenfolge für unsere version übernehmen".
@@ -27909,6 +27954,7 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[7][9] = {
         { {"Compressor Fast Attack","FAST ATTACK"}, {nullptr,""}, {nullptr,""}, {"Dynamics In","DYN"} },
         { {"Gate Fast Attack","FAST ATTACK"}, {"Gate Expander","EXPANDER"}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYN"} },
         { {"Compressor Auto Make-up","AUTO MAKEUP"}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (32C only)
     },
     { // 3 — 360 Link  (params: SSL 360 Link wrapper; "Phase"/"Listen"; no solo-safe)
         { {"Phase","\xd8"}, {"Saturation In","SATURATION IN"}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },
@@ -27920,6 +27966,7 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[7][9] = {
         { {"Comp Fast Attack","CMP FST ATTK"}, {"Comp Peak","COMP PEAK"}, {"Listen","LISTEN"}, {"Dynamics In","DYNAMICS IN"} },
         { {"Gate Expander","GTE EXPANDR"}, {"Gate Attack","GATE ATTACK"}, {nullptr,""}, {"Dynamics In","DYNAMICS IN"} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 9 (unreachable: 8-page type)
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (32C only)
     },
     { // 4 — SSL Bus Compressor 2 (Rea-Sixty extra). Toggles verified vs the BC2
       //     dump: "External S/C" (idx 0, 2-state), "Oversampling" (idx 1, OFF/2x/4x
@@ -27934,6 +27981,7 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[7][9] = {
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 9 (unreachable: 8-page type)
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (32C only)
     },
     { // 5 — SSL 4K G  ⇨ LAYOUT = SSL 360 2.1.12, MEASURED (cap135, 2026-09-11): the
       //     4K E's pages plus IMP IN on page 2 (params "Impedance In" 7, "Impedance"
@@ -27949,6 +27997,7 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[7][9] = {
         { {"Compressor Fast Attack","FAST ATTACK"}, {nullptr,""}, {nullptr,""}, {"Dynamics In","DYN"} },
         { {"Gate Fast Attack","FAST ATTACK"}, {"Gate Expander","EXPANDER"}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYN"} },
         { {"Compressor Auto Make-up","AUTO MAKEUP"}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (32C only)
     },
     { // 6 — L-BC (360 Link Bus Compressor). Blank soft-keys: the wrapper exposes no
       //     External-S/C / Oversampling / HQ / A-B params (verified vs the dump), so
@@ -27962,6 +28011,23 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[7][9] = {
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 9 (unreachable: 8-page type)
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 10 (32C only)
+    },
+    { // 7 — Harrison 32Classic Channel Strip v2  ⇨ LAYOUT = SSL 360 2.1.12, MEASURED
+      //     (cap134). Labels are SSL's own strings from the wire. HQ MODE is a REAL
+      //     param on this strip ("HQ" 63), not the SSL chunk toggle; A/B is label-only
+      //     because the chunk walker only knows SSL plug-ins. PRE is label-only too
+      //     (SSL prints it on every strip's home page; the 32C has no Pre).
+        { {"Polarity","\xd8"}, {nullptr,"PRE"}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },
+        { {"EQ Filters In","FILTERS"}, {nullptr,""}, {"HQ","HQ MODE"}, {nullptr,"A/B"} },
+        { {"Low Bell Mode","LOW BELL MODE"}, {nullptr,""}, {nullptr,""}, {"EQ Bands In","EQ"} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {"EQ Bands In","EQ"} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {"EQ Bands In","EQ"} },
+        { {"Hi Bell Mode","HI BELL MODE"}, {nullptr,""}, {nullptr,""}, {"EQ Bands In","EQ"} },
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {"Dynamics In","DYN"} },
+        { {nullptr,""}, {"Gate Expander Mode","EXPANDER"}, {nullptr,""}, {"Dynamics In","DYN"} },
+        { {nullptr,""}, {"Comp Emphasis In","COMP EMPHASIS IN"}, {"Gate SC Filter In","GSFT"}, {nullptr,""} },
+        { {"Gate Expander Mode","EXPANDER"}, {"Gate SC Listen","GATE SC LISTEN"}, {nullptr,""}, {nullptr,""} },
     },
 };
 
@@ -27984,6 +28050,25 @@ static Uf1CsSoftKey uf1CsSoftKeyAt_(int type, int page, int idx, MediaTrack* tr,
         }
     }
     return sk;
+}
+
+// The V-Pot page at a factory-strip position — the table row, except where SSL
+// decides at runtime. MEASURED on the 32C (cap134, 2026-09-11): with the gate's
+// Expander mode ON, V-Pot 4 of the gate page reads XpRt (Expander Ratio) instead
+// of Gate Hold, and V-Pot 1 of the last page XpKn (Expander Knee) instead of
+// GtHs (Hysteresis) — the labels swapped on the wire the moment EXPANDER was
+// pressed. By value, like uf1CsSoftKeyAt_. Main-thread only.
+static Uf1CsPage uf1CsPageAt_(int type, int page, MediaTrack* tr, int fx)
+{
+    Uf1CsPage pg = kUf1CsVPots[type][page];
+    if (type == 7 && (page == 7 || page == 9) && tr && fx >= 0) {
+        const int xp = uf1ParamByName_(tr, fx, "Gate Expander Mode");
+        if (xp >= 0 && TrackFX_GetParamNormalized(tr, fx, xp) >= 0.5) {
+            if (page == 7) pg.v4 = Uf1CsVPot{"Gate Expander Ratio", "XpRt"};
+            else           pg.v1 = Uf1CsVPot{"Gate Expander Knee",  "XpKn"};
+        }
+    }
+    return pg;
 }
 
 // Display soft-key LED ids (buttons 0x19-0x1C). The UF1 LED-id space is SEPARATE
@@ -28041,6 +28126,7 @@ int uf1CsPluginType_(MediaTrack* tr, int fx)
             if (s == "4K E") return 2;
             if (s == "Link") return 3;
             if (s == "4K G") return 5;   // Rea-Sixty extra (not in p188); layout = 4K E
+            if (s == "32C")  return 7;   // Harrison 32Classic v2 (cap134/137, 2026-09-11)
             return -1;
         }
         // Standalone SSL Bus Compressor 2 (Rea-Sixty extra beyond SSL's UF1 scope):
@@ -28374,7 +28460,7 @@ int uf1CsVpotParam_(MediaTrack* tr, int fx, int type, int page, int idx)
     if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm)))
         return uf1LearnedEffParam_(
             uf1LearnedSlotAt_(nm, /*busComp*/type == 4, /*wantButton*/false, page, idx));
-    const Uf1CsVPot& v = kUf1CsVPots[type][page].slot(idx);
+    const Uf1CsVPot v = uf1CsPageAt_(type, page, tr, fx).slot(idx);
     return v.param ? uf1ParamByName_(tr, fx, v.param) : -1;
 }
 // Same for a soft-key position (learned → the button/soft-key fill stream).
@@ -28775,7 +28861,7 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
             } else { p = -1; bipolar = false; }
         } else {
             p = uf1CsVpotParam_(tr, fx, type, page, vi);   // built-in by name
-            bipolar = kUf1CsVPots[type][page].slot(vi).bipolar;   // CS2/BC2 layout
+            bipolar = uf1CsPageAt_(type, page, tr, fx).slot(vi).bipolar;   // CS2/BC2 layout
         }
     }
     if (p < 0) return;                           // blank / unmapped on this page/layer
@@ -32150,7 +32236,7 @@ void uf1PaintChannel_()
         } else if (csType >= 0) {
             const int page = std::clamp(g_uf1CsPage.load(), 0,
                                         uf1CsPageCountFor_(csType, csTr, csFx) - 1);
-            const Uf1CsPage& pg = kUf1CsVPots[csType][page];
+            const Uf1CsPage pg = uf1CsPageAt_(csType, page, csTr, csFx);
             // ⚠ The EXPLICIT UF1 map wins here too. This painter resolves its own
             // labels/params, which makes it the FOURTH V-Pot resolver next to
             // uf1CsVpotParam_, applyUf1ChannelVpot_ and applyUf1ChannelVpotPush_ —
@@ -32326,6 +32412,7 @@ void uf1PaintChannel_()
                            : (tty == 2) ? "4K E" : (tty == 3) ? "Link"
                            : (tty == 4) ? "BC 2" : (tty == 5) ? "4K G"
                            : (tty == 6) ? "BC 2"   // L-BC → the recognised BC LAYOUT latch
+                           : (tty == 7) ? "32C"    // cap132: what SSL 360 2.1.12 sends for the 32C
                                         : "4K E";  // (the real "L-BC" name is shown by uf1ActiveFxShortName_)
             sendZoneText(uf1::scr::kCsType, cs);
         }
@@ -33515,6 +33602,7 @@ std::string sslPluginShortName(MediaTrack* tr)
         if (!uf8::fxIdentityName(tr, fx, buf, sizeof(buf))) continue;
         std::string n(buf);
         // Identity name — survives Rename FX. Stays "VST3: SSL Native ..."
+        if (n.find("32Classic")       != std::string::npos) return "32C";
         if (n.find("Channel Strip 2") != std::string::npos) return "CS 2";
         if (n.find("Channel Strip")   != std::string::npos) return "CS";
         if (n.find("4K B")            != std::string::npos) return "4K B";
@@ -44855,7 +44943,7 @@ const char* reasixty_uf1FactoryLabel(void* trV, int fx, bool softKeys,
         const Uf1CsSoftKey sk = uf1CsSoftKeyAt_(type, page, idx, tr, fx);
         return sk.label ? sk.label : "";
     }
-    const Uf1CsVPot& v = kUf1CsVPots[type][page].slot(idx);
+    const Uf1CsVPot v = uf1CsPageAt_(type, page, tr, fx).slot(idx);
     return v.label ? v.label : "";
 }
 

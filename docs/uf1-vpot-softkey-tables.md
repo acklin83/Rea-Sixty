@@ -92,3 +92,25 @@ The p188 (2.0.6-era) table it replaces, for the record:
 - Implementation: encode as a static table keyed by (plugin type, page) → 4 soft-key
   + 4 V-pot param descriptors (name string or toggle id). Resolve to a live
   vst3Param via name match at use time. ← / → step the page (wrap 1↔8).
+
+## Harrison 32Classic Channel Strip v2 — SSL 360 2.1.12, MEASURED (cap134, 2026-09-11)
+Rea-Sixty factory strip (type 7) since 2026-09-11. Ten pages as SSL sends
+them; V-Pot labels are SSL's (the plug-in's short names where it has them).
+Params from `docs/ssl-native-params/VST3__Harrison_32Classic_Channel_Strip_(Harrison_Audio).md`.
+
+| Page | Soft Key 1 | Soft Key 2 | Soft Key 3 | Soft Key 4 | V-Pot 1 | V-Pot 2 | V-Pot 3 | V-Pot 4 |
+|---|---|---|---|---|---|---|---|---|
+| 1 | Ø | PRE (label only) | SOLO SAFE | PLUG-IN | Width | Mic (= Saturator Drive) | Out Trim | Mix |
+| 2 | FILTERS (EQ Filters In) | | HQ MODE (HQ param) | A/B (label only) | In Trim | | High Pass | Low Pass |
+| 3 | LOW BELL MODE | | | EQ (EQ Bands In) | Low Gain | Low Freq | | |
+| 4 | | | | EQ | Low-Mid Gain | Low-Mid Freq | | |
+| 5 | | | | EQ | Hi-Mid Gain | Hi-Mid Freq | | |
+| 6 | HI BELL MODE | | | EQ | Hi Gain | Hi Freq | | |
+| 7 | | | | DYN | CpRt (Ratio) | Threshold | CpAt (Attack) | CpRl (Release) |
+| 8 | | EXPANDER | | DYN | | Threshold (gate) | Release (gate) | Gate Hold · XpRt when Expander on |
+| 9 | | COMP EMPHASIS IN | GSFT (Gate SC Filter In) | | CpMu (Makeup) | CEFq (Emphasis Freq) | GSFq (Gate SC Filter Freq) | Gate Attack |
+| 10 | EXPANDER | GATE SC LISTEN | | | GtHs (Hysteresis) · XpKn when Expander on | | | |
+
+Not wired yet: the UC1 GR meters from the 32C's "Comp Reduction Meter" /
+"Gate Reduction Meter" params (0..1, dB law unmeasured); presets (no SSL
+preset folder).
