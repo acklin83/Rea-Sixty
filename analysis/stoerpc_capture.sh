@@ -9,7 +9,7 @@
 #                                                         # interface carries UF1 traffic
 # Then decode with:  python3 analysis/uf1_loudness_vpot_decode.py captures/NAME.pcap
 #
-# Rig (memory HANDOFF-uf1-loudness): StoerPC LAN 192.168.177.198 (DHCP — re-check!),
+# Rig (memory HANDOFF-uf1-loudness): StoerPC LAN IP resolved via Tailscale (DHCP!),
 # UF1 = VID_31E9 PID_0025 on sslbus, meter traffic on \\.\USBPcap3, SSL 360 + REAPER +
 # SSL Meter Pro driving it. The remote shell is CMD, so PowerShell goes via
 # -EncodedCommand (UTF-16LE base64) — this is what keeps the \\.\USBPcap3 backslashes
@@ -17,11 +17,21 @@
 # pipe/quote leakage. USBPcapCMD needs -A or it prompts interactively and hangs.
 set -euo pipefail
 
-IP="${STOERPC_IP:-192.168.177.198}"
+# ⛔ The IP is DHCP and moves: resolve it, never remember it. Tailscale answers
+# "is it up" and "where" in one line (memory windows-debug-ssh). Override with
+# STOERPC_IP=… if Tailscale is not running.
+if [[ -z "${STOERPC_IP:-}" ]]; then
+  TS=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+  STOERPC_IP=$("$TS" status 2>/dev/null | awk '/stoerpc/ && /direct/ { for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+,?$/) { sub(/:.*/,"",$i); print $i; exit } }')
+fi
+IP="${STOERPC_IP:?stoerpc not reachable via Tailscale (offline?) — set STOERPC_IP=… by hand}"
 USER=claude
-PASS=claudepass
-SSH=(sshpass -p "$PASS" ssh -o StrictHostKeyChecking=no -o ConnectTimeout=8 "$USER@$IP")
-SCP=(sshpass -p "$PASS" scp -o StrictHostKeyChecking=no)
+# Key auth (~/.ssh/id_ed25519 is in the box's administrators_authorized_keys since
+# 2026-05-29; the old claudepass is dead). The host key differs per OS on this
+# dual-boot box, so a SCRATCH known_hosts keeps Frank's own file untouched.
+KH="${STOERPC_KNOWN_HOSTS:-/tmp/kh_stoerpc_win}"
+SSH=(ssh -o UserKnownHostsFile="$KH" -o StrictHostKeyChecking=accept-new -o ConnectTimeout=8 "$USER@$IP")
+SCP=(scp -o UserKnownHostsFile="$KH" -o StrictHostKeyChecking=accept-new)
 HERE="$(cd "$(dirname "$0")/.." && pwd)"      # repo root
 
 psenc() { python3 -c "import sys,base64;print(base64.b64encode(sys.stdin.read().encode('utf-16-le')).decode())"; }
@@ -65,10 +75,9 @@ fi
 NAME="${1:?usage: stoerpc_capture.sh NAME [SECS] [IFNUM]  |  --test [IFNUM]}"
 SECS="${2:-40}"
 IFNUM="${3:-3}"
-echo ">> Capturing '$NAME' for ${SECS}s on \\\\.\\USBPcap$IFNUM."
-echo ">> PAGE the UF1 Loudness screen 8 -> 9 -> 10 NOW (dwell ~3 s per page, turn a V-Pot on each)."
+echo ">> Capturing '$NAME' for ${SECS}s on \\\\.\\USBPcap$IFNUM — window is OPEN, act on the UF1 now."
 remote_capture "$NAME" "$SECS" "$IFNUM"
 "${SCP[@]}" "$USER@$IP:C:/Users/claude/ufcap_$NAME.pcap" "$HERE/captures/$NAME.pcap"
 echo ">> Pulled -> captures/$NAME.pcap"
 ls -la "$HERE/captures/$NAME.pcap"
-echo ">> Decode:  python3 analysis/uf1_loudness_vpot_decode.py captures/$NAME.pcap"
+echo ">> Decode:  python3 analysis/uf1_loudness_vpot_decode.py captures/$NAME.pcap   (or the decoder for the topic)"
