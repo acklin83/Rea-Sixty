@@ -166,6 +166,9 @@ static constexpr std::uint8_t kUf1InitFrame138[] = { 0xff, 0x67, 0x03, 0x01, 0x0
 static constexpr std::uint8_t kUf1InitFrame139[] = { 0xff, 0x67, 0x03, 0x01, 0x04, 0x02, 0x71 };
 static constexpr std::uint8_t kUf1InitFrame140[] = { 0xff, 0x67, 0x03, 0x01, 0x04, 0x03, 0x72 };
 static constexpr std::uint8_t kUf1InitFrame141[] = { 0xff, 0x67, 0x03, 0x01, 0x10, 0x00, 0x7b };
+// 0x012b = 00000000, the one zone SSL 360 2.1.12 added to the init (cap129,
+// right after 0x0110 and before 0x010b), written once and never again.
+static constexpr std::uint8_t kUf1InitFrame141b[] = { 0xff, 0x67, 0x07, 0x01, 0x2b, 0x00, 0x00, 0x00, 0x00, 0x9a };
 static constexpr std::uint8_t kUf1InitFrame142[] = { 0xff, 0x67, 0x03, 0x01, 0x0b, 0x00, 0x76 };
 static constexpr std::uint8_t kUf1InitFrame143[] = { 0xff, 0x67, 0x03, 0x01, 0x0b, 0x01, 0x77 };
 static constexpr std::uint8_t kUf1InitFrame144[] = { 0xff, 0x67, 0x03, 0x01, 0x0b, 0x02, 0x78 };
@@ -278,7 +281,10 @@ static constexpr std::uint8_t kUf1InitFrame250[] = { 0xff, 0x67, 0x06, 0x01, 0x1
 static constexpr std::uint8_t kUf1InitFrame251[] = { 0xff, 0x67, 0x0d, 0x01, 0x19, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8e };
 static constexpr std::uint8_t kUf1InitFrame252[] = { 0xff, 0x67, 0x03, 0x01, 0x1a, 0x02, 0x87 };
 static constexpr std::uint8_t kUf1InitFrame253[] = { 0xff, 0x67, 0x02, 0x01, 0x1b, 0x85 };
-static constexpr std::uint8_t kUf1InitFrame254[] = { 0xff, 0x67, 0x03, 0x01, 0x1e, 0x10, 0x99 };
+// 0x011e = 0x11, not cap101's 0x10: SSL 360 2.1.12 sets bit 0 of this byte in
+// every state it was captured in (cap129 init 11, cap132 channel view 19/1f)
+// and it is never restated by the streams, so the init is where it lives.
+static constexpr std::uint8_t kUf1InitFrame254[] = { 0xff, 0x67, 0x03, 0x01, 0x1e, 0x11, 0x9a };
 static constexpr std::uint8_t kUf1InitFrame255[] = { 0xff, 0x67, 0x03, 0x01, 0x20, 0x00, 0x8b };
 static constexpr std::uint8_t kUf1InitFrame256[] = { 0xff, 0x67, 0x06, 0x01, 0x21, 0x00, 0x00, 0x00, 0x00, 0x8f };
 static constexpr std::uint8_t kUf1InitFrame257[] = { 0xff, 0x67, 0x03, 0x01, 0x29, 0x00, 0x94 };
@@ -331,7 +337,7 @@ static constexpr std::uint8_t kUf1InitFrame303[] = { 0xff, 0x1e, 0x03, 0x00, 0x6
 static constexpr std::uint8_t kUf1InitFrame304[] = { 0xff, 0x1d, 0x02, 0x00, 0x01, 0x20 };
 static constexpr std::uint8_t kUf1InitFrame305[] = { 0xff, 0x1d, 0x02, 0x00, 0x00, 0x1f };
 
-static constexpr std::array<InitFrame, 306> kUf1InitSequence = {{
+static constexpr std::array<InitFrame, 307> kUf1InitSequence = {{
     { kUf1InitFrame0, sizeof(kUf1InitFrame0), 0 },
     { kUf1InitFrame1, sizeof(kUf1InitFrame1), 0 },
     { kUf1InitFrame2, sizeof(kUf1InitFrame2), 0 },
@@ -474,6 +480,7 @@ static constexpr std::array<InitFrame, 306> kUf1InitSequence = {{
     { kUf1InitFrame139, sizeof(kUf1InitFrame139), 0 },
     { kUf1InitFrame140, sizeof(kUf1InitFrame140), 0 },
     { kUf1InitFrame141, sizeof(kUf1InitFrame141), 0 },
+    { kUf1InitFrame141b, sizeof(kUf1InitFrame141b), 0 },
     { kUf1InitFrame142, sizeof(kUf1InitFrame142), 0 },
     { kUf1InitFrame143, sizeof(kUf1InitFrame143), 0 },
     { kUf1InitFrame144, sizeof(kUf1InitFrame144), 0 },

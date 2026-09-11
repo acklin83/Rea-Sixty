@@ -25125,7 +25125,11 @@ const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
                       0x20,0x73,0x65,0x63,0x00,0x00,0x00,0x00,0x00}},
             {0x010f, {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}},
             {0x011a, {0x07}},
-            {0x011e, {0x10}},
+            // 0x11, not cap101's 0x10: SSL 360 2.1.12 keeps bit 0 of 0x011e set in
+            // every captured state (init 11, channel 19/1f) and the streams never
+            // restate it; the meter value is the old 0x10 with that bit, inferred,
+            // no 2.1.12 Overview entry was captured.
+            {0x011e, {0x11}},
             {0x0120, {0x00}},
             {0x0129, {0xff}},
             {0x011f, {0x00}},
@@ -31805,7 +31809,7 @@ void uf1PaintChannel_()
             // view-state byte; SSL's channel state going into a meter-view entry
             // is 00 (cap101). 0x19 while the encoder list is open.
             put(0x011d, {uf1HeaderHighlight_()});
-            put(0x011e, {static_cast<uint8_t>(encList ? 0x1f : 0x18)});
+            put(0x011e, {static_cast<uint8_t>(encList ? 0x1f : 0x19)});   // 2.1.12: 19 (cap132)
             // The ff-state: SSL holds 0x0009=ffff0000, 0x0015/16=ff in the
             // channel state (cap101 t=26.62 and the whole idle stream). Our
             // cap66 init replay left 0009=00000000, so we entered the meter
@@ -32144,9 +32148,9 @@ void uf1PaintChannel_()
                 // both cases — what differs is the element state each view
                 // leaves behind. The meter's own entry burst zeroes 0x010f (the
                 // per-row position/brightness the plug-in V-Pots write) and
-                // holds 0x0101=03, 0x011a=07, 0x011e=10; the channel layout
+                // holds 0x0101=03, 0x011a=07, 0x011e=11; the channel layout
                 // leaves 0x010f carrying the strip's bar values and 0x0101=05,
-                // 0x011a=02, 0x011e=18. The browser owns the whole screen while
+                // 0x011a=02, 0x011e=19. The browser owns the whole screen while
                 // it is up, so it establishes the state it is known to render
                 // correctly in rather than borrowing the caller's.
                 // Leaving repaints both views from their own bursts, gated on
@@ -32154,7 +32158,7 @@ void uf1PaintChannel_()
                 put(0x010f, {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
                 put(0x0101, {0x03});
                 put(0x011a, {0x07});
-                put(0x011e, {0x10});
+                put(0x011e, {0x11});
                 txt(0x0104, 0x02, "Navigate Back");
                 // ⛔ THE SOFT-KEY ROW HAS EXACTLY ONE WRITER, uf1EmitSoftKeyRow_,
                 // and while the browser is up that writer never runs — this block
@@ -32322,7 +32326,7 @@ void uf1PaintChannel_()
             const bool open = listOpen;
             const uint8_t s0110 = open ? 0x07 : 0x0f;
             const uint8_t s011a = open ? 0x03 : 0x02;
-            const uint8_t s011e = open ? 0x1f : 0x18;   // SSL's value (cap132)
+            const uint8_t s011e = open ? 0x1f : 0x19;   // SSL 2.1.12's values (cap132: 19 closed, 1f open)
             g_uf1_dev->send(uf1::buildScreen(0x0110, std::span<const uint8_t>(&s0110, 1)));
             g_uf1_dev->send(uf1::buildScreen(0x011a, std::span<const uint8_t>(&s011a, 1)));
             g_uf1_dev->send(uf1::buildScreen(0x011e, std::span<const uint8_t>(&s011e, 1)));
