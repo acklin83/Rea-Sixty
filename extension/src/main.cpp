@@ -624,10 +624,11 @@ constexpr int     kUf1CsPageCount = 9;  // max pages (channel-strip types); work
 // 3 360 Link = the 8 p188 channel-strip pages; 4 = SSL Bus Compressor 2, a
 // Rea-Sixty extra (NOT in SSL's UF1 manual — the UF1 guide covers only the four
 // channel strips + Meter) with just 2 V-Pot/soft-key pages of its own params.
-// ⇨ 4K E and 4K G have NINE since SSL 360 2.1.12 — MEASURED (cap133, 2026-09-11):
-// after the gate page SSL shows a page with no V-Pots and one soft key, AUTO
-// MAKEUP. The other types were not captured on 2.1.12 and keep the p188 eight.
-constexpr int     kUf1CsTypePageCount[7] = { 8, 8, 9, 8, 2, 9, 2 };  // …4=BC(2p), 5=4K G(9p), 6=L-BC(2p)
+// ⇨ 4K B, 4K E and 4K G have NINE since SSL 360 2.1.12 — MEASURED (cap133/135/
+// 136, 2026-09-11): after the gate page SSL shows a page with no V-Pots and one
+// soft key, AUTO MAKEUP. CS2 and 360 Link were not captured on 2.1.12 and keep
+// the p188 eight.
+constexpr int     kUf1CsTypePageCount[7] = { 8, 9, 9, 8, 2, 9, 2 };  // …1=4K B(9p), 4=BC(2p), 5=4K G(9p), 6=L-BC(2p)
 constexpr int     kUf1CsTypeCount = 7;
 std::atomic<int>  g_uf1CsPage {0};      // active page (arrows page it; 0..count-1 per type)
 // Strip type currently under the channel V-Pots (uf1CsPluginType_), or -1 = none.
@@ -27744,7 +27745,7 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
         { {"HF Gain","HF Gain",true}, {"HF Freq","HF Freq"}, {}, {} },
         { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {"Compressor Release","Release"}, {} },
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {"Gate Hold","Hold"} },
-        { {}, {}, {}, {} },   // page 9: 4K E/G "AUTO MAKEUP" has no V-Pots (cap133); unreachable for 8-page types
+        { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
     },
     { // 1 — 4K B
         { {"Width","Width"}, {"Mic","Mic"}, {"Output Trim","Out Trim",true}, {"Compressor Mix","Comp Mix"} },
@@ -27753,9 +27754,9 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
         { {"LMF Gain","LMF Gain",true}, {"LMF Freq","LMF Freq"}, {"LMF Q","LMF Q"}, {} },
         { {"HMF Gain","HMF Gain",true}, {"HMF Freq","HMF Freq"}, {"HMF Q","HMF Q"}, {} },
         { {"HF Gain","HF Gain",true}, {"HF Freq","HF Freq"}, {}, {} },
-        { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {"Compressor Release","Release"}, {} },
+        { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {}, {"Compressor Release","Release"} },   // Release on V-Pot 4: cap133/135/136
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {} },  // 4K B has no Gate Hold
-        { {}, {}, {}, {} },   // page 9: 4K E/G "AUTO MAKEUP" has no V-Pots (cap133); unreachable for 8-page types
+        { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
     },
     { // 2 — 4K E
         { {"Width","Width"}, {"Mic","Mic"}, {"Output Trim","Out Trim",true}, {"Compressor Mix","Mix"} },
@@ -27764,9 +27765,9 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
         { {"LMF Gain","LMF Gain",true}, {"LMF Freq","LMF Freq"}, {"LMF Q","LMF Q"}, {} },
         { {"HMF Gain","HMF Gain",true}, {"HMF Freq","HMF Freq"}, {"HMF Q","HMF Q"}, {} },
         { {"HF Gain","HF Gain",true}, {"HF Freq","HF Freq"}, {}, {} },
-        { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {"Compressor Release","Release"}, {} },
+        { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {}, {"Compressor Release","Release"} },   // Release on V-Pot 4: cap133/135/136
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {} },  // 4K E has no Gate Hold
-        { {}, {}, {}, {} },   // page 9: 4K E/G "AUTO MAKEUP" has no V-Pots (cap133); unreachable for 8-page types
+        { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
     },
     { // 3 — 360 Link (param names are the wrapper's shorter "Comp …" forms)
         { {"Width","Width"}, {"Saturation Amount","Sat Amt"}, {"Output Trim","Out Trim",true}, {"Comp Mix","Comp Mix"} },
@@ -27777,7 +27778,7 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
         { {"HF Gain","HF Gain",true}, {"HF Freq","HF Freq"}, {}, {} },
         { {"Comp Ratio","Ratio"}, {"Comp Threshold","Thresh"}, {"Comp Release","Release"}, {} },
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {"Gate Hold","Hold"} },
-        { {}, {}, {}, {} },   // page 9: 4K E/G "AUTO MAKEUP" has no V-Pots (cap133); unreachable for 8-page types
+        { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
     },
     { // 4 — SSL Bus Compressor 2 (Rea-Sixty extra; standalone plug-in, NOT in the
       //     UF1 manual). Names verified vs the BC2 dump docs/ssl-native-params/
@@ -27793,7 +27794,7 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
         { {}, {}, {}, {} },
         { {}, {}, {}, {} },
         { {}, {}, {}, {} },
-        { {}, {}, {}, {} },   // page 9: 4K E/G "AUTO MAKEUP" has no V-Pots (cap133); unreachable for 8-page types
+        { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
     },
     { // 5 — SSL 4K G (Rea-Sixty extra; NOT in the p188 tables). Layout = 4K E (both
       //     4000-series) — every param name verified vs the 4K G dump; exact-first
@@ -27805,9 +27806,9 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
         { {"LMF Gain","LMF Gain",true}, {"LMF Freq","LMF Freq"}, {"LMF Q","LMF Q"}, {} },
         { {"HMF Gain","HMF Gain",true}, {"HMF Freq","HMF Freq"}, {"HMF Q","HMF Q"}, {} },
         { {"HF Gain","HF Gain",true}, {"HF Freq","HF Freq"}, {}, {} },
-        { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {"Compressor Release","Release"}, {} },
+        { {"Compressor Ratio","Ratio"}, {"Compressor Threshold","Thresh"}, {}, {"Compressor Release","Release"} },   // Release on V-Pot 4: cap133/135/136
         { {"Gate Range","Range"}, {"Gate Threshold","Thresh"}, {"Gate Release","Release"}, {} },
-        { {}, {}, {}, {} },   // page 9: 4K E/G "AUTO MAKEUP" has no V-Pots (cap133); unreachable for 8-page types
+        { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
     },
     { // 6 — SSL 360 Link Bus Compressor ("L-BC"). Same BC semantics as BC 2 but the
       //     360-Link wrapper NAMES them "MIX" / "S/C HPF" (not BC 2's "Dry/Wet" /
@@ -27822,7 +27823,7 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
         { {}, {}, {}, {} },
         { {}, {}, {}, {} },
         { {}, {}, {}, {} },
-        { {}, {}, {}, {} },   // page 9: 4K E/G "AUTO MAKEUP" has no V-Pots (cap133); unreachable for 8-page types
+        { {}, {}, {}, {} },   // page 9: the 4K strips' "AUTO MAKEUP" page has no V-Pots (cap133/135/136); unreachable for 8-page types
     },
 };
 // One physical detent = this much normalised movement (fine dial; ~50 clicks a
@@ -27877,16 +27878,20 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[7][9] = {
         { {"Gate Expander","EXPAND"}, {"Gate Attack","FAST ATTACK"}, {nullptr,""}, {"Dynamics In","DYNAMICS"} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 9 (unreachable: 8-page type)
     },
-    { // 1 — 4K B  (params: 4K B; no EQ Type, no Comp/Gate Fast-Attack toggles)
+    { // 1 — 4K B  ⇨ LAYOUT = SSL 360 2.1.12, MEASURED (cap136, 2026-09-11): the 4K E
+      //     pages without EQ COLOUR (the B has none) and without the compressor's
+      //     FAST ATTACK key; SSL's labels are DYN and EXPANDER here too. Params:
+      //     "Pre IN" 3, "Filters In" 44, "Gate Expander" 37, "S/C Listen" 41,
+      //     "Dynamics In" 28, "Compressor Auto Make-up" 47 (docs/ssl-native-params/VST3__4K_B.md).
         { {"Polarity","\xd8"}, {"Pre IN","PRE"}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },
-        { {"S/C Listen","S/C LISTEN"}, {nullptr,""}, {nullptr,"HQ MODE",Uf1CsSkAct::HQ}, {nullptr,"A/B",Uf1CsSkAct::AB} },
+        { {"Filters In","FILTERS"}, {nullptr,""}, {nullptr,"HQ MODE",Uf1CsSkAct::HQ}, {nullptr,"A/B",Uf1CsSkAct::AB} },
         { {"LF Type","LF BELL"}, {nullptr,""}, {nullptr,""}, {"EQ In","EQ"} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {"EQ In","EQ"} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {"EQ In","EQ"} },
         { {"HF Type","HF BELL"}, {nullptr,""}, {nullptr,""}, {"EQ In","EQ"} },
-        { {nullptr,""}, {nullptr,""}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYNAMICS"} },
-        { {"Gate Expander","EXPAND"}, {nullptr,""}, {nullptr,""}, {"Dynamics In","DYNAMICS"} },
-        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 9 (unreachable: 8-page type)
+        { {nullptr,""}, {nullptr,""}, {nullptr,""}, {"Dynamics In","DYN"} },
+        { {nullptr,""}, {"Gate Expander","EXPANDER"}, {"S/C Listen","S/C LISTEN"}, {"Dynamics In","DYN"} },
+        { {"Compressor Auto Make-up","AUTO MAKEUP"}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
     },
     { // 2 — 4K E  ⇨ LAYOUT = SSL 360 2.1.12, MEASURED page by page (cap133, 2026-09-11).
       //     Frank 2026-09-11: "diese param-reihenfolge für unsere version übernehmen".
