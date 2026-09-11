@@ -8142,54 +8142,6 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             ImGui_Spacing(ctx);
 
             if (curKind != DynamicBankKind::None) {
-                // ⇨ ◄ ► LONG-PRESS PAGES, NOT "5-8". The 5-8 key is always the
-                // DAW channel group (Frank, settled 2026-08-11 and again
-                // 2026-08-18: "5-8 ist immer die nächsten 5-8 kanäle"); paging
-                // inside a dynamic bank moved to the arrows' long press in the
-                // same breath. This text still described the old arrangement.
-                {
-                    // Where the paging action actually sits, rather than a
-                    // second setting beside the binding that owns it: a long
-                    // press on ◄ ► out of the factory, and yours to move.
-                    // ⇨ EVERY key that pages, not the first one found. BOTH page
-                    // arrows carry it out of the factory, so naming one of them
-                    // read as "only this one pages" (Frank 2026-08-26: "Bullshit.
-                    // left und right!"). The question this line answers is "where
-                    // does this action live", and that is a SET — findFirstBoundTo
-                    // was the wrong question, not a wrong answer.
-                    // Silk-screen labels ("PAGE ◄"), not the internal binding ids.
-                    const auto hits =
-                        uf8::bindings::findAllBoundTo("uf1_dyn_bank_page");
-                    // The same control can carry it on more than one layer; name
-                    // it once. First hit decides its press kind.
-                    std::vector<std::pair<std::string, bool>> keys;
-                    for (const auto& h : hits) {
-                        const char* nm = (h.id == uf8::bindings::ButtonId::None)
-                            ? h.where.c_str() : hwFaceLabel(h.id);
-                        if (!nm || !*nm) continue;
-                        bool dup = false;
-                        for (const auto& k : keys)
-                            if (k.first == nm) { dup = true; break; }
-                        if (!dup) keys.emplace_back(nm, h.longPress);
-                    }
-                    bool allLong = !keys.empty();
-                    for (const auto& k : keys) if (!k.second) allLong = false;
-                    std::string list;
-                    for (const auto& k : keys) {
-                        if (!list.empty()) list += ", ";
-                        list += k.first;
-                        // One suffix for the whole list when they agree, which is
-                        // the factory case: "PAGE ◄, PAGE ► (long press)".
-                        if (!allLong && k.second) list += " (long press)";
-                    }
-                    if (allLong) list += " (long press)";
-                    if (keys.empty())
-                        ImGui_TextDisabled(ctx,
-                            "Pages with: nothing is bound to "
-                            "\"UF1: Dynamic Bank Page\" right now.");
-                    else
-                        ImGui_TextDisabled(ctx, ("Pages with: " + list).c_str());
-                }
                 ImGui_Spacing(ctx);
                 if (curKind == DynamicBankKind::FxBank) {
                     drawFxBankGestures_(ctx,
