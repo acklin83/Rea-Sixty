@@ -27442,8 +27442,8 @@ int uf1CsPluginType_(MediaTrack* tr, int fx);   // defined with the tables below
 // static_cast<uint8_t>(NaN) is undefined and paints garbage. Added for Frank's
 // "4K G EQ graph völliger Müll wenn HF Gain auf 0" (2026-09-11) on the GUESS that
 // the G-series EQ sends NaN at 0 dB. The run after it logged no non-finite point
-// at all; the likelier cause was the 0x012b probe restated every cycle (see the
-// channel cycle tail). Kept as a guard, the stream path had none. Bridges each run of non-finite points linearly
+// at all, and removing the 0x012b probe did not cure the related FG-S fault
+// either: the cause is open. Kept as a guard, the stream path had none. Bridges each run of non-finite points linearly
 // between its finite neighbours; returns false when no point is finite, so the
 // caller falls back to the parametric render. Logs the first bad point's raw
 // bits once per plug-in and count: the evidence for what the plug-in sent.
@@ -32087,9 +32087,9 @@ void uf1PaintChannel_()
         parts->tail.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&hl, 1)));
         // ⛔ NO 0x012b HERE. 759eaec wrote it every cycle as a colour-bar probe
         // (the only zone 2.1.12 added to the init, cap129 4 x 00, never written by
-        // SSL in the Plug-in Mixer). From then on the EQ graph broke wherever its
-        // curve stands still: a learned third-party strip drew +max across every
-        // frequency, the 4K G garbage at HF Gain 0 (Frank 2026-09-11). SSL writes
+        // SSL in the Plug-in Mixer). It was removed as the suspect for two EQ-graph
+        // faults (Frank 2026-09-11), but the learned VM FG-S still drew +max across
+        // every frequency with it gone, so it was not that fault's cause. SSL writes
         // 0x012b once at init and never again; an unknown zone is not restated.
         {
             std::lock_guard<std::mutex> lk(g_uf1CycleMx);
