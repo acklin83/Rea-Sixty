@@ -27800,7 +27800,7 @@ constexpr Uf1CsPage kUf1CsVPots[7][9] = {
       //     resolution in uf1ParamByName_ keeps "Width"/"Pre" off "Width Frequency"/
       //     "Dynamics Pre-EQ". 8 pages like the other channel strips.
         { {"Width","Width"}, {"Mic","Mic"}, {"Output Trim","Out Trim",true}, {"Compressor Mix","Mix"} },
-        { {"Input Trim","In Trim",true}, {}, {"High Pass","HighPass"}, {"Low Pass","Low Pass"} },
+        { {"Input Trim","In Trim",true}, {"Impedance","Impedance"}, {"High Pass","HighPass"}, {"Low Pass","Low Pass"} },   // Impedance: cap135
         { {"LF Gain","LF Gain",true}, {"LF Freq","LF Freq"}, {}, {} },
         { {"LMF Gain","LMF Gain",true}, {"LMF Freq","LMF Freq"}, {"LMF Q","LMF Q"}, {} },
         { {"HMF Gain","HMF Gain",true}, {"HMF Freq","HMF Freq"}, {"HMF Q","HMF Q"}, {} },
@@ -27930,11 +27930,13 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[7][9] = {
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 9 (unreachable: 8-page type)
     },
-    { // 5 — SSL 4K G (Rea-Sixty extra). Layout = the 4K E's 2.1.12 layout above
-      //     (both 4000-series, same params: "Filters In" 19, "Compressor Auto
-      //     Make-up" 44 in the 4K G dump). Not captured on 2.1.12 itself yet.
+    { // 5 — SSL 4K G  ⇨ LAYOUT = SSL 360 2.1.12, MEASURED (cap135, 2026-09-11): the
+      //     4K E's pages plus IMP IN on page 2 (params "Impedance In" 7, "Impedance"
+      //     8). Soft key 1 on the LF and HF pages is NOT static on this strip —
+      //     it follows the EQ colour, see uf1CsSoftKeyAt_ (this row holds the
+      //     Black/"E" reading; Pink swaps in LMF DIV3 / HMF X3).
         { {"Polarity","\xd8"}, {"Pre","PRE"}, {nullptr,"SOLO SAFE"}, {nullptr,"PLUG-IN",Uf1CsSkAct::StripMode} },
-        { {"Filters In","FILTERS"}, {nullptr,""}, {nullptr,"HQ MODE",Uf1CsSkAct::HQ}, {nullptr,"A/B",Uf1CsSkAct::AB} },
+        { {"Filters In","FILTERS"}, {"Impedance In","IMP IN"}, {nullptr,"HQ MODE",Uf1CsSkAct::HQ}, {nullptr,"A/B",Uf1CsSkAct::AB} },
         { {"LF Type","LF BELL"}, {nullptr,""}, {"EQ Colour","EQ COLOUR"}, {"EQ In","EQ"} },
         { {nullptr,""}, {nullptr,""}, {"EQ Colour","EQ COLOUR"}, {"EQ In","EQ"} },
         { {nullptr,""}, {nullptr,""}, {"EQ Colour","EQ COLOUR"}, {"EQ In","EQ"} },
@@ -27957,6 +27959,27 @@ constexpr Uf1CsSkPage kUf1CsSoftKeys[7][9] = {
         { {nullptr,""}, {nullptr,""}, {nullptr,""}, {nullptr,""} },   // page 9 (unreachable: 8-page type)
     },
 };
+
+// The soft key at a factory-strip position — the table entry, except where SSL
+// itself decides at runtime. MEASURED on the 4K G (cap135, 2026-09-11): soft key
+// 1 of the LF and HF pages reads LF BELL / HF BELL while the EQ colour is Black
+// (the E-style EQ with bell switches) and LMF DIV3 / HMF X3 while it is Pink
+// (the G-series EQ, whose ÷3 / ×3 switches take that key instead). The label
+// swapped at the very moment the EQ COLOUR LED changed, three times each way.
+// Returned by value so the swap costs nothing at the four call sites.
+// Main-thread only (reads the plug-in); tr/fx may be null → the table entry.
+static Uf1CsSoftKey uf1CsSoftKeyAt_(int type, int page, int idx, MediaTrack* tr, int fx)
+{
+    Uf1CsSoftKey sk = kUf1CsSoftKeys[type][page].slot(idx);
+    if (type == 5 && idx == 0 && (page == 2 || page == 5) && tr && fx >= 0) {
+        const int colour = uf1ParamByName_(tr, fx, "EQ Colour");   // 4K G: Pink (0) / Black (1)
+        if (colour >= 0 && TrackFX_GetParamNormalized(tr, fx, colour) < 0.5) {
+            sk = (page == 2) ? Uf1CsSoftKey{"LMF div3", "LMF DIV3"}
+                             : Uf1CsSoftKey{"HMF x3",   "HMF X3"};
+        }
+    }
+    return sk;
+}
 
 // Display soft-key LED ids (buttons 0x19-0x1C). The UF1 LED-id space is SEPARATE
 // from the button-id space, but every HW-confirmed pair follows led_id = btn_id −
@@ -28358,7 +28381,7 @@ int uf1CsSoftKeyParam_(MediaTrack* tr, int fx, int type, int page, int idx)
     if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm)))
         return uf1LearnedEffParam_(
             uf1LearnedSlotAt_(nm, /*busComp*/type == 4, /*wantButton*/true, page, idx));
-    const Uf1CsSoftKey& sk = kUf1CsSoftKeys[type][page].slot(idx);
+    const Uf1CsSoftKey sk = uf1CsSoftKeyAt_(type, page, idx, tr, fx);
     return sk.param ? uf1ParamByName_(tr, fx, sk.param) : -1;
 }
 // Page count for the strip under the UF1 channel V-Pots: the fixed per-type count
@@ -29067,7 +29090,7 @@ void applyUf1ChannelSoftKey_(int idx, bool shiftAtPress)
     char lnm[256];
     const bool learned = uf1IsLearnedCsBc_(tr, fx, lnm, sizeof(lnm));
     if (!learned && !userOwnsKey) {
-        const Uf1CsSoftKey& sk = kUf1CsSoftKeys[type][page].slot(idx);
+        const Uf1CsSoftKey sk = uf1CsSoftKeyAt_(type, page, idx, tr, fx);
         // HQ MODE / A/B compare live in the plug-in state chunk, not as VST3 params
         // — toggle via the shared PluginChunkPatch hook on the resolved strip's
         // track (it walks every SSL plug-in on the track), exactly as the UF8 soft-
@@ -32759,7 +32782,7 @@ void uf1PaintChannel_()
                     }
                 }
             } else if (skType >= 0) {
-                const Uf1CsSoftKey& sk = kUf1CsSoftKeys[skType][skPage].slot(i);
+                const Uf1CsSoftKey sk = uf1CsSoftKeyAt_(skType, skPage, i, skTr, skFx);
                 label = sk.label ? sk.label : "";
                 haveLabel = true;
                 // Toggle on-state for the LED (same resolution the press uses).
@@ -44824,7 +44847,7 @@ const char* reasixty_uf1FactoryLabel(void* trV, int fx, bool softKeys,
     if (uf1IsLearnedCsBc_(tr, fx, nm, sizeof(nm))) return "";   // learned: params only
     if (page >= uf1CsPageCountFor_(type, tr, fx)) return "";
     if (softKeys) {
-        const Uf1CsSoftKey& sk = kUf1CsSoftKeys[type][page].slot(idx);
+        const Uf1CsSoftKey sk = uf1CsSoftKeyAt_(type, page, idx, tr, fx);
         return sk.label ? sk.label : "";
     }
     const Uf1CsVPot& v = kUf1CsVPots[type][page].slot(idx);
