@@ -27439,12 +27439,11 @@ static int uf1FindStripFx_(MediaTrack* tr);   // defined next to uf1ResolveCsFx_
 int uf1CsPluginType_(MediaTrack* tr, int fx);   // defined with the tables below
 
 // A non-finite point in the plug-in's OWN curve must never reach dbToH:
-// static_cast<uint8_t>(NaN) is undefined and paints garbage. Frank 2026-09-11:
-// "4K G EQ graph völliger Müll wenn HF Gain auf 0". The parametric render
-// returns exactly 0 dB for a zero-gain band; the stream path had no guard, and
-// the 4K G's G-series EQ ties the band's Q to its gain, which is where a 0 dB
-// setting can divide by zero inside the plug-in (inferred, the trace cuts the
-// HF end of each frame). Bridges each run of non-finite points linearly
+// static_cast<uint8_t>(NaN) is undefined and paints garbage. Added for Frank's
+// "4K G EQ graph völliger Müll wenn HF Gain auf 0" (2026-09-11) on the GUESS that
+// the G-series EQ sends NaN at 0 dB. The run after it logged no non-finite point
+// at all; the likelier cause was the 0x012b probe restated every cycle (see the
+// channel cycle tail). Kept as a guard, the stream path had none. Bridges each run of non-finite points linearly
 // between its finite neighbours; returns false when no point is finite, so the
 // caller falls back to the parametric render. Logs the first bad point's raw
 // bits once per plug-in and count: the evidence for what the plug-in sent.
@@ -32086,22 +32085,12 @@ void uf1PaintChannel_()
         }
         const uint8_t hl = uf1HeaderHighlight_();
         parts->tail.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&hl, 1)));
-        // 0x012b, 4 bytes: the ONLY zone SSL 360 2.1.12 added to the UF1 init
-        // (cap129, 4 x 00), never written in the Plug-in Mixer. Taken as the colour
-        // bars above the four V-Pot channels, which the UF1 guide Rev9.1 gives to
-        // 360 v2.1 with Pro Tools 2025. A PROBE (Frank 2026-09-11, "Ja, 0x012b
-        // probieren"): the four DAW-window tracks' palette indices, quantised like
-        // the fader bar 0x0018; zeros outside the DAW view.
-        {
-            uint8_t cb[4] = {0, 0, 0, 0};
-            if (g_uf1ChannelSubMode.load() == 1) {
-                const int base = uf1DawWindowStart_();
-                for (int i = 0; i < 4; ++i)
-                    if (MediaTrack* t = GetTrack(nullptr, base + i))
-                        cb[i] = uf8::quantize(trackColorRgb(t));
-            }
-            parts->tail.push_back(uf1::buildScreen(0x012b, cb));
-        }
+        // ⛔ NO 0x012b HERE. 759eaec wrote it every cycle as a colour-bar probe
+        // (the only zone 2.1.12 added to the init, cap129 4 x 00, never written by
+        // SSL in the Plug-in Mixer). From then on the EQ graph broke wherever its
+        // curve stands still: a learned third-party strip drew +max across every
+        // frequency, the 4K G garbage at HF Gain 0 (Frank 2026-09-11). SSL writes
+        // 0x012b once at init and never again; an unknown zone is not restated.
         {
             std::lock_guard<std::mutex> lk(g_uf1CycleMx);
             g_uf1CycleSnap = std::shared_ptr<const Uf1CycleParts>(std::move(parts));
