@@ -107,39 +107,46 @@ std::string presetDir(MediaTrack* tr, int fx)
     // are NOT the plug-in names — they are these. Longest match first, or
     // "Meter Pro" lands in the plain Meter's folder and "360 Link Bus
     // Compressor" in 360 Link's.
-    static const struct { const char* part; const char* leaf; } kDirs[] = {
-        { "Meter Pro",                 "MeterPro"                },
-        { "Meter",                     "Meter"                   },
-        { "Channel Strip 2",           "ChannelStrip2"           },
-        { "360 Link Bus Compressor",   "SSL360LinkBusCompressor" },
-        { "360 Link",                  "SSL360Link"              },
-        { "Bus Compressor 2",          "BusCompressor2"          },
-        { "4K B",                      "SSL4KB"                  },
-        { "4K E",                      "SSL4KE"                  },
-        { "4K G",                      "SSL4KG"                  },
+    // The Harrison 32C writes the same SSL_PRESET XML, but under its maker's own
+    // root: /Library/Application Support/Harrison/PlugIns/Presets/Harrison32Classic
+    // (19 factory presets, read on the Mac Studio 2026-09-11).
+    static const struct { const char* part; const char* vendor; const char* leaf; } kDirs[] = {
+        { "32Classic",                 "Harrison",          "Harrison32Classic"       },
+        { "Meter Pro",                 "Solid State Logic", "MeterPro"                },
+        { "Meter",                     "Solid State Logic", "Meter"                   },
+        { "Channel Strip 2",           "Solid State Logic", "ChannelStrip2"           },
+        { "360 Link Bus Compressor",   "Solid State Logic", "SSL360LinkBusCompressor" },
+        { "360 Link",                  "Solid State Logic", "SSL360Link"              },
+        { "Bus Compressor 2",          "Solid State Logic", "BusCompressor2"          },
+        { "4K B",                      "Solid State Logic", "SSL4KB"                  },
+        { "4K E",                      "Solid State Logic", "SSL4KE"                  },
+        { "4K G",                      "Solid State Logic", "SSL4KG"                  },
     };
     const char* leaf = nullptr;
+    const char* vendor = nullptr;
     for (const auto& d : kDirs)
-        if (s.find(d.part) != std::string::npos) { leaf = d.leaf; break; }
+        if (s.find(d.part) != std::string::npos) { leaf = d.leaf; vendor = d.vendor; break; }
     if (!leaf) return std::string();
 #if defined(__APPLE__)
-    return std::string("/Library/Application Support/Solid State Logic/PlugIns/Presets/") + leaf;
+    return std::string("/Library/Application Support/") + vendor + "/PlugIns/Presets/" + leaf;
 #elif defined(_WIN32)
     // VERIFIED on the Windows rig 2026-08-20 (StoerPC): the same tree, rooted at
     // ProgramData —  C:\ProgramData\Solid State Logic\PlugIns\Presets\MeterPro
     // holds the XMLs, byte for byte the layout macOS has. Read the root from the
     // ENVIRONMENT rather than hardcoding C:\ProgramData: it is relocatable, and
     // a hardcoded drive letter is the classic way this breaks on someone else's
-    // machine while working on ours.
+    // machine while working on ours. The Harrison 32C mirrors it:
+    // C:\ProgramData\Harrison\PlugIns\Presets\Harrison32Classic, 19 XMLs
+    // (StoerPC 2026-09-11).
     const char* pd = std::getenv("ProgramData");
     if (!pd || !*pd) pd = "C:\\ProgramData";
-    return std::string(pd) + "\\Solid State Logic\\PlugIns\\Presets\\" + leaf;
+    return std::string(pd) + "\\" + vendor + "\\PlugIns\\Presets\\" + leaf;
 #else
     // Linux gets NOTHING, and that is the finished answer rather than a gap: SSL
     // ships no Linux plug-ins at all (their own system requirements, checked
     // 2026-08-20, list macOS and Windows only). There is no folder to point at,
     // so the browser correctly comes back empty instead of hunting for one.
-    (void)leaf;
+    (void)leaf; (void)vendor;
     return std::string();
 #endif
 }
