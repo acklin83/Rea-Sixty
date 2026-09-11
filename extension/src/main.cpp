@@ -27438,6 +27438,53 @@ static int uf1FindStripFx_(MediaTrack* tr);   // defined next to uf1ResolveCsFx_
 // of a second of insistence, which nobody can see and no device can miss.
 int uf1CsPluginType_(MediaTrack* tr, int fx);   // defined with the tables below
 
+// A non-finite point in the plug-in's OWN curve must never reach dbToH:
+// static_cast<uint8_t>(NaN) is undefined and paints garbage. Frank 2026-09-11:
+// "4K G EQ graph völliger Müll wenn HF Gain auf 0". The parametric render
+// returns exactly 0 dB for a zero-gain band; the stream path had no guard, and
+// the 4K G's G-series EQ ties the band's Q to its gain, which is where a 0 dB
+// setting can divide by zero inside the plug-in (inferred, the trace cuts the
+// HF end of each frame). Bridges each run of non-finite points linearly
+// between its finite neighbours; returns false when no point is finite, so the
+// caller falls back to the parametric render. Logs the first bad point's raw
+// bits once per plug-in and count: the evidence for what the plug-in sent.
+static bool uf1SanitizeWireCurve_(std::vector<float>& w, const std::string& ident)
+{
+    const int m = static_cast<int>(w.size());
+    int bad = 0, firstBad = -1;
+    uint32_t bits = 0;
+    for (int i = 0; i < m; ++i)
+        if (!std::isfinite(w[i]) && bad++ == 0) { firstBad = i; std::memcpy(&bits, &w[i], 4); }
+    if (bad == 0) return true;
+    static std::string sKey;
+    const std::string key = ident + '|' + std::to_string(bad) + '|' + std::to_string(firstBad);
+    if (key != sKey) {
+        sKey = key;
+        if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+            std::fprintf(lg, "[uf1eq] '%s' sent %d non-finite of %d curve points, "
+                             "first #%d bits %08x\n", ident.c_str(), bad, m, firstBad, bits);
+            std::fclose(lg);
+        }
+    }
+    if (bad == m) return false;
+    for (int i = 0; i < m; ) {
+        if (std::isfinite(w[i])) { ++i; continue; }
+        int j = i;
+        while (j < m && !std::isfinite(w[j])) ++j;            // [i, j) non-finite
+        const bool hasL = i > 0, hasR = j < m;
+        for (int k = i; k < j; ++k) {
+            if (hasL && hasR) {
+                const float t = float(k - i + 1) / float(j - i + 1);
+                w[k] = w[i - 1] + (w[j] - w[i - 1]) * t;
+            } else {
+                w[k] = hasL ? w[i - 1] : w[j];
+            }
+        }
+        i = j;
+    }
+    return true;
+}
+
 void uf1PaintEqGraph_(MediaTrack* tr, bool force)
 {
     static MediaTrack* sFxTr = nullptr;
@@ -27620,6 +27667,7 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
 
     std::array<uint8_t, 251> col{};
     auto dbToH = [](double db) {
+        if (!std::isfinite(db)) db = 0.0;        // NaN would be UB in the cast below
         double h = 100.0 + db * 5.44;            // cap73: 0 dB = 100, +16 dB ≈ 187
         if (h < 0.0) h = 0.0; if (h > 199.0) h = 199.0;
         return static_cast<uint8_t>(h + 0.5);
@@ -27710,7 +27758,8 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
                                             pm ? pm->displayShort : nullptr,
                                             fp, nfp,
                                             uf8::sslCoreInstanceOrdinal(sFxTr, sFx),
-                                            wire, wMin, wMax)) {
+                                            wire, wMin, wMax)
+            && uf1SanitizeWireCurve_(wire, sIdent)) {
             // The plug-in's axis, or the render's own 20 Hz..20 kHz when it never
             // announced one. Both are log, so the mapping is a log-space lerp.
             const double aMin = (wMin > 0.0f) ? double(wMin) : 20.0;
