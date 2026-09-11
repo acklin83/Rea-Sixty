@@ -13486,6 +13486,28 @@ static bool csTextEq_(const char* a, const char* b)
     return *a == 0 && *b == 0;
 }
 
+// ⛔ ReaEQ states a band's width in OCTAVES ("BW-Band 2" reads "2.00", no unit),
+// where every other strip we map states Q. Checked 2026-09-11 against every
+// learned map on the Mac Studio: only ReaEQ's Q slots point at a BW param, so this
+// is keyed on the identity (Frank: a special case for ReaEQ). Inside Rea-Sixty a
+// width is always Q; these convert at the ReaEQ edge. The RBJ cookbook relation,
+// as Effects/Tukan/rbj_filter.jsfx-inc has it (rbj_bwtoq / rbj_qtobw):
+//   q = 1 / (2 sinh(ln2/2 * bw)),   bw = 2 asinh(1/(2q)) / ln2
+static bool fxWidthIsOctaves_(MediaTrack* tr, int fx)
+{
+    char nm[256] = {0};
+    return tr && fx >= 0 && uf8::fxIdentityName(tr, fx, nm, sizeof(nm))
+        && std::strstr(nm, "ReaEQ (Cockos)") != nullptr;
+}
+static double octavesToQ_(double bw)
+{
+    return bw > 0.0 ? 1.0 / (2.0 * std::sinh(std::log(2.0) / 2.0 * bw)) : bw;
+}
+static double qToOctaves_(double q)
+{
+    return q > 0.0 ? 2.0 * std::asinh(1.0 / (2.0 * q)) / std::log(2.0) : q;
+}
+
 // Read a param's value for transfer. `kind` (from the linkIdx) drives the later
 // scale handling. Numeric when the display parses to a number; otherwise the
 // display string is kept for a by-name match (Auto / Off / Bell …).
@@ -13498,6 +13520,8 @@ static CsVal readParamValue_(MediaTrack* tr, int fx, int param, uc1::CsQuantityK
         std::snprintf(v.text, sizeof(v.text), "%s", s);
         const CsUnitVal u = parseUnitValue_(s);
         if (u.ok) { v.numeric = true; v.eng = u.base; v.dim = u.dim; }
+        if (v.numeric && kind == uc1::CsQuantityKind::Q && fxWidthIsOctaves_(tr, fx))
+            v.eng = octavesToQ_(v.eng);   // a width travels as Q
     }
     if (!v.numeric) {
         // Discrete control — find its STATE POSITION so it can transfer by index
@@ -13523,8 +13547,12 @@ static CsVal readParamValue_(MediaTrack* tr, int fx, int param, uc1::CsQuantityK
 // Main-thread only.
 // Returns the normalised value actually written (for round-trip intent memory).
 static double applyParamValue_(MediaTrack* tr, int dstFx, int dstParam,
-                               const CsVal& v, int ctrlKey)
+                               const CsVal& vIn, int ctrlKey)
 {
+    // A width travels as Q; ReaEQ takes it in octaves (see fxWidthIsOctaves_).
+    CsVal v = vIn;
+    if (v.numeric && v.kind == uc1::CsQuantityKind::Q && fxWidthIsOctaves_(tr, dstFx))
+        v.eng = qToOctaves_(v.eng);
     const double origN = TrackFX_GetParamNormalized(tr, dstFx, dstParam);  // dst's own default
     // Which dst param are we actually writing? Logged on every line so we can see
     // whether a linkIdx resolves to the param the user expects (e.g. linkIdx 9 →
@@ -27796,8 +27824,14 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     } else {
         const double hfG=uf1ParamFmt_(sFxTr,sFx,ix[0],0),  hfF=uf1ParamFreq_(sFxTr,sFx,ix[1],8000);
         const bool   hfBell = ix[2]>=0 && TrackFX_GetParamNormalized(sFxTr,sFx,ix[2])>=0.5;
-        const double hmG=uf1ParamFmt_(sFxTr,sFx,ix[3],0),  hmF=uf1ParamFreq_(sFxTr,sFx,ix[4],3000),  hmQ=uf1ParamFmt_(sFxTr,sFx,ix[5],1.0);
-        const double lmG=uf1ParamFmt_(sFxTr,sFx,ix[6],0),  lmF=uf1ParamFreq_(sFxTr,sFx,ix[7],1000),  lmQ=uf1ParamFmt_(sFxTr,sFx,ix[8],1.0);
+        // ReaEQ's band width is octaves, not Q (see fxWidthIsOctaves_).
+        const bool   bwOct = fxWidthIsOctaves_(sFxTr, sFx);
+        auto qAt = [&](int k) {
+            const double w = uf1ParamFmt_(sFxTr, sFx, ix[k], 1.0);
+            return (bwOct && ix[k] >= 0) ? octavesToQ_(w) : w;
+        };
+        const double hmG=uf1ParamFmt_(sFxTr,sFx,ix[3],0),  hmF=uf1ParamFreq_(sFxTr,sFx,ix[4],3000),  hmQ=qAt(5);
+        const double lmG=uf1ParamFmt_(sFxTr,sFx,ix[6],0),  lmF=uf1ParamFreq_(sFxTr,sFx,ix[7],1000),  lmQ=qAt(8);
         const double lfF=uf1ParamFreq_(sFxTr,sFx,ix[9],200), lfG=uf1ParamFmt_(sFxTr,sFx,ix[10],0);
         const bool   lfBell = ix[11]>=0 && TrackFX_GetParamNormalized(sFxTr,sFx,ix[11])>=0.5;
         // HP ('High Pass Filter'): value in Hz ("80"), or "OUT" when disengaged.
