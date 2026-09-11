@@ -22504,9 +22504,34 @@ static void uf1SetJogField_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h,
 // and the list scrolls through it (Frank 2026-09-11: "meine sichtbaren Modi").
 // Row 1 = cell 0 is also what firmware before 2.1.12 shows, so it still reads the
 // live mode there. Main + pacer thread, atomics only.
+// Open while MODE (encoder modes) or SCRUB (jog modes) is held.
 static bool uf1EncListOpen_()
 {
-    return g_uf1ModeMenu.load() && !g_uf1ScrubHeld.load();   // SCRUB owns cell 0
+    return g_uf1ModeMenu.load() || g_uf1ScrubHeld.load();
+}
+// Cells 0-2 = rows 1-3: `vis` in ring order, the live mode `cur` first. Cell 5
+// gets the list's name as a PROBE for the title the firmware draws as "CHANNEL"
+// (Frank 2026-09-11: "Channel soll ENC MODE bzw. JOG MODE anzeigen"). SSL leaves
+// cells 5-7 empty and no capture shows another title there, so whether the
+// firmware draws cell 5 at all (0x011e bit 5 set while open) is what it tests.
+static void uf1FillModeList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h,
+                             int* vis, int n, int cap, int cur,
+                             const char* (*nameOf)(int), const char* title)
+{
+    int ci = -1;
+    for (int i = 0; i < n; ++i) if (vis[i] == cur) { ci = i; break; }
+    if (ci < 0) {                          // live mode hidden: it still leads
+        if (n < cap) { vis[n] = cur; ci = n++; }
+        else ci = 0;
+    }
+    auto put = [&](int cell, const char* s) {
+        const size_t len = std::strlen(s);
+        for (size_t k = 0; k < 25; ++k)
+            h[cell * 25 + k] = (k < len) ? static_cast<uint8_t>(s[k]) : 0;
+    };
+    for (int r = 0; r < 3; ++r)
+        put(r, (r < n) ? nameOf(vis[(ci + r) % n]) : "");
+    put(5, title);
 }
 static void uf1SetEncoderList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h)
 {
@@ -22517,20 +22542,27 @@ static void uf1SetEncoderList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h)
         if (m >= 0 && m < kEncoderModeCount && g_uf1EncoderVisible[m].load())
             vis[n++] = m;
     }
-    const int cur = static_cast<int>(g_uf1EncoderMode.load());
-    int ci = -1;
-    for (int i = 0; i < n; ++i) if (vis[i] == cur) { ci = i; break; }
-    if (ci < 0) {                          // live mode hidden: it still leads
-        if (n < kEncoderModeCount) { vis[n] = cur; ci = n++; }
-        else ci = 0;
+    uf1FillModeList_(h, vis, n, kEncoderModeCount,
+                     static_cast<int>(g_uf1EncoderMode.load()),
+                     [](int m) { return uf1EncoderModeHdr_(static_cast<EncoderMode>(m)); },
+                     "ENC MODE");
+}
+// The jog picker (SCRUB held + wheel, uf1JogModeStep_) draws the same list over
+// the jog ring, g_uf1JogSeq / g_uf1JogVisible (Frank 2026-09-11: "wieso zeichnet
+// es das jogwheel für jog-mode nicht gleich?").
+static void uf1SetJogList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h)
+{
+    int vis[kUf1JogModeCount];
+    int n = 0;
+    for (int k = 0; k < kUf1JogModeCount; ++k) {
+        const int m = g_uf1JogSeq[k].load();
+        if (m >= 0 && m < kUf1JogModeCount && g_uf1JogVisible[m].load())
+            vis[n++] = m;
     }
-    for (int r = 0; r < 3; ++r) {
-        const char* s = (r < n)
-            ? uf1EncoderModeHdr_(static_cast<EncoderMode>(vis[(ci + r) % n])) : "";
-        const size_t len = std::strlen(s);
-        for (size_t k = 0; k < 25; ++k)
-            h[r * 25 + k] = (k < len) ? static_cast<uint8_t>(s[k]) : 0;
-    }
+    uf1FillModeList_(h, vis, n, kUf1JogModeCount,
+                     static_cast<int>(g_uf1JogMode.load()),
+                     [](int m) { return uf1JogModeHdr_(static_cast<Uf1JogMode>(m)); },
+                     "JOG MODE");
 }
 // 0x011d: row 1 highlighted while the list is open, 00 otherwise (ours as before;
 // SSL's idle is 0x19).
@@ -22577,8 +22609,8 @@ static std::array<uint8_t, sizeof(kUf1PluginHeader)> uf1BuildLiveHeader_()
     const EncoderMode em  = g_uf1EncoderMode.load();
     const Uf1JogMode  jgm = g_uf1JogMode.load();
     if (g_uf1ScrubHeld.load())
-        uf1SetJogField_(hdr, jgm);
-    else if (uf1EncListOpen_())
+        uf1SetJogList_(hdr);              // the same 2.1.12 list, over the jog modes
+    else if (g_uf1ModeMenu.load())
         uf1SetEncoderList_(hdr);          // the 2.1.12 list in cells 0-2, see above
     else if (em != EncoderMode::ChSelect)
         uf1SetEncoderField_(hdr, em);
@@ -31444,7 +31476,7 @@ void uf1PaintChannel_()
             // view-state byte; SSL's channel state going into a meter-view entry
             // is 00 (cap101). 0x19 while the encoder list is open.
             put(0x011d, {uf1HeaderHighlight_()});
-            put(0x011e, {static_cast<uint8_t>(encList ? 0x1f : 0x18)});
+            put(0x011e, {static_cast<uint8_t>(encList ? 0x3f : 0x18)});   // 0x3f: see the list edge below
             // The ff-state: SSL holds 0x0009=ffff0000, 0x0015/16=ff in the
             // channel state (cap101 t=26.62 and the whole idle stream). Our
             // cap66 init replay left 0009=00000000, so we entered the meter
@@ -31945,15 +31977,20 @@ void uf1PaintChannel_()
         uf1PaintMeter_(tr, changed);
     } else {
         g_uf1SkipNotMeter.fetch_add(1, std::memory_order_relaxed);
-        // The encoder list opens and closes with MODE (uf1SetEncoderList_). Its
-        // three state bytes are not in the pacer's cycle, and a MODE edge must not
-        // re-assert the layout ([[uf1-mode-edge-must-not-relayout]]), so they go
-        // out here, once per edge. With a layout change the burst above writes them.
-        if (menuEdge && !layoutChanged) {
-            const bool open = uf1EncListOpen_();
+        // The list opens and closes with MODE or SCRUB (uf1SetEncoderList_ /
+        // uf1SetJogList_). Its three state bytes are not in the pacer's cycle, and
+        // a MODE edge must not re-assert the layout
+        // ([[uf1-mode-edge-must-not-relayout]]), so they go out here, once per
+        // open/close. With a layout change the burst above writes them.
+        static bool sListOpen = false;
+        const bool listOpen = uf1EncListOpen_();
+        const bool listEdge = (listOpen != sListOpen);
+        sListOpen = listOpen;
+        if (listEdge && !layoutChanged) {
+            const bool open = listOpen;
             const uint8_t s0110 = open ? 0x07 : 0x0f;
             const uint8_t s011a = open ? 0x03 : 0x02;
-            const uint8_t s011e = open ? 0x1f : 0x18;
+            const uint8_t s011e = open ? 0x3f : 0x18;   // SSL's 0x1f + bit 5, the cell-5 title probe
             g_uf1_dev->send(uf1::buildScreen(0x0110, std::span<const uint8_t>(&s0110, 1)));
             g_uf1_dev->send(uf1::buildScreen(0x011a, std::span<const uint8_t>(&s011a, 1)));
             g_uf1_dev->send(uf1::buildScreen(0x011e, std::span<const uint8_t>(&s011e, 1)));
