@@ -26764,9 +26764,6 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 ppmMode = uf1MeterParamNorm_(mtr, mfx, 8, 0.0) >= 0.5;   // kAnalogueModeSel: 0.5+ = 04 = PPM
         }
         uint8_t nL, nR, hL, hR;
-        // The value the overload LEDs judge, in dB above the reference (VU dB,
-        // or PPM marks re-expressed at 4 dB/mark) — set by whichever branch runs.
-        float ovlDbL = -120.f, ovlDbR = -120.f;
         // The second needle — SSL's measured law (Uf1MaxNeedle), driven by the
         // plug-in's "Analogue Max Needle" setting (param 10: Off / 2 sec /
         // Infinite). The fallback whenever the stream has no real second needle:
@@ -26848,7 +26845,6 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 sNdlTr = tr; sNdlPpm = ppmMode; sNdlHold.reset(mL, mR, now);
             }
             sNdlHold.step(mL, mR, now, maxNeedleHoldSec, kUf1PpmMaxNeedleReleaseMarksPerS);
-            ovlDbL = (mL - 4.f) * 4.f; ovlDbR = (mR - 4.f) * 4.f;   // 4 dB per mark, mark 4 = Ref
             nL = uf1PpmByte_(mL); nR = uf1PpmByte_(mR);
             hL = uf1PpmByte_(havePpmHold ? mhL : sNdlHold.l);
             hR = uf1PpmByte_(havePpmHold ? mhR : sNdlHold.r);
@@ -26887,10 +26883,9 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
                 sNdlTr = tr; sNdlPpm = ppmMode; sNdlHold.reset(vuL, vuR, now);
                 sGlideL = vuL; sGlideR = vuR; sGlideT = now;
             }
-            // The max needle and the LEDs judge the RAW value: what the plug-in
-            // says, before the glide below trails it.
+            // The max needle judges the RAW value: what the plug-in says, before
+            // the glide below trails it.
             sNdlHold.step(vuL, vuR, now, maxNeedleHoldSec, kUf1VuMaxNeedleReleaseDbPerS);
-            ovlDbL = vuL; ovlDbR = vuR;
             if (readout) {
                 // Silence (the gate below) is a target like any other here: the
                 // needle glides to the floor instead of snapping to rest. The
@@ -26968,56 +26963,71 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
         // overload LEDs, which is why the same 0 dBFS clip sets overload on no
         // data type at all there (cap98).
         //
-        // The LED is NOT a VU threshold: it flashes for 0.04-0.33 s (median 0.08),
-        // and the VU value at switch-on scatters over -4.9..+3.2 because a 300 ms
-        // ballistic needle cannot track a sample-peak event. So do not invent a
-        // trigger level — the plug-in already decided, in f5/f6. Read it.
+        // That was the old plug-in. Meter Pro 1.3.7 and SSL Meter no longer hand
+        // over the LED decision on this screen: the needle type dt=1 never sets
+        // f5 (0 of 3941 frames to us, 0 of 1052 to SSL 360 in /tmp/ssl360.pcap of
+        // 10.09., and 0 in every second of Frank's run on 11.09. while the plug-
+        // in's own LED lit). f5 on BarPeak/TextPeak is the 0 dBFS clip of the bar
+        // views (pcap 70.692 s: value 0.0, peak +1.1), and the Analogue view does
+        // not stream those types. dt=1 itself is the VU value with a 0.5 s hold,
+        // f4 its running maximum: a kick reading Ref-17 on the VU still lights the
+        // plug-in's LED at a 0 dB threshold.
         {
-            std::vector<uint8_t> ovl, ovlHold;
             uint8_t mask = 0x00;
-            // ⇨ THE LEDs ARE 360's OWN ARITHMETIC, NOT A BIT FROM THE PLUG-IN.
-            // MEASURED 2026-09-11 (cap130 VU, cap131 PPM, SSL 360 2.1.12 on the
-            // UF1): 0x0128 reads 0x0f — flash AND latch, L and R — for the whole
-            // length of every hit above the threshold, then 0x0a (latch only)
-            // until a RESET; and in the plug-in's own stream dt=1 sets f5 in 0 of
-            // 1052 frames while its value sits above +9 dB in 85 of them. So 360
-            // compares the VALUE with the Meter Pro's "Analogue Meters LED
-            // Overload" (param 15: 0..24 dB above Ref, or Off) and keeps the
-            // latch itself. We do the same: flash while over, latch until the
-            // RESET soft key (the same press that resets the plug-in's holds).
-            // A plug-in that still sends dt=0 carried real f5/f6 there and keeps
-            // them (that path was measured before 1.3.7).
+            // ⇨ THE FLASH = REAPER'S PEAK OF THE METER'S TRACK, WHILE IT IS FRESH.
+            // cap130/131 (SSL 360 2.1.12 on the UF1, 1 s hits at Ref+12, threshold
+            // 9): 0x0f from the very frame a hit starts (readout still -51.8, the
+            // needle at rest) until the hit ends (1.1 s), then 0x0a until RESET.
+            // So: peak above the reference (param 9) against the LED Overload
+            // threshold (param 15, norm x 25 dB, "Off" at 1.0), read on the
+            // instance itself (Kik Sample's SSL Meter stores 0.0, MASTER's Meter
+            // Pro 9.0). REAPER's meter falls 26.5 dB/s after a peak, and counting
+            // that tail kept the LED lit (peak - threshold) / 26.5 s after every
+            // hit (Frank: "viel zu lange"). A falling meter is REAPER's decay, not
+            // signal, so only a value that held or rose since the last paint
+            // lights the flash. The latch is ours, cleared by the RESET soft key.
+            // Limit: REAPER meters the track OUTPUT, after every FX behind the
+            // Meter and after the fader; the plug-in measures at its own slot.
             static bool sLatchL = false, sLatchR = false;
             static MediaTrack* sLatchTr = nullptr;
+            static float sPrevL = -200.f, sPrevR = -200.f;
+            static auto sPrevT = std::chrono::steady_clock::now();
             if (g_uf1OvlLatchClear.exchange(false) || tr != sLatchTr) {
                 sLatchL = sLatchR = false; sLatchTr = tr;
+                sPrevL = sPrevR = -200.f;
             }
-            if (uf1NeedleDataType_() == int(sslmeter::DataType::VuPpm)
-                && sslcore::getOverload(int(sslmeter::DataType::VuPpm), ovl, ovlHold)) {
-                if (ovl.size() >= 2) {
-                    if (ovl[0]) mask |= 0x01;      // L overload
-                    if (ovl[1]) mask |= 0x04;      // R overload
-                }
-                if (ovlHold.size() >= 2) {
-                    if (ovlHold[0]) mask |= 0x02;  // L latched
-                    if (ovlHold[1]) mask |= 0x08;  // R latched
-                }
-            } else {
-                // Param 15 is an enum on the wire: 0.36 = "9 dB" (the default),
-                // 0.5 = "13 dB", 1.0 = "Off" — 25 dB per unit, rounded, Off at
-                // the top (docs/ssl-native-params/VST3__SSL_Meter_Pro_(SSL).md).
-                float thrDb = 9.f;
+            // [[reaper-peakinfo-decay-rate]]: linear in dB, steady, both channels.
+            constexpr double kReaperMeterDecayDbPerS = 26.5;
+            const auto tNowLed = std::chrono::steady_clock::now();
+            double dtLed = std::chrono::duration<double>(tNowLed - sPrevT).count();
+            if (dtLed > 0.25) dtLed = 0.25;   // after a pause, still a real decay step
+            sPrevT = tNowLed;
+            // Half of one paint's decay: a held tone moves far less than that,
+            // REAPER's tail exactly one step.
+            const float decayTol = float(0.5 * kReaperMeterDecayDbPerS * dtLed);
+            float pkReL = -200.f, pkReR = -200.f, thrDb = 9.f;
+            bool freshL = false, freshR = false;
+            {
                 MediaTrack* mtr = nullptr; int mfx = -1;
                 if (uf1PinnedMeterTrackFx_(mtr, mfx)) {
-                    const double n = uf1MeterParamNorm_(mtr, mfx, 15, 0.36);
-                    thrDb = (n >= 0.99) ? 1e9f : float(std::lround(n * 25.0));
+                    const double n15 = uf1MeterParamNorm_(mtr, mfx, 15, 0.36);
+                    thrDb = (n15 >= 0.99) ? 1e9f : float(std::lround(n15 * 25.0));
+                    const float refDb =
+                        float(-36.0 + uf1MeterParamNorm_(mtr, mfx, 9, 0.5) * 36.0);
+                    auto toDb = [](double p) {
+                        return p > 1e-9 ? float(20.0 * std::log10(p)) : -200.f; };
+                    const float dbL = toDb(Track_GetPeakInfo(mtr, 0));
+                    const float dbR = toDb(Track_GetPeakInfo(mtr, 1));
+                    freshL = dbL > -200.f && dbL >= sPrevL - decayTol;
+                    freshR = dbR > -200.f && dbR >= sPrevR - decayTol;
+                    sPrevL = dbL; sPrevR = dbR;
+                    pkReL = dbL - refDb; pkReR = dbR - refDb;
                 }
-                const bool overL = ovlDbL > thrDb, overR = ovlDbR > thrDb;
-                if (overL) { mask |= 0x01; sLatchL = true; }
-                if (overR) { mask |= 0x04; sLatchR = true; }
-                if (sLatchL) mask |= 0x02;
-                if (sLatchR) mask |= 0x08;
             }
+            if (freshL && pkReL > thrDb) { mask |= 0x01; sLatchL = true; }
+            if (freshR && pkReR > thrDb) { mask |= 0x04; sLatchR = true; }
+            if (sLatchL) mask |= 0x02;
+            if (sLatchR) mask |= 0x08;
             g_uf1_dev->send(uf1::buildScreen(0x0128, std::span<const uint8_t>(&mask, 1)));
         }
     }
