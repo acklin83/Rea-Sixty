@@ -64,6 +64,34 @@ Finishing the UF1 Loudness V-Pot table: cap109 captured 7 of 10 pages (its 115 s
 closed at page 7). Pages 8-10 (params 40-45 max/range alerts + 50 Play/Pause) need the
 capture above. Context: [docs/HANDOFF-uf1-loudness.md](HANDOFF-uf1-loudness.md).
 
+## ⛔ USBPcap and SSL's driver — the hour of 2026-09-11, never again
+USBPcap installs itself as a **class upper filter of class USB only**. SSL's
+drivers (`sslbus.inf` = oem16, `ftdibus.inf` = oem13) put the UF1 control node
+(`USB\VID_31E9&PID_0025\UF1-009184`) into class `SSLUSBDriver_sc`, and after any
+driver rebind (pnputil delete/scan/restart, even a reboot) the node's stack was
+`SSLBUS > USBHUB3` — **no USBPcap** — while the UF1's HID function, the hubs and
+every plain USB device carried `… > USBPcap > USBHUB3`. Result: USBPcap "knows"
+the device (`--inject-descriptors` lists it) and captures zero bytes from it.
+
+Check, one line: `(Get-PnpDeviceProperty -InstanceId "USB\VID_31E9&PID_0025\UF1-009184" -KeyName DEVPKEY_Device_Stack).Data`
+Fix, then a **physical unplug/replug** (`pnputil /restart-device` does NOT rebuild the stack):
+```
+New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Enum\USB\VID_31E9&PID_0025\UF1-009184" -Name UpperFilters -PropertyType MultiString -Value @("USBPcap") -Force
+```
+After the replug the stack reads `SSLBUS > USBPcap > USBHUB3` and the capture
+carries the device on OUT 0x02 / IN 0x81 as always (cap129).
+
+Two more traps from the same hour:
+- `pnputil /delete-driver oem13.inf /uninstall` (the 2.1.12 ftdibus package) also
+  deletes `C:\Windows\System32\ftd2xx.dll` and `SysWOW64\ftd2xx.dll`; SSL 360 then logs
+  "Ftdi unable to find library" and discovers no devices at all. Backup of the package:
+  `C:\Users\claude\drv_backup_ftdibus` (restore the DLLs, or `pnputil /add-driver … /install`).
+- Our own WinUSB INF leaves `DeviceInterfaceGUIDs` in the node's Device Parameters;
+  `pnputil /remove-device` + `/scan-devices` recreates the node clean.
+- The 360 Core log answers "is 360 talking to the UF1" in one grep:
+  `C:\Users\sunny\AppData\Local\SSL\SSL360\LogFiles\CurrentRun\SSL360Core_*.log`
+  ("responded to GetIsTile", "module 0 has firmware 33109").
+
 ## Run plan 2026-09-11 — after SSL 360 2.1.12 (Meter Pro 1.3.7 dropped VuPpm)
 Versions on the box that day: 360 2.1.12.72214, Meter Pro 1.3.7, CS2 2.10.6,
 4K B 1.10.2, 4K E 1.7.1, 4K G 1.3.1, Harrison 32C 2.0.20, REAPER 7.66.
