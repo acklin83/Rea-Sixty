@@ -25157,10 +25157,13 @@ const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
             // number latched red with the LED. The 2026-07-22 "proven inert"
             // verdict compared 1e1e against 00, never ff against the eye. Same
             // group per cycle in uf1PaintMeter_ (screen 1).
-            // 0x000c is an extra dB readout seeded at rest (live wiring TODO).
+            // No 0x000c here. The "-31.1 dB" seed this burst carried since July
+            // is in NO capture of an Analogue entry: cap76 (the source of this
+            // burst) writes 0x0100, 0x0102, 0x0104 x4, 0x010d, 0x010e x4, 0x011a
+            // and nothing on 0x00xx; cap75 and cap130 never touch 0x000c in the
+            // Meter view either. Checked 2026-09-12 while chasing the red readout.
             {0x0009, {0xff,0xff,0x00,0x00}},
             {0x000a, {0x00,0x00,0x00,0x00}},
-            {0x000c, {0x00,0x2d,0x33,0x31,0x2e,0x31,0x00,0x64,0x42}},   // "-31.1" / "dB"
             {0x0015, {0xff}},
             {0x0016, {0xff}},
             {0x0104, {0x00,0x41,0x4e,0x41,0x4c,0x4f,0x47,0x55,0x45}},   // "ANALOGUE"
