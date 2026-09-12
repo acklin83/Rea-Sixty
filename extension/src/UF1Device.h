@@ -19,6 +19,7 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "UF1Protocol.h"
@@ -98,6 +99,12 @@ private:
     // ordinary sends wait in held_ until it closes.
     int                              cycleDepth_ = 0;
     std::vector<std::vector<uint8_t>> held_;
+    // The last FF38 / FF39 / FF3B frame sent per LED, keyed (opcode << 8 | id).
+    // An LED frame equal to the one the device already holds is dropped; a
+    // screen select (0x0100) forgets everything so the next assertion of every
+    // LED goes through once. Guarded by pending_->mu. See ledFrameIsRepeat_.
+    std::unordered_map<uint16_t, std::vector<uint8_t>> ledLast_;
+    bool ledFrameIsRepeat_(const std::vector<uint8_t>& frame);
 
     libusb_context*       ctx_    = nullptr;
     libusb_device_handle* handle_ = nullptr;

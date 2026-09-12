@@ -334,10 +334,37 @@ void UF1Device::close()
     shuttingDown_.store(false);
 }
 
+// ⛔ AN LED FRAME THAT SAYS WHAT THE DEVICE ALREADY SHOWS IS NOT SENT.
+// SSL 360 writes an LED only when its state changes: cap130 (2.1.12, Analogue,
+// 110 s) carries five LED frames in all, cap129 sweeps every LED once at
+// connect, cap75/cap76 touch a handful around a view change. Our frame trace of
+// 2026-09-11 (22:49) had the whole table, thirty LEDs times FF3B/FF38/FF39, go
+// out six times in 20 s of the Analogue screen, five of the six byte-identical
+// to the previous pass (every forced repaint re-asserts every LED). Frank:
+// "mach die LED-Frames". A screen select (0x0100) forgets the table, so the
+// one re-assertion the painters make after a view change still goes through,
+// exactly as before; only the repeats stop. Caller holds pending_->mu.
+bool UF1Device::ledFrameIsRepeat_(const std::vector<uint8_t>& frame)
+{
+    if (frame.size() < 5 || frame[0] != 0xFF) return false;
+    const uint8_t op = frame[1];
+    if (op == 0x38 || op == 0x39 || op == 0x3B) {
+        const uint16_t key = uint16_t((op << 8) | frame[3]);
+        auto it = ledLast_.find(key);
+        if (it != ledLast_.end() && it->second == frame) return true;
+        ledLast_[key] = frame;
+        return false;
+    }
+    if (op == 0x67 && frame.size() >= 7 && frame[3] == 0x01 && frame[4] == 0x00)
+        ledLast_.clear();
+    return false;
+}
+
 void UF1Device::send(std::vector<uint8_t> frame)
 {
     {
         std::lock_guard<std::mutex> lk(pending_->mu);
+        if (ledFrameIsRepeat_(frame)) return;
         if (cycleDepth_ > 0) { held_.push_back(std::move(frame)); return; }
         pending_->q.push_back(std::move(frame));
     }
@@ -378,6 +405,7 @@ void UF1Device::sendPriority(std::vector<uint8_t> frame)
 {
     {
         std::lock_guard<std::mutex> lk(pending_->mu);
+        if (ledFrameIsRepeat_(frame)) return;
         pending_->q.push_front(std::move(frame));
     }
     pending_->cv.notify_one();
