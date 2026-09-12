@@ -25125,11 +25125,11 @@ const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
                       0x20,0x73,0x65,0x63,0x00,0x00,0x00,0x00,0x00}},
             {0x010f, {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}},
             {0x011a, {0x07}},
-            // 0x11, not cap101's 0x10: SSL 360 2.1.12 keeps bit 0 of 0x011e set in
-            // every captured state (init 11, channel 19/1f) and the streams never
-            // restate it; the meter value is the old 0x10 with that bit, inferred,
-            // no 2.1.12 Overview entry was captured.
-            {0x011e, {0x11}},
+            // 0x10, MEASURED (cap101 Overview entry; cap138 writes 0x10 at the
+            // 2.1.12 Analogue entry too). The 0x11 inferred on 2026-09-12 from
+            // the init (11) and the channel view (19) was wrong for the meter
+            // screens and lived one night.
+            {0x011e, {0x10}},
             {0x0120, {0x00}},
             {0x0129, {0xff}},
             {0x011f, {0x00}},
@@ -25144,41 +25144,36 @@ const std::vector<Uf1ScreenFrame>& uf1MeterScreenBurst_(int screen)
             {0x0128, {0x00}},
         },
         // [1] ANALOGUE — VU (or PPM Type-II) needles + readouts.
+        // BYTE-EXACT FROM cap138 (SSL 360 2.1.12 on the StoerPC, 2026-09-12,
+        // the Analogue select at 11.603 s), in SSL's order. cap76 (360 2.0.6),
+        // the previous source, lacked 0x0101, 0x0110, 0x011e, 0x0120, 0x0129 and
+        // 0x011f here, and this table once carried a 0x000c seed and a 0x0128
+        // that no capture of an entry shows. The 0009 group is not in SSL's
+        // entry either: it rides every cycle (uf1PaintMeter_, screen 1). The
+        // V-Pot slot 0 goes out EMPTY, as SSL sends it; the live labels follow.
+        // ⛔ 0x011e = 0x10 here, MEASURED: the 0x11 inferred earlier from the
+        // 2.1.12 init (11) and channel view (19) does not hold for this screen.
         {
             {0x0100, {0x04,0x01}},
+            {0x0101, {0x03}},
             {0x0102, {0x01}},
-            // 0x0009 / 0x0015 / 0x0016: SSL 360 2.1.12's Analogue values, cap130
-            // (2708 cycles, constant): 0009=ffff0000, 000a=0, 0015=ff, 0016=ff.
-            // Frank at the device, 2026-09-11: under SSL 360 the readout stays
-            // WHITE with these bytes and the same 0x0128 bits we send. cap80's
-            // 1e1e / 00 / 00 (old 360, old firmware) were seeded here since July;
-            // with them, and with the live small-LCD level streamed per cycle
-            // since 02.08., the numbers went red with the level and the hold
-            // number latched red with the LED. The 2026-07-22 "proven inert"
-            // verdict compared 1e1e against 00, never ff against the eye. Same
-            // group per cycle in uf1PaintMeter_ (screen 1).
-            // No 0x000c here. The "-31.1 dB" seed this burst carried since July
-            // is in NO capture of an Analogue entry: cap76 (the source of this
-            // burst) writes 0x0100, 0x0102, 0x0104 x4, 0x010d, 0x010e x4, 0x011a
-            // and nothing on 0x00xx; cap75 and cap130 never touch 0x000c in the
-            // Meter view either. Checked 2026-09-12 while chasing the red readout.
-            {0x0009, {0xff,0xff,0x00,0x00}},
-            {0x000a, {0x00,0x00,0x00,0x00}},
-            {0x0015, {0xff}},
-            {0x0016, {0xff}},
             {0x0104, {0x00,0x41,0x4e,0x41,0x4c,0x4f,0x47,0x55,0x45}},   // "ANALOGUE"
             {0x0104, {0x01,0x52,0x45,0x53,0x45,0x54}},                  // "RESET"
             {0x0104, {0x02,0x46,0x49,0x4e,0x45}},                       // "FINE"
             {0x0104, {0x03,0x50,0x52,0x45,0x53,0x45,0x54,0x53}},        // "PRESETS"
+            {0x0110, {0x0f}},
             {0x010d, {0x0a,0x0a,0x0b,0x0b}},
-            {0x010e, {0x00,0x4d,0x41,0x53,0x54,0x45,0x52}},             // "MASTER"
+            {0x010e, {0x00}},                                           // slot 0 empty
             {0x010e, {0x01,0x56,0x55}},                                 // "VU"
             {0x010e, {0x02,0x30,0x64,0x42,0x75,0x00,0x00,0x00,0x00,0x00,0x30,
                       0x20,0x64,0x42,0x75,0x00,0x00,0x00,0x00,0x00}},   // "0dBu" / "0 dBu"
             {0x010e, {0x03,0x52,0x65,0x66,0x00,0x00,0x00,0x00,0x00,0x00,0x2d,
                       0x31,0x38,0x2e,0x30,0x64,0x42,0x00,0x00,0x00}},   // "Ref" / "-18.0dB"
             {0x011a, {0x02}},
-            {0x0128, {0x00}},
+            {0x011e, {0x10}},
+            {0x0120, {0x00}},
+            {0x0129, {0xff}},
+            {0x011f, {0x00}},
         },
         // [2] RTA — 31-band spectrum + selected-frequency readout.
         {
@@ -32151,7 +32146,7 @@ void uf1PaintChannel_()
                 // both cases — what differs is the element state each view
                 // leaves behind. The meter's own entry burst zeroes 0x010f (the
                 // per-row position/brightness the plug-in V-Pots write) and
-                // holds 0x0101=03, 0x011a=07, 0x011e=11; the channel layout
+                // holds 0x0101=03, 0x011a=07, 0x011e=10; the channel layout
                 // leaves 0x010f carrying the strip's bar values and 0x0101=05,
                 // 0x011a=02, 0x011e=19. The browser owns the whole screen while
                 // it is up, so it establishes the state it is known to render
@@ -32161,7 +32156,7 @@ void uf1PaintChannel_()
                 put(0x010f, {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
                 put(0x0101, {0x03});
                 put(0x011a, {0x07});
-                put(0x011e, {0x11});
+                put(0x011e, {0x10});
                 txt(0x0104, 0x02, "Navigate Back");
                 // ⛔ THE SOFT-KEY ROW HAS EXACTLY ONE WRITER, uf1EmitSoftKeyRow_,
                 // and while the browser is up that writer never runs — this block
