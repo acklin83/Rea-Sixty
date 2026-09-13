@@ -7902,16 +7902,22 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                             ImGui_InputTextWithHint(ctx, rid, defNm,
                                 s_uf1BankRenBuf, sizeof(s_uf1BankRenBuf),
                                 &rflags, nullptr);
-                        // ⇨ THE PANEL PREVIEWS EVERY KEYSTROKE, as the field
-                        // under the matrix did before it went (5ef830d, dropped
-                        // with 678d354, and the header inherited only the
-                        // commit): what you type is what the glass will show,
-                        // seven-segment approximations included. Armed by the
-                        // keystroke, not the caret, so a field left with focus
-                        // does not hold the clock hostage (Frank 2026-09-03).
-                        // An empty box previews what the bank falls back to,
+                        // ⇨ THE PANEL SHOWS THE NAME FOR AS LONG AS IT IS BEING
+                        // TYPED, until Enter (Frank 2026-09-13: "soll solange
+                        // angezeigt bleiben, bis mit enter bestätigt wird").
+                        // Re-armed every frame the field is active; the half-
+                        // second deadline brings the clock back on its own once
+                        // the field closes. The caret rule of 2026-09-03 (arm
+                        // per keystroke, never per caret) was for the field
+                        // under the matrix, which kept focus for as long as you
+                        // left it. This field exists only while renaming and
+                        // closes on Enter, Escape or a click elsewhere, so it
+                        // cannot hold the clock hostage. What you type is what
+                        // the glass will show, seven-segment approximations
+                        // included; an empty box previews the fallback name,
                         // which is what the hint says too.
-                        if (edited && reasixty_uf1Connected())
+                        (void)edited;
+                        if (ImGui_IsItemActive(ctx) && reasixty_uf1Connected())
                             reasixty_uf1PreviewOnPanel(
                                 s_uf1BankRenBuf[0] ? s_uf1BankRenBuf : defNm);
                         int escKey = ImGui_Key_Escape;
