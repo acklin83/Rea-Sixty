@@ -7895,6 +7895,18 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                             ImGui_InputTextWithHint(ctx, rid, defNm,
                                 s_uf1BankRenBuf, sizeof(s_uf1BankRenBuf),
                                 &rflags, nullptr);
+                        // ⇨ THE PANEL PREVIEWS EVERY KEYSTROKE, as the field
+                        // under the matrix did before it went (5ef830d, dropped
+                        // with 678d354, and the header inherited only the
+                        // commit): what you type is what the glass will show,
+                        // seven-segment approximations included. Armed by the
+                        // keystroke, not the caret, so a field left with focus
+                        // does not hold the clock hostage (Frank 2026-09-03).
+                        // An empty box previews what the bank falls back to,
+                        // which is what the hint says too.
+                        if (ImGui_IsItemEdited(ctx) && reasixty_uf1Connected())
+                            reasixty_uf1PreviewOnPanel(
+                                s_uf1BankRenBuf[0] ? s_uf1BankRenBuf : defNm);
                         int escKey = ImGui_Key_Escape;
                         if (ImGui_IsKeyPressed(ctx, escKey, nullptr)) {
                             s_uf1BankRen = -1;
