@@ -7890,8 +7890,15 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                         char defNm[64] = {0};
                         reasixty_uf1BankDisplayName(b, g_slotEditModIdx,
                                                     defNm, sizeof(defNm));
-                        int rflags = ImGui_InputTextFlags_EnterReturnsTrue;
-                        const bool committed =
+                        // ⛔ NO EnterReturnsTrue HERE. With that flag ImGui
+                        // keeps the typed text to itself and hands it to our
+                        // buffer only on Enter, so the per-keystroke preview
+                        // below saw nothing until then (Frank 2026-09-13:
+                        // "erscheint erst nach enter?"). Without it the buffer
+                        // follows every keystroke; Enter still deactivates the
+                        // field, which is what commits.
+                        int rflags = 0;
+                        const bool edited =
                             ImGui_InputTextWithHint(ctx, rid, defNm,
                                 s_uf1BankRenBuf, sizeof(s_uf1BankRenBuf),
                                 &rflags, nullptr);
@@ -7904,14 +7911,13 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                         // does not hold the clock hostage (Frank 2026-09-03).
                         // An empty box previews what the bank falls back to,
                         // which is what the hint says too.
-                        if (ImGui_IsItemEdited(ctx) && reasixty_uf1Connected())
+                        if (edited && reasixty_uf1Connected())
                             reasixty_uf1PreviewOnPanel(
                                 s_uf1BankRenBuf[0] ? s_uf1BankRenBuf : defNm);
                         int escKey = ImGui_Key_Escape;
                         if (ImGui_IsKeyPressed(ctx, escKey, nullptr)) {
                             s_uf1BankRen = -1;
-                        } else if (committed
-                                   || ImGui_IsItemDeactivatedAfterEdit(ctx)
+                        } else if (ImGui_IsItemDeactivatedAfterEdit(ctx)
                                    || ImGui_IsItemDeactivated(ctx)) {
                             setUf1SoftBankName(b, g_slotEditModIdx,
                                                s_uf1BankRenBuf);
