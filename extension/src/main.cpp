@@ -30090,9 +30090,13 @@ static void uf1EncodeTimecode_(const char* s, uint8_t out[11])
 // user-mapped plug-ins (Frank 2026-07-29), else the stripped plug-in name. Uses
 // resolveActiveFx_ so it names whatever FX is active (SSL or not), like the UF8
 // colour-bar / UC1 LCD. Empty when no FX resolves. Main-thread only.
-std::string uf1ActiveFxShortName_()
+// The short name of ONE plug-in, by the UF1's own precedence. Split out of
+// uf1ActiveFxShortName_ on 2026-09-14 so the small LCD's CS-type cell can name
+// the FADER side's strip: that cell sits in the 0x00xx zone with the track name,
+// dB, pan and colour bar, and those five have always been uf1FaderTrack_'s.
+static std::string uf1FxShortNameOn_(MediaTrack* trk, int fxIdx)
 {
-    const ActiveFxTarget a = resolveActiveFx_();
+    const struct { MediaTrack* tr; int fxIdx; } a { trk, fxIdx };
     if (!a.tr || a.fxIdx < 0) return "";
     // A USER RENAME WINS, exactly as it does on UF8 (instanceLabel_) and UC1
     // (reasixty_fxUserRename) — "UC1's CS / BC labels and UF8's csType zone share
@@ -30121,6 +30125,27 @@ std::string uf1ActiveFxShortName_()
     if (const auto p = s.rfind(" ("); p != std::string::npos)          s.erase(p);
     if (s.size() > 12) s.resize(12);
     return s;
+}
+
+// The globally active instance, for callers that follow the selection.
+std::string uf1ActiveFxShortName_()
+{
+    const ActiveFxTarget a = resolveActiveFx_();
+    return uf1FxShortNameOn_(a.tr, a.fxIdx);
+}
+
+// The strip the FADER side is on, for the small LCD's CS-type cell.
+static std::string uf1FaderSideFxShortName_()
+{
+    MediaTrack* ft = uf1FaderTrack_();
+    if (!ft) return "";
+    MediaTrack* csTr = nullptr; int csFx = -1;
+    if (uf1ResolveCsFx_(ft, csTr, csFx) >= 0 && csTr == ft && csFx >= 0)
+        return uf1FxShortNameOn_(csTr, csFx);
+    // No recognised strip on that track: name its first FX, the same fallback
+    // resolveActiveFx_ ends in, so an FX-less track is the only empty answer.
+    if (TrackFX_GetCount(ft) > 0) return uf1FxShortNameOn_(ft, 0);
+    return "";
 }
 
 // Comp GR reader defined further down (Stream Deck bridge section); forward-
@@ -32812,8 +32837,16 @@ void uf1PaintChannel_()
         // the end of this function overwrites the CELL with spaces a frame later, so
         // the layout (and with it the colour bar) stands but reads blank.
         {
+            // ⇨ THE LATCH IS THE SAME CELL, SO IT TAKES THE SAME SIDE. 0x0017
+            // carries the layout type AND the label; resolving the two from
+            // different tracks would latch one strip's plane under another
+            // strip's name, which is the split this cell was just fixed for.
+            // Falls back to the focused track when the fader side is empty (the
+            // 9th Extender slot past the end of the list) — the plane still
+            // needs a type string, and a blank drops it.
             MediaTrack* tt = nullptr; int tf = -1;
-            const int tty = uf1ResolveCsFx_(tr, tt, tf);
+            MediaTrack* const latchTr = uf1FaderTrack_() ? uf1FaderTrack_() : tr;
+            const int tty = uf1ResolveCsFx_(latchTr, tt, tf);
             const char* cs = (tty == 0) ? "CS 2" : (tty == 1) ? "4K B"
                            : (tty == 2) ? "4K E" : (tty == 3) ? "Link"
                            : (tty == 4) ? "BC 2" : (tty == 5) ? "4K G"
@@ -32938,13 +32971,26 @@ void uf1PaintChannel_()
     // latch too. If the layout drops on an FX-less track, THIS is the change.
     {
         static std::string sFxName;
-        const std::string fxName = uf1ActiveFxShortName_();
+        // ⛔ THIS CELL IS ON THE SMALL LCD, SO IT IS THE FADER SIDE'S.
+        // 0x0017 sits in the 0x00xx zone next to the track name, the dB readout,
+        // the pan line, the channel number and the colour bar, and all five of
+        // those are painted from uf1FaderTrack_. This one alone followed the
+        // SELECTION, so in Extender mode one field in that zone named a different
+        // track than its five neighbours (Frank 2026-09-14). The right half keeps
+        // the selection: the four V-Pots, the display soft-keys and the EQ graph
+        // resolve through uf1FocusedTrack_ and still show the selected channel's
+        // plug-in, which is where an FX bank belongs.
+        // Also bites with the Focus-Set pin, which parks the LEFT half only —
+        // then this names the parked member, like the rest of the zone.
+        MediaTrack* const csSideTr = uf1FaderTrack_();
+        const std::string fxName = uf1FaderSideFxShortName_();
         // Blank only when BOTH resolvers come up empty. uf1ResolveCsFx_ >= 0 means a
-        // real strip type is on screen and must stay; and uf1ActiveFxShortName_ ends
-        // in resolveActiveFx_'s FX[0] fallback, so an empty name really does mean
-        // "no FX on this track", not just "none active".
+        // real strip type is on screen and must stay; and the name resolver ends in
+        // the same FX[0] fallback, so an empty name really does mean "no FX on this
+        // track", not just "none active".
         MediaTrack* nmTr = nullptr; int nmFx = -1;
-        const bool bare = fxName.empty() && uf1ResolveCsFx_(tr, nmTr, nmFx) < 0;
+        const bool bare = fxName.empty()
+                       && uf1ResolveCsFx_(csSideTr, nmTr, nmFx) < 0;
         // TWELVE spaces = the zone's full width (the helper trims names to 12). The
         // firmware does not clear a text zone on write — the UF8 pads to a fixed
         // width for exactly that reason (Protocol.cpp buildChannelStripType) — so a
@@ -32963,7 +33009,11 @@ void uf1PaintChannel_()
         // label, so a blank drops the whole plane ([[uf1-plugin-mode-fake-cs-plan]]).
         // The `!want.empty()` guard below is that safeguard, and this branch can
         // only ever add a non-empty string.
-        const std::string rmeInName = recRmeInputNameLabel_(tr, /*foldLatin1*/false);
+        // ⇨ AND THE REC + RME INPUT NAME TOO. That mode's Solo, Cut and knob-push
+        // all resolve uf1FaderTrack_, so the cell named the input of one channel
+        // while the keys beside it drove another.
+        const std::string rmeInName =
+            recRmeInputNameLabel_(csSideTr, /*foldLatin1*/false);
         const bool routeView = (g_uf1ChannelSubMode.load() == 2);
         const std::string want = !rmeInName.empty()
                                    ? rmeInName
