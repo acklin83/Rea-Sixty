@@ -2164,6 +2164,14 @@ std::unordered_set<std::string> g_selsetActiveGuids;  // membership cache
 // extension reload.
 std::unordered_set<std::string> g_tempSelsetGuids;
 std::atomic<bool> g_tempSelsetActive{false};
+// ⛔ A CLUTCH THAT HOLDS NOTHING IS NOT A PIN. g_tempSelsetActive alone was read
+// as "the pin is on", but on an EMPTY set it pins nothing while still switching
+// the UF1 Extender off — so the key looked dead and had in fact taken the
+// Extender down with it, and the left half fell back to the selection (Frank
+// 2026-09-14). Membership lives in a std::set that only the main thread may
+// touch, so the answer is mirrored here for the input thread's LED predicate.
+// Recomputed once per drain next to the Focus-Set lamps.
+std::atomic<bool> g_focusSetPinHolds{false};
 // Main-thread drain flags for the temp-selset builtins. Lambdas can
 // fire from the libusb input thread; REAPER track APIs + SetProjExtState
 // are main-thread-only, so the lambdas just publish a request and the
@@ -2401,6 +2409,12 @@ inline bool tcpPinsRespected_() {
 // Is this track a member of the active Focus Set? The Focus Set (formerly
 // "Temporary Selection Set") is now a PIN source, not a filter: members
 // stick to the leftmost strips, nothing is hidden. Empty/inactive → false.
+// Main-thread twin of g_focusSetPinHolds: the clutch is in AND something is in
+// the set. Everything that decides BEHAVIOUR asks this; the raw flag stays for
+// what it is, the clutch's own state (project save, slot mutual exclusion).
+inline bool focusSetPinHolds_() {
+    return g_tempSelsetActive.load() && !g_tempSelsetGuids.empty();
+}
 inline bool isFocusMember_(MediaTrack* tr) {
     if (!tr || !g_tempSelsetActive.load() || g_tempSelsetGuids.empty())
         return false;
@@ -3246,6 +3260,9 @@ void drainSelsets_() {
         };
         g_uf1ChanInFocusSet.store(memberOf(uf1FaderTrack_()));
         g_uf1FocusInFocusSet.store(memberOf(uf1FocusedTrack_()));
+        // …and whether the clutch is holding anything at all, for the pin key's
+        // own lamp on the input thread.
+        g_focusSetPinHolds.store(focusSetPinHolds_());
     }
     // ⛔ MASTER IS A CHANNEL CHOSEN BY HAND, SO IT DROPS THE STICKY INSTANCE.
     // uf1FocusedTrack_ puts MASTER first and its comment claims "everything
@@ -3269,6 +3286,41 @@ void drainSelsets_() {
         if (m != sUf1Master) {
             sUf1Master = m;
             clearLastActivatedInstance_();
+        }
+    }
+    // ⛔ THE PIN HANDS THE EXTENDER OVER ONLY WHILE IT ACTUALLY PARKS THE UF1.
+    // The two are mutually exclusive (Frank 2026-08-05) and uf1FaderTrack_ gives
+    // the Extender the first word, so the pin has to step aside to be seen. But
+    // that hand-over used to hang off the pin TOGGLE, which got it wrong three
+    // ways: on an empty set it switched the Extender off for a pin holding
+    // nothing, clearing the set while pinned left the Extender off for good, and
+    // under scope "UF8 only" it fired although the UF1 never parks at all
+    // (Frank 2026-09-14). Edge-detected on the STATE instead, so every route in
+    // and out is covered: the toggle, adding the first member, clearing the last
+    // one, and a scope change.
+    {
+        static bool sPinParks = false;
+        const bool  pinParks  = focusSetPinHolds_() && focusScopeUf1_();
+        if (pinParks != sPinParks) {
+            sPinParks = pinParks;
+            if (pinParks) {
+                if (g_uf1Extender.load()) {
+                    g_uf1ExtenderSuspendedByPin.store(true);
+                    g_uf1Extender.store(false);
+                    SetExtState("rea_sixty", "uf1Extender", "0", true);
+                } else {
+                    g_uf1ExtenderSuspendedByPin.store(false);  // nothing to restore
+                }
+            } else if (g_uf1ExtenderSuspendedByPin.exchange(false)) {
+                g_uf1Extender.store(true);
+                SetExtState("rea_sixty", "uf1Extender", "1", true);
+            }
+        } else if (pinParks && g_uf1Extender.load()
+                   && g_uf1ExtenderSuspendedByPin.load()) {
+            // Brought back by hand while the pin parks: the pin no longer owns
+            // it, so releasing the pin must not switch it on a second time
+            // (Frank 2026-09-14, agreed with the plan).
+            g_uf1ExtenderSuspendedByPin.store(false);
         }
     }
     // UC1 detent census: ExtState rea_sixty/uc1_knob_count = 1 arms + zeroes the
@@ -44425,22 +44477,13 @@ void tempSelsetToggleRecall_()
     const bool wasActive = g_tempSelsetActive.load();
     g_tempSelsetActive.store(!wasActive);
     tempSelsetWriteToProject_();
-    // Mutual exclusion: pinning the Focus Set releases the UF1 Extender (Frank
-    // 2026-08-05) so the two never fight in uf1FocusedTrack_. Symmetric: releasing
-    // the pin RESTORES the Extender if the pin was what suspended it (Frank
-    // 2026-08-05 "sollte der nicht wieder zurückschalten wenn Pin Off ist?").
-    if (!wasActive) {
-        if (g_uf1Extender.load()) {
-            g_uf1ExtenderSuspendedByPin.store(true);
-            g_uf1Extender.store(false);
-            SetExtState("rea_sixty", "uf1Extender", "0", true);
-        } else {
-            g_uf1ExtenderSuspendedByPin.store(false);   // nothing to restore later
-        }
-    } else if (g_uf1ExtenderSuspendedByPin.exchange(false)) {
-        g_uf1Extender.store(true);
-        SetExtState("rea_sixty", "uf1Extender", "1", true);
-    }
+    // ⛔ THE EXTENDER HAND-OVER NO LONGER HAPPENS HERE — see
+    // tickFocusSetPinExtender_ in the drain. It used to hang off THIS edge, so
+    // pressing the pin on an EMPTY set switched the Extender off for a pin that
+    // then held nothing, and clearing the set while pinned left the Extender off
+    // with no way back short of toggling the pin again (Frank 2026-09-14). The
+    // decision belongs to the STATE "the pin actually parks the UF1", which this
+    // toggle is only one of several ways to change.
     // Seed the UF1 held position when the pin turns ON: park on the currently
     // selected member if it is one, else member 0 (Frank 2026-08-04 — the UF1
     // "focused track" lands on what you were looking at). Scroll moves it from there.
@@ -44513,7 +44556,9 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
         const bool on = !g_uf1Extender.load();
         g_uf1Extender.store(on);
         SetExtState("rea_sixty", "uf1Extender", on ? "1" : "0", true);
-        if (on && g_tempSelsetActive.load()) g_tempSelsetRecallRequest.store(true);
+        // ⇨ ONLY WHEN THE PIN ACTUALLY HOLDS SOMETHING. Releasing a clutch that
+        // pins nothing is a side-effect with no conflict behind it.
+        if (on && focusSetPinHolds_()) g_tempSelsetRecallRequest.store(true);
         g_bankDirty.store(true);
         g_pageDirty.store(true);
         return true;
@@ -47390,7 +47435,8 @@ void reasixty_setUf1Extender(bool on)
     if (on == g_uf1Extender.exchange(on)) return;
     SetExtState("rea_sixty", "uf1Extender", on ? "1" : "0", true);
     // Mutual exclusion: Extender on releases Pin Set (toggle it off if currently on).
-    if (on && g_tempSelsetActive.load()) g_tempSelsetRecallRequest.store(true);
+    // Only when the pin actually holds something — see focusSetPinHolds_.
+    if (on && focusSetPinHolds_()) g_tempSelsetRecallRequest.store(true);
     g_bankDirty.store(true);
     g_pageDirty.store(true);
 }
@@ -50676,7 +50722,11 @@ void registerBindingHandlers()
             const bool on = !g_uf1Extender.load();
             g_uf1Extender.store(on);
             SetExtState("rea_sixty", "uf1Extender", on ? "1" : "0", true);
-            if (on && g_tempSelsetActive.load()) g_tempSelsetRecallRequest.store(true);
+            // ⛔ THE MIRROR, NOT THE SET. This lambda runs on the input thread and
+            // the membership set is main-thread-only; same rule as every other
+            // predicate here ([[feedback-reaper-api-input-thread]]).
+            if (on && g_focusSetPinHolds.load())
+                g_tempSelsetRecallRequest.store(true);
             g_bankDirty.store(true);
             g_pageDirty.store(true);
         },
@@ -51251,7 +51301,12 @@ void registerBindingHandlers()
             if (!firing) return;
             g_tempSelsetRecallRequest.store(true);
         },
-        [](int) { return g_tempSelsetActive.load(); },
+        // ⇨ THE LAMP SAYS WHETHER ANYTHING IS PINNED, not whether the clutch is
+        // in. On an empty set the clutch holds nothing, so a lit key would be a
+        // lie — and now that the Extender hand-over follows the same condition,
+        // pressing this on an empty set is simply inert until a member exists.
+        // Adding one engages the pin anyway (focusSetEngageAfterAdd_).
+        [](int) { return g_focusSetPinHolds.load(); },
         "Focus Set: pin (toggle)", true
     });
     registerBuiltin("focus_set_clear", DescBuilder{
