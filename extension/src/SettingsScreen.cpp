@@ -3809,6 +3809,11 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             const bool isMod = (*f.action == "mod_shift"
                              || *f.action == "mod_cmd"
                              || *f.action == "mod_ctrl");
+            // Focus Chan uses param as the UF1 PANEL HALF it addresses. A raw 0/1
+            // says nothing about which track that is, and picking the wrong one is
+            // invisible until the Extender is on, so the two choices are named.
+            const bool isUf1FocusChan =
+                (*f.action == "focus_set_toggle_uf1_channel");
             // Send/receive routing builtins use param as a Flip flag
             // (0 = Faders default, 1 = V-Pots).
             const bool isRouting =
@@ -3841,7 +3846,35 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             }
             const bool isFxParamStep =
                 (*f.action == "fx_param_inc" || *f.action == "fx_param_dec");
-            if (isMod) {
+            if (isUf1FocusChan) {
+                // Left half = fader, meter, small LCD, Solo, Cut, Sel and the one
+                // SOFT key above the channel. Right half = the 4 V-Pots and the 4
+                // display soft-keys. Different tracks only while the Extender is
+                // on, which is why a wrong pick here hides until then.
+                static const char* kSideLabels[2] = {
+                    "Fader side (the channel the UF1 shows)",
+                    "Display side (the focused channel)"
+                };
+                snprintf(idbuf, sizeof(idbuf), "Channel##%s_uf1chanside",
+                         prefix);
+                int m = (*f.param == 1) ? 1 : 0;
+                ImGui_PushItemWidth(ctx, 260.0);
+                if (ImGui_BeginCombo(ctx, idbuf, kSideLabels[m],
+                                     /*flags*/ nullptr)) {
+                    for (int i = 0; i < 2; ++i) {
+                        bool sel = (m == i);
+                        if (ImGui_Selectable(ctx, kSideLabels[i], &sel,
+                                             /*flags*/ nullptr,
+                                             /*size_w*/ nullptr,
+                                             /*size_h*/ nullptr)) {
+                            *f.param = i;
+                            dirty = true;
+                        }
+                    }
+                    ImGui_EndCombo(ctx);
+                }
+                ImGui_PopItemWidth(ctx);
+            } else if (isMod) {
                 // BeginCombo + Selectable — ImGui_Combo with \0-items
                 // renders invisible in ReaImGui v0.10 (see GR meter source).
                 static const char* kModeLabels[2] = {

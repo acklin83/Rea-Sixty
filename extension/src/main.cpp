@@ -2186,11 +2186,22 @@ std::atomic<bool> g_tempSelsetPinFocusedRequest{false};
 // UF1 SOFT key: pin the channel the UF1 is SHOWING and engage the pin in one
 // press; press again releases. Distinct from g_tempSelsetPinFocusedRequest,
 // which reads GetLastTouchedTrack and never un-pins (Frank 2026-08-10).
-std::atomic<bool> g_uf1PinChannelRequest{false};
+// ⇨ AND IT CARRIES THE PANEL SIDE, because the same action sits on both halves.
+// 0 = idle, 1 = LEFT (the fader side's channel), 2 = RIGHT (the focused track).
+// The builtin's `param` picks it: the UF1's own SOFT key is left of the panel and
+// asks for 1, the Focus Set factory bank sits on the DISPLAY soft-keys and asks
+// for 2. Without the side the bank key pinned the fader's channel while every
+// other key in that bank worked on the selection — the panel-halves rule broken
+// not in a resolver but in a BINDING, which no caller search can find
+// (Frank 2026-09-13: "geht in Extender Mode nicht auf den selected track").
+std::atomic<int> g_uf1PinChannelRequest{0};
 // Is the channel the UF1 is showing a member of the Focus Set? Computed once per
 // onTimer tick (it resolves the UF1's fader track, which is REAPER API) and read
 // by the SOFT key's lamp on the input thread.
 std::atomic<bool> g_uf1ChanInFocusSet{false};
+// The same answer for the RIGHT half's track. A lamp has to say what its own key
+// does, so an action that can address either side needs one flag per side.
+std::atomic<bool> g_uf1FocusInFocusSet{false};
 // UF1 Held-Track ("focused track" clutch = the Focus Set pin, g_tempSelsetActive):
 // when the pin is on the UF1 parks on ONE Focus-Set member and its channel encoder
 // scrolls through the members INDEPENDENTLY of the REAPER selection / UF8 bank
@@ -3055,7 +3066,7 @@ void tempSelsetToggleRecall_();
 void tempSelsetClear_();
 void tempSelsetToggleSelected_();
 void tempSelsetSetFromSelection_();
-void uf1PinChannel_();
+void uf1PinChannel_(bool focusedSide);
 void applyUf1HoldScroll_(int step);   // defined near applyTempSelsetScroll_ (UF1 held-member scroll)
 MediaTrack* heldFocusTrack_();        // UF8 sends target: UF1 held member (if enabled) else last-touched
 
@@ -3220,18 +3231,20 @@ void drainSelsets_() {
     if (g_tempSelsetPinFocusedRequest.exchange(false)) {
         tempSelsetAddSelected_();   // adds + engages; see the flag's comment
     }
-    if (g_uf1PinChannelRequest.exchange(false)) {
-        uf1PinChannel_();
-    }
-    // …and publish whether that channel is a member, for the key's lamp.
+    if (const int side = g_uf1PinChannelRequest.exchange(0))
+        uf1PinChannel_(/*focusedSide*/ side == 2);
+    // …and publish whether that channel is a member, for the key's lamp — once
+    // per side, because the action exists on both halves and each key's lamp
+    // must answer for the track that key acts on.
     {
-        bool inSet = false;
-        if (MediaTrack* ct = uf1FaderTrack_()) {
+        auto memberOf = [](MediaTrack* t) {
+            if (!t) return false;
             char gb[64] = {0};
-            GetSetMediaTrackInfo_String(ct, "GUID", gb, false);
-            if (gb[0]) inSet = g_tempSelsetGuids.count(gb) > 0;
-        }
-        g_uf1ChanInFocusSet.store(inSet);
+            GetSetMediaTrackInfo_String(t, "GUID", gb, false);
+            return gb[0] && g_tempSelsetGuids.count(gb) > 0;
+        };
+        g_uf1ChanInFocusSet.store(memberOf(uf1FaderTrack_()));
+        g_uf1FocusInFocusSet.store(memberOf(uf1FocusedTrack_()));
     }
     // UC1 detent census: ExtState rea_sixty/uc1_knob_count = 1 arms + zeroes the
     // counters, back to 0 writes the tally. Main thread, once per drain — the
@@ -44287,12 +44300,16 @@ void tempSelsetSetFromSelection_()
 //
 // Main-thread only — reached through the request atomic + drain, per the
 // worker-thread API rule.
-void uf1PinChannel_()
+void uf1PinChannel_(bool focusedSide)
 {
-    // ⛔ uf1FaderTrack_ — the key sits above the channel NAME on the fader side,
-    // and that name is what changes when you pin, so it acts on the track it is
-    // printed above (Frank 2026-08-19).
-    MediaTrack* tr = uf1FaderTrack_();
+    // ⛔ THE PANEL SIDE PICKS THE RESOLVER, NOT THE ACTION'S NAME.
+    // Left (the UF1's own SOFT key): uf1FaderTrack_ — the key sits above the
+    // channel NAME on the fader side, and that name is what changes when you
+    // pin, so it acts on the track it is printed above (Frank 2026-08-19).
+    // Right (a DISPLAY soft-key, e.g. the Focus Set factory bank): the four keys
+    // there belong to the selection, so the action must follow it like every
+    // other key beside it (Frank 2026-09-13).
+    MediaTrack* tr = focusedSide ? uf1FocusedTrack_() : uf1FaderTrack_();
     if (!tr) return;
     char buf[64] = {0};
     GetSetMediaTrackInfo_String(tr, "GUID", buf, false);
@@ -51228,12 +51245,21 @@ void registerBindingHandlers()
     // once per tick on the main thread (g_uf1ChanInFocusSet) because answering it
     // means resolving the UF1's track, and this predicate is read from the input
     // thread ([[feedback-reaper-api-input-thread]]).
+    // ⇨ AND WHICH CHANNEL IS THE PARAM'S JOB, because the action sits on both
+    // halves of the UF1 and they are different tracks in Extender mode.
+    // param 0 (default, the UF1's own SOFT key): the channel the FADER shows.
+    // param 1 (the Focus Set factory bank): the FOCUSED channel, like the three
+    // other keys on that display row. The lamp follows the same param, or the
+    // key would light for one track and pin another.
     registerBuiltin("focus_set_toggle_uf1_channel", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (firing) g_uf1PinChannelRequest.store(true);
+        [](bool firing, bool /*pressed*/, int param) {
+            if (firing) g_uf1PinChannelRequest.store(param == 1 ? 2 : 1);
         },
-        [](int) { return g_uf1ChanInFocusSet.load(); },
-        "Focus Set: toggle the UF1 channel", true
+        [](int param) {
+            return param == 1 ? g_uf1FocusInFocusSet.load()
+                              : g_uf1ChanInFocusSet.load();
+        },
+        "Focus Set: toggle the UF1 channel (pick the panel side)", true
     });
     // Focus Set SCOPE — where Pin Set applies (UF8 head vs UF1 park). Bindable to
     // any surface button; paired with REASIXTY_FOCUS_SCOPE_CYCLE. Atomic store +

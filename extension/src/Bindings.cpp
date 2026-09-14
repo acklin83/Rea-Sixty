@@ -3014,7 +3014,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
-constexpr int kCurrentBindingsVersion = 39;
+constexpr int kCurrentBindingsVersion = 40;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -3623,6 +3623,27 @@ void upgradeRenameFocusSet_(Config& c)
     });
 }
 
+// v39→v40 (2026-09-14): focus_set_toggle_uf1_channel gained a param that names
+// the PANEL HALF it addresses (0 = the fader side's channel, 1 = the focused
+// one). A UF1 soft-key bank drives the four DISPLAY keys, which are the right
+// half, so every copy of the action sitting in one of those banks wants 1. Until
+// now the param had no meaning for this action, so there is no user choice here
+// to overwrite: a 0 in a bank slot is the old default, not a decision. The
+// physical keys in c.layers are untouched — the UF1's own SOFT key is on the
+// LEFT half and 0 is correct there.
+void upgradeUf1FocusChanSide_(Config& c)
+{
+    for (int b = 0; b < kUf1SoftBankCount; ++b)
+        for (int sl = 0; sl < kUf1SoftBankSlots; ++sl) {
+            Binding& bd = c.uf1SoftBanks[b][sl];
+            for (auto* set : { &bd.shortPress, &bd.longPress })
+                for (auto& step : *set)
+                    if (step.type == ActionType::Builtin
+                        && step.action == "focus_set_toggle_uf1_channel")
+                        step.param = 1;
+        }
+}
+
 void upgradeBackfillUf1SoftKey_(Config& c)
 {
     Layer& L1 = c.layers[0];
@@ -4123,6 +4144,9 @@ void load()
             }
             if (tmp.version < 39) {
                 upgradeRenameFocusSet_(tmp);
+            }
+            if (tmp.version < 40) {
+                upgradeUf1FocusChanSide_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -6635,8 +6659,15 @@ static const std::vector<Uf1BankPreset>& factoryUf1Banks_()
         }));
         // "Pin This Ch" pins the channel the UF1 is SHOWING, which is why it
         // left the UF8's Focus Set bank on 2026-09-01. This is where it belongs.
+        // ⛔ PARAM 1, BECAUSE THIS BANK SITS ON THE DISPLAY SOFT-KEYS. Those are
+        // the UF1's RIGHT half and belong to the selection; the fader side is the
+        // left half's business. With the default 0 this key pinned the channel
+        // the FADER was showing while the seven keys beside it worked on the
+        // selection, so in Extender mode it took the wrong track and its lamp
+        // reported that wrong track too (Frank 2026-09-13). The UF1's own SOFT
+        // key above the fader keeps param 0 — same action, other half.
         v.push_back(bank("Focus Set", {
-            {"focus_set_toggle_uf1_channel",    "Focus Chan", 0},
+            {"focus_set_toggle_uf1_channel",    "Focus Chan", 1},
             {"focus_set_pin",             "Pin Focused", 0},
             {"focus_set_add",                "Focus Add",   0},
             {"focus_set_clear",              "Focus Clear", 0},
