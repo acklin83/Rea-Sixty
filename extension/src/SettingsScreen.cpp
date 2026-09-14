@@ -3809,11 +3809,12 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             const bool isMod = (*f.action == "mod_shift"
                              || *f.action == "mod_cmd"
                              || *f.action == "mod_ctrl");
-            // Focus Chan uses param as the UF1 PANEL HALF it addresses. A raw 0/1
-            // says nothing about which track that is, and picking the wrong one is
+            // These use param as the UF1 PANEL HALF they address. A raw 0/1 says
+            // nothing about which track that is, and picking the wrong one is
             // invisible until the Extender is on, so the two choices are named.
-            const bool isUf1FocusChan =
-                (*f.action == "focus_set_toggle_uf1_channel");
+            const bool isUf1PanelSide =
+                (*f.action == "focus_set_toggle_uf1_channel"
+              || *f.action == "uf1_above_vpot_push");
             // Send/receive routing builtins use param as a Flip flag
             // (0 = Faders default, 1 = V-Pots).
             const bool isRouting =
@@ -3846,7 +3847,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             }
             const bool isFxParamStep =
                 (*f.action == "fx_param_inc" || *f.action == "fx_param_dec");
-            if (isUf1FocusChan) {
+            if (isUf1PanelSide) {
                 // Left half = fader, meter, small LCD, Solo, Cut, Sel and the one
                 // SOFT key above the channel. Right half = the 4 V-Pots and the 4
                 // display soft-keys. Different tracks only while the Extender is
@@ -3855,7 +3856,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                     "Fader side (the channel the UF1 shows)",
                     "Display side (the focused channel)"
                 };
-                snprintf(idbuf, sizeof(idbuf), "Channel##%s_uf1chanside",
+                snprintf(idbuf, sizeof(idbuf), "Channel##%s_uf1panelside",
                          prefix);
                 int m = (*f.param == 1) ? 1 : 0;
                 ImGui_PushItemWidth(ctx, 260.0);

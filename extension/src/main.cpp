@@ -2350,6 +2350,7 @@ std::atomic<int64_t> g_dynFxFocusLockUntilMs{0};
 static void applyDynBankReq_(uint32_t enc);          // main-thread executor
 static void applyDynBankUf1Req_(uint32_t enc);       // main-thread executor (UF1)
 static void tickUf1DynLongPress_();                  // main thread (drain), 500 ms edge
+inline void clearLastActivatedInstance_();           // main thread; defined later
 MediaTrack* uf1FocusedTrack_();                      // main-thread; defined later
 MediaTrack* uf1FaderTrack_();                        // the LEFT half's track, ditto
 // The one writer for a UF1 knob driving a plug-in parameter (stepped, toggle,
@@ -3245,6 +3246,30 @@ void drainSelsets_() {
         };
         g_uf1ChanInFocusSet.store(memberOf(uf1FaderTrack_()));
         g_uf1FocusInFocusSet.store(memberOf(uf1FocusedTrack_()));
+    }
+    // ⛔ MASTER IS A CHANNEL CHOSEN BY HAND, SO IT DROPS THE STICKY INSTANCE.
+    // uf1FocusedTrack_ puts MASTER first and its comment claims "everything
+    // downstream reads this one resolver" — but uf1ResolveCsFx_ stage 0 returns
+    // the LAST ACTIVATED INSTANCE before it looks at the focused track at all.
+    // Any surfaced-knob touch on a mapped plug-in stamps that cursor
+    // (setStripInstanceFx_ at the UF8 V-Pot write, 2026-05-22), so nudging a
+    // parameter on the UF8 and then pressing MASTER left the big display on the
+    // track you had just touched; selecting a channel by hand was the only way
+    // out, because SEL is the one gesture that clears the cursor (Frank
+    // 2026-09-14: "dann bleibt das grosse Display auf dieser Spur").
+    // The cursor's own rule already covers this: it is dropped the moment the
+    // user picks a channel by hand, and MASTER is picking one (UC1 "track 00").
+    // Edge-detected on the STATE, not plumbed into the builtin, so every route
+    // into MASTER is covered — the key, the REAPER action, anything added later.
+    // Both edges: leaving MASTER must return to the selected channel, and a
+    // stale cursor would hijack that just as well.
+    {
+        static bool sUf1Master = false;
+        const bool m = g_uf1Master.load();
+        if (m != sUf1Master) {
+            sUf1Master = m;
+            clearLastActivatedInstance_();
+        }
     }
     // UC1 detent census: ExtState rea_sixty/uc1_knob_count = 1 arms + zeroes the
     // counters, back to 0 writes the tally. Main thread, once per drain — the
@@ -19563,14 +19588,25 @@ void drainInputQueue()
             continue;
         }
         if (e.kind == PendingInput::Uf1AboveVpotPush) {
+            // ⛔ THE PANEL HALF RIDES IN `strip` (0 = fader side, 1 = focused).
+            // The knob itself is always 0; only a copy of the action bound to a
+            // DISPLAY soft-key asks for 1, and then it addresses the right half's
+            // track like everything else over there.
+            const bool abFocused = (e.strip == 1);
+            MediaTrack* const abTr =
+                abFocused ? uf1FocusedTrack_() : uf1FaderTrack_();
             // REC + RME: the push fires its assigned action (factory: 48V) instead
             // of centring pan / resetting the pin. Same ordering rule as CUT/SOLO.
-            if (recRmeUf1Fire_(g_recUf1VpotPush.load(), uf1FaderTrack_())) continue;
+            // ⇨ LEFT HALF ONLY. A preamp belongs to the channel on the fader, so
+            // this mode does not describe a key on the display side.
+            if (!abFocused
+                && recRmeUf1Fire_(g_recUf1VpotPush.load(), abTr)) continue;
             // Extender send fader: the V-Pot rides the 9th SEND's pan, so its PUSH
             // centres that send's pan (Frank 2026-08-05) — like the UF8 PanCenter.
             // Re-seed the software accumulator to centre so a following rotation
             // continues from 0, not the pre-centre value. Empty slot → eat.
-            if (uf1ExtenderRouteFader_()) {
+            // ⇨ ALSO LEFT HALF ONLY: the 9th SEND strip IS the fader side.
+            if (!abFocused && uf1ExtenderRouteFader_()) {
                 const StripRoute er = uf1ExtenderSendRoute_();
                 if (er.valid) {
                     writeRoutePanAutomation_(er, kExtSendGestureSlot, 0.0);
@@ -19584,8 +19620,10 @@ void drainInputQueue()
             // (main thread). Armed (get-next) → clear this track's pin; else a live
             // pin → reset it to its default (toggle flips 0/1, else midpoint); else
             // no pin → the knob's own default = centre Pan.
-            // ⛔ uf1FaderTrack_ — same knob, same side as the rotation above.
-            if (MediaTrack* tr = uf1FaderTrack_()) {
+            // ⛔ The knob's own side is uf1FaderTrack_, same knob and same side as
+            // the rotation above. `abTr` is exactly that, unless a display-side
+            // copy of the action asked for the focused channel instead.
+            if (MediaTrack* tr = abTr) {
                 if (g_stickyArmGetNext.load()) {
                     stickyClearForTrack_(tr);
                     g_stickyArmGetNext.store(false);
@@ -50474,13 +50512,20 @@ void registerBindingHandlers()
     // The knob above the fader. Its push was hardcoded and unbound until
     // 2026-09-10; both of these are what that code did, plus the parameter case
     // the knob gained the same day.
+    // ⇨ AND IT CARRIES THE PANEL HALF, like Focus Chan. The knob itself is on the
+    // LEFT, so param 0 stays the fader side and its factory place is unchanged.
+    // Put the action on a DISPLAY soft-key and param 1 makes it address the
+    // focused channel instead, which is what the right half means (the second
+    // action that reached a left-half resolver from an arbitrary key; the first
+    // was focus_set_toggle_uf1_channel, 2026-09-13).
     registerBuiltin("uf1_above_vpot_push", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
+        [](bool firing, bool /*pressed*/, int param) {
             if (!firing) return;
-            queueInput({PendingInput::Uf1AboveVpotPush, 0, 0.0});
+            queueInput({PendingInput::Uf1AboveVpotPush,
+                        static_cast<uint8_t>(param == 1 ? 1 : 0), 0.0});
         },
         nullptr,
-        "UF1: V-Pot above fader push (centre pan / reset the parameter)", false
+        "UF1: V-Pot above fader push (pick the panel side)", true
     });
     registerBuiltin("uf1_vpot_reset", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {
