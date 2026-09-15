@@ -10399,32 +10399,12 @@ static void uf1MoveCursorByGrid_(int dir)
 // exactly the old behaviour, and the right one when the walk is not ours.
 // Main thread only; stale item pointers are their own bug class here.
 static std::vector<MediaItem*> g_uf1ItemNavPicks;
-// Tracer for the arrow walk. Every press writes one line: which way, whether it
-// extended, the whole trail it reasoned over, the anchor it settled on and what it
-// picked. Enough to replay a wrong direction change without asking for another run.
+// Track number of an item's track, or -1. Shared by both anchors.
 static int uf1ItemTrk_(MediaItem* it)
 {
     if (!it) return -1;
     MediaTrack* t = GetMediaItem_Track(it);
     return t ? static_cast<int>(GetMediaTrackInfo_Value(t, "IP_TRACKNUMBER")) : -1;
-}
-static void uf1ItemNavLog_(const char* axis, int dir, bool add,
-                           const std::vector<MediaItem*>& trail,
-                           MediaItem* anchor, MediaItem* best)
-{
-    FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a");
-    if (!lg) return;
-    std::fprintf(lg, "[itemnav] %s dir=%+d add=%d trail=%d[", axis, dir, add ? 1 : 0,
-                 static_cast<int>(trail.size()));
-    for (MediaItem* it : trail)
-        std::fprintf(lg, "t%d@%.3f ", uf1ItemTrk_(it),
-                     it ? GetMediaItemInfo_Value(it, "D_POSITION") : -1.0);
-    std::fprintf(lg, "] anchor=t%d@%.3f best=t%d@%.3f\n",
-                 uf1ItemTrk_(anchor),
-                 anchor ? GetMediaItemInfo_Value(anchor, "D_POSITION") : -1.0,
-                 uf1ItemTrk_(best),
-                 best ? GetMediaItemInfo_Value(best, "D_POSITION") : -1.0);
-    std::fclose(lg);
 }
 static void uf1ItemNavTrail_(std::vector<MediaItem*>& out)
 {
@@ -10507,18 +10487,6 @@ static void uf1SelectGroupMates_(MediaItem* seed)
     const int st = GetToggleCommandState2(SectionFromUniqueID(0), 41156);
     if (st == 0) return;                       // the option is off
     Main_OnCommand(40034, 0);                  // Item grouping: Select all items in groups
-    {
-        static int sSt = -2, sN = -1;
-        const int n = CountSelectedMediaItems(nullptr);
-        if (st != sSt || n != sN) {
-            sSt = st; sN = n;
-            if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
-                std::fprintf(lg, "[itemgroup] toggle41156=%d -> 40034, selected=%d\n",
-                             st, n);
-                std::fclose(lg);
-            }
-        }
-    }
 }
 static void uf1DeselectAllItems_()
 {
@@ -10580,7 +10548,6 @@ static void uf1SelectAdjacentItem_(int dir, bool add)
         if (dir > 0 && p > anchorPos + 1e-9) { if (!best || p < bestPos) { best = it; bestPos = p; } }
         if (dir < 0 && p < anchorPos - 1e-9) { if (!best || p > bestPos) { best = it; bestPos = p; } }
     }
-    uf1ItemNavLog_("h", dir, add, trail, anchor, best);
     if (!best) return;
     if (!add) uf1DeselectAllItems_();
     SetMediaItemSelected(best, true);
@@ -10678,7 +10645,6 @@ static void uf1SelectItemAdjacentTrack_(int dir, bool add)
         if (!cand) break;
         if ((best = uf1NearestItemOnTrack_(cand, aPos)) != nullptr) break;
     }
-    uf1ItemNavLog_("v", dir, add, trail, anchor, best);
     if (!best) return;   // no item on any track in that direction
     if (!add) uf1DeselectAllItems_();
     SetMediaItemSelected(best, true);
