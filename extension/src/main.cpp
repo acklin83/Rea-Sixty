@@ -10399,12 +10399,38 @@ static void uf1MoveCursorByGrid_(int dir)
 // exactly the old behaviour, and the right one when the walk is not ours.
 // Main thread only; stale item pointers are their own bug class here.
 static std::vector<MediaItem*> g_uf1ItemNavPicks;
+// Tracer for the arrow walk. Every press writes one line: which way, whether it
+// extended, the whole trail it reasoned over, the anchor it settled on and what it
+// picked. Enough to replay a wrong direction change without asking for another run.
+static int uf1ItemTrk_(MediaItem* it)
+{
+    if (!it) return -1;
+    MediaTrack* t = GetMediaItem_Track(it);
+    return t ? static_cast<int>(GetMediaTrackInfo_Value(t, "IP_TRACKNUMBER")) : -1;
+}
+static void uf1ItemNavLog_(const char* axis, int dir, bool add,
+                           const std::vector<MediaItem*>& trail,
+                           MediaItem* anchor, MediaItem* best)
+{
+    FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a");
+    if (!lg) return;
+    std::fprintf(lg, "[itemnav] %s dir=%+d add=%d trail=%d[", axis, dir, add ? 1 : 0,
+                 static_cast<int>(trail.size()));
+    for (MediaItem* it : trail)
+        std::fprintf(lg, "t%d@%.3f ", uf1ItemTrk_(it),
+                     it ? GetMediaItemInfo_Value(it, "D_POSITION") : -1.0);
+    std::fprintf(lg, "] anchor=t%d@%.3f best=t%d@%.3f\n",
+                 uf1ItemTrk_(anchor),
+                 anchor ? GetMediaItemInfo_Value(anchor, "D_POSITION") : -1.0,
+                 uf1ItemTrk_(best),
+                 best ? GetMediaItemInfo_Value(best, "D_POSITION") : -1.0);
+    std::fclose(lg);
+}
 static void uf1ItemNavTrail_(std::vector<MediaItem*>& out)
 {
     out.clear();
     for (MediaItem* it : g_uf1ItemNavPicks)
-        if (it && ValidatePtr2(nullptr, it, "MediaItem*")
-            && GetMediaItemInfo_Value(it, "B_UISEL") > 0.5)
+        if (it && ValidatePtr2(nullptr, it, "MediaItem*") && IsMediaItemSelected(it))
             out.push_back(it);
     g_uf1ItemNavPicks = out;                       // prune in place
     if (!out.empty()) return;
@@ -10434,16 +10460,31 @@ static void uf1ItemNavTrail_(std::vector<MediaItem*>& out)
 static MediaItem* uf1ItemNavLast_()
 {
     for (auto i = g_uf1ItemNavPicks.rbegin(); i != g_uf1ItemNavPicks.rend(); ++i)
-        if (*i && ValidatePtr2(nullptr, *i, "MediaItem*")
-            && GetMediaItemInfo_Value(*i, "B_UISEL") > 0.5)
+        if (*i && ValidatePtr2(nullptr, *i, "MediaItem*") && IsMediaItemSelected(*i))
             return *i;
     return nullptr;
 }
+// Which axis the last step went along: 0 = ← →, 1 = ↑ ↓, −1 = no walk yet.
+static int g_uf1ItemNavAxis = -1;
 // Record a step. `add` false starts a fresh walk, as the selection does.
-static void uf1ItemNavRecord_(MediaItem* it, bool add)
+static void uf1ItemNavRecord_(MediaItem* it, bool add, int axis)
 {
     if (!add) g_uf1ItemNavPicks.clear();
     if (it) g_uf1ItemNavPicks.push_back(it);
+    g_uf1ItemNavAxis = axis;
+}
+// ⛔ THE EDGE RULE IS RIGHT ONLY ALONG THE AXIS YOU ARE ALREADY ON.
+// Extending ← ← ← has to grow outward, so there the anchor must be the OUTER edge
+// of the walk; anchoring on the last step would just walk back over items that
+// are already in. But the moment the axis CHANGES, the outer edge is somewhere
+// you left long ago: after → ↓ ↓ the left-most point of the walk is still the
+// item you started on, so ← carried on from there and jumped back to the top row
+// (Frank 2026-09-15, traced: anchor=t24@746.990 while the walk stood on t26).
+// On an axis change the anchor is simply where you are — the last step.
+static MediaItem* uf1ItemNavTurnAnchor_(int axis)
+{
+    if (g_uf1ItemNavAxis < 0 || g_uf1ItemNavAxis == axis) return nullptr;
+    return uf1ItemNavLast_();
 }
 // ⇨ THE NAV SELECTS LIKE A MOUSE CLICK DOES: with item grouping switched on, one
 // grouped item brings its group (Frank 2026-09-15: "sollte trotzdem respektiert
@@ -10501,15 +10542,16 @@ static void uf1SelectAdjacentItem_(int dir, bool add)
     // from the item the walk started at instead of the one it had reached (Frank
     // 2026-09-15: "mit shift wird beim schritt nach links wieder vom ersten item
     // nach links gewählt"). The tie goes to the track the nav last left you on.
-    MediaItem*   anchor    = nullptr;
-    double       anchorPos = 0.0;
-    int          anchorTrk = 0;
+    MediaItem*   anchor    = uf1ItemNavTurnAnchor_(/*axis h*/0);
+    double       anchorPos = anchor ? GetMediaItemInfo_Value(anchor, "D_POSITION") : 0.0;
+    int          anchorTrk = anchor ? uf1ItemTrk_(anchor) : 0;
+    const bool   turned    = (anchor != nullptr);
     MediaItem*   last      = uf1ItemNavLast_();
     int          lastTrk   = 0;
     if (last)
         if (MediaTrack* lt = GetMediaItem_Track(last))
             lastTrk = static_cast<int>(GetMediaTrackInfo_Value(lt, "IP_TRACKNUMBER"));
-    for (int i = 0; i < nsel; ++i) {
+    for (int i = 0; !turned && i < nsel; ++i) {
         MediaItem* it = trail[static_cast<size_t>(i)];
         if (!it) continue;
         const double p = GetMediaItemInfo_Value(it, "D_POSITION");
@@ -10538,10 +10580,11 @@ static void uf1SelectAdjacentItem_(int dir, bool add)
         if (dir > 0 && p > anchorPos + 1e-9) { if (!best || p < bestPos) { best = it; bestPos = p; } }
         if (dir < 0 && p < anchorPos - 1e-9) { if (!best || p > bestPos) { best = it; bestPos = p; } }
     }
+    uf1ItemNavLog_("h", dir, add, trail, anchor, best);
     if (!best) return;
     if (!add) uf1DeselectAllItems_();
     SetMediaItemSelected(best, true);
-    uf1ItemNavRecord_(best, add);
+    uf1ItemNavRecord_(best, add, /*axis h*/0);
     uf1SelectGroupMates_(best);
     UpdateArrange();
 }
@@ -10599,13 +10642,14 @@ static void uf1SelectItemAdjacentTrack_(int dir, bool add)
     // ONE direction hid it, because there the two coincide often enough.
     // Ties on the edge track — the usual case after extending sideways, where the
     // whole edge is one track — go to the column the nav last left you in.
-    MediaItem*   anchor  = nullptr;
-    int          bestTrk = 0;
-    double       bestPos = 0.0;
+    MediaItem*   anchor  = uf1ItemNavTurnAnchor_(/*axis v*/1);
+    int          bestTrk = anchor ? uf1ItemTrk_(anchor) : 0;
+    double       bestPos = anchor ? GetMediaItemInfo_Value(anchor, "D_POSITION") : 0.0;
+    const bool   turned  = (anchor != nullptr);
     MediaItem*   last    = uf1ItemNavLast_();
     const double lastPos = last ? GetMediaItemInfo_Value(last, "D_POSITION")
                                 : GetCursorPosition();
-    for (int i = 0; i < nsel; ++i) {
+    for (int i = 0; !turned && i < nsel; ++i) {
         MediaItem* it = trail[static_cast<size_t>(i)];
         if (!it) continue;
         MediaTrack* itTr = GetMediaItem_Track(it);
@@ -10634,10 +10678,11 @@ static void uf1SelectItemAdjacentTrack_(int dir, bool add)
         if (!cand) break;
         if ((best = uf1NearestItemOnTrack_(cand, aPos)) != nullptr) break;
     }
+    uf1ItemNavLog_("v", dir, add, trail, anchor, best);
     if (!best) return;   // no item on any track in that direction
     if (!add) uf1DeselectAllItems_();
     SetMediaItemSelected(best, true);
-    uf1ItemNavRecord_(best, add);
+    uf1ItemNavRecord_(best, add, /*axis v*/1);
     uf1SelectGroupMates_(best);
     UpdateArrange();
 }
