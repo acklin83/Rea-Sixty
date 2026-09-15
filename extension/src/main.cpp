@@ -10411,6 +10411,24 @@ static void uf1ItemNavTrail_(std::vector<MediaItem*>& out)
     const int n = CountSelectedMediaItems(nullptr);
     for (int i = 0; i < n; ++i)
         if (MediaItem* it = GetSelectedMediaItem(nullptr, i)) out.push_back(it);
+    // ⛔ THE FIRST ARROW AFTER A MOUSE CLICK, WITH GROUPING ON, HAD NO TRAIL AND A
+    // SELECTION THAT WAS A WHOLE GROUP. Every anchor is an EDGE, so it landed on
+    // the group's top or bottom track instead of the item that was clicked — the
+    // direction change was wrong before the walk had even started, and the trail
+    // then carried that wrong seed forward. A selection that is exactly ONE group
+    // is not a walk: reduce it to the item on the track REAPER says was touched
+    // last, which is the one under the click. Anything else — a hand-made
+    // multi-selection, several groups — is left alone, because there the whole
+    // selection really is the user's own and the edge rule is right.
+    if (out.size() < 2) return;
+    const int gid0 = static_cast<int>(GetMediaItemInfo_Value(out[0], "I_GROUPID"));
+    if (gid0 == 0) return;
+    for (MediaItem* it : out)
+        if (static_cast<int>(GetMediaItemInfo_Value(it, "I_GROUPID")) != gid0) return;
+    MediaTrack* lt = GetLastTouchedTrack();
+    if (!lt) return;
+    for (MediaItem* it : out)
+        if (GetMediaItem_Track(it) == lt) { out.assign(1, it); return; }
 }
 // The last step of the walk, or nullptr when the trail is gone.
 static MediaItem* uf1ItemNavLast_()
@@ -10436,9 +10454,38 @@ static void uf1ItemNavRecord_(MediaItem* it, bool add)
 static void uf1SelectGroupMates_(MediaItem* seed)
 {
     if (!seed) return;
-    if (GetToggleCommandState2(SectionFromUniqueID(0), 41156) != 1) return;
     const int gid = static_cast<int>(GetMediaItemInfo_Value(seed, "I_GROUPID"));
-    if (gid == 0) return;                       // 0 = no group
+    if (gid == 0) return;                       // 0 = no group, nothing to bring
+    // ⛔ "NOT 1" IS NOT "OFF". GetToggleCommandState2 answers −1 for an action whose
+    // state REAPER does not report, and testing `!= 1` then silently disabled the
+    // whole feature — which is what "die Option wird immer noch ignoriert" was
+    // (Frank 2026-09-15). Only an explicit 0 means off. When the toggle has no
+    // state, fall back to REAPER's master item-grouping switch: projgroupover is
+    // non-zero exactly while grouping is OVERRIDDEN, so 0 there means grouping is
+    // live and the group should come along.
+    const int st = GetToggleCommandState2(SectionFromUniqueID(0), 41156);
+    bool on = (st == 1);
+    int  ov = -1;
+    if (st < 0) {                                // no state reported → ask the master
+        int sz = 0;
+        if (int* p = static_cast<int*>(get_config_var("projgroupover", &sz)))
+            if (sz >= static_cast<int>(sizeof(int))) ov = *p;
+        on = (ov == 0);
+    }
+    // One line per CHANGE of the decision, so the log says what was read without
+    // filling up on every arrow press.
+    {
+        static int sSt = -2, sOv = -2; static int sOn = -1;
+        if (st != sSt || ov != sOv || static_cast<int>(on) != sOn) {
+            sSt = st; sOv = ov; sOn = on;
+            if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                std::fprintf(lg, "[itemgroup] toggle41156=%d projgroupover=%d -> %s\n",
+                             st, ov, on ? "expand" : "single");
+                std::fclose(lg);
+            }
+        }
+    }
+    if (!on) return;
     const int n = CountMediaItems(nullptr);
     for (int i = 0; i < n; ++i) {
         MediaItem* it = GetMediaItem(nullptr, i);
