@@ -12962,9 +12962,17 @@ static bool uf1RazorCreateAtCursor_(double delta)
     // track while a mouse drag spreads it over the group (Frank 2026-09-15: "razor
     // mode respektiert gruppen nicht wenn sie aktiv sind"). A track that LEADS a group
     // in MEDIA_EDIT hands the area to every track that FOLLOWS that group, the same
-    // lead/follow split as REAPER's own. REAPER's master switch 40771, "Track: Toggle
-    // all track grouping enabled", switched off (an explicit 0) keeps it on the lead.
-    if (GetToggleCommandState2(SectionFromUniqueID(0), 40771) != 0) {
+    // lead/follow split as REAPER's own: a follow-only track passes nothing on, which
+    // REAPER's guide states too ("Changes made to a follow track will only be applied
+    // to items in other tracks if those tracks are also selected").
+    // ⛔ THE SWITCH IS 1156, NOT 40771. REAPER's toolbar button "Enable item grouping
+    // and track media/razor edit grouping" is action 1156 ("Options: Toggle item
+    // grouping override"). Gating on 40771 alone spread the area with that button
+    // off (Frank 2026-09-15, measured: 1156=0, 40771=1). Either one explicitly off
+    // (0) keeps the area on the tracks it was drawn on.
+    KbdSectionInfo* const sec = SectionFromUniqueID(0);
+    if (GetToggleCommandState2(sec, 1156) != 0
+        && GetToggleCommandState2(sec, 40771) != 0) {
         unsigned leadLo = 0, leadHi = 0;
         for (MediaTrack* t : tracks) {
             leadLo |= GetSetTrackGroupMembership(t, "MEDIA_EDIT_LEAD", 0, 0);
