@@ -10381,6 +10381,20 @@ static void uf1MoveCursorByGrid_(int dir)
 }
 
 // Deselect every currently-selected media item (main thread).
+// ⇨ WHERE THE ITEM NAV LAST PUT YOU. Not a second selection, just a tie-break:
+// the arrows extend from the EDGE of the selection in the direction of travel, and
+// when that edge is a whole track of items the edge alone cannot say which column
+// you were in. Validated and re-checked against the live selection on every read,
+// so a mouse click elsewhere simply drops it (stale item pointers are their own
+// bug class here). Main thread only.
+static MediaItem* g_uf1ItemNavLast = nullptr;
+static MediaItem* uf1ItemNavLast_()
+{
+    MediaItem* it = g_uf1ItemNavLast;
+    if (!it || !ValidatePtr2(nullptr, it, "MediaItem*")) { g_uf1ItemNavLast = nullptr; return nullptr; }
+    if (GetMediaItemInfo_Value(it, "B_UISEL") <= 0.5) return nullptr;   // no longer part of it
+    return it;
+}
 static void uf1DeselectAllItems_()
 {
     for (int i = CountSelectedMediaItems(nullptr) - 1; i >= 0; --i)
@@ -10417,6 +10431,7 @@ static void uf1SelectAdjacentItem_(int dir, bool add)
     if (!best) return;
     if (!add) uf1DeselectAllItems_();
     SetMediaItemSelected(best, true);
+    g_uf1ItemNavLast = best;
     UpdateArrange();
 }
 
@@ -10462,14 +10477,43 @@ static MediaItem* uf1NearestItemOnTrack_(MediaTrack* t, double pos)
 static void uf1SelectItemAdjacentTrack_(int dir, bool add)
 {
     const int nsel = CountSelectedMediaItems(nullptr);
-    MediaItem* anchor = nsel > 0 ? GetSelectedMediaItem(nullptr, nsel - 1) : nullptr;
+    if (nsel <= 0) return;
+    // ⛔ THE ANCHOR IS THE EDGE IN THE DIRECTION OF TRAVEL, exactly as it is for
+    // ← →. It used to be GetSelectedMediaItem(nsel - 1), which is the last item in
+    // REAPER's OWN enumeration order (track, then time) — not the last one you
+    // picked and not the edge. So extending sideways and then pressing up or down
+    // carried on from wherever that order happened to end, which reads as "die
+    // Auswahl geht vom ersten gewählten Item aus" (Frank 2026-09-15). Extending in
+    // ONE direction hid it, because there the two coincide often enough.
+    // Ties on the edge track — the usual case after extending sideways, where the
+    // whole edge is one track — go to the column the nav last left you in.
+    MediaItem*   anchor  = nullptr;
+    int          bestTrk = 0;
+    double       bestPos = 0.0;
+    MediaItem*   last    = uf1ItemNavLast_();
+    const double lastPos = last ? GetMediaItemInfo_Value(last, "D_POSITION")
+                                : GetCursorPosition();
+    for (int i = 0; i < nsel; ++i) {
+        MediaItem* it = GetSelectedMediaItem(nullptr, i);
+        if (!it) continue;
+        MediaTrack* itTr = GetMediaItem_Track(it);
+        if (!itTr) continue;
+        const int    trk = static_cast<int>(GetMediaTrackInfo_Value(itTr, "IP_TRACKNUMBER"));
+        const double pos = GetMediaItemInfo_Value(it, "D_POSITION");
+        const bool better =
+            !anchor
+            || (dir > 0 ? trk < bestTrk : trk > bestTrk)
+            || (trk == bestTrk
+                && std::fabs(pos - lastPos) < std::fabs(bestPos - lastPos));
+        if (better) { anchor = it; bestTrk = trk; bestPos = pos; }
+    }
     if (!anchor) return;
     MediaTrack* tr = GetMediaItem_Track(anchor);
     if (!tr) return;
-    const int idx1 = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+    const int idx1 = bestTrk;
     if (idx1 <= 0) return;
     const int nTr  = CountTracks(nullptr);
-    const double aPos = GetMediaItemInfo_Value(anchor, "D_POSITION");
+    const double aPos = bestPos;
     // up (dir +1) → tracks above (smaller index). Walk in that direction, skipping
     // tracks with no items, until one yields a target or we run off the ends.
     MediaItem* best = nullptr;
@@ -10481,6 +10525,7 @@ static void uf1SelectItemAdjacentTrack_(int dir, bool add)
     if (!best) return;   // no item on any track in that direction
     if (!add) uf1DeselectAllItems_();
     SetMediaItemSelected(best, true);
+    g_uf1ItemNavLast = best;
     UpdateArrange();
 }
 
