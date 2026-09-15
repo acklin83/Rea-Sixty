@@ -5883,6 +5883,11 @@ std::atomic<bool>   g_uf1JogVisible[kUf1JogModeCount];
 // Reihenfolge daher"). ExtState "uf1_jog_seq", CSV. Default = enum order, which
 // is exactly what the picker did before, so nothing moves out of the box.
 std::atomic<int>    g_uf1JogSeq[kUf1JogModeCount];
+// The factory unit and amount per mode, kept after the ExtState load has
+// overwritten the live pair, so switching a mode back to its own unit restores
+// ITS amount (0.5 s for Scrub, 10 ms for Fades) instead of the generic one.
+int    g_uf1JogFactoryUnit[kUf1JogModeCount];
+double g_uf1JogFactoryStep[kUf1JogModeCount];
 struct Uf1JogStepInit_ {
     Uf1JogStepInit_() {
         for (int m = 0; m < kUf1JogModeCount; ++m) {
@@ -5892,6 +5897,8 @@ struct Uf1JogStepInit_ {
         auto set = [](Uf1JogMode m, Uf1JogUnit u, double v) {
             g_uf1JogUnit[static_cast<int>(m)].store(static_cast<int>(u));
             g_uf1JogStep[static_cast<int>(m)].store(v);
+            g_uf1JogFactoryUnit[static_cast<int>(m)] = static_cast<int>(u);
+            g_uf1JogFactoryStep[static_cast<int>(m)] = v;
         };
         set(Uf1JogMode::Playhead, Uf1JogUnit::ZoomRel, 0.01);  // 1% of view / count
         // Scrub is the one mode that must NOT be zoom-relative: it feeds real audio scrub
@@ -10361,13 +10368,25 @@ void applyUf1JogMoveItemsToTrack_(int count)
 // All main thread (jog drain). Reliable primitives only — pure API or the SAME action
 // IDs the zoom pad already uses (40111/40112 vertical zoom), no guessed command IDs.
 
+// The project grid in QUARTER NOTES, which is what TimeMap2_timeToQN counts in.
+// ⛔ GetSetProjectGrid does NOT answer in QN. Its division is a fraction of a WHOLE
+// note: "0.25=quarter note, 1.0/3.0=half note triplet" (reaper_plugin_functions.h).
+// All three grid users read it as QN, so every Grid step was a quarter of the size
+// set, and Playhead at 0.25 grid landed on sixteenths of a grid line, between the
+// values it was set to (Frank 2026-09-15). One conversion, here, for all of them.
+static double uf1ProjectGridQN_()
+{
+    double division = 0.25;   // whole-note fraction
+    GetSetProjectGrid(nullptr, false, &division, nullptr, nullptr);
+    if (!(division > 0.0)) division = 0.25;
+    return division * 4.0;
+}
+
 // Move the edit cursor one GRID line in `dir` (±1). Tempo-aware via the project grid,
 // same APIs as uf1JogGridSec_. Snaps to the grid first if the cursor sits off it.
 static void uf1MoveCursorByGrid_(int dir)
 {
-    double division = 1.0;   // QN fraction
-    GetSetProjectGrid(nullptr, false, &division, nullptr, nullptr);
-    if (!(division > 0.0)) division = 1.0;
+    const double division = uf1ProjectGridQN_();
     const double cur   = GetCursorPosition();
     const double qn    = TimeMap2_timeToQN(nullptr, cur);
     const double steps = qn / division;
@@ -10480,11 +10499,21 @@ static MediaItem* uf1ItemNavTurnAnchor_(int axis)
 // expands the current selection by whatever it considers a group, under its own
 // rules. All that is left here is the user's option, toggle 41156: an explicit
 // OFF suppresses it, anything else lets REAPER decide.
+// ⛔ 41156 IS NOT "GROUPING ON". REAPER's action list names it "Options:
+// Selecting one grouped item selects group", a preference that stays set while
+// grouping itself is switched off. The master switch is 1156, "Options: Toggle
+// item grouping override" (state 1 = grouping enabled, as ReaTeam scripts read
+// it). Asking only 41156 ran 40034 with grouping OFF, and 40034 selects by group
+// id whatever the switch says, so the Cmd+jog copies, which carry their
+// originals' GROUP line, came along on every walk (Frank 2026-09-15: "ER MACHT
+// ES AUCH WENN DIE GRUPPEN GAR NICHT AKTIV SIND"). Both have to be on.
 // Main thread only (Main_OnCommand); both callers are drained.
 static void uf1SelectGroupMates_(MediaItem* seed)
 {
     if (!seed) return;
-    const int st = GetToggleCommandState2(SectionFromUniqueID(0), 41156);
+    KbdSectionInfo* const sec = SectionFromUniqueID(0);
+    if (GetToggleCommandState2(sec, 1156) == 0) return;    // item grouping is off
+    const int st = GetToggleCommandState2(sec, 41156);
     if (st == 0) return;                       // the option is off
     Main_OnCommand(40034, 0);                  // Item grouping: Select all items in groups
 }
@@ -10994,9 +11023,7 @@ static double uf1JogViewSec_()
 // Current grid length (seconds) at the edit cursor — for Grid unit (tempo-aware).
 static double uf1JogGridSec_()
 {
-    double division = 1.0;   // QN fraction
-    GetSetProjectGrid(nullptr, false, &division, nullptr, nullptr);
-    if (!(division > 0.0)) division = 1.0;
+    const double division = uf1ProjectGridQN_();
     const double cur = GetCursorPosition();
     const double qn  = TimeMap2_timeToQN(nullptr, cur);
     const double g   = TimeMap2_QNToTime(nullptr, qn + division) - cur;
@@ -11008,9 +11035,7 @@ static double uf1JogGridSec_()
 // makes it finer). Tempo-aware.
 static double uf1SnapToGridCell_(double pos, double stepGrids)
 {
-    double gridQN = 1.0;   // QN per grid
-    GetSetProjectGrid(nullptr, false, &gridQN, nullptr, nullptr);
-    if (!(gridQN > 0.0)) gridQN = 1.0;
+    const double gridQN = uf1ProjectGridQN_();
     const double cell = gridQN * (stepGrids > 0.0 ? stepGrids : 1.0);
     if (!(cell > 0.0)) return pos;
     const double qn = TimeMap2_timeToQN(nullptr, pos);
@@ -47650,7 +47675,10 @@ void reasixty_setUf1JogUnit(int mode, int unit)
     char key[24]; std::snprintf(key, sizeof(key), "uf1JogUnit%d", mode);
     SetExtState("rea_sixty", key, std::to_string(unit).c_str(), true);
     // Reseed the amount to the new unit's default (0.01 view ≠ 0.25 grid ≠ 0.02 s).
-    const double v = uf1JogUnitDefault_(unit);
+    // Back on the mode's own unit, the mode's own factory amount.
+    const double v = (unit == g_uf1JogFactoryUnit[mode])
+                   ? g_uf1JogFactoryStep[mode]
+                   : uf1JogUnitDefault_(unit);
     g_uf1JogStep[mode].store(v);
     char skey[24]; std::snprintf(skey, sizeof(skey), "uf1JogStep%d", mode);
     SetExtState("rea_sixty", skey, std::to_string(v).c_str(), true);
