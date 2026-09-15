@@ -10395,6 +10395,26 @@ static MediaItem* uf1ItemNavLast_()
     if (GetMediaItemInfo_Value(it, "B_UISEL") <= 0.5) return nullptr;   // no longer part of it
     return it;
 }
+// ⇨ THE NAV SELECTS LIKE A MOUSE CLICK DOES: with item grouping switched on, one
+// grouped item brings its group (Frank 2026-09-15: "sollte trotzdem respektiert
+// werden ... wie wenn ich mit der maus ein gruppiertes item anklicke"). The option
+// is REAPER's own toggle 41156 — asked here rather than read out of a config file,
+// the same way the extension asks about every other REAPER switch. Grouping off,
+// or an ungrouped item, and this does nothing. Main thread only.
+static void uf1SelectGroupMates_(MediaItem* seed)
+{
+    if (!seed) return;
+    if (GetToggleCommandState2(SectionFromUniqueID(0), 41156) != 1) return;
+    const int gid = static_cast<int>(GetMediaItemInfo_Value(seed, "I_GROUPID"));
+    if (gid == 0) return;                       // 0 = no group
+    const int n = CountMediaItems(nullptr);
+    for (int i = 0; i < n; ++i) {
+        MediaItem* it = GetMediaItem(nullptr, i);
+        if (!it || it == seed) continue;
+        if (static_cast<int>(GetMediaItemInfo_Value(it, "I_GROUPID")) == gid)
+            SetMediaItemSelected(it, true);
+    }
+}
 static void uf1DeselectAllItems_()
 {
     for (int i = CountSelectedMediaItems(nullptr) - 1; i >= 0; --i)
@@ -10409,12 +10429,37 @@ static void uf1DeselectAllItems_()
 static void uf1SelectAdjacentItem_(int dir, bool add)
 {
     const int nsel = CountSelectedMediaItems(nullptr);
-    MediaItem* anchor = nullptr; double anchorPos = 0.0;
+    // ⛔ AND THE SAME TIE-BREAK THE VERTICAL ARROWS GOT, MIRRORED. The edge in the
+    // direction of travel is the right anchor, but after extending DOWNWARD the
+    // whole edge is one COLUMN: several selected items share the extreme position,
+    // one per track. First-wins then took the topmost, so stepping left carried on
+    // from the item the walk started at instead of the one it had reached (Frank
+    // 2026-09-15: "mit shift wird beim schritt nach links wieder vom ersten item
+    // nach links gewählt"). The tie goes to the track the nav last left you on.
+    MediaItem*   anchor    = nullptr;
+    double       anchorPos = 0.0;
+    int          anchorTrk = 0;
+    MediaItem*   last      = uf1ItemNavLast_();
+    int          lastTrk   = 0;
+    if (last)
+        if (MediaTrack* lt = GetMediaItem_Track(last))
+            lastTrk = static_cast<int>(GetMediaTrackInfo_Value(lt, "IP_TRACKNUMBER"));
     for (int i = 0; i < nsel; ++i) {
         MediaItem* it = GetSelectedMediaItem(nullptr, i);
         if (!it) continue;
         const double p = GetMediaItemInfo_Value(it, "D_POSITION");
-        if (!anchor || (dir > 0 ? p > anchorPos : p < anchorPos)) { anchor = it; anchorPos = p; }
+        int trk = 0;
+        if (MediaTrack* itTr = GetMediaItem_Track(it))
+            trk = static_cast<int>(GetMediaTrackInfo_Value(itTr, "IP_TRACKNUMBER"));
+        // 1 ms, the same tolerance the vertical nearest-item search uses: far below
+        // anything a crossfade is made of, far above float noise.
+        const bool ahead = (dir > 0) ? (p > anchorPos + 1e-3) : (p < anchorPos - 1e-3);
+        const bool tie   = std::fabs(p - anchorPos) <= 1e-3;
+        const bool better =
+            !anchor || ahead
+            || (tie && lastTrk
+                && std::abs(trk - lastTrk) < std::abs(anchorTrk - lastTrk));
+        if (better) { anchor = it; anchorPos = p; anchorTrk = trk; }
     }
     MediaTrack* tr = anchor ? GetMediaItem_Track(anchor) : GetLastTouchedTrack();
     if (!tr) return;
@@ -10431,6 +10476,7 @@ static void uf1SelectAdjacentItem_(int dir, bool add)
     if (!best) return;
     if (!add) uf1DeselectAllItems_();
     SetMediaItemSelected(best, true);
+    uf1SelectGroupMates_(best);
     g_uf1ItemNavLast = best;
     UpdateArrange();
 }
@@ -10525,6 +10571,7 @@ static void uf1SelectItemAdjacentTrack_(int dir, bool add)
     if (!best) return;   // no item on any track in that direction
     if (!add) uf1DeselectAllItems_();
     SetMediaItemSelected(best, true);
+    uf1SelectGroupMates_(best);
     g_uf1ItemNavLast = best;
     UpdateArrange();
 }
