@@ -11511,7 +11511,13 @@ static std::vector<Uf1RzLane> uf1RazorLanes_()
         const int ne = CountTrackEnvelopes(t);
         for (int k = 0; k < ne; ++k) {
             TrackEnvelope* env = GetTrackEnvelope(t, k);
-            if (!env || GetEnvelopeInfo_Value(env, "I_TCPH") <= 0.0) continue;
+            // ⛔ I_TCPH_USED, NOT I_TCPH. A collapsed or hidden envelope keeps its
+            // configured height in I_TCPH (117) while I_TCPH_USED, the height it really
+            // occupies, is 0. Counting it as a lane made the bottom edge grow onto a lane
+            // that is not on screen, REAPER discarded the area there, and the edge stood
+            // still on every detent (Frank 2026-09-15, traced: "Volume tcph=117 used=0"
+            // stuck, "used=98" walked through).
+            if (!env || GetEnvelopeInfo_Value(env, "I_TCPH_USED") <= 0.0) continue;
             const std::string g = uf1EnvGuid_(env);
             if (!g.empty()) out.push_back({ t, "\"" + g + "\"" });
         }
@@ -11557,6 +11563,36 @@ static void uf1RazorApplyOcc_(const std::vector<Uf1RzLane>& lanes,
     }
     for (auto& rt : uf1RazorTracks_()) uf1RazorSet_(rt.tr, "");   // clear first, then write
     for (auto& kv : build) uf1RazorSet_(kv.first, kv.second);
+}
+// TRACE (2026-09-15, razor area will not cross tracks with envelopes): every lane the
+// walk sees and every razor string REAPER holds, so a step that goes nowhere shows why.
+static void uf1RazorTrace_(const char* tag)
+{
+    FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a");
+    if (!lg) return;
+    std::fprintf(lg, "[rztrace] %s target=%d ctrl=%d\n", tag,
+                 static_cast<int>(g_uf1RazorTarget.load()),
+                 uf8::bindings::modifierHeld(uf8::bindings::Modifier::Ctrl) ? 1 : 0);
+    const int n = CountTracks(nullptr);
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* t = GetTrack(nullptr, i);
+        if (!t) continue;
+        const std::string rz = uf1RazorGet_(t);
+        const int ne = CountTrackEnvelopes(t);
+        std::fprintf(lg, "[rztrace]   t%d vis=%d envs=%d rz='%s'\n", i + 1,
+                     IsTrackVisible(t, false) ? 1 : 0, ne, rz.c_str());
+        for (int k = 0; k < ne; ++k) {
+            TrackEnvelope* env = GetTrackEnvelope(t, k);
+            if (!env) continue;
+            char nm[128] = {0};
+            GetEnvelopeName(env, nm, int(sizeof(nm)));
+            std::fprintf(lg, "[rztrace]     env%d '%s' tcph=%.0f used=%.0f guid=%s\n", k, nm,
+                         GetEnvelopeInfo_Value(env, "I_TCPH"),
+                         GetEnvelopeInfo_Value(env, "I_TCPH_USED"),
+                         uf1EnvGuid_(env).c_str());
+        }
+    }
+    std::fclose(lg);
 }
 // Slide razor boundaries in time. edge: 0 = whole (rigid, both), -1 = left (start),
 // +1 = right (end). Smooth (no grid-snap — Frank wanted the jog smooth).
@@ -11615,6 +11651,7 @@ static void uf1RazorShiftTracksOnce_(int dir)
             TrackEnvelope* src = uf1EnvByGuidOnTrack_(rt.tr, tp.guid);
             TrackEnvelope* ne  = uf1EnvLikeOnTrack_(dst, src);
             if (!ne) {
+                uf1RazorTrace_("shift: no like-envelope on dst, move refused");
                 return;
             }
             if (src) leaving.push_back(src);
@@ -11634,6 +11671,7 @@ static void uf1RazorShiftTracksOnce_(int dir)
         it->second += m.guid;
     }
     for (auto& kv : build) uf1RazorSet_(kv.first, kv.second);
+    uf1RazorTrace_("shift after write");
     // Only NOW is it safe to give back a lane this gesture borrowed: the area has left it,
     // so dropping it can't take the area down with it.
     for (TrackEnvelope* e : leaving) uf1EnvUndoMade_(e);
@@ -11668,6 +11706,7 @@ static void uf1RazorVertEdgeOnce_(bool topEdge, int dir)
                   occ.end());
     }
     uf1RazorApplyOcc_(lanes, occ);
+    uf1RazorTrace_(topEdge ? "top edge after write" : "bottom edge after write");
     UpdateArrange();
 }
 
@@ -12997,6 +13036,7 @@ static bool uf1RazorCreateAtCursor_(double delta)
 // Jog dispatch for Razor mode. count = de-jittered, timeDelta = seconds (per-mode step).
 void applyUf1JogRazor_(int count, double timeDelta)
 {
+    uf1RazorTrace_(count > 0 ? "jog+ before" : "jog- before");
     // Drawing an area, moving it, dragging an edge — all of it writes track state
     // and had no undo point. The CONTENT drag keeps its own block
     // (g_uf1RazorUndoOpen, opened on the grab and closed on the release); this one
