@@ -3014,7 +3014,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
-constexpr int kCurrentBindingsVersion = 40;
+constexpr int kCurrentBindingsVersion = 41;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -3631,6 +3631,36 @@ void upgradeRenameFocusSet_(Config& c)
 // to overwrite: a 0 in a bank slot is the old default, not a decision. The
 // physical keys in c.layers are untouched — the UF1's own SOFT key is on the
 // LEFT half and 0 is correct there.
+// v40→v41 (2026-09-15): jog_content_drag only works as a HOLD. It needs BOTH key
+// edges — the press arms the grab, the release decides between dropping what was
+// dragged and falling back to the spotlight zoom — and only Behavior::Hold fires
+// the handler on the release. A binding stored as Momentary or Toggle therefore
+// arms the grab and never lets go: in Items mode the centre key looked completely
+// dead, because the zoom sits on exactly that release (Frank 2026-09-15: "Druck
+// auf Center Button in Item Jog-Mode macht NICHTS"). His razor twin had Hold and
+// worked; the Items one had Toggle.
+// Not a user choice being overwritten: any other behaviour is broken by
+// construction for this action, and the factory has always seeded Hold.
+void upgradeContentDragIsHold_(Config& c)
+{
+    auto carries = [](const Binding& bd) {
+        for (const auto& sp : bd.shortPress)
+            if (sp.type == ActionType::Builtin && sp.action == "jog_content_drag")
+                return true;
+        for (const auto& lp : bd.longPress)
+            if (lp.type == ActionType::Builtin && lp.action == "jog_content_drag")
+                return true;
+        return false;
+    };
+    for (auto& L : c.layers)
+        for (auto& kv : L.bindings)
+            if (carries(kv.second)) kv.second.behavior = Behavior::Hold;
+    for (int b = 0; b < kUf1SoftBankCount; ++b)
+        for (int sl = 0; sl < kUf1SoftBankSlots; ++sl)
+            if (carries(c.uf1SoftBanks[b][sl]))
+                c.uf1SoftBanks[b][sl].behavior = Behavior::Hold;
+}
+
 void upgradeUf1FocusChanSide_(Config& c)
 {
     for (int b = 0; b < kUf1SoftBankCount; ++b)
@@ -4147,6 +4177,9 @@ void load()
             }
             if (tmp.version < 40) {
                 upgradeUf1FocusChanSide_(tmp);
+            }
+            if (tmp.version < 41) {
+                upgradeContentDragIsHold_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
