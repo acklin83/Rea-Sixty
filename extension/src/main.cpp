@@ -17910,6 +17910,29 @@ static int uf1NeedleDataType_()
     return dt;
 }
 
+// ⛔ EVERY EXIT OF uf1FocusedTrack_ NEEDS THE SAME LAST RESORT, and that is why
+// this is a function and not a tail. The resolver has several returns, and the
+// DAW-mode one handed back GetSelectedTrack directly — so a project that loads
+// with nothing selected answered nullptr there and the surface went blank, while
+// the fallback sitting at the bottom of the function was never reached (Frank
+// 2026-09-15: "volles projekt und der fucking UF1 leer nach projekt-load").
+// Order: the channel it was last on if that is still alive, else the first
+// channel the SURFACE is showing — the filtered, ordered list the strips are
+// built from — else the project's first track. Only an empty project answers
+// nullptr, and there the blank is the truth.
+// ⚠ Read-only. It never selects: selecting from inside a resolver would fight
+// every other writer and turn a display fallback into a project edit.
+static MediaTrack* g_uf1LastFocus = nullptr;
+static MediaTrack* uf1FocusFallback_()
+{
+    if (g_uf1LastFocus && ValidatePtr2(nullptr, g_uf1LastFocus, "MediaTrack*"))
+        return g_uf1LastFocus;
+    g_uf1LastFocus = nullptr;
+    if (MediaTrack* first = visibleTrackAt(0))  { g_uf1LastFocus = first; return first; }
+    if (MediaTrack* first = GetTrack(nullptr, 0)) { g_uf1LastFocus = first; return first; }
+    return nullptr;
+}
+
 MediaTrack* uf1FocusedTrack_()
 {
     MediaTrack* master = GetMasterTrack(nullptr);
@@ -17949,8 +17972,15 @@ MediaTrack* uf1FocusedTrack_()
     // The window and the strip now share ONE anchor, which is the only way they can
     // stay consistent. MASTER / Extender / Held-Track are decided above and are
     // unaffected; Meter view keeps the normal follow (the sub-mode is stale there).
-    if (!g_uf1MeterView.load() && g_uf1ChannelSubMode.load() == 1)
-        return GetSelectedTrack(nullptr, 0);
+    if (!g_uf1MeterView.load() && g_uf1ChannelSubMode.load() == 1) {
+        if (MediaTrack* sel = GetSelectedTrack(nullptr, 0)) {
+            g_uf1LastFocus = sel;
+            return sel;
+        }
+        // No selection: take the last resort, NOT last-touched — the whole point
+        // of this branch is that the window and the strip share one anchor.
+        return uf1FocusFallback_();
+    }
     // Chose a channel more recently than you touched one? Then the channel you
     // chose is what you meant. Covers SEL, the channel encoder, the mouse and
     // anything added later, because it compares the two signals rather than
@@ -17960,7 +17990,10 @@ MediaTrack* uf1FocusedTrack_()
     // See g_uf1TouchWasOurs for why withholding the timestamp alone did not do it.
     if (g_uf1TouchWasOurs.load(std::memory_order_relaxed)
         || g_uf1SelChangeMs > g_uf1TouchChangeMs) {
-        if (MediaTrack* sel = GetSelectedTrack(nullptr, 0)) return sel;
+        if (MediaTrack* sel = GetSelectedTrack(nullptr, 0)) {
+            g_uf1LastFocus = sel;          // every real answer feeds the fallback
+            return sel;
+        }
     }
     MediaTrack* tr = GetLastTouchedTrack();
     if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
@@ -17991,30 +18024,8 @@ MediaTrack* uf1FocusedTrack_()
     // and action still agree ([[uf1-panel-halves-rule]]). The master is
     // deliberately NOT followed here — that auto-follow was reverted (0afa296);
     // V-Pot1 pins a master instance by hand.
-    static MediaTrack* sLastFocus = nullptr;
-    if (tr) { sLastFocus = tr; return tr; }
-    if (sLastFocus && ValidatePtr2(nullptr, sLastFocus, "MediaTrack*"))
-        return sLastFocus;
-    sLastFocus = nullptr;      // deleted, or another project — nothing to hold
-    // ⛔ AND WHEN THERE IS NOTHING TO HOLD EITHER, THE UF1 STILL MUST NOT GO
-    // BLANK. Holding the last valid track closed the MASTER FREEZE, but it only
-    // works while there IS a last one. Open a project with nothing selected,
-    // switch projects, or delete the held track, and all four answers above are
-    // empty at once — the resolver returned nullptr and the surface went dead,
-    // with no way back except selecting something by hand (Frank 2026-09-15:
-    // "immer noch möglich, dass das UF1 ohne selektierten track sein kann").
-    // So fall back to the first channel the SURFACE is showing: the filtered,
-    // ordered list the strips are built from, so display and action land on a
-    // channel that is actually in front of the user. Its own list can be empty
-    // under a Selset filter that matches nothing, and then the project's first
-    // track stands in. Only a project with no tracks at all still answers
-    // nullptr, and there the blank is the truth.
-    // ⚠ Read-only, like the rest of this resolver: it does NOT select the track.
-    // Selecting from inside a resolver would fight every other writer and turn a
-    // display fallback into a project edit.
-    if (MediaTrack* first = visibleTrackAt(0)) { sLastFocus = first; return first; }
-    if (MediaTrack* first = GetTrack(nullptr, 0)) { sLastFocus = first; return first; }
-    return nullptr;            // an empty project has no channel to show
+    if (tr) { g_uf1LastFocus = tr; return tr; }
+    return uf1FocusFallback_();
 }
 
 // The track the UF1's MOTOR FADER belongs to — the ONLY thing the Extender
