@@ -807,10 +807,10 @@ pick the object.
 
 | Object | Jog turns |
 |---|---|
-| **Playhead** | Moves the play cursor. Step is 1 % of the visible view per count, so the feel follows your zoom. |
+| **Playhead** | Moves the play cursor. Default one quarter of a grid step per count, landing on the grid. |
 | **Scrub** | Audible scrub, 0.5 s per count. |
 | **Items** | Moves the selected item(s). Default one quarter of a grid step per count. |
-| **Envelope** | Moves the selected envelope points, same default step. |
+| **Envelope** | Moves the selected envelope points in value. Hold Ctrl and they move in time, one quarter of a grid step per count. |
 | **Razor** | Moves the razor edit — which edge, see below. |
 | **Fades** | Changes a fade length, 10 ms per count. Where there is a neighbour it is the crossfade. See *Fades* below. |
 

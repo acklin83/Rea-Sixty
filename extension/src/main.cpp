@@ -5900,7 +5900,11 @@ struct Uf1JogStepInit_ {
             g_uf1JogFactoryUnit[static_cast<int>(m)] = static_cast<int>(u);
             g_uf1JogFactoryStep[static_cast<int>(m)] = v;
         };
-        set(Uf1JogMode::Playhead, Uf1JogUnit::ZoomRel, 0.01);  // 1% of view / count
+        // Playhead in GRID, like the editing modes (Frank 2026-09-15: "1% der ansicht?
+        // das macht doch keinen sinn! DIE MUSS IN GRID WERTEN SEIN"). A cursor you are
+        // placing wants to land on the musical grid; a share of the view changes with
+        // every zoom and lands anywhere.
+        set(Uf1JogMode::Playhead, Uf1JogUnit::Grid,    0.25);
         // Scrub is the one mode that must NOT be zoom-relative: it feeds real audio scrub
         // (CSurf_ScrubAmt), and 1% of a zoomed-out view is seconds per count. Absolute time
         // instead. 0.5 s/count is Frank's tuned-by-ear value (2026-08-08) — 10 ms and 50 ms
