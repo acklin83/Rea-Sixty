@@ -365,7 +365,7 @@ Three buttons (Selection Mode block), each carrying the mode its silk-screen nam
 
 ## Left panel: AUTOMATION row
 
-Six buttons — **Read / Write / Touch / Latch / Trim / Off**. Default actions **Automation: Read**, **Automation: Write**, **Automation: Touch**, **Automation: Latch**, **Automation: Trim**, **Automation: Off / Trim** (set the automation mode of the first selected track).
+Six buttons — **Read / Write / Touch / Latch / Trim / Off**. Default actions **Automation: Read**, **Automation: Write**, **Automation: Touch**, **Automation: Latch**, **Automation: Trim**, **Automation: Off / Trim** (set the automation mode of every selected track).
 
 ## Left panel: PLUGIN / CHANNEL, PAGE and the SEND/PLUGIN grid
 
@@ -2100,7 +2100,7 @@ The focused parameter slot is **preserved across an Instance Cycle** when the ne
 
 ## Per-track automation modes
 
-Set the first selected track's automation mode. (*Automation: Off / Trim* and *Automation: Trim* are alternate names for the same REAPER mode 0; both kept for binding-file compatibility.)
+Set the automation mode of every selected track. (*Automation: Off / Trim* and *Automation: Trim* are alternate names for the same REAPER mode 0; both kept for binding-file compatibility.)
 
 - **Automation: Off / Trim**, **Automation: Trim** — mode 0 (Off / Trim).
 - **Automation: Read** — mode 1.

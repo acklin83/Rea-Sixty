@@ -19683,10 +19683,15 @@ void drainInputQueue()
             applyUf1JogAction_(e.strip, e.value);
             continue;
         }
+        // Every selected track, not just the first: an automation key is an
+        // edit on the selection like any other (Frank 2026-09-15: "sollen
+        // LOGISCHERWEISE auf ALLE selektierten spuren wirken").
         if (e.kind == PendingInput::AutomationMode) {
-            if (MediaTrack* tr = GetSelectedTrack(nullptr, 0)) {
-                SetTrackAutomationMode(tr, static_cast<int>(e.value));
-            }
+            const int mode = static_cast<int>(e.value);
+            const int nSel = CountSelectedTracks(nullptr);
+            for (int i = 0; i < nSel; ++i)
+                if (MediaTrack* tr = GetSelectedTrack(nullptr, i))
+                    SetTrackAutomationMode(tr, mode);
             continue;
         }
         if (e.kind == PendingInput::AutomationModeGlobal) {
