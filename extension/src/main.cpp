@@ -12948,15 +12948,41 @@ static bool uf1RazorCreateAtCursor_(double delta)
         }
     }
     std::snprintf(buf, sizeof(buf), "%.15g %.15g \"\"", a, a + w);
-    int created = 0;
+    std::vector<MediaTrack*> tracks;
     const int nsel = CountSelectedTracks(nullptr);
     for (int i = 0; i < nsel; ++i)
-        if (MediaTrack* t = GetSelectedTrack(nullptr, i)) { uf1RazorSet_(t, buf); ++created; }
-    if (created == 0) {
+        if (MediaTrack* t = GetSelectedTrack(nullptr, i)) tracks.push_back(t);
+    if (tracks.empty()) {
         MediaTrack* t = GetLastTouchedTrack();
         if (!t) return false;
-        uf1RazorSet_(t, buf);
+        tracks.push_back(t);
     }
+    // ⇨ TRACK GROUPS WITH MEDIA/RAZOR EDITS TAKE THE AREA ALONG. Writing P_RAZOREDITS
+    // is not an edit REAPER's grouping sees, so the area stayed on the lead's own
+    // track while a mouse drag spreads it over the group (Frank 2026-09-15: "razor
+    // mode respektiert gruppen nicht wenn sie aktiv sind"). A track that LEADS a group
+    // in MEDIA_EDIT hands the area to every track that FOLLOWS that group, the same
+    // lead/follow split as REAPER's own. REAPER's master switch 40771, "Track: Toggle
+    // all track grouping enabled", switched off (an explicit 0) keeps it on the lead.
+    if (GetToggleCommandState2(SectionFromUniqueID(0), 40771) != 0) {
+        unsigned leadLo = 0, leadHi = 0;
+        for (MediaTrack* t : tracks) {
+            leadLo |= GetSetTrackGroupMembership(t, "MEDIA_EDIT_LEAD", 0, 0);
+            leadHi |= GetSetTrackGroupMembershipHigh(t, "MEDIA_EDIT_LEAD", 0, 0);
+        }
+        if (leadLo || leadHi) {
+            const int nTr = CountTracks(nullptr);
+            for (int i = 0; i < nTr; ++i) {
+                MediaTrack* t = GetTrack(nullptr, i);
+                if (!t || std::find(tracks.begin(), tracks.end(), t) != tracks.end())
+                    continue;
+                if ((GetSetTrackGroupMembership(t, "MEDIA_EDIT_FOLLOW", 0, 0) & leadLo)
+                    || (GetSetTrackGroupMembershipHigh(t, "MEDIA_EDIT_FOLLOW", 0, 0) & leadHi))
+                    tracks.push_back(t);
+            }
+        }
+    }
+    for (MediaTrack* t : tracks) uf1RazorSet_(t, buf);
     return true;
 }
 
