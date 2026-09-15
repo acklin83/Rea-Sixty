@@ -5748,6 +5748,19 @@ std::atomic<bool>       g_uf1RazorUndoOpen{false};
 // rather than one undo point per detent, which would bury the undo history.
 std::atomic<bool>       g_uf1JogEnvUndoOpen{false};
 std::atomic<int64_t>    g_uf1JogEnvUndoUntilMs{0};
+// ⛔ THE SAME TREATMENT FOR ITEMS AND RAZOR AREAS — they had NONE. Copying items
+// with Cmd+jog cloned them with no undo point at all, so the copies could not be
+// taken back (Frank 2026-09-15: "konnte es nicht rückgängig machen"); moving them
+// horizontally or across tracks, and drawing or dragging a razor AREA, were the
+// same gap. Envelope and Fades had the pattern since August and Items/Razor never
+// got it. One block per continuous gesture, closed on idle, exactly as above.
+// `Copy` only names the undo point: a copy-drag is one gesture and takes back the
+// clones and their move together, the way REAPER's own copy-drag does.
+std::atomic<bool>       g_uf1JogItemUndoOpen{false};
+std::atomic<int64_t>    g_uf1JogItemUndoUntilMs{0};
+std::atomic<bool>       g_uf1JogItemUndoCopy{false};
+std::atomic<bool>       g_uf1JogRazorAreaUndoOpen{false};
+std::atomic<int64_t>    g_uf1JogRazorAreaUndoUntilMs{0};
 // One grab per gesture, EVEN IF IT FOUND NOTHING — see uf1RazorContentGesture_.
 std::atomic<bool>       g_uf1RazorGrabDone{false};
 // Item-jog drag gesture (Frank 2026-08-11): NAV-CENTRE held = "mouse down". While
@@ -10181,6 +10194,10 @@ void applyUf1JogMoveItemsDelta_(double dt)
     if (dt == 0.0) return;
     const int n = CountSelectedMediaItems(nullptr);
     if (n <= 0) return;
+    // Armed only once something really moves, so a jog over an empty selection
+    // leaves no empty block behind.
+    if (!g_uf1JogItemUndoOpen.exchange(true)) Undo_BeginBlock2(nullptr);
+    g_uf1JogItemUndoUntilMs.store(nowMs_() + 300);
     if (dt < 0.0) {                       // group-clamp at the project start
         double minPos = 1e18;
         for (int i = 0; i < n; ++i)
@@ -10232,6 +10249,11 @@ static void uf1JogDuplicateSelectedItems_()
 {
     const int n = CountSelectedMediaItems(nullptr);
     if (n <= 0) return;
+    // The clones join the gesture's block, so ONE undo takes back the copy and
+    // the drag that follows it.
+    if (!g_uf1JogItemUndoOpen.exchange(true)) Undo_BeginBlock2(nullptr);
+    g_uf1JogItemUndoCopy.store(true);
+    g_uf1JogItemUndoUntilMs.store(nowMs_() + 300);
     std::vector<MediaItem*> src; src.reserve(n);
     for (int i = 0; i < n; ++i)
         if (MediaItem* it = GetSelectedMediaItem(nullptr, i)) src.push_back(it);
@@ -10323,6 +10345,8 @@ void applyUf1JogMoveItemsToTrack_(int count)
     if (steps == 0) return;
     const int nTr = CountTracks(nullptr);
     if (nTr <= 0) return;
+    if (!g_uf1JogItemUndoOpen.exchange(true)) Undo_BeginBlock2(nullptr);
+    g_uf1JogItemUndoUntilMs.store(nowMs_() + 300);
     const int n = CountSelectedMediaItems(nullptr);
     std::vector<MediaItem*> items; items.reserve(n);
     for (int i = 0; i < n; ++i)
@@ -12674,6 +12698,12 @@ static bool uf1RazorCreateAtCursor_(double delta)
 // Jog dispatch for Razor mode. count = de-jittered, timeDelta = seconds (per-mode step).
 void applyUf1JogRazor_(int count, double timeDelta)
 {
+    // Drawing an area, moving it, dragging an edge — all of it writes track state
+    // and had no undo point. The CONTENT drag keeps its own block
+    // (g_uf1RazorUndoOpen, opened on the grab and closed on the release); this one
+    // is the area itself, and it closes on idle like the other free-running jogs.
+    if (!g_uf1JogRazorAreaUndoOpen.exchange(true)) Undo_BeginBlock2(nullptr);
+    g_uf1JogRazorAreaUndoUntilMs.store(nowMs_() + 300);
     // No razor yet → CREATE a visible area at the cursor on the selected track(s), force
     // the RightEdge target, and finish this tick (the next jogs grow/move it).
     if (uf1RazorTracks_().empty()) {
@@ -42939,6 +42969,30 @@ void onTimerBody_()
                 g_uf1JogFadeUndoUntilMs.store(0);
                 if (g_uf1JogFadeUndoOpen.exchange(false))
                     Undo_EndBlock2(nullptr, "Rea-Sixty: UF1 fade jog", -1);
+            }
+        }
+        // UF1 Items jog — the copy and both move axes. The name says which it was,
+        // because "undo item copy" and "undo item move" are different things to
+        // look for in the history. The copy flag is cleared WITH the block, so the
+        // next gesture starts as a move again.
+        if (g_uf1JogItemUndoOpen.load()) {
+            const int64_t until = g_uf1JogItemUndoUntilMs.load();
+            if (until && now > until) {
+                g_uf1JogItemUndoUntilMs.store(0);
+                if (g_uf1JogItemUndoOpen.exchange(false))
+                    Undo_EndBlock2(nullptr,
+                        g_uf1JogItemUndoCopy.exchange(false)
+                            ? "Rea-Sixty: UF1 item copy"
+                            : "Rea-Sixty: UF1 item jog", -1);
+            }
+        }
+        // UF1 Razor jog — the AREA, not its content (that block is its own).
+        if (g_uf1JogRazorAreaUndoOpen.load()) {
+            const int64_t until = g_uf1JogRazorAreaUndoUntilMs.load();
+            if (until && now > until) {
+                g_uf1JogRazorAreaUndoUntilMs.store(0);
+                if (g_uf1JogRazorAreaUndoOpen.exchange(false))
+                    Undo_EndBlock2(nullptr, "Rea-Sixty: UF1 razor area", -1);
             }
         }
     }
