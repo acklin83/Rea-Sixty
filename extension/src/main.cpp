@@ -17996,7 +17996,25 @@ MediaTrack* uf1FocusedTrack_()
     if (sLastFocus && ValidatePtr2(nullptr, sLastFocus, "MediaTrack*"))
         return sLastFocus;
     sLastFocus = nullptr;      // deleted, or another project — nothing to hold
-    return nullptr;
+    // ⛔ AND WHEN THERE IS NOTHING TO HOLD EITHER, THE UF1 STILL MUST NOT GO
+    // BLANK. Holding the last valid track closed the MASTER FREEZE, but it only
+    // works while there IS a last one. Open a project with nothing selected,
+    // switch projects, or delete the held track, and all four answers above are
+    // empty at once — the resolver returned nullptr and the surface went dead,
+    // with no way back except selecting something by hand (Frank 2026-09-15:
+    // "immer noch möglich, dass das UF1 ohne selektierten track sein kann").
+    // So fall back to the first channel the SURFACE is showing: the filtered,
+    // ordered list the strips are built from, so display and action land on a
+    // channel that is actually in front of the user. Its own list can be empty
+    // under a Selset filter that matches nothing, and then the project's first
+    // track stands in. Only a project with no tracks at all still answers
+    // nullptr, and there the blank is the truth.
+    // ⚠ Read-only, like the rest of this resolver: it does NOT select the track.
+    // Selecting from inside a resolver would fight every other writer and turn a
+    // display fallback into a project edit.
+    if (MediaTrack* first = visibleTrackAt(0)) { sLastFocus = first; return first; }
+    if (MediaTrack* first = GetTrack(nullptr, 0)) { sLastFocus = first; return first; }
+    return nullptr;            // an empty project has no channel to show
 }
 
 // The track the UF1's MOTOR FADER belongs to — the ONLY thing the Extender
