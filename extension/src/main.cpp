@@ -11680,6 +11680,27 @@ static void uf1RazorShiftTracksOnce_(int dir)
     for (auto& kv : build)
     UpdateArrange();
 }
+// Move the whole RECTANGLE one LANE (dir +1 down / -1 up), the same lane list the edges
+// walk: each visible track's media lane, then its envelope lanes that are on screen.
+// The track-by-track move below skipped every envelope lane on the way, which is not how
+// the edges go and not how a mouse drag goes (Frank 2026-09-15: "er überspringt
+// envelop-lanes", traced t6 → t7 → t8 past two open Volume lanes). That one stays for the
+// CONTENT drag, where the items travel track by track and the area has to go with them.
+// Off either end, nothing moves.
+static void uf1RazorShiftLanesOnce_(int dir)
+{
+    const auto lanes = uf1RazorLanes_();
+    auto occ = uf1RazorOccupancy_(lanes);
+    if (occ.empty() || lanes.empty()) return;
+    for (auto& o : occ) {
+        const int nl = o.lane + dir;
+        if (nl < 0 || nl >= int(lanes.size())) return;
+    }
+    for (auto& o : occ) o.lane += dir;
+    uf1RazorApplyOcc_(lanes, occ);
+    uf1RazorTrace_("lane shift after write");
+    UpdateArrange();
+}
 // Grow / retract the top or bottom edge of the rectangle by one LANE. dir +1 = the edge
 // moves DOWN the lane list, -1 = UP (so forward jog = down, like the rest). The last
 // remaining lane is never retracted away — an empty razor would make the next jog create a
@@ -13074,7 +13095,7 @@ void applyUf1JogRazor_(int count, double timeDelta)
         int st = vertSteps(); const int d = st > 0 ? 1 : -1;
         for (int i = 0, k = st > 0 ? st : -st; i < k; ++i) {
             if (g_uf1RazorContentHeld.load()) uf1RazorContentVertStep_(d, copy);  // with content
-            else                              uf1RazorShiftTracksOnce_(d);        // rectangle only
+            else                              uf1RazorShiftLanesOnce_(d);         // rectangle only
         }
         return;
     }
