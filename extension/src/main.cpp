@@ -10422,9 +10422,22 @@ static void uf1SelectAdjacentItem_(int dir, bool add)
 
 // Nearest item on `t` to position `pos` (0 distance if pos is inside an item), or
 // nullptr if the track has none. Helper for the vertical arrow nav.
+// ⛔ A CROSSFADE PUTS TWO ITEMS UNDER ONE POSITION, AND "FIRST WINS" PICKED THE
+// WRONG ONE. The gap to an item's span is 0 for every item the position falls
+// inside, and a crossfade is exactly two items overlapping — the previous one
+// still running while the next has already started. With a plain `d < bestD` the
+// first candidate in track order kept the tie, track order is by time, so the
+// EARLIER item always won and stepping to the neighbouring track also stepped one
+// item to the LEFT (Frank 2026-09-15: "gegen unten wählt es immer nach unten und
+// links aus", with the grouping option ruled out by test).
+// So the tie is broken by the item's START instead: among everything the position
+// sits inside, the one that begins nearest to it is the item at the same place.
+// Symmetric by construction — it no longer matters which way the walk came from,
+// nor what order the track hands its items over in.
 static MediaItem* uf1NearestItemOnTrack_(MediaTrack* t, double pos)
 {
-    MediaItem* best = nullptr; double bestD = 1e18;
+    MediaItem* best = nullptr;
+    double bestD = 1e18, bestStart = 1e18;
     const int ni = CountTrackMediaItems(t);
     for (int i = 0; i < ni; ++i) {
         MediaItem* it = GetTrackMediaItem(t, i);
@@ -10432,7 +10445,13 @@ static MediaItem* uf1NearestItemOnTrack_(MediaTrack* t, double pos)
         const double p = GetMediaItemInfo_Value(it, "D_POSITION");
         const double l = GetMediaItemInfo_Value(it, "D_LENGTH");
         const double d = (pos < p) ? (p - pos) : (pos > p + l) ? (pos - (p + l)) : 0.0;
-        if (d < bestD) { bestD = d; best = it; }
+        const double sd = std::fabs(p - pos);
+        // Tolerance on the primary key so two items that are a hair apart still
+        // count as equally near and let the start decide; 1 ms is far below
+        // anything a crossfade is made of and far above float noise.
+        if (d < bestD - 1e-3 || (d < bestD + 1e-3 && sd < bestStart)) {
+            bestD = std::min(bestD, d); bestStart = sd; best = it;
+        }
     }
     return best;
 }
