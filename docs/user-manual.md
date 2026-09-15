@@ -824,7 +824,7 @@ The cross is not one thing either — it follows the object, exactly like the wh
 | **Playhead** | Zoom out / in horizontally. | Zoom in / out vertically. | Zoom to fit the project. |
 | **Scrub** | As Playhead. | As Playhead. | As Playhead. |
 | **Items** | Select the previous / next item on the track. | Select the item on the track above / below. | **Hold** it and the wheel drags the selected items as one move; release drops them. Press and let go without turning and it zooms to the selected items instead, press again to come back. |
-| **Envelope** | Select the previous / next point. Once the play cursor has moved, the next arrow starts from where the cursor now is rather than from the point that was selected before it moved, so nudging the playhead and reaching for an arrow lands where you are looking. | Switch envelope lane. | Toggle what the jog edits: the selected **points** or the **playhead**. No zoom here, nudging the cursor while shaping an envelope is worth more. |
+| **Envelope** | Select the previous / next point. Once the play cursor has moved, the next arrow starts from where the cursor now is rather than from the point that was selected before it moved, so nudging the playhead and reaching for an arrow lands where you are looking. | Switch envelope lane. | Toggle what the jog edits: the selected **points** or the **playhead**. No zoom here, nudging the cursor while shaping an envelope is worth more. **Shift +** centre inserts a point at the cursor. |
 | **Razor** | Aim at the **left** / **right** edge. | Aim at the **top** / **bottom** edge. | **Hold** it to take the **whole area** and drag its content. See *Razor* below. |
 | **Fades**, aiming | Aim at the **fade-in** / **fade-out**. | Next / previous fade type. | Switch the cross over to walking the items. |
 | **Fades**, walking | Select the previous / next item on the track. | Select the item on the track above / below. | Switch the cross back to aiming. |
@@ -836,7 +836,7 @@ what the cross on the other surface does.
 
 In **Items**, `SHIFT` on any of the four arrows **adds** to the selection instead
 of replacing it, and in **Envelope** the same goes for `←` `→` on points, so you
-can walk a run of items or points onto the wheel. That is not a hidden check
+can walk a run of items or points onto the wheel. The Envelope centre carries REAPER's *Envelope: Insert new point at current position (do not remove nearby points)* (40106) in its Shift slot. That is not a hidden check
 inside the key: each of those keys carries the *(add)* twin of its own action in
 its Shift slot, where you can see it and change it. A Shift slot you leave empty
 falls back to the plain action, which is why the keys without one are unaffected
@@ -2782,7 +2782,7 @@ Eight rows, one per strip:
 | Column | What it is |
 |---|---|
 | **On** | Include this lamp. Only enabled rows take a strip. |
-| **Label** | Shown on the scribble strip, seven characters |
+| **Label** | Shown on the scribble strip, eight characters |
 | **Target** | A single lamp, or a whole room or zone |
 | **Kind** | `lamp` or `zone`, filled in for you |
 | **Bar** | The strip's colour bar when the lamp is off |

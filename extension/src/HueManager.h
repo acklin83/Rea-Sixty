@@ -43,8 +43,9 @@ namespace uf8::hue {
 inline constexpr int kMaxSlots  = 8;
 inline constexpr int kMaxScenes = 8;
 
-// The label that fits the UF8 scribble row.
-inline constexpr int kLabelChars = 7;
+// The label that fits the UF8 scribble row: eight cells, measured at the device
+// (uf8::kUf8ScribbleChars). Seven was copied from a capture, not a limit.
+inline constexpr int kLabelChars = 8;
 
 // How the link to the bridge is doing. Anything but Online means the strips
 // still respond but say so instead of pretending.

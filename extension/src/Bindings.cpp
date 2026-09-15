@@ -645,8 +645,9 @@ uint32_t pressKey(int layer, ButtonId id)
 // what Shift does is visible in the editor and rebindable like anything else
 // (Frank 2026-08-18). An empty Shift slot falls back to Plain at dispatch, so
 // the keys without one behave exactly as before.
+// `shiftReaper` says the Shift slot is a REAPER action id rather than a builtin.
 struct NavSeed { ButtonId id; const char* action; const char* label; Behavior beh;
-                 const char* shiftAction; };
+                 const char* shiftAction; bool shiftReaper = false; };
 const NavSeed kNavSeed[] = {
         // Playhead / Scrub: the zoom cross, centre zooms to fit.
         { ButtonId::Uf1NavUpPlayhead,     "zoom_up", "", Behavior::Momentary , nullptr },
@@ -671,7 +672,10 @@ const NavSeed kNavSeed[] = {
         { ButtonId::Uf1NavRightEnvelope,  "jog_env_point_next", "",   Behavior::Momentary , "jog_env_point_next_add" },
         { ButtonId::Uf1NavUpEnvelope,     "jog_env_lane_up", "", Behavior::Momentary , nullptr },
         { ButtonId::Uf1NavDownEnvelope,   "jog_env_lane_down", "", Behavior::Momentary , nullptr },
-        { ButtonId::Uf1NavCentreEnvelope, "jog_env_target_toggle", "",         Behavior::Toggle , nullptr },
+        // Shift + centre inserts a point at the cursor, REAPER's 40106 "Envelope:
+        // Insert new point at current position (do not remove nearby points)"
+        // (Frank 2026-09-15, from his own config).
+        { ButtonId::Uf1NavCentreEnvelope, "jog_env_target_toggle", "",         Behavior::Toggle , "40106", true },
         // Razor: the four edges, centre takes the whole area and drags it.
         { ButtonId::Uf1NavLeftRazor,      "jog_razor_left", "", Behavior::Momentary , nullptr },
         { ButtonId::Uf1NavRightRazor,     "jog_razor_right", "", Behavior::Momentary , nullptr },
@@ -1134,7 +1138,7 @@ void seedFactoryDefaults_(Config& c)
         L1[n.id].color[0] = 0x00; L1[n.id].color[1] = 0xFF; L1[n.id].color[2] = 0x66;
         if (n.shiftAction) {
             auto& sh = L1[n.id].shortPress[static_cast<int>(Modifier::Shift)];
-            sh.type   = ActionType::Builtin;
+            sh.type   = n.shiftReaper ? ActionType::Reaper : ActionType::Builtin;
             sh.action = n.shiftAction;
         }
     }
@@ -3443,7 +3447,7 @@ void upgradeBackfillUf1Buttons_(Config& c)
         // Only on a slot we just created — never overwrite a Shift the user set.
         if (wasMissing && n.shiftAction) {
             auto& sh = L1.bindings[n.id].shortPress[static_cast<int>(Modifier::Shift)];
-            sh.type   = ActionType::Builtin;
+            sh.type   = n.shiftReaper ? ActionType::Reaper : ActionType::Builtin;
             sh.action = n.shiftAction;
         }
     }
