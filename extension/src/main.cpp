@@ -10775,6 +10775,40 @@ static void uf1SwitchEnvLane_(int dir)
     }
 }
 
+// ⇨ THE LANE COMES ALONG WHEN THE CHANNEL CHANGES. In Envelope mode the wheel works
+// on REAPER's selected envelope, and that stayed on the track you came from, so after
+// a channel change the arrows had to pick a lane first (Frank 2026-09-15: "muss erst
+// mit den up/down buttons gewählt werden"). On a change of the first selected track
+// the same envelope, by name, is picked on the new one if it is showing there, else
+// its first showing lane. Only on a CHANGE: a lane you click on another track, with
+// the selection left where it is, stays yours. A track with no showing lane leaves
+// the selection alone. Main thread (onTimer).
+static void uf1EnvFollowChannel_()
+{
+    static MediaTrack* sLastSel = nullptr;
+    MediaTrack* tr = GetSelectedTrack(nullptr, 0);
+    if (tr == sLastSel) return;
+    sLastSel = tr;
+    if (!tr || g_uf1JogMode.load() != Uf1JogMode::Envelope) return;
+    TrackEnvelope* env = GetSelectedEnvelope(nullptr);
+    if (env && reinterpret_cast<MediaTrack*>(static_cast<intptr_t>(
+                   GetEnvelopeInfo_Value(env, "P_TRACK"))) == tr)
+        return;                                      // already on this channel
+    TrackEnvelope* pick = nullptr;
+    char nm[256] = {0};
+    if (env && GetEnvelopeName(env, nm, int(sizeof(nm))) && nm[0])
+        if (TrackEnvelope* same = GetTrackEnvelopeByName(tr, nm))
+            if (GetEnvelopeInfo_Value(same, "I_TCPH_USED") > 0.0) pick = same;
+    const int ne = CountTrackEnvelopes(tr);
+    for (int i = 0; !pick && i < ne; ++i) {
+        TrackEnvelope* cand = GetTrackEnvelope(tr, i);
+        if (cand && GetEnvelopeInfo_Value(cand, "I_TCPH_USED") > 0.0) pick = cand;
+    }
+    if (!pick) return;
+    SetCursorContext(2, pick);
+    UpdateArrange();
+}
+
 static void uf1JogNavCenterToggle_(Uf1JogMode mode)
 {
     // ⇨ IN ITEMS MODE REAPER OWNS THE ZOOM, BECAUSE IT DOES BOTH AXES.
@@ -40986,6 +41020,7 @@ void onTimerBody_()
     // Razor mode: keep the nav-cross LEDs showing the active edge target. Envelope's
     // centre-LED sync runs right after (and only touches 0x12) — see uf1EnvSyncLed_.
     uf1NavCrossSyncLeds_();
+    uf1EnvFollowChannel_();
 
     // Load-sweep selection safety net. Root cause is fixed at the source (the
     // impersonator no longer sends the "activate this channel" command frames
