@@ -10744,6 +10744,20 @@ static void uf1SwitchEnvLane_(int dir)
 
 static void uf1JogNavCenterToggle_(Uf1JogMode mode)
 {
+    // ⇨ IN ITEMS MODE REAPER OWNS THE ZOOM, BECAUSE IT DOES BOTH AXES.
+    // Our own path writes GetSet_ArrangeView2, which is the time axis only — the
+    // track heights stayed where they were, so "zoom to what you selected" only
+    // half happened (Frank 2026-09-15: "der zoom soll waagrecht und senkrecht
+    // machen"). REAPER's 41622, View: Toggle zoom to selected items, frames them
+    // horizontally AND vertically and toggles back on the second press, which is
+    // the same contract this key already had. Native, so no SWS dependency.
+    // The lamp follows REAPER's toggle rather than our flag from here on.
+    if (mode == Uf1JogMode::Items && CountSelectedMediaItems(nullptr) > 0) {
+        Main_OnCommand(41622, 0);
+        g_uf1JogNavZoomed.store(
+            GetToggleCommandState2(SectionFromUniqueID(0), 41622) == 1);
+        return;
+    }
     double s = 0.0, e = 0.0;
     GetSet_ArrangeView2(nullptr, false, 0, 0, &s, &e);
     if (g_uf1JogNavZoomed.load()) {                       // restore
@@ -53341,7 +53355,12 @@ void registerBindingHandlers()
                         pressed ? 1.0 : 0.0});
         },
         [](int) { return g_uf1RazorContentHeld.load() || g_uf1JogItemsHeld.load(); },
-        "Jog: hold to drag content", true
+        // ⇨ THE NAME HAS TO CARRY BOTH JOBS. It was "hold to drag content",
+        // which describes half of it, and the half it leaves out is the one
+        // that runs when you just tap the key — so a dead-feeling key looked
+        // like a broken zoom rather than a binding whose behaviour had been
+        // changed away from Hold (Frank 2026-09-15).
+        "Jog: hold+turn drags, tap zooms to selection", true
     });
 
     // ---- Parameter Groups ---------------------------------------------------

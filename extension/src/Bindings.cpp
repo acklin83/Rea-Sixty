@@ -7952,9 +7952,12 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "jog_zoom_selection",
       "Zooms to the current selection, and back out on a second press." },
     { "jog_content_drag",
-      "Hold to drag the content under the razor or the held item with the "
-      "wheel. Needs Hold behaviour on the key, which the factory binding "
-      "sets." },
+      "One key, two jobs, and the wheel decides which. Hold it and turn, and "
+      "you drag: the razor's content, or the items, dropped on release with "
+      "the trim and crossfade a mouse drop would do. Press and release "
+      "WITHOUT turning, and it zooms to what is selected instead, across and "
+      "down; press again to come back. Always set to Hold, because the "
+      "release is where the choice is made." },
     { "jog_nav_left",
       "The collective nav-cross action from before the cross became "
       "bindable per mode. Kept so older configs keep working; bind the "
@@ -8184,7 +8187,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "instance_next", "Inst Next" },
     { "instance_prev", "Inst Prev" },
     { "instance_scroll_all", "Inst Scroll" },
-    { "jog_content_drag", "Content Drag" },
+    { "jog_content_drag", "Drag/Zoom" },
     { "jog_env_lane_down", "Lane Down" },
     { "jog_env_lane_up", "Lane Up" },
     { "jog_env_point_next", "Point >" },
