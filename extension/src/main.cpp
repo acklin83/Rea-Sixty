@@ -10451,47 +10451,32 @@ static void uf1ItemNavRecord_(MediaItem* it, bool add)
 // is REAPER's own toggle 41156 — asked here rather than read out of a config file,
 // the same way the extension asks about every other REAPER switch. Grouping off,
 // or an ungrouped item, and this does nothing. Main thread only.
+// ⇨ REAPER SELECTS THE GROUP, NOT US. Reading the group myself was the wrong
+// road twice over: I_GROUPID came back 0 on items Frank had grouped as item edit
+// groups, and every extra assumption about what "grouped" means was another way
+// to be wrong about someone else's project. REAPER's own action 40034 ("Item
+// grouping: Select all items in groups", from its action list, not from memory)
+// expands the current selection by whatever it considers a group, under its own
+// rules. All that is left here is the user's option, toggle 41156: an explicit
+// OFF suppresses it, anything else lets REAPER decide.
+// Main thread only (Main_OnCommand); both callers are drained.
 static void uf1SelectGroupMates_(MediaItem* seed)
 {
     if (!seed) return;
-    const int gid = static_cast<int>(GetMediaItemInfo_Value(seed, "I_GROUPID"));
-    if (gid == 0) return;                       // 0 = no group, nothing to bring
-    // ⛔ "NOT 1" IS NOT "OFF". GetToggleCommandState2 answers −1 for an action whose
-    // state REAPER does not report, and testing `!= 1` then silently disabled the
-    // whole feature — which is what "die Option wird immer noch ignoriert" was
-    // (Frank 2026-09-15). Only an explicit 0 means off. When the toggle has no
-    // state, fall back to REAPER's master item-grouping switch: projgroupover is
-    // non-zero exactly while grouping is OVERRIDDEN, so 0 there means grouping is
-    // live and the group should come along.
     const int st = GetToggleCommandState2(SectionFromUniqueID(0), 41156);
-    bool on = (st == 1);
-    int  ov = -1;
-    if (st < 0) {                                // no state reported → ask the master
-        int sz = 0;
-        if (int* p = static_cast<int*>(get_config_var("projgroupover", &sz)))
-            if (sz >= static_cast<int>(sizeof(int))) ov = *p;
-        on = (ov == 0);
-    }
-    // One line per CHANGE of the decision, so the log says what was read without
-    // filling up on every arrow press.
+    if (st == 0) return;                       // the option is off
+    Main_OnCommand(40034, 0);                  // Item grouping: Select all items in groups
     {
-        static int sSt = -2, sOv = -2; static int sOn = -1;
-        if (st != sSt || ov != sOv || static_cast<int>(on) != sOn) {
-            sSt = st; sOv = ov; sOn = on;
+        static int sSt = -2, sN = -1;
+        const int n = CountSelectedMediaItems(nullptr);
+        if (st != sSt || n != sN) {
+            sSt = st; sN = n;
             if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
-                std::fprintf(lg, "[itemgroup] toggle41156=%d projgroupover=%d -> %s\n",
-                             st, ov, on ? "expand" : "single");
+                std::fprintf(lg, "[itemgroup] toggle41156=%d -> 40034, selected=%d\n",
+                             st, n);
                 std::fclose(lg);
             }
         }
-    }
-    if (!on) return;
-    const int n = CountMediaItems(nullptr);
-    for (int i = 0; i < n; ++i) {
-        MediaItem* it = GetMediaItem(nullptr, i);
-        if (!it || it == seed) continue;
-        if (static_cast<int>(GetMediaItemInfo_Value(it, "I_GROUPID")) == gid)
-            SetMediaItemSelected(it, true);
     }
 }
 static void uf1DeselectAllItems_()
