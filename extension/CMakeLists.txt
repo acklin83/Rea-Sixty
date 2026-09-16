@@ -839,6 +839,12 @@ if(NOT WIN32)
         src "${REAPER_SDK_DIR}/sdk" "${WDL_DIR}")
     add_test(NAME user_catalog_uf1 COMMAND test_user_catalog_uf1)
 
+    add_executable(test_autolearn_matrix tests/test_autolearn_matrix.cpp
+        src/AutoLearnEngine.cpp src/PluginMap.cpp src/LogPath.cpp)
+    target_include_directories(test_autolearn_matrix PRIVATE
+        src "${REAPER_SDK_DIR}/sdk" "${WDL_DIR}")
+    add_test(NAME autolearn_matrix COMMAND test_autolearn_matrix)
+
     add_executable(uf8_color_test tools/uf8_color_test.cpp src/Protocol.cpp)
     target_include_directories(uf8_color_test PRIVATE src)
     target_link_libraries(uf8_color_test PRIVATE reasixty_libusb)

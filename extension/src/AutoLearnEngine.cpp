@@ -920,6 +920,45 @@ int matrixRoleFor(const std::string& stem)   // 0 fader 1 cut 2 solo 3 sel, -1 n
     if (stem == "sel" || stem == "select") return 3;
     return -1;
 }
+
+// Roles for the whole stem list, so the two suggesters can never disagree about
+// which stem owns a control and which one gets a V-Pot bank.
+//
+// ⇨ AND THE FREE SEL ROW GOES TO A SWITCH. The rule above only knows words, and
+// no matrix plug-in calls anything "Sel", so that row came out empty on every
+// one of them while a two-state stem sat on a V-Pot — a pot that can only ever
+// be fully left or fully right (Frank 2026-09-16, comparing his own Delta 16 map
+// against the proposal: "mono auf sel"). This does NOT reopen name-guessing,
+// which stays refused (2026-09-03, "an empty Sel is more honest than a guessed
+// one"): the question here is the parameter's TYPE, which REAPER answers —
+// wasEnum is isToggle or a step of half the range or more. First binary stem in
+// the plug-in's own order takes the row; continuous stems (a Trim, a Pan) keep
+// their bank, and a matrix that names its own Sel keeps that one.
+void matrixRoles_(const std::vector<MatrixStem>& stems,
+                  const std::vector<UserParamInfo>& params,
+                  std::vector<int>& roles)
+{
+    roles.assign(stems.size(), -1);
+    bool selTaken = false;
+    for (size_t i = 0; i < stems.size(); ++i) {
+        roles[i] = matrixRoleFor(stems[i].name);
+        if (roles[i] == 3) selTaken = true;
+    }
+    if (selTaken) return;
+
+    std::map<int, bool> isEnum;
+    for (const auto& pi : params) isEnum[pi.vst3Param] = pi.wasEnum;
+    for (size_t i = 0; i < stems.size(); ++i) {
+        if (roles[i] >= 0) continue;
+        if (stems[i].param.empty()) continue;
+        bool allEnum = true;
+        for (int prm : stems[i].param) {
+            const auto it = isEnum.find(prm);
+            if (it == isEnum.end() || !it->second) { allEnum = false; break; }
+        }
+        if (allEnum) { roles[i] = 3; return; }
+    }
+}
 } // anonymous namespace
 
 std::vector<Uf8Suggestion> suggestUf8Banks(
@@ -940,9 +979,12 @@ std::vector<Uf8Suggestion> suggestUf8Banks(
         std::vector<MatrixStem> stems;
         if (const int width = detectMatrix(params, stems)) {
             std::vector<Uf8Suggestion> out;
+            std::vector<int> roles;
+            matrixRoles_(stems, params, roles);
             int vb = 0;
-            for (const auto& st : stems) {
-                if (matrixRoleFor(st.name) >= 0) continue;   // owns a control
+            for (size_t si = 0; si < stems.size(); ++si) {
+                const auto& st = stems[si];
+                if (roles[si] >= 0) continue;                // owns a control
                 if (vb >= 8) break;                          // 8 V-Pot banks
                 for (int ch = 0; ch < width && ch < 16; ++ch) {
                     Uf8Suggestion sg{};
@@ -1098,8 +1140,11 @@ std::vector<Uf8StripSuggestion> suggestUf8Strips(
         if (const int width = detectMatrix(params, stems)) {
             std::vector<Uf8StripSuggestion> out;
             using K = Uf8StripSuggestion::Kind;
-            for (const auto& st : stems) {
-                const int role = matrixRoleFor(st.name);
+            std::vector<int> roles;
+            matrixRoles_(stems, params, roles);
+            for (size_t si = 0; si < stems.size(); ++si) {
+                const auto& st = stems[si];
+                const int role = roles[si];
                 if (role < 0) continue;
                 for (int ch = 0; ch < width && ch < 16; ++ch) {
                     Uf8StripSuggestion sg{};
