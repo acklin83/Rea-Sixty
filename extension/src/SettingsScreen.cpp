@@ -10259,6 +10259,22 @@ void drawFxLearnCurveEditorPopup_(ImGui_Context* ctx)
     ImGui_EndPopup(ctx);
 }
 
+// ⇨ ENTER MEANS DONE. In the FX-Learn right-click menus every field commits as
+// you type (an InputText writes each keystroke, InputDouble / InputInt parse the
+// text live), so Enter has nothing left to save — but it is what a hand reaches
+// for to say "that's it", and the menu used to sit there until the mouse went
+// somewhere else (Frank 2026-09-16). Called at the END of a popup, after the
+// widgets: the field has already handled the key and deactivated itself, so all
+// that is left is to take the menu away. ESC keeps ImGui's own meaning inside a
+// field (revert), which is why that one is gated on !IsAnyItemActive elsewhere
+// and this one is not.
+void closeMenuOnEnter_(ImGui_Context* ctx)
+{
+    bool repeat = false;
+    if (ImGui_IsKeyPressed(ctx, ImGui_Key_Enter, &repeat) && !repeat)
+        ImGui_CloseCurrentPopup(ctx);
+}
+
 // ---- UF8 helpers (Phase 3) ------------------------------------------------
 //
 // Mirror the UC1 helpers above but address `editing->uf8.{strips,banks}`.
@@ -15019,6 +15035,7 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     g_listeningLinkIdx = -1;
                 unbindSlot_(ctrl.linkIdx);
             }
+            closeMenuOnEnter_(ctx);
             ImGui_EndPopup(ctx);
         }
     }
@@ -16971,6 +16988,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                         ImGui_SameLine(ctx, nullptr, nullptr);
                     }
                 }
+                closeMenuOnEnter_(ctx);
                 ImGui_EndPopup(ctx);
             }
 
@@ -17665,6 +17683,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                             ImGui_SameLine(ctx, nullptr, nullptr);
                         }
                     }
+                    closeMenuOnEnter_(ctx);
                     ImGui_EndPopup(ctx);
                 }
                 ImGui_Separator(ctx);
