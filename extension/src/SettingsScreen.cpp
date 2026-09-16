@@ -19441,7 +19441,10 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             const int paramCount = paramCountFor_(*editing, fx);
             const int kMaxParams = 1024;
             const int n = (paramCount < kMaxParams) ? paramCount : kMaxParams;
-            const auto& grNames = paramNamesFor_(*editing, fx, n);
+            // Ask for the FULL name list, like the parameter picker does: the
+            // cache is one static keyed on the count, so two callers asking for
+            // different counts would evict each other every frame.
+            const auto& grNames = paramNamesFor_(*editing, fx, paramCount);
             for (int p = 0; p < n; ++p) {
                 const char* pname = (p < (int)grNames.size())
                                   ? grNames[(size_t)p].c_str() : "";
@@ -21452,18 +21455,23 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             }   // end of the non-UF1 (UC1 / UF8) reverse-map
 
             const int paramCount = paramCountFor_(*editing, fx);
-            // Cap iteration so a 5000-param plugin doesn't tank the
-            // frame; the user can always sharpen the filter to reach
-            // the rest. 1024 is comfortably above any musical plugin.
-            const int kMaxParams = 1024;
-            const int n = (std::min)(paramCount, kMaxParams);
+            // ⛔ THE CAP COUNTS ROWS, NOT INDICES, and so does the line at the
+            // bottom. It used to cap the INDEX at 1024 and then report
+            // "showing first 1024 of <TrackFX_GetNumParams>" — a number that
+            // includes REAPER's MIDI-learn pseudo-params, which this list hides.
+            // Nolly X therefore claimed "first 1024 of 2244" under a list that
+            // ended at 160, because 2083 of those 2244 are "MIDI CC …" rows
+            // nobody draws (Frank 2026-09-16). Walk them all, draw at most a
+            // thousand, and count only what the list could actually show.
+            const int kMaxRows = 1024;
             // Additive, case-insensitive — so "out gain" finds "Output Gain"
             // and "out" alone still finds it (every token must be present).
             const auto fltToks = searchTokensLower_(g_paramFilter);
 
-            const auto& plNames = paramNamesFor_(*editing, fx, n);
+            const auto& plNames = paramNamesFor_(*editing, fx, paramCount);
             char pname[128];
-            for (int p = 0; p < n; ++p) {
+            int shownRows = 0, matchingRows = 0;
+            for (int p = 0; p < paramCount; ++p) {
                 snprintf(pname, sizeof(pname), "%s",
                          (p < (int)plNames.size()) ? plNames[(size_t)p].c_str()
                                                    : "");
@@ -21474,6 +21482,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 if (isReaperMidiParam_(pname)) continue;
 
                 if (!searchAllTokensCI_(fltToks, pname)) continue;
+
+                // Everything past this point is a row the user could click, so
+                // it counts even when the cap stops us drawing it.
+                ++matchingRows;
+                if (shownRows >= kMaxRows) continue;
+                ++shownRows;
 
                 auto it = usedBy.find(p);
                 const bool isBound = (it != usedBy.end());
@@ -21540,12 +21554,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 }
             }
 
-            if (paramCount > kMaxParams) {
+            if (matchingRows > shownRows) {
                 ImGui_Spacing(ctx);
                 char overflow[96];
                 snprintf(overflow, sizeof(overflow),
-                    "(showing first %d of %d params — use filter)",
-                    kMaxParams, paramCount);
+                    "(showing first %d of %d parameters — use the filter)",
+                    shownRows, matchingRows);
                 ImGui_TextDisabled(ctx, overflow);
             }
         }
