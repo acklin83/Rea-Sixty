@@ -4287,14 +4287,23 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
     return dirty;
 }
 
+// The destination coords are passed straight through to drawActionPicker so the
+// async "Browse Action..." result lands in the right store — a soft-key slot
+// needs them, a hardware binding leaves them at -1. withLabel = false for the
+// soft-key editors, which carry ONE label for the whole key above the picker
+// (Frank 2026-05-13: "für was Label UND display label? Label reicht.").
 bool drawStepPicker_(ImGui_Context* ctx, const char* prefix,
                      int layer, ButtonId id,
                      uf8::bindings::ActionStep& st,
                      bool isLongPress, int modIdx = 0, int stepIdx = 0,
-                     bool isDoublePress = false)
+                     bool isDoublePress = false,
+                     int uqLayer = -1, int uqQuick = -1,
+                     int uqSubBank = -1, int uqSlot = -1,
+                     int uf1Bank = -1, int uf1Slot = -1,
+                     bool withLabel = true)
 {
     ActionFieldsRef ref{
-        &st.type, &st.action, &st.param, &st.label,
+        &st.type, &st.action, &st.param, withLabel ? &st.label : nullptr,
         &st.midiDevice, &st.midiChannel, &st.midiMsgType,
         &st.midiData1, &st.midiData2,
         &st.fireOnInactive,
@@ -4302,9 +4311,8 @@ bool drawStepPicker_(ImGui_Context* ctx, const char* prefix,
     };
     return drawActionPicker(ctx, prefix, ref, layer, id, isLongPress,
                             modIdx, stepIdx,
-                            /*uqLayer*/ -1, /*uqQuick*/ -1,
-                            /*uqSubBank*/ -1, /*uqSlot*/ -1,
-                            /*uf1Bank*/ -1, /*uf1Slot*/ -1,
+                            uqLayer, uqQuick, uqSubBank, uqSlot,
+                            uf1Bank, uf1Slot,
                             isDoublePress);
 }
 
@@ -4315,7 +4323,12 @@ bool drawStepPicker_(ImGui_Context* ctx, const char* prefix,
 // inline picker).
 bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
                     int layer, ButtonId id, uf8::bindings::ActionSlot& s,
-                    bool isLongPress, int modIdx = 0)
+                    bool isLongPress, int modIdx = 0,
+                    // Soft-key destination coords (see drawStepPicker_).
+                    int uqLayer = -1, int uqQuick = -1,
+                    int uqSubBank = -1, int uqSlot = -1,
+                    int uf1Bank = -1, int uf1Slot = -1,
+                    bool withLabel = true, bool withLedOverride = true)
 {
     using namespace uf8::bindings;
     bool dirty = false;
@@ -4337,7 +4350,9 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
         char stepPrefix[80];
         snprintf(stepPrefix, sizeof(stepPrefix), "%s_st%d", prefix, i);
         if (drawStepPicker_(ctx, stepPrefix, layer, id, st, isLongPress,
-                            modIdx, /*stepIdx*/ i)) {
+                            modIdx, /*stepIdx*/ i, /*isDoublePress*/ false,
+                            uqLayer, uqQuick, uqSubBank, uqSlot,
+                            uf1Bank, uf1Slot, withLabel)) {
             dirty = true;
         }
         if (i < n - 1) {
@@ -4390,7 +4405,7 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
     const bool plainSingleShort = (n == 1 && modIdx == 0 && !isLongPress);
     char ledHdr[80];
     snprintf(ledHdr, sizeof(ledHdr), "LED override##%s_ledhdr", prefix);
-    if (!plainSingleShort
+    if (withLedOverride && !plainSingleShort
         && ImGui_CollapsingHeader(ctx, ledHdr, nullptr, nullptr)) {
         ImGui_Indent(ctx, nullptr);
         auto drawOverrideRow = [&](const char* rowLabel,
@@ -5443,20 +5458,20 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     // Slot's action picker. f.label = nullptr — the slot has only ONE
     // label (the binding's bd.label above), Frank's request 2026-05-13:
     // "für was Label UND display label? Label reicht."
-    ActionFieldsRef ref{
-        &sp.type, &sp.action, &sp.param,
-        /*label*/ nullptr,
-        &sp.midiDevice, &sp.midiChannel, &sp.midiMsgType,
-        &sp.midiData1, &sp.midiData2,
-        &sp.fireOnInactive,
-        &sp.stepValue, &sp.wrap, &sp.textParam,
-    };
-    if (drawActionPicker(ctx, idtag, ref,
-                         /*layer*/ -1, ButtonId::None,
-                         /*isLongPress*/ false,
-                         modIdx, /*stepIdx*/ 0,
-                         /*uqLayer*/ editLayer, /*uqQuick*/ qIdx,
-                         /*uqSubBank*/ sbIdx, /*uqSlot*/ slotIdx)) {
+    // ⇨ THE WHOLE CHAIN, not one step. Store, dispatch and JSON have carried
+    // multi-step slots since the chains went in — dispatchUserQuickSlot runs
+    // runSlot_ like every other key — but this editor only ever drew step 0, so
+    // a soft-key could not be given the one thing the chain was built for: a
+    // Note On, a wait, a Note Off from a single key (Frank 2026-09-16, on the
+    // film's MIDI chapter: "6.2 beschreibt eine MIDI chain, seh ich da was nicht
+    // oder ist das nicht möglich?"). Label and LED stay OFF here — this editor
+    // carries its own, above and below the picker.
+    if (drawSlotPicker(ctx, idtag, /*layer*/ -1, ButtonId::None, sp,
+                       /*isLongPress*/ false, modIdx,
+                       /*uqLayer*/ editLayer, /*uqQuick*/ qIdx,
+                       /*uqSubBank*/ sbIdx, /*uqSlot*/ slotIdx,
+                       /*uf1Bank*/ -1, /*uf1Slot*/ -1,
+                       /*withLabel*/ false, /*withLedOverride*/ false)) {
         dirty = true;
     }
     // Clears the WHOLE key, not the selected modifier set — it always did, but
@@ -5696,22 +5711,15 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
     // Modifier slot. dispatchUf1SoftBankSlot already snapshots the held
     // modifier at press time and indexes shortPress with it; the editor just
     // never let you fill anything but Plain (forum 3.5, second half).
-    ActionFieldsRef ref{
-        &sp.type, &sp.action, &sp.param,
-        /*label*/ nullptr,
-        &sp.midiDevice, &sp.midiChannel, &sp.midiMsgType,
-        &sp.midiData1, &sp.midiData2,
-        &sp.fireOnInactive,
-        &sp.stepValue, &sp.wrap, &sp.textParam,
-    };
-    if (drawActionPicker(ctx, idtag, ref,
-                         // Real id, not None: builtinDeviceForId(None) falls through
-                         // to "UF8" and hid all 14 uf1_* builtins from a UF1 key.
-                         /*layer*/ -1, ButtonId::Uf1DisplaySoft1,
-                         /*isLongPress*/ false, modIdx, /*stepIdx*/ 0,
-                         /*uqLayer*/ -1, /*uqQuick*/ -1,
-                         /*uqSubBank*/ -1, /*uqSlot*/ -1,
-                         /*uf1Bank*/ bank, /*uf1Slot*/ slotIdx)) {
+    // Same chain editor as the UF8's soft-key slots and for the same reason —
+    // see the note there. Real id, not None: builtinDeviceForId(None) falls
+    // through to "UF8" and hid all 14 uf1_* builtins from a UF1 key.
+    if (drawSlotPicker(ctx, idtag, /*layer*/ -1, ButtonId::Uf1DisplaySoft1, sp,
+                       /*isLongPress*/ false, modIdx,
+                       /*uqLayer*/ -1, /*uqQuick*/ -1,
+                       /*uqSubBank*/ -1, /*uqSlot*/ -1,
+                       /*uf1Bank*/ bank, /*uf1Slot*/ slotIdx,
+                       /*withLabel*/ false, /*withLedOverride*/ false)) {
         dirty = true;
     }
     // Same as the UF8 editor: this is the whole key, not one modifier slot.
