@@ -18526,6 +18526,31 @@ void applyUf1AboveFaderVpot_(int step)
     }
     switch (g_uf1AboveFaderMode.load()) {
         case Uf1AboveFaderMode::Pan:
+            // As the NINTH STRIP of the UF8 bank this knob has to pan what the
+            // eight beside it pan, and in SSL Strip Mode that is the CS plug-in's
+            // own Pan (linkIdx 3), not REAPER's track pan. Otherwise the extender
+            // strip moves a different pan than its neighbours and its readout
+            // prints a different number (Frank 2026-09-16). Same half-scale (the
+            // plug-in's 0..1 against REAPER's -1..+1), same centre notch and same
+            // group broadcast as the UF8 V-Pot's strip-mode pan. Falls through to
+            // REAPER's pan when the track carries no CS plug-in, exactly as the
+            // UF8 path does. Extender only: without it this knob is the UF1's own
+            // channel, not part of the UF8 bank.
+            if (uf1ExtenderActive_() && g_pluginFaderMode.load()) {
+                if (const auto pn = csPanForTrack(tr); pn.vst3Param >= 0) {
+                    const double cur = TrackFX_GetParamNormalized(
+                        tr, pn.fxIndex, pn.vst3Param);
+                    const double next = uf8::applyVirtualNotch(
+                        cur,
+                        step * kUf1AboveFaderPanPerDetent * kScale * 0.5,
+                        /*center*/0.5, /*zone*/g_notchZone.load(), 0.0, 1.0);
+                    TrackFX_SetParamNormalized(tr, pn.fxIndex,
+                                               pn.vst3Param, next);
+                    uf8::param_groups::broadcastBuiltinSlot(
+                        tr, uf8::Domain::ChannelStrip, 3, next);
+                    break;
+                }
+            }
             // Relative pan write — canonical surface path (applies + automation +
             // notifies the painter, which repaints the Pan label/bar).
             CSurf_OnPanChange(tr, step * kUf1AboveFaderPanPerDetent * kScale,
@@ -31084,7 +31109,15 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         barPos    = std::clamp(static_cast<int>(std::lround(nrm * 100.0)), 0, 100);
         barCentre = 0x00;
     } else {
-        const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+        // Reads the pan this knob WRITES: as the ninth strip of the UF8 bank it
+        // drives the CS plug-in's Pan in SSL Strip Mode (applyUf1AboveFaderVpot_),
+        // so the line and the bar have to come from there too.
+        double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+        if (double csPan = 0.0;
+            uf1ExtenderActive_() && csStripPanReadout_(tr, &csPan))
+        {
+            pan = csPan;
+        }
         valLine   = composeValueLine("Pan", formatPanReadout(pan));
         barPos    = std::clamp(static_cast<int>(std::lround((pan + 1.0) * 50.0)), 0, 100);
         barCentre = (pan == 0.0) ? 0x80 : 0x00;
@@ -38286,6 +38319,28 @@ void chaseLastTouchedFx()
                         && sp->vst3Param2 == paramIdx
                         && uf8::findFxIndexByGuid(tr, sp->fxGuid2) == fxIdx;
         if (isPin || isFollower) {
+            lastTr = trWord; lastFx = fxWord; lastParam = paramIdx;
+            return;
+        }
+    }
+    // SSL Strip Mode pan: the V-Pot's own fallback writes the CS plug-in's
+    // Pan (linkIdx 3) — that is the mode's ambient default, the same role
+    // REAPER's track pan plays everywhere else, NOT a param the user
+    // reached for. Our write lands in GetLastTouchedFX like any other, so
+    // without this chase focuses {CS,3} — and {CS,3} IS isVPotPanFocus, which
+    // every render branch reads as "no slot" and drops into the pan tree.
+    // The strips then stay on pan for good: pressing PAN again has nothing
+    // left to switch back to (Frank 2026-09-16). Same reasoning as the
+    // Sticky Pot clause above, and timing-free for the same reason: only
+    // this track's exact CS pan tuple, only while the mode is on. Source-
+    // agnostic on purpose — UF8, the UF1 extender's strips and a turn in the
+    // plug-in GUI all share this one focus.
+    if (g_pluginFaderMode.load()
+        && map->domain == uf8::Domain::ChannelStrip
+        && linkIdx == 3)
+    {
+        const auto pn = csPanForTrack(tr);
+        if (pn.fxIndex == fxIdx && pn.vst3Param == paramIdx) {
             lastTr = trWord; lastFx = fxWord; lastParam = paramIdx;
             return;
         }
