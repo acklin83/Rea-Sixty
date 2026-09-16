@@ -19439,15 +19439,21 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 }
             }
             const int paramCount = paramCountFor_(*editing, fx);
-            const int kMaxParams = 1024;
-            const int n = (paramCount < kMaxParams) ? paramCount : kMaxParams;
-            // Ask for the FULL name list, like the parameter picker does: the
-            // cache is one static keyed on the count, so two callers asking for
-            // different counts would evict each other every frame.
+            // Same rule as the parameter picker: REAPER's MIDI-learn
+            // pseudo-params are not the plug-in's meter and never will be, so
+            // they stay out of the list, and the thousand is a cap on ROWS
+            // DRAWN rather than on the index (Frank 2026-09-16). Ask for the
+            // FULL name list while we are at it: the cache is one static keyed
+            // on the count, so two callers asking for different counts would
+            // evict each other every frame.
+            const int kMaxRows = 1024;
             const auto& grNames = paramNamesFor_(*editing, fx, paramCount);
-            for (int p = 0; p < n; ++p) {
+            int grShown = 0;
+            for (int p = 0; p < paramCount && grShown < kMaxRows; ++p) {
                 const char* pname = (p < (int)grNames.size())
                                   ? grNames[(size_t)p].c_str() : "";
+                if (isReaperMidiParam_(pname)) continue;
+                ++grShown;
                 char rowLbl[200];
                 snprintf(rowLbl, sizeof(rowLbl),
                               "[%4d] %s##fxl_gr_p_%d", p, pname, p);
