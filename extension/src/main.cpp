@@ -43545,6 +43545,62 @@ void onTimerBody_()
     // sets g_navOverlayDirty so the track-render path re-pushes its
     // own content on the next tick. Gated by g_navUf8Show: when off,
     // strips keep their regular track-side content.
+    // ⛔ A MODE THAT DRIVES A MAP MUST NOT OUTLIVE IT. Delete the map the UF8 is
+    // showing while Plug-in Mode is on and the eight strips have nothing to be:
+    // the surface stayed in the mode with a dead map behind it, and the only way
+    // out was to notice and press the key (Frank 2026-09-16: "dann sollte UF8 aus
+    // dem Plugin-Mode raus. Gilt für UF1 auch").
+    // ⚠ THE TRIGGER IS THE DELETION, NOT THE EMPTINESS. Selecting a track whose
+    // plug-in nobody has mapped also leaves the context empty, and dropping out
+    // of the mode there would fight the user rather than help. So remember the
+    // match the mode is actually driving while it has one, and only re-ask when
+    // the CATALOG changes: gone from the catalog means gone for good.
+    {
+        static int         sMapGen = -1;
+        static std::string sUf8PmMatch, sUf1SmMatch;
+
+        if (g_uf8PluginMode.load()) {
+            if (auto c = userStripCtxFocused_(); c.map) sUf8PmMatch = c.map->match;
+        } else {
+            sUf8PmMatch.clear();
+        }
+        if (g_uf1StripMode.load()) {
+            MediaTrack* ctr = nullptr; int cfx = -1;
+            if (uf1ResolveCsFx_(uf1FocusedTrack_(), ctr, cfx) >= 0 && ctr && cfx >= 0) {
+                char nm[512] = {0};
+                if (uf8::fxIdentityName(ctr, cfx, nm, sizeof(nm)))
+                    if (const auto* om = uf8::user_plugins::lookupOwnedByName(nm))
+                        sUf1SmMatch = om->match;
+            }
+        } else {
+            sUf1SmMatch.clear();
+        }
+
+        const int mapGen = uf8::user_plugins::generation();
+        if (mapGen != sMapGen) {
+            sMapGen = mapGen;
+            auto stillThere = [](const std::string& mt) {
+                if (mt.empty()) return true;      // never had one → nothing to lose
+                for (const auto& m : uf8::user_plugins::get().maps)
+                    if (m.match == mt) return true;
+                return false;
+            };
+            if (g_uf8PluginMode.load() && !stillThere(sUf8PmMatch)) {
+                sUf8PmMatch.clear();
+                disengageUf8PluginMode_();
+            }
+            if (g_uf1StripMode.load() && !stillThere(sUf1SmMatch)) {
+                sUf1SmMatch.clear();
+                g_uf1StripMode.store(false);
+                g_uf1StripModeWithGui.store(false);
+                SetExtState("rea_sixty", "uf1StripMode",    "0", true);
+                SetExtState("rea_sixty", "uf1StripModeGui", "0", true);
+                g_pluginGuiSyncRequest.store(true);
+                g_pageDirty.store(true);
+            }
+        }
+    }
+
     // ⛔ FLIP HAS NO MEANING IN UF8 PLUG-IN MODE, so it must not be left standing
     // in the forty places that read it. The mode gives all eight strips to one
     // plug-in and the map already says which parameter sits on the fader and
