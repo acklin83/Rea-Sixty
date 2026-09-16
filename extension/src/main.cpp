@@ -34826,6 +34826,39 @@ std::string uf1ValueLine(std::string_view label, std::string_view value)
     return composeValueLine(lab, val);
 }
 
+// The UF8's value line is 19 characters, but the LCD does not draw them as one
+// field. MEASURED ON THE HARDWARE 2026-09-16 (Frank typed eleven M and eleven 8):
+// the WHITE label zone shows the first EIGHT characters, 9 to 11 are drawn
+// nowhere at all, and from character 12 the text sits in the YELLOW value zone.
+// So a parameter name longer than eight loses its tail into the dead gap and
+// then comes back in the wrong colour — "die Param-Namen werden gelb", found
+// while mapping Nolly X. composeValueLine alone cannot see this: it only trims
+// when label + value + 1 exceeds the full 19, which is the BUFFER, not what the
+// firmware paints. Same shape as the UF1's uf1ValueLine, other numbers (11 + 8
+// there, 8 + 8 here — [[surface-text-field-widths]] had the 8 for the UF8 all
+// along).
+// Label is ABBREVIATED, never cut: "LPF Frequency" keeps both words. The value
+// is TRUNCATED, because vowel-dropping "-12.3 dB" produces nonsense, and because
+// a value longer than 8 starts left of column 12 and falls into the dead gap.
+// foldLatin1 = false: the callers hand in text that has already been through
+// their own name resolution, and folding twice double-encodes umlauts
+// ([[surface-lcd-latin1-umlauts]]).
+constexpr size_t kUf8ValueLabelChars = 8;
+constexpr size_t kUf8ValueValueChars = 8;
+std::string uf8ValueLine(std::string_view label, std::string_view value)
+{
+    std::string lab(label);
+    if (lab.size() > kUf8ValueLabelChars)
+        lab = abbreviateTrackName_(lab, static_cast<int>(kUf8ValueLabelChars),
+                                   TNM_SmartAbbrev, /*foldLatin1*/ false);
+    std::string val(value);
+    if (val.size() > kUf8ValueValueChars) {
+        val.resize(kUf8ValueValueChars);
+        while (!val.empty() && val.back() == ' ') val.pop_back();
+    }
+    return composeValueLine(lab, val);
+}
+
 std::string composeValueLine(std::string_view label, std::string_view value)
 {
     constexpr size_t kWidth = 19;
@@ -37712,7 +37745,7 @@ void pushZonesForVisibleSlots()
                     // Readout shows the TRUE value — invert only reverses input.
                     TrackFX_FormatParamValueNormalized(uctx.tr,
                         uctx.fxIdx, bs.vst3Param, norm, vbuf, sizeof(vbuf));
-                    valLine = composeValueLine(pn,
+                    valLine = uf8ValueLine(pn,
                         sanitizeFormattedValue(vbuf, sizeof(vbuf)));
                 } else if (fb.faderVst3Param >= 0) {
                     // V-Pot bank slot empty but the fader is mapped to a
@@ -37734,7 +37767,7 @@ void pushZonesForVisibleSlots()
                     // Readout shows the TRUE value — invert only reverses input.
                     TrackFX_FormatParamValueNormalized(uctx.tr,
                         uctx.fxIdx, fb.faderVst3Param, norm, vbuf, sizeof(vbuf));
-                    valLine = composeValueLine(pn,
+                    valLine = uf8ValueLine(pn,
                         sanitizeFormattedValue(vbuf, sizeof(vbuf)));
                 } else {
                     valLine = std::string(19, ' ');
@@ -37930,7 +37963,7 @@ void pushZonesForVisibleSlots()
                 if (TrackFX_GetFormattedParamValue(tr, sfx, sparam, vb, sizeof(vb)))
                     for (unsigned char c : std::string(vb))
                         if (c >= 0x20 && c <= 0x7E) val += static_cast<char>(c);
-                valLine = composeValueLine(nm, val);
+                valLine = uf8ValueLine(nm, val);
                 vpotBar[s] = stg ? 0
                     : vpotPosFromUnipolar(
                           TrackFX_GetParamNormalized(tr, sfx, sparam));
