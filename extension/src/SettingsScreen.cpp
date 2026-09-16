@@ -9239,6 +9239,50 @@ inline int countFunctionalParams_(MediaTrack* tr, int fx)
     return functional;
 }
 
+// ⛔ ONE SOURCE FOR BOTH PANELS. AutoLearn is offered in two places, and they
+// fed the matcher different parameter lists: the FX-Learn page always handed it
+// the map's paramSnapshot, the Learn-HUD read the LIVE instance whenever the
+// snapshot was missing. A snapshot can be older than the plug-in in front of
+// you — an imported Exchange map carries the author's, which on Frank's Delta 16
+// ends at 112 parameters where the installed build has 132 — so the page could
+// not see Trim 1-16 at all while the HUD proposed it (Frank 2026-09-16: "die
+// müssen exakt gleich mappen").
+// The live instance is the truth when there is one; the snapshot is what keeps
+// the editor usable with nothing loaded. Same filters the HUD used: REAPER's
+// MIDI-learn tail and the wrapper params are not the plug-in's own controls.
+const std::vector<UserParamInfo>& autoLearnSource_(
+    const UserPluginMap* m, const EditingFx& fx,
+    std::vector<UserParamInfo>& storage)
+{
+    static const std::vector<UserParamInfo> kEmpty;
+    storage.clear();
+    if (fx.ok && fx.tr && fx.fxIdx >= 0) {
+        const int np = TrackFX_GetNumParams(fx.tr, fx.fxIdx);
+        char pn[256];
+        for (int i = 0; i < np; ++i) {
+            pn[0] = 0;
+            if (!TrackFX_GetParamName(fx.tr, fx.fxIdx, i, pn, sizeof(pn))) continue;
+            if (isReaperMidiParam_(pn)) continue;
+            if (isWrapperParam_(fx.tr, fx.fxIdx, i)) continue;
+            UserParamInfo pi{};
+            pi.vst3Param = i;
+            pi.name      = pn;
+            double mn = 0, mx = 1, def = 0;
+            TrackFX_GetParamEx(fx.tr, fx.fxIdx, i, &mn, &mx, &def);
+            const double range = mx - mn;
+            pi.defaultNorm = (range > 1e-9) ? (def - mn) / range : 0.5;
+            double step = 0, small = 0, large = 0;
+            bool isToggle = false;
+            TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx, i,
+                                          &step, &small, &large, &isToggle);
+            pi.wasEnum = isToggle || step >= 0.5;
+            storage.push_back(std::move(pi));
+        }
+        if (!storage.empty()) return storage;
+    }
+    return m ? m->paramSnapshot : kEmpty;
+}
+
 void snapshotParamsFor_(const std::string& match, const EditingFx& fx)
 {
     if (match.empty() || !fx.ok) return;
@@ -15467,23 +15511,14 @@ static std::string hudBuildAutoLearnUncached_(void* csTrV, int csFx, int mode)
     // UC1 slots only — this is the Channel Strip tab bootstrapping a strip, and
     // UF8 banks would need a UF8 map, which is a different act. Applying such a
     // row creates the map (see hudApplyAutoLearn_).
+    // Same source, same precedence as the FX-Learn page — see autoLearnSource_.
+    // (It reads the live instance whenever there is one, so a map whose snapshot
+    // predates the installed build no longer hides parameters from one panel
+    // while the other proposes them.)
     std::vector<UserParamInfo> live;
-    if (!m || m->paramSnapshot.empty()) {
-        const int np = TrackFX_GetNumParams(tr, csFx);
-        char pn[256];
-        for (int i = 0; i < np; ++i) {
-            pn[0] = 0;
-            if (!TrackFX_GetParamName(tr, csFx, i, pn, sizeof(pn))) continue;
-            if (isReaperMidiParam_(pn)) continue;
-            if (isWrapperParam_(tr, csFx, i)) continue;
-            UserParamInfo pi{};
-            pi.vst3Param = i;
-            pi.name      = pn;
-            live.push_back(std::move(pi));
-        }
-        if (live.empty()) return {};
-    }
-    const std::vector<UserParamInfo>& src = live.empty() ? m->paramSnapshot : live;
+    const EditingFx efxSrc{ tr, csFx, true };
+    const std::vector<UserParamInfo>& src = autoLearnSource_(m, efxSrc, live);
+    if (src.empty()) return {};
     // With a map, its own domain rules. Without one, THE TAB DECIDES — and only
     // the tab. An earlier cut let the matrix detector overrule it, so a fresh
     // Delta 16 got UF8 proposals even from the Channel Strip tab. Frank: "wenn
@@ -19858,9 +19893,12 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             //   - engine vst3Param/paramName/conf when matched, else
             //     vst3Param=-1, conf<0 (rendered as "—" / unmapped)
             //   - existing customLabel from editing->slots if present
+            // One source for both panels — see autoLearnSource_.
+            std::vector<uf8::UserParamInfo> alSrcStore;
+            const std::vector<uf8::UserParamInfo>& alSrc =
+                autoLearnSource_(editing, fx, alSrcStore);
             if (newDom != uf8::Domain::None) {
-                auto engineHits = uf8::autolearn::suggestSlots(
-                    editing->paramSnapshot, newDom);
+                auto engineHits = uf8::autolearn::suggestSlots(alSrc, newDom);
                 std::unordered_map<int, const uf8::autolearn::Suggestion*>
                     hitByLink;
                 for (const auto& h : engineHits)
@@ -19924,13 +19962,13 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             }
             if (g_autoLearnSetupVpots) {
                 g_autoLearnUf8 = uf8::autolearn::suggestUf8Banks(
-                    editing->paramSnapshot, /* faderBankCount */ 1);
+                    alSrc, /* faderBankCount */ 1);
             } else {
                 g_autoLearnUf8.clear();
             }
             if (g_autoLearnSetupStrips) {
                 g_autoLearnUf8Strips = uf8::autolearn::suggestUf8Strips(
-                    editing->paramSnapshot, /* faderBankCount */ 2);
+                    alSrc, /* faderBankCount */ 2);
             } else {
                 g_autoLearnUf8Strips.clear();
             }
@@ -19947,7 +19985,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                         s.strip >= 0 && s.strip < 8)
                         takenFader[s.faderBank][s.strip] = true;
                 auto pf = uf8::autolearn::suggestUf8ParamFaders(
-                    editing->paramSnapshot, /* faderBankCount */ 2);
+                    alSrc, /* faderBankCount */ 2);
                 for (auto& s : pf) {
                     if (s.faderBank >= 0 && s.faderBank < 2 &&
                         s.strip >= 0 && s.strip < 8 &&
