@@ -14018,21 +14018,49 @@ bool hudRenameMatch_(const std::string& match, int linkIdx, int layer,
 {
     if (match.empty() || linkIdx < 0) return false;
     if (layer < 0 || layer >= kNumFxLayers) layer = FxLayer::Normal;
+    // ⇨ A PARAMETER HAS ONE NAME, EVERYWHERE (Frank 2026-09-16). This wrote the
+    // SLOT's own customLabel while the FX-Learn page writes the shared
+    // per-parameter name (v13), so the same rename landed in two different
+    // places depending on which panel you typed it in — and the surfaces read
+    // the slot label FIRST, so a HUD rename stayed local while a page rename
+    // travelled to the UC1, the UF8 and the UF1 alike. Write the shared name,
+    // and clear the slot-local one so it cannot shadow what you just typed.
+    int param = -1;
+    for (const auto& m : user_plugins::get().maps) {
+        if (m.match != match) continue;
+        for (const auto& s : m.slots) {
+            if (s.linkIdx != linkIdx) continue;
+            const SlotLayer& lay = fxLayerOf(const_cast<UserLinkSlot&>(s), layer);
+            if (lay.vst3Param < 0 && lay.pushSteps.empty()) return false;
+            param = lay.vst3Param;
+            break;
+        }
+        break;
+    }
     auto cat = user_plugins::get();   // copy
+    bool touched = false;
     for (auto& m : cat.maps) {
         if (m.match != match) continue;
         for (auto& s : m.slots) {
             if (s.linkIdx != linkIdx) continue;
             SlotLayer& lay = fxLayerOf(s, layer);
             if (lay.vst3Param < 0 && lay.pushSteps.empty()) return false;
-            lay.customLabel = label;   // empty → default name
-            user_plugins::upsert(m);
-            user_plugins::save();
-            return true;
+            if (!lay.customLabel.empty()) { lay.customLabel.clear(); touched = true; }
+            break;
         }
-        return false;
+        break;
     }
-    return false;
+    if (touched) {
+        for (auto& m : cat.maps) {
+            if (m.match != match) continue;
+            user_plugins::upsert(m);
+            break;
+        }
+        user_plugins::save();
+    }
+    // A step-cycle slot has no single parameter to name; its label stays local.
+    if (param < 0) return touched;
+    return setSharedParamLabel_(match, param, label) || touched;
 }
 
 // Unbind / invert / rename the HUD control `idx` on `layer`. Resolve the owning
