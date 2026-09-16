@@ -116,6 +116,7 @@
 void reasixty_syncInsertsOverlayRun();
 void reasixty_syncAssignmentHudRun();
 void reasixty_setAssignmentHud(bool on);
+bool reasixty_assignmentHudRunning();
 void reasixty_syncFocusedPanelRun();
 void reasixty_setFocusedPanel(bool on);
 void reasixty_syncModeBannerRun();
@@ -41391,6 +41392,18 @@ void onTimerBody_()
         g_hudAutoStartDone.store(true);
         reasixty_syncAssignmentHudRun();
     }
+    // ⛔ THE WINDOW CAN CLOSE WITHOUT US. Its X, its own "Close HUD" item, a
+    // terminated script: the Lua clears the RUN key and goes, and nothing ever
+    // told the extension, so g_hudEnabled stayed true. The toggle then read
+    // "on" and the next press turned it OFF — a dead press, and the HUD only
+    // came back on the second one (Frank 2026-09-16). The RUN key is the honest
+    // signal, the same one the UF8-tab block above leans on; follow it here too
+    // instead of adding a third consumer that works around the stale flag.
+    if (g_hudAutoStartDone.load() && g_hudEnabled.load()
+        && !reasixty_assignmentHudRunning())
+    {
+        reasixty_setAssignmentHud(false);
+    }
     if (g_hudToggleRequest.exchange(false)) {
         reasixty_setAssignmentHud(!g_hudEnabled.load());
     }
@@ -45505,6 +45518,12 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
 int toggleActionState(int command)
 {
     if (command <= 0) return -1;
+    // The Learn-HUD action mirrors the learn_hud_toggle builtin, and that one
+    // carries a stateOf — so without this case the two routes lit differently:
+    // a surface key bound to the builtin followed the HUD, the same thing on a
+    // REAPER toolbar never checked itself.
+    if (command == g_cmdLearnHud && g_cmdLearnHud != 0)
+        return g_hudEnabled.load() ? 1 : 0;
     for (int i = 0; i < kUf1ViewActionCount; ++i)
         if (command == g_cmdUf1View[i] && command != 0)
             return uf1ViewMode_() == kUf1ViewActions[i].view ? 1 : 0;
