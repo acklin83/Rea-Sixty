@@ -117,6 +117,10 @@ void reasixty_syncInsertsOverlayRun();
 void reasixty_syncAssignmentHudRun();
 void reasixty_setAssignmentHud(bool on);
 bool reasixty_assignmentHudRunning();
+bool reasixty_focusedPanelRunning();
+bool reasixty_modeBannerRunning();
+bool reasixty_insertsOverlayRunning();
+void reasixty_setInsertMarkers(bool on);
 void reasixty_syncFocusedPanelRun();
 void reasixty_setFocusedPanel(bool on);
 void reasixty_syncModeBannerRun();
@@ -41411,6 +41415,21 @@ void onTimerBody_()
         g_focusedPanelAutoStartDone.store(true);
         reasixty_syncFocusedPanelRun();
     }
+    // ⛔ AND ITS THREE SIBLINGS, for the same reason. Each companion owns a RUN
+    // key it clears on every close path — its own "Close" menu item, the window
+    // X or dock tab, atexit, and REAPER's task-control kill — and each one's
+    // sync only ever pushed the extension's flag OUTWARD. So the flag survived
+    // a window that did not: the next toggle press went nowhere, the key's lamp
+    // stayed lit for something that was gone, and the Settings checkbox sat
+    // ticked over an empty screen. The panel's own "Close panel" is the only
+    // close it has, since it floats with no title bar. Reconcile after the
+    // auto-start one-shot: every script writes its RUN key before its first
+    // defer, so there is no window where "not yet started" reads as "gone".
+    if (g_focusedPanelAutoStartDone.load() && g_focusedPanel.load()
+        && !reasixty_focusedPanelRunning())
+    {
+        reasixty_setFocusedPanel(false);
+    }
     if (g_focusedPanelToggleRequest.exchange(false)) {
         reasixty_setFocusedPanel(!g_focusedPanel.load());
     }
@@ -41418,8 +41437,18 @@ void onTimerBody_()
         g_modeBannerAutoStartDone.store(true);
         reasixty_syncModeBannerRun();
     }
+    if (g_modeBannerAutoStartDone.load() && g_modeBanner.load()
+        && !reasixty_modeBannerRunning())
+    {
+        reasixty_setModeBanner(false);
+    }
     if (g_modeBannerToggleRequest.exchange(false)) {
         reasixty_setModeBanner(!g_modeBanner.load());
+    }
+    if (g_overlayAutoStartDone.load() && g_insertMarkersEnabled.load()
+        && !reasixty_insertsOverlayRunning())
+    {
+        reasixty_setInsertMarkers(false);
     }
 
     // LED refresh on stateful-toggle change (Frank 2026-06-23: "Panel
@@ -45524,6 +45553,50 @@ int toggleActionState(int command)
     // REAPER toolbar never checked itself.
     if (command == g_cmdLearnHud && g_cmdLearnHud != 0)
         return g_hudEnabled.load() ? 1 : 0;
+    // ⛔ EVERY ACTION WHOSE BUILTIN HAS A stateOf BELONGS HERE. The two routes
+    // are meant to be interchangeable, and a key bound to the action lit only
+    // where somebody remembered to add the case. The predicates below are the
+    // builtins' own, copied verbatim so the two cannot say different things:
+    // grep the builtin name and you land on the same expression. Actions whose
+    // builtin has a null stateOf (jog_mode_cycle, every one-shot) stay out —
+    // returning 0 for those draws an unchecked box on a plain command.
+    if (command != 0) {
+        if (command == g_cmdUc1OutGainFader)
+            return g_uc1OutGainFaderMode.load() ? 1 : 0;
+        if (command == g_cmdMasterPinStrip1)
+            return g_masterPinSlot.load() == MasterPin::Strip1 ? 1 : 0;
+        if (command == g_cmdMasterPinStrip8)
+            return g_masterPinSlot.load() == MasterPin::Strip8 ? 1 : 0;
+        if (command == g_cmdToggleMixer)
+            return g_mixerWindow.isOpen() ? 1 : 0;
+        if (command == g_cmdFocusRecall)
+            return g_focusSetPinHolds.load() ? 1 : 0;
+        if (command == g_cmdUf1ExtenderToggle)
+            return g_uf1Extender.load() ? 1 : 0;
+        if (command == g_cmdUf1ExtenderSide)
+            return g_uf1ExtenderSide.load() == 1 ? 1 : 0;   // lit = right
+        if (command == g_cmdFavCopyOwnToggle)
+            return ((uf8::getFocusedParam().domain == uf8::Domain::BusComp)
+                        ? g_bcFavOwnSettings.load()
+                        : g_csFavOwnSettings.load()) ? 1 : 0;
+        if (command == g_cmdCsCopyOwnToggle)
+            return g_csFavOwnSettings.load() ? 1 : 0;
+        if (command == g_cmdBcCopyOwnToggle)
+            return g_bcFavOwnSettings.load() ? 1 : 0;
+        // The six named jog modes. jog_mode_cycle has no stateOf of its own —
+        // it advances, it is not a state — so it is deliberately absent.
+        const struct { int cmd; Uf1JogMode mode; } kJog[] = {
+            { g_cmdJogModePlayhead, Uf1JogMode::Playhead },
+            { g_cmdJogModeScrub,    Uf1JogMode::Scrub    },
+            { g_cmdJogModeItems,    Uf1JogMode::Items    },
+            { g_cmdJogModeEnvelope, Uf1JogMode::Envelope },
+            { g_cmdJogModeRazor,    Uf1JogMode::Razor    },
+            { g_cmdJogModeFades,    Uf1JogMode::Fades    },
+        };
+        for (const auto& j : kJog)
+            if (j.cmd != 0 && command == j.cmd)
+                return g_uf1JogMode.load() == j.mode ? 1 : 0;
+    }
     for (int i = 0; i < kUf1ViewActionCount; ++i)
         if (command == g_cmdUf1View[i] && command != 0)
             return uf1ViewMode_() == kUf1ViewActions[i].view ? 1 : 0;
