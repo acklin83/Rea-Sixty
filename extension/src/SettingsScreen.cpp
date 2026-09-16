@@ -8787,7 +8787,6 @@ bool g_autoLearnSetupPending     = false;   // armed by "Create + AutoLearn"
 bool g_autoLearnPreviewPending   = false;
 int  g_autoLearnSetupPrimary     = 1;   // 1=CS, 2=BC, 3=UF8-only
 bool g_autoLearnSetupVpots       = true;
-bool g_autoLearnSetupStrips      = false;
 bool g_autoLearnSetupParamFaders = false;  // generic params → 8 faders;
                                            // defaults on when V-Pots is off
 
@@ -9261,7 +9260,6 @@ inline int countFunctionalParams_(MediaTrack* tr, int fx)
 struct AutoLearnPlan {
     uf8::Domain slotDom     = uf8::Domain::None;  // None = no UC1 slot pass
     bool        vpotBanks   = false;              // UF8 V-Pot bank pass
-    bool        chStrips    = false;              // CH<N> fader / cut / solo pass
     bool        paramFaders = false;              // generic params → faders
 };
 
@@ -19669,7 +19667,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                         (editing->domain == uf8::Domain::ChannelStrip) ? 1 :
                         (editing->domain == uf8::Domain::BusComp)      ? 2 : 3;
                     g_autoLearnSetupVpots       = pl.vpotBanks;
-                    g_autoLearnSetupStrips      = pl.chStrips;
                     g_autoLearnSetupParamFaders = pl.paramFaders;
                 }
                 g_autoLearnSetupOpen   = true;
@@ -19706,7 +19703,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     (editing->domain == uf8::Domain::ChannelStrip) ? 1 :
                     (editing->domain == uf8::Domain::BusComp)      ? 2 : 3;
                 g_autoLearnSetupVpots       = pl.vpotBanks;
-                g_autoLearnSetupStrips      = pl.chStrips;
                 g_autoLearnSetupParamFaders = pl.paramFaders;
             }
             g_autoLearnSetupOpen   = true;
@@ -19964,8 +19960,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         ImGui_Spacing(ctx);
         ImGui_Checkbox(ctx, "Also fill UF8 V-Pot banks##als_vp",
                        &g_autoLearnSetupVpots);
-        ImGui_Checkbox(ctx, "Also fill UF8 Faders + Mute/Solo/Sel (CH<N> names)##als_st",
-                       &g_autoLearnSetupStrips);
         ImGui_Checkbox(ctx, "Map all params to UF8 Faders##als_pf",
                        &g_autoLearnSetupParamFaders);
         ImGui_Spacing(ctx);
@@ -19980,9 +19974,27 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 (g_autoLearnSetupPrimary == 1) ? uf8::Domain::ChannelStrip
               : (g_autoLearnSetupPrimary == 2) ? uf8::Domain::BusComp
               :                                   uf8::Domain::None;
+            // ⛔ BY VALUE. autoLearnSource_ can hand back a reference into the
+            // map's own paramSnapshot, and the upsert below moves the catalog
+            // out from under it. One source for both panels, same function the
+            // Learn-HUD calls.
+            std::vector<uf8::UserParamInfo> alSrcStore;
+            const std::vector<uf8::UserParamInfo> alSrc =
+                autoLearnSource_(editing, fx, alSrcStore);
+            // ⛔ THE CH<N> PASS ALWAYS RUNS, exactly as it does in the Learn-HUD.
+            // On a channel matrix it IS the layout, on anything else it comes
+            // back empty, so there was never a question to ask — and it used to
+            // be a checkbox that could not even come up ticked, because the plan
+            // field seeding it was never assigned. Half of Frank's Delta 16 (the
+            // faders and Cut/Solo/Sel; the V-Pot pass carries the other half)
+            // therefore stayed unmapped here while the HUD proposed it. Built
+            // before the domain switch because whether it found anything decides
+            // whether the map needs a UF8 layer at all.
+            g_autoLearnUf8Strips = uf8::autolearn::suggestUf8Strips(
+                alSrc, /* faderBankCount */ 2);
             const bool wantUf8 = g_autoLearnSetupVpots
-                              || g_autoLearnSetupStrips
                               || g_autoLearnSetupParamFaders
+                              || !g_autoLearnUf8Strips.empty()
                               || (newDom == uf8::Domain::None);
             if (editing->domain != newDom || editing->uf8Mode != wantUf8) {
                 UserPluginMap copy = *editing;
@@ -20017,10 +20029,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             //   - engine vst3Param/paramName/conf when matched, else
             //     vst3Param=-1, conf<0 (rendered as "—" / unmapped)
             //   - existing customLabel from editing->slots if present
-            // One source for both panels — see autoLearnSource_.
-            std::vector<uf8::UserParamInfo> alSrcStore;
-            const std::vector<uf8::UserParamInfo>& alSrc =
-                autoLearnSource_(editing, fx, alSrcStore);
             if (newDom != uf8::Domain::None) {
                 auto engineHits = uf8::autolearn::suggestSlots(alSrc, newDom);
                 std::unordered_map<int, const uf8::autolearn::Suggestion*>
@@ -20089,12 +20097,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     alSrc, /* faderBankCount */ 1);
             } else {
                 g_autoLearnUf8.clear();
-            }
-            if (g_autoLearnSetupStrips) {
-                g_autoLearnUf8Strips = uf8::autolearn::suggestUf8Strips(
-                    alSrc, /* faderBankCount */ 2);
-            } else {
-                g_autoLearnUf8Strips.clear();
             }
             // Generic params → faders. Appended to the same strip list so
             // it shares the preview table + apply path. Skip any fader
@@ -22485,7 +22487,6 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 g_autoLearnSetupPrimary = g_newPrimaryMode;
                 g_autoLearnSetupVpots   = (g_newPrimaryMode == 3)
                                           ? true : g_newUf8Mode;
-                g_autoLearnSetupStrips  = false;
                 g_autoLearnSetupParamFaders = !g_autoLearnSetupVpots;
                 g_autoLearnSetupPending = true;
             }
