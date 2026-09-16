@@ -39841,20 +39841,25 @@ void pushUf8GlobalLeds()
     // real cell hasn't been discovered (0x5C is suspect).
 
     // Plugin button: bright while ANY bound slot's stateful action is
-    // active — covers Plain → ssl_strip_mode_toggle (g_pluginFaderMode)
-    // AND Shift → uf8_plugin_mode_toggle (g_uf8PluginMode) together, so
-    // toggling either modifier-slot binding keeps the LED lit after the
-    // modifier key is released. Falls back to the legacy hardcoded
-    // mode-OR only when the button has NO binding at all — otherwise
-    // the unconditional fallback overrode the binding's stateOf, e.g.
-    // PluginBtn bound to ssl_strip_mode_toggle still lit on UF8 Plugin
-    // Mode entry because of the OR (Frank 2026-05-16: "LED Plugin
-    // leuchtet bei UF8 Plugin Mode obwohl auf SSL Strip Mode gemappt").
+    // active — boundActionIsActive_ covers Plain → ssl_strip_mode_toggle
+    // (g_pluginFaderMode) AND Shift → uf8_plugin_mode_toggle
+    // (g_uf8PluginMode) together, so toggling either modifier-slot binding
+    // keeps the LED lit after the modifier key is released. Reading the
+    // binding rather than the mode flags is what stopped PluginBtn bound to
+    // ssl_strip_mode_toggle from lighting on UF8 Plug-in Mode entry (Frank
+    // 2026-05-16: "LED Plugin leuchtet bei UF8 Plugin Mode obwohl auf SSL
+    // Strip Mode gemappt").
+    //
+    // ⛔ NO mode-OR fallback, and NO raw layer. Until 2026-09-16 the cell was
+    // gated on hasBinding(getQuickLayer()) and then measured with
+    // boundActionIsActive_, which asks layerForButton — under "Layers switch
+    // Quicks only" those are two different layers, the same trap the Quick
+    // lamps hit on 2026-09-08. And where that gate found nothing it lit the
+    // cell from g_pluginFaderMode || g_uf8PluginMode, so a PLUGIN key cleared
+    // to Do-nothing still lit whenever either mode was on. An unbound key
+    // shows nothing.
     const bool pluginActive =
-        uf8::bindings::hasBinding(activeLayer,
-                                  uf8::bindings::ButtonId::PluginBtn)
-            ? boundActionIsActive_(uf8::bindings::ButtonId::PluginBtn)
-            : (g_pluginFaderMode.load() || g_uf8PluginMode.load());
+        boundActionIsActive_(uf8::bindings::ButtonId::PluginBtn);
     const int pluginLit = pluginActive ? 1 : 0;
 
     // Bindings generation — bumped on any setBinding/clearBinding/load/
