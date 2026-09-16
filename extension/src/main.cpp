@@ -35609,6 +35609,19 @@ void pushZonesForVisibleSlots()
         }
     }
 
+    // ⛔ THE COLOUR BAR'S IDEA OF "THE FOCUSED STRIP" IS NOT THE UC1's POINTER.
+    // Two branches of the CS-type chain below used to ask
+    // `g_uc1_surface && tr == g_uc1_surface->focusedTrack()` directly, so on a
+    // rig without a UC1 attached they could never fire: cycling the FX cursor
+    // onto an unmapped plug-in left the cell showing the mapped strip's name
+    // instead (Frank 2026-09-16: "konnte ein ungemapptes Plugin wählen, aber es
+    // erscheint nicht auf dem UF8 display" — and then, decisively, "mit UC1 dran
+    // erscheint das Plugin"). activeFocusTrack_ is the resolver with a fallback
+    // chain (UC1 focus → UF1 focus → selection), the same class of fix as
+    // dynBankContextTrack_ earlier the same day. Hoisted out of the loop: it is
+    // one answer per tick, not one per strip.
+    MediaTrack* const barFocusTrack = activeFocusTrack_();
+
     for (int s = 0; s < 8; ++s) {
         const int realSlot = stripToVisibleSlot(s, bankOffset);
         MediaTrack* tr = visibleTrackAt(realSlot);
@@ -36870,8 +36883,7 @@ void pushZonesForVisibleSlots()
                  || g_encoderMode.load() == EncoderMode::CsCycle
                  || g_encoderMode.load() == EncoderMode::BcCycle
                  || g_encoderMode.load() == EncoderMode::FavCycle)
-                && g_uc1_surface
-                && tr == g_uc1_surface->focusedTrack()) {
+                && tr == barFocusTrack) {
             // Channel-Encoder cycle mode counterpart of the V-Pot Sel-Mode
             // branch above. Scope is focused-track only: applyFxCycle_ /
             // applyInstanceCycle_ move the cursor on the focused track,
@@ -36919,8 +36931,7 @@ void pushZonesForVisibleSlots()
             }
             // No "-" placeholder — leave empty when no FX so the LCD
             // slot reads as "nothing here" rather than a dash.
-        } else if (g_uc1_surface
-                && tr == g_uc1_surface->focusedTrack()
+        } else if (tr == barFocusTrack
                 && stripInstanceFxRaw_(tr) >= 0
                 && (!map || stripInstanceFxRaw_(tr) != mapFxIdx))
         {
