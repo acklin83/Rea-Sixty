@@ -39411,13 +39411,23 @@ ResolvedLed resolveLed_(uf8::Uf8GlobalLed cell,
     // @ Dim default), and a freshly-customised button looked dark on
     // hardware regardless of what the user picked.
     //
+    // ⛔ ONLY when the user asked for it. "Show LED even when no action is
+    // assigned" (bd.ledShowWhenEmpty) is the switch for exactly this, and it
+    // ships OFF — the soft-keys have honoured it since 2026-08-18, this
+    // resolver never read it, so a key cleared to Do-nothing sat bright at
+    // its Active colour and no tick in the editor could talk it down (Frank
+    // 2026-09-16: "hab button CHANNEL ge-cleared, LED leuchtet bright
+    // weiss"). A per-slot LED override counts as asking too: setting a
+    // colour on the empty slot itself is the same intent.
+    //
     // Gated to the Plain slot — empty modifier slots never force-show
     // their LedOverride (Frank 2026-05-17: holding Shift on a button
     // with no Shift action shouldn't repaint the LED).
     bool useActive = active;
     if (!useActive
         && mod == uf8::bindings::Modifier::Plain
-        && uf8::bindings::slotIsEmpty(slot))
+        && uf8::bindings::slotIsEmpty(slot)
+        && (bd.ledShowWhenEmpty || slot.led.hasActive))
     {
         useActive = true;
     }
