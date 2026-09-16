@@ -29310,6 +29310,54 @@ static std::string uf1ParamDisplayName_(MediaTrack* tr, int fx, int p,
     return out;
 }
 
+// The SHARED per-parameter name (v13) for a strip's slot, or empty. Empty also
+// when the slot carries its own customLabel: that is a deliberate per-control
+// override and still wins, which is exactly the precedence the UC1 applies
+// (UC1Surface.cpp, "A per-layer customLabel is a deliberate override and still
+// wins; otherwise the shared name beats the canonical slot.name"). The painters
+// are handed a LinkSlot whose `name` has ALREADY folded the customLabel in
+// (UserPluginCatalog.cpp builds the view cache that way), so they cannot make
+// that distinction themselves — and that is why the UF8 value line was the one
+// readout of the three a rename never reached (the sweep, 2026-09-16).
+// ⚠ Cached on the catalog generation, like uf1ParamDisplayName_ next door: this
+// runs per strip, per tick, and the lookups behind it walk the catalog.
+static std::string sharedSlotLabel_(MediaTrack* tr, int fx, int linkIdx,
+                                    int vst3Param)
+{
+    if (!tr || fx < 0 || linkIdx < 0 || vst3Param < 0) return {};
+    struct Key {
+        MediaTrack* tr; int fx; int li;
+        bool operator<(const Key& o) const {
+            if (tr != o.tr) return tr < o.tr;
+            if (fx != o.fx) return fx < o.fx;
+            return li < o.li;
+        }
+    };
+    static std::map<Key, std::string> sCache;
+    static int sGen = -1;
+    const int gen = uf8::user_plugins::generation();
+    if (gen != sGen) { sGen = gen; sCache.clear(); }
+    const Key k{tr, fx, linkIdx};
+    if (auto it = sCache.find(k); it != sCache.end()) return it->second;
+
+    std::string out;
+    char nm[512] = {0};
+    if (uf8::fxIdentityName(tr, fx, nm, sizeof(nm))) {
+        bool ownLabel = false;
+        if (const auto* um = uf8::user_plugins::lookupOwnedByName(nm)) {
+            for (const auto& us : um->slots)
+                if (us.linkIdx == linkIdx) {
+                    ownLabel = !us.customLabel.empty();
+                    break;
+                }
+        }
+        if (!ownLabel) out = uf8::user_plugins::paramLabelFor(nm, vst3Param);
+    }
+    if (sCache.size() > 512) sCache.clear();
+    sCache.emplace(k, out);
+    return out;
+}
+
 // The explicit UF1 map for whatever plug-in sits at (tr,fx), REGARDLESS of its
 // domain. Deliberately not gated on uf1IsLearnedCsBc_: a UF1-only map (domain
 // None) has no CS/BC domain, and gating on one made its map unreadable — the
@@ -37990,6 +38038,13 @@ void pushZonesForVisibleSlots()
                                      qbuf, sizeof(qbuf));
                 if (qbuf[0]) label = qbuf;
             }
+            // A shared rename beats both of the above — one rename is meant to
+            // show on all three panels, and this line was the one that never
+            // got it (see sharedSlotLabel_). It returns empty when the slot has
+            // its own label, so an override still stands.
+            const std::string shared =
+                sharedSlotLabel_(tr, fxIdx, slot->linkIdx, slot->vst3Param);
+            if (!shared.empty()) label = shared.c_str();
             valLine = composeValueLine(label, valStr);
         } else if (focused.slotIdx != -1 && !isVPotPanFocus(focused)) {
             // Param is focused but unavailable on this strip's plug-in
@@ -38037,9 +38092,19 @@ void pushZonesForVisibleSlots()
         if (stickyGloballyEnabled_() && !routedVpot && !routedFader && tr) {
             int sfx = -1, sparam = -1; bool stg = false;
             if (stickyResolveOnTrack_(tr, &sfx, &sparam, &stg)) {
+                // The user's own name for the parameter wins, exactly as it
+                // does on the UF1's copy of this readout (fixed there
+                // 2026-08-10) and everywhere else this painter names a
+                // parameter. This one line still asked the plug-in, so a
+                // renamed param read "*Tresh" here and "*Threshold" on the
+                // panel beside it (the sweep, 2026-09-16).
                 char pn[64] = {0}, vb[64] = {0};
-                TrackFX_GetParamName(tr, sfx, sparam, pn, sizeof(pn));
-                std::string nm(pn);
+                std::string nm = uf1ParamDisplayName_(tr, sfx, sparam,
+                                                      std::string());
+                if (nm.empty()) {
+                    TrackFX_GetParamName(tr, sfx, sparam, pn, sizeof(pn));
+                    nm = pn;
+                }
                 if (nm.size() > 9) nm.resize(9);
                 nm.insert(nm.begin(), '*');           // sticky marker
                 std::string val;

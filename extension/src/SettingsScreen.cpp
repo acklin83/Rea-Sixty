@@ -10834,6 +10834,12 @@ void bindUf8_(int kind, int strip, int bank, int vst3Param, bool asToggle = fals
     mutateUf8_([&](uf8::UserUf8Map& u) {
         auto p = uf8EditFieldPtrs_(u, kind, strip, bank);
         if (p.param) *p.param = vst3Param;
+        // A fresh learn hands the cell back plain, invert off — the same reset
+        // hudUf8BindMatch_ does and the same one bindSlot_ does for the UC1
+        // slots. This was the one learn path of the four that kept it, so a
+        // cell you had reversed ran the NEW parameter backwards, on the fader,
+        // the knob, or the Cut/Solo/Sel lamp (the sweep, 2026-09-16).
+        if (p.invert) *p.invert = false;
         // V-Pot PRESS during learn → Toggle (push flips 0↔1). Settings kind
         // encoding: 1 = VPot, 2 = TopSoftKey (both bank-scoped) — matches
         // unbindUf8_. p.param being set means the indices are validated.
