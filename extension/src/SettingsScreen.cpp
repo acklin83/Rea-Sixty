@@ -9260,6 +9260,7 @@ inline int countFunctionalParams_(MediaTrack* tr, int fx)
 struct AutoLearnPlan {
     uf8::Domain slotDom     = uf8::Domain::None;  // None = no UC1 slot pass
     bool        vpotBanks   = false;              // UF8 V-Pot bank pass
+    bool        chStrips    = false;              // CH<N> fader / cut / solo pass
     bool        paramFaders = false;              // generic params → faders
 };
 
@@ -9268,13 +9269,32 @@ AutoLearnPlan autoLearnPlan_(const UserPluginMap* m, int tab)
     AutoLearnPlan pl;
     const bool virginPlugin = (!m || m->paramSnapshot.empty());
     if (virginPlugin) {
+        // ⛔ AND THE TAB DECIDES HERE TOO, all four of them. This read the tab
+        // for Bus Comp and handed back the UC1 channel strip for everything
+        // else, so an unmapped plug-in proposed UC1 slots on the UF8 tab and
+        // kept the V-Pot pass switched off: Frank's Delta 16, whose map he had
+        // just deleted, showed the same "Pan 1 → Pan" list on both tabs and
+        // changing tab changed nothing (2026-09-16). The old note said a UF8
+        // layout needs a map that says it wants one, and standing on the UF8
+        // tab IS that statement — applying a row creates the map, which is the
+        // same bootstrap the CS tab has had since 2026-09-03.
+        if (tab == 2 || tab == 3) {
+            pl.slotDom     = uf8::Domain::None;
+            pl.vpotBanks   = (tab == 2);
+            pl.chStrips    = (tab == 2);
+            pl.paramFaders = (tab == 2);
+            return pl;
+        }
         pl.slotDom = (tab == 1) ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip;
         return pl;                       // UC1 slots only — see above
     }
     if (tab < 0) {
-        // The page: the map says what it is.
+        // The page: the map says what it is. No tabs here, so the CH<N> pass
+        // has nothing to contradict and selects itself — on a channel matrix it
+        // is the layout, on anything else it comes back empty.
         pl.slotDom     = m->domain;
         pl.vpotBanks   = m->uf8Mode;
+        pl.chStrips    = true;
         pl.paramFaders = !m->uf8Mode;
         return pl;
     }
@@ -9282,6 +9302,7 @@ AutoLearnPlan autoLearnPlan_(const UserPluginMap* m, int tab)
     const bool deviceTab = (tab == 2 || tab == 3);
     pl.slotDom     = deviceTab ? uf8::Domain::None : m->domain;
     pl.vpotBanks   = (tab == 2);
+    pl.chStrips    = (tab == 2);
     pl.paramFaders = (tab == 2);         // fallback only, see the caller
     return pl;
 }
@@ -15711,10 +15732,16 @@ static std::string hudBuildAutoLearnUncached_(void* csTrV, int csFx, int mode)
     // physical fader.
     {
         using StKind = autolearn::Uf8StripSuggestion::Kind;
-        // The CH<N> pass always runs: on a channel MATRIX it is the whole point
-        // (it returns the matrix layout), and on anything else it finds nothing,
-        // which costs one walk over the names.
-        auto strips = autolearn::suggestUf8Strips(src, kUserUf8FaderBankCount);
+        // ⛔ AND THIS PASS OBEYS THE TAB. It used to run on every tab, on the
+        // grounds that it finds nothing outside a channel matrix — but ON one it
+        // finds sixty-four rows, and those landed in the Channel Strip tab's
+        // list next to five UC1 proposals (Frank 2026-09-16, a Delta 16 on the
+        // CS tab: "69 proposals"). The UF8 passes belong to the UF8 tab, this
+        // one included. The FX-Learn page has no tabs, so there the plan still
+        // says yes.
+        auto strips = plan.chStrips
+            ? autolearn::suggestUf8Strips(src, kUserUf8FaderBankCount)
+            : std::vector<autolearn::Uf8StripSuggestion>{};
         bool takenFader[2][8] = {};
         for (const auto& sg : strips)
             if (sg.kind == StKind::Fader && sg.faderBank >= 0 && sg.faderBank < 2
@@ -19981,17 +20008,19 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             std::vector<uf8::UserParamInfo> alSrcStore;
             const std::vector<uf8::UserParamInfo> alSrc =
                 autoLearnSource_(editing, fx, alSrcStore);
-            // ⛔ THE CH<N> PASS ALWAYS RUNS, exactly as it does in the Learn-HUD.
-            // On a channel matrix it IS the layout, on anything else it comes
-            // back empty, so there was never a question to ask — and it used to
-            // be a checkbox that could not even come up ticked, because the plan
-            // field seeding it was never assigned. Half of Frank's Delta 16 (the
+            // ⛔ THE CH<N> PASS IS NOT A QUESTION. On a channel matrix it IS
+            // the layout, on anything else it comes back empty, so it used to be
+            // a checkbox that could not even come up ticked: the plan field
+            // seeding it was never assigned. Half of Frank's Delta 16 (the
             // faders and Cut/Solo/Sel; the V-Pot pass carries the other half)
-            // therefore stayed unmapped here while the HUD proposed it. Built
-            // before the domain switch because whether it found anything decides
-            // whether the map needs a UF8 layer at all.
-            g_autoLearnUf8Strips = uf8::autolearn::suggestUf8Strips(
-                alSrc, /* faderBankCount */ 2);
+            // stayed unmapped here while the HUD proposed it. Through the shared
+            // plan, so the HUD's tab rule and the page's "no tabs here" are one
+            // decision in one place. Built before the domain switch because
+            // whether it found anything decides whether the map needs a UF8
+            // layer at all.
+            g_autoLearnUf8Strips = autoLearnPlan_(editing, -1).chStrips
+                ? uf8::autolearn::suggestUf8Strips(alSrc, /* faderBankCount */ 2)
+                : std::vector<uf8::autolearn::Uf8StripSuggestion>{};
             const bool wantUf8 = g_autoLearnSetupVpots
                               || g_autoLearnSetupParamFaders
                               || !g_autoLearnUf8Strips.empty()
