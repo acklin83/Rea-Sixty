@@ -17327,6 +17327,16 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
                     const auto& bs = m.uf8.banks.banks[g_uf8EditingFaderBank][bank][ctrl.strip];
                     curMode  = bs.vpotMode;
                     curLabel = bs.label;
+                    // ⛔ READ WHAT THE WRITER WROTE. setUf8Label_ stores the
+                    // SHARED per-parameter name (v13) and CLEARS the cell's own
+                    // label, so reading bs.label alone showed an empty field the
+                    // moment the user pressed Enter — the name was saved and on
+                    // the surface, and the box he had just typed into went blank
+                    // (Frank 2026-09-16, mapping Nolly X). The cell label is the
+                    // fallback for an unbound slot, which is the only case
+                    // setUf8Label_ still writes it in.
+                    if (curLabel.empty())
+                        curLabel = sharedParamLabel_(g_editingMatch, bs.vst3Param);
                     curDeflt = bs.defaultNorm;
                     break;
                 }
