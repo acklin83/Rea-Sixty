@@ -105,6 +105,10 @@ bool reasixty_dynBankPageControl(int control, int delta);
 int reasixty_stripInstanceActiveFx(MediaTrack* tr);
 std::string reasixty_fxCycleDisplayName(MediaTrack* tr, int fxIdx);
 void reasixty_toggleMixerWindow();
+// Hold the global focused param still while a gesture writes SEVERAL params in
+// a row — otherwise chaseLastTouchedFx focuses whichever was written last, which
+// is write order and not the user's choice.
+void reasixty_lockFocusForOwnWrite(int ms);
 void reasixty_toggleSslStripMode();   // the ssl_strip_mode_toggle builtin
 bool reasixty_sslStripModeOn();
 bool reasixty_grAnyFx();   // GR-source toggle (Settings → Devices → Metering)
@@ -1443,6 +1447,13 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
                 }
             }
         };
+        // ⛔ FIVE WRITES, NONE OF THEM A CHOICE OF PARAMETER. The user turned
+        // ONE encoder to pick a routing order; without this the last call wins
+        // GetLastTouchedFX and the global focus lands on "External S/C", which
+        // the UF8's eight V-Pots read — so every strip jumped onto a parameter
+        // nobody reached for (the sweep, 2026-09-16). 400 ms, the same window
+        // the Sticky-Pot writes use, comfortably covering a continuous turn.
+        reasixty_lockFocusForOwnWrite(400);
         setFlag("FiltersToInput", p.filtIn);
         setFlag("FiltersToSC",    p.filtSC);
         setFlag("EqToSC",         p.eqSC);

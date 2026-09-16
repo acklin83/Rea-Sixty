@@ -19424,6 +19424,14 @@ std::atomic<int> g_stickyCaptureAnnounce{0};
 // would drag every OTHER strip's V-Pot onto the equivalent slot). Same pattern as
 // g_dynFxFocusLockUntilMs. Sticky is a per-track pin, deliberately NOT the focus.
 std::atomic<int64_t> g_stickyFocusLockUntilMs{0};
+// ⛔ A WRITE WE MADE THAT THE USER DID NOT REACH FOR. Some gestures set SEVERAL
+// parameters at once — the UC1's Routing-preset encoder writes five CS flags per
+// detent — and every one of them lands in GetLastTouchedFX, so chase focuses
+// whichever happened to be written LAST. That is write order, not a choice: the
+// UF8's eight V-Pots all jumped to "External S/C" because it is the fifth call
+// (the sweep, 2026-09-16). Same family as the Sticky-Pot lock above and the
+// Strip-Mode pan guard in chase; set this around any such burst.
+std::atomic<int64_t> g_ownWriteFocusLockUntilMs{0};
 
 // Pins eligible to drive/render at all (independent of the individual strip):
 // active, and not inside a mode that owns the whole V-Pot layer.
@@ -38310,9 +38318,16 @@ void pushZonesForVisibleSlots()
                 vpotMode[s] = 0x01;  // FLIP / FLIP+PAN: V-Pot = volume (unipolar)
             } else if (!slot && focused.slotIdx != -1
                        && !isVPotPanFocus(focused)
-                       && !g_forcePan.load()
-                       && !g_pluginFaderMode.load()
-                       && !g_uf8PluginMode.load()) {
+                       && !g_forcePan.load()) {
+                // ⛔ THE TWO MODE FLAGS USED TO EXCLUDE THEMSELVES HERE, and the
+                // position chain does not exclude them: its blank branch sits
+                // ABOVE both the Strip-Mode pan branch and (for a strip with no
+                // user map) the UF8 user bank. So in Strip Mode a strip whose
+                // track lacks the focused param sent the collapsed marker under
+                // mode 0x01, and 0x8000 renders as the LEFT EDGE there — a false
+                // "hard counter-clockwise" on every non-CS track in the bank
+                // (the sweep, 2026-09-16). The earlier branches that genuinely
+                // own those modes have already continued by this point.
                 // A param is focused but doesn't resolve on this strip:
                 // synthetic toggles (Phase / A/B / HQ) that aren't VST3
                 // params, or a continuous param this strip's plug-in
@@ -38442,6 +38457,13 @@ void chaseLastTouchedFx()
     // pin never becomes the GLOBAL focus — otherwise every other strip's V-Pot
     // would chase onto the equivalent slot. Sticky is a per-track pin, not focus.
     if (nowMs_() < g_stickyFocusLockUntilMs.load()) {
+        lastTr = trWord; lastFx = fxWord; lastParam = paramIdx;
+        return;
+    }
+    // Multi-param bursts of our own (see g_ownWriteFocusLockUntilMs). Absorbed
+    // the same way: update the dedup so the burst's last tuple reads
+    // "unchanged" once the lock lifts, and leave the focus where the user put it.
+    if (nowMs_() < g_ownWriteFocusLockUntilMs.load()) {
         lastTr = trWord; lastFx = fxWord; lastParam = paramIdx;
         return;
     }
@@ -45683,47 +45705,54 @@ int toggleActionState(int command)
         return g_hudEnabled.load() ? 1 : 0;
     // ⛔ EVERY ACTION WHOSE BUILTIN HAS A stateOf BELONGS HERE. The two routes
     // are meant to be interchangeable, and a key bound to the action lit only
-    // where somebody remembered to add the case. The predicates below are the
-    // builtins' own, copied verbatim so the two cannot say different things:
-    // grep the builtin name and you land on the same expression. Actions whose
-    // builtin has a null stateOf (jog_mode_cycle, every one-shot) stay out —
-    // returning 0 for those draws an unchecked box on a plain command.
+    // where somebody remembered to add a case — so the table below names the
+    // BUILTIN and asks it, instead of repeating its predicate. Copied
+    // predicates are what this whole family of bugs is made of; asking the one
+    // that already exists means the two routes cannot say different things even
+    // if one of them changes. Actions whose builtin has no stateOf (every
+    // one-shot, jog_mode_cycle) stay out: returning 0 for those would draw an
+    // unchecked box beside a plain command.
+    // ⚠ A few of these predicates read the FX chain (the favourite switches ask
+    // which strip is on the focused track). REAPER calls this hook on the main
+    // thread, so that is legal — but it is the reason this function used to say
+    // "atomics only", and anything added here inherits that caution.
     if (command != 0) {
-        if (command == g_cmdUc1OutGainFader)
-            return g_uc1OutGainFaderMode.load() ? 1 : 0;
-        if (command == g_cmdMasterPinStrip1)
-            return g_masterPinSlot.load() == MasterPin::Strip1 ? 1 : 0;
-        if (command == g_cmdMasterPinStrip8)
-            return g_masterPinSlot.load() == MasterPin::Strip8 ? 1 : 0;
-        if (command == g_cmdToggleMixer)
-            return g_mixerWindow.isOpen() ? 1 : 0;
-        if (command == g_cmdFocusRecall)
-            return g_focusSetPinHolds.load() ? 1 : 0;
-        if (command == g_cmdUf1ExtenderToggle)
-            return g_uf1Extender.load() ? 1 : 0;
-        if (command == g_cmdUf1ExtenderSide)
-            return g_uf1ExtenderSide.load() == 1 ? 1 : 0;   // lit = right
-        if (command == g_cmdFavCopyOwnToggle)
-            return ((uf8::getFocusedParam().domain == uf8::Domain::BusComp)
-                        ? g_bcFavOwnSettings.load()
-                        : g_csFavOwnSettings.load()) ? 1 : 0;
-        if (command == g_cmdCsCopyOwnToggle)
-            return g_csFavOwnSettings.load() ? 1 : 0;
-        if (command == g_cmdBcCopyOwnToggle)
-            return g_bcFavOwnSettings.load() ? 1 : 0;
-        // The six named jog modes. jog_mode_cycle has no stateOf of its own —
-        // it advances, it is not a state — so it is deliberately absent.
-        const struct { int cmd; Uf1JogMode mode; } kJog[] = {
-            { g_cmdJogModePlayhead, Uf1JogMode::Playhead },
-            { g_cmdJogModeScrub,    Uf1JogMode::Scrub    },
-            { g_cmdJogModeItems,    Uf1JogMode::Items    },
-            { g_cmdJogModeEnvelope, Uf1JogMode::Envelope },
-            { g_cmdJogModeRazor,    Uf1JogMode::Razor    },
-            { g_cmdJogModeFades,    Uf1JogMode::Fades    },
+        struct ActBuiltin { int cmd; const char* builtin; };
+        const ActBuiltin kStateful[] = {
+            { g_cmdUc1OutGainFader,   "uc1_outgain_fader_toggle" },
+            { g_cmdMasterPinStrip1,   "master_pin_strip1"        },
+            { g_cmdMasterPinStrip8,   "master_pin_strip8"        },
+            { g_cmdToggleMixer,       "mixer_toggle"             },
+            { g_cmdFocusRecall,       "focus_set_pin"            },
+            { g_cmdUf1ExtenderToggle, "uf1_extender"             },
+            { g_cmdUf1ExtenderSide,   "uf1_extender_side"        },
+            { g_cmdFavCopyOwnToggle,  "fav_copy_own_toggle"      },
+            { g_cmdCsCopyOwnToggle,   "cs_copy_own_toggle"       },
+            { g_cmdBcCopyOwnToggle,   "bc_copy_own_toggle"       },
+            { g_cmdJogModePlayhead,   "jog_mode_playhead"        },
+            { g_cmdJogModeScrub,      "jog_mode_scrub"           },
+            { g_cmdJogModeItems,      "jog_mode_items"           },
+            { g_cmdJogModeEnvelope,   "jog_mode_envelope"        },
+            { g_cmdJogModeRazor,      "jog_mode_razor"           },
+            { g_cmdJogModeFades,      "jog_mode_fades"           },
         };
-        for (const auto& j : kJog)
-            if (j.cmd != 0 && command == j.cmd)
-                return g_uf1JogMode.load() == j.mode ? 1 : 0;
+        for (const auto& a : kStateful)
+            if (a.cmd != 0 && command == a.cmd)
+                return uf8::bindings::builtinStateOf(a.builtin, 0) ? 1 : 0;
+        // The favourite switches: exactly one of each row of eight is lit, which
+        // is the whole readout — it is how you see which strip is on the track
+        // without looking at the plug-in (Frank 2026-09-16).
+        char nm[24];
+        for (int i = 0; i < 8; ++i) {
+            if (g_cmdCsSwitch[i] != 0 && command == g_cmdCsSwitch[i]) {
+                std::snprintf(nm, sizeof(nm), "switch_cs_%d", i + 1);
+                return uf8::bindings::builtinStateOf(nm, 0) ? 1 : 0;
+            }
+            if (g_cmdBcSwitch[i] != 0 && command == g_cmdBcSwitch[i]) {
+                std::snprintf(nm, sizeof(nm), "switch_bc_%d", i + 1);
+                return uf8::bindings::builtinStateOf(nm, 0) ? 1 : 0;
+            }
+        }
     }
     for (int i = 0; i < kUf1ViewActionCount; ++i)
         if (command == g_cmdUf1View[i] && command != 0)
@@ -49590,6 +49619,14 @@ void reasixty_setShowOnlySelected(bool on)
 // Called from UC1Surface after any TrackFX_SetParamNormalized so the
 // strip(s) displaying `tr` switch off the "Folder" label and show the
 // actual parameter for kFolderRevealMs. No-op when folder mode is off.
+// Hold the focused param still while a gesture of ours writes several
+// parameters in a row. See g_ownWriteFocusLockUntilMs. Called from UC1Surface.
+void reasixty_lockFocusForOwnWrite(int ms)
+{
+    if (ms < 0) ms = 0;
+    g_ownWriteFocusLockUntilMs.store(nowMs_() + ms);
+}
+
 void reasixty_bumpFolderReveal(MediaTrack* tr)
 {
     if (!tr || !g_folderMode.load()) return;
