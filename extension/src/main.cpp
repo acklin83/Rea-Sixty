@@ -17349,9 +17349,17 @@ void runReaperActionOnTrack_(int cmdId, MediaTrack* tr);   // defined just below
 // echoed a gain for this track), which is the caller's cue to keep its normal
 // bar. Shared by the UF8 strips and the UF1 channel — a UF8 strip and the UF1
 // channel are the same strip, so the bar has to mean the same thing on both.
-double recRmeGainBarNorm_(MediaTrack* tr)
+// ⛔ `knobDrivesGain` IS NOT OPTIONAL, and it is not the same answer on both
+// surfaces: the UF8's V-Pot rotation is opt-in (g_recVpotRotateGain, default
+// OFF) while the UF1's knob has its own switch (g_recUf1RotateGain, default on).
+// Without it the bar drew gain whenever the MODE ran, so with the UF8 toggle at
+// its default the knob panned the track while the ring above it showed a gain
+// value that did not move — and the mode register went with it (the sweep,
+// 2026-09-16). A parameter rather than a read inside, so a caller cannot forget
+// which surface's switch applies to it.
+double recRmeGainBarNorm_(MediaTrack* tr, bool knobDrivesGain)
 {
-    if (!tr || !recRmeActive_()) return -1.0;
+    if (!tr || !knobDrivesGain || !recRmeActive_()) return -1.0;
     const std::string g = readTrackPExt_(tr, "P_EXT:totalreaper_gain");
     if (g.empty()) return -1.0;
     double db = std::atof(g.c_str());
@@ -31228,7 +31236,8 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
                                   &rmeLabel, &rmeValue)) {
             valLine = uf1ValueLine(rmeLabel, rmeValue);
         }
-        if (const double gNorm = recRmeGainBarNorm_(tr); gNorm >= 0.0) {
+        if (const double gNorm = recRmeGainBarNorm_(tr, g_recUf1RotateGain.load());
+            gNorm >= 0.0) {
             barPos    = static_cast<int>(std::lround(gNorm * 100.0));
             barCentre = 0x00;   // unipolar, no centre detent
         }
@@ -37360,7 +37369,8 @@ void pushZonesForVisibleSlots()
         // no longer touching (Frank 2026-08-19). Unipolar, full scale +75 dB, and
         // the mode register below agrees. No gain echoed yet → fall through and
         // keep the normal bar.
-        if (const double gNorm = recRmeGainBarNorm_(tr); gNorm >= 0.0) {
+        if (const double gNorm = recRmeGainBarNorm_(tr, g_recVpotRotateGain.load());
+            gNorm >= 0.0) {
             vpotBar[s] = vpotPosFromUnipolar(gNorm);
         } else if (routedFader) {
             // Fader carries the route's volume → V-Pot is free for pan.
@@ -38217,6 +38227,21 @@ void pushZonesForVisibleSlots()
                 else                          vpotMode[s] = 0x01;
                 continue;
             }
+            MediaTrack* tr = visibleTrackAt(realSlot);
+            if (MediaTrack* mp = masterPinTrack_(s)) tr = mp;  // Master-pin
+            // ⛔ REC + RME FIRST, because that is where the POSITION chain puts
+            // it. Preamp gain is a unipolar sweep, and this branch used to sit
+            // BELOW the user-bank block while the position claimed the bar above
+            // it — so a bipolar user slot sent 0x08 over a unipolar gain value
+            // (a centre dot that barely moved) and a Toggle or unbound slot sent
+            // 0x03, which erased a bar the knob was still driving. The branch's
+            // own note demanded the agreement it could not reach in this order
+            // (the sweep, 2026-09-16). The two chains now answer in the same
+            // order, and both ask the same gain helper with the same switch.
+            if (recRmeGainBarNorm_(tr, g_recVpotRotateGain.load()) >= 0.0) {
+                vpotMode[s] = 0x01;
+                continue;
+            }
             // FX Learn UF8: user-bank V-Pot mode register.
             //   Toggle slot           → 0x03 (binary indicator, no bar)
             //   Value + Unipolar      → 0x01 (L→R sweep)
@@ -38239,15 +38264,6 @@ void pushZonesForVisibleSlots()
                     }
                     continue;
                 }
-            }
-            MediaTrack* tr = visibleTrackAt(realSlot);
-            if (MediaTrack* mp = masterPinTrack_(s)) tr = mp;  // Master-pin
-            // REC + RME: preamp gain is a unipolar sweep. Must agree with the
-            // position branch above, which claims the bar first — a bipolar mode
-            // here would draw a unipolar position as a centre dot.
-            if (recRmeGainBarNorm_(tr) >= 0.0) {
-                vpotMode[s] = 0x01;
-                continue;
             }
             // Sticky Pot bar mode: routes already continued above; a pinned
             // strip drives a unipolar sweep (toggle → no bar). v1 treats every
