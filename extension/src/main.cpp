@@ -6251,9 +6251,23 @@ int effectiveStripCount_()
 // SAFETY: extender off → == effectiveStripCount_() → banking byte-identical to today.
 // The UF8 paint loop stays bound to effectiveStripCount_(); only the UF1 paints the
 // extra strip (via uf1FocusedTrack_).
+// ⛔ THE EXTENDER IS A UF1 STANDING NEXT TO THE UF8, so it only exists while a
+// UF1 is attached. g_uf1Extender is the user's SETTING, restored blind from
+// ExtState at startup, and nothing ever cross-checked it against the device: with
+// the setting left on and the UF1 unplugged the UF8 banked in NINES and, with the
+// side set to left, shifted every strip by one, so one track per bank had no
+// surface at all and could not be reached (audit 2026-09-16, Frank: "jede surface
+// muss auch alleine 100% funktionsfähig sein"). The setting stays what the user
+// chose — the toggle, its LED and the Settings checkbox still read it directly —
+// only the LAYOUT asks whether the ninth strip is actually there.
+bool uf1ExtenderActive_()
+{
+    return g_uf1Extender.load() && g_uf1_dev && g_uf1_dev->isOpen();
+}
+
 int bankWidth_()
 {
-    return effectiveStripCount_() + (g_uf1Extender.load() ? 1 : 0);
+    return effectiveStripCount_() + (uf1ExtenderActive_() ? 1 : 0);
 }
 
 // +1 offset applied to the UF8's banked strips when the UF1 Extender is on the LEFT:
@@ -6263,7 +6277,7 @@ int bankWidth_()
 // edge-cases not expected to combine with the Extender).
 int uf8StripBase_()
 {
-    return (g_uf1Extender.load() && g_uf1ExtenderSide.load() == 0) ? 1 : 0;
+    return (uf1ExtenderActive_() && g_uf1ExtenderSide.load() == 0) ? 1 : 0;
 }
 
 // UF1 Extender — SENDS case (Step 4, Frank 2026-08-05). When the UF8 bank is
@@ -6274,7 +6288,7 @@ int uf8StripBase_()
 // track case). SAFETY: extender off → false → every send path byte-identical.
 bool uf1ExtenderRouteFader_()
 {
-    return g_uf1Extender.load()
+    return uf1ExtenderActive_()
         && (g_sendFaderThisTrack.load() || g_recvFaderThisTrack.load());
 }
 
@@ -16583,8 +16597,13 @@ static std::string hudActiveFxName_(MediaTrack* tr)
 static bool cursorFxOnFocusedTrack_(MediaTrack*& trOut, int& fxOut)
 {
     trOut = nullptr; fxOut = -1;
-    MediaTrack* tr = g_uc1_surface
-        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+    // ⛔ activeFocusTrack_, not the UC1's pointer. Asking g_uc1_surface directly
+    // made this return false on every rig without a UC1, and with it went the
+    // whole cursor-first family: the Learn-HUD's UF8 tab, the bootstrap onto an
+    // unmapped plug-in, the AutoLearn apply target and reasixty_activeFocusedFx
+    // (audit 2026-09-16 — the comment at activeFocusTrack_ lists six features
+    // fixed for exactly this reason, and this call site was missed).
+    MediaTrack* tr = activeFocusTrack_();
     if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
     const int n = TrackFX_GetCount(tr);
     if (n <= 0) return false;
@@ -18206,7 +18225,7 @@ MediaTrack* uf1FocusedTrack_()
 MediaTrack* uf1FaderTrack_()
 {
     if (!g_uf1Master.load()
-        && g_uf1Extender.load() && !uf1ExtenderRouteFader_()) {
+        && uf1ExtenderActive_() && !uf1ExtenderRouteFader_()) {
         const int slot = g_bankOffset.load()
                        + (g_uf1ExtenderSide.load() ? effectiveStripCount_() : 0);
         // ⛔ THE 9th SLOT IS EMPTY EXACTLY WHEN THE UF8 IS NOT FULL, AND THEN THE
@@ -18287,7 +18306,7 @@ static bool uf1ExtenderFocusedParam_(MediaTrack* tr, int* fxOut, int* paramOut,
                                      const uf8::LinkSlot** slotOut = nullptr,
                                      int* focusIdxOut = nullptr)
 {
-    if (!tr || !g_uf1Extender.load()) return false;
+    if (!tr || !uf1ExtenderActive_()) return false;
     if (g_forcePan.load()) return false;
     const auto focused = uf8::getFocusedParam();
     if (isVPotPanFocus(focused)) return false;
@@ -35033,10 +35052,17 @@ uint32_t navColorForStrip(int slot)
 // pushZonesForVisibleSlots SKIPs its own writes to those three zones
 // while overlay-active so the dedup caches don't ping-pong between the
 // track value and the overlay value.
-void pushNavOverlayDecorations()
+// ⛔ THE OVERLAY'S STATE IS NOT UF8 OUTPUT. Entry view, the marker
+// re-enumeration and auto-follow used to sit behind the g_dev guard of
+// pushNavOverlayDecorations, and the UC1's nav carousel reads exactly this
+// singleton in mirror mode (pushUc1NavCarousel) without ever enumerating for
+// itself. So on a rig with no UF8 — and equally with "show on UF8" switched off,
+// because the call site gates on g_navUf8Show too — the UC1 showed a frozen
+// marker list that never followed the playhead and never picked up a rename
+// (audit 2026-09-16). State first, for everyone; frames after, for the UF8.
+// Main-thread only (REAPER marker enumeration).
+void tickNavOverlayState_()
 {
-    if (!g_dev || !g_dev->isOpen()) return;
-
     auto& ov = uf8::nav::Overlay::instance();
 
     // Phase 2.8c — default-view-on-toggle-enter. Detect activation
@@ -35057,6 +35083,7 @@ void pushNavOverlayDecorations()
                        : uf8::nav::View::Regions);
     }
     s_wasActiveForView = nowActive;
+    if (!nowActive) return;
 
     // Refresh marker list every tick — REAPER markers can be edited
     // (renamed, recoloured, repositioned) while overlay is active and
@@ -35075,6 +35102,13 @@ void pushNavOverlayDecorations()
             if (g_sync) g_sync->invalidate();
         }
     }
+}
+
+void pushNavOverlayDecorations()
+{
+    if (!g_dev || !g_dev->isOpen()) return;
+
+    auto& ov = uf8::nav::Overlay::instance();
 
     const bool dirty = g_navOverlayDirty.exchange(false);
     if (dirty) {
@@ -41061,7 +41095,13 @@ void onTimerBody_()
     // device appears — covers hot-plug after a device-less boot.
     {
         static bool s_startupBankDone = false;
-        if (!s_startupBankDone && g_dev) {
+        // ⛔ ANY surface, not the UF8. engageUserBank_ sets the active LAYER,
+        // the Quick and the soft-key domain — shared binding state the UF1
+        // resolves its own keys against — so gating on g_dev left a UC1/UF1-only
+        // rig on the wrong layer for the whole session. The UF1 sibling below
+        // already says it: gating on g_dev "would strand the view forever"
+        // (audit 2026-09-16).
+        if (!s_startupBankDone && (g_dev || g_uf1_dev || g_uc1_surface)) {
             s_startupBankDone = true;
             applyStartupBank_();
         }
@@ -43441,6 +43481,8 @@ void onTimerBody_()
     // sets g_navOverlayDirty so the track-render path re-pushes its
     // own content on the next tick. Gated by g_navUf8Show: when off,
     // strips keep their regular track-side content.
+    // State for everyone (the UC1 carousel mirrors it), frames for the UF8.
+    tickNavOverlayState_();
     if (uf8::nav::Overlay::instance().active() && g_navUf8Show.load()) {
         pushNavOverlayDecorations();
     }
