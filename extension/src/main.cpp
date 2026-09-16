@@ -41976,8 +41976,24 @@ void onTimerBody_()
         // engage on tab-enter (only if not already on, marking it ours), revert
         // on tab-leave (only what we engaged). The HUD writes "hud_uf8_tab".
         {
+            // ⛔ AND THE HUD HAS TO BE ALIVE. "hud_on" is the extension's own
+            // toggle and the HUD never clears it — closing the window only
+            // writes the RUN key — so this whole block kept running for a HUD
+            // that was long gone, and with a stale "hud_uf8_tab" left behind by
+            // a script that ended without its atexit (a terminated instance, a
+            // crash) the UF8 sat in Plug-in Mode with no window anywhere to
+            // explain it (Frank 2026-09-16: "ich hab den HUD gar nicht
+            // offen?"). The RUN key is the honest signal: the script sets it on
+            // start and clears it in every close path.
+            const char* hudRun = GetExtState("rea_sixty", "hud_imgui_running");
+            const bool  hudAlive = (hudRun && hudRun[0] == '1');
             const char* utp = GetExtState("rea_sixty", "hud_uf8_tab");
-            const bool uf8Tab = (utp && utp[0] == '1');
+            bool uf8Tab = (utp && utp[0] == '1');
+            if (!hudAlive) {
+                // Clear what the dead script left lying around, once.
+                if (uf8Tab) SetExtState("rea_sixty", "hud_uf8_tab", "0", false);
+                uf8Tab = false;
+            }
             // ⛔ ONLY WHEN THERE IS SOMETHING TO SHOW. The tab alone used to
             // engage the mode, so standing on a track whose plug-in carries no
             // UF8 map handed all eight strips to a map that does not exist: the
