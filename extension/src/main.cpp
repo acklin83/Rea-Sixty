@@ -2259,6 +2259,8 @@ std::atomic<int>  g_uf1ExtenderSide{1};   // 1 = right (default), 0 = left
 // releasing the pin RESTORES the Extender to where it was (Frank 2026-08-05).
 // Session-only; the restore is symmetric with the force-off in tempSelsetToggleRecall_.
 std::atomic<bool> g_uf1ExtenderSuspendedByPin{false};
+// FLIP is suspended for the duration of UF8 Plug-in Mode — see tickFlipSuspend_.
+std::atomic<bool> g_flipSuspendedByPluginMode{false};
 // Marks the in-memory `g_selsets` as stale w.r.t. ProjExtState — set
 // on plugin entry + every time the foreground REAPER project changes
 // so the next onTimer drain re-reads from the new project.
@@ -40058,7 +40060,10 @@ void pushUf8GlobalLeds()
         || g_recvVpotThisTrack.load()
         || g_sendVpotAllIdx.load() >= 0
         || g_recvVpotAllIdx.load() >= 0;
-    sendUf8GlobalLed(uf8::Uf8GlobalLed::Flip, flip || vpotRoutingActive);
+    // Dark while the mode holds FLIP — the key does nothing there, and a lit
+    // lamp over a sleeping key is the lie we spent this morning removing.
+    sendUf8GlobalLed(uf8::Uf8GlobalLed::Flip,
+                     !g_uf8PluginMode.load() && (flip || vpotRoutingActive));
     g_lastFlip = flip;
 
     // Shift/Fine LED — momentary, follows the held state of 0x6F.
@@ -43540,6 +43545,40 @@ void onTimerBody_()
     // sets g_navOverlayDirty so the track-render path re-pushes its
     // own content on the next tick. Gated by g_navUf8Show: when off,
     // strips keep their regular track-side content.
+    // ⛔ FLIP HAS NO MEANING IN UF8 PLUG-IN MODE, so it must not be left standing
+    // in the forty places that read it. The mode gives all eight strips to one
+    // plug-in and the map already says which parameter sits on the fader and
+    // which on the V-Pot — there is nothing to swap. Until now the state leaked
+    // in: both V-Pot paths asked `!g_flip` and simply stopped driving the
+    // plug-in's parameters, and the fader resolver's FLIP branch sits AHEAD of
+    // the plug-in-mode branch, so the fader showed the focused SSL slot instead.
+    // Suspend the state while the mode runs and put it back on exit — the same
+    // clutch the Focus-Set pin uses on the Extender — so every reader and the
+    // lamp agree without a special case anywhere else (Frank 2026-09-16: "der
+    // soll im Plugin-Modus nicht die V-Pots und Fader flippen, also aus").
+    {
+        static bool sPmFlip = false;
+        const bool pm = g_uf8PluginMode.load();
+        if (pm != sPmFlip) {
+            sPmFlip = pm;
+            if (pm) {
+                const bool was = g_flip.load();
+                g_flipSuspendedByPluginMode.store(was);
+                if (was) {
+                    g_flip.store(false);
+                    g_pageDirty.store(true);
+                    g_bankDirty.store(true);
+                    for (auto& v : g_lastTouchPbValid) v.store(false);
+                }
+            } else if (g_flipSuspendedByPluginMode.exchange(false)) {
+                g_flip.store(true);
+                g_pageDirty.store(true);
+                g_bankDirty.store(true);
+                for (auto& v : g_lastTouchPbValid) v.store(false);
+            }
+        }
+    }
+
     // The CS/BC latch the unified favourite actions fall back on when the focus
     // is on neither domain. It was written only inside the UF8's own paint, so
     // without a UF8 it never followed the focused parameter (audit 2026-09-16).
@@ -50566,6 +50605,13 @@ void registerBindingHandlers()
     registerBuiltin("flip", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
+            // ⛔ NOTHING TO SWAP IN UF8 PLUG-IN MODE. The map already says which
+            // parameter sits on the fader and which on the V-Pot, so FLIP has no
+            // meaning there and the key is asleep for the duration (Frank
+            // 2026-09-16). Refusing the toggle keeps the suspended state in
+            // tickFlipSuspend_ honest: whatever FLIP was before the mode is what
+            // comes back after it.
+            if (g_uf8PluginMode.load()) return;
             const bool next = !g_flip.load();
             g_flip.store(next);
             g_pageDirty.store(true);
@@ -50580,7 +50626,7 @@ void registerBindingHandlers()
             // start a clean touch.
             for (auto& v : g_lastTouchPbValid) v.store(false);
         },
-        [](int) { return g_flip.load(); },
+        [](int) { return g_flip.load() && !g_uf8PluginMode.load(); },
         "Toggle FLIP (fader ↔ V-Pot)", false
     });
 
