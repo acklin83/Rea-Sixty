@@ -15299,8 +15299,12 @@ static void applyCsSwitch_(int slot, bool ownSettings)
     if (targets.empty()) return;
     favUnifyTargetsIfNeeded_(targets, true);
 
-    MediaTrack* focusTr = g_uc1_surface
-        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+    // ⛔ activeFocusTrack_, not the UC1's pointer. Without a UC1 this was null,
+    // nothing ever matched `tr == focusTr`, and the focus / FX-cursor follow-up
+    // after a Switch or Copy simply never ran — while the action itself worked,
+    // because its target list is selection-first. The sibling cycles had the
+    // fallback; these four did not (audit 2026-09-16).
+    MediaTrack* focusTr = activeFocusTrack_();
 
     // BROADCAST GUARD: our own ParameterGroups fan-out (the CSURF_EXT_SETFXPARAM
     // hook) would re-broadcast every value the switch writes to the other selected
@@ -15363,8 +15367,12 @@ static void applyCsCopy_(int slot)
     if (targets.empty()) return;
     favUnifyTargetsIfNeeded_(targets, true);
 
-    MediaTrack* focusTr = g_uc1_surface
-        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+    // ⛔ activeFocusTrack_, not the UC1's pointer. Without a UC1 this was null,
+    // nothing ever matched `tr == focusTr`, and the focus / FX-cursor follow-up
+    // after a Switch or Copy simply never ran — while the action itself worked,
+    // because its target list is selection-first. The sibling cycles had the
+    // fallback; these four did not (audit 2026-09-16).
+    MediaTrack* focusTr = activeFocusTrack_();
 
     uf8::param_groups::pushBroadcastSuppress();
     PreventUIRefresh(1);
@@ -15406,9 +15414,7 @@ static void applyCsCycle_(int step, bool ownSettings)
     }
     if (slots.empty()) return;
 
-    MediaTrack* focusTr = g_uc1_surface
-        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
-    if (!focusTr) focusTr = GetSelectedTrack(nullptr, 0);
+    MediaTrack* focusTr = activeFocusTrack_();
     if (!focusTr) return;
 
     int cur = -1;
@@ -15453,8 +15459,12 @@ static void applyBcSwitch_(int slot, bool ownSettings)
     if (targets.empty()) return;
     favUnifyTargetsIfNeeded_(targets, false);
 
-    MediaTrack* focusTr = g_uc1_surface
-        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+    // ⛔ activeFocusTrack_, not the UC1's pointer. Without a UC1 this was null,
+    // nothing ever matched `tr == focusTr`, and the focus / FX-cursor follow-up
+    // after a Switch or Copy simply never ran — while the action itself worked,
+    // because its target list is selection-first. The sibling cycles had the
+    // fallback; these four did not (audit 2026-09-16).
+    MediaTrack* focusTr = activeFocusTrack_();
 
     uf8::param_groups::pushBroadcastSuppress();
     PreventUIRefresh(1);
@@ -15487,8 +15497,12 @@ static void applyBcCopy_(int slot)
     if (targets.empty()) return;
     favUnifyTargetsIfNeeded_(targets, false);
 
-    MediaTrack* focusTr = g_uc1_surface
-        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+    // ⛔ activeFocusTrack_, not the UC1's pointer. Without a UC1 this was null,
+    // nothing ever matched `tr == focusTr`, and the focus / FX-cursor follow-up
+    // after a Switch or Copy simply never ran — while the action itself worked,
+    // because its target list is selection-first. The sibling cycles had the
+    // fallback; these four did not (audit 2026-09-16).
+    MediaTrack* focusTr = activeFocusTrack_();
 
     uf8::param_groups::pushBroadcastSuppress();
     PreventUIRefresh(1);
@@ -15527,9 +15541,7 @@ static void applyBcCycle_(int step, bool ownSettings)
     }
     if (slots.empty()) return;
 
-    MediaTrack* focusTr = g_uc1_surface
-        ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
-    if (!focusTr) focusTr = GetSelectedTrack(nullptr, 0);
+    MediaTrack* focusTr = activeFocusTrack_();
     if (!focusTr) return;
 
     int cur = -1;
@@ -16148,8 +16160,11 @@ void publishOverlayFocus_()
     // Published whenever EITHER feature is on — the docker needs the focus GUID
     // independently of the MCP highlight.
     const bool feat = g_insertMarkersEnabled.load() || g_focusedPanel.load();
-    if (feat && g_uc1_surface) {
-        auto* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+    if (feat) {
+        // activeFocusTrack_, not the UC1's pointer: the MCP insert marker and
+        // the Focused-Track panel are on-screen features and must not go blank
+        // because no UC1 is plugged in (audit 2026-09-16).
+        MediaTrack* tr = activeFocusTrack_();
         if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*"))
             guid = uc1::trackGuid(tr);
     }
@@ -16171,8 +16186,10 @@ void publishOverlayFav_()
     // are tiny and diff-guarded, so publishing them unconditionally is free and the
     // panel works however it was started (Frank 2026-06-26).
     std::string csSet, bcSet;
-    if (g_uc1_surface) {
-        auto* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+    {
+        // Same reason as publishOverlayFocus_: the panel is on screen, not on
+        // the UC1 (audit 2026-09-16).
+        MediaTrack* tr = activeFocusTrack_();
         if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
             reasixty_trackAssignedSet(true,  tr, csSet);
             reasixty_trackAssignedSet(false, tr, bcSet);
@@ -21916,9 +21933,7 @@ void drainInputQueue()
                         // strip's track IS the focused track, so non-
                         // focused-strip rotations don't hijack UC1 /
                         // SSL Strip Mode focus globally.
-                        MediaTrack* focusedTr = g_uc1_surface
-                            ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
-                            : nullptr;
+                        MediaTrack* focusedTr = activeFocusTrack_();
                         const bool isFocusedStrip = (focusedTr == tr);
                         const bool synced = syncInstanceFromFxIdx_(
                             tr, next,
@@ -22109,9 +22124,7 @@ void drainInputQueue()
                 // only when the strip belongs to the currently focused
                 // track — otherwise a non-focused-strip rotation would
                 // silently hijack UC1 / SSL Strip Mode focus.
-                MediaTrack* focusedTr = g_uc1_surface
-                    ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack())
-                    : nullptr;
+                MediaTrack* focusedTr = activeFocusTrack_();
                 const bool isFocusedStrip = (focusedTr == tr);
                 setStripInstanceFx_(tr, target.fxIdx);
                 if (target.dom == uf8::Domain::ChannelStrip) {
@@ -36865,9 +36878,7 @@ void pushZonesForVisibleSlots()
                 // when the cycle crosses a domain on the selected track.
                 // Other strips keep their own track's primary variant
                 // (CS-first / BC-fallback). Frank 2026-05-18.
-                const bool isFocusedStrip =
-                    (g_uc1_surface
-                     && tr == g_uc1_surface->focusedTrack());
+                const bool isFocusedStrip = (tr == barFocusTrack);
                 if (isFocusedStrip
                     && focused.domain != uf8::Domain::None)
                 {
@@ -38761,7 +38772,12 @@ void commitDebouncedTouchReleases()
         const bool wasReported = g_touchReported[s].exchange(false);
         if (!wasReported) continue;
 
-        if (!g_dev) continue;
+        // ⛔ NO DEVICE CHECK HERE. Everything below this line up to the motor
+        // block is REAPER-side: the fader's last position and the automation
+        // edit it opened. Skipping it when the UF8 vanished between press and
+        // debounced release threw away the user's move and left the edit open
+        // (audit 2026-09-16). The two frames at the end are the only device
+        // work and carry their own check.
         MediaTrack* tr = g_slotTrack[s];
         if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) continue;
 
@@ -38982,7 +38998,7 @@ void commitDebouncedTouchReleases()
                     pb = static_cast<uint16_t>(p14);
                 }
             }
-            g_dev->send(uf8::buildMotorEnable(s, true));
+            if (g_dev) g_dev->send(uf8::buildMotorEnable(s, true));
             g_faderMotorEngaged[s].store(true);
             // Snap-back: firmware's target buffer is still pointing at
             // the user's drag-end position (last bit-7 echo). Re-enable
@@ -38995,7 +39011,7 @@ void commitDebouncedTouchReleases()
             if (snapBack) {
                 const uint8_t lsb = static_cast<uint8_t>(pb & 0x7F);
                 const uint8_t msb = static_cast<uint8_t>((pb >> 7) & 0x7F);
-                g_dev->send(uf8::buildFaderPosition(s, lsb, msb));
+                if (g_dev) g_dev->send(uf8::buildFaderPosition(s, lsb, msb));
             }
             g_lastFaderPb[s] = pb;
         }
@@ -41877,8 +41893,10 @@ void onTimerBody_()
             const std::string s = cmd;
             SetExtState("rea_sixty", "focused_panel_cmd", "", false);   // consume
             auto assignSet = [&](bool cs, const std::string& name) {
-                if (g_uc1_surface) {
-                    auto* tr = static_cast<MediaTrack*>(g_uc1_surface->focusedTrack());
+                {
+                    // The panel's own write path — it was swallowed whole
+                    // without a UC1 (audit 2026-09-16).
+                    MediaTrack* tr = activeFocusTrack_();
                     if (tr && ValidatePtr2(nullptr, tr, "MediaTrack*"))
                         reasixty_assignTrackSet(cs, tr, name.c_str());
                 }
@@ -43314,10 +43332,14 @@ void onTimerBody_()
     //    cleared them — invalidating g_globalLedsInit forces re-push.
     static int g_lastTrackCountForReinit = 0;
     const int currentTrackCount = CountTracks(nullptr);
-    if (g_dev && g_dev->isOpen() &&
-        currentTrackCount > 0 && g_lastTrackCountForReinit == 0) {
-        g_bankDirty.store(true);
-        g_globalLedsInit = false;
+    // ⛔ THE MODE IS NOT A UF8 FRAME. Restoring g_encoderMode after a project
+    // load used to sit inside the UF8 gate below, so on a rig without one the
+    // persisted mode was silently dropped and the banner, the action toggle
+    // states and any encoder bound to the dispatcher read the default instead
+    // (audit 2026-09-16). The LED re-arm stays where it belongs.
+    const bool projectJustLoaded_ =
+        (currentTrackCount > 0 && g_lastTrackCountForReinit == 0);
+    if (projectJustLoaded_) {
         // Re-apply persisted encoder mode after project load. Without
         // this, a phantom ChannelPush-on-init or stray binding
         // dispatch can clobber Instance/Nudge/Focus back to Nav,
@@ -43345,6 +43367,10 @@ void onTimerBody_()
             // resolve to the channel-select default mode.
             else                                         g_encoderMode.store(EncoderMode::ChSelect);
         }
+    }
+    if (g_dev && g_dev->isOpen() && projectJustLoaded_) {
+        g_bankDirty.store(true);
+        g_globalLedsInit = false;
     }
     g_lastTrackCountForReinit = currentTrackCount;
     chaseLastTouchedFx();
@@ -43514,6 +43540,15 @@ void onTimerBody_()
     // sets g_navOverlayDirty so the track-render path re-pushes its
     // own content on the next tick. Gated by g_navUf8Show: when off,
     // strips keep their regular track-side content.
+    // The CS/BC latch the unified favourite actions fall back on when the focus
+    // is on neither domain. It was written only inside the UF8's own paint, so
+    // without a UF8 it never followed the focused parameter (audit 2026-09-16).
+    // Idempotent and atomic-only; the UF8 path still writes it too.
+    if (g_paramSwitchesSoftKeyBank.load()) {
+        g_softKeyDomain.store(
+            uf8::getFocusedParam().domain == uf8::Domain::BusComp ? 1 : 0);
+    }
+
     // State for everyone (the UC1 carousel mirrors it), frames for the UF8.
     tickNavOverlayState_();
     if (uf8::nav::Overlay::instance().active() && g_navUf8Show.load()) {
@@ -44049,9 +44084,10 @@ void onTimerBody_()
                 reconcileAllInsertMarkers_();
             publishOverlayState_();
         } else {
-            if (legacy && g_insertMarkersEnabled.load() && g_uc1_surface) {
-                if (auto* ft =
-                        static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()))
+            if (legacy && g_insertMarkersEnabled.load()) {
+                // The safety-net reconcile is for REAPER's mixer, so it runs
+                // without a UC1 too (audit 2026-09-16).
+                if (MediaTrack* ft = activeFocusTrack_())
                     reconcileInsertMarkersForTrack_(ft);
             }
             // Overlay safety-net republish (FX add / remove / reorder, track
@@ -52681,8 +52717,9 @@ void registerBindingHandlers()
             },
             // Lit when the focused track's CS already is favourite N.
             [slot](int) {
-                MediaTrack* tr = g_uc1_surface
-                    ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+                // activeFocusTrack_: the key's lamp must not need a UC1 to be
+                // attached when its press does not (audit 2026-09-16).
+                MediaTrack* tr = activeFocusTrack_();
                 if (!tr) return false;
                 const uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(tr);
                 if (b.channelFxIdx < 0) return false;
@@ -52731,8 +52768,9 @@ void registerBindingHandlers()
             },
             // Lit when the focused track's BC already is favourite N.
             [slot](int) {
-                MediaTrack* tr = g_uc1_surface
-                    ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+                // activeFocusTrack_: the key's lamp must not need a UC1 to be
+                // attached when its press does not (audit 2026-09-16).
+                MediaTrack* tr = activeFocusTrack_();
                 if (!tr) return false;
                 const uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(tr);
                 if (b.busCompFxIdx < 0) return false;
@@ -52780,8 +52818,9 @@ void registerBindingHandlers()
             },
             // Lit when the focused domain's active instance already is favourite N.
             [slot](int) {
-                MediaTrack* tr = g_uc1_surface
-                    ? static_cast<MediaTrack*>(g_uc1_surface->focusedTrack()) : nullptr;
+                // activeFocusTrack_: the key's lamp must not need a UC1 to be
+                // attached when its press does not (audit 2026-09-16).
+                MediaTrack* tr = activeFocusTrack_();
                 if (!tr) return false;
                 const uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(tr);
                 const bool bc = favDomainIsBc_();
