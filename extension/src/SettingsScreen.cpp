@@ -8375,6 +8375,14 @@ namespace {
 // page so the editor never silently pretends the map it is on is the one you are
 // looking at. Empty = the active FX is mapped, or there is none.
 std::string g_activeUnmappedFx;
+// …and the instance it was found on, so creating its map can snapshot the live
+// parameter list and point the cursor at it without going looking again.
+MediaTrack* g_activeUnmappedTr    = nullptr;
+int         g_activeUnmappedFxIdx = -1;
+// Make a map for that plug-in and put the editor on it — the three answers the
+// +New dialog asks for, derived instead of typed. Defined further down, where
+// the snapshot and cursor helpers live.
+bool mapActiveUnmappedFx_();
 // Same plug-in, but it already has a FACTORY map. Kept apart so the banner can
 // say which of the two it is instead of calling both "no map yet".
 std::string g_activeFactoryFx;
@@ -8974,6 +8982,12 @@ char  g_fxlAddFilter[64] = {};
 
 void bindSlot_(int linkIdx, int vst3Param)
 {
+    // ⇨ THE FIRST ASSIGNMENT MAKES THE MAP, like the first touch does in the
+    // Learn-HUD — but only when the editor is on no map at all. With one open
+    // it would hijack the map the user is working on, which the HUD cannot do
+    // because it only ever shows the plug-in in front of you (Frank 2026-09-16).
+    if (g_editingMatch.empty() && !g_activeUnmappedFx.empty())
+        mapActiveUnmappedFx_();
     if (g_editingMatch.empty() || linkIdx < 0 || vst3Param < 0) return;
 
     auto cat = uf8::user_plugins::get();   // copy
@@ -10612,6 +10626,10 @@ int mappedVst3ForUf8_(int kind, int strip, int bank)
 void bindUf8_(int kind, int strip, int bank, int vst3Param, bool asToggle = false)
 {
     if (vst3Param < 0) return;
+    // Same first-assignment rule as bindSlot_ — see the note there.
+    if (g_editingMatch.empty() && !g_activeUnmappedFx.empty())
+        mapActiveUnmappedFx_();
+    if (g_editingMatch.empty()) return;
     mutateUf8_([&](uf8::UserUf8Map& u) {
         auto p = uf8EditFieldPtrs_(u, kind, strip, bank);
         if (p.param) *p.param = vst3Param;
@@ -13913,6 +13931,67 @@ static void pointInstanceCursorAt_(MediaTrack* tr, int fx, uf8::Domain dom)
     if (ord < 0) return;                       // not a recognised CS/BC binding
     if      (dom == uf8::Domain::ChannelStrip) uc1::setCsInstanceIndex(tr, ord);
     else if (dom == uf8::Domain::BusComp)      uc1::setBcInstanceIndex(tr, ord);
+}
+
+// ⇨ NO DIALOG FOR A PLUG-IN THAT IS ALREADY IN FRONT OF YOU. A map needs three
+// answers — the match substring, the short label and the mode — and the +New
+// dialog asks for all three. The Learn-HUD never asks: accepting an AutoLearn
+// proposal or touching the first control derives them (match root from the FX
+// name, short label from the same, domain from the tab) and the map is born
+// (see the AutoLearn apply path). The editor knew the plug-in from its banner
+// and still sent the user through the dialog (Frank 2026-09-16: "ich bin schon
+// im gewünschten Modus, sollte das Plugin nicht einfach sofort Map-bar sein?").
+// Same derivation here, with the MOCKUP standing in for the HUD's tab, and
+// everything it decided stays editable in the fields right below the banner.
+// Returns true when the editor is now on a map for that plug-in.
+bool mapActiveUnmappedFx_()
+{
+    if (g_activeUnmappedFx.empty()) return false;
+    const std::string match = deriveMatchRoot_(g_activeUnmappedFx);
+    if (match.empty()) return false;
+
+    auto switchTo = [&](const std::string& mt) {
+        g_editingMatch     = mt;
+        g_listeningLinkIdx = -1;
+        SetExtState("ReaSixty", "fxLearnLastMatch", mt.c_str(), true);
+    };
+    // Someone got there first (a second click, an import, the dialog): go to it
+    // rather than refusing with "a map with that match already exists".
+    for (const auto& m : user_plugins::get().maps) {
+        if (m.match == match) { switchTo(match); return true; }
+    }
+    // A factory plug-in is not ours to shadow — same guard the AutoLearn path
+    // grew after it was found to be the one way past it.
+    if (user_plugins::collidesWithBuiltin(match)) return false;
+
+    // The mockup is the editor's equivalent of the HUD tab: UC1 → channel strip,
+    // UF8 → UF8-only, UF1 → UF1-only. Read from ExtState because the radio lives
+    // in a static local of the draw function.
+    int mock = 1;
+    if (const char* v = GetExtState("ReaSixty", "fxLearnMockup"); v && *v)
+        mock = std::atoi(v);
+    UserPluginMap m{};
+    m.match        = match;
+    m.displayShort = deriveShortLabel_(g_activeUnmappedFx);
+    if (mock == 2)      { m.domain = Domain::None; m.uf1Mode = true; }
+    else if (mock == 1) { m.domain = Domain::None; m.uf8Mode = true; }
+    else                { m.domain = Domain::ChannelStrip; }
+    const Domain createdDom = m.domain;
+    user_plugins::upsert(std::move(m));
+    persistAndReport_();
+    if (!g_lastSaveError.empty()) return false;
+    switchTo(match);
+
+    // The live instance the banner found: snapshot its parameters so the editor
+    // stays usable with no instance loaded, and leave the cursor on it.
+    if (g_activeUnmappedTr && g_activeUnmappedFxIdx >= 0
+        && ValidatePtr2(nullptr, g_activeUnmappedTr, "MediaTrack*")) {
+        EditingFx efx{ g_activeUnmappedTr, g_activeUnmappedFxIdx, true };
+        snapshotParamsFor_(match, efx);
+        pointInstanceCursorAt_(g_activeUnmappedTr, g_activeUnmappedFxIdx,
+                               createdDom);
+    }
+    return true;
 }
 
 bool hudLearnCreateAndBind_(MediaTrack* tr, int fx, uf8::Domain domain,
@@ -21789,6 +21868,8 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     const auto* um = uf8::user_plugins::lookupOwnedByName(fxName);
                     g_activeUnmappedFx.clear();
                     g_activeFactoryFx.clear();
+                    g_activeUnmappedTr    = nullptr;
+                    g_activeUnmappedFxIdx = -1;
                     if (!um) {
                         // No map OF YOUR OWN: keep the editor where it is, but
                         // say what is in front of you. Silently sitting on an
@@ -21802,8 +21883,13 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                         // plug-in — which the Learn-HUD then refuses to arm on
                         // ("Factory map — not editable"). Two answers to one
                         // question (Frank 2026-09-07).
-                        if (uc1::lookupBindingsByName(fxName)) g_activeFactoryFx = nm;
-                        else                                   g_activeUnmappedFx = nm;
+                        if (uc1::lookupBindingsByName(fxName)) {
+                            g_activeFactoryFx = nm;
+                        } else {
+                            g_activeUnmappedFx    = nm;
+                            g_activeUnmappedTr    = ftr;
+                            g_activeUnmappedFxIdx = fxIdx;
+                        }
                     }
                     if (um) {
                         g_editingMatch = um->match;
@@ -21822,7 +21908,10 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     }
                 }
             }
-            if (!ftr) { g_activeUnmappedFx.clear(); g_activeFactoryFx.clear(); }
+            if (!ftr) {
+                g_activeUnmappedFx.clear(); g_activeFactoryFx.clear();
+                g_activeUnmappedTr = nullptr; g_activeUnmappedFxIdx = -1;
+            }
         }
 
             // The banner: what is actually in front of you, and one click to map
@@ -21844,59 +21933,10 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             ImGui_SameLine(ctx, nullptr, nullptr);
             if (ImGui_Button(ctx, "Map this plug-in##fxl_map_active",
                              nullptr, nullptr)) {
-                // Prefill +New from the live FX, exactly as picking it out of
-                // the browser would.
-                std::memset(g_newMatch,   0, sizeof(g_newMatch));
-                std::memset(g_newDisplay, 0, sizeof(g_newDisplay));
-                const std::string root = deriveMatchRoot_(g_activeUnmappedFx);
-                std::strncpy(g_newMatch, root.c_str(), sizeof(g_newMatch) - 1);
-                const std::string shrt = deriveShortLabel_(g_activeUnmappedFx);
-                std::strncpy(g_newDisplay, shrt.c_str(), sizeof(g_newDisplay) - 1);
-                g_newPrimaryMode = 1;
-                g_newUf8Mode     = false;
-                g_newError.clear();
-                // ⇨ AND THE PLUG-IN IS ALREADY PICKED. This button exists
-                // because the answer is not in question: the banner names the
-                // plug-in in front of you. Clearing the picker sent Frank into a
-                // tree of 970 to find the one he had just clicked on
-                // (2026-09-04: "anstatt genau das plugin zu laden schickt er
-                // mich in die auswahl"). The selection is not cosmetic either —
-                // Create inserts an instance by the picked FULL name, and falls
-                // back to the match substring only when nothing is picked.
-                if (g_installedFx.empty()) loadInstalledFx_();
-                g_pickerSelectedIdx = -1;
-                for (size_t i = 0; i < g_installedFx.size(); ++i) {
-                    if (g_installedFx[i].name == g_activeUnmappedFx) {
-                        g_pickerSelectedIdx = static_cast<int>(i);
-                        break;
-                    }
-                }
-                if (g_pickerSelectedIdx < 0 && !root.empty()) {
-                    // The banner carries REAPER's identity name, which is not
-                    // always spelled the way the installed list does. The match
-                    // root is the part both agree on.
-                    auto lc = [](std::string v) {
-                        for (auto& c : v)
-                            c = static_cast<char>(std::tolower(
-                                static_cast<unsigned char>(c)));
-                        return v;
-                    };
-                    const std::string want = lc(root);
-                    for (size_t i = 0; i < g_installedFx.size(); ++i) {
-                        if (lc(g_installedFx[i].name).find(want)
-                            != std::string::npos) {
-                            g_pickerSelectedIdx = static_cast<int>(i);
-                            break;
-                        }
-                    }
-                }
-                // Filter the tree down to it as well, so the row is visible
-                // instead of merely selected somewhere below the fold.
-                std::memset(g_pickerFilter, 0, sizeof(g_pickerFilter));
-                std::strncpy(g_pickerFilter, root.c_str(),
-                             sizeof(g_pickerFilter) - 1);
-                ImGui_OpenPopup(ctx, "New User Plug-in Map###fxl_new_popup",
-                                nullptr);
+                // One click, no dialog: the banner already names the plug-in,
+                // the mockup already says which surface, and match, short label
+                // and mode are all editable in the row right below this one.
+                mapActiveUnmappedFx_();
             }
             ImGui_Spacing(ctx);
         }
