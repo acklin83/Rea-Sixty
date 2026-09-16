@@ -9007,6 +9007,13 @@ void bindSlot_(int linkIdx, int vst3Param)
                     g_fxlLabelLinkIdx = -1;  // force the editor field re-seed
                 }
                 lay.vst3Param = vst3Param;
+                // Same fresh-learn reset the HUD does (hudLearnBindMatch_):
+                // a re-learn hands back a plain continuous binding, invert
+                // off and no step-cycle (Frank 2026-06-23). The two paths
+                // learn the same control; they may not disagree about what
+                // learning means.
+                lay.inverted  = false;
+                lay.pushSteps.clear();
                 replaced = true;
                 break;
             }
@@ -13961,9 +13968,12 @@ bool hudResolveControlMatch_(int idx, void* csTrV, int csFx, void* bcTrV, int bc
     return true;
 }
 
-// Clear the control's mapping on `layer`. Normal → the base param is removed;
-// a modifier layer → the overlay is removed and the control reverts to
-// inheriting Normal. upsert+save. Returns true when something changed.
+// Clear the control's mapping on `layer`. Mirrors unbindSlot_ on the bindings
+// page — clearing the Normal layer RETIRES THE CONTROL, so the whole slot goes
+// including the Option/Control overlays; an overlay left behind would keep the
+// control alive under a modifier with nothing underneath it. A modifier layer
+// clears only that overlay, and the slot goes only once no layer holds
+// anything. upsert+save. Returns true when something changed.
 bool hudUnbindMatch_(const std::string& match, int linkIdx, int layer)
 {
     if (match.empty() || linkIdx < 0) return false;
@@ -13972,18 +13982,35 @@ bool hudUnbindMatch_(const std::string& match, int linkIdx, int layer)
     for (auto& m : cat.maps) {
         if (m.match != match) continue;
         bool changed = false;
-        for (auto& s : m.slots) {
-            if (s.linkIdx != linkIdx) continue;
-            SlotLayer& lay = fxLayerOf(s, layer);
-            if (lay.vst3Param >= 0 || !lay.pushSteps.empty()
-                || !lay.customLabel.empty() || lay.inverted) {
-                lay.vst3Param = -1;
-                lay.inverted  = false;
-                lay.pushSteps.clear();
-                lay.customLabel.clear();
-                changed = true;
+        if (layer == FxLayer::Normal) {
+            const auto before = m.slots.size();
+            m.slots.erase(
+                std::remove_if(m.slots.begin(), m.slots.end(),
+                    [&](const UserLinkSlot& s) { return s.linkIdx == linkIdx; }),
+                m.slots.end());
+            changed = (m.slots.size() != before);
+        } else {
+            for (auto& s : m.slots) {
+                if (s.linkIdx != linkIdx) continue;
+                SlotLayer& lay = fxLayerOf(s, layer);
+                if (lay.vst3Param >= 0 || !lay.pushSteps.empty()
+                    || !lay.customLabel.empty() || lay.inverted) {
+                    lay = SlotLayer{};
+                    changed = true;
+                }
+                break;
             }
-            break;
+            // Drop the slot once nothing is mapped on any layer.
+            const auto before = m.slots.size();
+            m.slots.erase(
+                std::remove_if(m.slots.begin(), m.slots.end(),
+                    [&](const UserLinkSlot& s) {
+                        return s.linkIdx == linkIdx
+                            && !fxLayerMapped(s)
+                            && !hasAnyModLayer(s);
+                    }),
+                m.slots.end());
+            if (m.slots.size() != before) changed = true;
         }
         if (!changed) return false;
         user_plugins::upsert(m);
