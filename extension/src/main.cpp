@@ -22419,8 +22419,7 @@ void sendLedFrames(uf8::LedColourFrames frames)
 // sendSelRenderTrigger to restore the AutoTrim LED after the cap33
 // trigger sequence, and by drainInputQueue's FLIP path which routes
 // fader pb14 → focused-param normalised position).
-void pushAutoModeLedsMixed_(int perTrackMode, int globalMode,
-                            int activeLayer);
+void pushAutoModeLedsMixed_(int perTrackMode, int globalMode);
 void pushLayerLeds(int active);
 uint16_t linearVolumeToPb(double linear);
 // Folds the active layer's per-binding LED colour into a global-LED push.
@@ -39694,13 +39693,20 @@ struct AutoCellBinding {
     bool isGlobal   = false;
 };
 
-AutoCellBinding autoCellBinding_(uf8::Uf8GlobalLed cell, int activeLayer)
+// ⛔ Resolves the layer itself, and every caller lost its layer argument with
+// it. Two of the three passed getActiveLayer (right), the tick passed the raw
+// getQuickLayer (wrong under "Layers switch Quicks only", where the surface
+// fires layer 1 while the Quick layer reads 2 or 3) — the same split that hit
+// the Quick lamps 2026-09-08 and the PLUGIN LED 2026-09-16. A layer nobody can
+// pass in is a layer nobody can get wrong.
+AutoCellBinding autoCellBinding_(uf8::Uf8GlobalLed cell)
 {
     AutoCellBinding out;
     const auto bid = buttonIdForGlobalLed(cell);
     if (bid == uf8::bindings::ButtonId::None) return out;
-    if (!uf8::bindings::hasBinding(activeLayer, bid)) return out;
-    const auto bd = uf8::bindings::getBinding(activeLayer, bid);
+    const int layer = uf8::bindings::layerForButton(bid);
+    if (!uf8::bindings::hasBinding(layer, bid)) return out;
+    const auto bd = uf8::bindings::getBinding(layer, bid);
     const auto& sp = bd.shortPress[static_cast<int>(
         uf8::bindings::Modifier::Plain)];
     if (sp.type != uf8::bindings::ActionType::Builtin) return out;
@@ -39738,12 +39744,11 @@ AutoCellBinding autoCellBinding_(uf8::Uf8GlobalLed cell, int activeLayer)
 // auto_* press handlers, which pre-empt the firmware's transition flash
 // through TRIM that would otherwise be visible during the ~33 ms gap
 // before our next tick reads the new mode back from REAPER.
-void pushAutoModeLedsMixed_(int perTrackMode, int globalMode,
-                            int activeLayer)
+void pushAutoModeLedsMixed_(int perTrackMode, int globalMode)
 {
     if (!g_dev || !g_dev->isOpen()) return;
     for (auto cell : kAutoLeds) {
-        const auto ab = autoCellBinding_(cell, activeLayer);
+        const auto ab = autoCellBinding_(cell);
         bool active = false;
         if (ab.targetMode < 0) {
             // Non-auto binding — defer to its own active-state.
@@ -39901,7 +39906,7 @@ void pushUf8GlobalLeds()
      || globalAutoMode != g_lastGlobalAutoMode
      || !g_globalLedsInit)
     {
-        pushAutoModeLedsMixed_(autoMode, globalAutoMode, activeLayer);
+        pushAutoModeLedsMixed_(autoMode, globalAutoMode);
     }
 
     // Rec LED no longer driven by anyArmed — it's now a bindable
@@ -52886,8 +52891,7 @@ void registerBindingHandlers()
                 queueInput({PendingInput::AutomationMode, 0,
                             static_cast<double>(reaperMode)});
                 pushAutoModeLedsMixed_(reaperMode,
-                                       GetGlobalAutomationOverride(),
-                                       uf8::bindings::getActiveLayer());
+                                       GetGlobalAutomationOverride());
             },
             // stateOf — selected-track mode matches reaperMode. Mode 0
             // is suppressed (REAPER's per-track default applies to
@@ -52931,8 +52935,7 @@ void registerBindingHandlers()
                 if (MediaTrack* sel = GetSelectedTrack(nullptr, 0)) {
                     perTrack = GetTrackAutomationMode(sel);
                 }
-                pushAutoModeLedsMixed_(perTrack, reaperMode,
-                                       uf8::bindings::getActiveLayer());
+                pushAutoModeLedsMixed_(perTrack, reaperMode);
             },
             // stateOf — global override matches reaperMode. No mode-0
             // suppression here: a global override of 0 is an explicit
