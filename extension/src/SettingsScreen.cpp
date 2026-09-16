@@ -20021,10 +20021,18 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             g_autoLearnUf8Strips = autoLearnPlan_(editing, -1).chStrips
                 ? uf8::autolearn::suggestUf8Strips(alSrc, /* faderBankCount */ 2)
                 : std::vector<uf8::autolearn::Uf8StripSuggestion>{};
-            const bool wantUf8 = g_autoLearnSetupVpots
-                              || g_autoLearnSetupParamFaders
-                              || !g_autoLearnUf8Strips.empty()
-                              || (newDom == uf8::Domain::None);
+            // ⛔ RUN MAY NOT GIVE THE MAP A SURFACE LAYER. It used to turn
+            // uf8Mode on whenever a UF8 pass was merely GOING TO BE OFFERED —
+            // and "Map all params to UF8 Faders" is seeded ON for any map
+            // without a UF8 layer, so pressing Run on a channel strip gave it
+            // one before a single proposal was on screen, and Cancel did not
+            // take it back. Frank's FG-S is a CS map he learned by hand and it
+            // kept turning up on the UF8 (2026-09-16). A proposal is not an
+            // acceptance: the layer now goes on where it is earned, in Apply,
+            // when a UF8 row is actually accepted. Here only "UF8 only" forces
+            // it, because that mode is meaningless without it.
+            const bool wantUf8 = (newDom == uf8::Domain::None)
+                              || editing->uf8Mode;
             if (editing->domain != newDom || editing->uf8Mode != wantUf8) {
                 UserPluginMap copy = *editing;
                 // Stash outgoing slots.
@@ -20872,6 +20880,13 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     case StKind::Sel:  sb.selVst3Param  = s.vst3Param; break;
                 }
             }
+            // The UF8 layer is earned HERE, by an accepted UF8 row — not by
+            // the Setup dialog offering one (see the note on wantUf8 in Run).
+            for (const auto& u : g_autoLearnUf8)
+                if (u.accepted) { copy.uf8Mode = true; break; }
+            if (!copy.uf8Mode)
+                for (const auto& sg : g_autoLearnUf8Strips)
+                    if (sg.accepted) { copy.uf8Mode = true; break; }
             uf8::user_plugins::upsert(std::move(copy));
             persistAndReport_();
             // Re-resolve editing pointer after upsert.
@@ -22072,24 +22087,53 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             // 0) The FX the SURFACE is currently driving (rea-sixty's "active
             //    FX": focused CS/BC domain on the focused track + instance
             //    cycle). This is what "aktive FX" means here — it's defined even
-            //    with no plug-in window open and no REAPER focus, so it's the
-            //    primary signal. The others below are fallbacks.
+            //    with no plug-in window open and no REAPER focus.
+            MediaTrack* actTr = nullptr; int actFx = -1, actKey = -2;
             {
                 int aTr = -2, aFx = -1;
                 if (reasixty_activeFocusedFx(&aTr, &aFx)) {
                     MediaTrack* tr = (aTr < 0) ? GetMasterTrack(nullptr)
                                                : GetTrack(nullptr, aTr);
-                    tryFx(tr, aFx, aTr);
+                    if (tr) { actTr = tr; actFx = aFx; actKey = aTr; }
                 }
             }
-            // 1) REAPER's focused FX (covers "still last-focused" too).
+            // 1) REAPER's focused FX — the record of a DELIBERATE PICK.
             int trNum = -1, itemNum = -1, fxNum = -1;
-            if (!ftr && (GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1)) {
+            MediaTrack* focTr = nullptr; int focFx = -1, focKey = -2;
+            if (GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) {
                 MediaTrack* tr = (trNum == 0) ? GetMasterTrack(nullptr)
                                : (trNum > 0)  ? GetTrack(nullptr, trNum - 1)
                                               : nullptr;
-                tryFx(tr, fxNum & 0x00FFFFFF, trNum == 0 ? -1 : trNum - 1);
+                if (tr) { focTr = tr; focFx = fxNum & 0x00FFFFFF;
+                          focKey = (trNum == 0) ? -1 : trNum - 1; }
             }
+            // ⛔ WHAT THE USER JUST PICKED BEATS WHAT THE SURFACE HAPPENS TO BE
+            // ON. Step 0 answers "which plug-in is the surface driving" and it
+            // nearly always answers SOMETHING, so every step below it was
+            // effectively unreachable: focusing a mapped plug-in in the picker
+            // moved REAPER's focus and the page did not budge (Frank
+            // 2026-09-16, a Delta in front of him and FG-Dynamics on the page).
+            // REAPER clears its focused-FX bit the moment this window takes
+            // focus, which is why the pick cannot simply be read live — it has
+            // to be REMEMBERED. And it has to expire, or the page would stop
+            // following the surface, which is the complaint this detector was
+            // written for (2026-06-20). It expires when the surface's own
+            // answer MOVES: the last deliberate act wins, whichever hand it
+            // came from.
+            static MediaTrack* s_pickTr = nullptr;
+            static int         s_pickFx = -1, s_pickKey = -2;
+            static MediaTrack* s_actTr  = nullptr;
+            static int         s_actFx  = -1;
+            if (focTr && focFx >= 0) {
+                s_pickTr = focTr; s_pickFx = focFx; s_pickKey = focKey;
+            }
+            if (actTr && (actTr != s_actTr || actFx != s_actFx)) {
+                s_actTr = actTr; s_actFx = actFx;
+                s_pickTr = nullptr; s_pickFx = -1; s_pickKey = -2;
+            }
+            if (s_pickTr && s_pickFx >= 0)
+                tryFx(s_pickTr, s_pickFx, s_pickKey);
+            if (!ftr && actTr) tryFx(actTr, actFx, actKey);
             // 2) Last-touched FX (persists once a param was moved).
             if (!ftr) {
                 int t = -1, f = -1, p = -1;
