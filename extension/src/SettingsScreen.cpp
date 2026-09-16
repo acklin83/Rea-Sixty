@@ -9239,6 +9239,48 @@ inline int countFunctionalParams_(MediaTrack* tr, int fx)
     return functional;
 }
 
+// ⛔ ONE PLAN FOR BOTH PANELS. Which passes AutoLearn runs was written out
+// twice — the FX-Learn page seeded its Setup modal from the map, the Learn-HUD
+// decided from the tab — and the two drifted apart twice in one day: a mapped
+// UF8 map got the UC1 channel-strip pass in the HUD, and before that the HUD
+// copied the page's rule and proposed UF8 faders while you stood on the Channel
+// Strip tab. One function, one place to change, both panels reading it.
+//
+// `tab`: -1 = the FX-Learn page (it has no tabs, the map's own domain rules),
+// 0 = Channel Strip, 1 = Bus Comp, 2 = UF8, 3 = UF1.
+// A plug-in that is still a blank sheet (no map, no snapshot) has no domain to
+// read, so there the TAB is the statement of intent — and the UF8 passes stay
+// out of it, because a UF8 layout needs a map that says it wants one.
+struct AutoLearnPlan {
+    uf8::Domain slotDom     = uf8::Domain::None;  // None = no UC1 slot pass
+    bool        vpotBanks   = false;              // UF8 V-Pot bank pass
+    bool        chStrips    = false;              // CH<N> fader / cut / solo pass
+    bool        paramFaders = false;              // generic params → faders
+};
+
+AutoLearnPlan autoLearnPlan_(const UserPluginMap* m, int tab)
+{
+    AutoLearnPlan pl;
+    const bool virginPlugin = (!m || m->paramSnapshot.empty());
+    if (virginPlugin) {
+        pl.slotDom = (tab == 1) ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip;
+        return pl;                       // UC1 slots only — see above
+    }
+    if (tab < 0) {
+        // The page: the map says what it is.
+        pl.slotDom     = m->domain;
+        pl.vpotBanks   = m->uf8Mode;
+        pl.paramFaders = !m->uf8Mode;
+        return pl;
+    }
+    // The HUD: the tab you are standing on is the statement of intent.
+    const bool deviceTab = (tab == 2 || tab == 3);
+    pl.slotDom     = deviceTab ? uf8::Domain::None : m->domain;
+    pl.vpotBanks   = (tab == 2);
+    pl.paramFaders = (tab == 2);         // fallback only, see the caller
+    return pl;
+}
+
 // ⛔ ONE SOURCE FOR BOTH PANELS. AutoLearn is offered in two places, and they
 // fed the matcher different parameter lists: the FX-Learn page always handed it
 // the map's paramSnapshot, the Learn-HUD read the LIVE instance whenever the
@@ -9444,6 +9486,11 @@ void applyAutoLearnVpotSlot_(UserPluginMap& m, int fb, int vb, int st, int param
     for (const auto& e : m.paramSnapshot)
         if (e.vst3Param == param) { pi = &e; break; }
     if (!pi) return;
+
+    // The slot's own name. The page wrote it and the HUD did not, so the same
+    // proposal produced two different maps depending on which panel you applied
+    // it from (audit 2026-09-16).
+    if (bs.label.empty()) bs.label = pi->name;
 
     if (pi->wasEnum && bs.vpotMode == uf8::VPotMode::Value)
         bs.vpotMode = uf8::VPotMode::Toggle;
@@ -15538,10 +15585,8 @@ static std::string hudBuildAutoLearnUncached_(void* csTrV, int csFx, int mode)
     // "Was ist da los mit Pan1? Und WIESO macht es FX Learn richtig?" — the page
     // gates on the map's domain, which is None for a UF8-only map, so it never
     // ran that pass). Ask the question that was always meant.
-    const bool virginPlugin = (!m || m->paramSnapshot.empty());
-    const Domain srcDom = virginPlugin
-        ? (mode == 1 ? Domain::BusComp : Domain::ChannelStrip)
-        : m->domain;
+    const AutoLearnPlan plan = autoLearnPlan_(m, mode);
+    const Domain srcDom = plan.slotDom;
     auto scrub = [](std::string v) {
         for (char& ch : v) if (ch == ';' || ch == '\t' || ch == '\n') ch = ' ';
         return v;
@@ -15582,7 +15627,7 @@ static std::string hudBuildAutoLearnUncached_(void* csTrV, int csFx, int mode)
     // Channel Strip bin?"). Standing on the CS tab means the UC1's channel
     // strip; the UF8 passes belong to the UF8 tab and nowhere else.
     const bool uf8Tab     = (mode == 2);
-    const bool wantVpots  = uf8Tab;
+    const bool wantVpots  = plan.vpotBanks;
     // The generic params-onto-faders pass is a FALLBACK, not a partner: it lays
     // every usable param on a fader, and the V-Pot pass has just laid the same
     // ones on knobs. Measured on ValhallaPlate and EchoBoy — every parameter
@@ -19557,12 +19602,16 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         if (!editing->paramSnapshot.empty()) {
             ImGui_SameLine(ctx, nullptr, nullptr);
             if (ImGui_Button(ctx, "AutoLearn…##fxl_auto", nullptr, nullptr)) {
-                g_autoLearnSetupPrimary =
-                    (editing->domain == uf8::Domain::ChannelStrip) ? 1 :
-                    (editing->domain == uf8::Domain::BusComp)      ? 2 : 3;
-                g_autoLearnSetupVpots  = editing->uf8Mode;
-                g_autoLearnSetupStrips = false;
-                g_autoLearnSetupParamFaders = !editing->uf8Mode;
+                // Defaults from the shared plan — the page's tab is "none".
+                {
+                    const AutoLearnPlan pl = autoLearnPlan_(editing, -1);
+                    g_autoLearnSetupPrimary =
+                        (editing->domain == uf8::Domain::ChannelStrip) ? 1 :
+                        (editing->domain == uf8::Domain::BusComp)      ? 2 : 3;
+                    g_autoLearnSetupVpots       = pl.vpotBanks;
+                    g_autoLearnSetupStrips      = pl.chStrips;
+                    g_autoLearnSetupParamFaders = pl.paramFaders;
+                }
                 g_autoLearnSetupOpen   = true;
                 ImGui_OpenPopup(ctx, "AutoLearn Setup##fxl_alsetup", nullptr);
             }
@@ -19591,12 +19640,15 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         ImGui_TextColored(ctx, 0xC0C0FFFF, banner);
         // AutoLearn also works from snapshot alone.
         if (ImGui_Button(ctx, "AutoLearn…##fxl_auto_snap", nullptr, nullptr)) {
-            g_autoLearnSetupPrimary =
-                (editing->domain == uf8::Domain::ChannelStrip) ? 1 :
-                (editing->domain == uf8::Domain::BusComp)      ? 2 : 3;
-            g_autoLearnSetupVpots  = editing->uf8Mode;
-            g_autoLearnSetupStrips = false;
-            g_autoLearnSetupParamFaders = !editing->uf8Mode;
+            {
+                const AutoLearnPlan pl = autoLearnPlan_(editing, -1);
+                g_autoLearnSetupPrimary =
+                    (editing->domain == uf8::Domain::ChannelStrip) ? 1 :
+                    (editing->domain == uf8::Domain::BusComp)      ? 2 : 3;
+                g_autoLearnSetupVpots       = pl.vpotBanks;
+                g_autoLearnSetupStrips      = pl.chStrips;
+                g_autoLearnSetupParamFaders = pl.paramFaders;
+            }
             g_autoLearnSetupOpen   = true;
             ImGui_OpenPopup(ctx, "AutoLearn Setup##fxl_alsetup", nullptr);
         }
@@ -20711,8 +20763,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     uf8::kUserUf8VpotBankCount - 1);
                 const int st = std::clamp(u.strip, 0, 7);
                 applyAutoLearnVpotSlot_(copy, fb, vb, st, u.vst3Param);
-                auto& bs = copy.uf8.banks.banks[fb][vb][st];
-                if (bs.label.empty()) bs.label = u.paramName;
             }
             // Write accepted UF8 strip-control suggestions.
             using StKind = uf8::autolearn::Uf8StripSuggestion::Kind;
