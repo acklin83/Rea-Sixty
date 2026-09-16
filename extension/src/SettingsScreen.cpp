@@ -9354,6 +9354,45 @@ paramNamesFor_(const UserPluginMap& map, const EditingFx& fx, int pcount)
 }
 
 
+// ⇨ AN AUTOLEARN PROPOSAL CARRIES MORE THAN A PARAMETER NUMBER. Two things the
+// two apply paths used to leave on the floor, both of them visible the moment
+// you touch the surface (Frank 2026-09-16, comparing his own Delta 16 map with
+// the proposal):
+//   · A two-state parameter wants Toggle, so a PUSH flips it. Written as Value,
+//     MixA and MixB sat on a pot that can only be hard left or hard right and
+//     the push did nothing. The type comes from the snapshot's wasEnum, which is
+//     REAPER's own answer (isToggle, or a step of half the range or more).
+//   · A V-Pot bank in a matrix map IS a stem — "Pan", "MixA" — and the top
+//     soft-key that selects it can say so instead of showing nothing. The stem
+//     is the parameter name without its channel number.
+// Never overwrites: a mode the user already chose and a bank name already typed
+// both stand. Main-thread only, like every catalog mutation here.
+void applyAutoLearnVpotSlot_(UserPluginMap& m, int fb, int vb, int st, int param)
+{
+    auto& bs = m.uf8.banks.banks[fb][vb][st];
+    bs.vst3Param = param;
+
+    const UserParamInfo* pi = nullptr;
+    for (const auto& e : m.paramSnapshot)
+        if (e.vst3Param == param) { pi = &e; break; }
+    if (!pi) return;
+
+    if (pi->wasEnum && bs.vpotMode == uf8::VPotMode::Value)
+        bs.vpotMode = uf8::VPotMode::Toggle;
+
+    if (vb >= 0 && vb < kUserUf8VpotBankCount
+        && m.uf8.topSoftKeyLeds[vb].label.empty()) {
+        std::string stem = pi->name;
+        while (!stem.empty()
+               && std::isdigit(static_cast<unsigned char>(stem.back())))
+            stem.pop_back();
+        while (!stem.empty()
+               && (stem.back() == ' ' || stem.back() == '_' || stem.back() == '-'))
+            stem.pop_back();
+        if (!stem.empty()) m.uf8.topSoftKeyLeds[vb].label = stem;
+    }
+}
+
 int paramCountFor_(const UserPluginMap& map, const EditingFx& fx)
 {
     if (fx.ok) return TrackFX_GetNumParams(fx.tr, fx.fxIdx);
@@ -15652,8 +15691,7 @@ bool hudApplyAutoLearn_(void* csTrV, int csFx, int mode, const char* spec)
                 const int fb = std::clamp(f[0], 0, kUserUf8FaderBankCount - 1);
                 const int vb = std::clamp(f[1], 0, kUserUf8VpotBankCount - 1);
                 const int st = std::clamp(f[2], 0, 7);
-                auto& bs = m.uf8.banks.banks[fb][vb][st];
-                bs.vst3Param = f[3];
+                applyAutoLearnVpotSlot_(m, fb, vb, st, f[3]);
                 any = true;
             }
         }
@@ -20598,8 +20636,8 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 const int vb = std::clamp(u.vpotBank, 0,
                     uf8::kUserUf8VpotBankCount - 1);
                 const int st = std::clamp(u.strip, 0, 7);
+                applyAutoLearnVpotSlot_(copy, fb, vb, st, u.vst3Param);
                 auto& bs = copy.uf8.banks.banks[fb][vb][st];
-                bs.vst3Param = u.vst3Param;
                 if (bs.label.empty()) bs.label = u.paramName;
             }
             // Write accepted UF8 strip-control suggestions.
