@@ -3933,6 +3933,33 @@ static MediaTrack* favContextTrack_()
     return tr;
 }
 
+// The track a UF8 DYNAMIC BANK paints and acts on. favContextTrack_ answers
+// nullptr the moment REAPER has no selection (Esc clears it, and the UC1's own
+// focus is only there when a UC1 is attached), and dynamicBankSlot_ answers a
+// null track with eight empty keys — so the bank the user was reading vanished
+// off the surface on a keystroke that has nothing to do with it (Frank
+// 2026-09-16: "wenn ich per Esc alle track-selections aufhebe, erscheinen
+// DynBanks nicht mehr sichtbar auf dem UF8"). The UF1 never had this because
+// uf1FocusedTrack_ holds its last valid answer (uf1FocusFallback_); this is the
+// same rule for the UF8's row: keep describing the channel it was already
+// describing, so the labels and the press still agree. Deliberately NOT folded
+// into favContextTrack_ — the favourite / CS / BC keys keep their own "no
+// selection, no target" behaviour until someone asks for it. Main-thread only.
+static MediaTrack* g_dynBankLastCtx = nullptr;
+static MediaTrack* dynBankContextTrack_()
+{
+    if (MediaTrack* tr = favContextTrack_()) { g_dynBankLastCtx = tr; return tr; }
+    if (g_dynBankLastCtx
+        && ValidatePtr2(nullptr, g_dynBankLastCtx, "MediaTrack*"))
+        return g_dynBankLastCtx;
+    g_dynBankLastCtx = nullptr;
+    // Cold start with nothing ever selected: the first track the surface can
+    // see beats a blank bank.
+    if (MediaTrack* first = visibleTrackAt(0))    { g_dynBankLastCtx = first; return first; }
+    if (MediaTrack* first = GetTrack(nullptr, 0)) { g_dynBankLastCtx = first; return first; }
+    return nullptr;
+}
+
 // The CS (cs=true) or BC (cs=false) set a track resolves to via its per-project
 // assignment, or nullptr (→ caller falls back to the base bank).
 static const NamedFavSet* setForTrack_(bool cs, MediaTrack* tr)
@@ -7383,7 +7410,7 @@ static int engagedBankableKind_()
 static void pageDynBank_(int kind, int delta)
 {
     if (kind < 0 || kind >= 8 || delta == 0) return;
-    MediaTrack* tr = favContextTrack_();
+    MediaTrack* tr = dynBankContextTrack_();
     if (!tr) return;
     const auto K = static_cast<uf8::bindings::DynamicBankKind>(kind);
     int count = 0;
@@ -7407,7 +7434,7 @@ static void pageDynBank_(int kind, int delta)
 static void tickDynBankPaging_()
 {
     static void* s_track = nullptr;
-    void* ct = static_cast<void*>(favContextTrack_());
+    void* ct = static_cast<void*>(dynBankContextTrack_());
     if (ct != s_track) {
         s_track = ct;
         for (auto& p : g_dynBankPage) p.store(0);
@@ -8067,7 +8094,7 @@ static void applyDynBankReq_(uint32_t enc)
         uf1FlashTimecode_(nm, 1200);
         return;
     }
-    MediaTrack* tr = favContextTrack_();
+    MediaTrack* tr = dynBankContextTrack_();
     if (!tr) return;
     switch (kind) {
         case DK::FxBank:
@@ -35915,7 +35942,7 @@ void pushZonesForVisibleSlots()
             if (curQuick >= 0
                 && dynKind != uf8::bindings::DynamicBankKind::None
                 && !dynSetOwns) {
-                dynInfo = dynamicBankSlot_(dynKind, favContextTrack_(), s);
+                dynInfo = dynamicBankSlot_(dynKind, dynBankContextTrack_(), s);
                 userLabel = dynInfo.label;
                 userBankSlotPresent = dynInfo.present;
             } else if (curQuick >= 0) {
