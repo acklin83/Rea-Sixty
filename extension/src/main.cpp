@@ -6295,8 +6295,18 @@ int uf8StripBase_()
 // track case). SAFETY: extender off → false → every send path byte-identical.
 bool uf1ExtenderRouteFader_()
 {
+    // ⛔ ALL FOUR FADER-ROUTE MODES, not only the two "this track" ones. The
+    // UF8's own resolveFaderRoute_ asks about g_sendFaderAllIdx / g_recvFaderAllIdx
+    // as well, and in the All variant every strip gets its OWN bank track's send
+    // at that index — so the ninth slot has a well-defined send exactly like the
+    // eight beside it. Missing them left the Extender on plain track volume while
+    // those eight rode sends, and took the knob, CUT, SOLO and the readout with
+    // it, since all of them gate on this one answer (the sweep, 2026-09-16).
+    // uf1ExtenderSendRoute_ resolves through resolveFaderRoute_, which has known
+    // the All variants all along.
     return uf1ExtenderActive_()
-        && (g_sendFaderThisTrack.load() || g_recvFaderThisTrack.load());
+        && (g_sendFaderThisTrack.load() || g_recvFaderThisTrack.load()
+            || g_sendFaderAllIdx.load() >= 0 || g_recvFaderAllIdx.load() >= 0);
 }
 
 // The send/receive WINDOW width: 8 physical UF8 strips + 1 when the UF1 Extender
@@ -19941,6 +19951,18 @@ void drainInputQueue()
             // showed the bank slot while the press hit whatever was selected.
             // Same class as the SEL fix (Uf1SelectFocused below) and da8a2f6.
             if (MediaTrack* tr = uf1FaderTrack_()) {
+                // Held keyboard modifier → REAPER's solo-button modes, the same
+                // divert the UF8 strip SOLO and the UC1's have. The feature was
+                // built for those two in June and the UF1 was simply never
+                // added, so ignore-routing, unsolo-all, exclusive and defeat
+                // worked on two panels out of three (the sweep, 2026-09-16).
+                // Placed where the other two put it: after the REC and route
+                // branches, ahead of the plain toggle, skipping the group
+                // broadcast for the same reason they do.
+                if (const int sm = reasixty_soloMuteMod(); sm != 0) {
+                    reasixty_applySoloMod(tr, sm);
+                    continue;
+                }
                 CSurf_OnSoloChange(tr, -1);
                 const bool on = GetMediaTrackInfo_Value(tr, "I_SOLO") > 0.5;
                 uf8::param_groups::broadcastSoloMute(tr, true, on ? 1 : 0);
@@ -19965,6 +19987,12 @@ void drainInputQueue()
             }
             // ⛔ uf1FaderTrack_ — see the SOLO branch above. CUT is the fader side.
             if (MediaTrack* tr = uf1FaderTrack_()) {
+                // See the SOLO branch above — the same modifier divert the UF8
+                // and the UC1 have had since June.
+                if (const int sm = reasixty_soloMuteMod(); sm != 0) {
+                    reasixty_applyMuteMod(tr, sm);
+                    continue;
+                }
                 CSurf_OnMuteChange(tr, -1);
                 const bool on = GetMediaTrackInfo_Value(tr, "B_MUTE") > 0.5;
                 uf8::param_groups::broadcastSoloMute(tr, false, on ? 1 : 0);
