@@ -9614,9 +9614,13 @@ void autoAdvanceListening_(const uf8::PluginMap& topo)
 
 // Set or clear the display label for a UC1 slot. Names the PARAMETER, not just
 // this control (v13) — the same name then shows on the UF8 and the UF1. The
-// slot's own customLabel is cleared so it can't shadow the shared one. On a
-// MODIFIER layer the name stays slot-local: that layer's param is a different
-// binding of the same control, and naming it must not rename the Normal one.
+// slot's own customLabel is cleared so it can't shadow the shared one.
+// ⛔ ON A MODIFIER LAYER TOO. This used to keep an Option/Control name
+// slot-local, on the grounds that the overlay is a different BINDING of the same
+// control — but it is still the same PARAMETER, and the Learn-HUD's rename never
+// drew that distinction, so the two panels disagreed about how far a rename
+// reaches. Frank 2026-09-16, extending his rule of the same morning: a parameter
+// is called the same thing everywhere.
 void setCustomLabel_(int linkIdx, const std::string& label)
 {
     if (g_editingMatch.empty() || linkIdx < 0) return;
@@ -9626,11 +9630,12 @@ void setCustomLabel_(int linkIdx, const std::string& label)
         for (auto& s : m.slots) {
             if (s.linkIdx == linkIdx) {
                 uf8::SlotLayer& lay = editLayerRef_(s);
-                if (g_fxLearnEditLayer == uf8::FxLayer::Normal
-                    && lay.vst3Param >= 0) {
+                if (lay.vst3Param >= 0) {
                     uf8::user_plugins::setParamLabel(m, lay.vst3Param, label);
                     lay.customLabel.clear();
                 } else {
+                    // Macro-only slot: no parameter to name, so the label has
+                    // nowhere to live but the slot.
                     lay.customLabel = label;
                 }
                 uf8::user_plugins::upsert(m);

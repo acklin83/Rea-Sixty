@@ -4186,8 +4186,8 @@ void uf1FollowUf8StripMode_(bool on)
     if (g_uf1StripMode.load() == on)   return;   // already there: leave its GUI alone
     g_uf1StripMode.store(on);
     g_uf1StripModeWithGui.store(false);
-    SetExtState("rea_sixty", "uf1StripMode",    on ? "1" : "0", true);
-    SetExtState("rea_sixty", "uf1StripModeGui", "0", true);
+    SetExtState("rea_sixty", "uf1StripMode",    on ? "1" : "0", false);
+    SetExtState("rea_sixty", "uf1StripModeGui", "0", false);
     g_pluginGuiSyncRequest.store(true);
     g_pageDirty.store(true);
 }
@@ -4305,7 +4305,7 @@ inline void engageUf8PluginMode_(bool withGui)
     if (g_pluginFaderMode.load()) {
         g_pluginFaderMode.store(false);
         g_pluginFaderModeWithGui.store(false);
-        SetExtState("ReaSixty", "pluginFaderMode", "0", true);
+        SetExtState("ReaSixty", "pluginFaderMode", "0", false);
         uf1FollowUf8StripMode_(false);
     }
     parkSelModeForUf8PluginMode_();
@@ -4608,6 +4608,12 @@ void loadBrightness()
     // hud_on from older builds (which wrote it persist=true) so it can't re-trigger
     // the tick-30 auto-start. DeleteExtState(persist=true) clears the .ini entry.
     DeleteExtState("rea_sixty", "hud_on", true);
+    // SSL Strip Mode is session-only too (see the entrypoint note). Older builds
+    // wrote all three keys persist=true, so clear the .ini entries or a restart
+    // could still come up in a mode nobody asked for.
+    DeleteExtState("rea_sixty", "uf1StripMode",    true);
+    DeleteExtState("rea_sixty", "uf1StripModeGui", true);
+    DeleteExtState("ReaSixty",  "pluginFaderMode", true);
     if (const char* v = GetExtState("rea_sixty", "focused_panel_on"); v && *v) {
         g_focusedPanel.store(std::atoi(v) != 0);
     }
@@ -15641,7 +15647,7 @@ void applyShowFocusedPluginGui_()
     if (g_pluginFaderMode.load() && g_pluginFaderModeWithGui.load()) {
         g_pluginFaderMode.store(false);
         g_pluginFaderModeWithGui.store(false);
-        SetExtState("ReaSixty", "pluginFaderMode", "0", true);
+        SetExtState("ReaSixty", "pluginFaderMode", "0", false);
         uf1FollowUf8StripMode_(false);
         g_pageDirty.store(true);
         g_bankDirty.store(true);
@@ -17958,9 +17964,19 @@ CsPanHandle csPanForTrack(MediaTrack* tr)
 // and the value line did not, so PAN looked like it did something while
 // the knob kept moving the plug-in. Out is REAPER space, -1..+1.
 // Returns false when the strip has no CS pan — caller keeps track pan.
-bool csStripPanReadout_(MediaTrack* tr, double* out)
+// ⛔ `inStripMode` IS A PARAMETER because the two surfaces read two different
+// registers, by design. The UF8/UC1 toggle is g_pluginFaderMode; the UF1 has its
+// own PLUG-IN key in g_uf1StripMode, split on 2026-07-30 so the surfaces stop
+// dragging each other around, and the Settings option "UF1 Strip Mode follows
+// the UF8" couples them by MIRRORING the UF8's toggle into g_uf1StripMode
+// (uf1FollowUf8StripMode_). Reading g_pluginFaderMode on a UF1 path therefore
+// walks past that option AND past the UF1's own key: on 2026-09-16 the pan did
+// exactly that while the fader beside it read the right register, so one strip's
+// two controls hung on two switches (Frank: "hatten wir dafür nicht eine
+// option?" — there is one, and this bypassed it).
+bool csStripPanReadout_(MediaTrack* tr, bool inStripMode, double* out)
 {
-    if (!tr || !g_pluginFaderMode.load()) return false;
+    if (!tr || !inStripMode) return false;
     const auto pn = csPanForTrack(tr);
     if (pn.vst3Param < 0) return false;
     *out = TrackFX_GetParamNormalized(tr, pn.fxIndex, pn.vst3Param) * 2.0 - 1.0;
@@ -18558,8 +18574,10 @@ void applyUf1AboveFaderVpot_(int step)
             // (Frank 2026-09-16). Same half-scale (the plug-in's 0..1 against
             // REAPER's -1..+1), same centre notch and same group broadcast as the
             // UF8 path, and the same fallback to REAPER's pan when the track
-            // carries no CS plug-in.
-            if (g_pluginFaderMode.load()) {
+            // carries no CS plug-in. THE UF1'S OWN REGISTER, so its PLUG-IN key
+            // and the "follows the UF8" option both reach it — see
+            // csStripPanReadout_.
+            if (g_uf1StripMode.load()) {
                 if (const auto pn = csPanForTrack(tr); pn.vst3Param >= 0) {
                     const double cur = TrackFX_GetParamNormalized(
                         tr, pn.fxIndex, pn.vst3Param);
@@ -20239,7 +20257,7 @@ void drainInputQueue()
                     // the CS plug-in's Pan, whose centre is norm 0.5 — centring
                     // REAPER's instead moved a pan the knob was not on (Frank
                     // 2026-09-16). Twin of the UF8's PanCenter push.
-                    else if (const auto pn = g_pluginFaderMode.load()
+                    else if (const auto pn = g_uf1StripMode.load()
                                  ? csPanForTrack(tr) : CsPanHandle{-1, -1};
                              pn.vst3Param >= 0) {
                         TrackFX_SetParamNormalized(tr, pn.fxIndex,
@@ -29884,9 +29902,9 @@ void uf1FireSkSpecial_(uf8::Uf1SkSpecial act, MediaTrack* tr)
             const bool next = !g_uf1StripMode.load();
             g_uf1StripMode.store(next);
             g_uf1StripModeWithGui.store(gui && next);
-            SetExtState("rea_sixty", "uf1StripMode", next ? "1" : "0", true);
+            SetExtState("rea_sixty", "uf1StripMode", next ? "1" : "0", false);
             SetExtState("rea_sixty", "uf1StripModeGui",
-                        (gui && next) ? "1" : "0", true);
+                        (gui && next) ? "1" : "0", false);
             g_pluginGuiSyncRequest.store(true);
             g_pageDirty.store(true);
             return;
@@ -31214,7 +31232,8 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         // plug-in's Pan (applyUf1AboveFaderVpot_), so the line and the bar have
         // to come from there too.
         double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
-        if (double csPan = 0.0; csStripPanReadout_(tr, &csPan)) pan = csPan;
+        if (double csPan = 0.0;
+            csStripPanReadout_(tr, g_uf1StripMode.load(), &csPan)) pan = csPan;
         valLine   = composeValueLine("Pan", formatPanReadout(pan));
         barPos    = std::clamp(static_cast<int>(std::lround((pan + 1.0) * 50.0)), 0, 100);
         barCentre = (pan == 0.0) ? 0x80 : 0x00;
@@ -37470,7 +37489,7 @@ void pushZonesForVisibleSlots()
             }
         } else if (g_forcePan.load()) {
             double csPan = 0.0;
-            if (csStripPanReadout_(tr, &csPan)) {
+            if (csStripPanReadout_(tr, g_pluginFaderMode.load(), &csPan)) {
                 vpotBar[s] = vpotPosFromPan(csPan);
             } else {
                 double vDisp = 1.0, pan = 0.0;   // effective pan (reflects envelope)
@@ -37503,7 +37522,7 @@ void pushZonesForVisibleSlots()
             // byte1=0x80) renders as the LEFT EDGE. That is why centre
             // pan sat hard left in Strip Mode (Frank 2026-09-16).
             double csPan = 0.0;
-            if (csStripPanReadout_(tr, &csPan)) {
+            if (csStripPanReadout_(tr, g_pluginFaderMode.load(), &csPan)) {
                 vpotBar[s] = vpotPosFromPan(csPan);
             } else {
                 double vDisp = 1.0, pan = 0.0;   // effective pan (reflects envelope)
@@ -37990,7 +38009,7 @@ void pushZonesForVisibleSlots()
             // Strip Mode the knob still writes the CS plug-in's Pan, so
             // the readout has to follow it there instead of REAPER's.
             double csPan = 0.0;
-            const double pan = csStripPanReadout_(tr, &csPan)
+            const double pan = csStripPanReadout_(tr, g_pluginFaderMode.load(), &csPan)
                 ? csPan
                 : GetMediaTrackInfo_Value(tr, "D_PAN");
             valLine = composeValueLine("Pan", formatPanReadout(pan));
@@ -38097,7 +38116,7 @@ void pushZonesForVisibleSlots()
             // existing formatPanReadout helper. Falls back to track
             // pan when there's no CS plug-in on the track.
             double csPan = 0.0;
-            const double pan = csStripPanReadout_(tr, &csPan)
+            const double pan = csStripPanReadout_(tr, g_pluginFaderMode.load(), &csPan)
                 ? csPan
                 : GetMediaTrackInfo_Value(tr, "D_PAN");
             valLine = composeValueLine("Pan", formatPanReadout(pan));
@@ -43863,8 +43882,8 @@ void onTimerBody_()
                 sUf1SmMatch.clear();
                 g_uf1StripMode.store(false);
                 g_uf1StripModeWithGui.store(false);
-                SetExtState("rea_sixty", "uf1StripMode",    "0", true);
-                SetExtState("rea_sixty", "uf1StripModeGui", "0", true);
+                SetExtState("rea_sixty", "uf1StripMode",    "0", false);
+                SetExtState("rea_sixty", "uf1StripModeGui", "0", false);
                 g_pluginGuiSyncRequest.store(true);
                 g_pageDirty.store(true);
             }
@@ -51420,7 +51439,7 @@ void registerBindingHandlers()
             // re-illuminate from track state on exit).
             g_bankDirty.store(true);
             SetExtState("ReaSixty", "pluginFaderMode",
-                        next ? "1" : "0", true);
+                        next ? "1" : "0", false);
         },
         [](int) { return g_pluginFaderMode.load()
                        && !g_pluginFaderModeWithGui.load(); },
@@ -51457,7 +51476,7 @@ void registerBindingHandlers()
             // re-illuminate from track state on exit).
             g_bankDirty.store(true);
             SetExtState("ReaSixty", "pluginFaderMode",
-                        next ? "1" : "0", true);
+                        next ? "1" : "0", false);
             g_pluginGuiSyncRequest.store(true);
         },
         [](int) { return g_pluginFaderMode.load()
@@ -51689,8 +51708,8 @@ void registerBindingHandlers()
             // from the GUI builtin to this one stops following the GUI; the
             // sync drain then closes any window we'd opened (as the UF8 pair).
             g_uf1StripModeWithGui.store(false);
-            SetExtState("rea_sixty", "uf1StripMode", next ? "1" : "0", true);
-            SetExtState("rea_sixty", "uf1StripModeGui", "0", true);
+            SetExtState("rea_sixty", "uf1StripMode", next ? "1" : "0", false);
+            SetExtState("rea_sixty", "uf1StripModeGui", "0", false);
             g_pluginGuiSyncRequest.store(true);
             g_pageDirty.store(true);
         },
@@ -51710,8 +51729,8 @@ void registerBindingHandlers()
             const bool next = !g_uf1StripMode.load();
             g_uf1StripMode.store(next);
             g_uf1StripModeWithGui.store(next);
-            SetExtState("rea_sixty", "uf1StripMode", next ? "1" : "0", true);
-            SetExtState("rea_sixty", "uf1StripModeGui", next ? "1" : "0", true);
+            SetExtState("rea_sixty", "uf1StripMode", next ? "1" : "0", false);
+            SetExtState("rea_sixty", "uf1StripModeGui", next ? "1" : "0", false);
             g_pluginGuiSyncRequest.store(true);
             g_pageDirty.store(true);
         },
@@ -52098,7 +52117,7 @@ void registerBindingHandlers()
             if (next && g_pluginFaderMode.load()) {
                 g_pluginFaderMode.store(false);
                 g_pluginFaderModeWithGui.store(false);
-                SetExtState("ReaSixty", "pluginFaderMode", "0", true);
+                SetExtState("ReaSixty", "pluginFaderMode", "0", false);
                 uf1FollowUf8StripMode_(false);
             }
             // Park Sel-Mode on entry (so V-Pots can drive plug-in
@@ -52140,7 +52159,7 @@ void registerBindingHandlers()
             if (next && g_pluginFaderMode.load()) {
                 g_pluginFaderMode.store(false);
                 g_pluginFaderModeWithGui.store(false);
-                SetExtState("ReaSixty", "pluginFaderMode", "0", true);
+                SetExtState("ReaSixty", "pluginFaderMode", "0", false);
                 uf1FollowUf8StripMode_(false);
             }
             // Park Sel-Mode on entry, restore on exit — see plain
@@ -54916,8 +54935,14 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         if (lm < 0 || lm >= kEncoderModeCount || !g_uf1EncoderVisible[lm].load())
             uf1EncoderAdvancePastHidden_(lm < 0 || lm >= kEncoderModeCount ? 0 : lm);
     }
-    if (const char* v = GetExtState("rea_sixty", "uf1StripMode"); v && *v)
-        g_uf1StripMode.store(std::atoi(v) != 0);
+    // ⛔ SSL STRIP MODE DOES NOT SURVIVE A RESTART, on any surface (Frank
+    // 2026-09-16). It used to on the UF1 alone: all three keys were written
+    // persist=true and this one line read one of them back, so the UF1 came up
+    // in Strip Mode while the UF8 beside it came up on track volume — and the
+    // "with GUI" twin was never read at all, which is why the two PLUG-IN lamps
+    // came back swapped. The declaration comment had said "session-only,
+    // least-surprise on restart" all along; the writers now match it, and the
+    // wipe below clears what older builds left in the ini.
     if (const char* v = GetExtState("rea_sixty", "uf1SendsFollowHeld"); v && *v)
         g_uf1SendsFollowHeld.store(std::atoi(v) != 0);   // default true if never set
     if (const char* v = GetExtState("rea_sixty", "uf1Extender"); v && *v)
