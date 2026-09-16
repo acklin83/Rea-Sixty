@@ -18526,17 +18526,17 @@ void applyUf1AboveFaderVpot_(int step)
     }
     switch (g_uf1AboveFaderMode.load()) {
         case Uf1AboveFaderMode::Pan:
-            // As the NINTH STRIP of the UF8 bank this knob has to pan what the
-            // eight beside it pan, and in SSL Strip Mode that is the CS plug-in's
-            // own Pan (linkIdx 3), not REAPER's track pan. Otherwise the extender
-            // strip moves a different pan than its neighbours and its readout
-            // prints a different number (Frank 2026-09-16). Same half-scale (the
-            // plug-in's 0..1 against REAPER's -1..+1), same centre notch and same
-            // group broadcast as the UF8 V-Pot's strip-mode pan. Falls through to
-            // REAPER's pan when the track carries no CS plug-in, exactly as the
-            // UF8 path does. Extender only: without it this knob is the UF1's own
-            // channel, not part of the UF8 bank.
-            if (uf1ExtenderActive_() && g_pluginFaderMode.load()) {
+            // In SSL Strip Mode the pan of a channel is the CS plug-in's own Pan
+            // (linkIdx 3), not REAPER's track pan — that is what the UF8 V-Pots
+            // drive, and this knob is the UF1's pan knob, so it drives the same
+            // thing. As an extender it sits in that bank as the ninth strip and
+            // moved a different pan than the eight beside it; on its own it
+            // disagreed with the UF8 about the pan of one and the same channel
+            // (Frank 2026-09-16). Same half-scale (the plug-in's 0..1 against
+            // REAPER's -1..+1), same centre notch and same group broadcast as the
+            // UF8 path, and the same fallback to REAPER's pan when the track
+            // carries no CS plug-in.
+            if (g_pluginFaderMode.load()) {
                 if (const auto pn = csPanForTrack(tr); pn.vst3Param >= 0) {
                     const double cur = TrackFX_GetParamNormalized(
                         tr, pn.fxIndex, pn.vst3Param);
@@ -20193,6 +20193,18 @@ void drainInputQueue()
                         TrackFX_SetParamNormalized(tr, efx, eprm, pv);
                         uf8::param_groups::broadcastBuiltinSlot(
                             tr, uf8::getFocusedParam().domain, efocus, pv);
+                    }
+                    // Centre the pan the knob DRIVES. In SSL Strip Mode that is
+                    // the CS plug-in's Pan, whose centre is norm 0.5 — centring
+                    // REAPER's instead moved a pan the knob was not on (Frank
+                    // 2026-09-16). Twin of the UF8's PanCenter push.
+                    else if (const auto pn = g_pluginFaderMode.load()
+                                 ? csPanForTrack(tr) : CsPanHandle{-1, -1};
+                             pn.vst3Param >= 0) {
+                        TrackFX_SetParamNormalized(tr, pn.fxIndex,
+                                                   pn.vst3Param, 0.5);
+                        uf8::param_groups::broadcastBuiltinSlot(
+                            tr, uf8::Domain::ChannelStrip, 3, 0.5);
                     }
                     else
                         CSurf_OnPanChange(tr, 0.0, /*relative*/false);   // centre Pan
@@ -31109,15 +31121,11 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         barPos    = std::clamp(static_cast<int>(std::lround(nrm * 100.0)), 0, 100);
         barCentre = 0x00;
     } else {
-        // Reads the pan this knob WRITES: as the ninth strip of the UF8 bank it
-        // drives the CS plug-in's Pan in SSL Strip Mode (applyUf1AboveFaderVpot_),
-        // so the line and the bar have to come from there too.
+        // Reads the pan this knob WRITES: in SSL Strip Mode that is the CS
+        // plug-in's Pan (applyUf1AboveFaderVpot_), so the line and the bar have
+        // to come from there too.
         double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
-        if (double csPan = 0.0;
-            uf1ExtenderActive_() && csStripPanReadout_(tr, &csPan))
-        {
-            pan = csPan;
-        }
+        if (double csPan = 0.0; csStripPanReadout_(tr, &csPan)) pan = csPan;
         valLine   = composeValueLine("Pan", formatPanReadout(pan));
         barPos    = std::clamp(static_cast<int>(std::lround((pan + 1.0) * 50.0)), 0, 100);
         barCentre = (pan == 0.0) ? 0x80 : 0x00;
