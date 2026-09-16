@@ -41978,16 +41978,32 @@ void onTimerBody_()
         {
             const char* utp = GetExtState("rea_sixty", "hud_uf8_tab");
             const bool uf8Tab = (utp && utp[0] == '1');
-            if (uf8Tab && !g_hudUf8TabActive) {
+            // ⛔ ONLY WHEN THERE IS SOMETHING TO SHOW. The tab alone used to
+            // engage the mode, so standing on a track whose plug-in carries no
+            // UF8 map handed all eight strips to a map that does not exist: the
+            // scribbles blank by design in this mode, and the surface looked
+            // broken while nothing was wrong with it (Frank 2026-09-16, on a
+            // SNARE: "die UF8 geht ohne uf8-gemapptes plugin in eine art uf8
+            // mode und zeigt nix an"). resolveFocusedUf8Target_ is the same
+            // resolver the tab itself uses, and it deliberately asks uf8Mode
+            // rather than the mode flag, so it can answer before we engage.
+            // Re-asked every tick while the tab is open: walk onto a mapped
+            // track and the mode comes with you, walk off and it lets go —
+            // and it only ever lets go of what it engaged itself.
+            bool wantUf8Mode = false;
+            if (uf8Tab) {
+                MediaTrack* mTr = nullptr; int mFx = -1; const void* mMap = nullptr;
+                resolveFocusedUf8Target_(mTr, mFx, mMap, nullptr);
+                wantUf8Mode = (mMap != nullptr);
+            }
+            if (wantUf8Mode) {
                 if (!g_uf8PluginMode.load()) {
                     engageUf8PluginMode_(false);
                     g_hudUf8AutoEngaged = true;
                 }
-            } else if (!uf8Tab && g_hudUf8TabActive) {
-                if (g_hudUf8AutoEngaged) {
-                    disengageUf8PluginMode_();   // no-op if already off
-                    g_hudUf8AutoEngaged = false;
-                }
+            } else if (g_hudUf8AutoEngaged) {
+                disengageUf8PluginMode_();   // no-op if already off
+                g_hudUf8AutoEngaged = false;
             }
             g_hudUf8TabActive = uf8Tab;
         }
