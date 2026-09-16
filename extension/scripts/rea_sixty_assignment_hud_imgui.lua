@@ -911,8 +911,19 @@ local function drawTabs(st, ust)
     end
     btnR.learn = uf8Toggle("Touch to Learn",
       reaper.GetExtState(SECT, "hud_touch_learn") == "1", 0xE0A838)   -- amber
+    -- Lit = the content the drawer is SHOWING, same pair as on the CS/BC tabs.
     btnR.param = uf8Toggle("Parameter List",
-      reaper.GetExtState(SECT, "hud_imgui_params") == "1", 0x4A90D8)  -- blue
+      reaper.GetExtState(SECT, "hud_imgui_params") == "1"
+        and reaper.GetExtState(SECT, "hud_imgui_al") ~= "1", 0x4A90D8)  -- blue
+    -- ⇨ AUTOLEARN BELONGS HERE TOO. Everything behind it has been ready since
+    -- 2026-09-03: hud_al_req names the TAB, hudBuildAutoLearn_ takes mode 2 for
+    -- the UF8 and 3 for the UF1, and the apply path creates the map when the
+    -- plug-in has none. Only this button row stopped at two toggles and
+    -- returned, so the one tab where a sixteen-channel plug-in is worth
+    -- proposing for was the one tab that could not ask (Frank 2026-09-16, on a
+    -- Delta Control 16: "wieso kann ich hier nicht autolearn machen?").
+    btnR.al = uf8Toggle("AutoLearn",
+      reaper.GetExtState(SECT, "hud_imgui_al") == "1", 0x2E9E7A)
     return
   end
 
