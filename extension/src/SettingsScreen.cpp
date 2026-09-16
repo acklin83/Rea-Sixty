@@ -13981,6 +13981,11 @@ bool mapActiveUnmappedFx_()
     persistAndReport_();
     if (!g_lastSaveError.empty()) return false;
     switchTo(match);
+    // The banner has just been answered: it asked for a map and there is one.
+    // The follow-detector would catch up on the next frame via the catalog
+    // generation, but the button and the banner sit in the same frame and a
+    // stale "no map yet" under a freshly created map reads like a failure.
+    g_activeUnmappedFx.clear();
 
     // The live instance the banner found: snapshot its parameters so the editor
     // stays usable with no instance loaded, and leave the cursor on it.
@@ -21925,6 +21930,34 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 ("Active plug-in: " + g_activeFactoryFx
                  + "  \xE2\x80\x94  factory map, not editable").c_str());
             ImGui_Spacing(ctx);
+        }
+        // ⛔ THE BANNER IS A QUESTION, AND IT HAS TO NOTICE ITS OWN ANSWER. It is
+        // written by the follow-detector above, which only re-runs when the
+        // FOCUSED FX changes — and mapping a plug-in does not change which FX is
+        // focused. So "no map yet", with its button, stayed standing over an
+        // editor that was already editing the map it was offering to create
+        // (Frank 2026-09-16). Re-ask whenever the catalog has moved: one int
+        // compare per frame, one name lookup per catalog change. NOT folded into
+        // the detector's key, because that block also switches g_editingMatch —
+        // every saved binding bumps the generation, and the editor would jump to
+        // the active plug-in's map mid-edit of another one.
+        {
+            static int s_bannerGen = -1;
+            const int gen = static_cast<int>(uf8::user_plugins::generation());
+            if (gen != s_bannerGen) {
+                s_bannerGen = gen;
+                if (!g_activeUnmappedFx.empty() && g_activeUnmappedTr
+                    && g_activeUnmappedFxIdx >= 0
+                    && ValidatePtr2(nullptr, g_activeUnmappedTr, "MediaTrack*")) {
+                    char nm[512] = {0};
+                    if (uf8::fxIdentityName(g_activeUnmappedTr,
+                                            g_activeUnmappedFxIdx,
+                                            nm, sizeof(nm))
+                        && uf8::user_plugins::lookupOwnedByName(nm)) {
+                        g_activeUnmappedFx.clear();
+                    }
+                }
+            }
         }
         if (!g_activeUnmappedFx.empty()) {
             ImGui_TextColored(ctx, 0x66CCFFFF,
