@@ -141,6 +141,7 @@ std::string g_installStatus;
 int         g_installColor = 0;
 up::MapShare g_pendingInstall;     // downloaded, awaiting a replace-confirm
 bool        g_pendingClash = false;
+std::string g_pendingClashWith;   // the user's own map that install would replace
 
 // ---- "works for me" -------------------------------------------------------
 // The only write the browse surface performs. It needs the upload token: the
@@ -263,6 +264,7 @@ void openMap(int mapId) {
     g_mapError.clear();
     g_installStatus.clear();
     g_pendingClash = false;
+    g_pendingClashWith.clear();
     g_uf8FaderSel = 0;               // start on fader bank 1 for each map
     g_view = View::Map;
     g_mapReq = http::begin("GET", baseUrl() + "/v1/maps/" + std::to_string(mapId));
@@ -274,6 +276,7 @@ void startInstall(int mapId) {
     g_installStatus.clear();
     g_installColor = 0;
     g_pendingClash = false;
+    g_pendingClashWith.clear();
     g_dlMapId = mapId;
     g_dlReq = http::begin("GET", baseUrl() + "/v1/maps/" + std::to_string(mapId) + "/download");
     if (!g_dlReq) { g_installStatus = "Bad server URL."; g_installColor = 0xCC4444FF; }
@@ -441,13 +444,20 @@ void toggleWorks(int mapId, bool undo) {
     }
 }
 
-void applyInstall(up::MapShare&& share) {
+// `replacing` is the match string of the user's own map this install was
+// confirmed to replace — empty when there was nothing to replace. ⛔ upsert
+// alone is not enough: it keys on the INCOMING match, and a map that clashes by
+// overlap is spelled differently by definition, so the one being replaced would
+// simply stay next to it and, being broader, could keep winning the lookup
+// (Frank 2026-09-16). "Replace mine" has to mean gone.
+void applyInstall(up::MapShare&& share, const std::string& replacing = {}) {
     const std::string match = share.map.match;
     if (up::collidesWithBuiltin(match)) {
         g_installStatus = "Can't install — \"" + match + "\" is a built-in mapping.";
         g_installColor = 0xCC4444FF;
         return;
     }
+    if (!replacing.empty() && replacing != match) up::removeByMatch(replacing);
     up::upsert(std::move(share.map));
     switch (up::save()) {
         case up::SaveResult::Ok:
@@ -729,13 +739,28 @@ void pumpDownload() {
         return;
     }
     // Replacing an existing user map wholesale is the user's call.
-    bool exists = false;
-    for (const auto& m : up::get().maps)
-        if (m.match == share.map.match) { exists = true; break; }
-    if (exists) {
+    // ⛔ TWO MAPS CLASH WHEN THEY HIT THE SAME PLUG-IN, not when their match
+    // strings are spelled the same. Matching is by SUBSTRING, so "SSL Delta
+    // Control 16 (SSL)" and "VST3: SSL Delta Control 16 (SSL) (mono)" are the
+    // same plug-in wearing two names — and an equality test let the second one
+    // in beside the first without a word. The install then reported success
+    // while the surface kept playing the older map (Frank 2026-09-16: "sagt, er
+    // hätte sie geladen, ist aber noch die alte drauf"). Either containing the
+    // other is the same test the lookup itself performs.
+    std::string clashWith;  // also the map "Replace mine" has to remove
+    for (const auto& m : up::get().maps) {
+        if (m.match.empty() || share.map.match.empty()) continue;
+        if (m.match.find(share.map.match) != std::string::npos
+            || share.map.match.find(m.match) != std::string::npos) {
+            clashWith = m.match;
+            break;
+        }
+    }
+    if (!clashWith.empty()) {
         g_pendingInstall = std::move(share);
         g_pendingClash = true;
-        g_installStatus = "You already have a mapping for \"" + g_pendingInstall.map.match + "\".";
+        g_pendingClashWith = clashWith;
+        g_installStatus = "You already have a mapping for \"" + clashWith + "\".";
         g_installColor = 0xCC8844FF;
     } else {
         applyInstall(std::move(share));
@@ -1145,13 +1170,15 @@ void drawMap(ImGui_Context* ctx) {
                                "Replacing discards your version — there is no undo.");
         if (ImGui_Button(ctx, "Replace mine##exch_replace", nullptr, nullptr)) {
             g_pendingClash = false;
-            applyInstall(std::move(g_pendingInstall));
+            applyInstall(std::move(g_pendingInstall), g_pendingClashWith);
             g_pendingInstall = up::MapShare();
+            g_pendingClashWith.clear();
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
         if (ImGui_Button(ctx, "Keep mine##exch_keep", nullptr, nullptr)) {
             g_pendingClash = false;
             g_pendingInstall = up::MapShare();
+            g_pendingClashWith.clear();
             g_installStatus.clear();
         }
     } else {

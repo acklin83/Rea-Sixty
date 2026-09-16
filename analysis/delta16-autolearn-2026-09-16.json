@@ -1,0 +1,2292 @@
+{
+ "format_version": 18,
+ "plugins": [
+  {
+   "match": "SSL Delta Control 16 (SSL)",
+   "domain": "None",
+   "displayShort": "SSL Delta Co",
+   "isDefault": false,
+   "uf8Mode": true,
+   "snapshotTakenAt": 1789570226,
+   "original_name": "VST3: SSL Delta Control 16 (SSL) (mono)",
+   "functional_params": 100,
+   "slots": [
+    {
+     "linkIdx": 0,
+     "vst3Param": 129,
+     "inverted": false
+    },
+    {
+     "linkIdx": 3,
+     "vst3Param": 32,
+     "inverted": false
+    },
+    {
+     "linkIdx": 7,
+     "vst3Param": 57,
+     "inverted": false
+    },
+    {
+     "linkIdx": 23,
+     "vst3Param": 82,
+     "inverted": false
+    },
+    {
+     "linkIdx": 37,
+     "vst3Param": 16,
+     "inverted": false
+    }
+   ],
+   "uf8": {
+    "banksByFaderBank": [
+     [
+      [
+       {
+        "vst3Param": 16,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 17,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 18,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 19,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 20,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 21,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 22,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 23,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ],
+      [
+       {
+        "vst3Param": 32,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 33,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 34,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 35,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 36,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 37,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 38,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 39,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ],
+      [
+       {
+        "vst3Param": 64,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 65,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 66,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 67,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 68,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 69,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 70,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 71,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ],
+      [
+       {
+        "vst3Param": 80,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 81,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 82,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 83,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 84,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 85,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 86,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 87,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ],
+      [
+       {
+        "vst3Param": 96,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 97,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 98,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 99,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 100,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 101,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 102,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 103,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ],
+      [
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ],
+      [
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ],
+      [
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ]
+     ],
+     [
+      [
+       {
+        "vst3Param": 24,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 25,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 26,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 27,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 28,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 29,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 30,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 31,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ],
+      [
+       {
+        "vst3Param": 40,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 41,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 42,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 43,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 44,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 45,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 46,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 47,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ],
+      [
+       {
+        "vst3Param": 72,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 73,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 74,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 75,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 76,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 77,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 78,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 79,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ],
+      [
+       {
+        "vst3Param": 88,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 89,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 90,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 91,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 92,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 93,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 94,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 95,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ],
+      [
+       {
+        "vst3Param": 104,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 105,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 106,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 107,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 108,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 109,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 110,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": 111,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ],
+      [
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ],
+      [
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ],
+      [
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       },
+       {
+        "vst3Param": -1,
+        "label": "",
+        "vpotMode": "Value",
+        "inverted": false,
+        "defaultNorm": 0.5,
+        "stripColour": 0
+       }
+      ]
+     ]
+    ],
+    "stripsByFaderBank": [
+     [
+      {
+       "fader": {
+        "vst3Param": 0,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 112,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 48,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      },
+      {
+       "fader": {
+        "vst3Param": 1,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 113,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 49,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      },
+      {
+       "fader": {
+        "vst3Param": 2,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 114,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 50,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      },
+      {
+       "fader": {
+        "vst3Param": 3,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 115,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 51,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      },
+      {
+       "fader": {
+        "vst3Param": 4,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 116,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 52,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      },
+      {
+       "fader": {
+        "vst3Param": 5,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 117,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 53,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      },
+      {
+       "fader": {
+        "vst3Param": 6,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 118,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 54,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      },
+      {
+       "fader": {
+        "vst3Param": 7,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 119,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 55,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      }
+     ],
+     [
+      {
+       "fader": {
+        "vst3Param": 8,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 120,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 56,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      },
+      {
+       "fader": {
+        "vst3Param": 9,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 121,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 57,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      },
+      {
+       "fader": {
+        "vst3Param": 10,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 122,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 58,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      },
+      {
+       "fader": {
+        "vst3Param": 11,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 123,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 59,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      },
+      {
+       "fader": {
+        "vst3Param": 12,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 124,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 60,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      },
+      {
+       "fader": {
+        "vst3Param": 13,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 125,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 61,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      },
+      {
+       "fader": {
+        "vst3Param": 14,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 126,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 62,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      },
+      {
+       "fader": {
+        "vst3Param": 15,
+        "inverted": false,
+        "label": ""
+       },
+       "solo": {
+        "vst3Param": 127,
+        "colour": 0,
+        "invert": false
+       },
+       "cut": {
+        "vst3Param": 63,
+        "colour": 0,
+        "invert": false
+       },
+       "sel": {
+        "vst3Param": -1,
+        "colour": 0,
+        "invert": false
+       }
+      }
+     ]
+    ],
+    "topSoftKeyLeds": [
+     {
+      "colour": 16777215,
+      "label": ""
+     },
+     {
+      "colour": 16777215,
+      "label": ""
+     },
+     {
+      "colour": 16777215,
+      "label": ""
+     },
+     {
+      "colour": 16777215,
+      "label": ""
+     },
+     {
+      "colour": 16777215,
+      "label": ""
+     },
+     {
+      "colour": 16777215,
+      "label": ""
+     },
+     {
+      "colour": 16777215,
+      "label": ""
+     },
+     {
+      "colour": 16777215,
+      "label": ""
+     }
+    ]
+   },
+   "paramSnapshot": [
+    {
+     "vst3Param": 0,
+     "name": "Volume 1",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 1,
+     "name": "Volume 2",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 2,
+     "name": "Volume 3",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 3,
+     "name": "Volume 4",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 4,
+     "name": "Volume 5",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 5,
+     "name": "Volume 6",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 6,
+     "name": "Volume 7",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 7,
+     "name": "Volume 8",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 8,
+     "name": "Volume 9",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 9,
+     "name": "Volume 10",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 10,
+     "name": "Volume 11",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 11,
+     "name": "Volume 12",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 12,
+     "name": "Volume 13",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 13,
+     "name": "Volume 14",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 14,
+     "name": "Volume 15",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 15,
+     "name": "Volume 16",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 16,
+     "name": "Trim 1",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 17,
+     "name": "Trim 2",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 18,
+     "name": "Trim 3",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 19,
+     "name": "Trim 4",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 20,
+     "name": "Trim 5",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 21,
+     "name": "Trim 6",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 22,
+     "name": "Trim 7",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 23,
+     "name": "Trim 8",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 24,
+     "name": "Trim 9",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 25,
+     "name": "Trim 10",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 26,
+     "name": "Trim 11",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 27,
+     "name": "Trim 12",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 28,
+     "name": "Trim 13",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 29,
+     "name": "Trim 14",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 30,
+     "name": "Trim 15",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 31,
+     "name": "Trim 16",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 32,
+     "name": "Pan 1",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 33,
+     "name": "Pan 2",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 34,
+     "name": "Pan 3",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 35,
+     "name": "Pan 4",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 36,
+     "name": "Pan 5",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 37,
+     "name": "Pan 6",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 38,
+     "name": "Pan 7",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 39,
+     "name": "Pan 8",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 40,
+     "name": "Pan 9",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 41,
+     "name": "Pan 10",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 42,
+     "name": "Pan 11",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 43,
+     "name": "Pan 12",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 44,
+     "name": "Pan 13",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 45,
+     "name": "Pan 14",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 46,
+     "name": "Pan 15",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 47,
+     "name": "Pan 16",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 48,
+     "name": "Cut 1",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 49,
+     "name": "Cut 2",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 50,
+     "name": "Cut 3",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 51,
+     "name": "Cut 4",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 52,
+     "name": "Cut 5",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 53,
+     "name": "Cut 6",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 54,
+     "name": "Cut 7",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 55,
+     "name": "Cut 8",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 56,
+     "name": "Cut 9",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 57,
+     "name": "Cut 10",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 58,
+     "name": "Cut 11",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 59,
+     "name": "Cut 12",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 60,
+     "name": "Cut 13",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 61,
+     "name": "Cut 14",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 62,
+     "name": "Cut 15",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 63,
+     "name": "Cut 16",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 64,
+     "name": "Mono 1",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 65,
+     "name": "Mono 2",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 66,
+     "name": "Mono 3",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 67,
+     "name": "Mono 4",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 68,
+     "name": "Mono 5",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 69,
+     "name": "Mono 6",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 70,
+     "name": "Mono 7",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 71,
+     "name": "Mono 8",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 72,
+     "name": "Mono 9",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 73,
+     "name": "Mono 10",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 74,
+     "name": "Mono 11",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 75,
+     "name": "Mono 12",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 76,
+     "name": "Mono 13",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 77,
+     "name": "Mono 14",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 78,
+     "name": "Mono 15",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 79,
+     "name": "Mono 16",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 80,
+     "name": "MixA 1",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 81,
+     "name": "MixA 2",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 82,
+     "name": "MixA 3",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 83,
+     "name": "MixA 4",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 84,
+     "name": "MixA 5",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 85,
+     "name": "MixA 6",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 86,
+     "name": "MixA 7",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 87,
+     "name": "MixA 8",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 88,
+     "name": "MixA 9",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 89,
+     "name": "MixA 10",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 90,
+     "name": "MixA 11",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 91,
+     "name": "MixA 12",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 92,
+     "name": "MixA 13",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 93,
+     "name": "MixA 14",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 94,
+     "name": "MixA 15",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 95,
+     "name": "MixA 16",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 96,
+     "name": "MixB 1",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 97,
+     "name": "MixB 2",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 98,
+     "name": "MixB 3",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 99,
+     "name": "MixB 4",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 100,
+     "name": "MixB 5",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 101,
+     "name": "MixB 6",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 102,
+     "name": "MixB 7",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 103,
+     "name": "MixB 8",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 104,
+     "name": "MixB 9",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 105,
+     "name": "MixB 10",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 106,
+     "name": "MixB 11",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 107,
+     "name": "MixB 12",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 108,
+     "name": "MixB 13",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 109,
+     "name": "MixB 14",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 110,
+     "name": "MixB 15",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 111,
+     "name": "MixB 16",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 112,
+     "name": "Solo 1",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 113,
+     "name": "Solo 2",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 114,
+     "name": "Solo 3",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 115,
+     "name": "Solo 4",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 116,
+     "name": "Solo 5",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 117,
+     "name": "Solo 6",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 118,
+     "name": "Solo 7",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 119,
+     "name": "Solo 8",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 120,
+     "name": "Solo 9",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 121,
+     "name": "Solo 10",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 122,
+     "name": "Solo 11",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 123,
+     "name": "Solo 12",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 124,
+     "name": "Solo 13",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 125,
+     "name": "Solo 14",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 126,
+     "name": "Solo 15",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 127,
+     "name": "Solo 16",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 128,
+     "name": "Bypass",
+     "defaultNorm": 0.5,
+     "wasEnum": true
+    },
+    {
+     "vst3Param": 129,
+     "name": "Bypass",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 130,
+     "name": "Wet",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    },
+    {
+     "vst3Param": 131,
+     "name": "Delta",
+     "defaultNorm": 0.5,
+     "wasEnum": false
+    }
+   ]
+  }
+ ]
+}

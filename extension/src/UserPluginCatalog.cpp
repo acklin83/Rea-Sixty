@@ -1977,10 +1977,24 @@ const UserPluginMap* lookupOwnedByName(std::string_view fxName)
     // Same matching rule as lookupByName, but returns a pointer into the
     // owned catalog so callers can read the uf8.* fields directly.
     // Lifetime: until next mutation (same contract as g_viewCache).
+    //
+    // ⛔ THE LONGEST MATCH WINS, NOT THE FIRST ONE. Two user maps can both hit
+    // the same plug-in — "SSL Delta Control 16 (SSL)" and the fuller
+    // "VST3: SSL Delta Control 16 (SSL) (mono)" do — and taking the first hit
+    // meant CATALOG ORDER decided which map drove the surface. Frank imported
+    // his own Delta 16 from the Exchange, the install said it was in, and the
+    // older auto-learned map kept playing because it happened to sit earlier in
+    // the file (2026-09-16). Order is an accident of when things were added;
+    // specificity is a statement about the plug-in, so the more specific match
+    // is the one the user meant.
+    const UserPluginMap* best = nullptr;
+    size_t bestLen = 0;
     for (const auto& m : g_catalog.maps) {
-        if (fxName.find(m.match) != std::string_view::npos) return &m;
+        if (m.match.empty()) continue;
+        if (fxName.find(m.match) == std::string_view::npos) continue;
+        if (!best || m.match.size() > bestLen) { best = &m; bestLen = m.match.size(); }
     }
-    return nullptr;
+    return best;
 }
 
 const UserLinkSlot* lookupOwnedSlot(std::string_view fxName, int linkIdx)
