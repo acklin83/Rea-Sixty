@@ -15527,7 +15527,19 @@ static std::string hudBuildAutoLearnUncached_(void* csTrV, int csFx, int mode)
     // get to overrule one. The matrix rule still does its work where it belongs,
     // inside the UF8 suggestors, so mapping that same plug-in from the UF8 tab
     // lays it out as a matrix.
-    const Domain srcDom = !live.empty()
+    // ⛔ "IS THIS PLUG-IN STILL A BLANK SHEET", not "did we read live params".
+    // These two were the same thing until autoLearnSource_ arrived: `live` was
+    // filled ONLY for a plug-in with no map and no snapshot, so testing it was a
+    // way of asking whether anything is known about this plug-in yet. The shared
+    // source fills `live` whenever an instance is running, and the test then read
+    // as "a live instance means the tab decides" — so a mapped UF8-only plug-in
+    // got the UC1 channel-strip pass on top of its matrix, and the list opened
+    // with "Pan 1 → Pan", "Cut 10 → HPF", "MixA 3 → Comp Mix" (Frank 2026-09-16:
+    // "Was ist da los mit Pan1? Und WIESO macht es FX Learn richtig?" — the page
+    // gates on the map's domain, which is None for a UF8-only map, so it never
+    // ran that pass). Ask the question that was always meant.
+    const bool virginPlugin = (!m || m->paramSnapshot.empty());
+    const Domain srcDom = virginPlugin
         ? (mode == 1 ? Domain::BusComp : Domain::ChannelStrip)
         : m->domain;
     auto scrub = [](std::string v) {
