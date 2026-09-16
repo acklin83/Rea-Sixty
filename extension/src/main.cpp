@@ -17928,6 +17928,22 @@ CsPanHandle csPanForTrack(MediaTrack* tr)
     return { pick.fxIndex, sl->vst3Param };
 }
 
+// The pan the UF8 strip SHOWS must be the pan its V-Pot WRITES. In SSL
+// Strip Mode that is the CS plug-in's Pan, and the PAN button does not
+// divert it (Frank 2026-09-09) — it only takes the V-Pot off a focused
+// param. The rotate and the push paths already work that way; the ring
+// and the value line did not, so PAN looked like it did something while
+// the knob kept moving the plug-in. Out is REAPER space, -1..+1.
+// Returns false when the strip has no CS pan — caller keeps track pan.
+bool csStripPanReadout_(MediaTrack* tr, double* out)
+{
+    if (!tr || !g_pluginFaderMode.load()) return false;
+    const auto pn = csPanForTrack(tr);
+    if (pn.vst3Param < 0) return false;
+    *out = TrackFX_GetParamNormalized(tr, pn.fxIndex, pn.vst3Param) * 2.0 - 1.0;
+    return true;
+}
+
 // Captured at touch-on, computed on the main thread via the
 // TouchOriginSnapshot drain case. Mirrors the value the fader was
 // tracking immediately before the user grabbed it. Used by the
@@ -37321,9 +37337,14 @@ void pushZonesForVisibleSlots()
                 }
             }
         } else if (g_forcePan.load()) {
-            double vDisp = 1.0, pan = 0.0;   // effective pan (reflects envelope)
-            GetTrackUIVolPan(tr, &vDisp, &pan);
-            vpotBar[s] = vpotPosFromPan(pan);
+            double csPan = 0.0;
+            if (csStripPanReadout_(tr, &csPan)) {
+                vpotBar[s] = vpotPosFromPan(csPan);
+            } else {
+                double vDisp = 1.0, pan = 0.0;   // effective pan (reflects envelope)
+                GetTrackUIVolPan(tr, &vDisp, &pan);
+                vpotBar[s] = vpotPosFromPan(pan);
+            }
         } else if (slot && fxIdx >= 0 && !isVPotPanFocus(focused)) {
             const double norm = TrackFX_GetParamNormalized(tr, fxIdx, slot->vst3Param);
             const double visual = slot->inverted ? 1.0 - norm : norm;
@@ -37344,11 +37365,14 @@ void pushZonesForVisibleSlots()
             // the V-Pot blank so the user isn't misled.
             vpotBar[s] = (uint16_t{0x00} | (uint16_t{0x80} << 8));
         } else if (g_pluginFaderMode.load()) {
-            const auto pn = csPanForTrack(tr);
-            if (pn.vst3Param >= 0) {
-                const double norm = TrackFX_GetParamNormalized(
-                    tr, pn.fxIndex, pn.vst3Param);
-                vpotBar[s] = vpotPosFromBipolar(norm * 2.0 - 1.0);
+            // ⛔ Pan goes out UNIPOLAR — the mode register for a strip
+            // without a slot says 0x01 ("pan fallback — single line"),
+            // and under 0x01 the bipolar centre anchor (byte0=0x00,
+            // byte1=0x80) renders as the LEFT EDGE. That is why centre
+            // pan sat hard left in Strip Mode (Frank 2026-09-16).
+            double csPan = 0.0;
+            if (csStripPanReadout_(tr, &csPan)) {
+                vpotBar[s] = vpotPosFromPan(csPan);
             } else {
                 double vDisp = 1.0, pan = 0.0;   // effective pan (reflects envelope)
                 GetTrackUIVolPan(tr, &vDisp, &pan);
@@ -37830,8 +37854,13 @@ void pushZonesForVisibleSlots()
             // matches what the V-Pot is actually displaying.
             valLine = composeValueLine("Vol", formatDbReadout(volLin));
         } else if (g_forcePan.load()) {
-            // forcePan overrides Plugin mode + focus. Pure REAPER pan.
-            const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+            // forcePan takes the V-Pot off a focused param — but in SSL
+            // Strip Mode the knob still writes the CS plug-in's Pan, so
+            // the readout has to follow it there instead of REAPER's.
+            double csPan = 0.0;
+            const double pan = csStripPanReadout_(tr, &csPan)
+                ? csPan
+                : GetMediaTrackInfo_Value(tr, "D_PAN");
             valLine = composeValueLine("Pan", formatPanReadout(pan));
         } else if (synthFocused) {
             // Synthetic toggle focused: render this strip's own state.
@@ -37928,16 +37957,11 @@ void pushZonesForVisibleSlots()
             // 0.5 = centre; convert to REAPER's -1..+1 for the
             // existing formatPanReadout helper. Falls back to track
             // pan when there's no CS plug-in on the track.
-            const auto pn = csPanForTrack(tr);
-            if (pn.vst3Param >= 0) {
-                const double norm = TrackFX_GetParamNormalized(
-                    tr, pn.fxIndex, pn.vst3Param);
-                valLine = composeValueLine("Pan",
-                    formatPanReadout(norm * 2.0 - 1.0));
-            } else {
-                const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
-                valLine = composeValueLine("Pan", formatPanReadout(pan));
-            }
+            double csPan = 0.0;
+            const double pan = csStripPanReadout_(tr, &csPan)
+                ? csPan
+                : GetMediaTrackInfo_Value(tr, "D_PAN");
+            valLine = composeValueLine("Pan", formatPanReadout(pan));
         } else {
             // Nothing focused → V-Pot controls Pan; reflect that in
             // the Value Line. Fader dB stays in the dedicated O/PdB
