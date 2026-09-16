@@ -8507,6 +8507,23 @@ int builtinDeviceForId(ButtonId id)
     return 0;
 }
 
+// The rotating controls. dispatchEncoder hands the builtin the detent as its
+// `param`, so only a builtin that READS param can do anything here; a mode
+// setter fires once per detent and, because uf8SetEncoderMode_ toggles back to
+// Channel Select when its target is already live, flips the mode on and off as
+// you turn. That is what "Encoder Mode → FX Cycle" on Shift + the UF8 channel
+// encoder did: nothing to the FX, and the encoder's own mode changed underneath
+// (Frank 2026-09-16, whose UC1 had the delta-aware `fx_cycle` on the same
+// gesture and worked). Push slots are NOT in this list — a mode setter is
+// exactly right on a button.
+bool idIsRotation(ButtonId id)
+{
+    return id == ButtonId::ChannelEncoder
+        || id == ButtonId::Uc1Encoder1
+        || id == ButtonId::Uc1Encoder2
+        || id == ButtonId::Uf1ChannelEncoder;
+}
+
 bool builtinShownForId(const std::string& n, ButtonId id)
 {
     // An explicit mask on the descriptor wins over the name-prefix table.
@@ -8517,7 +8534,16 @@ bool builtinShownForId(const std::string& n, ButtonId id)
     auto it = g_builtins.find(n);
     if (it != g_builtins.end()) mask = it->second.deviceMask;
     if (mask == 0) mask = builtinDeviceMask(n);
-    return (mask & (1u << builtinDeviceForId(id))) != 0;
+    if ((mask & (1u << builtinDeviceForId(id))) == 0) return false;
+    // Encoder Modes off a rotation — see idIsRotation. The two dispatchers are
+    // not mode setters: they READ the live mode and pass the detent on, which is
+    // the factory binding on both plain slots, so they stay.
+    if (idIsRotation(id)
+        && n != "encoder_mode_dispatch" && n != "uf1_encoder_mode_dispatch") {
+        const char* cat = builtinCategory(n);
+        if (cat && std::strcmp(cat, "Encoder Modes") == 0) return false;
+    }
+    return true;
 }
 
 bool builtinStateOf(const std::string& name, int param)
