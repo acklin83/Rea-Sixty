@@ -9313,10 +9313,15 @@ const std::vector<UserParamInfo>& autoLearnSource_(
             TrackFX_GetParamEx(fx.tr, fx.fxIdx, i, &mn, &mx, &def);
             const double range = mx - mn;
             pi.defaultNorm = (range > 1e-9) ? (def - mn) / range : 0.5;
-            double step = 0, small = 0, large = 0;
+            // ⛔ NOT `small` / `large`: MSVC's rpcndr.h defines `small` as char,
+            // so those names compile here and fail on Windows with "type 'char'
+            // unexpected" (CI, 2026-09-16 — same family as the min/max macro
+            // trap). The snapshot writer next door already spells them out.
+            double step = 0, smallStep = 0, largeStep = 0;
             bool isToggle = false;
             TrackFX_GetParameterStepSizes(fx.tr, fx.fxIdx, i,
-                                          &step, &small, &large, &isToggle);
+                                          &step, &smallStep, &largeStep,
+                                          &isToggle);
             pi.wasEnum = isToggle || step >= 0.5;
             storage.push_back(std::move(pi));
         }
