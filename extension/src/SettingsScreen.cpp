@@ -28,6 +28,7 @@
 #include "PluginMap.h"
 #include "UC1PluginMap.h"   // uc1::lookupBindingsByName / hudParamForControl (Learn-HUD)
 #include "Protocol.h"
+#include "TrackName.h"      // abbreviateTrackName_ for AutoLearn's strip labels
 #include "UserPluginCatalog.h"
 #include "HttpClient.h"     // in-app "Publish to exchange" upload
 #include "reaper_imgui_functions.h"
@@ -9367,6 +9368,29 @@ paramNamesFor_(const UserPluginMap& map, const EditingFx& fx, int pcount)
 //     is the parameter name without its channel number.
 // Never overwrites: a mode the user already chose and a bank name already typed
 // both stand. Main-thread only, like every catalog mutation here.
+// The fader half of the same job. ⛔ THE CHANNEL NUMBER IS THE HALF THAT
+// MATTERS. This label used to be cut with substr(0, 7), so every strip of a
+// sixteen-channel map read "Volume" and nothing told you which one you were
+// holding (Frank 2026-09-16: "strips heissen auf allen autolearned strips nur
+// Volume ohne nummer" and "UF8 hat 8 characters, wieso geht der auf 7
+// runter?"). The scribble is kUf8ScribbleChars = 8 wide, and SmartAbbrev is
+// what the surface uses everywhere else: it drops separators and vowels and
+// keeps the digits, so "Volume 12" arrives as a name that still names a
+// channel. Never overwrites a label the user typed.
+void applyAutoLearnFaderSlot_(UserPluginMap& m, int fb, int st, int param)
+{
+    auto& sb = m.uf8.strips[fb][st];
+    sb.faderVst3Param = param;
+    if (!sb.faderLabel.empty()) return;
+    for (const auto& e : m.paramSnapshot) {
+        if (e.vst3Param != param) continue;
+        sb.faderLabel = abbreviateTrackName_(
+            e.name, static_cast<int>(uf8::kUf8ScribbleChars),
+            TNM_SmartAbbrev, /*foldLatin1*/ false);
+        return;
+    }
+}
+
 void applyAutoLearnVpotSlot_(UserPluginMap& m, int fb, int vb, int st, int param)
 {
     auto& bs = m.uf8.banks.banks[fb][vb][st];
@@ -15681,7 +15705,7 @@ bool hudApplyAutoLearn_(void* csTrV, int csFx, int mode, const char* spec)
                 const int st = std::clamp(f[2], 0, 7);
                 auto& sb = m.uf8.strips[fb][st];
                 switch (kind) {
-                    case 0: sb.faderVst3Param = f[3]; break;
+                    case 0: applyAutoLearnFaderSlot_(m, fb, st, f[3]); break;
                     case 1: sb.cutVst3Param   = f[3]; break;
                     case 2: sb.soloVst3Param  = f[3]; break;
                     default: sb.selVst3Param  = f[3]; break;
@@ -20650,11 +20674,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 auto& sb = copy.uf8.strips[fb][st];
                 switch (s.kind) {
                     case StKind::Fader:
-                        sb.faderVst3Param = s.vst3Param;
-                        if (sb.faderLabel.empty()) {
-                            sb.faderLabel = s.paramName.size() > 7
-                                ? s.paramName.substr(0, 7) : s.paramName;
-                        }
+                        applyAutoLearnFaderSlot_(copy, fb, st, s.vst3Param);
                         break;
                     case StKind::Cut:  sb.cutVst3Param  = s.vst3Param; break;
                     case StKind::Solo: sb.soloVst3Param = s.vst3Param; break;
