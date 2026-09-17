@@ -549,6 +549,196 @@ bool g_t10Dump = false;
 // It writes through slog, so it turns the trace on with it.
 bool g_ndlProbe = false;
 
+// ── THE PROBE (REASIXTY_SSL_PROBE). ONE SWITCH, THREE QUESTIONS, ONE RUN ────
+// Read-only, off by default, and deliberately NOT built on our own parsers —
+// that is the whole point. Three times now a conclusion about the SSL side was
+// drawn from our own decoded output, which cannot show what our decoder drops.
+//
+//  1. DO METER DATAGRAMS CARRY FRAMES WITH NO FIELD-2 TAG?
+//     parseMeterMessage starts `dataType` at -1 and valid() rejects it, so a
+//     frame whose type field is absent never exists for us. Protobuf omits a
+//     field sitting at its default, and DataType 0 IS VuPpm — the needle. If
+//     such frames are on the wire, "Meter Pro 1.3.7 stopped sending VuPpm"
+//     (46ef899) is an artefact of our reader, and the whole needle emulation
+//     stands on nothing. This pass walks the raw datagram itself.
+//  2. WHICH FIELDS ARE ACTUALLY PRESENT IN THE TCP BODIES?
+//     The same question one layer up: our value readers test a literal byte at
+//     pay[8], so a control that lands on exactly 0 would be invisible and the
+//     stored value would simply stay where it was. Logging the field SIGNATURE
+//     per object shows a field appearing and disappearing with its value.
+//  3. WHAT IS IN THE PREPARE MESSAGES (type 17)?
+//     We have never read them. They carry validity, units, channel format and
+//     the number of values, which is what the leg-count, mono-scale and
+//     last-chunk heuristics are all standing in for.
+bool g_sslProbe = false;
+
+FILE* probeFile_()
+{
+    static FILE* f = nullptr;
+    if (!f) {
+        f = std::fopen(uf8::logPath("reasixty_ssl_probe.log").c_str(), "a");
+        if (f) { std::fprintf(f, "\n==== PROBE RUN START ====\n"); std::fflush(f); }
+    }
+    return f;
+}
+
+// Walk one protobuf message: fn(field, wire, valuePtr, valueLen). For wire
+// types 0/1/5 the pointer is at the value bytes, for 2 at the payload. Returns
+// false on a truncated or malformed message, having already reported what it
+// read — a partial answer beats none for a probe.
+template <class Fn>
+bool pbWalk_(const uint8_t* b, size_t n, Fn&& fn)
+{
+    size_t i = 0;
+    while (i < n) {
+        uint64_t tag = 0; int shift = 0; bool ok = false;
+        while (i < n) {
+            const uint8_t x = b[i++];
+            tag |= uint64_t(x & 0x7f) << shift;
+            if (!(x & 0x80)) { ok = true; break; }
+            shift += 7; if (shift >= 64) return false;
+        }
+        if (!ok) return false;
+        const uint32_t field = uint32_t(tag >> 3), wire = uint32_t(tag & 7);
+        if (field == 0) return false;
+        const size_t at = i;
+        switch (wire) {
+            case 0: {
+                while (i < n && (b[i] & 0x80)) ++i;
+                if (i >= n) return false;
+                ++i;
+                break;
+            }
+            case 1: if (n - i < 8) return false; i += 8; break;
+            case 5: if (n - i < 4) return false; i += 4; break;
+            case 2: {
+                uint64_t len = 0; int sh = 0; bool lok = false;
+                while (i < n) {
+                    const uint8_t x = b[i++];
+                    len |= uint64_t(x & 0x7f) << sh;
+                    if (!(x & 0x80)) { lok = true; break; }
+                    sh += 7; if (sh >= 64) return false;
+                }
+                if (!lok || len > n - i) return false;
+                fn(field, wire, b + i, size_t(len));
+                i += size_t(len);
+                continue;
+            }
+            default: return false;
+        }
+        fn(field, wire, b + at, i - at);
+    }
+    return true;
+}
+
+// QUESTION 1. Walks the datagram frame by frame WITHOUT parseDatagram, and
+// tallies typed against untyped meter frames. Summarised every 2 s, because the
+// stream runs at ~25 Hz per instance and the answer is a count, not a trace.
+void probeUdpDatagram_(const uint8_t* data, size_t len, uint16_t srcPort)
+{
+    struct Bucket {
+        long typed = 0, untyped = 0;
+        long untypedFloats = -1;          // f3 count on untyped frames
+        float loF0 = 1e30f, hiF0 = -1e30f; // and the range of their first float
+        std::map<int, long> types;
+    };
+    static std::map<uint16_t, Bucket> byPort;
+    static long long nextFlush = 0;
+
+    size_t p = 0;
+    while (p + sslmeter::kMagicLen + sslmeter::kFrameLenSize <= len) {
+        if (std::memcmp(data + p, sslmeter::kMagic, sslmeter::kMagicLen) != 0) break;
+        uint32_t flen = 0;
+        std::memcpy(&flen, data + p + sslmeter::kMagicLen, 4);
+        const size_t bodyOff = p + sslmeter::kMagicLen + sslmeter::kFrameLenSize;
+        if (bodyOff + flen > len) break;
+        if (flen > sslmeter::kSslHeaderLen) {
+            const uint8_t* body = data + bodyOff;
+            const uint8_t* pb   = body + sslmeter::kSslHeaderLen;
+            const size_t   pbLen = size_t(flen) - sslmeter::kSslHeaderLen;
+            bool  hasF2 = false;
+            int   dt = -1, nF3 = 0;
+            float first = 0.0f;
+            pbWalk_(pb, pbLen, [&](uint32_t f, uint32_t w, const uint8_t* v, size_t) {
+                if (f == 2 && w == 0) { hasF2 = true; dt = int(v[0] & 0x7f); }
+                else if (f == 3 && w == 5) {
+                    if (nF3 == 0) std::memcpy(&first, v, 4);
+                    ++nF3;
+                }
+            });
+            Bucket& bk = byPort[srcPort];
+            if (hasF2) { ++bk.typed; ++bk.types[dt]; }
+            else {
+                ++bk.untyped;
+                bk.untypedFloats = nF3;
+                if (nF3 > 0) {
+                    if (first < bk.loF0) bk.loF0 = first;
+                    if (first > bk.hiF0) bk.hiF0 = first;
+                }
+            }
+        }
+        p = bodyOff + flen;
+    }
+
+    const long long now = nowMs();
+    if (now < nextFlush) return;
+    nextFlush = now + 2000;
+    FILE* f = probeFile_();
+    if (!f) return;
+    for (auto& [port, bk] : byPort) {
+        if (!bk.typed && !bk.untyped) continue;
+        std::fprintf(f, "UDP src=%u typed=%ld UNTYPED=%ld", unsigned(port),
+                     bk.typed, bk.untyped);
+        if (bk.untyped)
+            std::fprintf(f, "  untyped: n3=%ld first=[%.2f .. %.2f]",
+                         bk.untypedFloats, double(bk.loF0), double(bk.hiF0));
+        std::fprintf(f, "  types=");
+        for (auto& [dt, c] : bk.types) std::fprintf(f, "%d:%ld ", dt, c);
+        std::fprintf(f, "\n");
+        bk = Bucket{};
+    }
+    std::fflush(f);
+}
+
+// QUESTIONS 2 AND 3. One line per (message type, object, field signature) the
+// first time that combination appears. A field that comes and goes with its
+// value shows up as a SECOND signature for the same object — that is the whole
+// experiment, and it is why this logs signatures rather than values.
+void probeTcpFrame_(uint32_t ftype, const uint8_t* pay, size_t avail)
+{
+    if (avail < 8) return;
+    if (ftype != 16 && ftype != 17 && ftype != 18) return;
+    uint64_t scope = 0;
+    std::memcpy(&scope, pay, 8);
+    std::string sig;
+    char part[24];
+    pbWalk_(pay + 8, avail - 8, [&](uint32_t fld, uint32_t w, const uint8_t*, size_t) {
+        std::snprintf(part, sizeof(part), "%u/%u,", fld, w);
+        if (sig.size() < 200) sig += part;
+    });
+    if (sig.empty()) sig = "(empty body)";
+
+    char key[280];
+    std::snprintf(key, sizeof(key), "%u|%016llx|%s", ftype,
+                  static_cast<unsigned long long>(scope), sig.c_str());
+    static std::set<std::string> seen;
+    if (!seen.insert(key).second) return;
+
+    FILE* f = probeFile_();
+    if (!f) return;
+    std::fprintf(f, "TCP type=%u obj=%016llx fields=%s\n", ftype,
+                 static_cast<unsigned long long>(scope), sig.c_str());
+    // A prepare is rare and small, so it goes down whole: this is the message
+    // whose contents we have been guessing at with heuristics.
+    if (ftype == 17) {
+        std::fprintf(f, "     prepare hex:");
+        const size_t nb = (avail - 8 < 96) ? avail - 8 : 96;
+        for (size_t i = 0; i < nb; ++i) std::fprintf(f, " %02x", pay[8 + i]);
+        std::fprintf(f, "%s\n", (avail - 8 > nb) ? " ..." : "");
+    }
+    std::fflush(f);
+}
+
 // 360SelectedView (= c5ea04de4990b792) = `view` as a double.
 //
 // Read the four identity frames in subscribeInitial() again: they are NOT
@@ -1071,6 +1261,10 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
           int n = int(::recvfrom(d, reinterpret_cast<char*>(buf), sizeof(buf), 0,
                                  reinterpret_cast<sockaddr*>(&from), &fromLen));
           if (n > 0) {
+                // ⛔ BEFORE OUR OWN PARSER, ON PURPOSE. What this asks is which
+                // frames the parser DROPS, and a question asked through the
+                // thing under test cannot answer it.
+                if (g_sslProbe) probeUdpDatagram_(buf, size_t(n), ntohs(from.sin_port));
                 std::vector<sslmeter::Update> ups;
                 if (sslmeter::parseDatagram(buf, size_t(n), ups) > 0) {
                     g_lastDataMs.store(nowMs());
@@ -1461,6 +1655,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             std::memcpy(&ftype,  body + 16, 4);
                             const uint8_t* pay = body + 20;
                             const size_t   avail = (flen > 20) ? size_t(flen - 20) : 0;
+                            if (g_sslProbe) probeTcpFrame_(ftype, pay, avail);
 
                             // ── Instance NAME correlation ──────────────────────
                             // Each plug-in SETs (type 18) its own HostTrackName
@@ -1830,6 +2025,7 @@ bool start(uint16_t tcpPort, uint16_t dataPort) {
     g_trace    = std::getenv("REASIXTY_SSLCORE_TRACE") != nullptr;
     g_t10Dump  = std::getenv("REASIXTY_T10_DUMP") != nullptr;
     g_ndlProbe = std::getenv("REASIXTY_NDL_PROBE") != nullptr;
+    g_sslProbe = std::getenv("REASIXTY_SSL_PROBE") != nullptr;
     if (g_ndlProbe) g_trace = true;   // the probe writes through the trace log
     if (const char* fv = std::getenv("REASIXTY_FORCE_VIEW")) {
         g_forceView = std::atoi(fv);

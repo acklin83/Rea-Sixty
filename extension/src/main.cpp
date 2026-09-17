@@ -55928,6 +55928,20 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
                 setenv("REASIXTY_NDL_PROBE", "1", 1);
 #endif
             }
+            // SSL-side probe — same bridge. Walks the RAW datagrams and TCP
+            // bodies beside our parsers to answer what our parsers drop: are
+            // there meter frames with no data-type tag (= VuPpm, whose type
+            // number is the protobuf default), do TCP fields disappear when
+            // their value is 0, and what is actually in the prepare messages.
+            // Writes reasixty_ssl_probe.log. OFF by default.
+            if (const char* dv = GetExtState("rea_sixty", "ssl_probe");
+                dv && *dv && strcmp(dv, "0")) {
+#if defined(_WIN32)
+                _putenv_s("REASIXTY_SSL_PROBE", "1");
+#else
+                setenv("REASIXTY_SSL_PROBE", "1", 1);
+#endif
+            }
             const bool ok = sslcore::start(uint16_t(tcpPort), uint16_t(dataPort));
             initLog(ok ? "step: SSL Core impersonator started"
                        : "step: SSL Core impersonator FAILED to start");
