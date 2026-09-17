@@ -47,11 +47,45 @@ static const char* kStereoBalance =
     "efbc51002c0000001000000001000000449c281720000000030000007905"
     "7a5f1c01000010071d4ac2543c250000000028003000";
 
+// The same BarPeak frame with its type field (`1002`) removed and the length
+// adjusted — which is exactly what the plug-in does to the ONE stream whose
+// number is the protobuf default. DataType 0 is VuPpm, the analogue needle.
+static const char* kUntypedIsVuPpm =
+    "efbc5100380000001000000001000000449c28172e0000000300000079057a5f1c010000"
+    "1d7b48edc01dd20ad4c025212b8ac0253ed2a7c02800280030003000";
+
 static bool approx(float a, float b) { return std::fabs(a - b) < 0.01f; }
 
 int main()
 {
     using namespace sslmeter;
+
+    // --- An ABSENT type field means DataType 0 (VuPpm), not "invalid". -------
+    // Protobuf omits a field at its default; VuPpm's number IS the default, so
+    // the needle's own stream arrives untagged. Rejecting it is what made
+    // "Meter Pro stopped sending VuPpm" look true. cap139 measured both halves:
+    // one untyped 2-float frame per TextVuPpm frame, and a prepare declaring
+    // "VuPpm Meter Data" with no type field.
+    {
+        auto d = unhex(kUntypedIsVuPpm);
+        std::vector<Update> ups;
+        EXPECT(parseDatagram(d.data(), d.size(), ups) == 1);
+        EXPECT(ups[0].dataType == int(DataType::VuPpm));
+        EXPECT(ups[0].current.size() == 2);
+        EXPECT(ups[0].peak.size() == 2);
+    }
+
+    // --- …but a message carrying NO values at all is still not a reading. ----
+    // With the type defaulting to 0 that is the one door this opens, and the
+    // data socket sees SSL 360's own GUI feed as well as our plug-ins.
+    {
+        // Header only: 28 bytes of Lgx header, empty protobuf body.
+        const char* kEmptyBody =
+            "efbc51001c0000001000000001000000449c28172e0000000300000079057a5f1c010000";
+        auto d = unhex(kEmptyBody);
+        std::vector<Update> ups;
+        EXPECT(parseDatagram(d.data(), d.size(), ups) == 0);
+    }
 
     // --- BarPeak: DataType 2, stereo (L,R) current + peak, values in dBFS. ---
     {

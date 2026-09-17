@@ -52,7 +52,19 @@ constexpr size_t   kSslHeaderLen = 28;  // Lgx header before the protobuf
 
 struct Update {
     int                pluginType = -1;  // PluginType, -1 if the field was absent
-    int                dataType   = -1;  // DataType (f2)
+    // ⛔ THE DEFAULT IS 0, AND 0 IS VuPpm. Protobuf omits a field sitting at
+    // its default, so the ONE stream whose number is 0 arrives with no type tag
+    // at all. This started at -1, valid() rejected it, and a whole conclusion
+    // was built on the gap: "Meter Pro 1.3.7 no longer streams DataType 0"
+    // (46ef899) was our own parser, and the UF1 needle has been emulated from
+    // the TextVuPpm readout ever since for no reason.
+    // MEASURED, cap139 (2026-09-17): on the Analogue screen every TextVuPpm
+    // frame is accompanied by exactly one untyped 2-float frame whose values
+    // are cap98's July VuPpm table to the centibel (-12.01, -2.01, clamped
+    // 3.00), and the plug-in's own prepare declares a stream literally called
+    // "VuPpm Meter Data" carrying no data-type field while every other stream
+    // carries one.
+    int                dataType   = 0;   // DataType (f2), ABSENT = 0 = VuPpm
     std::vector<float> current;          // CurrentMeterValues (f3)
     std::vector<float> peak;             // PeakValues (f4)
     std::vector<uint8_t> overload;       // OverloadValues (f5) — the red LEDs
@@ -78,7 +90,16 @@ struct Update {
     int chunkSize   = -1;  // ChunkSize      (f8) — nominal OR actual, sender-dependent
     int chunkOffset = -1;  // ChunkOffset    (f9) — index OR float offset
 
-    bool valid() const { return dataType >= 0 && dataType < int(DataType::Count); }
+    // ⚠ AND THAT IS WHY A MESSAGE MUST NOW CARRY SOMETHING. With the type
+    // defaulting to 0, "no fields at all" would otherwise parse as a perfectly
+    // good VuPpm frame, and this socket sees more than our plug-ins: SSL 360's
+    // own GUI feed lands on the same port (see the NaN note in
+    // SslCoreImpersonator). A frame that brings no values is not a reading.
+    bool valid() const {
+        if (dataType < 0 || dataType >= int(DataType::Count)) return false;
+        return !current.empty() || !peak.empty()
+            || !overload.empty() || !overloadHold.empty();
+    }
 
     // Only the chunked types carry f8 at all, so its presence IS the flag.
     bool chunked() const { return chunkSize > 0; }
