@@ -17981,6 +17981,25 @@ UserFaderHandle userFaderForTrack(MediaTrack* tr, uf8::Domain domain)
     return {match.fxIndex, fp, um->uf8.strips[uf8FaderBankClamped_()][0].faderInverted};
 }
 
+// ⛔ MOVING THE PAIR'S OWN LEVEL IS NOT A REACH FOR A PARAMETER, so neither the
+// global focus nor "Track selection follows parameter change" may act on it.
+// Both used to. ⚠ IT IS THE JOB, NOT THE CONTROL: under FLIP the level sits on
+// the V-POT, and that write needs the very same guard. Without it, touching the
+// flipped V-Pot focused the CS Fader Level and every strip in the bank jumped
+// onto it (Frank 2026-09-17, "GEHEN ALLE UF8 KANÄLE MIT DEM FADER WIEDER AUF
+// FADER"). Whoever carries the level marks it.
+// The selection first (Frank 2026-09-17): on a motorised fader the grab itself
+// already moves the value, so every accidental touch became a channel change.
+// Then the focus, the same day: in Strip Mode the fader writes the CS Fader
+// Level, chase made that THE focused parameter, and all eight V-Pots jumped onto
+// it — "muss der auf der V-Pot anzeige UND dem Fader sein? Machts weniger
+// flexibel". The V-Pots are free for something else now.
+// It has to be marked at the SOURCE: the UC1's Out-Gain pot writes the very same
+// Fader Level param, and from the parameter alone chase could not tell a fader
+// from a knob.
+std::atomic<int64_t> g_ownWriteFocusLockUntilMs{0};
+constexpr int kFaderNoSelectMs = 400;   // same window the sticky writes use
+
 // CS plug-in's Pan param (linkIdx 3 across all CS variants). In SSL
 // Strip Mode, the V-Pot's Pan-fallback drives this instead of REAPER's
 // track pan, so the SSL strip Pan stays the surface's source-of-truth.
@@ -18631,6 +18650,7 @@ void applyUf1AboveFaderVpot_(int step)
                                                       fvf.vst3Param);
         const double next = std::clamp(
             cur + step * kUf1AboveFaderPanPerDetent * kScale, 0.0, 1.0);
+        g_ownWriteFocusLockUntilMs.store(nowMs_() + kFaderNoSelectMs);
         TrackFX_SetParamNormalized(tr, fvf.fxIndex, fvf.vst3Param, next);
         return;
     }
@@ -19539,19 +19559,6 @@ std::atomic<int64_t> g_stickyFocusLockUntilMs{0};
 // UF8's eight V-Pots all jumped to "External S/C" because it is the fifth call
 // (the sweep, 2026-09-16). Same family as the Sticky-Pot lock above and the
 // Strip-Mode pan guard in chase; set this around any such burst.
-std::atomic<int64_t> g_ownWriteFocusLockUntilMs{0};
-// ⛔ A FADER MOVE IS NOT A REACH FOR A PARAMETER, so neither the global focus
-// nor "Track selection follows parameter change" may act on it. Both used to.
-// The selection first (Frank 2026-09-17): on a motorised fader the grab itself
-// already moves the value, so every accidental touch became a channel change.
-// Then the focus, the same day: in Strip Mode the fader writes the CS Fader
-// Level, chase made that THE focused parameter, and all eight V-Pots jumped onto
-// it — "muss der auf der V-Pot anzeige UND dem Fader sein? Machts weniger
-// flexibel". The V-Pots are free for something else now.
-// It has to be marked at the SOURCE: the UC1's Out-Gain pot writes the very same
-// Fader Level param, and from the parameter alone chase could not tell a fader
-// from a knob.
-constexpr int kFaderNoSelectMs = 400;   // same window the sticky writes use
 
 // Pins eligible to drive/render at all (independent of the individual strip):
 // active, and not inside a mode that owns the whole V-Pot layer.
@@ -21553,6 +21560,9 @@ void drainInputQueue()
                     double d = e.value * reasixty_uf8KnobScale(vpotFineActive_());
                     if (shiftHeldAnywhere_()) d *= 0.25;
                     const double next = std::clamp(cur + d, 0.0, 1.0);
+                    // The pair's level, carried by the knob under FLIP — same
+                    // guard the fader's own write has. See kFaderNoSelectMs.
+                    g_ownWriteFocusLockUntilMs.store(nowMs_() + kFaderNoSelectMs);
                     TrackFX_SetParamNormalized(tr, fvf.fxIndex,
                                                fvf.vst3Param, next);
                     break;
@@ -22008,6 +22018,7 @@ void drainInputQueue()
                     const double range = mx - mn;
                     const double n = (range > 1e-9)
                         ? std::clamp((def - mn) / range, 0.0, 1.0) : 1.0;
+                    g_ownWriteFocusLockUntilMs.store(nowMs_() + kFaderNoSelectMs);
                     TrackFX_SetParamNormalized(tr, fvf.fxIndex,
                                                fvf.vst3Param, n);
                     break;
