@@ -25021,7 +25021,14 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     // (no-op), then real motion follows. Skipped when the
                     // anchor is invalid (-INF / uninit) — the POS path's raw
                     // fallback covers that case.
-                    {
+                    // ⛔ NOT WHILE TOUCH-TO-LEARN IS ON. There the touch is a
+                    // learn gesture, not the start of a move, so there is no
+                    // envelope to seed — and in Plug-in Mode this write lands on
+                    // the plug-in PARAMETER, which is exactly the signal the
+                    // learn poll is watching. Dropping the position frames
+                    // (4b73bb2) was only half of it; this edge writes before the
+                    // first frame ever arrives.
+                    if (!g_hudTouchLearn.load()) {
                         const uint16_t a = g_touchAnchorPb[strip].load();
                         if (a != 0 && a <= kUf8FaderPbMax) {
                             queueInput({PendingInput::VolumeAbs, strip,
@@ -25048,8 +25055,17 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     // touchReported true and skip the LIMP. Re-sending
                     // on every ON is cheap (one 6-byte frame) and
                     // idempotent.
-                    if (g_dev) g_dev->sendPriority(uf8::buildMotorEnable(strip, false));
-                    g_faderMotorEngaged[strip].store(false);
+                    // ⛔ EXCEPT IN TOUCH-TO-LEARN, WHERE THE FADER HAS TO WAVE.
+                    // The armed cell's feedback oscillates the fader ±6 dB so you
+                    // can see WHICH one you armed — and a limp motor cannot move.
+                    // So "Waiting" appeared on the scribble and the fader just
+                    // sat there (Frank 2026-09-17: "steht nur waiting, kein
+                    // winken vom fader"). Limping is for a finger riding the cap;
+                    // a learn touch is a tap, and nothing fights it.
+                    if (!g_hudTouchLearn.load()) {
+                        if (g_dev) g_dev->sendPriority(uf8::buildMotorEnable(strip, false));
+                        g_faderMotorEngaged[strip].store(false);
+                    }
                     // Settings → Behaviour → Tracks → "Touch selects channel": queue
                     // an exclusive selection for this strip's track. Runs
                     // through the main-thread drain (SetOnlyTrackSelected
@@ -42784,6 +42800,16 @@ void onTimerBody_()
                 // Clear what the dead script left lying around, once.
                 if (uf8Tab) SetExtState("rea_sixty", "hud_uf8_tab", "0", false);
                 uf8Tab = false;
+                // ⛔ THE UF1-TAB CLAIM TOO. It was written by the same script
+                // and cleared by the same close path, so it goes stale the same
+                // way — but only the UF8 one was ever swept up here. A stale
+                // claim says "the HUD is on its UF1 tab", and that alone keeps
+                // Touch-to-Learn from bringing the UF8 into Plug-in Mode, with
+                // no window anywhere to explain why.
+                if (g_hudUf1Tab.load()) {
+                    SetExtState("rea_sixty", "hud_uf1_tab", "0", false);
+                    g_hudUf1Tab.store(false);
+                }
             }
             // ⛔ ONLY WHEN THERE IS SOMETHING TO SHOW. The tab alone used to
             // engage the mode, so standing on a track whose plug-in carries no
