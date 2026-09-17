@@ -5387,6 +5387,15 @@ double uiVolLinear(MediaTrack* tr)
 // Forward decls — full definitions live near the LCD helpers below;
 // PanDelta/PanCenter handlers consume them earlier in the file.
 bool isBinarySlot(const uf8::LinkSlot& s);
+// ⛔ A FADER NEVER TAKES A BINARY PARAMETER. FLIP hands the fader whatever slot
+// is focused, and a 100 mm motorised throw over an on/off control is not a
+// control, it is a switch that flips as your hand passes the middle — and the
+// motor then parks at one end of it. Frank 2026-09-17, on a channel strip whose
+// canonical slot 0 is Bypass: with nothing else focused, FLIP put the Bypass on
+// the fader. The slot stays reachable from a V-Pot and a key, where a binary
+// belongs. FLIP falls through to the pan swap instead, which is what it does
+// when no slot resolves at all.
+bool faderMayTakeSlot_(const uf8::LinkSlot* s);
 // The value a V-Pot push puts on the focused slot (step-cycle or reset).
 // Defined next to isBinarySlot far below; both V-Pot push paths call it.
 static double uf8FocusedPushValue_(MediaTrack* tr, int fxIdx,
@@ -18125,7 +18134,7 @@ uint16_t computeStripCurrentPb_(uint8_t s, MediaTrack* tr,
             : nullptr;
         if (isVPotPanFocus(focusedT)) slT = nullptr;
 
-        if (g_flip.load() && slT) {
+        if (g_flip.load() && faderMayTakeSlot_(slT)) {
             double n = TrackFX_GetParamNormalized(tr, mmT.fxIndex, slT->vst3Param);
             if (slT->inverted) n = 1.0 - n;
             return normToPb(n);
@@ -21022,7 +21031,7 @@ void drainInputQueue()
                 // hijack the fader either (FLIP+Pan would conflict with
                 // Plugin-fader mode's fader→CS-Fader routing).
                 if (isVPotPanFocus(focusedF)) slF = nullptr;
-                if (g_flip.load() && slF) {
+                if (g_flip.load() && faderMayTakeSlot_(slF)) {
                     const uint16_t pbF = linearVolumeToPb(e.value);
                     double normF = static_cast<double>(pbF) /
                                    static_cast<double>(kUf8FaderPbMax);
@@ -21041,7 +21050,7 @@ void drainInputQueue()
                 // duty. Earlier this only kicked in when forcePan was
                 // also held — Frank 2026-05-08: just FLIP should be
                 // enough, no PAN-button-modifier required.
-                if (uf8FlipPanOnFader_(slF != nullptr)) {
+                if (uf8FlipPanOnFader_(faderMayTakeSlot_(slF))) {
                     const uint16_t pbF = linearVolumeToPb(e.value);
                     double n = static_cast<double>(pbF) /
                                static_cast<double>(kUf8FaderPbMax);
@@ -21546,7 +21555,7 @@ void drainInputQueue()
                                                fvf.vst3Param, next);
                     break;
                 }
-                if (g_flip.load() && slPtr) {
+                if (g_flip.load() && faderMayTakeSlot_(slPtr)) {
                     // Map detent fraction (signed6/128) to pb14 delta —
                     // single detent ≈ 128 pb (1/128 of full sweep, same
                     // feel as the V-Pot driving the param). Fine quarters.
@@ -22001,7 +22010,7 @@ void drainInputQueue()
                                                fvf.vst3Param, n);
                     break;
                 }
-                if (g_flip.load() && slPtr) {
+                if (g_flip.load() && faderMayTakeSlot_(slPtr)) {
                     CSurf_OnVolumeChange(tr, 1.0, false);
                     break;
                 }
@@ -34482,9 +34491,21 @@ void uf1PaintChannel_()
             // the parameter became active on the UF8 or in the plug-in window
             // (Frank 2026-09-17). Same resolver the knob uses, and it resolves
             // on the FADER side's track, so the panel-halves rule still holds.
+            // ⛔ NOT A BINARY ONE, on this panel either. See faderMayTakeSlot_:
+            // a toggle on a motor fader flips as the hand passes the middle.
+            // Here the target is a raw param rather than a slot, so ask the
+            // plug-in directly; refusing falls through to the pan swap, exactly
+            // as an unresolvable parameter does.
+            auto paramIsToggle = [](MediaTrack* t, int fx, int prm) {
+                double st = 0, sm = 0, lg = 0; bool tog = false;
+                if (!TrackFX_GetParameterStepSizes(t, fx, prm, &st, &sm, &lg, &tog))
+                    return false;
+                return tog || st >= 0.5;
+            };
             if (uf1ExtenderActive_() && ftr) {
                 int efx = -1, eprm = -1;
-                if (uf1ExtenderFocusedParam_(ftr, &efx, &eprm)) {
+                if (uf1ExtenderFocusedParam_(ftr, &efx, &eprm)
+                    && !paramIsToggle(ftr, efx, eprm)) {
                     flipParamTr = ftr; flipParamFx = efx; flipParam = eprm;
                     return true;
                 }
@@ -34501,7 +34522,7 @@ void uf1PaintChannel_()
                                          uf1CsPageCountFor_(pType, pt, pfx) - 1);
             const int p = uf1CsVpotParam_(pt, pfx, pType, pPage,
                                           std::clamp(g_uf1FlipVpotIdx.load(), 0, 3));
-            if (p < 0) return false;
+            if (p < 0 || paramIsToggle(pt, pfx, p)) return false;
             flipParamTr = pt; flipParamFx = pfx; flipParam = p;
             return true;
         }();
@@ -35152,6 +35173,11 @@ std::string formatDbReadout(double linearAmp)
 // V-Pot bar (no gradient) and respond to V-Pot push as a 0↔1 toggle
 // instead of a "reset to default". Match by slot id rather than
 // linkIdx so any future button additions show up here automatically.
+bool faderMayTakeSlot_(const uf8::LinkSlot* s)
+{
+    return s && s->vst3Param >= 0 && !isBinarySlot(*s);
+}
+
 bool isBinarySlot(const uf8::LinkSlot& s)
 {
     if (!s.id) return false;
@@ -37719,7 +37745,8 @@ void pushZonesForVisibleSlots()
         // FLIP active on this strip = global flip + a usable plug-in
         // slot. Without a slot there's no parameter to flip onto the
         // fader, so the strip falls back to normal mode silently.
-        const bool flipActive = g_flip.load() && slot && fxIdx >= 0;
+        const bool flipActive = g_flip.load() && fxIdx >= 0
+                             && faderMayTakeSlot_(slot);
 
         // Sticky Pot under FLIP: the per-track pin rides the FADER (resolved once
         // for the fader value LABEL + MOTOR below). Wins over the focused-param
@@ -39547,7 +39574,7 @@ void commitDebouncedTouchReleases()
                     TrackFX_SetParamNormalized(tr, sfxR, sprR, n);
                     g_stickyFocusLockUntilMs.store(nowMs_() + 400);
                     stickyApplyMacro_(tr, prevN);
-                } else if (g_flip.load() && slT) {
+                } else if (g_flip.load() && faderMayTakeSlot_(slT)) {
                     double normT = static_cast<double>(touchPb) /
                                    static_cast<double>(kUf8FaderPbMax);
                     if (slT->inverted) normT = 1.0 - normT;
