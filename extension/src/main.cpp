@@ -42875,6 +42875,24 @@ void onTimerBody_()
             // "WIESO KOMM ICH NICHT MEHR AUS DEM UF8 PLUGIN MODE RAUS????").
             // Read as ownership it is one line: the mode we hold stops being
             // ours the moment the user takes it back.
+            // ⛔ AND A REASON THAT NEWLY APPEARS GRANTS A FRESH CLAIM. The
+            // PLUG-IN exit retires OUR engage; it must not outlive the user's
+            // next deliberate act. Releasing it only when ALL reasons are gone
+            // made it a life sentence whenever one of them stands permanently:
+            // the HUD's UF8 tab on a resolvable plug-in never goes away, so
+            // toggling Touch-to-Learn off and on could not get the mode back
+            // (Frank 2026-09-17: "touch to learn geclickt, UF8 zeigt mir immer
+            // noch das Projekt. Ich beruehr Fader, der wackelt aber zeigt immer
+            // noch das Projekt" — the wave has nothing to do with the mode,
+            // which is what made it look like two faults).
+            // Bit 0 = Touch-to-Learn, bit 1 = the HUD tab. A bit going UP is the
+            // act; a bit standing is just a state.
+            static uint8_t prevReasons = 0;
+            const uint8_t reasons = (touchLearnUf8 ? 1u : 0u) | (uf8Tab ? 2u : 0u);
+            if ((reasons & ~prevReasons) != 0
+                && g_uf8ModeHolder == Uf8ModeHolder::UserLeft)
+                g_uf8ModeHolder = Uf8ModeHolder::None;
+            prevReasons = reasons;
             if (wantUf8Mode) {
                 if (g_uf8ModeHolder == Uf8ModeHolder::Auto && !g_uf8PluginMode.load())
                     g_uf8ModeHolder = Uf8ModeHolder::UserLeft;
