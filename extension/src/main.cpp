@@ -24033,6 +24033,21 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             const uint8_t strip   = data[i + 3];
             const uint8_t rawA    = data[i + 4];
             const uint8_t rawHigh = data[i + 4] & 0x80;     // diag: was bit 7 set?
+            // ⛔ IN TOUCH-TO-LEARN A FADER IS A LEARN GESTURE, NOT A CONTROL.
+            // The touch handler above arms its cell; the movement that follows
+            // must not ALSO drive the bound parameter. That write becomes
+            // REAPER's last-touched param, which is exactly what the learn poll
+            // is watching, so the fader consumed its own arm before the user
+            // ever reached the plug-in. First assignment worked (nothing bound
+            // yet, nothing written); every later one did not, and from the
+            // outside the fader simply moved its control instead of arming
+            // (Frank 2026-09-17: "ICH WILL DOCH NUR EINEN BEREITS ZUGEWIESENEN
+            // FADER ERNEUT ZUWEISEN KÖNNEN INDEM ICH IHN BERÜHR! WIE BEI JEDER
+            // ANDEREN CONTROL AUCH!"). Every other control is consumed this way
+            // while the mode is on; the fader was the one that was not.
+            // The TOUCH itself still runs: it limps the motor, so the cap stays
+            // loose under the finger instead of fighting it.
+            if (g_hudTouchLearn.load()) { i += frameSize; continue; }
             if (strip < 8 && g_touchReported[strip].load()) {
                 const uint8_t lsb = rawA & 0x7F;
                 const uint8_t msb = data[i + 5] & 0x7F;
