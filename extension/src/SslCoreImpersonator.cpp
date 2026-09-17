@@ -765,7 +765,13 @@ void probeUdpDatagram_(const uint8_t* data, size_t len, uint16_t srcPort)
 void probeTcpFrame_(uint32_t ftype, const uint8_t* pay, size_t avail)
 {
     if (avail < 8) return;
-    if (ftype != 16 && ftype != 17 && ftype != 18) return;
+    // ⛔ EVERY TYPE, NOT THE THREE WE ALREADY UNDERSTOOD. The first run
+    // logged 16, 17 and 18 because those were the ones we read — so it could
+    // only ever confirm what we already knew, and the plug-in's HELLO (type 4,
+    // the first thing it ever sends, and where issue #8 says the plug-in TYPE
+    // is stated) was filtered out by the instrument itself. Same mistake as
+    // counting data types in our own dump. A probe that only looks where the
+    // code already looks is not a probe.
     uint64_t scope = 0;
     std::memcpy(&scope, pay, 8);
     std::string sig;
@@ -788,8 +794,8 @@ void probeTcpFrame_(uint32_t ftype, const uint8_t* pay, size_t avail)
                  static_cast<unsigned long long>(scope), sig.c_str());
     // A prepare is rare and small, so it goes down whole: this is the message
     // whose contents we have been guessing at with heuristics.
-    if (ftype == 17) {
-        std::fprintf(f, "     prepare hex:");
+    if (ftype == 17 || ftype == 4 || ftype == 5 || ftype == 19) {
+        std::fprintf(f, "     body hex:");
         const size_t nb = (avail - 8 < 96) ? avail - 8 : 96;
         for (size_t i = 0; i < nb; ++i) std::fprintf(f, " %02x", pay[8 + i]);
         std::fprintf(f, "%s\n", (avail - 8 > nb) ? " ..." : "");
