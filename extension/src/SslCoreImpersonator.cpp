@@ -106,6 +106,11 @@ static_assert(sslScopeHash("PresetSelection")                  == 0xbeb95e94d29c
 static_assert(sslScopeHash("HostTrackName")                    == 0x0c7f66c7410f63f0ull, "");
 static_assert(sslScopeHash("HostTrackIndex")                   == 0xee438c9c8cda39cbull, "");
 static_assert(sslScopeHash("360SelectedView")                  == 0x92b79049de04eac5ull, "");
+// The selection LEDs, against the bytes subscribeInitial used to replay.
+static_assert(sslScopeHash("PluginControls.PerSslMeterProPlugin.Selects"
+                           ".IsSelected[1].BoolLedState")       == 0xffdbd55e1a29f038ull, "");
+static_assert(sslScopeHash("PluginControls.PerSslMeterProPlugin.Selects"
+                           ".IsTrackSelected[1].BoolLedState")  == 0xfe3dab093dce9601ull, "");
 // The four identity frames in subscribeInitial(), named in its own comment.
 static_assert(sslScopeHash("GuiSlotIndex")                     == 0x0c0888b1fc1b6a63ull, "");
 static_assert(sslScopeHash("PluginIdent")                      == 0x86a543491dee40b7ull, "");
@@ -415,6 +420,14 @@ std::map<socket_t, uint64_t>  g_clientEqObj;   // conn -> its EQCurveData object
 std::map<socket_t, EqCurve>   g_clientEq;      // conn -> curve      (g_meterMx)
 std::map<uint16_t, EqCurve>   g_portEq;        // UDP port -> curve  (g_meterMx)
 std::map<socket_t, uint16_t>                g_connPort;   // conn -> its UDP port (g_meterMx)
+// Which connection currently holds the selection LED, and the escape hatch.
+// kInvalid = nobody yet. g_selGaveUp is set when selecting one instance left
+// us with NO data at all for a few seconds: then every connection is told it
+// is selected again, which is exactly what the replayed bytes used to do, and
+// we stop steering for this session. A quiet meter is worse than a busy one.
+socket_t                                   g_selConn   = kInvalid;
+bool                                       g_selGaveUp = false;
+long long                                  g_selSince  = 0;
 std::map<uint16_t, FpSet>                   g_portFp;     // UDP port -> values (g_meterMx)
 std::map<uint16_t, int>          g_portIndex;      // UDP port -> HostTrackIndex (g_meterMx)
 // What the plug-in SAYS each stream is, from its prepare messages (frame type
@@ -843,6 +856,41 @@ std::vector<uint8_t> viewFrame(int view) {
 // A type-18 SET-PROPERTY on any object. Same framing as viewFrame above, with
 // both length fields computed rather than baked: verified by rebuilding the
 // captured view frame from it byte for byte.
+// ⛔ THE SELECTION LED IS WHAT MAKES A METER PLUG-IN STREAM.
+// A type-2 property value on
+//     PluginControls.PerSslMeterProPlugin.Selects.IsSelected[n].BoolLedState
+// with an empty body for false and `08 01` for true. We used to REPLAY these
+// as captured bytes (see subscribeInitial), which handed every instance the
+// same "you are selected" and left every Meter in the session streaming
+// everything at once — the Lissajous alone is about 2 MB/s per instance, all
+// of it through one receive worker behind one mutex. That is the stutter.
+// The slot number stays 1 for everyone on purpose: these are SEPARATE TCP
+// connections, so each plug-in only ever sees its own LED. What decides who
+// streams is which connection is told `true`, not which number it is told.
+// Reported by sollapse in issue #8, finding 4; the name-to-id hash that makes
+// it buildable is from the same issue's appendix.
+std::vector<uint8_t> ledFrame(bool trackSel, bool on)
+{
+    static const std::string kSel   = std::string(kScope) + ".Selects.IsSelected[1].BoolLedState";
+    static const std::string kTrkSel = std::string(kScope) + ".Selects.IsTrackSelected[1].BoolLedState";
+    const uint64_t id = sslScopeHash((trackSel ? kTrkSel : kSel).c_str());
+    std::vector<uint8_t> f = { 0xef, 0xbc, 0x51, 0x00 };
+    auto put32 = [&](uint32_t v) {
+        f.push_back(uint8_t( v        & 0xff)); f.push_back(uint8_t((v >> 8)  & 0xff));
+        f.push_back(uint8_t((v >> 16) & 0xff)); f.push_back(uint8_t((v >> 24) & 0xff));
+    };
+    const uint32_t vlen = on ? 2u : 0u;
+    put32(28 + vlen);
+    put32(0x10);
+    put32(1);
+    f.push_back(0x28); f.push_back(0xe0); f.push_back(0xc7); f.push_back(0x45);
+    put32(12 + vlen);
+    put32(2);                                    // PROPERTY VALUE
+    for (int i = 0; i < 8; ++i) f.push_back(uint8_t(id >> (8 * i)));
+    if (on) { f.push_back(0x08); f.push_back(0x01); }
+    return f;
+}
+
 std::vector<uint8_t> propFrame(const uint8_t obj[8], const std::vector<uint8_t>& val)
 {
     std::vector<uint8_t> f = { 0xef, 0xbc, 0x51, 0x00 };
@@ -884,9 +932,14 @@ constexpr uint8_t kObjPresetSel[8]  = SSL_ID("PresetSelection");
 std::vector<uint8_t> subscribeInitial() {
     std::vector<uint8_t> out;
     auto add = [&](const char* hx){ auto f = fromHex(hx); out.insert(out.end(), f.begin(), f.end()); };
-    add("efbc51001c000000100000000100000028e0c7450c0000000200000038f0291a5ed5dbff");
-    add("efbc51001c000000100000000100000028e0c7450c000000020000000196ce3d09ab3dfe");
-    add("efbc51001e000000100000000100000028e0c7450e0000000200000038f0291a5ed5dbff0801");
+    // The two "not selected" LEDs, now BUILT rather than replayed — same bytes,
+    // and the compiler checks the names (see ledFrame + the static_asserts).
+    { auto f = ledFrame(false, false); out.insert(out.end(), f.begin(), f.end()); }
+    { auto f = ledFrame(true,  false); out.insert(out.end(), f.begin(), f.end()); }
+    // ⛔ AND THE "SELECTED" ONE IS NOT SENT HERE ANY MORE. It used to be third
+    // in this block, so every instance was told it was the selected one the
+    // moment it connected. It is sent to exactly one connection now, from the
+    // worker, and it follows the instance the surface is reading.
     add("efbc51002d000000100000000100000028e0c7451d00000012000000636a1bfcb188080c0801120d0a0b08ffffffffffffffffff01");
     add("efbc51002e000000100000000100000028e0c7451e00000012000000b740ee1d4943a586088010120d0a0b08ffffffffffffffffff01");
     add("efbc510030000000100000000100000028e0c74520000000120000002ba7d9fe60d5ec5408f6cbb302120d0a0b08ffffffffffffffffff01");
@@ -1155,6 +1208,10 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
             dataFdConn.erase(it);
             break;
         }
+        // The selection LED cannot be held by a socket that is gone. Clearing
+        // it makes the next pass pick a live connection instead of believing
+        // the selection already sits where it wants it.
+        if (g_selConn == c) { g_selConn = kInvalid; g_selSince = 0; }
         clients.erase(clients.begin() + long(i));
     };
 
@@ -1245,6 +1302,46 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                 if (target != kInvalid) sendTo(target, item.second);
                 else if (g_trace) slog("[%.1f] cmd dropped: no conn for port %u",
                                        t, unsigned(item.first));
+            }
+        }
+        // ── Who holds the selection LED ────────────────────────────────
+        // Exactly one connection is told it is selected, and it follows the
+        // instance the surface is reading. Everything else stays quiet, which
+        // is the whole load win: a Meter that is not selected does not stream.
+        // ⛔ SELECT FIRST, THEN DESELECT. The other order leaves a window with
+        // nobody streaming, and at 25 Hz that window is visible.
+        // ⛔ AND AN ESCAPE HATCH. If steering leaves us with no data at all for
+        // a few seconds, every connection is told it is selected again — which
+        // is exactly what the replayed bytes used to do — and we stop steering
+        // for this session. Being wrong about which instance is read must cost
+        // a moment, not the meters.
+        if (!clients.empty() && !g_selGaveUp) {
+            socket_t want = kInvalid;
+            {
+                std::lock_guard<std::mutex> lk(g_meterMx);
+                const uint16_t port = currentMeterPortLocked_();
+                for (const auto& kv : g_connPort)
+                    if (kv.second == port) { want = kv.first; break; }
+            }
+            if (want != kInvalid && want != g_selConn) {
+                const socket_t prev = g_selConn;
+                sendTo(want, ledFrame(false, true));         // on, first
+                if (prev != kInvalid
+                    && std::find(clients.begin(), clients.end(), prev) != clients.end())
+                    sendTo(prev, ledFrame(false, false));    // off, second
+                g_selConn  = want;
+                g_selSince = nowMs();
+                if (g_trace) slog("[%.1f] selection LED -> conn %d", t, int(want));
+            }
+            if (g_selConn != kInvalid && g_selSince > 0) {
+                const long long quiet = nowMs() - g_lastDataMs.load();
+                if (nowMs() - g_selSince > 4000 && quiet > 4000) {
+                    g_selGaveUp = true;
+                    for (socket_t c2 : clients) sendTo(c2, ledFrame(false, true));
+                    slogAlways("[%.1f] selection steering OFF: no meter data for "
+                               "%lld ms after selecting one instance — every "
+                               "connection selected again", t, quiet);
+                }
             }
         }
         if (!clients.empty() && g_viewDirty.exchange(false)) {
@@ -2172,6 +2269,7 @@ bool start(uint16_t tcpPort, uint16_t dataPort) {
     { std::lock_guard<std::mutex> lk(g_meterMx);
       g_inst.clear(); g_portSeq.clear(); g_portSeqNext = 0; }
     g_lastDataMs.store(0);
+    g_selConn = kInvalid; g_selGaveUp = false; g_selSince = 0;
     g_running.store(true);
     slog("[start] tcpPort=%u dataPort=%u", unsigned(tcpPort), unsigned(dataPort));
     try { g_worker = std::thread(workerMain, tcpPort, dataPort); }
