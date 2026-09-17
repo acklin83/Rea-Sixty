@@ -631,6 +631,12 @@ std::atomic<int>  g_resetReq{0};
 // selected.
 std::mutex g_cmdMx;
 std::vector<std::pair<uint16_t, std::vector<uint8_t>>> g_cmdQueue;
+// ⚠ EXPERIMENT queue: {object name, value}. Broadcast to every connection,
+// because the object we are asking about is declared by a channel strip while
+// the "current instance" resolver answers for Meters — and for one question
+// asked once, reaching every plug-in is the simpler correctness. See
+// objTestSet in the header for what the question is.
+std::vector<std::pair<std::string, int>> g_objTestQueue;
 std::atomic<bool> g_viewDirty{false};
 // REASIXTY_FORCE_VIEW: pin the meter view the plug-in computes, overriding whatever the
 // UF1 screen asks for. Trace tool — drives view 3 (Loudness history, DataTypes 25/26)
@@ -1337,6 +1343,25 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                 if (rq & 1) press(kObjResetPeakHolds);
                 if (rq & 2) press(kObjResetLoudness);
                 if (g_trace) slog("[%.1f] reset req=%d -> conn", t, rq);
+            }
+        }
+        // ⚠ EXPERIMENT drain. One line per send, always logged (not behind the
+        // trace flag) because the whole point is to read afterwards what went
+        // out and compare it with what the plug-in's own window did.
+        if (!clients.empty()) {
+            std::vector<std::pair<std::string, int>> oq;
+            { std::lock_guard<std::mutex> lk(g_cmdMx); oq.swap(g_objTestQueue); }
+            for (auto& item : oq) {
+                const uint64_t id = sslScopeHash(item.first.c_str());
+                uint8_t obj[8];
+                for (int i = 0; i < 8; ++i) obj[i] = uint8_t(id >> (8 * i));
+                std::vector<uint8_t> val; val.push_back(0x08);
+                putVarint(val, uint64_t(item.second < 0 ? 0 : item.second));
+                for (socket_t c2 : clients) sendTo(c2, propFrame(obj, val));
+                slogAlways("[%.1f] OBJ TEST  name=%s  id=%016llx  value=%d  "
+                           "-> %zu connection(s)", t, item.first.c_str(),
+                           static_cast<unsigned long long>(id), item.second,
+                           clients.size());
             }
         }
         if (!clients.empty()) {
@@ -2737,6 +2762,13 @@ bool meterProAvailable() {
     const uint16_t port = currentMeterPortLocked_();   // pin → sticky → first alive
     auto it = g_inst.find(port);
     return it != g_inst.end() && it->second.isPro;
+}
+
+void objTestSet(const char* name, int value)
+{
+    if (!name || !*name) return;
+    std::lock_guard<std::mutex> lk(g_cmdMx);
+    g_objTestQueue.emplace_back(std::string(name), value);
 }
 
 bool getMeterInfo(int dataType, MeterInfo& out)

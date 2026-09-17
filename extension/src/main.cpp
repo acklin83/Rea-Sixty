@@ -42795,6 +42795,26 @@ void onTimerBody_()
         }
     }
 
+    // ⚠ EXPERIMENT (2026-09-17). "<Name>;<value>" in ExtState rea_sixty/ssl_obj_set
+    // writes that value into the named SSL plug-in object on every open
+    // connection, and logs what went out. One question: are "HQ Mode" and "A/B"
+    // settable as ordinary objects? Both are DECLARED on the wire — HighQuality
+    // announces itself with the label "HQ Mode", StateASelected with "A/B" —
+    // while PluginChunkPatch.cpp reaches them by rewriting base64 inside the
+    // track chunk, because they are not host parameters. If a write takes, that
+    // surgery can go, and with it a SetTrackStateChunk reload that can click
+    // during playback. Consumed on read, so it fires once per set.
+    if (const char* ov = GetExtState("rea_sixty", "ssl_obj_set"); ov && *ov) {
+        const std::string spec = ov;
+        SetExtState("rea_sixty", "ssl_obj_set", "", false);
+        const auto semi = spec.find(';');
+        if (semi != std::string::npos && semi > 0) {
+            const std::string nm = spec.substr(0, semi);
+            const int val = std::atoi(spec.c_str() + semi + 1);
+            sslcore::objTestSet(nm.c_str(), val);
+        }
+    }
+
     if (g_hudEnabled.load() || g_hudTouchLearn.load()) {
         // Mirror the Touch-to-Learn mode toggle (set by the HUD's menu).
         if (const char* tl = GetExtState("rea_sixty", "hud_touch_learn"))

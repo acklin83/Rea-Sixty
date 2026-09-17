@@ -97,6 +97,19 @@ struct MeterInfo {
 };
 bool getMeterInfo(int dataType, MeterInfo& out);
 
+// ⚠ EXPERIMENT (2026-09-17), not a feature. Write `value` into the plug-in
+// object called `name`, on EVERY open connection, as the same `08 <varint>`
+// shape the RESET commands use. The point is one question: are "HQ Mode" and
+// "A/B" — which PluginChunkPatch.cpp reaches by rewriting base64 inside the
+// track chunk, because they are not host parameters — settable as ordinary SSL
+// objects? Both are DECLARED on the wire: HighQuality announces itself with the
+// label "HQ Mode", StateASelected with "A/B" (measured, 2026-09-17). Whether a
+// WRITE takes is the part no capture can answer.
+// If it does, the chunk surgery for those two can go, and with it the
+// SetTrackStateChunk reload that can click during playback.
+// Driven by ExtState rea_sixty/ssl_obj_set = "<Name>;<value>".
+void objTestSet(const char* name, int value);
+
 // Copy the overload flags for `dataType`: f5 OverloadValues (instantaneous — it
 // flashes) and f6 OverloadInfHoldValues (latched until reset), one entry per
 // channel. Returns false if that type hasn't been seen yet. Thread-safe.
