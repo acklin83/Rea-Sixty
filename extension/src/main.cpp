@@ -4192,6 +4192,14 @@ void uf1FollowUf8StripMode_(bool on)
     g_pageDirty.store(true);
 }
 
+// ⇨ AND THE OTHER DIRECTION, and the same for FLIP: uf8FollowUf1StripMode_,
+// uf1FollowUf8Flip_ and uf8FollowUf1Flip_ are defined further down, beside
+// g_lastTouchPbValid, because they need symbols that are declared after this
+// point. Same option, same rule, and the note on the consequence lives there.
+void uf8FollowUf1StripMode_(bool on);
+void uf1FollowUf8Flip_(bool on);
+void uf8FollowUf1Flip_(bool on);
+
 // Pin plug-in GUI position — when on, every TrackFX_Show(..., 3) we run
 // on a managed path is followed by a SetWindowPos to (pinX, pinY). Size
 // is left alone (SWP_NOSIZE). User captures the position by dragging a
@@ -17983,6 +17991,44 @@ bool csStripPanReadout_(MediaTrack* tr, bool inStripMode, double* out)
     return true;
 }
 
+// ⛔ FLIP PUTS PAN ON THE FADER, IN STRIP MODE TOO. FLIP with a focused slot has
+// beaten Strip Mode on this panel all along; only the pan case carried an
+// exclusion, so the UF8 disagreed with itself and under FLIP the pan never
+// reached the fader in Strip Mode (Frank 2026-09-17: "PAN mode in strip mode
+// flipt nicht mit Fader"). UF8 Plug-in Mode stays out, because there the map
+// says what sits on the fader and FLIP is asleep entirely.
+// `slotOnFader` = FLIP has already claimed the fader for a focused parameter.
+// ⚠ FOUR CALLERS read this — the live write, the release writeback, the motor
+// follow and the painter — and they have to agree, or the fader fights its own
+// readout. That is why it is a predicate and not four copies of a condition.
+bool uf8FlipPanOnFader_(bool slotOnFader)
+{
+    return g_flip.load() && !slotOnFader && !g_uf8PluginMode.load();
+}
+
+// The pan that fader then moves and follows. In Strip Mode a channel's pan is
+// the CS plug-in's (Frank 2026-09-16), so it must be that one and not REAPER's.
+double uf8FlipPanRead_(MediaTrack* tr)
+{
+    double csPan = 0.0;
+    if (csStripPanReadout_(tr, g_pluginFaderMode.load(), &csPan)) return csPan;
+    return GetMediaTrackInfo_Value(tr, "D_PAN");
+}
+
+void uf8FlipPanWrite_(MediaTrack* tr, double pan)
+{
+    if (g_pluginFaderMode.load()) {
+        if (const auto pn = csPanForTrack(tr); pn.vst3Param >= 0) {
+            const double n = std::clamp((pan + 1.0) * 0.5, 0.0, 1.0);
+            TrackFX_SetParamNormalized(tr, pn.fxIndex, pn.vst3Param, n);
+            uf8::param_groups::broadcastBuiltinSlot(
+                tr, uf8::Domain::ChannelStrip, 3, n);
+            return;
+        }
+    }
+    SetMediaTrackInfo_Value(tr, "D_PAN", pan);
+}
+
 // Captured at touch-on, computed on the main thread via the
 // TouchOriginSnapshot drain case. Mirrors the value the fader was
 // tracking immediately before the user grabbed it. Used by the
@@ -18067,9 +18113,9 @@ uint16_t computeStripCurrentPb_(uint8_t s, MediaTrack* tr,
             if (slT->inverted) n = 1.0 - n;
             return normToPb(n);
         }
-        if (g_flip.load() && !g_pluginFaderMode.load() && !g_uf8PluginMode.load()) {
-            const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
-            return panToPb(pan);
+        // The slot branch above returned, so nothing holds the fader here.
+        if (uf8FlipPanOnFader_(/*slotOnFader*/false)) {
+            return panToPb(uf8FlipPanRead_(tr));
         }
     }
     if (g_uf8PluginMode.load()) {
@@ -20964,8 +21010,7 @@ void drainInputQueue()
                 // duty. Earlier this only kicked in when forcePan was
                 // also held — Frank 2026-05-08: just FLIP should be
                 // enough, no PAN-button-modifier required.
-                if (g_flip.load() && !g_pluginFaderMode.load()
-                    && !g_uf8PluginMode.load()) {
+                if (uf8FlipPanOnFader_(slF != nullptr)) {
                     const uint16_t pbF = linearVolumeToPb(e.value);
                     double n = static_cast<double>(pbF) /
                                static_cast<double>(kUf8FaderPbMax);
@@ -20974,7 +21019,7 @@ void drainInputQueue()
                     double pan = n * 2.0 - 1.0;
                     if (pan < -1.0) pan = -1.0;
                     if (pan >  1.0) pan =  1.0;
-                    SetMediaTrackInfo_Value(tr, "D_PAN", pan);
+                    uf8FlipPanWrite_(tr, pan);
                     break;
                 }
                 // Plugin-fader mode: route the fader to the SSL strip's
@@ -23567,6 +23612,61 @@ std::array<std::atomic<uint8_t>, 8> g_lastLsbOut{};
 // >=4-LSB deadband swallowed the tiny finger-induced shift.
 std::array<std::atomic<uint16_t>, 8> g_lastTouchPb{};
 std::array<std::atomic<bool>, 8>     g_lastTouchPbValid{};
+
+// ⇨ AND THE OTHER DIRECTION, and the same for FLIP (Frank 2026-09-17: "die
+// Option auf beide Richtungen machen. Also Flip und Strip Mode beidseitig
+// koppeln"). With the option on the two panels are one desk, and either key
+// speaks for both; off, nothing below runs and each panel keeps its own.
+// ⚠ THE CONSEQUENCE THE ONE-WAY NOTE ABOVE WAS AVOIDING, stated when it was
+// built: the UF8's Strip Mode is mutually exclusive with UF8 Plug-in Mode, so
+// the UF1's small PLUG-IN key can now drop the UF8 out of Plug-in Mode. That is
+// what "coupled" means, and the option is opt-in and off by default.
+// ⛔ A MIRROR NEVER CALLS THE OTHER MIRROR. Each one stores its own side and
+// does that side's work; calling back would bounce between the two forever.
+void uf8FollowUf1StripMode_(bool on)
+{
+    if (!g_uf1StripFollowsUf8.load())    return;
+    if (g_pluginFaderMode.load() == on)  return;   // already there
+    g_pluginFaderMode.store(on);
+    g_pluginFaderModeWithGui.store(false);   // headless, as the UF8's own key is
+    g_pluginGuiSyncRequest.store(true);
+    // The mutex, exactly as ssl_strip_mode_toggle runs it, including restoring
+    // the parked Sel-Mode so an FX / Instance cycle survives the implicit exit.
+    if (on && g_uf8PluginMode.load()) {
+        g_uf8PluginMode.store(false);
+        restoreSelModeAfterUf8PluginMode_();
+        SetExtState("ReaSixty", "uf8PluginMode", "0", true);
+    }
+    g_pageDirty.store(true);
+    g_bankDirty.store(true);
+    SetExtState("ReaSixty", "pluginFaderMode", on ? "1" : "0", false);
+}
+
+void uf1FollowUf8Flip_(bool on)
+{
+    if (!g_uf1StripFollowsUf8.load()) return;
+    if (g_uf1Flip.load() == on)       return;
+    g_uf1Flip.store(on);
+    g_pageDirty.store(true);
+}
+
+void uf8FollowUf1Flip_(bool on)
+{
+    if (!g_uf1StripFollowsUf8.load()) return;
+    // ⛔ THE UF8'S OWN FLIP KEY REFUSES WHILE UF8 PLUG-IN MODE RUNS — the map
+    // already says what sits on the fader, so there is nothing to swap. A
+    // follower has to refuse for the same reason, or the UF1's key would set a
+    // FLIP the UF8 cannot honour and the two would disagree about their state.
+    if (g_uf8PluginMode.load())       return;
+    if (g_flip.load() == on)          return;
+    g_flip.store(on);
+    g_pageDirty.store(true);
+    SetExtState("ReaSixty", "flip", on ? "1" : "0", true);
+    // Same touch-context invalidation the UF8's own toggle does: a pb14 captured
+    // under the old FLIP state would be written back as the wrong quantity.
+    for (auto& v : g_lastTouchPbValid) v.store(false);
+}
+
 
 // Last fader motor position we actually wrote to the UF8 — lets the timer
 // dedup motor-echo pushes, and lets the touch-release handler prime the
@@ -37557,10 +37657,7 @@ void pushZonesForVisibleSlots()
         // be enough — the swap is exactly what FLIP means without other
         // context. plugin-fader mode still wins when active (its fader
         // role is explicit and overrides the swap).
-        const bool flipPanSwap = g_flip.load()
-                              && !flipActive
-                              && !g_pluginFaderMode.load()
-                              && !g_uf8PluginMode.load();
+        const bool flipPanSwap = uf8FlipPanOnFader_(flipActive);
 
         struct UserFaderHandle {
             MediaTrack* tr; int fxIdx; int vst3Param; bool inverted;
@@ -37587,7 +37684,7 @@ void pushZonesForVisibleSlots()
         // toggle ON + a CS plug-in is loaded. FLIP wins if both are on
         // (FLIP is per-strip and explicit; plugin-fader is global).
         // User-fader wins over built-in CS-fader.
-        const auto cs = (g_pluginFaderMode.load() && !flipActive
+        const auto cs = (g_pluginFaderMode.load() && !flipActive && !flipPanSwap
                           && !userFaderActive)
                           ? csFaderForTrack(tr) : CsFaderHandle{-1, -1};
         const bool csFaderActive = cs.vst3Param >= 0;
@@ -39349,8 +39446,9 @@ void commitDebouncedTouchReleases()
                         slT->vst3Param, normT);
                     uf8::param_groups::broadcastBuiltinSlot(
                         tr, focusedT.domain, focusedT.slotIdx, normT);
-                } else if (g_flip.load() && !g_pluginFaderMode.load()
-                           && !g_uf8PluginMode.load()) {
+                } else if (uf8FlipPanOnFader_(/*slotOnFader*/false)) {
+                    // The slot rung is the branch above; reaching here means it
+                    // did not claim the fader.
                     double n = static_cast<double>(touchPb) /
                                static_cast<double>(kUf8FaderPbMax);
                     if (n < 0.0) n = 0.0;
@@ -39358,7 +39456,7 @@ void commitDebouncedTouchReleases()
                     double pan = n * 2.0 - 1.0;
                     if (pan < -1.0) pan = -1.0;
                     if (pan >  1.0) pan =  1.0;
-                    SetMediaTrackInfo_Value(tr, "D_PAN", pan);
+                    uf8FlipPanWrite_(tr, pan);
                 } else if (g_uf8PluginMode.load()) {
                     if (auto uctxT = userStripCtxFocused_(); uctxT.map) {
                         const int bank = std::clamp(g_softKeyBank.load(),
@@ -51262,6 +51360,7 @@ void registerBindingHandlers()
             if (g_uf8PluginMode.load()) return;
             const bool next = !g_flip.load();
             g_flip.store(next);
+            uf1FollowUf8Flip_(next);
             g_pageDirty.store(true);
             SetExtState("ReaSixty", "flip", next ? "1" : "0", true);
             // Invalidate any in-flight touch context — the captured pb14
@@ -51921,7 +52020,9 @@ void registerBindingHandlers()
     registerBuiltin("uf1_flip", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            g_uf1Flip.store(!g_uf1Flip.load());
+            const bool next = !g_uf1Flip.load();
+            g_uf1Flip.store(next);
+            uf8FollowUf1Flip_(next);
         },
         [](int) { return g_uf1Flip.load(); },
         "UF1: FLIP (swap V-Pot / fader)", false
@@ -51957,6 +52058,7 @@ void registerBindingHandlers()
             if (!firing) return;
             const bool next = !g_uf1StripMode.load();
             g_uf1StripMode.store(next);
+            uf8FollowUf1StripMode_(next);
             // Plain variant is headless — drop the with-GUI flag so switching
             // from the GUI builtin to this one stops following the GUI; the
             // sync drain then closes any window we'd opened (as the UF8 pair).
@@ -51981,6 +52083,7 @@ void registerBindingHandlers()
             if (!firing) return;
             const bool next = !g_uf1StripMode.load();
             g_uf1StripMode.store(next);
+            uf8FollowUf1StripMode_(next);
             g_uf1StripModeWithGui.store(next);
             SetExtState("rea_sixty", "uf1StripMode", next ? "1" : "0", false);
             SetExtState("rea_sixty", "uf1StripModeGui", next ? "1" : "0", false);
