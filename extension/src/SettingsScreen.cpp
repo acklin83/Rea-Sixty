@@ -12418,6 +12418,36 @@ int         g_hudUf8LearnTicks  = 0;
 int         g_hudUf8LearnTr     = -2;
 int         g_hudUf8LearnFx     = -1;
 int         g_hudUf8LearnParam  = -1;
+double      g_hudUf8LearnVal    = 0.0;  // that param's value when the cell armed
+
+// ⛔ A SECOND TOUCH OF THE SAME PARAM IS A TOUCH. GetLastTouchedFX names a
+// parameter, not an event, so a learn poll that watches only (track, fx, param)
+// cannot see the gesture the user makes most: re-learning a control onto the
+// parameter it ALREADY carries. Arming re-reads the baseline, so once a param is
+// the last-touched one it can never be learned again until something else is
+// touched in between (Frank 2026-09-17: "wenn ich in touch to learn eine bereits
+// gelernte control an der hardware anfasse und ich sie demselben paramter
+// zuweisen will, wo sie schon drauf ist, dann geht das nicht. das muss gehen.").
+// The VALUE is the missing half: same param, moved knob = a fresh touch.
+// ONE helper, because the identity line sat verbatim in all three surfaces'
+// polls (UF8 / UF1 / UC1) and a fix in one of them would have been a fix in one
+// of them — the 2026-09-16 failure class, one decision in three copies.
+// ⚠ A touch that does not MOVE the parameter stays invisible. The API offers
+// no touch counter, only the value.
+double learnTouchedValue_(int t, int f, int p)
+{
+    if (f < 0 || p < 0) return 0.0;
+    MediaTrack* tr = (t == 0) ? GetMasterTrack(nullptr)
+                   : (t > 0)  ? GetTrack(nullptr, t - 1) : nullptr;
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return 0.0;
+    return TrackFX_GetParamNormalized(tr, f, p);
+}
+bool learnTouchIsFresh_(int t, int f, int p, double val,
+                        int bt, int bf, int bp, double bval)
+{
+    if (t != bt || f != bf || p != bp) return true;
+    return std::fabs(val - bval) > 1e-6;
+}
 // CREATE-NEW mode: armed on a UF8 tab where no uf8Mode map exists for the
 // focused track but a virgin FX is under the cursor. The wiggled FX defines the
 // plug-in; a fresh UF8-only map (domain=None, uf8Mode=true) is created + bound.
@@ -12496,6 +12526,8 @@ void hudUf8ArmLearn_(int kind, int strip, int fb, int vb, void* trV, int fx,
         int t = -1, f = -1, p = -1;
         if (GetLastTouchedFX(&t, &f, &p)) { g_hudUf8LearnTr = t; g_hudUf8LearnFx = f; g_hudUf8LearnParam = p; }
         else                              { g_hudUf8LearnTr = -1; g_hudUf8LearnFx = -1; g_hudUf8LearnParam = -1; }
+        g_hudUf8LearnVal = learnTouchedValue_(g_hudUf8LearnTr, g_hudUf8LearnFx,
+                                              g_hudUf8LearnParam);
         return;
     }
     std::string match;
@@ -12510,6 +12542,8 @@ void hudUf8ArmLearn_(int kind, int strip, int fb, int vb, void* trV, int fx,
     int t = -1, f = -1, p = -1;
     if (GetLastTouchedFX(&t, &f, &p)) { g_hudUf8LearnTr = t; g_hudUf8LearnFx = f; g_hudUf8LearnParam = p; }
     else                              { g_hudUf8LearnTr = -1; g_hudUf8LearnFx = -1; g_hudUf8LearnParam = -1; }
+    g_hudUf8LearnVal = learnTouchedValue_(g_hudUf8LearnTr, g_hudUf8LearnFx,
+                                          g_hudUf8LearnParam);
 }
 
 // CREATE-NEW bind for the UF8 tab: the user armed a cell on a track with no
@@ -12599,8 +12633,11 @@ bool hudUf8LearnTick_()
     if (--g_hudUf8LearnTicks <= 0) { hudUf8CancelLearn_(); return false; }
     int t = -1, f = -1, p = -1;
     if (!GetLastTouchedFX(&t, &f, &p)) return false;
-    if (t == g_hudUf8LearnTr && f == g_hudUf8LearnFx && p == g_hudUf8LearnParam) return false;
+    const double v = learnTouchedValue_(t, f, p);
+    if (!learnTouchIsFresh_(t, f, p, v, g_hudUf8LearnTr, g_hudUf8LearnFx,
+                            g_hudUf8LearnParam, g_hudUf8LearnVal)) return false;
     g_hudUf8LearnTr = t; g_hudUf8LearnFx = f; g_hudUf8LearnParam = p;
+    g_hudUf8LearnVal = v;
     MediaTrack* tr = (t == 0) ? GetMasterTrack(nullptr)
                    : (t > 0)  ? GetTrack(nullptr, t - 1) : nullptr;
     if (!tr) return false;
@@ -12637,6 +12674,7 @@ int         g_hudUf1LearnPos    = -1;
 std::string g_hudUf1LearnMatch;
 int         g_hudUf1LearnTicks  = 0;
 int         g_hudUf1LearnTr = -1, g_hudUf1LearnFx = -1, g_hudUf1LearnParam = -1;
+double      g_hudUf1LearnVal = 0.0;   // see learnTouchIsFresh_
 
 void hudUf1CancelLearn_()
 {
@@ -12798,6 +12836,8 @@ void hudUf1ArmLearn_(bool softKeys, int pos, void* trV, int fx)
         int t0 = -1, f0 = -1, p0 = -1;
         if (GetLastTouchedFX(&t0, &f0, &p0)) { g_hudUf1LearnTr = t0; g_hudUf1LearnFx = f0; g_hudUf1LearnParam = p0; }
         else                                 { g_hudUf1LearnTr = -1; g_hudUf1LearnFx = -1; g_hudUf1LearnParam = -1; }
+        g_hudUf1LearnVal = learnTouchedValue_(g_hudUf1LearnTr, g_hudUf1LearnFx,
+                                              g_hudUf1LearnParam);
         return;
     }
     g_hudUf1LearnActive = true;
@@ -12808,6 +12848,8 @@ void hudUf1ArmLearn_(bool softKeys, int pos, void* trV, int fx)
     int t = -1, f = -1, p = -1;
     if (GetLastTouchedFX(&t, &f, &p)) { g_hudUf1LearnTr = t; g_hudUf1LearnFx = f; g_hudUf1LearnParam = p; }
     else                              { g_hudUf1LearnTr = -1; g_hudUf1LearnFx = -1; g_hudUf1LearnParam = -1; }
+    g_hudUf1LearnVal = learnTouchedValue_(g_hudUf1LearnTr, g_hudUf1LearnFx,
+                                          g_hudUf1LearnParam);
 }
 // Poll for the wiggle. True the tick a bind lands. Mirrors hudUf8LearnTick_.
 bool hudUf1LearnTick_()
@@ -12816,8 +12858,11 @@ bool hudUf1LearnTick_()
     if (--g_hudUf1LearnTicks <= 0) { hudUf1CancelLearn_(); return false; }
     int t = -1, f = -1, p = -1;
     if (!GetLastTouchedFX(&t, &f, &p)) return false;
-    if (t == g_hudUf1LearnTr && f == g_hudUf1LearnFx && p == g_hudUf1LearnParam) return false;
+    const double v = learnTouchedValue_(t, f, p);
+    if (!learnTouchIsFresh_(t, f, p, v, g_hudUf1LearnTr, g_hudUf1LearnFx,
+                            g_hudUf1LearnParam, g_hudUf1LearnVal)) return false;
     g_hudUf1LearnTr = t; g_hudUf1LearnFx = f; g_hudUf1LearnParam = p;
+    g_hudUf1LearnVal = v;
     MediaTrack* tr = (t == 0) ? GetMasterTrack(nullptr)
                    : (t > 0)  ? GetTrack(nullptr, t - 1) : nullptr;
     if (!tr) return false;
@@ -13808,6 +13853,7 @@ int         g_hudLearnTicks   = 0;    // arm timeout countdown (onTimer ticks)
 int         g_hudLearnTr      = -2;   // GetLastTouchedFX baseline
 int         g_hudLearnFx      = -1;
 int         g_hudLearnParam   = -1;
+double      g_hudLearnVal     = 0.0;  // see learnTouchIsFresh_
 // CREATE-NEW mode: armed on an EMPTY CS/BC tab where no plug-in is recognised
 // for the domain. -1 = bind into the existing g_hudLearnMatch; else the Domain
 // value (ChannelStrip/BusComp) — the wiggled FX defines the plug-in and a fresh
@@ -13920,6 +13966,7 @@ void hudArmLearn_(int idx, void* csTrV, int csFx, void* bcTrV, int bcFx)
         int t = -1, f = -1, p = -1;
         if (GetLastTouchedFX(&t, &f, &p)) { g_hudLearnTr = t; g_hudLearnFx = f; g_hudLearnParam = p; }
         else                              { g_hudLearnTr = -1; g_hudLearnFx = -1; g_hudLearnParam = -1; }
+        g_hudLearnVal = learnTouchedValue_(g_hudLearnTr, g_hudLearnFx, g_hudLearnParam);
     };
 
     // Existing-plug-in path: a CS/BC plug-in IS recognised on the focused track.
@@ -14331,8 +14378,11 @@ bool hudLearnTick_(int activeLayer)
     if (--g_hudLearnTicks <= 0) { hudCancelLearn_(); return false; }
     int t = -1, f = -1, p = -1;
     if (!GetLastTouchedFX(&t, &f, &p)) return false;
-    if (t == g_hudLearnTr && f == g_hudLearnFx && p == g_hudLearnParam) return false;
+    const double v = learnTouchedValue_(t, f, p);
+    if (!learnTouchIsFresh_(t, f, p, v, g_hudLearnTr, g_hudLearnFx,
+                            g_hudLearnParam, g_hudLearnVal)) return false;
     g_hudLearnTr = t; g_hudLearnFx = f; g_hudLearnParam = p;
+    g_hudLearnVal = v;
     MediaTrack* tr = (t == 0) ? GetMasterTrack(nullptr)
                    : (t > 0)  ? GetTrack(nullptr, t - 1) : nullptr;
     if (!tr) return false;
