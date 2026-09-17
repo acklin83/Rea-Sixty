@@ -42720,7 +42720,21 @@ void onTimerBody_()
             if (uf8Tab) {
                 MediaTrack* mTr = nullptr; int mFx = -1; const void* mMap = nullptr;
                 resolveFocusedUf8Target_(mTr, mFx, mMap, nullptr);
-                wantUf8Mode = (mMap != nullptr);
+                // ⛔ OR A PLUG-IN THAT HAS NO MAP AT ALL, because that is the one
+                // you are here to MAP. Requiring an existing map locked the door
+                // from the inside: you cannot see the cells you are filling until
+                // the map exists, and the map exists only once you have filled a
+                // cell (Frank 2026-09-17: "wie soll ich ein UF8 plugin gescheit
+                // mappen wenn die UF8 in der normalen ansicht bleibt?").
+                // ⚠ VIRGIN, not "no UF8 layer". The case this gate was built for
+                // on 2026-09-16 is a plug-in that HAS a map and is simply not a
+                // UF8 one — a channel strip on a snare — and that one still keeps
+                // the surface out of the mode. hudCursorUnlearnedFx_ is the same
+                // resolver the tab's own "Map this plug-in" banner uses, so the
+                // mode comes on for exactly the plug-in the banner is offering.
+                MediaTrack* vTr = nullptr; int vFx = -1;
+                wantUf8Mode = (mMap != nullptr)
+                           || hudCursorUnlearnedFx_(vTr, vFx);
             }
             if (wantUf8Mode) {
                 if (!g_uf8PluginMode.load()) {
