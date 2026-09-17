@@ -102,3 +102,27 @@ If ReaPack isn't an option:
 - **Linux:** `rea-sixty-linux-v0.6.0.tar.gz`, unpack **all three** files (`reaper_rea-sixty.so`, `libusb-1.0.so.0`, `libhidapi-hidraw.so.0`) into `~/.config/REAPER/UserPlugins/`, keeping them together. Apply the bundled `99-rea-sixty.rules` udev rule, or use the in-app button. No separate dependency install needed.
 
 The **Stream Deck Companion** plugin (`com.reasixty.companion.streamDeckPlugin`) is attached to this release separately, it is not part of the ReaPack package.
+
+---
+
+## ⛔ BEIM TAGGEN: diesen Satz ins README zurück
+
+Er stand dort ab `681ed8e` und war damit **öffentlich sichtbar, bevor v0.6.0
+getaggt war** — auf einem Repo, dessen letzter Release v0.5.9 ist. Frank hat es
+am 17.09. auf GitHub gesehen. Herausgenommen mit dem Commit, der diese Zeilen
+anlegt; er gehört wieder in den Status-Absatz von `README.md`, direkt vor
+„An on-screen Plug-in Mixer view is not planned.", und zwar **im selben Commit
+wie der Tag**, nicht davor:
+
+> v0.6.0 made a soft-key set a thing you own — nine of them, each with a number and a name, all in one matrix you edit in place, with copy, cut and paste of a whole bank and SSL's own two rows sitting in it like the rest — and taught the surface to reach past REAPER: **OBS** on the keys with recording, chapter marks and scenes by name, and a **Sticky Pot that carries two parameters at once**, counter-running, so an 1176 can be driven harder without the level moving.
+
+⛔ **Die Regel daraus:** die Release-Vorbereitung darf das README nicht auf eine
+Version setzen, die es noch nicht gibt. Alles andere an der Vorbereitung ist
+unsichtbar (Notes-Datei, Handbuch-Versionsstrings, Bench-Liste); das README ist
+das Erste, was ein Besucher sieht, und es hat keine Automatik hinter sich.
+
+⚠ **Noch offen, Franks Entscheidung:** `docs/user-manual.md` trägt in Zeile 8
+und 40 ebenfalls v0.6.0. Das Handbuch ist öffentlich im Repo UND in die Binary
+eingebettet. Zurückdrehen hiesse, dass das eingebaute Handbuch im laufenden
+Entwicklungsstand v0.5.9 behauptet, obwohl der Stand die v0.6.0-Funktionen hat.
+Deshalb nicht angefasst.
