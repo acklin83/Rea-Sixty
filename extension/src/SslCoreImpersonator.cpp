@@ -1851,15 +1851,39 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             // kFpIds. Stored against the connection's UDP port so
                             // the reader can match a stream to the FX in REAPER
                             // that holds the same settings.
-                            if (ftype == 18 && avail >= 17 && pay[8] == 0x09) {
+                            // ⛔ AN ABSENT FIELD IS ITS DEFAULT, NOT A NON-MATCH.
+                            // This used to require the literal byte 0x09 at
+                            // pay[8], the tag for "double in field 1". Current
+                            // plug-in builds omit a field sitting at its
+                            // protobuf default, so a control that lands on
+                            // EXACTLY 0 sends a frame with an EMPTY body — no
+                            // tag to match, no store, and the fingerprint keeps
+                            // whatever it held before. An EQ gain back at 0 dB,
+                            // an enum back on its first entry.
+                            // MEASURED (cap139): five objects appear with both
+                            // shapes in one run, field 1 present and body empty,
+                            // our own 360SelectedView among them.
+                            // Only objects this connection DECLARED as
+                            // fingerprint ids are read here, and those are
+                            // doubles, so an empty body is unambiguous.
+                            // Reported by sollapse in issue #8, finding 2.
+                            if (ftype == 18 && avail >= 8) {
+                                double v = 0.0;
+                                bool   isDouble = false, other = false;
+                                const bool walked = pbWalk_(pay + 8, avail - 8,
+                                    [&](uint32_t f, uint32_t w,
+                                        const uint8_t* b, size_t) {
+                                        if (f == 1 && w == 1) {
+                                            std::memcpy(&v, b, 8); isDouble = true;
+                                        } else other = true;
+                                    });
+                                if (walked && !other && (isDouble || avail == 8)) {
                                 if (auto itO = g_clientFpObj.find(c);
                                     itO != g_clientFpObj.end()) {
                                     uint64_t oid = 0;
                                     std::memcpy(&oid, pay, 8);
                                     if (auto itF = itO->second.find(oid);
                                         itF != itO->second.end()) {
-                                        double v = 0;
-                                        std::memcpy(&v, pay + 9, 8);
                                         std::lock_guard<std::mutex> lk(g_meterMx);
                                         // Always against the connection…
                                         FpSet& cs = g_clientFp[c];
@@ -1883,8 +1907,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                     std::memcpy(&oid, pay, 8);
                                     if (auto itF = itO->second.find(oid);
                                         itF != itO->second.end()) {
-                                        double v = 0;
-                                        std::memcpy(&v, pay + 9, 8);
+                                        // Same `v` as above — one read, one rule.
                                         std::lock_guard<std::mutex> lk(g_meterMx);
                                         MeterFpSet& cs = g_clientMf[c];
                                         cs.val[itF->second]  = v;
@@ -1897,6 +1920,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                         }
                                     }
                                 }
+                                }   // walked && !other
                             }
 
                             // PresetList / PresetSelection: `0a <varint len> <bytes>`.
