@@ -35120,6 +35120,10 @@ std::array<std::string, 8> g_lastCsType{
     kCsTypeSentinel, kCsTypeSentinel, kCsTypeSentinel, kCsTypeSentinel };
 std::array<std::string, 8> g_lastValueLine{};
 std::array<std::string, 8> g_lastFaderDb{};
+// The unit slot beside it. Cached separately, or a strip that keeps the same
+// NUMBER while its unit changes (a FLIP onto a different parameter that happens
+// to read the same value) would keep the old unit on the LCD.
+std::array<std::string, 8> g_lastFaderDbUnit{};
 std::array<std::string, 8> g_lastChanNum{};
 std::array<uint16_t, 8>    g_lastVPotBar{};      // 16-bit LE per strip
 std::array<uint8_t, 8>     g_lastVPotMode{};     // FF 66 09 0D mode byte per strip
@@ -35244,6 +35248,49 @@ uint16_t vpotPosFromNormalized(double v) { return vpotPosFromUnipolar(v); }
 // gain readable at a glance, and it is not what pan wants.
 // ⛔ Encoding and mode MUST agree: the bipolar centre anchor (byte0=0x00,
 // byte1=0x80) renders as the LEFT EDGE under mode 0x01.
+// Split a plug-in's formatted value into the 6-char value slot and the 2-char
+// UNIT slot of the fader readout frame. ⛔ THE UNIT IS OURS TO SET: the frame
+// carries it (buildFaderDbReadout's third argument, "dB" by default), and the
+// note beside the chain that said the suffix was a firmware glyph we could not
+// remove was simply wrong. Under FLIP in Strip Mode a frequency therefore read
+// "8.00kH dB" — the real unit truncated away and a wrong one appended (Frank
+// 2026-09-17).
+// An SI prefix moves into the VALUE rather than being cut: "8.00kHz" becomes
+// "8.00k" + "Hz", which is both true and legible, where "8.00" + "kH" would be
+// neither. A value with no numeric head at all ("Off", "INF:1") keeps the whole
+// string and blanks the unit — there is nothing to name.
+std::string splitFaderUnit_(std::string v, std::string* unitOut)
+{
+    unitOut->clear();
+    size_t n = 0;
+    while (n < v.size()
+           && (std::isdigit(static_cast<unsigned char>(v[n]))
+               || v[n] == '-' || v[n] == '+' || v[n] == '.')) ++n;
+    if (n == 0) {                       // not a number: no unit to name
+        if (v.size() > 6) v.resize(6);
+        return v;
+    }
+    std::string unit = v.substr(n);
+    while (!unit.empty() && unit.front() == ' ') unit.erase(0, 1);
+    while (!unit.empty() && unit.back()  == ' ') unit.pop_back();
+    std::string val = v.substr(0, n);
+    // Longer than the slot and headed by an SI prefix → the prefix belongs to
+    // the number, not to the unit.
+    if (unit.size() > 2) {
+        const char p0 = unit.front();
+        if (p0 == 'k' || p0 == 'K' || p0 == 'M' || p0 == 'm'
+            || p0 == 'u' || p0 == 'n' || p0 == 'p'
+            || p0 == 'c' || p0 == 'd') {
+            val  += p0;
+            unit.erase(0, 1);
+        }
+    }
+    if (unit.size() > 2) unit.resize(2);
+    if (val.size()  > 6) val.resize(6);
+    *unitOut = unit;
+    return val;
+}
+
 uint16_t vpotPosFromPan(double pan)
 {
     if (pan < -1.0) pan = -1.0;
@@ -35809,6 +35856,7 @@ void pushZonesForVisibleSlots()
         // CS Fader position even after Plugin mode is toggled off).
         g_lastFaderPb.fill(0xFFFF);
         g_lastFaderDb.fill({});
+        g_lastFaderDbUnit.fill({});
         g_lastVPotBar.fill(0xFFFF);
     }
     // FX Learn UF8: when the user edits a user-plugin map (binding /
@@ -35828,6 +35876,7 @@ void pushZonesForVisibleSlots()
         g_lastTopSoftKey.fill(-1);
         g_lastChanNum.fill({});
         g_lastFaderDb.fill({});
+        g_lastFaderDbUnit.fill({});
         g_lastFaderPb.fill(0xFFFF);
         g_lastVPotBar.fill(0xFFFF);
         if (g_sync) g_sync->invalidate();
@@ -35838,6 +35887,7 @@ void pushZonesForVisibleSlots()
         g_lastCsType.fill(kCsTypeSentinel);
         g_lastValueLine.fill({});
         g_lastFaderDb.fill({});
+        g_lastFaderDbUnit.fill({});
         g_lastChanNum.fill({});
         g_lastFaderPb.fill(0xFFFF);
         g_lastTopSoftKey.fill(-1);
@@ -37659,6 +37709,7 @@ void pushZonesForVisibleSlots()
             volLin = uiVolLinear(tr);
         }
         std::string dbStr;
+        std::string dbUnit = "dB";   // the frame's 2-char unit slot; see splitFaderUnit_
         if (routedFader) {
             dbStr = formatDbReadout(volLin);
         } else if (userFaderActive) {
@@ -37683,8 +37734,7 @@ void pushZonesForVisibleSlots()
                 if (u < 0x20 || u > 0x7E) c = '-';
             }
             while (!s2.empty() && s2.front() == ' ') s2.erase(0, 1);
-            if (s2.size() > 6) s2.resize(6);
-            dbStr = s2;
+            dbStr = splitFaderUnit_(s2, &dbUnit);
         } else if (stickyFlip || flipActive || csFaderActive) {
             char paramBuf[64] = {0};
             const int useFx = stickyFlip ? stickyFlipFx
@@ -37716,36 +37766,27 @@ void pushZonesForVisibleSlots()
                 if ((prev >= '0' && prev <= '9') || prev == '.') s2.erase(p - 1, 1);
                 break;
             }
-            // dB readout zone has "dB" baked into the protocol frame
-            // (Protocol.cpp:378). SSL's own formatter returns "-0.6 dB"
-            // → space-strip leaves "-0.6dB" → frame appends "dB" → the
-            // LCD renders "-0.6dBdB". Strip a trailing dB suffix so the
-            // CS Fader value lines up with REAPER-volume formatting (no
-            // unit; the frame supplies it).
-            if (s2.size() >= 2) {
-                const char a = s2[s2.size() - 2];
-                const char b = s2[s2.size() - 1];
-                if ((a == 'd' || a == 'D') && (b == 'B' || b == 'b')) {
-                    s2.erase(s2.size() - 2);
-                    while (!s2.empty() && s2.back() == ' ') s2.pop_back();
-                }
-            }
-            if (s2.size() > 6) s2.resize(6);
-            dbStr = s2;
+            // The plug-in's own unit goes into the frame's unit slot instead of
+            // being cut off and replaced by "dB". A Fader Level still reads
+            // "dB" — the plug-in says so — and a frequency under FLIP finally
+            // reads "8.00k Hz" instead of "8.00kH dB" (see splitFaderUnit_).
+            dbStr = splitFaderUnit_(s2, &dbUnit);
         } else if (userStripActive) {
             // User-strip mode + no fader binding for this strip: blank the
             // numeric readout to match the blanked scribble / channel# /
-            // colour bar. The "dB" suffix is appended unconditionally by
-            // buildFaderDbReadout (firmware-side glyph), so we can't
-            // remove it — just show empty digits, same as the blank-strip
-            // routedButInvalid path (Frank 2026-05-09).
+            // colour bar. The unit goes with it — the old note here said the
+            // "dB" was a firmware glyph we could not remove, and it is in fact
+            // the frame's third argument, which takes "" to blank it.
             dbStr = "    ";
+            dbUnit.clear();
         } else {
             dbStr = formatDbReadout(volLin);
         }
-        if (dbStr != g_lastFaderDb[s]) {
-            g_lastFaderDb[s] = dbStr;
-            g_dev->send(uf8::buildFaderDbReadout(static_cast<uint8_t>(s), dbStr));
+        if (dbStr != g_lastFaderDb[s] || dbUnit != g_lastFaderDbUnit[s]) {
+            g_lastFaderDb[s]     = dbStr;
+            g_lastFaderDbUnit[s] = dbUnit;
+            g_dev->send(uf8::buildFaderDbReadout(static_cast<uint8_t>(s),
+                                                 dbStr, dbUnit));
         }
 
         // Motor echo: push the fader target every tick — but NOT while
