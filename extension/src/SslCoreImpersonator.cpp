@@ -368,6 +368,10 @@ std::map<uint16_t, EqCurve>   g_portEq;        // UDP port -> curve  (g_meterMx)
 std::map<socket_t, uint16_t>                g_connPort;   // conn -> its UDP port (g_meterMx)
 std::map<uint16_t, FpSet>                   g_portFp;     // UDP port -> values (g_meterMx)
 std::map<uint16_t, int>          g_portIndex;      // UDP port -> HostTrackIndex (g_meterMx)
+// What the plug-in SAYS each stream is, from its prepare messages (frame type
+// 17). Keyed by DataType, under g_meterMx like everything else here. Filled in
+// the TCP frame loop; read through sslcore::getMeterInfo.
+std::map<int, MeterInfo>         g_meterInfo;      // DataType -> prepare (g_meterMx)
 
 // ── The plug-in's OWN preset list and selection (2026-08-20) ───────────────
 // Both are properties the plug-in ANNOUNCES, and keeps announcing: PresetList
@@ -1656,6 +1660,54 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             const uint8_t* pay = body + 20;
                             const size_t   avail = (flen > 20) ? size_t(flen - 20) : 0;
                             if (g_sslProbe) probeTcpFrame_(ftype, pay, avail);
+                            // ── What the plug-in SAYS this stream is ────────
+                            // A prepare (type 17) introduces one meter stream:
+                            // legend, unit, value count, overload mode. We have
+                            // never read them, so the leg count, the mono scale
+                            // selector and the loudness captions were all
+                            // standing in for something stated outright — and
+                            // the loudness slots are USER-CONFIGURABLE, so a
+                            // hardcoded caption is right only by luck (cap139:
+                            // the same slot object says "Integrated" at one
+                            // moment and "True Peak Max" at another).
+                            // ⚠ CONTROLS USE TYPE 17 TOO. They are told apart by
+                            // shape, not by guessing: a stream's value count is
+                            // field 6 as a VARINT, a control's field 6 is its
+                            // label STRINGS. No count, not a stream.
+                            // An ABSENT data type is 0 = VuPpm, the same
+                            // protobuf default rule that hid the needle.
+                            if (ftype == 17 && avail > 8) {
+                                const uint8_t* inner = pay + 8;
+                                size_t innerLen = avail - 8;
+                                pbWalk_(pay + 8, avail - 8,
+                                        [&](uint32_t f, uint32_t w,
+                                            const uint8_t* v, size_t vl) {
+                                            if (f == 1 && w == 2) { inner = v; innerLen = vl; }
+                                        });
+                                MeterInfo mi; int dt = 0; bool haveCount = false;
+                                pbWalk_(inner, innerLen,
+                                        [&](uint32_t f, uint32_t w,
+                                            const uint8_t* v, size_t vl) {
+                                            if (f == 2 && w == 2 && mi.legend.empty())
+                                                mi.legend.assign(reinterpret_cast<const char*>(v), vl);
+                                            else if (f == 3 && w == 2 && mi.unit.empty())
+                                                mi.unit.assign(reinterpret_cast<const char*>(v), vl);
+                                            else if (f == 5 && w == 0) dt = int(v[0] & 0x7f);
+                                            else if (f == 6 && w == 0) {
+                                                uint64_t n = 0; int sh = 0;
+                                                for (size_t k = 0; k < vl; ++k) {
+                                                    n |= uint64_t(v[k] & 0x7f) << sh; sh += 7;
+                                                }
+                                                mi.values = int(n); haveCount = true;
+                                            }
+                                            else if (f == 7 && w == 0) mi.overloadMode = int(v[0] & 0x7f);
+                                        });
+                                if (haveCount && mi.values > 0 && !mi.legend.empty()
+                                    && dt >= 0 && dt < int(sslmeter::DataType::Count)) {
+                                    std::lock_guard<std::mutex> lk(g_meterMx);
+                                    g_meterInfo[dt] = std::move(mi);
+                                }
+                            }
 
                             // ── Instance NAME correlation ──────────────────────
                             // Each plug-in SETs (type 18) its own HostTrackName
@@ -2388,6 +2440,15 @@ bool meterProAvailable() {
     const uint16_t port = currentMeterPortLocked_();   // pin → sticky → first alive
     auto it = g_inst.find(port);
     return it != g_inst.end() && it->second.isPro;
+}
+
+bool getMeterInfo(int dataType, MeterInfo& out)
+{
+    std::lock_guard<std::mutex> lk(g_meterMx);
+    auto it = g_meterInfo.find(dataType);
+    if (it == g_meterInfo.end()) return false;
+    out = it->second;
+    return true;
 }
 
 bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& peak,

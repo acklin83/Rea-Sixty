@@ -81,6 +81,22 @@ bool        setPresetSelection(const std::string& path, int port = 0);
 bool getMeter(int dataType, std::vector<float>& current, std::vector<float>& peak,
               uint64_t* seq = nullptr);
 
+// What the PLUG-IN says a stream is. Every meter stream is introduced by a
+// prepare message (frame type 17) carrying its legend, its unit, its value
+// count and its overload mode. We never read them, so a leg count, a mono
+// scale and a readout caption were all standing in for something the plug-in
+// states outright — and the loudness readout slots are USER-CONFIGURABLE, so a
+// hardcoded caption is right only by luck. MEASURED (cap139): the same slot
+// object declares "Integrated" at one moment and "True Peak Max" at another.
+// Returns false when that type has not announced itself yet. Thread-safe.
+struct MeterInfo {
+    std::string legend;        // "Short-Term", "Lissajous Meter Data", ...
+    std::string unit;          // "LKFS", "dBFS", "LU", "" — the plug-in's own
+    int         values      = 0;  // how many floats the stream carries
+    int         overloadMode = 0; // 1 momentary, 2 infinite hold, 4 prefer hold
+};
+bool getMeterInfo(int dataType, MeterInfo& out);
+
 // Copy the overload flags for `dataType`: f5 OverloadValues (instantaneous — it
 // flashes) and f6 OverloadInfHoldValues (latched until reset), one entry per
 // channel. Returns false if that type hasn't been seen yet. Thread-safe.

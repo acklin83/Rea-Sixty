@@ -26865,6 +26865,15 @@ std::string uf1FormatMeterDb_(float db)
 // slots blank (auto mode reads the Pro; an explicit plain-Meter pin does not).
 std::vector<uint8_t> uf1BuildLoudnessReadouts_()
 {
+    // ⛔ THE CAPTIONS ARE NOT OURS TO CHOOSE. These four cells show readout
+    // slots 1..4, and what a slot MEANS is what the user configured in the
+    // plug-in. Its prepare message says so outright — legend and unit, per
+    // stream — and cap139 caught the same slot object declaring "Integrated"
+    // at one moment and "True Peak Max" at another. A fixed table is right
+    // only for the configuration it was written against.
+    // The entries below are the FALLBACK, for a plug-in that has not announced
+    // itself yet; the plug-in's own words win whenever they arrive.
+    // Reported by sollapse in issue #8, findings 7 and 9.
     struct LoudSlot { int dt; const char* unit; const char* caption; uint8_t style; };
     static const LoudSlot kSlots[4] = {
         { int(sslmeter::DataType::LoudReadout1), "LUFS", "Integrated",    0x01 },
@@ -26886,10 +26895,21 @@ std::vector<uint8_t> uf1BuildLoudnessReadouts_()
             !cur.empty() && std::isfinite(cur[0]))
             val = uf1FormatMeterDb_(cur[0]);
         // else: leave the value blank (no Pro data / silent) rather than invent one.
+        // The plug-in's own legend and unit when it has announced them.
+        sslcore::MeterInfo mi;
+        const bool told = sslcore::isRunning() && sslcore::getMeterInfo(s.dt, mi)
+                          && !mi.legend.empty();
+        const char* unit    = told && !mi.unit.empty() ? mi.unit.c_str()    : s.unit;
+        const char* caption = told                     ? mi.legend.c_str() : s.caption;
+        // ⚠ OUR RULE, NOT A MEASUREMENT: the style byte followed the slot, and
+        // the slot was assumed to be True Peak Max. It follows the UNIT now, so
+        // the configuration we assumed still looks the same and any other one is
+        // at least consistent. What the byte really encodes is still open.
+        const uint8_t style = (std::strcmp(unit, "dBFS") == 0) ? 0x02 : s.style;
         put(val.c_str(), 6);   // value, left-justified in the 6-B zone
-        put(s.unit, 4);        // "LUFS" / "dBFS"
-        put(s.caption, 14);    // caption, left-justified + NUL-padded
-        p.push_back(s.style);  // per-slot style byte (0x01 LUFS / 0x02 dBFS)
+        put(unit, 4);          // "LUFS" / "dBFS" / "LU" — the plug-in's own
+        put(caption, 14);      // caption, left-justified + NUL-padded
+        p.push_back(style);
     }
     return p;
 }
