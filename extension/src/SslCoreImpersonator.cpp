@@ -762,7 +762,7 @@ void probeUdpDatagram_(const uint8_t* data, size_t len, uint16_t srcPort)
 // first time that combination appears. A field that comes and goes with its
 // value shows up as a SECOND signature for the same object — that is the whole
 // experiment, and it is why this logs signatures rather than values.
-void probeTcpFrame_(uint32_t ftype, const uint8_t* pay, size_t avail)
+void probeTcpFrame_(int conn, uint32_t ftype, const uint8_t* pay, size_t avail)
 {
     if (avail < 8) return;
     // ⛔ EVERY TYPE, NOT THE THREE WE ALREADY UNDERSTOOD. The first run
@@ -782,19 +782,31 @@ void probeTcpFrame_(uint32_t ftype, const uint8_t* pay, size_t avail)
     });
     if (sig.empty()) sig = "(empty body)";
 
-    char key[280];
-    std::snprintf(key, sizeof(key), "%u|%016llx|%s", ftype,
-                  static_cast<unsigned long long>(scope), sig.c_str());
-    static std::set<std::string> seen;
-    if (!seen.insert(key).second) return;
+    // ⛔ THE HANDSHAKE FRAMES ARE NEVER DEDUPED, AND EVERY LINE NAMES ITS
+    // CONNECTION. The dedup is right for the thousands of declarations and
+    // values, and it was wrong for exactly the frames this probe was widened
+    // to catch: three plug-ins sent three type-4 hellos with the same type,
+    // the same scope and the same field signature, so two were swallowed and
+    // the one that survived could not be attributed to any of them.
+    // Third time in one day that the instrument decided the answer. First the
+    // dump that could not contain what the parser drops, then the filter that
+    // only looked where the code looks, now this.
+    const bool handshake = (ftype == 4 || ftype == 5 || ftype == 19);
+    if (!handshake) {
+        char key[280];
+        std::snprintf(key, sizeof(key), "%u|%016llx|%s", ftype,
+                      static_cast<unsigned long long>(scope), sig.c_str());
+        static std::set<std::string> seen;
+        if (!seen.insert(key).second) return;
+    }
 
     FILE* f = probeFile_();
     if (!f) return;
-    std::fprintf(f, "TCP type=%u obj=%016llx fields=%s\n", ftype,
+    std::fprintf(f, "TCP conn=%d type=%u obj=%016llx fields=%s\n", conn, ftype,
                  static_cast<unsigned long long>(scope), sig.c_str());
     // A prepare is rare and small, so it goes down whole: this is the message
     // whose contents we have been guessing at with heuristics.
-    if (ftype == 17 || ftype == 4 || ftype == 5 || ftype == 19) {
+    if (ftype == 17 || handshake) {
         std::fprintf(f, "     body hex:");
         const size_t nb = (avail - 8 < 96) ? avail - 8 : 96;
         for (size_t i = 0; i < nb; ++i) std::fprintf(f, " %02x", pay[8 + i]);
@@ -1729,7 +1741,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             std::memcpy(&ftype,  body + 16, 4);
                             const uint8_t* pay = body + 20;
                             const size_t   avail = (flen > 20) ? size_t(flen - 20) : 0;
-                            if (g_sslProbe) probeTcpFrame_(ftype, pay, avail);
+                            if (g_sslProbe) probeTcpFrame_(int(c), ftype, pay, avail);
                             // ── What the plug-in SAYS this stream is ────────
                             // A prepare (type 17) introduces one meter stream:
                             // legend, unit, value count, overload mode. We have
