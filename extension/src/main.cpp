@@ -42784,10 +42784,21 @@ void onTimerBody_()
             // ⛔ NOT WHILE THE HUD SITS ON THE UF1 TAB. There only the UF1 arms,
             // and throwing the UF8 into a mode for a learn it is not part of is
             // the same surprise this whole gate exists to prevent.
-            const bool wantsUf8Surface =
-                uf8Tab || (g_hudTouchLearn.load() && !g_hudUf1Tab.load());
-            bool wantUf8Mode = false;
-            if (wantsUf8Surface) {
+            // ⛔ TOUCH-TO-LEARN ON MEANS PLUG-IN MODE ON. No second question.
+            // The gate below asks whether a plug-in is resolvable, and while the
+            // reason is the TAB that is right: standing on a snare must not hand
+            // eight strips to a map that does not exist. Touch-to-Learn is not
+            // standing anywhere, it is an explicit act, and the surface showing
+            // the PROJECT is the one thing that makes mapping impossible
+            // (Frank 2026-09-17: "WENN TOUCH TO LEARN FÜR UF8 EINGESCHALTET IST,
+            // DANN SOLL DIE UF8 AUCH AUF UF8-PLUGIN MODE SEIN! IST DOCH LOGISCH!
+            // SONST KANN ICH JA NICHT MAPPEN WENN ICH DAS PROJEKT AUF DER UF8
+            // SEH!"). So the switch alone is the reason, and the resolver only
+            // still has to answer for the tab.
+            const bool touchLearnUf8 =
+                g_hudTouchLearn.load() && !g_hudUf1Tab.load();
+            bool wantUf8Mode = touchLearnUf8;
+            if (!wantUf8Mode && uf8Tab) {
                 MediaTrack* mTr = nullptr; int mFx = -1; const void* mMap = nullptr;
                 resolveFocusedUf8Target_(mTr, mFx, mMap, nullptr);
                 // ⛔ OR A PLUG-IN THAT HAS NO MAP AT ALL, because that is the one
