@@ -4305,6 +4305,27 @@ inline void restoreSelModeAfterUf8PluginMode_()
 // Mutex-with-SSL-Strip-Mode + Sel-Mode parking + snap request match the
 // toggle builtins so the runtime state ends up identical regardless of
 // how the mode was entered.
+// ⛔ WHO IS HOLDING UF8 PLUG-IN MODE OPEN. ONE field, three answers, and no
+// two of them can be true at once — which is the whole point. This was four
+// separate booleans on 2026-09-17 (tab-active, auto-engaged, user-override,
+// banner-mute), each one added to repair what the previous one broke, and
+// nothing stopped two of them from claiming the mode at the same time. The
+// REASON to hold it (a HUD tab, Touch-to-Learn) is computed separately and
+// stays separate: the reason says whether anyone should hold it, the holder
+// says who does.
+//   None     — not ours. Whatever the mode is, the user set it.
+//   Auto     — we engaged it for a standing reason, and we will let it go
+//              when that reason goes (we only ever release what we took).
+//   UserLeft — we had it and the user pressed PLUG-IN. They win, and they keep
+//              winning until the reason itself goes away and comes back.
+enum class Uf8ModeHolder : uint8_t { None, Auto, UserLeft };
+Uf8ModeHolder g_uf8ModeHolder = Uf8ModeHolder::None;
+// The one mode change WE caused, not yet announced. Written in exactly one
+// place (setUf8ModeAuto_), read by the mode banner: our own engage/release is
+// not a mode change the user made, so it must not claim the banner the user's
+// actual keypress deserves.
+bool          g_uf8ModeOursPending = false;
+
 inline void engageUf8PluginMode_(bool withGui)
 {
     if (g_uf8PluginMode.load()) return;
@@ -4324,6 +4345,12 @@ inline void engageUf8PluginMode_(bool withGui)
     if (withGui) g_pluginGuiSyncRequest.store(true);
 }
 
+// Every AUTOMATIC engage/release goes through this one door, so "was that
+// change ours?" has a single writer instead of one per call site. Both helpers
+// below are no-ops when the mode already stands where we want it, so the flag
+// is only ever raised by a change that really happened.
+// (Defined after both helpers — see setUf8ModeAuto_ below disengage.)
+
 // Programmatic UF8 Plugin Mode disengage — inverse of engageUf8PluginMode_,
 // no-op if already off. Restores the parked Sel-Mode + repaints the surface.
 // Used by the Learn-HUD's UF8-tab auto-engage (engage on tab-enter, revert on
@@ -4340,6 +4367,14 @@ inline void disengageUf8PluginMode_()
     g_bankDirty.store(true);
     SetExtState("ReaSixty", "uf8PluginMode", "0", true);
     g_pluginGuiSyncRequest.store(true);
+}
+
+inline void setUf8ModeAuto_(bool on)
+{
+    const bool was = g_uf8PluginMode.load();
+    if (on) engageUf8PluginMode_(false);
+    else    disengageUf8PluginMode_();
+    if (g_uf8PluginMode.load() != was) g_uf8ModeOursPending = true;
 }
 
 // ── Meter ballistics ────────────────────────────────────────────────
@@ -16608,19 +16643,6 @@ std::string g_hudBcFavPublished;   // last-published "hud_bc_fav" (BC-Switch fav
 std::string g_hudFavModePublished; // last-published "hud_fav_mode" (copy/own toggle)
 std::string g_hudShortPublished;   // last-published "hud_short" (CS/BC/UF8 Kurzname seeds)
 bool        g_hudGeomPublished = false;
-// UF8 device tab auto-engages UF8 Plugin Mode (so the hardware Top-Soft-Keys
-// drive V-Pot banks while the user maps from the HUD). Edge-triggered on tab
-// enter/leave; we only disengage what WE engaged. g_hudUf8TabActive tracks the
-// last-seen "hud_uf8_tab" flag; g_hudUf8AutoEngaged marks our own engage.
-bool        g_hudUf8TabActive   = false;
-bool        g_hudUf8AutoEngaged = false;
-// ⛔ THE PLUG-IN KEY STILL WINS over the auto-engage: set when the user left
-// the mode by hand while our reason still stood, so the next tick does not drag
-// them back in. Cleared when the reason itself goes away.
-bool        g_hudUf8AutoOverride  = false;
-// Our own engage/release is not a mode change the user made — mute the one
-// banner it would otherwise fire. Consumed by the change it describes.
-bool        g_hudUf8AutoBannerMute = false;
 
 // Build the HUD's LCD line ("seg;line1;line2;line3") for the focused track:
 // 7-seg = track number, line2 = track name, line3 = stereo/mono. The companion
@@ -42554,9 +42576,9 @@ void onTimerBody_()
                 // The mode the user asked for is the one worth naming; the mode
                 // it brought with it is not a change they made. A press of the
                 // PLUG-IN key is, and still announces itself.
-                if (!g_hudUf8AutoBannerMute)
+                if (!g_uf8ModeOursPending)
                     chg.push_back(std::string("UF8 Plugin \xE2\x80\xA2 ") + onOff(u8p));
-                g_hudUf8AutoBannerMute = false;
+                g_uf8ModeOursPending = false;
                 mbUf8Plugin = u8p;
             }
             if (tch != mbTouch) { chg.push_back(std::string("Touch to Learn \xE2\x80\xA2 ") + onOff(tch)); mbTouch = tch; }
@@ -42825,28 +42847,21 @@ void onTimerBody_()
             // was no way out of Plug-in Mode at all short of turning Touch-to-
             // Learn off, and nothing on screen said so (Frank 2026-09-17:
             // "WIESO KOMM ICH NICHT MEHR AUS DEM UF8 PLUGIN MODE RAUS????").
-            // A manual exit therefore retires the auto-engage until the reason
-            // itself goes away and comes back — the same shape as "we only
-            // ever let go of what we engaged", read from the other end.
+            // Read as ownership it is one line: the mode we hold stops being
+            // ours the moment the user takes it back.
             if (wantUf8Mode) {
-                if (g_hudUf8AutoEngaged && !g_uf8PluginMode.load()) {
-                    g_hudUf8AutoEngaged  = false;
-                    g_hudUf8AutoOverride = true;
-                }
-                if (!g_uf8PluginMode.load() && !g_hudUf8AutoOverride) {
-                    engageUf8PluginMode_(false);
-                    g_hudUf8AutoEngaged      = true;
-                    g_hudUf8AutoBannerMute   = true;
+                if (g_uf8ModeHolder == Uf8ModeHolder::Auto && !g_uf8PluginMode.load())
+                    g_uf8ModeHolder = Uf8ModeHolder::UserLeft;
+                if (g_uf8ModeHolder == Uf8ModeHolder::None && !g_uf8PluginMode.load()) {
+                    setUf8ModeAuto_(true);
+                    g_uf8ModeHolder = Uf8ModeHolder::Auto;
                 }
             } else {
-                if (g_hudUf8AutoEngaged) {
-                    disengageUf8PluginMode_();   // no-op if already off
-                    g_hudUf8AutoBannerMute = true;
-                }
-                g_hudUf8AutoEngaged  = false;
-                g_hudUf8AutoOverride = false;    // a fresh reason may engage again
+                // The reason is gone: release what we took, and forget that the
+                // user ever overruled us, so a fresh reason may engage again.
+                if (g_uf8ModeHolder == Uf8ModeHolder::Auto) setUf8ModeAuto_(false);
+                g_uf8ModeHolder = Uf8ModeHolder::None;
             }
-            g_hudUf8TabActive = uf8Tab;
         }
         if (const char* cmd = GetExtState("rea_sixty", "hud_cmd"); cmd && *cmd) {
             const std::string s = cmd;
@@ -44006,15 +44021,11 @@ void onTimerBody_()
         // HUD closed / disabled: it can no longer own Touch-to-Learn, so the
         // UF1-tab claim must not outlive it — otherwise the UC1 stays inert.
         g_hudUf1Tab.store(false);
-        if (g_hudUf8AutoEngaged) {
-            // …and revert the UF8 Plugin Mode we auto-engaged for its tab, so
-            // the surface doesn't stay parked there unexpectedly.
-            disengageUf8PluginMode_();
-            g_hudUf8AutoEngaged    = false;
-            g_hudUf8TabActive      = false;
-            g_hudUf8AutoBannerMute = true;
-        }
-        g_hudUf8AutoOverride = false;
+        // …and revert the UF8 Plugin Mode we auto-engaged, so the surface
+        // doesn't stay parked there unexpectedly. Same release as above: only
+        // what we hold, and the holder is cleared either way.
+        if (g_uf8ModeHolder == Uf8ModeHolder::Auto) setUf8ModeAuto_(false);
+        g_uf8ModeHolder = Uf8ModeHolder::None;
     }
 
     // Mid-session stale-handle recovery. Triggered when a device's
