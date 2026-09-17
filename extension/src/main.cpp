@@ -34457,30 +34457,26 @@ void uf1PaintChannel_()
     const bool stickyFader = flip && !stripFaderRaw && !sendFader && ftr
         && g_stickyActive.load()
         && stickyResolveOnTrack_(ftr, &stickyFx, &stickyParam, &stickyTog);
-    // ⇨ PLUGIN MODE + FLIP: THE LAST-TOUCHED V-POT PARAMETER MOVES TO THE FADER.
-    // FLIP means "fader and V-Pot swap jobs", and in Plugin mode the V-Pots drive
-    // plug-in parameters — so that is what the fader should take. It used to land
-    // on Pan here, which is the DAW-mode reading of the same key and left no way
-    // to put a plug-in parameter on 100 mm of travel at all (forum 2026-08-25,
-    // "the only thing I miss from the FaderPort2"). WHICH parameter is
-    // g_uf1FlipVpotIdx: the pot you last reached for.
+    // ⇨ FLIP PUTS ON THE FADER WHAT IS ON THE V-POT. That is the whole rule, and
+    // it is Frank's (2026-09-17: "IMMER DER WERT, DER AUF DEM V-POT IST KOMMT BEI
+    // FLIP AUF DEN FADER"). The UF8 has done it that way all along, because its
+    // flipActive asks slotForStrip — the very resolver its V-Pot ring and value
+    // line ask.
     //
-    // ⛔ ONLY WHILE THE TWO PANEL HALVES ARE THE SAME TRACK (ftr == tr).
-    // The fader is the LEFT half and the V-Pots are the RIGHT one
-    // ([[uf1-panel-halves-rule]]); with the Extender on, those are different
-    // tracks, and handing the fader a parameter the small LCD next to it does not
-    // name is exactly the "shows track X, acts on track Y" bug that came back
-    // four times. In an Extender rig FLIP keeps its Pan meaning, unchanged.
-    // Without the Extender — every UF1-alone rig, the reporter's included —
-    // ftr == tr and the fader takes the parameter the screen is showing.
-    // The write goes to the instance uf1ResolveCsFx_ returns, i.e. the one the
-    // V-Pots are on, so the fader and the pot can never disagree about the target.
+    // ⛔ AND ON THE UF1 THAT IS THE EXTENDER CASE, AND ONLY THAT. As the ninth
+    // strip of the UF8 bank, this fader's V-Pot is carrying the focused
+    // parameter, so FLIP brings it across. Alone, the UF1 has its big display for
+    // the four V-Pots and their parameters, so the fader is not the way to reach
+    // one and FLIP means the plain pan swap: "nur wenn er Extender ist! Sonst hat
+    // der Channel ja sein grosses Display für das".
+    // This branch used to do it the other way round — the last of the four
+    // display pots, without the Extender — and that is where a Width arrived on
+    // the fader long after it had been turned, while the knob above the fader sat
+    // on the pan. It was never on that V-Pot at all.
     //
-    // Yields to Strip Mode, the send faders and a Sticky pin: all four mean "the
-    // fader carries something specific", and those three are explicit choices
-    // while this one is implicit. Nothing to resolve (no strip on the track, blank
-    // slot on this page) → falls through to FLIP's Pan, so nothing loses a
-    // behaviour it had.
+    // Yields to Strip Mode, the send faders and a Sticky pin: those three say
+    // "the fader carries something specific". Nothing to resolve → FLIP's pan
+    // swap, so nothing loses a behaviour it had.
     MediaTrack* flipParamTr = nullptr;
     int  flipParamFx = -1, flipParam = -1;
     const bool flipParamFader =
@@ -34513,20 +34509,16 @@ void uf1PaintChannel_()
                 }
                 return false;
             }
-            // UF1 alone: no bank beside it and no shared focus to follow, so the
-            // pot you last reached for is the only signal there is (forum
-            // 2026-08-25). ⛔ Both halves the same track, as ever.
-            if (ftr != tr || g_uf1ChannelSubMode.load() != 0) return false;
-            MediaTrack* pt = nullptr; int pfx = -1;
-            const int pType = uf1ResolveCsFx_(tr, pt, pfx);
-            if (pType < 0 || !pt) return false;
-            const int pPage = std::clamp(g_uf1CsPage.load(), 0,
-                                         uf1CsPageCountFor_(pType, pt, pfx) - 1);
-            const int p = uf1CsVpotParam_(pt, pfx, pType, pPage,
-                                          std::clamp(g_uf1FlipVpotIdx.load(), 0, 3));
-            if (p < 0 || paramIsToggle(pt, pfx, p)) return false;
-            flipParamTr = pt; flipParamFx = pfx; flipParam = p;
-            return true;
+            // ⛔ AND ONLY AS THE EXTENDER. Without it there is no parameter on
+            // this fader at all: the UF1 alone has its big display for the four
+            // V-Pots, so the fader is not the way to reach a parameter, and FLIP
+            // means the plain pan swap. This branch used to take the last of the
+            // four display pots here too, and THAT is where Frank's Width came
+            // from — a pot he had turned at some point, arriving on the fader
+            // long after, while the knob above it was on the pan (2026-09-17:
+            // "WIDTH WAR ABER NICHT AUF DEM V-POT", and "nur wenn er Extender
+            // ist! Sonst hat der Channel ja sein grosses Display für das").
+            return false;
         }();
     // ⛔ FLIP BEATS STRIP MODE NOW. It used to yield: Strip Mode was read as the
     // explicit choice and FLIP-onto-a-parameter as the implicit one, so in Strip
