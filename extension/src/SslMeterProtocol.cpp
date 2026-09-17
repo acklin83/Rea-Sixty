@@ -103,6 +103,25 @@ int parseDatagram(const uint8_t* data, size_t len, std::vector<Update>& out)
         const uint32_t frameLen = readU32LE(data + p + kMagicLen);
         const size_t   bodyOff  = p + kMagicLen + kFrameLenSize;
         if (bodyOff + frameLen > len) break;            // truncated frame
+        // ⛔ ONLY DATA-STREAM FRAMES GET PARSED AS METERS.
+        // This socket sees more than our plug-ins: SSL 360's own Core-to-GUI
+        // feed arrives here too, and it carries 43-float messages of nothing
+        // but NaN (see the note in SslCoreImpersonator). Every meter frame we
+        // have ever captured is message type 3, at offset 16 of the body:
+        // measured on all five real vectors in test_ssl_meter, carved from
+        // cap87. Reading the header instead of trusting the body matters more
+        // now that an ABSENT data type means VuPpm rather than "invalid" —
+        // without this, a foreign frame with no type field and two floats in
+        // field 3 would be a perfectly good needle reading.
+        // ⚠ NOT the scope. Issue #8 suggests gating on type == 3 AND scope ==
+        // hash("meters"); our own frames carry hash("system") in that slot, all
+        // five of them, so that gate would reject every meter we receive. Type
+        // is the structural claim and it is the one that checks out.
+        if (frameLen > kSslHeaderLen) {
+            uint32_t mtype = 0;
+            std::memcpy(&mtype, data + bodyOff + 16, 4);
+            if (mtype != 3) { p = bodyOff + frameLen; continue; }
+        }
         Update u;
         if (parseMeterMessage(data + bodyOff, frameLen, u)) {
             out.push_back(std::move(u));

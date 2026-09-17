@@ -75,6 +75,19 @@ int main()
         EXPECT(ups[0].peak.size() == 2);
     }
 
+    // --- A frame that is not a data stream is not a meter, whatever it holds.
+    // SSL 360's own Core-to-GUI feed reaches the same socket. kBarPeak with its
+    // message type changed from 3 to 2 (offset 16 of the body) must be ignored.
+    {
+        std::string h = "efbc51003a0000001000000001000000449c28172e000000"
+                        "02000000"                       // type 2, not 3
+                        "79057a5f1c010000"
+                        "10021d7b48edc01dd20ad4c025212b8ac0253ed2a7c02800280030003000";
+        auto d = unhex(h.c_str());
+        std::vector<Update> ups;
+        EXPECT(parseDatagram(d.data(), d.size(), ups) == 0);
+    }
+
     // --- …but a message carrying NO values at all is still not a reading. ----
     // With the type defaulting to 0 that is the one door this opens, and the
     // data socket sees SSL 360's own GUI feed as well as our plug-ins.
