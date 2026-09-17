@@ -42713,11 +42713,22 @@ void onTimerBody_()
             // mode und zeigt nix an"). resolveFocusedUf8Target_ is the same
             // resolver the tab itself uses, and it deliberately asks uf8Mode
             // rather than the mode flag, so it can answer before we engage.
-            // Re-asked every tick while the tab is open: walk onto a mapped
+            // Re-asked every tick while a reason stands: walk onto a mapped
             // track and the mode comes with you, walk off and it lets go —
             // and it only ever lets go of what it engaged itself.
+            // ⇨ AND TOUCH-TO-LEARN COUNTS AS A REASON, with the HUD or without
+            // it. Mapping UF8 cells by touching them needs the surface to SHOW
+            // the cells, and Touch-to-Learn is deliberately standalone (Frank
+            // 2026-06-20, "sonst kann man sie ja nicht blind ohne hud starten"),
+            // so it cannot lean on the tab. Frank 2026-09-17, asked which of the
+            // two he meant: "muss doch bei beiden fällen funktionieren!".
+            // ⛔ NOT WHILE THE HUD SITS ON THE UF1 TAB. There only the UF1 arms,
+            // and throwing the UF8 into a mode for a learn it is not part of is
+            // the same surprise this whole gate exists to prevent.
+            const bool wantsUf8Surface =
+                uf8Tab || (g_hudTouchLearn.load() && !g_hudUf1Tab.load());
             bool wantUf8Mode = false;
-            if (uf8Tab) {
+            if (wantsUf8Surface) {
                 MediaTrack* mTr = nullptr; int mFx = -1; const void* mMap = nullptr;
                 resolveFocusedUf8Target_(mTr, mFx, mMap, nullptr);
                 // ⛔ OR A PLUG-IN THAT HAS NO MAP AT ALL, because that is the one
