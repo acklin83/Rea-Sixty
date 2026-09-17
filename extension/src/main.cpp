@@ -5395,7 +5395,7 @@ bool isBinarySlot(const uf8::LinkSlot& s);
 // the fader. The slot stays reachable from a V-Pot and a key, where a binary
 // belongs. FLIP falls through to the pan swap instead, which is what it does
 // when no slot resolves at all.
-bool faderMayTakeSlot_(const uf8::LinkSlot* s);
+bool faderMayTakeSlot_(MediaTrack* tr, const uf8::LinkSlot* s);
 // The value a V-Pot push puts on the focused slot (step-cycle or reset).
 // Defined next to isBinarySlot far below; both V-Pot push paths call it.
 static double uf8FocusedPushValue_(MediaTrack* tr, int fxIdx,
@@ -18175,7 +18175,7 @@ uint16_t computeStripCurrentPb_(uint8_t s, MediaTrack* tr,
             : nullptr;
         if (isVPotPanFocus(focusedT)) slT = nullptr;
 
-        if (g_flip.load() && faderMayTakeSlot_(slT)) {
+        if (g_flip.load() && faderMayTakeSlot_(tr, slT)) {
             double n = TrackFX_GetParamNormalized(tr, mmT.fxIndex, slT->vst3Param);
             if (slT->inverted) n = 1.0 - n;
             return normToPb(n);
@@ -21056,7 +21056,7 @@ void drainInputQueue()
                 // hijack the fader either (FLIP+Pan would conflict with
                 // Plugin-fader mode's fader→CS-Fader routing).
                 if (isVPotPanFocus(focusedF)) slF = nullptr;
-                if (g_flip.load() && faderMayTakeSlot_(slF)) {
+                if (g_flip.load() && faderMayTakeSlot_(tr, slF)) {
                     double normF = uf8PbToParamNorm_(linearVolumeToPb(e.value));
                     if (slF->inverted) normF = 1.0 - normF;
                     TrackFX_SetParamNormalized(tr, mmF.fxIndex,
@@ -21071,7 +21071,7 @@ void drainInputQueue()
                 // duty. Earlier this only kicked in when forcePan was
                 // also held — Frank 2026-05-08: just FLIP should be
                 // enough, no PAN-button-modifier required.
-                if (uf8FlipPanOnFader_(faderMayTakeSlot_(slF))) {
+                if (uf8FlipPanOnFader_(faderMayTakeSlot_(tr, slF))) {
                     const double n = uf8PbToParamNorm_(linearVolumeToPb(e.value));
                     double pan = n * 2.0 - 1.0;
                     if (pan < -1.0) pan = -1.0;
@@ -21567,7 +21567,7 @@ void drainInputQueue()
                                                fvf.vst3Param, next);
                     break;
                 }
-                if (g_flip.load() && faderMayTakeSlot_(slPtr)) {
+                if (g_flip.load() && faderMayTakeSlot_(tr, slPtr)) {
                     // Map detent fraction (signed6/128) to pb14 delta —
                     // single detent ≈ 128 pb (1/128 of full sweep, same
                     // feel as the V-Pot driving the param). Fine quarters.
@@ -22023,7 +22023,7 @@ void drainInputQueue()
                                                fvf.vst3Param, n);
                     break;
                 }
-                if (g_flip.load() && faderMayTakeSlot_(slPtr)) {
+                if (g_flip.load() && faderMayTakeSlot_(tr, slPtr)) {
                     CSurf_OnVolumeChange(tr, 1.0, false);
                     break;
                 }
@@ -35178,9 +35178,22 @@ std::string formatDbReadout(double linearAmp)
 // V-Pot bar (no gradient) and respond to V-Pot push as a 0↔1 toggle
 // instead of a "reset to default". Match by slot id rather than
 // linkIdx so any future button additions show up here automatically.
-bool faderMayTakeSlot_(const uf8::LinkSlot* s)
+bool faderMayTakeSlot_(MediaTrack* tr, const uf8::LinkSlot* s)
 {
-    return s && s->vst3Param >= 0 && !isBinarySlot(*s);
+    if (!s || s->vst3Param < 0) return false;
+    if (isBinarySlot(*s))       return false;
+    // ⛔ AND NEVER WHAT THE V-POT IS HOLDING. Under FLIP the pair has traded
+    // jobs, so the strip's own Fader Level sits on the V-POT — the fader must
+    // not land on it as well, however the focus got there. Frank 2026-09-17:
+    // "wenn der V-Pot mit FLIP auf Fader steht, dann soll der Fader nicht auch
+    // auf den Fader gehen." A RULE, not a timing guard: there is nothing to race
+    // and nothing to expire, so no write, from us or from a mouse, can put the
+    // two controls on one value.
+    if (const auto fvf = flipVpotFader_(
+            tr, g_flip.load() && !g_uf8PluginMode.load(),
+            g_pluginFaderMode.load());
+        fvf.vst3Param >= 0 && fvf.vst3Param == s->vst3Param) return false;
+    return true;
 }
 
 bool isBinarySlot(const uf8::LinkSlot& s)
@@ -37751,7 +37764,7 @@ void pushZonesForVisibleSlots()
         // slot. Without a slot there's no parameter to flip onto the
         // fader, so the strip falls back to normal mode silently.
         const bool flipActive = g_flip.load() && fxIdx >= 0
-                             && faderMayTakeSlot_(slot);
+                             && faderMayTakeSlot_(tr, slot);
 
         // Sticky Pot under FLIP: the per-track pin rides the FADER (resolved once
         // for the fader value LABEL + MOTOR below). Wins over the focused-param
@@ -39576,7 +39589,7 @@ void commitDebouncedTouchReleases()
                     TrackFX_SetParamNormalized(tr, sfxR, sprR, n);
                     g_stickyFocusLockUntilMs.store(nowMs_() + 400);
                     stickyApplyMacro_(tr, prevN);
-                } else if (g_flip.load() && faderMayTakeSlot_(slT)) {
+                } else if (g_flip.load() && faderMayTakeSlot_(tr, slT)) {
                     double normT = uf8PbToParamNorm_(touchPb);
                     if (slT->inverted) normT = 1.0 - normT;
                     TrackFX_SetParamNormalized(tr, mmT.fxIndex,
