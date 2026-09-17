@@ -18008,10 +18008,15 @@ bool uf8FlipPanOnFader_(bool slotOnFader)
 
 // The pan that fader then moves and follows. In Strip Mode a channel's pan is
 // the CS plug-in's (Frank 2026-09-16), so it must be that one and not REAPER's.
-double uf8FlipPanRead_(MediaTrack* tr)
+// ⛔ `inStripMode` IS A PARAMETER, on all three of these, for the same reason
+// csStripPanReadout_ takes one: the UF8's register is g_pluginFaderMode and the
+// UF1's is g_uf1StripMode, and a helper that reads one of them by name is a trap
+// for whichever panel it does not belong to. That is exactly how the UF1's pan
+// ended up on the UF8's flag on 2026-09-16.
+double flipPanRead_(MediaTrack* tr, bool inStripMode)
 {
     double csPan = 0.0;
-    if (csStripPanReadout_(tr, g_pluginFaderMode.load(), &csPan)) return csPan;
+    if (csStripPanReadout_(tr, inStripMode, &csPan)) return csPan;
     return GetMediaTrackInfo_Value(tr, "D_PAN");
 }
 
@@ -18021,16 +18026,15 @@ double uf8FlipPanRead_(MediaTrack* tr)
 // carries the CS plug-in's Fader Level, so that is what the V-Pot takes; giving
 // it REAPER's volume there swapped in a quantity neither control was on (Frank
 // 2026-09-17). Returns {-1,-1} when the plain volume swap applies.
-CsFaderHandle uf8FlipVpotFader_(MediaTrack* tr)
+CsFaderHandle flipVpotFader_(MediaTrack* tr, bool flipOn, bool inStripMode)
 {
-    if (!tr || !g_flip.load() || !g_pluginFaderMode.load()
-        || g_uf8PluginMode.load()) return { -1, -1 };
+    if (!tr || !flipOn || !inStripMode) return { -1, -1 };
     return csFaderForTrack(tr);
 }
 
-void uf8FlipPanWrite_(MediaTrack* tr, double pan)
+void flipPanWrite_(MediaTrack* tr, bool inStripMode, double pan)
 {
-    if (g_pluginFaderMode.load()) {
+    if (inStripMode) {
         if (const auto pn = csPanForTrack(tr); pn.vst3Param >= 0) {
             const double n = std::clamp((pan + 1.0) * 0.5, 0.0, 1.0);
             TrackFX_SetParamNormalized(tr, pn.fxIndex, pn.vst3Param, n);
@@ -18128,7 +18132,7 @@ uint16_t computeStripCurrentPb_(uint8_t s, MediaTrack* tr,
         }
         // The slot branch above returned, so nothing holds the fader here.
         if (uf8FlipPanOnFader_(/*slotOnFader*/false)) {
-            return panToPb(uf8FlipPanRead_(tr));
+            return panToPb(flipPanRead_(tr, g_pluginFaderMode.load()));
         }
     }
     if (g_uf8PluginMode.load()) {
@@ -18585,7 +18589,21 @@ void applyUf1AboveFaderVpot_(int step)
             return;
         }
     }
-    // FLIP swaps fader/V-Pot: with the fader on Pan, the V-Pot rides Volume.
+    // FLIP swaps fader/V-Pot. ⛔ WHAT THE FADER HAD, which in Strip Mode is the
+    // CS plug-in's Fader Level and not REAPER's volume — the same half of the
+    // swap the UF8 got the same day. It rode the track's volume here, a quantity
+    // neither control was on (Frank 2026-09-17).
+    if (const auto fvf = flipVpotFader_(tr, g_uf1Flip.load(),
+                                        g_uf1StripMode.load());
+        fvf.vst3Param >= 0) {
+        const double cur = TrackFX_GetParamNormalized(tr, fvf.fxIndex,
+                                                      fvf.vst3Param);
+        const double next = std::clamp(
+            cur + step * kUf1AboveFaderPanPerDetent * kScale, 0.0, 1.0);
+        TrackFX_SetParamNormalized(tr, fvf.fxIndex, fvf.vst3Param, next);
+        return;
+    }
+    // FLIP without a strip fader to take: the V-Pot rides track Volume, as ever.
     // Nudge in dB per raw count → linear, absolute set via the surface path. Top
     // matches the fader (kUf1FaderTopDb = 12 dB); floor at −60 dB.
     if (g_uf1Flip.load()) {
@@ -21032,7 +21050,7 @@ void drainInputQueue()
                     double pan = n * 2.0 - 1.0;
                     if (pan < -1.0) pan = -1.0;
                     if (pan >  1.0) pan =  1.0;
-                    uf8FlipPanWrite_(tr, pan);
+                    flipPanWrite_(tr, g_pluginFaderMode.load(), pan);
                     break;
                 }
                 // Plugin-fader mode: route the fader to the SSL strip's
@@ -21517,7 +21535,7 @@ void drainInputQueue()
                 // FLIP in Strip Mode: the V-Pot takes the CS Fader Level, which
                 // is what the fader just gave up. Ahead of the two volume rungs
                 // below — see uf8FlipVpotFader_.
-                if (const auto fvf = uf8FlipVpotFader_(tr);
+                if (const auto fvf = flipVpotFader_(tr, g_flip.load() && !g_uf8PluginMode.load(), g_pluginFaderMode.load());
                     fvf.vst3Param >= 0) {
                     const double cur = TrackFX_GetParamNormalized(
                         tr, fvf.fxIndex, fvf.vst3Param);
@@ -21971,7 +21989,7 @@ void drainInputQueue()
                 // the rotate rung right above resolves the same way. The
                 // plug-in's own default, because unity on a strip's Out-Gain is
                 // the plug-in's to define, not ours.
-                if (const auto fvf = uf8FlipVpotFader_(tr);
+                if (const auto fvf = flipVpotFader_(tr, g_flip.load() && !g_uf8PluginMode.load(), g_pluginFaderMode.load());
                     fvf.vst3Param >= 0) {
                     double mn = 0.0, mx = 1.0, def = 0.0;
                     TrackFX_GetParamEx(tr, fvf.fxIndex, fvf.vst3Param,
@@ -34498,7 +34516,14 @@ void uf1PaintChannel_()
     // ONE definition, and the write chain, the motor follow and the readout all
     // sit downstream of it — they order Strip Mode ahead of FLIP and this is
     // what makes that order come out right, in all three at once.
-    const bool stripFader = stripFaderRaw && !flipParamFader;
+    // ⛔ AND TO THE PLAIN PAN SWAP. With no parameter to take, FLIP still means
+    // the fader and the knob trade jobs: the fader goes to the pan and the knob
+    // to the Fader Level. Strip Mode kept the fader here, so FLIP left the UF1
+    // exactly where it was while the UF8 beside it swapped (Frank 2026-09-17:
+    // "fader bleibt auf plugin, v-pot macht reaper volume").
+    const bool flipPanFader = flip && !flipParamFader && !sendFader
+                           && !extRouteActive && !stickyFader && !sendFlip;
+    const bool stripFader = stripFaderRaw && !flipParamFader && !flipPanFader;
     // Now the zone above the fader can name what the fader moves. Same order as
     // the branches below, so the readout and the write can never pick different
     // targets. The Extender's 9th send keeps arriving through sendOverride.
@@ -34527,9 +34552,9 @@ void uf1PaintChannel_()
         }
         else if (stickyFader)      fromParam(ftr, stickyFx, stickyParam);
         else if (flipParamFader)   fromParam(flipParamTr, flipParamFx, flipParam);
-        else if (flip && ftr) {    // plain FLIP: the fader rides Pan
+        else if (flipPanFader && ftr) {   // plain FLIP: the fader rides Pan
             faderDb.value = formatPanReadout(
-                GetMediaTrackInfo_Value(ftr, "D_PAN"));
+                flipPanRead_(ftr, g_uf1StripMode.load()));
             faderDb.unit.clear();   // a pan readout names itself (C / L12 / R30)
             faderDb.set   = true;
         }
@@ -34589,7 +34614,12 @@ void uf1PaintChannel_()
                 const double n = uf1PosToNorm_(pos);
                 TrackFX_SetParamNormalized(flipParamTr, flipParamFx, flipParam, n);
             }
-            else if (flip && !sendFlip) CSurf_OnPanChange(ftr, uf1PosToPan_(pos), /*relative*/false);
+            else if (flipPanFader) {
+                // The pan the readout and the motor also use — the plug-in's in
+                // Strip Mode, REAPER's otherwise. Never CSurf_OnPanChange here
+                // without asking, or the fader writes one pan and shows another.
+                flipPanWrite_(ftr, g_uf1StripMode.load(), uf1PosToPan_(pos));
+            }
             else      CSurf_OnVolumeChange(ftr, uf1PosToVol_(pos), false);
             // Echo the user's hand position to the firmware's MOTOR TARGET every
             // tick while the motor is limp. FF 1E while limp only updates the
@@ -34636,8 +34666,8 @@ void uf1PaintChannel_()
         } else if (flipParamFader) {
             const double n = TrackFX_GetParamNormalized(flipParamTr, flipParamFx, flipParam);
             pos = static_cast<uint16_t>(std::clamp(n, 0.0, 1.0) * double(kUf1FaderMax) + 0.5);
-        } else if (flip && !sendFlip) {
-            pos = uf1PanToPos_(GetMediaTrackInfo_Value(ftr, "D_PAN"));
+        } else if (flipPanFader) {
+            pos = uf1PanToPos_(flipPanRead_(ftr, g_uf1StripMode.load()));
         } else {
             pos = uf1VolToPos_(GetMediaTrackInfo_Value(ftr, "D_VOL"));
         }
@@ -37803,7 +37833,7 @@ void pushZonesForVisibleSlots()
                 // collapsed bar so the user sees the slot is empty.
                 vpotBar[s] = (uint16_t{0x00} | (uint16_t{0x80} << 8));
             }
-        } else if (const auto fvf = uf8FlipVpotFader_(tr);
+        } else if (const auto fvf = flipVpotFader_(tr, g_flip.load() && !g_uf8PluginMode.load(), g_pluginFaderMode.load());
                    (flipActive || flipPanSwap) && fvf.vst3Param >= 0) {
             // FLIP in Strip Mode: the knob is on the CS Fader Level, so the
             // ring shows that and not a volume nobody is touching.
@@ -38071,6 +38101,15 @@ void pushZonesForVisibleSlots()
             // "dB" — the plug-in says so — and a frequency under FLIP finally
             // reads "8.00k Hz" instead of "8.00kH dB" (see splitFaderUnit_).
             dbStr = splitFaderUnit_(s2, &dbUnit);
+        } else if (flipPanSwap) {
+            // ⛔ FLIP PUT THE PAN ON THE FADER, so the number above it names the
+            // pan. There was no rung for this at all, so it fell through to the
+            // track volume and reported a level the fader was not on — while the
+            // UF1, which got its rung yesterday, showed the pan correctly beside
+            // it (Frank 2026-09-17). Same reader as the four other callers, so
+            // in Strip Mode it is the plug-in's pan.
+            dbStr = formatPanReadout(flipPanRead_(tr, g_pluginFaderMode.load()));
+            dbUnit.clear();   // a pan readout names itself (C / L12 / R30)
         } else if (userStripActive) {
             // User-strip mode + no fader binding for this strip: blank the
             // numeric readout to match the blanked scribble / channel# /
@@ -38162,7 +38201,7 @@ void pushZonesForVisibleSlots()
                 // (centre = 0). Map -1..+1 → 0..kUf8FaderPbMax. The pan is the
                 // one uf8FlipPanRead_ names — the CS plug-in's in Strip Mode —
                 // or the motor parks somewhere the fader never writes.
-                const double pan = uf8FlipPanRead_(tr);
+                const double pan = flipPanRead_(tr, g_pluginFaderMode.load());
                 double n = (pan + 1.0) * 0.5;
                 if (n < 0.0) n = 0.0;
                 if (n > 1.0) n = 1.0;
@@ -38367,7 +38406,7 @@ void pushZonesForVisibleSlots()
             } else {
                 valLine = std::string(19, ' ');
             }
-        } else if (const auto fvf = uf8FlipVpotFader_(tr);
+        } else if (const auto fvf = flipVpotFader_(tr, g_flip.load() && !g_uf8PluginMode.load(), g_pluginFaderMode.load());
                    (flipActive || flipPanSwap) && fvf.vst3Param >= 0) {
             // FLIP in Strip Mode: name what the knob is on, the CS Fader Level,
             // formatted by the plug-in itself.
@@ -39528,7 +39567,7 @@ void commitDebouncedTouchReleases()
                     double pan = n * 2.0 - 1.0;
                     if (pan < -1.0) pan = -1.0;
                     if (pan >  1.0) pan =  1.0;
-                    uf8FlipPanWrite_(tr, pan);
+                    flipPanWrite_(tr, g_pluginFaderMode.load(), pan);
                 } else if (g_uf8PluginMode.load()) {
                     if (auto uctxT = userStripCtxFocused_(); uctxT.map) {
                         const int bank = std::clamp(g_softKeyBank.load(),
