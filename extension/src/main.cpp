@@ -35349,6 +35349,11 @@ std::string splitFaderUnit_(std::string v, std::string* unitOut)
             || p0 == 'c' || p0 == 'd') {
             val  += p0;
             unit.erase(0, 1);
+            // ⛔ AND TRIM AGAIN. Plug-ins put the space in different places:
+            // SSL writes "8.00kHz", bx writes "8.6k Hz" — prefix, THEN the
+            // space. Trimming only once left that space in the unit slot, so bx
+            // read "8.6k H" while SSL read "8.00kHz" (Frank 2026-09-17).
+            while (!unit.empty() && unit.front() == ' ') unit.erase(0, 1);
         }
     }
     if (unit.size() > 2) unit.resize(2);
