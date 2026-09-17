@@ -26597,85 +26597,53 @@ void uf1PaintGoniometer_(const std::vector<float>& src,
             img[2] = scale48(cur[0]);
     }
 
-    const std::vector<int>& uw = uf1DiamondWidths_();
     size_t litCells = 0, litNibbles = 0;
     float vmax = 0.f;
     std::array<size_t, 16> qhist{};
 
-    int dst = kUf1GonioOffset;
-    const int rows = int(uw.size()) < int(sg.w.size()) ? int(uw.size())
-                                                       : int(sg.w.size());
-    for (int r = 0; r < int(uw.size()); ++r) {
-        const int wu = uw[size_t(r)];
-        // Source row: 1:1 when both are 185 rows (the case that matters),
-        // proportional otherwise so a differently-sized raster still lands.
-        const int sr = (int(sg.w.size()) == int(uw.size()))
-                     ? r
-                     : int(std::lround(double(r) * (sg.w.size() - 1)
-                                       / double(uw.size() - 1)));
-        if (sr < 0 || sr >= rows) { dst += wu; continue; }
-        const int ws = sg.w[size_t(sr)];
-        const int s0 = sg.start[size_t(sr)];
-        // AREA-WEIGHTED (2026-07-18), and since 2026-09-11 a SUM OF LIGHT rather
-        // than an average of the floats. The coverage arithmetic stays: 185
-        // source columns onto 93 pixels is a ratio of 1.989, and a max over
-        // integer spans left one pixel per row covering a single cell, darker
-        // than its two-cell neighbours and lined up across rows ("dunkle
-        // vertikale linien die auf dem plugin nicht sind"). A cell straddling
-        // two pixels still becomes two part-lit pixels.
-        //
-        // What changed is the value. The plug-in's floats are a ramp: every
-        // trail cell loses exactly 0.01 a frame (/tmp/ssl360.pcap, 600 frames,
-        // 1.7 million decrements of 0.01, 0.02 in one frame of fourteen, nothing
-        // else). The UF1 byte is light. Sent as they are, the floats keep the
-        // trail bright for most of the ramp and the eye sees it cut off at the
-        // end (Frank 2026-09-11: "klingt zu plötzlich ab, das ist im plugin
-        // smoother"); the plug-in's own window shows the same ramp through a
-        // monitor's 2.2 gamma, which is where its even fade comes from. So a
-        // float becomes light through that same 2.2 before it is integrated.
-        // SSL 360 does the like: its bytes (cap101, 2179 images) are convex in
-        // the floats, quantile for quantile an exponent of 2.2 to 3 over the
-        // upper half, and 14.5 % of its lit pixels sit below 16 where only
-        // 1.2 % of the floats sit below 0.06.
-        // And the average halved every one-cell trace (a 1.0 cell beside a
-        // dark one came out 0.5): our lit bytes spread flat over the sixteen
-        // classes while SSL's pile up at 0xEE, its most common byte. The sum
-        // keeps a fully covered cell at full brightness; two lit cells clamp.
-        constexpr double kUf1GonioGamma = 2.2;
-        // ⇨ ONE CELL, ONE PIXEL, THE BRIGHTEST WINS (2026-09-11, later). The sum
-        // of light above saturated two lit cells into one block and split a
-        // straddling cell into two part-lit pixels; Frank: "wirkt eher körnig
-        // gegen plugin", the fade "macht nicht so schön alpha". Measured on
-        // SSL's own images (cap101, 2179) against our pipeline run on the
-        // plug-in's floats (/tmp/ssl360.pcap): of a bright pixel's horizontal
-        // neighbours SSL has 59 % bright and 8 % faint, the sum 79 % and 4 %,
-        // the max per pixel 47 % and 5 %. So each source cell goes to exactly
-        // one pixel, by its centre, and a pixel shows the brightest cell it
-        // was given: no doubling, no split, a one-cell trace stays one line at
-        // full brightness and its anti-aliased edge cells keep their own value.
-        const double scale = double(ws) / double(wu);
-        std::array<float, 93> px{};
-        for (int k = 0; k < ws; ++k) {
-            const size_t idx = size_t(s0 + k);
-            if (idx >= src.size()) break;
-            const float v = src[idx];
-            if (!(v > 0.f)) continue;              // dark, or the NaN sentinel
-            int c = int((double(k) + 0.5) / scale);
-            if (c >= wu) c = wu - 1;
-            const float lv = float(std::pow(double(v), kUf1GonioGamma));
-            if (lv > px[size_t(c)]) px[size_t(c)] = lv;
+    // ★ THE CODEC, CORRECTED 2026-09-17: 17113 FOUR-BIT CELLS, TWO PER BYTE,
+    // LOW NIBBLE FIRST, in the plug-in's own raster order. The Lissajous goes
+    // across ONE TO ONE — no row resampling, no column resampling, no gamma,
+    // no brightest-cell rule. All three existed to compensate for reading a
+    // PAIR of cells as one 8-bit brightness, and each was measured against
+    // SSL's images and tuned until it matched. That is why they looked right.
+    //
+    // The old reading said 8557 pixels of one byte; this says 17113 cells of
+    // four bits, and 17113 = 2 * 8557 - 1. Our own byte table already carried
+    // that identity: it is the cell table halved and rounded, which is why it
+    // came out as 1,1,3,3,...,93,...,3,3,1,1 (each width twice) rather than the
+    // plug-in's plain 1,3,5,...,185,...,5,3,1.
+    //
+    // MEASURED on SSL's own transmitted images (cap101, 40 images, 234878 lit
+    // bytes): the high and low nibble have the SAME distribution to within a
+    // tenth of a percent at every one of the fifteen levels (14 is the peak at
+    // 11.9 % / 12.0 %, 13 next at 9.7 % / 9.7 %). For an 8-bit brightness the
+    // low nibble would be the least significant bits and near uniform; two
+    // samples of the same quantity look like this. 12.2 % of the lit mass sits
+    // on the fifteen bytes whose nibbles are EQUAL, against 5.9 % by chance —
+    // neighbouring cells of a continuous trace share a level. And 0x0d/0x0e sit
+    // at the same frequency as 0xd0/0xe0, which under a brightness reading
+    // would mean 13 and 208 are equally common.
+    //
+    // Reported by sollapse in issue #8, finding 3.
+    // ⇨ The plug-in's own fade is already in the floats (every trail cell loses
+    // 0.01 a frame), so there is nothing to shape here. Truncate, do not round:
+    // only a cell at 1.0 earns the top level.
+    const size_t cap = size_t(kUf1DiamondBytes - kUf1GonioOffset) * 2;
+    const size_t n   = (src.size() < cap) ? src.size() : cap;
+    for (size_t i = 0; i < n; ++i) {
+        const float v = src[i];
+        const float c = (std::isfinite(v) && v > 0.f)
+                      ? ((v > 1.f) ? 1.f : v) : 0.f;
+        const uint8_t q = uint8_t(c * 15.f);
+        if (q) {
+            ++litCells; ++litNibbles;
+            ++qhist[size_t(q)];
+            if (c > vmax) vmax = c;
         }
-        for (int c = 0; c < wu; ++c) {
-            const float m = px[size_t(c)];
-            if (m > 0.f) {
-                ++litCells;
-                if (m > vmax) vmax = m;
-                const int q = int(std::lround(std::clamp(m, 0.f, 1.f) * 255.f));
-                ++qhist[size_t(q >> 4)];
-                if (q) { ++litNibbles; img[size_t(dst + c)] = uint8_t(q); }
-            }
-        }
-        dst += wu;
+        uint8_t& b = img[size_t(kUf1GonioOffset) + i / 2];
+        if (i & 1) b = uint8_t(b | uint8_t(q << 4));
+        else       b = q;
     }
 
     // Content trace (rea_sixty/uf1_gonio_trace=1 -> <tmp>/reasixty_gonio.log).
