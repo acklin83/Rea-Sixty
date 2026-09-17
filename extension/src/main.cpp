@@ -34222,7 +34222,11 @@ void uf1PaintChannel_()
     // ftr null = empty 9th Extender slot; there is no strip to look for on it.
     const CsFaderHandle csf = (stripMode && ftr) ? csFaderForTrack(ftr)
                                                  : CsFaderHandle{ -1, -1 };
-    const bool stripFader = stripMode && csf.vst3Param >= 0;
+    // ⛔ "RAW" BECAUSE FLIP CAN TAKE IT AWAY. The final stripFader is defined
+    // below, once flipParamFader is known — see the note there. The three
+    // predicates between here and it want the raw answer ("does Strip Mode own a
+    // fader on this track at all"), which is what they have always asked.
+    const bool stripFaderRaw = stripMode && csf.vst3Param >= 0;
     // SENDS + FLIP send-on-fader: the fader rides the FIRST of the 4 shown sends
     // (7.75 mixer slot g_uf1SendGroup*4 + 0, combinedSendSlot_) of the focused
     // track — motor FOLLOWS the EFFECTIVE level (readRouteVolumeLinear_), a MOVE
@@ -34232,7 +34236,7 @@ void uf1PaintChannel_()
     // track volume. Strip Mode keeps its documented FLIP win; a blank/gap first slot
     // leaves sendFader false so the fader falls back to track volume.
     constexpr int kSendFaderStrip = 12;   // reserved UF1 SENDS FLIP-fader gesture slot
-    const bool sendFlip = (g_uf1ChannelSubMode.load() == 2) && flip && !stripFader;
+    const bool sendFlip = (g_uf1ChannelSubMode.load() == 2) && flip && !stripFaderRaw;
     StripRoute sendRoute;
     if (sendFlip && ftr) {
         const CombinedSlot cs = uf1RouteSlot_(ftr, g_uf1SendGroup.load() * 4);
@@ -34259,7 +34263,7 @@ void uf1PaintChannel_()
     // flip (those own the fader). Frank 2026-08-02: FLIP must carry the sticky param,
     // not fall back to Pan / the CS V-Pot value.
     int  stickyFx = -1, stickyParam = -1; bool stickyTog = false;
-    const bool stickyFader = flip && !stripFader && !sendFader && ftr
+    const bool stickyFader = flip && !stripFaderRaw && !sendFader && ftr
         && g_stickyActive.load()
         && stickyResolveOnTrack_(ftr, &stickyFx, &stickyParam, &stickyTog);
     // ⇨ PLUGIN MODE + FLIP: THE LAST-TOUCHED V-POT PARAMETER MOVES TO THE FADER.
@@ -34289,7 +34293,7 @@ void uf1PaintChannel_()
     MediaTrack* flipParamTr = nullptr;
     int  flipParamFx = -1, flipParam = -1;
     const bool flipParamFader =
-        flip && !stripFader && !sendFader && !extRouteActive && !stickyFader
+        flip && !sendFader && !extRouteActive && !stickyFader
         && ftr == tr && g_uf1ChannelSubMode.load() == 0 && !meterView
         && [&] {
             MediaTrack* pt = nullptr; int pfx = -1;
@@ -34303,6 +34307,18 @@ void uf1PaintChannel_()
             flipParamTr = pt; flipParamFx = pfx; flipParam = p;
             return true;
         }();
+    // ⛔ FLIP BEATS STRIP MODE NOW. It used to yield: Strip Mode was read as the
+    // explicit choice and FLIP-onto-a-parameter as the implicit one, so in Strip
+    // Mode the FLIP key did nothing at all and the fader stayed on the Fader
+    // Level however hard you worked an EQ knob (Frank 2026-09-17). FLIP means
+    // the fader and the V-Pots swap jobs, and in Strip Mode the V-Pots are on
+    // plug-in parameters, so that is what the fader takes. The Fader Level is
+    // one FLIP away. Nothing is lost where nothing resolves: with no parameter
+    // on the page flipParamFader stays false and Strip Mode keeps the fader.
+    // ONE definition, and the write chain, the motor follow and the readout all
+    // sit downstream of it — they order Strip Mode ahead of FLIP and this is
+    // what makes that order come out right, in all three at once.
+    const bool stripFader = stripFaderRaw && !flipParamFader;
     // Now the zone above the fader can name what the fader moves. Same order as
     // the branches below, so the readout and the write can never pick different
     // targets. The Extender's 9th send keeps arriving through sendOverride.
@@ -35342,11 +35358,13 @@ std::string splitFaderUnit_(std::string v, std::string* unitOut)
     std::string val = v.substr(0, n);
     // Longer than the slot and headed by an SI prefix → the prefix belongs to
     // the number, not to the unit.
+    char moved = 0;
     if (unit.size() > 2) {
         const char p0 = unit.front();
         if (p0 == 'k' || p0 == 'K' || p0 == 'M' || p0 == 'm'
             || p0 == 'u' || p0 == 'n' || p0 == 'p'
             || p0 == 'c' || p0 == 'd') {
+            moved = p0;
             val  += p0;
             unit.erase(0, 1);
             // ⛔ AND TRIM AGAIN. Plug-ins put the space in different places:
@@ -35354,6 +35372,34 @@ std::string splitFaderUnit_(std::string v, std::string* unitOut)
             // space. Trimming only once left that space in the unit slot, so bx
             // read "8.6k H" while SSL read "8.00kHz" (Frank 2026-09-17).
             while (!unit.empty() && unit.front() == ' ') unit.erase(0, 1);
+        }
+    }
+    // ⛔ A FREQUENCY READS THE SAME ON EVERY STRIP. Here the plug-in's own
+    // wording is overruled, deliberately and only for Hz: SSL wrote "8.00kHz",
+    // bx "8.6k Hz" and FG-S "8437Hz" for the same knob, so a bank of different
+    // channel strips gave the same frequency three shapes (Frank 2026-09-17:
+    // "vereinheitlichen"). One rule, his: from 1000 up it is kHz with two
+    // decimals, below that the plug-in's own digits stand. The decimals give
+    // way before the 6-char slot does, so a stray 100 kHz still fits.
+    if (unit.size() == 2
+        && (unit[0] == 'H' || unit[0] == 'h')
+        && (unit[1] == 'z' || unit[1] == 'Z')) {
+        double hz = std::atof(v.substr(0, n).c_str());
+        if (moved == 'k' || moved == 'K') hz *= 1e3;
+        else if (moved == 'M')            hz *= 1e6;
+        if (hz >= 1000.0) {
+            char b[32];
+            for (int dec = 2; dec >= 0; --dec) {
+                std::snprintf(b, sizeof(b), "%.*fk", dec, hz / 1000.0);
+                if (std::string(b).size() <= 6) break;
+            }
+            val = b;
+        } else if (moved) {
+            // Sub-kHz written WITH a prefix ("0.98kHz") — spell it out rather
+            // than leave the one plug-in that does this looking different.
+            char b[32];
+            std::snprintf(b, sizeof(b), "%g", hz);
+            val = b;
         }
     }
     if (unit.size() > 2) unit.resize(2);
