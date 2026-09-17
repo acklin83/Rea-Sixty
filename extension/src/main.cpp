@@ -4019,6 +4019,8 @@ std::atomic<bool> g_uf8VpotLearnArmed{false};
 // onTimer cancels any armed learn + clears the hardware feedback (restores the
 // armed control's normal LEDs / fader / display). Frank 2026-06-20.
 std::atomic<bool> g_touchLearnOffRequest{false};
+// ⚠ Swatch probe: the palette index the UF1 colour bar is pinned to, -1 = off.
+std::atomic<int>  g_paletteSwatch{-1};
 
 // ---- V-Pot rotary StepCycle capture (Touch-to-Learn) ----------------------
 // When a V-Pot is armed during Touch-to-Learn, pressing plug-in BUTTONS in
@@ -31697,7 +31699,19 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, ledRgb));                 // FF38 full RGB (dark if unsel)
         g_uf1_dev->send(uf1::buildLedLevel(uf1::led::kSel, uf1::led::kFf39Lit));      // FF39 = 0x00 → LIT
         const std::array<uint8_t, 1> active{0x01};
-        const std::array<uint8_t, 1> barIdx{uf8::quantize(rgb)};   // BAR = TRACK colour (always)
+        // ⚠ SWATCH PROBE (ExtState rea_sixty/palette_swatch = 1..15, empty = off).
+        // Palette.cpp's table was read off a UF8 by eye and says 0x0C..0x0F
+        // render black; SSL 360's own LedColourType list calls them Light Blue,
+        // Lamp and Black. Neither side has checked every swatch on a panel, and
+        // our own comment admits an earlier sweep "produced shifted mappings" —
+        // our 0x01 (A0A0FF) is almost exactly SSL's 0x0C (9C9EFF).
+        // So: hold ONE index on the bar until told otherwise, and let the script
+        // that steps it also record what the eye sees. One pass, self-labelling,
+        // nothing to count or remember — which is the failure mode of a probe
+        // that shows sixteen colours in a row for three seconds each.
+        const int swatch = g_paletteSwatch.load();
+        const std::array<uint8_t, 1> barIdx{
+            (swatch >= 0) ? uint8_t(swatch) : uf8::quantize(rgb)};   // BAR = TRACK colour (always)
         if (!meterView) {   // the plane, not the LED: see the gate at the top
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive, active));
@@ -42804,6 +42818,15 @@ void onTimerBody_()
     // track chunk, because they are not host parameters. If a write takes, that
     // surgery can go, and with it a SetTrackStateChunk reload that can click
     // during playback. Consumed on read, so it fires once per set.
+    // ⚠ SWATCH PROBE: which palette index the UF1's colour bar holds. -1 = off.
+    // Read every tick, not consumed, so the bar keeps showing it while the eye
+    // decides. See the bar site for why this exists.
+    {
+        const char* sv = GetExtState("rea_sixty", "palette_swatch");
+        const int want = (sv && *sv) ? std::atoi(sv) : -1;
+        g_paletteSwatch.store((want >= 0 && want <= 15) ? want : -1);
+    }
+
     if (const char* ov = GetExtState("rea_sixty", "ssl_obj_set"); ov && *ov) {
         const std::string spec = ov;
         SetExtState("rea_sixty", "ssl_obj_set", "", false);
