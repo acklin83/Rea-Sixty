@@ -15638,6 +15638,20 @@ static std::string hudBuildAutoLearnUncached_(void* csTrV, int csFx, int mode)
     char nm[512] = {0};
     if (!fxIdentityName(tr, csFx, nm, sizeof(nm))) return {};
     const UserPluginMap* m = user_plugins::lookupOwnedByName(nm);
+    // ⛔ NOT ONTO A FACTORY STRIP, and that has to be decided HERE, not only at
+    // Apply. hudApplyAutoLearn_ has refused a built-in since 2026-09-04 — a user
+    // map born there would carry the same identity as the factory one and
+    // quietly take over the UC1's layout for SSL's own strip — but the proposal
+    // builder never learned the same rule, so a 32C offered a full list that
+    // nothing could accept (Frank 2026-09-17, on a factory 32C). The FX-Learn
+    // page has said "factory map, not editable" and offered nothing since
+    // 2026-09-07; this is that answer, on the panel that was still missing it.
+    // Same test as the apply guard, so the two cannot drift again.
+    if (!m && lookupPluginMapByName(nm)) {
+        SetExtState("rea_sixty", "hud_hint",
+                    "Factory map \xE2\x80\x94 not editable", false);
+        return {};
+    }
     // ⇨ A PLUG-IN WITH NO MAP IS THE CASE THAT NEEDS AUTOLEARN MOST, and until
     // 2026-09-03 it was the one case it could not serve: the matcher feeds on a
     // map's paramSnapshot, and a plug-in nobody has mapped has neither. Frank,
