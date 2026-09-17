@@ -31072,8 +31072,25 @@ static void uf1BlankChannelZone_()
 // The level + GR meter (0x0009/0x0015/0x0016) is streamed separately — via the
 // cycle pacer in each view — so it is NOT here. `changed` forces a full repaint
 // on a track / view / reopen change (its own send-on-change statics live here).
+// Defined with the UF8 readout helpers below; the UF1 uses the SAME splitter so
+// one rule decides how a unit reaches either panel's fader zone.
+std::string splitFaderUnit_(std::string v, std::string* unitOut);
+
+// What the UF1 fader is driving RIGHT NOW, pre-formatted for the numeric zone
+// above it. ⛔ THE ZONE NAMES WHAT THE FADER MOVES, which is the UF8's rule for
+// its own O/PdB zone and was never the UF1's: this zone read D_VOL and nothing
+// else, with one exception for the Extender's 9th send. So in Strip Mode you
+// pulled the plug-in's Fader Level and the number above it stood still, and
+// under FLIP it reported a volume the fader was not touching (the sweep,
+// 2026-09-16; deferred then because the painter ran BEFORE the fader target was
+// resolved — the call has moved below it).
+// Resolved in uf1PaintChannel_, where the target flags live, and passed in:
+// re-deriving them here would be a second copy of the one decision.
+struct Uf1FaderDb { bool set = false; std::string value, unit; };
+
 static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
-                                  const StripRoute* sendOverride = nullptr)
+                                  const StripRoute* sendOverride = nullptr,
+                                  const Uf1FaderDb* faderDb = nullptr)
 {
     if (!g_uf1_dev) return;
 
@@ -31184,17 +31201,24 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     if (sendZone) name = ovName;   // Extender: the 9th send's dest, not the track
     if (!meterView && (changed || name != sName)) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
 
-    // Output dB (0x000c): 0x00 + value left-justified, NUL-padded to 6, + "dB"
+    // Output dB (0x000c): 0x00 + value left-justified, NUL-padded to 6, + 2-byte
+    // unit. The unit is OURS here too — the Hue screen already sends spaces in
+    // that slot — so a non-dB target names its own unit, same rule and same
+    // splitter as the UF8's readout.
     const double volLin = GetMediaTrackInfo_Value(tr, "D_VOL");
-    std::string dbv = formatDbReadout(volLin);
+    std::string dbv  = formatDbReadout(volLin);
+    std::string dbu  = "dB";
     if (sendZone) dbv = ovDb;      // Extender: the 9th send's EFFECTIVE level
-    if (!meterView && (changed || dbv != sDb)) {
-        sDb = dbv;
+    if (faderDb && faderDb->set) { dbv = faderDb->value; dbu = faderDb->unit; }
+    static std::string sDbU = "dB";
+    if (!meterView && (changed || dbv != sDb || dbu != sDbU)) {
+        sDb = dbv; sDbU = dbu;
         std::vector<uint8_t> p;
         p.push_back(0x00);
         for (size_t k = 0; k < 6; ++k)
             p.push_back(k < dbv.size() ? static_cast<uint8_t>(dbv[k]) : 0x00);
-        p.push_back('d'); p.push_back('B');
+        p.push_back(dbu.size() > 0 ? static_cast<uint8_t>(dbu[0]) : 0x20);
+        p.push_back(dbu.size() > 1 ? static_cast<uint8_t>(dbu[1]) : 0x20);
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kOutputDb, p));
     }
 
@@ -34160,8 +34184,13 @@ void uf1PaintChannel_()
     // Extender off, and the SENDS case, are both unaffected: uf1FaderTrack_ returns
     // the focused track unless the track-extender branch fires, so ftr == tr there,
     // and the 9th-SEND readout keeps arriving through sendOverride as before.
-    uf1PaintChannelStrip_(ftr, changed, extRouteActive ? &extRoute : nullptr);
-
+    // ⛔ THE STRIP PAINT MOVED BELOW THE FADER-TARGET RESOLUTION. It used to run
+    // here, eight lines ABOVE the block that works out what the fader drives, so
+    // the numeric zone was drawn before anyone knew what to call it. Everything
+    // between here and the new call site only READS REAPER state, and the paint
+    // still happens before the fader WRITE below, so the order it cares about is
+    // unchanged.
+    //
     // Fader <-> volume (or Pan under FLIP — g_uf1Flip swaps fader/V-Pot).
     //  - While touched: write the user's fader position to the focused track's
     //    volume (or Pan under FLIP) — motor is limp (released on touch-down).
@@ -34274,6 +34303,43 @@ void uf1PaintChannel_()
             flipParamTr = pt; flipParamFx = pfx; flipParam = p;
             return true;
         }();
+    // Now the zone above the fader can name what the fader moves. Same order as
+    // the branches below, so the readout and the write can never pick different
+    // targets. The Extender's 9th send keeps arriving through sendOverride.
+    Uf1FaderDb faderDb;
+    {
+        auto fromParam = [&](MediaTrack* t, int fx, int prm) {
+            if (!t || fx < 0 || prm < 0) return;
+            char buf[64] = {0};
+            const double n = TrackFX_GetParamNormalized(t, fx, prm);
+            TrackFX_FormatParamValueNormalized(t, fx, prm, n, buf, sizeof(buf));
+            std::string v(buf);
+            for (auto& c : v) {
+                const unsigned char u = static_cast<unsigned char>(c);
+                if (u < 0x20 || u > 0x7E) c = '-';
+            }
+            while (!v.empty() && v.front() == ' ') v.erase(0, 1);
+            faderDb.value = splitFaderUnit_(v, &faderDb.unit);
+            faderDb.set   = true;
+        };
+        if (stripFader)            fromParam(ftr, csf.fxIndex, csf.vst3Param);
+        else if (sendFader) {      // UF1-local SENDS + FLIP: the first shown send
+            faderDb.value = formatDbReadout(
+                readRouteVolumeLinear_(sendRoute, ftr));
+            faderDb.unit  = "dB";
+            faderDb.set   = true;
+        }
+        else if (stickyFader)      fromParam(ftr, stickyFx, stickyParam);
+        else if (flipParamFader)   fromParam(flipParamTr, flipParamFx, flipParam);
+        else if (flip && ftr) {    // plain FLIP: the fader rides Pan
+            faderDb.value = formatPanReadout(
+                GetMediaTrackInfo_Value(ftr, "D_PAN"));
+            faderDb.unit.clear();   // a pan readout names itself (C / L12 / R30)
+            faderDb.set   = true;
+        }
+    }
+    uf1PaintChannelStrip_(ftr, changed, extRouteActive ? &extRoute : nullptr,
+                          &faderDb);
     // End-of-edit finalise (finishRouteVolEdit_ isend=1) fired ONCE on touch-release,
     // so Touch-mode recording stops + snaps back like the surface send-fader path.
     static bool sSendFaderEditing = false;
