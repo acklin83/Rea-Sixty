@@ -19432,16 +19432,17 @@ std::atomic<int64_t> g_stickyFocusLockUntilMs{0};
 // (the sweep, 2026-09-16). Same family as the Sticky-Pot lock above and the
 // Strip-Mode pan guard in chase; set this around any such burst.
 std::atomic<int64_t> g_ownWriteFocusLockUntilMs{0};
-// ⛔ A FADER WROTE IT, so "Track selection follows parameter change" stays out.
-// That setting is written for a DELIBERATE turn on a strip you are not on — at
-// the UC1's Out-Gain pot it is exactly right, and that pot writes the very same
-// CS Fader Level param, which is why this cannot be decided from the parameter
-// in chaseLastTouchedFx and has to be marked at the source. On a motorised fader
-// the grab itself already moves the value, so the rule turned every accidental
-// touch into a channel change (Frank 2026-09-17, after living with it a day).
-// ⚠ ONLY THE SELECTION is held off. The focused param still follows the write,
-// exactly as it does for every other one — this is not a focus lock.
-std::atomic<int64_t> g_faderWriteNoSelectUntilMs{0};
+// ⛔ A FADER MOVE IS NOT A REACH FOR A PARAMETER, so neither the global focus
+// nor "Track selection follows parameter change" may act on it. Both used to.
+// The selection first (Frank 2026-09-17): on a motorised fader the grab itself
+// already moves the value, so every accidental touch became a channel change.
+// Then the focus, the same day: in Strip Mode the fader writes the CS Fader
+// Level, chase made that THE focused parameter, and all eight V-Pots jumped onto
+// it — "muss der auf der V-Pot anzeige UND dem Fader sein? Machts weniger
+// flexibel". The V-Pots are free for something else now.
+// It has to be marked at the SOURCE: the UC1's Out-Gain pot writes the very same
+// Fader Level param, and from the parameter alone chase could not tell a fader
+// from a knob.
 constexpr int kFaderNoSelectMs = 400;   // same window the sticky writes use
 
 // Pins eligible to drive/render at all (independent of the individual strip):
@@ -20864,9 +20865,9 @@ void drainInputQueue()
                 // see g_uf8FaderVolumeTrack.
                 if (tr) g_uf8FaderVolumeTrack.store(tr, std::memory_order_relaxed);
                 // Whatever branch below claims this move, it came from a FADER —
-                // see g_faderWriteNoSelectUntilMs. Marked once at the top so a
+                // see kFaderNoSelectMs. Marked once at the top so a
                 // new branch cannot be added without it.
-                g_faderWriteNoSelectUntilMs.store(nowMs_() + kFaderNoSelectMs);
+                g_ownWriteFocusLockUntilMs.store(nowMs_() + kFaderNoSelectMs);
                 // Diag (Frank 2026-05-19): unconditional snapshot of the
                 // state that decides which fader-write branch fires, so
                 // when the SetParam log doesn't get hit we can see WHY.
@@ -34406,7 +34407,7 @@ void uf1PaintChannel_()
                 // Same rule on this panel: a fader is a fader. Leaving the UF1
                 // out would put the two surfaces back on different answers for
                 // one gesture, which is the drift this week was spent removing.
-                g_faderWriteNoSelectUntilMs.store(nowMs_() + kFaderNoSelectMs);
+                g_ownWriteFocusLockUntilMs.store(nowMs_() + kFaderNoSelectMs);
                 const double n = uf1PosToNorm_(pos);
                 TrackFX_SetParamNormalized(ftr, csf.fxIndex, csf.vst3Param, n);
             }
@@ -38829,10 +38830,10 @@ void chaseLastTouchedFx()
         }
         return;
     }
-    // ⛔ NOT WHEN A FADER WROTE IT (g_faderWriteNoSelectUntilMs). Everything
-    // else about this write is honoured — the focus above already followed it.
-    if (!isSelected && g_trackSelFollowsParam.load()
-        && nowMs_() >= g_faderWriteNoSelectUntilMs.load()) {
+    // A fader write never gets this far: it sets g_ownWriteFocusLockUntilMs and
+    // the absorb clause above returns before the focus is touched, let alone the
+    // selection. See the note on kFaderNoSelectMs.
+    if (!isSelected && g_trackSelFollowsParam.load()) {
         if (map->domain == uf8::Domain::ChannelStrip) {
             SetOnlyTrackSelected(tr);
             followSelectedInMixer(tr);
@@ -39223,7 +39224,7 @@ void commitDebouncedTouchReleases()
         // The release writeback is a fader write like the live one, and it is
         // the LAST thing to touch the param — without this the guard on the
         // drag would lapse and the release alone would grab the channel.
-        g_faderWriteNoSelectUntilMs.store(nowMs_() + kFaderNoSelectMs);
+        g_ownWriteFocusLockUntilMs.store(nowMs_() + kFaderNoSelectMs);
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             now - g_touchLastPress[s]).count();
         if (elapsed < kTouchDebounceQuiet.count()) continue;
