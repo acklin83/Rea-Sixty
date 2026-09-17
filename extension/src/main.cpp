@@ -17596,6 +17596,28 @@ double   uiVolLinear(MediaTrack* tr);
 // block further down. Kept in sync with that block.
 constexpr uint16_t kUf8FaderPbMax = 15583;
 
+// ⛔ BOTH ENDS SNAP, exactly as uf1PosToNorm_ does. The reason is written out
+// beside kUf1FaderEndSnap: the hardware reports a hair under the stop, so a
+// parameter sat just short of its limit with the fader hard against the end and
+// there was no way to close the gap by hand. That was fixed on 2026-09-10 — on
+// the UF1 only. The UF8 kept the gap, visibly: a 4K B high-pass stopped at
+// 10.1 Hz where the UF1 reached OUT (Frank 2026-09-17, "das hatten wir schon").
+// Same fraction of travel, ~0.2 %, which on this fader is a fifth of a
+// millimetre: under what a finger can place.
+// ⚠ ARITHMETIC, NOT PROTOCOL. Nothing here touches the input handler, the motor
+// builder or the init sequence — those still need a capture before anyone edits
+// them ([[feedback-fader-no-speculation]]).
+// ⚠ ONLY FOR A PARAMETER. Track volume does NOT go through this: a fraction of a
+// dB at the top of the throw is inaudible, and snapping it would quietly move a
+// level the user had set.
+constexpr uint16_t kUf8FaderEndSnap = 30;
+inline double uf8PbToParamNorm_(uint16_t pb)
+{
+    if (pb >= kUf8FaderPbMax - kUf8FaderEndSnap) return 1.0;
+    if (pb <= kUf8FaderEndSnap)                  return 0.0;
+    return static_cast<double>(pb) / static_cast<double>(kUf8FaderPbMax);
+}
+
 // FX Learn UF8 — locate the user-mapped plug-in instance currently
 // targeted by the focused track + instance switcher. Used by the SSL
 // Strip Mode + GUI builtin (Phase 4) and the per-strip dispatch path
@@ -21000,11 +21022,7 @@ void drainInputQueue()
                 if (tr && stickyFlipFaderEnabled_()) {
                     int sfx = -1, sp = -1;
                     if (stickyResolveOnTrack_(tr, &sfx, &sp, nullptr)) {
-                        const uint16_t pbS = linearVolumeToPb(e.value);
-                        double n = static_cast<double>(pbS) /
-                                   static_cast<double>(kUf8FaderPbMax);
-                        if (n < 0.0) n = 0.0;
-                        if (n > 1.0) n = 1.0;
+                        double n = uf8PbToParamNorm_(linearVolumeToPb(e.value));
                         const double prevN = TrackFX_GetParamNormalized(tr, sfx, sp);
                         TrackFX_SetParamNormalized(tr, sfx, sp, n);
                         g_stickyFocusLockUntilMs.store(nowMs_() + 400);
@@ -21032,12 +21050,8 @@ void drainInputQueue()
                 // Plugin-fader mode's fader→CS-Fader routing).
                 if (isVPotPanFocus(focusedF)) slF = nullptr;
                 if (g_flip.load() && faderMayTakeSlot_(slF)) {
-                    const uint16_t pbF = linearVolumeToPb(e.value);
-                    double normF = static_cast<double>(pbF) /
-                                   static_cast<double>(kUf8FaderPbMax);
+                    double normF = uf8PbToParamNorm_(linearVolumeToPb(e.value));
                     if (slF->inverted) normF = 1.0 - normF;
-                    if (normF < 0.0) normF = 0.0;
-                    if (normF > 1.0) normF = 1.0;
                     TrackFX_SetParamNormalized(tr, mmF.fxIndex,
                         slF->vst3Param, normF);
                     uf8::param_groups::broadcastBuiltinSlot(
@@ -21051,11 +21065,7 @@ void drainInputQueue()
                 // also held — Frank 2026-05-08: just FLIP should be
                 // enough, no PAN-button-modifier required.
                 if (uf8FlipPanOnFader_(faderMayTakeSlot_(slF))) {
-                    const uint16_t pbF = linearVolumeToPb(e.value);
-                    double n = static_cast<double>(pbF) /
-                               static_cast<double>(kUf8FaderPbMax);
-                    if (n < 0.0) n = 0.0;
-                    if (n > 1.0) n = 1.0;
+                    const double n = uf8PbToParamNorm_(linearVolumeToPb(e.value));
                     double pan = n * 2.0 - 1.0;
                     if (pan < -1.0) pan = -1.0;
                     if (pan >  1.0) pan =  1.0;
@@ -21076,12 +21086,8 @@ void drainInputQueue()
                             uctx.map->uf8.strips[uf8FaderBankClamped_()][s],
                             g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.faderVst3Param >= 0) {
-                            const uint16_t pbU = linearVolumeToPb(e.value);
-                            double n = static_cast<double>(pbU) /
-                                       static_cast<double>(kUf8FaderPbMax);
+                            double n = uf8PbToParamNorm_(linearVolumeToPb(e.value));
                             if (sb.faderInverted) n = 1.0 - n;
-                            if (n < 0.0) n = 0.0;
-                            if (n > 1.0) n = 1.0;
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
                                 sb.faderVst3Param, n);
                             uf8::param_groups::broadcastUserParam(
@@ -21094,11 +21100,7 @@ void drainInputQueue()
                 if (g_pluginFaderMode.load()) {
                     const auto cs = csFaderForTrack(tr);
                     if (cs.vst3Param >= 0) {
-                        const uint16_t pbCs = linearVolumeToPb(e.value);
-                        double n = static_cast<double>(pbCs) /
-                                   static_cast<double>(kUf8FaderPbMax);
-                        if (n < 0.0) n = 0.0;
-                        if (n > 1.0) n = 1.0;
+                        const double n = uf8PbToParamNorm_(linearVolumeToPb(e.value));
                         const bool setOk = TrackFX_SetParamNormalized(
                             tr, cs.fxIndex, cs.vst3Param, n);
                         const double after = TrackFX_GetParamNormalized(
@@ -39566,20 +39568,14 @@ void commitDebouncedTouchReleases()
                 const bool stickyRel = stickyFlipFaderEnabled_()
                     && stickyResolveOnTrack_(tr, &sfxR, &sprR, nullptr);
                 if (stickyRel) {
-                    double n = static_cast<double>(touchPb) /
-                               static_cast<double>(kUf8FaderPbMax);
-                    if (n < 0.0) n = 0.0;
-                    if (n > 1.0) n = 1.0;
+                    const double n = uf8PbToParamNorm_(touchPb);
                     const double prevN = TrackFX_GetParamNormalized(tr, sfxR, sprR);
                     TrackFX_SetParamNormalized(tr, sfxR, sprR, n);
                     g_stickyFocusLockUntilMs.store(nowMs_() + 400);
                     stickyApplyMacro_(tr, prevN);
                 } else if (g_flip.load() && faderMayTakeSlot_(slT)) {
-                    double normT = static_cast<double>(touchPb) /
-                                   static_cast<double>(kUf8FaderPbMax);
+                    double normT = uf8PbToParamNorm_(touchPb);
                     if (slT->inverted) normT = 1.0 - normT;
-                    if (normT < 0.0) normT = 0.0;
-                    if (normT > 1.0) normT = 1.0;
                     TrackFX_SetParamNormalized(tr, mmT.fxIndex,
                         slT->vst3Param, normT);
                     uf8::param_groups::broadcastBuiltinSlot(
@@ -39587,10 +39583,7 @@ void commitDebouncedTouchReleases()
                 } else if (uf8FlipPanOnFader_(/*slotOnFader*/false)) {
                     // The slot rung is the branch above; reaching here means it
                     // did not claim the fader.
-                    double n = static_cast<double>(touchPb) /
-                               static_cast<double>(kUf8FaderPbMax);
-                    if (n < 0.0) n = 0.0;
-                    if (n > 1.0) n = 1.0;
+                    const double n = uf8PbToParamNorm_(touchPb);
                     double pan = n * 2.0 - 1.0;
                     if (pan < -1.0) pan = -1.0;
                     if (pan >  1.0) pan =  1.0;
@@ -39602,11 +39595,8 @@ void commitDebouncedTouchReleases()
                         const auto& sb = uctxT.map->uf8.strips[uf8FaderBankClamped_()][
                             static_cast<int>(s)];
                         if (sb.faderVst3Param >= 0) {
-                            double n = static_cast<double>(touchPb) /
-                                       static_cast<double>(kUf8FaderPbMax);
+                            double n = uf8PbToParamNorm_(touchPb);
                             if (sb.faderInverted) n = 1.0 - n;
-                            if (n < 0.0) n = 0.0;
-                            if (n > 1.0) n = 1.0;
                             TrackFX_SetParamNormalized(uctxT.tr,
                                 uctxT.fxIdx, sb.faderVst3Param, n);
                             uf8::param_groups::broadcastUserParam(
@@ -39618,10 +39608,7 @@ void commitDebouncedTouchReleases()
                     }
                 } else if (g_pluginFaderMode.load()) {
                     if (csT.vst3Param >= 0) {
-                        double n = static_cast<double>(touchPb) /
-                                   static_cast<double>(kUf8FaderPbMax);
-                        if (n < 0.0) n = 0.0;
-                        if (n > 1.0) n = 1.0;
+                        const double n = uf8PbToParamNorm_(touchPb);
                         TrackFX_SetParamNormalized(tr, csT.fxIndex,
                             csT.vst3Param, n);
                         for (auto* m : uf8::param_groups::resolveBroadcastTargets(tr)) {
