@@ -69,6 +69,55 @@ namespace sslcore {
 static uint16_t currentMeterPortLocked_();
 namespace {
 
+// ⛔ THE OBJECT IDS ARE NOT OPAQUE. THEY ARE THE NAME.
+// Every eight-byte id on this protocol — scopes, properties, streams, commands
+// — is a hash of the object's clear-text name, little-endian on the wire:
+//
+//     h = 0;  for each byte c of the name:  h = 101 * h + c;   (64-bit wrap)
+//
+// We carried them as byte tables for months and treated them as magic numbers,
+// which is why "the missing RTA subscribe" was hunted for and why the three
+// frames at the head of subscribeInitial() went unread for as long as they did.
+// A constant nobody can read is an open question, not a fact.
+//
+// PROVEN against every named id this file already held, all eleven of them (see
+// the static_asserts below and beside each SSL_ID). Frank asked for it after
+// sollapse published the function in issue #8's appendix; it reproduces our own
+// kScopeId/kMsgId pair, the README's streamId, and every object constant here.
+//
+// ⚠ static_assert, not a comment. A name that does not hash to the id we used
+// to ship stops the BUILD, which is the only place a wrong name is cheap.
+constexpr uint64_t sslScopeHash(const char* s)
+{
+    uint64_t h = 0;
+    for (; *s; ++s) h = 101u * h + uint64_t(static_cast<uint8_t>(*s));
+    return h;
+}
+// The same hash as the eight wire bytes, little-endian.
+#define SSL_ID(name) {                                                        \
+    uint8_t(sslScopeHash(name) >>  0), uint8_t(sslScopeHash(name) >>  8),      \
+    uint8_t(sslScopeHash(name) >> 16), uint8_t(sslScopeHash(name) >> 24),      \
+    uint8_t(sslScopeHash(name) >> 32), uint8_t(sslScopeHash(name) >> 40),      \
+    uint8_t(sslScopeHash(name) >> 48), uint8_t(sslScopeHash(name) >> 56) }
+static_assert(sslScopeHash("GlobalResetPeakHoldsAndOverloads") == 0x3dec846af3916475ull, "");
+static_assert(sslScopeHash("ResetLoudnessMeasurements")        == 0x4f81efdde48c86fdull, "");
+static_assert(sslScopeHash("PresetList")                       == 0xcf84a12d91ee8d5bull, "");
+static_assert(sslScopeHash("PresetSelection")                  == 0xbeb95e94d29cb3c1ull, "");
+static_assert(sslScopeHash("HostTrackName")                    == 0x0c7f66c7410f63f0ull, "");
+static_assert(sslScopeHash("HostTrackIndex")                   == 0xee438c9c8cda39cbull, "");
+static_assert(sslScopeHash("360SelectedView")                  == 0x92b79049de04eac5ull, "");
+// The four identity frames in subscribeInitial(), named in its own comment.
+static_assert(sslScopeHash("GuiSlotIndex")                     == 0x0c0888b1fc1b6a63ull, "");
+static_assert(sslScopeHash("PluginIdent")                      == 0x86a543491dee40b7ull, "");
+static_assert(sslScopeHash("SessionDataId")                    == 0x54ecd560fed9a72bull, "");
+static_assert(sslScopeHash("UniqueId")                         == 0x0020cb9363d774fcull, "");
+// ⚠ HostTrackUuid EXISTS AND IS EMPTY UNDER REAPER. Its id is on the wire in
+// cap139, declared and set, and the value frame carries an EMPTY BODY — so
+// REAPER hands the plug-in no track uuid and it cannot replace the
+// name-plus-index correlation. That is issue #8's finding 12, answered without
+// a capture because the id could finally be COMPUTED and looked for.
+static_assert(sslScopeHash("HostTrackUuid")                    == 0x0c7f66c741808b9aull, "");
+
 // Diagnostic log — the impersonator is otherwise blind. Enabled by the env var
 // REASIXTY_SSLCORE_TRACE; writes to /tmp/reaper_sslcore.log. Logs the lifecycle
 // (bind, announce, plugin connect/disconnect) and a periodic summary of which
@@ -435,8 +484,13 @@ void netInit()    { }
 void netCleanup() { }
 
 // ---------------------------------------------------------- protocol constants
+// = sslScopeHash("system"), split across the frame's two 32-bit halves. The
+// README called them streamId and 269 and could say nothing about either.
 constexpr uint32_t kScopeId = 0x5f7a0579;
 constexpr uint32_t kMsgId   = 284;
+static_assert(uint32_t(sslScopeHash("system")) == kScopeId, "");
+static_assert(uint32_t(sslScopeHash("system") >> 32) == kMsgId, "");
+static_assert(sslScopeHash("meters") == 0x0000010d34c64634ull, "");   // the data stream
 const char*        kScope   = "PluginControls.PerSslMeterProPlugin";
 
 void putU32(std::vector<uint8_t>& v, uint32_t x) {
@@ -751,10 +805,24 @@ void probeTcpFrame_(uint32_t ftype, const uint8_t* pay, size_t avail)
 //     636a1bfc… = GuiSlotIndex     b740ee1d… = PluginIdent
 //     2ba7d9fe… = SessionDataId    fc74d763… = UniqueId
 // and the trailing `08<varint>` is that property's VALUE, not a stream selector.
-// type-18 is SET-PROPERTY, not subscribe. We never subscribed to anything: we
-// say who we are, and the plug-in streams its meters at us unprompted. That is
-// why hunting for "the missing RTA subscribe" got nowhere — there is no such
-// frame. RTA was withheld because the plug-in only computes what its SELECTED
+// type-18 is SET-PROPERTY, not subscribe. That is why hunting for "the missing
+// RTA subscribe" got nowhere — there is no such frame.
+//
+// ⛔ BUT WE DO SEND SOMETHING THAT TURNS THE STREAM ON, AND IT IS THE THREE
+// FRAMES ABOVE THOSE FOUR. This comment used to end "we never subscribed to
+// anything, the plug-in streams at us unprompted", which was true of the four
+// it had decoded and blind to the three it had not. Resolved with sslScopeHash
+// they are type-2 property values on:
+//     38f0291a5ed5dbff = PluginControls.PerSslMeterProPlugin
+//                        .Selects.IsSelected[1].BoolLedState      empty = false
+//     0196ce3d09ab3dfe = …Selects.IsTrackSelected[1].BoolLedState empty = false
+//     38f0291a5ed5dbff = …Selects.IsSelected[1].BoolLedState      08 01 = TRUE
+// That LED is what makes a meter plug-in stream. And because these are replayed
+// bytes, EVERY instance is handed slot [1] and every one of them believes it is
+// the selected one, so every Meter and Meter Pro in the session streams
+// everything at us at once — the Lissajous alone is about 2 MB/s per instance.
+// Building them per connection is issue #8's finding 4 and is still to do.
+// Frank knows; do not quietly change what the surface reads. RTA was withheld because the plug-in only computes what its SELECTED
 // VIEW needs, and we never set the view, so it sat on 0.0 = Overview.
 //
 // Property values are protobuf field 1, wire type 1 = little-endian double
@@ -803,19 +871,15 @@ std::vector<uint8_t> propFrame(const uint8_t obj[8], const std::vector<uint8_t>&
 // uses (`08 02 12 04 "Play"`). So: index 2 to press, index 1 to release, and
 // only the VALUE is sent — the label is the plug-in's own annotation, exactly as
 // the view property takes a bare double.
-static const uint8_t kObjResetPeakHolds[8] =
-    { 0x75, 0x64, 0x91, 0xf3, 0x6a, 0x84, 0xec, 0x3d };
-static const uint8_t kObjResetLoudness[8] =
-    { 0xfd, 0x86, 0x8c, 0xe4, 0xdd, 0xef, 0x81, 0x4f };
+constexpr uint8_t kObjResetPeakHolds[8] = SSL_ID("GlobalResetPeakHoldsAndOverloads");
+constexpr uint8_t kObjResetLoudness[8]  = SSL_ID("ResetLoudnessMeasurements");
 
-// The plug-in's own preset library. Same shape on every SSL plug-in (the ids are
-// name hashes), which is why the channel strips get this for free.
-//   5b8dee912da184cf  PresetList       an XML document of everything it can load
-//   c1b39cd2945eb9be  PresetSelection  the full path of what is loaded now
-static const uint8_t kObjPresetList[8] =
-    { 0x5b, 0x8d, 0xee, 0x91, 0x2d, 0xa1, 0x84, 0xcf };
-static const uint8_t kObjPresetSel[8] =
-    { 0xc1, 0xb3, 0x9c, 0xd2, 0x94, 0x5e, 0xb9, 0xbe };
+// The plug-in's own preset library. Same shape on every SSL plug-in, which is
+// why the channel strips get this for free.
+//   PresetList       an XML document of everything it can load
+//   PresetSelection  the full path of what is loaded now
+constexpr uint8_t kObjPresetList[8] = SSL_ID("PresetList");
+constexpr uint8_t kObjPresetSel[8]  = SSL_ID("PresetSelection");
 
 std::vector<uint8_t> subscribeInitial() {
     std::vector<uint8_t> out;
@@ -1968,10 +2032,8 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                 }
                             }
 
-                            static const uint8_t kHostTrackNameObj[8] =
-                                { 0xf0,0x63,0x0f,0x41,0xc7,0x66,0x7f,0x0c };
-                            static const uint8_t kHostTrackIndexObj[8] =
-                                { 0xcb,0x39,0xda,0x8c,0x9c,0x8c,0x43,0xee };
+                            constexpr uint8_t kHostTrackNameObj[8]  = SSL_ID("HostTrackName");
+                            constexpr uint8_t kHostTrackIndexObj[8] = SSL_ID("HostTrackIndex");
                             if (ftype == 18 && avail >= 10 &&
                                 g_namedClients.find(c) == g_namedClients.end()) {
                                 if (std::memcmp(pay, kHostTrackNameObj, 8) == 0 &&
