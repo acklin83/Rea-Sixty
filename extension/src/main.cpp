@@ -31258,6 +31258,19 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         valLine = uf1ValueLine(std::string("*") + nm, val);       // '*' = pinned marker
         const double nrm = TrackFX_GetParamNormalized(tr, spFx, spParam);
         barPos = std::clamp(static_cast<int>(std::lround(nrm * 100.0)), 0, 100);
+    } else if (g_uf1Flip.load()) {
+        // ⛔ UNDER FLIP THE KNOB RIDES VOLUME, and this line belongs to the knob.
+        // applyUf1AboveFaderVpot_ takes its FLIP branch AHEAD of the Extender's
+        // focused param, but this chain had no FLIP rung at all, so it fell
+        // through and printed the focused parameter — which the fader's own row
+        // right below was already showing. One fact on two rows, and neither of
+        // them what the knob was doing (Frank 2026-09-17). The UF8's value line
+        // has said "Vol" under FLIP all along.
+        valLine   = composeValueLine("Vol", formatDbReadout(volLin));
+        barPos    = std::clamp(static_cast<int>(std::lround(
+                        double(uf1VolToPos_(volLin)) / double(kUf1FaderMax) * 100.0)),
+                        0, 100);
+        barCentre = 0x00;
     } else if (int efx = -1, eprm = -1; uf1ExtenderFocusedParam_(tr, &efx, &eprm)) {
         // The knob drives the focused parameter here, so the line names it.
         // Without this the ninth strip said Pan while the eight beside it named
@@ -34293,9 +34306,27 @@ void uf1PaintChannel_()
     MediaTrack* flipParamTr = nullptr;
     int  flipParamFx = -1, flipParam = -1;
     const bool flipParamFader =
-        flip && !sendFader && !extRouteActive && !stickyFader
-        && ftr == tr && g_uf1ChannelSubMode.load() == 0 && !meterView
+        flip && !sendFader && !extRouteActive && !stickyFader && !meterView
         && [&] {
+            // ⛔ AS THE EXTENDER, THE FOCUSED PARAMETER. Everything else on the
+            // ninth strip already follows it — the knob, the value line, the bar
+            // — so the FLIP fader following the last UF1 pot instead left one
+            // strip with two ideas of "the parameter", and it did not move when
+            // the parameter became active on the UF8 or in the plug-in window
+            // (Frank 2026-09-17). Same resolver the knob uses, and it resolves
+            // on the FADER side's track, so the panel-halves rule still holds.
+            if (uf1ExtenderActive_() && ftr) {
+                int efx = -1, eprm = -1;
+                if (uf1ExtenderFocusedParam_(ftr, &efx, &eprm)) {
+                    flipParamTr = ftr; flipParamFx = efx; flipParam = eprm;
+                    return true;
+                }
+                return false;
+            }
+            // UF1 alone: no bank beside it and no shared focus to follow, so the
+            // pot you last reached for is the only signal there is (forum
+            // 2026-08-25). ⛔ Both halves the same track, as ever.
+            if (ftr != tr || g_uf1ChannelSubMode.load() != 0) return false;
             MediaTrack* pt = nullptr; int pfx = -1;
             const int pType = uf1ResolveCsFx_(tr, pt, pfx);
             if (pType < 0 || !pt) return false;
