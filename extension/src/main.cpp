@@ -19227,13 +19227,37 @@ void uf1EmitMeterInstanceLabel_(bool force = true)
 void uf1EmitMeterScaleSelector_(MediaTrack* tr, int fx, int screen)
 {
     if (!g_uf1_dev || !tr || fx < 0) return;
+    // Order: Non-Linear, Non-Linear 2x, Linear, Linear 2x, K-20, K-14, K-12.
     static const uint8_t kDigitalTypeSel[7] = {0x07,0x08,0x03,0x04,0x0e,0x0c,0x0a};
-    static const uint8_t kAnalogueModeSel[2] = {0x02,0x04};
+    static const uint8_t kAnalogueModeSel[2] = {0x02,0x04};   // VU, PPM
+    // ⛔ EVERY SCALE HAS A MONO TWIN, AND WE ONLY EVER SENT THE STEREO ONE, so
+    // a mono track got a two-channel faceplate. SSL picks the mono entry when
+    // the stream it is drawing carries one value instead of two, and the
+    // plug-in states that count in its prepare message (field 6) — which is
+    // readable since 853d37c, and is the reason this can be built at all.
+    // ⚠ THE MONO BYTE VALUES ARE sollapse's, NOT MEASURED HERE. Issue #8
+    // tags finding 8 unverified, and we have no capture of SSL 360 driving a
+    // UF1 from a mono Meter. The STEREO column of that same table is our own
+    // code line for line, which is why the mono column is worth trusting far
+    // enough to send: the case it changes is one we get wrong today anyway.
+    static const uint8_t kDigitalTypeSelMono[7] = {0x05,0x06,0x01,0x02,0x0d,0x0b,0x09};
+    static const uint8_t kAnalogueModeSelMono[2] = {0x01,0x03};
     static int     sLastScreen = -1;
     static uint8_t sLastSel     = 0xFF;
+    // Which stream the faceplate is drawing decides how many channels it has:
+    // the bar meters on the Overview, VuPpm on the Analogue screen.
+    auto streamIsMono = [](int dt) {
+        sslcore::MeterInfo mi;
+        return sslcore::isRunning() && sslcore::getMeterInfo(dt, mi)
+            && mi.values > 0 && mi.values != 2;
+    };
     int param = -1, n = 0; const uint8_t* map = nullptr;
-    if      (screen == 0) { param = 6; map = kDigitalTypeSel;  n = 7; }  // Overview: Digital Type
-    else if (screen == 1) { param = 8; map = kAnalogueModeSel; n = 2; }  // Analogue: VU/PPM
+    if      (screen == 0) { param = 6; n = 7;                            // Overview: Digital Type
+              map = streamIsMono(int(sslmeter::DataType::BarPeak))
+                  ? kDigitalTypeSelMono : kDigitalTypeSel; }
+    else if (screen == 1) { param = 8; n = 2;                            // Analogue: VU/PPM
+              map = streamIsMono(int(sslmeter::DataType::VuPpm))
+                  ? kAnalogueModeSelMono : kAnalogueModeSel; }
     else { sLastScreen = screen; sLastSel = 0xFF; return; }              // RTA/Loudness: data-driven
     const int lsel = uf1MeterParam_(tr, fx, param);
     if (lsel < 0) return;
