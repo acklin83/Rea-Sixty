@@ -260,6 +260,15 @@ struct Instance {
     // would need the control-socket object announcement instead (flagged in the
     // loudness memory). The UDP-DataType route is what's wired here.
     bool      isPro  = false;
+    // ⛔ WHAT THE PLUG-IN SAID IT IS, not what we inferred from its streams.
+    // -1 until its hello has been read. sslmeter::PluginType values.
+    int       pluginType = -1;
+    // ⛔ AND WHETHER ITS CONNECTION IS STILL OPEN. Instance existence used to
+    // mean "it streamed within the last three seconds", which is circular the
+    // moment anything decides who streams: select one Meter and the others fall
+    // out of the very list you would use to select them (819af79, reverted).
+    // The connection knows who it is whether or not it is sending.
+    bool      connected = false;
     long long lastMs = 0;
     // Last time this instance carried actual SIGNAL (any level meter above the
     // silence floor). With several Meter instances loaded, the silent ones
@@ -461,8 +470,25 @@ uint64_t                         g_portSeqNext = 0;
 // CompGain/GateGain carry exactly ONE value where the Meter plug-in's
 // TextPeak/TextRms carry two (L,R) — measured, and only used while still
 // unclassified, so a late DataType>=7 still wins.
+// What the plug-in stated in its type-4 hello, field 1. MEASURED (2026-09-17,
+// 38 hellos across one project): 2 Native Bus Comp 1.9.6, 3 4K B 1.10.2,
+// 4 SSL Meter 1.6.6, 5 4K E 1.7.1, 8 Meter Pro 1.3.7, 9 4K G 1.3.1 — one
+// version per type, and type 8 reports exactly the Meter Pro build SSL 360
+// 2.1.12 ships, which pins the table independently of the issue that named it.
+// Authoritative: it arrives before any data and it cannot be wrong the way a
+// width heuristic can. Issue #8, finding 5.
+void classifyFromHello_(Instance& in, int pluginType)
+{
+    in.pluginType = pluginType;
+    using PT = sslmeter::PluginType;
+    if (pluginType == int(PT::MeterPro)) { in.kind = Kind::Meter; in.isPro = true; }
+    else if (pluginType == int(PT::Meter)) in.kind = Kind::Meter;
+    else if (pluginType > 0)               in.kind = Kind::ChannelStrip;
+}
+
 void classify_(Instance& in, int dataType, size_t nvals)
 {
+    if (in.pluginType >= 0) return;   // the hello already said so
     // Any Loudness DataType marks a Meter PRO (plain Meter never streams these).
     if (dataType >= int(sslmeter::DataType::LoudMomentary)) in.isPro = true;
     if (dataType >= 7) { in.kind = Kind::Meter; return; }
@@ -1155,6 +1181,14 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                 g_portFp.erase(it->second);   // stale settings help nobody
                 g_portMf.erase(it->second);
                 g_portEq.erase(it->second);
+                // ⛔ AND THE INSTANCE STOPS BEING CONNECTED — HERE, while the
+                // mapping still exists. Doing it after the erase below would
+                // never fire, and an instance that stayed "connected" for ever
+                // would sit in the meter list long after its plug-in was gone.
+                // It keeps its last values; it just stops being alive by virtue
+                // of a socket that is not there.
+                if (auto itI = g_inst.find(it->second); itI != g_inst.end())
+                    itI->second.connected = false;
                 g_connPort.erase(it);
             }
             g_clientFp.erase(c);
@@ -1703,6 +1737,14 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                         dataFds.push_back(udp);
                         dataPorts.push_back(udpPort);
                         dataFdConn[udp] = c;
+                        // ⛔ THE PORT IS KNOWN HERE, SO SAY SO HERE. It used to be
+                        // recorded only when the first datagram arrived, which
+                        // made even the conn-to-port mapping depend on the
+                        // plug-in streaming. Only for a REAL dedicated port: on
+                        // a failed ephemeral bind several connections share the
+                        // fallback and the mapping would be a lie.
+                        std::lock_guard<std::mutex> lk(g_meterMx);
+                        g_connPort[c] = udpPort;
                     }
                     auto seq = openingSequence(udpPort, connId);
                     sendTo(c, seq);
@@ -1742,6 +1784,35 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             const uint8_t* pay = body + 20;
                             const size_t   avail = (flen > 20) ? size_t(flen - 20) : 0;
                             if (g_sslProbe) probeTcpFrame_(int(c), ftype, pay, avail);
+                            // ── The plug-in's HELLO says what it is ────────────
+                            // Type 4, field 1, the very first frame it sends.
+                            // Until now this was binned unread and the kind was
+                            // inferred from stream WIDTHS after data arrived —
+                            // the route that once left the Pro among a row of
+                            // Meters not counting as one. Reading it also lets
+                            // an instance exist before it has streamed a byte,
+                            // which is what the selection work needs.
+                            if (ftype == 4 && avail >= 8) {
+                                int ptype = -1;
+                                pbWalk_(pay + 8, avail - 8,
+                                    [&](uint32_t f, uint32_t w,
+                                        const uint8_t* v, size_t) {
+                                        if (f == 1 && w == 0) ptype = int(v[0] & 0x7f);
+                                    });
+                                if (ptype > 0 && ptype <= 12) {
+                                    std::lock_guard<std::mutex> lk(g_meterMx);
+                                    auto itP = g_connPort.find(c);
+                                    if (itP != g_connPort.end()) {
+                                        Instance& in = g_inst[itP->second];
+                                        classifyFromHello_(in, ptype);
+                                        in.connected = true;
+                                        if (g_portSeq.find(itP->second) == g_portSeq.end())
+                                            g_portSeq[itP->second] = g_portSeqNext++;
+                                    }
+                                }
+                                if (g_trace)
+                                    slog("[%.1f] hello fd=%d pluginType=%d", t, int(c), ptype);
+                            }
                             // ── What the plug-in SAYS this stream is ────────
                             // A prepare (type 17) introduces one meter stream:
                             // legend, unit, value count, overload mode. We have
@@ -2282,10 +2353,17 @@ static int meterOrderGroup_(uint16_t port)
 // counted and the UF1 showed "1/3" for two real meters (Frank, 2026-07-22).
 // Caller holds g_meterMx.
 static std::vector<uint16_t> aliveMeterPorts_() {
+    // ⛔ CONNECTED COUNTS, NOT ONLY STREAMING. "Alive" used to mean nothing but
+    // "sent something in the last three seconds", so an instance that goes quiet
+    // disappears from the list — and anything that decides WHO streams then
+    // erases its own alternatives (819af79, reverted for exactly that). A live
+    // TCP connection is the honest signal; the three-second window stays for
+    // instances we know only from their data.
     const long long cutoff = nowMs() - 3000;
     std::vector<uint16_t> out;
     for (const auto& kv : g_inst)
-        if (kv.second.kind == Kind::Meter && kv.second.lastMs >= cutoff)
+        if (kv.second.kind == Kind::Meter
+            && (kv.second.connected || kv.second.lastMs >= cutoff))
             out.push_back(kv.first);
     // Order by the plug-in's HostTrackIndex so V-Pot1 cycles in TRACK order, not
     // by the arbitrary UDP source-port number (that was "content right, ORDER
