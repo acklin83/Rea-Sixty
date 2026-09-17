@@ -16614,6 +16614,13 @@ bool        g_hudGeomPublished = false;
 // last-seen "hud_uf8_tab" flag; g_hudUf8AutoEngaged marks our own engage.
 bool        g_hudUf8TabActive   = false;
 bool        g_hudUf8AutoEngaged = false;
+// ⛔ THE PLUG-IN KEY STILL WINS over the auto-engage: set when the user left
+// the mode by hand while our reason still stood, so the next tick does not drag
+// them back in. Cleared when the reason itself goes away.
+bool        g_hudUf8AutoOverride  = false;
+// Our own engage/release is not a mode change the user made — mute the one
+// banner it would otherwise fire. Consumed by the change it describes.
+bool        g_hudUf8AutoBannerMute = false;
 
 // Build the HUD's LCD line ("seg;line1;line2;line3") for the focused track:
 // 7-seg = track number, line2 = track name, line3 = stereo/mono. The companion
@@ -42523,7 +42530,20 @@ void onTimerBody_()
                                        + (fdw ? "Walk items" : "Aim fades")); mbFadeWalk = fdw; }
             // UF8/UC1: SSL Strip Mode + the UF8 Plugin Mode it is mutex'd with.
             if (u8s != mbUf8Strip)  { chg.push_back(std::string("UF8 Strip \xE2\x80\xA2 ") + onOff(u8s)); mbUf8Strip = u8s; }
-            if (u8p != mbUf8Plugin) { chg.push_back(std::string("UF8 Plugin \xE2\x80\xA2 ") + onOff(u8p)); mbUf8Plugin = u8p; }
+            if (u8p != mbUf8Plugin) {
+                // ⛔ NOT WHEN WE ENGAGED IT OURSELVES. Turning Touch-to-Learn
+                // on drags Plug-in Mode along one tick later, and that second
+                // banner replaced the first: the user pressed Touch to Learn and
+                // the screen said "UF8 Plugin" (Frank 2026-09-17: "Touch to Learn
+                // wird im Banner nicht angezeigt weil UF8 Plugin erscheint").
+                // The mode the user asked for is the one worth naming; the mode
+                // it brought with it is not a change they made. A press of the
+                // PLUG-IN key is, and still announces itself.
+                if (!g_hudUf8AutoBannerMute)
+                    chg.push_back(std::string("UF8 Plugin \xE2\x80\xA2 ") + onOff(u8p));
+                g_hudUf8AutoBannerMute = false;
+                mbUf8Plugin = u8p;
+            }
             if (tch != mbTouch) { chg.push_back(std::string("Touch to Learn \xE2\x80\xA2 ") + onOff(tch)); mbTouch = tch; }
             // The UF8 soft-key bank. Last in the chain on purpose: a bank switch
             // often rides along with something else (engaging a Quick moves both),
@@ -42771,14 +42791,34 @@ void onTimerBody_()
                 wantUf8Mode = (mMap != nullptr)
                            || hudCursorUnlearnedFx_(vTr, vFx);
             }
+            // ⛔ AND THE PLUG-IN KEY STILL GETS THE USER OUT. This runs every
+            // tick, so a mode we engaged and the user then left by hand came
+            // back on the very next one. While the reason was the HUD's UF8 tab
+            // that was survivable — a tab can be left by clicking. Touch-to-
+            // Learn is standalone and stands on its own, so from 5962cc7 there
+            // was no way out of Plug-in Mode at all short of turning Touch-to-
+            // Learn off, and nothing on screen said so (Frank 2026-09-17:
+            // "WIESO KOMM ICH NICHT MEHR AUS DEM UF8 PLUGIN MODE RAUS????").
+            // A manual exit therefore retires the auto-engage until the reason
+            // itself goes away and comes back — the same shape as "we only
+            // ever let go of what we engaged", read from the other end.
             if (wantUf8Mode) {
-                if (!g_uf8PluginMode.load()) {
-                    engageUf8PluginMode_(false);
-                    g_hudUf8AutoEngaged = true;
+                if (g_hudUf8AutoEngaged && !g_uf8PluginMode.load()) {
+                    g_hudUf8AutoEngaged  = false;
+                    g_hudUf8AutoOverride = true;
                 }
-            } else if (g_hudUf8AutoEngaged) {
-                disengageUf8PluginMode_();   // no-op if already off
-                g_hudUf8AutoEngaged = false;
+                if (!g_uf8PluginMode.load() && !g_hudUf8AutoOverride) {
+                    engageUf8PluginMode_(false);
+                    g_hudUf8AutoEngaged      = true;
+                    g_hudUf8AutoBannerMute   = true;
+                }
+            } else {
+                if (g_hudUf8AutoEngaged) {
+                    disengageUf8PluginMode_();   // no-op if already off
+                    g_hudUf8AutoBannerMute = true;
+                }
+                g_hudUf8AutoEngaged  = false;
+                g_hudUf8AutoOverride = false;    // a fresh reason may engage again
             }
             g_hudUf8TabActive = uf8Tab;
         }
@@ -43944,9 +43984,11 @@ void onTimerBody_()
             // …and revert the UF8 Plugin Mode we auto-engaged for its tab, so
             // the surface doesn't stay parked there unexpectedly.
             disengageUf8PluginMode_();
-            g_hudUf8AutoEngaged = false;
-            g_hudUf8TabActive   = false;
+            g_hudUf8AutoEngaged    = false;
+            g_hudUf8TabActive      = false;
+            g_hudUf8AutoBannerMute = true;
         }
+        g_hudUf8AutoOverride = false;
     }
 
     // Mid-session stale-handle recovery. Triggered when a device's
