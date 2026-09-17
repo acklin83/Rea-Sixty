@@ -28541,6 +28541,7 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     // HMFf HMFq LMFg LMFf LMFq LFf LFg LFt HPF LPF EQIn.
     static int ix[15];
     static std::array<uint8_t, 251> sLast{};
+    static uint8_t sLastTail = 0;    // the tail point is part of the curve now
     static bool sHave = false;
     // ⛔ A REOPENED DEVICE IS A BLANK DEVICE. sLast/sHave are "what the UF1 is
     // already showing", and every send below is change-gated against them. They
@@ -28714,6 +28715,16 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     }
 
     std::array<uint8_t, 251> col{};
+    // ⛔ THE COMPANION FRAME IS THE CURVE'S LAST POINT, NOT A REFRESH MARKER.
+    // SSL pairs every graph frame with a short "01 <val>" to the same element
+    // (cap73: 260 FD and 260 short, 1:1), and 0x0122 is chunked by a leading
+    // index — so the short frame is chunk 1, carrying point 250. We sent a
+    // constant 0x64, and 0x64 is 100, which is exactly 0 dB on dbToH's scale.
+    // Every curve that is not flat at 20 kHz — a low-pass, a high shelf —
+    // therefore ended in a step at the right edge. The 249 columns now cover
+    // points 0..248 of a 250-point grid and this carries the last one.
+    // Reported by sollapse in issue #8, finding 11.
+    uint8_t eqTail = 0x64;
     auto dbToH = [](double db) {
         if (!std::isfinite(db)) db = 0.0;        // NaN would be UB in the cast below
         double h = 100.0 + db * 5.44;            // cap73: 0 dB = 100, +16 dB ≈ 187
@@ -28814,8 +28825,8 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
             const double aMax = (wMax > aMin)  ? double(wMax) : 20000.0;
             const double lMin = std::log(aMin), lSpan = std::log(aMax) - lMin;
             const int    n    = static_cast<int>(wire.size());
-            for (int x = 2; x < 251; ++x) {
-                const double frac = (x - 2) / 248.0;
+            for (int x = 2; x < 252; ++x) {          // 251 = the tail point
+                const double frac = (x - 2) / 249.0;
                 const double f    = 20.0 * std::pow(1000.0, frac);   // our columns
                 double pos = (lSpan > 0.0)
                     ? (std::log(f) - lMin) / lSpan * (n - 1)
@@ -28825,14 +28836,15 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
                 const int    i0 = static_cast<int>(pos);
                 const int    i1 = (i0 + 1 < n) ? i0 + 1 : i0;
                 const double fr = pos - i0;
-                col[x] = dbToH(wire[i0] * (1.0 - fr) + wire[i1] * fr);
+                const uint8_t h = dbToH(wire[i0] * (1.0 - fr) + wire[i1] * fr);
+                if (x < 251) col[x] = h; else eqTail = h;
             }
             col[0] = 0x00; col[1] = 0x01;
             // Same change-gate and same two-frame send as the parametric path
             // below — one way to put columns on the device, not two.
-            if (sHave && !force && col == sLast) return;
-            sLast = col; sHave = true;
-            const std::array<uint8_t, 2> eqRefreshW{0x01, 0x64};
+            if (sHave && !force && col == sLast && eqTail == sLastTail) return;
+            sLast = col; sLastTail = eqTail; sHave = true;
+            const std::array<uint8_t, 2> eqRefreshW{0x01, eqTail};
             g_uf1_dev->send(uf1::buildScreen(0x0122, eqRefreshW));
             g_uf1_dev->send(uf1::buildScreen(0x0122,
                 std::span<const uint8_t>(col.data(), col.size())));
@@ -28879,8 +28891,8 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         if (lpF < 1000.0 || lpF > 30000.0) lpF = 20000.0;   // off (≥19000 rail)
         // Columns live at payload indices 2..250 (249 columns); 0..1 = the
         // "00 01" format header below.
-        for (int x = 2; x < 251; ++x) {
-            const double frac = (x - 2) / 248.0;
+        for (int x = 2; x < 252; ++x) {              // 251 = the tail point
+            const double frac = (x - 2) / 249.0;
             const double f = 20.0 * std::pow(1000.0, frac);   // 20 Hz .. 20 kHz, log
             double db = 0.0;
             db += uf1PeakDb_(f, hmF, hmG, hmQ);
@@ -28889,7 +28901,8 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
             db += lfBell ? uf1PeakDb_(f, lfF, lfG, 0.7) : uf1LowShelfDb_(f, lfF, lfG);
             db += uf1HpfDb_(f, hpF);
             db += uf1LpfDb_(f, lpF);
-            col[x] = dbToH(db);
+            const uint8_t h = dbToH(db);
+            if (x < 251) col[x] = h; else eqTail = h;
         }
     }
     // FD payload format (cap73, byte-exact): "00 01" header marker, then 249
@@ -28898,15 +28911,15 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     col[0] = 0x00;
     col[1] = 0x01;
 
-    if (sHave && !force && col == sLast) return;
-    sLast = col; sHave = true;
+    if (sHave && !force && col == sLast && eqTail == sLastTail) return;
+    sLast = col; sLastTail = eqTail; sHave = true;
     // SSL 360 pairs EVERY full FD graph frame with a short "01 <val>" companion
     // to element 0x0122, always SHORT-then-FD (cap73: 260 FD / 260 short, 1:1).
     // We were sending only the FD frame, so the device never refreshed the graph
     // region (it showed the layout's flat baseline and ignored our curves). Send
     // the companion first. val tracks ~0x64 in cap73 (a 0 dB cursor/refresh
     // marker); 0x64 = neutral. Exact val semantics refinable.
-    const std::array<uint8_t, 2> eqRefresh{0x01, 0x64};
+    const std::array<uint8_t, 2> eqRefresh{0x01, eqTail};
     g_uf1_dev->send(uf1::buildScreen(0x0122, eqRefresh));
     g_uf1_dev->send(uf1::buildScreen(0x0122,
         std::span<const uint8_t>(col.data(), col.size())));
