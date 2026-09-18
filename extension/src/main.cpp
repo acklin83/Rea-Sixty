@@ -31727,17 +31727,42 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         // that steps it also record what the eye sees. One pass, self-labelling,
         // nothing to count or remember — which is the failure mode of a probe
         // that shows sixteen colours in a row for three seconds each.
-        const int swatch = g_paletteSwatch.load();
+        // ⛔ THE PROBE STEPS ITSELF. The first version let a Lua script hold a
+        // modal dialog open per index, and a modal dialog stops REAPER's main
+        // thread — so our timer never ran, the index was never painted, and the
+        // bar stayed black whatever the script had set. Frank saw nothing twice.
+        // Nothing here may depend on a script being between two dialogs.
+        int swatch = g_paletteSwatch.load();
+        if (swatch == 99) {          // 99 = walk 1..15 on our own clock
+            static long long sNext = 0;
+            static int       sIdx  = 1;
+            const long long nowMs = nowMs_();
+            if (sNext == 0) { sNext = nowMs + 4000; sIdx = 1; }
+            else if (nowMs >= sNext) { sNext = nowMs + 4000; if (++sIdx > 15) sIdx = 1; }
+            swatch = sIdx;
+        }
         const std::array<uint8_t, 1> barIdx{
             (swatch >= 0) ? uint8_t(swatch) : uf8::quantize(rgb)};   // BAR = TRACK colour (always)
         // ⚠ THE SWATCH PROBE PAINTS IN EVERY VIEW. Otherwise it answers only
         // for someone who already stands in the channel view, and the first
         // question it got was "where do I see the colours?" — from the Meter
         // screen, where this gate had swallowed it silently.
-        if (!meterView || swatch >= 0)
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
-        if (!meterView)
+        // ⛔ AND kChActive GOES WITH IT. The header says so in one line — it is
+        // the "channel populated" flag and it GATES the colour bar. Sending the
+        // colour without it paints nothing, which is the other half of why the
+        // probe showed a black strip.
+        if (!meterView || swatch >= 0) {
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive, active));
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
+        }
+        // Self-labelling: the index sits in the channel name, right beside the
+        // colour, so nothing has to be counted or remembered and no dialog has
+        // to be open for it to be readable.
+        if (swatch >= 0) {
+            char idxTxt[12];
+            std::snprintf(idxTxt, sizeof(idxTxt), "IDX %02X", swatch);
+            sendZoneText(uf1::scr::kTrackName, idxTxt);
+        }
     }
 
     // Solo / Cut button LEDs (cap64/cap65 ground truth). The scheme is the UF8's
