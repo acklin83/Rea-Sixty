@@ -63,7 +63,6 @@ local function num(key, dflt)
   local v = tonumber(reaper.GetExtState(SECT, key))
   return v or dflt
 end
-local function oneLine() return reaper.GetExtState(SECT, "focused_panel_oneline") == "1" end
 
 -- British/American spelling — mirrors the composite panel's sp() (ExtState
 -- "ui_spelling": "1" = American "color", else British "colour").
@@ -342,6 +341,8 @@ local restore_x, restore_y, restore_w, restore_h = loadRect()
 local first_frame = true
 local last_save_x, last_save_y, last_save_w, last_save_h
 local g_contentW, g_contentH               -- last measured content size (centering)
+local g_rowW     = {}   -- per-row measured width, keyed by the row's block ids
+local g_rowTrace = {}   -- "ids=width" per row, this frame, for the tracer
 local mb_text, mb_seq, mb_until = "", nil, 0   -- in-panel mode-change flash state
 
 -- Dock state. ReaImGui dock id: 0 = floating, <0 = a REAPER docker cell. We
@@ -617,7 +618,33 @@ end
 -- default; a block flagged "new line" starts a fresh row. Arrange mode shows a
 -- drag grip per block so the order can be rearranged by dragging. Frank 2026-06-27.
 ------------------------------------------------------------------------
-local BLOCK_IDS = { "params", "fav", "mode", "uf1enc", "jog", "u8bank", "cycle", "buttons" }
+local BLOCK_IDS = { "cs", "bc", "fav", "mode", "uf1enc", "jog", "u8bank", "cycle", "buttons" }
+
+-- One-shot migration off the old "oneline" mode.
+--
+-- There used to be two ways to start a new row, on two different levels: the
+-- per-block ↵ break (between blocks) and "oneline" (inside the params block,
+-- between CS and BC). Two switches, two places, one idea. CS and BC are now
+-- ordinary blocks, so "two lines" is just a break before `bc` — the same
+-- gesture as everywhere else. Runs once, then the old keys are never read.
+local function migrateOneLine()
+  if reaper.GetExtState(SECT, "focused_panel_rowmigrated") == "1" then return end
+  local order  = reaper.GetExtState(SECT, "focused_panel_order")
+  local breaks = reaper.GetExtState(SECT, "focused_panel_breaks")
+  -- "params" held CS and BC together and kept its place in the order.
+  if order ~= "" and order:find("params", 1, true) then
+    reaper.SetExtState(SECT, "focused_panel_order",
+                       (order:gsub("params", "cs,bc")), true)
+  end
+  -- oneline off (or unset, which used to mean two lines) → break before BC.
+  if reaper.GetExtState(SECT, "focused_panel_oneline") ~= "1"
+     and not breaks:find("bc", 1, true) then
+    reaper.SetExtState(SECT, "focused_panel_breaks",
+                       breaks == "" and "bc" or (breaks .. ",bc"), true)
+  end
+  reaper.SetExtState(SECT, "focused_panel_rowmigrated", "1", true)
+end
+migrateOneLine()
 local has_dnd = reaper.APIExists("ImGui_BeginDragDropSource")
   and reaper.APIExists("ImGui_AcceptDragDropPayload")
 
@@ -740,17 +767,21 @@ local function drawContent()
     end
   end
 
-  -- Params block: the CS/BC segments (oneLine controls their internal stacking;
-  -- the segments can be hidden entirely so someone may want only fav controls).
-  local function drawParams()
+  -- CS and BC are ordinary blocks now, each on its own. Whether they share a row
+  -- is the same ↵-break question as for every other block, so "one line / two
+  -- lines" stopped being a mode of its own (see migrateOneLine).
+  local showParams = reaper.GetExtState(SECT, "focused_panel_params") ~= "0"
+  local function drawCs()
     segment("CS", csRgb(), csName, csPN, csPV, csTrk, csTrkCol, ftr, csOpenIdx)
-    if oneLine() then reaper.ImGui_SameLine(ctx, 0, font_px) end
+  end
+  local function drawBc()
     segment("BC", bcRgb(), bcName, bcPN, bcPV, bcTrk, bcTrkCol, btr, bcOpenIdx)
   end
 
   -- Block registry: id → render fn + whether it shows this frame.
   local blocks = {
-    params  = { draw = drawParams,        show = reaper.GetExtState(SECT, "focused_panel_params") ~= "0" },
+    cs      = { draw = drawCs,            show = showParams },
+    bc      = { draw = drawBc,            show = showParams },
     fav     = { draw = drawFav,           show = anyFav },
     mode    = { draw = drawModeIndicator, show = reaper.GetExtState(SECT, "focused_panel_mode")    == "1" },
     uf1enc  = { draw = drawUf1Enc,        show = reaper.GetExtState(SECT, "focused_panel_uf1enc")  == "1" },
@@ -760,24 +791,63 @@ local function drawContent()
     buttons = { draw = drawButtons,       show = reaper.GetExtState(SECT, "focused_panel_buttons") == "1" },
   }
 
-  -- Transient mode-change flash sits above the flow (not reorderable).
+  -- Transient mode-change flash sits above the flow (not reorderable). It is a
+  -- row like any other as far as placement goes, so it centres with the rest —
+  -- a banner pinned left over centred rows is the thing "centre everything"
+  -- means to stop seeing.
   pollModeBanner()
   if reaper.GetExtState(SECT, "focused_panel_banner") == "1"
      and reaper.time_precise() < mb_until and mb_text ~= "" then
+    local bw = reaper.ImGui_CalcTextSize(ctx, mb_text)
+    local aw = reaper.ImGui_GetContentRegionAvail(ctx)
+    local bx = reaper.ImGui_GetCursorPosX(ctx)
+    if reaper.GetExtState(SECT, "focused_panel_center_h") == "1" and bw < aw then
+      reaper.ImGui_SetCursorPosX(ctx, bx + math.floor((aw - bw) * 0.5))
+    end
     reaper.ImGui_TextColored(ctx, rgba(0x70E0A0), mb_text)
   end
 
-  -- Flow blocks in the saved order: inline (one row) unless flagged new-line.
-  -- Arrange mode adds a per-block drag grip + a new-line toggle, and disables the
-  -- block content so dragging never trips a button/click.
+  -- ROWS ARE A REAL THING. The ordered blocks are partitioned at the breaks
+  -- BEFORE anything is drawn, so each row can be measured and placed on its own.
+  --
+  -- ⛔ This replaces a single centering offset for the whole block of rows, which
+  -- is why "centre horizontally" looked like it did nothing: the offset came from
+  -- ONE width — the widest row's — so only that row ever sat in the middle and
+  -- every other row hung off its left edge. It is also where the wobble came
+  -- from: one shared width means any content anywhere changing width moved EVERY
+  -- row by half the difference. One row breathing, six rows twitching. Per-row
+  -- placement makes a row move only for its own content. Frank 2026-09-18.
   local arrange = has_dnd and reaper.GetExtState(SECT, "focused_panel_arrange") == "1"
   local order   = parseOrder()
   local brk     = breakSet()
-  local first   = true
+
+  local rows, cur = {}, nil
   for _, id in ipairs(order) do
     local b = blocks[id]
     if b and b.show then
-      if not first and not brk[id] then reaper.ImGui_SameLine(ctx, 0, font_px) end
+      if cur == nil or brk[id] then cur = {}; rows[#rows + 1] = cur end
+      cur[#cur + 1] = id
+    end
+  end
+
+  local centerH = reaper.GetExtState(SECT, "focused_panel_center_h") == "1"
+  local availW  = reaper.ImGui_GetContentRegionAvail(ctx)
+  local baseX   = reaper.ImGui_GetCursorPosX(ctx)
+  g_rowTrace    = {}
+
+  for _, row in ipairs(rows) do
+    -- Keyed by the row's own blocks, not by its index: reordering then keeps
+    -- each row's measurement instead of handing it the neighbour's.
+    local key = table.concat(row, ",")
+    local rw  = g_rowW[key]
+    if centerH and rw and rw < availW then
+      -- floor: a fractional origin makes text shimmer on every redraw.
+      reaper.ImGui_SetCursorPosX(ctx, baseX + math.floor((availW - rw) * 0.5))
+    end
+    reaper.ImGui_BeginGroup(ctx)
+    for bi, id in ipairs(row) do
+      local b = blocks[id]
+      if bi > 1 then reaper.ImGui_SameLine(ctx, 0, font_px) end
       reaper.ImGui_PushID(ctx, id)
       if arrange then
         reaper.ImGui_Button(ctx, "\xE2\xA0\xBF")        -- ⠿ drag grip
@@ -792,9 +862,17 @@ local function drawContent()
           reaper.ImGui_EndDragDropTarget(ctx)
         end
         reaper.ImGui_SameLine(ctx, 0, 2)
-        -- ↵ = breaks to a new line before this block; → = stays inline.
-        if reaper.ImGui_Button(ctx, brk[id] and "\xE2\x86\xB5" or "\xE2\x86\x92") then
-          toggleBreak(id)
+        -- Ticked = this block starts a new row.
+        --
+        -- ⛔ A CHECKBOX, not a glyph. This was "↵" and "→", and U+21B5 is not in
+        -- the panel font, so half the column rendered as "?" (Frank, 2026-09-18).
+        -- A checkbox is drawn from primitives — there is no glyph to be missing,
+        -- at any font, any size — and ticked/unticked already means exactly what
+        -- this toggle means.
+        local rv = reaper.ImGui_Checkbox(ctx, "##nl", brk[id] and true or false)
+        if rv then toggleBreak(id) end
+        if reaper.ImGui_IsItemHovered(ctx) then
+          reaper.ImGui_SetTooltip(ctx, "Start a new row here")
         end
         reaper.ImGui_SameLine(ctx, 0, 6)
         reaper.ImGui_BeginDisabled(ctx)
@@ -804,8 +882,11 @@ local function drawContent()
         b.draw()
       end
       reaper.ImGui_PopID(ctx)
-      first = false
     end
+    reaper.ImGui_EndGroup(ctx)
+    local w = reaper.ImGui_GetItemRectSize(ctx)
+    g_rowW[key] = w
+    g_rowTrace[#g_rowTrace + 1] = string.format("%s=%.1f", key, w)
   end
 end
 
@@ -936,26 +1017,17 @@ local POPUP_ID = "##fp_ctx"
 local function drawContextMenu()
   if not reaper.ImGui_BeginPopup(ctx, POPUP_ID) then return end
 
-  local one = oneLine()
+  -- Layout = how it is arranged. Every show/hide toggle lives in Elements, one
+  -- menu, so nobody has to remember which of two places a switch was in
+  -- (Frank 2026-09-18: "die Elemente alle in EIN Untermenü").
   if reaper.ImGui_BeginMenu(ctx, "Layout") then
-    if reaper.ImGui_MenuItem(ctx, "Two lines (CS / BC)", nil, not one) then
-      reaper.SetExtState(SECT, "focused_panel_oneline", "0", true)
+    local ch = reaper.GetExtState(SECT, "focused_panel_center_h") == "1"
+    if reaper.ImGui_MenuItem(ctx, sp("Centre horizontally", "Center horizontally"), nil, ch) then
+      toggleKey("focused_panel_center_h", false)
     end
-    if reaper.ImGui_MenuItem(ctx, "One line", nil, one) then
-      reaper.SetExtState(SECT, "focused_panel_oneline", "1", true)
-    end
-    reaper.ImGui_Separator(ctx)
-    local showParams = reaper.GetExtState(SECT, "focused_panel_params") ~= "0"
-    if reaper.ImGui_MenuItem(ctx, "Show CS / BC parameters", nil, showParams) then
-      toggleKey("focused_panel_params", true)
-    end
-    local showMode = reaper.GetExtState(SECT, "focused_panel_fav_mode") == "1"
-    if reaper.ImGui_MenuItem(ctx, "Favourite: copy/own toggle", nil, showMode) then
-      toggleKey("focused_panel_fav_mode", false)
-    end
-    local showSet = reaper.GetExtState(SECT, "focused_panel_fav_set") == "1"
-    if reaper.ImGui_MenuItem(ctx, "Favourite: set picker", nil, showSet) then
-      toggleKey("focused_panel_fav_set", false)
+    local cv = reaper.GetExtState(SECT, "focused_panel_center_v") == "1"
+    if reaper.ImGui_MenuItem(ctx, sp("Centre vertically", "Center vertically"), nil, cv) then
+      toggleKey("focused_panel_center_v", false)
     end
     if has_dnd then
       reaper.ImGui_Separator(ctx)
@@ -963,15 +1035,12 @@ local function drawContextMenu()
       if reaper.ImGui_MenuItem(ctx, "Arrange elements (drag to reorder)", nil, arr) then
         toggleKey("focused_panel_arrange", false)
       end
+      reaper.ImGui_TextDisabled(ctx, "   tick an element to start a new row")
     end
     reaper.ImGui_EndMenu(ctx)
   end
 
   if reaper.ImGui_BeginMenu(ctx, "Track name") then
-    local showName = reaper.GetExtState(SECT, "focused_panel_trackname") ~= "0"
-    if reaper.ImGui_MenuItem(ctx, "Show track name", nil, showName) then
-      toggleKey("focused_panel_trackname", true)
-    end
     local useCol = reaper.GetExtState(SECT, "focused_panel_track_color") == "1"
     if reaper.ImGui_MenuItem(ctx, sp("Use track colour", "Use track color"), nil, useCol) then
       toggleKey("focused_panel_track_color", false)
@@ -1007,32 +1076,30 @@ local function drawContextMenu()
     reaper.ImGui_EndMenu(ctx)
   end
 
+  -- ONE menu for everything the panel can show. It used to be split between
+  -- here and Layout, so "is the favourite picker on?" was a guess about which
+  -- submenu it had been filed under.
   if reaper.ImGui_BeginMenu(ctx, "Elements") then
     local function item(label, key, def)
       local cur = reaper.GetExtState(SECT, key)
       local on = (cur == "") and def or (cur == "1")
       if reaper.ImGui_MenuItem(ctx, label, nil, on) then toggleKey(key, def) end
     end
+    item("CS / BC parameters",                    "focused_panel_params",     true)
+    item("Track name",                            "focused_panel_trackname",  true)
+    reaper.ImGui_Separator(ctx)
+    item("Favourite: copy/own toggle",            "focused_panel_fav_mode",   false)
+    item("Favourite: set picker",                 "focused_panel_fav_set",    false)
+    item("CS / BC cycle buttons",                 "focused_panel_cycle",      false)
+    reaper.ImGui_Separator(ctx)
     item("Mode indicator (Sel / Encoder)",        "focused_panel_mode",       false)
     item("UF1 encoder mode",                      "focused_panel_uf1enc",     false)
     item("UF1 jog mode",                          "focused_panel_jog",        false)
     item("UF8 soft-key bank name",                "focused_panel_u8bank",     false)
     item("Flash mode changes",                    "focused_panel_banner",     false)
+    reaper.ImGui_Separator(ctx)
     item("Settings + HUD buttons",                "focused_panel_buttons",    false)
-    item("CS / BC cycle buttons",                 "focused_panel_cycle",      false)
     item("Click plug-in name to open",            "focused_panel_open_click", true)
-    reaper.ImGui_EndMenu(ctx)
-  end
-
-  if reaper.ImGui_BeginMenu(ctx, "Align") then
-    local ch = reaper.GetExtState(SECT, "focused_panel_center_h") == "1"
-    if reaper.ImGui_MenuItem(ctx, "Centre horizontally", nil, ch) then
-      toggleKey("focused_panel_center_h", false)
-    end
-    local cv = reaper.GetExtState(SECT, "focused_panel_center_v") == "1"
-    if reaper.ImGui_MenuItem(ctx, "Centre vertically", nil, cv) then
-      toggleKey("focused_panel_center_v", false)
-    end
     reaper.ImGui_EndMenu(ctx)
   end
 
@@ -1072,9 +1139,13 @@ end
 -- reading the code cannot tell them apart. One run can. It logs only frames
 -- where something actually moved, so an idle panel writes nothing at all and a
 -- wobbling one writes a line per wobble.
+--
+-- Since rows became first-class it logs each ROW's width by name, which answers
+-- the question that is left: with the rows no longer sharing one offset, does
+-- any single row still change width on its own, and which.
 ------------------------------------------------------------------------
 local tr_file, tr_last = nil, nil
-local function fpTrace(availW, availH, sx, sy, gx, gy)
+local function fpTrace(availW, availH)
   if reaper.GetExtState(SECT, "focused_panel_trace") ~= "1" then
     if tr_file then tr_file:close(); tr_file, tr_last = nil, nil end
     return
@@ -1082,12 +1153,12 @@ local function fpTrace(availW, availH, sx, sy, gx, gy)
   if not tr_file then
     tr_file = io.open(reaper.GetResourcePath() .. "/rea_sixty_fp_trace.log", "w")
     if not tr_file then return end
-    tr_file:write("# t  availW availH contentW contentH curX curY groupScreenX groupScreenY\n")
+    tr_file:write("# t  avail  content  per-row widths (row = its block ids)\n")
   end
-  local line = string.format("%.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f",
+  local line = string.format("avail=%.1fx%.1f content=%.1fx%.1f rows[%s]",
                              availW or -1, availH or -1,
                              g_contentW or -1, g_contentH or -1,
-                             sx or -1, sy or -1, gx or -1, gy or -1)
+                             table.concat(g_rowTrace, " "))
   if line ~= tr_last then
     tr_last = line
     tr_file:write(string.format("%.3f %s\n", reaper.time_precise(), line))
@@ -1134,7 +1205,7 @@ local function loop()
       reaper.ImGui_SetNextWindowPos(ctx, restore_x, restore_y)
       reaper.ImGui_SetNextWindowSize(ctx, restore_w, restore_h)
     else
-      reaper.ImGui_SetNextWindowSize(ctx, 320, oneLine() and 40 or 64)
+      reaper.ImGui_SetNextWindowSize(ctx, 320, 64)
     end
     first_frame = false
   end
@@ -1164,20 +1235,18 @@ local function loop()
     -- in a group so GetItemRectSize yields its bounding box. Frank 2026-06-27.
     local availW, availH = reaper.ImGui_GetContentRegionAvail(ctx)
     local sx, sy = reaper.ImGui_GetCursorPos(ctx)
-    if reaper.GetExtState(SECT, "focused_panel_center_h") == "1"
-       and g_contentW and g_contentW < availW then
-      reaper.ImGui_SetCursorPosX(ctx, sx + (availW - g_contentW) * 0.5)
-    end
+    -- Horizontal centering lives per ROW now, in drawContent. Doing it here as
+    -- well would offset the rows twice.
     if reaper.GetExtState(SECT, "focused_panel_center_v") == "1"
        and g_contentH and g_contentH < availH then
-      reaper.ImGui_SetCursorPosY(ctx, sy + (availH - g_contentH) * 0.5)
+      -- floor for the same reason the row offset floors: whole pixels.
+      reaper.ImGui_SetCursorPosY(ctx, sy + math.floor((availH - g_contentH) * 0.5))
     end
-    local trace_x0, trace_y0 = reaper.ImGui_GetCursorScreenPos(ctx)
     reaper.ImGui_BeginGroup(ctx)
     drawContent()
     reaper.ImGui_EndGroup(ctx)
     g_contentW, g_contentH = reaper.ImGui_GetItemRectSize(ctx)
-    fpTrace(availW, availH, sx, sy, trace_x0, trace_y0)
+    fpTrace(availW, availH)
 
     -- Right-click anywhere in the window → context menu (whole-window hit area).
     if reaper.ImGui_IsWindowHovered(ctx)
