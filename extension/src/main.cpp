@@ -31730,10 +31730,14 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         const int swatch = g_paletteSwatch.load();
         const std::array<uint8_t, 1> barIdx{
             (swatch >= 0) ? uint8_t(swatch) : uf8::quantize(rgb)};   // BAR = TRACK colour (always)
-        if (!meterView) {   // the plane, not the LED: see the gate at the top
+        // ⚠ THE SWATCH PROBE PAINTS IN EVERY VIEW. Otherwise it answers only
+        // for someone who already stands in the channel view, and the first
+        // question it got was "where do I see the colours?" — from the Meter
+        // screen, where this gate had swallowed it silently.
+        if (!meterView || swatch >= 0)
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar, barIdx));
+        if (!meterView)
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive, active));
-        }
     }
 
     // Solo / Cut button LEDs (cap64/cap65 ground truth). The scheme is the UF8's
@@ -32175,7 +32179,11 @@ static void uf1PaintHue_()
         const uint8_t idx = (slot < 0)
             ? uint8_t(0) : uf8::quantize(hm.liveRgb24(slot));
         static uint8_t sBar = 0xFF;
-        if (force || idx != sBar) {
+        // ⚠ … and Hue mode does not fight it for the same bar. A `return` here
+        // would have skipped this function's V-Pots as well, which is not what
+        // "leave the bar alone" means.
+        if (g_paletteSwatch.load() >= 0) sBar = 0xFF;   // repaint once it ends
+        else if (force || idx != sBar) {
             sBar = idx;
             const uint8_t one = idx;
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar,
