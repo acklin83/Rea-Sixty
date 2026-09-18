@@ -51,15 +51,20 @@ WIDTH FQ · AUTO MKP · MKP OFST
   and contain none of the 32C's EQ/COMP/GATE section entries. The lists really
   are authored per strip, which is the whole reason for this capture.
 
-## ⚠ Bus Compressor 2 — not resolved by this capture
+## Bus Compressor 2 — no EXT FUNCS menu at all
 
-Frank, right after the run: *"BC2 hat keine EXT FUNCS."* What the wire shows
-from 106.3 s: the strip is selected, `PLUG-IN | COMP MIX` appears, the
-`EXTENDED FUNCTIONS` title appears at 109.0 s, and the window **never scrolls**
-before the menu closes at 111.1 s.
+Frank, at the device, twice: **BC2 has no EXT FUNCS menu.** That is the fact;
+the wire only looked ambiguous because I was reading it wrong.
 
-⛔ That is consistent with two different facts and does not choose between
-them: a list that is exactly two entries long, or a menu that was opened and
-not walked. The rolling window looks identical at "start of a long list" and at
-"whole short list". A second 20 s capture with one deliberate scroll attempt on
-BC2 decides it; until then, no BC2 table gets written.
+From 106.3 s the strip is selected and `PLUG-IN | COMP MIX` appears, with
+`EXTENDED FUNCTIONS` at 109.0 s. None of that is a menu: `EXTENDED FUNCTIONS`
+is the **key label**, printed 16 times across this capture including in the
+middle of the other four walks, and `PLUG-IN` / `COMP MIX` are what the UC1
+shows for the strip itself. A menu leaves a different trace — the rolling
+three-row window scrolling — and on BC2 it never does, because there is nothing
+to open.
+
+⛔ **The lesson:** "the window never scrolled" is not evidence of a short list,
+and it was not evidence of an unwalked one either. Only the person at the
+device could say which, and he had already said it. No BC2 table exists,
+because SSL wrote none.
