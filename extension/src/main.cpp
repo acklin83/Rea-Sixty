@@ -2264,6 +2264,15 @@ std::atomic<int>  g_uf1ExtenderSide{1};   // 1 = right (default), 0 = left
 // releasing the pin RESTORES the Extender to where it was (Frank 2026-08-05).
 // Session-only; the restore is symmetric with the force-off in tempSelsetToggleRecall_.
 std::atomic<bool> g_uf1ExtenderSuspendedByPin{false};
+// Set when the pin-parks logic above flips g_uf1Extender by itself, so the
+// mode-change banner can tell that apart from a key the user pressed. Mirrors
+// g_uf8ModeOursPending (Touch-to-Learn dragging Plug-in Mode along, 2026-09-17):
+// a scope change parks the extender, and its banner landed a tick later and
+// replaced the Focus Scope one the user had actually earned — Frank 2026-09-18
+// "focus set scope und die extender meldung nehmen sich die anzeige weg".
+// The state is still synced either way; only the announcement is dropped, or
+// the next real toggle would go unnamed.
+bool              g_uf1ExtenderOursPending = false;
 // FLIP is suspended for the duration of UF8 Plug-in Mode — see tickFlipSuspend_.
 std::atomic<bool> g_flipSuspendedByPluginMode{false};
 // Marks the in-memory `g_selsets` as stale w.r.t. ProjExtState — set
@@ -3314,12 +3323,14 @@ void drainSelsets_() {
                 if (g_uf1Extender.load()) {
                     g_uf1ExtenderSuspendedByPin.store(true);
                     g_uf1Extender.store(false);
+                    g_uf1ExtenderOursPending = true;
                     SetExtState("rea_sixty", "uf1Extender", "0", true);
                 } else {
                     g_uf1ExtenderSuspendedByPin.store(false);  // nothing to restore
                 }
             } else if (g_uf1ExtenderSuspendedByPin.exchange(false)) {
                 g_uf1Extender.store(true);
+                g_uf1ExtenderOursPending = true;
                 SetExtState("rea_sixty", "uf1Extender", "1", true);
             }
         } else if (pinParks && g_uf1Extender.load()
@@ -4348,6 +4359,7 @@ Uf8ModeHolder g_uf8ModeHolder = Uf8ModeHolder::None;
 // not a mode change the user made, so it must not claim the banner the user's
 // actual keypress deserves.
 bool          g_uf8ModeOursPending = false;
+
 
 inline void engageUf8PluginMode_(bool withGui)
 {
@@ -42684,7 +42696,15 @@ void onTimerBody_()
             // Strip Mode is per-device, so both halves name their device — "Strip
             // Mode • On" alone couldn't say which surface just changed.
             if (ufs != mbStrip)  { chg.push_back(std::string("UF1 Strip \xE2\x80\xA2 ") + onOff(ufs)); mbStrip = ufs; }
-            if (ufe != mbExt)    { chg.push_back(std::string("Extender \xE2\x80\xA2 ") + onOff(ufe)); mbExt = ufe; }
+            if (ufe != mbExt)    {
+                // ⛔ NOT WHEN THE PIN PARKED IT. See g_uf1ExtenderOursPending:
+                // the state still has to be synced, only the announcement is
+                // dropped, or the next real toggle would go unnamed.
+                if (!g_uf1ExtenderOursPending)
+                    chg.push_back(std::string("Extender \xE2\x80\xA2 ") + onOff(ufe));
+                g_uf1ExtenderOursPending = false;
+                mbExt = ufe;
+            }
             else if (ufes != mbExtSide) { chg.push_back(std::string("Extender \xE2\x80\xA2 ") + (ufes ? "Right" : "Left")); }
             mbExtSide = ufes;   // always sync (even when the on/off change took priority)
             // UF1 view / hardware mode.
