@@ -624,6 +624,19 @@ std::vector<std::pair<uint16_t, std::vector<uint8_t>>> g_cmdQueue;
 // asked once, reaching every plug-in is the simpler correctness. See
 // objTestSet in the header for what the question is.
 std::vector<std::pair<std::string, int>> g_objTestQueue;
+// ⚠ EXPERIMENT, sequencer half. Asking a human "did the switch move?" after
+// each of two hand-typed values is how you get "I think it toggles". So the
+// sequence is FIXED and the PLUG-IN answers: it reports this object's value
+// back on its own connection (type 18), and both halves land in the same log.
+// Six steps, 1 s apart, chosen to separate the three readings that fit "it
+// toggled": every message is a press, or 2 presses and 1 releases, or the value
+// is a state. 1,1 then 2,2 then 1,2 tells them apart in one run.
+const int  kObjSeq[]   = { 1, 1, 2, 2, 1, 2 };
+const int  kObjSeqLen  = 6;
+std::string g_objSeqName;
+int         g_objSeqStep  = -1;   // -1 = idle
+long long   g_objSeqNext  = 0;
+uint64_t    g_objSeqId    = 0;    // the armed object's id, for the echo filter
 std::atomic<bool> g_viewDirty{false};
 // REASIXTY_FORCE_VIEW: pin the meter view the plug-in computes, overriding whatever the
 // UF1 screen asks for. Trace tool — drives view 3 (Loudness history, DataTypes 25/26)
@@ -1287,6 +1300,27 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
         if (!clients.empty()) {
             std::vector<std::pair<std::string, int>> oq;
             { std::lock_guard<std::mutex> lk(g_cmdMx); oq.swap(g_objTestQueue); }
+            // The sequence, one step a second, so the log reads in order.
+            if (g_objSeqStep >= 0 && nowMs() >= g_objSeqNext) {
+                if (g_objSeqStep >= kObjSeqLen) {
+                    slogAlways("[%.1f] OBJ SEQ  done  (%s)", t, g_objSeqName.c_str());
+                    g_objSeqStep = -1;
+                    g_objSeqName.clear();
+                    g_objSeqId = 0;
+                } else {
+                    const int val = kObjSeq[g_objSeqStep];
+                    uint8_t obj[8];
+                    for (int i = 0; i < 8; ++i) obj[i] = uint8_t(g_objSeqId >> (8 * i));
+                    std::vector<uint8_t> v; v.push_back(0x08);
+                    putVarint(v, uint64_t(val));
+                    for (socket_t c2 : clients) sendTo(c2, propFrame(obj, v));
+                    slogAlways("[%.1f] OBJ SEQ  step %d/%d  SENT %s = %d", t,
+                               g_objSeqStep + 1, kObjSeqLen,
+                               g_objSeqName.c_str(), val);
+                    ++g_objSeqStep;
+                    g_objSeqNext = nowMs() + 1000;
+                }
+            }
             for (auto& item : oq) {
                 const uint64_t id = sslScopeHash(item.first.c_str());
                 uint8_t obj[8];
@@ -1810,6 +1844,34 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             const uint8_t* pay = body + 20;
                             const size_t   avail = (flen > 20) ? size_t(flen - 20) : 0;
                             if (g_sslProbe) probeTcpFrame_(int(c), ftype, pay, avail);
+                            // ⚠ EXPERIMENT, echo half: what the plug-in reports
+                            // for the object the sequence is driving. This is the
+                            // half that makes the run self-answering — the value
+                            // it sends back after each press is the state it
+                            // actually landed in, and the label is its own word
+                            // for it.
+                            if (ftype == 18 && avail >= 8 && g_objSeqId != 0) {
+                                uint64_t oid = 0;
+                                std::memcpy(&oid, pay, 8);
+                                if (oid == g_objSeqId) {
+                                    long long v = -1; std::string lab;
+                                    pbWalk_(pay + 8, avail - 8,
+                                        [&](uint32_t f, uint32_t w,
+                                            const uint8_t* b, size_t bl) {
+                                            if (f == 1 && w == 0) {
+                                                uint64_t n = 0; int sh = 0;
+                                                for (size_t k = 0; k < bl; ++k) {
+                                                    n |= uint64_t(b[k] & 0x7f) << sh; sh += 7;
+                                                }
+                                                v = (long long)n;
+                                            } else if (f == 2 && w == 2) {
+                                                lab.assign(reinterpret_cast<const char*>(b), bl);
+                                            }
+                                        });
+                                    slogAlways("[%.1f] OBJ ECHO  %s = %lld  \"%s\"",
+                                               t, g_objSeqName.c_str(), v, lab.c_str());
+                                }
+                            }
                             // ── The plug-in's HELLO says what it is ────────────
                             // Type 4, field 1, the very first frame it sends.
                             // Until now this was binned unread and the kind was
@@ -2652,6 +2714,16 @@ void objTestSet(const char* name, int value)
     if (!name || !*name) return;
     std::lock_guard<std::mutex> lk(g_cmdMx);
     g_objTestQueue.emplace_back(std::string(name), value);
+}
+
+void objTestRun(const char* name)
+{
+    if (!name || !*name) return;
+    std::lock_guard<std::mutex> lk(g_cmdMx);
+    g_objSeqName = name;
+    g_objSeqId   = sslScopeHash(name);
+    g_objSeqStep = 0;
+    g_objSeqNext = 0;
 }
 
 bool getMeterInfo(int dataType, MeterInfo& out)

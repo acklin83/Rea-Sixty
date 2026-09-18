@@ -42855,6 +42855,13 @@ void onTimerBody_()
             sslcore::objTestSet(nm.c_str(), val);
         }
     }
+    // The same experiment as a fixed sequence, with the plug-in answering — one
+    // object name, no value to guess at. See objTestRun.
+    if (const char* orn = GetExtState("rea_sixty", "ssl_obj_run"); orn && *orn) {
+        const std::string nm = orn;
+        SetExtState("rea_sixty", "ssl_obj_run", "", false);
+        sslcore::objTestRun(nm.c_str());
+    }
 
     if (g_hudEnabled.load() || g_hudTouchLearn.load()) {
         // Mirror the Touch-to-Learn mode toggle (set by the HUD's menu).

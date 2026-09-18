@@ -109,6 +109,13 @@ bool getMeterInfo(int dataType, MeterInfo& out);
 // SetTrackStateChunk reload that can click during playback.
 // Driven by ExtState rea_sixty/ssl_obj_set = "<Name>;<value>".
 void objTestSet(const char* name, int value);
+// The same experiment, run as a FIXED sequence with the plug-in answering.
+// Six presses a second apart with values 1,1,2,2,1,2 — enough to separate the
+// three readings that all look like "it toggled": every message is a press, or
+// 2 presses and 1 releases, or the value is a state. Each send and each value
+// the plug-in reports back lands in rea_sixty.log as OBJ SEQ / OBJ ECHO, so the
+// answer is read off the log rather than out of someone watching a switch.
+void objTestRun(const char* name);
 
 // Copy the overload flags for `dataType`: f5 OverloadValues (instantaneous — it
 // flashes) and f6 OverloadInfHoldValues (latched until reset), one entry per
