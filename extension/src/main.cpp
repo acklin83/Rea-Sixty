@@ -2386,6 +2386,10 @@ static void uf1WriteParamNotches_(MediaTrack* tr, int fx, int p, int notches,
 // UF1 channel-strip target + page count — defined with the UF1 painter far below,
 // but publishHud_ (v11 UF1 HUD tab) needs them well before that.
 int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx);
+// The one shared "which FX on this track is in play" answer (defined near the
+// UF1 name resolver). Declared here because the EQ-graph painter sits above it
+// and must land on the SAME FX the CS-TYPE cell names.
+static int inPlayFxOnTrack_(MediaTrack* tr, int stripFx);
 int uf1CsPageCountFor_(int type, MediaTrack* tr, int fx);
 static int  engagedBankableKind_();                  // any thread
 static void pageDynBank_(int kind, int delta);       // main thread
@@ -28686,6 +28690,23 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     // FX never is.
     MediaTrack* eqTr = nullptr; int eqFx = -1;
     uf1ResolveCsFx_(tr, eqTr, eqFx);
+
+    // ⛔ AND IT HAS TO BE THE FX THE SURFACE IS NAMING. uf1ResolveCsFx_ only ever
+    // returns a recognised strip, so once the CS-TYPE cell started following the
+    // shared in-play answer, the two could disagree: the cell said "SSLDeltaCont"
+    // while this drew the channel strip's curve underneath it. Two plug-ins on
+    // one screen. Frank 2026-09-18: "wieso wird mir ein EQ graph angezeigt? Das
+    // Plugin ist weder CS noch BC!" — and the comment four lines up had already
+    // called it: if the graph disagrees with the CS-TYPE cell, the graph is wrong.
+    //
+    // Dropping the strip here lands on the same path as a track with no strip at
+    // all, which blanks — and blank is the correct answer, because a plug-in that
+    // is not a channel strip HAS no EQ curve to show. "A blank graph on the right
+    // FX is correct; a curve from the wrong FX never is."
+    if (eqTr && eqFx >= 0 && inPlayFxOnTrack_(eqTr, eqFx) != eqFx) {
+        eqTr = nullptr;
+        eqFx = -1;
+    }
 
     // Which FX the graph landed on. Same value the soft keys use, by construction
     // — so if this ever disagrees with what the CS-TYPE cell shows, the bug is in
