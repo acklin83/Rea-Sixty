@@ -56035,6 +56035,11 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
                 setenv("REASIXTY_SSL_PROBE", "1", 1);
 #endif
             }
+            // The chunk patcher keeps knowing nothing about sockets; this is
+            // where the protocol road is handed to it. Installed next to the
+            // impersonator's own start so the two can never disagree about
+            // whether there is one. See PluginChunkPatch.h.
+            uf8::setSwitchPressHook(&sslcore::pressSwitchOnTrack);
             const bool ok = sslcore::start(uint16_t(tcpPort), uint16_t(dataPort));
             initLog(ok ? "step: SSL Core impersonator started"
                        : "step: SSL Core impersonator FAILED to start");

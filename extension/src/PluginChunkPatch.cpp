@@ -267,8 +267,32 @@ int applyToAllSsl(MediaTrack* tr, PatchFn patch) {
 
 }  // namespace
 
-int togglePluginHQ(MediaTrack* tr) { return applyToAllSsl(tr, patchHighQuality); }
-int togglePluginAB(MediaTrack* tr) { return applyToAllSsl(tr, patchStateASelected); }
+SwitchPressFn g_switchPress = nullptr;
+void setSwitchPressHook(SwitchPressFn fn) { g_switchPress = fn; }
+
+// ⚠ ADDED, NOT SUBSTITUTED. The protocol road needs a live connection to that
+// plug-in, so it needs the impersonator running and SSL 360 not holding the
+// ports. The chunk needs nothing. Take the protocol when it can, and when it
+// cannot, nothing about today changes.
+// What the chunk road costs and the protocol does not: a SetTrackStateChunk
+// that reloads the plug-in's processing state and can click during playback,
+// four byte counters in two endiannesses with per-line base64 re-encoding, and
+// the trap that 4K B and 4K E carry no "SSL" in their VST3 name.
+// The hook only presses plug-ins that ANNOUNCED the object, so no table of
+// which family has which switch is needed and the 32C answers for itself.
+static int toggleSwitch_(MediaTrack* tr, const char* objName, PatchFn patch)
+{
+    if (!tr) return 0;
+    if (g_switchPress) {
+        const int idx =
+            static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+        if (const int n = g_switchPress(objName, idx); n > 0) return n;
+    }
+    return applyToAllSsl(tr, patch);
+}
+
+int togglePluginHQ(MediaTrack* tr) { return toggleSwitch_(tr, "HighQuality", patchHighQuality); }
+int togglePluginAB(MediaTrack* tr) { return toggleSwitch_(tr, "StateASelected", patchStateASelected); }
 
 namespace {
 

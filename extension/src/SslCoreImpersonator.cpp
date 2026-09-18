@@ -424,6 +424,17 @@ std::map<uint16_t, EqCurve>   g_portEq;        // UDP port -> curve  (g_meterMx)
 std::map<socket_t, uint16_t>                g_connPort;
 // conn -> PluginType from its type-4 hello, kept until its port exists.
 std::map<socket_t, int>                     g_connType;   // (g_meterMx)
+// ⛔ WHICH CONNECTIONS ANNOUNCED THE TWO CHUNK-ONLY SWITCHES.
+// HQ Mode and A/B are not host parameters, which is why PluginChunkPatch
+// rewrites base64 XML inside the track chunk to reach them. They ARE ordinary
+// SSL objects: HighQuality announces itself with the label "HQ Mode",
+// StateASelected with "A/B" (measured 2026-09-17). A press toggles — measured
+// 2026-09-18 with a fixed sequence the plug-in answered itself: value 2 flips
+// the state and reports back, value 1 does nothing at all.
+// The set is filled from each plug-in's own type-16 declarations, so a Meter,
+// which has no HQ Mode, is never pressed. Nobody has to keep a table of which
+// plug-in family has what.
+std::map<socket_t, std::set<uint64_t>>      g_connSwitch; // (g_meterMx)
 std::map<uint16_t, FpSet>                   g_portFp;     // UDP port -> values (g_meterMx)
 std::map<uint16_t, int>          g_portIndex;      // UDP port -> HostTrackIndex (g_meterMx)
 // What the plug-in SAYS each stream is, from its prepare messages (frame type
@@ -1203,6 +1214,7 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                 g_connPort.erase(it);
             }
             g_connType.erase(c);
+            g_connSwitch.erase(c);
             g_clientFp.erase(c);
             g_clientMf.erase(c);
             g_clientEq.erase(c);
@@ -1964,6 +1976,18 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             // ONLY per-instance discriminator on this protocol.
                             // Keep the prefix ("4KE"); first one wins, so a later
                             // re-declaration cannot flip a live connection.
+                            // A declaration of one of the two switches: remember
+                            // that THIS connection has it. The id is the frame's
+                            // object, the same eight bytes every frame carries.
+                            if (ftype == 16 && avail >= 8) {
+                                uint64_t oid = 0;
+                                std::memcpy(&oid, pay, 8);
+                                if (oid == sslScopeHash("HighQuality")
+                                 || oid == sslScopeHash("StateASelected")) {
+                                    std::lock_guard<std::mutex> lk(g_meterMx);
+                                    g_connSwitch[c].insert(oid);
+                                }
+                            }
                             if (ftype == 16 && avail > 8) {
                                 for (size_t k = 8; k + 1 < avail; ++k) {
                                     if (pay[k] != 0x12) continue;
@@ -2714,6 +2738,43 @@ void objTestSet(const char* name, int value)
     if (!name || !*name) return;
     std::lock_guard<std::mutex> lk(g_cmdMx);
     g_objTestQueue.emplace_back(std::string(name), value);
+}
+
+// Press the named switch on every connected plug-in of `trackIndex` that
+// ANNOUNCED it. Returns how many were pressed; 0 means nothing here could do it
+// and the caller should fall back to its own way in.
+// ⚠ A press TOGGLES, exactly like the caller's chunk patch does, so this is the
+// same operation by a different road — not a new behaviour. Press then release,
+// the shape SSL's own reset commands use; the release is a no-op for the state
+// and is sent because that is what the protocol does.
+int pressSwitchOnTrack(const char* name, int trackIndex)
+{
+    if (!name || !*name || trackIndex == 0) return 0;   // 0 = the host did not say
+    const uint64_t id = sslScopeHash(name);
+    uint8_t obj[8];
+    for (int i = 0; i < 8; ++i) obj[i] = uint8_t(id >> (8 * i));
+    std::vector<uint16_t> ports;
+    {
+        std::lock_guard<std::mutex> lk(g_meterMx);
+        for (const auto& cp : g_connPort) {
+            auto itIdx = g_portIndex.find(cp.second);
+            if (itIdx == g_portIndex.end() || itIdx->second != trackIndex) continue;
+            auto itS = g_connSwitch.find(cp.first);
+            if (itS == g_connSwitch.end() || itS->second.count(id) == 0) continue;
+            ports.push_back(cp.second);
+        }
+    }
+    if (ports.empty()) return 0;
+    {
+        std::lock_guard<std::mutex> lk(g_cmdMx);
+        for (uint16_t port : ports) {
+            g_cmdQueue.emplace_back(port, propFrame(obj, { 0x08, 0x02 }));   // press
+            g_cmdQueue.emplace_back(port, propFrame(obj, { 0x08, 0x01 }));   // release
+        }
+    }
+    slogAlways("[sw] %s pressed on %zu plug-in(s) of track %d",
+               name, ports.size(), trackIndex);
+    return int(ports.size());
 }
 
 void objTestRun(const char* name)

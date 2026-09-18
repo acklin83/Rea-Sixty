@@ -39,6 +39,22 @@ namespace uf8 {
 // Toggle <PARAM_NON_AUTO id="HighQuality"> in the active A/B slot of
 // every CS-family SSL plug-in on `track`. Returns the number of plug-ins
 // patched (0 if none found / parse failure on every match).
+// ⛔ THE PROTOCOL ROAD, INSTALLED FROM OUTSIDE.
+// HQ Mode and A/B are reached here by rewriting base64 XML inside the track
+// chunk, because no host-parameter route exists. An SSL-protocol route does:
+// both are ordinary objects (HighQuality labelled "HQ Mode", StateASelected
+// labelled "A/B") and a press toggles them, which is what this file does by a
+// road with a SetTrackStateChunk reload at the end of it. Nobody found that road
+// because the object ids were opaque numbers until 2026-09-17.
+//
+// It is a HOOK rather than a call so this file keeps knowing nothing about
+// sockets: main.cpp installs sslcore::pressSwitchOnTrack at startup, and
+// anything that links the chunk patcher alone — the preset test does — simply
+// has no hook and takes the chunk, which is today's behaviour unchanged.
+// Returns how many plug-ins it pressed; 0 means "not me", and the chunk runs.
+using SwitchPressFn = int (*)(const char* objName, int trackIndex);
+void setSwitchPressHook(SwitchPressFn fn);
+
 int togglePluginHQ(MediaTrack* track);
 
 // Toggle StateASelected on every SSL plug-in (CS-family or BC) on

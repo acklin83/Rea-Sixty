@@ -117,6 +117,16 @@ void objTestSet(const char* name, int value);
 // answer is read off the log rather than out of someone watching a switch.
 void objTestRun(const char* name);
 
+// Press a plug-in switch that is not a host parameter, over the protocol.
+// "HighQuality" is the strips' HQ Mode, "StateASelected" their A/B compare —
+// the two PluginChunkPatch reaches by rewriting base64 inside the track chunk,
+// because no host-parameter route exists. An SSL object route does, and a press
+// toggles, which is exactly what the chunk patch does.
+// Only plug-ins that ANNOUNCED the object are pressed, so nothing needs a table
+// of which family has what. Returns how many were pressed; 0 means the caller
+// should use the chunk.
+int pressSwitchOnTrack(const char* name, int trackIndex);
+
 // Copy the overload flags for `dataType`: f5 OverloadValues (instantaneous — it
 // flashes) and f6 OverloadInfHoldValues (latched until reset), one entry per
 // channel. Returns false if that type hasn't been seen yet. Thread-safe.
