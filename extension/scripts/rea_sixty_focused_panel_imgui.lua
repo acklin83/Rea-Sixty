@@ -1063,6 +1063,39 @@ local function drawContextMenu()
 end
 
 ------------------------------------------------------------------------
+-- Layout tracer. Off unless ExtState rea_sixty/focused_panel_trace == "1".
+--
+-- ⛔ This exists because "the lower row keeps repositioning itself" has at least
+-- four plausible causes (content width changing under the centering, the
+-- centering offset landing on fractional pixels, the group rect being measured
+-- from an already-offset cursor, a row height that varies with hover), and
+-- reading the code cannot tell them apart. One run can. It logs only frames
+-- where something actually moved, so an idle panel writes nothing at all and a
+-- wobbling one writes a line per wobble.
+------------------------------------------------------------------------
+local tr_file, tr_last = nil, nil
+local function fpTrace(availW, availH, sx, sy, gx, gy)
+  if reaper.GetExtState(SECT, "focused_panel_trace") ~= "1" then
+    if tr_file then tr_file:close(); tr_file, tr_last = nil, nil end
+    return
+  end
+  if not tr_file then
+    tr_file = io.open(reaper.GetResourcePath() .. "/rea_sixty_fp_trace.log", "w")
+    if not tr_file then return end
+    tr_file:write("# t  availW availH contentW contentH curX curY groupScreenX groupScreenY\n")
+  end
+  local line = string.format("%.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f",
+                             availW or -1, availH or -1,
+                             g_contentW or -1, g_contentH or -1,
+                             sx or -1, sy or -1, gx or -1, gy or -1)
+  if line ~= tr_last then
+    tr_last = line
+    tr_file:write(string.format("%.3f %s\n", reaper.time_precise(), line))
+    tr_file:flush()
+  end
+end
+
+------------------------------------------------------------------------
 -- Main loop
 ------------------------------------------------------------------------
 -- Flags split so docking can drop the frameless/topmost character: a docked
@@ -1139,10 +1172,12 @@ local function loop()
        and g_contentH and g_contentH < availH then
       reaper.ImGui_SetCursorPosY(ctx, sy + (availH - g_contentH) * 0.5)
     end
+    local trace_x0, trace_y0 = reaper.ImGui_GetCursorScreenPos(ctx)
     reaper.ImGui_BeginGroup(ctx)
     drawContent()
     reaper.ImGui_EndGroup(ctx)
     g_contentW, g_contentH = reaper.ImGui_GetItemRectSize(ctx)
+    fpTrace(availW, availH, sx, sy, trace_x0, trace_y0)
 
     -- Right-click anywhere in the window → context menu (whole-window hit area).
     if reaper.ImGui_IsWindowHovered(ctx)
