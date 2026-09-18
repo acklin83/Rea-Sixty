@@ -4021,6 +4021,15 @@ std::atomic<bool> g_uf8VpotLearnArmed{false};
 std::atomic<bool> g_touchLearnOffRequest{false};
 // ⚠ Swatch probe: the palette index the UF1 colour bar is pinned to, -1 = off.
 std::atomic<int>  g_paletteSwatch{-1};
+// ⛔ A TRACER AT THE BEGINNING, NOT A FIFTH THEORY. Four attempts at the
+// swatch probe each blamed a different gate, each blame was a real defect, and
+// none of them was the reason. These say WHERE the paint actually stops.
+std::atomic<int> g_swDbgPaint{0};   // uf1PaintChannel_ entered
+std::atomic<int> g_swDbgHue{0};     // …and left through the Hue branch
+std::atomic<int> g_swDbgEmpty{0};   // …or through the no-track branch
+std::atomic<int> g_swDbgBlock{0};   // …reached the colour block
+std::atomic<int> g_swDbgStrip{0};   // uf1PaintChannelStrip_ entered
+std::atomic<int> g_swDbgSent{-1};   // …and sent this index
 
 // ---- V-Pot rotary StepCycle capture (Touch-to-Learn) ----------------------
 // When a V-Pot is armed during Touch-to-Learn, pressing plug-in BUTTONS in
@@ -31386,6 +31395,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
                                   const StripRoute* sendOverride = nullptr,
                                   const Uf1FaderDb* faderDb = nullptr)
 {
+    if (g_paletteSwatch.load() >= 0) g_swDbgStrip.fetch_add(1);
     if (!g_uf1_dev) return;
 
     // ⇨ NO TRACK ON THE FADER SIDE IS A STATE THIS ZONE HAS TO SHOW, NOT A REASON
@@ -31706,6 +31716,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         else if (nowMs >= sNext) { sNext = nowMs + 4000; if (++sIdx > 15) sIdx = 1; }
         swatch = sIdx;
     }
+    if (swatch >= 0) { g_swDbgBlock.fetch_add(1); g_swDbgSent.store(swatch); }
     if (changed || selKey != sColor || swatch >= 0) {
         sColor = selKey;
         // SEL LED (0x07) is FULL RGB (Frank 2026-08-05: Solo/Cut are multi-colour too —
@@ -32534,6 +32545,7 @@ static void uf1PaintTimeField_(bool changed)
 
 void uf1PaintChannel_()
 {
+    if (g_paletteSwatch.load() >= 0) g_swDbgPaint.fetch_add(1);
     Uf1PaintTimer_ paintTimer_;
     g_uf1PaintRuns.fetch_add(1, std::memory_order_relaxed);
     if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
@@ -32557,7 +32569,10 @@ void uf1PaintChannel_()
             sHueWas = hueNow;
             g_uf1Gen.fetch_add(1, std::memory_order_relaxed);
         }
-        if (hueNow) { uf1PaintHue_(); return; }
+        if (hueNow) {
+            if (g_paletteSwatch.load() >= 0) g_swDbgHue.fetch_add(1);
+            uf1PaintHue_(); return;
+        }
     }
 
     // Follow the user's focus: last-touched track, else the first selected.
@@ -32637,6 +32652,7 @@ void uf1PaintChannel_()
         g_uf1CycleActive.store(true, std::memory_order_relaxed);
         uf1EnsurePacer_();
         sTr = nullptr;
+        if (g_paletteSwatch.load() >= 0) g_swDbgEmpty.fetch_add(1);
         return;
     }
     sEmptyPainted = false;
@@ -42879,7 +42895,24 @@ void onTimerBody_()
     {
         const char* sv = GetExtState("rea_sixty", "palette_swatch");
         const int want = (sv && *sv) ? std::atoi(sv) : -1;
-        g_paletteSwatch.store((want >= 0 && want <= 15) ? want : -1);
+        g_paletteSwatch.store((want >= 0 && want <= 99) ? want : -1);
+        // One line a second while it is armed, saying where the paint stopped.
+        if (g_paletteSwatch.load() >= 0) {
+            static long long sNext = 0;
+            const long long now = nowMs_();
+            if (now >= sNext) {
+                sNext = now + 1000;
+                if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                    std::fprintf(lg, "[swatch] want=%d  paintChannel=%d hue=%d "
+                                     "empty=%d strip=%d block=%d lastIdx=%d\n",
+                                 want,
+                                 g_swDbgPaint.exchange(0), g_swDbgHue.exchange(0),
+                                 g_swDbgEmpty.exchange(0), g_swDbgStrip.exchange(0),
+                                 g_swDbgBlock.exchange(0), g_swDbgSent.load());
+                    std::fclose(lg);
+                }
+            }
+        }
     }
 
     if (const char* ov = GetExtState("rea_sixty", "ssl_obj_set"); ov && *ov) {
