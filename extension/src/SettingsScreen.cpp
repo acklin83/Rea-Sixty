@@ -9282,7 +9282,7 @@ AutoLearnPlan autoLearnPlan_(const UserPluginMap* m, int tab)
             pl.slotDom     = uf8::Domain::None;
             pl.vpotBanks   = (tab == 2);
             pl.chStrips    = (tab == 2);
-            pl.paramFaders = (tab == 2);
+            pl.paramFaders = false;      // never pre-ticked — see below
             return pl;
         }
         pl.slotDom = (tab == 1) ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip;
@@ -9295,16 +9295,16 @@ AutoLearnPlan autoLearnPlan_(const UserPluginMap* m, int tab)
         pl.slotDom     = m->domain;
         pl.vpotBanks   = m->uf8Mode;
         pl.chStrips    = true;
-        // ⛔ THE FADER PASS BELONGS TO A UF8-ONLY MAP, not to the ABSENCE of a
-        // UF8 layer. This read `!m->uf8Mode`, so a Channel Strip map that has
-        // deliberately never been given a UF8 layer was the one case that opened
-        // the dialog with "every param onto the faders" already ticked — it
-        // proposed building exactly the layer the map does not have, and the same
-        // params the UC1 pass was proposing one line above. Frank 2026-09-18.
-        // A map with no channel structure at all (domain None) is what that pass
-        // was written for: "the 'put these params on the faders' path for plug-ins
-        // with no channel structure".
-        pl.paramFaders = (m->domain == uf8::Domain::None);
+        // ⛔ NEVER PRE-TICKED. This read `!m->uf8Mode`, so the ABSENCE of a UF8
+        // layer switched it on: a Channel Strip map that had deliberately never
+        // been given one opened the dialog already offering to put every param
+        // onto the faders — building exactly the layer the map does not have,
+        // out of the same params the UC1 pass proposes one line above. My first
+        // correction only moved the tick to UF8-only maps. Frank 2026-09-18:
+        // take the default tick out, full stop. It is an extra pass over the
+        // whole plug-in; whoever wants it can say so, and nobody has to notice a
+        // box that was ticked for them.
+        pl.paramFaders = false;
         return pl;
     }
     // The HUD: the tab you are standing on is the statement of intent.
@@ -9312,7 +9312,7 @@ AutoLearnPlan autoLearnPlan_(const UserPluginMap* m, int tab)
     pl.slotDom     = deviceTab ? uf8::Domain::None : m->domain;
     pl.vpotBanks   = (tab == 2);
     pl.chStrips    = (tab == 2);
-    pl.paramFaders = (tab == 2);         // fallback only, see the caller
+    pl.paramFaders = false;              // never pre-ticked, as above
     return pl;
 }
 
@@ -22667,9 +22667,8 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 g_autoLearnSetupPrimary = g_newPrimaryMode;
                 g_autoLearnSetupVpots   = (g_newPrimaryMode == 3)
                                           ? true : g_newUf8Mode;
-                // Same rule as autoLearnPlan_: the fader pass is for a UF8-only
-                // map (primary 3), not for "no V-Pot pass".
-                g_autoLearnSetupParamFaders = (g_newPrimaryMode == 3);
+                // Same rule as autoLearnPlan_: never pre-ticked.
+                g_autoLearnSetupParamFaders = false;
                 g_autoLearnSetupPending = true;
             }
             ImGui_CloseCurrentPopup(ctx);
