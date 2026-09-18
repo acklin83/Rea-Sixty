@@ -270,6 +270,102 @@ constexpr ExtFuncsEntry kExtFuncs[] = {
 // plug-in's StateASelected (togglePluginAB, the 4K strips' A/B). HYST/KNEE
 // reads Gate Hysteresis: the capture ran with the expander off.
 struct ExtFuncsParam { const char* shortLabel; const char* longLabel; int vst3Param; int special = 0; };
+// SSL's own EXT FUNCS lists for the four factory channel strips, read off the
+// wire in cap140 (2026-09-18) — one list per strip, in SSL's order, because
+// the order is SSL's and not ours to sort.
+//
+// ⛔ They cannot be derived. 4K B and 4K E are identical entry for entry; 4K G
+// is those two plus IMPED IN / IMPEDANCE after MIC; CS 2 drops PRE, MIC and
+// ANLG VCA and is four entries shorter. The Bus Compressor 2 has no EXT FUNCS
+// menu at all (Frank at the device, 2026-09-18) — there is deliberately no
+// table for it.
+//
+// Param indices come from docs/ssl-native-params/, re-dumped 2026-09-18 for
+// SSL 360 2.1.12. The April dumps would have been wrong here: 2.1.12 added
+// five Lock params to 4K B/E/G, which shifts the Bypass/Wet/Delta tail.
+//
+// Two entries carry no host parameter on these strips:
+//   HQ         — a chunk switch, not a VST3 param (special 3 → togglePluginHQ,
+//                the same switch the UF1 soft-key and the protocol path use).
+//                The 32C is the exception: there HQ *is* a param (63).
+// SOLO SAFE is LEFT OUT of all four, the same call Frank made for the 32C on
+// 2026-09-11 and repeated on 2026-09-18 ("wir brauchen doch kein Solo Safe in
+// REAPER"). SSL does not drive it either — in every one of cap140's four walks
+// its value reads N/A, on CS 2 and 4K B too, where a Legacy Solo Safe param
+// exists. So the lists below are SSL's order minus that one entry: 12 / 15 /
+// 15 / 17.
+constexpr ExtFuncsParam kExtFuncsCs2[] = {
+    { "PLUG-IN",   "PLUG-IN",            -1, 2 },
+    { "COMP MIX",  "Mix",                26 },
+    { "FILT IN",   "Filters",            46 },
+    { "PAN",       "Pan",                41 },
+    { "WIDTH",     "Width",              40 },
+    { "OUT TRIM",  "Out Trim",           39 },
+    { "A/B",       "A/B",                -1, 1 },
+    { "HQ",        "HQ Mode",            -1, 3 },
+    { "WIDTH MD",  "Width Mode",         47 },
+    { "WIDTH FQ",  "Width Freq",         48 },
+    { "AUTO MKP",  "Auto Makeup",        49 },
+    { "MKP OFST",  "Auto Makeup Offset", 50 },
+};
+
+constexpr ExtFuncsParam kExtFuncs4kB[] = {
+    { "PLUG-IN",   "PLUG-IN",            -1, 2 },
+    { "COMP MIX",  "Mix",                33 },
+    { "PRE",       "Pre",                 3 },
+    { "MIC",       "Mic",                 4 },
+    { "FILT IN",   "Filters",            44 },
+    { "PAN",       "Pan",                 9 },
+    { "WIDTH",     "Width",               8 },
+    { "OUT TRIM",  "Out Trim",            7 },
+    { "A/B",       "A/B",                -1, 1 },
+    { "HQ",        "HQ Mode",            -1, 3 },
+    { "ANLG VCA",  "Analogue",           43 },
+    { "WIDTH MD",  "Width Mode",         45 },
+    { "WIDTH FQ",  "Width Freq",         46 },
+    { "AUTO MKP",  "Auto Makeup",        47 },
+    { "MKP OFST",  "Auto Makeup Offset", 48 },
+};
+
+// Same list as 4K B, different indices — 4K E orders its params differently.
+constexpr ExtFuncsParam kExtFuncs4kE[] = {
+    { "PLUG-IN",   "PLUG-IN",            -1, 2 },
+    { "COMP MIX",  "Mix",                38 },
+    { "PRE",       "Pre",                 3 },
+    { "MIC",       "Mic",                 4 },
+    { "FILT IN",   "Filters",            13 },
+    { "PAN",       "Pan",                12 },
+    { "WIDTH",     "Width",               9 },
+    { "OUT TRIM",  "Out Trim",            8 },
+    { "A/B",       "A/B",                -1, 1 },
+    { "HQ",        "HQ Mode",            -1, 3 },
+    { "ANLG VCA",  "Analogue",            7 },
+    { "WIDTH MD",  "Width Mode",         10 },
+    { "WIDTH FQ",  "Width Freq",         11 },
+    { "AUTO MKP",  "Auto Makeup",        40 },
+    { "MKP OFST",  "Auto Makeup Offset", 41 },
+};
+
+constexpr ExtFuncsParam kExtFuncs4kG[] = {
+    { "PLUG-IN",   "PLUG-IN",            -1, 2 },
+    { "COMP MIX",  "Mix",                42 },
+    { "PRE",       "Pre",                 9 },
+    { "MIC",       "Mic",                10 },
+    { "IMPED IN",  "Impedance Circuit",   7 },
+    { "IMPEDANCE", "Impedance",           8 },
+    { "FILT IN",   "Filters",            19 },
+    { "PAN",       "Pan",                18 },
+    { "WIDTH",     "Width",              15 },
+    { "OUT TRIM",  "Out Trim",           14 },
+    { "A/B",       "A/B",                -1, 1 },
+    { "HQ",        "HQ Mode",            -1, 3 },
+    { "ANLG VCA",  "Analogue",           13 },
+    { "WIDTH MD",  "Width Mode",         16 },
+    { "WIDTH FQ",  "Width Freq",         17 },
+    { "AUTO MKP",  "Auto Makeup",        44 },
+    { "MKP OFST",  "Auto Makeup Offset", 45 },
+};
+
 constexpr ExtFuncsParam kExtFuncs32c[] = {
     { "PLUG-IN",   "PLUG-IN",            -1, 2 },   // SSL Strip Mode
     { "COMP MIX",  "Mix",                55 },
@@ -1173,6 +1269,14 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
         }
         if (item.special == 2) {    // PLUG-IN: SSL Strip Mode, the UF8/UC1 toggle
             reasixty_toggleSslStripMode();
+            renderExtFuncsSubscreen_();
+            ++stats_.knobEventsHandled;
+            return;
+        }
+        if (item.special == 3) {    // HQ on the SSL strips: a chunk switch, not
+            // a param. The 32C is the exception — there HQ is param 63 and takes
+            // the ordinary vst3Param path below.
+            uf8::togglePluginHQ(static_cast<MediaTrack*>(focusedTrack_));
             renderExtFuncsSubscreen_();
             ++stats_.knobEventsHandled;
             return;
@@ -3309,10 +3413,34 @@ std::vector<UC1Surface::ExtFuncItem> UC1Surface::activeExtFuncs_()
         return out;   // possibly empty → caller renders "(none)"
     }
 
-    // Harrison 32C: SSL's own list for this strip (kExtFuncs32c), not the shared
-    // one, which only knows the 4K/CS slots (Frank 2026-09-11, "EXT FUNCS vom 32C").
-    if (match.map && match.fxIndex >= 0 && std::strstr(fxBuf, "32Classic")) {
-        for (const auto& k : kExtFuncs32c) {
+    // Factory strips: SSL's own list for THIS strip, not the shared one, which
+    // only knows the 4K/CS slots (Frank 2026-09-11, "EXT FUNCS vom 32C"; the
+    // other four read off the wire in cap140, 2026-09-18).
+    //
+    // ⛔ Keyed on fxIdentityName, with the exact `match` substrings the built-in
+    // maps use in PluginMap.cpp — NOT on displayShort/shortName. The SSL 360
+    // Link wrapper carries its own short name, which is precisely what broke
+    // the old Bus Comp check (see isBusCompBinding in UC1PluginMap.cpp).
+    struct FactoryExtFuncs {
+        const char*            fxMatch;   // == PluginMap::match for this strip
+        const ExtFuncsParam*   list;
+        size_t                 count;
+    };
+    static constexpr FactoryExtFuncs kFactoryExtFuncs[] = {
+        { "32Classic",       kExtFuncs32c, sizeof(kExtFuncs32c) / sizeof(kExtFuncs32c[0]) },
+        { "Channel Strip 2", kExtFuncsCs2, sizeof(kExtFuncsCs2) / sizeof(kExtFuncsCs2[0]) },
+        { "4K G",            kExtFuncs4kG, sizeof(kExtFuncs4kG) / sizeof(kExtFuncs4kG[0]) },
+        { "4K E",            kExtFuncs4kE, sizeof(kExtFuncs4kE) / sizeof(kExtFuncs4kE[0]) },
+        { "4K B",            kExtFuncs4kB, sizeof(kExtFuncs4kB) / sizeof(kExtFuncs4kB[0]) },
+    };
+    const FactoryExtFuncs* fef = nullptr;
+    if (match.map && match.fxIndex >= 0)
+        for (const auto& f : kFactoryExtFuncs)
+            if (std::strstr(fxBuf, f.fxMatch)) { fef = &f; break; }
+
+    if (fef) {
+        for (size_t ki = 0; ki < fef->count; ++ki) {
+            const ExtFuncsParam& k = fef->list[ki];
             ExtFuncItem it;
             it.shortLabel = k.shortLabel;
             it.longLabel  = k.longLabel;
@@ -3445,6 +3573,12 @@ void UC1Surface::renderExtFuncsSubscreen_()
     } else if (cur.special == 2) {
         // PLUG-IN: SSL Strip Mode, the UF8/UC1 one.
         device_->send(buildLcdValue(reasixty_sslStripModeOn() ? "On" : "Off"));
+        device_->send(buildLcdUnit(""));
+    } else if (focusedTrack_ && cur.special == 3) {
+        // HQ on the SSL strips — same chunk read as A/B, second output.
+        int ab = -1, hq = -1;
+        uf8::readPluginToggleStates(static_cast<MediaTrack*>(focusedTrack_), ab, hq);
+        device_->send(buildLcdValue(hq == 1 ? "On" : hq == 0 ? "Off" : ""));
         device_->send(buildLcdUnit(""));
     }
     // Commit (FF 66 02 09 <flag>) is NOT sent per scroll step —

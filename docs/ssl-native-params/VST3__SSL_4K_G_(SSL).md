@@ -1,6 +1,6 @@
 # VST3: SSL 4K G (SSL)
 
-Dumped via dump_fx_params.lua. 56 parameter(s).
+Dumped via dump_fx_params.lua. 61 parameter(s).
 
 | idx | name | cur | @0.0 | @0.5 | @1.0 |
 |----:|------|----:|------|------|------|
@@ -57,6 +57,11 @@ Dumped via dump_fx_params.lua. 56 parameter(s).
 | 50 | Gate Expander | Out (0.0000) | Out | In | In |
 | 51 | S/C Listen | Off (0.0000) | Off | On | On |
 | 52 | GroupSense | 0 (0.0000) | 0 | 8388608 | 16777215 |
-| 53 | Bypass | normal (0.0000) | normal | bypassed | bypassed |
-| 54 | Wet | 100% (1.0000) | 0% | 50% | 100% |
-| 55 | Delta | normal (0.0000) | normal | normal | enabled |
+| 53 | Lock Routing | Off (0.0000) | Off | On | On |
+| 54 | Lock Filters | Off (0.0000) | Off | On | On |
+| 55 | Lock EQ | Off (0.0000) | Off | On | On |
+| 56 | Lock Compressor | Off (0.0000) | Off | On | On |
+| 57 | Lock Gate | Off (0.0000) | Off | On | On |
+| 58 | Bypass | normal (0.0000) | normal | bypassed | bypassed |
+| 59 | Wet | 100% (1.0000) | 0% | 50% | 100% |
+| 60 | Delta | normal (0.0000) | normal | normal | enabled |

@@ -1,6 +1,6 @@
 # VST3: 4K B
 
-Dumped via dump_fx_params.lua. 52 parameter(s).
+Dumped via dump_fx_params.lua. 57 parameter(s).
 
 | idx | name | cur | @0.0 | @0.5 | @1.0 |
 |----:|------|----:|------|------|------|
@@ -23,7 +23,7 @@ Dumped via dump_fx_params.lua. 52 parameter(s).
 | 16 | LF Frequency | 200.0 Hz (0.5000) | 40.0 Hz | 200.0 Hz | 400.0 Hz |
 | 17 | LF Gain | 0.0 dB (0.5000) | -15.0 dB | 0.0 dB | 15.0 dB |
 | 18 | LF Type | Shelf (0.0000) | Shelf | Bell | Bell |
-| 19 | LMF Frequency | 1.50 KHz (0.5000) | 0.20 KHz | 1.50 KHz | 2.50 KHz |
+| 19 | LMF Frequency | 1.00 KHz (0.3750) | 0.20 KHz | 1.50 KHz | 2.50 KHz |
 | 20 | LMF Gain | 0.0 dB (0.5000) | -15.0 dB | 0.0 dB | 15.0 dB |
 | 21 | LMF Q | 1.50 (0.5000) | 3.00 | 1.50 | 0.50 |
 | 22 | HMF Frequency | 3.00 KHz (0.5000) | 0.60 KHz | 3.00 KHz | 7.00 KHz |
@@ -51,8 +51,13 @@ Dumped via dump_fx_params.lua. 52 parameter(s).
 | 44 | Filters In | In (1.0000) | Out | In | In |
 | 45 | Width Mode | Full (0.0000) | Full | Low | High |
 | 46 | Width Frequency | 20.0 Hz (0.0000) | 20.0 Hz | 632.5 Hz | 20000 Hz |
-| 47 | Compressor Auto Make-up | On (1.0000) | Off | On | On |
+| 47 | Compressor Auto Make-up | Off (0.0000) | Off | On | On |
 | 48 | Compressor Auto Make-up Offset | 0.0 dB (0.5000) | -12.0 dB | 0.0 dB | 12.0 dB |
-| 49 | Bypass | normal (0.0000) | normal | bypassed | bypassed |
-| 50 | Wet | 100% (1.0000) | 0% | 50% | 100% |
-| 51 | Delta | normal (0.0000) | normal | normal | enabled |
+| 49 | Lock Routing | Off (0.0000) | Off | On | On |
+| 50 | Lock Filters | Off (0.0000) | Off | On | On |
+| 51 | Lock EQ | Off (0.0000) | Off | On | On |
+| 52 | Lock Compressor | Off (0.0000) | Off | On | On |
+| 53 | Lock Gate | Off (0.0000) | Off | On | On |
+| 54 | Bypass | normal (0.0000) | normal | bypassed | bypassed |
+| 55 | Wet | 100% (1.0000) | 0% | 50% | 100% |
+| 56 | Delta | normal (0.0000) | normal | normal | enabled |

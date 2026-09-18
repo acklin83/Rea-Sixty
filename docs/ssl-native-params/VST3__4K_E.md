@@ -1,6 +1,6 @@
 # VST3: 4K E
 
-Dumped via dump_fx_params.lua. 52 parameter(s).
+Dumped via dump_fx_params.lua. 57 parameter(s).
 
 | idx | name | cur | @0.0 | @0.5 | @1.0 |
 |----:|------|----:|------|------|------|
@@ -44,7 +44,7 @@ Dumped via dump_fx_params.lua. 52 parameter(s).
 | 37 | Compressor Release | 0.10 s (0.0000) | 0.10 s | 0.40 s | 4.00 s |
 | 38 | Compressor Mix | 100.0 % (1.0000) | 0.0 % | 50.0 % | 100.0 % |
 | 39 | Compressor Fast Attack | Out (0.0000) | Out | In | In |
-| 40 | Compressor Auto Make-up | On (1.0000) | Off | On | On |
+| 40 | Compressor Auto Make-up | Off (0.0000) | Off | On | On |
 | 41 | Compressor Auto Make-up Offset | 0.0 dB (0.5000) | -12.0 dB | 0.0 dB | 12.0 dB |
 | 42 | Gate Range | 0.0 dB (0.0000) | 0.0 dB | 20.0 dB | 40.0 dB |
 | 43 | Gate Threshold | -30.0 dB (0.0000) | -30.0 dB | -12.0 dB | 10.0 dB |
@@ -53,6 +53,11 @@ Dumped via dump_fx_params.lua. 52 parameter(s).
 | 46 | Gate Expander | Out (0.0000) | Out | In | In |
 | 47 | S/C Listen | Off (0.0000) | Off | On | On |
 | 48 | GroupSense | 0 (0.0000) | 0 | 8388608 | 16777215 |
-| 49 | Bypass | normal (0.0000) | normal | bypassed | bypassed |
-| 50 | Wet | 100% (1.0000) | 0% | 50% | 100% |
-| 51 | Delta | normal (0.0000) | normal | normal | enabled |
+| 49 | Lock Routing | Off (0.0000) | Off | On | On |
+| 50 | Lock Filters | Off (0.0000) | Off | On | On |
+| 51 | Lock EQ | Off (0.0000) | Off | On | On |
+| 52 | Lock Compressor | Off (0.0000) | Off | On | On |
+| 53 | Lock Gate | Off (0.0000) | Off | On | On |
+| 54 | Bypass | normal (0.0000) | normal | bypassed | bypassed |
+| 55 | Wet | 100% (1.0000) | 0% | 50% | 100% |
+| 56 | Delta | normal (0.0000) | normal | normal | enabled |
