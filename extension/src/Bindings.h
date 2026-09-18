@@ -1109,8 +1109,8 @@ struct BoundRef {
 // ⇨ Use THIS wherever the UI answers "where does this action live". That is a
 // SET, and naming only the first reads as a claim that the others do not exist:
 // the dynamic-bank pager sits on BOTH page arrows out of the factory and the
-// Settings line named the left one alone (Frank 2026-08-26: "Bullshit. left und
-// right!"). findFirstBoundTo stays for the callers that really do want one.
+// Settings line named the left one alone (Frank 2026-08-26 corrected it in three
+// words: left AND right). findFirstBoundTo stays for callers that really want one.
 std::vector<BoundRef> findAllBoundTo(const std::string& builtinName);
 
 // Whether the layer has an entry for this id at all. Distinguishes

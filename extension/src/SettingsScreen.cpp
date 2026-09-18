@@ -1033,8 +1033,8 @@ bool                    s_bindingCtxOpenRequested = false;
 //
 // It belongs to the BANK, not to a key: you are looking at bank 1 and you switch
 // it to its Shift layer, exactly as holding Shift on the hardware does (Frank
-// 2026-08-18: "Ich bin auf Soft-Key Bank fucking 1 und sehe die Labels ohne
-// modifier. Dann drück ich shift und sehe Soft-Key Bank 1 mit Shift"). An
+// 2026-08-18: he is on soft-key bank 1 seeing the labels without a modifier;
+// pressing Shift shows him bank 1 with Shift. Same bank, other layer). An
 // earlier cut put four radio buttons on every individual key; that was the same
 // data seen through the wrong lens.
 static int g_slotEditModIdx = 0;
@@ -4908,7 +4908,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     // UF1 buttons carry a user LABEL, shown on the surface next to the key.
     // The UF8's top-soft-keys have had one forever (the user-Quick slot editor);
     // UF1 keys never got the field, so there was no way to name one — Frank
-    // 2026-08-10 ("lass ihn mich anschreiben however the fuck i want").
+    // 2026-08-10: he wants to label the key freely, in whatever words he picks.
     if (uf1ControlShowsLabel_(id)) {
         char lblBuf[64] = {0};
         std::strncpy(lblBuf, bd.label.c_str(), sizeof(lblBuf) - 1);
@@ -7284,8 +7284,8 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // competing answers back on screen that 9e1e8be removed — and worse than
     // cosmetically: drawSubBankCellEditor_ takes its sub-bank from the SELECTION
     // while its Quick comes from the ENGAGED bank, so the LED and preset editor
-    // was working on a bank the surface was not on (Frank 2026-08-18: "wieso ist
-    // der blaue fucker immernoch da?"). Only sub-bank cells are pulled along;
+    // was working on a bank the surface was not on (Frank 2026-08-18 asked why the
+    // blue highlight was still sitting there). Only sub-bank cells are pulled along;
     // any other selected button keeps its selection.
     if (isSubBankCellId_(s_selected)) s_selected = subBankCellId_(s_editSubBank);
 

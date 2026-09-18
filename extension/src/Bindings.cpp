@@ -722,10 +722,9 @@ Binding mkBuiltin(const char* name, Behavior b, const char* label,
 // the problem: fourteen of the sixteen per-view slots shipped empty, so the
 // pane said "None (disabled)" over keys that page the channel group and pin the
 // channel every day, and the only way to learn otherwise was to read the source
-// (Frank 2026-09-10: "5-8 ist LEER in DAW View obwohl doch dann channels 5-8
-// auf die v-pots kommen! MACH DAS SAUBER", and on being offered a hover box
-// instead: "WIESO WIRD … EIN BESCHISSENER HELP TEXT IM MOUSE OVER GEZEIGT WENN
-// DU EINFACH DIE VERFICKTE VALUE EINTRAGEN SOLLT IN DEN FUCKING BUTTON").
+// (Frank 2026-09-10: slots 5-8 read empty in DAW view although that is exactly
+// where channels 5-8 land on the V-Pots, and he rejected a hover box as the fix
+// outright — the value belongs IN the button, not in a tooltip over it.)
 //
 // So every derived slot is seeded with a COPY of its base. Behaviour does not
 // move by a hair: the copy is what the fallback was already resolving to.
@@ -3557,8 +3556,8 @@ void upgradeBackfillUf1EncoderLong_(Config& c)
 // LABEL said "PIN SET", which is the recall. So the same two words named two
 // different things on the same rig, and the UF1 bank built on 2026-09-09 put
 // the correct pair ("PIN THIS CH" / "PIN SET") right next to the wrong one
-// (Frank 2026-09-10: "wie heisst denn die scheisse auf uf8? du verwirrst mich
-// maximal").
+// (Frank 2026-09-10: asked what the thing is actually called on the UF8,
+// because the two names together were maximally confusing.)
 // Rewrites only where the label is still exactly the old factory string on a
 // key still bound to that action — a name the user typed is never touched.
 // ⚠ ALL FIVE SLOTS: the physical key and the four per-view copies, because
@@ -3622,8 +3621,8 @@ void upgradeUf1SoftKeyPinLabel_(Config& c)
 // what it belongs to, "pin" meant both the clutch AND taking a track in, and
 // "focused" was a third idea of "which track" beside the selection — three
 // reasons the same eight actions kept being mistaken for each other (Frank
-// 2026-09-10: "die ganze funktion ist einfach TOTAL FUCKING VERWIRREND gebaut
-// und benannt"). The identifiers move with the names so nothing keeps the old
+// 2026-09-10: the whole feature is built AND named confusingly, both at once).
+// The identifiers move with the names so nothing keeps the old
 // vocabulary alive; every binding is rewritten here.
 // ⚠ pin_focused is GONE, not renamed. It took REAPER's last-touched track,
 // which is the idea being retired; a binding on it becomes focus_set_add, which

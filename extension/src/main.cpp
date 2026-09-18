@@ -14147,7 +14147,7 @@ static CsVal readParamValue_(MediaTrack* tr, int fx, int param, uc1::CsQuantityK
 // Apply a read value onto (dstFx,dstParam). Numeric → kind-aware coarse-scan of
 // the dst's normalised range (robust to inverted / non-monotonic / stepped
 // curves; Hz↔kHz / s↔ms reconciled via the range for Freq/Time only — dB / ratio
-// never rescaled, killing the +3→−3 and +18→0.018 fuck-ups by construction).
+// never rescaled, killing the +3→−3 and +18→0.018 blunders by construction).
 // Discrete → match the dst position whose display equals v.text; else normalised.
 // Main-thread only.
 // Returns the normalised value actually written (for round-trip intent memory).
@@ -18339,7 +18339,7 @@ static int uf1NeedleDataType_()
 // DAW-mode one handed back GetSelectedTrack directly — so a project that loads
 // with nothing selected answered nullptr there and the surface went blank, while
 // the fallback sitting at the bottom of the function was never reached (Frank
-// 2026-09-15: "volles projekt und der fucking UF1 leer nach projekt-load").
+// 2026-09-15: a full project, and the UF1 blank after the project load).
 // Order: the channel it was last on if that is still alive, else the first
 // channel the SURFACE is showing — the filtered, ordered list the strips are
 // built from — else the project's first track. Only an empty project answers
@@ -18364,8 +18364,8 @@ MediaTrack* uf1FocusedTrack_()
     // overriding the selection (Frank 2026-07-30). Everything downstream reads
     // this one resolver, so the strip / fader / GR all follow the master.
     if (g_uf1Master.load() && master) return master;
-    // ⛔ The Extender does NOT repoint this resolver (Frank 2026-08-11, "Option A
-    // ist scheisse"). Pointing the whole surface at the 9th track made the UF1
+    // ⛔ The Extender does NOT repoint this resolver (Frank 2026-08-11 rejected
+    // option A outright). Pointing the whole surface at the 9th track made the UF1
     // useless whenever the selection differed: the screen described a plug-in the
     // surface was not addressing.
     // This resolver is the RIGHT half of the UF1 — the 4 V-Pots, the 4 display
@@ -25745,8 +25745,8 @@ void onUf1Event(const uf1::InputEvent& ev)
             // API. This key shipped UNBOUND with no default, so nothing is superseded.
             // (0x08 used to be handled right here, hardcoded and UNBOUND, so the
             // bindings editor showed an empty SHORT PRESS over a key that centres
-            // pan every day — Frank 2026-09-10: "wieso ist SHORT PUSH AUF DEM
-            // FUCKING V-POT ÜBERHAUPT LEER?". It is a factory binding now
+            // pan every day — Frank 2026-09-10 asked why the short push on the
+            // V-Pot was empty at all. It is a factory binding now
             // (uf1_above_vpot_push) and goes
             // through the dispatch below like every other key.)
             // Channel view: the 4 display soft keys (0x19-0x1C) are the SSL
@@ -42840,8 +42840,8 @@ void onTimerBody_()
     // Shift is how you type a capital letter. Every modifier reader hangs off
     // this ONE mirror, so while a field in the Settings window has the keyboard,
     // naming a soft-key "EQ" walked the whole surface onto its Shift set: LEDs,
-    // scribble labels, the lot, flickering per keystroke (Frank 2026-08-25,
-    // "DIE FUCKING LED AUF DER SURFACE"). Suppressing it HERE covers the LEDs,
+    // scribble labels, the lot, flickering per keystroke (Frank 2026-08-25 named
+    // the LEDs on the surface as the tell). Suppressing it HERE covers the LEDs,
     // the labels and the editor in one move; two earlier attempts patched single
     // READERS in SettingsScreen and could never have covered the surface.
     //
@@ -44247,8 +44247,8 @@ void onTimerBody_()
                 // note to re-enable it behind a bounded window. That window was
                 // never built, so the UF8 kept a half-working feature the UC1
                 // did not have, and the docs had to explain the difference.
-                // Frank: "DANN SCHALT DIE FUCKING UF8 STEPS AUCH AUS WENN ES
-                // NICHT GEKLAPPT HAT!" Step cycles are built in the FX-Learn
+                // Frank: then switch the UF8 steps off too, since it never
+                // worked. Step cycles are built in the FX-Learn
                 // editor, on both surfaces. Re-enable both together or neither.
                 if (false && kind == 0 && tr && fx >= 0
                     && ValidatePtr2(nullptr, tr, "MediaTrack*")) {
