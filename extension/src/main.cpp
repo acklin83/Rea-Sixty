@@ -16778,7 +16778,27 @@ static bool hudCursorUf8UnmappedFx_(MediaTrack*& trOut, int& fxOut)
 {
     trOut = nullptr; fxOut = -1;
     MediaTrack* tr = nullptr; int fx = -1;
-    if (!cursorFxOnFocusedTrack_(tr, fx)) return false;
+    if (!cursorFxOnFocusedTrack_(tr, fx)) {
+        // ⛔ …AND WHEN THE CURSOR HAS NOTHING, ASK THE PARAMETER THAT WAS JUST
+        // TOUCHED. cursorFxOnFocusedTrack_ needs a focused plug-in WINDOW or an
+        // FX-cycle cursor; learn on the UC1 with the GUI shut and without having
+        // cycled, and it has neither — the tracer proved it the other way round
+        // on 2026-09-18 (cursorOk=1, focusedWin ret=1: it worked because the
+        // window happened to be open). GetLastTouchedFX is the same signal the
+        // learn itself waits for, so the plug-in the user was just working on is
+        // exactly the one they mean.
+        //
+        // Only reached when the cursor answers nothing, so nothing that works
+        // today changes route. Track index: 0 is the master, otherwise 1-based
+        // (the conversion every other caller in SettingsScreen.cpp uses).
+        int t = -1, f = -1, pp = -1;
+        if (!GetLastTouchedFX(&t, &f, &pp)) return false;
+        tr = (t == 0) ? GetMasterTrack(nullptr)
+                      : (t > 0) ? GetTrack(nullptr, t - 1) : nullptr;
+        if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+        if (f < 0 || f >= TrackFX_GetCount(tr)) return false;
+        fx = f;
+    }
     char nm[512] = {0};
     if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm)) || !nm[0]) return false;
     // A built-in (SSL / Harrison) strip is unshadowable — never bootstrap one.
