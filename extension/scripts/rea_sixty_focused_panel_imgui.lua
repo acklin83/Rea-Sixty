@@ -343,7 +343,10 @@ local last_save_x, last_save_y, last_save_w, last_save_h
 local g_contentW, g_contentH               -- last measured content size (centering)
 local g_rowW     = {}   -- per-row measured width, keyed by the row's block ids
 local g_rowTrace = {}   -- "ids=width" per row, this frame, for the tracer
-local mb_text, mb_seq, mb_until = "", nil, 0   -- in-panel mode-change flash state
+-- in-panel mode-change flash state. mb_seq is seeded ONCE here from whatever is
+-- already published, for the reason spelled out at its use below.
+local mb_text, mb_until = "", 0
+local mb_seq = (reaper.GetExtState(SECT, "mode_banner") or ""):match("^.-\t(%d+)$")
 
 -- Dock state. ReaImGui dock id: 0 = floating, <0 = a REAPER docker cell. We
 -- persist it under its own key and re-attach on first frame, so a docked panel
@@ -424,7 +427,11 @@ local function pollModeBanner()
   local raw = reaper.GetExtState(SECT, "mode_banner")
   local text, seq = raw:match("^(.-)\t(%d+)$")
   if not seq then return end
-  if mb_seq == nil then mb_seq = seq; return end   -- baseline only, no flash
+  -- ⛔ No baseline-on-first-poll here either: that ate the first genuine flash of
+  -- the run, because on a fresh REAPER nothing is published until the first mode
+  -- change — so the first change WAS the first poll. Seeded at script start
+  -- instead, which still stops a restart from re-flashing the previous run's
+  -- banner. Same bug, same fix, same day as rea_sixty_mode_banner.lua.
   if seq ~= mb_seq then
     mb_seq, mb_text = seq, text or ""
     mb_until = reaper.time_precise() + math.max(0.3, num("mode_banner_secs", 2.0))

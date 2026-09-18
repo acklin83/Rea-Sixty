@@ -44307,6 +44307,31 @@ void onTimerBody_()
                 const bool boot = hudCursorUf8UnmappedFx_(vTr, vFx);
                 reasixty_hudUf8ArmLearn(kind, strip, fb, vb, vTr, vFx, boot);
             }
+            // ⛔ TRACER AT THE FRONT, not after the fourth theory. One line per
+            // touch, only while Touch-to-Learn is on, so it costs nothing when
+            // the mode is off. It names every input the decision is made from:
+            // which control fired, whether a UF8 target resolved, whether the
+            // cursor found an FX at all, and whether the bootstrap said yes.
+            // Frank 2026-09-18: fader touch does nothing after a UC1 mapping.
+            if (FILE* lg = std::fopen(uf8::logPath("reasixty_uf8learn.log").c_str(), "a")) {
+                MediaTrack* cTr = nullptr; int cFx = -1;
+                const bool curOk = cursorFxOnFocusedTrack_(cTr, cFx);
+                char cNm[256] = {0};
+                if (curOk && cTr && cFx >= 0)
+                    uf8::fxIdentityName(cTr, cFx, cNm, sizeof(cNm));
+                MediaTrack* uTr = nullptr; int uFx = -1;
+                const bool bootNow = hudCursorUf8UnmappedFx_(uTr, uFx);
+                int winTr = -1, winItem = -1, winFx = -1;
+                const int winRet = GetFocusedFX2(&winTr, &winItem, &winFx);
+                std::fprintf(lg,
+                    "[u8learn] kind=%d strip=%d | uf8Target=%s | cursorOk=%d fx=%d '%s'"
+                    " | bootstrap=%d | focusedWin ret=%d tr=%d fx=%d"
+                    " | rawCursor=%d\n",
+                    kind, strip, mp ? "yes" : "no", curOk ? 1 : 0, cFx, cNm,
+                    bootNow ? 1 : 0, winRet, winTr, winFx,
+                    cTr ? stripInstanceFxRaw_(cTr) : -99);
+                std::fclose(lg);
+            }
         }
         // Poll for the wiggle; refresh published assignments the tick it lands.
         // (The bind uses the layer captured at ARM time, not this live one.)

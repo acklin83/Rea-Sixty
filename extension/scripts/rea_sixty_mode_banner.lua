@@ -105,7 +105,10 @@ local was_ringing = false
 -- Banner state — watch the published seq, restart the hide timer on change.
 ------------------------------------------------------------------------
 local cur_text   = ""
-local last_seq   = nil
+-- Seeded ONCE, at script start, from whatever is already published — see
+-- pollBanner. nil here means nothing had been published when we started, and the
+-- first event that arrives is therefore genuinely fresh and must be shown.
+local last_seq   = (reaper.GetExtState(SECT, "mode_banner") or ""):match("^.-\t(%d+)$")
 local show_until = 0.0
 
 -- ⇨ THE POINTER OVERRIDES THE HIDE TIMER. The right-click menu used to be
@@ -224,14 +227,13 @@ local function pollBanner()
   if raw == "" then return end
   local text, seq = raw:match("^(.-)\t(%d+)$")
   if not seq then return end
-  -- First poll of this run: adopt whatever is already published WITHOUT showing
-  -- it. The ExtState survives the companion, so starting up (or restarting it)
-  -- with last_seq = nil re-flashed the last banner of the previous run, which
-  -- read as a mode changing on its own at startup (Frank 2026-08-18).
-  if last_seq == nil then
-    last_seq = seq
-    return
-  end
+  -- ⛔ THE BASELINE IS TAKEN AT SCRIPT START, NOT AT THE FIRST POLL. Adopting it
+  -- here swallowed the first genuine event of the run: on a fresh REAPER nothing
+  -- is published yet, so the first real mode change WAS the first poll and went
+  -- by unseen — "Touch to Learn ON sehe ich beim allerersten Mal drücken NIE"
+  -- (Frank 2026-09-18). Seeding at start still covers what the branch was built
+  -- for (2026-08-18): a companion restart must not re-flash the banner the
+  -- previous run left in the ExtState, because that seq is already in last_seq.
   if seq ~= last_seq then
     last_seq   = seq
     cur_text   = text or ""
