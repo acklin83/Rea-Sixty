@@ -1868,7 +1868,7 @@ bool captureOriginalName(std::string_view match, std::string_view originalName)
 //   page 6  HF Gain      HF Freq      -            -
 //   page 7  Comp Ratio   Comp Thr     Comp Rel     -
 //   page 8  Gate Range   Gate Thr     Gate Rel     Gate Hold
-static const int kUf1FactoryVpotLinkIdx[kUf1FactoryVpotPositions] = {
+static const int kUf1FactoryVpotLinkIdx[32] = {
      2, -1, 37, 23,
      4, -1,  7,  6,
     20, 19, -1, -1,
@@ -1879,11 +1879,26 @@ static const int kUf1FactoryVpotLinkIdx[kUf1FactoryVpotPositions] = {
     29, 30, 31, 32,
 };
 
+// The Bus Comp's two factory pages, from kUf1CsVPots[4], resolved through
+// kBusComp2Slots. Its linkIdx namespace is its OWN — 1..7 on the BC virtual
+// strip — which is why this cannot share the table above.
+//
+//   page 1  Threshold    Ratio        Attack       Release
+//   page 2  Makeup       Mix          S/C HPF      -
+static const int kUf1FactoryBcVpotLinkIdx[8] = {
+    1, 5, 3, 4,
+    2, 7, 6, -1,
+};
+
+int uf1FactoryVpotPositionCount(bool busComp) { return busComp ? 8 : 32; }
+
 int uf1FactoryVpotFlatPos(int linkIdx, bool busComp)
 {
-    if (busComp || linkIdx < 0) return -1;
-    for (int i = 0; i < kUf1FactoryVpotPositions; ++i)
-        if (kUf1FactoryVpotLinkIdx[i] == linkIdx) return i;
+    if (linkIdx < 0) return -1;
+    const int* tab = busComp ? kUf1FactoryBcVpotLinkIdx : kUf1FactoryVpotLinkIdx;
+    const int  n   = uf1FactoryVpotPositionCount(busComp);
+    for (int i = 0; i < n; ++i)
+        if (tab[i] == linkIdx) return i;
     return -1;
 }
 
@@ -1927,7 +1942,7 @@ void seedUf1FromSlots(UserPluginMap& m)
         s.customLabel = sl->customLabel;
         m.uf1.vpots.push_back(std::move(s));
     }
-    fill(spill, m.uf1.vpots, kUf1FactoryVpotPositions);
+    fill(spill, m.uf1.vpots, uf1FactoryVpotPositionCount(busComp));
     m.uf1.softKeys.clear();
     fill(sk, m.uf1.softKeys, 0);
     // The learned strip's PLUG-IN key sits at kUf1LearnedStripKeyPos and pushes

@@ -1063,10 +1063,11 @@ void seedUf1FromSlots(UserPluginMap& m);
 // Both the surface (uf1LearnedStreamSlots_) and the seeder (seedUf1FromSlots)
 // ask THIS — the seeder exists so switching the explicit UF1 layer on does not
 // move anything, which it could not promise if it packed in a different order.
-// Bus Comp returns -1 throughout: its factory layout is two pages and nobody
-// has asked for it, so it keeps the packed-by-linkIdx behaviour it has today.
+// Bus Comp has its own two-page factory layout and its own linkIdx namespace,
+// so it gets its own table and its own position count (Frank 2026-09-18:
+// "bus comp auch wie factory").
 int  uf1FactoryVpotFlatPos(int linkIdx, bool busComp);
-constexpr int kUf1FactoryVpotPositions = 32;   // 8 pages x 4 V-Pots
+int  uf1FactoryVpotPositionCount(bool busComp);   // 32 for CS (8 pages), 8 for BC (2)
 
 bool enableUf1Layer(std::string_view match);
 

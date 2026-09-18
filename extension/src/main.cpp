@@ -29576,16 +29576,18 @@ void uf1LearnedStreamSlots_(const char* fxName, bool busComp, bool wantButton,
     // falls. Sorting by linkIdx put the EQ on its head — SSL numbers it from the
     // top down (HF 8-10 … LF 19-21) while the panel reads bottom up, which never
     // shows on the UC1 because there the ENGRAVING is the order. See
-    // uf1FactoryVpotFlatPos: a learned Channel Strip now lands page for page
-    // where a factory strip has the same control, blanks included, and anything
-    // the factory pages do not show is packed after them. Frank 2026-09-18.
-    if (!wantButton && !busComp) {
+    // uf1FactoryVpotFlatPos: a learned strip now lands page for page where a
+    // factory one has the same control, blanks included, and anything the
+    // factory pages do not show is packed after them. Channel Strip and Bus
+    // Comp both, each against its own factory table. Frank 2026-09-18.
+    if (!wantButton) {
+        const int nPos = uf8::user_plugins::uf1FactoryVpotPositionCount(busComp);
         std::vector<const uf8::UserLinkSlot*> placed(
-            uf8::user_plugins::kUf1FactoryVpotPositions, nullptr);
+            static_cast<size_t>(nPos), nullptr);
         std::vector<const uf8::UserLinkSlot*> spill;
         for (const auto* sl : out) {
             const int pos = uf8::user_plugins::uf1FactoryVpotFlatPos(sl->linkIdx, busComp);
-            if (pos >= 0 && pos < uf8::user_plugins::kUf1FactoryVpotPositions && !placed[pos])
+            if (pos >= 0 && pos < nPos && !placed[pos])
                 placed[pos] = sl;
             else
                 spill.push_back(sl);

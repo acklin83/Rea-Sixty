@@ -319,6 +319,27 @@ int main()
             EXPECT(uf1SlotAt(m2.uf1.vpots, 21)->vst3Param == 100);  // HF Freq
         }
 
+        // The Bus Comp has its own two-page factory layout and its own linkIdx
+        // namespace, so it needs its own guard: Release (4) sits on page 1 while
+        // Makeup (2) sits on page 2, i.e. the higher link index comes FIRST.
+        // Sorting by linkIdx would swap them.
+        {
+            UserPluginCatalog c3{};
+            EXPECT(parse_(kV10, c3));
+            auto& m3 = c3.maps[0];
+            m3.domain = Domain::BusComp;
+            m3.slots.clear();
+            auto add3 = [&](int linkIdx, int param) {
+                UserLinkSlot s{}; s.linkIdx = linkIdx; s.vst3Param = param;
+                m3.slots.push_back(s);
+            };
+            add3(2, 22);   // Makeup  → page 2, flat 4
+            add3(4, 44);   // Release → page 1, flat 3
+            seedUf1FromSlots(m3);
+            EXPECT(uf1SlotAt(m3.uf1.vpots, 3)->vst3Param == 44);   // Release
+            EXPECT(uf1SlotAt(m3.uf1.vpots, 4)->vst3Param == 22);   // Makeup
+        }
+
         // Idempotent: seeding a populated map must leave it alone, else enabling
         // twice (or a later auto-enable) would stomp the user's own edits.
         m.uf1.vpots[0].vst3Param = 999;
