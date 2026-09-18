@@ -16760,6 +16760,38 @@ static bool cursorFxOnFocusedTrack_(MediaTrack*& trOut, int& fxOut)
 // HUD bootstrap detector. True when the cursor FX is UNLEARNED — no built-in AND
 // no user map (uf8::lookupPluginMapByName == null) — so the HUD can follow onto
 // a virgin plug-in (show it empty + named) for bootstrapping.
+// Same question one step wider, for the UF8 hardware learn ONLY: is the FX under
+// the cursor one the UF8 cannot target yet? That is true for a virgin plug-in AND
+// for one that is mapped without a UF8 block — a map made on the UC1 or the UF1.
+//
+// ⛔ A SIBLING, NOT AN EDIT. hudCursorUnlearnedFx_ has eleven readers (HUD
+// bootstrap, AutoLearn, the publisher, the UC1 learn …) and "virgin" is the right
+// question for every one of them; widening it there would have moved eleven
+// behaviours to fix one. [[who-else-touches-this-value]]
+//
+// Why it is needed: touching a UF8 fader with Touch-to-Learn on did nothing when
+// the plug-in was mapped on the UC1 and the UF1 but not the UF8. The code knew
+// only "has a UF8 map" (bind into it) and "has no map at all" (create one).
+// Mapped-but-not-for-the-UF8 fell between the two and armed nothing, so the
+// surface showed nothing either. Frank 2026-09-18.
+static bool hudCursorUf8UnmappedFx_(MediaTrack*& trOut, int& fxOut)
+{
+    trOut = nullptr; fxOut = -1;
+    MediaTrack* tr = nullptr; int fx = -1;
+    if (!cursorFxOnFocusedTrack_(tr, fx)) return false;
+    char nm[512] = {0};
+    if (!uf8::fxIdentityName(tr, fx, nm, sizeof(nm)) || !nm[0]) return false;
+    // A built-in (SSL / Harrison) strip is unshadowable — never bootstrap one.
+    if (const auto* pm = uf8::lookupPluginMapByName(nm)) {
+        const auto* um = uf8::user_plugins::lookupOwnedByName(nm);
+        if (!um) return false;          // built-in only → not ours to map
+        if (um->uf8Mode) return false;  // already has a UF8 block → bind, not create
+        (void)pm;
+    }
+    trOut = tr; fxOut = fx;
+    return true;
+}
+
 static bool hudCursorUnlearnedFx_(MediaTrack*& trOut, int& fxOut)
 {
     trOut = nullptr; fxOut = -1;
@@ -44268,7 +44300,11 @@ void onTimerBody_()
                 }
             } else {
                 MediaTrack* vTr = nullptr; int vFx = -1;
-                const bool boot = hudCursorUnlearnedFx_(vTr, vFx);
+                // Virgin OR mapped-without-a-UF8-block: both bootstrap here, and
+                // hudUf8CreateAndBind_ binds into the EXISTING map when there is
+                // one ("a map for this plug-in already exists → just bind"), so a
+                // UC1/UF1 mapping gains a UF8 block instead of a second map.
+                const bool boot = hudCursorUf8UnmappedFx_(vTr, vFx);
                 reasixty_hudUf8ArmLearn(kind, strip, fb, vb, vTr, vFx, boot);
             }
         }

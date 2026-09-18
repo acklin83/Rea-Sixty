@@ -12499,6 +12499,13 @@ bool hudUf8BindMatch_(const std::string& match, int kind, int fb, int vb,
         // the HUD V-Pot encoding; indices are already validated by p.param.
         if (kind == 0 && asToggle)
             m.uf8.banks.banks[fb][vb][strip].vpotMode = uf8::VPotMode::Toggle;
+        // ⛔ AND THE UF8 LAYER GOES ON. Writing into m.uf8 while uf8Mode stays
+        // off produces a binding nothing can reach: resolveFocusedUf8Target_
+        // tests exactly that flag, so the next touch falls through the same gap
+        // again and the write sits there dead. Every caller of this function is
+        // binding a UF8 control, so this is what the gesture means. Maps that
+        // already carry the layer are unaffected.
+        m.uf8Mode = true;
         uf8::user_plugins::upsert(m);
         uf8::user_plugins::save();
         return true;
