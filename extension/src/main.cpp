@@ -31146,10 +31146,57 @@ std::string uf1ActiveFxShortName_()
 }
 
 // The strip the FADER side is on, for the small LCD's CS-type cell.
+// ⛔ ONE ANSWER TO "WHICH FX ON THIS TRACK IS IN PLAY", and this is it.
+//
+// It was seven answers. Every surface resolved it for itself, each with its own
+// filter, and the filters disagreed: uf1ResolveCsFx_ passes only recognised
+// strip types, resolveFocusedUf8Target_ only maps with uf8Mode,
+// hudCursorUnlearnedFx_ only UNmapped ones, userStripCtxFocused_ only user maps.
+// The NAME was already shared (fxCycleDisplayName_ handles native maps, user
+// maps and plain FX alike) — only the choice in front of it was not. So the UF8
+// and the UC1 showed a UF8-only SSL Delta and even a completely unmapped
+// Pro-Q 4, while the UF1 showed neither, and the UF1's button could not open
+// what the UF1 never named. Frank 2026-09-18: "wieso haben die fucking geräte
+// eigene resolver und zeigen darum immer verschiedene scheisse an".
+//
+// The rule itself is NOT new — it is lifted verbatim from the UF8 csType chain
+// (the Sel-Mode Instance branch and the Channel-Encoder cycle branch below it):
+// in the modes that move the FX cursor, the cursor IS the answer, unfiltered.
+// ⇨ This is the FIRST shared answer, not an eighth private one. The UF8 chain
+// still carries its own copy of this condition; it is the next caller to move
+// onto this function, and until it does the two must be changed together.
+//
+// -1 means "no cursor answer here" — the caller keeps its own fallback, because
+// WHICH TRACK a surface shows is legitimately per-device (UF1 one channel, UF8
+// eight strips, UC1 the focused one) even though WHICH FX is not.
+static int inPlayFxOnTrack_(MediaTrack* tr)
+{
+    if (!tr) return -1;
+    const auto sm = g_selectionMode.load();
+    const auto em = g_encoderMode.load();
+    const bool cursorDrivesIt =
+           sm == SelectionMode::Instance
+        || sm == SelectionMode::InstanceCycle
+        || em == EncoderMode::FxCycle
+        || em == EncoderMode::Instance
+        || em == EncoderMode::FxScrollAll
+        || em == EncoderMode::InstanceScrollAll
+        || em == EncoderMode::FxMove
+        || em == EncoderMode::CsCycle
+        || em == EncoderMode::BcCycle
+        || em == EncoderMode::FavCycle;
+    if (!cursorDrivesIt) return -1;
+    return stripInstanceActiveFx_(tr);
+}
+
 static std::string uf1FaderSideFxShortName_()
 {
     MediaTrack* ft = uf1FaderTrack_();
     if (!ft) return "";
+    // The shared answer first, named with the shared namer — so the UF1 says
+    // what the UF8 and the UC1 say, including for plug-ins it has no map for.
+    if (const int inPlay = inPlayFxOnTrack_(ft); inPlay >= 0)
+        return fxCycleDisplayName_(ft, inPlay);
     MediaTrack* csTr = nullptr; int csFx = -1;
     if (uf1ResolveCsFx_(ft, csTr, csFx) >= 0 && csTr == ft && csFx >= 0)
         return uf1FxShortNameOn_(csTr, csFx);
