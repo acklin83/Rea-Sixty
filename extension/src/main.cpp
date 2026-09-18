@@ -31691,7 +31691,22 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
                           | (recLed        ? 0x02000000u : 0u)
                           | (recArmed      ? 0x04000000u : 0u)
                           | (selFollowsCol ? 0x08000000u : 0u);
-    if (changed || selKey != sColor) {
+    // ⛔ THE SWATCH LIVES ABOVE THE GATE, BECAUSE THE GATE IS WHY IT NEVER
+    // MOVED. Everything below only runs when the track's colour or selection
+    // CHANGED — which during a colour probe is never. The stepper sat inside it
+    // and was reached once, so the bar took index 1 and stayed there, in every
+    // view, whatever the script did. Three attempts at this went to the line I
+    // was editing and not to the two lines above it.
+    int swatch = g_paletteSwatch.load();
+    if (swatch == 99) {          // 99 = walk 1..15 on our own clock
+        static long long sNext = 0;
+        static int       sIdx  = 1;
+        const long long nowMs = nowMs_();
+        if (sNext == 0) { sNext = nowMs + 4000; sIdx = 1; }
+        else if (nowMs >= sNext) { sNext = nowMs + 4000; if (++sIdx > 15) sIdx = 1; }
+        swatch = sIdx;
+    }
+    if (changed || selKey != sColor || swatch >= 0) {
         sColor = selKey;
         // SEL LED (0x07) is FULL RGB (Frank 2026-08-05: Solo/Cut are multi-colour too —
         // Cut showing ORANGE for the old 0x3f byte proves the LED reads xx=(g<<4)|r as
@@ -31727,20 +31742,9 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         // that steps it also record what the eye sees. One pass, self-labelling,
         // nothing to count or remember — which is the failure mode of a probe
         // that shows sixteen colours in a row for three seconds each.
-        // ⛔ THE PROBE STEPS ITSELF. The first version let a Lua script hold a
-        // modal dialog open per index, and a modal dialog stops REAPER's main
-        // thread — so our timer never ran, the index was never painted, and the
-        // bar stayed black whatever the script had set. Frank saw nothing twice.
-        // Nothing here may depend on a script being between two dialogs.
-        int swatch = g_paletteSwatch.load();
-        if (swatch == 99) {          // 99 = walk 1..15 on our own clock
-            static long long sNext = 0;
-            static int       sIdx  = 1;
-            const long long nowMs = nowMs_();
-            if (sNext == 0) { sNext = nowMs + 4000; sIdx = 1; }
-            else if (nowMs >= sNext) { sNext = nowMs + 4000; if (++sIdx > 15) sIdx = 1; }
-            swatch = sIdx;
-        }
+        // The probe steps itself — see the hoist above. A Lua loop cannot do it:
+        // it held a modal dialog per index, and a modal dialog stops REAPER's
+        // main thread, so our timer never ran while the value was set.
         const std::array<uint8_t, 1> barIdx{
             (swatch >= 0) ? uint8_t(swatch) : uf8::quantize(rgb)};   // BAR = TRACK colour (always)
         // ⚠ THE SWATCH PROBE PAINTS IN EVERY VIEW. Otherwise it answers only
