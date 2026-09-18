@@ -4021,6 +4021,18 @@ std::atomic<bool> g_uf8VpotLearnArmed{false};
 std::atomic<bool> g_touchLearnOffRequest{false};
 // ⚠ Swatch probe: the palette index the UF1 colour bar is pinned to, -1 = off.
 std::atomic<int>  g_paletteSwatch{-1};
+// ⛔ THE UF8 SWATCH: EIGHT INDICES AT ONCE, FOR A CAMERA.
+// The palette table in Palette.cpp was read off a surface BY EYE, and Frank is
+// colourblind — which is exactly why it disagrees with SSL's own list on the
+// hard pairs (our "light blue" vs White, "lime" vs Yellow, "brown" vs Orange,
+// "blue leaning violet" vs Purple, "lighter violet" vs Pink) and agrees on red,
+// green and blue. That is a fault in the METHOD, and a probe that asks him to
+// name a colour repeats it.
+// A camera is not colourblind. The UF8 takes all eight colour bars in one
+// frame, so: page 1 paints indices 1..8 across the eight strips with the index
+// written above each, page 2 paints 9..15. Two photographs, nothing to
+// discriminate, nothing to write down.
+std::atomic<int>  g_uf8Swatch{0};   // 0 = off, 1 = indices 1..8, 2 = 9..15
 // ⛔ A TRACER AT THE BEGINNING, NOT A FIFTH THEORY. Four attempts at the
 // swatch probe each blamed a different gate, each blame was a real defect, and
 // none of them was the reason. These say WHERE the paint actually stops.
@@ -42893,6 +42905,11 @@ void onTimerBody_()
     // Read every tick, not consumed, so the bar keeps showing it while the eye
     // decides. See the bar site for why this exists.
     {
+        const char* uv = GetExtState("rea_sixty", "uf8_swatch");
+        const int up = (uv && *uv) ? std::atoi(uv) : 0;
+        g_uf8Swatch.store((up == 1 || up == 2) ? up : 0);
+    }
+    {
         const char* sv = GetExtState("rea_sixty", "palette_swatch");
         const int want = (sv && *sv) ? std::atoi(sv) : -1;
         g_paletteSwatch.store((want >= 0 && want <= 99) ? want : -1);
@@ -44605,7 +44622,24 @@ void onTimerBody_()
             uf8::nav::Overlay::instance().active()
             && g_navUf8Show.load()
             && g_navColorBar.load() != 2;
-        if (overlayOnUf8) {
+        if (const int page = g_uf8Swatch.load(); page > 0) {
+            // ⛔ INSTEAD OF ColorSync, NOT BESIDE IT — its dedup would push the
+            // real colours back on the next tick and the photograph would catch
+            // whichever won the race.
+            std::array<uint8_t, uf8::kStripCount> idx{};
+            for (int i = 0; i < int(uf8::kStripCount); ++i) {
+                const int v = (page == 1) ? (1 + i) : (9 + i);
+                idx[size_t(i)] = uint8_t(v <= 15 ? v : 0);
+            }
+            g_dev->send(uf8::buildColorCommand(idx));
+            for (int i = 0; i < int(uf8::kStripCount); ++i) {
+                char t[8];
+                std::snprintf(t, sizeof(t), "%02X", idx[size_t(i)]);
+                g_dev->send(uf8::buildStripTextUpper(uint8_t(i), t));
+                g_dev->send(uf8::buildStripTextLower(uint8_t(i), "SWATCH"));
+            }
+            g_sync->invalidate();   // so the real colours come back when it ends
+        } else if (overlayOnUf8) {
             g_sync->refresh(navColorForStrip);
         } else {
             g_sync->refresh(reaperColorForVisibleSlot);
