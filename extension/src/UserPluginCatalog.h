@@ -1045,6 +1045,29 @@ bool captureFunctionalParamCount(std::string_view match, int count);
 // UF1 map already carries something.
 void seedUf1FromSlots(UserPluginMap& m);
 // Enable + seed the UF1 layer for `match`. True when the catalog changed.
+// ⛔ ONE ORDER FOR THE LEARNED UF1 LAYOUT, because two of them drift.
+//
+// Flat UF1 position (page*4 + idx) that a CS linkIdx occupies on a FACTORY
+// strip, or -1 when the factory pages never show it. Read straight off
+// kUf1CsVPots in main.cpp — the table SSL's UF1 manual p188 is transcribed
+// into — so a learned Channel Strip lands page for page where every factory
+// strip has the same control.
+//
+// Why it exists: the learned stream used to be sorted by linkIdx, and SSL
+// numbers the EQ from the top down (HF 8-10 … LF 19-21) while the panel reads
+// from the bottom up. On the UC1 that never shows, because each slot goes to
+// its ENGRAVED knob and the engraving is the order. On the UF1 there is no
+// engraving: the number BECOMES the order, and the EQ came out upside down
+// (Frank 2026-09-18: "geht doch bei Factory CS immer von LF nach HF!").
+//
+// Both the surface (uf1LearnedStreamSlots_) and the seeder (seedUf1FromSlots)
+// ask THIS — the seeder exists so switching the explicit UF1 layer on does not
+// move anything, which it could not promise if it packed in a different order.
+// Bus Comp returns -1 throughout: its factory layout is two pages and nobody
+// has asked for it, so it keeps the packed-by-linkIdx behaviour it has today.
+int  uf1FactoryVpotFlatPos(int linkIdx, bool busComp);
+constexpr int kUf1FactoryVpotPositions = 32;   // 8 pages x 4 V-Pots
+
 bool enableUf1Layer(std::string_view match);
 
 // Lookup by match-substring on an FX name. Mirrors built-in lookup

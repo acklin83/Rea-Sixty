@@ -29572,6 +29572,38 @@ void uf1LearnedStreamSlots_(const char* fxName, bool busComp, bool wantButton,
               [](const uf8::UserLinkSlot* a, const uf8::UserLinkSlot* b) {
                   return a->linkIdx < b->linkIdx;
               });
+    // ⛔ V-POTS GO WHERE THE FACTORY PUTS THEM, not where their slot number
+    // falls. Sorting by linkIdx put the EQ on its head — SSL numbers it from the
+    // top down (HF 8-10 … LF 19-21) while the panel reads bottom up, which never
+    // shows on the UC1 because there the ENGRAVING is the order. See
+    // uf1FactoryVpotFlatPos: a learned Channel Strip now lands page for page
+    // where a factory strip has the same control, blanks included, and anything
+    // the factory pages do not show is packed after them. Frank 2026-09-18.
+    if (!wantButton && !busComp) {
+        std::vector<const uf8::UserLinkSlot*> placed(
+            uf8::user_plugins::kUf1FactoryVpotPositions, nullptr);
+        std::vector<const uf8::UserLinkSlot*> spill;
+        for (const auto* sl : out) {
+            const int pos = uf8::user_plugins::uf1FactoryVpotFlatPos(sl->linkIdx, busComp);
+            if (pos >= 0 && pos < uf8::user_plugins::kUf1FactoryVpotPositions && !placed[pos])
+                placed[pos] = sl;
+            else
+                spill.push_back(sl);
+        }
+        placed.insert(placed.end(), spill.begin(), spill.end());
+        // Trailing pages with nothing on them would be pages of blank to scroll
+        // through, so they go — the placement of everything before them stays.
+        while (placed.size() >= 4) {
+            const size_t tail = placed.size() - 4;
+            bool empty = true;
+            for (size_t i = tail; i < placed.size(); ++i)
+                if (placed[i]) { empty = false; break; }
+            if (!empty) break;
+            placed.resize(tail);
+        }
+        out.swap(placed);
+        return;                      // the strip key below is a SOFT-KEY concern
+    }
     // Reserve the PLUG-IN position in the SOFT-KEY stream, pushing the packed
     // params one place along. A nullptr here reads as "no param" to every
     // existing consumer (blank label, no toggle) — what the position actually

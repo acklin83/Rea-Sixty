@@ -279,20 +279,45 @@ int main()
             UserLinkSlot s{}; s.linkIdx = linkIdx; s.vst3Param = param;
             m.slots.push_back(s);
         };
-        add(6, 60);   // even → V-Pot stream (per the stub above)
-        add(2, 20);
+        add(6, 60);   // even → V-Pot stream (per the stub above). LPF  → flat 7
+        add(2, 20);   //                                            Width → flat 0
         add(3, 30);   // odd  → soft-key stream
         add(9, 90);
         add(4, -1);   // unmapped → must be skipped entirely
         seedUf1FromSlots(m);
 
-        // Split by stream, each ORDERED BY linkIdx and packed from position 0.
+        // ⛔ V-POTS SIT ON THEIR FACTORY POSITION, not packed from 0. linkIdx 2
+        // is Width (page 1, V-Pot 1 → flat 0) and linkIdx 6 is the Low Pass
+        // (page 2, V-Pot 4 → flat 7), so the gap between them is the factory's
+        // own gap. Soft-keys are still packed by linkIdx from 0.
         EXPECT(m.uf1.vpots.size() == 2);
         EXPECT(m.uf1.softKeys.size() == 2);
-        EXPECT(uf1SlotAt(m.uf1.vpots, 0)->vst3Param == 20);   // linkIdx 2 before 6
-        EXPECT(uf1SlotAt(m.uf1.vpots, 1)->vst3Param == 60);
+        EXPECT(uf1SlotAt(m.uf1.vpots, 0)->vst3Param == 20);   // Width
+        EXPECT(uf1SlotAt(m.uf1.vpots, 7)->vst3Param == 60);   // Low Pass
+        EXPECT(uf1SlotAt(m.uf1.vpots, 1) == nullptr);         // factory blank
         EXPECT(uf1SlotAt(m.uf1.softKeys, 0)->vst3Param == 30);
         EXPECT(uf1SlotAt(m.uf1.softKeys, 1)->vst3Param == 90);
+
+        // ⛔ THE BUG THIS ORDER EXISTS FOR. SSL numbers the EQ from the top
+        // down, so sorting by linkIdx put HF Freq (10) BEFORE LF Gain (20) and
+        // the learned strip showed its EQ upside down against every factory one
+        // (Frank 2026-09-18). On the factory pages LF Gain is page 3 (flat 8)
+        // and HF Freq is page 6 (flat 21): low band first, as the panel reads.
+        {
+            UserPluginCatalog c2{};
+            EXPECT(parse_(kV10, c2));
+            auto& m2 = c2.maps[0];
+            m2.slots.clear();
+            auto add2 = [&](int linkIdx, int param) {
+                UserLinkSlot s{}; s.linkIdx = linkIdx; s.vst3Param = param;
+                m2.slots.push_back(s);
+            };
+            add2(10, 100);   // HF Freq  — lower linkIdx, must NOT come first
+            add2(20, 200);   // LF Gain  — higher linkIdx, must come first
+            seedUf1FromSlots(m2);
+            EXPECT(uf1SlotAt(m2.uf1.vpots,  8)->vst3Param == 200);  // LF Gain
+            EXPECT(uf1SlotAt(m2.uf1.vpots, 21)->vst3Param == 100);  // HF Freq
+        }
 
         // Idempotent: seeding a populated map must leave it alone, else enabling
         // twice (or a later auto-enable) would stomp the user's own edits.

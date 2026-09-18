@@ -1855,6 +1855,38 @@ bool captureOriginalName(std::string_view match, std::string_view originalName)
 // Mirrors uf1LearnedStreamSlots_ in main.cpp: mapped slots only, split by
 // uc1::linkIdxIsButton (buttons → soft-keys, rest → V-Pots), each stream sorted
 // by linkIdx and packed from position 0. Keep the two in step.
+// The factory UF1 V-Pot pages, as linkIdx. Transcribed cell for cell from
+// kUf1CsVPots[0] (Channel Strip 2 — every CS type in that table shares this
+// layout) with the names resolved through kCs2Slots. -1 = the factory leaves
+// that V-Pot empty on that page, and so do we.
+//
+//   page 1  Width        -            Out Trim     Comp Mix
+//   page 2  Input Trim   -            HPF          LPF
+//   page 3  LF Gain      LF Freq      -            -
+//   page 4  LMF Gain     LMF Freq     LMF Q        -
+//   page 5  HMF Gain     HMF Freq     HMF Q        -
+//   page 6  HF Gain      HF Freq      -            -
+//   page 7  Comp Ratio   Comp Thr     Comp Rel     -
+//   page 8  Gate Range   Gate Thr     Gate Rel     Gate Hold
+static const int kUf1FactoryVpotLinkIdx[kUf1FactoryVpotPositions] = {
+     2, -1, 37, 23,
+     4, -1,  7,  6,
+    20, 19, -1, -1,
+    16, 17, 18, -1,
+    11, 12, 13, -1,
+     9, 10, -1, -1,
+    26, 27, 28, -1,
+    29, 30, 31, 32,
+};
+
+int uf1FactoryVpotFlatPos(int linkIdx, bool busComp)
+{
+    if (busComp || linkIdx < 0) return -1;
+    for (int i = 0; i < kUf1FactoryVpotPositions; ++i)
+        if (kUf1FactoryVpotLinkIdx[i] == linkIdx) return i;
+    return -1;
+}
+
 void seedUf1FromSlots(UserPluginMap& m)
 {
     if (uf1MapHasContent(m.uf1)) return;
@@ -1870,19 +1902,34 @@ void seedUf1FromSlots(UserPluginMap& m)
     std::sort(vp.begin(), vp.end(), byLink);
     std::sort(sk.begin(), sk.end(), byLink);
     auto fill = [](const std::vector<const UserLinkSlot*>& src,
-                   std::vector<UserUf1Slot>& dst) {
-        dst.clear();
+                   std::vector<UserUf1Slot>& dst, int startPos) {
         for (size_t i = 0; i < src.size(); ++i) {
             UserUf1Slot s{};
-            s.pos         = static_cast<int>(i);
+            s.pos         = startPos + static_cast<int>(i);
             s.vst3Param   = src[i]->vst3Param;
             s.inverted    = src[i]->inverted;
             s.customLabel = src[i]->customLabel;
             dst.push_back(std::move(s));
         }
     };
-    fill(vp, m.uf1.vpots);
-    fill(sk, m.uf1.softKeys);
+    // V-Pots land on their FACTORY position; whatever the factory pages do not
+    // show is packed after them. Same order the surface uses — see
+    // uf1FactoryVpotFlatPos, and keep the two in step.
+    m.uf1.vpots.clear();
+    std::vector<const UserLinkSlot*> spill;
+    for (const auto* sl : vp) {
+        const int pos = uf1FactoryVpotFlatPos(sl->linkIdx, busComp);
+        if (pos < 0) { spill.push_back(sl); continue; }
+        UserUf1Slot s{};
+        s.pos         = pos;
+        s.vst3Param   = sl->vst3Param;
+        s.inverted    = sl->inverted;
+        s.customLabel = sl->customLabel;
+        m.uf1.vpots.push_back(std::move(s));
+    }
+    fill(spill, m.uf1.vpots, kUf1FactoryVpotPositions);
+    m.uf1.softKeys.clear();
+    fill(sk, m.uf1.softKeys, 0);
     // The learned strip's PLUG-IN key sits at kUf1LearnedStripKeyPos and pushes
     // the packed stream one place along — mirror BOTH halves of that here, or
     // enabling the explicit layer would move every soft-key back by one and drop
