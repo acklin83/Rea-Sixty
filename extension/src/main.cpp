@@ -19185,7 +19185,25 @@ void uf1EmitMeterInstanceLabel_(bool force = true)
     // umlaut in half, which is the same trap the soft-key label documents.
     nm = utf8ToLatin1(nm);
     char lbl[16] = {0};
-    if (!nm.empty()) {
+    // ⛔ THE AUTO POSITION SAYS "AUTO", NOT THE NAME OF THE TRACK IT FOLLOWS.
+    // It used to show that name, so the same track appeared twice in the ring —
+    // once as the position that FOLLOWS the selection and once as its own pinned
+    // entry — and nothing on the surface said which was which (Frank 2026-09-12,
+    // "Kik Sampl, Kik In, Kik Sampl, MASTER, Mon FX"; explained then, not fixed).
+    // SSL has no such position at all: their UF1 guide calls V-Pot 1 the "Meter
+    // Plug-in Selector" and the display cell the "Selected Meter Plug-in
+    // Instance", and it scrolls a flat list of up to eight instances (p189). The
+    // follow position is ours, added because our Meters hang off REAPER tracks
+    // and the view should travel with the selection. Being ours, it has to name
+    // itself — and it can afford to, because the track it follows is the
+    // selected one and the surface already says which that is.
+    // ⚠ Only when there is a ring to be confused about. With a single instance
+    // AUTO is the only position there is, and its name is the useful thing, which
+    // is also what SSL shows.
+    if (count > 1 && sslcore::meterSelection() < 0) {
+        std::snprintf(lbl, sizeof(lbl), "AUTO");
+    }
+    else if (!nm.empty()) {
         // Two Meters on ONE track announce the same track name, so the label read
         // the same for both and cycling V-Pot1 looked like it had stuck. Number
         // them — "Track 4 2" is the second Meter in that track's chain.
