@@ -9295,7 +9295,16 @@ AutoLearnPlan autoLearnPlan_(const UserPluginMap* m, int tab)
         pl.slotDom     = m->domain;
         pl.vpotBanks   = m->uf8Mode;
         pl.chStrips    = true;
-        pl.paramFaders = !m->uf8Mode;
+        // ⛔ THE FADER PASS BELONGS TO A UF8-ONLY MAP, not to the ABSENCE of a
+        // UF8 layer. This read `!m->uf8Mode`, so a Channel Strip map that has
+        // deliberately never been given a UF8 layer was the one case that opened
+        // the dialog with "every param onto the faders" already ticked — it
+        // proposed building exactly the layer the map does not have, and the same
+        // params the UC1 pass was proposing one line above. Frank 2026-09-18.
+        // A map with no channel structure at all (domain None) is what that pass
+        // was written for: "the 'put these params on the faders' path for plug-ins
+        // with no channel structure".
+        pl.paramFaders = (m->domain == uf8::Domain::None);
         return pl;
     }
     // The HUD: the tab you are standing on is the statement of intent.
@@ -20067,9 +20076,14 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         ImGui_Spacing(ctx);
         ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
-        ImGui_Checkbox(ctx, "Also fill UF8 V-Pot banks##als_vp",
+        // ⛔ "Also fill" / "Map all" promised an action. Neither box fills or
+        // maps anything: they add rows to the proposal list, which is then
+        // reviewed and accepted per row — and on most plug-ins the pass comes
+        // back with nothing at all, so the label promised work that never
+        // happened. Frank 2026-09-18. Say what the box actually does.
+        ImGui_Checkbox(ctx, "Suggest UF8 V-Pot banks##als_vp",
                        &g_autoLearnSetupVpots);
-        ImGui_Checkbox(ctx, "Map all params to UF8 Faders##als_pf",
+        ImGui_Checkbox(ctx, "Suggest UF8 faders, one per param##als_pf",
                        &g_autoLearnSetupParamFaders);
         ImGui_Spacing(ctx);
         ImGui_Separator(ctx);
@@ -20223,6 +20237,16 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             // don't fight over the same physical fader.
             if (g_autoLearnSetupParamFaders) {
                 using StKind = uf8::autolearn::Uf8StripSuggestion::Kind;
+                // ⛔ AND NOT A PARAM THE UC1 PASS IS ALREADY PROPOSING. The two
+                // passes read the same param list and never compared notes, so
+                // running with a CS primary offered the same parameter twice —
+                // once on a UC1 slot, once on a fader — and accepting the preview
+                // wholesale bound it in both places. The fader pass already skips
+                // a fader the CH<N> pass claimed; this is that same courtesy one
+                // level up, on the param instead of the physical control.
+                std::set<int> uc1Params;
+                for (const auto& r : g_autoLearnSlots)
+                    if (r.vst3Param >= 0) uc1Params.insert(r.vst3Param);
                 bool takenFader[2][8] = {};   // [faderBank][strip]
                 for (const auto& s : g_autoLearnUf8Strips)
                     if (s.kind == StKind::Fader &&
@@ -20235,6 +20259,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     if (s.faderBank >= 0 && s.faderBank < 2 &&
                         s.strip >= 0 && s.strip < 8 &&
                         takenFader[s.faderBank][s.strip]) continue;
+                    if (s.vst3Param >= 0 && uc1Params.count(s.vst3Param)) continue;
                     g_autoLearnUf8Strips.push_back(std::move(s));
                 }
             }
@@ -22642,7 +22667,9 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 g_autoLearnSetupPrimary = g_newPrimaryMode;
                 g_autoLearnSetupVpots   = (g_newPrimaryMode == 3)
                                           ? true : g_newUf8Mode;
-                g_autoLearnSetupParamFaders = !g_autoLearnSetupVpots;
+                // Same rule as autoLearnPlan_: the fader pass is for a UF8-only
+                // map (primary 3), not for "no V-Pot pass".
+                g_autoLearnSetupParamFaders = (g_newPrimaryMode == 3);
                 g_autoLearnSetupPending = true;
             }
             ImGui_CloseCurrentPopup(ctx);
