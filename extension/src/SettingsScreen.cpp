@@ -8784,6 +8784,15 @@ std::vector<uf8::autolearn::Uf8StripSuggestion> g_autoLearnUf8Strips;
 // another in the same frame silently drops the second OpenPopup.)
 bool g_autoLearnSetupOpen        = false;
 bool g_autoLearnSetupPending     = false;   // armed by "Create + AutoLearn"
+// ⛔ THE MODE IS NOT ASKED TWICE. "Create + AutoLearn" answers it in the +New
+// dialog and seeds the Setup from that answer — and the Setup then put the very
+// same three radios on screen, pre-selected with what was just chosen, as if it
+// had not been asked. Frank 2026-09-18: "DER FRAGT MODE! UND NACHHER FRAGT
+// AUTOLEARN NOCHMALS DEN MODE?!". Set while the Setup was opened straight out
+// of +New; the radios then render as a line stating the decision instead.
+// Opening AutoLearn on its own still offers them, because there the mode is a
+// real choice that can also SWITCH an existing map's domain.
+bool g_autoLearnSetupFromNew     = false;
 bool g_autoLearnPreviewPending   = false;
 int  g_autoLearnSetupPrimary     = 1;   // 1=CS, 2=BC, 3=UF8-only
 bool g_autoLearnSetupVpots       = true;
@@ -19822,6 +19831,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     (editing->domain == uf8::Domain::BusComp)      ? 2 : 3;
                 g_autoLearnSetupVpots       = pl.vpotBanks;
                 g_autoLearnSetupParamFaders = pl.paramFaders;
+                g_autoLearnSetupFromNew     = false;   // opened on its own
             }
             g_autoLearnSetupOpen   = true;
             ImGui_OpenPopup(ctx, "AutoLearn Setup##fxl_alsetup", nullptr);
@@ -20062,17 +20072,27 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
     if (ImGui_BeginPopupModal(ctx, "AutoLearn Setup##fxl_alsetup",
                               &g_autoLearnSetupOpen, &setupFlags))
     {
-        ImGui_Text(ctx, "AutoLearn for:");
-        ImGui_Spacing(ctx);
-        if (ImGui_RadioButton(ctx, "Channel Strip slots (CS)##als_cs",
-                              g_autoLearnSetupPrimary == 1))
-            g_autoLearnSetupPrimary = 1;
-        if (ImGui_RadioButton(ctx, "Bus Comp slots (BC)##als_bc",
-                              g_autoLearnSetupPrimary == 2))
-            g_autoLearnSetupPrimary = 2;
-        if (ImGui_RadioButton(ctx, "UF8-only##als_uf8",
-                              g_autoLearnSetupPrimary == 3))
-            g_autoLearnSetupPrimary = 3;
+        if (g_autoLearnSetupFromNew) {
+            // Asked and answered one dialog ago — say what it is, do not ask.
+            const char* modeName = (g_autoLearnSetupPrimary == 1) ? "Channel Strip slots (CS)"
+                                 : (g_autoLearnSetupPrimary == 2) ? "Bus Comp slots (BC)"
+                                                                  : "UF8-only";
+            char line[96];
+            snprintf(line, sizeof(line), "AutoLearn for: %s", modeName);
+            ImGui_Text(ctx, line);
+        } else {
+            ImGui_Text(ctx, "AutoLearn for:");
+            ImGui_Spacing(ctx);
+            if (ImGui_RadioButton(ctx, "Channel Strip slots (CS)##als_cs",
+                                  g_autoLearnSetupPrimary == 1))
+                g_autoLearnSetupPrimary = 1;
+            if (ImGui_RadioButton(ctx, "Bus Comp slots (BC)##als_bc",
+                                  g_autoLearnSetupPrimary == 2))
+                g_autoLearnSetupPrimary = 2;
+            if (ImGui_RadioButton(ctx, "UF8-only##als_uf8",
+                                  g_autoLearnSetupPrimary == 3))
+                g_autoLearnSetupPrimary = 3;
+        }
         ImGui_Spacing(ctx);
         ImGui_Separator(ctx);
         ImGui_Spacing(ctx);
@@ -22707,6 +22727,7 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 // Same rule as autoLearnPlan_: never pre-ticked.
                 g_autoLearnSetupParamFaders = false;
                 g_autoLearnSetupPending = true;
+                g_autoLearnSetupFromNew  = true;
             }
             ImGui_CloseCurrentPopup(ctx);
         };
