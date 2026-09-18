@@ -2389,6 +2389,7 @@ int uf1ResolveCsFx_(MediaTrack* focusTr, MediaTrack*& outTr, int& outFx);
 // The one shared "which FX on this track is in play" answer (defined near the
 // UF1 name resolver). Declared here because the EQ-graph painter sits above it
 // and must land on the SAME FX the CS-TYPE cell names.
+static int explicitCursorFxOnTrack_(MediaTrack* tr, int stripFx);
 static int inPlayFxOnTrack_(MediaTrack* tr, int stripFx);
 int uf1CsPageCountFor_(int type, MediaTrack* tr, int fx);
 static int  engagedBankableKind_();                  // any thread
@@ -31279,11 +31280,24 @@ std::string uf1ActiveFxShortName_()
 // case, and Frank's — the gate returned nothing and the UF1 still diverged. The
 // branch I had read was real and was not the one that fires. Read the chain to
 // the END. [[which-fx-is-in-play-seven-resolvers]]
-static int inPlayFxOnTrack_(MediaTrack* tr, int stripFx)
+// The first half of the rule on its own: the FX the user EXPLICITLY cycled to,
+// when that is somewhere other than the strip this surface resolved. -1 means
+// "no deliberate cursor here" — which is a different statement from "here is the
+// answer", and callers need both. The UF8 csType chain has a branch that fires
+// only on the deliberate case and must fall through to its own later branches
+// otherwise; asking inPlayFxOnTrack_ there would make it fire on the FX-0
+// default as well and swallow the user-map branch below it.
+static int explicitCursorFxOnTrack_(MediaTrack* tr, int stripFx)
 {
     if (!tr) return -1;
     const int raw = stripInstanceFxRaw_(tr);
-    if (raw >= 0 && raw != stripFx) return raw;
+    return (raw >= 0 && raw != stripFx) ? raw : -1;
+}
+
+static int inPlayFxOnTrack_(MediaTrack* tr, int stripFx)
+{
+    if (!tr) return -1;
+    if (const int cur = explicitCursorFxOnTrack_(tr, stripFx); cur >= 0) return cur;
     if (stripFx >= 0) return stripFx;
     return stripInstanceActiveFx_(tr);
 }
@@ -37927,6 +37941,20 @@ void pushZonesForVisibleSlots()
             // FX Cycle look like UF8 "shows only Instances". Frank
             // 2026-05-20.
             //
+            // ⛔ NOT MERGED ONTO inPlayFxOnTrack_, ON PURPOSE. This branch and
+            // the Sel-Mode one above it each ask the cursor their own way, and
+            // both differ from the shared rule in a way that would CHANGE what
+            // the UF8 shows:
+            //   * the Sel-Mode branch calls stripInstanceActiveFx_ directly,
+            //     which clamps and SKIPS OFFLINE FX. inPlayFxOnTrack_ hands back
+            //     the raw cursor untouched when one is set, so an offline FX
+            //     under the cursor would start being named.
+            //   * this branch needs the stale-cursor safeguard below, which has
+            //     no equivalent in the shared rule.
+            // Only the plain cursor-override branch further down was provably
+            // identical, and that one now asks explicitCursorFxOnTrack_. Merging
+            // these two would be a behaviour change wearing a cleanup's clothes.
+            //
             // Instance-mode safeguard (Frank 2026-05-25): the raw cursor
             // can be stale from a prior FX-Cycle session and point at an
             // unmapped FX. FX-Cycle wants to display whatever's there;
@@ -37966,8 +37994,7 @@ void pushZonesForVisibleSlots()
             // No "-" placeholder — leave empty when no FX so the LCD
             // slot reads as "nothing here" rather than a dash.
         } else if (tr == barFocusTrack
-                && stripInstanceFxRaw_(tr) >= 0
-                && (!map || stripInstanceFxRaw_(tr) != mapFxIdx))
+                && explicitCursorFxOnTrack_(tr, map ? mapFxIdx : -1) >= 0)
         {
             // Focused-strip cursor override: when the user has
             // explicitly cycled (raw cursor set) on the focused track
@@ -37978,7 +38005,8 @@ void pushZonesForVisibleSlots()
             // because cycling into UF8-only territory parks the focus
             // at None — that branch would then fire and never reach
             // the cursor-aware path. Frank 2026-05-22.
-            const int rawCursor = stripInstanceFxRaw_(tr);
+            const int rawCursor =
+                explicitCursorFxOnTrack_(tr, map ? mapFxIdx : -1);
             csType = fxCycleDisplayName_(tr, rawCursor);
         } else if (focused.domain == uf8::Domain::None) {
             auto uf8Ctx = findUserPluginOnTrack_(tr, uf8::Domain::None);
