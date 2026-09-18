@@ -31148,44 +31148,36 @@ std::string uf1ActiveFxShortName_()
 // The strip the FADER side is on, for the small LCD's CS-type cell.
 // ⛔ ONE ANSWER TO "WHICH FX ON THIS TRACK IS IN PLAY", and this is it.
 //
-// It was seven answers. Every surface resolved it for itself, each with its own
-// filter, and the filters disagreed: uf1ResolveCsFx_ passes only recognised
-// strip types, resolveFocusedUf8Target_ only maps with uf8Mode,
-// hudCursorUnlearnedFx_ only UNmapped ones, userStripCtxFocused_ only user maps.
-// The NAME was already shared (fxCycleDisplayName_ handles native maps, user
-// maps and plain FX alike) — only the choice in front of it was not. So the UF8
-// and the UC1 showed a UF8-only SSL Delta and even a completely unmapped
-// Pro-Q 4, while the UF1 showed neither, and the UF1's button could not open
-// what the UF1 never named. Frank 2026-09-18: "wieso haben die fucking geräte
-// eigene resolver und zeigen darum immer verschiedene scheisse an".
+// It was seven answers, each with its own filter, and the filters disagreed:
+// uf1ResolveCsFx_ passes only recognised strip types, resolveFocusedUf8Target_
+// only maps with uf8Mode, hudCursorUnlearnedFx_ only UNmapped ones. The NAME was
+// already shared (fxCycleDisplayName_ handles native maps, user maps and plain
+// FX alike) — only the choice in front of it was not. So the UF8 and the UC1
+// showed a UF8-only SSL Delta and even a completely unmapped Pro-Q 4, while the
+// UF1 showed neither.
 //
-// The rule itself is NOT new — it is lifted verbatim from the UF8 csType chain
-// (the Sel-Mode Instance branch and the Channel-Encoder cycle branch below it):
-// in the modes that move the FX cursor, the cursor IS the answer, unfiltered.
-// ⇨ This is the FIRST shared answer, not an eighth private one. The UF8 chain
-// still carries its own copy of this condition; it is the next caller to move
-// onto this function, and until it does the two must be changed together.
+// The rule is READ OFF THE UF8's csType chain, not invented — specifically its
+// focused-strip cursor override and its last-resort tail:
+//   • the raw cursor is set only when the user has EXPLICITLY cycled this track,
+//     so when it points somewhere other than the strip, that is the answer;
+//   • otherwise the strip this surface resolved;
+//   • otherwise stripInstanceActiveFx_, which is the cursor's own default: FX 0,
+//     skipping offline FX.
+// `stripFx` is the caller's own strip answer (-1 when it has none) because WHICH
+// TRACK and WHICH STRIP a surface resolves is legitimately per-device — UF1 one
+// channel, UF8 eight strips, UC1 the focused one — even though WHICH FX is not.
 //
-// -1 means "no cursor answer here" — the caller keeps its own fallback, because
-// WHICH TRACK a surface shows is legitimately per-device (UF1 one channel, UF8
-// eight strips, UC1 the focused one) even though WHICH FX is not.
-static int inPlayFxOnTrack_(MediaTrack* tr)
+// ⛔ My first cut of this gated on the selection / encoder mode. That was wrong:
+// the UF8's tail has no mode check at all, so in plain ChSelect — the normal
+// case, and Frank's — the gate returned nothing and the UF1 still diverged. The
+// branch I had read was real and was not the one that fires. Read the chain to
+// the END. [[which-fx-is-in-play-seven-resolvers]]
+static int inPlayFxOnTrack_(MediaTrack* tr, int stripFx)
 {
     if (!tr) return -1;
-    const auto sm = g_selectionMode.load();
-    const auto em = g_encoderMode.load();
-    const bool cursorDrivesIt =
-           sm == SelectionMode::Instance
-        || sm == SelectionMode::InstanceCycle
-        || em == EncoderMode::FxCycle
-        || em == EncoderMode::Instance
-        || em == EncoderMode::FxScrollAll
-        || em == EncoderMode::InstanceScrollAll
-        || em == EncoderMode::FxMove
-        || em == EncoderMode::CsCycle
-        || em == EncoderMode::BcCycle
-        || em == EncoderMode::FavCycle;
-    if (!cursorDrivesIt) return -1;
+    const int raw = stripInstanceFxRaw_(tr);
+    if (raw >= 0 && raw != stripFx) return raw;
+    if (stripFx >= 0) return stripFx;
     return stripInstanceActiveFx_(tr);
 }
 
@@ -31193,16 +31185,16 @@ static std::string uf1FaderSideFxShortName_()
 {
     MediaTrack* ft = uf1FaderTrack_();
     if (!ft) return "";
-    // The shared answer first, named with the shared namer — so the UF1 says
-    // what the UF8 and the UC1 say, including for plug-ins it has no map for.
-    if (const int inPlay = inPlayFxOnTrack_(ft); inPlay >= 0)
-        return fxCycleDisplayName_(ft, inPlay);
+    // The UF1's own strip answer — this part stays per-device on purpose …
     MediaTrack* csTr = nullptr; int csFx = -1;
-    if (uf1ResolveCsFx_(ft, csTr, csFx) >= 0 && csTr == ft && csFx >= 0)
-        return uf1FxShortNameOn_(csTr, csFx);
-    // No recognised strip on that track: name its first FX, the same fallback
-    // resolveActiveFx_ ends in, so an FX-less track is the only empty answer.
-    if (TrackFX_GetCount(ft) > 0) return uf1FxShortNameOn_(ft, 0);
+    const int stripFx =
+        (uf1ResolveCsFx_(ft, csTr, csFx) >= 0 && csTr == ft && csFx >= 0)
+            ? csFx : -1;
+    // … and everything after it is the shared answer, with the shared namer, so
+    // the UF1 says what the UF8 and the UC1 say — including for a plug-in it has
+    // no map for at all.
+    const int inPlay = inPlayFxOnTrack_(ft, stripFx);
+    if (inPlay >= 0) return fxCycleDisplayName_(ft, inPlay);
     return "";
 }
 
@@ -37899,7 +37891,13 @@ void pushZonesForVisibleSlots()
         // that asymmetry made non-focused strips read "REAPER" while
         // the focused one read the actual plug-in (Frank 2026-05-23).
         if (csType.empty()) {
-            const int fxIdx = stripInstanceActiveFx_(tr);
+            // Through the shared answer now. With stripFx = -1 this is exactly
+            // the two calls that stood here (raw cursor when set, else
+            // stripInstanceActiveFx_'s FX-0 default) — the point is that the UF1
+            // reaches the same function instead of carrying a second copy of the
+            // rule. The mode-specific branches above stay: those are overrides,
+            // not the general answer.
+            const int fxIdx = inPlayFxOnTrack_(tr, -1);
             if (fxIdx >= 0) csType = fxCycleDisplayName_(tr, fxIdx);
         }
         // REC + RME override: show the track's hardware input name in
