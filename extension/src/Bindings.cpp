@@ -2231,6 +2231,27 @@ void parseMatrixRow_(wdl_json_element* obj, ActionSlot (&row)[kModifierCount])
     }
 }
 
+// ⛔ The plain, single-step, short-press slot has NO per-slot LED override. The
+// binding-level Active/Inactive colour IS its colour, and the editor has not
+// offered an override there since 2026-06-22 (Stream C1, deliberately: it was
+// redundant and confusing). But the READ path never learned that —
+// effectiveLedActive still lets slot.led win over bd.color — so a stored
+// override there is unreachable AND in force at the same time: the key wears a
+// colour that no screen shows and no button clears.
+//
+// Frank 2026-09-18, send/plugin 8: he set green on the SHIFT override, plain
+// carried green too, the editor showed white at the bottom, and there was
+// nowhere to go. Left behind by a push-cycle that later collapsed back to one
+// step, when the override section was still on screen.
+//
+// Dropped on load, so a leftover cannot outlive the UI that made it. Long-press
+// and the modifier slots keep theirs — the editor shows those.
+void dropUnreachablePlainLed_(Binding& bd)
+{
+    auto& p = bd.shortPress[static_cast<int>(Modifier::Plain)];
+    if (p.extraSteps.empty()) p.led = LedOverride{};
+}
+
 // Parse a Binding from its JSON object (new-schema only — no
 // type/action/param/midi/long_press fallback). Used by parseUserQuicks_.
 // parseLayer_ has its own inline logic that also covers the old
@@ -2278,6 +2299,7 @@ void parseBindingBody_(wdl_json_element* be, Binding& bd)
                               || std::strcmp(s, "1") == 0);
     if (auto* v = be->get_item_by_name("short"))
         parseMatrixRow_(v, bd.shortPress);
+    dropUnreachablePlainLed_(bd);
     if (auto* v = be->get_item_by_name("long"); v && v->is_object()) {
         bd.hasLongPress = true;
         parseMatrixRow_(v, bd.longPress);
@@ -2660,6 +2682,7 @@ bool parseLayer_(wdl_json_element* lobj, Layer& out)
         // missing slots stay at default (Noop).
         if (auto* v = be->get_item_by_name("short"))
             parseMatrixRow_(v, bd.shortPress);
+        dropUnreachablePlainLed_(bd);
         if (auto* v = be->get_item_by_name("long"); v && v->is_object()) {
             bd.hasLongPress = true;
             parseMatrixRow_(v, bd.longPress);
