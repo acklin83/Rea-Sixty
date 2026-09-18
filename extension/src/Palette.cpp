@@ -120,16 +120,26 @@ constexpr std::array<Rgb, 16> kPalette{{
     {0x40, 0x00, 0xFF},  // 0x09  blue leaning violet
     {0xA0, 0xFF, 0xA0},  // 0x0A  pale light green
     {0xC0, 0x80, 0xFF},  // 0x0B  lighter violet
-    {0x00, 0x00, 0x00},  // 0x0C  OFF
+    {0x9C, 0x9E, 0xFF},  // 0x0C  light blue — RENDERS, see below
     {0x00, 0x00, 0x00},  // 0x0D  OFF
     {0x00, 0x00, 0x00},  // 0x0E  OFF
     {0x00, 0x00, 0x00},  // 0x0F  OFF
 }};
 
+// ⛔ 0x0C IS NOT OFF, AND WE THREW IT AWAY FOR FIVE MONTHS.
+// Three independent sources say it renders, and two of them were already in
+// this repo. ColorSync.cpp has carried a note since 2026-04-23 that a direct
+// hardware test showed 0x0C as a light blue. SSL 360's own LedColourType list
+// calls 0x0C "Light Blue" (9C9EFF). And a photograph of all sixteen indices
+// painted across the UF8's eight strips (2026-09-18) shows a lit bar on 0x0C
+// and nothing on 0x0D, 0x0E, 0x0F.
+// ⚠ The table above was read off a surface BY EYE, and its entries disagree
+// with SSL's list exactly on the pairs that are hard to tell apart. Treat every
+// NAME in it as provisional; which indices LIGHT is what the photograph settles.
 constexpr std::array<bool, 16> kHasEntry{{
     false, true,  true,  true,  true,  true,
     true,  true,  true,  true,  true,  true,
-    false, false, false, false
+    true,  false, false, false
 }};
 
 } // anonymous
