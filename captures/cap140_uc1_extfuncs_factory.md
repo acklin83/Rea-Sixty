@@ -45,8 +45,11 @@ WIDTH FQ · AUTO MKP · MKP OFST
 
 - **SOLO SAFE and MKP OFST are new.** Neither is in `kExtFuncs32c`, which ends
   at AUTO MKP.
-- **HQ is on all four SSL strips.** The runbook guessed it was 32C-only and
-  would need a third `special`; measured, it is everywhere.
+- **HQ is a menu entry on all four SSL strips.** Whether it is also a host
+  parameter there is a separate question, and `docs/ssl-native-params/` cannot
+  answer it: those dumps are from 2026-04-21, before SSL 360 2.1.12. Frank,
+  2026-09-18: *"doch, der CS2 hat HQ Mode."* The dumps are stale, not the
+  plug-ins — they need re-running before any table is written.
 - **The SSL strips' lists are far shorter than the 32C's** (13–18 against 28)
   and contain none of the 32C's EQ/COMP/GATE section entries. The lists really
   are authored per strip, which is the whole reason for this capture.
