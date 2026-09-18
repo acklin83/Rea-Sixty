@@ -22240,6 +22240,43 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
             }
             if (s_pickTr && s_pickFx >= 0)
                 tryFx(s_pickTr, s_pickFx, s_pickKey);
+            // ⛔ AN OPEN WINDOW OUTRANKS A SURFACE FX YOU CANNOT SEE. Opening a
+            // plug-in IS a deliberate act (Frank 2026-09-18: "offenes Fenster IST
+            // doch eine bewusste Wahl"), but it used to rank LAST — below step 0,
+            // which "nearly always answers SOMETHING". So with a bx_console open
+            // in front of him the page sat on the strip the surface happened to
+            // be driving, and the open window was never reached.
+            //
+            // Edge-triggering the OPENING would not have fixed it: his window was
+            // already open before the page was, so no edge ever fires. The state
+            // is the signal.
+            //
+            // Narrow on purpose: this only beats step 0 when the surface's own
+            // plug-in has NO window open. Between something on screen and
+            // something you cannot see, the visible one is the deliberate choice
+            // — and when the surface's plug-in IS open there is nothing to
+            // resolve, so the 2026-09-16 rule (surface answers, pick beats it)
+            // stands untouched.
+            if (!ftr) {
+                const bool actVisible =
+                    actTr && actFx >= 0
+                    && ValidatePtr2(nullptr, actTr, "MediaTrack*")
+                    && actFx < TrackFX_GetCount(actTr)
+                    && TrackFX_GetOpen(actTr, actFx);
+                if (!actVisible) {
+                    MediaTrack* mtr = GetMasterTrack(nullptr);
+                    const int mn = mtr ? TrackFX_GetCount(mtr) : 0;
+                    for (int i = 0; i < mn && !ftr; ++i)
+                        if (TrackFX_GetOpen(mtr, i)) tryFx(mtr, i, -1);
+                    const int tc = CountTracks(nullptr);
+                    for (int ti = 0; ti < tc && !ftr; ++ti) {
+                        MediaTrack* tr = GetTrack(nullptr, ti);
+                        const int n = tr ? TrackFX_GetCount(tr) : 0;
+                        for (int i = 0; i < n && !ftr; ++i)
+                            if (TrackFX_GetOpen(tr, i)) tryFx(tr, i, ti);
+                    }
+                }
+            }
             if (!ftr && actTr) tryFx(actTr, actFx, actKey);
             // 2) Last-touched FX (persists once a param was moved).
             if (!ftr) {
