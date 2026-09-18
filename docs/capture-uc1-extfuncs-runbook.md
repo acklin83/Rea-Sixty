@@ -22,17 +22,26 @@ SSL 360 can only drive the UC1 if the UC1 is on **SSL's** driver. Ours (WinUSB,
 provider "Rea-Sixty") blocks it, and the binding has drifted by itself before —
 2026-08-14 found all three surfaces silently re-bound to ours.
 
-⛔ **Measure, never assume.** On the StoerPC:
+⛔ **Measure, never assume.** From the Mac, over SSH:
 
-```powershell
-pnputil /enum-devices /instanceid "USB\VID_31E9&PID_0023*"
+```bash
+ssh claude@$IP 'pnputil /enum-devices /drivers' | grep -A 12 "UC-000604"
 ```
+
+⚠ **Do not filter with `/instanceid "USB\VID_31E9&PID_0023*"`.** The remote
+shell is CMD, CMD eats the `&` inside the instance id, and the command answers
+**"No devices were found on the system"** with the UC1 sitting right there,
+connected and working. 2026-09-18 read that as "the UC1 is gone". A filter that
+fails open is worse than no filter: grep the full enum by serial instead.
 
 Provider "Solid State Logic" = SSL's, good. Provider "Rea-Sixty" = ours, and
 SSL 360 will not see the UC1. Switching back is `pnputil /delete-driver
 <oemNN.inf> /uninstall` + `/scan-devices`; ⚠ **our OEM number drifts** (oem4,
 then oem2), so read the current one out of the enum above rather than reusing a
 number from any note.
+
+Measured 2026-09-18: UC1 `UC-000604` and UF1 `UF1-009184` both on `oem16.inf`
+(original `sslbus.inf`, provider Solid State Logic, 2.12.36.4), Status Started.
 
 ## The capture
 
@@ -71,16 +80,32 @@ entry, and a missing entry is exactly what we came to avoid.
 ## Reading it, afterwards
 
 ```bash
-python3 analysis/uc1_extfuncs_decode.py captures/cap140_uc1_extfuncs_factory.pcap --dev N
+python3 analysis/uc1_extfuncs_decode.py captures/cap140_uc1_extfuncs_factory.pcap --dev 41
 ```
 
-`--dev` is the UC1's USB address; it is printed in the capture's own `.md` and
-is needed because a capture that starts after enumeration carries no
-descriptors. Add `--from`/`--to` to slice one strip's window.
+`--dev` is the UC1's USB address, and it is needed because a capture that
+starts after enumeration carries no descriptors — the VID/PID filter finds
+nothing to match. ⚠ **The address is per enumeration, not per device:** it was
+20 on cap137 and 41 on 2026-09-18. Re-read it whenever the rig has been
+replugged or rebooted. Add `--from`/`--to` to slice one strip's window.
 
-**Proven on the known case before it was needed:** on cap137 (`--dev 20 --from
-70 --to 86`) it prints `PLUG-IN, COMP MIX, PRE, MIC …`, which is
-`kExtFuncs32c` in SSL's order.
+To re-read it, list the addresses and find the one that is not the UF1:
+
+```bash
+tshark -r captures/NAME.pcap -T fields -e usb.device_address -e usb.endpoint_address \
+  -e usb.transfer_type | sort | uniq -c | sort -rn | head
+```
+
+Two devices carry heavy bulk traffic (`transfer_type 0x03`): the UF1 and the
+UC1. The UF1 is the one whose OUT endpoint (`0x02`) carries `ff67…` frames.
+⛔ That is an exclusion, not a proof — confirm the other one positively by
+decoding it and seeing LCD text come out. A silent decode proves nothing: an
+idle UC1 redraws no text, so "no output" and "wrong address" look identical.
+
+**Proven twice.** On cap137 (`--dev 20 --from 70 --to 86`) it prints
+`PLUG-IN, COMP MIX, PRE, MIC …`, which is `kExtFuncs32c` in SSL's order. And on
+cap139 (`--dev 41`), a 40 s probe taken on 2026-09-18 with Frank turning one
+knob, it prints `PLUG-IN, COMP MIX, FILT IN, PAN …` live off the current rig.
 
 ## Then
 
