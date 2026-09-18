@@ -31297,8 +31297,23 @@ static int explicitCursorFxOnTrack_(MediaTrack* tr, int stripFx)
 static int inPlayFxOnTrack_(MediaTrack* tr, int stripFx)
 {
     if (!tr) return -1;
-    if (const int cur = explicitCursorFxOnTrack_(tr, stripFx); cur >= 0) return cur;
-    if (stripFx >= 0) return stripFx;
+    // ⛔ "Don't show offline FX" APPLIES TO EVERY ANSWER, not just the last one.
+    // The check lived in exactly one place, stripInstanceActiveFx_, and the two
+    // branches above it walked straight past: a cursor that was set BEFORE the
+    // plug-in went offline, or a strip that is offline now, got named anyway with
+    // the option on. Frank 2026-09-18, who bet on it before looking.
+    // ⚠ Same hole I had just written down as the reason NOT to fold the UF8's
+    // Sel-Mode branch onto this function — named it there, left it here.
+    auto visible = [tr](int fx) {
+        if (fx < 0) return false;
+        if (!g_hideOfflineFx.load()) return true;
+        return !TrackFX_GetOffline(tr, fx);
+    };
+    if (const int cur = explicitCursorFxOnTrack_(tr, stripFx); visible(cur))
+        return cur;
+    if (visible(stripFx)) return stripFx;
+    // Falls through to the one answer that has always skipped offline FX, and
+    // skips onward from the cursor position rather than starting over.
     return stripInstanceActiveFx_(tr);
 }
 
