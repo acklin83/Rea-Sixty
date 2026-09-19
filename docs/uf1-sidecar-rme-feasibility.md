@@ -411,44 +411,55 @@ Kanals. Im Submix-Geltungsbereich ist das der Knoten, sonst der Ausgangs- oder
 Eingangspegel. Ein Fader, der je nach Seite etwas anderes tut, ist auf einem
 Ein-Fader-Geraet kein Feature, sondern ein Ratespiel.
 
-### 8.4 ⛔ Vorher aufraeumen: die V-Pot-Reihe hat ZWEI Schreiber
+### 8.4 Was ein Side-Car ist, und was nur eine Ansicht ist
 
-Die Soft-Key-Reihe hat per Regel genau einen Schreiber
-(`uf1EmitSoftKeyRow_`), und die Regel steht in der Memory, weil zwei Kopien
-davon einmal auseinandergelaufen sind. Die **V-Pot-Reihe hat diese Regel
-nicht**: `uf1PaintChannel_` schreibt `0x010e` / `0x010f` / `0x010d` bei
-`main.cpp:33803` ff., und `uf1PaintHue_` schreibt dieselben drei Zellen noch
-einmal bei `main.cpp:32448` ff. Zwei Maler, zwei Kopien, heute schon.
+Frank, 19.09.: "Hue und DynaMount sind eigentlich UF8-Modes, die einfach eine
+UF1-Ansicht haben. Richtiger Side-Car ist UF1 only."
 
-SPREAD und STRIP waeren Kopie drei und vier. Also **zuerst ein
-`uf1EmitVpotRow_`** mit Beschriftungen, Werten, Balken und Stilen als
-Parametern, und alle vier rufen es auf. Das ist keine Kuer, das ist der
-Unterschied zwischen einem Umbau und vier Fehlern, die wie vier verschiedene
-Sachen aussehen.
+Der Code gibt ihm recht, und zwar nachpruefbar: `g_uf1HueMode` kommt in der
+Fader-Besitzerkette (`main.cpp:34940` bis `35060`) **nicht vor**. Hue Mode
+nimmt den Bildschirm, nicht den Fader. Der Fader macht waehrenddessen weiter
+REAPER.
 
-### 8.5 Wo Side-Car im Modus-Modell sitzt
+Daraus die scharfe Fassung, die beide Antworten traegt:
 
-Heute gibt es zwei verschiedene Begriffe fuer "was zeigt die UF1":
+> **Side-Car ist eine Eigenschaft des Paares aus Flaeche und Modus, nicht des
+> Modus.** Ein Modus ist auf einer Flaeche ein Side-Car, wenn er DEREN Fader
+> von REAPER wegnimmt. Nimmt er nur den Bildschirm, ist er dort eine Ansicht.
 
-- `kUf1ViewPlugin / Daw / Meter / Sends` (`main.cpp:1149`), ein sauberer Enum
-  mit Builtins, LED-Zustand, Banner und dem MODE-Halten-Picker auf den vier
-  Display-Keys.
-- `g_uf1HueMode`, ein Bool, das oben in `uf1PaintChannel_` aussteigt.
+Damit ist Hue auf dem UF1 eine Ansicht (Bildschirm ja, Fader nein), TotalMix
+auf dem UF1 ein Side-Car, und TotalMix auf dem UF8 ebenfalls eines, weil es
+dort acht Fader nimmt. Hue und DynaMount bleiben, wo sie sind, und werden
+nicht angefasst.
 
-Der Picker ist mit vier Eintraegen **voll**. Also zwei Ebenen statt einer
-laengeren Liste:
+### 8.5 Der Einstieg: Shift und MODE halten
+
+`kUf1ViewPlugin / Daw / Meter / Sends` (`main.cpp:1149`) bleibt unveraendert,
+inklusive des static_assert gegen `kUf1ViewCountForKeys` -- ein Bump waere ein
+Config-Upgrade ohne Gegenwert. Der MODE-Halten-Picker ist mit diesen vier
+**voll**.
+
+Also eine zweite Seite auf denselben vier Keys:
 
 ```
-Flaeche   = { Reaper, SideCar }
-Reaper    = { Plugin, DAW, Meter, Sends }        (unveraendert, kein Config-Bump)
-SideCar   = { RmeSpread, RmeStrip, Hue, ItemVol, Zoom, ... }
+MODE halten            Plugin | DAW | Meter | Sends          (unveraendert)
+Shift + MODE halten    Side-Car-Seite, vier pro Seite
+  < und >              blaettern, solange gehalten wird
 ```
 
-MODE halten bleibt, was es ist. **Shift + MODE halten** zeigt die Side-Car-
-Seite auf denselben vier Keys, mit Blaettern, wenn es mehr als vier werden.
-Und Hue Mode zieht mit um: es ist heute der einzige Hijacker, und wenn vier
-weitere danebengestellt werden, ohne die Flanke, die Invalidierung und die
-V-Pot-Reihe zu teilen, stehen dort fuenf Kopien derselben drei Fehler.
+`<` und `>` sind `kBankLeft` (0x21) und `kBankRight` (0x23). Das Idiom gibt es
+auf diesem Geraet schon zweimal: MODE halten plus Soft-Key, Scrub halten plus
+Jog. Vier Plaetze reichen heute (TotalMix, Item-Volume, Zoom, frei), das
+Blaettern kostet jetzt fast nichts und spaeter eine Umbaurunde.
+
+### 8.6 ⛔ Die V-Pot-Reihe wird trotzdem zuerst aufgeraeumt
+
+Das Ergebnis aus 8.5 aendert daran nichts. Die Doppelung ist keine Frage der
+Modus-Kategorie, sondern eine Frage, **wer eine physische Reihe beschreibt**:
+`uf1PaintChannel_` (`main.cpp:33803`) und `uf1PaintHue_` (`main.cpp:32448`)
+schreiben beide `0x010e` / `0x010f` / `0x010d`. Hue bleibt eine Ansicht und
+bleibt trotzdem der zweite Schreiber. SPREAD und STRIP waeren der dritte und
+vierte.
 
 ## 9. Der EQ-Graph: ja, und er wird dabei besser
 
@@ -512,7 +523,74 @@ Der RME-Teil bringt eine eigene, statische Tabelle mit (Pfad-Blatt,
 Beschriftung, Kurzname, Einheit, Bereich, Schrittweite, Format) und schickt sie
 durch `uf1EmitVpotRow_`, die Wertzeile und den EQ-Renderer.
 
-## 10. Meter-View aus der RME-Hardware
+## 10. TotalMix auf dem UF8
+
+Frank will die Ansicht dort mitziehen, und das ist die richtige Flaeche dafuer:
+acht Strips, acht Fader, acht Scribble-Zeilen, acht Farbbalken. SPREAD ist auf
+dem UF8 kein Kompromiss, sondern der Normalfall -- acht Kanaele statt vier,
+ohne Blaettern.
+
+### 10.1 Global, nicht pro Strip
+
+DynaMount ist heute der einzige fremde Zielkoerper auf UF8-Strips, und er ist
+**pro Strip** gebaut: `uf8::dynamount::manager().mountForStrip(strip) >= 0`
+steht als eigene Frage an acht Stellen (`main.cpp:2052`, `24255`, `25051`,
+`25255`, `35319`, `35468`, `37511` und im Farbpfad). Das ist gewollt, weil man
+Mikrofonstative **neben** Spuren haben will.
+
+TotalMix will man nicht neben Spuren, man geht hinein. Also ein **globaler
+Modus** mit einer Verzweigung im Paint und einer im Drain, wie Hue auf dem UF1,
+und nicht ein neunter Sonderfall an denselben acht Stellen. Sonst steht
+dieselbe Frage sechzehnmal im Code und die naechste Fremdquelle macht
+vierundzwanzig daraus.
+
+**DynaMount wird dabei nicht angefasst.** Eine gemeinsame Aufloesung ("was
+adressiert Strip N") waere sauberer und ist ein Umbau an laufendem Code; das
+ist eine eigene Entscheidung und kein Nebenprodukt dieses Features.
+
+### 10.2 Was der UF8 kann, was der UF1 nicht kann
+
+| UF8-Element | im TotalMix-Modus |
+|---|---|
+| 8 Fader | acht Kanalpegel, oder acht Knoten in denselben Bus |
+| 8 V-Pots | `balpan` je Kanal, oder `gain` im Input-Bereich |
+| Scribble oben / unten | Kanalname aus `/input/<n>/name`, Wert darunter |
+| Farbbalken | `/input/<n>/color`, sobald wir die Palette haben |
+| SEL / CUT / SOLO je Strip | Auswahl, `mute`, `solo` |
+| Bank links / rechts | acht Kanaele weiter, ohne Blaettern im Kopf |
+| Wertzeile | dB, wie ueberall sonst |
+
+Die Kopplung UF1 plus UF8 ist dabei das Interessante: **UF8 = SPREAD,
+UF1 = STRIP auf dem Kanal, den der UF8 ausgewaehlt hat.** Das ist genau die
+Arbeitsteilung, die die beiden Geraete in REAPER schon haben, nur mit TotalMix
+dahinter. Wer beide besitzt, bekommt einen Konsolenblick auf sein Interface,
+den RME selbst nicht anbietet.
+
+### 10.3 Und damit wird das Standalone ein anderes Produkt
+
+Bisher hiess Standalone "ein UF1 als Monitor-Controller". Mit dem UF8 heisst
+es "SSL-Flaechen als TotalMix-Konsole, ohne DAW". Das ist eine deutlich
+groessere Geschichte und trifft Leute, die es heute nicht gibt: den UF8-
+Besitzer mit Cubase, Logic oder Pro Tools.
+
+Ein Haken gehoert dazu gesagt, und er ist groesser als beim UF1: **die Flaeche
+gehoert immer nur einem.** Auf dem Mac heisst das, den UF8 in SSL 360 zu
+deaktivieren, auf Windows den Treiberwechsel. In beiden Faellen verliert der
+Cubase-Nutzer damit **SSL 360 als DAW-Steuerung**, also genau das, wofuer er
+den UF8 gekauft hat. Ein Standalone, das nur TotalMix kann, ist fuer ihn kein
+Tausch, den er macht.
+
+Die Loesung waere, dass das Standalone **beides** kann: TotalMix ueber OSC und
+DAW-Steuerung ueber MCU. Die zweite Haelfte existiert schon halb --
+`MidiBridge` (`MidiBridge.h`) haelt zwei virtuelle Core-MIDI-Endpunkte und
+uebersetzt MCU in beide Richtungen, heute fuer REAPER und heute nur macOS.
+Das ist dann allerdings nicht mehr "eine duenne App", sondern ein Produkt mit
+eigenem Umfang.
+
+Entscheidung dazu offen und bewusst getrennt: Rea-Sixty zuerst, das Standalone
+danach, und dann als eigene Planung.
+
+## 11. Meter-View aus der RME-Hardware
 
 Erstens eine Korrektur: **"Totalizer" heisst Totalyser**, und es ist kein
 eigenes Produkt, sondern eine Ansicht in **DIGICheck**. DIGICheck ist ein
@@ -538,14 +616,14 @@ Was **nicht** geht: Goniometer, Korrelation und RTA. Aus einer Peak-Zahl pro
 Kanal laesst sich kein Lissajous rechnen, dafuer braucht es die Samples. Die
 UF1-Meter-View kann aus RME-Quellen also die Pegel und die Nadeln fuellen,
 nicht die Grafik auf `0x0122`. Wer die will, muss das Audio selbst hoeren,
-und im Standalone-Fall ist das sogar der naheliegende Weg (siehe 11.).
+und im Standalone-Fall ist das sogar der naheliegende Weg (siehe 12.).
 
 Beilaeufig faellt noch etwas ab: `/durec/time` und `/durec/state` kommen als
 Text, und `/durec/play|pause|stop|record|next|previous` nehmen Befehle. Die UF1
 hat eine Zeitzone (`0x0119`) und eine Transportreihe. Eine DuRec-Fernbedienung
 auf derselben Flaeche kostet danach fast nichts.
 
-## 11. UF1 standalone, ohne REAPER
+## 12. Standalone, ohne DAW
 
 ### Koexistenz mit SSL 360
 
@@ -604,7 +682,7 @@ kauft. Es ist eine Tuer, kein Geschaeft. Als Tuer kann es gut sein: ein
 kostenloses kleines Programm, das einen UF1-Besitzer ohne REAPER zum ersten
 Mal etwas mit seinem Geraet machen laesst, das SSL nicht vorgesehen hat.
 
-## 12. Was noch gemessen werden muss
+## 13. Was noch gemessen werden muss
 
 Alles davon liefert Franks Dump-Action in TotalReaper.
 
@@ -625,46 +703,47 @@ Alles davon liefert Franks Dump-Action in TotalReaper.
    eine laufende Nummer.
 8. Die Farbpalette hinter `/input/<n>/color` (Index, kein RGB).
 
-## 13. Fragen an Frank, bevor gebaut wird
+## 14. Entschieden am 19.09.
 
-1. **Folgt die Kanalauswahl der REAPER-Spur?** Der heutige RME-Modus loest den
-   Hardware-Kanal aus `I_RECINPUT` der Spur auf. Im Standalone gibt es keine
-   Spur, also braucht das Side-Car ohnehin eine **eigene** Auswahl. Soll sie in
-   Rea-Sixty der Spur folgen, solange man sie nicht selbst anfasst?
-2. **Fader-Invariante.** Vorschlag oben: der Fader ist IMMER der Pegel des
-   gewaehlten Kanals, in jeder Ansicht. Alternative waere FLIP-artig, dass er
-   in STRIP den fokussierten Parameter fahrt. Ich bin fuer die Invariante.
-3. **Einstieg ins Side-Car.** Der MODE-Halten-Picker ist mit Plugin/DAW/Meter/
-   Sends voll. Vorschlag: Shift + MODE halten zeigt die Side-Car-Seite. Oder
-   soll eine eigene Taste (360?) es tun?
-4. **Zieht Hue Mode mit um** in die Side-Car-Kategorie? Es ist laufender Code,
-   aber der einzige Weg, die Flankenlogik und die V-Pot-Reihe nicht fuenfmal zu
-   haben.
-5. **Room EQ auf Ausgaengen**, 9 Baender, im Graph? Mit dem Band-Vektor aus 9.1
-   waere er gratis, aber er ist ein anderes Werkzeug als ein Kanal-EQ.
-6. **Nur UF1, oder auch UF8 und UC1?** Der UF8 waere fuer SPREAD eigentlich die
-   bessere Flaeche: acht Strips, acht Kanaele, acht Fader. Nicht gebaut, bis du
-   es sagst. Genannt, weil es auffaellt.
+Franks Antworten auf die sechs offenen Punkte, damit sie nicht noch einmal
+aufgemacht werden:
 
-## 14. Urteil
+1. **Keine Spurverfolgung.** Der REC/RME-Modus bleibt, was er ist, und nimmt
+   weiter die REAPER-Spur. Im Side-Car gilt: **die UF1 IST TotalMix.** Eigene
+   Auswahl, kein `I_RECINPUT`, keine Spur. Das ist ausserdem die Bedingung
+   dafuer, dass derselbe Code im Standalone laeuft.
+2. **Fader-Invariante:** ja. In jeder Ansicht der Pegel des gewaehlten Kanals.
+3. **Einstieg Shift + MODE halten**, fuer alle Side-Car-Kategorien, mit `<`
+   und `>` zum Blaettern (siehe 8.5).
+4. **Hue und DynaMount bleiben, wo sie sind.** Sie sind UF8-Modi mit einer
+   UF1-Ansicht, kein Side-Car. Der Code bestaetigt es: Hue kommt in der
+   Fader-Besitzerkette nicht vor.
+5. **Room EQ im Graph:** ja, neun Baender ueber den Band-Vektor.
+6. **TotalMix kommt auf den UF8**, siehe 10. Und damit stellt sich die
+   Standalone-Frage neu, siehe 10.3.
 
-Machbar, und zwar ohne neue Erfindung: das Protokoll ist offen und
-vollstaendig dokumentiert, der OSC-Code existiert bereits in Franks Hand, die
-Pegel kommen mit, und der UF1-Code hat fuer eine Flaechenuebernahme schon den
-Praezedenzfall. Der motorisierte Fader macht aus dem Nachbau der ARC etwas,
-das die ARC nicht kann.
+**Der Name.** Die Kategorie heisst Side-Car, dieses Mitglied heisst
+**TotalMix**. Auf dem Geraet steht `TOTALMIX`, acht Zeichen, und acht ist genau
+die gemessene Breite beider Displays ([[surface-text-field-widths]]). Im
+Handbuch heisst es "TotalMix Mode", weil ein Nutzer, der auf sein Interface
+schaut, dieses Wort liest und kein anderes.
 
-Reihenfolge:
+## 15. Urteil und Reihenfolge
 
-1. **Aufraeumen, bevor gebaut wird:** `uf1EmitVpotRow_` als einziger Schreiber
+Machbar, ohne neue Erfindung: das Protokoll ist offen und vollstaendig
+dokumentiert, der OSC-Code existiert in Franks Hand, die Pegel kommen mit, und
+beide Flaechen haben fuer eine Uebernahme schon einen Praezedenzfall.
+
+1. **Aufraeumen, bevor gebaut wird.** `uf1EmitVpotRow_` als einziger Schreiber
    der V-Pot-Reihe, und `EqModel` als Band-Vektor zwischen Sammler und
-   Renderer. Beides ohne neues Feature, beides sofort pruefbar am bestehenden
-   Verhalten.
-2. **Side-Car als Kategorie:** zwei Ebenen im Modusmodell, Shift + MODE als
-   Einstieg, Hue Mode als erster Bewohner. Immer noch kein OSC.
-3. **RME-Client** mit eigenem Portpaar, `rme.json` mit den Rollen, die Builtins,
-   die drei dynamischen Baenke.
-4. **SPREAD**, mit `controlroom` als erstem Geltungsbereich. Das ist die ARC.
+   Renderer. Kein neues Verhalten, beides am bestehenden sofort pruefbar.
+2. **Side-Car als Kategorie.** Zweite Ebene im Modusmodell, Shift + MODE als
+   Einstieg, `<`/`>` zum Blaettern. Erster Bewohner: Zoom oder Item-Volume,
+   damit das Geruest ohne OSC steht.
+3. **RME-Client** mit eigenem Portpaar, `rme.json` mit den Rollen, die
+   `rme_*`-Builtins, die drei dynamischen Baenke.
+4. **SPREAD auf der UF1**, Geltungsbereich `controlroom`. Das ist die ARC.
 5. **SPREAD `submix`** und **STRIP** mit EQ-Graph.
 6. **Pegel** in die Kanalzone und in die Meter-View.
-7. **Standalone** als duenne App, und der Windows-Installer pro Geraet.
+7. **TotalMix auf dem UF8** als globaler Modus, DynaMount unberuehrt.
+8. **Standalone** als eigene Planung, mit der Frage aus 10.3 als erstem Punkt.
