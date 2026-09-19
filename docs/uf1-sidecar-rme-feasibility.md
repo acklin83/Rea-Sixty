@@ -530,23 +530,40 @@ acht Strips, acht Fader, acht Scribble-Zeilen, acht Farbbalken. SPREAD ist auf
 dem UF8 kein Kompromiss, sondern der Normalfall -- acht Kanaele statt vier,
 ohne Blaettern.
 
-### 10.1 Global, nicht pro Strip
+### 10.1 Es gibt dafuer schon eine Achse: `SelectionMode`
 
-DynaMount ist heute der einzige fremde Zielkoerper auf UF8-Strips, und er ist
-**pro Strip** gebaut: `uf8::dynamount::manager().mountForStrip(strip) >= 0`
-steht als eigene Frage an acht Stellen (`main.cpp:2052`, `24255`, `25051`,
-`25255`, `35319`, `35468`, `37511` und im Farbpfad). Das ist gewollt, weil man
-Mikrofonstative **neben** Spuren haben will.
+Erster Befund war falsch und ist hier korrigiert, weil er die ganze Empfehlung
+gedreht haette. `uf8::dynamount::manager().mountForStrip(strip)` steht an acht
+Stellen, und das sieht nach "pro Strip gebaut" aus. Liest man die Bedingung
+drumherum statt nur den Treffer, steht davor ueberall dasselbe:
 
-TotalMix will man nicht neben Spuren, man geht hinein. Also ein **globaler
-Modus** mit einer Verzweigung im Paint und einer im Drain, wie Hue auf dem UF1,
-und nicht ein neunter Sonderfall an denselben acht Stellen. Sonst steht
-dieselbe Frage sechzehnmal im Code und die naechste Fremdquelle macht
-vierundzwanzig daraus.
+```cpp
+if (g_selectionMode.load() == SelectionMode::DynaMount) { ... }
+```
 
-**DynaMount wird dabei nicht angefasst.** Eine gemeinsame Aufloesung ("was
-adressiert Strip N") waere sauberer und ist ein Umbau an laufendem Code; das
-ist eine eigene Entscheidung und kein Nebenprodukt dieses Features.
+Und der Enum lautet (`main.cpp`, bei `g_selectionMode`):
+
+```cpp
+enum class SelectionMode : uint8_t {
+    Norm, Rec, RecMon, Auto, Instance, InstanceCycle, DynaMount, Hue };
+```
+
+Damit ist die Frage beantwortet, bevor wir sie gestellt haben: **die Achse
+"der UF8 macht gerade etwas anderes als Spuren" existiert, sie heisst
+`SelectionMode`, und Hue und DynaMount sind bereits Mitglieder.** Das
+bestaetigt Franks Einordnung aus 8.4 ein zweites Mal, diesmal aus dem Code
+statt aus dem Gefuehl.
+
+TotalMix auf dem UF8 ist also ein **neues Mitglied dieses Enums**, mit
+derselben Form: ein globaler Zustand, und darin eine Abbildung Strip auf
+Kanal, so wie DynaMount Strip auf Stativ abbildet. Kein neues Konzept, kein
+Parallelmechanismus, und DynaMount wird nicht angefasst.
+
+Was dabei auffaellt und hier nur genannt, nicht gebaut wird: die Frage
+`g_selectionMode == X` steht fuer DynaMount allein an sechs Stellen verteilt.
+Ein weiteres Mitglied bringt seine eigenen sechs mit. Das ist die Bauart
+dieses Codes und funktioniert; es waere nur der Moment, in dem eine gemeinsame
+Aufloesung ("was adressiert Strip N") sich das erste Mal wirklich lohnt.
 
 ### 10.2 Was der UF8 kann, was der UF1 nicht kann
 
