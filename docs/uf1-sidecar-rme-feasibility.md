@@ -194,7 +194,164 @@ Item-Volume auf den Fader und Zoom auf Jog/Fader brauchen kein OSC und keinen
 RME. Sie sind dieselbe Uebernahme mit anderem Inhalt und koennen zuerst
 gebaut werden, wenn das Geruest beweisen soll, dass es traegt.
 
-## 6. Meter-View aus der RME-Hardware
+## 6. Konfiguration, fuer beide Produkte
+
+Die Leitfrage ist nicht "welches Format", sondern **wo eine Entscheidung
+genau einmal steht**. Drei Entscheidungen, drei Orte.
+
+### 6.1 Welche Taste macht was: das gibt es schon
+
+RME-Funktionen werden **Builtins**, wie jede andere Aktion in diesem Projekt
+auch (`registerBuiltin`, `Bindings.h:866`). Dann erbt jede Flaeche sie in dem
+Moment, in dem sie registriert sind, ohne eine Zeile Bindungscode:
+
+- die UF1-Bankmatrix, 10 Baenke mal 4 Display-Soft-Keys mal Plain/Shift
+  (`kUf1SoftBankCount = 10`, `kSoftKeyModifierSets = 2`, `Bindings.h:762`)
+- die UF8-Quicks, die UC1-Tasten, Long-Press, Doppelklick, die vier
+  Modifier-Slots
+- die Stream-Deck-Bruecke, die schon alles dispatcht, was ein Builtin ist
+
+Der Katalog, erster Entwurf:
+
+```
+rme_dim              rme_mono            rme_speaker_b       rme_link_ab
+rme_talkback         rme_mute_fx         rme_ext_in          rme_recall
+rme_cue <bus>        rme_snapshot <n>    rme_layout <n>      rme_show_window
+rme_global_mute      rme_global_solo     rme_undo            rme_redo
+rme_main_vol <delta> rme_out_vol <rolle> <delta>
+rme_durec_play       rme_durec_record    rme_durec_stop
+```
+
+Alles, was einen Zustand hat, bekommt `toggleaction`, sonst zeigt REAPERs
+Menue keine Lampe ([[reaper-actions-need-toggleaction]]).
+
+### 6.2 Welche Kanalnummer ist was: `rme.json`
+
+Das gehoert **nicht** in eine Tastenbelegung. Stuende die Kanalnummer in der
+Bindung, stuende sie in fuenfzig Zellen, und der Tag, an dem ein Interface
+getauscht wird, waere ein Suchen-und-Ersetzen-Tag.
+
+Also eine eigene, kleine Datei mit den **Rollen**:
+
+```json
+{
+  "connection": { "host": "127.0.0.1", "send": 7008, "receive": 9008 },
+  "roles": { "main": 0, "mainB": 6, "phones": [8, 10, 12, 14], "talk": 2 },
+  "sources": { "show": "active", "hidden": "skip" },
+  "steps":   { "mainVolumeDb": 0.5, "phonesDb": 1.0 }
+}
+```
+
+Das Builtin heisst dann `rme_out_vol phones1 +1`, nicht `rme_out_vol 8 +1`.
+Und die Rollen muss niemand tippen: TotalMix sagt sie selbst ueber
+`/controlroom/mainout`, `/mainoutb`, `/phones1` bis `/phones4`, `/talkchannel`.
+Die Datei ist damit eher ein Cache als eine Konfiguration.
+
+### 6.3 Zwei Produkte, eine Datei
+
+`bindings.json` ist bereits nach stabilen snake_case-ButtonIds geschluesselt,
+und ein `ActionStep` traegt bereits seinen **Typ** (REAPER-Aktion, Tastenakkord,
+Builtin, MIDI). Damit liest das Standalone dieselbe Datei und **ueberspringt,
+was es nicht kennt**. Kein zweites Format, kein Konverter, kein Export-Schritt,
+der vergessen werden kann.
+
+Was das Standalone trotzdem braucht, ist ein **eigener kleiner Editor** fuer
+dieselben zwei Dateien. Ein Produkt, dessen Konfigurator ein anderes Produkt
+ist, ist kein Produkt. Gleicher Parser, gleiche Datei, eigene Oberflaeche.
+
+### 6.4 Soft-Key-Baenke: statisch und dynamisch
+
+**Statisch** ist eine Werksbank in der 10x4-Matrix, genau wie die Focus-Set-
+und Plug-in-Ops-Baenke heute: Dim, Mono, Speaker B, Talkback auf Bank n,
+Ext In, Mute FX, Recall, Cue auf Bank n+1.
+
+**Dynamisch** ist alles, wo TotalMix die Liste besitzt und nicht wir. Dafuer
+gibt es `DynamicBankKind` (`Bindings.h:627`), und der Praezedenzfall ist
+`ObsScenes`: eine fremde Liste wird zur Reihe, mit eigenen Beschriftungen und
+eigenen Lampen. Vier Einhaengepunkte, alle bekannt:
+
+| Ort | Was | main.cpp |
+|---|---|---|
+| Aufloeser | Beschriftung, LED, Farbe pro Slot | 7738 |
+| Zaehler | wie viele Slots, fuer die Seitenzahl | 7905 |
+| UF8-Druck | was ein Druck tut | 8214 |
+| UF1-Druck | dasselbe fuer die Display-Keys | 8264 |
+
+Dazu die zwei Namensfunktionen (31059, 31145) und
+**`kDynamicBankKindLast` in `Bindings.h`**, sonst nimmt der Editor die neue Art
+an, schreibt sie auf die Platte und der naechste Ladevorgang wirft sie
+kommentarlos weg.
+
+Drei neue Arten:
+
+- **`RmeSnapshots`**: acht Slots, und die Lampe kann hier mehr als an/aus.
+  `/snapshot/load/<n>` meldet zurueck **0 aus, 2 aktiv, 3 geaendert**. Also
+  drei Farben, und "geaendert, nicht gespeichert" ist als Zustand sichtbar.
+- **`RmeLayouts`**: `/layout/load/<n>`. Nur senden, also Lampe nur als
+  Quittung.
+- **`RmeOutputs`**: die Ausgaenge aus `rme.json` plus die, die TotalMix
+  meldet. Diese Bank waehlt das **Ziel** fuer den Submix-Modus unten, und ihre
+  Lampe zeigt, welcher Bus gerade der Submix ist.
+
+## 7. Der Fader auf einem Matrix-Knoten: Submix View nachbauen
+
+Kurz: ja, und es ist die bessere Idee als der Monitor-Controller, weil sie der
+Form der UF1 entspricht statt der Form der ARC.
+
+Die Pfade stehen in der Tabelle:
+
+```
+/mix/in/<n>/<bus>/faderlin    f   0..1, Fader-Kurve
+/mix/in/<n>/<bus>/fader       f   dasselbe in dB, -300 = aus
+/mix/in/<n>/<bus>/balpan      f   -1..+1
+/mix/in/<n>/<bus>/solo        f
+/mix/in/<n>/<bus>/groupflags  f   Bit 1..4 Mute, 6..9 Solo, 12..16 Fader
+/mix/pb/<n>/<bus>/...             dasselbe fuer Software-Playback
+```
+
+`faderlin` ist 0 bis 1 auf derselben Kurve wie der UF1-Fader. Quelle waehlen,
+Ziel waehlen, Fader anfassen, fertig.
+
+### Die Belegung
+
+| Control | Aufgabe |
+|---|---|
+| Kanal-Encoder | laeuft durch die Quellen: erst Inputs, dann Playbacks |
+| Kanal-Encoder Push | Quelle als fokussiert setzen |
+| Fader | `faderlin` des Knotens Quelle nach Ziel |
+| V-Pot ueber dem Fader | `balpan` desselben Knotens |
+| V-Pot 1 bis 4 | vier Nachbarquellen in denselben Bus, also fuenf Regler auf einem Bild |
+| Soft-Key-Bank `RmeOutputs` | das Ziel, also welcher Submix gerade gebaut wird |
+| SOLO | `/mix/in/<n>/<bus>/solo` |
+| Kleines LCD | Name aus `/input/<n>/name`, Pegel aus `/level/in/<n>`, dB im Wertfeld |
+
+### Vier Dinge, die man dabei wissen muss
+
+1. **Einen Mute pro Knoten gibt es nicht.** Die Tabelle kennt `mute` nur am
+   Strip (`/input/<n>/mute`), nicht am Matrixknoten. CUT wuerde die Quelle
+   also **ueberall** stummschalten, nicht nur in diesem Submix. Entweder so
+   beschriften, oder CUT faehrt den Knoten auf -300 dB und merkt sich den
+   Wert. Zweiteres ist naeher an dem, was jemand erwartet, der einen
+   Kopfhoerermix baut.
+2. **Nicht durch achtzig tote Kanaele blaettern.** `/sendsubmix/<submix>` mit
+   Wert **2** laesst TotalMix nur die Knoten senden, deren Fader ueber -65 dB
+   steht. Das ist die Liste, die man will: was in diesem Mix ueberhaupt
+   vorkommt. Wert 1 holt alles, fuer den Fall, dass man etwas dazunehmen will.
+3. **Versteckte Kanaele.** `/input/<n>/color` ist nur sendend und liefert
+   **0 fuer versteckt**, sonst einen Farbindex. Das ist gleichzeitig der Filter
+   (Kanal-Layout gilt laut Spezifikation auch fuer Global OSC) und die Quelle
+   fuer den Farbbalken auf `0x0018`. Achtung: **Index, nicht RGB**, wir
+   brauchen also die Palette von TotalMix.
+4. **"Follow Submix" soll aus sein**, sagt die Spezifikation selbst. Das klingt
+   nach Einschraenkung und ist ein Vorteil: unser Submix ist unsere eigene
+   Auswahl, TotalMix' Bildschirm bleibt, wo er ist. Man baut am UF1 einen
+   Kopfhoerermix, ohne die Ansicht am Rechner umzuschalten.
+
+Offen ist genau eine Sache: ob `'submix'` in `/sendsubmix/<submix>` die
+Ausgangskanalnummer meint oder eine laufende Nummer. Sagt ein Dump in einer
+Minute.
+
+## 8. Meter-View aus der RME-Hardware
 
 Erstens eine Korrektur: **"Totalizer" heisst Totalyser**, und es ist kein
 eigenes Produkt, sondern eine Ansicht in **DIGICheck**. DIGICheck ist ein
@@ -220,14 +377,14 @@ Was **nicht** geht: Goniometer, Korrelation und RTA. Aus einer Peak-Zahl pro
 Kanal laesst sich kein Lissajous rechnen, dafuer braucht es die Samples. Die
 UF1-Meter-View kann aus RME-Quellen also die Pegel und die Nadeln fuellen,
 nicht die Grafik auf `0x0122`. Wer die will, muss das Audio selbst hoeren,
-und im Standalone-Fall ist das sogar der naheliegende Weg (siehe 7.).
+und im Standalone-Fall ist das sogar der naheliegende Weg (siehe 9.).
 
 Beilaeufig faellt noch etwas ab: `/durec/time` und `/durec/state` kommen als
 Text, und `/durec/play|pause|stop|record|next|previous` nehmen Befehle. Die UF1
 hat eine Zeitzone (`0x0119`) und eine Transportreihe. Eine DuRec-Fernbedienung
 auf derselben Flaeche kostet danach fast nichts.
 
-## 7. UF1 standalone, ohne REAPER
+## 9. UF1 standalone, ohne REAPER
 
 ### Koexistenz mit SSL 360
 
@@ -286,7 +443,7 @@ kauft. Es ist eine Tuer, kein Geschaeft. Als Tuer kann es gut sein: ein
 kostenloses kleines Programm, das einen UF1-Besitzer ohne REAPER zum ersten
 Mal etwas mit seinem Geraet machen laesst, das SSL nicht vorgesehen hat.
 
-## 8. Was noch gemessen werden muss
+## 10. Was noch gemessen werden muss
 
 Nach der Spezifikation ist wenig uebrig, und alles davon liefert Franks
 Dump-Action in TotalReaper.
@@ -299,7 +456,7 @@ Dump-Action in TotalReaper.
 4. Ob der UF1 auf dem Mac wirklich freigegeben wird, wenn man ihn in SSL 360
    einzeln deaktiviert, ohne SSL 360 zu beenden.
 
-## 9. Urteil
+## 11. Urteil
 
 Machbar, und zwar ohne neue Erfindung: das Protokoll ist offen und jetzt auch
 vollstaendig dokumentiert, der OSC-Code existiert bereits in Franks Hand, die
