@@ -356,6 +356,8 @@ add_library(reaper_uf8 MODULE
     src/Protocol.cpp
     src/Palette.cpp
     src/Uf1EqCurve.cpp
+    src/RmeOsc.cpp
+    src/RmeState.cpp
     src/TrackName.cpp
     src/PluginMap.cpp
     src/UserPluginCatalog.cpp
@@ -787,6 +789,15 @@ if(NOT WIN32)
     # The UF1 EQ curve: the pure half of the graph painter. Pins the cap73
     # height scale, the two filter rails that were regressions once, and that a
     # band LIST of any length sums — which is the reason it was split out.
+    # The RME Global OSC codec and the TotalMix state cache. Bytes and values
+    # from the live dump of 2026-09-19; pins bundles (every TotalMix packet is
+    # one), the three-valued snapshot echo, and that a role pointing at a
+    # channel this remote cannot see is a STATE and not a bug.
+    add_executable(test_rme_osc tests/test_rme_osc.cpp
+        src/RmeOsc.cpp src/RmeState.cpp)
+    target_include_directories(test_rme_osc PRIVATE src "${WDL_DIR}")
+    add_test(NAME rme_osc COMMAND test_rme_osc)
+
     add_executable(test_uf1_eq tests/test_uf1_eq.cpp src/Uf1EqCurve.cpp)
     target_include_directories(test_uf1_eq PRIVATE src "${WDL_DIR}")
     add_test(NAME uf1_eq COMMAND test_uf1_eq)
@@ -867,4 +878,14 @@ if(NOT WIN32)
     # SSL 360° Core-impersonation handshake probe (POSIX dev tool).
     add_executable(ssl_core_probe tools/ssl_core_probe.cpp src/SslMeterProtocol.cpp)
     target_include_directories(ssl_core_probe PRIVATE src)
+
+    # Talks to a live TotalMix over Global OSC and prints the state it answers
+    # with. The half of the RME path a unit test cannot reach. Sends /sendall
+    # and nothing else — it sets no value on the mixer.
+    add_executable(rme_osc_probe tools/rme_osc_probe.cpp
+        src/RmeOsc.cpp src/RmeState.cpp)
+    target_include_directories(rme_osc_probe PRIVATE src)
+    if(WIN32)
+        target_link_libraries(rme_osc_probe PRIVATE ws2_32)
+    endif()
 endif()
