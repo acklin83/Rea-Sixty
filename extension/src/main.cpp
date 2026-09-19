@@ -702,6 +702,27 @@ std::atomic<int>  g_hueFocusSlot {0};
 // with a state lambda, one branch in the channel painter, one gate in the input
 // handler.
 std::atomic<bool> g_uf1HueMode {false};
+
+// ⇨ UF1 LAYOUT PROBE (Settings -> About). A diagnostic, not a feature.
+//
+// 0x0100 is the large-LCD LAYOUT SELECTOR, two bytes {layout, screen}. We drive
+// exactly two layouts: 0x03 = channel/plug-in (where the EQ graph lives) and
+// 0x04 with screens 0..5 = Meter. The ENTIRE capture corpus only ever shows
+// those two, plus a single {0x80,0x03} at the head of the cold start (cap101
+// frame 585) -- checked across all 179 pcaps on 2026-09-19, not assumed.
+//
+// SSL's own DAW layer on the UF1 was never captured. The fields Frank saw there
+// (a large text area where our EQ graph sits, and a colour bar per V-Pot) are
+// therefore BEHIND a layout we never select, which is also why they read as
+// "swept, blank": that sweep ran in ONE layout and said nothing about the rest.
+//
+// So the probe moves the SELECTOR we already move on every MODE toggle, not
+// unknown elements. That is a far tamer experiment than the 0x011b accident.
+std::atomic<bool>     g_uf1LayoutProbe {false};   // probe owns the screen
+std::atomic<uint8_t>  g_uf1ProbeLayout {0x03};
+std::atomic<uint8_t>  g_uf1ProbeScreen {0x00};
+std::atomic<bool>     g_uf1ProbePattern{true};    // also paint the candidates
+std::atomic<uint32_t> g_uf1ProbeGen    {0};       // bump = re-send everything
 // Preset-browser working state — MAIN-THREAD ONLY (the painter in onTimer + the V-Pot4
 // drain in applyUf1MeterVpot_, both main-thread). Scanned once on entry, scrolled/loaded
 // on V-Pot4. g_uf1PresetSel indexes g_uf1PresetList.
@@ -32742,6 +32763,64 @@ static void uf1PaintTimeField_(bool changed)
 
 }
 
+// ⇨ THE LAYOUT PROBE'S PAINTER. Owns the screen while it runs, so it follows
+// the checklist for a screen-owning mode: it writes its own content, it is
+// change-gated against g_uf1Gen like every other painter, and its EXIT sets
+// g_uf1PlaneLost so the channel painter re-asserts the whole plane on the next
+// tick rather than believing its layout is still up.
+//
+// ⛔ THE READOUT MUST NOT BE A COLOUR. Frank is colour-blind, so the candidate
+// pattern writes ASCENDING POSITIONS (00 01 02 03) into the four-byte elements:
+// the answer we want is "four bars, rising from the left", never "green,
+// yellow, orange, red". Same reason the header cells are numbered.
+static void uf1PaintLayoutProbe_()
+{
+    if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
+
+    const uint8_t  layout  = g_uf1ProbeLayout.load();
+    const uint8_t  screen  = g_uf1ProbeScreen.load();
+    const bool     pattern = g_uf1ProbePattern.load();
+    const uint32_t gen     = g_uf1Gen.load(std::memory_order_relaxed);
+    const uint32_t pgen    = g_uf1ProbeGen.load(std::memory_order_relaxed);
+
+    static uint8_t  sLayout = 0xFF, sScreen = 0xFF;
+    static bool     sPattern = false;
+    static uint32_t sGen = 0xFFFFFFFFu, sPGen = 0xFFFFFFFFu;
+    if (layout == sLayout && screen == sScreen && pattern == sPattern
+        && gen == sGen && pgen == sPGen) return;
+    sLayout = layout; sScreen = screen; sPattern = pattern;
+    sGen = gen; sPGen = pgen;
+
+    const uint8_t sel[2] = { layout, screen };
+    g_uf1_dev->send(uf1::buildScreen(0x0100, sel));
+    if (!pattern) return;
+
+    // Eight numbered cells into the header row, so a layout that renders text
+    // there says so with a readable baseline instead of an empty field. Same
+    // shape the channel painter uses: 8 cells of 25 bytes, NUL-padded.
+    std::array<uint8_t, 200> hdr{};
+    for (int c = 0; c < 8; ++c) {
+        char cell[8];
+        std::snprintf(cell, sizeof(cell), "CELL%d", c + 1);
+        for (int i = 0; cell[i] && i < 24; ++i)
+            hdr[static_cast<size_t>(c) * 25 + static_cast<size_t>(i)] =
+                static_cast<uint8_t>(cell[i]);
+    }
+    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow,
+        std::span<const uint8_t>(hdr.data(), hdr.size())));
+
+    // The four-byte elements the init writes and we never touch. Four bytes is
+    // the shape of one value per V-Pot (kVpotStyle 0x010d is four bytes too), so
+    // if a per-pot row exists in another layout, it is most likely one of these.
+    // 0x0121 first in the list because it sits between solo-active (0x0120) and
+    // the graphic (0x0122). Init values: 0x0113 is 01 01 01 01, the other three
+    // are all zero.
+    static constexpr uint16_t kCandidates[] = { 0x0121, 0x0113, 0x0118, 0x012b };
+    const uint8_t rising[4] = { 0x00, 0x01, 0x02, 0x03 };
+    for (const uint16_t a : kCandidates)
+        g_uf1_dev->send(uf1::buildScreen(a, rising));
+}
+
 void uf1PaintChannel_()
 {
     if (g_paletteSwatch.load() >= 0) g_swDbgPaint.fetch_add(1);
@@ -32772,6 +32851,23 @@ void uf1PaintChannel_()
             if (g_paletteSwatch.load() >= 0) g_swDbgHue.fetch_add(1);
             uf1PaintHue_(); return;
         }
+    }
+
+    // The layout probe owns the screen the same way Hue Mode does, and for the
+    // same reason: a half-painted channel under a foreign layout is worse than
+    // no channel. Its EXIT additionally raises g_uf1PlaneLost, which is the
+    // existing "do what a track change does, on BOTH gates" signal -- that is
+    // what re-asserts 0x0100 = {03,00} and the rest of the plane below, so the
+    // probe needs no restore path of its own.
+    {
+        static bool sProbeWas = false;
+        const bool probeNow = g_uf1LayoutProbe.load();
+        if (probeNow != sProbeWas) {
+            sProbeWas = probeNow;
+            g_uf1Gen.fetch_add(1, std::memory_order_relaxed);
+            if (!probeNow) g_uf1PlaneLost.store(true, std::memory_order_relaxed);
+        }
+        if (probeNow) { uf1PaintLayoutProbe_(); return; }
     }
 
     // Follow the user's focus: last-touched track, else the first selected.
@@ -47088,6 +47184,32 @@ bool reasixty_uc1Connected()
 bool reasixty_uf1Connected()
 {
     return g_uf1_dev && g_uf1_dev->isOpen();
+}
+
+// UF1 layout probe (Settings -> About). See g_uf1LayoutProbe for what it is for.
+bool reasixty_uf1LayoutProbe() { return g_uf1LayoutProbe.load(); }
+void reasixty_setUf1LayoutProbe(bool on)
+{
+    if (g_uf1LayoutProbe.exchange(on) != on)
+        g_uf1ProbeGen.fetch_add(1, std::memory_order_relaxed);
+}
+int  reasixty_uf1ProbeLayout() { return g_uf1ProbeLayout.load(); }
+int  reasixty_uf1ProbeScreen() { return g_uf1ProbeScreen.load(); }
+void reasixty_setUf1ProbeLayout(int v)
+{
+    if (v < 0 || v > 255) return;
+    g_uf1ProbeLayout.store(static_cast<uint8_t>(v));
+}
+void reasixty_setUf1ProbeScreen(int v)
+{
+    if (v < 0 || v > 255) return;
+    g_uf1ProbeScreen.store(static_cast<uint8_t>(v));
+}
+bool reasixty_uf1ProbePattern() { return g_uf1ProbePattern.load(); }
+void reasixty_setUf1ProbePattern(bool on) { g_uf1ProbePattern.store(on); }
+void reasixty_uf1ProbeResend()
+{
+    g_uf1ProbeGen.fetch_add(1, std::memory_order_relaxed);
 }
 
 // SSL plug-in soft-key bank labels for the Settings → Soft-Key Banks

@@ -513,6 +513,17 @@ void reasixty_setRecUf1Cut(int v);
 void reasixty_setRecUf1Solo(int v);
 bool reasixty_totalReaperPresent();
 bool reasixty_openTotalReaperInReaPack();
+// UF1 layout probe (About pane) — diagnostic, see g_uf1LayoutProbe in main.cpp.
+bool reasixty_uf1LayoutProbe();
+void reasixty_setUf1LayoutProbe(bool on);
+int  reasixty_uf1ProbeLayout();
+int  reasixty_uf1ProbeScreen();
+void reasixty_setUf1ProbeLayout(int v);
+void reasixty_setUf1ProbeScreen(int v);
+bool reasixty_uf1ProbePattern();
+void reasixty_setUf1ProbePattern(bool on);
+void reasixty_uf1ProbeResend();
+bool reasixty_uf1Connected();
 bool reasixty_stripFollowsFocusedFx();
 void reasixty_setStripFollowsFocusedFx(bool follow);
 bool reasixty_pluginGuiFollowsInstance();
@@ -26016,6 +26027,58 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
         if (s_setupMsg != s_setupShown) { s_setupShown = s_setupMsg; s_setupSince = now; }
         if (now - s_setupSince > kSaveNoteSeconds) s_setupMsg.clear();
         else ImGui_Text(ctx, s_setupMsg.c_str());
+    }
+
+    // ── UF1 display probe ────────────────────────────────────────────────
+    // 0x0100 is the UF1's large-LCD layout selector, {layout, screen}. We drive
+    // 0x03/0x00 (channel, where the EQ graph is) and 0x04/0x00..05 (Meter), and
+    // the whole capture corpus holds no others. SSL's own DAW layer was never
+    // captured, so whatever it paints there sits behind a layout nothing of ours
+    // selects. This walks the selector and paints a readable pattern.
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "UF1 display probe");
+    ImGui_Separator(ctx);
+    if (!reasixty_uf1Connected()) {
+        ImGui_Text(ctx, "  No UF1 connected.");
+    } else {
+        bool probeOn = reasixty_uf1LayoutProbe();
+        if (ImGui_Checkbox(ctx, "Take over the UF1 screen##uf1probe", &probeOn))
+            reasixty_setUf1LayoutProbe(probeOn);
+        ImGui_Text(ctx,
+            "  Switches the large LCD to another layout. Turning this off puts"
+            " the channel view back.");
+        if (probeOn) {
+            int lay = reasixty_uf1ProbeLayout();
+            int scr = reasixty_uf1ProbeScreen();
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 120.0));
+            if (ImGui_InputInt(ctx, "Layout byte##uf1probe_l", &lay,
+                               nullptr, nullptr, nullptr))
+                reasixty_setUf1ProbeLayout(lay);
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 120.0));
+            if (ImGui_InputInt(ctx, "Screen byte##uf1probe_s", &scr,
+                               nullptr, nullptr, nullptr))
+                reasixty_setUf1ProbeScreen(scr);
+            ImGui_Text(ctx, "  Known: 3/0 = channel, 4/0 to 4/5 = meter."
+                            " Untried: 1, 2, 5 and up.");
+            bool pat = reasixty_uf1ProbePattern();
+            if (ImGui_Checkbox(ctx, "Paint the test pattern##uf1probe_p", &pat))
+                reasixty_setUf1ProbePattern(pat);
+            // The pattern is POSITIONS, not colours, on purpose: the question is
+            // "how many bars and where", which a colour-blind reader can answer
+            // and a colour cannot be.
+            ImGui_Text(ctx,
+                "  Eight numbered text cells, plus 0x0121 / 0x0113 / 0x0118 /"
+                " 0x012b set to 0,1,2,3 each.");
+            if (ImGui_Button(ctx, "Send again##uf1probe_r", nullptr, nullptr))
+                reasixty_uf1ProbeResend();
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Back to channel##uf1probe_x", nullptr, nullptr)) {
+                reasixty_setUf1ProbeLayout(0x03);
+                reasixty_setUf1ProbeScreen(0x00);
+                reasixty_setUf1LayoutProbe(false);
+            }
+        }
     }
 
 #ifdef _WIN32
