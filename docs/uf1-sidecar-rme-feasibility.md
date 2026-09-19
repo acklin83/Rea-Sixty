@@ -827,7 +827,94 @@ sauber, was im Dump fehlte: `/status/device|connection|dsp` kam nicht, und
 Tabelle.** Und eine Mindestversion nennen, sobald wir wissen, welche wir
 brauchen.
 
-## 14. Entschieden am 19.09.
+## 14. Die UF1-Anzeige: was 2.1.12 brachte und was wir nicht fahren
+
+Frank, 19.09.: "beim SSL-Update gabs doch neue Felder fuers UF1. Ich sah dort
+mal einen neuen grossen Textbalken, wahrscheinlich in ihrem DAW-Mode, weil im
+Plug-in-Mode dort der EQ-Graph ist. Und im gleichen Mode Farbbalken fuer die
+vier zusaetzlichen Kanaele auf den V-Pots."
+
+Aus dem vorhandenen Korpus beantwortet, ohne neuen Capture-Lauf.
+
+### 14.1 Was 2.1.12 wirklich hinzugefuegt hat: ein Element
+
+Init gegen Init, `cap129` (2.1.12) gegen `cap101` (davor):
+
+```
+nur in 2.1.12:   0x012b
+nur in alt:      0x0125 0x0126 0x0127 0x0128
+```
+
+Also **genau eine neue Adresse**, und die ist schon bekannt: `0x012b` wurde im
+Rahmen der roten VU-Zahlen am 11.09. probiert. Alles andere, was auf dem Glas
+neu aussieht, ist **kein neues Feld, sondern neuer Inhalt in alten Feldern**.
+
+### 14.2 Der grosse Textbalken: den haben wir schon
+
+In `cap132` (Plug-in-Mixer-Layer, DAW-Mode, 2.1.12) schreibt SSL 1479 mal auf
+`0x011c`, 202 Byte, und das ist unser `kHeaderRow`: **8 Zellen zu 25 ASCII**.
+Der Init legt dort `REAPER` in Zelle 0 und `OFF` in Zelle 4 ab, im Betrieb
+stehen `<SEL>`, `FOCUS`, `VOLUME`, `1/10`, `OFF` darin.
+
+Das ist die einzige grosse Textflaeche auf diesem Bildschirm, und **wir fahren
+sie bereits** (`uf1BuildLiveHeader_`). Fuer das Side-Car ist sie damit
+kostenlos: acht Zellen, in die "TOTALMIX", der Ziel-Bus, der Kanalname und der
+Wert passen, ohne dass ein Element dekodiert werden muss.
+
+Der EQ-Graph `0x0122` ist es nicht: in derselben Aufnahme traegt er
+Spaltenhoehen, keinen Text.
+
+### 14.3 Die vier Farbbalken: nicht gefunden, aber ein guter Kandidat
+
+**Nicht gefunden.** Im Korpus gibt es keine Aufnahme von SSLs eigenem
+DAW-LAYER auf dem UF1, nur vom Plug-in-Mixer-Layer im DAW-Mode, und dort
+zeigen die V-Pots Plug-in-Parameter (`Width`, `Mic`, `Out Trim`, `Mix`), keine
+vier Nachbarkanaele. Was Frank gesehen hat, kann also schlicht nicht im Korpus
+sein.
+
+Die vier Farb-Ids, die `cap132` zusaetzlich bewegt (`0x09`, `0x0b`, `0x0c`,
+`0x0e`), sind **nicht** die Antwort: sie tragen nur `0000f0`, `0011f1` und
+`00ffff`, bekommen daneben FF3B-Mono-Frames, und das liest sich wie
+Tasten-LEDs, nicht wie Spurfarben. Zum Vergleich: die bekannte Spurfarbe
+`0x07` traegt in derselben Aufnahme sechs verschiedene Werte.
+
+**Der Kandidat.** Vier-Byte-Elemente, die der Init beschreibt und die wir nie
+anfassen:
+
+| Adresse | Init-Wert | Bemerkung |
+|---|---|---|
+| `0x0113` | `01 01 01 01` | vier gleiche Werte, wie ein Stil pro Pot |
+| `0x0118` | `00 00 00 00` | |
+| `0x0121` | `00 00 00 00` | sitzt direkt zwischen Solo-Active (`0x0120`) und dem Graph (`0x0122`) |
+| `0x012b` | `00 00 00 00` | das neue aus 2.1.12 |
+
+Vier Byte ist genau die Form einer Reihe pro V-Pot: `kVpotStyle` (`0x010d`) ist
+ebenfalls vier Byte, eines je Pot. **`0x0121` ist der beste Kandidat**, wegen
+der Nachbarschaft.
+
+Und die Luecke ist erklaerbar: unsere eigene Notiz sagt "0x0100..0x011a
+render nothing at all, swept, blank" -- **der Sweep ging bis 0x011a.**
+`0x0121`, `0x0123`, `0x0129` und `0x012b` hat nie jemand angefasst.
+
+### 14.4 Wie man das beantwortet, ohne einen Capture-Lauf
+
+Durch Probieren aus unserem eigenen Code, so wie `0x0000` (Soft-Key-Backdrop)
+und `0x0120` (Solo-Active) gefunden wurden: beide standen in keiner einzigen
+Aufnahme, weil sie keinen Text tragen.
+
+Zwei Bedingungen, beide aus Schaden gelernt:
+
+- ⛔ **Ein unbekanntes Element kann das Layout zerlegen.** `0x011b` mit Bytes
+  statt leer riss jedes Textfeld vom Schirm und brauchte einen
+  REAPER-Neustart. Ein Sweep braucht also einen Ausschalter und das Wissen,
+  dass ein Neustart der Preis eines Treffers sein kann.
+- ⛔ **Frank ist farbenblind.** Eine Sonde, deren Ergebnis "welche Farbe
+  erscheint" lautet, hat den falschen Ableser. Die Sonde schreibt darum
+  unterscheidbare **Positionen** (`00 01 02 03` ueber die vier Bytes), nicht
+  unterscheidbare Farben, damit die Antwort "vier Balken, von links
+  ansteigend" heisst und nicht "gruen, gelb, orange, rot".
+
+## 15. Entschieden am 19.09.
 
 Franks Antworten auf die sechs offenen Punkte, damit sie nicht noch einmal
 aufgemacht werden:
@@ -852,7 +939,7 @@ die gemessene Breite beider Displays ([[surface-text-field-widths]]). Im
 Handbuch heisst es "TotalMix Mode", weil ein Nutzer, der auf sein Interface
 schaut, dieses Wort liest und kein anderes.
 
-## 15. Urteil und Reihenfolge
+## 16. Urteil und Reihenfolge
 
 Machbar, ohne neue Erfindung: das Protokoll ist offen und vollstaendig
 dokumentiert, der OSC-Code existiert in Franks Hand, die Pegel kommen mit, und
