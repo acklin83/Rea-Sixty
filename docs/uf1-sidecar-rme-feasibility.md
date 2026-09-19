@@ -1,5 +1,12 @@
 # Machbarkeitsstudie: UF1 Side-Car und RME Monitor Control
 
+> ⛔ **Alles hier ist NACH v0.6.0.** Frank, 19.09.2026: "alles bis und mit
+> gestern soll in den v0.6 tag, das sidecar zeugs ist für nachher". Die Grenze
+> ist `87edabf` (18.09. 17:04); der Tag geht auf diesen Commit, nicht auf die
+> Spitze von main. Alles ab `539bce2` (19.09. 15:47), also diese Studie, die
+> Layout-Sonde, das V-Pot/EQ-Aufräumen und das RME-Fundament, steht zwar auf
+> main, gehört aber nicht in 0.6.0.
+
 Stand 2026-09-19. Alles hier ist gelesen, nicht erinnert. Grundlage fuer den
 OSC-Teil ist die offizielle Tabelle **"OSC-Commands TotalMix FX 2.1 beta 2
 Global OSC", `OSCProtocoll_260721.ods`, 21.07.2026**, die Frank beigesteuert
