@@ -319,6 +319,17 @@ constexpr uint16_t kSoloActive   = 0x0120;
 // down (every text field gone, only the EQ graph and timecode survive) and needs
 // a REAPER restart. Proven on hardware 2026-08-10. If it is ever wanted, send it
 // EMPTY, the way SSL does. 0x0100..0x011a render nothing at all — swept, blank.
+// ⛔ AND THAT SWEEP WAS SCOPED TO ONE LAYOUT. "Blank" is an answer about the
+// layout the panel was in, not about the element. 0x0100 is the LARGE-LCD
+// LAYOUT SELECTOR, {layout, screen}: we drive {03,00} for the channel plane and
+// {04,00..05} for the six meter screens, and the whole corpus only ever shows
+// those two layouts (plus a single {80,03} at the head of the cold start,
+// cap101 frame 585). SSL's own DAW layer on the UF1 was never captured, so the
+// elements it paints there — Frank saw a large text field where our EQ graph
+// sits, and a colour bar per V-Pot — are BEHIND another layout and cannot
+// render while we hold {03,00}. Reading this line as "those addresses are dead"
+// is how that stayed hidden (2026-09-19). Before concluding an element does
+// nothing: say which layout you concluded it in.
 // NB: 0x011d is NOT a view selector (disproven — cap84=0x11, cap77=0x19, cap66=0xfb;
 // too variable, streaming it switched nothing). The Channel<->Meter view is toggled
 // by the MODE button (btn::kMode) on the device itself; the host does not command it

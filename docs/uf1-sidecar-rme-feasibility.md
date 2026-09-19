@@ -849,70 +849,96 @@ Also **genau eine neue Adresse**, und die ist schon bekannt: `0x012b` wurde im
 Rahmen der roten VU-Zahlen am 11.09. probiert. Alles andere, was auf dem Glas
 neu aussieht, ist **kein neues Feld, sondern neuer Inhalt in alten Feldern**.
 
-### 14.2 Der grosse Textbalken: den haben wir schon
+### 14.2 ⛔ Korrektur: der grosse Textbalken ist NICHT unsere Kopfzeile
 
-In `cap132` (Plug-in-Mixer-Layer, DAW-Mode, 2.1.12) schreibt SSL 1479 mal auf
-`0x011c`, 202 Byte, und das ist unser `kHeaderRow`: **8 Zellen zu 25 ASCII**.
-Der Init legt dort `REAPER` in Zelle 0 und `OFF` in Zelle 4 ab, im Betrieb
-stehen `<SEL>`, `FOCUS`, `VOLUME`, `1/10`, `OFF` darin.
+Erst stand hier, der Balken sei `0x011c`, unsere 8x25-Kopfzeile, und wir
+faehren ihn laengst. Frank hat widersprochen, und er hat recht. `0x011c` ist
+die Kopfzeile **in unserer Ebene**. Was er gesehen hat, liegt in einer anderen.
 
-Das ist die einzige grosse Textflaeche auf diesem Bildschirm, und **wir fahren
-sie bereits** (`uf1BuildLiveHeader_`). Fuer das Side-Car ist sie damit
-kostenlos: acht Zellen, in die "TOTALMIX", der Ziel-Bus, der Kanalname und der
-Wert passen, ohne dass ein Element dekodiert werden muss.
+### 14.3 Die Ebene ist der Punkt, und sie hat einen Namen
 
-Der EQ-Graph `0x0122` ist es nicht: in derselben Aufnahme traegt er
-Spaltenhoehen, keinen Text.
+`0x0100` ist der **Layout-Selektor des grossen LCD**, zwei Byte
+`{layout, screen}`. Wir fahren genau zwei Werte:
 
-### 14.3 Die vier Farbbalken: nicht gefunden, aber ein guter Kandidat
+```
+{0x03, 0x00}          Kanal-Ebene (Plugin / DAW / Sends teilen sie sich)
+{0x04, 0x00 .. 0x05}  Meter-Ebene, sechs Screens
+```
 
-**Nicht gefunden.** Im Korpus gibt es keine Aufnahme von SSLs eigenem
-DAW-LAYER auf dem UF1, nur vom Plug-in-Mixer-Layer im DAW-Mode, und dort
-zeigen die V-Pots Plug-in-Parameter (`Width`, `Mic`, `Out Trim`, `Mix`), keine
-vier Nachbarkanaele. Was Frank gesehen hat, kann also schlicht nicht im Korpus
-sein.
+Und der **gesamte Korpus** kennt nur diese beiden, plus ein einzelnes
+`{0x80, 0x03}` ganz am Anfang des Kaltstarts (`cap101`, Frame 585, vor dem
+ersten `{03,00}`). SSLs eigener **DAW-Layer** auf dem UF1 wurde nie
+aufgezeichnet, also ist seine Layout-Nummer unbekannt. Das erste Byte nimmt
+nachweislich mindestens 0x03, 0x04 und 0x80 an; der Raum ist groesser als die
+zwei Ebenen, die wir benutzen.
 
-Die vier Farb-Ids, die `cap132` zusaetzlich bewegt (`0x09`, `0x0b`, `0x0c`,
-`0x0e`), sind **nicht** die Antwort: sie tragen nur `0000f0`, `0011f1` und
-`00ffff`, bekommen daneben FF3B-Mono-Frames, und das liest sich wie
-Tasten-LEDs, nicht wie Spurfarben. Zum Vergleich: die bekannte Spurfarbe
-`0x07` traegt in derselben Aufnahme sechs verschiedene Werte.
+Damit loest sich auch das Raetsel aus 14.1: die Felder sind nicht neu und auch
+nicht versteckt, sie sind **hinter einer Ebene, die wir nie einschalten**.
+Frank: "sind hinter dem EQ Graph."
 
-**Der Kandidat.** Vier-Byte-Elemente, die der Init beschreibt und die wir nie
-anfassen:
+### ⛔ 14.3.1 Und darum stimmt unsere eigene Notiz nur halb
 
-| Adresse | Init-Wert | Bemerkung |
+In `UF1Protocol.h` steht "0x0100..0x011a render nothing at all, swept, blank".
+Das ist eine Aussage **ueber die Ebene, in der gesweept wurde**, nicht ueber
+die Elemente. Genau so gelesen habe ich sie, und genau daran bin ich in 14.2
+gescheitert. Der Satz steht jetzt mit dieser Einschraenkung im Header.
+
+**Leer in einer Ebene ist nicht leer.** Wer kuenftig schreibt, ein Element tue
+nichts, sagt dazu, in welcher Ebene er das festgestellt hat.
+
+### 14.4 Die vier Farbbalken: derselbe Grund
+
+Gilt genauso. Es gibt keine Aufnahme von SSLs DAW-Layer, also auch keine von
+dem, was er dort auf die V-Pots malt. Die vier Farb-Ids, die `cap132`
+zusaetzlich bewegt (`0x09`, `0x0b`, `0x0c`, `0x0e`), sind es nicht: sie tragen
+nur `0000f0`, `0011f1` und `00ffff` und bekommen daneben FF3B-Mono-Frames, das
+sind Tasten-LEDs. Die bekannte Spurfarbe `0x07` traegt in derselben Aufnahme
+sechs verschiedene Werte.
+
+Was bleibt, sind die Vier-Byte-Elemente, die der Init beschreibt und die wir
+nie anfassen. Vier Byte ist die Form einer Reihe pro V-Pot, `kVpotStyle`
+(`0x010d`) ist auch vier Byte:
+
+| Adresse | Init | |
 |---|---|---|
 | `0x0113` | `01 01 01 01` | vier gleiche Werte, wie ein Stil pro Pot |
 | `0x0118` | `00 00 00 00` | |
-| `0x0121` | `00 00 00 00` | sitzt direkt zwischen Solo-Active (`0x0120`) und dem Graph (`0x0122`) |
+| `0x0121` | `00 00 00 00` | sitzt zwischen Solo-Active `0x0120` und dem Graph `0x0122` |
 | `0x012b` | `00 00 00 00` | das neue aus 2.1.12 |
 
-Vier Byte ist genau die Form einer Reihe pro V-Pot: `kVpotStyle` (`0x010d`) ist
-ebenfalls vier Byte, eines je Pot. **`0x0121` ist der beste Kandidat**, wegen
-der Nachbarschaft.
+Aber die Reihenfolge der Fragen hat sich umgedreht: **erst die Ebene, dann die
+Elemente.** In `{03,00}` zeichnen sie nichts, und das war nie eine Aussage
+ueber sie.
 
-Und die Luecke ist erklaerbar: unsere eigene Notiz sagt "0x0100..0x011a
-render nothing at all, swept, blank" -- **der Sweep ging bis 0x011a.**
-`0x0121`, `0x0123`, `0x0129` und `0x012b` hat nie jemand angefasst.
+### 14.5 Der Versuch, den das erlaubt
 
-### 14.4 Wie man das beantwortet, ohne einen Capture-Lauf
+Kein Capture-Lauf, und auch kein Blindschuss auf unbekannte Elemente. Der
+Versuch ist **der Layout-Selektor, den wir laengst fahren**:
 
-Durch Probieren aus unserem eigenen Code, so wie `0x0000` (Soft-Key-Backdrop)
-und `0x0120` (Solo-Active) gefunden wurden: beide standen in keiner einzigen
-Aufnahme, weil sie keinen Text tragen.
+```
+0x0100 <- {0x01,0x00} {0x02,0x00} {0x05,0x00} ...      und wieder {0x03,0x00}
+```
 
-Zwei Bedingungen, beide aus Schaden gelernt:
+Das ist mechanisch dieselbe Operation wie jeder MODE-Wechsel zwischen Kanal-
+und Meter-Ebene, und **der Rueckweg ist der, den der Code ohnehin auf jeder
+Flanke geht** (`put(0x0100, {0x03, 0x00})`). Damit ist das eine deutlich
+zahmere Sonde als ein Schreibversuch auf ein unbekanntes Element: `0x011b` riss
+seinerzeit das ganze Layout herunter, weil niemand wusste, was es ist. Hier
+wissen wir es.
 
-- ⛔ **Ein unbekanntes Element kann das Layout zerlegen.** `0x011b` mit Bytes
-  statt leer riss jedes Textfeld vom Schirm und brauchte einen
-  REAPER-Neustart. Ein Sweep braucht also einen Ausschalter und das Wissen,
-  dass ein Neustart der Preis eines Treffers sein kann.
+Findet sich eine Ebene, in der etwas anderes steht, dann erst die Elemente
+darin abklopfen, und zwar mit den vier Kandidaten oben zuerst.
+
+Zwei Bedingungen bleiben:
+
+- ⛔ Eine unbekannte Ebene kann die Firmware in einen Zustand bringen, aus dem
+  das Zurueckschreiben allein nicht reicht. Der Preis eines Treffers kann ein
+  REAPER-Neustart sein, und die Sonde gehoert hinter einen Schalter.
 - ⛔ **Frank ist farbenblind.** Eine Sonde, deren Ergebnis "welche Farbe
-  erscheint" lautet, hat den falschen Ableser. Die Sonde schreibt darum
-  unterscheidbare **Positionen** (`00 01 02 03` ueber die vier Bytes), nicht
-  unterscheidbare Farben, damit die Antwort "vier Balken, von links
-  ansteigend" heisst und nicht "gruen, gelb, orange, rot".
+  erscheint" lautet, hat den falschen Ableser. Also unterscheidbare
+  **Positionen** in die vier Byte schreiben (`00 01 02 03`), damit die Antwort
+  "vier Balken, von links ansteigend" heisst und nicht "gruen, gelb, orange,
+  rot".
 
 ## 15. Entschieden am 19.09.
 
