@@ -355,6 +355,7 @@ add_library(reaper_uf8 MODULE
     src/LogPath.cpp
     src/Protocol.cpp
     src/Palette.cpp
+    src/Uf1EqCurve.cpp
     src/TrackName.cpp
     src/PluginMap.cpp
     src/UserPluginCatalog.cpp
@@ -783,6 +784,13 @@ if(NOT WIN32)
     # that blob silently empties the whole configuration on the next REAPER start
     # (ExtState is an INI file), and no code path anywhere reports an error — so
     # the round trip needs a test, and that drags in the HTTP client behind it.
+    # The UF1 EQ curve: the pure half of the graph painter. Pins the cap73
+    # height scale, the two filter rails that were regressions once, and that a
+    # band LIST of any length sums — which is the reason it was split out.
+    add_executable(test_uf1_eq tests/test_uf1_eq.cpp src/Uf1EqCurve.cpp)
+    target_include_directories(test_uf1_eq PRIVATE src "${WDL_DIR}")
+    add_test(NAME uf1_eq COMMAND test_uf1_eq)
+
     add_executable(test_hue tests/test_hue.cpp
         src/HueColor.cpp src/HueClient.cpp src/HueManager.cpp)
     target_include_directories(test_hue PRIVATE src "${WDL_DIR}")

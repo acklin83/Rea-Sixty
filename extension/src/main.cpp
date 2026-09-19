@@ -98,6 +98,7 @@
 #include "MixerWindow.h"
 #include "NavDispatch.h"
 #include "Palette.h"
+#include "Uf1EqCurve.h"
 #include "ParameterGroups.h"
 #include "PluginChunkPatch.h"
 #include "SslPresetLibrary.h"
@@ -28575,41 +28576,13 @@ double uf1ParamFreq_(MediaTrack* tr, int fx, int p, double fallback)
     return v;
 }
 
-// Analog peaking-EQ magnitude (dB) at f for a bell centred at f0, gain g dB, Q.
-double uf1PeakDb_(double f, double f0, double g, double q)
-{
-    if (g == 0.0 || f0 <= 0.0 || q <= 0.0) return 0.0;
-    const double A  = std::pow(10.0, g / 40.0);
-    const double w2 = f * f, w0 = f0 * f0;
-    const double d  = w0 - w2;
-    const double num = std::hypot(d, f * f0 * A / q);
-    const double den = std::hypot(d, f * f0 / (A * q));
-    return 20.0 * std::log10(num / den);
-}
-// 1st-order-ish shelves (display curves): smooth g->0 transition around f0.
-double uf1LowShelfDb_(double f, double f0, double g)
-{
-    if (g == 0.0 || f0 <= 0.0) return 0.0;
-    return g / (1.0 + (f / f0) * (f / f0));
-}
-double uf1HighShelfDb_(double f, double f0, double g)
-{
-    if (g == 0.0 || f0 <= 0.0) return 0.0;
-    return g / (1.0 + (f0 / f) * (f0 / f));
-}
-// 2nd-order filter roll-offs (≈12 dB/oct) — only meaningful away from the rail.
-double uf1HpfDb_(double f, double fc)
-{
-    if (fc <= 9.0) return 0.0;                        // below the control min (10 Hz) = off
-    const double r = fc / f;
-    return -10.0 * std::log10(1.0 + r * r * r * r);
-}
-double uf1LpfDb_(double f, double fc)
-{
-    if (fc >= 19000.0) return 0.0;                    // at/over the top rail = off
-    const double r = f / fc;
-    return -10.0 * std::log10(1.0 + r * r * r * r);
-}
+// ⇨ THE EQ CURVE MOVED OUT (2026-09-19): the five display-curve helpers, the
+// dB-to-height scale and the renderer now live in src/Uf1EqCurve.{h,cpp} as
+// uf1eq::. They were always the half of uf1PaintEqGraph_ that knows nothing
+// about REAPER, and a second source (RME's 3-band channel EQ, its 9-band Room
+// EQ) needs exactly that half. What stays here is the GATHERER.
+// The pure half is unit-tested in tests/test_uf1_eq.cpp — main.cpp is not, and
+// that asymmetry is the whole point of the split.
 
 } // namespace
 
@@ -28917,12 +28890,6 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
     // points 0..248 of a 250-point grid and this carries the last one.
     // Reported by sollapse in issue #8, finding 11.
     uint8_t eqTail = 0x64;
-    auto dbToH = [](double db) {
-        if (!std::isfinite(db)) db = 0.0;        // NaN would be UB in the cast below
-        double h = 100.0 + db * 5.44;            // cap73: 0 dB = 100, +16 dB ≈ 187
-        if (h < 0.0) h = 0.0; if (h > 199.0) h = 199.0;
-        return static_cast<uint8_t>(h + 0.5);
-    };
 
     bool eqOn = sFx >= 0;
     // ⛔ AN FX IS NOT AN EQ. "Some plug-in resolved" used to be the whole test, so
@@ -29028,7 +28995,7 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
                 const int    i0 = static_cast<int>(pos);
                 const int    i1 = (i0 + 1 < n) ? i0 + 1 : i0;
                 const double fr = pos - i0;
-                const uint8_t h = dbToH(wire[i0] * (1.0 - fr) + wire[i1] * fr);
+                const uint8_t h = uf1eq::dbToHeight(wire[i0] * (1.0 - fr) + wire[i1] * fr);
                 if (x < 251) col[x] = h; else eqTail = h;
             }
             col[0] = 0x00; col[1] = 0x01;
@@ -29044,9 +29011,9 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         }
     }
 
-    if (!eqOn) {
-        col.fill(100);
-    } else {
+    uf1eq::Model eqModel;
+    eqModel.on = eqOn;
+    if (eqOn) {
         const double hfG=uf1ParamFmt_(sFxTr,sFx,ix[0],0),  hfF=uf1ParamFreq_(sFxTr,sFx,ix[1],8000);
         const bool   hfBell = ix[2]>=0 && TrackFX_GetParamNormalized(sFxTr,sFx,ix[2])>=0.5;
         // ReaEQ's band width is octaves, not Q (see fxWidthIsOctaves_).
@@ -29081,22 +29048,19 @@ void uf1PaintEqGraph_(MediaTrack* tr, bool force)
         // Worst case LP/HP just don't draw — exactly the pre-fix behaviour.
         if (hpF < 9.0 || hpF > 2000.0)     hpF = 5.0;       // off (≤9 rail), HP min 10 Hz
         if (lpF < 1000.0 || lpF > 30000.0) lpF = 20000.0;   // off (≥19000 rail)
-        // Columns live at payload indices 2..250 (249 columns); 0..1 = the
-        // "00 01" format header below.
-        for (int x = 2; x < 252; ++x) {              // 251 = the tail point
-            const double frac = (x - 2) / 249.0;
-            const double f = 20.0 * std::pow(1000.0, frac);   // 20 Hz .. 20 kHz, log
-            double db = 0.0;
-            db += uf1PeakDb_(f, hmF, hmG, hmQ);
-            db += uf1PeakDb_(f, lmF, lmG, lmQ);
-            db += hfBell ? uf1PeakDb_(f, hfF, hfG, 0.7) : uf1HighShelfDb_(f, hfF, hfG);
-            db += lfBell ? uf1PeakDb_(f, lfF, lfG, 0.7) : uf1LowShelfDb_(f, lfF, lfG);
-            db += uf1HpfDb_(f, hpF);
-            db += uf1LpfDb_(f, lpF);
-            const uint8_t h = dbToH(db);
-            if (x < 251) col[x] = h; else eqTail = h;
-        }
+        // ⇨ AND THAT IS THE WHOLE GATHERER. Everything above reads REAPER; the
+        // model below is the seam, and nothing past it knows what an FX is.
+        // Order preserved from the hand-rolled loop (HMF, LMF, HF, LF, HP, LP)
+        // so the sum, and therefore every byte of the curve, is unchanged.
+        using K = uf1eq::Band::Kind;
+        eqModel.bands.push_back({K::Bell, hmF, hmG, hmQ});
+        eqModel.bands.push_back({K::Bell, lmF, lmG, lmQ});
+        eqModel.bands.push_back({hfBell ? K::Bell : K::HighShelf, hfF, hfG, 0.7});
+        eqModel.bands.push_back({lfBell ? K::Bell : K::LowShelf,  lfF, lfG, 0.7});
+        eqModel.bands.push_back({K::HighPass, hpF, 0.0, 0.7});
+        eqModel.bands.push_back({K::LowPass,  lpF, 0.0, 0.7});
     }
+    uf1eq::render(eqModel, col, eqTail);
     // FD payload format (cap73, byte-exact): "00 01" header marker, then 249
     // column heights. We were sending "00 <250 cols>" — missing the 0x01 marker
     // and off by one column — so the device parsed it wrong and never drew it.
@@ -32355,6 +32319,98 @@ void applyUf1HueVpot_(uint8_t id, int step)
 // Paints the whole UF1 while Hue Mode is on, the way the meter view owns the
 // screen: uf1PaintChannel_ hands over at the top and returns, so nothing below
 // can half-repaint a channel that is not being shown.
+// ══ THE FOUR V-POT CELLS HAVE EXACTLY ONE WRITER ════════════════════════════
+// Same rule, and the same reason, as uf1EmitSoftKeyRow_: there is ONE physical
+// row of four pots, so there is ONE cache describing what the device shows.
+// Until 2026-09-19 there were TWO — uf1PaintChannel_ and uf1PaintHue_ each kept
+// their own sVpot / sBars / sStyles and each emitted 0x010e / 0x010f / 0x010d
+// themselves. Two caches for one row is the shape that bit us on the soft keys
+// ([[uf1-screen-owning-mode-checklist]]): leaving a mode, the other painter says
+// "already showing that" and never re-sends, so the previous mode's labels stay
+// on the glass. A g_uf1Gen bump papered over it; one cache removes it.
+//
+// Fill four cells, call, done. Never build a second emitter.
+struct Uf1VpotRow {
+    // Already composed AND folded to Latin-1 — a V-Pot cell is uf1ValueLine()
+    // plus utf8ToLatin1(), and that is not a fact each caller should re-know.
+    std::array<std::string, 4> line{};
+    std::array<uint8_t, 8>     bars{};
+    // 0x03 = empty. The channel painter has always started from "all four
+    // blank" and only lights the slots it fills; Hue sets all four every time,
+    // so this default is the channel painter's behaviour preserved, not a new one.
+    std::array<uint8_t, 4>     styles{0x03, 0x03, 0x03, 0x03};
+};
+
+// Compose one cell's text. The 9-char label zone + 10-char value zone lives in
+// uf1ValueLine; the Latin-1 fold belongs at the emit because a plug-in's param
+// name is arbitrary UTF-8 and the panel is one byte per glyph.
+static void uf1VpotCell_(Uf1VpotRow& row, int i, const std::string& label,
+                         const std::string& value)
+{
+    row.line[static_cast<size_t>(i)] = utf8ToLatin1(uf1ValueLine(label, value));
+}
+
+// Compose one cell's bar + style. Both rules, in one place:
+//
+// ⛔ A CENTRE BAR CARRIES A SIGNED DEVIATION, NOT AN ABSOLUTE POSITION. Decoded
+// 2026-08-17 from cap72 by pairing every style-0x08 pot with its own dB readout:
+// 0 dB → 0, full boost → 100 (0x64), full cut → 156 (0x9c = −100 in two's
+// complement). Sending the plain 0..100 position put every gain at three
+// quarters of the bar. Unipolar bars are unaffected — there 0..100 IS the
+// position.
+//
+// The odd byte is BRIGHTNESS, uniformly 0x80. It was once wired to `bipolar`,
+// which made V-Pot 1 read dimmer than its neighbours on any page whose first
+// slot is not a gain (Frank 2026-08-17). It is not polarity.
+//
+// And the STYLE follows the UF8: unipolar draws a travelling LINE (0x01),
+// bipolar a fill from the centre (0x08), an empty slot nothing (0x03). SSL's
+// own "fill from the left" (0x02) made frequencies fill instead of point.
+static void uf1VpotBar_(Uf1VpotRow& row, int i, double norm,
+                        bool bipolar, bool empty)
+{
+    const int pos = bipolar
+        ? std::clamp(static_cast<int>(std::lround((norm - 0.5) * 200.0)), -100, 100)
+        : std::clamp(static_cast<int>(std::lround(norm * 100.0)),            0, 100);
+    row.bars[static_cast<size_t>(i) * 2]     =
+        static_cast<uint8_t>(static_cast<int8_t>(pos));
+    row.bars[static_cast<size_t>(i) * 2 + 1] = 0x80;
+    row.styles[static_cast<size_t>(i)] = empty ? 0x03 : (bipolar ? 0x08 : 0x01);
+}
+
+// The one emit. `force` is the caller's "repaint regardless" gate (g_uf1Gen
+// edge, mode edge, device reopen) and means exactly what it meant in both
+// copies.
+static void uf1EmitVpotRow_(const Uf1VpotRow& row, bool force)
+{
+    if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
+    static std::array<std::string, 4> sLine{};
+    static std::array<uint8_t, 8>     sBars{};
+    static std::array<uint8_t, 4>     sStyles{};
+    static bool                       sValid = false;
+    for (uint8_t i = 0; i < 4; ++i) {
+        const std::string& ln = row.line[i];
+        if (!force && sValid && ln == sLine[i]) continue;
+        sLine[i] = ln;
+        std::vector<uint8_t> p;
+        p.reserve(1 + ln.size());
+        p.push_back(i);
+        p.insert(p.end(), ln.begin(), ln.end());
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kFocusedParam, p));
+    }
+    if (force || !sValid || row.bars != sBars) {
+        sBars = row.bars;
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, row.bars));
+    }
+    // Independent gate: a page whose positions happen to repeat still gets its
+    // styles corrected.
+    if (force || !sValid || row.styles != sStyles) {
+        sStyles = row.styles;
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, row.styles));
+    }
+    sValid = true;
+}
+
 static void uf1PaintHue_()
 {
     auto& hm = uf8::hue::manager();
@@ -32452,29 +32508,17 @@ static void uf1PaintHue_()
     }
 
     // ---- the four V-Pots ---------------------------------------------------
+    // Fills the shared row and hands it to the ONE writer. Every axis here is
+    // unipolar, so uf1VpotBar_ draws the travelling line on all four — the same
+    // rule the channel painter gets, now from the same function rather than from
+    // a second copy of the comment.
     {
-        std::array<uint8_t, 8> bars{};
-        std::array<uint8_t, 4> styles{};
-        static std::array<std::string, 4> sVpot{};
+        Uf1VpotRow row;
 
         auto sendVpot = [&](uint8_t idx, const std::string& label,
                             const std::string& value, double norm, bool empty) {
-            const std::string line = utf8ToLatin1(uf1ValueLine(label, value));
-            if (force || line != sVpot[idx]) {
-                sVpot[idx] = line;
-                std::vector<uint8_t> p;
-                p.reserve(1 + line.size());
-                p.push_back(idx);
-                p.insert(p.end(), line.begin(), line.end());
-                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kFocusedParam, p));
-            }
-            const int pos = std::clamp(
-                static_cast<int>(std::lround(norm * 100.0)), 0, 100);
-            bars[idx * 2]     = static_cast<uint8_t>(pos);
-            bars[idx * 2 + 1] = 0x80;
-            // Every axis here is unipolar, so the travelling line (0x01) is the
-            // right look on all four — the same rule the channel painter uses.
-            styles[idx] = empty ? 0x03 : 0x01;
+            uf1VpotCell_(row, idx, label, value);
+            uf1VpotBar_(row, idx, norm, /*bipolar=*/false, empty);
         };
 
         if (slot < 0) {
@@ -32504,18 +32548,7 @@ static void uf1PaintHue_()
             sendVpot(3, "", "", 0.0, /*empty=*/true);
         }
 
-        static std::array<uint8_t, 8> sBars{};
-        static bool sBarsValid = false;
-        if (force || !sBarsValid || bars != sBars) {
-            sBars = bars; sBarsValid = true;
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
-        }
-        static std::array<uint8_t, 4> sStyles{};
-        static bool sStylesValid = false;
-        if (force || !sStylesValid || styles != sStyles) {
-            sStyles = styles; sStylesValid = true;
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, styles));
-        }
+        uf1EmitVpotRow_(row, force);
     }
 
     // ---- the four display soft keys ----------------------------------------
@@ -33882,21 +33915,14 @@ void uf1PaintChannel_()
     // the readout even without a full repaint). A non-SSL / unknown FX falls
     // back to the generic Pan / Vol readout so a plain track still reads sensibly.
     {
-        static std::array<std::string, 4> sVpot{};
+        // The row this branch fills; emitted once at the end through the ONE
+        // writer. The 9-char label zone + 10-char value zone and the Latin-1
+        // fold both live in uf1VpotCell_ now, so this call site says only WHAT
+        // to show.
+        Uf1VpotRow row;
         auto sendVpotParam = [&](uint8_t idx, const std::string& label,
                                  const std::string& value) {
-            // 9-char label zone + 10-char value zone (uf1ValueLine) — a longer
-            // param name would otherwise bleed into the yellow value field.
-            // Latin-1 at the emit, like every UF1 text zone: a plug-in's param name
-            // is arbitrary UTF-8 and the panel is one byte per glyph.
-            const std::string line = utf8ToLatin1(uf1ValueLine(label, value));
-            if (!changed && line == sVpot[idx]) return;
-            sVpot[idx] = line;
-            std::vector<uint8_t> p;
-            p.reserve(1 + line.size());
-            p.push_back(idx);
-            p.insert(p.end(), line.begin(), line.end());
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kFocusedParam, p));
+            uf1VpotCell_(row, idx, label, value);
         };
         MediaTrack* csTr = nullptr; int csFx = -1;
         const int csType = uf1ResolveCsFx_(tr, csTr, csFx);
@@ -33953,38 +33979,10 @@ void uf1PaintChannel_()
         // Reuses the SAME unipolar/bipolar split the UF8 V-Pot bars use (Frank:
         // "nimm die v-pot anzeigen vom uf8, die stimmen eh schon") — here the split
         // is the per-slot `bipolar` flag already in the kUf1CsVPots table.
-        static std::array<uint8_t, 8> sVpotBars{};
-        static bool sVpotBarsValid = false;
-        std::array<uint8_t, 8> bars{};
-        std::array<uint8_t, 4> styles{0x03, 0x03, 0x03, 0x03};
+        // Thin wrapper over the shared composer — the bipolar rule, the
+        // brightness byte and the style mapping live in uf1VpotBar_ now, once.
         auto setBar = [&](int i, double norm, bool bipolar, bool empty = false) {
-            // ⛔ A CENTRE BAR CARRIES A SIGNED DEVIATION, NOT AN ABSOLUTE POSITION.
-            // Decoded 2026-08-17 from cap72 by pairing every style-0x08 pot with its
-            // own dB readout: 0 dB -> 0, full boost -> 100 (0x64), full cut -> 156
-            // (0x9c = -100 in two's complement), -0.1 dB -> 255. So the byte is an
-            // int8 in -100..+100 measured FROM the centre.
-            // We were sending the plain 0..100 position, so a gain at 0 dB went out
-            // as 50, the firmware read +50, and every gain sat at three quarters of
-            // the bar (Frank 2026-08-17: "alle Gain-Werte fangen mit 0 = 75% des
-            // Balkens an; beim UF8 gehört 0 genau in die Mitte"). Unipolar bars are
-            // unaffected — there 0..100 IS the position.
-            const int pos = bipolar
-                ? std::clamp(static_cast<int>(std::lround((norm - 0.5) * 200.0)), -100, 100)
-                : std::clamp(static_cast<int>(std::lround(norm * 100.0)),            0, 100);
-            bars[i * 2]     = static_cast<uint8_t>(static_cast<int8_t>(pos));
-            // BRIGHTNESS, uniformly bright. This byte was wired to `bipolar`, which
-            // is why V-Pot 1 read dimmer than its neighbours on any page whose first
-            // slot is not a gain (Frank 2026-08-17). It is not polarity — forcing it
-            // on the hardware changed nothing but brightness — and there is no
-            // reason for one pot to be dimmer than the next.
-            bars[i * 2 + 1] = 0x80;
-            // …and the STYLE follows the UF8, which Frank confirms reads correctly:
-            // unipolar draws a travelling LINE (0x01), bipolar a fill from the
-            // centre (0x08), an empty slot nothing (0x03). We briefly sent 0x02
-            // here — SSL's "fill from the left", which it uses for Width / Mic /
-            // Ratio / Threshold / Mix — and that made frequencies fill instead of
-            // point. Matching the UF8 is the whole request: one rule, both surfaces.
-            styles[i] = empty ? 0x03 : (bipolar ? 0x08 : 0x01);
+            uf1VpotBar_(row, i, norm, bipolar, empty);
         };
         if (g_uf1ChannelSubMode.load() == 2) {
             // Sends mode: the 4 V-Pots follow the focused track's 7.75 MIXER-SLOT
@@ -34146,20 +34144,7 @@ void uf1PaintChannel_()
                 setBar(i, 0.0, false, /*empty*/true);
             }
         }
-        if (changed || !sVpotBarsValid || bars != sVpotBars) {
-            sVpotBars = bars; sVpotBarsValid = true;
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
-        }
-        // …and the styles alongside them, on the same change gate. Sent BEFORE the
-        // bars would be tidier but the device does not care, and keeping the two
-        // gates independent means a page whose positions happen to repeat still
-        // gets its styles corrected.
-        static std::array<uint8_t, 4> sVpotStyle{};
-        static bool sVpotStyleValid = false;
-        if (changed || !sVpotStyleValid || styles != sVpotStyle) {
-            sVpotStyle = styles; sVpotStyleValid = true;
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, styles));
-        }
+        uf1EmitVpotRow_(row, changed);
         }
 
     // ⛔ NO 0x011c ONE-SHOT HERE. The cell has exactly ONE sender: the cycle
