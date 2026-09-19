@@ -758,17 +758,38 @@ ansagt.
 Die 3 auf Slot 5 heisst "geaendert, nicht gespeichert", genau wie die Tabelle
 sagt. Die dreifarbige Taste aus 6.4 hat also echte Daten hinter sich.
 
-### 13.4 ⛔ Eine Rolle kann auf einen versteckten Kanal zeigen
+### 13.4 ⛔ Eine Rolle kann auf einen Kanal zeigen, den OSC nicht sieht
 
-Sichtbar in diesem Dump sind die Ausgaenge 0, 4, 6, 8, 10. `phones3` zeigt auf
-**2**, und den gibt es in der Liste nicht: der Kanal ist in
-Options, Channel Layout, "Hide in OSC Remote 1" ausgeblendet. Dieselbe
-Filterung gilt fuer die Matrix, deren Bus-Indizes exakt 0, 4, 6, 8, 10 sind.
+Sichtbar sind die Ausgaenge 0, 4, 6, 8, 10. `phones3` zeigt auf **2**, und den
+gibt es in der Liste nicht. Das ist kein Auslassen im Bulk-Dump: `/sendchan/
+output/2` bleibt **still**, waehrend `/sendchan/output/8` zur Kontrolle 73
+Adressen zurueckgibt. Kanal 2 ist fuer diese Fernbedienung schlicht nicht da.
 
-Das ist kein Fehler, sondern eine Zustandsform, mit der der Code rechnen muss:
-**eine Rolle zeigt auf einen Kanal, den diese OSC-Fernbedienung nicht sieht.**
-Die Kachel dafuer bleibt leer und sagt warum, statt auf Kanal 2 zu schreiben,
-der fuer uns nicht existiert.
+**Welche Einstellung ihn ausblendet, ist offen.** Erst hiess es hier "Hide in
+OSC Remote 1" -- das war aus der Notiz in Franks stoerme-Konfiguration
+abgeschrieben und nicht gemessen. Franks eigene Vermutung, das aktuelle
+**Layout** blende ihn aus, passt besser zur Spezifikation ("Channel settings in
+Channel Layout are effective for Global OSC too, hidden channels may be
+received by option"), und `LastLayoutPrest` steht in der Geraetedatei auf 3.
+Ein Beleg ist auch das nicht: die `OutputState`/`InputState`-Schluessel in
+`Frame0` sehen zwar nach Sichtbarkeit aus (`OutputState2` ist 0, die sichtbaren
+tragen 8576 oder 8613), aber `InputState0` ist ebenfalls 0 und Eingang 0 kommt
+ueber OSC ganz normal. Die Schluessel bedeuten also etwas anderes.
+
+Fuer den Bau ist die Ursache nachrangig, denn die Folge ist in beiden Faellen
+dieselbe und sogar staerker als gedacht: **die sichtbare Menge ist nicht
+konstant.** Sie haengt an einem Layout, das der Nutzer umschaltet. Und die
+Rollen selbst haengen am Snapshot: in der Geraetedatei steht `Phones3Chan` als
+`2, 78, 78, 2, 2, 2, 78, 78, 78` ueber die Snapshot-Slots, `Phones4Chan` als
+`-1, 80, 80, 4, 4, -1, ...`.
+
+Daraus zwei Regeln fuer den Code:
+
+- `rme.json` ist ein **Cache, keine Konfiguration**. Die Rollen kommen laufend
+  aus `/controlroom/...` und werden nachgezogen, wenn ein Snapshot laedt.
+- Eine Rolle, die auf einen Kanal zeigt, den diese Fernbedienung nicht sieht,
+  ist ein **Zustand**: die Kachel bleibt leer und sagt warum. Sie darf nicht
+  auf einen Kanal schreiben, der fuer uns nicht existiert.
 
 ### 13.5 Der Umfang, mit dem wir rechnen
 
@@ -786,12 +807,25 @@ raus, 7004 rein) weiter und wurde von unserem Betrieb auf Remote 1 nicht
 gestoert. Damit ist die Architekturfrage aus 3 beantwortet: Rea-Sixty bekommt
 sein eigenes Portpaar und TotalReaper behaelt seines.
 
-### 13.7 Was noch fehlt
+### 13.7 Zwei Dinge, die den Rest der Messung aufhalten
 
-Genau eine Sache, und sie haengt an einem Haken in TotalMix: **"Send Peak
-Level"** steht fuer diese Fernbedienung auf aus (`OSCSendLevel 0`), also kommt
-kein `/level/...`. Der Pfad steht in der Tabelle und ist nicht strittig, die
-Rate ist es. Dazu die Farbpalette hinter den Indizes 0 bis 8.
+**Das Interface war aus.** Die Titelzeile von TotalMix sagt "Fireface UFX+
+(23802132) - disconnected". Alles oben ist damit der **gespeicherte Zustand**,
+den TotalMix offline vorhaelt: strukturell gueltig (Namen, Rollen, Einheiten,
+Umfang), aber keine laufende Hardware. Pegel gibt es in diesem Zustand
+grundsaetzlich nicht, und Options, Mixer Settings ist dabei ausgegraut, also
+laesst sich auch der Haken "Send Peak Level" nicht setzen. Beides braucht ein
+eingeschaltetes Interface.
+
+**Die Version ist aelter als die Tabelle.** Installiert ist **TotalMix FX 2.10
+alpha 8**, die Spezifikation ist "2.1 beta 2" vom 21.07.2026. Das erklaert
+sauber, was im Dump fehlte: `/status/device|connection|dsp` kam nicht, und
+`/sendstate` blieb wirkungslos -- beides steht im Changelog unter dem 21.07.
+`/layout/load` (alpha 7) und `/input/<n>/color` (alpha 8) sind dagegen da.
+
+⇨ Fuer den Bau heisst das: **gegen das pruefen, was laeuft, nicht gegen die
+Tabelle.** Und eine Mindestversion nennen, sobald wir wissen, welche wir
+brauchen.
 
 ## 14. Entschieden am 19.09.
 
