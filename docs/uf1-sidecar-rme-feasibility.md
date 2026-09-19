@@ -971,16 +971,43 @@ Machbar, ohne neue Erfindung: das Protokoll ist offen und vollstaendig
 dokumentiert, der OSC-Code existiert in Franks Hand, die Pegel kommen mit, und
 beide Flaechen haben fuer eine Uebernahme schon einen Praezedenzfall.
 
-1. **Aufraeumen, bevor gebaut wird.** `uf1EmitVpotRow_` als einziger Schreiber
-   der V-Pot-Reihe, und `EqModel` als Band-Vektor zwischen Sammler und
-   Renderer. Kein neues Verhalten, beides am bestehenden sofort pruefbar.
-2. **Side-Car als Kategorie.** Zweite Ebene im Modusmodell, Shift + MODE als
+1. ✅ **Aufraeumen** (19.09.). `uf1EmitVpotRow_` ist der einzige Schreiber der
+   V-Pot-Reihe, mit EINEM Cache statt zwei; die Bipolar-Regel, das
+   Helligkeitsbyte und die Stil-Zuordnung liegen in `uf1VpotBar_`. Der EQ-Graph
+   ist in `src/Uf1EqCurve.{h,cpp}` geteilt: Sammler bleibt in `main.cpp`,
+   Renderer ist rein und nimmt eine **Bandliste** beliebiger Laenge. Die Kurven-
+   mathematik ist woertlich uebernommen, nicht neu hergeleitet. Test:
+   `tests/test_uf1_eq.cpp`.
+2. ✅ **RME-Fundament** (19.09.). `src/RmeOsc.{h,cpp}` (Global-OSC-Codec inkl.
+   Bundles), `src/RmeState.{h,cpp}` (Zustands-Cache, Rollen, Snapshots, Pegel),
+   `tools/rme_osc_probe` gegen den echten Mixer. Tests:
+   `tests/test_rme_osc.cpp`.
+3. **Side-Car als Kategorie.** Zweite Ebene im Modusmodell, Shift + MODE als
    Einstieg, `<`/`>` zum Blaettern. Erster Bewohner: Zoom oder Item-Volume,
    damit das Geruest ohne OSC steht.
-3. **RME-Client** mit eigenem Portpaar, `rme.json` mit den Rollen, die
+4. **Der Client im Tick.** Socket + Worker nach dem Muster von `HueManager` /
+   `ObsManager`, eigenes Portpaar, `rme.json` als Rollen-Cache, die
    `rme_*`-Builtins, die drei dynamischen Baenke.
-4. **SPREAD auf der UF1**, Geltungsbereich `controlroom`. Das ist die ARC.
-5. **SPREAD `submix`** und **STRIP** mit EQ-Graph.
-6. **Pegel** in die Kanalzone und in die Meter-View.
-7. **TotalMix auf dem UF8** als globaler Modus, DynaMount unberuehrt.
-8. **Standalone** als eigene Planung, mit der Frage aus 10.3 als erstem Punkt.
+5. **SPREAD auf der UF1**, Geltungsbereich `controlroom`. Das ist die ARC.
+6. **SPREAD `submix`** und **STRIP** mit EQ-Graph.
+7. **Pegel** in die Kanalzone und in die Meter-View.
+8. **TotalMix auf dem UF8** als globaler Modus, DynaMount unberuehrt.
+9. **Standalone** als eigene Planung, mit der Frage aus 10.3 als erstem Punkt.
+
+### 16.1 Zwei Fallen, die beim Bauen des Fundaments zugeschlagen haben
+
+Beide sind gefixt und beide haben jetzt einen Test, aber sie gehoeren
+aufgeschrieben, weil sie sich wiederholen werden.
+
+**Ein rechter Kanal ist kein Kanal.** Parameter, die es pro Seite gibt (phase,
+delay, gain, jedes Room-EQ-Band), werden auf der rechten Haelfte eines
+Stereopaars mit Index + 1 adressiert. Die erste Fassung markierte einen Kanal
+als vorhanden, sobald ueberhaupt etwas von ihm kam — und zaehlte damit **94
+Ausgaenge, wo der Mixer 5 zeigt**. Schlimmer: die Rollenaufloesung haette einen
+namenlosen Phantomkanal als sichtbar zurueckgegeben. Ein Strip meldet sich mit
+einem **Namen**; danach stimmen 61 / 47 / 5 genau.
+
+**Die Kurvenmathematik ist nicht "so ungefaehr eine Glocke".** Der erste
+Entwurf von `Uf1EqCurve.cpp` ersetzte die kapturgefittete Peaking-Formel durch
+eine Gausskurve, weil die auch wie eine Glocke aussieht. Beim Verschieben von
+Code wird nichts neu hergeleitet, es wird kopiert.
