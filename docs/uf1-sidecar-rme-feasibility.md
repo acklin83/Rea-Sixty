@@ -351,7 +351,168 @@ Offen ist genau eine Sache: ob `'submix'` in `/sendsubmix/<submix>` die
 Ausgangskanalnummer meint oder eine laufende Nummer. Sagt ein Dump in einer
 Minute.
 
-## 8. Meter-View aus der RME-Hardware
+## 8. Ansichten: zwei Maler, nicht fuenf
+
+Frank, 19.09.: "eine Ansicht eher global (4 Nachbarkanaele auf V-Pots,
+auswaehlen ueber Push) und eine auf den ausgewaehlten Channel mit EQ,
+Dynamics, Gain, aehnlich RME Rec Mode. Aber nichts doppeln."
+
+Der Schluss daraus ist schaerfer, als er klingt. Eine Ansicht kann nur zwei
+Dinge sein: **viele Kanaele mit je einem Regler**, oder **ein Kanal mit vielen
+Reglern**. Alles, was wir bisher aufgeschrieben haben, faellt in eines der
+beiden. Also nicht fuenf Ansichten, sondern **zwei Maler und ein Geltungs-
+bereich**.
+
+### 8.1 SPREAD: viele Kanaele, ein Parameter
+
+Ein Maler. Was er zeigt, sagt der Geltungsbereich:
+
+| Geltungsbereich | Kanaele | Parameter | ergibt |
+|---|---|---|---|
+| `controlroom` | Main, Main B, Phones 1-4 | `volume` | den Monitor-Controller, also die ARC |
+| `outputs` | alle Ausgaenge | `volume` | Ausgangspegel allgemein |
+| `submix <bus>` | Inputs + Playbacks | `/mix/.../faderlin` | die Submix View |
+| `inputs` | Hardware-Eingaenge | `gain` | vier Preamps nebeneinander |
+
+Vier V-Pots gleich vier Nachbarkanaele, Push waehlt, Kanal-Encoder schiebt das
+Fenster. Der Monitor-Controller ist damit **keine eigene Ansicht mehr**,
+sondern SPREAD mit dem Geltungsbereich `controlroom`. Das ist die Doppelung,
+die wir uns sparen.
+
+### 8.2 STRIP: ein Kanal, viele Parameter
+
+Der zweite Maler, geblaettert wie Plugin Mode heute:
+
+| Seite | V-Pot 1 | V-Pot 2 | V-Pot 3 | V-Pot 4 |
+|---|---|---|---|---|
+| Preamp | `gain` | `reflevel` | `width` | `balpan` |
+| Low Cut | `lowcut/freq` | `lowcut/slope` | | |
+| EQ 1 | `eq/band1gain` | `eq/band1freq` | `eq/band1q` | `eq/band1type` |
+| EQ 2 | `eq/band2gain` | `eq/band2freq` | `eq/band2q` | |
+| EQ 3 | `eq/band3gain` | `eq/band3freq` | `eq/band3q` | `eq/band3type` |
+| Dyn | `compthres` | `compratio` | `attack` | `release` |
+| Exp | `expthres` | `expratio` | `dynamics/gain` | |
+| AutoLevel | `maxgain` | `headroom` | `risetime` | |
+
+Die Schalter (`48v`, `pad`, `phase`, `msproc`, `instrument`, `autoset`,
+`lowcut/enable`, `eq/enable`, `dynamics/enable`, `autolevel/enable`) gehoeren
+auf Soft-Keys, nicht auf Pots. Auf Ausgaengen tauscht dieselbe Ansicht die
+Seiten gegen Room EQ (9 Baender), `crossfeed`, `delay`, `loopback`,
+`talkbacksel`.
+
+### 8.3 Eine Auswahl, zwei Maler
+
+SPREADs V-Pot-Push setzt den Kanal, den STRIP zeigt. Beide lesen dieselbe
+Variable. Damit ist Franks "auswaehlen ueber Push" nicht eine Geste in einer
+Ansicht, sondern die Bruecke zwischen beiden.
+
+Und **der Fader bleibt in JEDER Ansicht dasselbe**: der Pegel des gewaehlten
+Kanals. Im Submix-Geltungsbereich ist das der Knoten, sonst der Ausgangs- oder
+Eingangspegel. Ein Fader, der je nach Seite etwas anderes tut, ist auf einem
+Ein-Fader-Geraet kein Feature, sondern ein Ratespiel.
+
+### 8.4 ⛔ Vorher aufraeumen: die V-Pot-Reihe hat ZWEI Schreiber
+
+Die Soft-Key-Reihe hat per Regel genau einen Schreiber
+(`uf1EmitSoftKeyRow_`), und die Regel steht in der Memory, weil zwei Kopien
+davon einmal auseinandergelaufen sind. Die **V-Pot-Reihe hat diese Regel
+nicht**: `uf1PaintChannel_` schreibt `0x010e` / `0x010f` / `0x010d` bei
+`main.cpp:33803` ff., und `uf1PaintHue_` schreibt dieselben drei Zellen noch
+einmal bei `main.cpp:32448` ff. Zwei Maler, zwei Kopien, heute schon.
+
+SPREAD und STRIP waeren Kopie drei und vier. Also **zuerst ein
+`uf1EmitVpotRow_`** mit Beschriftungen, Werten, Balken und Stilen als
+Parametern, und alle vier rufen es auf. Das ist keine Kuer, das ist der
+Unterschied zwischen einem Umbau und vier Fehlern, die wie vier verschiedene
+Sachen aussehen.
+
+### 8.5 Wo Side-Car im Modus-Modell sitzt
+
+Heute gibt es zwei verschiedene Begriffe fuer "was zeigt die UF1":
+
+- `kUf1ViewPlugin / Daw / Meter / Sends` (`main.cpp:1149`), ein sauberer Enum
+  mit Builtins, LED-Zustand, Banner und dem MODE-Halten-Picker auf den vier
+  Display-Keys.
+- `g_uf1HueMode`, ein Bool, das oben in `uf1PaintChannel_` aussteigt.
+
+Der Picker ist mit vier Eintraegen **voll**. Also zwei Ebenen statt einer
+laengeren Liste:
+
+```
+Flaeche   = { Reaper, SideCar }
+Reaper    = { Plugin, DAW, Meter, Sends }        (unveraendert, kein Config-Bump)
+SideCar   = { RmeSpread, RmeStrip, Hue, ItemVol, Zoom, ... }
+```
+
+MODE halten bleibt, was es ist. **Shift + MODE halten** zeigt die Side-Car-
+Seite auf denselben vier Keys, mit Blaettern, wenn es mehr als vier werden.
+Und Hue Mode zieht mit um: es ist heute der einzige Hijacker, und wenn vier
+weitere danebengestellt werden, ohne die Flanke, die Invalidierung und die
+V-Pot-Reihe zu teilen, stehen dort fuenf Kopien derselben drei Fehler.
+
+## 9. Der EQ-Graph: ja, und er wird dabei besser
+
+`uf1PaintEqGraph_` (`main.cpp:28690`) besteht schon aus zwei Haelften, sie
+sind nur nicht getrennt:
+
+1. **Sammeln.** 15 Parameter-Indizes gegen den aufgeloesten FX, gelesen mit
+   `uf1ParamFmt_` / `uf1ParamFreq_`, plus die Sonderfaelle (ReaEQ zaehlt in
+   Oktaven, 32C hat keine Q, EQ In kann invertiert sein).
+2. **Rechnen und senden.** `uf1PeakDb_`, `uf1HighShelfDb_`, `uf1LowShelfDb_`,
+   `uf1HpfDb_`, `uf1LpfDb_`, aufsummiert ueber 249 Spalten von 20 Hz bis
+   20 kHz logarithmisch, `dbToH`, zwei Frames auf `0x0122`.
+
+Teil 2 weiss von REAPER nichts. Ein RME-Kanal braucht also **keinen zweiten
+Graph**, sondern einen zweiten Sammler, der dieselbe Struktur fuellt.
+
+### 9.1 Die Struktur gehoert verallgemeinert
+
+Heute sind die Baender fest: HF, HMF, LMF, LF, HPF, LPF. Die RME-Eingaenge
+haben 3 Baender plus Low Cut, die Ausgaenge haben **Room EQ mit 9 Baendern**.
+Also aus den festen Slots eine Liste machen:
+
+```cpp
+struct EqBand { enum Kind { Bell, LowShelf, HighShelf, HighPass, LowPass } kind;
+                double freq, gainDb, q; };
+struct EqModel { bool on; std::vector<EqBand> bands; };
+```
+
+Die Renderschleife summiert dann ueber `bands` statt ueber sechs Namen. Das
+ist dieselbe Mathematik, ein paar Zeilen kuerzer, und der 9-Band-Room-EQ faellt
+gratis ab.
+
+### 9.2 ⛔ Die Falle, die hier schon einmal zugeschlagen hat
+
+Der Sammler ist voll mit Klemmen, und die stehen dort nicht aus Vorsicht,
+sondern weil eine ungeklemmte Filterfrequenz den **ganzen** Graph auf den
+Boden reisst ([[uf1-eq-graph-hplp-slam-trap]]): HPF ausserhalb 9 bis 2000 Hz
+gilt als aus, LPF ausserhalb 1000 bis 30000 Hz gilt als aus. Dieselben Klemmen
+gelten fuer den RME-Sammler, und zwar bevor die erste Zahl aus TotalMix
+kommt, denn die Spezifikation sagt bei `eq/band1freq` nur `f`, ohne Bereich.
+Ob das Hertz sind oder 0..1 wie im Legacy-Protokoll, ist **ungemessen**. Ein
+Dump beantwortet es, und bis dahin wird nichts gezeichnet.
+
+Dazu die zweite Regel aus derselben Funktion, die hier genauso gilt: **"ein
+leerer Graph auf dem richtigen Kanal ist richtig, eine Kurve vom falschen
+Kanal nie"**. Im Side-Car ist das leichter als heute, weil der Modus den
+Bildschirm besitzt: es gibt keinen Wettbewerb darum, welcher FX gemeint ist,
+der Kanal steht fest.
+
+### 9.3 Was NICHT geteilt wird
+
+Der Versuch, einen RME-Kanal als Pseudo-Plug-in in `PluginMap` zu stecken,
+waere die falsche Sparsamkeit. Diese Maschinerie existiert, um die
+**numerierten** Parameter eines fremden VST auf benannte SSL-Slots abzubilden:
+Domain, linkIdx, FX Learn, Favourites, Learn-HUD. Ein RME-Kanal hat dieses
+Problem nicht, seine Parameter sind in der Spezifikation benannt und getypt.
+Es gibt nichts zu lernen.
+
+Die Trennlinie also: **die Maler werden geteilt, das Parametermodell nicht.**
+Der RME-Teil bringt eine eigene, statische Tabelle mit (Pfad-Blatt,
+Beschriftung, Kurzname, Einheit, Bereich, Schrittweite, Format) und schickt sie
+durch `uf1EmitVpotRow_`, die Wertzeile und den EQ-Renderer.
+
+## 10. Meter-View aus der RME-Hardware
 
 Erstens eine Korrektur: **"Totalizer" heisst Totalyser**, und es ist kein
 eigenes Produkt, sondern eine Ansicht in **DIGICheck**. DIGICheck ist ein
@@ -377,14 +538,14 @@ Was **nicht** geht: Goniometer, Korrelation und RTA. Aus einer Peak-Zahl pro
 Kanal laesst sich kein Lissajous rechnen, dafuer braucht es die Samples. Die
 UF1-Meter-View kann aus RME-Quellen also die Pegel und die Nadeln fuellen,
 nicht die Grafik auf `0x0122`. Wer die will, muss das Audio selbst hoeren,
-und im Standalone-Fall ist das sogar der naheliegende Weg (siehe 9.).
+und im Standalone-Fall ist das sogar der naheliegende Weg (siehe 11.).
 
 Beilaeufig faellt noch etwas ab: `/durec/time` und `/durec/state` kommen als
 Text, und `/durec/play|pause|stop|record|next|previous` nehmen Befehle. Die UF1
 hat eine Zeitzone (`0x0119`) und eine Transportreihe. Eine DuRec-Fernbedienung
 auf derselben Flaeche kostet danach fast nichts.
 
-## 9. UF1 standalone, ohne REAPER
+## 11. UF1 standalone, ohne REAPER
 
 ### Koexistenz mit SSL 360
 
@@ -443,22 +604,51 @@ kauft. Es ist eine Tuer, kein Geschaeft. Als Tuer kann es gut sein: ein
 kostenloses kleines Programm, das einen UF1-Besitzer ohne REAPER zum ersten
 Mal etwas mit seinem Geraet machen laesst, das SSL nicht vorgesehen hat.
 
-## 10. Was noch gemessen werden muss
+## 12. Was noch gemessen werden muss
 
-Nach der Spezifikation ist wenig uebrig, und alles davon liefert Franks
-Dump-Action in TotalReaper.
+Alles davon liefert Franks Dump-Action in TotalReaper.
 
-1. Welcher `<n>` ist bei Frank Main, welche sind die vier Phones. Fragt sich
-   selbst: `/controlroom/mainout`, `/phones1` bis `/phones4` sagen es.
+1. Welcher `<n>` ist Main, welche sind die vier Phones. Fragt sich selbst ueber
+   `/controlroom/mainout`, `/mainoutb`, `/phones1` bis `/phones4`.
 2. Nimmt TotalMix einen zweiten Global-OSC-Client auf einem zweiten Portpaar
    an, waehrend TotalReaper auf dem ersten haengt.
 3. Wie schnell `/level/out/<n>` bei Musik tatsaechlich kommt.
-4. Ob der UF1 auf dem Mac wirklich freigegeben wird, wenn man ihn in SSL 360
-   einzeln deaktiviert, ohne SSL 360 zu beenden.
+4. Ob der UF1 auf dem Mac freigegeben wird, wenn man ihn in SSL 360 einzeln
+   deaktiviert, ohne SSL 360 zu beenden.
+5. **In welcher Einheit `eq/band<N>freq`, `gain` und `q` kommen.** Die Tabelle
+   sagt nur `f`. Hertz und dB waeren konsequent (der Fader kommt ja auch in dB),
+   0..1 waere das Erbe des Legacy-Protokolls. Ohne diese Antwort wird kein
+   Graph gezeichnet, siehe 9.2.
+6. Welcher Index bei `band1type` / `band3type` / `lowcut/slope` welche
+   Charakteristik meint. Geraeteabhaengig laut Tabelle.
+7. Ob `'submix'` in `/sendsubmix/<submix>` die Ausgangskanalnummer ist oder
+   eine laufende Nummer.
+8. Die Farbpalette hinter `/input/<n>/color` (Index, kein RGB).
 
-## 11. Urteil
+## 13. Fragen an Frank, bevor gebaut wird
 
-Machbar, und zwar ohne neue Erfindung: das Protokoll ist offen und jetzt auch
+1. **Folgt die Kanalauswahl der REAPER-Spur?** Der heutige RME-Modus loest den
+   Hardware-Kanal aus `I_RECINPUT` der Spur auf. Im Standalone gibt es keine
+   Spur, also braucht das Side-Car ohnehin eine **eigene** Auswahl. Soll sie in
+   Rea-Sixty der Spur folgen, solange man sie nicht selbst anfasst?
+2. **Fader-Invariante.** Vorschlag oben: der Fader ist IMMER der Pegel des
+   gewaehlten Kanals, in jeder Ansicht. Alternative waere FLIP-artig, dass er
+   in STRIP den fokussierten Parameter fahrt. Ich bin fuer die Invariante.
+3. **Einstieg ins Side-Car.** Der MODE-Halten-Picker ist mit Plugin/DAW/Meter/
+   Sends voll. Vorschlag: Shift + MODE halten zeigt die Side-Car-Seite. Oder
+   soll eine eigene Taste (360?) es tun?
+4. **Zieht Hue Mode mit um** in die Side-Car-Kategorie? Es ist laufender Code,
+   aber der einzige Weg, die Flankenlogik und die V-Pot-Reihe nicht fuenfmal zu
+   haben.
+5. **Room EQ auf Ausgaengen**, 9 Baender, im Graph? Mit dem Band-Vektor aus 9.1
+   waere er gratis, aber er ist ein anderes Werkzeug als ein Kanal-EQ.
+6. **Nur UF1, oder auch UF8 und UC1?** Der UF8 waere fuer SPREAD eigentlich die
+   bessere Flaeche: acht Strips, acht Kanaele, acht Fader. Nicht gebaut, bis du
+   es sagst. Genannt, weil es auffaellt.
+
+## 14. Urteil
+
+Machbar, und zwar ohne neue Erfindung: das Protokoll ist offen und
 vollstaendig dokumentiert, der OSC-Code existiert bereits in Franks Hand, die
 Pegel kommen mit, und der UF1-Code hat fuer eine Flaechenuebernahme schon den
 Praezedenzfall. Der motorisierte Fader macht aus dem Nachbau der ARC etwas,
@@ -466,10 +656,15 @@ das die ARC nicht kann.
 
 Reihenfolge:
 
-1. Side-Car als Kategorie bauen, mit Item-Volume oder Zoom als erstem
-   Bewohner. Kein OSC, nur das Geruest: Uebernahme, Fader-Zweig, dB-Zweig,
-   Modusflanke, Settings-Eintrag.
-2. RME Monitor als zweiter Bewohner, mit eigenem Global-OSC-Client auf
-   eigenem Portpaar.
-3. Pegel in die Kanalzone und in die Meter-View.
-4. Standalone als duenne App, und der Windows-Installer pro Geraet.
+1. **Aufraeumen, bevor gebaut wird:** `uf1EmitVpotRow_` als einziger Schreiber
+   der V-Pot-Reihe, und `EqModel` als Band-Vektor zwischen Sammler und
+   Renderer. Beides ohne neues Feature, beides sofort pruefbar am bestehenden
+   Verhalten.
+2. **Side-Car als Kategorie:** zwei Ebenen im Modusmodell, Shift + MODE als
+   Einstieg, Hue Mode als erster Bewohner. Immer noch kein OSC.
+3. **RME-Client** mit eigenem Portpaar, `rme.json` mit den Rollen, die Builtins,
+   die drei dynamischen Baenke.
+4. **SPREAD**, mit `controlroom` als erstem Geltungsbereich. Das ist die ARC.
+5. **SPREAD `submix`** und **STRIP** mit EQ-Graph.
+6. **Pegel** in die Kanalzone und in die Meter-View.
+7. **Standalone** als duenne App, und der Windows-Installer pro Geraet.
