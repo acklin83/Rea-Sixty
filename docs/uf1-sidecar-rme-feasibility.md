@@ -699,26 +699,99 @@ kauft. Es ist eine Tuer, kein Geschaeft. Als Tuer kann es gut sein: ein
 kostenloses kleines Programm, das einen UF1-Besitzer ohne REAPER zum ersten
 Mal etwas mit seinem Geraet machen laesst, das SSL nicht vorgesehen hat.
 
-## 13. Was noch gemessen werden muss
+## 13. Gemessen am 19.09. auf Franks Mac Studio
 
-Alles davon liefert Franks Dump-Action in TotalReaper.
+Nicht mehr offen, sondern gedumpt. Fireface UFX+ (23802132), TotalMix laeuft,
+OSC Remote 1 (eigener Port 7001, Rueckweg 7002, Host localhost) war frei und
+antwortet auf `/sendall` mit **3595 Adressen**. Nichts an TotalMix wurde dabei
+veraendert; `/sendall` ist die Anfrage, die Franks eigene stoerme-Bruecke beim
+Start auch schickt.
 
-1. Welcher `<n>` ist Main, welche sind die vier Phones. Fragt sich selbst ueber
-   `/controlroom/mainout`, `/mainoutb`, `/phones1` bis `/phones4`.
-2. Nimmt TotalMix einen zweiten Global-OSC-Client auf einem zweiten Portpaar
-   an, waehrend TotalReaper auf dem ersten haengt.
-3. Wie schnell `/level/out/<n>` bei Musik tatsaechlich kommt.
-4. Ob der UF1 auf dem Mac freigegeben wird, wenn man ihn in SSL 360 einzeln
-   deaktiviert, ohne SSL 360 zu beenden.
-5. **In welcher Einheit `eq/band<N>freq`, `gain` und `q` kommen.** Die Tabelle
-   sagt nur `f`. Hertz und dB waeren konsequent (der Fader kommt ja auch in dB),
-   0..1 waere das Erbe des Legacy-Protokolls. Ohne diese Antwort wird kein
-   Graph gezeichnet, siehe 9.2.
-6. Welcher Index bei `band1type` / `band3type` / `lowcut/slope` welche
-   Charakteristik meint. Geraeteabhaengig laut Tabelle.
-7. Ob `'submix'` in `/sendsubmix/<submix>` die Ausgangskanalnummer ist oder
-   eine laufende Nummer.
-8. Die Farbpalette hinter `/input/<n>/color` (Index, kein RGB).
+### 13.1 Die Einheiten, der Blocker fuer den EQ-Graph: **echte Werte**
+
+```
+/input/0/eq/band1freq   80.0        Hz, kein 0..1
+/input/0/eq/band2freq   1000.0
+/input/0/eq/band3freq   5000.0
+/input/0/eq/band2q      1.0         echtes Q
+/input/0/eq/band1gain   0.0         dB
+/input/0/lowcut/freq    20.0        Hz
+/input/0/lowcut/slope   1.0         Index
+/input/0/eq/band1type   1.0         Index
+/input/0/fxsend         -16.0       dB
+/input/0/autolevel/maxgain 6.0      dB
+```
+
+Damit ist Abschnitt 9.2 erledigt: der Sammler kann direkt in `EqModel`
+schreiben, ohne Skalenraten. Die Klemmen bleiben trotzdem drin.
+
+Room EQ auf Ausgaengen genauso, neun Baender in Hz/dB/Q
+(`/output/0/roomeq/band1freq 50.0`, `band1q 0.7`, ... bis `band9type`), und
+jeder Wert kommt doppelt, links und rechts, wie die L/R-Spalte der Tabelle es
+ansagt.
+
+### 13.2 Die Rollen, ohne dass jemand eine Nummer tippt
+
+```
+/controlroom/mainout      0      /output/0  "Main"
+/controlroom/mainoutb     6      /output/6  "Speaker B"
+/controlroom/phones1      8      /output/8  "Phones 1"
+/controlroom/phones2     10      /output/10 "Phones 2"
+/controlroom/phones3      2      → NICHT in der Ausgangsliste (siehe 13.4)
+/controlroom/phones4     -1      nicht belegt
+/controlroom/talkchannel  8
+/controlroom/linkab       1      A/B verkoppelt
+/controlroom/dimreduction -20    dB
+/controlroom/recallvolume -10    dB
+/controlroom/extingain    -3     dB
+/controlroom/cuechan      -1     kein Cue
+```
+
+`rme.json` aus 6.2 fuellt sich damit vollstaendig von selbst.
+
+### 13.3 Snapshot-Zustand kommt tatsaechlich dreiwertig zurueck
+
+```
+/snapshot/load/1..8   0 0 0 0 3 0 0 0
+```
+
+Die 3 auf Slot 5 heisst "geaendert, nicht gespeichert", genau wie die Tabelle
+sagt. Die dreifarbige Taste aus 6.4 hat also echte Daten hinter sich.
+
+### 13.4 ⛔ Eine Rolle kann auf einen versteckten Kanal zeigen
+
+Sichtbar in diesem Dump sind die Ausgaenge 0, 4, 6, 8, 10. `phones3` zeigt auf
+**2**, und den gibt es in der Liste nicht: der Kanal ist in
+Options, Channel Layout, "Hide in OSC Remote 1" ausgeblendet. Dieselbe
+Filterung gilt fuer die Matrix, deren Bus-Indizes exakt 0, 4, 6, 8, 10 sind.
+
+Das ist kein Fehler, sondern eine Zustandsform, mit der der Code rechnen muss:
+**eine Rolle zeigt auf einen Kanal, den diese OSC-Fernbedienung nicht sieht.**
+Die Kachel dafuer bleibt leer und sagt warum, statt auf Kanal 2 zu schreiben,
+der fuer uns nicht existiert.
+
+### 13.5 Der Umfang, mit dem wir rechnen
+
+61 Eingaenge, 47 Playbacks, 5 sichtbare Ausgaenge, Bus-Indizes 0/4/6/8/10.
+Preamp-Regler nur dort, wo es sie gibt: `gain` auf 28 Eingaengen, `48v` und
+`autoset` auf 15. `phase` kommt 94 mal, also auch fuer die rechte Haelfte der
+Stereopaare. Farben sind Indizes 0 bis 8, 0 heisst versteckt.
+
+61 Quellen sind genau der Grund fuer `/sendsubmix/<bus>` mit Wert 2 aus 7.
+
+### 13.6 Zwei Global-OSC-Clients gleichzeitig: ja
+
+Waehrend dieser Messung lief Franks **stoerme**-Bruecke auf Remote 2 (7003
+raus, 7004 rein) weiter und wurde von unserem Betrieb auf Remote 1 nicht
+gestoert. Damit ist die Architekturfrage aus 3 beantwortet: Rea-Sixty bekommt
+sein eigenes Portpaar und TotalReaper behaelt seines.
+
+### 13.7 Was noch fehlt
+
+Genau eine Sache, und sie haengt an einem Haken in TotalMix: **"Send Peak
+Level"** steht fuer diese Fernbedienung auf aus (`OSCSendLevel 0`), also kommt
+kein `/level/...`. Der Pfad steht in der Tabelle und ist nicht strittig, die
+Rate ist es. Dazu die Farbpalette hinter den Indizes 0 bis 8.
 
 ## 14. Entschieden am 19.09.
 
