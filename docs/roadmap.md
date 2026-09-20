@@ -149,3 +149,23 @@ statt nur grau zu bleiben.
 auch im nicht-offenen Zustand existiert, aendert die Bedeutung jedes solchen
 Tests. `isOpen()` ist die richtige Frage, `!= nullptr` war es nur zufaellig.
 Gilt gleichermassen fuer UF8 und UC1, die denselben Aufbau haben.
+
+
+---
+
+## 4. ORC — das UF1-Standalone
+
+**Name entschieden 20.09.2026: ORC, "Open Remote Control"**, gegen RMEs ARC
+gestellt. Ohne Geraet im Namen (nicht "UF1-ORC"), damit der UF8 spaeter ein
+Feature bleibt und kein zweites Produkt wird, und weil `UF1` SSLs
+Modellbezeichnung ist.
+
+**Eigenes CMake-Target im Rea-Sixty-Repo**, kein eigenes Repo — es lebt von
+sechs Quellen, die hier liegen, und Duplikate laufen auseinander.
+
+Voller Plan in `docs/uf1-sidecar-rme-feasibility.md`, Abschnitt 12. Kurz:
+Menueleisten-App, die den UF1 haelt und TotalMix ueber Global OSC fernsteuert;
+spaeter zieht `stoerme`s Handy-Seite ein und der Mixer hat ein Gesicht auf dem
+Geraet und eines im Browser.
+
+⛔ Nicht vor dem Side-Car anfangen. Die Reihenfolge steht in Abschnitt 16.

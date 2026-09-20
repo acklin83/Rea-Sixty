@@ -692,7 +692,55 @@ Text, und `/durec/play|pause|stop|record|next|previous` nehmen Befehle. Die UF1
 hat eine Zeitzone (`0x0119`) und eine Transportreihe. Eine DuRec-Fernbedienung
 auf derselben Flaeche kostet danach fast nichts.
 
-## 12. Standalone, ohne DAW
+## 12. ORC — das Standalone
+
+### Der Name
+
+**ORC**, fuer **Open Remote Control**. Frank hat ihn am 20.09.2026 gewaehlt,
+gegen RMEs **ARC** ("Advanced Remote Control") gestellt: ihre ist advanced,
+unsere ist offen.
+
+**Ohne Geraet im Namen**, also *nicht* "UF1-ORC", aus zwei Gruenden:
+
+* `UF1` ist **SSLs Modellbezeichnung**. Beschreibend benutzen ist normal ("ORC
+  fuer die SSL UF1"), als ersten Teil des eigenen Produktnamens fuehren liest
+  sich wie ein SSL-Produkt oder eine Partnerschaft. Das Haus macht es an
+  anderer Stelle schon richtig: es heisst Rea-Sixty und nicht
+  "SSL-360-Ersatz".
+* Traegt der Name das Geraet, ist **jede weitere Flaeche ein neues Produkt**
+  mit eigener Seite, eigenem Download und eigenem Support. Heisst er nur ORC,
+  ist der UF8 ein **Feature**: "ORC kann jetzt auch den UF8" ist ein
+  Changelog-Eintrag, "wir machen jetzt auch UF8-ORC" ist eine Produktlinie.
+
+```
+ORC
+Open Remote Control
+fuer SSL UF1 und TotalMix FX
+```
+
+Drei Zeichen, passt notfalls auch auf das Display.
+
+⚠ Zur Nachbarschaft, damit es nicht vergessen wird: **ARC** fuehren RME *und*
+IK Multimedia, und Burl Audio verkauft mit dem **B26 Orca** einen
+Control-Room-Monitor-Controller, also dieselbe Kategorie mit einem Buchstaben
+Unterschied. Franks Entscheidung, nachdem das auf dem Tisch lag. Eine richtige
+Markenrecherche fuer Klasse 9 steht vor der Website an und ist kein Nachmittag.
+
+### Wo es lebt: eigenes Target, gleiches Repo
+
+Entschieden am 20.09.: **ORC wird ein eigenes CMake-Target im
+Rea-Sixty-Repo**, so wie `rme_osc_probe` heute eines ist. Kein eigenes Repo.
+
+Der Grund ist die Tabelle unten: ORC lebt von sechs Quellen, die hier liegen.
+Ein eigenes Repo hiesse sie duplizieren oder ein Submodul bauen — und
+Duplikate, die auseinanderlaufen, sind in diesem Projekt die teuerste
+Fehlerklasse, von der V-Pot-Reihe bis zum EQ-Graph. Die Release-Trennung ist
+dagegen geuebt: ein Tag zeigt auf einen Commit, das hat v0.6.0 gerade
+vorgefuehrt.
+
+Ein eigenes Repo lohnt erst, wenn ORC eine eigene Veroeffentlichungsfrequenz
+braucht.
+
 
 ### Koexistenz mit SSL 360
 
