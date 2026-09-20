@@ -1,0 +1,107 @@
+# Roadmap
+
+Angefangene Gedanken, die noch keinen eigenen Plan haben. Was hier steht, ist
+aufgenommen, nicht beschlossen, und **nichts davon wird gebaut, bevor Frank es
+einzeln freigibt**.
+
+Sobald ein Punkt gross genug ist, bekommt er eine eigene Datei und hier bleibt
+nur eine Zeile mit dem Verweis. Alles hier ist **nach v0.6.0** (Grenze:
+`87edabf`, siehe `.local-docs/bench-v0.6.0.md`).
+
+---
+
+## 1. RME-Pegel auf das Fader-Display, und TotalMix-Farben
+
+Frank, 20.09.2026: *"rme OSC kann Pegel! Auf Fader-Display anzeigen und
+totalmix farben als option in settings, REC mode?"*
+
+Die Pegel stimmen, das steht in RMEs eigener Tabelle und ist keine Vermutung:
+
+```
+/level/in/<n>    f   Peak level [dB], nur sendend, nur bei Aenderung
+/level/pb/<n>
+/level/out/<n>
+```
+
+### 1.1 Der Pegel
+
+Die Fader-Seite des UF1 hat **einen** Schreiber fuer ihren kleinen Meter:
+`uf1ChannelMeterBytes_(tr, lvL, lvR, compByte, gateByte)`, und der Wert geht
+als `{lvL, lvR, 0, 0}` auf `0x0009` (`main.cpp:33838`). Eine zweite Quelle ist
+damit **ein Tausch in einer Funktion**, nicht ein zweiter Meterpfad -- dieselbe
+Form wie beim EQ-Graph, wo der Sammler getauscht wird und der Renderer bleibt.
+
+Der UF8 hat denselben Gedanken acht Mal (`pushVuMeter`), also faellt er
+hinterher mit ab.
+
+### 1.2 Warum REC-Mode die richtige Heimat ist
+
+Frank stellt es als Frage, und die Antwort faellt aus dem Code: **im REC-Mode
+ist die Zuordnung Spur zu Hardware-Eingang schon da.** `I_RECINPUT` sagt,
+welcher Eingang die Spur speist, und genau dieser Index ist `<n>` in
+`/level/in/<n>`. Im Side-Car gibt es diese Bruecke nicht, dort IST die Flaeche
+TotalMix.
+
+Also: REC-Mode zeigt den Pegel, den das Interface sieht, neben dem Pegel, den
+REAPER sieht. Das ist beim Einpegeln die interessante Zahl, weil sie **vor**
+allem liegt, was REAPER damit macht.
+
+### 1.3 Die Farben, und die eine Huerde
+
+`/input/<n>/color` ist **nur sendend** und liefert einen **Palettenindex**,
+kein RGB. Auf Franks Rig kamen 0 bis 8 vor, und **0 heisst versteckt** (das ist
+gleichzeitig der Filter, welche Kanaele diese Fernbedienung ueberhaupt sieht).
+
+Unser Farbbalken nimmt auch einen Index, aber unseren
+(`uf8::quantize(rgb)` in `Palette.cpp`). Es fehlt also **die Tabelle Index zu
+RGB von TotalMix**. Die steht in keiner Spezifikation; sie muss einmal
+abgelesen werden.
+
+⛔ Und wer sie abliest, ist die Frage: **Frank ist farbenblind.** Eine Tabelle
+"Index 5 ist welches Gruen" holt man nicht per Zuruf, sondern aus einem
+Screenshot von TotalMix oder aus den Ressourcen der App.
+
+### 1.4 Was zuerst gemessen werden muss
+
+Der Haken **"Send Peak Level"** steht fuer Remote 1 auf aus, also kommt heute
+kein einziges `/level/...`. Wie oft es dann kommt, weiss niemand, und davon
+haengt ab, ob der Strom direkt in den 24-Hz-Zyklus darf oder gepuffert werden
+muss. Braucht eine laufende UFX+.
+
+---
+
+## 2. REC-Mode soll REAPERs Eingaenge auch ohne RME steppen
+
+Frank, 20.09.2026: *"rec mode soll auch reaper interne Inputs steppen koennen
+wie Rme Mode"*.
+
+Das ist kleiner, als es klingt: **die Funktion existiert und tut schon genau
+das.** `recRmeStepInputChannel_` (`main.cpp:17492`) liest `I_RECINPUT`, laesst
+MIDI (Bit 4096) und Mehrkanal (Bit 2048) in Ruhe und schreibt den Kanal
+zurueck. Darin kommt **kein OSC und keine RME-Hardware vor**, das ist reines
+REAPER.
+
+Nur haengt sie hinter dem falschen Tor:
+
+```cpp
+inline bool recRmeActive_()
+{
+    if (!g_recRmeEnabled.load()) return false;          // ← die RME-Integration
+    const auto m = g_selectionMode.load();
+    return m == SelectionMode::Rec || m == SelectionMode::RecMon;
+}
+```
+
+Wer keine RME hat, bekommt das Eingangs-Steppen also nicht, obwohl es ihn
+nichts angeht. Die Aenderung ist, das Tor zu **teilen**: der Eingangsschritt
+haengt an REC/RecMon allein, Gain, 48V, Pad und Phase bleiben hinter
+`g_recRmeEnabled`, weil die ohne Interface wirklich nichts tun.
+
+⛔ Aufpassen: `recRmeActive_()` hat mehrere Leser (V-Pot-Rotation, Tasten-LEDs,
+Beschriftung). Vor der Aenderung greppen, wer sonst noch daran haengt -- sonst
+faellt beim Teilen eine Lampe mit, die niemand gemeint hat.
+
+Offen, und nur Frank kann es sagen: **welche Steuerung** steppt im reinen
+REC-Mode den Eingang? Heute ist es Shift plus der Knopf ueber dem Fader
+(`g_recUf1ShiftInputCh`), und diese Geste ist frei, sobald die RME-Halbzeit
+nicht mitlaeuft.
