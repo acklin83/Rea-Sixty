@@ -119,3 +119,33 @@ Die eine Entscheidung dazu: Vorgabe auf `true` lassen (gleich wie im RME-Mode,
 aber es aendert sich etwas ungefragt) oder fuer den RME-losen Fall auf `false`
 setzen (nichts aendert sich, wer es will, holt es sich). Ich waere fuer
 `false`, weil die Fine-Geste aelter ist.
+
+
+---
+
+## 3. Rea-Sixty wird geduldig beim Oeffnen der Geraete
+
+Faellt als Voraussetzung aus dem Standalone heraus, ist aber **fuer sich
+genommen ein Fix**, unabhaengig davon, ob das Standalone je kommt.
+
+`openUf1BringUp_` versucht `open()` genau einmal. Scheitert es, wird geloggt
+und `g_uf1_dev.reset()` aufgerufen — danach existiert das Objekt nicht mehr,
+und die 5-Sekunden-Wiederhol-Schleife sieht nur Geraete an, die existieren und
+`needsReopen()` melden. Ein Wiederverbinden-Knopf existiert nicht.
+
+Drei Faelle sehen deshalb heute wie ein defektes Geraet aus, und alle drei sind
+haeufig:
+
+* REAPER gestartet, bevor der UF1 angesteckt war
+* SSL 360 hielt das Geraet beim Start noch
+* (kuenftig) das Standalone hielt es
+
+**Die Aenderung:** bei gescheitertem Open das Objekt behalten, `needsReopen`
+setzen, die bestehende Schleife macht den Rest. Dazu die Zeile unter
+*Connected devices* den Grund sagen lassen, den `lastError()` schon kennt,
+statt nur grau zu bleiben.
+
+⛔ Vorher greppen, wer `g_uf1_dev` auf Nicht-Null prueft: ein Objekt, das jetzt
+auch im nicht-offenen Zustand existiert, aendert die Bedeutung jedes solchen
+Tests. `isOpen()` ist die richtige Frage, `!= nullptr` war es nur zufaellig.
+Gilt gleichermassen fuer UF8 und UC1, die denselben Aufbau haben.

@@ -826,6 +826,51 @@ genau dieser MCU-Entscheidung. Ein UF8-Besitzer gibt SSL 360 nicht fuer einen
 reinen TotalMix-Controller auf, egal wie viele danach fragen. Die Nachfrage
 sagt, **ob** es sich lohnt, die MCU-Frage ueberhaupt aufzumachen.
 
+### Auf demselben Rechner: UF1 im Standalone, wenn REAPER zu ist
+
+Frank, 20.09.: *"Dass der UF1 auf einem REAPER-System auch standalone laeuft
+wenn REAPER zu ist, ist nicht moeglich?"* — **Doch, und in einer Richtung
+laeuft es sogar schon.**
+
+Der USB-Claim ist exklusiv pro Interface: wer ihn haelt, hat das Geraet, und
+wer loslaesst, gibt es frei. Mehr Mechanik braucht es nicht. Die zwei
+Richtungen sind aber verschieden weit.
+
+**REAPER geht zu, das Standalone uebernimmt: fast geschenkt.** Rea-Sixty gibt
+den UF1 beim Beenden frei. Das Standalone muss nur in Abstaenden nachsehen, ob
+es ihn jetzt bekommt.
+
+**REAPER geht auf, Rea-Sixty uebernimmt: geht heute NICHT**, und die Stelle ist
+benennbar. `openUf1BringUp_` ruft `open()` **einmal**; scheitert es, schreibt
+es eine Zeile ins Log und macht `g_uf1_dev.reset()`. Die 5-Sekunden-Schleife,
+die Geraete wiederholt aufmacht, sieht nur Geraete an, die **existieren** und
+`needsReopen()` melden — nach einem gescheiterten Open gibt es das Objekt gar
+nicht mehr. Und einen Wiederverbinden-Knopf gibt es nicht: unter *Connected
+devices* stehen Zustand und *Identify*, sonst nichts.
+
+Heisst konkret: ist der UF1 beim REAPER-Start belegt, bleibt er es fuer die
+ganze Sitzung. Auch Umstecken hilft nicht, weil niemand mehr hinsieht.
+
+**Zwei kleine Aenderungen, dann laeuft es in beide Richtungen von selbst:**
+
+1. **Rea-Sixty wird geduldig.** Bei gescheitertem Open das Objekt behalten,
+   `needsReopen` setzen und die bestehende 5-Sekunden-Schleife es wiederholen
+   lassen. ⇨ Das ist **unabhaengig vom Standalone eine Verbesserung**: es
+   erledigt auch "ich habe REAPER gestartet, bevor der UF1 angesteckt war" und
+   "SSL 360 hatte ihn noch", zwei Faelle, die heute wie ein defektes Geraet
+   aussehen.
+2. **Das Standalone wird hoeflich.** Es haelt den UF1 nur, solange REAPER
+   nicht laeuft, und gibt ihn frei, sobald es das sieht.
+
+Mit beiden braucht es **kein Protokoll und keine Lock-Datei**: beide Seiten
+versuchen es einfach wieder. Wer ihn hat, behaelt ihn; wer loslaesst, verliert
+ihn binnen Sekunden an den anderen.
+
+⛔ **Was dabei nicht fehlen darf, ist die Anzeige, wer ihn hat.** Ein Geraet,
+das ohne Grund grau bleibt, ist ein Fehlerbericht. Rea-Sixty kennt den Grund
+bereits — `lastError()` sagt heute schon "most commonly SSL 360 holding the
+device" — er steht nur im Log statt in der Zeile unter *Connected devices*.
+
 ### Die Empfehlung zur Reihenfolge
 
 Bauen, aber nicht jetzt und nicht als Zwilling.
