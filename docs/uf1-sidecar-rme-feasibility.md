@@ -871,6 +871,72 @@ das ohne Grund grau bleibt, ist ein Fehlerbericht. Rea-Sixty kennt den Grund
 bereits — `lastError()` sagt heute schon "most commonly SSL 360 holding the
 device" — er steht nur im Log statt in der Zeile unter *Connected devices*.
 
+### Die Form: Menueleiste, und wo die Settings hin
+
+Frank, 20.09.: *"ist das auf Mac eine kleine App die im Balken oben als Helper
+laeuft? Und wo waeren die Settings?"*
+
+**Ja, Menueleiste.** `LSUIElement`, also kein Dock-Icon, ein Status-Item. Das
+Gegenstueck unter Windows ist das Tray-Icon mit demselben Menue. Das ist das
+richtige Modell: das Ding haelt ein USB-Geraet und redet OSC, es hat im Dock
+nichts verloren, und bedient wird es an der Hardware.
+
+Was im Menue steht — und der erste Eintrag ist genau die Anzeige, die heute in
+Rea-Sixty fehlt:
+
+```
+UF1        gehalten  /  von REAPER gehalten  /  nicht gefunden
+TotalMix   verbunden (7005/7006)  /  keine Antwort
+────────────────────
+Einstellungen…
+Beim Anmelden starten            [x]
+Beenden
+```
+
+#### Die Settings-UI muss neu geschrieben werden, egal wie
+
+Das ist der Punkt, der die Wahl entscheidet: **die vorhandene Settings-Oberflaeche
+ist nicht mitnehmbar.** Im Repo liegt unter `extension/vendor/reaimgui/` nur der
+*Funktionsheader* von ReaImGui, und der zieht `reaper_plugin_functions.h`.
+Ausserhalb REAPERs ist er wertlos, und Dear ImGui selbst liegt gar nicht im
+Repo. Die Frage ist also nicht "wiederverwenden oder neu", sondern nur **womit
+neu**.
+
+| Weg | dafuer | dagegen |
+|---|---|---|
+| **Dear ImGui** vendoren, eigenes Fenster | gleicher Idiom wie der bestehende Code (`ImGui_Checkbox(ctx,…)` wird `ImGui::Checkbox(…)`, mechanisch), eine Codebasis fuer beide Plattformen, alles im Binary, kein Server | Fenster plus Grafik-Backend dazu |
+| **Lokale Webseite**, wie `stoerme` | einmal geschrieben, ueberall gleich; Tastenmatrix, Kanalrollen und Farbtabelle sind in HTML deutlich billiger | ein HTTP-Server, der auf 127.0.0.1 gehoert; fuehlt sich weniger nach App an |
+| Nativ pro Plattform | — | zweimal bauen |
+
+**Empfehlung: Menueleiste nativ und winzig, Settings als Dear-ImGui-Fenster.**
+Ein Binary, kein Server, kein Browser, der Nutzer sieht ein Programm.
+
+⇨ **Aber eine Frage entscheidet das um:** soll man das jemals **vom Telefon
+aus** bedienen koennen (Kopfhoerermix aus dem Nebenraum)? Dann ist die Webseite
+kein Kompromiss mehr, sondern das Feature — und `stoerme` macht genau das schon.
+
+#### Wieviel Settings es ueberhaupt sind
+
+Klein, und das stuetzt "eigenes Fenster reicht":
+
+* **Verbindung** — Host, Sende-Port, Empfangs-Port, Zustand
+* **Kanalrollen** — kommen von TotalMix selbst, nur anzeigen und ueberschreiben
+* **Belegung** — was die vier V-Pots, die Soft-Keys, der Fader und das Jog-Rad tun
+* **Anzeige** — Farben an/aus, Helligkeit, Pegelquelle
+* **Verhalten** — beim Anmelden starten, UF1 freigeben wenn REAPER laeuft
+
+Konfiguration liegt unter `~/Library/Application Support/…` und ist dieselbe
+Form wie Rea-Sixtys `bindings.json`, damit wer beides hat, nicht zweimal
+belegt.
+
+⛔ **Und das hier ist die erste echte Mac-APP im Projekt.** Rea-Sixty ist eine
+dylib, die ueber ReaPack kommt; eine App, die ausserhalb des App Store
+verteilt wird, muss **notarisiert** sein. Das Apple Developer Program ist ueber
+`brandy` aktiv und wird wiederverwendet, aber die Notarisierung braucht den
+Keychain-Secret und laeuft deshalb **lokal am Mac, nicht in CI**. Das ist ein
+manueller Schritt in jedem Release des Standalone, und er gehoert in die
+Planung, nicht in die Ueberraschung.
+
 ### Die Empfehlung zur Reihenfolge
 
 Bauen, aber nicht jetzt und nicht als Zwilling.
