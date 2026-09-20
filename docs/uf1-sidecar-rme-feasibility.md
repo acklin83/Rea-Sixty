@@ -998,14 +998,36 @@ richtige Vorgabe:
 4. **Eigene Domain** — braucht einen Tunnel oder einen Reverse Proxy. Das ist
    die Ausbaustufe, nicht die Vorgabe.
 
-**Franks eigener Fall ist Stufe 4.** Gemessen am 20.09.: `phones.stoersender.ch`
-loest auf **213.196.172.28** auf, und das ist laut Bestandstabelle derselbe
-Host wie `btcpay.stoersender.ch` — **nicht** der Hostinger-VPS. Dort steht also
-ein Reverse Proxy, der auf den Mac Studio weiterreicht, vermutlich ueber das
-Tailnet (der Mac Studio ist `100.109.232.65`). *Vermutlich* ist hier wirklich
-vermutlich: den Proxy selbst habe ich nicht gesehen, das muss Frank
-bestaetigen. Wenn es so ist, muss die App dafuer **nichts** tun — sie hoert
-lokal, der Proxy macht den Rest.
+**Franks eigener Fall ist Stufe 4**, und die Aufloesung ist seine, nicht meine:
+`phones.stoersender.ch` zeigt auf **213.196.172.28**, und das ist **die feste
+IP des Studios** — nicht, wie ich zuerst geschrieben hatte, "derselbe Host wie
+BTCPay". BTCPay liegt nur hinter derselben Adresse. Die Kette ist also:
+
+```
+Internet → feste Studio-IP → Router → Synology (Reverse Proxy) → LAN → Mac Studio :8088
+```
+
+Frank sagt selbst "denke ich", und den Proxy hat niemand von uns angesehen.
+Gegen die Annahme spricht nichts: stoerme hoert auf `*:8088`, also auf allen
+Schnittstellen, die NAS kann es erreichen.
+
+⇨ **Und daraus faellt ein Geschenk fuer die Umstellung:** loest das Standalone
+stoerme ab und **behaelt Port 8088**, zeigt der Proxy weiter auf dasselbe
+Ziel. `phones.stoersender.ch` funktioniert dann weiter, ohne dass an der NAS
+irgendetwas angefasst wird.
+
+⛔ **Was dabei auffiel und nichts mit uns zu tun hat:** der Mac Studio steht
+auf **DHCP** (`192.168.177.83` auf en0, dazu `192.168.177.66` auf en1, zwei
+Adressen im selben Netz). Ein Reverse-Proxy-Eintrag zeigt auf eine feste
+IP:Port. Vergibt der Router nach einem Neustart eine andere Adresse, ist
+`phones.stoersender.ch` still kaputt — und zwar an dem Tag, an dem Musiker
+davorstehen. Ob am Router schon eine Reservierung fuer den Mac Studio liegt,
+ist von hier aus nicht zu sehen; falls nicht, ist das der billigste Fix der
+ganzen Kette.
+
+⇨ Fuer einen **Nutzer** ohne feste IP und ohne NAS ist Stufe 4 damit endgueltig
+eine **Anleitung, kein Feature**. Das Produkt sind Stufe 2 und 3, mDNS und
+QR-Code.
 
 ⛔ **Und eine Seite, die Monitorpegel stellt, gehoert nicht versehentlich ins
 Internet.** Vorgabe: nur lokal hoeren, LAN und Bonjour ja, alles darueber ein
