@@ -572,6 +572,51 @@ Ein weiteres Mitglied bringt seine eigenen sechs mit. Das ist die Bauart
 dieses Codes und funktioniert; es waere nur der Moment, in dem eine gemeinsame
 Aufloesung ("was adressiert Strip N") sich das erste Mal wirklich lohnt.
 
+### 10.1.1 Wie man hineinkommt, und ob der UF8 mitlaeuft
+
+Frank, 20.09.: *"Wie wuerde man auf den UF8 TotalMix mode kommen? Eine Option
+ob das UF8 im Side-Car Mode pro mode mitlaeuft oder nicht?"*
+
+Das Projekt hat die Frage schon einmal beantwortet, und zwar mit **zwei
+unabhaengigen Schaltern**. Hue gibt es heute doppelt:
+
+| | was es ist | wie man hinkommt |
+|---|---|---|
+| `SelectionMode::Hue` | die acht UF8-Strips werden acht Lampen | ein `selection_mode_*`-Builtin auf einer Taste |
+| `g_uf1HueMode` | der UF1-Schirm wird der Lampen-Editor | das Builtin `uf1_hue` |
+
+Sie sind **nicht gekoppelt**: man kann eines ohne das andere haben. Und das
+UF1-Builtin traegt im Code den Grund mit: *"Bindable from ANY surface (not just
+the UF1) ... the point of a lamp screen is to reach it from wherever your hand
+already is."*
+
+Daraus der Vorschlag, in drei Teilen:
+
+1. **Der UF8 bekommt ein eigenes Mitglied** auf der bestehenden Achse,
+   `SelectionMode::TotalMix`, mit einem Builtin wie die anderen. Damit ist es
+   von jeder Flaeche aus erreichbar und kann auf jeder Taste liegen.
+2. **Der UF1 behaelt Shift + MODE** und bekommt zusaetzlich sein Builtin, damit
+   eine UF8-Taste ihn mitnehmen kann. Genau wie bei Hue.
+3. **Die Kopplung ist eine Einstellung, nicht der Mechanismus.** Franks
+   Instinkt ist richtig, und die Praezisierung ist sein eigenes "pro mode":
+   "der UF8 laeuft mit" ergibt fuer **TotalMix** Sinn (UF8 = SPREAD, UF1 =
+   STRIP, das ist ja der Gewinn) und fuer **Item-Volume** oder **Zoom**
+   ueberhaupt nicht, das sind Ein-Fader-Ideen.
+
+Also eine Spalte "UF8 laeuft mit" pro Side-Car-Modus, vorbelegt **an** fuer
+TotalMix und **aus** fuer alles andere. Die Liste mit Schaltern pro Modus gibt
+es als Muster schon: die Jog-Modi (`reasixty_uf1JogModeVisible` /
+`setUf1JogModeVisible`).
+
+⛔ **Und die Kopplung braucht eine Rueckfahrkarte.** Wenn der UF1-Einstieg
+`g_selectionMode` auf TotalMix stellt, muss der Ausstieg den vorherigen Modus
+wiederherstellen — und der kann sich zwischendurch geaendert haben, weil
+`selection_mode_*` auf jeder Taste liegen darf. "Vorherigen Zustand merken und
+zurueckschreiben" ist in diesem Projekt schon mehrfach die Fehlerquelle
+gewesen. Sicherer: der Ausstieg setzt auf **Norm**, wenn der UF8 beim Einstieg
+mitgenommen wurde und seither niemand von Hand umgeschaltet hat; sonst laesst
+er ihn stehen.
+
 ### 10.2 Was der UF8 kann, was der UF1 nicht kann
 
 | UF8-Element | im TotalMix-Modus |
@@ -687,7 +732,51 @@ Pacer. Ein Standalone mit Kanalzone, Soft-Key-Reihe, V-Pot-Beschriftung,
 Fadermotor und Pegelbalken ist deshalb ein **kleines** Programm. Eines mit
 grosser Meter-View ist ein Port.
 
-### Die Empfehlung
+### Wie genau, konkret
+
+Frank, 20.09.: *"wie genau machen wir es stand-alone?"*
+
+**Ein Binary pro Plattform, kein REAPER.** Was es an Quellen mitnimmt, ist
+heute schon frei von REAPER — drei der sechs sind es seit dem 19.09. geworden,
+und das war der Zweck:
+
+| Was | Haengt an | Rolle im Standalone |
+|---|---|---|
+| `UF1Protocol.{h,cpp}` | `<cmath>` | Rahmen bauen und lesen |
+| `UF1Device.{h,cpp}` | libusb, `LogPath`, `uf1_init_sequence.inc` | Geraet, Keepalive, Worker |
+| `RmeOsc.{h,cpp}` | nur std | Global-OSC-Codec |
+| `RmeState.{h,cpp}` | nur std | Rollen, Kanaele, Snapshots, Pegel |
+| `Uf1EqCurve.{h,cpp}` | nur std | der Graph, ueber eine Bandliste |
+| `Bindings`-Parser | `bindings.json` | dieselbe Datei wie Rea-Sixty |
+
+**Was es NICHT mitnimmt, ist der Maler.** Der lebt in `main.cpp` und redet mit
+REAPER. Das Standalone bekommt einen eigenen, kleinen: Kanalzone,
+Soft-Key-Reihe, V-Pot-Reihe, Fadermotor, Pegelbalken. **Keine Meter-View** —
+die braucht den Zyklus-Pacer und die Burst-Regeln, und das ist ein Port, keine
+Abzweigung.
+
+**Die Oberflaeche ist die offene Frage, und sie hat eine Hausloesung.** Ein
+Konfigurator muss dreimal gebaut werden, wenn er nativ ist. Frank hat fuer
+genau diesen Mixer schon eine Bruecke, die ihre Oberflaeche im Browser
+aufmacht (`stoerme`, HTTP auf :8088 neben dem OSC-Socket). Dasselbe Muster
+hier heisst: das Standalone ist ein Dienst mit einer lokalen Seite, und die
+Seite ist auf jeder Plattform dieselbe. Alternative waere headless mit reiner
+Dateikonfiguration, was fuer ein Produkt zu wenig ist.
+
+**Das Geraet bekommt man so:**
+
+* macOS: den UF1 in SSL 360 einzeln deaktivieren, dann gibt SSL 360 ihn frei
+  und fuehrt die anderen Flaechen weiter. (Noch nicht selbst gesehen, steht in
+  13.7.)
+* Windows: WinUSB, und dafuer braucht es die Installer-Schleife **pro Geraet**
+  statt fuer alle drei Hardware-IDs (siehe oben in diesem Abschnitt).
+
+**Und die Entscheidung, die alles andere bestimmt**, steht in 10.3: reicht ein
+TotalMix-Controller, oder muss das Standalone auch DAW-Steuerung ueber MCU
+koennen? Ohne die gibt ein UF8-Besitzer SSL 360 nicht auf. `MidiBridge` haelt
+die Haelfte davon schon, heute nur fuer macOS.
+
+### Die Empfehlung zur Reihenfolge
 
 Bauen, aber nicht jetzt und nicht als Zwilling.
 
@@ -695,7 +784,9 @@ Bauen, aber nicht jetzt und nicht als Zwilling.
    hat er ein Zuhause mit Settings, Bindings und Handbuch.
 2. Danach das Standalone als **duenne App** mit eigener, kleiner Anzeige:
    dieselbe Drahtebene, derselbe OSC-Client, ein eigener Maler, der nur die
-   Kanalzone kann. Kein Plugin-Kram, kein EQ-Graph, keine Meter-View.
+   Kanalzone kann. Kein Plugin-Kram, keine Meter-View. Den **EQ-Graph kann es
+   mitnehmen**, seit der Renderer am 19.09. eine eigene reine Datei geworden
+   ist (`Uf1EqCurve`) — das war vorher ausgeschlossen und ist es nicht mehr.
 3. Windows-Installer pro Geraet, sonst ist der Satz "laeuft neben SSL 360"
    auf der wichtigeren Haelfte der Nutzer falsch.
 
