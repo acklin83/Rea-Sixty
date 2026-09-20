@@ -937,6 +937,80 @@ Keychain-Secret und laeuft deshalb **lokal am Mac, nicht in CI**. Das ist ein
 manueller Schritt in jedem Release des Standalone, und er gehoert in die
 Planung, nicht in die Ueberraschung.
 
+### stoerme mit hineinnehmen, und wie ein Nutzer an eine URL kommt
+
+Frank, 20.09.: *"den stoerme koennten wir gleich miteinbauen? Wie wuerde das
+aussehen? Und wie bindet ein User das an eine URL wie wir es ueber
+phones.stoersender.ch machen?"*
+
+#### Die Haelfte davon haben wir gestern schon gebaut
+
+stoermes Bruecke **ist** der Standalone-Kern, nur in JavaScript:
+
+| stoerme heute (Node) | Standalone (C++, seit 19.09.) |
+|---|---|
+| `src/osc.js` — kodieren, dekodieren, Bundles | `RmeOsc` |
+| Zustandsspiegel + Auto-Discovery per `/sendall` | `RmeState` |
+| Fader auf -300 statt Mute, alten Wert merken | dieselbe Regel, in 7 festgehalten |
+| OSC-Remote 7003/7004 | eigenes Portpaar |
+| LaunchAgent mit `KeepAlive` | Menueleisten-App, "beim Anmelden starten" |
+
+Was stoerme zusaetzlich hat und wir nicht: den HTTP- und WebSocket-Server und
+`public/stoerme.html`, die Handy-Oberflaeche.
+
+Zusammenlegen heisst also: **die Handy-Seite bleibt, wie sie ist** (sie ist
+HTML und funktioniert), die Node-Bruecke faellt weg, und die App liefert die
+Seite selbst aus.
+
+**Was das bringt**, und der letzte Punkt ist der eigentliche:
+
+* ein Prozess statt zwei, keine Node-Laufzeit, die am Leben gehalten werden muss
+* ein OSC-Remote statt zwei
+* **eine** Stelle, an der Rollen und Kanal-Sichtbarkeit leben. Heute entdeckt
+  stoerme das getrennt und kann mit dem UF1 auseinanderlaufen.
+* **Der UF1 und das Handy zeigen denselben Mixer.** Der Techniker dreht Phones 1
+  am UF1, der Musiker sieht den Fader wandern. Heute sind das zwei Clients, die
+  zufaellig auf denselben Mixer zeigen.
+
+**Und es loest die offene Frage von oben mit.** Ist die Handy-Seite drin, ist
+der Server ohnehin da, also sind auch die **Settings die Webseite** und nicht
+ein Dear-ImGui-Fenster. Eine Entscheidung erledigt zwei.
+
+⛔ **Was dagegen spricht, und es ist ernst: stoerme funktioniert.** Laufende
+Software durch eine Neuschreibung zu ersetzen ist der klassische Weg, ein Jahr
+zu verlieren. Die ehrliche Reihenfolge ist deshalb: das Standalone beweist sich
+erst als UF1-Controller, **stoerme laeuft unveraendert weiter**, und die
+Handy-Seite zieht erst um, wenn der Rest steht. Der C++-Teil kostet dabei
+nichts extra — er existiert schon.
+
+#### Die URL
+
+Fuer einen **Nutzer** ist das eine Leiter, und die zweite Stufe ist die
+richtige Vorgabe:
+
+1. `http://192.168.x.y:8088` — geht, ist haesslich, und beim naechsten
+   DHCP-Wechsel stimmt der Zettel nicht mehr.
+2. **Bonjour/mDNS.** Die App meldet sich als Dienst an, dann loest
+   `http://stoerme.local:8088` auf Mac und iOS **ohne jede Einrichtung** auf.
+   Auf dem Mac sind das ein paar Zeilen. (Android ist hier unzuverlaessiger.)
+3. **Ein QR-Code im Einstellungsfenster.** Das ist die eigentliche Bedienung:
+   der Musiker scannt, fertig. Unabhaengig davon, welcher Name aufloest.
+4. **Eigene Domain** — braucht einen Tunnel oder einen Reverse Proxy. Das ist
+   die Ausbaustufe, nicht die Vorgabe.
+
+**Franks eigener Fall ist Stufe 4.** Gemessen am 20.09.: `phones.stoersender.ch`
+loest auf **213.196.172.28** auf, und das ist laut Bestandstabelle derselbe
+Host wie `btcpay.stoersender.ch` — **nicht** der Hostinger-VPS. Dort steht also
+ein Reverse Proxy, der auf den Mac Studio weiterreicht, vermutlich ueber das
+Tailnet (der Mac Studio ist `100.109.232.65`). *Vermutlich* ist hier wirklich
+vermutlich: den Proxy selbst habe ich nicht gesehen, das muss Frank
+bestaetigen. Wenn es so ist, muss die App dafuer **nichts** tun — sie hoert
+lokal, der Proxy macht den Rest.
+
+⛔ **Und eine Seite, die Monitorpegel stellt, gehoert nicht versehentlich ins
+Internet.** Vorgabe: nur lokal hoeren, LAN und Bonjour ja, alles darueber ein
+bewusst gesetzter Haken mit einem Satz daneben, der sagt, was er bedeutet.
+
 ### Die Empfehlung zur Reihenfolge
 
 Bauen, aber nicht jetzt und nicht als Zwilling.
