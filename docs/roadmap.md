@@ -101,7 +101,21 @@ haengt an REC/RecMon allein, Gain, 48V, Pad und Phase bleiben hinter
 Beschriftung). Vor der Aenderung greppen, wer sonst noch daran haengt -- sonst
 faellt beim Teilen eine Lampe mit, die niemand gemeint hat.
 
-Offen, und nur Frank kann es sagen: **welche Steuerung** steppt im reinen
-REC-Mode den Eingang? Heute ist es Shift plus der Knopf ueber dem Fader
-(`g_recUf1ShiftInputCh`), und diese Geste ist frei, sobald die RME-Halbzeit
-nicht mitlaeuft.
+**Die Geste bleibt, Frank 20.09.: Shift plus V-Pot.** Also genau die, die es
+heute schon ist, nur ohne die RME-Bedingung davor. Sie existiert pro Flaeche
+und jeweils mit eigenem Schalter: `g_recUf1ShiftInputCh` (UF1),
+`recVpotShiftInputCh` (UF8), `recUc1Enc2ShiftInputCh` (UC1).
+
+⛔ **Shift hat auf einem V-Pot aber schon einen Job.** `shiftFineActive_()`
+macht daraus Fine Mode, wenn die Einstellung "Shift activates Fine mode" an ist.
+In REC + RME kollidiert das heute bereits und Frank lebt damit; faellt das
+RME-Tor weg, breitet sich die Kollision auf den **reinen** REC-Mode aus.
+
+Und weil `g_recUf1ShiftInputCh` auf **`true`** vorbelegt ist, waere das kein
+Angebot, sondern eine Aenderung an allen bestehenden Setups: wer im REC-Mode
+bisher mit Shift fein gepannt hat, steppt danach Eingaenge.
+
+Die eine Entscheidung dazu: Vorgabe auf `true` lassen (gleich wie im RME-Mode,
+aber es aendert sich etwas ungefragt) oder fuer den RME-losen Fall auf `false`
+setzen (nichts aendert sich, wer es will, holt es sich). Ich waere fuer
+`false`, weil die Fine-Geste aelter ist.
