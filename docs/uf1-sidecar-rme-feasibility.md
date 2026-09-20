@@ -776,6 +776,56 @@ TotalMix-Controller, oder muss das Standalone auch DAW-Steuerung ueber MCU
 koennen? Ohne die gibt ein UF8-Besitzer SSL 360 nicht auf. `MidiBridge` haelt
 die Haelfte davon schon, heute nur fuer macOS.
 
+### ⇨ ENTSCHIEDEN 20.09.: das Standalone ist ein UF1-Produkt
+
+Frank: *"Ich glaube, die meisten Leute die alle 3 Geraete haben, nutzen
+hauptsaechlich die UF8 und UC1 und fragen sich beim UF1 'wofuer hab ich das
+eigentlich gekauft? Fader hab ich 8 auf dem UF8 und die Meter-View
+rechtfertigt den Preis nicht. Teures Spielzeug.' (Hab ich schon oft so gehoert
+von Usern.) Wir koennten die Standalone mit Fokus auf UF1 bauen und dann ist
+die UF1 halt einfach ein RME-ARC-Ersatz mit mehr Funktionen und Infos auf
+einem Display."*
+
+Das loest den Einwand aus 10.3 auf, und zwar vollstaendig — **weil der
+Einwand nur den UF8 betraf.** "Die Flaeche gehoert immer nur einem" wiegt
+schwer, wenn das Geraet die DAW-Steuerung ist, fuer die es gekauft wurde. Beim
+UF1 wiegt es fast nichts, wenn er ohnehin herumliegt. Derselbe Satz ist beim
+einen ein Ausschlusskriterium und beim anderen ein Argument dafuer.
+
+Dazu wird die Zielgruppe schaerfer: nicht mehr "Leute ohne REAPER" (also
+niemand, der heute Rea-Sixty kauft), sondern **"Leute, die schon einen UF1
+haben und ihn nicht benutzen"**. Und wer Monitorsteuerung will, kauft sonst
+eine ARC — das Standalone ersetzt also eine Anschaffung, die derselbe Mensch
+sowieso erwaegt.
+
+**Die eine Spannung, die man bewusst stehen lassen muss:** ein Standalone
+nimmt den UF1 aus Rea-Sixty heraus. Wir haben ein Jahr damit verbracht, ihn in
+REAPER nuetzlich zu machen, und jetzt gibt es ein zweites Programm, das ihn
+sich holt. Aufgeloest wird das vom Side-Car selbst: **ein REAPER-Nutzer
+bekommt TotalMix als Modus, ohne den UF1 herzugeben, ein Nicht-REAPER-Nutzer
+bekommt dasselbe als eigenes Programm.** Zwei Schalen, ein Code. Sie
+konkurrieren nicht, solange das so gebaut wird — und genau dafuer sind die
+sechs Quellen aus der Tabelle oben REAPER-frei.
+
+**Was dadurch vom Nice-to-have zur Bedingung wird:** der WinUSB-Installer
+**pro Geraet**. Solange die Schleife alle drei Hardware-IDs umbindet
+(`main.cpp:51406`), nimmt ein Windows-Nutzer, der nur den UF1 abgeben will,
+auch UF8 und UC1 von SSL 360 weg — und damit genau das, was die ganze Praemisse
+verspricht. Auf dem Mac reicht das Deaktivieren des einzelnen Geraets in
+SSL 360.
+
+**MCU / "Hybrid" wird geparkt, und der Grund ist richtig.** Frank: *"Fuer MCU
+Mode muessten wir die ganzen SSL-360-Sachen die sie 'Hybrid' nennen mitnehmen,
+also DAW-spezifische Settings die in SSL 360 sind."* Das ist kein Feature,
+sondern ein Produkt: pro DAW eigene Belegungen und Verhalten. Gehoert notiert
+und nicht angefangen.
+
+⇨ **Eine Korrektur zur Reihenfolge**, weil sie die Begruendung betrifft und
+nicht das Ergebnis: der UF8 haengt **nicht an der Nachfrage**, sondern an
+genau dieser MCU-Entscheidung. Ein UF8-Besitzer gibt SSL 360 nicht fuer einen
+reinen TotalMix-Controller auf, egal wie viele danach fragen. Die Nachfrage
+sagt, **ob** es sich lohnt, die MCU-Frage ueberhaupt aufzumachen.
+
 ### Die Empfehlung zur Reihenfolge
 
 Bauen, aber nicht jetzt und nicht als Zwilling.
