@@ -55,6 +55,17 @@ double levelDb(const State& st, Row r, int ch, int submix, bool& known);
 // Address for writing a channel's level, faderlin or dB.
 std::string levelAddress(Row r, int ch, int submix, bool faderlin);
 
+// Mute of a channel strip, /<input|playback|output>/<n>/mute. One place, because
+// the V-Pot push and CUT both write it.
+std::string muteAddress(Row r, int ch);
+
+// ⇨ SOLO LIVES ON THE ROUTING, NOT ON THE STRIP. TotalMix solos an input or a
+// playback INTO a submix (/mix/<in|pb>/<n>/<submix>/solo, TotalReaper's
+// osc-paths-discovered.md); neither source names a solo for outputs. Empty
+// string = nothing to solo (an output, or no submix yet).
+std::string soloAddress(Row r, int ch, int submix);
+bool        soloed(const State& st, Row r, int ch, int submix);
+
 // Name and palette colour of a channel, "" / -1 when unknown.
 const Channel* channelOf(const State& st, Row r, int ch);
 

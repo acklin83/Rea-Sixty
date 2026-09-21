@@ -113,6 +113,15 @@ struct State {
         const auto it = mix.find(mixKey(b, ch, sub));
         return it == mix.end() ? nullptr : &it->second;
     }
+    // Solo of the same node, /mix/<in|pb>/<channel>/<submix>/solo. TotalMix has
+    // no solo per strip and none on outputs; solo lives on the routing (TotalReaper
+    // docs/osc-paths-discovered.md). Missing reads as off.
+    std::map<std::uint64_t, bool> mixSolo;
+    bool mixSoloed(Bus b, int ch, int sub) const
+    {
+        const auto it = mixSolo.find(mixKey(b, ch, sub));
+        return it != mixSolo.end() && it->second;
+    }
 
     // Peak level in dB per channel, sent only when it changes and only when
     // "Send Peak Level" is enabled for this remote. Empty is the normal state

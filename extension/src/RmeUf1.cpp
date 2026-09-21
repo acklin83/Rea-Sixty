@@ -132,6 +132,26 @@ std::string levelAddress(Row r, int ch, int submix, bool faderlin)
          + "/" + std::to_string(submix) + (faderlin ? "/faderlin" : "/fader");
 }
 
+std::string muteAddress(Row r, int ch)
+{
+    const char* sec = r == Row::Output ? "/output/"
+                    : r == Row::Input  ? "/input/" : "/playback/";
+    return std::string(sec) + std::to_string(ch) + "/mute";
+}
+
+std::string soloAddress(Row r, int ch, int submix)
+{
+    if (r == Row::Output || ch < 0 || submix < 0) return {};
+    return std::string("/mix/") + (r == Row::Input ? "in/" : "pb/") + std::to_string(ch)
+         + "/" + std::to_string(submix) + "/solo";
+}
+
+bool soloed(const State& st, Row r, int ch, int submix)
+{
+    if (r == Row::Output) return false;
+    return st.mixSoloed(r == Row::Input ? Bus::Input : Bus::Playback, ch, submix);
+}
+
 uf1eq::Model eqModel(const State& st, Row r, int ch)
 {
     uf1eq::Model m;

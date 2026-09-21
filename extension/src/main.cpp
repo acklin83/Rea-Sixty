@@ -747,9 +747,6 @@ inline int uf1SideCarSet_()
 std::atomic<int> g_rmeRow{2};
 std::atomic<int> g_rmeSel[3] = { -1, -1, -1 };
 std::atomic<int> g_rmeSubmix{-1};
-// Das Jog hat gedreht: der Maler blendet den Main-Wert ins Zeitfeld ein. Nur
-// ein Merker, weil uf1FlashTimecode_ Hauptthread-Zustand ist.
-std::atomic<bool> g_rmeJogFlash{false};
 // Die aktive Bank JEDES Side-Car-Satzes, relativ (0..kUf1SideCarBankCount-1).
 // Gespeichert bei uf1SideCarBankBase(set) + Bank in denselben Arrays wie die
 // DAW-Baenke. Satz 0 = RME, Satz 1 = Item Volume (Bindings.h).
@@ -25763,7 +25760,6 @@ static bool uf1RmeEncoder_(uint8_t id, int delta)
         const rmeu::Target t = rmeu::resolveTarget(st, cfg.jogTarget);
         if (t.visible) {
             uf1RmeNudge_(st, t.row, t.ch, delta, cfg.jogStepDb);
-            g_rmeJogFlash.store(true);
         }
         return true;
     }
@@ -25815,16 +25811,54 @@ static bool uf1RmeButton_(const uf1::InputEvent& ev)
             uf1RmeSelect_(t.row, t.ch);
         } else if (slot.push == "mute") {
             const reasixty::rme::Channel* c = rmeu::channelOf(st, t.row, t.ch);
-            const char* sec = t.row == rmeu::Row::Output ? "/output/"
-                            : t.row == rmeu::Row::Input  ? "/input/" : "/playback/";
-            rm.send(std::string(sec) + std::to_string(t.ch) + "/mute",
-                    (c && c->mute) ? 0.0f : 1.0f);
+            rm.send(rmeu::muteAddress(t.row, t.ch), (c && c->mute) ? 0.0f : 1.0f);
         }
         return true;
     }
     if (id == uf1::btn::kVpotAboveFaderPush || id == uf1::btn::kChannelPush)
         return true;
-    return false;
+
+    // ⇨ SOLO, CUT, SEL GEHOEREN DEM FADER-KANAL IN TOTALMIX (Frank 22.09.: "sollten
+    // die nicht im Side-Car Mode komplett weg von Reaper? Sonst sind ja Side-Car
+    // und standalone ORC nie dasselbe"). Bis dahin fielen sie durch an REAPER und
+    // schalteten die fokussierte Spur.
+    if (id == uf1::btn::kCut || id == uf1::btn::kSolo || id == uf1::btn::kSel) {
+        if (!ev.pressed) return true;
+        auto& rm = reasixty::rme::manager();
+        const reasixty::rme::State st = rm.snapshot();
+        const auto r   = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
+        const int  sel = uf1RmeSelected_(st, r);
+        if (sel < 0) return true;
+        const int  sub = rmeu::effectiveSubmix(st, g_rmeSubmix.load());
+        if (id == uf1::btn::kCut) {
+            const reasixty::rme::Channel* c = rmeu::channelOf(st, r, sel);
+            rm.send(rmeu::muteAddress(r, sel), (c && c->mute) ? 0.0f : 1.0f);
+        } else if (id == uf1::btn::kSolo) {
+            // Solo sitzt im Routing: Eingang/Playback in den Submix. Ein Ausgang
+            // hat keins, die Taste tut dort nichts.
+            const std::string a = rmeu::soloAddress(r, sel, sub);
+            if (!a.empty())
+                rm.send(a, rmeu::soloed(st, r, sel, sub) ? 0.0f : 1.0f);
+        } else if (r == rmeu::Row::Output) {
+            // SEL auf einem Ausgang macht ihn zum Submix, wie ein Klick in TotalMix.
+            g_rmeSubmix.store(sel);
+        }
+        return true;
+    }
+
+    // ⇨ WEG b (Frank 22.09.): alles, was einen Kanal betrifft, geht an TotalMix;
+    // der Transport bleibt REAPERs, in ORC waeren diese Tasten unbelegt. SHIFT
+    // bleibt Modifier. Alles andere faengt der Side-Car ab und tut nichts, damit
+    // keine Taste im Side-Car heimlich eine REAPER-Spur schaltet.
+    switch (id) {
+        case uf1::btn::kShift:
+        case uf1::btn::kRwd:  case uf1::btn::kFfw:  case uf1::btn::kStop:
+        case uf1::btn::kPlay: case uf1::btn::kRec:
+        case uf1::btn::kCycle: case uf1::btn::kClick:
+            return false;
+        default:
+            return true;
+    }
 }
 
 void onUf1Event(const uf1::InputEvent& ev)
@@ -33908,6 +33942,183 @@ static void uf1PaintRmeStrip_(const std::string& name, const std::string& db,
     }
 }
 
+// ⇨ DIE TASTEN-LEDS DES UF1, EIN DURCHGANG FUER ALLE BEWOHNER. Stand bis
+// 22.09. nur im Kanalmaler, hinter uf1HandOverScreen_: im Side-Car blieben
+// Play, Rec, Cycle und Click auf dem Stand beim Einstieg stehen. Jetzt ruft der
+// RME-Side-Car denselben Durchgang mit `sideCar`: Transport und SHIFT zeigen
+// weiter REAPER (Frank 22.09., Weg b: was einen Kanal betrifft, geht an
+// TotalMix, der Transport bleibt REAPERs), alles andere ist dunkel, weil der
+// Side-Car es abfaengt und nichts tut (uf1RmeButton_).
+struct Uf1BtnAvail { bool left, right, bankL, bankR, five8; };
+static bool uf1SideCarKeepsLed_(uf8::bindings::ButtonId id)
+{
+    using B = uf8::bindings::ButtonId;
+    return id == B::Uf1Shift || id == B::Uf1Rwd || id == B::Uf1Ffw || id == B::Uf1Stop
+        || id == B::Uf1Play  || id == B::Uf1Rec || id == B::Uf1Cycle || id == B::Uf1Click;
+}
+static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
+{
+    if (!g_uf1_dev) return;
+    const bool leftOn = av.left, rightOn = av.right, bankLOn = av.bankL,
+               bankROn = av.bankR, five8On = av.five8;
+    // Ein Wechsel zwischen Side-Car und Kanal ist fuer jede Lampe ein Neuanfang.
+    static bool sSideCar = false;
+    if (sideCar != sSideCar) { sSideCar = sideCar; force = true; }
+
+    // ⇨ ONE PLACE DECIDES "is this key's move possible", and it is keyed on the
+    // ACTION, not on the key. These three builtins are STATELESS (no stateOf),
+    // so bindingHasActiveSlot_ can never light them and the pass would leave
+    // them permanently idle. Reading the slot means the lamp follows the action
+    // wherever it is bound — swap PAGE ◄ to param +1 and it shows the RIGHT
+    // page's availability, put uf1_bank_step on a soft-key and that one glows.
+    auto availabilityState = [&](const uf8::bindings::ActionSlot& sp,
+                                 bool& out) -> bool {
+        if (sp.type != uf8::bindings::ActionType::Builtin) return false;
+        if (sp.action == "uf1_page_step") {
+            out = (sp.param >= 0) ? rightOn : leftOn;  return true;
+        }
+        if (sp.action == "uf1_bank_step") {
+            out = (sp.param >= 0) ? bankROn : bankLOn; return true;
+        }
+        if (sp.action == "uf1_five_to_eight") { out = five8On; return true; }
+        return false;
+    };
+
+    // General per-button LED pass — SHIFT + the other bindable transport/mode
+    // buttons LIGHT UP from their bound action's state, and MODIFIER-AWARE so
+    // each button shows its held-modifier slot's colour like the UF8 (Frank
+    // 2026-07-31: "bringst du shift zum leuchten und die ganzen anderen LEDs,
+    // off/read/wrt/trim etc." + "die buttons sollten ihre SHIFT-led-farbe zeigen
+    // wenn shift gehalten wird"). Mirrors the UF8 resolver (resolveLed_ ~25394):
+    //   • MODIFIER: currentModifierSnapshot() (same shift the UF1 SHIFT key feeds
+    //     via mod_shift). No modifier → Plain slot; hold SHIFT/Cmd/Ctrl → that
+    //     modifier's slot. Folded into the change-detect key so the LEDs repaint
+    //     on the modifier edge.
+    //   • STATE (Plain) = bindingHasActiveSlot_(bd) — built-in stateOf + REAPER
+    //     GetToggleCommandState2 across all modifier slots. So SHIFT (mod_shift),
+    //     FLIP (uf1_flip), Cycle (repeat 1068), Click (metronome 40364) and any
+    //     user-bound auto_read/write/trim/latch/touch toggle light when active.
+    //     Play/Rec are momentary → transport reality (GetPlayState), Plain only.
+    //   • STATE (modifier held) = the button is ARMED (has an action for that
+    //     modifier) → bright; unarmed with an engaged Plain action (e.g. the held
+    //     SHIFT key itself) stays lit; otherwise dark.
+    //   • COLOUR = the resolved slot's effective LED (effectiveLedActive/Inactive:
+    //     slot override wins, else binding-level) — this is the per-modifier
+    //     "shift colour" the user set — through the FF38 GRB frame (buildColourRgb)
+    //     + FF39 state (buildLedLevel), + FF3B enable on force. Empty binding →
+    //     dark unless label / per-slot LED / ledShowWhenEmpty. These are REGULAR
+    //     buttons: NO key-1-only FF38 special case (that was ONLY soft-key id 0x01).
+    // LED ids are DERIVED (device_btn_id − 0x18) — HW-CONFIRMED as the rule for
+    // every tested pair, but HW-UNVERIFIED for these specific buttons → HW-verify.
+    // Excludes only the keys another painter genuinely owns: the nav cross
+    // (uf1NavCrossSyncLeds_), the four display soft-keys (three owners, the
+    // arbitration IS the feature) and solo/cut/sel (track state + track colour,
+    // and SEL has no LED editor for exactly that reason).
+    struct Uf1BtnLed { uf8::bindings::ButtonId id; uint8_t led; };
+    static const Uf1BtnLed kUf1BtnLeds[] = {
+        { uf8::bindings::ButtonId::Uf1Shift,          0x1e },  // btn 0x36
+        { uf8::bindings::ButtonId::Uf1Flip,           0x20 },  // btn 0x38
+        { uf8::bindings::ButtonId::Uf1Btn360,         0x0d },  // btn 0x25
+        { uf8::bindings::ButtonId::Uf1Scrub,          0x0f },  // btn 0x27
+        { uf8::bindings::ButtonId::Uf1Cycle,          0x1a },  // btn 0x32
+        { uf8::bindings::ButtonId::Uf1Click,          0x1b },  // btn 0x33
+        { uf8::bindings::ButtonId::Uf1SecLeft,        0x18 },  // btn 0x30
+        { uf8::bindings::ButtonId::Uf1SecRight,       0x19 },  // btn 0x31
+        { uf8::bindings::ButtonId::Uf1SecKey1,        0x1c },  // btn 0x34
+        { uf8::bindings::ButtonId::Uf1SecKey2,        0x1d },  // btn 0x35
+        { uf8::bindings::ButtonId::Uf1Rwd,            0x22 },  // btn 0x3a
+        { uf8::bindings::ButtonId::Uf1Ffw,            0x23 },  // btn 0x3b
+        { uf8::bindings::ButtonId::Uf1Stop,           0x24 },  // btn 0x3c
+        { uf8::bindings::ButtonId::Uf1Play,           0x25 },  // btn 0x3d
+        { uf8::bindings::ButtonId::Uf1Rec,            0x26 },  // btn 0x3e
+        { uf8::bindings::ButtonId::Uf1ChannelSoftKey, 0x00 },  // btn 0x18
+        // Joined 2026-08-22 — they used to be painted by a private navLed()
+        // that knew nothing about bindings. `on` still comes from the
+        // availability block above (or, for MASTER, from the builtin's own
+        // state); the COLOUR now comes from the binding like everywhere else.
+        { uf8::bindings::ButtonId::Uf1BankLeft,       0x09 },  // btn 0x21
+        { uf8::bindings::ButtonId::Uf1FiveToEight,    0x0a },  // btn 0x22
+        { uf8::bindings::ButtonId::Uf1BankRight,      0x0b },  // btn 0x23
+        { uf8::bindings::ButtonId::Uf1ArrowLeft,      0x0c },  // btn 0x24
+        { uf8::bindings::ButtonId::Uf1ArrowRight,     0x0e },  // btn 0x26
+        { uf8::bindings::ButtonId::Uf1Master,         0x21 },  // btn 0x39
+    };
+    constexpr size_t kUf1BtnLedN = sizeof(kUf1BtnLeds) / sizeof(kUf1BtnLeds[0]);
+    static int  sBtnLed[kUf1BtnLedN];
+    static bool sBtnLedInit = false;
+    if (!sBtnLedInit) { for (auto& v : sBtnLed) v = -1; sBtnLedInit = true; }
+    {
+        const int layer = uf8::bindings::getActiveLayer();
+        const int psNow = GetPlayState();
+        // Modifier-aware (Frank HW 2026-07-31: "die buttons sollten ihre
+        // SHIFT-led-farbe zeigen wenn shift gehalten wird"). One snapshot for the
+        // whole pass — the SAME modifier the UF1 SHIFT key feeds via mod_shift.
+        const auto mod = uf8::bindings::currentModifierSnapshot();
+        const int  mi  = static_cast<int>(mod);
+        for (size_t k = 0; k < kUf1BtnLedN; ++k) {
+            // ⚠ THE LED READS THE SAME BINDING THE PRESS WILL FIRE. Four of
+            // these keys resolve per view, so without the remap the lamp
+            // would wear the colour of the physical key's binding while the
+            // press ran the view's — the surface saying one thing and doing
+            // another, which is the trap this codebase keeps falling into.
+            const uf8::bindings::Binding bd =
+                uf8::bindings::getBinding(
+                    layer, uf1RemapForView_(kUf1BtnLeds[k].id));
+            // Per-modifier resolution, mirroring the UF8 (resolveLed_ ~25394):
+            // pick the slot for the held modifier, decide state, then take that
+            // slot's effective LED (slot override wins, else binding-level).
+            bool on = false;
+            const uf8::bindings::ActionSlot* colSlot = nullptr;
+            bool show = uf1BindingLedState_(bd, mod, on, colSlot);
+            // The hardcoded indicators below belong to the BASE view, so they
+            // also hold while an unarmed modifier is down — otherwise the very
+            // buttons that are supposed to stay put (PLAY, REC, the Fine key)
+            // would be the three that flicker on the SHIFT edge.
+            const bool armed = uf1ModSlotArmed_(bd, mod);
+            if (!armed) {
+                // Play/Rec are momentary (no toggle state) → transport reality.
+                if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1Play)
+                    on = (psNow & 1) != 0;   // playing
+                else if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1Rec)
+                    on = (psNow & 4) != 0;   // recording
+                else if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1SecKey2)
+                    // The "2" quick key is the hardcoded Fine-Ctrl toggle (not a
+                    // binding), so light it from the live Fine state — bright when
+                    // active, dim when off (Frank 2026-08-04). Meter view uses its
+                    // own Fine flag.
+                    on = g_uf1MeterView.load() ? g_uf1MeterFine.load()
+                                               : g_uf1CsFine.load();
+                // SecKey2 (Fine) always renders — it's a hardcoded indicator.
+                if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1SecKey2)
+                    show = true;
+            }
+            // Availability wins `on` for the three stateless page/bank/group
+            // builtins, on whichever slot is driving this lamp.
+            if (bool avail = false; availabilityState(*colSlot, avail))
+                on = avail;
+            const bool keep = !sideCar || uf1SideCarKeepsLed_(kUf1BtnLeds[k].id);
+            if (!keep) on = false;
+            const uint32_t scaled =
+                (show && keep) ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
+            // Fold the modifier that actually DROVE this lamp into the
+            // change-detect key, not the one being held: an unarmed button
+            // resolves to Plain, so it must not re-send on the SHIFT edge.
+            // These frames share the link with the layout and text bursts.
+            const int packed = ((armed ? mi : 0) << 25) | (on ? (1 << 24) : 0)
+                             | static_cast<int>(scaled & 0xFFFFFF);
+            if (force || packed != sBtnLed[k]) {
+                sBtnLed[k] = packed;
+                const uint8_t led = kUf1BtnLeds[k].led;
+                if (force) g_uf1_dev->send(uf1::buildLed(led, true));        // FF3B enable
+                g_uf1_dev->send(uf1::buildColourRgb(led, scaled));           // FF38 colour
+                // No colour → not lit, whatever the state says (Brightness::Off).
+                g_uf1_dev->send(uf1::buildLedLevel(led,
+                    (on && scaled) ? 0x00 : 0x11));                          // FF39 state
+            }
+        }
+    }
+}
+
 static std::string uf1RmeDbText_(double db)
 {
     if (db <= -99.0) return "-inf";
@@ -34053,16 +34264,58 @@ static void uf1PaintRme_()
 
     uf1PaintSideCarSoftKeys_(force);
 
-    // ── Zeitfeld: REAPER-Zeit, und beim Drehen am Jog der Main-Wert ─────────
-    // (a) von Franks a+b, 21.09. Das Zeitfeld bleibt REAPERs, der Wert steht nur
-    // so lange da, wie die Einblendung dauert, und kommt bei jeder Rastung neu.
+    // ── SOLO, CUT, SEL: der Fader-Kanal in TotalMix ─────────────────────────
+    // Dieselben Bytes wie im Kanalmaler (uf1PaintChannelStrip_): SOLO/CUT hell
+    // oder gedimmt, SEL weiss oder dunkel. SEL leuchtet, wenn der Ausgang auf
+    // dem Fader der Submix ist; auf Eingang und Playback tut SEL nichts und ist
+    // dunkel. SOLO gibt es nur im Routing, auf einem Ausgang also nie.
+    {
+        const rme::Channel* c = (sel >= 0) ? rmeu::channelOf(st, row, sel) : nullptr;
+        const bool muted  = c && c->mute;
+        const bool soloOn = sel >= 0 && rmeu::soloed(st, row, sel, sub);
+        const bool selOn  = sel >= 0 && row == rmeu::Row::Output && sel == sub;
+        static int sPacked = -1;
+        const int packed = (muted ? 1 : 0) | (soloOn ? 2 : 0) | (selOn ? 4 : 0);
+        if (force || packed != sPacked) {
+            sPacked = packed;
+            auto led = [&](uint8_t id, bool on, uint8_t litPrim, uint8_t dim) {
+                if (force) g_uf1_dev->send(uf1::buildLed(id, true));
+                g_uf1_dev->send(uf1::buildLedPrimary(id, on ? litPrim : dim));
+                g_uf1_dev->send(uf1::buildLedLevel(id, on ? uf1::led::kFf39Lit : dim));
+            };
+            led(uf1::led::kSolo, soloOn, uf1::led::kPrimSoloLit, uf1::led::kDimSolo);
+            led(uf1::led::kCut,  muted,  uf1::led::kPrimCutLit,  uf1::led::kDimCut);
+            if (force) g_uf1_dev->send(uf1::buildLed(uf1::led::kSel, true));
+            g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, selOn ? 0xFFFFFFu : 0x000000u));
+            g_uf1_dev->send(uf1::buildLedLevel(uf1::led::kSel, uf1::led::kFf39Lit));
+        }
+    }
+    // Die uebrigen Tasten: Transport und SHIFT wie REAPER, der Rest dunkel.
+    uf1PaintButtonLeds_(force, Uf1BtnAvail{ false, false, false, false, false },
+                        /*sideCar*/ true);
+
+    // ── Zeitfeld: immer der Jog-Kanal (Main) in dB ──────────────────────────
+    // ⛔ KEINE REAPER-ZEIT IM SIDE-CAR (Frank 22.09.: "immer im time display
+    // anzeigen"). Vorher stand hier REAPERs Uhr, Main nur als Einblendung beim
+    // Drehen und dauerhaft in Kopfzelle 4 unter FINE CTRL. Das Zeitfeld gehoert
+    // jetzt dem Side-Car wie der Rest der Flaeche; nur eine Einblendung (Bankname)
+    // darf es kurz haben, danach steht Main wieder da.
     const rmeu::Target jogT = rmeu::resolveTarget(st, cfg.jogTarget);
     bool jogKnown = false;
     const double jogDb = jogT.visible
         ? rmeu::levelDb(st, jogT.row, jogT.ch, sub, jogKnown) : rme::kDbOff;
-    if (g_rmeJogFlash.exchange(false) && jogKnown)
-        uf1FlashTimecode_(uf1RmeDbText_(jogDb), 1500);
-    uf1PaintTimeField_(force);
+    {
+        static std::array<uint8_t, 11> sTc{};
+        std::array<uint8_t, 11> tc{};
+        if (nowMs_() < g_uf1TcFlashUntilMs)
+            uf1EncodeSeg7Text_(g_uf1TcFlashText.c_str(), tc.data());
+        else if (jogKnown)
+            uf1EncodeSeg7Text_(uf1RmeDbText_(jogDb).c_str(), tc.data());
+        if (force || tc != sTc) {
+            sTc = tc;
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kTimecode, tc));
+        }
+    }
 
     // ── Zyklus fuer den Pacer: Kopfzeile und Pegel ──────────────────────────
     // ⛔ OHNE DAS SENDET DER PACER WEITER DEN LETZTEN REAPER-STAND. Kopfzeile und
@@ -34106,8 +34359,9 @@ static void uf1PaintRme_()
             putCell(0, utf8ToLatin1(std::string(row == rmeu::Row::Input ? "IN > " : "PB > ")
                                     + (on.empty() ? std::string("--") : on)));
         }
-        // (b) Main dauerhaft, in der Zelle unter FINE CTRL.
-        putCell(4, jogKnown ? uf1RmeDbText_(jogDb) + " dB" : std::string());
+        // Zelle 4 (unter FINE CTRL) leer: Main steht im Zeitfeld, und REAPERs
+        // Fine-Zustand, den uf1PageHeader_ dort einträgt, gilt hier nicht.
+        putCell(4, std::string());
 
         auto parts = std::make_shared<Uf1CycleParts>();
         // Pegel des gewaehlten Kanals aus TotalMix (/level/<bus>/<n> und n+1),
@@ -34708,158 +34962,8 @@ void uf1PaintChannel_()
         const bool bankLOn = selIdx > 0;
         const bool bankROn = selIdx < nTracks - 1;
 
-        const bool force = changed;
-
-        // ⇨ ONE PLACE DECIDES "is this key's move possible", and it is keyed on the
-        // ACTION, not on the key. These three builtins are STATELESS (no stateOf),
-        // so bindingHasActiveSlot_ can never light them and the pass would leave
-        // them permanently idle. Reading the slot means the lamp follows the action
-        // wherever it is bound — swap PAGE ◄ to param +1 and it shows the RIGHT
-        // page's availability, put uf1_bank_step on a soft-key and that one glows.
-        auto availabilityState = [&](const uf8::bindings::ActionSlot& sp,
-                                     bool& out) -> bool {
-            if (sp.type != uf8::bindings::ActionType::Builtin) return false;
-            if (sp.action == "uf1_page_step") {
-                out = (sp.param >= 0) ? rightOn : leftOn;  return true;
-            }
-            if (sp.action == "uf1_bank_step") {
-                out = (sp.param >= 0) ? bankROn : bankLOn; return true;
-            }
-            if (sp.action == "uf1_five_to_eight") { out = five8On; return true; }
-            return false;
-        };
-
-        // General per-button LED pass — SHIFT + the other bindable transport/mode
-        // buttons LIGHT UP from their bound action's state, and MODIFIER-AWARE so
-        // each button shows its held-modifier slot's colour like the UF8 (Frank
-        // 2026-07-31: "bringst du shift zum leuchten und die ganzen anderen LEDs,
-        // off/read/wrt/trim etc." + "die buttons sollten ihre SHIFT-led-farbe zeigen
-        // wenn shift gehalten wird"). Mirrors the UF8 resolver (resolveLed_ ~25394):
-        //   • MODIFIER: currentModifierSnapshot() (same shift the UF1 SHIFT key feeds
-        //     via mod_shift). No modifier → Plain slot; hold SHIFT/Cmd/Ctrl → that
-        //     modifier's slot. Folded into the change-detect key so the LEDs repaint
-        //     on the modifier edge.
-        //   • STATE (Plain) = bindingHasActiveSlot_(bd) — built-in stateOf + REAPER
-        //     GetToggleCommandState2 across all modifier slots. So SHIFT (mod_shift),
-        //     FLIP (uf1_flip), Cycle (repeat 1068), Click (metronome 40364) and any
-        //     user-bound auto_read/write/trim/latch/touch toggle light when active.
-        //     Play/Rec are momentary → transport reality (GetPlayState), Plain only.
-        //   • STATE (modifier held) = the button is ARMED (has an action for that
-        //     modifier) → bright; unarmed with an engaged Plain action (e.g. the held
-        //     SHIFT key itself) stays lit; otherwise dark.
-        //   • COLOUR = the resolved slot's effective LED (effectiveLedActive/Inactive:
-        //     slot override wins, else binding-level) — this is the per-modifier
-        //     "shift colour" the user set — through the FF38 GRB frame (buildColourRgb)
-        //     + FF39 state (buildLedLevel), + FF3B enable on force. Empty binding →
-        //     dark unless label / per-slot LED / ledShowWhenEmpty. These are REGULAR
-        //     buttons: NO key-1-only FF38 special case (that was ONLY soft-key id 0x01).
-        // LED ids are DERIVED (device_btn_id − 0x18) — HW-CONFIRMED as the rule for
-        // every tested pair, but HW-UNVERIFIED for these specific buttons → HW-verify.
-        // Excludes only the keys another painter genuinely owns: the nav cross
-        // (uf1NavCrossSyncLeds_), the four display soft-keys (three owners, the
-        // arbitration IS the feature) and solo/cut/sel (track state + track colour,
-        // and SEL has no LED editor for exactly that reason).
-        struct Uf1BtnLed { uf8::bindings::ButtonId id; uint8_t led; };
-        static const Uf1BtnLed kUf1BtnLeds[] = {
-            { uf8::bindings::ButtonId::Uf1Shift,          0x1e },  // btn 0x36
-            { uf8::bindings::ButtonId::Uf1Flip,           0x20 },  // btn 0x38
-            { uf8::bindings::ButtonId::Uf1Btn360,         0x0d },  // btn 0x25
-            { uf8::bindings::ButtonId::Uf1Scrub,          0x0f },  // btn 0x27
-            { uf8::bindings::ButtonId::Uf1Cycle,          0x1a },  // btn 0x32
-            { uf8::bindings::ButtonId::Uf1Click,          0x1b },  // btn 0x33
-            { uf8::bindings::ButtonId::Uf1SecLeft,        0x18 },  // btn 0x30
-            { uf8::bindings::ButtonId::Uf1SecRight,       0x19 },  // btn 0x31
-            { uf8::bindings::ButtonId::Uf1SecKey1,        0x1c },  // btn 0x34
-            { uf8::bindings::ButtonId::Uf1SecKey2,        0x1d },  // btn 0x35
-            { uf8::bindings::ButtonId::Uf1Rwd,            0x22 },  // btn 0x3a
-            { uf8::bindings::ButtonId::Uf1Ffw,            0x23 },  // btn 0x3b
-            { uf8::bindings::ButtonId::Uf1Stop,           0x24 },  // btn 0x3c
-            { uf8::bindings::ButtonId::Uf1Play,           0x25 },  // btn 0x3d
-            { uf8::bindings::ButtonId::Uf1Rec,            0x26 },  // btn 0x3e
-            { uf8::bindings::ButtonId::Uf1ChannelSoftKey, 0x00 },  // btn 0x18
-            // Joined 2026-08-22 — they used to be painted by a private navLed()
-            // that knew nothing about bindings. `on` still comes from the
-            // availability block above (or, for MASTER, from the builtin's own
-            // state); the COLOUR now comes from the binding like everywhere else.
-            { uf8::bindings::ButtonId::Uf1BankLeft,       0x09 },  // btn 0x21
-            { uf8::bindings::ButtonId::Uf1FiveToEight,    0x0a },  // btn 0x22
-            { uf8::bindings::ButtonId::Uf1BankRight,      0x0b },  // btn 0x23
-            { uf8::bindings::ButtonId::Uf1ArrowLeft,      0x0c },  // btn 0x24
-            { uf8::bindings::ButtonId::Uf1ArrowRight,     0x0e },  // btn 0x26
-            { uf8::bindings::ButtonId::Uf1Master,         0x21 },  // btn 0x39
-        };
-        constexpr size_t kUf1BtnLedN = sizeof(kUf1BtnLeds) / sizeof(kUf1BtnLeds[0]);
-        static int  sBtnLed[kUf1BtnLedN];
-        static bool sBtnLedInit = false;
-        if (!sBtnLedInit) { for (auto& v : sBtnLed) v = -1; sBtnLedInit = true; }
-        {
-            const int layer = uf8::bindings::getActiveLayer();
-            const int psNow = GetPlayState();
-            // Modifier-aware (Frank HW 2026-07-31: "die buttons sollten ihre
-            // SHIFT-led-farbe zeigen wenn shift gehalten wird"). One snapshot for the
-            // whole pass — the SAME modifier the UF1 SHIFT key feeds via mod_shift.
-            const auto mod = uf8::bindings::currentModifierSnapshot();
-            const int  mi  = static_cast<int>(mod);
-            for (size_t k = 0; k < kUf1BtnLedN; ++k) {
-                // ⚠ THE LED READS THE SAME BINDING THE PRESS WILL FIRE. Four of
-                // these keys resolve per view, so without the remap the lamp
-                // would wear the colour of the physical key's binding while the
-                // press ran the view's — the surface saying one thing and doing
-                // another, which is the trap this codebase keeps falling into.
-                const uf8::bindings::Binding bd =
-                    uf8::bindings::getBinding(
-                        layer, uf1RemapForView_(kUf1BtnLeds[k].id));
-                // Per-modifier resolution, mirroring the UF8 (resolveLed_ ~25394):
-                // pick the slot for the held modifier, decide state, then take that
-                // slot's effective LED (slot override wins, else binding-level).
-                bool on = false;
-                const uf8::bindings::ActionSlot* colSlot = nullptr;
-                bool show = uf1BindingLedState_(bd, mod, on, colSlot);
-                // The hardcoded indicators below belong to the BASE view, so they
-                // also hold while an unarmed modifier is down — otherwise the very
-                // buttons that are supposed to stay put (PLAY, REC, the Fine key)
-                // would be the three that flicker on the SHIFT edge.
-                const bool armed = uf1ModSlotArmed_(bd, mod);
-                if (!armed) {
-                    // Play/Rec are momentary (no toggle state) → transport reality.
-                    if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1Play)
-                        on = (psNow & 1) != 0;   // playing
-                    else if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1Rec)
-                        on = (psNow & 4) != 0;   // recording
-                    else if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1SecKey2)
-                        // The "2" quick key is the hardcoded Fine-Ctrl toggle (not a
-                        // binding), so light it from the live Fine state — bright when
-                        // active, dim when off (Frank 2026-08-04). Meter view uses its
-                        // own Fine flag.
-                        on = g_uf1MeterView.load() ? g_uf1MeterFine.load()
-                                                   : g_uf1CsFine.load();
-                    // SecKey2 (Fine) always renders — it's a hardcoded indicator.
-                    if (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1SecKey2)
-                        show = true;
-                }
-                // Availability wins `on` for the three stateless page/bank/group
-                // builtins, on whichever slot is driving this lamp.
-                if (bool avail = false; availabilityState(*colSlot, avail))
-                    on = avail;
-                const uint32_t scaled =
-                    show ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
-                // Fold the modifier that actually DROVE this lamp into the
-                // change-detect key, not the one being held: an unarmed button
-                // resolves to Plain, so it must not re-send on the SHIFT edge.
-                // These frames share the link with the layout and text bursts.
-                const int packed = ((armed ? mi : 0) << 25) | (on ? (1 << 24) : 0)
-                                 | static_cast<int>(scaled & 0xFFFFFF);
-                if (force || packed != sBtnLed[k]) {
-                    sBtnLed[k] = packed;
-                    const uint8_t led = kUf1BtnLeds[k].led;
-                    if (force) g_uf1_dev->send(uf1::buildLed(led, true));        // FF3B enable
-                    g_uf1_dev->send(uf1::buildColourRgb(led, scaled));           // FF38 colour
-                    // No colour → not lit, whatever the state says (Brightness::Off).
-                    g_uf1_dev->send(uf1::buildLedLevel(led,
-                        (on && scaled) ? 0x00 : 0x11));                          // FF39 state
-                }
-            }
-        }
+        uf1PaintButtonLeds_(changed, { leftOn, rightOn, bankLOn, bankROn, five8On },
+                            /*sideCar*/ false);
     }
 
     // ── PRESETS browser (SK4 in the Meter view, an action in the Channel view) ──
@@ -43416,7 +43520,11 @@ static void uf1NavCrossSyncLeds_()
         const uf8::bindings::ActionSlot* colSlot = nullptr;
         bool show = uf1BindingLedState_(bd, mod, on, colSlot);
         uint32_t scaled = show ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
-        if (i == marked) {
+        // Im RME-Side-Car faengt uf1RmeButton_ das Kreuz ab und tut nichts,
+        // also ist es dunkel. Eine Lampe, die REAPER zeigt, wo die Taste
+        // REAPER nicht erreicht, luegt (Frank 22.09., Weg b).
+        if (uf1RmeActive_()) { on = false; scaled = 0u; }
+        else if (i == marked) {
             // The mode's own pick wins the STATE, but not the colour: it lights
             // in this binding's ACTIVE colour, exactly as the editor shows it.
             // A hardcoded green here was the reason the editor could not show

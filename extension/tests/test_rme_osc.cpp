@@ -362,6 +362,24 @@ int main()
         check(u::nudgeDb(-60.0, -1, 0.5) == -60.5 && u::nudgeDb(5.8, 2, 0.5) == 6.0,
               "nudges in steps, clamps at +6");
         check(u::nudgeDb(-99.2, -1, 0.5) == kDbOff, "below -99 is off");
+
+        // SOLO sits on the routing, CUT on the strip (side-car, 22.09.).
+        check(u::muteAddress(u::Row::Input, 6) == "/input/6/mute"
+              && u::muteAddress(u::Row::Playback, 0) == "/playback/0/mute"
+              && u::muteAddress(u::Row::Output, 8) == "/output/8/mute",
+              "mute is per strip, in all three rows");
+        check(u::soloAddress(u::Row::Input, 6, 10) == "/mix/in/6/10/solo"
+              && u::soloAddress(u::Row::Playback, 0, 10) == "/mix/pb/0/10/solo",
+              "solo goes into the submix");
+        check(u::soloAddress(u::Row::Output, 8, 10).empty()
+              && u::soloAddress(u::Row::Input, 6, -1).empty(),
+              "no solo on an output, none without a submix");
+        check(!u::soloed(s3, u::Row::Input, 6, 10), "solo is off until TotalMix says so");
+        put("/mix/in/6/10/solo", 1);
+        check(u::soloed(s3, u::Row::Input, 6, 10) && !u::soloed(s3, u::Row::Input, 6, 8),
+              "solo lands per node, not per strip");
+        put("/mix/in/6/10/solo", 0);
+        check(!u::soloed(s3, u::Row::Input, 6, 10), "and turns off again");
     }
 
     if (g_fail == 0) std::printf("test_rme_osc: all checks passed\n");
