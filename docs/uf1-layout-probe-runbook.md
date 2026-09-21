@@ -291,3 +291,19 @@ nach Zeichenzahl. Nicht einzeln nachgemessen.
 ⛔ **Korrektur zu oben:** nicht „nur mit `0x04`", sondern **nicht mit `0x01` und
 nicht mit `0x08`**. Genau die zwei, die in Layout 3 Zeiger und Mitte-Füllung
 sind.
+
+**Nachtrag, CELL2 und Fotos (IMG_4679, IMG_4680):**
+
+- **CELL2** (`0x011c` Zelle 2, rechts unter *soft key*): Lineal a..x zeigt nur
+  **a bis e (5)**. CELL1 links: A bis J (10). Die rechte Zelle ist die schmale.
+- **Stil `0x02`** (4679): Segmentleiste als **Füllung von links**, mit unseren
+  Werten 0x14/0x32/0x50/0x64 sichtbar etwa ein Fünftel, halb, vier Fünftel,
+  voll. Also dieselbe Skala 0 bis 100 wie in Layout 3.
+- **Stil `0x03`** (4680): Wertzeilen da, **Segmentleiste weg**. Wie in Layout 3
+  („Pot leer"), nur dass der Text stehen bleibt.
+- **Stil `0x04`** (4678): Kästchenleiste, zwei helle Kästchen pro Pot.
+
+⛔ **Das trifft genau unseren Kanalmaler.** `uf1VpotBar_` setzt für jeden
+normalen Pot `0x01` (unipolar) oder `0x08` (bipolar), und das sind die zwei
+Stile, bei denen die ganze Reihe in Layout 1 verschwindet. Wer Layout 1 fährt,
+muss den Stil umstellen, sonst ist die V-Pot-Reihe leer.
