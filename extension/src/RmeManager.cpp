@@ -14,6 +14,7 @@
   #endif
   #include <winsock2.h>
   #include <ws2tcpip.h>
+  #pragma comment(lib, "ws2_32.lib")
   using rme_socket_t = SOCKET;
   static constexpr rme_socket_t kNoSocket = INVALID_SOCKET;
   #define RME_CLOSE closesocket

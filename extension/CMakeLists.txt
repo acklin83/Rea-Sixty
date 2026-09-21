@@ -797,6 +797,12 @@ if(NOT WIN32)
     add_executable(test_rme_osc tests/test_rme_osc.cpp
         src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp)
     target_include_directories(test_rme_osc PRIVATE src "${WDL_DIR}")
+    # RmeManager brings its worker thread, and on Windows its socket.
+    find_package(Threads REQUIRED)
+    target_link_libraries(test_rme_osc PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(test_rme_osc PRIVATE ws2_32)
+    endif()
     add_test(NAME rme_osc COMMAND test_rme_osc)
 
     add_executable(test_uf1_eq tests/test_uf1_eq.cpp src/Uf1EqCurve.cpp)
