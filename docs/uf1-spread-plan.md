@@ -239,7 +239,13 @@ M1 bis M3. Dann A (Client mit Statuszeile), dann I, dann E + F + G zusammen
 - Farbbalken über den V-Pots
 - TotalMix auf dem UF8, ORC, Zusammenlegen mit stoerme
 
-## Offene Entscheidungen für Frank
+## Entschieden 21.09. („ja mach")
+
+1. **10 Side-Car-Bänke**, wie die UF1-Bänke.
+2. **Jog: 0,5 dB pro Rastung** auf Main.
+3. **Playback ohne EQ: Graph flach, „no EQ".**
+
+## (Frühere) offene Entscheidungen
 
 1. **Wie viele Side-Car-Bänke?** Vorschlag: 10 wie die UF1-Bänke, damit der
    Editor dieselbe Form hat.
