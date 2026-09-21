@@ -1210,25 +1210,57 @@ raus, 7004 rein) weiter und wurde von unserem Betrieb auf Remote 1 nicht
 gestoert. Damit ist die Architekturfrage aus 3 beantwortet: Rea-Sixty bekommt
 sein eigenes Portpaar und TotalReaper behaelt seines.
 
-### 13.7 Zwei Dinge, die den Rest der Messung aufhalten
+### 13.7 ✅ Der Pegelstrom, gemessen am 21.09. mit laufender UFX+
 
-**Das Interface war aus.** Die Titelzeile von TotalMix sagt "Fireface UFX+
-(23802132) - disconnected". Alles oben ist damit der **gespeicherte Zustand**,
-den TotalMix offline vorhaelt: strukturell gueltig (Namen, Rollen, Einheiten,
-Umfang), aber keine laufende Hardware. Pegel gibt es in diesem Zustand
-grundsaetzlich nicht, und Options, Mixer Settings ist dabei ausgegraut, also
-laesst sich auch der Haken "Send Peak Level" nicht setzen. Beides braucht ein
-eingeschaltetes Interface.
+Frank hat "Send Peak Level" fuer Remote 1 gesetzt und etwas abgespielt.
+Gemessen auf 7002, zehn Sekunden:
 
-**Die Version ist aelter als die Tabelle.** Installiert ist **TotalMix FX 2.10
-alpha 8**, die Spezifikation ist "2.1 beta 2" vom 21.07.2026. Das erklaert
-sauber, was im Dump fehlte: `/status/device|connection|dsp` kam nicht, und
-`/sendstate` blieb wirkungslos -- beides steht im Changelog unter dem 21.07.
-`/layout/load` (alpha 7) und `/input/<n>/color` (alpha 8) sind dagegen da.
+```
+3335 Level-Nachrichten = 333/s   ueber 22 Adressen
+pro Adresse ~19/s, Median-Abstand 40.7 ms
+Werte: float dB, -100.0 .. -6.0, kleinster Abstand 0.001 dB
+daneben 12 Nicht-Level-Nachrichten in 10 s
+```
 
-⇨ Fuer den Bau heisst das: **gegen das pruefen, was laeuft, nicht gegen die
-Tabelle.** Und eine Mindestversion nennen, sobald wir wissen, welche wir
-brauchen.
+**1. Die Rate ist genau die, die der UF1 ohnehin will.** 40.7 ms Median sind
+**24.5 Hz**, und das ist bis auf die Nachkommastelle der Takt, den SSL fuer den
+Meter-Zyklus fährt (40.8 ms, in `main.cpp` beim Pacer dokumentiert). Es braucht
+also **keine Pufferung, keine Ratenwandlung und keine Interpolation** — ein Wert
+pro Kanal und Zyklus, genau wie gewuenscht.
+
+**2. Stille kostet nichts.** 22 von 113 moeglichen Kanaelen haben gemeldet,
+naemlich die, auf denen etwas lag. Die Spezifikation sagt "only changing values
+sent", und so verhaelt es sich auch: die ~19/s sind eine **Obergrenze**, kein
+Polling.
+
+**3. Es sind echte dB als float**, nicht quantisiert (0.001 dB Abstand
+beobachtet). Wir skalieren also, wir dekodieren nicht.
+
+**4. ⛔ DIE LEVEL-INDIZES SIND ABSOLUTE KANAELE, L UND R EINZELN** — nicht die
+Strip-Indizes. Gemessen:
+
+```
+out:  0,1  = Main L/R        4,5  = AN 5/6      8,9  = Phones 1 L/R     10,11 = Phones 2 L/R
+pb:   0,1  = Playback L/R
+```
+
+Der Strip heisst `/output/8` (das Paar), seine beiden Seiten heissen
+`/level/out/8` und `/level/out/9`. Wer "Level-Index = Strip-Index" annimmt,
+metert nur die linke Haelfte und merkt es nie, weil die rechte fast immer
+aehnlich aussieht.
+
+⇨ Und damit passt es **haargenau** auf das, was die UF1 braucht:
+`uf1ChannelMeterBytes_` liefert `{lvL, lvR, 0, 0}` an `0x0009`. Fuer ein
+Stereopaar am Strip `n` sind das `/level/out/n` und `/level/out/n+1`.
+
+### 13.8 Was jetzt noch offen ist
+
+Nur noch zwei, und beide brauchen ein Auge an der Oberflaeche, nicht eine
+Messung:
+
+* die **Farbpalette** hinter den Indizes 0 bis 8 (`/input/<n>/color`)
+* welcher Index bei **`band1type` / `band3type` / `lowcut/slope`** welche
+  Charakteristik meint
 
 ## 14. Die UF1-Anzeige: was 2.1.12 brachte und was wir nicht fahren
 
