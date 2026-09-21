@@ -33,6 +33,18 @@ const Channel* channelOf(const State& st, Row r, int ch)
     return &it->second;
 }
 
+std::string displayName(const State& st, Row r, int ch)
+{
+    if (r == Row::Output && ch >= 0) {
+        if (ch == st.mainOut)  return "Main";
+        if (ch == st.mainOutB) return "Main B";
+        for (int i = 0; i < 4; ++i)
+            if (ch == st.phones[i]) return "Phones " + std::to_string(i + 1);
+    }
+    const Channel* c = channelOf(st, r, ch);
+    return c ? c->name : std::string();
+}
+
 std::vector<int> visibleChannels(const State& st, Row r)
 {
     std::vector<int> v;

@@ -58,6 +58,12 @@ std::string levelAddress(Row r, int ch, int submix, bool faderlin);
 // Name and palette colour of a channel, "" / -1 when unknown.
 const Channel* channelOf(const State& st, Row r, int ch);
 
+// ⇨ WHAT THE UF1 CALLS A CHANNEL. An output that carries a control-room role is
+// shown by the ROLE ("Phones 3"), not by its strip name ("MADI 49/50"): the
+// role is what the user put on the pot, the strip name is TotalMix' routing
+// detail (Frank 21.09.: "Namen aufloesen!"). Everything else by its name.
+std::string displayName(const State& st, Row r, int ch);
+
 // The channel EQ as the UF1 graph's band list. Playbacks, and strips whose EQ
 // never arrived, give an OFF model: flat, which is a statement.
 uf1eq::Model eqModel(const State& st, Row r, int ch);

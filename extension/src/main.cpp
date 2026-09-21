@@ -25597,6 +25597,19 @@ static bool uf1RmeEncoder_(uint8_t id, int delta)
         return true;
     }
     if (id == uf1::enc::kChannel) {
+        // ⛔ DER KANAL-ENCODER LIEFERT ~4 ZAEHLER PRO RASTUNG. REAPERs Pfad sammelt
+        // sie mit kChannelEncoderScale zu ganzen Schritten (Drain, uf1::enc::
+        // kChannel); ohne das sprang die Reihenliste pro Rastung ueber Playback
+        // hinweg (Frank 21.09.: "loest zu fein auf, komm nur auf outputs und
+        // inputs"). Gleiche Regel, Richtungswechsel verwirft den Rest.
+        static double sAccum = 0.0;
+        if ((delta > 0 && sAccum < 0.0) || (delta < 0 && sAccum > 0.0)) sAccum = 0.0;
+        sAccum += delta / kChannelEncoderScale;
+        int steps = 0;
+        if (sAccum >=  1.0) { steps = static_cast<int>(sAccum); sAccum -= steps; }
+        if (sAccum <= -1.0) { steps = static_cast<int>(sAccum); sAccum -= steps; }
+        if (steps == 0) return true;
+        delta = steps;
         if (g_uf1ModeMenu.load()) {
             // MODE + Kanal-Encoder: die Reihe (Input / Playback / Output),
             // wie die Encoder- und Jog-Liste. Kein Umlauf, die Liste hat Enden.
@@ -33712,7 +33725,7 @@ static void uf1PaintRme_()
             line = std::string(rmeu::rowName(row)) + " empty";
         } else {
             const rme::Channel* c = rmeu::channelOf(st, row, sel);
-            name = c ? c->name : std::string();
+            name = rmeu::displayName(st, row, sel);
             db   = known ? uf1RmeDbText_(selDb) : std::string();
             no   = sel + 1;
             if (c && c->colour >= 0 && c->colour < 9) pal = cfg.colourMap[c->colour];
@@ -33720,9 +33733,9 @@ static void uf1PaintRme_()
                 line = rmeu::rowName(row);
             } else {
                 // Wohin dieser Fader schreibt: der Submix.
-                const rme::Channel* o = rmeu::channelOf(st, rmeu::Row::Output, sub);
+                const std::string on = rmeu::displayName(st, rmeu::Row::Output, sub);
                 line = std::string(row == rmeu::Row::Input ? "IN" : "PB") + " > "
-                     + (o ? o->name : std::string("--"));
+                     + (on.empty() ? std::string("--") : on);
             }
         }
         uf1PaintRmeStrip_(name, db, line, no, pal, force);
@@ -33746,7 +33759,8 @@ static void uf1PaintRme_()
             const rme::Channel* c = rmeu::channelOf(st, t.row, t.ch);
             bool k = false;
             const double d = rmeu::levelDb(st, t.row, t.ch, sub, k);
-            std::string label = c ? c->name : std::string();
+            std::string label = rmeu::displayName(st, t.row, t.ch);
+            (void)c;
             // Der Pot, dessen Ziel gerade auf dem Fader liegt, traegt den Stern,
             // dieselbe Markierung wie ein gepinnter Kanal.
             if (t.row == row && t.ch == sel) label = "*" + label;
@@ -33772,6 +33786,21 @@ static void uf1PaintRme_()
             sCol = col; sTail = tail; sHave = true;
             uf1SendEqFrames_(col, tail);
         }
+    }
+
+    // ── Soft-Keys ───────────────────────────────────────────────────────────
+    // ⛔ DAS MODE-MENUE SCHREIBT SEINE VIER NAMEN DIREKT und verlaesst sich darauf,
+    // dass der Besitzer des Schirms beim Loslassen seine eigenen zurueckschreibt.
+    // Das Side-Car hat das nicht getan, also blieben PLUGIN / DAW / METER / SENDS
+    // stehen (Frank 21.09.). Bis die eigenen Baenke kommen (Schritt 4): leer.
+    {
+        static bool sMenu = false;
+        const bool menu = g_uf1ModeMenu.load();
+        const bool menuClosed = sMenu && !menu;
+        sMenu = menu;
+        std::array<Uf1SkCell, 4> cells{};
+        for (auto& c : cells) { c.haveLabel = true; c.label.clear(); c.on = false; }
+        if (!menu) uf1EmitSoftKeyRow_(cells, force || menuClosed, false, false);
     }
 
     // Der Ausgang. Ohne ihn ist das Side-Car eine Falle.
