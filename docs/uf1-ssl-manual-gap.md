@@ -72,16 +72,48 @@ gedacht.** Das ist eine Flaeche, die SSL selbst freilaesst.
 
 ---
 
-## Die Liste, nach Wert sortiert
+## ⛔ KORREKTUR, noch am selben Tag: drei der fuenf sind keine Luecken
 
-1. **Vier Spurnamen ueber den V-Pots** (`0x010b`). Direkt das, was heute frueh
-   gefragt war, dokumentiert, und wir haben das Element aus cap141.
-2. **DAW-Faders-Modus**: vier V-Pots auf vier Spur-Faderpegeln, mit dB-Text.
-3. **Modus-Farbcodierung** (`0x012b`), jetzt dekodiert. In REAPER faerbt SSL
-   nicht — wir koennten es.
-4. **5-8-Taste** fuer die vier Pots.
-5. **CHANNEL-Modus "Volume"** fuer die Systemlautstaerke.
+Frank, nachdem er die Liste gelesen hatte: *"ähm, also ich seh die vier
+spurnamen über den v-pots schon heute in unserm DAW mode auf UF1 inkl. namen
+und dB wert."*
 
-⚠ Alles hier ist **aus dem Handbuch gelesen, nicht am Geraet geprueft**. Was
-SSL beschreibt und was die Firmware kann, ist zweimal dasselbe gewesen und
-einmal nicht (`0x011b`).
+Er hat recht, und es steht im Painter (`main.cpp`, DAW-Zweig des V-Pot-Malers):
+
+```cpp
+// DAW mode: the 4 V-Pots are volume faders for the window tracks
+// (selected + next 3, or +4..+7 via the "5-8" group).
+sendVpotParam(uint8_t(i), nm, formatDbReadout(vol) + "dB");
+setBar(i, uf1VolToPos_(vol) / kUf1FaderMax, /*bipolar*/false);
+```
+
+Damit fallen weg:
+
+* ~~Vier Spurnamen ueber den V-Pots~~ — **haben wir**, ueber `0x010e`
+  (Name und Wert in derselben 19-Zeichen-Zeile).
+* ~~DAW-Faders-Modus~~ — **haben wir**, genau so: vier Fensterspuren, Name,
+  dB, Balken.
+* ~~5-8-Taste~~ — **haben wir**, `uf1DawWindowStart_` mit der 5-8-Gruppe.
+
+⇨ **Die Lehre, und sie ist die zweite desselben Tages:** das Handbuch sagt, was
+das Geraet KANN. Es sagt nicht, was WIR schon tun. Eine Luecke ist erst eine,
+wenn beide Seiten nachgesehen sind — und die zweite Seite ist der Code, nicht
+die Erinnerung. Ich hatte im selben Vormittag erst SSLs Handbuch zu spaet
+aufgemacht und dann unseren Code gar nicht ([[vendor-manual-is-a-source]]).
+
+## Was wirklich bleibt
+
+1. **`0x010b` ist eine ZWEITE Zeile pro Pot.** SSL hat ein eigenes 6-Zeichen-
+   Namensfeld *und* darunter den Parameter-Readout. Wir quetschen beides in die
+   eine 19-Zeichen-Zeile von `0x010e`. Der Gewinn ist also nicht "Namen
+   ueberhaupt", sondern **Name oben, Wert unten, beide voll lesbar** — und
+   damit auch mehr Platz fuer laengere Spurnamen.
+2. **Modus-Farbcodierung** (`0x012b`). Haben wir nicht, und sie haengt an
+   Layout 1, also an der Flacker-Baustelle des Ebenenwechsels. Geparkt.
+3. **CHANNEL-Modus "Volume"** — die Systemlautstaerke, fuer Kopfhoerer am
+   eingebauten Ausgang unterwegs. Klein und unabhaengig.
+4. **Low Scribble** ist laut SSL in REAPER leer und ausdruecklich fuer Dritte
+   gedacht. Eine Flaeche, die niemand benutzt.
+
+⚠ Alles hier ist **aus dem Handbuch gelesen**. Was SSL beschreibt und was die
+Firmware tut, war zweimal dasselbe und einmal nicht (`0x011b`).
