@@ -25818,7 +25818,7 @@ static bool uf1RmeButton_(const uf1::InputEvent& ev)
     if (id == uf1::btn::kVpotAboveFaderPush || id == uf1::btn::kChannelPush)
         return true;
 
-    // ⇨ SOLO, CUT, SEL GEHOEREN DEM FADER-KANAL IN TOTALMIX (Frank 22.09.: "sollten
+    // ⇨ SOLO, CUT, SEL GEHOEREN DEM FADER-KANAL IN TOTALMIX (Frank 21.09.: "sollten
     // die nicht im Side-Car Mode komplett weg von Reaper? Sonst sind ja Side-Car
     // und standalone ORC nie dasselbe"). Bis dahin fielen sie durch an REAPER und
     // schalteten die fokussierte Spur.
@@ -25846,7 +25846,7 @@ static bool uf1RmeButton_(const uf1::InputEvent& ev)
         return true;
     }
 
-    // ⇨ WEG b (Frank 22.09.): alles, was einen Kanal betrifft, geht an TotalMix;
+    // ⇨ WEG b (Frank 21.09.): alles, was einen Kanal betrifft, geht an TotalMix;
     // der Transport bleibt REAPERs, in ORC waeren diese Tasten unbelegt. SHIFT
     // bleibt Modifier. Alles andere faengt der Side-Car ab und tut nichts, damit
     // keine Taste im Side-Car heimlich eine REAPER-Spur schaltet.
@@ -33943,10 +33943,10 @@ static void uf1PaintRmeStrip_(const std::string& name, const std::string& db,
 }
 
 // ⇨ DIE TASTEN-LEDS DES UF1, EIN DURCHGANG FUER ALLE BEWOHNER. Stand bis
-// 22.09. nur im Kanalmaler, hinter uf1HandOverScreen_: im Side-Car blieben
+// 21.09. nur im Kanalmaler, hinter uf1HandOverScreen_: im Side-Car blieben
 // Play, Rec, Cycle und Click auf dem Stand beim Einstieg stehen. Jetzt ruft der
 // RME-Side-Car denselben Durchgang mit `sideCar`: Transport und SHIFT zeigen
-// weiter REAPER (Frank 22.09., Weg b: was einen Kanal betrifft, geht an
+// weiter REAPER (Frank 21.09., Weg b: was einen Kanal betrifft, geht an
 // TotalMix, der Transport bleibt REAPERs), alles andere ist dunkel, weil der
 // Side-Car es abfaengt und nichts tut (uf1RmeButton_).
 struct Uf1BtnAvail { bool left, right, bankL, bankR, five8; };
@@ -34295,7 +34295,7 @@ static void uf1PaintRme_()
                         /*sideCar*/ true);
 
     // ── Zeitfeld: immer der Jog-Kanal (Main) in dB ──────────────────────────
-    // ⛔ KEINE REAPER-ZEIT IM SIDE-CAR (Frank 22.09.: "immer im time display
+    // ⛔ KEINE REAPER-ZEIT IM SIDE-CAR (Frank 21.09.: "immer im time display
     // anzeigen"). Vorher stand hier REAPERs Uhr, Main nur als Einblendung beim
     // Drehen und dauerhaft in Kopfzelle 4 unter FINE CTRL. Das Zeitfeld gehoert
     // jetzt dem Side-Car wie der Rest der Flaeche; nur eine Einblendung (Bankname)
@@ -43522,7 +43522,7 @@ static void uf1NavCrossSyncLeds_()
         uint32_t scaled = show ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
         // Im RME-Side-Car faengt uf1RmeButton_ das Kreuz ab und tut nichts,
         // also ist es dunkel. Eine Lampe, die REAPER zeigt, wo die Taste
-        // REAPER nicht erreicht, luegt (Frank 22.09., Weg b).
+        // REAPER nicht erreicht, luegt (Frank 21.09., Weg b).
         if (uf1RmeActive_()) { on = false; scaled = 0u; }
         else if (i == marked) {
             // The mode's own pick wins the STATE, but not the colour: it lights

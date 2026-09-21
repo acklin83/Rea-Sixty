@@ -87,7 +87,7 @@ Fader bleibt der Pegel des Kanals, die kleine Anzeige bleibt Name und dB.
 Belegung über dieselbe Datei wie der Rest (`rme.json`), damit Frank sie ändern
 kann. Die Tabelle oben ist die Werksbelegung.
 
-⇨ **Was eine Seite zeigt, hängt am Kanal, nicht nur am Gerät** (Frank 22.09.:
+⇨ **Was eine Seite zeigt, hängt am Kanal, nicht nur am Gerät** (Frank 21.09.:
 „das kommt doch drauf an, ob der Kanal auf stereo oder mono steht, siehe
 TotalReaper"). `stereo` ist schreibbar, TotalReaper sendet es selbst
 (`TotalReaperCSurf.cpp:1020`, Stereo-Pair Link). Mono: kein Width, kein M/S,
@@ -314,7 +314,7 @@ sind Schalter, keine Drehwerte.
 4. **Grenzen der Parameter:** wo liegt RMEs `OSCProtocoll_260721.ods`? Ohne
    sie messe ich die Grenzen einzeln (wie heute die Faderkurve), was bei Gain
    und Dynamics Pegeländerungen auf einem freigegebenen Kanal bedeutet.
-5. ~~**Stereo/Mono per OSC**~~ geklärt 22.09.: TotalReaper schreibt es
+5. ~~**Stereo/Mono per OSC**~~ geklärt 21.09.: TotalReaper schreibt es
    (`TotalReaperCSurf.cpp:1020`). Die Seiten hängen daran, siehe 3.2.
 6. **UF8, V-Pots:** Pan oder Gain als Standard in der Input-Reihe?
 

@@ -363,7 +363,7 @@ int main()
               "nudges in steps, clamps at +6");
         check(u::nudgeDb(-99.2, -1, 0.5) == kDbOff, "below -99 is off");
 
-        // SOLO sits on the routing, CUT on the strip (side-car, 22.09.).
+        // SOLO sits on the routing, CUT on the strip (side-car, 21.09.).
         check(u::muteAddress(u::Row::Input, 6) == "/input/6/mute"
               && u::muteAddress(u::Row::Playback, 0) == "/playback/0/mute"
               && u::muteAddress(u::Row::Output, 8) == "/output/8/mute",
