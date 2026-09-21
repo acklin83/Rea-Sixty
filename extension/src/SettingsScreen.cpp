@@ -26092,8 +26092,10 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
                 "  9  the whole V-Pot row: labels, bars, styles",
                 " 10  0x0104   the four soft-key labels (SK1..SK4)",
                 " 11  the five one-byte cells the init writes and we never do",
+                " 12  0x010b   a text field per V-Pot (C1..C4), from cap141",
+                " 13  0x010d   V-Pot style 0x04, SSL's DAW-layer look",
             };
-            const int shown = (only >= 0 && only <= 11) ? only : 0;
+            const int shown = (only >= 0 && only <= 13) ? only : 0;
             ImGui_Text(ctx, kElemNames[shown]);
             // The four bars show base..base+3, so the palette walks in fours.
             int barBase = reasixty_uf1ProbeBarBase();

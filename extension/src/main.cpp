@@ -32891,6 +32891,13 @@ static void uf1PaintLayoutProbe_()
         // Text koennen sie nicht sein, aber vielleicht schalten sie in Layout 1
         // etwas ein. Alle auf 0xFF, das ist in jeder Kodierung "voll".
         { 0x0110, 0, { 0, 0, 0, 0 } },
+        // 12 + 13 aus cap141: SSL fuehrt im DAW-Layer ein Textfeld pro V-Pot
+        // (0x010b, indiziert) und den V-Pot-Stil 0x04. Beides kannten wir
+        // nicht. Die Frage ist nicht, ob es in LAYOUT 2 geht -- das zeigt die
+        // Aufnahme -- sondern ob es in UNSERER Ebene geht. Wenn ja, sind es
+        // zwei Features ohne Ebenenwechsel.
+        { 0x010b, 0, { 0, 0, 0, 0 } },
+        { 0x010d, 0, { 0, 0, 0, 0 } },
     };
     constexpr int kProbeElemCount =
         static_cast<int>(sizeof(kProbeElems) / sizeof(kProbeElems[0]));
@@ -32904,6 +32911,29 @@ static void uf1PaintLayoutProbe_()
     for (int i = 0; i < kProbeElemCount; ++i) {
         const auto& e = kProbeElems[i];
         const bool pick = (only == 0) || (only == i + 1);
+        if (pick && e.addr == 0x010b) {
+            for (uint8_t k = 0; k < 4; ++k) {
+                std::vector<uint8_t> p;
+                p.push_back(k);
+                const char t[3] = { 'C', static_cast<char>('1' + k), 0 };
+                for (const char* c = t; *c; ++c)
+                    p.push_back(static_cast<uint8_t>(*c));
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotNumber, p));
+            }
+            continue;
+        }
+        if (!pick && e.addr == 0x010b) continue;
+        if (pick && e.addr == 0x010d) {
+            // Stil 0x04 auf allen vieren, dazu Balken auf klar verschiedenen
+            // Positionen -- sonst sieht man den Stil nicht.
+            const uint8_t st[4] = { uf1::scr::kVpotStyleSslDaw, uf1::scr::kVpotStyleSslDaw,
+                                    uf1::scr::kVpotStyleSslDaw, uf1::scr::kVpotStyleSslDaw };
+            const uint8_t bars[8] = { 0x14, 0x80, 0x32, 0x80, 0x50, 0x80, 0x64, 0x80 };
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, st));
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
+            continue;
+        }
+        if (!pick && e.addr == 0x010d) continue;
         if (pick && e.addr == 0x0104) {
             for (uint8_t k = 0; k < 4; ++k) {
                 const char* names[4] = { "SK1", "SK2", "SK3", "SK4" };
@@ -47323,7 +47353,7 @@ void reasixty_setUf1ProbeBarBase(int v)
 }
 void reasixty_setUf1ProbeOnly(int v)
 {
-    if (v < 0 || v > 11) return;
+    if (v < 0 || v > 13) return;
     if (g_uf1ProbeOnly.exchange(v) != v)
         g_uf1ProbeGen.fetch_add(1, std::memory_order_relaxed);
 }
