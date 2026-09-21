@@ -80,6 +80,40 @@ def doc_tables(bindings_cpp: str):
     return set(exact), pref
 
 
+def category_rules(bindings_cpp: str):
+    """[(exact names, prefixes, category)] in the order builtinCategory() tests
+    them, plus the category order the picker walks (builtinCategoryOrder).
+
+    ⛔ A BUILTIN WITHOUT A CATEGORY IS INVISIBLE. The picker drops every name
+    whose category is empty (SettingsScreen.cpp, `if (!cat || !*cat) continue`),
+    and so does any category that is missing from builtinCategoryOrder. The four
+    rme_* control-room keys went in on 2026-09-21 with description and label and
+    no category, so they could be bound only by the factory bank and never be
+    picked (Frank: "das darf ja gar nie passieren")."""
+    fn = bindings_cpp[bindings_cpp.index("const char* builtinCategory(const std::string& n)"):]
+    fn = fn[:fn.index("\n}\n")]
+    rules = []
+    for cond, cat in re.findall(r'if\s*\((.*?)\)\s*return\s+"([^"]*)";', fn, re.S):
+        exact = set(re.findall(r'n\s*==\s*"([^"]+)"', cond))
+        pref  = re.findall(r'n\.rfind\("([^"]+)",\s*0\)\s*==\s*0', cond)
+        rules.append((exact, pref, cat))
+    order_blk = bindings_cpp[bindings_cpp.index(
+        "const std::vector<const char*>& builtinCategoryOrder()"):]
+    order_blk = order_blk[:order_blk.index("};")]
+    order = re.findall(r'"([^"]+)"', order_blk)
+    return rules, order
+
+
+def category_of(name: str, rules):
+    """The category builtinCategory() returns, or None when no rule matches at
+    all. An explicit `return "";` is a builtin hidden ON PURPOSE and comes back
+    as "" -- that one is not a gap."""
+    for exact, pref, cat in rules:
+        if name in exact or any(name.startswith(p) for p in pref):
+            return cat
+    return None
+
+
 def main() -> int:
     main_cpp = (SRC / "main.cpp").read_text()
     bindings = (SRC / "Bindings.cpp").read_text()
@@ -103,6 +137,11 @@ def main() -> int:
     no_label   = [n for n in sorted(names)
                   if n not in labels and not n.startswith("__")]
     long_label = sorted((n, l) for n, l in labels.items() if len(l) > 12)
+    rules, order = category_rules(bindings)
+    no_cat = [n for n in sorted(names)
+              if not n.startswith("__")
+              and category_of(n, rules) != ""
+              and category_of(n, rules) not in order]
     stale_lbl  = [n for n in sorted(labels) if n not in names]
 
     print(f"registered builtins : {len(names)}")
@@ -129,9 +168,15 @@ def main() -> int:
         print(f"\nSTALE label entries, no longer registered ({len(stale_lbl)}):")
         for n in stale_lbl:
             print(f"  {n}")
-    bad = bool(missing or stale or no_label or long_label or stale_lbl)
+    if no_cat:
+        print(f"\nNOT IN THE PICKER, no category or one missing from "
+              f"builtinCategoryOrder ({len(no_cat)}):")
+        for n in no_cat:
+            print(f"  {n}  ->  {category_of(n, rules)!r}")
+    bad = bool(missing or stale or no_label or long_label or stale_lbl or no_cat)
     if not bad:
-        print("\nevery registered builtin has a description and a label \u226412 chars")
+        print("\nevery registered builtin has a description, a label \u226412 chars "
+              "and a category the picker shows")
     return 1 if bad else 0
 
 
