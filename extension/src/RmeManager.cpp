@@ -56,7 +56,7 @@ std::string configToJson(const Config& c)
     };
     std::string j;
     char buf[512];
-    std::snprintf(buf, sizeof(buf),
+    snprintf(buf, sizeof(buf),
         "{\n"
         "  \"version\": 1,\n"
         "  \"enabled\": %s,\n"
@@ -65,21 +65,21 @@ std::string configToJson(const Config& c)
     j += buf;
     j += "  \"vpots\": [\n";
     for (int i = 0; i < 4; ++i) {
-        std::snprintf(buf, sizeof(buf),
+        snprintf(buf, sizeof(buf),
             "    { \"target\": \"%s\", \"turn\": \"%s\", \"push\": \"%s\" }%s\n",
             clean(c.vpots[i].target).c_str(), clean(c.vpots[i].turn).c_str(),
             clean(c.vpots[i].push).c_str(), i < 3 ? "," : "");
         j += buf;
     }
     j += "  ],\n";
-    std::snprintf(buf, sizeof(buf),
+    snprintf(buf, sizeof(buf),
         "  \"jog\": { \"target\": \"%s\", \"stepDb\": %.2f },\n"
         "  \"steps\": { \"vpotDb\": %.2f },\n",
         clean(c.jogTarget).c_str(), c.jogStepDb, c.vpotStepDb);
     j += buf;
     j += "  \"colours\": [";
     for (int i = 0; i < 9; ++i) {
-        std::snprintf(buf, sizeof(buf), "%s%d", i ? ", " : "", c.colourMap[i]);
+        snprintf(buf, sizeof(buf), "%s%d", i ? ", " : "", c.colourMap[i]);
         j += buf;
     }
     j += "]\n}\n";
@@ -301,7 +301,7 @@ void Manager::workerLoop()
             if (::bind(sock, reinterpret_cast<sockaddr*>(&me), sizeof(me)) != 0) {
                 closeSock();
                 char t[160];
-                std::snprintf(t, sizeof(t),
+                snprintf(t, sizeof(t),
                     "port %d is in use by another program (stoerme, TotalReaper or a second REAPER?)",
                     cfg.recvPort);
                 setStatus(LinkState::PortBusy, t);
@@ -326,7 +326,7 @@ void Manager::workerLoop()
                 continue;
             }
             char t[160];
-            std::snprintf(t, sizeof(t), "waiting for TotalMix on %s:%d",
+            snprintf(t, sizeof(t), "waiting for TotalMix on %s:%d",
                           h.c_str(), cfg.sendPort);
             setStatus(LinkState::Waiting, t);
             ask();
@@ -362,7 +362,7 @@ void Manager::workerLoop()
                 heardSinceAsk = true;
                 if (link_.load() != LinkState::Online) {
                     char t[160];
-                    std::snprintf(t, sizeof(t), "connected to TotalMix (%s:%d, answers on %d)",
+                    snprintf(t, sizeof(t), "connected to TotalMix (%s:%d, answers on %d)",
                                   cfg.host.c_str(), cfg.sendPort, cfg.recvPort);
                     setStatus(LinkState::Online, t);
                 }
