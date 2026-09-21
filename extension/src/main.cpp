@@ -32831,9 +32831,30 @@ static void uf1PaintLayoutProbe_()
     sLayout = layout; sScreen = screen; sPattern = pattern;
     sGen = gen; sPGen = pgen;
 
+    // ⛔ EIN EBENENWECHSEL IST ZWEISTUFIG. Aus cap141 (SSL im DAW-Layer,
+    // 2026-09-21): SSL schreibt ZWEIMAL `0x0100 = {00,01}` und erst dann das
+    // Ziel. Die Sonde hat bis dahin direkt umgeschaltet -- und deshalb blieb
+    // Layout 2 fuer sie leer, obwohl SSL es taeglich faehrt. Jeder Nullbefund,
+    // den sie vor dieser Zeile geliefert hat, ist wertlos, nicht nur der eine.
+    const uint8_t via[2] = { 0x00, 0x01 };
+    g_uf1_dev->send(uf1::buildScreen(0x0100, via));
+    g_uf1_dev->send(uf1::buildScreen(0x0100, via));
     const uint8_t sel[2] = { layout, screen };
     g_uf1_dev->send(uf1::buildScreen(0x0100, sel));
     if (!pattern) return;
+
+    // ⇨ UND DANN DIE CHROME, der Form nach wie SSLs Eintrittsfolge. Ohne sie
+    // richtet die Ebene sich nicht ein: in cap141 folgen auf den Selektor
+    // sofort Soft-Key-Namen, das Nummernfeld, Stile, leere V-Pot-Saetze, Balken,
+    // 0x0110, 0x011a und die Kopfzeile. Wir schicken dieselben Zellen mit
+    // unseren Testwerten, damit ein leeres Feld "die Ebene kann das nicht"
+    // heisst und nicht "wir haben es nie eingerichtet".
+    {
+        const uint8_t chrome0102 = 0x00, chrome0110 = 0x0f, chrome011a = 0x02;
+        g_uf1_dev->send(uf1::buildScreen(0x0102, std::span<const uint8_t>(&chrome0102, 1)));
+        g_uf1_dev->send(uf1::buildScreen(0x0110, std::span<const uint8_t>(&chrome0110, 1)));
+        g_uf1_dev->send(uf1::buildScreen(0x011a, std::span<const uint8_t>(&chrome011a, 1)));
+    }
 
     // Eight numbered cells into the header row, so a layout that renders text
     // there says so with a readable baseline instead of an empty field. Same
