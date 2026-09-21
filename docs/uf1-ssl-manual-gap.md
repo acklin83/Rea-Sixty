@@ -113,7 +113,11 @@ aufgemacht und dann unseren Code gar nicht ([[vendor-manual-is-a-source]]).
    aus einer FREMDEN Ebene in unsere uebertragen, ohne zu fragen, was dort schon
    steht.
 2. **Modus-Farbcodierung** (`0x012b`). Haben wir nicht, und sie haengt an
-   Layout 1, also an der Flacker-Baustelle des Ebenenwechsels. Geparkt.
+   Layout 1 (am Geraet vermessen 21.09., `docs/uf1-layout-probe-runbook.md`).
+   ⛔ Korrektur: hier stand „Flacker-Baustelle des Ebenenwechsels". Die gibt es
+   nicht. Das UF1-Flackern ist seit August geloest (`1511dc0`: 0x0100 wurde bei
+   jedem MODE/SCRUB/Encoder-Schritt neu gesendet; `deb68c2`: zwei Schreiber pro
+   Zelle) und hatte mit einem gewollten Ebenenwechsel nichts zu tun.
 3. **CHANNEL-Modus "Volume"** — die Systemlautstaerke, fuer Kopfhoerer am
    eingebauten Ausgang unterwegs. Klein und unabhaengig.
 4. **Low Scribble** ist laut SSL in REAPER leer und ausdruecklich fuer Dritte
