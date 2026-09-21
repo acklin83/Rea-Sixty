@@ -359,6 +359,7 @@ add_library(reaper_uf8 MODULE
     src/RmeOsc.cpp
     src/RmeState.cpp
     src/RmeManager.cpp
+    src/RmeUf1.cpp
     src/TrackName.cpp
     src/PluginMap.cpp
     src/UserPluginCatalog.cpp
@@ -795,7 +796,8 @@ if(NOT WIN32)
     # one), the three-valued snapshot echo, and that a role pointing at a
     # channel this remote cannot see is a STATE and not a bug.
     add_executable(test_rme_osc tests/test_rme_osc.cpp
-        src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp)
+        src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp src/RmeUf1.cpp
+        src/Uf1EqCurve.cpp)
     target_include_directories(test_rme_osc PRIVATE src "${WDL_DIR}")
     # RmeManager brings its worker thread, and on Windows its socket.
     find_package(Threads REQUIRED)

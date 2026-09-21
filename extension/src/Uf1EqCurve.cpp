@@ -40,17 +40,27 @@ double highShelfDb(double f, double f0, double g)
 // mis-scaled unit must never slam the whole graph onto the floor (the
 // 2026-06-18 regression): a high pass at or under 9 Hz and a low pass at or
 // over 19 kHz count as disengaged and contribute nothing.
-double hpfDb(double f, double fc)
+//
+// ⇨ `order` is the Butterworth order n in |H|^2 = 1 / (1 + r^2n), so the slope
+// far from the corner is n x 6 dB/oct. It was always 2 here, and 2 is still the
+// default: r^4 is exactly the old expression, so the SSL/REAPER graph does not
+// move by a pixel. TotalMix' low cut sets 1..4 (slope index 0..3 = 6/12/18/24
+// dB/oct, measured 2026-09-21).
+double rollOff(double r, int order)
+{
+    if (order < 1) order = 1;
+    if (order > 8) order = 8;
+    return -10.0 * std::log10(1.0 + std::pow(r, 2.0 * order));
+}
+double hpfDb(double f, double fc, int order)
 {
     if (fc <= 9.0) return 0.0;                        // below the control min (10 Hz) = off
-    const double r = fc / f;
-    return -10.0 * std::log10(1.0 + r * r * r * r);
+    return rollOff(fc / f, order);
 }
-double lpfDb(double f, double fc)
+double lpfDb(double f, double fc, int order)
 {
     if (fc >= 19000.0) return 0.0;                    // at/over the top rail = off
-    const double r = f / fc;
-    return -10.0 * std::log10(1.0 + r * r * r * r);
+    return rollOff(f / fc, order);
 }
 
 }  // namespace
@@ -61,8 +71,8 @@ double bandDb(const Band& b, double f)
         case Band::Kind::Bell:      return peakDb(f, b.freq, b.gainDb, b.q);
         case Band::Kind::LowShelf:  return lowShelfDb(f, b.freq, b.gainDb);
         case Band::Kind::HighShelf: return highShelfDb(f, b.freq, b.gainDb);
-        case Band::Kind::HighPass:  return hpfDb(f, b.freq);
-        case Band::Kind::LowPass:   return lpfDb(f, b.freq);
+        case Band::Kind::HighPass:  return hpfDb(f, b.freq, b.order);
+        case Band::Kind::LowPass:   return lpfDb(f, b.freq, b.order);
     }
     return 0.0;
 }

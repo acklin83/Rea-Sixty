@@ -41,15 +41,42 @@ std::string configToJson(const Config& c)
     std::string host;
     for (const char ch : c.host)
         if (ch != '"' && ch != '\\' && static_cast<unsigned char>(ch) >= 0x20) host += ch;
+    auto clean = [](const std::string& v) {
+        std::string o;
+        for (const char ch : v)
+            if (ch != '"' && ch != '\\' && static_cast<unsigned char>(ch) >= 0x20) o += ch;
+        return o;
+    };
+    std::string j;
     char buf[512];
     std::snprintf(buf, sizeof(buf),
         "{\n"
         "  \"version\": 1,\n"
         "  \"enabled\": %s,\n"
-        "  \"connection\": { \"host\": \"%s\", \"send\": %d, \"receive\": %d }\n"
-        "}\n",
+        "  \"connection\": { \"host\": \"%s\", \"send\": %d, \"receive\": %d },\n",
         c.enabled ? "true" : "false", host.c_str(), c.sendPort, c.recvPort);
-    return buf;
+    j += buf;
+    j += "  \"vpots\": [\n";
+    for (int i = 0; i < 4; ++i) {
+        std::snprintf(buf, sizeof(buf),
+            "    { \"target\": \"%s\", \"turn\": \"%s\", \"push\": \"%s\" }%s\n",
+            clean(c.vpots[i].target).c_str(), clean(c.vpots[i].turn).c_str(),
+            clean(c.vpots[i].push).c_str(), i < 3 ? "," : "");
+        j += buf;
+    }
+    j += "  ],\n";
+    std::snprintf(buf, sizeof(buf),
+        "  \"jog\": { \"target\": \"%s\", \"stepDb\": %.2f },\n"
+        "  \"steps\": { \"vpotDb\": %.2f },\n",
+        clean(c.jogTarget).c_str(), c.jogStepDb, c.vpotStepDb);
+    j += buf;
+    j += "  \"colours\": [";
+    for (int i = 0; i < 9; ++i) {
+        std::snprintf(buf, sizeof(buf), "%s%d", i ? ", " : "", c.colourMap[i]);
+        j += buf;
+    }
+    j += "]\n}\n";
+    return j;
 }
 
 bool configFromJson(const std::string& json, Config& out)
@@ -68,6 +95,27 @@ bool configFromJson(const std::string& json, Config& out)
         if (const char* v = conn->get_string_by_name("send", true))    c.sendPort = std::atoi(v);
         if (const char* v = conn->get_string_by_name("receive", true)) c.recvPort = std::atoi(v);
     }
+    if (const wdl_json_element* arr = root->get_item_by_name("vpots"); arr && arr->is_array()) {
+        for (int i = 0; i < 4; ++i) {
+            const wdl_json_element* e = arr->enum_item(i);
+            if (!e || !e->is_object()) continue;
+            if (const char* v = e->get_string_by_name("target")) c.vpots[i].target = v;
+            if (const char* v = e->get_string_by_name("turn"))   c.vpots[i].turn   = v;
+            if (const char* v = e->get_string_by_name("push"))   c.vpots[i].push   = v;
+        }
+    }
+    if (const wdl_json_element* jog = root->get_item_by_name("jog"); jog && jog->is_object()) {
+        if (const char* v = jog->get_string_by_name("target")) c.jogTarget = v;
+        if (const char* v = jog->get_string_by_name("stepDb", true)) c.jogStepDb = std::atof(v);
+    }
+    if (const wdl_json_element* st = root->get_item_by_name("steps"); st && st->is_object())
+        if (const char* v = st->get_string_by_name("vpotDb", true)) c.vpotStepDb = std::atof(v);
+    if (const wdl_json_element* arr = root->get_item_by_name("colours"); arr && arr->is_array())
+        for (int i = 0; i < 9; ++i)
+            if (const wdl_json_element* e = arr->enum_item(i))
+                if (const char* v = e->get_string_value(true)) c.colourMap[i] = std::atoi(v) & 0x0F;
+    if (!(c.jogStepDb > 0.0 && c.jogStepDb <= 12.0))   c.jogStepDb  = Config{}.jogStepDb;
+    if (!(c.vpotStepDb > 0.0 && c.vpotStepDb <= 12.0)) c.vpotStepDb = Config{}.vpotStepDb;
     if (c.sendPort <= 0 || c.sendPort > 65535) c.sendPort = Config{}.sendPort;
     if (c.recvPort <= 0 || c.recvPort > 65535) c.recvPort = Config{}.recvPort;
     if (c.host.empty()) c.host = Config{}.host;
@@ -127,11 +175,10 @@ void Manager::setConfig(const Config& c)
 {
     {
         std::lock_guard<std::mutex> lk(mx_);
-        const bool same = c.enabled == cfg_.enabled && c.host == cfg_.host
-                       && c.sendPort == cfg_.sendPort && c.recvPort == cfg_.recvPort;
-        if (same) return;
+        const std::string before = configToJson(cfg_);
+        if (configToJson(c) == before) return;
+        if (!c.sameConnection(cfg_)) ++cfgGen_;   // only then reconnect
         cfg_ = c;
-        ++cfgGen_;
     }
     cfgDirty_.store(true);
 }

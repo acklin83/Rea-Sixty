@@ -32,6 +32,23 @@ namespace reasixty::rme {
 // spaces are independent: /input/0 and /playback/0 are different channels.
 enum class Bus : std::uint8_t { Input, Playback, Output };
 
+// The channel EQ (not Room EQ): three bands and a low cut, on inputs and
+// outputs. Playbacks have none (dump 2026-09-21). Indices measured the same
+// day: band1type / band3type 0 Bell, 1 Shelve, 2 Hipass, 3 Low-Pass (band 2 is
+// always a bell); lowcut/slope 0..3 = 6/12/18/24 dB/oct.
+struct ChannelEq {
+    bool   seen   = false;   // TotalMix sent at least one EQ value for this strip
+    bool   on     = false;   // eq/enable
+    double freq[3] = { 80.0, 1000.0, 5000.0 };
+    double gain[3] = { 0.0, 0.0, 0.0 };
+    double q[3]    = { 1.0, 1.0, 1.0 };
+    int    type1  = 1;       // band 1
+    int    type3  = 1;       // band 3
+    bool   lcOn   = false;   // lowcut/enable
+    double lcFreq = 20.0;
+    int    lcSlope = 1;
+};
+
 struct Channel {
     std::string name;
     int         colour = -1;   // TotalMix palette INDEX, not RGB. 0 = hidden.
@@ -43,6 +60,7 @@ struct Channel {
     bool        seen   = false;
     double      volume = 0.0;  // outputs: dB. -300 is -inf.
     bool        mute   = false;
+    ChannelEq   eq;
 };
 
 // A snapshot slot's state as TotalMix reports it back on /snapshot/load/<n>.
@@ -74,6 +92,24 @@ struct State {
     std::map<int, Channel> inputs;
     std::map<int, Channel> playbacks;
     std::map<int, Channel> outputs;
+
+    // ⇨ AN INPUT'S OR A PLAYBACK'S LEVEL IS ITS NODE IN A SUBMIX: /mix/in|pb/
+    // <channel>/<submix output>/fader, in dB. /sendall reports these for exactly
+    // the channels that are visible on this remote, into every visible output
+    // (2026-09-21), which is the set the UF1 walks. Missing is not "off": use
+    // mixFader(), which says whether TotalMix told us at all.
+    std::map<std::uint64_t, double> mix;
+    static std::uint64_t mixKey(Bus b, int ch, int sub)
+    {
+        return (static_cast<std::uint64_t>(b) << 40)
+             | (static_cast<std::uint64_t>(static_cast<std::uint32_t>(ch)) << 20)
+             | static_cast<std::uint64_t>(static_cast<std::uint32_t>(sub));
+    }
+    const double* mixFader(Bus b, int ch, int sub) const
+    {
+        const auto it = mix.find(mixKey(b, ch, sub));
+        return it == mix.end() ? nullptr : &it->second;
+    }
 
     // Peak level in dB per channel, sent only when it changes and only when
     // "Send Peak Level" is enabled for this remote. Empty is the normal state

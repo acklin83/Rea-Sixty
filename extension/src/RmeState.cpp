@@ -154,6 +154,26 @@ bool ingest(State& st, const Message& m)
         return false;
     }
 
+    // ── submix nodes: /mix/<in|pb>/<channel>/<submix>/fader ─────────────────
+    if (a.rfind("/mix/", 0) == 0) {
+        const std::size_t s1 = a.find('/', 5);
+        if (s1 == std::string::npos) return false;
+        const std::string bus = a.substr(5, s1 - 5);
+        const Bus b = (bus == "in") ? Bus::Input : (bus == "pb") ? Bus::Playback : Bus::Output;
+        if (b == Bus::Output) return false;
+        const std::size_t s2 = a.find('/', s1 + 1);
+        if (s2 == std::string::npos) return false;
+        const std::size_t s3 = a.find('/', s2 + 1);
+        if (s3 == std::string::npos) return false;
+        const int ch  = std::atoi(a.c_str() + s1 + 1);
+        const int sub = std::atoi(a.c_str() + s2 + 1);
+        if (a.compare(s3 + 1, std::string::npos, "fader") == 0) {
+            st.mix[State::mixKey(b, ch, sub)] = num(m);
+            return true;
+        }
+        return false;   // balpan, solo, groupflags: known, not used yet
+    }
+
     // ── channel strips ──────────────────────────────────────────────────────
     std::string section, leaf; int idx = 0;
     if (!splitChannel(a, section, idx, leaf)) return false;
@@ -177,6 +197,32 @@ bool ingest(State& st, const Message& m)
     if (leaf == "color")  { ch.colour = static_cast<int>(num(m)); return true; }
     if (leaf == "volume") { ch.volume = num(m); return true; }
     if (leaf == "mute")   { ch.mute   = truthy(m); return true; }
+    // The channel EQ. Band leaves are "eq/band<N><what>", N = 1..3.
+    if (leaf.rfind("eq/", 0) == 0) {
+        ChannelEq& e = ch.eq;
+        e.seen = true;
+        const std::string w = leaf.substr(3);
+        if (w == "enable")    { e.on    = truthy(m); return true; }
+        if (w == "band1type") { e.type1 = static_cast<int>(num(m)); return true; }
+        if (w == "band3type") { e.type3 = static_cast<int>(num(m)); return true; }
+        if (w.size() > 5 && w.rfind("band", 0) == 0 && w[4] >= '1' && w[4] <= '3') {
+            const int k = w[4] - '1';
+            const std::string what = w.substr(5);
+            if (what == "freq") { e.freq[k] = num(m); return true; }
+            if (what == "gain") { e.gain[k] = num(m); return true; }
+            if (what == "q")    { e.q[k]    = num(m); return true; }
+        }
+        return false;
+    }
+    if (leaf.rfind("lowcut/", 0) == 0) {
+        ChannelEq& e = ch.eq;
+        e.seen = true;
+        const std::string w = leaf.substr(7);
+        if (w == "enable") { e.lcOn    = truthy(m); return true; }
+        if (w == "freq")   { e.lcFreq  = num(m); return true; }
+        if (w == "slope")  { e.lcSlope = static_cast<int>(num(m)); return true; }
+        return false;
+    }
     // Everything else on a strip is known-but-unused today. The channel is
     // still marked seen, which is what the role check reads.
     return false;

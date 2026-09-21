@@ -14,6 +14,7 @@
 #include "RmeManager.h"
 #include "RmeOsc.h"
 #include "RmeState.h"
+#include "RmeUf1.h"
 
 #include <cmath>
 
@@ -240,6 +241,100 @@ int main()
         Config bad;
         configFromJson("{\"connection\": {\"send\": 99999, \"receive\": 0}}", bad);
         check(bad.sendPort == 7005 && bad.recvPort == 7006, "impossible ports fall back");
+    }
+
+    // ── rme.json carries the whole side-car layout ──────────────────────────
+    {
+        Config c;
+        check(c.vpots[0].target == "phones1" && c.vpots[3].target == "phones4"
+              && c.vpots[0].push == "select" && c.jogTarget == "main",
+              "defaults: Phones 1-4 on the pots, push selects, Main on the jog");
+        c.vpots[2].target = "input:30"; c.vpots[2].push = "mute";
+        c.jogTarget = "phones2"; c.jogStepDb = 1.0; c.colourMap[4] = 0x09;
+        Config r;
+        check(configFromJson(configToJson(c), r), "layout round trip parses");
+        check(r.vpots[2].target == "input:30" && r.vpots[2].push == "mute"
+              && r.jogTarget == "phones2" && r.jogStepDb == 1.0 && r.colourMap[4] == 0x09,
+              "…and keeps every pot, the jog and the colours");
+        Config a, b = a;
+        b.vpots[1].target = "output:4";
+        check(a.sameConnection(b), "moving a pot is not a reconnect");
+        b.recvPort = 7010;
+        check(!a.sameConnection(b), "moving a port is");
+    }
+
+    // ── the UF1 side-car's view of TotalMix (RmeUf1) ────────────────────────
+    {
+        namespace u = reasixty::rme::uf1;
+        State s3;
+        auto put = [&](const char* addr, float v) {
+            Message m; m.address = addr; m.args.push_back(Arg::fromFloat(v)); ingest(s3, m);
+        };
+        auto name = [&](const char* addr, const char* n) {
+            Message m; m.address = addr; m.args.push_back(Arg::fromString(n)); ingest(s3, m);
+        };
+        name("/output/0/name", "Main");      put("/output/0/color", 1);  put("/output/0/volume", -20.0f);
+        name("/output/8/name", "Phones 1");  put("/output/8/color", 1);  put("/output/8/volume", -16.0f);
+        name("/output/10/name", "Phones 2"); put("/output/10/color", 1);
+        name("/input/0/name", "Voc 1");      put("/input/0/color", 8);
+        name("/input/2/name", "Git");        put("/input/2/color", 0);   // hidden
+        name("/input/6/name", "Bass");       put("/input/6/color", 5);
+        name("/playback/0/name", "AN 1/2");  put("/playback/0/color", 1);
+        put("/controlroom/mainout", 0); put("/controlroom/phones1", 8);
+        put("/controlroom/phones2", 10); put("/controlroom/phones3", 2);
+        put("/mix/in/0/10/fader", -3.7f);
+        put("/mix/pb/0/10/fader", -4.1f);
+
+        const auto ins = u::visibleChannels(s3, u::Row::Input);
+        check(ins.size() == 2 && ins[0] == 0 && ins[1] == 6,
+              "a row walks the VISIBLE channels only (colour 0 skipped)");
+        check(u::stepChannel(ins, 0, 1) == 6 && u::stepChannel(ins, 6, 1) == 6
+              && u::stepChannel(ins, 6, -5) == 0, "stepping clamps at both ends");
+        check(u::stepChannel(ins, 2, 1) == 6 && u::stepChannel(ins, 2, -1) == 0,
+              "from a channel that vanished, one detent still moves");
+
+        const auto p1 = u::resolveTarget(s3, "phones1");
+        check(p1.row == u::Row::Output && p1.ch == 8 && p1.visible, "phones1 is the role");
+        const auto p3 = u::resolveTarget(s3, "phones3");
+        check(p3.assigned && !p3.visible, "a role on a channel this remote cannot see");
+        const auto p4 = u::resolveTarget(s3, "phones4");
+        check(!p4.assigned, "a role TotalMix never named");
+        const auto fx = u::resolveTarget(s3, "input:6");
+        check(fx.row == u::Row::Input && fx.ch == 6 && fx.visible, "a fixed channel");
+
+        check(u::effectiveSubmix(s3, 10) == 10, "a visible output is the submix");
+        check(u::effectiveSubmix(s3, 4) == 0, "an unknown one falls back to Main");
+
+        bool known = false;
+        check(u::levelDb(s3, u::Row::Input, 0, 10, known) < -3.6 && known,
+              "an input's level is its node in the submix");
+        u::levelDb(s3, u::Row::Input, 6, 10, known);
+        check(!known, "a node TotalMix never sent is unknown, not off");
+        check(u::levelAddress(u::Row::Input, 0, 10, true) == "/mix/in/0/10/faderlin"
+              && u::levelAddress(u::Row::Playback, 0, 10, false) == "/mix/pb/0/10/fader"
+              && u::levelAddress(u::Row::Output, 8, 0, true) == "/output/8/faderlin",
+              "level addresses");
+
+        // EQ: off is flat; on gives three bands; the low cut takes its slope.
+        check(!u::eqModel(s3, u::Row::Output, 8).on, "no EQ reported = flat");
+        put("/output/8/eq/enable", 1); put("/output/8/eq/band1type", 1);
+        put("/output/8/eq/band3type", 1); put("/output/8/eq/band1gain", 3);
+        put("/output/8/lowcut/enable", 1); put("/output/8/lowcut/freq", 80);
+        put("/output/8/lowcut/slope", 3);
+        const auto em = u::eqModel(s3, u::Row::Output, 8);
+        check(em.on && em.bands.size() == 4, "EQ on: three bands and the low cut");
+        check(em.bands[0].kind == uf1eq::Band::Kind::LowShelf
+              && em.bands[2].kind == uf1eq::Band::Kind::HighShelf,
+              "Shelve is low on band 1 and high on band 3");
+        check(em.bands[3].kind == uf1eq::Band::Kind::HighPass && em.bands[3].order == 4
+              && em.bands[3].freq == 80.0, "slope index 3 draws 24 dB/oct");
+        put("/playback/0/eq/enable", 1);
+        check(!u::eqModel(s3, u::Row::Playback, 0).on, "a playback never has an EQ");
+
+        check(u::nudgeDb(kDbOff, 1, 0.5) == -60.0, "off climbs to -60 first");
+        check(u::nudgeDb(-60.0, -1, 0.5) == -60.5 && u::nudgeDb(5.8, 2, 0.5) == 6.0,
+              "nudges in steps, clamps at +6");
+        check(u::nudgeDb(-99.2, -1, 0.5) == kDbOff, "below -99 is off");
     }
 
     if (g_fail == 0) std::printf("test_rme_osc: all checks passed\n");

@@ -144,6 +144,29 @@ int main()
         check(col[0] == 0 || true, "columns 0..1 are the caller's header, untouched here");
     }
 
+    // ── filter order: TotalMix' low cut, 6/12/18/24 dB/oct (2026-09-21) ──────
+    {
+        using uf1eq::Band;
+        // Order 2 is exactly the expression the graph has always drawn.
+        Band hp; hp.kind = Band::Kind::HighPass; hp.freq = 1000.0;
+        const double r = 1000.0 / 250.0;
+        check(std::fabs(uf1eq::bandDb(hp, 250.0) - (-10.0 * std::log10(1.0 + r * r * r * r))) < 1e-12,
+              "order 2 (the default) is the old curve, to the bit");
+        // Far below the corner, one octave costs n x 6.02 dB.
+        for (int n = 1; n <= 4; ++n) {
+            hp.order = n;
+            const double oct = uf1eq::bandDb(hp, 31.25) - uf1eq::bandDb(hp, 62.5);
+            char what[80];
+            std::snprintf(what, sizeof(what), "order %d falls %d dB per octave", n, 6 * n);
+            check(std::fabs(oct - (-6.0206 * n)) < 0.05, what);
+        }
+        Band lp; lp.kind = Band::Kind::LowPass; lp.freq = 1000.0; lp.order = 4;
+        const double octLp = uf1eq::bandDb(lp, 16000.0) - uf1eq::bandDb(lp, 8000.0);
+        check(std::fabs(octLp - (-24.08)) < 0.1, "the low pass takes the order too");
+        hp.order = 4; hp.freq = 5.0;
+        check(uf1eq::bandDb(hp, 20.0) == 0.0, "the 9 Hz rail still means off, at any order");
+    }
+
     if (g_fail == 0) std::printf("test_uf1_eq: all checks passed\n");
     return g_fail == 0 ? 0 : 1;
 }

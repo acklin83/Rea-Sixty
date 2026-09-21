@@ -47,11 +47,38 @@ enum class LinkState {
     Silent,     // it answered once and stopped (TotalMix quit, remote switched off)
 };
 
+// One V-Pot of the UF1 side-car. `target` is a role or a fixed channel (see
+// RmeUf1.h), `turn` what rotating does, `push` what pressing does.
+struct VpotSlot {
+    std::string target = "phones1";
+    std::string turn   = "volume";    // "volume" | "none"
+    std::string push   = "select";    // "select" | "mute" | "none"
+};
+
 struct Config {
     bool        enabled  = false;
     std::string host     = "127.0.0.1";
     int         sendPort = 7005;   // TotalMix listens here (its "Port incoming")
     int         recvPort = 7006;   // TotalMix answers here (its "Port outgoing")
+
+    // ── the UF1 side-car, everything a user may move (Frank 21.09.: "Muss
+    // ALLES customizeable sein, was wo erscheint"). Defaults: Phones 1-4 on the
+    // four pots, Main on the jog.
+    VpotSlot    vpots[4] = { {"phones1"}, {"phones2"}, {"phones3"}, {"phones4"} };
+    std::string jogTarget  = "main";
+    double      jogStepDb  = 0.5;
+    double      vpotStepDb = 0.5;
+    // TotalMix colour index (0 hidden, 1 white .. 8 pink) -> UF1 palette index
+    // for the colour bar. Frank assigns these himself; the defaults are only the
+    // nearest names in Palette.cpp.
+    int         colourMap[9] = { 0x00, 0x01, 0x0C, 0x08, 0x02, 0x04, 0x03, 0x07, 0x0B };
+
+    // Host and ports only. A pot or a colour changing must not drop the link.
+    bool sameConnection(const Config& o) const
+    {
+        return enabled == o.enabled && host == o.host
+            && sendPort == o.sendPort && recvPort == o.recvPort;
+    }
 };
 
 // rme.json. Unknown fields are not an error; a file that does not parse leaves

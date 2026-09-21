@@ -36,6 +36,9 @@ struct Band {
     double freq   = 1000.0;
     double gainDb = 0.0;
     double q      = 0.7;   // ignored by the shelves and by the two filters
+    // The two filters only: Butterworth order, n x 6 dB/oct. 2 is what the
+    // SSL/REAPER graph has always drawn.
+    int    order  = 2;
 };
 
 struct Model {
