@@ -306,6 +306,16 @@ constexpr uint16_t kFocusedParam = 0x010e;  // single focused param text (name+v
 // SSL re-sends it on every page change. ⚠ The ORIGIN is HERE, not in the odd byte
 // of kVpotBars — that one is brightness (hardware-measured).
 constexpr uint16_t kVpotStyle    = 0x010d;
+// ⇨ UND ES GIBT EINEN FUENFTEN STIL: 0x04. Aus cap141 (SSL im DAW-Layer,
+// 2026-09-21): dort steht 0x010d auf `04 04 04 04`. Bekannt waren bisher 0x01
+// Zeiger, 0x02 Fuellung von links, 0x03 leer, 0x08 Fuellung aus der Mitte.
+// Wie 0x04 aussieht, ist in unserer Ebene noch nicht ausprobiert.
+constexpr uint8_t kVpotStyleSslDaw = 0x04;
+// ⇨ EIN TEXTFELD PRO V-POT, das wir nie beschrieben haben. Indiziert wie
+// kFocusedParam: `{index} + Text`, vier Saetze. SSL schreibt dort im DAW-Layer
+// die Kanalnummern "1" bis "4" (cap141). Ob es in unserer Ebene (Layout 3)
+// ueberhaupt rendert, ist offen.
+constexpr uint16_t kVpotNumber   = 0x010b;
 constexpr uint16_t kVpotBars     = 0x010f;  // 4 V-pot readout bars
 constexpr uint16_t kHeaderRow    = 0x011c;  // Channel view: 8 x 25-byte ASCII header
                                             // (REAPER | N/8 | OFF). Meter view: 6 x 25-byte
@@ -348,11 +358,16 @@ constexpr uint16_t kSoloActive   = 0x0120;
 // bevor wir wussten, welche Adresse dahintersteckt.
 constexpr uint16_t kColourBars4  = 0x012b;
 }
-// ⚠ 0x011b is a COMMAND element, not data — the one thing the init replay writes
-// with a ZERO-length payload. Writing bytes to it tears the whole channel layout
-// down (every text field gone, only the EQ graph and timecode survive) and needs
-// a REAPER restart. Proven on hardware 2026-08-10. If it is ever wanted, send it
-// EMPTY, the way SSL does. 0x0100..0x011a render nothing at all — swept, blank.
+// ⚠ 0x011b, KORRIGIERT 2026-09-21. Der Satz hier lautete: "a COMMAND element,
+// not data ... writing bytes to it tears the whole channel layout down ... if it
+// is ever wanted, send it EMPTY, the way SSL does." Der erste Teil stimmt und ist
+// am Geraet bezahlt worden (10.08.2026: jedes Textfeld weg, REAPER-Neustart).
+// Der letzte Halbsatz stimmt NICHT: er war aus EINEM Zusammenhang, dem Init,
+// verallgemeinert. In cap141 schreibt SSL beim Eintritt in Layout 2
+// `ff 67 04 01 1b 7e 0c` — also ZWEI BYTES.
+// ⇨ Die Regel lautet deshalb nicht "immer leer", sondern: **leer im Init, und
+// alles andere nur als Teil einer Eintrittsfolge, die man abgelesen hat.**
+// Freihaendig Bytes dorthin schicken bleibt der Weg in den Neustart. 0x0100..0x011a render nothing at all — swept, blank.
 // ⛔ AND THAT SWEEP WAS SCOPED TO ONE LAYOUT. "Blank" is an answer about the
 // layout the panel was in, not about the element. 0x0100 is the LARGE-LCD
 // LAYOUT SELECTOR, {layout, screen}: we drive {03,00} for the channel plane and
