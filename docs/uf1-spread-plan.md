@@ -1,7 +1,17 @@
-# SPREAD auf Layout 1: der ganze Plan
+# RME-Side-Car in Rea-Sixty (SPREAD auf Layout 1): der ganze Plan
 
 Stand 21.09.2026. **Nichts davon ist gebaut.** Freigabe durch Frank steht aus.
 Alles hier ist nach v0.6.0 (Grenze `87edabf`).
+
+## ⛔ Worum es hier geht, und worum nicht
+
+Drei Dinge benutzen dieselben Layout-1-Messungen und sind trotzdem getrennt:
+
+| | was | wo es läuft | dieser Plan? |
+|---|---|---|---|
+| 1 | **RME Monitor als Side-Car in Rea-Sixty** | in REAPER, die UF1 steuert TotalMix | **ja, nur das** |
+| 2 | neue REAPER-Ansichten auf Layout 1/2 (z. B. vier Spuren wie SSLs „DAW Faders") | in REAPER, die UF1 steuert REAPER | nein, eigener Plan |
+| 3 | ORC, das Standalone | ohne REAPER | nein, später |
 
 ## Was SPREAD ist
 
@@ -133,10 +143,9 @@ Maler.
 
 ## Offene Fragen, die Frank entscheidet
 
-1. **Farbbalken:** TotalMix hat 8 Farben, die UF1 13. Die Zuordnung braucht
-   einen Ableser. Vorschlag: die Sonde läuft die UF1-Palette ab, Frank
-   fotografiert, ich lese die Farben aus den Fotos. Oder: Farbbalken im ersten
-   Schritt weglassen.
+1. ~~Farbbalken~~ **Entschieden 21.09.: Frank ordnet die 8 TotalMix-Farben
+   selbst den UF1-Palettenindizes zu** („die farben kann ich noch selbst").
+   Dafür die Sonde, Element 4, Palettenstart durchschalten.
 2. **Rendert `0x010b` in Layout 3?** Wenn ja, bleibt nach dem Austritt Text
    über den V-Pots stehen. Eine Sondenrunde klärt das (Element 12 auf L3 S0).
 3. **Soft-Keys:** leer lassen, oder schon Dim / Mono / Speaker B / Talkback?
