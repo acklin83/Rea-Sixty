@@ -7217,13 +7217,14 @@ MediaTrack* uf8StripSelTrack_(int strip, int bankOffset, int trackCount,
     return bankTr;
 }
 
-// The UF1's twin: which track the SMALL LCD's level and GR read. The UF1 as the
+// The UF1's twin: which track the fader zone STANDS FOR, for its level and GR
+// and for SEL (renamed from uf1FaderMeterTrack_ when SEL joined, 2026-09-21). The UF1 as the
 // Extender's ninth strip carries the ninth SEND in a fader routing mode, and
 // its name, dB, fader, pan and cut already follow uf1ExtenderSendRoute_; the
 // meter asked uf1FaderTrack_() and showed the source track (same bug as the
 // UF8 strips, found the same day, Frank: "ja unbedingt" for v0.6). Outside the
 // Extender's routing mode it is uf1FaderTrack_(), unchanged.
-MediaTrack* uf1FaderMeterTrack_()
+MediaTrack* uf1FaderShownTrack_()
 {
     if (uf1ExtenderRouteFader_()) return routeTargetTrack_(uf1ExtenderSendRoute_());
     return uf1FaderTrack_();
@@ -20385,7 +20386,11 @@ void drainInputQueue()
             // fader zone its own resolver and left a caller behind on `tr`.
             // uf1FaderTrack_ falls back to uf1FocusedTrack_ whenever the extender
             // branch does not fire, so Extender-off behaviour is unchanged.
-            if (MediaTrack* tr = uf1FaderTrack_()) {
+            // ⇨ AND AS THE EXTENDER'S NINTH SEND STRIP, THE SEND'S TRACK: the same
+            // track its name and meter show, like SEL on the UF8's send strips
+            // (Frank 2026-09-21, v0.6). A hardware output or an empty slot has
+            // no track, so SEL does nothing there.
+            if (MediaTrack* tr = uf1FaderShownTrack_()) {
                 // Picking a channel by hand outranks any earlier activation,
                 // and anchors the UF1 to it (last-touched does not move on a
                 // selection, so nothing would follow otherwise).
@@ -27613,7 +27618,7 @@ void uf1PaintMeter_(MediaTrack* tr, bool force)
     // track, and borrowing the big screen's one would put the selection's level
     // over a fader that is parked and inert (see uf1FaderTrack_).
     // uf1ChannelMeterBytes_ zeroes on nullptr.
-    uf1ChannelMeterBytes_(uf1FaderMeterTrack_(), chLvL, chLvR, chComp, chGate);
+    uf1ChannelMeterBytes_(uf1FaderShownTrack_(), chLvL, chLvR, chComp, chGate);
     if (screen == 1) {
         // ⛔ ANALOGUE STREAMS SSL 360 2.1.12's GROUP, NOT THE LIVE LEVEL.
         // cap130 (2.1.12, Analogue, 2708 cycles): 0x0009=ffff0000, 0x000a=0,
@@ -31943,7 +31948,12 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     // Kanal nicht selektiert ist"). The fader-colour BAR below still shows the track
     // colour regardless. `selected` folds into the change key so a selection change
     // (colour unchanged) still repaints.
-    const bool     selSel = GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5;
+    // As the Extender's ninth SEND strip the LED shows the send's track, the one
+    // SEL selects (uf1FaderShownTrack_), dark for a hardware output or an empty
+    // slot. Colour and channel number still follow the source track (below).
+    MediaTrack* const selTr = sendZone
+        ? (sendValid ? routeTargetTrack_(*sendOverride) : nullptr) : tr;
+    const bool     selSel = selTr && GetMediaTrackInfo_Value(selTr, "I_SELECTED") > 0.5;
     // Sel Mode REC / REC+MON retargets this LED to the ARM state, exactly like the
     // UF8's SEL row (ledColourFor, main.cpp ~18802): bright red armed, dim red not.
     // The selection bit is invisible in this mode by design — while you are arming,
@@ -33782,7 +33792,7 @@ void uf1PaintChannel_()
         uint8_t lvL = 0, lvR = 0, compByte = 0x00, gateByte = 0x00;
         // Fader side, and in the Extender's routing mode the far end of the
         // ninth send (uf1FaderMeterTrack_), like the name above it.
-        uf1ChannelMeterBytes_(uf1FaderMeterTrack_(), lvL, lvR, compByte, gateByte);
+        uf1ChannelMeterBytes_(uf1FaderShownTrack_(), lvL, lvR, compByte, gateByte);
         const uint8_t k0009i[] = {lvL, lvR, 0x00, 0x00};       // LEVEL L/R
         const uint8_t k000ai[] = {0x00, 0x00, 0x00, 0x00};     // idle (unknown)
         const uint8_t kZeroi = 0x00;
