@@ -32980,6 +32980,15 @@ static void uf1PaintLayoutProbe_()
         // Wertzeilen und Segmentleiste (Frank 21.09., IMG_4675). Die Frage:
         // gibt der Stil die Reihe frei?
         { 0x010e, 0, { 0, 0, 0, 0 } },
+        // 17 + 18: WIE BREIT? Ein Buchstabenlineal A..S (19 Zeichen, so lang
+        // wie unsere Wertzeile) NUR auf Pot 1, die anderen leer, damit nichts
+        // ueberlappt. In Layout 1 lief unsere Zeile in den Nachbarpot (Frank
+        // 21.09., IMG_4678). Die Antwort ist ein Buchstabe, keine Farbe:
+        // "bis H, dann Luecke, dann ab L bis Q".
+        // 17 = Wertzeile 0x010e (Stil 0x04, sonst rendert sie in L1 nicht),
+        // 18 = das Textfeld pro V-Pot 0x010b.
+        { 0x010e, 1, { 0, 0, 0, 0 } },
+        { 0x010b, 1, { 0, 0, 0, 0 } },
     };
     constexpr int kProbeElemCount =
         static_cast<int>(sizeof(kProbeElems) / sizeof(kProbeElems[0]));
@@ -32993,7 +33002,7 @@ static void uf1PaintLayoutProbe_()
     for (int i = 0; i < kProbeElemCount; ++i) {
         const auto& e = kProbeElems[i];
         const bool pick = (only == 0) || (only == i + 1);
-        if (pick && e.addr == 0x010b) {
+        if (pick && e.addr == 0x010b && e.n == 0) {
             for (uint8_t k = 0; k < 4; ++k) {
                 std::vector<uint8_t> p;
                 p.push_back(k);
@@ -33004,7 +33013,7 @@ static void uf1PaintLayoutProbe_()
             }
             continue;
         }
-        if (!pick && e.addr == 0x010b) {
+        if (!pick && e.addr == 0x010b && e.n == 0) {
             // ⛔ LOESCHEN, SONST STEHT ES IM NAECHSTEN FOTO. Leer = nur das
             // Indexbyte, so loescht SSL 0x010e im Eintritts-Burst (cap141).
             for (uint8_t k = 0; k < 4; ++k)
@@ -33079,6 +33088,28 @@ static void uf1PaintLayoutProbe_()
             const uint8_t styles[4] = { 0x01, 0x01, 0x01, 0x01 };
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, styles));
+            continue;
+        }
+        if (e.n == 1 && (e.addr == 0x010e || e.addr == 0x010b)) {
+            if (!pick) continue;   // 9 und 12 haben die Reihe schon geleert
+            static constexpr char kRuler[] = "ABCDEFGHIJKLMNOPQRS";
+            const uint16_t a = (e.addr == 0x010e) ? uf1::scr::kFocusedParam
+                                                  : uf1::scr::kVpotNumber;
+            for (uint8_t k = 0; k < 4; ++k) {
+                std::vector<uint8_t> p;
+                p.push_back(k);
+                if (k == 0)
+                    for (const char* c = kRuler; *c; ++c)
+                        p.push_back(static_cast<uint8_t>(*c));
+                g_uf1_dev->send(uf1::buildScreen(a, p));
+            }
+            if (e.addr == 0x010e) {
+                const uint8_t bars[8] = { 0x14, 0x80, 0x32, 0x80, 0x50, 0x80, 0x64, 0x80 };
+                const uint8_t st[4] = { uf1::scr::kVpotStyleSslDaw, uf1::scr::kVpotStyleSslDaw,
+                                        uf1::scr::kVpotStyleSslDaw, uf1::scr::kVpotStyleSslDaw };
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, st));
+            }
             continue;
         }
         if (pick && e.addr == 0x010e) {
@@ -47623,7 +47654,7 @@ void reasixty_setUf1ProbeBarBase(int v)
 }
 void reasixty_setUf1ProbeOnly(int v)
 {
-    if (v < 0 || v > 16) return;
+    if (v < 0 || v > 18) return;
     if (g_uf1ProbeOnly.exchange(v) != v)
         g_uf1ProbeGen.fetch_add(1, std::memory_order_relaxed);
 }
