@@ -337,5 +337,6 @@ S0 bis S2 zeigen zwei Stellen, S3 vier. Frank: S2 blau, S3 grün.
 **Keine in Layout 2**, jetzt mit zweistufiger Umschaltung bestätigt. `0x012b`
 gehört zu Layout 1.
 
-Nicht geprüft: ob die V-Pot-Reihe in Layout 2 dieselben Stilregeln hat wie in
-Layout 1. cap141 zeigt, dass SSL dort Stil `0x04` fährt.
+**V-Pot-Reihe in Layout 2: dieselbe Stilregel wie in Layout 1.** Element 9
+(Stil `0x01`) ohne Reihe, Element 16 (Stil `0x04`) mit. Passt zu cap141, wo SSL
+dort `0x04` fährt. `0x02`, `0x03`, `0x08` in Layout 2 nicht einzeln geprüft.
