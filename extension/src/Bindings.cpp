@@ -777,6 +777,16 @@ void seedRmeSideCarBank_(Config& c)
     bank[3] = mkBuiltin("rme_talkback",  Behavior::Momentary, "Talkback");
 }
 
+// Second factory bank of the RME side-car: Main onto the fader (Frank 21.09.).
+// Same rule, only into an empty bank.
+void seedRmeSideCarBank2_(Config& c)
+{
+    Binding* bank = c.uf1SoftBanks[kUf1RmeBankBase + 1];
+    for (int s = 0; s < kUf1SoftBankSlots; ++s)
+        if (!uf1BankSlotEmpty_(bank[s])) return;
+    bank[0] = mkBuiltin("rme_fader_main", Behavior::Momentary, "Main");
+}
+
 void seedFactoryDefaults_(Config& c)
 {
     crumb_("seed: enter");
@@ -1359,6 +1369,7 @@ void seedFactoryDefaults_(Config& c)
     // views that seed their own 5-8. See fillDerivedUf1Slots_.
     fillDerivedUf1Slots_(c);
     seedRmeSideCarBank_(c);
+    seedRmeSideCarBank2_(c);
 }
 
 // ---- JSON serialization ---------------------------------------------------
@@ -3057,7 +3068,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
-constexpr int kCurrentBindingsVersion = 42;
+constexpr int kCurrentBindingsVersion = 43;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4228,6 +4239,9 @@ void load()
                 // The RME side-car's own banks (10..19) are new; give the first
                 // one the control-room keys if it is still empty.
                 seedRmeSideCarBank_(tmp);
+            }
+            if (tmp.version < 43) {
+                seedRmeSideCarBank2_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -5473,9 +5487,10 @@ void walkBoundTo_(const std::string& builtinName,
                     && !(bd.hasLongPress && matchSlot(bd.longPress[m])))
                     continue;
                 char buf[96];
-                if (b >= kUf1RmeBankBase)
-                    snprintf(buf, sizeof(buf), "UF1 RME side-car bank %d / key %d",
-                             b - kUf1RmeBankBase + 1, si + 1);
+                if (const int set = uf1BankSideCarSet(b); set >= 0)
+                    snprintf(buf, sizeof(buf), "UF1 %s side-car bank %d / key %d",
+                             set == kUf1SideCarSetRme ? "RME" : "Item Volume",
+                             b - uf1SideCarBankBase(set) + 1, si + 1);
                 else
                     snprintf(buf, sizeof(buf), "UF1 bank %d / key %d",
                              b + 1, si + 1);
@@ -5742,12 +5757,13 @@ int uf1SoftBankInUseCount()
     return highest + 1 >= 1 ? highest + 1 : 1;
 }
 
-int uf1RmeBankInUseCount()
+int uf1SideCarBankInUseCount(int set)
 {
+    if (set < 0 || set >= kUf1SideCarBankSets) return 1;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     int highest = -1;
-    for (int r = 0; r < kUf1RmeBankCount; ++r) {
-        const int b = kUf1RmeBankBase + r;
+    for (int r = 0; r < kUf1SideCarBankCount; ++r) {
+        const int b = uf1SideCarBankBase(set) + r;
         bool inUse = false;
         for (int m = 0; m < kSoftKeyModifierSets && !inUse; ++m)
             if (g_cfg.uf1SoftBankDynamic[b][m] != DynamicBankKind::None) inUse = true;
@@ -7775,6 +7791,9 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "Switches TotalMix' Main output between Main and Speaker B." },
     { "rme_talkback",
       "Talkback in TotalMix, on or off." },
+    { "rme_fader_main",
+      "Puts TotalMix' Main output on the UF1 fader in the RME side-car. The "
+      "lamp is lit while Main is on the fader." },
     { "obs_record_toggle",
       "Starts or stops the recording in OBS. The lamp follows what OBS "
       "reports, so it lights when OBS is really running, not when the key "
@@ -8440,6 +8459,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "rme_mono", "Mono" },
     { "rme_speaker_b", "Speaker B" },
     { "rme_talkback", "Talkback" },
+    { "rme_fader_main", "Main" },
     { "obs_record_toggle", "OBS Rec" },
     { "obs_record_pause", "OBS Pause" },
     { "obs_chapter_marker", "OBS Chapter" },

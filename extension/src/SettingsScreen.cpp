@@ -119,8 +119,8 @@ int  reasixty_scribbleBrightnessLevel();
 void reasixty_setBrightnessLevel(int level);
 void reasixty_setScribbleBrightnessLevel(int level);
 int  reasixty_uf1SoftBank();
-int  reasixty_uf1RmeBank();
-void reasixty_setUf1RmeBank(int bank);
+int  reasixty_uf1SideCarBank(int set);
+void reasixty_setUf1SideCarBank(int set, int bank);
 int  reasixty_uf1CsPage();                  // live plugin-mode page (◄ ►)
 void reasixty_setUf1CsPage(int page);
 // UF1 soft-key bank naming: the announced string for a bank, and the ten cells a
@@ -712,24 +712,33 @@ static inline void help_(ImGui_Context* ctx, const char* text)
     if (ImGui_IsItemHovered(ctx, nullptr)) ImGui_SetTooltip(ctx, text);
 }
 
-// ⇨ WHICH UF1 BANKS THE EDITOR IS ON: the DAW view's ten (0..9) or the RME
-// side-car's own ten (kUf1RmeBankBase..), both in the same store. Every place
-// the editor used to ask reasixty_uf1SoftBank() for "the bank being edited"
-// asks uf1EditLiveBank_() now, and gets the ABSOLUTE index into the store.
-static bool g_uf1BankSetRme = false;
+// ⇨ WHICH UF1 BANKS THE EDITOR IS ON: the DAW view's ten (0..9), or the ten of
+// one side-car mode (uf1SideCarBankBase(set)..), all in the same store. Every
+// place the editor used to ask reasixty_uf1SoftBank() for "the bank being
+// edited" asks uf1EditLiveBank_() now, and gets the ABSOLUTE index.
+// -1 = DAW, else a side-car set (Bindings.h, kUf1SideCarSet*).
+static int g_uf1BankSet = -1;
+static const char* uf1BankSetName_(int set)
+{
+    switch (set) {
+        case uf8::bindings::kUf1SideCarSetRme:  return "Side-Car: RME";
+        case uf8::bindings::kUf1SideCarSetItem: return "Side-Car: Item Volume";
+        default:                                return "DAW";
+    }
+}
 static int uf1EditBankBase_()
 {
-    return g_uf1BankSetRme ? uf8::bindings::kUf1RmeBankBase : 0;
+    return g_uf1BankSet < 0 ? 0 : uf8::bindings::uf1SideCarBankBase(g_uf1BankSet);
 }
 static int uf1EditLiveBank_()
 {
-    return g_uf1BankSetRme ? uf8::bindings::kUf1RmeBankBase + reasixty_uf1RmeBank()
-                           : reasixty_uf1SoftBank();
+    return g_uf1BankSet < 0 ? reasixty_uf1SoftBank()
+                            : uf1EditBankBase_() + reasixty_uf1SideCarBank(g_uf1BankSet);
 }
 static void uf1EditSetLiveBank_(int absBank)
 {
-    if (g_uf1BankSetRme) reasixty_setUf1RmeBank(absBank - uf8::bindings::kUf1RmeBankBase);
-    else                 reasixty_setUf1SoftBank(absBank);
+    if (g_uf1BankSet < 0) reasixty_setUf1SoftBank(absBank);
+    else reasixty_setUf1SideCarBank(g_uf1BankSet, absBank - uf1EditBankBase_());
 }
 
 static inline double scaleW_(ImGui_Context* ctx, double designWidth)
@@ -2910,7 +2919,7 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     // Bank indicator (bottom of the screen), mirrors the hardware "N/10".
     {
         char bk[16];
-        snprintf(bk, sizeof bk, g_uf1BankSetRme ? "RME %d/%d" : "BANK %d/%d",
+        snprintf(bk, sizeof bk, g_uf1BankSet >= 0 ? "SIDE %d/%d" : "BANK %d/%d",
                       uf1Bank - uf1EditBankBase_() + 1, uf8::bindings::kUf1SoftBankCount);
         drawTextCentered_(c, kScrX0 + kScrW / 2.0f, 186, 0x5A6270FF, bk);
     }
@@ -5683,9 +5692,10 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
     auto& sp = bd.shortPress[modIdx];
 
     char hdr[120];
-    if (bank >= kUf1RmeBankBase)
-        snprintf(hdr, sizeof(hdr), "Editing: Soft-Key %d  (RME side-car bank %d / %d)",
-                 slotIdx + 1, bank - kUf1RmeBankBase + 1, kUf1RmeBankCount);
+    if (const int set = uf1BankSideCarSet(bank); set >= 0)
+        snprintf(hdr, sizeof(hdr), "Editing: Soft-Key %d  (%s, bank %d / %d)",
+                 slotIdx + 1, uf1BankSetName_(set),
+                 bank - uf1SideCarBankBase(set) + 1, kUf1SideCarBankCount);
     else
         snprintf(hdr, sizeof(hdr), "Editing: Soft-Key %d  (Bank %d / %d)",
                  slotIdx + 1, bank + 1, kUf1SoftBankCount);
@@ -7882,16 +7892,23 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             // Held for the whole table: a click writes both of these, and the
             // rows after it would otherwise mark a different cell than the rows
             // before it in the same frame.
-            // ⇨ DAW OR RME SIDE-CAR: the same matrix over the other ten banks.
-            if (ImGui_RadioButton(ctx, "DAW##uf1bankset_daw", !g_uf1BankSetRme))
-                g_uf1BankSetRme = false;
-            help_(ctx, "The ten banks of the UF1's DAW view.");
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (ImGui_RadioButton(ctx, "RME side-car##uf1bankset_rme", g_uf1BankSetRme))
-                g_uf1BankSetRme = true;
-            help_(ctx, "The ten banks the RME side-car shows on its soft keys "
-                       "(Shift + MODE, then RME). Bank 1 comes with Dim, Mono, "
-                       "Speaker B and Talkback.");
+            // ⇨ DAW OR ONE OF THE SIDE-CARS: the same matrix over that set's ten
+            // banks. Every side-car mode has its own (Frank 21.09.).
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
+            if (ImGui_BeginCombo(ctx, "Banks for##uf1bankset",
+                                 uf1BankSetName_(g_uf1BankSet), nullptr)) {
+                for (int set = -1; set < uf8::bindings::kUf1SideCarBankSets; ++set) {
+                    bool isSel = (g_uf1BankSet == set);
+                    if (ImGui_Selectable(ctx, uf1BankSetName_(set), &isSel,
+                                         nullptr, nullptr, nullptr))
+                        g_uf1BankSet = set;
+                }
+                ImGui_EndCombo(ctx);
+            }
+            help_(ctx, "The DAW view's ten banks, or the ten of a side-car "
+                       "(Shift + MODE, then the side-car's key). Each side-car "
+                       "has its own. The RME side-car's bank 1 comes with Dim, "
+                       "Mono, Speaker B and Talkback.");
             const int selBank = uf1EditLiveBank_();
             const int selSlot = slotIdx;
             ImGui_Text(ctx, "Soft-Key Banks");

@@ -52,7 +52,10 @@ enum class LinkState {
 struct VpotSlot {
     std::string target = "phones1";
     std::string turn   = "volume";    // "volume" | "none"
-    std::string push   = "select";    // "select" | "mute" | "none"
+    // "submix" (default since 21.09.: this output becomes the submix the
+    // inputs and playbacks on the fader write into; the fader stays put),
+    // "select" (this channel onto the fader), "mute", "none".
+    std::string push   = "submix";
 };
 
 struct Config {
@@ -120,7 +123,10 @@ class Manager {
 
     // The control-room switches, without copying the whole cache: surface LEDs
     // ask this every tick.
-    struct ControlRoom { bool dim = false, mono = false, speakerB = false, talkback = false; };
+    struct ControlRoom {
+        bool dim = false, mono = false, speakerB = false, talkback = false;
+        int  mainOut = -1;
+    };
     ControlRoom controlRoom() const;
 
   private:

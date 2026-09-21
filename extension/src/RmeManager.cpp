@@ -58,7 +58,7 @@ std::string configToJson(const Config& c)
     char buf[512];
     snprintf(buf, sizeof(buf),
         "{\n"
-        "  \"version\": 1,\n"
+        "  \"version\": 2,\n"
         "  \"enabled\": %s,\n"
         "  \"connection\": { \"host\": \"%s\", \"send\": %d, \"receive\": %d },\n",
         c.enabled ? "true" : "false", host.c_str(), c.sendPort, c.recvPort);
@@ -94,6 +94,8 @@ bool configFromJson(const std::string& json, Config& out)
     if (!root || !root->is_object()) return false;
 
     Config c = out;
+    int version = 1;
+    if (const char* v = root->get_string_by_name("version", true)) version = std::atoi(v);
     if (const char* v = root->get_string_by_name("enabled", true))
         c.enabled = (std::strcmp(v, "true") == 0 || std::strcmp(v, "1") == 0);
     if (const wdl_json_element* conn = root->get_item_by_name("connection");
@@ -109,6 +111,11 @@ bool configFromJson(const std::string& json, Config& out)
             if (const char* v = e->get_string_by_name("target")) c.vpots[i].target = v;
             if (const char* v = e->get_string_by_name("turn"))   c.vpots[i].turn   = v;
             if (const char* v = e->get_string_by_name("push"))   c.vpots[i].push   = v;
+            // v1 wrote the old default "select" for every pot. Frank 21.09.:
+            // a push on Phones 1-4 must not move the fader, it picks the
+            // submix. v1 had no way to say "select" on purpose, so all of it
+            // goes.
+            if (version < 2 && c.vpots[i].push == "select") c.vpots[i].push = "submix";
         }
     }
     if (const wdl_json_element* jog = root->get_item_by_name("jog"); jog && jog->is_object()) {
@@ -199,7 +206,7 @@ std::string Manager::status() const
 Manager::ControlRoom Manager::controlRoom() const
 {
     std::lock_guard<std::mutex> lk(mx_);
-    return { state_.dim, state_.mono, state_.speakerB, state_.talkback };
+    return { state_.dim, state_.mono, state_.speakerB, state_.talkback, state_.mainOut };
 }
 
 State Manager::snapshot() const

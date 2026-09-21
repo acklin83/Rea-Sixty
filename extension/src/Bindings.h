@@ -768,9 +768,29 @@ constexpr int kUf1SoftBankSlots = 4;
 // is. kUf1SoftBankCount keeps meaning "the DAW banks" (paging, header N/M,
 // startup bank, uf1_bank_select); kUf1SoftBankStore is the size of the store
 // and bounds every read, write and walk over it.
-constexpr int kUf1RmeBankBase   = 10;
-constexpr int kUf1RmeBankCount  = 10;
-constexpr int kUf1SoftBankStore = kUf1RmeBankBase + kUf1RmeBankCount;
+//
+// ⇨ AND EVERY SIDE-CAR MODE HAS ITS OWN SET OF TEN (Frank 21.09.: "Drop-Down
+// fuer ALLE Sidecar Modes", "jeder Modus eigene Baenke"). A set is addressed by
+// number, not by the side-car's enum, so the store layout never moves when a
+// mode is added: set 0 = RME at 10..19 (where the RME factory bank landed on
+// the first day), set 1 = Item Volume at 20..29. A new side-car takes the next
+// set and grows kUf1SideCarBankSets.
+constexpr int kUf1SideCarBankCount = 10;
+constexpr int kUf1SideCarBankSets  = 2;
+constexpr int kUf1SideCarSetRme    = 0;
+constexpr int kUf1SideCarSetItem   = 1;
+constexpr int uf1SideCarBankBase(int set)
+{
+    return kUf1SoftBankCount + set * kUf1SideCarBankCount;
+}
+// -1 for a DAW bank, else the side-car set a stored bank belongs to.
+constexpr int uf1BankSideCarSet(int bank)
+{
+    return bank < kUf1SoftBankCount ? -1 : (bank - kUf1SoftBankCount) / kUf1SideCarBankCount;
+}
+constexpr int kUf1RmeBankBase   = uf1SideCarBankBase(kUf1SideCarSetRme);
+constexpr int kUf1RmeBankCount  = kUf1SideCarBankCount;
+constexpr int kUf1SoftBankStore = kUf1SoftBankCount + kUf1SideCarBankSets * kUf1SideCarBankCount;
 
 // A named snapshot of one UF1 bank. Its own type rather than SoftKeyBankPreset
 // with four of eight slots filled: a preset that could be half-empty by design
@@ -1352,9 +1372,9 @@ bool            recallFactoryUf1BankPreset(int idx, int bank, int mod);
 // dynamic banks or banks with any non-empty slot count. Drives the DAW-mode
 // header denominator + bounds the DAW bank paging. Frank 2026-08-04.
 int             uf1SoftBankInUseCount();
-// The same count over the RME side-car's banks (kUf1RmeBankBase..), relative:
-// 1..kUf1RmeBankCount, min 1. Drives the side-car's own paging and N/M.
-int             uf1RmeBankInUseCount();
+// The same count over one side-car set's banks, relative 1..kUf1SideCarBankCount,
+// min 1. Drives that side-car's own paging and N/M.
+int             uf1SideCarBankInUseCount(int set);
 // Run a UF1 bank slot's action (same long-press + modifier logic as
 // dispatchUserQuickSlot). Returns true if the slot has an action.
 bool     dispatchUf1SoftBankSlot(int bank, int slot, bool pressed);

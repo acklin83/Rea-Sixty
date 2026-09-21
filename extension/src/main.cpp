@@ -735,15 +735,25 @@ inline const char* uf1SideCarName_(int i)
 //   g_rmeSel[row]   der gewaehlte Kanal pro Reihe, -1 = noch keiner
 //   g_rmeSubmix     der zuletzt gewaehlte Ausgang = der Submix, in den Eingaenge
 //                   und Playbacks schreiben, genau wie ein Klick in TotalMix
+// Welcher Bank-Satz zum laufenden Side-Car gehoert, -1 ohne Side-Car.
+inline int uf1SideCarSet_()
+{
+    switch (g_uf1SideCar.load()) {
+        case Uf1SideCar::RmeMonitor: return uf8::bindings::kUf1SideCarSetRme;
+        case Uf1SideCar::ItemVolume: return uf8::bindings::kUf1SideCarSetItem;
+        default:                     return -1;
+    }
+}
 std::atomic<int> g_rmeRow{2};
 std::atomic<int> g_rmeSel[3] = { -1, -1, -1 };
 std::atomic<int> g_rmeSubmix{-1};
 // Das Jog hat gedreht: der Maler blendet den Main-Wert ins Zeitfeld ein. Nur
 // ein Merker, weil uf1FlashTimecode_ Hauptthread-Zustand ist.
 std::atomic<bool> g_rmeJogFlash{false};
-// Die aktive Side-Car-Bank, relativ (0..kUf1RmeBankCount-1). Gespeichert wird
-// sie bei kUf1RmeBankBase + g_rmeBank in denselben Arrays wie die DAW-Baenke.
-std::atomic<int> g_rmeBank{0};
+// Die aktive Bank JEDES Side-Car-Satzes, relativ (0..kUf1SideCarBankCount-1).
+// Gespeichert bei uf1SideCarBankBase(set) + Bank in denselben Arrays wie die
+// DAW-Baenke. Satz 0 = RME, Satz 1 = Item Volume (Bindings.h).
+std::atomic<int> g_sideCarBank[2] = { 0, 0 };
 
 // ⇨ UF1 LAYOUT PROBE (Settings -> About). A diagnostic, not a feature.
 //
@@ -25692,6 +25702,33 @@ static bool uf1RmeEncoder_(uint8_t id, int delta)
     return true;   // V-Pot ueber dem Fader: bewusst nichts, aber auch nicht REAPER
 }
 
+// ⇨ SOFT-KEYS UND < > FUER JEDES SIDE-CAR. Jeder Modus hat seinen eigenen
+// Bank-Satz (Frank 21.09.); derselbe Weg wie in der DAW-Ansicht, nur mit der
+// Bank des Satzes. Waehrend MODE gehalten wird, gehoeren die Keys dem Menue;
+// dessen Druck ist oben schon verbraucht, das Loslassen darf hier nichts
+// ausloesen. true = verbraucht.
+static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
+{
+    const int set = uf1SideCarSet_();
+    if (set < 0) return false;
+    const uint8_t id = ev.id;
+    if (id >= uf1::btn::kDisplaySoft1 && id <= uf1::btn::kDisplaySoft4) {
+        if (!g_uf1ModeMenu.load())
+            uf1SoftBankKey_(uf8::bindings::uf1SideCarBankBase(set) + g_sideCarBank[set].load(),
+                            static_cast<int>(id - uf1::btn::kDisplaySoft1), ev.pressed);
+        return true;
+    }
+    if (id == uf1::btn::kBankLeft || id == uf1::btn::kBankRight) {
+        if (ev.pressed) {
+            const int nb  = std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set));
+            const int dir = (id == uf1::btn::kBankRight) ? 1 : -1;
+            g_sideCarBank[set].store((g_sideCarBank[set].load() % nb + dir + nb) % nb);
+        }
+        return true;
+    }
+    return false;
+}
+
 static bool uf1RmeButton_(const uf1::InputEvent& ev)
 {
     const uint8_t id = ev.id;
@@ -25703,7 +25740,10 @@ static bool uf1RmeButton_(const uf1::InputEvent& ev)
         const auto& slot = cfg.vpots[id - uf1::btn::kVpot1Push];
         const rmeu::Target t = rmeu::resolveTarget(st, slot.target);
         if (!t.visible) return true;
-        if (slot.push == "select") {
+        if (slot.push == "submix") {
+            // Nur Ausgaenge sind ein Submix. Der Fader bleibt, wo er ist.
+            if (t.row == rmeu::Row::Output) g_rmeSubmix.store(t.ch);
+        } else if (slot.push == "select") {
             uf1RmeSelect_(t.row, t.ch);
         } else if (slot.push == "mute") {
             const reasixty::rme::Channel* c = rmeu::channelOf(st, t.row, t.ch);
@@ -25711,25 +25751,6 @@ static bool uf1RmeButton_(const uf1::InputEvent& ev)
                             : t.row == rmeu::Row::Input  ? "/input/" : "/playback/";
             rm.send(std::string(sec) + std::to_string(t.ch) + "/mute",
                     (c && c->mute) ? 0.0f : 1.0f);
-        }
-        return true;
-    }
-    // Die vier Display-Soft-Keys: die EIGENEN Baenke des Side-Cars (Frank 21.09.),
-    // derselbe Weg wie in der DAW-Ansicht, nur mit der Side-Car-Bank. Waehrend
-    // MODE gehalten wird, gehoeren die Keys dem Menue; dessen Druck ist oben
-    // schon verbraucht, das Loslassen darf hier nichts ausloesen.
-    if (id >= uf1::btn::kDisplaySoft1 && id <= uf1::btn::kDisplaySoft4) {
-        if (!g_uf1ModeMenu.load())
-            uf1SoftBankKey_(uf8::bindings::kUf1RmeBankBase + g_rmeBank.load(),
-                            static_cast<int>(id - uf1::btn::kDisplaySoft1), ev.pressed);
-        return true;
-    }
-    // < > blaettern durch die belegten Side-Car-Baenke, mit Umlauf wie in DAW.
-    if (id == uf1::btn::kBankLeft || id == uf1::btn::kBankRight) {
-        if (ev.pressed) {
-            const int nb  = std::max(1, uf8::bindings::uf1RmeBankInUseCount());
-            const int dir = (id == uf1::btn::kBankRight) ? 1 : -1;
-            g_rmeBank.store((g_rmeBank.load() % nb + dir + nb) % nb);
         }
         return true;
     }
@@ -25868,6 +25889,7 @@ void onUf1Event(const uf1::InputEvent& ev)
             }
             // RME-Side-Car: hinter MODE und dem MODE-Menue (das ist der Ausgang),
             // vor allem anderen. Siehe uf1RmeButton_.
+            if (uf1SideCarSoftKeys_(ev)) break;
             if (uf1RmeActive_() && uf1RmeButton_(ev)) break;
             // PRESETS browser: V-Pot4 PUSH = "Select" → load the highlighted preset
             // (cap uf1_rp: V-Pot4 label "Select"). Claimed BEFORE the binding-first
@@ -31391,8 +31413,9 @@ static std::string uf1BankDisplayName_(int bank, int mod)
     }
     char b[16];
     // Side-Car-Baenke (10..19) zaehlen fuer sich von 1 an.
+    const int scSet = uf1BankSideCarSet(bank);
     snprintf(b, sizeof(b), "SOFT %d",
-             bank >= kUf1RmeBankBase ? bank - kUf1RmeBankBase + 1 : bank + 1);
+             scSet >= 0 ? bank - uf1SideCarBankBase(scSet) + 1 : bank + 1);
     return b;
 }
 
@@ -33610,6 +33633,40 @@ static void uf1PaintModeMenuOverlay_(bool changed)
 //
 // Die Lautstaerke eines Items ist LINEARE VERSTAERKUNG wie die einer Spur
 // (1.0 = 0 dB), also gelten dieselben zwei Umrechnungen und dieselbe Kalibrierung.
+// ── Soft-Keys eines Side-Cars: seine eigenen Baenke ─────────────────────────
+// ⛔ DAS MODE-MENUE SCHREIBT SEINE VIER NAMEN DIREKT und verlaesst sich darauf,
+// dass der Besitzer des Schirms beim Loslassen seine eigenen zurueckschreibt
+// (Frank 21.09.: PLUGIN / DAW / METER / SENDS blieben stehen). Darum der
+// erzwungene Durchgang beim Loslassen.
+// Zellen ueber uf1StaticBankCell_, dieselbe Regel wie in der DAW-Ansicht.
+// Dynamische Arten auf einer Side-Car-Bank werden (noch) nicht gemalt.
+// EIN Schreiber fuer jedes Side-Car, beide Maler rufen ihn.
+static void uf1PaintSideCarSoftKeys_(bool force)
+{
+    const int set = uf1SideCarSet_();
+    if (set < 0) return;
+    static bool sMenu = false;
+    const bool menu = g_uf1ModeMenu.load();
+    const bool menuClosed = sMenu && !menu;
+    sMenu = menu;
+    const int nb = std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set));
+    if (g_sideCarBank[set].load() >= nb) g_sideCarBank[set].store(0);
+    const int bank = uf8::bindings::uf1SideCarBankBase(set) + g_sideCarBank[set].load();
+    std::array<Uf1SkCell, 4> cells{};
+    for (int i = 0; i < 4; ++i) cells[static_cast<size_t>(i)] = uf1StaticBankCell_(bank, i);
+    // Ein anderes Side-Car ist ein anderer Satz: dann alles neu.
+    static int sSet = -1;
+    const bool setEdge = (set != sSet);
+    sSet = set;
+    if (!menu) uf1EmitSoftKeyRow_(cells, force || menuClosed || setEdge, false, false);
+    // Der Bankname im Zeitfeld beim Wechsel, wie in der DAW-Ansicht.
+    static int sBank = -1;
+    if (!setEdge && sBank != -1 && sBank != bank && nb > 1)
+        uf1FlashTimecode_(uf1BankDisplayName_(bank,
+            static_cast<int>(uf8::bindings::bankModifierSnapshot())), 1200);
+    sBank = bank;
+}
+
 static void uf1PaintSideCar_()
 {
     if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
@@ -33694,6 +33751,9 @@ static void uf1PaintSideCar_()
     uf1VpotBar_(row, 2, 0.0, false, true);
     uf1VpotBar_(row, 3, 0.0, false, true);
     uf1EmitVpotRow_(row, force);
+
+    // Die eigenen Soft-Key-Baenke des Item-Volume-Side-Cars (Satz 1).
+    uf1PaintSideCarSoftKeys_(force);
 
     // Der Ausgang. Ohne ihn ist das Side-Car eine Falle.
     uf1PaintModeMenuOverlay_(force);
@@ -33807,7 +33867,11 @@ static void uf1PaintRme_()
         const uint16_t pos = g_uf1FaderPos.load();
         if (pos != sSentPos) {
             sSentPos = pos;
-            const double lin = std::clamp(static_cast<double>(pos) / kUf1FaderMax, 0.0, 1.0);
+            // ⛔ DIE ENDZONEN, WIE UEBERALL AM UF1-FADER. Die Hardware meldet am
+            // Anschlag nie ganz 0, und roh geteilt kam der Fader nie unter
+            // -64.x dB, also nie auf -inf (Frank 21.09.). uf1PosToNorm_ rastet
+            // die unteren und oberen 64 Schritte auf 0 / 1 ein.
+            const double lin = uf1PosToNorm_(pos);
             rm.send(rmeu::levelAddress(row, sel, sub, /*faderlin*/ true),
                     static_cast<float>(lin));
         }
@@ -33876,8 +33940,9 @@ static void uf1PaintRme_()
             // dem Fader, schreibt er in den zuletzt gewaehlten Ausgang; der Pot,
             // der diesen Ausgang zeigt, sagt es (Frank 21.09.). Traegt der Pot
             // schon den Stern, ist er selbst der Fader-Kanal und braucht keinen.
-            else if (row != rmeu::Row::Output && t.row == rmeu::Row::Output
-                     && t.ch == sub) label = ">" + label;
+            // Seit der Druck den Submix waehlt, zeigt der Pfeil ihn immer, auch
+            // wenn gerade ein Ausgang auf dem Fader liegt.
+            else if (t.row == rmeu::Row::Output && t.ch == sub) label = ">" + label;
             uf1VpotCell_(vr, i, label, k ? uf1RmeDbText_(d) + "dB" : std::string());
             uf1VpotBar_(vr, i, k ? rme::dbToFaderlin(d) : 0.0, false, /*empty*/ !k);
         }
@@ -33902,32 +33967,7 @@ static void uf1PaintRme_()
         }
     }
 
-    // ── Soft-Keys: die eigenen Side-Car-Baenke ──────────────────────────────
-    // ⛔ DAS MODE-MENUE SCHREIBT SEINE VIER NAMEN DIREKT und verlaesst sich darauf,
-    // dass der Besitzer des Schirms beim Loslassen seine eigenen zurueckschreibt
-    // (Frank 21.09.: PLUGIN / DAW / METER / SENDS blieben stehen). Darum der
-    // erzwungene Durchgang beim Loslassen.
-    // Zellen ueber uf1StaticBankCell_, dieselbe Regel wie in der DAW-Ansicht.
-    // Dynamische Arten auf einer Side-Car-Bank werden (noch) nicht gemalt.
-    {
-        static bool sMenu = false;
-        const bool menu = g_uf1ModeMenu.load();
-        const bool menuClosed = sMenu && !menu;
-        sMenu = menu;
-        const int nb   = std::max(1, uf8::bindings::uf1RmeBankInUseCount());
-        if (g_rmeBank.load() >= nb) g_rmeBank.store(0);
-        const int rel  = g_rmeBank.load();
-        const int bank = uf8::bindings::kUf1RmeBankBase + rel;
-        std::array<Uf1SkCell, 4> cells{};
-        for (int i = 0; i < 4; ++i) cells[static_cast<size_t>(i)] = uf1StaticBankCell_(bank, i);
-        if (!menu) uf1EmitSoftKeyRow_(cells, force || menuClosed, false, false);
-        // Der Bankname im Zeitfeld beim Wechsel, wie in der DAW-Ansicht.
-        static int sBank = -1;
-        if (sBank != -1 && sBank != bank && nb > 1)
-            uf1FlashTimecode_(uf1BankDisplayName_(bank,
-                static_cast<int>(uf8::bindings::bankModifierSnapshot())), 1200);
-        sBank = bank;
-    }
+    uf1PaintSideCarSoftKeys_(force);
 
     // ── Zeitfeld: REAPER-Zeit, und beim Drehen am Jog der Main-Wert ─────────
     // (a) von Franks a+b, 21.09. Das Zeitfeld bleibt REAPERs, der Wert steht nur
@@ -33959,8 +33999,9 @@ static void uf1PaintRme_()
             g_uf1_dev->send(uf1::buildScreen(0x011e, std::span<const uint8_t>(&s011e, 1)));
         }
 
-        auto hdr = uf1PageHeader_(g_rmeBank.load() + 1,
-                                  std::max(1, uf8::bindings::uf1RmeBankInUseCount()));
+        auto hdr = uf1PageHeader_(
+            g_sideCarBank[uf8::bindings::kUf1SideCarSetRme].load() + 1,
+            std::max(1, uf8::bindings::uf1SideCarBankInUseCount(uf8::bindings::kUf1SideCarSetRme)));
         auto putCell = [&](int cell, const std::string& t) {
             for (size_t k = 0; k < 25; ++k)
                 hdr[static_cast<size_t>(cell) * 25 + k] =
@@ -48652,12 +48693,17 @@ int reasixty_uf1SoftBank()
     return g_uf1SoftBank.load();
 }
 
-// Die aktive Bank des RME-Side-Cars, relativ 0..kUf1RmeBankCount-1. Fuer die
-// Bank-Matrix in Settings, die beim Klick die Bank auf der Flaeche einschaltet.
-int reasixty_uf1RmeBank() { return g_rmeBank.load(); }
-void reasixty_setUf1RmeBank(int bank)
+// Die aktive Bank eines Side-Car-Satzes, relativ 0..kUf1SideCarBankCount-1. Fuer
+// die Bank-Matrix in Settings, die beim Klick die Bank auf der Flaeche einschaltet.
+int reasixty_uf1SideCarBank(int set)
 {
-    g_rmeBank.store(std::clamp(bank, 0, uf8::bindings::kUf1RmeBankCount - 1));
+    if (set < 0 || set >= uf8::bindings::kUf1SideCarBankSets) return 0;
+    return g_sideCarBank[set].load();
+}
+void reasixty_setUf1SideCarBank(int set, int bank)
+{
+    if (set < 0 || set >= uf8::bindings::kUf1SideCarBankSets) return;
+    g_sideCarBank[set].store(std::clamp(bank, 0, uf8::bindings::kUf1SideCarBankCount - 1));
 }
 
 void reasixty_setUf1SoftBank(int bank)
@@ -53625,6 +53671,23 @@ void registerBindingHandlers()
         regRmeCr("rme_speaker_b", "/controlroom/speakerb", &CR::speakerB, "RME: Speaker B");
         regRmeCr("rme_talkback",  "/controlroom/talkback", &CR::talkback, "RME: Talkback");
     }
+    // Main auf den Fader des RME-Side-Cars (Frank 21.09.: der V-Pot-Druck waehlt
+    // jetzt den Submix, also braucht Main einen eigenen Weg). Lampe an, solange
+    // Main auf dem Fader liegt.
+    registerBuiltin("rme_fader_main", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const int m = reasixty::rme::manager().controlRoom().mainOut;
+            if (m >= 0) uf1RmeSelect_(rmeu::Row::Output, m);
+        },
+        [](int) {
+            const int m = reasixty::rme::manager().controlRoom().mainOut;
+            const int sel = g_rmeSel[static_cast<int>(rmeu::Row::Output)].load();
+            return m >= 0 && g_rmeRow.load() == static_cast<int>(rmeu::Row::Output)
+                && (sel == m || sel < 0);
+        },
+        "RME: Main on the fader", false
+    });
     registerBuiltin("obs_record_toggle", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;

@@ -257,8 +257,18 @@ int main()
     {
         Config c;
         check(c.vpots[0].target == "phones1" && c.vpots[3].target == "phones4"
-              && c.vpots[0].push == "select" && c.jogTarget == "main",
-              "defaults: Phones 1-4 on the pots, push selects, Main on the jog");
+              && c.vpots[0].push == "submix" && c.jogTarget == "main",
+              "defaults: Phones 1-4 on the pots, push picks the submix, Main on the jog");
+        // A v1 file wrote the old default "select" for every pot. Frank: a push
+        // on Phones 1-4 must not move the fader. v1 could not mean it on purpose.
+        Config v1;
+        configFromJson("{\"version\": 1, \"vpots\": [{\"target\": \"phones1\", "
+                       "\"push\": \"select\"}, {\"push\": \"mute\"}]}", v1);
+        check(v1.vpots[0].push == "submix" && v1.vpots[1].push == "mute",
+              "v1 'select' becomes 'submix', anything else stays");
+        Config v2;
+        configFromJson("{\"version\": 2, \"vpots\": [{\"push\": \"select\"}]}", v2);
+        check(v2.vpots[0].push == "select", "from v2 on, 'select' is a choice and stays");
         c.vpots[2].target = "input:30"; c.vpots[2].push = "mute";
         c.jogTarget = "phones2"; c.jogStepDb = 1.0; c.colourMap[4] = 0x09;
         Config r;
