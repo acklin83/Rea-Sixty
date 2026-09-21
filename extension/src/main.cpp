@@ -32989,6 +32989,23 @@ static void uf1PaintLayoutProbe_()
         // 18 = das Textfeld pro V-Pot 0x010b.
         { 0x010e, 1, { 0, 0, 0, 0 } },
         { 0x010b, 1, { 0, 0, 0, 0 } },
+        // 19 bis 26: der Messdurchgang in Layout 1 (Frank 21.09.: "alles messen
+        // was du kannst"). n = 2 markiert sie, v[0] ist die Messnummer.
+        // 19/20: Kleinbuchstaben a..z. Passen mehr als 14 bzw. 8, kappt die
+        //        Firmware nach Pixelbreite, nicht nach Zeichenzahl.
+        // 21/22: Soft-Key 1 mit A..S und mit a..z (in Layout 3 sind es 13).
+        // 23:    CELL1 = A..X, CELL2 = a..x (je 24, die Zelle hat 25 Byte).
+        // 24-26: die V-Pot-Reihe mit Stil 0x02, 0x08, 0x03. Frage nur: rendert
+        //        sie, und wie sieht die Segmentleiste aus. Mit 0x01 rendert sie
+        //        in Layout 1 nicht, mit 0x04 schon.
+        { 0x0000, 2, { 19, 0, 0, 0 } },
+        { 0x0000, 2, { 20, 0, 0, 0 } },
+        { 0x0000, 2, { 21, 0, 0, 0 } },
+        { 0x0000, 2, { 22, 0, 0, 0 } },
+        { 0x0000, 2, { 23, 0, 0, 0 } },
+        { 0x0000, 2, { 24, 0, 0, 0 } },
+        { 0x0000, 2, { 25, 0, 0, 0 } },
+        { 0x0000, 2, { 26, 0, 0, 0 } },
     };
     constexpr int kProbeElemCount =
         static_cast<int>(sizeof(kProbeElems) / sizeof(kProbeElems[0]));
@@ -33088,6 +33105,64 @@ static void uf1PaintLayoutProbe_()
             const uint8_t styles[4] = { 0x01, 0x01, 0x01, 0x01 };
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, styles));
+            continue;
+        }
+        if (e.n == 2) {
+            // Nur einzeln, nie im Ueberblick 0: sie ueberschreiben Kopfzeile
+            // und Soft-Keys. 9, 10 und 12 haben vorher geleert.
+            if (only != i + 1) continue;
+            static constexpr char kUpper[] = "ABCDEFGHIJKLMNOPQRSTUVWX";
+            static constexpr char kLower[] = "abcdefghijklmnopqrstuvwxyz";
+            auto sendText = [](uint16_t a, uint8_t k, const char* t) {
+                std::vector<uint8_t> p;
+                p.push_back(k);
+                for (const char* c = t; *c; ++c) p.push_back(static_cast<uint8_t>(*c));
+                g_uf1_dev->send(uf1::buildScreen(a, p));
+            };
+            auto sendRow = [](uint8_t style) {
+                const uint8_t bars[8] = { 0x14, 0x80, 0x32, 0x80, 0x50, 0x80, 0x64, 0x80 };
+                const uint8_t st[4] = { style, style, style, style };
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, st));
+            };
+            switch (e.v[0]) {
+                case 19:
+                    sendText(uf1::scr::kFocusedParam, 0, kLower);
+                    sendRow(uf1::scr::kVpotStyleSslDaw);
+                    break;
+                case 20:
+                    sendText(uf1::scr::kVpotNumber, 0, kLower);
+                    break;
+                case 21:
+                    sendText(uf1::scr::kSoftKeyLabel, 0, "ABCDEFGHIJKLMNOPQRS");
+                    break;
+                case 22:
+                    sendText(uf1::scr::kSoftKeyLabel, 0, kLower);
+                    break;
+                case 23: {
+                    std::array<uint8_t, 200> hdr{};
+                    for (int i = 0; i < 24; ++i) {
+                        hdr[static_cast<size_t>(i)]      = static_cast<uint8_t>(kUpper[i]);
+                        hdr[25 + static_cast<size_t>(i)] = static_cast<uint8_t>(kLower[i]);
+                    }
+                    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow,
+                        std::span<const uint8_t>(hdr.data(), hdr.size())));
+                    break;
+                }
+                case 24: case 25: case 26: {
+                    const uint8_t style = e.v[0] == 24 ? 0x02 : e.v[0] == 25 ? 0x08 : 0x03;
+                    for (uint8_t k = 0; k < 4; ++k) {
+                        const char* names[4] = { "VPOT1", "VPOT2", "VPOT3", "VPOT4" };
+                        const std::string line = uf1ValueLine(names[k], "TEST");
+                        std::vector<uint8_t> p;
+                        p.push_back(k);
+                        p.insert(p.end(), line.begin(), line.end());
+                        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kFocusedParam, p));
+                    }
+                    sendRow(style);
+                    break;
+                }
+            }
             continue;
         }
         if (e.n == 1 && (e.addr == 0x010e || e.addr == 0x010b)) {
@@ -47654,7 +47729,7 @@ void reasixty_setUf1ProbeBarBase(int v)
 }
 void reasixty_setUf1ProbeOnly(int v)
 {
-    if (v < 0 || v > 18) return;
+    if (v < 0 || v > 26) return;
     if (g_uf1ProbeOnly.exchange(v) != v)
         g_uf1ProbeGen.fetch_add(1, std::memory_order_relaxed);
 }

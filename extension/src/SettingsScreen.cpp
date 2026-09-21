@@ -26099,8 +26099,16 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
                 " 16  like 9, but V-Pot style 0x04",
                 " 17  ruler A..S in the value line, pot 1 only",
                 " 18  ruler A..S in the per-pot text (0x010b), pot 1 only",
+                " 19  value line, pot 1, a..z",
+                " 20  per-pot text, pot 1, a..z",
+                " 21  soft key 1, A..S",
+                " 22  soft key 1, a..z",
+                " 23  CELL1 = A..X, CELL2 = a..x",
+                " 24  V-Pot row, style 0x02",
+                " 25  V-Pot row, style 0x08",
+                " 26  V-Pot row, style 0x03",
             };
-            const int shown = (only >= 0 && only <= 18) ? only : 0;
+            const int shown = (only >= 0 && only <= 26) ? only : 0;
             ImGui_Text(ctx, kElemNames[shown]);
             // The four bars show base..base+3, so the palette walks in fours.
             int barBase = reasixty_uf1ProbeBarBase();
