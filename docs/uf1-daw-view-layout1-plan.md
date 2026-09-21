@@ -1,7 +1,10 @@
 # UF1 DAW-Ansicht auf Layout 1: der ganze Plan
 
-Stand 21.09.2026. **Nichts davon ist gebaut.** Frank hat Layout 1 gewählt, der
-Plan selbst ist noch nicht freigegeben. Alles hier ist nach v0.6.0.
+Stand 21.09.2026. **Nichts davon ist gebaut.**
+
+⛔ **GEPARKT, Frank 21.09.:** „lassen wir das vorerst. Ich hab lieber einen EQ
+graph auf jeder Seite, bringt ja nicht viel ausser farbbalken für
+nachbarkanäle. Plan behalten." Nicht wieder anbieten, bis Frank ihn aufmacht.
 
 ## Worum es geht
 
