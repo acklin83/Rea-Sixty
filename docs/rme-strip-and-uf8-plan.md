@@ -212,6 +212,20 @@ Jeder Schritt einzeln testbar, jeder mit Tests für die reinen Teile.
 
 ---
 
+## 6a. Entschieden 21.09. (Frank)
+
+- **Graph:** ausserhalb der EQ- und Low-Cut-Seiten **Layout 1 mit den vier
+  Farbbalken** in TotalMix-Farben; EQ und Low Cut auf Layout 3 mit Graph (Weg B).
+- **Soft-Keys in der Kanalansicht:** die Schalter der Seite.
+- **REC/RME:** ⛔ *„Wir müssen das irgendwie zusammenfassen, sonst haben wir am
+  Schluss 4 Apps, die alle Ähnliches tun. Aber es darf nicht am UF1-Side-Car
+  hängen, sonst wär es ohne UF1 ja nicht nutzbar."* Also: **ein** TotalMix-Weg
+  im Kern (`RmeManager` ist schon flächenunabhängig), UF1-Side-Car, UF8, UC1 und
+  REC/RME sind nur Nutzer davon. Die Zusammenfassung von TotalReaper, stoerme,
+  Rea-Sixty-RME und ORC braucht einen eigenen Plan.
+- **UF8-V-Pots in der Input-Reihe: Preamp-Gain.** Pan in den Submix ist genau
+  das, was TotalReaper (Hardware-Monitoring für REAPER) schon macht.
+
 ## 7. Offene Entscheidungen
 
 1. **Graph nur auf den EQ-Seiten:** Weg A (flache Linie, Layout 3 bleibt) oder
