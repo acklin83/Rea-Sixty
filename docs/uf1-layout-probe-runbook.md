@@ -127,3 +127,43 @@ Mit allen Elementen gleichzeitig sieht man, DASS etwas zeichnet, nie WAS.
 Dafür hat die Sonde jetzt **"Only element (0 = all)"**: 1 bis 8 schreibt genau
 eines (`0x0121`, `0x0113`, `0x0118`, `0x012b`, `0x0009`, `0x000a`, `0x0015`,
 `0x0016`), die Liste steht unter dem Feld.
+
+---
+
+# Ergebnis der Element-Isolierung, 21.09.2026
+
+Sonde mit angehaltenem Pacer, ein Element nach dem anderen, die anderen auf
+null. Layout 1, Screen 0.
+
+| # | Adresse | was es zeichnet |
+|---|---|---|
+| 1-3 | `0x0121`, `0x0113`, `0x0118` | nichts — aber siehe die Warnung unten |
+| **4** | **`0x012b`** | **die vier Farbbalken.** Vier Bytes, ein Palettenindex je Balken |
+| 5 | `0x0009` | Pegel auf dem kleinen Fader-Display |
+| **6** | **`0x000a`** | **der Peak-Strich** auf demselben Display. War im Painter seit jeher "meaning unknown" |
+| 7 | `0x0015` | Comp-GR, eine LED bei Wert `0x05` |
+| 8 | `0x0016` | Gate-GR, zwei LEDs bei Wert `0x0a` |
+
+⛔ **Der Nullbefund bei 1 bis 3 war wertlos**, weil das Muster falsch war:
+`0, 1, 2, 3` sind in der 7-Segment-Kodierung `(SEG7 << 1) | Punkt` blank, ein
+Dezimalpunkt und ein halbes Segment. Die Sonde schreibt dort jetzt
+`FE 00 FE 00`; der Durchgang mit den neuen Werten steht in Layout 1 noch aus.
+
+## ⛔ Die Balken haengen an Layout 1
+
+In Layout 3, unserer Kanal-Ebene, zeichnet `0x012b` **nichts**. Am Geraet
+geprueft. Die vier Farbbalken sind also eine **Eigenschaft der Ebene** und kein
+Widget, das man dazuschalten kann.
+
+⇨ Und das faellt genau auf die zwei Maler aus Abschnitt 8 der Studie:
+**SPREAD gehoert auf Layout 1** (vier Kanaele, vier Farbbalken, CELL1 und CELL2
+als Beschriftung), **STRIP bleibt auf Layout 3**, wo der EQ-Graph lebt.
+
+## Offen geblieben
+
+* **Das 2- und 4-stellige 7-Segment-Feld in Layout 2** reagiert auf **keines**
+  unserer acht Elemente, weder auf S0 noch auf S3. Es wird also von einer
+  Adresse gefuettert, die wir nicht kennen. Kandidaten waeren die Ein-Byte-
+  Elemente, die der Init beschreibt und wir nie anfassen (`0x0110`, `0x011a`,
+  `0x011f`, `0x0123`, `0x0129`) — ungeprueft.
+* `0x0121`, `0x0113`, `0x0118` sind weiter unbenannt.

@@ -321,8 +321,21 @@ constexpr uint16_t kGraphic      = 0x0122;  // EQ graph (Channel) / meter graphi
 constexpr uint16_t kSoloActive   = 0x0120;
 
 // ⇨ VIER FARBBALKEN, EINER PRO V-POT. Vier Bytes, je ein PALETTENINDEX.
-// Gemessen am Geraet 2026-09-21 (Sonde, Muster 0,1,2,3): 0 = aus, 1 = weiss,
-// 2 = rot, 3 = gruen. Der Rest der Palette ist noch nicht abgelesen.
+// Palette am Geraet abgelaufen 2026-09-21 (Sonde, vier Balken zeigen
+// base..base+3, Basis 0 bis 10 durchgegangen):
+//
+//   0  aus / schwarz      5  hellblau           10  lime / hellgruen (*)
+//   1  weiss              6  hell-pink          11  pink / rosa (*)
+//   2  rot                7  gelb               12  helles blau (*)
+//   3  gruen              8  orange             13+ schwarz (= aus)
+//   4  blau               9  blau / violett (*)
+//
+// (*) = Franks eigene Unsicherheit beim Ablesen. ⛔ Er ist farbenblind, also
+// sind diese vier Namen die schwaechsten Punkte der Tabelle. Was ueberprueft
+// ist: Basis 3 habe ich im Video gegengelesen (gruen, blau, hellblau, pink) und
+// es stimmt mit seiner Zeile ueberein. Bevor diese Palette gegen eine ANDERE
+// gemappt wird (TotalMix-Farbindizes), gehoeren die Hues aus einem Foto
+// gemessen und nicht aus dieser Tabelle uebernommen.
 //
 // ⛔ ZEICHNET NUR IN LAYOUT 1. In unserer Kanal-Ebene ({03,00}) tut das
 // Element nichts — am Geraet geprueft, nicht vermutet. Wer die Balken will,
