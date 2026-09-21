@@ -119,6 +119,8 @@ int  reasixty_scribbleBrightnessLevel();
 void reasixty_setBrightnessLevel(int level);
 void reasixty_setScribbleBrightnessLevel(int level);
 int  reasixty_uf1SoftBank();
+int  reasixty_uf1RmeBank();
+void reasixty_setUf1RmeBank(int bank);
 int  reasixty_uf1CsPage();                  // live plugin-mode page (◄ ►)
 void reasixty_setUf1CsPage(int page);
 // UF1 soft-key bank naming: the announced string for a bank, and the ten cells a
@@ -710,6 +712,26 @@ static inline void help_(ImGui_Context* ctx, const char* text)
     if (ImGui_IsItemHovered(ctx, nullptr)) ImGui_SetTooltip(ctx, text);
 }
 
+// ⇨ WHICH UF1 BANKS THE EDITOR IS ON: the DAW view's ten (0..9) or the RME
+// side-car's own ten (kUf1RmeBankBase..), both in the same store. Every place
+// the editor used to ask reasixty_uf1SoftBank() for "the bank being edited"
+// asks uf1EditLiveBank_() now, and gets the ABSOLUTE index into the store.
+static bool g_uf1BankSetRme = false;
+static int uf1EditBankBase_()
+{
+    return g_uf1BankSetRme ? uf8::bindings::kUf1RmeBankBase : 0;
+}
+static int uf1EditLiveBank_()
+{
+    return g_uf1BankSetRme ? uf8::bindings::kUf1RmeBankBase + reasixty_uf1RmeBank()
+                           : reasixty_uf1SoftBank();
+}
+static void uf1EditSetLiveBank_(int absBank)
+{
+    if (g_uf1BankSetRme) reasixty_setUf1RmeBank(absBank - uf8::bindings::kUf1RmeBankBase);
+    else                 reasixty_setUf1SoftBank(absBank);
+}
+
 static inline double scaleW_(ImGui_Context* ctx, double designWidth)
 {
     constexpr double kRefSize = 14.0;
@@ -1075,7 +1097,7 @@ uf8::bindings::Binding ctxReadBinding_(int layer, uf8::bindings::ButtonId id,
     }
     if (id >= ButtonId::Uf1DisplaySoft1 && id <= ButtonId::Uf1DisplaySoft4) {
         const int slot = static_cast<int>(id) - static_cast<int>(ButtonId::Uf1DisplaySoft1);
-        return getUf1SoftBankSlot(reasixty_uf1SoftBank(), slot);
+        return getUf1SoftBankSlot(uf1EditLiveBank_(), slot);
     }
     return getBinding(layer, id);
 }
@@ -1090,7 +1112,7 @@ void ctxWriteBinding_(int layer, uf8::bindings::ButtonId id,
     }
     if (id >= ButtonId::Uf1DisplaySoft1 && id <= ButtonId::Uf1DisplaySoft4) {
         const int slot = static_cast<int>(id) - static_cast<int>(ButtonId::Uf1DisplaySoft1);
-        setUf1SoftBankSlot(reasixty_uf1SoftBank(), slot, bd);
+        setUf1SoftBankSlot(uf1EditLiveBank_(), slot, bd);
         return;
     }
     setBinding(layer, id, bd);
@@ -2851,7 +2873,7 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     // Soft-key labels come from the LIVE UF1 soft-key bank (DAW mode's 10
     // banks × 4 slots) — the screen shows the current bank's 4 labels the
     // way the UF8 scribbles show theirs. Blank slot falls back to "SOFT n".
-    const int uf1Bank = reasixty_uf1SoftBank();
+    const int uf1Bank = uf1EditLiveBank_();
     // A dynamic bank computes its 4 keys from the focused track, so the stored
     // slots are dead text — name the kind instead, exactly as the UF8 schematic
     // does. Preview the modifier set the picker is on, with the surface's own
@@ -2888,8 +2910,8 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     // Bank indicator (bottom of the screen), mirrors the hardware "N/10".
     {
         char bk[16];
-        snprintf(bk, sizeof bk, "BANK %d/%d",
-                      uf1Bank + 1, uf8::bindings::kUf1SoftBankCount);
+        snprintf(bk, sizeof bk, g_uf1BankSetRme ? "RME %d/%d" : "BANK %d/%d",
+                      uf1Bank - uf1EditBankBase_() + 1, uf8::bindings::kUf1SoftBankCount);
         drawTextCentered_(c, kScrX0 + kScrW / 2.0f, 186, 0x5A6270FF, bk);
     }
     ImGui_PopFont(ctx);
@@ -5647,7 +5669,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
 void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
 {
     using namespace uf8::bindings;
-    if (bank < 0 || bank >= kUf1SoftBankCount)       return;
+    if (bank < 0 || bank >= kUf1SoftBankStore)       return;
     if (slotIdx < 0 || slotIdx >= kUf1SoftBankSlots) return;
 
     Binding bd = getUf1SoftBankSlot(bank, slotIdx);
@@ -5661,8 +5683,12 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
     auto& sp = bd.shortPress[modIdx];
 
     char hdr[120];
-    snprintf(hdr, sizeof(hdr), "Editing: Soft-Key %d  (Bank %d / %d)",
-                  slotIdx + 1, bank + 1, kUf1SoftBankCount);
+    if (bank >= kUf1RmeBankBase)
+        snprintf(hdr, sizeof(hdr), "Editing: Soft-Key %d  (RME side-car bank %d / %d)",
+                 slotIdx + 1, bank - kUf1RmeBankBase + 1, kUf1RmeBankCount);
+    else
+        snprintf(hdr, sizeof(hdr), "Editing: Soft-Key %d  (Bank %d / %d)",
+                 slotIdx + 1, bank + 1, kUf1SoftBankCount);
     ImGui_Text(ctx, hdr);
     ImGui_Separator(ctx);
     ImGui_Spacing(ctx);
@@ -7856,7 +7882,17 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             // Held for the whole table: a click writes both of these, and the
             // rows after it would otherwise mark a different cell than the rows
             // before it in the same frame.
-            const int selBank = reasixty_uf1SoftBank();
+            // ⇨ DAW OR RME SIDE-CAR: the same matrix over the other ten banks.
+            if (ImGui_RadioButton(ctx, "DAW##uf1bankset_daw", !g_uf1BankSetRme))
+                g_uf1BankSetRme = false;
+            help_(ctx, "The ten banks of the UF1's DAW view.");
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_RadioButton(ctx, "RME side-car##uf1bankset_rme", g_uf1BankSetRme))
+                g_uf1BankSetRme = true;
+            help_(ctx, "The ten banks the RME side-car shows on its soft keys "
+                       "(Shift + MODE, then RME). Bank 1 comes with Dim, Mono, "
+                       "Speaker B and Talkback.");
+            const int selBank = uf1EditLiveBank_();
             const int selSlot = slotIdx;
             ImGui_Text(ctx, "Soft-Key Banks");
             ImGui_Spacing(ctx);
@@ -7893,8 +7929,9 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                         g_slotEditModIdx = m;
                     if (m == 0) ImGui_SameLine(ctx, nullptr, nullptr);
                 }
-                for (int b = 0; b < kUf1SoftBankCount; ++b) {
-                    ImGui_TableSetColumnIndex(ctx, b + 1);
+                for (int col = 0; col < kUf1SoftBankCount; ++col) {
+                    const int b = uf1EditBankBase_() + col;   // index into the store
+                    ImGui_TableSetColumnIndex(ctx, col + 1);
                     // ⇨ THE NUMBER IS ALWAYS THERE, the name only when there is
                     // one to say. reasixty_uf1BankDisplayName falls back to
                     // "SOFT n" for an unnamed static bank, which in a column
@@ -7913,9 +7950,9 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                         reasixty_uf1BankDisplayName(b, g_slotEditModIdx,
                                                     nm, sizeof(nm));
                         snprintf(hdr, sizeof(hdr), "%d %s##uf1mxh%d",
-                                 b + 1, nm, b);
+                                 col + 1, nm, b);
                     } else {
-                        snprintf(hdr, sizeof(hdr), "%d##uf1mxh%d", b + 1, b);
+                        snprintf(hdr, sizeof(hdr), "%d##uf1mxh%d", col + 1, b);
                     }
                     // ⇨ THE NAME IS TYPED IN THE HEADER IT NAMES (Frank
                     // 2026-09-09). Double-click a bank's header to rename it,
@@ -8011,7 +8048,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                         int rmb = 1;
                         if (ImGui_IsItemClicked(ctx, &rmb)) {
                             s_bankKeepScroll   = ImGui_GetScrollY(ctx);
-                            reasixty_setUf1SoftBank(b);
+                            uf1EditSetLiveBank_(b);
                             s_uf1BankCtx       = b;
                             s_uf1BankCtxSet    = g_slotEditModIdx;
                             s_uf1BankCtxFilled =
@@ -8022,7 +8059,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                         if (ImGui_IsItemHovered(ctx, nullptr)
                             && ImGui_IsMouseDoubleClicked(ctx, lmb)) {
                             s_bankKeepScroll = ImGui_GetScrollY(ctx);
-                            reasixty_setUf1SoftBank(b);
+                            uf1EditSetLiveBank_(b);
                             s_uf1BankRen      = b;
                             s_uf1BankRenMod   = g_slotEditModIdx;
                             s_uf1BankRenFocus = true;
@@ -8042,8 +8079,9 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                     char rowName[24];
                     snprintf(rowName, sizeof(rowName), "Soft-Key %d", s + 1);
                     ImGui_Text(ctx, rowName);
-                    for (int b = 0; b < kUf1SoftBankCount; ++b) {
-                        ImGui_TableSetColumnIndex(ctx, b + 1);
+                    for (int col = 0; col < kUf1SoftBankCount; ++col) {
+                        const int b = uf1EditBankBase_() + col;   // index into the store
+                        ImGui_TableSetColumnIndex(ctx, col + 1);
                         // What the cell says, by the surface's own label rule
                         // (the same cascade the mock LCD above uses): the set's
                         // own name, Plain's key name on Plain, else the action's
@@ -8085,7 +8123,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                             // scroll would clamp to the shorter content and jump
                             // under the mouse. Same remedy as the UF8 matrix.
                             s_bankKeepScroll = ImGui_GetScrollY(ctx);
-                            reasixty_setUf1SoftBank(b);
+                            uf1EditSetLiveBank_(b);
                             s_selected = static_cast<ButtonId>(
                                 static_cast<int>(ButtonId::Uf1DisplaySoft1) + s);
                             // The editor below reads slotIdx, which was derived
@@ -8103,7 +8141,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                         int rmbCell = 1;
                         if (ImGui_IsItemClicked(ctx, &rmbCell)) {
                             s_bankKeepScroll   = ImGui_GetScrollY(ctx);
-                            reasixty_setUf1SoftBank(b);
+                            uf1EditSetLiveBank_(b);
                             s_selected = static_cast<ButtonId>(
                                 static_cast<int>(ButtonId::Uf1DisplaySoft1) + s);
                             slotIdx            = s;
@@ -8131,7 +8169,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         bool uf1BankDynOwn = false;
         const bool uf1BankIsDyn =
             uf8::bindings::getUf1SoftBankDynamicFor(
-                reasixty_uf1SoftBank(), g_slotEditModIdx, &uf1BankDynOwn)
+                uf1EditLiveBank_(), g_slotEditModIdx, &uf1BankDynOwn)
             != uf8::bindings::DynamicBankKind::None;
         // The Plain/Shift radios that used to sit here moved into the matrix
         // header, beside the cells they govern. trackBankModifierEdge_ is
@@ -8152,7 +8190,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         // makes the 4 keys derive live from the focused track (its FX,
         // parameter groups, colours); the 4 static per-slot editors are
         // then hidden. Mirrors the UF8 Sub-Bank combo (drawSubBankCellEditor_).
-        const int uf1Bank = reasixty_uf1SoftBank();
+        const int uf1Bank = uf1EditLiveBank_();
 
         // ⛔ NO SECOND NAME FIELD. The bank is named by double-clicking its
         // column header, so a text box down here was a second way in to one

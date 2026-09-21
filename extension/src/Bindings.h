@@ -761,6 +761,16 @@ struct SoftKeyBankPreset {
 // paged by the ← → keys. Global (not per-layer) — 10 banks is plenty.
 constexpr int kUf1SoftBankCount = 10;
 constexpr int kUf1SoftBankSlots = 4;
+// ⇨ THE RME SIDE-CAR HAS ITS OWN BANKS, IN THE SAME STORE (2026-09-21). Frank:
+// "Side-Car Mode nimmt nicht bestehende Baenke sondern macht seine eigenen."
+// They live at 10..19 of the same arrays, so every function that takes a bank
+// index (names, dynamic kinds, presets, clipboard, dispatch) serves them as it
+// is. kUf1SoftBankCount keeps meaning "the DAW banks" (paging, header N/M,
+// startup bank, uf1_bank_select); kUf1SoftBankStore is the size of the store
+// and bounds every read, write and walk over it.
+constexpr int kUf1RmeBankBase   = 10;
+constexpr int kUf1RmeBankCount  = 10;
+constexpr int kUf1SoftBankStore = kUf1RmeBankBase + kUf1RmeBankCount;
 
 // A named snapshot of one UF1 bank. Its own type rather than SoftKeyBankPreset
 // with four of eight slots filled: a preset that could be half-empty by design
@@ -782,20 +792,20 @@ struct Config {
     std::vector<SoftKeyBankPreset> bankPresets;       // named Sub-Bank snapshots
     std::vector<Uf1BankPreset>     uf1BankPresets;    // named UF1 bank snapshots
     // UF1 soft-key banks (global). [bank 0..9][slot 0..3].
-    Binding uf1SoftBanks[kUf1SoftBankCount][kUf1SoftBankSlots];
+    Binding uf1SoftBanks[kUf1SoftBankStore][kUf1SoftBankSlots];
     // Per-bank dynamic kind. Non-None turns the whole bank into a computed
     // bank (FX list / parameter groups / colours) whose 4 keys derive live
     // from the focused track; the 4 static slots above are then ignored.
     // Default None ⇒ classic static behaviour.
     // [bank][modifier set] — same rule as the UF8 above.
-    DynamicBankKind uf1SoftBankDynamic[kUf1SoftBankCount][kSoftKeyModifierSets] = {};
+    DynamicBankKind uf1SoftBankDynamic[kUf1SoftBankStore][kSoftKeyModifierSets] = {};
     // What the bank is CALLED, announced on the UF1's time display when you
     // switch to it (Settings → Behaviour → UF1). Per modifier set, because a set
     // is a full bank and not a second list of actions ([[softkey-modifier-sets]]),
     // so Plain and Shift can be two differently named banks on one key.
     // Empty is the normal state and NOT a hole: a dynamic bank then announces its
     // own kind and a static one its number (uf1BankDisplayName_ in main.cpp).
-    std::string     uf1SoftBankName[kUf1SoftBankCount][kSoftKeyModifierSets];
+    std::string     uf1SoftBankName[kUf1SoftBankStore][kSoftKeyModifierSets];
 };
 
 // Builtin registry. Phase A registers from main.cpp at REAPER_PLUGIN_ENTRY
@@ -1342,6 +1352,9 @@ bool            recallFactoryUf1BankPreset(int idx, int bank, int mod);
 // dynamic banks or banks with any non-empty slot count. Drives the DAW-mode
 // header denominator + bounds the DAW bank paging. Frank 2026-08-04.
 int             uf1SoftBankInUseCount();
+// The same count over the RME side-car's banks (kUf1RmeBankBase..), relative:
+// 1..kUf1RmeBankCount, min 1. Drives the side-car's own paging and N/M.
+int             uf1RmeBankInUseCount();
 // Run a UF1 bank slot's action (same long-press + modifier logic as
 // dispatchUserQuickSlot). Returns true if the slot has an action.
 bool     dispatchUf1SoftBankSlot(int bank, int slot, bool pressed);

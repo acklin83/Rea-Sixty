@@ -196,6 +196,12 @@ std::string Manager::status() const
     return status_;
 }
 
+Manager::ControlRoom Manager::controlRoom() const
+{
+    std::lock_guard<std::mutex> lk(mx_);
+    return { state_.dim, state_.mono, state_.speakerB, state_.talkback };
+}
+
 State Manager::snapshot() const
 {
     std::lock_guard<std::mutex> lk(mx_);

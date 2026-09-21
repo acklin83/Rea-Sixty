@@ -761,6 +761,22 @@ void fillDerivedUf1Slots_(Config& c)
             seed(perModeNavId(base, m), base);
 }
 
+// ⇨ THE RME SIDE-CAR'S FACTORY BANK: its first own bank (kUf1RmeBankBase) holds
+// the four control-room keys. Written only into an EMPTY bank, so a user's own
+// layout is never touched (Memory franks-bindings-are-not-factory). Used by the
+// seed for a fresh config and by the v42 upgrade for an existing one.
+static bool uf1BankSlotEmpty_(const Binding& bd);   // defined below
+void seedRmeSideCarBank_(Config& c)
+{
+    Binding* bank = c.uf1SoftBanks[kUf1RmeBankBase];
+    for (int s = 0; s < kUf1SoftBankSlots; ++s)
+        if (!uf1BankSlotEmpty_(bank[s])) return;
+    bank[0] = mkBuiltin("rme_dim",       Behavior::Momentary, "Dim");
+    bank[1] = mkBuiltin("rme_mono",      Behavior::Momentary, "Mono");
+    bank[2] = mkBuiltin("rme_speaker_b", Behavior::Momentary, "Speaker B");
+    bank[3] = mkBuiltin("rme_talkback",  Behavior::Momentary, "Talkback");
+}
+
 void seedFactoryDefaults_(Config& c)
 {
     crumb_("seed: enter");
@@ -1342,6 +1358,7 @@ void seedFactoryDefaults_(Config& c)
     // every base above is final — including the arrows' long press and the two
     // views that seed their own 5-8. See fillDerivedUf1Slots_.
     fillDerivedUf1Slots_(c);
+    seedRmeSideCarBank_(c);
 }
 
 // ---- JSON serialization ---------------------------------------------------
@@ -1938,13 +1955,13 @@ static bool uf1BankSlotEmpty_(const Binding& bd)
 void serializeUf1SoftBanks_(const Config& c, std::ostringstream& os)
 {
     bool any = false;
-    for (int b = 0; b < kUf1SoftBankCount && !any; ++b)
+    for (int b = 0; b < kUf1SoftBankStore && !any; ++b)
         for (int s = 0; s < kUf1SoftBankSlots; ++s)
             if (!uf1BankSlotEmpty_(c.uf1SoftBanks[b][s])) { any = true; break; }
     if (!any) return;
     os << ",\n  \"uf1_soft_banks\": [";
     bool first = true;
-    for (int b = 0; b < kUf1SoftBankCount; ++b)
+    for (int b = 0; b < kUf1SoftBankStore; ++b)
         for (int s = 0; s < kUf1SoftBankSlots; ++s) {
             const Binding& bd = c.uf1SoftBanks[b][s];
             if (uf1BankSlotEmpty_(bd)) continue;
@@ -1963,13 +1980,13 @@ void serializeUf1SoftBanks_(const Config& c, std::ostringstream& os)
 void serializeUf1SoftBankDynamic_(const Config& c, std::ostringstream& os)
 {
     bool any = false;
-    for (int b = 0; b < kUf1SoftBankCount && !any; ++b)
+    for (int b = 0; b < kUf1SoftBankStore && !any; ++b)
         for (int m = 0; m < kSoftKeyModifierSets && !any; ++m)
             if (c.uf1SoftBankDynamic[b][m] != DynamicBankKind::None) any = true;
     if (!any) return;
     os << ",\n  \"uf1_soft_bank_dynamic\": [";
     bool first = true;
-    for (int b = 0; b < kUf1SoftBankCount; ++b)
+    for (int b = 0; b < kUf1SoftBankStore; ++b)
         for (int m = 0; m < kSoftKeyModifierSets; ++m) {
             const auto k = c.uf1SoftBankDynamic[b][m];
             if (k == DynamicBankKind::None) continue;
@@ -2044,13 +2061,13 @@ void serializeUf8SubBankNames_(const Config& c, std::ostringstream& os)
 void serializeUf1SoftBankNames_(const Config& c, std::ostringstream& os)
 {
     bool any = false;
-    for (int b = 0; b < kUf1SoftBankCount && !any; ++b)
+    for (int b = 0; b < kUf1SoftBankStore && !any; ++b)
         for (int m = 0; m < kSoftKeyModifierSets && !any; ++m)
             if (!c.uf1SoftBankName[b][m].empty()) any = true;
     if (!any) return;
     os << ",\n  \"uf1_soft_bank_names\": [";
     bool first = true;
-    for (int b = 0; b < kUf1SoftBankCount; ++b)
+    for (int b = 0; b < kUf1SoftBankStore; ++b)
         for (int m = 0; m < kSoftKeyModifierSets; ++m) {
             if (c.uf1SoftBankName[b][m].empty()) continue;
             if (!first) os << ",";
@@ -2516,7 +2533,7 @@ void parseUf1SoftBanks_(wdl_json_element* root, Config& out)
             if (auto* s = v->get_string_value(true)) bank = std::atoi(s);
         if (auto* v = eo->get_item_by_name("slot"))
             if (auto* s = v->get_string_value(true)) slot = std::atoi(s);
-        if (bank < 0 || bank >= kUf1SoftBankCount) continue;
+        if (bank < 0 || bank >= kUf1SoftBankStore) continue;
         if (slot < 0 || slot >= kUf1SoftBankSlots) continue;
         auto* bodyObj = eo->get_item_by_name("body");
         if (!bodyObj || !bodyObj->is_object()) continue;
@@ -2539,7 +2556,7 @@ void parseUf1SoftBankDynamic_(wdl_json_element* root, Config& out)
             if (auto* s = v->get_string_value(true)) bank = std::atoi(s);
         if (auto* v = eo->get_item_by_name("kind"))
             if (auto* s = v->get_string_value(true)) kind = std::atoi(s);
-        if (bank < 0 || bank >= kUf1SoftBankCount) continue;
+        if (bank < 0 || bank >= kUf1SoftBankStore) continue;
         if (kind < 0 || kind > static_cast<int>(kDynamicBankKindLast))
             continue;
         int mod = 0;   // absent = Plain (pre-v26 shape)
@@ -2606,7 +2623,7 @@ void parseUf1SoftBankNames_(wdl_json_element* root, Config& out)
             if (auto* t = v->get_string_value(true)) bank = std::atoi(t);
         if (auto* v = eo->get_item_by_name("mod"))
             if (auto* t = v->get_string_value(true)) mod = std::atoi(t);
-        if (bank < 0 || bank >= kUf1SoftBankCount) continue;
+        if (bank < 0 || bank >= kUf1SoftBankStore) continue;
         if (mod  < 0 || mod  >= kSoftKeyModifierSets) continue;
         if (auto* v = eo->get_item_by_name("name"))
             if (auto* t = v->get_string_value(true))
@@ -3040,7 +3057,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
-constexpr int kCurrentBindingsVersion = 41;
+constexpr int kCurrentBindingsVersion = 42;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -3261,7 +3278,7 @@ void forEachActionSlot_(Config& c, F&& fn)
                     doBinding(li, c.userQuicks[li].quicks[qi]
                                      .subBanks[bi].slots[si]);
     }
-    for (int b = 0; b < kUf1SoftBankCount; ++b)
+    for (int b = 0; b < kUf1SoftBankStore; ++b)
         for (int si = 0; si < kUf1SoftBankSlots; ++si)
             doBinding(0, c.uf1SoftBanks[b][si]);
     for (auto& p : c.bankPresets)
@@ -3681,7 +3698,7 @@ void upgradeContentDragIsHold_(Config& c)
     for (auto& L : c.layers)
         for (auto& kv : L.bindings)
             if (carries(kv.second)) kv.second.behavior = Behavior::Hold;
-    for (int b = 0; b < kUf1SoftBankCount; ++b)
+    for (int b = 0; b < kUf1SoftBankStore; ++b)
         for (int sl = 0; sl < kUf1SoftBankSlots; ++sl)
             if (carries(c.uf1SoftBanks[b][sl]))
                 c.uf1SoftBanks[b][sl].behavior = Behavior::Hold;
@@ -3689,7 +3706,7 @@ void upgradeContentDragIsHold_(Config& c)
 
 void upgradeUf1FocusChanSide_(Config& c)
 {
-    for (int b = 0; b < kUf1SoftBankCount; ++b)
+    for (int b = 0; b < kUf1SoftBankStore; ++b)
         for (int sl = 0; sl < kUf1SoftBankSlots; ++sl) {
             Binding& bd = c.uf1SoftBanks[b][sl];
             for (auto* set : { &bd.shortPress, &bd.longPress })
@@ -3856,7 +3873,7 @@ void upgradeMarkUserLabels_(Config& c)
             mark(kv.second, it == facL.end() ? nullptr : &it->second);
         }
     }
-    for (int b = 0; b < kUf1SoftBankCount; ++b)
+    for (int b = 0; b < kUf1SoftBankStore; ++b)
         for (int s = 0; s < kUf1SoftBankSlots; ++s)
             mark(c.uf1SoftBanks[b][s], &fac.uf1SoftBanks[b][s]);
     for (int li = 0; li < 3; ++li)
@@ -4206,6 +4223,11 @@ void load()
             }
             if (tmp.version < 41) {
                 upgradeContentDragIsHold_(tmp);
+            }
+            if (tmp.version < 42) {
+                // The RME side-car's own banks (10..19) are new; give the first
+                // one the control-room keys if it is still empty.
+                seedRmeSideCarBank_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -5442,7 +5464,7 @@ void walkBoundTo_(const std::string& builtinName,
             }
         }
     }
-    for (int b = 0; b < kUf1SoftBankCount; ++b) {
+    for (int b = 0; b < kUf1SoftBankStore; ++b) {
         for (int si = 0; si < kUf1SoftBankSlots; ++si) {
             const Binding& bd = g_cfg.uf1SoftBanks[b][si];
             for (int m = 0; m < kModifierCount; ++m) {
@@ -5451,8 +5473,12 @@ void walkBoundTo_(const std::string& builtinName,
                     && !(bd.hasLongPress && matchSlot(bd.longPress[m])))
                     continue;
                 char buf[96];
-                snprintf(buf, sizeof(buf), "UF1 bank %d / key %d",
-                              b + 1, si + 1);
+                if (b >= kUf1RmeBankBase)
+                    snprintf(buf, sizeof(buf), "UF1 RME side-car bank %d / key %d",
+                             b - kUf1RmeBankBase + 1, si + 1);
+                else
+                    snprintf(buf, sizeof(buf), "UF1 bank %d / key %d",
+                             b + 1, si + 1);
                 if (emit(0, ButtonId::None, m, !isShort, buf)) return;
             }
         }
@@ -5639,7 +5665,7 @@ void setUserQuickSlot(int layer, int quick, int subBank, int slot,
 
 static bool uf1SoftBankInRange_(int bank, int slot)
 {
-    return bank >= 0 && bank < kUf1SoftBankCount
+    return bank >= 0 && bank < kUf1SoftBankStore
         && slot >= 0 && slot < kUf1SoftBankSlots;
 }
 
@@ -5660,7 +5686,7 @@ void setUf1SoftBankSlot(int bank, int slot, const Binding& bd)
 
 DynamicBankKind getUf1SoftBankDynamic(int bank, int mod)
 {
-    if (bank < 0 || bank >= kUf1SoftBankCount) return DynamicBankKind::None;
+    if (bank < 0 || bank >= kUf1SoftBankStore) return DynamicBankKind::None;
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return DynamicBankKind::None;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     return g_cfg.uf1SoftBankDynamic[bank][mod];
@@ -5716,9 +5742,25 @@ int uf1SoftBankInUseCount()
     return highest + 1 >= 1 ? highest + 1 : 1;
 }
 
+int uf1RmeBankInUseCount()
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    int highest = -1;
+    for (int r = 0; r < kUf1RmeBankCount; ++r) {
+        const int b = kUf1RmeBankBase + r;
+        bool inUse = false;
+        for (int m = 0; m < kSoftKeyModifierSets && !inUse; ++m)
+            if (g_cfg.uf1SoftBankDynamic[b][m] != DynamicBankKind::None) inUse = true;
+        for (int s = 0; !inUse && s < kUf1SoftBankSlots; ++s)
+            if (!uf1BankSlotEmpty_(g_cfg.uf1SoftBanks[b][s])) inUse = true;
+        if (inUse) highest = r;
+    }
+    return highest + 1 >= 1 ? highest + 1 : 1;
+}
+
 void setUf1SoftBankDynamic(int bank, int mod, DynamicBankKind kind)
 {
-    if (bank < 0 || bank >= kUf1SoftBankCount) return;
+    if (bank < 0 || bank >= kUf1SoftBankStore) return;
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     g_cfg.uf1SoftBankDynamic[bank][mod] = kind;
@@ -5813,7 +5855,7 @@ void setSubBankName(int layer, int quick, int sub, int mod, const std::string& n
 
 std::string getUf1SoftBankName(int bank, int mod)
 {
-    if (bank < 0 || bank >= kUf1SoftBankCount) return std::string();
+    if (bank < 0 || bank >= kUf1SoftBankStore) return std::string();
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return std::string();
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     return g_cfg.uf1SoftBankName[bank][mod];
@@ -5821,7 +5863,7 @@ std::string getUf1SoftBankName(int bank, int mod)
 
 void setUf1SoftBankName(int bank, int mod, const std::string& name)
 {
-    if (bank < 0 || bank >= kUf1SoftBankCount) return;
+    if (bank < 0 || bank >= kUf1SoftBankStore) return;
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     g_cfg.uf1SoftBankName[bank][mod] = name;
@@ -6031,7 +6073,7 @@ static bool uf1BankSetHasContentLocked_(int bank, int mod)
 
 bool uf1BankSetHasContent(int bank, int mod)
 {
-    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (bank < 0 || bank >= kUf1SoftBankStore) return false;
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     return uf1BankSetHasContentLocked_(bank, mod);
@@ -6226,7 +6268,7 @@ int findUf1BankPreset(const std::string& name)
 bool saveUf1BankPreset(const std::string& name, int bank, int mod)
 {
     if (name.empty()) return false;
-    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (bank < 0 || bank >= kUf1SoftBankStore) return false;
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     Uf1BankPreset p;
@@ -6283,7 +6325,7 @@ bool uf1BankPresetSpills(int idx)
 
 bool recallUf1BankPreset(int idx, int bank, int mod)
 {
-    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (bank < 0 || bank >= kUf1SoftBankStore) return false;
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     if (idx < 0 || idx >= static_cast<int>(g_cfg.uf1BankPresets.size()))
@@ -6446,7 +6488,7 @@ std::string uf1BankClipboardLabel() {
 
 bool copyUf1BankToClipboard(int bank, int mod, const std::string& label)
 {
-    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (bank < 0 || bank >= kUf1SoftBankStore) return false;
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     const bool takeShift = (mod == 0) && uf1BankSetHasContentLocked_(bank, 1);
@@ -6472,7 +6514,7 @@ bool copyUf1BankToClipboard(int bank, int mod, const std::string& label)
 
 bool pasteUf1BankFromClipboard(int bank, int mod)
 {
-    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (bank < 0 || bank >= kUf1SoftBankStore) return false;
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     if (!g_uf1BankClip.full) return false;
@@ -6498,7 +6540,7 @@ bool pasteUf1BankFromClipboard(int bank, int mod)
 
 bool clearUf1Bank(int bank, int mod, bool bothSets)
 {
-    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (bank < 0 || bank >= kUf1SoftBankStore) return false;
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     const Binding empty{};
@@ -6738,6 +6780,14 @@ static const std::vector<Uf1BankPreset>& factoryUf1Banks_()
         }));
         // Recording control only. The scenes themselves are the ObsScenes
         // dynamic kind; a bank of three is the honest size of what is left.
+        // TotalMix' control room, the RME side-car's factory bank as a preset,
+        // so it can be put back or placed on any bank.
+        v.push_back(bank("RME Monitor", {
+            {"rme_dim",       "Dim",       0},
+            {"rme_mono",      "Mono",      0},
+            {"rme_speaker_b", "Speaker B", 0},
+            {"rme_talkback",  "Talkback",  0},
+        }));
         v.push_back(bank("OBS", {
             {"obs_record_toggle",  "OBS Rec",   0},
             {"obs_record_pause",   "OBS Pause", 0},
@@ -6781,7 +6831,7 @@ bool factoryUf1BankSpills(int idx)
 
 bool recallFactoryUf1BankPreset(int idx, int bank, int mod)
 {
-    if (bank < 0 || bank >= kUf1SoftBankCount) return false;
+    if (bank < 0 || bank >= kUf1SoftBankStore) return false;
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
     const auto& banks = factoryUf1Banks_();
     if (idx < 0 || idx >= static_cast<int>(banks.size())) return false;
@@ -7705,6 +7755,15 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "learn_hud_toggle",
       "Shows or hides the Learn HUD, the on-screen map of the focused "
       "plug-in's assignments." },
+    { "rme_dim",
+      "Dims TotalMix' Main output by the Dim amount set in TotalMix, or lifts "
+      "the dim. The lamp follows what TotalMix reports." },
+    { "rme_mono",
+      "Switches TotalMix' Main output to mono and back." },
+    { "rme_speaker_b",
+      "Switches TotalMix' Main output between Main and Speaker B." },
+    { "rme_talkback",
+      "Talkback in TotalMix, on or off." },
     { "obs_record_toggle",
       "Starts or stops the recording in OBS. The lamp follows what OBS "
       "reports, so it lights when OBS is really running, not when the key "
@@ -8366,6 +8425,10 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "ssl_softkey", "SSL Soft-Key" },
     { "ssl_strip_mode_toggle", "Strip Mode" },
     { "ssl_strip_mode_toggle_with_gui", "Strip + GUI" },
+    { "rme_dim", "Dim" },
+    { "rme_mono", "Mono" },
+    { "rme_speaker_b", "Speaker B" },
+    { "rme_talkback", "Talkback" },
     { "obs_record_toggle", "OBS Rec" },
     { "obs_record_pause", "OBS Pause" },
     { "obs_chapter_marker", "OBS Chapter" },

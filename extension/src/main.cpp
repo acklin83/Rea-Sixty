@@ -741,6 +741,9 @@ std::atomic<int> g_rmeSubmix{-1};
 // Das Jog hat gedreht: der Maler blendet den Main-Wert ins Zeitfeld ein. Nur
 // ein Merker, weil uf1FlashTimecode_ Hauptthread-Zustand ist.
 std::atomic<bool> g_rmeJogFlash{false};
+// Die aktive Side-Car-Bank, relativ (0..kUf1RmeBankCount-1). Gespeichert wird
+// sie bei kUf1RmeBankBase + g_rmeBank in denselben Arrays wie die DAW-Baenke.
+std::atomic<int> g_rmeBank{0};
 
 // ⇨ UF1 LAYOUT PROBE (Settings -> About). A diagnostic, not a feature.
 //
@@ -25538,6 +25541,57 @@ bool uf1HasActionForCurrentMod_(uf8::bindings::ButtonId id)
     return false;
 }
 
+// ⇨ EIN SOFT-KEY-DRUCK AUF EINE UF1-BANK, fuer JEDE Bank. Bis 21.09. stand das
+// im DAW-Zweig von onUf1Event; das RME-Side-Car hat eigene Baenke im selben
+// Speicher (10..19) und ruft dasselbe mit seiner Bank auf. Nichts daran ist
+// neu, es ist nur herausgezogen, damit es keine zweite Kopie gibt.
+// Worker-Thread, wie vorher.
+static void uf1SoftBankKey_(int bank, int slot, bool pressed)
+{
+    bool       ownsSet = false;
+    const auto dk  = uf8::bindings::getUf1SoftBankDynamicFor(
+        bank,
+        static_cast<int>(uf8::bindings::bankModifierSnapshot()),
+        &ownsSet);
+    if (dk != uf8::bindings::DynamicBankKind::None) {
+        // Dynamic bank: fire the SAME FX-key gestures as the UF8 (Push /
+        // +Shift / +Cmd / +Ctrl / Long-press → reasixty_fxBankOp), not
+        // only Push (Frank 2026-08-02 bug). dispatchUf1DynamicPress_
+        // snapshots the modifier on press, resolves the gesture on
+        // release, and posts the UF1 request atomic (distinct from the
+        // UF8 g_dynBankReq so UF8's dynBankSlotBase_ can't leak into our
+        // ABSOLUTE page*4+slot index). Encoding: (1<<31)|(kind<<24)|
+        // (absIdx<<8)|gesture. Worker-thread safe (atomics only); the
+        // onTimer drain runs applyDynBankUf1Req_ on the main thread.
+        //
+        // ⇨ UNLESS THE HELD SET OWNS THE KEY (setOwnsDynamicKey_) — the
+        // UF8's rule since 1a602ba, which the UF1 never got: here the
+        // gesture always won and the stored slot was unreachable
+        // (Frank 2026-08-25, "ja, UF1 auch nachziehen").
+        // ⚠ DECIDED ON THE PRESS AND REMEMBERED. The modifier can be
+        // let go while the key is down, so routing each edge on its own
+        // would let the press arm a long-press gesture that the release
+        // never disarms — tickUf1DynLongPress_ would then fire it under
+        // a finger that is no longer there.
+        static bool s_setTook[4] = { false, false, false, false };
+        if (pressed) {
+            s_setTook[slot] = !ownsSet && setOwnsDynamicKey_(
+                uf8::bindings::getUf1SoftBankSlot(bank, slot),
+                static_cast<int>(
+                    uf8::bindings::bankModifierSnapshot()));
+        }
+        if (s_setTook[slot]) {
+            uf8::bindings::dispatchUf1SoftBankSlot(
+                bank, slot, pressed);
+            if (!pressed) s_setTook[slot] = false;
+        } else {
+            dispatchUf1DynamicPress_(dk, slot, pressed, ownsSet);
+        }
+    } else {
+        uf8::bindings::dispatchUf1SoftBankSlot(bank, slot, pressed);
+    }
+}
+
 // ── RME-Side-Car: die Eingaben ───────────────────────────────────────────────
 // ⛔ ALLES, WAS DAS SIDE-CAR ZEIGT, FAENGT ES AUCH AB. Bis 21.09. gingen V-Pots,
 // Encoder und Jog waehrend eines Side-Cars weiter an REAPER (g_uf1SideCar kam im
@@ -25660,11 +25714,26 @@ static bool uf1RmeButton_(const uf1::InputEvent& ev)
         }
         return true;
     }
-    // Die Soft-Keys und < > bekommen eigene Baenke (Schritt 4). Bis dahin tun
-    // sie hier nichts, statt eine REAPER-Bank auszuloesen, die niemand sieht.
-    if (id == uf1::btn::kVpotAboveFaderPush || id == uf1::btn::kChannelPush
-        || (id >= uf1::btn::kDisplaySoft1 && id <= uf1::btn::kDisplaySoft4)
-        || id == uf1::btn::kBankLeft || id == uf1::btn::kBankRight)
+    // Die vier Display-Soft-Keys: die EIGENEN Baenke des Side-Cars (Frank 21.09.),
+    // derselbe Weg wie in der DAW-Ansicht, nur mit der Side-Car-Bank. Waehrend
+    // MODE gehalten wird, gehoeren die Keys dem Menue; dessen Druck ist oben
+    // schon verbraucht, das Loslassen darf hier nichts ausloesen.
+    if (id >= uf1::btn::kDisplaySoft1 && id <= uf1::btn::kDisplaySoft4) {
+        if (!g_uf1ModeMenu.load())
+            uf1SoftBankKey_(uf8::bindings::kUf1RmeBankBase + g_rmeBank.load(),
+                            static_cast<int>(id - uf1::btn::kDisplaySoft1), ev.pressed);
+        return true;
+    }
+    // < > blaettern durch die belegten Side-Car-Baenke, mit Umlauf wie in DAW.
+    if (id == uf1::btn::kBankLeft || id == uf1::btn::kBankRight) {
+        if (ev.pressed) {
+            const int nb  = std::max(1, uf8::bindings::uf1RmeBankInUseCount());
+            const int dir = (id == uf1::btn::kBankRight) ? 1 : -1;
+            g_rmeBank.store((g_rmeBank.load() % nb + dir + nb) % nb);
+        }
+        return true;
+    }
+    if (id == uf1::btn::kVpotAboveFaderPush || id == uf1::btn::kChannelPush)
         return true;
     return false;
 }
@@ -26065,50 +26134,9 @@ void onUf1Event(const uf1::InputEvent& ev)
                  ev.id == uf1::btn::kDisplaySoft3 || ev.id == uf1::btn::kDisplaySoft4)
                 && !g_uf1MeterView.load() && g_uf1ChannelSubMode.load() == 1
                 && !g_uf1ModeMenu.load()) {
-                const int bank = g_uf1SoftBank.load();
-                const int slot = static_cast<int>(ev.id - uf1::btn::kDisplaySoft1);
-                bool       ownsSet = false;
-                const auto dk  = uf8::bindings::getUf1SoftBankDynamicFor(
-                    bank,
-                    static_cast<int>(uf8::bindings::bankModifierSnapshot()),
-                    &ownsSet);
-                if (dk != uf8::bindings::DynamicBankKind::None) {
-                    // Dynamic bank: fire the SAME FX-key gestures as the UF8 (Push /
-                    // +Shift / +Cmd / +Ctrl / Long-press → reasixty_fxBankOp), not
-                    // only Push (Frank 2026-08-02 bug). dispatchUf1DynamicPress_
-                    // snapshots the modifier on press, resolves the gesture on
-                    // release, and posts the UF1 request atomic (distinct from the
-                    // UF8 g_dynBankReq so UF8's dynBankSlotBase_ can't leak into our
-                    // ABSOLUTE page*4+slot index). Encoding: (1<<31)|(kind<<24)|
-                    // (absIdx<<8)|gesture. Worker-thread safe (atomics only); the
-                    // onTimer drain runs applyDynBankUf1Req_ on the main thread.
-                    //
-                    // ⇨ UNLESS THE HELD SET OWNS THE KEY (setOwnsDynamicKey_) — the
-                    // UF8's rule since 1a602ba, which the UF1 never got: here the
-                    // gesture always won and the stored slot was unreachable
-                    // (Frank 2026-08-25, "ja, UF1 auch nachziehen").
-                    // ⚠ DECIDED ON THE PRESS AND REMEMBERED. The modifier can be
-                    // let go while the key is down, so routing each edge on its own
-                    // would let the press arm a long-press gesture that the release
-                    // never disarms — tickUf1DynLongPress_ would then fire it under
-                    // a finger that is no longer there.
-                    static bool s_setTook[4] = { false, false, false, false };
-                    if (ev.pressed) {
-                        s_setTook[slot] = !ownsSet && setOwnsDynamicKey_(
-                            uf8::bindings::getUf1SoftBankSlot(bank, slot),
-                            static_cast<int>(
-                                uf8::bindings::bankModifierSnapshot()));
-                    }
-                    if (s_setTook[slot]) {
-                        uf8::bindings::dispatchUf1SoftBankSlot(
-                            bank, slot, ev.pressed);
-                        if (!ev.pressed) s_setTook[slot] = false;
-                    } else {
-                        dispatchUf1DynamicPress_(dk, slot, ev.pressed, ownsSet);
-                    }
-                } else {
-                    uf8::bindings::dispatchUf1SoftBankSlot(bank, slot, ev.pressed);
-                }
+                uf1SoftBankKey_(g_uf1SoftBank.load(),
+                                static_cast<int>(ev.id - uf1::btn::kDisplaySoft1),
+                                ev.pressed);
                 break;
             }
             if ((ev.id == uf1::btn::kDisplaySoft1 || ev.id == uf1::btn::kDisplaySoft2 ||
@@ -31362,7 +31390,9 @@ static std::string uf1BankDisplayName_(int bank, int mod)
         default: break;
     }
     char b[16];
-    snprintf(b, sizeof(b), "SOFT %d", bank + 1);
+    // Side-Car-Baenke (10..19) zaehlen fuer sich von 1 an.
+    snprintf(b, sizeof(b), "SOFT %d",
+             bank >= kUf1RmeBankBase ? bank - kUf1RmeBankBase + 1 : bank + 1);
     return b;
 }
 
@@ -32367,6 +32397,78 @@ struct Uf1SkCell {
     uint32_t    colRgb    = 0;
     bool        colBright = false;
 };
+
+// ⇨ DIE ZELLE EINES STATISCHEN BANK-SLOTS: Beschriftung, Zustand, LED-Farbe.
+// Bis 21.09. stand das nur im DAW-Zweig von uf1PaintChannel_; das RME-Side-Car
+// malt seine eigenen Baenke (10..19) und braucht genau dieselbe Regel, also
+// steht sie hier einmal. Der DAW-Zweig ruft sie auf, geaendert hat sich nichts.
+static Uf1SkCell uf1StaticBankCell_(int bankNo, int i)
+{
+    std::string label;
+    bool haveLabel = false, on = false;
+    bool keyHasColour = false, keyColBright = false;
+    uint32_t keyColRgb = 0;
+    // Label from the bank slot (its own label, else the built-in's
+    // display name); blank = unassigned. LED follows the bound
+    // action's engaged state exactly like the UF8 soft-keys —
+    // `bindingHasActiveSlot_` is the same resolver (built-in state
+    // + REAPER GetToggleCommandState2, across all modifier slots),
+    // so bright = engaged, dim = idle. The LED COLOUR is driven from
+    // the binding too (see the LED block below).
+    const uf8::bindings::Binding dawSlot = uf8::bindings::getUf1SoftBankSlot(bankNo, i);
+    // ⇨ THE FOUR KEYS FOLLOW THE HELD MODIFIER — hold SHIFT and the
+    // bank shows its Shift layer. The layers and the dispatch were
+    // always there; only the labels stayed on Plain, so the keys
+    // fired one thing and the screen said another (Frank 2026-08-18).
+    // Binding::label names the key and belongs to Plain; a modifier
+    // layer carries its own in ActionSlot::label, and an empty layer
+    // shows EMPTY rather than borrowing the Plain name.
+    const int mIdx =
+        static_cast<int>(uf8::bindings::bankModifierSnapshot());
+    const bool plainLayer =
+        (mIdx == static_cast<int>(uf8::bindings::Modifier::Plain));
+    const auto& sp = dawSlot.shortPress[mIdx];
+    if (!sp.label.empty())               label = sp.label;
+    else if (plainLayer && !dawSlot.label.empty())
+                                         label = dawSlot.label;
+    else if (!sp.action.empty())
+        label = uf8::bindings::softKeyFallbackLabel(sp);
+    haveLabel = true;
+    on = bindingHasActiveSlotForSet_(dawSlot, mIdx);
+    // LED colour from the binding (active vs inactive colour + brightness),
+    // like the UF8 soft-keys — Frank assigns these in Settings → Bindings →
+    // UF1 and HW-confirmed they render. An unassigned slot (blank label) goes
+    // dark unless ledShowWhenEmpty. Drives the FF38 GRB path in the LED block.
+    keyHasColour = true;
+    if (label.empty() && !dawSlot.ledShowWhenEmpty) {
+        keyColRgb = 0; keyColBright = false;   // empty → dark
+    } else {
+        // ⇨ THE SET'S OWN COLOUR, IF IT HAS ONE.
+        // A modifier set is a full bank, so it carries its own LED
+        // override (ActionSlot::led) just like an ordinary button's
+        // modifier slot does. Reading dawSlot.color outright meant
+        // the Shift set could never look different from Plain
+        // (Frank 2026-08-18). effectiveLed* falls back to the key's
+        // colour when the set has no override, so a set that never
+        // set one paints exactly as before.
+        uint8_t c[3];
+        uf8::bindings::Brightness bri;
+        const auto& lsp = dawSlot.shortPress[mIdx];
+        if (on) uf8::bindings::effectiveLedActive  (dawSlot, lsp, c, bri);
+        else    uf8::bindings::effectiveLedInactive(dawSlot, lsp, c, bri);
+        keyColBright = (bri == uf8::bindings::Brightness::Bright);
+        keyColRgb = (uint32_t(c[0]) << 16) | (uint32_t(c[1]) << 8)
+                  | static_cast<uint32_t>(c[2]);
+        // Off is a third state, not "not bright" — same fix as
+        // uf1BindingLedColour_ (2026-08-22). The radio exists in the
+        // slot editor, so it has to mean something here.
+        if (bri == uf8::bindings::Brightness::Off) keyColRgb = 0;
+    }
+    Uf1SkCell c;
+    c.label = label; c.haveLabel = haveLabel; c.on = on;
+    c.hasColour = keyHasColour; c.colRgb = keyColRgb; c.colBright = keyColBright;
+    return c;
+}
 
 static void uf1EmitSoftKeyRow_(const std::array<Uf1SkCell, 4>& cells,
                                bool force, bool ledsBorrowed, bool menuOpen)
@@ -33800,19 +33902,31 @@ static void uf1PaintRme_()
         }
     }
 
-    // ── Soft-Keys ───────────────────────────────────────────────────────────
+    // ── Soft-Keys: die eigenen Side-Car-Baenke ──────────────────────────────
     // ⛔ DAS MODE-MENUE SCHREIBT SEINE VIER NAMEN DIREKT und verlaesst sich darauf,
-    // dass der Besitzer des Schirms beim Loslassen seine eigenen zurueckschreibt.
-    // Das Side-Car hat das nicht getan, also blieben PLUGIN / DAW / METER / SENDS
-    // stehen (Frank 21.09.). Bis die eigenen Baenke kommen (Schritt 4): leer.
+    // dass der Besitzer des Schirms beim Loslassen seine eigenen zurueckschreibt
+    // (Frank 21.09.: PLUGIN / DAW / METER / SENDS blieben stehen). Darum der
+    // erzwungene Durchgang beim Loslassen.
+    // Zellen ueber uf1StaticBankCell_, dieselbe Regel wie in der DAW-Ansicht.
+    // Dynamische Arten auf einer Side-Car-Bank werden (noch) nicht gemalt.
     {
         static bool sMenu = false;
         const bool menu = g_uf1ModeMenu.load();
         const bool menuClosed = sMenu && !menu;
         sMenu = menu;
+        const int nb   = std::max(1, uf8::bindings::uf1RmeBankInUseCount());
+        if (g_rmeBank.load() >= nb) g_rmeBank.store(0);
+        const int rel  = g_rmeBank.load();
+        const int bank = uf8::bindings::kUf1RmeBankBase + rel;
         std::array<Uf1SkCell, 4> cells{};
-        for (auto& c : cells) { c.haveLabel = true; c.label.clear(); c.on = false; }
+        for (int i = 0; i < 4; ++i) cells[static_cast<size_t>(i)] = uf1StaticBankCell_(bank, i);
         if (!menu) uf1EmitSoftKeyRow_(cells, force || menuClosed, false, false);
+        // Der Bankname im Zeitfeld beim Wechsel, wie in der DAW-Ansicht.
+        static int sBank = -1;
+        if (sBank != -1 && sBank != bank && nb > 1)
+            uf1FlashTimecode_(uf1BankDisplayName_(bank,
+                static_cast<int>(uf8::bindings::bankModifierSnapshot())), 1200);
+        sBank = bank;
     }
 
     // ── Zeitfeld: REAPER-Zeit, und beim Drehen am Jog der Main-Wert ─────────
@@ -33845,7 +33959,8 @@ static void uf1PaintRme_()
             g_uf1_dev->send(uf1::buildScreen(0x011e, std::span<const uint8_t>(&s011e, 1)));
         }
 
-        auto hdr = uf1PageHeader_(1, 1);   // Soft-Key-Bank N/M: Schritt 4
+        auto hdr = uf1PageHeader_(g_rmeBank.load() + 1,
+                                  std::max(1, uf8::bindings::uf1RmeBankInUseCount()));
         auto putCell = [&](int cell, const std::string& t) {
             for (size_t k = 0; k < 25; ++k)
                 hdr[static_cast<size_t>(cell) * 25 + k] =
@@ -35668,62 +35783,11 @@ void uf1PaintChannel_()
                     }
                 }
             } else if (dawBanks) {
-                // Label from the bank slot (its own label, else the built-in's
-                // display name); blank = unassigned. LED follows the bound
-                // action's engaged state exactly like the UF8 soft-keys —
-                // `bindingHasActiveSlot_` is the same resolver (built-in state
-                // + REAPER GetToggleCommandState2, across all modifier slots),
-                // so bright = engaged, dim = idle. The LED COLOUR is driven from
-                // the binding too (see the LED block below).
                 dawSlot = uf8::bindings::getUf1SoftBankSlot(bankNo, i);
-                // ⇨ THE FOUR KEYS FOLLOW THE HELD MODIFIER — hold SHIFT and the
-                // bank shows its Shift layer. The layers and the dispatch were
-                // always there; only the labels stayed on Plain, so the keys
-                // fired one thing and the screen said another (Frank 2026-08-18).
-                // Binding::label names the key and belongs to Plain; a modifier
-                // layer carries its own in ActionSlot::label, and an empty layer
-                // shows EMPTY rather than borrowing the Plain name.
-                const int mIdx =
-                    static_cast<int>(uf8::bindings::bankModifierSnapshot());
-                const bool plainLayer =
-                    (mIdx == static_cast<int>(uf8::bindings::Modifier::Plain));
-                const auto& sp = dawSlot.shortPress[mIdx];
-                if (!sp.label.empty())               label = sp.label;
-                else if (plainLayer && !dawSlot.label.empty())
-                                                     label = dawSlot.label;
-                else if (!sp.action.empty())
-                    label = uf8::bindings::softKeyFallbackLabel(sp);
-                haveLabel = true;
-                on = bindingHasActiveSlotForSet_(dawSlot, mIdx);
-                // LED colour from the binding (active vs inactive colour + brightness),
-                // like the UF8 soft-keys — Frank assigns these in Settings → Bindings →
-                // UF1 and HW-confirmed they render. An unassigned slot (blank label) goes
-                // dark unless ledShowWhenEmpty. Drives the FF38 GRB path in the LED block.
-                keyHasColour = true;
-                if (label.empty() && !dawSlot.ledShowWhenEmpty) {
-                    keyColRgb = 0; keyColBright = false;   // empty → dark
-                } else {
-                    // ⇨ THE SET'S OWN COLOUR, IF IT HAS ONE.
-                    // A modifier set is a full bank, so it carries its own LED
-                    // override (ActionSlot::led) just like an ordinary button's
-                    // modifier slot does. Reading dawSlot.color outright meant
-                    // the Shift set could never look different from Plain
-                    // (Frank 2026-08-18). effectiveLed* falls back to the key's
-                    // colour when the set has no override, so a set that never
-                    // set one paints exactly as before.
-                    uint8_t c[3];
-                    uf8::bindings::Brightness bri;
-                    const auto& lsp = dawSlot.shortPress[mIdx];
-                    if (on) uf8::bindings::effectiveLedActive  (dawSlot, lsp, c, bri);
-                    else    uf8::bindings::effectiveLedInactive(dawSlot, lsp, c, bri);
-                    keyColBright = (bri == uf8::bindings::Brightness::Bright);
-                    keyColRgb = (uint32_t(c[0]) << 16) | (uint32_t(c[1]) << 8)
-                              | static_cast<uint32_t>(c[2]);
-                    // Off is a third state, not "not bright" — same fix as
-                    // uf1BindingLedColour_ (2026-08-22). The radio exists in the
-                    // slot editor, so it has to mean something here.
-                    if (bri == uf8::bindings::Brightness::Off) keyColRgb = 0;
-                }
+                const Uf1SkCell sc = uf1StaticBankCell_(bankNo, i);
+                label = sc.label; haveLabel = sc.haveLabel; on = sc.on;
+                keyHasColour = sc.hasColour; keyColRgb = sc.colRgb;
+                keyColBright = sc.colBright;
             } else if (skXmap) {
                 // Explicit UF1 map: the soft-key owns its label + on-state.
                 const uf8::UserUf1Slot* s = uf8::uf1SlotAt(
@@ -48588,6 +48652,14 @@ int reasixty_uf1SoftBank()
     return g_uf1SoftBank.load();
 }
 
+// Die aktive Bank des RME-Side-Cars, relativ 0..kUf1RmeBankCount-1. Fuer die
+// Bank-Matrix in Settings, die beim Klick die Bank auf der Flaeche einschaltet.
+int reasixty_uf1RmeBank() { return g_rmeBank.load(); }
+void reasixty_setUf1RmeBank(int bank)
+{
+    g_rmeBank.store(std::clamp(bank, 0, uf8::bindings::kUf1RmeBankCount - 1));
+}
+
 void reasixty_setUf1SoftBank(int bank)
 {
     if (bank < 0) bank = 0;
@@ -53529,6 +53601,30 @@ void registerBindingHandlers()
     // worker, so a key press never waits for a socket. The LED reads the state
     // OBS reports, not the state we asked for — pressing record while OBS is
     // busy leaves the lamp dark, which is the honest answer.
+    // ── TotalMix' control room (RME side-car factory bank, any surface) ──────
+    // The same thread rule as OBS: the handler only queues an OSC message, the
+    // lamp reads what TotalMix holds. TotalMix does not echo our own writes, so
+    // the manager folds them in at once; the lamp is right the next tick.
+    // regRmeCr is listed in tools/check_builtin_docs.py, like regUf1View.
+    {
+        using CR = reasixty::rme::Manager::ControlRoom;
+        auto regRmeCr = [](const char* name, const char* addr, bool CR::* flag,
+                           const char* label) {
+            registerBuiltin(name, DescBuilder{
+                [addr, flag](bool firing, bool /*pressed*/, int /*param*/) {
+                    if (!firing) return;
+                    auto& rm = reasixty::rme::manager();
+                    rm.send(addr, (rm.controlRoom().*flag) ? 0.0f : 1.0f);
+                },
+                [flag](int) { return reasixty::rme::manager().controlRoom().*flag; },
+                label, false
+            });
+        };
+        regRmeCr("rme_dim",       "/controlroom/dim",      &CR::dim,      "RME: Dim main output");
+        regRmeCr("rme_mono",      "/controlroom/mainmono", &CR::mono,     "RME: Main output mono");
+        regRmeCr("rme_speaker_b", "/controlroom/speakerb", &CR::speakerB, "RME: Speaker B");
+        regRmeCr("rme_talkback",  "/controlroom/talkback", &CR::talkback, "RME: Talkback");
+    }
     registerBuiltin("obs_record_toggle", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;

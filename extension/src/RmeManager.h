@@ -118,6 +118,11 @@ class Manager {
     // Ask TotalMix for everything again.
     void refresh() { refreshReq_.store(true); }
 
+    // The control-room switches, without copying the whole cache: surface LEDs
+    // ask this every tick.
+    struct ControlRoom { bool dim = false, mono = false, speakerB = false, talkback = false; };
+    ControlRoom controlRoom() const;
+
   private:
     void workerLoop();
     void setStatus(LinkState st, const std::string& text);
