@@ -31668,7 +31668,15 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     // SEL / Solo / Cut LEDs below keep following the fader's track. Coming
     // back repaints everything: the statics still describe the pre-meter state.
     static bool sPlaneHeld = false;
-    const bool meterView = g_uf1MeterView.load();
+    // ⛔ EIN SIDE-CAR IST NICHT DIE METER-ANSICHT. Jeder Textschreibvorgang
+    // unten haengt an `!meterView`, und `g_uf1MeterView` bleibt stehen, wenn man
+    // aus der Meter-Ansicht in ein Side-Car geht — dann blieb die Zone ueber dem
+    // Fader leer (Frank 21.09.: "kanalname wird nicht angezeigt auf dem display
+    // oberhalb des faders"). Solange ein Side-Car den Schirm haelt, ist "sind
+    // wir in der Meter-Ansicht" die falsche Frage: die Antwort ist "nein, ein
+    // Side-Car ist es".
+    const bool meterView = g_uf1MeterView.load()
+                        && g_uf1SideCar.load() == Uf1SideCar::None;
     if (meterView) sPlaneHeld = true;
     else if (sPlaneHeld) { sPlaneHeld = false; changed = true; }
 
