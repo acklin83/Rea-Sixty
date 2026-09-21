@@ -704,6 +704,24 @@ std::atomic<int>  g_hueFocusSlot {0};
 // handler.
 std::atomic<bool> g_uf1HueMode {false};
 
+// ⇨ SIDE-CAR: die zweite Ebene des UF1-Modusmodells (Frank 19.09.2026).
+// `kUf1View*` bleibt, was es ist — Plugin / DAW / Meter / Sends, vier Ansichten
+// auf REAPER. Ein SIDE-CAR ist etwas anderes: ein Modus, der den FADER nicht
+// mehr fuer eine REAPER-Spur braucht und deshalb die ganze Flaeche uebernimmt.
+// Genau daran haengt die Unterscheidung, und sie ist am Code nachpruefbar: Hue
+// nimmt den Schirm, aber nicht den Fader, also ist Hue eine Ansicht und kein
+// Side-Car ([[uf1-sidecar-rme-plan]]).
+//
+// Einstieg: Shift + MODE halten, dann einer der vier Display-Soft-Keys.
+enum class Uf1SideCar : uint8_t { None = 0, ItemVolume = 1 };
+constexpr int kUf1SideCarCount = 1;          // ohne None
+std::atomic<Uf1SideCar> g_uf1SideCar{Uf1SideCar::None};
+
+inline const char* uf1SideCarName_(int i)
+{
+    switch (i) { case 0: return "ITEM"; default: return ""; }   // 1..3 noch frei
+}
+
 // ⇨ UF1 LAYOUT PROBE (Settings -> About). A diagnostic, not a feature.
 //
 // 0x0100 is the large-LCD LAYOUT SELECTOR, two bytes {layout, screen}. We drive
@@ -23345,6 +23363,7 @@ void onUf1Input(const uint8_t* data, size_t len);       // UF1 raw bulk-IN (diag
 void onUf1Event(const uf1::InputEvent& ev);             // UF1 parsed control event
 void openUf1BringUp_();                                  // claim + handlers + colour proof
 void uf1PaintChannel_();                                 // main-thread channel-zone + colour painter
+static void uf1PaintSideCar_();                          // Side-Car: besitzt Schirm UND Fader
 static void uf1ChannelMeterBytes_(MediaTrack* tr, uint8_t& lvL, uint8_t& lvR,
                                   uint8_t& compByte, uint8_t& gateByte);  // small-LCD level+GR, both views
 // Bumped on every successful UF1 open(). The painters' send-on-change statics
@@ -25569,6 +25588,28 @@ void onUf1Event(const uf1::InputEvent& ev)
             if (g_uf1ModeMenu.load() && ev.pressed &&
                 (ev.id == uf1::btn::kDisplaySoft1 || ev.id == uf1::btn::kDisplaySoft2 ||
                  ev.id == uf1::btn::kDisplaySoft3 || ev.id == uf1::btn::kDisplaySoft4)) {
+                // ⇨ SHIFT MACHT AUS DEM PICKER DIE SIDE-CAR-SEITE (Frank 19.09.).
+                // Ohne Shift die vier Ansichten wie immer, mit Shift die
+                // Side-Car-Bewohner. Derselbe Druck auf denselben Key, eine
+                // Ebene tiefer — und `kUf1View*` bleibt unberuehrt, also kein
+                // Config-Upgrade.
+                // Nochmal denselben Bewohner waehlen schaltet ihn AUS: ein
+                // Modus, der die ganze Flaeche nimmt, braucht eine Tuer, die
+                // dorthin zurueckfuehrt, wo man herkam.
+                if (shiftHeldAnywhere_()) {
+                    const int sc = ev.id - uf1::btn::kDisplaySoft1;
+                    if (sc >= 0 && sc < kUf1SideCarCount) {
+                        const auto want = static_cast<Uf1SideCar>(sc + 1);
+                        const auto cur  = g_uf1SideCar.load();
+                        g_uf1SideCar.store(cur == want ? Uf1SideCar::None : want);
+                        g_pageDirty.store(true);
+                    }
+                    break;
+                }
+                // Ein normaler Ansichtswechsel verlaesst das Side-Car. Sonst
+                // waehlt man eine Ansicht, sieht sie nicht, und der Fader faehrt
+                // weiter das Item.
+                g_uf1SideCar.store(Uf1SideCar::None);
                 // SK1 Plugin, SK2 DAW, SK3 Meter, SK4 Sends — the kUf1View* order,
                 // so this is a straight index. The bodies live in uf1SetViewMode_
                 // (shared with the uf1_view_* builtins + the REASIXTY_UF1_MODE_*
@@ -33012,14 +33053,99 @@ static void uf1PaintLayoutProbe_()
     }
 }
 
+// ── Side-Car: ITEM VOLUME ────────────────────────────────────────────────────
+// Der erste Bewohner, und der einfachste, den es gibt: der Fader faehrt die
+// Lautstaerke des ausgewaehlten Items.
+//
+// ⛔ EIN SIDE-CAR BESITZT AUCH DEN FADER, und das ist keine Redensart: die
+// Uebergabe kehrt oben aus uf1PaintChannel_ zurueck, also laeuft die
+// Fader-Besitzerkette dieses Malers gar nicht mehr. Wer den Schirm nimmt und
+// den Fader stehen laesst, hat einen Fader, der eine Spur faehrt, die nirgends
+// mehr zu sehen ist. Deshalb macht dieser Maler beides.
+//
+// Die Lautstaerke eines Items ist LINEARE VERSTAERKUNG wie die einer Spur
+// (1.0 = 0 dB), also gelten dieselben zwei Umrechnungen und dieselbe Kalibrierung.
+static void uf1PaintSideCar_()
+{
+    if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
+
+    static uint32_t sGen = 0xFFFFFFFFu;
+    const uint32_t gen = g_uf1Gen.load(std::memory_order_relaxed);
+    const bool force = (gen != sGen);
+    sGen = gen;
+
+    MediaItem* it = GetSelectedMediaItem(nullptr, 0);
+
+    // ── Fader ───────────────────────────────────────────────────────────────
+    // Dieselbe Touch-Entprellung wie im Kanalmaler: der kapazitive Sensor
+    // prellt waehrend eines Griffs, und den Motor bei jedem Prellen wieder
+    // einzuschalten schnappt den Fader auf den letzten Wert zurueck.
+    static auto sLastTouch = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+    static uint16_t sMotorPos = 0xFFFF;
+    const auto nowT = std::chrono::steady_clock::now();
+    if (g_uf1FaderTouched.load()) sLastTouch = nowT;
+    const bool touched = g_uf1FaderTouched.load()
+        || (nowT - sLastTouch < std::chrono::milliseconds(150));
+
+    if (it && touched && g_uf1FaderHasPos.load()) {
+        const double vol = uf1PosToVol_(g_uf1FaderPos.load());
+        SetMediaItemInfo_Value(it, "D_VOL", vol);
+        UpdateItemInProject(it);
+    } else if (it) {
+        const uint16_t want = uf1VolToPos_(
+            GetMediaItemInfo_Value(it, "D_VOL"));
+        if (force || want != sMotorPos) {
+            sMotorPos = want;
+            g_uf1_dev->sendPriority(uf1::buildMotorEnable(true));
+            g_uf1_dev->send(uf1::buildMotorPosition(want));
+        }
+    }
+
+    // ── Schirm ──────────────────────────────────────────────────────────────
+    // Kein Item ausgewaehlt ist ein ZUSTAND und kein Fehler: die Zeile sagt es,
+    // der Fader bleibt stehen. Sonst faehrt er etwas, das niemand sieht.
+    std::string name = "no item";
+    std::string db;
+    if (it) {
+        const double vol = GetMediaItemInfo_Value(it, "D_VOL");
+        db = formatDbReadout(vol) + "dB";
+        // ⛔ Signatur nachgesehen, nicht erinnert: die Funktion gibt `bool`
+        // zurueck und schreibt in einen Puffer, den der Aufrufer stellt
+        // (reaper_plugin_functions.h:2869). Der erste Versuch hier hat ihren
+        // Rueckgabewert als `const char*` gelesen.
+        name.clear();
+        if (MediaItem_Take* tk = GetActiveTake(it)) {
+            char tn[256] = {0};
+            if (GetSetMediaItemTakeInfo_String(tk, "P_NAME", tn, false) && tn[0])
+                name = tn;
+        }
+        if (name.empty()) name = "Item";
+    }
+
+    Uf1VpotRow row;
+    uf1VpotCell_(row, 0, "Item", name);
+    uf1VpotCell_(row, 1, "Vol", db);
+    uf1VpotCell_(row, 2, "", "");
+    uf1VpotCell_(row, 3, "", "");
+    uf1VpotBar_(row, 0, 0.0, false, /*empty=*/true);
+    uf1VpotBar_(row, 1, it ? static_cast<double>(uf1VolToPos_(
+                    GetMediaItemInfo_Value(it, "D_VOL")))
+                    / static_cast<double>(kUf1FaderMax) : 0.0,
+                false, /*empty=*/!it);
+    uf1VpotBar_(row, 2, 0.0, false, true);
+    uf1VpotBar_(row, 3, 0.0, false, true);
+    uf1EmitVpotRow_(row, force);
+}
+
 // Wer haelt den Schirm gerade? Reihenfolge ist Absicht: die Sonde ist ein
 // Diagnosewerkzeug und schlaegt alles, sonst kann man einen Modus nicht
 // untersuchen, der selbst den Schirm besitzt.
-enum class Uf1ScreenOwner : uint8_t { None, LayoutProbe, Hue };
+enum class Uf1ScreenOwner : uint8_t { None, LayoutProbe, SideCar, Hue };
 
 static Uf1ScreenOwner uf1CurrentScreenOwner_()
 {
     if (g_uf1LayoutProbe.load()) return Uf1ScreenOwner::LayoutProbe;
+    if (g_uf1SideCar.load() != Uf1SideCar::None) return Uf1ScreenOwner::SideCar;
     if (g_uf1HueMode.load())     return Uf1ScreenOwner::Hue;
     return Uf1ScreenOwner::None;
 }
@@ -33056,6 +33182,9 @@ static bool uf1HandOverScreen_()
         case Uf1ScreenOwner::LayoutProbe:
             g_uf1CycleActive.store(false, std::memory_order_relaxed);
             uf1PaintLayoutProbe_();
+            return true;
+        case Uf1ScreenOwner::SideCar:
+            uf1PaintSideCar_();
             return true;
         case Uf1ScreenOwner::Hue:
             if (g_paletteSwatch.load() >= 0) g_swDbgHue.fetch_add(1);
@@ -35452,12 +35581,25 @@ void uf1PaintChannel_()
             // (Sends lights SK4, not SK3). The encoder-mode picker is a separate
             // gesture (hold MODE + turn the channel encoder); its feedback is the
             // desktop mode-banner, so it needs no soft-key here.
+            // Mit Shift zeigt derselbe Picker die Side-Car-Seite. Leere
+            // Plaetze bleiben leer statt "SOFT n" zu behaupten.
+            const bool scPage = shiftHeldAnywhere_();
             const int sm = g_uf1ChannelSubMode.load();
-            const int sel = g_uf1MeterView.load() ? 2
-                          : (sm == 2 ? 3 : (sm == 1 ? 1 : 0));
-            if (changed || !sMenuShown || sel != sMenuSel) {
+            const int scNow = static_cast<int>(g_uf1SideCar.load());
+            const int sel = scPage ? (scNow > 0 ? scNow - 1 : -1)
+                          : (g_uf1MeterView.load() ? 2
+                             : (sm == 2 ? 3 : (sm == 1 ? 1 : 0)));
+            // Die Seite selbst gehoert in die Wechselerkennung: sonst bleiben
+            // beim Druecken von Shift die Namen der anderen Seite stehen.
+            static bool sMenuScPage = false;
+            const bool pageEdge = (scPage != sMenuScPage);
+            sMenuScPage = scPage;
+            if (changed || !sMenuShown || sel != sMenuSel || pageEdge) {
                 sMenuShown = true; sMenuSel = sel;
-                static const char* const kMenu[4] = { "PLUGIN", "DAW", "METER", "SENDS" };
+                static const char* const kViews[4] = { "PLUGIN", "DAW", "METER", "SENDS" };
+                const char* kSide[4] = { uf1SideCarName_(0), uf1SideCarName_(1),
+                                         uf1SideCarName_(2), uf1SideCarName_(3) };
+                const char* const* kMenu = scPage ? kSide : kViews;
                 for (int i = 0; i < 4; ++i) {
                     const std::string_view lbl = kMenu[i];
                     std::vector<uint8_t> pb; pb.reserve(1 + lbl.size());
