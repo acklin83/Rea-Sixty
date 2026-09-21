@@ -103,11 +103,15 @@ aufgemacht und dann unseren Code gar nicht ([[vendor-manual-is-a-source]]).
 
 ## Was wirklich bleibt
 
-1. **`0x010b` ist eine ZWEITE Zeile pro Pot.** SSL hat ein eigenes 6-Zeichen-
-   Namensfeld *und* darunter den Parameter-Readout. Wir quetschen beides in die
-   eine 19-Zeichen-Zeile von `0x010e`. Der Gewinn ist also nicht "Namen
-   ueberhaupt", sondern **Name oben, Wert unten, beide voll lesbar** — und
-   damit auch mehr Platz fuer laengere Spurnamen.
+1. ~~`0x010b` als zweite Zeile pro Pot~~ — **verworfen, Frank 21.09.:**
+   *"brauchen wir doch gar nicht und würde eh nicht gehen weil wir doch auf dem
+   layout mit dem EQ graph sind!"* Und das ist der physische Grund: in Layout 3
+   sitzt an dieser Stelle der **EQ-Graph** (`0x0122`). SSL schreibt `0x010b` in
+   Layout 2, wo kein Graph ist. Bei uns waere dort kein Platz — und das ist
+   vermutlich auch die Antwort auf die nie gelaufene Sondenmessung (Element 12).
+   ⇨ Dritte Korrektur desselben Tages, und dieselbe Klasse: ich habe ein Feld
+   aus einer FREMDEN Ebene in unsere uebertragen, ohne zu fragen, was dort schon
+   steht.
 2. **Modus-Farbcodierung** (`0x012b`). Haben wir nicht, und sie haengt an
    Layout 1, also an der Flacker-Baustelle des Ebenenwechsels. Geparkt.
 3. **CHANNEL-Modus "Volume"** — die Systemlautstaerke, fuer Kopfhoerer am
