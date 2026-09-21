@@ -142,14 +142,9 @@ struct State {
 // `faderlin` is TotalMix' own fader position, 0..1. It is accepted on outputs
 // and on submix nodes, but TotalMix only ever REPORTS dB (`volume`, `fader`),
 // so a motor fader that wants to stand where the TotalMix fader stands needs
-// the curve in both directions.
-//
-// Measured on Frank's Mac Studio on 2026-09-21: faderlin 0, 0.05 .. 1.0 written
-// to /mix/pb/0/10 (Ph 11/12, cleared for it), the dB read back on a second
-// remote. Outputs and nodes share it (0.3 gave -27.584 dB on both). 0 is OFF
-// (-300), 1.0 is +6 dB, and from about 0.7 up it is a straight line of
-// 1.641 dB per 0.05. Between the 21 points we interpolate linearly, which is
-// exact at the points and within a small fraction of a dB between them.
+// the curve in both directions. RME publishes it (CalcFaderDB / CalcFaderLin in
+// the protocol sheet); 0 is off, 1.0 is +6 dB, the same for outputs, inputs
+// and playbacks.
 constexpr double kDbOff = -300.0;
 double faderlinToDb(double x);
 double dbToFaderlin(double db);

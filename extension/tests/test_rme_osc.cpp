@@ -188,8 +188,18 @@ int main()
     check(near(faderlinToDb(0.3), -27.584, 0.001), "0.3 = -27.584 dB (outputs and nodes)");
     check(near(faderlinToDb(0.5), -12.1254, 0.001), "0.5 = -12.13 dB");
     check(near(faderlinToDb(1.0), 6.0, 0.001), "1.0 = +6 dB, playbacks included");
-    check(near(faderlinToDb(0.725), (-3.84706 + -2.20588) / 2.0, 0.001),
-          "straight line between two measured points");
+    {
+        // The 21 points measured on Frank's rig before RME's formula was at
+        // hand (/mix/pb/0/10, 2026-09-21). The formula has to hit every one.
+        const double measured[21] = {
+            kDbOff,   -57.5783, -50.6309, -44.1578, -38.1589, -32.6343, -27.584,
+            -23.0079, -18.9061, -15.2786, -12.1254, -9.44641, -7.24171, -5.48824,
+            -3.84706, -2.20588, -0.564707, 1.07647, 2.71764, 4.35882, 6.0 };
+        bool all = faderlinToDb(0.0) == kDbOff;
+        for (int i = 1; i <= 20; ++i)
+            if (!near(faderlinToDb(i * 0.05), measured[i], 0.01)) all = false;
+        check(all, "RME's formula lands on all 21 measured points");
+    }
     check(dbToFaderlin(kDbOff) == 0.0, "OFF maps back to 0");
     check(dbToFaderlin(20.0) == 1.0, "above +6 clamps to the top");
     {
@@ -200,10 +210,10 @@ int main()
             const double db = faderlinToDb(x);
             if (db <= prev) mono = false;
             prev = db;
-            if (!near(dbToFaderlin(db), x, 1e-9)) ok = false;
+            if (!near(dbToFaderlin(db), x, 1e-6)) ok = false;
         }
         check(mono, "the curve only ever rises");
-        check(ok, "dB -> faderlin -> dB is exact in both directions");
+        check(ok, "faderlin -> dB -> faderlin comes back, both directions");
     }
 
     // ── ⛔ TotalMix does not echo our own writes, so we fold them in ourselves

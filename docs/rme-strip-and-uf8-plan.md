@@ -212,6 +212,30 @@ Jeder Schritt einzeln testbar, jeder mit Tests für die reinen Teile.
 
 ---
 
+## 5a. Was RMEs Tabelle sagt (`OSCProtocoll_260721.ods`, gelesen 21.09.)
+
+RMEs Dokument, liegt bei Frank in `~/Downloads`, **nicht ins Repo**.
+
+- **Keine Wertebereiche.** Namen, senden/empfangen, L/R, aber kein Minimum und
+  Maximum für Gain, Ratio, Attack, Release, Headroom usw. Offen bleibt also,
+  woher die Grenzen kommen: TotalMix-Handbuch (RME, also eine Quelle) oder
+  Messung an einem freigegebenen Kanal.
+- **Faderkurve exakt** (`CalcFaderDB` / `CalcFaderLin`): jetzt in
+  `RmeState.cpp`, trifft alle 21 Messpunkte vom Nachmittag.
+- **Schreibbar laut Tabelle:** `stereo`, `pad`, `48v`, `instrument`, `autoset`,
+  `phase`, `gain`, `reflevel`, `width`, `msproc`, `fxsend`, alle EQ-, Low-Cut-,
+  Dynamics-, AutoLevel-, Room-EQ-Werte, `delay`, `crossfeed`, `loopback`,
+  `talkbacksel`. **Nur senden:** `color`, `level`, `status`.
+- **L/R:** `phase`, `gain`, `delay` und alle Room-EQ-Bänder gehen auf einem
+  Stereokanal pro Seite, rechts = Kanalnummer + 1.
+- **`/sendchan/input|playback|output/<n>`** holt alle Werte EINES Kanals. Für
+  die Kanalansicht beim Betreten, statt `/sendall`.
+- **`/status/device`, `/status/connection`, `/status/dsp`** kommen etwa einmal
+  pro Sekunde. Ein Herzschlag: `RmeManager` kann „keine Antwort mehr" daran
+  festmachen statt an einem `/sendall` alle 30 s. Noch nicht umgebaut.
+- **FX:** `/reverb/...` und `/echo/...` gibt es auch, nicht Teil dieses Plans.
+- `reflevel`, `band1type` usw. sind Listenindizes, **geräteabhängig**.
+
 ## 6a. Entschieden 21.09. (Frank)
 
 - **Graph:** ausserhalb der EQ- und Low-Cut-Seiten **Layout 1 mit den vier
