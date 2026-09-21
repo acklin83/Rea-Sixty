@@ -1298,6 +1298,11 @@ der Mitschnitt zeigte 1). Die anderen drei folgen aus der Reihenfolge: vier
 Werte, vier Stufen, aufsteigend. Der Regler lief beim Durchgang zu schnell,
 um jede Stufe einzeln zuzuordnen.
 
+⇨ **Nachgemessen am Abend:** Frank hat von 6 nach 24 gedreht, die Indizes kamen
+0, 1, 2, 3. Damit belegt: 0 = 6, 1 = 12, 2 = 18, 3 = 24 dB/Okt. Und: TotalMix
+schickt eine gesendete Änderung nicht an den sendenden Remote zurück, nur an
+die anderen (`docs/uf1-spread-plan.md`, Messungen).
+
 ## 14. Die UF1-Anzeige: was 2.1.12 brachte und was wir nicht fahren
 
 Frank, 19.09.: "beim SSL-Update gabs doch neue Felder fuers UF1. Ich sah dort

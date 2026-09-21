@@ -17,6 +17,12 @@
 // for a minute with "input/0/", switch a type in TotalMix, read the line
 // (2026-09-21, the colour palette and the EQ type indices).
 //
+//   rme_osc_probe <send> <listen> <seconds> <filter> /addr=value [/addr=value ...]
+//
+// ⛔ SETS VALUES IN TOTALMIX. Each /addr=value is sent as a float, one per second
+// starting at t = 1 s, so every echo lands on its own line. Only for a channel
+// someone has cleared for it (M2, 2026-09-21: Frank cleared Ph 11/12).
+//
 // ⛔ It sends only /sendall, which asks TotalMix to dump state. It sets nothing.
 //
 #include "RmeOsc.h"
@@ -71,6 +77,18 @@ int main(int argc, char** argv)
     const int listenPort = (argc > 2) ? std::atoi(argv[2]) : 7002;
     const double seconds = (argc > 3) ? std::atof(argv[3]) : 3.0;
     const std::string filter = (argc > 4) ? argv[4] : "";
+    std::vector<std::pair<std::string, float>> writes;
+    for (int a = 5; a < argc; ++a) {
+        const std::string w = argv[a];
+        const auto eq = w.find('=');
+        if (w.empty() || w[0] != '/' || eq == std::string::npos) {
+            std::printf("bad write '%s', want /addr=value\n", w.c_str());
+            return 1;
+        }
+        writes.emplace_back(w.substr(0, eq),
+                            static_cast<float>(std::atof(w.c_str() + eq + 1)));
+    }
+    std::size_t nextWrite = 0;
     std::setvbuf(stdout, nullptr, _IOLBF, 0);   // live lines, also into a pipe
 
 #if defined(_WIN32)
@@ -119,6 +137,16 @@ int main(int argc, char** argv)
     const auto t0 = std::chrono::steady_clock::now();
     while (std::chrono::duration<double>(
                std::chrono::steady_clock::now() - t0).count() < seconds) {
+        const double el = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - t0).count();
+        if (nextWrite < writes.size() && el >= 1.0 + static_cast<double>(nextWrite)) {
+            const auto& w = writes[nextWrite++];
+            const auto pkt = encodeFloat(w.first, w.second);
+            ::sendto(s, reinterpret_cast<const char*>(pkt.data()),
+                     static_cast<int>(pkt.size()), 0,
+                     reinterpret_cast<sockaddr*>(&to), sizeof(to));
+            std::printf("%7.2fs  SENT %-35s %g\n", el, w.first.c_str(), w.second);
+        }
         const int n = ::recv(s, reinterpret_cast<char*>(buf.data()),
                              static_cast<int>(buf.size()), 0);
         if (n <= 0) continue;

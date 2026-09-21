@@ -167,8 +167,8 @@ Zweiter Sammler für `Uf1EqCurve`:
   mit ihr. Standard bleibt 2, damit der REAPER/SSL-Graph unverändert bleibt.
   Test in `tests/test_uf1_eq.cpp`: 6/12/18/24 dB pro Oktave weit unter der
   Eckfrequenz, und der bestehende Fall unverändert.
-- **Steilheit herausfinden (Messung M1):** belegt ist nur Index 1 = 12 dB/Okt.
-  Frank stellt 6, 18 und 24 einzeln ein, das Messwerkzeug liest den Index mit.
+- **Steilheit (M1, gemessen):** Index 0..3 = 6/12/18/24 dB/Okt, also
+  Ordnung = Index + 1.
 - Ob TotalMix' Low Cut ein Butterworth-Hochpass n-ter Ordnung ist oder eine
   andere Kurvenform hat, weiss ich nicht. Gezeichnet wird n × 6 dB/Okt.
 - **Graph neu senden, sobald sich ein EQ-Wert des gewählten Kanals ändert**,
@@ -238,6 +238,28 @@ M1 bis M3. Dann A (Client mit Statuszeile), dann I, dann E + F + G zusammen
 - Pan, Solo, Mute auf dem Fader-Kanal (ausser `push: mute`)
 - Farbbalken über den V-Pots
 - TotalMix auf dem UF8, ORC, Zusammenlegen mit stoerme
+
+## ✅ Messungen M1 bis M3, 21.09. abends
+
+- **M1 Low Cut:** `lowcut/slope` **0 = 6, 1 = 12, 2 = 18, 3 = 24 dB/Okt**
+  (Frank hat von 6 nach 24 gedreht, Indizes kamen 0, 1, 2, 3). Low Cut steht
+  bei Frank auf aus, wie vorher.
+- **M3 Remote 3 (7005/7006):** antwortet auf `/sendall` wie Remote 1, dieselben
+  Rollen, dieselbe Adressmenge.
+- **M2 Senden**, auf Ph 11/12 (`/output/10`, von Frank freigegeben):
+  - `/output/10/faderlin 0.3` wird angenommen, ergibt **-27.584 dB**.
+  - `/output/10/volume -14.76` (dB) wird angenommen.
+  - `/mix/in/0/10/faderlin 0.3` wird angenommen, **dieselbe Kurve** (-27.584 dB).
+  - `/mix/in/0/10/fader` (dB) wird angenommen.
+  - ⛔ **TotalMix schickt eine Änderung NICHT an den Remote zurück, der sie
+    gesendet hat**, nur an die anderen (Remote 1 hörte jede, Remote 3 keine).
+    Der Client muss seinen eigenen Wert deshalb selbst in `RmeState` eintragen
+    und darf nicht auf ein Echo warten. Änderungen am TotalMix-Bildschirm kommen
+    auf allen Remotes an (Palette-Messung vom Nachmittag).
+  - Alles zurückgestellt und über Remote 1 gegengelesen: -14.76 dB, Knoten
+    -3.73857 dB.
+- Messwerkzeug kann dafür jetzt schreiben: `rme_osc_probe <send> <listen> <s>
+  <filter> /addr=value ...`, eine Adresse pro Sekunde.
 
 ## Entschieden 21.09. („ja mach")
 
