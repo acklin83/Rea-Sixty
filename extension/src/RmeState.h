@@ -60,6 +60,9 @@ struct Channel {
     bool        seen   = false;
     double      volume = 0.0;  // outputs: dB. -300 is -inf.
     bool        mute   = false;
+    // /<section>/<n>/stereo. A stereo strip's right half is index + 1; a mono
+    // one's index + 1 is the NEXT channel (inputs 30 and 31 on Frank's rig).
+    bool        stereo = false;
     ChannelEq   eq;
 };
 

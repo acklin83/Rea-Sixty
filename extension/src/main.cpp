@@ -738,6 +738,9 @@ inline const char* uf1SideCarName_(int i)
 std::atomic<int> g_rmeRow{2};
 std::atomic<int> g_rmeSel[3] = { -1, -1, -1 };
 std::atomic<int> g_rmeSubmix{-1};
+// Das Jog hat gedreht: der Maler blendet den Main-Wert ins Zeitfeld ein. Nur
+// ein Merker, weil uf1FlashTimecode_ Hauptthread-Zustand ist.
+std::atomic<bool> g_rmeJogFlash{false};
 
 // ⇨ UF1 LAYOUT PROBE (Settings -> About). A diagnostic, not a feature.
 //
@@ -25626,7 +25629,10 @@ static bool uf1RmeEncoder_(uint8_t id, int delta)
     }
     if (id == uf1::enc::kJog) {
         const rmeu::Target t = rmeu::resolveTarget(st, cfg.jogTarget);
-        if (t.visible) uf1RmeNudge_(st, t.row, t.ch, delta, cfg.jogStepDb);
+        if (t.visible) {
+            uf1RmeNudge_(st, t.row, t.ch, delta, cfg.jogStepDb);
+            g_rmeJogFlash.store(true);
+        }
         return true;
     }
     return true;   // V-Pot ueber dem Fader: bewusst nichts, aber auch nicht REAPER
@@ -33764,6 +33770,12 @@ static void uf1PaintRme_()
             // Der Pot, dessen Ziel gerade auf dem Fader liegt, traegt den Stern,
             // dieselbe Markierung wie ein gepinnter Kanal.
             if (t.row == row && t.ch == sel) label = "*" + label;
+            // ⇨ UND DER PFEIL AUF DEM SUBMIX. Steht ein Eingang oder Playback auf
+            // dem Fader, schreibt er in den zuletzt gewaehlten Ausgang; der Pot,
+            // der diesen Ausgang zeigt, sagt es (Frank 21.09.). Traegt der Pot
+            // schon den Stern, ist er selbst der Fader-Kanal und braucht keinen.
+            else if (row != rmeu::Row::Output && t.row == rmeu::Row::Output
+                     && t.ch == sub) label = ">" + label;
             uf1VpotCell_(vr, i, label, k ? uf1RmeDbText_(d) + "dB" : std::string());
             uf1VpotBar_(vr, i, k ? rme::dbToFaderlin(d) : 0.0, false, /*empty*/ !k);
         }
@@ -33801,6 +33813,98 @@ static void uf1PaintRme_()
         std::array<Uf1SkCell, 4> cells{};
         for (auto& c : cells) { c.haveLabel = true; c.label.clear(); c.on = false; }
         if (!menu) uf1EmitSoftKeyRow_(cells, force || menuClosed, false, false);
+    }
+
+    // ── Zeitfeld: REAPER-Zeit, und beim Drehen am Jog der Main-Wert ─────────
+    // (a) von Franks a+b, 21.09. Das Zeitfeld bleibt REAPERs, der Wert steht nur
+    // so lange da, wie die Einblendung dauert, und kommt bei jeder Rastung neu.
+    const rmeu::Target jogT = rmeu::resolveTarget(st, cfg.jogTarget);
+    bool jogKnown = false;
+    const double jogDb = jogT.visible
+        ? rmeu::levelDb(st, jogT.row, jogT.ch, sub, jogKnown) : rme::kDbOff;
+    if (g_rmeJogFlash.exchange(false) && jogKnown)
+        uf1FlashTimecode_(uf1RmeDbText_(jogDb), 1500);
+    uf1PaintTimeField_(force);
+
+    // ── Zyklus fuer den Pacer: Kopfzeile und Pegel ──────────────────────────
+    // ⛔ OHNE DAS SENDET DER PACER WEITER DEN LETZTEN REAPER-STAND. Kopfzeile und
+    // Pegel am Fader stecken im Schnappschuss, den sonst nur uf1PaintChannel_
+    // baut, und der laeuft im Side-Car nicht (Frank 21.09.: Kopfzeile zeigte
+    // REAPER, der Pegel kam von der Spur).
+    {
+        const bool listOpen = g_uf1ModeMenu.load();
+        // Die drei Zustandsbytes der Liste, einmal pro Flanke, wie im Kanalmaler.
+        static bool sListOpen = false;
+        if (force || listOpen != sListOpen) {
+            sListOpen = listOpen;
+            const uint8_t s0110 = listOpen ? 0x07 : 0x0f;
+            const uint8_t s011a = listOpen ? 0x03 : 0x02;
+            const uint8_t s011e = listOpen ? 0x1f : 0x19;
+            g_uf1_dev->send(uf1::buildScreen(0x0110, std::span<const uint8_t>(&s0110, 1)));
+            g_uf1_dev->send(uf1::buildScreen(0x011a, std::span<const uint8_t>(&s011a, 1)));
+            g_uf1_dev->send(uf1::buildScreen(0x011e, std::span<const uint8_t>(&s011e, 1)));
+        }
+
+        auto hdr = uf1PageHeader_(1, 1);   // Soft-Key-Bank N/M: Schritt 4
+        auto putCell = [&](int cell, const std::string& t) {
+            for (size_t k = 0; k < 25; ++k)
+                hdr[static_cast<size_t>(cell) * 25 + k] =
+                    (k < t.size()) ? static_cast<uint8_t>(t[k]) : 0;
+        };
+        if (listOpen) {
+            // MODE + Encoder: die drei Reihen, wie die Encoder-Liste.
+            int vis[3] = { 0, 1, 2 };
+            uf1FillModeList_(hdr, vis, 3, 3, static_cast<int>(row),
+                             [](int r) { return rmeu::rowName(static_cast<rmeu::Row>(r)); });
+        } else if (!linked) {
+            putCell(0, "RME");
+        } else if (row == rmeu::Row::Output) {
+            putCell(0, "OUTPUT");
+        } else {
+            // Wohin der Fader schreibt, auch hier: Reihe > Submix.
+            std::string on = rmeu::displayName(st, rmeu::Row::Output, sub);
+            putCell(0, utf8ToLatin1(std::string(row == rmeu::Row::Input ? "IN > " : "PB > ")
+                                    + (on.empty() ? std::string("--") : on)));
+        }
+        // (b) Main dauerhaft, in der Zelle unter FINE CTRL.
+        putCell(4, jogKnown ? uf1RmeDbText_(jogDb) + " dB" : std::string());
+
+        auto parts = std::make_shared<Uf1CycleParts>();
+        // Pegel des gewaehlten Kanals aus TotalMix (/level/<bus>/<n> und n+1),
+        // Peak in dB, dieselbe Umrechnung wie der REAPER-Pfad. Kommt nur, wenn
+        // in TotalMix fuer dieses Remote "Send Peak Level" an ist; sonst 0.
+        uint8_t lvL = 0, lvR = 0;
+        if (sel >= 0) {
+            const std::map<int, double>& lv = row == rmeu::Row::Output ? st.levelOut
+                                            : row == rmeu::Row::Input  ? st.levelIn
+                                                                       : st.levelPb;
+            const auto a = lv.find(sel);
+            if (a != lv.end()) lvL = dbToVuByte_(a->second);
+            lvR = lvL;
+            // Rechts nur bei einem Stereo-Kanal von n + 1: bei Mono ist n + 1 der
+            // naechste Kanal, nicht die andere Seite.
+            const rme::Channel* sc = rmeu::channelOf(st, row, sel);
+            if (sc && sc->stereo)
+                if (const auto bR = lv.find(sel + 1); bR != lv.end())
+                    lvR = dbToVuByte_(bR->second);
+        }
+        const uint8_t k0009[] = { lvL, lvR, 0x00, 0x00 };
+        const uint8_t z4[]    = { 0x00, 0x00, 0x00, 0x00 };
+        const uint8_t z1      = 0x00;
+        parts->meters.push_back(uf1::buildScreen(0x0009, k0009));
+        parts->meters.push_back(uf1::buildScreen(0x000a, z4));
+        parts->meters.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&z1, 1)));
+        parts->meters.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&z1, 1)));
+        parts->tail.push_back(uf1::buildScreen(uf1::scr::kHeaderRow,
+            std::span<const uint8_t>(hdr.data(), hdr.size())));
+        const uint8_t hl = listOpen ? 0x19 : 0x00;
+        parts->tail.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&hl, 1)));
+        {
+            std::lock_guard<std::mutex> lk(g_uf1CycleMx);
+            g_uf1CycleSnap = std::shared_ptr<const Uf1CycleParts>(std::move(parts));
+        }
+        g_uf1CycleActive.store(true, std::memory_order_relaxed);
+        uf1EnsurePacer_();
     }
 
     // Der Ausgang. Ohne ihn ist das Side-Car eine Falle.

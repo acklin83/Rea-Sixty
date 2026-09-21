@@ -336,6 +336,8 @@ int main()
               "an output with a role is shown by the role, not its strip name");
         check(u::displayName(s3, u::Row::Output, 0) == "Main", "Main by role");
         check(u::displayName(s3, u::Row::Input, 6) == "Bass", "an input by its name");
+        put("/input/6/stereo", 1);
+        check(s3.inputs[6].stereo && !s3.inputs[0].stereo, "the stereo flag lands per strip");
         check(u::nudgeDb(kDbOff, 1, 0.5) == -60.0, "off climbs to -60 first");
         check(u::nudgeDb(-60.0, -1, 0.5) == -60.5 && u::nudgeDb(5.8, 2, 0.5) == 6.0,
               "nudges in steps, clamps at +6");
