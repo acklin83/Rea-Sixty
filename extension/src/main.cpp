@@ -32975,6 +32975,11 @@ static void uf1PaintLayoutProbe_()
         // (die blieben auf FF stehen) und nicht 0x0129 (ist ab Werk FF).
         { 0x0110, 1, { 0xFF, 0, 0, 0 } },
         { 0x011a, 1, { 0xFF, 0, 0, 0 } },
+        // 16: genau 9, aber mit Stil 0x04 statt 0x01. In Layout 1 zeigte 9
+        // allein NICHTS, mit allen zusammen (13 setzt danach 0x04) aber
+        // Wertzeilen und Segmentleiste (Frank 21.09., IMG_4675). Die Frage:
+        // gibt der Stil die Reihe frei?
+        { 0x010e, 0, { 0, 0, 0, 0 } },
     };
     constexpr int kProbeElemCount =
         static_cast<int>(sizeof(kProbeElems) / sizeof(kProbeElems[0]));
@@ -33076,6 +33081,23 @@ static void uf1PaintLayoutProbe_()
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, styles));
             continue;
         }
+        if (pick && e.addr == 0x010e) {
+            for (uint8_t k = 0; k < 4; ++k) {
+                const char* names[4] = { "VPOT1", "VPOT2", "VPOT3", "VPOT4" };
+                const std::string line = uf1ValueLine(names[k], "TEST");
+                std::vector<uint8_t> p;
+                p.push_back(k);
+                p.insert(p.end(), line.begin(), line.end());
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kFocusedParam, p));
+            }
+            const uint8_t bars[8] = { 0x14, 0x80, 0x32, 0x80, 0x50, 0x80, 0x64, 0x80 };
+            const uint8_t st[4] = { uf1::scr::kVpotStyleSslDaw, uf1::scr::kVpotStyleSslDaw,
+                                    uf1::scr::kVpotStyleSslDaw, uf1::scr::kVpotStyleSslDaw };
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, st));
+            continue;
+        }
+        if (!pick && e.addr == 0x010e) continue;   // 9 raeumt die Reihe ab
         if (!pick && e.addr == 0x010f) {
             // Die ganze Reihe leer. 13 kommt spaeter in der Schleife und
             // schreibt Stil und Balken selbst.
@@ -47601,7 +47623,7 @@ void reasixty_setUf1ProbeBarBase(int v)
 }
 void reasixty_setUf1ProbeOnly(int v)
 {
-    if (v < 0 || v > 15) return;
+    if (v < 0 || v > 16) return;
     if (g_uf1ProbeOnly.exchange(v) != v)
         g_uf1ProbeGen.fetch_add(1, std::memory_order_relaxed);
 }

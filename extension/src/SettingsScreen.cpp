@@ -26096,8 +26096,9 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
                 " 13  0x010d   V-Pot style 0x04, SSL's DAW-layer look",
                 " 14  0x0110   alone, FF",
                 " 15  0x011a   alone, FF",
+                " 16  like 9, but V-Pot style 0x04",
             };
-            const int shown = (only >= 0 && only <= 15) ? only : 0;
+            const int shown = (only >= 0 && only <= 16) ? only : 0;
             ImGui_Text(ctx, kElemNames[shown]);
             // The four bars show base..base+3, so the palette walks in fours.
             int barBase = reasixty_uf1ProbeBarBase();

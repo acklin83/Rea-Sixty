@@ -216,3 +216,16 @@ Die Sonde hat die V-Pot-Reihe und die Soft-Key-Texte bei „nicht gewählt"
 Stil `0x04` anders aussieht als `0x01`, lässt sich daraus nicht sagen.
 Behoben: nicht gewählt heisst jetzt leer (Indexbyte allein, Balken 0, Stil 03),
 und 0x011f/0x0123/0x0129 gehen auf ihre Init-Werte zurück.
+
+## Zweiter Durchgang, isoliert
+
+| # | was zu sehen ist |
+|---|---|
+| 9 | nur Zeitfeld, CELL1, CELL2. **Keine Wertzeile, keine Segmentleiste** |
+| 10 | SK1 bis SK4 |
+| 12 | C1 bis C4, ohne SK1 bis SK4 |
+| 15 | **CELL1 und CELL2 weg: `0x011a = FF` blendet die Kopfzellen aus** |
+
+9 schreibt Stil `0x01`; mit „alle" setzt 13 danach `0x04`, und dann waren
+Wertzeile und Segmentleiste da. Vermutung: in Layout 1 gibt erst Stil `0x04`
+die Reihe frei. Test: Element 16 = 9 mit Stil `0x04`.
