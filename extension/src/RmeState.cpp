@@ -44,6 +44,48 @@ double num(const Message& m)
 
 }  // namespace
 
+namespace {
+// faderlin 0.00, 0.05 .. 1.00 -> dB, measured 2026-09-21 (see RmeState.h).
+constexpr double kCurve[21] = {
+    kDbOff,   -57.5783, -50.6309, -44.1578, -38.1589, -32.6343, -27.584,
+    -23.0079, -18.9061, -15.2786, -12.1254, -9.44641, -7.24171, -5.48824,
+    -3.84706, -2.20588, -0.564707, 1.07647, 2.71764, 4.35882, 6.0 };
+}  // namespace
+
+double faderlinToDb(double x)
+{
+    if (!(x > 0.0)) return kDbOff;           // also catches NaN
+    if (x >= 1.0) return kCurve[20];
+    const double pos = x * 20.0;
+    const int    i   = static_cast<int>(pos);
+    const double t   = pos - i;
+    // Between OFF and the first real point there is no dB to interpolate
+    // against, so the first step is drawn from the next two points' slope.
+    if (i == 0) {
+        const double slope = kCurve[2] - kCurve[1];
+        return kCurve[1] - (1.0 - t) * slope * 4.0;   // steep towards silence
+    }
+    return kCurve[i] + t * (kCurve[i + 1] - kCurve[i]);
+}
+
+double dbToFaderlin(double db)
+{
+    if (!(db > kDbOff + 1.0)) return 0.0;
+    if (db >= kCurve[20]) return 1.0;
+    if (db < kCurve[1]) {                     // below 0.05: invert the first step
+        const double slope = kCurve[2] - kCurve[1];
+        const double t = 1.0 - (kCurve[1] - db) / (slope * 4.0);
+        return t > 0.0 ? t * 0.05 : 0.0;
+    }
+    for (int i = 1; i < 20; ++i) {
+        if (db <= kCurve[i + 1]) {
+            const double t = (db - kCurve[i]) / (kCurve[i + 1] - kCurve[i]);
+            return (i + t) * 0.05;
+        }
+    }
+    return 1.0;
+}
+
 const Channel* State::outputForRole(int channelIndex) const
 {
     if (channelIndex < 0) return nullptr;

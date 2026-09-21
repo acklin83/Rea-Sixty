@@ -21,6 +21,7 @@
 #include "DynaMountManager.h"
 #include "HueManager.h"
 #include "ObsManager.h"
+#include "RmeManager.h"
 #include "GrCalibration.h"
 #include "KnobFeelPresets.h"
 #include "ParameterGroups.h"
@@ -23278,6 +23279,131 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
 // Persists to ExtState "rea_sixty"/"hue_config"; the application key lives apart
 // in "hue_key" so a shared setup bundle can carry the slots without carrying the
 // credentials.
+// ---- RME / TotalMix ---------------------------------------------------------
+// The link and what TotalMix says back. Same division and the same saving rule
+// as OBS: the pane only calls setConfig(); tickHueTransport_ writes rme.json
+// when takeConfigDirty() says so. Everything below the separator is a STATUS,
+// what the mixer reported, so it is allowed as text; every explanation is a
+// tooltip ([[settings-tooltips-conversion]]).
+static void drawRmeTab_(ImGui_Context* ctx)
+{
+    using namespace reasixty::rme;
+    auto& rm = manager();
+
+    ImGui_Text(ctx, "TotalMix FX");
+    ImGui_Spacing(ctx);
+
+    Config cfg = rm.config();
+
+    bool on = cfg.enabled;
+    if (ImGui_Checkbox(ctx, "Talk to TotalMix##rme_on", &on)) {
+        cfg.enabled = on;
+        rm.setConfig(cfg);
+    }
+    help_(ctx, "In TotalMix: Options, Settings, OSC. Pick Remote Controller 3, "
+               "tick In Use, Port incoming 7005, Port outgoing 7006, "
+               "IP or Host name 127.0.0.1. Remote 1 and 2 are often taken "
+               "(TotalReaper, stoerme).");
+
+    {
+        const LinkState st = rm.link();
+        int colour = 0x808080FF;
+        switch (st) {
+            case LinkState::Online:   colour = 0x5EC27AFF; break;
+            case LinkState::PortBusy:
+            case LinkState::Silent:   colour = 0xD97B6CFF; break;
+            case LinkState::Waiting:  colour = 0xE8C33AFF; break;
+            default: break;
+        }
+        ImGui_TextColored(ctx, colour, "\xE2\x97\x8F");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        std::string line = rm.status();
+        if (line.empty()) line = "off";
+        ImGui_Text(ctx, line.c_str());
+    }
+
+    ImGui_Spacing(ctx);
+
+    {
+        // ⛔ NOT s_host, see the OBS pane: winsock defines it as a macro.
+        static char        s_rmeHost[128] = {0};
+        static std::string s_hostSeen;
+        if (s_hostSeen != cfg.host) {
+            s_hostSeen = cfg.host;
+            std::snprintf(s_rmeHost, sizeof(s_rmeHost), "%s", cfg.host.c_str());
+        }
+        int f = 0;
+        ImGui_SetNextItemWidth(ctx, 200.0);
+        if (ImGui_InputText(ctx, "Host##rme_host", s_rmeHost, sizeof(s_rmeHost),
+                            &f, nullptr)) {
+            cfg.host   = s_rmeHost;
+            s_hostSeen = cfg.host;
+            rm.setConfig(cfg);
+        }
+        help_(ctx, "The machine TotalMix runs on. 127.0.0.1 when it is this one.");
+        int sp = cfg.sendPort;
+        ImGui_SetNextItemWidth(ctx, 140.0);
+        if (ImGui_InputInt(ctx, "Send to port##rme_send", &sp, nullptr, nullptr, nullptr)) {
+            cfg.sendPort = sp;
+            rm.setConfig(cfg);
+        }
+        help_(ctx, "TotalMix' \"Port incoming\" for this remote.");
+        int rp = cfg.recvPort;
+        ImGui_SetNextItemWidth(ctx, 140.0);
+        if (ImGui_InputInt(ctx, "Listen on port##rme_recv", &rp, nullptr, nullptr, nullptr)) {
+            cfg.recvPort = rp;
+            rm.setConfig(cfg);
+        }
+        help_(ctx, "TotalMix' \"Port outgoing\" for this remote.");
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Spacing(ctx);
+
+    // What TotalMix reported. Lets a wrong remote or a hidden channel show up
+    // here instead of as an empty knob.
+    {
+        const State st = rm.snapshot();
+        auto count = [](const std::map<int, Channel>& m) {
+            int n = 0;
+            for (const auto& kv : m) if (kv.second.seen) ++n;
+            return n;
+        };
+        char line[160];
+        std::snprintf(line, sizeof(line), "%d outputs, %d inputs, %d playbacks",
+                      count(st.outputs), count(st.inputs), count(st.playbacks));
+        ImGui_Text(ctx, line);
+
+        auto role = [&](const char* label, int ch) {
+            char r[192];
+            if (!State::roleAssigned(ch))
+                std::snprintf(r, sizeof(r), "%-10s --", label);
+            else if (st.roleHidden(ch))
+                std::snprintf(r, sizeof(r), "%-10s output %d, hidden from this remote", label, ch);
+            else {
+                const Channel* c = st.outputForRole(ch);
+                std::snprintf(r, sizeof(r), "%-10s %s  %.1f dB", label,
+                              c ? c->name.c_str() : "", c ? c->volume : 0.0);
+            }
+            ImGui_Text(ctx, r);
+        };
+        if (rm.link() == LinkState::Online || st.ingested > 0) {
+            role("Main",    st.mainOut);
+            role("Main B",  st.mainOutB);
+            role("Phones 1", st.phones[0]);
+            role("Phones 2", st.phones[1]);
+            role("Phones 3", st.phones[2]);
+            role("Phones 4", st.phones[3]);
+        }
+        ImGui_Spacing(ctx);
+        if (ImGui_Button(ctx, "Ask TotalMix again##rme_refresh", nullptr, nullptr))
+            rm.refresh();
+        help_(ctx, "Hidden channels: TotalMix, Options, Channel Layout, "
+                   "Hide in OSC Remote 3.");
+    }
+}
+
 // ---- OBS Mode -------------------------------------------------------------
 // Host, port, password, and what the link is doing. Everything else about OBS
 // lives on the keys: the actions in Bindings and the scene row as a dynamic
@@ -24246,7 +24372,9 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     if (s_savedTab < 0) {
         const char* saved = GetExtState("rea_sixty", "modes_subtab");
         s_savedTab = (saved && *saved) ? std::atoi(saved) : 0;
-        if (s_savedTab < 0 || s_savedTab > 7) s_savedTab = 0;
+        // ⛔ The highest tab index lives HERE too: a tab beyond it is never
+        // restored. 8 = RME (2026-09-21).
+        if (s_savedTab < 0 || s_savedTab > 8) s_savedTab = 0;
         s_lastWritten   = s_savedTab;
         s_savedConsumed = false;
     }
@@ -25044,6 +25172,14 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
     if (ImGui_BeginTabItem(ctx, "OBS", nullptr, &flagsObs)) {
         persistActive(7);
         drawObsTab_(ctx);
+        ImGui_EndTabItem(ctx);
+    }
+
+    // --- RME / TotalMix ---------------------------------------------
+    int flagsRme = tabFlagsFor(8);
+    if (ImGui_BeginTabItem(ctx, "RME", nullptr, &flagsRme)) {
+        persistActive(8);
+        drawRmeTab_(ctx);
         ImGui_EndTabItem(ctx);
     }
 

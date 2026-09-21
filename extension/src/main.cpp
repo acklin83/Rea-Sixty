@@ -92,6 +92,7 @@
 #include "DynaMountManager.h"
 #include "HueManager.h"
 #include "ObsManager.h"
+#include "RmeManager.h"
 #include "StreamDeckBridge.h"
 #include "SslCoreImpersonator.h"
 #include "uf1_loudness_chrome.h"
@@ -3886,6 +3887,22 @@ std::map<std::string, std::string> g_trackBcSet;   // trackGUID → BC-set name
 
 static std::vector<NamedFavSet>&          favLib_(bool cs)       { return cs ? g_csSets : g_bcSets; }
 static std::map<std::string, std::string>& favAssignMap_(bool cs) { return cs ? g_trackCsSet : g_trackBcSet; }
+
+// <ResourcePath>/rea_sixty/rme.json, the TotalMix link's settings. Its own file
+// so the standalone ORC can read it without REAPER. Creates the folder, like
+// every other file we keep there.
+static std::string reasixty_rmeConfigPath_()
+{
+    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    std::string d = (base && *base) ? base : ".";
+    d += "/rea_sixty";
+#ifdef _WIN32
+    _mkdir(d.c_str());
+#else
+    mkdir(d.c_str(), 0755);
+#endif
+    return d + "/rme.json";
+}
 
 static std::string favSetsFilePath_()
 {
@@ -42168,6 +42185,22 @@ static void tickHueTransport_()
                         om.serializeCredentials().c_str(), true);
         }
     }
+    // And the TotalMix link, into its own file (see the load in init). Written
+    // to a temporary name and moved over, so a crash mid-write cannot leave a
+    // half file that the next start refuses and silently replaces by defaults.
+    {
+        auto& rm = reasixty::rme::manager();
+        if (rm.takeConfigDirty()) {
+            const std::string path = reasixty_rmeConfigPath_();
+            const std::string tmp  = path + ".tmp";
+            if (FILE* f = std::fopen(tmp.c_str(), "wb")) {
+                const std::string j = reasixty::rme::configToJson(rm.config());
+                std::fwrite(j.data(), 1, j.size(), f);
+                std::fclose(f);
+                std::rename(tmp.c_str(), path.c_str());
+            }
+        }
+    }
 
     // ---- recording light ---------------------------------------------------
     {
@@ -56385,6 +56418,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         // Same again for the OBS link: the worker may be sitting in a socket
         // read, and run_ going false is what ends the pass.
         reasixty::obs::manager().stop();
+        // And the TotalMix link: its worker sits in a 100 ms recv.
+        reasixty::rme::manager().stop();
         // Stop the Stream Deck bridge server + join its worker thread.
         uf8::sdbridge::stop();
         // Stop the SSL Core impersonator worker (no-op if it never started).
@@ -56542,6 +56577,26 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         if (const char* key = GetExtState("rea_sixty", "obs_key"); key && *key)
             om.deserializeCredentials(key);
         om.start();
+    }
+
+    initLog("step: load RME config");
+    // ⇨ rme.json, NOT ExtState. The standalone ORC is meant to read the same
+    // file without REAPER, so the TotalMix link keeps its settings in a file of
+    // its own next to bindings.json (docs/uf1-spread-plan.md). The worker starts
+    // either way and idles while the link is off, like the OBS one.
+    {
+        auto& rm = reasixty::rme::manager();
+        std::string json;
+        if (FILE* f = std::fopen(reasixty_rmeConfigPath_().c_str(), "rb")) {
+            char buf[4096];
+            size_t n;
+            while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) json.append(buf, n);
+            std::fclose(f);
+        }
+        reasixty::rme::Config c = rm.config();
+        if (!json.empty() && reasixty::rme::configFromJson(json, c)) rm.setConfig(c);
+        rm.takeConfigDirty();   // loaded, not changed: nothing to write back
+        rm.start();
     }
 
     initLog("step: deploy input-level JSFX");

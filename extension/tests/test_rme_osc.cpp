@@ -11,8 +11,11 @@
 //   · ⛔ that a ROLE pointing at a channel this remote cannot see is a STATE,
 //     which is the one thing on Frank's rig that would otherwise read as a bug
 //
+#include "RmeManager.h"
 #include "RmeOsc.h"
 #include "RmeState.h"
+
+#include <cmath>
 
 #include <cstdio>
 #include <cstring>
@@ -177,6 +180,67 @@ int main()
     check(st.levelOut.empty(), "no levels until the mixer is told to send them");
     feed("/level/out/8", -6.5f);
     check(st.levelOut.count(8) == 1 && st.levelOut[8] < -6.4, "a level lands on its bus");
+
+    // ── the fader curve, measured 2026-09-21 on /mix/pb/0/10 ────────────────
+    auto near = [](double a, double b, double tol) { return std::fabs(a - b) <= tol; };
+    check(faderlinToDb(0.0) == kDbOff, "faderlin 0 is OFF");
+    check(near(faderlinToDb(0.3), -27.584, 0.001), "0.3 = -27.584 dB (outputs and nodes)");
+    check(near(faderlinToDb(0.5), -12.1254, 0.001), "0.5 = -12.13 dB");
+    check(near(faderlinToDb(1.0), 6.0, 0.001), "1.0 = +6 dB, playbacks included");
+    check(near(faderlinToDb(0.725), (-3.84706 + -2.20588) / 2.0, 0.001),
+          "straight line between two measured points");
+    check(dbToFaderlin(kDbOff) == 0.0, "OFF maps back to 0");
+    check(dbToFaderlin(20.0) == 1.0, "above +6 clamps to the top");
+    {
+        bool ok = true, mono = true;
+        double prev = -1e9;
+        for (int i = 1; i <= 100; ++i) {
+            const double x  = i / 100.0;
+            const double db = faderlinToDb(x);
+            if (db <= prev) mono = false;
+            prev = db;
+            if (!near(dbToFaderlin(db), x, 1e-9)) ok = false;
+        }
+        check(mono, "the curve only ever rises");
+        check(ok, "dB -> faderlin -> dB is exact in both directions");
+    }
+
+    // ── ⛔ TotalMix does not echo our own writes, so we fold them in ourselves
+    {
+        const Message e = localEcho("/output/10/faderlin", 0.3f);
+        check(e.address == "/output/10/volume", "an output's faderlin echoes as volume");
+        check(!e.args.empty() && near(e.args[0].number(), -27.584, 0.01),
+              "…in dB, on TotalMix' curve");
+        const Message n = localEcho("/mix/in/0/10/faderlin", 0.3f);
+        check(n.address == "/mix/in/0/10/fader", "a node's faderlin echoes as fader");
+        const Message d = localEcho("/controlroom/dim", 1.0f);
+        check(d.address == "/controlroom/dim" && !d.args.empty()
+              && d.args[0].number() == 1.0, "anything else echoes as itself");
+        State s2;
+        ingest(s2, localEcho("/output/10/faderlin", 0.3f));
+        check(near(s2.outputs[10].volume, -27.584, 0.01), "and the state takes the echo");
+    }
+
+    // ── rme.json ─────────────────────────────────────────────────────────────
+    {
+        Config c;
+        check(!c.enabled && c.sendPort == 7005 && c.recvPort == 7006,
+              "defaults: off, Remote 3 (7005 out, 7006 back)");
+        c.enabled = true; c.host = "192.168.177.83"; c.sendPort = 7007; c.recvPort = 7008;
+        Config r;
+        check(configFromJson(configToJson(c), r), "what we write, we read");
+        check(r.enabled && r.host == c.host && r.sendPort == 7007 && r.recvPort == 7008,
+              "round trip keeps every field");
+        Config keep; keep.host = "10.0.0.1";
+        check(!configFromJson("not json", keep) && keep.host == "10.0.0.1",
+              "a broken file changes nothing");
+        Config extra;
+        check(configFromJson("{\"future\": {\"a\": 1}, \"connection\": {\"send\": 7005}}", extra)
+              && extra.sendPort == 7005, "unknown fields are not an error");
+        Config bad;
+        configFromJson("{\"connection\": {\"send\": 99999, \"receive\": 0}}", bad);
+        check(bad.sendPort == 7005 && bad.recvPort == 7006, "impossible ports fall back");
+    }
 
     if (g_fail == 0) std::printf("test_rme_osc: all checks passed\n");
     return g_fail == 0 ? 0 : 1;
