@@ -32883,6 +32883,14 @@ static void uf1PaintLayoutProbe_()
         // Beschriftung waeren kein Tausch, sondern ein Verlust. Wird unten
         // gesondert geschrieben, weil 0x010e vier indizierte Saetze braucht.
         { 0x010f, 0, { 0, 0, 0, 0 } },
+        // 10: die vier Soft-Key-Beschriftungen (0x0104). In Layout 1 nie
+        // ausprobiert, und der einzige verbliebene Kandidat fuer Text NEBEN
+        // den Farbbalken — die Kopfzeile gibt dort nur zwei Zellen her.
+        { 0x0104, 0, { 0, 0, 0, 0 } },
+        // 11: die fuenf Ein-Byte-Zellen, die der Init beschreibt und wir nie.
+        // Text koennen sie nicht sein, aber vielleicht schalten sie in Layout 1
+        // etwas ein. Alle auf 0xFF, das ist in jeder Kodierung "voll".
+        { 0x0110, 0, { 0, 0, 0, 0 } },
     };
     constexpr int kProbeElemCount =
         static_cast<int>(sizeof(kProbeElems) / sizeof(kProbeElems[0]));
@@ -32896,6 +32904,30 @@ static void uf1PaintLayoutProbe_()
     for (int i = 0; i < kProbeElemCount; ++i) {
         const auto& e = kProbeElems[i];
         const bool pick = (only == 0) || (only == i + 1);
+        if (pick && e.addr == 0x0104) {
+            for (uint8_t k = 0; k < 4; ++k) {
+                const char* names[4] = { "SK1", "SK2", "SK3", "SK4" };
+                std::vector<uint8_t> p;
+                p.push_back(k);
+                for (const char* c = names[k]; *c; ++c)
+                    p.push_back(static_cast<uint8_t>(*c));
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kSoftKeyLabel, p));
+            }
+            continue;
+        }
+        if (!pick && e.addr == 0x0104) continue;
+        if (pick && e.addr == 0x0110) {
+            // ⛔ 0x011b ist NICHT dabei und darf es nie sein: mit Bytes statt
+            // leer reisst es die ganze Kanalansicht herunter (2026-08-10).
+            static constexpr uint16_t kOneByte[] = { 0x0110, 0x011a, 0x011f,
+                                                     0x0123, 0x0129 };
+            const uint8_t full = 0xFF;
+            for (const uint16_t a : kOneByte)
+                g_uf1_dev->send(uf1::buildScreen(a,
+                    std::span<const uint8_t>(&full, 1)));
+            continue;
+        }
+        if (!pick && e.addr == 0x0110) continue;
         if (pick && e.addr == 0x010f) {
             // Vier Beschriftungen mit Index-Praefix, vier Balken auf deutlich
             // verschiedenen Positionen, alle Stile auf "wandernde Linie".
@@ -47291,7 +47323,7 @@ void reasixty_setUf1ProbeBarBase(int v)
 }
 void reasixty_setUf1ProbeOnly(int v)
 {
-    if (v < 0 || v > 9) return;
+    if (v < 0 || v > 11) return;
     if (g_uf1ProbeOnly.exchange(v) != v)
         g_uf1ProbeGen.fetch_add(1, std::memory_order_relaxed);
 }

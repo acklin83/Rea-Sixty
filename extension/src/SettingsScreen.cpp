@@ -26090,8 +26090,10 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
                 "  7  0x0015   comp GR   one third",
                 "  8  0x0016   gate GR   two thirds",
                 "  9  the whole V-Pot row: labels, bars, styles",
+                " 10  0x0104   the four soft-key labels (SK1..SK4)",
+                " 11  the five one-byte cells the init writes and we never do",
             };
-            const int shown = (only >= 0 && only <= 9) ? only : 0;
+            const int shown = (only >= 0 && only <= 11) ? only : 0;
             ImGui_Text(ctx, kElemNames[shown]);
             // The four bars show base..base+3, so the palette walks in fours.
             int barBase = reasixty_uf1ProbeBarBase();
