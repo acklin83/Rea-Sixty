@@ -240,3 +240,22 @@ Farbbalken pro V-Pot, ein kurzer Text pro V-Pot (`0x010b`), Wertzeile und
 Segmentleiste, alles gleichzeitig, plus SK1 bis SK4, Zeitfeld und zwei
 Kopfzellen. Kein EQ-Graph (der lebt in Layout 3). Offen: welche Breite die
 Wertzeile in Layout 1 verträgt.
+
+## Breite in Layout 1, am Gerät gemessen
+
+Lineal `A..S` (19 Zeichen), nur auf Pot 1, Stil `0x04`:
+
+| Feld | sichtbar | Lücke | Lage |
+|---|---|---|---|
+| `0x010e` Wertzeile | **A bis N (14)** | keine | ganz über Pot 1 |
+| `0x010b` Text pro Pot | **A bis H (8)** | keine | ganz über Pot 1 |
+
+⛔ **Korrektur zu oben.** Die Wertzeile läuft NICHT in den Nachbarpot. Auf
+IMG_4678 steht „VPOT1" links in der Spalte von Pot 1 und „TES" rechts in
+derselben Spalte, nur dicht vor dem Label von Pot 2. Abgeschnitten wird am
+rechten Rand der eigenen Spalte.
+
+Die Zahl hängt an den Buchstaben: 14 Grossbuchstaben passen, von
+„VPOT1 + Leerzeichen + TEST" (19 Zeichen, Wert ab Stelle 16) waren 18 zu sehen.
+Das passt zu einer Kappung nach **Pixelbreite** (Proportionalschrift), nicht
+nach Zeichenzahl. Nicht einzeln nachgemessen.
