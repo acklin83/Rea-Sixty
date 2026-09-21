@@ -32968,6 +32968,13 @@ static void uf1PaintLayoutProbe_()
         // zwei Features ohne Ebenenwechsel.
         { 0x010b, 0, { 0, 0, 0, 0 } },
         { 0x010d, 0, { 0, 0, 0, 0 } },
+        // 14 + 15: die zwei Verdaechtigen aus 11 einzeln. In Layout 1 liess 11
+        // CELL1 und CELL2 verschwinden, und bei 13 waren sie wieder da
+        // (Frank 21.09., IMG_4677). Zurueckgesetzt wird pro Runde nur 0x0110
+        // und 0x011a -- also ist es einer dieser beiden, nicht 0x011f/0x0123
+        // (die blieben auf FF stehen) und nicht 0x0129 (ist ab Werk FF).
+        { 0x0110, 1, { 0xFF, 0, 0, 0 } },
+        { 0x011a, 1, { 0xFF, 0, 0, 0 } },
     };
     constexpr int kProbeElemCount =
         static_cast<int>(sizeof(kProbeElems) / sizeof(kProbeElems[0]));
@@ -32992,7 +32999,14 @@ static void uf1PaintLayoutProbe_()
             }
             continue;
         }
-        if (!pick && e.addr == 0x010b) continue;
+        if (!pick && e.addr == 0x010b) {
+            // ⛔ LOESCHEN, SONST STEHT ES IM NAECHSTEN FOTO. Leer = nur das
+            // Indexbyte, so loescht SSL 0x010e im Eintritts-Burst (cap141).
+            for (uint8_t k = 0; k < 4; ++k)
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotNumber,
+                    std::span<const uint8_t>(&k, 1)));
+            continue;
+        }
         if (pick && e.addr == 0x010d) {
             // Stil 0x04 auf allen vieren, dazu Balken auf klar verschiedenen
             // Positionen -- sonst sieht man den Stil nicht.
@@ -33003,7 +33017,7 @@ static void uf1PaintLayoutProbe_()
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
             continue;
         }
-        if (!pick && e.addr == 0x010d) continue;
+        if (!pick && e.addr == 0x010d) continue;   // 9 raeumt die Reihe ab
         if (pick && e.addr == 0x0104) {
             for (uint8_t k = 0; k < 4; ++k) {
                 const char* names[4] = { "SK1", "SK2", "SK3", "SK4" };
@@ -33015,8 +33029,13 @@ static void uf1PaintLayoutProbe_()
             }
             continue;
         }
-        if (!pick && e.addr == 0x0104) continue;
-        if (pick && e.addr == 0x0110) {
+        if (!pick && e.addr == 0x0104) {
+            for (uint8_t k = 0; k < 4; ++k)
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kSoftKeyLabel,
+                    std::span<const uint8_t>(&k, 1)));
+            continue;
+        }
+        if (pick && e.addr == 0x0110 && e.n == 0) {
             // ⛔ 0x011b ist NICHT dabei und darf es nie sein: mit Bytes statt
             // leer reisst es die ganze Kanalansicht herunter (2026-08-10).
             static constexpr uint16_t kOneByte[] = { 0x0110, 0x011a, 0x011f,
@@ -33027,7 +33046,18 @@ static void uf1PaintLayoutProbe_()
                     std::span<const uint8_t>(&full, 1)));
             continue;
         }
-        if (!pick && e.addr == 0x0110) continue;
+        if (!pick && e.addr == 0x0110 && e.n == 0) {
+            // Auf die Init-Werte zurueck. Vorher blieben 0x011f und 0x0123
+            // nach 11 einfach auf FF stehen.
+            static constexpr struct { uint16_t a; uint8_t v; } kBase[] = {
+                { 0x0110, 0x0f }, { 0x011a, 0x02 }, { 0x011f, 0x00 },
+                { 0x0123, 0x00 }, { 0x0129, 0xff } };
+            for (const auto& b : kBase)
+                g_uf1_dev->send(uf1::buildScreen(b.a,
+                    std::span<const uint8_t>(&b.v, 1)));
+            continue;
+        }
+        if (!pick && (e.addr == 0x0110 || e.addr == 0x011a)) continue;
         if (pick && e.addr == 0x010f) {
             // Vier Beschriftungen mit Index-Praefix, vier Balken auf deutlich
             // verschiedenen Positionen, alle Stile auf "wandernde Linie".
@@ -33046,7 +33076,18 @@ static void uf1PaintLayoutProbe_()
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, styles));
             continue;
         }
-        if (!pick && e.addr == 0x010f) continue;   // nichts zu loeschen
+        if (!pick && e.addr == 0x010f) {
+            // Die ganze Reihe leer. 13 kommt spaeter in der Schleife und
+            // schreibt Stil und Balken selbst.
+            const uint8_t barsOff[8] = { 0 };
+            const uint8_t stylesOff[4] = { 0x03, 0x03, 0x03, 0x03 };  // 03 = leer
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, barsOff));
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, stylesOff));
+            for (uint8_t k = 0; k < 4; ++k)
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kFocusedParam,
+                    std::span<const uint8_t>(&k, 1)));
+            continue;
+        }
         if (pick && e.addr == 0x012b) {
             // Palettenlauf: vier aufeinanderfolgende Indizes ab dem Startwert.
             const int b = g_uf1ProbeBarBase.load();
@@ -47560,7 +47601,7 @@ void reasixty_setUf1ProbeBarBase(int v)
 }
 void reasixty_setUf1ProbeOnly(int v)
 {
-    if (v < 0 || v > 13) return;
+    if (v < 0 || v > 15) return;
     if (g_uf1ProbeOnly.exchange(v) != v)
         g_uf1ProbeGen.fetch_add(1, std::memory_order_relaxed);
 }

@@ -167,3 +167,52 @@ als Beschriftung), **STRIP bleibt auf Layout 3**, wo der EQ-Graph lebt.
   Elemente, die der Init beschreibt und wir nie anfassen (`0x0110`, `0x011a`,
   `0x011f`, `0x0123`, `0x0129`) — ungeprueft.
 * `0x0121`, `0x0113`, `0x0118` sind weiter unbenannt.
+
+---
+
+# Layout 1 nochmal, mit zweistufiger Umschaltung, 21.09.2026 nachmittags
+
+Frank am Gerät, L1 S0, Fotos IMG_4675 (alle), IMG_4676 (1 bis 3), IMG_4677 (13).
+
+## ✅ Layout 1 HAT eine V-Pot-Reihe
+
+Der Nullbefund von vorher ist widerlegt. Mit allen Elementen (IMG_4675) zeigt
+L1 S0 von oben nach unten:
+
+1. **Soft-Key-Zeile** `0x0104`: SK1 bis SK4
+2. **Zehnstelliges 7-Segment-Feld**, alle Stellen unbeleuchtet. Wir haben
+   `0x0119` nicht beschrieben, es ist also die leere Zeitzeile.
+3. Die Kopfzellen (CELL1 unter *channel*, CELL2 unter *soft key*), bei „alle"
+   ausgeblendet, siehe unten
+4. **Die vier Farbbalken** `0x012b` auf der Trennlinie, **je einer über einem
+   V-Pot**
+5. **C1 bis C4** `0x010b`, ein Textfeld pro V-Pot
+6. **Die Wertzeilen** `0x010e` (VPOT1 ... TEST)
+7. **Die V-Pot-Balken** `0x010f`
+
+⛔ **Die Wertzeile passt in Layout 1 nicht.** Unsere 19-Zeichen-Zeile (11 Label,
+8 Wert) läuft über die Spaltenbreite hinaus: der Wert von Pot *n* landet links
+vor dem Label von Pot *n+1* („VPOT1 · TES VPOT2 · TES VPOT3 · TES VPOT4 · TES").
+SSL schreibt `0x010e` im DAW-Layer leer (cap141) und benutzt `0x010b` für den
+Text. Wer Layout 1 fährt, braucht eine eigene, schmalere Zeile.
+
+## 1 bis 3: weiter nichts
+
+`0x0121`, `0x0113`, `0x0118` mit `FE 00 FE 00`: kein „8." irgendwo (IMG_4676).
+Jetzt mit einem Muster, das auf einem 7-Segment sichtbar wäre. Weiter unbenannt.
+
+## 11 blendet CELL1 und CELL2 aus
+
+Und bei 13 waren sie wieder da. Die Sonde setzt pro Runde nur `0x0110` (auf
+`0f`) und `0x011a` (auf `02`) zurück; `0x011f` und `0x0123` blieben nach 11 auf
+`FF`, `0x0129` ist ab Werk `FF`. **Also ist es `0x0110` oder `0x011a`.** Dafür
+hat die Sonde jetzt 14 und 15, je eines allein.
+
+## ⛔ 9, 10, 12, 13 waren nicht isoliert
+
+Die Sonde hat die V-Pot-Reihe und die Soft-Key-Texte bei „nicht gewählt"
+übersprungen statt gelöscht. Darum steht die ganze Reihe auch auf dem Foto von
+1 bis 3. Was bei 13 zu sehen war, ist also 13 plus Reste von 9 und 12, und ob
+Stil `0x04` anders aussieht als `0x01`, lässt sich daraus nicht sagen.
+Behoben: nicht gewählt heisst jetzt leer (Indexbyte allein, Balken 0, Stil 03),
+und 0x011f/0x0123/0x0129 gehen auf ihre Init-Werte zurück.

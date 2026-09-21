@@ -26094,8 +26094,10 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
                 " 11  the five one-byte cells the init writes and we never do",
                 " 12  0x010b   a text field per V-Pot (C1..C4), from cap141",
                 " 13  0x010d   V-Pot style 0x04, SSL's DAW-layer look",
+                " 14  0x0110   alone, FF",
+                " 15  0x011a   alone, FF",
             };
-            const int shown = (only >= 0 && only <= 13) ? only : 0;
+            const int shown = (only >= 0 && only <= 15) ? only : 0;
             ImGui_Text(ctx, kElemNames[shown]);
             // The four bars show base..base+3, so the palette walks in fours.
             int barBase = reasixty_uf1ProbeBarBase();
