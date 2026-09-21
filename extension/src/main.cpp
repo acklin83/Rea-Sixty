@@ -7298,23 +7298,26 @@ MediaTrack* uf8StripMeterTrack_(int strip, int bankOffset, int trackCount)
     return tr;
 }
 
-// Which track a UF8 strip's SEL addresses and lights. Frank 2026-09-21 (v0.6):
-// in a Send/Receive fader mode SEL still selected the bank track, while Solo
-// and Cut already acted on the send. Now it is the route's target, the same
-// track the name, colour and meters show; nothing for a hardware output or an
-// empty slot. `bankTr` is what the caller already holds for the normal case.
-// ⛔ ONE ANSWER FOR THE PRESS, THE EVENT LED, THE SELECTED-STRIP MASK AND THE
+// Which track a UF8 strip's SEL addresses and lights, or nullptr for "SEL does
+// nothing here and its lamp is dark".
+// ⛔ IN A SEND/RECEIVE FADER MODE, NOTHING. SEL used to select the bank track
+// (the wrong one); pointing it at the send's track was tried the same day and
+// dropped. Frank 2026-09-21 (v0.6): "SEL besser gar nichts tun im send/receive
+// modus, spur wuerde ja dann gewechselt werden und alle fader zeigen dann eh
+// nix mehr an". Fader touch-select asks this too, so it stays out as well. The
+// lamp is dark, the rule for a key without a function.
+// ONE ANSWER FOR THE PRESS, THE EVENT LED, THE SELECTED-STRIP MASK AND THE
 // RESYNC. Change it here, not at one of the four.
 MediaTrack* uf8StripSelTrack_(int strip, int bankOffset, int trackCount,
                               MediaTrack* bankTr)
 {
-    const StripRoute fr = resolveFaderRoute_(strip, bankOffset, trackCount);
-    if (fr.active()) return routeTargetTrack_(fr);
+    if (resolveFaderRoute_(strip, bankOffset, trackCount).active()) return nullptr;
     return bankTr;
 }
 
 // The UF1's twin: which track the fader zone STANDS FOR, for its level and GR
-// and for SEL (renamed from uf1FaderMeterTrack_ when SEL joined, 2026-09-21). The UF1 as the
+// (renamed from uf1FaderMeterTrack_, 2026-09-21; SEL does not use it, SEL has
+// no function on a send strip). The UF1 as the
 // Extender's ninth strip carries the ninth SEND in a fader routing mode, and
 // its name, dB, fader, pan and cut already follow uf1ExtenderSendRoute_; the
 // meter asked uf1FaderTrack_() and showed the source track (same bug as the
@@ -20482,11 +20485,10 @@ void drainInputQueue()
             // fader zone its own resolver and left a caller behind on `tr`.
             // uf1FaderTrack_ falls back to uf1FocusedTrack_ whenever the extender
             // branch does not fire, so Extender-off behaviour is unchanged.
-            // ⇨ AND AS THE EXTENDER'S NINTH SEND STRIP, THE SEND'S TRACK: the same
-            // track its name and meter show, like SEL on the UF8's send strips
-            // (Frank 2026-09-21, v0.6). A hardware output or an empty slot has
-            // no track, so SEL does nothing there.
-            if (MediaTrack* tr = uf1FaderShownTrack_()) {
+            // ⛔ AS THE EXTENDER'S NINTH SEND STRIP, NOTHING, like SEL on the
+            // UF8's send strips (uf8StripSelTrack_, Frank 2026-09-21, v0.6).
+            if (uf1ExtenderRouteFader_()) continue;
+            if (MediaTrack* tr = uf1FaderTrack_()) {
                 // Picking a channel by hand outranks any earlier activation,
                 // and anchors the UF1 to it (last-touched does not move on a
                 // selection, so nothing would follow otherwise).
@@ -21282,7 +21284,7 @@ void drainInputQueue()
                 // hijack (cf. SelectExclusive above). In UF8 Plugin Mode the
                 // event is never queued in the first place — see the touch-ON
                 // edge in the input thread.
-                // A touched send fader selects the send's track, like SEL.
+                // A touched send fader selects nothing, like SEL there.
                 tr = uf8StripSelTrack_(e.strip, bankOffset, surfaceCount, tr);
                 if (!tr) break;
                 if (GetMediaTrackInfo_Value(tr, "I_SELECTED") < 0.5) {
@@ -23188,26 +23190,12 @@ void sendLed(LedClass cls, MediaTrack* tr, bool on)
     // so block the event-driven push too — otherwise a solo callback
     // relights it mid-routing-mode (Frank 2026-06-23).
     if (cls == LedClass::Solo && anyRoutingActive_()) return;
-    // SEL in a Send/Receive fader mode: the strips that SHOW `tr` (the route's
-    // target, uf8StripSelTrack_), and there can be several of them, e.g. every
-    // track's send N going to the same bus.
-    if (cls == LedClass::Sel) {
-        const int bankOffset = g_bankOffset.load();
-        const int trackCount = visibleTrackCount();
-        bool routed = false, any = false;
-        for (int s = 0; s < 8; ++s) {
-            if (!resolveFaderRoute_(s, bankOffset, trackCount).active()) continue;
-            routed = true;
-            if (uf8StripSelTrack_(s, bankOffset, trackCount, g_slotTrack[s]) != tr) continue;
-            sendLedFrames(uf8::buildLedColourPair(static_cast<uint8_t>(s),
-                toUf8LedClass(cls), on, ledColourFor(cls, tr)));
-            any = true;
-        }
-        if (routed) {
-            if (any) { sendSelRenderTrigger(); pushSelectedStripBitmask(); }
-            return;
-        }
-    }
+    // SEL in a Send/Receive fader mode has no function (uf8StripSelTrack_), so
+    // its lamp stays dark and a selection change must not relight it. The
+    // resync on the routing edge painted it dark.
+    if (cls == LedClass::Sel
+        && resolveFaderRoute_(0, g_bankOffset.load(), visibleTrackCount()).active())
+        return;
     for (int s = 0; s < 8; ++s) {
         if (g_slotTrack[s] != tr) continue;
         const uf8::LedClass devCls = toUf8LedClass(cls);
@@ -31999,7 +31987,8 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     // UF1 Extender send fader (Step 4): the strip's NAME + dB read out the 9th
     // SEND, not tr. Name = the send's dest / hw-out (routeName_ — ground truth),
     // dB = its EFFECTIVE level. ⇨ Since 2026-09-21 (v0.6) the channel number,
-    // the colour, the meters and SEL follow the send's track as well, exactly
+    // the colour and the meters follow the send's track as well (SEL has no
+    // function and a dark lamp), exactly
     // like the UF8's send strips (Frank: "der uf1 als extender soll doch gleich
     // reagieren wie der uf8"); pan and cut act on the send itself. It used to
     // read "this send, of that track", with the source's number and colour.
@@ -32237,10 +32226,9 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     // Kanal nicht selektiert ist"). The fader-colour BAR below still shows the track
     // colour regardless. `selected` folds into the change key so a selection change
     // (colour unchanged) still repaints.
-    // As the Extender's ninth SEND strip the LED shows the send's track, the one
-    // SEL selects (uf1FaderShownTrack_), dark for a hardware output or an empty
-    // slot. Colour and channel number still follow the source track (below).
-    MediaTrack* const selTr = sendZone ? routeTr : tr;
+    // As the Extender's ninth send strip SEL has no function, so its lamp is
+    // dark (like the UF8's send strips).
+    MediaTrack* const selTr = sendZone ? nullptr : tr;
     const bool     selSel = selTr && GetMediaTrackInfo_Value(selTr, "I_SELECTED") > 0.5;
     // Sel Mode REC / REC+MON retargets this LED to the ARM state, exactly like the
     // UF8's SEL row (ledColourFor, main.cpp ~18802): bright red armed, dim red not.
