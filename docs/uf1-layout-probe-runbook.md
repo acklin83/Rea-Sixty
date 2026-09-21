@@ -307,3 +307,35 @@ sind.
 normalen Pot `0x01` (unipolar) oder `0x08` (bipolar), und das sind die zwei
 Stile, bei denen die ganze Reihe in Layout 1 verschwindet. Wer Layout 1 fährt,
 muss den Stil umstellen, sonst ist die V-Pot-Reihe leer.
+
+---
+
+# Layout 2, zweistufig, 21.09.2026 nachmittags
+
+## ✅ `0x011b` ist das Zahlenfeld von Layout 2
+
+| Element | Screen | Bytes | Anzeige |
+|---|---|---|---|
+| 27 | S0 | `7e 0c` | **01** (zweistellig) |
+| 28 | S0 | `0c b6 9e cc` | **12** (zweistellig, die ersten zwei) |
+| 28 | S3 | `0c b6 9e cc` | **1234** (vierstellig) |
+
+Kodierung wie `0x0119`: ein Byte pro Stelle, `(SEG7[Ziffer] << 1) | Punkt`.
+S0 bis S2 zeigen zwei Stellen, S3 vier. Frank: S2 blau, S3 grün.
+
+- **Die Firmware hält den Wert**, bis er neu geschrieben wird, auch beim
+  Zurückschalten auf Element 0. Wer das Feld leeren will, muss es leer
+  schreiben.
+- Das löst den offenen Punkt von oben („reagiert auf keines unserer acht
+  Elemente"): `0x011b` war nie in der Liste. Die Adresse steht seit cap141 im
+  Eintritts-Burst von SSL (`7e 0c` = SSLs „01", die Kanal- oder Seitennummer).
+- Und es erklärt den 10.08.: in Layout 3 gibt es dieses Feld nicht, und Bytes
+  darauf haben dort die Kanalansicht zerlegt.
+
+## Farbbalken
+
+**Keine in Layout 2**, jetzt mit zweistufiger Umschaltung bestätigt. `0x012b`
+gehört zu Layout 1.
+
+Nicht geprüft: ob die V-Pot-Reihe in Layout 2 dieselben Stilregeln hat wie in
+Layout 1. cap141 zeigt, dass SSL dort Stil `0x04` fährt.
