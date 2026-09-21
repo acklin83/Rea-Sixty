@@ -33053,6 +33053,71 @@ static void uf1PaintLayoutProbe_()
     }
 }
 
+// ── MODE-Halten-Overlay: EIN Schreiber, fuer JEDEN Besitzer des Schirms ──────
+// Waehrend MODE gehalten wird, werden die vier Display-Soft-Keys zum Picker.
+// Er lief bis 21.09.2026 am ENDE von uf1PaintChannel_ — und damit nicht mehr,
+// sobald ein Modus oben aussteigt. Beim ersten Side-Car hiess das: MODE
+// druecken zeigte nichts, und man kam aus dem Modus nicht mehr heraus
+// (Frank 21.09.: "bei MODE press wird das menu oben nicht mehr angezeigt,
+// komm also nicht mehr raus").
+//
+// ⛔ EIN MODUS, DER DEN SCHIRM NIMMT, MUSS DEN AUSGANG MITNEHMEN. Das Menue
+// ist der Ausgang. Es gehoert deshalb nicht dem Kanalmaler, sondern allen.
+static void uf1PaintModeMenuOverlay_(bool changed)
+{
+    if (!g_uf1_dev) return;
+    const bool modeMenu = g_uf1ModeMenu.load();
+        static bool sMenuShown = false;
+        static int  sMenuSel   = -2;
+        if (modeMenu) {
+            // 4 view modes on the 4 soft-keys (Frank 2026-07-30): SK1 PLUGIN /
+            // SK2 DAW / SK3 METER / SK4 SENDS. sel = the active soft-key INDEX
+            // (Sends lights SK4, not SK3). The encoder-mode picker is a separate
+            // gesture (hold MODE + turn the channel encoder); its feedback is the
+            // desktop mode-banner, so it needs no soft-key here.
+            // Mit Shift zeigt derselbe Picker die Side-Car-Seite. Leere
+            // Plaetze bleiben leer statt "SOFT n" zu behaupten.
+            const bool scPage = shiftHeldAnywhere_();
+            const int sm = g_uf1ChannelSubMode.load();
+            const int scNow = static_cast<int>(g_uf1SideCar.load());
+            const int sel = scPage ? (scNow > 0 ? scNow - 1 : -1)
+                          : (g_uf1MeterView.load() ? 2
+                             : (sm == 2 ? 3 : (sm == 1 ? 1 : 0)));
+            // Die Seite selbst gehoert in die Wechselerkennung: sonst bleiben
+            // beim Druecken von Shift die Namen der anderen Seite stehen.
+            static bool sMenuScPage = false;
+            const bool pageEdge = (scPage != sMenuScPage);
+            sMenuScPage = scPage;
+            if (changed || !sMenuShown || sel != sMenuSel || pageEdge) {
+                sMenuShown = true; sMenuSel = sel;
+                static const char* const kViews[4] = { "PLUGIN", "DAW", "METER", "SENDS" };
+                const char* kSide[4] = { uf1SideCarName_(0), uf1SideCarName_(1),
+                                         uf1SideCarName_(2), uf1SideCarName_(3) };
+                const char* const* kMenu = scPage ? kSide : kViews;
+                for (int i = 0; i < 4; ++i) {
+                    const std::string_view lbl = kMenu[i];
+                    std::vector<uint8_t> pb; pb.reserve(1 + lbl.size());
+                    pb.push_back(static_cast<uint8_t>(i));
+                    pb.insert(pb.end(), lbl.begin(), lbl.end());
+                    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kSoftKeyLabel, pb));
+                    const bool    on = (i == sel);
+                    const uint8_t id = kUf1CsSoftKeyLedId[i];   // 0x01..0x04
+                    g_uf1_dev->send(uf1::buildLed(id, true));   // FF3B enable
+                    const uint8_t prim = on ? uf1::led::kPrimSoftKeyLit
+                                            : uf1::led::kPrimSoftKeyDim;
+                    if (i == 0) {
+                        g_uf1_dev->send(uf1::buildLedPrimary(id, prim));         // FF38 only
+                    } else {
+                        g_uf1_dev->send(uf1::buildLedPrimary(id, prim));         // FF38
+                        g_uf1_dev->send(uf1::buildLedLevel(id,   on ? 0x00 : 0x11)); // FF39
+                    }
+                }
+            }
+        } else {
+            sMenuShown = false; sMenuSel = -2;
+        }
+}
+
 // ── Side-Car: ITEM VOLUME ────────────────────────────────────────────────────
 // Der erste Bewohner, und der einfachste, den es gibt: der Fader faehrt die
 // Lautstaerke des ausgewaehlten Items.
@@ -33122,6 +33187,20 @@ static void uf1PaintSideCar_()
         if (name.empty()) name = "Item";
     }
 
+    // ⛔ UND DIE KLEINE ANZEIGE GEHOERT AUCH DAZU. Sie wird von
+    // uf1PaintChannelStrip_ gemalt, das NACH der Uebergabe steht — ohne diesen
+    // Aufruf bleibt der Name der Spur stehen, die der Fader gar nicht mehr
+    // faehrt (Frank 21.09.: "spur anzeige des fader stimmt nicht mehr").
+    // Gezeigt wird die Spur, auf der das Item liegt, mit dem Pegel des ITEMS —
+    // beides wahr, und zusammen sagen sie, was der Fader gerade tut.
+    {
+        Uf1FaderDb fdb;
+        if (it) { fdb.set = true; fdb.value = formatDbReadout(
+                      GetMediaItemInfo_Value(it, "D_VOL")); fdb.unit = "dB"; }
+        uf1PaintChannelStrip_(it ? GetMediaItem_Track(it) : nullptr,
+                              force, nullptr, &fdb);
+    }
+
     Uf1VpotRow row;
     uf1VpotCell_(row, 0, "Item", name);
     uf1VpotCell_(row, 1, "Vol", db);
@@ -33135,6 +33214,9 @@ static void uf1PaintSideCar_()
     uf1VpotBar_(row, 2, 0.0, false, true);
     uf1VpotBar_(row, 3, 0.0, false, true);
     uf1EmitVpotRow_(row, force);
+
+    // Der Ausgang. Ohne ihn ist das Side-Car eine Falle.
+    uf1PaintModeMenuOverlay_(force);
 }
 
 // Wer haelt den Schirm gerade? Reihenfolge ist Absicht: die Sonde ist ein
@@ -33189,6 +33271,10 @@ static bool uf1HandOverScreen_()
         case Uf1ScreenOwner::Hue:
             if (g_paletteSwatch.load() >= 0) g_swDbgHue.fetch_add(1);
             uf1PaintHue_();
+            // Hue steigt genauso frueh aus und hatte denselben fehlenden
+            // Ausgang; es ist nur nie aufgefallen, weil es ueber ein Builtin
+            // geschaltet wird und nicht ueber das Menue.
+            uf1PaintModeMenuOverlay_(false);
             return true;
     }
     return false;
@@ -35564,65 +35650,7 @@ void uf1PaintChannel_()
         }
     }
 
-    // ---- MODE-hold menu overlay (Frank 2026-07-30) -------------------------
-    // While MODE is held, the 4 display soft-keys become a mode picker: SK1
-    // PLUGIN / SK2 DAW / SK3 METER / SK4 free, the active mode lit. Runs in BOTH
-    // views and AFTER every view's own soft-key painting (channel block above +
-    // uf1PaintMeter_), so it OVERRIDES 0x0104 + the soft-key LEDs while open. On
-    // release, menuEdge forced `changed` this tick so the view painter already
-    // restored its own labels — the menu block just stops overriding. Change-
-    // detected on the highlighted mode so it doesn't re-send every tick.
-    {
-        static bool sMenuShown = false;
-        static int  sMenuSel   = -2;
-        if (modeMenu) {
-            // 4 view modes on the 4 soft-keys (Frank 2026-07-30): SK1 PLUGIN /
-            // SK2 DAW / SK3 METER / SK4 SENDS. sel = the active soft-key INDEX
-            // (Sends lights SK4, not SK3). The encoder-mode picker is a separate
-            // gesture (hold MODE + turn the channel encoder); its feedback is the
-            // desktop mode-banner, so it needs no soft-key here.
-            // Mit Shift zeigt derselbe Picker die Side-Car-Seite. Leere
-            // Plaetze bleiben leer statt "SOFT n" zu behaupten.
-            const bool scPage = shiftHeldAnywhere_();
-            const int sm = g_uf1ChannelSubMode.load();
-            const int scNow = static_cast<int>(g_uf1SideCar.load());
-            const int sel = scPage ? (scNow > 0 ? scNow - 1 : -1)
-                          : (g_uf1MeterView.load() ? 2
-                             : (sm == 2 ? 3 : (sm == 1 ? 1 : 0)));
-            // Die Seite selbst gehoert in die Wechselerkennung: sonst bleiben
-            // beim Druecken von Shift die Namen der anderen Seite stehen.
-            static bool sMenuScPage = false;
-            const bool pageEdge = (scPage != sMenuScPage);
-            sMenuScPage = scPage;
-            if (changed || !sMenuShown || sel != sMenuSel || pageEdge) {
-                sMenuShown = true; sMenuSel = sel;
-                static const char* const kViews[4] = { "PLUGIN", "DAW", "METER", "SENDS" };
-                const char* kSide[4] = { uf1SideCarName_(0), uf1SideCarName_(1),
-                                         uf1SideCarName_(2), uf1SideCarName_(3) };
-                const char* const* kMenu = scPage ? kSide : kViews;
-                for (int i = 0; i < 4; ++i) {
-                    const std::string_view lbl = kMenu[i];
-                    std::vector<uint8_t> pb; pb.reserve(1 + lbl.size());
-                    pb.push_back(static_cast<uint8_t>(i));
-                    pb.insert(pb.end(), lbl.begin(), lbl.end());
-                    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kSoftKeyLabel, pb));
-                    const bool    on = (i == sel);
-                    const uint8_t id = kUf1CsSoftKeyLedId[i];   // 0x01..0x04
-                    g_uf1_dev->send(uf1::buildLed(id, true));   // FF3B enable
-                    const uint8_t prim = on ? uf1::led::kPrimSoftKeyLit
-                                            : uf1::led::kPrimSoftKeyDim;
-                    if (i == 0) {
-                        g_uf1_dev->send(uf1::buildLedPrimary(id, prim));         // FF38 only
-                    } else {
-                        g_uf1_dev->send(uf1::buildLedPrimary(id, prim));         // FF38
-                        g_uf1_dev->send(uf1::buildLedLevel(id,   on ? 0x00 : 0x11)); // FF39
-                    }
-                }
-            }
-        } else {
-            sMenuShown = false; sMenuSel = -2;
-        }
-    }
+    uf1PaintModeMenuOverlay_(changed);
 }
 
 // Very simple rolling log file so we can see what CSI sends us without
