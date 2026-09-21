@@ -1,3 +1,21 @@
+#if defined(_WIN32)
+  // ⛔ winsock2.h BEFORE anything that drags in windows.h (JsonTree.h pulls in
+  // WDL, and WDL pulls in windows.h), or the old winsock.h wins and every
+  // socket type is defined twice. Same trap as WsClient.cpp. CI 2026-09-21.
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #pragma comment(lib, "ws2_32.lib")
+#else
+  #include <arpa/inet.h>
+  #include <netinet/in.h>
+  #include <sys/socket.h>
+  #include <sys/time.h>
+  #include <unistd.h>
+#endif
+
 #include "RmeManager.h"
 
 #include "JsonTree.h"
@@ -9,21 +27,10 @@
 #include <cstring>
 
 #if defined(_WIN32)
-  #ifndef WIN32_LEAN_AND_MEAN
-    #define WIN32_LEAN_AND_MEAN
-  #endif
-  #include <winsock2.h>
-  #include <ws2tcpip.h>
-  #pragma comment(lib, "ws2_32.lib")
   using rme_socket_t = SOCKET;
   static constexpr rme_socket_t kNoSocket = INVALID_SOCKET;
   #define RME_CLOSE closesocket
 #else
-  #include <arpa/inet.h>
-  #include <netinet/in.h>
-  #include <sys/socket.h>
-  #include <sys/time.h>
-  #include <unistd.h>
   using rme_socket_t = int;
   static constexpr rme_socket_t kNoSocket = -1;
   #define RME_CLOSE ::close
