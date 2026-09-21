@@ -33012,6 +33012,59 @@ static void uf1PaintLayoutProbe_()
     }
 }
 
+// Wer haelt den Schirm gerade? Reihenfolge ist Absicht: die Sonde ist ein
+// Diagnosewerkzeug und schlaegt alles, sonst kann man einen Modus nicht
+// untersuchen, der selbst den Schirm besitzt.
+enum class Uf1ScreenOwner : uint8_t { None, LayoutProbe, Hue };
+
+static Uf1ScreenOwner uf1CurrentScreenOwner_()
+{
+    if (g_uf1LayoutProbe.load()) return Uf1ScreenOwner::LayoutProbe;
+    if (g_uf1HueMode.load())     return Uf1ScreenOwner::Hue;
+    return Uf1ScreenOwner::None;
+}
+
+// ⛔ DIE EINE FLANKE. Was hier passiert und nirgends sonst:
+//
+//  · `g_uf1Gen` hochzaehlen, damit BEIDE Maler ihre Statics verwerfen. Ohne das
+//    sagt der jeweils andere "zeige ich doch schon" und sendet nie neu — so sah
+//    Hue am 27.08. aus, als haette es keinen Ausgang ([[uf1-screen-owning-mode-checklist]]).
+//  · beim VERLASSEN `g_uf1PlaneLost` setzen. Das ist das bestehende "mach, was
+//    ein Track-Wechsel macht, auf BEIDEN Gates"-Signal, und es baut 0x0100 und
+//    den Rest der Ebene neu auf. Darum braucht kein Bewohner einen eigenen
+//    Rueckweg.
+//  · den Pacer anhalten, wo der Bewohner es braucht. Er laeuft auf einem
+//    eigenen Thread und streamt den letzten Schnappschuss weiter; ein frueher
+//    `return` allein bringt ihn nicht zum Schweigen (21.09., die Sonde schrieb
+//    CELL1 und auf dem Glas stand REAPER).
+//
+// Gibt true zurueck, wenn ein Bewohner den Schirm hat und schon gemalt hat.
+static bool uf1HandOverScreen_()
+{
+    static Uf1ScreenOwner sWas = Uf1ScreenOwner::None;
+    const Uf1ScreenOwner now = uf1CurrentScreenOwner_();
+    if (now != sWas) {
+        const bool wasOwned = (sWas != Uf1ScreenOwner::None);
+        sWas = now;
+        g_uf1Gen.fetch_add(1, std::memory_order_relaxed);
+        if (now == Uf1ScreenOwner::None && wasOwned)
+            g_uf1PlaneLost.store(true, std::memory_order_relaxed);
+    }
+    switch (now) {
+        case Uf1ScreenOwner::None:
+            return false;
+        case Uf1ScreenOwner::LayoutProbe:
+            g_uf1CycleActive.store(false, std::memory_order_relaxed);
+            uf1PaintLayoutProbe_();
+            return true;
+        case Uf1ScreenOwner::Hue:
+            if (g_paletteSwatch.load() >= 0) g_swDbgHue.fetch_add(1);
+            uf1PaintHue_();
+            return true;
+    }
+    return false;
+}
+
 void uf1PaintChannel_()
 {
     if (g_paletteSwatch.load() >= 0) g_swDbgPaint.fetch_add(1);
@@ -33019,62 +33072,17 @@ void uf1PaintChannel_()
     g_uf1PaintRuns.fetch_add(1, std::memory_order_relaxed);
     if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
 
-    // Hue Mode owns the screen outright. Handing over here rather than branching
-    // further down is what keeps a half-painted channel off the glass.
+    // ══ JEDER MODUS, DER DEN SCHIRM UEBERNIMMT, GEHT DURCH EINE FLANKE ═════════
+    // Bis 21.09.2026 hatte jeder seinen eigenen Block mit eigener statischer
+    // Flanke: Hue, dann die Layout-Sonde. Beide taten dasselbe (g_uf1Gen
+    // hochzaehlen, beim Verlassen die Ebene neu aufbauen lassen) und taten es
+    // leicht verschieden — die Sonde hielt zusaetzlich den Pacer an, Hue nicht,
+    // und keiner der beiden sah die Flanke des anderen: von Hue direkt in die
+    // Sonde gewechselt gewann Hue, die Sonde lief nie, und ihre eigene Flanke
+    // feuerte nicht. Mit dem Side-Car waere das die dritte Kopie geworden.
     //
-    // ⛔ AND THE MODE EDGE HAS TO INVALIDATE BOTH PAINTERS. Each one dedupes
-    // against statics that describe what the DEVICE shows, and the two write the
-    // same cells. Without this, LEAVING Hue Mode left the lamp's text on the
-    // glass for good: the channel painter's statics still said "already showing
-    // that", so it never re-sent, and the mode looked like it had no exit at all
-    // (Frank 2026-08-27: "raus aus dem Mode komm ich auch nicht"). Bumping
-    // g_uf1Gen is exactly the channel the reopen path uses for the same reason,
-    // and both painters already read it — this is the one place that knows the
-    // edge, so it is the one place that bumps.
-    {
-        static bool sHueWas = false;
-        const bool hueNow = g_uf1HueMode.load();
-        if (hueNow != sHueWas) {
-            sHueWas = hueNow;
-            g_uf1Gen.fetch_add(1, std::memory_order_relaxed);
-        }
-        if (hueNow) {
-            if (g_paletteSwatch.load() >= 0) g_swDbgHue.fetch_add(1);
-            uf1PaintHue_(); return;
-        }
-    }
-
-    // The layout probe owns the screen the same way Hue Mode does, and for the
-    // same reason: a half-painted channel under a foreign layout is worse than
-    // no channel. Its EXIT additionally raises g_uf1PlaneLost, which is the
-    // existing "do what a track change does, on BOTH gates" signal -- that is
-    // what re-asserts 0x0100 = {03,00} and the rest of the plane below, so the
-    // probe needs no restore path of its own.
-    {
-        static bool sProbeWas = false;
-        const bool probeNow = g_uf1LayoutProbe.load();
-        if (probeNow != sProbeWas) {
-            sProbeWas = probeNow;
-            g_uf1Gen.fetch_add(1, std::memory_order_relaxed);
-            if (!probeNow) g_uf1PlaneLost.store(true, std::memory_order_relaxed);
-        }
-        if (probeNow) {
-            // ⛔ AND THE PACER HAS TO STOP, OR THE PROBE IS NOT A PROBE.
-            // Returning early only silences THIS painter. The cycle pacer runs
-            // on its own thread and keeps restreaming the last snapshot at
-            // ~24 Hz -- header row, level, comp GR, gate GR -- so everything the
-            // probe writes is overwritten within 40 ms. The first run on
-            // 2026-09-21 showed it plainly: the channel cell read "REAPER"
-            // where the probe had written "CELL1", and the bars that appeared
-            // in layout 1 were OUR meter cells rendered there, not the probe's
-            // pattern. A tool whose own output you cannot tell from the
-            // program's is not a measurement.
-            // The normal painter re-activates the pacer on its next tick
-            // (uf1PaintChannel_'s cycle build), so the exit needs nothing.
-            g_uf1CycleActive.store(false, std::memory_order_relaxed);
-            uf1PaintLayoutProbe_(); return;
-        }
-    }
+    // Einen Bewohner hinzufuegen heisst jetzt: ein Enum-Wert und ein case.
+    if (uf1HandOverScreen_()) return;
 
     // Follow the user's focus: last-touched track, else the first selected.
     MediaTrack* tr = uf1FocusedTrack_();
