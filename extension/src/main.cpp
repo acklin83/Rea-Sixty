@@ -7178,22 +7178,12 @@ std::string getTrackReceiveName(MediaTrack* tr, int recvIdx)
     return std::string(buf);
 }
 
-// The TRACK a route strip stands for: the send's destination, the receive's
-// source. nullptr for a hardware output (no track at the far end), an invalid
-// route or an empty slot. ONE answer for the name, the meter and the GR, so the
-// scribble cannot name one track while the LEDs show another (Frank 2026-09-21,
-// v0.6: in a Send/Receive fader mode the level and the comp/gate GR still came
-// from the bank track that would sit on the strip without the mode).
-MediaTrack* routeOtherTrack_(const StripRoute& r)
-{
-    if (!r.valid || !r.track || r.sendIndex < 0) return nullptr;
-    if (r.sendCategory != 0 && r.sendCategory != -1) return nullptr;
-    const char* tag = (r.sendCategory == 0) ? "P_DESTTRACK" : "P_SRCTRACK";
-    auto* other = static_cast<MediaTrack*>(GetSetTrackSendInfo(
-        r.track, r.sendCategory, r.sendIndex, tag, nullptr));
-    if (!other || !ValidatePtr2(nullptr, other, "MediaTrack*")) return nullptr;
-    return other;
-}
+// The TRACK a route strip stands for is routeTargetTrack_ (defined further
+// down, next to the strip colour that used it first). ONE answer for the name,
+// the colour, the meters, the GR and SEL, so the strip cannot name one track
+// while the LEDs show another (Frank 2026-09-21, v0.6). A second resolver
+// written here for the meters was folded back into it the same day.
+MediaTrack* routeTargetTrack_(const StripRoute& r);
 
 // Which track the UF8 strip's METERS read (level row, comp GR, gate GR).
 // ⛔ THE SAME QUESTION THE NAME ANSWERS. Without a routing mode on the faders it
@@ -7204,12 +7194,27 @@ MediaTrack* routeOtherTrack_(const StripRoute& r)
 MediaTrack* uf8StripMeterTrack_(int strip, int bankOffset, int trackCount)
 {
     const StripRoute fr = resolveFaderRoute_(strip, bankOffset, trackCount);
-    if (fr.active()) return routeOtherTrack_(fr);
+    if (fr.active()) return routeTargetTrack_(fr);
     const int idx = stripToVisibleSlot(strip, bankOffset);
     if (idx < 0 || idx >= trackCount) return nullptr;
     MediaTrack* tr = visibleTrackAt(idx);
     if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
     return tr;
+}
+
+// Which track a UF8 strip's SEL addresses and lights. Frank 2026-09-21 (v0.6):
+// in a Send/Receive fader mode SEL still selected the bank track, while Solo
+// and Cut already acted on the send. Now it is the route's target, the same
+// track the name, colour and meters show; nothing for a hardware output or an
+// empty slot. `bankTr` is what the caller already holds for the normal case.
+// ⛔ ONE ANSWER FOR THE PRESS, THE EVENT LED, THE SELECTED-STRIP MASK AND THE
+// RESYNC. Change it here, not at one of the four.
+MediaTrack* uf8StripSelTrack_(int strip, int bankOffset, int trackCount,
+                              MediaTrack* bankTr)
+{
+    const StripRoute fr = resolveFaderRoute_(strip, bankOffset, trackCount);
+    if (fr.active()) return routeTargetTrack_(fr);
+    return bankTr;
 }
 
 // The UF1's twin: which track the SMALL LCD's level and GR read. The UF1 as the
@@ -7220,7 +7225,7 @@ MediaTrack* uf8StripMeterTrack_(int strip, int bankOffset, int trackCount)
 // Extender's routing mode it is uf1FaderTrack_(), unchanged.
 MediaTrack* uf1FaderMeterTrack_()
 {
-    if (uf1ExtenderRouteFader_()) return routeOtherTrack_(uf1ExtenderSendRoute_());
+    if (uf1ExtenderRouteFader_()) return routeTargetTrack_(uf1ExtenderSendRoute_());
     return uf1FaderTrack_();
 }
 
@@ -7256,7 +7261,7 @@ std::string routeName_(const StripRoute& r)
         std::snprintf(buf, sizeof(buf), "Out %d", base + 1);
         return std::string(buf);
     }
-    MediaTrack* other = routeOtherTrack_(r);
+    MediaTrack* other = routeTargetTrack_(r);
     if (!other)
         return {};   // hardware-output send (no track) — nothing track-named here
     char nm[256] = {0};
@@ -21138,6 +21143,7 @@ void drainInputQueue()
                         break;
                     }
                 }
+                tr = uf8StripSelTrack_(e.strip, bankOffset, surfaceCount, tr);
                 if (!tr) break;
                 clearLastActivatedInstance_();
                 CSurf_OnSelectedChange(tr, -1);
@@ -21164,6 +21170,7 @@ void drainInputQueue()
                         break;
                     }
                 }
+                tr = uf8StripSelTrack_(e.strip, bankOffset, surfaceCount, tr);
                 if (!tr) break;
                 clearLastActivatedInstance_();
                 SetOnlyTrackSelected(tr);
@@ -21174,6 +21181,8 @@ void drainInputQueue()
                 // hijack (cf. SelectExclusive above). In UF8 Plugin Mode the
                 // event is never queued in the first place — see the touch-ON
                 // edge in the input thread.
+                // A touched send fader selects the send's track, like SEL.
+                tr = uf8StripSelTrack_(e.strip, bankOffset, surfaceCount, tr);
                 if (!tr) break;
                 if (GetMediaTrackInfo_Value(tr, "I_SELECTED") < 0.5) {
                     SetOnlyTrackSelected(tr);
@@ -23027,8 +23036,10 @@ void pushSelectedStripBitmask()
 {
     if (!g_dev) return;
     uint16_t mask = 0;
+    const int bankOffset = g_bankOffset.load();
+    const int trackCount = visibleTrackCount();
     for (int s = 0; s < 8; ++s) {
-        MediaTrack* t = g_slotTrack[s];
+        MediaTrack* t = uf8StripSelTrack_(s, bankOffset, trackCount, g_slotTrack[s]);
         if (t && GetMediaTrackInfo_Value(t, "I_SELECTED") > 0.5) {
             mask |= static_cast<uint16_t>(1u << s);
         }
@@ -23076,6 +23087,26 @@ void sendLed(LedClass cls, MediaTrack* tr, bool on)
     // so block the event-driven push too — otherwise a solo callback
     // relights it mid-routing-mode (Frank 2026-06-23).
     if (cls == LedClass::Solo && anyRoutingActive_()) return;
+    // SEL in a Send/Receive fader mode: the strips that SHOW `tr` (the route's
+    // target, uf8StripSelTrack_), and there can be several of them, e.g. every
+    // track's send N going to the same bus.
+    if (cls == LedClass::Sel) {
+        const int bankOffset = g_bankOffset.load();
+        const int trackCount = visibleTrackCount();
+        bool routed = false, any = false;
+        for (int s = 0; s < 8; ++s) {
+            if (!resolveFaderRoute_(s, bankOffset, trackCount).active()) continue;
+            routed = true;
+            if (uf8StripSelTrack_(s, bankOffset, trackCount, g_slotTrack[s]) != tr) continue;
+            sendLedFrames(uf8::buildLedColourPair(static_cast<uint8_t>(s),
+                toUf8LedClass(cls), on, ledColourFor(cls, tr)));
+            any = true;
+        }
+        if (routed) {
+            if (any) { sendSelRenderTrigger(); pushSelectedStripBitmask(); }
+            return;
+        }
+    }
     for (int s = 0; s < 8; ++s) {
         if (g_slotTrack[s] != tr) continue;
         const uf8::LedClass devCls = toUf8LedClass(cls);
@@ -36685,9 +36716,11 @@ void pushZonesForVisibleSlots()
             const int rs = stripToVisibleSlot(s, bankOffset);
             MediaTrack* t = visibleTrackAt(rs);
             if (MediaTrack* mp = masterPinTrack_(s)) t = mp;  // Master-pin
+            // SEL follows the strip's route in a Send/Receive fader mode.
+            MediaTrack* selT = uf8StripSelTrack_(s, bankOffset, trackCount, t);
             const bool solo = t && GetMediaTrackInfo_Value(t, "I_SOLO")     > 0.5;
             const bool mute = t && GetMediaTrackInfo_Value(t, "B_MUTE")     > 0.5;
-            const bool sel  = t && GetMediaTrackInfo_Value(t, "I_SELECTED") > 0.5;
+            const bool sel  = selT && GetMediaTrackInfo_Value(selT, "I_SELECTED") > 0.5;
             const bool arm  = t && GetMediaTrackInfo_Value(t, "I_RECARM")   > 0.5;
             // LED bank re-sync: push SEL/MUTE/SOLO for each strip's new
             // track. ARM LED ID mapping still unverified (cap23b needed)
@@ -36695,7 +36728,7 @@ void pushZonesForVisibleSlots()
             if (g_dev) {
                 const auto strip = static_cast<uint8_t>(s);
                 sendLedFrames(uf8::buildLedColourPair(strip, uf8::LedClass::Sel,  sel,
-                                                      ledColourFor(LedClass::Sel,  t)));
+                                                      ledColourFor(LedClass::Sel,  selT)));
                 sendLedFrames(uf8::buildLedColourPair(strip, uf8::LedClass::Cut,  mute,
                                                       ledColourFor(LedClass::Mute, t)));
                 sendLedFrames(uf8::buildLedColourPair(strip, uf8::LedClass::Solo, solo,
@@ -36711,7 +36744,8 @@ void pushZonesForVisibleSlots()
             for (int s = 0; s < 8; ++s) {
                 const int rs = stripToVisibleSlot(s, bankOffset);
                 MediaTrack* t = visibleTrackAt(rs);
-            if (MediaTrack* mp = masterPinTrack_(s)) t = mp;  // Master-pin
+                if (MediaTrack* mp = masterPinTrack_(s)) t = mp;  // Master-pin
+                t = uf8StripSelTrack_(s, bankOffset, trackCount, t);  // route, if any
                 if (t && GetMediaTrackInfo_Value(t, "I_SELECTED") > 0.5) {
                     mask |= static_cast<uint16_t>(1u << s);
                 }
