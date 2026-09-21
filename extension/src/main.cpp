@@ -7274,6 +7274,40 @@ std::string getTrackReceiveName(MediaTrack* tr, int recvIdx)
     return std::string(buf);
 }
 
+// The TRACK a route strip stands for: the send's destination, the receive's
+// source. nullptr for a hardware output (no track at the far end), an invalid
+// route or an empty slot. ONE answer for the name, the meter and the GR, so the
+// scribble cannot name one track while the LEDs show another (Frank 2026-09-21,
+// v0.6: in a Send/Receive fader mode the level and the comp/gate GR still came
+// from the bank track that would sit on the strip without the mode).
+MediaTrack* routeOtherTrack_(const StripRoute& r)
+{
+    if (!r.valid || !r.track || r.sendIndex < 0) return nullptr;
+    if (r.sendCategory != 0 && r.sendCategory != -1) return nullptr;
+    const char* tag = (r.sendCategory == 0) ? "P_DESTTRACK" : "P_SRCTRACK";
+    auto* other = static_cast<MediaTrack*>(GetSetTrackSendInfo(
+        r.track, r.sendCategory, r.sendIndex, tag, nullptr));
+    if (!other || !ValidatePtr2(nullptr, other, "MediaTrack*")) return nullptr;
+    return other;
+}
+
+// Which track the UF8 strip's METERS read (level row, comp GR, gate GR).
+// ⛔ THE SAME QUESTION THE NAME ANSWERS. Without a routing mode on the faders it
+// is the bank track, exactly as before. With one, the strip IS a send or a
+// receive, so it is that route's far-end track, or nothing (dark) for a
+// hardware output or an empty slot. V-Pot routing modes do not change it: there
+// the fader is still the track, and so is its level.
+MediaTrack* uf8StripMeterTrack_(int strip, int bankOffset, int trackCount)
+{
+    const StripRoute fr = resolveFaderRoute_(strip, bankOffset, trackCount);
+    if (fr.active()) return routeOtherTrack_(fr);
+    const int idx = stripToVisibleSlot(strip, bankOffset);
+    if (idx < 0 || idx >= trackCount) return nullptr;
+    MediaTrack* tr = visibleTrackAt(idx);
+    if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
+    return tr;
+}
+
 std::string routeName_(const StripRoute& r)
 {
     if (!r.valid) return {};
@@ -7306,10 +7340,8 @@ std::string routeName_(const StripRoute& r)
         std::snprintf(buf, sizeof(buf), "Out %d", base + 1);
         return std::string(buf);
     }
-    const char* tag = (r.sendCategory == 0) ? "P_DESTTRACK" : "P_SRCTRACK";
-    auto* other = static_cast<MediaTrack*>(GetSetTrackSendInfo(
-        r.track, r.sendCategory, r.sendIndex, tag, nullptr));
-    if (!other || !ValidatePtr2(nullptr, other, "MediaTrack*"))
+    MediaTrack* other = routeOtherTrack_(r);
+    if (!other)
         return {};   // hardware-output send (no track) — nothing track-named here
     char nm[256] = {0};
     GetSetMediaTrackInfo_String(other, "P_NAME", nm, false);
@@ -41450,10 +41482,11 @@ void pushVuMeter()
     g_meterEnvLast_ = tNow;
 
     for (int s = 0; s < 8; ++s) {
-        const int idx = stripToVisibleSlot(s, bankOffset);
         uint8_t rawL = 0, rawR = 0;
-        if (!pluginModeBlank && idx >= 0 && idx < trackCount) {
-            if (MediaTrack* tr = visibleTrackAt(idx)) {
+        if (!pluginModeBlank) {
+            // The strip's own track, or in a Send/Receive fader mode the far
+            // end of its route (uf8StripMeterTrack_, same answer as the name).
+            if (MediaTrack* tr = uf8StripMeterTrack_(s, bankOffset, trackCount)) {
                 // Left = channel 0, right = channel 1. REAPER's peak is
                 // the channel's post-fader tap; pre-fader VU isn't
                 // exposed via this call, so "in" and "out" end up
@@ -46476,12 +46509,14 @@ void onTimerBody_()
         // surface already does for names and colours, but if this ever shows up
         // in a profile, this is the loop it is in.
         const int bankOffset = g_bankOffset.load();
+        const int grTrackCount = visibleTrackCount();
         for (int st = 0; st < 8; ++st) {
-            const int slot = stripToVisibleSlot(st, bankOffset);
-            MediaTrack* tr = (slot >= 0) ? visibleTrackAt(slot) : nullptr;
-            if (tr && !ValidatePtr2(nullptr, tr, "MediaTrack*")) tr = nullptr;
-            // Blank strip (past the end of the list, or a mount / lamp strip):
-            // both rows dark, holders cleared so nothing ramps down later.
+            // Same track the level row reads: the strip's own, or the far end
+            // of its route in a Send/Receive fader mode (uf8StripMeterTrack_).
+            MediaTrack* tr = uf8StripMeterTrack_(st, bankOffset, grTrackCount);
+            // Blank strip (past the end of the list, or a mount / lamp strip,
+            // or a route to a hardware output / an empty slot): both rows
+            // dark, holders cleared so nothing ramps down later.
             if (!tr) { g_uf8GrBytes[st] = 0; g_uf8GateGrBytes[st] = 0; continue; }
             {
             uc1::UC1Bindings b = uc1::lookupBindingsOnTrack(tr);
