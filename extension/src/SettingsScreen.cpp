@@ -524,6 +524,8 @@ bool reasixty_uf1ProbePattern();
 void reasixty_setUf1ProbePattern(bool on);
 int  reasixty_uf1ProbeOnly();
 void reasixty_setUf1ProbeOnly(int v);
+int  reasixty_uf1ProbeBarBase();
+void reasixty_setUf1ProbeBarBase(int v);
 void reasixty_uf1ProbeResend();
 bool reasixty_uf1Connected();
 bool reasixty_stripFollowsFocusedFx();
@@ -26090,6 +26092,14 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
             };
             const int shown = (only >= 0 && only <= 8) ? only : 0;
             ImGui_Text(ctx, kElemNames[shown]);
+            // The four bars show base..base+3, so the palette walks in fours.
+            int barBase = reasixty_uf1ProbeBarBase();
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 120.0));
+            if (ImGui_InputInt(ctx, "Bar palette base (0x012b)##uf1probe_b",
+                               &barBase, nullptr, nullptr, nullptr))
+                reasixty_setUf1ProbeBarBase(barBase);
+            ImGui_Text(ctx, "  0x012b shows base, base+1, base+2, base+3."
+                            "  Known: 0 off, 1 white, 2 red, 3 green.");
             if (ImGui_Button(ctx, "Send again##uf1probe_r", nullptr, nullptr))
                 reasixty_uf1ProbeResend();
             ImGui_SameLine(ctx, nullptr, nullptr);

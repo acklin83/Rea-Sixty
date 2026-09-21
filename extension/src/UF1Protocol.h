@@ -263,6 +263,12 @@ constexpr uint16_t kChSoftKey = 0x0004;
 // WITHOUT overwriting the label, which belongs to the user.
 constexpr uint16_t kChSoftKeyBg = 0x0000;
 constexpr uint16_t kChActive  = 0x0006;  // 1-byte "channel populated" flag (01) — gates the colour bar
+// ⇨ DER PEAK-STRICH auf dem kleinen Fader-Display, Zwilling der Pegelzelle
+// 0x0009 und mit derselben Form ([L, R, 0, 0]). Stand seit der Dekodierung als
+// "a second element, meaning unknown → held idle 0" im Painter; am Geraet
+// beschriftet 2026-09-21 (Sonde, {0x40, 0x10, 0, 0} → ein Strich je Seite auf
+// unterschiedlicher Hoehe, wie ein Peak-Level-Indicator).
+constexpr uint16_t kPeakIndicator = 0x000a;
 constexpr uint16_t kColourBar = 0x0018;  // 1-byte palette index of the fader colour bar (uf8::quantize)
 constexpr uint16_t kTrackName = 0x000b;
 constexpr uint16_t kOutputDb  = 0x000c;
@@ -313,6 +319,21 @@ constexpr uint16_t kGraphic      = 0x0122;  // EQ graph (Channel) / meter graphi
 // corpus holds only two 0xff frames (cap55, cap64), which is why every search
 // for the ASCII failed.
 constexpr uint16_t kSoloActive   = 0x0120;
+
+// ⇨ VIER FARBBALKEN, EINER PRO V-POT. Vier Bytes, je ein PALETTENINDEX.
+// Gemessen am Geraet 2026-09-21 (Sonde, Muster 0,1,2,3): 0 = aus, 1 = weiss,
+// 2 = rot, 3 = gruen. Der Rest der Palette ist noch nicht abgelesen.
+//
+// ⛔ ZEICHNET NUR IN LAYOUT 1. In unserer Kanal-Ebene ({03,00}) tut das
+// Element nichts — am Geraet geprueft, nicht vermutet. Wer die Balken will,
+// schaltet den grossen LCD auf {01,xx}, und verliert dort den EQ-Graph, der
+// zu Layout 3 gehoert.
+//
+// Das ist ausserdem das EINZIGE Element, das SSL 360 2.1.12 neu gebracht hat
+// (Init-Diff cap129 gegen cap101, 2026-09-19: nur 0x012b kam dazu, 0x0125 bis
+// 0x0128 fielen weg). Frank hatte die Balken in SSLs eigenem DAW-Mode gesehen,
+// bevor wir wussten, welche Adresse dahintersteckt.
+constexpr uint16_t kColourBars4  = 0x012b;
 }
 // ⚠ 0x011b is a COMMAND element, not data — the one thing the init replay writes
 // with a ZERO-length payload. Writing bytes to it tears the whole channel layout

@@ -727,6 +727,9 @@ std::atomic<bool>     g_uf1ProbePattern{true};    // also paint the candidates
 // sich benennen, WELCHE Zelle einen Balken zeichnet -- mit allen gleichzeitig
 // sieht man nur, DASS etwas zeichnet.
 std::atomic<int>      g_uf1ProbeOnly   {0};
+// Startwert fuer die vier Farbbalken (0x012b): sie zeigen base..base+3, damit
+// sich die Palette in Vierergruppen ablaufen laesst (0, 4, 8, 12 ...).
+std::atomic<int>      g_uf1ProbeBarBase{0};
 std::atomic<uint32_t> g_uf1ProbeGen    {0};       // bump = re-send everything
 // Preset-browser working state — MAIN-THREAD ONLY (the painter in onTimer + the V-Pot4
 // drain in applyUf1MeterVpot_, both main-thread). Scanned once on entry, scrolled/loaded
@@ -32858,10 +32861,18 @@ static void uf1PaintLayoutProbe_()
     // Werte sind ueber LAENGEN unterscheidbar, nicht ueber Farben: die Antwort
     // soll "der lange Balken ist rechts" heissen und nicht "der gruene".
     static constexpr struct { uint16_t addr; uint8_t n; uint8_t v[4]; } kProbeElems[] = {
-        { 0x0121, 4, { 0x00, 0x01, 0x02, 0x03 } },
-        { 0x0113, 4, { 0x00, 0x01, 0x02, 0x03 } },
-        { 0x0118, 4, { 0x00, 0x01, 0x02, 0x03 } },
-        { 0x012b, 4, { 0x00, 0x01, 0x02, 0x03 } },
+        // ⛔ HOHE BYTES, SONST SIEHT MAN NICHTS. Erst standen hier 0,1,2,3 --
+        // und diese drei meldeten "nichts Neues". Ein 7-Segment-Byte ist aber
+        // (SEG7[Ziffer] << 1) | Punkt, also 0x0C..0xFE: 0 ist blank, 1 ist nur
+        // der Dezimalpunkt, 2 und 3 sind ein halbes Segment. Ein Nullbefund mit
+        // solchen Werten sagt nichts ueber das Element, nur ueber das Muster
+        // (Frank 2026-09-21, nach dem 2-/4-stelligen 7-Segment in Layout 2).
+        // 0xFE leuchtet als "8." und ist als Balken Vollausschlag; die Luecken
+        // dazwischen zeigen, welche Bytepositionen ueberhaupt antworten.
+        { 0x0121, 4, { 0xFE, 0x00, 0xFE, 0x00 } },
+        { 0x0113, 4, { 0xFE, 0x00, 0xFE, 0x00 } },
+        { 0x0118, 4, { 0xFE, 0x00, 0xFE, 0x00 } },
+        { 0x012b, 4, { 0x00, 0x01, 0x02, 0x03 } },   // Werte unten ueberschrieben
         { 0x0009, 4, { 0x20, 0x60, 0x00, 0x00 } },   // Pegel L viertel / R drei viertel
         { 0x000a, 4, { 0x40, 0x10, 0x00, 0x00 } },   // das unbekannte Zwillingsfeld
         { 0x0015, 1, { 0x05, 0, 0, 0 } },            // Comp GR, ein Drittel
@@ -32879,6 +32890,15 @@ static void uf1PaintLayoutProbe_()
     for (int i = 0; i < kProbeElemCount; ++i) {
         const auto& e = kProbeElems[i];
         const bool pick = (only == 0) || (only == i + 1);
+        if (pick && e.addr == 0x012b) {
+            // Palettenlauf: vier aufeinanderfolgende Indizes ab dem Startwert.
+            const int b = g_uf1ProbeBarBase.load();
+            const uint8_t bars[4] = {
+                static_cast<uint8_t>((b + 0) & 0xFF), static_cast<uint8_t>((b + 1) & 0xFF),
+                static_cast<uint8_t>((b + 2) & 0xFF), static_cast<uint8_t>((b + 3) & 0xFF) };
+            g_uf1_dev->send(uf1::buildScreen(e.addr, bars));
+            continue;
+        }
         g_uf1_dev->send(uf1::buildScreen(e.addr,
             std::span<const uint8_t>(pick ? e.v : zero, e.n)));
     }
@@ -47237,6 +47257,13 @@ void reasixty_setUf1ProbeScreen(int v)
 }
 bool reasixty_uf1ProbePattern() { return g_uf1ProbePattern.load(); }
 int  reasixty_uf1ProbeOnly() { return g_uf1ProbeOnly.load(); }
+int  reasixty_uf1ProbeBarBase() { return g_uf1ProbeBarBase.load(); }
+void reasixty_setUf1ProbeBarBase(int v)
+{
+    if (v < 0 || v > 252) return;
+    if (g_uf1ProbeBarBase.exchange(v) != v)
+        g_uf1ProbeGen.fetch_add(1, std::memory_order_relaxed);
+}
 void reasixty_setUf1ProbeOnly(int v)
 {
     if (v < 0 || v > 8) return;
