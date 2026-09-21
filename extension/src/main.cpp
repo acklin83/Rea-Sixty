@@ -31998,9 +31998,12 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
 
     // UF1 Extender send fader (Step 4): the strip's NAME + dB read out the 9th
     // SEND, not tr. Name = the send's dest / hw-out (routeName_ — ground truth),
-    // dB = its EFFECTIVE level. Pan / channel / colour / Solo / Cut still follow
-    // the focused SOURCE track below (the track the sends belong to), so the strip
-    // reads "this send, of that track". An empty/absent 9th slot blanks name + dB.
+    // dB = its EFFECTIVE level. ⇨ Since 2026-09-21 (v0.6) the channel number,
+    // the colour, the meters and SEL follow the send's track as well, exactly
+    // like the UF8's send strips (Frank: "der uf1 als extender soll doch gleich
+    // reagieren wie der uf8"); pan and cut act on the send itself. It used to
+    // read "this send, of that track", with the source's number and colour.
+    // An empty/absent 9th slot blanks name + dB.
     const bool sendZone  = sendOverride != nullptr;
     const bool sendValid = sendZone && sendOverride->valid;
     std::string ovName, ovDb;
@@ -32211,14 +32214,23 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVPotReadoutBar, pb));
     }
 
-    // Channel number (0x0014)
-    const int idx = static_cast<int>(GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
-    const std::string ch = std::to_string(idx);
+    // Channel number (0x0014). ⇨ As the Extender's ninth SEND strip, the send's
+    // track, like the UF8's send strips (Frank 2026-09-21: "der uf1 als extender
+    // soll doch gleich reagieren wie der uf8"); blank for a hardware output.
+    MediaTrack* const routeTr = (sendZone && sendValid) ? routeTargetTrack_(*sendOverride)
+                                                        : nullptr;
+    MediaTrack* const numTr = sendZone ? routeTr : tr;
+    const int idx = numTr ? static_cast<int>(GetMediaTrackInfo_Value(numTr, "IP_TRACKNUMBER"))
+                          : 0;
+    const std::string ch = idx > 0 ? std::to_string(idx) : std::string();
     if (!meterView && (changed || ch != sCh)) { sCh = ch; sendZoneText(uf1::scr::kChNumber, ch); }
 
     // Track colour: SEL / track-colour element 0x07 (FF38 GRB) + the fader colour
     // BAR (0x0018, palette index), gated by the 0x0006 "channel populated" flag.
-    const uint32_t rgb = trackColorRgb(tr);
+    // As the Extender's ninth send strip: the send's track, like the UF8
+    // (reaperColorForVisibleSlot); a hardware output keeps the source's colour
+    // there too.
+    const uint32_t rgb = trackColorRgb(routeTr ? routeTr : tr);
     // The SEL LED (0x07) lights the track colour ONLY when this track is actually
     // SELECTED. In Extender mode the UF1 shows a bank-slot track that is usually NOT
     // selected → its SEL must stay dark (Frank 2026-08-05: "SEL bleibt an obwohl der
@@ -32228,8 +32240,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     // As the Extender's ninth SEND strip the LED shows the send's track, the one
     // SEL selects (uf1FaderShownTrack_), dark for a hardware output or an empty
     // slot. Colour and channel number still follow the source track (below).
-    MediaTrack* const selTr = sendZone
-        ? (sendValid ? routeTargetTrack_(*sendOverride) : nullptr) : tr;
+    MediaTrack* const selTr = sendZone ? routeTr : tr;
     const bool     selSel = selTr && GetMediaTrackInfo_Value(selTr, "I_SELECTED") > 0.5;
     // Sel Mode REC / REC+MON retargets this LED to the ARM state, exactly like the
     // UF8's SEL row (ledColourFor, main.cpp ~18802): bright red armed, dim red not.
@@ -39452,13 +39463,20 @@ void pushZonesForVisibleSlots()
                 && (userBoundFader >= 0 || userBoundVpot >= 0
                  || userBoundSolo  >= 0 || userBoundCut  >= 0
                  || userBoundSel   >= 0);
+            // ⇨ IN A SEND/RECEIVE FADER MODE THE NUMBER IS THE ROUTE'S TRACK, the
+            // one the name, colour, meters and SEL follow (routeTargetTrack_).
+            // It was the bank track's, which in "sends of focused track" is a
+            // track that has nothing to do with the send (Frank 2026-09-21,
+            // v0.6). A hardware output has no track number: blank.
+            MediaTrack* numTr = tr;
+            if (routedFader) numTr = routeTargetTrack_(faderRoute);
             if (userStripActive && !stripHasUserFunction) {
                 chan = "  ";
-            } else if (tr == GetMasterTrack(nullptr)) {
-                chan = "  ";   // Master has no channel number
+            } else if (!numTr || numTr == GetMasterTrack(nullptr)) {
+                chan = "  ";   // Master / hardware output: no channel number
             } else {
                 const int trkNo = static_cast<int>(
-                    GetMediaTrackInfo_Value(tr, "IP_TRACKNUMBER"));
+                    GetMediaTrackInfo_Value(numTr, "IP_TRACKNUMBER"));
                 char buf[8];
                 snprintf(buf, sizeof(buf), "%d", trkNo > 0 ? trkNo : realSlot + 1);
                 chan = buf;
