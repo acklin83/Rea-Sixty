@@ -259,3 +259,35 @@ Die Zahl hängt an den Buchstaben: 14 Grossbuchstaben passen, von
 „VPOT1 + Leerzeichen + TEST" (19 Zeichen, Wert ab Stelle 16) waren 18 zu sehen.
 Das passt zu einer Kappung nach **Pixelbreite** (Proportionalschrift), nicht
 nach Zeichenzahl. Nicht einzeln nachgemessen.
+
+## Messdurchgang Layout 1 (Elemente 19 bis 26)
+
+| # | Feld | Lineal | sichtbar | vgl. Grossbuchstaben |
+|---|---|---|---|---|
+| 19 | Wertzeile `0x010e` | a..z | **a bis r (18)** | A bis N (14) |
+| 20 | Text pro Pot `0x010b` | a..z | **a bis h (8)** | A bis H (8) |
+| 21 | Soft-Key `0x0104` | A..S | **A bis L (12)** | |
+| 22 | Soft-Key `0x0104` | a..z | **a bis o (15)** | A bis L (12) |
+| 23 | CELL1 `0x011c` | A..X | **A bis J (10)** | |
+
+**Daraus:**
+- Wertzeile und Soft-Key werden nach **Pixelbreite** gekappt (Kleinbuchstaben
+  passen mehr). Die Zeichenzahl ist dort keine feste Grenze.
+- `0x010b` kappt nach **Zeichenzahl: 8**, egal welche Buchstaben.
+- Unsere Wertzeile „VPOT1 + 10 Leerzeichen + TEST" zeigt in Layout 1 nur
+  „VPOT1      TES": das letzte Zeichen fällt über den Rand. `uf1ValueLine` ist
+  auf Layout 3 zugeschnitten (11 + 8 = 19) und passt in Layout 1 nicht.
+
+**Stile, V-Pot-Reihe in Layout 1:**
+
+| Stil | Reihe |
+|---|---|
+| `0x01` | nichts (Element 9) |
+| `0x02` | da |
+| `0x03` | da |
+| `0x04` | da (Element 16) |
+| `0x08` | nichts |
+
+⛔ **Korrektur zu oben:** nicht „nur mit `0x04`", sondern **nicht mit `0x01` und
+nicht mit `0x08`**. Genau die zwei, die in Layout 3 Zeiger und Mitte-Füllung
+sind.
