@@ -73,8 +73,8 @@ Fader bleibt der Pegel des Kanals, die kleine Anzeige bleibt Name und dB.
 
 | Seite | V-Pot 1 | V-Pot 2 | V-Pot 3 | V-Pot 4 | Soft-Keys |
 |---|---|---|---|---|---|
-| **Input** | Gain | Width | FX Send | Ref Level | 48V · Pad · Phase · Inst |
-| **Input 2** (falls nötig) | | | | | Stereo · M/S · AutoSet |
+| **Input** | Gain | FX Send | Ref Level | Width (nur stereo) | 48V · Pad · Phase L · Phase R (nur stereo) |
+| **Input 2** | | | | | Stereo · M/S (nur stereo) · Inst · AutoSet |
 | **Low Cut** | Freq | Slope | | | LC an |
 | **EQ 1** | Gain | Freq | Q | Typ | EQ an |
 | **EQ 2** | Gain | Freq | Q | | EQ an |
@@ -86,6 +86,17 @@ Fader bleibt der Pegel des Kanals, die kleine Anzeige bleibt Name und dB.
 
 Belegung über dieselbe Datei wie der Rest (`rme.json`), damit Frank sie ändern
 kann. Die Tabelle oben ist die Werksbelegung.
+
+⇨ **Was eine Seite zeigt, hängt am Kanal, nicht nur am Gerät** (Frank 22.09.:
+„das kommt doch drauf an, ob der Kanal auf stereo oder mono steht, siehe
+TotalReaper"). `stereo` ist schreibbar, TotalReaper sendet es selbst
+(`TotalReaperCSurf.cpp:1020`, Stereo-Pair Link). Mono: kein Width, kein M/S,
+eine Phase. Stereo: Width, M/S, Phase links und rechts getrennt (Phase und Gain
+gehen pro Seite, rechts = n+1, Abschnitt 5a); Gain dreht beide Seiten. Der
+Stereo-Schalter steht darum immer da, und die Seite baut sich nach dem Schalten
+neu. Nach einem Entkoppeln taucht n+1 als eigener Kanal auf: dafür beim Schalten
+`/sendchan` für n und n+1 nachfragen, nicht auf ein Echo warten (TotalMix
+schickt dem sendenden Remote keins).
 
 Leere Soft-Keys bleiben leer. Hat ein Kanal kein Pad, steht dort nichts, und
 die Taste tut nichts.
@@ -303,8 +314,8 @@ sind Schalter, keine Drehwerte.
 4. **Grenzen der Parameter:** wo liegt RMEs `OSCProtocoll_260721.ods`? Ohne
    sie messe ich die Grenzen einzeln (wie heute die Faderkurve), was bei Gain
    und Dynamics Pegeländerungen auf einem freigegebenen Kanal bedeutet.
-5. **Stereo/Mono per OSC:** TotalReapers Doku nennt `stereo` als „Stereo link
-   toggle", gesendet habe ich es nie. Für den Test einen Kanal freigeben.
+5. ~~**Stereo/Mono per OSC**~~ geklärt 22.09.: TotalReaper schreibt es
+   (`TotalReaperCSurf.cpp:1020`). Die Seiten hängen daran, siehe 3.2.
 6. **UF8, V-Pots:** Pan oder Gain als Standard in der Input-Reihe?
 
 ## 8. Was belegt ist und was nicht
