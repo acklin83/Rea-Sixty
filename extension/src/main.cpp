@@ -32869,12 +32869,18 @@ static void uf1PaintLayoutProbe_()
     };
     constexpr int kProbeElemCount =
         static_cast<int>(sizeof(kProbeElems) / sizeof(kProbeElems[0]));
+    // ⛔ ISOLIEREN HEISST LOESCHEN, NICHT AUSLASSEN. Die erste Fassung hat die
+    // nicht gewaehlten Elemente uebersprungen -- und die Firmware behaelt, was
+    // zuletzt drinstand, also blieb beim Durchschalten alles stehen und nichts
+    // aenderte sich (Frank 2026-09-21: "aendert sich nix"). Jede Runde schreibt
+    // deshalb ALLE acht: das gewaehlte mit seinem Muster, die anderen auf null.
     const int only = g_uf1ProbeOnly.load();
+    const uint8_t zero[4] = { 0x00, 0x00, 0x00, 0x00 };
     for (int i = 0; i < kProbeElemCount; ++i) {
-        if (only != 0 && only != i + 1) continue;
         const auto& e = kProbeElems[i];
+        const bool pick = (only == 0) || (only == i + 1);
         g_uf1_dev->send(uf1::buildScreen(e.addr,
-            std::span<const uint8_t>(e.v, e.n)));
+            std::span<const uint8_t>(pick ? e.v : zero, e.n)));
     }
 }
 
