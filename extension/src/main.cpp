@@ -723,6 +723,10 @@ std::atomic<bool>     g_uf1LayoutProbe {false};   // probe owns the screen
 std::atomic<uint8_t>  g_uf1ProbeLayout {0x03};
 std::atomic<uint8_t>  g_uf1ProbeScreen {0x00};
 std::atomic<bool>     g_uf1ProbePattern{true};    // also paint the candidates
+// 0 = alle Elemente, sonst genau eines (Index in kProbeElems). Damit laesst
+// sich benennen, WELCHE Zelle einen Balken zeichnet -- mit allen gleichzeitig
+// sieht man nur, DASS etwas zeichnet.
+std::atomic<int>      g_uf1ProbeOnly   {0};
 std::atomic<uint32_t> g_uf1ProbeGen    {0};       // bump = re-send everything
 // Preset-browser working state — MAIN-THREAD ONLY (the painter in onTimer + the V-Pot4
 // drain in applyUf1MeterVpot_, both main-thread). Scanned once on entry, scrolled/loaded
@@ -32848,22 +32852,30 @@ static void uf1PaintLayoutProbe_()
     // 0x0121 first in the list because it sits between solo-active (0x0120) and
     // the graphic (0x0122). Init values: 0x0113 is 01 01 01 01, the other three
     // are all zero.
-    static constexpr uint16_t kCandidates[] = { 0x0121, 0x0113, 0x0118, 0x012b };
-    const uint8_t rising[4] = { 0x00, 0x01, 0x02, 0x03 };
-    for (const uint16_t a : kCandidates)
-        g_uf1_dev->send(uf1::buildScreen(a, rising));
-
-    // And the cells the pacer used to own, now that it is quiet: each at a
-    // DIFFERENT LENGTH, so whatever draws can be told apart by how far it
-    // reaches rather than by its colour. Level is a quarter and three
-    // quarters, comp GR a third, gate GR two thirds -- four distinguishable
-    // lengths, no colour needed to read the answer.
-    const uint8_t lvl[4]  = { 0x20, 0x60, 0x00, 0x00 };   // L quarter, R three quarters
-    const uint8_t comp    = 0x05;                          // of 0x0f
-    const uint8_t gate    = 0x0a;
-    g_uf1_dev->send(uf1::buildScreen(0x0009, lvl));
-    g_uf1_dev->send(uf1::buildScreen(0x0015, std::span<const uint8_t>(&comp, 1)));
-    g_uf1_dev->send(uf1::buildScreen(0x0016, std::span<const uint8_t>(&gate, 1)));
+    // ⇨ EINES NACH DEM ANDEREN, SONST IST ES KEINE ANTWORT. Mit allen Zellen
+    // gleichzeitig sieht man, DASS etwas zeichnet, aber nie WAS. `only` waehlt
+    // genau ein Element; 0 schreibt alle (der Ueberblick).
+    // Werte sind ueber LAENGEN unterscheidbar, nicht ueber Farben: die Antwort
+    // soll "der lange Balken ist rechts" heissen und nicht "der gruene".
+    static constexpr struct { uint16_t addr; uint8_t n; uint8_t v[4]; } kProbeElems[] = {
+        { 0x0121, 4, { 0x00, 0x01, 0x02, 0x03 } },
+        { 0x0113, 4, { 0x00, 0x01, 0x02, 0x03 } },
+        { 0x0118, 4, { 0x00, 0x01, 0x02, 0x03 } },
+        { 0x012b, 4, { 0x00, 0x01, 0x02, 0x03 } },
+        { 0x0009, 4, { 0x20, 0x60, 0x00, 0x00 } },   // Pegel L viertel / R drei viertel
+        { 0x000a, 4, { 0x40, 0x10, 0x00, 0x00 } },   // das unbekannte Zwillingsfeld
+        { 0x0015, 1, { 0x05, 0, 0, 0 } },            // Comp GR, ein Drittel
+        { 0x0016, 1, { 0x0a, 0, 0, 0 } },            // Gate GR, zwei Drittel
+    };
+    constexpr int kProbeElemCount =
+        static_cast<int>(sizeof(kProbeElems) / sizeof(kProbeElems[0]));
+    const int only = g_uf1ProbeOnly.load();
+    for (int i = 0; i < kProbeElemCount; ++i) {
+        if (only != 0 && only != i + 1) continue;
+        const auto& e = kProbeElems[i];
+        g_uf1_dev->send(uf1::buildScreen(e.addr,
+            std::span<const uint8_t>(e.v, e.n)));
+    }
 }
 
 void uf1PaintChannel_()
@@ -47218,6 +47230,13 @@ void reasixty_setUf1ProbeScreen(int v)
     g_uf1ProbeScreen.store(static_cast<uint8_t>(v));
 }
 bool reasixty_uf1ProbePattern() { return g_uf1ProbePattern.load(); }
+int  reasixty_uf1ProbeOnly() { return g_uf1ProbeOnly.load(); }
+void reasixty_setUf1ProbeOnly(int v)
+{
+    if (v < 0 || v > 8) return;
+    if (g_uf1ProbeOnly.exchange(v) != v)
+        g_uf1ProbeGen.fetch_add(1, std::memory_order_relaxed);
+}
 void reasixty_setUf1ProbePattern(bool on) { g_uf1ProbePattern.store(on); }
 void reasixty_uf1ProbeResend()
 {

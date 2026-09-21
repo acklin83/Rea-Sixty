@@ -522,6 +522,8 @@ void reasixty_setUf1ProbeLayout(int v);
 void reasixty_setUf1ProbeScreen(int v);
 bool reasixty_uf1ProbePattern();
 void reasixty_setUf1ProbePattern(bool on);
+int  reasixty_uf1ProbeOnly();
+void reasixty_setUf1ProbeOnly(int v);
 void reasixty_uf1ProbeResend();
 bool reasixty_uf1Connected();
 bool reasixty_stripFollowsFocusedFx();
@@ -26068,8 +26070,26 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
             // "how many bars and where", which a colour-blind reader can answer
             // and a colour cannot be.
             ImGui_Text(ctx,
-                "  Eight numbered text cells, plus 0x0121 / 0x0113 / 0x0118 /"
-                " 0x012b set to 0,1,2,3 each.");
+                "  Eight numbered text cells, plus the elements below.");
+            // One at a time, or you learn THAT something draws and never WHAT.
+            int only = reasixty_uf1ProbeOnly();
+            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 120.0));
+            if (ImGui_InputInt(ctx, "Only element (0 = all)##uf1probe_o", &only,
+                               nullptr, nullptr, nullptr))
+                reasixty_setUf1ProbeOnly(only);
+            static const char* kElemNames[] = {
+                "  0  all of them",
+                "  1  0x0121   (4 bytes 0,1,2,3)",
+                "  2  0x0113   (4 bytes 0,1,2,3)",
+                "  3  0x0118   (4 bytes 0,1,2,3)",
+                "  4  0x012b   (4 bytes 0,1,2,3)",
+                "  5  0x0009   level   L quarter / R three quarters",
+                "  6  0x000a   the unknown twin of the level cell",
+                "  7  0x0015   comp GR   one third",
+                "  8  0x0016   gate GR   two thirds",
+            };
+            const int shown = (only >= 0 && only <= 8) ? only : 0;
+            ImGui_Text(ctx, kElemNames[shown]);
             if (ImGui_Button(ctx, "Send again##uf1probe_r", nullptr, nullptr))
                 reasixty_uf1ProbeResend();
             ImGui_SameLine(ctx, nullptr, nullptr);
