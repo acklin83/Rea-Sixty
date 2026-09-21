@@ -26081,10 +26081,10 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
                 reasixty_setUf1ProbeOnly(only);
             static const char* kElemNames[] = {
                 "  0  all of them",
-                "  1  0x0121   (4 bytes 0,1,2,3)",
-                "  2  0x0113   (4 bytes 0,1,2,3)",
-                "  3  0x0118   (4 bytes 0,1,2,3)",
-                "  4  0x012b   (4 bytes 0,1,2,3)",
+                "  1  0x0121   (FE 00 FE 00: \"8.\" blank \"8.\" blank)",
+                "  2  0x0113   (FE 00 FE 00: \"8.\" blank \"8.\" blank)",
+                "  3  0x0118   (FE 00 FE 00: \"8.\" blank \"8.\" blank)",
+                "  4  0x012b   the four bars, palette base..base+3",
                 "  5  0x0009   level   L quarter / R three quarters",
                 "  6  0x000a   the unknown twin of the level cell",
                 "  7  0x0015   comp GR   one third",
