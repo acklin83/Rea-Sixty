@@ -236,6 +236,49 @@ RMEs Dokument, liegt bei Frank in `~/Downloads`, **nicht ins Repo**.
 - **FX:** `/reverb/...` und `/echo/...` gibt es auch, nicht Teil dieses Plans.
 - `reflevel`, `band1type` usw. sind Listenindizes, **geräteabhängig**.
 
+## 5b. Die Grenzen, aus dem UFX+-Handbuch
+
+Quelle: RME, *User's Guide Fireface UFX+*, Kapitel 19.2 und 25.3
+(<https://rme-audio.de/downloads/fface_ufxplus_e.pdf>, gelesen 21.09.). Gilt
+für die UFX+. Andere RME-Geräte können abweichen, und Listen wie `reflevel`
+sind laut OSC-Tabelle geräteabhängig.
+
+| Parameter | Bereich | Schritt | Seite |
+|---|---|---|---|
+| Gain Mic/Inst (9-12) | 0 dB, dann 8 bis 75 dB (XLR); Inst 8 bis 50 dB | 1 dB | 19.2 |
+| Gain Line (1-8) | 0 bis +12 dB | | 61 |
+| Ref Level Line-Eingänge | +4 dBu, LoGain | Liste | 61 |
+| Ref Level Line-Ausgänge | -10 dBV, +4 dBu, HiGain; 1/2 zusätzlich +24 dBu; Phones Low / High | Liste | 62 |
+| Width | -1.00 (vertauscht) bis 1.00 (stereo), 0.00 = mono | | 61 |
+| EQ Gain (3 Bänder) | -20 bis +20 dB | 0.5 dB | 62, 64 |
+| EQ Freq | 20 Hz bis 20 kHz | | 62 |
+| EQ Q | 0.4 bis 9.9 | | 62 |
+| EQ Typ Band 1/3 | Bell, Shelf, High-Pass, Low-Pass; Band 2 nur Bell | Liste | 62 |
+| Low Cut Freq | 20 bis 500 Hz | | 62 |
+| Low Cut Slope | 6, 12, 18, 24 dB/Okt | Liste | 62 |
+| Compressor Threshold | -60 bis 0 dB | | 65 |
+| Expander Threshold | -99 bis -20 dB | | 65 |
+| Ratio (beide) | 1 bis 10 | | 65 |
+| Dynamics Gain (Make-up) | -30 bis +30 dB | | 65 |
+| Attack | 0 bis 200 ms | | 65 |
+| Release | 100 bis 999 ms | | 65 |
+| AutoLevel Max Gain | 0 bis 18 dB | | 65 |
+| AutoLevel Headroom | 3 bis 12 dB | | 65 |
+| AutoLevel Rise Time | 0.1 bis 9.9 s | | 65 |
+| Crossfeed | 5 Stufen, höchstens 6 Stereokanäle | Liste | 62 |
+| Delay (Ausgang, im Room-EQ-Fenster) | 0 bis 42 ms | 0.01 ms | 64 |
+| Vol.Cal (Ausgang, = OSC `gain` bei Room EQ) | -24 bis +3 dB | 0.1 dB | 64 |
+| Room EQ Gain | | 0.1 dB | 64 |
+
+**Nicht im UFX+-Handbuch:** Pad (die UFX+ hat keinen; er kommt bei MADI-Kanälen
+mit vorgeschaltetem RME-Preamp, siehe 2.), FX Send als Zahl, die Crossfeed-
+Stufen als Werte, die OSC-Werte der Listen (`reflevel`, `crossfeed`).
+
+⇨ **Folge für die Kanalansicht:** die V-Pot-Schritte kommen pro Parameter aus
+dieser Tabelle; die Grenzen gelten als UFX+-Werte, und TotalMix klemmt selbst,
+wenn ein anderes Gerät engere hat. Listen (Typ, Slope, Ref Level, Crossfeed)
+sind Schalter, keine Drehwerte.
+
 ## 6a. Entschieden 21.09. (Frank)
 
 - **Graph:** ausserhalb der EQ- und Low-Cut-Seiten **Layout 1 mit den vier
