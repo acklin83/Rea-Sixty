@@ -26089,8 +26089,9 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
                 "  6  0x000a   the unknown twin of the level cell",
                 "  7  0x0015   comp GR   one third",
                 "  8  0x0016   gate GR   two thirds",
+                "  9  the whole V-Pot row: labels, bars, styles",
             };
-            const int shown = (only >= 0 && only <= 8) ? only : 0;
+            const int shown = (only >= 0 && only <= 9) ? only : 0;
             ImGui_Text(ctx, kElemNames[shown]);
             // The four bars show base..base+3, so the palette walks in fours.
             int barBase = reasixty_uf1ProbeBarBase();

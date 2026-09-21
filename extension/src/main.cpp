@@ -32877,6 +32877,12 @@ static void uf1PaintLayoutProbe_()
         { 0x000a, 4, { 0x40, 0x10, 0x00, 0x00 } },   // das unbekannte Zwillingsfeld
         { 0x0015, 1, { 0x05, 0, 0, 0 } },            // Comp GR, ein Drittel
         { 0x0016, 1, { 0x0a, 0, 0, 0 } },            // Gate GR, zwei Drittel
+        // 9: die ganze V-Pot-Reihe auf einmal (Beschriftungen, Balken, Stile).
+        // Die Frage dahinter ist nicht "welche der drei Zellen", sondern
+        // "rendert die Reihe in dieser Ebene ueberhaupt" — denn Farbbalken ohne
+        // Beschriftung waeren kein Tausch, sondern ein Verlust. Wird unten
+        // gesondert geschrieben, weil 0x010e vier indizierte Saetze braucht.
+        { 0x010f, 0, { 0, 0, 0, 0 } },
     };
     constexpr int kProbeElemCount =
         static_cast<int>(sizeof(kProbeElems) / sizeof(kProbeElems[0]));
@@ -32890,6 +32896,25 @@ static void uf1PaintLayoutProbe_()
     for (int i = 0; i < kProbeElemCount; ++i) {
         const auto& e = kProbeElems[i];
         const bool pick = (only == 0) || (only == i + 1);
+        if (pick && e.addr == 0x010f) {
+            // Vier Beschriftungen mit Index-Praefix, vier Balken auf deutlich
+            // verschiedenen Positionen, alle Stile auf "wandernde Linie".
+            for (uint8_t k = 0; k < 4; ++k) {
+                const char* names[4] = { "VPOT1", "VPOT2", "VPOT3", "VPOT4" };
+                const std::string line = uf1ValueLine(names[k], "TEST");
+                std::vector<uint8_t> p;
+                p.reserve(1 + line.size());
+                p.push_back(k);
+                p.insert(p.end(), line.begin(), line.end());
+                g_uf1_dev->send(uf1::buildScreen(uf1::scr::kFocusedParam, p));
+            }
+            const uint8_t bars[8] = { 0x14, 0x80, 0x32, 0x80, 0x50, 0x80, 0x64, 0x80 };
+            const uint8_t styles[4] = { 0x01, 0x01, 0x01, 0x01 };
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, bars));
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, styles));
+            continue;
+        }
+        if (!pick && e.addr == 0x010f) continue;   // nichts zu loeschen
         if (pick && e.addr == 0x012b) {
             // Palettenlauf: vier aufeinanderfolgende Indizes ab dem Startwert.
             const int b = g_uf1ProbeBarBase.load();
@@ -47266,7 +47291,7 @@ void reasixty_setUf1ProbeBarBase(int v)
 }
 void reasixty_setUf1ProbeOnly(int v)
 {
-    if (v < 0 || v > 8) return;
+    if (v < 0 || v > 9) return;
     if (g_uf1ProbeOnly.exchange(v) != v)
         g_uf1ProbeGen.fetch_add(1, std::memory_order_relaxed);
 }
