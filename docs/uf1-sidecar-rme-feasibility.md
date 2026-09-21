@@ -1262,6 +1262,42 @@ Messung:
 * welcher Index bei **`band1type` / `band3type` / `lowcut/slope`** welche
   Charakteristik meint
 
+### 13.9 Beide beantwortet, 21.09.2026
+
+Gemessen am Mac Studio mit `rme_osc_probe 7001 7002 1200 input/0/` (neuer
+Filtermodus: Rohwerte plus jede Aenderung live). Frank hat auf Eingang 1 jede
+Option in TotalMix-Reihenfolge angeklickt, das Werkzeug hat den Index
+mitgelesen. Danach alles auf den Ausgangszustand zurueck, im Mitschnitt
+kontrolliert (`band1type 1`, `band3type 1`, `slope 1`, Farbe 8).
+
+**Farbe `/input/<n>/color`** — Reihenfolge der Farbauswahl in TotalMix, ohne
+Luecke:
+
+| 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| versteckt | white | grey | orange | red | blue | green | yellow | pink |
+
+Nur die NAMEN sind gemessen, keine RGB-Werte. Fuer die UF1 heisst das: eine
+Zuordnung Name → UF1-Palettenindex, keine Farbumrechnung.
+
+**EQ-Typ `eq/band1type` und `eq/band3type`** — beide gleich, Band 2 hat nur
+Bell und keinen Typ:
+
+| 0 | 1 | 2 | 3 |
+|---|---|---|---|
+| Bell | Shelve | Hipass | Low-Pass |
+
+**Low-Cut-Steilheit `lowcut/slope`** — Werte 0 bis 3, Frequenz 20 bis 500 Hz:
+
+| 0 | 1 | 2 | 3 |
+|---|---|---|---|
+| 6 dB/Okt | 12 dB/Okt | 18 dB/Okt | 24 dB/Okt |
+
+⚠ Einzeln belegt ist nur **1 = 12 dB/Okt** (Frank hat auf 12 zurueckgestellt,
+der Mitschnitt zeigte 1). Die anderen drei folgen aus der Reihenfolge: vier
+Werte, vier Stufen, aufsteigend. Der Regler lief beim Durchgang zu schnell,
+um jede Stufe einzeln zuzuordnen.
+
 ## 14. Die UF1-Anzeige: was 2.1.12 brachte und was wir nicht fahren
 
 Frank, 19.09.: "beim SSL-Update gabs doch neue Felder fuers UF1. Ich sah dort

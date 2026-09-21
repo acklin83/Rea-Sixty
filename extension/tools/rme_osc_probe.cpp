@@ -8,8 +8,14 @@
 // of its stored state. That is also why this is a probe and not a test: what it
 // prints depends on the room.
 //
-//   rme_osc_probe [send-port] [listen-port] [seconds]
+//   rme_osc_probe [send-port] [listen-port] [seconds] [filter]
 //   defaults:      7001        7002          3
+//
+// With a FILTER, every message whose address contains it is printed raw, first
+// the /sendall dump, then every CHANGE TotalMix reports while the probe runs.
+// That is how an index is read against what the TotalMix window shows: run it
+// for a minute with "input/0/", switch a type in TotalMix, read the line
+// (2026-09-21, the colour palette and the EQ type indices).
 //
 // ⛔ It sends only /sendall, which asks TotalMix to dump state. It sets nothing.
 //
@@ -64,6 +70,8 @@ int main(int argc, char** argv)
     const int sendPort   = (argc > 1) ? std::atoi(argv[1]) : 7001;
     const int listenPort = (argc > 2) ? std::atoi(argv[2]) : 7002;
     const double seconds = (argc > 3) ? std::atof(argv[3]) : 3.0;
+    const std::string filter = (argc > 4) ? argv[4] : "";
+    std::setvbuf(stdout, nullptr, _IOLBF, 0);   // live lines, also into a pipe
 
 #if defined(_WIN32)
     WSADATA wsa; WSAStartup(MAKEWORD(2, 2), &wsa);
@@ -105,6 +113,7 @@ int main(int argc, char** argv)
 
     State st;
     std::map<std::string, int> unknown;
+    std::map<std::string, std::string> last;   // filter mode: print changes only
     std::size_t packets = 0, messages = 0;
     std::vector<std::uint8_t> buf(65536);
     const auto t0 = std::chrono::steady_clock::now();
@@ -118,6 +127,24 @@ int main(int argc, char** argv)
             std::span<const std::uint8_t>(buf.data(), static_cast<std::size_t>(n)),
             [&](const Message& m) {
                 if (!ingest(st, m)) ++unknown[m.address];
+                if (filter.empty() || m.address.find(filter) == std::string::npos)
+                    return;
+                std::string v;
+                for (const Arg& a : m.args) {
+                    char t[64];
+                    if (a.type == Arg::Type::String)
+                        std::snprintf(t, sizeof(t), " \"%s\"", a.s.c_str());
+                    else
+                        std::snprintf(t, sizeof(t), " %g", a.number());
+                    v += t;
+                }
+                auto it = last.find(m.address);
+                if (it != last.end() && it->second == v) return;
+                const double at = std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - t0).count();
+                std::printf("%7.2fs  %-40s%s%s\n", at, m.address.c_str(), v.c_str(),
+                            it == last.end() ? "" : "   <- changed");
+                last[m.address] = v;
             });
     }
     RP_CLOSE(s);
