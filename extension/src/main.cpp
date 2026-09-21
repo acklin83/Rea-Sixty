@@ -57318,7 +57318,11 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         }
         reasixty::rme::Config c = rm.config();
         if (!json.empty() && reasixty::rme::configFromJson(json, c)) rm.setConfig(c);
-        rm.takeConfigDirty();   // loaded, not changed: nothing to write back
+        // Loaded, not changed: nothing to write back, UNLESS the file is in an
+        // older shape (rme.json v1 kept "select" on the pots, which loading turns
+        // into "submix" in memory only). Then the tick writes it once.
+        if (json.empty() || reasixty::rme::configToJson(rm.config()) == json)
+            rm.takeConfigDirty();
         rm.start();
     }
 
