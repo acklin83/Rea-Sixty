@@ -32852,6 +32852,18 @@ static void uf1PaintLayoutProbe_()
     const uint8_t rising[4] = { 0x00, 0x01, 0x02, 0x03 };
     for (const uint16_t a : kCandidates)
         g_uf1_dev->send(uf1::buildScreen(a, rising));
+
+    // And the cells the pacer used to own, now that it is quiet: each at a
+    // DIFFERENT LENGTH, so whatever draws can be told apart by how far it
+    // reaches rather than by its colour. Level is a quarter and three
+    // quarters, comp GR a third, gate GR two thirds -- four distinguishable
+    // lengths, no colour needed to read the answer.
+    const uint8_t lvl[4]  = { 0x20, 0x60, 0x00, 0x00 };   // L quarter, R three quarters
+    const uint8_t comp    = 0x05;                          // of 0x0f
+    const uint8_t gate    = 0x0a;
+    g_uf1_dev->send(uf1::buildScreen(0x0009, lvl));
+    g_uf1_dev->send(uf1::buildScreen(0x0015, std::span<const uint8_t>(&comp, 1)));
+    g_uf1_dev->send(uf1::buildScreen(0x0016, std::span<const uint8_t>(&gate, 1)));
 }
 
 void uf1PaintChannel_()
@@ -32900,7 +32912,22 @@ void uf1PaintChannel_()
             g_uf1Gen.fetch_add(1, std::memory_order_relaxed);
             if (!probeNow) g_uf1PlaneLost.store(true, std::memory_order_relaxed);
         }
-        if (probeNow) { uf1PaintLayoutProbe_(); return; }
+        if (probeNow) {
+            // ⛔ AND THE PACER HAS TO STOP, OR THE PROBE IS NOT A PROBE.
+            // Returning early only silences THIS painter. The cycle pacer runs
+            // on its own thread and keeps restreaming the last snapshot at
+            // ~24 Hz -- header row, level, comp GR, gate GR -- so everything the
+            // probe writes is overwritten within 40 ms. The first run on
+            // 2026-09-21 showed it plainly: the channel cell read "REAPER"
+            // where the probe had written "CELL1", and the bars that appeared
+            // in layout 1 were OUR meter cells rendered there, not the probe's
+            // pattern. A tool whose own output you cannot tell from the
+            // program's is not a measurement.
+            // The normal painter re-activates the pacer on its next tick
+            // (uf1PaintChannel_'s cycle build), so the exit needs nothing.
+            g_uf1CycleActive.store(false, std::memory_order_relaxed);
+            uf1PaintLayoutProbe_(); return;
+        }
     }
 
     // Follow the user's focus: last-touched track, else the first selected.
