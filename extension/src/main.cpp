@@ -33006,6 +33006,13 @@ static void uf1PaintLayoutProbe_()
         { 0x0000, 2, { 24, 0, 0, 0 } },
         { 0x0000, 2, { 25, 0, 0, 0 } },
         { 0x0000, 2, { 26, 0, 0, 0 } },
+        // 27 + 28: das 2-/4-stellige 7-Segment-Feld in Layout 2. cap141: SSL
+        // schreibt beim Eintritt 0x011b = 7e 0c, und (SEG7<<1) liest das als
+        // "0" "1". Also vermutlich DAS Feld. ⛔ NUR IN LAYOUT 2: in Layout 3 hat
+        // 0x011b mit Bytes die Kanalansicht zerlegt (2026-08-10).
+        // 27 = "01" wie SSL, 28 = "1234" fuer die vierstellige Form auf S3.
+        { 0x0000, 2, { 27, 0, 0, 0 } },
+        { 0x0000, 2, { 28, 0, 0, 0 } },
     };
     constexpr int kProbeElemCount =
         static_cast<int>(sizeof(kProbeElems) / sizeof(kProbeElems[0]));
@@ -33147,6 +33154,17 @@ static void uf1PaintLayoutProbe_()
                     }
                     g_uf1_dev->send(uf1::buildScreen(uf1::scr::kHeaderRow,
                         std::span<const uint8_t>(hdr.data(), hdr.size())));
+                    break;
+                }
+                case 27: case 28: {
+                    if (layout != 0x02) break;   // siehe oben, nie ausserhalb
+                    // SEG7: 0=3f 1=06 2=5b 3=4f 4=66, Byte = SEG7 << 1
+                    static constexpr uint8_t k01[2]   = { 0x7e, 0x0c };
+                    static constexpr uint8_t k1234[4] = { 0x0c, 0xb6, 0x9e, 0xcc };
+                    if (e.v[0] == 27)
+                        g_uf1_dev->send(uf1::buildScreen(0x011b, k01));
+                    else
+                        g_uf1_dev->send(uf1::buildScreen(0x011b, k1234));
                     break;
                 }
                 case 24: case 25: case 26: {
@@ -47729,7 +47747,7 @@ void reasixty_setUf1ProbeBarBase(int v)
 }
 void reasixty_setUf1ProbeOnly(int v)
 {
-    if (v < 0 || v > 26) return;
+    if (v < 0 || v > 28) return;
     if (g_uf1ProbeOnly.exchange(v) != v)
         g_uf1ProbeGen.fetch_add(1, std::memory_order_relaxed);
 }

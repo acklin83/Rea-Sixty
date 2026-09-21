@@ -26107,8 +26107,10 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
                 " 24  V-Pot row, style 0x02",
                 " 25  V-Pot row, style 0x08",
                 " 26  V-Pot row, style 0x03",
+                " 27  0x011b = \"01\"   (layout 2 only)",
+                " 28  0x011b = \"1234\" (layout 2 only)",
             };
-            const int shown = (only >= 0 && only <= 26) ? only : 0;
+            const int shown = (only >= 0 && only <= 28) ? only : 0;
             ImGui_Text(ctx, kElemNames[shown]);
             // The four bars show base..base+3, so the palette walks in fours.
             int barBase = reasixty_uf1ProbeBarBase();
