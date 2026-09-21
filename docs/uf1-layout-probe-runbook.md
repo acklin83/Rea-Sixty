@@ -229,3 +229,14 @@ und 0x011f/0x0123/0x0129 gehen auf ihre Init-Werte zurück.
 9 schreibt Stil `0x01`; mit „alle" setzt 13 danach `0x04`, und dann waren
 Wertzeile und Segmentleiste da. Vermutung: in Layout 1 gibt erst Stil `0x04`
 die Reihe frei. Test: Element 16 = 9 mit Stil `0x04`.
+
+**Bestätigt (Frank, Element 16): mit Stil `0x04` sind Wertzeilen und
+Segmentleiste da.** In Layout 1 gibt erst dieser Stil die Reihe frei. Das
+„irgendwas oberhalb der V-Pots" bei 13 war die Segmentleiste im Stil `0x04`.
+
+## Was Layout 1 damit hergibt
+
+Farbbalken pro V-Pot, ein kurzer Text pro V-Pot (`0x010b`), Wertzeile und
+Segmentleiste, alles gleichzeitig, plus SK1 bis SK4, Zeitfeld und zwei
+Kopfzellen. Kein EQ-Graph (der lebt in Layout 3). Offen: welche Breite die
+Wertzeile in Layout 1 verträgt.
