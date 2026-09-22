@@ -70,6 +70,15 @@ muss. Braucht eine laufende UFX+.
 
 ---
 
+## 2. ✅ GEBAUT 22.09.2026 (`390b76e`, auf 0.6 als `f728ce1`)
+
+Das Tor ist geteilt: `recInputStepActive_()` fragt nur nach REC / REC + MON, die
+drei Shift-Wege (UF8, UC1, UF1) haengen daran, der Eingangsname ebenfalls. Gain,
+48V, Pad, Phase und die gespiegelten LEDs behalten `recRmeActive_()`. Franks
+Entscheidung zur Kollision mit Fine: **die Vorgabe bleibt an** ("shift auf v-pot
+ist dort ok, sind eh in eigenem mode"). Der Rest dieses Abschnitts ist die
+Vorgeschichte.
+
 ## 2. REC-Mode soll REAPERs Eingaenge auch ohne RME steppen
 
 Frank, 20.09.2026: *"rec mode soll auch reaper interne Inputs steppen koennen
