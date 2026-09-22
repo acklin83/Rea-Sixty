@@ -1802,6 +1802,18 @@ inline bool recRmeActive_()
     return m == SelectionMode::Rec || m == SelectionMode::RecMon;
 }
 
+// ⇨ UND DAS HALBE TOR: NUR DER MODUS, OHNE DIE RME-INTEGRATION. Den Eingang
+// einer Spur weiterzuschalten ist reines REAPER (I_RECINPUT), da kommt weder OSC
+// noch ein Interface vor — es hing nur hinter dem RME-Schalter, und wer keine RME
+// hat, bekam es darum nicht (Frank 20.09.: "rec mode soll auch reaper interne
+// Inputs steppen koennen wie Rme Mode"). Gain, 48V, Pad, Phase und die
+// gespiegelten LEDs bleiben hinter recRmeActive_, die tun ohne Interface nichts.
+inline bool recInputStepActive_()
+{
+    const auto m = g_selectionMode.load();
+    return m == SelectionMode::Rec || m == SelectionMode::RecMon;
+}
+
 // True when REC + RME is engaged AND the given button assignment fires a
 // TotalReaper toggle action — i.e. the LED should mirror P_EXT state, not
 // the track's underlying B_MUTE / I_SOLO. Lives here because it depends on
@@ -17619,7 +17631,9 @@ double recRmeGainBarNorm_(MediaTrack* tr, bool knobDrivesGain)
 // Main-thread only.
 std::string recRmeInputNameLabel_(MediaTrack* tr, bool foldLatin1)
 {
-    if (!tr || !recRmeActive_()) return {};
+    // Der Name gehoert zum Schritt, nicht zur RME: ohne ihn wechselt der Kanal
+    // und keine Flaeche sagt welcher (Frank 22.09., Punkt 3 des Plans).
+    if (!tr || !recInputStepActive_()) return {};
     const int recInput = static_cast<int>(
         GetMediaTrackInfo_Value(tr, "I_RECINPUT"));
     // Hardware inputs only — MIDI / multichannel / "no input" keep the
@@ -18767,7 +18781,7 @@ void applyUf1AboveFaderVpot_(int step)
     // (drainInputQueue: gain 2.0, input channel 4.0) — do not retune them here,
     // they cost Frank a round each in May.
     // Main thread (this runs out of the drain), so the REAPER API is safe.
-    if (recRmeActive_()) {
+    if (recInputStepActive_()) {
         const bool shiftMod = uf8::bindings::modifierHeld(
             uf8::bindings::Modifier::Shift);
         if (shiftMod && g_recUf1ShiftInputCh.load()) {
@@ -18782,7 +18796,10 @@ void applyUf1AboveFaderVpot_(int step)
             if (delta != 0) recRmeStepInputChannel_(tr, delta);
             return;
         }
-        if (g_recUf1RotateGain.load()) {
+        // ⛔ GAIN BRAUCHT DAS GANZE TOR. Der Eingangsschritt oben ist reines
+        // REAPER, das hier faehrt TotalReapers Preamp — ohne Interface tut es
+        // nichts und wuerde nur den Pan verschlucken.
+        if (recRmeActive_() && g_recUf1RotateGain.load()) {
             static double s_gainAccum = 0.0;
             constexpr double kRecGainScale = 2.0;
             s_gainAccum += step / kRecGainScale;
@@ -25435,7 +25452,9 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // as the SEL+Shift multi-select path (main.cpp:~6976).
                 const bool shiftMod = uf8::bindings::modifierHeld(
                     uf8::bindings::Modifier::Shift);
-                if (inRecMode && rmeOn && shiftMod
+                // ⇨ OHNE `rmeOn`: der Eingangsschritt ist reines REAPER
+                // (recInputStepActive_). Der Gain-Zweig darunter behaelt ihn.
+                if (inRecMode && shiftMod
                     && g_recVpotShiftInputCh.load())
                 {
                     queueInput({PendingInput::InputChannelDelta,
@@ -50581,7 +50600,8 @@ bool reasixty_dispatchUc1RecRmeGain(MediaTrack* tr, int signedStep)
 bool reasixty_dispatchUc1RecRmeInputChan(MediaTrack* tr, int signedStep)
 {
     if (!tr) return false;
-    if (!recRmeUc1Active_()) return false;
+    // Ohne RME ebenfalls: nur der Modus zaehlt (recInputStepActive_).
+    if (!recInputStepActive_()) return false;
     if (!g_recUc1Enc2ShiftInputCh.load()) return false;
     if (signedStep == 0) return true;
     const int cur = static_cast<int>(
