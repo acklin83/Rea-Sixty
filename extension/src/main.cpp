@@ -757,6 +757,10 @@ std::atomic<int> g_rmeVpotBank{0};
 // Kanalwechsel stehen; hat der neue Kanal die Seite nicht, zeigt der Maler die
 // erste, die er hat.
 std::atomic<bool> g_rmeStrip{false};
+// ⚠ DIAGNOSE, KEIN FEATURE (22.09.): welcher Wert macht die Soft-Key-
+// Hervorhebung in Layout 1 sichtbar? Gesetzt ueber ExtState rea_sixty /
+// uf1_l1hl_step (Lua auf Franks Desktop), gelesen vom RME-Maler. 0 = aus.
+std::atomic<int>  g_uf1L1HlStep{0};
 std::atomic<int>  g_rmeStripPage{0};
 static int rmeVpotSlot_(int pot)
 {
@@ -32882,7 +32886,9 @@ static void uf1EmitSoftKeyRow_(const std::array<Uf1SkCell, 4>& cells,
     // anderen nicht, Farbe egal). Also hier SSLs Reihenfolge: nach jeder neuen
     // Hervorhebung die Namen hinterher, die der Cache gerade hat.
     {
-        const uint8_t out = menuOpen ? uint8_t{0} : skHighlight;
+        uint8_t out = menuOpen ? uint8_t{0} : skHighlight;
+        if (g_uf1L1HlStep.load() == 14) out = static_cast<uint8_t>((out & 0x0F) << 4);
+        if (g_uf1L1HlStep.load() == 15) out = static_cast<uint8_t>(out ? 0x0F : 0x00);
         static int sSkHi = INT_MIN;
         if (force || out != sSkHi) {
             sSkHi = out;
@@ -34569,6 +34575,45 @@ static void uf1PaintRme_()
 
     // Soft-Keys: in STRIP die Schalter der Seite, sonst die Side-Car-Bank.
     // Beide gehen durch denselben Emitter, dessen Cache den Wechsel traegt.
+    // ── DIAGNOSE Layout-1-Hervorhebung (siehe g_uf1L1HlStep) ────────────────
+    // Jeder Schritt setzt ALLE Kandidaten auf ihren Init-Wert zurueck und aendert
+    // genau einen, dann Hervorhebung und Namen neu. Antwort = eine Zahl.
+    bool hlProbeEdge = false;
+    {
+        const char* s = GetExtState("rea_sixty", "uf1_l1hl_step");
+        const int step = (s && *s) ? std::atoi(s) : 0;
+        static int sStep = 0;
+        if (step != sStep) {
+            sStep = step;
+            g_uf1L1HlStep.store(step);
+            hlProbeEdge = true;
+            auto put4 = [&](uint16_t a, uint8_t v) {
+                const uint8_t b[4] = { v, v, v, v };
+                g_uf1_dev->send(uf1::buildScreen(a, b));
+            };
+            auto put1 = [&](uint16_t a, uint8_t v) {
+                g_uf1_dev->send(uf1::buildScreen(a, std::span<const uint8_t>(&v, 1)));
+            };
+            put4(0x0113, 0x01); put4(0x0121, 0x00); put4(0x0118, 0x00);
+            put1(0x0110, 0x0f); put1(0x011a, 0x02);
+            switch (step) {
+                case 2:  put4(0x0113, 0x00); break;
+                case 3:  put4(0x0113, 0x02); break;
+                case 4:  put4(0x0113, 0x04); break;
+                case 5:  put4(0x0113, 0xFF); break;
+                case 6:  put4(0x0121, 0x01); break;
+                case 7:  put4(0x0121, 0xFF); break;
+                case 8:  put4(0x0118, 0x01); break;
+                case 9:  put4(0x0118, 0xFF); break;
+                case 10: put1(0x0110, 0x07); break;
+                case 11: put1(0x0110, 0x00); break;
+                case 12: put1(0x011a, 0x03); break;
+                case 13: put1(0x011a, 0x00); break;
+                default: break;   // 1 = Grundlinie, 14/15 im Emitter
+            }
+        }
+    }
+
     // ⛔ DAS MODE-MENUE SCHREIBT SEINE NAMEN DIREKT, am Emitter vorbei. Wer die
     // Keys besitzt, schreibt beim Loslassen seine eigenen zurueck, sonst bleiben
     // PLUGIN / DAW / METER / SENDS stehen (Frank 22.09., in STRIP gesehen).
@@ -34594,9 +34639,9 @@ static void uf1PaintRme_()
             if (p->kind == rmes::Kind::List) c.label += " " + rmes::format(*p, row, v);
             c.on = (p->kind == rmes::Kind::Toggle) ? (v >= 0.5) : true;
         }
-        if (!menuNow) uf1EmitSoftKeyRow_(cells, big || menuClosed, false, false);
+        if (!menuNow) uf1EmitSoftKeyRow_(cells, big || menuClosed || hlProbeEdge, false, false);
     } else {
-        uf1PaintSideCarSoftKeys_(big);
+        uf1PaintSideCarSoftKeys_(big || hlProbeEdge);
     }
 
     // ── SOLO, CUT, SEL: der Fader-Kanal in TotalMix ─────────────────────────
