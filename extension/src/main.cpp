@@ -7978,12 +7978,11 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
         if (rm.link() != reasixty::rme::LinkState::Online) { info.led = 0; return info; }
         const auto sc = rm.scenes();
         if (snap) {
+            // Aktiv und geaendert leuchten gleich und ruhig, wie ein Layout
+            // (Frank 22.09.: "den aktiven nicht blinken lassen").
             using SS = reasixty::rme::SnapshotState;
-            // Changed blinks, at the 350 ms of the other blinking keys.
-            const bool phase = ((nowMs_() / 350) & 1) != 0;
-            info.led = sc.snapshot[slot] == SS::Active  ? 2
-                     : sc.snapshot[slot] == SS::Changed ? (phase ? 2 : 1)
-                                                        : 1;
+            info.led = (sc.snapshot[slot] == SS::Active
+                        || sc.snapshot[slot] == SS::Changed) ? 2 : 1;
         } else {
             info.led = (sc.lastLayout == slot) ? 2 : 1;
         }
@@ -31899,8 +31898,8 @@ static std::string uf1BankDisplayName_(int bank, int mod)
         // does not fail loudly, it just reads as a different word.
         case DynamicBankKind::HueScenes:    return "HUE";
         case DynamicBankKind::ObsScenes:    return "OBS";
-        // No K, M, V, W or X in either word.
-        case DynamicBankKind::RmeSnapshots: return "SNAPS";
+        // No K, M, V, W or X in either word; 9 and 7 of the ten cells.
+        case DynamicBankKind::RmeSnapshots: return "SNAPSHOTS";
         case DynamicBankKind::RmeLayouts:   return "LAYOUTS";
         default: break;
     }
@@ -34421,9 +34420,9 @@ static void uf1PaintSideCar_()
 static void uf1PaintRmeStrip_(const std::string& name, const std::string& db,
                               const std::string& line, int chNo, int palette,
                               int barPos, bool barCentre, const std::string& chSoft,
-                              bool force)
+                              const std::string& barText, bool force)
 {
-    static std::string sName, sDb, sLine, sChSoft;
+    static std::string sName, sDb, sLine, sChSoft, sBarText;
     static int sNo = INT_MIN, sPal = INT_MIN, sBar = INT_MIN;
     if (force) {
         // Einmal alles leer, auch die LEDs und den Readout-Balken, die dieser
@@ -34431,6 +34430,7 @@ static void uf1PaintRmeStrip_(const std::string& name, const std::string& db,
         uf1BlankChannelZone_();
         sName.clear(); sDb.clear(); sLine.clear(); sNo = INT_MIN; sPal = INT_MIN;
         sBar = INT_MIN; sChSoft = "\x01";   // never a real label: forces the write
+        sBarText = "\x01";
         // Der Balken-Stil, wie im Kanalmaler: 0x01 = Zeiger (die Pan-Optik). Der
         // Init laesst ihn auf 0x03 = aus, dann zeichnet keine Position etwas.
         const uint8_t pointer = 0x01;
@@ -34481,6 +34481,24 @@ static void uf1PaintRmeStrip_(const std::string& name, const std::string& db,
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kOutputDb, p));
     }
     if (force || line != sLine) { sLine = line; text(uf1::scr::kValueLine, line); }
+    // ⇨ DER TEXT IM FARBBALKEN (0x0017). Bis 22.09. schrieb ihn hier niemand, also
+    // stand der Plug-in-Name der REAPER-Spur darin (Frank 22.09.). Jetzt der
+    // Submix, 12 Zeichen breit. ⛔ Nie leer senden: ueber dieselbe Zelle rastet der
+    // Kanalmaler die Ebene ein, ein leerer Text laesst sie fallen; "nichts" sind
+    // 12 Leerzeichen wie bei einer leeren Spur. Beim Verlassen schreibt der
+    // Kanalmaler den Plug-in-Namen neu (uf1HandOverScreen_ zaehlt g_uf1Gen hoch).
+    {
+        std::string bt = utf8ToLatin1(barText);
+        if (bt.size() > 12) bt = abbreviateTrackName_(bt, 12, -1, /*foldLatin1*/ false);
+        if (bt.empty()) bt.assign(12, ' ');
+        if (force || bt != sBarText) {
+            sBarText = bt;
+            std::vector<uint8_t> p;
+            p.push_back(0x00);
+            p.insert(p.end(), bt.begin(), bt.end());
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kCsType, p));
+        }
+    }
     if (force || chNo != sNo) {
         sNo = chNo;
         text(uf1::scr::kChNumber, chNo > 0 ? std::to_string(chNo) : std::string());
@@ -34817,9 +34835,19 @@ static void uf1PaintRme_()
 
     // ── kleine Anzeige ──────────────────────────────────────────────────────
     // Name, dB und darunter PAN (Wertzeile + Zeiger), wie im REAPER-Modus. Das
-    // Submix-Ziel steht unter CHANNEL auf dem grossen Display (Frank 22.09.).
+    // Submix-Ziel steht im Farbbalken, fuer Eingang und Playback in der
+    // Uebersicht; in STRIP nichts, denn ein Kanal kann auf mehrere Submixe gehen
+    // (Frank 22.09.). Ausgang: OUTPUT, ohne TotalMix: RME.
     {
         std::string name = "RME", db, line;
+        std::string barText = !linked ? std::string("RME")
+                            : strip  ? std::string()
+                            : row == rmeu::Row::Output ? std::string("OUTPUT")
+                            : [&] {
+                                  const std::string on =
+                                      rmeu::displayName(st, rmeu::Row::Output, sub);
+                                  return "> " + (on.empty() ? std::string("--") : on);
+                              }();
         int no = 0, pal = 0, barPos = -1;
         bool barCentre = false;
         std::string chSoft;
@@ -34845,7 +34873,7 @@ static void uf1PaintRme_()
                 line = composeValueLine("Pan", "");
             }
         }
-        uf1PaintRmeStrip_(name, db, line, no, pal, barPos, barCentre, chSoft, force);
+        uf1PaintRmeStrip_(name, db, line, no, pal, barPos, barCentre, chSoft, barText, force);
     }
 
     // ── V-Pot-Reihe ─────────────────────────────────────────────────────────
@@ -35114,20 +35142,10 @@ static void uf1PaintRme_()
             }
         } else if (!linked) {
             putCell(0, "RME");
-        } else if (row == rmeu::Row::Output) {
-            putCell(0, "OUTPUT");
         } else {
-            // Wohin der Fader schreibt: Reihe > Submix. ⛔ CELL1 fasst in Layout 1
-            // nur 10 Grossbuchstaben ("IN > Phones 1" wurde abgeschnitten, Frank
-            // 22.09.), also ohne Leerzeichen und notfalls gekuerzt: "IN>Phones1".
-            std::string on = rmeu::displayName(st, rmeu::Row::Output, sub);
-            on.erase(std::remove(on.begin(), on.end(), ' '), on.end());
-            std::string cell = std::string(row == rmeu::Row::Input ? "IN>" : "PB>")
-                             + (on.empty() ? std::string("--") : on);
-            cell = utf8ToLatin1(cell);
-            if (cell.size() > 10)
-                cell = abbreviateTrackName_(cell, 10, -1, /*foldLatin1*/ false);
-            putCell(0, cell);
+            // Nur die Reihe; der Submix steht seit 22.09. im Farbbalken der
+            // kleinen Anzeige, der hat mehr Platz (Frank: "Nur die Reihe").
+            putCell(0, rmeu::rowName(row));
         }
         // Uebersicht: die Side-Car-Bank auch in CELL2, denn Layout 1 zeigt die
         // Zelle unter SOFT KEYS (3) nicht.

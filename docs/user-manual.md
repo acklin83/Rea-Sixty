@@ -1352,7 +1352,7 @@ Right-click the bank's cell in the matrix and open **Dynamic bank**. The kinds a
 | `BC Favourites` | The eight Bus Compressor favourites, the same way |
 | `Hue Scenes` | Your eight Hue scene slots, each key in its scene's colour |
 | `OBS Scenes` | The scenes OBS is showing, by name, the one on air lit |
-| `TotalMix Snapshots` | TotalMix' eight snapshots, by name. The active one is lit, a changed one blinks |
+| `TotalMix Snapshots` | TotalMix' eight snapshots, by name. The active one is lit, also after you change it |
 | `TotalMix Layouts` | TotalMix' eight layouts, by name. The one you last loaded from here is lit |
 
 The two TotalMix kinds need the RME link to be on. TotalMix sends no names over OSC, so Rea-Sixty reads them from TotalMix' own settings file on the Mac, which TotalMix does not rewrite the moment you rename something; a new name shows up once it has. On Windows the keys read `Snapshot 1` to `8` and `Layout 1` to `8`. With no connection to TotalMix the names stay and the lamps go dark. TotalMix does not report which layout is showing, so the lit layout key is the last one pressed here.

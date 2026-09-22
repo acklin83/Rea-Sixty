@@ -1368,7 +1368,7 @@ static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::BcFavourites: return "BC FAVS";
         case DynamicBankKind::HueScenes:   return "HUE";
         case DynamicBankKind::ObsScenes:   return "OBS";
-        case DynamicBankKind::RmeSnapshots: return "SNAPS";
+        case DynamicBankKind::RmeSnapshots: return "SNAPSHOTS";
         case DynamicBankKind::RmeLayouts:  return "LAYOUTS";
         default:                           return "";
     }
