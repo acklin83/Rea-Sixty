@@ -34388,6 +34388,10 @@ static void uf1PaintRme_()
     const rme::StripPage* pg = page >= 0 ? &cfg.stripPages[static_cast<size_t>(page)] : nullptr;
     const uint8_t wantLayout = (pg && rmes::pageShowsGraph(*pg)) ? 0x03 : 0x01;
     static uint8_t sLayout = 0;
+    // DIAGNOSE (g_uf1L1HlStep ab 19): jeder Versuch beginnt mit einem frischen
+    // Ebenenwechsel, damit kein Rest vom vorigen das Ergebnis traegt.
+    static bool sProbeRelayout = false;
+    if (sProbeRelayout) { sLayout = 0; }
     const bool relayout = force || wantLayout != sLayout;
     if (relayout) {
         sLayout = wantLayout;
@@ -34599,8 +34603,30 @@ static void uf1PaintRme_()
             auto put1 = [&](uint16_t a, uint8_t v) {
                 g_uf1_dev->send(uf1::buildScreen(a, std::span<const uint8_t>(&v, 1)));
             };
-            put4(0x0113, 0x01); put4(0x0121, 0x00); put4(0x0118, 0x00);
-            put1(0x0110, 0x0f); put1(0x011a, 0x02);
+            if (step >= 19 && !sProbeRelayout) {
+                // Erst der Ebenenwechsel (naechster Durchlauf), dann die Werte.
+                sProbeRelayout = true;
+                sStep = -1;        // Flanke im naechsten Durchlauf nochmal
+                hlProbeEdge = false;
+            } else {
+            const bool afterRelayout = sProbeRelayout;
+            sProbeRelayout = false;
+            if (!afterRelayout) {
+                put4(0x0113, 0x01); put4(0x0121, 0x00); put4(0x0118, 0x00);
+                put1(0x0110, 0x0f); put1(0x011a, 0x02);
+            }
+            auto put4v = [&](uint16_t a, uint8_t v0, uint8_t v1, uint8_t v2, uint8_t v3) {
+                const uint8_t b[4] = { v0, v1, v2, v3 };
+                g_uf1_dev->send(uf1::buildScreen(a, b));
+            };
+            switch (step) {
+                case 20: put4v(0x0118, 0x01, 0x00, 0x00, 0x00); break;
+                case 21: put4v(0x0118, 0x00, 0x01, 0x00, 0x00); break;
+                case 22: put4(0x0118, 0x01); break;
+                case 23: put4(0x0118, 0x02); break;
+                case 24: put4(0x0118, 0xFF); break;
+                default: break;
+            }
             switch (step) {
                 case 2:  put4(0x0113, 0x00); break;
                 case 3:  put4(0x0113, 0x02); break;
@@ -34615,6 +34641,7 @@ static void uf1PaintRme_()
                 case 12: put1(0x011a, 0x03); break;
                 case 13: put1(0x011a, 0x00); break;
                 default: break;   // 1 = Grundlinie, 14/15 im Emitter
+            }
             }
         }
     }
