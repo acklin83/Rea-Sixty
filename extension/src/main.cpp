@@ -92,6 +92,7 @@
 #include "DynaMountManager.h"
 #include "HueManager.h"
 #include "ObsManager.h"
+#include "BindingsPick.h"
 #include "StreamDeckBridge.h"
 #include "SslCoreImpersonator.h"
 #include "uf1_loudness_chrome.h"
@@ -191,6 +192,13 @@ bool        reasixty_uf8VpotGuiLearnArmed();
 // True while a control in our Settings window has the keyboard (a label being
 // typed, a value being dragged). Gates the keyboard-modifier mirror below.
 bool        reasixty_settingsHasKeyboardFocus();
+// Press-to-pick in Settings → Bindings (SettingsScreen.cpp, namespace uf8 like
+// reasixty_publishSettingsModifierPin; decision in BindingsPick.h).
+namespace uf8 {
+bool reasixty_bindingsPaneLive();
+void reasixty_bindingsPick(int tab, int buttonId);
+}
+
 int         reasixty_hudUf8LearnArmed();
 // UF1 plugin-mode learn (v11). pos = page*4 + idx of the V-Pot / soft-key stream.
 void        reasixty_uf1ArmLearn(bool softKeys, int pos, void* tr, int fx);
@@ -461,6 +469,35 @@ void        reasixty_setUf1CsPage(int page);
 // Defined far below; uf1BankDisplayName_ needs it for Colours / Colors.
 const char* reasixty_sp(const char* uk, const char* us);
 
+
+// ⇨ PRESS-TO-PICK (Frank 22.09.): while Settings → Bindings is open, a surface
+// press selects that button on its surface's tab instead of running it. The
+// decision is BindingsPick.h; this is the one gate all three surfaces call at
+// their earliest press point. A picked key's RELEASE is swallowed too (held[]),
+// or a Momentary / Hold binding would see a release without its press. Worker
+// threads: atomics and getBinding's own lock only.
+// Returns true = consumed, the caller does nothing else with this edge.
+bool bindingsPickGate_(int tab, uf8::bindings::ButtonId bid, uint8_t rawId,
+                       bool pressed, std::array<bool, 256>& held)
+{
+    using namespace uf8::bindings;
+    if (!pressed) {
+        if (!held[rawId]) return false;
+        held[rawId] = false;
+        return true;
+    }
+    if (!uf8::reasixty_bindingsPaneLive() || bid == ButtonId::None) return false;
+    const Binding bd = getBinding(layerForButton(bid), bid);
+    const auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+    const PickAction act = pickActionFor(
+        bid, sp.type == ActionType::Builtin ? std::string_view(sp.action)
+                                            : std::string_view());
+    if (act == PickAction::PassThrough) return false;
+    uf8::reasixty_bindingsPick(tab, static_cast<int>(bid));
+    if (act == PickAction::SelectAndRun) return false;
+    held[rawId] = true;
+    return true;
+}
 
 namespace {
 
@@ -23379,6 +23416,7 @@ int ReaSixtySurface::extendedBody_(int call, void* parm1, void* parm2, void* par
 // "Rea-Sixty" in Control Surface settings, and destroys it on removal or
 // on shutdown.
 void onTimer();
+
 void onUf8Input(const uint8_t* data, size_t len);
 void onUf1Input(const uint8_t* data, size_t len);       // UF1 raw bulk-IN (diag log)
 void onUf1Event(const uf1::InputEvent& ev);             // UF1 parsed control event
@@ -24465,6 +24503,16 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             const uint8_t id    = data[i + 3];
             const uint8_t state = data[i + 5];
             const bool pressed  = state == 0x01;
+
+            // Settings → Bindings open: the press picks the key (BindingsPick.h).
+            {
+                static std::array<bool, 256> sPickHeld{};
+                if (bindingsPickGate_(0, uf8::bindings::fromUf8DeviceId(id), id,
+                                      pressed, sPickHeld)) {
+                    i += frameSize;
+                    continue;
+                }
+            }
 
             bool handledNatively = false;
 
@@ -25567,6 +25615,15 @@ void onUf1Event(const uf1::InputEvent& ev)
             break;
         case uf1::InputKind::Button:
             if (f) std::fprintf(f, "BTN 0x%02x %s\n", ev.id, ev.pressed ? "down" : "up");
+            // Settings → Bindings open: the press picks the key (BindingsPick.h),
+            // ahead of MODE, side-car and every other claim. MODE maps to None
+            // and so always passes.
+            {
+                static std::array<bool, 256> sPickHeld{};
+                if (bindingsPickGate_(2, uf8::bindings::fromUf1DeviceId(ev.id), ev.id,
+                                      ev.pressed, sPickHeld))
+                    break;
+            }
             // SHIFT (0x36): now a normal binding — seeded to the shared
             // `mod_shift` builtin (Bindings.cpp factory default) and routed
             // through the dispatch below, giving full parity with the UF8/UC1

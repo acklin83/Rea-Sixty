@@ -783,6 +783,12 @@ if(NOT WIN32)
     # that blob silently empties the whole configuration on the next REAPER start
     # (ExtState is an INI file), and no code path anywhere reports an error — so
     # the round trip needs a test, and that drags in the HTTP client behind it.
+    # Press-to-pick in Settings -> Bindings: which surface key a press selects,
+    # selects and runs, or leaves alone. Header only.
+    add_executable(test_bindings_pick tests/test_bindings_pick.cpp)
+    target_include_directories(test_bindings_pick PRIVATE src)
+    add_test(NAME bindings_pick COMMAND test_bindings_pick)
+
     add_executable(test_hue tests/test_hue.cpp
         src/HueColor.cpp src/HueClient.cpp src/HueManager.cpp)
     target_include_directories(test_hue PRIVATE src "${WDL_DIR}")
