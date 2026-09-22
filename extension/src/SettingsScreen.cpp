@@ -8855,15 +8855,14 @@ std::vector<uf8::autolearn::Uf8StripSuggestion> g_autoLearnUf8Strips;
 // another in the same frame silently drops the second OpenPopup.)
 bool g_autoLearnSetupOpen        = false;
 bool g_autoLearnSetupPending     = false;   // armed by "Create + AutoLearn"
-// ⛔ THE MODE IS NOT ASKED TWICE. "Create + AutoLearn" answers it in the +New
-// dialog and seeds the Setup from that answer — and the Setup then put the very
-// same three radios on screen, pre-selected with what was just chosen, as if it
-// had not been asked. Frank 2026-09-18: "DER FRAGT MODE! UND NACHHER FRAGT
-// AUTOLEARN NOCHMALS DEN MODE?!". Set while the Setup was opened straight out
-// of +New; the radios then render as a line stating the decision instead.
-// Opening AutoLearn on its own still offers them, because there the mode is a
-// real choice that can also SWITCH an existing map's domain.
-bool g_autoLearnSetupFromNew     = false;
+// ⛔ THE MODE IS NOT ASKED TWICE, AND NOTHING ELSE EITHER. "Create + AutoLearn"
+// answers everything the Setup asks: the mode (Frank 2026-09-18: "DER FRAGT
+// MODE! UND NACHHER FRAGT AUTOLEARN NOCHMALS DEN MODE?!"), and since 22.09. the
+// window is skipped altogether (runAutoLearnSetup). Set by +New: run the Setup
+// with its answers on the next pass through the editor, no window. Opening
+// AutoLearn on its own still shows the Setup, because there the mode is a real
+// choice that can also SWITCH an existing map's domain.
+bool g_autoLearnSetupAutoRun     = false;
 bool g_autoLearnPreviewPending   = false;
 int  g_autoLearnSetupPrimary     = 1;   // 1=CS, 2=BC, 3=UF8-only
 bool g_autoLearnSetupVpots       = true;
@@ -19910,7 +19909,6 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                     (editing->domain == uf8::Domain::BusComp)      ? 2 : 3;
                 g_autoLearnSetupVpots       = pl.vpotBanks;
                 g_autoLearnSetupParamFaders = pl.paramFaders;
-                g_autoLearnSetupFromNew     = false;   // opened on its own
             }
             g_autoLearnSetupOpen   = true;
             ImGui_OpenPopup(ctx, "AutoLearn Setup##fxl_alsetup", nullptr);
@@ -20147,47 +20145,14 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         int condApp = ImGui_Cond_Appearing;
         ImGui_SetNextWindowSize(ctx, 380.0, 260.0, &condApp);
     }
-    int setupFlags = 0;
-    if (ImGui_BeginPopupModal(ctx, "AutoLearn Setup##fxl_alsetup",
-                              &g_autoLearnSetupOpen, &setupFlags))
-    {
-        if (g_autoLearnSetupFromNew) {
-            // Asked and answered one dialog ago — say what it is, do not ask.
-            const char* modeName = (g_autoLearnSetupPrimary == 1) ? "Channel Strip slots (CS)"
-                                 : (g_autoLearnSetupPrimary == 2) ? "Bus Comp slots (BC)"
-                                                                  : "UF8-only";
-            char line[96];
-            snprintf(line, sizeof(line), "AutoLearn for: %s", modeName);
-            ImGui_Text(ctx, line);
-        } else {
-            ImGui_Text(ctx, "AutoLearn for:");
-            ImGui_Spacing(ctx);
-            if (ImGui_RadioButton(ctx, "Channel Strip slots (CS)##als_cs",
-                                  g_autoLearnSetupPrimary == 1))
-                g_autoLearnSetupPrimary = 1;
-            if (ImGui_RadioButton(ctx, "Bus Comp slots (BC)##als_bc",
-                                  g_autoLearnSetupPrimary == 2))
-                g_autoLearnSetupPrimary = 2;
-            if (ImGui_RadioButton(ctx, "UF8-only##als_uf8",
-                                  g_autoLearnSetupPrimary == 3))
-                g_autoLearnSetupPrimary = 3;
-        }
-        ImGui_Spacing(ctx);
-        ImGui_Separator(ctx);
-        ImGui_Spacing(ctx);
-        // ⛔ "Also fill" / "Map all" promised an action. Neither box fills or
-        // maps anything: they add rows to the proposal list, which is then
-        // reviewed and accepted per row — and on most plug-ins the pass comes
-        // back with nothing at all, so the label promised work that never
-        // happened. Frank 2026-09-18. Say what the box actually does.
-        ImGui_Checkbox(ctx, "Suggest UF8 V-Pot banks##als_vp",
-                       &g_autoLearnSetupVpots);
-        ImGui_Checkbox(ctx, "Suggest UF8 faders, one per param##als_pf",
-                       &g_autoLearnSetupParamFaders);
-        ImGui_Spacing(ctx);
-        ImGui_Separator(ctx);
-        ImGui_Spacing(ctx);
-        if (ImGui_Button(ctx, "Run##als_run", nullptr, nullptr)) {
+    // ⇨ RUN, ALS FUNKTION: der Knopf im Setup-Fenster und "Create + AutoLearn"
+    // rufen dasselbe auf. Aus +New gibt es nichts mehr zu fragen: der Modus
+    // stand dort, "Suggest UF8 V-Pot banks" ist das UF8-layer-Haekchen von
+    // +New, und "one per param" ist von dort aus immer aus. Das Fenster
+    // zeigte nur Entschiedenes und wollte einen Klick (Frank 22.09.:
+    // "voellig ueberfluessig"). "AutoLearn..." im Editor behaelt es, dort
+    // ist der Modus eine echte Wahl.
+    auto runAutoLearnSetup = [&]() {
             // Apply domain switch via the same cache-swap logic
             // applyPrimary uses. UF8-only forces uf8Mode=true; CS/BC
             // turning on UF8 layers also sets uf8Mode=true so the runtime
@@ -20364,6 +20329,45 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             }
             g_autoLearnSetupOpen     = false;
             g_autoLearnPreviewPending = true;   // fires on next frame
+    };
+    if (g_autoLearnSetupAutoRun) {
+        g_autoLearnSetupAutoRun = false;
+        runAutoLearnSetup();
+    }
+    int setupFlags = 0;
+    if (ImGui_BeginPopupModal(ctx, "AutoLearn Setup##fxl_alsetup",
+                              &g_autoLearnSetupOpen, &setupFlags))
+    {
+        {
+            ImGui_Text(ctx, "AutoLearn for:");
+            ImGui_Spacing(ctx);
+            if (ImGui_RadioButton(ctx, "Channel Strip slots (CS)##als_cs",
+                                  g_autoLearnSetupPrimary == 1))
+                g_autoLearnSetupPrimary = 1;
+            if (ImGui_RadioButton(ctx, "Bus Comp slots (BC)##als_bc",
+                                  g_autoLearnSetupPrimary == 2))
+                g_autoLearnSetupPrimary = 2;
+            if (ImGui_RadioButton(ctx, "UF8-only##als_uf8",
+                                  g_autoLearnSetupPrimary == 3))
+                g_autoLearnSetupPrimary = 3;
+        }
+        ImGui_Spacing(ctx);
+        ImGui_Separator(ctx);
+        ImGui_Spacing(ctx);
+        // ⛔ "Also fill" / "Map all" promised an action. Neither box fills or
+        // maps anything: they add rows to the proposal list, which is then
+        // reviewed and accepted per row — and on most plug-ins the pass comes
+        // back with nothing at all, so the label promised work that never
+        // happened. Frank 2026-09-18. Say what the box actually does.
+        ImGui_Checkbox(ctx, "Suggest UF8 V-Pot banks##als_vp",
+                       &g_autoLearnSetupVpots);
+        ImGui_Checkbox(ctx, "Suggest UF8 faders, one per param##als_pf",
+                       &g_autoLearnSetupParamFaders);
+        ImGui_Spacing(ctx);
+        ImGui_Separator(ctx);
+        ImGui_Spacing(ctx);
+        if (ImGui_Button(ctx, "Run##als_run", nullptr, nullptr)) {
+            runAutoLearnSetup();
             ImGui_CloseCurrentPopup(ctx);
         }
         ImGui_SameLine(ctx, nullptr, nullptr);
@@ -22806,7 +22810,6 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                 // Same rule as autoLearnPlan_: never pre-ticked.
                 g_autoLearnSetupParamFaders = false;
                 g_autoLearnSetupPending = true;
-                g_autoLearnSetupFromNew  = true;
             }
             ImGui_CloseCurrentPopup(ctx);
         };
@@ -22913,8 +22916,9 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
     // as the AutoLearn Setup → Preview transition.
     if (g_autoLearnSetupPending) {
         g_autoLearnSetupPending = false;
-        g_autoLearnSetupOpen    = true;
-        ImGui_OpenPopup(ctx, "AutoLearn Setup##fxl_alsetup", nullptr);
+        // Straight to the proposals: the Setup code runs without its window
+        // on the next pass through the editor (runAutoLearnSetup).
+        g_autoLearnSetupAutoRun = true;
     }
 
     // ---- Delete confirm popup --------------------------------------------
