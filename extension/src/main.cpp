@@ -93,6 +93,7 @@
 #include "HueManager.h"
 #include "ObsManager.h"
 #include "RmeManager.h"
+#include "RmeStrip.h"
 #include "RmeUf1.h"
 #include "StreamDeckBridge.h"
 #include "SslCoreImpersonator.h"
@@ -750,6 +751,13 @@ std::atomic<int> g_rmeSubmix{-1};
 // Welche Bank der vier V-Pots, 0 oder 1, per 5-8 (Frank 21.09.: Bank 1 Phones
 // 1-4, Bank 2 Main A / Main B). Slot = Pot + 4 * Bank in rme::Config::vpots.
 std::atomic<int> g_rmeVpotBank{0};
+// ⇨ STRIP, die Kanalansicht (docs/rme-strip-and-uf8-plan.md 3). Druck auf den
+// Kanal-Encoder oeffnet die Einstellungen des Kanals auf dem Fader, ein zweiter
+// schliesst. g_rmeStripPage ist ein Index in Config::stripPages und bleibt beim
+// Kanalwechsel stehen; hat der neue Kanal die Seite nicht, zeigt der Maler die
+// erste, die er hat.
+std::atomic<bool> g_rmeStrip{false};
+std::atomic<int>  g_rmeStripPage{0};
 static int rmeVpotSlot_(int pot)
 {
     return pot + 4 * std::clamp(g_rmeVpotBank.load(), 0,
@@ -25723,12 +25731,52 @@ static void uf1RmeNudge_(const reasixty::rme::State& st, rmeu::Row r, int ch,
     rm.send(rmeu::levelAddress(r, ch, sub, /*faderlin*/ false), static_cast<float>(v));
 }
 
+namespace rmes = reasixty::rme::strip;
+
+// Die Seite, die STRIP fuer diesen Kanal zeigt: die gewaehlte, wenn der Kanal
+// sie hat, sonst seine erste. -1 = der Kanal meldet keine Einstellungen.
+// Eingabe und Maler fragen beide hier, damit sie nie verschiedene Seiten meinen.
+static int uf1RmeStripPage_(const reasixty::rme::State& st, rmeu::Row r, int sel,
+                            const reasixty::rme::Config& cfg)
+{
+    const auto pages = rmes::availablePages(st, r, sel, cfg.stripPages);
+    if (pages.empty()) return -1;
+    const int want = g_rmeStripPage.load();
+    if (std::find(pages.begin(), pages.end(), want) != pages.end()) return want;
+    return pages.front();
+}
+
+// Der Parameter auf Pot oder Key `i` der aktuellen Seite, nullptr = leer.
+static const rmes::Param* uf1RmeStripParam_(const reasixty::rme::Config& cfg, int page,
+                                            bool key, int i)
+{
+    if (page < 0 || page >= static_cast<int>(cfg.stripPages.size()) || i < 0 || i > 3)
+        return nullptr;
+    const auto& pg = cfg.stripPages[static_cast<size_t>(page)];
+    return rmes::find(key ? pg.keys[i] : pg.pots[i]);
+}
+
+static void uf1RmeSendAll_(const rmes::Writes& w)
+{
+    auto& rm = reasixty::rme::manager();
+    for (const auto& [a, v] : w) rm.send(a, v);
+}
+
 // true = verbraucht. Nur aufrufen, wenn uf1RmeActive_().
 static bool uf1RmeEncoder_(uint8_t id, int delta)
 {
     auto& rm = reasixty::rme::manager();
     const reasixty::rme::Config cfg = rm.config();
     const reasixty::rme::State  st  = rm.snapshot();
+    if (id >= uf1::enc::kVpot1 && id <= uf1::enc::kVpot4 && g_rmeStrip.load()) {
+        // STRIP: der Pot dreht den Parameter seiner Seite am Fader-Kanal.
+        const auto r   = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
+        const int  sel = uf1RmeSelected_(st, r);
+        const int  pg  = sel >= 0 ? uf1RmeStripPage_(st, r, sel, cfg) : -1;
+        if (const rmes::Param* p = uf1RmeStripParam_(cfg, pg, false, id - uf1::enc::kVpot1))
+            uf1RmeSendAll_(rmes::nudge(st, r, sel, *p, delta));
+        return true;
+    }
     if (id >= uf1::enc::kVpot1 && id <= uf1::enc::kVpot4) {
         const auto& slot = cfg.vpots[rmeVpotSlot_(id - uf1::enc::kVpot1)];
         if (slot.turn != "volume") return true;
@@ -25784,6 +25832,33 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
     const int set = uf1SideCarSet_();
     if (set < 0) return false;
     const uint8_t id = ev.id;
+    // ⇨ IN STRIP GEHOEREN DIE KEYS DER SEITE (Frank 21.09., plan 6a): die vier
+    // Schalter der Seite, und < > blaettern die Seiten statt der Baenke.
+    if (uf1RmeActive_() && g_rmeStrip.load()
+        && ((id >= uf1::btn::kDisplaySoft1 && id <= uf1::btn::kDisplaySoft4)
+            || id == uf1::btn::kBankLeft || id == uf1::btn::kBankRight)) {
+        if (!ev.pressed || g_uf1ModeMenu.load()) return true;
+        auto& rm = reasixty::rme::manager();
+        const reasixty::rme::Config cfg = rm.config();
+        const reasixty::rme::State  st  = rm.snapshot();
+        const auto r   = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
+        const int  sel = uf1RmeSelected_(st, r);
+        if (sel < 0) return true;
+        const int  pg  = uf1RmeStripPage_(st, r, sel, cfg);
+        if (pg < 0) return true;
+        if (id == uf1::btn::kBankLeft || id == uf1::btn::kBankRight) {
+            const auto pages = rmes::availablePages(st, r, sel, cfg.stripPages);
+            const int at  = static_cast<int>(std::find(pages.begin(), pages.end(), pg) - pages.begin());
+            const int dir = (id == uf1::btn::kBankRight) ? 1 : -1;
+            // Kein Umlauf: die Liste hat Enden, wie die Reihenliste.
+            const int to  = std::clamp(at + dir, 0, static_cast<int>(pages.size()) - 1);
+            g_rmeStripPage.store(pages[static_cast<size_t>(to)]);
+            return true;
+        }
+        if (const rmes::Param* p = uf1RmeStripParam_(cfg, pg, true, id - uf1::btn::kDisplaySoft1))
+            uf1RmeSendAll_(rmes::press(st, r, sel, *p));
+        return true;
+    }
     if (id >= uf1::btn::kDisplaySoft1 && id <= uf1::btn::kDisplaySoft4) {
         if (!g_uf1ModeMenu.load())
             uf1SoftBankKey_(uf8::bindings::uf1SideCarBankBase(set) + g_sideCarBank[set].load(),
@@ -25804,6 +25879,24 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
 static bool uf1RmeButton_(const uf1::InputEvent& ev)
 {
     const uint8_t id = ev.id;
+    if (id == uf1::btn::kChannelPush) {
+        // STRIP auf und zu. Oeffnen nur, wenn ein Kanal auf dem Fader liegt.
+        if (ev.pressed && !g_uf1ModeMenu.load()) {
+            if (g_rmeStrip.load()) {
+                g_rmeStrip.store(false);
+            } else {
+                const reasixty::rme::State st = reasixty::rme::manager().snapshot();
+                const auto r = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
+                if (uf1RmeSelected_(st, r) >= 0) g_rmeStrip.store(true);
+            }
+        }
+        return true;
+    }
+    // In STRIP tun die Pot-Druecke und 5-8 nichts: die Pots sind Parameter, und
+    // die V-Pot-Baenke gehoeren zur Uebersicht.
+    if (g_rmeStrip.load()
+        && ((id >= uf1::btn::kVpot1Push && id <= uf1::btn::kVpot4Push) || id == uf1::btn::k5to8))
+        return true;
     if (id >= uf1::btn::kVpot1Push && id <= uf1::btn::kVpot4Push) {
         if (!ev.pressed) return true;
         auto& rm = reasixty::rme::manager();
@@ -25823,7 +25916,7 @@ static bool uf1RmeButton_(const uf1::InputEvent& ev)
         }
         return true;
     }
-    if (id == uf1::btn::kVpotAboveFaderPush || id == uf1::btn::kChannelPush)
+    if (id == uf1::btn::kVpotAboveFaderPush)
         return true;
     // 5-8 schaltet die zwei V-Pot-Baenke, wie in der DAW-Ansicht die Spurgruppe.
     if (id == uf1::btn::k5to8) {
@@ -25977,6 +26070,7 @@ void onUf1Event(const uf1::InputEvent& ev)
                         const auto want = static_cast<Uf1SideCar>(sc + 1);
                         const auto cur  = g_uf1SideCar.load();
                         g_uf1SideCar.store(cur == want ? Uf1SideCar::None : want);
+                        g_rmeStrip.store(false);   // jedes Betreten beginnt in der Uebersicht
                         g_pageDirty.store(true);
                     }
                     break;
@@ -25985,6 +26079,7 @@ void onUf1Event(const uf1::InputEvent& ev)
                 // waehlt man eine Ansicht, sieht sie nicht, und der Fader faehrt
                 // weiter das Item.
                 g_uf1SideCar.store(Uf1SideCar::None);
+                g_rmeStrip.store(false);
                 // SK1 Plugin, SK2 DAW, SK3 Meter, SK4 Sends — the kUf1View* order,
                 // so this is a straight index. The bodies live in uf1SetViewMode_
                 // (shared with the uf1_view_* builtins + the REASIXTY_UF1_MODE_*
@@ -32835,6 +32930,12 @@ struct Uf1VpotRow {
     // blank" and only lights the slots it fills; Hue sets all four every time,
     // so this default is the channel painter's behaviour preserved, not a new one.
     std::array<uint8_t, 4>     styles{0x03, 0x03, 0x03, 0x03};
+    // ⇨ LAYOUT 1 (RME side-car, plan 6a): the name goes into the per-pot text
+    // field 0x010b (8 characters) and `line` carries the value alone (0x010e,
+    // 14 capitals wide there). Our 19-character Layout-3 line does not fit, and
+    // styles 0x01 / 0x08 hide the whole row in Layout 1 (runbook 21.09.).
+    bool                       layout1 = false;
+    std::array<std::string, 4> names{};
 };
 
 // Compose one cell's text. The 9-char label zone + 10-char value zone lives in
@@ -32862,6 +32963,21 @@ static void uf1VpotCell_(Uf1VpotRow& row, int i, const std::string& label,
 // And the STYLE follows the UF8: unipolar draws a travelling LINE (0x01),
 // bipolar a fill from the centre (0x08), an empty slot nothing (0x03). SSL's
 // own "fill from the left" (0x02) made frequencies fill instead of point.
+// Layout 1: name and value apart, the fill-from-left style 0x02 (0x03 = text
+// only, for an empty pot). Measured 21.09.: 0x02, 0x03 and 0x04 render there.
+static void uf1VpotCellL1_(Uf1VpotRow& row, int i, const std::string& name,
+                           const std::string& value, double norm, bool empty)
+{
+    const size_t k = static_cast<size_t>(i);
+    row.layout1 = true;
+    row.names[k] = utf8ToLatin1(name).substr(0, 8);
+    row.line[k]  = utf8ToLatin1(value).substr(0, 14);
+    const int pos = std::clamp(static_cast<int>(std::lround(norm * 100.0)), 0, 100);
+    row.bars[k * 2]     = empty ? 0 : static_cast<uint8_t>(pos);
+    row.bars[k * 2 + 1] = 0x80;
+    row.styles[k] = empty ? 0x03 : 0x02;
+}
+
 static void uf1VpotBar_(Uf1VpotRow& row, int i, double norm,
                         bool bipolar, bool empty)
 {
@@ -32884,6 +33000,23 @@ static void uf1EmitVpotRow_(const Uf1VpotRow& row, bool force)
     static std::array<uint8_t, 8>     sBars{};
     static std::array<uint8_t, 4>     sStyles{};
     static bool                       sValid = false;
+    static std::array<std::string, 4> sNames{};
+    static bool                       sNamesShown = false;
+    // The Layout-1 text field. Leaving Layout 1 clears it once (index byte
+    // alone, the way SSL empties a V-Pot field in cap141), so nothing of it
+    // survives into a layout that might draw it.
+    if (row.layout1 || sNamesShown) {
+        for (uint8_t i = 0; i < 4; ++i) {
+            const std::string nm = row.layout1 ? row.names[i] : std::string();
+            if (!force && sNamesShown == row.layout1 && nm == sNames[i]) continue;
+            sNames[i] = nm;
+            std::vector<uint8_t> p;
+            p.push_back(i);
+            p.insert(p.end(), nm.begin(), nm.end());
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotNumber, p));
+        }
+        sNamesShown = row.layout1;
+    }
     for (uint8_t i = 0; i < 4; ++i) {
         const std::string& ln = row.line[i];
         if (!force && sValid && ln == sLine[i]) continue;
@@ -34168,6 +34301,52 @@ static void uf1PaintRme_()
     const double selDb = (sel >= 0) ? rmeu::levelDb(st, row, sel, sub, known)
                                     : rme::kDbOff;
 
+    // ── STRIP und die Ebene ─────────────────────────────────────────────────
+    // ⇨ PLAN 6a (Frank 21.09.): EQ- und Low-Cut-Seiten auf Layout 3 mit dem
+    // Graphen, alles andere, auch die Uebersicht, auf Layout 1 mit den vier
+    // Farbbalken. Der Graph existiert nur in Layout 3, also heisst "kein
+    // Graph" die Ebene wechseln, nicht den Graphen ausblenden.
+    // ⛔ ZWEISTUFIG, wie SSL in cap141: zweimal {00,01}, dann das Ziel. Direkt
+    // umgeschaltet blieb Layout 2 in der Sonde leer.
+    const bool strip = g_rmeStrip.load() && sel >= 0;
+    if (g_rmeStrip.load() && sel < 0) g_rmeStrip.store(false);   // Kanal weg
+    const int  page  = strip ? uf1RmeStripPage_(st, row, sel, cfg) : -1;
+    const rme::StripPage* pg = page >= 0 ? &cfg.stripPages[static_cast<size_t>(page)] : nullptr;
+    const uint8_t wantLayout = (pg && rmes::pageShowsGraph(*pg)) ? 0x03 : 0x01;
+    static uint8_t sLayout = 0;
+    const bool relayout = force || wantLayout != sLayout;
+    if (relayout) {
+        sLayout = wantLayout;
+        const uint8_t via[2] = { 0x00, 0x01 };
+        g_uf1_dev->send(uf1::buildScreen(0x0100, via));
+        g_uf1_dev->send(uf1::buildScreen(0x0100, via));
+        const uint8_t to[2] = { wantLayout, 0x00 };
+        g_uf1_dev->send(uf1::buildScreen(0x0100, to));
+        // Die Chrome der Ebene, wie die Sonde sie nach dem Selektor schickt.
+        const uint8_t c0102 = 0x00, c0110 = 0x0f, c011a = 0x02;
+        g_uf1_dev->send(uf1::buildScreen(0x0102, std::span<const uint8_t>(&c0102, 1)));
+        g_uf1_dev->send(uf1::buildScreen(0x0110, std::span<const uint8_t>(&c0110, 1)));
+        g_uf1_dev->send(uf1::buildScreen(0x011a, std::span<const uint8_t>(&c011a, 1)));
+    }
+    // Alles auf dem grossen Schirm neu, wenn die Ebene gewechselt hat. Die
+    // kleine Anzeige ist ein eigenes Display und bleibt bei `force`.
+    const bool big = force || relayout;
+
+    // Beim Oeffnen und bei jedem Kanalwechsel in STRIP alle Werte dieses einen
+    // Kanals holen (RMEs /sendchan, plan 5a), statt auf /sendall zu warten.
+    // Bei einem Stereopaar auch die rechte Haelfte: dort liegt Phase R.
+    {
+        static int sAskRow = -1, sAskCh = -1;
+        if (strip && (static_cast<int>(row) != sAskRow || sel != sAskCh)) {
+            sAskRow = static_cast<int>(row); sAskCh = sel;
+            rm.send(rmes::sendChanAddress(row, sel), 1.0f);
+            const rme::Channel* c = rmeu::channelOf(st, row, sel);
+            if (c && c->stereo) rm.send(rmes::sendChanAddress(row, sel + 1), 1.0f);
+        } else if (!strip) {
+            sAskRow = -1; sAskCh = -1;
+        }
+    }
+
     // ── Fader ───────────────────────────────────────────────────────────────
     // Touch-Entprellung wie Item Volume. faderlin 0..1 ist dieselbe Stellung
     // wie der Fader in TotalMix; die Ruecklesung kommt in dB (RmeState.h).
@@ -34230,25 +34409,54 @@ static void uf1PaintRme_()
     }
 
     // ── V-Pot-Reihe ─────────────────────────────────────────────────────────
-    {
+    // Uebersicht und STRIP-Seiten ohne Graph: Layout 1, Name und Wert getrennt.
+    // EQ/Low Cut: Layout 3, die gewohnte Zeile.
+    // Die Farbe ueber jedem Pot (0x012b, nur Layout 1): TotalMix-Farbe seines
+    // Kanals, in STRIP die des Fader-Kanals auf allen vier.
+    std::array<uint8_t, 4> bars4{};
+    auto palOf = [&](rmeu::Row r, int ch) -> uint8_t {
+        const rme::Channel* c = rmeu::channelOf(st, r, ch);
+        return (c && c->colour >= 0 && c->colour < 9)
+            ? static_cast<uint8_t>(cfg.colourMap[c->colour]) : 0;
+    };
+    if (strip) {
+        Uf1VpotRow vr;
+        const uint8_t pal = palOf(row, sel);
+        for (int i = 0; i < 4; ++i) {
+            const rmes::Param* p = uf1RmeStripParam_(cfg, page, false, i);
+            double v = 0.0;
+            const bool have = p && rmes::available(st, row, sel, *p)
+                           && rmes::value(st, row, sel, *p, v);
+            bars4[static_cast<size_t>(i)] = have ? pal : 0;
+            const std::string nm = have ? rmes::label(st, row, sel, *p) : std::string();
+            const std::string tx = have ? rmes::format(*p, row, v) : std::string();
+            const double nrm = have ? rmes::norm(*p, row, v) : 0.0;
+            if (wantLayout == 0x01) {
+                uf1VpotCellL1_(vr, i, nm, tx, nrm, !have);
+            } else {
+                uf1VpotCell_(vr, i, nm, tx);
+                // dB um null (EQ-Gain) von der Mitte aus, alles andere als Linie.
+                const bool bip = have && p->kind == rmes::Kind::Db && p->lo < 0.0 && p->hi > 0.0;
+                uf1VpotBar_(vr, i, nrm, bip, !have);
+            }
+        }
+        uf1EmitVpotRow_(vr, big);
+    } else {
         Uf1VpotRow vr;
         for (int i = 0; i < 4; ++i) {
             if (!linked) {
-                uf1VpotCell_(vr, i, i == 0 ? "no TotalMix" : "", "");
-                uf1VpotBar_(vr, i, 0.0, false, /*empty*/ true);
+                uf1VpotCellL1_(vr, i, i == 0 ? "RME" : "", i == 0 ? "no TotalMix" : "", 0.0, true);
                 continue;
             }
             const std::string& spec = cfg.vpots[rmeVpotSlot_(i)].target;
             // Ein leerer Platz ist leer, kein "--": "--" heisst "Rolle ohne Ausgang".
             if (spec.empty()) {
-                uf1VpotCell_(vr, i, "", "");
-                uf1VpotBar_(vr, i, 0.0, false, true);
+                uf1VpotCellL1_(vr, i, "", "", 0.0, true);
                 continue;
             }
             const rmeu::Target t = rmeu::resolveTarget(st, spec);
             if (!t.assigned || !t.visible) {
-                uf1VpotCell_(vr, i, t.assigned ? "hidden" : "--", "");
-                uf1VpotBar_(vr, i, 0.0, false, true);
+                uf1VpotCellL1_(vr, i, t.assigned ? "hidden" : "--", "", 0.0, true);
                 continue;
             }
             const rme::Channel* c = rmeu::channelOf(st, t.row, t.ch);
@@ -34266,10 +34474,19 @@ static void uf1PaintRme_()
             // Seit der Druck den Submix waehlt, zeigt der Pfeil ihn immer, auch
             // wenn gerade ein Ausgang auf dem Fader liegt.
             else if (t.row == rmeu::Row::Output && t.ch == sub) label = ">" + label;
-            uf1VpotCell_(vr, i, label, k ? uf1RmeDbText_(d) + "dB" : std::string());
-            uf1VpotBar_(vr, i, k ? rme::dbToFaderlin(d) : 0.0, false, /*empty*/ !k);
+            bars4[static_cast<size_t>(i)] = palOf(t.row, t.ch);
+            uf1VpotCellL1_(vr, i, label, k ? uf1RmeDbText_(d) + " dB" : std::string(),
+                           k ? rme::dbToFaderlin(d) : 0.0, /*empty*/ !k);
         }
-        uf1EmitVpotRow_(vr, force);
+        uf1EmitVpotRow_(vr, big);
+    }
+    // Die Farbbalken, nur in Layout 1 (in Layout 3 zeichnet 0x012b nichts).
+    if (wantLayout == 0x01) {
+        static std::array<uint8_t, 4> sBars4{ 0xFF, 0xFF, 0xFF, 0xFF };
+        if (big || bars4 != sBars4) {
+            sBars4 = bars4;
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBars4, bars4));
+        }
     }
 
     // ── EQ-Graph: Kanal-EQ des Fader-Kanals ─────────────────────────────────
@@ -34277,20 +34494,41 @@ static void uf1PaintRme_()
         static std::array<uint8_t, 251> sCol{};
         static uint8_t sTail = 0;
         static bool sHave = false;
-        if (force) sHave = false;
+        if (big) sHave = false;
         const uf1eq::Model m = (sel >= 0) ? rmeu::eqModel(st, row, sel) : uf1eq::Model{};
         std::array<uint8_t, 251> col{};
         uint8_t tail = 0x64;
         uf1eq::render(m, col, tail);
         col[0] = 0x00;
         col[1] = 0x01;
-        if (!sHave || col != sCol || tail != sTail) {
+        // Nur in Layout 3: dort lebt der Graph, in Layout 1 gibt es ihn nicht.
+        if (wantLayout == 0x03 && (!sHave || col != sCol || tail != sTail)) {
             sCol = col; sTail = tail; sHave = true;
             uf1SendEqFrames_(col, tail);
         }
     }
 
-    uf1PaintSideCarSoftKeys_(force);
+    // Soft-Keys: in STRIP die Schalter der Seite, sonst die Side-Car-Bank.
+    // Beide gehen durch denselben Emitter, dessen Cache den Wechsel traegt.
+    if (strip) {
+        std::array<Uf1SkCell, 4> cells{};
+        for (int i = 0; i < 4; ++i) {
+            const rmes::Param* p = uf1RmeStripParam_(cfg, page, true, i);
+            double v = 0.0;
+            if (!p || !rmes::available(st, row, sel, *p) || !rmes::value(st, row, sel, *p, v))
+                continue;
+            Uf1SkCell& c = cells[static_cast<size_t>(i)];
+            c.haveLabel = true;
+            // Ein Listen-Key traegt seinen Wert im Namen ("Type 1 Bell"), ein
+            // Schalter zeigt ihn an der Lampe.
+            c.label = rmes::label(st, row, sel, *p);
+            if (p->kind == rmes::Kind::List) c.label += " " + rmes::format(*p, row, v);
+            c.on = (p->kind == rmes::Kind::Toggle) ? (v >= 0.5) : true;
+        }
+        if (!g_uf1ModeMenu.load()) uf1EmitSoftKeyRow_(cells, big, false, false);
+    } else {
+        uf1PaintSideCarSoftKeys_(big);
+    }
 
     // ── SOLO, CUT, SEL: der Fader-Kanal in TotalMix ─────────────────────────
     // Dieselben Bytes wie im Kanalmaler (uf1PaintChannelStrip_): SOLO/CUT hell
@@ -34321,7 +34559,7 @@ static void uf1PaintRme_()
     // Die uebrigen Tasten: Transport und SHIFT wie REAPER, der Rest dunkel.
     // 5-8 leuchtet auf Bank 2, ueber dieselbe Verfuegbarkeit wie die Spurgruppe.
     uf1PaintButtonLeds_(force, Uf1BtnAvail{ false, false, false, false,
-                                            g_rmeVpotBank.load() == 1 },
+                                            !strip && g_rmeVpotBank.load() == 1 },
                         /*sideCar*/ true);
 
     // ── Zeitfeld: immer der Jog-Kanal (Main) in dB ──────────────────────────
@@ -34341,7 +34579,7 @@ static void uf1PaintRme_()
             uf1EncodeSeg7Text_(g_uf1TcFlashText.c_str(), tc.data());
         else if (jogKnown)
             uf1EncodeSeg7Text_(uf1RmeDbText_(jogDb).c_str(), tc.data());
-        if (force || tc != sTc) {
+        if (big || tc != sTc) {
             sTc = tc;
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kTimecode, tc));
         }
@@ -34356,7 +34594,7 @@ static void uf1PaintRme_()
         const bool listOpen = g_uf1ModeMenu.load();
         // Die drei Zustandsbytes der Liste, einmal pro Flanke, wie im Kanalmaler.
         static bool sListOpen = false;
-        if (force || listOpen != sListOpen) {
+        if (big || listOpen != sListOpen) {
             sListOpen = listOpen;
             const uint8_t s0110 = listOpen ? 0x07 : 0x0f;
             const uint8_t s011a = listOpen ? 0x03 : 0x02;
@@ -34379,6 +34617,20 @@ static void uf1PaintRme_()
             int vis[3] = { 0, 1, 2 };
             uf1FillModeList_(hdr, vis, 3, 3, static_cast<int>(row),
                              [](int r) { return rmeu::rowName(static_cast<rmeu::Row>(r)); });
+        } else if (strip) {
+            // STRIP: die Seite in CELL1, "3/8" in CELL2 und in der Zelle, die
+            // Layout 3 unter SOFT KEYS zeigt. Layout 1 zeigt nur CELL1 und CELL2.
+            const auto pages = rmes::availablePages(st, row, sel, cfg.stripPages);
+            if (!pg) {
+                putCell(0, "NO SETTINGS");
+            } else {
+                const int at = static_cast<int>(std::find(pages.begin(), pages.end(), page)
+                                                - pages.begin());
+                putCell(0, utf8ToLatin1(pg->name));
+                const std::string n = std::to_string(at + 1) + "/" + std::to_string(pages.size());
+                putCell(1, n);
+                putCell(3, n);
+            }
         } else if (!linked) {
             putCell(0, "RME");
         } else if (row == rmeu::Row::Output) {
@@ -34388,6 +34640,13 @@ static void uf1PaintRme_()
             std::string on = rmeu::displayName(st, rmeu::Row::Output, sub);
             putCell(0, utf8ToLatin1(std::string(row == rmeu::Row::Input ? "IN > " : "PB > ")
                                     + (on.empty() ? std::string("--") : on)));
+        }
+        // Uebersicht: die Side-Car-Bank auch in CELL2, denn Layout 1 zeigt die
+        // Zelle unter SOFT KEYS (3) nicht.
+        if (!listOpen && !strip) {
+            const int set = uf8::bindings::kUf1SideCarSetRme;
+            putCell(1, std::to_string(g_sideCarBank[set].load() + 1) + "/"
+                     + std::to_string(std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set))));
         }
         // Zelle 4 (unter FINE CTRL) leer: Main steht im Zeitfeld, und REAPERs
         // Fine-Zustand, den uf1PageHeader_ dort einträgt, gilt hier nicht.

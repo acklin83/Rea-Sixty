@@ -1,6 +1,12 @@
 # RME: Kanaleinstellungen auf dem UF1 und der Weg zum UF8
 
-Stand 21.09.2026 abends. **Nichts davon ist gebaut.** Setzt auf
+Stand 22.09.2026. **STRIP (Abschnitt 3) ist gebaut**, am Gerät noch nicht
+getestet: `RmeStrip.{h,cpp}` (Katalog, Seiten, Schreiben), Seiten in `rme.json`
+v4 (`"strip"`), Bedienung und Maler in `main.cpp` (`uf1RmeStripPage_`,
+`uf1PaintRme_`). Abweichungen vom Plan: Output-Seite V-Pot 4 = Ref Level (sonst
+hätte ein Ausgang keinen Platz dafür), Listen-Keys tragen ihren Wert im Namen
+(„Type 1 Bell"), Input-Seiten nur für Eingänge und Playbacks (`rows`).
+Abschnitt 4 (UF8) und 5 sind nicht gebaut. Setzt auf
 `docs/uf1-spread-plan.md` auf (Monitor-Side-Car, Schritte 1 bis 3 gebaut).
 Alles nach v0.6.0.
 
