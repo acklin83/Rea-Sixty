@@ -32770,8 +32770,12 @@ static void uf1EmitSoftKeyRow_(const std::array<Uf1SkCell, 4>& cells,
     static std::array<int, 4>         sSkLed{ -1, -1, -1, -1 };
 
     uint8_t skHighlight = 0;
+    const int hlStep = g_uf1L1HlStep.load();   // DIAGNOSE, siehe g_uf1L1HlStep
     for (int i = 0; i < 4; ++i) {
-        const Uf1SkCell& c = cells[static_cast<size_t>(i)];
+        // Sonde 16/17: Lampe dunkel erzwingen, Hervorhebung bleibt beim Zustand.
+        Uf1SkCell c = cells[static_cast<size_t>(i)];
+        const bool hlOn = c.on;
+        if (hlStep == 16 || hlStep == 17) c.on = false;
         // Label (0x0104, <idx> + text) — SSL strip only; change-detected.
         // 13 chars is the field; abbreviate past it (see kUf1SoftKeyChars).
         // Fold to Latin-1 FIRST, for two reasons: the UF1 panel is one byte per
@@ -32855,7 +32859,7 @@ static void uf1EmitSoftKeyRow_(const std::array<Uf1SkCell, 4>& cells,
                 g_uf1_dev->send(uf1::buildLedLevel(id,   c.on ? 0x00 : 0x11)); // FF39
             }
         }
-        if (c.on) skHighlight |= static_cast<uint8_t>(1u << i);
+        if (hlOn) skHighlight |= static_cast<uint8_t>(1u << i);
     }
 
     // ⇨ 0x0102 — the on-screen highlight, one bit per key, bit0 = SK1.
@@ -32889,6 +32893,7 @@ static void uf1EmitSoftKeyRow_(const std::array<Uf1SkCell, 4>& cells,
         uint8_t out = menuOpen ? uint8_t{0} : skHighlight;
         if (g_uf1L1HlStep.load() == 14) out = static_cast<uint8_t>((out & 0x0F) << 4);
         if (g_uf1L1HlStep.load() == 15) out = static_cast<uint8_t>(out ? 0x0F : 0x00);
+        if (hlStep == 17 || hlStep == 18) out = 0;
         static int sSkHi = INT_MIN;
         if (force || out != sSkHi) {
             sSkHi = out;
