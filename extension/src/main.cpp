@@ -47738,10 +47738,27 @@ const char* reasixty_uf1FactoryLabel(void* trV, int fx, bool softKeys,
 // no strip. The editor gates its page sync on this: syncing while the user
 // edits a DIFFERENT plug-in would silently page the hardware away from what it
 // is showing. Main-thread only (REAPER API).
+// ⇨ DOES THE UF1 SHOW A STRIP'S PAGES RIGHT NOW? Only in the channel view, in
+// PLUGIN mode, with nothing else owning the screen. Everywhere else (DAW, Sends,
+// Meter, a side-car, Hue, the probe) the painter publishes ONE page and clamps
+// g_uf1CsPage to 0 every tick (uf1PaintChannel_), so an editor that stayed
+// coupled sent its page to the device, watched the clamp throw it back, and
+// followed the device back to page 1 — FX Learn and the Learn-HUD both, and
+// nobody could browse a map's pages by hand (Frank 22.09.). The two editors
+// couple to the device only while this is true.
+bool reasixty_uf1ShowsStripPages()
+{
+    // (0.6 has no side-car and no layout probe; main adds both.)
+    return !g_uf1MeterView.load()
+        && g_uf1ChannelSubMode.load() == 0
+        && !g_uf1HueMode.load();
+}
+
 const char* reasixty_uf1ShownMatch()
 {
     static std::string s;
     s.clear();
+    if (!reasixty_uf1ShowsStripPages()) return s.c_str();   // not coupled
     MediaTrack* tr = nullptr; int fx = -1;
     if (uf1ResolveCsFx_(uf1FocusedTrack_(), tr, fx) >= 0 && tr && fx >= 0) {
         char nm[256];

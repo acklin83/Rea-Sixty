@@ -425,10 +425,12 @@ local function readUf1()
               cells = { [0] = {}, [1] = {} } }
   for ln in raw:gmatch("[^\n]+") do
     if ln:sub(1, 2) == "P;" then
-      -- "P;<pages>;<page>;<hasMap>;<isBc>;<factory>;<eqGraph>;<name>" — name last
-      -- because it may contain ';'. The two-field form is the pre-v14 header.
-      local pg, cur, mapped, bc, fac, eqg, nm =
-        ln:match("^P;(%d+);(%d+);(%d);(%d);(%d);(%d);(.*)$")
+      -- "P;<pages>;<page>;<hasMap>;<isBc>;<factory>;<eqGraph>;<linked>;<name>" —
+      -- name last because it may contain ';'. <linked> (22.09.): the UF1 shows
+      -- this strip's pages right now; only then does the tab follow and page it.
+      -- The two-field form is the pre-v14 header.
+      local pg, cur, mapped, bc, fac, eqg, lk, nm =
+        ln:match("^P;(%d+);(%d+);(%d);(%d);(%d);(%d);(%d);(.*)$")
       if not pg then pg, cur = ln:match("^P;(%d+);(%d+)$") end
       u.pages   = tonumber(pg) or 1
       u.page    = tonumber(cur) or 0
@@ -441,6 +443,7 @@ local function readUf1()
       local e = tonumber(eqg) or 0
       u.eqMode  = math.floor(e / 2)
       u.eqGraph = (e % 2) == 1
+      u.linked  = (lk == "1")
       u.name    = nm or ""
     else
       -- "<pos>;<sk>;<param>;<inv>;<ledRgb>;<inherited>;<label>". `inherited`
@@ -2016,7 +2019,13 @@ local function renderUf1Tab(u1)
   end
   -- Follow the hardware page (Frank 2026-08-09). Only when it CHANGES, so
   -- clicking a page here still browses freely until the UF1 pages itself.
-  if u1.page ~= uf1View.hw then
+  -- ⛔ AND ONLY WHILE THE UF1 SHOWS THIS STRIP'S PAGES (u1.linked). In DAW /
+  -- Sends / Meter / a side-car the device's page is clamped to 0 every tick, so
+  -- following it threw every click back to page 1 (Frank 22.09.). Unlinked, the
+  -- remembered device page is dropped, so coupling again adopts what it shows.
+  if not u1.linked then
+    uf1View.hw = nil
+  elseif u1.page ~= uf1View.hw then
     uf1View.hw   = u1.page
     uf1View.page = u1.page
   end
@@ -2033,7 +2042,7 @@ local function renderUf1Tab(u1)
   -- FX-Learn page row uses, so the two renderers of this row behave the same (Frank
   -- 2026-08-26: "hud und learn gleich!"). Kept in uf1View rather than a new local:
   -- the main chunk is at Lua's 200-local ceiling.
-  if uf1View.spare and uf1View.spare < u1.pages and uf1View.page == uf1View.spare then
+  if u1.linked and uf1View.spare and uf1View.spare < u1.pages and uf1View.page == uf1View.spare then
     sendCmd("uf1page;" .. uf1View.page)
     uf1View.hw = uf1View.page
   end
@@ -4470,7 +4479,7 @@ local function loop()
               -- row does. Never the spare: the device has no such page and the
               -- painter clamps it straight back, which would drag the view off it.
               local u1p = readUf1()
-              if u1p and p < (u1p.pages or 0) then
+              if u1p and u1p.linked and p < (u1p.pages or 0) then
                 sendCmd("uf1page;" .. p)
                 uf1View.hw = p
               end

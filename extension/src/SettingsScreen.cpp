@@ -133,6 +133,7 @@ void reasixty_uf1Seg7Encode(const char* text, unsigned char out[10]);
 void reasixty_uf1PreviewOnPanel(const char* text);
 bool reasixty_uf1Connected();
 const char* reasixty_uf1ShownMatch();       // map match the UF1 shows, "" = none
+bool        reasixty_uf1ShowsStripPages();  // UF1 shows a strip's pages (PLUGIN view)
 // Point the SURFACE's instance cursor at an FX — the same cursor Instance Cycle
 // and FX Cycle write. Picking an instance in the FX-Learn combo used to be
 // editor-only, so the editor could show Pro-C while the UF1 sat on a 4K E.
@@ -13478,9 +13479,14 @@ void hudPublishUf1_(void* trV, int fx, int page, std::string& out)
     const int eqLit  = (um && uf1EqGraphOn_(um->match)) ? 1 : 0;
     const int eqg    = eqMode * 2 + eqLit;
     char hdr[600];
-    std::snprintf(hdr, sizeof(hdr), "P;%d;%d;%d;%d;%d;%d;%s",
+    // `linked`: the UF1 shows this strip's pages right now, so the HUD may
+    // follow its page and page it. Off in DAW / Sends / Meter / side-car, where
+    // the device's page is clamped to 0 and following it undid every click
+    // (Frank 22.09.). Before the name, which stays last.
+    const int linked = reasixty_uf1ShowsStripPages() ? 1 : 0;
+    std::snprintf(hdr, sizeof(hdr), "P;%d;%d;%d;%d;%d;%d;%d;%s",
                   haveMap ? uf1MapPageCount(um->uf1) : 1, page,
-                  haveMap ? 1 : 0, isBc, factory, eqg, shortName.c_str());
+                  haveMap ? 1 : 0, isBc, factory, eqg, linked, shortName.c_str());
     out = hdr;
     auto emit = [&](const std::vector<UserUf1Slot>& v, int sk) {
         for (const auto& s : v) {
