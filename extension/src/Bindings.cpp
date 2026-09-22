@@ -811,14 +811,51 @@ static bool uf1BankUntouched_(const Config& c, int b)
 // ⇨ SIE SASSEN EINEN TAG LANG AUF 3 UND 4, weil Main auf 2 lag. Das ist weg
 // (unseedRmeSideCarBank2_), also ruecken sie auf, sonst blaettert man ueber eine
 // leere Seite (Frank 22.09.). v46 zieht eine bestehende Datei nach.
+// ⛔ UND NUR, WENN DIE ART IM SIDE-CAR NOCH NIRGENDS LIEGT. Die Saat sah bis
+// 22.09. abends nur ihre Zielbank an: als die Baenke von 3/4 auf 2/3 rutschten,
+// setzte sie die Snapshots auf 2, waehrend die alte Fassung auf 3 stehen blieb,
+// und Frank hatte sie zweimal nebeneinander ("jetzt hab ich 2x snapshots").
+static bool uf1RmeKindPlaced_(const Config& c, DynamicBankKind k)
+{
+    for (int r = 0; r < kUf1RmeBankCount; ++r)
+        for (int m = 0; m < kSoftKeyModifierSets; ++m)
+            if (c.uf1SoftBankDynamic[kUf1RmeBankBase + r][m] == k) return true;
+    return false;
+}
+
 void seedRmeSideCarBank23_(Config& c)
 {
     const DynamicBankKind kinds[2] = { DynamicBankKind::RmeSnapshots,
                                        DynamicBankKind::RmeLayouts };
     for (int k = 0; k < 2; ++k) {
         const int b = kUf1RmeBankBase + 1 + k;
-        if (uf1BankUntouched_(c, b)) c.uf1SoftBankDynamic[b][0] = kinds[k];
+        if (uf1BankUntouched_(c, b) && !uf1RmeKindPlaced_(c, kinds[k]))
+            c.uf1SoftBankDynamic[b][0] = kinds[k];
     }
+}
+
+// Aufraeumen nach dem Umzug: jede RME-Bank, die NUR eine der beiden Arten traegt
+// (kein eigener Slot, kein zweiter Modifier-Satz, kein Name), ist unsere Saat und
+// wird geloescht; danach liegen Snapshots auf 2 und Layouts auf 3. Eine Bank, in
+// der der Nutzer etwas hat, bleibt unberuehrt -- dann bleibt auch das Duplikat
+// stehen, und das ist seine Entscheidung, nicht unsere.
+void tidyRmeSideCarDynBanks_(Config& c)
+{
+    for (int r = 0; r < kUf1RmeBankCount; ++r) {
+        const int b = kUf1RmeBankBase + r;
+        const auto k0 = c.uf1SoftBankDynamic[b][0];
+        if (k0 != DynamicBankKind::RmeSnapshots && k0 != DynamicBankKind::RmeLayouts)
+            continue;
+        bool ours = true;
+        for (int m = 1; m < kSoftKeyModifierSets && ours; ++m)
+            if (c.uf1SoftBankDynamic[b][m] != DynamicBankKind::None) ours = false;
+        for (int s = 0; s < kUf1SoftBankSlots && ours; ++s)
+            if (!uf1BankSlotEmpty_(c.uf1SoftBanks[b][s])) ours = false;
+        for (int m = 0; m < kSoftKeyModifierSets && ours; ++m)
+            if (!c.uf1SoftBankName[b][m].empty()) ours = false;
+        if (ours) c.uf1SoftBankDynamic[b][0] = DynamicBankKind::None;
+    }
+    seedRmeSideCarBank23_(c);
 }
 
 // v45 hatte sie auf 3 und 4 gesetzt. Nur verschieben, wenn dort noch genau das
@@ -3131,13 +3168,16 @@ bool invokeBuiltin(const std::string& name, int param)
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
+// v47 (2026-09-22): the two TotalMix banks end up on 2 and 3 exactly once —
+// the v46 move left a copy behind where the seed had already written one
+// (tidyRmeSideCarDynBanks_).
 // v46 (2026-09-22): snapshots and layouts move from RME side-car banks 3 and 4
 // to 2 and 3, now that Main has left bank 2 (moveRmeSideCarBanks34to23_).
 // v45 (2026-09-22): Main comes OFF the second RME side-car bank again — the
 // MASTER key at the fader does it now (unseedRmeSideCarBank2_).
 // v44 (2026-09-22): RME side-car banks 3 and 4 become the dynamic TotalMix
 // Snapshots and Layouts banks, where they are still empty (seedRmeSideCarBank34_).
-constexpr int kCurrentBindingsVersion = 46;
+constexpr int kCurrentBindingsVersion = 47;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4320,6 +4360,9 @@ void load()
             }
             if (tmp.version < 46) {
                 moveRmeSideCarBanks34to23_(tmp);
+            }
+            if (tmp.version < 47) {
+                tidyRmeSideCarDynBanks_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins

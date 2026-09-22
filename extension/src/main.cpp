@@ -34882,13 +34882,13 @@ static void uf1PaintRme_()
 
     // ── kleine Anzeige ──────────────────────────────────────────────────────
     // Name, dB und darunter PAN (Wertzeile + Zeiger), wie im REAPER-Modus. Das
-    // Submix-Ziel steht im Farbbalken, fuer Eingang und Playback in der
-    // Uebersicht; in STRIP nichts, denn ein Kanal kann auf mehrere Submixe gehen
-    // (Frank 22.09.). Ausgang: OUTPUT, ohne TotalMix: RME.
+    // Submix-Ziel steht im Farbbalken, und es BLEIBT IN STRIP STEHEN (Frank
+    // 22.09.: "verschwindet im strip mode, sollte bleiben"): der Fader schreibt
+    // dort in denselben Submix wie in der Uebersicht, also gilt die Zeile weiter.
+    // Ausgang: OUTPUT, ohne TotalMix: RME.
     {
         std::string name = "RME", db, line;
         std::string barText = !linked ? std::string("RME")
-                            : strip  ? std::string()
                             : row == rmeu::Row::Output ? std::string("OUTPUT")
                             : [&] {
                                   const std::string on =
