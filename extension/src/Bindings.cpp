@@ -777,14 +777,23 @@ void seedRmeSideCarBank_(Config& c)
     bank[3] = mkBuiltin("rme_talkback",  Behavior::Momentary, "Talkback");
 }
 
-// Second factory bank of the RME side-car: Main onto the fader (Frank 21.09.).
-// Same rule, only into an empty bank.
-void seedRmeSideCarBank2_(Config& c)
+// ⇨ DIE ZWEITE RME-BANK IST WIEDER LEER. Main lag dort seit dem 21.09. auf dem
+// ersten Soft-Key; seit dem 22.09. tut das die MASTER-Taste am Fader selbst, und
+// Frank wollte den Soft-Key dafuer zurueck ("den auf softkey seite 2 wieder
+// rausnehmen"). Das Builtin `rme_fader_main` bleibt, es ist nur nicht mehr ab
+// Werk gesetzt. v45 raeumt es aus einer bestehenden Datei, aber NUR, wenn dort
+// noch genau unsere Werksbelegung steht (Memory franks-bindings-are-not-factory).
+void unseedRmeSideCarBank2_(Config& c)
 {
     Binding* bank = c.uf1SoftBanks[kUf1RmeBankBase + 1];
-    for (int s = 0; s < kUf1SoftBankSlots; ++s)
-        if (!uf1BankSlotEmpty_(bank[s])) return;
-    bank[0] = mkBuiltin("rme_fader_main", Behavior::Momentary, "Main");
+    const Binding factory = mkBuiltin("rme_fader_main", Behavior::Momentary, "Main");
+    const auto& s0 = bank[0].shortPress[static_cast<int>(Modifier::Plain)];
+    const auto& f0 = factory.shortPress[static_cast<int>(Modifier::Plain)];
+    if (s0.type != f0.type || s0.action != f0.action || bank[0].label != factory.label)
+        return;
+    for (int s = 1; s < kUf1SoftBankSlots; ++s)
+        if (!uf1BankSlotEmpty_(bank[s])) return;   // der Nutzer hat die Bank ausgebaut
+    bank[0] = Binding{};
 }
 
 // Third and fourth: TotalMix' snapshots and layouts as dynamic banks (Frank
@@ -1386,7 +1395,6 @@ void seedFactoryDefaults_(Config& c)
     // views that seed their own 5-8. See fillDerivedUf1Slots_.
     fillDerivedUf1Slots_(c);
     seedRmeSideCarBank_(c);
-    seedRmeSideCarBank2_(c);
     seedRmeSideCarBank34_(c);
 }
 
@@ -3086,9 +3094,11 @@ bool invokeBuiltin(const std::string& name, int param)
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
+// v45 (2026-09-22): Main comes OFF the second RME side-car bank again — the
+// MASTER key at the fader does it now (unseedRmeSideCarBank2_).
 // v44 (2026-09-22): RME side-car banks 3 and 4 become the dynamic TotalMix
 // Snapshots and Layouts banks, where they are still empty (seedRmeSideCarBank34_).
-constexpr int kCurrentBindingsVersion = 44;
+constexpr int kCurrentBindingsVersion = 45;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4260,11 +4270,11 @@ void load()
                 // one the control-room keys if it is still empty.
                 seedRmeSideCarBank_(tmp);
             }
-            if (tmp.version < 43) {
-                seedRmeSideCarBank2_(tmp);
-            }
             if (tmp.version < 44) {
                 seedRmeSideCarBank34_(tmp);
+            }
+            if (tmp.version < 45) {
+                unseedRmeSideCarBank2_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins

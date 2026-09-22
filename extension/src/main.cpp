@@ -25833,11 +25833,37 @@ static int uf1RmeSelected_(const reasixty::rme::State& st, rmeu::Row r)
     return list.empty() ? -1 : list.front();
 }
 
+// Die Reihe eine weiter, MIT UMLAUF an den Enden (Frank 22.09.). EIN Schrittwerk
+// fuer beide Wege dorthin: Nav-Kreuz oben/unten und MODE + Kanal-Encoder.
+static void uf1RmeStepRow_(int dir)
+{
+    const int n = rmeu::kRowCount;
+    const int cur = std::clamp(g_rmeRow.load(), 0, n - 1);
+    g_rmeRow.store(((cur + (dir > 0 ? 1 : n - 1)) % n));
+}
+
 static void uf1RmeSelect_(rmeu::Row r, int ch)
 {
     g_rmeRow.store(static_cast<int>(r));
     g_rmeSel[static_cast<int>(r)].store(ch);
     if (r == rmeu::Row::Output) g_rmeSubmix.store(ch);
+}
+
+// ⇨ MAIN AUF DEN FADER, EINE ENTSCHEIDUNG FUER ZWEI TASTEN: das Builtin
+// `rme_fader_main` (Werksbank RME 2) und die MASTER-Taste am Fader, die im
+// Side-Car dasselbe tut (Frank 22.09.). Zustand = Main liegt auf dem Fader.
+static void rmeFaderMainFire_()
+{
+    const int m = reasixty::rme::manager().controlRoom().mainOut;
+    if (m >= 0) uf1RmeSelect_(rmeu::Row::Output, m);
+}
+
+static bool rmeFaderMainActive_()
+{
+    const int m = reasixty::rme::manager().controlRoom().mainOut;
+    const int sel = g_rmeSel[static_cast<int>(rmeu::Row::Output)].load();
+    return m >= 0 && g_rmeRow.load() == static_cast<int>(rmeu::Row::Output)
+        && (sel == m || sel < 0);
 }
 
 // Pegel eines Kanals um `detents` Rasten verschieben, in dB. Eingaenge und
@@ -25948,11 +25974,9 @@ static bool uf1RmeEncoder_(uint8_t id, int delta)
         if (steps == 0) return true;
         delta = steps;
         if (g_uf1ModeMenu.load()) {
-            // MODE + Kanal-Encoder: die Reihe (Input / Playback / Output),
-            // wie die Encoder- und Jog-Liste. Kein Umlauf, die Liste hat Enden.
-            const int row = std::clamp(g_rmeRow.load() + (delta > 0 ? 1 : -1),
-                                       0, rmeu::kRowCount - 1);
-            g_rmeRow.store(row);
+            // MODE + Kanal-Encoder: die Reihe (Input / Playback / Output), mit
+            // Umlauf wie das Nav-Kreuz (uf1RmeStepRow_, Frank 22.09.).
+            uf1RmeStepRow_(delta);
             return true;
         }
         const auto r = static_cast<rmeu::Row>(g_rmeRow.load());
@@ -26065,6 +26089,21 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
 static bool uf1RmeButton_(const uf1::InputEvent& ev)
 {
     const uint8_t id = ev.id;
+    // ⇨ NAV OBEN / UNTEN WAEHLT DIE REIHE (Frank 22.09.), mit Umlauf, auch in
+    // STRIP: dort bleibt die Ansicht offen und zeigt den Kanal der neuen Reihe.
+    // Links, rechts und die Mitte bleiben bei REAPER, wie bisher.
+    // ⇨ UND MASTER AM FADER IST IM SIDE-CAR `rme_fader_main` (Frank 22.09.:
+    // "master button auf dem UF1 Fader soll dasselbe wie die neue Built-In MASTER
+    // auf softbank 2 machen"). Dieselbe Funktion, nicht dieselbe Zeile zweimal.
+    if (id == uf1::btn::kMaster) {
+        if (ev.pressed && !g_uf1ModeMenu.load()) rmeFaderMainFire_();
+        return true;
+    }
+    if (id == uf1::btn::kNavUp || id == uf1::btn::kNavDown) {
+        if (ev.pressed && !g_uf1ModeMenu.load())
+            uf1RmeStepRow_(id == uf1::btn::kNavDown ? 1 : -1);
+        return true;
+    }
     if (id == uf1::btn::kChannelPush) {
         // STRIP auf und zu. Oeffnen nur, wenn ein Kanal auf dem Fader liegt.
         if (ev.pressed && !g_uf1ModeMenu.load()) {
@@ -34533,7 +34572,9 @@ static bool uf1SideCarKeepsLed_(uf8::bindings::ButtonId id)
         // < > = Baenke bzw. STRIP-Seiten (uf1SideCarSoftKeys_).
         || id == B::Uf1FiveToEight || id == B::Uf1ArrowLeft || id == B::Uf1ArrowRight
         // Soft-Key ueber dem Kanal = Stereo/Mono, hell bei stereo.
-        || id == B::Uf1ChannelSoftKey;
+        || id == B::Uf1ChannelSoftKey
+        // MASTER = Main auf den Fader (uf1RmeButton_), Zustand unten.
+        || id == B::Uf1Master;
 }
 static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
 {
@@ -34687,6 +34728,12 @@ static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
             }
             if (sideCar && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1ArrowRight) {
                 on = rightOn; show = true;
+            }
+            // MASTER am Fader = Main auf den Fader, solange das RME-Side-Car
+            // laeuft: die Lampe liest denselben Zustand wie das Builtin.
+            if (sideCar && uf1RmeActive_()
+                && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1Master) {
+                on = rmeFaderMainActive_(); show = true;
             }
             if (sideCar && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1ChannelSoftKey) {
                 on = av.chanSk; show = true;
@@ -44270,10 +44317,16 @@ static void uf1NavCrossSyncLeds_()
         const uf8::bindings::ActionSlot* colSlot = nullptr;
         bool show = uf1BindingLedState_(bd, mod, on, colSlot);
         uint32_t scaled = show ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
-        // Im RME-Side-Car faengt uf1RmeButton_ das Kreuz ab und tut nichts,
-        // also ist es dunkel. Eine Lampe, die REAPER zeigt, wo die Taste
-        // REAPER nicht erreicht, luegt (Frank 21.09., Weg b).
-        if (uf1RmeActive_()) { on = false; scaled = 0u; }
+        // Im RME-Side-Car faengt uf1RmeButton_ das Kreuz ab. Eine Lampe, die
+        // REAPER zeigt, wo die Taste REAPER nicht erreicht, luegt (Frank 21.09.,
+        // Weg b), also ist es dunkel -- ausser oben und unten, die seit dem
+        // 22.09. die Reihe waehlen und beide leuchten, weil es mit dem Umlauf
+        // immer in beide Richtungen weitergeht. Weiss, denn die Farbe der
+        // REAPER-Bindung gehoert zu einer Aktion, die hier nicht laeuft.
+        if (uf1RmeActive_()) {
+            const bool rowKey = (i == 0 || i == 4);
+            show = rowKey; on = rowKey; scaled = rowKey ? 0xFFFFFFu : 0u;
+        }
         else if (i == marked) {
             // The mode's own pick wins the STATE, but not the colour: it lights
             // in this binding's ACTIVE colour, exactly as the editor shows it.
@@ -54685,16 +54738,9 @@ void registerBindingHandlers()
     // Main auf dem Fader liegt.
     registerBuiltin("rme_fader_main", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (!firing) return;
-            const int m = reasixty::rme::manager().controlRoom().mainOut;
-            if (m >= 0) uf1RmeSelect_(rmeu::Row::Output, m);
+            if (firing) rmeFaderMainFire_();
         },
-        [](int) {
-            const int m = reasixty::rme::manager().controlRoom().mainOut;
-            const int sel = g_rmeSel[static_cast<int>(rmeu::Row::Output)].load();
-            return m >= 0 && g_rmeRow.load() == static_cast<int>(rmeu::Row::Output)
-                && (sel == m || sel < 0);
-        },
+        [](int) { return rmeFaderMainActive_(); },
         "RME: Main on the fader", false
     });
     registerBuiltin("obs_record_toggle", DescBuilder{
