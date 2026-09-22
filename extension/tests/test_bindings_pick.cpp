@@ -15,7 +15,7 @@ int main()
     EXPECT(pickActionFor(ButtonId::Uf1Play, "") == PickAction::Select);
     EXPECT(pickActionFor(ButtonId::TopSoftKey3, "ssl_softkey") == PickAction::Select);
     EXPECT(pickActionFor(ButtonId::Uf1DisplaySoft2, "") == PickAction::Select);
-    EXPECT(pickActionFor(ButtonId::Uc1Btn360, "mixer_toggle") == PickAction::Select);
+    EXPECT(pickActionFor(ButtonId::Uc1Btn360, "") == PickAction::Select);
     // Nothing to pick.
     EXPECT(pickActionFor(ButtonId::None, "") == PickAction::PassThrough);
     // Modifiers stay modifiers, by key and by what the key is bound to.
@@ -23,6 +23,9 @@ int main()
     EXPECT(pickActionFor(ButtonId::Uf1Shift, "") == PickAction::PassThrough);
     EXPECT(pickActionFor(ButtonId::Uf1Play, "mod_shift") == PickAction::PassThrough);
     EXPECT(pickActionFor(ButtonId::Flip, "mod_ctrl") == PickAction::PassThrough);
+    // The Settings key: the only way out of the window from a surface.
+    EXPECT(pickActionFor(ButtonId::Uc1Btn360, "mixer_toggle") == PickAction::PassThrough);
+    EXPECT(pickActionFor(ButtonId::Uf1Btn360, "mixer_toggle") == PickAction::PassThrough);
     // Drawn locked in the pane: keep working.
     EXPECT(pickActionFor(ButtonId::Uf1Solo, "") == PickAction::PassThrough);
     EXPECT(pickActionFor(ButtonId::Uf1Cut, "") == PickAction::PassThrough);

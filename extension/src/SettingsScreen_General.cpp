@@ -206,6 +206,9 @@ int                reasixty_uf1ViewMode();
 const char* reasixty_sp(const char* uk, const char* us);
 
 namespace uf8 {
+// Press-to-pick switch (SettingsScreen.cpp).
+bool reasixty_bindingsPressPick();
+void reasixty_setBindingsPressPick(bool on);
 
 namespace {
 // Surface bits, same order as bindings::builtinDeviceMask() and main.cpp's
@@ -1584,6 +1587,21 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
                            &bn))
             reasixty_setUf1BankNameFlash(bn);
     }
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    sectionHeader("Bindings");
+
+    // While Settings → Bindings is open, a press on UF8 / UC1 / UF1 selects that
+    // button there instead of running it (22.09.). SHIFT and the key bound to
+    // open/close Settings keep working either way.
+    bool bpp = reasixty_bindingsPressPick();
+    if (ImGui_Checkbox(ctx, "Press on a surface selects it in Bindings", &bpp))
+        reasixty_setBindingsPressPick(bpp);
+    if (ImGui_IsItemHovered(ctx, nullptr))
+        ImGui_SetTooltip(ctx,
+            "While the Bindings page is open, pressing a button on a surface selects\n"
+            "it there instead of running it. SHIFT and the Settings key still work.");
 
     ImGui_Spacing(ctx);
     ImGui_Spacing(ctx);

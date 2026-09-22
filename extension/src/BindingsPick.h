@@ -31,6 +31,11 @@ inline PickAction pickActionFor(ButtonId id, std::string_view plainBuiltin)
     if (plainBuiltin == "mod_shift" || plainBuiltin == "mod_cmd"
         || plainBuiltin == "mod_ctrl" || plainBuiltin == "fine_modifier")
         return PickAction::PassThrough;
+    // ⛔ THE KEY THAT OPENS AND CLOSES SETTINGS STAYS THAT KEY, or there is no
+    // way out of the window from the surface while the pane is open (Frank
+    // 22.09.). Wherever it is bound (UC1 360 by factory).
+    if (plainBuiltin == "mixer_toggle")
+        return PickAction::PassThrough;
     switch (id) {
         case ButtonId::Fine:
         case ButtonId::Uf1Shift:

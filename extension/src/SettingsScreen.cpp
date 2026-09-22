@@ -6430,6 +6430,26 @@ static bool g_bindingsPaneDrew = false;
 // takes it on the main thread. Pick = (tab << 16) | ButtonId, -1 = none.
 static std::atomic<bool> g_bindingsPaneLive{false};
 static std::atomic<int>  g_bindingsPick{-1};
+// Settings → Behaviour → Bindings, "Press on a surface selects it" (Frank
+// 22.09.: an option to switch the whole thing off). Default on. Read and
+// written on the main thread only; the surfaces see it through g_bindingsPaneLive.
+static bool g_bindingsPressPick       = true;
+static bool g_bindingsPressPickLoaded = false;
+bool reasixty_bindingsPressPick()
+{
+    if (!g_bindingsPressPickLoaded) {
+        g_bindingsPressPickLoaded = true;
+        const char* v = GetExtState("rea_sixty", "bindings_press_pick");
+        if (v && *v) g_bindingsPressPick = (std::atoi(v) != 0);
+    }
+    return g_bindingsPressPick;
+}
+void reasixty_setBindingsPressPick(bool on)
+{
+    g_bindingsPressPickLoaded = true;
+    g_bindingsPressPick = on;
+    SetExtState("rea_sixty", "bindings_press_pick", on ? "1" : "0", true);
+}
 bool reasixty_bindingsPaneLive() { return g_bindingsPaneLive.load(); }
 void reasixty_bindingsPick(int tab, int buttonId)
 {
@@ -6442,8 +6462,9 @@ void reasixty_publishSettingsModifierPin(bool bindingsPaneOpen)
     g_bindingsPaneDrew = false;
     uf8::bindings::setBankModifierPin(
         (bindingsPaneOpen && drew) ? g_slotEditModIdx : -1);
-    // Same "open AND drawn" test: a collapsed window must not eat presses.
-    g_bindingsPaneLive.store(bindingsPaneOpen && drew);
+    // Same "open AND drawn" test: a collapsed window must not eat presses. And
+    // only while the option is on.
+    g_bindingsPaneLive.store(bindingsPaneOpen && drew && reasixty_bindingsPressPick());
 }
 
 // Phase C UI — hardware-schematic view. Click a button on the schematic

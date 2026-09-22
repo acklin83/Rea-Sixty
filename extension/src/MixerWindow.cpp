@@ -269,6 +269,7 @@ constexpr SearchEntry kSearchIndex[] = {
                                                kSecBehaviour, "UF1", kDevUf1 },
     { "Alt/Option + fader drag \xE2\x86\x92 snap back to original on release",
                                                kSecBehaviour, "Keyboard" },
+    { "Press on a surface selects it in Bindings", kSecBehaviour, "Bindings" },
     { "Keyboard Shift acts as Shift modifier", kSecBehaviour, "Keyboard" },
     { "Keyboard Cmd (\xE2\x8C\x98) acts as Cmd modifier",
                                                kSecBehaviour, "Keyboard" },
