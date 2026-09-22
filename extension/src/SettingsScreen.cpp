@@ -24875,6 +24875,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
             {
                 reasixty_setRecVpotShiftInputCh(shiftInputCh);
             }
+            help_(ctx, "Changing the input channel is plain REAPER, so this one works in REC and\nREC + MON even without an RME interface. Preamp gain, 48V, pad and phase\nneed TotalReaper.");
 
 
             pickerCombo("V-Pot push##rec_rme",
@@ -24906,6 +24907,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
             {
                 reasixty_setRecUc1Enc2ShiftInputCh(uc1ShiftInputCh);
             }
+            help_(ctx, "Changing the input channel is plain REAPER, so this one works in REC and\nREC + MON even without an RME interface. Preamp gain, 48V, pad and phase\nneed TotalReaper.");
             pickerCombo("Encoder 2 push##rec_rme_uc1",
                         reasixty_recUc1Enc2Push(), reasixty_setRecUc1Enc2Push);
             pickerCombo("Cut button##rec_rme_uc1",
@@ -24938,6 +24940,7 @@ void SettingsScreen::drawModes(ImGui_Context* ctx)
             {
                 reasixty_setRecUf1ShiftInputCh(uf1ShiftInputCh);
             }
+            help_(ctx, "Changing the input channel is plain REAPER, so this one works in REC and\nREC + MON even without an RME interface. Preamp gain, 48V, pad and phase\nneed TotalReaper.");
             pickerCombo("V-Pot push##rec_rme_uf1",
                         reasixty_recUf1VpotPush(), reasixty_setRecUf1VpotPush);
             pickerCombo("Cut button##rec_rme_uf1",

@@ -1520,10 +1520,10 @@ V-Pots cycle per-strip (each strip's own track). The three single encoders cycle
 
 | Setting | Effect |
 |---|---|
-| Enable RME / TotalReaper integration | Master switch. Requires the TotalReaper extension. While REC Selection Mode is active, the assignments below trigger TotalReaper actions against the strip's track. |
+| Enable RME / TotalReaper integration | Master switch. Requires the TotalReaper extension. While REC Selection Mode is active, the assignments below trigger TotalReaper actions against the strip's track. Preamp gain, 48V, pad and phase need it; changing the input channel does not, because that is REAPER's own. |
 | (presence line) | Says whether TotalReaper was detected. When it is missing, a button hands you to ReaPack with the repository selected, so it installs like any other package. TotalReaper ships from the same repository as Rea-Sixty, so if you installed through ReaPack it is already listed. Without ReaPack the button opens the project page instead. |
 | V-Pot rotation → Preamp gain ±1 dB | Steps preamp gain instead of pan. |
-| V-Pot rotation + Shift → Change input channel | Re-routes the strip's track input on rotation. |
+| V-Pot rotation + Shift → Change input channel | Re-routes the strip's track input on rotation. Works without an RME interface: the input belongs to REAPER, so this one only needs REC or REC + MON. |
 | V-Pot push (combo) | TotalReaper action assignment. Choices: `None`, `Toggle 48V phantom`, `Toggle pad`, `Toggle phase invert`, `Toggle AutoLevel`. |
 | Cut button (combo) | Same action list. |
 | Solo button (combo) | Same action list. |
@@ -1533,7 +1533,7 @@ The rows above are the UF8 strips. The UC1 and the UF1 have their own set below,
 | Setting (UC1) | Effect |
 |---|---|
 | Encoder 2 rotation → Preamp gain ±1 dB | Steps preamp gain on the focused track. |
-| Encoder 2 rotation + Shift → Change input channel | Re-routes that track's input. |
+| Encoder 2 rotation + Shift → Change input channel | Re-routes that track's input. Also without an RME interface, like the UF8 row above. |
 | Encoder 2 push (combo) | Action assignment, same list as above. |
 | Cut button (combo) | Same action list. |
 | Solo button (combo) | Same action list. |
@@ -1542,7 +1542,7 @@ The rows above are the UF8 strips. The UC1 and the UF1 have their own set below,
 | Setting (UF1) | Effect |
 |---|---|
 | Above-fader V-Pot rotation → Preamp gain ±1 dB | Steps preamp gain on the channel the fader side is showing. |
-| Above-fader V-Pot rotation + Shift → Change input channel | Re-routes that channel's input. |
+| Above-fader V-Pot rotation + Shift → Change input channel | Re-routes that channel's input. Also without an RME interface, like the UF8 row above. |
 | V-Pot push (combo) | Action assignment, same list as above. |
 | Cut button (combo) | Same action list. |
 | Solo button (combo) | Same action list. |
