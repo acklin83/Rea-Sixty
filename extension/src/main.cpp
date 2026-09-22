@@ -32873,13 +32873,31 @@ static void uf1EmitSoftKeyRow_(const std::array<Uf1SkCell, 4>& cells,
     // METER / SENDS" (Frank 2026-08-26). The row's own selection stands down
     // while the menu is open. Nothing has to put it back: menuEdge folds into
     // `changed`, so the release tick re-sends the real mask through this gate.
+    //
+    // ⛔ UND DANACH DIE NAMEN NOCHMAL. In cap141 schreibt SSL in JEDER Ebene erst
+    // 0x0102 und dann die vier 0x0104 — auch im Auswahlschirm {00,01}, wo es die
+    // Hervorhebung wirklich setzt. Wir schrieben die Namen zuerst und bei einem
+    // blossen An/Aus NUR 0x0102. Layout 3 vertraegt das; in Layout 1 wurde der
+    // Name des eingeschalteten Keys leer (Frank 22.09.: EQ-Seiten gehen, alle
+    // anderen nicht, Farbe egal). Also hier SSLs Reihenfolge: nach jeder neuen
+    // Hervorhebung die Namen hinterher, die der Cache gerade hat.
     {
         const uint8_t out = menuOpen ? uint8_t{0} : skHighlight;
         static int sSkHi = INT_MIN;
         if (force || out != sSkHi) {
-        sSkHi = out;
-        g_uf1_dev->send(uf1::buildScreen(0x0102,
-            std::span<const uint8_t>(&out, 1)));
+            sSkHi = out;
+            g_uf1_dev->send(uf1::buildScreen(0x0102,
+                std::span<const uint8_t>(&out, 1)));
+            if (!menuOpen)
+                for (int i = 0; i < 4; ++i) {
+                    if (!cells[static_cast<size_t>(i)].haveLabel) continue;
+                    const std::string& lb = sSkLabel[static_cast<size_t>(i)];
+                    std::vector<uint8_t> pb;
+                    pb.reserve(1 + lb.size());
+                    pb.push_back(uint8_t(i));
+                    pb.insert(pb.end(), lb.begin(), lb.end());
+                    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kSoftKeyLabel, pb));
+                }
         }
     }
 }
