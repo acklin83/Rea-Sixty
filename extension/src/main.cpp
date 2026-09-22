@@ -757,10 +757,6 @@ std::atomic<int> g_rmeVpotBank{0};
 // Kanalwechsel stehen; hat der neue Kanal die Seite nicht, zeigt der Maler die
 // erste, die er hat.
 std::atomic<bool> g_rmeStrip{false};
-// ⚠ DIAGNOSE, KEIN FEATURE (22.09.): welcher Wert macht die Soft-Key-
-// Hervorhebung in Layout 1 sichtbar? Gesetzt ueber ExtState rea_sixty /
-// uf1_l1hl_step (Lua auf Franks Desktop), gelesen vom RME-Maler. 0 = aus.
-std::atomic<int>  g_uf1L1HlStep{0};
 std::atomic<int>  g_rmeStripPage{0};
 static int rmeVpotSlot_(int pot)
 {
@@ -32770,12 +32766,8 @@ static void uf1EmitSoftKeyRow_(const std::array<Uf1SkCell, 4>& cells,
     static std::array<int, 4>         sSkLed{ -1, -1, -1, -1 };
 
     uint8_t skHighlight = 0;
-    const int hlStep = g_uf1L1HlStep.load();   // DIAGNOSE, siehe g_uf1L1HlStep
     for (int i = 0; i < 4; ++i) {
-        // Sonde 16/17: Lampe dunkel erzwingen, Hervorhebung bleibt beim Zustand.
-        Uf1SkCell c = cells[static_cast<size_t>(i)];
-        const bool hlOn = c.on;
-        if (hlStep == 16 || hlStep == 17) c.on = false;
+        const Uf1SkCell& c = cells[static_cast<size_t>(i)];
         // Label (0x0104, <idx> + text) — SSL strip only; change-detected.
         // 13 chars is the field; abbreviate past it (see kUf1SoftKeyChars).
         // Fold to Latin-1 FIRST, for two reasons: the UF1 panel is one byte per
@@ -32859,7 +32851,7 @@ static void uf1EmitSoftKeyRow_(const std::array<Uf1SkCell, 4>& cells,
                 g_uf1_dev->send(uf1::buildLedLevel(id,   c.on ? 0x00 : 0x11)); // FF39
             }
         }
-        if (hlOn) skHighlight |= static_cast<uint8_t>(1u << i);
+        if (c.on) skHighlight |= static_cast<uint8_t>(1u << i);
     }
 
     // ⇨ 0x0102 — the on-screen highlight, one bit per key, bit0 = SK1.
@@ -32881,34 +32873,13 @@ static void uf1EmitSoftKeyRow_(const std::array<Uf1SkCell, 4>& cells,
     // METER / SENDS" (Frank 2026-08-26). The row's own selection stands down
     // while the menu is open. Nothing has to put it back: menuEdge folds into
     // `changed`, so the release tick re-sends the real mask through this gate.
-    //
-    // ⛔ UND DANACH DIE NAMEN NOCHMAL. In cap141 schreibt SSL in JEDER Ebene erst
-    // 0x0102 und dann die vier 0x0104 — auch im Auswahlschirm {00,01}, wo es die
-    // Hervorhebung wirklich setzt. Wir schrieben die Namen zuerst und bei einem
-    // blossen An/Aus NUR 0x0102. Layout 3 vertraegt das; in Layout 1 wurde der
-    // Name des eingeschalteten Keys leer (Frank 22.09.: EQ-Seiten gehen, alle
-    // anderen nicht, Farbe egal). Also hier SSLs Reihenfolge: nach jeder neuen
-    // Hervorhebung die Namen hinterher, die der Cache gerade hat.
     {
-        uint8_t out = menuOpen ? uint8_t{0} : skHighlight;
-        if (g_uf1L1HlStep.load() == 14) out = static_cast<uint8_t>((out & 0x0F) << 4);
-        if (g_uf1L1HlStep.load() == 15) out = static_cast<uint8_t>(out ? 0x0F : 0x00);
-        if (hlStep == 17 || hlStep == 18) out = 0;
+        const uint8_t out = menuOpen ? uint8_t{0} : skHighlight;
         static int sSkHi = INT_MIN;
         if (force || out != sSkHi) {
-            sSkHi = out;
-            g_uf1_dev->send(uf1::buildScreen(0x0102,
-                std::span<const uint8_t>(&out, 1)));
-            if (!menuOpen)
-                for (int i = 0; i < 4; ++i) {
-                    if (!cells[static_cast<size_t>(i)].haveLabel) continue;
-                    const std::string& lb = sSkLabel[static_cast<size_t>(i)];
-                    std::vector<uint8_t> pb;
-                    pb.reserve(1 + lb.size());
-                    pb.push_back(uint8_t(i));
-                    pb.insert(pb.end(), lb.begin(), lb.end());
-                    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kSoftKeyLabel, pb));
-                }
+        sSkHi = out;
+        g_uf1_dev->send(uf1::buildScreen(0x0102,
+            std::span<const uint8_t>(&out, 1)));
         }
     }
 }
@@ -34388,10 +34359,6 @@ static void uf1PaintRme_()
     const rme::StripPage* pg = page >= 0 ? &cfg.stripPages[static_cast<size_t>(page)] : nullptr;
     const uint8_t wantLayout = (pg && rmes::pageShowsGraph(*pg)) ? 0x03 : 0x01;
     static uint8_t sLayout = 0;
-    // DIAGNOSE (g_uf1L1HlStep ab 19): jeder Versuch beginnt mit einem frischen
-    // Ebenenwechsel, damit kein Rest vom vorigen das Ergebnis traegt.
-    static bool sProbeRelayout = false;
-    if (sProbeRelayout) { sLayout = 0; }
     const bool relayout = force || wantLayout != sLayout;
     if (relayout) {
         sLayout = wantLayout;
@@ -34405,6 +34372,18 @@ static void uf1PaintRme_()
         g_uf1_dev->send(uf1::buildScreen(0x0102, std::span<const uint8_t>(&c0102, 1)));
         g_uf1_dev->send(uf1::buildScreen(0x0110, std::span<const uint8_t>(&c0110, 1)));
         g_uf1_dev->send(uf1::buildScreen(0x011a, std::span<const uint8_t>(&c011a, 1)));
+        // ⛔ 0x0118 = DIE FREIGABE DER SOFT-KEY-HERVORHEBUNG IN LAYOUT 1, ein Byte
+        // pro Key. Ohne sie macht das Hervorhebungsbit (0x0102) den Namen des
+        // eingeschalteten Keys LEER statt ihn hervorzuheben. Am Geraet gemessen
+        // 22.09. (Frank, Sonde): 01 00 00 00 gibt nur Key 1 frei, 00 01 00 00
+        // nur Key 2, 01 01 01 01 alle vier, jeweils sauber an und aus. Nur NACH
+        // dem Ebenenwechsel: ohne frischen Wechsel blieb die Hervorhebung hängen.
+        // Layout 3 braucht es nicht (dort geht 0x0102 allein); zurueck auf den
+        // Init-Wert 00 beim Verlassen (hier fuer Layout 3, uf1HandOverScreen_
+        // fuer das Ende des Side-Cars).
+        const uint8_t hl = (wantLayout == 0x01) ? 0x01 : 0x00;
+        const uint8_t c0118[4] = { hl, hl, hl, hl };
+        g_uf1_dev->send(uf1::buildScreen(0x0118, c0118));
     }
     // Alles auf dem grossen Schirm neu, wenn die Ebene gewechselt hat. Die
     // kleine Anzeige ist ein eigenes Display und bleibt bei `force`.
@@ -34584,68 +34563,6 @@ static void uf1PaintRme_()
 
     // Soft-Keys: in STRIP die Schalter der Seite, sonst die Side-Car-Bank.
     // Beide gehen durch denselben Emitter, dessen Cache den Wechsel traegt.
-    // ── DIAGNOSE Layout-1-Hervorhebung (siehe g_uf1L1HlStep) ────────────────
-    // Jeder Schritt setzt ALLE Kandidaten auf ihren Init-Wert zurueck und aendert
-    // genau einen, dann Hervorhebung und Namen neu. Antwort = eine Zahl.
-    bool hlProbeEdge = false;
-    {
-        const char* s = GetExtState("rea_sixty", "uf1_l1hl_step");
-        const int step = (s && *s) ? std::atoi(s) : 0;
-        static int sStep = 0;
-        if (step != sStep) {
-            sStep = step;
-            g_uf1L1HlStep.store(step);
-            hlProbeEdge = true;
-            auto put4 = [&](uint16_t a, uint8_t v) {
-                const uint8_t b[4] = { v, v, v, v };
-                g_uf1_dev->send(uf1::buildScreen(a, b));
-            };
-            auto put1 = [&](uint16_t a, uint8_t v) {
-                g_uf1_dev->send(uf1::buildScreen(a, std::span<const uint8_t>(&v, 1)));
-            };
-            if (step >= 19 && !sProbeRelayout) {
-                // Erst der Ebenenwechsel (naechster Durchlauf), dann die Werte.
-                sProbeRelayout = true;
-                sStep = -1;        // Flanke im naechsten Durchlauf nochmal
-                hlProbeEdge = false;
-            } else {
-            const bool afterRelayout = sProbeRelayout;
-            sProbeRelayout = false;
-            if (!afterRelayout) {
-                put4(0x0113, 0x01); put4(0x0121, 0x00); put4(0x0118, 0x00);
-                put1(0x0110, 0x0f); put1(0x011a, 0x02);
-            }
-            auto put4v = [&](uint16_t a, uint8_t v0, uint8_t v1, uint8_t v2, uint8_t v3) {
-                const uint8_t b[4] = { v0, v1, v2, v3 };
-                g_uf1_dev->send(uf1::buildScreen(a, b));
-            };
-            switch (step) {
-                case 20: put4v(0x0118, 0x01, 0x00, 0x00, 0x00); break;
-                case 21: put4v(0x0118, 0x00, 0x01, 0x00, 0x00); break;
-                case 22: put4(0x0118, 0x01); break;
-                case 23: put4(0x0118, 0x02); break;
-                case 24: put4(0x0118, 0xFF); break;
-                default: break;
-            }
-            switch (step) {
-                case 2:  put4(0x0113, 0x00); break;
-                case 3:  put4(0x0113, 0x02); break;
-                case 4:  put4(0x0113, 0x04); break;
-                case 5:  put4(0x0113, 0xFF); break;
-                case 6:  put4(0x0121, 0x01); break;
-                case 7:  put4(0x0121, 0xFF); break;
-                case 8:  put4(0x0118, 0x01); break;
-                case 9:  put4(0x0118, 0xFF); break;
-                case 10: put1(0x0110, 0x07); break;
-                case 11: put1(0x0110, 0x00); break;
-                case 12: put1(0x011a, 0x03); break;
-                case 13: put1(0x011a, 0x00); break;
-                default: break;   // 1 = Grundlinie, 14/15 im Emitter
-            }
-            }
-        }
-    }
-
     // ⛔ DAS MODE-MENUE SCHREIBT SEINE NAMEN DIREKT, am Emitter vorbei. Wer die
     // Keys besitzt, schreibt beim Loslassen seine eigenen zurueck, sonst bleiben
     // PLUGIN / DAW / METER / SENDS stehen (Frank 22.09., in STRIP gesehen).
@@ -34671,9 +34588,9 @@ static void uf1PaintRme_()
             if (p->kind == rmes::Kind::List) c.label += " " + rmes::format(*p, row, v);
             c.on = (p->kind == rmes::Kind::Toggle) ? (v >= 0.5) : true;
         }
-        if (!menuNow) uf1EmitSoftKeyRow_(cells, big || menuClosed || hlProbeEdge, false, false);
+        if (!menuNow) uf1EmitSoftKeyRow_(cells, big || menuClosed, false, false);
     } else {
-        uf1PaintSideCarSoftKeys_(big || hlProbeEdge);
+        uf1PaintSideCarSoftKeys_(big);
     }
 
     // ── SOLO, CUT, SEL: der Fader-Kanal in TotalMix ─────────────────────────
@@ -34903,6 +34820,13 @@ static bool uf1HandOverScreen_()
         g_uf1Gen.fetch_add(1, std::memory_order_relaxed);
         if (now == Uf1ScreenOwner::None && wasOwned)
             g_uf1PlaneLost.store(true, std::memory_order_relaxed);
+        // Die Layout-1-Freigabe der Soft-Key-Hervorhebung (uf1PaintRme_) auf den
+        // Init-Wert, bevor der naechste Bewohner malt. Wer Layout 1 braucht,
+        // setzt sie nach seinem eigenen Ebenenwechsel wieder.
+        if (g_uf1_dev) {
+            const uint8_t z[4] = { 0x00, 0x00, 0x00, 0x00 };
+            g_uf1_dev->send(uf1::buildScreen(0x0118, z));
+        }
     }
     switch (now) {
         case Uf1ScreenOwner::None:
