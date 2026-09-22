@@ -93,7 +93,15 @@ double norm(const Param& p, Row r, double v);
 using Writes = std::vector<std::pair<std::string, float>>;
 
 // A pot turned by `detents`: the messages to send (empty = nothing to do).
-Writes nudge(const State& st, Row r, int ch, const Param& p, int detents);
+// `scale` is the surface's knob scale (Fine = 0.25 by default); it shrinks a
+// continuous step and leaves lists, numbers and switches alone.
+Writes nudge(const State& st, Row r, int ch, const Param& p, int detents,
+             double scale = 1.0);
+
+// Lists, plain numbers and switches move one whole entry per DETENT, not per
+// raw encoder count (a UF1 pot sends ~4 counts per click; Frank 22.09.: "für
+// EQ Type ist die Rasterung viel zu fein").
+bool stepsWhole(const Param& p);
 
 // A key pressed: toggle, or the next list entry.
 Writes press(const State& st, Row r, int ch, const Param& p);

@@ -475,6 +475,18 @@ int main()
         check(w.size() == 1 && std::fabs(w[0].second - 2000.0f) < 0.5f,
               "twelve detents are one octave");
         check(sp::nudge(s, Row::Input, 8, *width, 1).empty(), "nothing to nudge where it is absent");
+        put("/input/8/eq/band1gain", 2);
+        w = sp::nudge(s, Row::Input, 8, *sp::find("b1gain"), 1, 0.25);
+        check(w.size() == 1 && std::fabs(w[0].second - 2.125f) < 1e-4f,
+              "Fine quarters a continuous step");
+        put("/input/8/eq/band1type", 0);
+        w = sp::nudge(s, Row::Input, 8, *sp::find("b1type"), 1, 0.25);
+        check(w.size() == 1 && w[0].second == 1.0f, "Fine leaves a list step whole");
+        check(sp::stepsWhole(*sp::find("b1type")) && sp::stepsWhole(*sp::find("crossfeed"))
+              && !sp::stepsWhole(*sp::find("b1gain")), "lists and numbers step per detent");
+        put("/input/30/width", 0.0f);
+        w = sp::nudge(s, Row::Input, 30, *width, -100);
+        check(w.size() == 1 && w[0].second == -1.0f, "width reaches -1 (swapped)");
 
         check(sp::format(*sp::find("b1freq"), Row::Input, 1200) == "1.20 kHz"
               && sp::format(*sp::find("compratio"), Row::Input, 4) == "4.0:1"

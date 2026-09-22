@@ -25718,9 +25718,19 @@ static void uf1RmeSelect_(rmeu::Row r, int ch)
 
 // Pegel eines Kanals um `detents` Rasten verschieben, in dB. Eingaenge und
 // Playbacks schreiben ihren Knoten im aktuellen Submix.
+// Fine im Side-Car: dieselbe Regel wie der REAPER-Pfad des UF1 (Quick-Key 2,
+// reasixty_uf1KnobScale) und dazu SHIFT wie beim UF8 (shiftFineActive_, haengt
+// an "Shift activates Fine"). Frank 22.09.: "Fine mit shift geht nicht?", und
+// "shift auch fuer pegel pots". Keine REAPER-API, laeuft auf dem USB-Thread.
+static double uf1RmeKnobScale_()
+{
+    return reasixty_uf1KnobScale(shiftFineActive_() || g_uf1CsFine.load());
+}
+
 static void uf1RmeNudge_(const reasixty::rme::State& st, rmeu::Row r, int ch,
                          int detents, double stepDb)
 {
+    stepDb *= uf1RmeKnobScale_();
     auto& rm = reasixty::rme::manager();
     const int sub = rmeu::effectiveSubmix(st, g_rmeSubmix.load());
     if (r != rmeu::Row::Output && sub < 0) return;
@@ -25773,8 +25783,23 @@ static bool uf1RmeEncoder_(uint8_t id, int delta)
         const auto r   = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
         const int  sel = uf1RmeSelected_(st, r);
         const int  pg  = sel >= 0 ? uf1RmeStripPage_(st, r, sel, cfg) : -1;
-        if (const rmes::Param* p = uf1RmeStripParam_(cfg, pg, false, id - uf1::enc::kVpot1))
-            uf1RmeSendAll_(rmes::nudge(st, r, sel, *p, delta));
+        const int pot = id - uf1::enc::kVpot1;
+        const rmes::Param* p = uf1RmeStripParam_(cfg, pg, false, pot);
+        if (!p) return true;
+        if (rmes::stepsWhole(*p)) {
+            // Ein Eintrag pro Rastung: die Zaehler sammeln wie der Kanal-Encoder
+            // (kChannelEncoderScale), Richtungswechsel verwirft den Rest.
+            static double sAcc[4] = { 0, 0, 0, 0 };
+            double& a = sAcc[pot];
+            if ((delta > 0 && a < 0.0) || (delta < 0 && a > 0.0)) a = 0.0;
+            a += delta / kChannelEncoderScale;
+            int steps = 0;
+            if (a >=  1.0) { steps = static_cast<int>(a); a -= steps; }
+            if (a <= -1.0) { steps = static_cast<int>(a); a -= steps; }
+            if (steps != 0) uf1RmeSendAll_(rmes::nudge(st, r, sel, *p, steps));
+            return true;
+        }
+        uf1RmeSendAll_(rmes::nudge(st, r, sel, *p, delta, uf1RmeKnobScale_()));
         return true;
     }
     if (id >= uf1::enc::kVpot1 && id <= uf1::enc::kVpot4) {
@@ -25836,7 +25861,7 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
     // Schalter der Seite, und < > blaettern die Seiten statt der Baenke.
     if (uf1RmeActive_() && g_rmeStrip.load()
         && ((id >= uf1::btn::kDisplaySoft1 && id <= uf1::btn::kDisplaySoft4)
-            || id == uf1::btn::kBankLeft || id == uf1::btn::kBankRight)) {
+            || id == uf1::btn::kArrowLeft || id == uf1::btn::kArrowRight)) {
         if (!ev.pressed || g_uf1ModeMenu.load()) return true;
         auto& rm = reasixty::rme::manager();
         const reasixty::rme::Config cfg = rm.config();
@@ -25846,10 +25871,10 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
         if (sel < 0) return true;
         const int  pg  = uf1RmeStripPage_(st, r, sel, cfg);
         if (pg < 0) return true;
-        if (id == uf1::btn::kBankLeft || id == uf1::btn::kBankRight) {
+        if (id == uf1::btn::kArrowLeft || id == uf1::btn::kArrowRight) {
             const auto pages = rmes::availablePages(st, r, sel, cfg.stripPages);
             const int at  = static_cast<int>(std::find(pages.begin(), pages.end(), pg) - pages.begin());
-            const int dir = (id == uf1::btn::kBankRight) ? 1 : -1;
+            const int dir = (id == uf1::btn::kArrowRight) ? 1 : -1;
             // Kein Umlauf: die Liste hat Enden, wie die Reihenliste.
             const int to  = std::clamp(at + dir, 0, static_cast<int>(pages.size()) - 1);
             g_rmeStripPage.store(pages[static_cast<size_t>(to)]);
@@ -25865,11 +25890,14 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
                             static_cast<int>(id - uf1::btn::kDisplaySoft1), ev.pressed);
         return true;
     }
-    if (id == uf1::btn::kBankLeft || id == uf1::btn::kBankRight) {
+    // ⇨ DIE NORMALEN PFEILE < > BLAETTERN, wie die Soft-Key-Baenke in der DAW-
+    // Ansicht, nicht Bank < > (Frank 22.09.). Kein Umlauf: die Lampe sagt, ob es
+    // in diese Richtung noch weitergeht, und ein Umlauf machte sie sinnlos.
+    if (id == uf1::btn::kArrowLeft || id == uf1::btn::kArrowRight) {
         if (ev.pressed) {
             const int nb  = std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set));
-            const int dir = (id == uf1::btn::kBankRight) ? 1 : -1;
-            g_sideCarBank[set].store((g_sideCarBank[set].load() % nb + dir + nb) % nb);
+            const int dir = (id == uf1::btn::kArrowRight) ? 1 : -1;
+            g_sideCarBank[set].store(std::clamp(g_sideCarBank[set].load() + dir, 0, nb - 1));
         }
         return true;
     }
@@ -25906,8 +25934,18 @@ static bool uf1RmeButton_(const uf1::InputEvent& ev)
         const rmeu::Target t = rmeu::resolveTarget(st, slot.target);
         if (!t.visible) return true;
         if (slot.push == "submix") {
-            // Nur Ausgaenge sind ein Submix. Der Fader bleibt, wo er ist.
-            if (t.row == rmeu::Row::Output) g_rmeSubmix.store(t.ch);
+            // Nur Ausgaenge sind ein Submix. Liegt ein Eingang oder Playback auf
+            // dem Fader, bleibt er dort und schreibt ab jetzt in diesen Ausgang.
+            // ⇨ LIEGT EIN AUSGANG AUF DEM FADER, GEHT DER FADER MIT (Frank 22.09.,
+            // Punkt 7): sonst zeigte der Fader Ausgang A und der Submix waere B,
+            // zwei Auswahlen mit zwei Zeichen (* und >). Jetzt gibt es eine, den
+            // Submix, und sie traegt die weisse Linie.
+            if (t.row == rmeu::Row::Output) {
+                if (g_rmeRow.load() == static_cast<int>(rmeu::Row::Output))
+                    uf1RmeSelect_(t.row, t.ch);
+                else
+                    g_rmeSubmix.store(t.ch);
+            }
         } else if (slot.push == "select") {
             uf1RmeSelect_(t.row, t.ch);
         } else if (slot.push == "mute") {
@@ -34102,8 +34140,9 @@ static bool uf1SideCarKeepsLed_(uf8::bindings::ButtonId id)
     using B = uf8::bindings::ButtonId;
     return id == B::Uf1Shift || id == B::Uf1Rwd || id == B::Uf1Ffw || id == B::Uf1Stop
         || id == B::Uf1Play  || id == B::Uf1Rec || id == B::Uf1Cycle || id == B::Uf1Click
-        // 5-8 = die zwei V-Pot-Baenke im RME-Side-Car (uf1RmeButton_).
-        || id == B::Uf1FiveToEight;
+        // 5-8 = die zwei V-Pot-Baenke im RME-Side-Car (uf1RmeButton_),
+        // < > = Baenke bzw. STRIP-Seiten (uf1SideCarSoftKeys_).
+        || id == B::Uf1FiveToEight || id == B::Uf1ArrowLeft || id == B::Uf1ArrowRight;
 }
 static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
 {
@@ -34251,6 +34290,12 @@ static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
             // die Lampe sagt, was die Taste hier tut.
             if (sideCar && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1FiveToEight) {
                 on = five8On; show = true;
+            }
+            if (sideCar && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1ArrowLeft) {
+                on = leftOn; show = true;
+            }
+            if (sideCar && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1ArrowRight) {
+                on = rightOn; show = true;
             }
             const uint32_t scaled =
                 (show && keep) ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
@@ -34459,22 +34504,18 @@ static void uf1PaintRme_()
                 uf1VpotCellL1_(vr, i, t.assigned ? "hidden" : "--", "", 0.0, true);
                 continue;
             }
-            const rme::Channel* c = rmeu::channelOf(st, t.row, t.ch);
             bool k = false;
             const double d = rmeu::levelDb(st, t.row, t.ch, sub, k);
-            std::string label = rmeu::displayName(st, t.row, t.ch);
-            (void)c;
-            // Der Pot, dessen Ziel gerade auf dem Fader liegt, traegt den Stern,
-            // dieselbe Markierung wie ein gepinnter Kanal.
-            if (t.row == row && t.ch == sel) label = "*" + label;
-            // ⇨ UND DER PFEIL AUF DEM SUBMIX. Steht ein Eingang oder Playback auf
-            // dem Fader, schreibt er in den zuletzt gewaehlten Ausgang; der Pot,
-            // der diesen Ausgang zeigt, sagt es (Frank 21.09.). Traegt der Pot
-            // schon den Stern, ist er selbst der Fader-Kanal und braucht keinen.
-            // Seit der Druck den Submix waehlt, zeigt der Pfeil ihn immer, auch
-            // wenn gerade ein Ausgang auf dem Fader liegt.
-            else if (t.row == rmeu::Row::Output && t.ch == sub) label = ">" + label;
-            bars4[static_cast<size_t>(i)] = palOf(t.row, t.ch);
+            const std::string label = rmeu::displayName(st, t.row, t.ch);
+            // ⇨ EINE AUSWAHL, EINE MARKE (Frank 22.09., Punkt 7). Vorher trug der
+            // Pot auf dem Fader einen Stern und der Submix einen Pfeil; seit ein
+            // Pot-Druck bei einem Ausgang auf dem Fader den Fader mitnimmt, sind
+            // beide dasselbe. Die Marke ist der Farbbalken ueber dem Pot: weiss
+            // ueber dem Submix, dunkel ueber den anderen. Keine Zeichen im Namen.
+            // 0x01 = weiss in der UF1-Palette (colourMap-Vorgabe fuer TotalMix
+            // "weiss", am Geraet am 22.09. weiss gesehen).
+            bars4[static_cast<size_t>(i)] =
+                (t.row == rmeu::Row::Output && t.ch == sub) ? 0x01 : 0x00;
             uf1VpotCellL1_(vr, i, label, k ? uf1RmeDbText_(d) + " dB" : std::string(),
                            k ? rme::dbToFaderlin(d) : 0.0, /*empty*/ !k);
         }
@@ -34510,22 +34551,32 @@ static void uf1PaintRme_()
 
     // Soft-Keys: in STRIP die Schalter der Seite, sonst die Side-Car-Bank.
     // Beide gehen durch denselben Emitter, dessen Cache den Wechsel traegt.
+    // ⛔ DAS MODE-MENUE SCHREIBT SEINE NAMEN DIREKT, am Emitter vorbei. Wer die
+    // Keys besitzt, schreibt beim Loslassen seine eigenen zurueck, sonst bleiben
+    // PLUGIN / DAW / METER / SENDS stehen (Frank 22.09., in STRIP gesehen).
+    static bool sMenuWas = false;
+    const bool menuNow = g_uf1ModeMenu.load();
+    const bool menuClosed = sMenuWas && !menuNow;
+    sMenuWas = menuNow;
     if (strip) {
         std::array<Uf1SkCell, 4> cells{};
         for (int i = 0; i < 4; ++i) {
+            // ⛔ JEDER KEY BEKOMMT EINE BESCHRIFTUNG, AUCH EINE LEERE. Der Emitter
+            // schreibt nur Zellen mit haveLabel; ein leerer STRIP-Key liess
+            // stehen, was die Uebersicht dort hatte (Frank 22.09.).
+            Uf1SkCell& c = cells[static_cast<size_t>(i)];
+            c.haveLabel = true;
             const rmes::Param* p = uf1RmeStripParam_(cfg, page, true, i);
             double v = 0.0;
             if (!p || !rmes::available(st, row, sel, *p) || !rmes::value(st, row, sel, *p, v))
                 continue;
-            Uf1SkCell& c = cells[static_cast<size_t>(i)];
-            c.haveLabel = true;
             // Ein Listen-Key traegt seinen Wert im Namen ("Type 1 Bell"), ein
             // Schalter zeigt ihn an der Lampe.
             c.label = rmes::label(st, row, sel, *p);
             if (p->kind == rmes::Kind::List) c.label += " " + rmes::format(*p, row, v);
             c.on = (p->kind == rmes::Kind::Toggle) ? (v >= 0.5) : true;
         }
-        if (!g_uf1ModeMenu.load()) uf1EmitSoftKeyRow_(cells, big, false, false);
+        if (!menuNow) uf1EmitSoftKeyRow_(cells, big || menuClosed, false, false);
     } else {
         uf1PaintSideCarSoftKeys_(big);
     }
@@ -34558,7 +34609,23 @@ static void uf1PaintRme_()
     }
     // Die uebrigen Tasten: Transport und SHIFT wie REAPER, der Rest dunkel.
     // 5-8 leuchtet auf Bank 2, ueber dieselbe Verfuegbarkeit wie die Spurgruppe.
-    uf1PaintButtonLeds_(force, Uf1BtnAvail{ false, false, false, false,
+    // < > hell, solange es in diese Richtung weitergeht: in STRIP die Seiten,
+    // sonst die Side-Car-Baenke.
+    bool arrowL = false, arrowR = false;
+    if (strip) {
+        const auto pages = rmes::availablePages(st, row, sel, cfg.stripPages);
+        const auto it = std::find(pages.begin(), pages.end(), page);
+        if (it != pages.end()) {
+            arrowL = it != pages.begin();
+            arrowR = (it + 1) != pages.end();
+        }
+    } else {
+        const int set = uf8::bindings::kUf1SideCarSetRme;
+        const int nb  = std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set));
+        arrowL = g_sideCarBank[set].load() > 0;
+        arrowR = g_sideCarBank[set].load() < nb - 1;
+    }
+    uf1PaintButtonLeds_(force, Uf1BtnAvail{ arrowL, arrowR, false, false,
                                             !strip && g_rmeVpotBank.load() == 1 },
                         /*sideCar*/ true);
 
@@ -34591,7 +34658,14 @@ static void uf1PaintRme_()
     // baut, und der laeuft im Side-Car nicht (Frank 21.09.: Kopfzeile zeigte
     // REAPER, der Pegel kam von der Spur).
     {
-        const bool listOpen = g_uf1ModeMenu.load();
+        // ⚠ DIE REIHENLISTE NUR IN LAYOUT 3. Ihre Zustandsbytes (0110/011a/011e,
+        // dazu 011d im Pacer) sind dort gemessen; in Layout 1 flackerte beim
+        // Halten von MODE die oberste Reihe (Frank 22.09.), und das ist der
+        // einzige Unterschied zu Layout 3, den wir dabei schicken. VERMUTUNG,
+        // nicht gemessen. Layout 1 hat ohnehin nur CELL1/CELL2, drei Zeilen passen
+        // nicht: dort steht die gewaehlte Reihe in CELL1.
+        const bool menuHeld = g_uf1ModeMenu.load();
+        const bool listOpen = menuHeld && wantLayout == 0x03;
         // Die drei Zustandsbytes der Liste, einmal pro Flanke, wie im Kanalmaler.
         static bool sListOpen = false;
         if (big || listOpen != sListOpen) {
@@ -34617,6 +34691,8 @@ static void uf1PaintRme_()
             int vis[3] = { 0, 1, 2 };
             uf1FillModeList_(hdr, vis, 3, 3, static_cast<int>(row),
                              [](int r) { return rmeu::rowName(static_cast<rmeu::Row>(r)); });
+        } else if (menuHeld) {
+            putCell(0, rmeu::rowName(row));
         } else if (strip) {
             // STRIP: die Seite in CELL1, "3/8" in CELL2 und in der Zelle, die
             // Layout 3 unter SOFT KEYS zeigt. Layout 1 zeigt nur CELL1 und CELL2.
@@ -34643,7 +34719,7 @@ static void uf1PaintRme_()
         }
         // Uebersicht: die Side-Car-Bank auch in CELL2, denn Layout 1 zeigt die
         // Zelle unter SOFT KEYS (3) nicht.
-        if (!listOpen && !strip) {
+        if (!menuHeld && !strip) {
             const int set = uf8::bindings::kUf1SideCarSetRme;
             putCell(1, std::to_string(g_sideCarBank[set].load() + 1) + "/"
                      + std::to_string(std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set))));

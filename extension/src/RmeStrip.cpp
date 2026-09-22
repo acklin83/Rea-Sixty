@@ -22,7 +22,8 @@ const std::vector<Param>& catalogue()
           Need::Any, false, false,
           { "+4 dBu", "LoGain" },
           { "-10 dBV", "+4 dBu", "HiGain", "+24 dBu" } },
-        { "width",       "width",              "Width",    Kind::Width,  0.0,  1.0, 0.02,
+        // -1 = swapped, 0 = mono, +1 = stereo (UFX+ manual; Frank 22.09.).
+        { "width",       "width",              "Width",    Kind::Width, -1.0,  1.0, 0.02,
           Need::Stereo },
         { "48v",         "48v",                "48V",      Kind::Toggle, 0, 1, 1 },
         { "pad",         "pad",                "Pad",      Kind::Toggle, 0, 1, 1 },
@@ -271,20 +272,27 @@ double norm(const Param& p, Row r, double v)
     return p.hi > p.lo ? std::clamp((v - p.lo) / (p.hi - p.lo), 0.0, 1.0) : 0.0;
 }
 
-Writes nudge(const State& st, Row r, int ch, const Param& p, int detents)
+bool stepsWhole(const Param& p)
+{
+    return p.kind == Kind::List || p.kind == Kind::Int || p.kind == Kind::Toggle;
+}
+
+Writes nudge(const State& st, Row r, int ch, const Param& p, int detents, double scale)
 {
     if (detents == 0 || !available(st, r, ch, p) || p.kind == Kind::Toggle) return {};
     double v = 0.0;
     if (!value(st, r, ch, p, v)) return {};
+    // Fine scales a continuous step; a list entry is a list entry.
+    const double step = stepsWhole(p) ? p.step : p.step * (scale > 0.0 ? scale : 1.0);
     double nv;
     if (p.kind == Kind::Hz)
-        nv = std::max(v, p.lo) * std::pow(2.0, detents / 12.0);   // 1/12 octave
+        nv = std::max(v, p.lo) * std::pow(2.0, detents * (step / p.step) / 12.0);  // 1/12 oct
     else
-        nv = v + detents * p.step;
+        nv = v + detents * step;
     // Snap linear values onto the step grid, so a value TotalMix reported off
     // the grid lands on it with the first detent.
-    if (p.kind != Kind::Hz && p.step > 0.0)
-        nv = std::round(nv / p.step) * p.step;
+    if (p.kind != Kind::Hz && step > 0.0)
+        nv = std::round(nv / step) * step;
     nv = clampTo(p, r, nv);
     if (nv == v) return {};
     return writesFor(st, r, ch, p, nv);
