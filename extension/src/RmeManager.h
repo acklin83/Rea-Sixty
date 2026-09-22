@@ -58,6 +58,20 @@ struct VpotSlot {
     std::string push   = "submix";
 };
 
+// One page of the channel view (STRIP): four pots and four soft keys, each a
+// parameter id from RmeStrip.cpp's catalogue, "" for nothing. `rows` limits the
+// page to input / playback / output strips ("in,pb,out"; empty = all). Which of
+// these a channel actually SHOWS is TotalMix' answer: a page appears only when
+// the channel reported at least one of its parameters (RmeStrip.h).
+struct StripPage {
+    std::string name;
+    std::string rows;
+    std::string pots[4];
+    std::string keys[4];
+};
+// The factory pages, docs/rme-strip-and-uf8-plan.md 3.2 (Frank 21.09.).
+std::vector<StripPage> defaultStripPages();
+
 struct Config {
     bool        enabled  = false;
     std::string host     = "127.0.0.1";
@@ -83,6 +97,10 @@ struct Config {
     // for the colour bar. Frank assigns these himself; the defaults are only the
     // nearest names in Palette.cpp.
     int         colourMap[9] = { 0x00, 0x01, 0x0C, 0x08, 0x02, 0x04, 0x03, 0x07, 0x0B };
+
+    // The channel view's pages. Edited in rme.json for now (Frank 21.09., "a":
+    // no Settings UI until the layout has proven itself on the device).
+    std::vector<StripPage> stripPages = defaultStripPages();
 
     // Host and ports only. A pot or a colour changing must not drop the link.
     bool sameConnection(const Config& o) const

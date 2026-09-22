@@ -14,8 +14,10 @@
 #include "RmeManager.h"
 #include "RmeOsc.h"
 #include "RmeState.h"
+#include "RmeStrip.h"
 #include "RmeUf1.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include <cstdio>
@@ -391,6 +393,109 @@ int main()
               "solo lands per node, not per strip");
         put("/mix/in/6/10/solo", 0);
         check(!u::soloed(s3, u::Row::Input, 6, 10), "and turns off again");
+    }
+
+    // ── the channel view (RmeStrip), 21.09. ─────────────────────────────────
+    {
+        namespace sp = reasixty::rme::strip;
+        using Row = reasixty::rme::uf1::Row;
+        State s;
+        auto put = [&](const char* addr, float v) {
+            Message m; m.address = addr; m.args.push_back(Arg::fromFloat(v)); ingest(s, m);
+        };
+        auto name = [&](const char* addr, const char* n) {
+            Message m; m.address = addr; m.args.push_back(Arg::fromString(n)); ingest(s, m);
+        };
+        // Input 8 is a mono mic channel, input 30 a stereo pair (31 = right half).
+        name("/input/8/name", "Kick"); put("/input/8/gain", 30); put("/input/8/48v", 1);
+        put("/input/8/phase", 0); put("/input/8/eq/band1gain", 2);
+        put("/input/8/dynamics/compthres", -20);
+        name("/input/30/name", "Keys"); put("/input/30/stereo", 1);
+        put("/input/30/gain", 10); put("/input/30/width", 1); put("/input/30/msproc", 0);
+        put("/input/30/phase", 0); put("/input/31/phase", 1);
+
+        check(s.inputs[8].leaf("gain") && *s.inputs[8].leaf("gain") == 30.0,
+              "every numeric leaf lands in the channel");
+        check(!s.inputs[8].leaf("name"), "a name is not a leaf");
+        State copy = s;
+        put("/input/8/gain", 31);
+        check(*copy.inputs[8].leaf("gain") == 30.0 && *s.inputs[8].leaf("gain") == 31.0,
+              "a snapshot keeps its values when the live state moves on");
+
+        const sp::Param* width  = sp::find("width");
+        const sp::Param* phaseR = sp::find("phaseR");
+        const sp::Param* gain   = sp::find("gain");
+        check(width && phaseR && gain && !sp::find("nope") && !sp::find(""),
+              "catalogue finds known ids, and only those");
+        check(!sp::available(s, Row::Input, 8, *width) && sp::available(s, Row::Input, 30, *width),
+              "width only on a stereo strip");
+        check(!sp::available(s, Row::Input, 8, *phaseR) && sp::available(s, Row::Input, 30, *phaseR),
+              "Phase R only on a stereo strip");
+        double v = 0;
+        check(sp::value(s, Row::Input, 30, *phaseR, v) && v == 1.0,
+              "Phase R reads the right half, index + 1");
+        check(sp::label(s, Row::Input, 8, *sp::find("phase")) == "Phase"
+              && sp::label(s, Row::Input, 30, *sp::find("phase")) == "Phase L",
+              "a mono strip's phase has no L");
+
+        const auto pages = reasixty::rme::defaultStripPages();
+        const auto mono = sp::availablePages(s, Row::Input, 8, pages);
+        std::vector<std::string> names;
+        for (int i : mono) names.push_back(pages[static_cast<size_t>(i)].name);
+        check(names == std::vector<std::string>{ "Input", "EQ 1", "Dyn" },
+              "pages follow what TotalMix reported: Input, EQ 1, Dyn");
+        const auto st2 = sp::availablePages(s, Row::Input, 30, pages);
+        check(std::find(st2.begin(), st2.end(), 1) != st2.end(),
+              "a stereo strip with M/S gets Input 2");
+        check(sp::pageShowsGraph(pages[3]) && sp::pageShowsGraph(pages[2])
+              && !sp::pageShowsGraph(pages[0]) && !sp::pageShowsGraph(pages[6]),
+              "EQ and Low Cut pages draw the graph, the rest do not");
+        check(!sp::pageAllowsRow(pages[0], Row::Output) && sp::pageAllowsRow(pages[0], Row::Playback)
+              && sp::pageAllowsRow(pages[9], Row::Output) && !sp::pageAllowsRow(pages[9], Row::Input),
+              "Input pages are in/pb, the Output page is out");
+
+        auto w = sp::nudge(s, Row::Input, 8, *gain, 3);
+        check(w.size() == 1 && w[0].first == "/input/8/gain" && w[0].second == 34.0f,
+              "gain moves in whole dB on a mono strip");
+        w = sp::nudge(s, Row::Input, 30, *gain, -2);
+        check(w.size() == 2 && w[0].first == "/input/30/gain" && w[1].first == "/input/31/gain"
+              && w[1].second == 8.0f, "gain goes to both halves of a stereo pair");
+        w = sp::nudge(s, Row::Input, 8, *gain, -100);
+        check(w.size() == 1 && w[0].second == 0.0f, "clamped at the bottom");
+        w = sp::press(s, Row::Input, 30, *phaseR);
+        check(w.size() == 1 && w[0].first == "/input/31/phase" && w[0].second == 0.0f,
+              "Phase R toggles the right half only");
+        w = sp::press(s, Row::Input, 8, *sp::find("48v"));
+        check(w.size() == 1 && w[0].second == 0.0f, "a key toggles");
+        put("/input/8/eq/band1type", 3);
+        w = sp::press(s, Row::Input, 8, *sp::find("b1type"));
+        check(w.size() == 1 && w[0].second == 0.0f, "a list key wraps round");
+        put("/input/8/eq/band1freq", 1000);
+        w = sp::nudge(s, Row::Input, 8, *sp::find("b1freq"), 12);
+        check(w.size() == 1 && std::fabs(w[0].second - 2000.0f) < 0.5f,
+              "twelve detents are one octave");
+        check(sp::nudge(s, Row::Input, 8, *width, 1).empty(), "nothing to nudge where it is absent");
+
+        check(sp::format(*sp::find("b1freq"), Row::Input, 1200) == "1.20 kHz"
+              && sp::format(*sp::find("compratio"), Row::Input, 4) == "4.0:1"
+              && sp::format(*sp::find("balpan"), Row::Output, -0.5) == "L50"
+              && sp::format(*sp::find("reflevel"), Row::Output, 1) == "+4 dBu"
+              && sp::format(*sp::find("reflevel"), Row::Input, 1) == "LoGain",
+              "values read as TotalMix shows them");
+        check(sp::sendChanAddress(Row::Playback, 4) == "/sendchan/playback/4", "sendchan");
+
+        // rme.json carries the pages, and a v3 file without them keeps the factory set.
+        Config c;
+        c.stripPages[0].pots[3] = "fxsend";
+        c.stripPages.push_back({ "Mine", "out", { "delay", "", "", "" }, { "", "", "", "" } });
+        Config r;
+        check(configFromJson(configToJson(c), r) && r.stripPages.size() == c.stripPages.size()
+              && r.stripPages[0].pots[3] == "fxsend" && r.stripPages.back().name == "Mine"
+              && r.stripPages.back().rows == "out" && r.stripPages.back().pots[1].empty(),
+              "strip pages survive the round trip, empty slots included");
+        Config v3;
+        configFromJson("{\"version\": 3}", v3);
+        check(v3.stripPages.size() == pages.size(), "a file without pages keeps the factory set");
     }
 
     if (g_fail == 0) std::printf("test_rme_osc: all checks passed\n");

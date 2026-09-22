@@ -22,6 +22,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 
 #include "RmeOsc.h"
@@ -64,6 +65,33 @@ struct Channel {
     // one's index + 1 is the NEXT channel (inputs 30 and 31 on Frank's rig).
     bool        stereo = false;
     ChannelEq   eq;
+    // ⇨ EVERY NUMERIC LEAF THE STRIP HAS REPORTED, by its address below the
+    // channel ("gain", "48v", "dynamics/compthres", "eq/band1gain" ...). The
+    // channel view builds its pages from this: WHICH parameters a channel has
+    // is TotalMix' answer, not a table per device (a MADI channel has a pad
+    // when an RME preamp sits in front of it). The typed fields above stay:
+    // they are what the fader, the graph and the role check read.
+    // Right halves of stereo pairs (index + 1) keep their own map, which is
+    // where Phase R and the right-hand gain live.
+    //
+    // ⛔ SHARED, NOT COPIED. Manager::snapshot() copies the whole State on every
+    // paint tick, and all leaves together are ~3600 entries. So the map sits
+    // behind a shared_ptr: a snapshot copies pointers, and ingest() clones only
+    // the ONE channel it writes to, and only while a snapshot still holds it.
+    using LeafMap = std::map<std::string, double>;
+    std::shared_ptr<LeafMap> leaves;
+    const double* leaf(const std::string& k) const
+    {
+        if (!leaves) return nullptr;
+        const auto it = leaves->find(k);
+        return it == leaves->end() ? nullptr : &it->second;
+    }
+    void setLeaf(const std::string& k, double v)
+    {
+        if (!leaves)                      leaves = std::make_shared<LeafMap>();
+        else if (leaves.use_count() > 1)  leaves = std::make_shared<LeafMap>(*leaves);
+        (*leaves)[k] = v;
+    }
 };
 
 // A snapshot slot's state as TotalMix reports it back on /snapshot/load/<n>.

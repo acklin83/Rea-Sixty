@@ -170,6 +170,9 @@ bool ingest(State& st, const Message& m)
     std::map<int, Channel>* mp = mapFor(st, section);
     if (!mp) return false;
     Channel& ch = (*mp)[idx];
+    // Every numeric leaf, whatever else happens to it below.
+    if (!m.args.empty() && m.args[0].type != Arg::Type::String)
+        ch.setLeaf(leaf, m.args[0].number());
     // ⛔ "IT SENT SOMETHING" IS NOT "IT IS A STRIP". Several parameters are
     // addressed on the RIGHT half of a stereo pair by index + 1 (the L/R column
     // of the table): phase, delay, gain, every room-EQ band. So a first pass
@@ -214,9 +217,8 @@ bool ingest(State& st, const Message& m)
         if (w == "slope")  { e.lcSlope = static_cast<int>(num(m)); return true; }
         return false;
     }
-    // Everything else on a strip is known-but-unused today. The channel is
-    // still marked seen, which is what the role check reads.
-    return false;
+    // Everything else lands in `leaves` above and nowhere else.
+    return true;
 }
 
 }  // namespace reasixty::rme

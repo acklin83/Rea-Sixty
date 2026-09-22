@@ -40,6 +40,35 @@ namespace reasixty::rme {
 
 // ── rme.json ─────────────────────────────────────────────────────────────────
 
+std::vector<StripPage> defaultStripPages()
+{
+    // Parameter ids: RmeStrip.cpp. Output page pot 4 = Ref Level, because the
+    // Input page is inputs and playbacks only and an output's ref level would
+    // otherwise have no place at all.
+    return {
+        { "Input",     "in,pb", { "gain", "fxsend", "reflevel", "width" },
+                                { "48v", "pad", "phase", "phaseR" } },
+        { "Input 2",   "in,pb", { "", "", "", "" },
+                                { "stereo", "msproc", "instrument", "autoset" } },
+        { "Low Cut",   "",      { "lc_freq", "lc_slope", "", "" },
+                                { "lc_on", "", "", "" } },
+        { "EQ 1",      "",      { "b1gain", "b1freq", "b1q", "b1type" },
+                                { "eq_on", "", "", "" } },
+        { "EQ 2",      "",      { "b2gain", "b2freq", "b2q", "" },
+                                { "eq_on", "", "", "" } },
+        { "EQ 3",      "",      { "b3gain", "b3freq", "b3q", "b3type" },
+                                { "eq_on", "", "", "" } },
+        { "Dyn",       "",      { "compthres", "compratio", "attack", "release" },
+                                { "dyn_on", "", "", "" } },
+        { "Expander",  "",      { "expthres", "expratio", "dyngain", "" },
+                                { "dyn_on", "", "", "" } },
+        { "AutoLevel", "",      { "maxgain", "headroom", "risetime", "" },
+                                { "al_on", "", "", "" } },
+        { "Output",    "out",   { "balpan", "crossfeed", "delay", "reflevel" },
+                                { "loopback", "talkbacksel", "phase", "phaseR" } },
+    };
+}
+
 std::string configToJson(const Config& c)
 {
     // The host is the only free text. It is an address, so quotes and
@@ -58,7 +87,7 @@ std::string configToJson(const Config& c)
     char buf[512];
     snprintf(buf, sizeof(buf),
         "{\n"
-        "  \"version\": 3,\n"
+        "  \"version\": 4,\n"
         "  \"enabled\": %s,\n"
         "  \"connection\": { \"host\": \"%s\", \"send\": %d, \"receive\": %d },\n",
         c.enabled ? "true" : "false", host.c_str(), c.sendPort, c.recvPort);
@@ -82,7 +111,22 @@ std::string configToJson(const Config& c)
         snprintf(buf, sizeof(buf), "%s%d", i ? ", " : "", c.colourMap[i]);
         j += buf;
     }
-    j += "]\n}\n";
+    j += "],\n";
+    // The channel view, one page per line so it stays editable by hand.
+    j += "  \"strip\": [\n";
+    auto quad = [&](const std::string (&a)[4]) {
+        std::string o = "[";
+        for (int i = 0; i < 4; ++i)
+            o += std::string(i ? ", " : "") + "\"" + clean(a[i]) + "\"";
+        return o + "]";
+    };
+    for (std::size_t i = 0; i < c.stripPages.size(); ++i) {
+        const StripPage& pg = c.stripPages[i];
+        j += "    { \"name\": \"" + clean(pg.name) + "\", \"rows\": \"" + clean(pg.rows)
+           + "\", \"pots\": " + quad(pg.pots) + ", \"keys\": " + quad(pg.keys) + " }"
+           + (i + 1 < c.stripPages.size() ? ",\n" : "\n");
+    }
+    j += "  ]\n}\n";
     return j;
 }
 
@@ -129,6 +173,29 @@ bool configFromJson(const std::string& json, Config& out)
         for (int i = 0; i < 9; ++i)
             if (const wdl_json_element* e = arr->enum_item(i))
                 if (const char* v = e->get_string_value(true)) c.colourMap[i] = std::atoi(v) & 0x0F;
+    // A file without "strip" (v2 and older) keeps the factory pages.
+    if (const wdl_json_element* arr = root->get_item_by_name("strip"); arr && arr->is_array()) {
+        std::vector<StripPage> pages;
+        for (int i = 0; ; ++i) {
+            const wdl_json_element* e = arr->enum_item(i);
+            if (!e) break;
+            if (!e->is_object()) continue;
+            StripPage pg;
+            if (const char* v = e->get_string_by_name("name")) pg.name = v;
+            if (const char* v = e->get_string_by_name("rows")) pg.rows = v;
+            auto quad = [&](const char* key, std::string (&out)[4]) {
+                const wdl_json_element* q = e->get_item_by_name(key);
+                if (!q || !q->is_array()) return;
+                for (int k = 0; k < 4; ++k)
+                    if (const wdl_json_element* s = q->enum_item(k))
+                        if (const char* v = s->get_string_value()) out[k] = v;
+            };
+            quad("pots", pg.pots);
+            quad("keys", pg.keys);
+            pages.push_back(std::move(pg));
+        }
+        if (!pages.empty()) c.stripPages = std::move(pages);
+    }
     if (!(c.jogStepDb > 0.0 && c.jogStepDb <= 12.0))   c.jogStepDb  = Config{}.jogStepDb;
     if (!(c.vpotStepDb > 0.0 && c.vpotStepDb <= 12.0)) c.vpotStepDb = Config{}.vpotStepDb;
     if (c.sendPort <= 0 || c.sendPort > 65535) c.sendPort = Config{}.sendPort;
