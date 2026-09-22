@@ -506,9 +506,13 @@ int main()
         put("/input/30/width", 0.3f);
         w = sp::resetWrites(s, Row::Input, 30, *width);
         check(w.size() == 1 && w[0].second == 1.0f, "width back to stereo");
-        check(sp::resetWrites(s, Row::Input, 8, *sp::find("b1freq")).empty()
-              && sp::resetWrites(s, Row::Input, 8, *sp::find("b1type")).empty(),
-              "no belegt default for a frequency or a list: nothing");
+        put("/input/8/eq/band1freq", 250); put("/input/8/eq/band1type", 0);
+        w = sp::resetWrites(s, Row::Input, 8, *sp::find("b1freq"));
+        check(w.size() == 1 && w[0].second == 80.0f, "band 1 back to 80 Hz");
+        w = sp::resetWrites(s, Row::Input, 8, *sp::find("b1type"));
+        check(w.size() == 1 && w[0].second == 1.0f, "band 1 back to Shelf");
+        w = sp::resetWrites(s, Row::Input, 8, *sp::find("compthres"));
+        check(w.size() == 1 && w[0].second == -30.0f, "Frank's threshold wins over 0 dB");
 
         // rme.json carries the pages, and a v3 file without them keeps the factory set.
         Config c;

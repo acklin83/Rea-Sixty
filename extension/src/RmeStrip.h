@@ -103,11 +103,12 @@ Writes nudge(const State& st, Row r, int ch, const Param& p, int detents,
 // EQ Type ist die Rasterung viel zu fein").
 bool stepsWhole(const Param& p);
 
-// ⇨ BACK TO NEUTRAL on a V-Pot push (Frank 22.09.: "push auf V-Pot auf den
-// Standard-Wert, 0 dB bei Gains etc."). RME's sheet and the manual give no
-// defaults, so only the values that are neutral by definition: 0 dB for any dB
-// parameter whose range contains 0, Width 1 (stereo), Pan centre. Everything
-// else (frequencies, Q, ratio, times, lists) has no belegt default: empty.
+// ⇨ BACK TO THE DEFAULT on a V-Pot push (Frank 22.09.: "push auf V-Pot auf den
+// Standard-Wert, 0 dB bei Gains etc."). Frank's table first (EQ 80 Hz Shelf /
+// 1 kHz Bell / 5 kHz Shelf, Q 1.0; Low Cut 20 Hz 12 dB/oct; Comp gain 0, 10 ms,
+// 300 ms, -30 dB, 1:1; Exp -60 dB 1:1; AutoLevel 6 dB, 6 dB, 5.0 s), then the
+// neutral rule: 0 dB for a dB parameter whose range holds it, Width 1, Pan
+// centre. Nothing else (ref level, crossfeed, delay): empty.
 Writes resetWrites(const State& st, Row r, int ch, const Param& p);
 
 // A key pressed: toggle, or the next list entry.

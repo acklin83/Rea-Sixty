@@ -301,8 +301,24 @@ Writes nudge(const State& st, Row r, int ch, const Param& p, int detents, double
 Writes resetWrites(const State& st, Row r, int ch, const Param& p)
 {
     if (!available(st, r, ch, p)) return {};
+    // Frank's defaults, 22.09. They win over the neutral rule below (Threshold
+    // -30, Max Gain 6 dB). List values are indices: Shelf 1, 12 dB/oct 1.
+    static const struct { const char* id; double v; } kDefaults[] = {
+        { "b1freq",   80.0 }, { "b1type", 1.0 }, { "b1q", 1.0 },
+        { "b2freq", 1000.0 },                    { "b2q", 1.0 },
+        { "b3freq", 5000.0 }, { "b3type", 1.0 }, { "b3q", 1.0 },
+        { "lc_freq",  20.0 }, { "lc_slope", 1.0 },
+        { "dyngain",   0.0 }, { "attack", 10.0 }, { "release", 300.0 },
+        { "compthres", -30.0 }, { "compratio", 1.0 },
+        { "expthres",  -60.0 }, { "expratio",  1.0 },
+        { "maxgain",     6.0 }, { "headroom",  6.0 }, { "risetime", 5.0 },
+    };
     double def;
-    if (p.kind == Kind::Db && p.lo <= 0.0 && p.hi >= 0.0) def = 0.0;
+    bool   have = false;
+    for (const auto& d : kDefaults)
+        if (std::string(p.id) == d.id) { def = d.v; have = true; break; }
+    if (have) {}
+    else if (p.kind == Kind::Db && p.lo <= 0.0 && p.hi >= 0.0) def = 0.0;
     else if (p.kind == Kind::Width)                      def = 1.0;
     else if (p.kind == Kind::Pan)                        def = 0.0;
     else return {};
