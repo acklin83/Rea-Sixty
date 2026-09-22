@@ -9632,9 +9632,18 @@ void unbindSlot_(int linkIdx)
     }
 }
 
+bool linkIdxOnUc1Face_(uf8::Domain d, int linkIdx);   // after kUc1Controls
+
 // Move listening to the next still-unmapped slot in topology order, or
 // clear when nothing else needs binding. Used after a click-bind to
 // support quick mass mapping without an extra click per slot.
+// ⛔ ONLY ONTO SLOTS WITH A CONTROL ON THE UC1 FACE. It walked the whole SSL 360
+// Link topology, so after the last knob it kept listening on Out Trim, Quick 1,
+// Quick 2 … — slots with no control anywhere (Quick 1-6 are wrapper-only). And
+// the listen binds every change of REAPER's last-touched param, including the
+// ones our own surfaces cause: turning HF Gain / HF Freq on the UF1 while
+// recording the video bound them to Out Trim, Quick 1 and Quick 2 on Frank's
+// bx 9000 J (22.09.). An off-face slot is still learnable by clicking it.
 void autoAdvanceListening_(const uf8::PluginMap& topo)
 {
     if (g_listeningLinkIdx < 0) return;
@@ -9644,6 +9653,7 @@ void autoAdvanceListening_(const uf8::PluginMap& topo)
             if (s.linkIdx == g_listeningLinkIdx) past = true;
             continue;
         }
+        if (!linkIdxOnUc1Face_(topo.domain, s.linkIdx)) continue;
         if (mappedVst3For_(s.linkIdx) < 0) {
             g_listeningLinkIdx = s.linkIdx;
             return;
@@ -12123,6 +12133,16 @@ constexpr Uc1Control kUc1Controls[] = {
     { Uc1Control::Toggle,  0, uf8::Domain::ChannelStrip,
       776.0f, 547.0f, 0, 40, 40, 0, "IN" },  // Channel In → Bypass
 };
+
+// Does this Link slot have a control on the UC1 face (for this domain)? The one
+// answer for the "Also mapped — off-face" list and for the listen auto-advance,
+// read from the same table the schematic draws.
+bool linkIdxOnUc1Face_(uf8::Domain d, int linkIdx)
+{
+    for (const auto& c : kUc1Controls)
+        if (c.domain == d && c.linkIdx == linkIdx) return true;
+    return false;
+}
 
 constexpr int kUc1ControlsCount =
     sizeof(kUc1Controls) / sizeof(kUc1Controls[0]);
@@ -21373,11 +21393,7 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         // mockup added (== 2) the old negative form leaked this UC1-only list
         // onto the UF1 tab (Frank 2026-08-08).
         if (s_mockup == 0 && topo) {
-            auto onFace = [&](int li) {
-                for (const auto& c : kUc1Controls)
-                    if (c.domain == editing->domain && c.linkIdx == li) return true;
-                return false;
-            };
+            auto onFace = [&](int li) { return linkIdxOnUc1Face_(editing->domain, li); };
             std::vector<int> offFace;
             for (const auto& slt : editing->slots) {
                 if (slt.vst3Param < 0) continue;      // base layer unbound
