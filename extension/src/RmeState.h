@@ -145,6 +145,9 @@ struct State {
     // no solo per strip and none on outputs; solo lives on the routing (TotalReaper
     // docs/osc-paths-discovered.md). Missing reads as off.
     std::map<std::uint64_t, bool> mixSolo;
+    // Pan of the same node, /mix/<in|pb>/<channel>/<submix>/balpan, -1..+1.
+    // An output's own pan is a strip leaf ("balpan").
+    std::map<std::uint64_t, double> mixPan;
     bool mixSoloed(Bus b, int ch, int sub) const
     {
         const auto it = mixSolo.find(mixKey(b, ch, sub));

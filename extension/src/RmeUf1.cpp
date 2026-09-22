@@ -146,6 +146,30 @@ std::string soloAddress(Row r, int ch, int submix)
          + "/" + std::to_string(submix) + "/solo";
 }
 
+std::string panAddress(Row r, int ch, int submix)
+{
+    if (ch < 0) return {};
+    if (r == Row::Output) return "/output/" + std::to_string(ch) + "/balpan";
+    if (submix < 0) return {};
+    return std::string("/mix/") + (r == Row::Input ? "in/" : "pb/") + std::to_string(ch)
+         + "/" + std::to_string(submix) + "/balpan";
+}
+
+double panValue(const State& st, Row r, int ch, int submix, bool& known)
+{
+    known = false;
+    if (r == Row::Output) {
+        if (const Channel* c = channelOf(st, r, ch))
+            if (const double* v = c->leaf("balpan")) { known = true; return *v; }
+        return 0.0;
+    }
+    const auto it = st.mixPan.find(State::mixKey(r == Row::Input ? Bus::Input : Bus::Playback,
+                                                 ch, submix));
+    if (it == st.mixPan.end()) return 0.0;
+    known = true;
+    return it->second;
+}
+
 bool soloed(const State& st, Row r, int ch, int submix)
 {
     if (r == Row::Output) return false;

@@ -66,6 +66,12 @@ std::string muteAddress(Row r, int ch);
 std::string soloAddress(Row r, int ch, int submix);
 bool        soloed(const State& st, Row r, int ch, int submix);
 
+// ⇨ PAN of the fader channel (the V-Pot above the fader, 22.09.). An input or
+// a playback pans INTO the submix (/mix/<in|pb>/<n>/<submix>/balpan), an output
+// pans itself (/output/<n>/balpan). -1 left .. +1 right. Empty address = none.
+std::string panAddress(Row r, int ch, int submix);
+double      panValue(const State& st, Row r, int ch, int submix, bool& known);
+
 // Name and palette colour of a channel, "" / -1 when unknown.
 const Channel* channelOf(const State& st, Row r, int ch);
 

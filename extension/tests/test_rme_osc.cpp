@@ -391,6 +391,19 @@ int main()
         put("/mix/in/6/10/solo", 1);
         check(u::soloed(s3, u::Row::Input, 6, 10) && !u::soloed(s3, u::Row::Input, 6, 8),
               "solo lands per node, not per strip");
+        check(u::panAddress(u::Row::Input, 6, 10) == "/mix/in/6/10/balpan"
+              && u::panAddress(u::Row::Output, 8, 10) == "/output/8/balpan"
+              && u::panAddress(u::Row::Input, 6, -1).empty(),
+              "pan: an input pans into the submix, an output pans itself");
+        bool pk = true;
+        u::panValue(s3, u::Row::Input, 6, 10, pk);
+        check(!pk, "pan unknown until TotalMix says so");
+        put("/mix/in/6/10/balpan", -0.5f);
+        check(u::panValue(s3, u::Row::Input, 6, 10, pk) == -0.5 && pk,
+              "a node's pan lands per submix");
+        put("/output/8/balpan", 0.25f);
+        check(u::panValue(s3, u::Row::Output, 8, -1, pk) == 0.25 && pk,
+              "an output's pan is its own strip leaf");
         put("/mix/in/6/10/solo", 0);
         check(!u::soloed(s3, u::Row::Input, 6, 10), "and turns off again");
     }

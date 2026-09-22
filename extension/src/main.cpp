@@ -25892,7 +25892,22 @@ static bool uf1RmeEncoder_(uint8_t id, int delta)
         }
         return true;
     }
-    return true;   // V-Pot ueber dem Fader: bewusst nichts, aber auch nicht REAPER
+    if (id == uf1::enc::kVpotAboveFader) {
+        // ⇨ PAN DES FADER-KANALS (Frank 22.09.: "der Pan auf UF1 Channel macht
+        // noch nichts"). Eingang/Playback in den Submix, Ausgang sich selbst
+        // (rmeu::panAddress). 2 % pro Zaehler, Fine wie ueberall im Side-Car.
+        const auto r   = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
+        const int  sel = uf1RmeSelected_(st, r);
+        const int  sub = rmeu::effectiveSubmix(st, g_rmeSubmix.load());
+        const std::string a = rmeu::panAddress(r, sel, sub);
+        if (a.empty()) return true;
+        bool known = false;
+        const double cur = rmeu::panValue(st, r, sel, sub, known);
+        const double nv  = std::clamp(cur + delta * 0.02 * uf1RmeKnobScale_(), -1.0, 1.0);
+        if (nv != cur) rm.send(a, static_cast<float>(nv));
+        return true;
+    }
+    return true;
 }
 
 // ⇨ SOFT-KEYS UND < > FUER JEDES SIDE-CAR. Jeder Modus hat seinen eigenen
@@ -26015,8 +26030,30 @@ static bool uf1RmeButton_(const uf1::InputEvent& ev)
         }
         return true;
     }
-    if (id == uf1::btn::kVpotAboveFaderPush)
+    if (id == uf1::btn::kVpotAboveFaderPush || id == uf1::btn::kChannelSoftKey) {
+        if (!ev.pressed) return true;
+        auto& rm = reasixty::rme::manager();
+        const reasixty::rme::State st = rm.snapshot();
+        const auto r   = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
+        const int  sel = uf1RmeSelected_(st, r);
+        if (sel < 0) return true;
+        if (id == uf1::btn::kVpotAboveFaderPush) {
+            // Druck auf den Pan-Pot: Mitte, wie in REAPERs Kanalansicht.
+            const std::string a = rmeu::panAddress(r, sel, rmeu::effectiveSubmix(st, g_rmeSubmix.load()));
+            if (!a.empty()) rm.send(a, 0.0f);
+            return true;
+        }
+        // ⇨ SOFT-KEY UEBER DEM KANAL = STEREO/MONO des Fader-Kanals (Frank 22.09.).
+        // /<sec>/<n>/stereo, von TotalReaper selbst geschrieben (Stereo-Pair Link).
+        // Danach beide Haelften neu holen: beim Entkoppeln wird n+1 ein eigener
+        // Kanal, und TotalMix schickt dem sendenden Remote kein Echo.
+        const reasixty::rme::Channel* c = rmeu::channelOf(st, r, sel);
+        const std::string sec = std::string("/") + rmes::section(r) + "/";
+        rm.send(sec + std::to_string(sel) + "/stereo", (c && c->stereo) ? 0.0f : 1.0f);
+        rm.send(rmes::sendChanAddress(r, sel), 1.0f);
+        rm.send(rmes::sendChanAddress(r, sel + 1), 1.0f);
         return true;
+    }
     // 5-8 schaltet die zwei V-Pot-Baenke, wie in der DAW-Ansicht die Spurgruppe.
     if (id == uf1::btn::k5to8) {
         if (ev.pressed)
@@ -33110,7 +33147,8 @@ static void uf1VpotCell_(Uf1VpotRow& row, int i, const std::string& label,
 // Layout 1: name and value apart, the fill-from-left style 0x02 (0x03 = text
 // only, for an empty pot). Measured 21.09.: 0x02, 0x03 and 0x04 render there.
 static void uf1VpotCellL1_(Uf1VpotRow& row, int i, const std::string& name,
-                           const std::string& value, double norm, bool empty)
+                           const std::string& value, double norm, bool empty,
+                           uint8_t style = 0x02)
 {
     const size_t k = static_cast<size_t>(i);
     row.layout1 = true;
@@ -33119,7 +33157,7 @@ static void uf1VpotCellL1_(Uf1VpotRow& row, int i, const std::string& name,
     const int pos = std::clamp(static_cast<int>(std::lround(norm * 100.0)), 0, 100);
     row.bars[k * 2]     = empty ? 0 : static_cast<uint8_t>(pos);
     row.bars[k * 2 + 1] = 0x80;
-    row.styles[k] = empty ? 0x03 : 0x02;
+    row.styles[k] = empty ? 0x03 : style;
 }
 
 static void uf1VpotBar_(Uf1VpotRow& row, int i, double norm,
@@ -34189,15 +34227,32 @@ static void uf1PaintSideCar_()
 // sie den Stand beim Einstieg und tun nichts (uf1RmeButton_ faengt sie ab).
 static void uf1PaintRmeStrip_(const std::string& name, const std::string& db,
                               const std::string& line, int chNo, int palette,
-                              bool force)
+                              int barPos, bool barCentre, bool force)
 {
     static std::string sName, sDb, sLine;
-    static int sNo = INT_MIN, sPal = INT_MIN;
+    static int sNo = INT_MIN, sPal = INT_MIN, sBar = INT_MIN;
     if (force) {
         // Einmal alles leer, auch die LEDs und den Readout-Balken, die dieser
         // Maler sonst nicht anfasst. Derselbe Helfer wie fuer eine leere Spur.
         uf1BlankChannelZone_();
         sName.clear(); sDb.clear(); sLine.clear(); sNo = INT_MIN; sPal = INT_MIN;
+        sBar = INT_MIN;
+        // Der Balken-Stil, wie im Kanalmaler: 0x01 = Zeiger (die Pan-Optik). Der
+        // Init laesst ihn auf 0x03 = aus, dann zeichnet keine Position etwas.
+        const uint8_t pointer = 0x01;
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kBarStyle,
+                                         std::span<const uint8_t>(&pointer, 1)));
+    }
+    // Pan-Balken: Position 0..100, Mittelmarke 0x80 genau in der Mitte, wie der
+    // REAPER-Pfad. barPos < 0 = leer.
+    {
+        const int key = (barPos < 0) ? -1 : barPos * 2 + (barCentre ? 1 : 0);
+        if (force || key != sBar) {
+            sBar = key;
+            const uint8_t pb[2] = { static_cast<uint8_t>(barPos < 0 ? 0 : barPos),
+                                    static_cast<uint8_t>(barPos >= 0 && barCentre ? 0x80 : 0x00) };
+            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVPotReadoutBar, pb));
+        }
     }
     auto text = [](uint16_t addr, const std::string& t) {
         const std::string folded = utf8ToLatin1(t);
@@ -34245,7 +34300,7 @@ static void uf1PaintRmeStrip_(const std::string& name, const std::string& db,
 // weiter REAPER (Frank 21.09., Weg b: was einen Kanal betrifft, geht an
 // TotalMix, der Transport bleibt REAPERs), alles andere ist dunkel, weil der
 // Side-Car es abfaengt und nichts tut (uf1RmeButton_).
-struct Uf1BtnAvail { bool left, right, bankL, bankR, five8; };
+struct Uf1BtnAvail { bool left, right, bankL, bankR, five8; bool chanSk = false; };
 static bool uf1SideCarKeepsLed_(uf8::bindings::ButtonId id)
 {
     using B = uf8::bindings::ButtonId;
@@ -34253,7 +34308,9 @@ static bool uf1SideCarKeepsLed_(uf8::bindings::ButtonId id)
         || id == B::Uf1Play  || id == B::Uf1Rec || id == B::Uf1Cycle || id == B::Uf1Click
         // 5-8 = die zwei V-Pot-Baenke im RME-Side-Car (uf1RmeButton_),
         // < > = Baenke bzw. STRIP-Seiten (uf1SideCarSoftKeys_).
-        || id == B::Uf1FiveToEight || id == B::Uf1ArrowLeft || id == B::Uf1ArrowRight;
+        || id == B::Uf1FiveToEight || id == B::Uf1ArrowLeft || id == B::Uf1ArrowRight
+        // Soft-Key ueber dem Kanal = Stereo/Mono, hell bei stereo.
+        || id == B::Uf1ChannelSoftKey;
 }
 static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
 {
@@ -34408,6 +34465,9 @@ static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
             if (sideCar && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1ArrowRight) {
                 on = rightOn; show = true;
             }
+            if (sideCar && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1ChannelSoftKey) {
+                on = av.chanSk; show = true;
+            }
             const uint32_t scaled =
                 (show && keep) ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
             // Fold the modifier that actually DROVE this lamp into the
@@ -34551,9 +34611,12 @@ static void uf1PaintRme_()
     }
 
     // ── kleine Anzeige ──────────────────────────────────────────────────────
+    // Name, dB und darunter PAN (Wertzeile + Zeiger), wie im REAPER-Modus. Das
+    // Submix-Ziel steht unter CHANNEL auf dem grossen Display (Frank 22.09.).
     {
         std::string name = "RME", db, line;
-        int no = 0, pal = 0;
+        int no = 0, pal = 0, barPos = -1;
+        bool barCentre = false;
         if (!linked) {
             line = "no TotalMix";
         } else if (sel < 0) {
@@ -34564,16 +34627,17 @@ static void uf1PaintRme_()
             db   = known ? uf1RmeDbText_(selDb) : std::string();
             no   = sel + 1;
             if (c && c->colour >= 0 && c->colour < 9) pal = cfg.colourMap[c->colour];
-            if (row == rmeu::Row::Output) {
-                line = rmeu::rowName(row);
+            bool pk = false;
+            const double pan = rmeu::panValue(st, row, sel, sub, pk);
+            if (pk) {
+                line      = composeValueLine("Pan", formatPanReadout(pan));
+                barPos    = std::clamp(static_cast<int>(std::lround((pan + 1.0) * 50.0)), 0, 100);
+                barCentre = (pan == 0.0);
             } else {
-                // Wohin dieser Fader schreibt: der Submix.
-                const std::string on = rmeu::displayName(st, rmeu::Row::Output, sub);
-                line = std::string(row == rmeu::Row::Input ? "IN" : "PB") + " > "
-                     + (on.empty() ? std::string("--") : on);
+                line = composeValueLine("Pan", "");
             }
         }
-        uf1PaintRmeStrip_(name, db, line, no, pal, force);
+        uf1PaintRmeStrip_(name, db, line, no, pal, barPos, barCentre, force);
     }
 
     // ── V-Pot-Reihe ─────────────────────────────────────────────────────────
@@ -34600,7 +34664,12 @@ static void uf1PaintRme_()
             const std::string tx = have ? rmes::format(*p, row, v) : std::string();
             const double nrm = have ? rmes::norm(*p, row, v) : 0.0;
             if (wantLayout == 0x01) {
-                uf1VpotCellL1_(vr, i, nm, tx, nrm, !have);
+                // ⚠ TEST (Frank 22.09.): Pan zeichnete in Layout 1 einen Balken von
+                // links. Die Linie (0x01) und die Mittelfuellung (0x08) blenden dort
+                // die Reihe aus (gemessen 21.09.); ob 0x04 als wandernde Marke
+                // taugt, ist offen. Nur fuer Pan, bis Frank es gesehen hat.
+                const bool panLike = have && p->kind == rmes::Kind::Pan;
+                uf1VpotCellL1_(vr, i, nm, tx, nrm, !have, panLike ? uint8_t{0x04} : uint8_t{0x02});
             } else {
                 uf1VpotCell_(vr, i, nm, tx);
                 // dB um null (EQ-Gain) von der Mitte aus, alles andere als Linie.
@@ -34751,8 +34820,10 @@ static void uf1PaintRme_()
         arrowL = g_sideCarBank[set].load() > 0;
         arrowR = g_sideCarBank[set].load() < nb - 1;
     }
+    const rme::Channel* selCh = (sel >= 0) ? rmeu::channelOf(st, row, sel) : nullptr;
     uf1PaintButtonLeds_(force, Uf1BtnAvail{ arrowL, arrowR, false, false,
-                                            !strip && g_rmeVpotBank.load() == 1 },
+                                            !strip && g_rmeVpotBank.load() == 1,
+                                            selCh && selCh->stereo },
                         /*sideCar*/ true);
 
     // ── Zeitfeld: immer der Jog-Kanal (Main) in dB ──────────────────────────
@@ -34838,10 +34909,17 @@ static void uf1PaintRme_()
         } else if (row == rmeu::Row::Output) {
             putCell(0, "OUTPUT");
         } else {
-            // Wohin der Fader schreibt, auch hier: Reihe > Submix.
+            // Wohin der Fader schreibt: Reihe > Submix. ⛔ CELL1 fasst in Layout 1
+            // nur 10 Grossbuchstaben ("IN > Phones 1" wurde abgeschnitten, Frank
+            // 22.09.), also ohne Leerzeichen und notfalls gekuerzt: "IN>Phones1".
             std::string on = rmeu::displayName(st, rmeu::Row::Output, sub);
-            putCell(0, utf8ToLatin1(std::string(row == rmeu::Row::Input ? "IN > " : "PB > ")
-                                    + (on.empty() ? std::string("--") : on)));
+            on.erase(std::remove(on.begin(), on.end(), ' '), on.end());
+            std::string cell = std::string(row == rmeu::Row::Input ? "IN>" : "PB>")
+                             + (on.empty() ? std::string("--") : on);
+            cell = utf8ToLatin1(cell);
+            if (cell.size() > 10)
+                cell = abbreviateTrackName_(cell, 10, -1, /*foldLatin1*/ false);
+            putCell(0, cell);
         }
         // Uebersicht: die Side-Car-Bank auch in CELL2, denn Layout 1 zeigt die
         // Zelle unter SOFT KEYS (3) nicht.

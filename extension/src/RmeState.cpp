@@ -161,7 +161,11 @@ bool ingest(State& st, const Message& m)
             st.mixSolo[State::mixKey(b, ch, sub)] = truthy(m);
             return true;
         }
-        return false;   // balpan, groupflags: known, not used yet
+        if (a.compare(s3 + 1, std::string::npos, "balpan") == 0) {
+            st.mixPan[State::mixKey(b, ch, sub)] = num(m);
+            return true;
+        }
+        return false;   // groupflags: known, not used yet
     }
 
     // ── channel strips ──────────────────────────────────────────────────────
