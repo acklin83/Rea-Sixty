@@ -1068,6 +1068,17 @@ void seedUf1FromSlots(UserPluginMap& m);
 // "bus comp auch wie factory").
 int  uf1FactoryVpotFlatPos(int linkIdx, bool busComp);
 int  uf1FactoryVpotPositionCount(bool busComp);   // 32 for CS (8 pages), 8 for BC (2)
+// ⛔ AND THE SOFT-KEYS THE SAME WAY (Frank 22.09.: "wieso ist die Verteilung auf
+// dem UF1 nicht GANZ GENAU so wie bei SSL Factory CS? ... nur die V-Pots
+// angeglichen?"). On 18.09. only the V-Pots moved to their factory places; the
+// soft-keys stayed packed by linkIdx. The CS2 p188 soft-key pages, as linkIdx:
+// the linkIdx on flat position `flat`, or -1 where the factory key is empty or is
+// not a parameter (SOLO SAFE, S/C MODE, HQ, A/B, and PLUG-IN on position 3, which
+// uf1MapWantsStripKey places). A factory key that repeats (EQ TYPE and EQ on the
+// four EQ pages, DYNAMICS on both dynamics pages) repeats here too. Bus Comp has
+// no table (count 0): its only button is IN, which its factory pages never show.
+int  uf1FactorySoftKeyLinkAt(int flat, bool busComp);
+int  uf1FactorySoftKeyPositionCount(bool busComp);   // 32 for CS, 0 for BC
 
 bool enableUf1Layer(std::string_view match);
 

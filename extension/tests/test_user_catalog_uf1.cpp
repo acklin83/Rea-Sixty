@@ -289,14 +289,15 @@ int main()
         // ⛔ V-POTS SIT ON THEIR FACTORY POSITION, not packed from 0. linkIdx 2
         // is Width (page 1, V-Pot 1 → flat 0) and linkIdx 6 is the Low Pass
         // (page 2, V-Pot 4 → flat 7), so the gap between them is the factory's
-        // own gap. Soft-keys are still packed by linkIdx from 0.
+        // own gap. Soft-keys 3 and 9 are on no factory soft-key page, so they
+        // are packed AFTER the eight pages (flat 32, 33), not from 0.
         EXPECT(m.uf1.vpots.size() == 2);
         EXPECT(m.uf1.softKeys.size() == 2);
         EXPECT(uf1SlotAt(m.uf1.vpots, 0)->vst3Param == 20);   // Width
         EXPECT(uf1SlotAt(m.uf1.vpots, 7)->vst3Param == 60);   // Low Pass
         EXPECT(uf1SlotAt(m.uf1.vpots, 1) == nullptr);         // factory blank
-        EXPECT(uf1SlotAt(m.uf1.softKeys, 0)->vst3Param == 30);
-        EXPECT(uf1SlotAt(m.uf1.softKeys, 1)->vst3Param == 90);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 32)->vst3Param == 30);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 33)->vst3Param == 90);
 
         // ⛔ THE BUG THIS ORDER EXISTS FOR. SSL numbers the EQ from the top
         // down, so sorting by linkIdx put HF Freq (10) BEFORE LF Gain (20) and
@@ -369,15 +370,18 @@ int main()
         EXPECT(uf1MapWantsStripKey(m));
         seedUf1FromSlots(m);
 
-        // Positions 0..2 keep their params, 3 is the key, the rest moved along.
-        EXPECT(uf1SlotAt(m.uf1.softKeys, 0)->vst3Param == 10);
-        EXPECT(uf1SlotAt(m.uf1.softKeys, 1)->vst3Param == 30);
-        EXPECT(uf1SlotAt(m.uf1.softKeys, 2)->vst3Param == 50);
+        // Factory places: Polarity (5) is page 1 key 1, the key is page 1
+        // key 4, and 1/3/7/9 are on no factory soft-key page, so they follow
+        // the eight pages in linkIdx order. Nothing moved to make room.
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 0)->vst3Param == 50);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 1) == nullptr);
         const UserUf1Slot* key = uf1SlotAt(m.uf1.softKeys, 3);
         EXPECT(key && key->special == uint8_t(Uf1SkSpecial::StripMode));
         EXPECT(key->vst3Param < 0);       // it is an action, not a param
-        EXPECT(uf1SlotAt(m.uf1.softKeys, 4)->vst3Param == 70);
-        EXPECT(uf1SlotAt(m.uf1.softKeys, 5)->vst3Param == 90);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 32)->vst3Param == 10);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 33)->vst3Param == 30);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 34)->vst3Param == 70);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 35)->vst3Param == 90);
 
         // …and it survives a round trip, or the key would vanish on restart.
         c.maps[0] = m;
@@ -396,7 +400,38 @@ int main()
         EXPECT(!uf1MapWantsStripKey(m2));
         seedUf1FromSlots(m2);
         EXPECT(m2.uf1.softKeys.size() == 1);
-        EXPECT(uf1SlotAt(m2.uf1.softKeys, 0)->vst3Param == 30);
+        EXPECT(uf1SlotAt(m2.uf1.softKeys, 32)->vst3Param == 30);
+        EXPECT(uf1SlotAt(m2.uf1.softKeys, 3) == nullptr);
+    }
+
+    // --- soft-keys land where a FACTORY Channel Strip has them (22.09.) ------
+    // Frank: "wieso ist die Verteilung auf dem UF1 nicht GANZ GENAU so wie bei
+    // SSL Factory CS?" The CS2 p188 pages, repeats included: EQ In on all four
+    // EQ pages (flat 11, 15, 19, 23), LF Bell page 3 key 1 (8), Peak page 7
+    // key 2 (25), Expander page 8 key 1 (28). Odd linkIdx = button in the stub.
+    {
+        UserPluginCatalog c{};
+        EXPECT(parse_(kV10, c));
+        auto& m = c.maps[0];
+        m.slots.clear();
+        auto add = [&](int linkIdx, int param) {
+            UserLinkSlot s{}; s.linkIdx = linkIdx; s.vst3Param = param;
+            m.slots.push_back(s);
+        };
+        add(15, 150);   // EQ In
+        add(21, 210);   // LF Bell
+        add(25, 250);   // Comp Peak
+        add(33, 330);   // Gate/Exp
+        seedUf1FromSlots(m);
+        for (int f : { 11, 15, 19, 23 })
+            EXPECT(uf1SlotAt(m.uf1.softKeys, f) && uf1SlotAt(m.uf1.softKeys, f)->vst3Param == 150);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 8)->vst3Param  == 210);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 25)->vst3Param == 250);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 28)->vst3Param == 330);
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 0) == nullptr);   // no Polarity learned
+        EXPECT(uf1SlotAt(m.uf1.softKeys, 10) == nullptr);  // no EQ Type learned
+        EXPECT(uf1FactorySoftKeyLinkAt(3, false) == -1);   // PLUG-IN's place
+        EXPECT(uf1FactorySoftKeyPositionCount(true) == 0); // Bus Comp: packed
     }
 
     // --- v17: the PLUG-IN key is written into an EXISTING explicit map ------
