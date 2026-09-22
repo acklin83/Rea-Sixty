@@ -33944,12 +33944,7 @@ static void uf1PaintModeMenuOverlay_(bool changed)
 // Zellen ueber uf1StaticBankCell_, dieselbe Regel wie in der DAW-Ansicht.
 // Dynamische Arten auf einer Side-Car-Bank werden (noch) nicht gemalt.
 // EIN Schreiber fuer jedes Side-Car, beide Maler rufen ihn.
-// `stateOnly`: the keys' lamps get lit/dim only, no binding colour. TEST for the
-// RME side-car on Layout 1 (Frank 22.09.): there an engaged key's LABEL went
-// empty while STRIP's keys, which never carried a colour, highlighted fine.
-// Colour frame + Layout 1 is the one combination the two differ in; the DAW
-// view on Layout 3 highlights coloured keys (HW 2026-08-17). Not measured yet.
-static void uf1PaintSideCarSoftKeys_(bool force, bool stateOnly = false)
+static void uf1PaintSideCarSoftKeys_(bool force)
 {
     const int set = uf1SideCarSet_();
     if (set < 0) return;
@@ -33961,10 +33956,7 @@ static void uf1PaintSideCarSoftKeys_(bool force, bool stateOnly = false)
     if (g_sideCarBank[set].load() >= nb) g_sideCarBank[set].store(0);
     const int bank = uf8::bindings::uf1SideCarBankBase(set) + g_sideCarBank[set].load();
     std::array<Uf1SkCell, 4> cells{};
-    for (int i = 0; i < 4; ++i) {
-        cells[static_cast<size_t>(i)] = uf1StaticBankCell_(bank, i);
-        if (stateOnly) cells[static_cast<size_t>(i)].hasColour = false;
-    }
+    for (int i = 0; i < 4; ++i) cells[static_cast<size_t>(i)] = uf1StaticBankCell_(bank, i);
     // Ein anderes Side-Car ist ein anderer Satz: dann alles neu.
     static int sSet = -1;
     const bool setEdge = (set != sSet);
@@ -34586,7 +34578,7 @@ static void uf1PaintRme_()
         }
         if (!menuNow) uf1EmitSoftKeyRow_(cells, big || menuClosed, false, false);
     } else {
-        uf1PaintSideCarSoftKeys_(big, /*stateOnly*/ wantLayout == 0x01);
+        uf1PaintSideCarSoftKeys_(big);
     }
 
     // ── SOLO, CUT, SEL: der Fader-Kanal in TotalMix ─────────────────────────
