@@ -298,6 +298,19 @@ Writes nudge(const State& st, Row r, int ch, const Param& p, int detents, double
     return writesFor(st, r, ch, p, nv);
 }
 
+Writes resetWrites(const State& st, Row r, int ch, const Param& p)
+{
+    if (!available(st, r, ch, p)) return {};
+    double def;
+    if (p.kind == Kind::Db && p.lo <= 0.0 && p.hi >= 0.0) def = 0.0;
+    else if (p.kind == Kind::Width)                      def = 1.0;
+    else if (p.kind == Kind::Pan)                        def = 0.0;
+    else return {};
+    double v = 0.0;
+    if (value(st, r, ch, p, v) && v == def) return {};
+    return writesFor(st, r, ch, p, def);
+}
+
 Writes press(const State& st, Row r, int ch, const Param& p)
 {
     if (!available(st, r, ch, p)) return {};

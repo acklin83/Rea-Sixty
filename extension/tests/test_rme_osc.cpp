@@ -495,6 +495,20 @@ int main()
               && sp::format(*sp::find("reflevel"), Row::Input, 1) == "LoGain",
               "values read as TotalMix shows them");
         check(sp::sendChanAddress(Row::Playback, 4) == "/sendchan/playback/4", "sendchan");
+        // V-Pot push = neutral (22.09.): 0 dB where the range holds it, width 1,
+        // pan centre; nothing where no default is belegt.
+        put("/input/8/eq/band1gain", 4.5f);
+        w = sp::resetWrites(s, Row::Input, 8, *sp::find("b1gain"));
+        check(w.size() == 1 && w[0].first == "/input/8/eq/band1gain" && w[0].second == 0.0f,
+              "push resets an EQ gain to 0 dB");
+        w = sp::resetWrites(s, Row::Input, 30, *gain);
+        check(w.size() == 2 && w[0].second == 0.0f, "preamp gain to 0 dB, both halves");
+        put("/input/30/width", 0.3f);
+        w = sp::resetWrites(s, Row::Input, 30, *width);
+        check(w.size() == 1 && w[0].second == 1.0f, "width back to stereo");
+        check(sp::resetWrites(s, Row::Input, 8, *sp::find("b1freq")).empty()
+              && sp::resetWrites(s, Row::Input, 8, *sp::find("b1type")).empty(),
+              "no belegt default for a frequency or a list: nothing");
 
         // rme.json carries the pages, and a v3 file without them keeps the factory set.
         Config c;

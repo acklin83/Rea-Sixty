@@ -103,6 +103,13 @@ Writes nudge(const State& st, Row r, int ch, const Param& p, int detents,
 // EQ Type ist die Rasterung viel zu fein").
 bool stepsWhole(const Param& p);
 
+// ⇨ BACK TO NEUTRAL on a V-Pot push (Frank 22.09.: "push auf V-Pot auf den
+// Standard-Wert, 0 dB bei Gains etc."). RME's sheet and the manual give no
+// defaults, so only the values that are neutral by definition: 0 dB for any dB
+// parameter whose range contains 0, Width 1 (stereo), Pan centre. Everything
+// else (frequencies, Q, ratio, times, lists) has no belegt default: empty.
+Writes resetWrites(const State& st, Row r, int ch, const Param& p);
+
 // A key pressed: toggle, or the next list entry.
 Writes press(const State& st, Row r, int ch, const Param& p);
 

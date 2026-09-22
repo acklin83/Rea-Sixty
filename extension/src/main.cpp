@@ -25968,10 +25968,23 @@ static bool uf1RmeButton_(const uf1::InputEvent& ev)
         }
         return true;
     }
-    // In STRIP tun die Pot-Druecke und 5-8 nichts: die Pots sind Parameter, und
-    // die V-Pot-Baenke gehoeren zur Uebersicht.
-    if (g_rmeStrip.load()
-        && ((id >= uf1::btn::kVpot1Push && id <= uf1::btn::kVpot4Push) || id == uf1::btn::k5to8))
+    // In STRIP setzt der Pot-Druck seinen Parameter auf den neutralen Wert
+    // zurueck (RmeStrip::resetWrites, Frank 22.09.); 5-8 tut nichts, die
+    // V-Pot-Baenke gehoeren zur Uebersicht.
+    if (g_rmeStrip.load() && id >= uf1::btn::kVpot1Push && id <= uf1::btn::kVpot4Push) {
+        if (ev.pressed) {
+            auto& rm = reasixty::rme::manager();
+            const reasixty::rme::Config cfg = rm.config();
+            const reasixty::rme::State  st  = rm.snapshot();
+            const auto r   = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
+            const int  sel = uf1RmeSelected_(st, r);
+            const int  pg  = sel >= 0 ? uf1RmeStripPage_(st, r, sel, cfg) : -1;
+            if (const rmes::Param* p = uf1RmeStripParam_(cfg, pg, false, id - uf1::btn::kVpot1Push))
+                uf1RmeSendAll_(rmes::resetWrites(st, r, sel, *p));
+        }
+        return true;
+    }
+    if (g_rmeStrip.load() && id == uf1::btn::k5to8)
         return true;
     if (id >= uf1::btn::kVpot1Push && id <= uf1::btn::kVpot4Push) {
         if (!ev.pressed) return true;
@@ -34054,7 +34067,12 @@ static void uf1PaintSideCarSoftKeys_(bool force)
     static int sSet = -1;
     const bool setEdge = (set != sSet);
     sSet = set;
-    if (!menu) uf1EmitSoftKeyRow_(cells, force || menuClosed || setEdge, false, false);
+    // ⛔ AUCH BEI GEHALTENEM MODE AUFRUFEN, mit menuOpen: nur so nimmt der Emitter
+    // die Hervorhebung (0x0102) weg, solange das Menue auf den Keys steht. Vorher
+    // blieb z.B. Speaker B unter den Menue-Namen hervorgehoben (Frank 22.09.).
+    // Namen schreibt er dabei nur, wenn sie sich geaendert haben, die LEDs parkt er.
+    uf1EmitSoftKeyRow_(cells, !menu && (force || menuClosed || setEdge), false,
+                       /*menuOpen*/ menu);
     // Der Bankname im Zeitfeld beim Wechsel, wie in der DAW-Ansicht.
     static int sBank = -1;
     if (!setEdge && sBank != -1 && sBank != bank && nb > 1)
@@ -34681,7 +34699,10 @@ static void uf1PaintRme_()
             if (p->kind == rmes::Kind::List) c.label += " " + rmes::format(*p, row, v);
             c.on = (p->kind == rmes::Kind::Toggle) ? (v >= 0.5) : true;
         }
-        if (!menuNow) uf1EmitSoftKeyRow_(cells, big || menuClosed, false, false);
+        // Bei gehaltenem MODE mit menuOpen, damit die Hervorhebung weggeht
+        // (siehe uf1PaintSideCarSoftKeys_).
+        uf1EmitSoftKeyRow_(cells, !menuNow && (big || menuClosed), false,
+                           /*menuOpen*/ menuNow);
     } else {
         uf1PaintSideCarSoftKeys_(big);
     }
