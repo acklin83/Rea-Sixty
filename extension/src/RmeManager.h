@@ -66,8 +66,16 @@ struct Config {
 
     // ── the UF1 side-car, everything a user may move (Frank 21.09.: "Muss
     // ALLES customizeable sein, was wo erscheint"). Defaults: Phones 1-4 on the
-    // four pots, Main on the jog.
-    VpotSlot    vpots[4] = { {"phones1"}, {"phones2"}, {"phones3"}, {"phones4"} };
+    // four pots of bank 1, Main A/B on bank 2, Main on the jog.
+    // Two banks of four, 5-8 switches (Frank 21.09.: the control room has at
+    // most six outputs, Phones 1-4 and Main A/B). Fixed places: a role without
+    // an output leaves its pot empty rather than letting the others move up,
+    // because a snapshot can reassign roles under the hand. An empty target is
+    // an empty pot.
+    static constexpr int kVpotBanks = 2;
+    static constexpr int kVpotSlots = 4 * kVpotBanks;
+    VpotSlot    vpots[kVpotSlots] = { {"phones1"}, {"phones2"}, {"phones3"}, {"phones4"},
+                                      {"main"},    {"mainB"},   {""},        {""} };
     std::string jogTarget  = "main";
     double      jogStepDb  = 0.5;
     double      vpotStepDb = 0.5;

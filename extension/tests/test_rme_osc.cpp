@@ -276,6 +276,17 @@ int main()
         check(r.vpots[2].target == "input:30" && r.vpots[2].push == "mute"
               && r.jogTarget == "phones2" && r.jogStepDb == 1.0 && r.colourMap[4] == 0x09,
               "…and keeps every pot, the jog and the colours");
+        // Two banks (Frank 21.09.): Phones 1-4, then Main A / Main B and two empty.
+        check(c.vpots[4].target == "main" && c.vpots[5].target == "mainB"
+              && c.vpots[6].target.empty() && c.vpots[7].target.empty(),
+              "bank 2 defaults: Main A, Main B, two empty pots");
+        check(r.vpots[6].target.empty() && r.vpots[5].target == "mainB",
+              "an empty pot survives the round trip as empty");
+        // A v2 file has four pots: they stay bank 1, bank 2 keeps its defaults.
+        Config v2b;
+        configFromJson("{\"version\": 2, \"vpots\": [{\"target\": \"output:4\"}, {}, {}, {}]}", v2b);
+        check(v2b.vpots[0].target == "output:4" && v2b.vpots[4].target == "main"
+              && v2b.vpots[5].target == "mainB", "a v2 file fills bank 1 only");
         Config a, b = a;
         b.vpots[1].target = "output:4";
         check(a.sameConnection(b), "moving a pot is not a reconnect");

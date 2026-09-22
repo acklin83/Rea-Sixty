@@ -747,6 +747,14 @@ inline int uf1SideCarSet_()
 std::atomic<int> g_rmeRow{2};
 std::atomic<int> g_rmeSel[3] = { -1, -1, -1 };
 std::atomic<int> g_rmeSubmix{-1};
+// Welche Bank der vier V-Pots, 0 oder 1, per 5-8 (Frank 21.09.: Bank 1 Phones
+// 1-4, Bank 2 Main A / Main B). Slot = Pot + 4 * Bank in rme::Config::vpots.
+std::atomic<int> g_rmeVpotBank{0};
+static int rmeVpotSlot_(int pot)
+{
+    return pot + 4 * std::clamp(g_rmeVpotBank.load(), 0,
+                                reasixty::rme::Config::kVpotBanks - 1);
+}
 // Die aktive Bank JEDES Side-Car-Satzes, relativ (0..kUf1SideCarBankCount-1).
 // Gespeichert bei uf1SideCarBankBase(set) + Bank in denselben Arrays wie die
 // DAW-Baenke. Satz 0 = RME, Satz 1 = Item Volume (Bindings.h).
@@ -25722,7 +25730,7 @@ static bool uf1RmeEncoder_(uint8_t id, int delta)
     const reasixty::rme::Config cfg = rm.config();
     const reasixty::rme::State  st  = rm.snapshot();
     if (id >= uf1::enc::kVpot1 && id <= uf1::enc::kVpot4) {
-        const auto& slot = cfg.vpots[id - uf1::enc::kVpot1];
+        const auto& slot = cfg.vpots[rmeVpotSlot_(id - uf1::enc::kVpot1)];
         if (slot.turn != "volume") return true;
         const rmeu::Target t = rmeu::resolveTarget(st, slot.target);
         if (t.visible) uf1RmeNudge_(st, t.row, t.ch, delta, cfg.vpotStepDb);
@@ -25801,7 +25809,7 @@ static bool uf1RmeButton_(const uf1::InputEvent& ev)
         auto& rm = reasixty::rme::manager();
         const reasixty::rme::Config cfg = rm.config();
         const reasixty::rme::State  st  = rm.snapshot();
-        const auto& slot = cfg.vpots[id - uf1::btn::kVpot1Push];
+        const auto& slot = cfg.vpots[rmeVpotSlot_(id - uf1::btn::kVpot1Push)];
         const rmeu::Target t = rmeu::resolveTarget(st, slot.target);
         if (!t.visible) return true;
         if (slot.push == "submix") {
@@ -25817,6 +25825,12 @@ static bool uf1RmeButton_(const uf1::InputEvent& ev)
     }
     if (id == uf1::btn::kVpotAboveFaderPush || id == uf1::btn::kChannelPush)
         return true;
+    // 5-8 schaltet die zwei V-Pot-Baenke, wie in der DAW-Ansicht die Spurgruppe.
+    if (id == uf1::btn::k5to8) {
+        if (ev.pressed)
+            g_rmeVpotBank.store((g_rmeVpotBank.load() + 1) % reasixty::rme::Config::kVpotBanks);
+        return true;
+    }
 
     // ⇨ SOLO, CUT, SEL GEHOEREN DEM FADER-KANAL IN TOTALMIX (Frank 21.09.: "sollten
     // die nicht im Side-Car Mode komplett weg von Reaper? Sonst sind ja Side-Car
@@ -33954,7 +33968,9 @@ static bool uf1SideCarKeepsLed_(uf8::bindings::ButtonId id)
 {
     using B = uf8::bindings::ButtonId;
     return id == B::Uf1Shift || id == B::Uf1Rwd || id == B::Uf1Ffw || id == B::Uf1Stop
-        || id == B::Uf1Play  || id == B::Uf1Rec || id == B::Uf1Cycle || id == B::Uf1Click;
+        || id == B::Uf1Play  || id == B::Uf1Rec || id == B::Uf1Cycle || id == B::Uf1Click
+        // 5-8 = die zwei V-Pot-Baenke im RME-Side-Car (uf1RmeButton_).
+        || id == B::Uf1FiveToEight;
 }
 static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
 {
@@ -34098,6 +34114,11 @@ static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
                 on = avail;
             const bool keep = !sideCar || uf1SideCarKeepsLed_(kUf1BtnLeds[k].id);
             if (!keep) on = false;
+            // Im Side-Car ist 5-8 die V-Pot-Bank, egal was in REAPER darauf liegt:
+            // die Lampe sagt, was die Taste hier tut.
+            if (sideCar && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1FiveToEight) {
+                on = five8On; show = true;
+            }
             const uint32_t scaled =
                 (show && keep) ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
             // Fold the modifier that actually DROVE this lamp into the
@@ -34217,7 +34238,14 @@ static void uf1PaintRme_()
                 uf1VpotBar_(vr, i, 0.0, false, /*empty*/ true);
                 continue;
             }
-            const rmeu::Target t = rmeu::resolveTarget(st, cfg.vpots[i].target);
+            const std::string& spec = cfg.vpots[rmeVpotSlot_(i)].target;
+            // Ein leerer Platz ist leer, kein "--": "--" heisst "Rolle ohne Ausgang".
+            if (spec.empty()) {
+                uf1VpotCell_(vr, i, "", "");
+                uf1VpotBar_(vr, i, 0.0, false, true);
+                continue;
+            }
+            const rmeu::Target t = rmeu::resolveTarget(st, spec);
             if (!t.assigned || !t.visible) {
                 uf1VpotCell_(vr, i, t.assigned ? "hidden" : "--", "");
                 uf1VpotBar_(vr, i, 0.0, false, true);
@@ -34291,7 +34319,9 @@ static void uf1PaintRme_()
         }
     }
     // Die uebrigen Tasten: Transport und SHIFT wie REAPER, der Rest dunkel.
-    uf1PaintButtonLeds_(force, Uf1BtnAvail{ false, false, false, false, false },
+    // 5-8 leuchtet auf Bank 2, ueber dieselbe Verfuegbarkeit wie die Spurgruppe.
+    uf1PaintButtonLeds_(force, Uf1BtnAvail{ false, false, false, false,
+                                            g_rmeVpotBank.load() == 1 },
                         /*sideCar*/ true);
 
     // ── Zeitfeld: immer der Jog-Kanal (Main) in dB ──────────────────────────

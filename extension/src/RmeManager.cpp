@@ -58,17 +58,17 @@ std::string configToJson(const Config& c)
     char buf[512];
     snprintf(buf, sizeof(buf),
         "{\n"
-        "  \"version\": 2,\n"
+        "  \"version\": 3,\n"
         "  \"enabled\": %s,\n"
         "  \"connection\": { \"host\": \"%s\", \"send\": %d, \"receive\": %d },\n",
         c.enabled ? "true" : "false", host.c_str(), c.sendPort, c.recvPort);
     j += buf;
     j += "  \"vpots\": [\n";
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < Config::kVpotSlots; ++i) {
         snprintf(buf, sizeof(buf),
             "    { \"target\": \"%s\", \"turn\": \"%s\", \"push\": \"%s\" }%s\n",
             clean(c.vpots[i].target).c_str(), clean(c.vpots[i].turn).c_str(),
-            clean(c.vpots[i].push).c_str(), i < 3 ? "," : "");
+            clean(c.vpots[i].push).c_str(), i < Config::kVpotSlots - 1 ? "," : "");
         j += buf;
     }
     j += "  ],\n";
@@ -105,7 +105,8 @@ bool configFromJson(const std::string& json, Config& out)
         if (const char* v = conn->get_string_by_name("receive", true)) c.recvPort = std::atoi(v);
     }
     if (const wdl_json_element* arr = root->get_item_by_name("vpots"); arr && arr->is_array()) {
-        for (int i = 0; i < 4; ++i) {
+        // v2 had four pots: they stay bank 1, and bank 2 keeps its defaults.
+        for (int i = 0; i < Config::kVpotSlots; ++i) {
             const wdl_json_element* e = arr->enum_item(i);
             if (!e || !e->is_object()) continue;
             if (const char* v = e->get_string_by_name("target")) c.vpots[i].target = v;
