@@ -93,6 +93,7 @@
 #include "HueManager.h"
 #include "ObsManager.h"
 #include "RmeManager.h"
+#include "RmeNames.h"
 #include "BindingsPick.h"
 #include "RmeStrip.h"
 #include "RmeUf1.h"
@@ -807,6 +808,19 @@ static int rmeVpotSlot_(int pot)
 // Gespeichert bei uf1SideCarBankBase(set) + Bank in denselben Arrays wie die
 // DAW-Baenke. Satz 0 = RME, Satz 1 = Item Volume (Bindings.h).
 std::atomic<int> g_sideCarBank[2] = { 0, 0 };
+// Die Soft-Key-Bank, die das laufende Side-Car gerade zeigt (absolut im Store),
+// -1 ohne Side-Car.
+static int uf1SideCarBankNow_()
+{
+    const int set = uf1SideCarSet_();
+    return set < 0 ? -1
+                   : uf8::bindings::uf1SideCarBankBase(set) + g_sideCarBank[set].load();
+}
+// ◄ ► LANG im Side-Car: Zeitpunkt des Drucks (0 = keiner) und Richtung. Der
+// Eingabe-Thread setzt ihn, der Side-Car-Maler feuert die Seite bei
+// kUf1DynLongPressMs, das Loslassen davor ist der kurze Druck (Bankwechsel).
+std::atomic<int64_t> g_scArrowDownMs{0};
+std::atomic<int>     g_scArrowDir{0};
 
 // ⇨ UF1 LAYOUT PROBE (Settings -> About). A diagnostic, not a feature.
 //
@@ -7946,6 +7960,35 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
         info.led     = (nm == om.currentScene()) ? 2 : 1;
         return info;
     }
+    // ⛔ AND TOTALMIX' SNAPSHOTS AND LAYOUTS, same place, same reason. TotalMix
+    // always has eight of each, so every key is present; the name comes from its
+    // state file (RmeNames.h). Without a link the names stay and the lamp goes
+    // dark, and the press does nothing (Frank 22.09.).
+    if (kind == DK::RmeSnapshots || kind == DK::RmeLayouts) {
+        const auto& nm = reasixty::rme::namesFromDisk();
+        const bool snap = (kind == DK::RmeSnapshots);
+        info.present = true;
+        info.label   = snap ? reasixty::rme::snapshotName(nm, slot)
+                            : reasixty::rme::layoutName(nm, slot);
+        // White through the colour path: on the UF1 a key without a colour
+        // knows only lit and dim, and "no link" has to be dark.
+        info.hasRgb  = true;
+        info.rgb     = 0xFFFFFFu;
+        auto& rm = reasixty::rme::manager();
+        if (rm.link() != reasixty::rme::LinkState::Online) { info.led = 0; return info; }
+        const auto sc = rm.scenes();
+        if (snap) {
+            using SS = reasixty::rme::SnapshotState;
+            // Changed blinks, at the 350 ms of the other blinking keys.
+            const bool phase = ((nowMs_() / 350) & 1) != 0;
+            info.led = sc.snapshot[slot] == SS::Active  ? 2
+                     : sc.snapshot[slot] == SS::Changed ? (phase ? 2 : 1)
+                                                        : 1;
+        } else {
+            info.led = (sc.lastLayout == slot) ? 2 : 1;
+        }
+        return info;
+    }
     if (!tr) return info;
     switch (kind) {
         case DK::FxBank:
@@ -8113,6 +8156,7 @@ static int dynamicBankItemCountUf1_(uf8::bindings::DynamicBankKind kind,
     // count, so a fixed number would page onto keys that resolve to nothing.
     if (kind == DK::ObsScenes)
         return static_cast<int>(reasixty::obs::manager().scenes().size());
+    if (kind == DK::RmeSnapshots || kind == DK::RmeLayouts) return 8;
     return 0;
 }
 
@@ -8402,6 +8446,28 @@ static void applyDynBankFavouriteOp_(int slot, int gesture,
     else                    g_csSwitchReq.store(slot);
 }
 
+// A TotalMix snapshot or layout key. Plain push only: loads it, and the name
+// shows in the time field like an OBS scene. Saving a snapshot is not on these
+// keys. Without a link nothing is sent (Manager::send drops it anyway when RME
+// is switched off, but a link that is merely down would queue it).
+static void applyDynBankRmeOp_(uf8::bindings::DynamicBankKind kind, int slot,
+                               int gesture)
+{
+    if (slot < 0 || slot >= 8 || gesture != 0) return;
+    auto& rm = reasixty::rme::manager();
+    if (rm.link() != reasixty::rme::LinkState::Online) return;
+    const bool snap = (kind == uf8::bindings::DynamicBankKind::RmeSnapshots);
+    // Snapshots count from 1 on the wire (protocol sheet); layouts are sent the
+    // same way, which is not measured yet.
+    char addr[32];
+    std::snprintf(addr, sizeof(addr), snap ? "/snapshot/load/%d" : "/layout/load/%d",
+                  slot + 1);
+    rm.send(addr, 1.0f);
+    const auto& nm = reasixty::rme::namesFromDisk();
+    uf1FlashTimecode_(snap ? reasixty::rme::snapshotName(nm, slot)
+                           : reasixty::rme::layoutName(nm, slot), 1200);
+}
+
 // Main-thread executor for a UF8 dynamic bank press (drained in onTimer).
 static void applyDynBankReq_(uint32_t enc)
 {
@@ -8423,6 +8489,10 @@ static void applyDynBankReq_(uint32_t enc)
         if (nm.empty()) return;
         om.switchScene(nm);
         uf1FlashTimecode_(nm, 1200);
+        return;
+    }
+    if (kind == DK::RmeSnapshots || kind == DK::RmeLayouts) {
+        applyDynBankRmeOp_(kind, slot, gesture);
         return;
     }
     MediaTrack* tr = dynBankContextTrack_();
@@ -8470,6 +8540,10 @@ static void applyDynBankUf1_(uf8::bindings::DynamicBankKind kind,
         if (nm.empty()) return;
         om.switchScene(nm);
         uf1FlashTimecode_(nm, 1200);
+        return;
+    }
+    if (kind == DK::RmeSnapshots || kind == DK::RmeLayouts) {
+        applyDynBankRmeOp_(kind, absIdx, gesture);
         return;
     }
     if (!tr) return;
@@ -25959,11 +26033,30 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
     // ⇨ DIE NORMALEN PFEILE < > BLAETTERN, wie die Soft-Key-Baenke in der DAW-
     // Ansicht, nicht Bank < > (Frank 22.09.). Kein Umlauf: die Lampe sagt, ob es
     // in diese Richtung noch weitergeht, und ein Umlauf machte sie sinnlos.
+    // ⇨ AUF EINER DYNAMISCHEN BANK MIT MEHREREN SEITEN KURZ UND LANG (Frank
+    // 22.09., "nur dort"): kurz = Bank beim Loslassen, lang = Seite in der Bank,
+    // wie ◄ ► lang in der DAW-Ansicht. Sonst springt der Druck sofort, wie immer.
     if (id == uf1::btn::kArrowLeft || id == uf1::btn::kArrowRight) {
-        if (ev.pressed) {
-            const int nb  = std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set));
-            const int dir = (id == uf1::btn::kArrowRight) ? 1 : -1;
+        const int dir = (id == uf1::btn::kArrowRight) ? 1 : -1;
+        auto stepBank = [set, dir]() {
+            const int nb = std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set));
             g_sideCarBank[set].store(std::clamp(g_sideCarBank[set].load() + dir, 0, nb - 1));
+        };
+        if (ev.pressed) {
+            const bool paged = g_uf1DynBankPageCount.load() >= 2
+                && uf8::bindings::getUf1SoftBankDynamicFor(
+                       uf1SideCarBankNow_(),
+                       static_cast<int>(uf8::bindings::bankModifierSnapshot()))
+                   != uf8::bindings::DynamicBankKind::None;
+            if (paged) {
+                g_scArrowDir.store(dir);
+                g_scArrowDownMs.store(nowMs_());
+            } else {
+                g_scArrowDownMs.store(0);
+                stepBank();
+            }
+        } else if (g_scArrowDownMs.exchange(0) != 0) {
+            stepBank();   // losgelassen, bevor der Maler die Seite gefeuert hat
         }
         return true;
     }
@@ -31718,6 +31811,8 @@ static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod,
         case DynamicBankKind::BcFavourites: return withSet("BC Favourites");
         case DynamicBankKind::HueScenes:    return withSet("Hue");
         case DynamicBankKind::ObsScenes:    return withSet("OBS");
+        case DynamicBankKind::RmeSnapshots: return withSet("Snapshots");
+        case DynamicBankKind::RmeLayouts:   return withSet("Layouts");
         default: break;
     }
     // ⇨ THE FALLBACK NAMES THE SET AND THE BANK. The UF1 falls back to "SOFT 3"
@@ -31804,6 +31899,9 @@ static std::string uf1BankDisplayName_(int bank, int mod)
         // does not fail loudly, it just reads as a different word.
         case DynamicBankKind::HueScenes:    return "HUE";
         case DynamicBankKind::ObsScenes:    return "OBS";
+        // No K, M, V, W or X in either word.
+        case DynamicBankKind::RmeSnapshots: return "SNAPS";
+        case DynamicBankKind::RmeLayouts:   return "LAYOUTS";
         default: break;
     }
     char b[16];
@@ -32901,6 +32999,79 @@ static Uf1SkCell uf1StaticBankCell_(int bankNo, int i)
     Uf1SkCell c;
     c.label = label; c.haveLabel = haveLabel; c.on = on;
     c.hasColour = keyHasColour; c.colRgb = keyColRgb; c.colBright = keyColBright;
+    return c;
+}
+
+// ⇨ DIE ZELLE EINES DYNAMISCHEN BANK-SLOTS, und die Seite dazu. Bis 22.09. stand
+// beides nur im DAW-Zweig von uf1PaintChannel_; das Side-Car malt seine eigenen
+// Baenke und braucht dieselbe Regel (TotalMix-Snapshots auf RME-Bank 3), also
+// steht sie hier einmal, wie uf1StaticBankCell_ darueber.
+// Seite: g_uf1DynBankPage waehlt [page*4 .. page*4+3], ABSOLUT. Zaehler und
+// Ruecksetzen bei Wechsel von Bank / Art / Spur. Es malt immer nur EIN Maler,
+// darum teilen sich DAW-Ansicht und Side-Car die eine Seite.
+static int uf1DynBankPagePublish_(int bankNo, uf8::bindings::DynamicBankKind kind,
+                                  MediaTrack* tr)
+{
+    static int         sDynBank  = -1;
+    static int         sDynKind  = -1;
+    static MediaTrack* sDynTrack = nullptr;
+    const int items = dynamicBankItemCountUf1_(kind, tr);
+    const int pages = std::max(1, (items + 3) / 4);
+    g_uf1DynBankPageCount.store(pages);
+    const int kindI = static_cast<int>(kind);
+    if (bankNo != sDynBank || kindI != sDynKind || tr != sDynTrack) {
+        g_uf1DynBankPage.store(0);
+        sDynBank = bankNo; sDynKind = kindI; sDynTrack = tr;
+    }
+    if (g_uf1DynBankPage.load() >= pages) g_uf1DynBankPage.store(0);
+    return g_uf1DynBankPage.load();
+}
+
+static Uf1SkCell uf1DynBankCell_(int bankNo, uf8::bindings::DynamicBankKind kind,
+                                 bool ownsSet, MediaTrack* tr, int page, int i)
+{
+    Uf1SkCell c;
+    // Computed key at the ABSOLUTE item index page*4 + i. label + on-state +
+    // optional CLASS COLOUR come from the same DynSlotInfo the UF8/UC1 dynamic
+    // banks render (FxBank: CS yellow / BC red / UF8-mapped blue; TrackColours:
+    // the swatch). An empty slot yields a blank label (present=false). Colour
+    // drives the FF38 GRB path (Frank HW-confirmed the display soft-key colour
+    // works); led 2=bright, 1=dim, 0=dark. Plain FX (no hasRgb) keep the
+    // state-only bytes.
+    // ⇨ EXCEPT WHERE THE HELD SET OWNS THE KEY. That is what the press does, so
+    // it is what the screen has to say — the dispatch learned this and the
+    // painter did not, which is the LCD saying one thing while the key does
+    // another, one bank type further along (Frank 2026-08-25). Painted exactly
+    // like a static bank slot: the set's own label, its engaged state, its colour.
+    const int mIdxDyn = static_cast<int>(uf8::bindings::bankModifierSnapshot());
+    const uf8::bindings::Binding dawSlot = uf8::bindings::getUf1SoftBankSlot(bankNo, i);
+    if (!ownsSet && setOwnsDynamicKey_(dawSlot, mIdxDyn)) {
+        const auto& sp = dawSlot.shortPress[mIdxDyn];
+        c.label = !sp.label.empty() ? sp.label
+                                    : uf8::bindings::softKeyFallbackLabel(sp);
+        c.haveLabel = true;
+        c.on = bindingHasActiveSlotForSet_(dawSlot, mIdxDyn);
+        c.hasColour = true;
+        uint8_t col[3];
+        uf8::bindings::Brightness bri;
+        if (c.on) uf8::bindings::effectiveLedActive  (dawSlot, sp, col, bri);
+        else      uf8::bindings::effectiveLedInactive(dawSlot, sp, col, bri);
+        c.colBright = (bri == uf8::bindings::Brightness::Bright);
+        c.colRgb = (uint32_t(col[0]) << 16) | (uint32_t(col[1]) << 8)
+                 | static_cast<uint32_t>(col[2]);
+        // Off is a third state, not "not bright".
+        if (bri == uf8::bindings::Brightness::Off) c.colRgb = 0;
+        return c;
+    }
+    const DynSlotInfo di = dynamicBankSlotUf1_(kind, tr, page * 4 + i);
+    c.label = di.label;
+    c.haveLabel = true;
+    c.on = (di.led >= 2);   // bright when the LED hint is "on"
+    if (di.present && di.hasRgb) {
+        c.hasColour = true;
+        c.colBright = (di.led >= 2);
+        c.colRgb = (di.led == 0) ? 0u : di.rgb;   // dark when bypassed / off
+    }
     return c;
 }
 
@@ -34088,8 +34259,9 @@ static void uf1PaintModeMenuOverlay_(bool changed)
 // dass der Besitzer des Schirms beim Loslassen seine eigenen zurueckschreibt
 // (Frank 21.09.: PLUGIN / DAW / METER / SENDS blieben stehen). Darum der
 // erzwungene Durchgang beim Loslassen.
-// Zellen ueber uf1StaticBankCell_, dieselbe Regel wie in der DAW-Ansicht.
-// Dynamische Arten auf einer Side-Car-Bank werden (noch) nicht gemalt.
+// Zellen ueber uf1StaticBankCell_ / uf1DynBankCell_, dieselbe Regel wie in der
+// DAW-Ansicht; eine dynamische Art (TotalMix-Snapshots, Frank 22.09.) blaettert
+// dieselbe Seite g_uf1DynBankPage.
 // EIN Schreiber fuer jedes Side-Car, beide Maler rufen ihn.
 static void uf1PaintSideCarSoftKeys_(bool force)
 {
@@ -34102,8 +34274,26 @@ static void uf1PaintSideCarSoftKeys_(bool force)
     const int nb = std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set));
     if (g_sideCarBank[set].load() >= nb) g_sideCarBank[set].store(0);
     const int bank = uf8::bindings::uf1SideCarBankBase(set) + g_sideCarBank[set].load();
+    bool dynOwnsSet = false;
+    const auto dynKind = uf8::bindings::getUf1SoftBankDynamicFor(
+        bank, static_cast<int>(uf8::bindings::bankModifierSnapshot()), &dynOwnsSet);
+    const bool dyn = dynKind != uf8::bindings::DynamicBankKind::None;
+    MediaTrack* dynTr = dyn ? uf1FocusedTrack_() : nullptr;
+    // ◄ ► lang (uf1SideCarSoftKeys_): die Seite, sobald der Druck lang genug ist.
+    // Der CAS entscheidet zwischen diesem Tick und dem Loslassen, genau einer gewinnt.
+    if (int64_t down = g_scArrowDownMs.load();
+        down != 0 && nowMs_() - down >= kUf1DynLongPressMs
+        && g_scArrowDownMs.compare_exchange_strong(down, 0) && dyn) {
+        const int cnt = std::max(1, g_uf1DynBankPageCount.load());
+        const int dir = g_scArrowDir.load() > 0 ? 1 : cnt - 1;
+        g_uf1DynBankPage.store((g_uf1DynBankPage.load() + dir) % cnt);
+    }
+    const int dynPage = dyn ? uf1DynBankPagePublish_(bank, dynKind, dynTr) : 0;
     std::array<Uf1SkCell, 4> cells{};
-    for (int i = 0; i < 4; ++i) cells[static_cast<size_t>(i)] = uf1StaticBankCell_(bank, i);
+    for (int i = 0; i < 4; ++i)
+        cells[static_cast<size_t>(i)] = dyn
+            ? uf1DynBankCell_(bank, dynKind, dynOwnsSet, dynTr, dynPage, i)
+            : uf1StaticBankCell_(bank, i);
     // Ein anderes Side-Car ist ein anderer Satz: dann alles neu.
     static int sSet = -1;
     const bool setEdge = (set != sSet);
@@ -36502,24 +36692,10 @@ void uf1PaintChannel_()
             : uf8::bindings::DynamicBankKind::None;
         const bool dawDyn = dawDynKind != uf8::bindings::DynamicBankKind::None;
         MediaTrack* dawDynTr = dawDyn ? uf1FocusedTrack_() : nullptr;
-        if (dawDyn) {
-            // Publish the page count (ceil(items/4), min 1) for the "5-8" worker,
-            // and reset/clamp the page on bank / kind / focus-track change — the
-            // exact SENDS reset (sSendTrack) generalised to (bank, kind, track).
-            static int         sDynBank  = -1;
-            static int         sDynKind  = -1;
-            static MediaTrack* sDynTrack = nullptr;
-            const int items  = dynamicBankItemCountUf1_(dawDynKind, dawDynTr);
-            const int pages  = std::max(1, (items + 3) / 4);
-            g_uf1DynBankPageCount.store(pages);
-            const int kindI = static_cast<int>(dawDynKind);
-            if (bankNo != sDynBank || kindI != sDynKind || dawDynTr != sDynTrack) {
-                g_uf1DynBankPage.store(0);
-                sDynBank = bankNo; sDynKind = kindI; sDynTrack = dawDynTr;
-            }
-            if (g_uf1DynBankPage.load() >= pages) g_uf1DynBankPage.store(0);
-        }
-        const int dawDynPage = dawDyn ? g_uf1DynBankPage.load() : 0;
+        // Publish the page count (ceil(items/4), min 1) and reset/clamp the page
+        // on bank / kind / focus-track change (uf1DynBankPagePublish_).
+        const int dawDynPage = dawDyn
+            ? uf1DynBankPagePublish_(bankNo, dawDynKind, dawDynTr) : 0;
         // The on-screen HIGHLIGHT mask (0x0102) collected across the four keys —
         // see the send just after the loop for why it is worth having.
         std::array<Uf1SkCell, 4> skCells{};
@@ -36562,52 +36738,13 @@ void uf1PaintChannel_()
                 }
                 // gap slot → blank label + LED off
             } else if (dawDyn) {
-                // Computed key from the focused track at the ABSOLUTE item index
-                // page*4 + i. label + on-state + optional CLASS COLOUR come from the
-                // same DynSlotInfo the UF8/UC1 dynamic banks render (FxBank: CS yellow /
-                // BC red / UF8-mapped blue; TrackColours: the swatch). An empty slot
-                // yields a blank label (present=false). Colour drives the FF38 GRB path
-                // (Frank HW-confirmed the display soft-key colour works); led 2=bright,
-                // 1=dim, 0=dark. Plain FX (no hasRgb) keep the state-only bytes.
-                // ⇨ EXCEPT WHERE THE HELD SET OWNS THE KEY. That is what the
-                // press does, so it is what the screen has to say — the dispatch
-                // learned this and the painter did not, which is the LCD saying
-                // one thing while the key does another, one bank type further
-                // along (Frank 2026-08-25). Painted exactly like a static bank
-                // slot below: the set's own label, its engaged state, its colour.
-                const int mIdxDyn =
-                    static_cast<int>(uf8::bindings::bankModifierSnapshot());
+                // uf1DynBankCell_: the computed key, or the held set's own slot.
                 dawSlot = uf8::bindings::getUf1SoftBankSlot(bankNo, i);
-                if (!dawDynOwnsSet && setOwnsDynamicKey_(dawSlot, mIdxDyn)) {
-                    const auto& sp = dawSlot.shortPress[mIdxDyn];
-                    label = !sp.label.empty()
-                          ? sp.label
-                          : uf8::bindings::softKeyFallbackLabel(sp);
-                    haveLabel = true;
-                    on = bindingHasActiveSlotForSet_(dawSlot, mIdxDyn);
-                    keyHasColour = true;
-                    uint8_t c[3];
-                    uf8::bindings::Brightness bri;
-                    if (on) uf8::bindings::effectiveLedActive  (dawSlot, sp, c, bri);
-                    else    uf8::bindings::effectiveLedInactive(dawSlot, sp, c, bri);
-                    keyColBright = (bri == uf8::bindings::Brightness::Bright);
-                    keyColRgb = (uint32_t(c[0]) << 16) | (uint32_t(c[1]) << 8)
-                              | static_cast<uint32_t>(c[2]);
-                    // Off is a third state, not "not bright" — same as below.
-                    if (bri == uf8::bindings::Brightness::Off) keyColRgb = 0;
-                } else {
-                    const DynSlotInfo di = dynamicBankSlotUf1_(
-                        dawDynKind, dawDynTr, dawDynPage * 4 + i);
-                    label = di.label;
-                    haveLabel = true;
-                    on = (di.led >= 2);   // bright when the LED hint is "on"
-                    if (di.present && di.hasRgb) {
-                        keyHasColour = true;
-                        keyColBright = (di.led >= 2);
-                        // dark when bypassed / off
-                        keyColRgb = (di.led == 0) ? 0u : di.rgb;
-                    }
-                }
+                const Uf1SkCell sc = uf1DynBankCell_(bankNo, dawDynKind, dawDynOwnsSet,
+                                                     dawDynTr, dawDynPage, i);
+                label = sc.label; haveLabel = sc.haveLabel; on = sc.on;
+                keyHasColour = sc.hasColour; keyColRgb = sc.colRgb;
+                keyColBright = sc.colBright;
             } else if (dawBanks) {
                 dawSlot = uf8::bindings::getUf1SoftBankSlot(bankNo, i);
                 const Uf1SkCell sc = uf1StaticBankCell_(bankNo, i);
@@ -55327,10 +55464,19 @@ void registerBindingHandlers()
     // param sign = direction. Atomic stores + a config-mutex read → worker-safe.
     registerBuiltin("uf1_dyn_bank_page", DescBuilder{
         [](bool firing, bool /*pressed*/, int param) {
-            if (!firing || g_uf1MeterView.load()) return;
-            if (g_uf1ChannelSubMode.load() != 1) return;      // DAW mode only
+            if (!firing) return;
+            // ⇨ IM SIDE-CAR DIE BANK DES SIDE-CARS. Bis 22.09. las das hier immer
+            // die DAW-Bank, also blaetterte Franks Bank ◄ ► im Side-Car eine Bank,
+            // die gar nicht zu sehen war. In STRIP gehoeren die Keys der Seite.
+            const int scBank = uf1SideCarBankNow_();
+            if (scBank >= 0) {
+                if (uf1RmeActive_() && g_rmeStrip.load()) return;
+            } else {
+                if (g_uf1MeterView.load()) return;
+                if (g_uf1ChannelSubMode.load() != 1) return;  // DAW mode only
+            }
             if (uf8::bindings::getUf1SoftBankDynamicFor(
-                    g_uf1SoftBank.load(),
+                    scBank >= 0 ? scBank : g_uf1SoftBank.load(),
                     static_cast<int>(uf8::bindings::bankModifierSnapshot()))
                 == uf8::bindings::DynamicBankKind::None) return;
             const int cnt = std::max(1, g_uf1DynBankPageCount.load());

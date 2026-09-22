@@ -119,6 +119,9 @@ struct State {
     bool   globalSolo   = false;
 
     SnapshotState snapshot[8] = {};
+    // The layout last sent from here, 0..7, -1 = none yet. Ours, not TotalMix':
+    // /layout/load has no answer (RmeState.cpp).
+    int           lastLayout  = -1;
 
     std::map<int, Channel> inputs;
     std::map<int, Channel> playbacks;

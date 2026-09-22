@@ -1336,6 +1336,8 @@ static const char* dynKindLabel_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::BcFavourites: return "BC Favourites";
         case DynamicBankKind::HueScenes:   return "Hue Scenes";
         case DynamicBankKind::ObsScenes:   return "OBS Scenes";
+        case DynamicBankKind::RmeSnapshots: return "TotalMix Snapshots";
+        case DynamicBankKind::RmeLayouts:  return "TotalMix Layouts";
         default:                           return "Off (static slots)";
     }
 }
@@ -1366,6 +1368,8 @@ static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::BcFavourites: return "BC FAVS";
         case DynamicBankKind::HueScenes:   return "HUE";
         case DynamicBankKind::ObsScenes:   return "OBS";
+        case DynamicBankKind::RmeSnapshots: return "SNAPS";
+        case DynamicBankKind::RmeLayouts:  return "LAYOUTS";
         default:                           return "";
     }
 }
@@ -5412,6 +5416,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                     DynamicBankKind::Favourites,  DynamicBankKind::HueScenes,
                     DynamicBankKind::CsFavourites, DynamicBankKind::BcFavourites,
                     DynamicBankKind::ObsScenes,
+                    DynamicBankKind::RmeSnapshots, DynamicBankKind::RmeLayouts,
                 };
                 for (const auto k : kKinds) {
                     bool sel = (k == dynMine);
@@ -6610,6 +6615,8 @@ static void renderBankMatrixContextMenu_(ImGui_Context* ctx)
             { DynamicBankKind::BcFavourites, "BC Favourites" },
             { DynamicBankKind::HueScenes,    "Hue Scenes" },
             { DynamicBankKind::ObsScenes,    "OBS Scenes" },
+            { DynamicBankKind::RmeSnapshots, "TotalMix Snapshots" },
+            { DynamicBankKind::RmeLayouts,   "TotalMix Layouts" },
         };
         const DynamicBankKind cur =
             getSubBankDynamic(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod);
@@ -7036,6 +7043,7 @@ static void renderUf1BankMatrixContextMenu_(ImGui_Context* ctx)
             DynamicBankKind::Favourites,   DynamicBankKind::CsFavourites,
             DynamicBankKind::BcFavourites, DynamicBankKind::HueScenes,
             DynamicBankKind::ObsScenes,
+            DynamicBankKind::RmeSnapshots, DynamicBankKind::RmeLayouts,
         };
         const DynamicBankKind cur = getUf1SoftBankDynamic(b, mod);
         for (const auto k : kKinds) {
@@ -8290,6 +8298,8 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 { DynamicBankKind::BcFavourites, "BC Favourites" },
                 { DynamicBankKind::HueScenes,    "Hue Scenes" },
                 { DynamicBankKind::ObsScenes,    "OBS Scenes" },
+                { DynamicBankKind::RmeSnapshots, "TotalMix Snapshots" },
+                { DynamicBankKind::RmeLayouts,   "TotalMix Layouts" },
             };
             // This set's OWN kind — "Off" on a set means "take Plain's bank".
             const DynamicBankKind curKind =

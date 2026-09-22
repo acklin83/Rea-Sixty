@@ -277,6 +277,15 @@ Manager::ControlRoom Manager::controlRoom() const
     return { state_.dim, state_.mono, state_.speakerB, state_.talkback, state_.mainOut };
 }
 
+Manager::Scenes Manager::scenes() const
+{
+    std::lock_guard<std::mutex> lk(mx_);
+    Scenes sc;
+    for (int i = 0; i < 8; ++i) sc.snapshot[i] = state_.snapshot[i];
+    sc.lastLayout = state_.lastLayout;
+    return sc;
+}
+
 State Manager::snapshot() const
 {
     std::lock_guard<std::mutex> lk(mx_);

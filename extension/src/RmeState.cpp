@@ -118,11 +118,28 @@ bool ingest(State& st, const Message& m)
         const int n = std::atoi(a.c_str() + 15);          // slots count from 1
         if (n >= 1 && n <= 8) {
             const int v = static_cast<int>(num(m));
+            // ⇨ 1 IS OUR OWN LOAD, folded in by Manager::send. TotalMix only
+            // ever reports 0 / 2 / 3 and takes only 1 (the protocol sheet), so a
+            // 1 here means "this one was just loaded": it is the active one now
+            // and no other is. Read as "not 2 or 3" it turned the key we had just
+            // pressed dark until TotalMix spoke again.
+            if (v == 1) {
+                for (auto& s : st.snapshot) s = SnapshotState::Off;
+                st.snapshot[n - 1] = SnapshotState::Active;
+                return true;
+            }
             st.snapshot[n - 1] = (v == 2) ? SnapshotState::Active
                                : (v == 3) ? SnapshotState::Changed
                                           : SnapshotState::Off;
             return true;
         }
+        return false;
+    }
+    // ── layouts: send only. TotalMix answers nothing on /layout/load, so the
+    // one we hold is the one last sent from here (Manager::send folds it in).
+    if (a.rfind("/layout/load/", 0) == 0) {
+        const int n = std::atoi(a.c_str() + 13);          // counted like snapshots
+        if (n >= 1 && n <= 8) { st.lastLayout = n - 1; return true; }
         return false;
     }
 

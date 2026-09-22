@@ -787,6 +787,23 @@ void seedRmeSideCarBank2_(Config& c)
     bank[0] = mkBuiltin("rme_fader_main", Behavior::Momentary, "Main");
 }
 
+// Third and fourth: TotalMix' snapshots and layouts as dynamic banks (Frank
+// 22.09.). Same rule, only into a bank with no slot and no kind of its own.
+void seedRmeSideCarBank34_(Config& c)
+{
+    const DynamicBankKind kinds[2] = { DynamicBankKind::RmeSnapshots,
+                                       DynamicBankKind::RmeLayouts };
+    for (int k = 0; k < 2; ++k) {
+        const int b = kUf1RmeBankBase + 2 + k;
+        bool empty = true;
+        for (int s = 0; s < kUf1SoftBankSlots && empty; ++s)
+            if (!uf1BankSlotEmpty_(c.uf1SoftBanks[b][s])) empty = false;
+        for (int m = 0; m < kSoftKeyModifierSets && empty; ++m)
+            if (c.uf1SoftBankDynamic[b][m] != DynamicBankKind::None) empty = false;
+        if (empty) c.uf1SoftBankDynamic[b][0] = kinds[k];
+    }
+}
+
 void seedFactoryDefaults_(Config& c)
 {
     crumb_("seed: enter");
@@ -1370,6 +1387,7 @@ void seedFactoryDefaults_(Config& c)
     fillDerivedUf1Slots_(c);
     seedRmeSideCarBank_(c);
     seedRmeSideCarBank2_(c);
+    seedRmeSideCarBank34_(c);
 }
 
 // ---- JSON serialization ---------------------------------------------------
@@ -3068,7 +3086,9 @@ bool invokeBuiltin(const std::string& name, int param)
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
-constexpr int kCurrentBindingsVersion = 43;
+// v44 (2026-09-22): RME side-car banks 3 and 4 become the dynamic TotalMix
+// Snapshots and Layouts banks, where they are still empty (seedRmeSideCarBank34_).
+constexpr int kCurrentBindingsVersion = 44;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4242,6 +4262,9 @@ void load()
             }
             if (tmp.version < 43) {
                 seedRmeSideCarBank2_(tmp);
+            }
+            if (tmp.version < 44) {
+                seedRmeSideCarBank34_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins

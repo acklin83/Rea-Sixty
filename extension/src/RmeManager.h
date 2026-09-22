@@ -155,6 +155,14 @@ class Manager {
     };
     ControlRoom controlRoom() const;
 
+    // The snapshot and layout keys, same reason: eight LEDs per tick must not
+    // copy the whole cache.
+    struct Scenes {
+        SnapshotState snapshot[8] = {};
+        int           lastLayout  = -1;
+    };
+    Scenes scenes() const;
+
   private:
     void workerLoop();
     void setStatus(LinkState st, const std::string& text);

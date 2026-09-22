@@ -654,6 +654,14 @@ enum class DynamicBankKind : uint8_t {
     // the first eight — the surface has eight keys and OBS has no notion of a
     // page.
     ObsScenes    = 9,
+    // TotalMix' eight snapshots and eight layouts (Frank 2026-09-22). Like OBS,
+    // the list belongs to the other program: TotalMix has exactly eight of each,
+    // and the names come from its state file because OSC carries none
+    // (RmeNames.h). A snapshot key lights while TotalMix reports that snapshot
+    // active and blinks while it is changed; a layout key lights for the layout
+    // last sent from here, because TotalMix answers nothing on /layout/load.
+    RmeSnapshots = 10,
+    RmeLayouts   = 11,
 };
 
 // ⛔ THE PARSER'S UPPER BOUND LIVES HERE, NOT IN THE PARSER. Both loaders check
@@ -661,7 +669,7 @@ enum class DynamicBankKind : uint8_t {
 // a new kind was accepted by the editor, written to disk, and then silently
 // dropped on the next load — the bank came back static and nothing said why.
 // Adding a kind means moving this line, and only this line.
-constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::ObsScenes;
+constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::RmeLayouts;
 
 // ⇨ DOES THIS KIND SPEND THE MODIFIERS ON ITS OWN GESTURES?
 // Only the FX bank does. Its five key gestures are Push, +Shift, +Cmd, +Ctrl and
@@ -671,7 +679,8 @@ constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::ObsScenes;
 //
 // Every other kind reads at most gesture 0 and gesture 4, and long-press is not
 // a modifier: parameter groups and track colours act on 4 only, Hue scenes on 0
-// and 4, favourites on 0, OBS scenes on 0 (applyDynBank*Op_ in main.cpp, checked
+// and 4, favourites on 0, OBS scenes and TotalMix snapshots / layouts on 0
+// (applyDynBank*Op_ in main.cpp, checked
 // one by one). On those the modifier sets do nothing at all, so inheriting the
 // kind onto them spends a whole bank of keys to show the same eight labels that
 // Plain already shows and fire nothing (Frank 2026-09-07, on the OBS bank).

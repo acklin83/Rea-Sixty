@@ -12,6 +12,7 @@
 //     which is the one thing on Frank's rig that would otherwise read as a bug
 //
 #include "RmeManager.h"
+#include "RmeNames.h"
 #include "RmeOsc.h"
 #include "RmeState.h"
 #include "RmeStrip.h"
@@ -172,6 +173,16 @@ int main()
     check(st.snapshot[0] == SnapshotState::Off, "slot 1 is off");
     check(st.snapshot[4] == SnapshotState::Changed, "slot 5 is CHANGED, not on");
     check(st.snapshot[5] == SnapshotState::Active, "slot 6 is active");
+    // Our own load (value 1, folded in by Manager::send): that slot is the
+    // active one at once, every other is off, a changed one included.
+    feed("/snapshot/load/3", 1.0f);
+    check(st.snapshot[2] == SnapshotState::Active, "a slot we load is active at once");
+    check(st.snapshot[4] == SnapshotState::Off && st.snapshot[5] == SnapshotState::Off,
+          "...and the others, changed or active, are off");
+    // Layouts have no answer, so the state holds the one we sent, 1-based on the wire.
+    check(st.lastLayout == -1, "no layout until one is sent");
+    feed("/layout/load/4", 1.0f);
+    check(st.lastLayout == 3, "the layout last sent, 0-based");
 
     // ── colour index 0 means hidden, and it is an INDEX, not RGB ────────────
     feed("/input/0/color", 0.0f);
@@ -539,6 +550,33 @@ int main()
         Config v3;
         configFromJson("{\"version\": 3}", v3);
         check(v3.stripPages.size() == pages.size(), "a file without pages keeps the factory set");
+    }
+
+
+    // ── snapshot and layout names (TotalMix' state file, not OSC) ────────────
+    // Lines 70-86 of Frank's last.FirefaceUFX+23802132.xml, 2026-09-22, bytes
+    // as they are on disk: the file is LATIN-1, so "\xF6" is one byte there.
+    {
+        const std::string xml =
+            "\t\t\t<val e=\"SnapshotName 0\" v=\"Mix\"/>\n"
+            "\t\t\t<val e=\"LayoutName 0\" v=\"All\"/>\n"
+            "\t\t\t<val e=\"SnapshotName 3\" v=\"Uncr\xF6wned\"/>\n"
+            "\t\t\t<val e=\"LayoutName 3\" v=\"Tracking\"/>\n"
+            "\t\t\t<val e=\"SnapshotName 6\" v=\"Drums &amp; Bass\"/>\n"
+            "\t\t\t<val e=\"SnapshotName 7\" v=\"\"/>\n"
+            "\t\t\t<val e=\"LastLayoutPrest\" v=\"3\"/>\n";
+        Names n;
+        check(parseNames(xml, n), "a state file with names parses");
+        check(n.snapshot[0] == "Mix" && n.layout[3] == "Tracking", "names by slot, 0-based");
+        check(n.snapshot[3] == "Uncr\xC3\xB6wned", "Latin-1 byte F6 arrives as UTF-8 C3 B6");
+        check(n.snapshot[6] == "Drums & Bass", "XML entities unescaped");
+        check(snapshotName(n, 7) == "Snapshot 8" && layoutName(n, 1) == "Layout 2",
+              "an empty or missing name falls back to the 1-based number");
+        Names u;
+        parseNames("<val e=\"SnapshotName 1\" v=\"Gr\xC3\xBCn\"/>", u);
+        check(u.snapshot[1] == "Gr\xC3\xBCn", "a value that already is UTF-8 is left alone");
+        Names none;
+        check(!parseNames("<General/>", none), "no names, no parse");
     }
 
     if (g_fail == 0) std::printf("test_rme_osc: all checks passed\n");
