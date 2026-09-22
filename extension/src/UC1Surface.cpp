@@ -1,4 +1,6 @@
 #include "UC1Surface.h"
+
+#include <array>
 #include "PluginChunkPatch.h"   // uf8::sslLoadedPresetName
 #include "LogPath.h"
 
@@ -65,6 +67,9 @@ void reasixty_setUc1Fine(bool on);
 // HUD Touch-to-Learn (defined in main.cpp): active = HUD on + mode toggle set.
 // Moving a bindable UC1 control then arms a HUD learn for it instead of acting.
 bool reasixty_hudTouchLearnActive();
+// Press-to-pick in Settings → Bindings (main.cpp, BindingsPick.h).
+bool bindingsPickGate_(int tab, uf8::bindings::ButtonId bid, uint8_t rawId,
+                       bool pressed, std::array<bool, 256>& held);
 void reasixty_hudHwLearnRequest(int linkIdx, int domain, bool isKnob);
 
 // Platform-normalised track-colour reader (defined in main.cpp).
@@ -2254,6 +2259,19 @@ void UC1Surface::handleButton_(const ButtonEvent& ev)
             }
             return;
         }
+    }
+
+    // Settings → Bindings open: a bindable key's press picks it on the UC1 tab
+    // instead of running it (BindingsPick.h). The UC1 has three: the encoder-2
+    // push, 360 and the magnifier; everything else keeps its native job.
+    {
+        using uf8::bindings::ButtonId;
+        const ButtonId bid = (ev.id == button::kSecEncPush) ? ButtonId::Uc1Encoder2Push
+                           : (ev.id == button::k360)         ? ButtonId::Uc1Btn360
+                           : (ev.id == button::kMagnifier)   ? ButtonId::Uc1Magnifier
+                                                             : ButtonId::None;
+        static std::array<bool, 256> sPickHeld{};
+        if (bindingsPickGate_(1, bid, ev.id, ev.pressed, sPickHeld)) return;
     }
 
     // Fine is a latching toggle — press flips the mode, release is a

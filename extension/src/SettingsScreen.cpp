@@ -6423,12 +6423,26 @@ void drawSubBankCellEditor_(ImGui_Context* ctx, int editLayer,
 // the surface would sit on a set with no way back to Plain.
 static bool g_bindingsPaneDrew = false;
 
+// ⇨ PRESS-TO-PICK (Frank 22.09.): while the Bindings pane is open AND drawn, a
+// press on a surface selects that button here instead of running it. The
+// surfaces read the flag on their input threads and post the pick; drawBindings
+// takes it on the main thread. Pick = (tab << 16) | ButtonId, -1 = none.
+static std::atomic<bool> g_bindingsPaneLive{false};
+static std::atomic<int>  g_bindingsPick{-1};
+bool reasixty_bindingsPaneLive() { return g_bindingsPaneLive.load(); }
+void reasixty_bindingsPick(int tab, int buttonId)
+{
+    g_bindingsPick.store(((tab & 0xFF) << 16) | (buttonId & 0xFFFF));
+}
+
 void reasixty_publishSettingsModifierPin(bool bindingsPaneOpen)
 {
     const bool drew = g_bindingsPaneDrew;
     g_bindingsPaneDrew = false;
     uf8::bindings::setBankModifierPin(
         (bindingsPaneOpen && drew) ? g_slotEditModIdx : -1);
+    // Same "open AND drawn" test: a collapsed window must not eat presses.
+    g_bindingsPaneLive.store(bindingsPaneOpen && drew);
 }
 
 // Phase C UI — hardware-schematic view. Click a button on the schematic
@@ -7407,6 +7421,14 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             s_tabConsumed = false;
         }
         s_tabLastFrame = frame;
+    }
+    // A press on a surface picked a button (reasixty_bindingsPick): select it
+    // and bring its surface's tab up, through the same one-shot SetSelected the
+    // restore uses.
+    if (const int pick = g_bindingsPick.exchange(-1); pick >= 0) {
+        s_selected    = static_cast<ButtonId>(pick & 0xFFFF);
+        s_tabSaved    = std::clamp((pick >> 16) & 0xFF, 0, 2);
+        s_tabConsumed = false;
     }
     auto tabFlagsForDevice = [&](int idx) -> int {
         // if/return, not a ternary: ImGui_TabItemFlags_SetSelected is a

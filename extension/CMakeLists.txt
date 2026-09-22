@@ -807,6 +807,11 @@ if(NOT WIN32)
         target_link_libraries(test_rme_osc PRIVATE ws2_32)
     endif()
     add_test(NAME rme_osc COMMAND test_rme_osc)
+    # Press-to-pick in Settings -> Bindings: which surface key a press selects,
+    # selects and runs, or leaves alone. Header only.
+    add_executable(test_bindings_pick tests/test_bindings_pick.cpp)
+    target_include_directories(test_bindings_pick PRIVATE src)
+    add_test(NAME bindings_pick COMMAND test_bindings_pick)
 
     add_executable(test_uf1_eq tests/test_uf1_eq.cpp src/Uf1EqCurve.cpp)
     target_include_directories(test_uf1_eq PRIVATE src "${WDL_DIR}")
