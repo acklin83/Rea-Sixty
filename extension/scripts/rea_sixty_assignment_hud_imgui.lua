@@ -977,8 +977,14 @@ local function drawTabs(st, ust)
       and reaper.GetExtState(SECT, "hud_imgui_al") ~= "1", 0x4A90D8)  -- blue
   -- On every tab, for the geometry reason above — and because the ten slots
   -- belong to the CS map whichever tab you happen to be looking at.
-  btnR.ext = rightToggle("EXT FUNCS",
-    reaper.GetExtState(SECT, "hud_imgui_ext") == "1", 0x8A78C8)
+  -- Not on the BC tab: a Bus Compressor has no EXT FUNCS (Frank 22.09.). The
+  -- strip keeps its height (see EXT.open), it only stays empty there.
+  if activeTab ~= "bc" then
+    btnR.ext = rightToggle("EXT FUNCS",
+      reaper.GetExtState(SECT, "hud_imgui_ext") == "1", 0x8A78C8)
+  else
+    btnR.ext = nil
+  end
   -- AutoLearn borrows the parameter drawer rather than opening a second one:
   -- both are a list of this plug-in's params, one picked by you and one proposed.
   btnR.al = rightToggle("AutoLearn",
@@ -1053,6 +1059,7 @@ EXT.alClick = function(mx, my)
 end
 
 EXT.click = function(mx, my)
+  if activeTab == "bc" then return false end
   if hitRect(btnR.ext, mx, my) then
     local on = (reaper.GetExtState(SECT, "hud_imgui_ext") == "1")
     reaper.SetExtState(SECT, "hud_imgui_ext", on and "0" or "1", true)
@@ -1069,7 +1076,16 @@ EXT.click = function(mx, my)
           hintText, hintFrames = "EXT " .. (r.slot + 1) .. " \xE2\x86\x90 "
                                  .. selectedParamNm, 90
         else
-          hintText, hintFrames = "Pick a parameter in the list first", 90
+          -- No param picked: listen, like the mockup's controls (22.09.). A
+          -- second click on the armed cell cancels.
+          local armed = tonumber(reaper.GetExtState(SECT, "hud_ext_learn"))
+          if armed == r.slot then
+            sendCmd("extlearn;-1")
+          else
+            sendCmd("extlearn;" .. r.slot)
+            hintText, hintFrames = "EXT " .. (r.slot + 1)
+                                   .. ": move a parameter on the plug-in", 120
+          end
         end
         return true
       end
@@ -1661,7 +1677,10 @@ EXT.render = function()
   rect(0, top, w, EXT.H, col(0x16171A, 0.97))
   rect(0, top, w, 2, col(0x303440, 1))
   EXT.rects = {}
+  -- BC tab: the strip keeps its height and shows nothing (a BC has no EXT FUNCS).
+  if activeTab == "bc" then return end
   local raw = reaper.GetExtState(SECT, "hud_extfuncs")
+  local extArmed = tonumber(reaper.GetExtState(SECT, "hud_ext_learn"))
   if raw == "" then
     dtext(10, top + floor(EXT.H / 2) - hf,
           col(0x808890, 0.9),
@@ -1672,7 +1691,8 @@ EXT.render = function()
   dtext(10, top + 6, col(0x9A9AA2, 1),
         "UC1 EXT FUNCS  \xE2\x80\x94  hidden BACK menu"
         .. (selectedParam >= 0 and ("   \xE2\x80\xA2  click a cell to assign "
-            .. selectedParamNm) or "   \xE2\x80\xA2  pick a param to assign"), hf)
+            .. selectedParamNm)
+            or "   \xE2\x80\xA2  click a cell, then move a parameter on the plug-in"), hf)
   local gy = top + 6 + hf + 6
   local gh = (WH - 6) - gy
   local cw = (w - 20) / 5
@@ -1685,9 +1705,12 @@ EXT.render = function()
       local cy = gy + floor(slot / 5) * ch
       local bound = param >= 0
       rect(cx, cy, cw - 6, ch - 6, col(bound and 0x23262C or 0x1B1C1F, 1))
+      -- Armed for a wiggle: amber frame, the Touch-to-Learn colour.
+      local armedHere = (extArmed == slot)
       reaper.ImGui_DrawList_AddRect(dl, OX + cx, OY + cy,
         OX + cx + cw - 6, OY + cy + ch - 6,
-        col(bound and 0x4A5060 or 0x2A2C32, 1), 0, 0, 1)
+        col(armedHere and 0xE0A838 or (bound and 0x4A5060 or 0x2A2C32), 1), 0, 0,
+        armedHere and 2 or 1)
       dtext(cx + 6, cy + 4, col(bound and 0xC8CCD4 or 0x707680, 1),
             fit(nm ~= "" and nm or ("Slot " .. (slot + 1)), cw - 16, rf), rf)
       dtext(cx + 6, cy + 4 + rf + 3,
