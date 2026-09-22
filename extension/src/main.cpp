@@ -207,6 +207,9 @@ int         reasixty_hudUf8LearnArmed();
 // UF1 plugin-mode learn (v11). pos = page*4 + idx of the V-Pot / soft-key stream.
 void        reasixty_uf1ArmLearn(bool softKeys, int pos, void* tr, int fx);
 bool        reasixty_uf1LearnTick();
+void        reasixty_hudExtArmLearn(void* csTr, int csFx, int slot);   // slot -1 = cancel
+bool        reasixty_hudExtLearnTick();
+int         reasixty_hudExtLearnArmed();
 int         reasixty_uf1LearnArmed();
 void        reasixty_uf1CancelLearn();
 void        reasixty_hudPublishUf1(void* tr, int fx, int page, std::string& out);
@@ -45575,6 +45578,14 @@ void onTimerBody_()
                         publishHud_();
                     }
                 }
+            } else if (s.rfind("extlearn;", 0) == 0) {
+                // "extlearn;<slot>" — arm (or with -1 cancel) a wiggle-learn on one
+                // EXT FUNCS slot of the CS target's map (22.09.).
+                MediaTrack* csTr = nullptr; MediaTrack* bcTr = nullptr;
+                int csFx = -1, bcFx = -1;
+                activeCsBcTargets_(csTr, csFx, bcTr, bcFx);
+                reasixty_hudExtArmLearn(csTr, csFx, std::atoi(s.c_str() + 9));
+                publishHud_();
             } else if (s.rfind("extfuncname;", 0) == 0) {
                 // "extfuncname;<slot>;<name>" — the user label, which is also the
                 // LCD header and (truncated) the carousel entry. Everything after
@@ -46512,6 +46523,23 @@ void onTimerBody_()
         if (uf8Pub != g_hudUf8LearnPublished) {
             g_hudUf8LearnPublished = uf8Pub;
             SetExtState("rea_sixty", "hud_uf8_learn", uf8Pub.c_str(), false);
+        }
+
+        // EXT FUNCS learn (22.09.): poll, re-publish the grid when it binds, and
+        // publish the armed slot so the strip can light it.
+        if (reasixty_hudExtLearnTick()) {
+            g_hudExtFuncsPublished.clear();
+            g_hudUsedByPublished.clear();
+            publishHud_();
+        }
+        {
+            static std::string sExtLearnPub = "\x01";
+            const int ea = reasixty_hudExtLearnArmed();
+            const std::string pub = ea >= 0 ? std::to_string(ea) : std::string();
+            if (pub != sExtLearnPub) {
+                sExtLearnPub = pub;
+                SetExtState("rea_sixty", "hud_ext_learn", pub.c_str(), false);
+            }
         }
 
         // UF1 plugin-mode learn (v11): same poll + publish. The armed position is

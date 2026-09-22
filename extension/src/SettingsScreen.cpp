@@ -8794,6 +8794,9 @@ std::string deriveShortLabel_(const std::string& fxName)
 // renders so the search query survives a tab switch.
 std::string g_editingMatch;
 int         g_listeningLinkIdx = -1;
+// EXT FUNCS listen (22.09.): the slot 0..9 waiting for a wiggle, -1 = none.
+// EXT FUNCS have no link index, so they cannot share g_listeningLinkIdx.
+int         g_listeningExt = -1;
 char        g_paramFilter[64]  = {};
 // FX-Learn modifier-layer being EDITED in the schematic (uf8::FxLayer:
 // 0=Normal, 1=Option, 2=Control). Driven by the modifier tab-bar above the
@@ -14780,6 +14783,7 @@ void drawUc1Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
     if (exists && ImGui_IsItemClicked(ctx, &lbtn) && lbtn == 0) {
         g_listeningLinkIdx = isListen ? -1 : ctrl.linkIdx;
         g_listeningUf1.clear();          // all three listens are exclusive (v11)
+        g_listeningExt = -1;
     }
 
     if (exists && ImGui_IsItemHovered(ctx, nullptr)) {
@@ -15773,6 +15777,72 @@ bool hudSetExtFunc_(void* csTrV, int csFx, int slot, int param, const char* name
     }
     return false;
 }
+
+// ⇨ EXT FUNCS, CLICK AND WIGGLE IN THE HUD (Frank 22.09.: "wie die andern Potis
+// und Buttons auch"). A cell click with no param picked arms its slot on the CS
+// target's map; the next fresh touch on that plug-in binds, one slot per click,
+// 20 s like the other learns. An empty name takes the parameter's name.
+static int         g_hudExtLearnSlot  = -1;
+static std::string g_hudExtLearnMatch;
+static int         g_hudExtLearnTicks = 0;
+static int         g_hudExtLearnTr = -1, g_hudExtLearnFx = -1, g_hudExtLearnParam = -1;
+static double      g_hudExtLearnVal = 0.0;
+void hudExtArmLearn_(void* csTrV, int csFx, int slot)
+{
+    g_hudExtLearnSlot = -1;
+    if (slot < 0 || slot >= kUserExtFuncsCount) return;          // cancel
+    MediaTrack* tr = static_cast<MediaTrack*>(csTrV);
+    char nm[512] = {0};
+    const UserPluginMap* om = (tr && csFx >= 0 && fxIdentityName(tr, csFx, nm, sizeof(nm)))
+        ? user_plugins::lookupOwnedByName(nm) : nullptr;
+    if (!om || om->domain != Domain::ChannelStrip) {
+        SetExtState("rea_sixty", "hud_hint",
+                    "EXT FUNCS belong to a Channel-Strip map of your own", false);
+        return;
+    }
+    g_hudExtLearnSlot  = slot;
+    g_hudExtLearnMatch = om->match;
+    g_hudExtLearnTicks = 600;                                      // ~20 s at 30 Hz
+    int t = -1, f = -1, p = -1;
+    if (GetLastTouchedFX(&t, &f, &p)) { g_hudExtLearnTr = t; g_hudExtLearnFx = f; g_hudExtLearnParam = p; }
+    else                              { g_hudExtLearnTr = -1; g_hudExtLearnFx = -1; g_hudExtLearnParam = -1; }
+    g_hudExtLearnVal = learnTouchedValue_(g_hudExtLearnTr, g_hudExtLearnFx, g_hudExtLearnParam);
+}
+bool hudExtLearnTick_()
+{
+    if (g_hudExtLearnSlot < 0) return false;
+    if (--g_hudExtLearnTicks <= 0) { g_hudExtLearnSlot = -1; return false; }
+    int t = -1, f = -1, p = -1;
+    if (!GetLastTouchedFX(&t, &f, &p)) return false;
+    const double v = learnTouchedValue_(t, f, p);
+    if (!learnTouchIsFresh_(t, f, p, v, g_hudExtLearnTr, g_hudExtLearnFx,
+                            g_hudExtLearnParam, g_hudExtLearnVal)) return false;
+    g_hudExtLearnTr = t; g_hudExtLearnFx = f; g_hudExtLearnParam = p; g_hudExtLearnVal = v;
+    MediaTrack* tr = (t == 0) ? GetMasterTrack(nullptr)
+                   : (t > 0)  ? GetTrack(nullptr, t - 1) : nullptr;
+    char name[512] = {0};
+    if (!tr || !fxIdentityName(tr, f, name, sizeof(name))) return false;
+    const auto* um = user_plugins::lookupOwnedByName(name);
+    if (!um || um->match != g_hudExtLearnMatch) return false;      // another plug-in
+    const int slot = g_hudExtLearnSlot;
+    auto cat = user_plugins::get();
+    for (auto& m : cat.maps) {
+        if (m.match != g_hudExtLearnMatch) continue;
+        auto& e = m.extFuncs[slot];
+        if (e.name.empty()) {
+            char pn[256] = {0};
+            TrackFX_GetParamName(tr, f, p, pn, sizeof(pn));
+            e.name = pn;
+        }
+        e.vst3Param = p;
+        user_plugins::upsert(m);
+        user_plugins::save();
+        break;
+    }
+    g_hudExtLearnSlot = -1;
+    return true;
+}
+int hudExtLearnArmed_() { return g_hudExtLearnSlot; }
 
 // ⇨ AUTOLEARN'S PROPOSALS, FOR THE HUD. The engine is C++ and the map lives
 // here, so the HUD cannot run it; it asks (hud_al_req) and this answers. Kept
@@ -17552,6 +17622,7 @@ void drawUf8Control_(ImGui_Context* ctx, ImGui_DrawList* dl,
             g_listeningUf8.strip = ctrl.strip;
             g_listeningUf8.bank  = bank;
             g_listeningLinkIdx   = -1;   // mutually exclusive with UC1 listen
+            g_listeningExt       = -1;
             g_listeningUf1.clear();      // …and with the UF1 listen (v11)
             // Fresh GUI listen → default continuous; a HW V-Pot PRESS while this
             // slot listens flags the bind Toggle instead (Frank 2026-06-20).
@@ -18508,6 +18579,7 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
             g_listeningUf1.pos      = pos;
             g_listeningUf1.softKeys = softKeys;
             g_listeningLinkIdx      = -1;
+            g_listeningExt          = -1;
             g_listeningUf8.clear();
         }
     }
@@ -18598,6 +18670,7 @@ void drawFxLearnUf1Cell_(ImGui_Context* ctx, const EditingFx& fx,
             g_listeningUf1.pos      = pos;
             g_listeningUf1.softKeys = softKeys;
             g_listeningLinkIdx      = -1;
+            g_listeningExt          = -1;
             g_listeningUf8.clear();
             ImGui_CloseCurrentPopup(ctx);
         }
@@ -19301,12 +19374,14 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
 
     // ESC clears any in-progress listening (UC1, UF8 or UF1 — all mutually
     // exclusive). Only fires when nothing else is capturing keyboard.
-    if (g_listeningLinkIdx >= 0 || g_listeningUf8.active() || g_listeningUf1.active()) {
+    if (g_listeningLinkIdx >= 0 || g_listeningUf8.active() || g_listeningUf1.active()
+        || g_listeningExt >= 0) {
         bool repeat = false;
         if (ImGui_IsKeyPressed(ctx, ImGui_Key_Escape, &repeat)) {
             g_listeningLinkIdx = -1;
             g_listeningUf8.clear();
             g_listeningUf1.clear();
+            g_listeningExt = -1;
         }
     }
 
@@ -21258,6 +21333,43 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
         }
     }
 
+    // ⇨ EXT FUNCS, CLICK AND WIGGLE (Frank 22.09.: "wie die andern Potis und
+    // Buttons auch"). Same poll shape as the UC1 listen above: baseline on the
+    // arm edge, the next change of the last-touched param on THIS plug-in binds.
+    // One slot per click, no advance. An empty name takes the param's name.
+    {
+        static int sExtPrev = -1;
+        static int sExtTr = -1, sExtFx = -1, sExtP = -1;
+        static std::string sExtMatch;
+        if (g_listeningExt >= 0 && g_listeningExt != sExtPrev) {
+            if (!GetLastTouchedFX(&sExtTr, &sExtFx, &sExtP)) { sExtTr = sExtFx = sExtP = -1; }
+            sExtMatch = editing->match;
+        }
+        // Armed on one map, never binds into another (list pick, follow, import).
+        if (g_listeningExt >= 0 && editing->match != sExtMatch) g_listeningExt = -1;
+        sExtPrev = g_listeningExt;
+        int t = -1, f = -1, p = -1;
+        if (g_listeningExt >= 0 && GetLastTouchedFX(&t, &f, &p)
+            && (t != sExtTr || f != sExtFx || p != sExtP)) {
+            sExtTr = t; sExtFx = f; sExtP = p;
+            MediaTrack* tr = (t == 0) ? GetMasterTrack(nullptr)
+                           : (t > 0)  ? GetTrack(nullptr, t - 1) : nullptr;
+            char fxName[256] = {};
+            if (tr && uf8::fxIdentityName(tr, f, fxName, sizeof(fxName))
+                && std::string(fxName).find(editing->match) != std::string::npos) {
+                const int slot = g_listeningExt;
+                std::string nm = editing->extFuncs[slot].name;
+                if (nm.empty()) {
+                    char pn[256] = {};
+                    TrackFX_GetParamName(tr, f, p, pn, sizeof(pn));
+                    nm = pn;
+                }
+                g_listeningExt = -1;
+                setExtFunc_(slot, nm, p);
+            }
+        }
+    }
+
     // Same click-and-turn polling for the UF8 listen state. Mutually
     // exclusive with the UC1 listen above (clicking a UF8 control clears
     // g_listeningLinkIdx, and vice versa).
@@ -21555,12 +21667,38 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             // 2×5 grid lines up under the 730 px mockup. Row = 4 widgets + 3
             // inter-item gaps (~8 px): 2·(123+229) + 3·~8 ≈ 728.
             constexpr double kScale = 730.0 / 860.0;
-            const double nameW   = 145.0 * kScale;
+            const double nameW   = 100.0 * kScale;   // room for the Learn button
             const double assignW = 270.0 * kScale;
 
             auto drawExtSlot = [&](int slot) {
                 ImGui_BeginGroup(ctx);
                 const auto& e = editing->extFuncs[slot];
+
+                // Learn: click, then move the parameter on the plug-in. Lit while
+                // this slot listens; a second click cancels. Exclusive with the
+                // UC1 / UF8 / UF1 listens (22.09.).
+                {
+                    const bool armed = (g_listeningExt == slot);
+                    if (armed) {
+                        ImGui_PushStyleColor(ctx, ImGui_Col_Button,        0xC07020FF);
+                        ImGui_PushStyleColor(ctx, ImGui_Col_ButtonHovered, 0xD08030FF);
+                    }
+                    char lId[40];
+                    snprintf(lId, sizeof(lId), "%s##fxl_ef_learn_%d",
+                             armed ? "Wiggle" : "Learn", slot);
+                    if (ImGui_SmallButton(ctx, lId)) {
+                        g_listeningExt = armed ? -1 : slot;
+                        g_listeningLinkIdx = -1;
+                        g_listeningUf8.clear();
+                        g_listeningUf1.clear();
+                    }
+                    if (armed) { int n = 2; ImGui_PopStyleColor(ctx, &n); }
+                    if (ImGui_IsItemHovered(ctx, nullptr))
+                        ImGui_SetTooltip(ctx, armed
+                            ? "Move a parameter on the plug-in to bind it here (click to cancel)"
+                            : "Click, then move a parameter on the plug-in to bind it here");
+                    ImGui_SameLine(ctx, nullptr, nullptr);
+                }
 
                 // Name field.
                 char nameBuf[64] = {};
@@ -22372,80 +22510,26 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     if (tr) { actTr = tr; actFx = aFx; actKey = aTr; }
                 }
             }
-            // 1) REAPER's focused FX — the record of a DELIBERATE PICK.
-            int trNum = -1, itemNum = -1, fxNum = -1;
-            MediaTrack* focTr = nullptr; int focFx = -1, focKey = -2;
-            if (GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) {
-                MediaTrack* tr = (trNum == 0) ? GetMasterTrack(nullptr)
-                               : (trNum > 0)  ? GetTrack(nullptr, trNum - 1)
-                                              : nullptr;
-                if (tr) { focTr = tr; focFx = fxNum & 0x00FFFFFF;
-                          focKey = (trNum == 0) ? -1 : trNum - 1; }
-            }
-            // ⛔ WHAT THE USER JUST PICKED BEATS WHAT THE SURFACE HAPPENS TO BE
-            // ON. Step 0 answers "which plug-in is the surface driving" and it
-            // nearly always answers SOMETHING, so every step below it was
-            // effectively unreachable: focusing a mapped plug-in in the picker
-            // moved REAPER's focus and the page did not budge (Frank
-            // 2026-09-16, a Delta in front of him and FG-Dynamics on the page).
-            // REAPER clears its focused-FX bit the moment this window takes
-            // focus, which is why the pick cannot simply be read live — it has
-            // to be REMEMBERED. And it has to expire, or the page would stop
-            // following the surface, which is the complaint this detector was
-            // written for (2026-06-20). It expires when the surface's own
-            // answer MOVES: the last deliberate act wins, whichever hand it
-            // came from.
-            static MediaTrack* s_pickTr = nullptr;
-            static int         s_pickFx = -1, s_pickKey = -2;
-            static MediaTrack* s_actTr  = nullptr;
-            static int         s_actFx  = -1;
-            if (focTr && focFx >= 0) {
-                s_pickTr = focTr; s_pickFx = focFx; s_pickKey = focKey;
-            }
-            if (actTr && (actTr != s_actTr || actFx != s_actFx)) {
-                s_actTr = actTr; s_actFx = actFx;
-                s_pickTr = nullptr; s_pickFx = -1; s_pickKey = -2;
-            }
-            if (s_pickTr && s_pickFx >= 0)
-                tryFx(s_pickTr, s_pickFx, s_pickKey);
-            // ⛔ AN OPEN WINDOW OUTRANKS A SURFACE FX YOU CANNOT SEE. Opening a
-            // plug-in IS a deliberate act (Frank 2026-09-18: "offenes Fenster IST
-            // doch eine bewusste Wahl"), but it used to rank LAST — below step 0,
-            // which "nearly always answers SOMETHING". So with a bx_console open
-            // in front of him the page sat on the strip the surface happened to
-            // be driving, and the open window was never reached.
-            //
-            // Edge-triggering the OPENING would not have fixed it: his window was
-            // already open before the page was, so no edge ever fires. The state
-            // is the signal.
-            //
-            // Narrow on purpose: this only beats step 0 when the surface's own
-            // plug-in has NO window open. Between something on screen and
-            // something you cannot see, the visible one is the deliberate choice
-            // — and when the surface's plug-in IS open there is nothing to
-            // resolve, so the 2026-09-16 rule (surface answers, pick beats it)
-            // stands untouched.
+            // ⇨ THE HUD'S TARGET, FIRST AND ALONE (Frank 22.09.: "Learn HUD folgt
+            // sehr schoen dem ausgewaehlten Plugin, Learn FX nicht wirklich").
+            // reasixty_activeFocusedFx IS what the HUD shows (its unmapped
+            // override, then the surface's CS/BC or UF8 target). This page had
+            // its own ranking on top — a remembered REAPER focus pick (16.09.)
+            // and "an open window outranks the surface" (18.09.) — so with any
+            // plug-in window open it sat there while the surface and the HUD
+            // had moved on. Both rules are gone, with Frank's ok. What is left
+            // below only answers when the surface names nothing at all.
+            if (actTr) tryFx(actTr, actFx, actKey);
+            // 1) REAPER's focused FX.
             if (!ftr) {
-                const bool actVisible =
-                    actTr && actFx >= 0
-                    && ValidatePtr2(nullptr, actTr, "MediaTrack*")
-                    && actFx < TrackFX_GetCount(actTr)
-                    && TrackFX_GetOpen(actTr, actFx);
-                if (!actVisible) {
-                    MediaTrack* mtr = GetMasterTrack(nullptr);
-                    const int mn = mtr ? TrackFX_GetCount(mtr) : 0;
-                    for (int i = 0; i < mn && !ftr; ++i)
-                        if (TrackFX_GetOpen(mtr, i)) tryFx(mtr, i, -1);
-                    const int tc = CountTracks(nullptr);
-                    for (int ti = 0; ti < tc && !ftr; ++ti) {
-                        MediaTrack* tr = GetTrack(nullptr, ti);
-                        const int n = tr ? TrackFX_GetCount(tr) : 0;
-                        for (int i = 0; i < n && !ftr; ++i)
-                            if (TrackFX_GetOpen(tr, i)) tryFx(tr, i, ti);
-                    }
+                int trNum = -1, itemNum = -1, fxNum = -1;
+                if (GetFocusedFX2(&trNum, &itemNum, &fxNum) & 1) {
+                    MediaTrack* tr = (trNum == 0) ? GetMasterTrack(nullptr)
+                                   : (trNum > 0)  ? GetTrack(nullptr, trNum - 1)
+                                                  : nullptr;
+                    tryFx(tr, fxNum & 0x00FFFFFF, (trNum == 0) ? -1 : trNum - 1);
                 }
             }
-            if (!ftr && actTr) tryFx(actTr, actFx, actKey);
             // 2) Last-touched FX (persists once a param was moved).
             if (!ftr) {
                 int t = -1, f = -1, p = -1;
@@ -22456,11 +22540,8 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                     tryFx(tr, f & 0x00FFFFFF, t == 0 ? -1 : t - 1);
                 }
             }
-            // 3) First OPEN user-mapped FX window (master, then tracks). This is
-            //    the case the earlier versions missed: opening the Settings
-            //    window clears GetFocusedFX2 and the user may not have touched a
-            //    param, so only the open window itself identifies "the FX I'm
-            //    looking at".
+            // 3) First OPEN FX window (master, then tracks): opening the Settings
+            //    window clears GetFocusedFX2, and nothing may have been touched.
             if (!ftr) {
                 MediaTrack* mtr = GetMasterTrack(nullptr);
                 const int mn = mtr ? TrackFX_GetCount(mtr) : 0;
@@ -22521,6 +22602,15 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
                         }
                     }
                     if (um) {
+                        // A map switch ends any listen, as a pick in the list
+                        // does: armed on the old map it would otherwise bind the
+                        // new plug-in's params into the old slot's position.
+                        if (g_editingMatch != um->match) {
+                            g_listeningLinkIdx = -1;
+                            g_listeningUf8.clear();
+                            g_listeningUf1.clear();
+                            g_listeningExt = -1;
+                        }
                         g_editingMatch = um->match;
                         // `fxName` IS the live original_name here (fxIdentityName
                         // returns it) and `um` is the owned map — the one moment
@@ -26838,6 +26928,10 @@ void reasixty_uf1ArmLearn(bool softKeys, int pos, void* tr, int fx)
     uf8::hudUf1ArmLearn_(softKeys, pos, tr, fx);
 }
 bool reasixty_uf1LearnTick()   { return uf8::hudUf1LearnTick_(); }
+// EXT FUNCS learn in the HUD (22.09.). slot -1 cancels.
+void reasixty_hudExtArmLearn(void* csTr, int csFx, int slot) { uf8::hudExtArmLearn_(csTr, csFx, slot); }
+bool reasixty_hudExtLearnTick()  { return uf8::hudExtLearnTick_(); }
+int  reasixty_hudExtLearnArmed() { return uf8::hudExtLearnArmed_(); }
 int  reasixty_uf1LearnArmed()  { return uf8::hudUf1LearnArmed_(); }
 void reasixty_uf1CancelLearn() { uf8::hudUf1CancelLearn_(); }
 void reasixty_hudPublishUf1(void* tr, int fx, int page, std::string& out)
