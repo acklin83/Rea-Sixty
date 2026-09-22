@@ -34227,21 +34227,33 @@ static void uf1PaintSideCar_()
 // sie den Stand beim Einstieg und tun nichts (uf1RmeButton_ faengt sie ab).
 static void uf1PaintRmeStrip_(const std::string& name, const std::string& db,
                               const std::string& line, int chNo, int palette,
-                              int barPos, bool barCentre, bool force)
+                              int barPos, bool barCentre, const std::string& chSoft,
+                              bool force)
 {
-    static std::string sName, sDb, sLine;
+    static std::string sName, sDb, sLine, sChSoft;
     static int sNo = INT_MIN, sPal = INT_MIN, sBar = INT_MIN;
     if (force) {
         // Einmal alles leer, auch die LEDs und den Readout-Balken, die dieser
         // Maler sonst nicht anfasst. Derselbe Helfer wie fuer eine leere Spur.
         uf1BlankChannelZone_();
         sName.clear(); sDb.clear(); sLine.clear(); sNo = INT_MIN; sPal = INT_MIN;
-        sBar = INT_MIN;
+        sBar = INT_MIN; sChSoft = "\x01";   // never a real label: forces the write
         // Der Balken-Stil, wie im Kanalmaler: 0x01 = Zeiger (die Pan-Optik). Der
         // Init laesst ihn auf 0x03 = aus, dann zeichnet keine Position etwas.
         const uint8_t pointer = 0x01;
         g_uf1_dev->send(uf1::buildScreen(uf1::scr::kBarStyle,
                                          std::span<const uint8_t>(&pointer, 1)));
+    }
+    // ⇨ DIE BESCHRIFTUNG DES SOFT-KEYS UEBER DEM KANAL (0x0004, ein Index). Im
+    // Side-Car ist die Taste Stereo/Mono; vorher stand hier weiter, was REAPER
+    // zuletzt hineingeschrieben hatte (Frank 22.09.: "zeigt der Soft-Key ueber
+    // dem Kanal im Label Mono Stereo?"). Derselbe Rahmen wie im Kanalmaler.
+    if (force || chSoft != sChSoft) {
+        sChSoft = chSoft;
+        std::vector<uint8_t> p;
+        p.push_back(0x00);
+        p.insert(p.end(), chSoft.begin(), chSoft.end());
+        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChSoftKey, p));
     }
     // Pan-Balken: Position 0..100, Mittelmarke 0x80 genau in der Mitte, wie der
     // REAPER-Pfad. barPos < 0 = leer.
@@ -34617,6 +34629,7 @@ static void uf1PaintRme_()
         std::string name = "RME", db, line;
         int no = 0, pal = 0, barPos = -1;
         bool barCentre = false;
+        std::string chSoft;
         if (!linked) {
             line = "no TotalMix";
         } else if (sel < 0) {
@@ -34627,6 +34640,8 @@ static void uf1PaintRme_()
             db   = known ? uf1RmeDbText_(selDb) : std::string();
             no   = sel + 1;
             if (c && c->colour >= 0 && c->colour < 9) pal = cfg.colourMap[c->colour];
+            // Der Zustand, den der Soft-Key ueber dem Kanal umschaltet.
+            chSoft = (c && c->stereo) ? "STEREO" : "MONO";
             bool pk = false;
             const double pan = rmeu::panValue(st, row, sel, sub, pk);
             if (pk) {
@@ -34637,7 +34652,7 @@ static void uf1PaintRme_()
                 line = composeValueLine("Pan", "");
             }
         }
-        uf1PaintRmeStrip_(name, db, line, no, pal, barPos, barCentre, force);
+        uf1PaintRmeStrip_(name, db, line, no, pal, barPos, barCentre, chSoft, force);
     }
 
     // ── V-Pot-Reihe ─────────────────────────────────────────────────────────
