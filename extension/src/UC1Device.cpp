@@ -6,12 +6,14 @@ void reasixty_uc1KnobCensus(int id, int mag, bool wire);
 
 #include <libusb.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <queue>
 #include <span>
@@ -393,6 +395,14 @@ void UC1Device::workerLoop_()
 
     uint8_t keepaliveCounter = 0;
     auto    lastKeepalive    = std::chrono::steady_clock::now();
+    // ⇨ WHO FLOODS THE UC1 (Frank 22.09.). The stats line only showed a total
+    // (460-670 frames/s in error seconds, ~50 expected) and never WHAT. Counted
+    // here, on the only thread that sends: queued frames per second by their
+    // first three bytes. Above 150/s the top kinds go to rea_sixty_uc1_stats.log.
+    // The periodic GR / keepalive frames are not queued and not counted.
+    std::map<uint32_t, int> rateByKind;
+    int  rateTotal = 0;
+    auto rateStart = std::chrono::steady_clock::now();
     auto    lastGr           = std::chrono::steady_clock::now();
 
     while (!shuttingDown_) {
@@ -496,6 +506,13 @@ void UC1Device::workerLoop_()
 
         for (auto& frame : burst) {
             if (frame.empty()) continue;
+            {
+                uint32_t key = 0;
+                for (std::size_t b = 0; b < 3 && b < frame.size(); ++b)
+                    key = (key << 8) | frame[b];
+                ++rateByKind[key];
+                ++rateTotal;
+            }
             int transferred = 0;
             const int rc = libusb_bulk_transfer(handle_, kEpOut,
                                                 frame.data(),
@@ -503,6 +520,29 @@ void UC1Device::workerLoop_()
                                                 &transferred, 500);
             recordResult(rc, frame.size());
             frameLogWrite_(frame.data(), frame.size());
+        }
+
+        if (now - rateStart >= std::chrono::seconds(1)) {
+            if (rateTotal > 150) {
+                std::vector<std::pair<int, uint32_t>> top;
+                for (const auto& [k, n] : rateByKind) top.push_back({ n, k });
+                std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) {
+                    return a.first > b.first;
+                });
+                if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uc1_stats.log").c_str(), "a")) {
+                    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    std::fprintf(f, "[%lld] UC1 queued %d frames in 1 s, top:",
+                                 static_cast<long long>(ms), rateTotal);
+                    for (std::size_t i = 0; i < top.size() && i < 6; ++i)
+                        std::fprintf(f, " %06x x%d", top[i].second, top[i].first);
+                    std::fprintf(f, "\n");
+                    std::fclose(f);
+                }
+            }
+            rateByKind.clear();
+            rateTotal = 0;
+            rateStart = now;
         }
 
         // Pump libusb event loop so the IN callback fires.

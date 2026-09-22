@@ -44701,31 +44701,38 @@ void onTimerBody_()
         static auto sLastReopen = std::chrono::steady_clock::now()
             - std::chrono::seconds(60);
         const auto nowR = std::chrono::steady_clock::now();
-        const bool ucStale = g_uc1_dev && g_uc1_dev->needsReopen();
-        const bool ufStale = g_dev     && g_dev->needsReopen();
-        const bool u1Stale = g_uf1_dev && g_uf1_dev->needsReopen();
+        // ⛔ A FAILED REOPEN IS NOT THE END. It used to drop the device for good
+        // (g_*_dev.reset(), no log for UC1/UF8), so one bad moment on the bus
+        // left the surface dead until REAPER restarted — Frank's UC1 at 16:10
+        // and 17:11 on 22.09., log: "reopening..." and then nothing. Now the
+        // device stays "lost" and is tried again every 5 s, and the reason is
+        // logged (once, and again whenever it changes).
+        static bool sUc1Lost = false, sUf8Lost = false, sUf1Lost = false;
+        const bool ucStale = (g_uc1_dev && g_uc1_dev->needsReopen()) || (sUc1Lost && !g_uc1_dev);
+        const bool ufStale = (g_dev     && g_dev->needsReopen())     || (sUf8Lost && !g_dev);
+        const bool u1Stale = (g_uf1_dev && g_uf1_dev->needsReopen()) || (sUf1Lost && !g_uf1_dev);
+        auto staleLog = [](const char* file, const std::string& line) {
+            if (FILE* f = std::fopen(uf8::logPath(file).c_str(), "a")) {
+                const auto t = std::chrono::system_clock::now().time_since_epoch();
+                const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t).count();
+                std::fprintf(f, "[%lld] %s\n", static_cast<long long>(ms), line.c_str());
+                std::fclose(f);
+            }
+        };
         if ((ucStale || ufStale || u1Stale)
             && nowR - sLastReopen >= std::chrono::seconds(5))
         {
             sLastReopen = nowR;
             if (ucStale) {
-                if (FILE* f = std::fopen(
-                        uf8::logPath("rea_sixty_uc1_stale.log").c_str(), "a"))
-                {
-                    const auto t = std::chrono::system_clock::now()
-                        .time_since_epoch();
-                    const auto ms = std::chrono::duration_cast<
-                        std::chrono::milliseconds>(t).count();
-                    std::fprintf(f,
-                        "[%lld] UC1 stale handle - reopening...\n",
-                        static_cast<long long>(ms));
-                    std::fclose(f);
-                }
+                static std::string sUc1Err;
+                if (!sUc1Lost) staleLog("rea_sixty_uc1_stale.log", "UC1 stale handle - reopening...");
                 g_uc1_surface.reset();
-                g_uc1_dev->close();
+                if (g_uc1_dev) g_uc1_dev->close();
                 g_uc1_dev.reset();
                 g_uc1_dev = std::make_unique<uc1::UC1Device>();
                 if (g_uc1_dev->open()) {
+                    if (sUc1Lost) staleLog("rea_sixty_uc1_stale.log", "UC1 reopened after retry");
+                    sUc1Lost = false; sUc1Err.clear();
                     g_uc1_surface = std::make_unique<uc1::UC1Surface>();
                     g_uc1_surface->attach(*g_uc1_dev);
                     if (auto* tr = GetLastTouchedTrack()) {
@@ -44733,27 +44740,24 @@ void onTimerBody_()
                     }
                     applyBrightness();
                 } else {
+                    const std::string err = g_uc1_dev->lastError();
+                    if (!sUc1Lost || err != sUc1Err)
+                        staleLog("rea_sixty_uc1_stale.log",
+                                 "UC1 reopen failed: " + err + " (retrying every 5 s)");
+                    sUc1Lost = true; sUc1Err = err;
                     g_uc1_dev.reset();
                 }
             }
             if (ufStale) {
-                if (FILE* f = std::fopen(
-                        uf8::logPath("rea_sixty_uf8_stale.log").c_str(), "a"))
-                {
-                    const auto t = std::chrono::system_clock::now()
-                        .time_since_epoch();
-                    const auto ms = std::chrono::duration_cast<
-                        std::chrono::milliseconds>(t).count();
-                    std::fprintf(f,
-                        "[%lld] UF8 stale handle - reopening...\n",
-                        static_cast<long long>(ms));
-                    std::fclose(f);
-                }
+                static std::string sUf8Err;
+                if (!sUf8Lost) staleLog("rea_sixty_uf8_stale.log", "UF8 stale handle - reopening...");
                 g_sync.reset();
-                g_dev->close();
+                if (g_dev) g_dev->close();
                 g_dev.reset();
                 g_dev = std::make_unique<uf8::UF8Device>();
                 if (g_dev->open()) {
+                    if (sUf8Lost) staleLog("rea_sixty_uf8_stale.log", "UF8 reopened after retry");
+                    sUf8Lost = false; sUf8Err.clear();
                     g_sync = std::make_unique<uf8::ColorSync>(*g_dev);
                     g_sync->invalidate();
                     g_dev->setRawInputHandler(onUf8Input);
@@ -44765,20 +44769,22 @@ void onTimerBody_()
                     g_bankDirty.store(true);
                     applyBrightness();
                 } else {
+                    const std::string err = g_dev->lastError();
+                    if (!sUf8Lost || err != sUf8Err)
+                        staleLog("rea_sixty_uf8_stale.log",
+                                 "UF8 reopen failed: " + err + " (retrying every 5 s)");
+                    sUf8Lost = true; sUf8Err = err;
                     g_dev.reset();
                 }
             }
             if (u1Stale) {
-                if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uf1_stale.log").c_str(), "a")) {
-                    const auto t = std::chrono::system_clock::now().time_since_epoch();
-                    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t).count();
-                    std::fprintf(f, "[%lld] UF1 stale handle - reopening...\n",
-                                 static_cast<long long>(ms));
-                    std::fclose(f);
-                }
-                g_uf1_dev->close();
+                if (!sUf1Lost) staleLog("rea_sixty_uf1_stale.log", "UF1 stale handle - reopening...");
+                if (g_uf1_dev) g_uf1_dev->close();
                 g_uf1_dev.reset();
-                openUf1BringUp_();
+                openUf1BringUp_();   // logs its own failure reason
+                if (g_uf1_dev && sUf1Lost)
+                    staleLog("rea_sixty_uf1_stale.log", "UF1 reopened after retry");
+                sUf1Lost = !g_uf1_dev;
                 // The bring-up replays SSL's init sequence, and two of its
                 // frames set the UF1's brightness back to 0x10 / 0x32. A unit
                 // that reappears mid-sleep would come up lit.
@@ -45778,8 +45784,11 @@ void onTimerBody_()
             const auto dOe = oe - prevOutErrors;
             if ((dOe > 0 || dOf < 20)) {
                 if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uc1_stats.log").c_str(), "a")) {
+                    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
                     std::fprintf(f,
-                        "UC1 WARN: OUT=%llu frames/s errs=%llu (expected ~50)\n",
+                        "[%lld] UC1 WARN: OUT=%llu frames/s errs=%llu (expected ~50)\n",
+                        static_cast<long long>(ms),
                         (unsigned long long)dOf, (unsigned long long)dOe);
                     std::fclose(f);
                 }
