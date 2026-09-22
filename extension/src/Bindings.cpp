@@ -796,20 +796,57 @@ void unseedRmeSideCarBank2_(Config& c)
     bank[0] = Binding{};
 }
 
-// Third and fourth: TotalMix' snapshots and layouts as dynamic banks (Frank
+// Hat diese Bank weder einen belegten Slot noch eine dynamische Art?
+static bool uf1BankUntouched_(const Config& c, int b)
+{
+    for (int s = 0; s < kUf1SoftBankSlots; ++s)
+        if (!uf1BankSlotEmpty_(c.uf1SoftBanks[b][s])) return false;
+    for (int m = 0; m < kSoftKeyModifierSets; ++m)
+        if (c.uf1SoftBankDynamic[b][m] != DynamicBankKind::None) return false;
+    return true;
+}
+
+// Second and third: TotalMix' snapshots and layouts as dynamic banks (Frank
 // 22.09.). Same rule, only into a bank with no slot and no kind of its own.
-void seedRmeSideCarBank34_(Config& c)
+// ⇨ SIE SASSEN EINEN TAG LANG AUF 3 UND 4, weil Main auf 2 lag. Das ist weg
+// (unseedRmeSideCarBank2_), also ruecken sie auf, sonst blaettert man ueber eine
+// leere Seite (Frank 22.09.). v46 zieht eine bestehende Datei nach.
+void seedRmeSideCarBank23_(Config& c)
 {
     const DynamicBankKind kinds[2] = { DynamicBankKind::RmeSnapshots,
                                        DynamicBankKind::RmeLayouts };
     for (int k = 0; k < 2; ++k) {
-        const int b = kUf1RmeBankBase + 2 + k;
-        bool empty = true;
-        for (int s = 0; s < kUf1SoftBankSlots && empty; ++s)
-            if (!uf1BankSlotEmpty_(c.uf1SoftBanks[b][s])) empty = false;
-        for (int m = 0; m < kSoftKeyModifierSets && empty; ++m)
-            if (c.uf1SoftBankDynamic[b][m] != DynamicBankKind::None) empty = false;
-        if (empty) c.uf1SoftBankDynamic[b][0] = kinds[k];
+        const int b = kUf1RmeBankBase + 1 + k;
+        if (uf1BankUntouched_(c, b)) c.uf1SoftBankDynamic[b][0] = kinds[k];
+    }
+}
+
+// v45 hatte sie auf 3 und 4 gesetzt. Nur verschieben, wenn dort noch genau das
+// steht und die Ziele frei sind; sonst hat der Nutzer die Baenke selbst belegt.
+void moveRmeSideCarBanks34to23_(Config& c)
+{
+    const int b3 = kUf1RmeBankBase + 2, b4 = kUf1RmeBankBase + 3;
+    const int t2 = kUf1RmeBankBase + 1, t3 = b3;
+    if (c.uf1SoftBankDynamic[b3][0] != DynamicBankKind::RmeSnapshots
+        || c.uf1SoftBankDynamic[b4][0] != DynamicBankKind::RmeLayouts)
+        return;
+    if (!uf1BankUntouched_(c, t2)) return;
+    for (int m = 1; m < kSoftKeyModifierSets; ++m)
+        if (c.uf1SoftBankDynamic[b3][m] != DynamicBankKind::None
+            || c.uf1SoftBankDynamic[b4][m] != DynamicBankKind::None)
+            return;
+    for (int s = 0; s < kUf1SoftBankSlots; ++s)
+        if (!uf1BankSlotEmpty_(c.uf1SoftBanks[b3][s])
+            || !uf1BankSlotEmpty_(c.uf1SoftBanks[b4][s]))
+            return;
+    c.uf1SoftBankDynamic[t2][0] = DynamicBankKind::RmeSnapshots;
+    c.uf1SoftBankDynamic[t3][0] = DynamicBankKind::RmeLayouts;
+    c.uf1SoftBankDynamic[b4][0] = DynamicBankKind::None;
+    // Die Namen ziehen mit, falls welche vergeben wurden.
+    for (int m = 0; m < kSoftKeyModifierSets; ++m) {
+        c.uf1SoftBankName[t2][m] = c.uf1SoftBankName[b3][m];
+        c.uf1SoftBankName[t3][m] = c.uf1SoftBankName[b4][m];
+        c.uf1SoftBankName[b4][m].clear();
     }
 }
 
@@ -1395,7 +1432,7 @@ void seedFactoryDefaults_(Config& c)
     // views that seed their own 5-8. See fillDerivedUf1Slots_.
     fillDerivedUf1Slots_(c);
     seedRmeSideCarBank_(c);
-    seedRmeSideCarBank34_(c);
+    seedRmeSideCarBank23_(c);
 }
 
 // ---- JSON serialization ---------------------------------------------------
@@ -3094,11 +3131,13 @@ bool invokeBuiltin(const std::string& name, int param)
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
+// v46 (2026-09-22): snapshots and layouts move from RME side-car banks 3 and 4
+// to 2 and 3, now that Main has left bank 2 (moveRmeSideCarBanks34to23_).
 // v45 (2026-09-22): Main comes OFF the second RME side-car bank again — the
 // MASTER key at the fader does it now (unseedRmeSideCarBank2_).
 // v44 (2026-09-22): RME side-car banks 3 and 4 become the dynamic TotalMix
 // Snapshots and Layouts banks, where they are still empty (seedRmeSideCarBank34_).
-constexpr int kCurrentBindingsVersion = 45;
+constexpr int kCurrentBindingsVersion = 46;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4270,11 +4309,17 @@ void load()
                 // one the control-room keys if it is still empty.
                 seedRmeSideCarBank_(tmp);
             }
-            if (tmp.version < 44) {
-                seedRmeSideCarBank34_(tmp);
-            }
+            // ⛔ REIHENFOLGE: erst Main von Bank 2 runter, dann saeen. Andersherum
+            // sieht die Saat Bank 2 belegt, legt nur die Layouts an und die
+            // Snapshots fehlen (eine Datei von v43 hat Main noch dort stehen).
             if (tmp.version < 45) {
                 unseedRmeSideCarBank2_(tmp);
+            }
+            if (tmp.version < 44) {
+                seedRmeSideCarBank23_(tmp);
+            }
+            if (tmp.version < 46) {
+                moveRmeSideCarBanks34to23_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
