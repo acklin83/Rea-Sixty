@@ -19500,6 +19500,14 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
                 (newPrimary == 1) ? uf8::Domain::ChannelStrip
               : (newPrimary == 2) ? uf8::Domain::BusComp
               :                      uf8::Domain::None;
+            // ⛔ "UF1 ONLY" SWITCHES THE UF1 LAYER ON, SO IT SEEDS IT FIRST, from
+            // the slots it is about to stash — the rule the "UF1 layer" checkbox
+            // (enableUf1Layer) has followed since 2026-08-08. This path flipped
+            // uf1Mode on over an EMPTY layer, and an empty layer that is on means
+            // "show nothing on the UF1" (uf1ExplicitMap_). So CS -> UF1 only -> CS
+            // left a fully learned strip with nothing on the UF1 (Frank 22.09.,
+            // bx 9000 J via AutoLearn, video script says the UF1 maps itself).
+            if (newPrimary == 4 && !copy.uf1Mode) user_plugins::seedUf1FromSlots(copy);
             // Stash outgoing slots into the matching cache.
             if (copy.domain == uf8::Domain::ChannelStrip) {
                 copy.csSlotCache = copy.slots;
