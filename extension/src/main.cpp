@@ -36305,8 +36305,9 @@ void uf1PaintChannel_()
             g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChSoftKey, p));
         }
         // ⛔ NOBODY LIGHTS 0x0000 FROM HERE. It used to carry the SOFT key's state
-        // (lit while its bound builtin reported ON, added 2026-08-10 because the
-        // key has no LED of its own). It cost the whole display: with Pin Focused
+        // (lit while its bound builtin reported ON, added 2026-08-10 on the belief
+        // that the key had no LED of its own — WRONG: it has one like every other
+        // key, LED id 0x00, painted by uf1PaintButtonLeds_ (Frank 22.09.)). It cost the whole display: with Pin Focused
         // on, the UF1 fell back to the bare MCU look — no colour bar, no GR meter —
         // on EVERY track, whatever the Focus Scope said (Frank 2026-08-11).
         // Both halves of that are mechanical. The pin builtins report plain
