@@ -30122,6 +30122,42 @@ void uf1LearnedStreamSlots_(const char* fxName, bool busComp, bool wantButton,
         out.swap(placed);
         return;                      // the strip key below is a SOFT-KEY concern
     }
+    // ⛔ SOFT-KEYS ON THEIR FACTORY PLACES TOO (Frank 22.09.). Same rule as the
+    // V-Pots above, from uf1FactorySoftKeyLinkAt: every learned button lands on
+    // each position where a factory Channel Strip has that control, repeats
+    // included (EQ TYPE / EQ on the four EQ pages, DYNAMICS on both dynamics
+    // pages); position 3 stays free for PLUG-IN, whose meaning
+    // uf1LearnedStripKeyAt_ answers. Anything the factory never shows is packed
+    // after the eight pages. Bus Comp has no table and falls through to the
+    // packed stream below.
+    {
+        const int nSk = uf8::user_plugins::uf1FactorySoftKeyPositionCount(busComp);
+        if (nSk > 0) {
+            std::vector<const uf8::UserLinkSlot*> placed(static_cast<size_t>(nSk), nullptr);
+            std::vector<bool> used(out.size(), false);
+            for (int flat = 0; flat < nSk; ++flat) {
+                const int li = uf8::user_plugins::uf1FactorySoftKeyLinkAt(flat, busComp);
+                if (li < 0) continue;
+                for (size_t k = 0; k < out.size(); ++k)
+                    if (out[k]->linkIdx == li) { placed[flat] = out[k]; used[k] = true; break; }
+            }
+            for (size_t k = 0; k < out.size(); ++k)
+                if (!used[k]) placed.push_back(out[k]);
+            // Trailing blank pages go, as for the V-Pots — but never page 1 while
+            // it carries the PLUG-IN key.
+            const size_t keep = uf8::uf1MapWantsStripKey(*um) ? 4 : 0;
+            while (placed.size() >= 4 && placed.size() > keep) {
+                const size_t tail = placed.size() - 4;
+                bool empty = true;
+                for (size_t i = tail; i < placed.size(); ++i)
+                    if (placed[i]) { empty = false; break; }
+                if (!empty || tail < keep) break;
+                placed.resize(tail);
+            }
+            out.swap(placed);
+            return;
+        }
+    }
     // Reserve the PLUG-IN position in the SOFT-KEY stream, pushing the packed
     // params one place along. A nullptr here reads as "no param" to every
     // existing consumer (blank label, no toggle) — what the position actually

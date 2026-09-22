@@ -1854,7 +1854,8 @@ bool captureOriginalName(std::string_view match, std::string_view originalName)
 //
 // Mirrors uf1LearnedStreamSlots_ in main.cpp: mapped slots only, split by
 // uc1::linkIdxIsButton (buttons → soft-keys, rest → V-Pots), each stream sorted
-// by linkIdx and packed from position 0. Keep the two in step.
+// V-Pots and soft-keys on their FACTORY positions (uf1FactoryVpotFlatPos,
+// uf1FactorySoftKeyLinkAt), the rest packed after them. Keep the two in step.
 // The factory UF1 V-Pot pages, as linkIdx. Transcribed cell for cell from
 // kUf1CsVPots[0] (Channel Strip 2 — every CS type in that table shares this
 // layout) with the names resolved through kCs2Slots. -1 = the factory leaves
@@ -1902,6 +1903,36 @@ int uf1FactoryVpotFlatPos(int linkIdx, bool busComp)
     return -1;
 }
 
+// The CS2 soft-key pages (kUf1CsSoftKeys[0] in main.cpp, p188), resolved to
+// linkIdx through kCs2Slots / kCsLinkToUc1. -1 = empty, or not a parameter.
+//
+//   page 1  Polarity     -            (SOLO SAFE)  (PLUG-IN)
+//   page 2  (S/C MODE)   -            (HQ)         (A/B)
+//   page 3  LF Bell      -            EQ Type      EQ In
+//   page 4  -            -            EQ Type      EQ In
+//   page 5  -            -            EQ Type      EQ In
+//   page 6  HF Bell      -            EQ Type      EQ In
+//   page 7  Comp F.Atk   Comp Peak    S/C Listen   Dynamics In
+//   page 8  Gate/Exp     Gate F.Atk   -            Dynamics In
+static const int kUf1FactorySkLinkIdx[32] = {
+     5, -1, -1, -1,
+    -1, -1, -1, -1,
+    21, -1, 14, 15,
+    -1, -1, 14, 15,
+    -1, -1, 14, 15,
+     8, -1, 14, 15,
+    24, 25, 36, 22,
+    33, 34, -1, 22,
+};
+
+int uf1FactorySoftKeyPositionCount(bool busComp) { return busComp ? 0 : 32; }
+
+int uf1FactorySoftKeyLinkAt(int flat, bool busComp)
+{
+    if (flat < 0 || flat >= uf1FactorySoftKeyPositionCount(busComp)) return -1;
+    return kUf1FactorySkLinkIdx[flat];
+}
+
 void seedUf1FromSlots(UserPluginMap& m)
 {
     if (uf1MapHasContent(m.uf1)) return;
@@ -1944,14 +1975,48 @@ void seedUf1FromSlots(UserPluginMap& m)
     }
     fill(spill, m.uf1.vpots, uf1FactoryVpotPositionCount(busComp));
     m.uf1.softKeys.clear();
+    const int nSk = uf1FactorySoftKeyPositionCount(busComp);
+    if (nSk > 0) {
+        // Soft-keys on their FACTORY positions too, repeats included; whatever
+        // the factory pages do not show is packed after them. Same order the
+        // surface uses (uf1LearnedStreamSlots_), keep the two in step.
+        std::vector<bool> placedSk(sk.size(), false);
+        for (int flat = 0; flat < nSk; ++flat) {
+            const int li = uf1FactorySoftKeyLinkAt(flat, busComp);
+            if (li < 0) continue;
+            for (size_t k = 0; k < sk.size(); ++k) {
+                if (sk[k]->linkIdx != li) continue;
+                UserUf1Slot s{};
+                s.pos         = flat;
+                s.vst3Param   = sk[k]->vst3Param;
+                s.inverted    = sk[k]->inverted;
+                s.customLabel = sk[k]->customLabel;
+                m.uf1.softKeys.push_back(std::move(s));
+                placedSk[k] = true;
+                break;
+            }
+        }
+        std::vector<const UserLinkSlot*> skSpill;
+        for (size_t k = 0; k < sk.size(); ++k)
+            if (!placedSk[k]) skSpill.push_back(sk[k]);
+        fill(skSpill, m.uf1.softKeys, nSk);
+        // PLUG-IN sits on its factory place, position 3, which the table leaves
+        // empty for it: nothing has to move out of the way any more.
+        if (uf1MapWantsStripKey(m)) {
+            UserUf1Slot pk{};
+            pk.pos     = kUf1LearnedStripKeyPos;
+            pk.special = static_cast<uint8_t>(Uf1SkSpecial::StripMode);
+            m.uf1.softKeys.push_back(std::move(pk));   // sparse: uf1SlotAt keys on pos
+        }
+        return;
+    }
     fill(sk, m.uf1.softKeys, 0);
-    // The learned strip's PLUG-IN key sits at kUf1LearnedStripKeyPos and pushes
-    // the packed stream one place along — mirror BOTH halves of that here, or
-    // enabling the explicit layer would move every soft-key back by one and drop
-    // the key, which is exactly the visible change this seeder exists to avoid.
-    // Seeded as the plain variant; the editor's own picker offers "+ GUI" per key
-    // (the g_uf1StripKeyWithGui setting only steers keys that have no slot to
-    // carry the choice).
+    // No factory table (Bus Comp): packed. The learned strip's PLUG-IN key sits
+    // at kUf1LearnedStripKeyPos and pushes the packed stream one place along —
+    // mirror BOTH halves of that here, or enabling the explicit layer would move
+    // every soft-key back by one and drop the key. Seeded as the plain variant;
+    // the editor's own picker offers "+ GUI" per key (the g_uf1StripKeyWithGui
+    // setting only steers keys that have no slot to carry the choice).
     if (uf1MapWantsStripKey(m)) {
         for (auto& s : m.uf1.softKeys)
             if (s.pos >= kUf1LearnedStripKeyPos) ++s.pos;
