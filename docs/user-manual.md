@@ -1463,6 +1463,7 @@ For a regular button, the editor exposes:
 - **Modifier rows** — *(no modifier)*, *+ Shift / Fine*, *+ Cmd* and *+ Ctrl*, in both the SHORT PRESS and the LONG PRESS column. Each row is bound separately.
 - **Behavior** — Momentary / Toggle / Hold.
 - **Long press** — tick *Enable long-press (held > 0.5 s)* to get a second column of actions that fire once the key is held half a second. Ticking it sets Behavior to Momentary, so the short action does not also fire.
+- **Repeat while held** — in the LONG PRESS column, per row: the long press keeps firing until you let go. The first one lands at the half second, the rest at the interval you set, 20 ms to 1000 ms, 100 ms by default. Useful on nudges, zoom steps, marker steps and anything else you would otherwise tap ten times. The tick is greyed out on an action that toggles, because repeating one just flips it back and forth, and on an empty row.
 - **LED** — an Active and an Inactive row, each a colour plus Off / Dim / Bright, and *Show LED even when no action is assigned*.
 - For **MIDI Command** bindings: device, channel, message (Note On / Note Off / Control Change / Program Change), note or CC number, and velocity or value.
 - For **REAPER Action** bindings: **Browse Action...** opens REAPER's own Action List, and **Load ReaScript...** picks a script.

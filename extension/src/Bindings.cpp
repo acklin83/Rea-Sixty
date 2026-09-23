@@ -521,8 +521,12 @@ std::mutex g_pressMx;
 // holds a COPY of the resolved long slot so the timer can fire it with no
 // binding lookup. longFired flips true the moment the timer fires it, so
 // the release edge cleans up without re-firing (short OR long).
+// ⇨ RAPID FIRE haengt an denselben zwei Karten: hat der Slot `repeat`, setzt der
+// Tick nach jedem Schuss `nextFire` statt zu sperren, und `longFired` bleibt
+// gesetzt, damit das Loslassen weiterhin den kurzen Druck unterdrueckt.
 struct PressRecord {
     std::chrono::steady_clock::time_point start;
+    std::chrono::steady_clock::time_point nextFire;
     Modifier                              mod       = Modifier::Plain;
     bool                                  longArmed = false;
     bool                                  longFired = false;
@@ -1697,6 +1701,7 @@ void serializeSlotFields_(const ActionSlot& s, std::ostringstream& os)
 {
     const bool useNew = !s.extraSteps.empty()
                      || s.wait_ms > 0
+                     || s.repeat
                      || slotHasLedOverride_(s);
     if (!useNew) {
         serializeStepFields_(static_cast<const ActionStep&>(s), os);
@@ -1714,6 +1719,9 @@ void serializeSlotFields_(const ActionSlot& s, std::ostringstream& os)
     if (slotHasLedOverride_(s)) {
         os << ", \"led\": ";
         serializeLedOverride_(s.led, os);
+    }
+    if (s.repeat) {
+        os << ", \"repeat\": true, \"repeat_ms\": " << int(s.repeatMs);
     }
 }
 
@@ -2339,6 +2347,16 @@ bool parseSlotFields_(wdl_json_element* obj, ActionSlot& out)
     }
     if (auto* led = obj->get_item_by_name("led"); led && led->is_object()) {
         parseLedOverride_(led, out.led);
+    }
+    if (auto* r = obj->get_item_by_name("repeat")) {
+        const char* v = r->get_string_value(true);
+        out.repeat = v && (std::strcmp(v, "true") == 0 || std::strcmp(v, "1") == 0);
+    }
+    if (auto* ms = obj->get_item_by_name("repeat_ms")) {
+        if (const char* v = ms->get_string_value(true)) {
+            out.repeatMs = static_cast<std::uint16_t>(
+                std::clamp(std::atoi(v), kRepeatMsMin, kRepeatMsMax));
+        }
     }
     return true;
 }
@@ -3168,6 +3186,9 @@ bool invokeBuiltin(const std::string& name, int param)
 // modifier set, announced on the time display when the bank is switched. Purely
 // additive: an older config simply has none, and every reader treats an empty
 // name as "no name given", which is also the shipped state.
+// v48 (2026-09-23): a long-press slot can repeat while the key is held
+// ("repeat" / "repeat_ms" per slot). Additive: a file without them repeats
+// nothing, which is what every binding did before.
 // v47 (2026-09-22): the two TotalMix banks end up on 2 and 3 exactly once —
 // the v46 move left a copy behind where the seed had already written one
 // (tidyRmeSideCarDynBanks_).
@@ -3177,7 +3198,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // MASTER key at the fader does it now (unseedRmeSideCarBank2_).
 // v44 (2026-09-22): RME side-car banks 3 and 4 become the dynamic TotalMix
 // Snapshots and Layouts banks, where they are still empty (seedRmeSideCarBank34_).
-constexpr int kCurrentBindingsVersion = 47;
+constexpr int kCurrentBindingsVersion = 48;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -5421,19 +5442,30 @@ void tickLongPressThreshold()
     {
         std::lock_guard<std::mutex> lk(g_pressMx);
         const auto now = std::chrono::steady_clock::now();
+        // Erster Schuss bei der Schwelle, danach im Abstand des Slots, solange
+        // die Taste haengt (Rapid Fire). Ohne `repeat` bleibt es beim einen.
+        auto fireDue = [&](PressRecord& rec) {
+            if (!rec.longArmed) return false;
+            if (!rec.longFired) return now - rec.start >= kLongPressThreshold;
+            if (!rec.longSlot.repeat) return false;
+            return now >= rec.nextFire;
+        };
+        auto arm = [&](PressRecord& rec) {
+            rec.longFired = true;
+            rec.nextFire  = now + std::chrono::milliseconds(
+                std::clamp<int>(rec.longSlot.repeatMs, kRepeatMsMin, kRepeatMsMax));
+        };
         for (auto& [k, rec] : g_pressStart) {
             (void)k;
-            if (rec.longArmed && !rec.longFired
-                && now - rec.start >= kLongPressThreshold) {
-                rec.longFired = true;
+            if (fireDue(rec)) {
+                arm(rec);
                 toFire.push_back({rec.longSlot, rec.id, rec.mod});
             }
         }
         for (auto& [k, rec] : g_longPressStart) {
             (void)k;
-            if (rec.longArmed && !rec.longFired
-                && now - rec.start >= kLongPressThreshold) {
-                rec.longFired = true;
+            if (fireDue(rec)) {
+                arm(rec);
                 toFire.push_back({rec.longSlot, rec.id, rec.mod});
             }
         }
