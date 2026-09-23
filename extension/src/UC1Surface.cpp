@@ -193,6 +193,7 @@ bool reasixty_recRmeUc1ButtonAssigned(int which);
 // Build the REC+RME readout (UF8 V-Pot value-line format) for the
 // focused track. Returns false when not applicable; UC1 then renders
 // the regular focused-param readout in its place.
+std::string reasixty_recUc1InputName(MediaTrack* tr);
 bool reasixty_recUc1ReadoutText(MediaTrack* tr,
                                 std::string* outLabel,
                                 std::string* outValue);
@@ -5271,6 +5272,20 @@ void UC1Surface::refresh()
         // displayShort regardless of how many instances are on the
         // track (instance cycling is conveyed via the encoder action,
         // not the LCD label).
+        // ⇨ IN REC + RME STEHT DER EINGANG IM FARBBALKEN, wie auf der UF8 und
+        // der UF1 (Frank 23.09.). Der Name kommt aus derselben Quelle wie dort,
+        // also aus REAPERs I_RECINPUT, und ersetzt den Plug-in-Namen, solange
+        // die Spur auf einem Hardware-Eingang liegt. Ohne einen solchen Eingang
+        // bleibt das Label, was es war.
+        if (focusedTrack_ && ValidatePtr2(nullptr, focusedTrack_, "MediaTrack*")) {
+            if (std::string inName = reasixty_recUc1InputName(
+                    static_cast<MediaTrack*>(focusedTrack_));
+                !inName.empty())
+            {
+                baseLabel = std::move(inName);
+                instanceTrack = nullptr;   // kein Instanz-Zaehler auf einem Eingang
+            }
+        }
         constexpr int kCentralLabelW = 12;
         char labelBuf[kCentralLabelW + 1] = {0};
         // UC1 LCD = Latin-1; fold the (possibly user-renamed) FX label
