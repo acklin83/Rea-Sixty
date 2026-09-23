@@ -449,9 +449,22 @@ struct LedOverride {
 // — those fields ARE the chain's step 0. Additional steps live in
 // `extraSteps`. The LED override is per-slot (per modifier × press
 // combo), not per chain step.
+// ⇨ RAPID FIRE: WIEDERHOLEN, SOLANGE DIE TASTE HAENGT (Frank 23.09.). Gilt nur
+// fuer den LANGDRUCK — der feuert ohnehin schon waehrend des Haltens
+// (tickLongPressThreshold), also ist die Wiederholung dort eine Frage des
+// naechsten Zeitpunkts und keine neue Mechanik. Pro SLOT, nicht pro Taste:
+// Plain darf wiederholen und Shift nicht.
+// ⛔ Ein Umschalter kippt beim Wiederholen hin und her, darum sperrt der Editor
+// den Haken auf Aktionen mit Zustand (builtinHasState / REAPERs toggleaction).
+constexpr int kRepeatMsDefault = 100;
+constexpr int kRepeatMsMin     = 20;
+constexpr int kRepeatMsMax     = 1000;
+
 struct ActionSlot : ActionStep {
     std::vector<ActionStep> extraSteps;
     LedOverride             led;
+    bool                    repeat   = false;
+    std::uint16_t           repeatMs = kRepeatMsDefault;
 };
 
 // Chain helpers — treat the slot as a contiguous N-step list. stepCount

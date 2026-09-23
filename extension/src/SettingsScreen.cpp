@@ -4512,6 +4512,47 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
         }
         ImGui_Unindent(ctx, nullptr);
     }
+    // ⇨ RAPID FIRE, nur auf dem Langdruck (Frank 23.09.). Der Langdruck feuert
+    // ohnehin waehrend des Haltens; mit dem Haken feuert er weiter, bis die
+    // Taste losgelassen wird.
+    // ⛔ NICHT AUF EINER AKTION MIT ZUSTAND: ein Umschalter kippt beim
+    // Wiederholen hin und her, das ergibt nie das, was jemand wollte. Gesperrt
+    // statt kommentiert, entschieden von Frank.
+    if (isLongPress) {
+        // Zustand: bei einem Builtin sagt es der Deskriptor, bei einer
+        // REAPER-Aktion ihr eigener Toggle-Zustand (-1 = kein Umschalter).
+        bool stateful = (s.type == ActionType::Builtin && builtinHasState(s.action));
+        if (!stateful && s.type == ActionType::Reaper && !s.action.empty()) {
+            const int cmd = NamedCommandLookup(s.action.c_str());
+            if (cmd != 0) stateful = GetToggleCommandState2(nullptr, cmd) >= 0;
+        }
+        const bool empty = s.type == ActionType::Noop || s.action.empty();
+        ImGui_Spacing(ctx);
+        if (empty || stateful) {
+            ImGui_TextDisabled(ctx, empty
+                ? "Repeat while held: assign an action first."
+                : "Repeat while held: not for an action that toggles.");
+            if (s.repeat) { s.repeat = false; dirty = true; }
+        } else {
+            bool rep = s.repeat;
+            snprintf(idbuf, sizeof(idbuf), "Repeat while held##%s_rep", prefix);
+            if (ImGui_Checkbox(ctx, idbuf, &rep)) { s.repeat = rep; dirty = true; }
+            help_(ctx,
+                  "The long press keeps firing until you let go.\n"
+                  "The first one lands at the long-press threshold,\n"
+                  "the rest at the interval below.");
+            if (s.repeat) {
+                int ms = std::clamp<int>(s.repeatMs, kRepeatMsMin, kRepeatMsMax);
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
+                snprintf(idbuf, sizeof(idbuf), "Interval##%s_repms", prefix);
+                if (ImGui_SliderInt(ctx, idbuf, &ms, kRepeatMsMin, kRepeatMsMax,
+                                    "%d ms", nullptr)) {
+                    s.repeatMs = static_cast<std::uint16_t>(ms);
+                    dirty = true;
+                }
+            }
+        }
+    }
     return dirty;
 }
 
