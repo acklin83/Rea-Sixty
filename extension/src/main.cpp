@@ -816,11 +816,20 @@ static int uf1SideCarBankNow_()
     return set < 0 ? -1
                    : uf8::bindings::uf1SideCarBankBase(set) + g_sideCarBank[set].load();
 }
-// ◄ ► LANG im Side-Car: Zeitpunkt des Drucks (0 = keiner) und Richtung. Der
-// Eingabe-Thread setzt ihn, der Side-Car-Maler feuert die Seite bei
-// kUf1DynLongPressMs, das Loslassen davor ist der kurze Druck (Bankwechsel).
-std::atomic<int64_t> g_scArrowDownMs{0};
-std::atomic<int>     g_scArrowDir{0};
+// ⇨ BANK ◄ ► BLAETTERN IM SIDE-CAR IN DER DYNAMISCHEN BANK (Frank 22.09., wie
+// seine eigene Belegung in der DAW-Ansicht). Wie viele Seiten die gezeigte Bank
+// hat: 1 heisst statisch oder einseitig, dann tun die Tasten nichts. Den Zaehler
+// veroeffentlicht der Maler (uf1DynBankPagePublish_).
+static int uf1SideCarDynPages_()
+{
+    const int bank = uf1SideCarBankNow_();
+    if (bank < 0) return 1;
+    if (uf8::bindings::getUf1SoftBankDynamicFor(
+            bank, static_cast<int>(uf8::bindings::bankModifierSnapshot()))
+        == uf8::bindings::DynamicBankKind::None)
+        return 1;
+    return std::max(1, g_uf1DynBankPageCount.load());
+}
 
 // ⇨ UF1 LAYOUT PROBE (Settings -> About). A diagnostic, not a feature.
 //
@@ -26075,30 +26084,24 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
     // ⇨ DIE NORMALEN PFEILE < > BLAETTERN, wie die Soft-Key-Baenke in der DAW-
     // Ansicht, nicht Bank < > (Frank 22.09.). Kein Umlauf: die Lampe sagt, ob es
     // in diese Richtung noch weitergeht, und ein Umlauf machte sie sinnlos.
-    // ⇨ AUF EINER DYNAMISCHEN BANK MIT MEHREREN SEITEN KURZ UND LANG (Frank
-    // 22.09., "nur dort"): kurz = Bank beim Loslassen, lang = Seite in der Bank,
-    // wie ◄ ► lang in der DAW-Ansicht. Sonst springt der Druck sofort, wie immer.
     if (id == uf1::btn::kArrowLeft || id == uf1::btn::kArrowRight) {
-        const int dir = (id == uf1::btn::kArrowRight) ? 1 : -1;
-        auto stepBank = [set, dir]() {
-            const int nb = std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set));
-            g_sideCarBank[set].store(std::clamp(g_sideCarBank[set].load() + dir, 0, nb - 1));
-        };
         if (ev.pressed) {
-            const bool paged = g_uf1DynBankPageCount.load() >= 2
-                && uf8::bindings::getUf1SoftBankDynamicFor(
-                       uf1SideCarBankNow_(),
-                       static_cast<int>(uf8::bindings::bankModifierSnapshot()))
-                   != uf8::bindings::DynamicBankKind::None;
-            if (paged) {
-                g_scArrowDir.store(dir);
-                g_scArrowDownMs.store(nowMs_());
-            } else {
-                g_scArrowDownMs.store(0);
-                stepBank();
-            }
-        } else if (g_scArrowDownMs.exchange(0) != 0) {
-            stepBank();   // losgelassen, bevor der Maler die Seite gefeuert hat
+            const int nb  = std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set));
+            const int dir = (id == uf1::btn::kArrowRight) ? 1 : -1;
+            g_sideCarBank[set].store(std::clamp(g_sideCarBank[set].load() + dir, 0, nb - 1));
+        }
+        return true;
+    }
+    // ⇨ UND BANK ◄ ► BLAETTERN IN DER BANK, wenn eine dynamische zu sehen ist.
+    // Zwei Ebenen, zwei Tastenpaare, wie Frank es sich in der DAW-Ansicht selbst
+    // belegt hat. Eine statische Bank laesst die Tasten durch, sonst naehme das
+    // Side-Car dem Item-Modus die Spurwahl weg, ohne etwas dafuer zu bieten.
+    if (id == uf1::btn::kBankLeft || id == uf1::btn::kBankRight) {
+        const int cnt = uf1SideCarDynPages_();
+        if (cnt < 2) return false;
+        if (ev.pressed && !g_uf1ModeMenu.load()) {
+            const int dir = (id == uf1::btn::kBankRight) ? 1 : cnt - 1;
+            g_uf1DynBankPage.store((g_uf1DynBankPage.load() + dir) % cnt);
         }
         return true;
     }
@@ -34336,15 +34339,6 @@ static void uf1PaintSideCarSoftKeys_(bool force)
         bank, static_cast<int>(uf8::bindings::bankModifierSnapshot()), &dynOwnsSet);
     const bool dyn = dynKind != uf8::bindings::DynamicBankKind::None;
     MediaTrack* dynTr = dyn ? uf1FocusedTrack_() : nullptr;
-    // ◄ ► lang (uf1SideCarSoftKeys_): die Seite, sobald der Druck lang genug ist.
-    // Der CAS entscheidet zwischen diesem Tick und dem Loslassen, genau einer gewinnt.
-    if (int64_t down = g_scArrowDownMs.load();
-        down != 0 && nowMs_() - down >= kUf1DynLongPressMs
-        && g_scArrowDownMs.compare_exchange_strong(down, 0) && dyn) {
-        const int cnt = std::max(1, g_uf1DynBankPageCount.load());
-        const int dir = g_scArrowDir.load() > 0 ? 1 : cnt - 1;
-        g_uf1DynBankPage.store((g_uf1DynBankPage.load() + dir) % cnt);
-    }
     const int dynPage = dyn ? uf1DynBankPagePublish_(bank, dynKind, dynTr) : 0;
     std::array<Uf1SkCell, 4> cells{};
     for (int i = 0; i < 4; ++i)
@@ -34590,6 +34584,8 @@ static bool uf1SideCarKeepsLed_(uf8::bindings::ButtonId id)
         // 5-8 = die zwei V-Pot-Baenke im RME-Side-Car (uf1RmeButton_),
         // < > = Baenke bzw. STRIP-Seiten (uf1SideCarSoftKeys_).
         || id == B::Uf1FiveToEight || id == B::Uf1ArrowLeft || id == B::Uf1ArrowRight
+        // Bank ◄ ► = die Seiten einer dynamischen Bank (uf1SideCarSoftKeys_).
+        || id == B::Uf1BankLeft || id == B::Uf1BankRight
         // Soft-Key ueber dem Kanal = Stereo/Mono, hell bei stereo.
         || id == B::Uf1ChannelSoftKey
         // MASTER = Main auf den Fader (uf1RmeButton_), Zustand unten.
@@ -34747,6 +34743,14 @@ static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
             }
             if (sideCar && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1ArrowRight) {
                 on = rightOn; show = true;
+            }
+            // Bank ◄ ► blaettern in der dynamischen Bank. Beide leuchten oder
+            // keine: es geht im Kreis, also immer in beide Richtungen.
+            if (sideCar && (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1BankLeft
+                         || kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1BankRight)) {
+                on = (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1BankLeft)
+                   ? bankLOn : bankROn;
+                show = true;
             }
             // MASTER am Fader = Main auf den Fader, solange das RME-Side-Car
             // laeuft: die Lampe liest denselben Zustand wie das Builtin.
@@ -35123,7 +35127,8 @@ static void uf1PaintRme_()
         arrowR = g_sideCarBank[set].load() < nb - 1;
     }
     const rme::Channel* selCh = (sel >= 0) ? rmeu::channelOf(st, row, sel) : nullptr;
-    uf1PaintButtonLeds_(force, Uf1BtnAvail{ arrowL, arrowR, false, false,
+    const bool bankPage = uf1SideCarDynPages_() >= 2;
+    uf1PaintButtonLeds_(force, Uf1BtnAvail{ arrowL, arrowR, bankPage, bankPage,
                                             !strip && g_rmeVpotBank.load() == 1,
                                             selCh && selCh->stereo },
                         /*sideCar*/ true);
