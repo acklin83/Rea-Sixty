@@ -82,9 +82,25 @@ The push-cycle menus and the FX-Learn parameter lists were rebuilding themselves
 - **Hue:** the recording light can recall a scene instead of a colour, and the bridge is not read when it does not have to be.
 - **The manual was audited against the code**, chapter by chapter, and around fifty claims that had drifted were corrected — the channel encoder's fifteen modes, the bus comp's six soft-key pages, the number of tabs, and a long tail of smaller ones.
 
+## Sends, receives and the fixes after them
+
+The week after the features came a round on the hardware, and the send and receive fader modes took the biggest share of it.
+
+**A send strip is the route's track, everywhere.** In a Send or Receive fader mode the level and gain-reduction rows read the track the route goes to, not the strip's own; the channel number is that track's number; and the UF1 Extender paints its colours the way the UF8 does. SEL follows the same rule: on the Extender's ninth strip it selects the send's track and its lamp says so, and on a send strip where there is nothing to select it does nothing and stays dark.
+
+**FX Learn and the Learn HUD.** Switching a map to "UF1 only" fills the UF1 layer first instead of leaving it empty. A learned channel strip puts its soft-keys where a factory one has them. Create plus AutoLearn goes straight to the proposals. The listening run stops only at slots that have a UC1 control. UF1 pages can be turned by hand outside PLUGIN mode. FX Learn follows the plug-in the HUD is on, and nothing else. EXT FUNCS are learned by clicking the slot and wiggling the control, and they are gone from the bus-comp tab, where they never applied.
+
+**Bindings.** A press on a surface selects that button in Settings, Bindings, so you no longer hunt for it in the schematic. It can be switched off under Behaviour, and the key that opens and closes Settings keeps working, or there would be no way back out from the surface.
+
+**REC.** Changing a track's input channel with Shift and a rotation works without an RME interface. The input is REAPER's own; only preamp gain, 48V, pad and phase need TotalReaper.
+
+**UF8 Plug-in Mode.** A fresh REAPER never starts in it. It used to be restored from the last session, and since the mode deliberately locks the Quick and bank keys, a surface came up unable to change a soft-key set with nothing on screen saying why. A press the mode swallows now flashes the banner.
+
+**USB.** A failed reopen is retried every five seconds instead of once, and the extension counts what floods a surface, so a UC1 that drops out leaves something to read afterwards.
+
 ## Configuration
 
-The bindings file moves to **version 34**. Both bumps are additive: v33 gives a UF8 sub-bank its own name, v34 gives a set a name and a number. A configuration from v0.5.9 loads unchanged, and an unnamed set reads as *Set N*, which is what every set was before. Projects are untouched; Sticky Pot pairs are stored in the project alongside the pins that carry them.
+The bindings file moves to **version 41**. Every step is additive or migrates itself: v33 gives a UF8 sub-bank its own name, v34 gives a set a name and a number, v35 to v38 move the above-fader V-Pot's push onto a real binding and drop the long press that mirrored it, v39 renames the Focus Set family from its old internal name, v40 tells the channel focus key which panel half it sits on, and v41 makes the jog content drag a hold. A configuration from v0.5.9 loads unchanged, and an unnamed set reads as *Set N*, which is what every set was before. Projects are untouched; Sticky Pot pairs are stored in the project alongside the pins that carry them.
 
 ## Known issues
 
