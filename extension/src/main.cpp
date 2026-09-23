@@ -4546,6 +4546,12 @@ inline void restoreSelModeAfterUf8PluginMode_()
 //              when that reason goes (we only ever release what we took).
 //   UserLeft — we had it and the user pressed PLUG-IN. They win, and they keep
 //              winning until the reason itself goes away and comes back.
+// ⇨ EIN DRUCK, DEN DER PLUG-IN MODE SCHLUCKT, SAGT ES. Die drei Builtins, die
+// unter dem Modus aussteigen (domain_cs/bc, softkey_bank_N, softkey_bank_select),
+// zaehlen hier hoch; der Banner-Block in onTimer leert den Zaehler und blendet es
+// ein. Ueber ein Atomic, weil der Druck auf dem Eingabe-Thread ankommt.
+std::atomic<int> g_uf8ModeBlockedReq{0};
+
 enum class Uf8ModeHolder : uint8_t { None, Auto, UserLeft };
 Uf8ModeHolder g_uf8ModeHolder = Uf8ModeHolder::None;
 // The one mode change WE caused, not yet announced. Written in exactly one
@@ -4603,7 +4609,20 @@ inline void setUf8ModeAuto_(bool on)
     const bool was = g_uf8PluginMode.load();
     if (on) engageUf8PluginMode_(false);
     else    disengageUf8PluginMode_();
-    if (g_uf8PluginMode.load() != was) g_uf8ModeOursPending = true;
+    if (g_uf8PluginMode.load() != was) {
+        g_uf8ModeOursPending = true;
+        // ⇨ WER DEN MODUS GENOMMEN HAT, STEHT IM LOG. Am 23.09. war er nach
+        // einem frischen Start an, die Quick- und Bank-Tasten damit tot, und
+        // niemand konnte sagen, ob ihn die ExtState oder wir eingeschaltet
+        // hatten. Die ExtState tut es seitdem nicht mehr; bleibt diese Zeile.
+        if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+            std::fprintf(lg, "[uf8mode] auto %s (touchLearn=%d hudUf1Tab=%d)\n",
+                         on ? "engage" : "release",
+                         g_hudTouchLearn.load() ? 1 : 0,
+                         g_hudUf1Tab.load() ? 1 : 0);
+            std::fclose(lg);
+        }
+    }
 }
 
 // ── Meter ballistics ────────────────────────────────────────────────
@@ -5345,10 +5364,15 @@ void loadBrightness()
         g_fxChainPinY.store(std::atoi(v));
     if (const char* v = GetExtState("rea_sixty", "fx_chain_pin_center"); v && *v)
         g_fxChainPinCenter.store(std::atoi(v) != 0);
-    const char* upm = GetExtState("ReaSixty", "uf8PluginMode");
-    if (upm && *upm) {
-        g_uf8PluginMode.store(std::atoi(upm) != 0);
-    }
+    // ⛔ UF8 PLUG-IN MODE WIRD NICHT WIEDERHERGESTELLT (Frank 23.09.). Er wurde
+    // bis hierher aus der ExtState geladen, und wer eine Sitzung darin beendete,
+    // startete wieder darin — mit toten Quick- und Bank-Tasten, denn
+    // domain_cs/bc, softkey_bank_N und softkey_bank_select steigen unter dem
+    // Modus absichtlich aus (main.cpp, reasixty_editorEngageQuickIfLocked).
+    // Nichts auf der Flaeche sagte, warum ("kann keine soft-key banks und keine
+    // sets mehr waehlen ... vor allem bei reaper frischem start"). Der Modus ist
+    // jetzt eine Sache der Sitzung; geschrieben wird der Wert weiter, damit ein
+    // laufendes REAPER ihn nach einem Neuladen der Extension wiederfindet.
     if (const char* v = GetExtState("ReaSixty", "cycleOpenMode"); v && *v) {
         g_cycleOpenMode.store(std::atoi(v) != 0 ? 1 : 0);
     }
@@ -45282,6 +45306,13 @@ void onTimerBody_()
                 for (size_t i = 1; i < chg.size(); ++i) joined += "  |  " + chg[i];
                 fireBanner(joined);
             }
+            // ⇨ UND EIN DRUCK, DEN DER PLUG-IN MODE GESCHLUCKT HAT (Frank 23.09.).
+            // Er aendert nichts, also hat er keinen eigenen Zustand zu melden —
+            // aber schweigend nichts zu tun ist genau das, was ihn eine halbe
+            // Stunde gekostet hat. Nach den Moduswechseln, damit ein echter
+            // Wechsel zuerst steht.
+            if (g_uf8ModeBlockedReq.exchange(0) > 0 && chg.empty())
+                fireBanner("UF8 Plug-in Mode â¢ bank and Quick keys locked");
         }
     }
 
@@ -56493,7 +56524,7 @@ void registerBindingHandlers()
                 // "die Quick Buttons dürfen nichts an den Soft-Keys
                 // ändern, sonst kommt man nicht mehr auf die gelearnten
                 // Parameter."
-                if (g_uf8PluginMode.load()) return;
+                if (g_uf8PluginMode.load()) { g_uf8ModeBlockedReq.fetch_add(1); return; }
                 if (uf8::getFocusedParam().domain != target) {
                     uf8::setFocus({target, 0});
                 }
@@ -56551,7 +56582,7 @@ void registerBindingHandlers()
                 // user-Quick which would replace the FX-Learn-driven
                 // top-soft-key labels and break access to gelearnte
                 // Parameter (Frank 2026-05-13).
-                if (g_uf8PluginMode.load()) return;
+                if (g_uf8PluginMode.load()) { g_uf8ModeBlockedReq.fetch_add(1); return; }
                 // ⇨ THROUGH engageUserBank_, NOT PAST IT. This used to store
                 // the quick itself, which is right for seven of the nine and
                 // exactly wrong for Sets 8 and 9: those ARE the SSL rows, which
@@ -57342,7 +57373,7 @@ void registerBindingHandlers()
             // 1-5) are no-function — bank navigation moves to the 8
             // TopSoftKeys (Frank 2026-05-13: "Soft-Key Banks
             // no-function in UF8 plugin mode").
-            if (g_uf8PluginMode.load()) return;
+            if (g_uf8PluginMode.load()) { g_uf8ModeBlockedReq.fetch_add(1); return; }
             const int layer = uf8::bindings::getQuickLayer();
             const int activeQuick = (layer >= 0 && layer <= 2)
                 ? g_activeQuick[layer].load() : -1;
