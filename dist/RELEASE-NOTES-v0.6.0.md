@@ -158,6 +158,8 @@ The week after the features came a round on the hardware, and the send and recei
 
 **REC.** Changing a track's input channel with Shift and a rotation works without an RME interface. The input is REAPER's own; only preamp gain, 48V, pad and phase need TotalReaper.
 
+**And on TotalReaper's side**, those preamp keys work with its routing mirror switched off. The mirror had gated every write to TotalMix, so a gain moved on the surface, landed in the track's ExtState and never reached the interface, while the readback it was compared against came in regardless. Writing follows reading now, for the preamps and for Dim, Mono, Speaker B, Talkback and the snapshot slots. The mirror drives REAPER's monitoring into TotalMix and that alone.
+
 **UF8 Plug-in Mode.** A fresh REAPER never starts in it. It used to be restored from the last session, and since the mode deliberately locks the Quick and bank keys, a surface came up unable to change a soft-key set with nothing on screen saying why. A press the mode swallows now flashes the banner.
 
 **USB.** A failed reopen is retried every five seconds instead of once, and the extension counts what floods a surface, so a UC1 that drops out leaves something to read afterwards.
