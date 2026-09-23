@@ -82,6 +82,70 @@ The push-cycle menus and the FX-Learn parameter lists were rebuilding themselves
 - **Hue:** the recording light can recall a scene instead of a colour, and the bridge is not read when it does not have to be.
 - **The manual was audited against the code**, chapter by chapter, and around fifty claims that had drifted were corrected — the channel encoder's fifteen modes, the bus comp's six soft-key pages, the number of tabs, and a long tail of smaller ones.
 
+## The UF1 as an instrument
+
+**The jog wheel has modes, and each one edits something.** In *Items* the wheel walks the item selection and the nav cross extends it, along the edge it is travelling toward, with your own position taken up again when the axis changes. Item grouping is honoured, and REAPER picks the group rather than the extension working it out, which also covers edit groups, where the group id stays 0. In *Razor* the wheel draws and moves razor areas, Ctrl takes the rectangle lane by lane through the envelope lanes, and an area spreads over the track's media-edit group while REAPER's grouping switch is on. In *Envelope* a channel change takes the envelope lane with it, and Shift on the centre key inserts a point. In *Playhead* a jog step is REAPER's own grid unit, a quarter by default. Items and Razor jogs write undo points, so a wrong turn is one Cmd-Z away.
+
+**Nav Mode was rebuilt around the question it answers.** The pane is one row per question and one column per surface, each surface has its own display switch and its own set of actions, and the UF1 is in it: Nav lands on its soft-keys and its channel encoder, with Regions and Markers as two lists of its own, Bank pages the marker list, and the time field says where a jump went. *Markers in region* is a setting now.
+
+**The UF1's soft-key banks got the UF8's editor.** Ten banks in a matrix, the cell is the editor, rename in the header with the panel showing the name as it is typed, right-click for copy, cut, paste and clear, bank presets, and a pinned startup bank. Encoder and Jog mode are drop-downs, and `uf1_bank_select` reaches the UF8 as well.
+
+**The screens follow SSL 360 2.1.12.** The Analogue meter's entry is byte-for-byte SSL's, the init carries the zone 2.1.12 added, the encoder and jog pickers draw SSL's own list, the VU needle falls through the plug-in's 0.5 s hold instead of dropping between messages, the overload flash holds 100 ms, and the goniometer trail fades as light rather than as the raw number.
+
+## The surfaces on their own, and when they sleep
+
+**Each surface is fully usable without the others.** Fourteen places had a feature standing on a device that was not plugged in: the Extender layout, the Nav overlay, the pinned startup bank, the Learn-HUD's UF8 tab, the colour bar naming a cycled plug-in, the UF8's gain-reduction rows. All of them stand on their own now.
+
+**Sleep.** Under Settings, Devices, Brightness: the surfaces go to zero brightness after a set idle time, 1 to 99 minutes, which is SSL 360's own range. Off by default. Playing or recording counts as activity, any key, fader or knob wakes them, and that first touch only wakes. *Sleep now* is a built-in action for a key.
+
+**The UF1 joined the brightness sliders** and has a column of its own for its displays, after 0x47 turned out to be a panel master and the LCD slider had been dimming the LEDs with it.
+
+**Stability.** A plug-in bypassed, taken offline or stepped through presets from the USB thread, an empty Focus Set pin with the Extender on, a paint on the UF1 and a project load that left the surface blank: four ways to lose REAPER or the picture, all closed.
+
+## Plug-ins: a third factory strip, FLIP and Touch to Learn
+
+**The Harrison 32Classic Channel Strip v2 is a factory strip**, on the UF8, the UC1 and the UF1, with its gate gain reduction, its own presets in the preset browser, its A/B, its PRE key and its EXT FUNCS list as SSL sends it. The 4K strips got their soft-key pages as SSL 360 2.1.12 lays them out, including the colour-dependent LF/HF key on the 4K G and a tenth UF1 page, EXPANDER.
+
+**FLIP and Strip Mode couple both ways**, and FLIP with PAN reaches the fader in Strip Mode. FLIP never puts a binary parameter on the fader, the fader stops commandeering the V-Pots, and under FLIP the UF1's two rows show two different things. A fader reaches 100 % of a parameter rather than 99.9, touching one no longer changes the channel, and a move no longer takes the focused parameter with it.
+
+**The number above the UF1 fader names what the fader moves**, in the unit the plug-in gave it, and a frequency reads the same on every surface.
+
+**Touch to Learn puts the UF8 into Plug-in Mode** by itself, because mapping a plug-in while the surface shows the project is not possible. A fader arms its cell while the mode is armed instead of driving its parameter, and the PLUG-IN key is the way back out.
+
+**Pan in SSL Strip Mode belongs to the strip.** The V-Pot shows the pan it writes, Force Pan drives the strip's own pan, the UF1's pan knob sits on the strip's pan with or without the Extender, and panning no longer takes the focused parameter.
+
+## Layers, banks and keys
+
+**Layers switch Quicks only.** A setting under Bindings separates which bindings the surface carries from which Quicks and banks are live. Layer 3 is a key in the schema again with a working LED, and Layers 2 and 3 come up with a Quick engaged.
+
+**Seven printed keys that did nothing now do what they say:** NORM, REC, AUTO, NAV, NUDGE, FOCUS and the channel-encoder push ship bound. An existing configuration is left as it is.
+
+**CS and BC favourites are dynamic bank kinds**, which retired the two factory banks that did the same by hand and gave back two of the six places in a set.
+
+**The UF8 encoder modes are REAPER actions**, fifteen of them, one per mode, so a mode reaches a keyboard shortcut, a foot switch or a Stream Deck tile. The encoder no longer swallows the first click after a direction reversal.
+
+**A soft-key slot draws its whole step chain.** Add a step, set its type and its wait, and a Note On, a pause and a Note Off sit on one press. The dispatch has run chains for months; the editor showed only the first step.
+
+**A factory bank longer than eight keys spills into Shift**, which is how Encoder Modes fits.
+
+## Fine work
+
+**Helper text became hover boxes** under Devices, Appearance, Behaviour and 26 more panes, so the panes are shorter and the explanation is where the control is. Sel and Encoder mode are drop-downs in the focused-track panel, at a fixed width.
+
+**Text widths were measured at the device:** eight characters on the UF8, eight on the UF1, twelve on the UC1. Names had been abbreviated to widths the displays never had, and a long parameter name bled into the UF8's yellow value zone.
+
+**The MCP inserts overlay keeps up with the chain:** adding a plug-in no longer leaves it short, a move into an empty slot redraws, the frame follows an FX that slides into a free slot, and the overlay redraws when the highlighted row moves.
+
+**Parameter Groups wear a colour**, one per group, on the bank's keys.
+
+**Favourites housekeeping:** a clean-up button for favourites whose plug-in lost its mapping, un-learning no longer leaves a favourite that clones itself, switching a favourite moves the FX-Learn editor and the Learn HUD with it, and the carousel reads the short name.
+
+**Panel LEDs say what the key does.** A key cleared to *Do nothing* no longer sits bright in its active colour, the PLUGIN lamp follows its binding, and the Auto row reads the layer the surface fires.
+
+**Modifier modes and automation keys:** the UF1's Solo and Cut honour the keyboard modifier modes, the Extender knows all four route modes, and the automation-mode keys set every selected track.
+
+**Smaller, still visible:** ReaEQ's band width converts between octaves and Q, the parameter pickers hide REAPER's MIDI-learn entries, the bindings page and the Learn HUD agree on what learning and unbinding mean, a renamed parameter reads the same on all three panels, a UF8 relearn resets invert, an Exchange map can no longer be shadowed by the one it replaces, and Hue labels take eight characters.
+
 ## Sends, receives and the fixes after them
 
 The week after the features came a round on the hardware, and the send and receive fader modes took the biggest share of it.
@@ -98,13 +162,19 @@ The week after the features came a round on the hardware, and the send and recei
 
 **USB.** A failed reopen is retried every five seconds instead of once, and the extension counts what floods a surface, so a UC1 that drops out leaves something to read afterwards.
 
+## Metering: eight strips, and a calibration you capture
+
+**Gain reduction reads per strip on all eight UF8 strips.** Seven of them had been dark since April. Gate gain reduction is there too, including the 32Classic's, the row asks the strips instead of redoing their arithmetic, and Combine GR composes with the source instead of being gated by it.
+
+**The calibration is captured, not typed.** Drive the compressor to a point you can see, press capture, and the scale follows from that one point. The UF1's comp GR reads through the same calibration, and the columns are laid out as a table.
+
 ## Metering and the SSL protocol
 
-A reader of this repository, [sollapse](https://github.com/acklin83/Rea-Sixty/issues/8), took our notes apart against their own captures and filed twelve findings. Ten of them are fixed here, and most are things you can see on the glass.
+A reader of this repository, [sollapse](https://github.com/acklin83/Rea-Sixty/issues/8), took the notes in this repository apart against their own captures and filed twelve findings. Ten of them are fixed here, and most are things you can see on the glass.
 
-**The analogue needle and the overload LEDs run on the real stream again.** A meter frame that leaves the data type out means VuPpm, which is the default, and our parser threw exactly those frames away. The needle had been emulated against that gap; it no longer has to be.
+**The analogue needle and the overload LEDs run on the real stream again.** A meter frame that leaves the data type out means VuPpm, which is the default, and the parser here threw exactly those frames away. The needle had been emulated against that gap; it no longer has to be.
 
-**The goniometer draws at full width.** Its payload is 17113 four-bit cells, not 8557 bytes, so half the horizontal resolution was being thrown away and a brightness ramp we had added on top was fighting the aliasing it caused. Both are gone.
+**The goniometer draws at full width.** Its payload is 17113 four-bit cells, not 8557 bytes, so half the horizontal resolution was being thrown away and a brightness ramp added on top was fighting the aliasing it caused. Both are gone.
 
 **A setting that returns to zero arrives.** In SSL's protocol a field at its default is left out, so a value of exactly 0 looked like an absent field and the old one stood. That is also why the object ids are now checked against their own names at compile time: they are hashes of the plain text, and fourteen of them are pinned that way.
 
