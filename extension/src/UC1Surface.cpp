@@ -5277,20 +5277,6 @@ void UC1Surface::refresh()
         // displayShort regardless of how many instances are on the
         // track (instance cycling is conveyed via the encoder action,
         // not the LCD label).
-        // ⇨ IN REC + RME STEHT DER EINGANG IM FARBBALKEN, wie auf der UF8 und
-        // der UF1 (Frank 23.09.). Der Name kommt aus derselben Quelle wie dort,
-        // also aus REAPERs I_RECINPUT, und ersetzt den Plug-in-Namen, solange
-        // die Spur auf einem Hardware-Eingang liegt. Ohne einen solchen Eingang
-        // bleibt das Label, was es war.
-        if (focusedTrack_ && ValidatePtr2(nullptr, focusedTrack_, "MediaTrack*")) {
-            if (std::string inName = reasixty_recUc1InputName(
-                    static_cast<MediaTrack*>(focusedTrack_));
-                !inName.empty())
-            {
-                baseLabel = std::move(inName);
-                instanceTrack = nullptr;   // kein Instanz-Zaehler auf einem Eingang
-            }
-        }
         constexpr int kCentralLabelW = 12;
         char labelBuf[kCentralLabelW + 1] = {0};
         // UC1 LCD = Latin-1; fold the (possibly user-renamed) FX label
@@ -5305,6 +5291,33 @@ void UC1Surface::refresh()
                      : csInstanceIndex(instanceTrack))
             : 0;
         device_->send(buildCentralLabel(labelBuf));
+
+        // ⇨ IN REC + RME STEHT DER EINGANG IN DER OBEREN FARBLEISTE (Zone 0x10),
+        // dort wo sonst der Plug-in-Name steht, wie auf der UF8 und der UF1
+        // (Frank 23.09.: "dort wo sonst die Plugin-Names stehen"). Der erste
+        // Versuch landete im zentralen Label — das sitzt UNTER dem Kanalnamen,
+        // siehe die Karte in UC1Protocol.h.
+        // Die Zelle raeumt sich selbst auf: sobald kein Eingangsname mehr da
+        // ist, geht der Plug-in-Tag zurueck, sonst bliebe der Eingang stehen,
+        // wenn REC endet oder die Spur keinen Hardware-Eingang hat.
+        {
+            std::string barText;
+            if (focusedTrack_ && ValidatePtr2(nullptr, focusedTrack_, "MediaTrack*"))
+                barText = reasixty_recUc1InputName(
+                    static_cast<MediaTrack*>(focusedTrack_));
+            const bool haveIn = !barText.empty();
+            if (!haveIn && lastColourBarText_.empty()) {
+                // Nie etwas hineingeschrieben: der Tag gehoert dem Geraet.
+            } else {
+                if (!haveIn) barText = foldedLabel;   // zurueck auf den Plug-in-Tag
+                if (barText.size() > 12) barText.resize(12);
+                if (barText != lastColourBarText_) {
+                    lastColourBarText_ = barText;
+                    device_->send(buildDisplayText(zone::kColourBarText,
+                                                   barText, barText.size()));
+                }
+            }
+        }
 
         // Longer plug-in name in the LCD header zone (the same one the
         // BC-scroll overlay uses for "BUS COMP 2"). Uses the PluginMap's
