@@ -247,6 +247,16 @@ constexpr uint8_t kPrimSoftKeyDim = 0x11;  // g=1,r=1   → dim yellow (resting)
 // request to drop the "1/1" counter, 2026-08-17, is exactly this misreading).
 // Before promising to hide anything on this screen: check whether the words are
 // ours at all. If we never send them, they are the firmware's.
+// ⛔ DIE FELDKARTE DES KLEINEN DISPLAYS (ueber dem Fader), von oben nach unten.
+// Dieselben drei Ebenen wie ein UF8-Strip und wie die UC1:
+//   1  FARBBALKEN: die Farbe in kColourBar (0x0018, Palette der Spurfarbe),
+//      der TEXT darin in kCsType (0x0017) — "CS 2" / "4K E", und in REC + RME
+//      der Hardware-Eingang. ⚠ Dieselbe Zelle rastet auch die Ebene ein, ein
+//      leerer Text laesst sie fallen (siehe den Kommentar bei kCsType unten).
+//   2  SPURNAME: kTrackName (0x000b), daneben kChNumber und kOutputDb.
+//   3  WERTZEILE: kValueLine (0x000e) mit kVPotReadoutBar / kBarStyle darunter.
+// Das grosse Display (0x01xx) ist eine eigene Sache und faengt bei kTimecode an.
+//
 namespace scr {
 // Channel-info zone (0x00xx)
 // The soft-key label above the CHANNEL display (the small LCD). One byte of

@@ -125,6 +125,19 @@ std::vector<uint8_t> buildLayerDaw();
 std::vector<uint8_t> buildPluginSlotActive();
 std::vector<uint8_t> buildPluginSlotName(uint8_t strip, std::string_view text);
 
+// ⛔ DIE FELDKARTE EINES UF8-STRIPS, von oben nach unten, damit niemand (ich)
+// sie wieder aus Bezeichnern erraet:
+//   1  FARBBALKEN mit der CHANNEL-STRIP-TYPE-Zelle — "CS 2" / "4K E", und in
+//      REC + RME der Hardware-Eingang (main.cpp, recRmeInputNameLabel_).
+//      buildChannelStripType unten. Die Farbe: buildColorCommand (Palette je
+//      Strip, die Spurfarbe).
+//   2  SCRIBBLE, zwei Zeilen: buildStripTextUpper / ...Lower, 8 Zeichen je
+//      Zeile (am Geraet gemessen 2026-09-11).
+//   3  WERTZEILE: buildValueLine, 19 Zeichen. In REC + RME die Flaggen
+//      48V / Pd / Ph und der Gain.
+// Die UC1 hat dieselben drei Ebenen (UC1Protocol.h), die UF1 ebenso
+// (UF1Protocol.h, namespace scr).
+//
 // Plug-in Mixer / Channel Strip Mode LCD zones — per-strip addressable.
 // All decoded from cap14a–cap18 on 2026-04-20.
 //
