@@ -159,38 +159,42 @@ namespace led {
     constexpr uint8_t kStateOn   = 0xFF;
 }
 
-// ⛔ WO AUF DEM GLAS, NICHT NUR WELCHE NUMMER. Zweimal am 23.09.2026 habe ich
-// mich an diesen Namen verlaufen: "ColourBarEnable" schaltet keinen Streifen
-// (es ist der Layout-Modus des Readout-Vorlaeufers), und das "zentrale Label"
-// steht NICHT in der Farbleiste, sondern darunter. Also steht hier ab jetzt,
-// wo die Zelle sitzt und woher wir das wissen.
+// ⛔ DIE FELDKARTE DER UC1-ANZEIGE. Sie steht hier, weil ich sie am 23.09.2026
+// dreimal geraten habe, obwohl ich diesen Treiber selbst geschrieben habe: die
+// Bezeichner sagten, WAS jemand in eine Zelle schreibt, und nie, WO sie sitzt.
+// Quellen: SSLs UC1 User Guide S. 17 (die Felder heissen dort 3 Channel Strip
+// Model, 4 Channel Strip Name, darunter der Wert-Readout) und Franks Blick aufs
+// Geraet am 23.09.
 //
-// Die Anzeige von oben nach unten:
-//   FARBLEISTE oben      Farbe: FF 66 02 11 <palette> (buildFocusedColour,
-//                        protocol-notes-uc1.md "Focused-track colour").
-//                        Text darin: Zone 0x10, der Plugin-Name-Tag, den SSL
-//                        mit "4K E" fuellt — MESSUNG aus den Captures, von uns
-//                        bis 23.09. nie geschrieben.
-//   KANALNAME            die Namens-Triple FF 66 25 02 / FF 66 2B 04
-//                        (buildTrackNameTripleLarge / ...Small).
-//   ZENTRALES LABEL      FF 66 <len> 01 <text> (buildCentralLabel, und
-//                        buildLcdHeader schreibt DIESELBE Zone mit mehr Text).
-//                        Hier steht "CS 2" / "MAIN", direkt unter dem Kanalnamen.
-//   READOUT-ZEILEN       Zonen 0x03 und 0x05, "<label>   <value>".
+// Von oben nach unten:
+//   1  FARBLEISTE mit dem MODEL-FELD — "CS 2" / "4K E", und in REC + RME der
+//      Hardware-Eingang. Frame: FF 66 <len> 01 <text> (buildCentralLabel, bis
+//      12 Zeichen). ⚠ buildLcdHeader schreibt DIESELBE Zone mit mehr Text.
+//      Die Farbe dahinter: FF 66 02 11 <palette> (buildFocusedColour), die
+//      Spurfarbe, ohne jede Plug-in-Bedingung.
+//   2  SPURNAME — die Namens-Triples FF 66 25 02 (CS, 12 Zeichen je Feld) und
+//      FF 66 2B 04 (BC, 14 im Frame, 12 auf dem Glas).
+//   3  WERT-READOUT direkt darunter: Zone 0x03 (CS) und 0x05 (BC),
+//      "<label>   <value>", 22 Zeichen. In REC + RME stehen hier die Flaggen
+//      48V / Pd / Ph und der Gain.
+//   4  7-SEGMENT links: die Position des Kanals im Plug-in-Mixer.
 //
-// Display zones. 22-char fixed-width label+value fields, padded with
-// spaces. Each zone is a distinct UI element on the UC1.
+// ⛔ FF 66 03 00 01 <flag> ist NICHT der Farbschalter, auch wenn der Wrapper
+// buildColourBarEnable heisst: es ist der Layout-Modus des Readout-Vorlaeufers
+// (0x00 neutral, 0x01 Uebergang, 0x02 Bus Comp).
+//
 namespace zone {
     constexpr uint8_t kChannelStripContext = 0x02;  // 37 B, strip-layout markers
     constexpr uint8_t kChannelStripReadout = 0x03;  // 22 B, "<label>   <value>"
     constexpr uint8_t kGlobalStatus        = 0x04;  // 43 B, "No Plug-ins" / track context
     constexpr uint8_t kBusCompReadout      = 0x05;  // 22 B, same format as 0x03
     constexpr uint8_t kPluginStateTag      = 0x0E;  // "Off" / "N/A" / "On"
-    // ⇨ DER TEXT IN DER OBEREN FARBLEISTE. Hiess "kPluginNameTag", weil SSL
-    // dort den Plug-in-Namen hinschreibt; der Name sagte, WAS dort steht, und
-    // nicht WO es steht, und genau daran bin ich vorbeigelaufen.
-    constexpr uint8_t kColourBarText       = 0x10;  // "4K E" / "CS 2" / ...
-    constexpr uint8_t kPluginNameTag       = kColourBarText;   // alter Name
+    // ⚠ SSL schreibt hier den Modellnamen ("4K E"), WO das auf dem Glas landet
+    // ist NICHT gemessen — wir schreiben die Zone nicht. Das Model-Feld in der
+    // Farbleiste ist buildCentralLabel, siehe die Karte oben. Der Name sagt
+    // also den Inhalt, nicht den Ort, und genau daran bin ich am 23.09. zweimal
+    // vorbeigelaufen.
+    constexpr uint8_t kPluginNameTag       = 0x10;  // "4K E" / "CS 2" / …
 }
 
 struct ButtonEvent {
