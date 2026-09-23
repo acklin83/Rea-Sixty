@@ -1736,7 +1736,9 @@ std::atomic<bool> g_masterPinShift{false};
 // bank-offset clamp in rebuildVisibleTrackList.
 int masterPinnedStrip_();
 int effectiveStripCount_();
-int bankWidth_();     // effectiveStripCount_() + UF1-Extender (+1); banking-window width
+int bankWidth_();     // Strips, die eine Spur zeigen: effectiveStripCount_()
+                      // + UF1-Extender (+1) - die von DynaMount / Hue belegten
+                      // (bankReservedStrips_, siehe dort)
 int uf8StripBase_();  // +1 offset for the UF8 banked strips when the UF1 Extender is LEFT
 
 inline const char* selectionModeStr(SelectionMode m)
@@ -6446,9 +6448,27 @@ bool uf1ExtenderActive_()
     return g_uf1Extender.load() && g_uf1_dev && g_uf1_dev->isOpen();
 }
 
+// ⛔ STRIPS, DIE KEINE SPUR ZEIGEN, GEHOEREN NICHT INS BANKFENSTER. In
+// DynaMount- und Hue-Modus halten die definierten Zeilen N Strips an einem Ende
+// (stripToVisibleSlot gibt dort -1 zurueck), also zeigt die Flaeche N Spuren
+// weniger auf einmal. Das Fenster war trotzdem acht breit, und daran haengt die
+// Klemme des Bankens: bei acht Spuren und drei Lampen kam maxStart auf null
+// heraus, die Flaeche zeigte die ersten fuenf und die letzten drei waren mit
+// keinem Tastendruck erreichbar (Frank 23.09.: "sind weg"). Das Handbuch
+// versprach genau das Gegenteil.
+int bankReservedStrips_()
+{
+    const auto m = g_selectionMode.load();
+    int n = 0;
+    if (m == SelectionMode::DynaMount) n = uf8::dynamount::manager().definedCount();
+    else if (m == SelectionMode::Hue)  n = uf8::hue::manager().definedCount();
+    return std::clamp(n, 0, effectiveStripCount_() - 1);   // mindestens ein Track-Strip
+}
+
 int bankWidth_()
 {
-    return effectiveStripCount_() + (uf1ExtenderActive_() ? 1 : 0);
+    return effectiveStripCount_() + (uf1ExtenderActive_() ? 1 : 0)
+         - bankReservedStrips_();
 }
 
 // +1 offset applied to the UF8's banked strips when the UF1 Extender is on the LEFT:
