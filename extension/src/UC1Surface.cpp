@@ -3214,13 +3214,29 @@ void UC1Surface::pushFocusedParamReadout_()
     {
         auto* trMedia = static_cast<MediaTrack*>(focusedTrack_);
         std::string rmeLabel, rmeValue;
-        if (reasixty_recUc1ReadoutText(trMedia, &rmeLabel, &rmeValue)) {
+        const bool haveRme = reasixty_recUc1ReadoutText(trMedia, &rmeLabel, &rmeValue);
+        // ⛔ UND WENN DER INHALT WEGFAELLT, MUSS DIE ZELLE GERAEUMT WERDEN.
+        // Diese Zeile wird nur geschrieben, wenn es etwas zu schreiben gibt;
+        // auf UF8 und UF1 baut der Maler seine Wertzeile in jedem Tick neu und
+        // raeumt damit von selbst auf. Auf einen Kanal ohne Preamp umgehaengt,
+        // meldet TotalMix nichts mehr, der Aufruf oben gibt false zurueck — und
+        // der alte Gain blieb auf dem Glas stehen (Frank 23.09.: "uc1 zeigt
+        // immer noch den alten dB wert"). Einmal beim Wechsel von "wir haben
+        // die Zelle" auf "wir haben sie nicht": Cache leeren und die Zone
+        // ungueltig machen, dann schreibt der normale Pfad darunter wieder.
+        if (!haveRme && recReadoutOwned_) {
+            recReadoutOwned_ = false;
+            lastZone03Text_.clear();
+            device_->send(buildDisplayInvalidate(zone::kChannelStripReadout));
+        }
+        if (haveRme) {
             auto readout = formatReadout(rmeLabel, rmeValue);
             if (!csScrollOverlayActive_ && !bcScrollOverlayActive_
                 && !instanceCarouselActive_ && !navCarouselActive_
                 && readout != lastZone03Text_)
             {
                 lastZone03Text_ = readout;
+                recReadoutOwned_ = true;
                 device_->send(buildReadoutPrecursor(0x00));
                 if (!lastLargeTripleFrame_.empty()) {
                     device_->send(std::vector<uint8_t>(lastLargeTripleFrame_));
