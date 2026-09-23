@@ -925,6 +925,24 @@ void UC1Surface::invalidateCache()
 
 int UC1Surface::poll()
 {
+    // ⇨ DAS MODEL-FELD FOLGT DEM EINGANG, auch wenn niemand die Spur wechselt.
+    // In REC + RME traegt es den Eingangsnamen (refresh()), und refresh() laeuft
+    // bei Spur- und Plug-in-Wechseln. Wer REC einschaltet, den Eingang in REAPER
+    // umhaengt oder REC wieder verlaesst, aendert den Namen ohne so einen
+    // Wechsel — dann stand dort weiter der Plug-in-Name (Frank 23.09.).
+    if (device_ && mode_ == Uc1Mode::Main && focusedTrack_
+        && ValidatePtr2(nullptr, focusedTrack_, "MediaTrack*"))
+    {
+        const std::string inName = reasixty_recUc1InputName(
+            static_cast<MediaTrack*>(focusedTrack_));
+        if (!inName.empty() ? (inName != lastCentralLabel_)
+                            : recLabelWasInput_)
+        {
+            recLabelWasInput_ = !inName.empty();
+            refresh();
+        }
+    }
+
     std::deque<KnobEvent>   knobs;
     std::deque<ButtonEvent> buttons;
     {
@@ -1696,6 +1714,13 @@ void UC1Surface::handleKnob_(const KnobEvent& ev)
             if (shiftMod) {
                 if (reasixty_dispatchUc1RecRmeInputChan(trMedia, step)) {
                     ++stats_.knobEventsHandled;
+                    // ⇨ UND DAS MODEL-FELD NEU MALEN. Es traegt in REC + RME den
+                    // Eingangsnamen, wird aber nur in refresh() geschrieben, und
+                    // refresh() laeuft bei Spur- und Plug-in-Wechseln, nicht bei
+                    // einem Eingangswechsel: der Name blieb stehen, bis man die
+                    // Spur wechselte (Frank 23.09.).
+                    if (refreshCoalescing_) refreshDirty_ = true;
+                    else                    refresh();
                     return;
                 }
             } else {
@@ -5277,13 +5302,12 @@ void UC1Surface::refresh()
         // displayShort regardless of how many instances are on the
         // track (instance cycling is conveyed via the encoder action,
         // not the LCD label).
-        // ⇨ IN REC + RME IST DER EINGANGSNAME DAS LABEL, wie die CS-TYPE-Zelle
-        // auf der UF8 und der UF1 (Frank 23.09.). Er steht in BEIDEN Zellen, die
-        // auf der UC1 einen Plug-in-Namen tragen koennen: im zentralen Label
-        // (FF 66 <len> 01, der Zwilling der UF8-Zelle) und im Farbleisten-Tag
-        // (Zone 0x10, den SSL mit "4K E" fuellt). Welche der beiden auf dem Glas
-        // oben in der Leiste sitzt, sagt das Protokoll nicht, und zweimal daneben
-        // zu greifen hat Frank eine Stunde gekostet.
+        // ⇨ IN REC + RME IST DER EINGANGSNAME DAS MODEL-FELD, also das Feld
+        // ueber dem Spurnamen, in dem sonst "CS 2" oder "4K E" steht. SSLs
+        // eigenes Handbuch benennt die Anzeige von oben nach unten (User Guide
+        // S. 17): 3 Channel Strip Model, 4 Channel Strip Name, und "immediately
+        // below" der Wert-Readout. Das Model-Feld ist dieses zentrale Label
+        // (FF 66 <len> 01), der Zwilling der CS-TYPE-Zelle auf UF8 und UF1.
         std::string recInName;
         if (focusedTrack_ && ValidatePtr2(nullptr, focusedTrack_, "MediaTrack*"))
             recInName = reasixty_recUc1InputName(
@@ -5307,29 +5331,11 @@ void UC1Surface::refresh()
             : 0;
         device_->send(buildCentralLabel(labelBuf));
 
-        // ⇨ IN REC + RME STEHT DER EINGANG IN DER OBEREN FARBLEISTE (Zone 0x10),
-        // dort wo sonst der Plug-in-Name steht, wie auf der UF8 und der UF1
-        // (Frank 23.09.: "dort wo sonst die Plugin-Names stehen"). Der erste
-        // Versuch landete im zentralen Label — das sitzt UNTER dem Kanalnamen,
-        // siehe die Karte in UC1Protocol.h.
-        // Die Zelle raeumt sich selbst auf: sobald kein Eingangsname mehr da
-        // ist, geht der Plug-in-Tag zurueck, sonst bliebe der Eingang stehen,
-        // wenn REC endet oder die Spur keinen Hardware-Eingang hat.
-        {
-            std::string barText = recInName;
-            const bool haveIn = !barText.empty();
-            if (!haveIn && lastColourBarText_.empty()) {
-                // Nie etwas hineingeschrieben: der Tag gehoert dem Geraet.
-            } else {
-                if (!haveIn) barText = foldedLabel;   // zurueck auf den Plug-in-Tag
-                if (barText.size() > 12) barText.resize(12);
-                if (barText != lastColourBarText_) {
-                    lastColourBarText_ = barText;
-                    device_->send(buildDisplayText(zone::kColourBarText,
-                                                   barText, barText.size()));
-                }
-            }
-        }
+        // Was zuletzt im Model-Feld stand: daran erkennt poll(), dass ein
+        // Eingangswechsel es neu malen muss (refresh() laeuft sonst nur bei
+        // Spur- und Plug-in-Wechseln).
+        lastCentralLabel_ = labelBuf;
+        recLabelWasInput_ = !recInName.empty();
 
         // Longer plug-in name in the LCD header zone (the same one the
         // BC-scroll overlay uses for "BUS COMP 2"). Uses the PluginMap's
