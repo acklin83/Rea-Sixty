@@ -555,6 +555,9 @@ private:
     // Traegt das Model-Feld gerade einen Eingangsnamen? Damit weiss poll(),
     // dass es beim Verlassen von REC einmal zurueckmalen muss.
     bool        recLabelWasInput_ = false;
+    // Haelt REC + RME gerade die CS-Readout-Zeile? Der Wechsel auf false ist
+    // der Moment, in dem die Zelle geraeumt werden muss (UC1Surface.cpp).
+    bool        recReadoutOwned_ = false;
     // Cached track-name-triple frames (Small = FF 66 25 02 channel
     // carousel, Large = FF 66 2B 04 BC carousel). refresh() populates
     // them; pushFocusedParamReadout_ replays them as part of the SSL
