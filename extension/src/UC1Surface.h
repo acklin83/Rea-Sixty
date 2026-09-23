@@ -548,6 +548,10 @@ private:
     // readouts are always 22+ bytes so the first push always fires.
     std::string lastZone05Text_;
     std::string lastZone03Text_;
+    // Was zuletzt in der oberen Farbleiste stand (Zone 0x10). Leer heisst
+    // "wir haben dort noch nie geschrieben", und dann bleibt der Tag dem
+    // Geraet ueberlassen (UC1Surface.cpp, REC + RME).
+    std::string lastColourBarText_;
     // Cached track-name-triple frames (Small = FF 66 25 02 channel
     // carousel, Large = FF 66 2B 04 BC carousel). refresh() populates
     // them; pushFocusedParamReadout_ replays them as part of the SSL
