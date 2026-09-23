@@ -2724,7 +2724,7 @@ Bind **Selection Mode → DynaMount** to a button; it toggles like every other S
 
 With no mounts enabled the mode does nothing at all, and every strip stays a track.
 
-Enabled mounts pin to one end of the surface and carry no track. The other strips remain ordinary track strips, and the tracks that would have sat under the mounts shift onto them rather than disappearing.
+Enabled mounts pin to one end of the surface and carry no track. The other strips remain ordinary track strips and keep the project order: two mounts mean six track strips, and the bank buttons reach the rest of the session as usual.
 
 ## Driving a mount
 
@@ -2803,7 +2803,7 @@ A room or zone appears in the list only if it has lamps in it. An empty room can
 
 Bind **Selection Mode → Hue** to a button. It toggles like every other Selection Mode, and there is no switch in Settings: the Hue tab configures the lamps, it does not turn the mode on.
 
-With no lamps enabled the mode does nothing and every strip stays a track. Enabled lamps pin to one end of the surface, and the tracks that would have sat under them shift onto the remaining strips rather than disappearing.
+With no lamps enabled the mode does nothing and every strip stays a track. Enabled lamps pin to one end of the surface, and the tracks keep their order on the strips that are left: three lamps mean five track strips, and the bank buttons reach the rest of the session as usual.
 
 ## Driving a lamp from the UF8
 
