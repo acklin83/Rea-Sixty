@@ -52735,6 +52735,21 @@ inline bool recUc1InputChanFlashActive_()
 // gain dB on the right. Returns false when REC+RME isn't active for
 // this track or TotalReaper hasn't populated any of the P_EXT keys.
 
+// ⇨ DER EINGANGSNAME FUER DAS ZENTRALE LABEL DER UC1 (der Farbbalken). Die UF8
+// traegt ihn in der CS-TYPE-Zelle und die UF1 ebenso; die UC1 kannte ihn nur als
+// anderthalb Sekunden langen Blitz nach einem Kanalwechsel, also stand dort in
+// REC weiter der Plug-in-Name (Frank 23.09.: "UC1 zeigt den RME eingangskanal
+// nicht an in rec mode ... soll ihn auch im colorbar anzeigen"). Latin-1, weil
+// das LCD ein Byte pro Zeichen nimmt; leer heisst "kein Hardware-Eingang", und
+// dann behaelt das Label, was es sonst zeigt.
+// ⛔ UNGEFALTET ZURUECK: der Aufrufer faltet das zentrale Label selbst, und
+// zweimal falten zerlegt genau die hohen Bytes wieder, die das erste Falten
+// erzeugt hat ([[surface-lcd-latin1-umlauts]]).
+std::string reasixty_recUc1InputName(MediaTrack* tr)
+{
+    return recRmeInputNameLabel_(tr, /*foldLatin1*/false);
+}
+
 bool reasixty_recUc1ReadoutText(MediaTrack* tr,
                                 std::string* outLabel,
                                 std::string* outValue)
