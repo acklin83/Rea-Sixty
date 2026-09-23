@@ -5277,6 +5277,21 @@ void UC1Surface::refresh()
         // displayShort regardless of how many instances are on the
         // track (instance cycling is conveyed via the encoder action,
         // not the LCD label).
+        // ⇨ IN REC + RME IST DER EINGANGSNAME DAS LABEL, wie die CS-TYPE-Zelle
+        // auf der UF8 und der UF1 (Frank 23.09.). Er steht in BEIDEN Zellen, die
+        // auf der UC1 einen Plug-in-Namen tragen koennen: im zentralen Label
+        // (FF 66 <len> 01, der Zwilling der UF8-Zelle) und im Farbleisten-Tag
+        // (Zone 0x10, den SSL mit "4K E" fuellt). Welche der beiden auf dem Glas
+        // oben in der Leiste sitzt, sagt das Protokoll nicht, und zweimal daneben
+        // zu greifen hat Frank eine Stunde gekostet.
+        std::string recInName;
+        if (focusedTrack_ && ValidatePtr2(nullptr, focusedTrack_, "MediaTrack*"))
+            recInName = reasixty_recUc1InputName(
+                static_cast<MediaTrack*>(focusedTrack_));
+        if (!recInName.empty()) {
+            baseLabel     = recInName;
+            instanceTrack = nullptr;   // kein Instanz-Zaehler auf einem Eingang
+        }
         constexpr int kCentralLabelW = 12;
         char labelBuf[kCentralLabelW + 1] = {0};
         // UC1 LCD = Latin-1; fold the (possibly user-renamed) FX label
@@ -5301,10 +5316,7 @@ void UC1Surface::refresh()
         // ist, geht der Plug-in-Tag zurueck, sonst bliebe der Eingang stehen,
         // wenn REC endet oder die Spur keinen Hardware-Eingang hat.
         {
-            std::string barText;
-            if (focusedTrack_ && ValidatePtr2(nullptr, focusedTrack_, "MediaTrack*"))
-                barText = reasixty_recUc1InputName(
-                    static_cast<MediaTrack*>(focusedTrack_));
+            std::string barText = recInName;
             const bool haveIn = !barText.empty();
             if (!haveIn && lastColourBarText_.empty()) {
                 // Nie etwas hineingeschrieben: der Tag gehoert dem Geraet.
