@@ -50561,23 +50561,6 @@ bool reasixty_inRecOrRecMonMode()
 // Timestamp set whenever the user lands an input-channel cycle via
 // Shift+Enc2; the readout below substitutes the channel name for the
 // flag line for ~1.5s so the user can see what channel they're on.
-std::atomic<int64_t> g_recUc1InputChanFlashMs{0};
-inline void markRecUc1InputChanFlash_()
-{
-    using namespace std::chrono;
-    g_recUc1InputChanFlashMs.store(
-        duration_cast<milliseconds>(
-            steady_clock::now().time_since_epoch()).count());
-}
-inline bool recUc1InputChanFlashActive_()
-{
-    using namespace std::chrono;
-    const auto now = duration_cast<milliseconds>(
-        steady_clock::now().time_since_epoch()).count();
-    return (now - g_recUc1InputChanFlashMs.load()) < 1500;
-}
-
-
 // Readout-line builder for UC1's CS readout zone. Mirrors the UF8
 // V-Pot value-line layout (main.cpp ~10403): flags on the left,
 // gain dB on the right. Returns false when REC+RME isn't active for
@@ -50603,7 +50586,12 @@ bool reasixty_recUc1ReadoutText(MediaTrack* tr,
                                 std::string* outValue)
 {
     if (!recRmeUc1Active_()) return false;
-    return recRmeReadoutText_(tr, recUc1InputChanFlashActive_(), /*latin1*/true,
+    // ⛔ KEIN BLITZ MEHR. Die Readout-Zeile zeigt die Flaggen und den Gain; der
+    // Eingangsname steht seit dem 23.09. dauerhaft im Model-Feld ueber dem
+    // Spurnamen, und ihn zusaetzlich unten einzublenden hiess, ihn zweimal zu
+    // sagen (Frank 23.09.: "wieso schreibt er jetzt IMMERNOCH unter den
+    // kanalnamen In MADI 10").
+    return recRmeReadoutText_(tr, /*flashInputName*/false, /*latin1*/true,
                               outLabel, outValue);
 }
 
@@ -50683,7 +50671,6 @@ bool reasixty_dispatchUc1RecRmeInputChan(MediaTrack* tr, int signedStep)
     if (maxIn > 0 && chan > maxIn - 1) chan = maxIn - 1;
     SetMediaTrackInfo_Value(tr, "I_RECINPUT",
                             static_cast<double>(flags | chan));
-    markRecUc1InputChanFlash_();
     return true;
 }
 
