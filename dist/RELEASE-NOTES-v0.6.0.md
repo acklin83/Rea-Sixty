@@ -98,6 +98,22 @@ The week after the features came a round on the hardware, and the send and recei
 
 **USB.** A failed reopen is retried every five seconds instead of once, and the extension counts what floods a surface, so a UC1 that drops out leaves something to read afterwards.
 
+## Metering and the SSL protocol
+
+A reader of this repository, [sollapse](https://github.com/acklin83/Rea-Sixty/issues/8), took our notes apart against their own captures and filed twelve findings. Ten of them are fixed here, and most are things you can see on the glass.
+
+**The analogue needle and the overload LEDs run on the real stream again.** A meter frame that leaves the data type out means VuPpm, which is the default, and our parser threw exactly those frames away. The needle had been emulated against that gap; it no longer has to be.
+
+**The goniometer draws at full width.** Its payload is 17113 four-bit cells, not 8557 bytes, so half the horizontal resolution was being thrown away and a brightness ramp we had added on top was fighting the aliasing it caused. Both are gone.
+
+**A setting that returns to zero arrives.** In SSL's protocol a field at its default is left out, so a value of exactly 0 looked like an absent field and the old one stood. That is also why the object ids are now checked against their own names at compile time: they are hashes of the plain text, and fourteen of them are pinned that way.
+
+**The plug-in says what it is, and what it is sending.** The handshake carries the type, so a Meter, a Meter Pro and a channel strip are told apart instead of guessed at, and the prepare messages are read: the readouts wear the names the plug-in gives them, and a mono meter gets the mono faceplate instead of the stereo one. Only real data frames are parsed as meters now.
+
+**HQ Mode and A/B go over the protocol** where the plug-in offers it, and fall back to the chunk where it does not. The EQ graph's last point is the curve rather than a fixed 0 dB, so the step at the 20 kHz edge is gone, and the meter ring's AUTO position says AUTO.
+
+**Two of the twelve are still open:** the selection LED, which needs an instance identity that does not depend on the instance streaming first, and the multi-channel overview, which needs a surround Meter Pro to test against.
+
 ## Configuration
 
 The bindings file moves to **version 41**. Every step is additive or migrates itself: v33 gives a UF8 sub-bank its own name, v34 gives a set a name and a number, v35 to v38 move the above-fader V-Pot's push onto a real binding and drop the long press that mirrored it, v39 renames the Focus Set family from its old internal name, v40 tells the channel focus key which panel half it sits on, and v41 makes the jog content drag a hold. A configuration from v0.5.9 loads unchanged, and an unnamed set reads as *Set N*, which is what every set was before. Projects are untouched; Sticky Pot pairs are stored in the project alongside the pins that carry them.
