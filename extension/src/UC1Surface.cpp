@@ -5133,6 +5133,11 @@ void UC1Surface::refresh()
                static_cast<MediaTrack*>(focusedTrack_)) >= 0;
     const bool havePlugin = bindings.channelMap || bcBindings_.busCompMap
         || haveActiveFx;
+    // ⚠ DER NAME SAGT FARBE, DAS FRAME SAGT LAYOUT. buildColourBarEnable ist
+    // der duenne Wrapper um den Readout-Vorlaeufer FF 66 03 00 01 <flag>:
+    // 0x00 neutral, 0x01 Uebergang. Der farbige Streifen kommt aus
+    // buildFocusedColour weiter unten und haengt an der Spurfarbe, nicht an
+    // einem Plug-in.
     device_->send(buildColourBarEnable(havePlugin));
 
     // Release stale readout zones for any domain the new focused track
@@ -5382,9 +5387,13 @@ void UC1Surface::refresh()
 
     // Focused-track colour bar — single palette byte. Uses the same
     // quantizer as UF8's color-bar (uf8::quantize on the track's
-    // 0xRRGGBB colour). When no plugin is loaded the bar is inactive
-    // anyway (colour-bar-enable=0), but we still push a palette=0x00
-    // to clear stale state.
+    // 0xRRGGBB colour).
+    // ⛔ DER STREIFEN HAENGT AN KEINEM PLUG-IN. Hier stand, er sei ohne
+    // Plug-in ohnehin aus, weil "colour-bar-enable=0" — den Schalter gibt es
+    // nicht, buildColourBarEnable schreibt den LCD-Layout-Modus (UC1Protocol.h
+    // beim Readout-Vorlaeufer). Die Farbe ist die Spurfarbe, wie auf der UF8,
+    // und sie steht auch auf einer Spur ohne Plug-in (Frank 23.09.: "ich seh
+    // ihn ja! ohne plugin auf dem track!"). palette=0x00 nur ohne Spur.
     {
         uint8_t palette = 0x00;
         if (focusedTrack_) {
