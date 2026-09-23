@@ -162,6 +162,8 @@ The week after the features came a round on the hardware, and the send and recei
 
 **UF8 Plug-in Mode.** A fresh REAPER never starts in it. It used to be restored from the last session, and since the mode deliberately locks the Quick and bank keys, a surface came up unable to change a soft-key set with nothing on screen saying why. A press the mode swallows now flashes the banner.
 
+**DynaMount and Hue keep the session reachable.** A strip holding a stand or a lamp shows no track, but the banking window still counted it, so with eight tracks and three lamps the surface showed the first five and the last three could not be reached at all. The window counts the strips that show a track now, and the manual says what happens instead of promising that nothing moves.
+
 **USB.** A failed reopen is retried every five seconds instead of once, and the extension counts what floods a surface, so a UC1 that drops out leaves something to read afterwards.
 
 ## Metering: eight strips, and a calibration you capture
