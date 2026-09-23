@@ -114,6 +114,22 @@ A reader of this repository, [sollapse](https://github.com/acklin83/Rea-Sixty/is
 
 **Two of the twelve are still open:** the selection LED, which needs an instance identity that does not depend on the instance streaming first, and the multi-channel overview, which needs a surround Meter Pro to test against.
 
+## Mapping, panels and colours
+
+**EXT FUNCS read SSL's own list.** For each factory strip the entries now come from what the plug-in puts on the wire, in SSL's order, rather than from a rule of ours. The rule everyone reaches for first, "whatever is not already on a knob", is wrong: seven entries of the 32C list sit on its V-Pots at the same time. The Bus Comp has no such menu and no longer pretends to.
+
+**One answer to the question "which plug-in is in play".** The UF8, the UF1 and the panels asked it in their own ways and could disagree with each other. There is one resolver now, the UF1 reads it, and an open plug-in window outranks a surface FX you cannot see.
+
+**A learned channel strip lands where a factory one does.** Its soft-keys take the factory positions on the UF1 instead of filling from the top, and the Bus Comp gets the factory UF1 layout as well. The EQ graph no longer draws a strip's curve under a plug-in that has no EQ.
+
+**FX Learn and AutoLearn, from the day at the desk:** a plug-in already mapped on the UC1 and the UF1 can be learned on the UF8 too, the UF8 fader learn no longer depends on an open plug-in window, no fader is pre-ticked anywhere, AutoLearn stops proposing the same parameter twice and says what it did, it stops asking again for the mode you just picked, and "don't show offline FX" applies to every answer instead of only the last one.
+
+**Banners tell the truth about who caused them.** The first mode change of a run used to be swallowed as a baseline, and the Extender's own announcement could eat the one your keypress had earned.
+
+**One more colour.** Palette index 0x0C renders on the hardware and had been thrown away for five months, so track colours quantise onto twelve entries instead of eleven. An LED override on a key's plain slot could be in force and unreachable at the same time; it is reachable.
+
+**The focused-track panel** got proper rows and centring that centres.
+
 ## Configuration
 
 The bindings file moves to **version 41**. Every step is additive or migrates itself: v33 gives a UF8 sub-bank its own name, v34 gives a set a name and a number, v35 to v38 move the above-fader V-Pot's push onto a real binding and drop the long press that mirrored it, v39 renames the Focus Set family from its old internal name, v40 tells the channel focus key which panel half it sits on, and v41 makes the jog content drag a hold. A configuration from v0.5.9 loads unchanged, and an unnamed set reads as *Set N*, which is what every set was before. Projects are untouched; Sticky Pot pairs are stored in the project alongside the pins that carry them.

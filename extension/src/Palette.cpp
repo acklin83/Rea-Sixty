@@ -100,9 +100,10 @@ bool inLightVioletBand(double hueDeg)
 
 // Reference RGB for each palette index — identified by direct on-device
 // probe (uf8_palette_probe, re-run 2026-04-21 after the original sweep
-// produced shifted mappings). 0x00 is off on this hardware; 0x01..0x0B
-// are the 11 usable colors; 0x0C..0x0F render black/off and are skipped
-// during quantization.
+// produced shifted mappings). 0x00 is off on this hardware; 0x01..0x0C
+// are the 12 usable colors (0x0C joined them on 2026-09-18, see the note
+// below kPalette); 0x0D..0x0F render black/off and are skipped during
+// quantization.
 //
 // RGB values are eyeballed approximations of what the UF8 LCD shows —
 // accurate enough for Euclidean-distance nearest-match on the REAPER
