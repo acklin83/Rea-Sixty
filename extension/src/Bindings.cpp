@@ -7915,6 +7915,9 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "rme_fader_main",
       "Puts TotalMix' Main output on the UF1 fader in the RME side-car. The "
       "lamp is lit while Main is on the fader." },
+    { "rme_show_window",
+      "Shows or hides the TotalMix window. TotalMix says nothing about its own "
+      "window, so the lamp is what we last sent." },
     { "obs_record_toggle",
       "Starts or stops the recording in OBS. The lamp follows what OBS "
       "reports, so it lights when OBS is really running, not when the key "
@@ -8581,6 +8584,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "rme_speaker_b", "Speaker B" },
     { "rme_talkback", "Talkback" },
     { "rme_fader_main", "Main" },
+    { "rme_show_window", "TotalMix" },
     { "obs_record_toggle", "OBS Rec" },
     { "obs_record_pause", "OBS Pause" },
     { "obs_chapter_marker", "OBS Chapter" },

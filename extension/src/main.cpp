@@ -798,6 +798,11 @@ std::atomic<int> g_rmeVpotBank{0};
 // Kanalwechsel stehen; hat der neue Kanal die Seite nicht, zeigt der Maler die
 // erste, die er hat.
 std::atomic<bool> g_rmeStrip{false};
+// ⇨ DAS TOTALMIX-FENSTER, UNSER SCHALTER. `/showwindow` nimmt 0 oder 1, und
+// TotalMix meldet den Fensterzustand nirgends zurueck — also ist der Umschalter
+// unserer und merkt sich, was zuletzt gesendet wurde (Frank 23.09., Nav-Mitte
+// im Side-Car, dort wo die ARC ihr Dim hat).
+std::atomic<bool> g_rmeWindowShown{false};
 std::atomic<int>  g_rmeStripPage{0};
 static int rmeVpotSlot_(int pot)
 {
@@ -25870,6 +25875,32 @@ static void uf1RmeStepRow_(int dir)
     g_rmeRow.store(((cur + (dir > 0 ? 1 : n - 1)) % n));
 }
 
+// Den Submix eine Stelle weiter, durch die sichtbaren Ausgaenge, mit Umlauf
+// (Frank 23.09., Nav links/rechts). Der Submix ist der Ausgang, in den Eingaenge
+// und Playbacks schreiben; die Reihe und die Auswahl bleiben, wo sie sind.
+static void uf1RmeStepSubmix_(const reasixty::rme::State& st, int dir)
+{
+    const auto outs = rmeu::visibleChannels(st, rmeu::Row::Output);
+    if (outs.empty()) return;
+    const int cur = rmeu::effectiveSubmix(st, g_rmeSubmix.load());
+    const auto at  = std::find(outs.begin(), outs.end(), cur);
+    const int  idx = (at == outs.end()) ? 0
+                   : static_cast<int>(at - outs.begin());
+    const int  n   = static_cast<int>(outs.size());
+    g_rmeSubmix.store(outs[static_cast<size_t>(((idx + (dir > 0 ? 1 : n - 1)) % n))]);
+}
+
+// Das TotalMix-Fenster zeigen oder verstecken. Eine Entscheidung fuer die
+// Nav-Mitte im Side-Car und das Builtin `rme_show_window`.
+static void rmeToggleWindow_()
+{
+    auto& rm = reasixty::rme::manager();
+    if (rm.link() != reasixty::rme::LinkState::Online) return;
+    const bool want = !g_rmeWindowShown.load();
+    rm.send("/showwindow", want ? 1.0f : 0.0f);
+    g_rmeWindowShown.store(want);
+}
+
 static void uf1RmeSelect_(rmeu::Row r, int ch)
 {
     g_rmeRow.store(static_cast<int>(r));
@@ -26126,6 +26157,18 @@ static bool uf1RmeButton_(const uf1::InputEvent& ev)
             uf1RmeStepRow_(id == uf1::btn::kNavDown ? 1 : -1);
         return true;
     }
+    // ⇨ LINKS UND RECHTS STEPPEN DEN SUBMIX, ebenfalls mit Umlauf (Frank 23.09.).
+    if (id == uf1::btn::kNavLeft || id == uf1::btn::kNavRight) {
+        if (ev.pressed && !g_uf1ModeMenu.load())
+            uf1RmeStepSubmix_(reasixty::rme::manager().snapshot(),
+                              id == uf1::btn::kNavRight ? 1 : -1);
+        return true;
+    }
+    // ⇨ UND DIE MITTE ZEIGT TOTALMIX, dort wo die ARC ihr Dim hat (Frank 23.09.).
+    if (id == uf1::btn::kNavCentre) {
+        if (ev.pressed && !g_uf1ModeMenu.load()) rmeToggleWindow_();
+        return true;
+    }
     if (id == uf1::btn::kChannelPush) {
         // STRIP auf und zu. Oeffnen nur, wenn ein Kanal auf dem Fader liegt.
         if (ev.pressed && !g_uf1ModeMenu.load()) {
@@ -26254,6 +26297,10 @@ static bool uf1RmeButton_(const uf1::InputEvent& ev)
         case uf1::btn::kRwd:  case uf1::btn::kFfw:  case uf1::btn::kStop:
         case uf1::btn::kPlay: case uf1::btn::kRec:
         case uf1::btn::kCycle: case uf1::btn::kClick:
+        // ⇨ UND DIE 360-TASTE: sie behaelt ihre Bindung (Frank 23.09.). Was dort
+        // liegt, entscheidet er; eine Aktion auf das Zeitfeld bleibt allerdings
+        // wirkungslos, solange das Side-Car den Schirm haelt.
+        case uf1::btn::k360:
             return false;
         default:
             return true;
@@ -34586,6 +34633,8 @@ static bool uf1SideCarKeepsLed_(uf8::bindings::ButtonId id)
         || id == B::Uf1FiveToEight || id == B::Uf1ArrowLeft || id == B::Uf1ArrowRight
         // Bank ◄ ► = die Seiten einer dynamischen Bank (uf1SideCarSoftKeys_).
         || id == B::Uf1BankLeft || id == B::Uf1BankRight
+        // 360 behaelt im Side-Car seine Bindung, also auch seine Lampe.
+        || id == B::Uf1Btn360
         // Soft-Key ueber dem Kanal = Stereo/Mono, hell bei stereo.
         || id == B::Uf1ChannelSoftKey
         // MASTER = Main auf den Fader (uf1RmeButton_), Zustand unten.
@@ -44348,8 +44397,12 @@ static void uf1NavCrossSyncLeds_()
         // immer in beide Richtungen weitergeht. Weiss, denn die Farbe der
         // REAPER-Bindung gehoert zu einer Aktion, die hier nicht laeuft.
         if (uf1RmeActive_()) {
-            const bool rowKey = (i == 0 || i == 4);
-            show = rowKey; on = rowKey; scaled = rowKey ? 0xFFFFFFu : 0u;
+            // Oben und unten die Reihe, links und rechts der Submix, beide mit
+            // Umlauf, also immer beide hell. Die Mitte zeigt, ob wir TotalMix
+            // zuletzt eingeblendet haben. Weiss, denn die Farbe der REAPER-
+            // Bindung gehoert zu einer Aktion, die hier nicht laeuft.
+            const bool lit = (i == 2) ? g_rmeWindowShown.load() : true;
+            show = true; on = lit; scaled = lit ? 0xFFFFFFu : 0u;
         }
         else if (i == marked) {
             // The mode's own pick wins the STATE, but not the colour: it lights
@@ -54761,6 +54814,17 @@ void registerBindingHandlers()
     // Main auf den Fader des RME-Side-Cars (Frank 21.09.: der V-Pot-Druck waehlt
     // jetzt den Submix, also braucht Main einen eigenen Weg). Lampe an, solange
     // Main auf dem Fader liegt.
+    // Das TotalMix-Fenster. ⚠ `/showwindow` steht in RMEs Tabelle (2.1 beta 2);
+    // Franks TotalMix ist 2.10 alpha 8, wo `/status/*` und `/sendstate` fehlten.
+    // Kommt das Fenster nicht, kennt diese Version die Adresse nicht. Die Lampe
+    // zeigt, was wir zuletzt gesendet haben, denn TotalMix meldet nichts zurueck.
+    registerBuiltin("rme_show_window", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) rmeToggleWindow_();
+        },
+        [](int) { return g_rmeWindowShown.load(); },
+        "RME: Show the TotalMix window", false
+    });
     registerBuiltin("rme_fader_main", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (firing) rmeFaderMainFire_();
