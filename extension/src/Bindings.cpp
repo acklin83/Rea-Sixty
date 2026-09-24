@@ -7347,6 +7347,10 @@ const char* builtinCategory(const std::string& n)
      || n == "uf1_time_display_step"
      || n == "uf1_flip" || n == "uf1_master"
      || n == "uf1_five_to_eight" || n == "uf1_vpot_reset"
+     // ⛔ both were bindable with a description and a label and sat in no
+     // category, so the picker never offered them. Found 2026-09-21 by the
+     // category check in tools/check_builtin_docs.py.
+     || n == "uf1_above_vpot_push"
      || n == "uf1_encoder_mode_dispatch"
      || n == "uf1_presets"
      || n.rfind("uf1_strip_mode_", 0) == 0
@@ -7398,7 +7402,9 @@ const char* builtinCategory(const std::string& n)
 
     if (n == "send_this" || n == "recv_this"
      || n.rfind("send_all_", 0) == 0
-     || n.rfind("recv_all_", 0) == 0)
+     || n.rfind("recv_all_", 0) == 0
+     // Was in no category until 2026-09-21, see uf1_above_vpot_push above.
+     || n == "uf1_sends_receives_toggle")
         return "Sends / Receives";
 
     if (n.rfind("selset_", 0) == 0
