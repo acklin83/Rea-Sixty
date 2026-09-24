@@ -17726,31 +17726,6 @@ std::string recRmeInputNameLabel_(MediaTrack* tr, bool foldLatin1)
     return abbreviateTrackName_(s2, 12, -1, foldLatin1);
 }
 
-// ⇨ DIE WERTZEILE GEHOERT IN REC + RME DEM PREAMP, AUCH WENN ER NICHTS SAGT.
-// Liegt die Spur auf einem Hardware-Eingang, steht dort die Flaggenzeile und der
-// Gain — und auf einem Kanal ohne Preamp eben leere Flaggen und "--dB". Die UF8
-// hat das immer so gemacht; die UF1 fiel auf den Pan zurueck, was auf einem
-// Mikrofoneingang niemand lesen will (Frank 23.09.: "geht UF1 auf Pan zurueck
-// im Display. Das ist natuerlich voelliger unsinn"), und die UC1 liess den
-// alten Wert stehen. Eine Entscheidung, drei Flaechen.
-// false = die Spur ist kein Hardware-Eingang (ein Bus etwa), dann behaelt die
-// Zeile, was sie sonst zeigt.
-// flashInputName gibt nur die UC1 mit: dort ist der Blitz nach Shift+Enc2 die
-// einzige Stelle, an der der Eingangskanal steht. UF8 und UF1 nennen ihn im
-// Farbbalken, die geben false.
-bool recRmePreampLine_(MediaTrack* tr, bool flashInputName, bool latin1,
-                       std::string* outLabel, std::string* outValue)
-{
-    if (!tr || !outLabel || !outValue) return false;
-    if (!recRmeActive_()) return false;
-    if (recRmeInputNameLabel_(tr, /*foldLatin1*/false).empty()) return false;
-    *outLabel = "         ";   // 48V / Pd / Ph, alle aus
-    *outValue = "  --dB";
-    recRmeReadoutText_(tr, flashInputName, latin1, outLabel, outValue);
-    return true;
-}
-
-
 bool recRmeUf1Fire_(RecRmeAction a, MediaTrack* tr)
 {
     if (!tr || !recRmeButtonActive(a)) return false;
@@ -32069,9 +32044,11 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         // No input-name flash: the channel-strip type cell already names the
         // input permanently, exactly as the UF8's does, so blinking it in here
         // would say the same thing twice and cost the flags while it did.
-        if (recRmePreampLine_(tr, /*flashInputName*/false, /*latin1*/false,
-                              &rmeLabel, &rmeValue))
+        if (recRmeActive_()
+            && recRmeReadoutText_(tr, /*flashInputName*/false, /*latin1*/false,
+                                  &rmeLabel, &rmeValue)) {
             valLine = uf1ValueLine(rmeLabel, rmeValue);
+        }
         if (const double gNorm = recRmeGainBarNorm_(tr, g_recUf1RotateGain.load());
             gNorm >= 0.0) {
             barPos    = static_cast<int>(std::lround(gNorm * 100.0));
@@ -38995,12 +38972,12 @@ void pushZonesForVisibleSlots()
             // It leaves them untouched when it returns false, and the UF8 shows
             // the zone either way (unlike the UC1/UF1, which fall back to their
             // normal content) — that is the pre-existing behaviour, kept.
-            std::string flags, gain;
-            if (recRmePreampLine_(tr, /*flashInputName*/false, /*latin1*/false,
-                                  &flags, &gain)) {
-                valLine = composeValueLine(flags, gain);
-                selectionModeHandled = true;
-            }
+            std::string flags = "         ";
+            std::string gain  = "  --dB";
+            recRmeReadoutText_(tr, /*flashInputName*/false, /*latin1*/false,
+                               &flags, &gain);
+            valLine = composeValueLine(flags, gain);
+            selectionModeHandled = true;
         }
         // Instance mode: the active FX name is rendered in the
         // colour-bar Channel-Strip-Type zone (see csType override
@@ -50611,15 +50588,8 @@ bool reasixty_recUc1ReadoutText(MediaTrack* tr,
                                 std::string* outValue)
 {
     if (!recRmeUc1Active_()) return false;
-    // ⇨ DER BLITZ BLEIBT HIER. Auf main steht der Eingangsname seit dem
-    // 23.09. dauerhaft im Model-Feld ueber dem Spurnamen, darum faellt er
-    // dort aus der Readout-Zeile raus; dieser Zweig hat das Model-Feld
-    // nicht, also ist der Blitz nach Shift+Enc2 die einzige Stelle, an der
-    // der Kanal ueberhaupt steht. Neu ist nur die Preamp-Entscheidung: auf
-    // einem Eingang ohne Preamp leere Flaggen und "--dB" statt des alten
-    // Werts, dieselbe Zeile wie auf UF8 und UF1.
-    return recRmePreampLine_(tr, recUc1InputChanFlashActive_(), /*latin1*/true,
-                             outLabel, outValue);
+    return recRmeReadoutText_(tr, recUc1InputChanFlashActive_(), /*latin1*/true,
+                              outLabel, outValue);
 }
 
 int reasixty_recUc1ButtonMirroredState(int which, MediaTrack* tr)
