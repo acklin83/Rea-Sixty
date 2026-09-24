@@ -128,6 +128,8 @@ The push-cycle menus and the FX-Learn parameter lists were rebuilding themselves
 
 **A factory bank longer than eight keys spills into Shift**, which is how Encoder Modes fits.
 
+**A long press can repeat while the key is held.** Tick it per long-press row and the action keeps firing until you let go: the first one at the half second as before, the rest at the interval you set, 20 ms to 1000 ms, 100 by default. Plain can repeat while Shift on the same key does not. All three surfaces have it, because every bound button goes through the same dispatch. The tick is greyed out on an action that toggles, since repeating one just flips it back and forth.
+
 ## Fine work
 
 **Helper text became hover boxes** under Devices, Appearance, Behaviour and 26 more panes, so the panes are shorter and the explanation is where the control is. Sel and Encoder mode are drop-downs in the focused-track panel, at a fixed width.
