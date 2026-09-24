@@ -7283,6 +7283,17 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // below keeps getActiveLayer, because that one really is about which
     // binding fires.
     const int       s_editLayer = getQuickLayer();
+    // ⛔ UND DIE ZWEITE ANTWORT, DIE BIS HIERHER FEHLTE. Der Kommentar darueber
+    // sagt seit dem 08.09., der Tasten-Editor nehme getActiveLayer — der Aufruf
+    // tat es nicht, er nahm dieselbe Zahl wie die Matrix. Mit "Layers switch
+    // Quicks only" laufen die beiden auseinander: die Flaeche feuert weiter
+    // Layer 1, der Editor zeigte die leeren Tasten von Layer 2, und eine
+    // Bindung sah geloescht aus, die es nie war (Frank 23.09.: "Shift+Rec-Mode
+    // Bindung im Bindings-Tab weg obwohl der push am Geraet noch funktioniert").
+    // Alles, was eine BINDUNG anfasst — Editor, Reset, Import und Export —
+    // nimmt ab jetzt diese Zahl, alles, was Quicks und Baenke anfasst, die
+    // darueber ([[uf8-global-led-binding-rules]]).
+    const int       s_bindLayer = getActiveLayer();
     static ButtonId s_selected  = ButtonId::None;
 
     // This pane is painting: it owns the surface's set until it stops (see
@@ -8297,7 +8308,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             }
         }
     } else {
-        drawBindingEditor(ctx, s_editLayer, editSel);
+        drawBindingEditor(ctx, s_bindLayer, editSel);
     }
 
     // UF1 behaviour toggles — rendered BELOW the editor so they add NO height above
@@ -8356,37 +8367,37 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     if (s_deviceTab == 1) {
         if (ImGui_Button(ctx, "Save UC1 bindings…",
                          /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-            s_portMsg = reasixty_exportUc1ViaDialog(s_editLayer)
+            s_portMsg = reasixty_exportUc1ViaDialog(s_bindLayer)
                 ? "UC1 bindings exported."
                 : "Export cancelled or failed.";
         }
         sameLine(ctx);
         if (ImGui_Button(ctx, "Load UC1 bindings…",
                          /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-            s_portMsg = reasixty_importUc1ViaDialog(s_editLayer)
+            s_portMsg = reasixty_importUc1ViaDialog(s_bindLayer)
                 ? "UC1 bindings imported."
                 : "Import cancelled or failed.";
         }
     } else {
         if (ImGui_Button(ctx, "Reset this layer to factory defaults",
                          /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-            resetLayerToDefaults(s_editLayer);
+            resetLayerToDefaults(s_bindLayer);
         }
 
         char btnSave[40], btnLoad[40];
         snprintf(btnSave, sizeof(btnSave), "Save layer %d to file…",
-                      s_editLayer + 1);
+                      s_bindLayer + 1);
         snprintf(btnLoad, sizeof(btnLoad), "Load layer %d from file…",
-                      s_editLayer + 1);
+                      s_bindLayer + 1);
         sameLine(ctx);
         if (ImGui_Button(ctx, btnSave, /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-            s_portMsg = reasixty_exportLayerViaDialog(s_editLayer)
+            s_portMsg = reasixty_exportLayerViaDialog(s_bindLayer)
                 ? "Layer exported."
                 : "Export cancelled or failed.";
         }
         sameLine(ctx);
         if (ImGui_Button(ctx, btnLoad, /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-            s_portMsg = reasixty_importLayerViaDialog(s_editLayer)
+            s_portMsg = reasixty_importLayerViaDialog(s_bindLayer)
                 ? "Layer imported."
                 : "Import cancelled or failed.";
         }
