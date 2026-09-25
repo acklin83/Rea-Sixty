@@ -47,6 +47,11 @@ struct Host {
 
     // Type a key chord at the host application.
     std::function<void(const keymacro::KeyChord&)> sendKeyChord;
+
+    // A REAPER action's toggle state: 1 on, 0 off, -1 not a toggle or unknown.
+    // Added 2026-09-25 so the soft-key lamps can be resolved inside the engine
+    // for both hosts; ORC leaves it unset, and an action it cannot run is off.
+    std::function<int(int commandId)> toggleState;
 };
 
 // The installed host. Never null; the default answers nothing.

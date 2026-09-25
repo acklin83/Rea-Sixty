@@ -1314,6 +1314,14 @@ Binding  getUf1SoftBankSlot(int bank, int slot);            // OOR = empty
 // rule for the extension and ORC (moved out of main.cpp 2026-09-25). Empty =
 // nothing bound on this layer.
 std::string uf1SoftBankKeyLabel(int bank, int slot);
+
+// ⇨ IS THIS BINDING ENGAGED, for its lamp. A stateful builtin that reports on,
+// or a REAPER action whose toggle state is 1 (through Host::toggleState).
+// Moved out of main.cpp 2026-09-25 so ORC lights its soft keys the same way.
+// ForSet: one modifier set only, for the soft keys, whose label and dispatch
+// follow the held set (Frank 2026-08-18). The plain version walks every slot.
+bool bindingHasActiveSlotForSet(const Binding& bd, int mod);
+bool bindingHasActiveSlot(const Binding& bd);
 void     setUf1SoftBankSlot(int bank, int slot, const Binding& bd);
 // Per-bank dynamic-kind flag. Non-None turns the bank into a computed
 // bank (FX list / parameter groups / colours); its 4 static slots are

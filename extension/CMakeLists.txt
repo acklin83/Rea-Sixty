@@ -366,6 +366,7 @@ add_library(reaper_uf8 MODULE
     src/RmeFace.cpp
     src/RmeBuiltins.cpp
     src/Uf1Pacer.cpp
+    src/Uf1SoftKeys.cpp
     src/RmeNames.cpp
     src/TrackName.cpp
     src/PluginMap.cpp
@@ -989,6 +990,7 @@ if(APPLE)
         src/RmeFace.cpp
         src/RmeBuiltins.cpp
         src/Uf1Pacer.cpp
+        src/Uf1SoftKeys.cpp
         src/RmeNames.cpp
         src/Uf1EqCurve.cpp
         src/Uf1Spread.cpp
@@ -997,8 +999,8 @@ if(APPLE)
         # For paletteName(): the settings window offers the UF1's colours by
         # name. Palette.cpp asks REAPER nothing.
         src/Palette.cpp
-        # The bindings engine itself, not a second one: 8904 lines whose only
-        # outward questions are the four callbacks in BindingsHost.h. KeyMacro is
+        # The bindings engine itself, not a second one, whose only outward
+        # questions are the callbacks in BindingsHost.h. KeyMacro is
         # the parser alone; KeyMacroSend, which needs a window to type at, stays
         # with the extension.
         src/Bindings.cpp

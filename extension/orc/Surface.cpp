@@ -1,6 +1,7 @@
 #include "Surface.h"
 
 #include "OrcConfig.h"
+#include "Uf1SoftKeys.h"
 #include "Uf1Text.h"
 #include "RmeBuiltins.h"
 #include "Bindings.h"
@@ -255,48 +256,30 @@ void Surface::loop_()
         uf1spread::paintVpotRow(r, vpotCache,
             [this](std::vector<std::uint8_t> fr) { dev_.send(std::move(fr)); });
     };
-    // ⚠ Soft keys: the extension paints its side-car bank from the bindings, and
-    // ORC does not run keys through the bindings engine yet (the next step).
-    // Until then the overview's four names are emptied once, and STRIP's page
-    // keys are written as plain labels, so nothing of REAPER's stays standing.
-    std::array<std::string, 4> skShown{};
-    bool skKnown = false;
-    auto writeLabels = [this, &skShown, &skKnown](const std::array<std::string, 4>& want,
-                                                  bool f) {
-        for (std::uint8_t i = 0; i < 4; ++i) {
-            if (!f && skKnown && want[i] == skShown[i]) continue;
-            std::vector<std::uint8_t> p{ i };
-            p.insert(p.end(), want[i].begin(), want[i].end());
-            dev_.send(::uf1::buildScreen(::uf1::scr::kSoftKeyLabel, p));
-            skShown[i] = want[i];
-        }
-        skKnown = true;
-    };
-    // The side-car bank, as the extension counts it.
+    // ⇨ THE SOFT KEYS: the extension's own emitter and bank cell
+    // (src/Uf1SoftKeys), so names, lamps and highlight come out as they do in
+    // the side-car. One row, one cache, as on the device.
+    uf1sk::RowCache skCache;
+    auto skSink = [this](std::vector<std::uint8_t> fr) { dev_.send(std::move(fr)); };
     host.bankNow   = [this] { return scBank_.load(); };
     host.bankCount = [] {
         return std::max(1, uf8::bindings::uf1SideCarBankInUseCount(
                                uf8::bindings::kUf1SideCarSetRme));
     };
-    // The overview's four names, from the bindings, through the same two rules
-    // the extension uses (uf1SoftBankKeyLabel, uf1SoftKeyText).
-    // ⚠ Names only: the key lamps still need the soft-key emitter, which the
-    // extension shares with REAPER's own UF1 mode and has not moved yet.
-    host.sideCarSoftKeys = [this, &writeLabels](bool f) {
+    // The overview: the RME set's current bank, static cells. ⚠ No dynamic banks
+    // (those list REAPER's tracks, FX and sends), and no MODE menu to yield to.
+    host.sideCarSoftKeys = [this, &skCache, skSink](bool f) {
         namespace bnd = uf8::bindings;
         const int bank = bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme) + scBank_.load();
-        std::array<std::string, 4> want{};
+        std::array<uf1spread::SkCell, 4> cells{};
         for (int i = 0; i < 4; ++i)
-            want[static_cast<std::size_t>(i)] =
-                uf1SoftKeyText(bnd::uf1SoftBankKeyLabel(bank, i));
-        writeLabels(want, f);
+            cells[static_cast<std::size_t>(i)] = uf1sk::staticBankCell(bank, i);
+        uf1sk::emitRow(cells, f, /*ledsBorrowed*/ false, /*menuOpen*/ false, skCache, skSink);
     };
-    host.stripSoftKeys = [&writeLabels](const std::array<uf1spread::SkCell, 4>& cells,
-                                        bool f, bool, bool) {
-        std::array<std::string, 4> want{};
-        for (std::size_t i = 0; i < 4; ++i)
-            if (cells[i].haveLabel) want[i] = uf1SoftKeyText(cells[i].label);
-        writeLabels(want, f);
+    // STRIP: the page's switches, built by the shared painter.
+    host.stripSoftKeys = [&skCache, skSink](const std::array<uf1spread::SkCell, 4>& cells,
+                                            bool f, bool ledsBorrowed, bool menuOpen) {
+        uf1sk::emitRow(cells, f, ledsBorrowed, menuOpen, skCache, skSink);
     };
     // Header and meter: handed to the pacer thread below.
     host.publishCycle = [this](std::vector<std::vector<std::uint8_t>> meters,

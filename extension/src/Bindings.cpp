@@ -34,7 +34,7 @@
 #include <direct.h>
 #endif
 
-#include "BindingsHost.h"   // the four questions this file asks outwards
+#include "BindingsHost.h"   // the questions this file asks outwards
 
 #include "WDL/jsonparse.h"
 #include "JsonTree.h"
@@ -7196,6 +7196,54 @@ bool dispatchUserQuickSlot(int layer, int quick, int subBank,
 // UF1 soft-key bank slot dispatch — same long-press + modifier-matrix
 // logic as dispatchUserQuickSlot, but addressed by (bank, slot) on the
 // global uf1SoftBanks store, with a distinct press-timer keyspace.
+// One slot's engaged state: a stateful builtin that reports "on", or a REAPER
+// action whose toggle state is 1. Everything else is stateless and reads as off.
+static bool actionSlotActive(const ActionSlot& s)
+{
+    switch (s.type) {
+        case ActionType::Noop: return false;
+        case ActionType::Builtin:
+            return builtinHasState(s.action) && builtinStateOfStep(s.action, s);
+        case ActionType::Reaper: {
+            if (s.action.empty() || !host().toggleState) return false;
+            int aid = std::atoi(s.action.c_str());
+            if (aid <= 0 && host().namedCommand) aid = host().namedCommand(s.action.c_str());
+            if (aid > 0) {
+                const int st = host().toggleState(aid);
+                if (st >= 0) return st == 1;
+            }
+            return false;
+        }
+        case ActionType::Keyboard:
+        case ActionType::Midi:
+            return false;
+    }
+    return false;
+}
+
+// ⇨ ONE MODIFIER SET ONLY — for the soft-keys.
+// A soft-key slot is TWO BANKS in one Binding, and its label and its dispatch
+// both follow the held set. The union below then lit a key because the set you
+// were NOT holding had an engaged action, so the row showed one bank's names
+// over the other bank's lights (Frank 2026-08-18).
+bool bindingHasActiveSlotForSet(const Binding& bd, int mod)
+{
+    if (mod < 0 || mod >= kModifierCount) return false;
+    return actionSlotActive(bd.shortPress[mod]) || actionSlotActive(bd.longPress[mod]);
+}
+
+bool bindingHasActiveSlot(const Binding& bd)
+{
+    // Walk all modifier slots (short + long press) — a stateful action
+    // bound to e.g. Shift+Btn360 should light the cell after toggling
+    // even when Plain is Noop. Matches the routing-row LED convention.
+    // For an ordinary button the four slots are one key's gestures; only the
+    // soft-key stores hold two banks, and those ask the per-set version above.
+    for (const auto& s : bd.shortPress) if (actionSlotActive(s)) return true;
+    for (const auto& s : bd.longPress)  if (actionSlotActive(s)) return true;
+    return false;
+}
+
 std::string uf1SoftBankKeyLabel(int bank, int slot)
 {
     const Binding b = getUf1SoftBankSlot(bank, slot);
