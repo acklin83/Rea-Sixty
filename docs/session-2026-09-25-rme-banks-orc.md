@@ -62,3 +62,13 @@ Der UF1 hatte sich nach der Übergabe von ORC am USB-Bus neu angemeldet
 (`LIBUSB_ERROR_NO_DEVICE`), darum der Reopen. Jetzt schützt `g_uf1DevSwapMx`
 jedes Ersetzen des Geräts und jeden Pacer-Zyklus; `openUf1BringUp_`
 veröffentlicht das Gerät erst, wenn es offen ist. Deployt `3305a0c9`.
+
+## Nachtrag: TotalMix-EQ mit Q, Pegel-Untergrenze
+
+- `7426edc`: TotalMix' Shelves und die Band-Filter nehmen Q, wie TotalMix sie
+  zeichnet (RBJ Audio EQ Cookbook, 2. Ordnung). An Franks Screenshots gefittet:
+  0.17-0.65 dB RMS über Q 0.4-9.9, High Shelf gespiegelt, Frequenz = Mitte der
+  Stufe (nicht "-3 dB" wie im Handbuch). Tiefpass nur mit dem Auge geprüft.
+  SSL/REAPER-Graph und TotalMix' Low Cut unverändert, getestet.
+- `026fd27`: Knopf und Jog stoppen bei -64.5 dB wie TotalMix, alle Kanäle.
+- Deployt `12632b23`, ORC neu gestartet.
