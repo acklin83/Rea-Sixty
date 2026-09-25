@@ -115,7 +115,11 @@ def category_of(name: str, rules):
 
 
 def main() -> int:
-    main_cpp = (SRC / "main.cpp").read_text()
+    # ⇨ main.cpp AND the files that register on its behalf. RmeBuiltins.cpp
+    # moved out of main.cpp on 2026-09-25 so ORC registers the same six; left
+    # unread here, its names would have counted as stale doc entries.
+    main_cpp = "\n".join((SRC / f).read_text()
+                         for f in ("main.cpp", "RmeBuiltins.cpp"))
     bindings = (SRC / "Bindings.cpp").read_text()
 
     names = registered_names(main_cpp)

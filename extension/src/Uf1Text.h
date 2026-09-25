@@ -49,5 +49,9 @@ inline constexpr int kUf1TrackNameChars = 8;
 
 std::string uf8ValueLine(std::string_view label, std::string_view value);
 
+// A soft key's name as the UF1 draws it: Latin-1, abbreviated (never cut) to
+// the 13-character field. One rule for every UF1 soft-key painter.
+std::string uf1SoftKeyText(std::string_view name);
+
 // dBFS → VU byte (0..31), see Uf1Text.cpp.
 uint8_t dbToVuByte_(double dbfs);

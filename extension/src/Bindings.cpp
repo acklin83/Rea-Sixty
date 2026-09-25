@@ -7196,6 +7196,25 @@ bool dispatchUserQuickSlot(int layer, int quick, int subBank,
 // UF1 soft-key bank slot dispatch — same long-press + modifier-matrix
 // logic as dispatchUserQuickSlot, but addressed by (bank, slot) on the
 // global uf1SoftBanks store, with a distinct press-timer keyspace.
+std::string uf1SoftBankKeyLabel(int bank, int slot)
+{
+    const Binding b = getUf1SoftBankSlot(bank, slot);
+    // ⇨ THE FOUR KEYS FOLLOW THE HELD MODIFIER — hold SHIFT and the
+    // bank shows its Shift layer. The layers and the dispatch were
+    // always there; only the labels stayed on Plain, so the keys
+    // fired one thing and the screen said another (Frank 2026-08-18).
+    // Binding::label names the key and belongs to Plain; a modifier
+    // layer carries its own in ActionSlot::label, and an empty layer
+    // shows EMPTY rather than borrowing the Plain name.
+    const int mIdx = static_cast<int>(bankModifierSnapshot());
+    const bool plainLayer = (mIdx == static_cast<int>(Modifier::Plain));
+    const auto& sp = b.shortPress[mIdx];
+    if (!sp.label.empty())                  return sp.label;
+    if (plainLayer && !b.label.empty())     return b.label;
+    if (!sp.action.empty())                 return softKeyFallbackLabel(sp);
+    return std::string();
+}
+
 bool dispatchUf1SoftBankSlot(int bank, int slot, bool pressed)
 {
     if (!uf1SoftBankInRange_(bank, slot)) return false;

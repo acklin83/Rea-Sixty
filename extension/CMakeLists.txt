@@ -364,6 +364,7 @@ add_library(reaper_uf8 MODULE
     src/Uf1Text.cpp
     src/RmeInput.cpp
     src/RmeFace.cpp
+    src/RmeBuiltins.cpp
     src/Uf1Pacer.cpp
     src/RmeNames.cpp
     src/TrackName.cpp
@@ -986,6 +987,7 @@ if(APPLE)
         src/RmeInput.cpp
         # The side-car painter and its cycle, the extension's own (25.09.2026).
         src/RmeFace.cpp
+        src/RmeBuiltins.cpp
         src/Uf1Pacer.cpp
         src/RmeNames.cpp
         src/Uf1EqCurve.cpp

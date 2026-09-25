@@ -1,6 +1,9 @@
 #include "Surface.h"
 
 #include "OrcConfig.h"
+#include "Uf1Text.h"
+#include "RmeBuiltins.h"
+#include "Bindings.h"
 #include "RmeFace.h"
 #include "RmeInput.h"
 #include "Uf1Pacer.h"
@@ -104,17 +107,17 @@ void Surface::onEvent_(const ::uf1::InputEvent& ev)
     const auto cfg = mgr.config();
     rmei::Writes w;
 
-    // SHIFT is a modifier, not an action: RmeInput lets it fall through, and
-    // here is where it lands.
-    if (ev.kind == ::uf1::InputKind::Button && ev.id == ::uf1::btn::kShift)
-        shiftHeld_.store(ev.pressed);
-
     switch (ev.kind) {
         case ::uf1::InputKind::Button:
-            // STRIP's own soft keys first, then everything else. Outside STRIP
-            // the first call says "not mine" and costs nothing.
-            if (!rmei::stripSoftKey(in_, host_, st, cfg, ev, w))
-                rmei::button(in_, host_, st, cfg, ev, w);
+            // The extension's order (onUf1Event): STRIP's page keys, then the
+            // side-car's soft-key banks, then the side-car's own keys, and what
+            // it lets through (transport, SHIFT, 360) goes to the bindings.
+            if (rmei::stripSoftKey(in_, host_, st, cfg, ev, w)) break;
+            if (softKeys_(ev)) break;
+            if (rmei::button(in_, host_, st, cfg, ev, w)) break;
+            if (auto b = uf8::bindings::fromUf1DeviceId(ev.id);
+                b != uf8::bindings::ButtonId::None)
+                uf8::bindings::dispatch(b, ev.pressed);
             break;
         case ::uf1::InputKind::EncoderRotate:
             rmei::encoder(in_, host_, st, cfg, ev.id, ev.delta, w);
@@ -136,6 +139,33 @@ void Surface::onEvent_(const ::uf1::InputEvent& ev)
     for (const auto& [addr, val] : w) mgr.send(addr, val);
 }
 
+// ⇨ THE SIDE-CAR'S SOFT-KEY BANKS, the extension's uf1SideCarSoftKeys_ minus
+// what ORC has not got: no MODE menu owning the keys, and no dynamic banks
+// (those list REAPER's tracks, FX and sends). The four keys fire their slot of
+// the RME set's current bank through the bindings engine; < > step the bank,
+// with no wrap, because the lamp says whether there is more that way.
+bool Surface::softKeys_(const ::uf1::InputEvent& ev)
+{
+    namespace bnd = uf8::bindings;
+    const int set = bnd::kUf1SideCarSetRme;
+    const std::uint8_t id = ev.id;
+    if (id >= ::uf1::btn::kDisplaySoft1 && id <= ::uf1::btn::kDisplaySoft4) {
+        bnd::dispatchUf1SoftBankSlot(bnd::uf1SideCarBankBase(set) + scBank_.load(),
+                                     static_cast<int>(id - ::uf1::btn::kDisplaySoft1),
+                                     ev.pressed);
+        return true;
+    }
+    if (id == ::uf1::btn::kArrowLeft || id == ::uf1::btn::kArrowRight) {
+        if (ev.pressed) {
+            const int nb  = std::max(1, bnd::uf1SideCarBankInUseCount(set));
+            const int dir = (id == ::uf1::btn::kArrowRight) ? 1 : -1;
+            scBank_.store(std::clamp(scBank_.load() + dir, 0, nb - 1));
+        }
+        return true;
+    }
+    return false;
+}
+
 Surface::~Surface() { stop(); }
 
 void Surface::start()
@@ -146,9 +176,19 @@ void Surface::start()
     // stay unset and RmeInput reads them as "no" and "1.0". The link question it
     // can answer.
     host_.online = [] { return rme::manager().link() == rme::LinkState::Online; };
-    // ⇨ SHIFT MAKES EVERY KNOB FINE, the same factor the extension ships with
-    // (g_fineFactorUf1, 0.25). Frank 25.09.: "shift geht auch net".
-    host_.knobScale = [this] { return shiftHeld_.load() ? kFineFactor : 1.0; };
+    // ⇨ FINE = THE SHIFT MODIFIER, AS THE BINDINGS ENGINE HOLDS IT. The UF1's
+    // SHIFT key is bound to mod_shift in orc.json by default, exactly as in the
+    // extension, so rebinding it in orc.json is what makes it "bindable"
+    // (Frank 25.09.: "schalts ein und machs bindable"). Factor: the extension's
+    // default, g_fineFactorUf1 = 0.25.
+    host_.knobScale = [] {
+        return uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift) ? kFineFactor : 1.0;
+    };
+
+    // The six rme_* builtins, the extension's own (src/RmeBuiltins.cpp), against
+    // this surface's side-car state. Without them the factory bank's rme_dim
+    // and friends in orc.json were names that did nothing.
+    reasixty::rme::registerBuiltins(in_, host_);
 
     // The handler fires on the device's worker thread.
     dev_.setInputHandler([this](const ::uf1::InputEvent& ev) {
@@ -232,12 +272,30 @@ void Surface::loop_()
         }
         skKnown = true;
     };
-    host.sideCarSoftKeys = [&writeLabels](bool f) { writeLabels({}, f); };
+    // The side-car bank, as the extension counts it.
+    host.bankNow   = [this] { return scBank_.load(); };
+    host.bankCount = [] {
+        return std::max(1, uf8::bindings::uf1SideCarBankInUseCount(
+                               uf8::bindings::kUf1SideCarSetRme));
+    };
+    // The overview's four names, from the bindings, through the same two rules
+    // the extension uses (uf1SoftBankKeyLabel, uf1SoftKeyText).
+    // ⚠ Names only: the key lamps still need the soft-key emitter, which the
+    // extension shares with REAPER's own UF1 mode and has not moved yet.
+    host.sideCarSoftKeys = [this, &writeLabels](bool f) {
+        namespace bnd = uf8::bindings;
+        const int bank = bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme) + scBank_.load();
+        std::array<std::string, 4> want{};
+        for (int i = 0; i < 4; ++i)
+            want[static_cast<std::size_t>(i)] =
+                uf1SoftKeyText(bnd::uf1SoftBankKeyLabel(bank, i));
+        writeLabels(want, f);
+    };
     host.stripSoftKeys = [&writeLabels](const std::array<uf1spread::SkCell, 4>& cells,
                                         bool f, bool, bool) {
         std::array<std::string, 4> want{};
         for (std::size_t i = 0; i < 4; ++i)
-            if (cells[i].haveLabel) want[i] = cells[i].label.substr(0, 13);
+            if (cells[i].haveLabel) want[i] = uf1SoftKeyText(cells[i].label);
         writeLabels(want, f);
     };
     // Header and meter: handed to the pacer thread below.

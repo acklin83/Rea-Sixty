@@ -139,3 +139,18 @@ uint8_t dbToVuByte_(double dbfs)
     const int byte = static_cast<int>(f * 31.0 + 0.5);
     return static_cast<uint8_t>(std::clamp(byte, 0, 0x1F));
 }
+
+std::string uf1SoftKeyText(std::string_view name)
+{
+    // 13 chars is the field; abbreviate past it (see kUf1SoftKeyChars).
+    // Fold to Latin-1 FIRST, for two reasons: the UF1 panel is one byte per
+    // glyph, and folding before the length check makes that check and the
+    // byte-wise abbreviation character-safe instead of counting an umlaut as two
+    // and possibly cutting one in half. abbreviateTrackName_ therefore keeps
+    // foldLatin1=false — folding twice would re-decode the high bytes.
+    std::string label = utf8ToLatin1(name);
+    if (label.size() > kUf1SoftKeyChars)
+        label = abbreviateTrackName_(label, static_cast<int>(kUf1SoftKeyChars),
+                                     TNM_SmartAbbrev, /*foldLatin1*/ false);
+    return label;
+}

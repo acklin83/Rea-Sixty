@@ -63,6 +63,7 @@ class Surface {
 
     void onEvent_(const ::uf1::InputEvent& ev);
     void pacerLoop_();
+    bool softKeys_(const ::uf1::InputEvent& ev);
 
     mutable std::mutex mu_;
     Status             st_;
@@ -87,10 +88,8 @@ class Surface {
     // The fader: whether a hand is on it, and where it stands. While it is held
     // the surface writes to TotalMix and the motor is left alone; let go and the
     // painter drives it again.
-    // SHIFT held. ⇨ In ORC SHIFT is the fine modifier, hard-wired for now:
-    // making it bindable needs ORC to dispatch keys through the bindings engine,
-    // which it loads but does not call yet.
-    std::atomic<bool>     shiftHeld_{false};
+    // The side-car's soft-key bank, relative within the RME set.
+    std::atomic<int>      scBank_{0};
 
     std::atomic<bool>     faderTouched_{false};
     std::atomic<uint16_t> faderPos_{0};

@@ -1310,6 +1310,10 @@ bool     dispatchUserQuickSlot(int layer, int quick, int subBank,
 
 // ---- UF1 soft-key banks (global; 10 banks × 4 slots) -------------------
 Binding  getUf1SoftBankSlot(int bank, int slot);            // OOR = empty
+// ⇨ THE WORD A UF1 SOFT-BANK KEY SHOWS, for the modifier held right now. One
+// rule for the extension and ORC (moved out of main.cpp 2026-09-25). Empty =
+// nothing bound on this layer.
+std::string uf1SoftBankKeyLabel(int bank, int slot);
 void     setUf1SoftBankSlot(int bank, int slot, const Binding& bd);
 // Per-bank dynamic-kind flag. Non-None turns the bank into a computed
 // bank (FX list / parameter groups / colours); its 4 static slots are

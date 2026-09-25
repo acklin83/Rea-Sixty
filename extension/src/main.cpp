@@ -92,6 +92,7 @@
 #include "DynaMountManager.h"
 #include "HueManager.h"
 #include "ObsManager.h"
+#include "RmeBuiltins.h"
 #include "RmeFace.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
@@ -25921,38 +25922,6 @@ static void rmeSend_(const reasixty::rme::strip::Writes& w)
     for (const auto& [a, v] : w) rm.send(a, v);
 }
 
-static int uf1RmeSelected_(const reasixty::rme::State& st, rmeu::Row r)
-{
-    return reasixty::rme::input::selected(g_rmeIn, st, r);
-}
-
-static void uf1RmeStepRow_(int dir)
-{
-    reasixty::rme::input::stepRow(g_rmeIn, dir);
-}
-
-static void uf1RmeStepSubmix_(const reasixty::rme::State& st, int dir)
-{
-    reasixty::rme::input::stepSubmix(g_rmeIn, st, dir);
-}
-
-static void rmeToggleWindow_()
-{
-    reasixty::rme::strip::Writes w;
-    reasixty::rme::input::toggleWindow(g_rmeIn, rmeInputHost_(), w);
-    rmeSend_(w);
-}
-
-static void uf1RmeSelect_(rmeu::Row r, int ch)
-{
-    reasixty::rme::input::select(g_rmeIn, r, ch);
-}
-
-static void rmeFaderMainFire_()
-{
-    reasixty::rme::input::faderMainFire(g_rmeIn, reasixty::rme::manager().snapshot());
-}
-
 static bool rmeFaderMainActive_()
 {
     return reasixty::rme::input::faderMainActive(g_rmeIn,
@@ -25960,18 +25929,6 @@ static bool rmeFaderMainActive_()
 }
 
 namespace rmes = reasixty::rme::strip;
-
-static int uf1RmeStripPage_(const reasixty::rme::State& st, rmeu::Row r, int sel,
-                            const reasixty::rme::Config& cfg)
-{
-    return reasixty::rme::input::stripPage(g_rmeIn, st, r, sel, cfg);
-}
-
-static const rmes::Param* uf1RmeStripParam_(const reasixty::rme::Config& cfg, int page,
-                                            bool key, int i)
-{
-    return reasixty::rme::input::stripParam(cfg, page, key, i);
-}
 
 // true = verbraucht. Nur aufrufen, wenn uf1RmeActive_().
 static bool uf1RmeEncoder_(uint8_t id, int delta)
@@ -32662,23 +32619,11 @@ static Uf1SkCell uf1StaticBankCell_(int bankNo, int i)
     // so bright = engaged, dim = idle. The LED COLOUR is driven from
     // the binding too (see the LED block below).
     const uf8::bindings::Binding dawSlot = uf8::bindings::getUf1SoftBankSlot(bankNo, i);
-    // ⇨ THE FOUR KEYS FOLLOW THE HELD MODIFIER — hold SHIFT and the
-    // bank shows its Shift layer. The layers and the dispatch were
-    // always there; only the labels stayed on Plain, so the keys
-    // fired one thing and the screen said another (Frank 2026-08-18).
-    // Binding::label names the key and belongs to Plain; a modifier
-    // layer carries its own in ActionSlot::label, and an empty layer
-    // shows EMPTY rather than borrowing the Plain name.
     const int mIdx =
         static_cast<int>(uf8::bindings::bankModifierSnapshot());
-    const bool plainLayer =
-        (mIdx == static_cast<int>(uf8::bindings::Modifier::Plain));
-    const auto& sp = dawSlot.shortPress[mIdx];
-    if (!sp.label.empty())               label = sp.label;
-    else if (plainLayer && !dawSlot.label.empty())
-                                         label = dawSlot.label;
-    else if (!sp.action.empty())
-        label = uf8::bindings::softKeyFallbackLabel(sp);
+    // The name follows the held modifier; the rule lives in Bindings.cpp
+    // (uf1SoftBankKeyLabel) so ORC shows the same word for the same key.
+    label = uf8::bindings::uf1SoftBankKeyLabel(bankNo, i);
     haveLabel = true;
     on = bindingHasActiveSlotForSet_(dawSlot, mIdx);
     // LED colour from the binding (active vs inactive colour + brightness),
@@ -32800,18 +32745,9 @@ static void uf1EmitSoftKeyRow_(const std::array<Uf1SkCell, 4>& cells,
     for (int i = 0; i < 4; ++i) {
         const Uf1SkCell& c = cells[static_cast<size_t>(i)];
         // Label (0x0104, <idx> + text) — SSL strip only; change-detected.
-        // 13 chars is the field; abbreviate past it (see kUf1SoftKeyChars).
-        // Fold to Latin-1 FIRST, for two reasons: the UF1 panel is one byte per
-        // glyph (see the sendZoneText comment), and folding before the length
-        // check makes that check and the byte-wise abbreviation character-safe
-        // instead of counting an umlaut as two and possibly cutting one in half.
-        // abbreviateTrackName_ therefore keeps foldLatin1=false — folding twice
-        // would re-decode the high bytes.
-        std::string label = utf8ToLatin1(c.label);
-        if (label.size() > kUf1SoftKeyChars)
-            label = abbreviateTrackName_(label,
-                                 static_cast<int>(kUf1SoftKeyChars),
-                                 TNM_SmartAbbrev, /*foldLatin1*/ false);
+        // Latin-1 first, then abbreviated to the 13-char field: uf1SoftKeyText
+        // in Uf1Text.cpp, shared with ORC, where the reasons are written out.
+        const std::string label = uf1SoftKeyText(c.label);
         if (c.haveLabel && (force || label != sSkLabel[i])) {
             sSkLabel[i] = label;
             std::vector<uint8_t> pb;
@@ -53702,51 +53638,9 @@ void registerBindingHandlers()
     // worker, so a key press never waits for a socket. The LED reads the state
     // OBS reports, not the state we asked for — pressing record while OBS is
     // busy leaves the lamp dark, which is the honest answer.
-    // ── TotalMix' control room (RME side-car factory bank, any surface) ──────
-    // The same thread rule as OBS: the handler only queues an OSC message, the
-    // lamp reads what TotalMix holds. TotalMix does not echo our own writes, so
-    // the manager folds them in at once; the lamp is right the next tick.
-    // regRmeCr is listed in tools/check_builtin_docs.py, like regUf1View.
-    {
-        using CR = reasixty::rme::Manager::ControlRoom;
-        auto regRmeCr = [](const char* name, const char* addr, bool CR::* flag,
-                           const char* label) {
-            registerBuiltin(name, DescBuilder{
-                [addr, flag](bool firing, bool /*pressed*/, int /*param*/) {
-                    if (!firing) return;
-                    auto& rm = reasixty::rme::manager();
-                    rm.send(addr, (rm.controlRoom().*flag) ? 0.0f : 1.0f);
-                },
-                [flag](int) { return reasixty::rme::manager().controlRoom().*flag; },
-                label, false
-            });
-        };
-        regRmeCr("rme_dim",       "/controlroom/dim",      &CR::dim,      "RME: Dim main output");
-        regRmeCr("rme_mono",      "/controlroom/mainmono", &CR::mono,     "RME: Main output mono");
-        regRmeCr("rme_speaker_b", "/controlroom/speakerb", &CR::speakerB, "RME: Speaker B");
-        regRmeCr("rme_talkback",  "/controlroom/talkback", &CR::talkback, "RME: Talkback");
-    }
-    // Main auf den Fader des RME-Side-Cars (Frank 21.09.: der V-Pot-Druck waehlt
-    // jetzt den Submix, also braucht Main einen eigenen Weg). Lampe an, solange
-    // Main auf dem Fader liegt.
-    // Das TotalMix-Fenster. ⚠ `/showwindow` steht in RMEs Tabelle (2.1 beta 2);
-    // Franks TotalMix ist 2.10 alpha 8, wo `/status/*` und `/sendstate` fehlten.
-    // Kommt das Fenster nicht, kennt diese Version die Adresse nicht. Die Lampe
-    // zeigt, was wir zuletzt gesendet haben, denn TotalMix meldet nichts zurueck.
-    registerBuiltin("rme_show_window", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (firing) rmeToggleWindow_();
-        },
-        [](int) { return g_rmeIn.windowShown.load(); },
-        "RME: Show the TotalMix window", false
-    });
-    registerBuiltin("rme_fader_main", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (firing) rmeFaderMainFire_();
-        },
-        [](int) { return rmeFaderMainActive_(); },
-        "RME: Main on the fader", false
-    });
+    // ── TotalMix: the six rme_* builtins ─────────────────────────────────────
+    // ⇨ They live in src/RmeBuiltins.cpp since 25.09.2026, shared with ORC.
+    reasixty::rme::registerBuiltins(g_rmeIn, rmeInputHost_());
     registerBuiltin("obs_record_toggle", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
