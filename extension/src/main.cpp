@@ -768,10 +768,11 @@ std::atomic<bool> g_uf1HueMode {false};
 // Side-Car ([[uf1-sidecar-rme-plan]]).
 //
 // Einstieg: Shift + MODE halten, dann einer der vier Display-Soft-Keys.
-// ItemVolume (= 1) is gone since 25.09.2026: its job is the Items jog mode with
-// "Fader = Item Volume". RmeMonitor keeps its number, so it stays on the second
-// soft key of the SHIFT+MODE page, and the first key is empty.
-enum class Uf1SideCar : uint8_t { None = 0, RmeMonitor = 2 };
+// ItemVolume is gone since 25.09.2026: its job is the Items jog mode with
+// "Fader = Item Volume". RME moved up to the first soft key of the SHIFT+MODE
+// page (Frank: "wieso nicht auf 1?"). The value is the page position + 1: the
+// picker stores `sc + 1`, the overlay lights `scNow - 1`. Nothing persists it.
+enum class Uf1SideCar : uint8_t { None = 0, RmeMonitor = 1 };
 constexpr int kUf1SideCarCount = 2;          // ohne None
 std::atomic<Uf1SideCar> g_uf1SideCar{Uf1SideCar::None};
 
@@ -782,8 +783,7 @@ std::atomic<bool> g_rmeAvailable{false};
 inline const char* uf1SideCarName_(int i)
 {
     switch (i) {
-        case 0: return "";        // was ITEM, see Uf1SideCar
-        case 1: return g_rmeAvailable.load() ? "RME" : "";   // TotalMix, needs ORC
+        case 0: return g_rmeAvailable.load() ? "RME" : "";   // TotalMix, needs ORC
         default: return "";       // 2..3 noch frei
     }
 }
