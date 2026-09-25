@@ -768,7 +768,10 @@ std::atomic<bool> g_uf1HueMode {false};
 // Side-Car ([[uf1-sidecar-rme-plan]]).
 //
 // Einstieg: Shift + MODE halten, dann einer der vier Display-Soft-Keys.
-enum class Uf1SideCar : uint8_t { None = 0, ItemVolume = 1, RmeMonitor = 2 };
+// ItemVolume (= 1) is gone since 25.09.2026: its job is the Items jog mode with
+// "Fader = Item Volume". RmeMonitor keeps its number, so it stays on the second
+// soft key of the SHIFT+MODE page, and the first key is empty.
+enum class Uf1SideCar : uint8_t { None = 0, RmeMonitor = 2 };
 constexpr int kUf1SideCarCount = 2;          // ohne None
 std::atomic<Uf1SideCar> g_uf1SideCar{Uf1SideCar::None};
 
@@ -779,7 +782,7 @@ std::atomic<bool> g_rmeAvailable{false};
 inline const char* uf1SideCarName_(int i)
 {
     switch (i) {
-        case 0: return "ITEM";
+        case 0: return "";        // was ITEM, see Uf1SideCar
         case 1: return g_rmeAvailable.load() ? "RME" : "";   // TotalMix, needs ORC
         default: return "";       // 2..3 noch frei
     }
@@ -790,7 +793,6 @@ inline int uf1SideCarSet_()
 {
     switch (g_uf1SideCar.load()) {
         case Uf1SideCar::RmeMonitor: return uf8::bindings::kUf1SideCarSetRme;
-        case Uf1SideCar::ItemVolume: return uf8::bindings::kUf1SideCarSetItem;
         default:                     return -1;
     }
 }
@@ -6294,6 +6296,11 @@ std::atomic<double> g_uf1JogStep[kUf1JogModeCount];
 // Which Jog Modes the Scrub-held picker offers (user on/off, analog to the encoder
 // ring visibility). ExtState "uf1JogVis<m>". Default all on.
 std::atomic<bool>   g_uf1JogVisible[kUf1JogModeCount];
+// ⇨ THE FADER GOES WITH THE JOG MODE, if the user wants it (Frank 25.09.2026:
+// "Jog-Modes ... damit die auch den Fader mitnehmen können wenn gewünscht (pro
+// Mode)"). Only Items has a fader target today: "Fader = Item Volume", which
+// replaced the Item Volume side-car. ExtState "uf1JogFader<m>", default off.
+std::atomic<bool>   g_uf1JogFader[kUf1JogModeCount];
 // …and the ORDER they come in. Same shape as the encoder ring
 // (g_uf1EncoderSeq): a PERMUTATION of the mode ints, position to mode, so the
 // SCRUB-held picker walks the order you set instead of the order the enum
@@ -23763,7 +23770,6 @@ void onUf1Input(const uint8_t* data, size_t len);       // UF1 raw bulk-IN (diag
 void onUf1Event(const uf1::InputEvent& ev);             // UF1 parsed control event
 void openUf1BringUp_();                                  // claim + handlers + colour proof
 void uf1PaintChannel_();                                 // main-thread channel-zone + colour painter
-static void uf1PaintSideCar_();                          // Side-Car: besitzt Schirm UND Fader
 static void uf1ChannelMeterBytes_(MediaTrack* tr, uint8_t& lvL, uint8_t& lvR,
                                   uint8_t& compByte, uint8_t& gateByte);  // small-LCD level+GR, both views
 // Bumped on every successful UF1 open(). The painters' send-on-change statics
@@ -32073,7 +32079,9 @@ std::string splitFaderUnit_(std::string v, std::string* unitOut);
 // resolved — the call has moved below it).
 // Resolved in uf1PaintChannel_, where the target flags live, and passed in:
 // re-deriving them here would be a second copy of the one decision.
-struct Uf1FaderDb { bool set = false; std::string value, unit; };
+// What the zone above the fader says about the fader's target. `name`, when
+// set, replaces the track name in that zone ("no item", 25.09.2026).
+struct Uf1FaderDb { bool set = false; std::string value, unit, name; };
 
 static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
                                   const StripRoute* sendOverride = nullptr,
@@ -32199,6 +32207,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
                                    /*foldLatin1*/ false);
     }
     if (sendZone) name = ovName;   // Extender: the 9th send's dest, not the track
+    if (faderDb && !faderDb->name.empty()) name = faderDb->name;
     if (!meterView && (changed || name != sName)) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
 
     // Output dB (0x000c): 0x00 + value left-justified, NUL-padded to 6, + 2-byte
@@ -33676,18 +33685,6 @@ static void uf1PaintModeMenuOverlay_(bool changed)
         }
 }
 
-// ── Side-Car: ITEM VOLUME ────────────────────────────────────────────────────
-// Der erste Bewohner, und der einfachste, den es gibt: der Fader faehrt die
-// Lautstaerke des ausgewaehlten Items.
-//
-// ⛔ EIN SIDE-CAR BESITZT AUCH DEN FADER, und das ist keine Redensart: die
-// Uebergabe kehrt oben aus uf1PaintChannel_ zurueck, also laeuft die
-// Fader-Besitzerkette dieses Malers gar nicht mehr. Wer den Schirm nimmt und
-// den Fader stehen laesst, hat einen Fader, der eine Spur faehrt, die nirgends
-// mehr zu sehen ist. Deshalb macht dieser Maler beides.
-//
-// Die Lautstaerke eines Items ist LINEARE VERSTAERKUNG wie die einer Spur
-// (1.0 = 0 dB), also gelten dieselben zwei Umrechnungen und dieselbe Kalibrierung.
 // ── Soft-Keys eines Side-Cars: seine eigenen Baenke ─────────────────────────
 // ⛔ DAS MODE-MENUE SCHREIBT SEINE VIER NAMEN DIREKT und verlaesst sich darauf,
 // dass der Besitzer des Schirms beim Loslassen seine eigenen zurueckschreibt
@@ -33696,7 +33693,7 @@ static void uf1PaintModeMenuOverlay_(bool changed)
 // Zellen ueber uf1StaticBankCell_ / uf1DynBankCell_, dieselbe Regel wie in der
 // DAW-Ansicht; eine dynamische Art (TotalMix-Snapshots, Frank 22.09.) blaettert
 // dieselbe Seite g_uf1DynBankPage.
-// EIN Schreiber fuer jedes Side-Car, beide Maler rufen ihn.
+// EIN Schreiber fuer das Side-Car (seit 25.09. gibt es nur noch RME).
 static void uf1PaintSideCarSoftKeys_(bool force)
 {
     const int set = uf1SideCarSet_();
@@ -33735,98 +33732,6 @@ static void uf1PaintSideCarSoftKeys_(bool force)
         uf1FlashTimecode_(uf1BankDisplayName_(bank,
             static_cast<int>(uf8::bindings::bankModifierSnapshot())), 1200);
     sBank = bank;
-}
-
-static void uf1PaintSideCar_()
-{
-    if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
-
-    static uint32_t sGen = 0xFFFFFFFFu;
-    const uint32_t gen = g_uf1Gen.load(std::memory_order_relaxed);
-    const bool force = (gen != sGen);
-    sGen = gen;
-
-    MediaItem* it = GetSelectedMediaItem(nullptr, 0);
-
-    // ── Fader ───────────────────────────────────────────────────────────────
-    // Dieselbe Touch-Entprellung wie im Kanalmaler: der kapazitive Sensor
-    // prellt waehrend eines Griffs, und den Motor bei jedem Prellen wieder
-    // einzuschalten schnappt den Fader auf den letzten Wert zurueck.
-    static auto sLastTouch = std::chrono::steady_clock::now() - std::chrono::seconds(10);
-    static uint16_t sMotorPos = 0xFFFF;
-    const auto nowT = std::chrono::steady_clock::now();
-    if (g_uf1FaderTouched.load()) sLastTouch = nowT;
-    const bool touched = g_uf1FaderTouched.load()
-        || (nowT - sLastTouch < std::chrono::milliseconds(150));
-
-    if (it && touched && g_uf1FaderHasPos.load()) {
-        const double vol = uf1PosToVol_(g_uf1FaderPos.load());
-        SetMediaItemInfo_Value(it, "D_VOL", vol);
-        UpdateItemInProject(it);
-    } else if (it) {
-        const uint16_t want = uf1VolToPos_(
-            GetMediaItemInfo_Value(it, "D_VOL"));
-        if (force || want != sMotorPos) {
-            sMotorPos = want;
-            g_uf1_dev->sendPriority(uf1::buildMotorEnable(true));
-            g_uf1_dev->send(uf1::buildMotorPosition(want));
-        }
-    }
-
-    // ── Schirm ──────────────────────────────────────────────────────────────
-    // Kein Item ausgewaehlt ist ein ZUSTAND und kein Fehler: die Zeile sagt es,
-    // der Fader bleibt stehen. Sonst faehrt er etwas, das niemand sieht.
-    std::string name = "no item";
-    std::string db;
-    if (it) {
-        const double vol = GetMediaItemInfo_Value(it, "D_VOL");
-        db = formatDbReadout(vol) + "dB";
-        // ⛔ Signatur nachgesehen, nicht erinnert: die Funktion gibt `bool`
-        // zurueck und schreibt in einen Puffer, den der Aufrufer stellt
-        // (reaper_plugin_functions.h:2869). Der erste Versuch hier hat ihren
-        // Rueckgabewert als `const char*` gelesen.
-        name.clear();
-        if (MediaItem_Take* tk = GetActiveTake(it)) {
-            char tn[256] = {0};
-            if (GetSetMediaItemTakeInfo_String(tk, "P_NAME", tn, false) && tn[0])
-                name = tn;
-        }
-        if (name.empty()) name = "Item";
-    }
-
-    // ⛔ UND DIE KLEINE ANZEIGE GEHOERT AUCH DAZU. Sie wird von
-    // uf1PaintChannelStrip_ gemalt, das NACH der Uebergabe steht — ohne diesen
-    // Aufruf bleibt der Name der Spur stehen, die der Fader gar nicht mehr
-    // faehrt (Frank 21.09.: "spur anzeige des fader stimmt nicht mehr").
-    // Gezeigt wird die Spur, auf der das Item liegt, mit dem Pegel des ITEMS —
-    // beides wahr, und zusammen sagen sie, was der Fader gerade tut.
-    {
-        Uf1FaderDb fdb;
-        if (it) { fdb.set = true; fdb.value = formatDbReadout(
-                      GetMediaItemInfo_Value(it, "D_VOL")); fdb.unit = "dB"; }
-        uf1PaintChannelStrip_(it ? GetMediaItem_Track(it) : nullptr,
-                              force, nullptr, &fdb);
-    }
-
-    Uf1VpotRow row;
-    uf1VpotCell_(row, 0, "Item", name);
-    uf1VpotCell_(row, 1, "Vol", db);
-    uf1VpotCell_(row, 2, "", "");
-    uf1VpotCell_(row, 3, "", "");
-    uf1VpotBar_(row, 0, 0.0, false, /*empty=*/true);
-    uf1VpotBar_(row, 1, it ? static_cast<double>(uf1VolToPos_(
-                    GetMediaItemInfo_Value(it, "D_VOL")))
-                    / static_cast<double>(kUf1FaderMax) : 0.0,
-                false, /*empty=*/!it);
-    uf1VpotBar_(row, 2, 0.0, false, true);
-    uf1VpotBar_(row, 3, 0.0, false, true);
-    uf1EmitVpotRow_(row, force);
-
-    // Die eigenen Soft-Key-Baenke des Item-Volume-Side-Cars (Satz 1).
-    uf1PaintSideCarSoftKeys_(force);
-
-    // Der Ausgang. Ohne ihn ist das Side-Car eine Falle.
-    uf1PaintModeMenuOverlay_(force);
 }
 
 // ── RME-Side-Car: der Maler ──────────────────────────────────────────────────
@@ -34166,8 +34071,7 @@ static bool uf1HandOverScreen_()
             uf1PaintLayoutProbe_();
             return true;
         case Uf1ScreenOwner::SideCar:
-            if (g_uf1SideCar.load() == Uf1SideCar::RmeMonitor) uf1PaintRme_();
-            else                                               uf1PaintSideCar_();
+            uf1PaintRme_();   // the only side-car since 25.09.2026
             return true;
         case Uf1ScreenOwner::Hue:
             if (g_paletteSwatch.load() >= 0) g_swDbgHue.fetch_add(1);
@@ -36098,6 +36002,21 @@ void uf1PaintChannel_()
     // Now the zone above the fader can name what the fader moves. Same order as
     // the branches below, so the readout and the write can never pick different
     // targets. The Extender's 9th send keeps arriving through sendOverride.
+    // ⇨ JOG MODE ITEMS WITH "FADER = ITEM VOLUME" (Frank 25.09.2026), the Item
+    // Volume side-car's job without the side-car. The fader drives EVERY
+    // selected item, PROPORTIONALLY: the first one follows the fader, the others
+    // take the same change in dB, so their differences stay. The motor follows
+    // the first item. No item: the fader stays put and the zone says "no item".
+    // First in all three chains below (readout, write, motor), because it is a
+    // choice the user made for this mode on purpose.
+    const bool itemFader = g_uf1JogMode.load() == Uf1JogMode::Items
+                        && g_uf1JogFader[static_cast<int>(Uf1JogMode::Items)].load();
+    std::vector<MediaItem*> selItems;
+    if (itemFader) {
+        const int n = CountSelectedMediaItems(nullptr);
+        for (int i = 0; i < n; ++i)
+            if (MediaItem* it = GetSelectedMediaItem(nullptr, i)) selItems.push_back(it);
+    }
     Uf1FaderDb faderDb;
     {
         auto fromParam = [&](MediaTrack* t, int fx, int prm) {
@@ -36114,7 +36033,16 @@ void uf1PaintChannel_()
             faderDb.value = splitFaderUnit_(v, &faderDb.unit);
             faderDb.set   = true;
         };
-        if (stripFader)            fromParam(ftr, csf.fxIndex, csf.vst3Param);
+        if (itemFader) {
+            if (!selItems.empty()) {
+                faderDb.value = formatDbReadout(GetMediaItemInfo_Value(selItems[0], "D_VOL"));
+                faderDb.unit  = "dB";
+            } else {
+                faderDb.name  = "no item";   // value and unit stay empty
+            }
+            faderDb.set = true;
+        }
+        else if (stripFader)       fromParam(ftr, csf.fxIndex, csf.vst3Param);
         else if (sendFader) {      // UF1-local SENDS + FLIP: the first shown send
             faderDb.value = formatDbReadout(
                 readRouteVolumeLinear_(sendRoute, ftr));
@@ -36135,10 +36063,30 @@ void uf1PaintChannel_()
     // End-of-edit finalise (finishRouteVolEdit_ isend=1) fired ONCE on touch-release,
     // so Touch-mode recording stops + snaps back like the surface send-fader path.
     static bool sSendFaderEditing = false;
+    static uint16_t sItemSentPos = 0xFFFF;   // last position written to the items
     if (touched) {
         const uint16_t pos = g_uf1FaderPos.load();
         if (g_uf1FaderHasPos.load()) {
-            if (!ftr) {
+            if (itemFader) {
+                // Once per position, not per tick: each write is one per item.
+                if (!selItems.empty() && pos != sItemSentPos) {
+                    sItemSentPos = pos;
+                    const double want = uf1PosToVol_(pos);
+                    const double was  = GetMediaItemInfo_Value(selItems[0], "D_VOL");
+                    const double top  = uf1PosToVol_(kUf1FaderMax);
+                    for (MediaItem* it : selItems) {
+                        // Same ratio for all = same dB change for all. A first
+                        // item at -inf has no ratio; then everyone takes the
+                        // fader's value.
+                        const double v = (was > 1e-9)
+                            ? GetMediaItemInfo_Value(it, "D_VOL") * (want / was)
+                            : want;
+                        SetMediaItemInfo_Value(it, "D_VOL", std::clamp(v, 0.0, top));
+                        UpdateItemInProject(it);
+                    }
+                }
+            }
+            else if (!ftr) {
                 // Empty 9th Extender slot → the fader has no target and stays
                 // INERT, like a blank UF8 strip (and like the empty-send slot
                 // below). It must NOT fall through to the CSurf_On*Change tail:
@@ -36219,8 +36167,14 @@ void uf1PaintChannel_()
             finishRouteVolEdit_(kExtSendGestureSlot);   // Extender 9th-send Touch finalise
             sExtFaderEditing = false;
         }
+        sItemSentPos = 0xFFFF;   // the next grab writes from its first position
         uint16_t pos;
-        if (!ftr) {
+        if (itemFader) {
+            // The motor follows the first item; with none, it stays where it is.
+            pos = !selItems.empty()
+                ? uf1VolToPos_(GetMediaItemInfo_Value(selItems[0], "D_VOL"))
+                : (sLastMotorPos != 0xFFFF ? sLastMotorPos : uint16_t{0});
+        } else if (!ftr) {
             pos = 0;   // empty 9th Extender slot → park low, like a blank strip
         } else if (stripFader) {
             const double n = TrackFX_GetParamNormalized(ftr, csf.fxIndex, csf.vst3Param);
@@ -50596,6 +50550,23 @@ void reasixty_setUf1JogModeVisible(int mode, bool on)
     SetExtState("rea_sixty", key, on ? "1" : "0", true);
 }
 int reasixty_uf1JogModeCount() { return kUf1JogModeCount; }
+// Whether a jog mode has a fader target at all (only Items, for now), and the
+// user's choice for it.
+bool reasixty_uf1JogModeHasFader(int mode)
+{
+    return mode == static_cast<int>(Uf1JogMode::Items);
+}
+bool reasixty_uf1JogFaderFollows(int mode)
+{
+    return (mode >= 0 && mode < kUf1JogModeCount) && g_uf1JogFader[mode].load();
+}
+void reasixty_setUf1JogFaderFollows(int mode, bool on)
+{
+    if (mode < 0 || mode >= kUf1JogModeCount) return;
+    g_uf1JogFader[mode].store(on);
+    char key[24]; std::snprintf(key, sizeof(key), "uf1JogFader%d", mode);
+    SetExtState("rea_sixty", key, on ? "1" : "0", true);
+}
 // Ring order, mirroring the encoder ring's accessors one for one.
 int reasixty_uf1JogSeqAt(int pos)
 {
@@ -57242,6 +57213,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         char vkey[24]; std::snprintf(vkey, sizeof(vkey), "uf1JogVis%d", m);
         if (const char* v = GetExtState("rea_sixty", vkey); v && *v)
             g_uf1JogVisible[m].store(std::atoi(v) != 0);
+        char fkey[24]; std::snprintf(fkey, sizeof(fkey), "uf1JogFader%d", m);
+        if (const char* v = GetExtState("rea_sixty", fkey); v && *v)
+            g_uf1JogFader[m].store(std::atoi(v) != 0);
     }
     // softKeyBank intentionally NOT restored from ExtState — every
     // REAPER load starts on V-POT (bank 0) so the row matches what

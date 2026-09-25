@@ -1,5 +1,8 @@
 # RME-Side-Car in Rea-Sixty: der ganze Plan
 
+> ⇨ **Stand 25.09.2026:** das Item-Volume-Side-Car gibt es nicht mehr. Seine Aufgabe übernimmt der Jog-Modus Items mit dem Haken „Fader = Item Volume" (Bindings → UF1 → JOG WHEEL): der Fader fährt alle gewählten Items proportional. Die Einstellungen des RME-Side-Cars liegen seit demselben Tag in ORC (`~/Library/Application Support/ORC/rme.json`), Rea-Sixty liest sie nur.
+
+
 Stand 21.09.2026, dritte Fassung. **Nichts davon ist gebaut.** Freigabe durch
 Frank steht aus. Alles hier ist nach v0.6.0 (Grenze `87edabf`).
 

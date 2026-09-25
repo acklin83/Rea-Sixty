@@ -201,6 +201,9 @@ const char* reasixty_uf1JogModeName(int mode);
 bool        reasixty_uf1JogModeVisible(int mode);
 void        reasixty_setUf1JogModeVisible(int mode, bool on);
 int         reasixty_uf1JogModeCount();
+bool        reasixty_uf1JogModeHasFader(int mode);
+bool        reasixty_uf1JogFaderFollows(int mode);
+void        reasixty_setUf1JogFaderFollows(int mode, bool on);
 int         reasixty_uf1JogSeqAt(int pos);
 void        reasixty_uf1JogMoveSeq(int pos, int dir);
 // Live jog mode — the nav-cross editor follows it and switching there switches
@@ -723,7 +726,6 @@ static const char* uf1BankSetName_(int set)
 {
     switch (set) {
         case uf8::bindings::kUf1SideCarSetRme:  return "Side-Car: RME";
-        case uf8::bindings::kUf1SideCarSetItem: return "Side-Car: Item Volume";
         default:                                return "DAW";
     }
 }
@@ -4713,6 +4715,16 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             } else { ImGui_TextDisabled(ctx, "\xE2\x96\xBC"); }
             ImGui_SameLine(ctx, nullptr, nullptr);
             ImGui_Text(ctx, reasixty_uf1JogModeName(m));
+            // The fader can go with the mode (Frank 25.09.2026); only Items
+            // has a fader target so far.
+            if (reasixty_uf1JogModeHasFader(m)) {
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                bool ff = reasixty_uf1JogFaderFollows(m);
+                if (ImGui_Checkbox(ctx, "Fader = Item Volume##jf", &ff))
+                    reasixty_setUf1JogFaderFollows(m, ff);
+                help_(ctx, "In this mode the fader moves every selected item, "
+                           "keeping their differences.");
+            }
             ImGui_PopID(ctx);
         }
         ImGui_Spacing(ctx);
@@ -8002,6 +8014,9 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             if (ImGui_BeginCombo(ctx, "Banks for##uf1bankset",
                                  uf1BankSetName_(g_uf1BankSet), nullptr)) {
                 for (int set = -1; set < uf8::bindings::kUf1SideCarBankSets; ++set) {
+                    // The Item Volume side-car is gone (25.09.2026); its banks
+                    // stay in the store so the RME banks keep their numbers.
+                    if (set == uf8::bindings::kUf1SideCarSetItem) continue;
                     bool isSel = (g_uf1BankSet == set);
                     if (ImGui_Selectable(ctx, uf1BankSetName_(set), &isSel,
                                          nullptr, nullptr, nullptr))
@@ -8009,9 +8024,8 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 }
                 ImGui_EndCombo(ctx);
             }
-            help_(ctx, "The DAW view's ten banks, or the ten of a side-car "
-                       "(Shift + MODE, then the side-car's key). Each side-car "
-                       "has its own. The RME side-car's bank 1 comes with Dim, "
+            help_(ctx, "The DAW view's ten banks, or the RME side-car's ten "
+                       "(Shift + MODE, then RME). Its bank 1 comes with Dim, "
                        "Mono, Speaker B and Talkback.");
             const int selBank = uf1EditLiveBank_();
             const int selSlot = slotIdx;
