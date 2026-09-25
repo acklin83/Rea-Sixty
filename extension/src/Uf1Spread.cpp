@@ -44,6 +44,43 @@ void barBytes(const Pot& p, std::array<std::uint8_t, 8>& bars,
 
 } // namespace
 
+int paintVpotRow(const VpotRow& row, VpotCache& cache, const Sink& out)
+{
+    const bool all = !cache.valid;
+    int n = 0;
+    auto send = [&](std::vector<std::uint8_t> f) { out(std::move(f)); ++n; };
+
+    // Leaving Layout 1 clears the per-pot text once, the index byte alone and
+    // nothing behind it, the way SSL empties one. Otherwise a name survives into
+    // a layout that might draw it.
+    if (row.layout1 || cache.namesShown) {
+        for (std::uint8_t i = 0; i < 4; ++i) {
+            const std::string nm = row.layout1 ? row.names[i] : std::string();
+            if (!all && cache.namesShown == row.layout1 && nm == cache.names[i]) continue;
+            cache.names[i] = nm;
+            send(uf1::buildScreen(uf1::scr::kVpotNumber, indexedText(i, nm)));
+        }
+        cache.namesShown = row.layout1;
+    }
+    for (std::uint8_t i = 0; i < 4; ++i) {
+        if (!all && cache.valid && row.line[i] == cache.line[i]) continue;
+        cache.line[i] = row.line[i];
+        send(uf1::buildScreen(uf1::scr::kFocusedParam, indexedText(i, row.line[i])));
+    }
+    if (all || row.bars != cache.bars) {
+        cache.bars = row.bars;
+        send(uf1::buildScreen(uf1::scr::kVpotBars, row.bars));
+    }
+    // Its own gate: a page whose positions happen to repeat still gets its
+    // styles corrected.
+    if (all || row.styles != cache.styles) {
+        cache.styles = row.styles;
+        send(uf1::buildScreen(uf1::scr::kVpotStyle, row.styles));
+    }
+    cache.valid = true;
+    return n;
+}
+
 int paint(const View& v, Cache& cache, const Sink& out)
 {
     const bool all = !cache.valid;

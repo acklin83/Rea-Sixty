@@ -39,6 +39,39 @@ namespace uf1spread {
 // for. Rea-Sixty and ORC pass their device's send(); the test collects them.
 using Sink = std::function<void(std::vector<std::uint8_t>)>;
 
+// ── the V-Pot row ─────────────────────────────────────────────────────────────
+// The row as the extension has always composed it: text already folded to
+// Latin-1, bars and styles already computed. It moved here from main.cpp so that
+// there is exactly one emitter for these four elements. There used to be two,
+// each with its own cache, and leaving a mode left the other mode's labels on
+// the glass because the second believed they were already there (19.09.2026).
+struct VpotRow {
+    std::array<std::string, 4> line{};
+    std::array<std::uint8_t, 8> bars{};
+    // 0x03 = empty. The channel painter starts from "all four blank" and lights
+    // only what it fills; Hue sets all four every time.
+    std::array<std::uint8_t, 4> styles{ 0x03, 0x03, 0x03, 0x03 };
+    // ⇨ LAYOUT 1: the name goes into the per-pot text field and `line` carries
+    // the value alone, 14 capitals wide there. Styles 0x01 and 0x08 hide the
+    // whole row in Layout 1.
+    bool layout1 = false;
+    std::array<std::string, 4> names{};
+};
+
+// What the row is believed to be showing. Default = nothing known, so the next
+// call writes every cell. That is what the old `force` flag meant, made into a
+// value the caller holds instead of a static nobody could reset.
+struct VpotCache {
+    bool valid = false;
+    std::array<std::string, 4> line{};
+    std::array<std::uint8_t, 8> bars{};
+    std::array<std::uint8_t, 4> styles{};
+    std::array<std::string, 4> names{};
+    bool namesShown = false;
+};
+
+int paintVpotRow(const VpotRow& row, VpotCache& cache, const Sink& out);
+
 struct Pot {
     std::string name;            // Layout-1 per-pot text, 8 characters
     std::string line;            // the value line under it

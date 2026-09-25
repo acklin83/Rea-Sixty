@@ -371,6 +371,7 @@ add_library(reaper_uf8 MODULE
     src/FocusedParam.cpp
     src/UF8Device.cpp
     src/UF1Protocol.cpp
+    src/Uf1Spread.cpp
     src/UF1Device.cpp
     src/UC1Protocol.cpp
     src/UC1Device.cpp

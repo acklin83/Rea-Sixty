@@ -115,6 +115,7 @@
 #include "assignment_hud_lua.h"   // generated: uf8::setup_bundle::kAssignmentHudLua{Bytes,Size}
 #include "focused_panel_lua.h"    // generated: uf8::setup_bundle::kFocusedPanelLua{Bytes,Size}
 #include "mode_banner_lua.h"      // generated: uf8::setup_bundle::kModeBannerLua{Bytes,Size}
+#include "Uf1Spread.h"   // the shared UF1 painter, drawn by ORC too
 
 // File-global so both onTimer() and the insert setters (which live in an
 // anonymous namespace) bind to the SAME global symbol defined near the
@@ -33446,22 +33447,11 @@ void applyUf1HueVpot_(uint8_t id, int step)
 // on the glass. A g_uf1Gen bump papered over it; one cache removes it.
 //
 // Fill four cells, call, done. Never build a second emitter.
-struct Uf1VpotRow {
-    // Already composed AND folded to Latin-1 — a V-Pot cell is uf1ValueLine()
-    // plus utf8ToLatin1(), and that is not a fact each caller should re-know.
-    std::array<std::string, 4> line{};
-    std::array<uint8_t, 8>     bars{};
-    // 0x03 = empty. The channel painter has always started from "all four
-    // blank" and only lights the slots it fills; Hue sets all four every time,
-    // so this default is the channel painter's behaviour preserved, not a new one.
-    std::array<uint8_t, 4>     styles{0x03, 0x03, 0x03, 0x03};
-    // ⇨ LAYOUT 1 (RME side-car, plan 6a): the name goes into the per-pot text
-    // field 0x010b (8 characters) and `line` carries the value alone (0x010e,
-    // 14 capitals wide there). Our 19-character Layout-3 line does not fit, and
-    // styles 0x01 / 0x08 hide the whole row in Layout 1 (runbook 21.09.).
-    bool                       layout1 = false;
-    std::array<std::string, 4> names{};
-};
+// ⇨ MOVED to src/Uf1Spread.h, together with its one emitter: ORC draws the
+// same four elements on the same surface, and two emitters with a cache each
+// is exactly how this row drifted apart before (repaired 19.09.2026). An alias
+// rather than a rename, so the five call sites stay as they are.
+using Uf1VpotRow = uf1spread::VpotRow;
 
 // Compose one cell's text. The 9-char label zone + 10-char value zone lives in
 // uf1ValueLine; the Latin-1 fold belongs at the emit because a plug-in's param
@@ -33522,48 +33512,14 @@ static void uf1VpotBar_(Uf1VpotRow& row, int i, double norm,
 static void uf1EmitVpotRow_(const Uf1VpotRow& row, bool force)
 {
     if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
-    static std::array<std::string, 4> sLine{};
-    static std::array<uint8_t, 8>     sBars{};
-    static std::array<uint8_t, 4>     sStyles{};
-    static bool                       sValid = false;
-    static std::array<std::string, 4> sNames{};
-    static bool                       sNamesShown = false;
-    // The Layout-1 text field. Leaving Layout 1 clears it once (index byte
-    // alone, the way SSL empties a V-Pot field in cap141), so nothing of it
-    // survives into a layout that might draw it.
-    if (row.layout1 || sNamesShown) {
-        for (uint8_t i = 0; i < 4; ++i) {
-            const std::string nm = row.layout1 ? row.names[i] : std::string();
-            if (!force && sNamesShown == row.layout1 && nm == sNames[i]) continue;
-            sNames[i] = nm;
-            std::vector<uint8_t> p;
-            p.push_back(i);
-            p.insert(p.end(), nm.begin(), nm.end());
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotNumber, p));
-        }
-        sNamesShown = row.layout1;
-    }
-    for (uint8_t i = 0; i < 4; ++i) {
-        const std::string& ln = row.line[i];
-        if (!force && sValid && ln == sLine[i]) continue;
-        sLine[i] = ln;
-        std::vector<uint8_t> p;
-        p.reserve(1 + ln.size());
-        p.push_back(i);
-        p.insert(p.end(), ln.begin(), ln.end());
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kFocusedParam, p));
-    }
-    if (force || !sValid || row.bars != sBars) {
-        sBars = row.bars;
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotBars, row.bars));
-    }
-    // Independent gate: a page whose positions happen to repeat still gets its
-    // styles corrected.
-    if (force || !sValid || row.styles != sStyles) {
-        sStyles = row.styles;
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVpotStyle, row.styles));
-    }
-    sValid = true;
+    // ⇨ The emit itself is uf1spread::paintVpotRow, shared with ORC. What stays
+    // here is the device and the cache. `force` meant "send everything
+    // regardless"; with an explicit cache that is a cache which believes
+    // nothing, so the five callers and the bytes on the wire are unchanged.
+    static uf1spread::VpotCache sCache;
+    if (force) sCache = uf1spread::VpotCache{};
+    uf1spread::paintVpotRow(row, sCache,
+        [](std::vector<uint8_t> f) { g_uf1_dev->send(std::move(f)); });
 }
 
 static void uf1PaintHue_()
