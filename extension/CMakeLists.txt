@@ -905,3 +905,32 @@ if(NOT WIN32)
         target_link_libraries(rme_osc_probe PRIVATE ws2_32)
     endif()
 endif()
+
+# ----- ORC ---------------------------------------------------------------------
+# Open Remote Control: the UF1 as a monitor controller for RME TotalMix, with no
+# DAW under it. Its own program, in this repo because it lives off the same
+# REAPER-free model the extension does — the protocol, the device, the TotalMix
+# state, the strip catalogue, the EQ curve. A second repository would mean
+# copies of those, and copies that drift apart are the most expensive mistake
+# this project has made: the V-Pot row ran on two caches and the EQ curve was
+# re-derived as a Gaussian when it was split (both repaired 2026-09-19).
+#
+# ⛔ THE SOURCE LIST IS THE WALL. main.cpp is not in it and must never be. The
+# extension asks REAPER questions on nearly every line; ORC cannot link a single
+# one of them. If someone later reaches across, this target stops building, and
+# that is deliberate: the boundary is checked by the linker rather than
+# remembered by whoever is editing.
+#
+# macOS first. Windows and Linux need their own USB permissions story and are
+# not in scope yet, so the target is gated rather than left to fail confusingly.
+if(APPLE)
+    add_executable(orc
+        orc/main.cpp
+        src/UF1Device.cpp
+        src/UF1Protocol.cpp
+        src/LogPath.cpp)
+    target_include_directories(orc PRIVATE src)
+    target_link_libraries(orc PRIVATE reasixty_libusb Threads::Threads)
+    set_target_properties(orc PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+endif()
