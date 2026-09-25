@@ -2,11 +2,12 @@
 //
 // ORC's own files, and where they live.
 //
-// ⛔ ORC WRITES ITS OWN rme.json, NOT THE EXTENSION'S. RmeManager.h carries the
-// older intent that both programs should share one file. Frank decided against
-// it on 2026-09-25: a shared file is two writers, and two writers on one value
-// is the mistake this project pays for most often. The price is that whoever
-// runs both sets host and ports twice, which is three fields.
+// ⛔ ONE FILE, ONE WRITER, AND THE WRITER IS ORC. Frank, 25.09.2026 evening:
+// "Die ganze Konfig für den RME Side-Car kommt in ORC. Rea-Sixty übernimmt dann
+// die dortigen Einstellungen." Rea-Sixty's side-car reads this rme.json and
+// never writes it; its own copy and its RME settings page are gone. (Earlier
+// the same day each program had its own file; the rule that survived is the
+// one about writers.)
 //
 //   ~/Library/Application Support/ORC/orc.json   the bindings (stage 6)
 //   ~/Library/Application Support/ORC/rme.json   the TotalMix link

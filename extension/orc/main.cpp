@@ -83,6 +83,11 @@ int main()
     // there the TotalMix link is a side-car. In ORC it is the whole job, so the
     // first run comes up talking.
     if (!hadFile) cfg.enabled = true;
+    // ⇨ AND WRITE IT DOWN AT ONCE. Rea-Sixty reads this file for its RME
+    // side-car and treats a missing one as "no ORC here" (25.09.2026). ORC used
+    // to save only after an edit, so a fresh install would have looked absent
+    // to REAPER until someone touched a setting.
+    if (!hadFile) orc::saveRmeConfig(cfg);
     rme::manager().setConfig(cfg);
     // Loading is not an edit. Clearing the flag here is what stops the first
     // frame from writing the file back out over a file nobody touched.

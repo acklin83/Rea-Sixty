@@ -4,8 +4,9 @@
 //
 // One UDP socket on its own worker thread, the state cache from RmeState, and a
 // send queue. No REAPER API anywhere in here, on purpose: the standalone ORC is
-// meant to carry the same link without REAPER, and the file this reads and
-// writes (rme.json) is meant to be the same file.
+// meant to carry the same link without REAPER. Its settings (rme.json) belong
+// to ORC since 25.09.2026: ORC writes ~/Library/Application Support/ORC/rme.json,
+// the extension only reads it (reasixty_rmeConfigPath_ in main.cpp).
 //
 // ⇨ FOUR THINGS THAT WERE MEASURED, NOT ASSUMED (2026-09-21, Frank's rig):
 //

@@ -772,11 +772,15 @@ enum class Uf1SideCar : uint8_t { None = 0, ItemVolume = 1, RmeMonitor = 2 };
 constexpr int kUf1SideCarCount = 2;          // ohne None
 std::atomic<Uf1SideCar> g_uf1SideCar{Uf1SideCar::None};
 
+// True while ORC's rme.json is there to read (see reasixty_rmeConfigPath_).
+// Without it the RME side-car is not offered: no settings, no link.
+std::atomic<bool> g_rmeAvailable{false};
+
 inline const char* uf1SideCarName_(int i)
 {
     switch (i) {
         case 0: return "ITEM";
-        case 1: return "RME";     // TotalMix, docs/uf1-spread-plan.md
+        case 1: return g_rmeAvailable.load() ? "RME" : "";   // TotalMix, needs ORC
         default: return "";       // 2..3 noch frei
     }
 }
@@ -4033,20 +4037,69 @@ std::map<std::string, std::string> g_trackBcSet;   // trackGUID → BC-set name
 static std::vector<NamedFavSet>&          favLib_(bool cs)       { return cs ? g_csSets : g_bcSets; }
 static std::map<std::string, std::string>& favAssignMap_(bool cs) { return cs ? g_trackCsSet : g_trackBcSet; }
 
-// <ResourcePath>/rea_sixty/rme.json, the TotalMix link's settings. Its own file
-// so the standalone ORC can read it without REAPER. Creates the folder, like
-// every other file we keep there.
+// ⇨ THE TOTALMIX SETTINGS ARE ORC'S (Frank, 25.09.2026: "Die ganze Konfig für
+// den RME Side-Car kommt in ORC. Rea-Sixty übernimmt dann die dortigen
+// Einstellungen"). ORC writes ~/Library/Application Support/ORC/rme.json and is
+// its only writer; Rea-Sixty reads it at start and whenever it changes, and
+// never writes it. Until that day the extension kept its own copy under
+// <ResourcePath>/rea_sixty/, edited from Modes → RME; both are gone.
+// ⛔ No ORC, no RME side-car: on Windows and Linux until ORC runs there, and on
+// a Mac where ORC is not installed. Empty path = not available here.
 static std::string reasixty_rmeConfigPath_()
 {
-    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
-    std::string d = (base && *base) ? base : ".";
-    d += "/rea_sixty";
-#ifdef _WIN32
-    _mkdir(d.c_str());
+#ifdef __APPLE__
+    const char* home = std::getenv("HOME");
+    return home ? std::string(home) + "/Library/Application Support/ORC/rme.json"
+                : std::string();
 #else
-    mkdir(d.c_str(), 0755);
+    return std::string();
 #endif
-    return d + "/rme.json";
+}
+
+// Read ORC's rme.json into the link when it is new or changed (modification
+// time and size), or always with `force`. A missing file switches the link off
+// and withdraws the RME side-car; a file that does not parse leaves the running
+// settings alone, the same rule configFromJson follows.
+static void reasixty_rmeLoadConfig_(bool force)
+{
+    static long long sMtime = -1, sSize = -1;
+    auto& rm = reasixty::rme::manager();
+    const std::string path = reasixty_rmeConfigPath_();
+    struct stat sb{};
+    const bool have = !path.empty() && ::stat(path.c_str(), &sb) == 0;
+    if (!have) {
+        if (force || g_rmeAvailable.load()) {
+            g_rmeAvailable.store(false);
+            sMtime = sSize = -1;
+            reasixty::rme::Config off = rm.config();
+            off.enabled = false;
+            rm.setConfig(off);
+            rm.takeConfigDirty();   // nothing of ours to write, ever
+            if (g_uf1SideCar.load() == Uf1SideCar::RmeMonitor)
+                g_uf1SideCar.store(Uf1SideCar::None);
+        }
+        return;
+    }
+#ifdef __APPLE__
+    const long long mt = static_cast<long long>(sb.st_mtimespec.tv_sec) * 1000000000LL
+                       + sb.st_mtimespec.tv_nsec;
+#else
+    const long long mt = static_cast<long long>(sb.st_mtime);
+#endif
+    const long long sz = static_cast<long long>(sb.st_size);
+    if (!force && mt == sMtime && sz == sSize) return;
+    sMtime = mt; sSize = sz;
+    std::string json;
+    if (FILE* f = std::fopen(path.c_str(), "rb")) {
+        char buf[4096];
+        size_t n;
+        while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) json.append(buf, n);
+        std::fclose(f);
+    }
+    reasixty::rme::Config c = rm.config();
+    if (!json.empty() && reasixty::rme::configFromJson(json, c)) rm.setConfig(c);
+    rm.takeConfigDirty();           // read, not changed: nobody writes it back
+    g_rmeAvailable.store(true);
 }
 
 static std::string favSetsFilePath_()
@@ -26102,7 +26155,8 @@ void onUf1Event(const uf1::InputEvent& ev)
                 // dorthin zurueckfuehrt, wo man herkam.
                 if (shiftHeldAnywhere_()) {
                     const int sc = ev.id - uf1::btn::kDisplaySoft1;
-                    if (sc >= 0 && sc < kUf1SideCarCount) {
+                    // An empty place is empty: RME without ORC is not offered.
+                    if (sc >= 0 && sc < kUf1SideCarCount && *uf1SideCarName_(sc)) {
                         const auto want = static_cast<Uf1SideCar>(sc + 1);
                         const auto cur  = g_uf1SideCar.load();
                         g_uf1SideCar.store(cur == want ? Uf1SideCar::None : want);
@@ -42459,22 +42513,10 @@ static void tickHueTransport_()
                         om.serializeCredentials().c_str(), true);
         }
     }
-    // And the TotalMix link, into its own file (see the load in init). Written
-    // to a temporary name and moved over, so a crash mid-write cannot leave a
-    // half file that the next start refuses and silently replaces by defaults.
-    {
-        auto& rm = reasixty::rme::manager();
-        if (rm.takeConfigDirty()) {
-            const std::string path = reasixty_rmeConfigPath_();
-            const std::string tmp  = path + ".tmp";
-            if (FILE* f = std::fopen(tmp.c_str(), "wb")) {
-                const std::string j = reasixty::rme::configToJson(rm.config());
-                std::fwrite(j.data(), 1, j.size(), f);
-                std::fclose(f);
-                std::rename(tmp.c_str(), path.c_str());
-            }
-        }
-    }
+    // And the TotalMix link: ⛔ NEVER WRITTEN FROM HERE. ORC owns rme.json; this
+    // only follows it, once a second, so a change in ORC's settings window
+    // reaches the side-car while REAPER runs.
+    if ((g_tickCounter % 30) == 0) reasixty_rmeLoadConfig_(/*force*/ false);
 
     // ---- recording light ---------------------------------------------------
     {
@@ -56974,28 +57016,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     }
 
     initLog("step: load RME config");
-    // ⇨ rme.json, NOT ExtState. The standalone ORC is meant to read the same
-    // file without REAPER, so the TotalMix link keeps its settings in a file of
-    // its own next to bindings.json (docs/uf1-spread-plan.md). The worker starts
-    // either way and idles while the link is off, like the OBS one.
-    {
-        auto& rm = reasixty::rme::manager();
-        std::string json;
-        if (FILE* f = std::fopen(reasixty_rmeConfigPath_().c_str(), "rb")) {
-            char buf[4096];
-            size_t n;
-            while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) json.append(buf, n);
-            std::fclose(f);
-        }
-        reasixty::rme::Config c = rm.config();
-        if (!json.empty() && reasixty::rme::configFromJson(json, c)) rm.setConfig(c);
-        // Loaded, not changed: nothing to write back, UNLESS the file is in an
-        // older shape (rme.json v1 kept "select" on the pots, which loading turns
-        // into "submix" in memory only). Then the tick writes it once.
-        if (json.empty() || reasixty::rme::configToJson(rm.config()) == json)
-            rm.takeConfigDirty();
-        rm.start();
-    }
+    // ⇨ ORC's rme.json, read only (see reasixty_rmeConfigPath_). The worker
+    // starts either way and idles while the link is off, like the OBS one.
+    reasixty_rmeLoadConfig_(/*force*/ true);
+    reasixty::rme::manager().start();
 
     initLog("step: deploy input-level JSFX");
     // Make the "Rea-Sixty Input Level" probe available in the FX browser.

@@ -16,7 +16,7 @@ Alles nach v0.6.0.
 
 | | Stand |
 |---|---|
-| OSC-Link `RmeManager`, Remote 3 (7005/7006), `rme.json`, Settings → Modes → RME | gebaut, läuft |
+| OSC-Link `RmeManager`, Remote 3 (7005/7006), `rme.json` | gebaut, läuft. ⇨ Seit 25.09.: Einstellungen nur noch in ORC (`~/Library/Application Support/ORC/rme.json`), Rea-Sixty liest mit, die Seite Modes → RME gibt es nicht mehr |
 | UF1-Side-Car „RME": 4 V-Pots (Phones 1-4), Fader = gewählter Kanal, drei Reihen, Submix, Jog = Main, EQ-Graph, Kopfzeile, Pegel | gebaut, von Frank getestet („läuft eigentlich alles") |
 | eigene Soft-Key-Bänke + `rme_dim` / `rme_mono` / `rme_speaker_b` / `rme_talkback` | offen (Schritt 4) |
 | **REC/RME-Modus** (seit 19.08., `9590d85`): UF8, UC1, UF1 fahren Gain, 48V, Pad, Phase, AutoLevel eines REAPER-Spur-Eingangs über **TotalReaper-Actions**, lesen den Zustand aus `P_EXT:totalreaper_*` | gebaut, im Einsatz |
