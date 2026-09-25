@@ -151,6 +151,36 @@ std::optional<Rgb> paletteEntry(uint8_t index)
     return kPalette[index];
 }
 
+// ⇨ THE NAMES LIVE NEXT TO THE COLOURS, ON PURPOSE.
+// Up to 2026-09-25 the sixteen indices were named only in the comments of
+// kPalette above, so anything that wanted to show a user "0x03" as a word had
+// to carry its own list. A second list is a second truth, and this project has
+// paid for that twice (the V-Pot row, the EQ curve). ORC's settings window is
+// the first caller.
+//
+// Wherever a palette index is offered for choosing, this word is the label and
+// a swatch is the decoration beside it: a name can be searched, quoted in a bug
+// report and compared against SSL's own list, and a coloured square cannot.
+const char* paletteName(uint8_t index)
+{
+    switch (index) {
+        case 0x00: return "off";
+        case 0x01: return "light blue / light violet";
+        case 0x02: return "red";
+        case 0x03: return "bright green";
+        case 0x04: return "deep blue";
+        case 0x05: return "cyan";
+        case 0x06: return "violet (purple)";
+        case 0x07: return "lime green";
+        case 0x08: return "dark orange / brown";
+        case 0x09: return "blue leaning violet";
+        case 0x0A: return "pale light green";
+        case 0x0B: return "lighter violet";
+        case 0x0C: return "light blue";
+        default:   return "off";
+    }
+}
+
 uint8_t quantize(Rgb c)
 {
     // Greys and near-greys → 0x00 OFF. The display palette has no

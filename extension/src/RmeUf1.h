@@ -75,6 +75,16 @@ double      panValue(const State& st, Row r, int ch, int submix, bool& known);
 // Name and palette colour of a channel, "" / -1 when unknown.
 const Channel* channelOf(const State& st, Row r, int ch);
 
+// ⇨ TOTALMIX' OWN NAME FOR A CHANNEL COLOUR, 0 (hidden) to 8.
+// Read off the colour menu in TotalMix FX on 2026-09-25, in the order the menu
+// lists them. Until then only two of the nine were written down anywhere in
+// this project ("1 white .. 8 pink" in RmeManager.h) and the other six had no
+// name at all, so a settings page could only show numbers. The vendor's own
+// interface is a source; these are not derived from the RGB we paint.
+// ⚠ These name the MIXER's colour, not the UF1's. What the surface shows is
+// Config::colourMap[index], a palette entry with its own name in Palette.cpp.
+const char* colourName(int index);
+
 // ⇨ WHAT THE UF1 CALLS A CHANNEL. An output that carries a control-room role is
 // shown by the ROLE ("Phones 3"), not by its strip name ("MADI 49/50"): the
 // role is what the user put on the pot, the strip name is TotalMix' routing

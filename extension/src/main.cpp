@@ -92,6 +92,13 @@
 #include "DynaMountManager.h"
 #include "HueManager.h"
 #include "ObsManager.h"
+#include "RmeFace.h"
+#ifdef __APPLE__
+#include <unistd.h>   // getpid, for the ORC handover marker
+#endif
+#include "Uf1Pacer.h"
+#include "RmeInput.h"
+#include "Uf1Text.h"
 #include "RmeManager.h"
 #include "RmeNames.h"
 #include "BindingsPick.h"
@@ -772,13 +779,6 @@ inline const char* uf1SideCarName_(int i)
     }
 }
 
-// ⇨ RME-SIDE-CAR: was gerade gewaehlt ist. Atomics, weil die Eingaben auf dem
-// libusb-Thread ankommen und der Maler auf dem Hauptthread liest. Beides fasst
-// keine REAPER-API an, nur rme::manager(), und der ist threadsicher.
-//   g_rmeRow        die Reihe, RmeUf1 Row (0 Input, 1 Playback, 2 Output)
-//   g_rmeSel[row]   der gewaehlte Kanal pro Reihe, -1 = noch keiner
-//   g_rmeSubmix     der zuletzt gewaehlte Ausgang = der Submix, in den Eingaenge
-//                   und Playbacks schreiben, genau wie ein Klick in TotalMix
 // Welcher Bank-Satz zum laufenden Side-Car gehoert, -1 ohne Side-Car.
 inline int uf1SideCarSet_()
 {
@@ -788,27 +788,28 @@ inline int uf1SideCarSet_()
         default:                     return -1;
     }
 }
-std::atomic<int> g_rmeRow{2};
-std::atomic<int> g_rmeSel[3] = { -1, -1, -1 };
-std::atomic<int> g_rmeSubmix{-1};
-// Welche Bank der vier V-Pots, 0 oder 1, per 5-8 (Frank 21.09.: Bank 1 Phones
-// 1-4, Bank 2 Main A / Main B). Slot = Pot + 4 * Bank in rme::Config::vpots.
-std::atomic<int> g_rmeVpotBank{0};
-// ⇨ STRIP, die Kanalansicht (docs/rme-strip-and-uf8-plan.md 3). Druck auf den
-// Kanal-Encoder oeffnet die Einstellungen des Kanals auf dem Fader, ein zweiter
-// schliesst. g_rmeStripPage ist ein Index in Config::stripPages und bleibt beim
-// Kanalwechsel stehen; hat der neue Kanal die Seite nicht, zeigt der Maler die
-// erste, die er hat.
-std::atomic<bool> g_rmeStrip{false};
-// ⇨ DAS TOTALMIX-FENSTER, UNSER SCHALTER. `/showwindow` nimmt 0 oder 1, und
-// TotalMix meldet den Fensterzustand nirgends zurueck — also ist der Umschalter
-// unserer und merkt sich, was zuletzt gesendet wurde (Frank 23.09., Nav-Mitte
-// im Side-Car, dort wo die ARC ihr Dim hat).
-std::atomic<bool> g_rmeWindowShown{false};
-std::atomic<int>  g_rmeStripPage{0};
+// ⇨ EINE INSTANZ STATT SIEBEN GLOBALEN (25.09.2026). Der Zustand gehoert jetzt
+// dem Aufrufer, wie der Cache beim Maler, und die Regeln darauf stehen in
+// src/RmeInput.{h,cpp}, wo ORC sie mitbenutzt statt sie abzuschreiben.
+// Weiter Atomics, aus demselben Grund wie vorher: die Eingaben kommen auf dem
+// libusb-Thread an und der Maler liest auf dem Hauptthread.
+//   .row        die Reihe, RmeUf1 Row (0 Input, 1 Playback, 2 Output)
+//   .sel[row]   der gewaehlte Kanal pro Reihe, -1 = noch keiner
+//   .submix     der zuletzt gewaehlte Ausgang = der Submix, in den Eingaenge
+//               und Playbacks schreiben, genau wie ein Klick in TotalMix
+//   .vpotBank   welche Bank der vier V-Pots, 0 oder 1, per 5-8 (Frank 21.09.:
+//               Bank 1 Phones 1-4, Bank 2 Main A / Main B)
+//   .strip      STRIP, die Kanalansicht (docs/rme-strip-and-uf8-plan.md 3)
+//   .stripPage  Index in Config::stripPages, bleibt beim Kanalwechsel stehen;
+//               hat der neue Kanal die Seite nicht, zeigt der Maler die erste
+//   .windowShown ⇨ UNSER SCHALTER: `/showwindow` nimmt 0 oder 1, und TotalMix
+//               meldet den Fensterzustand nirgends zurueck, also merkt sich der
+//               Umschalter was zuletzt gesendet wurde (Frank 23.09., Nav-Mitte)
+static reasixty::rme::input::State g_rmeIn;
+
 static int rmeVpotSlot_(int pot)
 {
-    return pot + 4 * std::clamp(g_rmeVpotBank.load(), 0,
+    return pot + 4 * std::clamp(g_rmeIn.vpotBank.load(), 0,
                                 reasixty::rme::Config::kVpotBanks - 1);
 }
 // Die aktive Bank JEDES Side-Car-Satzes, relativ (0..kUf1SideCarBankCount-1).
@@ -1579,6 +1580,50 @@ constexpr int kSeenUf8 = 0b001;
 constexpr int kSeenUc1 = 0b010;
 constexpr int kSeenUf1 = 0b100;
 
+// ⇨ THE UF1 AND ORC ON ONE MACHINE (Frank 25.09.2026, "Weg c"). The USB claim is
+// exclusive: whoever holds the UF1 has it. ORC, the standalone, polls for it;
+// Rea-Sixty used to try exactly once at REAPER start and then never again, so a
+// UF1 that ORC held at that moment stayed ORC's for the whole session.
+// Two parts, no protocol:
+//   · a MARKER, ~/Library/Application Support/ORC/handover, holding REAPER's
+//     pid. While it exists and that process lives, ORC lets go of the UF1 and
+//     leaves it alone. It is written only when the setting below is on, and
+//     only if ORC's folder exists (no ORC installed, no litter).
+//   · PATIENCE. A UF1 that did not open at start is retried by the stale-handle
+//     loop in onTimer (every 5 s), exactly like one that went stale later.
+// The setting (Devices, "Take the UF1 over from ORC") decides whether REAPER
+// asks. Off: Rea-Sixty still takes a free UF1, it just does not ask ORC for it.
+std::atomic<bool> g_uf1TakeFromOrc{true};
+std::atomic<bool> g_uf1WantRetry{false};
+
+static std::string orcHandoverPath_()
+{
+#ifdef __APPLE__
+    const char* home = std::getenv("HOME");
+    return home ? std::string(home) + "/Library/Application Support/ORC/handover"
+                : std::string();
+#else
+    return std::string();   // ORC exists on macOS only
+#endif
+}
+
+static void orcHandoverMark_(bool want)
+{
+#ifdef __APPLE__
+    const std::string path = orcHandoverPath_();
+    if (path.empty()) return;
+    if (!want) { std::remove(path.c_str()); return; }
+    // Only where ORC lives: fopen fails when the folder is missing, and that is
+    // the whole check.
+    if (FILE* f = std::fopen(path.c_str(), "w")) {
+        std::fprintf(f, "%d\n", static_cast<int>(getpid()));
+        std::fclose(f);
+    }
+#else
+    (void)want;   // ORC exists on macOS only
+#endif
+}
+
 // Per-domain (Frank 2026-06-26): CS defaults to COPY (carry the live EQ/dyn values
 // onto the next strip), BC defaults to OWN (each compressor favourite recalls its own
 // remembered values rather than having CS-style live values pushed onto it). Two
@@ -2087,38 +2132,7 @@ bool recRmeReadoutText_(MediaTrack* tr, bool flashInputName, bool latin1,
 // Forward decl — defined further down with the other clock helpers.
 int64_t nowMs_();
 
-// Forward decls for Pan overlay used by drainInputQueue. The state +
-// formatters live further down with the other strip caches.
-std::string formatPanReadout(double pan);
-std::string composeValueLine(std::string_view label, std::string_view value);
-// ⚠ The UF1 paints a value line in TWO FIXED ZONES, not as one 19-char string:
-// characters 0-8 are the LABEL (white), 9-18 the VALUE (yellow). composeValueLine
-// only trims the label when label+value+1 exceeds the full 19, which is true of
-// the BUFFER but not of what the hardware draws — so a label longer than 9 spills
-// into the value zone and turns yellow. Frank 2026-08-09: "LPF Frequency 22.0k"
-// rendered as "LPF Frequ" + a yellow "ency 22.0k". Every UF1 line with a VARIABLE
-// label must go through uf1ValueLine, never composeValueLine directly.
-// SETTLED 2026-08-09 on the hardware (Frank): the white label field is
-// officially 11 characters wide — from character 12 on the text is drawn in
-// the YELLOW value zone. 9 was the shipped guess, 13 overran. Both dialogs
-// that name this limit (Settings FX-Learn cell, HUD UF1 cell) say 11 too.
-constexpr size_t kUf1LabelChars = 11;
-// …and the YELLOW value zone is the other 8 (19 − 11). The label got its cap on
-// 2026-08-09; the VALUE never did, and composeValueLine right-aligns it in the
-// 19-char buffer — so anything longer than 8 characters starts left of column 12
-// and is drawn in the WHITE label zone. "Concert Hall" (12) begins at column 7,
-// which is why a forum user reported the first three characters coming out white
-// ("Con") and, on other names, characters missing entirely where the label field
-// overwrote them ("Sm th Plate", "oth Room"). Truncating is what he asked for and
-// what the numbers want: "-12.3 dB" is exactly 8.
-constexpr size_t kUf1ValueChars = 8;
-// The UF1's SOFT-KEY label field (screen 0x0104) is 13 characters — measured on
-// the hardware 2026-08-09. It was the one UF1 text zone with no cap at all, so a
-// long user name or param name simply ran off the key. Abbreviated, never
-// truncated: SmartAbbrev keeps every word visible ("LPF Frequency" → "LPFFrqncy").
-constexpr size_t kUf1SoftKeyChars = 13;
-std::string uf1ValueLine(std::string_view label, std::string_view value);
-std::string formatDbReadout(double linearAmp);
+// The value-line formatters and the UF1 text-zone widths live in Uf1Text.h.
 constexpr int64_t kPanOverlayMs = 600;
 extern std::array<int64_t, 8>     g_panOverlayUntilMs;
 extern std::array<std::string, 8> g_panOverlayText;
@@ -18730,7 +18744,7 @@ void queueInput(PendingInput e)
 // hard-cut to 8, losing the end of the very abbreviation that was meant to save
 // it. Abbreviating to the REAL width is what makes it readable.
 // (The UC1's LCD is a different device and shows twelve — see UC1Surface.)
-inline constexpr int kUf1TrackNameChars = 8;
+// kUf1TrackNameChars lives in Uf1Text.h.
 
 // Which DataType carries the analogue needle on whatever we are reading.
 // dt=0 (VuPpm) where it still exists, dt=1 (TextVuPpm) otherwise — SSL removed
@@ -23820,7 +23834,17 @@ void initDevices_()
     }
 
     // Best-effort UF1 attach (Phase 0 bring-up). Absence is fine.
+    // ⇨ Ask ORC for it first, if that is what the user wants (see g_uf1TakeFromOrc).
+    if (const char* v = GetExtState("rea_sixty", "uf1_take_from_orc"); v && *v)
+        g_uf1TakeFromOrc.store(std::atoi(v) != 0);
+    orcHandoverMark_(g_uf1TakeFromOrc.load());
     openUf1BringUp_();
+    // ⇨ PATIENCE. Not open now is not "not there": ORC may be letting go this
+    // very second, or SSL 360 may still hold it. Retry when we asked ORC for it,
+    // or when this machine has had a UF1 before. A machine that never had one
+    // does not poll for it.
+    if (!g_uf1_dev && (g_uf1TakeFromOrc.load() || (g_devicesSeen.load() & kSeenUf1)))
+        g_uf1WantRetry.store(true);
 
 
     // Push the persisted brightness level to both devices now that
@@ -23832,22 +23856,8 @@ void initDevices_()
 // Close every device and drop the derived state. The counterpart to
 // initDevices_; the destructor and the restart action share it so a re-init can
 // never diverge from a real teardown. Leaves the timer alone (see initDevices_).
-// Channel-view large-LCD header (0x011c, 8 x 25 bytes): "REAPER" + "1/8" +
-// "OFF" template, cap77. Shared by the channel painter and the idle cycle.
-static const uint8_t kUf1PluginHeader[200] = {
-    0x52,0x45,0x41,0x50,0x45,0x52,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0x31,0x2f,0x38,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0x4f,0x46,0x46,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0 };
+// Die Kopfzeilen-Vorlage liegt in Uf1Spread (kPluginHeader), geteilt mit ORC.
+static const auto& kUf1PluginHeader = uf1spread::kPluginHeader;
 
 // Build the channel-view header (0x011c) with the LIVE "N/M" page indicator
 // patched over the template's static "1/8" (the ASCII digits at bytes 75 / 77;
@@ -23856,23 +23866,8 @@ static const uint8_t kUf1PluginHeader[200] = {
 // Returns a copy the caller hands to buildScreen (which copies the payload).
 static std::array<uint8_t, sizeof(kUf1PluginHeader)> uf1PageHeader_(int cur, int total)
 {
-    std::array<uint8_t, sizeof(kUf1PluginHeader)> h{};
-    std::memcpy(h.data(), kUf1PluginHeader, sizeof(kUf1PluginHeader));
-    h[75] = static_cast<uint8_t>('0' + std::clamp(cur,   1, 9));
-    h[77] = static_cast<uint8_t>('0' + std::clamp(total, 1, 9));
-    // Field 4 (bytes 100-102) = the Quick-Key-2 "Fine Ctrl" state readout. The
-    // cap77 template hardcodes "OFF"; drive it from g_uf1CsFine so the header
-    // tracks the toggle live (Frank 2026-08-04: was stuck "OFF" in every
-    // channel mode). ON = "ON" + clear the 3rd byte so no stray 'F' remains.
-    if (g_uf1CsFine.load()) { h[100] = 'O'; h[101] = 'N'; h[102] = 0x00; }
-    // Cells 1, 2 and 5-7 are left at zero here: in Channel-Strip mode the firmware
-    // bound only 0, 3 (SOFT KEYS page) and 4 (FINE CTRL) to screen regions. Proven
-    // on hardware 2026-08-10 by writing markers into the other five — nothing
-    // rendered, while the marker in cell 0 of the SAME frame did (firmware before
-    // SSL 360 2.1.12). ⇨ On 2.1.12 cells 1 and 2 ARE drawn: they are rows 2 and 3
-    // of the encoder list under the CHANNEL label, cell 0 is row 1, shown while
-    // 0x011e = 0x1f (cap132). See uf1SetEncoderList_.
-    return h;
+    // Der Bau liegt in Uf1Spread (pageHeader); der Fine-Zustand kommt von hier.
+    return uf1spread::pageHeader(cur, total, g_uf1CsFine.load());
 }
 
 // Overwrite the header's field 0 (the 25-byte cell that normally reads "REAPER")
@@ -23924,19 +23919,7 @@ static void uf1FillModeList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h,
                              int* vis, int n, int cap, int cur,
                              const char* (*nameOf)(int))
 {
-    int ci = -1;
-    for (int i = 0; i < n; ++i) if (vis[i] == cur) { ci = i; break; }
-    if (ci < 0) {                          // live mode hidden: it still leads
-        if (n < cap) { vis[n] = cur; ci = n++; }
-        else ci = 0;
-    }
-    auto put = [&](int cell, const char* s) {
-        const size_t len = std::strlen(s);
-        for (size_t k = 0; k < 25; ++k)
-            h[cell * 25 + k] = (k < len) ? static_cast<uint8_t>(s[k]) : 0;
-    };
-    for (int r = 0; r < 3; ++r)
-        put(r, (r < n) ? nameOf(vis[(ci + r) % n]) : "");
+    uf1spread::fillModeList(h, vis, n, cap, cur, nameOf);   // lives in Uf1Spread
 }
 static void uf1SetEncoderList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h)
 {
@@ -24038,12 +24021,7 @@ static std::array<uint8_t, sizeof(kUf1PluginHeader)> uf1BuildLiveHeader_()
 // 0125-0127, 0128, 011d) at ~40.3 ms — the next image follows 0.06 ms after
 // 011d. Our one-contiguous-burst emission was the last structural difference
 // to the working full-session blast.
-struct Uf1CycleParts {
-    std::vector<std::vector<uint8_t>> img;     // 35 chunk frames
-    std::vector<std::vector<uint8_t>> meters;  // 0009 000a 0015 0016
-    std::vector<std::vector<uint8_t>> tail;    // 011c 0125 0126 0127 0128 011d
-    uint64_t seq = 0;                          // the t10 array this was painted from
-};
+using Uf1CycleParts = uf1pace::Parts;   // lives in Uf1Pacer, shared with ORC
 static std::mutex g_uf1CycleMx;
 static std::shared_ptr<const Uf1CycleParts> g_uf1CycleSnap;
 static std::atomic<bool> g_uf1CycleActive{false};   // painter: screen 0 visible
@@ -24082,10 +24060,11 @@ static void uf1CyclePacerLoop_()
     // so the cycle chain never breaks when the data pauses — in silence SSL
     // keeps restating the stale image at the same rate, and the device wants
     // that stream unbroken.
-    constexpr auto kFloor     = microseconds(25000);   // never faster than 40 Hz
-    constexpr auto kCeiling   = microseconds(41000);   // never slower than SSL
-    constexpr auto kMetersOff = microseconds(18000);
-    constexpr auto kTailOff   = microseconds(40300);
+    // The four timings live in Uf1Pacer, shared with ORC.
+    using uf1pace::kFloor;
+    using uf1pace::kCeiling;
+    using uf1pace::kMetersOff;
+    using uf1pace::kTailOff;
     auto     slot     = steady_clock::now();
     uint64_t sentSeq  = 0;
     while (g_uf1PacerRun.load(std::memory_order_relaxed)) {
@@ -24137,18 +24116,8 @@ static void uf1CyclePacerLoop_()
             g_uf1CyclesEmitted.fetch_add(1, std::memory_order_relaxed);
         }
         if (snap && g_uf1_dev) {
-            // The three groups plus the silences between them are ONE unit to
-            // the firmware. Hold everything else out of it; the painter's own
-            // sends are released as a block once the trailer has closed it.
-            g_uf1_dev->beginCycle();
-            g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->img));
-            std::this_thread::sleep_until(slot + kMetersOff);
-            if (!snap->meters.empty())
-                g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->meters));
-            std::this_thread::sleep_until(slot + kTailOff);
-            if (!snap->tail.empty())
-                g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->tail));
-            g_uf1_dev->endCycle();
+            // One cycle, the same function ORC runs (Uf1Pacer::emitCycle).
+            uf1pace::emitCycle(*g_uf1_dev, *snap, slot);
             // ⇨ DOES THE OS ACTUALLY SLEEP THIS FINELY? Report it once per run,
             // because the whole cycle is built on sub-millisecond offsets (18.0 ms
             // and 40.3 ms inside a 40.8 ms slot) and one platform is known not to
@@ -24209,6 +24178,9 @@ void shutdownDevices_()
 
     if (g_uf1_dev) g_uf1_dev->close();
     g_uf1_dev.reset();
+    // Stop asking: ORC takes the UF1 back within its next poll.
+    orcHandoverMark_(false);
+    g_uf1WantRetry.store(false);
     g_slotTrack.fill(nullptr);
 }
 
@@ -25923,218 +25895,93 @@ static bool uf1RmeActive_()
     return g_uf1SideCar.load() == Uf1SideCar::RmeMonitor;
 }
 
-// Der Kanal, den Fader und EQ-Graph gerade zeigen. Ohne Wahl: fuer Ausgaenge
-// Main, sonst der erste sichtbare Kanal der Reihe.
-static int uf1RmeSelected_(const reasixty::rme::State& st, rmeu::Row r)
+// ⇨ DER SIDE-CAR-ZUSTAND UND DIE DREI FRAGEN, DIE ER AN UNS HAT.
+// Die Eingabelogik selbst liegt seit 25.09.2026 in src/RmeInput.{h,cpp}, damit
+// ORC dieselbe fahren kann statt einer zweiten Abschrift. Was hier bleibt, ist
+// der Zustand (EINE Instanz, nicht sieben Globale nebeneinander) und die drei
+// Antworten, die nur ein Wirt geben kann. ⛔ Ein Rueckruf, der nicht gesetzt
+// ist, ist ein Zustand: ORC setzt die ersten beiden nicht, und dort gibt es
+// eben kein MODE-Menue und keinen Fine-Modus.
+static const reasixty::rme::input::Host& rmeInputHost_()
 {
-    const int cur = g_rmeSel[static_cast<int>(r)].load();
-    const auto list = rmeu::visibleChannels(st, r);
-    if (std::find(list.begin(), list.end(), cur) != list.end()) return cur;
-    if (r == rmeu::Row::Output && st.outputForRole(st.mainOut)) return st.mainOut;
-    return list.empty() ? -1 : list.front();
+    static const reasixty::rme::input::Host h = {
+        [] { return g_uf1ModeMenu.load(); },
+        [] { return reasixty_uf1KnobScale(shiftFineActive_() || g_uf1CsFine.load()); },
+        [] { return reasixty::rme::manager().link() == reasixty::rme::LinkState::Online; },
+    };
+    return h;
 }
 
-// Die Reihe eine weiter, MIT UMLAUF an den Enden (Frank 22.09.). EIN Schrittwerk
-// fuer beide Wege dorthin: Nav-Kreuz oben/unten und MODE + Kanal-Encoder.
-static void uf1RmeStepRow_(int dir)
-{
-    const int n = rmeu::kRowCount;
-    const int cur = std::clamp(g_rmeRow.load(), 0, n - 1);
-    g_rmeRow.store(((cur + (dir > 0 ? 1 : n - 1)) % n));
-}
-
-// Den Submix eine Stelle weiter, durch die sichtbaren Ausgaenge, mit Umlauf
-// (Frank 23.09., Nav links/rechts). Der Submix ist der Ausgang, in den Eingaenge
-// und Playbacks schreiben; die Reihe und die Auswahl bleiben, wo sie sind.
-static void uf1RmeStepSubmix_(const reasixty::rme::State& st, int dir)
-{
-    const auto outs = rmeu::visibleChannels(st, rmeu::Row::Output);
-    if (outs.empty()) return;
-    const int cur = rmeu::effectiveSubmix(st, g_rmeSubmix.load());
-    const auto at  = std::find(outs.begin(), outs.end(), cur);
-    const int  idx = (at == outs.end()) ? 0
-                   : static_cast<int>(at - outs.begin());
-    const int  n   = static_cast<int>(outs.size());
-    g_rmeSubmix.store(outs[static_cast<size_t>(((idx + (dir > 0 ? 1 : n - 1)) % n))]);
-}
-
-// Das TotalMix-Fenster zeigen oder verstecken. Eine Entscheidung fuer die
-// Nav-Mitte im Side-Car und das Builtin `rme_show_window`.
-static void rmeToggleWindow_()
+// ⛔ DIE EINZIGE STELLE, DIE SCHICKT. RmeInput fuellt eine Liste und ruehrt den
+// Draht nicht an; genau das macht einen Test moeglich, der sagt "diese Rastung
+// erzeugt genau diese eine Adresse mit diesem Wert".
+static void rmeSend_(const reasixty::rme::strip::Writes& w)
 {
     auto& rm = reasixty::rme::manager();
-    if (rm.link() != reasixty::rme::LinkState::Online) return;
-    const bool want = !g_rmeWindowShown.load();
-    rm.send("/showwindow", want ? 1.0f : 0.0f);
-    g_rmeWindowShown.store(want);
+    for (const auto& [a, v] : w) rm.send(a, v);
+}
+
+static int uf1RmeSelected_(const reasixty::rme::State& st, rmeu::Row r)
+{
+    return reasixty::rme::input::selected(g_rmeIn, st, r);
+}
+
+static void uf1RmeStepRow_(int dir)
+{
+    reasixty::rme::input::stepRow(g_rmeIn, dir);
+}
+
+static void uf1RmeStepSubmix_(const reasixty::rme::State& st, int dir)
+{
+    reasixty::rme::input::stepSubmix(g_rmeIn, st, dir);
+}
+
+static void rmeToggleWindow_()
+{
+    reasixty::rme::strip::Writes w;
+    reasixty::rme::input::toggleWindow(g_rmeIn, rmeInputHost_(), w);
+    rmeSend_(w);
 }
 
 static void uf1RmeSelect_(rmeu::Row r, int ch)
 {
-    g_rmeRow.store(static_cast<int>(r));
-    g_rmeSel[static_cast<int>(r)].store(ch);
-    if (r == rmeu::Row::Output) g_rmeSubmix.store(ch);
+    reasixty::rme::input::select(g_rmeIn, r, ch);
 }
 
-// ⇨ MAIN AUF DEN FADER, EINE ENTSCHEIDUNG FUER ZWEI TASTEN: das Builtin
-// `rme_fader_main` (Werksbank RME 2) und die MASTER-Taste am Fader, die im
-// Side-Car dasselbe tut (Frank 22.09.). Zustand = Main liegt auf dem Fader.
 static void rmeFaderMainFire_()
 {
-    const int m = reasixty::rme::manager().controlRoom().mainOut;
-    if (m >= 0) uf1RmeSelect_(rmeu::Row::Output, m);
+    reasixty::rme::input::faderMainFire(g_rmeIn, reasixty::rme::manager().snapshot());
 }
 
 static bool rmeFaderMainActive_()
 {
-    const int m = reasixty::rme::manager().controlRoom().mainOut;
-    const int sel = g_rmeSel[static_cast<int>(rmeu::Row::Output)].load();
-    return m >= 0 && g_rmeRow.load() == static_cast<int>(rmeu::Row::Output)
-        && (sel == m || sel < 0);
-}
-
-// Pegel eines Kanals um `detents` Rasten verschieben, in dB. Eingaenge und
-// Playbacks schreiben ihren Knoten im aktuellen Submix.
-// Fine im Side-Car: dieselbe Regel wie der REAPER-Pfad des UF1 (Quick-Key 2,
-// reasixty_uf1KnobScale) und dazu SHIFT wie beim UF8 (shiftFineActive_, haengt
-// an "Shift activates Fine"). Frank 22.09.: "Fine mit shift geht nicht?", und
-// "shift auch fuer pegel pots". Keine REAPER-API, laeuft auf dem USB-Thread.
-static double uf1RmeKnobScale_()
-{
-    return reasixty_uf1KnobScale(shiftFineActive_() || g_uf1CsFine.load());
-}
-
-static void uf1RmeNudge_(const reasixty::rme::State& st, rmeu::Row r, int ch,
-                         int detents, double stepDb)
-{
-    stepDb *= uf1RmeKnobScale_();
-    auto& rm = reasixty::rme::manager();
-    const int sub = rmeu::effectiveSubmix(st, g_rmeSubmix.load());
-    if (r != rmeu::Row::Output && sub < 0) return;
-    bool known = false;
-    double cur = rmeu::levelDb(st, r, ch, sub, known);
-    if (!known) cur = reasixty::rme::kDbOff;
-    const double v = rmeu::nudgeDb(cur, detents, stepDb);
-    rm.send(rmeu::levelAddress(r, ch, sub, /*faderlin*/ false), static_cast<float>(v));
+    return reasixty::rme::input::faderMainActive(g_rmeIn,
+                                                 reasixty::rme::manager().snapshot());
 }
 
 namespace rmes = reasixty::rme::strip;
 
-// Die Seite, die STRIP fuer diesen Kanal zeigt: die gewaehlte, wenn der Kanal
-// sie hat, sonst seine erste. -1 = der Kanal meldet keine Einstellungen.
-// Eingabe und Maler fragen beide hier, damit sie nie verschiedene Seiten meinen.
 static int uf1RmeStripPage_(const reasixty::rme::State& st, rmeu::Row r, int sel,
                             const reasixty::rme::Config& cfg)
 {
-    const auto pages = rmes::availablePages(st, r, sel, cfg.stripPages);
-    if (pages.empty()) return -1;
-    const int want = g_rmeStripPage.load();
-    if (std::find(pages.begin(), pages.end(), want) != pages.end()) return want;
-    return pages.front();
+    return reasixty::rme::input::stripPage(g_rmeIn, st, r, sel, cfg);
 }
 
-// Der Parameter auf Pot oder Key `i` der aktuellen Seite, nullptr = leer.
 static const rmes::Param* uf1RmeStripParam_(const reasixty::rme::Config& cfg, int page,
                                             bool key, int i)
 {
-    if (page < 0 || page >= static_cast<int>(cfg.stripPages.size()) || i < 0 || i > 3)
-        return nullptr;
-    const auto& pg = cfg.stripPages[static_cast<size_t>(page)];
-    return rmes::find(key ? pg.keys[i] : pg.pots[i]);
-}
-
-static void uf1RmeSendAll_(const rmes::Writes& w)
-{
-    auto& rm = reasixty::rme::manager();
-    for (const auto& [a, v] : w) rm.send(a, v);
+    return reasixty::rme::input::stripParam(cfg, page, key, i);
 }
 
 // true = verbraucht. Nur aufrufen, wenn uf1RmeActive_().
 static bool uf1RmeEncoder_(uint8_t id, int delta)
 {
     auto& rm = reasixty::rme::manager();
-    const reasixty::rme::Config cfg = rm.config();
-    const reasixty::rme::State  st  = rm.snapshot();
-    if (id >= uf1::enc::kVpot1 && id <= uf1::enc::kVpot4 && g_rmeStrip.load()) {
-        // STRIP: der Pot dreht den Parameter seiner Seite am Fader-Kanal.
-        const auto r   = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
-        const int  sel = uf1RmeSelected_(st, r);
-        const int  pg  = sel >= 0 ? uf1RmeStripPage_(st, r, sel, cfg) : -1;
-        const int pot = id - uf1::enc::kVpot1;
-        const rmes::Param* p = uf1RmeStripParam_(cfg, pg, false, pot);
-        if (!p) return true;
-        if (rmes::stepsWhole(*p)) {
-            // Ein Eintrag pro Rastung: die Zaehler sammeln wie der Kanal-Encoder
-            // (kChannelEncoderScale), Richtungswechsel verwirft den Rest.
-            static double sAcc[4] = { 0, 0, 0, 0 };
-            double& a = sAcc[pot];
-            if ((delta > 0 && a < 0.0) || (delta < 0 && a > 0.0)) a = 0.0;
-            a += delta / kChannelEncoderScale;
-            int steps = 0;
-            if (a >=  1.0) { steps = static_cast<int>(a); a -= steps; }
-            if (a <= -1.0) { steps = static_cast<int>(a); a -= steps; }
-            if (steps != 0) uf1RmeSendAll_(rmes::nudge(st, r, sel, *p, steps));
-            return true;
-        }
-        uf1RmeSendAll_(rmes::nudge(st, r, sel, *p, delta, uf1RmeKnobScale_()));
-        return true;
-    }
-    if (id >= uf1::enc::kVpot1 && id <= uf1::enc::kVpot4) {
-        const auto& slot = cfg.vpots[rmeVpotSlot_(id - uf1::enc::kVpot1)];
-        if (slot.turn != "volume") return true;
-        const rmeu::Target t = rmeu::resolveTarget(st, slot.target);
-        if (t.visible) uf1RmeNudge_(st, t.row, t.ch, delta, cfg.vpotStepDb);
-        return true;
-    }
-    if (id == uf1::enc::kChannel) {
-        // ⛔ DER KANAL-ENCODER LIEFERT ~4 ZAEHLER PRO RASTUNG. REAPERs Pfad sammelt
-        // sie mit kChannelEncoderScale zu ganzen Schritten (Drain, uf1::enc::
-        // kChannel); ohne das sprang die Reihenliste pro Rastung ueber Playback
-        // hinweg (Frank 21.09.: "loest zu fein auf, komm nur auf outputs und
-        // inputs"). Gleiche Regel, Richtungswechsel verwirft den Rest.
-        static double sAccum = 0.0;
-        if ((delta > 0 && sAccum < 0.0) || (delta < 0 && sAccum > 0.0)) sAccum = 0.0;
-        sAccum += delta / kChannelEncoderScale;
-        int steps = 0;
-        if (sAccum >=  1.0) { steps = static_cast<int>(sAccum); sAccum -= steps; }
-        if (sAccum <= -1.0) { steps = static_cast<int>(sAccum); sAccum -= steps; }
-        if (steps == 0) return true;
-        delta = steps;
-        if (g_uf1ModeMenu.load()) {
-            // MODE + Kanal-Encoder: die Reihe (Input / Playback / Output), mit
-            // Umlauf wie das Nav-Kreuz (uf1RmeStepRow_, Frank 22.09.).
-            uf1RmeStepRow_(delta);
-            return true;
-        }
-        const auto r = static_cast<rmeu::Row>(g_rmeRow.load());
-        const int n = rmeu::stepChannel(rmeu::visibleChannels(st, r),
-                                        uf1RmeSelected_(st, r), delta);
-        if (n >= 0) uf1RmeSelect_(r, n);
-        return true;
-    }
-    if (id == uf1::enc::kJog) {
-        const rmeu::Target t = rmeu::resolveTarget(st, cfg.jogTarget);
-        if (t.visible) {
-            uf1RmeNudge_(st, t.row, t.ch, delta, cfg.jogStepDb);
-        }
-        return true;
-    }
-    if (id == uf1::enc::kVpotAboveFader) {
-        // ⇨ PAN DES FADER-KANALS (Frank 22.09.: "der Pan auf UF1 Channel macht
-        // noch nichts"). Eingang/Playback in den Submix, Ausgang sich selbst
-        // (rmeu::panAddress). 2 % pro Zaehler, Fine wie ueberall im Side-Car.
-        const auto r   = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
-        const int  sel = uf1RmeSelected_(st, r);
-        const int  sub = rmeu::effectiveSubmix(st, g_rmeSubmix.load());
-        const std::string a = rmeu::panAddress(r, sel, sub);
-        if (a.empty()) return true;
-        bool known = false;
-        const double cur = rmeu::panValue(st, r, sel, sub, known);
-        const double nv  = std::clamp(cur + delta * 0.02 * uf1RmeKnobScale_(), -1.0, 1.0);
-        if (nv != cur) rm.send(a, static_cast<float>(nv));
-        return true;
-    }
-    return true;
+    rmes::Writes w;
+    const bool used = reasixty::rme::input::encoder(
+        g_rmeIn, rmeInputHost_(), rm.snapshot(), rm.config(), id, delta, w);
+    rmeSend_(w);
+    return used;
 }
 
 // ⇨ SOFT-KEYS UND < > FUER JEDES SIDE-CAR. Jeder Modus hat seinen eigenen
@@ -26148,31 +25995,16 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
     if (set < 0) return false;
     const uint8_t id = ev.id;
     // ⇨ IN STRIP GEHOEREN DIE KEYS DER SEITE (Frank 21.09., plan 6a): die vier
-    // Schalter der Seite, und < > blaettern die Seiten statt der Baenke.
-    if (uf1RmeActive_() && g_rmeStrip.load()
-        && ((id >= uf1::btn::kDisplaySoft1 && id <= uf1::btn::kDisplaySoft4)
-            || id == uf1::btn::kArrowLeft || id == uf1::btn::kArrowRight)) {
-        if (!ev.pressed || g_uf1ModeMenu.load()) return true;
+    // Schalter der Seite, und < > blaettern die Seiten statt der Baenke. Das ist
+    // RME-Logik und liegt darum in RmeInput; was hier bleibt, ist die Bank-
+    // verwaltung darunter, die dem Wirt gehoert.
+    if (uf1RmeActive_()) {
         auto& rm = reasixty::rme::manager();
-        const reasixty::rme::Config cfg = rm.config();
-        const reasixty::rme::State  st  = rm.snapshot();
-        const auto r   = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
-        const int  sel = uf1RmeSelected_(st, r);
-        if (sel < 0) return true;
-        const int  pg  = uf1RmeStripPage_(st, r, sel, cfg);
-        if (pg < 0) return true;
-        if (id == uf1::btn::kArrowLeft || id == uf1::btn::kArrowRight) {
-            const auto pages = rmes::availablePages(st, r, sel, cfg.stripPages);
-            const int at  = static_cast<int>(std::find(pages.begin(), pages.end(), pg) - pages.begin());
-            const int dir = (id == uf1::btn::kArrowRight) ? 1 : -1;
-            // Kein Umlauf: die Liste hat Enden, wie die Reihenliste.
-            const int to  = std::clamp(at + dir, 0, static_cast<int>(pages.size()) - 1);
-            g_rmeStripPage.store(pages[static_cast<size_t>(to)]);
-            return true;
-        }
-        if (const rmes::Param* p = uf1RmeStripParam_(cfg, pg, true, id - uf1::btn::kDisplaySoft1))
-            uf1RmeSendAll_(rmes::press(st, r, sel, *p));
-        return true;
+        rmes::Writes w;
+        const bool used = reasixty::rme::input::stripSoftKey(
+            g_rmeIn, rmeInputHost_(), rm.snapshot(), rm.config(), ev, w);
+        rmeSend_(w);
+        if (used) return true;
     }
     if (id >= uf1::btn::kDisplaySoft1 && id <= uf1::btn::kDisplaySoft4) {
         if (!g_uf1ModeMenu.load())
@@ -26209,170 +26041,12 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
 
 static bool uf1RmeButton_(const uf1::InputEvent& ev)
 {
-    const uint8_t id = ev.id;
-    // ⇨ NAV OBEN / UNTEN WAEHLT DIE REIHE (Frank 22.09.), mit Umlauf, auch in
-    // STRIP: dort bleibt die Ansicht offen und zeigt den Kanal der neuen Reihe.
-    // Links, rechts und die Mitte bleiben bei REAPER, wie bisher.
-    // ⇨ UND MASTER AM FADER IST IM SIDE-CAR `rme_fader_main` (Frank 22.09.:
-    // "master button auf dem UF1 Fader soll dasselbe wie die neue Built-In MASTER
-    // auf softbank 2 machen"). Dieselbe Funktion, nicht dieselbe Zeile zweimal.
-    if (id == uf1::btn::kMaster) {
-        if (ev.pressed && !g_uf1ModeMenu.load()) rmeFaderMainFire_();
-        return true;
-    }
-    if (id == uf1::btn::kNavUp || id == uf1::btn::kNavDown) {
-        if (ev.pressed && !g_uf1ModeMenu.load())
-            uf1RmeStepRow_(id == uf1::btn::kNavDown ? 1 : -1);
-        return true;
-    }
-    // ⇨ LINKS UND RECHTS STEPPEN DEN SUBMIX, ebenfalls mit Umlauf (Frank 23.09.).
-    if (id == uf1::btn::kNavLeft || id == uf1::btn::kNavRight) {
-        if (ev.pressed && !g_uf1ModeMenu.load())
-            uf1RmeStepSubmix_(reasixty::rme::manager().snapshot(),
-                              id == uf1::btn::kNavRight ? 1 : -1);
-        return true;
-    }
-    // ⇨ UND DIE MITTE ZEIGT TOTALMIX, dort wo die ARC ihr Dim hat (Frank 23.09.).
-    if (id == uf1::btn::kNavCentre) {
-        if (ev.pressed && !g_uf1ModeMenu.load()) rmeToggleWindow_();
-        return true;
-    }
-    if (id == uf1::btn::kChannelPush) {
-        // STRIP auf und zu. Oeffnen nur, wenn ein Kanal auf dem Fader liegt.
-        if (ev.pressed && !g_uf1ModeMenu.load()) {
-            if (g_rmeStrip.load()) {
-                g_rmeStrip.store(false);
-            } else {
-                const reasixty::rme::State st = reasixty::rme::manager().snapshot();
-                const auto r = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
-                if (uf1RmeSelected_(st, r) >= 0) g_rmeStrip.store(true);
-            }
-        }
-        return true;
-    }
-    // In STRIP setzt der Pot-Druck seinen Parameter auf den neutralen Wert
-    // zurueck (RmeStrip::resetWrites, Frank 22.09.); 5-8 tut nichts, die
-    // V-Pot-Baenke gehoeren zur Uebersicht.
-    if (g_rmeStrip.load() && id >= uf1::btn::kVpot1Push && id <= uf1::btn::kVpot4Push) {
-        if (ev.pressed) {
-            auto& rm = reasixty::rme::manager();
-            const reasixty::rme::Config cfg = rm.config();
-            const reasixty::rme::State  st  = rm.snapshot();
-            const auto r   = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
-            const int  sel = uf1RmeSelected_(st, r);
-            const int  pg  = sel >= 0 ? uf1RmeStripPage_(st, r, sel, cfg) : -1;
-            if (const rmes::Param* p = uf1RmeStripParam_(cfg, pg, false, id - uf1::btn::kVpot1Push))
-                uf1RmeSendAll_(rmes::resetWrites(st, r, sel, *p));
-        }
-        return true;
-    }
-    if (g_rmeStrip.load() && id == uf1::btn::k5to8)
-        return true;
-    if (id >= uf1::btn::kVpot1Push && id <= uf1::btn::kVpot4Push) {
-        if (!ev.pressed) return true;
-        auto& rm = reasixty::rme::manager();
-        const reasixty::rme::Config cfg = rm.config();
-        const reasixty::rme::State  st  = rm.snapshot();
-        const auto& slot = cfg.vpots[rmeVpotSlot_(id - uf1::btn::kVpot1Push)];
-        const rmeu::Target t = rmeu::resolveTarget(st, slot.target);
-        if (!t.visible) return true;
-        if (slot.push == "submix") {
-            // Nur Ausgaenge sind ein Submix. Liegt ein Eingang oder Playback auf
-            // dem Fader, bleibt er dort und schreibt ab jetzt in diesen Ausgang.
-            // ⇨ LIEGT EIN AUSGANG AUF DEM FADER, GEHT DER FADER MIT (Frank 22.09.,
-            // Punkt 7): sonst zeigte der Fader Ausgang A und der Submix waere B,
-            // zwei Auswahlen mit zwei Zeichen (* und >). Jetzt gibt es eine, den
-            // Submix, und sie traegt die weisse Linie.
-            if (t.row == rmeu::Row::Output) {
-                if (g_rmeRow.load() == static_cast<int>(rmeu::Row::Output))
-                    uf1RmeSelect_(t.row, t.ch);
-                else
-                    g_rmeSubmix.store(t.ch);
-            }
-        } else if (slot.push == "select") {
-            uf1RmeSelect_(t.row, t.ch);
-        } else if (slot.push == "mute") {
-            const reasixty::rme::Channel* c = rmeu::channelOf(st, t.row, t.ch);
-            rm.send(rmeu::muteAddress(t.row, t.ch), (c && c->mute) ? 0.0f : 1.0f);
-        }
-        return true;
-    }
-    if (id == uf1::btn::kVpotAboveFaderPush || id == uf1::btn::kChannelSoftKey) {
-        if (!ev.pressed) return true;
-        auto& rm = reasixty::rme::manager();
-        const reasixty::rme::State st = rm.snapshot();
-        const auto r   = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
-        const int  sel = uf1RmeSelected_(st, r);
-        if (sel < 0) return true;
-        if (id == uf1::btn::kVpotAboveFaderPush) {
-            // Druck auf den Pan-Pot: Mitte, wie in REAPERs Kanalansicht.
-            const std::string a = rmeu::panAddress(r, sel, rmeu::effectiveSubmix(st, g_rmeSubmix.load()));
-            if (!a.empty()) rm.send(a, 0.0f);
-            return true;
-        }
-        // ⇨ SOFT-KEY UEBER DEM KANAL = STEREO/MONO des Fader-Kanals (Frank 22.09.).
-        // /<sec>/<n>/stereo, von TotalReaper selbst geschrieben (Stereo-Pair Link).
-        // Danach beide Haelften neu holen: beim Entkoppeln wird n+1 ein eigener
-        // Kanal, und TotalMix schickt dem sendenden Remote kein Echo.
-        const reasixty::rme::Channel* c = rmeu::channelOf(st, r, sel);
-        const std::string sec = std::string("/") + rmes::section(r) + "/";
-        rm.send(sec + std::to_string(sel) + "/stereo", (c && c->stereo) ? 0.0f : 1.0f);
-        rm.send(rmes::sendChanAddress(r, sel), 1.0f);
-        rm.send(rmes::sendChanAddress(r, sel + 1), 1.0f);
-        return true;
-    }
-    // 5-8 schaltet die zwei V-Pot-Baenke, wie in der DAW-Ansicht die Spurgruppe.
-    if (id == uf1::btn::k5to8) {
-        if (ev.pressed)
-            g_rmeVpotBank.store((g_rmeVpotBank.load() + 1) % reasixty::rme::Config::kVpotBanks);
-        return true;
-    }
-
-    // ⇨ SOLO, CUT, SEL GEHOEREN DEM FADER-KANAL IN TOTALMIX (Frank 21.09.: "sollten
-    // die nicht im Side-Car Mode komplett weg von Reaper? Sonst sind ja Side-Car
-    // und standalone ORC nie dasselbe"). Bis dahin fielen sie durch an REAPER und
-    // schalteten die fokussierte Spur.
-    if (id == uf1::btn::kCut || id == uf1::btn::kSolo || id == uf1::btn::kSel) {
-        if (!ev.pressed) return true;
-        auto& rm = reasixty::rme::manager();
-        const reasixty::rme::State st = rm.snapshot();
-        const auto r   = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
-        const int  sel = uf1RmeSelected_(st, r);
-        if (sel < 0) return true;
-        const int  sub = rmeu::effectiveSubmix(st, g_rmeSubmix.load());
-        if (id == uf1::btn::kCut) {
-            const reasixty::rme::Channel* c = rmeu::channelOf(st, r, sel);
-            rm.send(rmeu::muteAddress(r, sel), (c && c->mute) ? 0.0f : 1.0f);
-        } else if (id == uf1::btn::kSolo) {
-            // Solo sitzt im Routing: Eingang/Playback in den Submix. Ein Ausgang
-            // hat keins, die Taste tut dort nichts.
-            const std::string a = rmeu::soloAddress(r, sel, sub);
-            if (!a.empty())
-                rm.send(a, rmeu::soloed(st, r, sel, sub) ? 0.0f : 1.0f);
-        } else if (r == rmeu::Row::Output) {
-            // SEL auf einem Ausgang macht ihn zum Submix, wie ein Klick in TotalMix.
-            g_rmeSubmix.store(sel);
-        }
-        return true;
-    }
-
-    // ⇨ WEG b (Frank 21.09.): alles, was einen Kanal betrifft, geht an TotalMix;
-    // der Transport bleibt REAPERs, in ORC waeren diese Tasten unbelegt. SHIFT
-    // bleibt Modifier. Alles andere faengt der Side-Car ab und tut nichts, damit
-    // keine Taste im Side-Car heimlich eine REAPER-Spur schaltet.
-    switch (id) {
-        case uf1::btn::kShift:
-        case uf1::btn::kRwd:  case uf1::btn::kFfw:  case uf1::btn::kStop:
-        case uf1::btn::kPlay: case uf1::btn::kRec:
-        case uf1::btn::kCycle: case uf1::btn::kClick:
-        // ⇨ UND DIE 360-TASTE: sie behaelt ihre Bindung (Frank 23.09.). Was dort
-        // liegt, entscheidet er; eine Aktion auf das Zeitfeld bleibt allerdings
-        // wirkungslos, solange das Side-Car den Schirm haelt.
-        case uf1::btn::k360:
-            return false;
-        default:
-            return true;
-    }
+    auto& rm = reasixty::rme::manager();
+    rmes::Writes w;
+    const bool used = reasixty::rme::input::button(
+        g_rmeIn, rmeInputHost_(), rm.snapshot(), rm.config(), ev, w);
+    rmeSend_(w);
+    return used;
 }
 
 void onUf1Event(const uf1::InputEvent& ev)
@@ -26486,7 +26160,7 @@ void onUf1Event(const uf1::InputEvent& ev)
                         const auto want = static_cast<Uf1SideCar>(sc + 1);
                         const auto cur  = g_uf1SideCar.load();
                         g_uf1SideCar.store(cur == want ? Uf1SideCar::None : want);
-                        g_rmeStrip.store(false);   // jedes Betreten beginnt in der Uebersicht
+                        g_rmeIn.strip.store(false);   // jedes Betreten beginnt in der Uebersicht
                         g_pageDirty.store(true);
                     }
                     break;
@@ -26495,7 +26169,7 @@ void onUf1Event(const uf1::InputEvent& ev)
                 // waehlt man eine Ansicht, sieht sie nicht, und der Fader faehrt
                 // weiter das Item.
                 g_uf1SideCar.store(Uf1SideCar::None);
-                g_rmeStrip.store(false);
+                g_rmeIn.strip.store(false);
                 // SK1 Plugin, SK2 DAW, SK3 Meter, SK4 Sends — the kUf1View* order,
                 // so this is a straight index. The bodies live in uf1SetViewMode_
                 // (shared with the uf1_view_* builtins + the REASIXTY_UF1_MODE_*
@@ -26986,7 +26660,7 @@ void openUf1BringUp_()
 // reading is pushed onto the printed dB value so the marks line up with
 // REAPER's volume display. Only the bit-scale differs (UF1's clean 15-bit
 // kUf1FaderMax vs UF8's 14-bit kUf8FaderPbMax).
-constexpr uint16_t kUf1FaderMax   = 0x7FFF;
+constexpr uint16_t kUf1FaderMax   = uf1::kFaderMax;
 constexpr double   kUf1FaderTopDb = 12.0;
 
 double uf1PosToVol_(uint16_t pos)
@@ -27027,14 +26701,9 @@ uint16_t uf1VolToPos_(double linear)
 // ⚠ THIS IS THE ARITHMETIC, NOT THE PROTOCOL. Nothing here touches the input
 // handler, the motor builder or the init sequence — those still need a capture
 // before anyone edits them ([[feedback-fader-no-speculation]]).
-constexpr uint16_t kUf1FaderEndSnap = 64;
-inline double uf1PosToNorm_(uint16_t pos)
-{
-    if (pos >= kUf1FaderMax - kUf1FaderEndSnap) return 1.0;
-    if (pos <= kUf1FaderEndSnap)                return 0.0;
-    return std::clamp(static_cast<double>(pos)
-                      / static_cast<double>(kUf1FaderMax), 0.0, 1.0);
-}
+constexpr uint16_t kUf1FaderEndSnap = uf1::kFaderEndSnap;
+// The end-snap itself lives in UF1Protocol.h, where ORC can reach it too.
+inline double uf1PosToNorm_(uint16_t pos) { return uf1::faderPosToNorm(pos); }
 
 // FLIP mode fader <-> Pan mapping. The fader travel (0..kUf1FaderMax) maps
 // LINEARLY to pan (−1..+1): bottom = hard L, centre = 0, top = hard R. No dB
@@ -29578,18 +29247,11 @@ static bool uf1SanitizeWireCurve_(std::vector<float>& w, const std::string& iden
     return true;
 }
 
-// ⇨ DIE FRAMEFOLGE DES GRAPHEN, EINMAL. Kurzer Rahmen "01 <letzter Punkt>",
-// dann der volle mit "00 01" und den Spalten (cap73, siehe unten). Seit dem
-// RME-Side-Car (21.09.) malen zwei Quellen denselben Graphen, REAPER/SSL und
-// TotalMix, und die Folge ist so empfindlich, dass es sie nur hier gibt.
-// `col` muss die Kopfbytes 0x00 0x01 schon tragen.
+// Die Framefolge des Graphen liegt in Uf1Spread (eqFrames), geteilt mit ORC.
 static void uf1SendEqFrames_(const std::array<uint8_t, 251>& col, uint8_t tail)
 {
     if (!g_uf1_dev) return;
-    const std::array<uint8_t, 2> eqRefresh{0x01, tail};
-    g_uf1_dev->send(uf1::buildScreen(0x0122, eqRefresh));
-    g_uf1_dev->send(uf1::buildScreen(0x0122,
-        std::span<const uint8_t>(col.data(), col.size())));
+    uf1spread::eqFrames(col, tail, [](std::vector<uint8_t> f) { g_uf1_dev->send(std::move(f)); });
 }
 
 void uf1PaintEqGraph_(MediaTrack* tr, bool force)
@@ -31790,107 +31452,13 @@ void applyUf1ChannelVpotPush_(int idx)
     if (dv != cur) TrackFX_SetParamNormalized(tr, fx, p, dv);
 }
 
-// ⇨ THE TIME FIELD IS SEGMENT-ADDRESSED, SO IT CAN SPELL (Frank 2026-08-22:
-// "können wir das 10-digit Timedisplay missbrauchen um auch Text anzuzeigen?").
-// 0x0119 does not take digits — it takes a SEGMENT BITMASK per cell, which is
-// why the decode reads (SEG7[d] << 1) | dp. SSL only ever sends the ten digit
-// patterns, but nothing in the encoding says it has to: any of the 128 masks is
-// a legal cell value, so the field is really eleven little 7-segment canvases.
-//
-//        aaaa        a = 0x01   d = 0x08   g = 0x40
-//       f    b       b = 0x02   e = 0x10
-//       f    b       c = 0x04   f = 0x20
-//        gggg        The payload byte is (mask << 1) | dp, so the dp (the
-//       e    c       separator dot AFTER the cell) is bit 0 and the segments
-//       e    c       live in bits 1..7.
-//        dddd  dp
-//
-// ⚠ Four capitals have no 7-segment shape at all — K M V W X. The table below
-// approximates them so nothing silently vanishes, but the real rule is to CHOOSE
-// WORDS THAT FIT THE FONT: "BARS" reads perfectly, "MIX" never will.
-// ✅ HW-PROVEN 2026-08-22: the firmware paints the RAW MASK. It does not look the
-// byte up in a digit table — Frank pressed the format step and read letters off
-// the panel. The same press proved the field is TEN cells wide, not eleven (see
-// kUf1TcFirst below).
-static uint8_t uf1Seg7Glyph_(char ch)
-{
-    switch (ch) {
-        // Digits. '9' keeps SSL's own 0x67 (no bottom segment) so a flashed
-        // number looks identical to the clock's.
-        case '0': return 0x3f; case '1': return 0x06; case '2': return 0x5b;
-        case '3': return 0x4f; case '4': return 0x66; case '5': return 0x6d;
-        case '6': return 0x7d; case '7': return 0x07; case '8': return 0x7f;
-        case '9': return 0x67;
-        // Letters that have a real shape. Some are only legible in lower case
-        // (b d n r t u), which is the standard calculator alphabet, so the table
-        // folds both cases onto the shape that READS rather than the one asked for.
-        case 'A': case 'a': return 0x77;
-        case 'B': case 'b': return 0x7c;   // lower-case b — an upper B is an 8
-        case 'C':           return 0x39;
-        case 'c':           return 0x58;
-        case 'D': case 'd': return 0x5e;   // lower-case d — an upper D is a 0
-        case 'E': case 'e': return 0x79;
-        case 'F': case 'f': return 0x71;
-        case 'G': case 'g': return 0x3d;
-        case 'H':           return 0x76;
-        case 'h':           return 0x74;
-        case 'I':           return 0x30;   // the left bar, so it is not a 1
-        case 'i':           return 0x10;
-        case 'J': case 'j': return 0x1e;
-        case 'L': case 'l': return 0x38;
-        case 'N': case 'n': return 0x54;   // lower-case n — an upper N is an H
-        case 'O':           return 0x3f;   // = 0
-        case 'o':           return 0x5c;
-        case 'P': case 'p': return 0x73;
-        case 'Q': case 'q': return 0x67;   // = 9
-        case 'R': case 'r': return 0x50;
-        case 'S': case 's': return 0x6d;   // = 5
-        case 'T': case 't': return 0x78;   // lower-case t
-        case 'U':           return 0x3e;
-        case 'u': case 'v': return 0x1c;
-        case 'Y': case 'y': return 0x6e;
-        case 'Z': case 'z': return 0x5b;   // = 2
-        // The impossible four, approximated. Say it out loud before shipping a
-        // word that needs one of them.
-        case 'K': case 'k': return 0x76;   // reads as H
-        case 'M': case 'm': return 0x37;   // top box, open at the bottom
-        case 'V':           return 0x3e;   // reads as U
-        case 'W': case 'w': return 0x3e;   // reads as U
-        case 'X': case 'x': return 0x76;   // reads as H
-        // Punctuation that costs nothing.
-        case '-': return 0x40; case '_': return 0x08; case '=': return 0x48;
-        case '\'': return 0x20; case '"': return 0x22; case '?': return 0x53;
-        case '[': case '(': return 0x39; case ']': case ')': return 0x0f;
-        case '^': return 0x01; case '*': return 0x63;   // degree ring
-        case ' ': return 0x00;
-    }
-    return 0x00;                            // unknown → blank, never garbage
-}
+// The 7-segment font for the time field lives in UF1Protocol (seg7Glyph), where
+// ORC reaches it too. These names stay so the callers here read as before.
+static uint8_t uf1Seg7Glyph_(char ch) { return uf1::seg7Glyph(ch); }
 
-// ⛔ TEN CELLS ON THE GLASS, ELEVEN IN THE PAYLOAD. Byte 0 is not displayed —
-// HW-PROVEN 2026-08-22, the day the field first got a left-aligned string and
-// Frank saw it eat the first letter ("es sind eben NICHT 11!"). Nobody could see
-// it before because the clock right-aligns and never filled the field. So every
-// writer works in out[kUf1TcFirst .. 10] and leaves out[0] blank.
-constexpr int kUf1TcFirst = 1;    // payload index of the leftmost VISIBLE cell
-constexpr int kUf1TcCells = 10;   // visible cells
-
-// Text → the 0x0119 field, LEFT-aligned (text reads left to right; the clock
-// right-aligns because a number does). '.' ':' and ',' fold into the dp of the
-// cell before them instead of eating one, exactly as the clock's separators do.
-// Anything past the ten cells is dropped — there is no scrolling here.
-static void uf1EncodeSeg7Text_(const char* s, uint8_t out[11])
-{
-    for (int k = 0; k < 11; ++k) out[k] = 0x00;
-    int n = 0;
-    for (const char* p = s; *p && n < kUf1TcCells; ++p) {
-        const char c = *p;
-        if ((c == '.' || c == ':' || c == ',') && n > 0) {
-            out[kUf1TcFirst + n - 1] |= 0x01; continue;
-        }
-        out[kUf1TcFirst + n++] = static_cast<uint8_t>(uf1Seg7Glyph_(c) << 1);
-    }
-}
+constexpr int kUf1TcFirst = uf1::kTcFirst;    // payload index of the leftmost VISIBLE cell
+constexpr int kUf1TcCells = uf1::kTcCells;    // visible cells
+static void uf1EncodeSeg7Text_(const char* s, uint8_t out[11]) { uf1::encodeSeg7Text(s, out); }
 
 // A short message ON the time field, main thread only (the painter and whatever
 // it calls — never a USB worker; that is why the format flash below is triggered
@@ -32278,7 +31846,6 @@ static std::string uf1FaderSideFxShortName_()
 static float sdGrDb_(MediaTrack* tr, uf8::Domain dom);
 // UF8 peak-dB → level byte (0x00..0x1F over -55..0 dBFS); defined further down.
 // Reused so the UF1 small-LCD level meter deflects 1:1 with the UF8.
-uint8_t dbToVuByte_(double dbfs);
 
 // Small channel-LCD LEVEL + GR meter bytes for the focused track — the UF8-strip
 // meter, mirrored onto the UF1's small LCD (Frank 2026-07-30 "kleines display
@@ -32476,30 +32043,11 @@ static double uf1BcGrDb_()
 // copied so the "no channel here" look cannot drift apart between the two.
 // Every frame here is one the strip painter already sends for an unselected,
 // unsoloed, unmuted track — this is not a second scheme for the same lamps.
+// Das Leeren der Kanalzone liegt in Uf1Spread (blankChannelZone), geteilt mit ORC.
 static void uf1BlankChannelZone_()
 {
     if (!g_uf1_dev) return;
-    const uint8_t none = 0x00;
-    auto zoneText = [&](uint16_t addr) {
-        // 0x00-prefixed text cell with no glyphs after the prefix.
-        g_uf1_dev->send(uf1::buildScreen(addr, std::span<const uint8_t>(&none, 1)));
-    };
-    zoneText(uf1::scr::kTrackName);
-    zoneText(uf1::scr::kOutputDb);
-    zoneText(uf1::scr::kValueLine);
-    zoneText(uf1::scr::kChNumber);
-    const uint8_t bar[] = { 0x00, 0x00 };
-    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVPotReadoutBar, bar));
-    // 0x0006 is the firmware's OWN "channel populated" flag (it gates the colour
-    // bar), so an empty slot is a state the device already knows how to show.
-    g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive,
-                                     std::span<const uint8_t>(&none, 1)));
-    g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, 0x000000u));   // unselected → dark
-    g_uf1_dev->send(uf1::buildLedLevel (uf1::led::kSel, uf1::led::kFf39Lit));
-    g_uf1_dev->send(uf1::buildLedPrimary(uf1::led::kSolo, uf1::led::kDimSolo));
-    g_uf1_dev->send(uf1::buildLedLevel  (uf1::led::kSolo, uf1::led::kDimSolo));
-    g_uf1_dev->send(uf1::buildLedPrimary(uf1::led::kCut,  uf1::led::kDimCut));
-    g_uf1_dev->send(uf1::buildLedLevel  (uf1::led::kCut,  uf1::led::kDimCut));
+    uf1spread::blankChannelZone([](std::vector<uint8_t> f) { g_uf1_dev->send(std::move(f)); });
 }
 
 // Small-LCD channel-strip zone (0x00xx): track name, output dB, pan line + bar,
@@ -33093,14 +32641,8 @@ static uint32_t uf1BindingLedColour_(const uf8::bindings::Binding& bd,
 // writer per tick, and the poisoned entry is what makes them all re-send the
 // moment they are handed back. `menuOpen` is the MODE-hold overlay doing the
 // same for labels, LEDs and, since 2026-08-26, the highlight.
-struct Uf1SkCell {
-    std::string label;
-    bool        haveLabel = false;
-    bool        on        = false;
-    bool        hasColour = false;
-    uint32_t    colRgb    = 0;
-    bool        colBright = false;
-};
+// The cell type lives in Uf1Spread (SkCell), shared with the side-car painter.
+using Uf1SkCell = uf1spread::SkCell;
 
 // ⇨ DIE ZELLE EINES STATISCHEN BANK-SLOTS: Beschriftung, Zustand, LED-Farbe.
 // Bis 21.09. stand das nur im DAW-Zweig von uf1PaintChannel_; das RME-Side-Car
@@ -33454,58 +32996,17 @@ void applyUf1HueVpot_(uint8_t id, int step)
 // rather than a rename, so the five call sites stay as they are.
 using Uf1VpotRow = uf1spread::VpotRow;
 
-// Compose one cell's text. The 9-char label zone + 10-char value zone lives in
-// uf1ValueLine; the Latin-1 fold belongs at the emit because a plug-in's param
-// name is arbitrary UTF-8 and the panel is one byte per glyph.
+// The cell helpers moved to Uf1Spread (vpotCell, vpotCellL1, vpotBar), where
+// the side-car painter shared with ORC reaches them. Same names here, same bytes.
 static void uf1VpotCell_(Uf1VpotRow& row, int i, const std::string& label,
                          const std::string& value)
-{
-    row.line[static_cast<size_t>(i)] = utf8ToLatin1(uf1ValueLine(label, value));
-}
-
-// Compose one cell's bar + style. Both rules, in one place:
-//
-// ⛔ A CENTRE BAR CARRIES A SIGNED DEVIATION, NOT AN ABSOLUTE POSITION. Decoded
-// 2026-08-17 from cap72 by pairing every style-0x08 pot with its own dB readout:
-// 0 dB → 0, full boost → 100 (0x64), full cut → 156 (0x9c = −100 in two's
-// complement). Sending the plain 0..100 position put every gain at three
-// quarters of the bar. Unipolar bars are unaffected — there 0..100 IS the
-// position.
-//
-// The odd byte is BRIGHTNESS, uniformly 0x80. It was once wired to `bipolar`,
-// which made V-Pot 1 read dimmer than its neighbours on any page whose first
-// slot is not a gain (Frank 2026-08-17). It is not polarity.
-//
-// And the STYLE follows the UF8: unipolar draws a travelling LINE (0x01),
-// bipolar a fill from the centre (0x08), an empty slot nothing (0x03). SSL's
-// own "fill from the left" (0x02) made frequencies fill instead of point.
-// Layout 1: name and value apart, the fill-from-left style 0x02 (0x03 = text
-// only, for an empty pot). Measured 21.09.: 0x02, 0x03 and 0x04 render there.
+{ uf1spread::vpotCell(row, i, label, value); }
 static void uf1VpotCellL1_(Uf1VpotRow& row, int i, const std::string& name,
                            const std::string& value, double norm, bool empty,
                            uint8_t style = 0x02)
-{
-    const size_t k = static_cast<size_t>(i);
-    row.layout1 = true;
-    row.names[k] = utf8ToLatin1(name).substr(0, 8);
-    row.line[k]  = utf8ToLatin1(value).substr(0, 14);
-    const int pos = std::clamp(static_cast<int>(std::lround(norm * 100.0)), 0, 100);
-    row.bars[k * 2]     = empty ? 0 : static_cast<uint8_t>(pos);
-    row.bars[k * 2 + 1] = 0x80;
-    row.styles[k] = empty ? 0x03 : style;
-}
-
-static void uf1VpotBar_(Uf1VpotRow& row, int i, double norm,
-                        bool bipolar, bool empty)
-{
-    const int pos = bipolar
-        ? std::clamp(static_cast<int>(std::lround((norm - 0.5) * 200.0)), -100, 100)
-        : std::clamp(static_cast<int>(std::lround(norm * 100.0)),            0, 100);
-    row.bars[static_cast<size_t>(i) * 2]     =
-        static_cast<uint8_t>(static_cast<int8_t>(pos));
-    row.bars[static_cast<size_t>(i) * 2 + 1] = 0x80;
-    row.styles[static_cast<size_t>(i)] = empty ? 0x03 : (bipolar ? 0x08 : 0x01);
-}
+{ uf1spread::vpotCellL1(row, i, name, value, norm, empty, style); }
+static void uf1VpotBar_(Uf1VpotRow& row, int i, double norm, bool bipolar, bool empty)
+{ uf1spread::vpotBar(row, i, norm, bipolar, empty); }
 
 // The one emit. `force` is the caller's "repaint regardless" gate (g_uf1Gen
 // edge, mode edge, device reopen) and means exactly what it meant in both
@@ -34523,117 +34024,13 @@ static void uf1PaintSideCar_()
 }
 
 // ── RME-Side-Car: der Maler ──────────────────────────────────────────────────
-// Die UF1 als Monitor-Controller fuer TotalMix, auf Layout 3 (EQ-Graph statt
-// Farbbalken, Frank 21.09.). Plan: docs/uf1-spread-plan.md.
-//
-//   V-Pot 1-4     vier einstellbare Ziele (Standard Phones 1-4), Name und dB
-//   Fader         der gewaehlte Kanal, ueber faderlin
-//   EQ-Graph      Kanal-EQ des gewaehlten Kanals, nie Room EQ
-//   kleine Anz.   Name, dB, Reihe, Nummer, Farbe des gewaehlten Kanals
-//
-// ⛔ DIE CHECKLISTE ([[uf1-screen-owning-mode-checklist]]), Zelle fuer Zelle:
-// Ausgang = uf1PaintModeMenuOverlay_ (unten). Kleine Anzeige = uf1PaintRmeStrip_.
-// V-Pot-Reihe = uf1EmitVpotRow_. Graph = uf1SendEqFrames_. Fader = hier.
-// Soft-Keys, LEDs, Hervorhebung: Schritt 4 (eigene Baenke); bis dahin zeigen
-// sie den Stand beim Einstieg und tun nichts (uf1RmeButton_ faengt sie ab).
-static void uf1PaintRmeStrip_(const std::string& name, const std::string& db,
-                              const std::string& line, int chNo, int palette,
-                              int barPos, bool barCentre, const std::string& chSoft,
-                              const std::string& barText, bool force)
-{
-    static std::string sName, sDb, sLine, sChSoft, sBarText;
-    static int sNo = INT_MIN, sPal = INT_MIN, sBar = INT_MIN;
-    if (force) {
-        // Einmal alles leer, auch die LEDs und den Readout-Balken, die dieser
-        // Maler sonst nicht anfasst. Derselbe Helfer wie fuer eine leere Spur.
-        uf1BlankChannelZone_();
-        sName.clear(); sDb.clear(); sLine.clear(); sNo = INT_MIN; sPal = INT_MIN;
-        sBar = INT_MIN; sChSoft = "\x01";   // never a real label: forces the write
-        sBarText = "\x01";
-        // Der Balken-Stil, wie im Kanalmaler: 0x01 = Zeiger (die Pan-Optik). Der
-        // Init laesst ihn auf 0x03 = aus, dann zeichnet keine Position etwas.
-        const uint8_t pointer = 0x01;
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kBarStyle,
-                                         std::span<const uint8_t>(&pointer, 1)));
-    }
-    // ⇨ DIE BESCHRIFTUNG DES SOFT-KEYS UEBER DEM KANAL (0x0004, ein Index). Im
-    // Side-Car ist die Taste Stereo/Mono; vorher stand hier weiter, was REAPER
-    // zuletzt hineingeschrieben hatte (Frank 22.09.: "zeigt der Soft-Key ueber
-    // dem Kanal im Label Mono Stereo?"). Derselbe Rahmen wie im Kanalmaler.
-    if (force || chSoft != sChSoft) {
-        sChSoft = chSoft;
-        std::vector<uint8_t> p;
-        p.push_back(0x00);
-        p.insert(p.end(), chSoft.begin(), chSoft.end());
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChSoftKey, p));
-    }
-    // Pan-Balken: Position 0..100, Mittelmarke 0x80 genau in der Mitte, wie der
-    // REAPER-Pfad. barPos < 0 = leer.
-    {
-        const int key = (barPos < 0) ? -1 : barPos * 2 + (barCentre ? 1 : 0);
-        if (force || key != sBar) {
-            sBar = key;
-            const uint8_t pb[2] = { static_cast<uint8_t>(barPos < 0 ? 0 : barPos),
-                                    static_cast<uint8_t>(barPos >= 0 && barCentre ? 0x80 : 0x00) };
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kVPotReadoutBar, pb));
-        }
-    }
-    auto text = [](uint16_t addr, const std::string& t) {
-        const std::string folded = utf8ToLatin1(t);
-        std::vector<uint8_t> p;
-        p.reserve(folded.size() + 1);
-        p.push_back(0x00);
-        p.insert(p.end(), folded.begin(), folded.end());
-        g_uf1_dev->send(uf1::buildScreen(addr, p));
-    };
-    const std::string nm = abbreviateTrackName_(name, kUf1TrackNameChars, -1,
-                                                /*foldLatin1*/ false);
-    if (force || nm != sName) { sName = nm; text(uf1::scr::kTrackName, nm); }
-    if (force || db != sDb) {
-        sDb = db;
-        std::vector<uint8_t> p;
-        p.push_back(0x00);
-        for (size_t k = 0; k < 6; ++k)
-            p.push_back(k < db.size() ? static_cast<uint8_t>(db[k]) : 0x00);
-        p.push_back(db.empty() ? 0x20 : 'd');
-        p.push_back(db.empty() ? 0x20 : 'B');
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kOutputDb, p));
-    }
-    if (force || line != sLine) { sLine = line; text(uf1::scr::kValueLine, line); }
-    // ⇨ DER TEXT IM FARBBALKEN (0x0017). Bis 22.09. schrieb ihn hier niemand, also
-    // stand der Plug-in-Name der REAPER-Spur darin (Frank 22.09.). Jetzt der
-    // Submix, 12 Zeichen breit. ⛔ Nie leer senden: ueber dieselbe Zelle rastet der
-    // Kanalmaler die Ebene ein, ein leerer Text laesst sie fallen; "nichts" sind
-    // 12 Leerzeichen wie bei einer leeren Spur. Beim Verlassen schreibt der
-    // Kanalmaler den Plug-in-Namen neu (uf1HandOverScreen_ zaehlt g_uf1Gen hoch).
-    {
-        std::string bt = utf8ToLatin1(barText);
-        if (bt.size() > 12) bt = abbreviateTrackName_(bt, 12, -1, /*foldLatin1*/ false);
-        if (bt.empty()) bt.assign(12, ' ');
-        if (force || bt != sBarText) {
-            sBarText = bt;
-            std::vector<uint8_t> p;
-            p.push_back(0x00);
-            p.insert(p.end(), bt.begin(), bt.end());
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kCsType, p));
-        }
-    }
-    if (force || chNo != sNo) {
-        sNo = chNo;
-        text(uf1::scr::kChNumber, chNo > 0 ? std::to_string(chNo) : std::string());
-    }
-    if (force || palette != sPal) {
-        sPal = palette;
-        // kChActive ist das "Kanal belegt"-Flag der Firmware und GATET den
-        // Farbbalken; ohne es malt die Farbe nichts.
-        const uint8_t act = palette > 0 ? 0x01 : 0x00;
-        const uint8_t pal = static_cast<uint8_t>(palette > 0 ? palette : 0);
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kChActive,
-                                         std::span<const uint8_t>(&act, 1)));
-        g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBar,
-                                         std::span<const uint8_t>(&pal, 1)));
-    }
-}
+// ⇨ DER MALER LIEGT SEIT 25.09.2026 IN src/RmeFace.{h,cpp}, Wort fuer Wort wie er
+// hier stand, geteilt mit ORC (Frank: "GANZ GENAU SO wie in rea-sixty als
+// side-car"). Hier bleibt der Wirt: das Geraet, der Cache und die Teile, die
+// REAPERs eigener UF1-Modus mitbenutzt (Soft-Keys, Tasten-Lampen, MODE-Menue,
+// der Pacer). Die Checkliste ([[uf1-screen-owning-mode-checklist]]) steht in
+// RmeFace.cpp am Maler.
+static reasixty::rme::face::Cache g_rmeFace;
 
 // ⇨ DIE TASTEN-LEDS DES UF1, EIN DURCHGANG FUER ALLE BEWOHNER. Stand bis
 // 21.09. nur im Kanalmaler, hinter uf1HandOverScreen_: im Side-Car blieben
@@ -34642,7 +34039,7 @@ static void uf1PaintRmeStrip_(const std::string& name, const std::string& db,
 // weiter REAPER (Frank 21.09., Weg b: was einen Kanal betrifft, geht an
 // TotalMix, der Transport bleibt REAPERs), alles andere ist dunkel, weil der
 // Side-Car es abfaengt und nichts tut (uf1RmeButton_).
-struct Uf1BtnAvail { bool left, right, bankL, bankR, five8; bool chanSk = false; };
+using Uf1BtnAvail = uf1spread::BtnAvail;   // lives in Uf1Spread
 static bool uf1SideCarKeepsLed_(uf8::bindings::ButtonId id)
 {
     using B = uf8::bindings::ButtonId;
@@ -34851,493 +34248,62 @@ static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
     }
 }
 
-static std::string uf1RmeDbText_(double db)
-{
-    if (db <= -99.0) return "-inf";
-    return formatDbReadout(std::pow(10.0, db / 20.0));
-}
 
 static void uf1PaintRme_()
 {
     if (!g_uf1_dev || !g_uf1_dev->isOpen()) return;
-    namespace rme = reasixty::rme;
 
     static uint32_t sGen = 0xFFFFFFFFu;
     const uint32_t gen = g_uf1Gen.load(std::memory_order_relaxed);
     const bool force = (gen != sGen);
     sGen = gen;
 
-    auto& rm = rme::manager();
-    const rme::Config cfg = rm.config();
-    const rme::State  st  = rm.snapshot();
-    const bool   linked = (rm.link() == rme::LinkState::Online) || st.ingested > 0;
-
-    const auto row = static_cast<rmeu::Row>(std::clamp(g_rmeRow.load(), 0, 2));
-    const int  sel = linked ? uf1RmeSelected_(st, row) : -1;
-    const int  sub = rmeu::effectiveSubmix(st, g_rmeSubmix.load());
-    bool known = false;
-    const double selDb = (sel >= 0) ? rmeu::levelDb(st, row, sel, sub, known)
-                                    : rme::kDbOff;
-
-    // ── STRIP und die Ebene ─────────────────────────────────────────────────
-    // ⇨ PLAN 6a (Frank 21.09.): EQ- und Low-Cut-Seiten auf Layout 3 mit dem
-    // Graphen, alles andere, auch die Uebersicht, auf Layout 1 mit den vier
-    // Farbbalken. Der Graph existiert nur in Layout 3, also heisst "kein
-    // Graph" die Ebene wechseln, nicht den Graphen ausblenden.
-    // ⛔ ZWEISTUFIG, wie SSL in cap141: zweimal {00,01}, dann das Ziel. Direkt
-    // umgeschaltet blieb Layout 2 in der Sonde leer.
-    const bool strip = g_rmeStrip.load() && sel >= 0;
-    if (g_rmeStrip.load() && sel < 0) g_rmeStrip.store(false);   // Kanal weg
-    const int  page  = strip ? uf1RmeStripPage_(st, row, sel, cfg) : -1;
-    const rme::StripPage* pg = page >= 0 ? &cfg.stripPages[static_cast<size_t>(page)] : nullptr;
-    const uint8_t wantLayout = (pg && rmes::pageShowsGraph(*pg)) ? 0x03 : 0x01;
-    static uint8_t sLayout = 0;
-    const bool relayout = force || wantLayout != sLayout;
-    if (relayout) {
-        sLayout = wantLayout;
-        const uint8_t via[2] = { 0x00, 0x01 };
-        g_uf1_dev->send(uf1::buildScreen(0x0100, via));
-        g_uf1_dev->send(uf1::buildScreen(0x0100, via));
-        const uint8_t to[2] = { wantLayout, 0x00 };
-        g_uf1_dev->send(uf1::buildScreen(0x0100, to));
-        // Die Chrome der Ebene, wie die Sonde sie nach dem Selektor schickt.
-        const uint8_t c0102 = 0x00, c0110 = 0x0f, c011a = 0x02;
-        g_uf1_dev->send(uf1::buildScreen(0x0102, std::span<const uint8_t>(&c0102, 1)));
-        g_uf1_dev->send(uf1::buildScreen(0x0110, std::span<const uint8_t>(&c0110, 1)));
-        g_uf1_dev->send(uf1::buildScreen(0x011a, std::span<const uint8_t>(&c011a, 1)));
-        // ⛔ 0x0118 = DIE FREIGABE DER SOFT-KEY-HERVORHEBUNG IN LAYOUT 1, ein Byte
-        // pro Key. Ohne sie macht das Hervorhebungsbit (0x0102) den Namen des
-        // eingeschalteten Keys LEER statt ihn hervorzuheben. Am Geraet gemessen
-        // 22.09. (Frank, Sonde): 01 00 00 00 gibt nur Key 1 frei, 00 01 00 00
-        // nur Key 2, 01 01 01 01 alle vier, jeweils sauber an und aus. Nur NACH
-        // dem Ebenenwechsel: ohne frischen Wechsel blieb die Hervorhebung hängen.
-        // Layout 3 braucht es nicht (dort geht 0x0102 allein); zurueck auf den
-        // Init-Wert 00 beim Verlassen (hier fuer Layout 3, uf1HandOverScreen_
-        // fuer das Ende des Side-Cars).
-        const uint8_t hl = (wantLayout == 0x01) ? 0x01 : 0x00;
-        const uint8_t c0118[4] = { hl, hl, hl, hl };
-        g_uf1_dev->send(uf1::buildScreen(0x0118, c0118));
-    }
-    // Alles auf dem grossen Schirm neu, wenn die Ebene gewechselt hat. Die
-    // kleine Anzeige ist ein eigenes Display und bleibt bei `force`.
-    const bool big = force || relayout;
-
-    // Beim Oeffnen und bei jedem Kanalwechsel in STRIP alle Werte dieses einen
-    // Kanals holen (RMEs /sendchan, plan 5a), statt auf /sendall zu warten.
-    // Bei einem Stereopaar auch die rechte Haelfte: dort liegt Phase R.
-    {
-        static int sAskRow = -1, sAskCh = -1;
-        if (strip && (static_cast<int>(row) != sAskRow || sel != sAskCh)) {
-            sAskRow = static_cast<int>(row); sAskCh = sel;
-            rm.send(rmes::sendChanAddress(row, sel), 1.0f);
-            const rme::Channel* c = rmeu::channelOf(st, row, sel);
-            if (c && c->stereo) rm.send(rmes::sendChanAddress(row, sel + 1), 1.0f);
-        } else if (!strip) {
-            sAskRow = -1; sAskCh = -1;
-        }
-    }
-
-    // ── Fader ───────────────────────────────────────────────────────────────
-    // Touch-Entprellung wie Item Volume. faderlin 0..1 ist dieselbe Stellung
-    // wie der Fader in TotalMix; die Ruecklesung kommt in dB (RmeState.h).
-    static auto sLastTouch = std::chrono::steady_clock::now() - std::chrono::seconds(10);
-    static uint16_t sMotorPos = 0xFFFF, sSentPos = 0xFFFF;
-    static int sMotorCh = INT_MIN, sMotorRow = -1;
-    const auto nowT = std::chrono::steady_clock::now();
-    if (g_uf1FaderTouched.load()) sLastTouch = nowT;
-    const bool touched = g_uf1FaderTouched.load()
-        || (nowT - sLastTouch < std::chrono::milliseconds(150));
-    const bool writable = sel >= 0 && (row == rmeu::Row::Output || sub >= 0);
-    if (writable && touched && g_uf1FaderHasPos.load()) {
-        const uint16_t pos = g_uf1FaderPos.load();
-        if (pos != sSentPos) {
-            sSentPos = pos;
-            // ⛔ DIE ENDZONEN, WIE UEBERALL AM UF1-FADER. Die Hardware meldet am
-            // Anschlag nie ganz 0, und roh geteilt kam der Fader nie unter
-            // -64.x dB, also nie auf -inf (Frank 21.09.). uf1PosToNorm_ rastet
-            // die unteren und oberen 64 Schritte auf 0 / 1 ein.
-            const double lin = uf1PosToNorm_(pos);
-            rm.send(rmeu::levelAddress(row, sel, sub, /*faderlin*/ true),
-                    static_cast<float>(lin));
-        }
-        sMotorPos = pos;
-    } else {
-        sSentPos = 0xFFFF;
-        const double lin = (sel >= 0 && known) ? rme::dbToFaderlin(selDb) : 0.0;
-        const uint16_t want = static_cast<uint16_t>(std::lround(lin * kUf1FaderMax));
-        if (force || want != sMotorPos || sel != sMotorCh || static_cast<int>(row) != sMotorRow) {
-            sMotorPos = want; sMotorCh = sel; sMotorRow = static_cast<int>(row);
-            g_uf1_dev->sendPriority(uf1::buildMotorEnable(true));
-            g_uf1_dev->send(uf1::buildMotorPosition(want));
-        }
-    }
-
-    // ── kleine Anzeige ──────────────────────────────────────────────────────
-    // Name, dB und darunter PAN (Wertzeile + Zeiger), wie im REAPER-Modus. Das
-    // Submix-Ziel steht im Farbbalken, und es BLEIBT IN STRIP STEHEN (Frank
-    // 22.09.: "verschwindet im strip mode, sollte bleiben"): der Fader schreibt
-    // dort in denselben Submix wie in der Uebersicht, also gilt die Zeile weiter.
-    // Ausgang: OUTPUT, ohne TotalMix: RME.
-    {
-        std::string name = "RME", db, line;
-        std::string barText = !linked ? std::string("RME")
-                            : row == rmeu::Row::Output ? std::string("OUTPUT")
-                            : [&] {
-                                  const std::string on =
-                                      rmeu::displayName(st, rmeu::Row::Output, sub);
-                                  return "> " + (on.empty() ? std::string("--") : on);
-                              }();
-        int no = 0, pal = 0, barPos = -1;
-        bool barCentre = false;
-        std::string chSoft;
-        if (!linked) {
-            line = "no TotalMix";
-        } else if (sel < 0) {
-            line = std::string(rmeu::rowName(row)) + " empty";
-        } else {
-            const rme::Channel* c = rmeu::channelOf(st, row, sel);
-            name = rmeu::displayName(st, row, sel);
-            db   = known ? uf1RmeDbText_(selDb) : std::string();
-            no   = sel + 1;
-            if (c && c->colour >= 0 && c->colour < 9) pal = cfg.colourMap[c->colour];
-            // Der Zustand, den der Soft-Key ueber dem Kanal umschaltet.
-            chSoft = (c && c->stereo) ? "STEREO" : "MONO";
-            bool pk = false;
-            const double pan = rmeu::panValue(st, row, sel, sub, pk);
-            if (pk) {
-                line      = composeValueLine("Pan", formatPanReadout(pan));
-                barPos    = std::clamp(static_cast<int>(std::lround((pan + 1.0) * 50.0)), 0, 100);
-                barCentre = (pan == 0.0);
-            } else {
-                line = composeValueLine("Pan", "");
-            }
-        }
-        uf1PaintRmeStrip_(name, db, line, no, pal, barPos, barCentre, chSoft, barText, force);
-    }
-
-    // ── V-Pot-Reihe ─────────────────────────────────────────────────────────
-    // Uebersicht und STRIP-Seiten ohne Graph: Layout 1, Name und Wert getrennt.
-    // EQ/Low Cut: Layout 3, die gewohnte Zeile.
-    // Die Farbe ueber jedem Pot (0x012b, nur Layout 1): TotalMix-Farbe seines
-    // Kanals, in STRIP die des Fader-Kanals auf allen vier.
-    std::array<uint8_t, 4> bars4{};
-    auto palOf = [&](rmeu::Row r, int ch) -> uint8_t {
-        const rme::Channel* c = rmeu::channelOf(st, r, ch);
-        return (c && c->colour >= 0 && c->colour < 9)
-            ? static_cast<uint8_t>(cfg.colourMap[c->colour]) : 0;
-    };
-    if (strip) {
-        Uf1VpotRow vr;
-        const uint8_t pal = palOf(row, sel);
-        for (int i = 0; i < 4; ++i) {
-            const rmes::Param* p = uf1RmeStripParam_(cfg, page, false, i);
-            double v = 0.0;
-            const bool have = p && rmes::available(st, row, sel, *p)
-                           && rmes::value(st, row, sel, *p, v);
-            bars4[static_cast<size_t>(i)] = have ? pal : 0;
-            const std::string nm = have ? rmes::label(st, row, sel, *p) : std::string();
-            const std::string tx = have ? rmes::format(*p, row, v) : std::string();
-            const double nrm = have ? rmes::norm(*p, row, v) : 0.0;
-            if (wantLayout == 0x01) {
-                // Pan zeichnete in Layout 1 einen Balken von links. Die Linie
-                // (0x01) und die Mittelfuellung (0x08) blenden dort die Reihe aus
-                // (gemessen 21.09.); 0x04 ist die wandernde Marke, am Geraet
-                // bestaetigt (Frank 22.09.: "Marke wandert bei pan im strip").
-                const bool panLike = have && p->kind == rmes::Kind::Pan;
-                uf1VpotCellL1_(vr, i, nm, tx, nrm, !have, panLike ? uint8_t{0x04} : uint8_t{0x02});
-            } else {
-                uf1VpotCell_(vr, i, nm, tx);
-                // dB um null (EQ-Gain) von der Mitte aus, alles andere als Linie.
-                const bool bip = have && p->kind == rmes::Kind::Db && p->lo < 0.0 && p->hi > 0.0;
-                uf1VpotBar_(vr, i, nrm, bip, !have);
-            }
-        }
-        uf1EmitVpotRow_(vr, big);
-    } else {
-        Uf1VpotRow vr;
-        for (int i = 0; i < 4; ++i) {
-            if (!linked) {
-                uf1VpotCellL1_(vr, i, i == 0 ? "RME" : "", i == 0 ? "no TotalMix" : "", 0.0, true);
-                continue;
-            }
-            const std::string& spec = cfg.vpots[rmeVpotSlot_(i)].target;
-            // Ein leerer Platz ist leer, kein "--": "--" heisst "Rolle ohne Ausgang".
-            if (spec.empty()) {
-                uf1VpotCellL1_(vr, i, "", "", 0.0, true);
-                continue;
-            }
-            const rmeu::Target t = rmeu::resolveTarget(st, spec);
-            if (!t.assigned || !t.visible) {
-                uf1VpotCellL1_(vr, i, t.assigned ? "hidden" : "--", "", 0.0, true);
-                continue;
-            }
-            bool k = false;
-            const double d = rmeu::levelDb(st, t.row, t.ch, sub, k);
-            const std::string label = rmeu::displayName(st, t.row, t.ch);
-            // ⇨ EINE AUSWAHL, EINE MARKE (Frank 22.09., Punkt 7). Vorher trug der
-            // Pot auf dem Fader einen Stern und der Submix einen Pfeil; seit ein
-            // Pot-Druck bei einem Ausgang auf dem Fader den Fader mitnimmt, sind
-            // beide dasselbe. Die Marke ist der Farbbalken ueber dem Pot: weiss
-            // ueber dem Submix, dunkel ueber den anderen. Keine Zeichen im Namen.
-            // 0x01 = weiss in der UF1-Palette (colourMap-Vorgabe fuer TotalMix
-            // "weiss", am Geraet am 22.09. weiss gesehen).
-            bars4[static_cast<size_t>(i)] =
-                (t.row == rmeu::Row::Output && t.ch == sub) ? 0x01 : 0x00;
-            uf1VpotCellL1_(vr, i, label, k ? uf1RmeDbText_(d) + " dB" : std::string(),
-                           k ? rme::dbToFaderlin(d) : 0.0, /*empty*/ !k);
-        }
-        uf1EmitVpotRow_(vr, big);
-    }
-    // Die Farbbalken, nur in Layout 1 (in Layout 3 zeichnet 0x012b nichts).
-    if (wantLayout == 0x01) {
-        static std::array<uint8_t, 4> sBars4{ 0xFF, 0xFF, 0xFF, 0xFF };
-        if (big || bars4 != sBars4) {
-            sBars4 = bars4;
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kColourBars4, bars4));
-        }
-    }
-
-    // ── EQ-Graph: Kanal-EQ des Fader-Kanals ─────────────────────────────────
-    {
-        static std::array<uint8_t, 251> sCol{};
-        static uint8_t sTail = 0;
-        static bool sHave = false;
-        if (big) sHave = false;
-        const uf1eq::Model m = (sel >= 0) ? rmeu::eqModel(st, row, sel) : uf1eq::Model{};
-        std::array<uint8_t, 251> col{};
-        uint8_t tail = 0x64;
-        uf1eq::render(m, col, tail);
-        col[0] = 0x00;
-        col[1] = 0x01;
-        // Nur in Layout 3: dort lebt der Graph, in Layout 1 gibt es ihn nicht.
-        if (wantLayout == 0x03 && (!sHave || col != sCol || tail != sTail)) {
-            sCol = col; sTail = tail; sHave = true;
-            uf1SendEqFrames_(col, tail);
-        }
-    }
-
-    // Soft-Keys: in STRIP die Schalter der Seite, sonst die Side-Car-Bank.
-    // Beide gehen durch denselben Emitter, dessen Cache den Wechsel traegt.
-    // ⛔ DAS MODE-MENUE SCHREIBT SEINE NAMEN DIREKT, am Emitter vorbei. Wer die
-    // Keys besitzt, schreibt beim Loslassen seine eigenen zurueck, sonst bleiben
-    // PLUGIN / DAW / METER / SENDS stehen (Frank 22.09., in STRIP gesehen).
-    static bool sMenuWas = false;
-    const bool menuNow = g_uf1ModeMenu.load();
-    const bool menuClosed = sMenuWas && !menuNow;
-    sMenuWas = menuNow;
-    if (strip) {
-        std::array<Uf1SkCell, 4> cells{};
-        for (int i = 0; i < 4; ++i) {
-            // ⛔ JEDER KEY BEKOMMT EINE BESCHRIFTUNG, AUCH EINE LEERE. Der Emitter
-            // schreibt nur Zellen mit haveLabel; ein leerer STRIP-Key liess
-            // stehen, was die Uebersicht dort hatte (Frank 22.09.).
-            Uf1SkCell& c = cells[static_cast<size_t>(i)];
-            c.haveLabel = true;
-            const rmes::Param* p = uf1RmeStripParam_(cfg, page, true, i);
-            double v = 0.0;
-            if (!p || !rmes::available(st, row, sel, *p) || !rmes::value(st, row, sel, *p, v))
-                continue;
-            // Ein Listen-Key traegt seinen Wert im Namen ("Type 1 Bell"), ein
-            // Schalter zeigt ihn an der Lampe.
-            c.label = rmes::label(st, row, sel, *p);
-            if (p->kind == rmes::Kind::List) c.label += " " + rmes::format(*p, row, v);
-            c.on = (p->kind == rmes::Kind::Toggle) ? (v >= 0.5) : true;
-        }
-        // Bei gehaltenem MODE mit menuOpen, damit die Hervorhebung weggeht
-        // (siehe uf1PaintSideCarSoftKeys_).
-        uf1EmitSoftKeyRow_(cells, !menuNow && (big || menuClosed), false,
-                           /*menuOpen*/ menuNow);
-    } else {
-        uf1PaintSideCarSoftKeys_(big);
-    }
-
-    // ── SOLO, CUT, SEL: der Fader-Kanal in TotalMix ─────────────────────────
-    // Dieselben Bytes wie im Kanalmaler (uf1PaintChannelStrip_): SOLO/CUT hell
-    // oder gedimmt, SEL weiss oder dunkel. SEL leuchtet, wenn der Ausgang auf
-    // dem Fader der Submix ist; auf Eingang und Playback tut SEL nichts und ist
-    // dunkel. SOLO gibt es nur im Routing, auf einem Ausgang also nie.
-    {
-        const rme::Channel* c = (sel >= 0) ? rmeu::channelOf(st, row, sel) : nullptr;
-        const bool muted  = c && c->mute;
-        const bool soloOn = sel >= 0 && rmeu::soloed(st, row, sel, sub);
-        const bool selOn  = sel >= 0 && row == rmeu::Row::Output && sel == sub;
-        static int sPacked = -1;
-        const int packed = (muted ? 1 : 0) | (soloOn ? 2 : 0) | (selOn ? 4 : 0);
-        if (force || packed != sPacked) {
-            sPacked = packed;
-            auto led = [&](uint8_t id, bool on, uint8_t litPrim, uint8_t dim) {
-                if (force) g_uf1_dev->send(uf1::buildLed(id, true));
-                g_uf1_dev->send(uf1::buildLedPrimary(id, on ? litPrim : dim));
-                g_uf1_dev->send(uf1::buildLedLevel(id, on ? uf1::led::kFf39Lit : dim));
-            };
-            led(uf1::led::kSolo, soloOn, uf1::led::kPrimSoloLit, uf1::led::kDimSolo);
-            led(uf1::led::kCut,  muted,  uf1::led::kPrimCutLit,  uf1::led::kDimCut);
-            if (force) g_uf1_dev->send(uf1::buildLed(uf1::led::kSel, true));
-            g_uf1_dev->send(uf1::buildColourRgb(uf1::led::kSel, selOn ? 0xFFFFFFu : 0x000000u));
-            g_uf1_dev->send(uf1::buildLedLevel(uf1::led::kSel, uf1::led::kFf39Lit));
-        }
-    }
-    // Die uebrigen Tasten: Transport und SHIFT wie REAPER, der Rest dunkel.
-    // 5-8 leuchtet auf Bank 2, ueber dieselbe Verfuegbarkeit wie die Spurgruppe.
-    // < > hell, solange es in diese Richtung weitergeht: in STRIP die Seiten,
-    // sonst die Side-Car-Baenke.
-    bool arrowL = false, arrowR = false;
-    if (strip) {
-        const auto pages = rmes::availablePages(st, row, sel, cfg.stripPages);
-        const auto it = std::find(pages.begin(), pages.end(), page);
-        if (it != pages.end()) {
-            arrowL = it != pages.begin();
-            arrowR = (it + 1) != pages.end();
-        }
-    } else {
-        const int set = uf8::bindings::kUf1SideCarSetRme;
-        const int nb  = std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set));
-        arrowL = g_sideCarBank[set].load() > 0;
-        arrowR = g_sideCarBank[set].load() < nb - 1;
-    }
-    const rme::Channel* selCh = (sel >= 0) ? rmeu::channelOf(st, row, sel) : nullptr;
-    const bool bankPage = uf1SideCarDynPages_() >= 2;
-    uf1PaintButtonLeds_(force, Uf1BtnAvail{ arrowL, arrowR, bankPage, bankPage,
-                                            !strip && g_rmeVpotBank.load() == 1,
-                                            selCh && selCh->stereo },
-                        /*sideCar*/ true);
-
-    // ── Zeitfeld: immer der Jog-Kanal (Main) in dB ──────────────────────────
-    // ⛔ KEINE REAPER-ZEIT IM SIDE-CAR (Frank 21.09.: "immer im time display
-    // anzeigen"). Vorher stand hier REAPERs Uhr, Main nur als Einblendung beim
-    // Drehen und dauerhaft in Kopfzelle 4 unter FINE CTRL. Das Zeitfeld gehoert
-    // jetzt dem Side-Car wie der Rest der Flaeche; nur eine Einblendung (Bankname)
-    // darf es kurz haben, danach steht Main wieder da.
-    const rmeu::Target jogT = rmeu::resolveTarget(st, cfg.jogTarget);
-    bool jogKnown = false;
-    const double jogDb = jogT.visible
-        ? rmeu::levelDb(st, jogT.row, jogT.ch, sub, jogKnown) : rme::kDbOff;
-    {
-        static std::array<uint8_t, 11> sTc{};
-        std::array<uint8_t, 11> tc{};
-        if (nowMs_() < g_uf1TcFlashUntilMs)
-            uf1EncodeSeg7Text_(g_uf1TcFlashText.c_str(), tc.data());
-        else if (jogKnown)
-            uf1EncodeSeg7Text_(uf1RmeDbText_(jogDb).c_str(), tc.data());
-        if (big || tc != sTc) {
-            sTc = tc;
-            g_uf1_dev->send(uf1::buildScreen(uf1::scr::kTimecode, tc));
-        }
-    }
-
-    // ── Zyklus fuer den Pacer: Kopfzeile und Pegel ──────────────────────────
-    // ⛔ OHNE DAS SENDET DER PACER WEITER DEN LETZTEN REAPER-STAND. Kopfzeile und
-    // Pegel am Fader stecken im Schnappschuss, den sonst nur uf1PaintChannel_
-    // baut, und der laeuft im Side-Car nicht (Frank 21.09.: Kopfzeile zeigte
-    // REAPER, der Pegel kam von der Spur).
-    {
-        // ⚠ DIE REIHENLISTE NUR IN LAYOUT 3. Ihre Zustandsbytes (0110/011a/011e,
-        // dazu 011d im Pacer) sind dort gemessen; in Layout 1 flackerte beim
-        // Halten von MODE die oberste Reihe (Frank 22.09.), und das ist der
-        // einzige Unterschied zu Layout 3, den wir dabei schicken. VERMUTUNG,
-        // nicht gemessen. Layout 1 hat ohnehin nur CELL1/CELL2, drei Zeilen passen
-        // nicht: dort steht die gewaehlte Reihe in CELL1.
-        const bool menuHeld = g_uf1ModeMenu.load();
-        const bool listOpen = menuHeld && wantLayout == 0x03;
-        // Die drei Zustandsbytes der Liste, einmal pro Flanke, wie im Kanalmaler.
-        static bool sListOpen = false;
-        if (big || listOpen != sListOpen) {
-            sListOpen = listOpen;
-            const uint8_t s0110 = listOpen ? 0x07 : 0x0f;
-            const uint8_t s011a = listOpen ? 0x03 : 0x02;
-            const uint8_t s011e = listOpen ? 0x1f : 0x19;
-            g_uf1_dev->send(uf1::buildScreen(0x0110, std::span<const uint8_t>(&s0110, 1)));
-            g_uf1_dev->send(uf1::buildScreen(0x011a, std::span<const uint8_t>(&s011a, 1)));
-            g_uf1_dev->send(uf1::buildScreen(0x011e, std::span<const uint8_t>(&s011e, 1)));
-        }
-
-        auto hdr = uf1PageHeader_(
-            g_sideCarBank[uf8::bindings::kUf1SideCarSetRme].load() + 1,
-            std::max(1, uf8::bindings::uf1SideCarBankInUseCount(uf8::bindings::kUf1SideCarSetRme)));
-        auto putCell = [&](int cell, const std::string& t) {
-            for (size_t k = 0; k < 25; ++k)
-                hdr[static_cast<size_t>(cell) * 25 + k] =
-                    (k < t.size()) ? static_cast<uint8_t>(t[k]) : 0;
+    // Die Antworten des Wirts. Jede ist die Stelle, die der Maler vorher selbst
+    // gelesen hat; nichts davon ist neu.
+    static const reasixty::rme::face::Host host = [] {
+        namespace bnd = uf8::bindings;
+        reasixty::rme::face::Host h;
+        h.modeMenuOpen = [] { return g_uf1ModeMenu.load(); };
+        h.faderTouched = [] { return g_uf1FaderTouched.load(); };
+        h.faderHasPos  = [] { return g_uf1FaderHasPos.load(); };
+        h.faderPos     = [] { return g_uf1FaderPos.load(); };
+        h.bankNow      = [] { return g_sideCarBank[bnd::kUf1SideCarSetRme].load(); };
+        h.bankCount    = [] {
+            return std::max(1, bnd::uf1SideCarBankInUseCount(bnd::kUf1SideCarSetRme));
         };
-        if (listOpen) {
-            // MODE + Encoder: die drei Reihen, wie die Encoder-Liste.
-            int vis[3] = { 0, 1, 2 };
-            uf1FillModeList_(hdr, vis, 3, 3, static_cast<int>(row),
-                             [](int r) { return rmeu::rowName(static_cast<rmeu::Row>(r)); });
-        } else if (menuHeld) {
-            putCell(0, rmeu::rowName(row));
-        } else if (strip) {
-            // STRIP: die Seite in CELL1, "3/8" in CELL2 und in der Zelle, die
-            // Layout 3 unter SOFT KEYS zeigt. Layout 1 zeigt nur CELL1 und CELL2.
-            const auto pages = rmes::availablePages(st, row, sel, cfg.stripPages);
-            if (!pg) {
-                putCell(0, "NO SETTINGS");
-            } else {
-                const int at = static_cast<int>(std::find(pages.begin(), pages.end(), page)
-                                                - pages.begin());
-                putCell(0, utf8ToLatin1(pg->name));
-                const std::string n = std::to_string(at + 1) + "/" + std::to_string(pages.size());
-                putCell(1, n);
-                putCell(3, n);
+        h.dynPages     = [] { return uf1SideCarDynPages_(); };
+        h.tcFlash      = [] {
+            return nowMs_() < g_uf1TcFlashUntilMs ? g_uf1TcFlashText : std::string();
+        };
+        h.emitVpotRow  = [](const Uf1VpotRow& r, bool f) { uf1EmitVpotRow_(r, f); };
+        h.stripSoftKeys = [](const std::array<Uf1SkCell, 4>& cells, bool f,
+                             bool ledsBorrowed, bool menuOpen) {
+            uf1EmitSoftKeyRow_(cells, f, ledsBorrowed, menuOpen);
+        };
+        h.sideCarSoftKeys = [](bool f) { uf1PaintSideCarSoftKeys_(f); };
+        h.buttonLeds      = [](bool f, const Uf1BtnAvail& av) {
+            uf1PaintButtonLeds_(f, av, /*sideCar*/ true);
+        };
+        h.modeMenuOverlay = [](bool f) { uf1PaintModeMenuOverlay_(f); };
+        h.publishCycle    = [](std::vector<std::vector<uint8_t>> meters,
+                               std::vector<std::vector<uint8_t>> tail) {
+            auto parts = std::make_shared<Uf1CycleParts>();
+            parts->meters = std::move(meters);
+            parts->tail   = std::move(tail);
+            {
+                std::lock_guard<std::mutex> lk(g_uf1CycleMx);
+                g_uf1CycleSnap = std::shared_ptr<const Uf1CycleParts>(std::move(parts));
             }
-        } else if (!linked) {
-            putCell(0, "RME");
-        } else {
-            // Nur die Reihe; der Submix steht seit 22.09. im Farbbalken der
-            // kleinen Anzeige, der hat mehr Platz (Frank: "Nur die Reihe").
-            putCell(0, rmeu::rowName(row));
-        }
-        // Uebersicht: die Side-Car-Bank auch in CELL2, denn Layout 1 zeigt die
-        // Zelle unter SOFT KEYS (3) nicht.
-        if (!menuHeld && !strip) {
-            const int set = uf8::bindings::kUf1SideCarSetRme;
-            putCell(1, std::to_string(g_sideCarBank[set].load() + 1) + "/"
-                     + std::to_string(std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set))));
-        }
-        // Zelle 4 (unter FINE CTRL) leer: Main steht im Zeitfeld, und REAPERs
-        // Fine-Zustand, den uf1PageHeader_ dort einträgt, gilt hier nicht.
-        putCell(4, std::string());
-
-        auto parts = std::make_shared<Uf1CycleParts>();
-        // Pegel des gewaehlten Kanals aus TotalMix (/level/<bus>/<n> und n+1),
-        // Peak in dB, dieselbe Umrechnung wie der REAPER-Pfad. Kommt nur, wenn
-        // in TotalMix fuer dieses Remote "Send Peak Level" an ist; sonst 0.
-        uint8_t lvL = 0, lvR = 0;
-        if (sel >= 0) {
-            const std::map<int, double>& lv = row == rmeu::Row::Output ? st.levelOut
-                                            : row == rmeu::Row::Input  ? st.levelIn
-                                                                       : st.levelPb;
-            const auto a = lv.find(sel);
-            if (a != lv.end()) lvL = dbToVuByte_(a->second);
-            lvR = lvL;
-            // Rechts nur bei einem Stereo-Kanal von n + 1: bei Mono ist n + 1 der
-            // naechste Kanal, nicht die andere Seite.
-            const rme::Channel* sc = rmeu::channelOf(st, row, sel);
-            if (sc && sc->stereo)
-                if (const auto bR = lv.find(sel + 1); bR != lv.end())
-                    lvR = dbToVuByte_(bR->second);
-        }
-        const uint8_t k0009[] = { lvL, lvR, 0x00, 0x00 };
-        const uint8_t z4[]    = { 0x00, 0x00, 0x00, 0x00 };
-        const uint8_t z1      = 0x00;
-        parts->meters.push_back(uf1::buildScreen(0x0009, k0009));
-        parts->meters.push_back(uf1::buildScreen(0x000a, z4));
-        parts->meters.push_back(uf1::buildScreen(0x0015, std::span<const uint8_t>(&z1, 1)));
-        parts->meters.push_back(uf1::buildScreen(0x0016, std::span<const uint8_t>(&z1, 1)));
-        parts->tail.push_back(uf1::buildScreen(uf1::scr::kHeaderRow,
-            std::span<const uint8_t>(hdr.data(), hdr.size())));
-        const uint8_t hl = listOpen ? 0x19 : 0x00;
-        parts->tail.push_back(uf1::buildScreen(0x011d, std::span<const uint8_t>(&hl, 1)));
-        {
-            std::lock_guard<std::mutex> lk(g_uf1CycleMx);
-            g_uf1CycleSnap = std::shared_ptr<const Uf1CycleParts>(std::move(parts));
-        }
-        g_uf1CycleActive.store(true, std::memory_order_relaxed);
-        uf1EnsurePacer_();
-    }
-
-    // Der Ausgang. Ohne ihn ist das Side-Car eine Falle.
-    uf1PaintModeMenuOverlay_(force);
+            g_uf1CycleActive.store(true, std::memory_order_relaxed);
+            uf1EnsurePacer_();
+        };
+        return h;
+    }();
+    static const reasixty::rme::face::Out out{
+        [](std::vector<uint8_t> f) { g_uf1_dev->send(std::move(f)); },
+        [](std::vector<uint8_t> f) { g_uf1_dev->sendPriority(std::move(f)); },
+    };
+    reasixty::rme::face::paint(g_rmeFace, g_rmeIn, host, out, force);
 }
 
 // Wer haelt den Schirm gerade? Reihenfolge ist Absicht: die Sonde ist ein
@@ -37868,20 +36834,6 @@ std::string slotLabelForVisibleSlot(int slot)
 // Below ~10^-5 we call it "-inf" to match what the SSL LCD shows at
 // the fader bottom. Always one decimal where it fits in 6 chars; values
 // past -100 dB drop the decimal to keep the leading minus visible.
-std::string formatDbReadout(double linearAmp)
-{
-    if (linearAmp < 1e-5) return "-inf";
-    const double dB = 20.0 * std::log10(linearAmp);
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%.1f", dB);
-    std::string s(buf);
-    if (s.size() > 6) {
-        snprintf(buf, sizeof(buf), "%.0f", dB);
-        s.assign(buf);
-        if (s.size() > 6) s.resize(6);
-    }
-    return s;
-}
 
 // Is this slot a binary in/out toggle (driven by a UC1 button on the
 // physical surface)? Binary params render as full-or-empty on the
@@ -38035,109 +36987,9 @@ bool isBipolarSlot(const uf8::LinkSlot& s)
 
 // Format a -1..+1 pan value as SSL-convention "L100" / "C" / "R50".
 // Centred values render as bare "C" so the label-value gap is obvious.
-std::string formatPanReadout(double pan)
-{
-    if (pan < -1.0) pan = -1.0;
-    if (pan >  1.0) pan =  1.0;
-    if (std::abs(pan) < 0.005) return "C";
-    int pct = static_cast<int>(std::round(std::abs(pan) * 100.0));
-    if (pct > 100) pct = 100;
-    char buf[8];
-    snprintf(buf, sizeof(buf), "%c%d", pan < 0 ? 'L' : 'R', pct);
-    return buf;
-}
 
-// Compose the Value Line (19 chars) — e.g. "Vol        -6.0dB".
-// Left-justified label, right-justified value. Truncates both if needed
-// so the total fits within 19 chars.
-// Fit the label into the UF1's 9-character label zone, then lay the line out as
-// usual. ABBREVIATES rather than truncating (Frank 2026-08-09) — the same
-// smart-abbreviation the track scribbles use, so "LPF Frequency" becomes
-// "LPFFrqncy" instead of "LPF Frequ": every word stays visible. Acronyms (LPF,
-// HMF, EQ) survive untouched. A value longer than its own 10-char zone still
-// steals from the label (composeValueLine's rule) — the whole value matters more
-// than the name.
-// foldLatin1 = false: the UF1 text path folds at its own source; folding twice
-// would double-encode umlauts ([[surface-lcd-latin1-umlauts]]).
-std::string uf1ValueLine(std::string_view label, std::string_view value)
-{
-    std::string lab(label);
-    if (lab.size() > kUf1LabelChars)
-        lab = abbreviateTrackName_(lab, static_cast<int>(kUf1LabelChars),
-                                   TNM_SmartAbbrev, /*foldLatin1*/ false);
-    // ⛔ CAP THE VALUE TOO, not just the label. composeValueLine right-aligns the
-    // value in a 19-char buffer, but the firmware colours by fixed COLUMN, so an
-    // over-long value does not overflow to the right where it would simply be cut
-    // — it grows LEFTWARDS into the white label zone. See kUf1ValueChars.
-    // Truncated, NOT SmartAbbrev'd: these are formatted parameter values, and
-    // vowel-dropping "12 dB/oct" or "-3.5 dB" produces nonsense. Trailing spaces
-    // go so a clipped word does not look like a stray gap.
-    std::string val(value);
-    if (val.size() > kUf1ValueChars) {
-        val.resize(kUf1ValueChars);
-        while (!val.empty() && val.back() == ' ') val.pop_back();
-    }
-    return composeValueLine(lab, val);
-}
 
-// The UF8's value line is 19 characters, but the LCD does not draw them as one
-// field. MEASURED ON THE HARDWARE 2026-09-16 (Frank typed eleven M and eleven 8):
-// the WHITE label zone shows the first EIGHT characters, 9 to 11 are drawn
-// nowhere at all, and from character 12 the text sits in the YELLOW value zone.
-// So a parameter name longer than eight loses its tail into the dead gap and
-// then comes back in the wrong colour — "die Param-Namen werden gelb", found
-// while mapping Nolly X. composeValueLine alone cannot see this: it only trims
-// when label + value + 1 exceeds the full 19, which is the BUFFER, not what the
-// firmware paints. Same shape as the UF1's uf1ValueLine, other numbers (11 + 8
-// there, 8 + 8 here — [[surface-text-field-widths]] had the 8 for the UF8 all
-// along).
-// Label is ABBREVIATED, never cut: "LPF Frequency" keeps both words. The value
-// is TRUNCATED, because vowel-dropping "-12.3 dB" produces nonsense, and because
-// a value longer than 8 starts left of column 12 and falls into the dead gap.
-// foldLatin1 = false: the callers hand in text that has already been through
-// their own name resolution, and folding twice double-encodes umlauts
-// ([[surface-lcd-latin1-umlauts]]).
-constexpr size_t kUf8ValueLabelChars = 8;
-constexpr size_t kUf8ValueValueChars = 8;
-std::string uf8ValueLine(std::string_view label, std::string_view value)
-{
-    std::string lab(label);
-    if (lab.size() > kUf8ValueLabelChars)
-        lab = abbreviateTrackName_(lab, static_cast<int>(kUf8ValueLabelChars),
-                                   TNM_SmartAbbrev, /*foldLatin1*/ false);
-    std::string val(value);
-    if (val.size() > kUf8ValueValueChars) {
-        val.resize(kUf8ValueValueChars);
-        while (!val.empty() && val.back() == ' ') val.pop_back();
-    }
-    return composeValueLine(lab, val);
-}
 
-std::string composeValueLine(std::string_view label, std::string_view value)
-{
-    constexpr size_t kWidth = 19;
-    // ⛔ Every subtraction below is size_t. A `value` at least as long as the
-    // whole line wrapped `kWidth - value.size() - 1` to ~2^64; substr(0, huge)
-    // is legal and clamps, so the label came back at FULL length, and then
-    // `padding` underflowed too and append() threw std::length_error
-    // ("basic_string"). That escaped onTimer into REAPER's run loop, which
-    // treats an uncaught C++ exception as fatal — the SIGABRT Frank hit all day
-    // on 2026-08-14. `value` is a plug-in's FORMATTED parameter value, i.e.
-    // arbitrary text: FabFilter runs past 19 characters, SSL's own strips never
-    // did, which is why it read as "always FabFilter".
-    //
-    // Clamp BEFORE subtracting. Cap at kWidth-1 rather than kWidth so there is
-    // always at least one pad space, which keeps the value right-aligned in its
-    // zone the way the firmware expects.
-    if (value.size() > kWidth - 1) value = value.substr(0, kWidth - 1);
-    // Prefer to show the full value; trim the label to whatever is left.
-    const size_t labelMax = kWidth - value.size() - 1;
-    if (label.size() > labelMax) label = label.substr(0, labelMax);
-    std::string out(label);
-    out.append(kWidth - label.size() - value.size(), ' ');
-    out.append(value);
-    return out;
-}
 
 // Slot-level state caches — push only on change to avoid hammering the
 // OUT endpoint 30× per second.
@@ -42456,19 +41308,6 @@ void commitDebouncedTouchReleases()
     }
 }
 
-// dBFS → UF8 VU byte (0..31). -55 dBFS → 0, 0 dBFS → 31.
-// The cutoff is intentionally above -60 dB: REAPER's track-peak ballistics
-// have a slow decay tail that drifts through -60..-55 even on silent
-// tracks, which would otherwise flicker the bottom LED. Snapping anything
-// below -55 to 0 gives a clean noise-floor.
-uint8_t dbToVuByte_(double dbfs)
-{
-    if (dbfs >= 0.0)   return 0x1F;
-    if (dbfs <= -55.0) return 0x00;
-    const double f = (dbfs + 55.0) / 55.0;
-    const int byte = static_cast<int>(f * 31.0 + 0.5);
-    return static_cast<uint8_t>(std::clamp(byte, 0, 0x1F));
-}
 
 // Per-meter envelope state for meterTick. UC1In/Out are stereo (2 each),
 // UF8 is 8 strips × L/R (16). Seeded to "unseen" (-1000) so the first tick
@@ -44451,7 +43290,7 @@ static void uf1NavCrossSyncLeds_()
             // Umlauf, also immer beide hell. Die Mitte zeigt, ob wir TotalMix
             // zuletzt eingeblendet haben. Weiss, denn die Farbe der REAPER-
             // Bindung gehoert zu einer Aktion, die hier nicht laeuft.
-            const bool lit = (i == 2) ? g_rmeWindowShown.load() : true;
+            const bool lit = (i == 2) ? g_rmeIn.windowShown.load() : true;
             show = true; on = lit; scaled = lit ? 0xFFFFFFu : 0u;
         }
         else if (i == marked) {
@@ -46933,7 +45772,8 @@ void onTimerBody_()
         static bool sUc1Lost = false, sUf8Lost = false, sUf1Lost = false;
         const bool ucStale = (g_uc1_dev && g_uc1_dev->needsReopen()) || (sUc1Lost && !g_uc1_dev);
         const bool ufStale = (g_dev     && g_dev->needsReopen())     || (sUf8Lost && !g_dev);
-        const bool u1Stale = (g_uf1_dev && g_uf1_dev->needsReopen()) || (sUf1Lost && !g_uf1_dev);
+        const bool u1Stale = (g_uf1_dev && g_uf1_dev->needsReopen())
+                          || ((sUf1Lost || g_uf1WantRetry.load()) && !g_uf1_dev);
         auto staleLog = [](const char* file, const std::string& line) {
             if (FILE* f = std::fopen(uf8::logPath(file).c_str(), "a")) {
                 const auto t = std::chrono::system_clock::now().time_since_epoch();
@@ -47008,6 +45848,7 @@ void onTimerBody_()
                 if (g_uf1_dev && sUf1Lost)
                     staleLog("rea_sixty_uf1_stale.log", "UF1 reopened after retry");
                 sUf1Lost = !g_uf1_dev;
+                if (g_uf1_dev) g_uf1WantRetry.store(false);
                 // The bring-up replays SSL's init sequence, and two of its
                 // frames set the UF1's brightness back to 0x10 / 0x32. A unit
                 // that reappears mid-sleep would come up lit.
@@ -49471,6 +48312,21 @@ void reasixty_setShowAbsentDeviceSettings(bool on)
 {
     g_showAbsentDeviceSettings.store(on);
     SetExtState("rea_sixty", "show_absent_devices", on ? "1" : "0", true);
+}
+
+bool reasixty_uf1TakeFromOrc()
+{
+    return g_uf1TakeFromOrc.load();
+}
+
+void reasixty_setUf1TakeFromOrc(bool on)
+{
+    g_uf1TakeFromOrc.store(on);
+    SetExtState("rea_sixty", "uf1_take_from_orc", on ? "1" : "0", true);
+    // Takes effect now, not at the next start: ask (or stop asking) at once,
+    // and if the UF1 is not ours yet, start trying for it.
+    orcHandoverMark_(on);
+    if (on && !g_uf1_dev) g_uf1WantRetry.store(true);
 }
 
 int reasixty_devicesSeenMask()
@@ -54881,7 +53737,7 @@ void registerBindingHandlers()
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (firing) rmeToggleWindow_();
         },
-        [](int) { return g_rmeWindowShown.load(); },
+        [](int) { return g_rmeIn.windowShown.load(); },
         "RME: Show the TotalMix window", false
     });
     registerBuiltin("rme_fader_main", DescBuilder{
@@ -55682,7 +54538,7 @@ void registerBindingHandlers()
             // die gar nicht zu sehen war. In STRIP gehoeren die Keys der Seite.
             const int scBank = uf1SideCarBankNow_();
             if (scBank >= 0) {
-                if (uf1RmeActive_() && g_rmeStrip.load()) return;
+                if (uf1RmeActive_() && g_rmeIn.strip.load()) return;
             } else {
                 if (g_uf1MeterView.load()) return;
                 if (g_uf1ChannelSubMode.load() != 1) return;  // DAW mode only

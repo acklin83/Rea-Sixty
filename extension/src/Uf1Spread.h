@@ -145,4 +145,63 @@ struct StripCache {
 
 int paintStrip(const StripView& v, StripCache& cache, const Sink& out);
 
+// ── which layer of the large screen, and how to get there ────────────────────
+// ⇨ PLAN 6a (Frank 21.09.): the overview and every STRIP page without a graph on
+// Layout 1 (four colour bars, the per-pot names), the EQ and low-cut pages on
+// Layout 3, the only layer the graph exists in. "No graph" therefore means
+// changing layer, not hiding the graph.
+// ⛔ The per-pot names are only DRAWN in Layout 1. The painter sends them in
+// every layer; a surface left in another one shows the values and no names,
+// which is exactly how ORC's first run looked on 25.09.
+constexpr std::uint8_t kLayoutOverview = 0x01;
+constexpr std::uint8_t kLayoutGraph    = 0x03;
+
+// The entry sequence, byte for byte as the extension has driven it since
+// 22.09. ⛔ TWO STAGES, as SSL does in cap141: {00,01} twice, then the target.
+// Switched directly, Layout 2 stayed empty in the probe. Then the layer's
+// chrome, and 0x0118, which in Layout 1 is what lets a soft key's highlight
+// bit highlight the name instead of blanking it (measured 22.09.).
+// ⇨ After this, everything on the large screen has to be painted again: reset
+// the caller's Cache and StripCache.
+int enterLayout(std::uint8_t layout, const Sink& out);
+
+// One display soft key as a painter describes it. ⇨ Moved from main.cpp
+// (Uf1SkCell) so the side-car painter can hand its STRIP keys to the host.
+struct SkCell {
+    std::string   label;
+    bool          haveLabel = false;
+    bool          on        = false;
+    bool          hasColour = false;
+    std::uint32_t colRgb    = 0;
+    bool          colBright = false;
+};
+
+// Whether a key's move is possible right now, for the lamps (Uf1BtnAvail).
+struct BtnAvail { bool left, right, bankL, bankR, five8; bool chanSk = false; };
+
+// ── the helpers the side-car painter and ORC share ───────────────────────────
+// ⇨ MOVED OUT OF main.cpp ON 2026-09-25, verbatim. main.cpp keeps its old names
+// as one-line forwarders, so none of its call sites changed.
+
+// One V-Pot cell's text (Layout 3: one line, label and value zones).
+void vpotCell(VpotRow& row, int i, const std::string& label, const std::string& value);
+// Layout 1: name and value apart, fill-from-left 0x02 (0x03 = text only).
+void vpotCellL1(VpotRow& row, int i, const std::string& name, const std::string& value,
+                double norm, bool empty, std::uint8_t style = 0x02);
+// One cell's bar and style (Layout 3).
+void vpotBar(VpotRow& row, int i, double norm, bool bipolar, bool empty);
+
+// The EQ graph's frame sequence. `col` carries the head bytes 0x00 0x01.
+void eqFrames(const std::array<std::uint8_t, 251>& col, std::uint8_t tail, const Sink& out);
+
+// Blank the small display's channel zone, LEDs included.
+void blankChannelZone(const Sink& out);
+
+// The large-LCD header (0x011c, 8 x 25): template, live "N/M", FINE cell.
+extern const std::uint8_t kPluginHeader[200];
+std::array<std::uint8_t, 200> pageHeader(int cur, int total, bool fine);
+// Cells 0-2 of the header as the three-row mode list.
+void fillModeList(std::array<std::uint8_t, 200>& h, int* vis, int n, int cap, int cur,
+                  const char* (*nameOf)(int));
+
 } // namespace uf1spread

@@ -24,11 +24,45 @@
 #include <cstdint>
 #include <functional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace uf1 {
 
 constexpr uint8_t kFrameMagic = 0xFF;
+
+// ── the motor fader, in one place ────────────────────────────────────────────
+// ⇨ MOVED OUT OF main.cpp ON 2026-09-25 so ORC can use the same numbers. They
+// describe the hardware, not the host.
+constexpr uint16_t kFaderMax     = 0x7FFF;   // 15-bit, 0 bottom
+// ⛔ BOTH ENDS SNAP. The hardware never reports a clean 0 at the stop, so a raw
+// division never reached -inf: the fader bottomed out around -64 dB instead
+// (Frank 21.09.). The lowest and highest 64 steps latch onto 0 and 1.
+constexpr uint16_t kFaderEndSnap = 64;
+
+// ── the time field, 0x0119 ───────────────────────────────────────────────────
+// ⇨ MOVED OUT OF main.cpp ON 2026-09-25, because ORC was writing PLAIN TEXT into
+// this field and the surface answered with eight rows of "8.". The field is not
+// a string: it takes a SEGMENT MASK per cell. The font and the rules for it are
+// the device's, not the host's, so they belong here.
+constexpr int kTcFirst = 1;    // payload index of the leftmost VISIBLE cell
+constexpr int kTcCells = 10;   // visible cells
+
+// The segment mask for one character, 0x00 for anything with no shape.
+uint8_t seg7Glyph(char ch);
+// Text into the eleven payload bytes, LEFT-aligned. '.' ':' and ',' fold into
+// the dot of the cell before them. Anything past ten cells is dropped.
+void encodeSeg7Text(const char* s, uint8_t out[11]);
+// The same, as the payload buildScreen wants.
+std::vector<uint8_t> seg7Payload(const std::string& s);
+
+inline double faderPosToNorm(uint16_t pos)
+{
+    if (pos >= kFaderMax - kFaderEndSnap) return 1.0;
+    if (pos <= kFaderEndSnap)             return 0.0;
+    const double n = static_cast<double>(pos) / static_cast<double>(kFaderMax);
+    return n < 0.0 ? 0.0 : (n > 1.0 ? 1.0 : n);
+}
 
 // ---- Input (EP 0x81) -------------------------------------------------------
 
@@ -350,8 +384,8 @@ constexpr uint16_t kSoloActive   = 0x0120;
 //   3  gruen              8  orange             13+ schwarz (= aus)
 //   4  blau               9  blau / violett (*)
 //
-// (*) = Franks eigene Unsicherheit beim Ablesen. ⛔ Er ist farbenblind, also
-// sind diese vier Namen die schwaechsten Punkte der Tabelle. Was ueberprueft
+// (*) = beim Ablesen unsicher, also sind diese vier Namen die schwaechsten
+// Punkte der Tabelle. Was ueberprueft
 // ist: Basis 3 habe ich im Video gegengelesen (gruen, blau, hellblau, pink) und
 // es stimmt mit seiner Zeile ueberein. Bevor diese Palette gegen eine ANDERE
 // gemappt wird (TotalMix-Farbindizes), gehoeren die Hues aus einem Foto

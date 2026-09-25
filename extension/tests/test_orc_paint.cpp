@@ -84,6 +84,26 @@ int main()
         check(rec.wrote(uf1::scr::kChActive),    "populated flag written");
     }
 
+    // ⛔ THE TIME FIELD IS SPELLED, NOT TYPED. 0x0119 takes a segment mask per
+    // cell; ORC's first run wrote plain text there and the glass showed a row of
+    // "8." (25.09.). The frame must be exactly what buildScreen makes of the
+    // seg7 payload, and it must not contain the raw ASCII of the name.
+    {
+        Recorder rec;
+        uf1spread::Cache c;
+        uf1spread::paint(sampleView(), c, rec.sink());
+        const auto want = uf1::buildScreen(uf1::scr::kTimecode,
+                                           uf1::seg7Payload("Voc 1"));
+        bool found = false;
+        for (const auto& f : rec.frames) if (f == want) found = true;
+        check(found, "the time field goes out as segment masks");
+        const auto typed = uf1::buildScreen(uf1::scr::kTimecode,
+            std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t*>("Voc 1"), 5));
+        bool raw = false;
+        for (const auto& f : rec.frames) if (f == typed) raw = true;
+        check(!raw, "and never as the plain text of the name");
+    }
+
     // ⛔ The property the old painter could not prove about itself: painting the
     // same picture twice puts nothing more on the wire.
     {

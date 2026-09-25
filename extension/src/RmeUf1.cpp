@@ -71,6 +71,22 @@ int stepChannel(const std::vector<int>& list, int cur, int delta)
     return list[static_cast<std::size_t>(pos)];
 }
 
+const char* colourName(int index)
+{
+    switch (index) {
+        case 0: return "hidden";
+        case 1: return "white";
+        case 2: return "grey";
+        case 3: return "orange";
+        case 4: return "red";
+        case 5: return "blue";
+        case 6: return "green";
+        case 7: return "yellow";
+        case 8: return "pink";
+    }
+    return "?";
+}
+
 Target resolveTarget(const State& st, const std::string& spec)
 {
     Target t;

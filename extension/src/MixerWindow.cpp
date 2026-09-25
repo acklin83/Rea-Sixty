@@ -201,6 +201,7 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Connected devices",                     kSecDevices, "Connected devices" },
     { "Show settings for devices you don't have",
                                                kSecDevices, "Connected devices" },
+    { "Take the UF1 over from ORC",            kSecDevices, "Connected devices" },
     { "Forget devices that aren't connected",
                                                kSecDevices, "Connected devices" },
     // Drawn as "  LEDs" / "  LCDs" — the two leading spaces are layout

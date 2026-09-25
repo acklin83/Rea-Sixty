@@ -1418,11 +1418,10 @@ Zwei Bedingungen bleiben:
 - ⛔ Eine unbekannte Ebene kann die Firmware in einen Zustand bringen, aus dem
   das Zurueckschreiben allein nicht reicht. Der Preis eines Treffers kann ein
   REAPER-Neustart sein, und die Sonde gehoert hinter einen Schalter.
-- ⛔ **Frank ist farbenblind.** Eine Sonde, deren Ergebnis "welche Farbe
-  erscheint" lautet, hat den falschen Ableser. Also unterscheidbare
-  **Positionen** in die vier Byte schreiben (`00 01 02 03`), damit die Antwort
-  "vier Balken, von links ansteigend" heisst und nicht "gruen, gelb, orange,
-  rot".
+- ⛔ **Eine Sonde, deren Ergebnis "welche Farbe erscheint" lautet, stellt die
+  schwaechere Frage.** Also unterscheidbare **Positionen** in die vier Byte
+  schreiben (`00 01 02 03`), damit die Antwort "vier Balken, von links
+  ansteigend" heisst und nicht "gruen, gelb, orange, rot".
 
 ## 15. Entschieden am 19.09.
 

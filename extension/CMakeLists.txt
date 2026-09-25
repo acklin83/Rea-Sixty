@@ -361,6 +361,10 @@ add_library(reaper_uf8 MODULE
     src/RmeManager.cpp
     src/RmeUf1.cpp
     src/RmeStrip.cpp
+    src/Uf1Text.cpp
+    src/RmeInput.cpp
+    src/RmeFace.cpp
+    src/Uf1Pacer.cpp
     src/RmeNames.cpp
     src/TrackName.cpp
     src/PluginMap.cpp
@@ -800,7 +804,8 @@ if(NOT WIN32)
     # one), the three-valued snapshot echo, and that a role pointing at a
     # channel this remote cannot see is a STATE and not a bug.
     add_executable(test_rme_osc tests/test_rme_osc.cpp
-        src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp src/RmeUf1.cpp src/RmeStrip.cpp src/RmeNames.cpp
+        src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp src/RmeUf1.cpp src/RmeStrip.cpp
+        src/RmeInput.cpp src/RmeNames.cpp
         src/Uf1EqCurve.cpp)
     target_include_directories(test_rme_osc PRIVATE src "${WDL_DIR}")
     # RmeManager brings its worker thread, and on Windows its socket.
@@ -810,6 +815,33 @@ if(NOT WIN32)
         target_link_libraries(test_rme_osc PRIVATE ws2_32)
     endif()
     add_test(NAME rme_osc COMMAND test_rme_osc)
+
+    # What the UF1 does TO TotalMix. Pure: an event and a state in, a list of
+    # OSC addresses out, no socket and no surface. ⇨ The pair to test_orc_paint.
+    add_executable(test_rme_input tests/test_rme_input.cpp
+        src/RmeInput.cpp src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp
+        src/RmeUf1.cpp src/RmeStrip.cpp src/RmeNames.cpp src/Uf1EqCurve.cpp
+        src/UF1Protocol.cpp)
+    target_include_directories(test_rme_input PRIVATE src "${WDL_DIR}")
+    target_link_libraries(test_rme_input PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(test_rme_input PRIVATE ws2_32)
+    endif()
+    add_test(NAME rme_input COMMAND test_rme_input)
+
+    # What TotalMix looks like on the UF1: the side-car painter, shared by the
+    # extension and ORC. Pins the labels, the layer and the time field.
+    add_executable(test_rme_face tests/test_rme_face.cpp
+        src/RmeFace.cpp src/RmeInput.cpp src/RmeOsc.cpp src/RmeState.cpp
+        src/RmeManager.cpp src/RmeUf1.cpp src/RmeStrip.cpp src/RmeNames.cpp
+        src/Uf1EqCurve.cpp src/UF1Protocol.cpp src/Uf1Spread.cpp src/Uf1Text.cpp
+        src/TrackName.cpp)
+    target_include_directories(test_rme_face PRIVATE src "${WDL_DIR}")
+    target_link_libraries(test_rme_face PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(test_rme_face PRIVATE ws2_32)
+    endif()
+    add_test(NAME rme_face COMMAND test_rme_face)
     # Press-to-pick in Settings -> Bindings: which surface key a press selects,
     # selects and runs, or leaves alone. Header only.
     add_executable(test_bindings_pick tests/test_bindings_pick.cpp)
@@ -820,6 +852,7 @@ if(NOT WIN32)
     # View and writes into a Sink instead of reading globals and driving the
     # device, so the frames can be read here rather than looked at on the glass.
     add_executable(test_orc_paint tests/test_orc_paint.cpp
+        src/Uf1Text.cpp src/TrackName.cpp
         src/Uf1Spread.cpp src/UF1Protocol.cpp src/Uf1EqCurve.cpp)
     target_include_directories(test_orc_paint PRIVATE src)
     add_test(NAME orc_paint COMMAND test_orc_paint)
@@ -936,6 +969,13 @@ endif()
 if(APPLE)
     add_executable(orc
         orc/main.cpp
+        # Stage 7: the tick that used to be main()'s body, and the Mac side.
+        # ⛔ Surface has the device and the mixer and no AppKit; OrcApp and
+        # OrcSettingsWindow have AppKit and neither of the other two.
+        orc/Surface.cpp
+        orc/OrcConfig.cpp
+        orc/OrcApp.mm
+        orc/OrcSettingsWindow.mm
         src/UF1Device.cpp
         src/UF1Protocol.cpp
         src/RmeManager.cpp
@@ -943,9 +983,18 @@ if(APPLE)
         src/RmeOsc.cpp
         src/RmeUf1.cpp
         src/RmeStrip.cpp
+        src/RmeInput.cpp
+        # The side-car painter and its cycle, the extension's own (25.09.2026).
+        src/RmeFace.cpp
+        src/Uf1Pacer.cpp
         src/RmeNames.cpp
         src/Uf1EqCurve.cpp
         src/Uf1Spread.cpp
+        src/Uf1Text.cpp
+        src/TrackName.cpp
+        # For paletteName(): the settings window offers the UF1's colours by
+        # name. Palette.cpp asks REAPER nothing.
+        src/Palette.cpp
         # The bindings engine itself, not a second one: 8904 lines whose only
         # outward questions are the four callbacks in BindingsHost.h. KeyMacro is
         # the parser alone; KeyMacroSend, which needs a window to type at, stays
@@ -953,10 +1002,37 @@ if(APPLE)
         src/Bindings.cpp
         src/KeyMacro.cpp
         src/LogPath.cpp)
+    # ⛔ NATIVE APPKIT, NOT A DRAWN UI (Frank, 25.09.2026). The first stage-7
+    # build vendored Dear ImGui and drew its own window; it looked like a tool
+    # rather than a Mac program, and vendor/ is in .gitignore (WDL and the
+    # REAPER SDK arrive by FetchContent), so those files would have lived on one
+    # machine and CI could never have built this target. AppKit needs nothing
+    # vendored. No Swift either: that would be a second toolchain in a build
+    # that has none, and .mm files already compile here.
+    set_source_files_properties(
+        orc/OrcApp.mm
+        orc/OrcSettingsWindow.mm
+        PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     # WDL only for its JSON parser, which RmeManager reads rme.json with. No
     # REAPER header comes in with it: WDL is a standalone utility library.
     target_include_directories(orc PRIVATE src vendor/WDL)
-    target_link_libraries(orc PRIVATE reasixty_libusb Threads::Threads)
+    target_link_libraries(orc PRIVATE reasixty_libusb Threads::Threads
+        "-framework AppKit")
+    # ⇨ A BUNDLE, because a status item needs one. An unbundled binary can put
+    # an item in the menu bar, but it has no Info.plist to carry LSUIElement, no
+    # name for the system to show and nothing to sign or notarise later.
+    set(MACOSX_BUNDLE_EXECUTABLE_NAME ORC)
+    # ⚠ Provisional identifier. Nothing in this repo had one before; the App
+    # Store is not involved, so any reverse-DNS name works for signing and
+    # notarising, and this one is free to change until the first signed build
+    # goes out.
+    set(MACOSX_BUNDLE_GUI_IDENTIFIER ch.stoersender.orc)
+    set(MACOSX_BUNDLE_SHORT_VERSION_STRING 0.1.0)
+    set(MACOSX_BUNDLE_BUNDLE_VERSION 1)
+    configure_file(orc/Info.plist.in "${CMAKE_BINARY_DIR}/OrcInfo.plist" @ONLY)
     set_target_properties(orc PROPERTIES
+        OUTPUT_NAME ORC
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_BINARY_DIR}/OrcInfo.plist"
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 endif()

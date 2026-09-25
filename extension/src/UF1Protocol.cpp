@@ -182,4 +182,111 @@ std::vector<uint8_t> buildKeepalive(uint8_t counter) {
     return seal({kFrameMagic, 0x1B, 0x01, static_cast<uint8_t>(counter & 0x03)});
 }
 
+// ⇨ THE TIME FIELD IS SEGMENT-ADDRESSED, SO IT CAN SPELL (Frank 2026-08-22:
+// "können wir das 10-digit Timedisplay missbrauchen um auch Text anzuzeigen?").
+// 0x0119 does not take digits — it takes a SEGMENT BITMASK per cell, which is
+// why the decode reads (SEG7[d] << 1) | dp. SSL only ever sends the ten digit
+// patterns, but nothing in the encoding says it has to: any of the 128 masks is
+// a legal cell value, so the field is really eleven little 7-segment canvases.
+//
+//        aaaa        a = 0x01   d = 0x08   g = 0x40
+//       f    b       b = 0x02   e = 0x10
+//       f    b       c = 0x04   f = 0x20
+//        gggg        The payload byte is (mask << 1) | dp, so the dp (the
+//       e    c       separator dot AFTER the cell) is bit 0 and the segments
+//       e    c       live in bits 1..7.
+//        dddd  dp
+//
+// ⚠ Four capitals have no 7-segment shape at all — K M V W X. The table below
+// approximates them so nothing silently vanishes, but the real rule is to CHOOSE
+// WORDS THAT FIT THE FONT: "BARS" reads perfectly, "MIX" never will.
+// ✅ HW-PROVEN 2026-08-22: the firmware paints the RAW MASK. It does not look the
+// byte up in a digit table — Frank pressed the format step and read letters off
+// the panel. The same press proved the field is TEN cells wide, not eleven (see
+// kUf1TcFirst below).
+uint8_t seg7Glyph(char ch)
+{
+    switch (ch) {
+        // Digits. '9' keeps SSL's own 0x67 (no bottom segment) so a flashed
+        // number looks identical to the clock's.
+        case '0': return 0x3f; case '1': return 0x06; case '2': return 0x5b;
+        case '3': return 0x4f; case '4': return 0x66; case '5': return 0x6d;
+        case '6': return 0x7d; case '7': return 0x07; case '8': return 0x7f;
+        case '9': return 0x67;
+        // Letters that have a real shape. Some are only legible in lower case
+        // (b d n r t u), which is the standard calculator alphabet, so the table
+        // folds both cases onto the shape that READS rather than the one asked for.
+        case 'A': case 'a': return 0x77;
+        case 'B': case 'b': return 0x7c;   // lower-case b — an upper B is an 8
+        case 'C':           return 0x39;
+        case 'c':           return 0x58;
+        case 'D': case 'd': return 0x5e;   // lower-case d — an upper D is a 0
+        case 'E': case 'e': return 0x79;
+        case 'F': case 'f': return 0x71;
+        case 'G': case 'g': return 0x3d;
+        case 'H':           return 0x76;
+        case 'h':           return 0x74;
+        case 'I':           return 0x30;   // the left bar, so it is not a 1
+        case 'i':           return 0x10;
+        case 'J': case 'j': return 0x1e;
+        case 'L': case 'l': return 0x38;
+        case 'N': case 'n': return 0x54;   // lower-case n — an upper N is an H
+        case 'O':           return 0x3f;   // = 0
+        case 'o':           return 0x5c;
+        case 'P': case 'p': return 0x73;
+        case 'Q': case 'q': return 0x67;   // = 9
+        case 'R': case 'r': return 0x50;
+        case 'S': case 's': return 0x6d;   // = 5
+        case 'T': case 't': return 0x78;   // lower-case t
+        case 'U':           return 0x3e;
+        case 'u': case 'v': return 0x1c;
+        case 'Y': case 'y': return 0x6e;
+        case 'Z': case 'z': return 0x5b;   // = 2
+        // The impossible four, approximated. Say it out loud before shipping a
+        // word that needs one of them.
+        case 'K': case 'k': return 0x76;   // reads as H
+        case 'M': case 'm': return 0x37;   // top box, open at the bottom
+        case 'V':           return 0x3e;   // reads as U
+        case 'W': case 'w': return 0x3e;   // reads as U
+        case 'X': case 'x': return 0x76;   // reads as H
+        // Punctuation that costs nothing.
+        case '-': return 0x40; case '_': return 0x08; case '=': return 0x48;
+        case '\'': return 0x20; case '"': return 0x22; case '?': return 0x53;
+        case '[': case '(': return 0x39; case ']': case ')': return 0x0f;
+        case '^': return 0x01; case '*': return 0x63;   // degree ring
+        case ' ': return 0x00;
+    }
+    return 0x00;                            // unknown → blank, never garbage
+}
+
+// ⛔ TEN CELLS ON THE GLASS, ELEVEN IN THE PAYLOAD. Byte 0 is not displayed —
+// HW-PROVEN 2026-08-22, the day the field first got a left-aligned string and
+// Frank saw it eat the first letter ("es sind eben NICHT 11!"). Nobody could see
+// it before because the clock right-aligns and never filled the field. So every
+// writer works in out[kTcFirst .. 10] and leaves out[0] blank.
+
+// Text → the 0x0119 field, LEFT-aligned (text reads left to right; the clock
+// right-aligns because a number does). '.' ':' and ',' fold into the dp of the
+// cell before them instead of eating one, exactly as the clock's separators do.
+// Anything past the ten cells is dropped — there is no scrolling here.
+void encodeSeg7Text(const char* s, uint8_t out[11])
+{
+    for (int k = 0; k < 11; ++k) out[k] = 0x00;
+    int n = 0;
+    for (const char* p = s; *p && n < kTcCells; ++p) {
+        const char c = *p;
+        if ((c == '.' || c == ':' || c == ',') && n > 0) {
+            out[kTcFirst + n - 1] |= 0x01; continue;
+        }
+        out[kTcFirst + n++] = static_cast<uint8_t>(seg7Glyph(c) << 1);
+    }
+}
+
+std::vector<uint8_t> seg7Payload(const std::string& s)
+{
+    uint8_t cells[11];
+    encodeSeg7Text(s.c_str(), cells);
+    return std::vector<uint8_t>(cells, cells + 11);
+}
+
 } // namespace uf1

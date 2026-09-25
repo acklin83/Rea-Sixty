@@ -30,6 +30,8 @@ bool reasixty_uf1Connected();
 bool reasixty_settingsShowsDevice(int mask);
 bool reasixty_showAbsentDeviceSettings();
 void reasixty_setShowAbsentDeviceSettings(bool on);
+bool reasixty_uf1TakeFromOrc();
+void reasixty_setUf1TakeFromOrc(bool on);
 int  reasixty_devicesSeenMask();
 void reasixty_forgetAbsentDevices();
 const char* reasixty_uf8Serial();
@@ -612,6 +614,17 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
     }
 
     deviceLine("UF1", uf1On, reasixty_uf1Serial());
+#ifdef __APPLE__
+    // ⇨ ORC, the standalone, may hold the UF1 when REAPER starts. On: REAPER
+    // asks for it and ORC lets go. Off: REAPER leaves it with ORC.
+    {
+        bool take = reasixty_uf1TakeFromOrc();
+        if (ImGui_Checkbox(ctx, "Take the UF1 over from ORC", &take))
+            reasixty_setUf1TakeFromOrc(take);
+        help_(ctx, "If ORC holds the UF1, REAPER asks for it and ORC lets go. "
+                   "ORC takes it back when REAPER quits.");
+    }
+#endif
 
     // Settings for surfaces this machine has never had are hidden by default.
     // The escape hatch only appears when it would change something — with all

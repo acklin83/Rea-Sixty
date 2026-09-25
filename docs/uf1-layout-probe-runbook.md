@@ -28,8 +28,8 @@ MODE-Wechsel, und den Rueckweg geht der Maler ohnehin auf jeder Flanke.
    Reihenfolge: `0x0121`, `0x0113`, `0x0118`, `0x012b`
 
 **⛔ Das Muster sind Positionen, keine Farben.** Die Frage lautet "wie viele
-Balken und wo", nicht "welche Farbe". Frank ist farbenblind, eine Farbantwort
-haette den falschen Ableser.
+Balken und wo", nicht "welche Farbe": eine Position laesst sich zaehlen, eine
+Farbe nur benennen.
 
 ## Reihenfolge morgen
 

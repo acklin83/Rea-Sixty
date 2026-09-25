@@ -93,9 +93,12 @@ struct Config {
     std::string jogTarget  = "main";
     double      jogStepDb  = 0.5;
     double      vpotStepDb = 0.5;
-    // TotalMix colour index (0 hidden, 1 white .. 8 pink) -> UF1 palette index
-    // for the colour bar. Frank assigns these himself; the defaults are only the
-    // nearest names in Palette.cpp.
+    // TotalMix colour index -> UF1 palette index for the colour bar. The nine
+    // names are in RmeUf1.h (colourName), read off TotalMix' own menu on
+    // 2026-09-25: hidden, white, grey, orange, red, blue, green, yellow, pink.
+    // The defaults below are the nearest entry in Palette.cpp for each, which
+    // is exact for orange, red, blue and green and an approximation for the
+    // rest, because the surface palette has no white, no grey and no yellow.
     int         colourMap[9] = { 0x00, 0x01, 0x0C, 0x08, 0x02, 0x04, 0x03, 0x07, 0x0B };
 
     // The channel view's pages. Edited in rme.json for now (Frank 21.09., "a":

@@ -32,4 +32,9 @@ uint8_t quantize(uint32_t rgb24);
 // still unmapped (0x00, 0x01, 0x05, 0x0D, 0x0F) return std::nullopt.
 std::optional<Rgb> paletteEntry(uint8_t index);
 
+// The word for an index, for anywhere a person has to pick one. Never nullptr;
+// an index with no colour answers "off". The names are the ones in the kPalette
+// table's comments, in one place so nobody writes a second list.
+const char* paletteName(uint8_t index);
+
 } // namespace uf8

@@ -57,9 +57,9 @@ Unser Farbbalken nimmt auch einen Index, aber unseren
 RGB von TotalMix**. Die steht in keiner Spezifikation; sie muss einmal
 abgelesen werden.
 
-⛔ Und wer sie abliest, ist die Frage: **Frank ist farbenblind.** Eine Tabelle
-"Index 5 ist welches Gruen" holt man nicht per Zuruf, sondern aus einem
-Screenshot von TotalMix oder aus den Ressourcen der App.
+⛔ Und zwar gemessen, nicht per Zuruf: eine Tabelle "Index 5 ist welches
+Gruen" gehoert aus einem Screenshot von TotalMix oder aus den Ressourcen der
+App, wo sich der Hue auszaehlen laesst.
 
 ### 1.4 Was zuerst gemessen werden muss
 

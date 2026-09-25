@@ -172,6 +172,20 @@ int main()
     EXPECT(quantize(0xFFFFFF) == 0x00);   // pure white
     EXPECT(quantize(0x4C4C4D) == 0x00);   // 1-bit-off grey still grey
 
+    // --- paletteName (added 2026-09-25 for ORC's settings window).
+    //     ⛔ TWO TABLES IN ONE FILE, so this pins them to each other: an index
+    //     that HAS a colour must have a word, and an index that has none must
+    //     say "off". Without this, adding a palette entry and forgetting its
+    //     name gives a user a picker entry called "off" that is not off, and
+    //     nothing else would notice, because the word is the only part of a
+    //     picker entry anybody ever quotes back.
+    for (int i = 0; i < 16; ++i) {
+        const char* n = paletteName(static_cast<uint8_t>(i));
+        EXPECT(n != nullptr);
+        const bool named = n && std::string(n) != "off";
+        EXPECT(named == paletteEntry(static_cast<uint8_t>(i)).has_value());
+    }
+
     // --- LED colour pair (cap31, cap33). Lock the bytes captured from
     //     SSL 360° so a regression in the formula or colour-table is caught.
     //     Each pair returns FF38 + FF39 as TWO separate frames — SSL360
