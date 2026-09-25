@@ -520,6 +520,13 @@ std::unique_ptr<uc1::UC1Surface>  g_uc1_surface;
 // now this is claim + init-replay + input logging + a one-shot SEL colour
 // proof; the surface (screen features) comes after the path is verified.
 std::unique_ptr<uf1::UF1Device>   g_uf1_dev;
+// ⛔ THE PACER RUNS ON ITS OWN THREAD AND SENDS TO g_uf1_dev. Every place that
+// replaces or destroys the device takes this lock, and so does the pacer for
+// each cycle it emits. Without it the stale-handle reopen (every 5 s while ORC
+// holds the UF1) destroyed the device under a running emitCycle: REAPER died in
+// UF1Device::sendBurst on the freed object (crash 25.09.2026 22:50, 13 s after
+// start, main thread inside the reopen's UF1Device::open()).
+std::mutex                        g_uf1DevSwapMx;
 
 // UF1 fader state. Set on the worker thread (onUf1Event), consumed on the main
 // thread (uf1PaintChannel_) — atomics, no queue needed for a single fader.
@@ -23937,19 +23944,28 @@ static void uf1CyclePacerLoop_()
             }
             g_uf1CyclesEmitted.fetch_add(1, std::memory_order_relaxed);
         }
-        if (snap && g_uf1_dev) {
-            // The three groups plus the silences between them are ONE unit to
-            // the firmware. Hold everything else out of it; the painter's own
-            // sends are released as a block once the trailer has closed it.
-            g_uf1_dev->beginCycle();
-            g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->img));
-            std::this_thread::sleep_until(slot + kMetersOff);
-            if (!snap->meters.empty())
-                g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->meters));
-            std::this_thread::sleep_until(slot + kTailOff);
-            if (!snap->tail.empty())
-                g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->tail));
-            g_uf1_dev->endCycle();
+        // Under the swap lock: the main thread may be replacing the device
+        // (4aeffc3 on main, ported to 0.6's inline cycle).
+        bool emitted = false;
+        if (snap) {
+            std::lock_guard<std::mutex> devLk(g_uf1DevSwapMx);
+            if (g_uf1_dev && g_uf1_dev->isOpen()) {
+                // The three groups plus the silences between them are ONE unit to
+                // the firmware. Hold everything else out of it; the painter's own
+                // sends are released as a block once the trailer has closed it.
+                g_uf1_dev->beginCycle();
+                g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->img));
+                std::this_thread::sleep_until(slot + kMetersOff);
+                if (!snap->meters.empty())
+                    g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->meters));
+                std::this_thread::sleep_until(slot + kTailOff);
+                if (!snap->tail.empty())
+                    g_uf1_dev->sendBurst(std::vector<std::vector<uint8_t>>(snap->tail));
+                g_uf1_dev->endCycle();
+                emitted = true;
+            }
+        }
+        if (emitted) {
             // ⇨ DOES THE OS ACTUALLY SLEEP THIS FINELY? Report it once per run,
             // because the whole cycle is built on sub-millisecond offsets (18.0 ms
             // and 40.3 ms inside a 40.8 ms slot) and one platform is known not to
@@ -24008,8 +24024,11 @@ void shutdownDevices_()
     if (g_uf1PacerRun.exchange(false) && g_uf1PacerThread.joinable())
         g_uf1PacerThread.join();
 
-    if (g_uf1_dev) g_uf1_dev->close();
-    g_uf1_dev.reset();
+    {
+        std::lock_guard<std::mutex> devLk(g_uf1DevSwapMx);
+        if (g_uf1_dev) g_uf1_dev->close();
+        g_uf1_dev.reset();
+    }
     g_slotTrack.fill(nullptr);
 }
 
@@ -26204,7 +26223,10 @@ void onUf1Event(const uf1::InputEvent& ev)
 // (send-proof, flushed after the init replay completes).
 void openUf1BringUp_()
 {
-    g_uf1_dev = std::make_unique<uf1::UF1Device>();
+    // ⛔ OPENED ON THE SIDE, PUBLISHED WHEN IT IS UP. open() sleeps and runs the
+    // init replay; the pacer must neither send into a half-open device nor find
+    // one that is destroyed a moment later when open() fails (g_uf1DevSwapMx).
+    auto dev = std::make_unique<uf1::UF1Device>();
     {
         const char* v = GetExtState("rea_sixty", "uf1_trace");
         if (v && *v && strcmp(v, "0")) g_uf1Trace.store(true);
@@ -26218,9 +26240,9 @@ void openUf1BringUp_()
     // flag afterwards raced it — traces randomly missed the whole init replay
     // (EP0 'C' lines, the zero block, FF54), which made "did the init run?"
     // unanswerable from the log.
-    g_uf1_dev->setFrameTrace(g_uf1Trace.load());
-    if (!g_uf1_dev->open()) {
-        const std::string err = g_uf1_dev->lastError();
+    dev->setFrameTrace(g_uf1Trace.load());
+    if (!dev->open()) {
+        const std::string err = dev->lastError();
         // uf8::logPath, NOT a literal /tmp — on Windows the literal path ate
         // the one line that says WHY the UF1 didn't open (2026-07-17 session).
         if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uf1_stale.log").c_str(), "a")) {
@@ -26230,8 +26252,11 @@ void openUf1BringUp_()
                          static_cast<long long>(ms), err.c_str());
             std::fclose(f);
         }
-        g_uf1_dev.reset();
-        return;
+        return;   // `dev` goes out of scope; g_uf1_dev was never set
+    }
+    {
+        std::lock_guard<std::mutex> devLk(g_uf1DevSwapMx);
+        g_uf1_dev = std::move(dev);
     }
     markDeviceSeen_(kSeenUf1);
     g_uf1_dev->setRawInputHandler(onUf1Input);
@@ -44896,8 +44921,11 @@ void onTimerBody_()
             }
             if (u1Stale) {
                 if (!sUf1Lost) staleLog("rea_sixty_uf1_stale.log", "UF1 stale handle - reopening...");
-                if (g_uf1_dev) g_uf1_dev->close();
-                g_uf1_dev.reset();
+                {
+                    std::lock_guard<std::mutex> devLk(g_uf1DevSwapMx);
+                    if (g_uf1_dev) g_uf1_dev->close();
+                    g_uf1_dev.reset();
+                }
                 openUf1BringUp_();   // logs its own failure reason
                 if (g_uf1_dev && sUf1Lost)
                     staleLog("rea_sixty_uf1_stale.log", "UF1 reopened after retry");
