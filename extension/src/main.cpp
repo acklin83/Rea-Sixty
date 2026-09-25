@@ -809,7 +809,7 @@ inline int uf1SideCarSet_()
 //   .vpotBank   welche Bank der vier V-Pots, 0 oder 1 (Frank 21.09.: Bank 1
 //               Phones 1-4, Bank 2 Main A / Main B). Folgt seit 25.09. dem
 //               Submix auf Nav ◄ ► und dem Kanal-Encoder; 5-8 schaltet sie seit
-//               26.09. nicht mehr (Frank: "das reicht und macht mehr sinn")
+//               25.09. nicht mehr (Frank: "das reicht und macht mehr sinn")
 //   .skHalf     welche Haelfte der Soft-Key-Bank, per 5-8 (RmeSoftKeys)
 //   .strip      STRIP, die Kanalansicht (docs/rme-strip-and-uf8-plan.md 3)
 //   .stripPage  Index in Config::stripPages, bleibt beim Kanalwechsel stehen;
@@ -8112,7 +8112,7 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
         return info;
     }
     // ⛔ AND TOTALMIX' SNAPSHOTS AND LAYOUTS, same place, same reason. The rule
-    // lives in RmeSoftKeys since 26.09.2026, shared with ORC.
+    // lives in RmeSoftKeys since 25.09.2026, shared with ORC.
     if (kind == DK::RmeSnapshots || kind == DK::RmeLayouts) {
         const auto d = reasixty::rme::softkeys::dynSlot(kind, slot);
         info.present = true;
@@ -25992,7 +25992,7 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
         rmeSend_(w);
         if (used) return true;
     }
-    // ⇨ DER DRUCK GEHT DURCH RmeSoftKeys (26.09.2026), wie in ORC: die Haelfte
+    // ⇨ DER DRUCK GEHT DURCH RmeSoftKeys (25.09.2026), wie in ORC: die Haelfte
     // per 5-8 oder SHIFT, eine TotalMix-Bank laedt beim Druecken. Das Laden
     // selbst laeuft ueber g_uf1DynBankReq auf dem Hauptthread, weil dort auch
     // der Name ins Zeitfeld kommt (applyDynBankRmeOp_).
@@ -26024,7 +26024,7 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
         return true;
     }
     // Bank ◄ ► blaettern hier nicht mehr: die zweite Haelfte einer Bank ist seit
-    // 26.09.2026 auf 5-8 (Frank: "snapshots mit 5-8"), in RmeInput.
+    // 25.09.2026 auf 5-8 (Frank: "snapshots mit 5-8"), in RmeInput.
     return false;
 }
 
@@ -26182,7 +26182,7 @@ void onUf1Event(const uf1::InputEvent& ev)
             // vor allem anderen. Siehe uf1RmeButton_.
             if (uf1SideCarSoftKeys_(ev)) break;
             // ⇨ TRANSPORT IM SIDE-CAR: was ORC dort bindet (DuRec), sonst REAPER
-            // wie bisher (Frank 26.09.: "könnte ja an reasixty durchgehen falls
+            // wie bisher (Frank 25.09.: "könnte ja an reasixty durchgehen falls
             // nicht besetzt"). Nur Rwd/Ffw/Stop/Play/Rec, das entscheidet die Engine.
             if (uf1RmeActive_()
                 && uf8::bindings::dispatchSideCarKey(uf8::bindings::fromUf1DeviceId(ev.id),
@@ -32638,7 +32638,7 @@ static Uf1SkCell uf1StaticBankCell_(int bankNo, int i)
 }
 
 // ⇨ DIE ZELLE EINES DYNAMISCHEN BANK-SLOTS in der DAW-Ansicht, und die Seite
-// dazu. Das RME-Side-Car nimmt seit 26.09.2026 seine Zellen aus RmeSoftKeys
+// dazu. Das RME-Side-Car nimmt seit 25.09.2026 seine Zellen aus RmeSoftKeys
 // (geteilt mit ORC) und blaettert mit 5-8 statt ueber diese Seite.
 // Seite: g_uf1DynBankPage waehlt [page*4 .. page*4+3], ABSOLUT. Zaehler und
 // Ruecksetzen bei Wechsel von Bank / Art / Spur.
@@ -33694,7 +33694,7 @@ static void uf1PaintSideCarSoftKeys_(bool force)
     const int nb = std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set));
     if (g_sideCarBank[set].load() >= nb) g_sideCarBank[set].store(0);
     const int bank = uf8::bindings::uf1SideCarBankBase(set) + g_sideCarBank[set].load();
-    // ⇨ DIE ZELLEN KOMMEN AUS RmeSoftKeys (26.09.2026), dieselben wie in ORC:
+    // ⇨ DIE ZELLEN KOMMEN AUS RmeSoftKeys (25.09.2026), dieselben wie in ORC:
     // statisch oder TotalMix-Snapshots/-Layouts, Haelfte per 5-8 oder SHIFT.
     const std::array<Uf1SkCell, 4> cells =
         reasixty::rme::softkeys::row(bank, reasixty::rme::softkeys::half(g_rmeIn));
@@ -33738,10 +33738,10 @@ static bool uf1SideCarKeepsLed_(uf8::bindings::ButtonId id)
     using B = uf8::bindings::ButtonId;
     return id == B::Uf1Shift || id == B::Uf1Rwd || id == B::Uf1Ffw || id == B::Uf1Stop
         || id == B::Uf1Play  || id == B::Uf1Rec || id == B::Uf1Cycle || id == B::Uf1Click
-        // 5-8 = die zweite Haelfte der Soft-Key-Bank (RmeInput, seit 26.09.),
+        // 5-8 = die zweite Haelfte der Soft-Key-Bank (RmeInput, seit 25.09.),
         // < > = Baenke bzw. STRIP-Seiten (uf1SideCarSoftKeys_).
         || id == B::Uf1FiveToEight || id == B::Uf1ArrowLeft || id == B::Uf1ArrowRight
-        // Bank ◄ ►: blaettern seit 26.09. nichts mehr, der Maler meldet sie aus
+        // Bank ◄ ►: blaettern seit 25.09. nichts mehr, der Maler meldet sie aus
         // (RmeFace, BtnAvail), damit keine REAPER-Lampe durchscheint.
         || id == B::Uf1BankLeft || id == B::Uf1BankRight
         // 360 behaelt im Side-Car seine Bindung, also auch seine Lampe.
@@ -54222,7 +54222,7 @@ void registerBindingHandlers()
             const int scBank = uf1SideCarBankNow_();
             if (scBank >= 0) {
                 if (uf1RmeActive_() && g_rmeIn.strip.load()) return;
-                // Seit 26.09.2026 hat jede Side-Car-Bank zwei Haelften, und die
+                // Seit 25.09.2026 hat jede Side-Car-Bank zwei Haelften, und die
                 // wechselt 5-8 (RmeInput). Dieselbe Umschaltung, falls das hier
                 // auf einer anderen Taste liegt.
                 g_rmeIn.skHalf.store(g_rmeIn.skHalf.load() ? 0 : 1);
@@ -57307,7 +57307,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
 
 
     initLog("step: bindings::load");
-    // ⇨ THE RME SIDE-CAR'S BANKS ARE ORC'S (26.09.2026), like its settings
+    // ⇨ THE RME SIDE-CAR'S BANKS ARE ORC'S (25.09.2026), like its settings
     // (reasixty_rmeConfigPath_): read from orc.json, never written to our
     // bindings.json. Set BEFORE load(), so an upgrade that saves already leaves
     // them out. No ORC here (Windows, Linux, a Mac without it): empty path,

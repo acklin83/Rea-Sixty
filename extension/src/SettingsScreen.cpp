@@ -3770,7 +3770,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             for (auto& n : builtinNames()) {
                 const char* cat = categoryFor(n);
                 if (!cat || !*cat) continue;
-                // ⇨ THE RME ACTIONS ARE ORC'S TO BIND (26.09.2026): the side-car's
+                // ⇨ THE RME ACTIONS ARE ORC'S TO BIND (25.09.2026): the side-car's
                 // banks and its transport keys come from orc.json and are edited
                 // in ORC. They stay registered, so what is bound keeps working;
                 // they are just not offered here any more.
@@ -8013,7 +8013,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             // Held for the whole table: a click writes both of these, and the
             // rows after it would otherwise mark a different cell than the rows
             // before it in the same frame.
-            // The RME side-car's banks left this editor on 26.09.2026: they are
+            // The RME side-car's banks left this editor on 25.09.2026: they are
             // ORC's now, edited in ORC and read from orc.json (Bindings.h,
             // setSideCarSource). The matrix is the DAW view's ten again, and
             // g_uf1BankSet stays -1.

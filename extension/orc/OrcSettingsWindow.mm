@@ -332,7 +332,7 @@ NSTextField* dim(NSString* text)
     return item;
 }
 
-// ⇨ THE SOFT KEYS ARE BUILT HERE, NOT IN REA-SIXTY (Frank 26.09.2026: "die
+// ⇨ THE SOFT KEYS ARE BUILT HERE, NOT IN REA-SIXTY (Frank 25.09.2026: "die
 // bänke müssen wir den user bauen lassen, mit einer werksbesetzung"). Ten banks
 // of four keys, each with two halves (5-8 or SHIFT on the surface), and the five
 // transport keys. Written to orc.json through the bindings engine; Rea-Sixty's

@@ -1005,7 +1005,7 @@ void save();
 bool exportTo(const std::string& path);
 
 // ⇨ THE RME SIDE-CAR'S BANKS AND TRANSPORT KEYS FROM ANOTHER PROGRAM'S FILE
-// (26.09.2026: ORC owns them, Rea-Sixty reads orc.json). After setSideCarSource
+// (25.09.2026: ORC owns them, Rea-Sixty reads orc.json). After setSideCarSource
 // this host never writes banks kUf1RmeBankBase.. to its own file. `path` empty =
 // there is no such file here (no ORC): the banks stay empty.
 void setSideCarSource(const std::string& path);
@@ -1330,7 +1330,7 @@ Binding  getUf1SoftBankSlot(int bank, int slot);            // OOR = empty
 // rule for the extension and ORC (moved out of main.cpp 2026-09-25). Empty =
 // nothing bound on this layer. `mod` >= 0 names the set outright instead of
 // the held modifier: the RME side-car's 5-8 key shows the second set of a bank
-// without anything being held (Frank 26.09.).
+// without anything being held (Frank 25.09.).
 std::string uf1SoftBankKeyLabel(int bank, int slot, int mod = -1);
 
 // ⇨ IS THIS BINDING ENGAGED, for its lamp. A stateful builtin that reports on,

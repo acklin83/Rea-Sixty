@@ -32,10 +32,10 @@ void registerBuiltins(input::State& in, const input::Host& host)
         regRmeCr("rme_mono",      "/controlroom/mainmono", &CR::mono,     "RME: Main output mono");
         regRmeCr("rme_speaker_b", "/controlroom/speakerb", &CR::speakerB, "RME: Speaker B");
         regRmeCr("rme_talkback",  "/controlroom/talkback", &CR::talkback, "RME: Talkback");
-        // Ext In, on the second half of the factory bank (Frank 26.09.).
+        // Ext In, on the second half of the factory bank (Frank 25.09.).
         regRmeCr("rme_ext_in",    "/controlroom/externalin", &CR::externalIn, "RME: External input");
     }
-    // ⇨ DuRec, the recorder in the interface (Frank 26.09.: "Durec auf transport?
+    // ⇨ DuRec, the recorder in the interface (Frank 25.09.: "Durec auf transport?
     // könnte ja an reasixty durchgehen falls nicht besetzt"). Bindable, not bound:
     // the factory leaves the transport keys empty in orc.json, so they go on to
     // REAPER's transport in the side-car. Addresses from RME's Global OSC sheet

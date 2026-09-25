@@ -3,12 +3,12 @@
 // RmeSoftKeys — the RME side-car's four display soft keys: which bank, which
 // half, what each key says and what a press does.
 //
-// ⇨ ONE ANSWER FOR BOTH PROGRAMS (26.09.2026). Until then the extension built
+// ⇨ ONE ANSWER FOR BOTH PROGRAMS (25.09.2026). Until then the extension built
 // these cells in main.cpp and ORC built its own, static only: TotalMix'
 // snapshot and layout banks were resolved in main.cpp alone, so in ORC the
 // banks were there and the keys were dead. Now both call this.
 //
-// ⇨ A BANK HAS TWO HALVES, and 5-8 switches between them (Frank 26.09.: "Bank 1:
+// ⇨ A BANK HAS TWO HALVES, and 5-8 switches between them (Frank 25.09.: "Bank 1:
 // dim, mono, speaker b, talkback und dann über 5-8 ext in, main auf fader,
 // totalmix fenster"). A static bank's second half is its Shift set, so SHIFT on
 // the surface reaches it as well; in the extension the computer keyboard's Shift

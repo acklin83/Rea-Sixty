@@ -23,7 +23,7 @@ DK rmeKind(int bank)
     return (k == DK::RmeSnapshots || k == DK::RmeLayouts) ? k : DK::None;
 }
 
-// Moved from the extension's dynamicBankSlot_ (main.cpp), 26.09.2026, word for
+// Moved from the extension's dynamicBankSlot_ (main.cpp), 25.09.2026, word for
 // word apart from the struct it fills.
 // ⛔ TotalMix always has eight of each, so every key is present; the name comes
 // from its state file (RmeNames.h). Without a link the names stay and the lamp
@@ -49,7 +49,7 @@ DynSlot dynSlot(DK kind, int slot)
     return d;
 }
 
-// Moved from the extension's applyDynBankRmeOp_ (main.cpp), 26.09.2026. Saving
+// Moved from the extension's applyDynBankRmeOp_ (main.cpp), 25.09.2026. Saving
 // a snapshot is not on these keys. Without a link nothing is sent
 // (Manager::send drops it anyway when RME is switched off, but a link that is
 // merely down would queue it).

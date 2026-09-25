@@ -11,7 +11,7 @@
 //    replaces the whole config, banks 10.. included.
 //  · no file = empty banks (no ORC, no RME banks).
 //  · 5-8 shows the bank's second half: the Shift set on a static bank, items
-//    5..8 on a TotalMix bank, and SHIFT does the same (Frank 26.09.).
+//    5..8 on a TotalMix bank, and SHIFT does the same (Frank 25.09.).
 //  · a transport key fires only a TotalMix builtin from ORC's file; a REAPER
 //    action there is ORC's inherited factory and the key stays REAPER's.
 //  · 5-8 in the side-car switches the half, not the V-Pot bank any more.

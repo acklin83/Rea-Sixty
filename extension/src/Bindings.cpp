@@ -488,7 +488,7 @@ std::mutex                                 g_cfgMutex;
 Config                                     g_cfg;
 std::unordered_map<std::string, BuiltinDescriptor> g_builtins;
 
-// ⇨ THE RME SIDE-CAR'S BANKS BELONG TO ANOTHER FILE (26.09.2026, Frank: the
+// ⇨ THE RME SIDE-CAR'S BANKS BELONG TO ANOTHER FILE (25.09.2026, Frank: the
 // whole side-car configuration comes from ORC). Set by a host that reads them
 // from there (setSideCarSource): this host then never WRITES banks
 // kUf1RmeBankBase.. to its own file, and the next save takes them out of it.
@@ -793,7 +793,7 @@ void seedRmeSideCarBank_(Config& c)
     bank[3] = mkBuiltin("rme_talkback",  Behavior::Momentary, "Talkback");
 }
 
-// ⇨ DIE ZWEITE HAELFTE DER ERSTEN RME-BANK (Frank 26.09.: "Bank 1: dim, mono,
+// ⇨ DIE ZWEITE HAELFTE DER ERSTEN RME-BANK (Frank 25.09.: "Bank 1: dim, mono,
 // speaker b, talkback und dann über 5-8 ext in, main auf fader (zusätzlich),
 // totalmix fenster (zusätzlich)"). Die zweite Haelfte ist der Shift-Satz der
 // Bank; 5-8 und SHIFT zeigen ihn (RmeSoftKeys). Main und das Fenster liegen
@@ -3237,7 +3237,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // MASTER key at the fader does it now (unseedRmeSideCarBank2_).
 // v44 (2026-09-22): RME side-car banks 3 and 4 become the dynamic TotalMix
 // Snapshots and Layouts banks, where they are still empty (seedRmeSideCarBank34_).
-// v49 (2026-09-26): the first RME side-car bank gets its second half (the
+// v49 (2026-09-25): the first RME side-car bank gets its second half (the
 // Shift set, on 5-8): Ext In, Main, TotalMix, where that set is still empty
 // (seedRmeSideCarBankShift_).
 constexpr int kCurrentBindingsVersion = 49;
@@ -4559,7 +4559,7 @@ bool importFrom(const std::string& path)
 }
 
 // ---- The RME side-car from another program's file ----------------------------
-// ⇨ ORC OWNS THE SIDE-CAR'S BANKS (Frank 25./26.09.2026: "die bänke müssen wir
+// ⇨ ORC OWNS THE SIDE-CAR'S BANKS (Frank 25./25.09.2026: "die bänke müssen wir
 // den user bauen lassen, mit einer werksbesetzung", edited in ORC). Rea-Sixty
 // reads them out of ORC's orc.json into banks kUf1RmeBankBase.. of its own
 // store, so every reader (painter, dispatch, lamps) serves them unchanged, and
@@ -4686,7 +4686,7 @@ bool dispatchSideCarKey(ButtonId id, bool pressed)
     }
     // Only what ORC can run on its own, a TotalMix builtin. A REAPER action in
     // orc.json is ORC's inherited factory layer and means nothing there, so the
-    // key stays REAPER's (Frank 26.09.: "könnte ja an reasixty durchgehen falls
+    // key stays REAPER's (Frank 25.09.: "könnte ja an reasixty durchgehen falls
     // nicht besetzt").
     if (slot.type != ActionType::Builtin || slot.action.rfind("rme_", 0) != 0)
         return false;
@@ -4694,7 +4694,7 @@ bool dispatchSideCarKey(ButtonId id, bool pressed)
     return true;
 }
 
-// ⇨ ONE RME BANK BACK TO THE FACTORY (ORC's soft-key editor, 26.09.2026): the
+// ⇨ ONE RME BANK BACK TO THE FACTORY (ORC's soft-key editor, 25.09.2026): the
 // same three seeds a fresh file gets, run on an empty config, and only bank
 // `rel` of it copied over. So "factory" means exactly what a new install has,
 // and there is no second list of it to fall out of step.
@@ -7120,7 +7120,7 @@ static const std::vector<Uf1BankPreset>& factoryUf1Banks_()
         }));
         // Recording control only. The scenes themselves are the ObsScenes
         // dynamic kind; a bank of three is the honest size of what is left.
-        // (The "RME Monitor" preset left on 26.09.2026 with the RME actions:
+        // (The "RME Monitor" preset left on 25.09.2026 with the RME actions:
         // those are bound in ORC now.)
         v.push_back(bank("OBS", {
             {"obs_record_toggle",  "OBS Rec",   0},

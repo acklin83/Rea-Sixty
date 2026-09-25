@@ -376,7 +376,7 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
         out.push_back({ rmes::sendChanAddress(r, sel + 1), 1.0f });
         return true;
     }
-    // ⇨ 5-8 SWITCHES THE SOFT-KEY BANK'S HALF (Frank 26.09.: "Bank 1: dim, mono,
+    // ⇨ 5-8 SWITCHES THE SOFT-KEY BANK'S HALF (Frank 25.09.: "Bank 1: dim, mono,
     // speaker b, talkback und dann über 5-8 ext in, main auf fader, totalmix
     // fenster", "snapshots mit 5-8"). It used to switch the two V-Pot banks;
     // those follow the submix on Nav ◄ ► and the channel encoder since 25.09.,

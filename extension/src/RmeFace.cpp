@@ -468,7 +468,7 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
     }
     const rme::Channel* selCh = (sel >= 0) ? rmeu::channelOf(st, row, sel) : nullptr;
     // Bank ◄ ► blaettern im Side-Car nichts mehr; 5-8 leuchtet auf der zweiten
-    // Haelfte der Soft-Key-Bank (Frank 26.09.: "snapshots mit 5-8").
+    // Haelfte der Soft-Key-Bank (Frank 25.09.: "snapshots mit 5-8").
     if (h.buttonLeds) h.buttonLeds(force, uf1spread::BtnAvail{ arrowL, arrowR, false, false,
                                             !strip && in.skHalf.load() == 1,
                                             selCh && selCh->stereo });

@@ -274,7 +274,7 @@ void Surface::loop_()
     };
     // The overview: the RME set's current bank, the extension's cells
     // (src/RmeSoftKeys), TotalMix' snapshots and layouts included since
-    // 26.09.2026. No MODE menu to yield to.
+    // 25.09.2026. No MODE menu to yield to.
     host.sideCarSoftKeys = [this, &skCache, skSink](bool f) {
         namespace bnd = uf8::bindings;
         const int bank = bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme) + scBank_.load();
