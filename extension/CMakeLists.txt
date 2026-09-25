@@ -928,8 +928,16 @@ if(APPLE)
         orc/main.cpp
         src/UF1Device.cpp
         src/UF1Protocol.cpp
+        src/RmeManager.cpp
+        src/RmeState.cpp
+        src/RmeOsc.cpp
+        src/RmeUf1.cpp
+        src/RmeNames.cpp
+        src/Uf1EqCurve.cpp
         src/LogPath.cpp)
-    target_include_directories(orc PRIVATE src)
+    # WDL only for its JSON parser, which RmeManager reads rme.json with. No
+    # REAPER header comes in with it: WDL is a standalone utility library.
+    target_include_directories(orc PRIVATE src vendor/WDL)
     target_link_libraries(orc PRIVATE reasixty_libusb Threads::Threads)
     set_target_properties(orc PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
