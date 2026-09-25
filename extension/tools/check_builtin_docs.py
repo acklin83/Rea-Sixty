@@ -28,7 +28,7 @@ def registered_names(main_cpp: str) -> set:
     # selection modes, UF1 views and the FX-param pair never call it directly.
     names = set()
     for fn in ("registerBuiltin", "registerSelectionModeToggle",
-               "regUf1View", "registerFxParamStep", "regRmeCr"):
+               "regUf1View", "registerFxParamStep", "regRmeCr", "regDurec"):
         names.update(re.findall(fn + r'\(\s*"([a-z0-9_]+)"', main_cpp))
 
     # Loop-built families: snprintf(buf, ..., "name_%d", i) then

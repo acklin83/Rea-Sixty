@@ -39,7 +39,8 @@ std::uint32_t bindingLedColour(const uf8::bindings::Binding& bd,
                                const uf8::bindings::ActionSlot& colSlot, bool on);
 
 // One static soft-bank slot as a cell: name, engaged state, lamp colour.
-uf1spread::SkCell staticBankCell(int bankNo, int i);
+// `mod` >= 0 shows that set instead of the held one (the RME side-car's 5-8).
+uf1spread::SkCell staticBankCell(int bankNo, int i, int mod = -1);
 
 // Put the row on the surface: names, lamps and the highlight mask, each only
 // when it changed or when `force`. `ledsBorrowed`: another painter owns the

@@ -93,6 +93,7 @@
 #include "HueManager.h"
 #include "ObsManager.h"
 #include "RmeBuiltins.h"
+#include "RmeSoftKeys.h"
 #include "RmeFace.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
@@ -805,8 +806,11 @@ inline int uf1SideCarSet_()
 //   .sel[row]   der gewaehlte Kanal pro Reihe, -1 = noch keiner
 //   .submix     der zuletzt gewaehlte Ausgang = der Submix, in den Eingaenge
 //               und Playbacks schreiben, genau wie ein Klick in TotalMix
-//   .vpotBank   welche Bank der vier V-Pots, 0 oder 1, per 5-8 (Frank 21.09.:
-//               Bank 1 Phones 1-4, Bank 2 Main A / Main B)
+//   .vpotBank   welche Bank der vier V-Pots, 0 oder 1 (Frank 21.09.: Bank 1
+//               Phones 1-4, Bank 2 Main A / Main B). Folgt seit 25.09. dem
+//               Submix auf Nav ◄ ► und dem Kanal-Encoder; 5-8 schaltet sie seit
+//               26.09. nicht mehr (Frank: "das reicht und macht mehr sinn")
+//   .skHalf     welche Haelfte der Soft-Key-Bank, per 5-8 (RmeSoftKeys)
 //   .strip      STRIP, die Kanalansicht (docs/rme-strip-and-uf8-plan.md 3)
 //   .stripPage  Index in Config::stripPages, bleibt beim Kanalwechsel stehen;
 //               hat der neue Kanal die Seite nicht, zeigt der Maler die erste
@@ -831,20 +835,6 @@ static int uf1SideCarBankNow_()
     const int set = uf1SideCarSet_();
     return set < 0 ? -1
                    : uf8::bindings::uf1SideCarBankBase(set) + g_sideCarBank[set].load();
-}
-// ⇨ BANK ◄ ► BLAETTERN IM SIDE-CAR IN DER DYNAMISCHEN BANK (Frank 22.09., wie
-// seine eigene Belegung in der DAW-Ansicht). Wie viele Seiten die gezeigte Bank
-// hat: 1 heisst statisch oder einseitig, dann tun die Tasten nichts. Den Zaehler
-// veroeffentlicht der Maler (uf1DynBankPagePublish_).
-static int uf1SideCarDynPages_()
-{
-    const int bank = uf1SideCarBankNow_();
-    if (bank < 0) return 1;
-    if (uf8::bindings::getUf1SoftBankDynamicFor(
-            bank, static_cast<int>(uf8::bindings::bankModifierSnapshot()))
-        == uf8::bindings::DynamicBankKind::None)
-        return 1;
-    return std::max(1, g_uf1DynBankPageCount.load());
 }
 
 // ⇨ UF1 LAYOUT PROBE (Settings -> About). A diagnostic, not a feature.
@@ -4052,6 +4042,19 @@ static std::string reasixty_rmeConfigPath_()
 #ifdef __APPLE__
     const char* home = std::getenv("HOME");
     return home ? std::string(home) + "/Library/Application Support/ORC/rme.json"
+                : std::string();
+#else
+    return std::string();
+#endif
+}
+
+// ORC's bindings file: the RME side-car's soft-key banks and the transport keys
+// it binds come from here (Bindings.h, setSideCarSource). Same rule as above.
+static std::string reasixty_orcBindingsPath_()
+{
+#ifdef __APPLE__
+    const char* home = std::getenv("HOME");
+    return home ? std::string(home) + "/Library/Application Support/ORC/orc.json"
                 : std::string();
 #else
     return std::string();
@@ -8108,32 +8111,17 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
         info.led     = (nm == om.currentScene()) ? 2 : 1;
         return info;
     }
-    // ⛔ AND TOTALMIX' SNAPSHOTS AND LAYOUTS, same place, same reason. TotalMix
-    // always has eight of each, so every key is present; the name comes from its
-    // state file (RmeNames.h). Without a link the names stay and the lamp goes
-    // dark, and the press does nothing (Frank 22.09.).
+    // ⛔ AND TOTALMIX' SNAPSHOTS AND LAYOUTS, same place, same reason. The rule
+    // lives in RmeSoftKeys since 26.09.2026, shared with ORC.
     if (kind == DK::RmeSnapshots || kind == DK::RmeLayouts) {
-        const auto& nm = reasixty::rme::namesFromDisk();
-        const bool snap = (kind == DK::RmeSnapshots);
+        const auto d = reasixty::rme::softkeys::dynSlot(kind, slot);
         info.present = true;
-        info.label   = snap ? reasixty::rme::snapshotName(nm, slot)
-                            : reasixty::rme::layoutName(nm, slot);
+        info.label   = d.label;
         // White through the colour path: on the UF1 a key without a colour
         // knows only lit and dim, and "no link" has to be dark.
         info.hasRgb  = true;
         info.rgb     = 0xFFFFFFu;
-        auto& rm = reasixty::rme::manager();
-        if (rm.link() != reasixty::rme::LinkState::Online) { info.led = 0; return info; }
-        const auto sc = rm.scenes();
-        if (snap) {
-            // Aktiv und geaendert leuchten gleich und ruhig, wie ein Layout
-            // (Frank 22.09.: "den aktiven nicht blinken lassen").
-            using SS = reasixty::rme::SnapshotState;
-            info.led = (sc.snapshot[slot] == SS::Active
-                        || sc.snapshot[slot] == SS::Changed) ? 2 : 1;
-        } else {
-            info.led = (sc.lastLayout == slot) ? 2 : 1;
-        }
+        info.led     = d.led;
         return info;
     }
     if (!tr) return info;
@@ -8588,19 +8576,12 @@ static void applyDynBankFavouriteOp_(int slot, int gesture,
 static void applyDynBankRmeOp_(uf8::bindings::DynamicBankKind kind, int slot,
                                int gesture)
 {
-    if (slot < 0 || slot >= 8 || gesture != 0) return;
-    auto& rm = reasixty::rme::manager();
-    if (rm.link() != reasixty::rme::LinkState::Online) return;
-    const bool snap = (kind == uf8::bindings::DynamicBankKind::RmeSnapshots);
-    // Snapshots count from 1 on the wire (protocol sheet); layouts are sent the
-    // same way, which is not measured yet.
-    char addr[32];
-    std::snprintf(addr, sizeof(addr), snap ? "/snapshot/load/%d" : "/layout/load/%d",
-                  slot + 1);
-    rm.send(addr, 1.0f);
+    if (gesture != 0) return;
+    if (!reasixty::rme::softkeys::loadDyn(kind, slot)) return;   // RmeSoftKeys
     const auto& nm = reasixty::rme::namesFromDisk();
-    uf1FlashTimecode_(snap ? reasixty::rme::snapshotName(nm, slot)
-                           : reasixty::rme::layoutName(nm, slot), 1200);
+    uf1FlashTimecode_(kind == uf8::bindings::DynamicBankKind::RmeSnapshots
+                          ? reasixty::rme::snapshotName(nm, slot)
+                          : reasixty::rme::layoutName(nm, slot), 1200);
 }
 
 // Main-thread executor for a UF8 dynamic bank press (drained in onTimer).
@@ -26011,10 +25992,21 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
         rmeSend_(w);
         if (used) return true;
     }
+    // ⇨ DER DRUCK GEHT DURCH RmeSoftKeys (26.09.2026), wie in ORC: die Haelfte
+    // per 5-8 oder SHIFT, eine TotalMix-Bank laedt beim Druecken. Das Laden
+    // selbst laeuft ueber g_uf1DynBankReq auf dem Hauptthread, weil dort auch
+    // der Name ins Zeitfeld kommt (applyDynBankRmeOp_).
     if (id >= uf1::btn::kDisplaySoft1 && id <= uf1::btn::kDisplaySoft4) {
         if (!g_uf1ModeMenu.load())
-            uf1SoftBankKey_(uf8::bindings::uf1SideCarBankBase(set) + g_sideCarBank[set].load(),
-                            static_cast<int>(id - uf1::btn::kDisplaySoft1), ev.pressed);
+            reasixty::rme::softkeys::press(
+                uf8::bindings::uf1SideCarBankBase(set) + g_sideCarBank[set].load(),
+                reasixty::rme::softkeys::half(g_rmeIn),
+                static_cast<int>(id - uf1::btn::kDisplaySoft1), ev.pressed,
+                [](uf8::bindings::DynamicBankKind kind, int slot) {
+                    g_uf1DynBankReq.store((1u << 31)
+                        | (static_cast<uint32_t>(kind) << 24)
+                        | ((static_cast<uint32_t>(slot) & 0xFFFFu) << 8));
+                });
         return true;
     }
     // ⇨ DIE NORMALEN PFEILE < > BLAETTERN, wie die Soft-Key-Baenke in der DAW-
@@ -26024,23 +26016,15 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
         if (ev.pressed) {
             const int nb  = std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set));
             const int dir = (id == uf1::btn::kArrowRight) ? 1 : -1;
-            g_sideCarBank[set].store(std::clamp(g_sideCarBank[set].load() + dir, 0, nb - 1));
+            const int to  = std::clamp(g_sideCarBank[set].load() + dir, 0, nb - 1);
+            // Eine neue Bank beginnt auf ihrer ersten Haelfte.
+            if (to != g_sideCarBank[set].load()) g_rmeIn.skHalf.store(0);
+            g_sideCarBank[set].store(to);
         }
         return true;
     }
-    // ⇨ UND BANK ◄ ► BLAETTERN IN DER BANK, wenn eine dynamische zu sehen ist.
-    // Zwei Ebenen, zwei Tastenpaare, wie Frank es sich in der DAW-Ansicht selbst
-    // belegt hat. Eine statische Bank laesst die Tasten durch, sonst naehme das
-    // Side-Car dem Item-Modus die Spurwahl weg, ohne etwas dafuer zu bieten.
-    if (id == uf1::btn::kBankLeft || id == uf1::btn::kBankRight) {
-        const int cnt = uf1SideCarDynPages_();
-        if (cnt < 2) return false;
-        if (ev.pressed && !g_uf1ModeMenu.load()) {
-            const int dir = (id == uf1::btn::kBankRight) ? 1 : cnt - 1;
-            g_uf1DynBankPage.store((g_uf1DynBankPage.load() + dir) % cnt);
-        }
-        return true;
-    }
+    // Bank ◄ ► blaettern hier nicht mehr: die zweite Haelfte einer Bank ist seit
+    // 26.09.2026 auf 5-8 (Frank: "snapshots mit 5-8"), in RmeInput.
     return false;
 }
 
@@ -26197,6 +26181,13 @@ void onUf1Event(const uf1::InputEvent& ev)
             // RME-Side-Car: hinter MODE und dem MODE-Menue (das ist der Ausgang),
             // vor allem anderen. Siehe uf1RmeButton_.
             if (uf1SideCarSoftKeys_(ev)) break;
+            // ⇨ TRANSPORT IM SIDE-CAR: was ORC dort bindet (DuRec), sonst REAPER
+            // wie bisher (Frank 26.09.: "könnte ja an reasixty durchgehen falls
+            // nicht besetzt"). Nur Rwd/Ffw/Stop/Play/Rec, das entscheidet die Engine.
+            if (uf1RmeActive_()
+                && uf8::bindings::dispatchSideCarKey(uf8::bindings::fromUf1DeviceId(ev.id),
+                                                     ev.pressed))
+                break;
             if (uf1RmeActive_() && uf1RmeButton_(ev)) break;
             // PRESETS browser: V-Pot4 PUSH = "Select" → load the highlighted preset
             // (cap uf1_rp: V-Pot4 label "Select"). Claimed BEFORE the binding-first
@@ -32646,13 +32637,11 @@ static Uf1SkCell uf1StaticBankCell_(int bankNo, int i)
     return uf1sk::staticBankCell(bankNo, i);            // lives in Uf1SoftKeys
 }
 
-// ⇨ DIE ZELLE EINES DYNAMISCHEN BANK-SLOTS, und die Seite dazu. Bis 22.09. stand
-// beides nur im DAW-Zweig von uf1PaintChannel_; das Side-Car malt seine eigenen
-// Baenke und braucht dieselbe Regel (TotalMix-Snapshots auf RME-Bank 3), also
-// steht sie hier einmal, wie uf1StaticBankCell_ darueber.
+// ⇨ DIE ZELLE EINES DYNAMISCHEN BANK-SLOTS in der DAW-Ansicht, und die Seite
+// dazu. Das RME-Side-Car nimmt seit 26.09.2026 seine Zellen aus RmeSoftKeys
+// (geteilt mit ORC) und blaettert mit 5-8 statt ueber diese Seite.
 // Seite: g_uf1DynBankPage waehlt [page*4 .. page*4+3], ABSOLUT. Zaehler und
-// Ruecksetzen bei Wechsel von Bank / Art / Spur. Es malt immer nur EIN Maler,
-// darum teilen sich DAW-Ansicht und Side-Car die eine Seite.
+// Ruecksetzen bei Wechsel von Bank / Art / Spur.
 static int uf1DynBankPagePublish_(int bankNo, uf8::bindings::DynamicBankKind kind,
                                   MediaTrack* tr)
 {
@@ -33705,17 +33694,10 @@ static void uf1PaintSideCarSoftKeys_(bool force)
     const int nb = std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set));
     if (g_sideCarBank[set].load() >= nb) g_sideCarBank[set].store(0);
     const int bank = uf8::bindings::uf1SideCarBankBase(set) + g_sideCarBank[set].load();
-    bool dynOwnsSet = false;
-    const auto dynKind = uf8::bindings::getUf1SoftBankDynamicFor(
-        bank, static_cast<int>(uf8::bindings::bankModifierSnapshot()), &dynOwnsSet);
-    const bool dyn = dynKind != uf8::bindings::DynamicBankKind::None;
-    MediaTrack* dynTr = dyn ? uf1FocusedTrack_() : nullptr;
-    const int dynPage = dyn ? uf1DynBankPagePublish_(bank, dynKind, dynTr) : 0;
-    std::array<Uf1SkCell, 4> cells{};
-    for (int i = 0; i < 4; ++i)
-        cells[static_cast<size_t>(i)] = dyn
-            ? uf1DynBankCell_(bank, dynKind, dynOwnsSet, dynTr, dynPage, i)
-            : uf1StaticBankCell_(bank, i);
+    // ⇨ DIE ZELLEN KOMMEN AUS RmeSoftKeys (26.09.2026), dieselben wie in ORC:
+    // statisch oder TotalMix-Snapshots/-Layouts, Haelfte per 5-8 oder SHIFT.
+    const std::array<Uf1SkCell, 4> cells =
+        reasixty::rme::softkeys::row(bank, reasixty::rme::softkeys::half(g_rmeIn));
     // Ein anderes Side-Car ist ein anderer Satz: dann alles neu.
     static int sSet = -1;
     const bool setEdge = (set != sSet);
@@ -33756,10 +33738,11 @@ static bool uf1SideCarKeepsLed_(uf8::bindings::ButtonId id)
     using B = uf8::bindings::ButtonId;
     return id == B::Uf1Shift || id == B::Uf1Rwd || id == B::Uf1Ffw || id == B::Uf1Stop
         || id == B::Uf1Play  || id == B::Uf1Rec || id == B::Uf1Cycle || id == B::Uf1Click
-        // 5-8 = die zwei V-Pot-Baenke im RME-Side-Car (uf1RmeButton_),
+        // 5-8 = die zweite Haelfte der Soft-Key-Bank (RmeInput, seit 26.09.),
         // < > = Baenke bzw. STRIP-Seiten (uf1SideCarSoftKeys_).
         || id == B::Uf1FiveToEight || id == B::Uf1ArrowLeft || id == B::Uf1ArrowRight
-        // Bank ◄ ► = die Seiten einer dynamischen Bank (uf1SideCarSoftKeys_).
+        // Bank ◄ ►: blaettern seit 26.09. nichts mehr, der Maler meldet sie aus
+        // (RmeFace, BtnAvail), damit keine REAPER-Lampe durchscheint.
         || id == B::Uf1BankLeft || id == B::Uf1BankRight
         // 360 behaelt im Side-Car seine Bindung, also auch seine Lampe.
         || id == B::Uf1Btn360
@@ -33910,8 +33893,8 @@ static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
                 on = avail;
             const bool keep = !sideCar || uf1SideCarKeepsLed_(kUf1BtnLeds[k].id);
             if (!keep) on = false;
-            // Im Side-Car ist 5-8 die V-Pot-Bank, egal was in REAPER darauf liegt:
-            // die Lampe sagt, was die Taste hier tut.
+            // Im Side-Car ist 5-8 die Haelfte der Soft-Key-Bank, egal was in
+            // REAPER darauf liegt: die Lampe sagt, was die Taste hier tut.
             if (sideCar && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1FiveToEight) {
                 on = five8On; show = true;
             }
@@ -33982,7 +33965,6 @@ static void uf1PaintRme_()
         h.bankCount    = [] {
             return std::max(1, bnd::uf1SideCarBankInUseCount(bnd::kUf1SideCarSetRme));
         };
-        h.dynPages     = [] { return uf1SideCarDynPages_(); };
         h.tcFlash      = [] {
             return nowMs_() < g_uf1TcFlashUntilMs ? g_uf1TcFlashText : std::string();
         };
@@ -42471,6 +42453,8 @@ static void tickHueTransport_()
     // only follows it, once a second, so a change in ORC's settings window
     // reaches the side-car while REAPER runs.
     if ((g_tickCounter % 30) == 0) reasixty_rmeLoadConfig_(/*force*/ false);
+    // The side-car's banks, same file owner, same rate (setSideCarSource).
+    if ((g_tickCounter % 30) == 0) uf8::bindings::refreshSideCarSource();
 
     // ---- recording light ---------------------------------------------------
     {
@@ -54238,6 +54222,11 @@ void registerBindingHandlers()
             const int scBank = uf1SideCarBankNow_();
             if (scBank >= 0) {
                 if (uf1RmeActive_() && g_rmeIn.strip.load()) return;
+                // Seit 26.09.2026 hat jede Side-Car-Bank zwei Haelften, und die
+                // wechselt 5-8 (RmeInput). Dieselbe Umschaltung, falls das hier
+                // auf einer anderen Taste liegt.
+                g_rmeIn.skHalf.store(g_rmeIn.skHalf.load() ? 0 : 1);
+                return;
             } else {
                 if (g_uf1MeterView.load()) return;
                 if (g_uf1ChannelSubMode.load() != 1) return;  // DAW mode only
@@ -57318,7 +57307,14 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
 
 
     initLog("step: bindings::load");
+    // ⇨ THE RME SIDE-CAR'S BANKS ARE ORC'S (26.09.2026), like its settings
+    // (reasixty_rmeConfigPath_): read from orc.json, never written to our
+    // bindings.json. Set BEFORE load(), so an upgrade that saves already leaves
+    // them out. No ORC here (Windows, Linux, a Mac without it): empty path,
+    // empty banks, and no RME side-car anyway.
+    uf8::bindings::setSideCarSource(reasixty_orcBindingsPath_());
     uf8::bindings::load();
+    uf8::bindings::refreshSideCarSource(/*force*/ true);
     initLog("step: bindings::load done");
     // Phase 2.5d-A — user-learned plugin catalogue. Load after the
     // built-in PluginMap registry is initialised (it's static so it's

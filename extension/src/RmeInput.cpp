@@ -376,9 +376,13 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
         out.push_back({ rmes::sendChanAddress(r, sel + 1), 1.0f });
         return true;
     }
-    // 5-8 switches the two V-Pot banks, like the track group in the DAW view.
+    // ⇨ 5-8 SWITCHES THE SOFT-KEY BANK'S HALF (Frank 26.09.: "Bank 1: dim, mono,
+    // speaker b, talkback und dann über 5-8 ext in, main auf fader, totalmix
+    // fenster", "snapshots mit 5-8"). It used to switch the two V-Pot banks;
+    // those follow the submix on Nav ◄ ► and the channel encoder since 25.09.,
+    // and Frank: "das reicht und macht mehr sinn als 5-8". RmeSoftKeys reads it.
     if (id == ::uf1::btn::k5to8) {
-        if (ev.pressed) s.vpotBank.store((s.vpotBank.load() + 1) % Config::kVpotBanks);
+        if (ev.pressed && !modeMenu(h)) s.skHalf.store(s.skHalf.load() ? 0 : 1);
         return true;
     }
 

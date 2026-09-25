@@ -467,9 +467,10 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
         arrowR = bankNow(h) < nb - 1;
     }
     const rme::Channel* selCh = (sel >= 0) ? rmeu::channelOf(st, row, sel) : nullptr;
-    const bool bankPage = (h.dynPages ? h.dynPages() : 0) >= 2;
-    if (h.buttonLeds) h.buttonLeds(force, uf1spread::BtnAvail{ arrowL, arrowR, bankPage, bankPage,
-                                            !strip && in.vpotBank.load() == 1,
+    // Bank ◄ ► blaettern im Side-Car nichts mehr; 5-8 leuchtet auf der zweiten
+    // Haelfte der Soft-Key-Bank (Frank 26.09.: "snapshots mit 5-8").
+    if (h.buttonLeds) h.buttonLeds(force, uf1spread::BtnAvail{ arrowL, arrowR, false, false,
+                                            !strip && in.skHalf.load() == 1,
                                             selCh && selCh->stereo });
 
     // ── Zeitfeld: immer der Jog-Kanal (Main) in dB ──────────────────────────

@@ -1003,6 +1003,22 @@ void save();
 // active Config with the contents of `path` (and persists to the
 // regular configPath). Both return false on I/O / parse errors.
 bool exportTo(const std::string& path);
+
+// ⇨ THE RME SIDE-CAR'S BANKS AND TRANSPORT KEYS FROM ANOTHER PROGRAM'S FILE
+// (26.09.2026: ORC owns them, Rea-Sixty reads orc.json). After setSideCarSource
+// this host never writes banks kUf1RmeBankBase.. to its own file. `path` empty =
+// there is no such file here (no ORC): the banks stay empty.
+void setSideCarSource(const std::string& path);
+// Look again: re-read when the file changed (modification time, size) or with
+// `force`, and put the banks back after our own config was loaded or edited.
+// True when the banks were (re)applied. Any thread; call it about once a second.
+bool refreshSideCarSource(bool force = false);
+// A transport key (Rwd, Ffw, Stop, Play, Rec) while the side-car has the UF1:
+// fires the TotalMix builtin the source file puts there and returns true, or
+// returns false and the key is the host's as before.
+bool dispatchSideCarKey(ButtonId id, bool pressed);
+// Put RME side-car bank `rel` (0-based) back to what a fresh file has, and save.
+void restoreRmeSideCarBank(int rel);
 bool importFrom(const std::string& path);
 
 // Absolute path where bindings.json is persisted (<REAPER>/rea_sixty/...).
@@ -1312,8 +1328,10 @@ bool     dispatchUserQuickSlot(int layer, int quick, int subBank,
 Binding  getUf1SoftBankSlot(int bank, int slot);            // OOR = empty
 // ⇨ THE WORD A UF1 SOFT-BANK KEY SHOWS, for the modifier held right now. One
 // rule for the extension and ORC (moved out of main.cpp 2026-09-25). Empty =
-// nothing bound on this layer.
-std::string uf1SoftBankKeyLabel(int bank, int slot);
+// nothing bound on this layer. `mod` >= 0 names the set outright instead of
+// the held modifier: the RME side-car's 5-8 key shows the second set of a bank
+// without anything being held (Frank 26.09.).
+std::string uf1SoftBankKeyLabel(int bank, int slot, int mod = -1);
 
 // ⇨ IS THIS BINDING ENGAGED, for its lamp. A stateful builtin that reports on,
 // or a REAPER action whose toggle state is 1 (through Host::toggleState).
@@ -1410,8 +1428,9 @@ int             uf1SoftBankInUseCount();
 // min 1. Drives that side-car's own paging and N/M.
 int             uf1SideCarBankInUseCount(int set);
 // Run a UF1 bank slot's action (same long-press + modifier logic as
-// dispatchUserQuickSlot). Returns true if the slot has an action.
-bool     dispatchUf1SoftBankSlot(int bank, int slot, bool pressed);
+// dispatchUserQuickSlot). Returns true if the slot has an action. `mod` >= 0
+// fires that set instead of the held one (see uf1SoftBankKeyLabel).
+bool     dispatchUf1SoftBankSlot(int bank, int slot, bool pressed, int mod = -1);
 
 // Replace (or insert) a single binding and persist. Caller is the UI;
 // any in-flight USB-thread dispatch holding the lock blocks briefly.

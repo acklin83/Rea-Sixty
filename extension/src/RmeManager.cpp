@@ -274,7 +274,8 @@ std::string Manager::status() const
 Manager::ControlRoom Manager::controlRoom() const
 {
     std::lock_guard<std::mutex> lk(mx_);
-    return { state_.dim, state_.mono, state_.speakerB, state_.talkback, state_.mainOut };
+    return { state_.dim, state_.mono, state_.speakerB, state_.talkback, state_.mainOut,
+             state_.externalIn };
 }
 
 Manager::Scenes Manager::scenes() const

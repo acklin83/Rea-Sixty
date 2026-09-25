@@ -488,6 +488,18 @@ std::mutex                                 g_cfgMutex;
 Config                                     g_cfg;
 std::unordered_map<std::string, BuiltinDescriptor> g_builtins;
 
+// ⇨ THE RME SIDE-CAR'S BANKS BELONG TO ANOTHER FILE (26.09.2026, Frank: the
+// whole side-car configuration comes from ORC). Set by a host that reads them
+// from there (setSideCarSource): this host then never WRITES banks
+// kUf1RmeBankBase.. to its own file, and the next save takes them out of it.
+// ORC never sets it and keeps writing its orc.json as before.
+std::atomic<bool> g_sideCarBanksForeign{false};
+bool serializesUf1Bank_(int b)
+{
+    if (!g_sideCarBanksForeign.load()) return true;
+    return b < kUf1RmeBankBase || b >= kUf1RmeBankBase + kUf1RmeBankCount;
+}
+
 // Mixer auto-switch save slot. -1 means "no transient swap in effect".
 // When the mixer opens and a Layer 2/3 has auto_when_mixer_visible=true,
 // we stash the currently-active layer here and flip activeLayer to the
@@ -779,6 +791,34 @@ void seedRmeSideCarBank_(Config& c)
     bank[1] = mkBuiltin("rme_mono",      Behavior::Momentary, "Mono");
     bank[2] = mkBuiltin("rme_speaker_b", Behavior::Momentary, "Speaker B");
     bank[3] = mkBuiltin("rme_talkback",  Behavior::Momentary, "Talkback");
+}
+
+// ⇨ DIE ZWEITE HAELFTE DER ERSTEN RME-BANK (Frank 26.09.: "Bank 1: dim, mono,
+// speaker b, talkback und dann über 5-8 ext in, main auf fader (zusätzlich),
+// totalmix fenster (zusätzlich)"). Die zweite Haelfte ist der Shift-Satz der
+// Bank; 5-8 und SHIFT zeigen ihn (RmeSoftKeys). Main und das Fenster liegen
+// ausserdem auf MASTER und Nav-Mitte, darum "zusaetzlich". Nur in einen Satz,
+// der noch ganz leer ist, auch ohne Beschriftung (Memory
+// franks-bindings-are-not-factory). Von der Saat und von v49.
+bool slotHasNoData_(const ActionSlot& s);   // defined below
+void seedRmeSideCarBankShift_(Config& c)
+{
+    Binding* bank = c.uf1SoftBanks[kUf1RmeBankBase];
+    const int sh = static_cast<int>(Modifier::Shift);
+    for (int s = 0; s < kUf1SoftBankSlots; ++s)
+        if (!slotHasNoData_(bank[s].shortPress[sh])) return;
+    const struct { const char* action; const char* label; } half2[3] = {
+        { "rme_ext_in",      "Ext In"   },
+        { "rme_fader_main",  "Main"     },
+        { "rme_show_window", "TotalMix" },
+    };
+    for (int s = 0; s < 3; ++s) {
+        auto& sp  = bank[s].shortPress[sh];
+        sp.type   = ActionType::Builtin;
+        sp.action = half2[s].action;
+        sp.param  = 0;
+        sp.label  = half2[s].label;
+    }
 }
 
 // ⇨ DIE ZWEITE RME-BANK IST WIEDER LEER. Main lag dort seit dem 21.09. auf dem
@@ -1473,6 +1513,7 @@ void seedFactoryDefaults_(Config& c)
     // views that seed their own 5-8. See fillDerivedUf1Slots_.
     fillDerivedUf1Slots_(c);
     seedRmeSideCarBank_(c);
+    seedRmeSideCarBankShift_(c);
     seedRmeSideCarBank23_(c);
 }
 
@@ -2076,14 +2117,14 @@ void serializeUf1SoftBanks_(const Config& c, std::ostringstream& os)
     bool any = false;
     for (int b = 0; b < kUf1SoftBankStore && !any; ++b)
         for (int s = 0; s < kUf1SoftBankSlots; ++s)
-            if (!uf1BankSlotEmpty_(c.uf1SoftBanks[b][s])) { any = true; break; }
+            if (serializesUf1Bank_(b) && !uf1BankSlotEmpty_(c.uf1SoftBanks[b][s])) { any = true; break; }
     if (!any) return;
     os << ",\n  \"uf1_soft_banks\": [";
     bool first = true;
     for (int b = 0; b < kUf1SoftBankStore; ++b)
         for (int s = 0; s < kUf1SoftBankSlots; ++s) {
             const Binding& bd = c.uf1SoftBanks[b][s];
-            if (uf1BankSlotEmpty_(bd)) continue;
+            if (!serializesUf1Bank_(b) || uf1BankSlotEmpty_(bd)) continue;
             if (!first) os << ",";
             first = false;
             os << "\n    {\"bank\": " << b << ", \"slot\": " << s
@@ -2101,14 +2142,14 @@ void serializeUf1SoftBankDynamic_(const Config& c, std::ostringstream& os)
     bool any = false;
     for (int b = 0; b < kUf1SoftBankStore && !any; ++b)
         for (int m = 0; m < kSoftKeyModifierSets && !any; ++m)
-            if (c.uf1SoftBankDynamic[b][m] != DynamicBankKind::None) any = true;
+            if (serializesUf1Bank_(b) && c.uf1SoftBankDynamic[b][m] != DynamicBankKind::None) any = true;
     if (!any) return;
     os << ",\n  \"uf1_soft_bank_dynamic\": [";
     bool first = true;
     for (int b = 0; b < kUf1SoftBankStore; ++b)
         for (int m = 0; m < kSoftKeyModifierSets; ++m) {
             const auto k = c.uf1SoftBankDynamic[b][m];
-            if (k == DynamicBankKind::None) continue;
+            if (!serializesUf1Bank_(b) || k == DynamicBankKind::None) continue;
             if (!first) os << ",";
             first = false;
             os << "\n    {\"bank\": " << b
@@ -2182,13 +2223,13 @@ void serializeUf1SoftBankNames_(const Config& c, std::ostringstream& os)
     bool any = false;
     for (int b = 0; b < kUf1SoftBankStore && !any; ++b)
         for (int m = 0; m < kSoftKeyModifierSets && !any; ++m)
-            if (!c.uf1SoftBankName[b][m].empty()) any = true;
+            if (serializesUf1Bank_(b) && !c.uf1SoftBankName[b][m].empty()) any = true;
     if (!any) return;
     os << ",\n  \"uf1_soft_bank_names\": [";
     bool first = true;
     for (int b = 0; b < kUf1SoftBankStore; ++b)
         for (int m = 0; m < kSoftKeyModifierSets; ++m) {
-            if (c.uf1SoftBankName[b][m].empty()) continue;
+            if (!serializesUf1Bank_(b) || c.uf1SoftBankName[b][m].empty()) continue;
             if (!first) os << ",";
             first = false;
             os << "\n    {\"bank\": " << b << ", \"mod\": " << m << ", \"name\": ";
@@ -3196,7 +3237,10 @@ bool invokeBuiltin(const std::string& name, int param)
 // MASTER key at the fader does it now (unseedRmeSideCarBank2_).
 // v44 (2026-09-22): RME side-car banks 3 and 4 become the dynamic TotalMix
 // Snapshots and Layouts banks, where they are still empty (seedRmeSideCarBank34_).
-constexpr int kCurrentBindingsVersion = 48;
+// v49 (2026-09-26): the first RME side-car bank gets its second half (the
+// Shift set, on 5-8): Ext In, Main, TotalMix, where that set is still empty
+// (seedRmeSideCarBankShift_).
+constexpr int kCurrentBindingsVersion = 49;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4383,6 +4427,9 @@ void load()
             if (tmp.version < 47) {
                 tidyRmeSideCarDynBanks_(tmp);
             }
+            if (tmp.version < 49) {
+                seedRmeSideCarBankShift_(tmp);
+            }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
             // (quick_select_X / user_domain_X / show_user_bank /
@@ -4509,6 +4556,164 @@ bool importFrom(const std::string& path)
         g_bindingsGen.fetch_add(1, std::memory_order_relaxed);
     }
     return true;
+}
+
+// ---- The RME side-car from another program's file ----------------------------
+// ⇨ ORC OWNS THE SIDE-CAR'S BANKS (Frank 25./26.09.2026: "die bänke müssen wir
+// den user bauen lassen, mit einer werksbesetzung", edited in ORC). Rea-Sixty
+// reads them out of ORC's orc.json into banks kUf1RmeBankBase.. of its own
+// store, so every reader (painter, dispatch, lamps) serves them unchanged, and
+// never writes them (serializesUf1Bank_). Only those ten banks and the five
+// transport keys come across; nothing else in orc.json means anything here.
+namespace {
+struct SideCarSource {
+    std::string             path;
+    long long               mtime = -2, size = -2;   // -2 = never looked
+    std::unique_ptr<Config> file;                     // null = no file / unreadable
+    uint64_t                appliedGen = ~0ull;       // g_bindingsGen after the last copy
+};
+SideCarSource g_scSrc;   // guarded by g_cfgMutex
+
+bool statFile_(const std::string& path, long long& mtime, long long& size)
+{
+    struct stat sb{};
+    if (path.empty() || stat(path.c_str(), &sb) != 0) return false;
+#ifdef __APPLE__
+    mtime = static_cast<long long>(sb.st_mtimespec.tv_sec) * 1000000000LL
+          + sb.st_mtimespec.tv_nsec;
+#else
+    mtime = static_cast<long long>(sb.st_mtime);
+#endif
+    size = static_cast<long long>(sb.st_size);
+    return true;
+}
+
+// Copy what the file holds into g_cfg's RME banks; a missing file leaves them
+// empty (no ORC, no RME banks). Caller holds g_cfgMutex.
+void applySideCarSourceLocked_()
+{
+    const Config* f = g_scSrc.file.get();
+    for (int r = 0; r < kUf1RmeBankCount; ++r) {
+        const int b = kUf1RmeBankBase + r;
+        for (int sl = 0; sl < kUf1SoftBankSlots; ++sl)
+            g_cfg.uf1SoftBanks[b][sl] = f ? f->uf1SoftBanks[b][sl] : Binding{};
+        for (int m = 0; m < kSoftKeyModifierSets; ++m) {
+            g_cfg.uf1SoftBankDynamic[b][m] = f ? f->uf1SoftBankDynamic[b][m]
+                                               : DynamicBankKind::None;
+            g_cfg.uf1SoftBankName[b][m] = f ? f->uf1SoftBankName[b][m] : std::string();
+        }
+    }
+    g_scSrc.appliedGen = g_bindingsGen.fetch_add(1, std::memory_order_relaxed) + 1;
+}
+
+void runSlot_(const ActionSlot& slot, bool firing, bool pressed);   // defined below
+void persistLocked_();                                              // defined below
+
+bool isSideCarKey_(ButtonId id)
+{
+    return id == ButtonId::Uf1Rwd || id == ButtonId::Uf1Ffw || id == ButtonId::Uf1Stop
+        || id == ButtonId::Uf1Play || id == ButtonId::Uf1Rec;
+}
+} // namespace
+
+void setSideCarSource(const std::string& path)
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    g_sideCarBanksForeign.store(true);
+    g_scSrc.path  = path;
+    g_scSrc.mtime = g_scSrc.size = -2;
+}
+
+bool refreshSideCarSource(bool force)
+{
+    std::string path;
+    {
+        std::lock_guard<std::mutex> lk(g_cfgMutex);
+        if (!g_sideCarBanksForeign.load()) return false;
+        path = g_scSrc.path;
+    }
+    long long mt = -1, sz = -1;
+    const bool have = statFile_(path, mt, sz);
+    bool reread = false;
+    {
+        std::lock_guard<std::mutex> lk(g_cfgMutex);
+        reread = force || mt != g_scSrc.mtime || sz != g_scSrc.size;
+    }
+    std::unique_ptr<Config> parsed;
+    if (reread && have) {
+        std::string json;
+        if (readFile_(path, json) && !json.empty()) {
+            // Heap, not stack: sizeof(Config) (see load()). No factory seed: the
+            // banks are what the file says, and an empty bank in ORC is empty.
+            parsed = std::make_unique<Config>();
+            if (!tryParse_(json, *parsed)) parsed.reset();
+        }
+    }
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (reread) {
+        // A file that does not parse (ORC halfway through writing it) keeps what
+        // we had; the next look, a second later, sees the finished one.
+        if (!have) g_scSrc.file.reset();
+        else if (parsed) g_scSrc.file = std::move(parsed);
+        else return false;
+        g_scSrc.mtime = mt;
+        g_scSrc.size  = sz;
+        applySideCarSourceLocked_();
+        return true;
+    }
+    // ⇨ AND AGAIN WHENEVER OUR OWN CONFIG WAS REPLACED OR EDITED (load, import,
+    // any setter): those write g_cfg whole, banks 10.. included, from our own
+    // file. Cheap, ten banks, at the caller's rate.
+    if (g_bindingsGen.load(std::memory_order_relaxed) != g_scSrc.appliedGen) {
+        applySideCarSourceLocked_();
+        return true;
+    }
+    return false;
+}
+
+bool dispatchSideCarKey(ButtonId id, bool pressed)
+{
+    if (!isSideCarKey_(id)) return false;
+    ActionSlot slot;
+    {
+        std::lock_guard<std::mutex> lk(g_cfgMutex);
+        const Config* f = g_scSrc.file.get();
+        if (!f) return false;
+        const auto& L = f->layers[std::clamp(f->activeLayer, 0, 2)].bindings;
+        auto it = L.find(id);
+        if (it == L.end()) return false;
+        slot = it->second.shortPress[static_cast<int>(bankModifierSnapshot())];
+    }
+    // Only what ORC can run on its own, a TotalMix builtin. A REAPER action in
+    // orc.json is ORC's inherited factory layer and means nothing there, so the
+    // key stays REAPER's (Frank 26.09.: "könnte ja an reasixty durchgehen falls
+    // nicht besetzt").
+    if (slot.type != ActionType::Builtin || slot.action.rfind("rme_", 0) != 0)
+        return false;
+    runSlot_(slot, /*firing*/ pressed, pressed);
+    return true;
+}
+
+// ⇨ ONE RME BANK BACK TO THE FACTORY (ORC's soft-key editor, 26.09.2026): the
+// same three seeds a fresh file gets, run on an empty config, and only bank
+// `rel` of it copied over. So "factory" means exactly what a new install has,
+// and there is no second list of it to fall out of step.
+void restoreRmeSideCarBank(int rel)
+{
+    if (rel < 0 || rel >= kUf1RmeBankCount) return;
+    auto fresh = std::make_unique<Config>();   // heap: sizeof(Config), see load()
+    seedRmeSideCarBank_(*fresh);
+    seedRmeSideCarBankShift_(*fresh);
+    seedRmeSideCarBank23_(*fresh);
+    const int b = kUf1RmeBankBase + rel;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    for (int sl = 0; sl < kUf1SoftBankSlots; ++sl)
+        g_cfg.uf1SoftBanks[b][sl] = fresh->uf1SoftBanks[b][sl];
+    for (int m = 0; m < kSoftKeyModifierSets; ++m) {
+        g_cfg.uf1SoftBankDynamic[b][m] = fresh->uf1SoftBankDynamic[b][m];
+        g_cfg.uf1SoftBankName[b][m]    = fresh->uf1SoftBankName[b][m];
+    }
+    persistLocked_();
 }
 
 bool exportLayerTo(int layer, const std::string& path)
@@ -6915,14 +7120,8 @@ static const std::vector<Uf1BankPreset>& factoryUf1Banks_()
         }));
         // Recording control only. The scenes themselves are the ObsScenes
         // dynamic kind; a bank of three is the honest size of what is left.
-        // TotalMix' control room, the RME side-car's factory bank as a preset,
-        // so it can be put back or placed on any bank.
-        v.push_back(bank("RME Monitor", {
-            {"rme_dim",       "Dim",       0},
-            {"rme_mono",      "Mono",      0},
-            {"rme_speaker_b", "Speaker B", 0},
-            {"rme_talkback",  "Talkback",  0},
-        }));
+        // (The "RME Monitor" preset left on 26.09.2026 with the RME actions:
+        // those are bound in ORC now.)
         v.push_back(bank("OBS", {
             {"obs_record_toggle",  "OBS Rec",   0},
             {"obs_record_pause",   "OBS Pause", 0},
@@ -7244,7 +7443,7 @@ bool bindingHasActiveSlot(const Binding& bd)
     return false;
 }
 
-std::string uf1SoftBankKeyLabel(int bank, int slot)
+std::string uf1SoftBankKeyLabel(int bank, int slot, int mod)
 {
     const Binding b = getUf1SoftBankSlot(bank, slot);
     // ⇨ THE FOUR KEYS FOLLOW THE HELD MODIFIER — hold SHIFT and the
@@ -7254,7 +7453,8 @@ std::string uf1SoftBankKeyLabel(int bank, int slot)
     // Binding::label names the key and belongs to Plain; a modifier
     // layer carries its own in ActionSlot::label, and an empty layer
     // shows EMPTY rather than borrowing the Plain name.
-    const int mIdx = static_cast<int>(bankModifierSnapshot());
+    const int mIdx = (mod >= 0 && mod < kSoftKeyModifierSets)
+                   ? mod : static_cast<int>(bankModifierSnapshot());
     const bool plainLayer = (mIdx == static_cast<int>(Modifier::Plain));
     const auto& sp = b.shortPress[mIdx];
     if (!sp.label.empty())                  return sp.label;
@@ -7263,9 +7463,12 @@ std::string uf1SoftBankKeyLabel(int bank, int slot)
     return std::string();
 }
 
-bool dispatchUf1SoftBankSlot(int bank, int slot, bool pressed)
+bool dispatchUf1SoftBankSlot(int bank, int slot, bool pressed, int mod)
 {
     if (!uf1SoftBankInRange_(bank, slot)) return false;
+    // The set this press belongs to: the one named, else the one held.
+    const Modifier setMod = (mod >= 0 && mod < kSoftKeyModifierSets)
+                          ? static_cast<Modifier>(mod) : bankModifierSnapshot();
 
     Binding bd;
     {
@@ -7284,12 +7487,12 @@ bool dispatchUf1SoftBankSlot(int bank, int slot, bool pressed)
 
     if (longPressArmed) {
         if (pressed) {
-            const Modifier mod = bankModifierSnapshot();
-            const int      m   = static_cast<int>(mod);
+            const Modifier pm  = setMod;
+            const int      m   = static_cast<int>(pm);
             std::lock_guard<std::mutex> lk(g_pressMx);
             PressRecord rec;
             rec.start = std::chrono::steady_clock::now();
-            rec.mod   = mod;
+            rec.mod   = pm;
             // Plain-fallback long slot (see effectiveLongSlot_).
             const ActionSlot& ls = effectiveLongSlot_(bd, m);
             if (!slotIsEmpty_(ls)) {
@@ -7330,13 +7533,13 @@ bool dispatchUf1SoftBankSlot(int bank, int slot, bool pressed)
     // soft-key had one set. With sets AND the Behavior combo both exposed, a
     // Toggle key showed its Shift label and fired its PLAIN action, or nothing
     // at all when Plain was empty (Frank 2026-08-18).
-    int slotMod = static_cast<int>(bankModifierSnapshot());
+    int slotMod = static_cast<int>(setMod);
     if (bd.behavior == Behavior::Momentary) {
         std::lock_guard<std::mutex> lk(g_pressMx);
         if (pressed) {
             PressRecord rec;
             rec.start = std::chrono::steady_clock::now();
-            rec.mod   = bankModifierSnapshot();
+            rec.mod   = setMod;
             g_pressStart[k] = std::move(rec);
             slotMod = static_cast<int>(g_pressStart[k].mod);
         } else {
@@ -7977,6 +8180,20 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "Switches TotalMix' Main output between Main and Speaker B." },
     { "rme_talkback",
       "Talkback in TotalMix, on or off." },
+    { "rme_ext_in",
+      "Switches TotalMix' Main output to the external input and back." },
+    { "rme_durec_play",
+      "Plays the current DuRec file." },
+    { "rme_durec_pause",
+      "Pauses DuRec." },
+    { "rme_durec_stop",
+      "Stops DuRec." },
+    { "rme_durec_record",
+      "Starts a DuRec recording." },
+    { "rme_durec_next",
+      "Goes to the next DuRec file." },
+    { "rme_durec_previous",
+      "Goes to the previous DuRec file." },
     { "rme_fader_main",
       "Puts TotalMix' Main output on the UF1 fader in the RME side-car. The "
       "lamp is lit while Main is on the fader." },
@@ -8648,6 +8865,13 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "rme_mono", "Mono" },
     { "rme_speaker_b", "Speaker B" },
     { "rme_talkback", "Talkback" },
+    { "rme_ext_in", "Ext In" },
+    { "rme_durec_play", "DuRec Play" },
+    { "rme_durec_pause", "DuRec Pause" },
+    { "rme_durec_stop", "DuRec Stop" },
+    { "rme_durec_record", "DuRec Rec" },
+    { "rme_durec_next", "DuRec Next" },
+    { "rme_durec_previous", "DuRec Prev" },
     { "rme_fader_main", "Main" },
     { "rme_show_window", "TotalMix" },
     { "obs_record_toggle", "OBS Rec" },

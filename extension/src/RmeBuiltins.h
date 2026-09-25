@@ -1,6 +1,6 @@
 #pragma once
 //
-// The six rme_* builtins: the TotalMix control room and the side-car's own
+// The rme_* builtins: the TotalMix control room, DuRec and the side-car's own
 // keys, as actions a soft key or any other key can be bound to.
 //
 // ⇨ MOVED OUT OF main.cpp ON 2026-09-25 so ORC registers the same six, with the
@@ -15,8 +15,9 @@
 
 namespace reasixty::rme {
 
-// Registers rme_dim, rme_mono, rme_speaker_b, rme_talkback, rme_show_window
-// and rme_fader_main against `in`, the surface's side-car state, which must
+// Registers rme_dim, rme_mono, rme_speaker_b, rme_talkback, rme_ext_in,
+// rme_show_window, rme_fader_main and the six rme_durec_* against `in`, the
+// surface's side-car state, which must
 // outlive the registration (both hosts keep it for the life of the program).
 void registerBuiltins(input::State& in, const input::Host& host);
 

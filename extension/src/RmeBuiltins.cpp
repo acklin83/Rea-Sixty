@@ -32,6 +32,31 @@ void registerBuiltins(input::State& in, const input::Host& host)
         regRmeCr("rme_mono",      "/controlroom/mainmono", &CR::mono,     "RME: Main output mono");
         regRmeCr("rme_speaker_b", "/controlroom/speakerb", &CR::speakerB, "RME: Speaker B");
         regRmeCr("rme_talkback",  "/controlroom/talkback", &CR::talkback, "RME: Talkback");
+        // Ext In, on the second half of the factory bank (Frank 26.09.).
+        regRmeCr("rme_ext_in",    "/controlroom/externalin", &CR::externalIn, "RME: External input");
+    }
+    // ⇨ DuRec, the recorder in the interface (Frank 26.09.: "Durec auf transport?
+    // könnte ja an reasixty durchgehen falls nicht besetzt"). Bindable, not bound:
+    // the factory leaves the transport keys empty in orc.json, so they go on to
+    // REAPER's transport in the side-car. Addresses from RME's Global OSC sheet
+    // (2.1 beta 2) as the study transcribed it, docs/uf1-sidecar-rme-feasibility.md
+    // section 2; not yet tried against a running DuRec. No lamp: TotalMix reports
+    // the recorder as a text (/durec/state) whose values are not measured.
+    {
+        auto regDurec = [](const char* name, const char* addr, const char* label) {
+            registerBuiltin(name, DescBuilder{
+                [addr](bool firing, bool /*pressed*/, int /*param*/) {
+                    if (firing) manager().send(addr, 1.0f);
+                },
+                nullptr, label, false
+            });
+        };
+        regDurec("rme_durec_play",     "/durec/play",     "RME: DuRec play");
+        regDurec("rme_durec_pause",    "/durec/pause",    "RME: DuRec pause");
+        regDurec("rme_durec_stop",     "/durec/stop",     "RME: DuRec stop");
+        regDurec("rme_durec_record",   "/durec/record",   "RME: DuRec record");
+        regDurec("rme_durec_next",     "/durec/next",     "RME: DuRec next file");
+        regDurec("rme_durec_previous", "/durec/previous", "RME: DuRec previous file");
     }
     // Das TotalMix-Fenster. ⚠ `/showwindow` steht in RMEs Tabelle (2.1 beta 2);
     // Franks TotalMix ist 2.10 alpha 8, wo `/status/*` und `/sendstate` fehlten.

@@ -365,6 +365,7 @@ add_library(reaper_uf8 MODULE
     src/RmeInput.cpp
     src/RmeFace.cpp
     src/RmeBuiltins.cpp
+    src/RmeSoftKeys.cpp
     src/Uf1Pacer.cpp
     src/Uf1SoftKeys.cpp
     src/RmeNames.cpp
@@ -831,6 +832,22 @@ if(NOT WIN32)
     endif()
     add_test(NAME rme_input COMMAND test_rme_input)
 
+    # The RME side-car's soft keys (RmeSoftKeys) and where its banks come from
+    # (Bindings.cpp, setSideCarSource): ORC's file, banks 10.. only, never
+    # written back. Links the real bindings engine, like ORC does.
+    add_executable(test_rme_softkeys tests/test_rme_softkeys.cpp
+        src/RmeSoftKeys.cpp src/Uf1SoftKeys.cpp src/Uf1Spread.cpp src/Uf1Text.cpp
+        src/TrackName.cpp src/Uf1EqCurve.cpp src/UF1Protocol.cpp
+        src/RmeInput.cpp src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp
+        src/RmeUf1.cpp src/RmeStrip.cpp src/RmeNames.cpp
+        src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp)
+    target_include_directories(test_rme_softkeys PRIVATE src "${WDL_DIR}")
+    target_link_libraries(test_rme_softkeys PRIVATE Threads::Threads)
+    if(WIN32)
+        target_link_libraries(test_rme_softkeys PRIVATE ws2_32)
+    endif()
+    add_test(NAME rme_softkeys COMMAND test_rme_softkeys)
+
     # What TotalMix looks like on the UF1: the side-car painter, shared by the
     # extension and ORC. Pins the labels, the layer and the time field.
     add_executable(test_rme_face tests/test_rme_face.cpp
@@ -989,6 +1006,7 @@ if(APPLE)
         # The side-car painter and its cycle, the extension's own (25.09.2026).
         src/RmeFace.cpp
         src/RmeBuiltins.cpp
+        src/RmeSoftKeys.cpp
         src/Uf1Pacer.cpp
         src/Uf1SoftKeys.cpp
         src/RmeNames.cpp

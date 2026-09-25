@@ -156,6 +156,7 @@ class Manager {
     struct ControlRoom {
         bool dim = false, mono = false, speakerB = false, talkback = false;
         int  mainOut = -1;
+        bool externalIn = false;   // after mainOut: positional initialisers stay valid
     };
     ControlRoom controlRoom() const;
 

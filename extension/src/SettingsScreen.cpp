@@ -3770,6 +3770,11 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             for (auto& n : builtinNames()) {
                 const char* cat = categoryFor(n);
                 if (!cat || !*cat) continue;
+                // ⇨ THE RME ACTIONS ARE ORC'S TO BIND (26.09.2026): the side-car's
+                // banks and its transport keys come from orc.json and are edited
+                // in ORC. They stay registered, so what is bound keeps working;
+                // they are just not offered here any more.
+                if (std::strcmp(cat, "RME") == 0) continue;
                 if (!matches(n)) continue;
                 // Device scoping: a UF1-only action never appears in the UF8/UC1
                 // picker, and vice versa (Frank 2026-07-31). `id` is the control
@@ -8008,25 +8013,10 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             // Held for the whole table: a click writes both of these, and the
             // rows after it would otherwise mark a different cell than the rows
             // before it in the same frame.
-            // ⇨ DAW OR ONE OF THE SIDE-CARS: the same matrix over that set's ten
-            // banks. Every side-car mode has its own (Frank 21.09.).
-            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 200.0));
-            if (ImGui_BeginCombo(ctx, "Banks for##uf1bankset",
-                                 uf1BankSetName_(g_uf1BankSet), nullptr)) {
-                for (int set = -1; set < uf8::bindings::kUf1SideCarBankSets; ++set) {
-                    // The Item Volume side-car is gone (25.09.2026); its banks
-                    // stay in the store so the RME banks keep their numbers.
-                    if (set == uf8::bindings::kUf1SideCarSetItem) continue;
-                    bool isSel = (g_uf1BankSet == set);
-                    if (ImGui_Selectable(ctx, uf1BankSetName_(set), &isSel,
-                                         nullptr, nullptr, nullptr))
-                        g_uf1BankSet = set;
-                }
-                ImGui_EndCombo(ctx);
-            }
-            help_(ctx, "The DAW view's ten banks, or the RME side-car's ten "
-                       "(Shift + MODE, then RME). Its bank 1 comes with Dim, "
-                       "Mono, Speaker B and Talkback.");
+            // The RME side-car's banks left this editor on 26.09.2026: they are
+            // ORC's now, edited in ORC and read from orc.json (Bindings.h,
+            // setSideCarSource). The matrix is the DAW view's ten again, and
+            // g_uf1BankSet stays -1.
             const int selBank = uf1EditLiveBank_();
             const int selSlot = slotIdx;
             ImGui_Text(ctx, "Soft-Key Banks");

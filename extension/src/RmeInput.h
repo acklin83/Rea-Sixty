@@ -52,6 +52,9 @@ struct State {
     std::atomic<bool> strip{false};                 // STRIP open
     std::atomic<int>  stripPage{0};                 // index into Config::stripPages
     std::atomic<int>  vpotBank{0};
+    // Which half of the soft-key bank is on the four keys, 0 or 1, latched by
+    // 5-8 (Frank 26.09.). RmeSoftKeys reads it; a bank change puts it back to 0.
+    std::atomic<int>  skHalf{0};
     std::atomic<bool> windowShown{false};           // TotalMix' window is up
 
     // Encoder remainders. The channel encoder emits about four counts per

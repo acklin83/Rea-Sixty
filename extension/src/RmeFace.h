@@ -50,7 +50,6 @@ struct Host {
     // The side-car's soft-key bank: which one (0-based) and how many.
     std::function<int()> bankNow;
     std::function<int()> bankCount;
-    std::function<int()> dynPages;
 
     // A short text for the time field (a bank name), "" when there is none.
     std::function<std::string()> tcFlash;

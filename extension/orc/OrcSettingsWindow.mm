@@ -1,14 +1,17 @@
 #import "OrcSettingsWindow.h"
 
+#include "Bindings.h"
 #include "OrcConfig.h"
 #include "Palette.h"
 #include "RmeManager.h"
 #include "RmeState.h"
 #include "RmeUf1.h"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
+namespace bnd  = uf8::bindings;
 namespace rme  = reasixty::rme;
 namespace rmeu = reasixty::rme::uf1;
 
@@ -50,6 +53,31 @@ std::vector<Choice> targetChoices(const rme::State& st)
     }
     return out;
 }
+
+// ⇨ WHAT A KEY CAN DO IN ORC: the builtins in the RME category, which is every
+// action ORC can run without REAPER. Read from the engine's registry, so a new
+// rme_* builtin turns up here without anyone touching this list.
+std::vector<std::string> rmeActions()
+{
+    std::vector<std::string> out;
+    for (const auto& n : bnd::builtinNames())
+        if (std::string(bnd::builtinCategory(n)) == "RME") out.push_back(n);
+    std::sort(out.begin(), out.end(), [](const std::string& a, const std::string& b) {
+        return bnd::builtinDisplayName(a) < bnd::builtinDisplayName(b);
+    });
+    return out;
+}
+
+// The five transport keys the side-car hands to ORC's bindings (Bindings.cpp,
+// dispatchSideCarKey), in the order they sit on the surface.
+struct TransportKey { bnd::ButtonId id; const char* name; };
+const TransportKey kTransport[5] = {
+    { bnd::ButtonId::Uf1Rwd,  "Rewind" },
+    { bnd::ButtonId::Uf1Ffw,  "Forward" },
+    { bnd::ButtonId::Uf1Stop, "Stop" },
+    { bnd::ButtonId::Uf1Play, "Play" },
+    { bnd::ButtonId::Uf1Rec,  "Record" },
+};
 
 const char* linkWord(rme::LinkState st)
 {
@@ -113,6 +141,14 @@ NSTextField* dim(NSString* text)
 @property (nonatomic, strong) NSTextField*   knobStep;
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* colourPops;
 @property (nonatomic, strong) NSMutableArray<NSTextField*>*   wearerLabels;
+@property (nonatomic, strong) NSPopUpButton*      skBank;
+@property (nonatomic, strong) NSSegmentedControl* skHalf;
+@property (nonatomic, strong) NSPopUpButton*      skKind;
+@property (nonatomic, strong) NSTextField*        skName;
+@property (nonatomic, strong) NSMutableArray<NSTextField*>*   skLabels;
+@property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* skActions;
+@property (nonatomic, strong) NSTextField*        skNote;
+@property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* trActions;
 @property (nonatomic, strong) NSTimer* tick;
 @end
 
@@ -122,6 +158,9 @@ NSTextField* dim(NSString* text)
     // they are refilled only when the mixer's answer actually changed. Same
     // rule as the surface painter: compare what you draw, not what arrived.
     std::vector<Choice> _lastChoices;
+    // The action menus' entries after "(none)", filled once the surface has
+    // registered its builtins (it starts after this window may be built).
+    std::vector<std::string> _actions;
 }
 
 + (instancetype)shared
@@ -151,11 +190,15 @@ NSTextField* dim(NSString* text)
         self.potPushes    = [NSMutableArray array];
         self.colourPops   = [NSMutableArray array];
         self.wearerLabels = [NSMutableArray array];
+        self.skLabels     = [NSMutableArray array];
+        self.skActions    = [NSMutableArray array];
+        self.trActions    = [NSMutableArray array];
 
         NSTabView* tabs = [[NSTabView alloc] initWithFrame:w.contentView.bounds];
         tabs.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         [tabs addTabViewItem:[self connectionTab]];
         [tabs addTabViewItem:[self controlsTab]];
+        [tabs addTabViewItem:[self softKeysTab]];
         [tabs addTabViewItem:[self coloursTab]];
         [w.contentView addSubview:tabs];
         [self refresh];
@@ -284,6 +327,85 @@ NSTextField* dim(NSString* text)
     self.knobStep = [self field:@selector(stepsChanged:) width:90];
     [jog addRowWithViews:@[ label(@"Knob step, dB"), self.knobStep ]];
     [v addArrangedSubview:jog];
+
+    item.view = [self pageWithStack:v];
+    return item;
+}
+
+// ⇨ THE SOFT KEYS ARE BUILT HERE, NOT IN REA-SIXTY (Frank 26.09.2026: "die
+// bänke müssen wir den user bauen lassen, mit einer werksbesetzung"). Ten banks
+// of four keys, each with two halves (5-8 or SHIFT on the surface), and the five
+// transport keys. Written to orc.json through the bindings engine; Rea-Sixty's
+// side-car reads the same file.
+- (NSTabViewItem*)softKeysTab
+{
+    NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"softkeys"];
+    item.label = @"Soft Keys";
+
+    NSStackView* v = [[NSStackView alloc] init];
+
+    NSGridView* head = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
+    head.columnSpacing = 10.0;
+    head.rowSpacing = 8.0;
+    self.skBank = [self popUp:@selector(skBankChanged:) tag:0 width:200];
+    for (int b = 0; b < bnd::kUf1RmeBankCount; ++b)
+        [self.skBank addItemWithTitle:[NSString stringWithFormat:@"Bank %d", b + 1]];
+    [head addRowWithViews:@[ label(@"Bank"), self.skBank ]];
+
+    self.skHalf = [NSSegmentedControl segmentedControlWithLabels:@[ @"Keys 1-4", @"5-8" ]
+                                                    trackingMode:NSSegmentSwitchTrackingSelectOne
+                                                          target:self
+                                                          action:@selector(skBankChanged:)];
+    self.skHalf.selectedSegment = 0;
+    [head addRowWithViews:@[ label(@"Half"), self.skHalf ]];
+
+    self.skKind = [self popUp:@selector(skKindChanged:) tag:0 width:200];
+    [self.skKind addItemWithTitle:@"Keys"];
+    [self.skKind addItemWithTitle:@"TotalMix snapshots"];
+    [self.skKind addItemWithTitle:@"TotalMix layouts"];
+    [head addRowWithViews:@[ label(@"Shows"), self.skKind ]];
+
+    self.skName = [self field:@selector(skNameChanged:) width:200];
+    [head addRowWithViews:@[ label(@"Name"), self.skName ]];
+    [v addArrangedSubview:head];
+
+    NSGridView* keys = [NSGridView gridViewWithNumberOfColumns:3 rows:0];
+    keys.columnSpacing = 10.0;
+    keys.rowSpacing = 6.0;
+    [keys addRowWithViews:@[ dim(@"key"), dim(@"label"), dim(@"action") ]];
+    for (int i = 0; i < 4; ++i) {
+        NSTextField* lab = [self field:@selector(skLabelChanged:) width:140];
+        lab.tag = i;
+        NSPopUpButton* act = [self popUp:@selector(skActionChanged:) tag:i width:300];
+        [self.skLabels addObject:lab];
+        [self.skActions addObject:act];
+        [keys addRowWithViews:@[ label([NSString stringWithFormat:@"%d", i + 1]), lab, act ]];
+    }
+    [v addArrangedSubview:keys];
+
+    self.skNote = dim(@"");
+    [v addArrangedSubview:self.skNote];
+
+    NSButton* factory = [NSButton buttonWithTitle:@"Factory set for this bank"
+                                           target:self
+                                           action:@selector(skFactory:)];
+    [v addArrangedSubview:factory];
+    [v addArrangedSubview:dim(@"From the factory, bank 1 has Dim, Mono, Speaker B and "
+                              @"Talkback, and Ext In, Main and TotalMix on 5-8. Bank 2 "
+                              @"has TotalMix snapshots, bank 3 its layouts.")];
+
+    NSGridView* tr = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
+    tr.columnSpacing = 10.0;
+    tr.rowSpacing = 6.0;
+    [tr addRowWithViews:@[ dim(@"transport"), dim(@"action") ]];
+    for (int k = 0; k < 5; ++k) {
+        NSPopUpButton* act = [self popUp:@selector(trActionChanged:) tag:k width:300];
+        [self.trActions addObject:act];
+        [tr addRowWithViews:@[ label(@(kTransport[k].name)), act ]];
+    }
+    [v addArrangedSubview:tr];
+    [v addArrangedSubview:dim(@"A transport key without an action here stays with "
+                              @"REAPER while Rea-Sixty has the UF1.")];
 
     item.view = [self pageWithStack:v];
     return item;
@@ -458,6 +580,175 @@ NSTextField* dim(NSString* text)
         [self.colourPops[i] selectItemAtIndex:cur];
         self.wearerLabels[i].stringValue = str(wearers[i]);
     }
+    [self refreshSoftKeys];
+}
+
+// ── the soft-key page ────────────────────────────────────────────────────────
+
+- (int)skBankAbs { return bnd::kUf1RmeBankBase + (int)std::max<NSInteger>(0, self.skBank.indexOfSelectedItem); }
+- (int)skHalfNow { return self.skHalf.selectedSegment == 1 ? 1 : 0; }
+
+- (void)fillActions:(NSPopUpButton*)pop
+{
+    [pop removeAllItems];
+    [pop addItemWithTitle:@"(none)"];
+    for (const auto& n : _actions)
+        [pop addItemWithTitle:str(bnd::builtinDisplayName(n))];
+}
+
+- (void)selectAction:(NSPopUpButton*)pop slot:(const bnd::ActionSlot&)sp
+{
+    if (sp.type != bnd::ActionType::Builtin || sp.action.empty()) {
+        [pop selectItemAtIndex:(sp.type == bnd::ActionType::Noop && sp.action.empty()) ? 0 : -1];
+        return;
+    }
+    const auto it = std::find(_actions.begin(), _actions.end(), sp.action);
+    // Something ORC cannot run (a REAPER action from the inherited factory)
+    // shows no entry rather than pretending to be "(none)".
+    [pop selectItemAtIndex:it == _actions.end() ? -1 : 1 + (it - _actions.begin())];
+}
+
+- (void)refreshSoftKeys
+{
+    if (_actions.empty()) {
+        _actions = rmeActions();
+        if (!_actions.empty()) {
+            for (NSPopUpButton* p in self.skActions) [self fillActions:p];
+            for (NSPopUpButton* p in self.trActions) [self fillActions:p];
+        }
+    }
+    const int bank = [self skBankAbs];
+    const int half = [self skHalfNow];
+    const auto kind = bnd::getUf1SoftBankDynamic(bank, 0);
+    const bool dyn = kind == bnd::DynamicBankKind::RmeSnapshots
+                  || kind == bnd::DynamicBankKind::RmeLayouts;
+    [self.skKind selectItemAtIndex:kind == bnd::DynamicBankKind::RmeSnapshots ? 1
+                                 : kind == bnd::DynamicBankKind::RmeLayouts   ? 2
+                                 : kind == bnd::DynamicBankKind::None         ? 0 : -1];
+    if (self.window.firstResponder != self.skName.currentEditor)
+        self.skName.stringValue = str(bnd::getUf1SoftBankName(bank, 0));
+
+    for (int i = 0; i < 4; ++i) {
+        const bnd::Binding bd = bnd::getUf1SoftBankSlot(bank, i);
+        const auto& sp = bd.shortPress[half];
+        NSTextField* lab = self.skLabels[i];
+        lab.enabled = !dyn;
+        self.skActions[i].enabled = !dyn;
+        if (self.window.firstResponder != lab.currentEditor) {
+            const std::string own = (half == 0 && sp.label.empty()) ? bd.label : sp.label;
+            lab.stringValue = dyn ? @"" : str(own);
+            lab.placeholderString = dyn ? @"" : str(bnd::softKeyFallbackLabel(sp));
+        }
+        if (dyn) [self.skActions[i] selectItemAtIndex:-1];
+        else     [self selectAction:self.skActions[i] slot:sp];
+    }
+    self.skNote.stringValue = dyn
+        ? @"TotalMix names these keys: 1 to 4, and 5 to 8 on the second half."
+        : @"An empty label shows the action's own name.";
+
+    const int layer = bnd::getActiveLayer();
+    for (int k = 0; k < 5; ++k) {
+        const bnd::Binding bd = bnd::getBinding(layer, kTransport[k].id);
+        const auto& sp = bd.shortPress[0];
+        // A REAPER action there is ORC's inherited factory and does nothing in
+        // ORC: it reads as "(none)", which is also what Rea-Sixty makes of it.
+        if (sp.type == bnd::ActionType::Builtin && sp.action.rfind("rme_", 0) == 0)
+            [self selectAction:self.trActions[k] slot:sp];
+        else
+            [self.trActions[k] selectItemAtIndex:0];
+    }
+}
+
+- (std::string)actionAt:(NSInteger)index
+{
+    if (index <= 0 || (std::size_t)index > _actions.size()) return {};
+    return _actions[(std::size_t)index - 1];
+}
+
+- (void)skBankChanged:(id)sender { [self refreshSoftKeys]; }
+
+- (void)skKindChanged:(NSPopUpButton*)sender
+{
+    const int bank = [self skBankAbs];
+    const NSInteger i = sender.indexOfSelectedItem;
+    const auto kind = i == 1 ? bnd::DynamicBankKind::RmeSnapshots
+                    : i == 2 ? bnd::DynamicBankKind::RmeLayouts
+                             : bnd::DynamicBankKind::None;
+    bnd::setUf1SoftBankDynamic(bank, 0, kind);
+    // The kind belongs to the bank, both halves (RmeSoftKeys::rmeKind).
+    bnd::setUf1SoftBankDynamic(bank, 1, bnd::DynamicBankKind::None);
+    [self refreshSoftKeys];
+}
+
+- (void)skNameChanged:(id)sender
+{
+    const int bank = [self skBankAbs];
+    const std::string n = self.skName.stringValue.UTF8String ?: "";
+    // One name for the bank, whichever half is showing when it is announced.
+    bnd::setUf1SoftBankName(bank, 0, n);
+    bnd::setUf1SoftBankName(bank, 1, n);
+}
+
+- (void)skLabelChanged:(NSTextField*)sender
+{
+    const int bank = [self skBankAbs];
+    const int half = [self skHalfNow];
+    const int i = (int)sender.tag;
+    const std::string t = sender.stringValue.UTF8String ?: "";
+    bnd::Binding bd = bnd::getUf1SoftBankSlot(bank, i);
+    // The first half's name is the key's own (Binding::label), the second
+    // half's lives in its set (ActionSlot::label): uf1SoftBankKeyLabel.
+    if (half == 0) {
+        bd.label = t;
+        bd.labelIsUserSet = !t.empty();
+        bd.shortPress[0].label.clear();
+    } else {
+        bd.shortPress[1].label = t;
+    }
+    bnd::setUf1SoftBankSlot(bank, i, bd);
+}
+
+- (void)skActionChanged:(NSPopUpButton*)sender
+{
+    const int bank = [self skBankAbs];
+    const int half = [self skHalfNow];
+    const int i = (int)sender.tag;
+    const std::string a = [self actionAt:sender.indexOfSelectedItem];
+    bnd::Binding bd = bnd::getUf1SoftBankSlot(bank, i);
+    auto& sp = bd.shortPress[half];
+    const std::string keepLabel = sp.label;
+    sp = bnd::ActionSlot{};
+    if (!a.empty()) {
+        sp.type   = bnd::ActionType::Builtin;
+        sp.action = a;
+    }
+    if (half == 1) sp.label = a.empty() ? std::string() : keepLabel;
+    // A label nobody typed follows the new action (the placeholder shows it).
+    if (half == 0 && !bd.labelIsUserSet) bd.label.clear();
+    bnd::setUf1SoftBankSlot(bank, i, bd);
+    [self refreshSoftKeys];
+}
+
+- (void)skFactory:(id)sender
+{
+    bnd::restoreRmeSideCarBank((int)std::max<NSInteger>(0, self.skBank.indexOfSelectedItem));
+    [self refreshSoftKeys];
+}
+
+- (void)trActionChanged:(NSPopUpButton*)sender
+{
+    const int k = (int)sender.tag;
+    const std::string a = [self actionAt:sender.indexOfSelectedItem];
+    const int layer = bnd::getActiveLayer();
+    bnd::Binding bd = bnd::getBinding(layer, kTransport[k].id);
+    bd.shortPress[0] = bnd::ActionSlot{};
+    if (!a.empty()) {
+        bd.shortPress[0].type   = bnd::ActionType::Builtin;
+        bd.shortPress[0].action = a;
+    }
+    bd.label.clear();
+    bnd::setBinding(layer, kTransport[k].id, bd);
+    [self refreshSoftKeys];
 }
 
 - (void)fill:(NSPopUpButton*)pop with:(const std::vector<Choice>&)choices

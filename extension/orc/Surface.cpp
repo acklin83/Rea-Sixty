@@ -4,6 +4,7 @@
 #include "Uf1SoftKeys.h"
 #include "Uf1Text.h"
 #include "RmeBuiltins.h"
+#include "RmeSoftKeys.h"
 #include "Bindings.h"
 #include "RmeFace.h"
 #include "RmeInput.h"
@@ -141,8 +142,7 @@ void Surface::onEvent_(const ::uf1::InputEvent& ev)
 }
 
 // ⇨ THE SIDE-CAR'S SOFT-KEY BANKS, the extension's uf1SideCarSoftKeys_ minus
-// what ORC has not got: no MODE menu owning the keys, and no dynamic banks
-// (those list REAPER's tracks, FX and sends). The four keys fire their slot of
+// what ORC has not got: no MODE menu owning the keys. The four keys fire their slot of
 // the RME set's current bank through the bindings engine; < > step the bank,
 // with no wrap, because the lamp says whether there is more that way.
 bool Surface::softKeys_(const ::uf1::InputEvent& ev)
@@ -151,16 +151,22 @@ bool Surface::softKeys_(const ::uf1::InputEvent& ev)
     const int set = bnd::kUf1SideCarSetRme;
     const std::uint8_t id = ev.id;
     if (id >= ::uf1::btn::kDisplaySoft1 && id <= ::uf1::btn::kDisplaySoft4) {
-        bnd::dispatchUf1SoftBankSlot(bnd::uf1SideCarBankBase(set) + scBank_.load(),
-                                     static_cast<int>(id - ::uf1::btn::kDisplaySoft1),
-                                     ev.pressed);
+        // The extension's press (src/RmeSoftKeys): the half from 5-8 or SHIFT,
+        // and a TotalMix bank loads right here on the device thread.
+        rme::softkeys::press(bnd::uf1SideCarBankBase(set) + scBank_.load(),
+                             rme::softkeys::half(in_),
+                             static_cast<int>(id - ::uf1::btn::kDisplaySoft1),
+                             ev.pressed);
         return true;
     }
     if (id == ::uf1::btn::kArrowLeft || id == ::uf1::btn::kArrowRight) {
         if (ev.pressed) {
             const int nb  = std::max(1, bnd::uf1SideCarBankInUseCount(set));
             const int dir = (id == ::uf1::btn::kArrowRight) ? 1 : -1;
-            scBank_.store(std::clamp(scBank_.load() + dir, 0, nb - 1));
+            const int to  = std::clamp(scBank_.load() + dir, 0, nb - 1);
+            // A new bank starts on its first half, as in the extension.
+            if (to != scBank_.load()) in_.skHalf.store(0);
+            scBank_.store(to);
         }
         return true;
     }
@@ -266,14 +272,13 @@ void Surface::loop_()
         return std::max(1, uf8::bindings::uf1SideCarBankInUseCount(
                                uf8::bindings::kUf1SideCarSetRme));
     };
-    // The overview: the RME set's current bank, static cells. ⚠ No dynamic banks
-    // (those list REAPER's tracks, FX and sends), and no MODE menu to yield to.
+    // The overview: the RME set's current bank, the extension's cells
+    // (src/RmeSoftKeys), TotalMix' snapshots and layouts included since
+    // 26.09.2026. No MODE menu to yield to.
     host.sideCarSoftKeys = [this, &skCache, skSink](bool f) {
         namespace bnd = uf8::bindings;
         const int bank = bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme) + scBank_.load();
-        std::array<uf1spread::SkCell, 4> cells{};
-        for (int i = 0; i < 4; ++i)
-            cells[static_cast<std::size_t>(i)] = uf1sk::staticBankCell(bank, i);
+        const auto cells = rme::softkeys::row(bank, rme::softkeys::half(in_));
         uf1sk::emitRow(cells, f, /*ledsBorrowed*/ false, /*menuOpen*/ false, skCache, skSink);
     };
     // STRIP: the page's switches, built by the shared painter.

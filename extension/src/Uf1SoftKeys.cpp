@@ -55,7 +55,7 @@ uint32_t bindingLedColour(const uf8::bindings::Binding& bd,
           |  (( rgb        & 0xFF) / 4));
 }
 
-uf1spread::SkCell staticBankCell(int bankNo, int i)
+uf1spread::SkCell staticBankCell(int bankNo, int i, int mod)
 {
     std::string label;
     bool haveLabel = false, on = false;
@@ -69,11 +69,11 @@ uf1spread::SkCell staticBankCell(int bankNo, int i)
     // so bright = engaged, dim = idle. The LED COLOUR is driven from
     // the binding too (see the LED block below).
     const uf8::bindings::Binding dawSlot = uf8::bindings::getUf1SoftBankSlot(bankNo, i);
-    const int mIdx =
-        static_cast<int>(uf8::bindings::bankModifierSnapshot());
+    const int mIdx = (mod >= 0 && mod < uf8::bindings::kSoftKeyModifierSets)
+        ? mod : static_cast<int>(uf8::bindings::bankModifierSnapshot());
     // The name follows the held modifier; the rule lives in Bindings.cpp
     // (uf1SoftBankKeyLabel) so ORC shows the same word for the same key.
-    label = uf8::bindings::uf1SoftBankKeyLabel(bankNo, i);
+    label = uf8::bindings::uf1SoftBankKeyLabel(bankNo, i, mIdx);
     haveLabel = true;
     on = uf8::bindings::bindingHasActiveSlotForSet(dawSlot, mIdx);
     // LED colour from the binding (active vs inactive colour + brightness),
