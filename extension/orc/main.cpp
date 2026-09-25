@@ -23,8 +23,11 @@
 #include <cstdio>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <thread>
 
+#include "Bindings.h"
+#include "BindingsHost.h"
 #include "RmeManager.h"
 #include "RmeState.h"
 #include "RmeStrip.h"
@@ -209,6 +212,24 @@ int main()
 {
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
+
+    // ⇨ ORC'S BINDINGS HOST. The engine is the extension's, unchanged and
+    // unforked; what differs is the four answers. Two of them ORC does not have:
+    // there is no REAPER to look a command id up in, and no window to type a key
+    // chord at, so both stay unset and a binding that asks for them does nothing
+    // — which is the honest outcome, not a failure.
+    {
+        uf8::bindings::Host bh;
+        bh.configDir = []() -> std::string {
+            const char* home = std::getenv("HOME");
+            return home ? std::string(home) + "/Library/Application Support/ORC"
+                        : std::string(".");
+        };
+        bh.configFile = []() -> std::string { return "orc.json"; };
+        uf8::bindings::setHost(std::move(bh));
+    }
+    uf8::bindings::load();
+    std::printf("ORC: bindings from %s\n", uf8::bindings::configPath().c_str());
 
     uf1::UF1Device dev;
 

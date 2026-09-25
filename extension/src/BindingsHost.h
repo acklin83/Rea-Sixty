@@ -27,9 +27,14 @@ namespace uf8 {
 namespace bindings {
 
 struct Host {
-    // Where bindings.json lives. Rea-Sixty: REAPER's resource path plus
-    // rea_sixty. ORC: its own application-support folder.
+    // The directory the bindings file lives in, in full. Rea-Sixty appends
+    // rea_sixty to REAPER's resource path; ORC names its own folder. The
+    // "/rea_sixty" used to be added down inside the engine, which is a name only
+    // one of the two hosts has any business carrying.
     std::function<std::string()> configDir;
+
+    // The file's name inside that directory. Empty means bindings.json.
+    std::function<std::string()> configFile;
 
     // A REAPER action name to its command id, 0 when there is no such action or
     // no REAPER at all. ORC returns 0 and the binding does nothing, which is the

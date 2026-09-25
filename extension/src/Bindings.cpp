@@ -2979,17 +2979,14 @@ void upgradeStripFactoryColours_(Layer& L)
 
 std::string configDir_()
 {
-    const std::string baseStr = host().configDir ? host().configDir() : std::string();
-    const char* base = baseStr.empty() ? nullptr : baseStr.c_str();
-    if (!base || !*base) base = ".";
-    std::string d = base;
-    d += "/rea_sixty";
-    return d;
+    const std::string d = host().configDir ? host().configDir() : std::string();
+    return d.empty() ? std::string(".") : d;
 }
 
 std::string configPath_()
 {
-    return configDir_() + "/bindings.json";
+    const std::string f = host().configFile ? host().configFile() : std::string();
+    return configDir_() + "/" + (f.empty() ? std::string("bindings.json") : f);
 }
 
 void ensureConfigDir_()

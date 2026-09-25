@@ -395,6 +395,7 @@ add_library(reaper_uf8 MODULE
     src/Bindings.cpp
     # Keyboard-macro action type — chord synthesis to REAPER's main window
     src/KeyMacro.cpp
+    src/KeyMacroSend.cpp
     # Virtual notch / detent for relative-encoder writes
     src/VirtualNotch.cpp
     # Multi-track parameter sync (8 persistent groups + temp-from-selection)
@@ -945,6 +946,12 @@ if(APPLE)
         src/RmeNames.cpp
         src/Uf1EqCurve.cpp
         src/Uf1Spread.cpp
+        # The bindings engine itself, not a second one: 8904 lines whose only
+        # outward questions are the four callbacks in BindingsHost.h. KeyMacro is
+        # the parser alone; KeyMacroSend, which needs a window to type at, stays
+        # with the extension.
+        src/Bindings.cpp
+        src/KeyMacro.cpp
         src/LogPath.cpp)
     # WDL only for its JSON parser, which RmeManager reads rme.json with. No
     # REAPER header comes in with it: WDL is a standalone utility library.

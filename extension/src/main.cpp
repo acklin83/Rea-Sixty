@@ -58693,8 +58693,11 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         uf8::bindings::Host bh;
         bh.configDir = []() -> std::string {
             const char* base = GetResourcePath ? GetResourcePath() : nullptr;
-            return base ? std::string(base) : std::string();
+            // <resource>/rea_sixty, unchanged: the folder name is the host's,
+            // and the engine has no reason to know it.
+            return base ? std::string(base) + "/rea_sixty" : std::string();
         };
+        bh.configFile = []() -> std::string { return "bindings.json"; };
         bh.namedCommand = [](const char* name) -> int {
             return NamedCommandLookup ? NamedCommandLookup(name) : 0;
         };
