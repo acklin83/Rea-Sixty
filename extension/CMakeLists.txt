@@ -814,6 +814,14 @@ if(NOT WIN32)
     target_include_directories(test_bindings_pick PRIVATE src)
     add_test(NAME bindings_pick COMMAND test_bindings_pick)
 
+    # The first test of UF1 painting code. It can exist because Uf1Spread takes a
+    # View and writes into a Sink instead of reading globals and driving the
+    # device, so the frames can be read here rather than looked at on the glass.
+    add_executable(test_orc_paint tests/test_orc_paint.cpp
+        src/Uf1Spread.cpp src/UF1Protocol.cpp)
+    target_include_directories(test_orc_paint PRIVATE src)
+    add_test(NAME orc_paint COMMAND test_orc_paint)
+
     add_executable(test_uf1_eq tests/test_uf1_eq.cpp src/Uf1EqCurve.cpp)
     target_include_directories(test_uf1_eq PRIVATE src "${WDL_DIR}")
     add_test(NAME uf1_eq COMMAND test_uf1_eq)
@@ -934,6 +942,7 @@ if(APPLE)
         src/RmeUf1.cpp
         src/RmeNames.cpp
         src/Uf1EqCurve.cpp
+        src/Uf1Spread.cpp
         src/LogPath.cpp)
     # WDL only for its JSON parser, which RmeManager reads rme.json with. No
     # REAPER header comes in with it: WDL is a standalone utility library.

@@ -11,20 +11,24 @@
 // remembered.
 //
 // Stage 1: open the surface, hold it open, print what it sends.
-// Stage 2 (added here): bring up the TotalMix link and print the model it
-// answers with. Still no painting. Each half is proven on its own before
-// anything is drawn on top of them — three times this week a display question
-// turned out to be a device question underneath.
+// Stage 2: bring up the TotalMix link and print the model it answers with.
+// Stage 3 (added here): draw SPREAD on the surface, through the shared painter
+// in src/Uf1Spread.{h,cpp}. The renderer is the one Rea-Sixty will use as well;
+// what lives here is the gatherer, the half that knows TotalMix.
 //
 
 #include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdio>
+#include <algorithm>
+#include <cmath>
 #include <thread>
 
 #include "RmeManager.h"
+#include "RmeState.h"
 #include "RmeUf1.h"
+#include "Uf1Spread.h"
 #include "UF1Device.h"
 #include "UF1Protocol.h"
 
@@ -88,6 +92,63 @@ void dumpModel(const rme::State& st)
     std::fflush(stdout);
 }
 
+// ⇨ THE GATHERER. It knows TotalMix; the renderer it hands this to knows the
+// UF1 and nothing else. Same split as Uf1EqCurve, for the same reason: the half
+// that can be tested should not be the half that needs a mixer attached.
+uf1spread::View viewFor(const rme::State& st, const rme::Config& cfg, int row)
+{
+    uf1spread::View v;
+    const auto r = static_cast<rmeu::Row>(row);
+    const int submix = rmeu::effectiveSubmix(st, -1);
+
+    const auto list = rmeu::visibleChannels(st, r);
+    const int sel = list.empty() ? -1 : list.front();
+
+    char hdr[64];
+    std::snprintf(hdr, sizeof hdr, "%-8s %s", rmeu::rowName(r),
+                  submix >= 0 ? rmeu::displayName(st, rmeu::Row::Output, submix).c_str() : "");
+    v.header   = hdr;
+    v.timecode = sel >= 0 ? rmeu::displayName(st, r, sel) : std::string();
+
+    // The four pots carry the control-room roles the config puts on them. A role
+    // TotalMix has not assigned leaves its pot empty rather than letting the
+    // others move up: a snapshot can reassign roles under the hand, and a pot
+    // that wanders is worse than one that is blank.
+    for (int i = 0; i < 4; ++i) {
+        const auto& slot = cfg.vpots[i];
+        auto& pot = v.pots[static_cast<std::size_t>(i)];
+        if (slot.target.empty()) continue;
+        const auto t = rmeu::resolveTarget(st, slot.target);
+        if (!t.assigned || !t.visible) continue;
+        bool known = false;
+        const double db = rmeu::levelDb(st, t.row, t.ch, submix, known);
+        if (!known) continue;
+        pot.name  = rmeu::displayName(st, t.row, t.ch).substr(0, 8);
+        char val[24];
+        std::snprintf(val, sizeof val, "%.1fdB", db <= rme::kDbOff ? -99.0 : db);
+        pot.line  = val;
+        pot.norm  = rme::dbToFaderlin(db);
+        pot.empty = false;
+    }
+
+    if (sel >= 0) {
+        v.chName   = rmeu::displayName(st, r, sel);
+        v.chNumber = std::to_string(sel);
+        v.chActive = true;
+        if (const auto* ch = rmeu::channelOf(st, r, sel))
+            v.palette = cfg.colourMap[std::clamp(ch->colour, 0, 8)];
+        bool known = false;
+        const double db = rmeu::levelDb(st, r, sel, submix, known);
+        if (known) {
+            char t[16];
+            std::snprintf(t, sizeof t, "%.1f", db <= rme::kDbOff ? -99.0 : db);
+            v.chDb = t;
+            v.faderPos = static_cast<int>(std::lround(rme::dbToFaderlin(db) * 0x7FFF));
+        }
+    }
+    return v;
+}
+
 } // namespace
 
 int main()
@@ -138,6 +199,9 @@ int main()
     auto lastLink = rme::LinkState::Off;
     std::uint64_t lastRev = 0;
     auto lastDump = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+    uf1spread::Cache paintCache;
+    long painted = 0;
+    const int row = static_cast<int>(rmeu::Row::Output);
 
     while (!g_quit.load()) {
         // Same rule as the extension's tick: a stale handle after a USB
@@ -163,6 +227,17 @@ int main()
         // on a quiet mixer. It answers "did anything arrive", not "did anything
         // change that is worth drawing", so the painter in stage 3 cannot use it
         // as its repaint trigger. Here it only gates a once-a-second dump.
+        // ⇨ DRAW. The view is rebuilt every tick and the painter decides what
+        // actually goes on the wire, which is why revision() being useless as a
+        // trigger costs nothing: an unchanged picture writes zero frames, and
+        // the test pins that.
+        if (link == rme::LinkState::Online) {
+            const auto view = viewFor(rme::manager().snapshot(), cfg, row);
+            const int wrote = uf1spread::paint(view, paintCache,
+                [&dev](std::vector<std::uint8_t> f) { dev.send(std::move(f)); });
+            painted += wrote;
+        }
+
         const auto rev = rme::manager().revision();
         const auto now = std::chrono::steady_clock::now();
         if (link == rme::LinkState::Online && rev != lastRev
@@ -175,7 +250,7 @@ int main()
         std::this_thread::sleep_for(std::chrono::milliseconds(33));
     }
 
-    std::printf("\nORC: closing.\n");
+    std::printf("\nORC: closing. %ld frames painted.\n", painted);
     rme::manager().stop();
     dev.close();
     return 0;
