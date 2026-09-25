@@ -106,7 +106,7 @@ void stepRow(State& s, int dir)
 // The submix one place on, through the visible outputs, with wrap (Frank
 // 23.09., nav left/right). The submix is the output inputs and playbacks write
 // into; the row and the selection stay where they are.
-void stepSubmix(State& s, const rme::State& st, int dir)
+void stepSubmix(State& s, const rme::State& st, const Config& cfg, int dir)
 {
     const auto outs = rmeu::visibleChannels(st, rmeu::Row::Output);
     if (outs.empty()) return;
@@ -114,7 +114,23 @@ void stepSubmix(State& s, const rme::State& st, int dir)
     const auto at  = std::find(outs.begin(), outs.end(), cur);
     const int  idx = (at == outs.end()) ? 0 : static_cast<int>(at - outs.begin());
     const int  n   = static_cast<int>(outs.size());
-    s.submix.store(outs[static_cast<size_t>((idx + (dir > 0 ? 1 : n - 1)) % n)]);
+    const int  to  = outs[static_cast<size_t>((idx + (dir > 0 ? 1 : n - 1)) % n)];
+    s.submix.store(to);
+
+    // The bank follows. The current bank wins a tie, so an output that sits on
+    // both banks never makes the row jump.
+    const int bankNow = std::clamp(s.vpotBank.load(), 0, Config::kVpotBanks - 1);
+    int found = -1;
+    for (int slot = 0; slot < Config::kVpotSlots; ++slot) {
+        const auto& spec = cfg.vpots[slot].target;
+        if (spec.empty()) continue;
+        const rmeu::Target t = rmeu::resolveTarget(st, spec);
+        if (!t.visible || t.row != rmeu::Row::Output || t.ch != to) continue;
+        const int bank = slot / 4;
+        if (bank == bankNow) { found = bankNow; break; }
+        if (found < 0) found = bank;
+    }
+    if (found >= 0) s.vpotBank.store(found);
 }
 
 void toggleWindow(State& s, const Host& h, Writes& out)
@@ -262,7 +278,7 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
     // ⇨ LEFT AND RIGHT STEP THE SUBMIX, with wrap as well (Frank 23.09.).
     if (id == ::uf1::btn::kNavLeft || id == ::uf1::btn::kNavRight) {
         if (ev.pressed && !modeMenu(h))
-            stepSubmix(s, st, id == ::uf1::btn::kNavRight ? 1 : -1);
+            stepSubmix(s, st, cfg, id == ::uf1::btn::kNavRight ? 1 : -1);
         return true;
     }
     // ⇨ AND THE CENTRE SHOWS TOTALMIX, where the ARC has its dim (Frank 23.09.).

@@ -183,6 +183,24 @@ int main()
         EXPECT(s.row.load() == 2);
     }
 
+    // ── nav left/right steps the submix, and the V-Pot bank follows it ───────
+    // Frank 25.09.: the output you stepped to must be on the glass. Main sits on
+    // bank 2 (factory layout), Phones 1 on bank 1.
+    {
+        Config c2 = config();
+        c2.vpots[4] = { "main", "volume", "submix" };   // bank 2, pot 1
+        in_::State s;
+        in_::Writes w;
+        s.submix.store(6);          // Phones 1
+        s.vpotBank.store(0);
+        in_::button(s, bare, st, c2, press(::uf1::btn::kNavRight), w);
+        EXPECT(s.submix.load() == 0);      // outputs 0 and 6: 6 -> 0 wraps
+        EXPECT(s.vpotBank.load() == 1);    // Main is on bank 2
+        in_::button(s, bare, st, c2, press(::uf1::btn::kNavRight), w);
+        EXPECT(s.submix.load() == 6);
+        EXPECT(s.vpotBank.load() == 0);    // Phones 1 is on bank 1
+    }
+
     // ── the nav centre toggles TotalMix' window and remembers it ─────────────
     {
         in_::State s;
