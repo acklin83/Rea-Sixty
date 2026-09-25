@@ -21,6 +21,15 @@ namespace reasixty::rme::face {
 namespace rmeu = reasixty::rme::uf1;
 namespace rmes = reasixty::rme::strip;
 
+// ⇨ OFF READS "-", AS IN TOTALMIX (Frank 25.09.2026: "einer nach -64.5 ist -",
+// "ja, auch - anzeigen"). Not "-inf": that is REAPER's word, and the level
+// below TotalMix' floor is not a very small number, it is off.
+std::string dbText(double db)
+{
+    if (db <= -99.0) return "-";
+    return formatDbReadout(std::pow(10.0, db / 20.0));
+}
+
 namespace {
 
 bool modeMenu(const Host& h)      { return h.modeMenuOpen && h.modeMenuOpen(); }
@@ -41,11 +50,6 @@ void emitVpotRow(const Host& h, const Out& o, Cache&, const uf1spread::VpotRow& 
     if (h.emitVpotRow) h.emitVpotRow(row, force);
 }
 
-std::string dbText(double db)
-{
-    if (db <= -99.0) return "-inf";
-    return formatDbReadout(std::pow(10.0, db / 20.0));
-}
 
 static void paintSmall(Cache& cc, const Out& o,
                        const std::string& name, const std::string& db,
@@ -361,7 +365,8 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
             // "weiss", am Geraet am 22.09. weiss gesehen).
             bars4[static_cast<size_t>(i)] =
                 (t.row == rmeu::Row::Output && t.ch == sub) ? 0x01 : 0x00;
-            uf1spread::vpotCellL1(vr, i, label, k ? dbText(d) + " dB" : std::string(),
+            uf1spread::vpotCellL1(vr, i, label,
+                           k ? (d <= -99.0 ? dbText(d) : dbText(d) + " dB") : std::string(),
                            k ? rme::dbToFaderlin(d) : 0.0, /*empty*/ !k);
         }
         emitVpotRow(h, o, cc, vr, big);

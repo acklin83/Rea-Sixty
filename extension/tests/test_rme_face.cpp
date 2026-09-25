@@ -98,6 +98,10 @@ int main()
         if (rec.frames[i] == sel) ++reentries;
     EXPECT(reentries == 0);
 
+    // Off reads "-", as in TotalMix (Frank 25.09.), not REAPER's "-inf".
+    EXPECT(face::dbText(reasixty::rme::kDbOff) == "-");
+    EXPECT(face::dbText(-64.5).rfind("-64", 0) == 0);
+
     if (g_fail == 0) std::printf("test_rme_face: all good\n");
     return g_fail ? 1 : 0;
 }

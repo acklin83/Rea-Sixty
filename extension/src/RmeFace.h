@@ -92,6 +92,9 @@ struct Cache {
     bool sListOpen = false;
 };
 
+// A level as the side-car writes it: TotalMix' own readout, off as "-".
+std::string dbText(double db);
+
 // One pass. `force` = the surface knows nothing (just opened, or the host
 // handed the screen over): repaint everything.
 void paint(Cache& c, input::State& in, const Host& h, const Out& o, bool force);
