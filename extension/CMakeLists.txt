@@ -818,7 +818,7 @@ if(NOT WIN32)
     # View and writes into a Sink instead of reading globals and driving the
     # device, so the frames can be read here rather than looked at on the glass.
     add_executable(test_orc_paint tests/test_orc_paint.cpp
-        src/Uf1Spread.cpp src/UF1Protocol.cpp)
+        src/Uf1Spread.cpp src/UF1Protocol.cpp src/Uf1EqCurve.cpp)
     target_include_directories(test_orc_paint PRIVATE src)
     add_test(NAME orc_paint COMMAND test_orc_paint)
 
@@ -940,6 +940,7 @@ if(APPLE)
         src/RmeState.cpp
         src/RmeOsc.cpp
         src/RmeUf1.cpp
+        src/RmeStrip.cpp
         src/RmeNames.cpp
         src/Uf1EqCurve.cpp
         src/Uf1Spread.cpp

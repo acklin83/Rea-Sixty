@@ -27,6 +27,7 @@
 
 #include "RmeManager.h"
 #include "RmeState.h"
+#include "RmeStrip.h"
 #include "RmeUf1.h"
 #include "Uf1Spread.h"
 #include "UF1Device.h"
@@ -34,10 +35,17 @@
 
 namespace rme  = reasixty::rme;
 namespace rmeu = reasixty::rme::uf1;
+namespace rmes = reasixty::rme::strip;
 
 namespace {
 
 std::atomic<bool> g_quit{false};
+
+// Which of the two views has the screen. The input handler runs on the device's
+// worker thread and the tick reads it, so it is atomic rather than a plain bool.
+// Stage 5 puts this on a binding; until then the channel-encoder push is the way
+// between the views, hard-wired, so stage 4 can be seen on the glass.
+std::atomic<bool> g_showStrip{false};
 
 void onSignal(int) { g_quit.store(true); }
 
@@ -149,6 +157,52 @@ uf1spread::View viewFor(const rme::State& st, const rme::Config& cfg, int row)
     return v;
 }
 
+// STRIP, the channel view. Same split: this half knows TotalMix, the renderer
+// it feeds knows the UF1.
+uf1spread::StripView stripViewFor(const rme::State& st, const rme::Config& cfg,
+                                  int row, int sel)
+{
+    uf1spread::StripView v;
+    const auto r = static_cast<rmeu::Row>(row);
+    if (sel < 0) return v;
+
+    v.name   = rmeu::displayName(st, r, sel);
+    v.number = std::to_string(sel);
+    v.active = true;
+    if (const auto* ch = rmeu::channelOf(st, r, sel))
+        v.palette = cfg.colourMap[std::clamp(ch->colour, 0, 8)];
+
+    const int submix = rmeu::effectiveSubmix(st, -1);
+    bool known = false;
+    const double db = rmeu::levelDb(st, r, sel, submix, known);
+    if (known) {
+        char t[16];
+        std::snprintf(t, sizeof t, "%.1f", db <= rme::kDbOff ? -99.0 : db);
+        v.db = t;
+    }
+
+    // The page the channel can actually show. A page that does not apply to this
+    // row is not offered, so the type cell never names something the channel
+    // has not got.
+    const auto pages = rmes::availablePages(st, r, sel, cfg.stripPages);
+    if (!pages.empty()) {
+        const auto& pg = cfg.stripPages[static_cast<std::size_t>(pages.front())];
+        v.csType = pg.name;
+        if (const auto* p = rmes::find(pg.pots[0])) {
+            double raw = 0.0;
+            if (rmes::value(st, r, sel, *p, raw)) {
+                v.line = rmes::label(st, r, sel, *p) + "  " + rmes::format(*p, r, raw);
+                v.barPos = static_cast<int>(std::lround(rmes::norm(*p, r, raw) * 100.0));
+            }
+        }
+    }
+
+    // ⛔ eqModel answers for THIS channel or says the EQ is out. A flat graph is
+    // the honest answer to "no EQ here"; the wrong channel's curve never is.
+    v.eq = rmeu::eqModel(st, r, sel);
+    return v;
+}
+
 } // namespace
 
 int main()
@@ -162,6 +216,11 @@ int main()
     // stage does, so there is nothing here that needs the main thread yet; the
     // tick that will own the painting comes in stage 2.
     dev.setInputHandler([](const uf1::InputEvent& ev) {
+        if (ev.kind == uf1::InputKind::Button && ev.id == uf1::btn::kChannelPush
+            && ev.pressed) {
+            g_showStrip.store(!g_showStrip.load());
+            std::printf("ORC: view -> %s\n", g_showStrip.load() ? "STRIP" : "SPREAD");
+        }
         switch (ev.kind) {
             case uf1::InputKind::FaderPosition:
                 std::printf("%-14s pos=%5u\n", kindName(ev.kind), ev.position);
@@ -200,6 +259,7 @@ int main()
     std::uint64_t lastRev = 0;
     auto lastDump = std::chrono::steady_clock::now() - std::chrono::seconds(10);
     uf1spread::Cache paintCache;
+    uf1spread::StripCache stripCache;
     long painted = 0;
     const int row = static_cast<int>(rmeu::Row::Output);
 
@@ -232,10 +292,16 @@ int main()
         // trigger costs nothing: an unchanged picture writes zero frames, and
         // the test pins that.
         if (link == rme::LinkState::Online) {
-            const auto view = viewFor(rme::manager().snapshot(), cfg, row);
-            const int wrote = uf1spread::paint(view, paintCache,
-                [&dev](std::vector<std::uint8_t> f) { dev.send(std::move(f)); });
-            painted += wrote;
+            const auto st = rme::manager().snapshot();
+            auto sink = [&dev](std::vector<std::uint8_t> f) { dev.send(std::move(f)); };
+            if (g_showStrip.load()) {
+                const auto list = rmeu::visibleChannels(st, static_cast<rmeu::Row>(row));
+                painted += uf1spread::paintStrip(
+                    stripViewFor(st, cfg, row, list.empty() ? -1 : list.front()),
+                    stripCache, sink);
+            } else {
+                painted += uf1spread::paint(viewFor(st, cfg, row), paintCache, sink);
+            }
         }
 
         const auto rev = rme::manager().revision();

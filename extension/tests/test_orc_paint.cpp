@@ -152,6 +152,77 @@ int main()
         check(!motor, "faderPos -1 leaves the motor alone");
     }
 
+    // ── STRIP ────────────────────────────────────────────────────────────────
+    auto strip = [] {
+        uf1spread::StripView v;
+        v.name = "Voc 1"; v.db = "-6.0"; v.line = "GAIN  +12.0dB";
+        v.number = "1"; v.csType = "PREAMP"; v.chSoft = "MONO";
+        v.palette = 0x0C; v.active = true; v.barPos = 40;
+        v.eq.on = true;
+        v.eq.bands.push_back({ uf1eq::Band::Kind::Bell, 1000.0, 3.0, 1.0, 2 });
+        return v;
+    };
+
+    {
+        Recorder rec;
+        uf1spread::StripCache c;
+        const int n = uf1spread::paintStrip(strip(), c, rec.sink());
+        check(n > 0, "STRIP: a cold cache writes something");
+        check(rec.wrote(uf1::scr::kTrackName), "STRIP: name written");
+        check(rec.wrote(uf1::scr::kValueLine), "STRIP: value line written");
+        check(rec.wrote(uf1::scr::kCsType),    "STRIP: type cell written");
+        check(rec.wrote(uf1::scr::kGraphic),   "STRIP: the curve is drawn");
+    }
+
+    {
+        Recorder rec;
+        uf1spread::StripCache c;
+        uf1spread::paintStrip(strip(), c, rec.sink());
+        rec.clear();
+        const int n = uf1spread::paintStrip(strip(), c, rec.sink());
+        check(n == 0, "STRIP: an unchanged view writes nothing");
+    }
+
+    // The value line moves under the hand while the curve stands still. The
+    // graph is two frames of 251 bytes; redrawing it for a text change is the
+    // kind of waste that made the display drop to lazy render-on-idle.
+    {
+        Recorder rec;
+        uf1spread::StripCache c;
+        uf1spread::paintStrip(strip(), c, rec.sink());
+        rec.clear();
+        auto v = strip();
+        v.line = "GAIN  +13.0dB";
+        uf1spread::paintStrip(v, c, rec.sink());
+        check(rec.wrote(uf1::scr::kValueLine), "STRIP: the value line follows");
+        check(!rec.wrote(uf1::scr::kGraphic),  "STRIP: the curve is left alone");
+    }
+
+    // A band moves: the curve is redrawn.
+    {
+        Recorder rec;
+        uf1spread::StripCache c;
+        uf1spread::paintStrip(strip(), c, rec.sink());
+        rec.clear();
+        auto v = strip();
+        v.eq.bands[0].gainDb = 6.0;
+        uf1spread::paintStrip(v, c, rec.sink());
+        check(rec.wrote(uf1::scr::kGraphic), "STRIP: the curve follows a band");
+    }
+
+    // ⛔ EQ off is a statement. Switching it off has to reach the glass, or the
+    // last curve stands there claiming an EQ that is out.
+    {
+        Recorder rec;
+        uf1spread::StripCache c;
+        uf1spread::paintStrip(strip(), c, rec.sink());
+        rec.clear();
+        auto v = strip();
+        v.eq.on = false;
+        uf1spread::paintStrip(v, c, rec.sink());
+        check(rec.wrote(uf1::scr::kGraphic), "STRIP: EQ off redraws the graph flat");
+    }
+
     if (failures == 0) std::printf("test_orc_paint: all checks passed\n");
     return failures == 0 ? 0 : 1;
 }

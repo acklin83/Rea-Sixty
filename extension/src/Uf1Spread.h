@@ -31,6 +31,8 @@
 #include <string>
 #include <vector>
 
+#include "Uf1EqCurve.h"
+
 namespace uf1spread {
 
 // The painter hands finished frames over; the caller decides what a frame is
@@ -77,5 +79,37 @@ struct Cache {
 // frames handed to `out`. A second paint of an unchanged View writes nothing,
 // which is the property the test pins.
 int paint(const View& v, Cache& cache, const Sink& out);
+
+// ── STRIP ─────────────────────────────────────────────────────────────────────
+// The channel view: one TotalMix channel across the colour bar, its name, its
+// value line, and the EQ curve under them.
+struct StripView {
+    std::string name;
+    std::string db;
+    std::string line;       // the value line: the parameter under the hand
+    std::string number;
+    std::string csType;     // the type cell, which carries the page name here
+    std::string chSoft;     // label of the soft key beside the channel
+    int         palette  = 0;
+    bool        active   = false;
+    int         barPos   = 0;      // -100..100
+    bool        barCentre = false; // draw the bar from the middle
+
+    // ⛔ on == false is a STATEMENT, not a fallback. A flat graph means the EQ
+    // is out; a curve from the wrong channel is never right. That distinction
+    // cost a day when the graph was first shared, so it travels in the type.
+    uf1eq::Model eq;
+};
+
+struct StripCache {
+    bool valid = false;
+    StripView shown{};
+    // The rendered curve, not the model. What decides a redraw is whether the
+    // picture changed, and two different models can draw the same picture.
+    std::array<std::uint8_t, 251> col{};
+    std::uint8_t tail = 0;
+};
+
+int paintStrip(const StripView& v, StripCache& cache, const Sink& out);
 
 } // namespace uf1spread
