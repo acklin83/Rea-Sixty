@@ -35475,6 +35475,37 @@ void uf1PaintChannel_()
         // Paint the empty zone once, then keep the idle cycle running so the
         // firmware stays in continuous-refresh mode and the face is BLANK rather
         // than frozen on whatever it last showed.
+        // ⛔ THE RETURN BELOW USED TO TAKE THE WHOLE FACE WITH IT. Blanking the
+        // channel zone is right — with no track there is no name, no level, no
+        // colour — but the soft-key labels, the bank header, the time field and
+        // the button LEDs come from the BINDINGS, not from a track, and they
+        // were dropped only because they happen to be painted further down the
+        // same function. An empty project left the surface looking dead
+        // (Frank 2026-09-25: "ohne track in reaper ist immer noch die ganze
+        // surface ohne anzeige").
+        //
+        // ⚠ The return itself stays: fifteen places below this point hand `tr`
+        // to REAPER's track and send APIs without re-checking it. Letting the
+        // function run on with a null track would trade a blank face for a
+        // crash. So the branch paints what it can and then leaves.
+        const bool emptyEdge = !sEmptyPainted;
+        {
+            std::array<Uf1SkCell, 4> cells{};
+            const int bankNo = g_uf1SoftBank.load();
+            // The same builder the DAW branch uses, not a second copy of the
+            // label and LED rules. A dynamic bank of FX has nothing to show
+            // without a track, and shows nothing, which is the honest answer.
+            for (int i = 0; i < 4; ++i)
+                cells[static_cast<size_t>(i)] = uf1StaticBankCell_(bankNo, i);
+            uf1EmitSoftKeyRow_(cells, emptyEdge, /*ledsBorrowed=*/false,
+                               /*menuOpen=*/g_uf1ModeMenu.load());
+        }
+        uf1PaintTimeField_(emptyEdge);
+        // All four flags false: the bank arrows step tracks and there are none,
+        // and there is no channel page to walk. Everything else on this row is
+        // a binding and paints regardless.
+        uf1PaintButtonLeds_(emptyEdge, Uf1BtnAvail{}, /*sideCar=*/false);
+
         if (!sEmptyPainted) {
             sEmptyPainted = true;
             uf1PaintEmptyChannel_();
