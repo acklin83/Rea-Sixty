@@ -384,10 +384,15 @@ int main()
         check(u::displayName(s3, u::Row::Input, 6) == "Bass", "an input by its name");
         put("/input/6/stereo", 1);
         check(s3.inputs[6].stereo && !s3.inputs[0].stereo, "the stereo flag lands per strip");
-        check(u::nudgeDb(kDbOff, 1, 0.5) == -60.0, "off climbs to -60 first");
+        check(u::nudgeDb(kDbOff, 1, 0.5) == -64.5, "off climbs to TotalMix' floor first");
+        check(u::nudgeDb(kDbOff, 3, 0.5) == -63.5, "and steps on from there");
         check(u::nudgeDb(-60.0, -1, 0.5) == -60.5 && u::nudgeDb(5.8, 2, 0.5) == 6.0,
               "nudges in steps, clamps at +6");
-        check(u::nudgeDb(-99.2, -1, 0.5) == kDbOff, "below -99 is off");
+        // TotalMix stops at -64.5 on every channel (Frank 25.09.): turning on
+        // down stays there, it never goes off.
+        check(u::nudgeDb(-64.3, -1, 0.5) == -64.5, "clamps at -64.5");
+        check(u::nudgeDb(-64.5, -10, 0.5) == -64.5, "and stays there");
+        check(u::nudgeDb(kDbOff, -1, 0.5) == kDbOff, "off turned down stays off");
 
         // SOLO sits on the routing, CUT on the strip (side-car, 21.09.).
         check(u::muteAddress(u::Row::Input, 6) == "/input/6/mute"

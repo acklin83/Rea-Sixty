@@ -242,11 +242,11 @@ double nudgeDb(double cur, int detents, double stepDb)
     if (detents == 0) return cur;
     if (cur <= -99.0) {
         if (detents < 0) return kDbOff;
-        cur = -60.0;
+        cur = kLevelFloorDb;
         --detents;
     }
     double v = cur + detents * stepDb;
-    if (v < -99.0) return kDbOff;
+    if (v < kLevelFloorDb) v = kLevelFloorDb;
     if (v > 6.0) v = 6.0;
     return v;
 }
