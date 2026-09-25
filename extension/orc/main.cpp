@@ -87,7 +87,10 @@ int main()
     // Loading is not an edit. Clearing the flag here is what stops the first
     // frame from writing the file back out over a file nobody touched.
     rme::manager().takeConfigDirty();
-    rme::manager().start();
+    // ⛔ Not while REAPER holds the UF1: the TotalMix port goes with the surface
+    // (see Surface.cpp, the handover). The surface loop starts the link the
+    // moment REAPER lets go.
+    if (!orc::reaperWantsUf1()) rme::manager().start();
     std::printf("ORC: TotalMix on %s, send %d, receive %d. Settings in %s\n",
                 cfg.host.c_str(), cfg.sendPort, cfg.recvPort,
                 orc::rmeConfigPath().c_str());

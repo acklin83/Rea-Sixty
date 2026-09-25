@@ -330,13 +330,21 @@ void Surface::loop_()
             if (now - lastCheck >= std::chrono::milliseconds(500)) {
                 lastCheck = now;
                 const bool want = reaperWantsUf1();
+                // ⛔ THE UF1 AND THE TOTALMIX PORT GO TOGETHER (Frank 25.09.:
+                // "orc muss die totalmix osc bindung zu machen bei der
+                // übergabe"). Both programs use Remote 3, so while ORC held
+                // 7006, REAPER's side-car had the surface and no mixer: "RME
+                // no TotalMix". Rea-Sixty retries a busy port every 3 s, so
+                // closing ours is all it needs.
                 if (want && !yielding) {
-                    std::printf("ORC: REAPER asked for the UF1, letting go\n");
+                    std::printf("ORC: REAPER asked for the UF1, letting go of it and of TotalMix\n");
                     std::fflush(stdout);
+                    rme::manager().stop();
                 }
                 if (!want && yielding) {
-                    std::printf("ORC: REAPER let go of the UF1, taking it back\n");
+                    std::printf("ORC: REAPER let go of the UF1, taking it and TotalMix back\n");
                     std::fflush(stdout);
+                    rme::manager().start();
                     lastOpenTry = now - std::chrono::seconds(5);   // try at once
                 }
                 yielding = want;
