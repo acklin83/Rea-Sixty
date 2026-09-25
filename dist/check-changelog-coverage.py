@@ -47,12 +47,31 @@ def main(notes_path, ext_path, threshold=0.34):
     # gelesen und das Paket fliegt mit "no files provided" aus dem Index.
     blanks = [i for i, l in enumerate(ext[start + 1:end], start + 2) if not l.strip()]
 
+    # ⛔ Ein Anteilstest reicht NICHT. „The plug-in says what it is, and what it
+    # is sending" teilt sich mit dem Changelog Wörter wie meter, plug, channel,
+    # strip, data — Vokabular, das in diesem Projekt überall vorkommt. Der
+    # Abschnitt kam durch, obwohl kein einziger seiner EIGENEN Begriffe drinstand
+    # (handshake, prepare, faceplate). Frank hat ihn gefunden, der Wächter nicht.
+    #
+    # Also nach Seltenheit gewichten: ein Wort, das in vielen Abschnitten der
+    # Notes vorkommt, sagt nichts über DIESEN Abschnitt. Geprüft werden die
+    # Begriffe, die den Abschnitt von den anderen unterscheiden.
+    df = {}
+    for _, probe in heads:
+        for w in words(probe):
+            df[w] = df.get(w, 0) + 1
+
     missing = []
     for title, probe in heads:
         w = words(probe)
         if not w:
             continue
-        if sum(1 for x in w if x in hay) / len(w) < threshold:
+        rare = {x for x in w if df.get(x, 0) <= 3}
+        if not rare:                       # nichts Eigenes: am Anteil messen
+            if sum(1 for x in w if x in hay) / len(w) < threshold:
+                missing.append(title)
+            continue
+        if sum(1 for x in rare if x in hay) / len(rare) < threshold:
             missing.append(title)
 
     print("Notes-Abschnitte: %d" % len(heads))
