@@ -96,15 +96,15 @@ std::string displayName(const State& st, Row r, int ch);
 uf1eq::Model eqModel(const State& st, Row r, int ch);
 
 // ⇨ TOTALMIX' FLOOR FOR EVERY LEVEL, inputs, playbacks and outputs alike: a
-// knob turned down stops at -64.5 dB and never goes off (Frank 25.09.2026:
-// "bleibt bei -64.5 stehen, alle kanäle"). Stepping on below it sent values
-// TotalMix ignored, and since TotalMix does not echo our own writes, the UF1
-// showed them anyway.
+// knob turned down stops at -64.5 dB, and the next step is off, shown as "-"
+// (Frank 25.09.2026: "bleibt bei -64.5 stehen, alle kanäle", "einer nach -64.5
+// ist -"). Stepping on to -99 sent values TotalMix ignored, and since TotalMix
+// does not echo our own writes, the UF1 showed them anyway.
 constexpr double kLevelFloorDb = -64.5;
 
-// A V-Pot or jog step: dB nudge from `cur`, clamped to kLevelFloorDb..+6. Off
-// (-300, a fader pulled to its end) climbs to the floor first; turned down it
-// stays off.
+// A V-Pot or jog step: dB nudge from `cur`, clamped to kLevelFloorDb..+6; one
+// step below the floor is off (-300). Off climbs to the floor first; turned
+// down it stays off.
 double nudgeDb(double cur, int detents, double stepDb);
 
 }  // namespace reasixty::rme::uf1

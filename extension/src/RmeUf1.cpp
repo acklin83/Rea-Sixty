@@ -245,6 +245,8 @@ double nudgeDb(double cur, int detents, double stepDb)
         cur = kLevelFloorDb;
         --detents;
     }
+    // One step below the floor is off, as in TotalMix ("-").
+    if (detents < 0 && cur <= kLevelFloorDb + 1e-9) return kDbOff;
     double v = cur + detents * stepDb;
     if (v < kLevelFloorDb) v = kLevelFloorDb;
     if (v > 6.0) v = 6.0;

@@ -388,10 +388,11 @@ int main()
         check(u::nudgeDb(kDbOff, 3, 0.5) == -63.5, "and steps on from there");
         check(u::nudgeDb(-60.0, -1, 0.5) == -60.5 && u::nudgeDb(5.8, 2, 0.5) == 6.0,
               "nudges in steps, clamps at +6");
-        // TotalMix stops at -64.5 on every channel (Frank 25.09.): turning on
-        // down stays there, it never goes off.
+        // TotalMix stops at -64.5 on every channel, and the next step down is
+        // off (Frank 25.09.).
         check(u::nudgeDb(-64.3, -1, 0.5) == -64.5, "clamps at -64.5");
-        check(u::nudgeDb(-64.5, -10, 0.5) == -64.5, "and stays there");
+        check(u::nudgeDb(-63.0, -10, 0.5) == -64.5, "a big step lands on the floor, not off");
+        check(u::nudgeDb(-64.5, -1, 0.5) == kDbOff, "one step below the floor is off");
         check(u::nudgeDb(kDbOff, -1, 0.5) == kDbOff, "off turned down stays off");
 
         // SOLO sits on the routing, CUT on the strip (side-car, 21.09.).
