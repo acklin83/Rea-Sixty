@@ -92,11 +92,11 @@ const rmes::Param* stripParam(const Config& cfg, int page, bool key, int i);
 
 void select(State& s, rmeu::Row r, int ch);
 void stepRow(State& s, int dir);
-// ⇨ AND THE V-POT BANK FOLLOWS (Frank 25.09.: "wenn mit nav tasten die outputs
-// gescrollt werden sollte das display folgen"). If the new submix sits on a pot
-// of the other bank, 5-8's bank switches to it, so the output you stepped to is
-// on the glass. An output on no pot leaves the bank alone.
+// The V-Pot bank follows the output stepped to (followBank).
 void stepSubmix(State& s, const rme::State& st, const Config& cfg, int dir);
+// If channel `ch` of row `r` sits on a pot of the other bank, switch 5-8's bank
+// to it. Nav left/right and the channel encoder both call this (Frank 25.09.).
+void followBank(State& s, const rme::State& st, const Config& cfg, rmeu::Row r, int ch);
 
 // Show or hide TotalMix' window. One decision for the nav centre and for the
 // `rme_show_window` builtin.

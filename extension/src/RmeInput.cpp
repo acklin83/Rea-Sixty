@@ -103,6 +103,27 @@ void stepRow(State& s, int dir)
     s.row.store((cur + (dir > 0 ? 1 : n - 1)) % n);
 }
 
+// ⇨ THE V-POT BANK FOLLOWS WHAT YOU STEPPED TO (Frank 25.09.: nav, then "mit
+// encoder bitte auch"). If channel `ch` of row `r` sits on a pot of the other
+// bank, 5-8's bank switches to it, so it is on the glass. The current bank wins
+// a tie, so a channel on both banks never makes the row jump; a channel on no
+// pot leaves the bank alone. One rule for both ways of stepping.
+void followBank(State& s, const rme::State& st, const Config& cfg, rmeu::Row r, int ch)
+{
+    const int bankNow = std::clamp(s.vpotBank.load(), 0, Config::kVpotBanks - 1);
+    int found = -1;
+    for (int slot = 0; slot < Config::kVpotSlots; ++slot) {
+        const auto& spec = cfg.vpots[slot].target;
+        if (spec.empty()) continue;
+        const rmeu::Target t = rmeu::resolveTarget(st, spec);
+        if (!t.visible || t.row != r || t.ch != ch) continue;
+        const int bank = slot / 4;
+        if (bank == bankNow) { found = bankNow; break; }
+        if (found < 0) found = bank;
+    }
+    if (found >= 0) s.vpotBank.store(found);
+}
+
 // The submix one place on, through the visible outputs, with wrap (Frank
 // 23.09., nav left/right). The submix is the output inputs and playbacks write
 // into; the row and the selection stay where they are.
@@ -116,21 +137,7 @@ void stepSubmix(State& s, const rme::State& st, const Config& cfg, int dir)
     const int  n   = static_cast<int>(outs.size());
     const int  to  = outs[static_cast<size_t>((idx + (dir > 0 ? 1 : n - 1)) % n)];
     s.submix.store(to);
-
-    // The bank follows. The current bank wins a tie, so an output that sits on
-    // both banks never makes the row jump.
-    const int bankNow = std::clamp(s.vpotBank.load(), 0, Config::kVpotBanks - 1);
-    int found = -1;
-    for (int slot = 0; slot < Config::kVpotSlots; ++slot) {
-        const auto& spec = cfg.vpots[slot].target;
-        if (spec.empty()) continue;
-        const rmeu::Target t = rmeu::resolveTarget(st, spec);
-        if (!t.visible || t.row != rmeu::Row::Output || t.ch != to) continue;
-        const int bank = slot / 4;
-        if (bank == bankNow) { found = bankNow; break; }
-        if (found < 0) found = bank;
-    }
-    if (found >= 0) s.vpotBank.store(found);
+    followBank(s, st, cfg, rmeu::Row::Output, to);
 }
 
 void toggleWindow(State& s, const Host& h, Writes& out)
@@ -193,7 +200,10 @@ bool encoder(State& s, const Host& h, const rme::State& st, const Config& cfg,
         const auto r = static_cast<rmeu::Row>(std::clamp(s.row.load(), 0, 2));
         const int n = rmeu::stepChannel(rmeu::visibleChannels(st, r),
                                         selected(s, st, r), steps);
-        if (n >= 0) select(s, r, n);
+        if (n >= 0) {
+            select(s, r, n);
+            followBank(s, st, cfg, r, n);
+        }
         return true;
     }
     if (id == ::uf1::enc::kJog) {

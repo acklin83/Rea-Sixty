@@ -201,6 +201,21 @@ int main()
         EXPECT(s.vpotBank.load() == 0);    // Phones 1 is on bank 1
     }
 
+    // ── the channel encoder takes the bank along too ─────────────────────────
+    {
+        Config c2 = config();
+        c2.vpots[4] = { "main", "volume", "submix" };   // bank 2, pot 1
+        in_::State s;
+        in_::Writes w;
+        s.row.store(2);             // Output
+        s.sel[2].store(6);          // Phones 1, bank 1
+        s.vpotBank.store(0);
+        for (int i = 0; i < 4; ++i)  // one detent back: 6 -> 0 (Main)
+            in_::encoder(s, bare, st, c2, ::uf1::enc::kChannel, -1, w);
+        EXPECT(s.sel[2].load() == 0);
+        EXPECT(s.vpotBank.load() == 1);
+    }
+
     // ── the nav centre toggles TotalMix' window and remembers it ─────────────
     {
         in_::State s;
