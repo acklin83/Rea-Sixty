@@ -6093,6 +6093,11 @@ std::atomic<double> g_uf1JogStep[kUf1JogModeCount];
 // Which Jog Modes the Scrub-held picker offers (user on/off, analog to the encoder
 // ring visibility). ExtState "uf1JogVis<m>". Default all on.
 std::atomic<bool>   g_uf1JogVisible[kUf1JogModeCount];
+// ⇨ THE FADER GOES WITH THE JOG MODE, if the user wants it (Frank 25.09.2026:
+// "Jog-Modes ... damit die auch den Fader mitnehmen können wenn gewünscht (pro
+// Mode)"). Only Items has a fader target today: "Fader = Item Volume", which
+// replaced the Item Volume side-car. ExtState "uf1JogFader<m>", default off.
+std::atomic<bool>   g_uf1JogFader[kUf1JogModeCount];
 // …and the ORDER they come in. Same shape as the encoder ring
 // (g_uf1EncoderSeq): a PERMUTATION of the mode ints, position to mode, so the
 // SCRUB-held picker walks the order you set instead of the order the enum
@@ -31862,7 +31867,9 @@ std::string splitFaderUnit_(std::string v, std::string* unitOut);
 // resolved — the call has moved below it).
 // Resolved in uf1PaintChannel_, where the target flags live, and passed in:
 // re-deriving them here would be a second copy of the one decision.
-struct Uf1FaderDb { bool set = false; std::string value, unit; };
+// What the zone above the fader says about the fader's target. `name`, when
+// set, replaces the track name in that zone ("no item", 25.09.2026).
+struct Uf1FaderDb { bool set = false; std::string value, unit, name; };
 
 static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
                                   const StripRoute* sendOverride = nullptr,
@@ -31980,6 +31987,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
                                    /*foldLatin1*/ false);
     }
     if (sendZone) name = ovName;   // Extender: the 9th send's dest, not the track
+    if (faderDb && !faderDb->name.empty()) name = faderDb->name;
     if (!meterView && (changed || name != sName)) { sName = name; sendZoneText(uf1::scr::kTrackName, name); }
 
     // Output dB (0x000c): 0x00 + value left-justified, NUL-padded to 6, + 2-byte
@@ -35228,6 +35236,21 @@ void uf1PaintChannel_()
     // Now the zone above the fader can name what the fader moves. Same order as
     // the branches below, so the readout and the write can never pick different
     // targets. The Extender's 9th send keeps arriving through sendOverride.
+    // ⇨ JOG MODE ITEMS WITH "FADER = ITEM VOLUME" (Frank 25.09.2026), the Item
+    // Volume side-car's job without the side-car. The fader drives EVERY
+    // selected item, PROPORTIONALLY: the first one follows the fader, the others
+    // take the same change in dB, so their differences stay. The motor follows
+    // the first item. No item: the fader stays put and the zone says "no item".
+    // First in all three chains below (readout, write, motor), because it is a
+    // choice the user made for this mode on purpose.
+    const bool itemFader = g_uf1JogMode.load() == Uf1JogMode::Items
+                        && g_uf1JogFader[static_cast<int>(Uf1JogMode::Items)].load();
+    std::vector<MediaItem*> selItems;
+    if (itemFader) {
+        const int n = CountSelectedMediaItems(nullptr);
+        for (int i = 0; i < n; ++i)
+            if (MediaItem* it = GetSelectedMediaItem(nullptr, i)) selItems.push_back(it);
+    }
     Uf1FaderDb faderDb;
     {
         auto fromParam = [&](MediaTrack* t, int fx, int prm) {
@@ -35244,7 +35267,16 @@ void uf1PaintChannel_()
             faderDb.value = splitFaderUnit_(v, &faderDb.unit);
             faderDb.set   = true;
         };
-        if (stripFader)            fromParam(ftr, csf.fxIndex, csf.vst3Param);
+        if (itemFader) {
+            if (!selItems.empty()) {
+                faderDb.value = formatDbReadout(GetMediaItemInfo_Value(selItems[0], "D_VOL"));
+                faderDb.unit  = "dB";
+            } else {
+                faderDb.name  = "no item";   // value and unit stay empty
+            }
+            faderDb.set = true;
+        }
+        else if (stripFader)       fromParam(ftr, csf.fxIndex, csf.vst3Param);
         else if (sendFader) {      // UF1-local SENDS + FLIP: the first shown send
             faderDb.value = formatDbReadout(
                 readRouteVolumeLinear_(sendRoute, ftr));
@@ -35265,10 +35297,30 @@ void uf1PaintChannel_()
     // End-of-edit finalise (finishRouteVolEdit_ isend=1) fired ONCE on touch-release,
     // so Touch-mode recording stops + snaps back like the surface send-fader path.
     static bool sSendFaderEditing = false;
+    static uint16_t sItemSentPos = 0xFFFF;   // last position written to the items
     if (touched) {
         const uint16_t pos = g_uf1FaderPos.load();
         if (g_uf1FaderHasPos.load()) {
-            if (!ftr) {
+            if (itemFader) {
+                // Once per position, not per tick: each write is one per item.
+                if (!selItems.empty() && pos != sItemSentPos) {
+                    sItemSentPos = pos;
+                    const double want = uf1PosToVol_(pos);
+                    const double was  = GetMediaItemInfo_Value(selItems[0], "D_VOL");
+                    const double top  = uf1PosToVol_(kUf1FaderMax);
+                    for (MediaItem* it : selItems) {
+                        // Same ratio for all = same dB change for all. A first
+                        // item at -inf has no ratio; then everyone takes the
+                        // fader's value.
+                        const double v = (was > 1e-9)
+                            ? GetMediaItemInfo_Value(it, "D_VOL") * (want / was)
+                            : want;
+                        SetMediaItemInfo_Value(it, "D_VOL", std::clamp(v, 0.0, top));
+                        UpdateItemInProject(it);
+                    }
+                }
+            }
+            else if (!ftr) {
                 // Empty 9th Extender slot → the fader has no target and stays
                 // INERT, like a blank UF8 strip (and like the empty-send slot
                 // below). It must NOT fall through to the CSurf_On*Change tail:
@@ -35349,8 +35401,14 @@ void uf1PaintChannel_()
             finishRouteVolEdit_(kExtSendGestureSlot);   // Extender 9th-send Touch finalise
             sExtFaderEditing = false;
         }
+        sItemSentPos = 0xFFFF;   // the next grab writes from its first position
         uint16_t pos;
-        if (!ftr) {
+        if (itemFader) {
+            // The motor follows the first item; with none, it stays where it is.
+            pos = !selItems.empty()
+                ? uf1VolToPos_(GetMediaItemInfo_Value(selItems[0], "D_VOL"))
+                : (sLastMotorPos != 0xFFFF ? sLastMotorPos : uint16_t{0});
+        } else if (!ftr) {
             pos = 0;   // empty 9th Extender slot → park low, like a blank strip
         } else if (stripFader) {
             const double n = TrackFX_GetParamNormalized(ftr, csf.fxIndex, csf.vst3Param);
@@ -49854,6 +49912,23 @@ void reasixty_setUf1JogModeVisible(int mode, bool on)
     SetExtState("rea_sixty", key, on ? "1" : "0", true);
 }
 int reasixty_uf1JogModeCount() { return kUf1JogModeCount; }
+// Whether a jog mode has a fader target at all (only Items, for now), and the
+// user's choice for it.
+bool reasixty_uf1JogModeHasFader(int mode)
+{
+    return mode == static_cast<int>(Uf1JogMode::Items);
+}
+bool reasixty_uf1JogFaderFollows(int mode)
+{
+    return (mode >= 0 && mode < kUf1JogModeCount) && g_uf1JogFader[mode].load();
+}
+void reasixty_setUf1JogFaderFollows(int mode, bool on)
+{
+    if (mode < 0 || mode >= kUf1JogModeCount) return;
+    g_uf1JogFader[mode].store(on);
+    char key[24]; std::snprintf(key, sizeof(key), "uf1JogFader%d", mode);
+    SetExtState("rea_sixty", key, on ? "1" : "0", true);
+}
 // Ring order, mirroring the encoder ring's accessors one for one.
 int reasixty_uf1JogSeqAt(int pos)
 {
@@ -56480,6 +56555,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         char vkey[24]; std::snprintf(vkey, sizeof(vkey), "uf1JogVis%d", m);
         if (const char* v = GetExtState("rea_sixty", vkey); v && *v)
             g_uf1JogVisible[m].store(std::atoi(v) != 0);
+        char fkey[24]; std::snprintf(fkey, sizeof(fkey), "uf1JogFader%d", m);
+        if (const char* v = GetExtState("rea_sixty", fkey); v && *v)
+            g_uf1JogFader[m].store(std::atoi(v) != 0);
     }
     // softKeyBank intentionally NOT restored from ExtState — every
     // REAPER load starts on V-POT (bank 0) so the row matches what

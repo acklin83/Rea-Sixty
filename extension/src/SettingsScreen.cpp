@@ -198,6 +198,9 @@ const char* reasixty_uf1JogModeName(int mode);
 bool        reasixty_uf1JogModeVisible(int mode);
 void        reasixty_setUf1JogModeVisible(int mode, bool on);
 int         reasixty_uf1JogModeCount();
+bool        reasixty_uf1JogModeHasFader(int mode);
+bool        reasixty_uf1JogFaderFollows(int mode);
+void        reasixty_setUf1JogFaderFollows(int mode, bool on);
 int         reasixty_uf1JogSeqAt(int pos);
 void        reasixty_uf1JogMoveSeq(int pos, int dir);
 // Live jog mode — the nav-cross editor follows it and switching there switches
@@ -4662,6 +4665,16 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             } else { ImGui_TextDisabled(ctx, "\xE2\x96\xBC"); }
             ImGui_SameLine(ctx, nullptr, nullptr);
             ImGui_Text(ctx, reasixty_uf1JogModeName(m));
+            // The fader can go with the mode (Frank 25.09.2026); only Items
+            // has a fader target so far.
+            if (reasixty_uf1JogModeHasFader(m)) {
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                bool ff = reasixty_uf1JogFaderFollows(m);
+                if (ImGui_Checkbox(ctx, "Fader = Item Volume##jf", &ff))
+                    reasixty_setUf1JogFaderFollows(m, ff);
+                help_(ctx, "In this mode the fader moves every selected item, "
+                           "keeping their differences.");
+            }
             ImGui_PopID(ctx);
         }
         ImGui_Spacing(ctx);
