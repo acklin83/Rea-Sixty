@@ -15,6 +15,8 @@
 #include "RmeNames.h"
 #include "RmeOsc.h"
 #include "RmeState.h"
+#include "RmeUf1.h"
+#include "Uf1EqCurve.h"
 #include "RmeStrip.h"
 #include "RmeUf1.h"
 
@@ -580,5 +582,40 @@ int main()
     }
 
     if (g_fail == 0) std::printf("test_rme_osc: all checks passed\n");
-    return g_fail == 0 ? 0 : 1;
+        // ⛔ Band 1 and band 3 do not share indices 2 and 3. Frank measured both at
+    // the mixer on 2026-09-25 after the surface offered a high-pass and set a
+    // low-pass: index 2 is "the pass filter of this band", and the bands sit at
+    // opposite ends. The note this replaced said "both the same", which had read
+    // band 1 and assumed band 3 mirrored it, and the same wrong order had been
+    // copied into two sources and three documents.
+    {
+        using K = uf1eq::Band::Kind;
+        auto kindAt = [](reasixty::rme::uf1::Row row, int type) {
+            reasixty::rme::State st;
+            auto& m = (row == reasixty::rme::uf1::Row::Output) ? st.outputs : st.inputs;
+            auto& ch = m[0];
+            ch.name = "ch";
+            ch.seen = true;
+            ch.eq.seen = true;
+            ch.eq.on   = true;
+            ch.eq.type1 = type;
+            ch.eq.type3 = type;
+            const auto mod = reasixty::rme::uf1::eqModel(st, row, 0);
+            return mod;
+        };
+        const auto r = reasixty::rme::uf1::Row::Output;
+        const auto t2 = kindAt(r, 2);
+        const auto t3 = kindAt(r, 3);
+        check(t2.bands.size() >= 3, "eq: three bands modelled");
+        if (t2.bands.size() >= 3) {
+            check(t2.bands[0].kind == K::HighPass, "band 1 type 2 is a high-pass");
+            check(t2.bands[2].kind == K::LowPass,  "band 3 type 2 is a LOW-pass");
+        }
+        if (t3.bands.size() >= 3) {
+            check(t3.bands[0].kind == K::LowPass,  "band 1 type 3 is a low-pass");
+            check(t3.bands[2].kind == K::HighPass, "band 3 type 3 is a HIGH-pass");
+        }
+    }
+
+return g_fail == 0 ? 0 : 1;
 }

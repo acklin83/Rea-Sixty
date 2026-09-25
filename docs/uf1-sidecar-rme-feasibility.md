@@ -1280,12 +1280,20 @@ Luecke:
 Nur die NAMEN sind gemessen, keine RGB-Werte. Fuer die UF1 heisst das: eine
 Zuordnung Name → UF1-Palettenindex, keine Farbumrechnung.
 
-**EQ-Typ `eq/band1type` und `eq/band3type`** — beide gleich, Band 2 hat nur
-Bell und keinen Typ:
+**EQ-Typ `eq/band1type` und `eq/band3type`** — ⛔ **NICHT gleich.** Band 2 hat
+nur Bell und keinen Typ.
 
-| 0 | 1 | 2 | 3 |
-|---|---|---|---|
-| Bell | Shelve | Hipass | Low-Pass |
+| | 0 | 1 | 2 | 3 |
+|---|---|---|---|---|
+| `band1type` | Bell | Shelf | **HiPass** | **LoPass** |
+| `band3type` | Bell | Shelf | **LoPass** | **HiPass** |
+
+Index 2 ist „das Passfilter dieses Bandes", und die beiden sitzen an
+entgegengesetzten Enden: Band 1 ist das untere, sein Filter schneidet unten weg,
+Band 3 ist das obere. ⚠ Die frühere Fassung dieser Tabelle sagte „beide gleich".
+Gemessen war Band 1, Band 3 war gespiegelt angenommen, und der Graph zeichnete
+vier Tage lang einen Tiefpass, wo im Mixer ein Hochpass stand. Von Frank am
+Mixer korrigiert, 25.09.2026.
 
 **Low-Cut-Steilheit `lowcut/slope`** — Werte 0 bis 3, Frequenz 20 bis 500 Hz:
 

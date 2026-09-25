@@ -270,7 +270,8 @@ sind laut OSC-Tabelle geräteabhängig.
 | EQ Gain (3 Bänder) | -20 bis +20 dB | 0.5 dB | 62, 64 |
 | EQ Freq | 20 Hz bis 20 kHz | | 62 |
 | EQ Q | 0.4 bis 9.9 | | 62 |
-| EQ Typ Band 1/3 | Bell, Shelf, High-Pass, Low-Pass; Band 2 nur Bell | Liste | 62 |
+| EQ Typ Band 1 | Bell, Shelf, High-Pass, Low-Pass; Band 2 nur Bell | Liste | 62 |
+| EQ Typ Band 3 | Bell, Shelf, **Low-Pass, High-Pass** (2 und 3 andersherum als Band 1) | Liste | 62 |
 | Low Cut Freq | 20 bis 500 Hz | | 62 |
 | Low Cut Slope | 6, 12, 18, 24 dB/Okt | Liste | 62 |
 | Compressor Threshold | -60 bis 0 dB | | 65 |

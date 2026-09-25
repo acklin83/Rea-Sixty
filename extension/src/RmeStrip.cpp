@@ -44,7 +44,8 @@ const std::vector<Param>& catalogue()
         { "b1gain",      "eq/band1gain",       "Gain 1",   Kind::Db,   -20.0, 20.0, 0.5 },
         { "b1freq",      "eq/band1freq",       "Freq 1",   Kind::Hz,    20.0, 20000.0, 1.0 },
         { "b1q",         "eq/band1q",          "Q 1",      Kind::Q,      0.4, 9.9, 0.1 },
-        // 0 Bell, 1 Shelve, 2 Hipass, 3 Low-Pass, measured 2026-09-21.
+        // ⛔ Band 1 and band 3 do NOT share indices 2 and 3; see b3type below.
+        // Band 1 is the low band, so its pass filter cuts lows.
         { "b1type",      "eq/band1type",       "Type 1",   Kind::List,   0, 0, 1,
           Need::Any, false, false, { "Bell", "Shelf", "HiPass", "LoPass" } },
         { "b2gain",      "eq/band2gain",       "Gain 2",   Kind::Db,   -20.0, 20.0, 0.5 },
@@ -53,8 +54,12 @@ const std::vector<Param>& catalogue()
         { "b3gain",      "eq/band3gain",       "Gain 3",   Kind::Db,   -20.0, 20.0, 0.5 },
         { "b3freq",      "eq/band3freq",       "Freq 3",   Kind::Hz,    20.0, 20000.0, 1.0 },
         { "b3q",         "eq/band3q",          "Q 3",      Kind::Q,      0.4, 9.9, 0.1 },
+        // ⛔ 2 is LoPass here and HiPass on band 1: index 2 is "the pass filter
+        // of this band", and band 3 is the high one. Measured at the mixer by
+        // Frank 2026-09-25, after the list below had carried band 1's order for
+        // four days and the surface offered the opposite of what it set.
         { "b3type",      "eq/band3type",       "Type 3",   Kind::List,   0, 0, 1,
-          Need::Any, false, false, { "Bell", "Shelf", "HiPass", "LoPass" } },
+          Need::Any, false, false, { "Bell", "Shelf", "LoPass", "HiPass" } },
         // ── dynamics ────────────────────────────────────────────────────────
         { "dyn_on",      "dynamics/enable",    "Dyn",      Kind::Toggle, 0, 1, 1 },
         { "compthres",   "dynamics/compthres", "Thresh",   Kind::Db,   -60.0,  0.0, 0.5 },

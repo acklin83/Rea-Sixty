@@ -184,13 +184,20 @@ uf1eq::Model eqModel(const State& st, Row r, int ch)
     if (!c || !c->eq.seen) return m;
     const ChannelEq& e = c->eq;
     using K = uf1eq::Band::Kind;
-    // band1: 0 Bell, 1 Shelve (low), 2 Hipass, 3 Low-Pass. band3 the same with
-    // a HIGH shelf. Measured 2026-09-21; Frank: the shelf side is obvious.
+    // ⛔ THE TWO BANDS DO NOT SHARE INDICES 2 AND 3. Measured at the mixer by
+    // Frank 2026-09-25:
+    //     band 1: 0 Bell, 1 Shelf, 2 HiPass, 3 LoPass
+    //     band 3: 0 Bell, 1 Shelf, 2 LoPass, 3 HiPass
+    // Index 2 is "the pass filter of this band", and the bands sit at opposite
+    // ends: band 1 is the low one, so its filter cuts lows; band 3 is the high
+    // one, so its filter cuts highs. The 21.09. note said "both the same", which
+    // read band 1 and assumed band 3 mirrored it, and the graph drew a low-pass
+    // where the mixer had a high-pass for four days.
     auto kindOf = [](int type, bool low) {
         switch (type) {
             case 1:  return low ? K::LowShelf : K::HighShelf;
-            case 2:  return K::HighPass;
-            case 3:  return K::LowPass;
+            case 2:  return low ? K::HighPass : K::LowPass;
+            case 3:  return low ? K::LowPass  : K::HighPass;
             default: return K::Bell;
         }
     };

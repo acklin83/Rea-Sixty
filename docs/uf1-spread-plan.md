@@ -160,7 +160,7 @@ Zweiter Sammler für `Uf1EqCurve`:
 | `eq/enable` | `Model::on` |
 | `band1type` 0/1/2/3 | Bell / LowShelf / HighPass / LowPass |
 | `band2` | Bell |
-| `band3type` 0/1/2/3 | Bell / HighShelf / HighPass / LowPass |
+| `band3type` 0/1/2/3 | Bell / HighShelf / **LowPass** / **HighPass** (⛔ 2 und 3 sind gegenüber `band1type` vertauscht, gemessen 25.09.2026) |
 | `lowcut/enable` + `freq` + `slope` | HighPass mit **Ordnung 1..4** |
 
 - **Renderer:** `Band` bekommt eine Filterordnung, `hpfDb`/`lpfDb` rechnen

@@ -35,7 +35,8 @@ enum class Bus : std::uint8_t { Input, Playback, Output };
 
 // The channel EQ (not Room EQ): three bands and a low cut, on inputs and
 // outputs. Playbacks have none (dump 2026-09-21). Indices measured the same
-// day: band1type / band3type 0 Bell, 1 Shelve, 2 Hipass, 3 Low-Pass (band 2 is
+// day: band1type 0 Bell, 1 Shelf, 2 HiPass, 3 LoPass; band3type 0 Bell, 1 Shelf,
+// 2 LoPass, 3 HiPass — indices 2 and 3 are NOT shared, see RmeUf1.cpp (band 2 is
 // always a bell); lowcut/slope 0..3 = 6/12/18/24 dB/oct.
 struct ChannelEq {
     bool   seen   = false;   // TotalMix sent at least one EQ value for this strip
