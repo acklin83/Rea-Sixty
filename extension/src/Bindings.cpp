@@ -34,7 +34,7 @@
 #include <direct.h>
 #endif
 
-#include "reaper_plugin_functions.h"
+#include "BindingsHost.h"   // the four questions this file asks outwards
 
 #include "WDL/jsonparse.h"
 #include "JsonTree.h"
@@ -2979,7 +2979,8 @@ void upgradeStripFactoryColours_(Layer& L)
 
 std::string configDir_()
 {
-    const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+    const std::string baseStr = host().configDir ? host().configDir() : std::string();
+    const char* base = baseStr.empty() ? nullptr : baseStr.c_str();
     if (!base || !*base) base = ".";
     std::string d = base;
     d += "/rea_sixty";
@@ -4662,17 +4663,12 @@ namespace {
 
 // ---- MIDI output dispatch ------------------------------------------------
 //
-// We use StuffMIDIMessage rather than CreateMIDIOutput + midi_Output::Send.
-// StuffMIDIMessage(16+N, …) writes to MIDI hardware output device N
-// without needing the device to be "enabled for output" in REAPER's
-// MIDI prefs (Preferences → MIDI Devices). CreateMIDIOutput returns
-// nullptr for not-enabled devices — which Frank hit with his RME
-// Fireface UFX+ on 2026-05-14: the device enumerated via
-// GetMIDIOutputName but CreateMIDIOutput failed silently, and no MIDI
-// reached the destination. StuffMIDIMessage matches the behaviour of
-// the equivalent Lua (`reaper.StuffMIDIMessage(28, status, cc, val)` →
-// device 12, 28-16=12) so any device the user can see in the dropdown
-// is reachable.
+// What is decided here: the status byte, the two data bytes, and which device
+// name the binding asked for. HOW a message reaches a port is the host's, and
+// the reason Rea-Sixty's host does it the way it does — StuffMIDIMessage rather
+// than CreateMIDIOutput, after Frank's UFX+ enumerated but would not open on
+// 2026-05-14 — is written at that lambda in main.cpp, beside the code it
+// explains.
 
 // Build the MIDI status byte for the binding's MidiMsgType + channel
 // (1..16). Returns -1 on invalid input. Program Change is single-data-
@@ -4702,36 +4698,9 @@ void dispatchMidi_(const ActionStep& a)
     // send stray velocity-shaped trailing bytes.
     const int d2 = isPC ? 0 : std::clamp(a.midiData2, 0, 127);
 
-    const int n = GetNumMIDIOutputs();
-    if (a.midiDevice.empty()) {
-        // "(all enabled outputs)" — iterate every enumerated device.
-        // StuffMIDIMessage silently drops messages destined for
-        // unmapped indices, so over-shooting is harmless.
-        for (int i = 0; i < n; ++i) {
-            char nm[256] = {0};
-            if (!GetMIDIOutputName(i, nm, sizeof(nm))) continue;
-            if (!*nm) continue;
-            StuffMIDIMessage(16 + i, status, d1, d2);
-        }
-        return;
-    }
-    for (int i = 0; i < n; ++i) {
-        char nm[256] = {0};
-        if (!GetMIDIOutputName(i, nm, sizeof(nm))) continue;
-        if (a.midiDevice == nm) {
-            StuffMIDIMessage(16 + i, status, d1, d2);
-            return;
-        }
-    }
-    // Bound device name no longer enumerated (unplugged or renamed) —
-    // log once for diagnosis but don't surface a UI error every press.
-    if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
-        std::fprintf(lg,
-            "[midi] bound device '%s' not in current MIDI output list "
-            "(unplugged or renamed)\n",
-            a.midiDevice.c_str());
-        std::fclose(lg);
-    }
+    // ⇨ The enumeration and the "device is gone" log live in the host: which
+    // outputs exist is the one part of this that is not ours to know.
+    if (host().sendMidi) host().sendMidi(status, d1, d2, a.midiDevice);
 }
 
 // Keyboard-macro chords queued for main-thread delivery. runStep_ runs on the
@@ -4758,7 +4727,7 @@ void runStep_(const ActionStep& a, bool firing, bool pressed)
             // NamedCommandLookup so script bindings dispatch correctly.
             int actionId = 0;
             if (!a.action.empty() && a.action[0] == '_') {
-                actionId = NamedCommandLookup(a.action.c_str());
+                actionId = host().namedCommand ? host().namedCommand(a.action.c_str()) : 0;
             } else {
                 actionId = std::atoi(a.action.c_str());
             }
@@ -4943,7 +4912,7 @@ void tickPending()
         }
         g_pendingKeys.swap(keep);
     }
-    for (const auto& ch : dueKeys) keymacro::sendChordToReaper(ch);
+    for (const auto& ch : dueKeys) (host().sendKeyChord ? host().sendKeyChord(ch) : void());
 }
 
 void effectiveLedActive(const Binding& bd, const ActionSlot& slot,
@@ -8902,3 +8871,16 @@ bool lastFiredWasLongPress(ButtonId id)
 }
 
 } // namespace uf8::bindings
+
+namespace uf8 {
+namespace bindings {
+
+// One installed host per process. Default-constructed means "answers nothing",
+// which is a working state: no MIDI, no key macros, no REAPER actions, and a
+// config path the caller must supply before anything is loaded.
+static Host g_host;
+const Host& host() { return g_host; }
+void setHost(Host h) { g_host = std::move(h); }
+
+} // namespace bindings
+} // namespace uf8

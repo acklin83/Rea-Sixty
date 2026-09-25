@@ -115,6 +115,7 @@
 #include "assignment_hud_lua.h"   // generated: uf8::setup_bundle::kAssignmentHudLua{Bytes,Size}
 #include "focused_panel_lua.h"    // generated: uf8::setup_bundle::kFocusedPanelLua{Bytes,Size}
 #include "mode_banner_lua.h"      // generated: uf8::setup_bundle::kModeBannerLua{Bytes,Size}
+#include "BindingsHost.h"
 #include "Uf1Spread.h"   // the shared UF1 painter, drawn by ORC too
 
 // File-global so both onTimer() and the insert setters (which live in an
@@ -58682,6 +58683,60 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
             }
         }
     }
+
+    // ⇨ THE BINDINGS HOST. Bindings.cpp no longer includes a REAPER header; the
+    // five calls it used to make are these four callbacks. Installed before the
+    // first load, because configDir decides where bindings.json is read from and
+    // an unset one means no file at all.
+    initLog("step: bindings host");
+    {
+        uf8::bindings::Host bh;
+        bh.configDir = []() -> std::string {
+            const char* base = GetResourcePath ? GetResourcePath() : nullptr;
+            return base ? std::string(base) : std::string();
+        };
+        bh.namedCommand = [](const char* name) -> int {
+            return NamedCommandLookup ? NamedCommandLookup(name) : 0;
+        };
+        bh.sendKeyChord = [](const keymacro::KeyChord& c) {
+            keymacro::sendChordToReaper(c);
+        };
+        // ⛔ StuffMIDIMessage(16 + N, ...), not CreateMIDIOutput. It writes to
+        // hardware output N without the device being "enabled for output" in
+        // REAPER's MIDI preferences. CreateMIDIOutput returns nullptr for a
+        // device that is not enabled, which Frank hit with his RME Fireface UFX+
+        // on 2026-05-14: it enumerated through GetMIDIOutputName and then opened
+        // silently as nothing, and no MIDI arrived. This matches the equivalent
+        // Lua (reaper.StuffMIDIMessage(28, ...) is device 12, 28 - 16), so every
+        // device the user can see in the dropdown is reachable.
+        bh.sendMidi = [](int status, int d1, int d2, const std::string& device) {
+            const int n = GetNumMIDIOutputs();
+            if (device.empty()) {
+                for (int i = 0; i < n; ++i) {
+                    char nm[256] = {0};
+                    if (!GetMIDIOutputName(i, nm, sizeof(nm))) continue;
+                    if (!*nm) continue;
+                    StuffMIDIMessage(16 + i, status, d1, d2);
+                }
+                return;
+            }
+            for (int i = 0; i < n; ++i) {
+                char nm[256] = {0};
+                if (!GetMIDIOutputName(i, nm, sizeof(nm))) continue;
+                if (device == nm) { StuffMIDIMessage(16 + i, status, d1, d2); return; }
+            }
+            // Bound device no longer enumerated (unplugged or renamed): log once
+            // for diagnosis rather than a UI error on every press.
+            if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                std::fprintf(lg,
+                    "[midi] bound device '%s' not in current MIDI output list "
+                    "(unplugged or renamed)\n", device.c_str());
+                std::fclose(lg);
+            }
+        };
+        uf8::bindings::setHost(std::move(bh));
+    }
+
 
     initLog("step: bindings::load");
     uf8::bindings::load();
