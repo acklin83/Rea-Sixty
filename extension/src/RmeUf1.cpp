@@ -222,6 +222,10 @@ uf1eq::Model eqModel(const State& st, Row r, int ch)
         m.bands.push_back({kindOf(e.type1, true),  e.freq[0], e.gain[0], e.q[0]});
         m.bands.push_back({K::Bell,                e.freq[1], e.gain[1], e.q[1]});
         m.bands.push_back({kindOf(e.type3, false), e.freq[2], e.gain[2], e.q[2]});
+        // TotalMix' shelves and band filters take their Q (Uf1EqCurve.h,
+        // Band::totalMix); the bell draws the same either way. Not the low cut
+        // below: that one has a slope and no Q.
+        for (auto& b : m.bands) b.totalMix = true;
     }
     // The low cut is its own switch in TotalMix and draws with the EQ off too.
     if (e.lcOn) {

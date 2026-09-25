@@ -34,6 +34,50 @@ double highShelfDb(double f, double f0, double g)
     if (g == 0.0 || f0 <= 0.0) return 0.0;
     return g / (1.0 + (f0 / f) * (f0 / f));
 }
+// ⇨ TOTALMIX' SHELVES: the Audio EQ Cookbook's analog shelving prototypes
+// (RBJ), A = 10^(g/40), s = jf/f0, f0 the middle of the step. Fitted against
+// nine TotalMix screenshots on 25.09.2026, low shelf Q 0.4..9.9 and a +20 dB
+// high shelf: 0.17..0.65 dB RMS with the knob values as they are, which is one
+// to two pixels of TotalMix' own line. The high shelf is the low one mirrored.
+double cookbookLowShelfDb(double f, double f0, double g, double q)
+{
+    if (g == 0.0 || f0 <= 0.0 || q <= 0.0 || f <= 0.0) return 0.0;
+    const double A  = std::pow(10.0, g / 40.0);
+    const double w  = f / f0;                 // s = jw
+    const double k  = std::sqrt(A) / q;
+    const double w2 = w * w;
+    // H(s) = A (s^2 + k s + A) / (A s^2 + k s + 1)
+    const double numRe = A - w2, numIm = k * w;
+    const double denRe = 1.0 - A * w2, denIm = k * w;
+    return 20.0 * std::log10(A * std::hypot(numRe, numIm) / std::hypot(denRe, denIm));
+}
+double cookbookHighShelfDb(double f, double f0, double g, double q)
+{
+    if (g == 0.0 || f0 <= 0.0 || q <= 0.0 || f <= 0.0) return 0.0;
+    const double A  = std::pow(10.0, g / 40.0);
+    const double w  = f / f0;
+    const double k  = std::sqrt(A) / q;
+    const double w2 = w * w;
+    // H(s) = A (A s^2 + k s + 1) / (s^2 + k s + A)
+    const double numRe = 1.0 - A * w2, numIm = k * w;
+    const double denRe = A - w2,       denIm = k * w;
+    return 20.0 * std::log10(A * std::hypot(numRe, numIm) / std::hypot(denRe, denIm));
+}
+// ⇨ AND TOTALMIX' BAND FILTERS (band 1 and 3, types HiPass / LoPass): the
+// Cookbook's second-order low and high pass, Q the resonance. Checked by eye
+// against Frank's low-pass screenshots at 5 kHz, Q 0.4..9.9 (Q 4.1 peaks near
+// +12 dB, Q 9.9 near +20); not fitted pixel by pixel like the shelves.
+double cookbookLowPassDb(double f, double f0, double q)
+{
+    if (f0 <= 0.0 || q <= 0.0 || f <= 0.0) return 0.0;
+    const double w = f / f0, a = 1.0 - w * w, b = w / q;
+    return -10.0 * std::log10(a * a + b * b);
+}
+double cookbookHighPassDb(double f, double f0, double q)
+{
+    if (f0 <= 0.0 || q <= 0.0 || f <= 0.0) return 0.0;
+    return cookbookLowPassDb(f0 * f0 / f, f0, q);   // w -> 1/w
+}
 // 2nd-order filter roll-offs (≈12 dB/oct) — only meaningful away from the rail.
 //
 // ⛔ THE RAILS ARE THE SAFETY, NOT DECORATION. A wrong parameter grab or a
@@ -69,10 +113,16 @@ double bandDb(const Band& b, double f)
 {
     switch (b.kind) {
         case Band::Kind::Bell:      return peakDb(f, b.freq, b.gainDb, b.q);
-        case Band::Kind::LowShelf:  return lowShelfDb(f, b.freq, b.gainDb);
-        case Band::Kind::HighShelf: return highShelfDb(f, b.freq, b.gainDb);
-        case Band::Kind::HighPass:  return hpfDb(f, b.freq, b.order);
-        case Band::Kind::LowPass:   return lpfDb(f, b.freq, b.order);
+        case Band::Kind::LowShelf:
+            return b.totalMix ? cookbookLowShelfDb(f, b.freq, b.gainDb, b.q)
+                            : lowShelfDb(f, b.freq, b.gainDb);
+        case Band::Kind::HighShelf:
+            return b.totalMix ? cookbookHighShelfDb(f, b.freq, b.gainDb, b.q)
+                            : highShelfDb(f, b.freq, b.gainDb);
+        case Band::Kind::HighPass:
+            return b.totalMix ? cookbookHighPassDb(f, b.freq, b.q) : hpfDb(f, b.freq, b.order);
+        case Band::Kind::LowPass:
+            return b.totalMix ? cookbookLowPassDb(f, b.freq, b.q) : lpfDb(f, b.freq, b.order);
     }
     return 0.0;
 }

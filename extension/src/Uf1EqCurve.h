@@ -35,10 +35,21 @@ struct Band {
     Kind   kind   = Kind::Bell;
     double freq   = 1000.0;
     double gainDb = 0.0;
-    double q      = 0.7;   // ignored by the shelves and by the two filters
+    double q      = 0.7;   // ignored by the shelves and filters unless totalMix
     // The two filters only: Butterworth order, n x 6 dB/oct. 2 is what the
     // SSL/REAPER graph has always drawn.
     int    order  = 2;
+    // ⇨ TOTALMIX' SHAPES TAKE Q (measured 25.09.2026 off TotalMix' own graph,
+    // screenshots by Frank). TotalMix draws its shelves as the second-order
+    // shelf of the Audio EQ Cookbook (RBJ), with frequency, gain and Q exactly
+    // as on the knobs: frequency is the MIDDLE of the step, not the "-3 dB" the
+    // manual says, and above Q ~0.7 a bump before and a dip after it grow with Q
+    // (Q 2: +8.3/-2.8 dB around a +5.5 dB shelf at 143 Hz). The pass filters of
+    // bands 1 and 3 are the same book's second-order filters: Q is the
+    // resonance (about 20 log Q dB at high Q), gain plays no part. Off by
+    // default: the SSL/REAPER graph and TotalMix' separate low cut (slope, no
+    // Q) keep their shapes, pixel for pixel.
+    bool   totalMix = false;
 };
 
 struct Model {

@@ -167,6 +167,63 @@ int main()
         check(uf1eq::bandDb(hp, 20.0) == 0.0, "the 9 Hz rail still means off, at any order");
     }
 
+    // ── TotalMix' shelves take Q (25.09.2026) ───────────────────────────────
+    // The numbers are read off TotalMix' own graph (Frank's screenshots): a low
+    // shelf +5.5 dB at 143 Hz and a high shelf +20 dB at 5 kHz. Tolerances are
+    // one to two pixels of that graph (1 px = 0.35 dB).
+    {
+        auto maxMin = [](const Band& b, double& mx, double& fmx, double& mn, double& fmn) {
+            mx = -1e9; mn = 1e9;
+            for (double f = 20.0; f < 20000.0; f *= 1.002) {
+                const double d = uf1eq::bandDb(b, f);
+                if (d > mx) { mx = d; fmx = f; }
+                if (d < mn) { mn = d; fmn = f; }
+            }
+        };
+        Band ls; ls.kind = Band::Kind::LowShelf; ls.freq = 143.0; ls.gainDb = 5.5;
+        ls.totalMix = true;
+        double mx, fmx, mn, fmn;
+        ls.q = 2.0; maxMin(ls, mx, fmx, mn, fmn);
+        check(std::fabs(mx - 8.3) < 0.5 && fmx > 90 && fmx < 115, "Q 2: bump +8.3 dB near 100 Hz");
+        check(std::fabs(mn + 2.8) < 0.5 && fmn > 175 && fmn < 215, "Q 2: dip -2.8 dB near 190 Hz");
+        ls.q = 9.9; maxMin(ls, mx, fmx, mn, fmn);
+        check(std::fabs(mx - 19.6) < 0.8 && std::fabs(mn + 13.3) < 0.8, "Q 9.9: +19.6 / -13.3 dB");
+        ls.q = 0.4; maxMin(ls, mx, fmx, mn, fmn);
+        check(mx <= 5.5 + 1e-9 && mn >= -1e-9, "Q 0.4: no overshoot either way");
+        check(std::fabs(uf1eq::bandDb(ls, 143.0) - 2.75) < 1e-9,
+              "the frequency is the middle of the step, not -3 dB");
+        Band hs; hs.kind = Band::Kind::HighShelf; hs.freq = 5000.0; hs.gainDb = 20.0;
+        hs.q = 1.0; hs.totalMix = true;
+        check(std::fabs(uf1eq::bandDb(hs, 5000.0) - 10.0) < 1e-9, "high shelf: middle at 5 kHz");
+        // Above the step Q 1 still overshoots a little, as TotalMix' line does
+        // at its right edge (read there: about +21 dB).
+        check(uf1eq::bandDb(hs, 20000.0) > 20.2 && uf1eq::bandDb(hs, 20000.0) < 21.5
+              && std::fabs(uf1eq::bandDb(hs, 100.0)) < 0.05, "high shelf: 0 below, just over +20 above");
+        maxMin(hs, mx, fmx, mn, fmn);
+        check(mn < -0.5 && mn > -1.3 && fmn > 1400 && fmn < 2200, "high shelf Q 1: the small dip below");
+        // And the SSL/REAPER graph does not move: totalMix off is the old
+        // first-order display shelf, whatever Q says.
+        Band old; old.kind = Band::Kind::LowShelf; old.freq = 143.0; old.gainDb = 5.5; old.q = 9.9;
+        const double r = 300.0 / 143.0;
+        check(uf1eq::bandDb(old, 300.0) == 5.5 / (1.0 + r * r), "totalMix off is the old shelf, to the bit");
+        // Band 3 as a low pass, 5 kHz: Q is the resonance, gain plays no part.
+        Band lp; lp.kind = Band::Kind::LowPass; lp.freq = 5000.0; lp.gainDb = 20.0;
+        lp.totalMix = true;
+        lp.q = 9.9; maxMin(lp, mx, fmx, mn, fmn);
+        check(std::fabs(mx - 19.9) < 0.3 && fmx > 4800 && fmx < 5100, "low pass Q 9.9 peaks ~+20 dB at 5 kHz");
+        lp.gainDb = -0.5; maxMin(lp, mx, fmx, mn, fmn);
+        check(std::fabs(mx - 19.9) < 0.3, "the low pass ignores gain");
+        lp.q = 0.4; maxMin(lp, mx, fmx, mn, fmn);
+        check(mx <= 1e-9, "low pass Q 0.4: no bump");
+        Band hp2; hp2.kind = Band::Kind::HighPass; hp2.freq = 200.0; hp2.q = 4.1; hp2.totalMix = true;
+        maxMin(hp2, mx, fmx, mn, fmn);
+        check(std::fabs(mx - 12.3) < 0.3 && fmx > 195 && fmx < 210, "high pass mirrors it");
+        Band hpOld; hpOld.kind = Band::Kind::HighPass; hpOld.freq = 200.0; hpOld.q = 4.1;
+        const double rr = 200.0 / 100.0;
+        check(uf1eq::bandDb(hpOld, 100.0) == -10.0 * std::log10(1.0 + rr * rr * rr * rr),
+              "totalMix off: the pass filters stay Butterworth, to the bit");
+    }
+
     if (g_fail == 0) std::printf("test_uf1_eq: all checks passed\n");
     return g_fail == 0 ? 0 : 1;
 }
