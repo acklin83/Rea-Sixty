@@ -53,3 +53,12 @@ Commits `14d7c9c`, `2a29b10`. Deployt `616e66fd` (REAPER lief nicht). ORC aus
 - `g_uf1BankSet` in `SettingsScreen.cpp` ist jetzt immer -1; die Zweige dafür
   sind tot und können raus.
 - Nach einem Laden der eigenen Datei bis zu 1 s Werksbelegung in Bank 10 (s. o.).
+
+## Nachtrag 22:50: Absturz beim Start, gefixt (`4aeffc3`)
+
+REAPER stürzte 13 s nach dem Start ab: der Pacer-Thread sendete in ein
+UF1Device, das der Stale-Handle-Reopen auf dem Hauptthread gerade zerstörte.
+Der UF1 hatte sich nach der Übergabe von ORC am USB-Bus neu angemeldet
+(`LIBUSB_ERROR_NO_DEVICE`), darum der Reopen. Jetzt schützt `g_uf1DevSwapMx`
+jedes Ersetzen des Geräts und jeden Pacer-Zyklus; `openUf1BringUp_`
+veröffentlicht das Gerät erst, wenn es offen ist. Deployt `3305a0c9`.
