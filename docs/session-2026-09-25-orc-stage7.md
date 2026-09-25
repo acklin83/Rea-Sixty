@@ -73,3 +73,34 @@ ctest 16/16. `check_builtin_docs.py` now reads `RmeBuiltins.cpp` too.
    `reaper_uf1_frames.log`).
 4. Sign and notarise `ORC.app`; set a deployment target; confirm the bundle id
    (`ch.stoersender.orc` is provisional).
+
+## Later the same evening
+
+Commits `d43355f` to `dd0133f`, extension deployed `bc5ffed8`.
+
+- **Handover takes the TotalMix port too** (`d43355f`). ORC held UDP 7006 while
+  REAPER had the surface, so the side-car showed "RME no TotalMix". ORC now
+  stops its link when it yields and starts it when it takes the UF1 back.
+- **Meter view names after MODE** (`a8060fb`). The 03.09. restore sat behind a
+  gate that excludes MODE edges on purpose and never fired on its own. The
+  release tick now re-sends the meter screen's four labels, nothing else.
+- **ORC soft-key lamps** (`a8060fb`): `src/Uf1SoftKeys` (emitter, bank cell,
+  colour helpers, verbatim from main.cpp); the engaged-state resolver moved into
+  the bindings engine with `Host::toggleState` for REAPER actions.
+- **V-Pot bank follows** nav left/right and the channel encoder
+  (`c7ab4a1`, `7f49a76`, `RmeInput::followBank`).
+- **Step 1: the RME settings are ORC's** (`c963b51`). Rea-Sixty reads
+  `~/Library/Application Support/ORC/rme.json` and never writes it; no ORC, no
+  RME side-car. Settings → Modes → RME is removed.
+- **Step 2: Items jog mode "Fader = Item Volume"** (`af4fd2c`), replacing the
+  Item Volume side-car: every selected item, proportionally; "no item" when none.
+- **RME on the first key** of the SHIFT+MODE page (`dd0133f`).
+
+### Open
+
+1. The RME label on the SHIFT+MODE page was not drawn (pressing worked). Cause
+   not found; moving RME to the first key restores the frame order that worked
+   before. If it persists, trace it (`rea_sixty_uf1_trace_on.lua`).
+2. Step 3: RME soft-key banks and builtins from `orc.json`, with a soft-key
+   editor in ORC. To be planned in full first.
+3. Frame-trace comparison, signing `ORC.app`.
