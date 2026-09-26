@@ -11,6 +11,7 @@
 #include "Uf1Text.h"
 
 #include <cstdio>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -97,6 +98,26 @@ int main()
     for (std::size_t i = before; i < rec.frames.size(); ++i)
         if (rec.frames[i] == sel) ++reentries;
     EXPECT(reentries == 0);
+
+    // ⛔ THE MOTOR GETS ITS TARGET BEFORE IT IS ENGAGED (26.09.). The device's
+    // queue puts a priority frame in FRONT of everything waiting; engaging first
+    // made the fader hop to its last stored target. Modelled here the way
+    // UF1Device queues: send at the back, sendPriority at the front.
+    {
+        std::deque<std::vector<std::uint8_t>> wire;
+        face::Out qo{ [&](std::vector<std::uint8_t> f) { wire.push_back(std::move(f)); },
+                      [&](std::vector<std::uint8_t> f) { wire.push_front(std::move(f)); } };
+        face::Cache qc;
+        face::paint(qc, in, h, qo, /*force*/ true);
+        long posAt = -1, onAt = -1;
+        for (std::size_t i = 0; i < wire.size(); ++i) {
+            const auto& f = wire[i];
+            if (f.size() >= 2 && f[0] == 0xFF && f[1] == 0x1E && posAt < 0) posAt = long(i);
+            if (f == ::uf1::buildMotorEnable(true) && onAt < 0) onAt = long(i);
+        }
+        EXPECT(posAt >= 0 && onAt >= 0);
+        EXPECT(posAt < onAt);
+    }
 
     // Off reads "-", as in TotalMix (Frank 25.09.), not REAPER's "-inf".
     EXPECT(face::dbText(reasixty::rme::kDbOff) == "-");

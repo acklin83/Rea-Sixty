@@ -249,8 +249,16 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
         const uint16_t want = static_cast<uint16_t>(std::lround(lin * ::uf1::kFaderMax));
         if (force || want != cc.sMotorPos || sel != cc.sMotorCh || static_cast<int>(row) != cc.sMotorRow) {
             cc.sMotorPos = want; cc.sMotorCh = sel; cc.sMotorRow = static_cast<int>(row);
-            o.sendPriority(::uf1::buildMotorEnable(true));
+            // ⛔ TARGET FIRST, THEN ENGAGE, both in order (Frank 26.09.2026: after
+            // moving Main by hand and then turning the jog, the fader hopped to
+            // where it stood before the hand move and came back). The enable
+            // went out as sendPriority, i.e. AHEAD of the queue, and the new
+            // target behind it: the motor engaged on its last stored target
+            // (-21 dB in the trace, the value before the hand move) and 9 ms
+            // later got the new one. Rea-Sixty's own fader paths (main.cpp,
+            // UF1 channel and Hue) have always sent position, then enable.
             o.send(::uf1::buildMotorPosition(want));
+            o.send(::uf1::buildMotorEnable(true));
         }
     }
 
