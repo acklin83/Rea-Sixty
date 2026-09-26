@@ -238,7 +238,9 @@ std::string format(const Param& p, Row r, double v)
             return b;
         }
         case Kind::Db:
-            if (v <= -64.9 && p.lo <= -60.0) return "-inf";
+            // Off reads "-", as in TotalMix and on the side-car's levels (Frank
+            // 25.09.2026: "ja, dort auch -").
+            if (v <= -64.9 && p.lo <= -60.0) return "-";
             std::snprintf(b, sizeof(b), p.step >= 1.0 ? "%+.0f dB" : "%+.1f dB", v);
             return b;
         case Kind::Hz:

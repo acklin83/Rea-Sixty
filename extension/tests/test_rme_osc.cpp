@@ -526,6 +526,8 @@ int main()
               && sp::format(*sp::find("reflevel"), Row::Output, 1) == "+4 dBu"
               && sp::format(*sp::find("reflevel"), Row::Input, 1) == "LoGain",
               "values read as TotalMix shows them");
+        check(sp::format(*sp::find("fxsend"), Row::Input, -65.0) == "-",
+              "an FX send that is off reads \"-\", as in TotalMix (25.09.)");
         check(sp::sendChanAddress(Row::Playback, 4) == "/sendchan/playback/4", "sendchan");
         // V-Pot push = neutral (22.09.): 0 dB where the range holds it, width 1,
         // pan centre; nothing where no default is belegt.
