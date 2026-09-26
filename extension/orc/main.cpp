@@ -34,10 +34,15 @@
 #include <atomic>
 #include <csignal>
 #include <cstdio>
+#include <ctime>
 #include <string>
+
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "Bindings.h"
 #include "BindingsHost.h"
+#include "LogPath.h"
 #include "OrcConfig.h"
 #include "OrcUi.h"
 #include "RmeManager.h"
@@ -60,6 +65,26 @@ int main()
 {
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
+
+    // ⇨ ORC ALWAYS WRITES ITS LOG TO A FILE (Frank 26.09.2026). Started from
+    // Finder or at login there is no terminal, and on 26.09. the reason the UF1
+    // stayed on its boot screen was lost that way. Same folder as Rea-Sixty's
+    // log (LogPath), orc.log; over 10 MB at start it is moved to orc.log.1.
+    {
+        const std::string path = uf8::logPath("orc.log");
+        struct stat sb{};
+        if (::stat(path.c_str(), &sb) == 0 && sb.st_size > 10 * 1024 * 1024)
+            std::rename(path.c_str(), (path + ".1").c_str());
+        if (::isatty(STDOUT_FILENO)) std::printf("ORC: logging to %s\n", path.c_str());
+        if (std::freopen(path.c_str(), "a", stdout)) {
+            ::dup2(::fileno(stdout), STDERR_FILENO);
+            std::setvbuf(stdout, nullptr, _IOLBF, 0);
+        }
+        const std::time_t now = std::time(nullptr);
+        char when[32];
+        std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+        std::printf("\n=== ORC start %s ===\n", when);
+    }
 
     // ⇨ ORC'S BINDINGS HOST. The engine is the extension's, unchanged and
     // unforked; what differs is the four answers. Two of them ORC does not have:

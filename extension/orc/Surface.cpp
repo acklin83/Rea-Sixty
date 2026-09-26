@@ -218,8 +218,10 @@ void Surface::start()
     // ⇨ THE SAME FRAME TRACE THE EXTENSION HAS (UF1Device::setFrameTrace), so
     // the two can be compared frame for frame. ORC_TRACE=1 switches it on; it
     // writes to the same file name the extension does, in the same log folder.
-    if (const char* t = std::getenv("ORC_TRACE"); t && *t && std::string(t) != "0")
+    if (const char* t = std::getenv("ORC_TRACE"); t && *t && std::string(t) != "0") {
         dev_.setFrameTrace(true);
+        rme::setOscTrace(true);   // the mixer's side too: rme_osc_trace.log
+    }
 
     quit_.store(false);
     th_    = std::thread([this] { loop_(); });

@@ -20,6 +20,7 @@
 
 #include "JsonTree.h"
 #include "RmeOsc.h"
+#include "LogPath.h"
 
 #include <chrono>
 #include <cstdio>
@@ -207,6 +208,24 @@ bool configFromJson(const std::string& json, Config& out)
 
 // ── the "no echo" workaround ─────────────────────────────────────────────────
 
+// ⇨ THE OSC TRACE (26.09.2026, for the fader that jumped back after the jog).
+// Every message out and in, level meters excluded (they are 333/s), with a ms
+// timestamp, to <log dir>/rme_osc_trace.log. Off unless switched on.
+static std::atomic<bool> g_oscTrace{false};
+void setOscTrace(bool on) { g_oscTrace.store(on); }
+static void oscTrace_(char dir, const std::string& address, double value)
+{
+    if (!g_oscTrace.load(std::memory_order_relaxed)) return;
+    if (address.rfind("/level/", 0) == 0) return;
+    if (FILE* f = std::fopen(uf8::logPath("rme_osc_trace.log").c_str(), "a")) {
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::fprintf(f, "[%lld] %c %s %.4f\n", static_cast<long long>(ms), dir,
+                     address.c_str(), value);
+        std::fclose(f);
+    }
+}
+
 Message localEcho(const std::string& address, float value)
 {
     Message m;
@@ -300,6 +319,7 @@ void Manager::send(const std::string& address, float value)
         std::lock_guard<std::mutex> lk(mx_);
         if (!cfg_.enabled) return;
         queue_.emplace_back(address, value);
+        oscTrace_('>', address, value);
         ingest(state_, localEcho(address, value));
     }
     rev_.fetch_add(1);
@@ -445,7 +465,10 @@ void Manager::workerLoop()
                 std::lock_guard<std::mutex> lk(mx_);
                 got = forEachMessage(
                     std::span<const std::uint8_t>(buf.data(), static_cast<std::size_t>(n)),
-                    [&](const Message& m) { ingest(state_, m); });
+                    [&](const Message& m) {
+                        oscTrace_('<', m.address, m.args.empty() ? 0.0 : m.args[0].number());
+                        ingest(state_, m);
+                    });
             }
             if (got > 0) {
                 rev_.fetch_add(1);

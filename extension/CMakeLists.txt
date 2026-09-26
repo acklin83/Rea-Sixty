@@ -809,7 +809,8 @@ if(NOT WIN32)
     add_executable(test_rme_osc tests/test_rme_osc.cpp
         src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp src/RmeUf1.cpp src/RmeStrip.cpp
         src/RmeInput.cpp src/RmeNames.cpp
-        src/Uf1EqCurve.cpp)
+        src/Uf1EqCurve.cpp
+        src/LogPath.cpp)
     target_include_directories(test_rme_osc PRIVATE src "${WDL_DIR}")
     # RmeManager brings its worker thread, and on Windows its socket.
     find_package(Threads REQUIRED)
@@ -824,7 +825,8 @@ if(NOT WIN32)
     add_executable(test_rme_input tests/test_rme_input.cpp
         src/RmeInput.cpp src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp
         src/RmeUf1.cpp src/RmeStrip.cpp src/RmeNames.cpp src/Uf1EqCurve.cpp
-        src/UF1Protocol.cpp)
+        src/UF1Protocol.cpp
+        src/LogPath.cpp)
     target_include_directories(test_rme_input PRIVATE src "${WDL_DIR}")
     target_link_libraries(test_rme_input PRIVATE Threads::Threads)
     if(WIN32)
@@ -854,7 +856,8 @@ if(NOT WIN32)
         src/RmeFace.cpp src/RmeInput.cpp src/RmeOsc.cpp src/RmeState.cpp
         src/RmeManager.cpp src/RmeUf1.cpp src/RmeStrip.cpp src/RmeNames.cpp
         src/Uf1EqCurve.cpp src/UF1Protocol.cpp src/Uf1Spread.cpp src/Uf1Text.cpp
-        src/TrackName.cpp)
+        src/TrackName.cpp
+        src/LogPath.cpp)
     target_include_directories(test_rme_face PRIVATE src "${WDL_DIR}")
     target_link_libraries(test_rme_face PRIVATE Threads::Threads)
     if(WIN32)

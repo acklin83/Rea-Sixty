@@ -195,4 +195,8 @@ Manager& manager();
 // test: this is the whole "no echo" workaround, and it is pure.
 Message localEcho(const std::string& address, float value);
 
+// Trace every OSC message out and in (not the level meters) to
+// <log dir>/rme_osc_trace.log. Off by default.
+void setOscTrace(bool on);
+
 }  // namespace reasixty::rme
