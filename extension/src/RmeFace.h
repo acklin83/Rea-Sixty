@@ -81,6 +81,9 @@ struct Cache {
     std::chrono::steady_clock::time_point sLastTouch =
         std::chrono::steady_clock::now() - std::chrono::seconds(10);
     std::uint16_t sMotorPos = 0xFFFF, sSentPos = 0xFFFF;
+    // The hand had the fader: the host let the motor go limp on touch, and it
+    // stays limp until this painter engages it again (see the fader block).
+    bool sMotorLimp = false;
     int sMotorCh = INT_MIN, sMotorRow = -1;
     std::array<std::uint8_t, 4> sBars4{ 0xFF, 0xFF, 0xFF, 0xFF };
     std::array<std::uint8_t, 251> sCol{};

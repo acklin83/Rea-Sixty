@@ -242,21 +242,33 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
             rm.send(rmeu::levelAddress(row, sel, sub, /*faderlin*/ true),
                     static_cast<float>(lin));
         }
+        // ⇨ ECHO THE HAND TO THE MOTOR TARGET WHILE IT IS LIMP, exactly as
+        // Rea-Sixty's channel painter does (main.cpp, "wobble") and as SSL 360
+        // does (cap53, cap132: FF 1E follows every FF 21 while touched). Then
+        // the target is where the hand is when the motor engages on release.
+        // Without it the motor swung towards its pre-grab target for 60-80 ms
+        // on every release (trace 26.09.2026), and before that on the next jog.
+        if (faderTouched(h) && pos != cc.sMotorPos)
+            o.send(::uf1::buildMotorPosition(pos));
         cc.sMotorPos = pos;
+        if (faderTouched(h)) cc.sMotorLimp = true;
     } else {
         cc.sSentPos = 0xFFFF;
         const double lin = (sel >= 0 && known) ? rme::dbToFaderlin(selDb) : 0.0;
         const uint16_t want = static_cast<uint16_t>(std::lround(lin * ::uf1::kFaderMax));
-        if (force || want != cc.sMotorPos || sel != cc.sMotorCh || static_cast<int>(row) != cc.sMotorRow) {
+        if (force || cc.sMotorLimp || want != cc.sMotorPos || sel != cc.sMotorCh
+            || static_cast<int>(row) != cc.sMotorRow) {
             cc.sMotorPos = want; cc.sMotorCh = sel; cc.sMotorRow = static_cast<int>(row);
-            // ⛔ TARGET FIRST, THEN ENGAGE, both in order (Frank 26.09.2026: after
-            // moving Main by hand and then turning the jog, the fader hopped to
-            // where it stood before the hand move and came back). The enable
-            // went out as sendPriority, i.e. AHEAD of the queue, and the new
-            // target behind it: the motor engaged on its last stored target
-            // (-21 dB in the trace, the value before the hand move) and 9 ms
-            // later got the new one. Rea-Sixty's own fader paths (main.cpp,
-            // UF1 channel and Hue) have always sent position, then enable.
+            // ⛔ THE HOP (Frank 26.09.2026): Main moved by hand, then the jog,
+            // and the fader jumped to where it stood BEFORE the hand move and
+            // came back. The host lets the motor go limp on touch, and this
+            // painter never engaged it again on release, nor did it keep the
+            // target with the hand (see the echo above), so the jog's first step
+            // engaged it on the pre-grab target. Now, as in Rea-Sixty's channel
+            // painter: engaged right after release (sMotorLimp), target first,
+            // then enable, in order. The enable used to go out as sendPriority,
+            // ahead of its own target.
+            cc.sMotorLimp = false;
             o.send(::uf1::buildMotorPosition(want));
             o.send(::uf1::buildMotorEnable(true));
         }
