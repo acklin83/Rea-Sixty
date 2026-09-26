@@ -87,6 +87,10 @@ public:
     // the handle is stale (USB re-enumerated under us). Main thread polls this
     // and reopens. Same pattern as UF8Device/UC1Device.
     bool needsReopen() const { return needsReopen_.load(); }
+    // Has the unit answered the init's wake (FF 01 -> FF 01 02 ..) since the
+    // last open? A UF1 that does not stays on its "UF1" boot screen whatever
+    // else is sent (trace 26.09.2026).
+    bool awake() const { return awake_.load(); }
 
 private:
     void workerLoop_();
@@ -131,6 +135,7 @@ private:
 
     std::atomic<int>   consecutiveErrors_{0};
     std::atomic<bool>  needsReopen_{false};
+    std::atomic<bool>  awake_{false};
     // Diagnostic full-session replay (uf1_blast.bin): while set, the worker
     // drops every queued user frame and sends no keepalive — the recording
     // owns the wire. See runInit_.

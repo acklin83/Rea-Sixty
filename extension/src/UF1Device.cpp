@@ -143,6 +143,7 @@ bool UF1Device::open()
     // keeps OUT flow-control moving) and emits the FF 1B keepalive throughout.
     shuttingDown_ = false;
     initInProgress_ = true;
+    awake_.store(false);
     worker_ = std::thread([this]{ workerLoop_(); });
     initThread_ = std::thread([this]{ runInit_(); });
     return true;
@@ -241,6 +242,30 @@ void UF1Device::runInit_()
             initInProgress_ = false;
             return;
         }
+        // ⇨ THE WAKE MUST BE ANSWERED, OR THIS CONTACT IS LOST (26.09.2026).
+        // Right after being switched on, the UF1 leaves the first FF 01 of the
+        // first contact unanswered, takes nothing from the rest of the init
+        // (bulk OUT times out) and stays on its "UF1" boot screen; the next
+        // contact is answered within a few ms (trace: session 2 no answer and 22
+        // timeouts, session 3 answered after 217 ms). So wait briefly for the
+        // answer, and without it stop and ask the host to open again: both hosts
+        // reopen on needsReopen() already.
+        if (f.bytes == kUf1InitFrame0) {
+            const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+            while (!awake_.load() && !shuttingDown_.load()
+                   && std::chrono::steady_clock::now() < until)
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            if (!awake_.load()) {
+                lastError_ = "the UF1 did not answer the wake (just switched on?), opening again";
+                if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                    std::fprintf(lg, "[uf1] no answer to the wake, asking for a reopen\n");
+                    std::fclose(lg);
+                }
+                needsReopen_.store(true);
+                initInProgress_ = false;
+                return;
+            }
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
 
@@ -332,6 +357,24 @@ void UF1Device::close()
     consecutiveErrors_.store(0);
     needsReopen_.store(false);
     shuttingDown_.store(false);
+
+    // ⛔ AND FORGET THE SESSION. A closed device must be as good as a new one,
+    // because ORC reopens the SAME object after a stale handle (Rea-Sixty builds
+    // a new one, which is why it never showed). Before this, ORC's reopen after
+    // the UF1 was switched off and on came up with 1730 frames still queued for
+    // the old session, a cycle possibly left open (everything then waits in
+    // held_), and an LED table claiming the blank device already showed every
+    // lamp; the unit sat on its "UF1" boot screen (Frank 26.09.2026). endCycle
+    // tolerates a cycle closed after this, it only counts down from above 0.
+    {
+        std::lock_guard<std::mutex> lk(pending_->mu);
+        pending_->q.clear();
+        held_.clear();
+        cycleDepth_ = 0;
+        ledLast_.clear();
+    }
+    readResidual_.clear();
+    initInProgress_ = false;
 }
 
 // ⛔ AN LED FRAME THAT SAYS WHAT THE DEVICE ALREADY SHOWS IS NOT SENT.
@@ -599,6 +642,15 @@ void UF1Device::readCallback_(libusb_transfer* xfer)
     if (xfer->status == LIBUSB_TRANSFER_COMPLETED && xfer->actual_length > 0) {
         const size_t len = static_cast<size_t>(xfer->actual_length);
         self->traceFrame_('I', xfer->buffer, len, 0);
+        // The answer to the wake: FF 01 02 <2 bytes> <ck>. Seen once is enough.
+        if (!self->awake_.load(std::memory_order_relaxed)) {
+            for (size_t i = 0; i + 2 < len; ++i)
+                if (xfer->buffer[i] == 0xFF && xfer->buffer[i + 1] == 0x01
+                    && xfer->buffer[i + 2] == 0x02) {
+                    self->awake_.store(true);
+                    break;
+                }
+        }
         if (self->rawInputHandler_) self->rawInputHandler_(xfer->buffer, len);
         if (self->inputHandler_) {
             // Prepend any residual (a frame straddling the previous URB boundary),

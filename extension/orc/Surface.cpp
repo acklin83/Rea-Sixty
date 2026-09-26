@@ -246,6 +246,7 @@ void Surface::loop_()
 {
     auto lastLink = rme::LinkState::Off;
     auto lastOpenTry = std::chrono::steady_clock::now() - std::chrono::seconds(5);
+
     bool force = true;
 
     // ⇨ THE HOST'S ANSWERS TO THE SHARED PAINTER. Each one is a thing the
@@ -354,9 +355,12 @@ void Surface::loop_()
         }
 
         if (dev_.isOpen() && dev_.needsReopen()) {
-            std::printf("ORC: the handle went stale, reopening\n");
+            // Stale handle, or no answer to the wake (UF1Device::runInit_,
+            // right after the unit was switched on): open again at once.
+            std::printf("ORC: reopening the UF1 (%s)\n", dev_.lastError().c_str());
             std::fflush(stdout);
             dev_.close();
+            lastOpenTry = std::chrono::steady_clock::now() - std::chrono::seconds(5);
         }
         if (!dev_.isOpen()) {
             const auto now = std::chrono::steady_clock::now();
