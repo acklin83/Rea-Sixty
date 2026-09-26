@@ -188,6 +188,16 @@ void UF8Device::runInit_()
     // pacing for everything else matches SSL's observed inter-frame gap.
     for (const auto& f : kInitSequence) {
         if (shuttingDown_.load()) { initInProgress_ = false; return; }
+        // ⇨ NO FADER DANCE ON THE UF8 EITHER (Frank 26.09.2026, after the UF1
+        // lost its own: "evtl. könnten wir auch mal testen, ob in rea-sixty der
+        // uf8/uf1 fadertanz auch überflüssig ist"). The capture's 168 motor
+        // frames (FF 1D enable, FF 1E position) carry all 7.3 s of this loop's
+        // pauses; skipped together. The motor follow in the timer places all
+        // eight faders once the surface is up. The Plugin-Mixer-Layer flood
+        // below is a mode switch and stays as it is.
+        if (f.size >= 2 && f.bytes[0] == 0xFF
+            && (f.bytes[1] == 0x1D || f.bytes[1] == 0x1E))
+            continue;
         if (f.delay_ms_before > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(f.delay_ms_before));
         }
