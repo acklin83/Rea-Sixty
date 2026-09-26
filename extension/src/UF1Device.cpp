@@ -227,6 +227,16 @@ void UF1Device::runInit_()
     // pause (the UF1 init has none, but the field is respected for parity).
     for (const auto& f : kUf1InitSequence) {
         if (shuttingDown_.load()) { initInProgress_ = false; return; }
+        // ⇨ NO FADER DANCE (Frank 26.09.2026: "lass die motor-frames weg").
+        // SSL's cold start drives the motor to mid, bottom, mid, top, mid, top,
+        // bottom and back, about 6 s with the pauses attached to those frames
+        // (frames 128/129 and 284..305 of the capture). We replayed it on every
+        // connect. The motor frames (FF 1D enable, FF 1E position) are skipped
+        // with their pauses; the painters engage and position the motor
+        // themselves once the surface is up. The capture file stays verbatim.
+        if (f.size >= 2 && f.bytes[0] == 0xFF
+            && (f.bytes[1] == 0x1D || f.bytes[1] == 0x1E))
+            continue;
         if (f.delay_ms_before > 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(f.delay_ms_before));
         }
