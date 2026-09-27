@@ -57122,27 +57122,6 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     initLog("step: registerBindingHandlers");
     registerBindingHandlers();
 
-    // First-run detection: no bindings.json on disk means this is the
-    // very first time the extension loads in this REAPER profile.
-    // Seed from the embedded factory.rea60config bundle (bindings +
-    // user_plugins + parameter_groups + ext_state) BEFORE the
-    // per-module load() calls, so all three modules pick up the same
-    // curated factory state instead of the C++ hard-coded
-    // seedFactoryDefaults_ skeleton. Frank 2026-05-19: "factory
-    // mappings sollten bei install auch reinkommen".
-    {
-        struct stat st{};
-        const std::string bindingsPath = uf8::bindings::configPath();
-        const bool firstRun = (stat(bindingsPath.c_str(), &st) != 0);
-        if (firstRun) {
-            initLog("step: first-run -> restoreFactoryDefaults");
-            std::string err;
-            if (!uf8::setup_bundle::restoreFactoryDefaults(&err)) {
-                initLog((std::string("  factory restore failed: ") + err).c_str());
-            }
-        }
-    }
-
     // ⇨ THE BINDINGS HOST. Bindings.cpp no longer includes a REAPER header; the
     // REAPER calls it used to make are these callbacks (plus toggleState since
     // 25.09., for the soft-key lamps). Installed before the
@@ -57202,6 +57181,40 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
             }
         };
         uf8::bindings::setHost(std::move(bh));
+    }
+
+    // First-run detection: no bindings.json on disk means this is the
+    // very first time the extension loads in this REAPER profile.
+    // ⛔ AFTER THE HOST, NEVER BEFORE. configPath() asks the host for the folder;
+    // unset, it answers "./bindings.json", which never exists, so from the host
+    // refactor (6aa6442, 25.09.2026 15:58) until 27.09. EVERY start counted as a
+    // first run and restoreFactoryDefaults overwrote user_plugins.json,
+    // parameter_groups.json and 44 settings with the factory state. Frank lost
+    // his plug-in maps to it. The bindings survived only because the factory
+    // write went to that same non-existent path.
+    // Seed from the embedded factory.rea60config bundle (bindings +
+    // user_plugins + parameter_groups + ext_state) BEFORE the
+    // per-module load() calls, so all three modules pick up the same
+    // curated factory state instead of the C++ hard-coded
+    // seedFactoryDefaults_ skeleton. Frank 2026-05-19: "factory
+    // mappings sollten bei install auch reinkommen".
+    {
+        struct stat st{};
+        const std::string bindingsPath = uf8::bindings::configPath();
+        // A path that still starts at "./" is the unset host's answer, not a
+        // folder we looked in: never read it as "nothing installed yet".
+        const bool hostKnown = bindingsPath.rfind("./", 0) != 0
+                            && bindingsPath.rfind(".\\", 0) != 0;
+        if (!hostKnown)
+            initLog("step: first-run check SKIPPED, bindings path not resolved");
+        const bool firstRun = hostKnown && (stat(bindingsPath.c_str(), &st) != 0);
+        if (firstRun) {
+            initLog("step: first-run -> restoreFactoryDefaults");
+            std::string err;
+            if (!uf8::setup_bundle::restoreFactoryDefaults(&err)) {
+                initLog((std::string("  factory restore failed: ") + err).c_str());
+            }
+        }
     }
 
 
