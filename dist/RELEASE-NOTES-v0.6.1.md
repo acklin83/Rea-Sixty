@@ -1,4 +1,4 @@
-# Rea-Sixty v0.6.1, "CODENAME"
+# Rea-Sixty v0.6.1, "My whole brain is crying!"
 
 **Automation from the surfaces, and a UF1 that comes back up.** The UF1 now follows automation while it plays and records it in Touch, the same as the UF8. Faders let go in Touch when the hand does, also on pan under FLIP and on plug-in parameters. Pots write their own point into the envelope and leave the value there until the envelope's next point, the way a plug-in parameter on a pot always behaved. The receiver for the SSL plug-ins' own data starts with REAPER, so the UF1 meter view has its goniometer and RTA without a script line. A Sticky Pot pin moves along when a CS or BC switch replaces the plug-in, and the UF1 got a factory bank for the three Sticky keys.
 
