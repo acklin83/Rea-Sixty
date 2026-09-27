@@ -157,14 +157,16 @@ std::array<KeyLamp, 18> keyLamps(const LampFacts& f)
 {
     namespace b = ::uf1::btn;
     const auto on = [](bool lit) { return lit ? Lamp::Lit : Lamp::Dim; };
-    // Bank ◄ ► waehlen die Haelfte: die Taste der gezeigten hell, die andere
-    // gedimmt. Ohne zweite Haelfte tun beide nichts; in STRIP auch nicht.
+    // Bank ◄ ► waehlen die Haelfte und leuchten wie < >: hell in die Richtung,
+    // in der es noch eine gibt, dunkel wo nichts mehr ist (Frank 27.09.: "genau
+    // falsch herum", die erste Fassung zeigte die gezeigte Haelfte). Ohne zweite
+    // Haelfte tun beide nichts; in STRIP auch nicht.
     const bool halves = !f.strip && f.secondHalf;
     return {{
         { b::kArrowLeft,  f.moreLeft  ? Lamp::Lit : Lamp::Dark },
         { b::kArrowRight, f.moreRight ? Lamp::Lit : Lamp::Dark },
-        { b::kBankLeft,   halves ? on(f.half == 0) : Lamp::Dark },
-        { b::kBankRight,  halves ? on(f.half == 1) : Lamp::Dark },
+        { b::kBankLeft,   halves && f.half == 1 ? Lamp::Lit : Lamp::Dark },
+        { b::kBankRight,  halves && f.half == 0 ? Lamp::Lit : Lamp::Dark },
         { b::k5to8,       Lamp::Dark },
         // Oben/unten die Reihe, links/rechts der Submix, beide mit Umlauf.
         { b::kNavUp,      Lamp::Dim },

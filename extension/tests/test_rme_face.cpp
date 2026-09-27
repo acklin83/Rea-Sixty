@@ -137,8 +137,10 @@ int main()
         auto ls = face::keyLamps(f);
         EXPECT(lampOf(ls, b::kArrowLeft) == L::Dark);    // first bank: nothing left
         EXPECT(lampOf(ls, b::kArrowRight) == L::Lit);
-        EXPECT(lampOf(ls, b::kBankLeft) == L::Lit);      // half 1 on the keys
-        EXPECT(lampOf(ls, b::kBankRight) == L::Dim);
+        // Half 1 on the keys: lit toward the half there is, dark where there is
+        // none (Frank 27.09.: the first version had it "genau falsch herum").
+        EXPECT(lampOf(ls, b::kBankLeft) == L::Dark);
+        EXPECT(lampOf(ls, b::kBankRight) == L::Lit);
         EXPECT(lampOf(ls, b::k5to8) == L::Dark);
         EXPECT(lampOf(ls, b::kNavUp) == L::Dim && lampOf(ls, b::kNavLeft) == L::Dim
                && lampOf(ls, b::kNavRight) == L::Dim && lampOf(ls, b::kNavDown) == L::Dim);
@@ -151,7 +153,7 @@ int main()
 
         f.half = 1; f.window = true; f.mainOnFader = true; f.stereo = true;
         ls = face::keyLamps(f);
-        EXPECT(lampOf(ls, b::kBankLeft) == L::Dim && lampOf(ls, b::kBankRight) == L::Lit);
+        EXPECT(lampOf(ls, b::kBankLeft) == L::Lit && lampOf(ls, b::kBankRight) == L::Dark);
         EXPECT(lampOf(ls, b::kNavCentre) == L::Lit);
         EXPECT(lampOf(ls, b::kMaster) == L::Lit);
         EXPECT(lampOf(ls, b::kChannelSoftKey) == L::Lit);
