@@ -184,21 +184,54 @@ int main()
     EXPECT(!bnd::dispatchSideCarKey(bnd::ButtonId::Uf1Rec, true));     // unbound
     EXPECT(!bnd::dispatchSideCarKey(bnd::ButtonId::Uf1Btn360, true));  // never
 
-    // ── 5-8 in the side-car flips the half and leaves the V-Pot bank ────────
+    // ── Bank ◄ ► pick the half, 5-8 does nothing (Frank 27.09.) ────────────
     {
+        namespace sk2 = reasixty::rme::softkeys;
         reasixty::rme::input::State s;
         reasixty::rme::input::Host host;
         reasixty::rme::input::Writes w;
+        std::atomic<int> bankIdx{0};
+        const int base = bnd::kUf1RmeBankBase;
         ::uf1::InputEvent ev{};
         ev.kind = ::uf1::InputKind::Button;
-        ev.id = ::uf1::btn::k5to8;
         ev.pressed = true;
-        reasixty::rme::input::button(s, host, reasixty::rme::State{},
-                                     reasixty::rme::Config{}, ev, w);
+
+        ev.id = ::uf1::btn::k5to8;          // swallowed, no half, no V-Pot bank
+        EXPECT(reasixty::rme::input::button(s, host, reasixty::rme::State{},
+                                            reasixty::rme::Config{}, ev, w));
+        EXPECT(s.skHalf.load() == 0 && s.vpotBank.load() == 0);
+
+        EXPECT(sk2::hasSecondHalf(base));      // bank 1: Ext In, Main, TotalMix
+        EXPECT(sk2::hasSecondHalf(base + 1));  // snapshots: always eight
+        ev.id = ::uf1::btn::kBankRight;
+        EXPECT(sk2::stepKey(s, bankIdx, base, 3, ev));
         EXPECT(s.skHalf.load() == 1);
-        EXPECT(s.vpotBank.load() == 0);
-        reasixty::rme::input::button(s, host, reasixty::rme::State{},
-                                     reasixty::rme::Config{}, ev, w);
+        EXPECT(sk2::stepKey(s, bankIdx, base, 3, ev));   // picks, does not toggle
+        EXPECT(s.skHalf.load() == 1);
+        ev.id = ::uf1::btn::kBankLeft;
+        EXPECT(sk2::stepKey(s, bankIdx, base, 3, ev));
+        EXPECT(s.skHalf.load() == 0);
+
+        // < > step the bank, a new bank starts on its first half, no wrap.
+        ev.id = ::uf1::btn::kBankRight;
+        sk2::stepKey(s, bankIdx, base, 3, ev);
+        ev.id = ::uf1::btn::kArrowRight;
+        EXPECT(sk2::stepKey(s, bankIdx, base, 3, ev));
+        EXPECT(bankIdx.load() == 1 && s.skHalf.load() == 0);
+        ev.id = ::uf1::btn::kArrowLeft;
+        sk2::stepKey(s, bankIdx, base, 3, ev);
+        sk2::stepKey(s, bankIdx, base, 3, ev);
+        EXPECT(bankIdx.load() == 0);
+
+        // A static bank with an empty Shift set has no second half: Bank ► stays.
+        EXPECT(!sk2::hasSecondHalf(base + 5));
+        sk2::pickHalf(s, base + 5, 1);
+        EXPECT(s.skHalf.load() == 0);
+
+        // In STRIP Bank ◄ ► are used up and change nothing.
+        s.strip.store(true);
+        ev.id = ::uf1::btn::kBankRight;
+        EXPECT(sk2::stepKey(s, bankIdx, base, 3, ev));
         EXPECT(s.skHalf.load() == 0);
     }
 

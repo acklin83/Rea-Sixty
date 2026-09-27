@@ -471,14 +471,53 @@ int main()
               "a mono strip's phase has no L");
 
         const auto pages = reasixty::rme::defaultStripPages();
-        const auto mono = sp::availablePages(s, Row::Input, 8, pages);
+        const auto mono = sp::views(s, Row::Input, 8, pages);
         std::vector<std::string> names;
-        for (int i : mono) names.push_back(pages[static_cast<size_t>(i)].name);
+        for (const auto& v : mono) names.push_back(v.name);
         check(names == std::vector<std::string>{ "Input", "EQ 1", "Dyn" },
               "pages follow what TotalMix reported: Input, EQ 1, Dyn");
-        const auto st2 = sp::availablePages(s, Row::Input, 30, pages);
-        check(std::find(st2.begin(), st2.end(), 1) != st2.end(),
-              "a stereo strip with M/S gets Input 2");
+        check(mono[1].graph && !mono[0].graph && !mono[2].graph,
+              "a view draws the graph when it carries EQ or low cut");
+
+        // ⇨ Input and Input 2 are packed (Frank 27.09.). The stereo pair: pots
+        // Gain, Width; keys Phase L, Phase R, then Stereo, M/S from Input 2.
+        const auto st2 = sp::views(s, Row::Input, 30, pages);
+        check(!st2.empty() && st2[0].name == "Input" && st2[0].id == 0
+              && st2[0].pots[0] == gain && st2[0].pots[1] == width && !st2[0].pots[2]
+              && st2[0].keys[0] == sp::find("phase") && st2[0].keys[1] == phaseR
+              && st2[0].keys[2] == sp::find("stereo") && st2[0].keys[3] == sp::find("msproc")
+              && st2.size() == 1,
+              "a stereo strip's Input 2 moves up into Input's empty slots");
+
+        // Frank's T2: a mono line input with FX Send, Phase and Stereo only.
+        // Two pages before, each nearly empty; one now.
+        name("/input/2/name", "T2"); put("/input/2/fxsend", -10);
+        put("/input/2/phase", 0); put("/input/2/stereo", 0);
+        const auto t2 = sp::views(s, Row::Input, 2, pages);
+        check(t2.size() == 1 && t2[0].name == "Input"
+              && t2[0].pots[0] == sp::find("fxsend") && !t2[0].pots[1]
+              && t2[0].keys[0] == sp::find("phase") && t2[0].keys[1] == sp::find("stereo")
+              && !t2[0].keys[2],
+              "T2 gets one page: FX Send, Phase, Stereo");
+
+        // More than four keys spill onto a second view, named after Input 2.
+        name("/input/12/name", "Mic"); put("/input/12/gain", 20);
+        put("/input/12/48v", 0); put("/input/12/pad", 0); put("/input/12/phase", 0);
+        put("/input/12/stereo", 0); put("/input/12/instrument", 0); put("/input/12/autoset", 0);
+        const auto mic = sp::views(s, Row::Input, 12, pages);
+        check(mic.size() == 2 && mic[0].name == "Input" && mic[1].name == "Input 2"
+              && mic[1].id == 1 && mic[0].keys[3] == sp::find("stereo")
+              && mic[1].keys[0] == sp::find("instrument") && mic[1].keys[1] == sp::find("autoset")
+              && mic[0].pots[0] == gain && !mic[1].pots[0],
+              "the fifth key opens Input 2, in page order");
+
+        // A page on its own stays as written, slot for slot: an output with Pan
+        // and Delay but no crossfeed keeps Delay on pot 3.
+        name("/output/4/name", "Out"); put("/output/4/balpan", 0); put("/output/4/delay", 1);
+        const auto out = sp::views(s, Row::Output, 4, pages);
+        check(out.size() == 1 && out[0].name == "Output" && out[0].id == 9 * 8
+              && out[0].pots[2] == sp::find("delay") && out[0].pots[1] == sp::find("crossfeed"),
+              "a lone page keeps its slots");
         check(sp::pageShowsGraph(pages[3]) && sp::pageShowsGraph(pages[2])
               && !sp::pageShowsGraph(pages[0]) && !sp::pageShowsGraph(pages[6]),
               "EQ and Low Cut pages draw the graph, the rest do not");

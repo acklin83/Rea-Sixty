@@ -70,13 +70,31 @@ bool pageAllowsRow(const StripPage& pg, Row r);
 // stereo condition holds.
 bool available(const State& st, Row r, int ch, const Param& p);
 
-// Pages this channel shows, as indices into `pages`, in order.
-std::vector<int> availablePages(const State& st, Row r, int ch,
-                                const std::vector<StripPage>& pages);
-
 // The page draws the EQ graph (it carries an EQ or low-cut parameter), which
 // on the UF1 means Layout 3; every other page is Layout 1 (plan 6a).
 bool pageShowsGraph(const StripPage& pg);
+
+// ── the pages one channel shows ──────────────────────────────────────────────
+// ⇨ PAGES WITH THE SAME ROWS ARE PACKED (Frank 27.09.: "die ersten zwei seiten
+// ein wenig verschwenderisch", T2 had Phase and FX Send on page 1 and Stereo
+// alone on page 2). A run of two or more ADJACENT pages with the same non-empty
+// `rows` ("Input" and "Input 2", both "in,pb") is one pool per channel: its
+// pots that the channel has, in page order, four to a view, and its keys the
+// same way, independently. So a line input without preamp gets one page where
+// a mic input may keep two. Every other page stays exactly as written, slot for
+// slot, and shows when one of its parameters exists (as before).
+// ⛔ In a packed view a parameter's slot depends on the channel; the display
+// names every slot, which is why Frank chose this over fixed places.
+struct View {
+    int         id = -1;    // stable across channels: page * 8 + view in the run
+    int         page = -1;  // the page it names itself after (index into pages)
+    std::string name;
+    bool        graph = false;
+    const Param* pots[4] = { nullptr, nullptr, nullptr, nullptr };
+    const Param* keys[4] = { nullptr, nullptr, nullptr, nullptr };
+};
+std::vector<View> views(const State& st, Row r, int ch,
+                        const std::vector<StripPage>& pages);
 
 // Current value. false when TotalMix has not reported it.
 bool value(const State& st, Row r, int ch, const Param& p, double& out);

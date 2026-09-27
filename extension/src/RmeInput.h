@@ -50,10 +50,11 @@ struct State {
     std::atomic<int>  sel[3] = { {-1}, {-1}, {-1} };// chosen channel per row
     std::atomic<int>  submix{-1};                   // the output inputs write into
     std::atomic<bool> strip{false};                 // STRIP open
-    std::atomic<int>  stripPage{0};                 // index into Config::stripPages
+    std::atomic<int>  stripPage{0};                 // a RmeStrip::View id
     std::atomic<int>  vpotBank{0};
-    // Which half of the soft-key bank is on the four keys, 0 or 1, latched by
-    // 5-8 (Frank 25.09.). RmeSoftKeys reads it; a bank change puts it back to 0.
+    // Which half of the soft-key bank is on the four keys, 0 or 1, picked by
+    // Bank ◄ ► (Frank 27.09.; 5-8 until then). RmeSoftKeys reads and sets it;
+    // a bank change puts it back to 0.
     std::atomic<int>  skHalf{0};
     std::atomic<bool> windowShown{false};           // TotalMix' window is up
 
@@ -86,12 +87,11 @@ struct Host {
 // The channel the fader and the EQ graph show. With nothing chosen: Main for
 // outputs, else the first visible channel of the row.
 int  selected(const State& s, const rme::State& st, rmeu::Row r);
-// The page STRIP shows for this channel: the chosen one if the channel has it,
-// else its first. -1 = the channel reports no settings at all.
-int  stripPage(const State& s, const rme::State& st, rmeu::Row r, int sel,
-               const Config& cfg);
-// The parameter on pot or key `i` of that page, nullptr for an empty slot.
-const rmes::Param* stripParam(const Config& cfg, int page, bool key, int i);
+// The page STRIP shows for this channel (RmeStrip::views, packed): the chosen
+// one if the channel has it, else its first. id -1 = the channel reports no
+// settings at all. Its pots[] and keys[] are the parameters, nullptr = empty.
+rmes::View stripView(const State& s, const rme::State& st, rmeu::Row r, int sel,
+                     const Config& cfg);
 
 void select(State& s, rmeu::Row r, int ch);
 void stepRow(State& s, int dir);
@@ -119,9 +119,13 @@ bool encoder(State& s, const Host& h, const rme::State& st, const Config& cfg,
              std::uint8_t id, int delta, Writes& out);
 bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
             const ::uf1::InputEvent& ev, Writes& out);
+// The keys the side-car lets through to the bindings: SHIFT, the transport,
+// CYCLE, CLICK and 360. button() returns false for exactly these, and their
+// lamps are the host's; every other key and lamp belongs to the side-car.
+bool passesThrough(std::uint8_t id);
 // The four display soft keys and < > WHILE STRIP IS OPEN, where they belong to
 // the page rather than to the soft-key banks. False when STRIP is closed, and
-// then the host's own bank handling takes the event.
+// then the host's own bank handling takes the event (RmeSoftKeys::stepKey).
 bool stripSoftKey(State& s, const Host& h, const rme::State& st, const Config& cfg,
                   const ::uf1::InputEvent& ev, Writes& out);
 

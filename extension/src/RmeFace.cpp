@@ -151,6 +151,72 @@ static void paintSmall(Cache& cc, const Out& o,
 
 } // namespace
 
+// ── die Tasten-Lampen ────────────────────────────────────────────────────────
+
+std::array<KeyLamp, 18> keyLamps(const LampFacts& f)
+{
+    namespace b = ::uf1::btn;
+    const auto on = [](bool lit) { return lit ? Lamp::Lit : Lamp::Dim; };
+    // Bank ◄ ► waehlen die Haelfte: die Taste der gezeigten hell, die andere
+    // gedimmt. Ohne zweite Haelfte tun beide nichts; in STRIP auch nicht.
+    const bool halves = !f.strip && f.secondHalf;
+    return {{
+        { b::kArrowLeft,  f.moreLeft  ? Lamp::Lit : Lamp::Dark },
+        { b::kArrowRight, f.moreRight ? Lamp::Lit : Lamp::Dark },
+        { b::kBankLeft,   halves ? on(f.half == 0) : Lamp::Dark },
+        { b::kBankRight,  halves ? on(f.half == 1) : Lamp::Dark },
+        { b::k5to8,       Lamp::Dark },
+        // Oben/unten die Reihe, links/rechts der Submix, beide mit Umlauf.
+        { b::kNavUp,      Lamp::Dim },
+        { b::kNavLeft,    Lamp::Dim },
+        // Die Mitte blendet TotalMix ein; ohne Verbindung geht nichts raus.
+        { b::kNavCentre,  f.online ? on(f.window) : Lamp::Dark },
+        { b::kNavRight,   Lamp::Dim },
+        { b::kNavDown,    Lamp::Dim },
+        { b::kMaster,     f.haveMain ? on(f.mainOnFader) : Lamp::Dark },
+        // Stereo/Mono des Fader-Kanals.
+        { b::kChannelSoftKey, f.haveChannel ? on(f.stereo) : Lamp::Dark },
+        // Was der Side-Car schluckt und nicht benutzt.
+        { b::kScrub, Lamp::Dark }, { b::kFlip, Lamp::Dark },
+        { b::kTLeft, Lamp::Dark }, { b::kTRight, Lamp::Dark },
+        { b::kT1,    Lamp::Dark }, { b::kT2,     Lamp::Dark },
+    }};
+}
+
+namespace {
+bool isNav(std::uint8_t btn) { return btn >= ::uf1::btn::kNavUp && btn <= ::uf1::btn::kNavDown; }
+} // namespace
+
+// ⇨ DIESELBEN BYTES WIE REAPERS TASTEN-DURCHGANG (uf1PaintButtonLeds_ in
+// main.cpp): FF38 die Farbe, FF39 0x00 fuer an und 0x11 sonst, FF3B beim
+// Erzwingen. Gedimmt = Weiss geviertelt, wie uf1sk::bindingLedColour Dim
+// rechnet. Das Nav-Kreuz wie dort: FF3B bei jedem Senden, und eine Lampe, die
+// leuchtet, alle 500 ms nochmal, weil die Kreuz-Frames sonst im Text- und
+// Layout-Strom untergehen (Frank 12.08.: "LED leuchtet schlicht nicht").
+void emitLamps(const KeyLamp* lamps, std::size_t n, int* cache,
+               std::chrono::steady_clock::time_point& navSentAt, const Out& o, bool force)
+{
+    const auto now = std::chrono::steady_clock::now();
+    const bool reassert = now - navSentAt >= std::chrono::milliseconds(500);
+    bool navSent = false;
+    for (std::size_t k = 0; k < n; ++k) {
+        const KeyLamp& l = lamps[k];
+        const int packed = static_cast<int>(l.lamp) + 1;
+        const bool nav = isNav(l.btn);
+        const bool again = nav && reassert && l.lamp != Lamp::Dark;
+        if (!force && packed == cache[k] && !again) continue;
+        cache[k] = packed;
+        const std::uint8_t led = static_cast<std::uint8_t>(l.btn - 0x18);
+        const std::uint32_t rgb = l.lamp == Lamp::Lit ? 0xFFFFFFu
+                                : l.lamp == Lamp::Dim ? 0x3F3F3Fu : 0u;
+        if (force || nav) o.send(::uf1::buildLed(led, true));
+        o.send(::uf1::buildColourRgb(led, rgb));
+        o.send(::uf1::buildLedLevel(led, l.lamp == Lamp::Lit ? 0x00 : 0x11));
+        if (nav) navSent = true;
+    }
+    if (navSent) navSentAt = now;
+}
+
 // ── RME-Side-Car: der Maler ──────────────────────────────────────────────────
 // Die UF1 als Monitor-Controller fuer TotalMix. Layout 1 (Farbbalken, Pot-Namen)
 // fuer die Uebersicht und jede STRIP-Seite ohne Graph, Layout 3 fuer EQ und Low
@@ -191,9 +257,12 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
     // umgeschaltet blieb Layout 2 in der Sonde leer.
     const bool strip = in.strip.load() && sel >= 0;
     if (in.strip.load() && sel < 0) in.strip.store(false);   // Kanal weg
-    const int  page  = strip ? input::stripPage(in, st, row, sel, cfg) : -1;
-    const rme::StripPage* pg = page >= 0 ? &cfg.stripPages[static_cast<size_t>(page)] : nullptr;
-    const uint8_t wantLayout = (pg && rmes::pageShowsGraph(*pg)) ? uf1spread::kLayoutGraph
+    // The page as this channel shows it (RmeStrip::views: Input and Input 2
+    // packed, Frank 27.09.). id -1 = the channel reports no settings.
+    const rmes::View view = strip ? input::stripView(in, st, row, sel, cfg) : rmes::View{};
+    const std::vector<rmes::View> views =
+        strip ? rmes::views(st, row, sel, cfg.stripPages) : std::vector<rmes::View>{};
+    const uint8_t wantLayout = (view.id >= 0 && view.graph) ? uf1spread::kLayoutGraph
                                                             : uf1spread::kLayoutOverview;
     const bool relayout = force || wantLayout != cc.sLayout;
     if (relayout) {
@@ -332,7 +401,7 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
         uf1spread::VpotRow vr;
         const uint8_t pal = palOf(row, sel);
         for (int i = 0; i < 4; ++i) {
-            const rmes::Param* p = input::stripParam(cfg, page, false, i);
+            const rmes::Param* p = view.pots[i];
             double v = 0.0;
             const bool have = p && rmes::available(st, row, sel, *p)
                            && rmes::value(st, row, sel, *p, v);
@@ -431,7 +500,7 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
             // stehen, was die Uebersicht dort hatte (Frank 22.09.).
             uf1spread::SkCell& sk = cells[static_cast<size_t>(i)];
             sk.haveLabel = true;
-            const rmes::Param* p = input::stripParam(cfg, page, true, i);
+            const rmes::Param* p = view.keys[i];
             double v = 0.0;
             if (!p || !rmes::available(st, row, sel, *p) || !rmes::value(st, row, sel, *p, v))
                 continue;
@@ -474,29 +543,43 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
             o.send(::uf1::buildLedLevel(::uf1::led::kSel, ::uf1::led::kFf39Lit));
         }
     }
-    // Die uebrigen Tasten: Transport und SHIFT wie REAPER, der Rest dunkel.
-    // 5-8 leuchtet auf Bank 2, ueber dieselbe Verfuegbarkeit wie die Spurgruppe.
+    // ── Die Tasten-Lampen des Side-Cars (keyLamps, Frank 27.09.) ────────────
     // < > hell, solange es in diese Richtung weitergeht: in STRIP die Seiten,
-    // sonst die Side-Car-Baenke.
-    bool arrowL = false, arrowR = false;
-    if (strip) {
-        const auto pages = rmes::availablePages(st, row, sel, cfg.stripPages);
-        const auto it = std::find(pages.begin(), pages.end(), page);
-        if (it != pages.end()) {
-            arrowL = it != pages.begin();
-            arrowR = (it + 1) != pages.end();
+    // sonst die Side-Car-Baenke. Der Rest nach der Drei-Zustaende-Regel.
+    {
+        LampFacts f;
+        f.strip = strip;
+        if (strip) {
+            int at = -1;
+            for (int i = 0; i < static_cast<int>(views.size()); ++i)
+                if (views[static_cast<size_t>(i)].id == view.id) at = i;
+            f.moreLeft  = at > 0;
+            f.moreRight = at >= 0 && at + 1 < static_cast<int>(views.size());
+        } else {
+            f.moreLeft  = bankNow(h) > 0;
+            f.moreRight = bankNow(h) < bankCount(h) - 1;
         }
-    } else {
-        const int nb = bankCount(h);
-        arrowL = bankNow(h) > 0;
-        arrowR = bankNow(h) < nb - 1;
+        f.half        = h.bankHalf ? h.bankHalf() : 0;
+        f.secondHalf  = h.bankHasSecondHalf && h.bankHasSecondHalf();
+        f.online      = rm.link() == rme::LinkState::Online;
+        f.window      = in.windowShown.load();
+        f.haveMain    = st.mainOut >= 0;
+        f.mainOnFader = input::faderMainActive(in, st);
+        const rme::Channel* selCh = (sel >= 0) ? rmeu::channelOf(st, row, sel) : nullptr;
+        f.haveChannel = selCh != nullptr;
+        f.stereo      = selCh && selCh->stereo;
+        const auto lamps = keyLamps(f);
+        emitLamps(lamps.data(), lamps.size(), cc.sLamp.data(), cc.sNavSent, o, force);
+
+        // Die Tasten, die der Side-Car durchlaesst (Transport, SHIFT, 360),
+        // malt der Wirt. BtnAvail traegt, was eine dort gebundene Seiten- oder
+        // Bank-Aktion anzeigen wuerde.
+        if (h.buttonLeds)
+            h.buttonLeds(force, uf1spread::BtnAvail{ f.moreLeft, f.moreRight,
+                                                     f.secondHalf && f.half == 1,
+                                                     f.secondHalf && f.half == 0,
+                                                     false, f.stereo });
     }
-    const rme::Channel* selCh = (sel >= 0) ? rmeu::channelOf(st, row, sel) : nullptr;
-    // Bank ◄ ► blaettern im Side-Car nichts mehr; 5-8 leuchtet auf der zweiten
-    // Haelfte der Soft-Key-Bank (Frank 25.09.: "snapshots mit 5-8").
-    if (h.buttonLeds) h.buttonLeds(force, uf1spread::BtnAvail{ arrowL, arrowR, false, false,
-                                            !strip && in.skHalf.load() == 1,
-                                            selCh && selCh->stereo });
 
     // ── Zeitfeld: immer der Jog-Kanal (Main) in dB ──────────────────────────
     // ⛔ KEINE REAPER-ZEIT IM SIDE-CAR (Frank 21.09.: "immer im time display
@@ -562,14 +645,14 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
         } else if (strip) {
             // STRIP: die Seite in CELL1, "3/8" in CELL2 und in der Zelle, die
             // Layout 3 unter SOFT KEYS zeigt. Layout 1 zeigt nur CELL1 und CELL2.
-            const auto pages = rmes::availablePages(st, row, sel, cfg.stripPages);
-            if (!pg) {
+            if (view.id < 0) {
                 putCell(0, "NO SETTINGS");
             } else {
-                const int at = static_cast<int>(std::find(pages.begin(), pages.end(), page)
-                                                - pages.begin());
-                putCell(0, utf8ToLatin1(pg->name));
-                const std::string n = std::to_string(at + 1) + "/" + std::to_string(pages.size());
+                int at = 0;
+                for (int i = 0; i < static_cast<int>(views.size()); ++i)
+                    if (views[static_cast<size_t>(i)].id == view.id) at = i;
+                putCell(0, utf8ToLatin1(view.name));
+                const std::string n = std::to_string(at + 1) + "/" + std::to_string(views.size());
                 putCell(1, n);
                 putCell(3, n);
             }

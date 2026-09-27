@@ -4,6 +4,8 @@
 #include "RmeNames.h"
 #include "Uf1SoftKeys.h"
 
+#include <algorithm>
+
 namespace reasixty::rme::softkeys {
 
 namespace bnd = uf8::bindings;
@@ -13,6 +15,43 @@ int half(const input::State& s)
 {
     if (s.skHalf.load() != 0) return 1;
     return bnd::bankModifierSnapshot() == bnd::Modifier::Shift ? 1 : 0;
+}
+
+bool hasSecondHalf(int bank)
+{
+    if (rmeKind(bank) != DK::None) return true;
+    const auto cells = row(bank, 1);
+    for (const auto& c : cells)
+        if (!c.label.empty()) return true;
+    return false;
+}
+
+void pickHalf(input::State& s, int bank, int half)
+{
+    s.skHalf.store((half != 0 && hasSecondHalf(bank)) ? 1 : 0);
+}
+
+bool stepKey(input::State& s, std::atomic<int>& bankIdx, int base, int count,
+             const ::uf1::InputEvent& ev)
+{
+    const std::uint8_t id = ev.id;
+    if (id == ::uf1::btn::kBankLeft || id == ::uf1::btn::kBankRight) {
+        if (ev.pressed && !s.strip.load())
+            pickHalf(s, base + bankIdx.load(), id == ::uf1::btn::kBankRight ? 1 : 0);
+        return true;
+    }
+    if (id == ::uf1::btn::kArrowLeft || id == ::uf1::btn::kArrowRight) {
+        if (ev.pressed) {
+            const int nb  = std::max(1, count);
+            const int dir = (id == ::uf1::btn::kArrowRight) ? 1 : -1;
+            const int to  = std::clamp(bankIdx.load() + dir, 0, nb - 1);
+            // A new bank starts on its first half.
+            if (to != bankIdx.load()) s.skHalf.store(0);
+            bankIdx.store(to);
+        }
+        return true;
+    }
+    return false;
 }
 
 DK rmeKind(int bank)

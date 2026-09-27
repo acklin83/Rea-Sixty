@@ -179,35 +179,81 @@ bool available(const State& st, Row r, int ch, const Param& p)
     return c && c->leaf(p.leaf) != nullptr;
 }
 
-std::vector<int> availablePages(const State& st, Row r, int ch,
-                                const std::vector<StripPage>& pages)
+namespace {
+bool eqish(const Param* p)
 {
-    std::vector<int> out;
-    for (int i = 0; i < static_cast<int>(pages.size()); ++i) {
-        const StripPage& pg = pages[static_cast<std::size_t>(i)];
-        if (!pageAllowsRow(pg, r)) continue;
-        bool any = false;
-        for (int k = 0; k < 4 && !any; ++k) {
-            const Param* a = find(pg.pots[k]);
-            const Param* b = find(pg.keys[k]);
-            any = (a && available(st, r, ch, *a)) || (b && available(st, r, ch, *b));
-        }
-        if (any) out.push_back(i);
-    }
-    return out;
+    if (!p) return false;
+    const std::string leaf = p->leaf;
+    return leaf.rfind("eq/", 0) == 0 || leaf.rfind("lowcut/", 0) == 0;
 }
+}  // namespace
 
 bool pageShowsGraph(const StripPage& pg)
 {
-    auto eqish = [](const std::string& id) {
-        const Param* p = find(id);
-        if (!p) return false;
-        const std::string leaf = p->leaf;
-        return leaf.rfind("eq/", 0) == 0 || leaf.rfind("lowcut/", 0) == 0;
-    };
     for (int k = 0; k < 4; ++k)
-        if (eqish(pg.pots[k]) || eqish(pg.keys[k])) return true;
+        if (eqish(find(pg.pots[k])) || eqish(find(pg.keys[k]))) return true;
     return false;
+}
+
+std::vector<View> views(const State& st, Row r, int ch,
+                        const std::vector<StripPage>& pages)
+{
+    std::vector<View> out;
+    const int n = static_cast<int>(pages.size());
+    for (int i = 0; i < n; ) {
+        const StripPage& pg = pages[static_cast<std::size_t>(i)];
+        // The run: this page and every adjacent one with the same rows.
+        int end = i + 1;
+        if (!pg.rows.empty())
+            while (end < n && pages[static_cast<std::size_t>(end)].rows == pg.rows) ++end;
+        if (!pageAllowsRow(pg, r)) { i = end; continue; }
+
+        if (end - i < 2) {
+            // A page on its own: as written, slot for slot.
+            View v;
+            v.id = i * 8; v.page = i; v.name = pg.name; v.graph = pageShowsGraph(pg);
+            bool any = false;
+            for (int k = 0; k < 4; ++k) {
+                v.pots[k] = find(pg.pots[k]);
+                v.keys[k] = find(pg.keys[k]);
+                any = any || (v.pots[k] && available(st, r, ch, *v.pots[k]))
+                          || (v.keys[k] && available(st, r, ch, *v.keys[k]));
+            }
+            if (any) out.push_back(v);
+            i = end;
+            continue;
+        }
+
+        // A run: what the channel has, in order, four to a view.
+        std::vector<const Param*> pots, keys;
+        for (int j = i; j < end; ++j) {
+            const StripPage& q = pages[static_cast<std::size_t>(j)];
+            for (int k = 0; k < 4; ++k) {
+                if (const Param* p = find(q.pots[k]); p && available(st, r, ch, *p))
+                    pots.push_back(p);
+                if (const Param* p = find(q.keys[k]); p && available(st, r, ch, *p))
+                    keys.push_back(p);
+            }
+        }
+        const std::size_t count = (std::max(pots.size(), keys.size()) + 3) / 4;
+        for (std::size_t j = 0; j < count; ++j) {
+            View v;
+            // Never more views than pages in the run (each held four of each),
+            // so view j takes the name of the run's page j.
+            v.page = i + static_cast<int>(j);
+            v.id   = i * 8 + static_cast<int>(j);
+            v.name = pages[static_cast<std::size_t>(v.page)].name;
+            for (std::size_t k = 0; k < 4; ++k) {
+                const std::size_t at = j * 4 + k;
+                if (at < pots.size()) v.pots[k] = pots[at];
+                if (at < keys.size()) v.keys[k] = keys[at];
+                v.graph = v.graph || eqish(v.pots[k]) || eqish(v.keys[k]);
+            }
+            out.push_back(v);
+        }
+        i = end;
+    }
+    return out;
 }
 
 bool value(const State& st, Row r, int ch, const Param& p, double& out)

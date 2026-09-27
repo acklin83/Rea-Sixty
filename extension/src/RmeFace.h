@@ -50,6 +50,10 @@ struct Host {
     // The side-car's soft-key bank: which one (0-based) and how many.
     std::function<int()> bankNow;
     std::function<int()> bankCount;
+    // Its half on the keys now (0/1), and whether it has a second one at all
+    // (RmeSoftKeys::half / hasSecondHalf; both hosts answer with those).
+    std::function<int()>  bankHalf;
+    std::function<bool()> bankHasSecondHalf;
 
     // A short text for the time field (a bank name), "" when there is none.
     std::function<std::string()> tcFlash;
@@ -62,6 +66,9 @@ struct Host {
     std::function<void(const std::array<uf1spread::SkCell, 4>&, bool force,
                        bool highlight, bool menuOpen)> stripSoftKeys;
     std::function<void(bool force)> sideCarSoftKeys;
+    // ⇨ ONLY THE KEYS THAT PASS THROUGH (RmeInput::passesThrough: SHIFT,
+    // transport, CYCLE, CLICK, 360). Every other lamp the side-car owns is
+    // painted here, by keyLamps, in both programs.
     std::function<void(bool force, const uf1spread::BtnAvail&)> buttonLeds;
     std::function<void(bool force)> modeMenuOverlay;
     // Header and channel meter, handed over once per paint.
@@ -93,7 +100,46 @@ struct Cache {
     int sPacked = -1;
     std::array<std::uint8_t, 11> sTc{};
     bool sListOpen = false;
+    // keyLamps as last sent, lamp + 1 per entry, 0 = never.
+    std::array<int, 18> sLamp{};
+    std::chrono::steady_clock::time_point sNavSent{};
 };
+
+// ── the side-car's key lamps ─────────────────────────────────────────────────
+// ⇨ A KEY WITH A FUNCTION GLOWS (Frank 27.09.: "LEDs mit Funktion leuchten
+// lassen"). Three states, the UF8 panel's rule: dim = the key does something
+// here, lit = its state is on (or, for < >, there is more that way), dark = it
+// does nothing here. White, because the colour of a REAPER binding belongs to
+// an action that does not run in the side-car. Until 27.09. the extension
+// decided these in main.cpp from the REAPER bindings' colours, and ORC painted
+// none of them at all.
+enum class Lamp : std::uint8_t { Dark = 0, Dim = 1, Lit = 2 };
+struct KeyLamp {
+    std::uint8_t btn;   // UF1 button id; the LED id is btn - 0x18
+    Lamp         lamp;
+};
+// What the painter knows and the lamps need, gathered in one place so the rule
+// is a pure function a test can hold.
+struct LampFacts {
+    bool strip = false;
+    bool moreLeft = false, moreRight = false;  // < >: STRIP pages, else banks
+    int  half = 0;                             // the soft-key bank's half on the keys
+    bool secondHalf = false;                   // the bank has one
+    bool online = false;                       // TotalMix answers
+    bool window = false;                       // TotalMix' window shown
+    bool haveMain = false, mainOnFader = false;
+    bool haveChannel = false, stereo = false;  // the fader channel
+};
+// Every key the side-car owns and has a lamp for, except SOLO, CUT, SEL and the
+// four soft keys (painted with the channel and the bank). Fixed order.
+std::array<KeyLamp, 18> keyLamps(const LampFacts& f);
+
+// Send `n` lamps: the bytes REAPER's own key pass sends (FF38 colour, FF39 0x00
+// lit / 0x11 otherwise, FF3B on force), dim = white quartered. `cache` holds
+// lamp + 1 per entry, 0 = never sent. Nav-cross keys re-send every 500 ms while
+// they glow, through `navSent`. ORC uses it for the keys that pass through.
+void emitLamps(const KeyLamp* lamps, std::size_t n, int* cache,
+               std::chrono::steady_clock::time_point& navSent, const Out& o, bool force);
 
 // A level as the side-car writes it: TotalMix' own readout, off as "-".
 std::string dbText(double db);

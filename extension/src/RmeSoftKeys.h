@@ -8,9 +8,10 @@
 // snapshot and layout banks were resolved in main.cpp alone, so in ORC the
 // banks were there and the keys were dead. Now both call this.
 //
-// ⇨ A BANK HAS TWO HALVES, and 5-8 switches between them (Frank 25.09.: "Bank 1:
-// dim, mono, speaker b, talkback und dann über 5-8 ext in, main auf fader,
-// totalmix fenster"). A static bank's second half is its Shift set, so SHIFT on
+// ⇨ A BANK HAS TWO HALVES (Frank 25.09.: "Bank 1: dim, mono, speaker b,
+// talkback und dann über 5-8 ext in, main auf fader, totalmix fenster"), and
+// since 27.09. Bank ◄ picks the first and Bank ► the second; 5-8 did it for the
+// two days in between. A static bank's second half is its Shift set, so SHIFT on
 // the surface reaches it as well; in the extension the computer keyboard's Shift
 // does too, because the extension feeds it to the bindings engine and ORC does
 // not. A snapshot or layout bank's second half is items 5 to 8.
@@ -28,9 +29,25 @@
 
 namespace reasixty::rme::softkeys {
 
-// The half on the keys: 0 = keys 1-4, 1 = keys 5-8. Latched by 5-8
+// The half on the keys: 0 = keys 1-4, 1 = keys 5-8. Picked by Bank ◄ ►
 // (State::skHalf), or held SHIFT.
 int half(const input::State& s);
+
+// The bank (absolute) has something on its second half: a TotalMix bank always
+// (eight items), a static bank when its Shift set names a key. Without one,
+// Bank ► does nothing and its lamp is dark.
+bool hasSecondHalf(int bank);
+
+// Put `half` on the keys of `bank`. The second half only where there is one.
+void pickHalf(input::State& s, int bank, int half);
+
+// ⇨ THE OVERVIEW'S PAGING KEYS, for both programs (Frank 27.09.): < > step the
+// bank within the set (no wrap, the lamps say whether there is more), Bank ◄ ►
+// pick the half. In STRIP < > are the page's (RmeInput::stripSoftKey, called
+// first) and Bank ◄ ► do nothing. `bankIdx` is the host's bank within the set,
+// `base` the set's first absolute bank, `count` the banks in use. True = used.
+bool stepKey(input::State& s, std::atomic<int>& bankIdx, int base, int count,
+             const ::uf1::InputEvent& ev);
 
 // The bank's kind, when it is one of TotalMix' two; None for a static bank. Any
 // other dynamic kind (FX, favourites, ...) has no meaning without REAPER and is

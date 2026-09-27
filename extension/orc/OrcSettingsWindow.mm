@@ -334,7 +334,7 @@ NSTextField* dim(NSString* text)
 
 // ⇨ THE SOFT KEYS ARE BUILT HERE, NOT IN REA-SIXTY (Frank 25.09.2026: "die
 // bänke müssen wir den user bauen lassen, mit einer werksbesetzung"). Ten banks
-// of four keys, each with two halves (5-8 or SHIFT on the surface), and the five
+// of four keys, each with two halves (Bank ◄ ► or SHIFT on the surface), and the five
 // transport keys. Written to orc.json through the bindings engine; Rea-Sixty's
 // side-car reads the same file.
 - (NSTabViewItem*)softKeysTab
@@ -352,7 +352,7 @@ NSTextField* dim(NSString* text)
         [self.skBank addItemWithTitle:[NSString stringWithFormat:@"Bank %d", b + 1]];
     [head addRowWithViews:@[ label(@"Bank"), self.skBank ]];
 
-    self.skHalf = [NSSegmentedControl segmentedControlWithLabels:@[ @"Keys 1-4", @"5-8" ]
+    self.skHalf = [NSSegmentedControl segmentedControlWithLabels:@[ @"Keys 1-4", @"Keys 5-8" ]
                                                     trackingMode:NSSegmentSwitchTrackingSelectOne
                                                           target:self
                                                           action:@selector(skBankChanged:)];
@@ -390,8 +390,9 @@ NSTextField* dim(NSString* text)
                                            target:self
                                            action:@selector(skFactory:)];
     [v addArrangedSubview:factory];
-    [v addArrangedSubview:dim(@"From the factory, bank 1 has Dim, Mono, Speaker B and "
-                              @"Talkback, and Ext In, Main and TotalMix on 5-8. Bank 2 "
+    [v addArrangedSubview:dim(@"On the UF1, BANK left shows keys 1-4 and BANK right keys 5-8. "
+                              @"From the factory, bank 1 has Dim, Mono, Speaker B and "
+                              @"Talkback, and Ext In, Main and TotalMix on keys 5-8. Bank 2 "
                               @"has TotalMix snapshots, bank 3 its layouts.")];
 
     NSGridView* tr = [NSGridView gridViewWithNumberOfColumns:2 rows:0];

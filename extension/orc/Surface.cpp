@@ -144,7 +144,8 @@ void Surface::onEvent_(const ::uf1::InputEvent& ev)
 // ⇨ THE SIDE-CAR'S SOFT-KEY BANKS, the extension's uf1SideCarSoftKeys_ minus
 // what ORC has not got: no MODE menu owning the keys. The four keys fire their slot of
 // the RME set's current bank through the bindings engine; < > step the bank,
-// with no wrap, because the lamp says whether there is more that way.
+// with no wrap, because the lamp says whether there is more that way, and
+// Bank ◄ ► pick the bank's half.
 bool Surface::softKeys_(const ::uf1::InputEvent& ev)
 {
     namespace bnd = uf8::bindings;
@@ -159,18 +160,9 @@ bool Surface::softKeys_(const ::uf1::InputEvent& ev)
                              ev.pressed);
         return true;
     }
-    if (id == ::uf1::btn::kArrowLeft || id == ::uf1::btn::kArrowRight) {
-        if (ev.pressed) {
-            const int nb  = std::max(1, bnd::uf1SideCarBankInUseCount(set));
-            const int dir = (id == ::uf1::btn::kArrowRight) ? 1 : -1;
-            const int to  = std::clamp(scBank_.load() + dir, 0, nb - 1);
-            // A new bank starts on its first half, as in the extension.
-            if (to != scBank_.load()) in_.skHalf.store(0);
-            scBank_.store(to);
-        }
-        return true;
-    }
-    return false;
+    // < > the bank, Bank ◄ ► the half: the extension's function (RmeSoftKeys).
+    return rme::softkeys::stepKey(in_, scBank_, bnd::uf1SideCarBankBase(set),
+                                  bnd::uf1SideCarBankInUseCount(set), ev);
 }
 
 Surface::~Surface() { stop(); }
@@ -274,6 +266,37 @@ void Surface::loop_()
     host.bankCount = [] {
         return std::max(1, uf8::bindings::uf1SideCarBankInUseCount(
                                uf8::bindings::kUf1SideCarSetRme));
+    };
+    host.bankHalf = [this] { return rme::softkeys::half(in_); };
+    host.bankHasSecondHalf = [this] {
+        namespace bnd = uf8::bindings;
+        return rme::softkeys::hasSecondHalf(
+            bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme) + scBank_.load());
+    };
+    // ⇨ THE KEYS THAT PASS THROUGH (RmeInput::passesThrough), from orc.json:
+    // bound = dim, its action's state on = lit, unbound = dark. Every other
+    // key's lamp the shared painter sends (RmeFace::keyLamps).
+    std::array<int, 9> ptCache{};
+    auto ptNav = std::chrono::steady_clock::time_point{};
+    host.buttonLeds = [this, &ptCache, &ptNav](bool f, const uf1spread::BtnAvail&) {
+        namespace bnd = uf8::bindings;
+        static constexpr std::uint8_t kKeys[9] = {
+            ::uf1::btn::kShift, ::uf1::btn::kRwd, ::uf1::btn::kFfw, ::uf1::btn::kStop,
+            ::uf1::btn::kPlay, ::uf1::btn::kRec, ::uf1::btn::kCycle, ::uf1::btn::kClick,
+            ::uf1::btn::k360 };
+        std::array<rmef::KeyLamp, 9> lamps{};
+        const int layer = bnd::getActiveLayer();
+        for (std::size_t k = 0; k < lamps.size(); ++k) {
+            const bnd::Binding bd = bnd::getBinding(layer, bnd::fromUf1DeviceId(kKeys[k]));
+            const bool bound = !bnd::slotIsEmpty(
+                bd.shortPress[static_cast<int>(bnd::Modifier::Plain)]);
+            lamps[k] = { kKeys[k], !bound ? rmef::Lamp::Dark
+                                 : bnd::bindingHasActiveSlot(bd) ? rmef::Lamp::Lit
+                                                                 : rmef::Lamp::Dim };
+        }
+        const rmef::Out o{ [this](std::vector<std::uint8_t> fr) { ++sent_; dev_.send(std::move(fr)); },
+                           [this](std::vector<std::uint8_t> fr) { ++sent_; dev_.sendPriority(std::move(fr)); } };
+        rmef::emitLamps(lamps.data(), lamps.size(), ptCache.data(), ptNav, o, f);
     };
     // The overview: the RME set's current bank, the extension's cells
     // (src/RmeSoftKeys), TotalMix' snapshots and layouts included since

@@ -817,10 +817,10 @@ inline int uf1SideCarSet_()
 //               Phones 1-4, Bank 2 Main A / Main B). Folgt seit 25.09. dem
 //               Submix auf Nav ◄ ► und dem Kanal-Encoder; 5-8 schaltet sie seit
 //               25.09. nicht mehr (Frank: "das reicht und macht mehr sinn")
-//   .skHalf     welche Haelfte der Soft-Key-Bank, per 5-8 (RmeSoftKeys)
+//   .skHalf     welche Haelfte der Soft-Key-Bank, per Bank ◄ ► (RmeSoftKeys)
 //   .strip      STRIP, die Kanalansicht (docs/rme-strip-and-uf8-plan.md 3)
-//   .stripPage  Index in Config::stripPages, bleibt beim Kanalwechsel stehen;
-//               hat der neue Kanal die Seite nicht, zeigt der Maler die erste
+//   .stripPage  RmeStrip::View-Id, bleibt beim Kanalwechsel stehen; hat der
+//               neue Kanal die Seite nicht, zeigt der Maler die erste
 //   .windowShown ⇨ UNSER SCHALTER: `/showwindow` nimmt 0 oder 1, und TotalMix
 //               meldet den Fensterzustand nirgends zurueck, also merkt sich der
 //               Umschalter was zuletzt gesendet wurde (Frank 23.09., Nav-Mitte)
@@ -25974,12 +25974,6 @@ static void rmeSend_(const reasixty::rme::strip::Writes& w)
     for (const auto& [a, v] : w) rm.send(a, v);
 }
 
-static bool rmeFaderMainActive_()
-{
-    return reasixty::rme::input::faderMainActive(g_rmeIn,
-                                                 reasixty::rme::manager().snapshot());
-}
-
 namespace rmes = reasixty::rme::strip;
 
 // true = verbraucht. Nur aufrufen, wenn uf1RmeActive_().
@@ -26032,23 +26026,11 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
                 });
         return true;
     }
-    // ⇨ DIE NORMALEN PFEILE < > BLAETTERN, wie die Soft-Key-Baenke in der DAW-
-    // Ansicht, nicht Bank < > (Frank 22.09.). Kein Umlauf: die Lampe sagt, ob es
-    // in diese Richtung noch weitergeht, und ein Umlauf machte sie sinnlos.
-    if (id == uf1::btn::kArrowLeft || id == uf1::btn::kArrowRight) {
-        if (ev.pressed) {
-            const int nb  = std::max(1, uf8::bindings::uf1SideCarBankInUseCount(set));
-            const int dir = (id == uf1::btn::kArrowRight) ? 1 : -1;
-            const int to  = std::clamp(g_sideCarBank[set].load() + dir, 0, nb - 1);
-            // Eine neue Bank beginnt auf ihrer ersten Haelfte.
-            if (to != g_sideCarBank[set].load()) g_rmeIn.skHalf.store(0);
-            g_sideCarBank[set].store(to);
-        }
-        return true;
-    }
-    // Bank ◄ ► blaettern hier nicht mehr: die zweite Haelfte einer Bank ist seit
-    // 25.09.2026 auf 5-8 (Frank: "snapshots mit 5-8"), in RmeInput.
-    return false;
+    // ⇨ < > BLAETTERN DIE BANK (Frank 22.09.), BANK ◄ ► WAEHLEN DIE HAELFTE
+    // (Frank 27.09.). Dieselbe Funktion wie in ORC, RmeSoftKeys::stepKey.
+    return reasixty::rme::softkeys::stepKey(
+        g_rmeIn, g_sideCarBank[set], uf8::bindings::uf1SideCarBankBase(set),
+        uf8::bindings::uf1SideCarBankInUseCount(set), ev);
 }
 
 static bool uf1RmeButton_(const uf1::InputEvent& ev)
@@ -33757,29 +33739,14 @@ static reasixty::rme::face::Cache g_rmeFace;
 // ⇨ DIE TASTEN-LEDS DES UF1, EIN DURCHGANG FUER ALLE BEWOHNER. Stand bis
 // 21.09. nur im Kanalmaler, hinter uf1HandOverScreen_: im Side-Car blieben
 // Play, Rec, Cycle und Click auf dem Stand beim Einstieg stehen. Jetzt ruft der
-// RME-Side-Car denselben Durchgang mit `sideCar`: Transport und SHIFT zeigen
-// weiter REAPER (Frank 21.09., Weg b: was einen Kanal betrifft, geht an
-// TotalMix, der Transport bleibt REAPERs), alles andere ist dunkel, weil der
-// Side-Car es abfaengt und nichts tut (uf1RmeButton_).
+// RME-Side-Car denselben Durchgang mit `sideCar`: Transport, SHIFT und 360
+// zeigen weiter REAPER (Frank 21.09., Weg b: was einen Kanal betrifft, geht an
+// TotalMix, der Transport bleibt REAPERs).
+// ⛔ SEIT 27.09. NUR NOCH DIESE. Jede andere Taste gehoert im Side-Car dem
+// Side-Car, und ihre Lampe malt RmeFace::keyLamps, dieselbe Entscheidung wie in
+// ORC (Frank: "LEDs mit Funktion leuchten lassen"). Dieser Durchgang laesst sie
+// dort ganz in Ruhe, auch den Cache: der Wechsel zurueck erzwingt ohnehin alles.
 using Uf1BtnAvail = uf1spread::BtnAvail;   // lives in Uf1Spread
-static bool uf1SideCarKeepsLed_(uf8::bindings::ButtonId id)
-{
-    using B = uf8::bindings::ButtonId;
-    return id == B::Uf1Shift || id == B::Uf1Rwd || id == B::Uf1Ffw || id == B::Uf1Stop
-        || id == B::Uf1Play  || id == B::Uf1Rec || id == B::Uf1Cycle || id == B::Uf1Click
-        // 5-8 = die zweite Haelfte der Soft-Key-Bank (RmeInput, seit 25.09.),
-        // < > = Baenke bzw. STRIP-Seiten (uf1SideCarSoftKeys_).
-        || id == B::Uf1FiveToEight || id == B::Uf1ArrowLeft || id == B::Uf1ArrowRight
-        // Bank ◄ ►: blaettern seit 25.09. nichts mehr, der Maler meldet sie aus
-        // (RmeFace, BtnAvail), damit keine REAPER-Lampe durchscheint.
-        || id == B::Uf1BankLeft || id == B::Uf1BankRight
-        // 360 behaelt im Side-Car seine Bindung, also auch seine Lampe.
-        || id == B::Uf1Btn360
-        // Soft-Key ueber dem Kanal = Stereo/Mono, hell bei stereo.
-        || id == B::Uf1ChannelSoftKey
-        // MASTER = Main auf den Fader (uf1RmeButton_), Zustand unten.
-        || id == B::Uf1Master;
-}
 static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
 {
     if (!g_uf1_dev) return;
@@ -33880,6 +33847,11 @@ static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
         const auto mod = uf8::bindings::currentModifierSnapshot();
         const int  mi  = static_cast<int>(mod);
         for (size_t k = 0; k < kUf1BtnLedN; ++k) {
+            // Im Side-Car nur die durchgelassenen Tasten (siehe oben). LED-Id =
+            // Tasten-Id - 0x18, dieselbe Regel wie in der Tabelle.
+            if (sideCar && !reasixty::rme::input::passesThrough(
+                               static_cast<uint8_t>(kUf1BtnLeds[k].led + 0x18)))
+                continue;
             // ⚠ THE LED READS THE SAME BINDING THE PRESS WILL FIRE. Four of
             // these keys resolve per view, so without the remap the lamp
             // would wear the colour of the physical key's binding while the
@@ -33920,38 +33892,7 @@ static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
             // builtins, on whichever slot is driving this lamp.
             if (bool avail = false; availabilityState(*colSlot, avail))
                 on = avail;
-            const bool keep = !sideCar || uf1SideCarKeepsLed_(kUf1BtnLeds[k].id);
-            if (!keep) on = false;
-            // Im Side-Car ist 5-8 die Haelfte der Soft-Key-Bank, egal was in
-            // REAPER darauf liegt: die Lampe sagt, was die Taste hier tut.
-            if (sideCar && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1FiveToEight) {
-                on = five8On; show = true;
-            }
-            if (sideCar && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1ArrowLeft) {
-                on = leftOn; show = true;
-            }
-            if (sideCar && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1ArrowRight) {
-                on = rightOn; show = true;
-            }
-            // Bank ◄ ► blaettern in der dynamischen Bank. Beide leuchten oder
-            // keine: es geht im Kreis, also immer in beide Richtungen.
-            if (sideCar && (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1BankLeft
-                         || kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1BankRight)) {
-                on = (kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1BankLeft)
-                   ? bankLOn : bankROn;
-                show = true;
-            }
-            // MASTER am Fader = Main auf den Fader, solange das RME-Side-Car
-            // laeuft: die Lampe liest denselben Zustand wie das Builtin.
-            if (sideCar && uf1RmeActive_()
-                && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1Master) {
-                on = rmeFaderMainActive_(); show = true;
-            }
-            if (sideCar && kUf1BtnLeds[k].id == uf8::bindings::ButtonId::Uf1ChannelSoftKey) {
-                on = av.chanSk; show = true;
-            }
-            const uint32_t scaled =
-                (show && keep) ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
+            const uint32_t scaled = show ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
             // Fold the modifier that actually DROVE this lamp into the
             // change-detect key, not the one being held: an unarmed button
             // resolves to Plain, so it must not re-send on the SHIFT edge.
@@ -33993,6 +33934,12 @@ static void uf1PaintRme_()
         h.bankNow      = [] { return g_sideCarBank[bnd::kUf1SideCarSetRme].load(); };
         h.bankCount    = [] {
             return std::max(1, bnd::uf1SideCarBankInUseCount(bnd::kUf1SideCarSetRme));
+        };
+        h.bankHalf     = [] { return reasixty::rme::softkeys::half(g_rmeIn); };
+        h.bankHasSecondHalf = [] {
+            return reasixty::rme::softkeys::hasSecondHalf(
+                bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme)
+                + g_sideCarBank[bnd::kUf1SideCarSetRme].load());
         };
         h.tcFlash      = [] {
             return nowMs_() < g_uf1TcFlashUntilMs ? g_uf1TcFlashText : std::string();
@@ -43015,6 +42962,12 @@ static void uf1NavCrossSyncLeds_()
     // the LED is guaranteed to survive. A dark key costs nothing to leave alone.
     static int     sPacked[5] = { -2, -2, -2, -2, -2 };
     static int64_t sLastSend  = 0;
+    // ⛔ IM RME-SIDE-CAR MALT RmeFace::keyLamps DAS KREUZ (27.09., dieselbe
+    // Entscheidung wie in ORC). Hier nichts senden und beim Zurueckkommen alles
+    // neu, sonst haelt der Cache den Stand von vor dem Side-Car fuer gezeigt.
+    static bool    sInRme     = false;
+    if (uf1RmeActive_()) { sInRme = true; return; }
+    if (sInRme) { sInRme = false; for (int& v : sPacked) v = -2; }
     const int64_t  now        = nowMs_();
     const bool     reassert   = (now - sLastSend >= 500);
     bool           anyLit     = false;
@@ -43026,21 +42979,7 @@ static void uf1NavCrossSyncLeds_()
         const uf8::bindings::ActionSlot* colSlot = nullptr;
         bool show = uf1BindingLedState_(bd, mod, on, colSlot);
         uint32_t scaled = show ? uf1BindingLedColour_(bd, *colSlot, on) : 0u;
-        // Im RME-Side-Car faengt uf1RmeButton_ das Kreuz ab. Eine Lampe, die
-        // REAPER zeigt, wo die Taste REAPER nicht erreicht, luegt (Frank 21.09.,
-        // Weg b), also ist es dunkel -- ausser oben und unten, die seit dem
-        // 22.09. die Reihe waehlen und beide leuchten, weil es mit dem Umlauf
-        // immer in beide Richtungen weitergeht. Weiss, denn die Farbe der
-        // REAPER-Bindung gehoert zu einer Aktion, die hier nicht laeuft.
-        if (uf1RmeActive_()) {
-            // Oben und unten die Reihe, links und rechts der Submix, beide mit
-            // Umlauf, also immer beide hell. Die Mitte zeigt, ob wir TotalMix
-            // zuletzt eingeblendet haben. Weiss, denn die Farbe der REAPER-
-            // Bindung gehoert zu einer Aktion, die hier nicht laeuft.
-            const bool lit = (i == 2) ? g_rmeIn.windowShown.load() : true;
-            show = true; on = lit; scaled = lit ? 0xFFFFFFu : 0u;
-        }
-        else if (i == marked) {
+        if (i == marked) {
             // The mode's own pick wins the STATE, but not the colour: it lights
             // in this binding's ACTIVE colour, exactly as the editor shows it.
             // A hardcoded green here was the reason the editor could not show
@@ -54274,10 +54213,10 @@ void registerBindingHandlers()
             const int scBank = uf1SideCarBankNow_();
             if (scBank >= 0) {
                 if (uf1RmeActive_() && g_rmeIn.strip.load()) return;
-                // Seit 25.09.2026 hat jede Side-Car-Bank zwei Haelften, und die
-                // wechselt 5-8 (RmeInput). Dieselbe Umschaltung, falls das hier
-                // auf einer anderen Taste liegt.
-                g_rmeIn.skHalf.store(g_rmeIn.skHalf.load() ? 0 : 1);
+                // Jede Side-Car-Bank hat zwei Haelften, Bank ◄ ► waehlen sie
+                // (Frank 27.09.). Dieselbe Wahl, falls das hier auf einer
+                // anderen Taste liegt: +1 die zweite, -1 die erste.
+                reasixty::rme::softkeys::pickHalf(g_rmeIn, scBank, param >= 0 ? 1 : 0);
                 return;
             } else {
                 if (g_uf1MeterView.load()) return;

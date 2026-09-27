@@ -123,6 +123,76 @@ int main()
     EXPECT(face::dbText(reasixty::rme::kDbOff) == "-");
     EXPECT(face::dbText(-64.5).rfind("-64", 0) == 0);
 
+    // ── the key lamps (Frank 27.09.: "LEDs mit Funktion leuchten lassen") ────
+    {
+        namespace b = ::uf1::btn;
+        using L = face::Lamp;
+        auto lampOf = [](const std::array<face::KeyLamp, 18>& ls, std::uint8_t btn) {
+            for (const auto& l : ls) if (l.btn == btn) return l.lamp;
+            return L::Lit;   // missing = a failure below, never a pass
+        };
+        face::LampFacts f;
+        f.online = true; f.haveMain = true; f.haveChannel = true;
+        f.secondHalf = true; f.moreRight = true;
+        auto ls = face::keyLamps(f);
+        EXPECT(lampOf(ls, b::kArrowLeft) == L::Dark);    // first bank: nothing left
+        EXPECT(lampOf(ls, b::kArrowRight) == L::Lit);
+        EXPECT(lampOf(ls, b::kBankLeft) == L::Lit);      // half 1 on the keys
+        EXPECT(lampOf(ls, b::kBankRight) == L::Dim);
+        EXPECT(lampOf(ls, b::k5to8) == L::Dark);
+        EXPECT(lampOf(ls, b::kNavUp) == L::Dim && lampOf(ls, b::kNavLeft) == L::Dim
+               && lampOf(ls, b::kNavRight) == L::Dim && lampOf(ls, b::kNavDown) == L::Dim);
+        EXPECT(lampOf(ls, b::kNavCentre) == L::Dim);     // TotalMix hidden
+        EXPECT(lampOf(ls, b::kMaster) == L::Dim);
+        EXPECT(lampOf(ls, b::kChannelSoftKey) == L::Dim); // mono
+        EXPECT(lampOf(ls, b::kFlip) == L::Dark && lampOf(ls, b::kScrub) == L::Dark
+               && lampOf(ls, b::kT1) == L::Dark && lampOf(ls, b::kT2) == L::Dark
+               && lampOf(ls, b::kTLeft) == L::Dark && lampOf(ls, b::kTRight) == L::Dark);
+
+        f.half = 1; f.window = true; f.mainOnFader = true; f.stereo = true;
+        ls = face::keyLamps(f);
+        EXPECT(lampOf(ls, b::kBankLeft) == L::Dim && lampOf(ls, b::kBankRight) == L::Lit);
+        EXPECT(lampOf(ls, b::kNavCentre) == L::Lit);
+        EXPECT(lampOf(ls, b::kMaster) == L::Lit);
+        EXPECT(lampOf(ls, b::kChannelSoftKey) == L::Lit);
+
+        // No second half, or STRIP: Bank ◄ ► do nothing, so they are dark.
+        f.secondHalf = false;
+        ls = face::keyLamps(f);
+        EXPECT(lampOf(ls, b::kBankLeft) == L::Dark && lampOf(ls, b::kBankRight) == L::Dark);
+        f.secondHalf = true; f.strip = true;
+        ls = face::keyLamps(f);
+        EXPECT(lampOf(ls, b::kBankLeft) == L::Dark && lampOf(ls, b::kBankRight) == L::Dark);
+        // No link, no Main, no channel: those keys do nothing.
+        f = face::LampFacts{};
+        ls = face::keyLamps(f);
+        EXPECT(lampOf(ls, b::kNavCentre) == L::Dark && lampOf(ls, b::kMaster) == L::Dark
+               && lampOf(ls, b::kChannelSoftKey) == L::Dark);
+
+        // ⛔ NO PASS-THROUGH KEY IN THE LIST: those lamps are the host's, and a
+        // second writer is the one thing this split exists to prevent.
+        for (const auto& l : ls)
+            EXPECT(!reasixty::rme::input::passesThrough(l.btn));
+
+        // The bytes: dim = white quartered, FF39 0x11; lit = white, 0x00.
+        std::vector<std::vector<std::uint8_t>> out;
+        const face::Out o{ [&](std::vector<std::uint8_t> fr) { out.push_back(std::move(fr)); },
+                           [&](std::vector<std::uint8_t> fr) { out.push_back(std::move(fr)); } };
+        const face::KeyLamp two[2] = { { b::kMaster, L::Dim }, { b::kArrowRight, L::Lit } };
+        int cache[2] = { 0, 0 };
+        auto navAt = std::chrono::steady_clock::now();
+        face::emitLamps(two, 2, cache, navAt, o, /*force*/ false);
+        const std::uint8_t mLed = b::kMaster - 0x18, aLed = b::kArrowRight - 0x18;
+        EXPECT(out.size() == 4);
+        EXPECT(out[0] == ::uf1::buildColourRgb(mLed, 0x3F3F3Fu));
+        EXPECT(out[1] == ::uf1::buildLedLevel(mLed, 0x11));
+        EXPECT(out[2] == ::uf1::buildColourRgb(aLed, 0xFFFFFFu));
+        EXPECT(out[3] == ::uf1::buildLedLevel(aLed, 0x00));
+        out.clear();
+        face::emitLamps(two, 2, cache, navAt, o, false);
+        EXPECT(out.empty());                              // unchanged: nothing sent
+    }
+
     if (g_fail == 0) std::printf("test_rme_face: all good\n");
     return g_fail ? 1 : 0;
 }

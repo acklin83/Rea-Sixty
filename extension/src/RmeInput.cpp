@@ -69,22 +69,16 @@ int selected(const State& s, const rme::State& st, rmeu::Row r)
     return list.empty() ? -1 : list.front();
 }
 
-int stripPage(const State& s, const rme::State& st, rmeu::Row r, int sel,
-              const Config& cfg)
+rmes::View stripView(const State& s, const rme::State& st, rmeu::Row r, int sel,
+                     const Config& cfg)
 {
-    const auto pages = rmes::availablePages(st, r, sel, cfg.stripPages);
-    if (pages.empty()) return -1;
+    if (sel < 0) return {};
+    const auto views = rmes::views(st, r, sel, cfg.stripPages);
+    if (views.empty()) return {};
     const int want = s.stripPage.load();
-    if (std::find(pages.begin(), pages.end(), want) != pages.end()) return want;
-    return pages.front();
-}
-
-const rmes::Param* stripParam(const Config& cfg, int page, bool key, int i)
-{
-    if (page < 0 || page >= static_cast<int>(cfg.stripPages.size()) || i < 0 || i > 3)
-        return nullptr;
-    const auto& pg = cfg.stripPages[static_cast<size_t>(page)];
-    return rmes::find(key ? pg.keys[i] : pg.pots[i]);
+    for (const auto& v : views)
+        if (v.id == want) return v;
+    return views.front();
 }
 
 void select(State& s, rmeu::Row r, int ch)
@@ -169,9 +163,8 @@ bool encoder(State& s, const Host& h, const rme::State& st, const Config& cfg,
         // STRIP: the pot turns its page's parameter on the fader channel.
         const auto r   = static_cast<rmeu::Row>(std::clamp(s.row.load(), 0, 2));
         const int  sel = selected(s, st, r);
-        const int  pg  = sel >= 0 ? stripPage(s, st, r, sel, cfg) : -1;
         const int  pot = id - ::uf1::enc::kVpot1;
-        const rmes::Param* p = stripParam(cfg, pg, false, pot);
+        const rmes::Param* p = stripView(s, st, r, sel, cfg).pots[pot];
         if (!p) return true;
         if (rmes::stepsWhole(*p)) {
             const int steps = wholeSteps(s.potAccum[pot], delta);
@@ -246,20 +239,21 @@ bool stripSoftKey(State& s, const Host& h, const rme::State& st, const Config& c
     const auto r   = static_cast<rmeu::Row>(std::clamp(s.row.load(), 0, 2));
     const int  sel = selected(s, st, r);
     if (sel < 0) return true;
-    const int  pg  = stripPage(s, st, r, sel, cfg);
-    if (pg < 0) return true;
+    const rmes::View v = stripView(s, st, r, sel, cfg);
+    if (v.id < 0) return true;
 
     if (id == ::uf1::btn::kArrowLeft || id == ::uf1::btn::kArrowRight) {
-        const auto pages = rmes::availablePages(st, r, sel, cfg.stripPages);
-        const int at  = static_cast<int>(std::find(pages.begin(), pages.end(), pg)
-                                         - pages.begin());
+        const auto views = rmes::views(st, r, sel, cfg.stripPages);
+        int at = 0;
+        for (int i = 0; i < static_cast<int>(views.size()); ++i)
+            if (views[static_cast<size_t>(i)].id == v.id) at = i;
         const int dir = (id == ::uf1::btn::kArrowRight) ? 1 : -1;
         // No wrap: the list has ends, like the row list.
-        const int to  = std::clamp(at + dir, 0, static_cast<int>(pages.size()) - 1);
-        s.stripPage.store(pages[static_cast<size_t>(to)]);
+        const int to  = std::clamp(at + dir, 0, static_cast<int>(views.size()) - 1);
+        s.stripPage.store(views[static_cast<size_t>(to)].id);
         return true;
     }
-    if (const rmes::Param* p = stripParam(cfg, pg, true, id - ::uf1::btn::kDisplaySoft1))
+    if (const rmes::Param* p = v.keys[id - ::uf1::btn::kDisplaySoft1])
         append(out, rmes::press(st, r, sel, *p));
     return true;
 }
@@ -309,20 +303,17 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
         return true;
     }
     // In STRIP a pot press puts its parameter back to the neutral value
-    // (RmeStrip::resetWrites, Frank 22.09.); 5-8 does nothing there, the V-Pot
-    // banks belong to the overview.
+    // (RmeStrip::resetWrites, Frank 22.09.).
     if (s.strip.load() && id >= ::uf1::btn::kVpot1Push && id <= ::uf1::btn::kVpot4Push) {
         if (ev.pressed) {
             const auto r   = static_cast<rmeu::Row>(std::clamp(s.row.load(), 0, 2));
             const int  sel = selected(s, st, r);
-            const int  pg  = sel >= 0 ? stripPage(s, st, r, sel, cfg) : -1;
-            if (const rmes::Param* p = stripParam(cfg, pg, false,
-                                                  id - ::uf1::btn::kVpot1Push))
+            if (const rmes::Param* p =
+                    stripView(s, st, r, sel, cfg).pots[id - ::uf1::btn::kVpot1Push])
                 append(out, rmes::resetWrites(st, r, sel, *p));
         }
         return true;
     }
-    if (s.strip.load() && id == ::uf1::btn::k5to8) return true;
 
     if (id >= ::uf1::btn::kVpot1Push && id <= ::uf1::btn::kVpot4Push) {
         if (!ev.pressed) return true;
@@ -376,15 +367,10 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
         out.push_back({ rmes::sendChanAddress(r, sel + 1), 1.0f });
         return true;
     }
-    // ⇨ 5-8 SWITCHES THE SOFT-KEY BANK'S HALF (Frank 25.09.: "Bank 1: dim, mono,
-    // speaker b, talkback und dann über 5-8 ext in, main auf fader, totalmix
-    // fenster", "snapshots mit 5-8"). It used to switch the two V-Pot banks;
-    // those follow the submix on Nav ◄ ► and the channel encoder since 25.09.,
-    // and Frank: "das reicht und macht mehr sinn als 5-8". RmeSoftKeys reads it.
-    if (id == ::uf1::btn::k5to8) {
-        if (ev.pressed && !modeMenu(h)) s.skHalf.store(s.skHalf.load() ? 0 : 1);
-        return true;
-    }
+    // ⇨ 5-8 DOES NOTHING IN THE SIDE-CAR (Frank 27.09.). It switched the V-Pot
+    // banks until 25.09. (those follow Nav ◄ ► and the channel encoder now),
+    // then the soft-key bank's half for two days; the half is on Bank ◄ ► since
+    // (RmeSoftKeys::stepKey). It falls to the default below, dark and swallowed.
 
     // ⇨ SOLO, CUT, SEL BELONG TO THE FADER CHANNEL IN TOTALMIX (Frank 21.09.:
     // "sollten die nicht im Side-Car Mode komplett weg von Reaper? Sonst sind ja
@@ -416,6 +402,11 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
     // TotalMix; the transport stays REAPER's, and in ORC these keys are
     // unbound. SHIFT stays a modifier. Everything else the side-car swallows
     // and does nothing with, so no key secretly switches a REAPER track.
+    return !passesThrough(id);
+}
+
+bool passesThrough(std::uint8_t id)
+{
     switch (id) {
         case ::uf1::btn::kShift:
         case ::uf1::btn::kRwd:  case ::uf1::btn::kFfw:  case ::uf1::btn::kStop:
@@ -425,9 +416,9 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
         // his call; an action on the time field stays ineffective while the
         // side-car holds the screen.
         case ::uf1::btn::k360:
-            return false;
-        default:
             return true;
+        default:
+            return false;
     }
 }
 
