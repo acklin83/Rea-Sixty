@@ -26368,273 +26368,280 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
         else ImGui_Text(ctx, s_setupMsg.c_str());
     }
 
-    // ── UF1 display probe ────────────────────────────────────────────────
-    // 0x0100 is the UF1's large-LCD layout selector, {layout, screen}. We drive
-    // 0x03/0x00 (channel, where the EQ graph is) and 0x04/0x00..05 (Meter), and
-    // the whole capture corpus holds no others. SSL's own DAW layer was never
-    // captured, so whatever it paints there sits behind a layout nothing of ours
-    // selects. This walks the selector and paints a readable pattern.
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "UF1 display probe");
-    ImGui_Separator(ctx);
-    if (!reasixty_uf1Connected()) {
-        ImGui_Text(ctx, "  No UF1 connected.");
-    } else {
-        bool probeOn = reasixty_uf1LayoutProbe();
-        if (ImGui_Checkbox(ctx, "Take over the UF1 screen##uf1probe", &probeOn))
-            reasixty_setUf1LayoutProbe(probeOn);
-        ImGui_Text(ctx,
-            "  Switches the large LCD to another layout. Turning this off puts"
-            " the channel view back.");
-        if (probeOn) {
-            int lay = reasixty_uf1ProbeLayout();
-            int scr = reasixty_uf1ProbeScreen();
-            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 120.0));
-            if (ImGui_InputInt(ctx, "Layout byte##uf1probe_l", &lay,
-                               nullptr, nullptr, nullptr))
-                reasixty_setUf1ProbeLayout(lay);
-            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 120.0));
-            if (ImGui_InputInt(ctx, "Screen byte##uf1probe_s", &scr,
-                               nullptr, nullptr, nullptr))
-                reasixty_setUf1ProbeScreen(scr);
-            ImGui_Text(ctx, "  Known: 3/0 = channel, 4/0 to 4/5 = meter."
-                            " Untried: 1, 2, 5 and up.");
-            bool pat = reasixty_uf1ProbePattern();
-            if (ImGui_Checkbox(ctx, "Paint the test pattern##uf1probe_p", &pat))
-                reasixty_setUf1ProbePattern(pat);
-            // The pattern is POSITIONS, not colours, on purpose: the question is
-            // "how many bars and where", which a colour-blind reader can answer
-            // and a colour cannot be.
+    // ⛔ A DIAGNOSTIC, NOT A SETTING (27.09.2026: nothing of the side-car era's
+    // tooling in front of a customer). Shown only with ExtState
+    // rea_sixty/dev_probes = 1; its "Take over the UF1 screen" would otherwise
+    // be one click away for anyone with a UF1.
+    if (const char* dp = GetExtState("rea_sixty", "dev_probes");
+        dp && *dp && std::strcmp(dp, "0") != 0) {
+        // ── UF1 display probe ────────────────────────────────────────────────
+        // 0x0100 is the UF1's large-LCD layout selector, {layout, screen}. We drive
+        // 0x03/0x00 (channel, where the EQ graph is) and 0x04/0x00..05 (Meter), and
+        // the whole capture corpus holds no others. SSL's own DAW layer was never
+        // captured, so whatever it paints there sits behind a layout nothing of ours
+        // selects. This walks the selector and paints a readable pattern.
+        ImGui_Spacing(ctx);
+        ImGui_Spacing(ctx);
+        ImGui_Text(ctx, "UF1 display probe");
+        ImGui_Separator(ctx);
+        if (!reasixty_uf1Connected()) {
+            ImGui_Text(ctx, "  No UF1 connected.");
+        } else {
+            bool probeOn = reasixty_uf1LayoutProbe();
+            if (ImGui_Checkbox(ctx, "Take over the UF1 screen##uf1probe", &probeOn))
+                reasixty_setUf1LayoutProbe(probeOn);
             ImGui_Text(ctx,
-                "  Eight numbered text cells, plus the elements below.");
-            // One at a time, or you learn THAT something draws and never WHAT.
-            int only = reasixty_uf1ProbeOnly();
-            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 120.0));
-            if (ImGui_InputInt(ctx, "Only element (0 = all)##uf1probe_o", &only,
-                               nullptr, nullptr, nullptr))
-                reasixty_setUf1ProbeOnly(only);
-            static const char* kElemNames[] = {
-                "  0  all of them",
-                "  1  0x0121   (FE 00 FE 00: \"8.\" blank \"8.\" blank)",
-                "  2  0x0113   (FE 00 FE 00: \"8.\" blank \"8.\" blank)",
-                "  3  0x0118   (FE 00 FE 00: \"8.\" blank \"8.\" blank)",
-                "  4  0x012b   the four bars, palette base..base+3",
-                "  5  0x0009   level   L quarter / R three quarters",
-                "  6  0x000a   the unknown twin of the level cell",
-                "  7  0x0015   comp GR   one third",
-                "  8  0x0016   gate GR   two thirds",
-                "  9  the whole V-Pot row: labels, bars, styles",
-                " 10  0x0104   the four soft-key labels (SK1..SK4)",
-                " 11  the five one-byte cells the init writes and we never do",
-                " 12  0x010b   a text field per V-Pot (C1..C4), from cap141",
-                " 13  0x010d   V-Pot style 0x04, SSL's DAW-layer look",
-                " 14  0x0110   alone, FF",
-                " 15  0x011a   alone, FF",
-                " 16  like 9, but V-Pot style 0x04",
-                " 17  ruler A..S in the value line, pot 1 only",
-                " 18  ruler A..S in the per-pot text (0x010b), pot 1 only",
-                " 19  value line, pot 1, a..z",
-                " 20  per-pot text, pot 1, a..z",
-                " 21  soft key 1, A..S",
-                " 22  soft key 1, a..z",
-                " 23  CELL1 = A..X, CELL2 = a..x",
-                " 24  V-Pot row, style 0x02",
-                " 25  V-Pot row, style 0x08",
-                " 26  V-Pot row, style 0x03",
-                " 27  0x011b = \"01\"   (layout 2 only)",
-                " 28  0x011b = \"1234\" (layout 2 only)",
-            };
-            const int shown = (only >= 0 && only <= 28) ? only : 0;
-            ImGui_Text(ctx, kElemNames[shown]);
-            // The four bars show base..base+3, so the palette walks in fours.
-            int barBase = reasixty_uf1ProbeBarBase();
-            ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 120.0));
-            if (ImGui_InputInt(ctx, "Bar palette base (0x012b)##uf1probe_b",
-                               &barBase, nullptr, nullptr, nullptr))
-                reasixty_setUf1ProbeBarBase(barBase);
-            ImGui_Text(ctx, "  0x012b shows base, base+1, base+2, base+3."
-                            "  Known: 0 off, 1 white, 2 red, 3 green.");
-            if (ImGui_Button(ctx, "Send again##uf1probe_r", nullptr, nullptr))
-                reasixty_uf1ProbeResend();
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (ImGui_Button(ctx, "Back to channel##uf1probe_x", nullptr, nullptr)) {
-                reasixty_setUf1ProbeLayout(0x03);
-                reasixty_setUf1ProbeScreen(0x00);
-                reasixty_setUf1LayoutProbe(false);
+                "  Switches the large LCD to another layout. Turning this off puts"
+                " the channel view back.");
+            if (probeOn) {
+                int lay = reasixty_uf1ProbeLayout();
+                int scr = reasixty_uf1ProbeScreen();
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 120.0));
+                if (ImGui_InputInt(ctx, "Layout byte##uf1probe_l", &lay,
+                                   nullptr, nullptr, nullptr))
+                    reasixty_setUf1ProbeLayout(lay);
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 120.0));
+                if (ImGui_InputInt(ctx, "Screen byte##uf1probe_s", &scr,
+                                   nullptr, nullptr, nullptr))
+                    reasixty_setUf1ProbeScreen(scr);
+                ImGui_Text(ctx, "  Known: 3/0 = channel, 4/0 to 4/5 = meter."
+                                " Untried: 1, 2, 5 and up.");
+                bool pat = reasixty_uf1ProbePattern();
+                if (ImGui_Checkbox(ctx, "Paint the test pattern##uf1probe_p", &pat))
+                    reasixty_setUf1ProbePattern(pat);
+                // The pattern is POSITIONS, not colours, on purpose: the question is
+                // "how many bars and where", which a colour-blind reader can answer
+                // and a colour cannot be.
+                ImGui_Text(ctx,
+                    "  Eight numbered text cells, plus the elements below.");
+                // One at a time, or you learn THAT something draws and never WHAT.
+                int only = reasixty_uf1ProbeOnly();
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 120.0));
+                if (ImGui_InputInt(ctx, "Only element (0 = all)##uf1probe_o", &only,
+                                   nullptr, nullptr, nullptr))
+                    reasixty_setUf1ProbeOnly(only);
+                static const char* kElemNames[] = {
+                    "  0  all of them",
+                    "  1  0x0121   (FE 00 FE 00: \"8.\" blank \"8.\" blank)",
+                    "  2  0x0113   (FE 00 FE 00: \"8.\" blank \"8.\" blank)",
+                    "  3  0x0118   (FE 00 FE 00: \"8.\" blank \"8.\" blank)",
+                    "  4  0x012b   the four bars, palette base..base+3",
+                    "  5  0x0009   level   L quarter / R three quarters",
+                    "  6  0x000a   the unknown twin of the level cell",
+                    "  7  0x0015   comp GR   one third",
+                    "  8  0x0016   gate GR   two thirds",
+                    "  9  the whole V-Pot row: labels, bars, styles",
+                    " 10  0x0104   the four soft-key labels (SK1..SK4)",
+                    " 11  the five one-byte cells the init writes and we never do",
+                    " 12  0x010b   a text field per V-Pot (C1..C4), from cap141",
+                    " 13  0x010d   V-Pot style 0x04, SSL's DAW-layer look",
+                    " 14  0x0110   alone, FF",
+                    " 15  0x011a   alone, FF",
+                    " 16  like 9, but V-Pot style 0x04",
+                    " 17  ruler A..S in the value line, pot 1 only",
+                    " 18  ruler A..S in the per-pot text (0x010b), pot 1 only",
+                    " 19  value line, pot 1, a..z",
+                    " 20  per-pot text, pot 1, a..z",
+                    " 21  soft key 1, A..S",
+                    " 22  soft key 1, a..z",
+                    " 23  CELL1 = A..X, CELL2 = a..x",
+                    " 24  V-Pot row, style 0x02",
+                    " 25  V-Pot row, style 0x08",
+                    " 26  V-Pot row, style 0x03",
+                    " 27  0x011b = \"01\"   (layout 2 only)",
+                    " 28  0x011b = \"1234\" (layout 2 only)",
+                };
+                const int shown = (only >= 0 && only <= 28) ? only : 0;
+                ImGui_Text(ctx, kElemNames[shown]);
+                // The four bars show base..base+3, so the palette walks in fours.
+                int barBase = reasixty_uf1ProbeBarBase();
+                ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 120.0));
+                if (ImGui_InputInt(ctx, "Bar palette base (0x012b)##uf1probe_b",
+                                   &barBase, nullptr, nullptr, nullptr))
+                    reasixty_setUf1ProbeBarBase(barBase);
+                ImGui_Text(ctx, "  0x012b shows base, base+1, base+2, base+3."
+                                "  Known: 0 off, 1 white, 2 red, 3 green.");
+                if (ImGui_Button(ctx, "Send again##uf1probe_r", nullptr, nullptr))
+                    reasixty_uf1ProbeResend();
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                if (ImGui_Button(ctx, "Back to channel##uf1probe_x", nullptr, nullptr)) {
+                    reasixty_setUf1ProbeLayout(0x03);
+                    reasixty_setUf1ProbeScreen(0x00);
+                    reasixty_setUf1LayoutProbe(false);
+                }
             }
         }
-    }
 
-#ifdef _WIN32
-    // Windows-only: bind UF8, UC1 and UF1 to WinUSB so libusb can claim them
-    // without Zadig. Single UAC prompt; replaces SSL 360°'s driver
-    // (SSL 360° will stop seeing the devices afterwards).
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Windows USB driver");
-    ImGui_Separator(ctx);
-    // Says UF1 too: the script has always force-bound PID_0025, but the text
-    // named only UF8 + UC1, so a UF1 owner read the button as not being for
-    // them (forum user creal, 2026-08-13). "Plug in first" is not advice, it is
-    // a requirement: the rebind only reaches devices present when it runs.
-    ImGui_TextWrapped(ctx,
-        "  Binds UF8, UC1 and UF1 to WinUSB. One-time setup, requires admin. "
-        "Plug the devices in before pressing. SSL 360° stops seeing them "
-        "after install; reinstall SSL 360° to revert.");
-    ImGui_Spacing(ctx);
+    #ifdef _WIN32
+        // Windows-only: bind UF8, UC1 and UF1 to WinUSB so libusb can claim them
+        // without Zadig. Single UAC prompt; replaces SSL 360°'s driver
+        // (SSL 360° will stop seeing the devices afterwards).
+        ImGui_Spacing(ctx);
+        ImGui_Spacing(ctx);
+        ImGui_Text(ctx, "Windows USB driver");
+        ImGui_Separator(ctx);
+        // Says UF1 too: the script has always force-bound PID_0025, but the text
+        // named only UF8 + UC1, so a UF1 owner read the button as not being for
+        // them (forum user creal, 2026-08-13). "Plug in first" is not advice, it is
+        // a requirement: the rebind only reaches devices present when it runs.
+        ImGui_TextWrapped(ctx,
+            "  Binds UF8, UC1 and UF1 to WinUSB. One-time setup, requires admin. "
+            "Plug the devices in before pressing. SSL 360° stops seeing them "
+            "after install; reinstall SSL 360° to revert.");
+        ImGui_Spacing(ctx);
 
-    // What each surface is bound to RIGHT NOW. Nobody could tell before, which
-    // is how a working install got mistaken for a dead unit. Read via SetupAPI,
-    // so no elevation and no UAC; cached and refreshed on demand rather than
-    // every frame, because it enumerates the whole USB tree.
-    static std::string s_drvStatus;
-    static bool        s_drvStatusInit = false;
-    if (!s_drvStatusInit) {
-        s_drvStatusInit = true;
-        s_drvStatus = reasixty_winUsbDriverStatus();
-    }
-    ImGui_Text(ctx, "Current driver binding:");
-    ImGui_TextWrapped(ctx, s_drvStatus.c_str());
-    if (ImGui_Button(ctx, "Refresh##winusb_status", nullptr, nullptr))
-        s_drvStatus = reasixty_winUsbDriverStatus();
-    ImGui_Spacing(ctx);
-
-    static std::string s_winusbMsg;
-    // The job runs on a worker so the UI does not freeze for the length of an
-    // elevated pnputil run. While it runs, both buttons are inert: a second
-    // press would race the first, and pressing again is exactly what users do
-    // when nothing appears to happen.
-    const int  jobState = reasixty_winUsbJobState();
-    const bool jobBusy  = (jobState == 1);
-    if (jobState == 2) {
-        // Finished: adopt the worker's verdict and re-read the bindings once,
-        // so the readout above reflects what just happened without a click.
-        s_winusbMsg = reasixty_winUsbJobMessage();
-        s_drvStatus = reasixty_winUsbDriverStatus();
-        reasixty_winUsbJobClear();
-    } else if (jobBusy) {
-        s_winusbMsg = reasixty_winUsbJobMessage();
-    }
-    // ⚠ NOT ImGui_BeginDisabled — this ReaImGui function set has no such call
-    // (checked against vendor/reaimgui/reaper_imgui_functions.h; see the
-    // signature-drift note in the ReaImGui memory). While a job runs the
-    // buttons are simply not drawn, which also removes the temptation to press
-    // again when nothing seems to be happening.
-    if (!jobBusy) {
-    if (ImGui_Button(ctx, "Install UF8/UC1/UF1 WinUSB driver##winusb_install",
-                     nullptr, nullptr))
-    {
-        std::string err;
-        // The worker owns the outcome message now (installed / failed with the
-        // log path / cancelled at the UAC prompt). This branch only reports a
-        // failure to LAUNCH, which is a different thing entirely.
-        if (!reasixty_installWinUsbDriver(&err)) {
-            s_winusbMsg = err.empty()
-                ? "Driver install could not start."
-                : ("Driver install could not start: " + err);
+        // What each surface is bound to RIGHT NOW. Nobody could tell before, which
+        // is how a working install got mistaken for a dead unit. Read via SetupAPI,
+        // so no elevation and no UAC; cached and refreshed on demand rather than
+        // every frame, because it enumerates the whole USB tree.
+        static std::string s_drvStatus;
+        static bool        s_drvStatusInit = false;
+        if (!s_drvStatusInit) {
+            s_drvStatusInit = true;
+            s_drvStatus = reasixty_winUsbDriverStatus();
         }
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_Button(ctx, "Uninstall##winusb_uninstall",
-                     nullptr, nullptr))
-    {
-        std::string err;
-        if (!reasixty_uninstallWinUsbDriver(&err)) {
-            s_winusbMsg = err.empty()
-                ? "Driver uninstall could not start."
-                : ("Driver uninstall could not start: " + err);
-        }
-    }
-    }   // end of the not-busy button pair
-    if (!s_winusbMsg.empty()) {
-        ImGui_TextWrapped(ctx, s_winusbMsg.c_str());
-    }
-#endif
+        ImGui_Text(ctx, "Current driver binding:");
+        ImGui_TextWrapped(ctx, s_drvStatus.c_str());
+        if (ImGui_Button(ctx, "Refresh##winusb_status", nullptr, nullptr))
+            s_drvStatus = reasixty_winUsbDriverStatus();
+        ImGui_Spacing(ctx);
 
-#ifdef __linux__
-    // Linux equivalent — install udev rule so libusb can claim UF8 +
-    // UC1 without root. Single pkexec prompt, mirrors the Windows
-    // WinUSB-installer UX. Required for ReaPack-installed packages
-    // (ReaPack can drop the .so but can't sudo).
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Linux udev rule");
-    ImGui_Separator(ctx);
-    ImGui_TextWrapped(ctx,
-        "  Grants non-root USB access to UF8 + UC1 by installing "
-        "/etc/udev/rules.d/99-rea-sixty.rules. One-time setup, "
-        "requires sudo (graphical password prompt).");
-    ImGui_Spacing(ctx);
-    static std::string s_udevMsg;
-    if (ImGui_Button(ctx, "Install Linux udev rule##udev_install",
-                     nullptr, nullptr))
-    {
-        std::string err;
-        if (reasixty_installLinuxUdevRule(&err)) {
-            s_udevMsg = "udev rule installed. Unplug + replug UF8 + UC1, "
-                        "then restart REAPER.";
-        } else {
-            s_udevMsg = err.empty()
-                ? "udev install failed."
-                : ("udev install failed: " + err);
+        static std::string s_winusbMsg;
+        // The job runs on a worker so the UI does not freeze for the length of an
+        // elevated pnputil run. While it runs, both buttons are inert: a second
+        // press would race the first, and pressing again is exactly what users do
+        // when nothing appears to happen.
+        const int  jobState = reasixty_winUsbJobState();
+        const bool jobBusy  = (jobState == 1);
+        if (jobState == 2) {
+            // Finished: adopt the worker's verdict and re-read the bindings once,
+            // so the readout above reflects what just happened without a click.
+            s_winusbMsg = reasixty_winUsbJobMessage();
+            s_drvStatus = reasixty_winUsbDriverStatus();
+            reasixty_winUsbJobClear();
+        } else if (jobBusy) {
+            s_winusbMsg = reasixty_winUsbJobMessage();
         }
-    }
-    ImGui_SameLine(ctx, nullptr, nullptr);
-    if (ImGui_Button(ctx, "Uninstall##udev_uninstall",
-                     nullptr, nullptr))
-    {
-        std::string err;
-        if (reasixty_uninstallLinuxUdevRule(&err)) {
-            s_udevMsg = "udev rule removed. Unplug + replug UF8 + UC1, "
-                        "then restart REAPER.";
-        } else {
-            s_udevMsg = err.empty()
-                ? "udev uninstall failed."
-                : ("udev uninstall failed: " + err);
+        // ⚠ NOT ImGui_BeginDisabled — this ReaImGui function set has no such call
+        // (checked against vendor/reaimgui/reaper_imgui_functions.h; see the
+        // signature-drift note in the ReaImGui memory). While a job runs the
+        // buttons are simply not drawn, which also removes the temptation to press
+        // again when nothing seems to be happening.
+        if (!jobBusy) {
+        if (ImGui_Button(ctx, "Install UF8/UC1/UF1 WinUSB driver##winusb_install",
+                         nullptr, nullptr))
+        {
+            std::string err;
+            // The worker owns the outcome message now (installed / failed with the
+            // log path / cancelled at the UAC prompt). This branch only reports a
+            // failure to LAUNCH, which is a different thing entirely.
+            if (!reasixty_installWinUsbDriver(&err)) {
+                s_winusbMsg = err.empty()
+                    ? "Driver install could not start."
+                    : ("Driver install could not start: " + err);
+            }
         }
-    }
-    if (!s_udevMsg.empty()) {
-        ImGui_TextWrapped(ctx, s_udevMsg.c_str());
-    }
-#endif
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Uninstall##winusb_uninstall",
+                         nullptr, nullptr))
+        {
+            std::string err;
+            if (!reasixty_uninstallWinUsbDriver(&err)) {
+                s_winusbMsg = err.empty()
+                    ? "Driver uninstall could not start."
+                    : ("Driver uninstall could not start: " + err);
+            }
+        }
+        }   // end of the not-busy button pair
+        if (!s_winusbMsg.empty()) {
+            ImGui_TextWrapped(ctx, s_winusbMsg.c_str());
+        }
+    #endif
 
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Logs");
-    ImGui_Separator(ctx);
-    bool con = reasixty_consoleOutput();
-    if (ImGui_Checkbox(ctx, "Console output", &con)) {
-        reasixty_setConsoleOutput(con);
-    }
-    // Show the real directory — it is %TEMP% on Windows, not /tmp.
-    {
-        const std::string frames = uf8::logPath("reaper_uf8_frames.log");
-        const std::string colors = uf8::logPath("reaper_uf8_colors.log");
-        ImGui_Text(ctx, ("  " + frames + "   (frame trace, when enabled)").c_str());
-        ImGui_Text(ctx, ("  " + colors + "   (ColorSync push log)").c_str());
-        std::string dir = frames;
-        const size_t cut = dir.find_last_of("/\\");
-        if (cut != std::string::npos) dir.erase(cut);
-#if defined(_WIN32)
-        const char* reveal = "Reveal log folder in Explorer";
-#elif defined(__APPLE__)
-        const char* reveal = "Reveal log folder in Finder";
-#else
-        const char* reveal = "Reveal log folder";
-#endif
-        if (ImGui_Button(ctx, reveal, /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-            reasixty_revealInFinder(dir.c_str());
+    #ifdef __linux__
+        // Linux equivalent — install udev rule so libusb can claim UF8 +
+        // UC1 without root. Single pkexec prompt, mirrors the Windows
+        // WinUSB-installer UX. Required for ReaPack-installed packages
+        // (ReaPack can drop the .so but can't sudo).
+        ImGui_Spacing(ctx);
+        ImGui_Spacing(ctx);
+        ImGui_Text(ctx, "Linux udev rule");
+        ImGui_Separator(ctx);
+        ImGui_TextWrapped(ctx,
+            "  Grants non-root USB access to UF8 + UC1 by installing "
+            "/etc/udev/rules.d/99-rea-sixty.rules. One-time setup, "
+            "requires sudo (graphical password prompt).");
+        ImGui_Spacing(ctx);
+        static std::string s_udevMsg;
+        if (ImGui_Button(ctx, "Install Linux udev rule##udev_install",
+                         nullptr, nullptr))
+        {
+            std::string err;
+            if (reasixty_installLinuxUdevRule(&err)) {
+                s_udevMsg = "udev rule installed. Unplug + replug UF8 + UC1, "
+                            "then restart REAPER.";
+            } else {
+                s_udevMsg = err.empty()
+                    ? "udev install failed."
+                    : ("udev install failed: " + err);
+            }
         }
-    }
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (ImGui_Button(ctx, "Uninstall##udev_uninstall",
+                         nullptr, nullptr))
+        {
+            std::string err;
+            if (reasixty_uninstallLinuxUdevRule(&err)) {
+                s_udevMsg = "udev rule removed. Unplug + replug UF8 + UC1, "
+                            "then restart REAPER.";
+            } else {
+                s_udevMsg = err.empty()
+                    ? "udev uninstall failed."
+                    : ("udev uninstall failed: " + err);
+            }
+        }
+        if (!s_udevMsg.empty()) {
+            ImGui_TextWrapped(ctx, s_udevMsg.c_str());
+        }
+    #endif
 
-    ImGui_Spacing(ctx);
-    ImGui_Spacing(ctx);
-    ImGui_Text(ctx, "Acknowledgements");
-    ImGui_Separator(ctx);
-    ImGui_Text(ctx, "  Built without affiliation with Solid State Logic.");
-    ImGui_Text(ctx, "  ReaImGui (cfillion) handles all on-screen rendering.");
-    ImGui_Text(ctx, "  libusb drives the UF8 / UC1 / UF1 vendor-USB endpoints.");
+        ImGui_Spacing(ctx);
+        ImGui_Spacing(ctx);
+        ImGui_Text(ctx, "Logs");
+        ImGui_Separator(ctx);
+        bool con = reasixty_consoleOutput();
+        if (ImGui_Checkbox(ctx, "Console output", &con)) {
+            reasixty_setConsoleOutput(con);
+        }
+        // Show the real directory — it is %TEMP% on Windows, not /tmp.
+        {
+            const std::string frames = uf8::logPath("reaper_uf8_frames.log");
+            const std::string colors = uf8::logPath("reaper_uf8_colors.log");
+            ImGui_Text(ctx, ("  " + frames + "   (frame trace, when enabled)").c_str());
+            ImGui_Text(ctx, ("  " + colors + "   (ColorSync push log)").c_str());
+            std::string dir = frames;
+            const size_t cut = dir.find_last_of("/\\");
+            if (cut != std::string::npos) dir.erase(cut);
+    #if defined(_WIN32)
+            const char* reveal = "Reveal log folder in Explorer";
+    #elif defined(__APPLE__)
+            const char* reveal = "Reveal log folder in Finder";
+    #else
+            const char* reveal = "Reveal log folder";
+    #endif
+            if (ImGui_Button(ctx, reveal, /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+                reasixty_revealInFinder(dir.c_str());
+            }
+        }
+
+        ImGui_Spacing(ctx);
+        ImGui_Spacing(ctx);
+        ImGui_Text(ctx, "Acknowledgements");
+        ImGui_Separator(ctx);
+        ImGui_Text(ctx, "  Built without affiliation with Solid State Logic.");
+        ImGui_Text(ctx, "  ReaImGui (cfillion) handles all on-screen rendering.");
+        ImGui_Text(ctx, "  libusb drives the UF8 / UC1 / UF1 vendor-USB endpoints.");
+    }
 }
 
 } // namespace uf8

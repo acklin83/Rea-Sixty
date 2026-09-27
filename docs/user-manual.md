@@ -1219,7 +1219,7 @@ Surface-side handling of the REAPER Master bus. See **Master track** (own chapte
 | Control | Effect |
 |---|---|
 | Announce the soft-key bank on the time display | On by default. Switching the UF1's soft-key bank flashes the bank's name across the ten-cell time field for about a second, the same way a format change flashes *BARS* / *TIME* / *SAMPLES*, and the clock comes back by itself. Holding SHIFT counts as a switch, because a modifier set is a bank of its own; if that set simply takes Plain's bank its name is the same one, and nothing flashes. A bank you named in *Settings → Bindings → UF1* shows that name; a dynamic bank shows what kind it is (`EFFECTS`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`, `HUE`, `OBS`); an unnamed static bank shows its number (`SOFT 3`). |
-| Start the UF1 in a fixed view | Off by default, and the UF1 comes back up in the view you last left it in. Ticking it pins whichever view the UF1 is showing at that moment instead; the combo below changes it to Plug-in, DAW, Meter or Sends, or to RME where ORC is installed, which brings the UF1 up in the RME side-car. Either way the view is applied once, on the first timer tick that sees the UF1, so plugging the device in mid-session engages it too. The last-used view is remembered globally, not per project: which view the surface shows belongs to the surface, not to the session you happen to open. |
+| Start the UF1 in a fixed view | Off by default, and the UF1 comes back up in the view you last left it in. Ticking it pins whichever view the UF1 is showing at that moment instead; the combo below changes it to Plug-in, DAW, Meter or Sends. Either way the view is applied once, on the first timer tick that sees the UF1, so plugging the device in mid-session engages it too. The last-used view is remembered globally, not per project: which view the surface shows belongs to the surface, not to the session you happen to open. |
 
 ### Keyboard
 
@@ -1352,10 +1352,6 @@ Right-click the bank's cell in the matrix and open **Dynamic bank**. The kinds a
 | `BC Favourites` | The eight Bus Compressor favourites, the same way |
 | `Hue Scenes` | Your eight Hue scene slots, each key in its scene's colour |
 | `OBS Scenes` | The scenes OBS is showing, by name, the one on air lit |
-| `TotalMix Snapshots` | TotalMix' eight snapshots, by name. The active one is lit, also after you change it |
-| `TotalMix Layouts` | TotalMix' eight layouts, by name. The one you last loaded from here is lit |
-
-The two TotalMix kinds are offered only where ORC is set up, and they use its connection to TotalMix. TotalMix sends no names over OSC, so Rea-Sixty reads them from TotalMix' own settings file, which TotalMix does not rewrite the moment you rename something; a new name shows up once it has. With no connection to TotalMix the names stay and the lamps go dark. TotalMix does not report which layout is showing, so the lit layout key is the last one pressed here.
 
 The three favourite kinds differ in one thing only. The first follows the focus, which is what you want when one bank should serve both. The other two do not, so a rig can carry its channel strips on one bank and its bus comps on another and both are always what they say. All three read the plug-in's short name onto the key, live, and light the key that is on the track.
 
