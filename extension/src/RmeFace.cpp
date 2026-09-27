@@ -167,8 +167,8 @@ std::array<KeyLamp, 18> keyLamps(const LampFacts& f)
         { b::kArrowRight, f.moreRight ? Lamp::Lit : Lamp::Dark },
         { b::kBankLeft,   halves && f.half == 1 ? Lamp::Lit : Lamp::Dark },
         { b::kBankRight,  halves && f.half == 0 ? Lamp::Lit : Lamp::Dark },
-        // 5-8 flips the half and shows it like SSL's own: lit on keys 5-8.
-        { b::k5to8,       halves ? on(f.half == 1) : Lamp::Dark },
+        // 5-8 switches the V-Pot banks: lit on bank 2, as since 22.09. (24e1825).
+        { b::k5to8,       f.strip ? Lamp::Dark : on(f.vpotBank == 1) },
         // Oben/unten die Reihe, links/rechts der Submix, beide mit Umlauf.
         { b::kNavUp,      Lamp::Dim },
         { b::kNavLeft,    Lamp::Dim },
@@ -564,6 +564,7 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
         }
         f.half        = h.bankHalf ? h.bankHalf() : 0;
         f.secondHalf  = h.bankHasSecondHalf && h.bankHasSecondHalf();
+        f.vpotBank    = in.vpotBank.load();
         f.online      = rm.link() == rme::LinkState::Online;
         f.window      = in.windowShown.load();
         f.haveMain    = st.mainOut >= 0;

@@ -184,7 +184,7 @@ int main()
     EXPECT(!bnd::dispatchSideCarKey(bnd::ButtonId::Uf1Rec, true));     // unbound
     EXPECT(!bnd::dispatchSideCarKey(bnd::ButtonId::Uf1Btn360, true));  // never
 
-    // ── Bank ◄ ► pick the half, 5-8 flips it (Frank 27.09.) ────────────────
+    // ── Bank ◄ ► pick the half, 5-8 the V-Pot bank (Frank 27.09.) ──────────
     {
         namespace sk2 = reasixty::rme::softkeys;
         reasixty::rme::input::State s;
@@ -196,22 +196,29 @@ int main()
         ev.kind = ::uf1::InputKind::Button;
         ev.pressed = true;
 
-        EXPECT(sk2::hasSecondHalf(base));      // bank 1: Ext In, Main, TotalMix
-        // 5-8 flips the half and leaves the V-Pot bank alone; its release does nothing.
+        // 5-8 is not the soft keys' any more: stepKey lets it through, and the
+        // side-car's own keys switch the V-Pot bank with it, and back.
         ev.id = ::uf1::btn::k5to8;
-        EXPECT(sk2::stepKey(s, bankIdx, base, 3, ev));
-        EXPECT(s.skHalf.load() == 1 && s.vpotBank.load() == 0);
-        ev.pressed = false;
-        EXPECT(sk2::stepKey(s, bankIdx, base, 3, ev));
-        EXPECT(s.skHalf.load() == 1);
+        EXPECT(!sk2::stepKey(s, bankIdx, base, 3, ev));
+        EXPECT(reasixty::rme::input::button(s, host, reasixty::rme::State{},
+                                            reasixty::rme::Config{}, ev, w));
+        EXPECT(s.vpotBank.load() == 1 && s.skHalf.load() == 0);
+        ev.pressed = false;                  // the release does nothing
+        reasixty::rme::input::button(s, host, reasixty::rme::State{},
+                                     reasixty::rme::Config{}, ev, w);
+        EXPECT(s.vpotBank.load() == 1);
         ev.pressed = true;
-        EXPECT(sk2::stepKey(s, bankIdx, base, 3, ev));
-        EXPECT(s.skHalf.load() == 0);
-        // In STRIP it does nothing, like Bank ◄ ►.
+        reasixty::rme::input::button(s, host, reasixty::rme::State{},
+                                     reasixty::rme::Config{}, ev, w);
+        EXPECT(s.vpotBank.load() == 0);
+        // In STRIP the pots are the page's: 5-8 does nothing.
         s.strip.store(true);
-        EXPECT(sk2::stepKey(s, bankIdx, base, 3, ev));
-        EXPECT(s.skHalf.load() == 0);
+        EXPECT(reasixty::rme::input::button(s, host, reasixty::rme::State{},
+                                            reasixty::rme::Config{}, ev, w));
+        EXPECT(s.vpotBank.load() == 0);
         s.strip.store(false);
+
+        EXPECT(sk2::hasSecondHalf(base));      // bank 1: Ext In, Main, TotalMix
 
         EXPECT(sk2::hasSecondHalf(base + 1));  // snapshots: always eight
         ev.id = ::uf1::btn::kBankRight;
@@ -237,11 +244,6 @@ int main()
         // A static bank with an empty Shift set has no second half: Bank ► stays.
         EXPECT(!sk2::hasSecondHalf(base + 5));
         sk2::pickHalf(s, base + 5, 1);
-        EXPECT(s.skHalf.load() == 0);
-        // Nor does 5-8.
-        bankIdx.store(5);
-        ev.id = ::uf1::btn::k5to8;
-        EXPECT(sk2::stepKey(s, bankIdx, base, 8, ev));
         EXPECT(s.skHalf.load() == 0);
 
         // In STRIP Bank ◄ ► are used up and change nothing.

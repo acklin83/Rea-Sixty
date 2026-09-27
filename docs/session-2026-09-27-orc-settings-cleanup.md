@@ -1,11 +1,14 @@
-# Session 27.09.2026 abends: ORC-Einstellungen aufgeräumt, 5-8 schaltet die Hälfte
+# Session 27.09.2026 abends: ORC-Einstellungen aufgeräumt, 5-8 schaltet die V-Pot-Bank
 
 Franks Meldung mit vier Bildschirmfotos des ORC-Einstellungsfensters.
 
 ## Entscheidungen (Frank, auf Nachfrage)
 
-- **5-8 schaltet die Hälfte**, zusätzlich zu Bank ◄ ►. Lampe: gedimmt = es gibt eine
-  zweite Hälfte, hell = Tasten 5-8 sichtbar, dunkel = keine zweite Hälfte oder STRIP.
+- ~~5-8 schaltet die Hälfte~~ **ÜBERHOLT, Frank später am Abend:** „soft-key hälften haben
+  schon bank < und >. nimm 5-8 für die v-pot bänke". Ich hatte seine Frage „5-8 wieder
+  dazuholen" falsch gelesen und die V-Pot-Bänke damit ohne Taste gelassen. Jetzt: 5-8
+  schaltet V-Pot-Bank 1/2 wie `24e1825` (22.09.), in STRIP nichts. Lampe gedimmt auf
+  Bank 1, hell auf Bank 2, dunkel in STRIP. `RmeInput::button`, `RmeFace::keyLamps`.
 - **Farbnamen und Farbfelder aus SSL 360s eigener Liste** (Issue #8, Abschnitt C,
   `LedColourType`). 0x01 heisst jetzt White und zeigt weiss, obwohl der UF8 ihn
   hellblau zeigte.
@@ -14,7 +17,7 @@ Franks Meldung mit vier Bildschirmfotos des ORC-Einstellungsfensters.
 
 | Teil | Wo |
 |---|---|
-| 5-8 in beiden Programmen | `RmeSoftKeys::stepKey`, Lampe in `RmeFace::keyLamps` |
+| 5-8 = V-Pot-Bank in beiden Programmen | `RmeInput::button`, Lampe in `RmeFace::keyLamps` |
 | Tab-Leiste ohne Fokusring | `tabs.focusRingType` |
 | Alle Hilfesätze raus, keine Rea-Sixty/REAPER-Bezüge mehr im Fenster | `OrcSettingsWindow.mm` |
 | Kanalzählung „INPUT 18 PLAYBACK 1 OUTPUT 5“ raus | dito |

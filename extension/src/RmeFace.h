@@ -124,6 +124,7 @@ struct LampFacts {
     bool strip = false;
     bool moreLeft = false, moreRight = false;  // < >: STRIP pages, else banks
     int  half = 0;                             // the soft-key bank's half on the keys
+    int  vpotBank = 0;                         // the V-Pot bank, 0 or 1 (5-8)
     bool secondHalf = false;                   // the bank has one
     bool online = false;                       // TotalMix answers
     bool window = false;                       // TotalMix' window shown

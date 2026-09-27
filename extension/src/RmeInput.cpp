@@ -368,10 +368,17 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
         out.push_back({ rmes::sendChanAddress(r, sel + 1), 1.0f });
         return true;
     }
-    // ⇨ 5-8 FLIPS THE SOFT-KEY HALF (Frank 27.09. evening), next to Bank ◄ ►.
-    // Both hosts hand it to RmeSoftKeys::stepKey before this function, so it
-    // never arrives here in the overview. It switched the V-Pot banks until
-    // 25.09.; those follow Nav ◄ ► and the channel encoder now.
+    // ⇨ 5-8 SWITCHES THE TWO V-POT BANKS (Frank 27.09. evening: "soft-key
+    // hälften haben schon bank < und >. nimm 5-8 für die v-pot bänke"), as it
+    // did from 22.09. (24e1825) until 25.09. Nav ◄ ► and the channel encoder
+    // still take the bank along (followBank). In STRIP the pots are the page's
+    // parameters, so 5-8 does nothing there.
+    if (id == ::uf1::btn::k5to8) {
+        if (ev.pressed && !s.strip.load())
+            s.vpotBank.store((std::clamp(s.vpotBank.load(), 0, Config::kVpotBanks - 1) + 1)
+                             % Config::kVpotBanks);
+        return true;
+    }
 
     // ⇨ SOLO, CUT, SEL BELONG TO THE FADER CHANNEL IN TOTALMIX (Frank 21.09.:
     // "sollten die nicht im Side-Car Mode komplett weg von Reaper? Sonst sind ja

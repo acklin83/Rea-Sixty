@@ -43,7 +43,7 @@ void pickHalf(input::State& s, int bank, int half);
 
 // ⇨ THE OVERVIEW'S PAGING KEYS, for both programs (Frank 27.09.): < > step the
 // bank within the set (no wrap, the lamps say whether there is more), Bank ◄ ►
-// pick the half, 5-8 flips it. In STRIP < > are the page's (RmeInput::stripSoftKey, called
+// pick the half. 5-8 is the V-Pot bank's (RmeInput::button). In STRIP < > are the page's (RmeInput::stripSoftKey, called
 // first) and Bank ◄ ► do nothing. `bankIdx` is the host's bank within the set,
 // `base` the set's first absolute bank, `count` the banks in use. True = used.
 bool stepKey(input::State& s, std::atomic<int>& bankIdx, int base, int count,
