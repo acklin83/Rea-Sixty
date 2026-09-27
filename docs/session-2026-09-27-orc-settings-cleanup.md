@@ -80,3 +80,31 @@ Frage von Frank. Gemessen im Mitschnitt `/tmp/rme_osc_trace.log` (26.09., Antwor
 Nicht geprüft: ob TotalMix auf dieselben Adressen SCHREIBEND reagiert (wir haben nie
 eine gesendet), und was die Zahlen bei `type` bedeuten. `RmeState` speichert davon heute
 nichts.
+
+### Die Auswahllisten (Franks Bildschirmfotos aus TotalMix, 27.09.)
+
+Der OSC-Wert ist die Position im Menü, von 0 an. Belegt an den gemessenen Werten:
+reverb type 2 = Large Room, echo type 0 = Stereo Echo, echo highcut 0 = off (Mitschnitt
+27.09.); der Mitschnitt vom 26.09. hatte highcut 3, das wäre 8k. Die übrigen Positionen
+folgen der Menüreihenfolge, einzeln gemessen sind sie nicht.
+
+| Wert | reverb type | echo type | echo highcut |
+|---|---|---|---|
+| 0 | Small Room | Stereo Echo | off |
+| 1 | Medium Room | Stereo Cross | 16k |
+| 2 | Large Room | Pong Echo | 12k |
+| 3 | Walls | | 8k |
+| 4 | Shorty | | 4k |
+| 5 | Attack | | 2k |
+| 6 | Swagger | | |
+| 7 | Old School | | |
+| 8 | Echoistic | | |
+| 9 | 8plus9 | | |
+| 10 | Grand Wide | | |
+| 11 | Thicker | | |
+| 12 | Envelope | | |
+| 13 | Gated | | |
+| 14 | Space | | |
+
+Vermutung, ungeprüft: attack/hold/release gehören zu Envelope und Gated, time/highdamp
+zu Space (die drei Typen am Ende der Liste, die andere Regler brauchen).
