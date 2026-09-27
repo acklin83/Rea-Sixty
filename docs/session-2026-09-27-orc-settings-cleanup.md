@@ -115,4 +115,6 @@ zu Space (die drei Typen am Ende der Liste, die andere Regler brauchen).
 Remote-Port bei TotalMix). Frank sah es in TotalMix. Der Mitschnitt von ORC zeigt keine
 Rückmeldung: TotalMix meldet einer Remote nicht, was an ihren eigenen Port geschrieben
 wurde. Ein Side-Car, der Reverb/Echo schreibt, muss den Wert selbst übernehmen.
-Playback-FX-Send (`/playback/<n>/fxsend`) nicht probiert.
+Playback-FX-Send danach auch probiert (19:38, mit Franks Okay): `/playback/0/fxsend -10`,
+fünf Sekunden später `-300` (aus), auf AN 1/2. Frank sah es. **Schreibbar, aber TotalMix
+meldet ihn nie**: der Side-Car kann ihn setzen, aber den aktuellen Wert nicht kennen.
