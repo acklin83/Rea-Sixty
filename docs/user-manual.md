@@ -332,7 +332,7 @@ Per strip, from top to bottom:
 |---|---|---|
 | Top soft-key | SSL Soft-Key for this strip in the current PAGE bank | Default action **SSL Soft-Key (current bank, slot 0..7)**. Rebindable. |
 | Colour TFT (scribble strip) | Upper zone = track name / mode-dependent. Lower zone = parameter readout. Track-colour bar at the bottom. | Hijacked by Plug-in Modes for parameter / FX names. |
-| V-Pot rotation | Pan | Re-maps per Selection Mode (REC + RME → preamp gain, once *V-Pot rotation → Preamp gain ±1 dB* is ticked; FX Cycle / Instance Cycle → walk FX/Instances). In Pan, turning records track-pan automation in Touch mode and holds on release. |
+| V-Pot rotation | Pan | Re-maps per Selection Mode (REC + RME → preamp gain, once *V-Pot rotation → Preamp gain ±1 dB* is ticked; FX Cycle / Instance Cycle → walk FX/Instances). In Pan and in Touch mode, each turn writes a point into the track's pan envelope at the play position, and the value then stays until the envelope's next point, as a plug-in parameter on a V-Pot does. |
 | V-Pot push | Centre Pan | In FX Cycle / Instance Cycle Sel-Modes → open the active FX's GUI. |
 | `SOLO` | Solo | Yellow, the class colour. The track-colour setting in *Appearance → Surface display* drives the SEL LED, not this one. |
 | `CUT` | Mute |  |
@@ -843,6 +843,13 @@ falls back to the plain action, which is why the keys without one are unaffected
 by the modifier.
 
 The cross keys light to show the Razor target you have aimed at.
+
+**Items can take the fader.** Under *Settings → Bindings → UF1 → JOG WHEEL*, tick
+*Fader = Item Volume* on the Items row. With the jog on Items, the UF1 fader then sets
+the volume of every selected item: the first one follows the fader, the others change by
+the same number of dB, so the differences between them stay. The motor follows the first
+item. With no item selected the fader stays where it is and the channel display reads
+*no item*.
 
 **Everything in that table is a factory default, not a fixed rule.** Each cross
 key holds its own binding *per object*, so the same physical key can do six
