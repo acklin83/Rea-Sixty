@@ -64,6 +64,15 @@ nachgezogen. **Gehört in die Notes der nächsten Version.** Der Mixbus-Fall
 („gar nichts“) ist damit nicht sicher erklärt; der Ersatzweg las die fokussierte
 Spur. Nach dem Update nochmal fragen.
 
+## Suchfelder bleiben stehen (`041ca00`)
+
+- Settings, FX Learn: die Parameterzeilen haben ein eigenes Child
+  (`fxl_param_rows`) unter Hinweis und Filter, nur sie scrollen.
+- Learn-HUD: die Zeilen werden auf ihr Band beschnitten
+  (`ImGui_DrawList_PushClipRect`, Signatur aus der installierten ReaImGui gelesen).
+  Vorher lag eine halb sichtbare Zeile über der Filterzeile, samt Klickfläche.
+- Am Bildschirm nicht angesehen (REAPER lief nicht).
+
 ## Offen
 
 - **Frank am Gerät:** alles oben. Gedimmtes Weiss auf dem Nav-Kreuz war vorher
