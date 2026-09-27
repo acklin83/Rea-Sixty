@@ -291,17 +291,18 @@ int main()
         check(r.vpots[2].target == "input:30" && r.vpots[2].push == "mute"
               && r.jogTarget == "phones2" && r.jogStepDb == 1.0 && r.colourMap[4] == 0x09,
               "…and keeps every pot, the jog and the colours");
-        // Two banks (Frank 21.09.): Phones 1-4, then Main A / Main B and two empty.
-        check(c.vpots[4].target == "main" && c.vpots[5].target == "mainB"
+        // Two banks (Frank 21.09.): Phones 1-4, then Main B / Main (TotalMix'
+        // order, Frank 27.09.) and two empty.
+        check(c.vpots[4].target == "mainB" && c.vpots[5].target == "main"
               && c.vpots[6].target.empty() && c.vpots[7].target.empty(),
-              "bank 2 defaults: Main A, Main B, two empty pots");
-        check(r.vpots[6].target.empty() && r.vpots[5].target == "mainB",
+              "bank 2 defaults: Main B, Main, two empty pots");
+        check(r.vpots[6].target.empty() && r.vpots[5].target == "main",
               "an empty pot survives the round trip as empty");
         // A v2 file has four pots: they stay bank 1, bank 2 keeps its defaults.
         Config v2b;
         configFromJson("{\"version\": 2, \"vpots\": [{\"target\": \"output:4\"}, {}, {}, {}]}", v2b);
-        check(v2b.vpots[0].target == "output:4" && v2b.vpots[4].target == "main"
-              && v2b.vpots[5].target == "mainB", "a v2 file fills bank 1 only");
+        check(v2b.vpots[0].target == "output:4" && v2b.vpots[4].target == "mainB"
+              && v2b.vpots[5].target == "main", "a v2 file fills bank 1 only");
         Config a, b = a;
         b.vpots[1].target = "output:4";
         check(a.sameConnection(b), "moving a pot is not a reconnect");
@@ -339,8 +340,8 @@ int main()
         check(u::stepChannel(ins, 2, 1) == 6 && u::stepChannel(ins, 2, -1) == 0,
               "from a channel that vanished, one detent still moves");
 
-        // ⇨ Outputs in TotalMix' order (Frank 27.09.): plain outputs by number,
-        // then the control room block Phones 1-4, Speaker B, Main, found by role.
+        // ⇨ Outputs (Frank 27.09.): the control room first, Phones 1-4, Speaker
+        // B, Main as TotalMix shows them, found by role; then the rest by number.
         {
             State s4;
             auto put4 = [&](const char* addr, float v) {
@@ -357,11 +358,12 @@ int main()
             put4("/controlroom/phones1", 0); put4("/controlroom/phones2", 2);
             put4("/controlroom/phones3", 8); put4("/controlroom/phones4", 10);
             const auto outs = u::visibleChannels(s4, u::Row::Output);
-            const std::vector<int> want = { 12, 0, 2, 8, 10, 6, 4 };
-            check(outs == want, "outputs: the rest, then Phones 1-4, Speaker B, Main");
+            const std::vector<int> want = { 0, 2, 8, 10, 6, 4, 12 };
+            check(outs == want, "outputs: Phones 1-4, Speaker B, Main, then the rest");
             const auto key = [&](int ch) { return u::orderKey(s4, u::Row::Output, ch); };
-            check(u::stepChannel(outs, 10, 1, key) == 6 && u::stepChannel(outs, 6, 1, key) == 4,
-                  "the encoder walks the control room in that order");
+            check(u::stepChannel(outs, 10, 1, key) == 6 && u::stepChannel(outs, 6, 1, key) == 4
+                  && u::stepChannel(outs, 4, 1, key) == 12,
+                  "the encoder walks the control room in that order, then the rest");
             // Phones 3 hidden meanwhile: one detent on lands on Phones 4, back on Phones 2.
             std::vector<int> gap = outs;
             gap.erase(std::find(gap.begin(), gap.end(), 8));

@@ -27,14 +27,15 @@ enum class Row : int { Input = 0, Playback = 1, Output = 2 };
 constexpr int kRowCount = 3;
 const char* rowName(Row r);                 // "INPUT" / "PLAYBACK" / "OUTPUT"
 
-// ⇨ THE ORDER TOTALMIX SHOWS (Frank 27.09.2026: control room "nebeneinander,
-// wie in TotalMix"). Inputs and playbacks by channel number. Outputs: the plain
-// outputs by number, then the control room as its own block on the right, in
-// TotalMix' order Phones 1, 2, 3, 4, Speaker B (Main B), Main. Which channel is
-// which comes from /controlroom/phones1..4, mainoutb, mainout. Sorting by RME's
-// channel number alone mixed them (Phones 1, Phones 2, Main, Main B, Phones 3...)
-// and the channel encoder and nav left/right made the V-Pot bank jump.
-constexpr int kControlRoomKey = 1 << 20;
+// ⇨ THE ORDER OF A ROW (Frank 27.09.2026: control room "nebeneinander, wie in
+// TotalMix", then "zuerst control room, dann der rest"). Inputs and playbacks
+// by channel number. Outputs: the control room first, in TotalMix' order Phones
+// 1, 2, 3, 4, Speaker B (Main B), Main, then every other output by number.
+// Which channel is which comes from /controlroom/phones1..4, mainoutb, mainout.
+// Sorting by RME's channel number alone mixed them (Phones 1, Phones 2, Main,
+// Main B, Phones 3...) and the channel encoder and nav left/right made the
+// V-Pot bank jump.
+constexpr int kControlRoomKey = -(1 << 20);   // below every channel number
 int orderKey(const State& st, Row r, int ch);
 
 // Visible channels of a row in that order: named on this remote and colour != 0.

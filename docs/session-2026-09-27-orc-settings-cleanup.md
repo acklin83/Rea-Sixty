@@ -63,5 +63,20 @@ Block, **Phones 1, Phones 2, Phones 3, Phones 4, Speaker B, Main**.
   kleinste Nummer), ORC-Zielmenü, ORC-Startausgabe. Alle wollen dieselbe Reihenfolge.
 - `test_rme_input` hielt die alte Nummernordnung fest (Main vor Phones 1), angepasst.
   Neuer Test in `test_rme_osc`, fällt ohne die Sortierung um.
-- Nicht angefasst: auf deiner Bank 2 liegt Main auf Pot 1 und Main B auf Pot 2, in
-  TotalMix steht Speaker B links von Main.
+- Danach Frank: **Control Room zuerst**, dann die übrigen Ausgänge
+  (`kControlRoomKey` negativ). Und Bank 2 ab Werk **Main B, Main** (TotalMix'
+  Reihenfolge), `RmeManager.h`. Franks eigene `rme.json` bei gestopptem ORC ebenso
+  gedreht (Zeilen 10/11 getauscht, Rest unverändert).
+
+## Reverb und Echo über OSC
+
+Frage von Frank. Gemessen im Mitschnitt `/tmp/rme_osc_trace.log` (26.09., Antwort auf
+`/sendall`): TotalMix SENDET
+- `/reverb/` enable, type, predelay, lowcut, highcut, attack, hold, release, roomscale,
+  time, highdamp, smooth, volume, width
+- `/echo/` enable, type, delay, feedback, highcut, volume, width
+- pro Eingang `/input/<n>/fxsend` (dB), pro Ausgang `/output/<n>/fxreturn` (dB),
+  `/controlroom/mutefx`. Kein `/playback/<n>/fxsend` im Mitschnitt.
+Nicht geprüft: ob TotalMix auf dieselben Adressen SCHREIBEND reagiert (wir haben nie
+eine gesendet), und was die Zahlen bei `type` bedeuten. `RmeState` speichert davon heute
+nichts.
