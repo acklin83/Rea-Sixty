@@ -20426,13 +20426,31 @@ const StickyPin* stickyPinFor_(MediaTrack* tr)
 // no pin or the pinned FX is gone (deleted / chunk-replaced) — the strip then
 // falls back to its normal V-Pot behaviour. Does NOT check the global gate or
 // routing; callers gate those.
+// ⇨ A PIN THAT DOES NOT RESOLVE SAYS SO, once per pin and reason (27.09.2026:
+// a pin on a 4K's HF Gain showed the banner, and the V-Pot then rode pan).
+static void stickyLogUnresolved_(const StickyPin& pin, const char* why, int n)
+{
+    static std::string sLast;
+    const std::string key = pin.fxGuid + ";" + std::to_string(pin.vst3Param) + ";" + why;
+    if (key == sLast) return;
+    sLast = key;
+    if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+        std::fprintf(lg, "[sticky] pin does not resolve: %s (fx %s, param %d, n %d)\n",
+                     why, pin.fxGuid.c_str(), pin.vst3Param, n);
+        std::fclose(lg);
+    }
+}
+
 bool stickyResolveOnTrack_(MediaTrack* tr, int* fxOut, int* paramOut, bool* toggleOut)
 {
     const StickyPin* pin = stickyPinFor_(tr);
     if (!pin || pin->vst3Param < 0) return false;
     const int fx = uf8::findFxIndexByGuid(tr, pin->fxGuid);
-    if (fx < 0) return false;
-    if (pin->vst3Param >= TrackFX_GetNumParams(tr, fx)) return false;
+    if (fx < 0) { stickyLogUnresolved_(*pin, "fx guid not on track", -1); return false; }
+    if (const int n = TrackFX_GetNumParams(tr, fx); pin->vst3Param >= n) {
+        stickyLogUnresolved_(*pin, "param index past the plug-in's count", n);
+        return false;
+    }
     if (fxOut)     *fxOut     = fx;
     if (paramOut)  *paramOut  = pin->vst3Param;
     if (toggleOut) *toggleOut = pin->toggle;
@@ -20452,6 +20470,16 @@ void stickyPotAssign_(MediaTrack* tr, int fx, int param)
     pin.fxGuid    = fxg;
     pin.vst3Param = param;
     pin.toggle    = isToggle;
+    if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+        char tn[128] = {0}, fn[256] = {0}, pn[128] = {0};
+        GetTrackName(tr, tn, sizeof(tn));
+        TrackFX_GetFXName(tr, fx, fn, sizeof(fn));
+        TrackFX_GetParamName(tr, fx, param, pn, sizeof(pn));
+        std::fprintf(lg, "[sticky] pinned track \"%s\" %s fx %d \"%s\" %s param %d \"%s\" of %d\n",
+                     tn, trackGuidStr_(tr).c_str(), fx, fn, fxg.c_str(), param, pn,
+                     TrackFX_GetNumParams(tr, fx));
+        std::fclose(lg);
+    }
     g_stickyPins[trackGuidStr_(tr)] = std::move(pin);
     g_stickyCaptureAnnounce.store(1);  // banner: "Sticky • Pinned"
     g_stickyActive.store(true);        // assigning implies active
