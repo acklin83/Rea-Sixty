@@ -2173,6 +2173,11 @@ extern MediaTrack* g_uf1FaderVolTr;
 // strips 0..7, the UF1 = kUf1PanTouchSlot). Set by flipPanWrite_, read by
 // GetTouchState while that fader's hand is on it. Main thread only.
 extern std::array<MediaTrack*, kPanTouchSlots> g_faderPanTr;
+// The track whose VOLUME each UF8 fader wrote during this touch, nullptr when it
+// wrote something else (a plug-in parameter, pan). GetTouchState reports only
+// that: a fader on a parameter reported "volume touched" and REAPER wrote
+// volume and pan points it never moved (Frank 27.09.2026). Cleared on release.
+inline std::array<MediaTrack*, 8> g_faderVolTr{};
 // Defined with the V-Pot pan code below; the UF1's pan pot calls it earlier.
 static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta);
 
@@ -20218,12 +20223,16 @@ static bool potEnvelopeWrite_(MediaTrack* modeTr, TrackEnvelope* env, PotEnv kin
         if (std::fabs(pt - t) < 0.005) {
             SetEnvelopePointEx(env, -1, prev, &pt, &raw, &shape, &tension, &sel, &noSort);
             Envelope_SortPointsEx(env, -1);
+            UpdateArrange();
             g_potEnvUndoDueMs = nowMs_() + 400;
             return true;
         }
     }
     InsertEnvelopePointEx(env, -1, t, raw, shape, tension, false, &noSort);
     Envelope_SortPointsEx(env, -1);
+    // Draw it now (Frank 27.09.2026: the curve only appeared at Stop, when
+    // REAPER redraws on its own).
+    UpdateArrange();
     g_potEnvUndoDueMs = nowMs_() + 400;
     return true;
 }
@@ -21967,6 +21976,7 @@ void drainInputQueue()
                 // cache the value — motor echo reads GetTrackUIVolPan
                 // on each tick so it always reflects whatever REAPER
                 // actually has (including envelope playback).
+                if (e.strip < 8) g_faderVolTr[e.strip] = tr;   // before the write
                 CSurf_OnVolumeChange(tr, e.value, false);
                 break;
             }
@@ -23469,11 +23479,9 @@ bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
         }
         // A fader riding pan under FLIP, with the hand on it (flipPanWrite_).
         if (tr) {
-            // Only while FLIP is on: the UF8's entries are not cleared per pass,
-            // so FLIP is what says the entry is current.
-            if (g_flip.load())
-                for (int s = 0; s < 8; ++s)
-                    if (g_faderPanTr[s] == tr && g_touchReported[s].load()) return true;
+            // Cleared on every release, so an entry is this touch's own.
+            for (int s = 0; s < 8; ++s)
+                if (g_faderPanTr[s] == tr && g_touchReported[s].load()) return true;
             if (g_faderPanTr[kUf1PanTouchSlot] == tr && g_uf1FaderTouched.load())
                 return true;
         }
@@ -23481,10 +23489,9 @@ bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
     }
     for (int s = 0; s < 8; ++s) {
         if (!g_touchReported[s].load()) continue;
-        // Under FLIP this fader holds PAN, not volume: holding it must not
-        // freeze the track's volume automation.
-        if (g_flip.load() && g_faderPanTr[s] == tr) continue;
-        if (g_slotTrack[s] == tr) return true;
+        // Only when this touch wrote THIS track's volume (g_faderVolTr). A fader
+        // on a plug-in parameter or on pan under FLIP is no volume touch.
+        if (g_faderVolTr[s] == tr) return true;
     }
     // ⇨ AND THE UF1 FADER (Frank 27.09.2026: "wieso macht das UF1 nicht mit bei
     // automatisierten sachen"). Only the eight UF8 strips were ever reported, so
@@ -41087,6 +41094,8 @@ void commitDebouncedTouchReleases()
         MediaTrack* tr = g_slotTrack[s];
         if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) {
             endFaderFxEdit_(static_cast<int>(s));
+            g_faderVolTr[s] = nullptr;
+            g_faderPanTr[s] = nullptr;
             continue;
         }
 
@@ -41222,6 +41231,7 @@ void commitDebouncedTouchReleases()
                         }
                     } else {
                         const double tLin = pbToLinearVolume(touchPb);
+                        g_faderVolTr[s] = tr;
                         CSurf_OnVolumeChange(tr, tLin, false);
                     }
                 } else if (g_pluginFaderMode.load()) {
@@ -41242,18 +41252,23 @@ void commitDebouncedTouchReleases()
                         }
                     } else {
                         const double tLin = pbToLinearVolume(touchPb);
+                        g_faderVolTr[s] = tr;
                         CSurf_OnVolumeChange(tr, tLin, false);
                     }
                 } else {
                     const double tLin = pbToLinearVolume(touchPb);
+                    g_faderVolTr[s] = tr;
                     CSurf_OnVolumeChange(tr, tLin, false);
                 }
             }
         }
 
         // The hand is off: a plug-in parameter this fader wrote ends its edit, so
-        // Touch returns it like track volume (TrackFX_EndParamEdit).
+        // Touch returns it like track volume (TrackFX_EndParamEdit), and what it
+        // reported as touched is forgotten, so the next touch starts clean.
         endFaderFxEdit_(static_cast<int>(s));
+        g_faderVolTr[s] = nullptr;
+        g_faderPanTr[s] = nullptr;
 
         // Re-engage the motor ONLY if the user actually moved the fader
         // during this touch. SSL 360° on Windows verified 2026-05-06 via
