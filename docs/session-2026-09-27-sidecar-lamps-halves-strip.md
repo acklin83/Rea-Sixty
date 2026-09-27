@@ -52,6 +52,18 @@ platzgetreu, Stereo), `test_rme_softkeys` (Bank ◄ ► wählt, 5-8 geschluckt,
 < > ohne Umlauf, keine zweite Hälfte, STRIP). Gegen zwei absichtliche Brüche
 geprüft (Nav hell, Packen aus). ctest 17/17.
 
+## Meter-Forum: der 360-Core-Empfänger läuft jetzt immer
+
+Drei Berichte (zwei Win 11, einer macOS Tahoe): Goniometer und RTA leer, Pegel,
+Infofeld und VU laufen. Ursache: der Impersonator war opt-in über ExtState
+`rea_sixty/ssl_core`, den keine Settings-Seite, kein Installer und nicht das
+Handbuch setzt. Frank hat ihn seit Juli an, darum ging es bei ihm überall.
+Frank: kein Schalter, jeder Nutzer hat SSL 360 zu, das ist unsere Bedingung.
+Jetzt startet er immer (`main.cpp`, Tor und ExtState entfernt), README
+nachgezogen. **Gehört in die Notes der nächsten Version.** Der Mixbus-Fall
+(„gar nichts“) ist damit nicht sicher erklärt; der Ersatzweg las die fokussierte
+Spur. Nach dem Update nochmal fragen.
+
 ## Offen
 
 - **Frank am Gerät:** alles oben. Gedimmtes Weiss auf dem Nav-Kreuz war vorher
