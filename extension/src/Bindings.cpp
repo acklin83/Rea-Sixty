@@ -7228,6 +7228,15 @@ static const std::vector<Uf1BankPreset>& factoryUf1Banks_()
             {"focus_set_replace", "Focus = Sel", 0},
             {"focus_scope_cycle",              "Focus Scope", 0},
         }));
+        // ⇨ STICKY POT, ITS OWN BANK ON THE UF1 (Frank 27.09.2026: "wo sind pin
+        // sticky, pair sticky und sticky on/off für UF1 als factory bank?"). The
+        // UF8 carries them on its Focus Set bank's Shift half; the UF1's Focus
+        // Set is full on both halves (4 + 4), so they sit next to it instead.
+        v.push_back(bank("Sticky Pot", {
+            {"sticky_pot_get_next", "Pin Sticky",   0},
+            {"sticky_pot_pair",     "Pair Sticky",  0},
+            {"sticky_pot_toggle",   "Sticky OnOff", 0},
+        }));
         // Recording control only. The scenes themselves are the ObsScenes
         // dynamic kind; a bank of three is the honest size of what is left.
         // (The "RME Monitor" preset left on 25.09.2026 with the RME actions:
