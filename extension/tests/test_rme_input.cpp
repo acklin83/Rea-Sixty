@@ -194,7 +194,7 @@ int main()
         s.submix.store(6);          // Phones 1
         s.vpotBank.store(0);
         in_::button(s, bare, st, c2, press(::uf1::btn::kNavRight), w);
-        EXPECT(s.submix.load() == 0);      // outputs 0 and 6: 6 -> 0 wraps
+        EXPECT(s.submix.load() == 0);      // TotalMix' order Phones 1 (6), Main (0)
         EXPECT(s.vpotBank.load() == 1);    // Main is on bank 2
         in_::button(s, bare, st, c2, press(::uf1::btn::kNavRight), w);
         EXPECT(s.submix.load() == 6);
@@ -210,10 +210,16 @@ int main()
         s.row.store(2);             // Output
         s.sel[2].store(6);          // Phones 1, bank 1
         s.vpotBank.store(0);
-        for (int i = 0; i < 4; ++i)  // one detent back: 6 -> 0 (Main)
-            in_::encoder(s, bare, st, c2, ::uf1::enc::kChannel, -1, w);
+        // One detent on: Phones 1 -> Main. TotalMix shows Main right of the
+        // phones; by channel number (0 before 6) it used to be a detent back.
+        for (int i = 0; i < 4; ++i)
+            in_::encoder(s, bare, st, c2, ::uf1::enc::kChannel, +1, w);
         EXPECT(s.sel[2].load() == 0);
         EXPECT(s.vpotBank.load() == 1);
+        for (int i = 0; i < 4; ++i)  // and back
+            in_::encoder(s, bare, st, c2, ::uf1::enc::kChannel, -1, w);
+        EXPECT(s.sel[2].load() == 6);
+        EXPECT(s.vpotBank.load() == 0);
     }
 
     // ── the nav centre toggles TotalMix' window and remembers it ─────────────

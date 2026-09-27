@@ -339,6 +339,38 @@ int main()
         check(u::stepChannel(ins, 2, 1) == 6 && u::stepChannel(ins, 2, -1) == 0,
               "from a channel that vanished, one detent still moves");
 
+        // ⇨ Outputs in TotalMix' order (Frank 27.09.): plain outputs by number,
+        // then the control room block Phones 1-4, Speaker B, Main, found by role.
+        {
+            State s4;
+            auto put4 = [&](const char* addr, float v) {
+                Message m; m.address = addr; m.args.push_back(Arg::fromFloat(v)); ingest(s4, m);
+            };
+            auto out4 = [&](int ch, const char* n) {
+                const std::string a = "/output/" + std::to_string(ch);
+                Message m; m.address = a + "/name"; m.args.push_back(Arg::fromString(n)); ingest(s4, m);
+                put4((a + "/color").c_str(), 1);
+            };
+            out4(0, "AN 1/2"); out4(2, "AN 3/4"); out4(4, "AN 5/6"); out4(6, "AN 7/8");
+            out4(8, "PH 9/10"); out4(10, "PH 11/12"); out4(12, "ADAT 1/2");
+            put4("/controlroom/mainout", 4); put4("/controlroom/mainoutb", 6);
+            put4("/controlroom/phones1", 0); put4("/controlroom/phones2", 2);
+            put4("/controlroom/phones3", 8); put4("/controlroom/phones4", 10);
+            const auto outs = u::visibleChannels(s4, u::Row::Output);
+            const std::vector<int> want = { 12, 0, 2, 8, 10, 6, 4 };
+            check(outs == want, "outputs: the rest, then Phones 1-4, Speaker B, Main");
+            const auto key = [&](int ch) { return u::orderKey(s4, u::Row::Output, ch); };
+            check(u::stepChannel(outs, 10, 1, key) == 6 && u::stepChannel(outs, 6, 1, key) == 4,
+                  "the encoder walks the control room in that order");
+            // Phones 3 hidden meanwhile: one detent on lands on Phones 4, back on Phones 2.
+            std::vector<int> gap = outs;
+            gap.erase(std::find(gap.begin(), gap.end(), 8));
+            check(u::stepChannel(gap, 8, 1, key) == 10 && u::stepChannel(gap, 8, -1, key) == 2,
+                  "from a vanished control-room channel, one detent moves by TotalMix' order");
+            const auto ins4 = u::visibleChannels(s4, u::Row::Input);
+            check(ins4.empty(), "no inputs sent, none listed");
+        }
+
         const auto p1 = u::resolveTarget(s3, "phones1");
         check(p1.row == u::Row::Output && p1.ch == 8 && p1.visible, "phones1 is the role");
         const auto p3 = u::resolveTarget(s3, "phones3");

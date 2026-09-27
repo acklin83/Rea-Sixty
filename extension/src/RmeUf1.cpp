@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <functional>
 
 namespace reasixty::rme::uf1 {
 
@@ -45,15 +46,35 @@ std::string displayName(const State& st, Row r, int ch)
     return c ? c->name : std::string();
 }
 
+int orderKey(const State& st, Row r, int ch)
+{
+    if (r != Row::Output || ch < 0) return ch;
+    // TotalMix FX, control room section, left to right (seen 27.09.2026).
+    const int cr[6] = { st.phones[0], st.phones[1], st.phones[2], st.phones[3],
+                        st.mainOutB, st.mainOut };
+    for (int i = 0; i < 6; ++i)
+        if (cr[i] == ch) return kControlRoomKey + i;
+    return ch;
+}
+
 std::vector<int> visibleChannels(const State& st, Row r)
 {
     std::vector<int> v;
     for (const auto& [idx, c] : mapOf(st, r))
         if (c.seen && c.colour != 0) v.push_back(idx);   // std::map: ascending
+    std::stable_sort(v.begin(), v.end(), [&](int a, int b) {
+        return orderKey(st, r, a) < orderKey(st, r, b);
+    });
     return v;
 }
 
 int stepChannel(const std::vector<int>& list, int cur, int delta)
+{
+    return stepChannel(list, cur, delta, [](int ch) { return ch; });
+}
+
+int stepChannel(const std::vector<int>& list, int cur, int delta,
+                const std::function<int(int)>& key)
 {
     if (list.empty()) return -1;
     auto it = std::find(list.begin(), list.end(), cur);
@@ -62,8 +83,11 @@ int stepChannel(const std::vector<int>& list, int cur, int delta)
         pos = static_cast<int>(it - list.begin()) + delta;
     } else {
         // Not in the list (hidden meanwhile, or never set): the first entry past
-        // it in the direction of travel, so one detent is never a no-op.
-        const auto up = std::upper_bound(list.begin(), list.end(), cur);
+        // it in the direction of travel, so one detent is never a no-op. "Past"
+        // in the list's own order, which for outputs is not the channel number.
+        const int k = key(cur);
+        const auto up = std::partition_point(list.begin(), list.end(),
+                                             [&](int ch) { return key(ch) <= k; });
         const int  at = static_cast<int>(up - list.begin());
         pos = (delta > 0) ? at + (delta - 1) : at - 1 + (delta + 1);
     }

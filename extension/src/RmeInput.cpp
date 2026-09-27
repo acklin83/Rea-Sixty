@@ -192,7 +192,8 @@ bool encoder(State& s, const Host& h, const rme::State& st, const Config& cfg,
         }
         const auto r = static_cast<rmeu::Row>(std::clamp(s.row.load(), 0, 2));
         const int n = rmeu::stepChannel(rmeu::visibleChannels(st, r),
-                                        selected(s, st, r), steps);
+                                        selected(s, st, r), steps,
+                                        [&](int ch) { return rmeu::orderKey(st, r, ch); });
         if (n >= 0) {
             select(s, r, n);
             followBank(s, st, cfg, r, n);

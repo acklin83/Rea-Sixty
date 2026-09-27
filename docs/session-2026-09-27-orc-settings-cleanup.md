@@ -41,3 +41,24 @@ Franks Meldung mit vier Bildschirmfotos des ORC-Einstellungsfensters.
 
 - ORC-Menü „UF1 not open: handed over to REAPER“ nennt REAPER. Nur sichtbar, wenn
   Rea-Sixty den UF1 übernimmt; nicht angefasst.
+
+## Nachtrag: Control Room in TotalMix' Reihenfolge
+
+Frank: die Control-Room-Ausgänge hüpften beim Kanal-Encoder und Nav ◄ ► durcheinander
+(Phones 1, Phones 2, Main, Main B, Phones 3 …), weil `visibleChannels` nach RMEs
+Kanalnummer sortierte, und `followBank` die V-Pot-Bank jedes Mal mitnahm.
+In TotalMix nachgesehen (Fenster, 27.09.): der Control Room steht rechts als eigener
+Block, **Phones 1, Phones 2, Phones 3, Phones 4, Speaker B, Main**.
+
+- `RmeUf1::orderKey`: übrige Ausgänge nach Nummer, dann die Rollen aus
+  `/controlroom/phones1..4`, `mainoutb`, `mainout` in dieser Reihenfolge.
+  `visibleChannels` sortiert danach (Eingänge, Playbacks unverändert).
+- `stepChannel` bekommt den Schlüssel mit: von einem inzwischen versteckten Kanal
+  suchte es per `upper_bound` in Nummernordnung.
+- Leser von `visibleChannels` geprüft: Kanal-Encoder, Nav ◄ ► (Submix), `selected`,
+  `effectiveSubmix` (Rückfall ohne Main ist jetzt der erste gezeigte statt die
+  kleinste Nummer), ORC-Zielmenü, ORC-Startausgabe. Alle wollen dieselbe Reihenfolge.
+- `test_rme_input` hielt die alte Nummernordnung fest (Main vor Phones 1), angepasst.
+  Neuer Test in `test_rme_osc`, fällt ohne die Sortierung um.
+- Nicht angefasst: auf deiner Bank 2 liegt Main auf Pot 1 und Main B auf Pot 2, in
+  TotalMix steht Speaker B links von Main.

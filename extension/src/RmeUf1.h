@@ -17,6 +17,7 @@
 #include "RmeState.h"
 #include "Uf1EqCurve.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -26,12 +27,25 @@ enum class Row : int { Input = 0, Playback = 1, Output = 2 };
 constexpr int kRowCount = 3;
 const char* rowName(Row r);                 // "INPUT" / "PLAYBACK" / "OUTPUT"
 
-// Visible channels of a row, ascending: named on this remote and colour != 0.
+// ⇨ THE ORDER TOTALMIX SHOWS (Frank 27.09.2026: control room "nebeneinander,
+// wie in TotalMix"). Inputs and playbacks by channel number. Outputs: the plain
+// outputs by number, then the control room as its own block on the right, in
+// TotalMix' order Phones 1, 2, 3, 4, Speaker B (Main B), Main. Which channel is
+// which comes from /controlroom/phones1..4, mainoutb, mainout. Sorting by RME's
+// channel number alone mixed them (Phones 1, Phones 2, Main, Main B, Phones 3...)
+// and the channel encoder and nav left/right made the V-Pot bank jump.
+constexpr int kControlRoomKey = 1 << 20;
+int orderKey(const State& st, Row r, int ch);
+
+// Visible channels of a row in that order: named on this remote and colour != 0.
 std::vector<int> visibleChannels(const State& st, Row r);
 
 // Step through a list by `delta`, clamped at both ends. A `cur` not in the list
-// lands on the nearest entry in the direction of travel.
+// lands on the nearest entry in the direction of travel; `key` is the order the
+// list is sorted by (orderKey for a row), plain channel number without one.
 int stepChannel(const std::vector<int>& list, int cur, int delta);
+int stepChannel(const std::vector<int>& list, int cur, int delta,
+                const std::function<int(int)>& key);
 
 // A V-Pot or jog target from rme.json: a role TotalMix names itself ("main",
 // "mainB", "phones1".."phones4", "talk"), or a fixed channel ("output:8",
