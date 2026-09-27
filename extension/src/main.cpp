@@ -105,7 +105,6 @@
 #include "Uf1Text.h"
 #include "RmeManager.h"
 #include "RmeNames.h"
-#include "PotTouch.h"
 #include "BindingsPick.h"
 #include "RmeStrip.h"
 #include "RmeUf1.h"
@@ -2177,26 +2176,13 @@ extern std::array<MediaTrack*, kPanTouchSlots> g_faderPanTr;
 // Defined with the V-Pot pan code below; the UF1's pan pot calls it earlier.
 static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta);
 
-// ⇨ A POT HOLDS ITS TOUCH UNTIL THE TRANSPORT STOPS (Frank 27.09.2026: "pan soll
-// in touch nur auf den alten wert zurück, wenn pan über flip auf dem fader
-// automatisiert wird. gilt für alle parameter"). A pot has no touch sensor, so
-// the timed window made Touch let go 250 ms after the hand stopped turning and
-// the automation took the value back. Now, while the transport rolls, a pot's
-// touch stays until Stop, like REAPER's Latch; only a fader with a sensor lets
-// go when the hand does. Stopped, the short window stays (nothing records).
-// ONE rule for every pot edit: track pan, track volume, send pan, send volume.
-// Plug-in parameters are REAPER's own and already hold (Frank: "fährt nicht
-// zurück. soll genau so sein").
-// The rule itself is PotTouch.h, pure and tested; these hand it the play state.
-inline bool transportRolling_() { return (GetPlayState() & 5) != 0; }   // play | record
-inline int64_t potHoldUntil_(int64_t now, int64_t windowMs)
-{
-    return reasixty::pot_touch::holdUntil(now, windowMs, transportRolling_());
-}
-inline bool potHoldLive_(int64_t now, int64_t until)
-{
-    return reasixty::pot_touch::live(now, until, transportRolling_());
-}
+// ⇨ A POT'S TOUCH IS A SHORT WINDOW AFTER ITS LAST STEP. A pot has no touch
+// sensor. On 27.09.2026 it held until Stop for a few minutes; that kept pan
+// writing in Touch after the hand had gone and held a later FLIP fader's pan
+// against its return (Frank: pots behave like plug-in parameters). One rule for
+// every pot edit: track pan, track volume, send pan, send volume.
+inline int64_t potHoldUntil_(int64_t now, int64_t windowMs) { return now + windowMs; }
+inline bool potHoldLive_(int64_t now, int64_t until) { return until != 0 && now <= until; }
 
 // Volume on a pot, the pan pot's twin (writeVpotTrackVol_): 0..7 UF8 strips,
 // 8 the UF1's pot above the fader, 9..12 the UF1 DAW view's four pots.
@@ -7498,7 +7484,7 @@ void writeRoutePanAutomation_(const StripRoute& r, int strip, double pan)
         g_sendPanEditVal[strip]   = pan;
         // V-Pot pan has no touch-release; arm a timed end-of-edit. The fader-flip
         // path calls finishRoutePanEdit_ on release first, clearing this.
-        g_sendPanEditUntilMs[strip] = potHoldUntil_(nowMs_(), 300);   // until Stop
+        g_sendPanEditUntilMs[strip] = potHoldUntil_(nowMs_(), 300);
     } else {
         SetTrackSendInfo_Value(r.track, r.sendCategory, r.sendIndex, "D_PAN", pan);
         g_sendPanEditUiIdx[strip] = INT_MIN;
@@ -20133,7 +20119,7 @@ static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta)
     if (next >  1.0) next =  1.0;
     g_panTouchVal[strip]     = next;
     g_panTouchTr[strip]      = tr;
-    g_panTouchUntilMs[strip] = potHoldUntil_(now, kPanTouchHoldMs);  // held until Stop
+    g_panTouchUntilMs[strip] = potHoldUntil_(now, kPanTouchHoldMs);  // arm/extend fake touch
     CSurf_OnPanChange(tr, next, false);                // absolute → REAPER records
 }
 
@@ -20143,7 +20129,7 @@ static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta)
 // touch: REAPER never held the envelope, so every read got the automation's
 // value again and every write fought it. Same cure as pan: seed an accumulator
 // from the EFFECTIVE volume when a gesture starts, step it in software, write it
-// absolute, and report the touch (GetTouchState) until Stop. `step` maps the
+// absolute, and report the touch (GetTouchState) for the pot window. `step` maps the
 // current linear volume to the new one, so each caller keeps its own feel.
 static void writeVpotTrackVol_(MediaTrack* tr, int slot,
                                const std::function<double(double)>& step)
@@ -23364,7 +23350,7 @@ bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
     // in Touch REAPER never knew the UF1 fader was held: automation kept
     // playing under the hand and nothing was recorded.
     if (tr && tr == g_uf1FaderVolTr && g_uf1FaderTouched.load()) return true;
-    // And every pot that wrote this track's volume, held until Stop.
+    // And every pot that wrote this track's volume, within its window.
     if (tr) {
         const int64_t now = nowMs_();
         for (int s = 0; s < kVolTouchSlots; ++s)
@@ -30963,7 +30949,7 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
         sSAcc[vi] = std::max(nDb, kUf1VpotFloorDb);
         sSMs[vi]  = now;
         writeRouteVolAutomation_(r, strip, uf1VpotVolLinear_(nDb));
-        g_sendVolEditUntilMs[strip] = potHoldUntil_(now, 300);   // Touch finalise at Stop
+        g_sendVolEditUntilMs[strip] = potHoldUntil_(now, 300);   // idle-timed Touch finalise
         return;
     }
 
