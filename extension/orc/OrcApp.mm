@@ -3,7 +3,7 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "RmeManager.h"
+#include "OrcConfig.h"
 #include "Surface.h"
 
 namespace rme = reasixty::rme;
@@ -67,17 +67,8 @@ static orc::Surface* g_surface = nullptr;
             ? [NSString stringWithFormat:@"UF1   held by ORC, %s", st.serial.c_str()]
             : [NSString stringWithFormat:@"UF1   not open: %s", st.error.c_str()];
     }
-    auto& mgr = rme::manager();
-    const char* word = "off";
-    switch (mgr.link()) {
-        case rme::LinkState::Off:      word = "off";        break;
-        case rme::LinkState::PortBusy: word = "port taken"; break;
-        case rme::LinkState::Waiting:  word = "waiting";    break;
-        case rme::LinkState::Online:   word = "online";     break;
-        case rme::LinkState::Silent:   word = "gone quiet"; break;
-    }
-    self.mixerLine.title = [NSString stringWithFormat:@"TotalMix   %s, %s",
-                                     word, mgr.status().c_str()];
+    self.mixerLine.title = [NSString stringWithFormat:@"TotalMix   %s",
+                                     orc::linkSummary().c_str()];
 }
 
 - (void)openSettings:(id)sender { [[OrcSettingsWindowController shared] present]; }

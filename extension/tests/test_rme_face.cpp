@@ -141,7 +141,7 @@ int main()
         // none (Frank 27.09.: the first version had it "genau falsch herum").
         EXPECT(lampOf(ls, b::kBankLeft) == L::Dark);
         EXPECT(lampOf(ls, b::kBankRight) == L::Lit);
-        EXPECT(lampOf(ls, b::k5to8) == L::Dark);
+        EXPECT(lampOf(ls, b::k5to8) == L::Dim);          // there is a second half
         EXPECT(lampOf(ls, b::kNavUp) == L::Dim && lampOf(ls, b::kNavLeft) == L::Dim
                && lampOf(ls, b::kNavRight) == L::Dim && lampOf(ls, b::kNavDown) == L::Dim);
         EXPECT(lampOf(ls, b::kNavCentre) == L::Dim);     // TotalMix hidden
@@ -154,17 +154,20 @@ int main()
         f.half = 1; f.window = true; f.mainOnFader = true; f.stereo = true;
         ls = face::keyLamps(f);
         EXPECT(lampOf(ls, b::kBankLeft) == L::Lit && lampOf(ls, b::kBankRight) == L::Dark);
+        EXPECT(lampOf(ls, b::k5to8) == L::Lit);          // keys 5-8 showing
         EXPECT(lampOf(ls, b::kNavCentre) == L::Lit);
         EXPECT(lampOf(ls, b::kMaster) == L::Lit);
         EXPECT(lampOf(ls, b::kChannelSoftKey) == L::Lit);
 
-        // No second half, or STRIP: Bank ◄ ► do nothing, so they are dark.
+        // No second half, or STRIP: Bank ◄ ► and 5-8 do nothing, so they are dark.
         f.secondHalf = false;
         ls = face::keyLamps(f);
         EXPECT(lampOf(ls, b::kBankLeft) == L::Dark && lampOf(ls, b::kBankRight) == L::Dark);
+        EXPECT(lampOf(ls, b::k5to8) == L::Dark);
         f.secondHalf = true; f.strip = true;
         ls = face::keyLamps(f);
         EXPECT(lampOf(ls, b::kBankLeft) == L::Dark && lampOf(ls, b::kBankRight) == L::Dark);
+        EXPECT(lampOf(ls, b::k5to8) == L::Dark);
         // No link, no Main, no channel: those keys do nothing.
         f = face::LampFacts{};
         ls = face::keyLamps(f);

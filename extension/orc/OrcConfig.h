@@ -44,6 +44,12 @@ bool saveRmeConfig(const reasixty::rme::Config& c);
 // depend on whether anybody is looking at a settings page.
 std::string saveRmeConfigIfDirty();
 
+// The TotalMix link in a few words, for the menu bar and the settings page:
+// "online", "off", "waiting for TotalMix", or the reason it is down. ⇨ Says
+// nothing the port fields beside it already say (Frank 27.09.2026: "nicht
+// wiederholen").
+std::string linkSummary();
+
 // ⇨ THE HANDOVER TO REA-SIXTY (Frank 25.09.2026, "Weg c"). Rea-Sixty, when its
 // setting "Take the UF1 over from ORC" is on, writes its REAPER pid into
 // <supportDir>/handover while it wants the UF1, and removes it on quit. True

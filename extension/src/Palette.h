@@ -33,8 +33,12 @@ uint8_t quantize(uint32_t rgb24);
 std::optional<Rgb> paletteEntry(uint8_t index);
 
 // The word for an index, for anywhere a person has to pick one. Never nullptr;
-// an index with no colour answers "off". The names are the ones in the kPalette
-// table's comments, in one place so nobody writes a second list.
+// an index with no colour answers "off". SSL 360's own names (LedColourType),
+// in one place so nobody writes a second list.
 const char* paletteName(uint8_t index);
+
+// The colour SSL 360 draws for that name, for a swatch beside it. Not the
+// quantiser's reference (paletteEntry): that one is what a UF8 looked like.
+std::optional<Rgb> paletteSwatch(uint8_t index);
 
 } // namespace uf8

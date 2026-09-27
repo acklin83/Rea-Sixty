@@ -8,6 +8,8 @@
 #include "RmeUf1.h"
 
 #include <algorithm>
+#include <cctype>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -21,38 +23,61 @@ namespace {
 // then whatever this remote can actually see, named as TotalMix names it.
 // ⇨ Built from the live state, so the list is the mixer's answer rather than one
 // we keep in step by hand.
+// ⇨ WORDS, NOT SPECS (Frank 27.09.2026: "liest sich wie code", "nicht
+// wiederholen"). A role reads as its name, with the channel only where TotalMix
+// calls it something else; a channel reads as its TotalMix name under a heading
+// for its row. The spec stays behind the entry. A heading has no spec.
 struct Choice {
     std::string spec;
     std::string label;
-    bool operator==(const Choice& o) const { return spec == o.spec && label == o.label; }
+    bool header = false;
+    bool operator==(const Choice& o) const
+    {
+        return spec == o.spec && label == o.label && header == o.header;
+    }
 };
 
 std::vector<Choice> targetChoices(const rme::State& st)
 {
     std::vector<Choice> out;
-    out.push_back({ "", "(nothing)" });
-    const char* roles[] = { "main", "mainB", "phones1", "phones2",
-                            "phones3", "phones4", "talk" };
-    for (const char* r : roles) {
-        const auto t = rmeu::resolveTarget(st, r);
-        std::string label = r;
-        if (!t.assigned)     label += "   not handed out";
-        else if (!t.visible) label += "   hidden from this remote";
-        else                 label += "   " + rmeu::displayName(st, t.row, t.ch);
-        out.push_back({ r, label });
+    out.push_back({ "", "None" });
+    struct Role { const char* spec; const char* name; };
+    const Role roles[] = { { "main", "Main" }, { "mainB", "Main B" },
+                           { "phones1", "Phones 1" }, { "phones2", "Phones 2" },
+                           { "phones3", "Phones 3" }, { "phones4", "Phones 4" },
+                           { "talk", "Talkback" } };
+    for (const auto& r : roles) {
+        const auto t = rmeu::resolveTarget(st, r.spec);
+        std::string label = r.name;
+        if (!t.assigned)     label += " (not assigned)";
+        else if (!t.visible) label += " (hidden)";
+        else {
+            const std::string ch = rmeu::displayName(st, t.row, t.ch);
+            if (!ch.empty() && ch != r.name) label += " (" + ch + ")";
+        }
+        out.push_back({ r.spec, label });
     }
-    const char* kinds[] = { "input", "playback", "output" };
+    const char* kinds[]   = { "input", "playback", "output" };
+    const char* headers[] = { "Inputs", "Playback", "Outputs" };
     for (int r = 0; r < rmeu::kRowCount; ++r) {
         const auto row = static_cast<rmeu::Row>(r);
-        for (int ch : rmeu::visibleChannels(st, row)) {
+        const auto chans = rmeu::visibleChannels(st, row);
+        if (chans.empty()) continue;
+        out.push_back({ "", headers[r], true });
+        for (int ch : chans) {
             char spec[32];
             std::snprintf(spec, sizeof spec, "%s:%d", kinds[r], ch);
-            out.push_back({ spec, std::string(spec) + "   "
-                                  + rmeu::displayName(st, row, ch) });
+            out.push_back({ spec, rmeu::displayName(st, row, ch) });
         }
     }
     return out;
 }
+
+// A pot's push, stored as the word on the left, shown as the one on the right.
+struct PushChoice { const char* value; const char* title; };
+const PushChoice kPushes[] = {
+    { "submix", "Submix" }, { "select", "Select" }, { "mute", "Mute" }, { "none", "Nothing" },
+};
 
 // ⇨ WHAT A KEY CAN DO IN ORC: the builtins in the RME category, which is every
 // action ORC can run without REAPER. Read from the engine's registry, so a new
@@ -79,19 +104,17 @@ const TransportKey kTransport[5] = {
     { bnd::ButtonId::Uf1Rec,  "Record" },
 };
 
-const char* linkWord(rme::LinkState st)
-{
-    switch (st) {
-        case rme::LinkState::Off:      return "off";
-        case rme::LinkState::PortBusy: return "port taken";
-        case rme::LinkState::Waiting:  return "waiting";
-        case rme::LinkState::Online:   return "online";
-        case rme::LinkState::Silent:   return "gone quiet";
-    }
-    return "?";
-}
-
 NSString* str(const std::string& s) { return @(s.c_str()); }
+
+// Every action ORC offers is TotalMix', so the "RME: " in front of each would
+// only repeat itself down the menu.
+std::string actionTitle(const std::string& builtin)
+{
+    std::string d = bnd::builtinDisplayName(builtin);
+    const std::string prefix = "RME: ";
+    if (d.rfind(prefix, 0) == 0) d.erase(0, prefix.size());
+    return d;
+}
 
 NSTextField* label(NSString* text)
 {
@@ -99,16 +122,35 @@ NSTextField* label(NSString* text)
     return f;
 }
 
+// A column heading. ⛔ No explaining sentences on these pages (Frank
+// 27.09.2026: "sämtliche Helfer-Texte raus"): a heading names, it does not
+// instruct.
 NSTextField* dim(NSString* text)
 {
     NSTextField* f = [NSTextField labelWithString:text];
     f.textColor = NSColor.secondaryLabelColor;
     f.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
-    // A sentence in a settings page wraps; it does not push the window wider
-    // than the screen.
-    f.lineBreakMode = NSLineBreakByWordWrapping;
-    f.preferredMaxLayoutWidth = 620.0;
     return f;
+}
+
+// A group title inside a page, e.g. "Bank 1".
+NSTextField* heading(NSString* text)
+{
+    NSTextField* f = [NSTextField labelWithString:text];
+    f.font = [NSFont boldSystemFontOfSize:NSFont.systemFontSize];
+    return f;
+}
+
+// A number field followed by its unit.
+NSStackView* withUnit(NSView* field, NSString* unit)
+{
+    NSStackView* h = [NSStackView stackViewWithViews:@[ field, [NSTextField labelWithString:unit] ]];
+    h.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    h.spacing = 6.0;
+    // A stack hugs loosely by default and would widen the grid it sits in.
+    [h setHuggingPriority:NSLayoutPriorityRequired
+           forOrientation:NSLayoutConstraintOrientationHorizontal];
+    return h;
 }
 
 } // namespace
@@ -131,10 +173,8 @@ NSTextField* dim(NSString* text)
 @property (nonatomic, strong) NSTextField* sendField;
 @property (nonatomic, strong) NSTextField* recvField;
 @property (nonatomic, strong) NSTextField* linkLabel;
-@property (nonatomic, strong) NSTextField* countsLabel;
 @property (nonatomic, strong) NSTextField* errorLabel;
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* potTargets;
-@property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* potTurns;
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* potPushes;
 @property (nonatomic, strong) NSPopUpButton* jogTarget;
 @property (nonatomic, strong) NSTextField*   jogStep;
@@ -147,7 +187,7 @@ NSTextField* dim(NSString* text)
 @property (nonatomic, strong) NSTextField*        skName;
 @property (nonatomic, strong) NSMutableArray<NSTextField*>*   skLabels;
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* skActions;
-@property (nonatomic, strong) NSTextField*        skNote;
+@property (nonatomic, strong) NSMutableArray<NSTextField*>*   skKeyNumbers;
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* trActions;
 @property (nonatomic, strong) NSTimer* tick;
 @end
@@ -186,16 +226,20 @@ NSTextField* dim(NSString* text)
     if ((self = [super initWithWindow:w])) {
         w.delegate = self;
         self.potTargets   = [NSMutableArray array];
-        self.potTurns     = [NSMutableArray array];
         self.potPushes    = [NSMutableArray array];
         self.colourPops   = [NSMutableArray array];
         self.wearerLabels = [NSMutableArray array];
         self.skLabels     = [NSMutableArray array];
         self.skActions    = [NSMutableArray array];
+        self.skKeyNumbers = [NSMutableArray array];
         self.trActions    = [NSMutableArray array];
 
         NSTabView* tabs = [[NSTabView alloc] initWithFrame:w.contentView.bounds];
         tabs.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        // ⇨ The tab strip took keyboard focus when the window opened and drew a
+        // focus ring around the selected tab, a second outline around the blue
+        // one (Frank 27.09.2026: "Highlight nicht sauber").
+        tabs.focusRingType = NSFocusRingTypeNone;
         [tabs addTabViewItem:[self connectionTab]];
         [tabs addTabViewItem:[self controlsTab]];
         [tabs addTabViewItem:[self softKeysTab]];
@@ -226,6 +270,15 @@ NSTextField* dim(NSString* text)
     stack.spacing = 10.0;
     stack.edgeInsets = NSEdgeInsetsMake(16, 16, 16, 16);
     stack.translatesAutoresizingMaskIntoConstraints = NO;
+    // ⛔ A grid hugs loosely and the stack is as wide as the window, so every
+    // grid grew to the page width and threw its spare room into the columns:
+    // a wide gap between "key" and "label", Target and Push far apart. Each
+    // row of the page keeps its own width.
+    // Just below required: at required it tied with the fields' fixed widths
+    // and the host field lost, squeezed to the width of a port.
+    for (NSView* sub in stack.arrangedSubviews)
+        [sub setContentHuggingPriority:NSLayoutPriorityRequired - 1
+                        forOrientation:NSLayoutConstraintOrientationHorizontal];
     scroll.documentView = stack;
     [NSLayoutConstraint activateConstraints:@[
         [stack.topAnchor      constraintEqualToAnchor:scroll.contentView.topAnchor],
@@ -246,12 +299,6 @@ NSTextField* dim(NSString* text)
                                            target:self
                                            action:@selector(enabledChanged:)];
     [v addArrangedSubview:self.enabledBox];
-    // ⛔ NO ROMANS, AND NO ASSUMPTIONS ABOUT SOMEBODY ELSE'S RIG. The first
-    // version told the user to take Remote 3 because 1 and 2 were "often taken
-    // already (TotalReaper, stoerme)" — which is Frank's machine, not theirs.
-    [v addArrangedSubview:dim(@"In TotalMix: Options, Settings, OSC. Take a free "
-                              @"Remote Controller, tick In Use, and give it the "
-                              @"ports below.")];
 
     NSGridView* grid = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
     grid.columnSpacing = 10.0;
@@ -265,21 +312,18 @@ NSTextField* dim(NSString* text)
 
     self.recvField = [self field:@selector(portsChanged:) width:90];
     [grid addRowWithViews:@[ label(@"Listen on port"), self.recvField ]];
+
+    self.linkLabel = label(@"");
+    [grid addRowWithViews:@[ label(@"Status"), self.linkLabel ]];
     [v addArrangedSubview:grid];
 
     NSButton* ask = [NSButton buttonWithTitle:@"Ask TotalMix again"
                                        target:self
                                        action:@selector(askAgain:)];
-    ask.toolTip = @"Missing channels are hidden in TotalMix: Options, Channel "
-                  @"Layout.";
     [v addArrangedSubview:ask];
 
-    self.linkLabel = label(@"");
-    self.countsLabel = dim(@"");
     self.errorLabel = label(@"");
     self.errorLabel.textColor = NSColor.systemRedColor;
-    [v addArrangedSubview:self.linkLabel];
-    [v addArrangedSubview:self.countsLabel];
     [v addArrangedSubview:self.errorLabel];
 
     item.view = [self pageWithStack:v];
@@ -292,40 +336,42 @@ NSTextField* dim(NSString* text)
     item.label = @"Controls";
 
     NSStackView* v = [[NSStackView alloc] init];
-    NSGridView* grid = [NSGridView gridViewWithNumberOfColumns:4 rows:0];
+    // ⇨ No "turn" column: a pot turns the volume of its target, there is
+    // nothing else to pick (Frank 27.09.2026). rme.json keeps its field.
+    NSGridView* grid = [NSGridView gridViewWithNumberOfColumns:3 rows:0];
     grid.columnSpacing = 10.0;
     grid.rowSpacing = 6.0;
-    [grid addRowWithViews:@[ dim(@"pot"), dim(@"target"), dim(@"turn"), dim(@"push") ]];
-
-    const char* turns[]  = { "volume", "none" };
-    const char* pushes[] = { "submix", "select", "mute", "none" };
+    [grid addRowWithViews:@[ dim(@"Pot"), dim(@"Target"), dim(@"Push") ]];
 
     for (int i = 0; i < rme::Config::kVpotSlots; ++i) {
+        if (i % 4 == 0) {
+            // ⛔ Not merged across the columns: a merged cell let the grid
+            // stretch to the page width and pulled Target and Push apart.
+            NSGridRow* row = [grid addRowWithViews:@[
+                heading([NSString stringWithFormat:@"Bank %d", i / 4 + 1]),
+                [NSGridCell emptyContentView], [NSGridCell emptyContentView] ]];
+            row.topPadding = i == 0 ? 4.0 : 10.0;
+        }
         NSPopUpButton* target = [self popUp:@selector(potTargetChanged:) tag:i width:300];
-        NSPopUpButton* turn   = [self popUp:@selector(potTurnChanged:) tag:i width:110];
-        NSPopUpButton* push   = [self popUp:@selector(potPushChanged:) tag:i width:110];
-        for (const char* t : turns)  [turn addItemWithTitle:@(t)];
-        for (const char* p : pushes) [push addItemWithTitle:@(p)];
+        NSPopUpButton* push   = [self popUp:@selector(potPushChanged:) tag:i width:130];
+        for (const auto& p : kPushes) [push addItemWithTitle:@(p.title)];
         [self.potTargets addObject:target];
-        [self.potTurns addObject:turn];
         [self.potPushes addObject:push];
         [grid addRowWithViews:@[
-            label([NSString stringWithFormat:@"bank %d, pot %d", i / 4 + 1, i % 4 + 1]),
-            target, turn, push ]];
+            label([NSString stringWithFormat:@"Pot %d", i % 4 + 1]), target, push ]];
     }
     [v addArrangedSubview:grid];
-    [v addArrangedSubview:dim(@"A role TotalMix has not handed out leaves its pot "
-                              @"blank.")];
 
     NSGridView* jog = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
     jog.columnSpacing = 10.0;
     jog.rowSpacing = 8.0;
     self.jogTarget = [self popUp:@selector(jogTargetChanged:) tag:0 width:300];
     [jog addRowWithViews:@[ label(@"Jog wheel"), self.jogTarget ]];
-    self.jogStep = [self field:@selector(stepsChanged:) width:90];
-    [jog addRowWithViews:@[ label(@"Jog step, dB"), self.jogStep ]];
-    self.knobStep = [self field:@selector(stepsChanged:) width:90];
-    [jog addRowWithViews:@[ label(@"Knob step, dB"), self.knobStep ]];
+    self.jogStep = [self field:@selector(stepsChanged:) width:70];
+    [jog addRowWithViews:@[ label(@"Jog step"), withUnit(self.jogStep, @"dB") ]];
+    self.knobStep = [self field:@selector(stepsChanged:) width:70];
+    [jog addRowWithViews:@[ label(@"Pot step"), withUnit(self.knobStep, @"dB") ]];
+    [v setCustomSpacing:20.0 afterView:grid];
     [v addArrangedSubview:jog];
 
     item.view = [self pageWithStack:v];
@@ -334,7 +380,7 @@ NSTextField* dim(NSString* text)
 
 // ⇨ THE SOFT KEYS ARE BUILT HERE, NOT IN REA-SIXTY (Frank 25.09.2026: "die
 // bänke müssen wir den user bauen lassen, mit einer werksbesetzung"). Ten banks
-// of four keys, each with two halves (Bank ◄ ► or SHIFT on the surface), and the five
+// of four keys, each with two halves (Bank ◄ ►, 5-8 or SHIFT on the surface), and the five
 // transport keys. Written to orc.json through the bindings engine; Rea-Sixty's
 // side-car reads the same file.
 - (NSTabViewItem*)softKeysTab
@@ -372,41 +418,35 @@ NSTextField* dim(NSString* text)
     NSGridView* keys = [NSGridView gridViewWithNumberOfColumns:3 rows:0];
     keys.columnSpacing = 10.0;
     keys.rowSpacing = 6.0;
-    [keys addRowWithViews:@[ dim(@"key"), dim(@"label"), dim(@"action") ]];
+    [keys addRowWithViews:@[ dim(@"Key"), dim(@"Label"), dim(@"Action") ]];
     for (int i = 0; i < 4; ++i) {
+        NSTextField* num = label([NSString stringWithFormat:@"%d", i + 1]);
         NSTextField* lab = [self field:@selector(skLabelChanged:) width:140];
         lab.tag = i;
         NSPopUpButton* act = [self popUp:@selector(skActionChanged:) tag:i width:300];
+        [self.skKeyNumbers addObject:num];
         [self.skLabels addObject:lab];
         [self.skActions addObject:act];
-        [keys addRowWithViews:@[ label([NSString stringWithFormat:@"%d", i + 1]), lab, act ]];
+        [keys addRowWithViews:@[ num, lab, act ]];
     }
     [v addArrangedSubview:keys];
-
-    self.skNote = dim(@"");
-    [v addArrangedSubview:self.skNote];
 
     NSButton* factory = [NSButton buttonWithTitle:@"Factory set for this bank"
                                            target:self
                                            action:@selector(skFactory:)];
     [v addArrangedSubview:factory];
-    [v addArrangedSubview:dim(@"On the UF1, BANK left shows keys 1-4 and BANK right keys 5-8. "
-                              @"From the factory, bank 1 has Dim, Mono, Speaker B and "
-                              @"Talkback, and Ext In, Main and TotalMix on keys 5-8. Bank 2 "
-                              @"has TotalMix snapshots, bank 3 its layouts.")];
 
     NSGridView* tr = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
     tr.columnSpacing = 10.0;
     tr.rowSpacing = 6.0;
-    [tr addRowWithViews:@[ dim(@"transport"), dim(@"action") ]];
+    [tr addRowWithViews:@[ dim(@"Transport"), dim(@"Action") ]];
     for (int k = 0; k < 5; ++k) {
         NSPopUpButton* act = [self popUp:@selector(trActionChanged:) tag:k width:300];
         [self.trActions addObject:act];
         [tr addRowWithViews:@[ label(@(kTransport[k].name)), act ]];
     }
+    [v setCustomSpacing:20.0 afterView:factory];
     [v addArrangedSubview:tr];
-    [v addArrangedSubview:dim(@"A transport key without an action here stays with "
-                              @"REAPER while Rea-Sixty has the UF1.")];
 
     item.view = [self pageWithStack:v];
     return item;
@@ -418,49 +458,58 @@ NSTextField* dim(NSString* text)
     item.label = @"Colours";
 
     NSStackView* v = [[NSStackView alloc] init];
-    [v addArrangedSubview:dim(@"TotalMix numbers its channel colours. Pick the "
-                              @"UF1 colour each number becomes.")];
 
     NSGridView* grid = [NSGridView gridViewWithNumberOfColumns:3 rows:0];
     grid.columnSpacing = 10.0;
     grid.rowSpacing = 6.0;
-    [grid addRowWithViews:@[ dim(@"TotalMix"), dim(@"UF1 colour"), dim(@"worn by") ]];
+    [grid addRowWithViews:@[ dim(@"TotalMix"), dim(@"UF1"), dim(@"Channels") ]];
 
     for (int i = 0; i < 9; ++i) {
-        NSPopUpButton* pop = [self popUp:@selector(colourChanged:) tag:i width:260];
+        NSPopUpButton* pop = [self popUp:@selector(colourChanged:) tag:i width:200];
         // The word is the entry and a drawn swatch sits beside it: a name can be
         // searched, quoted and compared against SSL's own list. Palette.cpp is
-        // the one place those names live.
+        // the one place those names live, and they are SSL's (issue #8).
+        // ⇨ Only what lights: 0x0D-0x0F show nothing on a panel, and offering
+        // them gave three more entries called "off". The palette index rides on
+        // the item's tag, so the menu position is free.
         for (int p = 0; p < 16; ++p) {
-            NSString* t = [NSString stringWithFormat:@"0x%02X  %s", p,
-                           uf8::paletteName(static_cast<uint8_t>(p))];
+            const auto idx = static_cast<uint8_t>(p);
+            const auto rgb = uf8::paletteSwatch(idx);
+            if (p != 0 && !rgb) continue;
+            NSString* t = p == 0 ? @"Off" : @(uf8::paletteName(idx));
             [pop addItemWithTitle:t];
-            if (const auto rgb = uf8::paletteEntry(static_cast<uint8_t>(p))) {
-                NSImage* sw = [NSImage imageWithSize:NSMakeSize(12, 12)
-                                             flipped:NO
-                                      drawingHandler:^BOOL(NSRect r) {
-                    [[NSColor colorWithSRGBRed:rgb->r / 255.0
-                                         green:rgb->g / 255.0
-                                          blue:rgb->b / 255.0
+            NSMenuItem* it = pop.lastItem;
+            it.tag = p;
+            if (rgb) {
+                const auto c = *rgb;
+                it.image = [NSImage imageWithSize:NSMakeSize(12, 12)
+                                          flipped:NO
+                                   drawingHandler:^BOOL(NSRect r) {
+                    [[NSColor colorWithSRGBRed:c.r / 255.0
+                                         green:c.g / 255.0
+                                          blue:c.b / 255.0
                                          alpha:1.0] setFill];
                     NSRectFill(r);
+                    [[NSColor.separatorColor colorWithAlphaComponent:0.6] setStroke];
+                    NSFrameRect(r);
                     return YES;
                 }];
-                [pop itemAtIndex:p].image = sw;
             }
         }
         [self.colourPops addObject:pop];
 
-        NSTextField* worn = dim(@"");
+        NSTextField* worn = [NSTextField labelWithString:@""];
+        worn.textColor = NSColor.secondaryLabelColor;
         [self.wearerLabels addObject:worn];
 
         // ⇨ TotalMix' own word for the number, from RmeUf1::colourName. Read
-        // off the mixer's colour menu, not derived from anything we paint.
-        NSString* left = [NSString stringWithFormat:@"%d  %s", i, rmeu::colourName(i)];
-        [grid addRowWithViews:@[ label(left), pop, worn ]];
+        // off the mixer's colour menu, not derived from anything we paint. The
+        // number itself is only OSC's.
+        std::string name = rmeu::colourName(i);
+        if (!name.empty()) name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
+        [grid addRowWithViews:@[ label(str(name)), pop, worn ]];
     }
     [v addArrangedSubview:grid];
-    [v addArrangedSubview:dim(@"The surface has no white, grey or yellow.")];
 
     item.view = [self pageWithStack:v];
     return item;
@@ -532,16 +581,11 @@ NSTextField* dim(NSString* text)
     if (self.window.firstResponder != self.recvField.currentEditor)
         self.recvField.stringValue = @(cfg.recvPort).stringValue;
 
-    self.linkLabel.stringValue =
-        [NSString stringWithFormat:@"TotalMix: %s   %s", linkWord(link),
-                                   mgr.status().c_str()];
-
-    NSMutableString* counts = [NSMutableString string];
-    for (auto row : { rmeu::Row::Input, rmeu::Row::Playback, rmeu::Row::Output }) {
-        [counts appendFormat:@"%s %zu   ", rmeu::rowName(row),
-                              rmeu::visibleChannels(st, row).size()];
-    }
-    self.countsLabel.stringValue = counts;
+    std::string linkText = orc::linkSummary();
+    if (!linkText.empty()) linkText[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(linkText[0])));
+    self.linkLabel.stringValue = str(linkText);
+    self.linkLabel.textColor = link == rme::LinkState::Online ? NSColor.labelColor
+                                                              : NSColor.secondaryLabelColor;
 
     // ⇨ Refill the target menus only when the mixer's answer changed. The model
     // arrives in pieces over about twenty seconds, so this fires a handful of
@@ -555,8 +599,10 @@ NSTextField* dim(NSString* text)
 
     for (int i = 0; i < rme::Config::kVpotSlots; ++i) {
         [self select:self.potTargets[i] spec:cfg.vpots[i].target among:choices];
-        [self.potTurns[i] selectItemWithTitle:str(cfg.vpots[i].turn)];
-        [self.potPushes[i] selectItemWithTitle:str(cfg.vpots[i].push)];
+        NSInteger push = -1;
+        for (std::size_t p = 0; p < std::size(kPushes); ++p)
+            if (cfg.vpots[i].push == kPushes[p].value) push = (NSInteger)p;
+        [self.potPushes[i] selectItemAtIndex:push];
     }
     [self select:self.jogTarget spec:cfg.jogTarget among:choices];
     if (self.window.firstResponder != self.jogStep.currentEditor)
@@ -578,7 +624,7 @@ NSTextField* dim(NSString* text)
     }
     for (int i = 0; i < 9; ++i) {
         const int cur = cfg.colourMap[i] < 0 ? 0 : (cfg.colourMap[i] > 15 ? 15 : cfg.colourMap[i]);
-        [self.colourPops[i] selectItemAtIndex:cur];
+        if (![self.colourPops[i] selectItemWithTag:cur]) [self.colourPops[i] selectItemAtIndex:-1];
         self.wearerLabels[i].stringValue = str(wearers[i]);
     }
     [self refreshSoftKeys];
@@ -592,9 +638,9 @@ NSTextField* dim(NSString* text)
 - (void)fillActions:(NSPopUpButton*)pop
 {
     [pop removeAllItems];
-    [pop addItemWithTitle:@"(none)"];
+    [pop addItemWithTitle:@"None"];
     for (const auto& n : _actions)
-        [pop addItemWithTitle:str(bnd::builtinDisplayName(n))];
+        [pop addItemWithTitle:str(actionTitle(n))];
 }
 
 - (void)selectAction:(NSPopUpButton*)pop slot:(const bnd::ActionSlot&)sp
@@ -605,7 +651,7 @@ NSTextField* dim(NSString* text)
     }
     const auto it = std::find(_actions.begin(), _actions.end(), sp.action);
     // Something ORC cannot run (a REAPER action from the inherited factory)
-    // shows no entry rather than pretending to be "(none)".
+    // shows no entry rather than pretending to be "None".
     [pop selectItemAtIndex:it == _actions.end() ? -1 : 1 + (it - _actions.begin())];
 }
 
@@ -630,6 +676,7 @@ NSTextField* dim(NSString* text)
         self.skName.stringValue = str(bnd::getUf1SoftBankName(bank, 0));
 
     for (int i = 0; i < 4; ++i) {
+        self.skKeyNumbers[i].stringValue = [NSString stringWithFormat:@"%d", i + 1 + 4 * half];
         const bnd::Binding bd = bnd::getUf1SoftBankSlot(bank, i);
         const auto& sp = bd.shortPress[half];
         NSTextField* lab = self.skLabels[i];
@@ -643,16 +690,13 @@ NSTextField* dim(NSString* text)
         if (dyn) [self.skActions[i] selectItemAtIndex:-1];
         else     [self selectAction:self.skActions[i] slot:sp];
     }
-    self.skNote.stringValue = dyn
-        ? @"TotalMix names these keys: 1 to 4, and 5 to 8 on the second half."
-        : @"An empty label shows the action's own name.";
 
     const int layer = bnd::getActiveLayer();
     for (int k = 0; k < 5; ++k) {
         const bnd::Binding bd = bnd::getBinding(layer, kTransport[k].id);
         const auto& sp = bd.shortPress[0];
         // A REAPER action there is ORC's inherited factory and does nothing in
-        // ORC: it reads as "(none)", which is also what Rea-Sixty makes of it.
+        // ORC: it reads as "None", which is also what Rea-Sixty makes of it.
         if (sp.type == bnd::ActionType::Builtin && sp.action.rfind("rme_", 0) == 0)
             [self selectAction:self.trActions[k] slot:sp];
         else
@@ -752,17 +796,37 @@ NSTextField* dim(NSString* text)
     [self refreshSoftKeys];
 }
 
+// One menu item per choice, headings included, so an item's index is its
+// choice's index (specAt, select:).
 - (void)fill:(NSPopUpButton*)pop with:(const std::vector<Choice>&)choices
 {
     [pop removeAllItems];
-    for (const auto& c : choices) [pop addItemWithTitle:str(c.label)];
+    NSMenu* menu = pop.menu;
+    menu.autoenablesItems = NO;
+    for (const auto& c : choices) {
+        NSMenuItem* it;
+        if (c.header) {
+            if (@available(macOS 14.0, *)) {
+                it = [NSMenuItem sectionHeaderWithTitle:str(c.label)];
+            } else {
+                it = [[NSMenuItem alloc] initWithTitle:str(c.label) action:nil keyEquivalent:@""];
+            }
+            it.enabled = NO;
+        } else {
+            it = [[NSMenuItem alloc] initWithTitle:str(c.label) action:nil keyEquivalent:@""];
+        }
+        [menu addItem:it];
+    }
 }
 
 - (void)select:(NSPopUpButton*)pop spec:(const std::string&)spec
          among:(const std::vector<Choice>&)choices
 {
     for (std::size_t i = 0; i < choices.size(); ++i) {
-        if (choices[i].spec == spec) { [pop selectItemAtIndex:(NSInteger)i]; return; }
+        if (!choices[i].header && choices[i].spec == spec) {
+            [pop selectItemAtIndex:(NSInteger)i];
+            return;
+        }
     }
     // ⛔ A spec the live list cannot contain (the link is down, or the channel
     // is hidden) leaves the menu alone rather than rewriting the file to
@@ -806,7 +870,7 @@ NSTextField* dim(NSString* text)
 - (std::string)specAt:(NSInteger)index
 {
     if (index < 0 || (std::size_t)index >= _lastChoices.size()) return {};
-    return _lastChoices[(std::size_t)index].spec;
+    return _lastChoices[(std::size_t)index].spec;   // a heading's is empty
 }
 
 - (void)potTargetChanged:(NSPopUpButton*)sender
@@ -816,17 +880,12 @@ NSTextField* dim(NSString* text)
     [self apply:^(rme::Config& c) { c.vpots[i].target = spec; }];
 }
 
-- (void)potTurnChanged:(NSPopUpButton*)sender
-{
-    const int i = (int)sender.tag;
-    const std::string v = sender.titleOfSelectedItem.UTF8String ?: "";
-    [self apply:^(rme::Config& c) { c.vpots[i].turn = v; }];
-}
-
 - (void)potPushChanged:(NSPopUpButton*)sender
 {
     const int i = (int)sender.tag;
-    const std::string v = sender.titleOfSelectedItem.UTF8String ?: "";
+    const NSInteger at = sender.indexOfSelectedItem;
+    if (at < 0 || (std::size_t)at >= std::size(kPushes)) return;
+    const std::string v = kPushes[at].value;
     [self apply:^(rme::Config& c) { c.vpots[i].push = v; }];
 }
 
@@ -846,7 +905,7 @@ NSTextField* dim(NSString* text)
 - (void)colourChanged:(NSPopUpButton*)sender
 {
     const int i = (int)sender.tag;
-    const int v = (int)sender.indexOfSelectedItem;
+    const int v = (int)sender.selectedTag;
     [self apply:^(rme::Config& c) { c.colourMap[i] = v; }];
 }
 

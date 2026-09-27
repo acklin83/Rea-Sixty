@@ -163,22 +163,50 @@ std::optional<Rgb> paletteEntry(uint8_t index)
 // report and compared against SSL's own list, and a coloured square cannot.
 const char* paletteName(uint8_t index)
 {
+    // ⇨ SSL 360'S OWN NAMES (LedColourType, issue #8, section C), Frank
+    // 27.09.2026: they read better than the words we made up by eye. Our kPalette
+    // comments above keep what the UF8 looked like; the name a person picks is
+    // SSL's. 0x0D Lamp and 0x0E Black are on SSL's list but light nothing on a
+    // panel (kHasEntry), so they are not offered.
     switch (index) {
         case 0x00: return "off";
-        case 0x01: return "light blue / light violet";
-        case 0x02: return "red";
-        case 0x03: return "bright green";
-        case 0x04: return "deep blue";
-        case 0x05: return "cyan";
-        case 0x06: return "violet (purple)";
-        case 0x07: return "lime green";
-        case 0x08: return "dark orange / brown";
-        case 0x09: return "blue leaning violet";
-        case 0x0A: return "pale light green";
-        case 0x0B: return "lighter violet";
-        case 0x0C: return "light blue";
+        case 0x01: return "White";
+        case 0x02: return "Red";
+        case 0x03: return "Green";
+        case 0x04: return "Blue";
+        case 0x05: return "Cyan";
+        case 0x06: return "Magenta";
+        case 0x07: return "Yellow";
+        case 0x08: return "Orange";
+        case 0x09: return "Purple";
+        case 0x0A: return "Light Green";
+        case 0x0B: return "Pink";
+        case 0x0C: return "Light Blue";
         default:   return "off";
     }
+}
+
+std::optional<Rgb> paletteSwatch(uint8_t index)
+{
+    // SSL 360's drawing of each name (issue #8, section C, expanded from 16-bit
+    // colour), so the square beside a name shows that name.
+    static constexpr std::array<Rgb, 13> kSsl{{
+        {0x00, 0x00, 0x00},  // 0x00  off
+        {0xFF, 0xFF, 0xFF},  // 0x01  White
+        {0xFF, 0x00, 0x00},  // 0x02  Red
+        {0x00, 0xFF, 0x00},  // 0x03  Green
+        {0x00, 0x00, 0xFF},  // 0x04  Blue
+        {0x6B, 0xFF, 0xFF},  // 0x05  Cyan
+        {0xF7, 0x71, 0xF7},  // 0x06  Magenta
+        {0xF7, 0xFB, 0x10},  // 0x07  Yellow
+        {0xF7, 0x9E, 0x52},  // 0x08  Orange
+        {0xAD, 0x65, 0xF7},  // 0x09  Purple
+        {0x9C, 0xFB, 0xCE},  // 0x0A  Light Green
+        {0xFF, 0x8A, 0xC6},  // 0x0B  Pink
+        {0x9C, 0x9E, 0xFF},  // 0x0C  Light Blue
+    }};
+    if (index >= kSsl.size() || !kHasEntry[index]) return std::nullopt;
+    return kSsl[index];
 }
 
 uint8_t quantize(Rgb c)

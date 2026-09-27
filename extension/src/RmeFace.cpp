@@ -167,7 +167,8 @@ std::array<KeyLamp, 18> keyLamps(const LampFacts& f)
         { b::kArrowRight, f.moreRight ? Lamp::Lit : Lamp::Dark },
         { b::kBankLeft,   halves && f.half == 1 ? Lamp::Lit : Lamp::Dark },
         { b::kBankRight,  halves && f.half == 0 ? Lamp::Lit : Lamp::Dark },
-        { b::k5to8,       Lamp::Dark },
+        // 5-8 flips the half and shows it like SSL's own: lit on keys 5-8.
+        { b::k5to8,       halves ? on(f.half == 1) : Lamp::Dark },
         // Oben/unten die Reihe, links/rechts der Submix, beide mit Umlauf.
         { b::kNavUp,      Lamp::Dim },
         { b::kNavLeft,    Lamp::Dim },

@@ -367,10 +367,10 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
         out.push_back({ rmes::sendChanAddress(r, sel + 1), 1.0f });
         return true;
     }
-    // ⇨ 5-8 DOES NOTHING IN THE SIDE-CAR (Frank 27.09.). It switched the V-Pot
-    // banks until 25.09. (those follow Nav ◄ ► and the channel encoder now),
-    // then the soft-key bank's half for two days; the half is on Bank ◄ ► since
-    // (RmeSoftKeys::stepKey). It falls to the default below, dark and swallowed.
+    // ⇨ 5-8 FLIPS THE SOFT-KEY HALF (Frank 27.09. evening), next to Bank ◄ ►.
+    // Both hosts hand it to RmeSoftKeys::stepKey before this function, so it
+    // never arrives here in the overview. It switched the V-Pot banks until
+    // 25.09.; those follow Nav ◄ ► and the channel encoder now.
 
     // ⇨ SOLO, CUT, SEL BELONG TO THE FADER CHANNEL IN TOTALMIX (Frank 21.09.:
     // "sollten die nicht im Side-Car Mode komplett weg von Reaper? Sonst sind ja

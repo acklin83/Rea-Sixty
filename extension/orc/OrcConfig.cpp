@@ -70,4 +70,17 @@ std::string saveRmeConfigIfDirty()
     return "Cannot write " + rmeConfigPath();
 }
 
+std::string linkSummary()
+{
+    auto& mgr = reasixty::rme::manager();
+    switch (mgr.link()) {
+        case reasixty::rme::LinkState::Off:     return "off";
+        case reasixty::rme::LinkState::Waiting: return "waiting for TotalMix";
+        case reasixty::rme::LinkState::Online:  return "online";
+        case reasixty::rme::LinkState::PortBusy:
+        case reasixty::rme::LinkState::Silent:  return mgr.status();
+    }
+    return mgr.status();
+}
+
 } // namespace orc

@@ -184,6 +184,7 @@ int main()
         EXPECT(n != nullptr);
         const bool named = n && std::string(n) != "off";
         EXPECT(named == paletteEntry(static_cast<uint8_t>(i)).has_value());
+        EXPECT(named == paletteSwatch(static_cast<uint8_t>(i)).has_value());
     }
 
     // --- LED colour pair (cap31, cap33). Lock the bytes captured from

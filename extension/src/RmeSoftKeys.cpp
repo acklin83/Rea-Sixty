@@ -40,6 +40,14 @@ bool stepKey(input::State& s, std::atomic<int>& bankIdx, int base, int count,
             pickHalf(s, base + bankIdx.load(), id == ::uf1::btn::kBankRight ? 1 : 0);
         return true;
     }
+    // 5-8 flips between the halves, the same pick as Bank ◄ ► (Frank 27.09.,
+    // evening: the editor calls them "Keys 1-4" and "Keys 5-8", so the key
+    // with that name belongs to them too).
+    if (id == ::uf1::btn::k5to8) {
+        if (ev.pressed && !s.strip.load())
+            pickHalf(s, base + bankIdx.load(), s.skHalf.load() == 0 ? 1 : 0);
+        return true;
+    }
     if (id == ::uf1::btn::kArrowLeft || id == ::uf1::btn::kArrowRight) {
         if (ev.pressed) {
             const int nb  = std::max(1, count);

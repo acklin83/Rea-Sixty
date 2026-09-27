@@ -413,7 +413,9 @@ void Manager::workerLoop()
                 closeSock();
                 char t[160];
                 snprintf(t, sizeof(t),
-                    "port %d is in use by another program (stoerme, TotalReaper or a second REAPER?)",
+                    // ⛔ No guesses at which program: those were Frank's (stoerme,
+                    // TotalReaper), and ORC runs on machines that have neither.
+                    "port %d is in use by another program",
                     cfg.recvPort);
                 setStatus(LinkState::PortBusy, t);
                 retryAt = now + std::chrono::seconds(3);
