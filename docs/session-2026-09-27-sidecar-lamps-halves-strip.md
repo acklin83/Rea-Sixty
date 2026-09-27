@@ -73,6 +73,22 @@ Spur. Nach dem Update nochmal fragen.
   Vorher lag eine halb sichtbare Zeile über der Filterzeile, samt Klickfläche.
 - Am Bildschirm nicht angesehen (REAPER lief nicht).
 
+## Automation auf UF1 und UF8 (abends, von Frank am Gerät bestätigt: „jetzt passt es“)
+
+| Was | Wie es jetzt ist | Commit |
+|---|---|---|
+| UF1 folgt Automation | Motor, dB, Pan, DAW-Ansicht lesen `GetTrackUIVolPan` (uiVolLinear / uiPan) statt `D_VOL`/`D_PAN` | `5f03f16` |
+| UF1-Fader in Touch | `GetTouchState` meldet den UF1-Fader (g_uf1FaderVolTr) | `5f03f16` |
+| FLIP-Pan auf Fadern (UF8, UF1) | `CSurf_OnPanChange` + Berührung pro Fader-Platz (g_faderPanTr) | `7f66897` |
+| Plug-in-Parameter auf Fadern | `TrackFX_EndParamEdit` beim Loslassen (noteFaderFxEdit_/endFaderFxEdit_) | `b866e3a` |
+| Pan/Lautstärke/Sends auf Pots in Touch | eigener Hüllkurvenpunkt an der hörbaren Position (potEnvelopeWrite_), keine Berührung, `UpdateArrange`, ein Undo pro Bewegung; sonst alter Weg (legt fehlende Hüllkurve an) | `ce1419f`, `302c172` |
+| Fader melden nur, was sie schreiben | g_faderVolTr / g_faderPanTr, beim Loslassen gelöscht | `302c172` |
+
+Sackgassen, nicht wiederholen:
+- Pots „halten bis Stop“ (`a40891b`): Pan schrieb weiter, hielt spätere FLIP-Fader fest. Zurück `8402e99`.
+- Pots ohne Berührung, nur absolut schreiben (`f315cbb`): Zickzack. Die Juni-Notiz stimmte. Zurück `b4a90e7`, Warnung im Code.
+
+
 ## Offen
 
 - **Frank am Gerät:** alles oben. Gedimmtes Weiss auf dem Nav-Kreuz war vorher
