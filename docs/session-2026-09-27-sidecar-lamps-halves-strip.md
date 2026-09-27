@@ -30,9 +30,12 @@ Commit `7f4bf85`. Deployt `9f94a7ec` (REAPER lief nicht), ORC aus
 
 ## Regeln im Code
 
-- **Bank ◄ ► Lampe:** die Taste der gezeigten Hälfte hell, die andere gedimmt.
-  Ohne zweite Hälfte (statische Bank, leerer Shift-Satz) beide dunkel und
-  wirkungslos, in STRIP auch.
+- **Bank ◄ ► Lampe:** wie < >, hell in die Richtung, in der es noch eine Hälfte
+  gibt, sonst dunkel (`39638bb`; die erste Fassung zeigte die gezeigte Hälfte,
+  Frank: „genau falsch herum“). Ohne zweite Hälfte (statische Bank, leerer
+  Shift-Satz) beide dunkel und wirkungslos, in STRIP auch.
+- **SHIFT in ORC** (`74764ae`): `mod_shift`/`mod_cmd`/`mod_ctrl` samt Latch liegen
+  jetzt in `Bindings.cpp` (`registerModifierBuiltins`), ORC registriert sie.
 - **< >:** hell, solange es weitergeht, am Ende dunkel (wie vorher).
 - **Nav-Mitte:** ohne TotalMix-Verbindung dunkel.
 - **MASTER:** ohne Main dunkel. **Stereo-Taste:** ohne Kanal dunkel.
@@ -53,9 +56,5 @@ geprüft (Nav hell, Packen aus). ctest 17/17.
 
 - **Frank am Gerät:** alles oben. Gedimmtes Weiss auf dem Nav-Kreuz war vorher
   nie an; dieselben Bytes wie ein gedimmter gebundener Knopf (SHIFT im Leerlauf).
-- **ORC registriert `mod_shift` nicht** (grep: kein `registerBuiltin("mod_shift"`,
-  kein `setModifierHeld` ausserhalb `main.cpp`). SHIFT an der Fläche dürfte in
-  ORC weder Fine noch Hälfte 2 schalten, und seine Lampe bleibt gedimmt. Nicht
-  gemeldet, nicht gebaut; am Gerät nicht geprüft.
 - Welche Parameter TotalMix auf einem Mic-Kanal meldet, ist nicht gemessen; der
   Test benutzt einen erfundenen Satz.
