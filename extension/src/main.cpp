@@ -15063,6 +15063,12 @@ static void healFavourites_()
 //                    strip. This is the "Cycle (own settings)" mode — each favourite
 //                    keeps its own per-channel values instead of carrying the live
 //                    ones across. Needs favRemember on to have anything to restore.
+// A Sticky pin on the plug-in a switch replaces follows it to the same control
+// on the new one (defined with the Sticky code; `map` = old param → new param).
+void stickyFollowSwitch_(MediaTrack* tr, const std::string& oldFx,
+                         const std::string& newFx,
+                         const std::unordered_map<int, int>& map);
+
 static bool switchCsTo_(MediaTrack* tr, const char* addName,
                         const uc1::PluginBindings* dstMap, bool focusResult,
                         bool copyMode = false, bool forceOwnSettings = false)
@@ -15259,6 +15265,10 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
     }
 
     auto& intent = g_csIntent[trackGuidStr_(tr)];
+    // Old param → new param for every control both strips have, for a Sticky pin
+    // (stickyFollowSwitch_). Collected whatever the copy mask says: the mask is
+    // about carrying VALUES, the pin is about which control it is.
+    std::unordered_map<int, int> stickyMap;
     for (int linkIdx = 1; linkIdx <= 63; ++linkIdx) {
         // Global section mask: when a section is unticked it is NOT carried from
         // the old strip. Instead of falling to the new plug-in's defaults, each
@@ -15299,6 +15309,7 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
                     dstClaimed.insert(dp);
             }
             if (sp == uc1::kParamNone && dp == uc1::kParamNone) continue;
+            if (sp != uc1::kParamNone && dp != uc1::kParamNone) stickyMap.emplace(sp, dp);
             const int key = linkIdx * 2 + (isBtn ? 1 : 0);
             const uc1::CsQuantityKind kind = isBtn ? uc1::CsQuantityKind::Generic
                                                    : uc1::csQuantityKind(linkIdx);
@@ -15497,6 +15508,15 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
                 liveOld[s.id]   = v;   // and as the live source for a copy carry
             }
         }
+        if (oldPM && newPM)
+            for (const auto& so : oldPM->slots) {
+                if (!isOffGridSlot(so)) continue;
+                for (const auto& sn : newPM->slots)
+                    if (isOffGridSlot(sn) && sn.id && std::strcmp(sn.id, so.id) == 0) {
+                        stickyMap.emplace(so.vst3Param, sn.vst3Param);
+                        break;
+                    }
+            }
         if (newPM) {
             auto& extNewMem = g_csFavMemExt[guid + "\t" + newIdent];
             std::unordered_set<int> extWritten;
@@ -15524,12 +15544,17 @@ static bool switchCsTo_(MediaTrack* tr, const char* addName,
     // CopyToTrack(move) inserts at the destination index and shifts the rest down.
     int finalIdx;
     if (copyMode) {
+        // A/B: the original stays on the track, and so does a pin on it.
         TrackFX_CopyToTrack(tr, newIdx, tr, oldIdx + 1, /*is_move*/ true);
         finalIdx = oldIdx + 1;
     } else {
+        const std::string oldFxGuid = uf8::fxGuidString(tr, oldIdx);
         TrackFX_CopyToTrack(tr, newIdx, tr, oldIdx, /*is_move*/ true);
         TrackFX_Delete(tr, oldIdx + 1);
         finalIdx = oldIdx;
+        // ⇨ A STICKY PIN GOES WITH THE SWITCH (Frank 27.09.2026: a pin on a 4K B's
+        // HF Gain died when the strip became a 4K E, and the V-Pot rode pan).
+        stickyFollowSwitch_(tr, oldFxGuid, uf8::fxGuidString(tr, finalIdx), stickyMap);
     }
 
     // SECOND PASS — re-apply numeric values now that all params (incl. EQ Type and
@@ -15730,6 +15755,7 @@ static bool switchBcTo_(MediaTrack* tr, const char* addName,
     }
 
     auto& intent = g_bcIntent[guid];
+    std::unordered_map<int, int> stickyMap;   // old → new param, for a Sticky pin
     for (int linkIdx = 1; linkIdx <= 7; ++linkIdx) {
         // BC has no section mask — the only non-copied path is own settings.
         const bool copied = !forceOwnSettings;
@@ -15753,6 +15779,7 @@ static bool switchBcTo_(MediaTrack* tr, const char* addName,
                     dstClaimed.insert(dp);
             }
             if (sp == uc1::kParamNone && dp == uc1::kParamNone) continue;
+            if (sp != uc1::kParamNone && dp != uc1::kParamNone) stickyMap.emplace(sp, dp);
             const int key = linkIdx * 2 + (isBtn ? 1 : 0);
             const uc1::CsQuantityKind kind = isBtn ? uc1::CsQuantityKind::Generic
                                                    : uc1::bcQuantityKind(linkIdx);
@@ -15827,12 +15854,17 @@ static bool switchBcTo_(MediaTrack* tr, const char* addName,
 
     int finalIdx;
     if (copyMode) {
+        // A/B: the original stays on the track, and so does a pin on it.
         TrackFX_CopyToTrack(tr, newIdx, tr, oldIdx + 1, /*is_move*/ true);
         finalIdx = oldIdx + 1;
     } else {
+        const std::string oldFxGuid = uf8::fxGuidString(tr, oldIdx);
         TrackFX_CopyToTrack(tr, newIdx, tr, oldIdx, /*is_move*/ true);
         TrackFX_Delete(tr, oldIdx + 1);
         finalIdx = oldIdx;
+        // ⇨ A STICKY PIN GOES WITH THE SWITCH (Frank 27.09.2026: a pin on a 4K B's
+        // HF Gain died when the strip became a 4K E, and the V-Pot rode pan).
+        stickyFollowSwitch_(tr, oldFxGuid, uf8::fxGuidString(tr, finalIdx), stickyMap);
     }
 
     for (const auto& r : reapply) {
@@ -20483,6 +20515,50 @@ void stickyPotAssign_(MediaTrack* tr, int fx, int param)
     g_stickyPins[trackGuidStr_(tr)] = std::move(pin);
     g_stickyCaptureAnnounce.store(1);  // banner: "Sticky • Pinned"
     g_stickyActive.store(true);        // assigning implies active
+    g_pageDirty.store(true);
+    if (ReaProject* pr = EnumProjects(-1, nullptr, 0)) MarkProjectDirty(pr);
+}
+
+// ⇨ A SWITCH REPLACES THE PLUG-IN, SO A PIN ON IT MOVES TO THE NEW ONE. CS and
+// BC switches put a different plug-in on the same slot with a new FX GUID, and
+// the same control sits at a different index there (4K B's HF Gain is 26, a
+// 4K E's is 31). The switch knows which old param is which new one; the pin is
+// rewritten through that map, both targets of a paired pin. A param with no
+// counterpart leaves the pin as it was, and the log says so.
+void stickyFollowSwitch_(MediaTrack* tr, const std::string& oldFx,
+                         const std::string& newFx,
+                         const std::unordered_map<int, int>& map)
+{
+    if (!tr || oldFx.empty() || newFx.empty()) return;
+    auto it = g_stickyPins.find(trackGuidStr_(tr));
+    if (it == g_stickyPins.end()) return;
+    StickyPin& p = it->second;
+    bool moved = false;
+    auto carry = [&](std::string& g, int& param) {
+        if (g != oldFx || param < 0) return;
+        const auto m = map.find(param);
+        if (m == map.end()) {
+            if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                std::fprintf(lg, "[sticky] switch: param %d has no counterpart, pin kept\n", param);
+                std::fclose(lg);
+            }
+            return;
+        }
+        g = newFx; param = m->second; moved = true;
+    };
+    carry(p.fxGuid, p.vst3Param);
+    carry(p.fxGuid2, p.vst3Param2);
+    if (!moved) return;
+    if (const int fx = uf8::findFxIndexByGuid(tr, p.fxGuid); fx >= 0) {
+        double s0 = 0.0, s1 = 0.0, s2 = 0.0; bool isToggle = false;
+        TrackFX_GetParameterStepSizes(tr, fx, p.vst3Param, &s0, &s1, &s2, &isToggle);
+        p.toggle = isToggle;
+    }
+    if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+        std::fprintf(lg, "[sticky] switch: pin follows to fx %s param %d\n",
+                     p.fxGuid.c_str(), p.vst3Param);
+        std::fclose(lg);
+    }
     g_pageDirty.store(true);
     if (ReaProject* pr = EnumProjects(-1, nullptr, 0)) MarkProjectDirty(pr);
 }
