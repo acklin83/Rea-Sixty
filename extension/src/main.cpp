@@ -1322,6 +1322,11 @@ enum : int { kUf1ViewPlugin = 0, kUf1ViewDaw = 1, kUf1ViewMeter = 2, kUf1ViewSen
 // slot, so let the compiler hold the two together.
 static_assert(kUf1ViewCount == uf8::bindings::kUf1ViewCountForKeys,
               "per-view ButtonId block and the UF1 view enum disagree");
+// ⇨ ONE MORE STARTUP "VIEW": THE RME SIDE-CAR (Frank 26.09.2026: "dass der UF1
+// sobald reaper startet im RME-Side-car (ORC) modus bleibt"). Stored as
+// kUf1StartupRme, past the four real views, so kUf1View* and every table keyed
+// by it stay as they are. Offered only where ORC is set up (g_rmeAvailable).
+constexpr int kUf1StartupRme = kUf1ViewCount;
 inline void uf1SetViewMode_(int v)
 {
     switch (v) {
@@ -42889,7 +42894,17 @@ static void applyStartupBank_()
 static void applyUf1StartupView_()
 {
     int view = -1;
-    if (reasixty_uf1StartupView(&view)) { uf1SetViewMode_(view); return; }
+    const bool pinned = reasixty_uf1StartupView(&view);
+    if (pinned && view != kUf1StartupRme) { uf1SetViewMode_(view); return; }
+    // ⇨ RME: the view underneath is the one the UF1 was last left in, and the
+    // side-car goes over it, exactly as SHIFT + MODE, RME does, so leaving the
+    // side-car leads back there. Without ORC (no rme.json) there is no side-car
+    // to enter and the UF1 simply comes up in its last view.
+    if (pinned && g_rmeAvailable.load()) {
+        g_uf1SideCar.store(Uf1SideCar::RmeMonitor);
+        g_rmeIn.strip.store(false);   // every entry starts in the overview
+        g_pageDirty.store(true);
+    }
     // No fixed view pinned: come back up in the one the UF1 was last left in.
     // GLOBAL, not per project (Frank 2026-08-18) — which view the surface shows
     // is a property of the surface, not of the session you happen to open.
@@ -49420,14 +49435,14 @@ bool reasixty_uf1StartupView(int* view)
     const char* v = GetExtState("rea_sixty", "uf1_startup_view");
     if (!v || !*v) return false;
     const int n = std::atoi(v);
-    if (n < 0 || n >= kUf1ViewCount) return false;
+    if (n < 0 || n > kUf1StartupRme) return false;
     if (view) *view = n;
     return true;
 }
 void reasixty_setUf1StartupView(bool on, int view)
 {
     if (!on) { SetExtState("rea_sixty", "uf1_startup_view", "", true); return; }
-    if (view < 0 || view >= kUf1ViewCount) return;
+    if (view < 0 || view > kUf1StartupRme) return;
     char b[16]; std::snprintf(b, sizeof(b), "%d", view);
     SetExtState("rea_sixty", "uf1_startup_view", b, true);
 }
@@ -49453,6 +49468,16 @@ void reasixty_setUf1StartupBank(bool on, int bank)
     SetExtState("rea_sixty", "uf1_startup_bank", b, true);
 }
 int reasixty_uf1ViewMode() { return uf1ViewMode_(); }
+// What "start the UF1 in a fixed view" pins when ticked: the live view, or RME
+// while the RME side-car has the surface. ⛔ Its own function: three other
+// readers of reasixty_uf1ViewMode index per-view tables (0..3) with it.
+int reasixty_uf1StartupViewNow()
+{
+    if (g_uf1SideCar.load() == Uf1SideCar::RmeMonitor) return kUf1StartupRme;
+    return uf1ViewMode_();
+}
+// Is the RME side-car offered here at all (ORC's rme.json is there)?
+bool reasixty_rmeAvailable() { return g_rmeAvailable.load(); }
 // The editor's view picker switches the SURFACE, exactly as its jog-object
 // picker does: there is no edit-only view, so what you edit is always what the
 // UF1 is showing and the two cannot drift apart.

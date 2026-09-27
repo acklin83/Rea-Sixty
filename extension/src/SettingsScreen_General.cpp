@@ -203,6 +203,8 @@ void               reasixty_uf1BankDisplayName(int bank, int mod,
 bool               reasixty_uf1BankNameFlash();
 void               reasixty_setUf1BankNameFlash(bool on);
 int                reasixty_uf1ViewMode();
+bool               reasixty_rmeAvailable();
+int                reasixty_uf1StartupViewNow();
 // British / American spelling picked at render time (Appearance → Spelling).
 // Defined in main.cpp; same declaration as SettingsScreen.cpp carries.
 const char* reasixty_sp(const char* uk, const char* us);
@@ -1519,7 +1521,11 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
     // always came up on Plug-in. Off = unchanged. Guarded separately from the
     // heading above so the forty lines below keep their indentation.
     if (showsDev(kDevUf1)) {
-        static const char* kSvName[4] = { "Plug-in", "DAW", "Meter", "Sends" };
+        // The fifth, RME, is the side-car ORC runs (Frank 26.09.2026), offered
+        // only where ORC is set up; stored past the four views (main.cpp,
+        // kUf1StartupRme).
+        static const char* kSvName[5] = { "Plug-in", "DAW", "Meter", "Sends", "RME" };
+        const int svCount = reasixty_rmeAvailable() ? 5 : 4;
 
         int sv = 0;
         const bool svOn = reasixty_uf1StartupView(&sv);
@@ -1527,18 +1533,18 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
         if (ImGui_Checkbox(ctx, "Start the UF1 in a fixed view", &on)) {
             // Seed from what the UF1 shows right now, so ticking the box pins
             // the view the user is looking at.
-            reasixty_setUf1StartupView(on, on ? reasixty_uf1ViewMode() : 0);
-            if (on) sv = reasixty_uf1ViewMode();
+            reasixty_setUf1StartupView(on, on ? reasixty_uf1StartupViewNow() : 0);
+            if (on) sv = reasixty_uf1StartupViewNow();
         }
         help_(ctx, "Off: comes back up where you left it.");
         if (on) {
             ImGui_Indent(ctx, /*indent_w*/ nullptr);
             ImGui_SetNextItemWidth(ctx, 110.0);
             // sv is already range-checked: reasixty_uf1StartupView rejects
-            // anything outside 0..3, and reasixty_uf1ViewMode only returns those.
+            // anything outside 0..4, and reasixty_uf1ViewMode only returns those.
             if (ImGui_BeginCombo(ctx, "##uf1_startup_view",
                                  kSvName[sv], nullptr)) {
-                for (int i = 0; i < 4; ++i) {
+                for (int i = 0; i < svCount; ++i) {
                     bool s = (sv == i);
                     if (ImGui_Selectable(ctx, kSvName[i], &s,
                                          nullptr, nullptr, nullptr)) {
