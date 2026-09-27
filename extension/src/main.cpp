@@ -2168,6 +2168,10 @@ constexpr int64_t kPanTouchHoldMs = 250;
 // The track whose VOLUME the UF1 fader is writing right now, nullptr when it
 // writes something else or nothing. Main thread only; GetTouchState reads it.
 extern MediaTrack* g_uf1FaderVolTr;
+// The track whose PAN each fader wrote last under FLIP, per touch slot (UF8
+// strips 0..7, the UF1 = kUf1PanTouchSlot). Set by flipPanWrite_, read by
+// GetTouchState while that fader's hand is on it. Main thread only.
+extern std::array<MediaTrack*, kPanTouchSlots> g_faderPanTr;
 // Defined with the V-Pot pan code below; the UF1's pan pot calls it earlier.
 static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta);
 
@@ -18649,7 +18653,7 @@ CsFaderHandle flipVpotFader_(MediaTrack* tr, bool flipOn, bool inStripMode)
     return csFaderForTrack(tr);
 }
 
-void flipPanWrite_(MediaTrack* tr, bool inStripMode, double pan)
+void flipPanWrite_(MediaTrack* tr, bool inStripMode, double pan, int touchSlot)
 {
     if (inStripMode) {
         if (const auto pn = csPanForTrack(tr); pn.vst3Param >= 0) {
@@ -18660,7 +18664,12 @@ void flipPanWrite_(MediaTrack* tr, bool inStripMode, double pan)
             return;
         }
     }
-    SetMediaTrackInfo_Value(tr, "D_PAN", pan);
+    // ⇨ THROUGH REAPER'S SURFACE PATH, WITH A TOUCH (Frank 27.09.2026: "das ist
+    // offensichtlich ein bug"). A plain D_PAN write is neither recorded nor held
+    // against playback, so under FLIP pan automation was never written from
+    // either fader. The fader's slot says which hand GetTouchState asks about.
+    if (touchSlot >= 0 && touchSlot < kPanTouchSlots) g_faderPanTr[touchSlot] = tr;
+    CSurf_OnPanChange(tr, pan, /*relative*/ false);
 }
 
 // Captured at touch-on, computed on the main thread via the
@@ -21699,7 +21708,8 @@ void drainInputQueue()
                     double pan = n * 2.0 - 1.0;
                     if (pan < -1.0) pan = -1.0;
                     if (pan >  1.0) pan =  1.0;
-                    flipPanWrite_(tr, g_pluginFaderMode.load(), pan);
+                    flipPanWrite_(tr, g_pluginFaderMode.load(), pan,
+                                  static_cast<int>(e.strip));
                     break;
                 }
                 // Plugin-fader mode: route the fader to the SSL strip's
@@ -23281,10 +23291,23 @@ bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
             if (g_panTouchTr[s] != tr) continue;
             if (now <= g_panTouchUntilMs[s]) return true;
         }
+        // A fader riding pan under FLIP, with the hand on it (flipPanWrite_).
+        if (tr) {
+            // Only while FLIP is on: the UF8's entries are not cleared per pass,
+            // so FLIP is what says the entry is current.
+            if (g_flip.load())
+                for (int s = 0; s < 8; ++s)
+                    if (g_faderPanTr[s] == tr && g_touchReported[s].load()) return true;
+            if (g_faderPanTr[kUf1PanTouchSlot] == tr && g_uf1FaderTouched.load())
+                return true;
+        }
         return false;
     }
     for (int s = 0; s < 8; ++s) {
         if (!g_touchReported[s].load()) continue;
+        // Under FLIP this fader holds PAN, not volume: holding it must not
+        // freeze the track's volume automation.
+        if (g_flip.load() && g_faderPanTr[s] == tr) continue;
         if (g_slotTrack[s] == tr) return true;
     }
     // ⇨ AND THE UF1 FADER (Frank 27.09.2026: "wieso macht das UF1 nicht mit bei
@@ -36050,8 +36073,10 @@ void uf1PaintChannel_()
     // so Touch-mode recording stops + snaps back like the surface send-fader path.
     static bool sSendFaderEditing = false;
     static uint16_t sItemSentPos = 0xFFFF;   // last position written to the items
-    // Cleared every pass; the one branch that writes track volume sets it again.
+    // Cleared every pass; the branch that writes track volume (or, under FLIP,
+    // track pan) sets it again.
     g_uf1FaderVolTr = nullptr;
+    g_faderPanTr[kUf1PanTouchSlot] = nullptr;
     if (touched) {
         const uint16_t pos = g_uf1FaderPos.load();
         if (g_uf1FaderHasPos.load()) {
@@ -36125,7 +36150,8 @@ void uf1PaintChannel_()
                 // The pan the readout and the motor also use — the plug-in's in
                 // Strip Mode, REAPER's otherwise. Never CSurf_OnPanChange here
                 // without asking, or the fader writes one pan and shows another.
-                flipPanWrite_(ftr, g_uf1StripMode.load(), uf1PosToPan_(pos));
+                flipPanWrite_(ftr, g_uf1StripMode.load(), uf1PosToPan_(pos),
+                              kUf1PanTouchSlot);
             }
             else {
                 // Tell REAPER the fader is held BEFORE the write (GetTouchState).
@@ -36812,6 +36838,7 @@ std::array<int64_t, kPanTouchSlots>      g_panTouchUntilMs{};
 std::array<double, kPanTouchSlots>       g_panTouchVal{};
 std::array<MediaTrack*, kPanTouchSlots>  g_panTouchTr{};
 MediaTrack*                              g_uf1FaderVolTr = nullptr;
+std::array<MediaTrack*, kPanTouchSlots>  g_faderPanTr{};
 
 // Folder Mode reveal timestamps — bumped by V-Pot-driven inputs in
 // drainInputQueue so a parent strip briefly shows the real value before
@@ -40968,7 +40995,8 @@ void commitDebouncedTouchReleases()
                     double pan = n * 2.0 - 1.0;
                     if (pan < -1.0) pan = -1.0;
                     if (pan >  1.0) pan =  1.0;
-                    flipPanWrite_(tr, g_pluginFaderMode.load(), pan);
+                    flipPanWrite_(tr, g_pluginFaderMode.load(), pan,
+                                  static_cast<int>(s));
                 } else if (g_uf8PluginMode.load()) {
                     if (auto uctxT = userStripCtxFocused_(); uctxT.map) {
                         const int bank = std::clamp(g_softKeyBank.load(),
