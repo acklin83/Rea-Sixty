@@ -118,3 +118,34 @@ wurde. Ein Side-Car, der Reverb/Echo schreibt, muss den Wert selbst übernehmen.
 Playback-FX-Send danach auch probiert (19:38, mit Franks Okay): `/playback/0/fxsend -10`,
 fünf Sekunden später `-300` (aus), auf AN 1/2. Frank sah es. **Schreibbar, aber TotalMix
 meldet ihn nie**: der Side-Car kann ihn setzen, aber den aktuellen Wert nicht kennen.
+
+## UF1-Jog fällt nicht mehr zwischen das Raster (Forum, sebsteeno)
+
+Meldung: der Jog „sometimes doesn't want to snap to the beginning of a bar (bar 20)“,
+im ersten Post „landing between bars when moved slowly“.
+
+Ursache, nachgerechnet mit der echten Logik: `uf1JogDeJitter_` (Totzone 2) gibt eine
+einzelne Raste erst mit der zweiten weiter, langsam gedreht also immer zwei Zellen.
+Playhead rastete auf Zellen (Grid 1/4 × 0.25 = 1/16) ab Projektbeginn. Von einer
+ungeraden Sechzehntel lief der Cursor 19, 21, 23 … und übersprang jeden Takt. Der Jog
+liefert laut ORC-Log fast nur Einzelrasten (±1: 3079 von ~3470).
+Zweiter Grund derselben Klasse: gezählt in QN ab Projektbeginn, nach einem 7/8-Takt
+lag keine Zelle mehr auf dem Taktstrich.
+
+Frank: „machs einfach so dass er gar nicht mehr zwischen den raster fallen kann“,
+„mit shift natürlich auch den einstellungen entsprechend kleiner“.
+
+- `src/JogGrid.h` (rein, nur Header): Zellen und Linien zählen ab dem Taktanfang
+  (`TimeMap_QNToMeasures`), der Cursor landet auf einer Zelle (Grid × Schritt) und
+  springt nie über eine Linie (Grid). Shift teilt beides durch den Fein-Teiler.
+  Ein Schritt grösser als das Grid wird nicht gekürzt.
+- `uf1JogMovePlayhead_` (Playhead und Envelope-Playhead) rechnet damit;
+  `uf1SnapToGridCell_` ist weg (einziger Aufrufer).
+- `uf1MoveCursorByGrid_` (Nav-Pfeile) zählt jetzt auch ab dem Taktanfang, gleiche
+  Fehlerklasse.
+- Test `test_jog_grid`: Forenfall vorwärts und rückwärts, 7/8, Shift, schneller Dreh,
+  grosser Schritt, Nav-Pfeile. Fällt ohne die Liniensperre um (5 Fehler).
+
+Nicht gesehen: sein GIF, seine Einstellungen. Ungeprüft: dass REAPERs eigenes Raster
+auch ab jedem Takt neu zählt (für die Taktanfänge egal, die sind jetzt immer Linien).
+Am Gerät nicht gesehen.

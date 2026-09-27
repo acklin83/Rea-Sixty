@@ -96,6 +96,7 @@
 #include "RmeBuiltins.h"
 #include "RmeSoftKeys.h"
 #include "RmeFace.h"
+#include "JogGrid.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
 #endif
@@ -11042,19 +11043,24 @@ static double uf1ProjectGridQN_()
     return division * 4.0;
 }
 
-// Move the edit cursor one GRID line in `dir` (±1). Tempo-aware via the project grid,
-// same APIs as uf1JogGridSec_. Snaps to the grid first if the cursor sits off it.
+// The measure a QN position falls in, for the grid helpers in JogGrid.h. REAPER
+// answers with the time signature map, so a 7/8 bar is 3.5 QN long here.
+static jog::Measure uf1MeasureAtQN_(double qn)
+{
+    double s = 0.0, e = 0.0;
+    TimeMap_QNToMeasures(nullptr, qn, &s, &e);
+    if (!(e > s)) { s = std::floor(qn / 4.0) * 4.0; e = s + 4.0; }
+    return { s, e };
+}
+
+// Move the edit cursor one GRID line in `dir` (±1). Tempo-aware via the project grid.
+// Snaps to the grid first if the cursor sits off it. ⇨ The lines count from the bar
+// (JogGrid.h), so a bar start is always one, also after an odd time signature.
 static void uf1MoveCursorByGrid_(int dir)
 {
-    const double division = uf1ProjectGridQN_();
-    const double cur   = GetCursorPosition();
-    const double qn    = TimeMap2_timeToQN(nullptr, cur);
-    const double steps = qn / division;
-    const double snap  = std::round(steps) * division;
-    double targetQn;
-    if (std::fabs(snap - qn) < 1e-6) targetQn = snap + dir * division;      // on a line → step
-    else targetQn = (dir > 0 ? std::ceil(steps) : std::floor(steps)) * division;  // off → nearest in dir
-    double t = TimeMap2_QNToTime(nullptr, targetQn);
+    const double qn = TimeMap2_timeToQN(nullptr, GetCursorPosition());
+    double t = TimeMap2_QNToTime(nullptr,
+                                 jog::stepLine(qn, dir, uf1ProjectGridQN_(), uf1MeasureAtQN_));
     if (t < 0.0) t = 0.0;
     SetEditCurPos(t, true, false);
 }
@@ -11723,20 +11729,6 @@ static double uf1JogGridSec_()
     const double g   = TimeMap2_QNToTime(nullptr, qn + division) - cur;
     return (g > 0.0) ? g : 0.5;   // fallback
 }
-// Snap a time to the nearest CELL of `stepGrids` grid divisions (in QN), so Playhead in
-// Grid unit lands ON grid cells — no sub-grid drift when the jog is spun fast (Frank
-// 2026-08-06). stepGrids = the per-mode amount (1 = one grid, 0.25 = quarter, Shift
-// makes it finer). Tempo-aware.
-static double uf1SnapToGridCell_(double pos, double stepGrids)
-{
-    const double gridQN = uf1ProjectGridQN_();
-    const double cell = gridQN * (stepGrids > 0.0 ? stepGrids : 1.0);
-    if (!(cell > 0.0)) return pos;
-    const double qn = TimeMap2_timeToQN(nullptr, pos);
-    const double t  = TimeMap2_QNToTime(nullptr, std::round(qn / cell) * cell);
-    return t < 0.0 ? 0.0 : t;
-}
-
 // De-jitter the raw jog counts (Frank 2026-08-06 "bewegt sich von alleine wenn das
 // Wheel physisch settled"). Accumulate; only flush once |accum| reaches the deadzone,
 // resetting on a direction reversal — a deliberate turn crosses it instantly, the one
@@ -13736,13 +13728,26 @@ void applyUf1JogRazor_(int count, double timeDelta)
     }
 }
 
-// Move the edit cursor by `delta` seconds. Grid unit → snap to grid cells so a fast spin
-// can't land the cursor between grid lines (Frank 2026-08-06); Zoom/Seconds stay
-// continuous. Shared by Playhead mode and Envelope mode's playhead sub-target.
-static void uf1JogMovePlayhead_(double delta, Uf1JogUnit unit, double step)
+// Move the edit cursor by `delta` seconds. Zoom/Seconds stay continuous. Shared by
+// Playhead mode and Envelope mode's playhead sub-target.
+// ⇨ GRID UNIT CANNOT FALL BETWEEN THE GRID (Frank 2026-09-27, forum: the jog "sometimes
+// doesn't want to snap to the beginning of a bar"). The cursor lands on cells of
+// grid × step, counted from the bar, and never crosses a grid line without stopping
+// on it: the de-jitter hands on two detents at a time, which from an odd cell used
+// to jump every bar. `fine` is the Shift divisor (1 without), and it makes the lines
+// finer too. All of it in JogGrid.h, pinned by test_jog_grid.
+static void uf1JogMovePlayhead_(double delta, Uf1JogUnit unit, double step, double fine)
 {
-    double np = GetCursorPosition() + delta;
-    if (unit == Uf1JogUnit::Grid) np = uf1SnapToGridCell_(np, step);
+    const double cur = GetCursorPosition();
+    double np = cur + delta;
+    if (unit == Uf1JogUnit::Grid) {
+        const double grid = uf1ProjectGridQN_();
+        const double qCur = TimeMap2_timeToQN(nullptr, cur);
+        const double qTo  = jog::move(qCur, TimeMap2_timeToQN(nullptr, np) - qCur,
+                                      grid * step, grid / (fine > 0.0 ? fine : 1.0),
+                                      uf1MeasureAtQN_);
+        np = TimeMap2_QNToTime(nullptr, qTo);
+    }
     if (np < 0.0) np = 0.0;
     SetEditCurPos(np, true, false);
 }
@@ -13786,9 +13791,10 @@ void uf1JogDispatch_(int count)
     if (count == 0) return;
     const auto mode = g_uf1JogMode.load();
     double step = g_uf1JogStep[static_cast<int>(mode)].load();
+    double fine = 1.0;   // the Shift divisor, also for the playhead's grid lines
     if (uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)) {
         const double d = g_uf1JogFineDiv.load();
-        if (d > 0.0) step /= d;
+        if (d > 0.0) { step /= d; fine = d; }
     }
     const auto unit = static_cast<Uf1JogUnit>(g_uf1JogUnit[static_cast<int>(mode)].load());
     double scale = 1.0;   // step unit → seconds
@@ -13807,7 +13813,7 @@ void uf1JogDispatch_(int count)
     else if (!g_uf1TimeSelArmed.exchange(true)) g_uf1TimeSelAnchor = GetCursorPosition();
     switch (mode) {
         case Uf1JogMode::Playhead:
-            uf1JogMovePlayhead_(delta, unit, step);
+            uf1JogMovePlayhead_(delta, unit, step, fine);
             if (pulling) uf1TimeSelSet_(GetCursorPosition());
             break;
         case Uf1JogMode::Scrub: {
@@ -13880,7 +13886,7 @@ void uf1JogDispatch_(int count)
             // NAV-centre picks the target: playhead (nudge the cursor without leaving
             // Envelope editing) or the selected envelope's points (Frank 2026-08-08).
             if (g_uf1EnvJogPlayhead.load()) {
-                uf1JogMovePlayhead_(delta, unit, step);
+                uf1JogMovePlayhead_(delta, unit, step, fine);
                 // Same Cmd pull as Playhead mode — the wheel is on the cursor here,
                 // so the gesture is the same gesture.
                 if (pulling) uf1TimeSelSet_(GetCursorPosition());

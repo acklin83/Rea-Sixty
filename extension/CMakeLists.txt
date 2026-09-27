@@ -783,6 +783,11 @@ if(NOT WIN32)
     enable_testing()
     add_test(NAME protocol COMMAND test_protocol)
 
+    # The UF1 jog in Grid unit never falls between the grid (JogGrid.h, header only).
+    add_executable(test_jog_grid tests/test_jog_grid.cpp)
+    target_include_directories(test_jog_grid PRIVATE src)
+    add_test(NAME jog_grid COMMAND test_jog_grid)
+
     add_executable(test_uc1_protocol tests/test_uc1_protocol.cpp src/UC1Protocol.cpp)
     target_include_directories(test_uc1_protocol PRIVATE src)
     add_test(NAME uc1_protocol COMMAND test_uc1_protocol)
