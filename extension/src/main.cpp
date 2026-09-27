@@ -2157,10 +2157,19 @@ extern std::array<std::string, 8> g_panOverlayText;
 // detent and re-assert it every tick (keeps CSurf_OnPanChange continuous so it
 // doesn't read the gaps as touch-releases → the snap-to-centre sawtooth). When
 // the window lapses (user stopped turning) the writes stop and Touch releases.
-extern std::array<int64_t, 8>      g_panTouchUntilMs;
-extern std::array<double, 8>       g_panTouchVal;
-extern std::array<MediaTrack*, 8>  g_panTouchTr;
+// Nine places: the UF8's eight strips, and the UF1's pot above the fader
+// (kUf1PanTouchSlot, 27.09.2026). One mechanism for both surfaces.
+constexpr int kPanTouchSlots   = 9;
+constexpr int kUf1PanTouchSlot = 8;
+extern std::array<int64_t, kPanTouchSlots>      g_panTouchUntilMs;
+extern std::array<double, kPanTouchSlots>       g_panTouchVal;
+extern std::array<MediaTrack*, kPanTouchSlots>  g_panTouchTr;
 constexpr int64_t kPanTouchHoldMs = 250;
+// The track whose VOLUME the UF1 fader is writing right now, nullptr when it
+// writes something else or nothing. Main thread only; GetTouchState reads it.
+extern MediaTrack* g_uf1FaderVolTr;
+// Defined with the V-Pot pan code below; the UF1's pan pot calls it earlier.
+static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta);
 
 // Folder Mode value-line override: parent tracks normally show "Folder"
 // in the V-Pot value line; turning the V-Pot reveals the actual value
@@ -5761,6 +5770,15 @@ double uiVolLinear(MediaTrack* tr)
     double pan = 0.0;
     GetTrackUIVolPan(tr, &vol, &pan);
     return vol;
+}
+
+// Its twin for pan: what the mixer shows, automation playback included.
+double uiPan(MediaTrack* tr)
+{
+    double vol = 1.0;
+    double pan = 0.0;
+    GetTrackUIVolPan(tr, &vol, &pan);
+    return pan;
 }
 
 // REAPER's C API expects calls on the main thread. The UF8 input handler
@@ -18614,7 +18632,9 @@ double flipPanRead_(MediaTrack* tr, bool inStripMode)
 {
     double csPan = 0.0;
     if (csStripPanReadout_(tr, inStripMode, &csPan)) return csPan;
-    return GetMediaTrackInfo_Value(tr, "D_PAN");
+    // The pan REAPER shows, automation included, like the UF8's pan ring
+    // (27.09.2026; D_PAN is the stored value and stood still under automation).
+    return uiPan(tr);
 }
 
 // The OTHER HALF of FLIP's swap: what the V-Pot takes when the fader gives up
@@ -19208,7 +19228,7 @@ void applyUf1AboveFaderVpot_(int step)
     // Nudge in dB per raw count → linear, absolute set via the surface path. Top
     // matches the fader (kUf1FaderTopDb = 12 dB); floor at −60 dB.
     if (g_uf1Flip.load()) {
-        const double curLin = GetMediaTrackInfo_Value(tr, "D_VOL");
+        const double curLin = uiVolLinear(tr);  // from what plays, like the UF8's nudge
         const double curDb  = (curLin > 0.0) ? 20.0 * std::log10(curLin) : -60.0;
         double nDb = curDb + step * kUf1FlipVolDbPerCount * kScale;
         if (nDb > 12.0) nDb = 12.0;
@@ -19270,10 +19290,11 @@ void applyUf1AboveFaderVpot_(int step)
                     break;
                 }
             }
-            // Relative pan write — canonical surface path (applies + automation +
-            // notifies the painter, which repaints the Pan label/bar).
-            CSurf_OnPanChange(tr, step * kUf1AboveFaderPanPerDetent * kScale,
-                              /*relative*/true);
+            // The UF8 V-Pot's pan write, on the UF1's own touch slot: absolute
+            // from an accumulator seeded at the EFFECTIVE pan, with a touch
+            // window, so Touch records a held line (writeVpotTrackPan_).
+            writeVpotTrackPan_(tr, kUf1PanTouchSlot,
+                               step * kUf1AboveFaderPanPerDetent * kScale);
             break;
     }
 }
@@ -20051,7 +20072,10 @@ void applyUf1ChannelVpotPush_(int idx);
 // sawtooth); the only CSurf write is the real detent. Frank 2026-06-24.
 static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta)
 {
-    if (strip < 0 || strip >= 8) return;
+    // `strip` 0..7 = UF8 strips, kUf1PanTouchSlot = the UF1's pot above the
+    // fader (27.09.2026: it wrote a RELATIVE CSurf pan with no touch, the very
+    // path the comment above names as the Touch sawtooth).
+    if (strip < 0 || strip >= kPanTouchSlots) return;
     const int64_t now = nowMs_();
     // Fresh gesture (touch window lapsed) or track changed → re-seed the
     // accumulator from the EFFECTIVE pan (GetTrackUIVolPan reflects an active
@@ -23253,7 +23277,7 @@ bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
         // on each detent. While the window is live REAPER sees a sustained touch
         // and records pan automation in Touch (mirrors the fader's volume touch).
         const int64_t now = nowMs_();
-        for (int s = 0; s < 8; ++s) {
+        for (int s = 0; s < kPanTouchSlots; ++s) {
             if (g_panTouchTr[s] != tr) continue;
             if (now <= g_panTouchUntilMs[s]) return true;
         }
@@ -23263,6 +23287,11 @@ bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
         if (!g_touchReported[s].load()) continue;
         if (g_slotTrack[s] == tr) return true;
     }
+    // ⇨ AND THE UF1 FADER (Frank 27.09.2026: "wieso macht das UF1 nicht mit bei
+    // automatisierten sachen"). Only the eight UF8 strips were ever reported, so
+    // in Touch REAPER never knew the UF1 fader was held: automation kept
+    // playing under the hand and nothing was recorded.
+    if (tr && tr == g_uf1FaderVolTr && g_uf1FaderTouched.load()) return true;
     return false;
 }
 
@@ -30777,7 +30806,7 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
     if (g_uf1ChannelSubMode.load() == 1) {
         MediaTrack* t = GetTrack(nullptr, uf1DawWindowStart_() + vi);
         if (!t) return;
-        const double curLin = GetMediaTrackInfo_Value(t, "D_VOL");
+        const double curLin = uiVolLinear(t);   // from what plays, like the UF8's nudge
         const double curDb  = (curLin > 0.0) ? 20.0 * std::log10(curLin) : -60.0;
         // Quick-Key-2 "Fine Ctrl" also applies in DAW mode (Frank 2026-08-04:
         // Fine ging vorher nur im Plugin-Mode) — scale the dB nudge by the fine
@@ -32214,7 +32243,8 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
     // unit. The unit is OURS here too — the Hue screen already sends spaces in
     // that slot — so a non-dB target names its own unit, same rule and same
     // splitter as the UF8's readout.
-    const double volLin = GetMediaTrackInfo_Value(tr, "D_VOL");
+    // What the mixer shows, automation included (uiVolLinear, like the UF8).
+    const double volLin = uiVolLinear(tr);
     std::string dbv  = formatDbReadout(volLin);
     std::string dbu  = "dB";
     if (sendZone) dbv = ovDb;      // Extender: the 9th send's EFFECTIVE level
@@ -32300,7 +32330,7 @@ static void uf1PaintChannelStrip_(MediaTrack* tr, bool changed,
         // Reads the pan this knob WRITES: in SSL Strip Mode that is the CS
         // plug-in's Pan (applyUf1AboveFaderVpot_), so the line and the bar have
         // to come from there too.
-        double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+        double pan = uiPan(tr);   // automation included, like the UF8's ring
         if (double csPan = 0.0;
             csStripPanReadout_(tr, g_uf1StripMode.load(), &csPan)) pan = csPan;
         valLine   = composeValueLine("Pan", formatPanReadout(pan));
@@ -35096,7 +35126,7 @@ void uf1PaintChannel_()
                 if (!t) { sendVpotParam(uint8_t(i), "", ""); setBar(i, 0.0, false, /*empty*/true); continue; }
                 char nm[64] = {0};
                 GetTrackName(t, nm, sizeof(nm));
-                const double vol = GetMediaTrackInfo_Value(t, "D_VOL");
+                const double vol = uiVolLinear(t);   // automation included
                 sendVpotParam(uint8_t(i), nm, formatDbReadout(vol) + "dB");
                 setBar(i, static_cast<double>(uf1VolToPos_(vol))
                             / static_cast<double>(kUf1FaderMax), /*bipolar*/false);
@@ -36020,6 +36050,8 @@ void uf1PaintChannel_()
     // so Touch-mode recording stops + snaps back like the surface send-fader path.
     static bool sSendFaderEditing = false;
     static uint16_t sItemSentPos = 0xFFFF;   // last position written to the items
+    // Cleared every pass; the one branch that writes track volume sets it again.
+    g_uf1FaderVolTr = nullptr;
     if (touched) {
         const uint16_t pos = g_uf1FaderPos.load();
         if (g_uf1FaderHasPos.load()) {
@@ -36095,7 +36127,11 @@ void uf1PaintChannel_()
                 // without asking, or the fader writes one pan and shows another.
                 flipPanWrite_(ftr, g_uf1StripMode.load(), uf1PosToPan_(pos));
             }
-            else      CSurf_OnVolumeChange(ftr, uf1PosToVol_(pos), false);
+            else {
+                // Tell REAPER the fader is held BEFORE the write (GetTouchState).
+                g_uf1FaderVolTr = ftr;
+                CSurf_OnVolumeChange(ftr, uf1PosToVol_(pos), false);
+            }
             // Echo the user's hand position to the firmware's MOTOR TARGET every
             // tick while the motor is limp. FF 1E while limp only updates the
             // target (it doesn't drive — verified: no mid-drag motion). This is
@@ -36150,7 +36186,10 @@ void uf1PaintChannel_()
         } else if (flipPanFader) {
             pos = uf1PanToPos_(flipPanRead_(ftr, g_uf1StripMode.load()));
         } else {
-            pos = uf1VolToPos_(GetMediaTrackInfo_Value(ftr, "D_VOL"));
+            // What the mixer shows, automation included: the UF8's motor has
+            // always followed this (uiVolLinear); the UF1's read the stored
+            // D_VOL and stood still while automation played (27.09.2026).
+            pos = uf1VolToPos_(uiVolLinear(ftr));
         }
         // ⛔ FORCED ON `changed`, and that is not a nicety. These two statics say
         // where the CHANNEL painter last drove the motor and whether IT engaged
@@ -36769,9 +36808,10 @@ std::array<int64_t, 8>     g_panOverlayUntilMs{};
 std::array<std::string, 8> g_panOverlayText{};
 
 // V-Pot pan fake-touch hold state (see forward decls).
-std::array<int64_t, 8>      g_panTouchUntilMs{};
-std::array<double, 8>       g_panTouchVal{};
-std::array<MediaTrack*, 8>  g_panTouchTr{};
+std::array<int64_t, kPanTouchSlots>      g_panTouchUntilMs{};
+std::array<double, kPanTouchSlots>       g_panTouchVal{};
+std::array<MediaTrack*, kPanTouchSlots>  g_panTouchTr{};
+MediaTrack*                              g_uf1FaderVolTr = nullptr;
 
 // Folder Mode reveal timestamps — bumped by V-Pot-driven inputs in
 // drainInputQueue so a parent strip briefly shows the real value before
