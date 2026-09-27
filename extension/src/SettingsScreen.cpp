@@ -7539,6 +7539,13 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     };
     auto persistDeviceTab = [&](int idx) {
         s_deviceTab = idx;
+        // ⇨ AND THE RESTORE TARGET, once clicks own the tab (Frank 27.09.:
+        // "geht immer auf UF1 tab"). s_tabSaved was read from the ExtState
+        // once per REAPER session and never moved after it, so every reopen of
+        // Settings restored the tab REAPER started with, not the last one used.
+        // Not on the restore's own first frame: a fresh context shows its first
+        // tab for that frame, and taking it would cancel the restore.
+        if (s_tabConsumed) s_tabSaved = idx;
         if (idx == s_tabWritten) return;
         s_tabWritten = idx;
         char buf[8]; snprintf(buf, sizeof(buf), "%d", idx);
