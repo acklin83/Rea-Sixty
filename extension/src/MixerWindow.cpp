@@ -28,6 +28,7 @@ int reasixty_fontScale();
 // See main.cpp's g_devicesSeen: the gate is "ever attached to this machine",
 // not "connected right now".
 bool reasixty_settingsShowsDevice(int mask);
+bool reasixty_rmeAvailable();   // ORC is set up (its rme.json is there)
 // Publishes whether this window currently owns the keyboard, so main.cpp's
 // keyboard-modifier mirror can stand down while a field is being typed into.
 void reasixty_setSettingsHasKeyboardFocus(bool on);
@@ -175,6 +176,8 @@ struct SearchEntry {
     // filtered out of the result list, exactly as the pane hides the control —
     // otherwise search would be a back door onto a setting that isn't drawn.
     uint8_t     dev = kDevAll;
+    // Only where ORC is set up (reasixty_rmeAvailable), like the control.
+    bool        needsOrc = false;
 };
 
 constexpr SearchEntry kSearchIndex[] = {
@@ -201,7 +204,7 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Connected devices",                     kSecDevices, "Connected devices" },
     { "Show settings for devices you don't have",
                                                kSecDevices, "Connected devices" },
-    { "Take the UF1 over from ORC",            kSecDevices, "Connected devices" },
+    { "Take the UF1 over from ORC",            kSecDevices, "Connected devices", kDevUf1, true },
     { "Forget devices that aren't connected",
                                                kSecDevices, "Connected devices" },
     // Drawn as "  LEDs" / "  LCDs" — the two leading spaces are layout
@@ -761,6 +764,7 @@ void MixerWindow::onRunTick()
                         // scrolls you to a control the pane doesn't draw is
                         // worse than no result at all.
                         if (!reasixty_settingsShowsDevice(s.dev)) continue;
+                        if (s.needsOrc && !reasixty_rmeAvailable()) continue;
                         const std::string crumb =
                             searchBreadcrumb(s, /*withGroup*/ true);
                         if (!settingsSearchMatches(toks, crumb)) continue;

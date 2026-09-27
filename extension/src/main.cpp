@@ -796,6 +796,11 @@ inline const char* uf1SideCarName_(int i)
     }
 }
 
+// ⇨ DIE SHIFT-SEITE DES MODE-MENUES GIBT ES NUR MIT EINEM BEWOHNER (Frank
+// 27.09.: ohne ORC nichts vom Side-Car zeigen). Ohne ORC ist SHIFT+MODE dasselbe
+// wie MODE, wie in 0.6.0. Eine Antwort fuer Anzeige und Druck.
+inline bool uf1SideCarPageOffered_() { return g_rmeAvailable.load(); }
+
 // Welcher Bank-Satz zum laufenden Side-Car gehoert, -1 ohne Side-Car.
 inline int uf1SideCarSet_()
 {
@@ -26141,7 +26146,7 @@ void onUf1Event(const uf1::InputEvent& ev)
                 // Nochmal denselben Bewohner waehlen schaltet ihn AUS: ein
                 // Modus, der die ganze Flaeche nimmt, braucht eine Tuer, die
                 // dorthin zurueckfuehrt, wo man herkam.
-                if (shiftHeldAnywhere_()) {
+                if (shiftHeldAnywhere_() && uf1SideCarPageOffered_()) {
                     const int sc = ev.id - uf1::btn::kDisplaySoft1;
                     // An empty place is empty: RME without ORC is not offered.
                     if (sc >= 0 && sc < kUf1SideCarCount && *uf1SideCarName_(sc)) {
@@ -33637,7 +33642,7 @@ static void uf1PaintModeMenuOverlay_(bool changed)
             // desktop mode-banner, so it needs no soft-key here.
             // Mit Shift zeigt derselbe Picker die Side-Car-Seite. Leere
             // Plaetze bleiben leer statt "SOFT n" zu behaupten.
-            const bool scPage = shiftHeldAnywhere_();
+            const bool scPage = shiftHeldAnywhere_() && uf1SideCarPageOffered_();
             const int sm = g_uf1ChannelSubMode.load();
             const int scNow = static_cast<int>(g_uf1SideCar.load());
             const int sel = scPage ? (scNow > 0 ? scNow - 1 : -1)

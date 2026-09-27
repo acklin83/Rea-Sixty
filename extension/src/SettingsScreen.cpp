@@ -54,6 +54,7 @@ bool reasixty_uc1Connected();
 // Device filter — "ever attached to this machine", not "connected right now".
 // See main.cpp's g_devicesSeen.
 bool reasixty_settingsShowsDevice(int mask);
+bool reasixty_rmeAvailable();   // ORC is set up (its rme.json is there)
 // SSL soft-key occupancy, so the editor asks the same question the input
 // path does instead of keeping a second copy of the rule.
 bool reasixty_sslSoftKeySlotOccupied(bool isBc, int bank, int slot);
@@ -1348,6 +1349,19 @@ static const char* dynKindLabel_(uf8::bindings::DynamicBankKind k)
 // not mean static slots, it means this set has no bank of its own and takes
 // Plain's (getSubBankDynamicFor). Naming both "Off (static slots)" made the
 // choice look like it turned the whole bank off.
+// ⇨ THE TOTALMIX KINDS ONLY WHERE ORC IS SET UP (Frank 27.09.: nothing of the
+// side-car without ORC). Without it there is no TotalMix link and no way to
+// switch one on, so a snapshot key would show names and never do anything.
+// `cur` stays offered, so a bank already set to one still reads as what it is.
+// One answer for all four places that list the kinds.
+static bool dynKindOffered_(uf8::bindings::DynamicBankKind k,
+                            uf8::bindings::DynamicBankKind cur)
+{
+    using DK = uf8::bindings::DynamicBankKind;
+    if (k != DK::RmeSnapshots && k != DK::RmeLayouts) return true;
+    return k == cur || reasixty_rmeAvailable();
+}
+
 static const char* dynKindLabelForSet_(uf8::bindings::DynamicBankKind k,
                                        int modIdx)
 {
@@ -5477,6 +5491,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                     DynamicBankKind::RmeSnapshots, DynamicBankKind::RmeLayouts,
                 };
                 for (const auto k : kKinds) {
+                    if (!dynKindOffered_(k, dynMine)) continue;
                     bool sel = (k == dynMine);
                     if (ImGui_Selectable(ctx,
                                          dynKindLabelForSet_(
@@ -6679,6 +6694,7 @@ static void renderBankMatrixContextMenu_(ImGui_Context* ctx)
         const DynamicBankKind cur =
             getSubBankDynamic(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod);
         for (const auto& o : kOpts) {
+            if (!dynKindOffered_(o.kind, cur)) continue;
             bool sel = (o.kind == cur);
             if (ImGui_MenuItem(ctx, dynKindLabelForSet_(o.kind, mod),
                                nullptr, &sel, nullptr))
@@ -7105,6 +7121,7 @@ static void renderUf1BankMatrixContextMenu_(ImGui_Context* ctx)
         };
         const DynamicBankKind cur = getUf1SoftBankDynamic(b, mod);
         for (const auto k : kKinds) {
+            if (!dynKindOffered_(k, cur)) continue;
             bool sel = (k == cur);
             if (ImGui_MenuItem(ctx, dynKindLabelForSet_(k, mod), nullptr, &sel,
                                nullptr))
@@ -8380,6 +8397,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             if (ImGui_BeginCombo(ctx, "##uf1dynbank", curLabel,
                                  /*flags*/ nullptr)) {
                 for (const auto& o : kUf1DynOpts) {
+                    if (!dynKindOffered_(o.kind, curKind)) continue;
                     bool sel = (o.kind == curKind);
                     if (ImGui_Selectable(ctx,
                                          dynKindLabelForSet_(

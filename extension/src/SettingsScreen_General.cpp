@@ -619,7 +619,9 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
 #ifdef __APPLE__
     // ⇨ ORC, the standalone, may hold the UF1 when REAPER starts. On: REAPER
     // asks for it and ORC lets go. Off: REAPER leaves it with ORC.
-    {
+    // Only where ORC is set up (Frank 27.09.: nothing of it without ORC); the
+    // same answer the RME start view asks.
+    if (reasixty_rmeAvailable()) {
         bool take = reasixty_uf1TakeFromOrc();
         if (ImGui_Checkbox(ctx, "Take the UF1 over from ORC", &take))
             reasixty_setUf1TakeFromOrc(take);
