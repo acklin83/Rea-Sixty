@@ -2195,6 +2195,28 @@ extern std::array<MediaTrack*, kVolTouchSlots>  g_volTouchTr;
 static void writeVpotTrackVol_(MediaTrack* tr, int slot,
                                const std::function<double(double)>& step);
 
+// ⇨ A POT IN TOUCH WRITES ITS OWN ENVELOPE POINT (Frank 27.09.2026: a pot's
+// pan, volume and sends behave like a plug-in parameter on a pot, which stays
+// until the envelope's next point). A pot has no touch sensor: reported as a
+// touch, REAPER wrote a flat line and ramped back; not reported, the write was
+// a momentary touch and pan zigzagged (tried, f315cbb). So in Touch, while the
+// transport rolls and the envelope is active and armed, the pot puts a point
+// at the audible position and nothing else: no CSurf write, no touch. The
+// envelope then plays on from it to its next point. Anything else (Read,
+// Latch, Write, stopped, no envelope yet) takes the old path; with no envelope,
+// that old path is also what makes REAPER create one, as it does for a fader.
+enum class PotEnv : uint8_t { Volume, Pan };
+static bool potEnvelopeWrite_(MediaTrack* modeTr, TrackEnvelope* env, PotEnv kind,
+                              double value);
+// The same for a send or receive: its own envelope, the source track's mode.
+struct StripRoute;
+static bool potEnvelopeWriteRoute_(const StripRoute& r, PotEnv kind, double value);
+// One undo step per pot movement, taken in the timer once the pot rests.
+inline int64_t g_potEnvUndoDueMs = 0;
+// Which pot slots last wrote through the envelope (then they are no touch).
+inline std::array<bool, 9>  g_panTouchViaEnv{};
+inline std::array<bool, 13> g_volTouchViaEnv{};
+
 // ⇨ A FADER ON A PLUG-IN PARAMETER ENDS ITS EDIT WHEN THE HAND LETS GO (Frank
 // 27.09.2026: "parameter auf fader macht es falsch (geht nicht zurück)"). REAPER
 // keeps a parameter written through the API in its edit until
@@ -19249,7 +19271,8 @@ void applyUf1AboveFaderVpot_(int step)
                 /*zone*/ g_notchZone.load() * 2.0, -1.0, 1.0);
             g_sendPanVpotAccum[kExtSendGestureSlot] = next;
             g_sendPanVpotMs[kExtSendGestureSlot]    = now;
-            writeRoutePanAutomation_(er, kExtSendGestureSlot, next);
+            if (!potEnvelopeWriteRoute_(er, PotEnv::Pan, next))
+                writeRoutePanAutomation_(er, kExtSendGestureSlot, next);
         }
         return;
     }
@@ -20151,8 +20174,74 @@ static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta)
     if (next >  1.0) next =  1.0;
     g_panTouchVal[strip]     = next;
     g_panTouchTr[strip]      = tr;
+    // Touch: the pot's own envelope point, no touch, no CSurf write.
+    if (potEnvelopeWrite_(tr, GetTrackEnvelopeByChunkName(tr, "<PANENV2"),
+                          PotEnv::Pan, next)) {
+        g_panTouchViaEnv[static_cast<size_t>(strip)] = true;
+        g_panTouchUntilMs[strip] = potHoldUntil_(now, kPanTouchHoldMs);
+        return;
+    }
+    g_panTouchViaEnv[static_cast<size_t>(strip)] = false;
     g_panTouchUntilMs[strip] = potHoldUntil_(now, kPanTouchHoldMs);  // arm/extend fake touch
     CSurf_OnPanChange(tr, next, false);                // absolute → REAPER records
+}
+
+static bool potEnvelopeWrite_(MediaTrack* modeTr, TrackEnvelope* env, PotEnv kind,
+                              double value)
+{
+    if (!modeTr || !env) return false;
+    if ((GetPlayState() & 5) == 0) return false;                 // play | record
+    const int ovr  = GetGlobalAutomationOverride();               // -1 = none
+    const int mode = ovr >= 0 ? ovr : GetTrackAutomationMode(modeTr);
+    if (mode != 2) return false;                                  // 2 = Touch
+    char b[16] = {0};
+    if (GetSetEnvelopeInfo_String(env, "ACTIVE", b, false) && b[0] == '0') return false;
+    b[0] = 0;
+    if (GetSetEnvelopeInfo_String(env, "ARM", b, false) && b[0] == '0') return false;
+
+    double raw = value;
+    if (kind == PotEnv::Pan) {
+        // Which way is positive: asked of the envelope itself, not assumed.
+        char f[64] = {0};
+        Envelope_FormatValue(env, 0.5, f, int(sizeof(f)));
+        if (std::strchr(f, 'L')) raw = -value;                    // +0.5 reads "50%L"
+    } else {
+        raw = ScaleToEnvelopeMode(GetEnvelopeScalingMode(env), value);
+    }
+    const double t = GetPlayPosition();
+    int shape = 0; double tension = 0.0; bool noSort = true;
+    const int prev = GetEnvelopePointByTimeEx(env, -1, t);
+    if (prev >= 0) {
+        double pt = 0.0, pv = 0.0; bool sel = false;
+        GetEnvelopePointEx(env, -1, prev, &pt, &pv, &shape, &tension, &sel);
+        // A point right here already (a fast turn): move it, don't stack another.
+        if (std::fabs(pt - t) < 0.005) {
+            SetEnvelopePointEx(env, -1, prev, &pt, &raw, &shape, &tension, &sel, &noSort);
+            Envelope_SortPointsEx(env, -1);
+            g_potEnvUndoDueMs = nowMs_() + 400;
+            return true;
+        }
+    }
+    InsertEnvelopePointEx(env, -1, t, raw, shape, tension, false, &noSort);
+    Envelope_SortPointsEx(env, -1);
+    g_potEnvUndoDueMs = nowMs_() + 400;
+    return true;
+}
+
+static bool potEnvelopeWriteRoute_(const StripRoute& r, PotEnv kind, double value)
+{
+    if (!r.valid || !r.track) return false;
+    const char* tag = (kind == PotEnv::Pan) ? "P_ENV:<PANENV" : "P_ENV:<VOLENV";
+    auto* env = static_cast<TrackEnvelope*>(
+        GetSetTrackSendInfo(r.track, r.sendCategory, r.sendIndex, tag, nullptr));
+    // A send's envelope lives on its source track and follows that track's mode.
+    MediaTrack* modeTr = r.track;
+    if (r.sendCategory < 0)
+        if (auto* src = static_cast<MediaTrack*>(
+                GetSetTrackSendInfo(r.track, r.sendCategory, r.sendIndex,
+                                    "P_SRCTRACK", nullptr)))
+            modeTr = src;
+    return potEnvelopeWrite_(modeTr, env, kind, value);
 }
 
 // ⇨ VOLUME ON A POT, THE SAME WAY (Frank 27.09.2026: "bei Flip aktiv und
@@ -20173,6 +20262,13 @@ static void writeVpotTrackVol_(MediaTrack* tr, int slot,
     const double next = std::max(0.0, step(g_volTouchVal[slot]));
     g_volTouchVal[slot]     = next;
     g_volTouchTr[slot]      = tr;
+    if (potEnvelopeWrite_(tr, GetTrackEnvelopeByChunkName(tr, "<VOLENV2"),
+                          PotEnv::Volume, next)) {
+        g_volTouchViaEnv[static_cast<size_t>(slot)] = true;
+        g_volTouchUntilMs[slot] = potHoldUntil_(now, kPanTouchHoldMs);
+        return;
+    }
+    g_volTouchViaEnv[static_cast<size_t>(slot)] = false;
     g_volTouchUntilMs[slot] = potHoldUntil_(now, kPanTouchHoldMs);
     CSurf_OnVolumeChange(tr, next, false);
 }
@@ -21936,15 +22032,17 @@ void drainInputQueue()
                             -1.0, 1.0);
                         g_sendPanVpotAccum[strip] = next;
                         g_sendPanVpotMs[strip]    = now;
-                        writeRoutePanAutomation_(r, strip, next);
+                        if (!potEnvelopeWriteRoute_(r, PotEnv::Pan, next))
+                            writeRoutePanAutomation_(r, strip, next);
                         g_panOverlayUntilMs[strip] = now + kPanOverlayMs;
                         g_panOverlayText[strip]    =
                             composeValueLine("Pan", formatPanReadout(next));
                         return next;
                     };
                     auto writeRouteVolDelta = [](const StripRoute& r, double dv) {
-                        const double curLin = GetTrackSendInfo_Value(
-                            r.track, r.sendCategory, r.sendIndex, "D_VOL");
+                        // From what plays (the stored D_VOL stands still under
+                        // automation), and in Touch as the pot's own envelope point.
+                        const double curLin = readRouteVolumeLinear_(r, nullptr);
                         const uint16_t curPb = linearVolumeToPb(curLin);
                         double dPb = dv * 16383.0;
                         int newPb = static_cast<int>(std::round(
@@ -21953,6 +22051,7 @@ void drainInputQueue()
                         if (newPb > 16383) newPb = 16383;
                         const double newLin = pbToLinearVolume(
                             static_cast<uint16_t>(newPb));
+                        if (potEnvelopeWriteRoute_(r, PotEnv::Volume, newLin)) return;
                         writeRouteVolumeLinear_(r, newLin);
                     };
                     if (fr.active()) {
@@ -23365,6 +23464,7 @@ bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
         const int64_t now = nowMs_();
         for (int s = 0; s < kPanTouchSlots; ++s) {
             if (g_panTouchTr[s] != tr) continue;
+            if (g_panTouchViaEnv[static_cast<size_t>(s)]) continue;   // wrote its point
             if (potHoldLive_(now, g_panTouchUntilMs[s])) return true;
         }
         // A fader riding pan under FLIP, with the hand on it (flipPanWrite_).
@@ -23395,7 +23495,8 @@ bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
     if (tr) {
         const int64_t now = nowMs_();
         for (int s = 0; s < kVolTouchSlots; ++s)
-            if (g_volTouchTr[s] == tr && potHoldLive_(now, g_volTouchUntilMs[s]))
+            if (g_volTouchTr[s] == tr && !g_volTouchViaEnv[static_cast<size_t>(s)]
+                && potHoldLive_(now, g_volTouchUntilMs[s]))
                 return true;
     }
     return false;
@@ -30965,7 +31066,8 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
                 /*zone*/ g_notchZone.load() * 2.0, -1.0, 1.0);
             g_sendPanVpotAccum[strip] = nextP;
             g_sendPanVpotMs[strip]    = pnow;
-            writeRoutePanAutomation_(r, strip, nextP);
+            if (!potEnvelopeWriteRoute_(r, PotEnv::Pan, nextP))
+                writeRoutePanAutomation_(r, strip, nextP);
             return;
         }
 
@@ -30989,6 +31091,7 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
         if (nDb < kUf1VpotFloorDb - 1.0) nDb = kUf1VpotFloorDb - 1.0;
         sSAcc[vi] = std::max(nDb, kUf1VpotFloorDb);
         sSMs[vi]  = now;
+        if (potEnvelopeWriteRoute_(r, PotEnv::Volume, uf1VpotVolLinear_(nDb))) return;
         writeRouteVolAutomation_(r, strip, uf1VpotVolLinear_(nDb));
         g_sendVolEditUntilMs[strip] = potHoldUntil_(now, 300);   // idle-timed Touch finalise
         return;
@@ -45902,6 +46005,11 @@ void onTimerBody_()
     // knob has been idle past the window (the fader-flip path finalises on release).
     {
         const int64_t now = nowMs_();
+        // One undo step for the envelope points a pot wrote, once it rests.
+        if (g_potEnvUndoDueMs && now > g_potEnvUndoDueMs) {
+            g_potEnvUndoDueMs = 0;
+            Undo_OnStateChangeEx("Rea-Sixty: pot automation", 1 /*track cfg + envelopes*/, -1);
+        }
         // UF8 strips (0..7) + the UF1 Extender send V-Pot (slot 13) — send PAN has
         // no touch-release, so finalise its automation edit once idle. (8..11 are
         // the UF1-local sends V-Pots, which drive VOL not pan.)
