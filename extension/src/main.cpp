@@ -2153,9 +2153,11 @@ constexpr int64_t kPanOverlayMs = 600;
 extern std::array<int64_t, 8>     g_panOverlayUntilMs;
 extern std::array<std::string, 8> g_panOverlayText;
 
-// V-Pot pan gesture state (the accumulator and its window). Until 27.09.2026 the
-// window was also reported to REAPER as a "fake touch"; it no longer is — see
-// writeVpotTrackPan_ and GetTouchState.
+// V-Pot pan "fake touch": the V-Pot has no touch sensor, so to make REAPER's
+// Touch automation record we hold the touch armed for a short window after each
+// detent and re-assert it every tick (keeps CSurf_OnPanChange continuous so it
+// doesn't read the gaps as touch-releases → the snap-to-centre sawtooth). When
+// the window lapses (user stopped turning) the writes stop and Touch releases.
 // Nine places: the UF8's eight strips, and the UF1's pot above the fader
 // (kUf1PanTouchSlot, 27.09.2026). One mechanism for both surfaces.
 constexpr int kPanTouchSlots   = 9;
@@ -2174,12 +2176,11 @@ extern std::array<MediaTrack*, kPanTouchSlots> g_faderPanTr;
 // Defined with the V-Pot pan code below; the UF1's pan pot calls it earlier.
 static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta);
 
-// ⇨ A POT'S GESTURE IS A SHORT WINDOW AFTER ITS LAST STEP. A pot has no touch
-// sensor, and since 27.09.2026 REAPER is never told one is touched: a pot's pan
-// and volume behave like a plug-in parameter, each write one edit that stays
-// until the envelope's next point (Frank). The window only scopes the
-// accumulators (and the send edits, which REAPER ends with their own call).
-// Holding until Stop, tried the same day, kept pan writing in Touch.
+// ⇨ A POT'S TOUCH IS A SHORT WINDOW AFTER ITS LAST STEP. A pot has no touch
+// sensor. On 27.09.2026 it held until Stop for a few minutes; that kept pan
+// writing in Touch after the hand had gone and held a later FLIP fader's pan
+// against its return (Frank: pots behave like plug-in parameters). One rule for
+// every pot edit: track pan, track volume, send pan, send volume.
 inline int64_t potHoldUntil_(int64_t now, int64_t windowMs) { return now + windowMs; }
 inline bool potHoldLive_(int64_t now, int64_t until) { return until != 0 && now <= until; }
 
@@ -20098,13 +20099,6 @@ void applyUf1ChannelVpotPush_(int idx);
 // never read back a value that doesn't yet reflect our own write (the bug that
 // pinned every CSurf attempt at centre). No per-tick re-assert (attempt 8's
 // sawtooth); the only CSurf write is the real detent. Frank 2026-06-24.
-// ⇨ 27.09.2026: THE FAKE TOUCH IS GONE, the accumulator stays. Frank wants a
-// pot's pan to behave like a plug-in parameter (stays until the envelope's next
-// point), and a reported touch wrote a flat line and ramped back. ⚠ The June
-// note above says REAPER did not record untouched pan at all; that was measured
-// together with the read-back bug, which the accumulator has fixed since. If
-// Touch records nothing from a pot now, that note was right, and the fallback is
-// writing the pan envelope's point ourselves (Frank's "Weg 2").
 static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta)
 {
     // `strip` 0..7 = UF8 strips, kUf1PanTouchSlot = the UF1's pot above the
@@ -20125,9 +20119,7 @@ static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta)
     if (next >  1.0) next =  1.0;
     g_panTouchVal[strip]     = next;
     g_panTouchTr[strip]      = tr;
-    // The window now only bounds one gesture for the accumulator; it is no
-    // longer reported as a touch (GetTouchState, 27.09.2026).
-    g_panTouchUntilMs[strip] = potHoldUntil_(now, kPanTouchHoldMs);
+    g_panTouchUntilMs[strip] = potHoldUntil_(now, kPanTouchHoldMs);  // arm/extend fake touch
     CSurf_OnPanChange(tr, next, false);                // absolute → REAPER records
 }
 
@@ -20137,7 +20129,7 @@ static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta)
 // touch: REAPER never held the envelope, so every read got the automation's
 // value again and every write fought it. Same cure as pan: seed an accumulator
 // from the EFFECTIVE volume when a gesture starts, step it in software, write it
-// absolute. No touch is reported (a pot is not one, see GetTouchState). `step` maps the
+// absolute, and report the touch (GetTouchState) for the pot window. `step` maps the
 // current linear volume to the new one, so each caller keeps its own feel.
 static void writeVpotTrackVol_(MediaTrack* tr, int slot,
                                const std::function<double(double)>& step)
@@ -23329,11 +23321,11 @@ bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
         // V-Pot pan fake-touch: writeVpotTrackPan_ arms a timed window per strip
         // on each detent. While the window is live REAPER sees a sustained touch
         // and records pan automation in Touch (mirrors the fader's volume touch).
-        // ⛔ NO POT IS EVER A TOUCH (Frank 27.09.2026: a pot's pan behaves like
-        // a plug-in parameter, which stays until the envelope's next point). A
-        // reported touch made REAPER write a flat line and ramp back when it
-        // lapsed. Unreported, each absolute write is one edit, as REAPER treats
-        // a plug-in parameter. Only a fader, whose sensor knows the hand, is.
+        const int64_t now = nowMs_();
+        for (int s = 0; s < kPanTouchSlots; ++s) {
+            if (g_panTouchTr[s] != tr) continue;
+            if (potHoldLive_(now, g_panTouchUntilMs[s])) return true;
+        }
         // A fader riding pan under FLIP, with the hand on it (flipPanWrite_).
         if (tr) {
             // Only while FLIP is on: the UF8's entries are not cleared per pass,
@@ -23358,7 +23350,13 @@ bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
     // in Touch REAPER never knew the UF1 fader was held: automation kept
     // playing under the hand and nothing was recorded.
     if (tr && tr == g_uf1FaderVolTr && g_uf1FaderTouched.load()) return true;
-    // Pots that wrote volume are not a touch either (see the pan half above).
+    // And every pot that wrote this track's volume, within its window.
+    if (tr) {
+        const int64_t now = nowMs_();
+        for (int s = 0; s < kVolTouchSlots; ++s)
+            if (g_volTouchTr[s] == tr && potHoldLive_(now, g_volTouchUntilMs[s]))
+                return true;
+    }
     return false;
 }
 
