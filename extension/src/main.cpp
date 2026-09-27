@@ -20099,6 +20099,9 @@ void applyUf1ChannelVpotPush_(int idx);
 // never read back a value that doesn't yet reflect our own write (the bug that
 // pinned every CSurf attempt at centre). No per-tick re-assert (attempt 8's
 // sawtooth); the only CSurf write is the real detent. Frank 2026-06-24.
+// ⛔ 27.09.2026, TRIED AGAIN AND CONFIRMED: without the reported touch, pan
+// zigzags in Touch even with the accumulator (f315cbb, reverted b4a90e7). The
+// untouched write IS the sawtooth, not the read-back. Do not remove the touch.
 static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta)
 {
     // `strip` 0..7 = UF8 strips, kUf1PanTouchSlot = the UF1's pot above the
