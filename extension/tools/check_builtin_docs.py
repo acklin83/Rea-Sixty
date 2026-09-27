@@ -118,9 +118,11 @@ def main() -> int:
     # ⇨ main.cpp AND the files that register on its behalf. RmeBuiltins.cpp
     # moved out of main.cpp on 2026-09-25 so ORC registers the same six; left
     # unread here, its names would have counted as stale doc entries.
-    main_cpp = "\n".join((SRC / f).read_text()
-                         for f in ("main.cpp", "RmeBuiltins.cpp"))
+    # Bindings.cpp too since 2026-09-27: mod_shift / mod_cmd / mod_ctrl
+    # (registerModifierBuiltins), so ORC registers the same three.
     bindings = (SRC / "Bindings.cpp").read_text()
+    main_cpp = "\n".join((SRC / f).read_text()
+                         for f in ("main.cpp", "RmeBuiltins.cpp")) + "\n" + bindings
 
     names = registered_names(main_cpp)
     exact, prefixes = doc_tables(bindings)
