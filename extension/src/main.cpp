@@ -49,6 +49,7 @@
 #  include <windows.h>
 #endif
 
+#include <functional>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -104,6 +105,7 @@
 #include "Uf1Text.h"
 #include "RmeManager.h"
 #include "RmeNames.h"
+#include "PotTouch.h"
 #include "BindingsPick.h"
 #include "RmeStrip.h"
 #include "RmeUf1.h"
@@ -2174,6 +2176,38 @@ extern MediaTrack* g_uf1FaderVolTr;
 extern std::array<MediaTrack*, kPanTouchSlots> g_faderPanTr;
 // Defined with the V-Pot pan code below; the UF1's pan pot calls it earlier.
 static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta);
+
+// ⇨ A POT HOLDS ITS TOUCH UNTIL THE TRANSPORT STOPS (Frank 27.09.2026: "pan soll
+// in touch nur auf den alten wert zurück, wenn pan über flip auf dem fader
+// automatisiert wird. gilt für alle parameter"). A pot has no touch sensor, so
+// the timed window made Touch let go 250 ms after the hand stopped turning and
+// the automation took the value back. Now, while the transport rolls, a pot's
+// touch stays until Stop, like REAPER's Latch; only a fader with a sensor lets
+// go when the hand does. Stopped, the short window stays (nothing records).
+// ONE rule for every pot edit: track pan, track volume, send pan, send volume.
+// Plug-in parameters are REAPER's own and already hold (Frank: "fährt nicht
+// zurück. soll genau so sein").
+// The rule itself is PotTouch.h, pure and tested; these hand it the play state.
+inline bool transportRolling_() { return (GetPlayState() & 5) != 0; }   // play | record
+inline int64_t potHoldUntil_(int64_t now, int64_t windowMs)
+{
+    return reasixty::pot_touch::holdUntil(now, windowMs, transportRolling_());
+}
+inline bool potHoldLive_(int64_t now, int64_t until)
+{
+    return reasixty::pot_touch::live(now, until, transportRolling_());
+}
+
+// Volume on a pot, the pan pot's twin (writeVpotTrackVol_): 0..7 UF8 strips,
+// 8 the UF1's pot above the fader, 9..12 the UF1 DAW view's four pots.
+constexpr int kVolTouchSlots      = 13;
+constexpr int kUf1VolTouchAbove   = 8;
+constexpr int kUf1VolTouchDawBase = 9;
+extern std::array<int64_t, kVolTouchSlots>      g_volTouchUntilMs;
+extern std::array<double, kVolTouchSlots>       g_volTouchVal;
+extern std::array<MediaTrack*, kVolTouchSlots>  g_volTouchTr;
+static void writeVpotTrackVol_(MediaTrack* tr, int slot,
+                               const std::function<double(double)>& step);
 
 // Folder Mode value-line override: parent tracks normally show "Folder"
 // in the V-Pot value line; turning the V-Pot reveals the actual value
@@ -7464,7 +7498,7 @@ void writeRoutePanAutomation_(const StripRoute& r, int strip, double pan)
         g_sendPanEditVal[strip]   = pan;
         // V-Pot pan has no touch-release; arm a timed end-of-edit. The fader-flip
         // path calls finishRoutePanEdit_ on release first, clearing this.
-        g_sendPanEditUntilMs[strip] = nowMs_() + 300;
+        g_sendPanEditUntilMs[strip] = potHoldUntil_(nowMs_(), 300);   // until Stop
     } else {
         SetTrackSendInfo_Value(r.track, r.sendCategory, r.sendIndex, "D_PAN", pan);
         g_sendPanEditUiIdx[strip] = INT_MIN;
@@ -19237,11 +19271,11 @@ void applyUf1AboveFaderVpot_(int step)
     // Nudge in dB per raw count → linear, absolute set via the surface path. Top
     // matches the fader (kUf1FaderTopDb = 12 dB); floor at −60 dB.
     if (g_uf1Flip.load()) {
-        const double curLin = uiVolLinear(tr);  // from what plays, like the UF8's nudge
-        const double curDb  = (curLin > 0.0) ? 20.0 * std::log10(curLin) : -60.0;
-        double nDb = curDb + step * kUf1FlipVolDbPerCount * kScale;
-        if (nDb > 12.0) nDb = 12.0;
-        CSurf_OnVolumeChange(tr, uf1VpotVolLinear_(nDb), false);
+        const double dDb = step * kUf1FlipVolDbPerCount * kScale;
+        writeVpotTrackVol_(tr, kUf1VolTouchAbove, [dDb](double curLin) {
+            const double curDb = (curLin > 0.0) ? 20.0 * std::log10(curLin) : -60.0;
+            return uf1VpotVolLinear_(std::min(curDb + dDb, 12.0));
+        });
         return;
     }
     // Extender: the ninth strip's V-Pot rides the focused parameter, and it
@@ -20089,7 +20123,7 @@ static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta)
     // Fresh gesture (touch window lapsed) or track changed → re-seed the
     // accumulator from the EFFECTIVE pan (GetTrackUIVolPan reflects an active
     // envelope), so we grab the pan where it currently plays and move relative.
-    if (now > g_panTouchUntilMs[strip] || g_panTouchTr[strip] != tr) {
+    if (!potHoldLive_(now, g_panTouchUntilMs[strip]) || g_panTouchTr[strip] != tr) {
         double vol = 1.0, pan = 0.0;
         GetTrackUIVolPan(tr, &vol, &pan);
         g_panTouchVal[strip] = pan;
@@ -20099,8 +20133,30 @@ static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta)
     if (next >  1.0) next =  1.0;
     g_panTouchVal[strip]     = next;
     g_panTouchTr[strip]      = tr;
-    g_panTouchUntilMs[strip] = now + kPanTouchHoldMs;  // arm/extend fake touch
+    g_panTouchUntilMs[strip] = potHoldUntil_(now, kPanTouchHoldMs);  // held until Stop
     CSurf_OnPanChange(tr, next, false);                // absolute → REAPER records
+}
+
+// ⇨ VOLUME ON A POT, THE SAME WAY (Frank 27.09.2026: "bei Flip aktiv und
+// automatisieren geht volume (auf dem v-pot) immer wieder zickzack gegen null").
+// The pots read the playing volume, added their step and wrote it back with no
+// touch: REAPER never held the envelope, so every read got the automation's
+// value again and every write fought it. Same cure as pan: seed an accumulator
+// from the EFFECTIVE volume when a gesture starts, step it in software, write it
+// absolute, and report the touch (GetTouchState) until Stop. `step` maps the
+// current linear volume to the new one, so each caller keeps its own feel.
+static void writeVpotTrackVol_(MediaTrack* tr, int slot,
+                               const std::function<double(double)>& step)
+{
+    if (!tr || slot < 0 || slot >= kVolTouchSlots) return;
+    const int64_t now = nowMs_();
+    if (!potHoldLive_(now, g_volTouchUntilMs[slot]) || g_volTouchTr[slot] != tr)
+        g_volTouchVal[slot] = uiVolLinear(tr);
+    const double next = std::max(0.0, step(g_volTouchVal[slot]));
+    g_volTouchVal[slot]     = next;
+    g_volTouchTr[slot]      = tr;
+    g_volTouchUntilMs[slot] = potHoldUntil_(now, kPanTouchHoldMs);
+    CSurf_OnVolumeChange(tr, next, false);
 }
 
 // ============================ Sticky Pot =============================
@@ -21879,12 +21935,9 @@ void drainInputQueue()
                             if (g_flip.load() && g_forcePan.load() && tr) {
                                 // FLIP+PAN held → V-Pot drives the strip
                                 // track's own pan (P_PAN), not the send.
-                                const double cur = GetMediaTrackInfo_Value(tr, "D_PAN");
-                                const double next = uf8::applyVirtualNotch(
-                                    cur, delta, /*center*/0.0,
-                                    /*zone*/g_notchZone.load() * 2.0,
-                                    -1.0, 1.0);
-                                SetMediaTrackInfo_Value(tr, "D_PAN", next);
+                                // The V-Pot's track-pan write, so it records
+                                // and holds in Touch (it was a bare D_PAN).
+                                writeVpotTrackPan_(tr, static_cast<int>(e.strip), delta);
                             } else if (g_flip.load()) {
                                 writeRouteVolDelta(fr, delta);
                             } else {
@@ -22204,16 +22257,14 @@ void drainInputQueue()
                     // Map detent fraction (signed6/128) to pb14 delta —
                     // single detent ≈ 128 pb (1/128 of full sweep, same
                     // feel as the V-Pot driving the param). Fine quarters.
-                    const uint16_t curPb = linearVolumeToPb(uiVolLinear(tr));
                     double dPb = e.value * 16383.0;
                     if (shiftHeldAnywhere_()) dPb *= 0.25;
-                    int newPb = static_cast<int>(std::round(
-                        static_cast<double>(curPb) + dPb));
-                    if (newPb < 0) newPb = 0;
-                    if (newPb > 16383) newPb = 16383;
-                    const double newLin = pbToLinearVolume(
-                        static_cast<uint16_t>(newPb));
-                    CSurf_OnVolumeChange(tr, newLin, false);
+                    writeVpotTrackVol_(tr, static_cast<int>(e.strip), [dPb](double cur) {
+                        int newPb = static_cast<int>(std::round(
+                            static_cast<double>(linearVolumeToPb(cur)) + dPb));
+                        newPb = std::clamp(newPb, 0, 16383);
+                        return pbToLinearVolume(static_cast<uint16_t>(newPb));
+                    });
                     break;
                 }
                 // FLIP+PAN no-slot swap: V-Pot writes track volume.
@@ -22221,16 +22272,14 @@ void drainInputQueue()
                 // detent feel matches. Active when no plug-in slot is
                 // present (otherwise FLIP+slot wins).
                 if (g_flip.load() && forcePan) {
-                    const uint16_t curPb = linearVolumeToPb(uiVolLinear(tr));
                     double dPb = e.value * 16383.0;
                     if (shiftHeldAnywhere_()) dPb *= 0.25;
-                    int newPb = static_cast<int>(std::round(
-                        static_cast<double>(curPb) + dPb));
-                    if (newPb < 0) newPb = 0;
-                    if (newPb > 16383) newPb = 16383;
-                    const double newLin = pbToLinearVolume(
-                        static_cast<uint16_t>(newPb));
-                    CSurf_OnVolumeChange(tr, newLin, false);
+                    writeVpotTrackVol_(tr, static_cast<int>(e.strip), [dPb](double cur) {
+                        int newPb = static_cast<int>(std::round(
+                            static_cast<double>(linearVolumeToPb(cur)) + dPb));
+                        newPb = std::clamp(newPb, 0, 16383);
+                        return pbToLinearVolume(static_cast<uint16_t>(newPb));
+                    });
                     break;
                 }
                 if (slPtr) {
@@ -23289,7 +23338,7 @@ bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
         const int64_t now = nowMs_();
         for (int s = 0; s < kPanTouchSlots; ++s) {
             if (g_panTouchTr[s] != tr) continue;
-            if (now <= g_panTouchUntilMs[s]) return true;
+            if (potHoldLive_(now, g_panTouchUntilMs[s])) return true;
         }
         // A fader riding pan under FLIP, with the hand on it (flipPanWrite_).
         if (tr) {
@@ -23315,6 +23364,13 @@ bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
     // in Touch REAPER never knew the UF1 fader was held: automation kept
     // playing under the hand and nothing was recorded.
     if (tr && tr == g_uf1FaderVolTr && g_uf1FaderTouched.load()) return true;
+    // And every pot that wrote this track's volume, held until Stop.
+    if (tr) {
+        const int64_t now = nowMs_();
+        for (int s = 0; s < kVolTouchSlots; ++s)
+            if (g_volTouchTr[s] == tr && potHoldLive_(now, g_volTouchUntilMs[s]))
+                return true;
+    }
     return false;
 }
 
@@ -30829,15 +30885,15 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
     if (g_uf1ChannelSubMode.load() == 1) {
         MediaTrack* t = GetTrack(nullptr, uf1DawWindowStart_() + vi);
         if (!t) return;
-        const double curLin = uiVolLinear(t);   // from what plays, like the UF8's nudge
-        const double curDb  = (curLin > 0.0) ? 20.0 * std::log10(curLin) : -60.0;
         // Quick-Key-2 "Fine Ctrl" also applies in DAW mode (Frank 2026-08-04:
         // Fine ging vorher nur im Plugin-Mode) — scale the dB nudge by the fine
         // factor (not the full UF8 knob-speed; the UF1 dB/count is its own).
         const double fine = g_uf1CsFine.load() ? g_fineFactorUf1.load() : 1.0;
-        double nDb = curDb + step * kUf1FlipVolDbPerCount * fine;
-        if (nDb > 12.0) nDb = 12.0;
-        CSurf_OnVolumeChange(t, uf1VpotVolLinear_(nDb), false);
+        const double dDb = step * kUf1FlipVolDbPerCount * fine;
+        writeVpotTrackVol_(t, kUf1VolTouchDawBase + vi, [dDb](double curLin) {
+            const double curDb = (curLin > 0.0) ? 20.0 * std::log10(curLin) : -60.0;
+            return uf1VpotVolLinear_(std::min(curDb + dDb, 12.0));
+        });
         return;
     }
 
@@ -30907,7 +30963,7 @@ void applyUf1ChannelVpot_(uint8_t id, int step)
         sSAcc[vi] = std::max(nDb, kUf1VpotFloorDb);
         sSMs[vi]  = now;
         writeRouteVolAutomation_(r, strip, uf1VpotVolLinear_(nDb));
-        g_sendVolEditUntilMs[strip] = now + 300;   // idle-timed Touch finalise
+        g_sendVolEditUntilMs[strip] = potHoldUntil_(now, 300);   // Touch finalise at Stop
         return;
     }
 
@@ -36839,6 +36895,9 @@ std::array<double, kPanTouchSlots>       g_panTouchVal{};
 std::array<MediaTrack*, kPanTouchSlots>  g_panTouchTr{};
 MediaTrack*                              g_uf1FaderVolTr = nullptr;
 std::array<MediaTrack*, kPanTouchSlots>  g_faderPanTr{};
+std::array<int64_t, kVolTouchSlots>      g_volTouchUntilMs{};
+std::array<double, kVolTouchSlots>       g_volTouchVal{};
+std::array<MediaTrack*, kVolTouchSlots>  g_volTouchTr{};
 
 // Folder Mode reveal timestamps — bumped by V-Pot-driven inputs in
 // drainInputQueue so a parent strip briefly shows the real value before
@@ -39236,7 +39295,7 @@ void pushZonesForVisibleSlots()
             // the track's own pan on the V-Pot (transient overlay).
             if (faderRoute.valid) {
                 if (g_flip.load() && g_forcePan.load()) {
-                    const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+                    const double pan = uiPan(tr);   // automation included
                     vpotBar[s] = vpotPosFromPan(pan);
                 } else if (g_flip.load()) {
                     const double volLin = GetTrackSendInfo_Value(
@@ -39873,7 +39932,7 @@ void pushZonesForVisibleSlots()
             double csPan = 0.0;
             const double pan = csStripPanReadout_(tr, g_pluginFaderMode.load(), &csPan)
                 ? csPan
-                : GetMediaTrackInfo_Value(tr, "D_PAN");
+                : uiPan(tr);   // what plays, like the ring (27.09.2026)
             valLine = composeValueLine("Pan", formatPanReadout(pan));
         } else if (synthFocused) {
             // Synthetic toggle focused: render this strip's own state.
@@ -39980,13 +40039,15 @@ void pushZonesForVisibleSlots()
             double csPan = 0.0;
             const double pan = csStripPanReadout_(tr, g_pluginFaderMode.load(), &csPan)
                 ? csPan
-                : GetMediaTrackInfo_Value(tr, "D_PAN");
+                : uiPan(tr);   // what plays, like the ring (27.09.2026)
             valLine = composeValueLine("Pan", formatPanReadout(pan));
         } else {
             // Nothing focused → V-Pot controls Pan; reflect that in
             // the Value Line. Fader dB stays in the dedicated O/PdB
             // zone above, so we don't need to repeat volume here.
-            const double pan = GetMediaTrackInfo_Value(tr, "D_PAN");
+            // What plays, like the ring: D_PAN stood still under automation
+            // while the ring moved (Frank 27.09.2026).
+            const double pan = uiPan(tr);
             valLine = composeValueLine("Pan", formatPanReadout(pan));
         }
         // Folder Mode override — final stop in the value-line chain.
@@ -45792,13 +45853,13 @@ void onTimerBody_()
         // the UF1-local sends V-Pots, which drive VOL not pan.)
         for (int s = 0; s < 8; ++s)
             if (g_sendPanEditUiIdx[s] != INT_MIN && g_sendPanEditUntilMs[s]
-                && now > g_sendPanEditUntilMs[s]) {
+                && !potHoldLive_(now, g_sendPanEditUntilMs[s])) {
                 finishRoutePanEdit_(s);
                 g_sendPanEditUntilMs[s] = 0;
             }
         if (g_sendPanEditUiIdx[kExtSendGestureSlot] != INT_MIN
             && g_sendPanEditUntilMs[kExtSendGestureSlot]
-            && now > g_sendPanEditUntilMs[kExtSendGestureSlot]) {
+            && !potHoldLive_(now, g_sendPanEditUntilMs[kExtSendGestureSlot])) {
             finishRoutePanEdit_(kExtSendGestureSlot);
             g_sendPanEditUntilMs[kExtSendGestureSlot] = 0;
         }
@@ -45806,7 +45867,7 @@ void onTimerBody_()
         // fader (slot 12) finalises on its own touch-release, not here.
         for (int s = 8; s <= 11; ++s)
             if (g_sendEditUiIdx[s] != INT_MIN && g_sendVolEditUntilMs[s]
-                && now > g_sendVolEditUntilMs[s]) {
+                && !potHoldLive_(now, g_sendVolEditUntilMs[s])) {
                 finishRouteVolEdit_(s);
                 g_sendVolEditUntilMs[s] = 0;
             }

@@ -864,6 +864,10 @@ if(NOT WIN32)
         target_link_libraries(test_rme_face PRIVATE ws2_32)
     endif()
     add_test(NAME rme_face COMMAND test_rme_face)
+    # How long a pot's Touch edit holds (PotTouch.h): until Stop while rolling.
+    add_executable(test_pot_touch tests/test_pot_touch.cpp)
+    target_include_directories(test_pot_touch PRIVATE src)
+    add_test(NAME pot_touch COMMAND test_pot_touch)
     # Press-to-pick in Settings -> Bindings: which surface key a press selects,
     # selects and runs, or leaves alone. Header only.
     add_executable(test_bindings_pick tests/test_bindings_pick.cpp)
