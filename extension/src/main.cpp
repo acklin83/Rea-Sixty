@@ -56640,18 +56640,19 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // end-to-end 2026-07-10/14 (see SslCoreImpersonator.h, memory
     // ssl360-plugin-protobuf).
     //
-    // OPT-IN (default OFF): it announces itself on the SSL discovery ports
-    // (16008/16009) and would clash with a running SSL 360°. Enable per-user via
-    //   reaper.SetExtState("rea_sixty","ssl_core","1",true)
+    // ⛔ ALWAYS ON, NO SWITCH (Frank 27.09.2026: "JEDER user hat ssl 360 zu wenn
+    // er Rea-Sixty benutzt", a condition stated many times). Until then it was
+    // opt-in through ExtState rea_sixty/ssl_core, which no settings page, no
+    // installer and not the manual ever set: every customer ran without it, and
+    // the UF1 meter view had no goniometer and no RTA on Windows and on macOS
+    // alike while Frank's own machines, with the key set since July, worked.
+    // It announces on the SSL discovery ports (16008/16009) and clashes with a
+    // running SSL 360; that is the user's condition to keep, not ours to gate.
     // TCP control port + UDP data port are overridable for clash-avoidance:
     //   rea_sixty/ssl_core_tcp  (0 = ephemeral, announced)
     //   rea_sixty/ssl_core_data (default 16010)
     {
-        bool enable = false;
-        if (const char* ev = GetExtState("rea_sixty", "ssl_core"); ev && *ev)
-            enable = (!strcmp(ev, "1") || !strcmp(ev, "on")
-                      || !strcmp(ev, "true") || !strcmp(ev, "yes"));
-        if (enable) {
+        {
             int tcpPort = 0;
             if (const char* tv = GetExtState("rea_sixty", "ssl_core_tcp");
                 tv && *tv) {
@@ -56729,8 +56730,6 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
             const bool ok = sslcore::start(uint16_t(tcpPort), uint16_t(dataPort));
             initLog(ok ? "step: SSL Core impersonator started"
                        : "step: SSL Core impersonator FAILED to start");
-        } else {
-            initLog("step: SSL Core impersonator disabled (rea_sixty/ssl_core)");
         }
     }
 

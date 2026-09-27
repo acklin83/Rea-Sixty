@@ -4762,8 +4762,8 @@ void UC1Surface::pollGainReduction_()
     // setting) with the attack/release ramp in between, while CompGain tracked
     // the compressor independently.
     //
-    // Requires the impersonator to be running (ExtState rea_sixty/ssl_core=1,
-    // and SSL 360° quit). Stays 0 = dark otherwise, exactly as before — no
+    // Requires the impersonator to be running (always started since
+    // 27.09.2026; SSL 360° must be quit). Stays 0 = dark otherwise — no
     // mirroring of Comp GR onto the gate strip.
     // Sign: the wire is 0..negative; the meters take magnitude (as above).
     // Keyed to the FOCUSED track's channel strip (via the impersonator's
