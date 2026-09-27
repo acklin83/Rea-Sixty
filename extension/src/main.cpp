@@ -33474,6 +33474,22 @@ void uf1PaintChannel_()
         }
     }
 
+    // ⛔ THE METER VIEW'S NAMES COME BACK WHEN MODE IS LET GO, and only the names.
+    // The 03.09. restore (`menuJustClosed` inside the burst above, a34622c) sits
+    // behind `if (layoutChanged)`, and that gate leaves MODE edges out on purpose
+    // (10.08., 1511dc0: a menu edge must not re-establish the plane, it
+    // flickered). So on its own the restore never ran: the MODE overlay wrote
+    // PLUGIN / DAW / METER / SENDS over the meter's names, and on release nothing
+    // put them back.
+    // Here, outside that gate: on the release tick, the four soft-key labels of
+    // the current meter screen, straight from the same burst table, and nothing
+    // else of it. No 0x0100, so no plane rebuild and no flicker.
+    if (meterView && menuEdge && !modeMenu && !layoutChanged) {
+        for (const auto& f : uf1MeterScreenBurst_(meterScreen))
+            if (f.addr == uf1::scr::kSoftKeyLabel)
+                g_uf1_dev->send(uf1::buildScreen(f.addr, f.payload));
+    }
+
     // V-Pot2/3/4 name+value labels track view/screen/PAGE change with the plug-in's
     // LIVE formatted values (the entry burst above only sets page-1 statics, and on
     // some screens those name a different param than the V-Pot drives). On a page
