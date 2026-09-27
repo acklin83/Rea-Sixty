@@ -108,3 +108,11 @@ folgen der Menüreihenfolge, einzeln gemessen sind sie nicht.
 
 Vermutung, ungeprüft: attack/hold/release gehören zu Envelope und Gated, time/highdamp
 zu Space (die drei Typen am Ende der Liste, die andere Regler brauchen).
+
+### Schreiben geprüft (19:34, mit Franks Okay)
+
+`/echo/enable 1`, drei Sekunden später `/echo/enable 0`, als UDP an 127.0.0.1:7005 (ORCs
+Remote-Port bei TotalMix). Frank sah es in TotalMix. Der Mitschnitt von ORC zeigt keine
+Rückmeldung: TotalMix meldet einer Remote nicht, was an ihren eigenen Port geschrieben
+wurde. Ein Side-Car, der Reverb/Echo schreibt, muss den Wert selbst übernehmen.
+Playback-FX-Send (`/playback/<n>/fxsend`) nicht probiert.
