@@ -1980,7 +1980,12 @@ local function renderParamPanel(st, asn)
   paramMaxScroll  = math.max(0, #rows * lineH - (listBot - listTop))
   paramScroll     = clamp(paramScroll, 0, paramMaxScroll)
 
+  -- ⇨ THE HEAD STAYS PUT (Frank 27.09.2026: the search field "immer sichtbar,
+  -- nicht wegscrollen lassen"). A row half above listTop used to be drawn in
+  -- full, over the filter line, so scrolling looked as if the filter slid away.
+  -- Clip the rows to the list's own band, and keep their click area in it too.
   local y = listTop - paramScroll
+  reaper.ImGui_DrawList_PushClipRect(dl, OX + x0, OY + listTop, OX + x0 + PW, OY + WH, true)
   for _, pr in ipairs(rows) do
     if y + lineH >= listTop and y <= listBot then
       local sel    = (pr.p == selectedParam)
@@ -1999,11 +2004,13 @@ local function renderParamPanel(st, asn)
         local uwd = measure(ut, rf)
         dtext(x0 + PW - pad - uwd, y + 1, col(0x78C898, 0.85), ut, rf)
       end
+      local ry = math.max(y, listTop)
       paramRects[#paramRects + 1] =
-        { p = pr.p, name = pr.name, x = x0, y = y, w = PW, h = lineH }
+        { p = pr.p, name = pr.name, x = x0, y = ry, w = PW, h = y + lineH - ry }
     end
     y = y + lineH
   end
+  reaper.ImGui_DrawList_PopClipRect(dl)
 end
 
 -- UF8 device tab — interactive strip-grid. 8 strip columns × 5 control rows

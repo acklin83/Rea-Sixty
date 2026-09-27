@@ -22235,100 +22235,113 @@ void drawFxLearnEditor_(ImGui_Context* ctx)
             // and "out" alone still finds it (every token must be present).
             const auto fltToks = searchTokensLower_(g_paramFilter);
 
-            const auto& plNames = paramNamesFor_(*editing, fx, paramCount);
-            char pname[128];
-            int shownRows = 0, matchingRows = 0;
-            for (int p = 0; p < paramCount; ++p) {
-                snprintf(pname, sizeof(pname), "%s",
-                         (p < (int)plNames.size()) ? plNames[(size_t)p].c_str()
-                                                   : "");
+            // ⇨ THE HEAD STAYS, THE ROWS SCROLL (Frank 27.09.2026: search
+            // fields "immer sichtbar, nicht wegscrollen lassen"). The hint and
+            // the filter above sit in fxl_params; the rows get a child of their
+            // own that fills what is left, so scrolling moves only them.
+            double rowsW = 0.0, rowsH = 0.0;
+            ImGui_GetContentRegionAvail(ctx, &rowsW, &rowsH);
+            int rowsChildFlags = 0;
+            const bool rowsOpen = ImGui_BeginChild(ctx, "fxl_param_rows", &rowsW, &rowsH,
+                                                   &rowsChildFlags, nullptr);
+            if (rowsOpen) {
+                const auto& plNames = paramNamesFor_(*editing, fx, paramCount);
+                char pname[128];
+                int shownRows = 0, matchingRows = 0;
+                for (int p = 0; p < paramCount; ++p) {
+                    snprintf(pname, sizeof(pname), "%s",
+                             (p < (int)plNames.size()) ? plNames[(size_t)p].c_str()
+                                                       : "");
 
-                // Hide REAPER's injected MIDI-learn params (MIDI CC … /
-                // Pitch / Program / Channel Pressure) — never real
-                // controls, just clutter in the picker. (Frank 2026-05-29.)
-                if (isReaperMidiParam_(pname)) continue;
+                    // Hide REAPER's injected MIDI-learn params (MIDI CC … /
+                    // Pitch / Program / Channel Pressure) — never real
+                    // controls, just clutter in the picker. (Frank 2026-05-29.)
+                    if (isReaperMidiParam_(pname)) continue;
 
-                if (!searchAllTokensCI_(fltToks, pname)) continue;
+                    if (!searchAllTokensCI_(fltToks, pname)) continue;
 
-                // Everything past this point is a row the user could click, so
-                // it counts even when the cap stops us drawing it.
-                ++matchingRows;
-                if (shownRows >= kMaxRows) continue;
-                ++shownRows;
+                    // Everything past this point is a row the user could click, so
+                    // it counts even when the cap stops us drawing it.
+                    ++matchingRows;
+                    if (shownRows >= kMaxRows) continue;
+                    ++shownRows;
 
-                auto it = usedBy.find(p);
-                const bool isBound = (it != usedBy.end());
+                    auto it = usedBy.find(p);
+                    const bool isBound = (it != usedBy.end());
 
-                // Already-mapped rows: render disabled so the user can't
-                // accidentally re-bind (clear the existing binding via
-                // the schematic's right-click menu first). The Selectable
-                // carries only the index + param name; the "-> binding"
-                // label is rendered via SameLine at a fixed x-offset so
-                // arrows line up vertically across rows regardless of
-                // the proportional font width of param names. Frank
-                // 2026-05-22.
-                char rowLbl[256];
-                snprintf(rowLbl, sizeof(rowLbl),
-                    "  [%4d] %s##fxl_param_%d",
-                    p, pname, p);
+                    // Already-mapped rows: render disabled so the user can't
+                    // accidentally re-bind (clear the existing binding via
+                    // the schematic's right-click menu first). The Selectable
+                    // carries only the index + param name; the "-> binding"
+                    // label is rendered via SameLine at a fixed x-offset so
+                    // arrows line up vertically across rows regardless of
+                    // the proportional font width of param names. Frank
+                    // 2026-05-22.
+                    char rowLbl[256];
+                    snprintf(rowLbl, sizeof(rowLbl),
+                        "  [%4d] %s##fxl_param_%d",
+                        p, pname, p);
 
-                // One line per DRAWN row, not per candidate: enough to name the row
-                // that throws, without the volume that made the pane unusable.
-                bool selected = false;
-                int  selFlags = ImGui_SelectableFlags_AllowDoubleClick;
-                if (isBound) selFlags |= ImGui_SelectableFlags_Disabled;
-                if (ImGui_Selectable(ctx, rowLbl, &selected, &selFlags,
-                                     nullptr, nullptr)) {
-                    if (g_listeningLinkIdx >= 0 && topo) {
-                        bindSlot_(g_listeningLinkIdx, p);
-                        autoAdvanceListening_(*topo);
-                    } else if (g_listeningUf8.active()) {
-                        bindUf8_(g_listeningUf8.kind,
-                                 g_listeningUf8.strip,
-                                 g_listeningUf8.bank, p,
-                                 reasixty_uf8LearnAsToggle());
-                        g_listeningUf8.clear();
+                    // One line per DRAWN row, not per candidate: enough to name the row
+                    // that throws, without the volume that made the pane unusable.
+                    bool selected = false;
+                    int  selFlags = ImGui_SelectableFlags_AllowDoubleClick;
+                    if (isBound) selFlags |= ImGui_SelectableFlags_Disabled;
+                    if (ImGui_Selectable(ctx, rowLbl, &selected, &selFlags,
+                                         nullptr, nullptr)) {
+                        if (g_listeningLinkIdx >= 0 && topo) {
+                            bindSlot_(g_listeningLinkIdx, p);
+                            autoAdvanceListening_(*topo);
+                        } else if (g_listeningUf8.active()) {
+                            bindUf8_(g_listeningUf8.kind,
+                                     g_listeningUf8.strip,
+                                     g_listeningUf8.bank, p,
+                                     reasixty_uf8LearnAsToggle());
+                            g_listeningUf8.clear();
+                        }
+                    }
+
+                    // Aligned binding column for already-bound rows.
+                    if (isBound) {
+                        double arrowX = scaleW_(ctx, 240.0);
+                        ImGui_SameLine(ctx, &arrowX, nullptr);
+                        char bindBuf[160];
+                        snprintf(bindBuf, sizeof(bindBuf),
+                            "-> %s", it->second.c_str());
+                        ImGui_TextDisabled(ctx, bindBuf);
+                    }
+
+                    // Drag source — payload is the vst3 param index encoded
+                    // as ASCII. Schematic pads accept it via "FXL_PARAM" type.
+                    // Disabled rows are still draggable would surprise the
+                    // user (the row looks dim), so gate this on isBound too.
+                    if (!isBound) {
+                        int dndFlags = 0;
+                        if (ImGui_BeginDragDropSource(ctx, &dndFlags)) {
+                            char payload[16];
+                            snprintf(payload, sizeof(payload), "%d", p);
+                            ImGui_SetDragDropPayload(ctx, "FXL_PARAM", payload,
+                                                     nullptr);
+                            char preview[160];
+                            snprintf(preview, sizeof(preview),
+                                "param %d  %s", p, pname);
+                            ImGui_Text(ctx, preview);
+                            ImGui_EndDragDropSource(ctx);
+                        }
                     }
                 }
 
-                // Aligned binding column for already-bound rows.
-                if (isBound) {
-                    double arrowX = scaleW_(ctx, 240.0);
-                    ImGui_SameLine(ctx, &arrowX, nullptr);
-                    char bindBuf[160];
-                    snprintf(bindBuf, sizeof(bindBuf),
-                        "-> %s", it->second.c_str());
-                    ImGui_TextDisabled(ctx, bindBuf);
-                }
-
-                // Drag source — payload is the vst3 param index encoded
-                // as ASCII. Schematic pads accept it via "FXL_PARAM" type.
-                // Disabled rows are still draggable would surprise the
-                // user (the row looks dim), so gate this on isBound too.
-                if (!isBound) {
-                    int dndFlags = 0;
-                    if (ImGui_BeginDragDropSource(ctx, &dndFlags)) {
-                        char payload[16];
-                        snprintf(payload, sizeof(payload), "%d", p);
-                        ImGui_SetDragDropPayload(ctx, "FXL_PARAM", payload,
-                                                 nullptr);
-                        char preview[160];
-                        snprintf(preview, sizeof(preview),
-                            "param %d  %s", p, pname);
-                        ImGui_Text(ctx, preview);
-                        ImGui_EndDragDropSource(ctx);
-                    }
+                if (matchingRows > shownRows) {
+                    ImGui_Spacing(ctx);
+                    char overflow[96];
+                    snprintf(overflow, sizeof(overflow),
+                        "(showing first %d of %d parameters — use the filter)",
+                        shownRows, matchingRows);
+                    ImGui_TextDisabled(ctx, overflow);
                 }
             }
-
-            if (matchingRows > shownRows) {
-                ImGui_Spacing(ctx);
-                char overflow[96];
-                snprintf(overflow, sizeof(overflow),
-                    "(showing first %d of %d parameters — use the filter)",
-                    shownRows, matchingRows);
-                ImGui_TextDisabled(ctx, overflow);
-            }
+            // ⛔ Unconditional, like every EndChild here (learnings #31).
+            ImGui_EndChild(ctx);
         }
     }
     // ⛔ Unconditional — see the fxl_slots EndChild above for why.
