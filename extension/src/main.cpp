@@ -2195,6 +2195,35 @@ extern std::array<MediaTrack*, kVolTouchSlots>  g_volTouchTr;
 static void writeVpotTrackVol_(MediaTrack* tr, int slot,
                                const std::function<double(double)>& step);
 
+// ⇨ A FADER ON A PLUG-IN PARAMETER ENDS ITS EDIT WHEN THE HAND LETS GO (Frank
+// 27.09.2026: "parameter auf fader macht es falsch (geht nicht zurück)"). REAPER
+// keeps a parameter written through the API in its edit until
+// TrackFX_EndParamEdit; we never sent it, so in Touch a fader's parameter stayed
+// where the hand left it instead of returning like track volume. Each fader
+// notes what it writes (slot 0..7 UF8 strips, kUf1FaderEditSlot the UF1) and its
+// release ends it. Pots do NOT use this: a pot's parameter staying until the
+// envelope's next point is what Frank wants, and REAPER does that by itself.
+constexpr int kUf1FaderEditSlot = 8;
+struct FaderFxEdit { MediaTrack* tr; int fx; int param; };
+inline std::array<std::vector<FaderFxEdit>, 9> g_faderFxEdit;
+inline void noteFaderFxEdit_(int slot, MediaTrack* tr, int fx, int param)
+{
+    if (slot < 0 || slot >= 9 || !tr || fx < 0 || param < 0) return;
+    auto& v = g_faderFxEdit[static_cast<size_t>(slot)];
+    for (const auto& e : v)
+        if (e.tr == tr && e.fx == fx && e.param == param) return;
+    v.push_back({ tr, fx, param });
+}
+inline void endFaderFxEdit_(int slot)
+{
+    if (slot < 0 || slot >= 9) return;
+    auto& v = g_faderFxEdit[static_cast<size_t>(slot)];
+    for (const auto& e : v)
+        if (ValidatePtr2(nullptr, e.tr, "MediaTrack*"))
+            TrackFX_EndParamEdit(e.tr, e.fx, e.param);
+    v.clear();
+}
+
 // Folder Mode value-line override: parent tracks normally show "Folder"
 // in the V-Pot value line; turning the V-Pot reveals the actual value
 // for kFolderRevealMs, then it reverts to "Folder".
@@ -21709,6 +21738,7 @@ void drainInputQueue()
                         double n = uf8PbToParamNorm_(linearVolumeToPb(e.value));
                         const double prevN = TrackFX_GetParamNormalized(tr, sfx, sp);
                         TrackFX_SetParamNormalized(tr, sfx, sp, n);
+                        noteFaderFxEdit_(static_cast<int>(e.strip), tr, sfx, sp);
                         g_stickyFocusLockUntilMs.store(nowMs_() + 400);
                         stickyApplyMacro_(tr, prevN);
                         break;
@@ -21738,6 +21768,8 @@ void drainInputQueue()
                     if (slF->inverted) normF = 1.0 - normF;
                     TrackFX_SetParamNormalized(tr, mmF.fxIndex,
                         slF->vst3Param, normF);
+                    noteFaderFxEdit_(static_cast<int>(e.strip), tr, mmF.fxIndex,
+                                     slF->vst3Param);
                     uf8::param_groups::broadcastBuiltinSlot(
                         tr, focusedF.domain, focusedF.slotIdx, normF);
                     break;
@@ -21775,6 +21807,7 @@ void drainInputQueue()
                             if (sb.faderInverted) n = 1.0 - n;
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
                                 sb.faderVst3Param, n);
+                            noteFaderFxEdit_(s, uctx.tr, uctx.fxIdx, sb.faderVst3Param);
                             uf8::param_groups::broadcastUserParam(
                                 uctx.tr, uctx.map, sb.faderVst3Param, n);
                         }
@@ -21804,15 +21837,20 @@ void drainInputQueue()
                         //                                  window
                         diagSetParamLog_("strip_mode/fader",
                             tr, cs.fxIndex, cs.vst3Param, n, setOk, after);
+                        noteFaderFxEdit_(static_cast<int>(e.strip), tr, cs.fxIndex,
+                                         cs.vst3Param);
                         // CS FaderLevel isn't a Link slot for built-in
                         // variants — broadcast by re-resolving per member
                         // via csFaderForTrack so the right vst3 idx is hit
                         // on each variant.
                         for (auto* m : uf8::param_groups::resolveBroadcastTargets(tr)) {
                             const auto mcs = csFaderForTrack(m);
-                            if (mcs.vst3Param >= 0)
+                            if (mcs.vst3Param >= 0) {
                                 TrackFX_SetParamNormalized(m, mcs.fxIndex,
                                     mcs.vst3Param, n);
+                                noteFaderFxEdit_(static_cast<int>(e.strip), m,
+                                                 mcs.fxIndex, mcs.vst3Param);
+                            }
                         }
                         // ⛔ AND IT DOES NOT TAKE THE FOCUS. This used to
                         // setFocus({ChannelStrip, 1}) so the readout would
@@ -35915,6 +35953,13 @@ void uf1PaintChannel_()
     if (g_uf1FaderTouched.load()) sLastTouchSeen = nowT;
     const bool touched = g_uf1FaderTouched.load()
         || (nowT - sLastTouchSeen < std::chrono::milliseconds(150));
+    // The hand has left the fader (after the same 150 ms debounce the writes
+    // use): end the plug-in parameter edit it opened, so Touch returns it.
+    {
+        static bool sWasTouched = false;
+        if (sWasTouched && !touched) endFaderFxEdit_(kUf1FaderEditSlot);
+        sWasTouched = touched;
+    }
     const bool flip = g_uf1Flip.load();   // FLIP: fader rides Pan instead of Volume
     // SSL Strip Mode (PLUG-IN key → g_uf1StripMode, UF1-LOCAL): the fader drives the
     // SSL strip's Out-Gain / Fader Level plug-in param (csFaderForTrack — CS 2 / 4K B/
@@ -36160,6 +36205,7 @@ void uf1PaintChannel_()
                 g_ownWriteFocusLockUntilMs.store(nowMs_() + kFaderNoSelectMs);
                 const double n = uf1PosToNorm_(pos);
                 TrackFX_SetParamNormalized(ftr, csf.fxIndex, csf.vst3Param, n);
+                noteFaderFxEdit_(kUf1FaderEditSlot, ftr, csf.fxIndex, csf.vst3Param);
             }
             else if (extSendFader) {
                 writeRouteVolAutomation_(extRoute, kExtSendGestureSlot, uf1PosToVol_(pos));
@@ -36178,6 +36224,7 @@ void uf1PaintChannel_()
                 const double n = uf1PosToNorm_(pos);
                 const double prevN = TrackFX_GetParamNormalized(ftr, stickyFx, stickyParam);
                 TrackFX_SetParamNormalized(ftr, stickyFx, stickyParam, n);
+                noteFaderFxEdit_(kUf1FaderEditSlot, ftr, stickyFx, stickyParam);
                 g_stickyFocusLockUntilMs.store(nowMs_() + 400);   // don't let the move steal focus
                 stickyApplyMacro_(ftr, prevN);
             }
@@ -36190,6 +36237,7 @@ void uf1PaintChannel_()
                 // such problem to solve.
                 const double n = uf1PosToNorm_(pos);
                 TrackFX_SetParamNormalized(flipParamTr, flipParamFx, flipParam, n);
+                noteFaderFxEdit_(kUf1FaderEditSlot, flipParamTr, flipParamFx, flipParam);
             }
             else if (flipPanFader) {
                 // The pan the readout and the motor also use — the plug-in's in
@@ -40934,7 +40982,10 @@ void commitDebouncedTouchReleases()
         // (audit 2026-09-16). The two frames at the end are the only device
         // work and carry their own check.
         MediaTrack* tr = g_slotTrack[s];
-        if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) continue;
+        if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) {
+            endFaderFxEdit_(static_cast<int>(s));
+            continue;
+        }
 
         // Snap REAPER (or the active plug-in target) to the user's last
         // raw fader position (regardless of the >=4-LSB deadband). The
@@ -41029,6 +41080,7 @@ void commitDebouncedTouchReleases()
                     const double n = uf8PbToParamNorm_(touchPb);
                     const double prevN = TrackFX_GetParamNormalized(tr, sfxR, sprR);
                     TrackFX_SetParamNormalized(tr, sfxR, sprR, n);
+                    noteFaderFxEdit_(static_cast<int>(s), tr, sfxR, sprR);
                     g_stickyFocusLockUntilMs.store(nowMs_() + 400);
                     stickyApplyMacro_(tr, prevN);
                 } else if (g_flip.load() && faderMayTakeSlot_(tr, slT)) {
@@ -41036,6 +41088,8 @@ void commitDebouncedTouchReleases()
                     if (slT->inverted) normT = 1.0 - normT;
                     TrackFX_SetParamNormalized(tr, mmT.fxIndex,
                         slT->vst3Param, normT);
+                    noteFaderFxEdit_(static_cast<int>(s), tr, mmT.fxIndex,
+                                     slT->vst3Param);
                     uf8::param_groups::broadcastBuiltinSlot(
                         tr, focusedT.domain, focusedT.slotIdx, normT);
                 } else if (uf8FlipPanOnFader_(/*slotOnFader*/false)) {
@@ -41058,6 +41112,8 @@ void commitDebouncedTouchReleases()
                             if (sb.faderInverted) n = 1.0 - n;
                             TrackFX_SetParamNormalized(uctxT.tr,
                                 uctxT.fxIdx, sb.faderVst3Param, n);
+                            noteFaderFxEdit_(static_cast<int>(s), uctxT.tr,
+                                             uctxT.fxIdx, sb.faderVst3Param);
                             uf8::param_groups::broadcastUserParam(
                                 uctxT.tr, uctxT.map, sb.faderVst3Param, n);
                         }
@@ -41070,11 +41126,16 @@ void commitDebouncedTouchReleases()
                         const double n = uf8PbToParamNorm_(touchPb);
                         TrackFX_SetParamNormalized(tr, csT.fxIndex,
                             csT.vst3Param, n);
+                        noteFaderFxEdit_(static_cast<int>(s), tr, csT.fxIndex,
+                                         csT.vst3Param);
                         for (auto* m : uf8::param_groups::resolveBroadcastTargets(tr)) {
                             const auto mcs = csFaderForTrack(m);
-                            if (mcs.vst3Param >= 0)
+                            if (mcs.vst3Param >= 0) {
                                 TrackFX_SetParamNormalized(m, mcs.fxIndex,
                                     mcs.vst3Param, n);
+                                noteFaderFxEdit_(static_cast<int>(s), m,
+                                                 mcs.fxIndex, mcs.vst3Param);
+                            }
                         }
                     } else {
                         const double tLin = pbToLinearVolume(touchPb);
@@ -41086,6 +41147,10 @@ void commitDebouncedTouchReleases()
                 }
             }
         }
+
+        // The hand is off: a plug-in parameter this fader wrote ends its edit, so
+        // Touch returns it like track volume (TrackFX_EndParamEdit).
+        endFaderFxEdit_(static_cast<int>(s));
 
         // Re-engage the motor ONLY if the user actually moved the fader
         // during this touch. SSL 360° on Windows verified 2026-05-06 via
