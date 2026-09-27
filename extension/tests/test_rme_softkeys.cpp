@@ -235,6 +235,29 @@ int main()
         EXPECT(s.skHalf.load() == 0);
     }
 
+    // ── SHIFT in ORC: mod_shift is registered, momentary and latching ───────
+    // (Frank 27.09.: "mod_shift in ORC fixen"). Nothing had registered it in
+    // ORC, so the factory SHIFT binding fired a name that did nothing.
+    {
+        std::atomic<bool> mirror{false};
+        bnd::registerModifierBuiltins(&mirror);
+        const auto shiftKey = bnd::ButtonId::Uf1Shift;
+        bnd::dispatch(shiftKey, true);
+        EXPECT(bnd::modifierHeld(bnd::Modifier::Shift) && mirror.load());
+        EXPECT(bnd::builtinStateOf("mod_shift", 0));
+        reasixty::rme::input::State hs;
+        EXPECT(sk::half(hs) == 1);                     // SHIFT shows the second half
+        bnd::dispatch(shiftKey, false);
+        EXPECT(!bnd::modifierHeld(bnd::Modifier::Shift) && !mirror.load());
+        // Second press within 400 ms of the release: latched after its release.
+        bnd::dispatch(shiftKey, true);
+        bnd::dispatch(shiftKey, false);
+        EXPECT(bnd::modifierHeld(bnd::Modifier::Shift));
+        bnd::dispatch(shiftKey, true);                 // the next press clears it
+        bnd::dispatch(shiftKey, false);
+        EXPECT(!bnd::modifierHeld(bnd::Modifier::Shift) && !mirror.load());
+    }
+
     std::remove(orc.c_str());
     std::remove((g_dir + "/bindings.json").c_str());
     rmdir(g_dir.c_str());

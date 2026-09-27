@@ -591,7 +591,7 @@ std::unordered_map<uint32_t, PressRecord> g_longPressStart;
 // Double-press support. A 2nd press of the same (layer, button) within
 // kDoubleClickMs of the previous PRESS fires the binding's doublePress
 // slot ADDITIVELY (the single press already fired normally). Mirrors the
-// host-keyboard Shift double-click window (main.cpp kShiftDoubleClickMs).
+// SHIFT double-click window (kShiftDoubleClickMs, registerModifierBuiltins).
 // Guarded by g_pressMx like the other press maps. The map holds the last
 // press timestamp; it's reset the moment a double fires so a triple-tap
 // doesn't fire the double twice on the 3rd press.
@@ -5162,6 +5162,116 @@ void setModifierHeld(Modifier m, bool held)
 void setKeyboardShiftHeld(bool held) { g_modShiftKbHeld.store(held); }
 void setKeyboardCmdHeld  (bool held) { g_modCmdKbHeld  .store(held); }
 void setKeyboardCtrlHeld (bool held) { g_modCtrlKbHeld .store(held); }
+
+namespace {
+// Shift double-click latch. A second press within kShiftDoubleClickMs of
+// the previous release latches Shift on — it then stays active until the
+// next press, which clears the latch. Single press+release is plain
+// momentary (Shift held only while finger's on the button), so the user
+// can either "hold for a sec" or "double-click to keep on".
+constexpr int64_t kShiftDoubleClickMs = 400;
+std::atomic<bool>    g_shiftLatched{false};
+std::atomic<int64_t> g_shiftLastReleaseMs{0};
+std::atomic<bool>    g_shiftDoubleClickArmed{false};
+// The surface's SHIFT as mod_shift last set it, keyboard not included: the
+// builtin's lamp state. The host's mirror, when it has one, follows it.
+std::atomic<bool>    g_surfaceShift{false};
+std::atomic<bool>*   g_shiftMirror = nullptr;
+
+void setSurfaceShift(bool v)
+{
+    g_surfaceShift.store(v);
+    if (g_shiftMirror) g_shiftMirror->store(v);
+}
+} // namespace
+
+void registerModifierBuiltins(std::atomic<bool>* shiftMirror)
+{
+    g_shiftMirror = shiftMirror;
+
+    // Modifier builtins. `param` selects mode:
+    //   0 = Momentary  → modifier active while button is held
+    //   1 = Toggle     → press flips active state, second press releases
+    // Each handler publishes the resulting state into Bindings so
+    // dispatch() can snapshot the active modifier at press-edge of any
+    // other button.
+    //
+    // mod_shift (only) wires in extra atomics that turn Momentary into
+    // "momentary OR double-click-latch": a 2nd press within
+    // kShiftDoubleClickMs of the previous release latches Shift on
+    // instead of releasing it; the next press clears the latch and
+    // turns Shift off. Cmd/Ctrl stay pure momentary.
+    auto modHandler = [](Modifier m) {
+        return [m](bool /*firing*/, bool pressed, int param) {
+            const bool toggleMode = (param == 1);
+            if (toggleMode) {
+                if (!pressed) return;   // press-edge only
+                setModifierHeld(m, !modifierHeld(m));
+                return;
+            }
+            // Plain momentary (Cmd / Ctrl).
+            setModifierHeld(m, pressed);
+        };
+    };
+    auto shiftHandler = [](bool /*firing*/, bool pressed, int param) {
+        using namespace std::chrono;
+        using M = Modifier;
+        const bool toggleMode = (param == 1);
+        if (toggleMode) {
+            if (!pressed) return;
+            const bool newState = !modifierHeld(M::Shift);
+            setModifierHeld(M::Shift, newState);
+            setSurfaceShift(newState);
+            return;
+        }
+        const int64_t now = duration_cast<milliseconds>(
+            steady_clock::now().time_since_epoch()).count();
+        if (pressed) {
+            if (g_shiftLatched.load()) {
+                // Press while latched → clear latch + modifier off.
+                // Reset the double-click window so the clearing press
+                // doesn't accidentally start a fresh double-click.
+                g_shiftLatched.store(false);
+                g_shiftDoubleClickArmed.store(false);
+                g_shiftLastReleaseMs.store(0);
+                setModifierHeld(M::Shift, false);
+                setSurfaceShift(false);
+                return;
+            }
+            // Detect 2nd press of a double-click sequence.
+            const int64_t lastRel = g_shiftLastReleaseMs.exchange(0);
+            const bool isDoubleClick =
+                lastRel > 0 && (now - lastRel) <= kShiftDoubleClickMs;
+            g_shiftDoubleClickArmed.store(isDoubleClick);
+            setModifierHeld(M::Shift, true);
+            setSurfaceShift(true);
+            return;
+        }
+        // Release.
+        if (g_shiftDoubleClickArmed.exchange(false)) {
+            // Release of the 2nd press → latch on, modifier stays held.
+            g_shiftLatched.store(true);
+            g_shiftLastReleaseMs.store(0);
+            return;
+        }
+        setModifierHeld(M::Shift, false);
+        setSurfaceShift(false);
+        g_shiftLastReleaseMs.store(now);
+    };
+    registerBuiltin("mod_shift", BuiltinDescriptor{
+        shiftHandler,
+        [](int) { return g_surfaceShift.load(); },
+        "Modifier: Shift / Fine (double-click latches)", true
+    });
+    registerBuiltin("mod_cmd", BuiltinDescriptor{
+        modHandler(Modifier::Cmd),
+        nullptr, "Modifier: Cmd", true
+    });
+    registerBuiltin("mod_ctrl", BuiltinDescriptor{
+        modHandler(Modifier::Ctrl),
+        nullptr, "Modifier: Ctrl", true
+    });
+}
 
 bool modifierHeld(Modifier m)
 {

@@ -188,6 +188,11 @@ void Surface::start()
     // this surface's side-car state. Without them the factory bank's rme_dim
     // and friends in orc.json were names that did nothing.
     reasixty::rme::registerBuiltins(in_, host_);
+    // ⇨ AND THE MODIFIERS (Frank 27.09.: "mod_shift in ORC fixen"). orc.json
+    // binds SHIFT to mod_shift, but nothing had registered it here, so the key
+    // did nothing: no fine mode, no second bank half, and its lamp never lit.
+    // The extension's own three, with its double-press latch (Bindings.cpp).
+    uf8::bindings::registerModifierBuiltins(nullptr);
 
     // The handler fires on the device's worker thread.
     dev_.setInputHandler([this](const ::uf1::InputEvent& ev) {

@@ -917,6 +917,15 @@ struct BuiltinDescriptor {
 
 void registerBuiltin(const char* name, BuiltinDescriptor desc);
 
+// ⇨ mod_shift / mod_cmd / mod_ctrl FOR ANY HOST (moved out of main.cpp
+// 27.09.2026). ORC never registered them, so the UF1's SHIFT, bound to
+// mod_shift in orc.json, did nothing there: no fine mode, no second half of a
+// soft-key bank. `param` 0 = momentary, 1 = toggle; mod_shift's momentary also
+// latches on a double press (a second press within 400 ms of the release keeps
+// Shift on until the next press). `shiftMirror` is the host's own "the
+// SURFACE's SHIFT is down" flag (Rea-Sixty's g_shiftHeld), nullptr for none.
+void registerModifierBuiltins(std::atomic<bool>* shiftMirror);
+
 // Fire a registered builtin by name, as if a bound button had triggered it
 // (run(firing=true, pressed=false, param)). Returns false if `name` isn't
 // registered or has no run handler. MAIN THREAD ONLY — the handler reaches
