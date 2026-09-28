@@ -11,10 +11,9 @@
 // ⇨ A BANK HAS TWO HALVES (Frank 25.09.: "Bank 1: dim, mono, speaker b,
 // talkback und dann über 5-8 ext in, main auf fader, totalmix fenster"), and
 // since 27.09. Bank ◄ picks the first and Bank ► the second; 5-8 did it for the
-// two days in between. A static bank's second half is its Shift set, so SHIFT on
-// the surface reaches it as well; in the extension the computer keyboard's Shift
-// does too, because the extension feeds it to the bindings engine and ORC does
-// not. A snapshot or layout bank's second half is items 5 to 8.
+// two days in between. A static bank's second half is its Shift set; SHIFT
+// itself does not pick it (Frank 28.09.). A snapshot or layout bank's second
+// half is items 5 to 8.
 //
 // No REAPER here. What the extension adds on top (the MODE menu owning the
 // keys, the bank name on the time field) stays with the host.
@@ -30,7 +29,7 @@
 namespace reasixty::rme::softkeys {
 
 // The half on the keys: 0 = keys 1-4, 1 = keys 5-8. Picked by Bank ◄ ►
-// (State::skHalf), or held SHIFT.
+// (State::skHalf) and nothing else.
 int half(const input::State& s);
 
 // The bank (absolute) has something on its second half: a TotalMix bank always

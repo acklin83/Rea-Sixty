@@ -10,11 +10,11 @@
 //  · a load of our own file puts them back from the source, because load
 //    replaces the whole config, banks 10.. included.
 //  · no file = empty banks (no ORC, no RME banks).
-//  · 5-8 shows the bank's second half: the Shift set on a static bank, items
-//    5..8 on a TotalMix bank, and SHIFT does the same (Frank 25.09.).
+//  · Bank ► shows the bank's second half: the Shift set on a static bank, items
+//    5..8 on a TotalMix bank. SHIFT does not (Frank 28.09.).
 //  · a transport key fires only a TotalMix builtin from ORC's file; a REAPER
 //    action there is ORC's inherited factory and the key stays REAPER's.
-//  · 5-8 in the side-car switches the half, not the V-Pot bank any more.
+//  · Bank ◄ ► pick the half; 5-8 switches the V-Pot bank (Frank 27.09. evening).
 
 #include "Bindings.h"
 #include "BindingsHost.h"
@@ -151,8 +151,12 @@ int main()
     in.skHalf.store(1);
     EXPECT(sk::half(in) == 1);
     in.skHalf.store(0);
-    bnd::setModifierHeld(bnd::Modifier::Shift, true);        // SHIFT on the surface
+    // SHIFT does not pick the half, in either program (Frank 28.09.).
+    bnd::setModifierHeld(bnd::Modifier::Shift, true);
+    EXPECT(sk::half(in) == 0);
+    in.skHalf.store(1);
     EXPECT(sk::half(in) == 1);
+    in.skHalf.store(0);
     bnd::setModifierHeld(bnd::Modifier::Shift, false);
     EXPECT(sk::half(in) == 0);
     // A TotalMix bank: kind from Plain, halves are items 1-4 and 5-8.
@@ -264,7 +268,7 @@ int main()
         EXPECT(bnd::modifierHeld(bnd::Modifier::Shift) && mirror.load());
         EXPECT(bnd::builtinStateOf("mod_shift", 0));
         reasixty::rme::input::State hs;
-        EXPECT(sk::half(hs) == 1);                     // SHIFT shows the second half
+        EXPECT(sk::half(hs) == 0);                     // but not the second half (28.09.)
         bnd::dispatch(shiftKey, false);
         EXPECT(!bnd::modifierHeld(bnd::Modifier::Shift) && !mirror.load());
         // Second press within 400 ms of the release: latched after its release.

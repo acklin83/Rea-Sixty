@@ -152,7 +152,7 @@ bool Surface::softKeys_(const ::uf1::InputEvent& ev)
     const int set = bnd::kUf1SideCarSetRme;
     const std::uint8_t id = ev.id;
     if (id >= ::uf1::btn::kDisplaySoft1 && id <= ::uf1::btn::kDisplaySoft4) {
-        // The extension's press (src/RmeSoftKeys): the half from 5-8 or SHIFT,
+        // The extension's press (src/RmeSoftKeys): the half from Bank ◄ ►,
         // and a TotalMix bank loads right here on the device thread.
         rme::softkeys::press(bnd::uf1SideCarBankBase(set) + scBank_.load(),
                              rme::softkeys::half(in_),

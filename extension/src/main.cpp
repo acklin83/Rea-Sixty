@@ -26361,7 +26361,7 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
         if (used) return true;
     }
     // ⇨ DER DRUCK GEHT DURCH RmeSoftKeys (25.09.2026), wie in ORC: die Haelfte
-    // per 5-8 oder SHIFT, eine TotalMix-Bank laedt beim Druecken. Das Laden
+    // per Bank ◄ ►, eine TotalMix-Bank laedt beim Druecken. Das Laden
     // selbst laeuft ueber g_uf1DynBankReq auf dem Hauptthread, weil dort auch
     // der Name ins Zeitfeld kommt (applyDynBankRmeOp_).
     if (id >= uf1::btn::kDisplaySoft1 && id <= uf1::btn::kDisplaySoft4) {
@@ -34060,7 +34060,7 @@ static void uf1PaintSideCarSoftKeys_(bool force)
     if (g_sideCarBank[set].load() >= nb) g_sideCarBank[set].store(0);
     const int bank = uf8::bindings::uf1SideCarBankBase(set) + g_sideCarBank[set].load();
     // ⇨ DIE ZELLEN KOMMEN AUS RmeSoftKeys (25.09.2026), dieselben wie in ORC:
-    // statisch oder TotalMix-Snapshots/-Layouts, Haelfte per 5-8 oder SHIFT.
+    // statisch oder TotalMix-Snapshots/-Layouts, Haelfte per Bank ◄ ►.
     const std::array<Uf1SkCell, 4> cells =
         reasixty::rme::softkeys::row(bank, reasixty::rme::softkeys::half(g_rmeIn));
     // Ein anderes Side-Car ist ein anderer Satz: dann alles neu.

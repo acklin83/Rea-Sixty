@@ -11,10 +11,15 @@ namespace reasixty::rme::softkeys {
 namespace bnd = uf8::bindings;
 using DK = bnd::DynamicBankKind;
 
+// ⇨ ONLY BANK ◄ ► PICK THE HALF (Frank 2026-09-28: "shift soll in beiden die
+// hälfte gar nicht mehr umschalten, dann ist das konsistent"). Held SHIFT used
+// to show the second half as well, from 25.09., when SHIFT and 5-8 were the
+// only ways there. In the extension the computer keyboard's Shift did it too,
+// and in ORC it did not, so the two programs answered differently. SHIFT stays
+// a modifier (fine mode, the transport's Shift assignments).
 int half(const input::State& s)
 {
-    if (s.skHalf.load() != 0) return 1;
-    return bnd::bankModifierSnapshot() == bnd::Modifier::Shift ? 1 : 0;
+    return s.skHalf.load() != 0 ? 1 : 0;
 }
 
 bool hasSecondHalf(int bank)
