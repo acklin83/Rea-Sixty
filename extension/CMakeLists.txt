@@ -783,6 +783,15 @@ if(NOT WIN32)
     enable_testing()
     add_test(NAME protocol COMMAND test_protocol)
 
+    # Press / Toggle on a key (Frank 2026-09-28): what fires on press and
+    # release per kind of action, the modifiers, the editor's choice, the load
+    # migration. Runs the real bindings engine.
+    add_executable(test_press_mode tests/test_press_mode.cpp
+        src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp)
+    target_include_directories(test_press_mode PRIVATE src "${WDL_DIR}")
+    target_link_libraries(test_press_mode PRIVATE Threads::Threads)
+    add_test(NAME press_mode COMMAND test_press_mode)
+
     # The UF1 jog in Grid unit never falls between the grid (JogGrid.h, header only).
     add_executable(test_jog_grid tests/test_jog_grid.cpp)
     target_include_directories(test_jog_grid PRIVATE src)

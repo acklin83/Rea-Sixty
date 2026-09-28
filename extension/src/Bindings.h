@@ -917,6 +917,45 @@ struct BuiltinDescriptor {
 
 void registerBuiltin(const char* name, BuiltinDescriptor desc);
 
+// ⇨ WHAT A PRESS MEANS TO AN ACTION (Frank 2026-09-28: "idiotensicher"). A key
+// offers two things, Press (on while held) and Toggle (each press switches),
+// and whether both make sense depends on the action, not on the key:
+//   Once    no state, fires once per press: Press and Toggle would be the same,
+//           so nothing is offered, and the release never fires it (a stored
+//           "hold" used to run it twice).
+//   Switch  flips its own state on every firing: Toggle flips on the press,
+//           Press flips on the press and back on the release. Both offered.
+//   Select  has a state, but a press chooses it (automation Read, a jog mode):
+//           releasing would only choose again. Nothing offered.
+//   Edges   reads press and release itself (the modifiers, the jog content drag,
+//           the zoom keys' lamp). Always gets both edges.
+// Auto (the default) is Select for a builtin with a state and Once without one,
+// so a builtin nobody classified can never be offered a choice it cannot keep.
+enum class BuiltinKind : uint8_t { Auto, Once, Switch, Select, Edges };
+void        setBuiltinKind(const std::string& name, BuiltinKind kind);
+BuiltinKind builtinKind(const std::string& name);   // never Auto
+bool        builtinRegistered(const std::string& name);
+
+// mod_shift / mod_cmd / mod_ctrl. Their Press / Toggle lives in `param`
+// (0 / 1), which is what the handler reads.
+bool isModifierBuiltin(const std::string& name);
+
+// The two choices a key offers, as the editor shows them.
+enum class PressMode : uint8_t { Toggle, Press };
+// What the key does now: a modifier by its param, anything else by its
+// behaviour (Hold = Press; Momentary and Toggle both fire on the press only).
+PressMode pressModeOf(const Binding& bd);
+// Write the choice. Press = Hold. Toggle keeps a Momentary or Toggle it already
+// has (their long-press timing differs and the user did not ask to change it)
+// and turns a Hold into Toggle. A modifier gets its param with it.
+void setPressMode(Binding& bd, PressMode mode);
+// Whether the editor offers the choice for this key: some short-press step is
+// a Switch or a modifier, or a REAPER action that `reaperIsToggle` says has an
+// on/off state, or the key is on Hold already (so a stored choice stays
+// visible and can be undone). `reaperIsToggle` may be empty.
+bool offersPressChoice(const Binding& bd,
+                       const std::function<bool(const std::string&)>& reaperIsToggle);
+
 // ⇨ mod_shift / mod_cmd / mod_ctrl FOR ANY HOST (moved out of main.cpp
 // 27.09.2026). ORC never registered them, so the UF1's SHIFT, bound to
 // mod_shift in orc.json, did nothing there: no fine mode, no second half of a

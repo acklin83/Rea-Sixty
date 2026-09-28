@@ -1488,12 +1488,12 @@ std::string buildBindingTooltip_(int layer, ButtonId id, const char* label)
             out += d;
         }
     }
-    const char* beh = bd.behavior == Behavior::Toggle ? "Toggle"
-                    : bd.behavior == Behavior::Hold   ? "Hold"
-                                                      : "Momentary";
-    out += "\n  [";
-    out += beh;
-    out += "]";
+    // The key's Press / Toggle, where it offers one (pressModeCombo_).
+    if (offersPressChoice(bd, [](const std::string& a) { return reasixty_actionIsToggle(a); })) {
+        out += "\n  [";
+        out += pressModeOf(bd) == PressMode::Press ? "Press" : "Toggle";
+        out += "]";
+    }
     return out;
 }
 
@@ -3451,13 +3451,46 @@ static void trackBankModifierEdge_(ImGui_Context* ctx, int* modIdx)
 }
 
 
-// Behaviour wording, shared by the per-button editor and the UF1 soft-key bank
-// slot editor so the two cannot drift. Order IS the Behavior enum.
-static const char* const kBehaviorLabels_[3] = {
-    "Momentary (fire on press)",
-    "Toggle (flip on each press)",
-    "Hold (state mirrors button)"
+// ⇨ TWO CHOICES, AND ONLY WHERE THEY MEAN SOMETHING (Frank 2026-09-28: "wieso
+// haben wir überhaupt mehr optionen als einfach press und toggle?"). There used
+// to be three here (Momentary, Toggle, Hold), and a second menu, Mode, for the
+// modifiers; Momentary and Toggle did the same thing for every action, Hold ran
+// a one-shot twice, and on a modifier only Mode counted. What the key does is
+// in Bindings.h (PressMode, BuiltinKind). One combo for all three editors, so
+// they cannot drift. Order IS the PressMode enum.
+static const char* const kPressModeLabels_[2] = {
+    "Toggle (each press switches)",
+    "Press (on while held)"
 };
+
+// Draws the choice when the key offers one; draws nothing otherwise. True when
+// the user changed it.
+static bool pressModeCombo_(ImGui_Context* ctx, const char* id,
+                            uf8::bindings::Binding& bd)
+{
+    using namespace uf8::bindings;
+    if (!offersPressChoice(bd, [](const std::string& a) { return reasixty_actionIsToggle(a); }))
+        return false;
+    const int cur = static_cast<int>(pressModeOf(bd));
+    bool changed = false;
+    ImGui_PushItemWidth(ctx, 240);
+    // BeginCombo + Selectable — ImGui_Combo with \0-items renders invisible in
+    // ReaImGui v0.10 (see GR meter source).
+    if (ImGui_BeginCombo(ctx, id, kPressModeLabels_[cur], /*flags*/ nullptr)) {
+        for (int i = 0; i < 2; ++i) {
+            bool sel = (cur == i);
+            if (ImGui_Selectable(ctx, kPressModeLabels_[i], &sel, /*flags*/ nullptr,
+                                 /*size_w*/ nullptr, /*size_h*/ nullptr)
+                && i != cur) {
+                setPressMode(bd, static_cast<PressMode>(i));
+                changed = true;
+            }
+        }
+        ImGui_EndCombo(ctx);
+    }
+    ImGui_PopItemWidth(ctx);
+    return changed;
+}
 
 // The per-action "Display label" only renders where the control actually shows a
 // text label on the surface — the UF8 top-soft-keys (the LCD above the V-Pots).
@@ -3653,8 +3686,7 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
             const bool isToggle = reasixty_actionIsToggle(*f.action);
             if (isToggle) {
                 ImGui_TextDisabled(ctx,
-                    "  Toggle action — set Behavior to Hold for "
-                    "ON-while-held");
+                    "  Toggle action. Behavior Press keeps it on while held.");
             }
             snprintf(idbuf, sizeof(idbuf),
                           "Fire again on inactive##%s_foi", prefix);
@@ -3950,31 +3982,8 @@ bool drawActionPicker(ImGui_Context* ctx, const char* prefix,
                 }
                 ImGui_PopItemWidth(ctx);
             } else if (isMod) {
-                // BeginCombo + Selectable — ImGui_Combo with \0-items
-                // renders invisible in ReaImGui v0.10 (see GR meter source).
-                static const char* kModeLabels[2] = {
-                    "Momentary (held = active)",
-                    "Toggle (press flips state)"
-                };
-                snprintf(idbuf, sizeof(idbuf), "Mode##%s_modemod", prefix);
-                int m = (*f.param == 1) ? 1 : 0;
-                double pw = 200;
-                ImGui_PushItemWidth(ctx, pw);
-                if (ImGui_BeginCombo(ctx, idbuf, kModeLabels[m],
-                                     /*flags*/ nullptr)) {
-                    for (int i = 0; i < 2; ++i) {
-                        bool sel = (m == i);
-                        if (ImGui_Selectable(ctx, kModeLabels[i], &sel,
-                                             /*flags*/ nullptr,
-                                             /*size_w*/ nullptr,
-                                             /*size_h*/ nullptr)) {
-                            *f.param = i;
-                            dirty = true;
-                        }
-                    }
-                    ImGui_EndCombo(ctx);
-                }
-                ImGui_PopItemWidth(ctx);
+                // Nothing here any more: a modifier's Press / Toggle is the
+                // key's Behavior (pressModeCombo_), which writes this param.
             } else if (isFxParamStep) {
                 // Target slot, step size, and wrap flag. The slot combo
                 // walks the built-in SSL CS / BC PluginMap registry —
@@ -4901,26 +4910,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             // Behavior combo lives only in the SHORT column — it
             // applies to both columns.
             if (!isLongCol) {
-                // BeginCombo + Selectable — ImGui_Combo with \0-items
-                // renders invisible in ReaImGui v0.10 (see GR meter source).
-                int b = std::clamp(static_cast<int>(bd.behavior), 0, 2);
-                double bw = 240;
-                ImGui_PushItemWidth(ctx, bw);
-                if (ImGui_BeginCombo(ctx, "Behavior##pri_beh",
-                                     kBehaviorLabels_[b], /*flags*/ nullptr)) {
-                    for (int i = 0; i < 3; ++i) {
-                        bool sel = (b == i);
-                        if (ImGui_Selectable(ctx, kBehaviorLabels_[i], &sel,
-                                             /*flags*/ nullptr,
-                                             /*size_w*/ nullptr,
-                                             /*size_h*/ nullptr)) {
-                            bd.behavior = static_cast<Behavior>(i);
-                            dirty = true;
-                        }
-                    }
-                    ImGui_EndCombo(ctx);
-                }
-                ImGui_PopItemWidth(ctx);
+                if (pressModeCombo_(ctx, "Behavior##pri_beh", bd)) dirty = true;
                 ImGui_Spacing(ctx);
                 ImGui_Separator(ctx);
             } else {
@@ -4951,8 +4941,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                     dirty = true;
                 }
                 help_(ctx,
-                    "Long-press auto-sets Behavior to Momentary so theshort action\n"
-                    "doesn't also fire on release.");
+                    "With a long press, the short action waits for the release.");
                 if (!bd.hasLongPress) {
                     renderSlots = false;
                 } else {
@@ -5560,24 +5549,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
     // simply never offered it, so all 144 user-Quick slots per layer were stuck
     // on Momentary (forum 3.5, which asked for it on the soft-keys generally —
     // the UF1 half shipped first, this is the UF8 one).
-    {
-        int b = std::clamp(static_cast<int>(bd.behavior), 0, 2);
-        ImGui_PushItemWidth(ctx, 240);
-        if (ImGui_BeginCombo(ctx, "Behavior##uqslotbeh",
-                             kBehaviorLabels_[b], /*flags*/ nullptr)) {
-            for (int i = 0; i < 3; ++i) {
-                bool sel = (b == i);
-                if (ImGui_Selectable(ctx, kBehaviorLabels_[i], &sel,
-                                     /*flags*/ nullptr,
-                                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-                    bd.behavior = static_cast<Behavior>(i);
-                    dirty = true;
-                }
-            }
-            ImGui_EndCombo(ctx);
-        }
-        ImGui_PopItemWidth(ctx);
-    }
+    if (pressModeCombo_(ctx, "Behavior##uqslotbeh", bd)) dirty = true;
 
     // Modifier slot — same story: dispatchUserQuickSlot snapshots the held
     // modifier at press time and indexes shortPress with it, but only Plain was
@@ -5821,24 +5793,7 @@ void drawUf1SoftBankSlotEditor_(ImGui_Context* ctx, int bank, int slotIdx)
     // press edges reach it (main.cpp, the DAW-mode display-soft-key block) — but
     // the editor never offered it, so every bank slot was stuck on the
     // Momentary default. Same combo + same wording as the per-button editor.
-    {
-        int b = std::clamp(static_cast<int>(bd.behavior), 0, 2);
-        ImGui_PushItemWidth(ctx, 240);
-        if (ImGui_BeginCombo(ctx, "Behavior##uf1sbbeh",
-                             kBehaviorLabels_[b], /*flags*/ nullptr)) {
-            for (int i = 0; i < 3; ++i) {
-                bool sel = (b == i);
-                if (ImGui_Selectable(ctx, kBehaviorLabels_[i], &sel,
-                                     /*flags*/ nullptr,
-                                     /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-                    bd.behavior = static_cast<Behavior>(i);
-                    dirty = true;
-                }
-            }
-            ImGui_EndCombo(ctx);
-        }
-        ImGui_PopItemWidth(ctx);
-    }
+    if (pressModeCombo_(ctx, "Behavior##uf1sbbeh", bd)) dirty = true;
 
     // Modifier slot. dispatchUf1SoftBankSlot already snapshots the held
     // modifier at press time and indexes shortPress with it; the editor just

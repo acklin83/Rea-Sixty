@@ -83,6 +83,16 @@ void registerBuiltins(input::State& in, const input::Host& host)
         [&in](int) { return input::faderMainActive(in, manager().snapshot()); },
         "RME: Main on the fader", false
     });
+
+    // ⇨ WHAT A PRESS MEANS (Bindings.h, BuiltinKind). These flip, so a key can
+    // hold them (Press) as well as switch them (Toggle). Holding works because
+    // Manager::send writes the value into our copy of the mixer at once
+    // (localEcho): the release reads the new state and sends it back, without
+    // waiting for TotalMix, which does not answer the remote that wrote. The
+    // DuRec keys fire once and Main on the fader chooses, which is the default.
+    for (const char* n : { "rme_dim", "rme_mono", "rme_speaker_b", "rme_talkback",
+                           "rme_ext_in", "rme_show_window" })
+        uf8::bindings::setBuiltinKind(n, uf8::bindings::BuiltinKind::Switch);
 }
 
 } // namespace reasixty::rme

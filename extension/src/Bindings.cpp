@@ -2438,6 +2438,19 @@ void dropUnreachablePlainLed_(Binding& bd)
     if (p.extraSteps.empty()) p.led = LedOverride{};
 }
 
+// ⇨ A MODIFIER'S PRESS / TOGGLE IS ITS PARAM (Frank 2026-09-28). Until then the
+// editor showed two menus for it, Behavior and Mode, and only Mode did
+// anything: Behavior Toggle with Mode Momentary held the modifier. The param
+// is what the handler has always read, so it wins, and the behaviour is set to
+// say the same thing. Nothing a key does changes. Called last, after every
+// migration of an older file.
+void alignModifierBehavior_(Binding& bd)
+{
+    const auto& p = bd.shortPress[static_cast<int>(Modifier::Plain)];
+    if (p.type != ActionType::Builtin || !isModifierBuiltin(p.action)) return;
+    bd.behavior = (p.param == 1) ? Behavior::Toggle : Behavior::Hold;
+}
+
 // Parse a Binding from its JSON object (new-schema only — no
 // type/action/param/midi/long_press fallback). Used by parseUserQuicks_.
 // parseLayer_ has its own inline logic that also covers the old
@@ -2494,6 +2507,7 @@ void parseBindingBody_(wdl_json_element* be, Binding& bd)
         bd.hasDoublePress = true;
         parseMatrixRow_(v, bd.doublePress);
     }
+    alignModifierBehavior_(bd);
 }
 
 // forceLayer >= 0 ignores each entry's "layer" field (a per-layer export
@@ -2944,6 +2958,7 @@ bool parseLayer_(wdl_json_element* lobj, Layer& out)
             }
         }
 
+        alignModifierBehavior_(bd);
         out.bindings[bid] = std::move(bd);
     }
     return true;
@@ -3103,6 +3118,75 @@ void registerBuiltin(const char* name, BuiltinDescriptor desc)
 {
     if (!name || !*name) return;
     g_builtins[name] = std::move(desc);
+}
+
+// ⇨ WHAT A PRESS MEANS TO AN ACTION (Bindings.h, BuiltinKind). Written at
+// startup by whoever registered the builtin, read by dispatch and the editor.
+namespace { std::unordered_map<std::string, BuiltinKind> g_builtinKinds; }
+
+void setBuiltinKind(const std::string& name, BuiltinKind kind) { g_builtinKinds[name] = kind; }
+
+bool builtinRegistered(const std::string& name) { return g_builtins.count(name) != 0; }
+
+BuiltinKind builtinKind(const std::string& name)
+{
+    if (auto it = g_builtinKinds.find(name);
+        it != g_builtinKinds.end() && it->second != BuiltinKind::Auto)
+        return it->second;
+    return builtinHasState(name) ? BuiltinKind::Select : BuiltinKind::Once;
+}
+
+bool isModifierBuiltin(const std::string& name)
+{
+    return name == "mod_shift" || name == "mod_cmd" || name == "mod_ctrl";
+}
+
+namespace {
+bool slotIsModifier_(const ActionSlot& s)
+{
+    return s.type == ActionType::Builtin && isModifierBuiltin(s.action);
+}
+} // namespace
+
+PressMode pressModeOf(const Binding& bd)
+{
+    const ActionSlot& p = bd.shortPress[static_cast<int>(Modifier::Plain)];
+    if (slotIsModifier_(p)) return p.param == 1 ? PressMode::Toggle : PressMode::Press;
+    return bd.behavior == Behavior::Hold ? PressMode::Press : PressMode::Toggle;
+}
+
+void setPressMode(Binding& bd, PressMode mode)
+{
+    if (mode == PressMode::Press) bd.behavior = Behavior::Hold;
+    else if (bd.behavior == Behavior::Hold) bd.behavior = Behavior::Toggle;
+    for (ActionSlot& s : bd.shortPress) {
+        if (!slotIsModifier_(s)) continue;
+        s.param = (mode == PressMode::Toggle) ? 1 : 0;
+        bd.behavior = (mode == PressMode::Toggle) ? Behavior::Toggle : Behavior::Hold;
+    }
+}
+
+bool offersPressChoice(const Binding& bd,
+                       const std::function<bool(const std::string&)>& reaperIsToggle)
+{
+    bool any = false;
+    for (const ActionSlot& s : bd.shortPress) {
+        const int n = stepCount(s);
+        for (int i = 0; i < n; ++i) {
+            const ActionStep& st = stepAt(s, i);
+            if (st.type == ActionType::Noop) continue;
+            any = true;
+            if (st.type == ActionType::Builtin
+                && (isModifierBuiltin(st.action)
+                    || builtinKind(st.action) == BuiltinKind::Switch))
+                return true;
+            if (st.type == ActionType::Reaper && reaperIsToggle
+                && reaperIsToggle(st.action))
+                return true;
+        }
+    }
+    // A stored Hold stays visible so it can be switched back.
+    return any && bd.behavior == Behavior::Hold;
 }
 
 bool invokeBuiltin(const std::string& name, int param)
@@ -5271,6 +5355,8 @@ void registerModifierBuiltins(std::atomic<bool>* shiftMirror)
         modHandler(Modifier::Ctrl),
         nullptr, "Modifier: Ctrl", true
     });
+    for (const char* n : { "mod_shift", "mod_cmd", "mod_ctrl" })
+        setBuiltinKind(n, BuiltinKind::Edges);
 }
 
 bool modifierHeld(Modifier m)
@@ -5370,6 +5456,34 @@ void armWakeSwallow()
 {
     g_wakeSwallowUntilMs.store(steadyNowMs_() + kWakeSwallowMs);
 }
+
+// ⇨ DOES THE RELEASE FIRE? One answer for all three dispatch paths (dispatch,
+// the user-Quick slots, the UF1 soft-key banks), which used to carry the same
+// switch three times. Every behaviour fires on the press. Only Hold (the
+// editor's "Press") fires on the release too, and only where the release means
+// something (BuiltinKind): a Switch goes back, an Edges builtin reads it. A
+// REAPER step keeps firing as before: whether it has a toggle state is REAPER's
+// to say, and this runs on the surface thread, where REAPER may not be asked.
+// Anything else, a one-shot or a choice, would run twice (Frank 2026-09-28).
+namespace {
+bool releaseMatters_(const ActionSlot& slot)
+{
+    const int n = stepCount(slot);
+    for (int i = 0; i < n; ++i) {
+        const ActionStep& st = stepAt(slot, i);
+        if (st.type == ActionType::Reaper) return true;
+        if (st.type != ActionType::Builtin) continue;
+        const BuiltinKind k = builtinKind(st.action);
+        if (k == BuiltinKind::Switch || k == BuiltinKind::Edges) return true;
+    }
+    return false;
+}
+bool firingFor_(Behavior b, const ActionSlot& slot, bool pressed)
+{
+    if (pressed) return true;
+    return b == Behavior::Hold && releaseMatters_(slot);
+}
+} // namespace
 
 // Defined with getQuickLayer further down; used by all three dispatch paths.
 bool isLayerSelectorButton(ButtonId id);
@@ -5591,13 +5705,8 @@ bool dispatch(ButtonId id, bool pressed)
     {
         slotIdx = static_cast<int>(Modifier::Plain);
     }
-    bool firing;
-    switch (bd.behavior) {
-        case Behavior::Momentary: firing = pressed; break;
-        case Behavior::Toggle:    firing = pressed; break;
-        case Behavior::Hold:      firing = true;    break;
-    }
     const auto& slot = bd.shortPress[slotIdx];
+    const bool firing = firingFor_(bd.behavior, slot, pressed);
     if (firing && slot.type != ActionType::Noop) {
         // Remember which modifier slot this button last actually fired
         // — main.cpp's LED pusher reads this so the active-state
@@ -7500,12 +7609,7 @@ bool dispatchUserQuickSlot(int layer, int quick, int subBank,
             }
         }
     }
-    bool firing;
-    switch (bd.behavior) {
-        case Behavior::Momentary: firing = pressed; break;
-        case Behavior::Toggle:    firing = pressed; break;
-        case Behavior::Hold:      firing = true;    break;
-    }
+    const bool firing = firingFor_(bd.behavior, shortP[slotMod], pressed);
     runSlot_(shortP[slotMod], firing, pressed);
     return shortP[slotMod].type != ActionType::Noop
         || !shortP[slotMod].action.empty();
@@ -7669,12 +7773,7 @@ bool dispatchUf1SoftBankSlot(int bank, int slot, bool pressed, int mod)
             }
         }
     }
-    bool firing;
-    switch (bd.behavior) {
-        case Behavior::Momentary: firing = pressed; break;
-        case Behavior::Toggle:    firing = pressed; break;
-        case Behavior::Hold:      firing = true;    break;
-    }
+    const bool firing = firingFor_(bd.behavior, shortP[slotMod], pressed);
     runSlot_(shortP[slotMod], firing, pressed);
     return shortP[slotMod].type != ActionType::Noop
         || !shortP[slotMod].action.empty();

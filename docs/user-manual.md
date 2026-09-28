@@ -652,9 +652,9 @@ Like Plugin view, except that the four V-Pots ride the volume of four tracks fro
 case the key behaves like a UF8 FX key — plain press, **+Shift**, **+Cmd**,
 **+Ctrl** and long-press each do something different.
 
-Each bank slot carries its own **Behavior** (*Momentary*, *Toggle* or *Hold*)
-alongside its label, action and LED colours, so a bank key can latch rather than
-fire once.
+Each bank slot carries its own label, action and LED colours. Where the action
+can be on or off, the slot also has a **Behavior**: *Toggle* (each press
+switches) or *Press* (on while held).
 
 Every bank also holds **two sets of keys**: Plain and Shift. Hold the UF1's SHIFT
 key and the four keys show their Shift set, labels and all, and fire it; release
@@ -1286,7 +1286,7 @@ The matrix is nine rows by six columns. Each row is a set, with its **number** i
 
 **The set comes first in every name the surface announces**, so you always know which of the nine you are in: a bank called *KHE Amps* in a set called *Editing* reads `Editing, KHE Amps`. Name neither and it reads `Set 2, Soft 3`. The one exception is the pages SSL fills on Sets 8 and 9, where the set's own default name is already *SSL Factory CS* or *SSL Factory BC* and repeating it would say the same thing twice — rename the set and it comes through like any other.
 
-Each slot carries a **Behavior** (*Momentary*, *Toggle* or *Hold*), the same setting a regular button has.
+Where the action can be on or off, each slot carries a **Behavior** (*Toggle* or *Press*), the same setting a regular button has.
 
 **Assign an action and the key names itself.** Every built-in action carries a twelve-character default label — the surface's cap — and it lands in the Label field the moment you pick the action, for as long as you have not typed a name of your own. A name you typed is never overwritten, and clearing the field lets the automatic one come back. Families share a prefix so eight of them side by side stay readable: *Enc* for the encoder modes, *UF1* and *UF8* for the surface-specific ones, *Hue*, *Zoom*. The jog cross is the exception, because there the object is the information (*Item <*, *Point >*, *Razor Top*, *Fade Follow*) and a prefix would not leave room for it.
 
@@ -1455,7 +1455,7 @@ One historical case: Rea-Sixty briefly had a **Sends** dynamic bank, which was r
 
 ### Binding visibility in the schematic
 
-Bound buttons in the UF8 schematic are **tinted** (a soft green face / border); empty buttons stay neutral, so you can see at a glance which controls carry a binding. Hovering a bound button shows a **tooltip** listing what it fires on **Plain / +Shift / +Cmd / +Ctrl**, any **long-press** action, and the **behaviour** (Momentary / Toggle / Hold).
+Bound buttons in the UF8 schematic are **tinted** (a soft green face / border); empty buttons stay neutral, so you can see at a glance which controls carry a binding. Hovering a bound button shows a **tooltip** listing what it fires on **Plain / +Shift / +Cmd / +Ctrl**, any **long-press** action, and, where the key has one, its **behaviour** (Toggle / Press).
 
 ### Per-binding editor
 
@@ -1464,8 +1464,8 @@ For a regular button, the editor exposes:
 - **Action type** — None (disabled) / REAPER Action / Keyboard macro / Native Action (Built-in) / MIDI Command.
 - **Action** — for Native, a **Built-in** drop-down with a search field; for REAPER Action, an **Action ID** field.
 - **Modifier rows** — *(no modifier)*, *+ Shift / Fine*, *+ Cmd* and *+ Ctrl*, in both the SHORT PRESS and the LONG PRESS column. Each row is bound separately.
-- **Behavior** — Momentary / Toggle / Hold.
-- **Long press** — tick *Enable long-press (held > 0.5 s)* to get a second column of actions that fire once the key is held half a second. Ticking it sets Behavior to Momentary, so the short action does not also fire.
+- **Behavior**: *Toggle* (each press switches) or *Press* (on while held). It is there only where the action can be on or off: a switch like FLIP, a modifier like SHIFT, or a REAPER action with an on/off state. An action that fires once, or picks one of several modes, has nothing to choose, so the menu is not shown.
+- **Long press** — tick *Enable long-press (held > 0.5 s)* to get a second column of actions that fire once the key is held half a second. Ticking it makes the short action wait for the release, so it does not also fire when you hold.
 - **Repeat while held** — in the LONG PRESS column, per row: the long press keeps firing until you let go. The first one lands at the half second, the rest at the interval you set, 20 ms to 1000 ms, 100 ms by default. Useful on nudges, zoom steps, marker steps and anything else you would otherwise tap ten times. The tick is greyed out on an action that toggles, because repeating one just flips it back and forth, and on an empty row.
 - **LED** — an Active and an Inactive row, each a colour plus Off / Dim / Bright, and *Show LED even when no action is assigned*.
 - For **MIDI Command** bindings: device, channel, message (Note On / Note Off / Control Change / Program Change), note or CC number, and velocity or value.
@@ -3153,12 +3153,12 @@ The Bindings tab renders the UF8, UC1 and UF1 hardware as schematics. Every butt
 - **Action type:** None (disabled) / REAPER Action / Keyboard macro / Native Action (Built-in) / MIDI Command
 - **Action name** (Native + REAPER Action) / MIDI message (MIDI Command)
 - **Modifier:** None / Shift / Cmd / Ctrl. There are four, and no combinations.
-- **Behavior:** Momentary / Toggle / Hold, plus an **Enable long-press** switch
+- **Behavior:** Toggle / Press, where the action can be on or off, plus an **Enable long-press** switch
 - **LED override:** colour + brightness
 
 ## Modifier system
 
-The three modifier-key actions (**Modifier: Shift / Fine (double-click latches)**, **Modifier: Cmd**, **Modifier: Ctrl**) shift every other button's binding to that modifier slot while held. Modifier keys themselves are bindable to any physical button.
+The three modifier-key actions (**Modifier: Shift / Fine (double-click latches)**, **Modifier: Cmd**, **Modifier: Ctrl**) shift every other button's binding to that modifier slot while held. Modifier keys themselves are bindable to any physical button. Set the key's Behavior to *Toggle* and one press turns the modifier on, the next turns it off.
 
 Double-clicking `Shift` (= the SSL `FINE` key) latches it on. Press once more to unlatch.
 
@@ -3168,12 +3168,12 @@ A button carries four short-press slots, four long-press and four double-press, 
 
 A long-press binding fires after the long-press threshold elapses. The short-press binding fires on release if the threshold wasn't reached. A button can have both bindings.
 
-## Toggle / Hold semantics
+## Toggle / Press
 
-- **Momentary**: fires once per press
-- **Toggle**: flips on each press
-- **Hold**: fires once when pressed and once when released, so the action can mirror the key. Nothing repeats while you hold it
-- **Long-press** (when enabled): fires once when the long-press threshold elapses. Enabling it switches the key to Momentary.
+- **Toggle**: each press switches the action on or off.
+- **Press**: the action is on while you hold the key and off when you let go. Nothing repeats while you hold it.
+- An action that fires once (next track, zoom, a marker) or picks one of several modes (automation Read, a jog mode) has no choice to make: it fires once per press.
+- **Long-press** (when enabled): fires once when the long-press threshold elapses. Enabling it makes the short action wait for the release.
 
 ## LED override
 

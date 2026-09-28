@@ -56728,6 +56728,78 @@ void registerBindingHandlers()
                         "FX param: step up");
     registerFxParamStep("fx_param_dec", /*isInc*/false,
                         "FX param: step down");
+
+    // ⇨ WHAT A PRESS MEANS (Bindings.h, BuiltinKind; Frank 2026-09-28). Every
+    // builtin not named here is Auto: it chooses when it has a state and fires
+    // once when it has none, and neither is offered Press / Toggle. These are
+    // the ones that FLIP their own state on every firing (read handler by
+    // handler, 28.09.), so a key can hold them as well as switch them. The ones
+    // that go through a request flag (learn HUD, mixer, sleep, the plug-in
+    // window, bypass, offline, the FX chain) switch on the next main-thread tick:
+    // a press and release inside one tick count as one switch.
+    {
+        using uf8::bindings::BuiltinKind;
+        using uf8::bindings::setBuiltinKind;
+        static const char* const kSwitch[] = {
+            "flip", "uf1_flip", "uf1_master", "pan_force",
+            "sticky_pot_toggle", "uf1_fine_toggle",
+            "ssl_strip_mode_toggle", "ssl_strip_mode_toggle_with_gui",
+            "uf1_strip_mode_toggle", "uf1_strip_mode_toggle_with_gui",
+            "uf8_plugin_mode_toggle", "uf8_plugin_mode_toggle_with_gui",
+            "uf1_extender", "uf1_extender_side",
+            "uf1_presets", "uf1_hue", "uf1_sends_receives_toggle",
+            "folder_mode", "show_only_selected", "tcp_follows_selection_toggle",
+            "marker_overlay_toggle", "marker_overlay_markers_only_toggle",
+            "marker_overlay_regions_only_toggle",
+            "touch_to_learn_toggle", "learn_hud_toggle", "focused_panel_toggle",
+            "mode_banner_toggle", "mixer_toggle", "sleep_now",
+            "master_pin_strip1", "master_pin_strip8", "uc1_outgain_fader_toggle",
+            "fav_copy_own_toggle", "cs_copy_own_toggle", "bc_copy_own_toggle",
+            "plugin_bypass", "plugin_offline", "show_fx_chain", "show_focused_plugin_gui",
+            "jog_env_target_toggle", "jog_fade_nav_toggle", "jog_fade_follow_toggle",
+            "jog_fade_xfade_editor_toggle",
+            "multi_select_as_temp_group_toggle", "focus_set_toggle_uf1_channel",
+            "hue_rec_light", "obs_record_toggle", "obs_record_pause",
+            // A second press goes back to NORM / Channel Select.
+            "selection_mode_rec", "selection_mode_rec_mon", "selection_mode_auto",
+            "selection_mode_instance", "selection_mode_instance_cycle",
+            "selection_mode_dynamount", "selection_mode_hue",
+            "encoder_nudge", "encoder_focus", "encoder_markers", "encoder_bank_by_1",
+            "encoder_last_param", "encoder_instance", "encoder_fx_cycle",
+            "encoder_fx_scroll_all", "encoder_instance_scroll_all", "encoder_fx_move",
+            "encoder_cs_cycle", "encoder_bc_cycle", "encoder_fav_cycle",
+            "encoder_selset_cycle",
+            "uf1_encoder_nudge", "uf1_encoder_mousewheel", "uf1_encoder_markers",
+            "uf1_encoder_last_param", "uf1_encoder_instance", "uf1_encoder_fx_cycle",
+            "uf1_encoder_fx_scroll_all", "uf1_encoder_instance_scroll_all",
+            "uf1_encoder_fx_move", "uf1_encoder_cs_cycle", "uf1_encoder_bc_cycle",
+            "uf1_encoder_fav_cycle", "uf1_encoder_selset_cycle",
+        };
+        // Read press and release themselves: the content drag holds, the zoom
+        // keys light their lamp while held.
+        static const char* const kEdges[] = {
+            "jog_content_drag",
+            "zoom_up", "zoom_down", "zoom_left", "zoom_right", "zoom_center",
+        };
+        std::vector<std::string> unknown;
+        auto set = [&](const std::string& n, BuiltinKind k) {
+            if (!uf8::bindings::builtinRegistered(n)) unknown.push_back(n);
+            setBuiltinKind(n, k);
+        };
+        for (const char* n : kSwitch) set(n, BuiltinKind::Switch);
+        for (const char* n : kEdges)  set(n, BuiltinKind::Edges);
+        for (int slot = 1; slot <= uf8::param_groups::kSlotCount; ++slot)
+            set("param_group_toggle_" + std::to_string(slot), BuiltinKind::Switch);
+        // ⛔ A name here that nothing registered is a typo, and its key would
+        // silently lose the choice. Say so where a bug report looks.
+        if (!unknown.empty())
+            if (FILE* lg = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                for (const auto& n : unknown)
+                    std::fprintf(lg, "[bindings] press kind set for unknown builtin '%s'\n",
+                                 n.c_str());
+                std::fclose(lg);
+            }
+    }
 }
 
 // Write the embedded "Rea-Sixty Input Level" JSFX into REAPER's Effects
