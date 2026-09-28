@@ -16,8 +16,10 @@ Nichts davon ist gebaut.
 | Vertrieb | kein Kanal (ReaPack ist für REAPER-Erweiterungen) | kein Weg zum Kunden |
 
 Auf dem Mac Studio vorhanden: Zertifikat
-`Developer ID Application: Frank Acklin (234VF7874N)`.
-Nicht vorhanden: ein `notarytool`-Zugang im Schlüsselbund (geprüft, keiner hinterlegt).
+`Developer ID Application: Frank Acklin (234VF7874N)` und der Notarisier-Zugang
+`rea-sixty-notarize`, mit dem jede Rea-Sixty-Version notarisiert wird
+(`dist/release-mac.sh`). Geprüft 28.09.: `notarytool history` antwortet, letzte
+Einreichung v0.6.1 am 27.09., Accepted.
 
 ## Entschieden
 
@@ -38,19 +40,15 @@ Nicht vorhanden: ein `notarytool`-Zugang im Schlüsselbund (geprüft, keiner hin
    libusb, dann die App. Ohne Sandbox braucht ORC für USB und Netzwerk keine
    zusätzlichen Berechtigungen. Prüfen mit `codesign --verify --deep --strict` und
    `spctl --assess`.
-5. **Notarisieren** mit `xcrun notarytool submit … --wait` über den Zugang im
-   Schlüsselbund, danach `xcrun stapler staple`, damit die App auch offline startet.
+5. **Notarisieren** mit `xcrun notarytool submit … --keychain-profile rea-sixty-notarize
+   --wait`, danach `xcrun stapler staple`, damit die App auch offline startet.
+   Vorbild für Aufbau und Prüfungen: `dist/release-mac.sh`.
 6. **DMG** mit der App und einer Verknüpfung auf „Programme“; das DMG ebenfalls
    signieren, notarisieren und stapeln.
 7. **Skript `tools/orc-release.sh`** für die Schritte 1 bis 6, wiederholbar und lokal.
    In der CI geht es nicht: Notarisieren braucht Franks Schlüsselbund.
 8. **Prüfung wie beim Kunden:** DMG mit Quarantäne-Flag wie nach einem Download öffnen,
    auf einem anderen Benutzerkonto starten, UF1 und TotalMix verbinden.
-
-## Einmal von Frank nötig
-
-Den Notarisier-Zugang anlegen (App-spezifisches Passwort bei appleid.apple.com, dann
-`xcrun notarytool store-credentials`). Den genauen Befehl gibt es mit dem Skript.
 
 ## Offen, Franks Entscheidung
 
