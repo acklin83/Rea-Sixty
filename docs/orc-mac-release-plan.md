@@ -65,8 +65,8 @@ Einreichung v0.6.1 am 27.09., Accepted.
    `THIRD-PARTY-NOTICES.txt`. Veröffentlicht nichts.
 8. ✅ **Frank 29.09.2026: „funzt!“** (installiert aus dem DMG mit Quarantäne-Flag). **Prüfung wie beim Kunden:** DMG mit Quarantäne-Flag wie nach einem Download öffnen,
    auf einem anderen Benutzerkonto starten, UF1 und TotalMix verbinden.
-9. ◐ **Repo angelegt 29.09.2026**, öffentlich, lokal `~/Documents/dev/ORC`: README, Hinweise,
-   `docs/index.html` = Handbuch, Pages aus `main:/docs` live, Issues an. **Offen: Release 1.0.0.**
+9. ✅ **ORC 1.0.0 veröffentlicht 29.09.2026** mit Rea-Sixty v0.6.2 aus demselben Code (`a0416bf`). **Repo angelegt 29.09.2026**, öffentlich, lokal `~/Documents/dev/ORC`: README, Hinweise,
+   `docs/index.html` = Handbuch, Pages aus `main:/docs` live, Issues an. Release: https://github.com/acklin83/ORC/releases/tag/v1.0.0
    Bei jedem Release das Handbuch neu bauen und nach `ORC/docs/index.html` kopieren.
    Ursprünglicher Plan: **Repo `acklin83/ORC`** anlegen: README als Einrichtungsseite (Text mit dem Skill
    `texte`), Lizenz, Lizenzhinweise, Issues an, Release 1.0.0 mit DMG und libusb-Quelltext.
