@@ -31,7 +31,10 @@ static orc::Surface* g_surface = nullptr;
         // Buchstaben, soll auch in der top-row so sein"). The same drawing as
         // the app icon (OrcLogo). A template image: macOS tints it for a light
         // or a dark menu bar and for the highlighted state.
-        const CGFloat letters = 12.0;   // points; the bar is 22
+        // Cap height of the menu bar's own text (Frank 29.09.: "gleich gross
+        // wie UA", the input-source item): 12 pt measured 24 px against its
+        // 17 px, so 12 * 17 / 24.
+        const CGFloat letters = 8.5;    // points; the bar is 22
         const NSSize size = NSMakeSize(std::ceil(orc::wordmarkAspect() * letters) + 2.0, 18.0);
         NSImage* mark = [NSImage imageWithSize:size flipped:NO
                                 drawingHandler:^BOOL(NSRect r) {

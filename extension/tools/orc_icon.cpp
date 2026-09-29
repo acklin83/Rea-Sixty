@@ -127,9 +127,9 @@ int main(int argc, char** argv)
         writePng(big, pv + "/orc-icon-1024.png");
         CGImageRelease(big);
         // The menu-bar mark as macOS draws it on a light bar: black, 44 px high
-        // (a 22 pt bar at 2x), 14 pt of it the letters.
+        // (a 22 pt bar at 2x), 8.5 pt of it the letters as in OrcApp.mm.
         const int mh = 44;
-        const int lh = 28;
+        const int lh = 17;
         const int mw = static_cast<int>(orc::wordmarkAspect() * lh) + 12;
         CGContextRef ctx = canvas(mw, mh);
         CGColorRef black = rgb(0, 0, 0);
