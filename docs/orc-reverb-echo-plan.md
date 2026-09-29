@@ -78,8 +78,8 @@ Was jedes Bedienelement auf der FX-Reihe tut:
 
 Farbe: fest weiss (Palette 1), TotalMix meldet für die Effekte keine Farbe.
 
-Die Volume-Bereiche fehlen noch (Messung 2). Der Fader bildet seine Stellung mit
-TotalMix' Fadergesetz auf dB ab (`faderlinToDb`) und klemmt auf den gemessenen Bereich.
+Volume reicht wie jeder TotalMix-Fader von -65 bis +6 dB (gemessen 29.09.). Der Fader bildet
+seine Stellung mit TotalMix' Fadergesetz auf dB ab (`faderlinToDb`) und schreibt dB.
 
 ### Die STRIP-Seiten der FX-Reihe
 
@@ -171,14 +171,50 @@ Voreinstellung nicht sicher. Vorschlag: nur Width auf 1.0, sonst nichts (wie Ref
 liest nur das neue Built-in. `InputState::row` schreiben `stepRow`, `select`, `faderMainFire`;
 alle Leser stehen in der Fallen-Tabelle.
 
-## Messen, bevor gebaut wird (Frank am TotalMix)
+## Gemessen 29.09.2026 (TotalMix 2.10 alpha 8, UFX+)
 
-1. **Nimmt TotalMix die Felder an?** Die Tabelle nennt nur `enable`. Pro Feld einmal
-   schreiben, Frank schaut in TotalMix. Gebaut wird nur, was TotalMix annimmt.
-2. **Bereiche:** Reverb Volume, Echo Delay, Echo Feedback, Echo Volume. Mit `ORC_TRACE=1`
-   jeden Regler in TotalMix an beide Enden ziehen.
-3. **Welche Regler zeigt TotalMix bei welchem Typ?** Ein Bildschirmfoto des FX-Fensters für
-   einen Room-Typ, Envelope, Gated, Space und einen der übrigen (z.B. Shorty).
+Über Remote 1 (TotalMix hört auf 7001, antwortet an 7002; niemand sonst hielt 7002).
+Geschrieben mit `/<feld> <wert>`, zurückgelesen mit `/sendall`. Reverb und Echo waren
+dabei aus, TotalMix steht danach wieder Wert für Wert auf dem Ausgangsstand (Rückvergleich).
+
+**1. TotalMix nimmt alle 17 Felder an.** Jeder geschriebene Wert kam exakt zurück.
+Die OSC-Tabelle nennt nur `enable`, TotalMix nimmt trotzdem alle.
+
+**2. Grenzen**, gemessen durch Schreiben von ±100000 und Zurücklesen, bei festem Typ:
+
+| Feld | min | max | Handbuch |
+|---|---|---|---|
+| reverb predelay | 0 | 999 ms | gleich |
+| reverb lowcut | 20 | 500 Hz | gleich |
+| reverb highcut | **2000** | 20000 Hz | 5 kHz min |
+| reverb smooth | 0 | 100 | gleich |
+| reverb width, echo width | 0 | 1 | 100..0 |
+| reverb volume, echo volume | -65 | +6 dB | nicht angegeben |
+| reverb roomscale | 0.5 | 3.0 | gleich |
+| reverb attack, hold | 5 | 400 ms | gleich |
+| reverb release | 5 | **500** ms | 400 |
+| reverb time | 0.1 | **5.0** s | 4.9 |
+| reverb highdamp | **2000** | 20000 Hz | 5 kHz min |
+| echo delay | 0.1 | 2.0 s | nicht angegeben |
+| echo feedback | 0 | 100 | nicht angegeben |
+| echo highcut | 0 | 5 (Liste) | |
+| reverb type | 0 | 14; **15 und -1 werden 0** (kein Klemmen) | 15 Typen |
+| echo type | 0 | 2, geklemmt | 3 Typen |
+
+Wo Handbuch und TotalMix abweichen, gilt TotalMix.
+
+**⛔ Ein Typwechsel lädt Werte des Typs.** Reverb-Typ auf Gated verstellte `highcut`
+(10000 auf 8000) und `roomscale` (2.0 auf 1.5). TotalMix meldet das der schreibenden Remote
+nicht. Also: nach jedem geschriebenen Typ den Stand neu holen (`/sendall`), sonst zeigt der
+STRIP die alten Werte. Gilt für Reverb; ob der Echo-Typ auch Werte lädt, war nicht zu sehen
+(die Echo-Felder blieben gleich).
+
+**Beim Schreiben des Typs** nicht über 14 bzw. 2 hinaus: TotalMix springt dann auf 0.
+Der Katalog klemmt ohnehin auf die Liste.
+
+**Noch offen, Messung 3:** Welche Regler zeigt TotalMix bei welchem Typ (Room Scale bei
+welchen, Attack/Hold/Release nur bei Envelope und Gated, Time/High Damp nur bei Space)?
+Braucht einen Blick in das FX-Fenster von TotalMix pro Typ.
 
 ## Was ich nicht baue
 
