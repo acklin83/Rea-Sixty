@@ -1,6 +1,6 @@
 # ORC für den Mac ausliefern: Plan
 
-Stand 28.09.2026, ergänzt 29.09. um die zwei Nutzergruppen. Frank: ORC wird ein **eigenes
+Stand 28.09.2026, ergänzt 29.09. um die zwei Nutzergruppen und Franks Entscheidungen. Frank: ORC wird ein **eigenes
 Produkt**, zuerst die **Mac-Version**. Nichts davon ist gebaut.
 
 ## Ausgangslage (gemessen am Build vom 28.09.)
@@ -83,11 +83,8 @@ Download**. Was sich unterscheidet, ist das Drumherum.
 - **Lizenzhinweise:** ORC liefert libusb (LGPL-2.1) mit wie Rea-Sixty. Der Plan
   `docs/third-party-notices-plan.md` gilt für das DMG vom ersten Tag an: Hinweise, LGPL-Text,
   libusb-Quelltext am Download-Ort.
-- **Gratis oder kostenpflichtig** entscheidet über den ganzen Weg. Kostenpflichtig heisst:
-  (1) `docs/interop-rationale.md` verlangt vor einer kommerziellen Verbreitung eine neue
-  rechtliche Prüfung, und SSLs Zustimmung vom 18.05. galt einem offenen, nicht kommerziellen
-  Projekt; (2) der ORC-Quelltext liegt öffentlich unter MIT im Rea-Sixty-Repo, jeder kann ihn
-  bauen; (3) eine Lizenzprüfung in der App. Gratis heisst: nichts davon.
+- **Gratis** (Frank 29.09.). Kostenpflichtig hätte eine neue rechtliche Prüfung verlangt
+  (`docs/interop-rationale.md`, SSLs Zustimmung galt einem offenen, nicht kommerziellen Projekt).
 - Kundentexte (Einrichtungsseite, Ankündigung) mit dem Skill `texte`.
 
 ### Reihenfolge
@@ -99,20 +96,31 @@ Download**. Was sich unterscheidet, ist das Drumherum.
 4. ORC 0.1.0 und Rea-Sixty 0.6.2 aus demselben Commit.
 5. Einrichtungsseite und Ankündigung.
 
-## Offen, Franks Entscheidung
+## Entschieden am 29.09.2026 (Frank)
 
-- **Gratis oder kostenpflichtig** (siehe oben, entscheidet alles andere mit).
-- **Start beim Anmelden** als Schalter in ORC (für Gruppe B nötig, damit ORC nach REAPER
-  übernimmt). Macht ihn das Mindest-macOS 13, weil Apples `SMAppService` erst ab 13 da ist
-  (nicht geprüft, vor dem Bau nachlesen)?
-- **Update-Hinweis** für Gruppe A: keiner in 0.1.0, oder ORC fragt beim Start eine kleine
-  Datei am Download-Ort ab.
-- **Wo Fehler gemeldet werden.**
-- Erste Versionsnummer (Vorschlag 0.1.0).
-- Mindest-macOS (Vorschlag 12).
-- App-Symbol: im Finder und im DMG heute das leere Standardsymbol.
-- Wohin der Download kommt: eigenes GitHub-Repo nur für Releases, oder eine Website.
-- Markenrecherche zum Namen ORC (Klasse 9), laut Memory vor der Website.
+- **Gratis.** Keine Lizenzprüfung in der App, keine neue Rechtsprüfung nötig.
+- **Name bleibt ORC.** Markenrecherche gemacht (WIPO Global Brand Database, 29.09.): „ORC" ist
+  in Klasse 9 mehrfach eingetragen (u.a. Itiviti / ORC Software, SE, Handelssoftware, US
+  3927831; ORC Manufacturing, JP, US 4656179). Geprüft und verworfen: UFRC (frei, aber
+  SSL-Präfix), ORCHID, MORC, TORC, OSTRA (alle in Kl. 9 belegt). Frank: „wir nehmen ORC".
+  Damit bleiben Ordner `~/Library/Application Support/ORC/`, Bundle-ID und Übergabe-Marke,
+  wie sie sind; nichts zieht um.
+- **Version 1.0.0.**
+- **Start beim Anmelden: ja**, als Schalter in ORC über `SMAppService.mainApp` (Apple:
+  macOS 13.0+, nachgelesen im SDK-Header `SMAppService.h` und in Apples Doku). Damit ist das
+  **Mindest-macOS 13**.
+- **Update-Hinweis: später**, nicht in 1.0.
+- **Download und Fehlermeldungen** (Frank: „das ist dein Gebiet"): ein eigenes öffentliches
+  GitHub-Repo `acklin83/ORC`, nur für Auslieferung. Darin: README als Einrichtungsseite
+  (TotalMix Global OSC, Remote auf 7005 / 7006, SSL 360 zu), Lizenz und Lizenzhinweise,
+  die Releases mit dem DMG und dem libusb-Quelltext, Issues für Fehlermeldungen. Kein Code:
+  der bleibt im Rea-Sixty-Repo, weil ORC den Side-Car-Code mit der Extension teilt. Grund:
+  kostet nichts, feste Adresse `github.com/acklin83/ORC/releases/latest`, Fehlermeldungen
+  mit Anhängen, und es trägt keinen Rea-Sixty-Namen.
+
+## Offen
+
+- **App-Symbol** (Frank: „machen wir noch"). Bis dahin zeigen Finder und DMG das Standardsymbol.
 
 ## Nicht in diesem Plan (genannt, nicht gebaut)
 
