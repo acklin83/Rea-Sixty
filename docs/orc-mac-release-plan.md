@@ -72,7 +72,8 @@ Download**. Was sich unterscheidet, ist das Drumherum.
 |---|---|
 | Wer hält den UF1 | **gelöst, seit v0.6.1 bei den Nutzern** (`4a68823`, „Weg c"): Rea-Sixty legt beim REAPER-Start `~/Library/Application Support/ORC/handover` mit seiner pid an, ORC gibt UF1 und TotalMix-Port frei und holt beides zurück, wenn REAPER beendet wird. Einstellung in Rea-Sixty „Take the UF1 over from ORC", ab Werk an. |
 | TotalMix-Remote | beide Programme benutzen dieselbe Remote (7005 / 7006); der Port geht mit dem UF1 über |
-| Einstellungen | **getrennt**: ORC hat `ORC/rme.json` + `orc.json`, Rea-Sixty `REAPER/rea_sixty/rme.json` + `bindings.json`. Franks eigene zwei Dateien sind schon auseinandergelaufen (Main B und Main in Bank 2 vertauscht). |
+| Einstellungen | **eine Quelle, ORC** (seit 25.09.2026, Frank: „Die ganze Konfig für den RME Side-Car kommt in ORC"). ORC schreibt `ORC/rme.json` und `orc.json`, Rea-Sixty liest beide nur (`reasixty_rmeConfigPath_`, `reasixty_orcBindingsPath_` in main.cpp). `REAPER/rea_sixty/rme.json` ist ein Überbleibsel von vorher, das nichts mehr liest. |
+| Side-Car in Rea-Sixty ohne ORC | **gibt es nicht**: ohne `ORC/rme.json` bietet Rea-Sixty keinen Side-Car an. Wer ihn in REAPER will, installiert ORC. Unter Windows und Linux gibt es ihn darum heute gar nicht. |
 | ORC muss laufen, damit es den UF1 nach REAPER übernimmt | kein Start beim Anmelden (steht oben unter „nicht in diesem Plan") |
 | Gleicher Funktionsstand | Side-Car und ORC teilen den Code. Seit v0.6.1 sind 21 Commits dazugekommen, darunter die FX-Reihe. ORC 0.1.0 und Rea-Sixty 0.6.2 sollten aus demselben Commit kommen. |
 | Rea-Sixty unter Windows / Linux | kein ORC (nur Mac) |
@@ -101,8 +102,6 @@ Download**. Was sich unterscheidet, ist das Drumherum.
 ## Offen, Franks Entscheidung
 
 - **Gratis oder kostenpflichtig** (siehe oben, entscheidet alles andere mit).
-- **Gruppe B, Einstellungen:** getrennt lassen, oder ORC übernimmt beim ersten Start die
-  Side-Car-Einstellungen aus Rea-Sixty einmalig.
 - **Start beim Anmelden** als Schalter in ORC (für Gruppe B nötig, damit ORC nach REAPER
   übernimmt). Macht ihn das Mindest-macOS 13, weil Apples `SMAppService` erst ab 13 da ist
   (nicht geprüft, vor dem Bau nachlesen)?
