@@ -1055,7 +1055,48 @@ if(APPLE)
     # WDL only for its JSON parser, which RmeManager reads rme.json with. No
     # REAPER header comes in with it: WDL is a standalone utility library.
     target_include_directories(orc PRIVATE src vendor/WDL)
-    target_link_libraries(orc PRIVATE reasixty_libusb Threads::Threads
+
+    # ⇨ ONE APP FOR BOTH MACS, FROM MACOS 13 (release plan step 2, Frank
+    # 29.09.2026). arm64 and x86_64 in one binary. 13 because the launch-at-
+    # login switch needs SMAppService, which Apple ships from macOS 13.0
+    # (SMAppService.h, API_AVAILABLE(macos(13.0))). Per target, not global: the
+    # extension keeps its own per-architecture builds and ReaPack assets.
+    set_target_properties(orc PROPERTIES OSX_ARCHITECTURES "arm64;x86_64")
+    target_compile_options(orc PRIVATE -mmacosx-version-min=13.0)
+    target_link_options(orc PRIVATE -mmacosx-version-min=13.0)
+
+    # ⇨ ITS OWN LIBUSB, BUILT FOR BOTH ARCHITECTURES. Homebrew's libusb is the
+    # machine's own architecture only, so a universal ORC cannot link it. The
+    # official libusb release, pinned to one version and one checksum, built
+    # with both -arch flags. That exact tarball is also the LGPL-2.1 source the
+    # release has to offer (docs/third-party-notices-plan.md).
+    # Checksum: matches GitHub's digest for the release asset, and the tarball's
+    # GPG signature verifies against libusb's KEYS (Tormod Volden), 29.09.2026.
+    include(ExternalProject)
+    set(ORC_LIBUSB_VERSION 1.0.30)
+    set(ORC_LIBUSB_SHA256 fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf)
+    set(ORC_LIBUSB_PREFIX "${CMAKE_BINARY_DIR}/orc-libusb")
+    set(ORC_LIBUSB_FLAGS "-arch arm64 -arch x86_64 -mmacosx-version-min=13.0 -O2")
+    ExternalProject_Add(orc_libusb
+        URL "https://github.com/libusb/libusb/releases/download/v${ORC_LIBUSB_VERSION}/libusb-${ORC_LIBUSB_VERSION}.tar.bz2"
+        URL_HASH SHA256=${ORC_LIBUSB_SHA256}
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        PREFIX "${ORC_LIBUSB_PREFIX}"
+        INSTALL_DIR "${ORC_LIBUSB_PREFIX}/install"
+        CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=<INSTALL_DIR>
+            --disable-dependency-tracking --disable-static
+            "CFLAGS=${ORC_LIBUSB_FLAGS}" "LDFLAGS=${ORC_LIBUSB_FLAGS}"
+        BUILD_COMMAND make
+        # The app finds it in its own Frameworks folder, so the name it carries
+        # is @rpath/... from the start and ORC's link records exactly that.
+        INSTALL_COMMAND make install
+            COMMAND install_name_tool -id "@rpath/libusb-1.0.0.dylib"
+                <INSTALL_DIR>/lib/libusb-1.0.0.dylib
+        BUILD_BYPRODUCTS "${ORC_LIBUSB_PREFIX}/install/lib/libusb-1.0.0.dylib")
+    set(ORC_LIBUSB_DYLIB "${ORC_LIBUSB_PREFIX}/install/lib/libusb-1.0.0.dylib")
+    add_dependencies(orc orc_libusb)
+    target_include_directories(orc PRIVATE "${ORC_LIBUSB_PREFIX}/install/include/libusb-1.0")
+    target_link_libraries(orc PRIVATE "${ORC_LIBUSB_DYLIB}" Threads::Threads
         "-framework AppKit")
     # ⇨ A BUNDLE, because a status item needs one. An unbundled binary can put
     # an item in the menu bar, but it has no Info.plist to carry LSUIElement, no
@@ -1077,30 +1118,17 @@ if(APPLE)
         # The app's own Frameworks folder, where its libusb lives (below).
         BUILD_RPATH "@executable_path/../Frameworks")
 
-    # ⇨ LIBUSB INSIDE THE APP (release plan step 1, 29.09.2026). The link
-    # points at Homebrew's libusb, which a customer does not have, so ORC would
-    # not start. Same source as the extension's bundled copy (brew, queried
-    # above as LIBUSB_BREW_PREFIX), placed where a Mac app keeps its libraries:
-    # ORC.app/Contents/Frameworks, found through @rpath. install_name_tool
-    # breaks the signatures, so the library is signed again and then the app,
-    # innermost first. Ad hoc here; the Developer ID signature comes with the
-    # release script (step 4).
-    set(ORC_LIBUSB_SRC "${LIBUSB_BREW_PREFIX}/lib/libusb-1.0.0.dylib")
+    # ⇨ LIBUSB INSIDE THE APP (release plan step 1, 29.09.2026): a customer
+    # has no Homebrew. The universal libusb built above goes where a Mac app
+    # keeps its libraries, ORC.app/Contents/Frameworks, found through @rpath.
+    # Signed ad hoc, the library first and then the app, innermost first; the
+    # Developer ID signature comes with the release script (step 4).
     add_custom_command(TARGET orc POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Frameworks"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ORC_LIBUSB_SRC}"
+            "${ORC_LIBUSB_DYLIB}"
             "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Frameworks/libusb-1.0.0.dylib"
-        COMMAND chmod u+w
-            "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Frameworks/libusb-1.0.0.dylib"
-        COMMAND install_name_tool -id
-            "@rpath/libusb-1.0.0.dylib"
-            "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Frameworks/libusb-1.0.0.dylib"
-        COMMAND install_name_tool -change
-            "${ORC_LIBUSB_SRC}"
-            "@rpath/libusb-1.0.0.dylib"
-            "$<TARGET_FILE:orc>"
         COMMAND codesign --force --sign -
             "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Frameworks/libusb-1.0.0.dylib"
         COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:orc>"

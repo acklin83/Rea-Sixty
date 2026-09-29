@@ -29,17 +29,15 @@ Einreichung v0.6.1 am 27.09., Accepted.
 ## Schritte
 
 1. ✅ **Erledigt 29.09.2026:** libusb liegt in `ORC.app/Contents/Frameworks`, ORC findet sie
-   über `@rpath` (`BUILD_RPATH @executable_path/../Frameworks`), Quelle ist dieselbe
-   Homebrew-libusb wie beim Bündeln der Extension (`LIBUSB_BREW_PREFIX`). `otool -L`: kein
-   Homebrew-Pfad mehr, `codesign --verify --deep --strict` gültig (ad hoc). Noch nur arm64,
-   Universal kommt mit Schritt 2. Ursprünglicher Text:
-   **libusb ins Programm.** Eigene Kopie nach `ORC.app/Contents/Frameworks`, das
-   Programm findet sie per `@rpath` (`@executable_path/../Frameworks`). Vorher klären,
-   woher die Rea-Sixty-CI ihre libusb für macOS holt (Release-Assets
-   `libusb-1.0.0.dylib` und `libusb-1.0.0-x86_64.dylib`), und dieselbe Quelle nehmen.
-2. **Universal bauen** (arm64 + x86_64) für das ORC-Target, Mindest-macOS **13**
-   (`CMAKE_OSX_DEPLOYMENT_TARGET`), wegen `SMAppService`. Die Menü-Überschriften ab
-   macOS 14 sind schon abgesichert.
+   über `@rpath` (`BUILD_RPATH @executable_path/../Frameworks`). Kein Homebrew-Pfad mehr
+   (`otool -L`), Signatur gültig (ad hoc).
+2. ✅ **Erledigt 29.09.2026:** ORC ist universal (arm64 + x86_64), Mindest-macOS 13.0
+   (`vtool -show-build`: `minos 13.0` in beiden Hälften). Die Homebrew-libusb hat nur die
+   eigene Architektur, darum baut CMake für ORC **eine eigene libusb 1.0.30** aus dem
+   offiziellen Release (`ExternalProject_Add orc_libusb`, SHA256 fest, stimmt mit GitHubs
+   Angabe überein, GPG-Signatur gegen libusbs `KEYS` geprüft), mit beiden `-arch` und
+   macOS 13. Dieser Tarball ist zugleich der LGPL-Quelltext fürs Release. Die Extension
+   bleibt unverändert bei ihrer Homebrew-libusb pro Architektur.
 3. **Info.plist:** Version 1.0.0, `LSMinimumSystemVersion` 13.0, Copyright.
 3a. **Start beim Anmelden:** ein Schalter im ORC-Fenster, `SMAppService.mainApp`
    `register` / `unregister`, der angezeigte Zustand kommt aus `status` (der Nutzer kann

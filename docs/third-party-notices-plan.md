@@ -27,6 +27,7 @@ source offer. That is independent of Rea-Sixty's own licence.
 | Windows zip + ReaPack | 1.0.30 prebuilt (`build.yml:102`) | 0.15.0 prebuilt (`build.yml:104`) | CI download URLs |
 | Linux tar + ReaPack | Ubuntu 22.04 package | Ubuntu 22.04 package | CI container, `dpkg-query` |
 | `com.reasixty.companion.streamDeckPlugin` | | | `ws` from `package.json` (^8.18.0) |
+| ORC.app (DMG) | 1.0.30, built universal from the official tarball (`orc_libusb` in `extension/CMakeLists.txt`) | not linked | the pinned tarball is the source to offer |
 
 The Linux libraries are Ubuntu's builds, so their corresponding source is Ubuntu's
 source package (`apt-get source`), including Ubuntu's patches.
