@@ -10,6 +10,10 @@
     <key>CFBundleShortVersionString</key> <string>@MACOSX_BUNDLE_SHORT_VERSION_STRING@</string>
     <key>CFBundleVersion</key>         <string>@MACOSX_BUNDLE_BUNDLE_VERSION@</string>
     <key>NSHighResolutionCapable</key> <true/>
+    <!-- Launch at login needs SMAppService, macOS 13.0 and later. The binary is
+         built for 13.0 as well (-mmacosx-version-min in CMakeLists.txt). -->
+    <key>LSMinimumSystemVersion</key>  <string>13.0</string>
+    <key>NSHumanReadableCopyright</key> <string>© 2026 Frank Acklin</string>
     <!-- No Dock icon and no menu bar of its own: ORC lives in the status bar.
          The surface is the instrument, this is the thing that says who holds
          it. NSApplicationActivationPolicyAccessory in OrcApp.mm says the same

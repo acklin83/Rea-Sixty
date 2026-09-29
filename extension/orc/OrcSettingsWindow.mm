@@ -1,4 +1,5 @@
 #import "OrcSettingsWindow.h"
+#import <ServiceManagement/ServiceManagement.h>
 
 #include "Bindings.h"
 #include "OrcConfig.h"
@@ -172,6 +173,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
 
 @interface OrcSettingsWindowController () <NSWindowDelegate>
 @property (nonatomic, strong) NSButton*    enabledBox;
+@property (nonatomic, strong) NSButton*    loginBox;
 @property (nonatomic, strong) NSTextField* hostField;
 @property (nonatomic, strong) NSTextField* sendField;
 @property (nonatomic, strong) NSTextField* recvField;
@@ -302,6 +304,17 @@ NSStackView* withUnit(NSView* field, NSString* unit)
                                            target:self
                                            action:@selector(enabledChanged:)];
     [v addArrangedSubview:self.enabledBox];
+
+    // ⇨ OPEN AT LOGIN (Frank 29.09.2026, release plan 3a). With Rea-Sixty on the
+    // same Mac, ORC can only take the UF1 back after REAPER quits if it is
+    // running, so it has to start with the session. Off from the factory.
+    // macOS keeps the switch (SMAppService, macOS 13+); the user can also turn
+    // it off in System Settings, so the box shows what macOS says, not what
+    // was last clicked (refresh).
+    self.loginBox = [NSButton checkboxWithTitle:@"Open at login"
+                                         target:self
+                                         action:@selector(loginChanged:)];
+    [v addArrangedSubview:self.loginBox];
 
     NSGridView* grid = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
     grid.columnSpacing = 10.0;
@@ -577,6 +590,12 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     const auto link = mgr.link();
 
     self.enabledBox.state = cfg.enabled ? NSControlStateValueOn : NSControlStateValueOff;
+    // Enabled, or waiting for the user's approval in System Settings: both are
+    // "the user asked for it", so both show ticked.
+    const SMAppServiceStatus login = SMAppService.mainAppService.status;
+    self.loginBox.state = (login == SMAppServiceStatusEnabled
+                           || login == SMAppServiceStatusRequiresApproval)
+                              ? NSControlStateValueOn : NSControlStateValueOff;
     if (self.window.firstResponder != self.hostField.currentEditor)
         self.hostField.stringValue = str(cfg.host);
     if (self.window.firstResponder != self.sendField.currentEditor)
@@ -849,6 +868,21 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     mgr.setConfig(cfg);
     const std::string err = orc::saveRmeConfigIfDirty();
     self.errorLabel.stringValue = err.empty() ? @"" : str(err);
+}
+
+- (void)loginChanged:(id)sender
+{
+    const bool on = self.loginBox.state == NSControlStateValueOn;
+    SMAppService* app = SMAppService.mainAppService;
+    NSError* err = nil;
+    const BOOL ok = on ? [app registerAndReturnError:&err] : [app unregisterAndReturnError:&err];
+    // macOS may hold a new login item until the user allows it. Then the place
+    // to do that opens, rather than a sentence in this window saying where it is.
+    if (on && app.status == SMAppServiceStatusRequiresApproval)
+        [SMAppService openSystemSettingsLoginItems];
+    else if (!ok && err)
+        self.errorLabel.stringValue = err.localizedDescription;
+    [self refresh];
 }
 
 - (void)enabledChanged:(id)sender

@@ -1097,17 +1097,19 @@ if(APPLE)
     add_dependencies(orc orc_libusb)
     target_include_directories(orc PRIVATE "${ORC_LIBUSB_PREFIX}/install/include/libusb-1.0")
     target_link_libraries(orc PRIVATE "${ORC_LIBUSB_DYLIB}" Threads::Threads
-        "-framework AppKit")
+        "-framework AppKit" "-framework ServiceManagement")
     # ⇨ A BUNDLE, because a status item needs one. An unbundled binary can put
     # an item in the menu bar, but it has no Info.plist to carry LSUIElement, no
     # name for the system to show and nothing to sign or notarise later.
     set(MACOSX_BUNDLE_EXECUTABLE_NAME ORC)
-    # ⚠ Provisional identifier. Nothing in this repo had one before; the App
-    # Store is not involved, so any reverse-DNS name works for signing and
-    # notarising, and this one is free to change until the first signed build
-    # goes out.
+    # The identifier stays (Frank 28.09.2026), and so does the name ORC
+    # (29.09.). ⛔ Changing it later makes macOS treat ORC as a new app: the
+    # login item, its permissions and ~/Library/Application Support/ORC, which
+    # Rea-Sixty reads, would all come apart.
     set(MACOSX_BUNDLE_GUI_IDENTIFIER ch.stoersender.orc)
-    set(MACOSX_BUNDLE_SHORT_VERSION_STRING 0.1.0)
+    # ORC starts at 1.0 (Frank 29.09.2026). The build number goes up with every
+    # release, whatever the version string does.
+    set(MACOSX_BUNDLE_SHORT_VERSION_STRING 1.0.0)
     set(MACOSX_BUNDLE_BUNDLE_VERSION 1)
     configure_file(orc/Info.plist.in "${CMAKE_BINARY_DIR}/OrcInfo.plist" @ONLY)
     set_target_properties(orc PROPERTIES

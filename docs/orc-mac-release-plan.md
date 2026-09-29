@@ -38,8 +38,9 @@ Einreichung v0.6.1 am 27.09., Accepted.
    Angabe überein, GPG-Signatur gegen libusbs `KEYS` geprüft), mit beiden `-arch` und
    macOS 13. Dieser Tarball ist zugleich der LGPL-Quelltext fürs Release. Die Extension
    bleibt unverändert bei ihrer Homebrew-libusb pro Architektur.
-3. **Info.plist:** Version 1.0.0, `LSMinimumSystemVersion` 13.0, Copyright.
-3a. **Start beim Anmelden:** ein Schalter im ORC-Fenster, `SMAppService.mainApp`
+3. ✅ **Erledigt 29.09.2026:** Info.plist mit Version 1.0.0, `LSMinimumSystemVersion` 13.0,
+   Copyright „© 2026 Frank Acklin".
+3a. ✅ **Erledigt 29.09.2026** („Open at login" auf der Seite Connection). **Start beim Anmelden:** ein Schalter im ORC-Fenster, `SMAppService.mainApp`
    `register` / `unregister`, der angezeigte Zustand kommt aus `status` (der Nutzer kann
    ORC auch in den Systemeinstellungen abschalten, das muss der Schalter zeigen). Ab Werk aus.
 3b. **Lizenzhinweise** im DMG und im Repo, nach `docs/third-party-notices-plan.md`
