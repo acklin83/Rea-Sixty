@@ -121,6 +121,7 @@
 #include "PluginChunkPatch.h"
 #include "SslPresetLibrary.h"
 #include "PluginMap.h"
+#include "ProjectScoped.h"
 #include "Protocol.h"
 #include "SetupBundle.h"
 #include "input_level_jsfx.h"  // generated: uf8::setup_bundle::kInputLevelJsfx{Bytes,Size}
@@ -3031,6 +3032,61 @@ void selsetWriteToProject_(int slot1to8) {
     }
 }
 
+// ⇨ PROJECT STATE FOLLOWS THE PROJECT TAB (forum, timothys_monster, 29.09.2026:
+// a Selection Set saved in project A was gone after a detour through a new tab;
+// Frank: "Should be session aware, of course"). Every projectconfig hook below
+// used to keep ONE set of globals for all open projects: the new tab's
+// begin-load emptied them, the switch back loaded nothing, and saving A then
+// wrote the empty state into A's .rpp. Now each hook runs through a
+// ProjectScoped store (ProjectScoped.h): its globals always hold the ACTIVE
+// tab's state, every other open tab has a parked copy, a load or save works on
+// the project REAPER names, and switchProjectState_ (top of onTimer) swaps on
+// a tab change. The hook bodies themselves are unchanged.
+ReaProject* projInLoadSave_()
+{
+    ReaProject* p = GetCurrentProjectInLoadSave ? GetCurrentProjectInLoadSave() : nullptr;
+    // The active project is already current while a load's callbacks run (see
+    // stickyBeginLoad_), so it is the right fallback on a REAPER without the call.
+    return p ? p : EnumProjects(-1, nullptr, 0);
+}
+
+// Wraps a hook's three callbacks so each runs on the state of the project in
+// load or save. Store = its ProjectScoped instance.
+template <auto& Store, auto Process, auto Save, auto Begin>
+struct ScopedProjConfig {
+    static bool process(const char* line, ProjectStateContext* ctx, bool isUndo,
+                        project_config_extension_t* reg)
+    {
+        bool used = false;
+        Store.with(projInLoadSave_(), [&] { used = Process(line, ctx, isUndo, reg); });
+        return used;
+    }
+    static void save(ProjectStateContext* ctx, bool isUndo, project_config_extension_t* reg)
+    {
+        Store.with(projInLoadSave_(), [&] { Save(ctx, isUndo, reg); });
+    }
+    static void begin(bool isUndo, project_config_extension_t* reg)
+    {
+        Store.with(projInLoadSave_(), [&] { Begin(isUndo, reg); });
+    }
+    static project_config_extension_t config() { return { process, save, begin, nullptr }; }
+};
+
+// Selection Set slots 1..8 and the recalled slot. The recall is per tab too, so
+// a new tab does not inherit A's filter and A shows its set again on the way
+// back; it is not written to the file (as before). Global-scope slots ride
+// along and are refreshed from ExtState by loadSelsetsFromProject_ on the switch.
+struct SelsetProjState {
+    std::array<SelSet, 8> slots{};
+    int active = 0;
+};
+void selsetSwapLive_(SelsetProjState& s)
+{
+    std::swap(g_selsets, s.slots);
+    s.active = g_selsetActive.exchange(s.active);
+}
+reasixty::ProjectScoped<ReaProject*, SelsetProjState> g_selsetScoped{selsetSwapLive_};
+
 // projectconfig hooks for the 1..8 Selection Set slots — project-scoped
 // data. Mirrors the temp-selset pattern (see g_tempSelsetProjConfig).
 // Global-scoped slots stay on SetExtState (reliable) and are skipped
@@ -3085,12 +3141,28 @@ void slotsBeginLoad_(bool /*isUndo*/,
     }
 }
 
-project_config_extension_t g_slotsProjConfig{
-    slotsProcessLine_,
-    slotsSaveExt_,
-    slotsBeginLoad_,
-    nullptr
+project_config_extension_t g_slotsProjConfig =
+    ScopedProjConfig<g_selsetScoped, slotsProcessLine_, slotsSaveExt_, slotsBeginLoad_>::config();
+
+// Parameter Groups' on/off flags and names, per tab. They live inside
+// ParameterGroups.cpp behind its mutex, so the swap goes through its own API.
+struct PgProjState {
+    std::string bits = std::string(uf8::param_groups::kSlotCount, '0');
+    std::array<std::string, uf8::param_groups::kSlotCount> names{};
 };
+void pgSwapLive_(PgProjState& s)
+{
+    namespace pg = uf8::param_groups;
+    PgProjState live;
+    live.bits = pg::activeFlagsBits();
+    for (int i = 0; i < pg::kSlotCount; ++i) live.names[i] = pg::groupName(i);
+    pg::resetActiveFlags();
+    pg::resetGroupNames();
+    pg::applyActiveFlags(s.bits.c_str());
+    for (int i = 0; i < pg::kSlotCount; ++i) pg::applyGroupName(i, s.names[i].c_str());
+    s = std::move(live);
+}
+reasixty::ProjectScoped<ReaProject*, PgProjState> g_pgScoped{pgSwapLive_};
 
 // projectconfig hooks for Parameter-Group ON/OFF flags — per-project so a new
 // empty project always loads with every group off (membership is already
@@ -3146,12 +3218,8 @@ void pgActiveBeginLoad_(bool /*isUndo*/,
     uf8::param_groups::resetGroupNames();
 }
 
-project_config_extension_t g_pgActiveProjConfig{
-    pgActiveProcessLine_,
-    pgActiveSaveExt_,
-    pgActiveBeginLoad_,
-    nullptr
-};
+project_config_extension_t g_pgActiveProjConfig =
+    ScopedProjConfig<g_pgScoped, pgActiveProcessLine_, pgActiveSaveExt_, pgActiveBeginLoad_>::config();
 
 // Temporary-selection-set persistence: TAB-joined GUIDs in ProjExtState
 // key "temp_selset", recall flag in "temp_selset_active" ("1" / ""). Per-
@@ -3242,12 +3310,21 @@ void tempSelsetBeginLoad_(bool /*isUndo*/,
     g_tempSelsetActive.store(false);
 }
 
-project_config_extension_t g_tempSelsetProjConfig{
-    tempSelsetProcessLine_,
-    tempSelsetSaveExt_,
-    tempSelsetBeginLoad_,
-    nullptr
+// The Temporary Selection Set (Focus Set) and its pin, per tab.
+struct TempSelsetProjState {
+    std::unordered_set<std::string> guids;
+    bool active = false;
 };
+void tempSelsetSwapLive_(TempSelsetProjState& s)
+{
+    std::swap(g_tempSelsetGuids, s.guids);
+    s.active = g_tempSelsetActive.exchange(s.active);
+}
+reasixty::ProjectScoped<ReaProject*, TempSelsetProjState> g_tempSelsetScoped{tempSelsetSwapLive_};
+
+project_config_extension_t g_tempSelsetProjConfig =
+    ScopedProjConfig<g_tempSelsetScoped, tempSelsetProcessLine_, tempSelsetSaveExt_,
+                     tempSelsetBeginLoad_>::config();
 
 // Load now flows through the projectconfig BeginLoadProjectState +
 // ProcessExtensionLine callbacks driven by REAPER. Stub kept so the
@@ -3418,7 +3495,9 @@ void drainSelsets_() {
     if (curProj != g_selsetsLoadedFor) g_selsetsDirty.store(true);
     if (g_selsetsDirty.load()) {
         loadSelsetsFromProject_();
-        if (g_selsetActive.load() > 0) refreshActiveSelsetGuids_();
+        // Unconditional: a tab switch can bring back "no slot recalled", and the
+        // cache of the other tab's slot must not outlive it (clears on slot 0).
+        refreshActiveSelsetGuids_();
         g_bankDirty.store(true);
     }
     const int saveReq = g_selsetSaveRequest.exchange(0);
@@ -14323,12 +14402,23 @@ void csFavMemBeginLoad_(bool /*isUndo*/, struct project_config_extension_t* /*re
     g_csFavFull.clear();
 }
 
-project_config_extension_t g_csFavMemProjConfig{
-    csFavMemProcessLine_,
-    csFavMemSaveExt_,
-    csFavMemBeginLoad_,
-    nullptr
+// The CS favourite value memory, per tab.
+struct CsFavMemProjState {
+    decltype(g_csFavMem)    mem;
+    decltype(g_csFavMemExt) ext;
+    decltype(g_csFavFull)   full;
 };
+void csFavMemSwapLive_(CsFavMemProjState& s)
+{
+    std::swap(g_csFavMem, s.mem);
+    std::swap(g_csFavMemExt, s.ext);
+    std::swap(g_csFavFull, s.full);
+}
+reasixty::ProjectScoped<ReaProject*, CsFavMemProjState> g_csFavMemScoped{csFavMemSwapLive_};
+
+project_config_extension_t g_csFavMemProjConfig =
+    ScopedProjConfig<g_csFavMemScoped, csFavMemProcessLine_, csFavMemSaveExt_,
+                     csFavMemBeginLoad_>::config();
 
 // ---- Bus-Compressor intent + per-favourite memory — exact analog of CS ------
 // Separate maps from the CS ones: BC linkIdx 1..7 would otherwise collide with
@@ -14433,12 +14523,21 @@ void bcFavMemBeginLoad_(bool /*isUndo*/, struct project_config_extension_t* /*re
     g_bcFavFull.clear();
 }
 
-project_config_extension_t g_bcFavMemProjConfig{
-    bcFavMemProcessLine_,
-    bcFavMemSaveExt_,
-    bcFavMemBeginLoad_,
-    nullptr
+// The BC favourite value memory, per tab.
+struct BcFavMemProjState {
+    decltype(g_bcFavMem)  mem;
+    decltype(g_bcFavFull) full;
 };
+void bcFavMemSwapLive_(BcFavMemProjState& s)
+{
+    std::swap(g_bcFavMem, s.mem);
+    std::swap(g_bcFavFull, s.full);
+}
+reasixty::ProjectScoped<ReaProject*, BcFavMemProjState> g_bcFavMemScoped{bcFavMemSwapLive_};
+
+project_config_extension_t g_bcFavMemProjConfig =
+    ScopedProjConfig<g_bcFavMemScoped, bcFavMemProcessLine_, bcFavMemSaveExt_,
+                     bcFavMemBeginLoad_>::config();
 
 // ---- Per-project favourite bank (Phase 2) → .rpp ----------------------------
 // CSFAVBANK_ACTIVE 1   (present only when the project overrides the global set)
@@ -14545,12 +14644,23 @@ void favBankBeginLoad_(bool /*isUndo*/, struct project_config_extension_t* /*reg
     g_trackBcSet.clear();
 }
 
-project_config_extension_t g_favBankProjConfig{
-    favBankProcessLine_,
-    favBankSaveExt_,
-    favBankBeginLoad_,
-    nullptr
+// The project favourite bank and the per-track CS/BC set assignments, per tab.
+struct FavBankProjState {
+    ProjFavBank bank;
+    decltype(g_trackCsSet) trackCs;
+    decltype(g_trackBcSet) trackBc;
 };
+void favBankSwapLive_(FavBankProjState& s)
+{
+    std::swap(g_projFavBank, s.bank);
+    std::swap(g_trackCsSet, s.trackCs);
+    std::swap(g_trackBcSet, s.trackBc);
+}
+reasixty::ProjectScoped<ReaProject*, FavBankProjState> g_favBankScoped{favBankSwapLive_};
+
+project_config_extension_t g_favBankProjConfig =
+    ScopedProjConfig<g_favBankScoped, favBankProcessLine_, favBankSaveExt_,
+                     favBankBeginLoad_>::config();
 
 // Debug: opt-in via ExtState "rea_sixty"/"cs_log" = "1" (Desktop cs_log_on.lua).
 // Appends one line per param transfer to /tmp/rea_sixty_cs.log.
@@ -20944,12 +21054,65 @@ void stickyBeginLoad_(bool /*isUndo*/, struct project_config_extension_t* /*reg*
     g_modeBannerReseed.store(true);
 }
 
-project_config_extension_t g_stickyProjConfig{
-    stickyProcessLine_,
-    stickySaveExt_,
-    stickyBeginLoad_,
-    nullptr
+// Sticky Pot pins and Sticky on/off, per tab. A new project starts active, as
+// stickyBeginLoad_ resets it.
+struct StickyProjState {
+    decltype(g_stickyPins) pins;
+    bool active = true;
 };
+void stickySwapLive_(StickyProjState& s)
+{
+    std::swap(g_stickyPins, s.pins);
+    s.active = g_stickyActive.exchange(s.active);
+}
+reasixty::ProjectScoped<ReaProject*, StickyProjState> g_stickyScoped{stickySwapLive_};
+
+project_config_extension_t g_stickyProjConfig =
+    ScopedProjConfig<g_stickyScoped, stickyProcessLine_, stickySaveExt_,
+                     stickyBeginLoad_>::config();
+
+// ⇨ THE TAB SWITCH FOR ALL SEVEN STORES, at the very top of onTimer: before the
+// mode banner diffs Sticky and the Focus Set (it would announce the other tab's
+// state as a flip) and before drainSelsets_ reads the slots. Closed tabs lose
+// their parked copy on every tick, so a new project that gets a closed one's
+// address starts empty.
+bool projectIsOpen_(ReaProject* p)
+{
+    for (int i = 0;; ++i) {
+        ReaProject* q = EnumProjects(i, nullptr, 0);
+        if (!q) return false;
+        if (q == p) return true;
+    }
+}
+
+void switchProjectState_()
+{
+    ReaProject* const cur = EnumProjects(-1, nullptr, 0);
+    if (!cur) return;
+    bool changed = false;
+    changed |= g_selsetScoped.switchTo(cur, projectIsOpen_);
+    changed |= g_tempSelsetScoped.switchTo(cur, projectIsOpen_);
+    changed |= g_pgScoped.switchTo(cur, projectIsOpen_);
+    changed |= g_stickyScoped.switchTo(cur, projectIsOpen_);
+    changed |= g_csFavMemScoped.switchTo(cur, projectIsOpen_);
+    changed |= g_bcFavMemScoped.switchTo(cur, projectIsOpen_);
+    changed |= g_favBankScoped.switchTo(cur, projectIsOpen_);
+    if (changed) {
+        g_modeBannerReseed.store(true);   // another tab's state, not a user flip
+        g_selsetsDirty.store(true);       // drainSelsets_: global slots, recall cache
+        g_bankDirty.store(true);
+        g_pageDirty.store(true);
+        g_softKeyDirty.store(true);
+        return;
+    }
+    g_selsetScoped.prune(projectIsOpen_);
+    g_tempSelsetScoped.prune(projectIsOpen_);
+    g_pgScoped.prune(projectIsOpen_);
+    g_stickyScoped.prune(projectIsOpen_);
+    g_csFavMemScoped.prune(projectIsOpen_);
+    g_bcFavMemScoped.prune(projectIsOpen_);
+    g_favBankScoped.prune(projectIsOpen_);
+}
 
 void drainInputQueue()
 {
@@ -43588,6 +43751,7 @@ void refreshUf1TraceFlag_()
 void onTimerBody_()
 {
     ++g_tickCounter;
+    switchProjectState_();
     refreshUf1TraceFlag_();
     uf1TrackFocusRecency_();
 

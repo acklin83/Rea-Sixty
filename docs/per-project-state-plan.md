@@ -1,5 +1,12 @@
 # Selection Sets per project tab: plan (29.09.2026)
 
+**Built 29.09.2026, option b (Frank: "b, bau"):** all seven hooks. `src/ProjectScoped.h`,
+`ScopedProjConfig` and `switchProjectState_` in main.cpp, `tests/test_project_scoped.cpp`.
+Threads read before building: the containers are main-thread only (the input thread
+posts requests and reads atomics or mirrors the timer recomputes); Parameter Groups
+swap through their own API under their mutex. ⛔ A NEW projectconfig hook goes through
+`ScopedProjConfig` with its own store and a line in `switchProjectState_`.
+
 Forum, timothys_monster: set saved in project A (project scope), new tab with empty
 project B, back to A: the slot is empty, its name gone, the UF8 shows all tracks.
 Frank: "Should be session aware, of course."

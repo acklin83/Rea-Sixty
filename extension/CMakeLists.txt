@@ -797,6 +797,11 @@ if(NOT WIN32)
     target_include_directories(test_jog_grid PRIVATE src)
     add_test(NAME jog_grid COMMAND test_jog_grid)
 
+    # Project state follows the project tab (ProjectScoped.h, header only).
+    add_executable(test_project_scoped tests/test_project_scoped.cpp)
+    target_include_directories(test_project_scoped PRIVATE src)
+    add_test(NAME project_scoped COMMAND test_project_scoped)
+
     add_executable(test_uc1_protocol tests/test_uc1_protocol.cpp src/UC1Protocol.cpp)
     target_include_directories(test_uc1_protocol PRIVATE src)
     add_test(NAME uc1_protocol COMMAND test_uc1_protocol)
