@@ -564,17 +564,38 @@ with Solid State Logic or RME.</p>
       b.classList.toggle('hidden', words.length > 0 && !hit);
     });
   });
-  // The drawing: the control's box lights up on hover and after a click.
-  var links = document.querySelectorAll('svg a');
-  Array.prototype.forEach.call(links, function (a) {
-    var id = a.getAttribute('href').slice(1);
-    var box = document.getElementById(id);
+  // ⇨ EVERY JUMP INSIDE THE PAGE GOES THROUGH HERE, the drawing's and the
+  // contents'. A plain #anchor does not scroll when the page is opened as a
+  // file preview or from a data: address (seen 29.09.2026: the clicks landed and
+  // nothing moved), so the page scrolls itself and a real address still gets
+  // its #fragment.
+  function jump(id) {
+    var el = document.getElementById(id);
+    if (!el) return false;
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (el.classList.contains('ctl')) {
+      el.classList.add('lit');
+      setTimeout(function () { el.classList.remove('lit'); }, 1600);
+    }
+    try { history.replaceState(null, '', '#' + id); } catch (err) { /* data: address */ }
+    return true;
+  }
+  document.addEventListener('click', function (ev) {
+    var a = ev.target.closest ? ev.target.closest('a') : null;
+    if (!a) return;
+    var href = a.getAttribute('href') || a.getAttribute('xlink:href') || '';
+    if (href.charAt(0) !== '#') return;
+    if (jump(href.slice(1))) ev.preventDefault();
+  });
+  // The drawing: the control's box lights up while the pointer is on it.
+  Array.prototype.forEach.call(document.querySelectorAll('svg a'), function (a) {
+    var box = document.getElementById(a.getAttribute('href').slice(1));
     if (!box) return;
+    a.setAttribute('tabindex', '0');
     a.addEventListener('mouseenter', function () { box.classList.add('lit'); });
     a.addEventListener('mouseleave', function () { box.classList.remove('lit'); });
-    a.addEventListener('click', function () {
-      box.classList.add('lit');
-      setTimeout(function () { box.classList.remove('lit'); }, 1600);
+    a.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); jump(box.id); }
     });
   });
 })();
