@@ -86,6 +86,7 @@
 
 #include "Bindings.h"
 #include "ColorSync.h"
+#include "PushQuiet.h"
 #include "FocusedParam.h"
 #include "GrCalibration.h"
 #include "MarkerOverlay.h"
@@ -2262,8 +2263,15 @@ extern std::array<int64_t, 8>     g_folderRevealUntilMs;
 // same strip for this window. Stops the tiny twist that often rides along
 // with the press from nudging the param straight back off the just-set
 // reset value (Frank 2026-05-29).
-constexpr int64_t kVpotPushRotSuppressMs = 250;
+// One window for every pot: PushQuiet.h holds the number since the UF1 and
+// the RME side-car got the same rule (Frank 2026-09-29).
+constexpr int64_t kVpotPushRotSuppressMs = reasixty::kPushQuietMs;
 extern std::array<int64_t, 8>     g_vpotPushSuppressUntilMs;
+// The UF1's REAPER path, the same rule: 0..3 the four display pots, 4 the pot
+// above the fader. Armed by their push drains, checked in the Uf1Encoder
+// drain; both on the main thread.
+constexpr int kUf1QuietAboveFader = 4;
+extern reasixty::PushQuiet<5> g_uf1PotPushQuiet;
 
 // Forward declarations for followFocusedPluginGuiAcrossCycle_ — the
 // definitions live ~500 lines below in the same anonymous namespace.
@@ -21209,6 +21217,9 @@ void drainInputQueue()
                     else                       uf1JogDispatch_(step);   // move by the mode
                     break;
                 case uf1::enc::kVpotAboveFader: // above-fader V-pot → Pan (extensible)
+                    // Just pushed back to its default: the twist riding along
+                    // is not a turn (PushQuiet.h, Frank 2026-09-29).
+                    if (g_uf1PotPushQuiet.quiet(kUf1QuietAboveFader, nowMs_())) break;
                     applyUf1AboveFaderVpot_(step);
                     break;
                 case uf1::enc::kVpot1:          // 4 plugin V-pots. In Meter view
@@ -21222,6 +21233,8 @@ void drainInputQueue()
                     // lives in the meter path, which is where it started.
                     // Hue Mode owns all four outright — it owns the screen, so
                     // the pots have to follow or the labels lie.
+                    if (g_uf1PotPushQuiet.quiet(id - uf1::enc::kVpot1, nowMs_()))
+                         break;   // just pushed back to its default (PushQuiet.h)
                     if (g_uf1HueMode.load())
                          applyUf1HueVpot_(id, step);
                     else if (g_uf1MeterView.load() || g_uf1PresetsMode.load())
@@ -21242,6 +21255,7 @@ void drainInputQueue()
         if (e.kind == PendingInput::Uf1CsVpotPush) {
             // Channel-view V-Pot push (0x09-0x0C): reset the current-page V-Pot
             // param to its default on the on-screen SSL strip (main thread).
+            g_uf1PotPushQuiet.arm(static_cast<int>(e.strip), nowMs_());
             applyUf1ChannelVpotPush_(static_cast<int>(e.strip));
             continue;
         }
@@ -21253,6 +21267,8 @@ void drainInputQueue()
             const bool abFocused = (e.strip == 1);
             MediaTrack* const abTr =
                 abFocused ? uf1FocusedTrack_() : uf1FaderTrack_();
+            // The knob's own push (not a display-side copy) quietens the knob.
+            if (!abFocused) g_uf1PotPushQuiet.arm(kUf1QuietAboveFader, nowMs_());
             // REC + RME: the push fires its assigned action (factory: 48V) instead
             // of centring pan / resetting the pin. Same ordering rule as CUT/SOLO.
             // ⇨ LEFT HALF ONLY. A preamp belongs to the channel on the fader, so
@@ -21288,9 +21304,28 @@ void drainInputQueue()
                 } else {
                     int sfx = -1, sparam = -1; bool stg = false;
                     int efx = -1, eprm = -1, efocus = -1;
+                    const auto fvf = flipVpotFader_(tr, g_uf1Flip.load(),
+                                                    g_uf1StripMode.load());
                     if (stickyUf1AboveEnabled_()
                         && stickyResolveOnTrack_(tr, &sfx, &sparam, &stg))
                         stickyPushDefault_(tr, sfx, sparam, stg);
+                    // ⇨ UNDER FLIP THE PUSH RESETS WHAT THE KNOB MOVES (Frank
+                    // 2026-09-29). The rotation above rides the CS Fader Level in
+                    // Strip Mode, else the track volume; the push centred the pan,
+                    // a quantity the knob was not on. Same two rungs as the UF8's
+                    // push: the plug-in's own default, else 0 dB.
+                    else if (fvf.vst3Param >= 0) {
+                        double mn = 0.0, mx = 1.0, def = 0.0;
+                        TrackFX_GetParamEx(tr, fvf.fxIndex, fvf.vst3Param,
+                                           &mn, &mx, &def);
+                        const double range = mx - mn;
+                        const double n = (range > 1e-9)
+                            ? std::clamp((def - mn) / range, 0.0, 1.0) : 1.0;
+                        g_ownWriteFocusLockUntilMs.store(nowMs_() + kFaderNoSelectMs);
+                        TrackFX_SetParamNormalized(tr, fvf.fxIndex, fvf.vst3Param, n);
+                    }
+                    else if (g_uf1Flip.load())
+                        CSurf_OnVolumeChange(tr, 1.0, /*relative*/false);
                     // Extender: the push belongs to whatever the knob is on, and
                     // it does what the eight strips beside it do — step-cycle an
                     // enumerated slot, reset anything else to its default. Same
@@ -22764,6 +22799,14 @@ void drainInputQueue()
                             } else {
                                 SetTrackSendInfo_Value(fr.track, fr.sendCategory,
                                                        fr.sendIndex, "D_PAN", 0.0);
+                                // ⇨ DROP THE GESTURE'S ACCUMULATOR (Frank
+                                // 2026-09-29), as the UF1's send pushes do: its
+                                // window is 300 ms against the push guard's 250,
+                                // and a turn in between resumed from the pan
+                                // BEFORE the push. Cleared, the next turn re-seeds
+                                // from the centre just written.
+                                g_sendPanVpotAccum[e.strip] = 0.0;
+                                g_sendPanVpotKey[e.strip].clear();
                                 g_panOverlayUntilMs[e.strip] = nowMs_() + kPanOverlayMs;
                                 g_panOverlayText[e.strip]    =
                                     composeValueLine("Pan", formatPanReadout(0.0));
@@ -22776,6 +22819,8 @@ void drainInputQueue()
                             if (g_forcePan.load()) {
                                 SetTrackSendInfo_Value(vr.track, vr.sendCategory,
                                                        vr.sendIndex, "D_PAN", 0.0);
+                                g_sendPanVpotAccum[e.strip] = 0.0;   // as above
+                                g_sendPanVpotKey[e.strip].clear();
                             } else {
                                 writeRouteVolumeLinear_(vr, 1.0);
                             }
@@ -37161,6 +37206,7 @@ std::array<MediaTrack*, kVolTouchSlots>  g_volTouchTr{};
 // reverting to "Folder". See kFolderRevealMs in the forward decls.
 std::array<int64_t, 8>     g_folderRevealUntilMs{};
 std::array<int64_t, 8>     g_vpotPushSuppressUntilMs{};
+reasixty::PushQuiet<5>     g_uf1PotPushQuiet;
 
 // CUT LED last-pushed state per strip — int8_t with -1 = unknown / force
 // re-push, 0/1 = effective mute state. Effective mute follows routing:

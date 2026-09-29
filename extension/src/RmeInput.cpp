@@ -1,6 +1,7 @@
 #include "RmeInput.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <string>
 
@@ -16,6 +17,12 @@ namespace {
 constexpr double kChannelEncoderScale = 4.0;
 
 bool modeMenu(const Host& h) { return h.modeMenuOpen && h.modeMenuOpen(); }
+std::int64_t nowMs(const Host& h)
+{
+    if (h.nowMs) return h.nowMs();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 double knobScale(const Host& h) { return h.knobScale ? h.knobScale() : 1.0; }
 bool online(const Host& h) { return !h.online || h.online(); }
 
@@ -164,6 +171,8 @@ bool encoder(State& s, const Host& h, const rme::State& st, const Config& cfg,
         const auto r   = rmeu::rowAt(s.row.load());
         const int  sel = selected(s, st, r);
         const int  pot = id - ::uf1::enc::kVpot1;
+        // Just pushed back to its default: the twist riding along is not a turn.
+        if (s.pushQuiet.quiet(pot, nowMs(h))) return true;
         const rmes::Param* p = stripView(s, st, r, sel, cfg).pots[pot];
         if (!p) return true;
         if (rmes::stepsWhole(*p)) {
@@ -209,6 +218,7 @@ bool encoder(State& s, const Host& h, const rme::State& st, const Config& cfg,
         // ⇨ PAN OF THE FADER CHANNEL (Frank 22.09.: "der Pan auf UF1 Channel
         // macht noch nichts"). Input/playback into the submix, an output itself
         // (rmeu::panAddress). 2 % per count, fine as everywhere in the side-car.
+        if (s.pushQuiet.quiet(State::kQuietAboveFader, nowMs(h))) return true;
         const auto r   = rmeu::rowAt(s.row.load());
         const int  sel = selected(s, st, r);
         const int  sub = rmeu::effectiveSubmix(st, s.submix.load());
@@ -311,8 +321,9 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
         if (ev.pressed) {
             const auto r   = rmeu::rowAt(s.row.load());
             const int  sel = selected(s, st, r);
-            if (const rmes::Param* p =
-                    stripView(s, st, r, sel, cfg).pots[id - ::uf1::btn::kVpot1Push])
+            const int  pot = id - ::uf1::btn::kVpot1Push;
+            s.pushQuiet.arm(pot, nowMs(h));
+            if (const rmes::Param* p = stripView(s, st, r, sel, cfg).pots[pot])
                 append(out, rmes::resetWrites(st, r, sel, *p));
         }
         return true;
@@ -350,6 +361,7 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
         const int  sel = selected(s, st, r);
         if (sel < 0) return true;
         if (id == ::uf1::btn::kVpotAboveFaderPush) {
+            s.pushQuiet.arm(State::kQuietAboveFader, nowMs(h));
             // Press on the pan pot: centre, as in REAPER's channel view. On the
             // FX row it is the width, and its neutral is full stereo.
             const std::string a = rmeu::panAddress(r, sel,

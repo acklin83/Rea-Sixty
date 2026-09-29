@@ -333,6 +333,73 @@ int main()
         EXPECT(w.size() == 1 && w[0].first == "/reverb/predelay");
     }
 
+    // ── PushQuiet: a push quietens its own pot for 250 ms (Frank 29.09.) ─────
+    {
+        reasixty::PushQuiet<5> q;
+        EXPECT(!q.quiet(0, 0));                  // never pushed: free
+        q.arm(2, 1000);
+        EXPECT(q.quiet(2, 1000) && q.quiet(2, 1249));
+        EXPECT(!q.quiet(2, 1250));               // the window ends
+        EXPECT(!q.quiet(1, 1100));               // the next pot is not touched
+        EXPECT(!q.quiet(-1, 1100) && !q.quiet(5, 1100));   // out of range: free
+        q.arm(9, 1000);                          // out of range: ignored
+        EXPECT(reasixty::kPushQuietMs == 250);   // the UF8's window since 29.05.
+    }
+
+    // ── the side-car: the twist riding on a push is not a turn ──────────────
+    // Same code in ORC and in Rea-Sixty's side-car. The clock is the host's.
+    {
+        State fx = fixture();
+        auto put = [&](const char* a, float v) {
+            Message m; m.address = a; m.args.push_back(Arg::fromFloat(v)); ingest(fx, m);
+        };
+        put("/reverb/enable", 1); put("/reverb/type", 2); put("/reverb/predelay", 20);
+        put("/reverb/width", 0.6f);
+        std::int64_t t = 1000;
+        in_::Host clock;
+        clock.nowMs = [&t] { return t; };
+        in_::State s;
+        s.row.store(3);
+        s.strip.store(true);
+
+        in_::Writes w;
+        in_::button(s, clock, fx, cfg, press(::uf1::btn::kVpot2Push), w);   // PreDelay
+        t = 1100;
+        w.clear();
+        in_::encoder(s, clock, fx, cfg, ::uf1::enc::kVpot2, +3, w);
+        EXPECT(w.empty());                                        // swallowed
+        in_::encoder(s, clock, fx, cfg, ::uf1::enc::kVpot1, +4, w);
+        // Another pot turns (a reverb type also asks for /sendall).
+        EXPECT(w.size() == 2 && w[0].first == "/reverb/type");
+        t = 1250;
+        w.clear();
+        in_::encoder(s, clock, fx, cfg, ::uf1::enc::kVpot2, +3, w);
+        EXPECT(w.size() == 1 && w[0].first == "/reverb/predelay"); // free again
+
+        // The pot above the fader: push, then its twist, then a real turn.
+        t = 2000;
+        w.clear();
+        in_::button(s, clock, fx, cfg, press(::uf1::btn::kVpotAboveFaderPush), w);
+        EXPECT(w.size() == 1 && w[0].first == "/reverb/width" && w[0].second == 1.0f);
+        t = 2100;
+        w.clear();
+        in_::encoder(s, clock, fx, cfg, ::uf1::enc::kVpotAboveFader, -2, w);
+        EXPECT(w.empty());
+        t = 2300;
+        in_::encoder(s, clock, fx, cfg, ::uf1::enc::kVpotAboveFader, -2, w);
+        EXPECT(w.size() == 1 && w[0].first == "/reverb/width");
+
+        // A push with STRIP closed is not a reset (submix / select / mute) and
+        // quietens nothing.
+        in_::State o;
+        t = 3000;
+        w.clear();
+        in_::button(o, clock, st, cfg, press(::uf1::btn::kVpot1Push), w);
+        t = 3050;
+        in_::encoder(o, clock, st, cfg, ::uf1::enc::kVpot1, +1, w);
+        EXPECT(!w.empty());
+    }
+
     if (g_fail == 0) std::printf("test_rme_input: all good\n");
     return g_fail ? 1 : 0;
 }

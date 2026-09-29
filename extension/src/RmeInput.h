@@ -24,6 +24,7 @@
 // have been the other's. They live in State, which the caller owns, exactly like
 // Uf1Spread::Cache.
 
+#include "PushQuiet.h"
 #include "RmeManager.h"
 #include "RmeState.h"
 #include "RmeStrip.h"
@@ -68,12 +69,18 @@ struct State {
     std::atomic<double> chAccum{0.0};
     std::atomic<double> potAccum[4] = { {0.0}, {0.0}, {0.0}, {0.0} };
 
+    // ⇨ A PUSH QUIETENS ITS POT FOR A MOMENT (Frank 29.09.: "dass sich der pot
+    // nach dem push nicht versehentlich leicht bewegt"). 0..3 the four display
+    // pots in STRIP, 4 the pot above the fader. PushQuiet.h, the UF8's 250 ms.
+    static constexpr int kQuietAboveFader = 4;
+    PushQuiet<5> pushQuiet;
+
     State() = default;
     State(const State&) = delete;
     State& operator=(const State&) = delete;
 };
 
-// The three things the input path cannot know by itself.
+// The things the input path cannot know by itself.
 // ⛔ An unset callback is a STATE, not a failure, and each one has the answer
 // that makes the surface behave as if the host had never heard of it: no mode
 // menu, no fine mode, link up. ORC leaves the first two unset.
@@ -81,6 +88,9 @@ struct Host {
     std::function<bool()>   modeMenuOpen;  // the MODE menu owns the keys
     std::function<double()> knobScale;     // fine mode factor, 1.0 = normal
     std::function<bool()>   online;        // the link is answering
+    // Milliseconds on a steady clock, for PushQuiet. Unset: std::chrono's own.
+    // A test sets it to walk time without waiting.
+    std::function<std::int64_t()> nowMs;
 };
 
 // ── queries the painter and the LEDs share with the input path ───────────────
