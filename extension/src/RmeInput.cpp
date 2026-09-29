@@ -47,7 +47,7 @@ void nudge(const State& s, const Host& h, const rme::State& st, rmeu::Row r, int
 {
     stepDb *= knobScale(h);
     const int sub = rmeu::effectiveSubmix(st, s.submix.load());
-    if (r != rmeu::Row::Output && sub < 0) return;
+    if (r != rmeu::Row::Output && r != rmeu::Row::Fx && sub < 0) return;
     bool known = false;
     double cur = rmeu::levelDb(st, r, ch, sub, known);
     if (!known) cur = kDbOff;
@@ -62,7 +62,7 @@ void nudge(const State& s, const Host& h, const rme::State& st, rmeu::Row r, int
 
 int selected(const State& s, const rme::State& st, rmeu::Row r)
 {
-    const int cur = s.sel[static_cast<int>(r)].load();
+    const int cur = s.sel[static_cast<int>(rmeu::rowAt(static_cast<int>(r)))].load();
     const auto list = rmeu::visibleChannels(st, r);
     if (std::find(list.begin(), list.end(), cur) != list.end()) return cur;
     if (r == rmeu::Row::Output && st.outputForRole(st.mainOut)) return st.mainOut;
@@ -84,7 +84,7 @@ rmes::View stripView(const State& s, const rme::State& st, rmeu::Row r, int sel,
 void select(State& s, rmeu::Row r, int ch)
 {
     s.row.store(static_cast<int>(r));
-    s.sel[static_cast<int>(r)].store(ch);
+    s.sel[static_cast<int>(rmeu::rowAt(static_cast<int>(r)))].store(ch);
     if (r == rmeu::Row::Output) s.submix.store(ch);
 }
 
@@ -161,7 +161,7 @@ bool encoder(State& s, const Host& h, const rme::State& st, const Config& cfg,
 {
     if (id >= ::uf1::enc::kVpot1 && id <= ::uf1::enc::kVpot4 && s.strip.load()) {
         // STRIP: the pot turns its page's parameter on the fader channel.
-        const auto r   = static_cast<rmeu::Row>(std::clamp(s.row.load(), 0, 2));
+        const auto r   = rmeu::rowAt(s.row.load());
         const int  sel = selected(s, st, r);
         const int  pot = id - ::uf1::enc::kVpot1;
         const rmes::Param* p = stripView(s, st, r, sel, cfg).pots[pot];
@@ -190,7 +190,7 @@ bool encoder(State& s, const Host& h, const rme::State& st, const Config& cfg,
             stepRow(s, steps);
             return true;
         }
-        const auto r = static_cast<rmeu::Row>(std::clamp(s.row.load(), 0, 2));
+        const auto r = rmeu::rowAt(s.row.load());
         const int n = rmeu::stepChannel(rmeu::visibleChannels(st, r),
                                         selected(s, st, r), steps,
                                         [&](int ch) { return rmeu::orderKey(st, r, ch); });
@@ -209,14 +209,16 @@ bool encoder(State& s, const Host& h, const rme::State& st, const Config& cfg,
         // ⇨ PAN OF THE FADER CHANNEL (Frank 22.09.: "der Pan auf UF1 Channel
         // macht noch nichts"). Input/playback into the submix, an output itself
         // (rmeu::panAddress). 2 % per count, fine as everywhere in the side-car.
-        const auto r   = static_cast<rmeu::Row>(std::clamp(s.row.load(), 0, 2));
+        const auto r   = rmeu::rowAt(s.row.load());
         const int  sel = selected(s, st, r);
         const int  sub = rmeu::effectiveSubmix(st, s.submix.load());
         const std::string a = rmeu::panAddress(r, sel, sub);
         if (a.empty()) return true;
         bool known = false;
         const double cur = rmeu::panValue(st, r, sel, sub, known);
-        const double nv  = std::clamp(cur + delta * 0.02 * knobScale(h), -1.0, 1.0);
+        // On the FX row the pot is the width, 0 mono .. 1 stereo.
+        const double lo  = rmeu::panIsWidth(r) ? 0.0 : -1.0;
+        const double nv  = std::clamp(cur + delta * 0.02 * knobScale(h), lo, 1.0);
         if (nv != cur) out.push_back({ a, static_cast<float>(nv) });
         return true;
     }
@@ -237,7 +239,7 @@ bool stripSoftKey(State& s, const Host& h, const rme::State& st, const Config& c
         return false;
     if (!ev.pressed || modeMenu(h)) return true;
 
-    const auto r   = static_cast<rmeu::Row>(std::clamp(s.row.load(), 0, 2));
+    const auto r   = rmeu::rowAt(s.row.load());
     const int  sel = selected(s, st, r);
     if (sel < 0) return true;
     const rmes::View v = stripView(s, st, r, sel, cfg);
@@ -297,7 +299,7 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
             if (s.strip.load()) {
                 s.strip.store(false);
             } else {
-                const auto r = static_cast<rmeu::Row>(std::clamp(s.row.load(), 0, 2));
+                const auto r = rmeu::rowAt(s.row.load());
                 if (selected(s, st, r) >= 0) s.strip.store(true);
             }
         }
@@ -307,7 +309,7 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
     // (RmeStrip::resetWrites, Frank 22.09.).
     if (s.strip.load() && id >= ::uf1::btn::kVpot1Push && id <= ::uf1::btn::kVpot4Push) {
         if (ev.pressed) {
-            const auto r   = static_cast<rmeu::Row>(std::clamp(s.row.load(), 0, 2));
+            const auto r   = rmeu::rowAt(s.row.load());
             const int  sel = selected(s, st, r);
             if (const rmes::Param* p =
                     stripView(s, st, r, sel, cfg).pots[id - ::uf1::btn::kVpot1Push])
@@ -337,24 +339,26 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
         } else if (slot.push == "select") {
             select(s, t.row, t.ch);
         } else if (slot.push == "mute") {
-            const Channel* c = rmeu::channelOf(st, t.row, t.ch);
-            out.push_back({ rmeu::muteAddress(t.row, t.ch),
-                            (c && c->mute) ? 0.0f : 1.0f });
+            const auto m = rmeu::muteToggle(st, t.row, t.ch);
+            if (!m.first.empty()) out.push_back({ m.first, m.second });
         }
         return true;
     }
     if (id == ::uf1::btn::kVpotAboveFaderPush || id == ::uf1::btn::kChannelSoftKey) {
         if (!ev.pressed) return true;
-        const auto r   = static_cast<rmeu::Row>(std::clamp(s.row.load(), 0, 2));
+        const auto r   = rmeu::rowAt(s.row.load());
         const int  sel = selected(s, st, r);
         if (sel < 0) return true;
         if (id == ::uf1::btn::kVpotAboveFaderPush) {
-            // Press on the pan pot: centre, as in REAPER's channel view.
+            // Press on the pan pot: centre, as in REAPER's channel view. On the
+            // FX row it is the width, and its neutral is full stereo.
             const std::string a = rmeu::panAddress(r, sel,
                                       rmeu::effectiveSubmix(st, s.submix.load()));
-            if (!a.empty()) out.push_back({ a, 0.0f });
+            if (!a.empty()) out.push_back({ a, rmeu::panIsWidth(r) ? 1.0f : 0.0f });
             return true;
         }
+        // An effect is not a stereo pair: the key above the channel does nothing.
+        if (r == rmeu::Row::Fx) return true;
         // ⇨ THE SOFT KEY ABOVE THE CHANNEL IS STEREO/MONO of the fader channel
         // (Frank 22.09.). /<sec>/<n>/stereo, written by TotalReaper itself
         // (Stereo-Pair Link). Afterwards fetch both halves again: on unlinking,
@@ -386,13 +390,14 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
     // to REAPER and switched the focused track.
     if (id == ::uf1::btn::kCut || id == ::uf1::btn::kSolo || id == ::uf1::btn::kSel) {
         if (!ev.pressed) return true;
-        const auto r   = static_cast<rmeu::Row>(std::clamp(s.row.load(), 0, 2));
+        const auto r   = rmeu::rowAt(s.row.load());
         const int  sel = selected(s, st, r);
         if (sel < 0) return true;
         const int  sub = rmeu::effectiveSubmix(st, s.submix.load());
         if (id == ::uf1::btn::kCut) {
-            const Channel* c = rmeu::channelOf(st, r, sel);
-            out.push_back({ rmeu::muteAddress(r, sel), (c && c->mute) ? 0.0f : 1.0f });
+            // On the FX row CUT switches the effect off and on (muteToggle).
+            const auto m = rmeu::muteToggle(st, r, sel);
+            if (!m.first.empty()) out.push_back({ m.first, m.second });
         } else if (id == ::uf1::btn::kSolo) {
             // Solo sits in the routing: input/playback into the submix. An
             // output has none, so the key does nothing there.

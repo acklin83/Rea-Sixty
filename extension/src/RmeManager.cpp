@@ -22,6 +22,7 @@
 #include "RmeOsc.h"
 #include "LogPath.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -67,7 +68,47 @@ std::vector<StripPage> defaultStripPages()
                                 { "al_on", "", "", "" } },
         { "Output",    "out",   { "balpan", "crossfeed", "delay", "reflevel" },
                                 { "loopback", "talkbacksel", "phase", "phaseR" } },
+        { "Output 2",  "out",   { "fxreturn", "", "", "" },
+                                { "", "", "", "" } },
+        { "Reverb",    "reverb", { "rev_type", "rev_predelay", "rev_roomscale", "rev_time" },
+                                 { "rev_on", "", "", "" } },
+        { "Reverb 2",  "reverb", { "rev_lowcut", "rev_highcut", "rev_highdamp", "rev_smooth" },
+                                 { "", "", "", "" } },
+        { "Reverb 3",  "reverb", { "rev_attack", "rev_hold", "rev_release", "" },
+                                 { "", "", "", "" } },
+        { "Echo",      "echo",  { "echo_type", "echo_delay", "echo_feedback", "echo_highcut" },
+                                { "echo_on", "", "", "" } },
     };
+}
+
+// ⇨ VERSION 5 (29.09.2026): FX RETURN AND THE FX ROW. A file with a "strip" list
+// replaces the factory pages whole, so without this the new pages would never
+// reach anyone who has an rme.json already, Frank included. "Output 2" goes
+// right after the first page for outputs (it packs with it: FX Ret after Pan,
+// Xfeed, Delay, Ref Lvl, Frank 29.09.); the FX pages go to the end. Each only
+// when no page of that name is there, so running it twice changes nothing.
+void upgradeStripPagesToV5(std::vector<StripPage>& pages)
+{
+    const std::vector<StripPage> fac = defaultStripPages();
+    auto has = [&](const std::string& name) {
+        return std::any_of(pages.begin(), pages.end(),
+                           [&](const StripPage& p) { return p.name == name; });
+    };
+    auto facPage = [&](const std::string& name) -> const StripPage* {
+        for (const auto& p : fac) if (p.name == name) return &p;
+        return nullptr;
+    };
+    if (!has("Output 2")) {
+        if (const StripPage* o2 = facPage("Output 2")) {
+            auto at = std::find_if(pages.begin(), pages.end(),
+                                   [](const StripPage& p) { return p.rows == "out"; });
+            if (at != pages.end()) pages.insert(at + 1, *o2);
+            else                   pages.push_back(*o2);
+        }
+    }
+    for (const char* n : { "Reverb", "Reverb 2", "Reverb 3", "Echo" })
+        if (!has(n))
+            if (const StripPage* pg = facPage(n)) pages.push_back(*pg);
 }
 
 std::string configToJson(const Config& c)
@@ -88,7 +129,7 @@ std::string configToJson(const Config& c)
     char buf[512];
     snprintf(buf, sizeof(buf),
         "{\n"
-        "  \"version\": 4,\n"
+        "  \"version\": 5,\n"
         "  \"enabled\": %s,\n"
         "  \"connection\": { \"host\": \"%s\", \"send\": %d, \"receive\": %d },\n",
         c.enabled ? "true" : "false", host.c_str(), c.sendPort, c.recvPort);
@@ -195,7 +236,10 @@ bool configFromJson(const std::string& json, Config& out)
             quad("keys", pg.keys);
             pages.push_back(std::move(pg));
         }
-        if (!pages.empty()) c.stripPages = std::move(pages);
+        if (!pages.empty()) {
+            if (version < 5) upgradeStripPagesToV5(pages);
+            c.stripPages = std::move(pages);
+        }
     }
     if (!(c.jogStepDb > 0.0 && c.jogStepDb <= 12.0))   c.jogStepDb  = Config{}.jogStepDb;
     if (!(c.vpotStepDb > 0.0 && c.vpotStepDb <= 12.0)) c.vpotStepDb = Config{}.vpotStepDb;
@@ -294,7 +338,7 @@ Manager::ControlRoom Manager::controlRoom() const
 {
     std::lock_guard<std::mutex> lk(mx_);
     return { state_.dim, state_.mono, state_.speakerB, state_.talkback, state_.mainOut,
-             state_.externalIn };
+             state_.externalIn, state_.muteFx };
 }
 
 Manager::Scenes Manager::scenes() const

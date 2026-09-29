@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <map>
 #include <span>
 #include <string>
@@ -244,7 +245,7 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
     const rme::State  st  = rm.snapshot();
     const bool   linked = (rm.link() == rme::LinkState::Online) || st.ingested > 0;
 
-    const auto row = static_cast<rmeu::Row>(std::clamp(in.row.load(), 0, 2));
+    const auto row = rmeu::rowAt(in.row.load());
     const int  sel = linked ? input::selected(in, st, row) : -1;
     const int  sub = rmeu::effectiveSubmix(st, in.submix.load());
     bool known = false;
@@ -286,9 +287,12 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
     {
         if (strip && (static_cast<int>(row) != cc.sAskRow || sel != cc.sAskCh)) {
             cc.sAskRow = static_cast<int>(row); cc.sAskCh = sel;
-            rm.send(rmes::sendChanAddress(row, sel), 1.0f);
+            // Empty on the FX row: TotalMix has no /sendchan for the effects,
+            // their values come with /sendall.
+            const std::string ask = rmes::sendChanAddress(row, sel);
+            if (!ask.empty()) rm.send(ask, 1.0f);
             const rme::Channel* c = rmeu::channelOf(st, row, sel);
-            if (c && c->stereo) rm.send(rmes::sendChanAddress(row, sel + 1), 1.0f);
+            if (!ask.empty() && c && c->stereo) rm.send(rmes::sendChanAddress(row, sel + 1), 1.0f);
         } else if (!strip) {
             cc.sAskRow = -1; cc.sAskCh = -1;
         }
@@ -301,7 +305,9 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
     if (faderTouched(h)) cc.sLastTouch = nowT;
     const bool touched = faderTouched(h)
         || (nowT - cc.sLastTouch < std::chrono::milliseconds(150));
-    const bool writable = sel >= 0 && (row == rmeu::Row::Output || sub >= 0);
+    // An effect's volume needs no submix, like an output's.
+    const bool writable = sel >= 0
+        && (row == rmeu::Row::Output || row == rmeu::Row::Fx || sub >= 0);
     if (writable && touched && faderHasPos(h)) {
         const uint16_t pos = faderPos(h);
         if (pos != cc.sSentPos) {
@@ -311,8 +317,18 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
             // -64.x dB, also nie auf -inf (Frank 21.09.). uf1PosToNorm_ rastet
             // die unteren und oberen 64 Schritte auf 0 / 1 ein.
             const double lin = ::uf1::faderPosToNorm(pos);
-            rm.send(rmeu::levelAddress(row, sel, sub, /*faderlin*/ true),
-                    static_cast<float>(lin));
+            if (rmeu::levelTakesFaderlin(row)) {
+                rm.send(rmeu::levelAddress(row, sel, sub, /*faderlin*/ true),
+                        static_cast<float>(lin));
+            } else {
+                // ⇨ FX VOLUME IS dB ONLY, -65..+6 (measured 29.09.2026): the same
+                // fader law as TotalMix' own faders, written as dB. Off stops at
+                // -65, where TotalMix clamps it anyway; writing -300 would have
+                // left our copy at "-" and TotalMix at -65.
+                const double db = std::max(rme::faderlinToDb(lin), -65.0);
+                rm.send(rmeu::levelAddress(row, sel, sub, /*faderlin*/ false),
+                        static_cast<float>(db));
+            }
         }
         // ⇨ ECHO THE HAND TO THE MOTOR TARGET WHILE IT IS LIMP, exactly as
         // Rea-Sixty's channel painter does (main.cpp, "wobble") and as SSL 360
@@ -356,6 +372,7 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
         std::string name = "RME", db, line;
         std::string barText = !linked ? std::string("RME")
                             : row == rmeu::Row::Output ? std::string("OUTPUT")
+                            : row == rmeu::Row::Fx     ? std::string("FX")
                             : [&] {
                                   const std::string on =
                                       rmeu::displayName(st, rmeu::Row::Output, sub);
@@ -372,13 +389,21 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
             const rme::Channel* c = rmeu::channelOf(st, row, sel);
             name = rmeu::displayName(st, row, sel);
             db   = known ? dbText(selDb) : std::string();
-            no   = sel + 1;
+            const bool fx = row == rmeu::Row::Fx;
+            no   = fx ? 0 : sel + 1;
             if (c && c->colour >= 0 && c->colour < 9) pal = cfg.colourMap[c->colour];
-            // Der Zustand, den der Soft-Key ueber dem Kanal umschaltet.
-            chSoft = (c && c->stereo) ? "STEREO" : "MONO";
+            // Der Zustand, den der Soft-Key ueber dem Kanal umschaltet. Auf der
+            // FX-Reihe tut die Taste nichts, also keine Beschriftung.
+            chSoft = fx ? std::string() : (c && c->stereo) ? "STEREO" : "MONO";
             bool pk = false;
             const double pan = rmeu::panValue(st, row, sel, sub, pk);
-            if (pk) {
+            if (fx) {
+                // Die Breite, 0 mono .. 1 stereo, geschrieben wie TotalMix ("+0.60").
+                char w[16];
+                std::snprintf(w, sizeof(w), "%+.2f", pan);
+                line   = composeValueLine("Width", pk ? std::string(w) : std::string());
+                barPos = pk ? std::clamp(static_cast<int>(std::lround(pan * 100.0)), 0, 100) : -1;
+            } else if (pk) {
                 line      = composeValueLine("Pan", formatPanReadout(pan));
                 barPos    = std::clamp(static_cast<int>(std::lround((pan + 1.0) * 50.0)), 0, 100);
                 barCentre = (pan == 0.0);
@@ -527,8 +552,8 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
     // dem Fader der Submix ist; auf Eingang und Playback tut SEL nichts und ist
     // dunkel. SOLO gibt es nur im Routing, auf einem Ausgang also nie.
     {
-        const rme::Channel* c = (sel >= 0) ? rmeu::channelOf(st, row, sel) : nullptr;
-        const bool muted  = c && c->mute;
+        // Auf der FX-Reihe heisst CUT "Effekt aus" (rmeu::muted).
+        const bool muted  = sel >= 0 && rmeu::muted(st, row, sel);
         const bool soloOn = sel >= 0 && rmeu::soloed(st, row, sel, sub);
         const bool selOn  = sel >= 0 && row == rmeu::Row::Output && sel == sub;
         const int packed = (muted ? 1 : 0) | (soloOn ? 2 : 0) | (selOn ? 4 : 0);
@@ -570,7 +595,8 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
         f.haveMain    = st.mainOut >= 0;
         f.mainOnFader = input::faderMainActive(in, st);
         const rme::Channel* selCh = (sel >= 0) ? rmeu::channelOf(st, row, sel) : nullptr;
-        f.haveChannel = selCh != nullptr;
+        // Die Stereo-Taste tut auf der FX-Reihe nichts, also dunkel.
+        f.haveChannel = selCh != nullptr && row != rmeu::Row::Fx;
         f.stereo      = selCh && selCh->stereo;
         const auto lamps = keyLamps(f);
         emitLamps(lamps.data(), lamps.size(), cc.sLamp.data(), cc.sNavSent, o, force);
@@ -640,9 +666,11 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
                     (k < t.size()) ? static_cast<uint8_t>(t[k]) : 0;
         };
         if (listOpen) {
-            // MODE + Encoder: die drei Reihen, wie die Encoder-Liste.
-            int vis[3] = { 0, 1, 2 };
-            uf1spread::fillModeList(hdr, vis, 3, 3, static_cast<int>(row),
+            // MODE + Encoder: die Reihen, wie die Encoder-Liste. Drei Zeilen
+            // passen, ab der gewaehlten mit Umlauf (fillModeList).
+            int vis[rmeu::kRowCount] = { 0, 1, 2, 3 };
+            uf1spread::fillModeList(hdr, vis, rmeu::kRowCount, rmeu::kRowCount,
+                             static_cast<int>(row),
                              [](int r) { return rmeu::rowName(static_cast<rmeu::Row>(r)); });
         } else if (menuHeld) {
             putCell(0, rmeu::rowName(row));
@@ -681,7 +709,8 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
         // Peak in dB, dieselbe Umrechnung wie der REAPER-Pfad. Kommt nur, wenn
         // in TotalMix fuer dieses Remote "Send Peak Level" an ist; sonst 0.
         uint8_t lvL = 0, lvR = 0;
-        if (sel >= 0) {
+        // Fuer die Effekte meldet TotalMix keinen Pegel: FX bleibt leer.
+        if (sel >= 0 && row != rmeu::Row::Fx) {
             const std::map<int, double>& lv = row == rmeu::Row::Output ? st.levelOut
                                             : row == rmeu::Row::Input  ? st.levelIn
                                                                        : st.levelPb;

@@ -47,7 +47,11 @@ using Writes = rmes::Writes;
 // which is fine: there is exactly one per surface and the caller owns it.
 struct State {
     std::atomic<int>  row{2};                       // rmeu::Row, 2 = Output
-    std::atomic<int>  sel[3] = { {-1}, {-1}, {-1} };// chosen channel per row
+    // Chosen channel per row, one per rmeu::Row. ⛔ Sized by kRowCount: it held
+    // three when the FX row came (29.09.2026), and s.sel[Row::Fx] would have
+    // read past the end.
+    std::atomic<int>  sel[rmeu::kRowCount] = { {-1}, {-1}, {-1}, {-1} };
+    static_assert(rmeu::kRowCount == 4, "one -1 per row in sel's initialiser");
     std::atomic<int>  submix{-1};                   // the output inputs write into
     std::atomic<bool> strip{false};                 // STRIP open
     std::atomic<int>  stripPage{0};                 // a RmeStrip::View id

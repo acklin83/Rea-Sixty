@@ -127,6 +127,12 @@ struct State {
     std::map<int, Channel> inputs;
     std::map<int, Channel> playbacks;
     std::map<int, Channel> outputs;
+    // ⇨ THE TWO EFFECTS AS TWO STRIPS: 0 Reverb (/reverb/...), 1 Echo
+    // (/echo/...). Every field lands in `leaves` like a channel's ("type",
+    // "predelay", "volume", "enable" ...), so the channel view reads them the
+    // same way. TotalMix gives them no name and no colour; ingest() sets both,
+    // name "Reverb"/"Echo" and colour 1 (white). Plan: docs/orc-reverb-echo-plan.md.
+    std::map<int, Channel> fx;
 
     // ⇨ AN INPUT'S OR A PLAYBACK'S LEVEL IS ITS NODE IN A SUBMIX: /mix/in|pb/
     // <channel>/<submix output>/fader, in dB. /sendall reports these for exactly

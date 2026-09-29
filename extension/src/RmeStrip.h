@@ -40,9 +40,13 @@ enum class Kind : std::uint8_t {
     Width,    // 0..1
     Pan,      // -1..1, L / C / R
     Int,      // plain number
+    Pct,      // 0..100, "100%" (reverb smooth, echo feedback)
+    Factor,   // "1.00" (reverb room scale)
 };
 
-enum class Need : std::uint8_t { Any, Stereo };
+// Stereo: only on a stereo strip. Reverb / Echo: only on that FX channel (the
+// two share leaf names: type, highcut, width, volume, enable).
+enum class Need : std::uint8_t { Any, Stereo, Reverb, Echo };
 
 struct Param {
     const char* id;
@@ -55,6 +59,12 @@ struct Param {
     bool        bothSides = false;   // on a stereo strip, write n and n + 1
     std::vector<const char*> names   = {};   // List: display per index
     std::vector<const char*> namesOut = {};  // List on an output, if different
+    // ⇨ REVERB TYPES THAT SHOW THIS CONTROL, one bit per type index 0..14; 0 =
+    // every type. From TotalMix' FX window (Frank's screenshots 29.09.2026):
+    // Room Scale not on Envelope/Gated/Space, High Cut not on Space, Attack
+    // only on Envelope, Hold and Release on Envelope and Gated, Time and High
+    // Damp only on Space.
+    std::uint16_t revTypes = 0;
 };
 
 // nullptr for an unknown id (a typo in rme.json is an empty slot, not a crash).
@@ -132,7 +142,8 @@ Writes resetWrites(const State& st, Row r, int ch, const Param& p);
 // A key pressed: toggle, or the next list entry.
 Writes press(const State& st, Row r, int ch, const Param& p);
 
-// "/sendchan/input/3": asks TotalMix for every value of one channel.
+// "/sendchan/input/3": asks TotalMix for every value of one channel. Empty on
+// the FX row: TotalMix has no /sendchan for the effects.
 std::string sendChanAddress(Row r, int ch);
 
 }  // namespace reasixty::rme::strip

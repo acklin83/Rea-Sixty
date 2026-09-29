@@ -185,6 +185,25 @@ bool ingest(State& st, const Message& m)
         return false;   // groupflags: known, not used yet
     }
 
+    // ── reverb and echo: /reverb/<field>, /echo/<field> ─────────────────────
+    // Measured 2026-09-29 (docs/orc-reverb-echo-plan.md): TotalMix reports 14
+    // reverb and 7 echo fields on /sendall and takes a write to every one.
+    {
+        const bool rev = a.rfind("/reverb/", 0) == 0;
+        if (rev || a.rfind("/echo/", 0) == 0) {
+            const std::string leaf = a.substr(rev ? 8 : 6);
+            if (leaf.empty() || m.args.empty() || m.args[0].type == Arg::Type::String)
+                return false;
+            Channel& fx = st.fx[rev ? 0 : 1];
+            fx.name   = rev ? "Reverb" : "Echo";
+            fx.colour = 1;
+            fx.seen   = true;
+            // Only the leaves: the fader reads "volume", CUT "enable" (RmeUf1).
+            fx.setLeaf(leaf, m.args[0].number());
+            return true;
+        }
+    }
+
     // ── channel strips ──────────────────────────────────────────────────────
     std::string section, leaf; int idx = 0;
     if (!splitChannel(a, section, idx, leaf)) return false;

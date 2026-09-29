@@ -7,6 +7,14 @@
 namespace reasixty::rme::strip {
 namespace {
 
+// Reverb type index -> bit, for Param::revTypes. 12 Envelope, 13 Gated, 14 Space;
+// 0..11 are the room-like types (Large Room and Shorty seen, the rest assumed).
+constexpr std::uint16_t kRevEnvelope = 1u << 12;
+constexpr std::uint16_t kRevGated    = 1u << 13;
+constexpr std::uint16_t kRevSpace    = 1u << 14;
+constexpr std::uint16_t kRevRooms    = (1u << 12) - 1;
+constexpr std::uint16_t kRevNotSpace = kRevRooms | kRevEnvelope | kRevGated;
+
 // ⇨ THE CATALOGUE. Leaf = RME's sheet, range/step = UFX+ manual (plan 5b).
 // Not in the manual and therefore NOT belegt: the OSC values of `crossfeed`,
 // the ref-level list order (taken as the manual lists them), FX send range.
@@ -81,6 +89,40 @@ const std::vector<Param>& catalogue()
           Need::Any, false, /*bothSides*/ true },
         { "loopback",    "loopback",           "Loopback", Kind::Toggle, 0, 1, 1 },
         { "talkbacksel", "talkbacksel",        "TB Sel",   Kind::Toggle, 0, 1, 1 },
+        // ── reverb and echo (the FX row) ────────────────────────────────────
+        // Leaves below /reverb/ and /echo/. Ranges are what TotalMix clamped a
+        // write of +-100000 to on 2026-09-29, which differs from the UFX+ manual
+        // in four places (high cut and high damp from 2 kHz, release to 500 ms,
+        // time to 5.0 s); TotalMix wins. Volume and width are not here: they
+        // ride the fader and the pot above it (RmeUf1, Row::Fx).
+        { "rev_on",       "enable",    "Reverb",   Kind::Toggle, 0, 1, 1, Need::Reverb },
+        { "rev_type",     "type",      "Rev Type", Kind::List,   0, 0, 1, Need::Reverb, false, false,
+          { "Small", "Medium", "Large", "Walls", "Shorty", "Attack", "Swagger", "OldSchl",
+            "Echoist", "8plus9", "GrandWd", "Thicker", "Envelope", "Gated", "Space" } },
+        { "rev_predelay", "predelay",  "PreDelay", Kind::Ms,     0.0, 999.0, 1.0, Need::Reverb },
+        { "rev_roomscale","roomscale", "RoomScl",  Kind::Factor, 0.5,   3.0, 0.05, Need::Reverb,
+          false, false, {}, {}, kRevRooms },
+        { "rev_time",     "time",      "Time",     Kind::Sec,    0.1,   5.0, 0.1, Need::Reverb,
+          false, false, {}, {}, kRevSpace },
+        { "rev_lowcut",   "lowcut",    "Low Cut",  Kind::Hz,    20.0, 500.0, 1.0, Need::Reverb },
+        { "rev_highcut",  "highcut",   "High Cut", Kind::Hz,  2000.0, 20000.0, 1.0, Need::Reverb,
+          false, false, {}, {}, kRevNotSpace },
+        { "rev_highdamp", "highdamp",  "HiDamp",   Kind::Hz,  2000.0, 20000.0, 1.0, Need::Reverb,
+          false, false, {}, {}, kRevSpace },
+        { "rev_smooth",   "smooth",    "Smooth",   Kind::Pct,    0.0, 100.0, 1.0, Need::Reverb },
+        { "rev_attack",   "attack",    "Attack",   Kind::Ms,     5.0, 400.0, 1.0, Need::Reverb,
+          false, false, {}, {}, kRevEnvelope },
+        { "rev_hold",     "hold",      "Hold",     Kind::Ms,     5.0, 400.0, 1.0, Need::Reverb,
+          false, false, {}, {}, kRevEnvelope | kRevGated },
+        { "rev_release",  "release",   "Release",  Kind::Ms,     5.0, 500.0, 1.0, Need::Reverb,
+          false, false, {}, {}, kRevEnvelope | kRevGated },
+        { "echo_on",      "enable",    "Echo",     Kind::Toggle, 0, 1, 1, Need::Echo },
+        { "echo_type",    "type",      "EchoType", Kind::List,   0, 0, 1, Need::Echo, false, false,
+          { "Stereo", "Cross", "Pong" } },
+        { "echo_delay",   "delay",     "Delay",    Kind::Sec,    0.1,   2.0, 0.01, Need::Echo },
+        { "echo_feedback","feedback",  "Feedback", Kind::Pct,    0.0, 100.0, 1.0, Need::Echo },
+        { "echo_highcut", "highcut",   "HiCut",    Kind::List,   0, 0, 1, Need::Echo, false, false,
+          { "off", "16k", "12k", "8k", "4k", "2k" } },
     };
     return k;
 }
@@ -97,6 +139,7 @@ const Channel* half(const State& st, Row r, int ch, bool right)
 {
     if (!right) return chan(st, r, ch);
     if (!chan(st, r, ch)) return nullptr;       // the left half must be a strip
+    if (r == Row::Fx) return nullptr;           // an effect has no right half
     const auto& m = r == Row::Input ? st.inputs : r == Row::Playback ? st.playbacks
                                                                      : st.outputs;
     const auto it = m.find(ch + 1);
@@ -126,6 +169,7 @@ double clampTo(const Param& p, Row r, double v)
 
 std::string addr(Row r, int ch, const char* leaf)
 {
+    if (r == Row::Fx) return std::string("/") + uf1::fxSection(ch) + "/" + leaf;
     return std::string("/") + section(r) + "/" + std::to_string(ch) + "/" + leaf;
 }
 
@@ -137,6 +181,12 @@ Writes writesFor(const State& st, Row r, int ch, const Param& p, double v)
     w.emplace_back(addr(r, target, p.leaf), f);
     if (p.bothSides && !p.right && isStereo(st, r, ch))
         w.emplace_back(addr(r, ch + 1, p.leaf), f);
+    // ⛔ A REVERB TYPE LOADS VALUES OF ITS OWN (measured 29.09.: Gated moved high
+    // cut 10000 -> 8000 and room scale 2.0 -> 1.5), and TotalMix tells the remote
+    // that wrote it nothing. Ask for everything again, or the view keeps showing
+    // the old values.
+    if (r == Row::Fx && ch == 0 && std::string(p.leaf) == "type")
+        w.emplace_back("/sendall", 1.0f);
     return w;
 }
 
@@ -152,13 +202,19 @@ const Param* find(const std::string& id)
 
 const char* section(Row r)
 {
-    return r == Row::Input ? "input" : r == Row::Playback ? "playback" : "output";
+    return r == Row::Input ? "input" : r == Row::Playback ? "playback"
+         : r == Row::Fx ? "fx" : "output";
 }
 
 bool pageAllowsRow(const StripPage& pg, Row r)
 {
     if (pg.rows.empty()) return true;
-    const char* want = r == Row::Input ? "in" : r == Row::Playback ? "pb" : "out";
+    // The FX row takes "fx", and "reverb" / "echo" so the two effects can have
+    // runs of their own (a run is adjacent pages with the SAME rows string, and
+    // a view is named after its page in the run).
+    const bool fx = r == Row::Fx;
+    const char* want = r == Row::Input ? "in" : r == Row::Playback ? "pb"
+                     : fx ? "fx" : "out";
     std::size_t s = 0;
     while (s <= pg.rows.size()) {
         std::size_t e = pg.rows.find(',', s);
@@ -166,6 +222,7 @@ bool pageAllowsRow(const StripPage& pg, Row r)
         std::string tok = pg.rows.substr(s, e - s);
         tok.erase(std::remove(tok.begin(), tok.end(), ' '), tok.end());
         if (tok == want) return true;
+        if (fx && (tok == "reverb" || tok == "echo")) return true;
         s = e + 1;
     }
     return false;
@@ -175,8 +232,17 @@ bool available(const State& st, Row r, int ch, const Param& p)
 {
     if (ch < 0) return false;
     if (p.need == Need::Stereo && !isStereo(st, r, ch)) return false;
+    if (p.need == Need::Reverb && !(r == Row::Fx && ch == 0)) return false;
+    if (p.need == Need::Echo   && !(r == Row::Fx && ch == 1)) return false;
     const Channel* c = half(st, r, ch, p.right);
-    return c && c->leaf(p.leaf) != nullptr;
+    if (!c || c->leaf(p.leaf) == nullptr) return false;
+    if (p.revTypes != 0) {
+        const double* t = c->leaf("type");
+        if (!t) return false;
+        const int ti = static_cast<int>(std::lround(*t));
+        if (ti < 0 || ti > 14 || !(p.revTypes & (1u << ti))) return false;
+    }
+    return true;
 }
 
 namespace {
@@ -297,7 +363,9 @@ std::string format(const Param& p, Row r, double v)
         case Kind::Ms:
             std::snprintf(b, sizeof(b), p.step >= 1.0 ? "%.0f ms" : "%.1f ms", v);
             return b;
-        case Kind::Sec:   std::snprintf(b, sizeof(b), "%.1f s", v); return b;
+        case Kind::Sec:
+            std::snprintf(b, sizeof(b), p.step < 0.1 ? "%.2f s" : "%.1f s", v);
+            return b;
         case Kind::Ratio: std::snprintf(b, sizeof(b), "%.1f:1", v); return b;
         case Kind::Width: std::snprintf(b, sizeof(b), "%.2f", v); return b;
         case Kind::Pan: {
@@ -307,6 +375,8 @@ std::string format(const Param& p, Row r, double v)
             return b;
         }
         case Kind::Int:   std::snprintf(b, sizeof(b), "%.0f", v); return b;
+        case Kind::Pct:   std::snprintf(b, sizeof(b), "%.0f%%", v); return b;
+        case Kind::Factor: std::snprintf(b, sizeof(b), "%.2f", v); return b;
     }
     return {};
 }
@@ -397,6 +467,7 @@ Writes press(const State& st, Row r, int ch, const Param& p)
 
 std::string sendChanAddress(Row r, int ch)
 {
+    if (r == Row::Fx) return {};
     return std::string("/sendchan/") + section(r) + "/" + std::to_string(ch);
 }
 

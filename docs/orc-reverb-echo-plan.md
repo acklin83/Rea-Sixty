@@ -1,6 +1,6 @@
 # Plan: Reverb und Echo auf der UF1 (Side-Car und ORC)
 
-Stand 29.09.2026. Nur Plan, nichts gebaut. Gilt für beide Programme, weil ORC den
+Stand 29.09.2026: gebaut, siehe `docs/session-2026-09-29-fx-row.md`. Gilt für beide Programme, weil ORC den
 Side-Car der Extension wortwörtlich fährt (RmeState, RmeUf1, RmeStrip, RmeInput,
 RmeFace, RmeBuiltins).
 

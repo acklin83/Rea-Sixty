@@ -10,6 +10,8 @@
 #include "UF1Protocol.h"
 #include "Uf1Text.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <deque>
 #include <string>
@@ -200,6 +202,60 @@ int main()
         out.clear();
         face::emitLamps(two, 2, cache, navAt, o, false);
         EXPECT(out.empty());                              // unchanged: nothing sent
+    }
+
+    // ── the FX row on the glass (29.09.2026) ─────────────────────────────────
+    // The fader writes the effect's volume in dB (FX takes no faderlin), CUT
+    // is lit while the effect is off, the value line is the width, and there is
+    // no level. Fed through the manager's own send, which folds every write in.
+    {
+        auto& rm = manager();
+        rm.send("/reverb/enable", 1.0f); rm.send("/reverb/volume", -3.0f);
+        rm.send("/reverb/width", 0.6f);  rm.send("/reverb/type", 2.0f);
+        rm.send("/echo/enable", 0.0f);   rm.send("/echo/volume", -3.0f);
+        rm.send("/echo/width", 0.6f);
+
+        in_::State fin;
+        fin.row.store(3);
+        fin.sel[3].store(1);                              // Echo, switched off
+        const std::uint16_t pos = 20000;
+        Rec fr;
+        std::vector<std::vector<std::uint8_t>> meters;
+        face::Host fh;
+        fh.faderTouched = [] { return true; };
+        fh.faderHasPos  = [] { return true; };
+        fh.faderPos     = [pos] { return pos; };
+        fh.publishCycle = [&](std::vector<std::vector<std::uint8_t>> m,
+                              std::vector<std::vector<std::uint8_t>>) { meters = std::move(m); };
+        face::Out fo{ [&](std::vector<std::uint8_t> f) { fr.frames.push_back(std::move(f)); },
+                      [&](std::vector<std::uint8_t> f) { fr.frames.push_back(std::move(f)); } };
+        face::Cache fc;
+        face::paint(fc, fin, fh, fo, /*force*/ true);
+
+        const State st = rm.snapshot();
+        const double want = std::max(faderlinToDb(::uf1::faderPosToNorm(pos)), -65.0);
+        const double* vol = st.fx.count(1) ? st.fx.at(1).leaf("volume") : nullptr;
+        EXPECT(vol && std::fabs(*vol - want) < 1e-3);         // dB, TotalMix' fader law
+        EXPECT(!st.fx.at(1).leaf("faderlin"));                // never faderlin
+        EXPECT(std::fabs(*st.fx.at(0).leaf("volume") + 3.0) < 1e-6);   // Reverb untouched
+
+        // CUT lit: Echo is off.
+        bool cutLit = false;
+        const auto lit = ::uf1::buildLedPrimary(::uf1::led::kCut, ::uf1::led::kPrimCutLit);
+        for (const auto& f : fr.frames) if (f == lit) cutLit = true;
+        EXPECT(cutLit);
+        // The value line names the width, the colour bar text the row.
+        const auto line = ::uf1::buildScreen(::uf1::scr::kValueLine, [] {
+            std::vector<std::uint8_t> p{ 0x00 };
+            const std::string t = composeValueLine("Width", "+0.60");
+            p.insert(p.end(), t.begin(), t.end());
+            return p; }());
+        bool lineOk = false;
+        for (const auto& f : fr.frames) if (f == line) lineOk = true;
+        EXPECT(lineOk);
+        // No level for an effect.
+        EXPECT(!meters.empty() && meters[0] == ::uf1::buildScreen(0x0009,
+                   std::vector<std::uint8_t>{ 0, 0, 0, 0 }));
     }
 
     if (g_fail == 0) std::printf("test_rme_face: all good\n");

@@ -57,9 +57,12 @@ std::vector<Choice> targetChoices(const rme::State& st)
         }
         out.push_back({ r.spec, label });
     }
+    // TotalMix' channel rows only: an effect is no V-Pot or jog target, and
+    // these two arrays have three entries (kRowCount became 4 with the FX row).
     const char* kinds[]   = { "input", "playback", "output" };
     const char* headers[] = { "Inputs", "Playback", "Outputs" };
-    for (int r = 0; r < rmeu::kRowCount; ++r) {
+    static_assert(rmeu::kMixerRowCount == 3, "kinds[] and headers[] name each mixer row");
+    for (int r = 0; r < rmeu::kMixerRowCount; ++r) {
         const auto row = static_cast<rmeu::Row>(r);
         const auto chans = rmeu::visibleChannels(st, row);
         if (chans.empty()) continue;
@@ -611,7 +614,9 @@ NSStackView* withUnit(NSView* field, NSString* unit)
         self.knobStep.stringValue = [NSString stringWithFormat:@"%.2f", cfg.vpotStepDb];
 
     std::string wearers[9];
-    for (int r = 0; r < rmeu::kRowCount; ++r) {
+    // Who wears a TotalMix colour: mixer channels only. The effects carry a
+    // colour we set ourselves (RmeState, State::fx), not one from TotalMix.
+    for (int r = 0; r < rmeu::kMixerRowCount; ++r) {
         const auto row = static_cast<rmeu::Row>(r);
         for (int ch : rmeu::visibleChannels(st, row)) {
             const auto* c = rmeu::channelOf(st, row, ch);

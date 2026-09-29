@@ -6,8 +6,9 @@
 //
 // The whole plan is docs/uf1-spread-plan.md. The rules that shape this file:
 //
-//  · Three ROWS, as TotalMix has them: Input, Playback, Output. The channel
-//    encoder walks the VISIBLE channels of one row (colour != 0 on this remote).
+//  · Three ROWS, as TotalMix has them: Input, Playback, Output, and since
+//    29.09.2026 a fourth, FX (Reverb, Echo). The channel encoder walks the
+//    VISIBLE channels of one row (colour != 0 on this remote).
 //  · "The selected channel" is what the fader rides and whose EQ the graph
 //    draws. For an output that is its own volume. For an input or a playback it
 //    is its NODE in the current submix, and the current submix is the output
@@ -19,13 +20,36 @@
 
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace reasixty::rme::uf1 {
 
-enum class Row : int { Input = 0, Playback = 1, Output = 2 };
-constexpr int kRowCount = 3;
-const char* rowName(Row r);                 // "INPUT" / "PLAYBACK" / "OUTPUT"
+// ⇨ A FOURTH ROW, FX, BELOW THE OUTPUTS (Frank 29.09.2026: "eine Reihe
+// unterhalb der Outputs, damit mit dem Nav-Kreuz noch eine Stufe tiefer
+// gegangen werden kann"). Two channels, 0 Reverb and 1 Echo (State::fx). The
+// fader is the effect's volume, the pot above it its width, CUT switches it
+// off; SOLO, SEL and the stereo key do nothing there.
+// ⛔ "OUTPUT OR THE REST" IS NOT A TWO-WAY CHOICE ANY MORE. Every function below
+// that branched on Output and let everything else be an input or a playback
+// has an explicit Fx branch, pinned in tests/test_rme_osc.cpp.
+enum class Row : int { Input = 0, Playback = 1, Output = 2, Fx = 3 };
+// Every row the surface steps through (nav up/down, MODE + channel encoder).
+constexpr int kRowCount = 4;
+// Only TotalMix' channel rows: what a V-Pot or the jog can target, what carries
+// a TotalMix colour. A loop meaning "every mixer channel" uses this one.
+constexpr int kMixerRowCount = 3;
+const char* rowName(Row r);                 // "INPUT" / "PLAYBACK" / "OUTPUT" / "FX"
+
+// The row stored in the input state, clamped into range.
+inline Row rowAt(int stored)
+{
+    return static_cast<Row>(stored < 0 ? 0 : stored >= kRowCount ? kRowCount - 1 : stored);
+}
+
+// "reverb" / "echo" for FX channel 0 / 1, "" otherwise. The OSC section of the
+// effect: /reverb/predelay, /echo/delay.
+const char* fxSection(int ch);
 
 // ⇨ THE ORDER OF A ROW (Frank 27.09.2026: control room "nebeneinander, wie in
 // TotalMix", then "zuerst control room, dann der rest"). Inputs and playbacks
@@ -68,11 +92,20 @@ int effectiveSubmix(const State& st, int selectedOutput);
 double levelDb(const State& st, Row r, int ch, int submix, bool& known);
 
 // Address for writing a channel's level, faderlin or dB.
+// ⛔ FX TAKES NO FADERLIN: /reverb/volume and /echo/volume are dB only, so on the
+// FX row the address is the dB one whatever `faderlin` asks for, and the caller
+// converts (levelTakesFaderlin).
 std::string levelAddress(Row r, int ch, int submix, bool faderlin);
+bool        levelTakesFaderlin(Row r);
 
 // Mute of a channel strip, /<input|playback|output>/<n>/mute. One place, because
 // the V-Pot push and CUT both write it.
+// On the FX row "muted" is the effect switched OFF: /reverb/enable 0. So the
+// value to write is not "!mute" there; muteToggle gives address and value for
+// every row, and muted() what the CUT lamp shows.
 std::string muteAddress(Row r, int ch);
+bool        muted(const State& st, Row r, int ch);
+std::pair<std::string, float> muteToggle(const State& st, Row r, int ch);
 
 // ⇨ SOLO LIVES ON THE ROUTING, NOT ON THE STRIP. TotalMix solos an input or a
 // playback INTO a submix (/mix/<in|pb>/<n>/<submix>/solo, TotalReaper's
@@ -84,8 +117,12 @@ bool        soloed(const State& st, Row r, int ch, int submix);
 // ⇨ PAN of the fader channel (the V-Pot above the fader, 22.09.). An input or
 // a playback pans INTO the submix (/mix/<in|pb>/<n>/<submix>/balpan), an output
 // pans itself (/output/<n>/balpan). -1 left .. +1 right. Empty address = none.
+// ⇨ ON THE FX ROW THE SAME POT IS THE WIDTH, 0 (mono) .. 1 (stereo), measured
+// 29.09.: /reverb/width, /echo/width. panIsWidth says which one the pot is, so
+// the pot's range, its push value and the value line follow.
 std::string panAddress(Row r, int ch, int submix);
 double      panValue(const State& st, Row r, int ch, int submix, bool& known);
+inline bool panIsWidth(Row r) { return r == Row::Fx; }
 
 // Name and palette colour of a channel, "" / -1 when unknown.
 const Channel* channelOf(const State& st, Row r, int ch);

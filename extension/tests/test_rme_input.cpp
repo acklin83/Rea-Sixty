@@ -173,12 +173,17 @@ int main()
     }
 
     // ── nav up and down step the row, with wrap ──────────────────────────────
+    // Four rows since 29.09.: FX below the outputs (Frank: "noch eine Stufe tiefer").
     {
         in_::State s;
         in_::Writes w;
         s.row.store(2);
         in_::button(s, bare, st, cfg, press(::uf1::btn::kNavDown), w);
-        EXPECT(s.row.load() == 0);       // Output wraps to Input
+        EXPECT(s.row.load() == 3);       // Output goes down to FX
+        in_::button(s, bare, st, cfg, press(::uf1::btn::kNavDown), w);
+        EXPECT(s.row.load() == 0);       // FX wraps to Input
+        in_::button(s, bare, st, cfg, press(::uf1::btn::kNavUp), w);
+        EXPECT(s.row.load() == 3);
         in_::button(s, bare, st, cfg, press(::uf1::btn::kNavUp), w);
         EXPECT(s.row.load() == 2);
     }
@@ -268,6 +273,64 @@ int main()
         EXPECT(!in_::button(s, bare, st, cfg, press(::uf1::btn::kPlay), w));
         EXPECT(!in_::button(s, bare, st, cfg, press(::uf1::btn::kShift), w));
         EXPECT(in_::button(s, bare, st, cfg, press(::uf1::btn::kCut), w));
+    }
+
+    // ── the FX row: Reverb and Echo (Frank 29.09.) ────────────────────────────
+    // Fader = volume, pot above = width, CUT = effect off, SOLO / SEL / the
+    // stereo key do nothing. Values as TotalMix reported them on 29.09.
+    {
+        State fx = fixture();
+        auto put = [&](const char* a, float v) {
+            Message m; m.address = a; m.args.push_back(Arg::fromFloat(v)); ingest(fx, m);
+        };
+        put("/reverb/enable", 1); put("/reverb/volume", -3); put("/reverb/width", 0.6f);
+        put("/reverb/type", 2);   put("/reverb/predelay", 20);
+        put("/echo/enable", 0);   put("/echo/volume", -3);   put("/echo/width", 0.6f);
+
+        in_::State s;
+        s.row.store(3);
+        EXPECT(in_::selected(s, fx, reasixty::rme::uf1::Row::Fx) == 0);          // Reverb first
+
+        in_::Writes w;
+        in_::encoder(s, bare, fx, cfg, ::uf1::enc::kChannel, +4, w);
+        EXPECT(in_::selected(s, fx, reasixty::rme::uf1::Row::Fx) == 1);          // one detent: Echo
+        EXPECT(s.sel[3].load() == 1);                             // its own slot, index 3
+        EXPECT(s.row.load() == 3);
+
+        // CUT on Echo (off) switches it on; on Reverb (on) switches it off.
+        w.clear();
+        in_::button(s, bare, fx, cfg, press(::uf1::btn::kCut), w);
+        EXPECT(w.size() == 1 && w[0].first == "/echo/enable" && w[0].second == 1.0f);
+        s.sel[3].store(0);
+        w.clear();
+        in_::button(s, bare, fx, cfg, press(::uf1::btn::kCut), w);
+        EXPECT(w.size() == 1 && w[0].first == "/reverb/enable" && w[0].second == 0.0f);
+
+        // SOLO, SEL and the stereo key write nothing.
+        w.clear();
+        in_::button(s, bare, fx, cfg, press(::uf1::btn::kSolo), w);
+        in_::button(s, bare, fx, cfg, press(::uf1::btn::kSel), w);
+        in_::button(s, bare, fx, cfg, press(::uf1::btn::kChannelSoftKey), w);
+        EXPECT(w.empty());
+
+        // The pot above the fader is the width, 0..1; its push is full stereo.
+        w.clear();
+        in_::encoder(s, bare, fx, cfg, ::uf1::enc::kVpotAboveFader, +5, w);
+        EXPECT(w.size() == 1 && w[0].first == "/reverb/width"
+               && std::fabs(w[0].second - 0.7f) < 1e-4f);
+        w.clear();
+        in_::encoder(s, bare, fx, cfg, ::uf1::enc::kVpotAboveFader, -100, w);
+        EXPECT(w.size() == 1 && w[0].second == 0.0f);             // not below mono
+        w.clear();
+        in_::button(s, bare, fx, cfg, press(::uf1::btn::kVpotAboveFaderPush), w);
+        EXPECT(w.size() == 1 && w[0].first == "/reverb/width" && w[0].second == 1.0f);
+
+        // STRIP opens on an effect, and a pot there writes /reverb/<leaf>.
+        in_::button(s, bare, fx, cfg, press(::uf1::btn::kChannelPush), w);
+        EXPECT(s.strip.load());
+        w.clear();
+        in_::encoder(s, bare, fx, cfg, ::uf1::enc::kVpot2, +3, w);
+        EXPECT(w.size() == 1 && w[0].first == "/reverb/predelay");
     }
 
     if (g_fail == 0) std::printf("test_rme_input: all good\n");

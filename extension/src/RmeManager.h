@@ -61,7 +61,8 @@ struct VpotSlot {
 
 // One page of the channel view (STRIP): four pots and four soft keys, each a
 // parameter id from RmeStrip.cpp's catalogue, "" for nothing. `rows` limits the
-// page to input / playback / output strips ("in,pb,out"; empty = all). Which of
+// page to input / playback / output strips ("in,pb,out"; empty = all), or to the
+// FX row ("fx", or "reverb" / "echo" to keep the two effects' runs apart). Which of
 // these a channel actually SHOWS is TotalMix' answer: a page appears only when
 // the channel reported at least one of its parameters (RmeStrip.h).
 struct StripPage {
@@ -70,8 +71,12 @@ struct StripPage {
     std::string pots[4];
     std::string keys[4];
 };
-// The factory pages, docs/rme-strip-and-uf8-plan.md 3.2 (Frank 21.09.).
+// The factory pages, docs/rme-strip-and-uf8-plan.md 3.2 (Frank 21.09.), plus
+// Output 2 and the FX pages (docs/orc-reverb-echo-plan.md, 29.09.).
 std::vector<StripPage> defaultStripPages();
+// rme.json v4 and older: add Output 2 after the output page and the FX pages
+// at the end, each only if missing. Exposed for the test.
+void upgradeStripPagesToV5(std::vector<StripPage>& pages);
 
 struct Config {
     bool        enabled  = false;
@@ -158,6 +163,7 @@ class Manager {
         bool dim = false, mono = false, speakerB = false, talkback = false;
         int  mainOut = -1;
         bool externalIn = false;   // after mainOut: positional initialisers stay valid
+        bool muteFx     = false;   // /controlroom/mutefx, the same reason
     };
     ControlRoom controlRoom() const;
 

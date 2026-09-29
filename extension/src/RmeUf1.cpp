@@ -12,8 +12,14 @@ const char* rowName(Row r)
         case Row::Input:    return "INPUT";
         case Row::Playback: return "PLAYBACK";
         case Row::Output:   return "OUTPUT";
+        case Row::Fx:       return "FX";
     }
     return "";
+}
+
+const char* fxSection(int ch)
+{
+    return ch == 0 ? "reverb" : ch == 1 ? "echo" : "";
 }
 
 static const std::map<int, Channel>& mapOf(const State& st, Row r)
@@ -21,6 +27,7 @@ static const std::map<int, Channel>& mapOf(const State& st, Row r)
     switch (r) {
         case Row::Input:    return st.inputs;
         case Row::Playback: return st.playbacks;
+        case Row::Fx:       return st.fx;
         case Row::Output:   break;
     }
     return st.outputs;
@@ -155,6 +162,11 @@ int effectiveSubmix(const State& st, int selectedOutput)
 double levelDb(const State& st, Row r, int ch, int submix, bool& known)
 {
     known = false;
+    if (r == Row::Fx) {
+        if (const Channel* c = channelOf(st, Row::Fx, ch))
+            if (const double* v = c->leaf("volume")) { known = true; return *v; }
+        return kDbOff;
+    }
     if (r == Row::Output) {
         if (const Channel* c = channelOf(st, Row::Output, ch)) { known = true; return c->volume; }
         return kDbOff;
@@ -166,22 +178,54 @@ double levelDb(const State& st, Row r, int ch, int submix, bool& known)
 
 std::string levelAddress(Row r, int ch, int submix, bool faderlin)
 {
+    if (r == Row::Fx) {
+        const char* sec = fxSection(ch);
+        return *sec ? std::string("/") + sec + "/volume" : std::string();
+    }
     if (r == Row::Output)
         return "/output/" + std::to_string(ch) + (faderlin ? "/faderlin" : "/volume");
     return std::string("/mix/") + (r == Row::Input ? "in/" : "pb/") + std::to_string(ch)
          + "/" + std::to_string(submix) + (faderlin ? "/faderlin" : "/fader");
 }
 
+bool levelTakesFaderlin(Row r)
+{
+    return r != Row::Fx;
+}
+
 std::string muteAddress(Row r, int ch)
 {
+    if (r == Row::Fx) {
+        const char* sec = fxSection(ch);
+        return *sec ? std::string("/") + sec + "/enable" : std::string();
+    }
     const char* sec = r == Row::Output ? "/output/"
                     : r == Row::Input  ? "/input/" : "/playback/";
     return std::string(sec) + std::to_string(ch) + "/mute";
 }
 
+bool muted(const State& st, Row r, int ch)
+{
+    const Channel* c = channelOf(st, r, ch);
+    if (!c) return false;
+    if (r == Row::Fx) {
+        const double* on = c->leaf("enable");
+        return on && *on < 0.5;
+    }
+    return c->mute;
+}
+
+std::pair<std::string, float> muteToggle(const State& st, Row r, int ch)
+{
+    const bool m = muted(st, r, ch);
+    // FX: muted = off, so unmuting writes enable 1 and muting enable 0.
+    if (r == Row::Fx) return { muteAddress(r, ch), m ? 1.0f : 0.0f };
+    return { muteAddress(r, ch), m ? 0.0f : 1.0f };
+}
+
 std::string soloAddress(Row r, int ch, int submix)
 {
-    if (r == Row::Output || ch < 0 || submix < 0) return {};
+    if (r == Row::Output || r == Row::Fx || ch < 0 || submix < 0) return {};
     return std::string("/mix/") + (r == Row::Input ? "in/" : "pb/") + std::to_string(ch)
          + "/" + std::to_string(submix) + "/solo";
 }
@@ -189,6 +233,10 @@ std::string soloAddress(Row r, int ch, int submix)
 std::string panAddress(Row r, int ch, int submix)
 {
     if (ch < 0) return {};
+    if (r == Row::Fx) {
+        const char* sec = fxSection(ch);
+        return *sec ? std::string("/") + sec + "/width" : std::string();
+    }
     if (r == Row::Output) return "/output/" + std::to_string(ch) + "/balpan";
     if (submix < 0) return {};
     return std::string("/mix/") + (r == Row::Input ? "in/" : "pb/") + std::to_string(ch)
@@ -198,6 +246,11 @@ std::string panAddress(Row r, int ch, int submix)
 double panValue(const State& st, Row r, int ch, int submix, bool& known)
 {
     known = false;
+    if (r == Row::Fx) {
+        if (const Channel* c = channelOf(st, r, ch))
+            if (const double* v = c->leaf("width")) { known = true; return *v; }
+        return 1.0;
+    }
     if (r == Row::Output) {
         if (const Channel* c = channelOf(st, r, ch))
             if (const double* v = c->leaf("balpan")) { known = true; return *v; }
@@ -212,14 +265,14 @@ double panValue(const State& st, Row r, int ch, int submix, bool& known)
 
 bool soloed(const State& st, Row r, int ch, int submix)
 {
-    if (r == Row::Output) return false;
+    if (r == Row::Output || r == Row::Fx) return false;
     return st.mixSoloed(r == Row::Input ? Bus::Input : Bus::Playback, ch, submix);
 }
 
 uf1eq::Model eqModel(const State& st, Row r, int ch)
 {
     uf1eq::Model m;
-    if (r == Row::Playback) return m;             // no EQ on a playback
+    if (r == Row::Playback || r == Row::Fx) return m;   // no EQ on a playback or an effect
     const Channel* c = channelOf(st, r, ch);
     if (!c || !c->eq.seen) return m;
     const ChannelEq& e = c->eq;

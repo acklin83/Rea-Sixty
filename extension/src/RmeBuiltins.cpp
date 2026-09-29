@@ -34,6 +34,9 @@ void registerBuiltins(input::State& in, const input::Host& host)
         regRmeCr("rme_talkback",  "/controlroom/talkback", &CR::talkback, "RME: Talkback");
         // Ext In, on the second half of the factory bank (Frank 25.09.).
         regRmeCr("rme_ext_in",    "/controlroom/externalin", &CR::externalIn, "RME: External input");
+        // Reverb and echo off on the main output (Frank 29.09.: in the picker,
+        // on no factory key).
+        regRmeCr("rme_mute_fx",   "/controlroom/mutefx",   &CR::muteFx,   "RME: Mute FX");
     }
     // ⇨ DuRec, the recorder in the interface (Frank 25.09.: "Durec auf transport?
     // könnte ja an reasixty durchgehen falls nicht besetzt"). Bindable, not bound:
@@ -91,7 +94,7 @@ void registerBuiltins(input::State& in, const input::Host& host)
     // waiting for TotalMix, which does not answer the remote that wrote. The
     // DuRec keys fire once and Main on the fader chooses, which is the default.
     for (const char* n : { "rme_dim", "rme_mono", "rme_speaker_b", "rme_talkback",
-                           "rme_ext_in", "rme_show_window" })
+                           "rme_ext_in", "rme_mute_fx", "rme_show_window" })
         uf8::bindings::setBuiltinKind(n, uf8::bindings::BuiltinKind::Switch);
 }
 

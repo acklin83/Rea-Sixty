@@ -546,12 +546,33 @@ int main()
               "the fifth key opens Input 2, in page order");
 
         // A page on its own stays as written, slot for slot: an output with Pan
-        // and Delay but no crossfeed keeps Delay on pot 3.
+        // and Delay but no crossfeed keeps Delay on pot 3. (Since 29.09. the
+        // factory Output page has Output 2 beside it, so the lone case is the
+        // same list without it.)
         name("/output/4/name", "Out"); put("/output/4/balpan", 0); put("/output/4/delay", 1);
-        const auto out = sp::views(s, Row::Output, 4, pages);
+        auto lonePages = pages;
+        lonePages.erase(std::remove_if(lonePages.begin(), lonePages.end(),
+                            [](const reasixty::rme::StripPage& p) { return p.name == "Output 2"; }),
+                        lonePages.end());
+        const auto out = sp::views(s, Row::Output, 4, lonePages);
         check(out.size() == 1 && out[0].name == "Output" && out[0].id == 9 * 8
               && out[0].pots[2] == sp::find("delay") && out[0].pots[1] == sp::find("crossfeed"),
               "a lone page keeps its slots");
+
+        // ⇨ FX RETURN AFTER PAN, XFEED, DELAY, REF LVL (Frank 29.09.): Output and
+        // Output 2 are one run, so an output with all five gets two views.
+        name("/output/6/name", "Full"); put("/output/6/balpan", 0); put("/output/6/crossfeed", 0);
+        put("/output/6/delay", 0); put("/output/6/reflevel", 1); put("/output/6/fxreturn", -10);
+        const auto full = sp::views(s, Row::Output, 6, pages);
+        const sp::View* v9  = full.size() >= 2 ? &full[full.size() - 2] : nullptr;
+        const sp::View* v10 = full.empty() ? nullptr : &full.back();
+        check(v9 && v10 && v9->name == "Output" && v9->pots[0] == sp::find("balpan")
+              && v9->pots[3] == sp::find("reflevel")
+              && v10->name == "Output 2" && v10->pots[0] == sp::find("fxreturn") && !v10->pots[1],
+              "FX Ret comes after Pan, Xfeed, Delay, Ref Lvl on its own view");
+        check(sp::nudge(s, Row::Output, 6, *sp::find("fxreturn"), 2).at(0).first
+                  == "/output/6/fxreturn",
+              "FX Ret writes the output's own fxreturn");
         check(sp::pageShowsGraph(pages[3]) && sp::pageShowsGraph(pages[2])
               && !sp::pageShowsGraph(pages[0]) && !sp::pageShowsGraph(pages[6]),
               "EQ and Low Cut pages draw the graph, the rest do not");
@@ -696,6 +717,197 @@ int main()
             check(t3.bands[0].kind == K::LowPass,  "band 1 type 3 is a low-pass");
             check(t3.bands[2].kind == K::HighPass, "band 3 type 3 is a HIGH-pass");
         }
+    }
+
+    // ── the FX row: Reverb and Echo (29.09.2026) ────────────────────────────
+    // Values are what TotalMix reported and took on 29.09. (plan section
+    // "Gemessen"). Every "Output or the rest" helper gets its FX branch pinned.
+    {
+        namespace u  = reasixty::rme::uf1;
+        namespace sp = reasixty::rme::strip;
+        using Row = u::Row;
+        State s;
+        auto put = [&](const char* a, float v) {
+            Message m; m.address = a; m.args.push_back(Arg::fromFloat(v)); ingest(s, m);
+        };
+        for (const auto& [a, v] : std::vector<std::pair<const char*, float>>{
+                 {"/reverb/enable", 1}, {"/reverb/type", 2}, {"/reverb/predelay", 20},
+                 {"/reverb/lowcut", 20}, {"/reverb/highcut", 18000}, {"/reverb/attack", 100},
+                 {"/reverb/hold", 80}, {"/reverb/release", 200}, {"/reverb/roomscale", 1},
+                 {"/reverb/time", 3}, {"/reverb/highdamp", 18000}, {"/reverb/smooth", 100},
+                 {"/reverb/volume", -3}, {"/reverb/width", 0.6f},
+                 {"/echo/enable", 0}, {"/echo/type", 0}, {"/echo/delay", 0.6f},
+                 {"/echo/feedback", 20}, {"/echo/highcut", 0}, {"/echo/volume", -3},
+                 {"/echo/width", 0.6f}})
+            put(a, v);
+
+        // State and the row helpers.
+        check(s.fx.size() == 2 && s.fx[0].leaves->size() == 14 && s.fx[1].leaves->size() == 7,
+              "fx: 14 reverb and 7 echo fields land as leaves");
+        check(u::visibleChannels(s, Row::Fx) == std::vector<int>{0, 1}
+              && u::displayName(s, Row::Fx, 0) == "Reverb" && u::displayName(s, Row::Fx, 1) == "Echo",
+              "fx: two visible channels, Reverb then Echo");
+        check(u::visibleChannels(s, Row::Output).empty() && s.inputs.empty() && s.playbacks.empty(),
+              "fx: nothing leaks into the mixer rows");
+        check(std::string(u::rowName(Row::Fx)) == "FX" && u::rowAt(9) == Row::Fx
+              && u::rowAt(-1) == Row::Input && u::kRowCount == 4 && u::kMixerRowCount == 3,
+              "fx: fourth row, clamped into range");
+        bool k = false;
+        check(u::levelDb(s, Row::Fx, 1, -1, k) == -3.0 && k, "fx: the fader reads volume");
+        check(u::levelAddress(Row::Fx, 0, -1, true) == "/reverb/volume"
+              && u::levelAddress(Row::Fx, 1, 10, false) == "/echo/volume"
+              && !u::levelTakesFaderlin(Row::Fx) && u::levelTakesFaderlin(Row::Output),
+              "fx: volume is dB only, whatever faderlin asks for");
+        check(u::muteAddress(Row::Fx, 0) == "/reverb/enable"
+              && !u::muted(s, Row::Fx, 0) && u::muted(s, Row::Fx, 1),
+              "fx: muted means switched off");
+        const auto mt0 = u::muteToggle(s, Row::Fx, 0), mt1 = u::muteToggle(s, Row::Fx, 1);
+        check(mt0.first == "/reverb/enable" && mt0.second == 0.0f
+              && mt1.first == "/echo/enable" && mt1.second == 1.0f,
+              "fx: CUT writes enable, inverted");
+        check(u::soloAddress(Row::Fx, 0, 10).empty() && !u::soloed(s, Row::Fx, 0, 10),
+              "fx: no solo");
+        check(u::panAddress(Row::Fx, 1, -1) == "/echo/width" && u::panIsWidth(Row::Fx)
+              && !u::panIsWidth(Row::Output), "fx: the pan pot is the width");
+        k = false;
+        check(std::fabs(u::panValue(s, Row::Fx, 0, -1, k) - 0.6) < 1e-6 && k, "fx: width value");
+        check(!u::eqModel(s, Row::Fx, 0).on, "fx: no EQ graph");
+        check(sp::sendChanAddress(Row::Fx, 0).empty(), "fx: no /sendchan");
+
+        // The channel view: what shows depends on the channel and the type.
+        const auto pages = reasixty::rme::defaultStripPages();
+        auto idsOf = [&](int ch) {
+            std::vector<std::string> ids;
+            for (const auto& v : sp::views(s, Row::Fx, ch, pages))
+                for (const sp::Param* p : v.pots) if (p) ids.push_back(p->id);
+            return ids;
+        };
+        auto names = [&](int ch) {
+            std::vector<std::string> n;
+            for (const auto& v : sp::views(s, Row::Fx, ch, pages)) n.push_back(v.name);
+            return n;
+        };
+        // Large Room: Type, PreDelay, Room Scale, Low Cut, High Cut, Smooth.
+        check(idsOf(0) == std::vector<std::string>{"rev_type", "rev_predelay", "rev_roomscale",
+                                                   "rev_lowcut", "rev_highcut", "rev_smooth"}
+              && names(0) == std::vector<std::string>{"Reverb", "Reverb 2"},
+              "fx: Large Room shows Room Scale and High Cut, in TotalMix' order");
+        put("/reverb/type", 12);   // Envelope
+        check(idsOf(0) == std::vector<std::string>{"rev_type", "rev_predelay", "rev_lowcut",
+                                                   "rev_highcut", "rev_smooth", "rev_attack",
+                                                   "rev_hold", "rev_release"},
+              "fx: Envelope adds Attack, Hold, Release, drops Room Scale");
+        put("/reverb/type", 13);   // Gated
+        const auto gated = idsOf(0);
+        check(std::find(gated.begin(), gated.end(), "rev_attack") == gated.end()
+              && std::find(gated.begin(), gated.end(), "rev_hold") != gated.end()
+              && std::find(gated.begin(), gated.end(), "rev_release") != gated.end(),
+              "fx: Gated has Hold and Release, no Attack (TotalMix, not the manual)");
+        put("/reverb/type", 14);   // Space
+        check(idsOf(0) == std::vector<std::string>{"rev_type", "rev_predelay", "rev_time",
+                                                   "rev_lowcut", "rev_highdamp", "rev_smooth"},
+              "fx: Space has Time and High Damp, no High Cut, no Room Scale");
+        put("/reverb/type", 4);    // Shorty
+        check(idsOf(0).size() == 6 && idsOf(0)[2] == "rev_roomscale",
+              "fx: Shorty is room-like");
+        check(idsOf(1) == std::vector<std::string>{"echo_type", "echo_delay", "echo_feedback",
+                                                   "echo_highcut"}
+              && names(1) == std::vector<std::string>{"Echo"},
+              "fx: Echo has its own page, named Echo");
+        const auto ev = sp::views(s, Row::Fx, 1, pages);
+        check(ev.size() == 1 && ev[0].keys[0] == sp::find("echo_on"), "fx: Echo's key is on/off");
+        check(!sp::available(s, Row::Fx, 1, *sp::find("rev_predelay"))
+              && !sp::available(s, Row::Fx, 0, *sp::find("echo_type"))
+              && !sp::available(s, Row::Input, 0, *sp::find("rev_type")),
+              "fx: reverb and echo controls stay on their own channel");
+
+        // Writes and text.
+        auto w = sp::nudge(s, Row::Fx, 0, *sp::find("rev_predelay"), 5);
+        check(w.size() == 1 && w[0].first == "/reverb/predelay" && w[0].second == 25.0f,
+              "fx: a pot writes /reverb/<leaf>");
+        w = sp::nudge(s, Row::Fx, 0, *sp::find("rev_type"), 1);
+        check(w.size() == 2 && w[0].first == "/reverb/type" && w[0].second == 5.0f
+              && w[1].first == "/sendall",
+              "fx: a reverb type asks for everything again (it loads its own values)");
+        w = sp::nudge(s, Row::Fx, 0, *sp::find("rev_type"), 100);
+        check(!w.empty() && w[0].second == 14.0f, "fx: the type stops at Space, never past 14");
+        w = sp::nudge(s, Row::Fx, 1, *sp::find("echo_type"), 1);
+        check(w.size() == 1 && w[0].first == "/echo/type", "fx: the echo type does not");
+        w = sp::press(s, Row::Fx, 1, *sp::find("echo_on"));
+        check(w.size() == 1 && w[0].first == "/echo/enable" && w[0].second == 1.0f,
+              "fx: the Echo key switches it on");
+        check(sp::format(*sp::find("rev_smooth"), Row::Fx, 100) == "100%"
+              && sp::format(*sp::find("rev_roomscale"), Row::Fx, 1.5) == "1.50"
+              && sp::format(*sp::find("echo_delay"), Row::Fx, 0.25) == "0.25 s"
+              && sp::format(*sp::find("rev_time"), Row::Fx, 3) == "3.0 s"
+              && sp::format(*sp::find("risetime"), Row::Input, 5) == "5.0 s"
+              && sp::format(*sp::find("rev_type"), Row::Fx, 7) == "OldSchl"
+              && sp::format(*sp::find("echo_highcut"), Row::Fx, 3) == "8k",
+              "fx: values read like TotalMix");
+        for (const char* id : { "rev_on", "rev_type", "rev_predelay", "rev_roomscale", "rev_time",
+                                "rev_lowcut", "rev_highcut", "rev_highdamp", "rev_smooth",
+                                "rev_attack", "rev_hold", "rev_release", "echo_on", "echo_type",
+                                "echo_delay", "echo_feedback", "echo_highcut", "fxreturn" }) {
+            const sp::Param* p = sp::find(id);
+            check(p && std::strlen(p->label) <= 8, id);
+        }
+
+        // Our own write comes back into the state (TotalMix does not echo it).
+        ingest(s, localEcho("/reverb/predelay", 42.0f));
+        check(*s.fx[0].leaf("predelay") == 42.0, "fx: localEcho folds a write in");
+        {
+            Message m; m.address = "/reverb/type"; m.args.push_back(Arg::fromString("Large"));
+            check(!ingest(s, m) && *s.fx[0].leaf("type") == 4.0,
+                  "fx: a text value is not a number and changes nothing");
+            Message bare; bare.address = "/echo/"; bare.args.push_back(Arg::fromFloat(1));
+            check(!ingest(s, bare) && s.fx[1].leaves->size() == 7, "fx: no field, no leaf");
+        }
+    }
+
+    // ── rme.json v5: Output 2 and the FX pages reach existing files ─────────
+    {
+        using reasixty::rme::StripPage;
+        // Frank's v4 list: the factory pages up to "Output", nothing after.
+        std::vector<StripPage> v4 = reasixty::rme::defaultStripPages();
+        v4.erase(std::remove_if(v4.begin(), v4.end(), [](const StripPage& p) {
+                     return p.name == "Output 2" || p.name == "Reverb" || p.name == "Reverb 2"
+                         || p.name == "Reverb 3" || p.name == "Echo"; }), v4.end());
+        check(v4.size() == 10 && v4.back().name == "Output", "v4 list as Frank's file has it");
+        auto up = v4;
+        reasixty::rme::upgradeStripPagesToV5(up);
+        std::vector<std::string> n;
+        for (const auto& p : up) n.push_back(p.name);
+        check(up.size() == 15 && n[9] == "Output" && n[10] == "Output 2" && n[11] == "Reverb"
+              && n[14] == "Echo", "v5: Output 2 right after Output, FX pages at the end");
+        auto twice = up;
+        reasixty::rme::upgradeStripPagesToV5(twice);
+        check(twice.size() == up.size(), "v5: running it again changes nothing");
+
+        // Through the file: a v4 file gets them, a v5 file without them does not.
+        Config c;
+        std::string j = configToJson(c);
+        check(j.find("\"version\": 5") != std::string::npos, "rme.json is written as v5");
+        auto strip = [](std::string js, const char* ver, bool keepFx) {
+            const auto a = js.find("\"version\": 5");
+            js.replace(a, 12, std::string("\"version\": ") + ver);
+            if (!keepFx)
+                for (const char* nm : { "Output 2", "Reverb 3", "Reverb 2", "Reverb", "Echo" }) {
+                    const std::string key = std::string("{ \"name\": \"") + nm + "\"";
+                    const auto s0 = js.find(key);
+                    if (s0 == std::string::npos) continue;
+                    auto e = js.find('\n', s0);
+                    js.erase(s0, e - s0 + 1);
+                }
+            // The last page left must not keep its comma.
+            if (const auto tc = js.find(",\n  ]"); tc != std::string::npos) js.erase(tc, 1);
+            return js;
+        };
+        Config fromV4;
+        check(configFromJson(strip(j, "4", false), fromV4) && fromV4.stripPages.size() == 15,
+              "v4 file: the upgrade adds the five pages");
+        Config fromV5;
+        check(configFromJson(strip(j, "5", false), fromV5) && fromV5.stripPages.size() == 10,
+              "v5 file: pages the user removed stay removed");
     }
 
 return g_fail == 0 ? 0 : 1;

@@ -15,7 +15,7 @@
 
 namespace reasixty::rme {
 
-// Registers rme_dim, rme_mono, rme_speaker_b, rme_talkback, rme_ext_in,
+// Registers rme_dim, rme_mono, rme_speaker_b, rme_talkback, rme_ext_in, rme_mute_fx,
 // rme_show_window, rme_fader_main and the six rme_durec_* against `in`, the
 // surface's side-car state, which must
 // outlive the registration (both hosts keep it for the life of the program).
