@@ -3064,6 +3064,8 @@ A Group slot tracks REAPER's track-group membership in real time. Add a track to
 
 Project-scoped Snapshot + Group slots are saved into the project's RPP chunk via REAPER's project-config hook (lines `SELSET_<N>_DATA "..."`). Global-scoped slots ride REAPER's global ExtState (`reaper-extstate.ini`). The per-slot global/project flag itself, plus the Selection-Set Auto-Mode value, also live in global ExtState.
 
+With several projects open in tabs, each tab keeps its own project-scoped slots and its own active slot: a new tab starts without them, and switching back brings the set and its filter back.
+
 ## Focus Set
 
 A ninth, ad-hoc set living alongside the 8 numbered slots — no Settings UI, no slot name, just actions you bind to hardware. Unlike the slot Selsets (which *filter* the visible list), the Focus Set is a **pin source**: its members stick to the leftmost strips and the rest of the tracks keep banking past them — nothing is hidden. Useful for keeping a working set ("the 6 drum mics + 2 talkbacks") permanently under your hands while you still scroll the rest of the session.
@@ -3082,7 +3084,7 @@ Clear, toggle selected and replace also have REAPER-action equivalents (`REASIXT
 
 **Auto-mode.** A dedicated *Focus-Set Auto-Mode* dropdown (Settings → Modes → AUTO) arms members to a chosen automation mode when pinned in AUTO sel mode — decoupled from the slot Selset auto-mode. Members are exempt from the *Auto-hide Trim/Read* filter, so a pinned member stays visible even when unarmed.
 
-Persists per-project (saved into the RPP via the same project-config hook the numbered slots use).
+Persists per-project (saved into the RPP via the same project-config hook the numbered slots use), and each open project tab keeps its own set and pin.
 
 \newpage
 
