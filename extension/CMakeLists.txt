@@ -1073,5 +1073,37 @@ if(APPLE)
         OUTPUT_NAME ORC
         MACOSX_BUNDLE TRUE
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_BINARY_DIR}/OrcInfo.plist"
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
+        # The app's own Frameworks folder, where its libusb lives (below).
+        BUILD_RPATH "@executable_path/../Frameworks")
+
+    # ⇨ LIBUSB INSIDE THE APP (release plan step 1, 29.09.2026). The link
+    # points at Homebrew's libusb, which a customer does not have, so ORC would
+    # not start. Same source as the extension's bundled copy (brew, queried
+    # above as LIBUSB_BREW_PREFIX), placed where a Mac app keeps its libraries:
+    # ORC.app/Contents/Frameworks, found through @rpath. install_name_tool
+    # breaks the signatures, so the library is signed again and then the app,
+    # innermost first. Ad hoc here; the Developer ID signature comes with the
+    # release script (step 4).
+    set(ORC_LIBUSB_SRC "${LIBUSB_BREW_PREFIX}/lib/libusb-1.0.0.dylib")
+    add_custom_command(TARGET orc POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Frameworks"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ORC_LIBUSB_SRC}"
+            "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Frameworks/libusb-1.0.0.dylib"
+        COMMAND chmod u+w
+            "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Frameworks/libusb-1.0.0.dylib"
+        COMMAND install_name_tool -id
+            "@rpath/libusb-1.0.0.dylib"
+            "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Frameworks/libusb-1.0.0.dylib"
+        COMMAND install_name_tool -change
+            "${ORC_LIBUSB_SRC}"
+            "@rpath/libusb-1.0.0.dylib"
+            "$<TARGET_FILE:orc>"
+        COMMAND codesign --force --sign -
+            "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Frameworks/libusb-1.0.0.dylib"
+        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:orc>"
+        COMMENT "Bundling libusb into ORC.app"
+        VERBATIM)
 endif()

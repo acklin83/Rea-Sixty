@@ -28,7 +28,12 @@ Einreichung v0.6.1 am 27.09., Accepted.
 
 ## Schritte
 
-1. **libusb ins Programm.** Eigene Kopie nach `ORC.app/Contents/Frameworks`, das
+1. ✅ **Erledigt 29.09.2026:** libusb liegt in `ORC.app/Contents/Frameworks`, ORC findet sie
+   über `@rpath` (`BUILD_RPATH @executable_path/../Frameworks`), Quelle ist dieselbe
+   Homebrew-libusb wie beim Bündeln der Extension (`LIBUSB_BREW_PREFIX`). `otool -L`: kein
+   Homebrew-Pfad mehr, `codesign --verify --deep --strict` gültig (ad hoc). Noch nur arm64,
+   Universal kommt mit Schritt 2. Ursprünglicher Text:
+   **libusb ins Programm.** Eigene Kopie nach `ORC.app/Contents/Frameworks`, das
    Programm findet sie per `@rpath` (`@executable_path/../Frameworks`). Vorher klären,
    woher die Rea-Sixty-CI ihre libusb für macOS holt (Release-Assets
    `libusb-1.0.0.dylib` und `libusb-1.0.0-x86_64.dylib`), und dieselbe Quelle nehmen.
