@@ -131,9 +131,13 @@ Download**. Was sich unterscheidet, ist das Drumherum.
   kostet nichts, feste Adresse `github.com/acklin83/ORC/releases/latest`, Fehlermeldungen
   mit Anhängen, und es trägt keinen Rea-Sixty-Namen.
 
-## Offen
+## App-Symbol: erledigt 29.09.2026
 
-- **App-Symbol** (Frank: „machen wir noch"). Bis dahin zeigen Finder und DMG das Standardsymbol.
+Frank: „einfach ORC als Buchstaben, soll auch in der top-row so sein". Die Buchstaben sind aus
+Linien gezeichnet, keine Schrift (Apples Systemschriften sind für Oberflächen lizenziert, nicht
+für Logos): `orc/OrcLogo.cpp`. Das App-Symbol rendert `tools/orc_icon.cpp` beim Build in alle
+Grössen (`ORC.icns`, weiss auf dunklem Quadrat nach Apples Raster), die Menüleiste zeichnet
+dieselben Buchstaben zur Laufzeit als Vorlagenbild.
 
 ## Nicht in diesem Plan (genannt, nicht gebaut)
 

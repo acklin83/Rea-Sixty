@@ -10,6 +10,8 @@
     <key>CFBundleShortVersionString</key> <string>@MACOSX_BUNDLE_SHORT_VERSION_STRING@</string>
     <key>CFBundleVersion</key>         <string>@MACOSX_BUNDLE_BUNDLE_VERSION@</string>
     <key>NSHighResolutionCapable</key> <true/>
+    <!-- Rendered from the wordmark at build time (tools/orc_icon.cpp). -->
+    <key>CFBundleIconFile</key>        <string>ORC</string>
     <!-- Launch at login needs SMAppService, macOS 13.0 and later. The binary is
          built for 13.0 as well (-mmacosx-version-min in CMakeLists.txt). -->
     <key>LSMinimumSystemVersion</key>  <string>13.0</string>

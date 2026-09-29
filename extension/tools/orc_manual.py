@@ -300,7 +300,7 @@ def main():
     ap.add_argument("--dump", required=True, help="path to the orc_manual_dump binary")
     ap.add_argument("--check", action="store_true", help="check only, write nothing")
     a = ap.parse_args()
-    r = subprocess.run([a.dump], capture_output=True, text=True)
+    r = subprocess.run([str(Path(a.dump).resolve())], capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit(f"orc_manual: {a.dump} failed: {r.stderr}")
     sys.exit(build(r.stdout, a.check))

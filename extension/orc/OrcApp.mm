@@ -1,4 +1,6 @@
 #import "OrcUi.h"
+#include "OrcLogo.h"
+#include <cmath>
 #import "OrcSettingsWindow.h"
 
 #import <Cocoa/Cocoa.h>
@@ -25,10 +27,23 @@ static orc::Surface* g_surface = nullptr;
     if ((self = [super init])) {
         _item = [NSStatusBar.systemStatusBar
             statusItemWithLength:NSVariableStatusItemLength];
-        NSImage* icon = [NSImage imageWithSystemSymbolName:@"slider.horizontal.3"
-                                  accessibilityDescription:@"ORC"];
-        if (icon) _item.button.image = icon;
-        else      _item.button.title = @"ORC";
+        // ⇨ THE WORDMARK, NOT A SYMBOL (Frank 29.09.2026: "einfach ORC als
+        // Buchstaben, soll auch in der top-row so sein"). The same drawing as
+        // the app icon (OrcLogo). A template image: macOS tints it for a light
+        // or a dark menu bar and for the highlighted state.
+        const CGFloat letters = 12.0;   // points; the bar is 22
+        const NSSize size = NSMakeSize(std::ceil(orc::wordmarkAspect() * letters) + 2.0, 18.0);
+        NSImage* mark = [NSImage imageWithSize:size flipped:NO
+                                drawingHandler:^BOOL(NSRect r) {
+            CGContextRef ctx = NSGraphicsContext.currentContext.CGContext;
+            orc::drawWordmark(ctx, CGRectMake(0, (r.size.height - letters) / 2.0,
+                                              r.size.width, letters),
+                              NSColor.blackColor.CGColor);
+            return YES;
+        }];
+        [mark setTemplate:YES];   // `template` is a C++ keyword in this .mm
+        mark.accessibilityDescription = @"ORC";
+        _item.button.image = mark;
 
         NSMenu* menu = [[NSMenu alloc] init];
         menu.delegate = self;

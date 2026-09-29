@@ -1045,7 +1045,18 @@ if(APPLE)
         orc/OrcConfig.cpp
         orc/OrcApp.mm
         orc/OrcSettingsWindow.mm
+        orc/OrcLogo.cpp
+        "${CMAKE_BINARY_DIR}/ORC.icns"
         ${ORC_SHARED_SOURCES})
+    # ⇨ THE ICON, RENDERED FROM THE WORDMARK (orc/OrcLogo.cpp, Frank 29.09.2026:
+    # "einfach ORC als Buchstaben"). orc_icon draws every size macOS wants,
+    # iconutil packs them, and the bundle carries the result in Resources.
+    # One drawing: the menu bar item draws the same letters at run time.
+    # ⛔ Copied into the bundle by the POST_BUILD step below, right before the
+    # signature, not through MACOSX_PACKAGE_LOCATION: CMake copied that after
+    # the POST_BUILD signing, and the signature then missed the file (29.09.).
+    set_source_files_properties("${CMAKE_BINARY_DIR}/ORC.icns" PROPERTIES
+        GENERATED TRUE HEADER_FILE_ONLY TRUE)
     # ⛔ NATIVE APPKIT, NOT A DRAWN UI (Frank, 25.09.2026). The first stage-7
     # build vendored Dear ImGui and drew its own window; it looked like a tool
     # rather than a Mac program, and vendor/ is in .gitignore (WDL and the
@@ -1136,10 +1147,29 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${ORC_LIBUSB_DYLIB}"
             "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Frameworks/libusb-1.0.0.dylib"
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Resources"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_BINARY_DIR}/ORC.icns"
+            "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Resources/ORC.icns"
         COMMAND codesign --force --sign -
             "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Frameworks/libusb-1.0.0.dylib"
         COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:orc>"
-        COMMENT "Bundling libusb into ORC.app"
+        COMMENT "Bundling libusb and the icon into ORC.app, then signing"
+        VERBATIM)
+
+    add_executable(orc_icon tools/orc_icon.cpp orc/OrcLogo.cpp)
+    target_include_directories(orc_icon PRIVATE orc)
+    target_link_libraries(orc_icon PRIVATE "-framework CoreGraphics"
+        "-framework ImageIO" "-framework CoreFoundation")
+    add_custom_command(
+        OUTPUT "${CMAKE_BINARY_DIR}/ORC.icns"
+        COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_BINARY_DIR}/ORC.iconset"
+        COMMAND orc_icon "${CMAKE_BINARY_DIR}/ORC.iconset"
+        COMMAND iconutil -c icns "${CMAKE_BINARY_DIR}/ORC.iconset"
+            -o "${CMAKE_BINARY_DIR}/ORC.icns"
+        DEPENDS orc_icon
+        COMMENT "Rendering ORC.icns from the wordmark"
         VERBATIM)
 
     # ⇨ THE MANUAL'S DATA (docs/orc-manual-plan.md). Prints, as JSON, what the
