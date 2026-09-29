@@ -43,19 +43,26 @@ Einreichung v0.6.1 am 27.09., Accepted.
 3a. ✅ **Erledigt 29.09.2026** („Open at login" auf der Seite Connection). **Start beim Anmelden:** ein Schalter im ORC-Fenster, `SMAppService.mainApp`
    `register` / `unregister`, der angezeigte Zustand kommt aus `status` (der Nutzer kann
    ORC auch in den Systemeinstellungen abschalten, das muss der Schalter zeigen). Ab Werk aus.
-3b. **Lizenzhinweise** im DMG und im Repo, nach `docs/third-party-notices-plan.md`
-   (libusb LGPL-2.1: Hinweis, Lizenztext, Quelltext beim Release).
-4. **Signieren** mit der Developer ID und Hardened Runtime, zuerst die mitgelieferte
-   libusb, dann die App. Ohne Sandbox braucht ORC für USB und Netzwerk keine
-   zusätzlichen Berechtigungen. Prüfen mit `codesign --verify --deep --strict` und
-   `spctl --assess`.
-5. **Notarisieren** mit `xcrun notarytool submit … --keychain-profile rea-sixty-notarize
-   --wait`, danach `xcrun stapler staple`, damit die App auch offline startet.
-   Vorbild für Aufbau und Prüfungen: `dist/release-mac.sh`.
-6. **DMG** mit der App und einer Verknüpfung auf „Programme“; das DMG ebenfalls
-   signieren, notarisieren und stapeln.
-7. **Skript `tools/orc-release.sh`** für die Schritte 1 bis 6, wiederholbar und lokal.
-   In der CI geht es nicht: Notarisieren braucht Franks Schlüsselbund.
+3b. ✅ **Erledigt 29.09.2026:** `orc/licenses/THIRD-PARTY-NOTICES.txt` (ORC selbst, SSL-Marken,
+   libusb LGPL-2.1 mit Austauschbarkeit und Quelltext-Ort, WDL `jsonparse.h` zlib). Das Skript
+   füllt Version und libusb-Version ein und legt die Hinweise, `libusb-COPYING.txt` und
+   `libusb-AUTHORS.txt` (aus dem gebauten Tarball) nach `ORC.app/Contents/Resources/Licenses/`
+   und in einen Ordner `Licenses` im DMG.
+4. ✅ **Erledigt 29.09.2026:** Developer ID + Hardened Runtime, zuerst libusb, dann die App mit
+   `orc/ORC.entitlements`. Darin nur `com.apple.security.cs.disable-library-validation`:
+   LGPL-2.1 §6 verlangt, dass ein Nutzer eine eigene libusb einsetzen kann, und die Hardened
+   Runtime lädt sonst nur Bibliotheken desselben Teams. USB und Netzwerk brauchen ohne Sandbox
+   nichts.
+5. ✅ **Erledigt 29.09.2026:** App (als Zip) und DMG je `Accepted`
+   (`8418b383-772e-4378-a7a7-38959268c2af`, `13fcb293-5d9d-4ae6-9ac7-04ec12c9c4d6`), beide
+   gestapelt, `spctl`: „accepted, source=Notarized Developer ID".
+6. ✅ **Erledigt 29.09.2026:** `ORC-1.0.0.dmg` (1.8 MB, UDZO) mit ORC.app, Verknüpfung auf
+   /Applications und `Licenses/`. Im DMG geprüft: universal, `flags=0x10000(runtime)`,
+   Team 234VF7874N, Staple gültig.
+7. ✅ **Erledigt 29.09.2026:** `extension/tools/orc-release.sh`, nur lokal (Notarisieren braucht
+   Franks Schlüsselbund). Baut in `extension/build-orc-release`, schreibt nach
+   `dist/orc-<version>/`: DMG, `libusb-<version>.tar.bz2` (SHA gegen CMake geprüft),
+   `THIRD-PARTY-NOTICES.txt`. Veröffentlicht nichts.
 8. **Prüfung wie beim Kunden:** DMG mit Quarantäne-Flag wie nach einem Download öffnen,
    auf einem anderen Benutzerkonto starten, UF1 und TotalMix verbinden.
 9. **Repo `acklin83/ORC`** anlegen: README als Einrichtungsseite (Text mit dem Skill
@@ -73,7 +80,7 @@ Download**. Was sich unterscheidet, ist das Drumherum.
 
 | Braucht | Stand |
 |---|---|
-| ORC.app, die auf einem fremden Mac startet | fehlt (Schritte 1 bis 8 oben) |
+| ORC.app, die auf einem fremden Mac startet | gebaut, signiert, notarisiert (Schritte 1 bis 7); Kundentest (Schritt 8) offen |
 | TotalMix eingerichtet: Global OSC, eine Remote auf 7005 / 7006, „In Use" | ORC sagt es nicht mehr (Hilfetexte auf Franks Wunsch entfernt), also braucht es eine kurze Einrichtungsseite beim Download |
 | SSL 360 geschlossen, UF1 angesteckt | dieselbe Bedingung wie bei Rea-Sixty; gehört auf dieselbe Seite |
 | Wo melde ich Fehler | offen |
@@ -87,8 +94,8 @@ Download**. Was sich unterscheidet, ist das Drumherum.
 | TotalMix-Remote | beide Programme benutzen dieselbe Remote (7005 / 7006); der Port geht mit dem UF1 über |
 | Einstellungen | **eine Quelle, ORC** (seit 25.09.2026, Frank: „Die ganze Konfig für den RME Side-Car kommt in ORC"). ORC schreibt `ORC/rme.json` und `orc.json`, Rea-Sixty liest beide nur (`reasixty_rmeConfigPath_`, `reasixty_orcBindingsPath_` in main.cpp). `REAPER/rea_sixty/rme.json` ist ein Überbleibsel von vorher, das nichts mehr liest. |
 | Side-Car in Rea-Sixty ohne ORC | **gibt es nicht**: ohne `ORC/rme.json` bietet Rea-Sixty keinen Side-Car an. Wer ihn in REAPER will, installiert ORC. Unter Windows und Linux gibt es ihn darum heute gar nicht. |
-| ORC muss laufen, damit es den UF1 nach REAPER übernimmt | kein Start beim Anmelden (steht oben unter „nicht in diesem Plan") |
-| Gleicher Funktionsstand | Side-Car und ORC teilen den Code. Seit v0.6.1 sind 21 Commits dazugekommen, darunter die FX-Reihe. ORC 0.1.0 und Rea-Sixty 0.6.2 sollten aus demselben Commit kommen. |
+| ORC muss laufen, damit es den UF1 nach REAPER übernimmt | „Open at login" in ORC (Schritt 3a), ab Werk aus |
+| Gleicher Funktionsstand | Side-Car und ORC teilen den Code. Seit v0.6.1 sind 21 Commits dazugekommen, darunter die FX-Reihe. ORC 1.0.0 und Rea-Sixty 0.6.2 sollten aus demselben Commit kommen. |
 | Rea-Sixty unter Windows / Linux | kein ORC (nur Mac) |
 
 ### Für beide
@@ -106,7 +113,7 @@ Download**. Was sich unterscheidet, ist das Drumherum.
 2. Schritte 1 bis 8 oben, dazu die Lizenzhinweise im DMG.
 3. Frank prüft wie ein Kunde: Gruppe A auf einem zweiten Benutzerkonto ohne REAPER,
    Gruppe B mit REAPER und Rea-Sixty (Übergabe hin und zurück).
-4. ORC 0.1.0 und Rea-Sixty 0.6.2 aus demselben Commit.
+4. ORC 1.0.0 und Rea-Sixty 0.6.2 aus demselben Commit.
 5. Einrichtungsseite und Ankündigung.
 
 ## Entschieden am 29.09.2026 (Frank)

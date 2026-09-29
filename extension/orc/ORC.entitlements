@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ORC's entitlements for the hardened runtime (tools/orc-release.sh).
+
+  No sandbox, so USB and the TotalMix socket need nothing: Apple's USB
+  entitlement is for sandboxed apps (com.apple.security.device.usb, read
+  29.09.2026).
+
+  ⇨ LIBRARY VALIDATION OFF, FOR THE LGPL. libusb is LGPL-2.1; section 6 wants a
+  user able to swap in a modified libusb. The hardened runtime otherwise loads
+  only libraries signed by the same team, so a user's own build would be
+  refused. This lets a library signed by someone else load; the app itself
+  stays signed and notarised.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

@@ -1,0 +1,54 @@
+ORC @VERSION@
+Copyright (c) 2026 Frank Acklin
+
+ORC is free. Its source code is published under the MIT License as part of
+Rea-Sixty: https://github.com/acklin83/Rea-Sixty
+
+SSL, UF1 and SSL 360 are trademarks of Solid State Logic. ORC is not affiliated
+with Solid State Logic or RME.
+
+
+ORC contains the following third-party software.
+
+------------------------------------------------------------------------------
+libusb @LIBUSB_VERSION@
+https://libusb.info
+------------------------------------------------------------------------------
+
+Copyright the libusb authors (see libusb-AUTHORS.txt).
+
+libusb is licensed under the GNU Lesser General Public License, version 2.1
+or later. The full licence text is in libusb-COPYING.txt.
+
+ORC uses libusb as a separate shared library, ORC.app/Contents/Frameworks/
+libusb-1.0.0.dylib, and loads it at run time. You may replace that file with
+a modified libusb of a compatible version; ORC is signed so that it accepts a
+library signed by someone else.
+
+The complete source code of the libusb version in this release,
+libusb-@LIBUSB_VERSION@.tar.bz2, is published next to ORC's download, at the
+same place:
+https://github.com/acklin83/ORC/releases
+
+------------------------------------------------------------------------------
+WDL, JSON parser (jsonparse.h)
+https://github.com/justinfrankel/WDL
+------------------------------------------------------------------------------
+
+Copyright (C) 2025 and later, Cockos Incorporated
+
+This software is provided 'as-is', without any express or implied
+warranty.  In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose,
+including commercial applications, and to alter it and redistribute it
+freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not
+   claim that you wrote the original software. If you use this software
+   in a product, an acknowledgment in the product documentation would be
+   appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be
+   misrepresented as being the original software.
+3. This notice may not be removed or altered from any source distribution.
