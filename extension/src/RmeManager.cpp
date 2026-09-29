@@ -74,10 +74,13 @@ std::vector<StripPage> defaultStripPages()
                                  { "rev_on", "", "", "" } },
         { "Reverb 2",  "reverb", { "rev_lowcut", "rev_highcut", "rev_highdamp", "rev_smooth" },
                                  { "", "", "", "" } },
-        { "Reverb 3",  "reverb", { "rev_attack", "rev_hold", "rev_release", "" },
+        { "Reverb 3",  "reverb", { "rev_width", "rev_attack", "rev_hold", "rev_release" },
                                  { "", "", "", "" } },
-        { "Echo",      "echo",  { "echo_type", "echo_delay", "echo_feedback", "echo_highcut" },
+        // TotalMix' order: Delay, BPM, Feedback, Width, High Cut (Volume is the fader).
+        { "Echo",      "echo",  { "echo_type", "echo_delay", "echo_bpm", "echo_feedback" },
                                 { "echo_on", "", "", "" } },
+        { "Echo 2",    "echo",  { "echo_width", "echo_highcut", "", "" },
+                                { "", "", "", "" } },
     };
 }
 
@@ -106,7 +109,7 @@ void upgradeStripPagesToV5(std::vector<StripPage>& pages)
             else                   pages.push_back(*o2);
         }
     }
-    for (const char* n : { "Reverb", "Reverb 2", "Reverb 3", "Echo" })
+    for (const char* n : { "Reverb", "Reverb 2", "Reverb 3", "Echo", "Echo 2" })
         if (!has(n))
             if (const StripPage* pg = facPage(n)) pages.push_back(*pg);
 }

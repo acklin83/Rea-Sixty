@@ -789,13 +789,14 @@ int main()
         };
         // Large Room: Type, PreDelay, Room Scale, Low Cut, High Cut, Smooth.
         check(idsOf(0) == std::vector<std::string>{"rev_type", "rev_predelay", "rev_roomscale",
-                                                   "rev_lowcut", "rev_highcut", "rev_smooth"}
+                                                   "rev_lowcut", "rev_highcut", "rev_smooth",
+                                                   "rev_width"}
               && names(0) == std::vector<std::string>{"Reverb", "Reverb 2"},
               "fx: Large Room shows Room Scale and High Cut, in TotalMix' order");
         put("/reverb/type", 12);   // Envelope
         check(idsOf(0) == std::vector<std::string>{"rev_type", "rev_predelay", "rev_lowcut",
-                                                   "rev_highcut", "rev_smooth", "rev_attack",
-                                                   "rev_hold", "rev_release"},
+                                                   "rev_highcut", "rev_smooth", "rev_width",
+                                                   "rev_attack", "rev_hold", "rev_release"},
               "fx: Envelope adds Attack, Hold, Release, drops Room Scale");
         put("/reverb/type", 13);   // Gated
         const auto gated = idsOf(0);
@@ -805,17 +806,40 @@ int main()
               "fx: Gated has Hold and Release, no Attack (TotalMix, not the manual)");
         put("/reverb/type", 14);   // Space
         check(idsOf(0) == std::vector<std::string>{"rev_type", "rev_predelay", "rev_time",
-                                                   "rev_lowcut", "rev_highdamp", "rev_smooth"},
+                                                   "rev_lowcut", "rev_highdamp", "rev_smooth",
+                                                   "rev_width"},
               "fx: Space has Time and High Damp, no High Cut, no Room Scale");
         put("/reverb/type", 4);    // Shorty
-        check(idsOf(0).size() == 6 && idsOf(0)[2] == "rev_roomscale",
+        check(idsOf(0).size() == 7 && idsOf(0)[2] == "rev_roomscale",
               "fx: Shorty is room-like");
-        check(idsOf(1) == std::vector<std::string>{"echo_type", "echo_delay", "echo_feedback",
-                                                   "echo_highcut"}
-              && names(1) == std::vector<std::string>{"Echo"},
-              "fx: Echo has its own page, named Echo");
+        check(idsOf(1) == std::vector<std::string>{"echo_type", "echo_delay", "echo_bpm",
+                                                   "echo_feedback", "echo_width", "echo_highcut"}
+              && names(1) == std::vector<std::string>{"Echo", "Echo 2"},
+              "fx: Echo in TotalMix' order: Delay, BPM, Feedback, Width, High Cut");
         const auto ev = sp::views(s, Row::Fx, 1, pages);
-        check(ev.size() == 1 && ev[0].keys[0] == sp::find("echo_on"), "fx: Echo's key is on/off");
+        check(ev.size() == 2 && ev[0].keys[0] == sp::find("echo_on"), "fx: Echo's key is on/off");
+
+        // ⇨ BPM IS THE DELAY, SEEN AS A TEMPO (Frank 29.09.). 0.6 s = 100 bpm; one
+        // detent up is 101 bpm, written back as seconds; the delay pot moves it too.
+        double bpm = 0;
+        check(sp::value(s, Row::Fx, 1, *sp::find("echo_bpm"), bpm) && std::fabs(bpm - 100.0) < 1e-3
+              && sp::format(*sp::find("echo_bpm"), Row::Fx, bpm) == "100 bpm",
+              "fx: 0.6 s reads 100 bpm");
+        auto bw = sp::nudge(s, Row::Fx, 1, *sp::find("echo_bpm"), 1);
+        check(bw.size() == 1 && bw[0].first == "/echo/delay"
+              && std::fabs(bw[0].second - 60.0f / 101.0f) < 1e-5f,
+              "fx: a bpm detent writes the delay in seconds");
+        ingest(s, localEcho("/echo/delay", 0.25f));
+        check(sp::value(s, Row::Fx, 1, *sp::find("echo_bpm"), bpm) && std::fabs(bpm - 240.0) < 1e-3,
+              "fx: moving the delay moves the bpm");
+        bw = sp::nudge(s, Row::Fx, 1, *sp::find("echo_bpm"), -1000);
+        check(bw.size() == 1 && std::fabs(bw[0].second - 2.0f) < 1e-5f,
+              "fx: bpm stops at 30, the delay's 2.0 s");
+        ingest(s, localEcho("/echo/delay", 0.6f));
+        check(sp::format(*sp::find("rev_width"), Row::Fx, 0.6) == "+0.60"
+              && sp::resetWrites(s, Row::Fx, 0, *sp::find("rev_width")).at(0).second == 1.0f
+              && sp::nudge(s, Row::Fx, 1, *sp::find("echo_width"), 1).at(0).first == "/echo/width",
+              "fx: width in the STRIP, +0.60 as TotalMix writes it, push = stereo");
         check(!sp::available(s, Row::Fx, 1, *sp::find("rev_predelay"))
               && !sp::available(s, Row::Fx, 0, *sp::find("echo_type"))
               && !sp::available(s, Row::Input, 0, *sp::find("rev_type")),
@@ -847,7 +871,8 @@ int main()
         for (const char* id : { "rev_on", "rev_type", "rev_predelay", "rev_roomscale", "rev_time",
                                 "rev_lowcut", "rev_highcut", "rev_highdamp", "rev_smooth",
                                 "rev_attack", "rev_hold", "rev_release", "echo_on", "echo_type",
-                                "echo_delay", "echo_feedback", "echo_highcut", "fxreturn" }) {
+                                "echo_delay", "echo_feedback", "echo_highcut", "fxreturn",
+                                "rev_width", "echo_width", "echo_bpm" }) {
             const sp::Param* p = sp::find(id);
             check(p && std::strlen(p->label) <= 8, id);
         }
@@ -871,14 +896,16 @@ int main()
         std::vector<StripPage> v4 = reasixty::rme::defaultStripPages();
         v4.erase(std::remove_if(v4.begin(), v4.end(), [](const StripPage& p) {
                      return p.name == "Output 2" || p.name == "Reverb" || p.name == "Reverb 2"
-                         || p.name == "Reverb 3" || p.name == "Echo"; }), v4.end());
+                         || p.name == "Reverb 3" || p.name == "Echo" || p.name == "Echo 2"; }),
+             v4.end());
         check(v4.size() == 10 && v4.back().name == "Output", "v4 list as Frank's file has it");
         auto up = v4;
         reasixty::rme::upgradeStripPagesToV5(up);
         std::vector<std::string> n;
         for (const auto& p : up) n.push_back(p.name);
-        check(up.size() == 15 && n[9] == "Output" && n[10] == "Output 2" && n[11] == "Reverb"
-              && n[14] == "Echo", "v5: Output 2 right after Output, FX pages at the end");
+        check(up.size() == 16 && n[9] == "Output" && n[10] == "Output 2" && n[11] == "Reverb"
+              && n[14] == "Echo" && n[15] == "Echo 2",
+              "v5: Output 2 right after Output, FX pages at the end");
         auto twice = up;
         reasixty::rme::upgradeStripPagesToV5(twice);
         check(twice.size() == up.size(), "v5: running it again changes nothing");
@@ -891,7 +918,8 @@ int main()
             const auto a = js.find("\"version\": 5");
             js.replace(a, 12, std::string("\"version\": ") + ver);
             if (!keepFx)
-                for (const char* nm : { "Output 2", "Reverb 3", "Reverb 2", "Reverb", "Echo" }) {
+                for (const char* nm : { "Output 2", "Reverb 3", "Reverb 2", "Reverb", "Echo 2",
+                                        "Echo" }) {
                     const std::string key = std::string("{ \"name\": \"") + nm + "\"";
                     const auto s0 = js.find(key);
                     if (s0 == std::string::npos) continue;
@@ -903,8 +931,8 @@ int main()
             return js;
         };
         Config fromV4;
-        check(configFromJson(strip(j, "4", false), fromV4) && fromV4.stripPages.size() == 15,
-              "v4 file: the upgrade adds the five pages");
+        check(configFromJson(strip(j, "4", false), fromV4) && fromV4.stripPages.size() == 16,
+              "v4 file: the upgrade adds the six pages");
         Config fromV5;
         check(configFromJson(strip(j, "5", false), fromV5) && fromV5.stripPages.size() == 10,
               "v5 file: pages the user removed stay removed");

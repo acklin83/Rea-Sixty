@@ -42,6 +42,12 @@ enum class Kind : std::uint8_t {
     Int,      // plain number
     Pct,      // 0..100, "100%" (reverb smooth, echo feedback)
     Factor,   // "1.00" (reverb room scale)
+    FxWidth,  // 0 mono .. 1 stereo, "+0.60" as TotalMix writes it
+    // ⇨ BEATS PER MINUTE OF A LEAF IN SECONDS (echo delay, Frank 29.09.: "totalmix
+    // hat auch bpm das sich mit der delay-time in sekunden bewegt"). TotalMix
+    // sends no bpm of its own (27.09.), so the value is 60 / leaf and a write
+    // goes to the leaf as 60 / bpm: one value, two views of it.
+    Bpm,
 };
 
 // Stereo: only on a stereo strip. Reverb / Echo: only on that FX channel (the

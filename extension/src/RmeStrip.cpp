@@ -110,6 +110,9 @@ const std::vector<Param>& catalogue()
         { "rev_highdamp", "highdamp",  "HiDamp",   Kind::Hz,  2000.0, 20000.0, 1.0, Need::Reverb,
           false, false, {}, {}, kRevSpace },
         { "rev_smooth",   "smooth",    "Smooth",   Kind::Pct,    0.0, 100.0, 1.0, Need::Reverb },
+        // Width also rides the pot above the fader; here it sits where TotalMix'
+        // FX window has it, after Smooth (Frank 29.09.: "bei reverbs fehlt width").
+        { "rev_width",    "width",     "Width",    Kind::FxWidth, 0.0,  1.0, 0.02, Need::Reverb },
         { "rev_attack",   "attack",    "Attack",   Kind::Ms,     5.0, 400.0, 1.0, Need::Reverb,
           false, false, {}, {}, kRevEnvelope },
         { "rev_hold",     "hold",      "Hold",     Kind::Ms,     5.0, 400.0, 1.0, Need::Reverb,
@@ -120,7 +123,10 @@ const std::vector<Param>& catalogue()
         { "echo_type",    "type",      "EchoType", Kind::List,   0, 0, 1, Need::Echo, false, false,
           { "Stereo", "Cross", "Pong" } },
         { "echo_delay",   "delay",     "Delay",    Kind::Sec,    0.1,   2.0, 0.01, Need::Echo },
+        // The same delay in beats per minute, 60 / 0.1 s .. 60 / 2.0 s.
+        { "echo_bpm",     "delay",     "BPM",      Kind::Bpm,   30.0, 600.0, 1.0, Need::Echo },
         { "echo_feedback","feedback",  "Feedback", Kind::Pct,    0.0, 100.0, 1.0, Need::Echo },
+        { "echo_width",   "width",     "Width",    Kind::FxWidth, 0.0,  1.0, 0.02, Need::Echo },
         { "echo_highcut", "highcut",   "HiCut",    Kind::List,   0, 0, 1, Need::Echo, false, false,
           { "off", "16k", "12k", "8k", "4k", "2k" } },
     };
@@ -176,7 +182,8 @@ std::string addr(Row r, int ch, const char* leaf)
 Writes writesFor(const State& st, Row r, int ch, const Param& p, double v)
 {
     Writes w;
-    const float f = static_cast<float>(v);
+    // A bpm goes to its leaf as seconds (Kind::Bpm).
+    const float f = static_cast<float>(p.kind == Kind::Bpm ? 60.0 / std::max(v, 1.0) : v);
     const int target = p.right ? ch + 1 : ch;
     w.emplace_back(addr(r, target, p.leaf), f);
     if (p.bothSides && !p.right && isStereo(st, r, ch))
@@ -327,6 +334,11 @@ bool value(const State& st, Row r, int ch, const Param& p, double& out)
     const Channel* c = half(st, r, ch, p.right);
     const double* v = c ? c->leaf(p.leaf) : nullptr;
     if (!v) return false;
+    if (p.kind == Kind::Bpm) {
+        if (!(*v > 0.0)) return false;
+        out = 60.0 / *v;
+        return true;
+    }
     out = *v;
     return true;
 }
@@ -377,6 +389,8 @@ std::string format(const Param& p, Row r, double v)
         case Kind::Int:   std::snprintf(b, sizeof(b), "%.0f", v); return b;
         case Kind::Pct:   std::snprintf(b, sizeof(b), "%.0f%%", v); return b;
         case Kind::Factor: std::snprintf(b, sizeof(b), "%.2f", v); return b;
+        case Kind::FxWidth: std::snprintf(b, sizeof(b), "%+.2f", v); return b;
+        case Kind::Bpm:   std::snprintf(b, sizeof(b), "%.0f bpm", v); return b;
     }
     return {};
 }
@@ -397,7 +411,9 @@ double norm(const Param& p, Row r, double v)
 
 bool stepsWhole(const Param& p)
 {
-    return p.kind == Kind::List || p.kind == Kind::Int || p.kind == Kind::Toggle;
+    // A bpm moves one whole beat per detent, like a tempo field.
+    return p.kind == Kind::List || p.kind == Kind::Int || p.kind == Kind::Toggle
+        || p.kind == Kind::Bpm;
 }
 
 Writes nudge(const State& st, Row r, int ch, const Param& p, int detents, double scale)
@@ -442,7 +458,7 @@ Writes resetWrites(const State& st, Row r, int ch, const Param& p)
         if (std::string(p.id) == d.id) { def = d.v; have = true; break; }
     if (have) {}
     else if (p.kind == Kind::Db && p.lo <= 0.0 && p.hi >= 0.0) def = 0.0;
-    else if (p.kind == Kind::Width)                      def = 1.0;
+    else if (p.kind == Kind::Width || p.kind == Kind::FxWidth) def = 1.0;
     else if (p.kind == Kind::Pan)                        def = 0.0;
     else return {};
     double v = 0.0;

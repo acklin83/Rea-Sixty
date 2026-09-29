@@ -19,6 +19,13 @@ Plan: `docs/orc-reverb-echo-plan.md`. Gilt für den Side-Car in Rea-Sixty und f�
 - **`rme.json` Version 5**: Output 2 und die FX-Seiten kommen in bestehende Dateien
   (`upgradeStripPagesToV5`), nur einmal und nur wenn sie fehlen.
 
+## Nach Franks erstem Blick
+
+- Echo hatte nur Sekunden: neuer Regler **BPM** (`Kind::Bpm`, 60 / Delay, schreibt Sekunden),
+  Seite „Echo 2" mit Width und HiCut.
+- Reverb hatte kein Width im STRIP: `rev_width` nach Smooth, `echo_width` nach Feedback.
+  Der Pan-Pot bleibt zusätzlich Width.
+
 ## Gefunden beim Bauen
 
 - `input::State::sel` hatte **drei** Plätze. `sel[Row::Fx]` hätte über das Ende gelesen.

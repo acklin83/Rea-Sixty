@@ -91,10 +91,13 @@ getrennte Einträge mit der Bedingung „nur Reverb" bzw. „nur Echo".
 
 | Kanal | Pots (in dieser Reihenfolge, gepackt) | Tasten |
 |---|---|---|
-| Reverb | Rev Type, PreDelay, RoomScl¹ oder Time⁴, Low Cut, High Cut² oder HiDamp⁴, Smooth, Attack³, Hold³ ⁵, Release³ ⁵ | Reverb (an/aus) |
-| Echo | EchoType, Delay, Feedback, HiCut | Echo (an/aus) |
+| Reverb | Rev Type, PreDelay, RoomScl¹ oder Time⁴, Low Cut, High Cut² oder HiDamp⁴, Smooth, Width, Attack³, Hold³ ⁵, Release³ ⁵ | Reverb (an/aus) |
+| Echo | EchoType, Delay, BPM, Feedback, Width, HiCut | Echo (an/aus) |
 
-Volume und Width stehen nicht im STRIP, sie liegen auf Fader und Pan-Pot.
+Volume liegt auf dem Fader. Width steht im STRIP und zusätzlich auf dem Pan-Pot (Frank 29.09.:
+„bei reverbs fehlt width"). BPM ist dieselbe Delay-Zeit als Tempo, 60 / Delay; ein Dreh
+schreibt Sekunden, TotalMix sendet keine BPM (Frank 29.09.: „totalmix hat auch bpm das sich
+mit der delay-time in sekunden bewegt").
 Reihenfolge wie im FX-Fenster von TotalMix. Sichtbar nach Typ (Entscheidung 2, gemessen unten):
 ¹ alle ausser Envelope, Gated, Space · ² alle ausser Space · ³ Envelope · ⁴ Space · ⁵ Gated
 
@@ -233,7 +236,6 @@ Die Anzeige auf der UF1 folgt dem.
 ## Was ich nicht baue
 
 - Playback-FX-Send (TotalMix meldet ihn nie).
-- Echo in BPM (TotalMix sendet nur Sekunden).
 - Presets von TotalMix.
 - FX als V-Pot- oder Jog-Ziel in `rme.json`.
 - Reverb/Echo auf dem UF8.
