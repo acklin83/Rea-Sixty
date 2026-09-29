@@ -1,7 +1,17 @@
 # Plan: Reverb und Echo auf der UF1 (Side-Car und ORC)
 
 Stand 29.09.2026. Nur Plan, nichts gebaut. Gilt für beide Programme, weil ORC den
-Side-Car der Extension wortwörtlich fährt (RmeState, RmeStrip, RmeBuiltins, RmeFace).
+Side-Car der Extension wortwörtlich fährt (RmeState, RmeUf1, RmeStrip, RmeInput,
+RmeFace, RmeBuiltins).
+
+## Franks Entscheidungen (29.09.)
+
+1. **Eine eigene Reihe FX unter den Outputs**, per Nav-Kreuz erreichbar. Keine FX-Seiten
+   auf jedem Kanal.
+2. Typabhängige Regler **nur beim passenden Reverb-Typ**.
+3. **FX Return pro Output**, im STRIP direkt nach Pan, Xfeed, Delay, Ref Lvl.
+4. **Mute FX nur im Picker**, auf keiner Werkstaste.
+5. Kurzformen wie vorgeschlagen, Frank korrigiert am Gerät.
 
 ## Was es schon gibt
 
@@ -10,17 +20,17 @@ Side-Car der Extension wortwörtlich fährt (RmeState, RmeStrip, RmeBuiltins, Rm
   attack hold release roomscale time highdamp smooth volume width`), 7 Echo-Felder
   (`enable type delay feedback highcut volume width`), `/input/<n>/fxsend`,
   `/output/<n>/fxreturn`, `/controlroom/mutefx`.
-- Die Werte kommen in echten Einheiten: predelay 20 (ms), lowcut 20 und highcut 18000 (Hz),
-  roomscale 1.0, time 3.0 (s), smooth 100, volume -3 (dB), width 0.6, echo delay 0.6 (s),
-  feedback 20.
-- Menüwerte = Position im TotalMix-Menü ab 0 (Tabelle der 15 Reverb-Typen, 3 Echo-Typen,
-  6 Echo-High-Cut-Stufen in der Session-Notiz).
-- Schreiben: `/echo/enable` geht (Frank sah es). `/playback/<n>/fxsend` geht auch, wird
-  aber nie gemeldet. TotalMix meldet der schreibenden Remote nichts zurück.
+- Werte in echten Einheiten: predelay 20 (ms), lowcut 20, highcut 18000 (Hz), roomscale
+  1.0, time 3.0 (s), smooth 100, volume -3 (dB), width 0.6, echo delay 0.6 (s), feedback 20.
+- Menüwerte = Position im TotalMix-Menü ab 0 (15 Reverb-Typen, 3 Echo-Typen, 6
+  Echo-High-Cut-Stufen, Tabelle in der Session-Notiz).
+- Schreiben: `/echo/enable` geht (Frank sah es). TotalMix meldet der schreibenden Remote
+  nichts zurück; `Manager::send` spielt jeden eigenen Schreibvorgang sofort in den eigenen
+  Zustand (`localEcho`, `RmeManager.cpp:323`), das deckt es ab.
 
 **RMEs OSC-Tabelle** (`OSCProtocoll_260721.ods`, 2.1 beta 2) nennt nur `/reverb/enable`,
-`/echo/enable`, `fxsend`, `fxreturn`, `/mutefx`. Die übrigen Felder sendet TotalMix, die
-Tabelle führt sie nicht. Ob TotalMix sie auch annimmt, ist nicht geprüft.
+`/echo/enable`, `fxsend`, `fxreturn`, `/mutefx`. Die übrigen Felder sendet TotalMix, ob es
+sie auch annimmt, ist nicht geprüft.
 
 **RMEs UFX+-Handbuch, Kap. 25.6** (rme-audio.de/downloads/fface_ufxplus_e.pdf, gelesen 29.09.):
 
@@ -39,92 +49,141 @@ Tabelle führt sie nicht. Ob TotalMix sie auch annimmt, ist nicht geprüft.
 | Echo Delay Time, Feedback, Volume | nicht angegeben | Echo |
 | Echo Width | 100 bis 0, OSC 0..1 | Echo |
 
-**Im Code schon da:**
-- `fxsend` steht im STRIP-Katalog und auf der Werksseite „Input" (Pot 2), für Eingänge.
-  Playbacks melden ihn nie, darum zeigt der STRIP ihn dort nicht (Regel „was TotalMix
-  meldet, wird gezeigt").
-- `fxreturn` steht im Katalog (`RmeStrip.cpp`), aber auf **keiner** Werksseite.
-- `mutefx` wird gelesen (`RmeState.cpp:105`, `State::muteFx`), aber nichts benutzt es:
-  kein Built-in, keine Lampe.
-- `Manager::send` spielt jeden eigenen Schreibvorgang sofort in den eigenen Zustand zurück
-  (`localEcho`, `RmeManager.cpp:323`). Das deckt das fehlende Echo von TotalMix für
-  Reverb/Echo ohne Zusatzarbeit ab.
+**Im Code:** `fxsend` steht auf der Werksseite „Input". `fxreturn` steht im Katalog, auf
+keiner Seite. `mutefx` wird gelesen (`State::muteFx`), nichts benutzt es.
 
-## Was sich ändert
+## Die FX-Reihe
 
-### Auf der UF1
+Vier Reihen statt drei: Input, Playback, Output, **FX**. Nav auf/ab und MODE + Kanal-Encoder
+laufen durch alle vier, mit Umlauf wie heute. Die FX-Reihe hat zwei Kanäle, **Reverb** und
+**Echo**, in dieser Reihenfolge. Sie sind da, sobald TotalMix ihre Felder gemeldet hat.
+Eine leere FX-Reihe verhält sich wie eine leere Playback-Reihe heute.
 
-Vorschlag, **Entscheidung 1**: Reverb und Echo als Seiten am Ende des STRIP, wie EQ oder
-Dyn. Die Seiten zeigen auf jedem Kanal dieselben globalen Werte. Blättern, Anzeige,
-V-Pot-Druck und Tasten laufen über die bestehende STRIP-Mechanik, kein neuer Modus.
+Was jedes Bedienelement auf der FX-Reihe tut:
 
-| Seite | Pots 1-4 | Tasten 1-4 |
+| Element | Input/Playback/Output heute | FX-Reihe |
 |---|---|---|
-| Reverb | Type, PreDelay, Volume, Width | Reverb an/aus, Echo an/aus, Mute FX |
-| Reverb 2 | Low Cut, High Cut, Smooth, Room Scale | Reverb an/aus |
-| Reverb 3 | Attack, Hold, Release (Envelope, Gated) oder Time, High Damp (Space) | Reverb an/aus |
-| Echo | Type, Delay, Feedback, Volume | Echo an/aus |
-| Echo 2 | High Cut, Width | Echo an/aus |
+| Kanal-Encoder | Kanal der Reihe | Reverb / Echo |
+| Fader | Pegel (Knoten im Submix, Output selbst) | Volume des Effekts (`/reverb/volume`, `/echo/volume`, dB) |
+| V-Pot über dem Fader | Pan | Width |
+| Druck darauf | Pan Mitte | Width auf 1.0 (stereo) |
+| CUT | Mute | Effekt aus (Lampe an = aus, wie Mute) |
+| SOLO | Solo in den Submix | nichts, Lampe dunkel |
+| SEL | Output wird Submix | nichts |
+| Soft-Key über dem Kanal | Stereo/Mono | nichts |
+| Kanal-Druck | STRIP auf/zu | STRIP auf/zu, mit den Reverb- bzw. Echo-Seiten |
+| Kanalzone (SPREAD) | Name, Farbbalken, Wert, Pegel | Name, Farbbalken, Volume. **Kein Pegelbalken**: TotalMix meldet für die Effekte keinen Pegel |
+| Nav ◄ ► | Submix | Submix wie überall (ändert an FX nichts) |
+| MASTER, 5-8, V-Pots 1-4 | wie heute | wie heute |
 
-Die Belegung ist ein Vorschlag, sie steht in `rme.json` und lässt sich dort umstellen.
-Die Seiten sind Layout 1, kein EQ-Graph.
+Farbe: fest weiss (Palette 1), TotalMix meldet für die Effekte keine Farbe.
 
-**Entscheidung 2:** „Reverb 3" nur zeigen, wenn der gewählte Typ diese Regler hat? Oder
-immer alles zeigen? Das Handbuch sagt, welche Regler zu welchem Typ gehören. Ob TotalMix
-sie bei anderen Typen ausblendet, weiss ich nicht.
+Die Volume-Bereiche fehlen noch (Messung 2). Der Fader bildet seine Stellung mit
+TotalMix' Fadergesetz auf dB ab (`faderlinToDb`) und klemmt auf den gemessenen Bereich.
 
-**Entscheidung 3:** FX Return für Ausgänge. Die Werksseite „Output" ist voll. Eine Seite
-„Output 2" mit FX Return auf Pot 1?
+### Die STRIP-Seiten der FX-Reihe
 
-**Mute FX als Built-in** `rme_mute_fx`, wie Dim und Mono (`RmeBuiltins.cpp`), mit Lampe,
-umschaltend (Switch). **Entscheidung 4:** auf eine Werkstaste legen, oder nur im Picker
-anbieten?
+Neue Zeilenmarke `fx` für `StripPage::rows`. Die Seiten eines Kanals werden wie heute
+gepackt (gleiche `rows` nebeneinander = ein Vorrat, vier pro Ansicht). Was ein Kanal nicht
+hat, fällt heraus: Echo meldet kein `predelay`, also erscheinen Reverb-Regler dort nicht.
+Gleich benannte Felder (`type`, `highcut`, `width`, `volume`, `enable`) bekommen im Katalog
+getrennte Einträge mit der Bedingung „nur Reverb" bzw. „nur Echo".
 
-**Playback-FX-Send bleibt verborgen.** TotalMix meldet ihn nie, der STRIP würde einen
-Wert zeigen, den niemand kennt.
+| Kanal | Pots (in dieser Reihenfolge, gepackt) | Tasten |
+|---|---|---|
+| Reverb | Rev Type, PreDelay, Low Cut, High Cut, Smooth, RoomScl*, Attack**, Hold**, Release**, Time***, HiDamp*** | Reverb (an/aus) |
+| Echo | EchoType, Delay, Feedback, HiCut | Echo (an/aus) |
 
-### Anzeige (UF1 Textfelder = 8 Zeichen)
+Volume und Width stehen nicht im STRIP, sie liegen auf Fader und Pan-Pot.
+\* bei den Room-Typen, \*\* bei Envelope und Gated, \*\*\* bei Space
+(Entscheidung 2; welche Typen „Room Types" sind, klärt Messung 3).
 
-Kurzformen, **Entscheidung 5** (Vorschlag):
+### FX Return pro Output
+
+Neue Werksseite „Output 2" mit `rows = "out"`, Pot 1 = `fxreturn`, direkt nach „Output".
+Weil beide `out` tragen, packt der STRIP sie zu einem Vorrat: Pan, Xfeed, Delay, Ref Lvl,
+dann FX Ret auf der nächsten Ansicht.
+
+### Mute FX
+
+Built-in `rme_mute_fx` über `regRmeCr` (wie Dim), Lampe aus `State::muteFx`, umschaltend
+(`BuiltinKind::Switch`), Picker-Kategorie wie die anderen RME-Built-ins. Keine Werkstaste.
+
+### Anzeige (8 Zeichen)
+
 - Reverb-Typen: `Small`, `Medium`, `Large`, `Walls`, `Shorty`, `Attack`, `Swagger`,
   `OldSchl`, `Echoist`, `8plus9`, `GrandWd`, `Thicker`, `Envelope`, `Gated`, `Space`
 - Echo-Typen: `Stereo`, `Cross`, `Pong`
 - Echo High Cut: `off`, `16k`, `12k`, `8k`, `4k`, `2k`
-- Labels: `Rev Type`, `PreDelay`, `Volume`, `Width`, `Low Cut`, `High Cut`, `Smooth`,
-  `RoomScl`, `Attack`, `Hold`, `Release`, `Time`, `HiDamp`, `EchoType`, `Delay`,
-  `Feedback`, `Reverb`, `Echo`, `Mute FX`
+- Reihe: `FX` im Reihenkopf und in der MODE-Liste
 
-## Dateien und Funktionen
+## ⛔ Die Falle: „Output oder der Rest"
+
+Viele Funktionen kennen heute zwei Fälle, Output und „sonst Input/Playback". Eine vierte
+Reihe landet dort still im falschen Zweig. Jede Stelle bekommt einen FX-Zweig und einen Test:
+
+| Stelle | heute | ohne FX-Zweig |
+|---|---|---|
+| `RmeUf1.cpp` `mapOf`, `channelOf` | switch über drei Reihen | findet nichts oder die Output-Map |
+| `RmeUf1.cpp` `displayName`, `orderKey`, `visibleChannels` | `colour != 0` Pflicht | FX unsichtbar (keine Farbe gemeldet) |
+| `RmeUf1.cpp` `levelDb`, `levelAddress` | Output sonst Submix-Knoten | schreibt `/mix/...` |
+| `RmeUf1.cpp` `muteAddress` | `/output/` sonst `/input/`, `/playback/` | schreibt auf einen Playback |
+| `RmeUf1.cpp` `panAddress`, `panValue`, `soloAddress`, `soloed`, `eqModel` | Output sonst Submix | falsche Adresse |
+| `RmeFace.cpp:685` Pegelquelle | Output, Input, sonst `levelPb` | zeigt Playback-Pegel |
+| `RmeFace.cpp:289` `/sendchan` beim STRIP-Öffnen | pro Kanal | `/sendchan/fx/0` gibt es nicht; für FX nichts senden |
+| `RmeFace.cpp:304` Fader `writable` | Output oder Submix da | FX braucht keinen Submix |
+| `RmeStrip.cpp` `section`, `addr`, `available`, `value`, `sendChanAddress` | `/<section>/<n>/<leaf>` | FX: `/reverb/<leaf>` bzw. `/echo/<leaf>` |
+| **9×** `std::clamp(s.row.load(), 0, 2)` (`RmeInput.cpp` 164, 193, 212, 240, 300, 310, 348, 389; `RmeFace.cpp` 247) | feste 2 | FX nie erreichbar; wird `kRowCount - 1` |
+| `RmeFace.cpp:644` MODE-Liste `vis[3]` | drei Einträge | vier |
+
+**Wer über `kRowCount` schleift, meint zweierlei.** Navigation will vier Reihen, alles
+über TotalMix-Kanäle will drei. Neu: `kMixerRowCount = 3` neben `kRowCount = 4`.
+
+| Leser | braucht |
+|---|---|
+| `RmeInput.cpp:95` `stepRow` | 4 |
+| `OrcSettingsWindow.mm:62` Zielmenü (V-Pots, Jog) | 3. ⛔ `kinds[]` und `headers[]` haben drei Einträge, mit 4 läse die Schleife über das Array hinaus |
+| `OrcSettingsWindow.mm:614` Farbträger | 3 |
+| `orc/Surface.cpp:80` Startausgabe | 3 (eigene Liste) |
+
+## Dateien
 
 | Datei | Änderung |
 |---|---|
-| `RmeState.h/.cpp` | `State::fx` (Blattname nach Wert, wie `Channel::leaves`), `ingest` nimmt `/reverb/*` und `/echo/*` |
-| `RmeStrip.h/.cpp` | `Param` bekommt `global`: Adresse `/` + Blatt statt `/<section>/<n>/<blatt>`, Wert aus `State::fx`, vorhanden wenn TotalMix das Feld gemeldet hat (plus Typregel, Entscheidung 2). Neue Katalogeinträge `rev_*`, `echo_*`. Zwei neue Arten: Prozent (Smooth, Width 0..1 als 0..100, Feedback) und Faktor (Room Scale). `writesFor`, `value`, `available`, `format`, `norm`, `nudge`, `press` lernen `global`. |
-| `RmeManager.cpp` | Werksseiten ergänzen. `rme.json` Version 5: Eine vorhandene `strip`-Liste ersetzt die Werksseiten heute vollständig (`RmeManager.cpp:177-198`). Ohne Hochstufung kommen die neuen Seiten bei niemandem an, der die Datei schon hat, auch bei Frank nicht (`ORC/rme.json` und `REAPER/rea_sixty/rme.json`). Die Hochstufung hängt die FX-Seiten einmal hinten an, wenn keine davon da ist. |
-| `RmeBuiltins.cpp` | `rme_mute_fx` über `regRmeCr` + `Manager::ControlRoom` bekommt `muteFx`. `setBuiltinKind(..., Switch)`. |
-| Picker-Kategorie | Pflicht für jedes neue Built-in, CI prüft (`check_builtin_docs.py`). |
-| `tests/test_rme_osc.cpp` | `ingest` der FX-Felder, Adressen der Schreibvorgänge, Hochstufung v4 auf v5 genau einmal, Sichtbarkeit nach Typ. |
-| `docs/user-manual.md` | Side-Car-Kapitel: die neuen Seiten, Mute FX. |
-| Changelog | Eine Zeile. |
+| `RmeState.h/.cpp` | `State::fx`: zwei `Channel` (Reverb 0, Echo 1) mit `leaves`, `name`, `seen`. `ingest`: `/reverb/<leaf>`, `/echo/<leaf>` |
+| `RmeUf1.h/.cpp` | `Row::Fx = 3`, `kRowCount = 4`, `kMixerRowCount = 3`, `rowName` „FX", FX-Zweig in allen Funktionen der Tabelle oben |
+| `RmeStrip.h/.cpp` | Zeilenmarke `fx`, `Need::Reverb`/`Echo` und die Typbedingungen, neue Katalogeinträge, zwei neue Arten (Prozent: Smooth, Feedback; Faktor: Room Scale), Adressierung `/reverb/`, `/echo/`, Push-Standard (siehe unten) |
+| `RmeInput.cpp` | Klemmen auf `kRowCount - 1`, FX-Zweige für CUT, Pan-Pot (Width), SOLO/SEL/Soft-Key nichts |
+| `RmeFace.cpp` | Klemme, Pegelquelle, `/sendchan`, Fader, MODE-Liste, Kanalzone ohne Pegel |
+| `RmeManager.cpp` | Werksseiten „Output 2", „Reverb", „Echo". `rme.json` **Version 5**: Eine vorhandene `strip`-Liste ersetzt die Werksseiten heute ganz (`RmeManager.cpp:177-198`), sonst kämen die Seiten bei niemandem an, auch nicht in Franks zwei Dateien (`ORC/rme.json`, `REAPER/rea_sixty/rme.json`). Die Hochstufung setzt „Output 2" direkt hinter eine Seite mit `rows = "out"` und hängt die FX-Seiten hinten an, jeweils nur wenn sie fehlen |
+| `RmeBuiltins.cpp` | `rme_mute_fx`, `Manager::ControlRoom::muteFx` |
+| `OrcSettingsWindow.mm`, `orc/Surface.cpp` | Schleifen auf `kMixerRowCount` |
+| Picker-Kategorie + `check_builtin_docs.py` | Pflicht für `rme_mute_fx` |
+| `tests/test_rme_osc.cpp`, `test_rme_input.cpp`, `test_rme_face.cpp` | ingest; jede Stelle der Fallen-Tabelle; Reihenumlauf über vier; Typbedingungen; Hochstufung v4 auf v5 genau einmal und Reihenfolge Output/Output 2 |
+| `docs/user-manual.md` | Side-Car-Kapitel: FX-Reihe, Output 2, Mute FX |
+| Changelog | Eine Zeile |
 
-**Wer fasst die Werte sonst noch an:** `State::fx` wird nur von `ingest` geschrieben
-(TotalMix und `localEcho`) und nur vom STRIP gelesen. `State::muteFx` schreibt `ingest`,
-lesen wird nur das neue Built-in.
+Push auf einem FX-Pot: Standardwerte, wie sie im Mitschnitt stehen, sind TotalMix' eigene
+Voreinstellung nicht sicher. Vorschlag: nur Width auf 1.0, sonst nichts (wie Ref Level heute).
 
-## Messen, bevor gebaut wird (Frank, am TotalMix)
+**Wer fasst die Werte sonst noch an:** `State::fx` schreibt nur `ingest` (TotalMix und
+`localEcho`); lesen STRIP, Fader, Kanalzone, CUT-Lampe. `State::muteFx` schreibt `ingest`,
+liest nur das neue Built-in. `InputState::row` schreiben `stepRow`, `select`, `faderMainFire`;
+alle Leser stehen in der Fallen-Tabelle.
+
+## Messen, bevor gebaut wird (Frank am TotalMix)
 
 1. **Nimmt TotalMix die Felder an?** Die Tabelle nennt nur `enable`. Pro Feld einmal
-   schreiben (z.B. `/reverb/predelay 50`) und in TotalMix schauen. Bis das belegt ist,
-   werden nur die Felder gebaut, die TotalMix annimmt.
-2. **Fehlende Bereiche:** Reverb Volume, Echo Delay, Echo Feedback, Echo Volume. Mit
-   `ORC_TRACE=1` jeden Regler in TotalMix an beide Enden ziehen, der Mitschnitt zeigt die Werte.
-3. **Für Entscheidung 2:** zeigt TotalMix bei Envelope, Gated und Space andere Regler?
-   Ein Bildschirmfoto des FX-Fensters pro Gruppe reicht.
+   schreiben, Frank schaut in TotalMix. Gebaut wird nur, was TotalMix annimmt.
+2. **Bereiche:** Reverb Volume, Echo Delay, Echo Feedback, Echo Volume. Mit `ORC_TRACE=1`
+   jeden Regler in TotalMix an beide Enden ziehen.
+3. **Welche Regler zeigt TotalMix bei welchem Typ?** Ein Bildschirmfoto des FX-Fensters für
+   einen Room-Typ, Envelope, Gated, Space und einen der übrigen (z.B. Shorty).
 
 ## Was ich nicht baue
 
-- Playback-FX-Send (nicht lesbar).
+- Playback-FX-Send (TotalMix meldet ihn nie).
 - Echo in BPM (TotalMix sendet nur Sekunden).
 - Presets von TotalMix.
+- FX als V-Pot- oder Jog-Ziel in `rme.json`.
 - Reverb/Echo auf dem UF8.
-- Nichts im ORC-Einstellungsfenster: Die STRIP-Seiten haben dort keinen Editor, nur `rme.json`.
