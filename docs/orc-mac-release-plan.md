@@ -32,10 +32,15 @@ Einreichung v0.6.1 am 27.09., Accepted.
    Programm findet sie per `@rpath` (`@executable_path/../Frameworks`). Vorher klären,
    woher die Rea-Sixty-CI ihre libusb für macOS holt (Release-Assets
    `libusb-1.0.0.dylib` und `libusb-1.0.0-x86_64.dylib`), und dieselbe Quelle nehmen.
-2. **Universal bauen** (arm64 + x86_64) für das ORC-Target, dazu ein Mindest-macOS.
-   Untergrenze aus dem Code: macOS 11 (`imageWithSystemSymbolName` fürs
-   Menüleisten-Symbol); die Menü-Überschriften ab macOS 14 sind schon abgesichert.
-3. **Info.plist:** eigene ORC-Versionsnummer, `LSMinimumSystemVersion`, Copyright.
+2. **Universal bauen** (arm64 + x86_64) für das ORC-Target, Mindest-macOS **13**
+   (`CMAKE_OSX_DEPLOYMENT_TARGET`), wegen `SMAppService`. Die Menü-Überschriften ab
+   macOS 14 sind schon abgesichert.
+3. **Info.plist:** Version 1.0.0, `LSMinimumSystemVersion` 13.0, Copyright.
+3a. **Start beim Anmelden:** ein Schalter im ORC-Fenster, `SMAppService.mainApp`
+   `register` / `unregister`, der angezeigte Zustand kommt aus `status` (der Nutzer kann
+   ORC auch in den Systemeinstellungen abschalten, das muss der Schalter zeigen). Ab Werk aus.
+3b. **Lizenzhinweise** im DMG und im Repo, nach `docs/third-party-notices-plan.md`
+   (libusb LGPL-2.1: Hinweis, Lizenztext, Quelltext beim Release).
 4. **Signieren** mit der Developer ID und Hardened Runtime, zuerst die mitgelieferte
    libusb, dann die App. Ohne Sandbox braucht ORC für USB und Netzwerk keine
    zusätzlichen Berechtigungen. Prüfen mit `codesign --verify --deep --strict` und
@@ -49,6 +54,8 @@ Einreichung v0.6.1 am 27.09., Accepted.
    In der CI geht es nicht: Notarisieren braucht Franks Schlüsselbund.
 8. **Prüfung wie beim Kunden:** DMG mit Quarantäne-Flag wie nach einem Download öffnen,
    auf einem anderen Benutzerkonto starten, UF1 und TotalMix verbinden.
+9. **Repo `acklin83/ORC`** anlegen: README als Einrichtungsseite (Text mit dem Skill
+   `texte`), Lizenz, Lizenzhinweise, Issues an, Release 1.0.0 mit DMG und libusb-Quelltext.
 
 ## Zwei Nutzergruppen (29.09.2026)
 
@@ -124,10 +131,9 @@ Download**. Was sich unterscheidet, ist das Drumherum.
 
 ## Nicht in diesem Plan (genannt, nicht gebaut)
 
-- Start beim Anmelden.
-- Automatische Updates.
-- Eine Einführung, wie man TotalMix einrichtet (die Hilfetexte im Fenster sind auf
-  Franks Wunsch entfernt).
+- Automatische Updates und ein Update-Hinweis (später, Frank 29.09.).
+- Hilfetexte im ORC-Fenster (auf Franks Wunsch entfernt); die Einrichtung steht in der
+  README des Repos.
 
 ## Windows, später
 
