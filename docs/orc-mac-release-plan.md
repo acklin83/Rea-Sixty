@@ -63,9 +63,12 @@ Einreichung v0.6.1 am 27.09., Accepted.
    Franks Schlüsselbund). Baut in `extension/build-orc-release`, schreibt nach
    `dist/orc-<version>/`: DMG, `libusb-<version>.tar.bz2` (SHA gegen CMake geprüft),
    `THIRD-PARTY-NOTICES.txt`. Veröffentlicht nichts.
-8. **Prüfung wie beim Kunden:** DMG mit Quarantäne-Flag wie nach einem Download öffnen,
+8. ✅ **Frank 29.09.2026: „funzt!“** (installiert aus dem DMG mit Quarantäne-Flag). **Prüfung wie beim Kunden:** DMG mit Quarantäne-Flag wie nach einem Download öffnen,
    auf einem anderen Benutzerkonto starten, UF1 und TotalMix verbinden.
-9. **Repo `acklin83/ORC`** anlegen: README als Einrichtungsseite (Text mit dem Skill
+9. ◐ **Repo angelegt 29.09.2026**, öffentlich, lokal `~/Documents/dev/ORC`: README, Hinweise,
+   `docs/index.html` = Handbuch, Pages aus `main:/docs` live, Issues an. **Offen: Release 1.0.0.**
+   Bei jedem Release das Handbuch neu bauen und nach `ORC/docs/index.html` kopieren.
+   Ursprünglicher Plan: **Repo `acklin83/ORC`** anlegen: README als Einrichtungsseite (Text mit dem Skill
    `texte`), Lizenz, Lizenzhinweise, Issues an, Release 1.0.0 mit DMG und libusb-Quelltext.
    **GitHub Pages** mit dem Handbuch (`extension/build/orc-manual/index.html`, gebaut von
    `tools/orc_manual.py`): ORCs Menüeintrag „Manual" zeigt auf `https://acklin83.github.io/ORC/`.
