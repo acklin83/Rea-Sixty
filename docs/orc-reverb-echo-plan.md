@@ -91,12 +91,12 @@ getrennte Einträge mit der Bedingung „nur Reverb" bzw. „nur Echo".
 
 | Kanal | Pots (in dieser Reihenfolge, gepackt) | Tasten |
 |---|---|---|
-| Reverb | Rev Type, PreDelay, Low Cut, High Cut, Smooth, RoomScl*, Attack**, Hold**, Release**, Time***, HiDamp*** | Reverb (an/aus) |
+| Reverb | Rev Type, PreDelay, RoomScl¹ oder Time⁴, Low Cut, High Cut² oder HiDamp⁴, Smooth, Attack³, Hold³ ⁵, Release³ ⁵ | Reverb (an/aus) |
 | Echo | EchoType, Delay, Feedback, HiCut | Echo (an/aus) |
 
 Volume und Width stehen nicht im STRIP, sie liegen auf Fader und Pan-Pot.
-\* bei den Room-Typen, \*\* bei Envelope und Gated, \*\*\* bei Space
-(Entscheidung 2; welche Typen „Room Types" sind, klärt Messung 3).
+Reihenfolge wie im FX-Fenster von TotalMix. Sichtbar nach Typ (Entscheidung 2, gemessen unten):
+¹ alle ausser Envelope, Gated, Space · ² alle ausser Space · ³ Envelope · ⁴ Space · ⁵ Gated
 
 ### FX Return pro Output
 
@@ -152,7 +152,7 @@ Reihe landet dort still im falschen Zweig. Jede Stelle bekommt einen FX-Zweig un
 |---|---|
 | `RmeState.h/.cpp` | `State::fx`: zwei `Channel` (Reverb 0, Echo 1) mit `leaves`, `name`, `seen`. `ingest`: `/reverb/<leaf>`, `/echo/<leaf>` |
 | `RmeUf1.h/.cpp` | `Row::Fx = 3`, `kRowCount = 4`, `kMixerRowCount = 3`, `rowName` „FX", FX-Zweig in allen Funktionen der Tabelle oben |
-| `RmeStrip.h/.cpp` | Zeilenmarke `fx`, `Need::Reverb`/`Echo` und die Typbedingungen, neue Katalogeinträge, zwei neue Arten (Prozent: Smooth, Feedback; Faktor: Room Scale), Adressierung `/reverb/`, `/echo/`, Push-Standard (siehe unten) |
+| `RmeStrip.h/.cpp` | Zeilenmarke `fx`, `Need::Reverb`/`Echo` und die Typbedingungen, neue Katalogeinträge, zwei neue Arten (Prozent: Smooth, Feedback; Faktor: Room Scale), Adressierung `/reverb/`, `/echo/`, Push-Standard (siehe unten). Nach einem geschriebenen Reverb-Typ zusätzlich `/sendall`, weil der Typ Werte lädt (gemessen). Wechselt der Typ, ändert sich der Vorrat der Ansichten; die offene Ansicht wird wie heute über ihre `id` gesucht, sonst die erste |
 | `RmeInput.cpp` | Klemmen auf `kRowCount - 1`, FX-Zweige für CUT, Pan-Pot (Width), SOLO/SEL/Soft-Key nichts |
 | `RmeFace.cpp` | Klemme, Pegelquelle, `/sendchan`, Fader, MODE-Liste, Kanalzone ohne Pegel |
 | `RmeManager.cpp` | Werksseiten „Output 2", „Reverb", „Echo". `rme.json` **Version 5**: Eine vorhandene `strip`-Liste ersetzt die Werksseiten heute ganz (`RmeManager.cpp:177-198`), sonst kämen die Seiten bei niemandem an, auch nicht in Franks zwei Dateien (`ORC/rme.json`, `REAPER/rea_sixty/rme.json`). Die Hochstufung setzt „Output 2" direkt hinter eine Seite mit `rows = "out"` und hängt die FX-Seiten hinten an, jeweils nur wenn sie fehlen |
@@ -212,9 +212,23 @@ STRIP die alten Werte. Gilt für Reverb; ob der Echo-Typ auch Werte lädt, war n
 **Beim Schreiben des Typs** nicht über 14 bzw. 2 hinaus: TotalMix springt dann auf 0.
 Der Katalog klemmt ohnehin auf die Liste.
 
-**Noch offen, Messung 3:** Welche Regler zeigt TotalMix bei welchem Typ (Room Scale bei
-welchen, Attack/Hold/Release nur bei Envelope und Gated, Time/High Damp nur bei Space)?
-Braucht einen Blick in das FX-Fenster von TotalMix pro Typ.
+**3. Regler pro Typ** (Franks Bildschirmfotos des FX-Fensters, 29.09.):
+
+| Typ | Pots neben Pre Delay, Low Cut, Smooth, Width, Volume |
+|---|---|
+| Large Room | Room Scale, High Cut |
+| Shorty | Room Scale, High Cut |
+| Envelope | High Cut, **Attack, Hold, Release** |
+| Gated | High Cut, **Hold, Release** (kein Attack) |
+| Space | **Time, High Damp** (kein High Cut, kein Room Scale) |
+
+Das Handbuch liegt bei Gated falsch: Es nennt Attack auch für Gated, TotalMix zeigt ihn nicht.
+Gemessen sind 5 der 15 Typen. Small Room, Medium Room, Walls und die sieben übrigen
+(Attack, Swagger, Old School, Echoistic, 8plus9, Grand Wide, Thicker) sind als „wie Large
+Room und Shorty" angenommen, nicht gesehen.
+
+TotalMix zeigt Width als `+0.60`, Smooth als `100%`, Room Scale als `1.00`, Volume als `-3.0`.
+Die Anzeige auf der UF1 folgt dem.
 
 ## Was ich nicht baue
 
