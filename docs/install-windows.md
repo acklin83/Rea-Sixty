@@ -39,11 +39,11 @@ Restart REAPER. Open Action List (`?`) → "Rea-Sixty". You should see
 
 1. Action List → **"Rea-Sixty: Open / Close Rea-Sixty Settings"**.
 2. Settings → **About** tab → **"Windows USB driver"** section.
-3. Click **"Install UF8/UC1 WinUSB driver"**.
+3. Click **"Install UF8/UC1/UF1 WinUSB driver"**.
 4. UAC prompt → accept.
 5. **"Publisher unknown"** warning (the INF is unsigned) → "Install
    anyway".
-6. Unplug + replug UF8 and UC1.
+6. Unplug + replug every SSL surface (UF8, UC1, UF1).
 7. Restart REAPER.
 
 (The "Publisher unknown" warning is expected — the WinUSB INF is
