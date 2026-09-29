@@ -1,6 +1,27 @@
 # Plan: das ORC-Handbuch
 
-Stand 29.09.2026. Nur Plan, nichts geschrieben. Frank: „Handbuch brauchen wir ein schlaues!"
+Stand 29.09.2026: **gebaut.** Frank: „Handbuch brauchen wir ein schlaues!", Plan freigegeben
+(„ja, passt so. nur englisch, rea-sixty darf rein").
+
+## Gebaut
+
+- `extension/tools/orc_manual_dump.cpp` (Target `orc_manual_dump`, gleiche Quellen wie ORC über
+  `ORC_SHARED_SOURCES`): gibt als JSON aus, was ORCs Code weiss. Aktionen (Kategorie RME),
+  Werksbänke (in einem Wegwerf-Ordner geseedet), STRIP-Seiten, jeder Regler mit Bereich und dem
+  Wert, den ein Druck setzt (echt über `resetWrites` gefragt), Reihen, Vorgaben, Push-Sperre.
+- `extension/tools/orc_manual.py`: baut `extension/build/orc-manual/index.html` aus
+  `extension/orc/manual/template.html` und den Daten. Liest Version, Mindest-macOS,
+  libusb-Version und Fine-Faktor aus den Quellen. **Schlägt fehl**, wenn eine UF1-Taste oder ein
+  Drehgeber aus `UF1Protocol.h` keinen Abschnitt hat (`data-btn` / `data-enc`), wenn ein Text der
+  Menüleiste fehlt (aus `linkSummary`, `RmeManager::setStatus`, `Surface.cpp`, `OrcApp.mm`), oder
+  wenn ein Platzhalter leer bleibt. In der CI (macOS arm64, „Verify the ORC manual").
+- Seite: eigene UF1-Zeichnung (SVG, klickbar, nach SSLs Anordnung, keine SSL-Grafik), Suche,
+  hell/dunkel, Handybreite geprüft. Gepackte Seitenläufe als eine Tabelle in Reihenfolge.
+- ORC-Menü „Manual" öffnet `https://acklin83.github.io/ORC/` (lebt ab Release-Schritt 9).
+- Rea-Sixty-Handbuch: kurzer Absatz „TotalMix (RME)" unter UF1 Views mit Verweis (Frage 4 von
+  Frank nicht beantwortet, kleinster Schritt genommen).
+
+## Ursprünglicher Plan
 
 ## Ausgangslage
 

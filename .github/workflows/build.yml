@@ -135,6 +135,14 @@ jobs:
         if: matrix.container == '' && runner.os == 'macOS'
         run: python3 extension/tools/check_builtin_docs.py
 
+      # The ORC manual against the code ORC runs: every UF1 key and encoder has
+      # a section, every menu-bar text is explained, every generated list fills
+      # (docs/orc-manual-plan.md). A new key or status fails here, not in a
+      # user's e-mail. orc_manual_dump is built on macOS only.
+      - name: Verify the ORC manual
+        if: matrix.name == 'macos-arm64'
+        run: python3 extension/tools/orc_manual.py --dump extension/build/orc_manual_dump --check
+
       # Fail here rather than in a user's REAPER. Checks the symbol versions
       # the .so and the two bundled libs demand of the system, against the
       # oldest distro we support. Catches a bumped container image, a dropped

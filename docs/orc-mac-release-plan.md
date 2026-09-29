@@ -60,6 +60,8 @@ Einreichung v0.6.1 am 27.09., Accepted.
    auf einem anderen Benutzerkonto starten, UF1 und TotalMix verbinden.
 9. **Repo `acklin83/ORC`** anlegen: README als Einrichtungsseite (Text mit dem Skill
    `texte`), Lizenz, Lizenzhinweise, Issues an, Release 1.0.0 mit DMG und libusb-Quelltext.
+   **GitHub Pages** mit dem Handbuch (`extension/build/orc-manual/index.html`, gebaut von
+   `tools/orc_manual.py`): ORCs Menüeintrag „Manual" zeigt auf `https://acklin83.github.io/ORC/`.
 
 ## Zwei Nutzergruppen (29.09.2026)
 

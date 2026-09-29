@@ -817,14 +817,14 @@ inline int uf1SideCarSet_()
 // src/RmeInput.{h,cpp}, wo ORC sie mitbenutzt statt sie abzuschreiben.
 // Weiter Atomics, aus demselben Grund wie vorher: die Eingaben kommen auf dem
 // libusb-Thread an und der Maler liest auf dem Hauptthread.
-//   .row        die Reihe, RmeUf1 Row (0 Input, 1 Playback, 2 Output)
+//   .row        die Reihe, RmeUf1 Row (0 Input, 1 Playback, 2 Output, 3 FX)
 //   .sel[row]   der gewaehlte Kanal pro Reihe, -1 = noch keiner
 //   .submix     der zuletzt gewaehlte Ausgang = der Submix, in den Eingaenge
 //               und Playbacks schreiben, genau wie ein Klick in TotalMix
 //   .vpotBank   welche Bank der vier V-Pots, 0 oder 1 (Frank 21.09.: Bank 1
 //               Phones 1-4, Bank 2 Main A / Main B). Folgt seit 25.09. dem
 //               Submix auf Nav ◄ ► und dem Kanal-Encoder; 5-8 schaltet sie seit
-//               25.09. nicht mehr (Frank: "das reicht und macht mehr sinn")
+//               27.09. wieder (RmeInput::button, k5to8)
 //   .skHalf     welche Haelfte der Soft-Key-Bank, per Bank ◄ ► (RmeSoftKeys)
 //   .strip      STRIP, die Kanalansicht (docs/rme-strip-and-uf8-plan.md 3)
 //   .stripPage  RmeStrip::View-Id, bleibt beim Kanalwechsel stehen; hat der

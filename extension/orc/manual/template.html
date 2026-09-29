@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ORC Manual</title>
+<meta name="description" content="ORC {{version}}: the SSL UF1 as a remote control for RME TotalMix FX on the Mac.">
+<!--
+  ⇨ SOURCE OF THE ORC MANUAL. Built by extension/tools/orc_manual.py, which
+  fills every double-brace token and GEN block from the code ORC runs and fails when a
+  key, an encoder or a menu-bar text has no place here. Plan:
+  docs/orc-manual-plan.md. Written by the rules of the "texte" skill: first
+  person, no "we", nothing claimed that the code does not do.
+  Every UF1 key needs a data-btn and every encoder a data-enc on its section.
+-->
+<style>
+:root {
+  --bg: #ffffff; --fg: #1d1d1f; --muted: #6e6e73; --line: #e3e3e8; --card: #f6f6f8;
+  --accent: #b4481c; --accent-soft: #fbe9e1; --hot: rgba(180, 72, 28, 0.18);
+  --panel: #f2f2f4; --panel-line: #9a9aa2; --key: #ffffff; --screen: #1d2430; --screen-fg: #cfd8e3;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #161618; --fg: #ececf0; --muted: #9b9ba3; --line: #2e2e33; --card: #1f1f23;
+    --accent: #ef8a5b; --accent-soft: #3a2219; --hot: rgba(239, 138, 91, 0.25);
+    --panel: #232327; --panel-line: #6b6b73; --key: #2f2f35; --screen: #0c1016; --screen-fg: #9fb3c8;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: 16px; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, sans-serif; }
+a { color: var(--accent); }
+code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--card);
+  padding: 0.05em 0.35em; border-radius: 4px; }
+.wrap { display: grid; grid-template-columns: 240px minmax(0, 1fr); max-width: 1180px; margin: 0 auto; }
+nav.toc { position: sticky; top: 0; align-self: start; height: 100vh; overflow: auto;
+  padding: 24px 16px 24px 24px; border-right: 1px solid var(--line); font-size: 14px; }
+nav.toc h1 { font-size: 22px; margin: 0 0 2px; letter-spacing: 0.02em; }
+nav.toc .ver { color: var(--muted); margin: 0 0 16px; }
+nav.toc input { width: 100%; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--fg); font: inherit; margin-bottom: 14px; }
+nav.toc ol { list-style: none; padding: 0; margin: 0; }
+nav.toc li { margin: 2px 0; }
+nav.toc li.sub { padding-left: 12px; }
+nav.toc a { color: var(--fg); text-decoration: none; display: block; padding: 3px 6px; border-radius: 6px; }
+nav.toc a:hover { background: var(--card); }
+main { padding: 24px 40px 80px; min-width: 0; }
+section { margin-bottom: 40px; }
+h2 { font-size: 26px; margin: 8px 0 12px; }
+h3 { font-size: 19px; margin: 28px 0 8px; }
+h4 { font-size: 16px; margin: 22px 0 4px; }
+p, li { max-width: 72ch; }
+.note { color: var(--muted); font-size: 0.93em; }
+table.data { border-collapse: collapse; width: 100%; margin: 8px 0 16px; font-size: 14.5px; }
+table.data th, table.data td { text-align: left; vertical-align: top; padding: 6px 10px;
+  border-bottom: 1px solid var(--line); }
+table.data th { font-weight: 600; background: var(--card); }
+.ctl { border: 1px solid var(--line); border-radius: 12px; padding: 4px 18px 12px; margin: 14px 0;
+  scroll-margin-top: 16px; transition: box-shadow 0.2s; }
+.ctl.lit { box-shadow: 0 0 0 3px var(--hot); }
+.ctl h3 { margin-top: 14px; }
+.steps li { margin: 6px 0; }
+.surface { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
+.surface svg { width: 100%; max-width: 520px; height: auto; display: block; margin: 0 auto; }
+@media (min-width: 1240px) {
+  .surface { grid-template-columns: 440px minmax(0, 1fr); }
+  .surface svg { position: sticky; top: 16px; }
+}
+.tw { overflow-x: auto; }
+svg .pnl { fill: var(--panel); stroke: var(--panel-line); stroke-width: 1.5; }
+svg .k { fill: var(--key); stroke: var(--panel-line); stroke-width: 1.2; }
+svg .scr { fill: var(--screen); }
+svg .st { fill: var(--screen-fg); font: 9px ui-monospace, Menlo, monospace; }
+svg .lb { fill: var(--muted); font: 8.5px -apple-system, Helvetica, sans-serif; text-anchor: middle; }
+svg .knob { fill: var(--fg); }
+svg a .k, svg a .knob, svg a .scr { transition: fill 0.15s; }
+svg a:hover .k, svg a:focus .k { fill: var(--accent-soft); stroke: var(--accent); }
+svg a:hover .knob, svg a:focus .knob { fill: var(--accent); }
+.hidden { display: none !important; }
+@media (max-width: 860px) {
+  .wrap { grid-template-columns: 1fr; }
+  nav.toc { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 16px; }
+  main { padding: 16px 16px 60px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <h1>ORC</h1>
+  <p class="ver">Open Remote Control · version {{version}}</p>
+  <input id="q" type="search" placeholder="Search the manual" aria-label="Search the manual">
+  <ol>
+    <li><a href="#what">What ORC does</a></li>
+    <li><a href="#need">What you need</a></li>
+    <li><a href="#setup">Setting up</a></li>
+    <li><a href="#reasixty">ORC and Rea-Sixty</a></li>
+    <li><a href="#menubar">The menu bar</a></li>
+    <li><a href="#rows">Rows, channels and the submix</a></li>
+    <li><a href="#surface">The UF1, control by control</a></li>
+    <li><a href="#strip">STRIP: one channel in detail</a></li>
+    <li class="sub"><a href="#reverb">Reverb types</a></li>
+    <li><a href="#softkeys">Soft-key banks</a></li>
+    <li class="sub"><a href="#actions">Actions</a></li>
+    <li><a href="#settings">The settings window</a></li>
+    <li><a href="#trouble">When something is off</a></li>
+    <li><a href="#files">Files</a></li>
+    <li><a href="#licences">Licences</a></li>
+  </ol>
+</nav>
+<main>
+
+<section id="what">
+<h2>What ORC does</h2>
+<p>ORC turns an SSL UF1 into a remote control for RME TotalMix FX. The fader, the pots and the keys
+move TotalMix directly, and the two screens show what TotalMix is doing: channel names and colours,
+levels, the EQ, reverb and echo. ORC runs in the menu bar and needs no DAW.</p>
+<p>ORC is free.</p>
+</section>
+
+<section id="need">
+<h2>What you need</h2>
+<ul>
+  <li>A Mac with macOS {{minMacos}} or later, Apple silicon or Intel.</li>
+  <li>An SSL UF1, connected by USB.</li>
+  <li>An RME interface with TotalMix FX 2.1 or later. ORC talks Global OSC, which arrived with 2.1.</li>
+</ul>
+<p>SSL 360° has to be closed while ORC uses the UF1. Only one program can hold the surface at a time.</p>
+</section>
+
+<section id="setup">
+<h2>Setting up</h2>
+<h3>In TotalMix</h3>
+<ol class="steps">
+  <li>Under Settings, OSC, set Compatibility Mode to Global OSC, and switch Enable OSC Control on
+      under Options.</li>
+  <li>Pick a free remote in the OSC settings and tick <em>In Use</em>.</li>
+  <li>Set its IP to <code>{{host}}</code>, <em>Port incoming</em> to <code>{{sendPort}}</code> and
+      <em>Port outgoing</em> to <code>{{recvPort}}</code>. These are ORC's numbers out of the box.</li>
+  <li>For the level meters on the UF1, switch <em>Send Peak Level</em> on for that remote. Without it
+      everything else works and the meters stay empty.</li>
+</ol>
+<h3>ORC</h3>
+<ol class="steps">
+  <li>Open the disk image and drag ORC to Applications.</li>
+  <li>Quit SSL 360°, connect the UF1, start ORC. Its menu bar item says who holds the UF1 and
+      whether TotalMix answers (<a href="#menubar">the menu bar</a>).</li>
+  <li>If you want ORC there whenever the Mac is on, tick <em>Open at login</em> in the settings
+      window, page Connection.</li>
+</ol>
+<p>A different port or a TotalMix on another machine goes in the settings window, page
+<a href="#set-connection">Connection</a>.</p>
+</section>
+
+<section id="reasixty">
+<h2>ORC and Rea-Sixty</h2>
+<p>Rea-Sixty, my REAPER extension for SSL surfaces, shows the same TotalMix view on the UF1 inside
+REAPER: hold SHIFT, press MODE, and pick RME. It runs the code ORC runs, so the surface works as
+this page describes, with two differences: MODE opens REAPER's mode menu, and a transport key runs
+the action you gave it in ORC, or else stays REAPER's transport.</p>
+<h3>Who holds the UF1</h3>
+<p>When REAPER starts, Rea-Sixty asks ORC for the UF1 and ORC lets go of the surface and of the
+TotalMix port. When REAPER quits, ORC takes both back. The menu bar then reads
+<em>handed over to REAPER</em> for as long as REAPER has it. Rea-Sixty's setting
+<em>Take the UF1 over from ORC</em> (Settings, Connected devices) switches this off, and then
+REAPER leaves the UF1 with ORC.</p>
+<p>ORC can only take the UF1 back after REAPER if it is running, so with both on one Mac,
+<em>Open at login</em> is worth ticking.</p>
+<h3>One set of settings</h3>
+<p>ORC keeps the settings and Rea-Sixty reads them: pot targets, soft-key banks, colours, STRIP
+pages. Change them in ORC and REAPER picks them up. Without ORC installed, Rea-Sixty offers no
+TotalMix view at all.</p>
+</section>
+
+<section id="menubar">
+<h2>The menu bar</h2>
+<p>ORC has no Dock icon and no window of its own until you open the settings. Its menu bar item
+holds these lines:</p>
+<table class="data"><tbody>
+<tr><th>UF1</th><td><em>held by ORC</em> and the unit's serial number, or <em>not open</em> and the
+reason ORC was given. ORC tries again every two seconds, so a UF1 plugged in later or let go by
+another program is picked up by itself.</td></tr>
+<tr><th>TotalMix</th><td>The link to TotalMix, see <a href="#trouble">when something is off</a>.</td></tr>
+<tr><th>Settings…</th><td>Opens <a href="#settings">the settings window</a>.</td></tr>
+<tr><th>Manual</th><td>Opens this page.</td></tr>
+<tr><th>Quit ORC</th><td>Lets go of the UF1 and TotalMix and quits.</td></tr>
+</tbody></table>
+</section>
+
+<section id="rows">
+<h2>Rows, channels and the submix</h2>
+<p>TotalMix has three rows of channels: inputs, playbacks and outputs. ORC adds a fourth,
+<strong>FX</strong>, below the outputs, with two channels: Reverb and Echo. The nav cross steps
+from row to row, top to bottom and round again.</p>
+<p>A row on the UF1 holds the channels this TotalMix remote can see, in TotalMix' order: those with a
+name and a colour other than <em>hidden</em>. On the output row the control room comes first:
+Phones 1 to 4, Main B, Main, then the other outputs. A channel that carries a control-room role is
+named by the role, so the output you use as Phones 1 reads <em>Phones 1</em>.</p>
+<h3>The submix</h3>
+<p>An input or a playback has no single level in TotalMix. It has one level in every output's mix.
+ORC works the way TotalMix does when you click an output: the output selected last is the
+<strong>submix</strong>, and the fader, the pan pot and SOLO of an input or a playback act on that
+output's mix. The small screen shows which one, as <code>&gt; Main</code> for example. Nav left and
+right step the submix through the visible outputs.</p>
+</section>
+
+<section id="surface">
+<h2>The UF1, control by control</h2>
+<p>Click a control on the drawing to jump to it.</p>
+<div class="surface">
+<svg viewBox="0 0 520 700" role="img" aria-label="Drawing of the UF1 front panel with clickable controls">
+  <rect class="pnl" x="2" y="2" width="516" height="696" rx="6"/>
+  <rect class="pnl" x="46" y="12" width="124" height="660" rx="4"/>
+  <a href="#c-chsoft"><rect class="k" x="95" y="27" width="30" height="18" rx="3"/></a>
+  <a href="#c-small"><rect class="scr" x="55" y="77" width="104" height="93" rx="3"/>
+    <text class="st" x="62" y="98">Phones 1</text><text class="st" x="62" y="118">-12.0 dB</text>
+    <text class="st" x="62" y="160">Pan   C</text></a>
+  <a href="#c-abovepot"><circle class="knob" cx="110" cy="223" r="14"/></a>
+  <a href="#c-solocutsel"><rect class="k" x="62" y="285" width="22" height="22" rx="3"/>
+    <rect class="k" x="62" y="328" width="22" height="22" rx="3"/>
+    <rect class="k" x="62" y="370" width="22" height="22" rx="3"/></a>
+  <text class="lb" x="73" y="316">SOLO</text><text class="lb" x="73" y="359">CUT</text><text class="lb" x="73" y="401">SEL</text>
+  <a href="#c-fader"><rect x="112" y="285" width="6" height="310" rx="3" fill="var(--panel-line)"/>
+    <rect class="k" x="100" y="330" width="30" height="40" rx="4"/></a>
+  <a href="#c-idle"><rect class="k" x="62" y="520" width="22" height="22" rx="3"/></a>
+  <text class="lb" x="73" y="551">FLIP</text>
+  <a href="#c-master"><rect class="k" x="62" y="555" width="22" height="22" rx="3"/></a>
+  <text class="lb" x="73" y="586">MASTER</text>
+  <a href="#c-softkeys"><rect class="k" x="215" y="27" width="28" height="16" rx="3"/>
+    <rect class="k" x="275" y="27" width="28" height="16" rx="3"/>
+    <rect class="k" x="335" y="27" width="28" height="16" rx="3"/>
+    <rect class="k" x="395" y="27" width="28" height="16" rx="3"/></a>
+  <a href="#c-screen"><rect class="scr" x="212" y="70" width="252" height="147" rx="3"/>
+    <text class="st" x="222" y="88">Dim   Mono  Spk B Talkb</text>
+    <text class="st" x="222" y="120" style="font-size:18px">-12.0</text>
+    <text class="st" x="222" y="190">Ph 1  Ph 2  Ph 3  Ph 4</text></a>
+  <a href="#c-vpots"><circle class="knob" cx="237" cy="253" r="14"/><circle class="knob" cx="302" cy="253" r="14"/>
+    <circle class="knob" cx="375" cy="253" r="14"/><circle class="knob" cx="447" cy="253" r="14"/></a>
+  <a href="#c-idle"><rect class="k" x="320" y="299" width="22" height="20" rx="3"/></a>
+  <text class="lb" x="331" y="329">MODE</text>
+  <a href="#c-58"><rect class="k" x="366" y="299" width="22" height="20" rx="3"/></a>
+  <text class="lb" x="377" y="329">5-8</text>
+  <a href="#c-arrows"><rect class="k" x="410" y="299" width="22" height="20" rx="3"/>
+    <rect class="k" x="451" y="299" width="22" height="20" rx="3"/></a>
+  <text class="lb" x="421" y="329">&lt;</text><text class="lb" x="462" y="329">&gt;</text>
+  <a href="#c-bank"><rect class="k" x="322" y="341" width="22" height="22" rx="3"/>
+    <rect class="k" x="365" y="341" width="22" height="22" rx="3"/></a>
+  <text class="lb" x="354" y="373">BANK</text>
+  <a href="#c-idle"><rect class="k" x="410" y="341" width="22" height="22" rx="3"/>
+    <rect class="k" x="451" y="341" width="22" height="22" rx="3"/></a>
+  <text class="lb" x="421" y="373">360</text><text class="lb" x="462" y="373">SCRUB</text>
+  <a href="#c-channel"><circle cx="248" cy="335" r="36" fill="none" stroke="var(--panel-line)"/>
+    <circle class="knob" cx="248" cy="335" r="24"/></a>
+  <text class="lb" x="248" y="384">CHANNEL</text>
+  <a href="#c-nav"><rect class="k" x="240" y="423" width="20" height="20" rx="3"/>
+    <rect class="k" x="202" y="457" width="20" height="20" rx="3"/>
+    <circle class="k" cx="250" cy="467" r="9"/>
+    <rect class="k" x="278" y="457" width="20" height="20" rx="3"/>
+    <rect class="k" x="240" y="493" width="20" height="20" rx="3"/></a>
+  <a href="#c-jog"><circle class="k" cx="419" cy="465" r="72"/><circle class="k" cx="437" cy="440" r="12"/></a>
+  <a href="#c-idle"><rect class="k" x="196" y="555" width="22" height="22" rx="3"/>
+    <rect class="k" x="238" y="555" width="22" height="22" rx="3"/>
+    <rect class="k" x="280" y="555" width="22" height="22" rx="3"/>
+    <rect class="k" x="323" y="555" width="22" height="22" rx="3"/>
+    <rect class="k" x="367" y="555" width="22" height="22" rx="3"/>
+    <rect class="k" x="409" y="555" width="22" height="22" rx="3"/></a>
+  <a href="#c-shift"><rect class="k" x="451" y="555" width="22" height="22" rx="3"/></a>
+  <text class="lb" x="462" y="586">SHIFT</text>
+  <a href="#c-transport"><rect class="k" x="184" y="605" width="38" height="35" rx="4"/>
+    <rect class="k" x="237" y="605" width="38" height="35" rx="4"/>
+    <rect class="k" x="290" y="605" width="38" height="35" rx="4"/>
+    <rect class="k" x="344" y="605" width="38" height="35" rx="4"/>
+    <rect class="k" x="398" y="605" width="38" height="35" rx="4"/></a>
+</svg>
+
+<div>
+<p class="note">Where a control does something different on each row, its table says what, row by
+row. Hold <a href="#c-shift">SHIFT</a> for finer steps.</p>
+
+<div class="ctl" id="c-chsoft" data-btn="kChannelSoftKey">
+<h3>Key above the small screen</h3>
+<p>Switches the fader channel between stereo and mono, as the link between a pair in TotalMix
+does. Its label reads STEREO or MONO. On the FX row it does nothing and stays dark.</p>
+</div>
+
+<div class="ctl" id="c-small">
+<h3>Small screen</h3>
+<p>The channel on the fader: its name, its level in dB, its number and its TotalMix colour. The
+line below shows the pan, on the FX row the width. The text in the colour bar says where the fader
+writes: <code>&gt; Main</code> for an input or a playback (the <a href="#rows">submix</a>),
+<code>OUTPUT</code> for an output, <code>FX</code> for Reverb and Echo.</p>
+</div>
+
+<div class="ctl" id="c-abovepot" data-enc="kVpotAboveFader" data-btn="kVpotAboveFaderPush">
+<h3>Pot above the fader</h3>
+<table class="data"><thead><tr><th>Row</th><th>Turn</th><th>Push</th></tr></thead><tbody>
+<tr><td>Input, Playback</td><td>Pan in the current submix</td><td>Centre</td></tr>
+<tr><td>Output</td><td>The output's own pan</td><td>Centre</td></tr>
+<tr><td>FX</td><td>Width, 0 (mono) to 1 (stereo)</td><td>Full stereo</td></tr>
+</tbody></table>
+</div>
+
+<div class="ctl" id="c-fader">
+<h3>Fader</h3>
+<p>The level of the channel on the fader, motorised: it moves when the level changes in TotalMix.</p>
+<table class="data"><thead><tr><th>Row</th><th>The fader sets</th></tr></thead><tbody>
+<tr><td>Input, Playback</td><td>Its level in the current submix</td></tr>
+<tr><td>Output</td><td>The output's volume</td></tr>
+<tr><td>FX</td><td>The effect's volume, -65 to +6 dB</td></tr>
+</tbody></table>
+</div>
+
+<div class="ctl" id="c-solocutsel" data-btn="kSolo kCut kSel">
+<h3>SOLO, CUT, SEL</h3>
+<table class="data"><thead><tr><th>Row</th><th>SOLO</th><th>CUT</th><th>SEL</th></tr></thead><tbody>
+<tr><td>Input, Playback</td><td>Solo in the current submix</td><td>Mute</td><td>Nothing</td></tr>
+<tr><td>Output</td><td>Nothing (TotalMix has no solo on an output)</td><td>Mute</td><td>Makes it the submix</td></tr>
+<tr><td>FX</td><td>Nothing</td><td>Switches the effect off and on; lit while off</td><td>Nothing</td></tr>
+</tbody></table>
+</div>
+
+<div class="ctl" id="c-master" data-btn="kMaster">
+<h3>MASTER</h3>
+<p>Puts Main on the fader: the output row, with Main selected. Lit while Main is there.</p>
+</div>
+
+<div class="ctl" id="c-softkeys" data-btn="kDisplaySoft1 kDisplaySoft2 kDisplaySoft3 kDisplaySoft4">
+<h3>The four keys above the large screen</h3>
+<p>In the overview they are the <a href="#softkeys">soft-key banks</a>. With
+<a href="#strip">STRIP</a> open they are the switches of the page on screen.</p>
+</div>
+
+<div class="ctl" id="c-screen">
+<h3>Large screen</h3>
+<p>In the overview: the four pot targets with their names and levels, a colour bar over each, and
+a white bar over the pot whose output is the current submix. The header names the row and the
+soft-key bank. The time display shows the level of the jog wheel's target in dB. With STRIP open:
+the page name and number, and on the EQ and Low Cut pages the channel's EQ curve.</p>
+</div>
+
+<div class="ctl" id="c-vpots" data-enc="kVpot1 kVpot2 kVpot3 kVpot4" data-btn="kVpot1Push kVpot2Push kVpot3Push kVpot4Push">
+<h3>The four pots</h3>
+<p><strong>Overview.</strong> Four of eight targets, in two banks (<a href="#c-58">5-8</a> switches).
+Turning sets the target's level in steps of {{potStepDb}} dB. A push does what is set for that pot
+on the settings page <a href="#set-controls">Controls</a>: make it the submix, put it on the fader,
+mute it, or nothing. Out of the box every push picks the submix, and the targets are:</p>
+<!--GEN:pots-->
+<p><strong>STRIP.</strong> The page's parameters. A push sets the parameter back to its default,
+listed with each page under <a href="#strip">STRIP</a>.</p>
+<p>After a push the same pot ignores turning for {{pushQuietMs}} ms, so the small twist that comes
+with a press does not move the value you just set.</p>
+</div>
+
+<div class="ctl" id="c-58" data-btn="k5to8">
+<h3>5-8</h3>
+<p>Switches the four pots between their two banks. Lit on bank 2. Does nothing with STRIP open.</p>
+</div>
+
+<div class="ctl" id="c-arrows" data-btn="kArrowLeft kArrowRight">
+<h3>&lt; and &gt;</h3>
+<p>In the overview: the previous and next <a href="#softkeys">soft-key bank</a>. With STRIP open:
+the previous and next page. Lit where there is more in that direction; there is no wrap.</p>
+</div>
+
+<div class="ctl" id="c-bank" data-btn="kBankLeft kBankRight">
+<h3>BANK ◄ ►</h3>
+<p>Picks the half of the soft-key bank on the four keys: ◄ keys 1 to 4, ► keys 5 to 8. Lit toward
+the half you can switch to. Dark when the bank has no second half, and with STRIP open.</p>
+</div>
+
+<div class="ctl" id="c-channel" data-enc="kChannel" data-btn="kChannelPush">
+<h3>CHANNEL encoder</h3>
+<p>Turn: the previous or next channel of the row onto the fader. When that channel sits on a pot
+of the other bank, the pots follow to that bank. Push: opens and closes
+<a href="#strip">STRIP</a> for the channel on the fader.</p>
+</div>
+
+<div class="ctl" id="c-nav" data-btn="kNavUp kNavDown kNavLeft kNavRight kNavCentre">
+<h3>Nav cross</h3>
+<table class="data"><tbody>
+<tr><th>Up, down</th><td>The previous or next row: Input, Playback, Output, FX, and round again.
+With STRIP open the view stays open on the new row's channel.</td></tr>
+<tr><th>Left, right</th><td>The previous or next <a href="#rows">submix</a>, round the visible outputs.</td></tr>
+<tr><th>Centre</th><td>Shows or hides the TotalMix window. Lit while shown.</td></tr>
+</tbody></table>
+</div>
+
+<div class="ctl" id="c-jog" data-enc="kJog">
+<h3>Jog wheel</h3>
+<p>The level of one fixed target, out of the box Main, in steps of {{jogStepDb}} dB. The time
+display shows that level. Target and step are on the settings page
+<a href="#set-controls">Controls</a>.</p>
+</div>
+
+<div class="ctl" id="c-transport" data-btn="kRwd kFfw kStop kPlay kRec">
+<h3>Transport keys</h3>
+<p>Empty out of the box. The settings page <a href="#set-softkeys">Soft Keys</a> puts any of the
+<a href="#actions">actions</a> on them, the DuRec recorder for example.</p>
+</div>
+
+<div class="ctl" id="c-shift" data-btn="kShift">
+<h3>SHIFT</h3>
+<p>Held: the pots and the jog wheel turn in finer steps, {{fineFactorText}} of the normal step.
+Controls that step through a list, such as an EQ type, still move one entry at a time.</p>
+</div>
+
+<div class="ctl" id="c-idle" data-btn="kFlip kScrub kMode k360 kTLeft kTRight kCycle kClick kT1 kT2">
+<h3>Keys ORC leaves alone</h3>
+<p>FLIP, SCRUB, MODE, 360 and the row of six keys above the transport do nothing in ORC.</p>
+</div>
+</div>
+</div>
+</section>
+
+<section id="strip">
+<h2>STRIP: one channel in detail</h2>
+<p>Push the CHANNEL encoder and the UF1 shows the channel on the fader in detail: its settings in
+TotalMix, four pots and four keys to a page. Push again to go back to the overview.</p>
+<ul>
+  <li>&lt; and &gt; step through the pages; the header shows the page and, for example, 3/9.</li>
+  <li>A page appears only when the channel has what is on it, as TotalMix reports it. A line input
+      without a preamp has no gain, a playback has no EQ.</li>
+  <li>Pages next to each other for the same rows are packed: the parameters a channel has move up to
+      fill four pots, so no page is half empty. The screen names every pot, so nothing is hidden by
+      it moving.</li>
+  <li>On the FX row, Reverb and Echo have their own pages. Which reverb controls show depends on the
+      reverb type, as in TotalMix' FX window (<a href="#reverb">reverb types</a>).</li>
+  <li>A push on a pot sets it back to the value in the last column. Where the column is empty, the
+      push leaves the value alone.</li>
+</ul>
+<p class="note">The page list below is ORC's out of the box, read from the code this version runs.</p>
+<!--GEN:strip-->
+<h3 id="reverb">Reverb types</h3>
+<p>Every type has PreDelay, Low Cut, Smooth and Width. The rest depends on the type, as TotalMix'
+own FX window shows it. Turning the type pot loads the type's own values in TotalMix, and ORC reads
+them back at once.</p>
+<!--GEN:reverbtypes-->
+</section>
+
+<section id="softkeys">
+<h2>Soft-key banks</h2>
+<p>In the overview the four keys above the large screen play a bank of eight keys, four at a time.
+&lt; and &gt; step through the banks, BANK ◄ ► pick the half. A bank holds either keys you set up
+yourself or one of two lists TotalMix keeps:</p>
+<ul>
+  <li><strong>TotalMix snapshots</strong>: the eight snapshots by the names TotalMix gives them. A press
+      loads one. The key of the active snapshot is lit.</li>
+  <li><strong>TotalMix layouts</strong>: the eight layouts. A press loads one; the one loaded last is lit.</li>
+</ul>
+<p>Out of the box:</p>
+<!--GEN:banks-->
+<p>Every bank, key, label and action is set on the settings page <a href="#set-softkeys">Soft Keys</a>.</p>
+<h3 id="actions">Actions</h3>
+<p>What a soft key or a transport key can do, {{actionCount}} actions. A <em>switch</em> turns something
+on and off and its key is lit while on; a <em>press</em> does one thing each time.</p>
+<!--GEN:actions-->
+</section>
+
+<section id="settings">
+<h2>The settings window</h2>
+<p>Settings… in the menu bar. Every change is saved at once.</p>
+<h3 id="set-connection">Connection</h3>
+<table class="data"><tbody>
+<tr><th>Talk to TotalMix</th><td>The link on or off.</td></tr>
+<tr><th>Open at login</th><td>Starts ORC when you log in. macOS may ask you to allow it once; ORC
+then opens the right place in System Settings.</td></tr>
+<tr><th>Host</th><td>Where TotalMix runs. <code>{{host}}</code> is this Mac.</td></tr>
+<tr><th>Send to port</th><td>TotalMix' <em>Port incoming</em>, out of the box {{sendPort}}.</td></tr>
+<tr><th>Listen on port</th><td>TotalMix' <em>Port outgoing</em>, out of the box {{recvPort}}.</td></tr>
+<tr><th>Status</th><td>The link, as in the menu bar.</td></tr>
+<tr><th>Ask TotalMix again</th><td>Asks TotalMix for everything it knows, for example after you
+renamed channels.</td></tr>
+</tbody></table>
+<h3 id="set-controls">Controls</h3>
+<table class="data"><tbody>
+<tr><th>Pot, Target, Push</th><td>The eight pot targets, bank 1 and bank 2: a control-room role
+(Main, Main B, Phones 1 to 4, Talkback) or any channel TotalMix shows this remote. The push: Submix,
+Select (put it on the fader), Mute or Nothing.</td></tr>
+<tr><th>Jog wheel</th><td>The jog wheel's target.</td></tr>
+<tr><th>Jog step</th><td>dB per step of the jog wheel.</td></tr>
+<tr><th>Pot step</th><td>dB per step of the four pots in the overview.</td></tr>
+</tbody></table>
+<p class="note">A role follows TotalMix: when a snapshot moves Phones 1 to another output, the pot
+follows it. A role TotalMix has not given to any output reads <em>not assigned</em>, and one this
+remote cannot see reads <em>hidden</em>.</p>
+<h3 id="set-softkeys">Soft Keys</h3>
+<table class="data"><tbody>
+<tr><th>Bank, Half</th><td>Which bank and which half you are editing.</td></tr>
+<tr><th>Shows</th><td>Keys, TotalMix snapshots or TotalMix layouts.</td></tr>
+<tr><th>Name</th><td>The bank's name on the large screen.</td></tr>
+<tr><th>Label, Action</th><td>Per key: what the screen says and what a press does. An empty label
+takes the action's own.</td></tr>
+<tr><th>Factory set for this bank</th><td>Puts this bank back the way it came.</td></tr>
+<tr><th>Transport</th><td>An action for each of the five transport keys.</td></tr>
+</tbody></table>
+<h3 id="set-colours">Colours</h3>
+<p>TotalMix has nine channel colours, the UF1 its own palette. This page says which UF1 colour each
+TotalMix colour shows as, and lists the channels that wear it.</p>
+</section>
+
+<section id="trouble">
+<h2>When something is off</h2>
+<h3>The TotalMix line</h3>
+<table class="data"><thead><tr><th>It says</th><th>What it means, what to do</th></tr></thead><tbody>
+<tr><td>online</td><td>All good.</td></tr>
+<tr><td>off</td><td><em>Talk to TotalMix</em> is off (page Connection).</td></tr>
+<tr><td>waiting for TotalMix</td><td>ORC asks and nobody answers. TotalMix is not running, OSC is off,
+the remote is not <em>In Use</em>, or the ports do not match (<a href="#setup">setting up</a>).</td></tr>
+<tr><td>port … is in use by another program</td><td>Another program listens on ORC's port. Pick a
+different <em>Listen on port</em> and set the same number as the remote's <em>Port outgoing</em> in
+TotalMix.</td></tr>
+<tr><td>could not open a socket</td><td>macOS refused ORC a network connection. Quit ORC and
+start it again.</td></tr>
+<tr><td>host is not an IPv4 address</td><td>The Host field holds something other than an address
+like <code>192.168.1.20</code>.</td></tr>
+<tr><td>TotalMix stopped answering (quit, or the remote is off)</td><td>It was online and went quiet.
+Check that TotalMix is running and the remote is still <em>In Use</em>.</td></tr>
+</tbody></table>
+<h3>The UF1 line</h3>
+<table class="data"><thead><tr><th>It says</th><th>What it means, what to do</th></tr></thead><tbody>
+<tr><td>held by ORC</td><td>All good.</td></tr>
+<tr><td>not open: handed over to REAPER</td><td>Rea-Sixty has the UF1 while REAPER runs
+(<a href="#reasixty">ORC and Rea-Sixty</a>).</td></tr>
+<tr><td>not open, with another reason</td><td>ORC could not open the UF1. Is it connected and
+switched on? Is SSL 360° still running? ORC tries again every two seconds.</td></tr>
+</tbody></table>
+<h3>No level meters on the UF1</h3>
+<p>Switch <em>Send Peak Level</em> on for ORC's remote in TotalMix.</p>
+</section>
+
+<section id="files">
+<h2>Files</h2>
+<table class="data"><tbody>
+<tr><th><code>~/Library/Application Support/ORC/rme.json</code></th><td>The link, the pots, the colours
+and the STRIP pages.</td></tr>
+<tr><th><code>~/Library/Application Support/ORC/orc.json</code></th><td>The soft-key banks and the
+transport keys.</td></tr>
+<tr><th><code>/tmp/orc.log</code></th><td>ORC's log. Useful with a bug report.</td></tr>
+</tbody></table>
+<p>To start from scratch, quit ORC and remove the folder <code>~/Library/Application Support/ORC</code>.</p>
+</section>
+
+<section id="licences">
+<h2>Licences</h2>
+<p>ORC is free. It contains libusb {{libusbVersion}}, © the libusb authors, under the GNU Lesser
+General Public License 2.1. The licence text and libusb's source come with every ORC release.</p>
+<p class="note">SSL, UF1 and SSL 360° are trademarks of Solid State Logic. ORC is not affiliated
+with Solid State Logic or RME.</p>
+</section>
+
+</main>
+</div>
+<script>
+(function () {
+  // Search: hides the sections and controls that do not contain every word typed.
+  var q = document.getElementById('q');
+  var blocks = Array.prototype.slice.call(document.querySelectorAll('main section, .ctl'));
+  q.addEventListener('input', function () {
+    var words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+    blocks.forEach(function (b) {
+      var t = b.textContent.toLowerCase();
+      var hit = words.every(function (w) { return t.indexOf(w) >= 0; });
+      b.classList.toggle('hidden', words.length > 0 && !hit);
+    });
+  });
+  // The drawing: the control's box lights up on hover and after a click.
+  var links = document.querySelectorAll('svg a');
+  Array.prototype.forEach.call(links, function (a) {
+    var id = a.getAttribute('href').slice(1);
+    var box = document.getElementById(id);
+    if (!box) return;
+    a.addEventListener('mouseenter', function () { box.classList.add('lit'); });
+    a.addEventListener('mouseleave', function () { box.classList.remove('lit'); });
+    a.addEventListener('click', function () {
+      box.classList.add('lit');
+      setTimeout(function () { box.classList.remove('lit'); }, 1600);
+    });
+  });
+})();
+</script>
+</body>
+</html>

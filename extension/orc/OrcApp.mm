@@ -47,6 +47,11 @@ static orc::Surface* g_surface = nullptr;
         [menu addItemWithTitle:@"Settings…"
                         action:@selector(openSettings:)
                  keyEquivalent:@","].target = self;
+        // ⇨ THE MANUAL, NOT A SENTENCE IN THE WINDOW (Frank 27.09.2026: no
+        // helper texts in ORC's window; 29.09.: "ein schlaues Handbuch").
+        [menu addItemWithTitle:@"Manual"
+                        action:@selector(openManual:)
+                 keyEquivalent:@""].target = self;
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItemWithTitle:@"Quit ORC"
                         action:@selector(quit:)
@@ -72,6 +77,14 @@ static orc::Surface* g_surface = nullptr;
 }
 
 - (void)openSettings:(id)sender { [[OrcSettingsWindowController shared] present]; }
+
+// ⇨ THE MANUAL'S ADDRESS: GitHub Pages of the releases-only repo acklin83/ORC
+// (docs/orc-mac-release-plan.md, step 9), built by tools/orc_manual.py. It goes
+// live with that repo; until then the link leads nowhere.
+- (void)openManual:(id)sender
+{
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://acklin83.github.io/ORC/"]];
+}
 
 // ⛔ stop:, not terminate:. terminate: ends the process where it stands and the
 // surface thread would be cut off mid-frame with the UF1 still claimed. stop:

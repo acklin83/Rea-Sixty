@@ -575,6 +575,11 @@ view (`5-8` pages the send window in Sends view and toggles the channel group in
 DAW view), and the four V-Pots are not bindable at all — they always belong to
 the mode that is showing.
 
+**TotalMix (RME).** With ORC installed, `SHIFT` + `MODE` offers a second page with
+**RME**: the UF1 then drives RME TotalMix FX instead of REAPER, with ORC's settings.
+ORC's manual describes that view control by control:
+<https://acklin83.github.io/ORC/>. Without ORC the page does not appear.
+
 ## The channel (all views)
 
 These are the controls down the left of the panel, and they all address the same

@@ -1003,15 +1003,10 @@ endif()
 # macOS first. Windows and Linux need their own USB permissions story and are
 # not in scope yet, so the target is gated rather than left to fail confusingly.
 if(APPLE)
-    add_executable(orc
-        orc/main.cpp
-        # Stage 7: the tick that used to be main()'s body, and the Mac side.
-        # ⛔ Surface has the device and the mixer and no AppKit; OrcApp and
-        # OrcSettingsWindow have AppKit and neither of the other two.
-        orc/Surface.cpp
-        orc/OrcConfig.cpp
-        orc/OrcApp.mm
-        orc/OrcSettingsWindow.mm
+    # The shared half of ORC: the extension's own files, no REAPER in any of
+    # them. ORC and tools/orc_manual_dump (the manual's data) both build from
+    # this one list, so the manual describes exactly the code ORC runs.
+    set(ORC_SHARED_SOURCES
         src/UF1Device.cpp
         src/UF1Protocol.cpp
         src/RmeManager.cpp
@@ -1041,6 +1036,16 @@ if(APPLE)
         src/Bindings.cpp
         src/KeyMacro.cpp
         src/LogPath.cpp)
+    add_executable(orc
+        orc/main.cpp
+        # Stage 7: the tick that used to be main()'s body, and the Mac side.
+        # ⛔ Surface has the device and the mixer and no AppKit; OrcApp and
+        # OrcSettingsWindow have AppKit and neither of the other two.
+        orc/Surface.cpp
+        orc/OrcConfig.cpp
+        orc/OrcApp.mm
+        orc/OrcSettingsWindow.mm
+        ${ORC_SHARED_SOURCES})
     # ⛔ NATIVE APPKIT, NOT A DRAWN UI (Frank, 25.09.2026). The first stage-7
     # build vendored Dear ImGui and drew its own window; it looked like a tool
     # rather than a Mac program, and vendor/ is in .gitignore (WDL and the
@@ -1136,4 +1141,18 @@ if(APPLE)
         COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:orc>"
         COMMENT "Bundling libusb into ORC.app"
         VERBATIM)
+
+    # ⇨ THE MANUAL'S DATA (docs/orc-manual-plan.md). Prints, as JSON, what the
+    # code ORC runs knows about itself: the actions, the factory banks, the
+    # STRIP pages with ranges and push defaults. tools/orc_manual.py builds the
+    # manual from it. The host's architecture only; it never ships.
+    add_executable(orc_manual_dump tools/orc_manual_dump.cpp ${ORC_SHARED_SOURCES})
+    add_dependencies(orc_manual_dump orc_libusb)
+    target_include_directories(orc_manual_dump PRIVATE src vendor/WDL
+        "${ORC_LIBUSB_PREFIX}/install/include/libusb-1.0")
+    target_compile_options(orc_manual_dump PRIVATE -mmacosx-version-min=13.0)
+    target_link_options(orc_manual_dump PRIVATE -mmacosx-version-min=13.0)
+    target_link_libraries(orc_manual_dump PRIVATE "${ORC_LIBUSB_DYLIB}" Threads::Threads)
+    set_target_properties(orc_manual_dump PROPERTIES
+        BUILD_RPATH "${ORC_LIBUSB_PREFIX}/install/lib")
 endif()
