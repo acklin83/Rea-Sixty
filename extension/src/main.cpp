@@ -2356,10 +2356,10 @@ void resolveSpilledParents_() {
 
 // A track's bits in one REAPER group category, all 128 groups. Groups 1..64
 // through the calls every REAPER has; 65..128 through GetSetTrackGroupMembershipEx
-// (REAPER 7.23+, null before). Its offset counts BITS (0/32/64/96, as ReaTeam's
-// az_ scripts use it and as its doc reads, "at offset, where 0 is the low 32
-// bits"); one other project passes word indices, so the two words that matter
-// most stay on the old calls.
+// (REAPER 7.23+, null before). Its offset counts BITS (0/32/64/96), MEASURED
+// 30.09.2026 on REAPER 7.81 (rea_sixty_vca_sonde.lua): a VCA in group 70 read
+// 0x20 at offset 64 and 0 at offset 2. One other project on GitHub passes word
+// indices; that reading is wrong.
 uint32_t trackGroupWord_(MediaTrack* tr, const char* cat, int word) {
     if (!tr) return 0;
     switch (word) {

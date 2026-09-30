@@ -30,8 +30,9 @@
   project uses word indices). Selection-Set group slots and razor media-edit grouping
   use it too.
 
-## Open
-- Offset semantics of `GetSetTrackGroupMembershipEx` for groups 65..128 not measured.
+## Measured
+- `GetSetTrackGroupMembershipEx` offset counts bits: VCA in group 70 read 0x20 at offset 64,
+  0 at offset 2 (REAPER 7.81, VCA probe).
 
 ## Later the same day
 - `699376d`: long SEL spills a VCA only in VCA Mode; REAPER actions REASIXTY_FOLDER_MODE,
