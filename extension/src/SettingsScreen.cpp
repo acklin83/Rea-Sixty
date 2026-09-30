@@ -5085,43 +5085,43 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             ImGui_TextDisabled(ctx, "Selects the track (built-in).");
             ImGui_TextDisabled(ctx, "Shift + SEL extends the selection.");
             ImGui_TextDisabled(ctx, "In REC / REC + MON it arms the track.");
+            // DOUBLE PRESS lives in this column (Frank 2026-09-30): it is the
+            // press side of SEL. Inline widgets inside the existing child, not
+            // a child of its own ([[learnings]] #19).
+            ImGui_Spacing(ctx);
+            ImGui_Separator(ctx);
+            ImGui_Text(ctx, "DOUBLE PRESS");
+            ImGui_TextDisabled(ctx, "2nd tap < 0.4 s, on top of the select");
+            bool en = bd.hasDoublePress;
+            if (ImGui_Checkbox(ctx, "Enable double-press", &en)) {
+                bd.hasDoublePress = en;
+                if (en && bd.doublePress[0].type == ActionType::Noop)
+                    bd.doublePress[0].type = ActionType::Builtin;
+                dirty = true;
+            }
+            if (bd.hasDoublePress) {
+                if (drawStepPicker_(ctx, "dp_pl", layer, id,
+                                    bd.doublePress[0], /*isLongPress*/ false,
+                                    /*modIdx*/ 0, /*stepIdx*/ 0,
+                                    /*isDoublePress*/ true))
+                    dirty = true;
+            }
         }
         ImGui_EndChild(ctx);
         ImGui_SameLine(ctx, nullptr, nullptr);
         drawColumn("LONG PRESS", "lp", bd.longPress, /*isLongCol*/ true);
     }
 
-    // DOUBLE PRESS — SEL ONLY. On a normal button the single (short) press
-    // fires first anyway, so an additive double is pointless (Frank
-    // 2026-08-03: "bringt so überhaupt nichts"); only SEL benefits (single =
-    // native select, double = a real extra action). A single, PLAIN action:
-    // no modifier rows (a double-tap fires plain only; Shift+SEL stays
-    // additive-select), no LED (a momentary tap has no lit/idle state).
-    // Rendered INLINE — NEVER a 3rd BeginChild: a culled child window reaped
-    // the whole ReaImGui Settings window a defer cycle later (2026-08-03
-    // diagnostic, learnings #19). drawStepPicker_ = action-type + arg only,
-    // with isDoublePress=true so a browsed REAPER action routes to the
-    // doublePress slot (not the short slot).
-    if (idIsSel) {
-        ImGui_Spacing(ctx);
-        ImGui_Separator(ctx);
-        ImGui_Text(ctx, "DOUBLE PRESS  (2nd tap < 0.4 s — an extra action on "
-                        "top of the select)");
-        bool en = bd.hasDoublePress;
-        if (ImGui_Checkbox(ctx, "Enable double-press", &en)) {
-            bd.hasDoublePress = en;
-            if (en && bd.doublePress[0].type == ActionType::Noop)
-                bd.doublePress[0].type = ActionType::Builtin;
-            dirty = true;
-        }
-        if (bd.hasDoublePress) {
-            if (drawStepPicker_(ctx, "dp_pl", layer, id,
-                                bd.doublePress[0], /*isLongPress*/ false,
-                                /*modIdx*/ 0, /*stepIdx*/ 0,
-                                /*isDoublePress*/ true))
-                dirty = true;
-        }
-    }
+    // DOUBLE PRESS — SEL ONLY, drawn inside SEL's SHORT column above. On a
+    // normal button the single (short) press fires first anyway, so an
+    // additive double is pointless (Frank 2026-08-03: "bringt so überhaupt
+    // nichts"); only SEL benefits (single = native select, double = a real
+    // extra action). A single, PLAIN action: no modifier rows (a double-tap
+    // fires plain only; Shift+SEL stays additive-select), no LED. NEVER a 3rd
+    // BeginChild: a culled child window reaped the whole ReaImGui Settings
+    // window a defer cycle later (2026-08-03 diagnostic, learnings #19).
+    // drawStepPicker_ with isDoublePress=true so a browsed REAPER action
+    // routes to the doublePress slot (not the short slot).
 
     // LED appearance is UF8-only — the UC1's encoders / 360 / MAGNIFY
     // don't expose user-settable RGB, so hide the whole LED block on the
