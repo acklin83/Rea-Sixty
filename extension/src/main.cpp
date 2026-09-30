@@ -44397,6 +44397,12 @@ void onTimerBody_()
         // the REASIXTY_UF1_MODE_* actions — and the last two can fire with the UF1
         // out of sight, so the announcement is the only feedback (Frank 2026-08-10).
         static int           mbView = 0;
+        // The side-car goes OVER the view (SHIFT + MODE, or Start view RME), so
+        // the view alone told the banner nothing: at REAPER start it announced
+        // "UF1 Mode • DAW", the view underneath, while the UF1 came up in the
+        // RME side-car (Frank 30.09.2026), and entering or leaving the side-car
+        // by hand announced nothing at all.
+        static int           mbSideCar = 0;
         static int           mbJog = 0;
         static bool          mbEnvPh = false;
         static bool          mbFadeOut = false;
@@ -44708,6 +44714,7 @@ void onTimerBody_()
         const bool ufe  = g_uf1Extender.load();
         const int  ufes = g_uf1ExtenderSide.load();
         const int  ufv  = uf1ViewMode_();
+        const int  ufsc = static_cast<int>(g_uf1SideCar.load());
         const int  jm   = static_cast<int>(g_uf1JogMode.load());
         const bool eph  = g_uf1EnvJogPlayhead.load();
         const bool fdo  = g_uf1FadeOutEdge.load();
@@ -44738,7 +44745,7 @@ void onTimerBody_()
             mbSticky = sa; mbStickyArm = sarm; mbFocusPin = fp; mbFocusScope = fsc;
             mbStickyPairArm = sprm;
             mbFlip = ufl; mbMaster = ufm; mbStrip = ufs; mbExt = ufe; mbExtSide = ufes;
-            mbView = ufv; mbJog = jm; mbEnvPh = eph;
+            mbView = ufv; mbSideCar = ufsc; mbJog = jm; mbEnvPh = eph;
             mbFadeOut = fdo; mbFadeWalk = fdw;
             mbUf8Strip = u8s; mbUf8Plugin = u8p; mbTouch = tch;
             mbU8Bank = u8bn;
@@ -44794,8 +44801,18 @@ void onTimerBody_()
             else if (ufes != mbExtSide) { chg.push_back(std::string("Extender \xE2\x80\xA2 ") + (ufes ? "Right" : "Left")); }
             mbExtSide = ufes;   // always sync (even when the on/off change took priority)
             // UF1 view / hardware mode.
-            if (ufv != mbView) { chg.push_back(std::string("UF1 Mode \xE2\x80\xA2 ")
-                                     + uf1ViewModeFriendly_(ufv)); mbView = ufv; }
+            // The side-car names itself while it is up; the view underneath only
+            // when there is no side-car over it (leaving one names the view it
+            // leads back to).
+            if (ufv != mbView || ufsc != mbSideCar) {
+                const char* scName = (ufsc > 0) ? uf1SideCarName_(ufsc - 1) : "";
+                if (ufsc > 0 && *scName)
+                    chg.push_back(std::string("UF1 Mode \xE2\x80\xA2 ") + scName);
+                else if (ufsc == 0)
+                    chg.push_back(std::string("UF1 Mode \xE2\x80\xA2 ")
+                                  + uf1ViewModeFriendly_(ufv));
+                mbView = ufv; mbSideCar = ufsc;
+            }
             // UF1 Jog Mode.
             if (jm != mbJog) { chg.push_back(std::string("Jog \xE2\x80\xA2 ")
                                    + uf1JogModeFriendly(static_cast<Uf1JogMode>(jm))); mbJog = jm; }
