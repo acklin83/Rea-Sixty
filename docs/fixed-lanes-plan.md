@@ -683,3 +683,155 @@ Entscheid 7 vorausgesetzt.
    Mousewheel und Bank by 1 abhaken, Lanes mit ▲ neben Channel Select schieben. Ab jetzt
    springt das Karussell zwischen den verbliebenen Modi in dieser Reihenfolge.
 
+
+---
+
+## 8. Fallstudien am UF8
+
+Stand nach dem Entscheid vom 30.09.: Lanes ist ein Encoder-Modus, gewählt per ENC PUSH
+halten + drehen; das Zoom-Pad ist in diesem Modus das Lanes-Kreuz; die Top-Keys tragen die
+Bank „Lanes“; die acht Strips werden nur mit der Option „Lanes on the strips“ zu Lanes.
+Der UF8 hat keinen Transport: Play kommt von der Tastatur, einer belegten Taste oder dem UF1.
+
+Die Griffe in allen Fällen:
+
+| Griff | Lanes-Modus (Werk) |
+|---|---|
+| Kanal-Encoder | gehörte Lane steppen; mit Shift die Comp-Area unter dem Cursor |
+| Zoom-Pad ↑ / ↓ | Lane steppen; mit Shift die Comp-Area |
+| Zoom-Pad ← / → | vorige / nächste Comp- bzw. Item-Grenze; Shift ← Loop, Shift → A/B |
+| FIT tippen | Comp here; mit Shift die gehörte Lane in den Spielsatz / heraus |
+| FIT halten + Encoder | malen |
+| FIT lang, ohne Drehen | Live-Comping an / aus |
+| Top-Key | nur diese Lane; Shift = dazu / weg; lang = Comp-Lane; Cmd = Comp here aus dieser Lane |
+| ENC PUSH halten + drehen | Encoder-Modus wählen (Karussell) |
+
+### U1: Vocal comppen, Strips bleiben Spuren
+
+**Ausgangslage:** Session mit 24 Spuren auf dem UF8, „Lead Vox“ hat sechs Takes in Lanes.
+
+1. **SEL auf „Lead Vox“.** Die Spur ist fokussiert.
+2. **ENC PUSH halten, Encoder drehen** bis „Lanes“ in der Mitte der Scribbles steht,
+   loslassen. Banner „Encoder • Lanes“. Die Scribbles zeigen wieder die Spuren, die Fader
+   bleiben Lautstärken. Die Top-Keys zeigen „1“ bis „6“ bzw. die Lane-Namen, Lane 1 hell.
+3. **Shift + ←** auf dem Zoom-Pad: Loop auf die erste Zeile. **Play** (Tastatur).
+4. **Encoder drehen:** Take für Take, die helle Top-Key-Lampe wandert mit. Die Wertzeile des
+   Vox-Strips zeigt „Lane“ und den Namen, z. B. „Take 4“.
+5. **FIT tippen:** Take 4 kommt für diese Zeile in den Comp (C1 wird angelegt, die Top-Keys
+   bekommen eine Taste mehr, C1 in eigener Farbe).
+6. **→**, **Shift + ←**, weiter bei 4. Zwischendurch **SEL auf „Backing Vox“**: die Top-Keys
+   zeigen sofort deren Lanes, der Encoder steppt jetzt dort. Kein Moduswechsel nötig.
+
+### U2: Mit den Top-Keys direkt wählen statt steppen
+
+**Ausgangslage:** wie U1, sechs Takes.
+
+1. **Top-Key 5 drücken:** nur Lane 5 spielt, sofort, ohne durch 2 bis 4 zu steppen.
+2. **Cmd + Top-Key 3:** „Comp here“ aus Lane 3, ohne sie vorher zu hören. Für den, der schon
+   weiss, welcher Take es an dieser Stelle ist.
+3. **Top-Key auf C1 lang:** C1 wird die aktive Comp-Lane (bei mehreren Comps: C1 / C2 als
+   Varianten eines Comps).
+
+### U3: Eine Silbe malen, stumm
+
+**Ausgangslage:** wie U1, Comp steht, eine Silbe soll aus Take 2 kommen. „Scrub while
+painting“ aus, „Play the stroke after painting“ an (Werk).
+
+1. **Encoder** auf Lane 2 (Top-Key 2 leuchtet).
+2. Cursor vor die Silbe (← / → an die nächste Grenze, oder Maus).
+3. **FIT halten, Encoder langsam nach rechts:** der Cursor fährt stumm, im Arrange wächst
+   ein Razor auf der Höhe von Lane 2. Zu weit: zurückdrehen.
+4. **FIT loslassen:** die Strecke wird Comp-Area aus Lane 2, REAPER spielt sie mit 1 s
+   Vorlauf einmal ab und springt zurück. Ein Undo-Schritt.
+
+### U4: Das Schnittpult, Lanes auf den Strips
+
+**Ausgangslage:** „Solo Gtr“ mit fünf Takes. Lanes-Modus wie in U1.
+
+1. **`lanes_on_strips_toggle`** (auf einer Taste). Banner „Lanes • Strips“. Die Motorfader
+   fahren auf die Take-Gains der fünf Lanes (je das Item unter dem Cursor), Strips 6 bis 8
+   leer. Scribbles: die Lane-Namen. Farbbalken: Lane 1 hell, der Rest dunkel. Wertzeilen:
+   „Lane“.
+2. **FIT lang:** Live-Comping an, Banner „Lanes • Live paint“.
+3. **Play** vor dem Solo. **SEL 2** in Takt 1, **SEL 5** in Takt 5, **SEL 1** für die letzte
+   Phrase. Jeder SEL ist ein Schnitt, der Farbbalken springt mit.
+4. **Stop.** Drei Comp-Areas in C1 (bzw. je nach Entscheid 6 schon während des Spielens).
+   Ein Undo-Schritt.
+5. **`lanes_on_strips_toggle`** wieder aus: die Strips sind wieder Spuren, die Fader fahren
+   auf die Spurlautstärken zurück.
+
+### U5: Versionen vergleichen und angleichen
+
+**Ausgangslage:** „Bass“ mit drei ganzen Fassungen: Finger, Pick, Synth. Lanes auf den
+Strips an (wie U4, Schritt 1).
+
+1. **Play, SEL „Pick“, SEL „Synth“, SEL „Finger“:** jede Fassung im Song, ohne Aussetzer.
+2. **Synth ist zu laut:** Fader von „Synth“ runter (Entscheid 2: Take-Gain des Items unter
+   dem Cursor). Fein nachstellen mit dem V-Pot desselben Strips.
+3. **V-Pot-Push auf „Synth“:** Loop auf das Synth-Item unter dem Cursor, zum genauen Vergleich.
+4. **Shift + →** (A/B): zwischen den beiden zuletzt gehörten Fassungen hin und her.
+5. Entschieden: SEL „Pick“, Option aus. Pick spielt, die Spur ist wieder ein Kanal.
+
+### U6: Dopplung auf zwei Lanes
+
+**Ausgangslage:** „Rhythm Gtr“ mit vier Einspielungen, Lanes auf den Strips an.
+
+1. **SEL 1, dann SOLO 3:** Lanes 1 und 3 spielen zusammen, beide Farbbalken hell, die
+   Top-Keys 1 und 3 ebenso.
+2. **Encoder eine Rastung:** nur Lane 4 zum Vorhören (exklusiv).
+3. **Shift + →:** zurück auf 1 + 3, der ganze Satz.
+4. **CUT 3:** Lane 3 aus dem Satz, nur noch 1 spielt.
+
+### U7: Drums in der Gruppe, vom UF8 aus
+
+**Ausgangslage:** Kick, Snare, OH L, OH R, Room in Media-Edit-Gruppe 3, je vier Takes.
+„Lanes follow the edit group“ an. Strips bleiben Spuren (Option aus).
+
+1. **SEL auf „Snare“**, Lanes-Modus. Die Top-Keys zeigen die Lanes der Snare.
+2. **Encoder:** alle fünf Spuren schalten mit; man hört das Set aus Take 2, 3, 4.
+3. **Zeitauswahl über den Fill** (Maus oder UF1-Razor), **FIT tippen:** der Fill aus der
+   gehörten Lane landet auf allen fünf Spuren im Comp, phasengleich.
+4. Die Fader bleiben dabei die fünf Drum-Kanäle: man kann beim Comppen die Balance fahren.
+
+### U8: Vierzehn Lanes
+
+**Ausgangslage:** „Lead Vox“ mit 14 Lanes.
+
+- **Option aus:** die Top-Keys zeigen acht Lanes, der Encoder steppt durch alle 14, und die
+  Bank blättert von selbst mit, sobald die gehörte Lane ausserhalb liegt. Blättern von Hand
+  wie bei der FX-Bank.
+- **Option an:** Strips 1 bis 8, **Bank ◄ / ►** zeigt 9 bis 14. Auch hier blättert der
+  Encoder mit.
+
+### U9: Zurück zum Mischen
+
+**Ausgangslage:** Lanes-Modus mit Lanes auf den Strips.
+
+1. **ENC PUSH halten, Encoder drehen** bis „Channel Select“, loslassen.
+2. Die Strips kommen zurück, egal wie die Option steht: Scribbles = Spuren, Farbbalken =
+   Spurfarben, die Fader fahren auf die Spurlautstärken. Das Zoom-Pad zoomt wieder.
+3. Die Option bleibt gespeichert: beim nächsten Wechsel in Lanes sind die Strips wieder Lanes.
+4. Die Top-Keys: zurück auf ihre vorige Bank oder auf „Lanes“ stehen lassen, je nach
+   Entscheid 9.
+
+### U10: UF8 und UF1 zusammen
+
+**Ausgangslage:** beide Flächen, „Lead Vox“ fokussiert. UF8 im Lanes-Modus mit Lanes auf den
+Strips, UF1 im Jog-Modus Lanes.
+
+- **UF8 = Übersicht und Direktwahl:** acht Lanes mit Namen, Lampen für den Spielsatz, SEL
+  wählt, die Fader gleichen Take-Pegel an.
+- **UF1 = Rad und Malen:** Rad steppt, Mitte comppt, Mitte halten + Rad malt, das grosse
+  Display zeigt Name und „3/7“.
+- Beide zeigen denselben Stand, weil der Spielsatz in REAPER steht: steppt das Rad, springt
+  der helle Farbbalken auf dem UF8 mit; drückt man SEL auf dem UF8, steht der neue Name auf
+  dem UF1.
+
+### U11: Spur ohne Lanes
+
+**Ausgangslage:** Lanes-Modus, SEL auf „Kick“, die keine Lanes hat.
+
+- Top-Keys dunkel bis auf „Lanes on“. Encoder und Zoom-Pad tun nichts.
+- Mit Lanes auf den Strips: Strips leer, Fader in Ruhestellung, SEL tut nichts. Die Option
+  bleibt an und greift auf der nächsten Spur mit Lanes.
+- **Top-Key „Lanes on“:** die Kick bekommt Fixed Lanes, ab dann gilt alles oben.
