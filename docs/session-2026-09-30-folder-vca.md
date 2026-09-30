@@ -32,3 +32,15 @@
 
 ## Open
 - Offset semantics of `GetSetTrackGroupMembershipEx` for groups 65..128 not measured.
+
+## Later the same day
+- `699376d`: long SEL spills a VCA only in VCA Mode; REAPER actions REASIXTY_FOLDER_MODE,
+  REASIXTY_VCA_MODE, REASIXTY_VCA_SPILL_SELECTED, REASIXTY_VCA_SPILL_EXIT (fire the builtin,
+  state via toggleActionState).
+- `f1154e6`: long SEL is a binding on UF8 + UF1, factory `strip_spill`, bindings v50 backfill.
+- `efe7876`: UF1 long SEL quiet in REC / REC+MON (`cancelLongPress`; the release fallbacks in
+  `dispatch` fired the long slot for any hold past the threshold, test_press_mode caught it).
+  SEL editor: SHORT left (described), LONG right.
+- `b812a92`: mode banner names the UF1 side-car ("UF1 Mode • RME"); at start it said DAW.
+- "Followers 7-9 missing" was no bug: those tracks were not in the VCA group
+  (probe `rea_sixty_vca_sonde.lua`).
