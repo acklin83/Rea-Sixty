@@ -542,6 +542,7 @@ struct PressRecord {
     Modifier                              mod       = Modifier::Plain;
     bool                                  longArmed = false;
     bool                                  longFired = false;
+    bool                                  longCancelled = false;  // cancelLongPress
     ActionSlot                            longSlot;
     ButtonId                              id        = ButtonId::None;
 };
@@ -5660,6 +5661,7 @@ bool dispatch(ButtonId id, bool pressed)
             // Pull the record out under the lock, then fire after unlock.
             bool                                  have  = false;
             bool                                  fired = false;
+            bool                                  cancelled = false;
             std::chrono::steady_clock::duration   held{};
             int                                   m     = 0;
             {
@@ -5668,6 +5670,7 @@ bool dispatch(ButtonId id, bool pressed)
                 if (it != g_pressStart.end()) {
                     have  = true;
                     fired = it->second.longFired;
+                    cancelled = it->second.longCancelled;
                     held  = std::chrono::steady_clock::now() - it->second.start;
                     m     = static_cast<int>(it->second.mod);
                     g_pressStart.erase(it);
@@ -5676,7 +5679,9 @@ bool dispatch(ButtonId id, bool pressed)
             // If the threshold timer already fired the long slot, the
             // release edge only cleans up — never re-fire short or long.
             if (have && !fired) {
-                if (held >= kLongPressThreshold) {
+                if (held >= kLongPressThreshold && cancelled) {
+                    // cancelLongPress: a long hold does nothing at all.
+                } else if (held >= kLongPressThreshold) {
                     // Fallback: timer normally beats us here, but a fast
                     // release right at the threshold can still land first.
                     // Same Plain-fallback resolution as the arm.
@@ -5795,6 +5800,7 @@ bool dispatch(ButtonId id, bool pressed)
         } else {
             bool                                have  = false;
             bool                                fired = false;
+            bool                                cancelled = false;
             std::chrono::steady_clock::duration held{};
             int                                 m     = 0;
             {
@@ -5803,6 +5809,7 @@ bool dispatch(ButtonId id, bool pressed)
                 if (lit != g_longPressStart.end()) {
                     have  = true;
                     fired = lit->second.longFired;
+                    cancelled = lit->second.longCancelled;
                     held  = std::chrono::steady_clock::now() - lit->second.start;
                     m     = static_cast<int>(lit->second.mod);
                     g_longPressStart.erase(lit);
@@ -5810,7 +5817,7 @@ bool dispatch(ButtonId id, bool pressed)
             }
             // Skip if the threshold timer already fired the additive long.
             const ActionSlot& ls = effectiveLongSlot_(bd, m);
-            if (have && !fired
+            if (have && !fired && !cancelled
                 && held >= kLongPressThreshold
                 && !slotIsEmpty_(ls))
             {
@@ -5864,6 +5871,22 @@ static bool fireResolvedSlot_(ButtonId id, bool wantDouble)
 
 bool fireShortPress(ButtonId id)  { return fireResolvedSlot_(id, false); }
 bool fireDoublePress(ButtonId id) { return fireResolvedSlot_(id, true);  }
+
+// Disarm a long press that dispatch() just armed for `id`, so the threshold
+// never fires it. The UF1 SEL in REC / REC+MON: SEL arms there, and the UF8
+// SELs do not even start their long-press timer in those modes (Frank
+// 2026-09-30). The release then fires the (empty) short slot as usual.
+void cancelLongPress(ButtonId id)
+{
+    std::lock_guard<std::mutex> lk(g_pressMx);
+    // ⛔ Both flags: the threshold timer asks longArmed, but each release path
+    // has its own fallback that fires the long slot for a hold past the
+    // threshold, armed or not (found by test_press_mode, 2026-09-30).
+    for (auto& kv : g_pressStart)
+        if (kv.second.id == id) { kv.second.longArmed = false; kv.second.longCancelled = true; }
+    for (auto& kv : g_longPressStart)
+        if (kv.second.id == id) { kv.second.longArmed = false; kv.second.longCancelled = true; }
+}
 
 // The UF8 per-strip SEL owns its long-press timer too (one shared id, eight
 // strips), so it fires the long slot itself at the threshold. Modifier slot

@@ -27433,6 +27433,15 @@ void onUf1Event(const uf1::InputEvent& ev)
                             }
                         }
                         uf8::bindings::dispatch(uf8::bindings::ButtonId::Uf1Sel, ev.pressed);
+                        // REC / REC+MON: SEL arms, and long SEL stays quiet, as on
+                        // the UF8, whose SEL long-press timer does not run in those
+                        // modes (Frank 2026-09-30). The double press still fires.
+                        if (ev.pressed) {
+                            const auto m = g_selectionMode.load();
+                            if (m == SelectionMode::Rec || m == SelectionMode::RecMon)
+                                uf8::bindings::cancelLongPress(
+                                    uf8::bindings::ButtonId::Uf1Sel);
+                        }
                         break;
                     default: nativeHandled = false; break;
                 }

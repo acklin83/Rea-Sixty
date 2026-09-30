@@ -5073,13 +5073,21 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         ImGui_EndChild(ctx);
     }
     } else {
-        // SEL: single press = built-in track select, so only the LONG column
-        // (and the double press below). One BeginChild, like any key.
-        ImGui_TextDisabled(ctx,
-            "Single press = Select the track (built-in). Long press and");
-        ImGui_TextDisabled(ctx,
-            "double press are assignable:");
-        ImGui_Spacing(ctx);
+        // SEL: the same two columns as any key, SHORT left and LONG right
+        // (Frank 2026-09-30). SHORT is the built-in select, so its column only
+        // says so; LONG (and the double press below) are assignable. Two
+        // children, like the placeholder column above, never a third.
+        double w = colW, h = colH;
+        int childFlags = ImGui_ChildFlags_Borders;
+        if (ImGui_BeginChild(ctx, "sp_col_sel", &w, &h, &childFlags, nullptr)) {
+            ImGui_Text(ctx, "SHORT PRESS");
+            ImGui_Separator(ctx);
+            ImGui_TextDisabled(ctx, "Selects the track (built-in).");
+            ImGui_TextDisabled(ctx, "Shift + SEL extends the selection.");
+            ImGui_TextDisabled(ctx, "In REC / REC + MON it arms the track.");
+        }
+        ImGui_EndChild(ctx);
+        ImGui_SameLine(ctx, nullptr, nullptr);
         drawColumn("LONG PRESS", "lp", bd.longPress, /*isLongCol*/ true);
     }
 

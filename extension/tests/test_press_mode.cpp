@@ -273,6 +273,30 @@ int main()
         bnd::save();
         bnd::load();
         EXPECT(!bnd::getBinding(0, ButtonId::Uf8Select).hasLongPress);
+
+        // UF1 SEL in REC: dispatch arms the long press, cancelLongPress
+        // disarms it, the threshold passes and nothing fires. Without the
+        // cancel the same hold fires once.
+        auto u = bnd::getBinding(0, ButtonId::Uf1Sel);
+        u.hasLongPress = true;
+        u.hasDoublePress = false;
+        u.behavior = Behavior::Momentary;
+        u.longPress[P] = bnd::ActionSlot{};
+        u.longPress[P].type = bnd::ActionType::Builtin;
+        u.longPress[P].action = "t_once";
+        bnd::setBinding(0, ButtonId::Uf1Sel, u);
+        auto hold = [&](bool cancel) {
+            const int n0 = g_onceFires;
+            bnd::dispatch(ButtonId::Uf1Sel, true);
+            if (cancel) bnd::cancelLongPress(ButtonId::Uf1Sel);
+            usleep(600 * 1000);
+            bnd::tickLongPressThreshold();
+            bnd::dispatch(ButtonId::Uf1Sel, false);
+            usleep(450 * 1000);
+            return g_onceFires - n0;
+        };
+        EXPECT(hold(false) == 1);
+        EXPECT(hold(true) == 0);
     }
 
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }

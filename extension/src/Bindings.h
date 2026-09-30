@@ -1182,6 +1182,8 @@ bool fireShortPress(ButtonId id);
 // Fire the long-press slot (if on and set) — the UF8 per-strip SEL times its
 // own long press and calls this at the threshold. Main thread in practice.
 bool fireLongPress(ButtonId id);
+// Disarm the long press dispatch() armed for `id` on this press (UF1 SEL in REC).
+void cancelLongPress(ButtonId id);
 
 // Dispatch a hardware encoder rotation event — fires the bound
 // builtin's run() with `param = stepDelta` (signed integer detents).
