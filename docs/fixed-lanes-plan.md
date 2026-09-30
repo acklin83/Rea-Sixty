@@ -275,6 +275,47 @@ eigenes gesetzt ist (`fillDerivedUf1Slots_`).
    machbar. Mit UF1 teilen sich beide denselben Zustand, weil der Spielsatz in REAPER selbst
    steht (`C_LANEPLAYS`) und A/B pro Spur gemerkt wird.
 
+### Baustein H: Modus-Wahl am UF8, Dropdown im Editor und Karussell am Gerät
+
+Mit G bekommt der UF8-Encoder eine Belegung pro Modus. Dann braucht er auch, was der UF1 dafür
+hat. Alles davon gibt es beim UF1 schon und wird geteilt, nicht nachgebaut:
+
+- **UF1-Jog:** Ring mit Reihenfolge und Sichtbarkeit (`g_uf1JogSeq`, `g_uf1JogVisible`),
+  Karussell SCRUB halten + Rad (`uf1JogModeStep_`), und der Kreuz-Editor folgt dem Live-Modus
+  (SettingsScreen.cpp:210, „switching there switches the surface“).
+- **UF1-Kanal-Encoder:** eigener Ring über dieselben `EncoderMode`-Werte wie der UF8
+  (`g_uf1EncoderSeq`, main.cpp:6909), Karussell MODE halten + Encoder drehen, Editor für
+  Reihenfolge und Sichtbarkeit unter dem Binding-Editor von ENC PUSH (SettingsScreen.cpp:5261).
+
+**1. Dropdown im Binding-Editor (UF8).** Wählt man eine Taste des Zoom-Pads (oder ENC PUSH),
+steht darüber ein Dropdown „Encoder mode“, wie der Jog-Modus-Wähler beim UF1-Kreuz:
+- Es folgt dem Live-Modus, und ein Wechsel dort schaltet den UF8 um. Was man bearbeitet, ist
+  immer das, was das Gerät gerade tut.
+- Damit jeder Modus im Dropdown bearbeitbar ist, bekommt jeder Modus seine fünf Kreuz-IDs (bei
+  17 Modi 85; ButtonId ist 16 Bit). Wie beim UF1 füllt das Laden jede leere Modus-Belegung mit
+  der Zoom-Grundbelegung (Muster `fillDerivedUf1Slots_`), und nur Lanes bekommt ab Werk sein
+  eigenes Kreuz. Für alle bestehenden Modi zoomt das Kreuz also weiter, bis man es umbelegt.
+- Das ändert G: nicht mehr „nur Lanes bekommt IDs“, sondern alle, mit Rückfall wie beim UF1.
+  Das Bindings-Upgrade legt sie an.
+
+**2. Karussell am UF8.** Mit dem Encoder den Encoder-Modus wählen, wie SCRUB + Rad am UF1:
+- **Griff:** ENC PUSH halten und den Kanal-Encoder drehen. Loslassen ohne Drehen löst weiter
+  aus, was auf ENC PUSH liegt (heute: Plug-in-Fenster). Dieselbe Regel wie bei der Mitte im
+  Lanes-Modus: wurde gedreht, war es eine Wahl, und das Loslassen feuert nichts.
+- **Eigener Ring für den UF8**, getrennt vom UF1-Encoder-Ring, aber derselbe Code: der Ring
+  (Reihenfolge, Sichtbarkeit, Speichern, Schritt) wird aus den UF1-Globals in eine kleine
+  Struktur gezogen, die es zweimal gibt (UF1, UF8). So bleiben beide Flächen einzeln
+  einstellbar, und es gibt keine zweite Kopie der Logik.
+- **Reihenfolge und Sichtbarkeit einstellbar**, im selben Editor-Block wie beim UF1, angezeigt
+  unter dem Binding-Editor von UF8 ENC PUSH: Häkchen = im Karussell, ▲ / ▼ = Reihenfolge.
+- **Anzeige ohne grosses Display:** solange ENC PUSH gehalten ist, zeigen die acht
+  Scribble-Strips die Modi des Rings rund um den aktuellen (Fenster wie beim Nav-Overlay),
+  der gewählte in der Mitte hell, Farbbalken als Markierung. Loslassen gibt die Strips
+  zurück (`g_pageDirty` / `g_bankDirty`, wie das Nav-Overlay). Dazu der Banner
+  „Encoder • <Modus>“ und die bestehende `mode_ring`-Liste für das Focused Panel.
+- Die Encoder-Modus-Tasten (NUDGE, FOCUS) und die `encoder_*`-Builtins bleiben, wie sie sind;
+  das Karussell ist ein zusätzlicher Weg, kein Ersatz.
+
 **Nur genannt, nicht Teil dieses Plans:** Mit dem Kreuz-pro-Modus-Muster könnten später auch
 die UF1-Jog-Modi (Playhead, Scrub, Items, Envelope, Razor, Fades) als UF8-Encoder-Modi
 kommen. Dann kann ein UF8 ohne UF1 editieren.
@@ -325,13 +366,17 @@ Danach steht fest, was über die API geht und was über Actions mit vorher geset
 
 1. Sonde (Abschnitt 4).
 2. Kern `LaneModel.h` + ctest.
-3. Baustein B + E + G, der Lanes-Modus mit Spielsatz auf UF1 (Rad) und UF8 (Encoder, Kreuz
+3. Baustein H zuerst in seinem Unterbau: Encoder-Ring in eine geteilte Struktur ziehen (UF1
+   verhält sich danach gleich, ctest), Kreuz-IDs pro UF8-Encoder-Modus mit Rückfall, Dropdown
+   im Editor, Karussell am UF8. Nützt auch ohne Lanes: jeder Encoder-Modus kann sein Kreuz
+   bekommen.
+4. Baustein B + E + G, der Lanes-Modus mit Spielsatz auf UF1 (Rad) und UF8 (Encoder, Kreuz
    pro Modus) zusammen, weil beide dieselben Builtins und dieselbe Tabelle benutzen. Samt
    Nav-Werksbelegung, Banner, Handbuch.
-4. Baustein F.1 Malen mit dem Rad, dann F.2 Live-Comping.
-5. Baustein C, dynamische Bank „Lanes“.
-6. Baustein D, UF8-Ansicht „Lanes“, mit F.3 (SEL als Schnitttasten).
-7. Takes in Items im Lanes-Modus.
+5. Baustein F.1 Malen mit dem Rad, dann F.2 Live-Comping.
+6. Baustein C, dynamische Bank „Lanes“.
+7. Baustein D, UF8-Ansicht „Lanes“, mit F.3 (SEL als Schnitttasten).
+8. Takes in Items im Lanes-Modus.
 
 Jeder Schritt ist für sich nutzbar. B allein ist schon das, was es nirgends gibt.
 
@@ -354,6 +399,9 @@ Jeder Schritt ist für sich nutzbar. B allein ist schon das, was es nirgends gib
    bleibt er „Plug-in-Fenster“?
 9. Holt der Lanes-Encoder-Modus die Bank „Lanes“ selbst auf die UF8-Top-Keys (und beim
    Verlassen die vorige zurück), oder wählt man die Bank selbst?
+10. Karussell-Griff am UF8: ENC PUSH halten + drehen (Vorschlag), oder eine eigene Taste?
+11. Welche Modi sind ab Werk im UF8-Karussell sichtbar: alle 17, oder dieselben wie im
+    UF1-Encoder-Ring plus Lanes?
 
 ---
 
@@ -572,4 +620,21 @@ Entscheid 7 vorausgesetzt.
 5. **FIT halten und Encoder drehen:** malen, wie Fall 3.
 6. **Zurück zum Mischen:** `encoder_nudge` oder die Modus-Taste, die man gewohnt ist. Das
    Zoom-Pad zoomt wieder, die Top-Keys sind wieder auf ihrer Bank (je nach Entscheid 9).
+
+### Fall 14: Encoder-Modus am UF8 wählen und das Kreuz umbelegen
+
+**Ausgangslage:** UF8, Encoder auf Channel Select, Kreuz zoomt.
+
+1. **ENC PUSH halten, Encoder drehen.** Die acht Scribbles zeigen die Modi des Rings, der
+   aktuelle in der Mitte hell; jede Rastung schiebt den Ring eins weiter. Banner „Encoder •
+   Lanes“, als Lanes in der Mitte steht.
+2. **Loslassen.** Der UF8 ist im Modus Lanes, die Scribbles zeigen wieder die Spuren, das
+   Kreuz ist das Lanes-Kreuz. ENC PUSH hat nichts ausgelöst, weil gedreht wurde.
+3. **Settings → Bindings → UF8, Taste ← des Zoom-Pads anklicken.** Das Dropdown „Encoder
+   mode“ steht auf Lanes, weil der UF8 dort ist. Man belegt Shift + ← um. Dropdown auf
+   „Markers“ stellen: der UF8 schaltet auf Markers, das Kreuz zeigt dessen Belegung (die
+   Zoom-Grundbelegung, bis man dort etwas setzt).
+4. **UF8 ENC PUSH im Editor anklicken:** darunter die Liste „Channel encoder modes (UF8)“.
+   Mousewheel und Bank by 1 abhaken, Lanes mit ▲ neben Channel Select schieben. Ab jetzt
+   springt das Karussell zwischen den verbliebenen Modi in dieser Reihenfolge.
 
