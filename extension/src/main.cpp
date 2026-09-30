@@ -34414,6 +34414,33 @@ static void uf1PaintButtonLeds_(bool force, const Uf1BtnAvail& av, bool sideCar)
             if (sideCar && !reasixty::rme::input::passesThrough(
                                static_cast<uint8_t>(kUf1BtnLeds[k].led + 0x18)))
                 continue;
+            // ⇨ A TRANSPORT KEY ORC TAKES WEARS ORC'S LAMP (Frank 30.09.2026: Stop
+            // on Mono in ORC switched Mono, and the lamp showed REAPER's
+            // transport). The press runs orc.json's TotalMix builtin
+            // (dispatchSideCarKey), so the lamp reads that same binding, with the
+            // rule ORC paints by (orcKeySlot) and the colours set in ORC. A key ORC
+            // leaves free stays REAPER's, lamp and press, below.
+            if (sideCar) {
+                uf8::bindings::Binding orcBd;
+                const int bm = static_cast<int>(uf8::bindings::bankModifierSnapshot());
+                const uf8::bindings::ActionSlot* os =
+                    uf8::bindings::sideCarKeyBinding(kUf1BtnLeds[k].id, orcBd)
+                        ? uf8::bindings::orcKeySlot(orcBd, bm) : nullptr;
+                if (os) {
+                    const bool on = uf8::bindings::bindingHasActiveSlotForSet(orcBd, bm);
+                    const uint32_t rgb = uf1BindingLedColour_(orcBd, *os, on);
+                    const int packed = (1 << 30) | (bm << 25) | (on ? (1 << 24) : 0)
+                                     | static_cast<int>(rgb & 0xFFFFFF);
+                    if (force || packed != sBtnLed[k]) {
+                        sBtnLed[k] = packed;
+                        const uint8_t led = kUf1BtnLeds[k].led;
+                        if (force) g_uf1_dev->send(uf1::buildLed(led, true));
+                        g_uf1_dev->send(uf1::buildColourRgb(led, rgb));
+                        g_uf1_dev->send(uf1::buildLedLevel(led, (on && rgb) ? 0x00 : 0x11));
+                    }
+                    continue;
+                }
+            }
             // ⚠ THE LED READS THE SAME BINDING THE PRESS WILL FIRE. Four of
             // these keys resolve per view, so without the remap the lamp
             // would wear the colour of the physical key's binding while the

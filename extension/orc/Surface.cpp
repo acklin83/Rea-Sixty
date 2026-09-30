@@ -117,6 +117,14 @@ void Surface::onEvent_(const ::uf1::InputEvent& ev)
             if (rmei::stripSoftKey(in_, host_, st, cfg, ev, w)) break;
             if (softKeys_(ev)) break;
             if (rmei::button(in_, host_, st, cfg, ev, w)) break;
+            // 360 opens the settings window; the app picks the request up on
+            // its main thread (runApp). CYCLE and CLICK do nothing in ORC for
+            // now (Frank 30.09.2026), whatever orc.json inherited for them.
+            if (ev.id == ::uf1::btn::k360) {
+                if (ev.pressed) settingsRequest_.store(true);
+                break;
+            }
+            if (ev.id == ::uf1::btn::kCycle || ev.id == ::uf1::btn::kClick) break;
             if (auto b = uf8::bindings::fromUf1DeviceId(ev.id);
                 b != uf8::bindings::ButtonId::None)
                 uf8::bindings::dispatch(b, ev.pressed);
@@ -278,9 +286,15 @@ void Surface::loop_()
         return rme::softkeys::hasSecondHalf(
             bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme) + scBank_.load());
     };
-    // ⇨ THE KEYS THAT PASS THROUGH (RmeInput::passesThrough), from orc.json:
-    // bound = dim, its action's state on = lit, unbound = dark. Every other
-    // key's lamp the shared painter sends (RmeFace::keyLamps).
+    // ⇨ THE KEYS THAT PASS THROUGH (RmeInput::passesThrough). Every other key's
+    // lamp the shared painter sends (RmeFace::keyLamps). Frank 30.09.2026:
+    //   SHIFT      as before, from orc.json: bound = dim, on = lit (fine steps).
+    //   transport  lit only when ORC runs it: a TotalMix builtin (orcKeySlot, the
+    //              rule Rea-Sixty's side-car asks too), in the colours set in
+    //              ORC, active when the action is on. A REAPER action from the
+    //              inherited factory layer does nothing here, so dark.
+    //   360        opens the settings window (onEvent_), dim.
+    //   CYCLE, CLICK  nothing in ORC for now, dark.
     std::array<int, 9> ptCache{};
     auto ptNav = std::chrono::steady_clock::time_point{};
     host.buttonLeds = [this, &ptCache, &ptNav](bool f, const uf1spread::BtnAvail&) {
@@ -291,13 +305,29 @@ void Surface::loop_()
             ::uf1::btn::k360 };
         std::array<rmef::KeyLamp, 9> lamps{};
         const int layer = bnd::getActiveLayer();
+        // The modifier dispatch() fires with, so the lamp shows what a press does.
+        const int mod = static_cast<int>(bnd::currentModifierSnapshot());
         for (std::size_t k = 0; k < lamps.size(); ++k) {
-            const bnd::Binding bd = bnd::getBinding(layer, bnd::fromUf1DeviceId(kKeys[k]));
-            const bool bound = !bnd::slotIsEmpty(
-                bd.shortPress[static_cast<int>(bnd::Modifier::Plain)]);
-            lamps[k] = { kKeys[k], !bound ? rmef::Lamp::Dark
-                                 : bnd::bindingHasActiveSlot(bd) ? rmef::Lamp::Lit
-                                                                 : rmef::Lamp::Dim };
+            const std::uint8_t key = kKeys[k];
+            rmef::KeyLamp& l = lamps[k];
+            l.btn = key;
+            l.lamp = rmef::Lamp::Dark;
+            if (key == ::uf1::btn::kCycle || key == ::uf1::btn::kClick) continue;
+            if (key == ::uf1::btn::k360) { l.lamp = rmef::Lamp::Dim; continue; }
+            const bnd::Binding bd = bnd::getBinding(layer, bnd::fromUf1DeviceId(key));
+            if (key == ::uf1::btn::kShift) {
+                const bool bound = !bnd::slotIsEmpty(
+                    bd.shortPress[static_cast<int>(bnd::Modifier::Plain)]);
+                l.lamp = !bound ? rmef::Lamp::Dark
+                       : bnd::bindingHasActiveSlot(bd) ? rmef::Lamp::Lit : rmef::Lamp::Dim;
+                continue;
+            }
+            const bnd::ActionSlot* slot = bnd::orcKeySlot(bd, mod);
+            if (!slot) continue;
+            const bool on = bnd::bindingHasActiveSlotForSet(bd, mod);
+            const std::uint32_t rgb = uf1sk::bindingLedColour(bd, *slot, on);
+            l.lamp = !rgb ? rmef::Lamp::Dark : on ? rmef::Lamp::Lit : rmef::Lamp::Dim;
+            l.rgb = static_cast<std::int32_t>(rgb);
         }
         const rmef::Out o{ [this](std::vector<std::uint8_t> fr) { ++sent_; dev_.send(std::move(fr)); },
                            [this](std::vector<std::uint8_t> fr) { ++sent_; dev_.sendPriority(std::move(fr)); } };

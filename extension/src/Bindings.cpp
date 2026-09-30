@@ -4755,26 +4755,38 @@ bool refreshSideCarSource(bool force)
     return false;
 }
 
-bool dispatchSideCarKey(ButtonId id, bool pressed)
+const ActionSlot* orcKeySlot(const Binding& bd, int mod)
 {
-    if (!isSideCarKey_(id)) return false;
-    ActionSlot slot;
-    {
-        std::lock_guard<std::mutex> lk(g_cfgMutex);
-        const Config* f = g_scSrc.file.get();
-        if (!f) return false;
-        const auto& L = f->layers[std::clamp(f->activeLayer, 0, 2)].bindings;
-        auto it = L.find(id);
-        if (it == L.end()) return false;
-        slot = it->second.shortPress[static_cast<int>(bankModifierSnapshot())];
-    }
+    if (mod < 0 || mod >= kModifierCount) return nullptr;
+    const ActionSlot& s = bd.shortPress[mod];
     // Only what ORC can run on its own, a TotalMix builtin. A REAPER action in
     // orc.json is ORC's inherited factory layer and means nothing there, so the
-    // key stays REAPER's (Frank 25.09.: "könnte ja an reasixty durchgehen falls
+    // key stays the host's (Frank 25.09.: "könnte ja an reasixty durchgehen falls
     // nicht besetzt").
-    if (slot.type != ActionType::Builtin || slot.action.rfind("rme_", 0) != 0)
-        return false;
-    runSlot_(slot, /*firing*/ pressed, pressed);
+    if (s.type != ActionType::Builtin || s.action.rfind("rme_", 0) != 0) return nullptr;
+    return &s;
+}
+
+bool sideCarKeyBinding(ButtonId id, Binding& out)
+{
+    if (!isSideCarKey_(id)) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    const Config* f = g_scSrc.file.get();
+    if (!f) return false;
+    const auto& L = f->layers[std::clamp(f->activeLayer, 0, 2)].bindings;
+    auto it = L.find(id);
+    if (it == L.end()) return false;
+    out = it->second;
+    return true;
+}
+
+bool dispatchSideCarKey(ButtonId id, bool pressed)
+{
+    Binding bd;
+    if (!sideCarKeyBinding(id, bd)) return false;
+    const ActionSlot* slot = orcKeySlot(bd, static_cast<int>(bankModifierSnapshot()));
+    if (!slot) return false;
+    runSlot_(*slot, /*firing*/ pressed, pressed);
     return true;
 }
 

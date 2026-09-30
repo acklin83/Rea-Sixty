@@ -1065,6 +1065,16 @@ bool refreshSideCarSource(bool force = false);
 // fires the TotalMix builtin the source file puts there and returns true, or
 // returns false and the key is the host's as before.
 bool dispatchSideCarKey(ButtonId id, bool pressed);
+// ⇨ ONE DECISION FOR THE PRESS AND THE LAMP (Frank 30.09.2026: Stop on Mono in
+// ORC fired Mono in REAPER, but the lamp showed REAPER's transport). A transport
+// key is ORC's when its slot for `mod` is a TotalMix builtin (rme_...); anything
+// else in orc.json, a REAPER action from the inherited factory layer included,
+// leaves the key to the host. ORC's own lamp, Rea-Sixty's side-car lamp and
+// dispatchSideCarKey all ask this. nullptr = not ORC's.
+const ActionSlot* orcKeySlot(const Binding& bd, int mod);
+// Rea-Sixty: the side-car source file's binding for a transport key (Rwd, Ffw,
+// Stop, Play, Rec). False without ORC's file, or for any other key.
+bool sideCarKeyBinding(ButtonId id, Binding& out);
 // Put RME side-car bank `rel` (0-based) back to what a fresh file has, and save.
 void restoreRmeSideCarBank(int rel);
 bool importFrom(const std::string& path);

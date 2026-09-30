@@ -57,6 +57,9 @@ class Surface {
     // and a second copy of it would be one of them going stale.
     bool strip() const { return in_.strip.load(); }
     void setStrip(bool on) { in_.strip.store(on); }
+    // 360 was pressed: the app opens the settings window on its main thread.
+    // Set on the device thread, taken (and cleared) by the app's timer.
+    bool takeSettingsRequest() { return settingsRequest_.exchange(false); }
 
   private:
     void loop_();
@@ -68,6 +71,7 @@ class Surface {
     mutable std::mutex mu_;
     Status             st_;
     std::atomic<bool>  quit_{false};
+    std::atomic<bool>  settingsRequest_{false};
     std::thread        th_;
     std::thread        pacer_;
     ::uf1::UF1Device   dev_;

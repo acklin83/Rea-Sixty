@@ -202,6 +202,22 @@ int main()
         out.clear();
         face::emitLamps(two, 2, cache, navAt, o, false);
         EXPECT(out.empty());                              // unchanged: nothing sent
+
+        // A lamp with a colour of its own (30.09.2026, ORC's transport keys):
+        // that colour goes out, and a change of colour alone is sent again.
+        face::KeyLamp red[1] = { { b::kStop, L::Lit } };
+        red[0].rgb = 0xFF0000;
+        int rc[1] = { 0 };
+        const std::uint8_t sLed = b::kStop - 0x18;
+        out.clear();
+        face::emitLamps(red, 1, rc, navAt, o, false);
+        EXPECT(out.size() == 2);
+        EXPECT(out[0] == ::uf1::buildColourRgb(sLed, 0xFF0000u));
+        EXPECT(out[1] == ::uf1::buildLedLevel(sLed, 0x00));
+        red[0].rgb = 0x00FF00;
+        out.clear();
+        face::emitLamps(red, 1, rc, navAt, o, false);
+        EXPECT(out.size() == 2 && out[0] == ::uf1::buildColourRgb(sLed, 0x00FF00u));
     }
 
     // ── the FX row on the glass (29.09.2026) ─────────────────────────────────

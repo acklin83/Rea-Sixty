@@ -145,6 +145,10 @@ void runApp(Surface& surface, const std::function<bool()>& interrupted)
                                                          repeats:YES
                                                            block:^(NSTimer*) {
             if (interrupted && interrupted()) [delegate quit:nil];
+            // 360 on the UF1 (Surface::onEvent_): the settings window, here on
+            // the main thread where AppKit wants it.
+            if (g_surface && g_surface->takeSettingsRequest())
+                [[OrcSettingsWindowController shared] present];
         }];
         [NSApp run];
         [watch invalidate];

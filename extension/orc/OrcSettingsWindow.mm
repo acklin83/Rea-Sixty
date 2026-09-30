@@ -194,6 +194,10 @@ NSStackView* withUnit(NSView* field, NSString* unit)
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* skActions;
 @property (nonatomic, strong) NSMutableArray<NSTextField*>*   skKeyNumbers;
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* trActions;
+@property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* skActive;
+@property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* skInactive;
+@property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* trActive;
+@property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* trInactive;
 @property (nonatomic, strong) NSTimer* tick;
 @end
 
@@ -238,6 +242,10 @@ NSStackView* withUnit(NSView* field, NSString* unit)
         self.skActions    = [NSMutableArray array];
         self.skKeyNumbers = [NSMutableArray array];
         self.trActions    = [NSMutableArray array];
+        self.skActive     = [NSMutableArray array];
+        self.skInactive   = [NSMutableArray array];
+        self.trActive     = [NSMutableArray array];
+        self.trInactive   = [NSMutableArray array];
 
         NSTabView* tabs = [[NSTabView alloc] initWithFrame:w.contentView.bounds];
         tabs.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -431,19 +439,29 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     [head addRowWithViews:@[ label(@"Name"), self.skName ]];
     [v addArrangedSubview:head];
 
-    NSGridView* keys = [NSGridView gridViewWithNumberOfColumns:3 rows:0];
+    // ⇨ THE LAMP COLOURS (Frank 30.09.2026: "die lampenfarben wären eigentlich
+    // für ORC auch geil"), per key and half: Active while the action is on,
+    // Inactive otherwise, SSL's names. They ride the half's own set
+    // (ActionSlot::led), which the painter already reads (staticBankCell), so
+    // Rea-Sixty's side-car shows them too.
+    NSGridView* keys = [NSGridView gridViewWithNumberOfColumns:5 rows:0];
     keys.columnSpacing = 10.0;
     keys.rowSpacing = 6.0;
-    [keys addRowWithViews:@[ dim(@"Key"), dim(@"Label"), dim(@"Action") ]];
+    [keys addRowWithViews:@[ dim(@"Key"), dim(@"Label"), dim(@"Action"),
+                             dim(@"Active"), dim(@"Inactive") ]];
     for (int i = 0; i < 4; ++i) {
         NSTextField* num = label([NSString stringWithFormat:@"%d", i + 1]);
         NSTextField* lab = [self field:@selector(skLabelChanged:) width:140];
         lab.tag = i;
-        NSPopUpButton* act = [self popUp:@selector(skActionChanged:) tag:i width:300];
+        NSPopUpButton* act = [self popUp:@selector(skActionChanged:) tag:i width:240];
+        NSPopUpButton* on  = [self palettePop:@selector(skLedChanged:) tag:i width:130];
+        NSPopUpButton* off = [self palettePop:@selector(skLedChanged:) tag:i + 10 width:130];
         [self.skKeyNumbers addObject:num];
         [self.skLabels addObject:lab];
         [self.skActions addObject:act];
-        [keys addRowWithViews:@[ num, lab, act ]];
+        [self.skActive addObject:on];
+        [self.skInactive addObject:off];
+        [keys addRowWithViews:@[ num, lab, act, on, off ]];
     }
     [v addArrangedSubview:keys];
 
@@ -452,14 +470,21 @@ NSStackView* withUnit(NSView* field, NSString* unit)
                                            action:@selector(skFactory:)];
     [v addArrangedSubview:factory];
 
-    NSGridView* tr = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
+    // The same two colours for the transport keys, on the key's own binding.
+    // Rea-Sixty's side-car lamp reads them too (orcKeySlot, Bindings.h).
+    NSGridView* tr = [NSGridView gridViewWithNumberOfColumns:4 rows:0];
     tr.columnSpacing = 10.0;
     tr.rowSpacing = 6.0;
-    [tr addRowWithViews:@[ dim(@"Transport"), dim(@"Action") ]];
+    [tr addRowWithViews:@[ dim(@"Transport"), dim(@"Action"),
+                           dim(@"Active"), dim(@"Inactive") ]];
     for (int k = 0; k < 5; ++k) {
-        NSPopUpButton* act = [self popUp:@selector(trActionChanged:) tag:k width:300];
+        NSPopUpButton* act = [self popUp:@selector(trActionChanged:) tag:k width:240];
+        NSPopUpButton* on  = [self palettePop:@selector(trLedChanged:) tag:k width:130];
+        NSPopUpButton* off = [self palettePop:@selector(trLedChanged:) tag:k + 10 width:130];
         [self.trActions addObject:act];
-        [tr addRowWithViews:@[ label(@(kTransport[k].name)), act ]];
+        [self.trActive addObject:on];
+        [self.trInactive addObject:off];
+        [tr addRowWithViews:@[ label(@(kTransport[k].name)), act, on, off ]];
     }
     [v setCustomSpacing:20.0 afterView:factory];
     [v addArrangedSubview:tr];
@@ -481,37 +506,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     [grid addRowWithViews:@[ dim(@"TotalMix"), dim(@"UF1"), dim(@"Channels") ]];
 
     for (int i = 0; i < 9; ++i) {
-        NSPopUpButton* pop = [self popUp:@selector(colourChanged:) tag:i width:200];
-        // The word is the entry and a drawn swatch sits beside it: a name can be
-        // searched, quoted and compared against SSL's own list. Palette.cpp is
-        // the one place those names live, and they are SSL's (issue #8).
-        // ⇨ Only what lights: 0x0D-0x0F show nothing on a panel, and offering
-        // them gave three more entries called "off". The palette index rides on
-        // the item's tag, so the menu position is free.
-        for (int p = 0; p < 16; ++p) {
-            const auto idx = static_cast<uint8_t>(p);
-            const auto rgb = uf8::paletteSwatch(idx);
-            if (p != 0 && !rgb) continue;
-            NSString* t = p == 0 ? @"Off" : @(uf8::paletteName(idx));
-            [pop addItemWithTitle:t];
-            NSMenuItem* it = pop.lastItem;
-            it.tag = p;
-            if (rgb) {
-                const auto c = *rgb;
-                it.image = [NSImage imageWithSize:NSMakeSize(12, 12)
-                                          flipped:NO
-                                   drawingHandler:^BOOL(NSRect r) {
-                    [[NSColor colorWithSRGBRed:c.r / 255.0
-                                         green:c.g / 255.0
-                                          blue:c.b / 255.0
-                                         alpha:1.0] setFill];
-                    NSRectFill(r);
-                    [[NSColor.separatorColor colorWithAlphaComponent:0.6] setStroke];
-                    NSFrameRect(r);
-                    return YES;
-                }];
-            }
-        }
+        NSPopUpButton* pop = [self palettePop:@selector(colourChanged:) tag:i width:200];
         [self.colourPops addObject:pop];
 
         NSTextField* worn = [NSTextField labelWithString:@""];
@@ -546,6 +541,68 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     [p.widthAnchor constraintEqualToConstant:width].active = YES;
     p.cell.lineBreakMode = NSLineBreakByTruncatingMiddle;
     return p;
+}
+
+// ⇨ ONE COLOUR MENU for the TotalMix colours and the key lamps. The word is the
+// entry and a drawn swatch sits beside it: a name can be searched, quoted and
+// compared against SSL's own list. Palette.cpp is the one place those names
+// live, and they are SSL's (issue #8). Only what lights: 0x0D-0x0F show nothing
+// on a panel, and offering them gave three more entries called "off". The
+// palette index rides on the item's tag, so the menu position is free.
+- (NSPopUpButton*)palettePop:(SEL)action tag:(NSInteger)tag width:(CGFloat)width
+{
+    NSPopUpButton* pop = [self popUp:action tag:tag width:width];
+    for (int p = 0; p < 16; ++p) {
+        const auto idx = static_cast<uint8_t>(p);
+        const auto rgb = uf8::paletteSwatch(idx);
+        if (p != 0 && !rgb) continue;
+        NSString* t = p == 0 ? @"Off" : @(uf8::paletteName(idx));
+        [pop addItemWithTitle:t];
+        NSMenuItem* it = pop.lastItem;
+        it.tag = p;
+        if (rgb) {
+            const auto c = *rgb;
+            it.image = [NSImage imageWithSize:NSMakeSize(12, 12)
+                                      flipped:NO
+                               drawingHandler:^BOOL(NSRect r) {
+                [[NSColor colorWithSRGBRed:c.r / 255.0
+                                     green:c.g / 255.0
+                                      blue:c.b / 255.0
+                                     alpha:1.0] setFill];
+                NSRectFill(r);
+                [[NSColor.separatorColor colorWithAlphaComponent:0.6] setStroke];
+                NSFrameRect(r);
+                return YES;
+            }];
+        }
+    }
+    return pop;
+}
+
+// A lamp colour in a colour menu: Off, or the SSL entry it is. A colour that is
+// no entry (set elsewhere) shows no selection rather than a wrong one.
+static void selectLed(NSPopUpButton* pop, const uint8_t (&rgb)[3], bnd::Brightness bri)
+{
+    if (bri == bnd::Brightness::Off) { [pop selectItemWithTag:0]; return; }
+    for (int p = 1; p < 16; ++p) {
+        const auto s = uf8::paletteSwatch(static_cast<uint8_t>(p));
+        if (s && s->r == rgb[0] && s->g == rgb[1] && s->b == rgb[2]) {
+            [pop selectItemWithTag:p];
+            return;
+        }
+    }
+    [pop selectItemAtIndex:-1];
+}
+
+// The menu's choice into a lamp colour. Active is bright, Inactive dim, the way
+// a fresh binding has them (white, Bright / Dim); Off is the lamp's own Off.
+static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brightness& bri)
+{
+    if (tag <= 0) { bri = bnd::Brightness::Off; return; }
+    const auto s = uf8::paletteSwatch(static_cast<uint8_t>(tag));
+    if (!s) return;
+    rgb[0] = s->r; rgb[1] = s->g; rgb[2] = s->b;
+    bri = active ? bnd::Brightness::Bright : bnd::Brightness::Dim;
 }
 
 // Text fields have next to no intrinsic width when they are empty, so every one
@@ -713,6 +770,16 @@ NSStackView* withUnit(NSView* field, NSString* unit)
         }
         if (dyn) [self.skActions[i] selectItemAtIndex:-1];
         else     [self selectAction:self.skActions[i] slot:sp];
+        // A snapshot or layout bank paints its keys white by state (RmeSoftKeys).
+        self.skActive[i].enabled = !dyn;
+        self.skInactive[i].enabled = !dyn;
+        uint8_t rgb[3]; bnd::Brightness bri;
+        bnd::effectiveLedActive(bd, sp, rgb, bri);
+        if (dyn) [self.skActive[i] selectItemAtIndex:-1];
+        else     selectLed(self.skActive[i], rgb, bri);
+        bnd::effectiveLedInactive(bd, sp, rgb, bri);
+        if (dyn) [self.skInactive[i] selectItemAtIndex:-1];
+        else     selectLed(self.skInactive[i], rgb, bri);
     }
 
     const int layer = bnd::getActiveLayer();
@@ -725,7 +792,42 @@ NSStackView* withUnit(NSView* field, NSString* unit)
             [self selectAction:self.trActions[k] slot:sp];
         else
             [self.trActions[k] selectItemAtIndex:0];
+        selectLed(self.trActive[k], bd.color, bd.brightness);
+        selectLed(self.trInactive[k], bd.inactiveColor, bd.inactiveBrightness);
     }
+}
+
+// Tags 0-3 Active, 10-13 Inactive; the colour goes into the showing half's set.
+- (void)skLedChanged:(NSPopUpButton*)sender
+{
+    const int bank = [self skBankAbs];
+    const int half = [self skHalfNow];
+    const bool active = sender.tag < 10;
+    const int i = (int)(sender.tag % 10);
+    bnd::Binding bd = bnd::getUf1SoftBankSlot(bank, i);
+    auto& led = bd.shortPress[half].led;
+    if (active) {
+        led.hasActive = true;
+        ledFromTag(sender.selectedTag, true, led.color, led.brightness);
+    } else {
+        led.hasInactive = true;
+        ledFromTag(sender.selectedTag, false, led.inactiveColor, led.inactiveBrightness);
+    }
+    bnd::setUf1SoftBankSlot(bank, i, bd);
+    [self refreshSoftKeys];
+}
+
+// Tags 0-4 Active, 10-14 Inactive, on the transport key's binding.
+- (void)trLedChanged:(NSPopUpButton*)sender
+{
+    const bool active = sender.tag < 10;
+    const int k = (int)(sender.tag % 10);
+    const int layer = bnd::getActiveLayer();
+    bnd::Binding bd = bnd::getBinding(layer, kTransport[k].id);
+    if (active) ledFromTag(sender.selectedTag, true, bd.color, bd.brightness);
+    else        ledFromTag(sender.selectedTag, false, bd.inactiveColor, bd.inactiveBrightness);
+    bnd::setBinding(layer, kTransport[k].id, bd);
+    [self refreshSoftKeys];
 }
 
 - (std::string)actionAt:(NSInteger)index
@@ -786,7 +888,9 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     bnd::Binding bd = bnd::getUf1SoftBankSlot(bank, i);
     auto& sp = bd.shortPress[half];
     const std::string keepLabel = sp.label;
+    const bnd::LedOverride keepLed = sp.led;   // the colour belongs to the key
     sp = bnd::ActionSlot{};
+    sp.led = keepLed;
     if (!a.empty()) {
         sp.type   = bnd::ActionType::Builtin;
         sp.action = a;

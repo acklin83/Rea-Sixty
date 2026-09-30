@@ -792,6 +792,14 @@ if(NOT WIN32)
     target_link_libraries(test_press_mode PRIVATE Threads::Threads)
     add_test(NAME press_mode COMMAND test_press_mode)
 
+    # ORC's transport keys: one decision for press and lamp, in ORC's colours.
+    add_executable(test_orc_keys tests/test_orc_keys.cpp
+        src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp
+        src/Uf1SoftKeys.cpp src/UF1Protocol.cpp src/Uf1Text.cpp src/TrackName.cpp)
+    target_include_directories(test_orc_keys PRIVATE src "${WDL_DIR}")
+    target_link_libraries(test_orc_keys PRIVATE Threads::Threads)
+    add_test(NAME orc_keys COMMAND test_orc_keys)
+
     # The UF1 jog in Grid unit never falls between the grid (JogGrid.h, header only).
     add_executable(test_jog_grid tests/test_jog_grid.cpp)
     target_include_directories(test_jog_grid PRIVATE src)

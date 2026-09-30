@@ -158,7 +158,8 @@ levels, the EQ, reverb and echo. ORC runs in the menu bar and needs no DAW.</p>
 <p>Rea-Sixty, my REAPER extension for SSL surfaces, shows the same TotalMix view on the UF1 inside
 REAPER: hold SHIFT, press MODE, and pick RME. It runs the code ORC runs, so the surface works as
 this page describes, with two differences: MODE opens REAPER's mode menu, and a transport key runs
-the action you gave it in ORC, or else stays REAPER's transport.</p>
+the action you gave it in ORC, its lamp in ORC's colours, or else stays REAPER's transport, lamp
+included.</p>
 <h3>Who holds the UF1</h3>
 <p>When REAPER starts, Rea-Sixty asks ORC for the UF1 and ORC lets go of the surface and of the
 TotalMix port. When REAPER quits, ORC takes both back. The menu bar then reads
@@ -249,8 +250,8 @@ right step the submix through the visible outputs.</p>
   <a href="#c-bank"><rect class="k" x="322" y="341" width="22" height="22" rx="3"/>
     <rect class="k" x="365" y="341" width="22" height="22" rx="3"/></a>
   <text class="lb" x="354" y="373">BANK</text>
-  <a href="#c-idle"><rect class="k" x="410" y="341" width="22" height="22" rx="3"/>
-    <rect class="k" x="451" y="341" width="22" height="22" rx="3"/></a>
+  <a href="#c-360"><rect class="k" x="410" y="341" width="22" height="22" rx="3"/></a>
+  <a href="#c-idle"><rect class="k" x="451" y="341" width="22" height="22" rx="3"/></a>
   <text class="lb" x="421" y="373">360</text><text class="lb" x="462" y="373">SCRUB</text>
   <a href="#c-channel"><circle cx="248" cy="335" r="36" fill="none" stroke="var(--panel-line)"/>
     <circle class="knob" cx="248" cy="335" r="24"/></a>
@@ -398,7 +399,9 @@ display shows that level. Target and step are on the settings page
 <div class="ctl" id="c-transport" data-btn="kRwd kFfw kStop kPlay kRec">
 <h3>Transport keys</h3>
 <p>Empty out of the box. The settings page <a href="#set-softkeys">Soft Keys</a> puts any of the
-<a href="#actions">actions</a> on them, the DuRec recorder for example.</p>
+<a href="#actions">actions</a> on them, the DuRec recorder for example, and sets each key's lamp: its
+<em>Active</em> colour while the action is on, its <em>Inactive</em> colour otherwise. A key with no
+action stays dark.</p>
 </div>
 
 <div class="ctl" id="c-shift" data-btn="kShift">
@@ -407,9 +410,14 @@ display shows that level. Target and step are on the settings page
 Controls that step through a list, such as an EQ type, still move one entry at a time.</p>
 </div>
 
-<div class="ctl" id="c-idle" data-btn="kFlip kScrub kMode k360 kTLeft kTRight kCycle kClick kT1 kT2">
+<div class="ctl" id="c-360" data-btn="k360">
+<h3>360</h3>
+<p>Opens the settings window.</p>
+</div>
+
+<div class="ctl" id="c-idle" data-btn="kFlip kScrub kMode kTLeft kTRight kCycle kClick kT1 kT2">
 <h3>Keys ORC leaves alone</h3>
-<p>FLIP, SCRUB, MODE, 360 and the row of six keys above the transport do nothing in ORC.</p>
+<p>FLIP, SCRUB, MODE and the row of six keys above the transport do nothing in ORC.</p>
 </div>
 </div>
 </div>
@@ -493,8 +501,10 @@ remote cannot see reads <em>hidden</em>.</p>
 <tr><th>Name</th><td>The bank's name on the large screen.</td></tr>
 <tr><th>Label, Action</th><td>Per key: what the screen says and what a press does. An empty label
 takes the action's own.</td></tr>
+<tr><th>Active, Inactive</th><td>Per key: the lamp's colour while its action is on, and otherwise.
+<em>Off</em> leaves the lamp dark. A bank of snapshots or layouts lights its keys white.</td></tr>
 <tr><th>Factory set for this bank</th><td>Puts this bank back the way it came.</td></tr>
-<tr><th>Transport</th><td>An action for each of the five transport keys.</td></tr>
+<tr><th>Transport</th><td>An action and the two lamp colours for each of the five transport keys.</td></tr>
 </tbody></table>
 <h3 id="set-colours">Colours</h3>
 <p>TotalMix has nine channel colours, the UF1 its own palette. This page says which UF1 colour each

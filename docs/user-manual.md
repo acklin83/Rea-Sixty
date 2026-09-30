@@ -579,6 +579,8 @@ the mode that is showing.
 **RME**: the UF1 then drives RME TotalMix FX instead of REAPER, with ORC's settings.
 ORC's manual describes that view control by control:
 <https://acklin83.github.io/ORC/>. Without ORC the page does not appear.
+A transport key that has a TotalMix action in ORC runs it here as well, and its lamp shows it in
+ORC's colours; a transport key ORC leaves free stays REAPER's, lamp included.
 
 ## The channel (all views)
 

@@ -205,14 +205,15 @@ void emitLamps(const KeyLamp* lamps, std::size_t n, int* cache,
     bool navSent = false;
     for (std::size_t k = 0; k < n; ++k) {
         const KeyLamp& l = lamps[k];
-        const int packed = static_cast<int>(l.lamp) + 1;
+        const std::uint32_t rgb = l.rgb >= 0 ? static_cast<std::uint32_t>(l.rgb) & 0xFFFFFFu
+                                : l.lamp == Lamp::Lit ? 0xFFFFFFu
+                                : l.lamp == Lamp::Dim ? 0x3F3F3Fu : 0u;
+        const int packed = ((static_cast<int>(l.lamp) + 1) << 24) | static_cast<int>(rgb);
         const bool nav = isNav(l.btn);
         const bool again = nav && reassert && l.lamp != Lamp::Dark;
         if (!force && packed == cache[k] && !again) continue;
         cache[k] = packed;
         const std::uint8_t led = static_cast<std::uint8_t>(l.btn - 0x18);
-        const std::uint32_t rgb = l.lamp == Lamp::Lit ? 0xFFFFFFu
-                                : l.lamp == Lamp::Dim ? 0x3F3F3Fu : 0u;
         if (force || nav) o.send(::uf1::buildLed(led, true));
         o.send(::uf1::buildColourRgb(led, rgb));
         o.send(::uf1::buildLedLevel(led, l.lamp == Lamp::Lit ? 0x00 : 0x11));

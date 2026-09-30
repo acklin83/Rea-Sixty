@@ -117,6 +117,10 @@ enum class Lamp : std::uint8_t { Dark = 0, Dim = 1, Lit = 2 };
 struct KeyLamp {
     std::uint8_t btn;   // UF1 button id; the LED id is btn - 0x18
     Lamp         lamp;
+    // ⇨ A COLOUR OF ITS OWN, for a key whose binding runs HERE (30.09.2026: the
+    // transport keys ORC takes, coloured in ORC). 0xRRGGBB already dimmed for
+    // Dim (uf1sk::bindingLedColour); -1 = the white rule above.
+    std::int32_t rgb = -1;
 };
 // What the painter knows and the lamps need, gathered in one place so the rule
 // is a pure function a test can hold.
@@ -136,8 +140,8 @@ struct LampFacts {
 std::array<KeyLamp, 18> keyLamps(const LampFacts& f);
 
 // Send `n` lamps: the bytes REAPER's own key pass sends (FF38 colour, FF39 0x00
-// lit / 0x11 otherwise, FF3B on force), dim = white quartered. `cache` holds
-// lamp + 1 per entry, 0 = never sent. Nav-cross keys re-send every 500 ms while
+// lit / 0x11 otherwise, FF3B on force), dim = white quartered unless the lamp
+// brings its own colour. `cache` holds lamp and colour per entry, 0 = never sent. Nav-cross keys re-send every 500 ms while
 // they glow, through `navSent`. ORC uses it for the keys that pass through.
 void emitLamps(const KeyLamp* lamps, std::size_t n, int* cache,
                std::chrono::steady_clock::time_point& navSent, const Out& o, bool force);
