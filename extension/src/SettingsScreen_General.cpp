@@ -152,6 +152,8 @@ int  reasixty_visibilityFollow();
 void reasixty_setVisibilityFollow(int v);
 bool reasixty_pinnedSurvivesBanking();
 void reasixty_setPinnedSurvivesBanking(bool v);
+bool reasixty_vcaSpillShowHidden();
+void reasixty_setVcaSpillShowHidden(bool on);
 int  reasixty_uiSpelling();
 void reasixty_setUiSpelling(int v);
 bool reasixty_stripFollowsFocusedFx();
@@ -1195,6 +1197,18 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
         if (ImGui_Checkbox(ctx, "Pinned tracks survive banking", &pinSurvives)) {
             reasixty_setPinnedSurvivesBanking(pinSurvives);
         }
+    }
+
+    // VCA spill (long SEL on a VCA lead): whether followers the mirrored view
+    // hides come along. Frank 2026-09-30.
+    {
+        bool vcaHidden = reasixty_vcaSpillShowHidden();
+        if (ImGui_Checkbox(ctx, "VCA spill shows hidden tracks", &vcaHidden)) {
+            reasixty_setVcaSpillShowHidden(vcaHidden);
+        }
+        help_(ctx,
+            "Long-press SEL on a VCA lead spills its followers.\n"
+            "On: followers hidden in the TCP or Mixer come along.");
     }
 
     // Touch a UF8 fader → that strip's track becomes the only selected

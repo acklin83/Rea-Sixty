@@ -821,6 +821,11 @@ if(NOT WIN32)
     target_include_directories(test_mcp_folder_collapse PRIVATE src)
     add_test(NAME mcp_folder_collapse COMMAND test_mcp_folder_collapse)
 
+    # VCA spill: members, top leads, the chain of spilled leads (VcaSpill.h).
+    add_executable(test_vca_spill tests/test_vca_spill.cpp)
+    target_include_directories(test_vca_spill PRIVATE src)
+    add_test(NAME vca_spill COMMAND test_vca_spill)
+
     add_executable(test_uc1_protocol tests/test_uc1_protocol.cpp src/UC1Protocol.cpp)
     target_include_directories(test_uc1_protocol PRIVATE src)
     add_test(NAME uc1_protocol COMMAND test_uc1_protocol)

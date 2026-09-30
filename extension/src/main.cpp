@@ -99,6 +99,7 @@
 #include "RmeFace.h"
 #include "JogGrid.h"
 #include "McpFolderCollapse.h"
+#include "VcaSpill.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
 #endif
@@ -1463,6 +1464,20 @@ std::atomic<bool> g_uc1OutGainFaderMode{false};
 std::atomic<bool> g_folderMode{false};
 std::atomic<bool> g_showOnlySelected{false};
 
+// VCA (Frank 30.09.2026, plan .local-docs/vca-spill-plan.md, logic VcaSpill.h).
+// vca_mode: like folder_mode, only the VCA leads that follow no other lead.
+// Spill: long SEL on a lead (or vca_spill_selected) puts that lead on the left
+// strips and its followers after it; nothing else is on the surface meanwhile.
+// g_vcaChain = the spilled leads, outermost first, main thread only;
+// g_vcaSpillActive mirrors "chain not empty" for the device thread.
+std::atomic<bool> g_vcaMode{false};
+std::atomic<bool> g_vcaSpillActive{false};
+std::atomic<bool> g_vcaSpillShowHidden{true};   // followers hidden in TCP/MCP too
+std::atomic<bool> g_vcaSpillSelectedReq{false}; // vca_spill_selected, drained on main
+std::atomic<bool> g_vcaSpillExitReq{false};     // vca_spill_exit, drained on main
+std::vector<MediaTrack*> g_vcaChain;
+int g_vcaSpillSavedBank = 0;                    // bank offset before the spill
+
 // Settings → Modes → AUTO: when active AND SelectionMode == Auto, hide
 // tracks whose automation mode is Trim/Read (0) or Read (1) from the
 // surface track list, so the user only sees tracks armed for automation
@@ -2311,6 +2326,62 @@ std::vector<MediaTrack*> g_visibleTracks;
 // behind our back when the user reorders or deletes.
 std::unordered_set<MediaTrack*> g_spilledParents;
 
+// The spilled folders stay in the project (Frank 30.09.2026: Folder Mode off
+// and on again used to forget them). g_spilledGuids is the truth, saved as
+// FOLDERSPILL in the .rpp through a projectconfig hook, one copy per project
+// tab (ProjectScoped); g_spilledParents is its pointer cache for the rebuild,
+// refilled whenever g_spilledResolve is set (load, tab switch). Main thread.
+std::unordered_set<std::string> g_spilledGuids;
+bool g_spilledResolve = true;
+
+void resolveSpilledParents_() {
+    // A changed track count also re-resolves: an undo that brings a deleted
+    // folder back gives it a new pointer under its old GUID.
+    static int s_lastCount = -1;
+    const int n = CountTracks(nullptr);
+    if (n != s_lastCount) { s_lastCount = n; g_spilledResolve = true; }
+    if (!g_spilledResolve) return;
+    g_spilledResolve = false;
+    g_spilledParents.clear();
+    if (g_spilledGuids.empty()) return;
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* tr = GetTrack(nullptr, i);
+        if (!tr) continue;
+        char g[64] = {0};
+        GetSetMediaTrackInfo_String(tr, "GUID", g, false);
+        if (g_spilledGuids.count(g)) g_spilledParents.insert(tr);
+    }
+}
+
+// A track's bits in one REAPER group category, all 128 groups. Groups 1..64
+// through the calls every REAPER has; 65..128 through GetSetTrackGroupMembershipEx
+// (REAPER 7.23+, null before). Its offset counts BITS (0/32/64/96, as ReaTeam's
+// az_ scripts use it and as its doc reads, "at offset, where 0 is the low 32
+// bits"); one other project passes word indices, so the two words that matter
+// most stay on the old calls.
+uint32_t trackGroupWord_(MediaTrack* tr, const char* cat, int word) {
+    if (!tr) return 0;
+    switch (word) {
+        case 0: return GetSetTrackGroupMembership(tr, cat, 0, 0);
+        case 1: return GetSetTrackGroupMembershipHigh(tr, cat, 0, 0);
+        case 2: case 3:
+            return GetSetTrackGroupMembershipEx
+                ? GetSetTrackGroupMembershipEx(tr, cat, word * 32, 0, 0) : 0;
+        default: return 0;
+    }
+}
+vca::Groups trackGroups_(MediaTrack* tr, const char* cat) {
+    vca::Groups g;
+    for (int k = 0; k < 4; ++k) g.w[k] = trackGroupWord_(tr, cat, k);
+    return g;
+}
+vca::Groups vcaLeadOf_(MediaTrack* tr)   { return trackGroups_(tr, "VOLUME_VCA_LEAD"); }
+vca::Groups vcaFollowOf_(MediaTrack* tr) { return trackGroups_(tr, "VOLUME_VCA_FOLLOW"); }
+bool isVcaLead_(MediaTrack* tr) { return vcaLeadOf_(tr).any(); }
+bool inVcaChain_(MediaTrack* tr) {
+    return std::find(g_vcaChain.begin(), g_vcaChain.end(), tr) != g_vcaChain.end();
+}
+
 // Folders collapsed in the MIXER, for "Surface mirrors: MCP" (McpFolderCollapse.h:
 // IsTrackVisible(tr, true) does not know this state, and no API reads it, only the
 // folder's chunk). Chunks are costly (a Meter Pro alone is ~840 KB), so they are
@@ -2456,7 +2527,10 @@ inline int stripToVisibleSlot(int strip, int bankOffset) {
     // fill the whole usable range (no banking room left) — the spill-across-
     // banks rule (was ">= 8"). See g_pinnedSurvivesBanking for rationale.
     const int pinnedCount = g_pinnedCount.load();
-    const bool sticky = g_pinnedSurvivesBanking.load()
+    // A VCA spill keeps its lead chain on the left whatever the pin setting
+    // says: only the lead's followers are on the surface, so there is nothing
+    // to bank away to.
+    const bool sticky = (g_pinnedSurvivesBanking.load() || g_vcaSpillActive.load())
                      && pinnedCount > 0 && pinnedCount < usable;
     if (sticky && pos < pinnedCount) return pos;
 
@@ -2480,7 +2554,7 @@ std::atomic<int>  g_selsetActive{0};
 // Selection-Set storage (Phase 2.5b). Eight slots, project-scoped
 // (ProjExtState key `selset_<N>`). Two slot types:
 //   Snapshot — fixed list of REAPER track GUIDs (frozen at save time).
-//   Group    — bound to a REAPER track group (1..64). Membership
+//   Group    — bound to a REAPER track group (1..128). Membership
 //              recomputed live each onTimer tick from
 //              GetSetTrackGroupMembership across all Lead/Follow
 //              categories — track is in the set if ANY group-N flag
@@ -2492,7 +2566,7 @@ std::atomic<int>  g_selsetActive{0};
 //   line 1: "snapshot" | "group"
 //   line 2: <name>
 //   line 3..: <guid> per line  (Snapshot)
-//        OR  <groupIdx 1..64>  (Group)
+//        OR  <groupIdx 1..128>  (Group)
 enum class SelSetType : uint8_t { Snapshot = 0, Group = 1 };
 struct SelSet {
     SelSetType type     = SelSetType::Snapshot;
@@ -2508,7 +2582,7 @@ struct SelSet {
     bool global         = false;
     std::string name;                 // "" = empty slot
     std::vector<std::string> guids;   // Snapshot only
-    int groupIdx        = 1;          // Group only, 1..64
+    int groupIdx        = 1;          // Group only, 1..128
 };
 std::array<SelSet, 8> g_selsets;
 std::unordered_set<std::string> g_selsetActiveGuids;  // membership cache
@@ -2799,6 +2873,82 @@ inline bool isFocusMember_(MediaTrack* tr) {
     return g_tempSelsetGuids.count(guidBuf) != 0;
 }
 
+// Clamp bankOffset when a filter (selset / show-only-selected /
+// folder mode / VCA spill) shrinks the list past the current offset, so the
+// surface doesn't end up with every strip empty. Only fires when
+// ALL strips would be empty (curOff >= vc) — partial-fill banks
+// (e.g. vc=10 + off=8 showing 2 tracks on strips 0-1) are valid
+// user-intended positions and stay untouched. Frank 2026-05-16.
+void clampBankToVisible_() {
+    const int vc     = static_cast<int>(g_visibleTracks.size());
+    const int curOff = g_bankOffset.load();
+    const int esc    = bankWidth_();   // window width (UF1 Extender widens it by 1)
+    const int maxOff = (vc > esc) ? vc - esc : 0;
+    if (curOff >= vc && curOff > maxOff) {
+        g_bankOffset.store(maxOff);
+        g_bankDirty.store(true);
+    }
+}
+
+// ---- VCA spill (VcaSpill.h) — main thread --------------------------------
+void endVcaSpill_() {
+    g_vcaChain.clear();
+    g_vcaSpillActive.store(false);
+    g_bankOffset.store(g_vcaSpillSavedBank);   // back where the spill started
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
+}
+
+// Long SEL or vca_spill_selected on `tr`. False = not a VCA gesture (no lead,
+// not in the chain), so the caller may treat it otherwise.
+bool vcaPress_(MediaTrack* tr) {
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return false;
+    const bool wasActive = !g_vcaChain.empty();
+    const bool followsDeepest = wasActive
+        && vca::follows(tr, g_vcaChain.back(), vcaLeadOf_, vcaFollowOf_);
+    const vca::Step st = vca::press(g_vcaChain, tr, isVcaLead_(tr), followsDeepest);
+    if (st == vca::Step::None) return false;
+    if (!wasActive) g_vcaSpillSavedBank = g_bankOffset.load();
+    if (g_vcaChain.empty()) { endVcaSpill_(); return true; }
+    g_vcaSpillActive.store(true);
+    g_bankOffset.store(0);          // each level starts with its first follower
+    g_bankDirty.store(true);
+    g_pageDirty.store(true);
+    return true;
+}
+
+// While a lead is spilled the surface list is the chain (pinned on the left by
+// stripToVisibleSlot) followed by the deepest lead's followers in track order.
+// Every other filter rests. False = no spill, build the normal list.
+bool buildVcaSpillList_(bool followMcp) {
+    if (g_vcaChain.empty()) return false;
+    if (vca::prune(g_vcaChain, [](MediaTrack* t) {
+            return ValidatePtr2(nullptr, t, "MediaTrack*") && isVcaLead_(t); })) {
+        if (g_vcaChain.empty()) { endVcaSpill_(); return false; }
+        g_bankOffset.store(0);
+        g_bankDirty.store(true);
+        g_pageDirty.store(true);
+    }
+    const vca::Groups leadBits = vcaLeadOf_(g_vcaChain.back());
+    const bool showHidden = g_vcaSpillShowHidden.load();
+    g_visibleTracks.assign(g_vcaChain.begin(), g_vcaChain.end());
+    const int n = CountTracks(nullptr);
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* tr = GetTrack(nullptr, i);
+        if (!tr || inVcaChain_(tr)) continue;
+        if (!vcaFollowOf_(tr).meets(leadBits)) continue;
+        if (!showHidden) {
+            if (!IsTrackVisible(tr, followMcp)) continue;
+            if (followMcp && mcpfold::underCollapsedFolder(
+                    tr, [](MediaTrack* t) { return GetParentTrack(t); },
+                    g_mcpCollapsedParents))
+                continue;
+        }
+        g_visibleTracks.push_back(tr);
+    }
+    return true;
+}
+
 void rebuildVisibleTrackList() {
     const bool folderMode = g_folderMode.load();
     const bool selOnly    = g_showOnlySelected.load();
@@ -2807,6 +2957,24 @@ void rebuildVisibleTrackList() {
     // stale set from an earlier MCP stretch must not survive a trip to TCP.
     if (followMcp) refreshMcpCollapsedParents_();
     else           g_mcpCollapseSig = 0;
+    if (buildVcaSpillList_(followMcp)) {
+        g_pinnedCount.store(static_cast<int>(g_vcaChain.size()));
+        clampBankToVisible_();
+        return;
+    }
+    // VCA Mode: only the leads that follow no other lead (VcaSpill.h).
+    std::unordered_set<MediaTrack*> vcaTopLeads;
+    const bool vcaMode = g_vcaMode.load();
+    if (vcaMode) {
+        std::vector<MediaTrack*> all;
+        const int nt = CountTracks(nullptr);
+        all.reserve(static_cast<size_t>(nt));
+        for (int i = 0; i < nt; ++i)
+            if (MediaTrack* t = GetTrack(nullptr, i)) all.push_back(t);
+        for (MediaTrack* t : vca::topLeads(all, vcaLeadOf_, vcaFollowOf_))
+            vcaTopLeads.insert(t);
+    }
+    resolveSpilledParents_();
     if (!g_spilledParents.empty()) {
         for (auto it = g_spilledParents.begin(); it != g_spilledParents.end();) {
             if (!ValidatePtr2(nullptr, *it, "MediaTrack*")) it = g_spilledParents.erase(it);
@@ -2841,6 +3009,7 @@ void rebuildVisibleTrackList() {
                 if (!chainOk) continue;
             }
         }
+        if (vcaMode && !vcaTopLeads.count(tr)) continue;
         // Show-only-selected: live filter against current selection (not
         // a saved selection set). Each tick reflects the latest
         // I_SELECTED state so toggling track selection adds/removes
@@ -2923,20 +3092,7 @@ void rebuildVisibleTrackList() {
     }
     g_pinnedCount.store(pinnedCount);
 
-    // Clamp bankOffset when a filter (selset / show-only-selected /
-    // folder mode) shrinks the list past the current offset, so the
-    // surface doesn't end up with every strip empty. Only fires when
-    // ALL strips would be empty (curOff >= vc) — partial-fill banks
-    // (e.g. vc=10 + off=8 showing 2 tracks on strips 0-1) are valid
-    // user-intended positions and stay untouched. Frank 2026-05-16.
-    const int vc     = static_cast<int>(g_visibleTracks.size());
-    const int curOff = g_bankOffset.load();
-    const int esc    = bankWidth_();   // window width (UF1 Extender widens it by 1)
-    const int maxOff = (vc > esc) ? vc - esc : 0;
-    if (curOff >= vc && curOff > maxOff) {
-        g_bankOffset.store(maxOff);
-        g_bankDirty.store(true);
-    }
+    clampBankToVisible_();
 }
 
 // ---- Selection-Set helpers ------------------------------------------------
@@ -2970,23 +3126,15 @@ inline const char* const* selsetGroupCategories_(int* outCount) {
     return kCats;
 }
 
+// Groups 1..128 (REAPER 7.23+; 1..64 before, trackGroups_ knows how).
 bool trackInGroup_(MediaTrack* tr, int groupIdx) {
-    if (!tr || groupIdx < 1 || groupIdx > 64) return false;
+    if (!tr || groupIdx < 1 || groupIdx > 128) return false;
     int count = 0;
     const char* const* cats = selsetGroupCategories_(&count);
-    if (groupIdx <= 32) {
-        const unsigned bit = 1u << (groupIdx - 1);
-        for (int i = 0; i < count; ++i) {
-            unsigned m = GetSetTrackGroupMembership(tr, cats[i], 0, 0);
-            if (m & bit) return true;
-        }
-    } else {
-        const unsigned bit = 1u << (groupIdx - 33);
-        for (int i = 0; i < count; ++i) {
-            unsigned m = GetSetTrackGroupMembershipHigh(tr, cats[i], 0, 0);
-            if (m & bit) return true;
-        }
-    }
+    const int word = (groupIdx - 1) / 32;
+    const uint32_t bit = 1u << ((groupIdx - 1) % 32);
+    for (int i = 0; i < count; ++i)
+        if (trackGroupWord_(tr, cats[i], word) & bit) return true;
     return false;
 }
 
@@ -3043,7 +3191,7 @@ void selsetDeserialize_(const char* raw, SelSet& out) {
     if (out.type == SelSetType::Group) {
         const std::string n = popField();
         out.groupIdx = std::atoi(n.c_str());
-        if (out.groupIdx < 1 || out.groupIdx > 64) out.groupIdx = 1;
+        if (out.groupIdx < 1 || out.groupIdx > 128) out.groupIdx = 1;
     } else {
         while (!s.empty()) {
             std::string g = popField();
@@ -3387,6 +3535,72 @@ reasixty::ProjectScoped<ReaProject*, TempSelsetProjState> g_tempSelsetScoped{tem
 project_config_extension_t g_tempSelsetProjConfig =
     ScopedProjConfig<g_tempSelsetScoped, tempSelsetProcessLine_, tempSelsetSaveExt_,
                      tempSelsetBeginLoad_>::config();
+
+// Folder Mode's spilled folders (Frank 30.09.2026), per tab. One line,
+// `FOLDERSPILL "guid\tguid..."`, same quoting as TEMPSELSET_DATA. Any change to
+// the live GUID set asks the rebuild to re-resolve the pointer cache.
+void folderSpillSaveExt_(ProjectStateContext* ctx, bool isUndo,
+                         struct project_config_extension_t* /*reg*/)
+{
+    // Not in undo states: spilling is no edit, and an undo of an edit must not
+    // fold the folders back to how they were at that point.
+    if (isUndo) return;
+    std::string joined;
+    for (const auto& g : g_spilledGuids) {
+        if (!joined.empty()) joined += '\t';
+        joined += g;
+    }
+    if (!joined.empty()) ctx->AddLine("FOLDERSPILL \"%s\"", joined.c_str());
+}
+
+bool folderSpillProcessLine_(const char* line, ProjectStateContext* /*ctx*/,
+                             bool /*isUndo*/,
+                             struct project_config_extension_t* /*reg*/)
+{
+    if (!line || !*line) return false;
+    const char* p = line;
+    while (*p == ' ' || *p == '\t') ++p;
+    if (std::strncmp(p, "FOLDERSPILL", 11) != 0) return false;
+    p += 11;
+    if (*p != ' ' && *p != '\t') return false;
+    while (*p == ' ' || *p == '\t') ++p;
+    if (*p == '"') ++p;
+    std::string field;
+    while (*p && *p != '"') field += *p++;
+    size_t pos = 0;
+    while (pos <= field.size()) {
+        const size_t next = field.find('\t', pos);
+        std::string g = (next == std::string::npos)
+                        ? field.substr(pos) : field.substr(pos, next - pos);
+        if (!g.empty()) g_spilledGuids.insert(std::move(g));
+        if (next == std::string::npos) break;
+        pos = next + 1;
+    }
+    g_spilledResolve = true;
+    return true;
+}
+
+void folderSpillBeginLoad_(bool isUndo,
+                           struct project_config_extension_t* /*reg*/)
+{
+    if (isUndo) return;   // undo states carry no FOLDERSPILL (see save)
+    g_spilledGuids.clear();
+    g_spilledResolve = true;
+}
+
+struct FolderSpillProjState {
+    std::unordered_set<std::string> guids;
+};
+void folderSpillSwapLive_(FolderSpillProjState& s)
+{
+    std::swap(g_spilledGuids, s.guids);
+    g_spilledResolve = true;
+}
+reasixty::ProjectScoped<ReaProject*, FolderSpillProjState> g_folderSpillScoped{folderSpillSwapLive_};
+
+project_config_extension_t g_folderSpillProjConfig =
+    ScopedProjConfig<g_folderSpillScoped, folderSpillProcessLine_, folderSpillSaveExt_,
+                     folderSpillBeginLoad_>::config();
 
 // Load now flows through the projectconfig BeginLoadProjectState +
 // ProcessExtensionLine callbacks driven by REAPER. Stub kept so the
@@ -3837,18 +4051,34 @@ void drainSelsets_() {
         applyUf1HoldScroll_(hs);
 }
 
-// Long-press SEL → folder spill toggle. Polled at the start of onTimer
-// (before rebuildVisibleTrackList) so the rebuilt list immediately
-// reflects spill changes. Skips silently when folder_mode is off — no
-// visible effect even if user happens to long-press SEL.
+// Long-press SEL → folder spill toggle or VCA spill. Polled at the start of
+// onTimer (before rebuildVisibleTrackList) so the rebuilt list immediately
+// reflects spill changes.
 //
-// Toggle is per-folder only: collapsing removes just this entry,
-// leaving any previously-spilled descendants in the set as dormant
-// state. The strict-ancestor filter in rebuildVisibleTrackList hides
-// them while this folder is collapsed, and a future re-spill restores
-// the drill-down without any explicit snapshot.
+// Folder: per-folder toggle, only in folder_mode. Collapsing removes just this
+// entry, leaving any previously-spilled descendants in the set as dormant
+// state. The strict-ancestor filter in rebuildVisibleTrackList hides them while
+// this folder is collapsed, and a future re-spill restores the drill-down
+// without any explicit snapshot. The set lives in the project (FOLDERSPILL).
+//
+// VCA (VcaSpill.h): while a spill runs, long SEL only moves through the chain.
+// Otherwise a folder parent in folder_mode wins; any other VCA lead spills.
+// The vca_spill_selected / vca_spill_exit builtins drain here too.
+void toggleFolderSpill_(MediaTrack* tr) {
+    char g[64] = {0};
+    GetSetMediaTrackInfo_String(tr, "GUID", g, false);
+    if (g_spilledParents.count(tr)) { g_spilledParents.erase(tr); g_spilledGuids.erase(g); }
+    else                            { g_spilledParents.insert(tr); g_spilledGuids.insert(g); }
+    if (ReaProject* p = EnumProjects(-1, nullptr, 0)) MarkProjectDirty(p);
+    g_bankDirty.store(true);
+}
+
 void checkSelLongPressSpill() {
-    if (!g_folderMode.load()) return;
+    if (g_vcaSpillExitReq.exchange(false) && !g_vcaChain.empty())
+        endVcaSpill_();
+    if (g_vcaSpillSelectedReq.exchange(false))
+        vcaPress_(GetSelectedTrack(nullptr, 0));
+    const bool folderMode = g_folderMode.load();
     const int64_t now = nowMs_();
     for (int s = 0; s < 8; ++s) {
         const int64_t pressMs = g_selPressMs[s].load();
@@ -3859,12 +4089,13 @@ void checkSelLongPressSpill() {
         MediaTrack* tr = g_slotTrack[s];
         if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) continue;
         // Only folder-start tracks (I_FOLDERDEPTH == 1) carry children
-        // worth spilling. Non-folder top-level tracks fail this gate
-        // and the long-press is a no-op for them.
-        if (GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") < 0.5) continue;
-        if (g_spilledParents.count(tr)) g_spilledParents.erase(tr);
-        else                            g_spilledParents.insert(tr);
-        g_bankDirty.store(true);
+        // worth spilling.
+        const bool folderParent = GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") > 0.5;
+        if (g_vcaChain.empty() && folderMode && folderParent) {
+            toggleFolderSpill_(tr);
+            continue;
+        }
+        vcaPress_(tr);
     }
 }
 
@@ -7012,7 +7243,8 @@ int pinnedHeadCount_()
 {
     const int esc = effectiveStripCount_();
     const int pc  = g_pinnedCount.load();
-    return (g_pinnedSurvivesBanking.load() && pc > 0 && pc < esc) ? pc : 0;
+    const bool sticky = g_pinnedSurvivesBanking.load() || g_vcaSpillActive.load();
+    return (sticky && pc > 0 && pc < esc) ? pc : 0;
 }
 
 // Toggle the Master-pin for strip 1 (which==1) or strip 8 (which==8).
@@ -13796,19 +14028,19 @@ static bool uf1RazorCreateAtCursor_(double delta)
     KbdSectionInfo* const sec = SectionFromUniqueID(0);
     if (GetToggleCommandState2(sec, 1156) != 0
         && GetToggleCommandState2(sec, 40771) != 0) {
-        unsigned leadLo = 0, leadHi = 0;
+        // All 128 groups (REAPER 7.23+), same helper as the VCA spill.
+        vca::Groups lead;
         for (MediaTrack* t : tracks) {
-            leadLo |= GetSetTrackGroupMembership(t, "MEDIA_EDIT_LEAD", 0, 0);
-            leadHi |= GetSetTrackGroupMembershipHigh(t, "MEDIA_EDIT_LEAD", 0, 0);
+            const vca::Groups g = trackGroups_(t, "MEDIA_EDIT_LEAD");
+            for (int k = 0; k < 4; ++k) lead.w[k] |= g.w[k];
         }
-        if (leadLo || leadHi) {
+        if (lead.any()) {
             const int nTr = CountTracks(nullptr);
             for (int i = 0; i < nTr; ++i) {
                 MediaTrack* t = GetTrack(nullptr, i);
                 if (!t || std::find(tracks.begin(), tracks.end(), t) != tracks.end())
                     continue;
-                if ((GetSetTrackGroupMembership(t, "MEDIA_EDIT_FOLLOW", 0, 0) & leadLo)
-                    || (GetSetTrackGroupMembershipHigh(t, "MEDIA_EDIT_FOLLOW", 0, 0) & leadHi))
+                if (trackGroups_(t, "MEDIA_EDIT_FOLLOW").meets(lead))
                     tracks.push_back(t);
             }
         }
@@ -21159,7 +21391,11 @@ void switchProjectState_()
     changed |= g_csFavMemScoped.switchTo(cur, projectIsOpen_);
     changed |= g_bcFavMemScoped.switchTo(cur, projectIsOpen_);
     changed |= g_favBankScoped.switchTo(cur, projectIsOpen_);
+    changed |= g_folderSpillScoped.switchTo(cur, projectIsOpen_);
     if (changed) {
+        // A VCA spill is a gesture on this tab's tracks, not project state:
+        // another tab starts without one.
+        if (!g_vcaChain.empty()) endVcaSpill_();
         g_modeBannerReseed.store(true);   // another tab's state, not a user flip
         g_selsetsDirty.store(true);       // drainSelsets_: global slots, recall cache
         g_bankDirty.store(true);
@@ -21174,6 +21410,7 @@ void switchProjectState_()
     g_csFavMemScoped.prune(projectIsOpen_);
     g_bcFavMemScoped.prune(projectIsOpen_);
     g_favBankScoped.prune(projectIsOpen_);
+    g_folderSpillScoped.prune(projectIsOpen_);
 }
 
 void drainInputQueue()
@@ -40613,11 +40850,20 @@ void pushZonesForVisibleSlots()
         // 19-char zone at position 11 (left = label/white, right =
         // value/yellow) so "Folder" must live entirely in the label
         // half — composeValueLine left-aligns it for free.
-        if (g_folderMode.load()
-            && nowMs_() >= g_folderRevealUntilMs[s]
-            && GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") > 0.5)
-        {
-            valLine = composeValueLine("Folder", "");
+        //
+        // VCA the same way (Frank 30.09.2026): "VCA Lead" on every lead in
+        // VCA Mode and during a spill, "Spill" in the yellow value half on
+        // the leads of the spilled chain. The label half holds 8 on the UF8
+        // (kUf8ValueLabelChars), so "VCA Spill" would not fit.
+        if (nowMs_() >= g_folderRevealUntilMs[s]) {
+            const bool spill = g_vcaSpillActive.load();
+            if (spill && inVcaChain_(tr))
+                valLine = composeValueLine("VCA Lead", "Spill");
+            else if ((spill || g_vcaMode.load()) && isVcaLead_(tr))
+                valLine = composeValueLine("VCA Lead", "");
+            else if (g_folderMode.load()
+                     && GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") > 0.5)
+                valLine = composeValueLine("Folder", "");
         }
         // Sticky Pot: a pinned strip shows the pinned param's name (prefixed
         // with '*' as the sticky marker) + formatted value, and drives its
@@ -50807,7 +51053,7 @@ void reasixty_setSelsetGroupIdx(int slot1to8, int groupIdx)
 {
     if (slot1to8 < 1 || slot1to8 > 8) return;
     if (groupIdx < 1) groupIdx = 1;
-    if (groupIdx > 64) groupIdx = 64;
+    if (groupIdx > 128) groupIdx = 128;
     g_selsets[slot1to8 - 1].groupIdx = groupIdx;
     selsetWriteToProject_(slot1to8);
     if (g_selsetActive.load() == slot1to8) refreshActiveSelsetGuids_();
@@ -52423,11 +52669,18 @@ bool reasixty_folderMode()
 
 void reasixty_setFolderMode(bool on)
 {
-    g_folderMode.store(on);
-    if (!on) g_spilledParents.clear();
+    g_folderMode.store(on);   // the spilled folders stay (FOLDERSPILL)
     g_pageDirty.store(true);
     g_bankDirty.store(true);
     SetExtState("ReaSixty", "folderMode", on ? "1" : "0", true);
+}
+
+bool reasixty_vcaSpillShowHidden() { return g_vcaSpillShowHidden.load(); }
+void reasixty_setVcaSpillShowHidden(bool on)
+{
+    g_vcaSpillShowHidden.store(on);
+    SetExtState("rea_sixty", "vca_spill_show_hidden", on ? "1" : "0", true);
+    g_bankDirty.store(true);
 }
 
 bool reasixty_showOnlySelected()
@@ -52444,8 +52697,9 @@ void reasixty_setShowOnlySelected(bool on)
 }
 
 // Called from UC1Surface after any TrackFX_SetParamNormalized so the
-// strip(s) displaying `tr` switch off the "Folder" label and show the
-// actual parameter for kFolderRevealMs. No-op when folder mode is off.
+// strip(s) displaying `tr` switch off the "Folder" / "VCA Lead" label and
+// show the actual parameter for kFolderRevealMs. No-op when neither folder
+// mode, VCA Mode nor a VCA spill is on.
 // Hold the focused param still while a gesture of ours writes several
 // parameters in a row. See g_ownWriteFocusLockUntilMs. Called from UC1Surface.
 void reasixty_lockFocusForOwnWrite(int ms)
@@ -52456,7 +52710,8 @@ void reasixty_lockFocusForOwnWrite(int ms)
 
 void reasixty_bumpFolderReveal(MediaTrack* tr)
 {
-    if (!tr || !g_folderMode.load()) return;
+    if (!tr) return;
+    if (!g_folderMode.load() && !g_vcaMode.load() && !g_vcaSpillActive.load()) return;
     const int n = visibleTrackCount();
     const int bankOffset = g_bankOffset.load();
     const int64_t until = nowMs_() + kFolderRevealMs;
@@ -55115,10 +55370,9 @@ void registerBindingHandlers()
             if (!firing) return;
             const bool next = !g_folderMode.load();
             g_folderMode.store(next);
-            // Spilled parents are meaningless without folder mode — drop
-            // them so toggling folder mode back on starts collapsed
-            // (long-press SEL re-spills as needed).
-            if (!next) g_spilledParents.clear();
+            // The spilled folders stay: folder mode back on shows them as
+            // they were (Frank 30.09.2026), and they live in the project
+            // (FOLDERSPILL), so they are the project's, not the mode's.
             g_pageDirty.store(true);
             // Bank-dirty re-renders every strip from the new filtered
             // list — without this, dedup pins each strip to its previous
@@ -55142,6 +55396,38 @@ void registerBindingHandlers()
         },
         [](int) { return g_showOnlySelected.load(); },
         "Toggle Show Only Selected", false
+    });
+
+    // VCA (Frank 30.09.2026, VcaSpill.h). vca_mode is the VCA twin of
+    // folder_mode. The two spill actions only post a request: the chain is
+    // main-thread state, drained by checkSelLongPressSpill.
+    registerBuiltin("vca_mode", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            const bool next = !g_vcaMode.load();
+            g_vcaMode.store(next);
+            g_pageDirty.store(true);
+            g_bankDirty.store(true);
+            SetExtState("ReaSixty", "vcaMode", next ? "1" : "0", true);
+        },
+        [](int) { return g_vcaMode.load(); },
+        "Toggle VCA Mode (top leads only)", false
+    });
+    registerBuiltin("vca_spill_selected", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_vcaSpillSelectedReq.store(true);
+        },
+        [](int) { return g_vcaSpillActive.load(); },
+        "VCA Spill (selected track)", false
+    });
+    registerBuiltin("vca_spill_exit", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_vcaSpillExitReq.store(true);
+        },
+        [](int) { return g_vcaSpillActive.load(); },
+        "Leave VCA Spill", false
     });
 
     // Selection-Set recall — toggle. param = slot 1..8. Pressing the
@@ -57048,6 +57334,7 @@ void registerBindingHandlers()
             "uf1_extender", "uf1_extender_side",
             "uf1_presets", "uf1_hue", "uf1_sends_receives_toggle",
             "folder_mode", "show_only_selected", "tcp_follows_selection_toggle",
+            "vca_mode",
             "marker_overlay_toggle", "marker_overlay_markers_only_toggle",
             "marker_overlay_regions_only_toggle",
             "touch_to_learn_toggle", "learn_hud_toggle", "focused_panel_toggle",
@@ -57727,6 +58014,13 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         v && v[0] == '1') {
         g_folderMode.store(true);
     }
+    if (const char* v = GetExtState("ReaSixty", "vcaMode");
+        v && v[0] == '1') {
+        g_vcaMode.store(true);
+    }
+    if (const char* v = GetExtState("rea_sixty", "vca_spill_show_hidden"); v && *v) {
+        g_vcaSpillShowHidden.store(v[0] == '1');
+    }
     if (const char* v = GetExtState("ReaSixty", "showOnlySelected");
         v && v[0] == '1') {
         g_showOnlySelected.store(true);
@@ -58126,6 +58420,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // Replaces an earlier SetProjExtState attempt where the writes
     // never made it to disk (Frank 2026-05-27).
     plugin_register("projectconfig", &g_tempSelsetProjConfig);
+    // Folder Mode's spilled folders (FOLDERSPILL) → .rpp, per tab.
+    plugin_register("projectconfig", &g_folderSpillProjConfig);
     // 1..8 Selection Set slots — project-scoped data uses the same
     // projectconfig pattern. Global-scoped slots stay on SetExtState
     // (reliable). Preemptive migration so the slots don't bite us the

@@ -7984,6 +7984,7 @@ const char* builtinCategory(const std::string& n)
     if (n == "flip" || n == "pan_force"
      || n == "mixer_toggle" || n == "home"
      || n == "folder_mode" || n == "show_only_selected"
+     || n == "vca_mode" || n == "vca_spill_selected" || n == "vca_spill_exit"
      || n.rfind("ssl_strip_mode_", 0) == 0
      || n.rfind("uf8_plugin_mode_", 0) == 0
      || n == "uc1_outgain_fader_toggle"
@@ -8511,6 +8512,14 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "parent spills its children." },
     { "show_only_selected",
       "The surface shows only the selected tracks." },
+    { "vca_mode",
+      "The surface shows only the VCA leads that follow no other VCA. "
+      "Long-pressing SEL on a lead spills its followers." },
+    { "vca_spill_selected",
+      "Spills the selected track's VCA: the lead on the left, its "
+      "followers after it. On the spilled lead again, it leaves." },
+    { "vca_spill_exit",
+      "Leaves the VCA spill and goes back to the bank you were on." },
     { "tcp_follows_selection_toggle",
       "Whether REAPER's track panel scrolls to follow what you select on "
       "the surface." },
@@ -8927,6 +8936,9 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "focus_scope_uf8", "Focus UF8" },
     { "focused_panel_toggle", "Focus Panel" },
     { "folder_mode", "Folder Mode" },
+    { "vca_mode", "VCA Mode" },
+    { "vca_spill_selected", "VCA Spill" },
+    { "vca_spill_exit", "VCA Exit" },
     { "fx_cycle", "FX Cycle" },
     { "fx_move", "FX Move" },
     { "fx_param_dec", "Param -" },

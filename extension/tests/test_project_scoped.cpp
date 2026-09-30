@@ -99,6 +99,30 @@ int main()
     EXPECT(store.switchTo(A, isOpen));
     EXPECT(g_name == "Vox");
 
+    // Folder Mode's spilled folders (FOLDERSPILL, Frank 30.09.2026): a GUID set
+    // per tab, and every swap asks the rebuild to re-resolve its pointers.
+    {
+        static std::set<std::string> spilled;
+        static bool resolve = false;
+        struct Spill { std::set<std::string> guids; };
+        using SpillStore = reasixty::ProjectScoped<int, Spill>;
+        SpillStore fs([](Spill& st) { std::swap(spilled, st.guids); resolve = true; });
+        std::set<int> tabs{1, 2};
+        auto tabOpen = [&](int p) { return tabs.count(p) != 0; };
+
+        EXPECT(fs.switchTo(1, tabOpen));
+        spilled = {"{DRUMS}", "{TOMS}"};             // two folders open in tab 1
+        resolve = false;
+        EXPECT(fs.switchTo(2, tabOpen));
+        EXPECT(spilled.empty() && resolve);          // tab 2 starts with none
+        spilled.insert("{VOX}");
+        resolve = false;
+        EXPECT(fs.switchTo(1, tabOpen));
+        EXPECT((spilled == std::set<std::string>{"{DRUMS}", "{TOMS}"}) && resolve);
+        EXPECT(fs.switchTo(2, tabOpen));
+        EXPECT((spilled == std::set<std::string>{"{VOX}"}));
+    }
+
     if (g_fail == 0) std::printf("project_scoped: all passed\n");
     return g_fail == 0 ? 0 : 1;
 }

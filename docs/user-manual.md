@@ -1194,6 +1194,7 @@ Two-way radio: **British (Colour, Grey)** / **American (Color, Gray)**. Switches
 | TCP follows UF8 selection | UF8-triggered track selection scrolls REAPER's arrange-view track panel (action 40913). MCP follow is always on. Off by default. |
 | Surface mirrors: TCP / MCP (radio) | Which of REAPER's two views the surface's track list mirrors. **TCP** (default): the surface shows what the arrange view's track panel shows. A track hidden in the TCP drops off the surface, and so do the children of a folder collapsed to *hidden*. Children collapsed to *small* stay on the surface, because the TCP still shows them. Which states the folder button steps through is set in REAPER under *Preferences > Appearance > Track Control Panels > Folder collapse button cycles track heights*. **MCP**: the surface follows the Mixer instead and hides whatever the Mixer hides, including the children of a folder collapsed in the Mixer. REAPER's Mixer shows the folder button only after a right-click on an empty spot in the Mixer and *Clickable icon for folder tracks to show/hide children*. Also available as the bindable **Surface mirrors: TCP** and **Surface mirrors: MCP** actions. |
 | Pinned tracks survive banking | On by default. Pinned tracks — Focus-Set members, plus REAPER's own TCP pins while *Surface mirrors* is TCP — sit on the leftmost strips and stay there while everything else banks past them. Switches itself off when the pinned head would fill every usable strip, since there would be nothing left to bank. MCP has no pin concept, so the setting is inert in MCP mode. |
+| VCA spill shows hidden tracks | On by default. A VCA spill (long-press `SEL` on a VCA lead) also brings the followers the mirrored view hides, in the TCP or the Mixer. Off → the spill shows only the followers the surface would show anyway. |
 | Touch selects channel | Touching a UF8 fader exclusively selects that strip's track. Off by default. |
 | Track selection follows parameter change | A Channel Strip parameter edit on a non-selected track auto-selects that track. A Bus Comp edit never changes the selection; it only moves the UC1's Bus Comp focus. Off → the UC1 stays on the currently selected track no matter which strip was just edited. Off by default. |
 | Selection mode resets to Normal on startup | The active Selection Mode is remembered while you work, but comes back as NORM after a REAPER restart. On by default: a session that reopens with REC still engaged has its `SEL` keys arming tracks before you notice. Off → the mode is restored as it was. |
@@ -1811,7 +1812,7 @@ Eight slots (1..8). The slot acts as a filter — combined with any active Folde
 Each slot is either:
 
 - **Snapshot** — fixed list of REAPER track GUIDs frozen at save time.
-- **Group** — bound to a REAPER track group (1..64). Membership refreshes continuously from REAPER's track groups across all Lead/Follow categories (ANY category).
+- **Group** — bound to a REAPER track group (1..128; 1..64 before REAPER 7.23). Membership refreshes continuously from REAPER's track groups across all Lead/Follow categories (ANY category).
 
 The slot rows are laid out as a fixed-width 7-column table so columns align across rows regardless of slot type. Left to right:
 
@@ -1819,7 +1820,7 @@ The slot rows are laid out as a fixed-width 7-column table so columns align acro
 - **Global** checkbox. When ON, the slot's content is workspace-global (ExtState, persists immediately). When OFF, project-scoped (saved into the project's RPP chunk on Cmd+S). Switching a slot to Group ticks Global for you, since "group N" is a stable concept across projects; untick it for a per-project group.
 - **Type** combo: `Snapshot` / `Group`.
 - **Name** text field.
-- **Grp** spinner (Group rows) — REAPER track group index 1..64. Snapshot rows show `(N tracks)` in this column instead.
+- **Grp** spinner (Group rows) — REAPER track group index 1..128. Snapshot rows show `(N tracks)` in this column instead.
 - **Save** button — Snapshot rows only. Overwrites the slot's GUID list with the current REAPER selection. (Save is hidden on Group rows — pressing it there would silently convert the slot to Snapshot and drop the live group binding, which is bad UX.)
 - **Clear** button — Snapshot rows only. Empties the slot.
 
@@ -2171,6 +2172,8 @@ All of these are toggles, and all take **param: 0 = Faders, 1 = V-Pots** to choo
 
 - **Toggle Folder Mode (parents only)** — toggle Folder Mode (only top-level tracks visible; folder children appear on spill).
 - **Toggle Show Only Selected** — toggle Show Only Selected (only currently-selected REAPER tracks appear).
+- **Toggle VCA Mode (top leads only)** — only the VCA leads that follow no other VCA appear. See *Operational modes → VCA Mode and VCA spill*.
+- **VCA Spill (selected track)** / **Leave VCA Spill** — spill the selected track's VCA as long-press `SEL` does, or leave the spill from any level. Both light while a spill is on.
 - **Open / Close Rea-Sixty Settings** — open / close the Rea-Sixty Settings window. Default binding for the `360°` key.
 - **Surface mirrors: TCP** / **Surface mirrors: MCP** — choose which window's track visibility the surface follows: the Arrange view's track panels (TCP) or the Mixer (MCP). Hiding a track in the chosen window removes it from the surface. These are not a toggle but a mutually-exclusive pair, so a bound key sets one mode absolutely and lights while that mode is the active one — which means you can bind both and see at a glance which is on. The choice is remembered between sessions.
 - **TCP follows selection** — toggle whether selecting a track on the surface scrolls the Arrange view to it. Same setting as *Settings → Behaviour → Tracks*.
@@ -3212,7 +3215,24 @@ If the bound device is no longer in REAPER's output list, unplugged or renamed, 
 
 Toggle: **Toggle Folder Mode (parents only)** action. When on, only top-level (depth-0) tracks are visible on the surface. Folder children appear only when "spilled" — long-press a folder parent's `SEL` button to toggle that parent's spill.
 
-**Nested folders (ancestor-chain spill).** Long-pressing a folder at any depth spills *that* folder; the ancestor chain stays in the spill set as well, so the intermediate hierarchy remains visible. Collapsing an ancestor (re-long-pressing it) hides its subtree but **keeps the descendants' spill state in memory**, so re-spilling that ancestor restores the previous drill-down without having to long-press each level again. Toggling Folder Mode off (or re-pressing the **Toggle Folder Mode (parents only)** action) clears the spill set entirely.
+**Nested folders (ancestor-chain spill).** Long-pressing a folder at any depth spills *that* folder; the ancestor chain stays in the spill set as well, so the intermediate hierarchy remains visible. Collapsing an ancestor (re-long-pressing it) hides its subtree but **keeps the descendants' spill state in memory**, so re-spilling that ancestor restores the previous drill-down without having to long-press each level again. Toggling Folder Mode off and on again keeps the spilled folders as they were. They are saved with the project, one set per project tab.
+
+## VCA Mode and VCA spill
+
+A VCA in REAPER is a track grouping: a track that is *VCA lead* in a group moves the volume of every track that is *VCA follow* in the same group (Track Grouping Parameters). All 128 groups of REAPER 7.23 and later count; older REAPER versions have 64.
+
+**VCA spill.** Long-press `SEL` on a VCA lead. The lead moves to strip 1 and stays there, its followers take the strips after it, in track order, and bank as usual. Nothing else is on the surface while the spill is on; Folder Mode, Selection Sets, Show Only Selected and the AUTO filter rest until it ends. The lead's value line reads **VCA Lead** with **Spill** on the right.
+
+- A follower that is itself a VCA lead reads **VCA Lead**. Long-press its `SEL` to go one level deeper; the leads line up on the left, outermost first.
+- Long-press the deepest lead to go back one level, a lead in between to go back to its level, and the outermost lead to leave the spill.
+- Leaving returns to the bank you were on before the spill. Switching project tabs, or the lead disappearing, ends the spill too.
+- In Folder Mode, a folder parent that is also a VCA lead spills as a folder. During a VCA spill, long-press `SEL` only moves through the VCA levels.
+- *Settings → Behaviour → Tracks → VCA spill shows hidden tracks* (on by default) decides whether followers hidden in the TCP or Mixer come along.
+- Turning the V-Pot on a lead, or a UC1 pot writing to it, shows the real value for three seconds, as on a Folder Mode parent.
+
+**VCA Mode.** Toggle: **Toggle VCA Mode (top leads only)** action. When on, the surface shows only the VCA leads that follow no other VCA, each reading **VCA Lead**. A lead that follows another lead is reached by spilling its parent.
+
+**Actions.** **VCA Spill (selected track)** does the long-press on the track selected in REAPER, for the UF1 or a keyboard shortcut. **Leave VCA Spill** leaves from any level. Both light while a spill is on.
 
 ## Show Only Selected
 

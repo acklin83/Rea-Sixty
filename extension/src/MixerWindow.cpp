@@ -244,6 +244,7 @@ constexpr SearchEntry kSearchIndex[] = {
     { "TCP follows UF8 selection",             kSecBehaviour, "Tracks", kDevUf8 },
     { "Surface mirrors:",                      kSecBehaviour, "Tracks" },
     { "Pinned tracks survive banking",         kSecBehaviour, "Tracks" },
+    { "VCA spill shows hidden tracks",         kSecBehaviour, "Tracks" },
     { "Touch selects channel",                 kSecBehaviour, "Tracks" },
     { "Track selection follows parameter change",
                                                kSecBehaviour, "Tracks" },
