@@ -4062,7 +4062,7 @@ void drainSelsets_() {
 // without any explicit snapshot. The set lives in the project (FOLDERSPILL).
 //
 // VCA (VcaSpill.h): while a spill runs, long SEL only moves through the chain.
-// Otherwise a folder parent in folder_mode wins; any other VCA lead spills.
+// Otherwise a folder parent in folder_mode wins; a VCA lead spills in vca_mode.
 // The vca_spill_selected / vca_spill_exit builtins drain here too.
 void toggleFolderSpill_(MediaTrack* tr) {
     char g[64] = {0};
@@ -4095,7 +4095,11 @@ void checkSelLongPressSpill() {
             toggleFolderSpill_(tr);
             continue;
         }
-        vcaPress_(tr);
+        // Like the folder spill, long SEL spills a VCA only in its mode (Frank
+        // 30.09.2026). A running spill keeps moving through its levels in any
+        // mode; vca_spill_selected spills in any mode.
+        if (g_vcaMode.load() || !g_vcaChain.empty())
+            vcaPress_(tr);
     }
 }
 
@@ -48007,6 +48011,25 @@ custom_action_register_t g_actionUf1SendsFollowHeld{
     0, "REASIXTY_UF1_SENDS_FOLLOW_FOCUS", "Rea-Sixty: UF8 sends follow UF1 Focus Set track (toggle)", nullptr,
 };
 int g_cmdUf1SendsFollowHeld = 0;
+// Folder Mode and VCA (Frank 30.09.2026: REAPER actions for both). Each fires
+// its builtin, so the two routes cannot drift apart; toggleActionState asks
+// the builtin for the state.
+custom_action_register_t g_actionFolderMode{
+    0, "REASIXTY_FOLDER_MODE", "Rea-Sixty: Folder Mode (parents only) (toggle)", nullptr,
+};
+int g_cmdFolderMode = 0;
+custom_action_register_t g_actionVcaMode{
+    0, "REASIXTY_VCA_MODE", "Rea-Sixty: VCA Mode (top leads only) (toggle)", nullptr,
+};
+int g_cmdVcaMode = 0;
+custom_action_register_t g_actionVcaSpillSelected{
+    0, "REASIXTY_VCA_SPILL_SELECTED", "Rea-Sixty: VCA spill (selected track)", nullptr,
+};
+int g_cmdVcaSpillSelected = 0;
+custom_action_register_t g_actionVcaSpillExit{
+    0, "REASIXTY_VCA_SPILL_EXIT", "Rea-Sixty: Leave VCA spill", nullptr,
+};
+int g_cmdVcaSpillExit = 0;
 // UF1 Extender (9th fader of the UF8 bank) — mode change → REAPER actions too.
 custom_action_register_t g_actionUf1ExtenderToggle{
     0, "REASIXTY_UF1_EXTENDER_TOGGLE", "Rea-Sixty: UF1 Extender on/off (9th fader / Selection)", nullptr,
@@ -48496,6 +48519,20 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
         g_bankDirty.store(true);
         return true;
     }
+    {
+        struct ActFire { int cmd; const char* builtin; };
+        const ActFire kFire[] = {
+            { g_cmdFolderMode,        "folder_mode"        },
+            { g_cmdVcaMode,           "vca_mode"           },
+            { g_cmdVcaSpillSelected,  "vca_spill_selected" },
+            { g_cmdVcaSpillExit,      "vca_spill_exit"     },
+        };
+        for (const auto& a : kFire)
+            if (a.cmd != 0 && command == a.cmd) {
+                uf8::bindings::invokeBuiltin(a.builtin, 0);
+                return true;
+            }
+    }
     if (command == g_cmdUf1ExtenderToggle) {
         // Selection <-> Extender (mutually exclusive with the Focus-Set pin). Inline
         // mirror of reasixty_setUf1Extender (global, after this hook).
@@ -48682,6 +48719,10 @@ int toggleActionState(int command)
             { g_cmdToggleMixer,       "mixer_toggle"             },
             { g_cmdFocusRecall,       "focus_set_pin"            },
             { g_cmdUf1ExtenderToggle, "uf1_extender"             },
+            { g_cmdFolderMode,        "folder_mode"              },
+            { g_cmdVcaMode,           "vca_mode"                 },
+            { g_cmdVcaSpillSelected,  "vca_spill_selected"       },
+            { g_cmdVcaSpillExit,      "vca_spill_exit"           },
             { g_cmdUf1ExtenderSide,   "uf1_extender_side"        },
             { g_cmdFavCopyOwnToggle,  "fav_copy_own_toggle"      },
             { g_cmdCsCopyOwnToggle,   "cs_copy_own_toggle"       },
@@ -58350,6 +58391,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdUf1HoldPrev     = plugin_register("custom_action", &g_actionUf1HoldPrev);
     g_cmdUf1SendsFollowHeld = plugin_register("custom_action", &g_actionUf1SendsFollowHeld);
     g_cmdUf1ExtenderToggle = plugin_register("custom_action", &g_actionUf1ExtenderToggle);
+    g_cmdFolderMode        = plugin_register("custom_action", &g_actionFolderMode);
+    g_cmdVcaMode           = plugin_register("custom_action", &g_actionVcaMode);
+    g_cmdVcaSpillSelected  = plugin_register("custom_action", &g_actionVcaSpillSelected);
+    g_cmdVcaSpillExit      = plugin_register("custom_action", &g_actionVcaSpillExit);
     g_cmdUf1ExtenderSide   = plugin_register("custom_action", &g_actionUf1ExtenderSide);
     g_cmdFocusScopeCycle   = plugin_register("custom_action", &g_actionFocusScopeCycle);
     g_cmdJogModeCycle    = plugin_register("custom_action", &g_actionJogModeCycle);

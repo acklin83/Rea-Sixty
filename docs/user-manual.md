@@ -3221,18 +3221,19 @@ Toggle: **Toggle Folder Mode (parents only)** action. When on, only top-level (d
 
 A VCA in REAPER is a track grouping: a track that is *VCA lead* in a group moves the volume of every track that is *VCA follow* in the same group (Track Grouping Parameters). All 128 groups of REAPER 7.23 and later count; older REAPER versions have 64.
 
-**VCA spill.** Long-press `SEL` on a VCA lead. The lead moves to strip 1 and stays there, its followers take the strips after it, in track order, and bank as usual. Nothing else is on the surface while the spill is on; Folder Mode, Selection Sets, Show Only Selected and the AUTO filter rest until it ends. The lead's value line reads **VCA Lead** with **Spill** on the right.
+**VCA spill.** In VCA Mode, long-press `SEL` on a VCA lead. Outside VCA Mode, use **VCA Spill (selected track)**. The lead moves to strip 1 and stays there, its followers take the strips after it, in track order, and bank as usual. Nothing else is on the surface while the spill is on; Folder Mode, Selection Sets, Show Only Selected and the AUTO filter rest until it ends. The lead's value line reads **VCA Lead** with **Spill** on the right.
 
-- A follower that is itself a VCA lead reads **VCA Lead**. Long-press its `SEL` to go one level deeper; the leads line up on the left, outermost first.
+- A follower that is itself a VCA lead reads **VCA Lead**. Long-press its `SEL` to go one level deeper; the leads line up on the left, outermost first. During a spill long-press `SEL` moves through the levels whether VCA Mode is on or not.
 - Long-press the deepest lead to go back one level, a lead in between to go back to its level, and the outermost lead to leave the spill.
 - Leaving returns to the bank you were on before the spill. Switching project tabs, or the lead disappearing, ends the spill too.
 - In Folder Mode, a folder parent that is also a VCA lead spills as a folder. During a VCA spill, long-press `SEL` only moves through the VCA levels.
 - *Settings → Behaviour → Tracks → VCA spill shows hidden tracks* (on by default) decides whether followers hidden in the TCP or Mixer come along.
+- Only tracks set to *VCA follow* in one of the lead's groups spill. Children of the lead's folder that are not in the group stay out.
 - Turning the V-Pot on a lead, or a UC1 pot writing to it, shows the real value for three seconds, as on a Folder Mode parent.
 
 **VCA Mode.** Toggle: **Toggle VCA Mode (top leads only)** action. When on, the surface shows only the VCA leads that follow no other VCA, each reading **VCA Lead**. A lead that follows another lead is reached by spilling its parent.
 
-**Actions.** **VCA Spill (selected track)** does the long-press on the track selected in REAPER, for the UF1 or a keyboard shortcut. **Leave VCA Spill** leaves from any level. Both light while a spill is on.
+**Actions.** **VCA Spill (selected track)** does the long-press on the track selected in REAPER, in any mode, from any key, the UF1 or a keyboard shortcut. **Leave VCA Spill** leaves from any level. Both light while a spill is on. REAPER's Action List has them too, as *Rea-Sixty: VCA spill (selected track)*, *Rea-Sixty: Leave VCA spill* and *Rea-Sixty: VCA Mode (top leads only) (toggle)*; Folder Mode is there as *Rea-Sixty: Folder Mode (parents only) (toggle)*.
 
 ## Show Only Selected
 

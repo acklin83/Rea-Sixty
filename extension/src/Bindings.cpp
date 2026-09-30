@@ -8516,8 +8516,8 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "The surface shows only the VCA leads that follow no other VCA. "
       "Long-pressing SEL on a lead spills its followers." },
     { "vca_spill_selected",
-      "Spills the selected track's VCA: the lead on the left, its "
-      "followers after it. On the spilled lead again, it leaves." },
+      "Spills the selected track's VCA, in any mode: the lead on the "
+      "left, its followers after it. On the spilled lead again, it leaves." },
     { "vca_spill_exit",
       "Leaves the VCA spill and goes back to the bank you were on." },
     { "tcp_follows_selection_toggle",

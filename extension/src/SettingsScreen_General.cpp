@@ -1207,7 +1207,7 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
             reasixty_setVcaSpillShowHidden(vcaHidden);
         }
         help_(ctx,
-            "Long-press SEL on a VCA lead spills its followers.\n"
+            "Long-press SEL on a VCA lead in VCA Mode spills its followers.\n"
             "On: followers hidden in the TCP or Mixer come along.");
     }
 
