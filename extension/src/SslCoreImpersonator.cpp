@@ -1,6 +1,7 @@
 #include "SslCoreImpersonator.h"
 #include "LogPath.h"
 #include "BuildId.h"
+#include "SslTrackIdentity.h"
 
 // Socket plumbing mirrors StreamDeckBridge.cpp — socket headers FIRST so Winsock2
 // wins over the legacy <winsock.h> that WDL pulls in transitively.
@@ -1963,11 +1964,11 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                             // ── Instance NAME correlation ──────────────────────
                             // Each plug-in SETs (type 18) its own HostTrackName
                             // (obj f0630f41c7667f0c, pb 0a <len> <ascii>) over its
-                            // connection at connect. Take it ONCE per client and
-                            // queue it; the next new UDP source port claims it (the
-                            // datagram carries no track id). Later re-sends of the
-                            // shared object (on selection change) are ignored via
-                            // g_namedClients so a name is only tied at connect.
+                            // connection at connect. The first complete pair is
+                            // queued ONCE for the timing fallback; the dedicated port
+                            // ties it for real. The plug-in SETs both again when the
+                            // track moves or is renamed, and that re-send now moves
+                            // the port with it (SslTrackIdentity.h, 30.09.2026).
                             // ── Instance MODEL correlation ─────────────────────
                             // A type=16 frame declares an object's wire name as
                             // pb field 2 (`12 <len> <ascii>`). The channel strip
@@ -2233,14 +2234,20 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
 
                             constexpr uint8_t kHostTrackNameObj[8]  = SSL_ID("HostTrackName");
                             constexpr uint8_t kHostTrackIndexObj[8] = SSL_ID("HostTrackIndex");
-                            if (ftype == 18 && avail >= 10 &&
-                                g_namedClients.find(c) == g_namedClients.end()) {
+                            if (ftype == 18 && avail >= 10) {
+                                // Parsed first, applied below through TrackIdentity:
+                                // first pair, a real change, or a plain re-send.
+                                bool haveName = false, haveIndex = false;
+                                std::string annName;
+                                int annIndex = 0;
                                 if (std::memcmp(pay, kHostTrackNameObj, 8) == 0 &&
                                     pay[8] == 0x0a) {                 // pb: 0a <len> <ascii>
                                     const size_t slen = pay[9];
-                                    if (10 + slen <= avail && slen > 0)
-                                        g_clientName[c].assign(
+                                    if (10 + slen <= avail && slen > 0) {
+                                        annName.assign(
                                             reinterpret_cast<const char*>(pay + 10), slen);
+                                        haveName = true;
+                                    }
                                 } else if (std::memcmp(pay, kHostTrackIndexObj, 8) == 0 &&
                                            pay[8] == 0x08) {          // pb: 08 <varint>
                                     // ⚠ A REAL VARINT, not one byte. The old
@@ -2275,11 +2282,14 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                         ++k; shift += 7;
                                     }
                                     const int v = int(int64_t(u));
-                                    g_clientIndex[c] = v;             // 1-based track idx
+                                    annIndex = v;                     // 1-based track idx
+                                    haveIndex = true;
                                     // The bytes that produced it, so a disagreement
                                     // like the one above is one grep away instead of a
-                                    // round of guessing across two machines.
-                                    {
+                                    // round of guessing across two machines. First
+                                    // announcement only: a move re-sends it from every
+                                    // instance at once, and that has its own line.
+                                    if (g_namedClients.count(c) == 0) {
                                         char hex[64] = {0}; int o = 0;
                                         for (size_t q = 9; q < avail && q < 19 && o < 57; ++q)
                                             o += std::snprintf(hex + o, sizeof(hex) - o,
@@ -2288,27 +2298,44 @@ void workerMain(uint16_t tcpPort, uint16_t dataPort) {
                                                    avail, hex, v);
                                     }
                                 }
-                                // Queue once this client has announced BOTH; the
-                                // port claim below ties them to the next new port.
-                                auto itN = g_clientName.find(c);
-                                auto itI = g_clientIndex.find(c);
-                                if (itN != g_clientName.end() && itI != g_clientIndex.end()) {
-                                    g_pending.push_back({ itN->second, itI->second });
-                                    g_namedClients.insert(c);
-                                    // ALWAYS logged, not behind g_trace: it fires
-                                    // once per plug-in connect, and it is the only
-                                    // record of what the host calls an instance.
-                                    // Needed to tell a master / monitoring-chain
-                                    // Meter from a plain track one without guessing.
-                                    // (It said that and still used slog(), which is
-                                    // trace-gated — so on a machine with tracing off
-                                    // this record did not exist. slogAlways now.)
-                                    slogAlways("instance announced: track=%d name=\"%s\"",
-                                               itI->second, itN->second.c_str());
-                                    // KEEP g_clientName/g_clientIndex keyed by this
-                                    // connection fd — the dedicated-port correlation
-                                    // reads them by fd; they are no longer a
-                                    // consume-once queue. Cleared on disconnect.
+                                if (haveName || haveIndex) {
+                                    const int oldIndex = g_clientIndex.count(c) ? g_clientIndex[c] : 0;
+                                    const std::string oldName = g_clientName.count(c) ? g_clientName[c] : std::string();
+                                    ::sslcore::id::Announce a;
+                                    {
+                                        std::lock_guard<std::mutex> lk(g_meterMx);
+                                        ::sslcore::id::TrackIdentity<socket_t> ident{
+                                            g_namedClients, g_clientName, g_clientIndex,
+                                            g_connPort, g_portName, g_portIndex };
+                                        a = haveName ? ident.onName(c, annName)
+                                                     : ident.onIndex(c, annIndex);
+                                    }
+                                    if (a == ::sslcore::id::Announce::Completed) {
+                                        // Queue once this client has announced BOTH; the
+                                        // port claim ties them to the next new port.
+                                        g_pending.push_back({ g_clientName[c], g_clientIndex[c] });
+                                        // ALWAYS logged, not behind g_trace: it fires
+                                        // once per plug-in connect, and it is the only
+                                        // record of what the host calls an instance.
+                                        // Needed to tell a master / monitoring-chain
+                                        // Meter from a plain track one without guessing.
+                                        slogAlways("instance announced: track=%d name=\"%s\"",
+                                                   g_clientIndex[c], g_clientName[c].c_str());
+                                        // KEEP g_clientName/g_clientIndex keyed by this
+                                        // connection fd — the dedicated-port correlation
+                                        // reads them by fd; they are no longer a
+                                        // consume-once queue. Cleared on disconnect.
+                                    } else if (a == ::sslcore::id::Announce::Changed) {
+                                        // The track moved or was renamed. Logged always:
+                                        // it is the only record that the port's track
+                                        // changed under a running session.
+                                        if (haveIndex)
+                                            slogAlways("instance renumbered: track %d -> %d (%s)",
+                                                       oldIndex, annIndex, g_clientName[c].c_str());
+                                        else
+                                            slogAlways("instance renamed: \"%s\" -> \"%s\" (track %d)",
+                                                       oldName.c_str(), annName.c_str(), g_clientIndex[c]);
+                                    }
                                 }
                             }
 

@@ -802,6 +802,11 @@ if(NOT WIN32)
     target_include_directories(test_project_scoped PRIVATE src)
     add_test(NAME project_scoped COMMAND test_project_scoped)
 
+    # An SSL plug-in's track follows it when the track moves (SslTrackIdentity.h).
+    add_executable(test_ssl_track_identity tests/test_ssl_track_identity.cpp)
+    target_include_directories(test_ssl_track_identity PRIVATE src)
+    add_test(NAME ssl_track_identity COMMAND test_ssl_track_identity)
+
     add_executable(test_uc1_protocol tests/test_uc1_protocol.cpp src/UC1Protocol.cpp)
     target_include_directories(test_uc1_protocol PRIVATE src)
     add_test(NAME uc1_protocol COMMAND test_uc1_protocol)
