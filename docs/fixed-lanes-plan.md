@@ -140,7 +140,9 @@ UF8 + UF1, Anzahl/Blättern). Kontext = fokussierte Spur.
   - Shift = diese Lane zum Spiel-Satz dazu / weg (Schichten, wie Ctrl-Klick in REAPER).
   - Lang = diese Lane zur aktiven Comp-Lane machen (bzw. Comping mit ihr als Ziel).
   - Cmd = „Comp here“ aus dieser Lane (ohne vorher hinzusteppen).
-- **Blättern:** UF1 wie immer ◄ ► lang; UF8 bankbar wie die FX-Bank.
+- **Blättern:** UF1 wie immer ◄ ► lang; UF8 bankbar wie die FX-Bank. Steppt das Rad auf eine
+  Lane ausserhalb der sichtbaren Seite, blättert die Bank von selbst mit.
+- **Spur ohne Lanes:** alle Tasten dunkel, bis auf eine: „Lanes on“ (`lanes_fixed_toggle`).
   ⛔ Falle aus der Karte: `g_dynBankPage[8]` / `g_dynBankCtrl[8]` sind auf Art < 8 bemessen,
   Lanes wäre 12. Die Felder wachsen mit, sonst schreibt die Bank daneben.
 
@@ -198,10 +200,19 @@ Das Wischen mit der Maus ist in REAPER der Kern des Comping: man zieht über die
 Quell-Lane, und die Comp-Lane übernimmt sie. Drei Arten, das an der Hardware zu tun, von
 einfach bis spektakulär:
 
-1. **Mit dem Rad malen (UF1).** Mitte des Kreuzes halten und das Rad drehen: der Play-Cursor
-   fährt (man hört mit, wie beim Scrub), und die überfahrene Strecke wird aus der gehörten Lane
-   in die Comp-Lane gemalt. Loslassen beendet den Strich. Rückwärts drehen nimmt zurück, was
-   im selben Strich zu weit ging. Das ist Wischen mit dem Rad statt mit der Maus.
+1. **Mit dem Rad malen (UF1).** Mitte des Kreuzes halten und das Rad drehen: der Cursor fährt,
+   und die überfahrene Strecke wird aus der gehörten Lane in die Comp-Lane gemalt. Loslassen
+   beendet den Strich. Rückwärts drehen nimmt zurück, was im selben Strich zu weit ging. Das
+   ist Wischen mit dem Rad statt mit der Maus.
+   - **Mithören ist eine Einstellung, ab Werk aus** („Scrub while painting“). Viele wollen das
+     Gegarble eines Scrubs nicht hören; ohne fährt der Cursor stumm, und die gemalte Strecke
+     ist im Arrange und auf dem UF1-Display zu sehen.
+   - Stattdessen ab Werk an: **„Play the stroke after painting“**. Nach dem Loslassen spielt
+     REAPER den Strich einmal ab, mit kurzem Vorlauf (Einstellung, Werk 1 s), und stoppt
+     danach wieder dort, wo er vorher stand. So hört man den Übergang sauber statt verzerrt.
+   - Beide aus: stumm malen, selber abspielen.
+   - Während des Strichs zeigt ein Razor auf der Höhe der Lane die Strecke im Arrange; der
+     UF1 zeigt „Paint“, die Lane und die Länge.
 2. **Live-Comping beim Abspielen („Schnittpult“).** Malen einschalten (Builtin
    `lane_paint_live`, lang auf der Mitte), Play drücken, und bei jedem Lane-Wechsel mit dem Rad,
    dem Kreuz, der Bank oder SEL schreibt Rea-Sixty ab dieser Stelle die neue Lane in den Comp.
@@ -235,6 +246,7 @@ aktiv. So funktioniert das Comping auch für alle, die noch mit Takes statt Lane
 `lane_next`, `lane_prev`, `lane_ab`, `lane_play_all`, `lane_play_none`, `lane_play_comp`
 (nur aktive Comp-Lane), `lane_play_toggle` (gehörte Lane in den Satz / heraus),
 `lane_paint_live` (Live-Comping an/aus), `lane_paint_hold` (Malen, solange gehalten),
+`lane_paint_discard` (laufenden Live-Durchgang verwerfen, nur bei Entscheid 6 = „bei Stop“),
 `lane_comp_here`, `lane_comp_area_up`, `lane_comp_area_down`, `lane_loop_here`,
 `lane_comping_toggle`, `lane_comp_new` (Comp in neue leere Lane), `lane_show_one_toggle`
 (`C_LANESCOLLAPSED`), `lanes_fixed_toggle` (`I_FREEMODE`), `jog_mode_lanes`,
@@ -242,10 +254,12 @@ aktiv. So funktioniert das Comping auch für alle, die noch mit Takes statt Lane
 
 ### Banner, Einstellungen
 
-- Banner: „Jog • Lanes“, beim UF8-Wechsel „UF8 • Lanes“. Beim Steppen kein Banner (zu
-  laut), der UF1 zeigt es.
+- Banner: „Jog • Lanes“, beim UF8-Wechsel „UF8 • Lanes“, Live-Comping „Lanes • Live paint“
+  an / aus. Beim Steppen kein Banner (zu laut), der UF1 zeigt es.
 - Einstellungen (Behaviour → Lanes): „Lane steps skip comp lanes“ (Werk an), „Lanes follow
-  the edit group“ (Werk an), „UF1 fader = take gain in Lanes mode“ (Werk aus).
+  the edit group“ (Werk an), „UF1 fader = take gain in Lanes mode“ (Werk aus), „Scrub while
+  painting“ (Werk aus), „Play the stroke after painting“ (Werk an, Vorlauf 1 s), „Snap paint
+  to grid“ (Werk aus), „Paint lead-in“ (Werk 20 ms).
 
 ---
 
@@ -317,3 +331,187 @@ Jeder Schritt ist für sich nutzbar. B allein ist schon das, was es nirgends gib
 - Forum: https://forums.cockos.com/showthread.php?t=291607, https://forum.cockos.com/showthread.php?p=2846050,
   https://forum.cockos.com/showthread.php?t=283665, https://forums.cockos.com/showthread.php?t=290705,
   https://forum.cockos.com/showthread.php?p=2900845
+
+---
+
+## 7. Fallstudien
+
+Jede Fallstudie geht einen echten Arbeitsgang durch: was man in der Hand hat, was man drückt,
+was Rea-Sixty dabei in REAPER tut, und was man sieht und hört. Die Bedienung ist die aus dem
+Plan mit den Werksbelegungen; wo ein offener Entscheid hineinspielt, steht es dabei.
+
+### Fall 1: Lead-Vocal aus sechs Takes, Zeile für Zeile
+
+**Ausgangslage:** Spur „Lead Vox“, Fixed Lanes an, sechs Takes in Lanes 1 bis 6, noch kein
+Comp. Die Sängerin ist weg, jetzt wird ausgesucht.
+
+1. **SEL auf „Lead Vox“** (UF8). Die Spur ist fokussiert; UF1 und die Lanes-Bank folgen ihr.
+2. **SCRUB halten, Rad auf „Lanes“.** Kopfzeile auf dem UF1: „JOG Lanes“. Die Soft-Keys zeigen
+   (mit Bank „Lanes“) die Lanes 1 bis 4 mit Namen; Lane 1 hell, weil sie spielt.
+3. **Cursor an die erste Zeile, Shift + ←** = Loop auf das Item unter dem Cursor (noch keine
+   Comp-Area da). Rea-Sixty setzt die Loop-Punkte auf die Item-Grenzen von Lane 1 und schaltet
+   Repeat ein. **Play.**
+4. **Rad drehen.** Jede Detente: nur die nächste Lane spielt (`C_LANEPLAYS`, exklusiv). Man
+   hört in der Schleife Take 2, 3, 4 … Die Lampe wandert mit, der UF1 zeigt den Lane-Namen und
+   „4/6“. Comp-Lanes gibt es noch keine, also nichts zu überspringen.
+5. **Take 4 sitzt: Mitte tippen („Comp here“).** Rea-Sixty setzt einen Razor über die Loop-
+   Strecke auf die Höhe von Lane 4 und löst 42475 aus. Comping war aus, also legt REAPER die
+   Comp-Lane C1 oben an, und die Zeile aus Take 4 steht darin. Die Mitte leuchtet (Comping an).
+   Was danach spielt (C1 oder weiter die gehörte Lane), ist REAPERs Verhalten beim Comping;
+   das klärt Sonde Frage 2, und die Lampen zeigen es.
+6. **→** springt zum nächsten Item-Rand, also zur nächsten Zeile. **Shift + ←** setzt die
+   Schleife dorthin. Weiter bei Schritt 4.
+7. **Eine Silbe aus Take 2 retten: Mitte halten und Rad drehen** über genau die Silbe (Malen,
+   Fall 3 im Detail). Loslassen spielt den Strich ab (Werkseinstellung).
+8. **Gegenprobe: Shift + →** (A/B) springt zwischen dem Comp und dem zuletzt gehörten Take.
+
+**Ergebnis:** C1 enthält den Comp, die sechs Takes sind unangetastet. Jeder „Comp here“ ist ein
+eigener Undo-Schritt.
+
+### Fall 2: Eine Stelle nachträglich tauschen
+
+**Ausgangslage:** Comp C1 steht, in Takt 23 klingt das „s“ aus Take 3 zu scharf.
+
+1. Cursor in die Comp-Area in Takt 23 (Rad im Playhead-Modus oder ← / → im Lanes-Modus, die
+   an Comp-Area-Rändern halten).
+2. **Shift + ↑ / ↓** (oder Shift + Rad): die Comp-Area unter dem Cursor wandert eine Lane hoch
+   oder runter. Technisch: das Comp-Lane-Item unter dem Cursor auswählen, 42707 / 42708.
+   Hörbar sofort, wenn die Schleife läuft; die Anzeige nennt die Quell-Lane.
+3. Passt es nicht an der Grenze: ← / → an den Rand, dann Mitte halten + Rad, um die Grenze
+   nachzumalen.
+
+### Fall 3: Malen mit dem Rad, stumm und mit Vorhören
+
+**Ausgangslage:** Wie Fall 1, gehörte Lane ist Take 5. „Scrub while painting“ ist aus (Werk),
+„Play the stroke after painting“ an (Werk).
+
+1. Cursor kurz vor die Stelle.
+2. **Mitte halten, Rad nach rechts.** Der Cursor fährt stumm Detente um Detente (Schrittweite
+   wie im Playhead-Modus: Raster, Takte oder Sekunden). Im Arrange wächst eine Markierung auf
+   der Höhe von Lane 5; der UF1 zeigt „Paint 5“ und die Länge.
+3. Zu weit gefahren: **Rad zurück**, die Markierung schrumpft mit.
+4. **Loslassen.** Rea-Sixty setzt den Razor über die Strecke auf Lane 5, 20 ms Vorlauf
+   (Einstellung), 42475. Ein Undo-Schritt. Dann spielt REAPER ab 1 s vor dem Strich bis zu
+   seinem Ende und stoppt wieder, der Cursor steht wieder da, wo er vorher war.
+5. Wer lieber mithört: „Scrub while painting“ an, dann klingt Schritt 2 wie ein Scrub.
+
+### Fall 4: Live-Comping eines Gitarrensolos (Schnittpult)
+
+**Ausgangslage:** Spur „Solo Gtr“, fünf Takes in Lanes 1 bis 5. UF8 in der Lanes-Ansicht,
+acht Strips, davon fünf belegt, Namen auf den Scribbles.
+
+1. **Mitte lang** (UF1) oder das Builtin `lane_paint_live` auf einem Soft-Key: Live-Comping an.
+   Banner „Lanes • Live paint“, die Mitte leuchtet.
+2. **Play** vor dem Solo.
+3. **SEL auf Strip 2** in Takt 1 des Solos, **SEL auf Strip 5** in Takt 5, **SEL auf Strip 1**
+   für die letzte Phrase. Jede SEL: Rea-Sixty merkt Zeitpunkt und Lane; ab da hört man diese
+   Lane (exklusiv). Der Farbbalken der gewählten Lane leuchtet hell.
+4. **Stop.** Die Abschnitte [Start → Takt 5: Lane 2], [Takt 5 → letzte Phrase: Lane 5],
+   [letzte Phrase → Stop: Lane 1] werden als Comp-Areas in C1 geschrieben, ein Undo-Schritt
+   für den ganzen Durchgang.
+   - Entscheid 6: entweder schreibt jeder SEL sofort (man sieht die Areas entstehen), oder
+     erst bei Stop (ein verpatzter Durchgang lässt sich mit einem Druck verwerfen, statt Undo).
+5. **Mit Schleife:** Loop über das Solo, Live-Comping an. Jeder Durchgang schreibt seine
+   Wechsel über den vorigen; wenn es sitzt, Live-Comping aus.
+
+Ohne UF8 geht dasselbe mit dem Rad oder ↑ / ↓ auf dem UF1: jeder Lane-Schritt ist ein Schnitt.
+
+### Fall 5: Drums in der Gruppe comppen
+
+**Ausgangslage:** Kick, Snare, OH L/R, Room, alle in Media-Edit-Gruppe 3, jede mit vier Takes
+in Lanes 1 bis 4. „Lanes follow the edit group“ an (Werk).
+
+1. **SEL auf Snare**, Jog-Modus Lanes.
+2. **Rad:** jeder Schritt schaltet auf allen fünf Spuren dieselbe Lane (Gruppe über alle 128
+   Gruppen, `trackGroups_`). Man hört das ganze Set aus Take 3.
+3. **Fill in Takt 16 aus Take 3:** Zeitauswahl über den Fill (am Rechner oder mit dem
+   Razor-Modus), **Mitte tippen**. Rea-Sixty setzt den Razor auf Lane 3 aller Gruppenspuren,
+   42475 legt auf allen fünf die Comp-Area an. Phasengleich, weil alle Spuren dieselbe Strecke
+   aus derselben Lane bekommen.
+4. **Eine Spur allein** (Room nur aus Take 1): Gruppe kurz aus (REAPER-Gruppen-Schalter) oder
+   die Einstellung aus, dann nur Room fokussieren.
+
+### Fall 6: Drei Bass-Versionen (Playlist-Betrieb)
+
+**Ausgangslage:** Spur „Bass“, Lane 1 „Finger“, Lane 2 „Pick“, Lane 3 „Synth“, jede eine ganze
+Fassung, exklusiv. Kein Comping.
+
+1. **UF8 Lanes-Ansicht** (Soft-Key `uf8_lanes_view_toggle`). Strips 1 bis 3 heissen Finger,
+   Pick, Synth; Finger hell.
+2. **Play, SEL auf „Pick“.** Nur Lane 2 spielt, im Takt, ohne Aussetzer. SEL „Synth“,
+   SEL „Finger“: Versionen im Kontext des Songs vergleichen.
+3. **Fader auf „Synth“ ziehen** (Entscheid 2, Fader = Take-Gain unter dem Cursor): die Synth-
+   Fassung ist 3 dB lauter, runter, damit der Vergleich fair ist. Das ändert das Item in Lane 3
+   unter dem Cursor, nicht die Spur.
+4. **A/B** (Shift + → auf dem UF1): zwischen den zwei zuletzt gehörten Fassungen hin und her.
+5. Entschieden: „Pick“ bleibt die spielende Lane und wird so gespeichert.
+
+### Fall 7: Gedoppelte Gitarre, mehrere Lanes zugleich
+
+**Ausgangslage:** Spur „Rhythm Gtr“, Lanes 1 bis 4 sind vier Einspielungen. Gewollt: 1 und 3
+zusammen als Dopplung.
+
+1. **Bank „Lanes“** (UF1-Soft-Keys oder UF8-Top-Keys): Druck auf Lane 1 = nur Lane 1.
+   **Shift + Druck auf Lane 3** = Lane 3 dazu. Beide Tasten hell, der UF1 zeigt „2 von 4“.
+2. Dasselbe in der UF8-Ansicht: SEL auf 1, SOLO auf 3.
+3. **Kurz Lane 4 allein hören:** Rad eine Detente, nur Lane 4 spielt (Vorhören ist exklusiv).
+4. **Zurück zur Dopplung: Shift + →** (A/B) holt den ganzen Satz 1 + 3 zurück, nicht nur eine
+   Lane.
+5. **Alles gegenhören:** `lane_play_all` aus der Werksbank „Lanes“, dann wieder A/B.
+
+### Fall 8: Nachaufnahme im Punch-In
+
+**Ausgangslage:** Comp C1 spielt. Für Takt 40 wird ein neuer Take aufgenommen; REAPER legt ihn
+in eine neue Lane und lässt diese spielen (die Forumsklage).
+
+1. Aufnahme wie gewohnt (Transport, UF1 REC).
+2. Nach dem Stop springt die helle Lampe sichtbar auf die neue Lane 7: man sieht sofort, dass
+   jetzt der Rohtake spielt statt des Comps.
+3. **Shift + →** (A/B): zurück auf C1, so wie es vorher war.
+4. Takt 40 aus Lane 7 übernehmen: Cursor dorthin, Rad auf Lane 7 (vorhören), **Mitte**.
+
+Rea-Sixty ändert REAPERs Aufnahmeverhalten nicht; es macht es sichtbar und in einem Griff
+rückgängig.
+
+### Fall 9: Takes in einem Item (ohne Lanes)
+
+**Ausgangslage:** Spur „Keys“ ohne Fixed Lanes, ein Item mit fünf Takes (REAPERs Takesystem).
+Entscheid 7 vorausgesetzt.
+
+1. Jog-Modus Lanes, Cursor im Item. Die Anzeige sagt „Takes“ statt „Lanes“ und nennt den
+   aktiven Take.
+2. **Rad:** der aktive Take des Items unter dem Cursor steppt (`I_CURTAKE`), man hört ihn.
+3. **Mitte (Comp here)** mit Zeitauswahl: das Item wird an den Grenzen geteilt, im Mittelteil
+   ist der gewählte Take aktiv. Malen mit dem Rad genauso, an den Strichgrenzen geteilt.
+4. Wer lieber auf Lanes arbeitet: `lanes_fixed_toggle` bzw. REAPERs „convert takes to lanes“
+   (42661), dann gilt alles aus Fall 1.
+
+### Fall 10: Viele Lanes
+
+**Ausgangslage:** 14 Lanes auf einer Spur.
+
+- UF1-Soft-Keys: vier sichtbar, **◄ / ► lang** blättert innerhalb der Bank (wie bei jeder
+  dynamischen Bank), die Seite steht auf dem Display.
+- UF8-Top-Keys: acht sichtbar, blättern wie bei der FX-Bank.
+- UF8-Ansicht: Strips 1 bis 8, **Bank ◄ / ►** zeigt 9 bis 14.
+- Das Rad kennt keine Seiten: es steppt durch alle 14, und die Bank blättert von selbst mit, damit
+  die gehörte Lane immer auf einer Taste zu sehen ist.
+
+### Fall 11: Spur ohne Lanes
+
+**Ausgangslage:** Lanes-Modus an, fokussiert ist eine normale Spur mit einem Take.
+
+- UF1: „No lanes“ in der Kopfzeile, Rad und Kreuz tun nichts, kein Fehler.
+- Bank „Lanes“: alle Tasten dunkel, bis auf eine: „Lanes on“ (`lanes_fixed_toggle`).
+- UF8-Ansicht: Strips leer, SEL tut nichts.
+- Sobald man eine Spur mit Lanes fokussiert, ist alles wieder da. Kein Modus springt von selbst
+  um.
+
+### Fall 12: Einen Durchgang verwerfen
+
+- **Comp here / Malen:** jeder Strich ist ein Undo-Schritt, REAPERs Undo nimmt ihn zurück.
+- **Live-Comping:** der ganze Durchgang ist ein Undo-Schritt. Mit Entscheid 6 = „erst bei
+  Stop“ kommt dazu: `lane_paint_discard` verwirft den laufenden Durchgang, bevor etwas
+  geschrieben ist.
+- **Spielsatz:** A/B ist das Undo für „wer spielt“; REAPER legt dafür keinen Undo-Schritt an.
+
