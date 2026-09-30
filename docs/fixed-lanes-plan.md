@@ -137,8 +137,14 @@ Pegelangleichen von Takes beim Comping.
 
 **LEDs:** ↑/↓ nur, wenn es oben/unten noch eine Lane gibt; Mitte = Comping an.
 
-**Gruppen:** Ist die Spur in einer Media-Edit-Gruppe (Drums), steppen alle Gruppenspuren
-mit Lanes dieselbe Lane-Nummer mit. Einstellung, Werk an.
+**Gruppen (entschieden 30.09.):** keine eigene Einstellung, Rea-Sixty folgt REAPERs
+Gruppierung. Steppen, Spielsatz, Comp here und Malen wirken auf alle Spuren derselben
+Media-Edit-Gruppe (alle 128 Gruppen, `trackGroups_`), genau dann, wenn REAPERs Gruppierung
+eingeschaltet ist: dieselbe Bedingung, die der UF1-Razor schon benutzt (Schalter 1156
+„Toggle item grouping override“ und 40771, siehe `uf1RazorCreateAtCursor_` und
+`uf1SelectGroupMates_` in main.cpp). Ist sie aus,
+wirkt alles nur auf die fokussierte Spur. REAPERs eigene Comp-Area-Actions respektieren die
+Gruppierung ohnehin (whatsnew.txt).
 
 ### Baustein C: dynamische Bank „Lanes“ (UF8 und UF1)
 
@@ -290,7 +296,7 @@ eigenes gesetzt ist (`fillDerivedUf1Slots_`).
 2. **Das Kreuz folgt dem Encoder-Modus**, nach demselben Muster wie beim UF1: eine
    Umleitung `uf8RemapCrossForEncMode_` an der einen Stelle, an der das Zoom-Pad in die
    Bindings geht, und eigene Belegungs-IDs pro Modus. Aber nur für Modi, die ein eigenes Kreuz
-   mitbringen, vorerst nur Lanes (5 IDs, mit ENC PUSH 6). Alle anderen Modi fallen auf die
+   mitbringen, vorerst nur Lanes (6 IDs: Kreuz und ENC PUSH; H erweitert das auf alle Modi). Alle anderen Modi fallen auf die
    Zoom-Grundbelegung zurück, für sie ändert sich nichts. Weitere Modi können später je fünf
    IDs dazubekommen.
 3. **Dieselbe Tabelle wie am UF1**, dieselben Builtins, derselbe Kern: Encoder = Lane steppen,
@@ -299,8 +305,9 @@ eigenes gesetzt ist (`fillDerivedUf1Slots_`).
    Live-Comping. Wer beide Flächen hat, hat an beiden dieselben Griffe.
 4. **Anzeige ohne grosses Display:** die Top-Soft-Keys zeigen die Bank „Lanes“ (acht Namen,
    Lampen = Spielsatz). Beim Steppen zeigt die Wertzeile des fokussierten Strips „Lane“ und
-   den Namen der gehörten Lane (je 8 Zeichen), beim Malen „Paint“. Ob der Lanes-Modus die
-   Bank „Lanes“ selbst auf die Top-Keys holt, ist ein Entscheid (unten).
+   den Namen der gehörten Lane (je 8 Zeichen), beim Malen „Paint“. Der Lanes-Modus holt die
+   Bank „Lanes“ selbst auf die Top-Keys und gibt beim Verlassen die vorige zurück
+   (entschieden; abschaltbar mit „Lanes mode brings the Lanes bank“).
 5. **Encoder-Auflösung:** der Kanal-Encoder schickt mehrere Ereignisse pro Rastung; Lanes
    benutzt denselben Sammler wie Channel Select (`kChannelEncoderScale`), eine Rastung = eine
    Lane.
@@ -324,21 +331,23 @@ hat. Alles davon gibt es beim UF1 schon und wird geteilt, nicht nachgebaut:
 steht darüber ein Dropdown „Encoder mode“, wie der Jog-Modus-Wähler beim UF1-Kreuz:
 - Es folgt dem Live-Modus, und ein Wechsel dort schaltet den UF8 um. Was man bearbeitet, ist
   immer das, was das Gerät gerade tut.
-- Damit jeder Modus im Dropdown bearbeitbar ist, bekommt jeder Modus seine fünf Kreuz-IDs (bei
-  17 Modi 85; ButtonId ist 16 Bit). Wie beim UF1 füllt das Laden jede leere Modus-Belegung mit
+- Damit jeder Modus im Dropdown bearbeitbar ist, bekommt jeder Modus seine sechs IDs: fünf
+  fürs Kreuz, eine für ENC PUSH tippen (bei 17 Modi 102; ButtonId ist 16 Bit). Wie beim UF1 füllt das Laden jede leere Modus-Belegung mit
   der Zoom-Grundbelegung (Muster `fillDerivedUf1Slots_`), und nur Lanes bekommt ab Werk sein
   eigenes Kreuz. Für alle bestehenden Modi zoomt das Kreuz also weiter, bis man es umbelegt.
 - Das ändert G: nicht mehr „nur Lanes bekommt IDs“, sondern alle, mit Rückfall wie beim UF1.
   Das Bindings-Upgrade legt sie an.
 
 **2. Karussell am UF8.** Mit dem Encoder den Encoder-Modus wählen, wie SCRUB + Rad am UF1:
-- **Griff:** ENC PUSH halten und den Kanal-Encoder drehen. Loslassen ohne Drehen löst weiter
-  aus, was auf ENC PUSH liegt (heute: Plug-in-Fenster). Dieselbe Regel wie bei der Mitte im
+- **Griff:** ENC PUSH halten und den Kanal-Encoder drehen. Loslassen ohne Drehen löst aus, was
+  im aktuellen Modus auf ENC PUSH liegt (entschieden: pro Modus belegbar; ab Werk
+  Plug-in-Fenster wie heute, im Lanes-Modus Comp here). Dieselbe Regel wie bei der Mitte im
   Lanes-Modus: wurde gedreht, war es eine Wahl, und das Loslassen feuert nichts.
 - **Eigener Ring für den UF8**, getrennt vom UF1-Encoder-Ring, aber derselbe Code: der Ring
   (Reihenfolge, Sichtbarkeit, Speichern, Schritt) wird aus den UF1-Globals in eine kleine
   Struktur gezogen, die es zweimal gibt (UF1, UF8). So bleiben beide Flächen einzeln
   einstellbar, und es gibt keine zweite Kopie der Logik.
+- **Ab Werk alle 17 Modi sichtbar** (entschieden 30.09.); man hakt ab, was man nicht braucht.
 - **Reihenfolge und Sichtbarkeit einstellbar**, im selben Editor-Block wie beim UF1, angezeigt
   unter dem Binding-Editor von UF8 ENC PUSH: Häkchen = im Karussell, ▲ / ▼ = Reihenfolge.
 - **Anzeige ohne grosses Display:** solange ENC PUSH gehalten ist, zeigen die acht
@@ -358,7 +367,7 @@ kommen. Dann kann ein UF8 ohne UF1 editieren.
 `lane_next`, `lane_prev`, `lane_ab`, `lane_play_all`, `lane_play_none`, `lane_play_comp`
 (nur aktive Comp-Lane), `lane_play_toggle` (gehörte Lane in den Satz / heraus),
 `lane_paint_live` (Live-Comping an/aus), `lane_paint_hold` (Malen, solange gehalten),
-`lane_paint_discard` (laufenden Live-Durchgang verwerfen, nur bei Entscheid 6 = „bei Stop“),
+
 `lane_comp_here`, `lane_comp_area_up`, `lane_comp_area_down`, `lane_loop_here`,
 `lane_comping_toggle`, `lane_comp_new` (Comp in neue leere Lane), `lane_show_one_toggle`
 (`C_LANESCOLLAPSED`), `lanes_fixed_toggle` (`I_FREEMODE`), `jog_mode_lanes`,
@@ -370,8 +379,8 @@ eingestellt).
 - Banner: „Jog • Lanes“ (UF1), „Encoder • Lanes“ (UF8), „Lanes • Strips“ an / aus,
   Live-Comping „Lanes • Live paint“
   an / aus. Beim Steppen kein Banner (zu laut), der UF1 zeigt es.
-- Einstellungen (Behaviour → Lanes): „Lane steps skip comp lanes“ (Werk an), „Lanes follow
-  the edit group“ (Werk an), „UF1 fader = take gain in Lanes mode“ (Werk aus), „Scrub while
+- Einstellungen (Behaviour → Lanes): „Lane steps skip comp lanes“ (Werk an), „Lanes mode brings the
+  Lanes bank“ (UF8-Top-Keys, Werk an), „UF1 fader = take gain in Lanes mode“ (Werk aus), „Scrub while
   painting“ (Werk aus), „Play the stroke after painting“ (Werk an, Vorlauf 1 s), „Snap paint
   to grid“ (Werk aus), „Paint lead-in“ (Werk 20 ms).
 
@@ -418,31 +427,25 @@ Jeder Schritt ist für sich nutzbar. B allein ist schon das, was es nirgends gib
 
 ## 6. Entscheide für Frank
 
-**Schon entschieden (30.09.):**
+**Alles entschieden (Frank 30.09.2026):**
 - Lanes ist ein Encoder-Modus (UF8) bzw. Jog-Modus (UF1), kein neuer Modus-Typ; die Strips
   sind eine Option dieses Modus, ab Werk aus (Baustein D).
 - Encoder-Modus wählen per ENC PUSH halten + drehen bleibt („sehr geil, behalten“).
 - Mithören beim Malen mit dem Rad ist optional, ab Werk aus.
-
-**Offen:**
-
-1. Reihenfolge wie in Abschnitt 5, oder die Strips-Option (D) früher?
-2. UF8-Fader bei „Lanes on the strips“: Take-Gain unter dem Cursor, oder die Spur bleibt auf dem
-   Fader?
-3. Gruppen: Lanes folgen der Media-Edit-Gruppe, Werk an?
-4. Rad in der Grundstellung: ganze Spur steppen (Versionen/Audition) und Shift = Comp-Area,
-   oder umgekehrt?
-5. „Comp here“ / Malen auf die Mitte des Kreuzes, oder die Mitte bleibt `jog_content_drag` wie
-   in den anderen Modi?
-6. Live-Comping: schreibt jeder Lane-Wechsel beim Abspielen sofort, oder erst nach Stop (dann
-   ist ein verpatzter Durchgang mit einem Druck verworfen)?
-7. Takes in Items mit in den Plan, oder nur Lanes?
-8. UF8 im Lanes-Encoder-Modus: wird ENC PUSH auch pro Modus belegbar (Werk: Comp here), oder
-   bleibt er „Plug-in-Fenster“?
-9. Holt der Lanes-Encoder-Modus die Bank „Lanes“ selbst auf die UF8-Top-Keys (und beim
-   Verlassen die vorige zurück), oder wählt man die Bank selbst?
-10. Welche Modi sind ab Werk im UF8-Karussell sichtbar: alle 17, oder dieselben wie im
-    UF1-Encoder-Ring plus Lanes?
+1. Reihenfolge wie in Abschnitt 5: die Strips-Option kommt spät.
+2. UF8-Fader bei „Lanes on the strips“ = Take-Gain des Items dieser Lane unter dem Cursor.
+3. Gruppen: keine eigene Einstellung, Rea-Sixty folgt REAPERs Gruppierung (Media-Edit-Gruppen,
+   wirksam, wenn REAPERs Gruppierung eingeschaltet ist, wie beim UF1-Razor).
+4. Rad / Encoder in der Grundstellung steppen die ganze Spur; Shift = Comp-Area.
+5. Mitte des Kreuzes im Lanes-Modus: tippen = Comp here, halten + drehen = malen, lang =
+   Live-Comping.
+6. Live-Comping schreibt jeden Lane-Wechsel sofort; ein Durchgang = ein Undo-Schritt.
+7. Takes in Items kommen mit, als letzter Schritt.
+8. UF8 ENC PUSH tippen ist pro Encoder-Modus belegbar; ab Werk Plug-in-Fenster, im
+   Lanes-Modus Comp here.
+9. Der Lanes-Modus holt die Bank „Lanes“ auf die UF8-Top-Keys und gibt die vorige zurück,
+   abschaltbar.
+10. UF8-Karussell ab Werk mit allen 17 Modi sichtbar.
 
 ---
 
@@ -539,11 +542,10 @@ eigener Undo-Schritt.
 3. **SEL auf Strip 2** in Takt 1 des Solos, **SEL auf Strip 5** in Takt 5, **SEL auf Strip 1**
    für die letzte Phrase. Jede SEL: Rea-Sixty merkt Zeitpunkt und Lane; ab da hört man diese
    Lane (exklusiv). Der Farbbalken der gewählten Lane leuchtet hell.
-4. **Stop.** Die Abschnitte [Start → Takt 5: Lane 2], [Takt 5 → letzte Phrase: Lane 5],
-   [letzte Phrase → Stop: Lane 1] werden als Comp-Areas in C1 geschrieben, ein Undo-Schritt
-   für den ganzen Durchgang.
-   - Entscheid 6: entweder schreibt jeder SEL sofort (man sieht die Areas entstehen), oder
-     erst bei Stop (ein verpatzter Durchgang lässt sich mit einem Druck verwerfen, statt Undo).
+4. Jeder SEL schreibt sofort (entschieden): die Abschnitte [Start → Takt 5: Lane 2],
+   [Takt 5 → letzte Phrase: Lane 5] entstehen im Arrange, während das Solo läuft. **Stop**
+   schliesst den letzten Abschnitt [letzte Phrase → Stop: Lane 1] ab. Der ganze Durchgang ist
+   ein Undo-Schritt.
 5. **Mit Schleife:** Loop über das Solo, Live-Comping an. Jeder Durchgang schreibt seine
    Wechsel über den vorigen; wenn es sitzt, Live-Comping aus.
 
@@ -552,7 +554,7 @@ Ohne UF8 geht dasselbe mit dem Rad oder ↑ / ↓ auf dem UF1: jeder Lane-Schrit
 ### Fall 5: Drums in der Gruppe comppen
 
 **Ausgangslage:** Kick, Snare, OH L/R, Room, alle in Media-Edit-Gruppe 3, jede mit vier Takes
-in Lanes 1 bis 4. „Lanes follow the edit group“ an (Werk).
+in Lanes 1 bis 4. REAPERs Gruppierung ist eingeschaltet.
 
 1. **SEL auf Snare**, Jog-Modus Lanes.
 2. **Rad:** jeder Schritt schaltet auf allen fünf Spuren dieselbe Lane (Gruppe über alle 128
@@ -561,8 +563,8 @@ in Lanes 1 bis 4. „Lanes follow the edit group“ an (Werk).
    Razor-Modus), **Mitte tippen**. Rea-Sixty setzt den Razor auf Lane 3 aller Gruppenspuren,
    42475 legt auf allen fünf die Comp-Area an. Phasengleich, weil alle Spuren dieselbe Strecke
    aus derselben Lane bekommen.
-4. **Eine Spur allein** (Room nur aus Take 1): Gruppe kurz aus (REAPER-Gruppen-Schalter) oder
-   die Einstellung aus, dann nur Room fokussieren.
+4. **Eine Spur allein** (Room nur aus Take 1): REAPERs Gruppierung kurz aus, Room fokussieren,
+   comppen, Gruppierung wieder an.
 
 ### Fall 6: Drei Bass-Versionen (Playlist-Betrieb)
 
@@ -574,7 +576,7 @@ Fassung, exklusiv. Kein Comping.
    Finger hell.
 2. **Play, SEL auf „Pick“.** Nur Lane 2 spielt, im Takt, ohne Aussetzer. SEL „Synth“,
    SEL „Finger“: Versionen im Kontext des Songs vergleichen.
-3. **Fader auf „Synth“ ziehen** (Entscheid 2, Fader = Take-Gain unter dem Cursor): die Synth-
+3. **Fader auf „Synth“ ziehen** (Fader = Take-Gain unter dem Cursor): die Synth-
    Fassung ist 3 dB lauter, runter, damit der Vergleich fair ist. Das ändert das Item in Lane 3
    unter dem Cursor, nicht die Spur.
 4. **A/B** (Shift + → auf dem UF1): zwischen den zwei zuletzt gehörten Fassungen hin und her.
@@ -610,7 +612,7 @@ rückgängig.
 ### Fall 9: Takes in einem Item (ohne Lanes)
 
 **Ausgangslage:** Spur „Keys“ ohne Fixed Lanes, ein Item mit fünf Takes (REAPERs Takesystem).
-Entscheid 7 vorausgesetzt.
+Kommt als letzter Schritt (entschieden).
 
 1. Jog-Modus Lanes, Cursor im Item. Die Anzeige sagt „Takes“ statt „Lanes“ und nennt den
    aktiven Take.
@@ -645,9 +647,7 @@ Entscheid 7 vorausgesetzt.
 ### Fall 12: Einen Durchgang verwerfen
 
 - **Comp here / Malen:** jeder Strich ist ein Undo-Schritt, REAPERs Undo nimmt ihn zurück.
-- **Live-Comping:** der ganze Durchgang ist ein Undo-Schritt. Mit Entscheid 6 = „erst bei
-  Stop“ kommt dazu: `lane_paint_discard` verwirft den laufenden Durchgang, bevor etwas
-  geschrieben ist.
+- **Live-Comping:** geschrieben wird sofort, der ganze Durchgang ist ein Undo-Schritt.
 - **Spielsatz:** A/B ist das Undo für „wer spielt“; REAPER legt dafür keinen Undo-Schritt an.
 
 ### Fall 13: Comping nur mit dem UF8
@@ -664,7 +664,7 @@ Entscheid 7 vorausgesetzt.
 4. **FIT (Mitte) tippen:** Comp here, wie Fall 1 Schritt 5.
 5. **FIT halten und Encoder drehen:** malen, wie Fall 3.
 6. **Zurück zum Mischen:** `encoder_nudge` oder die Modus-Taste, die man gewohnt ist. Das
-   Zoom-Pad zoomt wieder, die Top-Keys sind wieder auf ihrer Bank (je nach Entscheid 9).
+   Zoom-Pad zoomt wieder, die Top-Keys sind wieder auf ihrer vorigen Bank.
 
 ### Fall 14: Encoder-Modus am UF8 wählen und das Kreuz umbelegen
 
@@ -755,8 +755,8 @@ painting“ aus, „Play the stroke after painting“ an (Werk).
 2. **FIT lang:** Live-Comping an, Banner „Lanes • Live paint“.
 3. **Play** vor dem Solo. **SEL 2** in Takt 1, **SEL 5** in Takt 5, **SEL 1** für die letzte
    Phrase. Jeder SEL ist ein Schnitt, der Farbbalken springt mit.
-4. **Stop.** Drei Comp-Areas in C1 (bzw. je nach Entscheid 6 schon während des Spielens).
-   Ein Undo-Schritt.
+4. Jeder SEL schreibt sofort, die Areas entstehen während des Spielens; **Stop** schliesst
+   den letzten Abschnitt ab. Ein Undo-Schritt.
 5. **`lanes_on_strips_toggle`** wieder aus: die Strips sind wieder Spuren, die Fader fahren
    auf die Spurlautstärken zurück.
 
@@ -766,7 +766,7 @@ painting“ aus, „Play the stroke after painting“ an (Werk).
 Strips an (wie U4, Schritt 1).
 
 1. **Play, SEL „Pick“, SEL „Synth“, SEL „Finger“:** jede Fassung im Song, ohne Aussetzer.
-2. **Synth ist zu laut:** Fader von „Synth“ runter (Entscheid 2: Take-Gain des Items unter
+2. **Synth ist zu laut:** Fader von „Synth“ runter (Take-Gain des Items unter
    dem Cursor). Fein nachstellen mit dem V-Pot desselben Strips.
 3. **V-Pot-Push auf „Synth“:** Loop auf das Synth-Item unter dem Cursor, zum genauen Vergleich.
 4. **Shift + →** (A/B): zwischen den beiden zuletzt gehörten Fassungen hin und her.
@@ -785,7 +785,7 @@ Strips an (wie U4, Schritt 1).
 ### U7: Drums in der Gruppe, vom UF8 aus
 
 **Ausgangslage:** Kick, Snare, OH L, OH R, Room in Media-Edit-Gruppe 3, je vier Takes.
-„Lanes follow the edit group“ an. Strips bleiben Spuren (Option aus).
+REAPERs Gruppierung an. Strips bleiben Spuren (Option aus).
 
 1. **SEL auf „Snare“**, Lanes-Modus. Die Top-Keys zeigen die Lanes der Snare.
 2. **Encoder:** alle fünf Spuren schalten mit; man hört das Set aus Take 2, 3, 4.
@@ -811,8 +811,8 @@ Strips an (wie U4, Schritt 1).
 2. Die Strips kommen zurück, egal wie die Option steht: Scribbles = Spuren, Farbbalken =
    Spurfarben, die Fader fahren auf die Spurlautstärken. Das Zoom-Pad zoomt wieder.
 3. Die Option bleibt gespeichert: beim nächsten Wechsel in Lanes sind die Strips wieder Lanes.
-4. Die Top-Keys: zurück auf ihre vorige Bank oder auf „Lanes“ stehen lassen, je nach
-   Entscheid 9.
+4. Die Top-Keys gehen zurück auf ihre vorige Bank (ausser „Lanes mode brings the Lanes bank“
+   ist aus, dann waren sie gar nicht umgeschaltet).
 
 ### U10: UF8 und UF1 zusammen
 
