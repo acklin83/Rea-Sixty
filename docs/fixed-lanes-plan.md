@@ -69,10 +69,23 @@ Lane-Funktionen nicht an.
 
 ---
 
-## 3. Die Idee: vier Bausteine, ein Modell
+## 3. Die Idee: ein Kern, ein Modus pro Fläche
 
-Ein gemeinsamer Kern (reine Logik, testbar), darauf drei Oberflächen, die man einzeln
-freigeben kann. Jede nutzt, was es schon gibt, und baut nichts nach.
+Ein gemeinsamer Kern (reine Logik, testbar), darauf der Modus „Lanes“ auf beiden Flächen:
+am UF1 als Jog-Modus, am UF8 als Encoder-Modus, beide mit eigenem Kreuz und denselben
+Builtins. Was der Modus mitnimmt, ist wählbar (die Bank „Lanes“ auf den Soft-Keys, die acht
+Strips als Option). Jeder Baustein nutzt, was es schon gibt, und baut nichts nach.
+
+| Baustein | Was |
+|---|---|
+| A | Kern `LaneModel.h` |
+| B | UF1-Jog-Modus Lanes |
+| C | dynamische Bank „Lanes“ (UF8 und UF1) |
+| D | Option „Lanes on the strips“ des UF8-Encoder-Modus |
+| E | Spielsatz (eine, mehrere, alle, keine Lane) |
+| F | Malen (Rad, Live-Comping, SEL als Schnitttasten) |
+| G | UF8-Encoder-Modus Lanes mit Kreuz pro Encoder-Modus |
+| H | Modus-Wahl am UF8: Dropdown im Editor, Karussell am Gerät |
 
 ### Baustein A: der Kern `LaneModel.h` (reine Logik, ctest)
 
@@ -149,12 +162,32 @@ UF8 + UF1, Anzahl/Blättern). Kontext = fokussierte Spur.
 Mit dem Jog-Modus zusammen ist das die Übersicht, die im Forum fehlt: vier Lanes mit Namen
 auf dem UF1-Display, die spielende hell, das Rad steppt, die Lampe wandert mit.
 
-### Baustein D: UF8 „Lanes“-Ansicht (Versionen auf acht Kanälen)
+### Baustein D: „Lanes on the strips“, die Option des Encoder-Modus Lanes
 
-Acht Strips = acht Lanes der fokussierten Spur, gebaut nach dem Vorbild der Send-Ansicht
-„This Track“ (`StripRoute`, die einzige Stelle, an der schon heute alle acht Strips
-Unterobjekte einer Spur zeigen). Ein-/aus per Builtin, folgt dem Fokus, Bank ◄ ► blättert
-bei mehr als acht Lanes.
+**Entschieden (Frank 30.09.):** kein eigener Modus und kein neuer Name. Die acht Strips
+gehören zum Encoder-Modus Lanes (Baustein G), als **Option dieses Modus, ab Werk aus**.
+Vorbild ist der UF1: dort nimmt der Jog-Modus Items auf Wunsch den Fader mit
+(„Fader = Item Volume“, eine Option pro Jog-Modus, `g_uf1JogFader`). Ein Encoder-Modus, der
+auf Wunsch die Strips mitnimmt, ist dasselbe Muster auf dem UF8.
+
+- **Option aus (Werk):** die Strips bleiben Spuren, SEL wählt die Spur, die Top-Keys zeigen
+  deren Lanes (Bank „Lanes“), Encoder und Kreuz steppen und comppen. Das ist der Alltag beim
+  Vocal-Comping: Lanes hören und zwischendurch die Spur wechseln (Fall 1, Fall 13).
+- **Option an:** acht Strips = acht Lanes der fokussierten Spur. Für Versionen und das
+  Schnittpult (Fall 4, Fall 6). Um die Spur zu wechseln, schaltet man die Option aus oder
+  wählt am UF1 bzw. mit der Maus.
+- **Umschalten:** in den Einstellungen des Modus und mit dem Builtin
+  `lanes_on_strips_toggle`, damit es mitten in der Arbeit auf einer Taste liegt.
+- **Verlassen:** wer den Encoder-Modus verlässt (Karussell, Modus-Taste, Builtin), bekommt die
+  Strips immer zurück, egal wie die Option steht. Die Rückgabe läuft über denselben Weg wie
+  beim Nav-Overlay (`g_pageDirty`, `g_bankDirty`, `g_sync->invalidate()`).
+- **Deutlich zeigen, dass die Fader jetzt Lanes sind:** Banner „Lanes • Strips“, Farbbalken
+  nach Spielsatz statt Spurfarbe, Wertzeile „Lane“ auf jedem Strip. Ein Fader, der plötzlich
+  etwas anderes fährt, darf nicht unbemerkt passieren.
+
+Gebaut nach dem Vorbild der Send-Ansicht „This Track“ (`StripRoute`, die einzige Stelle, an
+der schon heute alle acht Strips Unterobjekte einer Spur zeigen). Folgt dem Fokus, Bank ◄ ►
+blättert bei mehr als acht Lanes.
 
 | Element | Belegung |
 |---|---|
@@ -178,8 +211,8 @@ Gegenhören „alles“. Der Plan behandelt den **Spielsatz** als eigenes Ding, 
 Sonderfall:
 
 - **Anzeige überall gleich:** jede spielende Lane hell, jede stumme gedimmt, auf UF8-Bank,
-  UF1-Soft-Keys und UF8-Ansicht. Auf dem UF1 zusätzlich „1/7“, „3 von 7“ oder „alle 7“.
-- **Einzelne Lane rein/raus:** Shift auf der Bank-Taste, SOLO in der UF8-Ansicht, Shift+Mitte
+  UF1-Soft-Keys und Lanes auf den Strips. Auf dem UF1 zusätzlich „1/7“, „3 von 7“ oder „alle 7“.
+- **Einzelne Lane rein/raus:** Shift auf der Bank-Taste, SOLO bei Lanes auf den Strips, Shift+Mitte
   im Jog-Modus. Aus exklusiv wird damit ein Satz; nimmt man bis auf eine alle heraus, ist es
   wieder exklusiv.
 - **Alle / keine / nur Comp:** eigene Builtins (`lane_play_all`, `lane_play_none`,
@@ -219,7 +252,7 @@ einfach bis spektakulär:
    Man spielt den Song durch und schneidet wie ein Bildmischer: Strophe Take 2, Refrain Take 5,
    letzte Zeile Take 1. Mit laufender Schleife überschreibt jeder Durchgang die Stelle, bis sie
    sitzt. Stop schliesst den letzten Abschnitt ab.
-3. **Acht Lanes als Schnitttasten (UF8).** In der UF8-Ansicht mit Malen an ist jedes SEL eine
+3. **Acht Lanes als Schnitttasten (UF8).** Mit „Lanes on the strips“ und Malen an ist jedes SEL eine
    Schnitttaste: drücken, und ab jetzt kommt diese Lane in den Comp. Acht Takes nebeneinander,
    Namen auf den Scribbles, die spielende hell. Das kann keine andere Surface.
 
@@ -271,7 +304,7 @@ eigenes gesetzt ist (`fillDerivedUf1Slots_`).
 5. **Encoder-Auflösung:** der Kanal-Encoder schickt mehrere Ereignisse pro Rastung; Lanes
    benutzt denselben Sammler wie Channel Select (`kChannelEncoderScale`), eine Rastung = eine
    Lane.
-6. **UF8 allein reicht:** mit G und D (Lanes-Ansicht) ist der ganze Comping-Ablauf ohne UF1
+6. **UF8 allein reicht:** mit G (und D, der Strips-Option) ist der ganze Comping-Ablauf ohne UF1
    machbar. Mit UF1 teilen sich beide denselben Zustand, weil der Spielsatz in REAPER selbst
    steht (`C_LANEPLAYS`) und A/B pro Spur gemerkt wird.
 
@@ -329,12 +362,13 @@ kommen. Dann kann ein UF8 ohne UF1 editieren.
 `lane_comp_here`, `lane_comp_area_up`, `lane_comp_area_down`, `lane_loop_here`,
 `lane_comping_toggle`, `lane_comp_new` (Comp in neue leere Lane), `lane_show_one_toggle`
 (`C_LANESCOLLAPSED`), `lanes_fixed_toggle` (`I_FREEMODE`), `jog_mode_lanes`,
-`uf8_lanes_view_toggle`, `encoder_lanes`. Alle auf die fokussierte Spur (plus Gruppe, wenn
+`lanes_on_strips_toggle`, `encoder_lanes`. Alle auf die fokussierte Spur (plus Gruppe, wenn
 eingestellt).
 
 ### Banner, Einstellungen
 
-- Banner: „Jog • Lanes“, beim UF8-Wechsel „UF8 • Lanes“, Live-Comping „Lanes • Live paint“
+- Banner: „Jog • Lanes“ (UF1), „Encoder • Lanes“ (UF8), „Lanes • Strips“ an / aus,
+  Live-Comping „Lanes • Live paint“
   an / aus. Beim Steppen kein Banner (zu laut), der UF1 zeigt es.
 - Einstellungen (Behaviour → Lanes): „Lane steps skip comp lanes“ (Werk an), „Lanes follow
   the edit group“ (Werk an), „UF1 fader = take gain in Lanes mode“ (Werk aus), „Scrub while
@@ -375,7 +409,7 @@ Danach steht fest, was über die API geht und was über Actions mit vorher geset
    Nav-Werksbelegung, Banner, Handbuch.
 5. Baustein F.1 Malen mit dem Rad, dann F.2 Live-Comping.
 6. Baustein C, dynamische Bank „Lanes“.
-7. Baustein D, UF8-Ansicht „Lanes“, mit F.3 (SEL als Schnitttasten).
+7. Baustein D, die Option „Lanes on the strips“, mit F.3 (SEL als Schnitttasten).
 8. Takes in Items im Lanes-Modus.
 
 Jeder Schritt ist für sich nutzbar. B allein ist schon das, was es nirgends gibt.
@@ -384,8 +418,16 @@ Jeder Schritt ist für sich nutzbar. B allein ist schon das, was es nirgends gib
 
 ## 6. Entscheide für Frank
 
-1. Reihenfolge B → C → D, oder die UF8-Ansicht (D) zuerst?
-2. UF8-Fader in der Lanes-Ansicht: Take-Gain unter dem Cursor, oder die Spur bleibt auf dem
+**Schon entschieden (30.09.):**
+- Lanes ist ein Encoder-Modus (UF8) bzw. Jog-Modus (UF1), kein neuer Modus-Typ; die Strips
+  sind eine Option dieses Modus, ab Werk aus (Baustein D).
+- Encoder-Modus wählen per ENC PUSH halten + drehen bleibt („sehr geil, behalten“).
+- Mithören beim Malen mit dem Rad ist optional, ab Werk aus.
+
+**Offen:**
+
+1. Reihenfolge wie in Abschnitt 5, oder die Strips-Option (D) früher?
+2. UF8-Fader bei „Lanes on the strips“: Take-Gain unter dem Cursor, oder die Spur bleibt auf dem
    Fader?
 3. Gruppen: Lanes folgen der Media-Edit-Gruppe, Werk an?
 4. Rad in der Grundstellung: ganze Spur steppen (Versionen/Audition) und Shift = Comp-Area,
@@ -399,8 +441,7 @@ Jeder Schritt ist für sich nutzbar. B allein ist schon das, was es nirgends gib
    bleibt er „Plug-in-Fenster“?
 9. Holt der Lanes-Encoder-Modus die Bank „Lanes“ selbst auf die UF8-Top-Keys (und beim
    Verlassen die vorige zurück), oder wählt man die Bank selbst?
-10. Karussell-Griff am UF8: ENC PUSH halten + drehen (Vorschlag), oder eine eigene Taste?
-11. Welche Modi sind ab Werk im UF8-Karussell sichtbar: alle 17, oder dieselben wie im
+10. Welche Modi sind ab Werk im UF8-Karussell sichtbar: alle 17, oder dieselben wie im
     UF1-Encoder-Ring plus Lanes?
 
 ---
@@ -489,8 +530,8 @@ eigener Undo-Schritt.
 
 ### Fall 4: Live-Comping eines Gitarrensolos (Schnittpult)
 
-**Ausgangslage:** Spur „Solo Gtr“, fünf Takes in Lanes 1 bis 5. UF8 in der Lanes-Ansicht,
-acht Strips, davon fünf belegt, Namen auf den Scribbles.
+**Ausgangslage:** Spur „Solo Gtr“, fünf Takes in Lanes 1 bis 5. UF8 im Encoder-Modus Lanes,
+„Lanes on the strips“ an: acht Strips, davon fünf belegt, Namen auf den Scribbles.
 
 1. **Mitte lang** (UF1) oder das Builtin `lane_paint_live` auf einem Soft-Key: Live-Comping an.
    Banner „Lanes • Live paint“, die Mitte leuchtet.
@@ -528,8 +569,9 @@ in Lanes 1 bis 4. „Lanes follow the edit group“ an (Werk).
 **Ausgangslage:** Spur „Bass“, Lane 1 „Finger“, Lane 2 „Pick“, Lane 3 „Synth“, jede eine ganze
 Fassung, exklusiv. Kein Comping.
 
-1. **UF8 Lanes-Ansicht** (Soft-Key `uf8_lanes_view_toggle`). Strips 1 bis 3 heissen Finger,
-   Pick, Synth; Finger hell.
+1. **Encoder-Modus Lanes** (ENC PUSH halten + drehen), dann **`lanes_on_strips_toggle`**
+   (Taste nach Wahl). Banner „Lanes • Strips“. Strips 1 bis 3 heissen Finger, Pick, Synth;
+   Finger hell.
 2. **Play, SEL auf „Pick“.** Nur Lane 2 spielt, im Takt, ohne Aussetzer. SEL „Synth“,
    SEL „Finger“: Versionen im Kontext des Songs vergleichen.
 3. **Fader auf „Synth“ ziehen** (Entscheid 2, Fader = Take-Gain unter dem Cursor): die Synth-
@@ -545,7 +587,7 @@ zusammen als Dopplung.
 
 1. **Bank „Lanes“** (UF1-Soft-Keys oder UF8-Top-Keys): Druck auf Lane 1 = nur Lane 1.
    **Shift + Druck auf Lane 3** = Lane 3 dazu. Beide Tasten hell, der UF1 zeigt „2 von 4“.
-2. Dasselbe in der UF8-Ansicht: SEL auf 1, SOLO auf 3.
+2. Dasselbe mit Lanes auf den Strips: SEL auf 1, SOLO auf 3.
 3. **Kurz Lane 4 allein hören:** Rad eine Detente, nur Lane 4 spielt (Vorhören ist exklusiv).
 4. **Zurück zur Dopplung: Shift + →** (A/B) holt den ganzen Satz 1 + 3 zurück, nicht nur eine
    Lane.
@@ -585,7 +627,7 @@ Entscheid 7 vorausgesetzt.
 - UF1-Soft-Keys: vier sichtbar, **◄ / ► lang** blättert innerhalb der Bank (wie bei jeder
   dynamischen Bank), die Seite steht auf dem Display.
 - UF8-Top-Keys: acht sichtbar, blättern wie bei der FX-Bank.
-- UF8-Ansicht: Strips 1 bis 8, **Bank ◄ / ►** zeigt 9 bis 14.
+- Lanes auf den Strips: Strips 1 bis 8, **Bank ◄ / ►** zeigt 9 bis 14.
 - Das Rad kennt keine Seiten: es steppt durch alle 14, und die Bank blättert von selbst mit, damit
   die gehörte Lane immer auf einer Taste zu sehen ist.
 
@@ -595,7 +637,8 @@ Entscheid 7 vorausgesetzt.
 
 - UF1: „No lanes“ in der Kopfzeile, Rad und Kreuz tun nichts, kein Fehler.
 - Bank „Lanes“: alle Tasten dunkel, bis auf eine: „Lanes on“ (`lanes_fixed_toggle`).
-- UF8-Ansicht: Strips leer, SEL tut nichts.
+- Lanes auf den Strips: Strips leer, SEL tut nichts. Die Option bleibt an, damit sie auf der
+  nächsten Spur mit Lanes wieder greift.
 - Sobald man eine Spur mit Lanes fokussiert, ist alles wieder da. Kein Modus springt von selbst
   um.
 
@@ -611,8 +654,10 @@ Entscheid 7 vorausgesetzt.
 
 **Ausgangslage:** kein UF1. Spur „Lead Vox“ wie in Fall 1, UF8 Top-Keys auf Bank „Lanes“.
 
-1. **SEL auf „Lead Vox“**, dann **`encoder_lanes`** (Taste nach Wahl). Banner „Encoder •
-   Lanes“; das Zoom-Pad ist jetzt das Lanes-Kreuz.
+1. **SEL auf „Lead Vox“**, dann Encoder-Modus Lanes (ENC PUSH halten + drehen, oder
+   `encoder_lanes` auf einer Taste). Banner „Encoder • Lanes“; das Zoom-Pad ist jetzt das
+   Lanes-Kreuz. „Lanes on the strips“ ist aus (Werk): die Strips bleiben Spuren, man kann
+   jederzeit mit SEL eine andere Spur fokussieren, und die Top-Keys zeigen deren Lanes.
 2. **Shift + ←** (Zoom-Pad) = Loop auf die Zeile, **Play**.
 3. **Kanal-Encoder drehen:** Take für Take; die Top-Key-Lampe wandert mit, die Wertzeile des
    Vox-Strips zeigt „Lane“ und den Namen.
