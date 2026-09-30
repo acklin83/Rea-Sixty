@@ -100,10 +100,14 @@ nächsten Take ab der nächsten Detente. Das ist „Cycle Playlist“ am Rad.
 | Taste | Werk | Shift |
 |---|---|---|
 | ↑ / ↓ | Lane vor / zurück (wie das Rad, in Schritten) | Comp-Area unter dem Play-Cursor eine Lane hoch / runter |
-| ← / → | Play-Cursor zum vorigen / nächsten Comp-Area-Rand bzw. Item-Rand | ← alle Lanes spielen, → nur die Comp-Lane |
-| Rad + Shift | fein (halbe Schritte gibt es bei Lanes nicht): A/B, der ganze vorige Spielsatz | |
-| Mitte | **Comp here** beim Tippen; **halten + Rad = malen** (Baustein F) | Gehörte Lane in den Spielsatz / heraus |
-| Mitte lang | Live-Comping an/aus (Baustein F) | |
+| ← / → | Play-Cursor zum vorigen / nächsten Comp-Area-Rand bzw. Item-Rand | ← Loop auf die Comp-Area / das Item unter dem Cursor, → A/B (der ganze vorige Spielsatz) |
+| Rad | gehörte Lane steppen | Comp-Area unter dem Cursor steppen (wie Shift ↑ / ↓) |
+| Mitte tippen | **Comp here** | gehörte Lane in den Spielsatz / heraus |
+| Mitte halten + Rad | **malen** (Baustein F) | |
+| Mitte lang, ohne Rad | Live-Comping an / aus (Baustein F) | |
+
+Ob die Mitte beim Halten malt oder beim Loslassen Live-Comping schaltet, entscheidet das Rad:
+wurde während des Haltens gedreht, war es ein Strich, und das Loslassen schaltet nichts.
 
 „Comp here“ ist das fehlende Hardware-Verb: hören, und wenn es sitzt, einen Knopf drücken.
 Technisch: Razor mit Lane-y auf der gehörten Lane setzen, 42475. Die Mitte leuchtet, wenn
@@ -177,7 +181,8 @@ Sonderfall:
   im Jog-Modus. Aus exklusiv wird damit ein Satz; nimmt man bis auf eine alle heraus, ist es
   wieder exklusiv.
 - **Alle / keine / nur Comp:** eigene Builtins (`lane_play_all`, `lane_play_none`,
-  `lane_play_comp`), Werksbelegung auf Shift + ◄ / ► im Lanes-Modus.
+  `lane_play_comp`). Werksbelegung in einer neuen UF1-Werksbank „Lanes“ neben „Jog Modes“,
+  nicht auf ◄ / ►: die blättern Bänke, und die Beschriftung einer Taste hat Vorrang.
 - **Das Rad bei mehreren spielenden Lanes:** es wählt weiter EINE Lane zum Vorhören (exklusiv),
   merkt sich aber den ganzen Satz davor. A/B holt den ganzen Satz zurück, nicht nur eine Lane.
   So bleibt „kurz reinhören, zurück zur Schichtung“ ein Handgriff.
