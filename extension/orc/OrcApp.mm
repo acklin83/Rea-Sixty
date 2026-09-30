@@ -51,6 +51,22 @@ static orc::Surface* g_surface = nullptr;
         NSMenu* menu = [[NSMenu alloc] init];
         menu.delegate = self;
 
+        // ⇨ WHICH ORC IS THIS (Frank 30.09.2026: "woher soll ich wissen welche
+        // version ich am laufen habe?"). The bundle's version, and the folder
+        // when this is not the copy in Applications: a development build has
+        // the same name, icon and bundle id, and macOS refuses it as a login
+        // item ("Operation not permitted") where the installed one is allowed.
+        NSString* ver = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+        NSString* folder = NSBundle.mainBundle.bundlePath.stringByDeletingLastPathComponent;
+        NSString* title = [NSString stringWithFormat:@"ORC %@", ver ?: @"?"];
+        if (![folder isEqualToString:@"/Applications"]
+            && ![folder isEqualToString:[@"~/Applications" stringByExpandingTildeInPath]])
+            title = [title stringByAppendingFormat:@"   %@", folder.stringByAbbreviatingWithTildeInPath];
+        NSMenuItem* versionLine = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+        versionLine.enabled = NO;
+        [menu addItem:versionLine];
+        [menu addItem:[NSMenuItem separatorItem]];
+
         // ⇨ THE FIRST TWO LINES ARE THE WHOLE POINT OF THE MENU: who holds the
         // UF1, and whether TotalMix is answering. That is the question
         // Rea-Sixty cannot answer either, and the reason a surface "does
