@@ -5013,11 +5013,10 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     };
 
     // SEL (Uf8Select / Uf1Sel): single press = built-in track SELECT (native,
-    // per-strip on UF8 / focused on UF1), long press = native too (UF8 = the
-    // folder-select spill; UF1 = none). Neither routes through the binding's
-    // short/long slots, so DON'T show empty SHORT/LONG columns for them — only
-    // the double-press below is user-assignable. Frank 2026-08-03 ("nicht
-    // schluddrig — entweder Aktionen zuteilen oder nur double press").
+    // per-strip on UF8 / focused on UF1), so no SHORT column. Long press and
+    // double press are assignable (Frank 2026-08-03 "entweder Aktionen
+    // zuteilen oder nur double press"; long press since 2026-09-30, factory
+    // default strip_spill).
     // UF1 buttons carry a user LABEL, shown on the surface next to the key.
     // The UF8's top-soft-keys have had one forever (the user-Quick slot editor);
     // UF1 keys never got the field, so there was no way to name one — Frank
@@ -5074,14 +5073,14 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         ImGui_EndChild(ctx);
     }
     } else {
-        // SEL: single press = built-in track select; long press stays native
-        // (UF8 folder-select spill / UF1 none). Only the double-press below
-        // is user-assignable — no empty SHORT/LONG columns.
+        // SEL: single press = built-in track select, so only the LONG column
+        // (and the double press below). One BeginChild, like any key.
         ImGui_TextDisabled(ctx,
-            "Single press = Select the track (built-in). Long press stays");
+            "Single press = Select the track (built-in). Long press and");
         ImGui_TextDisabled(ctx,
-            "native. Only the double-press below is user-assignable:");
+            "double press are assignable:");
         ImGui_Spacing(ctx);
+        drawColumn("LONG PRESS", "lp", bd.longPress, /*isLongCol*/ true);
     }
 
     // DOUBLE PRESS — SEL ONLY. On a normal button the single (short) press

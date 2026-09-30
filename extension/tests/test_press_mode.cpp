@@ -214,6 +214,67 @@ int main()
         EXPECT(got2.behavior == Behavior::Toggle && got2.shortPress[0].param == 1);
     }
 
+    // ── SEL long press is a binding (Frank 2026-09-30) ───────────────────────
+    {
+        using bnd::ButtonId;
+        using bnd::Modifier;
+        const int P = static_cast<int>(Modifier::Plain);
+        auto isSpillSeed = [&](ButtonId id) {
+            const auto bd = bnd::getBinding(0, id);
+            return bd.hasLongPress && bd.longPress[P].type == bnd::ActionType::Builtin
+                && bd.longPress[P].action == "strip_spill";
+        };
+        // Factory (the first load ran on an empty dir; nothing above touched SEL).
+        EXPECT(isSpillSeed(ButtonId::Uf8Select));
+        EXPECT(isSpillSeed(ButtonId::Uf1Sel));
+
+        // The UF8 strip timer fires the LONG slot; off or empty = nothing.
+        auto sel = bnd::getBinding(0, ButtonId::Uf8Select);
+        sel.longPress[P] = bnd::ActionSlot{};
+        sel.longPress[P].type = bnd::ActionType::Builtin;
+        sel.longPress[P].action = "t_once";
+        bnd::setBinding(0, ButtonId::Uf8Select, sel);
+        const int before = g_onceFires;
+        EXPECT(bnd::fireLongPress(ButtonId::Uf8Select));
+        EXPECT(g_onceFires == before + 1);
+        sel.hasLongPress = false;
+        bnd::setBinding(0, ButtonId::Uf8Select, sel);
+        EXPECT(!bnd::fireLongPress(ButtonId::Uf8Select));
+        EXPECT(g_onceFires == before + 1);
+
+        // A pre-v50 file without a long press gets the seed on load ...
+        sel.longPress[P] = bnd::ActionSlot{};
+        bnd::setBinding(0, ButtonId::Uf8Select, sel);
+        bnd::save();
+        const std::string path = g_dir + "/bindings.json";
+        auto setVersion = [&](int v) {
+            std::ifstream in(path);
+            std::stringstream ss; ss << in.rdbuf();
+            std::string js = ss.str();
+            const size_t k = js.find("\"version\"");
+            EXPECT(k != std::string::npos);
+            if (k == std::string::npos) return;
+            size_t a = js.find(':', k) + 1;
+            while (a < js.size() && js[a] == ' ') ++a;
+            size_t b = a;
+            while (b < js.size() && js[b] >= '0' && js[b] <= '9') ++b;
+            js.replace(a, b - a, std::to_string(v));
+            std::ofstream(path) << js;
+        };
+        setVersion(49);
+        bnd::load();
+        EXPECT(isSpillSeed(ButtonId::Uf8Select));
+
+        // ... but a long press switched off in a v50 file stays off.
+        sel = bnd::getBinding(0, ButtonId::Uf8Select);
+        sel.hasLongPress = false;
+        sel.longPress[P] = bnd::ActionSlot{};
+        bnd::setBinding(0, ButtonId::Uf8Select, sel);
+        bnd::save();
+        bnd::load();
+        EXPECT(!bnd::getBinding(0, ButtonId::Uf8Select).hasLongPress);
+    }
+
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
     std::printf("press mode ok\n");
     return 0;

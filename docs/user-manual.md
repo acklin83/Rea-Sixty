@@ -336,7 +336,7 @@ Per strip, from top to bottom:
 | V-Pot push | Centre Pan | In FX Cycle / Instance Cycle Sel-Modes → open the active FX's GUI. |
 | `SOLO` | Solo | Yellow, the class colour. The track-colour setting in *Appearance → Surface display* drives the SEL LED, not this one. |
 | `CUT` | Mute |  |
-| `SEL` | Selection-Mode dependent | NORM = exclusive select; REC = arm; REC+MON = arm + monitor; AUTO = cycle automation mode. Long-press on a folder parent toggles spill. |
+| `SEL` | Selection-Mode dependent | NORM = exclusive select; REC = arm; REC+MON = arm + monitor; AUTO = cycle automation mode. Long-press fires *Spill (folder / VCA)* by default: in Folder Mode it opens or closes a folder, in VCA Mode it spills a VCA lead. Long press and double press are yours to rebind in *Settings → Bindings*. |
 | Capacitive touch (fader) | Drives REAPER's "touch" automation | Alt/Option held during touch → snap back on release (Settings → Behaviour → Keyboard). |
 | 100 mm motorised fader | Track volume | 14-bit MCU pitch-bend, two 7-bit halves, 0 to 0x3FFF. |
 
@@ -594,7 +594,7 @@ agree.
 | Fader | Volume of the UF1's channel. Touch-sensitive, drives touch automation. |
 | V-Pot above the fader | Pan by default, or whatever the Sticky Pot is pinned to. **Push** sends the pinned parameter to its middle (a pin set as a toggle flips instead); the pin itself stays. While *Get next touched Parameter* is armed the same push **clears** that track's pin, and with no pin at all it centres Pan. In REC + RME it rides the preamp gain, **Shift +** turn changes the input channel, and the push fires its assigned action instead. |
 | `SOLO` / `CUT` | Solo / mute the channel. Fixed, not rebindable. In REC + RME they fire their assigned TotalReaper actions instead, and their lamps show those states. |
-| `SEL` | Select the channel exclusively; **Shift +** `SEL` extends the selection. Double-press opens the FX chain by default. In REC / REC + MON it arms the channel instead, and its lamp turns red to show the arm state. |
+| `SEL` | Select the channel exclusively; **Shift +** `SEL` extends the selection. Double-press opens the FX chain by default, long-press fires *Spill (folder / VCA)* on the selected track. Both are yours to rebind. In REC / REC + MON it arms the channel instead, and its lamp turns red to show the arm state. |
 | `SOFT` (above the fader display) | **Focus Chan**: one press puts the channel the UF1 is showing into the Focus Set *and* engages the pin; press again to take the channel back out of the set. While the channel is in the set, the **background behind the key's label lights up** on the channel display. Factory default since v0.5; it shipped unbound before that. Rebindable like every other key, and an assignment you had already made is kept — the backlight follows whatever you bind, as long as that action has an on/off state. |
 | `FLIP` | Swap the fader and V-Pot assignments. Factory default, rebindable. In **Plugin view** the fader takes the parameter of the V-Pot you last turned or pushed, so you can reach for a control on the encoder and then move it on 100 mm of travel; the V-Pot above the fader rides Volume meanwhile. A Sticky-Pot pin, SSL Strip Mode and the send faders all keep their claim on the fader, and with the Extender running FLIP stays on Pan (the fader and the screen would otherwise be looking at two different tracks). |
 | `MASTER` | Put the Master bus on the channel. Factory default, rebindable. |
@@ -2174,6 +2174,7 @@ All of these are toggles, and all take **param: 0 = Faders, 1 = V-Pots** to choo
 - **Toggle Show Only Selected** — toggle Show Only Selected (only currently-selected REAPER tracks appear).
 - **Toggle VCA Mode (top leads only)** — only the VCA leads that follow no other VCA appear. See *Operational modes → VCA Mode and VCA spill*.
 - **VCA Spill (selected track)** / **Leave VCA Spill** — spill the selected track's VCA as long-press `SEL` does, or leave the spill from any level. Both light while a spill is on.
+- **Spill (folder / VCA)** — the factory long press on `SEL` (UF8 and UF1). In Folder Mode it opens or closes a folder, in VCA Mode it spills a VCA lead, during a VCA spill it moves through the levels. On a UF8 `SEL` it acts on that strip's track, from any other key on the selected track.
 - **Open / Close Rea-Sixty Settings** — open / close the Rea-Sixty Settings window. Default binding for the `360°` key.
 - **Surface mirrors: TCP** / **Surface mirrors: MCP** — choose which window's track visibility the surface follows: the Arrange view's track panels (TCP) or the Mixer (MCP). Hiding a track in the chosen window removes it from the surface. These are not a toggle but a mutually-exclusive pair, so a bound key sets one mode absolutely and lights while that mode is the active one — which means you can bind both and see at a glance which is on. The choice is remembered between sessions.
 - **TCP follows selection** — toggle whether selecting a track on the surface scrolls the Arrange view to it. Same setting as *Settings → Behaviour → Tracks*.
@@ -3232,6 +3233,8 @@ A VCA in REAPER is a track grouping: a track that is *VCA lead* in a group moves
 - Turning the V-Pot on a lead, or a UC1 pot writing to it, shows the real value for three seconds, as on a Folder Mode parent.
 
 **VCA Mode.** Toggle: **Toggle VCA Mode (top leads only)** action. When on, the surface shows only the VCA leads that follow no other VCA, each reading **VCA Lead**. A lead that follows another lead is reached by spilling its parent.
+
+**Long-press `SEL`** is a binding: its factory action is **Spill (folder / VCA)** on the UF8 and the UF1. Rebind it in *Settings → Bindings* and long-press `SEL` does something else; the spill stays available as the **Spill (folder / VCA)** action on any other key, where it acts on the selected track.
 
 **Actions.** **VCA Spill (selected track)** does the long-press on the track selected in REAPER, in any mode, from any key, the UF1 or a keyboard shortcut. **Leave VCA Spill** leaves from any level. Both light while a spill is on. REAPER's Action List has them too, as *Rea-Sixty: VCA spill (selected track)*, *Rea-Sixty: Leave VCA spill* and *Rea-Sixty: VCA Mode (top leads only) (toggle)*; Folder Mode is there as *Rea-Sixty: Folder Mode (parents only) (toggle)*.
 

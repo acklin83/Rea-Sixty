@@ -1475,6 +1475,7 @@ std::atomic<bool> g_vcaSpillActive{false};
 std::atomic<bool> g_vcaSpillShowHidden{true};   // followers hidden in TCP/MCP too
 std::atomic<bool> g_vcaSpillSelectedReq{false}; // vca_spill_selected, drained on main
 std::atomic<bool> g_vcaSpillExitReq{false};     // vca_spill_exit, drained on main
+std::atomic<bool> g_stripSpillReq{false};       // strip_spill, drained on main
 std::vector<MediaTrack*> g_vcaChain;
 int g_vcaSpillSavedBank = 0;                    // bank offset before the spill
 
@@ -4051,9 +4052,13 @@ void drainSelsets_() {
         applyUf1HoldScroll_(hs);
 }
 
-// Long-press SEL → folder spill toggle or VCA spill. Polled at the start of
-// onTimer (before rebuildVisibleTrackList) so the rebuilt list immediately
-// reflects spill changes.
+// Long-press SEL. Polled at the start of onTimer (before
+// rebuildVisibleTrackList) so the rebuilt list immediately reflects a spill.
+//
+// SEL's long press is a binding since 2026-09-30 (Frank): the UF8 strip timer
+// below fires the Uf8Select LONG slot, the UF1 SEL runs through dispatch() and
+// its own long-press timer. The factory default on both is strip_spill, which
+// does what long SEL did hard-wired before (spillTrack_).
 //
 // Folder: per-folder toggle, only in folder_mode. Collapsing removes just this
 // entry, leaving any previously-spilled descendants in the set as dormant
@@ -4061,9 +4066,9 @@ void drainSelsets_() {
 // this folder is collapsed, and a future re-spill restores the drill-down
 // without any explicit snapshot. The set lives in the project (FOLDERSPILL).
 //
-// VCA (VcaSpill.h): while a spill runs, long SEL only moves through the chain.
+// VCA (VcaSpill.h): while a spill runs, it only moves through the chain.
 // Otherwise a folder parent in folder_mode wins; a VCA lead spills in vca_mode.
-// The vca_spill_selected / vca_spill_exit builtins drain here too.
+// The strip_spill / vca_spill_selected / vca_spill_exit builtins drain here.
 void toggleFolderSpill_(MediaTrack* tr) {
     char g[64] = {0};
     GetSetMediaTrackInfo_String(tr, "GUID", g, false);
@@ -4073,12 +4078,31 @@ void toggleFolderSpill_(MediaTrack* tr) {
     g_bankDirty.store(true);
 }
 
-void checkSelLongPressSpill() {
+void spillTrack_(MediaTrack* tr) {
+    if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+    const bool folderParent = GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") > 0.5;
+    if (g_vcaChain.empty() && g_folderMode.load() && folderParent) {
+        toggleFolderSpill_(tr);
+        return;
+    }
+    // Like the folder spill, a VCA spills only in its mode (Frank 30.09.2026).
+    // A running spill keeps moving through its levels in any mode;
+    // vca_spill_selected spills in any mode.
+    if (g_vcaMode.load() || !g_vcaChain.empty())
+        vcaPress_(tr);
+}
+
+void drainSpillRequests_() {
     if (g_vcaSpillExitReq.exchange(false) && !g_vcaChain.empty())
         endVcaSpill_();
     if (g_vcaSpillSelectedReq.exchange(false))
         vcaPress_(GetSelectedTrack(nullptr, 0));
-    const bool folderMode = g_folderMode.load();
+    if (g_stripSpillReq.exchange(false))           // UF1 SEL, any other key
+        spillTrack_(GetSelectedTrack(nullptr, 0));
+}
+
+void checkSelLongPressSpill() {
+    drainSpillRequests_();
     const int64_t now = nowMs_();
     for (int s = 0; s < 8; ++s) {
         const int64_t pressMs = g_selPressMs[s].load();
@@ -4088,18 +4112,12 @@ void checkSelLongPressSpill() {
         g_selSpillFired[s].store(true);
         MediaTrack* tr = g_slotTrack[s];
         if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) continue;
-        // Only folder-start tracks (I_FOLDERDEPTH == 1) carry children
-        // worth spilling.
-        const bool folderParent = GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") > 0.5;
-        if (g_vcaChain.empty() && folderMode && folderParent) {
-            toggleFolderSpill_(tr);
-            continue;
-        }
-        // Like the folder spill, long SEL spills a VCA only in its mode (Frank
-        // 30.09.2026). A running spill keeps moving through its levels in any
-        // mode; vca_spill_selected spills in any mode.
-        if (g_vcaMode.load() || !g_vcaChain.empty())
-            vcaPress_(tr);
+        // The strip's own track, not the selection: a strip_spill fired from
+        // this SEL posts its request inside fireLongPress (same thread), and
+        // it is claimed right here. Anything else bound to the slot just runs.
+        g_stripSpillReq.store(false);
+        uf8::bindings::fireLongPress(uf8::bindings::ButtonId::Uf8Select);
+        if (g_stripSpillReq.exchange(false)) spillTrack_(tr);
     }
 }
 
@@ -55461,6 +55479,16 @@ void registerBindingHandlers()
         },
         [](int) { return g_vcaSpillActive.load(); },
         "VCA Spill (selected track)", false
+    });
+    // Long SEL's factory default (UF8 per strip, UF1 SEL). On the UF8 SEL it
+    // spills that strip's track, from anywhere else the selected track.
+    registerBuiltin("strip_spill", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_stripSpillReq.store(true);
+        },
+        nullptr,
+        "Spill (folder / VCA)", false
     });
     registerBuiltin("vca_spill_exit", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {

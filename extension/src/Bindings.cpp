@@ -751,6 +751,19 @@ Binding mkBuiltin(const char* name, Behavior b, const char* label,
 // ⚠ ONLY WHERE THE SLOT IS EMPTY. A view that carries its own binding from the
 // factory (Plugin's 5-8 opens the preset browser on Shift, Sends' flips to the
 // receives) or one the user filled is never touched.
+// SEL long press, factory default (Frank 2026-09-30): strip_spill on Plain,
+// on. Shared by the factory seed and upgradeBackfillSelLong_.
+template <class Bindings>
+void seedSelLong_(Bindings& bindings, ButtonId id)
+{
+    Binding& bd = bindings[id];   // default-creates if missing
+    bd.hasLongPress = true;
+    auto& lp  = bd.longPress[static_cast<int>(Modifier::Plain)];
+    lp.type   = ActionType::Builtin;
+    lp.action = "strip_spill";
+    lp.label  = "Spill";
+}
+
 void fillDerivedUf1Slots_(Config& c)
 {
     Layer& L1 = c.layers[0];
@@ -1507,6 +1520,12 @@ void seedFactoryDefaults_(Config& c)
         seedSelDouble(ButtonId::Uf1Sel);
         seedSelDouble(ButtonId::Uf8Select);
     }
+    // SEL LONG press (Frank 2026-09-30): assignable like any key, factory
+    // default = strip_spill, which is what long SEL did hard-wired before
+    // (folder spill in Folder Mode, VCA spill in VCA Mode). Same seed as
+    // upgradeBackfillSelLong_.
+    seedSelLong_(L1, ButtonId::Uf1Sel);
+    seedSelLong_(L1, ButtonId::Uf8Select);
     // LAST, deliberately: it copies every base binding into the per-view and
     // per-jog-mode slots that have none of their own, so it has to run after
     // every base above is final — including the arrows' long press and the two
@@ -3324,7 +3343,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // v49 (2026-09-25): the first RME side-car bank gets its second half (the
 // Shift set, on 5-8): Ext In, Main, TotalMix, where that set is still empty
 // (seedRmeSideCarBankShift_).
-constexpr int kCurrentBindingsVersion = 49;
+constexpr int kCurrentBindingsVersion = 50;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4151,6 +4170,22 @@ void upgradeMarkUserLabels_(Config& c)
                          &fac.userQuicks[li].quicks[q].subBanks[sb].slots[sl]);
 }
 
+// v49→v50 (2026-09-30): SEL's long press becomes a binding. A config from
+// before carries none, and long SEL spilled hard-wired, so fill the factory
+// default wherever the slot is still empty and off. A long press the user set
+// or switched off since v50 is never touched (this runs only below v50).
+void upgradeBackfillSelLong_(Config& c)
+{
+    Layer& L1 = c.layers[0];
+    for (ButtonId id : { ButtonId::Uf1Sel, ButtonId::Uf8Select }) {
+        Binding& bd = L1.bindings[id];   // default-creates if missing
+        if (bd.hasLongPress) continue;
+        const auto& lp = bd.longPress[static_cast<int>(Modifier::Plain)];
+        if (lp.type != ActionType::Noop || !lp.action.empty()) continue;
+        seedSelLong_(L1.bindings, id);
+    }
+}
+
 void upgradeBackfillSelDouble_(Config& c)
 {
     Layer& L1 = c.layers[0];
@@ -4513,6 +4548,9 @@ void load()
             }
             if (tmp.version < 49) {
                 seedRmeSideCarBankShift_(tmp);
+            }
+            if (tmp.version < 50) {
+                upgradeBackfillSelLong_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -5826,6 +5864,32 @@ static bool fireResolvedSlot_(ButtonId id, bool wantDouble)
 
 bool fireShortPress(ButtonId id)  { return fireResolvedSlot_(id, false); }
 bool fireDoublePress(ButtonId id) { return fireResolvedSlot_(id, true);  }
+
+// The UF8 per-strip SEL owns its long-press timer too (one shared id, eight
+// strips), so it fires the long slot itself at the threshold. Modifier slot
+// with Plain fallback, like the short press. Off (hasLongPress false) or empty
+// = nothing.
+bool fireLongPress(ButtonId id)
+{
+    if (id == ButtonId::None) return false;
+    Binding bd;
+    {
+        std::lock_guard<std::mutex> lk(g_cfgMutex);
+        int layer = g_cfg.activeLayer;
+        if (layer < 0 || layer > 2) layer = 0;
+        layer = applyLayerOption(layer, id);
+        auto it = g_cfg.layers[layer].bindings.find(id);
+        if (it == g_cfg.layers[layer].bindings.end()) return false;
+        bd = it->second;
+    }
+    if (!bd.hasLongPress) return false;
+    const int m = static_cast<int>(currentModifierSnapshot());
+    const ActionSlot& s = !slotIsEmpty_(bd.longPress[m])
+        ? bd.longPress[m] : bd.longPress[static_cast<int>(Modifier::Plain)];
+    if (slotIsEmpty_(s)) return false;
+    runSlot_(s, /*firing*/ true, /*pressed*/ true);
+    return true;
+}
 
 // Fire any armed long-press the moment it crosses the 0.5 s threshold,
 // WHILE the button is still held — instead of waiting for the release
@@ -7985,6 +8049,7 @@ const char* builtinCategory(const std::string& n)
      || n == "mixer_toggle" || n == "home"
      || n == "folder_mode" || n == "show_only_selected"
      || n == "vca_mode" || n == "vca_spill_selected" || n == "vca_spill_exit"
+     || n == "strip_spill"
      || n.rfind("ssl_strip_mode_", 0) == 0
      || n.rfind("uf8_plugin_mode_", 0) == 0
      || n == "uc1_outgain_fader_toggle"
@@ -8520,6 +8585,11 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "left, its followers after it. On the spilled lead again, it leaves." },
     { "vca_spill_exit",
       "Leaves the VCA spill and goes back to the bank you were on." },
+    { "strip_spill",
+      "Long SEL by default. In Folder Mode it opens or closes a folder, in "
+      "VCA Mode it spills a VCA lead, and during a VCA spill it moves "
+      "through the levels. On SEL it acts on that strip's track, elsewhere "
+      "on the selected track." },
     { "tcp_follows_selection_toggle",
       "Whether REAPER's track panel scrolls to follow what you select on "
       "the surface." },
@@ -8939,6 +9009,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "vca_mode", "VCA Mode" },
     { "vca_spill_selected", "VCA Spill" },
     { "vca_spill_exit", "VCA Exit" },
+    { "strip_spill", "Spill" },
     { "fx_cycle", "FX Cycle" },
     { "fx_move", "FX Move" },
     { "fx_param_dec", "Param -" },
