@@ -135,6 +135,13 @@ jobs:
         if: matrix.container == '' && runner.os == 'macOS'
         run: python3 extension/tools/check_builtin_docs.py
 
+      # Source-only too: the About page's driver installer, udev rule, Logs and
+      # Acknowledgements must sit outside the dev_probes gate. From 27.09. to
+      # 30.09.2026 they were inside it and no user could reach the WinUSB driver.
+      - name: Verify the About sections are shown to everybody
+        if: matrix.container == '' && runner.os == 'macOS'
+        run: python3 extension/tools/check_about_sections.py
+
       # The ORC manual against the code ORC runs: every UF1 key and encoder has
       # a section, every menu-bar text is explained, every generated list fills
       # (docs/orc-manual-plan.md). A new key or status fails here, not in a

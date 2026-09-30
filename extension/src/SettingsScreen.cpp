@@ -26426,177 +26426,181 @@ void SettingsScreen::drawAbout(ImGui_Context* ctx)
                 }
             }
         }
+    }   // ⛔ dev_probes ends HERE, with the probe. From 27.09. (2488f64) until
+        // 30.09.2026 this brace sat at the end of drawAbout, and every user
+        // without dev_probes lost the driver installer, the udev rule, Logs and
+        // Acknowledgements below (forum drummerboy, issue #9).
+        // tools/check_about_sections.py keeps them outside in CI.
 
-    #ifdef _WIN32
-        // Windows-only: bind UF8, UC1 and UF1 to WinUSB so libusb can claim them
-        // without Zadig. Single UAC prompt; replaces SSL 360°'s driver
-        // (SSL 360° will stop seeing the devices afterwards).
-        ImGui_Spacing(ctx);
-        ImGui_Spacing(ctx);
-        ImGui_Text(ctx, "Windows USB driver");
-        ImGui_Separator(ctx);
-        // Says UF1 too: the script has always force-bound PID_0025, but the text
-        // named only UF8 + UC1, so a UF1 owner read the button as not being for
-        // them (forum user creal, 2026-08-13). "Plug in first" is not advice, it is
-        // a requirement: the rebind only reaches devices present when it runs.
-        ImGui_TextWrapped(ctx,
-            "  Binds UF8, UC1 and UF1 to WinUSB. One-time setup, requires admin. "
-            "Plug the devices in before pressing. SSL 360° stops seeing them "
-            "after install; reinstall SSL 360° to revert.");
-        ImGui_Spacing(ctx);
+#ifdef _WIN32
+    // Windows-only: bind UF8, UC1 and UF1 to WinUSB so libusb can claim them
+    // without Zadig. Single UAC prompt; replaces SSL 360°'s driver
+    // (SSL 360° will stop seeing the devices afterwards).
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Windows USB driver");
+    ImGui_Separator(ctx);
+    // Says UF1 too: the script has always force-bound PID_0025, but the text
+    // named only UF8 + UC1, so a UF1 owner read the button as not being for
+    // them (forum user creal, 2026-08-13). "Plug in first" is not advice, it is
+    // a requirement: the rebind only reaches devices present when it runs.
+    ImGui_TextWrapped(ctx,
+        "  Binds UF8, UC1 and UF1 to WinUSB. One-time setup, requires admin. "
+        "Plug the devices in before pressing. SSL 360° stops seeing them "
+        "after install; reinstall SSL 360° to revert.");
+    ImGui_Spacing(ctx);
 
-        // What each surface is bound to RIGHT NOW. Nobody could tell before, which
-        // is how a working install got mistaken for a dead unit. Read via SetupAPI,
-        // so no elevation and no UAC; cached and refreshed on demand rather than
-        // every frame, because it enumerates the whole USB tree.
-        static std::string s_drvStatus;
-        static bool        s_drvStatusInit = false;
-        if (!s_drvStatusInit) {
-            s_drvStatusInit = true;
-            s_drvStatus = reasixty_winUsbDriverStatus();
-        }
-        ImGui_Text(ctx, "Current driver binding:");
-        ImGui_TextWrapped(ctx, s_drvStatus.c_str());
-        if (ImGui_Button(ctx, "Refresh##winusb_status", nullptr, nullptr))
-            s_drvStatus = reasixty_winUsbDriverStatus();
-        ImGui_Spacing(ctx);
-
-        static std::string s_winusbMsg;
-        // The job runs on a worker so the UI does not freeze for the length of an
-        // elevated pnputil run. While it runs, both buttons are inert: a second
-        // press would race the first, and pressing again is exactly what users do
-        // when nothing appears to happen.
-        const int  jobState = reasixty_winUsbJobState();
-        const bool jobBusy  = (jobState == 1);
-        if (jobState == 2) {
-            // Finished: adopt the worker's verdict and re-read the bindings once,
-            // so the readout above reflects what just happened without a click.
-            s_winusbMsg = reasixty_winUsbJobMessage();
-            s_drvStatus = reasixty_winUsbDriverStatus();
-            reasixty_winUsbJobClear();
-        } else if (jobBusy) {
-            s_winusbMsg = reasixty_winUsbJobMessage();
-        }
-        // ⚠ NOT ImGui_BeginDisabled — this ReaImGui function set has no such call
-        // (checked against vendor/reaimgui/reaper_imgui_functions.h; see the
-        // signature-drift note in the ReaImGui memory). While a job runs the
-        // buttons are simply not drawn, which also removes the temptation to press
-        // again when nothing seems to be happening.
-        if (!jobBusy) {
-        if (ImGui_Button(ctx, "Install UF8/UC1/UF1 WinUSB driver##winusb_install",
-                         nullptr, nullptr))
-        {
-            std::string err;
-            // The worker owns the outcome message now (installed / failed with the
-            // log path / cancelled at the UAC prompt). This branch only reports a
-            // failure to LAUNCH, which is a different thing entirely.
-            if (!reasixty_installWinUsbDriver(&err)) {
-                s_winusbMsg = err.empty()
-                    ? "Driver install could not start."
-                    : ("Driver install could not start: " + err);
-            }
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_Button(ctx, "Uninstall##winusb_uninstall",
-                         nullptr, nullptr))
-        {
-            std::string err;
-            if (!reasixty_uninstallWinUsbDriver(&err)) {
-                s_winusbMsg = err.empty()
-                    ? "Driver uninstall could not start."
-                    : ("Driver uninstall could not start: " + err);
-            }
-        }
-        }   // end of the not-busy button pair
-        if (!s_winusbMsg.empty()) {
-            ImGui_TextWrapped(ctx, s_winusbMsg.c_str());
-        }
-    #endif
-
-    #ifdef __linux__
-        // Linux equivalent — install udev rule so libusb can claim UF8 +
-        // UC1 without root. Single pkexec prompt, mirrors the Windows
-        // WinUSB-installer UX. Required for ReaPack-installed packages
-        // (ReaPack can drop the .so but can't sudo).
-        ImGui_Spacing(ctx);
-        ImGui_Spacing(ctx);
-        ImGui_Text(ctx, "Linux udev rule");
-        ImGui_Separator(ctx);
-        ImGui_TextWrapped(ctx,
-            "  Grants non-root USB access to UF8 + UC1 by installing "
-            "/etc/udev/rules.d/99-rea-sixty.rules. One-time setup, "
-            "requires sudo (graphical password prompt).");
-        ImGui_Spacing(ctx);
-        static std::string s_udevMsg;
-        if (ImGui_Button(ctx, "Install Linux udev rule##udev_install",
-                         nullptr, nullptr))
-        {
-            std::string err;
-            if (reasixty_installLinuxUdevRule(&err)) {
-                s_udevMsg = "udev rule installed. Unplug + replug UF8 + UC1, "
-                            "then restart REAPER.";
-            } else {
-                s_udevMsg = err.empty()
-                    ? "udev install failed."
-                    : ("udev install failed: " + err);
-            }
-        }
-        ImGui_SameLine(ctx, nullptr, nullptr);
-        if (ImGui_Button(ctx, "Uninstall##udev_uninstall",
-                         nullptr, nullptr))
-        {
-            std::string err;
-            if (reasixty_uninstallLinuxUdevRule(&err)) {
-                s_udevMsg = "udev rule removed. Unplug + replug UF8 + UC1, "
-                            "then restart REAPER.";
-            } else {
-                s_udevMsg = err.empty()
-                    ? "udev uninstall failed."
-                    : ("udev uninstall failed: " + err);
-            }
-        }
-        if (!s_udevMsg.empty()) {
-            ImGui_TextWrapped(ctx, s_udevMsg.c_str());
-        }
-    #endif
-
-        ImGui_Spacing(ctx);
-        ImGui_Spacing(ctx);
-        ImGui_Text(ctx, "Logs");
-        ImGui_Separator(ctx);
-        bool con = reasixty_consoleOutput();
-        if (ImGui_Checkbox(ctx, "Console output", &con)) {
-            reasixty_setConsoleOutput(con);
-        }
-        // Show the real directory — it is %TEMP% on Windows, not /tmp.
-        {
-            const std::string frames = uf8::logPath("reaper_uf8_frames.log");
-            const std::string colors = uf8::logPath("reaper_uf8_colors.log");
-            ImGui_Text(ctx, ("  " + frames + "   (frame trace, when enabled)").c_str());
-            ImGui_Text(ctx, ("  " + colors + "   (ColorSync push log)").c_str());
-            std::string dir = frames;
-            const size_t cut = dir.find_last_of("/\\");
-            if (cut != std::string::npos) dir.erase(cut);
-    #if defined(_WIN32)
-            const char* reveal = "Reveal log folder in Explorer";
-    #elif defined(__APPLE__)
-            const char* reveal = "Reveal log folder in Finder";
-    #else
-            const char* reveal = "Reveal log folder";
-    #endif
-            if (ImGui_Button(ctx, reveal, /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-                reasixty_revealInFinder(dir.c_str());
-            }
-        }
-
-        ImGui_Spacing(ctx);
-        ImGui_Spacing(ctx);
-        ImGui_Text(ctx, "Acknowledgements");
-        ImGui_Separator(ctx);
-        ImGui_Text(ctx, "  Built without affiliation with Solid State Logic.");
-        ImGui_Text(ctx, "  ReaImGui (cfillion) handles all on-screen rendering.");
-        ImGui_Text(ctx, "  libusb drives the UF8 / UC1 / UF1 vendor-USB endpoints.");
+    // What each surface is bound to RIGHT NOW. Nobody could tell before, which
+    // is how a working install got mistaken for a dead unit. Read via SetupAPI,
+    // so no elevation and no UAC; cached and refreshed on demand rather than
+    // every frame, because it enumerates the whole USB tree.
+    static std::string s_drvStatus;
+    static bool        s_drvStatusInit = false;
+    if (!s_drvStatusInit) {
+        s_drvStatusInit = true;
+        s_drvStatus = reasixty_winUsbDriverStatus();
     }
+    ImGui_Text(ctx, "Current driver binding:");
+    ImGui_TextWrapped(ctx, s_drvStatus.c_str());
+    if (ImGui_Button(ctx, "Refresh##winusb_status", nullptr, nullptr))
+        s_drvStatus = reasixty_winUsbDriverStatus();
+    ImGui_Spacing(ctx);
+
+    static std::string s_winusbMsg;
+    // The job runs on a worker so the UI does not freeze for the length of an
+    // elevated pnputil run. While it runs, both buttons are inert: a second
+    // press would race the first, and pressing again is exactly what users do
+    // when nothing appears to happen.
+    const int  jobState = reasixty_winUsbJobState();
+    const bool jobBusy  = (jobState == 1);
+    if (jobState == 2) {
+        // Finished: adopt the worker's verdict and re-read the bindings once,
+        // so the readout above reflects what just happened without a click.
+        s_winusbMsg = reasixty_winUsbJobMessage();
+        s_drvStatus = reasixty_winUsbDriverStatus();
+        reasixty_winUsbJobClear();
+    } else if (jobBusy) {
+        s_winusbMsg = reasixty_winUsbJobMessage();
+    }
+    // ⚠ NOT ImGui_BeginDisabled — this ReaImGui function set has no such call
+    // (checked against vendor/reaimgui/reaper_imgui_functions.h; see the
+    // signature-drift note in the ReaImGui memory). While a job runs the
+    // buttons are simply not drawn, which also removes the temptation to press
+    // again when nothing seems to be happening.
+    if (!jobBusy) {
+    if (ImGui_Button(ctx, "Install UF8/UC1/UF1 WinUSB driver##winusb_install",
+                     nullptr, nullptr))
+    {
+        std::string err;
+        // The worker owns the outcome message now (installed / failed with the
+        // log path / cancelled at the UAC prompt). This branch only reports a
+        // failure to LAUNCH, which is a different thing entirely.
+        if (!reasixty_installWinUsbDriver(&err)) {
+            s_winusbMsg = err.empty()
+                ? "Driver install could not start."
+                : ("Driver install could not start: " + err);
+        }
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Uninstall##winusb_uninstall",
+                     nullptr, nullptr))
+    {
+        std::string err;
+        if (!reasixty_uninstallWinUsbDriver(&err)) {
+            s_winusbMsg = err.empty()
+                ? "Driver uninstall could not start."
+                : ("Driver uninstall could not start: " + err);
+        }
+    }
+    }   // end of the not-busy button pair
+    if (!s_winusbMsg.empty()) {
+        ImGui_TextWrapped(ctx, s_winusbMsg.c_str());
+    }
+#endif
+
+#ifdef __linux__
+    // Linux equivalent — install udev rule so libusb can claim UF8, UC1
+    // and UF1 without root. Single pkexec prompt, mirrors the Windows
+    // WinUSB-installer UX. Required for ReaPack-installed packages
+    // (ReaPack can drop the .so but can't sudo).
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Linux udev rule");
+    ImGui_Separator(ctx);
+    ImGui_TextWrapped(ctx,
+        "  Grants non-root USB access to UF8, UC1 and UF1 by installing "
+        "/etc/udev/rules.d/99-rea-sixty.rules. One-time setup, "
+        "requires sudo (graphical password prompt).");
+    ImGui_Spacing(ctx);
+    static std::string s_udevMsg;
+    if (ImGui_Button(ctx, "Install Linux udev rule##udev_install",
+                     nullptr, nullptr))
+    {
+        std::string err;
+        if (reasixty_installLinuxUdevRule(&err)) {
+            s_udevMsg = "udev rule installed. Unplug and replug UF8, UC1 and UF1, "
+                        "then restart REAPER.";
+        } else {
+            s_udevMsg = err.empty()
+                ? "udev install failed."
+                : ("udev install failed: " + err);
+        }
+    }
+    ImGui_SameLine(ctx, nullptr, nullptr);
+    if (ImGui_Button(ctx, "Uninstall##udev_uninstall",
+                     nullptr, nullptr))
+    {
+        std::string err;
+        if (reasixty_uninstallLinuxUdevRule(&err)) {
+            s_udevMsg = "udev rule removed. Unplug and replug UF8, UC1 and UF1, "
+                        "then restart REAPER.";
+        } else {
+            s_udevMsg = err.empty()
+                ? "udev uninstall failed."
+                : ("udev uninstall failed: " + err);
+        }
+    }
+    if (!s_udevMsg.empty()) {
+        ImGui_TextWrapped(ctx, s_udevMsg.c_str());
+    }
+#endif
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Logs");
+    ImGui_Separator(ctx);
+    bool con = reasixty_consoleOutput();
+    if (ImGui_Checkbox(ctx, "Console output", &con)) {
+        reasixty_setConsoleOutput(con);
+    }
+    // Show the real directory — it is %TEMP% on Windows, not /tmp.
+    {
+        const std::string frames = uf8::logPath("reaper_uf8_frames.log");
+        const std::string colors = uf8::logPath("reaper_uf8_colors.log");
+        ImGui_Text(ctx, ("  " + frames + "   (frame trace, when enabled)").c_str());
+        ImGui_Text(ctx, ("  " + colors + "   (ColorSync push log)").c_str());
+        std::string dir = frames;
+        const size_t cut = dir.find_last_of("/\\");
+        if (cut != std::string::npos) dir.erase(cut);
+#if defined(_WIN32)
+        const char* reveal = "Reveal log folder in Explorer";
+#elif defined(__APPLE__)
+        const char* reveal = "Reveal log folder in Finder";
+#else
+        const char* reveal = "Reveal log folder";
+#endif
+        if (ImGui_Button(ctx, reveal, /*size_w*/ nullptr, /*size_h*/ nullptr)) {
+            reasixty_revealInFinder(dir.c_str());
+        }
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    ImGui_Text(ctx, "Acknowledgements");
+    ImGui_Separator(ctx);
+    ImGui_Text(ctx, "  Built without affiliation with Solid State Logic.");
+    ImGui_Text(ctx, "  ReaImGui (cfillion) handles all on-screen rendering.");
+    ImGui_Text(ctx, "  libusb drives the UF8 / UC1 / UF1 vendor-USB endpoints.");
 }
 
 } // namespace uf8
