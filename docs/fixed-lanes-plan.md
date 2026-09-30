@@ -100,8 +100,10 @@ nächsten Take ab der nächsten Detente. Das ist „Cycle Playlist“ am Rad.
 | Taste | Werk | Shift |
 |---|---|---|
 | ↑ / ↓ | Lane vor / zurück (wie das Rad, in Schritten) | Comp-Area unter dem Play-Cursor eine Lane hoch / runter |
-| ← / → | Play-Cursor zum vorigen / nächsten Comp-Area-Rand bzw. Item-Rand | Loop auf die Comp-Area / das Item unter dem Cursor |
-| Mitte | **Comp here**: die gehörte Lane übernimmt die Stelle (Zeitauswahl, sonst Razor, sonst das Item unter dem Cursor) | A/B: zurück zur vorigen Lane |
+| ← / → | Play-Cursor zum vorigen / nächsten Comp-Area-Rand bzw. Item-Rand | ← alle Lanes spielen, → nur die Comp-Lane |
+| Rad + Shift | fein (halbe Schritte gibt es bei Lanes nicht): A/B, der ganze vorige Spielsatz | |
+| Mitte | **Comp here** beim Tippen; **halten + Rad = malen** (Baustein F) | Gehörte Lane in den Spielsatz / heraus |
+| Mitte lang | Live-Comping an/aus (Baustein F) | |
 
 „Comp here“ ist das fehlende Hardware-Verb: hören, und wenn es sitzt, einen Knopf drücken.
 Technisch: Razor mit Lane-y auf der gehörten Lane setzen, 42475. Die Mitte leuchtet, wenn
@@ -161,9 +163,73 @@ bei mehr als acht Lanes.
 
 Dazu passt der UF1 als Rad: UF8 zeigt alle Fassungen, UF1 steppt und übernimmt.
 
+### Baustein E: der Spielsatz (eine, mehrere, alle, keine Lane)
+
+REAPER lässt jede Lane einzeln spielen (`C_LANEPLAYS:N`: 1 = exklusiv, 2 = mit anderen,
+0 = stumm), dazu `C_ALLLANESPLAY` (0 keine, 1 alle, 2 einige). Mehrere Lanes zugleich braucht
+man für Dopplungen, mehrere Mikrofone eines Takes, Schichten beim Sounddesign, und zum
+Gegenhören „alles“. Der Plan behandelt den **Spielsatz** als eigenes Ding, nicht als
+Sonderfall:
+
+- **Anzeige überall gleich:** jede spielende Lane hell, jede stumme gedimmt, auf UF8-Bank,
+  UF1-Soft-Keys und UF8-Ansicht. Auf dem UF1 zusätzlich „1/7“, „3 von 7“ oder „alle 7“.
+- **Einzelne Lane rein/raus:** Shift auf der Bank-Taste, SOLO in der UF8-Ansicht, Shift+Mitte
+  im Jog-Modus. Aus exklusiv wird damit ein Satz; nimmt man bis auf eine alle heraus, ist es
+  wieder exklusiv.
+- **Alle / keine / nur Comp:** eigene Builtins (`lane_play_all`, `lane_play_none`,
+  `lane_play_comp`), Werksbelegung auf Shift + ◄ / ► im Lanes-Modus.
+- **Das Rad bei mehreren spielenden Lanes:** es wählt weiter EINE Lane zum Vorhören (exklusiv),
+  merkt sich aber den ganzen Satz davor. A/B holt den ganzen Satz zurück, nicht nur eine Lane.
+  So bleibt „kurz reinhören, zurück zur Schichtung“ ein Handgriff.
+- **Gruppen:** der Satz wird als Muster übertragen (Lanes 1, 3 und 4 spielen → auf jeder
+  Gruppenspur spielen 1, 3 und 4), soweit die Spur so viele Lanes hat.
+- **Aufnahme:** nach einem Punch-In schaltet REAPER auf die neue Lane (Forumsklage). Rea-Sixty
+  greift da nicht ein, zeigt es aber sofort an (Lampe springt), und A/B bringt den Satz davor
+  zurück.
+
+### Baustein F: Malen (Comp-Areas von der Surface)
+
+Das Wischen mit der Maus ist in REAPER der Kern des Comping: man zieht über die Stelle einer
+Quell-Lane, und die Comp-Lane übernimmt sie. Drei Arten, das an der Hardware zu tun, von
+einfach bis spektakulär:
+
+1. **Mit dem Rad malen (UF1).** Mitte des Kreuzes halten und das Rad drehen: der Play-Cursor
+   fährt (man hört mit, wie beim Scrub), und die überfahrene Strecke wird aus der gehörten Lane
+   in die Comp-Lane gemalt. Loslassen beendet den Strich. Rückwärts drehen nimmt zurück, was
+   im selben Strich zu weit ging. Das ist Wischen mit dem Rad statt mit der Maus.
+2. **Live-Comping beim Abspielen („Schnittpult“).** Malen einschalten (Builtin
+   `lane_paint_live`, lang auf der Mitte), Play drücken, und bei jedem Lane-Wechsel mit dem Rad,
+   dem Kreuz, der Bank oder SEL schreibt Rea-Sixty ab dieser Stelle die neue Lane in den Comp.
+   Man spielt den Song durch und schneidet wie ein Bildmischer: Strophe Take 2, Refrain Take 5,
+   letzte Zeile Take 1. Mit laufender Schleife überschreibt jeder Durchgang die Stelle, bis sie
+   sitzt. Stop schliesst den letzten Abschnitt ab.
+3. **Acht Lanes als Schnitttasten (UF8).** In der UF8-Ansicht mit Malen an ist jedes SEL eine
+   Schnitttaste: drücken, und ab jetzt kommt diese Lane in den Comp. Acht Takes nebeneinander,
+   Namen auf den Scribbles, die spielende hell. Das kann keine andere Surface.
+
+Gemeinsame Regeln fürs Malen:
+- Schnittpunkte rasten optional am Raster (Einstellung „Snap paint to grid“, Werk aus), sonst
+  am Play-Cursor. Ein kleiner Vorlauf (Einstellung, z. B. 20 ms) setzt den Schnitt vor die
+  Detente, damit Konsonanten nicht abgeschnitten werden.
+- Überblendungen macht REAPER selbst (Option „Auto-crossfade when comping“, 42631); Rea-Sixty
+  schaltet sie nicht um.
+- Ein Strich bzw. ein Live-Durchgang = ein Undo-Schritt.
+- Technik: jeder Abschnitt wird als Razor mit der Lane-Höhe der Quell-Lane gesetzt und über
+  42475 in eine Comp-Area verwandelt; ist Comping auf der Spur aus, schaltet der erste Strich
+  es ein (REAPER legt dann C1 an). Ob das während der Wiedergabe sauber geht, klärt die Sonde.
+- Gruppen: gemalt wird auf allen Gruppenspuren derselben Lane-Nummer (Drums in einem Zug).
+
+**Takes in Items** (das alte REAPER-Takesystem, mehrere Takes in einem Item): Der Lanes-Modus
+kann sie mitbedienen. Steht unter dem Cursor ein Item mit mehreren Takes und die Spur hat keine
+Lanes, steppt das Rad den aktiven Take (`I_CURTAKE`), der Name steht wie der Lane-Name da, und
+„Comp here“ bzw. Malen teilt das Item an den Schnittpunkten und setzt dort den gewählten Take
+aktiv. So funktioniert das Comping auch für alle, die noch mit Takes statt Lanes arbeiten.
+
 ### Builtins (alle als Builtin, Kategorie „Lanes“, REAPER-Actions nur auf Wunsch)
 
-`lane_next`, `lane_prev`, `lane_ab`, `lane_play_all`, `lane_play_comp` (nur aktive Comp-Lane),
+`lane_next`, `lane_prev`, `lane_ab`, `lane_play_all`, `lane_play_none`, `lane_play_comp`
+(nur aktive Comp-Lane), `lane_play_toggle` (gehörte Lane in den Satz / heraus),
+`lane_paint_live` (Live-Comping an/aus), `lane_paint_hold` (Malen, solange gehalten),
 `lane_comp_here`, `lane_comp_area_up`, `lane_comp_area_down`, `lane_loop_here`,
 `lane_comping_toggle`, `lane_comp_new` (Comp in neue leere Lane), `lane_show_one_toggle`
 (`C_LANESCOLLAPSED`), `lanes_fixed_toggle` (`I_FREEMODE`), `jog_mode_lanes`,
@@ -189,6 +255,9 @@ Eine Lua-Sonde auf den Desktop, Log nach `/tmp`, Frank fährt sie an einem Comp-
 5. `P_RAZOREDITS_EXT` y-Werte gegen `F_FREEMODE_Y/H` für Lane i von n, und ob 42475 danach
    genau diese Lane als Quelle nimmt.
 6. Takes in Items in Lanes: gibt es ein Rank-Attribut per API, oder nur die Maus-Actions?
+7. Razor + 42475 während der Wiedergabe: entsteht die Comp-Area sauber, ohne Aussetzer?
+8. Comping bei geschichteten Lanes (mehrere spielen): was spielt, was wird in den Comp kopiert?
+9. Takes: `I_CURTAKE` setzen und Item an Schnittpunkten teilen, ein Undo-Schritt?
 
 Danach steht fest, was über die API geht und was über Actions mit vorher gesetzter Auswahl.
 
@@ -198,9 +267,12 @@ Danach steht fest, was über die API geht und was über Actions mit vorher geset
 
 1. Sonde (Abschnitt 4).
 2. Kern `LaneModel.h` + ctest.
-3. Baustein B, UF1-Jog-Modus „Lanes“, samt Builtins, Nav-Werksbelegung, Banner, Handbuch.
-4. Baustein C, dynamische Bank „Lanes“.
-5. Baustein D, UF8-Ansicht „Lanes“.
+3. Baustein B + E, UF1-Jog-Modus „Lanes“ mit Spielsatz, samt Builtins, Nav-Werksbelegung,
+   Banner, Handbuch.
+4. Baustein F.1 Malen mit dem Rad, dann F.2 Live-Comping.
+5. Baustein C, dynamische Bank „Lanes“.
+6. Baustein D, UF8-Ansicht „Lanes“, mit F.3 (SEL als Schnitttasten).
+7. Takes in Items im Lanes-Modus.
 
 Jeder Schritt ist für sich nutzbar. B allein ist schon das, was es nirgends gibt.
 
@@ -214,8 +286,11 @@ Jeder Schritt ist für sich nutzbar. B allein ist schon das, was es nirgends gib
 3. Gruppen: Lanes folgen der Media-Edit-Gruppe, Werk an?
 4. Rad in der Grundstellung: ganze Spur steppen (Versionen/Audition) und Shift = Comp-Area,
    oder umgekehrt?
-5. „Comp here“ auf die Mitte des Kreuzes, oder die Mitte bleibt `jog_content_drag` wie in den
-   anderen Modi?
+5. „Comp here“ / Malen auf die Mitte des Kreuzes, oder die Mitte bleibt `jog_content_drag` wie
+   in den anderen Modi?
+6. Live-Comping: schreibt jeder Lane-Wechsel beim Abspielen sofort, oder erst nach Stop (dann
+   ist ein verpatzter Durchgang mit einem Druck verworfen)?
+7. Takes in Items mit in den Plan, oder nur Lanes?
 
 ---
 
