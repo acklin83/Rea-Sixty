@@ -241,6 +241,44 @@ Lanes, steppt das Rad den aktiven Take (`I_CURTAKE`), der Name steht wie der Lan
 „Comp here“ bzw. Malen teilt das Item an den Schnittpunkten und setzt dort den gewählten Take
 aktiv. So funktioniert das Comping auch für alle, die noch mit Takes statt Lanes arbeiten.
 
+### Baustein G: UF8-Encoder-Modus „Lanes“ mit eigenem Kreuz
+
+**Was es heute gibt:** der UF8 hat 15 Encoder-Modi (`EncoderMode`, main.cpp:6481: Channel
+Select, Nudge, Markers, FX-Cycle, …), gewählt über NUDGE / FOCUS und die `encoder_*`-Builtins.
+Das Kreuz daneben (Zoom-Pad) ist fest Zoom (`zoom_up` … `zoom_center` = FIT, Bindings.cpp:1095),
+egal in welchem Modus. Der UF1 hat, was hier fehlt: pro Jog-Modus eigene Kreuz-Belegungen
+(`perModeNavId`, `uf1RemapNavForJogMode_`), mit Rückfall auf die Grundbelegung, wo nichts
+eigenes gesetzt ist (`fillDerivedUf1Slots_`).
+
+**Vorschlag, bei dieser ersten Gelegenheit das Muster für den UF8 anzulegen:**
+
+1. **`EncoderMode::Lanes`**, hinten angehängt, Builtin `encoder_lanes`. Auf eine freie Taste
+   oder eine Quick-Belegung; die Encoder-Modus-Tasten behalten ihre Beschriftung.
+2. **Das Kreuz folgt dem Encoder-Modus**, nach demselben Muster wie beim UF1: eine
+   Umleitung `uf8RemapCrossForEncMode_` an der einen Stelle, an der das Zoom-Pad in die
+   Bindings geht, und eigene Belegungs-IDs pro Modus. Aber nur für Modi, die ein eigenes Kreuz
+   mitbringen, vorerst nur Lanes (5 IDs, mit ENC PUSH 6). Alle anderen Modi fallen auf die
+   Zoom-Grundbelegung zurück, für sie ändert sich nichts. Weitere Modi können später je fünf
+   IDs dazubekommen.
+3. **Dieselbe Tabelle wie am UF1**, dieselben Builtins, derselbe Kern: Encoder = Lane steppen,
+   Shift + Encoder = Comp-Area steppen, ↑ / ↓ Lane, ← / → Ränder, Shift + ← Loop,
+   Shift + → A/B, Mitte (FIT) tippen = Comp here, Mitte halten + Encoder = malen, Mitte lang =
+   Live-Comping. Wer beide Flächen hat, hat an beiden dieselben Griffe.
+4. **Anzeige ohne grosses Display:** die Top-Soft-Keys zeigen die Bank „Lanes“ (acht Namen,
+   Lampen = Spielsatz). Beim Steppen zeigt die Wertzeile des fokussierten Strips „Lane“ und
+   den Namen der gehörten Lane (je 8 Zeichen), beim Malen „Paint“. Ob der Lanes-Modus die
+   Bank „Lanes“ selbst auf die Top-Keys holt, ist ein Entscheid (unten).
+5. **Encoder-Auflösung:** der Kanal-Encoder schickt mehrere Ereignisse pro Rastung; Lanes
+   benutzt denselben Sammler wie Channel Select (`kChannelEncoderScale`), eine Rastung = eine
+   Lane.
+6. **UF8 allein reicht:** mit G und D (Lanes-Ansicht) ist der ganze Comping-Ablauf ohne UF1
+   machbar. Mit UF1 teilen sich beide denselben Zustand, weil der Spielsatz in REAPER selbst
+   steht (`C_LANEPLAYS`) und A/B pro Spur gemerkt wird.
+
+**Nur genannt, nicht Teil dieses Plans:** Mit dem Kreuz-pro-Modus-Muster könnten später auch
+die UF1-Jog-Modi (Playhead, Scrub, Items, Envelope, Razor, Fades) als UF8-Encoder-Modi
+kommen. Dann kann ein UF8 ohne UF1 editieren.
+
 ### Builtins (alle als Builtin, Kategorie „Lanes“, REAPER-Actions nur auf Wunsch)
 
 `lane_next`, `lane_prev`, `lane_ab`, `lane_play_all`, `lane_play_none`, `lane_play_comp`
@@ -250,7 +288,8 @@ aktiv. So funktioniert das Comping auch für alle, die noch mit Takes statt Lane
 `lane_comp_here`, `lane_comp_area_up`, `lane_comp_area_down`, `lane_loop_here`,
 `lane_comping_toggle`, `lane_comp_new` (Comp in neue leere Lane), `lane_show_one_toggle`
 (`C_LANESCOLLAPSED`), `lanes_fixed_toggle` (`I_FREEMODE`), `jog_mode_lanes`,
-`uf8_lanes_view_toggle`. Alle auf die fokussierte Spur (plus Gruppe, wenn eingestellt).
+`uf8_lanes_view_toggle`, `encoder_lanes`. Alle auf die fokussierte Spur (plus Gruppe, wenn
+eingestellt).
 
 ### Banner, Einstellungen
 
@@ -286,8 +325,9 @@ Danach steht fest, was über die API geht und was über Actions mit vorher geset
 
 1. Sonde (Abschnitt 4).
 2. Kern `LaneModel.h` + ctest.
-3. Baustein B + E, UF1-Jog-Modus „Lanes“ mit Spielsatz, samt Builtins, Nav-Werksbelegung,
-   Banner, Handbuch.
+3. Baustein B + E + G, der Lanes-Modus mit Spielsatz auf UF1 (Rad) und UF8 (Encoder, Kreuz
+   pro Modus) zusammen, weil beide dieselben Builtins und dieselbe Tabelle benutzen. Samt
+   Nav-Werksbelegung, Banner, Handbuch.
 4. Baustein F.1 Malen mit dem Rad, dann F.2 Live-Comping.
 5. Baustein C, dynamische Bank „Lanes“.
 6. Baustein D, UF8-Ansicht „Lanes“, mit F.3 (SEL als Schnitttasten).
@@ -310,6 +350,10 @@ Jeder Schritt ist für sich nutzbar. B allein ist schon das, was es nirgends gib
 6. Live-Comping: schreibt jeder Lane-Wechsel beim Abspielen sofort, oder erst nach Stop (dann
    ist ein verpatzter Durchgang mit einem Druck verworfen)?
 7. Takes in Items mit in den Plan, oder nur Lanes?
+8. UF8 im Lanes-Encoder-Modus: wird ENC PUSH auch pro Modus belegbar (Werk: Comp here), oder
+   bleibt er „Plug-in-Fenster“?
+9. Holt der Lanes-Encoder-Modus die Bank „Lanes“ selbst auf die UF8-Top-Keys (und beim
+   Verlassen die vorige zurück), oder wählt man die Bank selbst?
 
 ---
 
@@ -514,4 +558,18 @@ Entscheid 7 vorausgesetzt.
   Stop“ kommt dazu: `lane_paint_discard` verwirft den laufenden Durchgang, bevor etwas
   geschrieben ist.
 - **Spielsatz:** A/B ist das Undo für „wer spielt“; REAPER legt dafür keinen Undo-Schritt an.
+
+### Fall 13: Comping nur mit dem UF8
+
+**Ausgangslage:** kein UF1. Spur „Lead Vox“ wie in Fall 1, UF8 Top-Keys auf Bank „Lanes“.
+
+1. **SEL auf „Lead Vox“**, dann **`encoder_lanes`** (Taste nach Wahl). Banner „Encoder •
+   Lanes“; das Zoom-Pad ist jetzt das Lanes-Kreuz.
+2. **Shift + ←** (Zoom-Pad) = Loop auf die Zeile, **Play**.
+3. **Kanal-Encoder drehen:** Take für Take; die Top-Key-Lampe wandert mit, die Wertzeile des
+   Vox-Strips zeigt „Lane“ und den Namen.
+4. **FIT (Mitte) tippen:** Comp here, wie Fall 1 Schritt 5.
+5. **FIT halten und Encoder drehen:** malen, wie Fall 3.
+6. **Zurück zum Mischen:** `encoder_nudge` oder die Modus-Taste, die man gewohnt ist. Das
+   Zoom-Pad zoomt wieder, die Top-Keys sind wieder auf ihrer Bank (je nach Entscheid 9).
 
