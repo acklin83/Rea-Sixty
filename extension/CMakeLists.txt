@@ -815,6 +815,12 @@ if(NOT WIN32)
     target_include_directories(test_ssl_track_identity PRIVATE src)
     add_test(NAME ssl_track_identity COMMAND test_ssl_track_identity)
 
+    # A folder collapsed in the mixer takes its children off the surface
+    # (McpFolderCollapse.h, header only).
+    add_executable(test_mcp_folder_collapse tests/test_mcp_folder_collapse.cpp)
+    target_include_directories(test_mcp_folder_collapse PRIVATE src)
+    add_test(NAME mcp_folder_collapse COMMAND test_mcp_folder_collapse)
+
     add_executable(test_uc1_protocol tests/test_uc1_protocol.cpp src/UC1Protocol.cpp)
     target_include_directories(test_uc1_protocol PRIVATE src)
     add_test(NAME uc1_protocol COMMAND test_uc1_protocol)

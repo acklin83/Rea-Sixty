@@ -98,6 +98,7 @@
 #include "RmeSoftKeys.h"
 #include "RmeFace.h"
 #include "JogGrid.h"
+#include "McpFolderCollapse.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
 #endif
@@ -1790,9 +1791,11 @@ std::atomic<bool>         g_bankScrollByOne{false};
 // Which REAPER view the UF8 mirrors for track visibility: 0 = TCP
 // (arrange-view panel), 1 = MCP (mixer). A track hidden in the
 // selected view drops from g_visibleTracks so the surface matches
-// what the user sees in REAPER. Default TCP — children of a collapsed
-// folder fall out automatically as long as REAPER's "Hide children of
-// collapsed folders" pref is active. Frank 2026-05-22.
+// what the user sees in REAPER. Default TCP. TCP: children of a folder
+// whose collapse button is on "hidden" fall out via IsTrackVisible,
+// "small" children stay (REAPER draws them). MCP: children of a folder
+// collapsed in the mixer fall out via g_mcpCollapsedParents. Frank
+// 2026-05-22, MCP collapse 2026-09-30.
 std::atomic<int>          g_visibilityFollow{0};
 // Pinned-tracks behaviour: when Surface mirrors TCP and tracks are
 // pinned (B_TCPPIN, REAPER's "pin to top of arrange view" feature),
@@ -2285,8 +2288,9 @@ extern int   g_focusedGuiShownFx;
 // g_folderMode (parents-only: only top-level / depth-0 tracks pass,
 // plus the direct children of every entry in g_spilledParents) and
 // g_showOnlySelected (live "currently selected" filter, not a saved
-// selection set). Independent of REAPER's MCP collapse state — folder
-// mode here is a pure surface filter. Rebuilt once per onTimer tick
+// selection set). Folder mode here is a pure surface filter, independent
+// of REAPER's folder collapse; the visibility-follow gate in the rebuild
+// honours REAPER's collapse (TCP hidden, MCP collapsed). Rebuilt once per onTimer tick
 // before strip rendering and input handling. ALL "bank index → track"
 // lookups in surface contexts read from this list; non-surface callers
 // (e.g. scanning all tracks for any-armed status) keep using REAPER's
@@ -2306,6 +2310,52 @@ std::vector<MediaTrack*> g_visibleTracks;
 // against ValidatePtr2 every rebuild because REAPER may free a track
 // behind our back when the user reorders or deletes.
 std::unordered_set<MediaTrack*> g_spilledParents;
+
+// Folders collapsed in the MIXER, for "Surface mirrors: MCP" (McpFolderCollapse.h:
+// IsTrackVisible(tr, true) does not know this state, and no API reads it, only the
+// folder's chunk). Chunks are costly (a Meter Pro alone is ~840 KB), so they are
+// read only when the signature changes: project, track count, folder layout, and
+// which strips have I_MCPW 0. A collapse in the mixer zeroes its children's strips
+// (measured 30.09.2026), so every click on the folder icon changes the signature;
+// the chunk stays the truth, I_MCPW is only the trigger. Pointers in the set are
+// compared, never dereferenced. Main thread only (rebuildVisibleTrackList).
+std::unordered_set<MediaTrack*> g_mcpCollapsedParents;
+uint64_t g_mcpCollapseSig = 0;   // 0 = read again on the next MCP tick
+
+void refreshMcpCollapsedParents_() {
+    uint64_t h = 1469598103934665603ULL;   // FNV-1a
+    auto mix = [&h](uint64_t v) {
+        for (int i = 0; i < 8; ++i) { h ^= (v >> (i * 8)) & 0xFF; h *= 1099511628211ULL; }
+    };
+    const int n = CountTracks(nullptr);
+    mix(reinterpret_cast<uintptr_t>(EnumProjects(-1, nullptr, 0)));
+    mix(static_cast<uint64_t>(n));
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* tr = GetTrack(nullptr, i);
+        if (!tr) continue;
+        mix(reinterpret_cast<uintptr_t>(tr));
+        const int depth = static_cast<int>(GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH"));
+        const bool zeroW = GetMediaTrackInfo_Value(tr, "I_MCPW") < 0.5;
+        mix((static_cast<uint64_t>(static_cast<uint32_t>(depth)) << 1) | (zeroW ? 1u : 0u));
+    }
+    if (h == 0) h = 1;
+    if (h == g_mcpCollapseSig) return;
+    g_mcpCollapseSig = h;
+    g_mcpCollapsedParents.clear();
+    // BUSCOMP sits in the track's header lines, ahead of <FXCHAIN, so even a chunk
+    // cut off at the buffer end still carries it.
+    constexpr int kBuf = 1 << 20;
+    static std::vector<char> buf(kBuf, 0);
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* tr = GetTrack(nullptr, i);
+        if (!tr || GetMediaTrackInfo_Value(tr, "I_FOLDERDEPTH") < 0.5) continue;
+        buf[0] = 0;
+        GetTrackStateChunk(tr, buf.data(), kBuf, false);
+        buf[kBuf - 1] = 0;
+        if (mcpfold::mixerCollapsedFromChunk(buf.data()))
+            g_mcpCollapsedParents.insert(tr);
+    }
+}
 
 // Per-strip SEL press state for long-press detection. press_ms = epoch
 // millis at the press edge (0 = not currently held). spill_fired = true
@@ -2752,6 +2802,11 @@ inline bool isFocusMember_(MediaTrack* tr) {
 void rebuildVisibleTrackList() {
     const bool folderMode = g_folderMode.load();
     const bool selOnly    = g_showOnlySelected.load();
+    const bool followMcp  = (g_visibilityFollow.load() == 1);
+    // Several writers flip the mode (setter, both builtins, ExtState load); a
+    // stale set from an earlier MCP stretch must not survive a trip to TCP.
+    if (followMcp) refreshMcpCollapsedParents_();
+    else           g_mcpCollapseSig = 0;
     if (!g_spilledParents.empty()) {
         for (auto it = g_spilledParents.begin(); it != g_spilledParents.end();) {
             if (!ValidatePtr2(nullptr, *it, "MediaTrack*")) it = g_spilledParents.erase(it);
@@ -2829,8 +2884,15 @@ void rebuildVisibleTrackList() {
         // state into one call, so children of a collapsed folder are
         // dropped in TCP-mode without us having to walk the hierarchy.
         // B_SHOWIN* alone misses the folder-collapse case. Frank 2026-05-22.
-        const bool followMcp = (g_visibilityFollow.load() == 1);
+        // ⛔ But only in the TCP: IsTrackVisible(tr, true) ignores a folder
+        // collapsed in the mixer (measured 30.09.2026), so MCP-mode asks the
+        // folder itself. A TCP folder set to "small" keeps its children here on
+        // purpose: REAPER still draws them (Frank 30.09.: only hidden is hidden).
         if (!IsTrackVisible(tr, followMcp)) continue;
+        if (followMcp && mcpfold::underCollapsedFolder(
+                tr, [](MediaTrack* t) { return GetParentTrack(t); },
+                g_mcpCollapsedParents))
+            continue;
         g_visibleTracks.push_back(tr);
     }
 

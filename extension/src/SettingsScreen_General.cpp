@@ -1161,17 +1161,21 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
     }
 
     // Visibility follow: the surface mirrors what's visible in either
-    // REAPER's TCP (arrange-view) or MCP (mixer). TCP-mode also hides
-    // children of fully-collapsed folders because REAPER's
-    // "Hide children of collapsed folders" pref clears B_SHOWINTCP on
-    // those children — no separate toggle needed. Frank 2026-05-22.
+    // REAPER's TCP (arrange-view) or MCP (mixer). TCP: IsTrackVisible drops
+    // the children of a folder set to hidden; "small" children stay because
+    // REAPER still draws them. MCP: a folder collapsed in the mixer is read
+    // from its chunk (McpFolderCollapse.h), IsTrackVisible does not know it.
+    // Frank 2026-05-22, MCP collapse 2026-09-30.
     int visFollow = reasixty_visibilityFollow();
     ImGui_Text(ctx, "Surface mirrors:");
     ImGui_SameLine(ctx, nullptr, nullptr);
     // One note for the pair, so hovering either radio answers the question.
     static const char* kVisFollowHelp =
-        "TCP hides children of collapsed folders when REAPER's\n"
-        "'Hide children of collapsed folders' preference is on.";
+        "TCP: children of a folder set to hidden leave the surface,\n"
+        "children shown small stay.\n"
+        "MCP: children of a folder collapsed in the Mixer leave the surface.\n"
+        "The Mixer's folder icon is off by default: right-click the Mixer,\n"
+        "'Clickable icon for folder tracks to show/hide children'.";
     if (ImGui_RadioButtonEx(ctx, "TCP", &visFollow, 0)) {
         reasixty_setVisibilityFollow(visFollow);
     }
