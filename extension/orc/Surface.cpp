@@ -1,3 +1,4 @@
+#include "OrcLog.h"
 #include "Surface.h"
 
 #include "OrcConfig.h"
@@ -66,7 +67,7 @@ const char* linkName(rme::LinkState st)
 void dumpModel(const rme::State& st)
 {
     const auto cr = rme::manager().controlRoom();
-    std::printf("\n-- control room -------------------------------------------\n");
+    orc::logLine("-- control room -------------------------------------------\n");
     std::printf("   main out %d   main B %d   phones %d %d %d %d\n",
                 st.mainOut, st.mainOutB, st.phones[0], st.phones[1],
                 st.phones[2], st.phones[3]);
@@ -207,13 +208,13 @@ void Surface::start()
         onEvent_(ev);
         switch (ev.kind) {
             case uf1::InputKind::FaderPosition:
-                std::printf("%-14s pos=%5u\n", kindName(ev.kind), ev.position);
+                orc::logLine("%-14s pos=%5u\n", kindName(ev.kind), ev.position);
                 break;
             case uf1::InputKind::EncoderRotate:
-                std::printf("%-14s id=0x%02X delta=%+d\n", kindName(ev.kind), ev.id, ev.delta);
+                orc::logLine("%-14s id=0x%02X delta=%+d\n", kindName(ev.kind), ev.id, ev.delta);
                 break;
             default:
-                std::printf("%-14s id=0x%02X %s\n", kindName(ev.kind), ev.id,
+                orc::logLine("%-14s id=0x%02X %s\n", kindName(ev.kind), ev.id,
                             ev.pressed ? "down" : "up");
                 break;
         }
@@ -386,12 +387,12 @@ void Surface::loop_()
                 // no TotalMix". Rea-Sixty retries a busy port every 3 s, so
                 // closing ours is all it needs.
                 if (want && !yielding) {
-                    std::printf("ORC: REAPER asked for the UF1, letting go of it and of TotalMix\n");
+                    orc::logLine("ORC: REAPER asked for the UF1, letting go of it and of TotalMix\n");
                     std::fflush(stdout);
                     rme::manager().stop();
                 }
                 if (!want && yielding) {
-                    std::printf("ORC: REAPER let go of the UF1, taking it and TotalMix back\n");
+                    orc::logLine("ORC: REAPER let go of the UF1, taking it and TotalMix back\n");
                     std::fflush(stdout);
                     rme::manager().start();
                     lastOpenTry = now - std::chrono::seconds(5);   // try at once
@@ -417,7 +418,7 @@ void Surface::loop_()
         if (dev_.isOpen() && dev_.needsReopen()) {
             // Stale handle, or no answer to the wake (UF1Device::runInit_,
             // right after the unit was switched on): open again at once.
-            std::printf("ORC: reopening the UF1 (%s)\n", dev_.lastError().c_str());
+            orc::logLine("ORC: reopening the UF1 (%s)\n", dev_.lastError().c_str());
             std::fflush(stdout);
             dev_.close();
             lastOpenTry = std::chrono::steady_clock::now() - std::chrono::seconds(5);
@@ -436,12 +437,12 @@ void Surface::loop_()
                 // Why it did not open, once per new reason, not every 2 s.
                 if (!ok && dev_.lastError() != lastOpenErr) {
                     lastOpenErr = dev_.lastError();
-                    std::printf("ORC: UF1 not open: %s\n", lastOpenErr.c_str());
+                    orc::logLine("ORC: UF1 not open: %s\n", lastOpenErr.c_str());
                     std::fflush(stdout);
                 }
                 if (ok) {
                     lastOpenErr.clear();
-                    std::printf("ORC: UF1 open, serial %s.\n", dev_.serial().c_str());
+                    orc::logLine("ORC: UF1 open, serial %s.\n", dev_.serial().c_str());
                     std::fflush(stdout);
                     // The device that just came up is blank: the painter must
                     // believe nothing it cached (the extension's g_uf1Gen bump).
@@ -453,7 +454,7 @@ void Surface::loop_()
 
         const auto link = rme::manager().link();
         if (link != lastLink) {
-            std::printf("ORC: link %s (%s)\n", linkName(link),
+            orc::logLine("ORC: link %s (%s)\n", linkName(link),
                         rme::manager().status().c_str());
             std::fflush(stdout);
             lastLink = link;
@@ -475,7 +476,7 @@ void Surface::loop_()
     }
     cycleActive_.store(false);
 
-    std::printf("\nORC: surface closing.\n");
+    orc::logLine("ORC: surface closing.\n");
     std::fflush(stdout);
 }
 

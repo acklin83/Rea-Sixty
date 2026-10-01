@@ -105,6 +105,7 @@
 #include "LaneModel.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
+#include <sys/time.h> // gettimeofday, for the lines in ORC's log
 #endif
 #include "Uf1Pacer.h"
 #include "Uf1SoftKeys.h"
@@ -1653,17 +1654,53 @@ static std::string orcHandoverPath_()
 #endif
 }
 
+// ⇨ OUR SIDE OF THE HANDOVER, IN ORC'S LOG (Frank 01.10.2026, after recording
+// dropouts nobody could place in time). One line per change, same file and same
+// "[HH:MM:SS.mmm]" format as ORC's own lines (orc/OrcLog.h), so /tmp/orc.log
+// tells in one place who held the UF1 and TotalMix when. Only where ORC is
+// installed (its folder exists): a machine without ORC gets no file.
+static void orcLogLine_(const char* what)
+{
+#ifdef __APPLE__
+    const std::string marker = orcHandoverPath_();
+    if (marker.empty()) return;
+    struct stat sb{};
+    if (::stat(marker.substr(0, marker.rfind('/')).c_str(), &sb) != 0) return;
+    timeval tv{};
+    gettimeofday(&tv, nullptr);
+    std::tm lt{};
+    localtime_r(&tv.tv_sec, &lt);
+    char ts[16];
+    std::strftime(ts, sizeof(ts), "%H:%M:%S", &lt);
+    if (FILE* f = std::fopen(uf8::logPath("orc.log").c_str(), "a")) {
+        std::fprintf(f, "[%s.%03d] REA-SIXTY: %s\n", ts,
+                     static_cast<int>(tv.tv_usec / 1000), what);
+        std::fclose(f);
+    }
+#else
+    (void)what;   // ORC exists on macOS only
+#endif
+}
+
 static void orcHandoverMark_(bool want)
 {
 #ifdef __APPLE__
     const std::string path = orcHandoverPath_();
     if (path.empty()) return;
-    if (!want) { std::remove(path.c_str()); return; }
+    if (!want) {
+        if (std::remove(path.c_str()) == 0)
+            orcLogLine_("handover marker removed, ORC may take the UF1 back");
+        return;
+    }
     // Only where ORC lives: fopen fails when the folder is missing, and that is
     // the whole check.
     if (FILE* f = std::fopen(path.c_str(), "w")) {
         std::fprintf(f, "%d\n", static_cast<int>(getpid()));
         std::fclose(f);
+        char line[96];
+        std::snprintf(line, sizeof(line), "handover marker set (REAPER pid %d), asking ORC for the UF1",
+                      static_cast<int>(getpid()));
+        orcLogLine_(line);
     }
 #else
     (void)want;   // ORC exists on macOS only
@@ -28139,12 +28176,14 @@ void openUf1BringUp_()
                          static_cast<long long>(ms), err.c_str());
             std::fclose(f);
         }
+        orcLogLine_(("UF1 not open: " + err).c_str());
         return;   // `dev` goes out of scope; g_uf1_dev was never set
     }
     {
         std::lock_guard<std::mutex> devLk(g_uf1DevSwapMx);
         g_uf1_dev = std::move(dev);
     }
+    orcLogLine_("UF1 open, REAPER has it");
     markDeviceSeen_(kSeenUf1);
     g_uf1_dev->setRawInputHandler(onUf1Input);
     g_uf1_dev->setInputHandler(onUf1Event);
@@ -47270,6 +47309,8 @@ void onTimerBody_()
             }
             if (u1Stale) {
                 if (!sUf1Lost) staleLog("rea_sixty_uf1_stale.log", "UF1 stale handle - reopening...");
+                if (g_uf1_dev)
+                    orcLogLine_(("UF1 lost (" + g_uf1_dev->lastError() + "), reopening").c_str());
                 {
                     std::lock_guard<std::mutex> devLk(g_uf1DevSwapMx);
                     if (g_uf1_dev) g_uf1_dev->close();
