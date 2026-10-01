@@ -117,8 +117,8 @@ void Surface::onEvent_(const ::uf1::InputEvent& ev)
             if (rmei::stripSoftKey(in_, host_, st, cfg, ev, w)) break;
             if (softKeys_(ev)) break;
             if (rmei::button(in_, host_, st, cfg, ev, w)) break;
-            // 360 opens the settings window; the app picks the request up on
-            // its main thread (runApp). CYCLE and CLICK do nothing in ORC for
+            // 360 opens the settings window and closes it again; the app picks
+            // the request up on its main thread (runApp). CYCLE and CLICK do nothing in ORC for
             // now (Frank 30.09.2026), whatever orc.json inherited for them.
             if (ev.id == ::uf1::btn::k360) {
                 if (ev.pressed) settingsRequest_.store(true);

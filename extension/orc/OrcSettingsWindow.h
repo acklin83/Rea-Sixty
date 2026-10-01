@@ -14,4 +14,6 @@
 @interface OrcSettingsWindowController : NSWindowController
 + (instancetype)shared;
 - (void)present;
+// 360 on the UF1: open the window, or close it when it is showing.
+- (void)toggle;
 @end

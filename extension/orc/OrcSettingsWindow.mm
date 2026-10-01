@@ -632,6 +632,12 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
     }
 }
 
+- (void)toggle
+{
+    if (self.window.isVisible) [self.window close];
+    else                       [self present];
+}
+
 - (void)windowWillClose:(NSNotification*)note
 {
     // Nothing is polled while nobody is looking.
