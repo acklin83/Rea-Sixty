@@ -85,14 +85,10 @@ mit ctest: leer / belegt / Group / aktiv, lang auf belegt = nichts, Shift übers
 
 **Handbuch:** Abschnitt Selection Sets und Dynamic Banks.
 
-## Entscheide
+## Entschieden (Frank 01.10.2026)
 
-1. **Laden:** Druck = Filter wie heute, Cmd = Spuren auswählen (Vorschlag). Oder soll der
-   Druck beides tun (Filter an und Spuren auswählen)?
-2. **Speichern:** lang nur in leere Slots, Überschreiben mit Shift (Vorschlag), oder lang
-   speichert immer?
-3. **Leeren vom Gerät** (Ctrl + Druck): ja, oder nur in Settings?
-4. **Name beim Speichern vom Gerät:** leer lassen (angezeigt „Set 3“) (Vorschlag), oder
-   automatisch aus der ersten Spur („Vox +3“)?
-5. **Werksbank:** eine fertige Bank „Selection Sets“ in die Werks-Bänke (UF8 und UF1), oder
-   legt man sie selbst an?
+1. Druck = Filter wie heute, Cmd + Druck = Spuren in REAPER auswählen.
+2. Lang speichert nur in leere Slots, Shift + Druck überschreibt.
+3. Ctrl + Druck leert den Slot am Gerät.
+4. Speichern am Gerät setzt keinen Namen; angezeigt wird „Set 3“.
+5. Keine eigene Werksbank: die Art steht im Bank-Menü wie jede andere dynamische Bank.
