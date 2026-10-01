@@ -1,6 +1,22 @@
-# Rea-Sixty v0.6.4 (draft, not released)
+# Rea-Sixty v0.6.4, "Fletcher Dragge is my Spirit Animal"
 
-Codename and date come with the release. Everything below is on main after v0.6.3.
+**Spill on the surface.** A VCA lead spills its followers onto the UF8 and the UF1 with a long press on `SEL`, level by level for nested VCAs, and VCA Mode shows only the top leads. Long-press `SEL` became a binding of its own. A new dynamic bank puts the eight Selection Sets on the keys, in their own colours, to recall, store, select and clear. Folders collapsed in the Mixer now take their children off the surface, and Folder Mode keeps its open folders in the project.
+
+## Install via ReaPack (recommended)
+
+Under Extensions, ReaPack, Manage repositories, Import/export, Import repositories. Paste:
+
+```
+https://github.com/acklin83/reaper-scripts/raw/main/index.xml
+```
+
+Then Browse packages, `Rea-Sixty`, Install. Restart REAPER. Add the surface under Preferences, Control/OSC/Web, Add, Rea-Sixty.
+
+First-run setup buttons live under Settings, About:
+
+- **Windows:** "Install UF8/UC1/UF1 WinUSB driver" (UAC prompt)
+- **Linux:** "Install Linux udev rule" (pkexec prompt)
+- **macOS:** nothing extra
 
 ## VCA spill and VCA Mode
 
@@ -44,21 +60,19 @@ Codename and date come with the release. Everything below is on main after v0.6.
 - The mode banner names the UF1's RME side-car. With the UF1 set to start in RME it said "UF1 Mode • DAW" at REAPER start, and entering or leaving the side-car with SHIFT + MODE showed nothing.
 - Settings text named a REAPER preference that does not exist ("Hide children of collapsed folders"). It now names the real one, *Folder collapse button cycles track heights*.
 
-## Changelog (for ReaPack, without the two-space indent)
+## Known issues
 
-```
-- VCA spill: long-press SEL on a VCA lead in VCA Mode; lead stays on strip 1, followers after it, nested VCAs level by level
-- VCA Mode: only the top VCA leads on the surface
-- Setting "VCA spill shows hidden tracks" (default on)
-- Actions: VCA Mode, VCA Spill (selected track), Leave VCA Spill, also in REAPER's Action List
-- Long-press SEL is a binding on UF8 and UF1, factory action "Spill (folder / VCA)"
-- SEL editor: double press in the SHORT column
-- UF1: long-press SEL does nothing in REC and REC + MON
-- Surface mirrors MCP: a folder collapsed in the Mixer takes its children off the surface
-- Folder Mode keeps its open folders, saved per project tab
-- Selection Set group slots and UF1 razor grouping reach all 128 groups (REAPER 7.23+)
-- REAPER action for Folder Mode
-- Mode banner names the UF1 RME side-car
-- Dynamic bank "Selection Sets": slots 1-8 on the keys; push recalls, hold stores into an empty slot, Shift stores over, Cmd selects, Ctrl clears
-- Selection Sets get a key colour each (Settings, Selection Sets), used by the Selection Sets bank
-```
+- Windows 11 with Smart App Control on refuses to load Rea-Sixty ("Bad Image", error 0xc0e90002): the extension is not code-signed. Turning Smart App Control off lets it load.
+- On a track without the envelope yet, the first pot turn in Touch goes through REAPER's usual path, which creates the envelope, and the value returns once. From the second turn on, the pot writes its point.
+- FX Cycle, Instance Cycle and Favourites cycling show their prev/current/next carousel on the UC1 only. On a UF1 the landed plug-in name appears, without the neighbours.
+- OBS chapter marks need one of OBS's Hybrid recording formats; on anything else OBS refuses the request and the status line says so.
+
+## Manual install
+
+If ReaPack isn't an option:
+
+- **macOS:** `rea-sixty-mac-v0.6.4.zip`, unzip the three `.dylib` files into `~/Library/Application Support/REAPER/UserPlugins/`.
+- **Windows:** `rea-sixty-win-v0.6.4.zip`, unzip the three `.dll` files into `%APPDATA%\REAPER\UserPlugins\`. Run the WinUSB driver installer from Settings, About on first launch.
+- **Linux:** `rea-sixty-linux-v0.6.4.tar.gz`, unpack **all three** files (`reaper_rea-sixty.so`, `libusb-1.0.so.0`, `libhidapi-hidraw.so.0`) into `~/.config/REAPER/UserPlugins/`, keeping them together. Apply the bundled `99-rea-sixty.rules` udev rule, or use the in-app button. No separate dependency install needed.
+
+The **Stream Deck Companion** plugin (`com.reasixty.companion.streamDeckPlugin`) is attached to this release separately, it is not part of the ReaPack package.
