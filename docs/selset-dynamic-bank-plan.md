@@ -5,7 +5,7 @@ Stand 01.10.2026. Nicht gebaut. Was über den Code dasteht, ist in dieser Sitzun
 
 ## Was es heute gibt
 
-- **Acht Slots** pro Projekt (oder global), `g_selsets` (main.cpp ~2520). Zwei Arten:
+- **Acht Slots** pro Projekt (oder global), `g_selsets` (main.cpp:2588). Zwei Arten:
   Snapshot (feste Spurliste, GUIDs) und Group (folgt REAPER-Gruppe 1–128).
 - **`selset_recall`** Param 1–8: Slot aufrufen; derselbe Slot noch einmal = aus. Aufrufen ist
   ein **Filter für die Oberfläche** (`g_selsetActive`, `drainSelsets_`, main.cpp:3855): die
