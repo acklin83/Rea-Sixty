@@ -58,10 +58,14 @@ Lane sieht, existiert nirgends. Das ist die Lücke.
 (`P_RAZOREDITS_EXT`: `start end "" top_y bottom_y`, y als Bruchteil der Spurhöhe).
 
 **Nur über Actions oder Chunk:**
-- Comp-Areas: keine API. Anlegen über Razor + 42475, verschieben über 42707/42708 (für
-  ausgewählte Items) oder die Maus-Actions.
-- Welche Lane die aktive Comp-Lane ist und ob Comping an ist: nur Chunk `LANEREC rec comp
-  lastcomp`.
+- Comp-Areas: keine API, aber **lesbar im Spur-Chunk** (gemessen 01.10.): eine Zeile pro
+  Area, `LINKEDLANE start ende quell-lane 0 -1 blende-ein blende-aus` (Quell-Lane 0-basiert,
+  Blenden 0.01). Anlegen über Razor + 42475, verschieben über 42707/42708 (für das
+  ausgewählte Comp-Lane-Item) oder die Maus-Actions.
+- Welche Lane die aktive Comp-Lane ist und ob Comping an ist: nur Chunk `LANEREC`, Feld 2 =
+  Index der Comp-Lane, -1 = Comping aus (gemessen; Feld 4 ändert sich mit, Bedeutung offen).
+  Die Comp-Lane heisst nicht zwingend „C1“: in der Sonde hiess sie weiter „1“. Erkennen also
+  immer über `LANEREC`, nie über den Namen.
 - Masking, „Quelle bearbeiten beim Comping“: nur Chunk oder Toggle-Actions.
 
 **Mindestversion:** REAPER 7.12 (ab da gibt es alles oben). Darunter bietet Rea-Sixty die
@@ -96,8 +100,16 @@ Strips als Option). Jeder Baustein nutzt, was es schon gibt, und baut nichts nac
   Gruppen über den `trackGroups_`-Helfer vom VCA-Spill), mit derselben Lane-Nummer.
 - A/B: die zuletzt spielende Lane merken (pro Spur).
 
-Main-Thread-Teil in main.cpp: liest/schreibt die Attribute, Chunk-Leser für `LANEREC` mit
-Cache (gleiche Machart wie `BUSCOMP` beim MCP-Collapse: nur bei Signaturwechsel neu lesen).
+Main-Thread-Teil in main.cpp: liest/schreibt die Attribute, Chunk-Leser für `LANEREC` und
+`LINKEDLANE` mit Cache (gleiche Machart wie `BUSCOMP` beim MCP-Collapse: nur bei
+Signaturwechsel neu lesen). Aus `LINKEDLANE` kommt die **Comp-Karte**: welche Stelle aus
+welcher Lane stammt. Der UF1 kann sie zeigen, ← / → springen an ihre Grenzen, und „Comp-Area
+unter dem Cursor“ weiss, aus welcher Lane sie kommt.
+
+**Kein Undo-Schritt beim Steppen:** REAPERs eigene Lane-Actions legen pro Wechsel einen
+Eintrag „Change lane play state“ an (gemessen, acht Einträge für acht Klicks). Rea-Sixty
+setzt den Spielsatz über die API (`C_LANEPLAYS`) ohne Undo-Block, damit das Rad den
+Undo-Verlauf nicht füllt. A/B ist das Zurück für „wer spielt“.
 
 ### Baustein B: UF1-Jog-Modus „Lanes“ (der Kern des Ganzen)
 
@@ -268,7 +280,8 @@ Gemeinsame Regeln fürs Malen:
   Detente, damit Konsonanten nicht abgeschnitten werden.
 - Überblendungen macht REAPER selbst (Option „Auto-crossfade when comping“, 42631); Rea-Sixty
   schaltet sie nicht um.
-- Ein Strich bzw. ein Live-Durchgang = ein Undo-Schritt.
+- Ein Strich = ein Undo-Schritt. Live-Comping: ein Undo-Schritt pro Schnitt (Entscheid 6,
+  gemessen: jedes 42475 ist ein eigener Eintrag „Create fixed lane comp area“).
 - Technik: jeder Abschnitt wird als Razor mit der Lane-Höhe der Quell-Lane gesetzt und über
   42475 in eine Comp-Area verwandelt; ist Comping auf der Spur aus, schaltet der erste Strich
   es ein (REAPER legt dann C1 an). Ob das während der Wiedergabe sauber geht, klärt die Sonde.
@@ -403,6 +416,24 @@ Eine Lua-Sonde auf den Desktop, Log nach `/tmp`, Frank fährt sie an einem Comp-
 
 Danach steht fest, was über die API geht und was über Actions mit vorher gesetzter Auswahl.
 
+### Gemessen am 01.10.2026 (REAPER 7.81, Sonde `rea_sixty_lanes_sonde.lua`)
+
+| Frage | Ergebnis |
+|---|---|
+| 1 | `LANEREC` Feld 2 = Comp-Lane (0-basiert), -1 = Comping aus. Comp-Lane hiess „1“, nicht „C1“. Comp-Areas stehen als `LINKEDLANE start ende quell-lane 0 -1 0.01 0.01`. |
+| 2 | Comping an: Comp-Lane `C_LANEPLAYS` 1, Quellen 0. Mehrere spielende Lanes (Cmd-Klick) je 2. `LANESOLO` war anfangs die verdrehte Maske (4294967281), danach eine normale Bitmaske: nur `C_LANEPLAYS` lesen. |
+| 3 | 42481/42482 wirken nur auf ausgewählte Spuren (ohne Auswahl keine Änderung). Von zwei spielenden Lanes (1, 2) ging „next“ auf Lane 2 allein. Ob Comp-Lanes übersprungen werden: nicht geklärt, für uns egal (eigenes Steppen über `C_LANEPLAYS`). |
+| 4 | 42707 mit ausgewähltem Comp-Lane-Item: genau diese Area eine Lane hoch (3 → 2). 41082: ALLE Areas der Spur eine Lane hoch, mit Umlauf an der Comp-Lane vorbei (1 → 3). |
+| 5 | Lane i von n: y von i/n bis (i+1)/n, gleich wie `F_FREEMODE_Y/H` der Items. 42475 nimmt genau diese Lane als Quelle; Nachbar-Areas werden gekürzt, 10 ms Überlappung. |
+| 6 | Kein Rang-Attribut in der API; keine Rang-Zeile im Item-Chunk eines unbewerteten Takes. |
+| 7 | 42475 während Play: Area entsteht, kein Aussetzer (Frank), Aufruf 0.1 ms. |
+| 8 | Nur der Zustand gemessen (siehe 2), Comping bei Schichtung nicht. |
+| 9 | Teilen + `I_CURTAKE` in einem Undo-Block: genau ein Eintrag. |
+| Undo | Jede Lane-Action ein Eintrag („Change lane play state“), jedes 42475 ein Eintrag („Create fixed lane comp area“), 42707/41082 je „Edit fixed lane comp area“. |
+
+**Nur genannt:** 41082 / 41083 wären ein eigenes Verb, „ganzen Comp eine Lane hoch / runter“
+(z. B. Shift auf einem Bank-Key der Bank „Lanes“). Nicht im Plan, solange Frank es nicht will.
+
 ---
 
 ## 5. Reihenfolge
@@ -439,7 +470,9 @@ Jeder Schritt ist für sich nutzbar. B allein ist schon das, was es nirgends gib
 4. Rad / Encoder in der Grundstellung steppen die ganze Spur; Shift = Comp-Area.
 5. Mitte des Kreuzes im Lanes-Modus: tippen = Comp here, halten + drehen = malen, lang =
    Live-Comping.
-6. Live-Comping schreibt jeden Lane-Wechsel sofort; ein Durchgang = ein Undo-Schritt.
+6. Live-Comping schreibt jeden Lane-Wechsel sofort; jeder Schnitt ist ein Undo-Schritt
+   (Frank 01.10., nach der Sonde: ein Undo-Block über einen ganzen Durchgang ist bei sofortigem
+   Schreiben nicht zu haben).
 7. Takes in Items kommen mit, als letzter Schritt.
 8. UF8 ENC PUSH tippen ist pro Encoder-Modus belegbar; ab Werk Plug-in-Fenster, im
    Lanes-Modus Comp here.
@@ -511,7 +544,8 @@ eigener Undo-Schritt.
 1. Cursor in die Comp-Area in Takt 23 (Rad im Playhead-Modus oder ← / → im Lanes-Modus, die
    an Comp-Area-Rändern halten).
 2. **Shift + ↑ / ↓** (oder Shift + Rad): die Comp-Area unter dem Cursor wandert eine Lane hoch
-   oder runter. Technisch: das Comp-Lane-Item unter dem Cursor auswählen, 42707 / 42708.
+   oder runter. Technisch: das Comp-Lane-Item unter dem Cursor auswählen, 42707 / 42708
+   (gemessen: verschiebt genau diese eine Area, Quell-Lane 3 → 2).
    Hörbar sofort, wenn die Schleife läuft; die Anzeige nennt die Quell-Lane.
 3. Passt es nicht an der Grenze: ← / → an den Rand, dann Mitte halten + Rad, um die Grenze
    nachzumalen.
@@ -544,8 +578,8 @@ eigener Undo-Schritt.
    Lane (exklusiv). Der Farbbalken der gewählten Lane leuchtet hell.
 4. Jeder SEL schreibt sofort (entschieden): die Abschnitte [Start → Takt 5: Lane 2],
    [Takt 5 → letzte Phrase: Lane 5] entstehen im Arrange, während das Solo läuft. **Stop**
-   schliesst den letzten Abschnitt [letzte Phrase → Stop: Lane 1] ab. Der ganze Durchgang ist
-   ein Undo-Schritt.
+   schliesst den letzten Abschnitt [letzte Phrase → Stop: Lane 1] ab. Jeder Schnitt ist ein
+   Undo-Schritt, hier also drei.
 5. **Mit Schleife:** Loop über das Solo, Live-Comping an. Jeder Durchgang schreibt seine
    Wechsel über den vorigen; wenn es sitzt, Live-Comping aus.
 
@@ -647,8 +681,10 @@ Kommt als letzter Schritt (entschieden).
 ### Fall 12: Einen Durchgang verwerfen
 
 - **Comp here / Malen:** jeder Strich ist ein Undo-Schritt, REAPERs Undo nimmt ihn zurück.
-- **Live-Comping:** geschrieben wird sofort, der ganze Durchgang ist ein Undo-Schritt.
-- **Spielsatz:** A/B ist das Undo für „wer spielt“; REAPER legt dafür keinen Undo-Schritt an.
+- **Live-Comping:** geschrieben wird sofort, jeder Schnitt ist ein Undo-Schritt. Einen ganzen
+  verpatzten Durchgang nimmt man mit so vielen Undo zurück, wie er Schnitte hatte.
+- **Spielsatz:** Rea-Sixty legt beim Steppen keinen Undo-Schritt an; A/B ist das Zurück für
+  „wer spielt“.
 
 ### Fall 13: Comping nur mit dem UF8
 
@@ -756,7 +792,7 @@ painting“ aus, „Play the stroke after painting“ an (Werk).
 3. **Play** vor dem Solo. **SEL 2** in Takt 1, **SEL 5** in Takt 5, **SEL 1** für die letzte
    Phrase. Jeder SEL ist ein Schnitt, der Farbbalken springt mit.
 4. Jeder SEL schreibt sofort, die Areas entstehen während des Spielens; **Stop** schliesst
-   den letzten Abschnitt ab. Ein Undo-Schritt.
+   den letzten Abschnitt ab. Drei Schnitte, drei Undo-Schritte.
 5. **`lanes_on_strips_toggle`** wieder aus: die Strips sind wieder Spuren, die Fader fahren
    auf die Spurlautstärken zurück.
 
