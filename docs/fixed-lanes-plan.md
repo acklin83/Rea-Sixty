@@ -871,3 +871,57 @@ Strips, UF1 im Jog-Modus Lanes.
 - Mit Lanes auf den Strips: Strips leer, Fader in Ruhestellung, SEL tut nichts. Die Option
   bleibt an und greift auf der nächsten Spur mit Lanes.
 - **Top-Key „Lanes on“:** die Kick bekommt Fixed Lanes, ab dann gilt alles oben.
+
+---
+
+## Anhang: Einbaukarte (Stand 30.09.2026, main.cpp ~58'700 Zeilen)
+
+Zeilennummern verschieben sich; vor dem Bau jede Stelle neu greppen.
+
+**UF1-Jog-Modi**
+- `enum class Uf1JogMode { Playhead, Scrub, Items, Envelope, Razor, Fades }` (main.cpp ~6571),
+  `kUf1JogModeCount`, static_assert gegen `bindings::kUf1JogModeCountForNav = 6` (Bindings.h ~288).
+  Regel: hinten anhängen, nie einfügen (Modus als int in ExtState `uf1JogMode`).
+- Pro-Modus-Einstellungen `g_uf1JogUnit/Step/Visible/Fader/Seq` (~6815), Namen `uf1JogModeFriendly`
+  (~6872), `uf1JogModeHdr_` (~6884).
+- Wahl: SCRUB halten + Rad → `uf1JogModeStep_` (~11238); Builtins `jog_mode_*` (~54992);
+  REAPER-Actions `REASIXTY_JOG_MODE_*` (~48093); Werksbank „Jog Modes“ (Bindings.cpp ~7396).
+- Rad: `uf1JogDispatch_` (~14191), Switch pro Modus (~14217), z. B. `applyUf1JogRazor_`,
+  `applyUf1JogFades_`.
+- Kreuz: 30 IDs pro Modus (Bindings.h ~228-248), `perModeNavId` (Bindings.h ~327),
+  `uf1RemapNavForJogMode_` (~6590) an BEIDEN Dispatch-Stellen in `onUf1Event`; Werkssaat
+  `kNavSeed` (Bindings.cpp ~667); `fillDerivedUf1Slots_` (Bindings.cpp ~768).
+- Benannte Jog-Aktionen: Builtins ~57197 → `queueInput(Uf1JogAction, op)`, `enum Uf1JogActionOp`
+  (~6444), Drain `applyUf1JogAction_` (~12023).
+- LEDs: `uf1NavCrossSyncLeds_` (~43876). Anzeige: nur Kopfzeile `uf1SetJogField_` (~24811),
+  Liste beim SCRUB-Halten `uf1SetJogList_` (~24862), Kurztext `uf1FlashTimecode_`.
+- Vorhandenes Lane-Wissen: `uf1MoveItemVertical_` (~11356, `I_FIXEDLANE`-Hops),
+  `uf1FadeNeighbourAt_` (~13596). Razor ohne Lanes: `uf1RazorGet_/Set_` (~12249), `uf1RazorLanes_`.
+
+**UF8-Encoder-Modi**
+- `enum class EncoderMode` (~6481), UF1-Ring `kUf1EncoderModes` und `g_uf1EncoderSeq` (~6909,
+  Ring-Editor SettingsScreen.cpp ~5261), UF8-Actions `kUf8EncActions` (~48160). Zoom-Pad-Werk
+  `zoom_up…zoom_center` (Bindings.cpp ~1095), ENC PUSH = `show_focused_plugin_gui` (~997).
+
+**Dynamische Bänke** (die vier Stellen)
+- Enum Bindings.h (`kDynamicBankKindLast` mitziehen, `dynamicKindUsesModifiers`), Listen/Namen
+  SettingsScreen.cpp (`dynKindLabel_`, `dynKindShort_`, vier Menü-Listen), Resolver
+  `dynamicBankSlot_` (~8600) + `dynamicBankSlotUf1_`, Ausführer `applyDynBankReq_` /
+  `applyDynBankUf1_`, Anzahl `dynamicBankItemCountUf1_`, Banknamen `uf8BankDisplayName_` /
+  `uf1BankDisplayName_` (7-Segment: kein K, M, V, W, X). Vorbild: SelectionSets (`29ba9b8`).
+
+**UF8-Strips übernehmen**
+- Send „This Track“: `StripRoute` (~7117), `makeRoute_` (~7551), `resolveFaderRoute_` /
+  `resolveVpotRoute_`, `g_routingDirty` invalidiert alle Strip-Caches. Rückgabe wie Nav-Overlay:
+  `g_pageDirty`, `g_bankDirty`, `g_sync->invalidate()`.
+
+**UF1-Bildschirm**
+- `enum Uf1ScreenOwner` (~34900), `uf1HandOverScreen_` (~34925); Checkliste in der Memory
+  `uf1-screen-owning-mode-checklist` (einziger Schreiber der Soft-Key-Reihe `uf1EmitSoftKeyRow_`).
+
+**Banner**: Block in `onTimerBody_` (~44364), Ankündigungs-Atomics nach Muster
+`g_stickyCaptureAnnounce` / `g_selsetBankAnnounce`.
+
+**Threads**: Geräte-Callbacks und Builtin-Lambdas laufen auf dem Eingabe-Thread; REAPER-API nur
+im Drain (`drainInputQueue`, `drainSelsets_`, onTimer). Vorwärtsdeklarationen von `reasixty_*`
+NIE im anonymen Namespace (main.cpp ~529 bis ~48914), sondern davor.
