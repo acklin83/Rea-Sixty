@@ -168,37 +168,42 @@ constexpr NameEntry kNames[] = {
     // Per-mode nav cross — 5 keys x 6 modes. Order MUST match the enum block
     // in Bindings.h (mode-minor: Playhead, Scrub, Items, Envelope, Razor, Fades).
     // Without a name a binding does not serialise and the editor collapses,
-    // so all 25 are listed even though they are never typed by hand.
+    // so all of them are listed even though they are never typed by hand.
     { ButtonId::Uf1NavUpPlayhead, "uf1_nav_up_playhead" },
     { ButtonId::Uf1NavUpScrub, "uf1_nav_up_scrub" },
     { ButtonId::Uf1NavUpItems, "uf1_nav_up_items" },
     { ButtonId::Uf1NavUpEnvelope, "uf1_nav_up_envelope" },
     { ButtonId::Uf1NavUpRazor, "uf1_nav_up_razor" },
     { ButtonId::Uf1NavUpFades, "uf1_nav_up_fades" },
+    { ButtonId::Uf1NavUpLanes, "uf1_nav_up_lanes" },
     { ButtonId::Uf1NavLeftPlayhead, "uf1_nav_left_playhead" },
     { ButtonId::Uf1NavLeftScrub, "uf1_nav_left_scrub" },
     { ButtonId::Uf1NavLeftItems, "uf1_nav_left_items" },
     { ButtonId::Uf1NavLeftEnvelope, "uf1_nav_left_envelope" },
     { ButtonId::Uf1NavLeftRazor, "uf1_nav_left_razor" },
     { ButtonId::Uf1NavLeftFades, "uf1_nav_left_fades" },
+    { ButtonId::Uf1NavLeftLanes, "uf1_nav_left_lanes" },
     { ButtonId::Uf1NavCentrePlayhead, "uf1_nav_centre_playhead" },
     { ButtonId::Uf1NavCentreScrub, "uf1_nav_centre_scrub" },
     { ButtonId::Uf1NavCentreItems, "uf1_nav_centre_items" },
     { ButtonId::Uf1NavCentreEnvelope, "uf1_nav_centre_envelope" },
     { ButtonId::Uf1NavCentreRazor, "uf1_nav_centre_razor" },
     { ButtonId::Uf1NavCentreFades, "uf1_nav_centre_fades" },
+    { ButtonId::Uf1NavCentreLanes, "uf1_nav_centre_lanes" },
     { ButtonId::Uf1NavRightPlayhead, "uf1_nav_right_playhead" },
     { ButtonId::Uf1NavRightScrub, "uf1_nav_right_scrub" },
     { ButtonId::Uf1NavRightItems, "uf1_nav_right_items" },
     { ButtonId::Uf1NavRightEnvelope, "uf1_nav_right_envelope" },
     { ButtonId::Uf1NavRightRazor, "uf1_nav_right_razor" },
     { ButtonId::Uf1NavRightFades, "uf1_nav_right_fades" },
+    { ButtonId::Uf1NavRightLanes, "uf1_nav_right_lanes" },
     { ButtonId::Uf1NavDownPlayhead, "uf1_nav_down_playhead" },
     { ButtonId::Uf1NavDownScrub, "uf1_nav_down_scrub" },
     { ButtonId::Uf1NavDownItems, "uf1_nav_down_items" },
     { ButtonId::Uf1NavDownEnvelope, "uf1_nav_down_envelope" },
     { ButtonId::Uf1NavDownRazor, "uf1_nav_down_razor" },
     { ButtonId::Uf1NavDownFades, "uf1_nav_down_fades" },
+    { ButtonId::Uf1NavDownLanes, "uf1_nav_down_lanes" },
     { ButtonId::Uf1SecLeft,       "uf1_sec_left"        },
     { ButtonId::Uf1SecRight,      "uf1_sec_right"       },
     { ButtonId::Uf1Cycle,         "uf1_cycle"           },
@@ -248,6 +253,7 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf8EncZoomUpCsCycle, "uf8_enc_zoom_up_cs_cycle" },
     { ButtonId::Uf8EncZoomUpBcCycle, "uf8_enc_zoom_up_bc_cycle" },
     { ButtonId::Uf8EncZoomUpFavCycle, "uf8_enc_zoom_up_fav_cycle" },
+    { ButtonId::Uf8EncZoomUpLanes, "uf8_enc_zoom_up_lanes" },
     { ButtonId::Uf8EncZoomDownChSelect, "uf8_enc_zoom_down_ch_select" },
     { ButtonId::Uf8EncZoomDownNudge, "uf8_enc_zoom_down_nudge" },
     { ButtonId::Uf8EncZoomDownMousewheel, "uf8_enc_zoom_down_mousewheel" },
@@ -263,6 +269,7 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf8EncZoomDownCsCycle, "uf8_enc_zoom_down_cs_cycle" },
     { ButtonId::Uf8EncZoomDownBcCycle, "uf8_enc_zoom_down_bc_cycle" },
     { ButtonId::Uf8EncZoomDownFavCycle, "uf8_enc_zoom_down_fav_cycle" },
+    { ButtonId::Uf8EncZoomDownLanes, "uf8_enc_zoom_down_lanes" },
     { ButtonId::Uf8EncZoomLeftChSelect, "uf8_enc_zoom_left_ch_select" },
     { ButtonId::Uf8EncZoomLeftNudge, "uf8_enc_zoom_left_nudge" },
     { ButtonId::Uf8EncZoomLeftMousewheel, "uf8_enc_zoom_left_mousewheel" },
@@ -278,6 +285,7 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf8EncZoomLeftCsCycle, "uf8_enc_zoom_left_cs_cycle" },
     { ButtonId::Uf8EncZoomLeftBcCycle, "uf8_enc_zoom_left_bc_cycle" },
     { ButtonId::Uf8EncZoomLeftFavCycle, "uf8_enc_zoom_left_fav_cycle" },
+    { ButtonId::Uf8EncZoomLeftLanes, "uf8_enc_zoom_left_lanes" },
     { ButtonId::Uf8EncZoomRightChSelect, "uf8_enc_zoom_right_ch_select" },
     { ButtonId::Uf8EncZoomRightNudge, "uf8_enc_zoom_right_nudge" },
     { ButtonId::Uf8EncZoomRightMousewheel, "uf8_enc_zoom_right_mousewheel" },
@@ -293,6 +301,7 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf8EncZoomRightCsCycle, "uf8_enc_zoom_right_cs_cycle" },
     { ButtonId::Uf8EncZoomRightBcCycle, "uf8_enc_zoom_right_bc_cycle" },
     { ButtonId::Uf8EncZoomRightFavCycle, "uf8_enc_zoom_right_fav_cycle" },
+    { ButtonId::Uf8EncZoomRightLanes, "uf8_enc_zoom_right_lanes" },
     { ButtonId::Uf8EncZoomCenterChSelect, "uf8_enc_zoom_center_ch_select" },
     { ButtonId::Uf8EncZoomCenterNudge, "uf8_enc_zoom_center_nudge" },
     { ButtonId::Uf8EncZoomCenterMousewheel, "uf8_enc_zoom_center_mousewheel" },
@@ -308,6 +317,7 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf8EncZoomCenterCsCycle, "uf8_enc_zoom_center_cs_cycle" },
     { ButtonId::Uf8EncZoomCenterBcCycle, "uf8_enc_zoom_center_bc_cycle" },
     { ButtonId::Uf8EncZoomCenterFavCycle, "uf8_enc_zoom_center_fav_cycle" },
+    { ButtonId::Uf8EncZoomCenterLanes, "uf8_enc_zoom_center_lanes" },
     { ButtonId::Uf8EncChannelPushChSelect, "uf8_enc_channel_push_ch_select" },
     { ButtonId::Uf8EncChannelPushNudge, "uf8_enc_channel_push_nudge" },
     { ButtonId::Uf8EncChannelPushMousewheel, "uf8_enc_channel_push_mousewheel" },
@@ -323,6 +333,7 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf8EncChannelPushCsCycle, "uf8_enc_channel_push_cs_cycle" },
     { ButtonId::Uf8EncChannelPushBcCycle, "uf8_enc_channel_push_bc_cycle" },
     { ButtonId::Uf8EncChannelPushFavCycle, "uf8_enc_channel_push_fav_cycle" },
+    { ButtonId::Uf8EncChannelPushLanes, "uf8_enc_channel_push_lanes" },
 };
 
 } // namespace
@@ -740,10 +751,10 @@ constexpr size_t kLastFiredModSize = 512;   // > every ButtonId (Uf1Jog + the UF
 // ctor on std::atomic propagates through std::array's aggregate init);
 // the raw C array works on all compilers.
 std::atomic<uint8_t> g_lastFiredMod[kLastFiredModSize] = {};
-static_assert(static_cast<int>(ButtonId::Uf8EncChannelPushFavCycle)
+static_assert(static_cast<int>(ButtonId::Uf8EncChannelPushLanes)
               == static_cast<int>(ButtonId::Uf8EncZoomUpChSelect) + 6 * kUf8EncModeCountForKeys - 1,
               "the per-encoder-mode block must stay six contiguous groups of kUf8EncModeCountForKeys");
-static_assert(static_cast<size_t>(ButtonId::Uf8EncChannelPushFavCycle) < kLastFiredModSize,
+static_assert(static_cast<size_t>(ButtonId::Uf8EncChannelPushLanes) < kLastFiredModSize,
               "g_lastFiredMod must cover every ButtonId");
 
 uint32_t pressKey(int layer, ButtonId id)
@@ -818,6 +829,17 @@ const NavSeed kNavSeed[] = {
         { ButtonId::Uf1NavUpFades,        "jog_fade_up", "", Behavior::Momentary , "jog_fade_up_add" },
         { ButtonId::Uf1NavDownFades,      "jog_fade_down", "", Behavior::Momentary , "jog_fade_down_add" },
         { ButtonId::Uf1NavCentreFades,    "jog_fade_nav_toggle", "",        Behavior::Toggle , nullptr },
+        // Lanes (plan docs/fixed-lanes-plan.md, Baustein B): ↑ / ↓ step the
+        // heard lane, Shift steps the comp area under the cursor; ← / → go to
+        // the comp-area or item edges, Shift ← loops there, Shift → is A/B;
+        // the centre is Comp here, Shift centre puts the heard lane into the
+        // play set or takes it out. The UF8's Lanes cross is the same table
+        // (seedUf8LanesCross_).
+        { ButtonId::Uf1NavUpLanes,        "lane_prev",      "", Behavior::Momentary , "lane_comp_area_up" },
+        { ButtonId::Uf1NavDownLanes,      "lane_next",      "", Behavior::Momentary , "lane_comp_area_down" },
+        { ButtonId::Uf1NavLeftLanes,      "lane_edge_prev", "", Behavior::Momentary , "lane_loop_here" },
+        { ButtonId::Uf1NavRightLanes,     "lane_edge_next", "", Behavior::Momentary , "lane_ab" },
+        { ButtonId::Uf1NavCentreLanes,    "lane_comp_here", "", Behavior::Momentary , "lane_play_toggle" },
     };
 
 // ---- Factory defaults -----------------------------------------------------
@@ -926,6 +948,38 @@ void fillDerivedUf8EncSlots_(Config& c)
             }
         }
     }
+}
+
+// ⇨ THE UF8 LANES CROSS (plan Baustein G): the zoom pad and ENC PUSH in the
+// encoder mode Lanes, the same table as the UF1's Lanes cross (kNavSeed) and
+// ENC PUSH = Comp here (Frank 30.09.2026, decision 8). Every layer, only into
+// slots with no action yet, BEFORE fillDerivedUf8EncSlots_ copies the zoom
+// bindings into whatever is still empty.
+void seedUf8LanesCross_(Config& c)
+{
+    constexpr int kLanes = kUf8EncModeCountForKeys - 1;    // EncoderMode::Lanes
+    const struct { ButtonId base; const char* action; const char* shift; } k[] = {
+        { ButtonId::ZoomUp,      "lane_prev",      "lane_comp_area_up"   },
+        { ButtonId::ZoomDown,    "lane_next",      "lane_comp_area_down" },
+        { ButtonId::ZoomLeft,    "lane_edge_prev", "lane_loop_here"      },
+        { ButtonId::ZoomRight,   "lane_edge_next", "lane_ab"             },
+        { ButtonId::ZoomCenter,  "lane_comp_here", "lane_play_toggle"    },
+        { ButtonId::ChannelPush, "lane_comp_here", nullptr               },
+    };
+    for (Layer& L : c.layers)
+        for (const auto& e : k) {
+            Binding& bd = L.bindings[perEncModeUf8Id(e.base, kLanes)];   // default-creates
+            if (bindingHasAnyAction(bd)) continue;
+            bd.behavior = Behavior::Momentary;
+            auto& p = bd.shortPress[static_cast<int>(Modifier::Plain)];
+            p.type = ActionType::Builtin;
+            p.action = e.action;
+            if (e.shift) {
+                auto& sh = bd.shortPress[static_cast<int>(Modifier::Shift)];
+                sh.type = ActionType::Builtin;
+                sh.action = e.shift;
+            }
+        }
 }
 
 // ⇨ THE RME SIDE-CAR'S FACTORY BANK: its first own bank (kUf1RmeBankBase) holds
@@ -1669,6 +1723,7 @@ void seedFactoryDefaults_(Config& c)
     // every base above is final — including the arrows' long press and the two
     // views that seed their own 5-8. See fillDerivedUf1Slots_.
     fillDerivedUf1Slots_(c);
+    seedUf8LanesCross_(c);
     fillDerivedUf8EncSlots_(c);
     seedRmeSideCarBank_(c);
     seedRmeSideCarBankShift_(c);
@@ -3485,7 +3540,10 @@ bool invokeBuiltin(const std::string& name, int param)
 // v51 (2026-10-01): the UF8 zoom pad and ENC PUSH get a binding per encoder
 // mode, each filled from the key's own binding on its layer
 // (fillDerivedUf8EncSlots_), so nothing changes until a mode gets its own.
-constexpr int kCurrentBindingsVersion = 51;
+// v52 (2026-10-01): the jog mode and the encoder mode Lanes. The UF1 cross gets
+// its five Lanes slots (upgradeBackfillUf1Buttons_ fills missing kNavSeed ids,
+// green like the rest of the cross), the UF8 its Lanes cross on every layer.
+constexpr int kCurrentBindingsVersion = 52;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4210,6 +4268,25 @@ void upgradeUf1NavActiveColour_(Config& c)
     }
 }
 
+// v52: the five UF1 Lanes slots (missing in every older file; the backfill
+// leaves every other slot alone) in the cross's green, and the UF8 Lanes cross.
+void upgradeLanesCross_(Config& c)
+{
+    upgradeBackfillUf1Buttons_(c);
+    Layer& L1 = c.layers[0];
+    for (const ButtonId id : { ButtonId::Uf1NavUpLanes, ButtonId::Uf1NavDownLanes,
+                               ButtonId::Uf1NavLeftLanes, ButtonId::Uf1NavRightLanes,
+                               ButtonId::Uf1NavCentreLanes }) {
+        auto it = L1.bindings.find(id);
+        if (it == L1.bindings.end()) continue;
+        Binding& bd = it->second;
+        if (bd.color[0] != 0xFF || bd.color[1] != 0xFF || bd.color[2] != 0xFF) continue;
+        bd.color[0] = 0x00; bd.color[1] = 0xFF; bd.color[2] = 0x66;
+    }
+    seedUf8LanesCross_(c);
+    fillDerivedUf8EncSlots_(c);
+}
+
 void upgradeClearUf1NavLabels_(Config& c)
 {
     Layer& L1 = c.layers[0];
@@ -4696,6 +4773,9 @@ void load()
             }
             if (tmp.version < 51) {
                 fillDerivedUf8EncSlots_(tmp);
+            }
+            if (tmp.version < 52) {
+                upgradeLanesCross_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -7418,6 +7498,7 @@ static const std::vector<SoftKeyBankPreset>& factoryReaSixtyBanks_()
             {"encoder_last_param",         "Last Param", 0},
             {"encoder_fx_scroll_all",      "FX Scroll", 0},
             {"encoder_instance_scroll_all","Inst Scroll", 0},
+            {"encoder_lanes",              "Lanes", 0},
         }));
         // Nine to sixteen fill the SHIFT set, which is how the Sticky Pot keys
         // get in: pinning one parameter to a strip is the same trade as pinning
@@ -7536,7 +7617,8 @@ static const std::vector<Uf1BankPreset>& factoryUf1Banks_()
         };
         std::vector<Uf1BankPreset> v;
         // The jog wheel is the UF1's own thing and its seven modes are otherwise
-        // reachable only one at a time through the cycle.
+        // reachable only one at a time through the cycle. Eight entries: both
+        // halves full.
         v.push_back(bank("Jog Modes", {
             {"jog_mode_playhead", "Playhead", 0},
             {"jog_mode_scrub",    "Scrub",    0},
@@ -7545,6 +7627,7 @@ static const std::vector<Uf1BankPreset>& factoryUf1Banks_()
             // Shift
             {"jog_mode_razor",    "Razor",     0},
             {"jog_mode_fades",    "Fades",     0},
+            {"jog_mode_lanes",    "Lanes",     0},
             {"jog_mode_cycle",    "Jog Mode", 0},
         }));
         // The UF8's Plug-in Ops bank, cut to four. ssl_strip_mode_toggle is not
@@ -8206,6 +8289,10 @@ const char* builtinCategory(const std::string& n)
     if (n.rfind("jog_mode_", 0) == 0)
         return "Jog Modes";
 
+    // Fixed item lanes: the verbs both surfaces share (plan docs/fixed-lanes-plan.md).
+    if (n.rfind("lane_", 0) == 0)
+        return "Lanes";
+
     // What the modes DO, as opposed to which mode is engaged. Kept apart from
     // "Jog Modes" so neither list becomes the leftovers drawer (Frank
     // 2026-08-18): the mode switches there, the named actions here.
@@ -8863,7 +8950,7 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "Holds the Ctrl modifier while pressed. Param 1 makes it a toggle "
       "instead." },
     { "jog_mode_cycle",
-      "UF1. Steps the jog wheel through its six modes." },
+      "UF1. Steps the jog wheel through its seven modes." },
     { "jog_mode_playhead",
       "UF1. The jog wheel moves the playhead." },
     { "jog_mode_scrub",
@@ -8877,6 +8964,40 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "jog_mode_fades",
       "UF1. The jog wheel sets fade length. Which fade is decided by the "
       "edge you aimed at and what lies next to it." },
+    { "jog_mode_lanes",
+      "UF1. The jog wheel steps through the fixed lanes of the selected track, "
+      "one lane playing at a time." },
+    { "encoder_lanes",
+      "Channel Encoder steps through the fixed lanes of the selected track, "
+      "one lane playing at a time." },
+    { "lane_next",
+      "Fixed lanes: play only the next lane down." },
+    { "lane_prev",
+      "Fixed lanes: play only the next lane up." },
+    { "lane_ab",
+      "Fixed lanes: back to the lanes that played before, all of them." },
+    { "lane_play_all",
+      "Fixed lanes: every lane plays." },
+    { "lane_play_none",
+      "Fixed lanes: no lane plays." },
+    { "lane_play_comp",
+      "Fixed lanes: only the comp lane plays." },
+    { "lane_play_toggle",
+      "Fixed lanes: the lane you hear joins the lanes that play, or leaves them." },
+    { "lane_comp_here",
+      "Fixed lanes: the lane you hear goes into the comp, over the time selection, "
+      "the loop, or the item under the edit cursor." },
+    { "lane_comp_area_up",
+      "Fixed lanes: the comp area under the edit cursor takes the lane above." },
+    { "lane_comp_area_down",
+      "Fixed lanes: the comp area under the edit cursor takes the lane below." },
+    { "lane_loop_here",
+      "Fixed lanes: loop the comp area under the edit cursor, or the item of the "
+      "lane you hear, and switch repeat on." },
+    { "lane_edge_prev",
+      "Fixed lanes: edit cursor to the previous comp-area or item edge." },
+    { "lane_edge_next",
+      "Fixed lanes: edit cursor to the next comp-area or item edge." },
     { "jog_razor_whole",
       "Razor mode: aim at the whole razor area rather than one edge." },
     { "jog_razor_left",
@@ -9221,6 +9342,21 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "jog_mode_cycle", "Jog Mode" },
     { "jog_mode_envelope", "Jog Env" },
     { "jog_mode_fades", "Jog Fades" },
+    { "jog_mode_lanes", "Jog Lanes" },
+    { "encoder_lanes", "Enc Lanes" },
+    { "lane_next", "Lane Next" },
+    { "lane_prev", "Lane Prev" },
+    { "lane_ab", "Lane A/B" },
+    { "lane_play_all", "Lanes All" },
+    { "lane_play_none", "Lanes None" },
+    { "lane_play_comp", "Lane Comp" },
+    { "lane_play_toggle", "Lane +/-" },
+    { "lane_comp_here", "Comp Here" },
+    { "lane_comp_area_up", "Area Up" },
+    { "lane_comp_area_down", "Area Down" },
+    { "lane_loop_here", "Lane Loop" },
+    { "lane_edge_prev", "Lane Edge <" },
+    { "lane_edge_next", "Lane Edge >" },
     { "jog_mode_items", "Jog Items" },
     { "jog_mode_playhead", "Jog Playhd" },
     { "jog_mode_razor", "Jog Razor" },
@@ -9459,7 +9595,7 @@ const std::vector<const char*>& builtinCategoryOrder()
 {
     static const std::vector<const char*> kCats = {
         "Favourites", "Cycle Actions", "Selection Modes", "Encoder Modes",
-        "Jog Modes", "Jog Actions",
+        "Jog Modes", "Jog Actions", "Lanes",
         "Hardware Modes", "Plug-in", "Layer", "Soft-Key Bank", "SSL",
         "Bank / Page", "Automation", "Zoom", "Sends / Receives",
         "Selection Sets", "Parameter Groups", "Tracks", "Master",

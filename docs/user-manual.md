@@ -187,11 +187,11 @@ When the cycle lands on a learned Instance the per-domain Instance index updates
 
 # Channel Encoder modes
 
-The large notched CHANNEL encoder (in the right-hand panel, pushable, with the cursor pad well below it rather than around it) runs one of fifteen modes. Switch with the corresponding **Encoder Mode → …** action on a surface key, or from REAPER's own action list, where each mode has a **Rea-Sixty: UF8 Encoder → …** action for a keyboard shortcut, a foot switch or a Stream Deck tile. Either route shows the live mode as a ticked action. The current mode persists across REAPER restarts.
+The large notched CHANNEL encoder (in the right-hand panel, pushable, with the cursor pad well below it rather than around it) runs one of sixteen modes. Switch with the corresponding **Encoder Mode → …** action on a surface key, or from REAPER's own action list, where each mode has a **Rea-Sixty: UF8 Encoder → …** action for a keyboard shortcut, a foot switch or a Stream Deck tile. Either route shows the live mode as a ticked action. The current mode persists across REAPER restarts.
 
 Tapping the mode that is already live returns the encoder to Channel Select, which is what SSL 360° does. Channel Select itself does not toggle away.
 
-**Hold the encoder's push and turn** to pick a mode on the surface. While you hold it, the scribble strips list the modes around the current one: the current mode sits on strip 4 with its top soft key lit, and each detent moves one mode on. Let go and the encoder stays in that mode. Which modes the ring offers, and in what order, is set under PUSH in *Settings → Bindings → UF8*: tick a mode to include it, move it with ▲ / ▼. All fifteen are in from the factory. The mode keys and actions above reach every mode, ticked or not.
+**Hold the encoder's push and turn** to pick a mode on the surface. While you hold it, the scribble strips list the modes around the current one: the current mode sits on strip 4 with its top soft key lit, and each detent moves one mode on. Let go and the encoder stays in that mode. Which modes the ring offers, and in what order, is set under PUSH in *Settings → Bindings → UF8*: tick a mode to include it, move it with ▲ / ▼. All sixteen are in from the factory. The mode keys and actions above reach every mode, ticked or not.
 
 The push fires when you let go, and only if you did not turn. Held past half a second it fires its long-press slot, if that slot is on.
 
@@ -214,6 +214,7 @@ The push fires when you let go, and only if you did not turn. Held past half a s
 | CS Cycle (Favourites) | Step the active Channel Strip through the CS favourite slots | Carries values across the swap, or restores each favourite's own settings (see chapter *Favourites*). Empty slots are skipped; wrapping follows *Wrap Plug-in Cycle*. |
 | BC Cycle (Favourites) | The same for the Bus Compressor | Uses the BC favourite slots and the BC copy/own setting. |
 | Favourite Cycle (Focused Domain) | Whichever of the two the focused parameter belongs to | Falls back to the domain you last touched. Saves binding both cycles when one encoder should follow whatever is under your hand. |
+| Lanes | Play the next lane of the selected track, one lane at a time | `Shift` + rotation moves the comp area under the edit cursor to the next lane. The cursor pad and the push become the Lanes keys. See chapter *Fixed lanes*. |
 
 `Shift` + rotation is the encoder's Shift binding, which factory-defaults to **Instance Cycle**, not to Bank by 1. Rebind it in *Settings → Bindings → Channel Encoder* like any other slot.
 
@@ -825,6 +826,7 @@ pick the object.
 | **Envelope** | Moves the selected envelope points in value. Hold Ctrl and they move in time, one quarter of a grid step per count. |
 | **Razor** | Moves the razor edit — which edge, see below. |
 | **Fades** | Changes a fade length, 10 ms per count. Where there is a neighbour it is the crossfade. See *Fades* below. |
+| **Lanes** | Plays the next lane of the selected track, one lane at a time. With `SHIFT` the comp area under the edit cursor takes the next lane. See the chapter *Fixed lanes*. |
 
 The arrow cross **selects**, the jog **moves**. That split is the whole idea: you
 never have to let go of the wheel to change what you are working on.
@@ -842,6 +844,7 @@ The cross is not one thing either — it follows the object, exactly like the wh
 | **Razor** | Aim at the **left** / **right** edge. | Aim at the **top** / **bottom** edge. | **Hold** it to take the **whole area** and drag its content. See *Razor* below. |
 | **Fades**, aiming | Aim at the **fade-in** / **fade-out**. | Next / previous fade type. | Switch the cross over to walking the items. |
 | **Fades**, walking | Select the previous / next item on the track. | Select the item on the track above / below. | Switch the cross back to aiming. |
+| **Lanes** | Edit cursor to the previous / next comp-area or item edge. `SHIFT` + `←` loops the comp area or item there, `SHIFT` + `→` is A/B. | Play the lane above / below. `SHIFT`: the comp area under the edit cursor takes the lane above / below. | Comp here. `SHIFT`: the lane you hear joins the lanes that play, or leaves them. |
 
 Playhead and Scrub carry the plain zoom cross, the same five REAPER zoom actions
 the UF8's cursor pad uses (40111 / 40112 / 1011 / 1012 / 40295): with no editing
@@ -866,8 +869,8 @@ item. With no item selected the fader stays where it is and the channel display 
 *no item*.
 
 **Everything in that table is a factory default, not a fixed rule.** Each cross
-key holds its own binding *per object*, so the same physical key can do six
-different things and you decide all six. Click a cross key in **Settings →
+key holds its own binding *per object*, so the same physical key can do seven
+different things and you decide all seven. Click a cross key in **Settings →
 Bindings → UF1** and pick the object at the top of the editor: the picker follows
 the surface, and changing it there changes the wheel's object too, so what you
 edit is always what you are holding. The Shift row is a binding as well, which is
@@ -1012,6 +1015,55 @@ so it fills when you are working from a selection and stays empty when you are
 working from the edit cursor. A window you had open yourself is never closed by
 this: only the one it opened goes when you leave the mode or switch the option
 off. It is on a key as well, as **Fades: show REAPER's crossfade editor**.
+
+\newpage
+
+# Fixed lanes
+
+REAPER's fixed item lanes put several takes of a track on top of each other: one lane per take, a comp lane that collects the best parts. Rea-Sixty lets you work through them from the surface, with the transport running: hear one take after the other, put the one that sits into the comp, change a part of the comp later.
+
+It works on the **selected track**: the one you last touched, if it is selected, otherwise the first selected track. Needs REAPER 7.12 or newer. On a track without fixed lanes the Lanes keys do nothing.
+
+## Where it lives
+
+- **UF1:** jog object **Lanes** (`SCRUB` held + jog, or **UF1 Jog Mode: Lanes**). The jog steps the lanes, the nav cross carries the Lanes keys, and the time field shows the name of the lane you now hear (or *LANE 3* for a lane without a name of its own).
+- **UF8:** encoder mode **Lanes** (push held + turn, or **Encoder Mode → Lanes**). The encoder steps the lanes, the cursor pad carries the same keys as the UF1's cross, and the push is Comp here.
+- The UF1's own encoder can run Lanes too. It is unticked in its ring from the factory, because the jog does it there; tick it under the UF1's push in *Settings → Bindings → UF1*.
+
+| Key | Does | With `SHIFT` |
+|---|---|---|
+| jog / encoder | Play the next lane, alone | The comp area under the edit cursor takes the next lane |
+| `↑` / `↓` | Play the lane above / below, alone | The comp area under the edit cursor takes the lane above / below |
+| `←` / `→` | Edit cursor to the previous / next comp-area or item edge | `←` loops the comp area (or the item) there, `→` is A/B |
+| centre (UF8: FIT and the push) | Comp here | The lane you hear joins the lanes that play, or leaves them |
+
+All of them are bindings like any other cross key, per jog object on the UF1 and per encoder mode on the UF8.
+
+## What the keys do
+
+**Stepping plays one lane at a time.** The comp lane is passed over, so the wheel walks the takes. `↑` and `↓` light while there is a lane further that way. Switching lanes adds nothing to REAPER's undo history.
+
+**A/B** goes back to what played before the last change, the whole set of lanes. When several lanes played together and you step through single lanes to listen in, A/B brings the layered set back, however many steps it was. It also catches REAPER's own switches while a Lanes mode is on: when REAPER plays a new take after a punch-in, A/B returns to what played before.
+
+**Comp here** puts the lane you hear into the comp lane, over the time selection, or over the loop when there is none, or over the item of that lane under the edit cursor. Each Comp here is one undo step. The centre key lights while comping is on for the track.
+
+**Groups.** When REAPER's item grouping is on (the toolbar button), stepping, A/B and Comp here also act on every track that follows a media-edit group the selected track leads, on the same lane numbers. With grouping off they act on the selected track only.
+
+## Working with it
+
+**A lead vocal from six takes, line by line (UF1).** Select the vocal track and put the jog on **Lanes**. Loop the first line, the way you always do in REAPER or with `SHIFT` + `←` on a comp area, and press play. Turn the jog: take after take plays in the loop, and the time field names it. When one sits, press the centre: that line goes into the comp. `→` takes the edit cursor to the next edge, loop the next line and go on. A single word from another take: step to that take, select the word as a time selection, press the centre.
+
+**One spot of the comp, later.** Put the edit cursor into the comp area you want to change and press `SHIFT` + `↑` or `↓` (or turn the jog with `SHIFT` held): that area now comes from the lane above or below. With the loop running you hear it right away.
+
+**Versions of a part.** A bass track with three whole versions on three lanes: turn the jog or press `↑` / `↓` while the song plays, and `SHIFT` + `→` flips between the last two you heard.
+
+**A doubled part.** Let two lanes play together in REAPER (Cmd-click the lane's play button on the Mac, Ctrl-click on Windows). Turn the jog to hear any single take alone; `SHIFT` + `→` brings the two back together.
+
+**Drums in a group.** Kick, snare, overheads and room in one media-edit group that the snare leads, REAPER's grouping on. Select the snare and turn the jog: the whole kit switches to the next take together. A time selection over a fill and the centre puts that fill into the comp on every drum track at once.
+
+**After a punch-in.** When REAPER plays the new take afterwards, `SHIFT` + `→` returns to the comp you had.
+
+**With the UF8 alone.** Select the track, hold the push and turn to **Lanes**. The encoder steps the takes, the cursor pad is the cross from the table above, FIT and the push are Comp here, `SHIFT` + encoder moves a comp area. The UF8 has no display for the lane name; REAPER's lane buttons show which lane plays.
 
 \newpage
 
@@ -1329,13 +1381,13 @@ This works with no UF8 attached, so you can still walk through every set and ban
 
 Right-click the bank's cell in the matrix and open **Rea-Sixty factory banks**. Picking one recalls it into that cell, and **Load the full set into Layer 1 / Quick 3** drops all five into Layer 1 / Quick 3's six soft-key banks at once, leaving one place free. A bank that fills both sets is marked *(Plain + Shift)* in the menu.
 
-**A bank with more than eight entries fills both sets.** Eight keys is one set, and a curated list longer than that would otherwise be cut off — which is how the Encoder Modes bank used to show eight of the fifteen modes. Such a bank writes Plain from its first eight and Shift from the rest, so recalling it replaces **both** sets of that bank, and the confirm dialog says so.
+**A bank with more than eight entries fills both sets.** Eight keys is one set, and a curated list longer than that would otherwise be cut off — which is how the Encoder Modes bank used to show eight of its modes. Such a bank writes Plain from its first eight and Shift from the rest, so recalling it replaces **both** sets of that bank, and the confirm dialog says so.
 
 **A factory bank always owns both halves, including the one it does not fill.** A shorter bank used to write only the set you were on, which left the previous bank's Shift half standing under the new Plain half — recall *Focus Set & Selsets* over *Encoder Modes* and the encoder modes stayed on Shift. A curated bank is the whole bank: what it does not fill, it clears.
 
 The five factory banks are:
 
-- **Encoder Modes** — all fifteen Channel-Encoder modes. Eight on Plain (Ch Select / Inst Cycle / FX Cycle / FX Move / CS Cycle / Markers / Nudge / Mousewheel) and seven on Shift (BC Cycle / Fav Cycle / Selset Cycle / Bank by 1 / Last Param / FX Scroll / Inst Scroll).
+- **Encoder Modes** — all sixteen Channel-Encoder modes. Eight on Plain (Ch Select / Inst Cycle / FX Cycle / FX Move / CS Cycle / Markers / Nudge / Mousewheel) and eight on Shift (BC Cycle / Fav Cycle / Selset Cycle / Bank by 1 / Last Param / FX Scroll / Inst Scroll / Lanes).
 - **Focus Set & Selsets** — pin / add / remove / toggle / set-from-selection / clear, plus **Focus Scope**, which cycles Both / UF1 / UF8. The sixth Plain key is left free. The scope is on the bank because setting it on one surface and then pressing on the other is the mistake this bank invites. On **Shift**, the three Sticky Pot actions: *Pin Sticky*, *Pair Sticky* and *Sticky OnOff* — pinning one parameter to a strip is the same trade as pinning one track to the surface.
 - **Plug-in Ops** — FX GUI / FX Chain / Close All FX / Bypass / Offline / Preset prev-next / SSL Strip.
 - **Learn / Master** — Learn-HUD / Touch-Learn / Master pin left-right / focused-track panel / Out-Gain. Two of the eight keys are free.
@@ -1984,7 +2036,7 @@ Enable via *Settings → Appearance → On-screen → "Show focused-track panel"
 - **Layout** — Two lines (CS / BC) or One line.
 - **Track name** — *Show track name*; **Use track colour** (draws the track name in the track's REAPER colour — falls back to grey if the track has no custom colour assigned); *Full name* / *Smart abbreviate* / *Abbreviation length*; **Before / After CS/BC** (whether the track name sits before or after the plug-in tag).
 - **Customize** — Font size, Corner radius, Background / Border / CS / BC colour.
-- **Elements** — what the panel shows besides the track name and the plug-in tags. *Mode indicator (Sel / Encoder)* — the UF8's Selection Mode and Channel-Encoder Mode, each as a **drop-down you can switch with**: eight Selection Modes, fifteen Encoder Modes. Picking the row you are already on does nothing, and picking *Select* or *Channel Select* returns you there. Every drop-down in the panel shares one fixed width, so nothing under the mouse moves when a mode name changes length. *UF1 encoder mode* and *UF1 jog mode* — the UF1's own two rings, which are separate from the UF8's and are scrolled blind under a held key, so this is the only always-on readout of them. *Flash mode changes* — the transient banner, in the panel instead of its own window. *UF8 soft-key bank name* — a drop-down of every soft-key bank that holds something, by the names you gave them in *Bindings*, with the one you are on selected. Picking a row engages that bank, layer and Quick included, so the panel is a jump menu over the whole soft-key configuration. **Plain banks only.** Shift rows were listed for a day and taken out again: picking one could not reliably put the surface on that set, and a menu entry that does not go where it says is worse than no entry. Hold the modifier to reach the Shift set, as everywhere else. Sets 8 and 9 are not in the list either: engaging those is a domain move, which is not what a jump menu over your own banks is for. *Settings + HUD buttons*, *CS / BC cycle buttons*, and *Click plug-in name to open*. All off by default except the last.
+- **Elements** — what the panel shows besides the track name and the plug-in tags. *Mode indicator (Sel / Encoder)* — the UF8's Selection Mode and Channel-Encoder Mode, each as a **drop-down you can switch with**: eight Selection Modes, sixteen Encoder Modes. Picking the row you are already on does nothing, and picking *Select* or *Channel Select* returns you there. Every drop-down in the panel shares one fixed width, so nothing under the mouse moves when a mode name changes length. *UF1 encoder mode* and *UF1 jog mode* — the UF1's own two rings, which are separate from the UF8's and are scrolled blind under a held key, so this is the only always-on readout of them. *Flash mode changes* — the transient banner, in the panel instead of its own window. *UF8 soft-key bank name* — a drop-down of every soft-key bank that holds something, by the names you gave them in *Bindings*, with the one you are on selected. Picking a row engages that bank, layer and Quick included, so the panel is a jump menu over the whole soft-key configuration. **Plain banks only.** Shift rows were listed for a day and taken out again: picking one could not reliably put the surface on that set, and a menu entry that does not go where it says is worse than no entry. Hold the modifier to reach the Shift set, as everywhere else. Sets 8 and 9 are not in the list either: engaging those is a domain move, which is not what a jump menu over your own banks is for. *Settings + HUD buttons*, *CS / BC cycle buttons*, and *Click plug-in name to open*. All off by default except the last.
 - **Align** — centre the box horizontally or vertically on screen.
 - **Load on startup** — auto-launch the panel when REAPER starts (writes a marked one-liner into `Scripts/__startup.lua`; untick to remove it).
 - **Close panel**.
@@ -2051,6 +2103,7 @@ Change which job the large CHANNEL encoder does. The current mode persists acros
 - **Encoder Mode → CS Cycle (Favourites)** — cycle the active CS through the favourite slots (see chapter *Favourites*).
 - **Encoder Mode → BC Cycle (Favourites)** — the same for the Bus Compressor, using the BC favourite slots.
 - **Encoder Mode → Favourite Cycle (Focused Domain)** — cycle whichever domain the focused parameter belongs to, falling back to the domain you last touched. Respects each domain's copy/own setting.
+- **Encoder Mode → Lanes** — step through the fixed lanes of the selected track (see chapter *Fixed lanes*).
 - **Encoder: dispatch by current mode** — routes rotation to whichever encoder mode is currently set. Bound by default to the CHANNEL encoder so rotation just "does the right thing"; rebind if you want a fixed behaviour.
 
 ## Direct encoder rotation handlers
@@ -2247,6 +2300,20 @@ choice on a button. Each direct setter lights while its object is the live one.
 - **UF1 Jog Mode: Envelope** puts it on the selected envelope points.
 - **UF1 Jog Mode: Razor Edit** puts it on the razor edit.
 - **UF1 Jog Mode: Fades** puts it on the fades of the selected items.
+- **UF1 Jog Mode: Lanes** puts it on the fixed lanes of the selected track.
+
+## Lanes
+
+The fixed-lanes keys (see the chapter **Fixed lanes**). They work on the selected track, from any surface.
+
+- **Lanes: next lane** / **Lanes: previous lane** play only the lane below / above the one you hear. They light while there is a lane to go to.
+- **Lanes: A/B (the lanes that played before)** brings back what played before the last change, all of it.
+- **Lanes: play all**, **Lanes: play none**, **Lanes: play only the comp lane**.
+- **Lanes: heard lane into / out of the play set** lets the lane you hear play together with the others, or takes it out.
+- **Lanes: comp here** puts the lane you hear into the comp. It lights while comping is on.
+- **Lanes: comp area one lane up** / **down** gives the comp area under the edit cursor the lane above / below.
+- **Lanes: loop the comp area / item here** loops the comp area under the edit cursor, or the item of the lane you hear, and switches repeat on.
+- **Lanes: cursor to previous edge** / **next edge** moves the edit cursor to the previous / next comp-area or item edge.
 
 ## Jog Actions
 

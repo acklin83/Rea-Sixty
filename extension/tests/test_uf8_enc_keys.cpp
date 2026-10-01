@@ -82,8 +82,18 @@ int main()
     // UF8 controls, not UF1 (the `<= Uf1Jog` range checks).
     EXPECT(bnd::perEncModeUf8Id(ButtonId::ZoomUp, 0) > ButtonId::Uf1Jog);
 
-    // ── factory: every mode does what the key did ──────────────────────────────
-    for (int m = 0; m < bnd::kUf8EncModeCountForKeys; ++m) {
+    // ── factory: every mode does what the key did, except Lanes (the last mode),
+    // which brings its own cross ───────────────────────────────────────────────
+    const int kLanes = bnd::kUf8EncModeCountForKeys - 1;
+    for (int L = 0; L < 3; ++L) {
+        EXPECT(plainAction(L, bnd::perEncModeUf8Id(ButtonId::ZoomUp, kLanes)) == "lane_prev");
+        EXPECT(plainAction(L, bnd::perEncModeUf8Id(ButtonId::ZoomDown, kLanes)) == "lane_next");
+        EXPECT(plainAction(L, bnd::perEncModeUf8Id(ButtonId::ZoomCenter, kLanes)) == "lane_comp_here");
+        EXPECT(plainAction(L, bnd::perEncModeUf8Id(ButtonId::ChannelPush, kLanes)) == "lane_comp_here");
+        EXPECT(bnd::getBinding(L, bnd::perEncModeUf8Id(ButtonId::ZoomRight, kLanes))
+                   .shortPress[static_cast<int>(bnd::Modifier::Shift)].action == "lane_ab");
+    }
+    for (int m = 0; m < kLanes; ++m) {
         EXPECT(plainAction(0, bnd::perEncModeUf8Id(ButtonId::ZoomUp, m)) == "zoom_up");
         EXPECT(plainAction(0, bnd::perEncModeUf8Id(ButtonId::ZoomCenter, m)) == "zoom_center");
         EXPECT(plainAction(0, bnd::perEncModeUf8Id(ButtonId::ChannelPush, m))
@@ -126,6 +136,35 @@ int main()
         bnd::save();
         bnd::load();
         EXPECT(plainAction(0, bnd::perEncModeUf8Id(ButtonId::ZoomLeft, 6)) == "mod_shift");
+    }
+
+    // ── v52: a v51 file has no Lanes slots. The UF1 cross gets its five, the
+    // UF8 its Lanes cross; a Lanes slot of the user's own is left alone. ───────
+    {
+        for (int L = 0; L < 3; ++L)
+            for (const ButtonId base : kBases)
+                bnd::clearBinding(L, bnd::perEncModeUf8Id(base, kLanes));
+        for (const ButtonId id : { ButtonId::Uf1NavUpLanes, ButtonId::Uf1NavDownLanes,
+                                   ButtonId::Uf1NavLeftLanes, ButtonId::Uf1NavRightLanes,
+                                   ButtonId::Uf1NavCentreLanes })
+            bnd::clearBinding(0, id);
+        bnd::Binding own = bnd::getBinding(1, ButtonId::ZoomUp);
+        own.shortPress[P].action = "mod_shift";
+        bnd::setBinding(1, bnd::perEncModeUf8Id(ButtonId::ZoomUp, kLanes), own);
+        bnd::save();
+        setVersion(51);
+        bnd::load();
+        EXPECT(plainAction(0, bnd::perEncModeUf8Id(ButtonId::ZoomUp, kLanes)) == "lane_prev");
+        EXPECT(plainAction(1, bnd::perEncModeUf8Id(ButtonId::ZoomUp, kLanes)) == "mod_shift");
+        EXPECT(plainAction(2, bnd::perEncModeUf8Id(ButtonId::ZoomLeft, kLanes)) == "lane_edge_prev");
+        EXPECT(plainAction(0, ButtonId::Uf1NavCentreLanes) == "lane_comp_here");
+        EXPECT(bnd::getBinding(0, ButtonId::Uf1NavUpLanes)
+                   .shortPress[static_cast<int>(bnd::Modifier::Shift)].action == "lane_comp_area_up");
+        const auto c = bnd::getBinding(0, ButtonId::Uf1NavDownLanes).color;
+        EXPECT(c[0] == 0x00 && c[1] == 0xFF && c[2] == 0x66);
+        // UF1 cross ids by mode: Lanes is the seventh jog mode.
+        EXPECT(bnd::perModeNavId(ButtonId::Uf1NavUp, 6) == ButtonId::Uf1NavUpLanes);
+        EXPECT(bnd::fromName(bnd::toName(ButtonId::Uf1NavDownLanes)) == ButtonId::Uf1NavDownLanes);
     }
 
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }

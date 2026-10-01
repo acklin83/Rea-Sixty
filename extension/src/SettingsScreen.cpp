@@ -4898,8 +4898,9 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             help_(ctx, "Empty with nothing selected.");
         }
         // Per-mode TIME axis unit + amount, for the live mode only. Razor (4)
-        // has no time axis at the wheel, so it shows none of this.
-        if (liveJm != 4) {
+        // has no time axis at the wheel, so it shows none of this; Lanes (6)
+        // steps lanes, at the picker's rate, so neither does it.
+        if (liveJm != 4 && liveJm != 6) {
             const int m = liveJm;
             const int unit = reasixty_uf1JogUnit(m);   // 0 sec, 1 zoom, 2 grid
             ImGui_Text(ctx, reasixty_uf1JogModeName(m));

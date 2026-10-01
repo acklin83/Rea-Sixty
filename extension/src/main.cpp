@@ -6471,6 +6471,7 @@ struct PendingInput {
                          // (Frank 2026-08-18). strip = Uf1JogActionOp; value =
                          // signed direction where the op has one, else the
                          // press/release edge for the held drag.
+        LaneOp,          // a fixed-lanes verb (lane_* builtins). strip = LaneOpCode.
     };
     Kind    kind;
     uint8_t strip;
@@ -6499,6 +6500,12 @@ enum class Uf1JogActionOp : uint8_t {
     FadeXfadeEditorClose,
 };
 constexpr uint8_t kUf1JogActionShiftBit = 0x80;
+
+// The fixed-lanes verbs, carried in PendingInput::strip (lane_* builtins).
+enum class LaneOpCode : uint8_t {
+    Next, Prev, AB, PlayAll, PlayNone, PlayComp, PlayToggle,
+    CompHere, AreaUp, AreaDown, LoopHere, EdgePrev, EdgeNext,
+};
 
 // Sub-ops for PendingInput::Uf1Transport (carried in PendingInput::value).
 enum class Uf1TransportOp : int {
@@ -6538,6 +6545,11 @@ enum class EncoderMode : uint8_t {
     // Frank 2026-06-26. (The old *_own encoder variants were dropped — the
     // copy/own option governs.)
     FavCycle,
+    // Fixed item lanes: rotation steps the heard lane of the selected track,
+    // Shift the comp area under the cursor; the zoom pad is the Lanes cross
+    // (plan docs/fixed-lanes-plan.md, Baustein G, 01.10.2026). APPEND only:
+    // the per-mode zoom-pad ids and the rings count on the order.
+    Lanes,
 };
 std::atomic<EncoderMode> g_encoderMode{EncoderMode::ChSelect};
 
@@ -6565,6 +6577,7 @@ inline const char* encoderModeFriendly(EncoderMode m)
         case EncoderMode::CsCycle:           return "CS Cycle";
         case EncoderMode::BcCycle:           return "BC Cycle";
         case EncoderMode::FavCycle:          return "Favourite Cycle";
+        case EncoderMode::Lanes:             return "Lanes";
     }
     return "Encoder";
 }
@@ -6580,7 +6593,7 @@ inline const char* encoderModeFriendly(EncoderMode m)
 // lives on the MODE-hold menu (hold MODE + turn the channel encoder).
 std::atomic<EncoderMode> g_uf1EncoderMode{EncoderMode::ChSelect};
 constexpr int kEncoderModeCount =
-    static_cast<int>(EncoderMode::FavCycle) + 1;
+    static_cast<int>(EncoderMode::Lanes) + 1;
 
 // ⇨ THE UF8 ZOOM PAD AND ENC PUSH RESOLVE THROUGH THE ENCODER MODE (Baustein H,
 // docs/fixed-lanes-plan.md). Same construction as the UF1 cross per jog mode:
@@ -6652,9 +6665,9 @@ constexpr int kUf1EncoderModeCount =
 // ⚠ APPEND new modes, never insert: SettingsScreen.cpp reads the live mode as a
 // raw int (2 = Items, 3 = Envelope, 4 = Razor) to decide which per-mode rows to
 // show, and the ExtState "uf1JogMode" persists the same int.
-enum class Uf1JogMode : uint8_t { Playhead, Scrub, Items, Envelope, Razor, Fades };
+enum class Uf1JogMode : uint8_t { Playhead, Scrub, Items, Envelope, Razor, Fades, Lanes };
 std::atomic<Uf1JogMode> g_uf1JogMode{Uf1JogMode::Playhead};
-constexpr int kUf1JogModeCount = static_cast<int>(Uf1JogMode::Fades) + 1;
+constexpr int kUf1JogModeCount = static_cast<int>(Uf1JogMode::Lanes) + 1;
 // The per-mode nav-cross ButtonIds are laid out in blocks of this size, and
 // Bindings.h has to hard-code it because it cannot see this enum. Adding a jog
 // mode without widening the block would map the new mode onto the next key's
@@ -6898,21 +6911,17 @@ std::atomic<int64_t> g_uf1JogFadeUndoUntilMs{0};
 enum class Uf1JogUnit : uint8_t { Seconds = 0, ZoomRel = 1, Grid = 2 };
 std::atomic<int>    g_uf1JogUnit[kUf1JogModeCount];
 std::atomic<double> g_uf1JogStep[kUf1JogModeCount];
-// Which Jog Modes the Scrub-held picker offers (user on/off, analog to the encoder
-// ring visibility). ExtState "uf1JogVis<m>". Default all on.
-std::atomic<bool>   g_uf1JogVisible[kUf1JogModeCount];
 // ⇨ THE FADER GOES WITH THE JOG MODE, if the user wants it (Frank 25.09.2026:
 // "Jog-Modes ... damit die auch den Fader mitnehmen können wenn gewünscht (pro
 // Mode)"). Only Items has a fader target today: "Fader = Item Volume", which
 // replaced the Item Volume side-car. ExtState "uf1JogFader<m>", default off.
 std::atomic<bool>   g_uf1JogFader[kUf1JogModeCount];
-// …and the ORDER they come in. Same shape as the encoder ring
-// (g_uf1EncRing.seq): a PERMUTATION of the mode ints, position to mode, so the
-// SCRUB-held picker walks the order you set instead of the order the enum
-// happens to be written in (Frank 2026-08-20: "die kommen ja in einer
-// Reihenfolge daher"). ExtState "uf1_jog_seq", CSV. Default = enum order, which
-// is exactly what the picker did before, so nothing moves out of the box.
-std::atomic<int>    g_uf1JogSeq[kUf1JogModeCount];
+// Which Jog Modes the Scrub-held picker offers (ExtState "uf1JogVis<m>", default
+// all on) and the ORDER they come in (Frank 2026-08-20: "die kommen ja in einer
+// Reihenfolge daher"; ExtState "uf1_jog_seq", CSV, default enum order). The same
+// ring as the encoders' (EncoderRing.h), which keeps a stored order that is
+// shorter than the enum: the old loader threw it away the day a mode was added.
+encring::Ring<kUf1JogModeCount> g_uf1JogRing;
 // The factory unit and amount per mode, kept after the ExtState load has
 // overwritten the live pair, so switching a mode back to its own unit restores
 // ITS amount (0.5 s for Scrub, 10 ms for Fades) instead of the generic one.
@@ -6921,8 +6930,8 @@ double g_uf1JogFactoryStep[kUf1JogModeCount];
 struct Uf1JogStepInit_ {
     Uf1JogStepInit_() {
         for (int m = 0; m < kUf1JogModeCount; ++m) {
-            g_uf1JogVisible[m].store(true);
-            g_uf1JogSeq[m].store(m);          // identity = today's enum order
+            g_uf1JogRing.seq[m].store(m);     // identity = today's enum order
+            g_uf1JogRing.vis[m].store(true);
         }
         auto set = [](Uf1JogMode m, Uf1JogUnit u, double v) {
             g_uf1JogUnit[static_cast<int>(m)].store(static_cast<int>(u));
@@ -6949,6 +6958,10 @@ struct Uf1JogStepInit_ {
         // and changes meaning with the tempo. 10 ms per count is one third of a
         // second per turn, Shift-fine 2.5 ms.
         set(Uf1JogMode::Fades,    Uf1JogUnit::Seconds, 0.010);
+        // Lanes steps lanes, not time: the wheel counts detents like the mode
+        // picker does (g_uf1JogPickSpeed). The pair is never read; it is set so
+        // a stray read gets a sane value instead of 0.
+        set(Uf1JogMode::Lanes,    Uf1JogUnit::Grid,    0.25);
     }
 } g_uf1JogStepInit_;
 // Full name (desktop mode-banner) + compact name (UF1 header "REAPER" cell, ≤ fits
@@ -6962,6 +6975,7 @@ inline const char* uf1JogModeFriendly(Uf1JogMode m)
         case Uf1JogMode::Envelope: return "Envelope";
         case Uf1JogMode::Razor:    return "Razor Edit";
         case Uf1JogMode::Fades:    return "Fades";
+        case Uf1JogMode::Lanes:    return "Lanes";
     }
     return "Jog";
 }
@@ -6974,6 +6988,7 @@ inline const char* uf1JogModeHdr_(Uf1JogMode m)
         case Uf1JogMode::Envelope: return "Envelope";
         case Uf1JogMode::Razor:    return "Razor";
         case Uf1JogMode::Fades:    return "Fades";
+        case Uf1JogMode::Lanes:    return "Lanes";
     }
     return "Jog";
 }
@@ -7002,8 +7017,11 @@ inline void uf1EncoderRingDefaults_()
         order[k] = static_cast<int>(kUf1EncoderModes[k]);
     // BankBy1 is the one mode excluded from kUf1EncoderModes -> append it last.
     order[kUf1EncoderModeCount] = static_cast<int>(EncoderMode::BankBy1);
+    // Lanes is not in kUf1EncoderModes either and comes in hidden: on the UF1
+    // the jog wheel steps lanes (jog mode Lanes); tick it to have both.
     g_uf1EncRing.setDefaults(order, kUf1EncoderModeCount + 1,
-        [](int m) { return m != static_cast<int>(EncoderMode::BankBy1); },
+        [](int m) { return m != static_cast<int>(EncoderMode::BankBy1)
+                        && m != static_cast<int>(EncoderMode::Lanes); },
         static_cast<int>(EncoderMode::ChSelect));
 }
 
@@ -7081,6 +7099,7 @@ inline const char* uf1EncoderModeHdr_(EncoderMode m)
         case EncoderMode::CsCycle:           return "CS Cycle";
         case EncoderMode::BcCycle:           return "BC Cycle";
         case EncoderMode::FavCycle:          return "Fav Cycle";
+        case EncoderMode::Lanes:             return "Lanes";
     }
     return "Enc";
 }
@@ -11373,20 +11392,13 @@ void uf1JogModeStep_(int rawStep)
     if (accum >=  1.0) { steps = static_cast<int>(accum); accum -= steps; }
     if (accum <= -1.0) { steps = static_cast<int>(accum); accum -= steps; }
     if (steps == 0) return;
-    // Walk the VISIBLE modes in RING order (g_uf1JogSeq), wrapping — the same
-    // body uf1EncoderStepVisible_ runs for the other ring, so the two pickers
-    // now behave identically and the on-screen carousel can show either.
-    int vis[kUf1JogModeCount]; int n = 0;
-    for (int k = 0; k < kUf1JogModeCount; ++k) {
-        const int c = g_uf1JogSeq[k].load();
-        if (c >= 0 && c < kUf1JogModeCount && g_uf1JogVisible[c].load()) vis[n++] = c;
-    }
-    if (n == 0) return;                       // everything hidden: nothing to step to
-    int idx = 0;
-    const int cur = static_cast<int>(g_uf1JogMode.load());
-    for (int i = 0; i < n; ++i) if (vis[i] == cur) { idx = i; break; }
-    idx = ((idx + steps) % n + n) % n;
-    const auto nm = static_cast<Uf1JogMode>(vis[idx]);
+    // Walk the VISIBLE modes in RING order, wrapping — the same ring code the
+    // encoder pickers run (EncoderRing.h), so the pickers behave identically and
+    // the on-screen carousel can show either.
+    int vis[kUf1JogModeCount];
+    if (g_uf1JogRing.visibleList(vis) == 0) return;   // everything hidden: nothing to step to
+    const auto nm = static_cast<Uf1JogMode>(
+        g_uf1JogRing.step(static_cast<int>(g_uf1JogMode.load()), steps));
     if (g_uf1JogMode.exchange(nm) != nm) { uf1JogPersistMode_(nm); g_pageDirty.store(true); }
 }
 
@@ -14133,6 +14145,45 @@ void applyUf1JogFades_(int count, double timeDelta)
     UpdateArrange();
 }
 
+// ⇨ TRACK GROUPS WITH MEDIA/RAZOR EDITS TAKE AN EDIT ALONG. Writing P_RAZOREDITS
+// (or C_LANEPLAYS, or a razor for a comp area) is not an edit REAPER's grouping
+// sees, so the edit stayed on the lead's own track while a mouse drag spreads it
+// over the group (Frank 2026-09-15: "razor mode respektiert gruppen nicht wenn sie
+// aktiv sind"). A track that LEADS a group in MEDIA_EDIT hands the edit to every
+// track that FOLLOWS that group, the same lead/follow split as REAPER's own: a
+// follow-only track passes nothing on, which REAPER's guide states too ("Changes
+// made to a follow track will only be applied to items in other tracks if those
+// tracks are also selected"). Appends the mates to `tracks`. Used by the UF1
+// razor and by fixed lanes (Frank 30.09.2026: lanes follow REAPER's grouping).
+// ⛔ THE SWITCH IS 1156, NOT 40771. REAPER's toolbar button "Enable item grouping
+// and track media/razor edit grouping" is action 1156 ("Options: Toggle item
+// grouping override"). Gating on 40771 alone spread the area with that button
+// off (Frank 2026-09-15, measured: 1156=0, 40771=1). Either one explicitly off
+// (0) keeps the edit on the tracks it was made on.
+static void addMediaEditGroupMates_(std::vector<MediaTrack*>& tracks)
+{
+    KbdSectionInfo* const sec = SectionFromUniqueID(0);
+    if (GetToggleCommandState2(sec, 1156) != 0
+        && GetToggleCommandState2(sec, 40771) != 0) {
+        // All 128 groups (REAPER 7.23+), same helper as the VCA spill.
+        vca::Groups lead;
+        for (MediaTrack* t : tracks) {
+            const vca::Groups g = trackGroups_(t, "MEDIA_EDIT_LEAD");
+            for (int k = 0; k < 4; ++k) lead.w[k] |= g.w[k];
+        }
+        if (lead.any()) {
+            const int nTr = CountTracks(nullptr);
+            for (int i = 0; i < nTr; ++i) {
+                MediaTrack* t = GetTrack(nullptr, i);
+                if (!t || std::find(tracks.begin(), tracks.end(), t) != tracks.end())
+                    continue;
+                if (trackGroups_(t, "MEDIA_EDIT_FOLLOW").meets(lead))
+                    tracks.push_back(t);
+            }
+        }
+    }
+}
+
 // No razor present → create a VISIBLE (non-zero) area anchored at the edit cursor,
 // growing right by |delta|. Non-zero on purpose — REAPER discards a zero-width razor, so
 // we can't create [cur,cur] and grow it. Returns false if there's nothing to put it on.
@@ -14169,41 +14220,446 @@ static bool uf1RazorCreateAtCursor_(double delta)
         if (!t) return false;
         tracks.push_back(t);
     }
-    // ⇨ TRACK GROUPS WITH MEDIA/RAZOR EDITS TAKE THE AREA ALONG. Writing P_RAZOREDITS
-    // is not an edit REAPER's grouping sees, so the area stayed on the lead's own
-    // track while a mouse drag spreads it over the group (Frank 2026-09-15: "razor
-    // mode respektiert gruppen nicht wenn sie aktiv sind"). A track that LEADS a group
-    // in MEDIA_EDIT hands the area to every track that FOLLOWS that group, the same
-    // lead/follow split as REAPER's own: a follow-only track passes nothing on, which
-    // REAPER's guide states too ("Changes made to a follow track will only be applied
-    // to items in other tracks if those tracks are also selected").
-    // ⛔ THE SWITCH IS 1156, NOT 40771. REAPER's toolbar button "Enable item grouping
-    // and track media/razor edit grouping" is action 1156 ("Options: Toggle item
-    // grouping override"). Gating on 40771 alone spread the area with that button
-    // off (Frank 2026-09-15, measured: 1156=0, 40771=1). Either one explicitly off
-    // (0) keeps the area on the tracks it was drawn on.
-    KbdSectionInfo* const sec = SectionFromUniqueID(0);
-    if (GetToggleCommandState2(sec, 1156) != 0
-        && GetToggleCommandState2(sec, 40771) != 0) {
-        // All 128 groups (REAPER 7.23+), same helper as the VCA spill.
-        vca::Groups lead;
-        for (MediaTrack* t : tracks) {
-            const vca::Groups g = trackGroups_(t, "MEDIA_EDIT_LEAD");
-            for (int k = 0; k < 4; ++k) lead.w[k] |= g.w[k];
-        }
-        if (lead.any()) {
-            const int nTr = CountTracks(nullptr);
-            for (int i = 0; i < nTr; ++i) {
-                MediaTrack* t = GetTrack(nullptr, i);
-                if (!t || std::find(tracks.begin(), tracks.end(), t) != tracks.end())
-                    continue;
-                if (trackGroups_(t, "MEDIA_EDIT_FOLLOW").meets(lead))
-                    tracks.push_back(t);
-            }
-        }
-    }
+    // Track groups with media/razor edits take the area along.
+    addMediaEditGroupMates_(tracks);
     for (MediaTrack* t : tracks) uf1RazorSet_(t, buf);
     return true;
+}
+
+// ===== FIXED ITEM LANES (plan docs/fixed-lanes-plan.md, Bausteine A, B, E, G) =====
+// The REAPER half of LaneModel.h: read and write a track's lanes, the comp map
+// from its chunk, the verbs both surfaces share (UF1 jog mode Lanes, UF8 encoder
+// mode Lanes). Main thread only; the builtins queue into here.
+//
+// Which track: the last-touched one when it is selected (SEL on either surface
+// does both), else the first selected track, else the last-touched one. REAPER's
+// own lane actions act on selected tracks, so this stays in step with them.
+// REAPER 7.12 or newer (plan, section 2); older builds report I_FREEMODE != 2 on
+// every track and nothing here does anything.
+static MediaTrack* laneTrack_()
+{
+    MediaTrack* lt = GetLastTouchedTrack();
+    if (lt && ValidatePtr2(nullptr, lt, "MediaTrack*")
+        && GetMediaTrackInfo_Value(lt, "I_SELECTED") > 0.5)
+        return lt;
+    if (MediaTrack* t = GetSelectedTrack(nullptr, 0)) return t;
+    return lt && ValidatePtr2(nullptr, lt, "MediaTrack*") ? lt : nullptr;
+}
+
+static bool laneTrackHasLanes_(MediaTrack* tr)
+{
+    return tr && static_cast<int>(GetMediaTrackInfo_Value(tr, "I_FREEMODE")) == 2;
+}
+static int laneCount_(MediaTrack* tr)
+{
+    if (!laneTrackHasLanes_(tr)) return 0;
+    return static_cast<int>(GetMediaTrackInfo_Value(tr, "I_NUMFIXEDLANES"));
+}
+static lanes::PlaySet lanePlaySet_(MediaTrack* tr)
+{
+    const int n = laneCount_(tr);
+    std::vector<int> v(static_cast<size_t>(n), 0);
+    char key[32];
+    for (int i = 0; i < n; ++i) {
+        std::snprintf(key, sizeof(key), "C_LANEPLAYS:%d", i);
+        v[static_cast<size_t>(i)] = static_cast<int>(GetMediaTrackInfo_Value(tr, key));
+    }
+    return lanes::fromLanePlays(v);
+}
+static std::string laneName_(MediaTrack* tr, int lane)
+{
+    char key[32], buf[256] = {0};
+    std::snprintf(key, sizeof(key), "P_LANENAME:%d", lane);
+    GetSetMediaTrackInfo_String(tr, key, buf, false);
+    if (!*buf) std::snprintf(buf, sizeof(buf), "%d", lane + 1);
+    return buf;
+}
+
+// The play set, written through the API WITHOUT an undo point (LaneModel.h: one
+// REAPER lane action = one undo entry, a wheel would flood the history). The
+// lanes going silent first, then the ones that play, so a lane set to play
+// alone never meets another one still marked alone. ⚠ Writing C_LANEPLAYS was
+// not part of the probe of 01.10.; the attribute is documented settable.
+static void laneWritePlaySet_(MediaTrack* tr, const lanes::PlaySet& set)
+{
+    const int n = laneCount_(tr);
+    if (n <= 0 || set.empty()) return;
+    const std::vector<int> v = lanes::toLanePlays(lanes::resized(set, n));
+    char key[32];
+    for (int pass = 0; pass < 2; ++pass)
+        for (int i = 0; i < n; ++i) {
+            const int val = v[static_cast<size_t>(i)];
+            if ((pass == 0) != (val == 0)) continue;
+            std::snprintf(key, sizeof(key), "C_LANEPLAYS:%d", i);
+            SetMediaTrackInfo_Value(tr, key, val);
+        }
+    UpdateArrange();
+}
+
+// The comp map from the track chunk (LANEREC, LINKEDLANE). The chunk is read
+// again only when the project's state count moved: creating or moving a comp
+// area is an undo point, so it bumps the count. Pointers are compared, never
+// dereferenced.
+static const lanes::CompInfo& laneCompInfo_(MediaTrack* tr)
+{
+    static MediaTrack* s_tr = nullptr;
+    static int s_sig = -1;
+    static lanes::CompInfo s_info;
+    const int sig = GetProjectStateChangeCount(nullptr);
+    if (tr == s_tr && sig == s_sig) return s_info;
+    s_tr = tr; s_sig = sig; s_info = lanes::CompInfo{};
+    if (!laneTrackHasLanes_(tr)) return s_info;
+    // Lanes tracks carry their items in the chunk: grow until it fits.
+    static std::vector<char> buf(1 << 20);
+    for (;;) {
+        buf[0] = 0;
+        GetTrackStateChunk(tr, buf.data(), static_cast<int>(buf.size()), false);
+        buf.back() = 0;
+        if (std::strlen(buf.data()) < buf.size() - 2 || buf.size() >= (64u << 20)) break;
+        buf.resize(buf.size() * 2);
+    }
+    s_info = lanes::compFromChunk(buf.data());
+    return s_info;
+}
+
+// The lane each track's wheel last stepped to, and its A/B memory. Keyed by the
+// track pointer; entries of deleted tracks are never dereferenced.
+static std::unordered_map<MediaTrack*, int>            g_laneHeard;
+static std::unordered_map<MediaTrack*, lanes::LaneAb>  g_laneAb;
+
+static int laneHeard_(MediaTrack* tr, const lanes::PlaySet& set)
+{
+    auto it = g_laneHeard.find(tr);
+    return lanes::heardLane(set, it == g_laneHeard.end() ? -1 : it->second);
+}
+
+// Every tick while a Lanes mode is live: who plays on the lane track, ours or
+// REAPER's (a punch-in switches lanes on its own; A/B has to know the set before).
+static void laneObserve_()
+{
+    MediaTrack* tr = laneTrack_();
+    if (!laneTrackHasLanes_(tr)) return;
+    g_laneAb[tr].observe(lanePlaySet_(tr));
+}
+
+// The lane track plus, when REAPER's grouping is on, its media-edit group mates.
+static std::vector<MediaTrack*> laneTracksWithGroup_(MediaTrack* tr)
+{
+    std::vector<MediaTrack*> v;
+    if (!tr) return v;
+    v.push_back(tr);
+    addMediaEditGroupMates_(v);
+    return v;
+}
+
+// Apply a set to the lane track and, as a pattern, to its group mates (same
+// lane numbers; a mate that has none of them is left alone).
+static void laneApplySet_(MediaTrack* tr, const lanes::PlaySet& set)
+{
+    for (MediaTrack* t : laneTracksWithGroup_(tr)) {
+        if (!laneTrackHasLanes_(t)) continue;
+        const lanes::PlaySet p = lanes::pattern(set, laneCount_(t));
+        if (!p.empty()) laneWritePlaySet_(t, p);
+    }
+}
+
+std::atomic<bool> g_laneSkipComp{true};   // "Lane steps skip comp lanes", factory on
+
+// The lane you now hear, on the UF1's time field: its name, or "LANE 3" when it
+// has none of its own. No banner (plan: stepping is too frequent for one).
+static void laneFlash_(MediaTrack* tr, int lane)
+{
+    char key[32], buf[256] = {0};
+    std::snprintf(key, sizeof(key), "P_LANENAME:%d", lane);
+    GetSetMediaTrackInfo_String(tr, key, buf, false);
+    std::string txt = buf;
+    if (txt.empty() || txt == std::to_string(lane + 1)) txt = "LANE " + std::to_string(lane + 1);
+    uf1FlashTimecode_(txt, 1200);
+}
+
+// Step the heard lane by `dir` lanes (wheel, encoder, ↑ / ↓). Exclusive: the
+// wheel previews ONE lane; the set before it waits in A/B.
+static void laneStep_(int dir)
+{
+    MediaTrack* tr = laneTrack_();
+    const int n = laneCount_(tr);
+    if (n <= 0 || dir == 0) return;
+    lanes::LaneAb& ab = g_laneAb[tr];
+    const lanes::PlaySet now = lanePlaySet_(tr);
+    ab.observe(now);
+    int lane = laneHeard_(tr, now);
+    const int comp = laneCompInfo_(tr).compLane;
+    const int step = dir > 0 ? 1 : -1;
+    for (int k = dir > 0 ? dir : -dir; k > 0; --k) {
+        const int next = lanes::stepLane(n, lane, step, comp, g_laneSkipComp.load());
+        if (next < 0) break;
+        lane = next;
+    }
+    if (lane < 0) return;
+    const lanes::PlaySet set = lanes::only(n, lane);
+    if (lanes::same(set, now)) return;
+    g_laneHeard[tr] = lane;
+    laneApplySet_(tr, set);
+    ab.observe(set);
+    laneFlash_(tr, lane);
+}
+
+// Can the wheel go further this way? Lights ↑ / ↓ on the UF1 cross.
+static bool laneCanStep_(int dir)
+{
+    MediaTrack* tr = laneTrack_();
+    const int n = laneCount_(tr);
+    if (n <= 0) return false;
+    const int lane = laneHeard_(tr, lanePlaySet_(tr));
+    return lanes::stepLane(n, lane, dir, laneCompInfo_(tr).compLane,
+                           g_laneSkipComp.load()) >= 0;
+}
+
+enum class LanePlayOp { All, None, Comp, ToggleHeard, AB };
+static void lanePlayOp_(LanePlayOp op)
+{
+    MediaTrack* tr = laneTrack_();
+    const int n = laneCount_(tr);
+    if (n <= 0) return;
+    lanes::LaneAb& ab = g_laneAb[tr];
+    const lanes::PlaySet now = lanePlaySet_(tr);
+    ab.observe(now);
+    lanes::PlaySet set;
+    switch (op) {
+        case LanePlayOp::All:  set = lanes::all(n);  break;
+        case LanePlayOp::None: set = lanes::none(n); break;
+        case LanePlayOp::Comp: {
+            const int comp = laneCompInfo_(tr).compLane;
+            if (comp < 0) return;
+            set = lanes::only(n, comp);
+            break;
+        }
+        case LanePlayOp::ToggleHeard: {
+            const int lane = laneHeard_(tr, now);
+            if (lane < 0) return;
+            set = lanes::toggled(now, lane);
+            break;
+        }
+        case LanePlayOp::AB:
+            set = ab.recall(n);              // swapped in already
+            if (set.empty()) return;
+            laneApplySet_(tr, set);
+            return;
+    }
+    laneApplySet_(tr, set);
+    ab.observe(set);
+}
+
+// The range a comp or loop verb works on: the time selection, else the loop
+// points, else the item of the heard lane under the edit cursor.
+static bool laneVerbRange_(MediaTrack* tr, int lane, double& s, double& e)
+{
+    GetSet_LoopTimeRange2(nullptr, false, false, &s, &e, false);
+    if (e - s > 1e-6) return true;
+    GetSet_LoopTimeRange2(nullptr, false, true, &s, &e, false);
+    if (e - s > 1e-6) return true;
+    const double cur = GetCursorPosition();
+    const int ni = CountTrackMediaItems(tr);
+    for (int i = 0; i < ni; ++i) {
+        MediaItem* it = GetTrackMediaItem(tr, i);
+        if (static_cast<int>(GetMediaItemInfo_Value(it, "I_FIXEDLANE")) != lane) continue;
+        const double p = GetMediaItemInfo_Value(it, "D_POSITION");
+        const double l = GetMediaItemInfo_Value(it, "D_LENGTH");
+        if (p <= cur && cur < p + l) { s = p; e = p + l; return true; }
+    }
+    return false;
+}
+
+// ⇨ COMP HERE: the heard lane's stretch goes into the comp lane. A razor with
+// that lane's height on the lane track (and group mates, same lane number),
+// then 42475 "create fixed lane comp area" (measured 01.10.: takes exactly that
+// lane as the source, works during playback, one undo entry). 42475 acts on
+// every razor in the project, so any other razor is put aside and given back.
+// ⚠ 42475 with comping OFF on the track was not measured.
+static void laneCompHere_(int laneOverride = -1)
+{
+    MediaTrack* tr = laneTrack_();
+    const int n = laneCount_(tr);
+    if (n <= 0) return;
+    const int lane = laneOverride >= 0 ? laneOverride : laneHeard_(tr, lanePlaySet_(tr));
+    if (lane < 0 || lane >= n) return;
+    double s = 0, e = 0;
+    if (!laneVerbRange_(tr, lane, s, e)) return;
+
+    std::vector<std::pair<MediaTrack*, std::string>> aside;
+    const int nTr = CountTracks(nullptr);
+    static std::vector<char> rz(1 << 16);
+    for (int i = 0; i < nTr; ++i) {
+        MediaTrack* t = GetTrack(nullptr, i);
+        rz[0] = 0;
+        GetSetMediaTrackInfo_String(t, "P_RAZOREDITS_EXT", rz.data(), false);
+        if (rz[0]) {
+            aside.emplace_back(t, std::string(rz.data()));
+            GetSetMediaTrackInfo_String(t, "P_RAZOREDITS_EXT", const_cast<char*>(""), true);
+        }
+    }
+    for (MediaTrack* t : laneTracksWithGroup_(tr)) {
+        const int tn = laneCount_(t);
+        if (lane >= tn) continue;
+        const std::string entry = lanes::razorEntry(s, e, lane, tn);
+        GetSetMediaTrackInfo_String(t, "P_RAZOREDITS_EXT", const_cast<char*>(entry.c_str()), true);
+    }
+    Main_OnCommand(42475, 0);
+    for (MediaTrack* t : laneTracksWithGroup_(tr))
+        GetSetMediaTrackInfo_String(t, "P_RAZOREDITS_EXT", const_cast<char*>(""), true);
+    for (auto& a : aside)
+        GetSetMediaTrackInfo_String(a.first, "P_RAZOREDITS_EXT", const_cast<char*>(a.second.c_str()), true);
+    UpdateArrange();
+}
+
+// ⇨ THE COMP AREA UNDER THE CURSOR ONE LANE UP / DOWN: select the comp-lane item
+// under the edit cursor alone, 42707 (up) / 42708 (down) (measured: 42707 moves
+// exactly that area, 3 → 2), then the selection the user had comes back.
+static void laneCompAreaStep_(int dir)
+{
+    MediaTrack* tr = laneTrack_();
+    const int comp = laneCompInfo_(tr).compLane;
+    if (comp < 0 || dir == 0) return;
+    const double cur = GetCursorPosition();
+    MediaItem* hit = nullptr;
+    const int ni = CountTrackMediaItems(tr);
+    for (int i = 0; i < ni; ++i) {
+        MediaItem* it = GetTrackMediaItem(tr, i);
+        if (static_cast<int>(GetMediaItemInfo_Value(it, "I_FIXEDLANE")) != comp) continue;
+        const double p = GetMediaItemInfo_Value(it, "D_POSITION");
+        const double l = GetMediaItemInfo_Value(it, "D_LENGTH");
+        if (p <= cur && cur < p + l) hit = it;       // the later one in an overlap
+    }
+    if (!hit) return;
+    std::vector<MediaItem*> was;
+    const int ns = CountSelectedMediaItems(nullptr);
+    for (int i = 0; i < ns; ++i) was.push_back(GetSelectedMediaItem(nullptr, i));
+    for (MediaItem* it : was) SetMediaItemSelected(it, false);
+    SetMediaItemSelected(hit, true);
+    for (int k = dir > 0 ? dir : -dir; k > 0; --k)
+        Main_OnCommand(dir > 0 ? 42708 : 42707, 0);
+    SetMediaItemSelected(hit, false);
+    for (MediaItem* it : was)
+        if (ValidatePtr2(nullptr, it, "MediaItem*")) SetMediaItemSelected(it, true);
+    UpdateArrange();
+}
+
+// ← / →: the edit cursor to the previous / next comp-area edge or item edge of
+// the heard lane. Seeks while playing, like the Markers encoder mode.
+static void laneEdge_(int dir)
+{
+    MediaTrack* tr = laneTrack_();
+    if (laneCount_(tr) <= 0 || dir == 0) return;
+    const int lane = laneHeard_(tr, lanePlaySet_(tr));
+    std::vector<double> extra;
+    const int ni = CountTrackMediaItems(tr);
+    for (int i = 0; i < ni; ++i) {
+        MediaItem* it = GetTrackMediaItem(tr, i);
+        if (static_cast<int>(GetMediaItemInfo_Value(it, "I_FIXEDLANE")) != lane) continue;
+        const double p = GetMediaItemInfo_Value(it, "D_POSITION");
+        extra.push_back(p);
+        extra.push_back(p + GetMediaItemInfo_Value(it, "D_LENGTH"));
+    }
+    const std::vector<double> es = lanes::edges(laneCompInfo_(tr).areas, extra);
+    const double cur = GetCursorPosition();
+    const double t = dir > 0 ? lanes::nextEdge(es, cur) : lanes::prevEdge(es, cur);
+    if (t != cur) SetEditCurPos(t, true, true);
+}
+
+// Shift + ←: loop the comp area under the cursor, else the heard lane's item
+// under it, and switch repeat on (Fall 1).
+static void laneLoopHere_()
+{
+    MediaTrack* tr = laneTrack_();
+    if (laneCount_(tr) <= 0) return;
+    const double cur = GetCursorPosition();
+    const auto& ci = laneCompInfo_(tr);
+    double s = 0, e = 0;
+    const int a = lanes::areaAt(ci.areas, cur);
+    if (a >= 0) {
+        s = ci.areas[static_cast<size_t>(a)].start;
+        e = ci.areas[static_cast<size_t>(a)].end;
+    } else {
+        const int lane = laneHeard_(tr, lanePlaySet_(tr));
+        bool found = false;
+        const int ni = CountTrackMediaItems(tr);
+        for (int i = 0; i < ni && !found; ++i) {
+            MediaItem* it = GetTrackMediaItem(tr, i);
+            if (static_cast<int>(GetMediaItemInfo_Value(it, "I_FIXEDLANE")) != lane) continue;
+            const double p = GetMediaItemInfo_Value(it, "D_POSITION");
+            const double l = GetMediaItemInfo_Value(it, "D_LENGTH");
+            if (p <= cur && cur < p + l) { s = p; e = p + l; found = true; }
+        }
+        if (!found) return;
+    }
+    GetSet_LoopTimeRange2(nullptr, true, true, &s, &e, false);
+    GetSetRepeat(1);
+    UpdateTimeline();
+}
+
+// What the lane keys show (their builtins' stateOf reads these, so the UF1
+// cross and the UF8 zoom pad light like any other binding): ↑ / ↓ only where
+// there is a lane to go to, the centre while comping is on. Written by
+// laneTick_ on the main thread, read from wherever a lamp is resolved.
+std::atomic<bool> g_laneCanUp{false}, g_laneCanDown{false}, g_laneComping{false};
+
+static bool lanesModeLive_()
+{
+    return g_uf1JogMode.load() == Uf1JogMode::Lanes
+        || g_encoderMode.load() == EncoderMode::Lanes
+        || g_uf1EncoderMode.load() == EncoderMode::Lanes;
+}
+
+// Every timer tick: while a Lanes mode is live, watch who plays (A/B has to see
+// REAPER's own switches, a punch-in is one) and refresh the lamp states.
+void laneTick_()
+{
+    if (!lanesModeLive_()) {
+        g_laneCanUp.store(false); g_laneCanDown.store(false); g_laneComping.store(false);
+        return;
+    }
+    laneObserve_();
+    MediaTrack* tr = laneTrack_();
+    g_laneCanUp.store(laneCanStep_(-1));
+    g_laneCanDown.store(laneCanStep_(+1));
+    g_laneComping.store(laneCount_(tr) > 0 && laneCompInfo_(tr).compLane >= 0);
+}
+
+// The drain of PendingInput::LaneOp: one lane_* builtin.
+void applyLaneOp_(uint8_t op)
+{
+    switch (static_cast<LaneOpCode>(op)) {
+        case LaneOpCode::Next:       laneStep_(+1);                          break;
+        case LaneOpCode::Prev:       laneStep_(-1);                          break;
+        case LaneOpCode::AB:         lanePlayOp_(LanePlayOp::AB);            break;
+        case LaneOpCode::PlayAll:    lanePlayOp_(LanePlayOp::All);           break;
+        case LaneOpCode::PlayNone:   lanePlayOp_(LanePlayOp::None);          break;
+        case LaneOpCode::PlayComp:   lanePlayOp_(LanePlayOp::Comp);          break;
+        case LaneOpCode::PlayToggle: lanePlayOp_(LanePlayOp::ToggleHeard);   break;
+        case LaneOpCode::CompHere:   laneCompHere_();                        break;
+        case LaneOpCode::AreaUp:     laneCompAreaStep_(-1);                  break;
+        case LaneOpCode::AreaDown:   laneCompAreaStep_(+1);                  break;
+        case LaneOpCode::LoopHere:   laneLoopHere_();                        break;
+        case LaneOpCode::EdgePrev:   laneEdge_(-1);                          break;
+        case LaneOpCode::EdgeNext:   laneEdge_(+1);                          break;
+    }
+}
+
+// Jog mode Lanes: the wheel steps the heard lane, Shift the comp area under the
+// cursor. The jog is smooth, so counts gather into steps at the picker's rate
+// (g_uf1JogPickSpeed counts per lane); turning back drops what was gathered.
+static void applyUf1JogLanes_(int count)
+{
+    static double s_acc = 0.0;
+    const double scale = std::max(1.0, g_uf1JogPickSpeed.load());
+    if ((count > 0 && s_acc < 0.0) || (count < 0 && s_acc > 0.0)) s_acc = 0.0;
+    s_acc += count / scale;
+    int steps = 0;
+    if (s_acc >=  1.0) { steps = static_cast<int>(s_acc); s_acc -= steps; }
+    if (s_acc <= -1.0) { steps = static_cast<int>(s_acc); s_acc -= steps; }
+    if (steps == 0) return;
+    if (uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)) laneCompAreaStep_(steps);
+    else                                                              laneStep_(steps);
 }
 
 // Jog dispatch for Razor mode. count = de-jittered, timeDelta = seconds (per-mode step).
@@ -14434,6 +14890,7 @@ void uf1JogDispatch_(int count)
             break;
         case Uf1JogMode::Razor:    applyUf1JogRazor_(count, delta);    break;
         case Uf1JogMode::Fades:    applyUf1JogFades_(count, delta);    break;
+        case Uf1JogMode::Lanes:    applyUf1JogLanes_(count);           break;
     }
 }
 
@@ -14473,6 +14930,9 @@ void uf1EncoderDispatch_(int step)
             if (!applySendBankStep_(step)) applyBankByOne_(step);
             break;
         case EncoderMode::LastParam:   applyLastParamStep_(step);  break;
+        // Shift (the comp area) is taken in the drain: the Shift slot of the
+        // encoder binding would otherwise run instead of this dispatcher.
+        case EncoderMode::Lanes:       laneStep_(step);            break;
     }
 }
 
@@ -21600,6 +22060,10 @@ void drainInputQueue()
             applyUf1JogAction_(e.strip, e.value);
             continue;
         }
+        if (e.kind == PendingInput::LaneOp) {
+            applyLaneOp_(e.strip);
+            continue;
+        }
         // Every selected track, not just the first: an automation key is an
         // edit on the selection like any other (Frank 2026-09-15: "sollen
         // LOGISCHERWEISE auf ALLE selektierten spuren wirken").
@@ -21815,6 +22279,12 @@ void drainInputQueue()
                             // helper persists uf1EncoderMode. Drain runs on the main
                             // thread → SetExtState is safe here.
                             uf1EncoderStepVisible_(tracks);
+                        } else if (g_uf1EncoderMode.load() == EncoderMode::Lanes
+                                   && uf8::bindings::modifierHeld(
+                                          uf8::bindings::Modifier::Shift)) {
+                            // Encoder mode Lanes: Shift steps the comp area, as
+                            // on the UF8 (the Shift slot would run instead).
+                            laneCompAreaStep_(tracks);
                         } else {
                             // BINDINGS, exactly like the UF8's ChannelEncoder
                             // (Frank 2026-09-03). The two branches that used to
@@ -22159,6 +22629,14 @@ void drainInputQueue()
                 // turned flag was set at the enqueue, on the input thread).
                 if (g_uf8EncPushHeld.load()) {
                     uf8EncoderStepVisible_(step);
+                    continue;
+                }
+                // Encoder mode Lanes: Shift steps the comp area under the
+                // cursor (plan, decision 4). Taken here because the binding's
+                // Shift slot runs INSTEAD of encoder_mode_dispatch.
+                if (g_encoderMode.load() == EncoderMode::Lanes
+                    && uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)) {
+                    laneCompAreaStep_(step);
                     continue;
                 }
                 // SEL Mode override: when Settings → Modes → FX/Instance
@@ -24993,17 +25471,12 @@ static void uf1SetEncoderList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h)
                      [](int m) { return uf1EncoderModeHdr_(static_cast<EncoderMode>(m)); });
 }
 // The jog picker (SCRUB held + wheel, uf1JogModeStep_) draws the same list over
-// the jog ring, g_uf1JogSeq / g_uf1JogVisible (Frank 2026-09-11: "wieso zeichnet
+// the jog ring, g_uf1JogRing (Frank 2026-09-11: "wieso zeichnet
 // es das jogwheel für jog-mode nicht gleich?").
 static void uf1SetJogList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h)
 {
     int vis[kUf1JogModeCount];
-    int n = 0;
-    for (int k = 0; k < kUf1JogModeCount; ++k) {
-        const int m = g_uf1JogSeq[k].load();
-        if (m >= 0 && m < kUf1JogModeCount && g_uf1JogVisible[m].load())
-            vis[n++] = m;
-    }
+    const int n = g_uf1JogRing.visibleList(vis);
     uf1FillModeList_(h, vis, n, kUf1JogModeCount,
                      static_cast<int>(g_uf1JogMode.load()),
                      [](int m) { return uf1JogModeHdr_(static_cast<Uf1JogMode>(m)); });
@@ -44813,6 +45286,7 @@ void onTimerBody_()
                         { EncoderMode::LastParam,         "encoder_last_param" },
                         { EncoderMode::FxScrollAll,       "encoder_fx_scroll_all" },
                         { EncoderMode::InstanceScrollAll, "encoder_instance_scroll_all" },
+                        { EncoderMode::Lanes,             "encoder_lanes" },
                     };
                     const auto curEnc = g_encoderMode.load();
                     std::string em; int ei = 0;
@@ -44865,6 +45339,7 @@ void onTimerBody_()
                             { Uf1JogMode::Envelope, "jog_mode_envelope" },
                             { Uf1JogMode::Razor,    "jog_mode_razor" },
                             { Uf1JogMode::Fades,    "jog_mode_fades" },
+                            { Uf1JogMode::Lanes,    "jog_mode_lanes" },
                         };
                         const auto curJ = g_uf1JogMode.load();
                         std::string uj; int ji = 0, row = 0;
@@ -44912,9 +45387,9 @@ void onTimerBody_()
                 const int   tot  = jogHeld ? kUf1JogModeCount : kEncoderModeCount;
                 std::string names; int idx = 0, n = 0;
                 for (int k = 0; k < tot; ++k) {
-                    const int m = jogHeld ? g_uf1JogSeq[k].load() : g_uf1EncRing.seq[k].load();
+                    const int m = jogHeld ? g_uf1JogRing.seq[k].load() : g_uf1EncRing.seq[k].load();
                     if (m < 0 || m >= tot) continue;
-                    const bool vis = jogHeld ? g_uf1JogVisible[m].load()
+                    const bool vis = jogHeld ? g_uf1JogRing.visible(m)
                                              : g_uf1EncRing.visible(m);
                     if (!vis) continue;
                     if (m == cur) idx = n;
@@ -46922,6 +47397,7 @@ void onTimerBody_()
             else if (std::strcmp(m, "Markers")     == 0) g_encoderMode.store(EncoderMode::Markers);
             else if (std::strcmp(m, "BankBy1")     == 0) g_encoderMode.store(EncoderMode::BankBy1);
             else if (std::strcmp(m, "LastParam")   == 0) g_encoderMode.store(EncoderMode::LastParam);
+            else if (std::strcmp(m, "Lanes")       == 0) g_encoderMode.store(EncoderMode::Lanes);
             // 'Nav' (legacy) and 'ChSelect' (post-2026-05-19 rename) both
             // resolve to the channel-select default mode.
             else                                         g_encoderMode.store(EncoderMode::ChSelect);
@@ -47231,6 +47707,7 @@ void onTimerBody_()
         pushNavOverlayDecorations();
     }
     pushUf8EncPickerDecorations_();
+    laneTick_();
     pushUf8GlobalLeds();
     // pushSelColourBar() removed: it was a per-tick fallback that wrote
     // SEL LEDs in white-only mode (buildSelWhite). With track-colour SEL
@@ -48374,9 +48851,11 @@ custom_action_register_t g_actionJogModeRazor{
     0, "REASIXTY_JOG_MODE_RAZOR", "Rea-Sixty: UF1 Jog Mode = Razor Edit", nullptr };
 custom_action_register_t g_actionJogModeFades{
     0, "REASIXTY_JOG_MODE_FADES", "Rea-Sixty: UF1 Jog Mode = Fades", nullptr };
+custom_action_register_t g_actionJogModeLanes{
+    0, "REASIXTY_JOG_MODE_LANES", "Rea-Sixty: UF1 Jog Mode = Lanes", nullptr };
 int g_cmdJogModeCycle = 0, g_cmdJogModePlayhead = 0, g_cmdJogModeScrub = 0,
     g_cmdJogModeItems = 0, g_cmdJogModeEnvelope = 0, g_cmdJogModeRazor = 0,
-    g_cmdJogModeFades = 0;
+    g_cmdJogModeFades = 0, g_cmdJogModeLanes = 0;
 
 // UF1 channel-encoder MODE + the four hardware VIEW modes as REAPER-native
 // actions too (Frank 2026-08-10, the same both-routes ask the Jog Modes got).
@@ -48444,6 +48923,7 @@ static const Uf8EncActionDef kUf8EncActions[] = {
     { EncoderMode::LastParam,         "LastParam",         "REASIXTY_UF8_ENCODER_LAST_PARAM",          "Rea-Sixty: UF8 Encoder \xE2\x86\x92 Last Touched Param" },
     { EncoderMode::FxScrollAll,       "FxScrollAll",       "REASIXTY_UF8_ENCODER_FX_SCROLL_ALL",       "Rea-Sixty: UF8 Encoder \xE2\x86\x92 FX Cycle (across tracks)" },
     { EncoderMode::InstanceScrollAll, "InstanceScrollAll", "REASIXTY_UF8_ENCODER_INSTANCE_SCROLL_ALL", "Rea-Sixty: UF8 Encoder \xE2\x86\x92 Instance Cycle (across tracks)" },
+    { EncoderMode::Lanes,             "Lanes",             "REASIXTY_UF8_ENCODER_LANES",               "Rea-Sixty: UF8 Encoder \xE2\x86\x92 Lanes" },
 };
 constexpr int kUf8EncActionCount =
     static_cast<int>(sizeof(kUf8EncActions) / sizeof(kUf8EncActions[0]));
@@ -48488,6 +48968,7 @@ static const Uf1EncActionDef kUf1EncActions[] = {
     { EncoderMode::BcCycle,           "REASIXTY_UF1_ENCODER_BC_CYCLE",           "Rea-Sixty: UF1 Encoder \xE2\x86\x92 BC Cycle (Favourites)" },
     { EncoderMode::FavCycle,          "REASIXTY_UF1_ENCODER_FAV_CYCLE",          "Rea-Sixty: UF1 Encoder \xE2\x86\x92 Favourite Cycle (Focused Domain)" },
     { EncoderMode::SelsetCycle,       "REASIXTY_UF1_ENCODER_SELSET_CYCLE",       "Rea-Sixty: UF1 Encoder \xE2\x86\x92 Selection Set Cycle" },
+    { EncoderMode::Lanes,             "REASIXTY_UF1_ENCODER_LANES",              "Rea-Sixty: UF1 Encoder \xE2\x86\x92 Lanes" },
 };
 constexpr int kUf1EncActionCount =
     static_cast<int>(sizeof(kUf1EncActions) / sizeof(kUf1EncActions[0]));
@@ -48911,6 +49392,7 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
         else if (command == g_cmdJogModeEnvelope) jm = static_cast<int>(Uf1JogMode::Envelope);
         else if (command == g_cmdJogModeRazor)    jm = static_cast<int>(Uf1JogMode::Razor);
         else if (command == g_cmdJogModeFades)    jm = static_cast<int>(Uf1JogMode::Fades);
+        else if (command == g_cmdJogModeLanes)    jm = static_cast<int>(Uf1JogMode::Lanes);
         if (jm >= 0) {
             g_uf1JogMode.store(static_cast<Uf1JogMode>(jm));
             char b[8]; std::snprintf(b, sizeof(b), "%d", jm);
@@ -49070,6 +49552,7 @@ int toggleActionState(int command)
             { g_cmdJogModeEnvelope,   "jog_mode_envelope"        },
             { g_cmdJogModeRazor,      "jog_mode_razor"           },
             { g_cmdJogModeFades,      "jog_mode_fades"           },
+            { g_cmdJogModeLanes,      "jog_mode_lanes"           },
         };
         for (const auto& a : kStateful)
             if (a.cmd != 0 && command == a.cmd)
@@ -51892,12 +52375,12 @@ void reasixty_setUf1JogUnit(int mode, int unit)
 }
 bool reasixty_uf1JogModeVisible(int mode)
 {
-    return (mode >= 0 && mode < kUf1JogModeCount) ? g_uf1JogVisible[mode].load() : true;
+    return (mode >= 0 && mode < kUf1JogModeCount) ? g_uf1JogRing.visible(mode) : true;
 }
 void reasixty_setUf1JogModeVisible(int mode, bool on)
 {
     if (mode < 0 || mode >= kUf1JogModeCount) return;
-    g_uf1JogVisible[mode].store(on);
+    g_uf1JogRing.vis[mode].store(on);
     char key[24]; std::snprintf(key, sizeof(key), "uf1JogVis%d", mode);
     SetExtState("rea_sixty", key, on ? "1" : "0", true);
 }
@@ -51923,24 +52406,12 @@ void reasixty_setUf1JogFaderFollows(int mode, bool on)
 int reasixty_uf1JogSeqAt(int pos)
 {
     if (pos < 0 || pos >= kUf1JogModeCount) return 0;
-    return g_uf1JogSeq[pos].load();
+    return g_uf1JogRing.seq[pos].load();
 }
 void reasixty_uf1JogMoveSeq(int pos, int dir)
 {
-    const int other = pos + dir;
-    if (pos   < 0 || pos   >= kUf1JogModeCount) return;
-    if (other < 0 || other >= kUf1JogModeCount) return;
-    const int a = g_uf1JogSeq[pos].load();
-    const int b = g_uf1JogSeq[other].load();
-    g_uf1JogSeq[pos].store(b);
-    g_uf1JogSeq[other].store(a);
-    std::string csv;
-    for (int k = 0; k < kUf1JogModeCount; ++k) {
-        char t[16]; std::snprintf(t, sizeof(t), "%d", g_uf1JogSeq[k].load());
-        if (k) csv += ',';
-        csv += t;
-    }
-    SetExtState("rea_sixty", "uf1_jog_seq", csv.c_str(), true);
+    if (!g_uf1JogRing.move(pos, dir)) return;
+    SetExtState("rea_sixty", "uf1_jog_seq", g_uf1JogRing.seqCsv().c_str(), true);
 }
 // The LIVE jog mode, for the Settings nav-cross editor: it shows the mode the
 // surface is in and switching it there switches the surface too, the same way
@@ -55369,6 +55840,47 @@ void registerBindingHandlers()
         [](int) { return g_uf1JogMode.load() == Uf1JogMode::Fades; },
         "UF1 Jog Mode: Fades", false
     });
+    registerBuiltin("jog_mode_lanes", DescBuilder{
+        [setJogMode](bool f, bool, int) { if (f) setJogMode(Uf1JogMode::Lanes); },
+        [](int) { return g_uf1JogMode.load() == Uf1JogMode::Lanes; },
+        "UF1 Jog Mode: Lanes", false
+    });
+
+    // ⇨ FIXED LANES (plan docs/fixed-lanes-plan.md): the verbs both surfaces
+    // share, on the UF1 cross in jog mode Lanes and on the UF8 zoom pad in
+    // encoder mode Lanes. The REAPER work runs in the drain (applyLaneOp_). The
+    // three with a state light the keys: a lane to step to, comping on.
+    auto laneOp = [](LaneOpCode op) {
+        return [op](bool firing, bool, int) {
+            if (firing) queueInput({PendingInput::LaneOp, static_cast<uint8_t>(op), 1.0});
+        };
+    };
+    registerBuiltin("lane_next", DescBuilder{ laneOp(LaneOpCode::Next),
+        [](int) { return g_laneCanDown.load(); }, "Lanes: next lane", false });
+    registerBuiltin("lane_prev", DescBuilder{ laneOp(LaneOpCode::Prev),
+        [](int) { return g_laneCanUp.load(); }, "Lanes: previous lane", false });
+    registerBuiltin("lane_ab", DescBuilder{ laneOp(LaneOpCode::AB),
+        nullptr, "Lanes: A/B (the lanes that played before)", false });
+    registerBuiltin("lane_play_all", DescBuilder{ laneOp(LaneOpCode::PlayAll),
+        nullptr, "Lanes: play all", false });
+    registerBuiltin("lane_play_none", DescBuilder{ laneOp(LaneOpCode::PlayNone),
+        nullptr, "Lanes: play none", false });
+    registerBuiltin("lane_play_comp", DescBuilder{ laneOp(LaneOpCode::PlayComp),
+        nullptr, "Lanes: play only the comp lane", false });
+    registerBuiltin("lane_play_toggle", DescBuilder{ laneOp(LaneOpCode::PlayToggle),
+        nullptr, "Lanes: heard lane into / out of the play set", false });
+    registerBuiltin("lane_comp_here", DescBuilder{ laneOp(LaneOpCode::CompHere),
+        [](int) { return g_laneComping.load(); }, "Lanes: comp here", false });
+    registerBuiltin("lane_comp_area_up", DescBuilder{ laneOp(LaneOpCode::AreaUp),
+        nullptr, "Lanes: comp area one lane up", false });
+    registerBuiltin("lane_comp_area_down", DescBuilder{ laneOp(LaneOpCode::AreaDown),
+        nullptr, "Lanes: comp area one lane down", false });
+    registerBuiltin("lane_loop_here", DescBuilder{ laneOp(LaneOpCode::LoopHere),
+        nullptr, "Lanes: loop the comp area / item here", false });
+    registerBuiltin("lane_edge_prev", DescBuilder{ laneOp(LaneOpCode::EdgePrev),
+        nullptr, "Lanes: cursor to previous edge", false });
+    registerBuiltin("lane_edge_next", DescBuilder{ laneOp(LaneOpCode::EdgeNext),
+        nullptr, "Lanes: cursor to next edge", false });
 
     // Channel-encoder MODE setters for the UF1 (Frank 2026-07-31). The UF1 has
     // its OWN encoder mode (g_uf1EncoderMode), independent of the UF8's
@@ -55413,6 +55925,7 @@ void registerBindingHandlers()
     regUf1EncMode("uf1_encoder_cs_cycle",           EncoderMode::CsCycle,           "UF1: Encoder \xE2\x86\x92 CS Cycle (Favourites)");
     regUf1EncMode("uf1_encoder_bc_cycle",           EncoderMode::BcCycle,           "UF1: Encoder \xE2\x86\x92 BC Cycle (Favourites)");
     regUf1EncMode("uf1_encoder_fav_cycle",          EncoderMode::FavCycle,          "UF1: Encoder \xE2\x86\x92 Favourite Cycle (Focused Domain)");
+    regUf1EncMode("uf1_encoder_lanes",              EncoderMode::Lanes,             "UF1: Encoder \xE2\x86\x92 Lanes");
     regUf1EncMode("uf1_encoder_selset_cycle",       EncoderMode::SelsetCycle,       "UF1: Encoder \xE2\x86\x92 Selection Set Cycle");
 
     // UF1 VIEW ("hardware mode") setters — the four modes the MODE-hold menu puts
@@ -56235,6 +56748,15 @@ void registerBindingHandlers()
         [](int) { return g_encoderMode.load() == EncoderMode::FavCycle; },
         "Encoder Mode → Favourite Cycle (Focused Domain)", false
     });
+    // Fixed item lanes (plan docs/fixed-lanes-plan.md, Baustein G).
+    registerBuiltin("encoder_lanes", DescBuilder{
+        [setOrToggleMode](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            setOrToggleMode(EncoderMode::Lanes, "Lanes");
+        },
+        [](int) { return g_encoderMode.load() == EncoderMode::Lanes; },
+        "Encoder Mode → Lanes", false
+    });
     // Selection-Set cycle mode — Channel-Encoder rotation steps through
     // populated Selection-Set slots (off → 1 → 2 → … → last → off).
     // Pairs with the bindable selset_cycle builtin further down so the
@@ -56279,6 +56801,7 @@ void registerBindingHandlers()
                     if (!applySendBankStep_(step)) applyBankByOne_(step);
                     break;
                 case EncoderMode::LastParam:   applyLastParamStep_(step);  break;
+                case EncoderMode::Lanes:       laneStep_(step);            break;
             }
         },
         nullptr,
@@ -57782,12 +58305,12 @@ void registerBindingHandlers()
             "encoder_last_param", "encoder_instance", "encoder_fx_cycle",
             "encoder_fx_scroll_all", "encoder_instance_scroll_all", "encoder_fx_move",
             "encoder_cs_cycle", "encoder_bc_cycle", "encoder_fav_cycle",
-            "encoder_selset_cycle",
+            "encoder_selset_cycle", "encoder_lanes",
             "uf1_encoder_nudge", "uf1_encoder_mousewheel", "uf1_encoder_markers",
             "uf1_encoder_last_param", "uf1_encoder_instance", "uf1_encoder_fx_cycle",
             "uf1_encoder_fx_scroll_all", "uf1_encoder_instance_scroll_all",
             "uf1_encoder_fx_move", "uf1_encoder_cs_cycle", "uf1_encoder_bc_cycle",
-            "uf1_encoder_fav_cycle", "uf1_encoder_selset_cycle",
+            "uf1_encoder_fav_cycle", "uf1_encoder_selset_cycle", "uf1_encoder_lanes",
         };
         // Read press and release themselves: the content drag holds, the zoom
         // keys light their lamp while held.
@@ -58477,6 +59000,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         else if (std::strcmp(m, "Markers") == 0)       g_encoderMode.store(EncoderMode::Markers);
         else if (std::strcmp(m, "BankBy1") == 0)       g_encoderMode.store(EncoderMode::BankBy1);
         else if (std::strcmp(m, "LastParam") == 0)     g_encoderMode.store(EncoderMode::LastParam);
+        else if (std::strcmp(m, "Lanes") == 0)         g_encoderMode.store(EncoderMode::Lanes);
         // 'Nav' (legacy) + anything else = ChSelect (factory default).
         else                                           g_encoderMode.store(EncoderMode::ChSelect);
     }
@@ -58544,24 +59068,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     if (const char* v = GetExtState("rea_sixty", "uf1JogFadeCurve"); v && *v) {
         const double d = std::atof(v); if (d > 0.0) g_uf1JogFadeCurveStep.store(d);
     }
-    // Jog ring order. A malformed or short key is ignored wholesale, so the
-    // identity default stands rather than a half-applied permutation.
-    if (const char* v = GetExtState("rea_sixty", "uf1_jog_seq"); v && *v) {
-        int tmp[kUf1JogModeCount]; int n = 0; bool ok = true;
-        const char* p = v;
-        while (*p && n < kUf1JogModeCount) {
-            tmp[n++] = std::atoi(p);
-            while (*p && *p != ',') ++p;
-            if (*p == ',') ++p;
-        }
-        if (n != kUf1JogModeCount || *p) ok = false;
-        bool seen[kUf1JogModeCount] = {};
-        for (int k = 0; ok && k < kUf1JogModeCount; ++k) {
-            if (tmp[k] < 0 || tmp[k] >= kUf1JogModeCount || seen[tmp[k]]) ok = false;
-            else seen[tmp[k]] = true;
-        }
-        if (ok) for (int k = 0; k < kUf1JogModeCount; ++k) g_uf1JogSeq[k].store(tmp[k]);
-    }
+    // Jog ring order. A malformed key is ignored wholesale, so the identity
+    // default stands; a shorter one (saved before a mode was added) is kept and
+    // the new modes go behind it (EncoderRing::loadSeq).
+    g_uf1JogRing.loadSeq(GetExtState("rea_sixty", "uf1_jog_seq"));
     if (const char* v = GetExtState("rea_sixty", "uf1FadeFollow"); v && *v)
         g_uf1FadeFollow.store(std::atoi(v) != 0);
     if (const char* v = GetExtState("rea_sixty", "uf1FadeXfadeEditor"); v && *v)
@@ -58580,7 +59090,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         }
         char vkey[24]; std::snprintf(vkey, sizeof(vkey), "uf1JogVis%d", m);
         if (const char* v = GetExtState("rea_sixty", vkey); v && *v)
-            g_uf1JogVisible[m].store(std::atoi(v) != 0);
+            g_uf1JogRing.vis[m].store(std::atoi(v) != 0);
         char fkey[24]; std::snprintf(fkey, sizeof(fkey), "uf1JogFader%d", m);
         if (const char* v = GetExtState("rea_sixty", fkey); v && *v)
             g_uf1JogFader[m].store(std::atoi(v) != 0);
@@ -58757,6 +59267,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdJogModeEnvelope = plugin_register("custom_action", &g_actionJogModeEnvelope);
     g_cmdJogModeRazor    = plugin_register("custom_action", &g_actionJogModeRazor);
     g_cmdJogModeFades    = plugin_register("custom_action", &g_actionJogModeFades);
+    g_cmdJogModeLanes    = plugin_register("custom_action", &g_actionJogModeLanes);
     // UF1 encoder modes + the four hardware view modes. idStr/name come from the
     // static tables next to the declarations (the register_t only stores the
     // pointers, so they must outlive registration — string literals do).

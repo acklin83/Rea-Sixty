@@ -1,6 +1,11 @@
 # Fixed Item Lanes auf UF8 und UF1: Plan
 
-Stand 30.09.2026. Nichts davon ist gebaut. Recherche in drei Teilen (REAPER-API und Actions,
+Stand 30.09.2026, Baustand 01.10.2026: gebaut sind A (Kern), H (Kreuz pro UF8-Encoder-Modus,
+Karussell, Ring geteilt) und B + E + G (Jog-Modus Lanes, Spielsatz-Verben, Encoder-Modus Lanes),
+ohne Malen (F), ohne Bank „Lanes" (C), ohne Strips-Option (D), ohne Takes in Items. Offen aus
+G: die Wertzeile des UF8 zeigt beim Steppen noch keinen Lane-Namen (nur das UF1-Zeitfeld).
+Einstellungen (Abschnitt „Banner, Einstellungen") noch nicht als UI: „Lane steps skip comp
+lanes" ist fest an. Recherche in drei Teilen (REAPER-API und Actions,
 andere DAWs und Surfaces, unsere eigene Mechanik); Quellen stehen unten. Was als Tatsache über
 REAPER dasteht, ist gelesen (SDK-Header, ReaScript-Doku 7.81, User Guide 7.81 Kap. 8.12,
 whatsnew.txt, Action-Liste). Was nur vermutet ist, steht unter „Zuerst messen“.

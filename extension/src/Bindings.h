@@ -219,27 +219,27 @@ enum class ButtonId : uint16_t {
     // Flip / Master / primary transport 0x38..0x3E. Transport carries
     // factory defaults via uf1_transport; Flip/Master ship UNBOUND for now.
     Uf1Flip, Uf1Master, Uf1Rwd, Uf1Ffw, Uf1Stop, Uf1Play, Uf1Rec,
-    // ⇨ THE NAV CROSS, ONCE PER JOG MODE — 5 keys x 6 modes = 30 slots.
+    // ⇨ THE NAV CROSS, ONCE PER JOG MODE — 5 keys x 7 modes = 35 slots.
     // The five physical ids above stay (they are what fromUf1DeviceId returns),
     // but the dispatch remaps them to the id for the ACTIVE mode before it looks
     // up a binding. That way one key can do six different things without the
     // meaning hiding in the drain, which is what jog_nav_* used to do
     // (Frank 2026-08-06 "volle Freiheit", built 2026-08-18).
     // Order is mode-minor and MUST match enum Uf1JogMode (Playhead, Scrub,
-    // Items, Envelope, Razor, Fades) so perModeNavId(base, mode) = groupStart + mode.
+    // Items, Envelope, Razor, Fades, Lanes) so perModeNavId(base, mode) = groupStart + mode.
     // ⚠ A new mode APPENDS to each group (never inserts): the ids are persisted
     // by NAME, so the shifted values are harmless, but the arithmetic above only
     // holds while every group stays contiguous and in enum order.
     Uf1NavUpPlayhead, Uf1NavUpScrub, Uf1NavUpItems, Uf1NavUpEnvelope, Uf1NavUpRazor,
-    Uf1NavUpFades,
+    Uf1NavUpFades, Uf1NavUpLanes,
     Uf1NavLeftPlayhead, Uf1NavLeftScrub, Uf1NavLeftItems, Uf1NavLeftEnvelope, Uf1NavLeftRazor,
-    Uf1NavLeftFades,
+    Uf1NavLeftFades, Uf1NavLeftLanes,
     Uf1NavCentrePlayhead, Uf1NavCentreScrub, Uf1NavCentreItems, Uf1NavCentreEnvelope, Uf1NavCentreRazor,
-    Uf1NavCentreFades,
+    Uf1NavCentreFades, Uf1NavCentreLanes,
     Uf1NavRightPlayhead, Uf1NavRightScrub, Uf1NavRightItems, Uf1NavRightEnvelope, Uf1NavRightRazor,
-    Uf1NavRightFades,
+    Uf1NavRightFades, Uf1NavRightLanes,
     Uf1NavDownPlayhead, Uf1NavDownScrub, Uf1NavDownItems, Uf1NavDownEnvelope, Uf1NavDownRazor,
-    Uf1NavDownFades,
+    Uf1NavDownFades, Uf1NavDownLanes,
     // UF1 1/4" footswitch jacks on the back panel, the twin of the UF8's
     // Foot1/Foot2. No factory binding — user assigns via Settings → Bindings.
     // Device ids 0x00 / 0x01, the same pair the UF8 uses, in the same
@@ -280,7 +280,7 @@ enum class ButtonId : uint16_t {
     // "is a UF1 control" (Bindings.cpp builtinDeviceForId, SettingsScreen idIsUf1
     // + selIsUf1, main.cpp labelFollowsAction).
     Uf1Jog,
-    // ⇨ THE UF8 ZOOM PAD AND ENC PUSH, ONCE PER ENCODER MODE — 6 keys x 15 modes.
+    // ⇨ THE UF8 ZOOM PAD AND ENC PUSH, ONCE PER ENCODER MODE — 6 keys x 16 modes.
     // The UF1 cross does the same per jog mode (Uf1NavUpPlayhead…). The physical
     // ids (ZoomUp… ChannelPush) stay what fromUf8DeviceId returns; every dispatch,
     // LED and editor path runs them through perEncModeUf8Id for the live
@@ -296,42 +296,42 @@ enum class ButtonId : uint16_t {
     Uf8EncZoomUpChSelect, Uf8EncZoomUpNudge, Uf8EncZoomUpMousewheel, Uf8EncZoomUpInstance,
     Uf8EncZoomUpFxCycle, Uf8EncZoomUpSelsetCycle, Uf8EncZoomUpMarkers, Uf8EncZoomUpBankBy1,
     Uf8EncZoomUpLastParam, Uf8EncZoomUpFxScrollAll, Uf8EncZoomUpInstanceScrollAll,
-    Uf8EncZoomUpFxMove, Uf8EncZoomUpCsCycle, Uf8EncZoomUpBcCycle, Uf8EncZoomUpFavCycle,
+    Uf8EncZoomUpFxMove, Uf8EncZoomUpCsCycle, Uf8EncZoomUpBcCycle, Uf8EncZoomUpFavCycle, Uf8EncZoomUpLanes,
     Uf8EncZoomDownChSelect, Uf8EncZoomDownNudge, Uf8EncZoomDownMousewheel,
     Uf8EncZoomDownInstance, Uf8EncZoomDownFxCycle, Uf8EncZoomDownSelsetCycle,
     Uf8EncZoomDownMarkers, Uf8EncZoomDownBankBy1, Uf8EncZoomDownLastParam,
     Uf8EncZoomDownFxScrollAll, Uf8EncZoomDownInstanceScrollAll, Uf8EncZoomDownFxMove,
-    Uf8EncZoomDownCsCycle, Uf8EncZoomDownBcCycle, Uf8EncZoomDownFavCycle,
+    Uf8EncZoomDownCsCycle, Uf8EncZoomDownBcCycle, Uf8EncZoomDownFavCycle, Uf8EncZoomDownLanes,
     Uf8EncZoomLeftChSelect, Uf8EncZoomLeftNudge, Uf8EncZoomLeftMousewheel,
     Uf8EncZoomLeftInstance, Uf8EncZoomLeftFxCycle, Uf8EncZoomLeftSelsetCycle,
     Uf8EncZoomLeftMarkers, Uf8EncZoomLeftBankBy1, Uf8EncZoomLeftLastParam,
     Uf8EncZoomLeftFxScrollAll, Uf8EncZoomLeftInstanceScrollAll, Uf8EncZoomLeftFxMove,
-    Uf8EncZoomLeftCsCycle, Uf8EncZoomLeftBcCycle, Uf8EncZoomLeftFavCycle,
+    Uf8EncZoomLeftCsCycle, Uf8EncZoomLeftBcCycle, Uf8EncZoomLeftFavCycle, Uf8EncZoomLeftLanes,
     Uf8EncZoomRightChSelect, Uf8EncZoomRightNudge, Uf8EncZoomRightMousewheel,
     Uf8EncZoomRightInstance, Uf8EncZoomRightFxCycle, Uf8EncZoomRightSelsetCycle,
     Uf8EncZoomRightMarkers, Uf8EncZoomRightBankBy1, Uf8EncZoomRightLastParam,
     Uf8EncZoomRightFxScrollAll, Uf8EncZoomRightInstanceScrollAll, Uf8EncZoomRightFxMove,
-    Uf8EncZoomRightCsCycle, Uf8EncZoomRightBcCycle, Uf8EncZoomRightFavCycle,
+    Uf8EncZoomRightCsCycle, Uf8EncZoomRightBcCycle, Uf8EncZoomRightFavCycle, Uf8EncZoomRightLanes,
     Uf8EncZoomCenterChSelect, Uf8EncZoomCenterNudge, Uf8EncZoomCenterMousewheel,
     Uf8EncZoomCenterInstance, Uf8EncZoomCenterFxCycle, Uf8EncZoomCenterSelsetCycle,
     Uf8EncZoomCenterMarkers, Uf8EncZoomCenterBankBy1, Uf8EncZoomCenterLastParam,
     Uf8EncZoomCenterFxScrollAll, Uf8EncZoomCenterInstanceScrollAll, Uf8EncZoomCenterFxMove,
-    Uf8EncZoomCenterCsCycle, Uf8EncZoomCenterBcCycle, Uf8EncZoomCenterFavCycle,
+    Uf8EncZoomCenterCsCycle, Uf8EncZoomCenterBcCycle, Uf8EncZoomCenterFavCycle, Uf8EncZoomCenterLanes,
     Uf8EncChannelPushChSelect, Uf8EncChannelPushNudge, Uf8EncChannelPushMousewheel,
     Uf8EncChannelPushInstance, Uf8EncChannelPushFxCycle, Uf8EncChannelPushSelsetCycle,
     Uf8EncChannelPushMarkers, Uf8EncChannelPushBankBy1, Uf8EncChannelPushLastParam,
     Uf8EncChannelPushFxScrollAll, Uf8EncChannelPushInstanceScrollAll, Uf8EncChannelPushFxMove,
-    Uf8EncChannelPushCsCycle, Uf8EncChannelPushBcCycle, Uf8EncChannelPushFavCycle,
+    Uf8EncChannelPushCsCycle, Uf8EncChannelPushBcCycle, Uf8EncChannelPushFavCycle, Uf8EncChannelPushLanes,
 };
 
 // How many jog modes the nav block above is sized for. main.cpp owns the real
 // enum (Uf1JogMode) and static_asserts that the two agree — Bindings.h cannot
 // see it, and a silent mismatch would map keys onto the wrong mode's ids.
-constexpr int kUf1JogModeCountForNav = 6;
+constexpr int kUf1JogModeCountForNav = 7;
 
 // How many UF8 encoder modes the per-mode zoom-pad block above is sized for.
 // main.cpp owns the real enum (EncoderMode) and static_asserts that the two agree.
-constexpr int kUf8EncModeCountForKeys = 15;
+constexpr int kUf8EncModeCountForKeys = 16;
 
 // The per-encoder-mode id for one of the six UF8 keys that follow the encoder
 // mode (the zoom pad and ENC PUSH). `mode` is an EncoderMode value. Out of range,
