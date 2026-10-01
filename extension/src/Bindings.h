@@ -675,6 +675,10 @@ enum class DynamicBankKind : uint8_t {
     // last sent from here, because TotalMix answers nothing on /layout/load.
     RmeSnapshots = 10,
     RmeLayouts   = 11,
+    // The eight Selection Set slots (Frank 2026-10-01, SelsetBank.h). Key N is slot
+    // N; push recalls (the surface filter), long saves into an EMPTY slot, Shift
+    // saves over, Cmd selects the set's tracks, Ctrl clears.
+    SelectionSets = 12,
 };
 
 // ⛔ THE PARSER'S UPPER BOUND LIVES HERE, NOT IN THE PARSER. Both loaders check
@@ -682,10 +686,11 @@ enum class DynamicBankKind : uint8_t {
 // a new kind was accepted by the editor, written to disk, and then silently
 // dropped on the next load — the bank came back static and nothing said why.
 // Adding a kind means moving this line, and only this line.
-constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::RmeLayouts;
+constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::SelectionSets;
 
 // ⇨ DOES THIS KIND SPEND THE MODIFIERS ON ITS OWN GESTURES?
-// Only the FX bank does. Its five key gestures are Push, +Shift, +Cmd, +Ctrl and
+// The FX bank and the Selection Sets bank do (Shift saves over, Cmd selects, Ctrl
+// clears, SelsetBank.h). Its five key gestures are Push, +Shift, +Cmd, +Ctrl and
 // Long-press (drawFxBankGestures_), so on an FX bank a modifier is already
 // spoken for and a second set would fight it — that is the decision behind
 // "a dynamic bank has no Shift set" (Frank 2026-08-18).
@@ -699,7 +704,7 @@ constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::RmeLayouts;
 // Plain already shows and fire nothing (Frank 2026-09-07, on the OBS bank).
 constexpr bool dynamicKindUsesModifiers(DynamicBankKind k)
 {
-    return k == DynamicBankKind::FxBank;
+    return k == DynamicBankKind::FxBank || k == DynamicBankKind::SelectionSets;
 }
 
 struct UserQuickSubBank {

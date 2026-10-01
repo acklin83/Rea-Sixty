@@ -826,6 +826,11 @@ if(NOT WIN32)
     target_include_directories(test_vca_spill PRIVATE src)
     add_test(NAME vca_spill COMMAND test_vca_spill)
 
+    # The "Selection Sets" dynamic bank: labels, lamps, gestures (SelsetBank.h).
+    add_executable(test_selset_bank tests/test_selset_bank.cpp)
+    target_include_directories(test_selset_bank PRIVATE src)
+    add_test(NAME selset_bank COMMAND test_selset_bank)
+
     add_executable(test_uc1_protocol tests/test_uc1_protocol.cpp src/UC1Protocol.cpp)
     target_include_directories(test_uc1_protocol PRIVATE src)
     add_test(NAME uc1_protocol COMMAND test_uc1_protocol)

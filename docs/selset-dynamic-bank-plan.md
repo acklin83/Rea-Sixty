@@ -1,6 +1,6 @@
 # Dynamische Bank „Selection Sets“ (UF8 und UF1): Plan
 
-Stand 01.10.2026. Nicht gebaut. Was über den Code dasteht, ist in dieser Sitzung nachgelesen
+Stand 01.10.2026. **Gebaut** (SelsetBank.h, ctest selset_bank). Was über den Code dasteht, ist in dieser Sitzung nachgelesen
 (Datei:Zeile).
 
 ## Was es heute gibt
@@ -55,8 +55,8 @@ Filter; Cmd gibt das andere Laden dazu, das man zum Bearbeiten braucht: die Spur
 ausgewählt haben.
 
 **Rückmeldung beim Speichern:** Banner „Selection Set • 3 saved“ (bzw. „cleared“), auf dem
-UF1 zusätzlich kurz „SAVED 3“ im Zeitfeld (`uf1FlashTimecode_`; die 7-Segment-Schrift kann
-K, M, V, W, X nicht, „SAVED“ und „CLEAR“ gehen). Die Lampe springt von dunkel auf gedimmt.
+UF1 zusätzlich kurz „STORED 3“ im Zeitfeld (`uf1FlashTimecode_`; die 7-Segment-Schrift kann
+K, M, V, W, X nicht, darum nicht „SAVED“). Die Lampe springt von dunkel auf gedimmt.
 
 **Bankname:** „Selection Sets“ in Settings, kurz „SETS“ (`dynKindShort_`,
 SettingsScreen.cpp:1374; UF1-Bankname ebenfalls „SETS“).

@@ -1367,6 +1367,7 @@ Right-click the bank's cell in the matrix and open **Dynamic bank**. The kinds a
 | `BC Favourites` | The eight Bus Compressor favourites, the same way |
 | `Hue Scenes` | Your eight Hue scene slots, each key in its scene's colour |
 | `OBS Scenes` | The scenes OBS is showing, by name, the one on air lit |
+| `Selection Sets` | Selection Set slots 1–8, by name, the recalled one lit, the used ones dim |
 
 The three favourite kinds differ in one thing only. The first follows the focus, which is what you want when one bank should serve both. The other two do not, so a rig can carry its channel strips on one bank and its bus comps on another and both are always what they say. All three read the plug-in's short name onto the key, live, and light the key that is on the track.
 
@@ -1375,7 +1376,7 @@ The choice is stored per bank, so each of the six banks in a set can be dynamic 
 A dynamic bank announces itself in three places, so you never edit slots that cannot fire:
 
 - The bank's selector key on the schematic (V-POT / Soft 1-5) carries an **amber tick** in its top-right corner. The matrix cell itself stays plain.
-- The eight scribble strips above it read the bank's kind (`FX`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`, `HUE`, `OBS`) rather than the stored slot labels, because those labels never reach the hardware while the bank is dynamic.
+- The eight scribble strips above it read the bank's kind (`FX`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`, `HUE`, `OBS`, `SETS`) rather than the stored slot labels, because those labels never reach the hardware while the bank is dynamic.
 - Clicking any of the eight keys shows what the bank computes instead of a slot editor, with the same **Dynamic bank** dropdown and the same settings the cell shows, so you can switch it back to static, or tune the palette or the FX paging, without hunting for the cell.
 
 On Sets 8 and 9 it depends on the page. A dynamic bank computes all eight keys, so it can only go where the plug-in claims none of them: the bus comp's four empty pages take one, the pages SSL fills do not. Every page of the other seven sets can.
@@ -1837,6 +1838,18 @@ Recalling a slot snaps the surface to strip 0 = first channel of the set, so lar
 ### Driving from hardware
 
 Bind buttons to **Recall Selection Slot (toggle)** with param 1..8, and **Save current REAPER selection to slot** with param 1..8, via Settings → Bindings.
+
+**All eight on one bank.** Give a soft-key bank the dynamic kind **Selection Sets**. On the UF8 the eight top keys are slots 1 to 8; on the UF1 the four keys show 1 to 4, and a long press on ◄ / ► turns to 5 to 8. A key reads the set's name, or `Set 3` for an unnamed one and `Grp 12` for a group slot. Lit is the recalled set, dim a used slot, dark an empty one.
+
+| Gesture | What it does |
+|---|---|
+| Push | Recall the set, press again to switch it off (the surface filter, as **Recall Selection Slot**) |
+| Hold | Store the current REAPER selection, into an **empty** slot only |
+| Shift + push | Store the current selection over what is in the slot |
+| Cmd + push | Select the set's tracks in REAPER, without the filter |
+| Ctrl + push | Clear the slot |
+
+Storing from the surface leaves the name empty; name the set under Settings, Selection Sets. The mode banner says what happened (`Selection Set 3 • stored`, `cleared`, `selected`), and the UF1's time field flashes `STORED 3`, `SELECT 3` or `CLEAR 3`. Hold with no track selected stores nothing and says so. The slots are the same ones as in the pane above and follow the project tab.
 
 \newpage
 

@@ -20,6 +20,10 @@ Codename and date come with the release. Everything below is on main after v0.6.
 - The double press moved into the SHORT column, next to the description of the built-in select.
 - On the UF1 in REC and REC + MON, long-press `SEL` does nothing, as on the UF8. The double press still fires.
 
+## Selection Sets on a bank
+
+**A soft-key bank of the kind Selection Sets puts slots 1 to 8 on the keys**, on the UF8's eight top keys and on the UF1's four (two pages). Names on the keys, the recalled set lit, used slots dim. Push recalls, hold stores the current selection into an empty slot, Shift stores over, Cmd selects the set's tracks in REAPER, Ctrl clears. The banner and the UF1's time field say what was stored or cleared.
+
 ## Folders
 
 - **Surface mirrors: MCP follows a folder collapsed in the Mixer.** Its children leave the surface. The Mixer shows the folder button after a right-click on an empty spot and *Clickable icon for folder tracks to show/hide children*. REAPER itself reports those children as visible, which is why the surface kept them before.
@@ -55,4 +59,5 @@ Codename and date come with the release. Everything below is on main after v0.6.
 - Selection Set group slots and UF1 razor grouping reach all 128 groups (REAPER 7.23+)
 - REAPER action for Folder Mode
 - Mode banner names the UF1 RME side-car
+- Dynamic bank "Selection Sets": slots 1-8 on the keys; push recalls, hold stores into an empty slot, Shift stores over, Cmd selects, Ctrl clears
 ```

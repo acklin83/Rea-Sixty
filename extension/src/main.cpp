@@ -100,6 +100,7 @@
 #include "JogGrid.h"
 #include "McpFolderCollapse.h"
 #include "VcaSpill.h"
+#include "SelsetBank.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
 #endif
@@ -524,6 +525,11 @@ bool bindingsPickGate_(int tab, uf8::bindings::ButtonId bid, uint8_t rawId,
     held[rawId] = true;
     return true;
 }
+
+// Defined with the Settings bridges, outside the anonymous namespace below, and
+// called from inside it (the Selection Sets bank's clear). Declared HERE, at global
+// scope: a declaration inside the namespace would name a second, undefined function.
+void reasixty_selsetClear(int slot1to8);
 
 namespace {
 
@@ -3748,6 +3754,35 @@ void saveCurrentSelectionToSlot_(int slot1to8) {
     if (g_selsetActive.load() == slot1to8) refreshActiveSelsetGuids_();
     g_bankDirty.store(true);
 }
+
+// ONE answer to "is there anything in this slot": a name, tracks, or a group
+// binding. The Selset Cycle walks these, the Selection Sets bank lights them.
+inline bool selsetPopulated_(const SelSet& s) {
+    return !s.name.empty() || !s.guids.empty() || s.type == SelSetType::Group;
+}
+
+// Select the slot's tracks in REAPER (and only those) without recalling the
+// filter: the Selection Sets bank's Cmd gesture (Frank 2026-10-01). Main thread.
+void selsetSelectTracks_(int slot1to8) {
+    if (slot1to8 < 1 || slot1to8 > 8) return;
+    const SelSet& s = g_selsets[slot1to8 - 1];
+    const std::unordered_set<std::string> guids(s.guids.begin(), s.guids.end());
+    PreventUIRefresh(1);
+    const int n = CountTracks(nullptr);
+    for (int i = 0; i < n; ++i) {
+        MediaTrack* tr = GetTrack(nullptr, i);
+        if (!tr) continue;
+        const bool in = (s.type == SelSetType::Group)
+                      ? trackInGroup_(tr, s.groupIdx)
+                      : guids.count(trackGuidStr_(tr)) != 0;
+        SetTrackSelected(tr, in);
+    }
+    PreventUIRefresh(-1);
+}
+
+// Banner for the Selection Sets bank: (op << 8) | slot, op 1 stored, 2 cleared,
+// 3 selected, 4 nothing selected to store. Consumed by the mode banner block.
+std::atomic<int> g_selsetBankAnnounce{0};
 
 // Temp-selset handler forward decls — bodies live further down in the
 // same anonymous namespace (~line 13569). Declared at namespace scope
@@ -8630,6 +8665,23 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
         info.led     = (nm == om.currentScene()) ? 2 : 1;
         return info;
     }
+    // ⛔ SELECTION SETS, same place, same reason: a slot belongs to the project,
+    // not to the focused track. The rule lives in SelsetBank.h.
+    if (kind == DK::SelectionSets) {
+        const SelSet& s = g_selsets[slot];
+        selbank::Slot v;
+        v.populated = selsetPopulated_(s);
+        v.group     = (s.type == SelSetType::Group);
+        v.groupIdx  = s.groupIdx;
+        v.active    = (g_selsetActive.load() == slot + 1);
+        v.name      = s.name;
+        const selbank::Key k = selbank::key(v, slot + 1);
+        info.present = k.present;
+        info.label   = k.label;
+        info.led     = k.led;
+        if (k.present) { info.hasRgb = true; info.rgb = 0xFFFFFFu; }   // white, like RME
+        return info;
+    }
     // ⛔ AND TOTALMIX' SNAPSHOTS AND LAYOUTS, same place, same reason. The rule
     // lives in RmeSoftKeys since 25.09.2026, shared with ORC.
     if (kind == DK::RmeSnapshots || kind == DK::RmeLayouts) {
@@ -8799,6 +8851,7 @@ static int dynamicBankItemCountUf1_(uf8::bindings::DynamicBankKind kind,
     if (kind == DK::ObsScenes)
         return static_cast<int>(reasixty::obs::manager().scenes().size());
     if (kind == DK::RmeSnapshots || kind == DK::RmeLayouts) return 8;
+    if (kind == DK::SelectionSets) return 8;
     return 0;
 }
 
@@ -9104,6 +9157,48 @@ static void applyDynBankRmeOp_(uf8::bindings::DynamicBankKind kind, int slot,
 }
 
 // Main-thread executor for a UF8 dynamic bank press (drained in onTimer).
+// Selection Sets bank press (SelsetBank.h). Runs the paths that already exist:
+// the recall request selset_recall posts, the save selset_save runs, the clear
+// Settings runs. Main thread.
+static void applyDynBankSelsetOp_(int slot0, int gesture)
+{
+    if (slot0 < 0 || slot0 >= 8) return;
+    const int n1 = slot0 + 1;
+    char fl[16];
+    switch (selbank::op(gesture, selsetPopulated_(g_selsets[slot0]))) {
+        case selbank::Op::Recall:
+            g_selsetActivateRequest.store(g_selsetActive.load() == n1 ? -1 : n1);
+            g_pageDirty.store(true);
+            break;
+        case selbank::Op::Save:
+            if (CountSelectedTracks(nullptr) == 0) {   // nothing to store, keep the slot
+                g_selsetBankAnnounce.store((4 << 8) | n1);
+                break;
+            }
+            saveCurrentSelectionToSlot_(n1);
+            g_selsetBankAnnounce.store((1 << 8) | n1);
+            // Seven segments: no K, M, V, W or X, so "STORED", not "SAVED".
+            std::snprintf(fl, sizeof(fl), "STORED %d", n1);
+            uf1FlashTimecode_(fl, 1200);
+            break;
+        case selbank::Op::Select:
+            selsetSelectTracks_(n1);
+            g_selsetBankAnnounce.store((3 << 8) | n1);
+            std::snprintf(fl, sizeof(fl), "SELECT %d", n1);
+            uf1FlashTimecode_(fl, 1200);
+            break;
+        case selbank::Op::Clear:
+            reasixty_selsetClear(n1);
+            g_selsetBankAnnounce.store((2 << 8) | n1);
+            std::snprintf(fl, sizeof(fl), "CLEAR %d", n1);
+            uf1FlashTimecode_(fl, 1200);
+            break;
+        case selbank::Op::None:
+            break;
+    }
+    g_bankDirty.store(true);
+}
+
 static void applyDynBankReq_(uint32_t enc)
 {
     const auto kind    = static_cast<uf8::bindings::DynamicBankKind>(
@@ -9130,6 +9225,7 @@ static void applyDynBankReq_(uint32_t enc)
         applyDynBankRmeOp_(kind, slot, gesture);
         return;
     }
+    if (kind == DK::SelectionSets) { applyDynBankSelsetOp_(slot, gesture); return; }
     MediaTrack* tr = dynBankContextTrack_();
     if (!tr) return;
     switch (kind) {
@@ -9181,6 +9277,7 @@ static void applyDynBankUf1_(uf8::bindings::DynamicBankKind kind,
         applyDynBankRmeOp_(kind, absIdx, gesture);
         return;
     }
+    if (kind == DK::SelectionSets) { applyDynBankSelsetOp_(absIdx, gesture); return; }
     if (!tr) return;
     switch (kind) {
         case DK::FxBank:
@@ -10899,12 +10996,8 @@ void applySelsetCycle_(int step)
     // check so a freshly-cleared slot doesn't show up in the cycle.
     int populated[8];
     int popCount = 0;
-    for (int i = 1; i <= 8; ++i) {
-        const SelSet& s = g_selsets[i - 1];
-        const bool isEmpty = s.name.empty() && s.guids.empty()
-                          && s.type == SelSetType::Snapshot;
-        if (!isEmpty) populated[popCount++] = i;
-    }
+    for (int i = 1; i <= 8; ++i)
+        if (selsetPopulated_(g_selsets[i - 1])) populated[popCount++] = i;
     if (popCount == 0) return;     // nothing to cycle to
     const int total = popCount + 1;       // +1 for "off"
     const int cur = g_selsetActive.load();
@@ -32455,6 +32548,7 @@ static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod,
         case DynamicBankKind::ObsScenes:    return withSet("OBS");
         case DynamicBankKind::RmeSnapshots: return withSet("Snapshots");
         case DynamicBankKind::RmeLayouts:   return withSet("Layouts");
+        case DynamicBankKind::SelectionSets: return withSet("Sel Sets");
         default: break;
     }
     // ⇨ THE FALLBACK NAMES THE SET AND THE BANK. The UF1 falls back to "SOFT 3"
@@ -32544,6 +32638,8 @@ static std::string uf1BankDisplayName_(int bank, int mod)
         // No K, M, V, W or X in either word; 9 and 7 of the ten cells.
         case DynamicBankKind::RmeSnapshots: return "SNAPSHOTS";
         case DynamicBankKind::RmeLayouts:   return "LAYOUTS";
+        // S E T S, all in the font.
+        case DynamicBankKind::SelectionSets: return "SETS";
         default: break;
     }
     char b[16];
@@ -44706,6 +44802,7 @@ void onTimerBody_()
         // Consumed unconditionally: a capture announced on the tick a project
         // loads would otherwise sit in the flag and fire much later.
         const int  scap = g_stickyCaptureAnnounce.exchange(0);
+        const int  ssba = g_selsetBankAnnounce.exchange(0);
         const bool fp   = g_tempSelsetActive.load();
         const int  fsc  = g_focusSetScope.load();
         const bool ufl  = g_uf1Flip.load();
@@ -44779,6 +44876,16 @@ void onTimerBody_()
             // the arm simply goes dark and a timeout looks like a capture.
             if (scap == 1)      chg.push_back("Sticky \xE2\x80\xA2 Pinned");
             else if (scap == 2) chg.push_back("Sticky \xE2\x80\xA2 Paired");
+            // The Selection Sets bank's stores and clears, which leave nothing
+            // else on screen to say they happened.
+            if (ssba != 0) {
+                static const char* const kSsOp[] = { "", "stored", "cleared",
+                                                     "selected", "nothing selected" };
+                const int op = (ssba >> 8) & 0xFF;
+                if (op >= 1 && op <= 4)
+                    chg.push_back("Selection Set " + std::to_string(ssba & 0xFF)
+                                  + " \xE2\x80\xA2 " + kSsOp[op]);
+            }
             // Focus Set: pin + scope.
             if (fp != mbFocusPin)   { chg.push_back(std::string("Focus Set \xE2\x80\xA2 ") + (fp ? "Pinned" : "Off")); mbFocusPin = fp; }
             if (fsc != mbFocusScope){ const char* n = (fsc == 1) ? "UF1" : (fsc == 2) ? "UF8" : "Both";

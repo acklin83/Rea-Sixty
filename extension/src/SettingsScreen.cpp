@@ -1341,6 +1341,7 @@ static const char* dynKindLabel_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::ObsScenes:   return "OBS Scenes";
         case DynamicBankKind::RmeSnapshots: return "TotalMix Snapshots";
         case DynamicBankKind::RmeLayouts:  return "TotalMix Layouts";
+        case DynamicBankKind::SelectionSets: return "Selection Sets";
         default:                           return "Off (static slots)";
     }
 }
@@ -1371,6 +1372,13 @@ static const char* dynKindLabelForSet_(uf8::bindings::DynamicBankKind k,
 }
 
 // Same, short enough for a scribble cell (the strip LCDs are ~72 px wide).
+// The Selection Sets bank's fixed gestures (SelsetBank.h), shown in all three
+// bank editors (UF8 bank cell, UF8 slot, UF1 bank). One string, so they agree.
+static const char* const kSelsetBankGestures_ =
+    "Push recalls the set (press again to switch it off). Hold: store the "
+    "REAPER selection into an empty slot. Shift: store over. Cmd: select "
+    "the set's tracks. Ctrl: clear the slot.";
+
 static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
 {
     using uf8::bindings::DynamicBankKind;
@@ -1386,6 +1394,7 @@ static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::ObsScenes:   return "OBS";
         case DynamicBankKind::RmeSnapshots: return "SNAPSHOTS";
         case DynamicBankKind::RmeLayouts:  return "LAYOUTS";
+        case DynamicBankKind::SelectionSets: return "SETS";
         default:                           return "";
     }
 }
@@ -5456,6 +5465,10 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                         "Shift / Cmd / Ctrl / long-press run the FX-key "
                         "gestures instead. They are set on the bank cell.");
                 }
+                if (dynKind == DynamicBankKind::SelectionSets) {
+                    ImGui_TextDisabled(ctx,
+                    kSelsetBankGestures_);
+                }
             } else if (dynOwn) {
                 ImGui_TextDisabled(ctx,
                     "This set has a bank of its own, so its 8 keys come from "
@@ -5485,6 +5498,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                     DynamicBankKind::CsFavourites, DynamicBankKind::BcFavourites,
                     DynamicBankKind::ObsScenes,
                     DynamicBankKind::RmeSnapshots, DynamicBankKind::RmeLayouts,
+                    DynamicBankKind::SelectionSets,
                 };
                 for (const auto k : kKinds) {
                     if (!dynKindOffered_(k, dynMine)) continue;
@@ -6249,6 +6263,9 @@ static void drawDynamicBankSettings_(ImGui_Context* ctx, int layer, int quick,
                               != DynamicBankKind::None);
         } else if (curKind == DynamicBankKind::TrackColours) {
             drawTrackColourPalette_(ctx);
+        } else if (curKind == DynamicBankKind::SelectionSets) {
+            ImGui_TextDisabled(ctx,
+                kSelsetBankGestures_);
         }
     }
 }
@@ -6652,6 +6669,7 @@ static void renderBankMatrixContextMenu_(ImGui_Context* ctx)
             { DynamicBankKind::ObsScenes,    "OBS Scenes" },
             { DynamicBankKind::RmeSnapshots, "TotalMix Snapshots" },
             { DynamicBankKind::RmeLayouts,   "TotalMix Layouts" },
+            { DynamicBankKind::SelectionSets, "Selection Sets" },
         };
         const DynamicBankKind cur =
             getSubBankDynamic(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod);
@@ -7080,6 +7098,7 @@ static void renderUf1BankMatrixContextMenu_(ImGui_Context* ctx)
             DynamicBankKind::BcFavourites, DynamicBankKind::HueScenes,
             DynamicBankKind::ObsScenes,
             DynamicBankKind::RmeSnapshots, DynamicBankKind::RmeLayouts,
+            DynamicBankKind::SelectionSets,
         };
         const DynamicBankKind cur = getUf1SoftBankDynamic(b, mod);
         for (const auto k : kKinds) {
@@ -8342,6 +8361,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 { DynamicBankKind::ObsScenes,    "OBS Scenes" },
                 { DynamicBankKind::RmeSnapshots, "TotalMix Snapshots" },
                 { DynamicBankKind::RmeLayouts,   "TotalMix Layouts" },
+                { DynamicBankKind::SelectionSets, "Selection Sets" },
             };
             // This set's OWN kind — "Off" on a set means "take Plain's bank".
             const DynamicBankKind curKind =
@@ -8405,6 +8425,11 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 }
                 if (curKind == DynamicBankKind::CsFavourites
                  || curKind == DynamicBankKind::BcFavourites) {
+                    ImGui_Spacing(ctx);
+                }
+                if (curKind == DynamicBankKind::SelectionSets) {
+                    ImGui_TextDisabled(ctx,
+                    kSelsetBankGestures_);
                     ImGui_Spacing(ctx);
                 }
                 if (curKind == DynamicBankKind::TrackColours) {
