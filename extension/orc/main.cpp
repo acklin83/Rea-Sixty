@@ -31,6 +31,7 @@
 //   orc/OrcSettingsWindow.mm  the settings page. AppKit.
 //
 
+#include "OrcLog.h"
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -98,7 +99,7 @@ int main()
         uf8::bindings::setHost(std::move(bh));
     }
     uf8::bindings::load();
-    std::printf("ORC: bindings from %s\n", uf8::bindings::configPath().c_str());
+    orc::logLine("ORC: bindings from %s\n", uf8::bindings::configPath().c_str());
 
     // The link's settings, ORC's own copy of them. ⛔ Not the extension's file:
     // one writer per file (Frank, 2026-09-25). See OrcConfig.h.
@@ -121,7 +122,7 @@ int main()
     // (see Surface.cpp, the handover). The surface loop starts the link the
     // moment REAPER lets go.
     if (!orc::reaperWantsUf1()) rme::manager().start();
-    std::printf("ORC: TotalMix on %s, send %d, receive %d. Settings in %s\n",
+    orc::logLine("ORC: TotalMix on %s, send %d, receive %d. Settings in %s\n",
                 cfg.host.c_str(), cfg.sendPort, cfg.recvPort,
                 orc::rmeConfigPath().c_str());
     std::fflush(stdout);
@@ -134,6 +135,6 @@ int main()
 
     surface.stop();
     rme::manager().stop();
-    std::printf("ORC: closed.\n");
+    orc::logLine("ORC: closed.\n");
     return 0;
 }
