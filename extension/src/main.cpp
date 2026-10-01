@@ -101,6 +101,8 @@
 #include "McpFolderCollapse.h"
 #include "VcaSpill.h"
 #include "SelsetBank.h"
+#include "EncoderRing.h"
+#include "LaneModel.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
 #endif
@@ -6580,6 +6582,51 @@ std::atomic<EncoderMode> g_uf1EncoderMode{EncoderMode::ChSelect};
 constexpr int kEncoderModeCount =
     static_cast<int>(EncoderMode::FavCycle) + 1;
 
+// ⇨ THE UF8 ZOOM PAD AND ENC PUSH RESOLVE THROUGH THE ENCODER MODE (Baustein H,
+// docs/fixed-lanes-plan.md). Same construction as the UF1 cross per jog mode:
+// fromUf8DeviceId returns the physical id, and every path that looks a binding
+// up for one of these six keys (dispatch, Settings pick, LED) runs it through
+// here first. The load fills every per-mode slot from the key's own binding on
+// its layer (fillDerivedUf8EncSlots_); an empty one still falls back to the
+// physical key, like the UF1's per-view keys, so a slot nobody filled never
+// leaves the key dead. Layer via layerForButton, the rule dispatch applies
+// (memory uf8-global-led-binding-rules: the raw quick layer is the wrong one).
+static_assert(kEncoderModeCount == uf8::bindings::kUf8EncModeCountForKeys,
+              "add the encoder mode to the per-mode zoom-pad ButtonId block too");
+static uf8::bindings::ButtonId uf8RemapForEncMode_(uf8::bindings::ButtonId id)
+{
+    const uf8::bindings::ButtonId v =
+        uf8::bindings::perEncModeUf8Id(id, static_cast<int>(g_encoderMode.load()));
+    if (v == id) return id;
+    return uf8::bindings::bindingHasAnyAction(
+               uf8::bindings::getBinding(uf8::bindings::layerForButton(v), v))
+         ? v : id;
+}
+
+// ⇨ ENC PUSH HELD + ENCODER = PICK THE UF8 ENCODER MODE, the twin of MODE held
+// on the UF1 (Frank 30.09.2026: "sehr geil, behalten"). The push no longer fires
+// on the press: whether it was a pick or a press is only known when the key
+// comes up. Turned while held = a pick, the release fires nothing; not turned =
+// the push of the live mode fires on the release (long slot past the 0.5 s
+// threshold, else the short press). The flags are set on the input thread, the
+// turn too (at the enqueue), so a fast turn-and-release cannot race the drain.
+std::atomic<bool>    g_uf8EncPushHeld{false};
+std::atomic<bool>    g_uf8EncPushTurned{false};
+std::atomic<int64_t> g_uf8EncPushDownMs{0};
+// The UF8's own ring, separate from the UF1's but the same code (EncoderRing.h).
+// ExtState "uf8_enc_seq" / "uf8_enc_vis". Factory: every mode, enum order, all
+// visible (Frank 30.09.2026).
+encring::Ring<kEncoderModeCount> g_uf8EncRing;
+void uf8EncoderStepVisible_(int delta);   // with the mode setter, near kUf8EncActions
+// The picker shows on the scribbles once it is clearly a pick: the first detent,
+// or ENC PUSH held past 0.4 s. A plain tap (open the plug-in window) must not
+// flash eight scribbles every time.
+inline bool uf8EncPickerShown_()
+{
+    return g_uf8EncPushHeld.load()
+        && (g_uf8EncPushTurned.load() || nowMs_() - g_uf8EncPushDownMs.load() >= 400);
+}
+
 // The encoder modes the UF1 PICKER offers, in scroll order. BankBy1 is EXCLUDED —
 // it drives applyBankByOne_ (shift the UF8 8-track fader bank by one strip), which
 // is meaningless on the single-strip UF1; its send-window paging is already covered
@@ -6860,7 +6907,7 @@ std::atomic<bool>   g_uf1JogVisible[kUf1JogModeCount];
 // replaced the Item Volume side-car. ExtState "uf1JogFader<m>", default off.
 std::atomic<bool>   g_uf1JogFader[kUf1JogModeCount];
 // …and the ORDER they come in. Same shape as the encoder ring
-// (g_uf1EncoderSeq): a PERMUTATION of the mode ints, position to mode, so the
+// (g_uf1EncRing.seq): a PERMUTATION of the mode ints, position to mode, so the
 // SCRUB-held picker walks the order you set instead of the order the enum
 // happens to be written in (Frank 2026-08-20: "die kommen ja in einer
 // Reihenfolge daher"). ExtState "uf1_jog_seq", CSV. Default = enum order, which
@@ -6933,9 +6980,8 @@ inline const char* uf1JogModeHdr_(Uf1JogMode m)
 
 // --- Runtime, user-editable UF1 encoder-mode RING (order + visibility) ------
 // Replaces the hardcoded kUf1EncoderModes[] scroll for the MODE-hold picker.
-//   g_uf1EncoderSeq[]     = a PERMUTATION of every mode int 0..kEncoderModeCount-1,
-//                           giving the display / scroll order (position -> mode).
-//   g_uf1EncoderVisible[] = per-mode enabled flag, indexed by EncoderMode int.
+// The ring itself (order, visibility, step, load) is EncoderRing.h, shared with
+// the UF8's ring (ENC PUSH held + encoder) so the two cannot drift apart.
 // Persisted to ExtState "uf1_enc_seq" / "uf1_enc_vis" and edited in
 // Settings -> Bindings -> UF1 (channel encoder). Defaults preserve today's ring:
 // the kUf1EncoderModes order with BankBy1 appended LAST and hidden, so out of the
@@ -6943,21 +6989,22 @@ inline const char* uf1JogModeHdr_(Uf1JogMode m)
 // BankBy1 (or hide anything). Main-thread only (picker drain + Settings both run
 // on the main thread); atomics keep the surface-thread reads (uf1EncoderDispatch_
 // reads only g_uf1EncoderMode, not these) safe.
-std::atomic<int>  g_uf1EncoderSeq[kEncoderModeCount];
-std::atomic<bool> g_uf1EncoderVisible[kEncoderModeCount];
+encring::Ring<kEncoderModeCount> g_uf1EncRing;
 
 // Fill the ring with the factory default (kUf1EncoderModes order + BankBy1 last,
 // visible for all except BankBy1). Idempotent; run once before the ExtState
-// restore so a missing / malformed key falls back to today's behaviour.
+// restore so a missing / malformed key falls back to today's behaviour. A mode
+// added to the enum and not in kUf1EncoderModes goes behind BankBy1, visible.
 inline void uf1EncoderRingDefaults_()
 {
+    int order[kUf1EncoderModeCount + 1];
     for (int k = 0; k < kUf1EncoderModeCount; ++k)
-        g_uf1EncoderSeq[k].store(static_cast<int>(kUf1EncoderModes[k]));
+        order[k] = static_cast<int>(kUf1EncoderModes[k]);
     // BankBy1 is the one mode excluded from kUf1EncoderModes -> append it last.
-    g_uf1EncoderSeq[kUf1EncoderModeCount].store(
-        static_cast<int>(EncoderMode::BankBy1));
-    for (int m = 0; m < kEncoderModeCount; ++m)
-        g_uf1EncoderVisible[m].store(m != static_cast<int>(EncoderMode::BankBy1));
+    order[kUf1EncoderModeCount] = static_cast<int>(EncoderMode::BankBy1);
+    g_uf1EncRing.setDefaults(order, kUf1EncoderModeCount + 1,
+        [](int m) { return m != static_cast<int>(EncoderMode::BankBy1); },
+        static_cast<int>(EncoderMode::ChSelect));
 }
 
 // Write the ring order + visibility back to ExtState (CSV). Main thread only.
@@ -6965,16 +7012,8 @@ inline void uf1EncoderRingDefaults_()
 //   uf1_enc_vis = 0/1 flags indexed by mode int.
 inline void uf1EncoderRingPersist_()
 {
-    std::string seq, vis;
-    for (int k = 0; k < kEncoderModeCount; ++k) {
-        char b[16];
-        std::snprintf(b, sizeof(b), "%d", g_uf1EncoderSeq[k].load());
-        if (k) { seq += ','; vis += ','; }
-        seq += b;
-        vis += (g_uf1EncoderVisible[k].load() ? '1' : '0');
-    }
-    SetExtState("rea_sixty", "uf1_enc_seq", seq.c_str(), true);
-    SetExtState("rea_sixty", "uf1_enc_vis", vis.c_str(), true);
+    SetExtState("rea_sixty", "uf1_enc_seq", g_uf1EncRing.seqCsv().c_str(), true);
+    SetExtState("rea_sixty", "uf1_enc_vis", g_uf1EncRing.visCsv().c_str(), true);
 }
 
 // Persist just the live UF1 mode (shared with the picker + hide-advance paths).
@@ -6986,25 +7025,12 @@ inline void uf1EncoderPersistMode_(EncoderMode m)
 }
 
 // Step the live UF1 encoder mode by `delta` positions through the VISIBLE modes
-// (in g_uf1EncoderSeq order), wrapping. Empty visible list -> ChSelect. Persists
+// (in ring order), wrapping. Empty visible list -> ChSelect. Persists
 // uf1EncoderMode. This is the MODE-hold picker body. Main thread only.
 inline void uf1EncoderStepVisible_(int delta)
 {
-    int vis[kEncoderModeCount];
-    int n = 0;
-    for (int k = 0; k < kEncoderModeCount; ++k) {
-        const int m = g_uf1EncoderSeq[k].load();
-        if (m >= 0 && m < kEncoderModeCount && g_uf1EncoderVisible[m].load())
-            vis[n++] = m;
-    }
-    EncoderMode nm = EncoderMode::ChSelect;
-    if (n > 0) {
-        const int cur = static_cast<int>(g_uf1EncoderMode.load());
-        int idx = 0;
-        for (int i = 0; i < n; ++i) if (vis[i] == cur) { idx = i; break; }
-        idx = ((idx + delta) % n + n) % n;
-        nm  = static_cast<EncoderMode>(vis[idx]);
-    }
+    const EncoderMode nm = static_cast<EncoderMode>(
+        g_uf1EncRing.step(static_cast<int>(g_uf1EncoderMode.load()), delta));
     g_uf1EncoderMode.store(nm);
     uf1EncoderPersistMode_(nm);
 }
@@ -7013,22 +7039,22 @@ inline void uf1EncoderStepVisible_(int delta)
 // next VISIBLE mode after it in ring order (wrapping). Persists. Main thread.
 inline void uf1EncoderAdvancePastHidden_(int hiddenMode)
 {
-    int pos = 0;
-    for (int k = 0; k < kEncoderModeCount; ++k)
-        if (g_uf1EncoderSeq[k].load() == hiddenMode) { pos = k; break; }
-    for (int step = 1; step <= kEncoderModeCount; ++step) {
-        const int k = (pos + step) % kEncoderModeCount;
-        const int m = g_uf1EncoderSeq[k].load();
-        if (m >= 0 && m < kEncoderModeCount && g_uf1EncoderVisible[m].load()) {
-            g_uf1EncoderMode.store(static_cast<EncoderMode>(m));
-            uf1EncoderPersistMode_(static_cast<EncoderMode>(m));
-            return;
-        }
-    }
-    // No visible mode at all (should not happen — the set-visible guard forces
-    // ChSelect visible first). Fall back to ChSelect.
-    g_uf1EncoderMode.store(EncoderMode::ChSelect);
-    uf1EncoderPersistMode_(EncoderMode::ChSelect);
+    const EncoderMode nm =
+        static_cast<EncoderMode>(g_uf1EncRing.nextVisibleAfter(hiddenMode));
+    g_uf1EncoderMode.store(nm);
+    uf1EncoderPersistMode_(nm);
+}
+
+// The UF8 ring's factory: every mode in enum order, all visible.
+inline void uf8EncoderRingDefaults_()
+{
+    g_uf8EncRing.setDefaults(nullptr, 0, [](int) { return true; },
+                             static_cast<int>(EncoderMode::ChSelect));
+}
+inline void uf8EncoderRingPersist_()
+{
+    SetExtState("rea_sixty", "uf8_enc_seq", g_uf8EncRing.seqCsv().c_str(), true);
+    SetExtState("rea_sixty", "uf8_enc_vis", g_uf8EncRing.visCsv().c_str(), true);
 }
 
 // UF1 HEADER name for the encoder mode. The header's "REAPER" cell shows only
@@ -22129,6 +22155,12 @@ void drainInputQueue()
                     if (g_sync) g_sync->invalidate();
                     continue;
                 }
+                // ENC PUSH held: the detent picks the encoder mode (the
+                // turned flag was set at the enqueue, on the input thread).
+                if (g_uf8EncPushHeld.load()) {
+                    uf8EncoderStepVisible_(step);
+                    continue;
+                }
                 // SEL Mode override: when Settings → Modes → FX/Instance
                 // Cycle has the UF8 Channel Encoder bit ticked, an
                 // Instance / InstanceCycle SelectionMode hijacks the
@@ -24955,12 +24987,7 @@ static void uf1FillModeList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h,
 static void uf1SetEncoderList_(std::array<uint8_t, sizeof(kUf1PluginHeader)>& h)
 {
     int vis[kEncoderModeCount];
-    int n = 0;
-    for (int k = 0; k < kEncoderModeCount; ++k) {
-        const int m = g_uf1EncoderSeq[k].load();
-        if (m >= 0 && m < kEncoderModeCount && g_uf1EncoderVisible[m].load())
-            vis[n++] = m;
-    }
+    const int n = g_uf1EncRing.visibleList(vis);
     uf1FillModeList_(h, vis, n, kEncoderModeCount,
                      static_cast<int>(g_uf1EncoderMode.load()),
                      [](int m) { return uf1EncoderModeHdr_(static_cast<EncoderMode>(m)); });
@@ -25474,6 +25501,26 @@ static int navPushGestureAct_(NavPushGesture& g, bool pressed,
     return isLong ? lng : (isShift ? shift : plain);
 }
 
+// ENC PUSH edge on the UF8 (input thread). See g_uf8EncPushHeld.
+static void uf8EncPushEdge_(bool pressed)
+{
+    if (pressed) {
+        g_uf8EncPushTurned.store(false);
+        g_uf8EncPushDownMs.store(nowMs_());
+        g_uf8EncPushHeld.store(true);
+        return;
+    }
+    if (!g_uf8EncPushHeld.exchange(false)) return;
+    if (g_uf8EncPushTurned.exchange(false)) return;      // it was a pick
+    const auto pid = uf8RemapForEncMode_(uf8::bindings::ButtonId::ChannelPush);
+    const bool longHeld = nowMs_() - g_uf8EncPushDownMs.load() >= 500;
+    if (longHeld && uf8::bindings::fireLongPress(pid)) return;
+    // A press and its release in one go: dispatch's own short / double-press
+    // logic sees the same pair it would have, only later.
+    uf8::bindings::dispatch(pid, true);
+    uf8::bindings::dispatch(pid, false);
+}
+
 void onUf8Input(const uint8_t* dataIn, size_t lenIn)
 {
     // NOTE: do NOT add per-packet file logging here. This runs on the libusb
@@ -25806,7 +25853,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // Settings → Bindings open: the press picks the key (BindingsPick.h).
             {
                 static std::array<bool, 256> sPickHeld{};
-                if (bindingsPickGate_(0, uf8::bindings::fromUf8DeviceId(id), id,
+                if (bindingsPickGate_(0, uf8RemapForEncMode_(uf8::bindings::fromUf8DeviceId(id)), id,
                                       pressed, sPickHeld)) {
                     i += frameSize;
                     continue;
@@ -26120,8 +26167,13 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // also covers top-soft-keys (TopSoftKey1..8) which carry an
             // ssl_softkey factory binding by default — same semantics as
             // SSL 360°, but the user can rebind via Settings.
+            if (!handledNatively
+                && uf8::bindings::fromUf8DeviceId(id) == uf8::bindings::ButtonId::ChannelPush) {
+                uf8EncPushEdge_(pressed);
+                handledNatively = true;
+            }
             if (!handledNatively) {
-                if (auto bid = uf8::bindings::fromUf8DeviceId(id);
+                if (auto bid = uf8RemapForEncMode_(uf8::bindings::fromUf8DeviceId(id));
                     bid != uf8::bindings::ButtonId::None) {
                     // Bankable dynamic bank paging via the Bank ◄/► buttons:
                     // when the engaged sub-bank is an FX / Sends bank set to
@@ -26802,6 +26854,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // mode system). Default Shift = instance_cycle. Cmd /
                 // Ctrl unbound until the user picks an action in
                 // Settings → Bindings → Channel Encoder.
+                if (g_uf8EncPushHeld.load()) g_uf8EncPushTurned.store(true);
                 queueInput({PendingInput::EncoderRotation, 0,
                             static_cast<double>(signed6)});
                 }
@@ -38120,6 +38173,80 @@ void tickNavOverlayState_()
     }
 }
 
+// ⇨ THE UF8 ENCODER-MODE PICKER ON THE SCRIBBLES (ENC PUSH held + encoder).
+// The visible ring around the live mode, the live one on strip 4: its name in
+// the slot-label zone, its ring position in the channel number, its top soft
+// key and colour bar bright, its neighbours dim. Same three zones the Nav
+// overlay takes (pushZonesForVisibleSlots yields them while uf8EncPickerShown_),
+// and handed back the same way: bank + page dirty, colours invalidated.
+constexpr int kUf8EncPickerLiveStrip = 3;
+static int uf8EncPickerModeAt_(int strip, int* posOut)
+{
+    int vis[kEncoderModeCount];
+    const int n = g_uf8EncRing.visibleList(vis);
+    if (n == 0) return -1;
+    int cur = 0;
+    const int live = static_cast<int>(g_encoderMode.load());
+    for (int i = 0; i < n; ++i) if (vis[i] == live) { cur = i; break; }
+    int pos = cur + strip - kUf8EncPickerLiveStrip;
+    if (n >= 8) pos = ((pos % n) + n) % n;           // a full ring wraps
+    else if (pos < 0 || pos >= n) return -1;          // a short one does not
+    if (posOut) *posOut = pos;
+    return vis[pos];
+}
+uint32_t uf8EncPickerColorForStrip_(int slot)
+{
+    if (uf8EncPickerModeAt_(slot, nullptr) < 0) return 0x000000;
+    return slot == kUf8EncPickerLiveStrip ? 0xFFFFFF : 0x404040;
+}
+static void pushUf8EncPickerDecorations_()
+{
+    static bool s_was = false;
+    const bool shown = uf8EncPickerShown_();
+    if (shown != s_was) {
+        s_was = shown;
+        g_lastSlotLabel.fill({});
+        g_lastChanNum.fill({});
+        g_lastTopSoftKey.fill(-1);
+        if (!shown) {                  // give the strips back
+            g_pageDirty.store(true);
+            g_bankDirty.store(true);
+            g_navOverlayDirty.store(true);
+            if (g_sync) g_sync->invalidate();
+        }
+    }
+    if (!shown || !g_dev || !g_dev->isOpen()) return;
+    for (int s = 0; s < 8; ++s) {
+        int pos = -1;
+        const int m = uf8EncPickerModeAt_(s, &pos);
+        std::string label = m < 0 ? std::string()
+                                  : uf1EncoderModeHdr_(static_cast<EncoderMode>(m));
+        label.resize(uf8::kUf8ScribbleChars, ' ');
+        if (label != g_lastSlotLabel[s]) {
+            g_lastSlotLabel[s] = label;
+            g_dev->send(uf8::buildPluginSlotName(static_cast<uint8_t>(s), label));
+        }
+        std::string chan = "  ";
+        if (m >= 0) chan = std::to_string(pos + 1);
+        if (chan != g_lastChanNum[s]) {
+            g_lastChanNum[s] = chan;
+            g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), chan));
+        }
+        const uf8::TopSoftKeyState tssk =
+            m < 0 ? uf8::TopSoftKeyState::Off
+            : s == kUf8EncPickerLiveStrip ? uf8::TopSoftKeyState::On
+                                          : uf8::TopSoftKeyState::Dim;
+        const uint32_t rgb = 0xFFFFFF;
+        const int32_t composite = (int32_t(static_cast<int>(tssk)) << 28)
+                                ^ static_cast<int32_t>(rgb);
+        if (composite != g_lastTopSoftKey[s]) {
+            g_lastTopSoftKey[s] = composite;
+            sendLedFrames(uf8::buildTopSoftKeyLed(
+                static_cast<uint8_t>(s), tssk, uf8::ledColourForTrackRgb(rgb)));
+        }
+    }
+}
+
 void pushNavOverlayDecorations()
 {
     if (!g_dev || !g_dev->isOpen()) return;
@@ -38508,7 +38635,9 @@ void pushZonesForVisibleSlots()
     // other track-derived content (track name, V-Pot value, fader db,
     // SOLO/CUT/SEL) still renders normally so the user keeps live
     // track feedback while navigating markers.
-    const bool overlayActive = uf8::nav::Overlay::instance().active();
+    // The encoder-mode picker (ENC PUSH held) owns the same three zones.
+    const bool overlayActive = uf8::nav::Overlay::instance().active()
+                            || uf8EncPickerShown_();
 
     const int trackCount = visibleTrackCount();
     const int bankOffset = g_bankOffset.load();
@@ -42447,11 +42576,12 @@ uf8::bindings::ButtonId buttonIdForGlobalLed(uf8::Uf8GlobalLed cell)
         case L::Focus:        return B::EncFocus;
         case L::BankLeft:     return B::BankLeft;
         case L::BankRight:    return B::BankRight;
-        case L::ZoomUp:       return B::ZoomUp;
-        case L::ZoomLeft:     return B::ZoomLeft;
-        case L::ZoomCenter:   return B::ZoomCenter;
-        case L::ZoomRight:    return B::ZoomRight;
-        case L::ZoomDown:     return B::ZoomDown;
+        // The zoom pad lights by the binding of the encoder mode it serves.
+        case L::ZoomUp:       return uf8RemapForEncMode_(B::ZoomUp);
+        case L::ZoomLeft:     return uf8RemapForEncMode_(B::ZoomLeft);
+        case L::ZoomCenter:   return uf8RemapForEncMode_(B::ZoomCenter);
+        case L::ZoomRight:    return uf8RemapForEncMode_(B::ZoomRight);
+        case L::ZoomDown:     return uf8RemapForEncMode_(B::ZoomDown);
         // Selection-mode row — bindable since 2026-05-14 (Selection Mode
         // feature). LEDs follow whatever binding the user attaches; the
         // factory ships them unbound so users opt in via Settings.
@@ -44782,10 +44912,10 @@ void onTimerBody_()
                 const int   tot  = jogHeld ? kUf1JogModeCount : kEncoderModeCount;
                 std::string names; int idx = 0, n = 0;
                 for (int k = 0; k < tot; ++k) {
-                    const int m = jogHeld ? g_uf1JogSeq[k].load() : g_uf1EncoderSeq[k].load();
+                    const int m = jogHeld ? g_uf1JogSeq[k].load() : g_uf1EncRing.seq[k].load();
                     if (m < 0 || m >= tot) continue;
                     const bool vis = jogHeld ? g_uf1JogVisible[m].load()
-                                             : g_uf1EncoderVisible[m].load();
+                                             : g_uf1EncRing.visible(m);
                     if (!vis) continue;
                     if (m == cur) idx = n;
                     names += '\t';
@@ -44796,6 +44926,18 @@ void onTimerBody_()
                 // SCRUB is also held for the Jog picker while the wheel is idle,
                 // so this appears the moment you press it. That is the point.
                 if (n > 0) mr = std::string(kind) + "\t" + std::to_string(idx) + names;
+            } else if (uf8EncPickerShown_()) {
+                // The UF8 picker (ENC PUSH held + encoder), its own ring.
+                int vis[kEncoderModeCount];
+                const int n = g_uf8EncRing.visibleList(vis);
+                const int cur = static_cast<int>(g_encoderMode.load());
+                std::string names; int idx = 0;
+                for (int i = 0; i < n; ++i) {
+                    if (vis[i] == cur) idx = i;
+                    names += '\t';
+                    names += encoderModeFriendly(static_cast<EncoderMode>(vis[i]));
+                }
+                if (n > 0) mr = "Encoder\t" + std::to_string(idx) + names;
             }
             // Diff-guarded: SetExtState on every tick of a held key would be a
             // write per frame for as long as you hold it.
@@ -46962,6 +47104,8 @@ void onTimerBody_()
                 g_dev->send(uf8::buildStripTextLower(uint8_t(i), "SWATCH"));
             }
             g_sync->invalidate();   // so the real colours come back when it ends
+        } else if (uf8EncPickerShown_()) {
+            g_sync->refresh(uf8EncPickerColorForStrip_);
         } else if (overlayOnUf8) {
             g_sync->refresh(navColorForStrip);
         } else {
@@ -47080,9 +47224,13 @@ void onTimerBody_()
 
     // State for everyone (the UC1 carousel mirrors it), frames for the UF8.
     tickNavOverlayState_();
-    if (uf8::nav::Overlay::instance().active() && g_navUf8Show.load()) {
+    // The picker takes the overlay's zones while it is held (Nav Mode without
+    // encoder takeover leaves ENC PUSH to it), so the two never write by turns.
+    if (uf8::nav::Overlay::instance().active() && g_navUf8Show.load()
+        && !uf8EncPickerShown_()) {
         pushNavOverlayDecorations();
     }
+    pushUf8EncPickerDecorations_();
     pushUf8GlobalLeds();
     // pushSelColourBar() removed: it was a per-tick fallback that wrote
     // SEL LEDs in white-only mode (buildSelWhite). With track-colour SEL
@@ -48274,10 +48422,10 @@ static void uf8SetEncoderMode_(EncoderMode target, const char* extKey)
 // switch or a Stream Deck tile. The handlers already existed — this is the
 // registration they were missing.
 //
-// ⚠ No "next / previous" pair here, unlike the UF1's. That one steps the ring
-// the user configured for the UF1 (uf1EncoderStepVisible_); the UF8 has no such
-// visible order to step, its ring is the "Encoder Modes" factory soft-key bank.
-// Inventing an order for it would be a feature, not a registration.
+// ⚠ No "next / previous" pair here, unlike the UF1's. The UF8 has had its own
+// ring since 01.10.2026 (g_uf8EncRing, ENC PUSH held + encoder,
+// uf8EncoderStepVisible_), but nobody asked for actions that step it; adding
+// them would be a feature, not a registration.
 struct Uf8EncActionDef { EncoderMode mode; const char* extKey;
                          const char* idStr; const char* name; };
 static const Uf8EncActionDef kUf8EncActions[] = {
@@ -48299,6 +48447,28 @@ static const Uf8EncActionDef kUf8EncActions[] = {
 };
 constexpr int kUf8EncActionCount =
     static_cast<int>(sizeof(kUf8EncActions) / sizeof(kUf8EncActions[0]));
+
+// Set the UF8 encoder mode straight to `m`: the picker and the editor's
+// dropdown. No re-tap toggle back to Channel Select (that belongs to a key that
+// names one mode), the rest is uf8SetEncoderMode_: same ExtState, same Nav exit.
+static void uf8SetEncoderModeDirect_(EncoderMode m)
+{
+    const char* key = "ChSelect";
+    for (const auto& a : kUf8EncActions)
+        if (a.mode == m) { key = a.extKey; break; }
+    g_encoderMode.store(m);
+    SetExtState("ReaSixty", "encoderMode", key, true);
+    uf8ExitNavModeIfActive_();
+    g_pageDirty.store(true);
+}
+
+// ENC PUSH held + encoder: `delta` visible modes on through the UF8 ring.
+// Main thread (the encoder drain).
+void uf8EncoderStepVisible_(int delta)
+{
+    uf8SetEncoderModeDirect_(static_cast<EncoderMode>(
+        g_uf8EncRing.step(static_cast<int>(g_encoderMode.load()), delta)));
+}
 custom_action_register_t g_actionUf8Enc[kUf8EncActionCount];
 int g_cmdUf8Enc[kUf8EncActionCount] = { 0 };
 
@@ -49770,7 +49940,7 @@ const char* reasixty_uf1ShownMatch()
 // ---- UF1 channel-encoder mode ring (user-editable order + visibility) ------
 // Read/written by the Settings → Bindings → UF1 editor. Main-thread only.
 // Total number of selectable modes (= kEncoderModeCount). Ring positions
-// 0..total-1 index g_uf1EncoderSeq; mode ints 0..total-1 index visibility.
+// 0..total-1 index g_uf1EncRing.seq; mode ints 0..total-1 index visibility.
 int reasixty_uf1EncoderModeTotal()
 {
     return kEncoderModeCount;
@@ -49780,14 +49950,14 @@ int reasixty_uf1EncoderModeTotal()
 int reasixty_uf1EncoderSeqAt(int pos)
 {
     if (pos < 0 || pos >= kEncoderModeCount) return 0;
-    return g_uf1EncoderSeq[pos].load();
+    return g_uf1EncRing.seq[pos].load();
 }
 
 // Whether the picker offers `modeInt` (indexed by EncoderMode int).
 bool reasixty_uf1EncoderModeVisible(int modeInt)
 {
     if (modeInt < 0 || modeInt >= kEncoderModeCount) return false;
-    return g_uf1EncoderVisible[modeInt].load();
+    return g_uf1EncRing.visible(modeInt);
 }
 
 // Friendly (long) display name for `modeInt`.
@@ -49803,16 +49973,14 @@ const char* reasixty_uf1EncoderModeName(int modeInt)
 void reasixty_setUf1EncoderModeVisible(int modeInt, bool on)
 {
     if (modeInt < 0 || modeInt >= kEncoderModeCount) return;
-    g_uf1EncoderVisible[modeInt].store(on);
-    // Guard: at least one mode must stay visible.
-    bool any = false;
-    for (int m = 0; m < kEncoderModeCount; ++m)
-        if (g_uf1EncoderVisible[m].load()) { any = true; break; }
-    if (!any)
-        g_uf1EncoderVisible[static_cast<int>(EncoderMode::ChSelect)].store(true);
-    // If we just hid the live mode, move it onto a visible one.
-    if (!on && static_cast<int>(g_uf1EncoderMode.load()) == modeInt)
-        uf1EncoderAdvancePastHidden_(modeInt);
+    // At least one mode stays visible (ChSelect comes back), and a hidden live
+    // mode moves onto the next visible one.
+    const int live = static_cast<int>(g_uf1EncoderMode.load());
+    const int next = g_uf1EncRing.setVisible(modeInt, on, live);
+    if (next != live) {
+        g_uf1EncoderMode.store(static_cast<EncoderMode>(next));
+        uf1EncoderPersistMode_(static_cast<EncoderMode>(next));
+    }
     uf1EncoderRingPersist_();
 }
 
@@ -49820,14 +49988,40 @@ void reasixty_setUf1EncoderModeVisible(int modeInt, bool on)
 // +1 down), then persist. Bounds-checked (out-of-range = no-op).
 void reasixty_uf1EncoderMoveSeq(int pos, int dir)
 {
-    const int other = pos + dir;
-    if (pos   < 0 || pos   >= kEncoderModeCount) return;
-    if (other < 0 || other >= kEncoderModeCount) return;
-    const int a = g_uf1EncoderSeq[pos].load();
-    const int b = g_uf1EncoderSeq[other].load();
-    g_uf1EncoderSeq[pos].store(b);
-    g_uf1EncoderSeq[other].store(a);
-    uf1EncoderRingPersist_();
+    if (g_uf1EncRing.move(pos, dir)) uf1EncoderRingPersist_();
+}
+
+// ---- UF8 channel-encoder mode + its picker ring ---------------------------
+// The Settings editor: the zoom pad / ENC PUSH tiles follow the live mode, the
+// dropdown switches it, the list under ENC PUSH edits the ring. Main thread.
+int reasixty_uf8EncoderMode()
+{
+    return static_cast<int>(g_encoderMode.load());
+}
+void reasixty_setUf8EncoderMode(int mode)
+{
+    if (mode < 0 || mode >= kEncoderModeCount) return;
+    uf8SetEncoderModeDirect_(static_cast<EncoderMode>(mode));
+}
+int reasixty_uf8EncoderSeqAt(int pos)
+{
+    if (pos < 0 || pos >= kEncoderModeCount) return 0;
+    return g_uf8EncRing.seq[pos].load();
+}
+bool reasixty_uf8EncoderModeVisible(int modeInt)
+{
+    return g_uf8EncRing.visible(modeInt);
+}
+// The live mode stays where it is when its tick goes: the UF8's mode keys and
+// actions reach any mode, the ring only decides what the picker offers.
+void reasixty_setUf8EncoderModeVisible(int modeInt, bool on)
+{
+    g_uf8EncRing.setVisible(modeInt, on, static_cast<int>(g_encoderMode.load()));
+    uf8EncoderRingPersist_();
+}
+void reasixty_uf8EncoderMoveSeq(int pos, int dir)
+{
+    if (g_uf8EncRing.move(pos, dir)) uf8EncoderRingPersist_();
 }
 
 void reasixty_identifyUf8()
@@ -58298,50 +58492,16 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // as a FULL permutation (seq) / full flag list (vis) — a malformed / partial
     // value falls back to today's behaviour rather than a broken ring.
     uf1EncoderRingDefaults_();
-    if (const char* v = GetExtState("rea_sixty", "uf1_enc_seq"); v && *v) {
-        int  seq[kEncoderModeCount];
-        bool seen[kEncoderModeCount] = { false };
-        int  n = 0;
-        bool ok = true;
-        for (const char* p = v; *p && n < kEncoderModeCount; ) {
-            char* end = nullptr;
-            long val = std::strtol(p, &end, 10);
-            if (end == p) { ok = false; break; }
-            if (val < 0 || val >= kEncoderModeCount || seen[val]) { ok = false; break; }
-            seen[val] = true;
-            seq[n++]  = static_cast<int>(val);
-            p = end;
-            while (*p == ',' || *p == ' ') ++p;
-        }
-        if (ok && n == kEncoderModeCount)
-            for (int k = 0; k < kEncoderModeCount; ++k)
-                g_uf1EncoderSeq[k].store(seq[k]);
-    }
-    if (const char* v = GetExtState("rea_sixty", "uf1_enc_vis"); v && *v) {
-        bool vis[kEncoderModeCount];
-        int  n = 0;
-        bool ok = true;
-        for (const char* p = v; *p && n < kEncoderModeCount; ) {
-            char* end = nullptr;
-            long val = std::strtol(p, &end, 10);
-            if (end == p) { ok = false; break; }
-            vis[n++] = (val != 0);
-            p = end;
-            while (*p == ',' || *p == ' ') ++p;
-        }
-        if (ok && n == kEncoderModeCount) {
-            bool any = false;
-            for (int m = 0; m < kEncoderModeCount; ++m) if (vis[m]) { any = true; break; }
-            if (!any) vis[static_cast<int>(EncoderMode::ChSelect)] = true;
-            for (int m = 0; m < kEncoderModeCount; ++m)
-                g_uf1EncoderVisible[m].store(vis[m]);
-        }
-    }
+    g_uf1EncRing.loadSeq(GetExtState("rea_sixty", "uf1_enc_seq"));
+    g_uf1EncRing.loadVis(GetExtState("rea_sixty", "uf1_enc_vis"));
+    uf8EncoderRingDefaults_();
+    g_uf8EncRing.loadSeq(GetExtState("rea_sixty", "uf8_enc_seq"));
+    g_uf8EncRing.loadVis(GetExtState("rea_sixty", "uf8_enc_vis"));
     // Guard: the restored live mode must be visible — otherwise the picker's
     // first turn would jump unexpectedly. If it's hidden, advance to a visible.
     {
         const int lm = static_cast<int>(g_uf1EncoderMode.load());
-        if (lm < 0 || lm >= kEncoderModeCount || !g_uf1EncoderVisible[lm].load())
+        if (!g_uf1EncRing.visible(lm))
             uf1EncoderAdvancePastHidden_(lm < 0 || lm >= kEncoderModeCount ? 0 : lm);
     }
     // ⛔ SSL STRIP MODE DOES NOT SURVIVE A RESTART, on any surface (Frank

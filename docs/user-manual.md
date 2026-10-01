@@ -191,6 +191,12 @@ The large notched CHANNEL encoder (in the right-hand panel, pushable, with the c
 
 Tapping the mode that is already live returns the encoder to Channel Select, which is what SSL 360° does. Channel Select itself does not toggle away.
 
+**Hold the encoder's push and turn** to pick a mode on the surface. While you hold it, the scribble strips list the modes around the current one: the current mode sits on strip 4 with its top soft key lit, and each detent moves one mode on. Let go and the encoder stays in that mode. Which modes the ring offers, and in what order, is set under PUSH in *Settings → Bindings → UF8*: tick a mode to include it, move it with ▲ / ▼. All fifteen are in from the factory. The mode keys and actions above reach every mode, ticked or not.
+
+The push fires when you let go, and only if you did not turn. Held past half a second it fires its long-press slot, if that slot is on.
+
+**The cursor pad and the push have their own bindings in every encoder mode.** In *Settings → Bindings → UF8* the five pad keys and PUSH show the bindings of the mode the UF8 is in, and the *Encoder mode* drop-down above the editor switches the mode, on the surface too. Out of the box every mode carries the bindings these six keys had before, so nothing changes until you give a mode its own.
+
 | Mode | Rotation acts on | Notes |
 |---|---|---|
 | Channel Select | Move REAPER track selection ± | Default mode. Strips re-bank to keep selection visible. |
@@ -353,9 +359,10 @@ A single block:
 - **Large notched CHANNEL encoder** (push-button rotary). Rotation drives the active Channel Encoder mode (see chapter Channel Encoder modes). Push: see *CHANNEL encoder push* below.
 - **Cursor pad** — 5 buttons (4 arrows + central circle), in the right-hand panel below the BANK row. They do not surround the encoder.
   - Default behaviour: **zoom** via the **Zoom in vertically** / **Zoom out vertically** / **Zoom out horizontally** / **Zoom in horizontally** / **Zoom to fit project** actions (REAPER actions 40111 / 40112 / 1011 / 1012 / 40295).
+  - Each Channel Encoder mode has its own five bindings for the pad, filled with the ones above until you change them (see chapter *Channel Encoder modes*).
   - SSL's reference UG also documents a "Cursor-Transport" mode (press-and-hold CHANNEL encoder to enter; ↓=Stop ↑=Play ←=Rew →=FF centre=Rec). Rea-Sixty leaves these as the standard zoom bindings — rebind them to transport actions via Settings → Bindings if you want SSL's behaviour.
 - **NAV / NUDGE / FOCUS** mode buttons (around the encoder; ButtonId entries `Nav`, `Nudge`, `EncFocus`). NAV carries **Nav Mode (Markers & Regions): toggle**, NUDGE carries **Encoder Mode → Nudge**, FOCUS carries **Encoder Mode → Last Touched Param**. They shipped unbound between 2026-05-19 and 2026-09-02.
-- **CHANNEL encoder push** (`ChannelPush`) — **Plug-in: toggle focused GUI**, the same thing the UC1's Encoder-2 push and the UF1's encoder push do. Also unbound until 2026-09-02.
+- **CHANNEL encoder push** (`ChannelPush`) — **Plug-in: toggle focused GUI**, the same thing the UC1's Encoder-2 push and the UF1's encoder push do. Also unbound until 2026-09-02. It fires on release, with its own binding per encoder mode; held while you turn the encoder, it picks the mode instead.
 
 Top left of the unit, beside the LAYER keys: **Q1 / Q2 / Q3** ("Quick" user keys). Factory bindings — Q1 = *Soft-Key Set 8 (SSL Channel Strip)*, Q2 = *Soft-Key Set 9 (SSL Bus Comp)*, Q3 = *Soft-Key Set 1*, the first of your own.
 

@@ -836,6 +836,18 @@ if(NOT WIN32)
     target_include_directories(test_lane_model PRIVATE src)
     add_test(NAME lane_model COMMAND test_lane_model)
 
+    # The encoder-mode picker ring, UF1 and UF8 (EncoderRing.h, header only).
+    add_executable(test_encoder_ring tests/test_encoder_ring.cpp)
+    target_include_directories(test_encoder_ring PRIVATE src)
+    add_test(NAME encoder_ring COMMAND test_encoder_ring)
+
+    # The UF8 zoom pad and ENC PUSH per encoder mode: ids, seed, v51 upgrade.
+    add_executable(test_uf8_enc_keys tests/test_uf8_enc_keys.cpp
+        src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp)
+    target_include_directories(test_uf8_enc_keys PRIVATE src "${WDL_DIR}")
+    target_link_libraries(test_uf8_enc_keys PRIVATE Threads::Threads)
+    add_test(NAME uf8_enc_keys COMMAND test_uf8_enc_keys)
+
     add_executable(test_uc1_protocol tests/test_uc1_protocol.cpp src/UC1Protocol.cpp)
     target_include_directories(test_uc1_protocol PRIVATE src)
     add_test(NAME uc1_protocol COMMAND test_uc1_protocol)

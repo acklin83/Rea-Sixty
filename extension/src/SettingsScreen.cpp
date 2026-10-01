@@ -216,6 +216,15 @@ int         reasixty_uf1ViewMode();
 void        reasixty_setUf1ViewMode(int view);
 const char* reasixty_uf1ViewName(int view);
 void        reasixty_setUf1JogMode(int mode);
+// The UF8 encoder mode and its picker ring (ENC PUSH held + encoder). The zoom
+// pad and ENC PUSH carry a binding per mode; the editor follows the live mode
+// and switching there switches the surface, like the UF1 jog dropdown.
+int         reasixty_uf8EncoderMode();
+void        reasixty_setUf8EncoderMode(int mode);
+int         reasixty_uf8EncoderSeqAt(int pos);
+bool        reasixty_uf8EncoderModeVisible(int modeInt);
+void        reasixty_setUf8EncoderModeVisible(int modeInt, bool on);
+void        reasixty_uf8EncoderMoveSeq(int pos, int dir);
 void reasixty_identifyUf8();
 void reasixty_identifyUc1();
 bool reasixty_selFollowsColor();
@@ -805,6 +814,12 @@ void centerNextPopupOnDisplay_(ImGui_Context* ctx)
 // the physical UF8 silk-screen). Used by the editor header too.
 const char* hwFaceLabel(ButtonId id)
 {
+    // A per-mode id wears its physical key's face. Folded here once instead of
+    // a case per mode: the UF1 cross's Fades ids were missing from the list
+    // below and showed their JSON names.
+    if (ButtonId base; uf8::bindings::splitPerModeNavId(id, &base, nullptr)
+                       || uf8::bindings::splitPerEncModeUf8Id(id, &base, nullptr))
+        id = base;
     switch (id) {
         case ButtonId::BankLeft:    return "BANK \xE2\x97\x82";
         case ButtonId::BankRight:   return "BANK \xE2\x96\xB8";
@@ -2062,8 +2077,11 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
         const float hbx = cx - r, hby = cy - r;
         const float hbw = 2 * r, hbh = 2 * r;
         const bool hot      = inside(hbx, hby, hbw, hbh);
-        const bool selected = (ButtonId::ChannelPush == sel);
-        if (hot && canvasClicked && leftBtn == 0) sel = ButtonId::ChannelPush;
+        // The push of the live encoder mode, like the PUSH tile below.
+        const ButtonId pushId = uf8::bindings::perEncModeUf8Id(
+            ButtonId::ChannelPush, reasixty_uf8EncoderMode());
+        const bool selected = (pushId == sel);
+        if (hot && canvasClicked && leftBtn == 0) sel = pushId;
 
         const uint32_t edge = selected ? 0xAACCFFFF
                               : hot     ? 0x6688AAFF
@@ -2098,7 +2116,12 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
     // Channel-encoder bindings split into push (left) + rotate (right).
     // Rotate is the new bindable surface for the rotation gesture —
     // Plain / Shift / Cmd / Ctrl modifier slots each map to a builtin.
-    drawHwBtn(852, 270, 65, 18, ButtonId::ChannelPush,    "PUSH");
+    // ⇨ PUSH and the zoom pad are drawn as the ids of the LIVE encoder mode, so
+    // the tile shows and edits what the key does right now (the UF1 cross per
+    // jog mode works the same way).
+    const int em = reasixty_uf8EncoderMode();
+    auto encKey = [em](ButtonId base) { return uf8::bindings::perEncModeUf8Id(base, em); };
+    drawHwBtn(852, 270, 65, 18, encKey(ButtonId::ChannelPush), "PUSH");
     drawHwBtn(919, 270, 66, 18, ButtonId::ChannelEncoder, "ROTATE");
 
     drawGroupLabelCentered(917, 300, "BANK");
@@ -2112,15 +2135,15 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
     {
         constexpr float cx = 918;
         constexpr float baseY = 406;
-        drawHwBtn(cx - 17, baseY - 32, 34, 26, ButtonId::ZoomUp,
+        drawHwBtn(cx - 17, baseY - 32, 34, 26, encKey(ButtonId::ZoomUp),
                   "\xE2\x96\xB2");
-        drawHwBtn(cx - 54, baseY,      34, 26, ButtonId::ZoomLeft,
+        drawHwBtn(cx - 54, baseY,      34, 26, encKey(ButtonId::ZoomLeft),
                   "\xE2\x97\x82");
-        drawHwBtn(cx - 17, baseY,      34, 26, ButtonId::ZoomCenter,
+        drawHwBtn(cx - 17, baseY,      34, 26, encKey(ButtonId::ZoomCenter),
                   "\xE2\x97\x8F");
-        drawHwBtn(cx + 20, baseY,      34, 26, ButtonId::ZoomRight,
+        drawHwBtn(cx + 20, baseY,      34, 26, encKey(ButtonId::ZoomRight),
                   "\xE2\x96\xB8");
-        drawHwBtn(cx - 17, baseY + 32, 34, 26, ButtonId::ZoomDown,
+        drawHwBtn(cx - 17, baseY + 32, 34, 26, encKey(ButtonId::ZoomDown),
                   "\xE2\x96\xBC");
     }
 
@@ -4652,6 +4675,60 @@ bool drawSlotPicker(ImGui_Context* ctx, const char* prefix,
 // modifier collapsibles). Right: LONG PRESS (same shape, only for
 // Momentary). Auto-saves on every change.
 
+// Order + visibility of the modes the channel encoder's picker walks: the UF1's
+// ring (MODE held + encoder) or the UF8's (ENC PUSH held + encoder).
+static void drawEncoderRingEditor_(ImGui_Context* ctx, bool uf8)
+{
+    int  (*seqAt)(int)        = uf8 ? reasixty_uf8EncoderSeqAt : reasixty_uf1EncoderSeqAt;
+    bool (*visible)(int)      = uf8 ? reasixty_uf8EncoderModeVisible
+                                    : reasixty_uf1EncoderModeVisible;
+    void (*setVisible)(int, bool) = uf8 ? reasixty_setUf8EncoderModeVisible
+                                        : reasixty_setUf1EncoderModeVisible;
+    void (*moveSeq)(int, int) = uf8 ? reasixty_uf8EncoderMoveSeq : reasixty_uf1EncoderMoveSeq;
+
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Text(ctx, uf8 ? "Channel encoder modes (UF8)" : "Channel encoder modes");
+    help_(ctx, uf8 ? "Order + visibility of the modes the channel encoder cycles "
+                     "(hold ENC PUSH + turn)."
+                   : "Order + visibility of the modes the channel encoder cycles "
+                     "(hold MODE + turn).");
+    ImGui_Spacing(ctx);
+
+    const int total = reasixty_uf1EncoderModeTotal();
+    for (int pos = 0; pos < total; ++pos) {
+        const int modeInt = seqAt(pos);
+        char rowId[24];
+        snprintf(rowId, sizeof(rowId), "encmode_%d", pos);
+        ImGui_PushID(ctx, rowId);
+
+        bool vis = visible(modeInt);
+        if (ImGui_Checkbox(ctx, "##vis", &vis))
+            setVisible(modeInt, vis);
+
+        // ▲ move up (disabled on the first row).
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (pos > 0) {
+            if (ImGui_SmallButton(ctx, "\xE2\x96\xB2##up"))
+                moveSeq(pos, -1);
+        } else {
+            ImGui_TextDisabled(ctx, "\xE2\x96\xB2");
+        }
+        // ▼ move down (disabled on the last row).
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        if (pos < total - 1) {
+            if (ImGui_SmallButton(ctx, "\xE2\x96\xBC##dn"))
+                moveSeq(pos, +1);
+        } else {
+            ImGui_TextDisabled(ctx, "\xE2\x96\xBC");
+        }
+
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_Text(ctx, reasixty_uf1EncoderModeName(modeInt));
+        ImGui_PopID(ctx);
+    }
+}
+
 void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
 {
     using namespace uf8::bindings;
@@ -5274,48 +5351,14 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     // channel encoder (ENC PUSH). Lets the user reorder + hide the modes the
     // encoder cycles via the MODE-hold picker. Operates on main.cpp's runtime
     // ring (reasixty_uf1Encoder* accessors), independent of `bd` / `dirty`.
-    if (id == ButtonId::Uf1ChannelPush) {
-        ImGui_Spacing(ctx);
-        ImGui_Separator(ctx);
-        ImGui_Text(ctx, "Channel encoder modes");
-        ImGui_TextDisabled(ctx,
-            "Order + visibility of the modes the channel encoder cycles "
-            "(hold MODE + turn).");
-        ImGui_Spacing(ctx);
-
-        const int total = reasixty_uf1EncoderModeTotal();
-        for (int pos = 0; pos < total; ++pos) {
-            const int modeInt = reasixty_uf1EncoderSeqAt(pos);
-            char rowId[24];
-            snprintf(rowId, sizeof(rowId), "encmode_%d", pos);
-            ImGui_PushID(ctx, rowId);
-
-            bool vis = reasixty_uf1EncoderModeVisible(modeInt);
-            if (ImGui_Checkbox(ctx, "##vis", &vis))
-                reasixty_setUf1EncoderModeVisible(modeInt, vis);
-
-            // ▲ move up (disabled on the first row).
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (pos > 0) {
-                if (ImGui_SmallButton(ctx, "\xE2\x96\xB2##up"))
-                    reasixty_uf1EncoderMoveSeq(pos, -1);
-            } else {
-                ImGui_TextDisabled(ctx, "\xE2\x96\xB2");
-            }
-            // ▼ move down (disabled on the last row).
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            if (pos < total - 1) {
-                if (ImGui_SmallButton(ctx, "\xE2\x96\xBC##dn"))
-                    reasixty_uf1EncoderMoveSeq(pos, +1);
-            } else {
-                ImGui_TextDisabled(ctx, "\xE2\x96\xBC");
-            }
-
-            ImGui_SameLine(ctx, nullptr, nullptr);
-            ImGui_Text(ctx, reasixty_uf1EncoderModeName(modeInt));
-            ImGui_PopID(ctx);
-        }
-    }
+    // The encoder-mode ring under the encoder's push: the UF1's (MODE held)
+    // and the UF8's (ENC PUSH held, any mode's push tile). One block, two rings.
+    if (id == ButtonId::Uf1ChannelPush)
+        drawEncoderRingEditor_(ctx, false);
+    else if (ButtonId pb; id == ButtonId::ChannelPush
+             || (uf8::bindings::splitPerEncModeUf8Id(id, &pb, nullptr)
+                 && pb == ButtonId::ChannelPush))
+        drawEncoderRingEditor_(ctx, true);
 
 
     popBindingsTheme(ctx, themePushed);
@@ -7464,6 +7507,15 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         s_selected = uf8::bindings::perModeNavId(navBase, reasixty_uf1JogMode());
     }
 
+    // ⇨ AND THE UF8 ZOOM PAD AND ENC PUSH FOLLOW THE ENCODER MODE, for the same
+    // reason. The physical id too: a hardware pick lands on it when that mode's
+    // slot is empty, and the tile the user then edits is the mode's own.
+    if (uf8::bindings::ButtonId encBase;
+        uf8::bindings::splitPerEncModeUf8Id(s_selected, &encBase, nullptr)
+        || (uf8::bindings::followsUf8EncMode(s_selected) && ((encBase = s_selected), true))) {
+        s_selected = uf8::bindings::perEncModeUf8Id(encBase, reasixty_uf8EncoderMode());
+    }
+
     // ⇨ AND THE FOUR VIEW-OWNED KEYS FOLLOW THE VIEW, for the same reason: a
     // stale selection would leave the editor on the view you left while the
     // schematic already shows the one you are in.
@@ -7944,6 +7996,38 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 if (ImGui_Selectable(ctx, reasixty_uf1ViewName(v), &sel,
                                      nullptr, nullptr, nullptr))
                     reasixty_setUf1ViewMode(v);
+            }
+            ImGui_EndCombo(ctx);
+        }
+        ImGui_Spacing(ctx);
+    }
+
+    // ⇨ THE UF8 ENCODER MODE, for the zoom pad and ENC PUSH. Same contract as
+    // the jog picker below: it follows the surface and switches it. Every mode
+    // can be picked here, a ticked-off one too: on the UF8 the mode keys and
+    // actions reach a mode the ring skips.
+    if (s_deviceTab == 0
+        && uf8::bindings::splitPerEncModeUf8Id(editSel, nullptr, nullptr)) {
+        const int live = reasixty_uf8EncoderMode();
+        const int total = reasixty_uf1EncoderModeTotal();
+        ImGui_Text(ctx, "Encoder mode:");
+        help_(ctx, "The zoom pad and ENC PUSH have their own bindings in every "
+                   "encoder mode. Switching here switches the UF8.");
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        ImGui_SetNextItemWidth(ctx, 190.0);
+        if (ImGui_BeginCombo(ctx, "##uf8encmode",
+                             reasixty_uf1EncoderModeName(live), nullptr)) {
+            for (int pos = 0; pos < total; ++pos) {
+                const int m = reasixty_uf8EncoderSeqAt(pos);
+                char cid[32]; snprintf(cid, sizeof(cid), "##uf8emv%d", m);
+                bool v = reasixty_uf8EncoderModeVisible(m);
+                if (ImGui_Checkbox(ctx, cid, &v))
+                    reasixty_setUf8EncoderModeVisible(m, v);
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                bool sel = (m == live);
+                if (ImGui_Selectable(ctx, reasixty_uf1EncoderModeName(m), &sel,
+                                     nullptr, nullptr, nullptr))
+                    reasixty_setUf8EncoderMode(m);
             }
             ImGui_EndCombo(ctx);
         }

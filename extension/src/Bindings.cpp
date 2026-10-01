@@ -233,9 +233,113 @@ constexpr NameEntry kNames[] = {
     { ButtonId::Uf1Foot1,         "uf1_foot_1"          },
     { ButtonId::Uf1Foot2,         "uf1_foot_2"          },
     { ButtonId::Uf1Jog,           "uf1_jog"             },
+    { ButtonId::Uf8EncZoomUpChSelect, "uf8_enc_zoom_up_ch_select" },
+    { ButtonId::Uf8EncZoomUpNudge, "uf8_enc_zoom_up_nudge" },
+    { ButtonId::Uf8EncZoomUpMousewheel, "uf8_enc_zoom_up_mousewheel" },
+    { ButtonId::Uf8EncZoomUpInstance, "uf8_enc_zoom_up_instance" },
+    { ButtonId::Uf8EncZoomUpFxCycle, "uf8_enc_zoom_up_fx_cycle" },
+    { ButtonId::Uf8EncZoomUpSelsetCycle, "uf8_enc_zoom_up_selset_cycle" },
+    { ButtonId::Uf8EncZoomUpMarkers, "uf8_enc_zoom_up_markers" },
+    { ButtonId::Uf8EncZoomUpBankBy1, "uf8_enc_zoom_up_bank_by_1" },
+    { ButtonId::Uf8EncZoomUpLastParam, "uf8_enc_zoom_up_last_param" },
+    { ButtonId::Uf8EncZoomUpFxScrollAll, "uf8_enc_zoom_up_fx_scroll_all" },
+    { ButtonId::Uf8EncZoomUpInstanceScrollAll, "uf8_enc_zoom_up_instance_scroll_all" },
+    { ButtonId::Uf8EncZoomUpFxMove, "uf8_enc_zoom_up_fx_move" },
+    { ButtonId::Uf8EncZoomUpCsCycle, "uf8_enc_zoom_up_cs_cycle" },
+    { ButtonId::Uf8EncZoomUpBcCycle, "uf8_enc_zoom_up_bc_cycle" },
+    { ButtonId::Uf8EncZoomUpFavCycle, "uf8_enc_zoom_up_fav_cycle" },
+    { ButtonId::Uf8EncZoomDownChSelect, "uf8_enc_zoom_down_ch_select" },
+    { ButtonId::Uf8EncZoomDownNudge, "uf8_enc_zoom_down_nudge" },
+    { ButtonId::Uf8EncZoomDownMousewheel, "uf8_enc_zoom_down_mousewheel" },
+    { ButtonId::Uf8EncZoomDownInstance, "uf8_enc_zoom_down_instance" },
+    { ButtonId::Uf8EncZoomDownFxCycle, "uf8_enc_zoom_down_fx_cycle" },
+    { ButtonId::Uf8EncZoomDownSelsetCycle, "uf8_enc_zoom_down_selset_cycle" },
+    { ButtonId::Uf8EncZoomDownMarkers, "uf8_enc_zoom_down_markers" },
+    { ButtonId::Uf8EncZoomDownBankBy1, "uf8_enc_zoom_down_bank_by_1" },
+    { ButtonId::Uf8EncZoomDownLastParam, "uf8_enc_zoom_down_last_param" },
+    { ButtonId::Uf8EncZoomDownFxScrollAll, "uf8_enc_zoom_down_fx_scroll_all" },
+    { ButtonId::Uf8EncZoomDownInstanceScrollAll, "uf8_enc_zoom_down_instance_scroll_all" },
+    { ButtonId::Uf8EncZoomDownFxMove, "uf8_enc_zoom_down_fx_move" },
+    { ButtonId::Uf8EncZoomDownCsCycle, "uf8_enc_zoom_down_cs_cycle" },
+    { ButtonId::Uf8EncZoomDownBcCycle, "uf8_enc_zoom_down_bc_cycle" },
+    { ButtonId::Uf8EncZoomDownFavCycle, "uf8_enc_zoom_down_fav_cycle" },
+    { ButtonId::Uf8EncZoomLeftChSelect, "uf8_enc_zoom_left_ch_select" },
+    { ButtonId::Uf8EncZoomLeftNudge, "uf8_enc_zoom_left_nudge" },
+    { ButtonId::Uf8EncZoomLeftMousewheel, "uf8_enc_zoom_left_mousewheel" },
+    { ButtonId::Uf8EncZoomLeftInstance, "uf8_enc_zoom_left_instance" },
+    { ButtonId::Uf8EncZoomLeftFxCycle, "uf8_enc_zoom_left_fx_cycle" },
+    { ButtonId::Uf8EncZoomLeftSelsetCycle, "uf8_enc_zoom_left_selset_cycle" },
+    { ButtonId::Uf8EncZoomLeftMarkers, "uf8_enc_zoom_left_markers" },
+    { ButtonId::Uf8EncZoomLeftBankBy1, "uf8_enc_zoom_left_bank_by_1" },
+    { ButtonId::Uf8EncZoomLeftLastParam, "uf8_enc_zoom_left_last_param" },
+    { ButtonId::Uf8EncZoomLeftFxScrollAll, "uf8_enc_zoom_left_fx_scroll_all" },
+    { ButtonId::Uf8EncZoomLeftInstanceScrollAll, "uf8_enc_zoom_left_instance_scroll_all" },
+    { ButtonId::Uf8EncZoomLeftFxMove, "uf8_enc_zoom_left_fx_move" },
+    { ButtonId::Uf8EncZoomLeftCsCycle, "uf8_enc_zoom_left_cs_cycle" },
+    { ButtonId::Uf8EncZoomLeftBcCycle, "uf8_enc_zoom_left_bc_cycle" },
+    { ButtonId::Uf8EncZoomLeftFavCycle, "uf8_enc_zoom_left_fav_cycle" },
+    { ButtonId::Uf8EncZoomRightChSelect, "uf8_enc_zoom_right_ch_select" },
+    { ButtonId::Uf8EncZoomRightNudge, "uf8_enc_zoom_right_nudge" },
+    { ButtonId::Uf8EncZoomRightMousewheel, "uf8_enc_zoom_right_mousewheel" },
+    { ButtonId::Uf8EncZoomRightInstance, "uf8_enc_zoom_right_instance" },
+    { ButtonId::Uf8EncZoomRightFxCycle, "uf8_enc_zoom_right_fx_cycle" },
+    { ButtonId::Uf8EncZoomRightSelsetCycle, "uf8_enc_zoom_right_selset_cycle" },
+    { ButtonId::Uf8EncZoomRightMarkers, "uf8_enc_zoom_right_markers" },
+    { ButtonId::Uf8EncZoomRightBankBy1, "uf8_enc_zoom_right_bank_by_1" },
+    { ButtonId::Uf8EncZoomRightLastParam, "uf8_enc_zoom_right_last_param" },
+    { ButtonId::Uf8EncZoomRightFxScrollAll, "uf8_enc_zoom_right_fx_scroll_all" },
+    { ButtonId::Uf8EncZoomRightInstanceScrollAll, "uf8_enc_zoom_right_instance_scroll_all" },
+    { ButtonId::Uf8EncZoomRightFxMove, "uf8_enc_zoom_right_fx_move" },
+    { ButtonId::Uf8EncZoomRightCsCycle, "uf8_enc_zoom_right_cs_cycle" },
+    { ButtonId::Uf8EncZoomRightBcCycle, "uf8_enc_zoom_right_bc_cycle" },
+    { ButtonId::Uf8EncZoomRightFavCycle, "uf8_enc_zoom_right_fav_cycle" },
+    { ButtonId::Uf8EncZoomCenterChSelect, "uf8_enc_zoom_center_ch_select" },
+    { ButtonId::Uf8EncZoomCenterNudge, "uf8_enc_zoom_center_nudge" },
+    { ButtonId::Uf8EncZoomCenterMousewheel, "uf8_enc_zoom_center_mousewheel" },
+    { ButtonId::Uf8EncZoomCenterInstance, "uf8_enc_zoom_center_instance" },
+    { ButtonId::Uf8EncZoomCenterFxCycle, "uf8_enc_zoom_center_fx_cycle" },
+    { ButtonId::Uf8EncZoomCenterSelsetCycle, "uf8_enc_zoom_center_selset_cycle" },
+    { ButtonId::Uf8EncZoomCenterMarkers, "uf8_enc_zoom_center_markers" },
+    { ButtonId::Uf8EncZoomCenterBankBy1, "uf8_enc_zoom_center_bank_by_1" },
+    { ButtonId::Uf8EncZoomCenterLastParam, "uf8_enc_zoom_center_last_param" },
+    { ButtonId::Uf8EncZoomCenterFxScrollAll, "uf8_enc_zoom_center_fx_scroll_all" },
+    { ButtonId::Uf8EncZoomCenterInstanceScrollAll, "uf8_enc_zoom_center_instance_scroll_all" },
+    { ButtonId::Uf8EncZoomCenterFxMove, "uf8_enc_zoom_center_fx_move" },
+    { ButtonId::Uf8EncZoomCenterCsCycle, "uf8_enc_zoom_center_cs_cycle" },
+    { ButtonId::Uf8EncZoomCenterBcCycle, "uf8_enc_zoom_center_bc_cycle" },
+    { ButtonId::Uf8EncZoomCenterFavCycle, "uf8_enc_zoom_center_fav_cycle" },
+    { ButtonId::Uf8EncChannelPushChSelect, "uf8_enc_channel_push_ch_select" },
+    { ButtonId::Uf8EncChannelPushNudge, "uf8_enc_channel_push_nudge" },
+    { ButtonId::Uf8EncChannelPushMousewheel, "uf8_enc_channel_push_mousewheel" },
+    { ButtonId::Uf8EncChannelPushInstance, "uf8_enc_channel_push_instance" },
+    { ButtonId::Uf8EncChannelPushFxCycle, "uf8_enc_channel_push_fx_cycle" },
+    { ButtonId::Uf8EncChannelPushSelsetCycle, "uf8_enc_channel_push_selset_cycle" },
+    { ButtonId::Uf8EncChannelPushMarkers, "uf8_enc_channel_push_markers" },
+    { ButtonId::Uf8EncChannelPushBankBy1, "uf8_enc_channel_push_bank_by_1" },
+    { ButtonId::Uf8EncChannelPushLastParam, "uf8_enc_channel_push_last_param" },
+    { ButtonId::Uf8EncChannelPushFxScrollAll, "uf8_enc_channel_push_fx_scroll_all" },
+    { ButtonId::Uf8EncChannelPushInstanceScrollAll, "uf8_enc_channel_push_instance_scroll_all" },
+    { ButtonId::Uf8EncChannelPushFxMove, "uf8_enc_channel_push_fx_move" },
+    { ButtonId::Uf8EncChannelPushCsCycle, "uf8_enc_channel_push_cs_cycle" },
+    { ButtonId::Uf8EncChannelPushBcCycle, "uf8_enc_channel_push_bc_cycle" },
+    { ButtonId::Uf8EncChannelPushFavCycle, "uf8_enc_channel_push_fav_cycle" },
 };
 
 } // namespace
+
+bool splitPerEncModeUf8Id(ButtonId id, ButtonId* baseOut, int* modeOut)
+{
+    static const ButtonId kBase[] = {
+        ButtonId::ZoomUp, ButtonId::ZoomDown, ButtonId::ZoomLeft,
+        ButtonId::ZoomRight, ButtonId::ZoomCenter, ButtonId::ChannelPush,
+    };
+    const int first = static_cast<int>(ButtonId::Uf8EncZoomUpChSelect);
+    const int v = static_cast<int>(id) - first;
+    if (v < 0 || v >= 6 * kUf8EncModeCountForKeys) return false;
+    if (baseOut) *baseOut = kBase[v / kUf8EncModeCountForKeys];
+    if (modeOut) *modeOut = v % kUf8EncModeCountForKeys;
+    return true;
+}
 
 bool splitPerViewUf1Id(ButtonId id, ButtonId* baseOut, int* viewOut)
 {
@@ -631,11 +735,16 @@ std::atomic<uint64_t> g_bindingsGen{0};
 // button now keeps the LED showing the Shift slot's active colour
 // after release, instead of falling back to Plain. Sized to 256 to
 // cover any future ButtonId additions without resizing.
-constexpr size_t kLastFiredModSize = 256;
+constexpr size_t kLastFiredModSize = 512;   // > every ButtonId (Uf1Jog + the UF8 per-encoder-mode block)
 // MSVC can't instantiate std::array<std::atomic<T>, N> (deleted copy
 // ctor on std::atomic propagates through std::array's aggregate init);
 // the raw C array works on all compilers.
 std::atomic<uint8_t> g_lastFiredMod[kLastFiredModSize] = {};
+static_assert(static_cast<int>(ButtonId::Uf8EncChannelPushFavCycle)
+              == static_cast<int>(ButtonId::Uf8EncZoomUpChSelect) + 6 * kUf8EncModeCountForKeys - 1,
+              "the per-encoder-mode block must stay six contiguous groups of kUf8EncModeCountForKeys");
+static_assert(static_cast<size_t>(ButtonId::Uf8EncChannelPushFavCycle) < kLastFiredModSize,
+              "g_lastFiredMod must cover every ButtonId");
 
 uint32_t pressKey(int layer, ButtonId id)
 {
@@ -789,6 +898,34 @@ void fillDerivedUf1Slots_(Config& c)
     for (const ButtonId base : kNavBases)
         for (int m = 0; m < kUf1JogModeCountForNav; ++m)
             seed(perModeNavId(base, m), base);
+}
+
+// ⇨ THE UF8 ZOOM PAD AND ENC PUSH PER ENCODER MODE. Every empty per-mode slot
+// gets the physical key's binding of the SAME layer, so each mode does what the
+// key did before until the user gives that mode its own (Baustein H, plan
+// docs/fixed-lanes-plan.md). All three layers: the UF8 binds per layer, and a
+// per-mode slot filled on Layer 1 only would leave Layers 2 and 3 to the
+// fallback in uf8RemapForEncMode_, which the editor cannot show. Idempotent: a
+// slot that has an action of its own is never touched, so a later run after a
+// new mode was appended only fills the new ids.
+void fillDerivedUf8EncSlots_(Config& c)
+{
+    static const ButtonId kBases[] = {
+        ButtonId::ZoomUp, ButtonId::ZoomDown, ButtonId::ZoomLeft,
+        ButtonId::ZoomRight, ButtonId::ZoomCenter, ButtonId::ChannelPush,
+    };
+    for (Layer& L : c.layers) {
+        for (const ButtonId base : kBases) {
+            auto b = L.bindings.find(base);
+            if (b == L.bindings.end() || !bindingHasAnyAction(b->second)) continue;
+            const Binding src = b->second;
+            for (int m = 0; m < kUf8EncModeCountForKeys; ++m) {
+                Binding& dst = L.bindings[perEncModeUf8Id(base, m)];
+                if (bindingHasAnyAction(dst)) continue;
+                dst = src;
+            }
+        }
+    }
 }
 
 // ⇨ THE RME SIDE-CAR'S FACTORY BANK: its first own bank (kUf1RmeBankBase) holds
@@ -1532,6 +1669,7 @@ void seedFactoryDefaults_(Config& c)
     // every base above is final — including the arrows' long press and the two
     // views that seed their own 5-8. See fillDerivedUf1Slots_.
     fillDerivedUf1Slots_(c);
+    fillDerivedUf8EncSlots_(c);
     seedRmeSideCarBank_(c);
     seedRmeSideCarBankShift_(c);
     seedRmeSideCarBank23_(c);
@@ -3344,7 +3482,10 @@ bool invokeBuiltin(const std::string& name, int param)
 // v49 (2026-09-25): the first RME side-car bank gets its second half (the
 // Shift set, on 5-8): Ext In, Main, TotalMix, where that set is still empty
 // (seedRmeSideCarBankShift_).
-constexpr int kCurrentBindingsVersion = 50;
+// v51 (2026-10-01): the UF8 zoom pad and ENC PUSH get a binding per encoder
+// mode, each filled from the key's own binding on its layer
+// (fillDerivedUf8EncSlots_), so nothing changes until a mode gets its own.
+constexpr int kCurrentBindingsVersion = 51;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4552,6 +4693,9 @@ void load()
             }
             if (tmp.version < 50) {
                 upgradeBackfillSelLong_(tmp);
+            }
+            if (tmp.version < 51) {
+                fillDerivedUf8EncSlots_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
