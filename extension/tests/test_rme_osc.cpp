@@ -546,30 +546,27 @@ int main()
               "the fifth key opens Input 2, in page order");
 
         // A page on its own stays as written, slot for slot: an output with Pan
-        // and Delay but no crossfeed keeps Delay on pot 3. (Since 29.09. the
-        // factory Output page has Output 2 beside it, so the lone case is the
-        // same list without it.)
+        // and Delay but no crossfeed keeps Delay on pot 2.
         name("/output/4/name", "Out"); put("/output/4/balpan", 0); put("/output/4/delay", 1);
-        auto lonePages = pages;
-        lonePages.erase(std::remove_if(lonePages.begin(), lonePages.end(),
-                            [](const reasixty::rme::StripPage& p) { return p.name == "Output 2"; }),
-                        lonePages.end());
-        const auto out = sp::views(s, Row::Output, 4, lonePages);
+        const auto out = sp::views(s, Row::Output, 4, pages);
         check(out.size() == 1 && out[0].name == "Output" && out[0].id == 9 * 8
-              && out[0].pots[2] == sp::find("delay") && out[0].pots[1] == sp::find("crossfeed"),
+              && out[0].pots[1] == sp::find("delay") && out[0].pots[0] == sp::find("crossfeed"),
               "a lone page keeps its slots");
 
-        // ⇨ FX RETURN AFTER PAN, XFEED, DELAY, REF LVL (Frank 29.09.): Output and
-        // Output 2 are one run, so an output with all five gets two views.
+        // ⇨ PAN OFF THE OUTPUT PAGE, FX RET ON IT (Frank 01.10.2026): Pan rides
+        // the V-Pot above the fader, so an output with all five gets ONE view,
+        // Xfeed, Delay, Ref Lvl, FX Ret, and no page of its own for FX Ret.
         name("/output/6/name", "Full"); put("/output/6/balpan", 0); put("/output/6/crossfeed", 0);
         put("/output/6/delay", 0); put("/output/6/reflevel", 1); put("/output/6/fxreturn", -10);
         const auto full = sp::views(s, Row::Output, 6, pages);
-        const sp::View* v9  = full.size() >= 2 ? &full[full.size() - 2] : nullptr;
-        const sp::View* v10 = full.empty() ? nullptr : &full.back();
-        check(v9 && v10 && v9->name == "Output" && v9->pots[0] == sp::find("balpan")
-              && v9->pots[3] == sp::find("reflevel")
-              && v10->name == "Output 2" && v10->pots[0] == sp::find("fxreturn") && !v10->pots[1],
-              "FX Ret comes after Pan, Xfeed, Delay, Ref Lvl on its own view");
+        const sp::View* v9 = full.empty() ? nullptr : &full.back();
+        bool anyPan = false;
+        for (const auto& v : full)
+            for (const auto* q : v.pots) if (q == sp::find("balpan")) anyPan = true;
+        check(v9 && v9->name == "Output" && v9->pots[0] == sp::find("crossfeed")
+              && v9->pots[2] == sp::find("reflevel") && v9->pots[3] == sp::find("fxreturn")
+              && !anyPan,
+              "FX Ret after Xfeed, Delay, Ref Lvl on the Output page, no Pan on a page");
         check(sp::nudge(s, Row::Output, 6, *sp::find("fxreturn"), 2).at(0).first
                   == "/output/6/fxreturn",
               "FX Ret writes the output's own fxreturn");
@@ -889,52 +886,106 @@ int main()
         }
     }
 
-    // ── rme.json v5: Output 2 and the FX pages reach existing files ─────────
+    // ── rme.json v5 + v6: the FX pages reach existing files, FX Ret moves onto
+    // the Output page and Pan leaves it ───────────────────────────────────────
     {
         using reasixty::rme::StripPage;
-        // Frank's v4 list: the factory pages up to "Output", nothing after.
+        const std::string oldOut[4] = { "balpan", "crossfeed", "delay", "reflevel" };
+        auto names = [](const std::vector<StripPage>& v) {
+            std::vector<std::string> n;
+            for (const auto& p : v) n.push_back(p.name);
+            return n;
+        };
+        auto outPots = [](const std::vector<StripPage>& v) {
+            for (const auto& p : v)
+                if (p.name == "Output")
+                    return p.pots[0] + "," + p.pots[1] + "," + p.pots[2] + "," + p.pots[3];
+            return std::string();
+        };
+        const std::string newOutPots = "crossfeed,delay,reflevel,fxreturn";
+
+        // A v4 list: the factory pages up to "Output" with the old pots, nothing after.
         std::vector<StripPage> v4 = reasixty::rme::defaultStripPages();
         v4.erase(std::remove_if(v4.begin(), v4.end(), [](const StripPage& p) {
-                     return p.name == "Output 2" || p.name == "Reverb" || p.name == "Reverb 2"
-                         || p.name == "Reverb 3" || p.name == "Echo" || p.name == "Echo 2"; }),
-             v4.end());
-        check(v4.size() == 10 && v4.back().name == "Output", "v4 list as Frank's file has it");
+                     return p.name == "Reverb" || p.name == "Reverb 2" || p.name == "Reverb 3"
+                         || p.name == "Echo" || p.name == "Echo 2"; }),
+                 v4.end());
+        for (auto& p : v4) if (p.name == "Output") std::copy(oldOut, oldOut + 4, p.pots);
+        check(v4.size() == 10 && v4.back().name == "Output", "v4 list as an old file has it");
         auto up = v4;
         reasixty::rme::upgradeStripPagesToV5(up);
-        std::vector<std::string> n;
-        for (const auto& p : up) n.push_back(p.name);
-        check(up.size() == 16 && n[9] == "Output" && n[10] == "Output 2" && n[11] == "Reverb"
-              && n[14] == "Echo" && n[15] == "Echo 2",
-              "v5: Output 2 right after Output, FX pages at the end");
+        auto n = names(up);
+        check(up.size() == 15 && n[9] == "Output" && n[10] == "Reverb" && n[14] == "Echo 2",
+              "v5: FX pages at the end, no Output 2 any more");
+        reasixty::rme::upgradeStripPagesToV6(up);
+        check(up.size() == 15 && outPots(up) == newOutPots, "v6 on a v4 list: FX Ret, no Pan");
         auto twice = up;
         reasixty::rme::upgradeStripPagesToV5(twice);
-        check(twice.size() == up.size(), "v5: running it again changes nothing");
+        reasixty::rme::upgradeStripPagesToV6(twice);
+        check(names(twice) == names(up) && outPots(twice) == newOutPots,
+              "v5 + v6: running them again changes nothing");
 
-        // Through the file: a v4 file gets them, a v5 file without them does not.
+        // Frank's v5 file: Output with Pan, Output 2 with FX Ret alone, FX pages.
+        std::vector<StripPage> v5 = v4;
+        {
+            StripPage o2; o2.name = "Output 2"; o2.rows = "out"; o2.pots[0] = "fxreturn";
+            v5.push_back(o2);
+            reasixty::rme::upgradeStripPagesToV5(v5);        // the FX pages after it
+        }
+        check(v5.size() == 16 && names(v5)[10] == "Output 2", "v5 list as Frank's file has it");
+        auto v5up = v5;
+        reasixty::rme::upgradeStripPagesToV6(v5up);
+        n = names(v5up);
+        check(v5up.size() == 15 && outPots(v5up) == newOutPots
+              && std::find(n.begin(), n.end(), "Output 2") == n.end(),
+              "v6: Output 2 goes, FX Ret moves onto the Output page");
+
+        // Pages the user arranged stay as they are.
+        auto ownO2 = v5;
+        for (auto& p : ownO2) if (p.name == "Output 2") p.pots[1] = "delay";
+        reasixty::rme::upgradeStripPagesToV6(ownO2);
+        check(ownO2.size() == 16 && outPots(ownO2) == "balpan,crossfeed,delay,reflevel",
+              "v6: an Output 2 of the user's own keeps everything");
+        auto ownOut = v5;
+        for (auto& p : ownOut) if (p.name == "Output") p.pots[0] = "delay";
+        reasixty::rme::upgradeStripPagesToV6(ownOut);
+        check(ownOut.size() == 16 && outPots(ownOut) == "delay,crossfeed,delay,reflevel",
+              "v6: an Output page of the user's own keeps everything");
+
+        // Through the file.
         Config c;
         std::string j = configToJson(c);
-        check(j.find("\"version\": 5") != std::string::npos, "rme.json is written as v5");
-        auto strip = [](std::string js, const char* ver, bool keepFx) {
-            const auto a = js.find("\"version\": 5");
+        check(j.find("\"version\": 6") != std::string::npos, "rme.json is written as v6");
+        auto withVersion = [](std::string js, const char* ver) {
+            const auto a = js.find("\"version\": 6");
             js.replace(a, 12, std::string("\"version\": ") + ver);
-            if (!keepFx)
-                for (const char* nm : { "Output 2", "Reverb 3", "Reverb 2", "Reverb", "Echo 2",
-                                        "Echo" }) {
-                    const std::string key = std::string("{ \"name\": \"") + nm + "\"";
-                    const auto s0 = js.find(key);
-                    if (s0 == std::string::npos) continue;
-                    auto e = js.find('\n', s0);
-                    js.erase(s0, e - s0 + 1);
-                }
-            // The last page left must not keep its comma.
+            return js;
+        };
+        Config franks; franks.stripPages = v5;
+        Config fromV5;
+        check(configFromJson(withVersion(configToJson(franks), "5"), fromV5)
+              && fromV5.stripPages.size() == 15 && outPots(fromV5.stripPages) == newOutPots,
+              "v5 file: Output 2 folded into the Output page on load");
+        Config fromV6;
+        check(configFromJson(configToJson(franks), fromV6) && fromV6.stripPages.size() == 16,
+              "v6 file: pages are taken as written");
+        auto noFx = [](std::string js) {
+            for (const char* nm : { "Reverb 3", "Reverb 2", "Reverb", "Echo 2", "Echo" }) {
+                const std::string key = std::string("{ \"name\": \"") + nm + "\"";
+                const auto s0 = js.find(key);
+                if (s0 == std::string::npos) continue;
+                auto e = js.find('\n', s0);
+                js.erase(s0, e - s0 + 1);
+            }
             if (const auto tc = js.find(",\n  ]"); tc != std::string::npos) js.erase(tc, 1);
             return js;
         };
         Config fromV4;
-        check(configFromJson(strip(j, "4", false), fromV4) && fromV4.stripPages.size() == 16,
-              "v4 file: the upgrade adds the six pages");
-        Config fromV5;
-        check(configFromJson(strip(j, "5", false), fromV5) && fromV5.stripPages.size() == 10,
+        check(configFromJson(withVersion(noFx(j), "4"), fromV4) && fromV4.stripPages.size() == 15,
+              "v4 file: the upgrade adds the five FX pages");
+        Config fromV5NoFx;
+        check(configFromJson(withVersion(noFx(j), "5"), fromV5NoFx)
+              && fromV5NoFx.stripPages.size() == 10,
               "v5 file: pages the user removed stay removed");
     }
 

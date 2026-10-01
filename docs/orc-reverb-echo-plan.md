@@ -107,6 +107,10 @@ Neue Werksseite „Output 2" mit `rows = "out"`, Pot 1 = `fxreturn`, direkt nach
 Weil beide `out` tragen, packt der STRIP sie zu einem Vorrat: Pan, Xfeed, Delay, Ref Lvl,
 dann FX Ret auf der nächsten Ansicht.
 
+**Überholt 01.10.2026 (Frank, ORC 1.2):** Pan raus aus der Seite „Output“ (er sitzt auf dem
+V-Pot über dem Fader), FX Ret als Pot 4 hinein, „Output 2“ fällt weg. Eine Ausgangsspur hat
+damit 8 Seiten statt 9. `rme.json` v6 stuft unveränderte Werksseiten um (`upgradeStripPagesToV6`).
+
 ### Mute FX
 
 Built-in `rme_mute_fx` über `regRmeCr` (wie Dim), Lampe aus `State::muteFx`, umschaltend

@@ -72,11 +72,14 @@ struct StripPage {
     std::string keys[4];
 };
 // The factory pages, docs/rme-strip-and-uf8-plan.md 3.2 (Frank 21.09.), plus
-// Output 2 and the FX pages (docs/orc-reverb-echo-plan.md, 29.09.).
+// FX Ret and the FX pages (docs/orc-reverb-echo-plan.md, 29.09.; FX Ret on the
+// Output page since 01.10.).
 std::vector<StripPage> defaultStripPages();
-// rme.json v4 and older: add Output 2 after the output page and the FX pages
-// at the end, each only if missing. Exposed for the test.
+// rme.json v4 and older: add the FX pages at the end, each only if missing.
+// v5 and older: Pan off a factory Output page, FX Ret onto it, a factory
+// "Output 2" goes. Exposed for the test.
 void upgradeStripPagesToV5(std::vector<StripPage>& pages);
+void upgradeStripPagesToV6(std::vector<StripPage>& pages);
 
 struct Config {
     bool        enabled  = false;

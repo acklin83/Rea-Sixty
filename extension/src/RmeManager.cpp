@@ -44,9 +44,11 @@ namespace reasixty::rme {
 
 std::vector<StripPage> defaultStripPages()
 {
-    // Parameter ids: RmeStrip.cpp. Output page pot 4 = Ref Level, because the
-    // Input page is inputs and playbacks only and an output's ref level would
-    // otherwise have no place at all.
+    // Parameter ids: RmeStrip.cpp. The Output page carries Ref Level, because
+    // the Input page is inputs and playbacks only and an output's ref level would
+    // otherwise have no place at all. No Pan there: it rides the V-Pot above the
+    // fader, and leaving it off the page fits FX Ret onto it (Frank 01.10.2026:
+    // eight pages for an output instead of nine, the ninth holding FX Ret alone).
     return {
         { "Input",     "in,pb", { "gain", "fxsend", "reflevel", "width" },
                                 { "48v", "pad", "phase", "phaseR" } },
@@ -66,10 +68,8 @@ std::vector<StripPage> defaultStripPages()
                                 { "dyn_on", "", "", "" } },
         { "AutoLevel", "",      { "maxgain", "headroom", "risetime", "" },
                                 { "al_on", "", "", "" } },
-        { "Output",    "out",   { "balpan", "crossfeed", "delay", "reflevel" },
+        { "Output",    "out",   { "crossfeed", "delay", "reflevel", "fxreturn" },
                                 { "loopback", "talkbacksel", "phase", "phaseR" } },
-        { "Output 2",  "out",   { "fxreturn", "", "", "" },
-                                { "", "", "", "" } },
         { "Reverb",    "reverb", { "rev_type", "rev_predelay", "rev_roomscale", "rev_time" },
                                  { "rev_on", "", "", "" } },
         { "Reverb 2",  "reverb", { "rev_lowcut", "rev_highcut", "rev_highdamp", "rev_smooth" },
@@ -86,10 +86,12 @@ std::vector<StripPage> defaultStripPages()
 
 // ⇨ VERSION 5 (29.09.2026): FX RETURN AND THE FX ROW. A file with a "strip" list
 // replaces the factory pages whole, so without this the new pages would never
-// reach anyone who has an rme.json already, Frank included. "Output 2" goes
-// right after the first page for outputs (it packs with it: FX Ret after Pan,
-// Xfeed, Delay, Ref Lvl, Frank 29.09.); the FX pages go to the end. Each only
-// when no page of that name is there, so running it twice changes nothing.
+// reach anyone who has an rme.json already, Frank included. "Output 2" went
+// right after the first page for outputs (FX Ret after Pan, Xfeed, Delay, Ref
+// Lvl, Frank 29.09.); the FX pages go to the end. Each only when no page of
+// that name is there, so running it twice changes nothing. Since v6 the factory
+// has no "Output 2" any more, so that half finds nothing to insert, and v6 puts
+// FX Ret on the Output page instead.
 void upgradeStripPagesToV5(std::vector<StripPage>& pages)
 {
     const std::vector<StripPage> fac = defaultStripPages();
@@ -114,6 +116,34 @@ void upgradeStripPagesToV5(std::vector<StripPage>& pages)
             if (const StripPage* pg = facPage(n)) pages.push_back(*pg);
 }
 
+// ⇨ VERSION 6 (01.10.2026): PAN OFF THE OUTPUT PAGE, FX RET ONTO IT. Pan is on
+// the V-Pot above the fader already; without it the Output page has room for FX
+// Ret, and an output has eight pages instead of nine (Frank 01.10.2026). Only a
+// page still as the factory wrote it changes: the Output page with the v5 pots,
+// and "Output 2" either missing (a v4 file) or holding FX Ret alone. A page the
+// user arranged stays as it is.
+void upgradeStripPagesToV6(std::vector<StripPage>& pages)
+{
+    const std::string oldPots[4] = { "balpan", "crossfeed", "delay", "reflevel" };
+    auto out = std::find_if(pages.begin(), pages.end(), [&](const StripPage& p) {
+        return p.name == "Output" && p.rows == "out"
+            && std::equal(std::begin(p.pots), std::end(p.pots), std::begin(oldPots));
+    });
+    if (out == pages.end()) return;
+    auto o2 = std::find_if(pages.begin(), pages.end(),
+                           [](const StripPage& p) { return p.name == "Output 2"; });
+    if (o2 != pages.end()) {
+        const StripPage& q = *o2;
+        const bool factory = q.rows == "out" && q.pots[0] == "fxreturn"
+            && q.pots[1].empty() && q.pots[2].empty() && q.pots[3].empty()
+            && q.keys[0].empty() && q.keys[1].empty() && q.keys[2].empty() && q.keys[3].empty();
+        if (!factory) return;
+    }
+    const std::string newPots[4] = { "crossfeed", "delay", "reflevel", "fxreturn" };
+    std::copy(std::begin(newPots), std::end(newPots), std::begin(out->pots));
+    if (o2 != pages.end()) pages.erase(o2);
+}
+
 std::string configToJson(const Config& c)
 {
     // The host is the only free text. It is an address, so quotes and
@@ -132,7 +162,7 @@ std::string configToJson(const Config& c)
     char buf[512];
     snprintf(buf, sizeof(buf),
         "{\n"
-        "  \"version\": 5,\n"
+        "  \"version\": 6,\n"
         "  \"enabled\": %s,\n"
         "  \"connection\": { \"host\": \"%s\", \"send\": %d, \"receive\": %d },\n",
         c.enabled ? "true" : "false", host.c_str(), c.sendPort, c.recvPort);
@@ -241,6 +271,7 @@ bool configFromJson(const std::string& json, Config& out)
         }
         if (!pages.empty()) {
             if (version < 5) upgradeStripPagesToV5(pages);
+            if (version < 6) upgradeStripPagesToV6(pages);
             c.stripPages = std::move(pages);
         }
     }
