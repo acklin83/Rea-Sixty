@@ -22,7 +22,7 @@ Codename and date come with the release. Everything below is on main after v0.6.
 
 ## Selection Sets on a bank
 
-**A soft-key bank of the kind Selection Sets puts slots 1 to 8 on the keys**, on the UF8's eight top keys and on the UF1's four (two pages). Names on the keys, the recalled set lit, used slots dim. Push recalls, hold stores the current selection into an empty slot, Shift stores over, Cmd selects the set's tracks in REAPER, Ctrl clears. The banner and the UF1's time field say what was stored or cleared.
+**A soft-key bank of the kind Selection Sets puts slots 1 to 8 on the keys**, on the UF8's eight top keys and on the UF1's four (two pages). Names on the keys, each slot in its own colour (set under Settings, Selection Sets, like the Parameter Groups' colours), the recalled set lit, used slots dim. Push recalls, hold stores the current selection into an empty slot, Shift stores over, Cmd selects the set's tracks in REAPER, Ctrl clears. The banner and the UF1's time field say what was stored or cleared.
 
 ## Folders
 
@@ -60,4 +60,5 @@ Codename and date come with the release. Everything below is on main after v0.6.
 - REAPER action for Folder Mode
 - Mode banner names the UF1 RME side-car
 - Dynamic bank "Selection Sets": slots 1-8 on the keys; push recalls, hold stores into an empty slot, Shift stores over, Cmd selects, Ctrl clears
+- Selection Sets get a key colour each (Settings, Selection Sets), used by the Selection Sets bank
 ```

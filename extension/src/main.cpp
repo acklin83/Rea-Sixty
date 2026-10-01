@@ -445,6 +445,8 @@ int      reasixty_pgBankOp(int gesture);            // Parameter-Groups bank
 void     reasixty_setPgBankOp(int gesture, int op);
 uint32_t reasixty_paramGroupColour(int i);          // per-group key colour
 void     reasixty_setParamGroupColour(int i, uint32_t rgb);
+uint32_t reasixty_selsetColour(int i);              // per-slot key colour (0-based)
+void     reasixty_setSelsetColour(int i, uint32_t rgb);
 uint32_t reasixty_trackBankColour(int i);
 void     reasixty_setTrackBankColour(int i, uint32_t rgb);
 std::string reasixty_trackBankColourName(int i);
@@ -8208,6 +8210,14 @@ std::atomic<uint32_t> g_paramGroupColour[8] = {
     0xFF0000, 0xFF8000, 0xFFFF00, 0x00FF00,   // red    orange  yellow  green
     0x0000FF, 0x8000FF, 0xFF00FF, 0x00FFFF,   // blue   violet  magenta cyan
 };
+// The same for the eight Selection Set slots, for the Selection Sets bank's keys
+// (Frank 2026-10-01, "wie bei param groups"). GLOBAL for the same reason: the sets
+// belong to the project, what slot 3 looks like on the surface does not. Coloured
+// from the start with the same eight.
+std::atomic<uint32_t> g_selsetColour[8] = {
+    0xFF0000, 0xFF8000, 0xFFFF00, 0x00FF00,
+    0x0000FF, 0x8000FF, 0xFF00FF, 0x00FFFF,
+};
 
 std::atomic<int> g_fxBankOp[5] = {
     int(FxBankOp::Focus), int(FxBankOp::Float), int(FxBankOp::Bypass),
@@ -8303,6 +8313,11 @@ static void ensureDynCfgLoaded_()
         if (const char* v = GetExtState("rea_sixty", k); v && v[0]) {
             const long c = std::strtol(v, nullptr, 16);
             g_paramGroupColour[i].store(static_cast<uint32_t>(c) & 0xFFFFFFu);
+        }
+        std::snprintf(k, sizeof(k), "selset_col_%d", i + 1);
+        if (const char* v = GetExtState("rea_sixty", k); v && v[0]) {
+            const long c = std::strtol(v, nullptr, 16);
+            g_selsetColour[i].store(static_cast<uint32_t>(c) & 0xFFFFFFu);
         }
     }
     if (const char* v = GetExtState("rea_sixty", "pg_bank_ops"); v && v[0]) {
@@ -8679,7 +8694,8 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
         info.present = k.present;
         info.label   = k.label;
         info.led     = k.led;
-        if (k.present) { info.hasRgb = true; info.rgb = 0xFFFFFFu; }   // white, like RME
+        // The slot's own colour (Settings → Selection Sets), like a parameter group.
+        if (k.present) { info.hasRgb = true; info.rgb = reasixty_selsetColour(slot); }
         return info;
     }
     // ⛔ AND TOTALMIX' SNAPSHOTS AND LAYOUTS, same place, same reason. The rule
@@ -50402,6 +50418,22 @@ void reasixty_setParamGroupColour(int i, uint32_t rgb)
     ensureDynCfgLoaded_();
     g_paramGroupColour[i].store(rgb & 0xFFFFFFu);
     char k[32]; std::snprintf(k, sizeof(k), "pg_col_%d", i);
+    char v[16]; std::snprintf(v, sizeof(v), "%06X", rgb & 0xFFFFFFu);
+    SetExtState("rea_sixty", k, v, true);
+    g_softKeyDirty.store(true);
+    g_pageDirty.store(true);
+}
+uint32_t reasixty_selsetColour(int i)
+{
+    ensureDynCfgLoaded_();
+    return (i >= 0 && i < 8) ? g_selsetColour[i].load() : 0xFFFFFFu;
+}
+void reasixty_setSelsetColour(int i, uint32_t rgb)
+{
+    if (i < 0 || i >= 8) return;
+    ensureDynCfgLoaded_();
+    g_selsetColour[i].store(rgb & 0xFFFFFFu);
+    char k[32]; std::snprintf(k, sizeof(k), "selset_col_%d", i + 1);
     char v[16]; std::snprintf(v, sizeof(v), "%06X", rgb & 0xFFFFFFu);
     SetExtState("rea_sixty", k, v, true);
     g_softKeyDirty.store(true);

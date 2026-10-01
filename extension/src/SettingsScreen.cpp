@@ -290,6 +290,8 @@ int      reasixty_pgBankOp(int gesture);
 void     reasixty_setPgBankOp(int gesture, int op);
 uint32_t reasixty_paramGroupColour(int i);
 void     reasixty_setParamGroupColour(int i, uint32_t rgb);
+uint32_t reasixty_selsetColour(int i);
+void     reasixty_setSelsetColour(int i, uint32_t rgb);
 uint32_t reasixty_trackBankColour(int i);
 void     reasixty_setTrackBankColour(int i, uint32_t rgb);
 std::string reasixty_trackBankColourName(int i);
@@ -25732,13 +25734,14 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
 
     const int active = reasixty_selsetActive();
     int tblFlags = 0;
-    if (ImGui_BeginTable(ctx, "selset_tbl", 7, &tblFlags,
+    if (ImGui_BeginTable(ctx, "selset_tbl", 8, &tblFlags,
                          nullptr, nullptr, nullptr)) {
         int    wFlag   = ImGui_TableColumnFlags_WidthFixed;
         double wSlot   = scaleW_(ctx,  70.0);
         double wGlob   = scaleW_(ctx,  70.0);
         double wType   = scaleW_(ctx,  95.0);
         double wName   = scaleW_(ctx, 190.0);
+        double wCol    = scaleW_(ctx,  50.0);
         double wMid    = scaleW_(ctx, 140.0);
         // Save + Clear share identical column + button widths so they
         // sit on the same horizontal pitch on every row. Recall is
@@ -25750,6 +25753,7 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
         ImGui_TableSetupColumn(ctx, "global", &wFlag, &wGlob,   nullptr);
         ImGui_TableSetupColumn(ctx, "type",   &wFlag, &wType,   nullptr);
         ImGui_TableSetupColumn(ctx, "name",   &wFlag, &wName,   nullptr);
+        ImGui_TableSetupColumn(ctx, "colour", &wFlag, &wCol,    nullptr);
         ImGui_TableSetupColumn(ctx, "mid",    &wFlag, &wMid,    nullptr);
         ImGui_TableSetupColumn(ctx, "save",   &wFlag, &wSave,   nullptr);
         ImGui_TableSetupColumn(ctx, "clear",  &wFlag, &wClear,  nullptr);
@@ -25806,6 +25810,17 @@ void SettingsScreen::drawSelectionSets(ImGui_Context* ctx)
                                         nullptr, nullptr))
             {
                 reasixty_setSelsetName(slot, nameBuf);
+            }
+
+            // Key colour of this slot on the Selection Sets bank. Global, like the
+            // Parameter Groups' colours (Frank 2026-10-01); slot is 1-based here.
+            ImGui_TableNextColumn(ctx);
+            {
+                int col = static_cast<int>(reasixty_selsetColour(slot - 1));
+                int ceFlags = ImGui_ColorEditFlags_NoInputs;
+                if (ImGui_ColorEdit3(ctx, "##sscol", &col, &ceFlags))
+                    reasixty_setSelsetColour(
+                        slot - 1, static_cast<uint32_t>(col) & 0xFFFFFFu);
             }
 
             // Col 5 — Group spinner (Group rows) OR live track count

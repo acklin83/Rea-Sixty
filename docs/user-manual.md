@@ -1367,7 +1367,7 @@ Right-click the bank's cell in the matrix and open **Dynamic bank**. The kinds a
 | `BC Favourites` | The eight Bus Compressor favourites, the same way |
 | `Hue Scenes` | Your eight Hue scene slots, each key in its scene's colour |
 | `OBS Scenes` | The scenes OBS is showing, by name, the one on air lit |
-| `Selection Sets` | Selection Set slots 1–8, by name, the recalled one lit, the used ones dim |
+| `Selection Sets` | Selection Set slots 1–8, by name and in each slot's colour, the recalled one lit, the used ones dim |
 
 The three favourite kinds differ in one thing only. The first follows the focus, which is what you want when one bank should serve both. The other two do not, so a rig can carry its channel strips on one bank and its bus comps on another and both are always what they say. All three read the plug-in's short name onto the key, live, and light the key that is on the track.
 
@@ -1815,12 +1815,13 @@ Each slot is either:
 - **Snapshot** — fixed list of REAPER track GUIDs frozen at save time.
 - **Group** — bound to a REAPER track group (1..128; 1..64 before REAPER 7.23). Membership refreshes continuously from REAPER's track groups across all Lead/Follow categories (ANY category).
 
-The slot rows are laid out as a fixed-width 7-column table so columns align across rows regardless of slot type. Left to right:
+The slot rows are laid out as a fixed-width 8-column table so columns align across rows regardless of slot type. Left to right:
 
 - **`• Slot N`** — the `•` prefix marks the currently active slot.
 - **Global** checkbox. When ON, the slot's content is workspace-global (ExtState, persists immediately). When OFF, project-scoped (saved into the project's RPP chunk on Cmd+S). Switching a slot to Group ticks Global for you, since "group N" is a stable concept across projects; untick it for a per-project group.
 - **Type** combo: `Snapshot` / `Group`.
 - **Name** text field.
+- **Colour** swatch — the slot's key colour on the **Selection Sets** dynamic bank. Global, like the Parameter Groups' colours: the sets belong to the project, the colour of slot 3 is the same in every project. The eight ship as red, orange, yellow, green, blue, violet, magenta and cyan. The keys can only show the SSL's ten button colours, so a colour you pick lands on the nearest of them.
 - **Grp** spinner (Group rows) — REAPER track group index 1..128. Snapshot rows show `(N tracks)` in this column instead.
 - **Save** button — Snapshot rows only. Overwrites the slot's GUID list with the current REAPER selection. (Save is hidden on Group rows — pressing it there would silently convert the slot to Snapshot and drop the live group binding, which is bad UX.)
 - **Clear** button — Snapshot rows only. Empties the slot.
@@ -1839,7 +1840,7 @@ Recalling a slot snaps the surface to strip 0 = first channel of the set, so lar
 
 Bind buttons to **Recall Selection Slot (toggle)** with param 1..8, and **Save current REAPER selection to slot** with param 1..8, via Settings → Bindings.
 
-**All eight on one bank.** Give a soft-key bank the dynamic kind **Selection Sets**. On the UF8 the eight top keys are slots 1 to 8; on the UF1 the four keys show 1 to 4, and a long press on ◄ / ► turns to 5 to 8. A key reads the set's name, or `Set 3` for an unnamed one and `Grp 12` for a group slot. Lit is the recalled set, dim a used slot, dark an empty one.
+**All eight on one bank.** Give a soft-key bank the dynamic kind **Selection Sets**. On the UF8 the eight top keys are slots 1 to 8; on the UF1 the four keys show 1 to 4, and a long press on ◄ / ► turns to 5 to 8. A key reads the set's name, or `Set 3` for an unnamed one and `Grp 12` for a group slot, and wears the slot's colour from the table above. Lit is the recalled set, dim a used slot, dark an empty one.
 
 | Gesture | What it does |
 |---|---|
