@@ -45,3 +45,11 @@
 - `b812a92`: mode banner names the UF1 side-car ("UF1 Mode • RME"); at start it said DAW.
 - "Followers 7-9 missing" was no bug: those tracks were not in the VCA group
   (probe `rea_sixty_vca_sonde.lua`).
+
+## 01.10.2026
+- Fixed Item Lanes: plan complete with decisions and probe results, `docs/fixed-lanes-plan.md`
+  (not built; order in section 5, decisions in section 6, measurements in section 4).
+- `29ba9b8` dynamic bank "Selection Sets" (SelsetBank.h), `ebeaebd` slot colours.
+- `312f5f4` released as v0.6.4 "Fletcher Dragge is my Spirit Animal" (ORC 1.2 later).
+  Apple notarization returned 403 until both agreements (developer account and App Store
+  Connect, Business) were accepted.
