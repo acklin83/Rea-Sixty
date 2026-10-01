@@ -284,7 +284,8 @@ Gemeinsame Regeln fürs Malen:
   gemessen: jedes 42475 ist ein eigener Eintrag „Create fixed lane comp area“).
 - Technik: jeder Abschnitt wird als Razor mit der Lane-Höhe der Quell-Lane gesetzt und über
   42475 in eine Comp-Area verwandelt; ist Comping auf der Spur aus, schaltet der erste Strich
-  es ein (REAPER legt dann C1 an). Ob das während der Wiedergabe sauber geht, klärt die Sonde.
+  es ein (REAPER legt dann C1 an). Während der Wiedergabe geht das ohne Aussetzer (Sonde
+  Frage 7).
 - Gruppen: gemalt wird auf allen Gruppenspuren derselben Lane-Nummer (Drums in einem Zug).
 
 **Takes in Items** (das alte REAPER-Takesystem, mehrere Takes in einem Item): Der Lanes-Modus
@@ -454,6 +455,10 @@ Danach steht fest, was über die API geht und was über Actions mit vorher geset
 
 Jeder Schritt ist für sich nutzbar. B allein ist schon das, was es nirgends gibt.
 
+**Handbuch (Frank 01.10.):** Die Fallstudien aus Abschnitt 7 und 8 kommen als Arbeitsabläufe
+ins Handbuch, jeweils mit dem Baustein, der sie möglich macht. Vorher den gebauten Ablauf
+Schritt für Schritt gehen, nicht aus dem Plan abschreiben.
+
 ---
 
 ## 6. Entscheide für Frank
@@ -526,8 +531,8 @@ Comp. Die Sängerin ist weg, jetzt wird ausgesucht.
 5. **Take 4 sitzt: Mitte tippen („Comp here“).** Rea-Sixty setzt einen Razor über die Loop-
    Strecke auf die Höhe von Lane 4 und löst 42475 aus. Comping war aus, also legt REAPER die
    Comp-Lane C1 oben an, und die Zeile aus Take 4 steht darin. Die Mitte leuchtet (Comping an).
-   Was danach spielt (C1 oder weiter die gehörte Lane), ist REAPERs Verhalten beim Comping;
-   das klärt Sonde Frage 2, und die Lampen zeigen es.
+   Danach spielt C1 (gemessen, Sonde Frage 2: Comp-Lane `C_LANEPLAYS` 1, Quellen 0); die
+   Lampen zeigen es.
 6. **→** springt zum nächsten Item-Rand, also zur nächsten Zeile. **Shift + ←** setzt die
    Schleife dorthin. Weiter bei Schritt 4.
 7. **Eine Silbe aus Take 2 retten: Mitte halten und Rad drehen** über genau die Silbe (Malen,

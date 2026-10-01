@@ -831,6 +831,11 @@ if(NOT WIN32)
     target_include_directories(test_selset_bank PRIVATE src)
     add_test(NAME selset_bank COMMAND test_selset_bank)
 
+    # Fixed item lanes: play set, stepping, A/B, razor per lane, comp map (LaneModel.h).
+    add_executable(test_lane_model tests/test_lane_model.cpp)
+    target_include_directories(test_lane_model PRIVATE src)
+    add_test(NAME lane_model COMMAND test_lane_model)
+
     add_executable(test_uc1_protocol tests/test_uc1_protocol.cpp src/UC1Protocol.cpp)
     target_include_directories(test_uc1_protocol PRIVATE src)
     add_test(NAME uc1_protocol COMMAND test_uc1_protocol)
