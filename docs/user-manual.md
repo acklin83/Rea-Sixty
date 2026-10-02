@@ -1035,7 +1035,7 @@ It works on the **selected track**: the one you last touched, if it is selected,
 | jog / encoder | Play the next lane, alone | The comp area under the edit cursor takes the next lane |
 | `↑` / `↓` | Play the lane above / below, alone | The comp area under the edit cursor takes the lane above / below |
 | `←` / `→` | Edit cursor to the previous / next comp-area or item edge | `←` loops the comp area (or the item) there, `→` is A/B |
-| centre (UF8: FIT and the push) | Comp here | The lane you hear joins the lanes that play, or leaves them |
+| centre (UF8: FIT and the push) | Comp here | Play the comp lane |
 
 All of them are bindings like any other cross key, per jog object on the UF1 and per encoder mode on the UF8.
 

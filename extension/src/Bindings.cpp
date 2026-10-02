@@ -832,14 +832,15 @@ const NavSeed kNavSeed[] = {
         // Lanes (plan docs/fixed-lanes-plan.md, Baustein B): ↑ / ↓ step the
         // heard lane, Shift steps the comp area under the cursor; ← / → go to
         // the comp-area or item edges, Shift ← loops there, Shift → is A/B;
-        // the centre is Comp here, Shift centre puts the heard lane into the
-        // play set or takes it out. The UF8's Lanes cross is the same table
+        // the centre is Comp here, Shift centre plays the comp lane (Frank
+        // 02.10.2026: lane_play_toggle could only ever take the one lane a step
+        // left playing out again). The UF8's Lanes cross is the same table
         // (seedUf8LanesCross_).
         { ButtonId::Uf1NavUpLanes,        "lane_prev",      "", Behavior::Momentary , "lane_comp_area_up" },
         { ButtonId::Uf1NavDownLanes,      "lane_next",      "", Behavior::Momentary , "lane_comp_area_down" },
         { ButtonId::Uf1NavLeftLanes,      "lane_edge_prev", "", Behavior::Momentary , "lane_loop_here" },
         { ButtonId::Uf1NavRightLanes,     "lane_edge_next", "", Behavior::Momentary , "lane_ab" },
-        { ButtonId::Uf1NavCentreLanes,    "lane_comp_here", "", Behavior::Momentary , "lane_play_toggle" },
+        { ButtonId::Uf1NavCentreLanes,    "lane_comp_here", "", Behavior::Momentary , "lane_play_comp" },
     };
 
 // ---- Factory defaults -----------------------------------------------------
@@ -963,7 +964,7 @@ void seedUf8LanesCross_(Config& c)
         { ButtonId::ZoomDown,    "lane_next",      "lane_comp_area_down" },
         { ButtonId::ZoomLeft,    "lane_edge_prev", "lane_loop_here"      },
         { ButtonId::ZoomRight,   "lane_edge_next", "lane_ab"             },
-        { ButtonId::ZoomCenter,  "lane_comp_here", "lane_play_toggle"    },
+        { ButtonId::ZoomCenter,  "lane_comp_here", "lane_play_comp"      },
         { ButtonId::ChannelPush, "lane_comp_here", nullptr               },
     };
     for (Layer& L : c.layers)
@@ -3543,7 +3544,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // v52 (2026-10-01): the jog mode and the encoder mode Lanes. The UF1 cross gets
 // its five Lanes slots (upgradeBackfillUf1Buttons_ fills missing kNavSeed ids,
 // green like the rest of the cross), the UF8 its Lanes cross on every layer.
-constexpr int kCurrentBindingsVersion = 52;
+constexpr int kCurrentBindingsVersion = 53;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4287,6 +4288,25 @@ void upgradeLanesCross_(Config& c)
     fillDerivedUf8EncSlots_(c);
 }
 
+// v53: Shift + centre of the Lanes cross plays the comp lane instead of
+// lane_play_toggle (a step always leaves one lane playing, so the toggle could
+// only silence it). Only where the slot still holds the v52 factory value.
+void upgradeLanesShiftCentre_(Config& c)
+{
+    auto swap = [](Binding& bd) {
+        auto& sh = bd.shortPress[static_cast<int>(Modifier::Shift)];
+        if (sh.type == ActionType::Builtin && sh.action == "lane_play_toggle")
+            sh.action = "lane_play_comp";
+    };
+    auto it = c.layers[0].bindings.find(ButtonId::Uf1NavCentreLanes);
+    if (it != c.layers[0].bindings.end()) swap(it->second);
+    constexpr int kLanes = kUf8EncModeCountForKeys - 1;    // EncoderMode::Lanes
+    for (Layer& L : c.layers) {
+        auto jt = L.bindings.find(perEncModeUf8Id(ButtonId::ZoomCenter, kLanes));
+        if (jt != L.bindings.end()) swap(jt->second);
+    }
+}
+
 void upgradeClearUf1NavLabels_(Config& c)
 {
     Layer& L1 = c.layers[0];
@@ -4776,6 +4796,9 @@ void load()
             }
             if (tmp.version < 52) {
                 upgradeLanesCross_(tmp);
+            }
+            if (tmp.version < 53) {
+                upgradeLanesShiftCentre_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
