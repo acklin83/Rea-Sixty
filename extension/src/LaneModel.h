@@ -443,8 +443,11 @@ struct Key {
 
 // `name` as P_LANENAME gives it ("" or the lane's number when it has none of its
 // own). A track without lanes shows one key, "Lanes on", on key 0.
+// ⇨ COMPING (a comp lane, live comping off; Frank 02.10.2026): the comp plays all
+// the time, so a take's lamp says something else: lit = the comp area under the
+// cursor (`areaSrc`, -1 none) comes from this take.
 inline Key key(int lane, int n, bool trackHasLanes, const std::string& name,
-               bool plays, int compLane)
+               bool plays, int compLane, bool comping = false, int areaSrc = -1)
 {
     Key k;
     if (!trackHasLanes) {
@@ -457,19 +460,30 @@ inline Key key(int lane, int n, bool trackHasLanes, const std::string& name,
     if (k.comp)                                                   k.label = "Comp";
     else if (name.empty() || name == std::to_string(lane + 1))    k.label = "Lane " + std::to_string(lane + 1);
     else                                                          k.label = name;
-    k.led = plays ? 2 : 1;
+    k.led = (comping && !k.comp) ? (lane == areaSrc ? 2 : 1) : (plays ? 2 : 1);
     return k;
 }
 
-enum class Op { None, Solo, Toggle, CompHere, LanesOn };
+// AreaTake: the comp area under the cursor takes this lane. Audition: hear this
+// lane alone while SHIFT is held, the comp comes back when it is let go.
+enum class Op { None, Solo, Toggle, CompHere, LanesOn, AreaTake, Audition };
 
 // gesture as the dynamic banks post it: 0 push, 1 Shift, 2 Cmd, 3 Ctrl, 4 long.
 // Push = this lane alone, Shift = into / out of the lanes that play, Cmd = Comp
 // here from this lane (not from the comp lane itself). Ctrl and long are free.
-inline Op op(int gesture, int lane, int n, bool trackHasLanes, int compLane)
+inline Op op(int gesture, int lane, int n, bool trackHasLanes, int compLane,
+              bool comping = false)
 {
     if (!trackHasLanes) return (gesture == 0 && lane == 0) ? Op::LanesOn : Op::None;
     if (lane < 0 || lane >= n) return Op::None;
+    if (comping && lane != compLane) {
+        switch (gesture) {
+            case 0: return Op::AreaTake;
+            case 1: return Op::Audition;
+            case 2: return Op::CompHere;
+            default: return Op::None;
+        }
+    }
     switch (gesture) {
         case 0: return Op::Solo;
         case 1: return Op::Toggle;

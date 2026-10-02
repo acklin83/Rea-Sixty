@@ -15004,6 +15004,19 @@ static int laneBankItemCount_()
     return lanes::bank::itemCount(laneCount_(tr), laneTrackHasLanes_(tr));
 }
 
+// Comping on the lane track: a comp lane, live comping off (the rule of
+// laneShiftTurn_). The comp area under the playing position, else the cursor.
+static bool laneComping_(MediaTrack* tr)
+{
+    return laneCount_(tr) > 0 && laneCompInfo_(tr).compLane >= 0 && !g_laneLive.load();
+}
+static int laneAreaHere_(MediaTrack* tr)
+{
+    const double t = (GetPlayState() & 1) ? GetPlayPosition() : GetCursorPosition();
+    const auto& ci = laneCompInfo_(tr);
+    return lanes::areaAt(ci.areas, t);
+}
+
 static DynSlotInfo laneBankSlot_(int lane)
 {
     DynSlotInfo info;
@@ -15012,10 +15025,16 @@ static DynSlotInfo laneBankSlot_(int lane)
     const bool has = laneTrackHasLanes_(tr);
     const int  n   = laneCount_(tr);
     const bool in  = has && lane < n;
+    const bool comping = has && laneComping_(tr);
+    int areaSrc = -1;
+    if (comping) {
+        const int a = laneAreaHere_(tr);
+        if (a >= 0) areaSrc = laneCompInfo_(tr).areas[static_cast<size_t>(a)].srcLane;
+    }
     const lanes::bank::Key k = lanes::bank::key(
         lane, n, has, in ? laneName_(tr, lane) : std::string(),
         in && lanes::plays(lanePlaySet_(tr), lane),
-        has ? laneCompInfo_(tr).compLane : -1);
+        has ? laneCompInfo_(tr).compLane : -1, comping, areaSrc);
     info.present = k.present;
     info.label   = k.label;
     info.led     = k.led;
@@ -15044,6 +15063,10 @@ static void laneToggleLane_(MediaTrack* tr, int lane)
     laneLiveHeard_(tr, set);
 }
 
+// SHIFT + a key while comping: that take alone until SHIFT is let go, then the
+// comp again (laneTick_).
+static MediaTrack* g_laneAuditionTr = nullptr;
+
 static void applyDynBankLaneOp_(int lane, int gesture)
 {
     MediaTrack* tr = laneTrack_();
@@ -15051,7 +15074,22 @@ static void applyDynBankLaneOp_(int lane, int gesture)
     const bool has  = laneTrackHasLanes_(tr);
     const int  n    = laneCount_(tr);
     const int  comp = has ? laneCompInfo_(tr).compLane : -1;
-    switch (lanes::bank::op(gesture, lane, n, has, comp)) {
+    switch (lanes::bank::op(gesture, lane, n, has, comp, has && laneComping_(tr))) {
+        case lanes::bank::Op::AreaTake: {
+            // The area keeps its bounds and takes this lane: one comp write,
+            // one undo step, the comp keeps playing.
+            const int a = laneAreaHere_(tr);
+            if (a < 0) break;
+            const lanes::CompArea area = laneCompInfo_(tr).areas[static_cast<size_t>(a)];
+            if (area.srcLane != lane)
+                laneCompRange_(tr, lane, area.start, area.end, /*keepPlaying*/ true);
+            laneNoteTake_(tr, lanes::only(n, lane));
+            break;
+        }
+        case lanes::bank::Op::Audition:
+            laneHearAlone_(tr, lane);
+            g_laneAuditionTr = tr;
+            break;
         case lanes::bank::Op::Solo:     laneHearAlone_(tr, lane); break;
         case lanes::bank::Op::Toggle:   laneToggleLane_(tr, lane); break;
         case lanes::bank::Op::CompHere: laneCompHere_(lane);       break;
@@ -15086,6 +15124,15 @@ static bool lanesModeLive_()
 // REAPER's own switches, a punch-in is one) and refresh the lamp states.
 void laneTick_()
 {
+    // SHIFT let go after auditioning a take from the bank: the comp again.
+    if (g_laneAuditionTr && !uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)) {
+        MediaTrack* tr = g_laneAuditionTr;
+        g_laneAuditionTr = nullptr;
+        if (ValidatePtr2(nullptr, tr, "MediaTrack*")) {
+            const int n = laneCount_(tr), comp = laneCompInfo_(tr).compLane;
+            if (comp >= 0 && comp < n) laneApplySet_(tr, lanes::only(n, comp));
+        }
+    }
     // The top keys repaint when the Lanes mode brings or takes back its bank.
     static bool s_bankOv = false;
     if (const bool ov = laneBankOverride_(); ov != s_bankOv) {

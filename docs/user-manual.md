@@ -1047,6 +1047,13 @@ On the UF8 it comes by itself: while the encoder is in **Lanes**, the eight top 
 - `SHIFT` + key: that lane joins the lanes that play, or leaves them. This is how you layer two takes from the surface.
 - Cmd + key: Comp here from that lane, without listening to it first.
 
+On a track with a comp lane the comp plays all the time, and the keys change with it (not while live comping, where every lane change is a cut):
+
+- **Push** a take: the comp area under the edit cursor now comes from that take, one undo step, and the comp keeps playing. Push `Comp` to hear the comp lane.
+- `SHIFT` + key: that take alone, as long as you hold `SHIFT`; let go and the comp plays again.
+- Cmd + key: Comp here from that take, as above.
+- Lit is the take the comp area under the edit cursor comes from, or under the play position while the song plays, so you see where each part comes from as it goes by.
+
 With more lanes than keys, the bank pages: on the UF8 with the control chosen under *Page with* below the matrix (the UF8 encoder, a UC1 encoder or BANK ◄ ►), on the UF1 with a long press on ◄ / ►. When you step to a lane on another page, the bank turns to that page. On a track without fixed lanes, key 1 reads `Lanes on` and turns them on for the track, as one undo step.
 
 The bank shows the track the Lanes keys work on, the selected one, so it can differ from the track the other dynamic banks follow.

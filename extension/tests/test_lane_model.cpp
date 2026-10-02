@@ -353,6 +353,19 @@ int main()
         EXPECT(op(1, 0, 0, false, -1) == Op::None);
         EXPECT(op(0, 1, 0, false, -1) == Op::None);
 
+        // Comping: the takes light by the area under the cursor, not by playing.
+        k = key(1, 4, true, "Rec", false, 3, /*comping*/ true, /*areaSrc*/ 1);
+        EXPECT(k.led == 2);
+        k = key(0, 4, true, "Edit", false, 3, true, 1);
+        EXPECT(k.led == 1);
+        k = key(3, 4, true, "1", true, 3, true, 1);      // the comp key: as it plays
+        EXPECT(k.comp && k.led == 2);
+        EXPECT(op(0, 1, 4, true, 3, true) == Op::AreaTake);
+        EXPECT(op(1, 1, 4, true, 3, true) == Op::Audition);
+        EXPECT(op(2, 1, 4, true, 3, true) == Op::CompHere);
+        EXPECT(op(0, 3, 4, true, 3, true) == Op::Solo);   // push Comp: hear the comp
+        EXPECT(op(4, 1, 4, true, 3, true) == Op::None);
+
         EXPECT(itemCount(14, true) == 14 && itemCount(0, false) == 1);
         EXPECT(pageOf(9, 8) == 1 && pageOf(7, 8) == 0 && pageOf(5, 4) == 1 && pageOf(-1, 4) == 0);
     }
