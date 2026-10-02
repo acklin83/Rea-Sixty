@@ -115,6 +115,12 @@ struct Config {
     // no Settings UI until the layout has proven itself on the device).
     std::vector<StripPage> stripPages = defaultStripPages();
 
+    // ⇨ ORC's sleep (SurfaceSleep.h, Frank 02.10.2026): the UF1 goes dark after
+    // this many minutes without a touch. ORC's own setting, in ORC's file;
+    // Rea-Sixty has its own (Settings → Devices → Sleep) and reads past these.
+    bool sleepEnabled = false;
+    int  sleepMinutes = 15;
+
     // Host and ports only. A pot or a colour changing must not drop the link.
     bool sameConnection(const Config& o) const
     {

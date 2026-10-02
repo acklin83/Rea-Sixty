@@ -836,6 +836,12 @@ if(NOT WIN32)
     target_include_directories(test_lane_model PRIVATE src)
     add_test(NAME lane_model COMMAND test_lane_model)
 
+    # Sleep: the clock Rea-Sixty and ORC share, the UF1's lights, the waking press
+    # (SurfaceSleep.h).
+    add_executable(test_surface_sleep tests/test_surface_sleep.cpp src/UF1Protocol.cpp)
+    target_include_directories(test_surface_sleep PRIVATE src)
+    add_test(NAME surface_sleep COMMAND test_surface_sleep)
+
     # The encoder-mode picker ring, UF1 and UF8 (EncoderRing.h, header only).
     add_executable(test_encoder_ring tests/test_encoder_ring.cpp)
     target_include_directories(test_encoder_ring PRIVATE src)

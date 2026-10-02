@@ -101,6 +101,7 @@
 #include "McpFolderCollapse.h"
 #include "VcaSpill.h"
 #include "SelsetBank.h"
+#include "SurfaceSleep.h"
 #include "EncoderRing.h"
 #include "LaneModel.h"
 #ifdef __APPLE__
@@ -5344,9 +5345,9 @@ constexpr BrightnessBytes kBrightnessTable[5] = {
     {0x20, 0xA0, 0x40, 0xA0, 0x32, 0xE0},  // full
 };
 
-// What the UF1's panel master sits at while the surface is awake: full, the way
-// SSL's own init leaves it and never changes it.
-constexpr uint8_t kUf1MasterFull = 0xFF;
+// What the UF1's panel master sits at while the surface is awake is
+// surfsleep::kUf1MasterFull (SurfaceSleep.h): full, the way SSL's own init
+// leaves it and never changes it.
 
 int clampLevel_(int level)
 {
@@ -5367,24 +5368,13 @@ int clampLevel_(int level)
 // is dim, not off. Sleep therefore writes a raw 0 straight to the builders and
 // does not go through the table or BL_Dark.
 
-constexpr int kSleepMinutesMin = 1;               // SSL's own range is 1..99
-constexpr int kSleepMinutesMax = 99;              // (uf8-manual-reference.md:55)
-
-std::atomic<bool> g_sleepEnabled{false};
-std::atomic<int>  g_sleepMinutes{15};
-
-// Written by the three input threads, read by onTimer. int64 ms from nowMs_().
-std::atomic<int64_t> g_lastInputMs{0};
-// True while the surfaces are dark. Read on the input threads too — it is the
-// thing surfaceWake_ swaps.
-std::atomic<bool> g_asleep{false};
-// Set by whichever input event won the wake, drained on the next tick.
-std::atomic<bool> g_wakeRequest{false};
-// Set by the sleep_now builtin, drained on the next tick. The builtin runs on
-// the INPUT thread (see the threading note at the top of this file), and the
-// device pointers it would otherwise push through are reset by the main thread
-// on a stale-handle reopen, so the push belongs to the tick and not to the key.
-std::atomic<bool> g_sleepToggleRequest{false};
+// The clock is SurfaceSleep.h, shared with ORC (02.10.2026): enabled, minutes,
+// the last input (stamped on the three input threads), asleep, the wake request
+// the waking event leaves for the tick, and the toggle request of sleep_now. The
+// builtin runs on the INPUT thread, and the device pointers it would otherwise
+// push through are reset by the main thread on a stale-handle reopen, so the
+// push belongs to the tick and not to the key.
+surfsleep::Clock g_sleep;
 
 // Defined below with the rest of the sleep code; applyBrightness needs it.
 void pushSleepBrightness_(bool asleep);
@@ -5441,13 +5431,13 @@ void applyBrightness()
     const int led = g_brightness.load();
     const int scr = g_scribbleBrightness.load();
     // ⛔ A SLEEPING SURFACE STAYS DARK. Two callers reach this while asleep and
-    // both would otherwise light the panel with g_asleep still true, leaving it
+    // both would otherwise light the panel with g_sleep.asleep still true, leaving it
     // lit until something happened to wake it: moving the Brightness sliders,
     // and the stale-handle reopen, which calls applyBrightness on a device that
     // just came up at its own firmware default. Re-asserting the dark here
     // covers both, and the stored value is what the next wake pushes.
-    if (g_asleep.load()) pushSleepBrightness_(true);
-    else                 pushBrightness(led, scr);
+    if (g_sleep.asleep.load()) pushSleepBrightness_(true);
+    else                       pushBrightness(led, scr);
     char buf[8];
     snprintf(buf, sizeof(buf), "%d", led);
     SetExtState("rea_sixty", "brightness", buf, true);
@@ -5918,11 +5908,11 @@ void loadBrightness()
         g_notchHold.store(std::clamp(std::atof(v), 0.0, 0.10));
     }
     if (const char* v = GetExtState("rea_sixty", "sleep_enabled"); v && *v) {
-        g_sleepEnabled.store(*v == '1');
+        g_sleep.enabled.store(*v == '1');
     }
     if (const char* v = GetExtState("rea_sixty", "sleep_minutes"); v && *v) {
-        g_sleepMinutes.store(std::clamp(std::atoi(v),
-                                        kSleepMinutesMin, kSleepMinutesMax));
+        g_sleep.minutes.store(std::clamp(std::atoi(v),
+                                         surfsleep::kMinutesMin, surfsleep::kMinutesMax));
     }
     if (const char* v = GetExtState("rea_sixty", "theme"); v && *v) {
         g_themeSelection.store(std::atoi(v));
@@ -6191,15 +6181,13 @@ void pushSleepBrightness_(bool asleep)
     // ⇨ SLEEP IS THE ONE OWNER OF THE UF1's PANEL MASTER. Taking it to 0 is what
     // finally darkens the small channel LCD, which 0x2D and 0x4F leave lit; on
     // wake it goes back to full and the two sliders paint over it.
-    if (g_uf1_dev && g_uf1_dev->isOpen())
-        g_uf1_dev->send(uf1::buildMasterBrightness(asleep ? 0x00 : kUf1MasterFull));
-    if (asleep) {
-        if (g_uf1_dev && g_uf1_dev->isOpen()) {
-            g_uf1_dev->send(uf1::buildLedBrightness(0x00));
-            g_uf1_dev->send(uf1::buildLcdBrightness(0x00));
-        }
-    } else {
-        pushUf1Brightness(g_brightness.load(), g_scribbleBrightness.load());
+    // The three frames are SurfaceSleep's (shared with ORC); awake they carry
+    // the Brightness sliders' levels, as pushUf1Brightness sends them.
+    if (g_uf1_dev && g_uf1_dev->isOpen()) {
+        const auto& bl = kBrightnessTable[clampLevel_(g_brightness.load())];
+        const auto& bs = kBrightnessTable[clampLevel_(g_scribbleBrightness.load())];
+        for (auto& fr : surfsleep::uf1Frames(asleep, bl.uf8_led, bs.uf1_lcd))
+            g_uf1_dev->send(std::move(fr));
     }
 }
 
@@ -6211,9 +6199,7 @@ void pushSleepBrightness_(bool asleep)
 // Atomics only, no REAPER API here ([[feedback-reaper-api-input-thread]]).
 bool surfaceWake_()
 {
-    g_lastInputMs.store(nowMs_());
-    if (!g_asleep.exchange(false)) return false;
-    g_wakeRequest.store(true);
+    if (!g_sleep.wake(nowMs_())) return false;
     // Buttons are swallowed one layer down, as a press/release pair.
     uf8::bindings::armWakeSwallow();
     return true;
@@ -6221,43 +6207,22 @@ bool surfaceWake_()
 
 // Put the surfaces to sleep, or wake them, from an action rather than the clock.
 // MAIN THREAD ONLY — it pushes. Anything on an input thread asks for it through
-// g_sleepToggleRequest instead.
+// g_sleep.toggleRequest instead.
 void setAsleep_(bool asleep)
 {
-    if (g_asleep.exchange(asleep) == asleep) return;
-    g_lastInputMs.store(nowMs_());
-    pushSleepBrightness_(asleep);
+    g_sleep.set(asleep, nowMs_(), pushSleepBrightness_);
 }
 
 // Main thread, from onTimerBody_. Mirrors tickIdentify: a deadline, an edge,
 // and a push only when the edge is crossed.
 void tickSleep_()
 {
-    if (g_wakeRequest.exchange(false)) pushSleepBrightness_(false);
-    // Deliberately above the transport check: asking for the dark by hand wins
-    // over a rolling transport, which is the whole point of having the key
-    // during a take. Only the CLOCK is held off while it rolls.
-    if (g_sleepToggleRequest.exchange(false)) setAsleep_(!g_asleep.load());
-
     // ⇨ A ROLLING TRANSPORT IS ACTIVITY. Frank asked for this explicitly: a take
     // must not go dark under his hands because he did not touch anything for
-    // twenty minutes. Carrying the stamp forward while it rolls also means the
-    // countdown starts at zero on stop rather than firing the instant he stops.
+    // twenty minutes. It holds the countdown, so it starts at zero on stop.
+    // Sleep now by hand still wins over it (SurfaceSleep.h, Clock::tick).
     const int ps = GetPlayState();
-    if ((ps & 1) || (ps & 4)) {
-        g_lastInputMs.store(nowMs_());
-        return;
-    }
-
-    if (!g_sleepEnabled.load() || g_asleep.load()) return;
-
-    const int64_t last = g_lastInputMs.load();
-    if (last == 0) { g_lastInputMs.store(nowMs_()); return; }   // first tick
-    const int64_t idleMs = nowMs_() - last;
-    if (idleMs < static_cast<int64_t>(g_sleepMinutes.load()) * 60000) return;
-
-    g_asleep.store(true);
-    pushSleepBrightness_(true);
+    g_sleep.tick(nowMs_(), (ps & 1) || (ps & 4), pushSleepBrightness_);
 }
 
 bool brightnessUp()
@@ -47824,7 +47789,7 @@ void onTimerBody_()
                 // The bring-up replays SSL's init sequence, and two of its
                 // frames set the UF1's brightness back to 0x10 / 0x32. A unit
                 // that reappears mid-sleep would come up lit.
-                if (g_asleep.load()) pushSleepBrightness_(true);
+                if (g_sleep.asleep.load()) pushSleepBrightness_(true);
             }
             // Skip the rest of this tick — pointers may have shifted
             // under code that already cached them above this block.
@@ -53432,24 +53397,24 @@ double reasixty_knobSpeedUc1()        { return g_knobSpeedUc1.load(); }
 // surfaceWake_ itself has internal linkage; UC1Surface.cpp is its own
 // translation unit and reaches it through here.
 bool reasixty_surfaceWake()           { return surfaceWake_(); }
-bool reasixty_isAsleep()              { return g_asleep.load(); }
-bool reasixty_sleepEnabled()          { return g_sleepEnabled.load(); }
-int  reasixty_sleepMinutes()          { return g_sleepMinutes.load(); }
+bool reasixty_isAsleep()              { return g_sleep.asleep.load(); }
+bool reasixty_sleepEnabled()          { return g_sleep.enabled.load(); }
+int  reasixty_sleepMinutes()          { return g_sleep.minutes.load(); }
 
 void reasixty_setSleepEnabled(bool on)
 {
-    g_sleepEnabled.store(on);
+    g_sleep.enabled.store(on);
     // Switching it on must not fire immediately on a surface nobody has touched
     // since REAPER started: the countdown begins now.
-    g_lastInputMs.store(nowMs_());
-    if (!on && g_asleep.load()) setAsleep_(false);
+    g_sleep.lastInputMs.store(nowMs_());
+    if (!on && g_sleep.asleep.load()) setAsleep_(false);
     SetExtState("rea_sixty", "sleep_enabled", on ? "1" : "0", true);
 }
 
 void reasixty_setSleepMinutes(int m)
 {
-    m = std::clamp(m, kSleepMinutesMin, kSleepMinutesMax);
-    g_sleepMinutes.store(m);
+    m = std::clamp(m, surfsleep::kMinutesMin, surfsleep::kMinutesMax);
+    g_sleep.minutes.store(m);
     char b[16]; snprintf(b, sizeof(b), "%d", m);
     SetExtState("rea_sixty", "sleep_minutes", b, true);
 }
@@ -57534,9 +57499,9 @@ void registerBindingHandlers()
     registerBuiltin("sleep_now", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            g_sleepToggleRequest.store(true);
+            g_sleep.toggleRequest.store(true);
         },
-        [](int) { return g_asleep.load(); },
+        [](int) { return g_sleep.asleep.load(); },
         "Sleep the surfaces now", false
     });
 

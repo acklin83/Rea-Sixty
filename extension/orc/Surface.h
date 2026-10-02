@@ -24,6 +24,7 @@
 #include <thread>
 
 #include "RmeInput.h"
+#include "SurfaceSleep.h"
 #include "Uf1Pacer.h"
 #include "UF1Device.h"
 #include "Uf1Spread.h"
@@ -94,6 +95,12 @@ class Surface {
     // painter drives it again.
     // The side-car's soft-key bank, relative within the RME set.
     std::atomic<int>      scBank_{0};
+
+    // ⇨ SLEEP, the extension's clock (SurfaceSleep.h): dark after the minutes
+    // set on the Controls page, the first touch only wakes. The waking press is
+    // swallowed with its release.
+    surfsleep::Clock       sleep_;
+    surfsleep::WakeSwallow wakeSwallow_;
 
     std::atomic<bool>     faderTouched_{false};
     std::atomic<uint16_t> faderPos_{0};
