@@ -185,6 +185,31 @@ int main()
     EXPECT(near(nextEdge(es, 5.0), 5.0));                               // past the end
     EXPECT(near(prevEdge(es, 0.0), 0.0));
 
+    // ---- no slivers (Test.RPP, 02.10.2026) ------------------------------------
+    {
+        // After stroke 1 (lane 4 of the file's 0-based count = "5"): lane 7 goes on
+        // 10 ms early. Stroke 2 starts where stroke 1 ended.
+        const std::vector<CompArea> before = {
+            {0.0, 18.99, 7}, {18.98, 20.98, 4}, {20.97, 85.37, 7} };
+        double s = 20.98, e = 22.98;
+        absorbSlivers(before, 5, s, e);
+        EXPECT(near(s, 20.97) && near(e, 22.98));       // takes lane 7's 10 ms head
+        // A stroke in the middle of a long area changes nothing.
+        s = 30.0; e = 32.0;
+        absorbSlivers(before, 5, s, e);
+        EXPECT(near(s, 30.0) && near(e, 32.0));
+        // Painted backwards up to the next area: the tail of the old one goes too.
+        const std::vector<CompArea> after = {
+            {0.0, 40.01, 7}, {40.0, 45.0, 3} };
+        s = 38.0; e = 39.99;
+        absorbSlivers(after, 5, s, e);
+        EXPECT(near(s, 38.0) && near(e, 40.01));
+        // The stroke's own lane is never a sliver to take.
+        s = 20.98; e = 22.98;
+        absorbSlivers({ {20.97, 85.37, 5} }, 5, s, e);
+        EXPECT(near(s, 20.98));
+    }
+
     // ---- painting --------------------------------------------------------------
     {
         double s = 0, e = 0;

@@ -289,6 +289,23 @@ inline double prevEdge(const std::vector<double>& es, double t, double eps = 1e-
     return t;
 }
 
+// ---- no slivers at the cuts ------------------------------------------------------------
+// REAPER lets neighbouring comp areas overlap by 10 ms. A stroke that starts where the
+// last one ended cut the old area there and left its 10 ms head plus overlap behind,
+// 20 ms of the old lane between the two strokes (Frank 02.10.2026, Test.RPP:
+// 18.98-20.98 lane 5, 20.97-20.99 lane 8, 20.98-22.98 lane 6). So before writing
+// [s, e] from `lane`: where an area of another lane would keep less than `sliver` on
+// either side of the new stretch, the stretch takes that bit too.
+inline void absorbSlivers(const std::vector<CompArea>& areas, int lane,
+                          double& s, double& e, double sliver = 0.03)
+{
+    for (const CompArea& a : areas) {
+        if (a.srcLane == lane) continue;
+        if (a.start < s && s < a.end && s - a.start < sliver) s = a.start;
+        if (a.start < e && e < a.end && a.end - e < sliver) e = a.end;
+    }
+}
+
 // ---- painting and live comping (Baustein F) ----------------------------------------
 
 // The stretch a stroke paints: from where the hold began to where the cursor got,

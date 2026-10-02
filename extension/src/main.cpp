@@ -14580,6 +14580,8 @@ static void laneCompRange_(MediaTrack* tr, int lane, double s, double e,
                            bool keepPlaying = false)
 {
     const lanes::PlaySet before = lanePlaySet_(tr);
+    // No 20 ms of the old lane left between two cuts (LaneModel.h, absorbSlivers).
+    lanes::absorbSlivers(laneCompInfo_(tr).areas, lane, s, e);
     LaneRazorsAside aside;
     aside.take();
     for (MediaTrack* t : laneTracksWithGroup_(tr)) {
