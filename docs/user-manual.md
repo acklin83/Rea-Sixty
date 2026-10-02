@@ -214,7 +214,7 @@ The push fires when you let go, and only if you did not turn. Held past half a s
 | CS Cycle (Favourites) | Step the active Channel Strip through the CS favourite slots | Carries values across the swap, or restores each favourite's own settings (see chapter *Favourites*). Empty slots are skipped; wrapping follows *Wrap Plug-in Cycle*. |
 | BC Cycle (Favourites) | The same for the Bus Compressor | Uses the BC favourite slots and the BC copy/own setting. |
 | Favourite Cycle (Focused Domain) | Whichever of the two the focused parameter belongs to | Falls back to the domain you last touched. Saves binding both cycles when one encoder should follow whatever is under your hand. |
-| Lanes | Play the next lane of the selected track, one lane at a time | `Shift` + rotation moves the comp area under the edit cursor to the next lane. The cursor pad and the push become the Lanes keys. See chapter *Fixed lanes*. |
+| Lanes | The edit cursor, as Nudge | `Shift` + rotation plays the next lane of the selected track, or, on a track with a comp lane, gives the comp area under the edit cursor the next take. The cursor pad and the push become the Lanes keys. See chapter *Fixed lanes*. |
 
 `Shift` + rotation is the encoder's Shift binding, which factory-defaults to **Instance Cycle**, not to Bank by 1. Rebind it in *Settings → Bindings → Channel Encoder* like any other slot.
 
@@ -826,7 +826,7 @@ pick the object.
 | **Envelope** | Moves the selected envelope points in value. Hold Ctrl and they move in time, one quarter of a grid step per count. |
 | **Razor** | Moves the razor edit — which edge, see below. |
 | **Fades** | Changes a fade length, 10 ms per count. Where there is a neighbour it is the crossfade. See *Fades* below. |
-| **Lanes** | Plays the next lane of the selected track, one lane at a time. With `SHIFT` the comp area under the edit cursor takes the next lane. See the chapter *Fixed lanes*. |
+| **Lanes** | Moves the edit cursor, at the Playhead object's step. With `SHIFT` it plays the next lane of the selected track, or, on a track with a comp lane, gives the comp area under the edit cursor the next take. See the chapter *Fixed lanes*. |
 
 The arrow cross **selects**, the jog **moves**. That split is the whole idea: you
 never have to let go of the wheel to change what you are working on.
@@ -1026,13 +1026,13 @@ It works on the **selected track**: the one you last touched, if it is selected,
 
 ## Where it lives
 
-- **UF1:** jog object **Lanes** (`SCRUB` held + jog, or **UF1 Jog Mode: Lanes**). The jog steps the lanes, the nav cross carries the Lanes keys, and the time field shows the name of the lane you now hear (or *LANE 3* for a lane without a name of its own).
-- **UF8:** encoder mode **Lanes** (push held + turn, or **Encoder Mode → Lanes**). The encoder steps the lanes, the cursor pad carries the same keys as the UF1's cross, and the push is A/B: turn through the takes, push to go back to the comp or whatever played before.
+- **UF1:** jog object **Lanes** (`SCRUB` held + jog, or **UF1 Jog Mode: Lanes**). The jog moves the edit cursor as in **Playhead** and with `SHIFT` changes the lane, the nav cross carries the Lanes keys, and the time field shows the name of the lane you now hear (or *LANE 3* for a lane without a name of its own).
+- **UF8:** encoder mode **Lanes** (push held + turn, or **Encoder Mode → Lanes**). The encoder moves the edit cursor as in **Nudge** and with `SHIFT` changes the lane, the cursor pad carries the same keys as the UF1's cross, and the push is A/B: back to the comp or whatever played before.
 - The UF1's own encoder can run Lanes too. It is unticked in its ring from the factory, because the jog does it there; tick it under the UF1's push in *Settings → Bindings → UF1*.
 
 | Key | Does | With `SHIFT` |
 |---|---|---|
-| jog / encoder | Play the next lane, alone | The comp area under the edit cursor takes the next lane |
+| jog / encoder | Move the edit cursor | Without a comp lane: play the next lane, alone. With one: the comp area under the edit cursor takes the next take, the comp keeps playing |
 | `↑` / `↓` | Play the lane above / below, alone | The comp area under the edit cursor takes the lane above / below |
 | `←` / `→` | Edit cursor to the previous / next comp-area or item edge | `←` loops around the nearest cut, `→` is A/B |
 | centre | Tap: play the comp lane. Hold and turn: paint | Comp here |
@@ -1043,11 +1043,11 @@ All of them are bindings like any other cross key, per jog object on the UF1 and
 
 On the UF8 it comes by itself: while the encoder is in **Lanes**, the eight top keys are the Lanes bank, whatever bank you had engaged, and leaving the mode brings that bank back. Switch this off under *Settings → Behaviour → Fixed lanes*. Elsewhere, and on the UF1, give a soft-key bank the dynamic kind **Lanes** (right-click its cell in the matrix, *Dynamic bank*). Key 1 is lane 1 of the selected track, key 2 lane 2, and so on: eight keys on the UF8, four on the UF1. A key reads the lane's name, or `Lane 3` for one without a name of its own; the comp lane reads `Comp`. Lit is a lane that plays, dim one that is silent. Takes are white, the comp lane green.
 
-- **Push** plays that lane alone, the same as stepping the jog onto it, without passing the lanes in between.
+- **Push** plays that lane alone, the same as `↑` / `↓` onto it, without passing the lanes in between.
 - `SHIFT` + key: that lane joins the lanes that play, or leaves them. This is how you layer two takes from the surface.
 - Cmd + key: Comp here from that lane, without listening to it first.
 
-With more lanes than keys, the bank pages: on the UF8 with the control chosen under *Page with* below the matrix (the UF8 encoder, a UC1 encoder or BANK ◄ ►), on the UF1 with a long press on ◄ / ►. When the jog steps to a lane on another page, the bank turns to that page. On a track without fixed lanes, key 1 reads `Lanes on` and turns them on for the track, as one undo step.
+With more lanes than keys, the bank pages: on the UF8 with the control chosen under *Page with* below the matrix (the UF8 encoder, a UC1 encoder or BANK ◄ ►), on the UF1 with a long press on ◄ / ►. When you step to a lane on another page, the bank turns to that page. On a track without fixed lanes, key 1 reads `Lanes on` and turns them on for the track, as one undo step.
 
 The bank shows the track the Lanes keys work on, the selected one, so it can differ from the track the other dynamic banks follow.
 
@@ -1065,9 +1065,9 @@ The bank shows the track the Lanes keys work on, the selected one, so it can dif
 
 On the UF8, holding the push and letting go without turning does nothing in Lanes either, so a mode pick you change your mind about does not write the comp.
 
-**Live comping.** Bind **Lanes: live comping on / off** to a key (a UF1 soft key, a UF8 key) and press it. The centre lights and the banner says *Lanes • Live comping On*. Press play. From then on every lane change with the jog, the encoder or `↑` / `↓` is a cut: the part since the last change goes into the comp at once, from the lane that played. The first change only marks where the first part starts. A lane that plays for less than half a second counts as passed on the way: turning from take 2 to take 5 goes over 3 and 4, and the part goes to take 5 from where you started turning. Stop ends the last part. Each cut is one undo step. With the loop running, the part that is open when the loop jumps back ends at the loop end, and the next pass writes only where you change lanes, so a pass without a change leaves the comp as it is. Switching live comping off, selecting another track or leaving the Lanes mode also ends the open part.
+**Live comping.** Bind **Lanes: live comping on / off** to a key (a UF1 soft key, a UF8 key) and press it. The centre lights and the banner says *Lanes • Live comping On*. Press play. From then on every lane change with `SHIFT` + jog, `SHIFT` + encoder, `↑` / `↓` or a key of the Lanes bank is a cut; while live comping is on, `SHIFT` + jog changes the whole lane on a track with a comp lane too: the part since the last change goes into the comp at once, from the lane that played. The first change only marks where the first part starts. A lane that plays for less than half a second counts as passed on the way: turning from take 2 to take 5 goes over 3 and 4, and the part goes to take 5 from where you started turning. Stop ends the last part. Each cut is one undo step. With the loop running, the part that is open when the loop jumps back ends at the loop end, and the next pass writes only where you change lanes, so a pass without a change leaves the comp as it is. Switching live comping off, selecting another track or leaving the Lanes mode also ends the open part.
 
-**Looping a cut.** `SHIFT` + `←` loops two seconds centred on the cut nearest the edit cursor, the one it sits on after `←` / `→`, and switches repeat on. A cut is a comp-area edge or an item edge of the lane you hear. Set the length under *Settings → Bindings → UF1* with the jog on **Lanes**, *Loop around the cut*; the UF8 uses the same length.
+**Looping a cut.** `SHIFT` + `←` loops two seconds centred on the cut nearest the edit cursor, the one it sits on after `←` / `→`, switches repeat on and puts the edit cursor at the start of the loop; while the song plays, playback jumps there. `SHIFT` + `←` again at the same cut switches the loop off and repeat back to how it was. A cut is a comp-area edge or an item edge of the lane you hear. Set the length under *Settings → Bindings → UF1* with the jog on **Lanes**, *Loop around the cut*; the UF8 uses the same length.
 
 **Cuts** land 20 ms before the point you chose, so the start of a word is not clipped, and can snap to the grid. Both are set under *Settings → Behaviour → Fixed lanes*.
 
@@ -1075,23 +1075,23 @@ On the UF8, holding the push and letting go without turning does nothing in Lane
 
 ## Working with it
 
-**A lead vocal from six takes, line by line (UF1).** Select the vocal track and put the jog on **Lanes**. Loop the first line the way you always do in REAPER and press play. Turn the jog: take after take plays in the loop, and the time field names it. When one sits, press `SHIFT` + centre: that line goes into the comp. Tap the centre to hear the comp. `→` takes the edit cursor to the next edge, loop the next line and go on. A single word from another take: step to that take and paint over the word.
+**A lead vocal from six takes, line by line (UF1).** Select the vocal track and put the jog on **Lanes**. Loop the first line the way you always do in REAPER and press play. Press `↓`: take after take plays in the loop, and the time field names it. When one sits, press `SHIFT` + centre: that line goes into the comp. Tap the centre to hear the comp. `→` takes the edit cursor to the next edge, loop the next line and go on. A single word from another take: step to that take and paint over the word.
 
-**One spot of the comp, later.** Put the edit cursor into the comp area you want to change and press `SHIFT` + `↑` or `↓` (or turn the jog with `SHIFT` held): that area now comes from the lane above or below. With the loop running you hear it right away.
+**One spot of the comp, later.** Put the edit cursor into the comp area you want to change and turn the jog with `SHIFT` held, or press `SHIFT` + `↑` or `↓`: that area now comes from another take, and the comp keeps playing. With the loop running you hear it right away.
 
-**Versions of a part.** A bass track with three whole versions on three lanes: turn the jog or press `↑` / `↓` while the song plays, and `SHIFT` + `→` flips between the last two you heard.
+**Versions of a part.** A bass track with three whole versions on three lanes: turn the jog with `SHIFT` held or press `↑` / `↓` while the song plays, and `SHIFT` + `→` flips between the last two you heard.
 
-**A doubled part.** Let two lanes play together in REAPER (Cmd-click the lane's play button on the Mac, Ctrl-click on Windows). Turn the jog to hear any single take alone; `SHIFT` + `→` brings the two back together.
+**A doubled part.** Let two lanes play together in REAPER (Cmd-click the lane's play button on the Mac, Ctrl-click on Windows). Press `↑` / `↓` to hear any single take alone; `SHIFT` + `→` brings the two back together.
 
-**Drums in a group.** Kick, snare, overheads and room in one media-edit group that the snare leads, REAPER's grouping on. Select the snare and turn the jog: the whole kit switches to the next take together. A time selection over a fill and `SHIFT` + centre puts that fill into the comp on every drum track at once.
+**Drums in a group.** Kick, snare, overheads and room in one media-edit group that the snare leads, REAPER's grouping on. Select the snare and press `↓`: the whole kit switches to the next take together. A time selection over a fill and `SHIFT` + centre puts that fill into the comp on every drum track at once.
 
 **After a punch-in.** When REAPER plays the new take afterwards, `SHIFT` + `→` returns to the comp you had.
 
-**One syllable from another take (UF1).** Turn the jog to the take that has it. Put the edit cursor just before the syllable, with `←` / `→` to the nearest edge or with the mouse. Hold the centre and turn the jog slowly to the right: the razor grows over the syllable. Too far, turn back. Let go: the syllable is in the comp, and REAPER plays it with a second either side, then stops.
+**One syllable from another take (UF1).** Step with `↑` / `↓` to the take that has it. Turn the jog to put the edit cursor just before the syllable. Hold the centre and turn the jog slowly to the right: the razor grows over the syllable. Too far, turn back. Let go: the syllable is in the comp, and REAPER plays it with a second either side, then stops.
 
-**A guitar solo cut while it plays (UF1).** Five takes of the solo on five lanes. Press your live comping key: live comping is on. Press play before the solo. At the start of the solo turn the jog to take 2, at bar 5 to take 5, for the last phrase to take 1. Each change writes the part before it into the comp while the solo runs; stop writes the last one. Three cuts, three undo steps. To work on one spot, loop it and change lanes on every pass until it sits, then press the live comping key again to switch it off.
+**A guitar solo cut while it plays (UF1).** Five takes of the solo on five lanes. Press your live comping key: live comping is on. Press play before the solo. At the start of the solo press take 2 on the Lanes bank (or step there with `↑` / `↓`), at bar 5 take 5, for the last phrase take 1. Each change writes the part before it into the comp while the solo runs; stop writes the last one. Three cuts, three undo steps. To work on one spot, loop it and change lanes on every pass until it sits, then press the live comping key again to switch it off.
 
-**With the UF8 alone.** Select the track, hold the push and turn to **Lanes**. The encoder steps the takes, the cursor pad is the cross from the table above, the push is A/B, `SHIFT` + encoder moves a comp area. Hold the centre and turn the encoder to paint. The eight top keys show the lanes by name, the ones playing lit: press one to hear it, `SHIFT` + key to layer it, Cmd + key for Comp here from it.
+**With the UF8 alone.** Select the track, hold the push and turn to **Lanes**. The encoder moves the edit cursor and with `SHIFT` changes the take, the cursor pad is the cross from the table above, the push is A/B. Hold the centre and turn the encoder to paint. The eight top keys show the lanes by name, the ones playing lit: press one to hear it, `SHIFT` + key to layer it, Cmd + key for Comp here from it.
 
 \newpage
 

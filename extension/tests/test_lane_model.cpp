@@ -199,6 +199,22 @@ int main()
         EXPECT(near(s, 0.0) && near(e, 1.5));
         loopAround(10.0, 0.0, s, e);                     // nonsense length: 2 s
         EXPECT(near(s, 9.0) && near(e, 11.0));
+
+        // Again at the same cut: off, repeat back to what it was.
+        LoopToggle lt;
+        EXPECT(lt.press(0, 0, 19.98, 21.98, 0) == LoopToggle::Act::Set);
+        EXPECT(lt.press(19.98, 21.98, 19.98, 21.98, 1) == LoopToggle::Act::Clear);
+        EXPECT(lt.repeatBefore == 0);
+        // At another cut: it moves, and repeat still goes back to the first state.
+        EXPECT(lt.press(0, 0, 19.98, 21.98, 1) == LoopToggle::Act::Set);
+        EXPECT(lt.repeatBefore == 1);
+        EXPECT(lt.press(19.98, 21.98, 21.98, 23.98, 1) == LoopToggle::Act::Set);
+        EXPECT(lt.repeatBefore == 1);
+        EXPECT(lt.press(21.98, 23.98, 21.98, 23.98, 1) == LoopToggle::Act::Clear);
+        // A loop moved by hand in between: the next press sets, it does not clear.
+        EXPECT(lt.press(0, 0, 19.98, 21.98, 0) == LoopToggle::Act::Set);
+        EXPECT(lt.press(5.0, 9.0, 19.98, 21.98, 1) == LoopToggle::Act::Set);
+        EXPECT(lt.repeatBefore == 1);
     }
 
     // ---- no slivers (Test.RPP, 02.10.2026) ------------------------------------

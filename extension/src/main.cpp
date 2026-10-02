@@ -14664,6 +14664,12 @@ static void laneCompAreaStep_(int dir)
     UpdateArrange();
 }
 
+// ⇨ SHIFT + JOG / ENCODER IN LANES (Frank 02.10.2026: the plain turn is the
+// playhead). Without a comp lane, or while live comping (every change is a cut
+// there), it switches the whole lane; with a comp lane, the comp area under the
+// cursor takes the next take and the comp keeps playing.
+static void laneShiftTurn_(int steps);   // with live comping, below
+
 // SHIFT + jog / encoder: the same step, but a turn is ONE undo step. Each
 // 42707 / 42708 is an undo point of its own, so spinning from take 2 to take 9
 // left seven to take back (Frank 02.10.2026). The block opens on the first
@@ -14709,18 +14715,29 @@ static void laneEdge_(int dir)
 }
 
 // Shift + ←: loop "Loop around the cut" seconds centred on the cut nearest the
-// edit cursor, and switch repeat on (Frank 02.10.2026; it looped the whole comp
-// area or item before). Settings → Bindings → UF1, jog object Lanes.
+// edit cursor, switch repeat on and put the cursor (and a running playback) at
+// the loop's start; again at the same cut switches it off (Frank 02.10.2026; it
+// looped the whole comp area or item before). Settings → Bindings → UF1, jog
+// object Lanes.
 std::atomic<double> g_laneLoopAround{2.0};
 static void laneLoopHere_()
 {
+    static lanes::LoopToggle s_loop;
     MediaTrack* tr = laneTrack_();
     if (laneCount_(tr) <= 0) return;
-    double s = 0.0, e = 0.0;
+    double s = 0.0, e = 0.0, cs = 0.0, ce = 0.0;
     lanes::loopAround(lanes::nearestEdge(laneEdgesList_(tr), GetCursorPosition()),
                       g_laneLoopAround.load(), s, e);
-    GetSet_LoopTimeRange2(nullptr, true, true, &s, &e, false);
-    GetSetRepeat(1);
+    GetSet_LoopTimeRange2(nullptr, false, true, &cs, &ce, false);
+    if (s_loop.press(cs, ce, s, e, GetSetRepeat(-1)) == lanes::LoopToggle::Act::Clear) {
+        double z = 0.0;
+        GetSet_LoopTimeRange2(nullptr, true, true, &z, &z, false);
+        GetSetRepeat(s_loop.repeatBefore);
+    } else {
+        GetSet_LoopTimeRange2(nullptr, true, true, &s, &e, false);
+        GetSetRepeat(1);
+        SetEditCurPos(s, true, true);   // seeks a running playback too
+    }
     UpdateTimeline();
 }
 
@@ -14969,6 +14986,14 @@ static void laneCentreUp_(double heldMs)
     lanePlayOp_(LanePlayOp::Comp);
 }
 
+static void laneShiftTurn_(int steps)
+{
+    MediaTrack* tr = laneTrack_();
+    const bool comping = laneCount_(tr) > 0 && laneCompInfo_(tr).compLane >= 0;
+    if (comping && !g_laneLive.load()) laneCompAreaTurn_(steps);
+    else                               laneStep_(steps);
+}
+
 // ===== THE LANES BANK (plan Baustein C) ===========================================
 // Key N = lane N of the lane track (LaneModel.h lanes::bank). Resolved and run on
 // the main thread, like every dynamic bank.
@@ -15103,9 +15128,9 @@ void applyLaneOp_(uint8_t op, double value)
     }
 }
 
-// Jog mode Lanes: the wheel steps the heard lane, Shift the comp area under the
-// cursor. The jog is smooth, so counts gather into steps at the picker's rate
-// (g_uf1JogPickSpeed counts per lane); turning back drops what was gathered.
+// Jog mode Lanes, SHIFT held: lane or comp area (laneShiftTurn_). The jog is
+// smooth, so counts gather into steps at the picker's rate (g_uf1JogPickSpeed
+// counts per lane); turning back drops what was gathered.
 static void applyUf1JogLanes_(int count)
 {
     static double s_acc = 0.0;
@@ -15116,8 +15141,7 @@ static void applyUf1JogLanes_(int count)
     if (s_acc >=  1.0) { steps = static_cast<int>(s_acc); s_acc -= steps; }
     if (s_acc <= -1.0) { steps = static_cast<int>(s_acc); s_acc -= steps; }
     if (steps == 0) return;
-    if (uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)) laneCompAreaTurn_(steps);
-    else                                                              laneStep_(steps);
+    laneShiftTurn_(steps);
 }
 
 // Jog dispatch for Razor mode. count = de-jittered, timeDelta = seconds (per-mode step).
@@ -15362,17 +15386,23 @@ void uf1JogDispatch_(int count)
             break;
         case Uf1JogMode::Razor:    applyUf1JogRazor_(count, delta);    break;
         case Uf1JogMode::Fades:    applyUf1JogFades_(count, delta);    break;
-        case Uf1JogMode::Lanes:
-            // Centre held: the wheel paints, at Playhead mode's step.
-            if (g_laneCentreHeld.load()) {
-                Uf1JogUnit pu;
-                double ps = 0.0, pf = 1.0;
-                const double pd = uf1JogDelta_(Uf1JogMode::Playhead, count, pu, ps, pf);
-                lanePaintTo_(uf1JogPlayheadTarget_(lanePaintFrom_(), pd, pu, ps, pf));
-            } else {
+        case Uf1JogMode::Lanes: {
+            // Centre held: the wheel paints. SHIFT: lane or comp area. Plain:
+            // the playhead (Frank 02.10.2026). Both moves at Playhead mode's step.
+            if (!g_laneCentreHeld.load()
+                && uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)) {
                 applyUf1JogLanes_(count);
+                break;
             }
+            Uf1JogUnit pu;
+            double ps = 0.0, pf = 1.0;
+            const double pd = uf1JogDelta_(Uf1JogMode::Playhead, count, pu, ps, pf);
+            if (g_laneCentreHeld.load())
+                lanePaintTo_(uf1JogPlayheadTarget_(lanePaintFrom_(), pd, pu, ps, pf));
+            else
+                uf1JogMovePlayhead_(pd, pu, ps, pf);
             break;
+        }
     }
 }
 
@@ -15412,9 +15442,10 @@ void uf1EncoderDispatch_(int step)
             if (!applySendBankStep_(step)) applyBankByOne_(step);
             break;
         case EncoderMode::LastParam:   applyLastParamStep_(step);  break;
-        // Shift (the comp area) is taken in the drain: the Shift slot of the
+        // Plain turn = the playhead, as Nudge (Frank 02.10.2026). SHIFT (lane or
+        // comp area, laneShiftTurn_) is taken in the drain: the Shift slot of the
         // encoder binding would otherwise run instead of this dispatcher.
-        case EncoderMode::Lanes:       laneStep_(step);            break;
+        case EncoderMode::Lanes:       applyPlayheadNudge_(step);  break;
     }
 }
 
@@ -22767,9 +22798,9 @@ void drainInputQueue()
                         } else if (g_uf1EncoderMode.load() == EncoderMode::Lanes
                                    && uf8::bindings::modifierHeld(
                                           uf8::bindings::Modifier::Shift)) {
-                            // Encoder mode Lanes: Shift steps the comp area, as
+                            // Encoder mode Lanes: Shift is lane or comp area, as
                             // on the UF8 (the Shift slot would run instead).
-                            laneCompAreaTurn_(tracks);
+                            laneShiftTurn_(tracks);
                         } else {
                             // BINDINGS, exactly like the UF8's ChannelEncoder
                             // (Frank 2026-09-03). The two branches that used to
@@ -23123,12 +23154,12 @@ void drainInputQueue()
                     lanePaintNudge_(step);
                     continue;
                 }
-                // Encoder mode Lanes: Shift steps the comp area under the
+                // Encoder mode Lanes: Shift is the lane or the comp area under the
                 // cursor (plan, decision 4). Taken here because the binding's
                 // Shift slot runs INSTEAD of encoder_mode_dispatch.
                 if (g_encoderMode.load() == EncoderMode::Lanes
                     && uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)) {
-                    laneCompAreaTurn_(step);
+                    laneShiftTurn_(step);
                     continue;
                 }
                 // SEL Mode override: when Settings → Modes → FX/Instance
@@ -57394,7 +57425,7 @@ void registerBindingHandlers()
                     if (!applySendBankStep_(step)) applyBankByOne_(step);
                     break;
                 case EncoderMode::LastParam:   applyLastParamStep_(step);  break;
-                case EncoderMode::Lanes:       laneStep_(step);            break;
+                case EncoderMode::Lanes:       applyPlayheadNudge_(step);  break;
             }
         },
         nullptr,

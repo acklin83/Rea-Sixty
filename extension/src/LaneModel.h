@@ -310,6 +310,32 @@ inline void loopAround(double cut, double len, double& s, double& e)
     if (s < 0.0) s = 0.0;
 }
 
+// ⇨ SHIFT + ← AGAIN AT THE SAME CUT SWITCHES THE LOOP OFF (Frank 02.10.2026). "Same"
+// = the loop is still exactly the one this set and the new one would be it again.
+// At another cut it moves there. Off puts repeat back as it was before the first
+// press; a loop changed by hand in between counts as none of ours.
+struct LoopToggle {
+    bool   active = false;
+    double s = 0.0, e = 0.0;
+    int    repeatBefore = 0;
+
+    enum class Act { Set, Clear };
+    // curS/curE: the loop REAPER has now, newS/newE: the one around the cut,
+    // repeat: REAPER's repeat now. Updates the state; the caller applies Act
+    // (Clear: no loop, repeat back to repeatBefore).
+    Act press(double curS, double curE, double newS, double newE, int repeat)
+    {
+        auto same = [](double a, double b) { return a - b < 1e-6 && b - a < 1e-6; };
+        const bool ours = active && same(curS, s) && same(curE, e);
+        if (ours && same(newS, s) && same(newE, e)) { active = false; return Act::Clear; }
+        if (!ours) repeatBefore = repeat;
+        active = true;
+        s = newS;
+        e = newE;
+        return Act::Set;
+    }
+};
+
 // ---- no slivers at the cuts ------------------------------------------------------------
 // REAPER lets neighbouring comp areas overlap by 10 ms. A stroke that starts where the
 // last one ended cut the old area there and left its 10 ms head plus overlap behind,
