@@ -844,7 +844,7 @@ The cross is not one thing either — it follows the object, exactly like the wh
 | **Razor** | Aim at the **left** / **right** edge. | Aim at the **top** / **bottom** edge. | **Hold** it to take the **whole area** and drag its content. See *Razor* below. |
 | **Fades**, aiming | Aim at the **fade-in** / **fade-out**. | Next / previous fade type. | Switch the cross over to walking the items. |
 | **Fades**, walking | Select the previous / next item on the track. | Select the item on the track above / below. | Switch the cross back to aiming. |
-| **Lanes** | Edit cursor to the previous / next comp-area or item edge. `SHIFT` + `←` loops the comp area or item there, `SHIFT` + `→` is A/B. | Play the lane above / below. `SHIFT`: the comp area under the edit cursor takes the lane above / below. | Comp here. `SHIFT`: the lane you hear joins the lanes that play, or leaves them. |
+| **Lanes** | Edit cursor to the previous / next comp-area or item edge. `SHIFT` + `←` loops the comp area or item there, `SHIFT` + `→` is A/B. | Play the lane above / below. `SHIFT`: the comp area under the edit cursor takes the lane above / below. | Tap: Comp here. **Hold** it and the wheel paints into the comp; see *Fixed lanes*. `SHIFT`: play the comp lane. |
 
 Playhead and Scrub carry the plain zoom cross, the same five REAPER zoom actions
 the UF8's cursor pad uses (40111 / 40112 / 1011 / 1012 / 40295): with no editing
