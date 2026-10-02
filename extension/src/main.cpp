@@ -14618,6 +14618,21 @@ static void laneCompAreaStep_(int dir)
     UpdateArrange();
 }
 
+// SHIFT + jog / encoder: the same step, but a turn is ONE undo step. Each
+// 42707 / 42708 is an undo point of its own, so spinning from take 2 to take 9
+// left seven to take back (Frank 02.10.2026). The block opens on the first
+// detent and closes after 300 ms without one, as the razor jog's does (closed
+// in the timer, next to it). The arrows stay one step, one undo point.
+std::atomic<bool>    g_laneAreaUndoOpen{false};
+std::atomic<int64_t> g_laneAreaUndoUntilMs{0};
+static void laneCompAreaTurn_(int steps)
+{
+    if (steps == 0) return;
+    if (!g_laneAreaUndoOpen.exchange(true)) Undo_BeginBlock2(nullptr);
+    g_laneAreaUndoUntilMs.store(nowMs_() + 300);
+    laneCompAreaStep_(steps);
+}
+
 // ← / →: the edit cursor to the previous / next comp-area edge or item edge of
 // the heard lane. Seeks while playing, like the Markers encoder mode.
 static void laneEdge_(int dir)
@@ -14981,7 +14996,7 @@ static void applyUf1JogLanes_(int count)
     if (s_acc >=  1.0) { steps = static_cast<int>(s_acc); s_acc -= steps; }
     if (s_acc <= -1.0) { steps = static_cast<int>(s_acc); s_acc -= steps; }
     if (steps == 0) return;
-    if (uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)) laneCompAreaStep_(steps);
+    if (uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)) laneCompAreaTurn_(steps);
     else                                                              laneStep_(steps);
 }
 
@@ -22634,7 +22649,7 @@ void drainInputQueue()
                                           uf8::bindings::Modifier::Shift)) {
                             // Encoder mode Lanes: Shift steps the comp area, as
                             // on the UF8 (the Shift slot would run instead).
-                            laneCompAreaStep_(tracks);
+                            laneCompAreaTurn_(tracks);
                         } else {
                             // BINDINGS, exactly like the UF8's ChannelEncoder
                             // (Frank 2026-09-03). The two branches that used to
@@ -22993,7 +23008,7 @@ void drainInputQueue()
                 // Shift slot runs INSTEAD of encoder_mode_dispatch.
                 if (g_encoderMode.load() == EncoderMode::Lanes
                     && uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)) {
-                    laneCompAreaStep_(step);
+                    laneCompAreaTurn_(step);
                     continue;
                 }
                 // SEL Mode override: when Settings → Modes → FX/Instance
@@ -47919,6 +47934,15 @@ void onTimerBody_()
                 g_uf1JogRazorAreaUndoUntilMs.store(0);
                 if (g_uf1JogRazorAreaUndoOpen.exchange(false))
                     Undo_EndBlock2(nullptr, "Rea-Sixty: UF1 razor area", -1);
+            }
+        }
+        // Lanes: SHIFT + jog / encoder, the comp area to another lane.
+        if (g_laneAreaUndoOpen.load()) {
+            const int64_t until = g_laneAreaUndoUntilMs.load();
+            if (until && now > until) {
+                g_laneAreaUndoUntilMs.store(0);
+                if (g_laneAreaUndoOpen.exchange(false))
+                    Undo_EndBlock2(nullptr, "Rea-Sixty: comp area to another lane", -1);
             }
         }
     }

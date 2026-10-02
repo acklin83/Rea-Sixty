@@ -1047,6 +1047,8 @@ All of them are bindings like any other cross key, per jog object on the UF1 and
 
 **Comp here** puts the lane you hear into the comp lane, over the time selection, or over the loop when there is none, or over the item of that lane under the edit cursor. Each Comp here is one undo step.
 
+**Moving a comp area** to another lane with `SHIFT` + jog or encoder is one undo step for the whole turn, however many lanes you pass. `SHIFT` + `↑` / `↓` is one undo step per press.
+
 **Painting.** Hold the centre and turn the jog (UF8: the encoder). The edit cursor moves silently, by the step of the jog object Playhead on the UF1 and of the encoder mode Playhead on the UF8; `SHIFT` makes the jog's step finer. A razor at the height of the lane you hear shows the stretch you have run over, and turning back shortens it. The time field shows *PAINT* and the lane number. Let go, and that stretch goes into the comp from the lane you hear, as one undo step. Then REAPER plays the comp from a second before the stretch to a second after it, stops, and the edit cursor goes to where you let go. The lane you painted from plays again, so the next stroke takes from the same take. While the song is playing, nothing is played back after a stroke. Painting takes from a take: while the comp lane plays, step to a take first. To call a stroke off, turn back to where it started, or hold the centre and let go without turning; a long hold without a turn does nothing.
 
 On the UF8, holding the push and letting go without turning does nothing in Lanes either, so a mode pick you change your mind about does not write the comp.
