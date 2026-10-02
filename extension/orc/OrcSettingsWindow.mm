@@ -776,16 +776,14 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
         }
         if (dyn) [self.skActions[i] selectItemAtIndex:-1];
         else     [self selectAction:self.skActions[i] slot:sp];
-        // A snapshot or layout bank paints its keys white by state (RmeSoftKeys).
-        self.skActive[i].enabled = !dyn;
-        self.skInactive[i].enabled = !dyn;
+        // A snapshot or layout key takes its colours from here too (Frank
+        // 02.10.2026, RmeSoftKeys::dynKeyLamp): Active = the loaded one,
+        // Inactive = the others. Only the label and the action are fixed.
         uint8_t rgb[3]; bnd::Brightness bri;
         bnd::effectiveLedActive(bd, sp, rgb, bri);
-        if (dyn) [self.skActive[i] selectItemAtIndex:-1];
-        else     selectLed(self.skActive[i], rgb, bri);
+        selectLed(self.skActive[i], rgb, bri);
         bnd::effectiveLedInactive(bd, sp, rgb, bri);
-        if (dyn) [self.skInactive[i] selectItemAtIndex:-1];
-        else     selectLed(self.skInactive[i], rgb, bri);
+        selectLed(self.skInactive[i], rgb, bri);
     }
 
     const int layer = bnd::getActiveLayer();

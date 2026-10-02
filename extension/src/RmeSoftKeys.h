@@ -62,6 +62,18 @@ struct DynSlot {
 };
 DynSlot dynSlot(uf8::bindings::DynamicBankKind kind, int slot);
 
+// ⇨ A SNAPSHOT OR LAYOUT KEY'S LAMP (Frank 02.10.2026: colours per key, as on
+// every other soft key). The colours live where a static key keeps them, on the
+// bank slot's set for that half (ActionSlot::led, Active / Inactive), so ORC's
+// Soft Keys page sets them the same way. Nothing set = white, lit when active and
+// dim otherwise, as before. `led` is DynSlot::led; 0 (no link) is dark whatever
+// the colour. Brightness Off is dark too.
+struct KeyLamp {
+    std::uint32_t rgb    = 0;
+    bool          bright = false;
+};
+KeyLamp dynKeyLamp(const uf8::bindings::Binding& slot, int half, int led);
+
 // Load snapshot / layout `slot` (0..7). False when there is no link, and then
 // nothing is sent. Thread-safe (the manager has its own lock).
 bool loadDyn(uf8::bindings::DynamicBankKind kind, int slot);
