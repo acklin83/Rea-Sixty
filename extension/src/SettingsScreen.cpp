@@ -1359,6 +1359,7 @@ static const char* dynKindLabel_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::RmeSnapshots: return "TotalMix Snapshots";
         case DynamicBankKind::RmeLayouts:  return "TotalMix Layouts";
         case DynamicBankKind::SelectionSets: return "Selection Sets";
+        case DynamicBankKind::Lanes:       return "Lanes";
         default:                           return "Off (static slots)";
     }
 }
@@ -1391,6 +1392,12 @@ static const char* dynKindLabelForSet_(uf8::bindings::DynamicBankKind k,
 // Same, short enough for a scribble cell (the strip LCDs are ~72 px wide).
 // The Selection Sets bank's fixed gestures (SelsetBank.h), shown in all three
 // bank editors (UF8 bank cell, UF8 slot, UF1 bank). One string, so they agree.
+// The Lanes bank's gestures (LaneModel.h lanes::bank), a hover box on the kind
+// and paging controls, never a line of grey text (Frank 2026-09-10).
+static const char* const kLaneBankGestures_ =
+    "Key N is lane N of the selected track. Push plays the lane alone.\n"
+    "Shift: the lane joins the lanes that play, or leaves them.\n"
+    "Cmd: Comp here from this lane. On a track without lanes, key 1 turns them on.";
 static const char* const kSelsetBankGestures_ =
     "Push recalls the set (press again to switch it off). Hold: store the "
     "REAPER selection into an empty slot. Shift: store over. Cmd: select "
@@ -1412,6 +1419,7 @@ static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::RmeSnapshots: return "SNAPSHOTS";
         case DynamicBankKind::RmeLayouts:  return "LAYOUTS";
         case DynamicBankKind::SelectionSets: return "SETS";
+        case DynamicBankKind::Lanes:       return "LANES";
         default:                           return "";
     }
 }
@@ -5544,7 +5552,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                     DynamicBankKind::CsFavourites, DynamicBankKind::BcFavourites,
                     DynamicBankKind::ObsScenes,
                     DynamicBankKind::RmeSnapshots, DynamicBankKind::RmeLayouts,
-                    DynamicBankKind::SelectionSets,
+                    DynamicBankKind::SelectionSets, DynamicBankKind::Lanes,
                 };
                 for (const auto k : kKinds) {
                     if (!dynKindOffered_(k, dynMine)) continue;
@@ -6202,8 +6210,9 @@ static void drawDynamicBankSettings_(ImGui_Context* ctx, int layer, int quick,
         // Contextual editor for the selected kind. The config is GLOBAL
         // (shared by every FX / colour bank), edited here for convenience.
 
-        // "Page with" — the FX bank pages 1-8 / 9-16 / … via a chosen control.
-        if (curKind == DynamicBankKind::FxBank) {
+        // "Page with" — the FX bank pages 1-8 / 9-16 / … via a chosen control,
+        // and so does the Lanes bank (fourteen takes are two pages).
+        if (curKind == DynamicBankKind::FxBank || curKind == DynamicBankKind::Lanes) {
             static const char* kCtrlNames[] = {
                 "(no paging — stays on 1-8)", "UF8 encoder",
                 "UC1 Encoder 1", "UC1 Encoder 2", "UF8 Bank ◄ ►",
@@ -6225,6 +6234,7 @@ static void drawDynamicBankSettings_(ImGui_Context* ctx, int layer, int quick,
                 }
                 ImGui_EndCombo(ctx);
             }
+            if (curKind == DynamicBankKind::Lanes) help_(ctx, kLaneBankGestures_);
             ImGui_Spacing(ctx);
         }
 
@@ -6716,6 +6726,7 @@ static void renderBankMatrixContextMenu_(ImGui_Context* ctx)
             { DynamicBankKind::RmeSnapshots, "TotalMix Snapshots" },
             { DynamicBankKind::RmeLayouts,   "TotalMix Layouts" },
             { DynamicBankKind::SelectionSets, "Selection Sets" },
+            { DynamicBankKind::Lanes,        "Lanes" },
         };
         const DynamicBankKind cur =
             getSubBankDynamic(s_bankCtxL, s_bankCtxQ, s_bankCtxSb, mod);
@@ -7144,7 +7155,7 @@ static void renderUf1BankMatrixContextMenu_(ImGui_Context* ctx)
             DynamicBankKind::BcFavourites, DynamicBankKind::HueScenes,
             DynamicBankKind::ObsScenes,
             DynamicBankKind::RmeSnapshots, DynamicBankKind::RmeLayouts,
-            DynamicBankKind::SelectionSets,
+            DynamicBankKind::SelectionSets, DynamicBankKind::Lanes,
         };
         const DynamicBankKind cur = getUf1SoftBankDynamic(b, mod);
         for (const auto k : kKinds) {
@@ -8449,6 +8460,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 { DynamicBankKind::RmeSnapshots, "TotalMix Snapshots" },
                 { DynamicBankKind::RmeLayouts,   "TotalMix Layouts" },
                 { DynamicBankKind::SelectionSets, "Selection Sets" },
+                { DynamicBankKind::Lanes,        "Lanes" },
             };
             // This set's OWN kind — "Off" on a set means "take Plain's bank".
             const DynamicBankKind curKind =
@@ -8481,6 +8493,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 }
                 ImGui_EndCombo(ctx);
             }
+            if (curKind == DynamicBankKind::Lanes) help_(ctx, kLaneBankGestures_);
             ImGui_Spacing(ctx);
 
             if (curKind != DynamicBankKind::None) {

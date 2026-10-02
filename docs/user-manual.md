@@ -1039,6 +1039,18 @@ It works on the **selected track**: the one you last touched, if it is selected,
 
 All of them are bindings like any other cross key, per jog object on the UF1 and per encoder mode on the UF8.
 
+## The Lanes bank
+
+Give a soft-key bank the dynamic kind **Lanes** (right-click its cell in the matrix, *Dynamic bank*). Key 1 is lane 1 of the selected track, key 2 lane 2, and so on: eight keys on the UF8, four on the UF1. A key reads the lane's name, or `Lane 3` for one without a name of its own; the comp lane reads `Comp`. Lit is a lane that plays, dim one that is silent. Takes are white, the comp lane green.
+
+- **Push** plays that lane alone, the same as stepping the jog onto it, without passing the lanes in between.
+- `SHIFT` + key: that lane joins the lanes that play, or leaves them. This is how you layer two takes from the surface.
+- Cmd + key: Comp here from that lane, without listening to it first.
+
+With more lanes than keys, the bank pages: on the UF8 with the control chosen under *Page with* below the matrix (the UF8 encoder, a UC1 encoder or BANK ◄ ►), on the UF1 with a long press on ◄ / ►. When the jog steps to a lane on another page, the bank turns to that page. On a track without fixed lanes, key 1 reads `Lanes on` and turns them on for the track, as one undo step.
+
+The bank shows the track the Lanes keys work on, the selected one, so it can differ from the track the other dynamic banks follow.
+
 ## What the keys do
 
 **Stepping plays one lane at a time.** The comp lane is passed over, so the wheel walks the takes. `↑` and `↓` light while there is a lane further that way. Switching lanes adds nothing to REAPER's undo history.
@@ -1452,10 +1464,11 @@ Right-click the bank's cell in the matrix and open **Dynamic bank**. The kinds a
 | `Hue Scenes` | Your eight Hue scene slots, each key in its scene's colour |
 | `OBS Scenes` | The scenes OBS is showing, by name, the one on air lit |
 | `Selection Sets` | Selection Set slots 1–8, by name and in each slot's colour, the recalled one lit, the used ones dim |
+| `Lanes` | The fixed lanes of the selected track, by name, the ones playing lit, the comp lane green. See *Fixed lanes* |
 
 The three favourite kinds differ in one thing only. The first follows the focus, which is what you want when one bank should serve both. The other two do not, so a rig can carry its channel strips on one bank and its bus comps on another and both are always what they say. All three read the plug-in's short name onto the key, live, and light the key that is on the track.
 
-The choice is stored per bank, so each of the six banks in a set can be dynamic or static independently. While a bank is dynamic its eight stored slots are ignored — they are not lost, and turning the bank back to `Off` restores them. Everything a kind can be *tuned* with stays under the matrix: the FX bank's paging control, the colour palette, and the warning about slots you left under a held modifier, which beat the computed key.
+The choice is stored per bank, so each of the six banks in a set can be dynamic or static independently. While a bank is dynamic its eight stored slots are ignored — they are not lost, and turning the bank back to `Off` restores them. Everything a kind can be *tuned* with stays under the matrix: the FX and Lanes banks' paging control, the colour palette, and the warning about slots you left under a held modifier, which beat the computed key.
 
 A dynamic bank announces itself in three places, so you never edit slots that cannot fire:
 

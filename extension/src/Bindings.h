@@ -756,6 +756,11 @@ enum class DynamicBankKind : uint8_t {
     // N; push recalls (the surface filter), long saves into an EMPTY slot, Shift
     // saves over, Cmd selects the set's tracks, Ctrl clears.
     SelectionSets = 12,
+    // The lanes of the lane track (fixed lanes, docs/fixed-lanes-plan.md Baustein
+    // C, LaneModel.h lanes::bank). Push plays the lane alone, Shift puts it into
+    // or out of the lanes that play, Cmd is Comp here from it. Pages like the FX
+    // bank on the UF8.
+    Lanes = 13,
 };
 
 // ⛔ THE PARSER'S UPPER BOUND LIVES HERE, NOT IN THE PARSER. Both loaders check
@@ -763,7 +768,7 @@ enum class DynamicBankKind : uint8_t {
 // a new kind was accepted by the editor, written to disk, and then silently
 // dropped on the next load — the bank came back static and nothing said why.
 // Adding a kind means moving this line, and only this line.
-constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::SelectionSets;
+constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::Lanes;
 
 // ⇨ DOES THIS KIND SPEND THE MODIFIERS ON ITS OWN GESTURES?
 // The FX bank and the Selection Sets bank do (Shift saves over, Cmd selects, Ctrl
@@ -781,7 +786,8 @@ constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::SelectionSets;
 // Plain already shows and fire nothing (Frank 2026-09-07, on the OBS bank).
 constexpr bool dynamicKindUsesModifiers(DynamicBankKind k)
 {
-    return k == DynamicBankKind::FxBank || k == DynamicBankKind::SelectionSets;
+    return k == DynamicBankKind::FxBank || k == DynamicBankKind::SelectionSets
+        || k == DynamicBankKind::Lanes;
 }
 
 struct UserQuickSubBank {

@@ -2870,6 +2870,7 @@ static int explicitCursorFxOnTrack_(MediaTrack* tr, int stripFx);
 static int inPlayFxOnTrack_(MediaTrack* tr, int stripFx);
 int uf1CsPageCountFor_(int type, MediaTrack* tr, int fx);
 static int  engagedBankableKind_();                  // any thread
+static int  laneBankItemCount_();                    // main thread (Lanes bank)
 static void pageDynBank_(int kind, int delta);       // main thread
 static void tickDynBankPaging_();                    // main thread (onTimer)
 static bool syncInstanceFromFxIdx_(MediaTrack* tr, int fxIdx,
@@ -8378,13 +8379,17 @@ enum class BankControl : int {
     None = 0, Uf8Enc, Uc1Enc1, Uc1Enc2, Uf8Bank,
 };
 constexpr int kBankControlCount = 5;
-std::atomic<int> g_dynBankCtrl[8] = {};   // BankControl per kind; default None
+// ⛔ One entry per KIND, every kind: the Lanes bank is kind 13 and the tables
+// were eight long (the plan's trap, 01.10.2026). They grow with the enum.
+constexpr int kDynKindCount = static_cast<int>(uf8::bindings::kDynamicBankKindLast) + 1;
+std::atomic<int> g_dynBankCtrl[kDynKindCount] = {};   // BankControl per kind; default None
 // Current page offset (× 8) per bankable kind; reset to 0 on track change.
-std::atomic<int> g_dynBankPage[8] = {};
+std::atomic<int> g_dynBankPage[kDynKindCount] = {};
 // A bankable kind has more than 8 items and pages; Groups / Colours don't.
 static bool dynBankBankable_(uf8::bindings::DynamicBankKind k)
 {
-    return k == uf8::bindings::DynamicBankKind::FxBank;
+    return k == uf8::bindings::DynamicBankKind::FxBank
+        || k == uf8::bindings::DynamicBankKind::Lanes;
 }
 static void ensureDynCfgLoaded_()
 {
@@ -8470,7 +8475,7 @@ static void ensureDynCfgLoaded_()
         }
         SetExtState("rea_sixty", "track_bank_col_names_fixed", "2", true);
     }
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < kDynKindCount; ++i) {
         char k[32]; std::snprintf(k, sizeof(k), "dyn_bank_ctrl_%d", i);
         if (const char* v = GetExtState("rea_sixty", k); v && v[0]) {
             const int c = std::atoi(v);
@@ -8557,15 +8562,16 @@ static int engagedBankableKind_()
 // track's item count. Main-thread only (reads FX / send counts).
 static void pageDynBank_(int kind, int delta)
 {
-    if (kind < 0 || kind >= 8 || delta == 0) return;
-    MediaTrack* tr = dynBankContextTrack_();
-    if (!tr) return;
+    if (kind < 0 || kind >= kDynKindCount || delta == 0) return;
     const auto K = static_cast<uf8::bindings::DynamicBankKind>(kind);
     int count = 0;
-    if (K == uf8::bindings::DynamicBankKind::FxBank) {
-        count = TrackFX_GetCount(tr);
+    if (K == uf8::bindings::DynamicBankKind::Lanes) {
+        count = laneBankItemCount_();          // the lane track, not the focused one
     } else {
-        return;
+        MediaTrack* tr = dynBankContextTrack_();
+        if (!tr) return;
+        if (K == uf8::bindings::DynamicBankKind::FxBank) count = TrackFX_GetCount(tr);
+        else return;
     }
     const int maxPage = count > 0 ? (count - 1) / 8 : 0;
     int p = g_dynBankPage[kind].load() + delta;
@@ -8728,6 +8734,11 @@ static std::string favDisplayName_(const std::string& addName,
     return !storedLabel.empty() ? storedLabel : addName;
 }
 
+// The Lanes bank, defined with the lanes (they resolve against the lane track,
+// not the focused one: the bank and the jog must show the same track).
+static DynSlotInfo laneBankSlot_(int lane);
+static void        applyDynBankLaneOp_(int lane, int gesture);
+
 // Resolve key `slot` (0..7) of a dynamic bank against `tr`. Main-thread only
 // (touches REAPER track/send API). Empty/out-of-range → present=false.
 static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
@@ -8794,6 +8805,8 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
         info.led     = d.led;
         return info;
     }
+    // ⛔ LANES, same place: the lane track, which need not be the focused one.
+    if (kind == DK::Lanes) return laneBankSlot_(dynBankSlotBase_(kind) + slot);
     if (!tr) return info;
     switch (kind) {
         case DK::FxBank:
@@ -8929,6 +8942,7 @@ static DynSlotInfo dynamicBankSlotUf1_(uf8::bindings::DynamicBankKind kind,
     using DK = uf8::bindings::DynamicBankKind;
     if (kind == DK::FxBank)
         return fxBankSlotInfo_(tr, absIdx);
+    if (kind == DK::Lanes) return laneBankSlot_(absIdx);
     if (absIdx < 0 || absIdx >= 8) return DynSlotInfo{};
     // Hue scenes need no track — dynamicBankSlot_ handles that itself now, and
     // passing nullptr through is fine for every other kind (they return empty).
@@ -8951,6 +8965,7 @@ static int dynamicBankItemCountUf1_(uf8::bindings::DynamicBankKind kind,
         return static_cast<int>(reasixty::obs::manager().scenes().size());
     if (kind == DK::RmeSnapshots || kind == DK::RmeLayouts) return 8;
     if (kind == DK::SelectionSets) return 8;
+    if (kind == DK::Lanes) return laneBankItemCount_();
     return 0;
 }
 
@@ -9325,6 +9340,10 @@ static void applyDynBankReq_(uint32_t enc)
         return;
     }
     if (kind == DK::SelectionSets) { applyDynBankSelsetOp_(slot, gesture); return; }
+    if (kind == DK::Lanes) {
+        applyDynBankLaneOp_(dynBankSlotBase_(kind) + slot, gesture);
+        return;
+    }
     MediaTrack* tr = dynBankContextTrack_();
     if (!tr) return;
     switch (kind) {
@@ -9377,6 +9396,7 @@ static void applyDynBankUf1_(uf8::bindings::DynamicBankKind kind,
         return;
     }
     if (kind == DK::SelectionSets) { applyDynBankSelsetOp_(absIdx, gesture); return; }
+    if (kind == DK::Lanes) { applyDynBankLaneOp_(absIdx, gesture); return; }
     if (!tr) return;
     switch (kind) {
         case DK::FxBank:
@@ -14421,23 +14441,29 @@ static void laneLiveHeard_(MediaTrack* tr, const lanes::PlaySet& set);
 
 // Step the heard lane by `dir` lanes (wheel, encoder, ↑ / ↓). Exclusive: the
 // wheel previews ONE lane; the set before it waits in A/B.
-static void laneStep_(int dir)
+// The Lanes bank shows the page with the lane you now hear (UF8 eight a page,
+// UF1 four), so a wheel step off the page takes the keys along.
+static void laneBankFollow_(int lane)
 {
-    MediaTrack* tr = laneTrack_();
+    using DK = uf8::bindings::DynamicBankKind;
+    g_dynBankPage[static_cast<int>(DK::Lanes)].store(lanes::bank::pageOf(lane, 8));
+    if (uf8::bindings::getUf1SoftBankDynamicFor(
+            g_uf1SoftBank.load(),
+            static_cast<int>(uf8::bindings::bankModifierSnapshot()), nullptr) == DK::Lanes)
+        g_uf1DynBankPage.store(lanes::bank::pageOf(lane, 4));
+    g_softKeyDirty.store(true);
+    g_pageDirty.store(true);
+}
+
+// Play `lane` alone on the lane track (its group mates by pattern): a step of
+// the wheel, a key of the Lanes bank. A/B, live comping and the bank follow.
+static void laneHearAlone_(MediaTrack* tr, int lane)
+{
     const int n = laneCount_(tr);
-    if (n <= 0 || dir == 0) return;
+    if (lane < 0 || lane >= n) return;
     lanes::LaneAb& ab = g_laneAb[tr];
     const lanes::PlaySet now = lanePlaySet_(tr);
     ab.observe(now);
-    int lane = laneHeard_(tr, now);
-    const int comp = laneCompInfo_(tr).compLane;
-    const int step = dir > 0 ? 1 : -1;
-    for (int k = dir > 0 ? dir : -dir; k > 0; --k) {
-        const int next = lanes::stepLane(n, lane, step, comp, g_laneSkipComp.load());
-        if (next < 0) break;
-        lane = next;
-    }
-    if (lane < 0) return;
     const lanes::PlaySet set = lanes::only(n, lane);
     if (lanes::same(set, now)) return;
     g_laneHeard[tr] = lane;
@@ -14445,6 +14471,23 @@ static void laneStep_(int dir)
     ab.observe(set);
     laneFlash_(tr, lane);
     laneLiveHeard_(tr, set);
+    laneBankFollow_(lane);
+}
+
+static void laneStep_(int dir)
+{
+    MediaTrack* tr = laneTrack_();
+    const int n = laneCount_(tr);
+    if (n <= 0 || dir == 0) return;
+    int lane = laneHeard_(tr, lanePlaySet_(tr));
+    const int comp = laneCompInfo_(tr).compLane;
+    const int step = dir > 0 ? 1 : -1;
+    for (int k = dir > 0 ? dir : -dir; k > 0; --k) {
+        const int next = lanes::stepLane(n, lane, step, comp, g_laneSkipComp.load());
+        if (next < 0) break;
+        lane = next;
+    }
+    laneHearAlone_(tr, lane);
 }
 
 // Can the wheel go further this way? Lights ↑ / ↓ on the UF1 cross.
@@ -14929,6 +14972,81 @@ static void laneCentreUp_(double heldMs)
     if (g_laneStroke.on) { lanePaintEnd_(); return; }
     if (heldMs >= kLaneLongPressMs) return;
     laneCompHere_();
+}
+
+// ===== THE LANES BANK (plan Baustein C) ===========================================
+// Key N = lane N of the lane track (LaneModel.h lanes::bank). Resolved and run on
+// the main thread, like every dynamic bank.
+static int laneBankItemCount_()
+{
+    MediaTrack* tr = laneTrack_();
+    if (!tr) return 0;
+    return lanes::bank::itemCount(laneCount_(tr), laneTrackHasLanes_(tr));
+}
+
+static DynSlotInfo laneBankSlot_(int lane)
+{
+    DynSlotInfo info;
+    MediaTrack* tr = laneTrack_();
+    if (!tr || lane < 0) return info;
+    const bool has = laneTrackHasLanes_(tr);
+    const int  n   = laneCount_(tr);
+    const bool in  = has && lane < n;
+    const lanes::bank::Key k = lanes::bank::key(
+        lane, n, has, in ? laneName_(tr, lane) : std::string(),
+        in && lanes::plays(lanePlaySet_(tr), lane),
+        has ? laneCompInfo_(tr).compLane : -1);
+    info.present = k.present;
+    info.label   = k.label;
+    info.led     = k.led;
+    if (k.present) {
+        // Takes white, the comp lane in the green of the Lanes cross (Frank
+        // 02.10.2026). Through the colour path, so the UF1 key goes dark too.
+        info.hasRgb = true;
+        info.rgb    = k.comp ? 0x00FF66u : 0xFFFFFFu;
+    }
+    return info;
+}
+
+// Shift on a key: that lane into or out of the lanes that play (layering, REAPER's
+// Ctrl-click on the lane button).
+static void laneToggleLane_(MediaTrack* tr, int lane)
+{
+    const int n = laneCount_(tr);
+    if (lane < 0 || lane >= n) return;
+    lanes::LaneAb& ab = g_laneAb[tr];
+    const lanes::PlaySet now = lanePlaySet_(tr);
+    ab.observe(now);
+    const lanes::PlaySet set = lanes::toggled(now, lane);
+    if (lanes::plays(set, lane)) g_laneHeard[tr] = lane;
+    laneApplySet_(tr, set);
+    ab.observe(set);
+    laneLiveHeard_(tr, set);
+}
+
+static void applyDynBankLaneOp_(int lane, int gesture)
+{
+    MediaTrack* tr = laneTrack_();
+    if (!tr) return;
+    const bool has  = laneTrackHasLanes_(tr);
+    const int  n    = laneCount_(tr);
+    const int  comp = has ? laneCompInfo_(tr).compLane : -1;
+    switch (lanes::bank::op(gesture, lane, n, has, comp)) {
+        case lanes::bank::Op::Solo:     laneHearAlone_(tr, lane); break;
+        case lanes::bank::Op::Toggle:   laneToggleLane_(tr, lane); break;
+        case lanes::bank::Op::CompHere: laneCompHere_(lane);       break;
+        case lanes::bank::Op::LanesOn:
+            // ⚠ I_FREEMODE 2 is the documented value for fixed item lanes; what
+            // REAPER does with a track that has items on it was not measured.
+            Undo_BeginBlock2(nullptr);
+            SetMediaTrackInfo_Value(tr, "I_FREEMODE", 2);
+            Undo_EndBlock2(nullptr, "Rea-Sixty: fixed lanes on", 1 /*track cfg*/);
+            UpdateArrange();
+            break;
+        case lanes::bank::Op::None:     break;
+    }
+    g_softKeyDirty.store(true);
+    g_pageDirty.store(true);
 }
 
 // What the lane keys show (their builtins' stateOf reads these, so the UF1
@@ -33468,6 +33586,7 @@ static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod,
         case DynamicBankKind::RmeSnapshots: return withSet("Snapshots");
         case DynamicBankKind::RmeLayouts:   return withSet("Layouts");
         case DynamicBankKind::SelectionSets: return withSet("Sel Sets");
+        case DynamicBankKind::Lanes:        return withSet("Lanes");
         default: break;
     }
     // ⇨ THE FALLBACK NAMES THE SET AND THE BANK. The UF1 falls back to "SOFT 3"
@@ -33559,6 +33678,8 @@ static std::string uf1BankDisplayName_(int bank, int mod)
         case DynamicBankKind::RmeLayouts:   return "LAYOUTS";
         // S E T S, all in the font.
         case DynamicBankKind::SelectionSets: return "SETS";
+        // L A N E S, all in the font.
+        case DynamicBankKind::Lanes:        return "LANES";
         default: break;
     }
     char b[16];
@@ -51572,12 +51693,12 @@ void reasixty_setTrackBankColourName(int i, const char* name)
 int  reasixty_dynBankCtrl(int kind)
 {
     ensureDynCfgLoaded_();
-    return (kind >= 0 && kind < 8) ? g_dynBankCtrl[kind].load()
-                                   : int(BankControl::None);
+    return (kind >= 0 && kind < kDynKindCount) ? g_dynBankCtrl[kind].load()
+                                               : int(BankControl::None);
 }
 void reasixty_setDynBankCtrl(int kind, int ctrl)
 {
-    if (kind < 0 || kind >= 8 || ctrl < 0 || ctrl >= kBankControlCount) return;
+    if (kind < 0 || kind >= kDynKindCount || ctrl < 0 || ctrl >= kBankControlCount) return;
     ensureDynCfgLoaded_();
     g_dynBankCtrl[kind].store(ctrl);
     char k[32]; std::snprintf(k, sizeof(k), "dyn_bank_ctrl_%d", kind);

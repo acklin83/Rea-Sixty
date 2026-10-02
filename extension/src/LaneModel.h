@@ -364,4 +364,62 @@ inline bool jumpedBack(double last, double now, double slack = 0.05)
     return now < last - slack;
 }
 
+// ---- the Lanes bank (Baustein C) -----------------------------------------------------
+// Key N of the dynamic bank "Lanes" is lane N of the lane track (UF8 eight a page,
+// UF1 four). Frank 02.10.2026: takes white, the active comp lane green; no long
+// press yet (making a lane the comp lane has no API and was not probed).
+namespace bank {
+
+struct Key {
+    bool        present = false;
+    std::string label;
+    int         led     = 0;      // 0 dark, 1 dim (there, silent), 2 lit (plays)
+    bool        comp    = false;  // the active comp lane: its own colour
+};
+
+// `name` as P_LANENAME gives it ("" or the lane's number when it has none of its
+// own). A track without lanes shows one key, "Lanes on", on key 0.
+inline Key key(int lane, int n, bool trackHasLanes, const std::string& name,
+               bool plays, int compLane)
+{
+    Key k;
+    if (!trackHasLanes) {
+        if (lane == 0) { k.present = true; k.label = "Lanes on"; k.led = 1; }
+        return k;
+    }
+    if (lane < 0 || lane >= n) return k;
+    k.present = true;
+    k.comp    = (lane == compLane);
+    if (k.comp)                                                   k.label = "Comp";
+    else if (name.empty() || name == std::to_string(lane + 1))    k.label = "Lane " + std::to_string(lane + 1);
+    else                                                          k.label = name;
+    k.led = plays ? 2 : 1;
+    return k;
+}
+
+enum class Op { None, Solo, Toggle, CompHere, LanesOn };
+
+// gesture as the dynamic banks post it: 0 push, 1 Shift, 2 Cmd, 3 Ctrl, 4 long.
+// Push = this lane alone, Shift = into / out of the lanes that play, Cmd = Comp
+// here from this lane (not from the comp lane itself). Ctrl and long are free.
+inline Op op(int gesture, int lane, int n, bool trackHasLanes, int compLane)
+{
+    if (!trackHasLanes) return (gesture == 0 && lane == 0) ? Op::LanesOn : Op::None;
+    if (lane < 0 || lane >= n) return Op::None;
+    switch (gesture) {
+        case 0: return Op::Solo;
+        case 1: return Op::Toggle;
+        case 2: return lane == compLane ? Op::None : Op::CompHere;
+        default: return Op::None;
+    }
+}
+
+// Keys a bank shows for `n` lanes: one ("Lanes on") on a track without them.
+inline int itemCount(int n, bool trackHasLanes) { return trackHasLanes ? (n > 0 ? n : 0) : 1; }
+
+// The page that shows `lane`, `perPage` keys a page.
+inline int pageOf(int lane, int perPage) { return (lane < 0 || perPage <= 0) ? 0 : lane / perPage; }
+
+} // namespace bank
+
 } // namespace lanes

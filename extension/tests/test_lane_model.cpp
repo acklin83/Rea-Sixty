@@ -265,6 +265,40 @@ int main()
         EXPECT(lc.close(31.2, sec));
         EXPECT(sec.lane == 2 && near(sec.start, 31.0) && near(sec.end, 31.2));
     }
+    // ---- the Lanes bank -----------------------------------------------------
+    {
+        using namespace lanes::bank;
+        // A take with a name of its own, one without (REAPER gives its number),
+        // the comp lane, past the end.
+        Key k = key(0, 4, true, "Vox take 1", true, 3);
+        EXPECT(k.present && k.label == "Vox take 1" && k.led == 2 && !k.comp);
+        k = key(1, 4, true, "2", false, 3);
+        EXPECT(k.present && k.label == "Lane 2" && k.led == 1);
+        k = key(2, 4, true, "", false, 3);
+        EXPECT(k.label == "Lane 3");
+        k = key(3, 4, true, "1", true, 3);              // comp lane keeps "1" (probe)
+        EXPECT(k.present && k.comp && k.label == "Comp" && k.led == 2);
+        EXPECT(!key(4, 4, true, "", false, 3).present);
+        // No lanes: key 0 offers them, the rest stay dark.
+        k = key(0, 0, false, "", false, -1);
+        EXPECT(k.present && k.label == "Lanes on" && k.led == 1);
+        EXPECT(!key(1, 0, false, "", false, -1).present);
+
+        EXPECT(op(0, 2, 4, true, 3) == Op::Solo);
+        EXPECT(op(1, 2, 4, true, 3) == Op::Toggle);
+        EXPECT(op(2, 2, 4, true, 3) == Op::CompHere);
+        EXPECT(op(2, 3, 4, true, 3) == Op::None);       // no comp from the comp lane
+        EXPECT(op(3, 2, 4, true, 3) == Op::None);
+        EXPECT(op(4, 2, 4, true, 3) == Op::None);       // long: not yet
+        EXPECT(op(0, 5, 4, true, 3) == Op::None);
+        EXPECT(op(0, 3, 4, true, 3) == Op::Solo);       // push the comp key: hear the comp
+        EXPECT(op(0, 0, 0, false, -1) == Op::LanesOn);
+        EXPECT(op(1, 0, 0, false, -1) == Op::None);
+        EXPECT(op(0, 1, 0, false, -1) == Op::None);
+
+        EXPECT(itemCount(14, true) == 14 && itemCount(0, false) == 1);
+        EXPECT(pageOf(9, 8) == 1 && pageOf(7, 8) == 0 && pageOf(5, 4) == 1 && pageOf(-1, 4) == 0);
+    }
     EXPECT(jumpedBack(16.0, 8.0));
     EXPECT(!jumpedBack(16.0, 15.98));                     // jitter
     EXPECT(!jumpedBack(16.0, 16.03));
