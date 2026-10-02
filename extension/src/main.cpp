@@ -8542,10 +8542,25 @@ static int dynBankSlotBase_(uf8::bindings::DynamicBankKind kind)
         ? g_dynBankPage[static_cast<int>(kind)].load() * 8 : 0;
 }
 
+// ⇨ THE LANES MODE BRINGS ITS BANK (plan Baustein C2, decision 9). While the UF8
+// encoder is in Lanes the eight top keys ARE the Lanes bank, whatever bank is
+// engaged. An overlay, not a switch: nothing in the user's banks or the engaged
+// Quick changes, so leaving the mode gives back what was there by itself. Not in
+// UF8 Plug-in Mode, which owns the row. Atomics only, any thread.
+std::atomic<bool> g_laneBringsBank{true};   // "Lanes mode shows the Lanes bank", on
+static bool laneBankOverride_()
+{
+    return g_laneBringsBank.load()
+        && g_encoderMode.load() == EncoderMode::Lanes
+        && !g_uf8PluginMode.load();
+}
+
 // The dynamic kind of the engaged sub-bank IF it is bankable (FX / Sends),
 // else -1. Reads atomics + the config mutex only → safe on any thread.
 static int engagedBankableKind_()
 {
+    if (laneBankOverride_())
+        return static_cast<int>(uf8::bindings::DynamicBankKind::Lanes);
     const int layer = uf8::bindings::getQuickLayer();
     if (layer < 0 || layer > 2) return -1;
     const int q = g_activeQuick[layer].load();
@@ -15066,6 +15081,13 @@ static bool lanesModeLive_()
 // REAPER's own switches, a punch-in is one) and refresh the lamp states.
 void laneTick_()
 {
+    // The top keys repaint when the Lanes mode brings or takes back its bank.
+    static bool s_bankOv = false;
+    if (const bool ov = laneBankOverride_(); ov != s_bankOv) {
+        s_bankOv = ov;
+        g_softKeyDirty.store(true);
+        g_pageDirty.store(true);
+    }
     laneAuditionTick_();
     const bool live = lanesModeLive_();
     laneLiveTick_(live);
@@ -26901,6 +26923,13 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 (id >= 0x18 && id <= 0x1F
                  && uf8::nav::Overlay::instance().active()
                  && g_navUf8Show.load());
+            if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()
+                && !handledNatively && !navOwnsSoftKey && laneBankOverride_()) {
+                // The Lanes mode's bank: the modifiers are its gestures.
+                dispatchDynamicPress_(uf8::bindings::DynamicBankKind::Lanes,
+                                      id - 0x18, pressed, /*setOwnsBank*/ false);
+                handledNatively = true;
+            }
             if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()
                 && !handledNatively && !navOwnsSoftKey) {
                 const int layer = uf8::bindings::getQuickLayer();
@@ -40085,7 +40114,15 @@ void pushZonesForVisibleSlots()
                 uf8::bindings::DynamicBankKind::None;
             DynSlotInfo dynInfo;
             bool dynOwnsSet = false;
-            if (curQuick >= 0)
+            // The Lanes mode's bank stands in for whatever is engaged, also
+            // where no Quick is (laneBankOverride_). `userCtx` is "the row is a
+            // user bank", which it then is.
+            const bool laneOv = !pluginModeLocal && laneBankOverride_();
+            const bool userCtx = curQuick >= 0 || laneOv;
+            if (laneOv) {
+                dynKind = uf8::bindings::DynamicBankKind::Lanes;
+                dynOwnsSet = true;
+            } else if (curQuick >= 0)
                 dynKind = uf8::bindings::getSubBankDynamicFor(
                     curLayer, curQuick, curSub,
                     static_cast<int>(uf8::bindings::bankModifierSnapshot()),
@@ -40108,7 +40145,7 @@ void pushZonesForVisibleSlots()
                             curLayer, curQuick, curSub, s),
                         static_cast<int>(
                             uf8::bindings::bankModifierSnapshot())));
-            if (curQuick >= 0
+            if (userCtx
                 && dynKind != uf8::bindings::DynamicBankKind::None
                 && !dynSetOwns) {
                 dynInfo = dynamicBankSlot_(dynKind, dynBankContextTrack_(), s);
@@ -40181,7 +40218,7 @@ void pushZonesForVisibleSlots()
             // no way to see what you had put on Shift (Frank 2026-08-25:
             // "bei den SSL eigenen auf Q1 und Q2 ist das noch nicht der fall").
             const bool sslSetOwnsRow =
-                (curQuick < 0 && !pluginModeLocal && curLayer == 0
+                (!userCtx && !pluginModeLocal && curLayer == 0
                  && uf8::bindings::bankModifierSnapshot()
                         != uf8::bindings::Modifier::Plain);
             // ⇨ PLAIN IS SSL'S WHERE SSL HAS SOMETHING; A MODIFIER SET IS
@@ -40190,7 +40227,7 @@ void pushZonesForVisibleSlots()
             // "shift als mod für ALLE bänke öffnen (auch die SSL Factory)".
             // On Plain an occupied key still shows and fires the plug-in
             // parameter, unchanged; only the held-modifier sets open up.
-            if (curQuick < 0 && !pluginModeLocal && curLayer == 0 && vSk.linkIdx
+            if (!userCtx && !pluginModeLocal && curLayer == 0 && vSk.linkIdx
                 && (vSk.linkIdx[s] == softkey::kNoSlot || sslSetOwnsRow)) {
                 const int qd = (domSk == uf8::Domain::BusComp) ? 1 : 0;
                 const auto fslot = uf8::bindings::getUserQuickSlot(
@@ -40257,7 +40294,7 @@ void pushZonesForVisibleSlots()
                 }
             }
             if (label.empty()) {
-                if (curQuick >= 0)              label = userLabel;
+                if (userCtx)                    label = userLabel;
                 else if (!sslFreeLabel.empty()) label = sslFreeLabel;
                 // A held set with nothing on this key shows NOTHING. Handing the
                 // plug-in's own name back would announce that the key still does
@@ -40288,7 +40325,7 @@ void pushZonesForVisibleSlots()
             // Same for the LED: an unassigned key under a held set is empty,
             // not "the plug-in's parameter, possibly focused" — kNoSlot drops it
             // to the dim/idle rung the empty user-Quick slots sit on.
-            const int slotLink = (curQuick >= 0)
+            const int slotLink = userCtx
                 ? (userBankSlotPresent ? 0 : softkey::kNoSlot)
                 : (sslFreeSlotPresent ? 0
                    : (sslSetOwnsRow ? softkey::kNoSlot : vSk.linkIdx[s]));
@@ -40360,7 +40397,7 @@ void pushZonesForVisibleSlots()
                     tssk = uf8::TopSoftKeyState::Dim;
                     ledCacheKey = 9;
                 }
-            } else if (curQuick >= 0) {
+            } else if (userCtx) {
                 // User-Quick context. Three-tier rendering:
                 //   empty slot                       → Dim (row stays
                 //                                       visibly populated)
@@ -52797,6 +52834,8 @@ bool   reasixty_laneScrubPaint()          { return g_laneScrubPaint.load(); }
 void   reasixty_setLaneScrubPaint(bool on){ laneSetFlag_(g_laneScrubPaint, "laneScrubPaint", on); }
 bool   reasixty_lanePlayStroke()          { return g_lanePlayStroke.load(); }
 void   reasixty_setLanePlayStroke(bool on){ laneSetFlag_(g_lanePlayStroke, "lanePlayStroke", on); }
+bool   reasixty_laneBringsBank()          { return g_laneBringsBank.load(); }
+void   reasixty_setLaneBringsBank(bool on){ laneSetFlag_(g_laneBringsBank, "laneBringsBank", on); }
 bool   reasixty_laneSnapPaint()           { return g_laneSnapPaint.load(); }
 void   reasixty_setLaneSnapPaint(bool on) { laneSetFlag_(g_laneSnapPaint, "laneSnapPaint", on); }
 double reasixty_lanePlayAround()          { return g_lanePlayAround.load(); }
@@ -59632,6 +59671,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         flag("laneScrubPaint", g_laneScrubPaint);
         flag("lanePlayStroke", g_lanePlayStroke);
         flag("laneSnapPaint",  g_laneSnapPaint);
+        flag("laneBringsBank", g_laneBringsBank);
         if (const char* v = GetExtState("rea_sixty", "lanePlayAround"); v && *v)
             g_lanePlayAround.store(std::clamp(std::atof(v), 0.0, 10.0));
         if (const char* v = GetExtState("rea_sixty", "laneLeadInMs"); v && *v)

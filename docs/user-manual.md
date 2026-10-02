@@ -1041,7 +1041,7 @@ All of them are bindings like any other cross key, per jog object on the UF1 and
 
 ## The Lanes bank
 
-Give a soft-key bank the dynamic kind **Lanes** (right-click its cell in the matrix, *Dynamic bank*). Key 1 is lane 1 of the selected track, key 2 lane 2, and so on: eight keys on the UF8, four on the UF1. A key reads the lane's name, or `Lane 3` for one without a name of its own; the comp lane reads `Comp`. Lit is a lane that plays, dim one that is silent. Takes are white, the comp lane green.
+On the UF8 it comes by itself: while the encoder is in **Lanes**, the eight top keys are the Lanes bank, whatever bank you had engaged, and leaving the mode brings that bank back. Switch this off under *Settings → Behaviour → Fixed lanes*. Elsewhere, and on the UF1, give a soft-key bank the dynamic kind **Lanes** (right-click its cell in the matrix, *Dynamic bank*). Key 1 is lane 1 of the selected track, key 2 lane 2, and so on: eight keys on the UF8, four on the UF1. A key reads the lane's name, or `Lane 3` for one without a name of its own; the comp lane reads `Comp`. Lit is a lane that plays, dim one that is silent. Takes are white, the comp lane green.
 
 - **Push** plays that lane alone, the same as stepping the jog onto it, without passing the lanes in between.
 - `SHIFT` + key: that lane joins the lanes that play, or leaves them. This is how you layer two takes from the surface.
@@ -1089,7 +1089,7 @@ On the UF8, holding the push and letting go without turning does nothing in Lane
 
 **A guitar solo cut while it plays (UF1).** Five takes of the solo on five lanes. Press your live comping key: live comping is on. Press play before the solo. At the start of the solo turn the jog to take 2, at bar 5 to take 5, for the last phrase to take 1. Each change writes the part before it into the comp while the solo runs; stop writes the last one. Three cuts, three undo steps. To work on one spot, loop it and change lanes on every pass until it sits, then press the live comping key again to switch it off.
 
-**With the UF8 alone.** Select the track, hold the push and turn to **Lanes**. The encoder steps the takes, the cursor pad is the cross from the table above, the push is Comp here, `SHIFT` + encoder moves a comp area. Hold the centre and turn the encoder to paint. The UF8 has no display for the lane name; REAPER's lane buttons show which lane plays.
+**With the UF8 alone.** Select the track, hold the push and turn to **Lanes**. The encoder steps the takes, the cursor pad is the cross from the table above, the push is Comp here, `SHIFT` + encoder moves a comp area. Hold the centre and turn the encoder to paint. The eight top keys show the lanes by name, the ones playing lit: press one to hear it, `SHIFT` + key to layer it, Cmd + key for Comp here from it.
 
 \newpage
 
@@ -1326,6 +1326,7 @@ Surface-side handling of the REAPER Master bus. See **Master track** (own chapte
 | Control | Effect |
 |---|---|
 | Lane steps skip comp lanes | On by default. The jog, the encoder and `↑` / `↓` pass over the comp lane and walk the takes. |
+| UF8 Lanes mode shows the Lanes bank | On by default. While the UF8 encoder is in Lanes, the eight top keys are the Lanes bank; leaving the mode brings your bank back. Not in UF8 Plug-in Mode, which keeps the row. |
 | Scrub while painting | Off by default: the cursor moves silently while you paint. On: painting sounds like a scrub. |
 | Play the stroke after painting | On by default. After a stroke REAPER plays the comp around it, stops, and the edit cursor goes to where you let go. |
 | Played before and after the stroke | How much of the comp plays on either side of a stroke. 1 s by default. |

@@ -275,6 +275,7 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Alt/Option + fader drag \xE2\x86\x92 snap back to original on release",
                                                kSecBehaviour, "Keyboard" },
     { "Lane steps skip comp lanes",            kSecBehaviour, "Fixed lanes" },
+    { "UF8 Lanes mode shows the Lanes bank",   kSecBehaviour, "Fixed lanes" },
     { "Scrub while painting",                  kSecBehaviour, "Fixed lanes" },
     { "Play the stroke after painting",        kSecBehaviour, "Fixed lanes" },
     { "Snap cuts to the grid",                 kSecBehaviour, "Fixed lanes" },

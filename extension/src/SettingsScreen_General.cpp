@@ -211,6 +211,8 @@ bool               reasixty_laneScrubPaint();
 void               reasixty_setLaneScrubPaint(bool on);
 bool               reasixty_lanePlayStroke();
 void               reasixty_setLanePlayStroke(bool on);
+bool               reasixty_laneBringsBank();
+void               reasixty_setLaneBringsBank(bool on);
 bool               reasixty_laneSnapPaint();
 void               reasixty_setLaneSnapPaint(bool on);
 double             reasixty_lanePlayAround();
@@ -1649,6 +1651,12 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
         if (ImGui_Checkbox(ctx, "Lane steps skip comp lanes", &v))
             reasixty_setLaneSkipComp(v);
         help_(ctx, "The wheel and the encoder walk the takes and pass over the comp lane.");
+
+        v = reasixty_laneBringsBank();
+        if (ImGui_Checkbox(ctx, "UF8 Lanes mode shows the Lanes bank", &v))
+            reasixty_setLaneBringsBank(v);
+        help_(ctx, "While the UF8 encoder is in Lanes, the eight top keys are the lanes\n"
+                   "of the selected track. Leaving the mode brings your bank back.");
 
         v = reasixty_laneScrubPaint();
         if (ImGui_Checkbox(ctx, "Scrub while painting", &v))
