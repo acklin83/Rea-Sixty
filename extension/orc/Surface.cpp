@@ -33,6 +33,12 @@ namespace rmef = reasixty::rme::face;
 namespace orc {
 namespace {
 
+int64_t steadyMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 // The extension's default fine factor (g_fineFactorUf1 in main.cpp). ORC has no
 // setting for it yet.
 constexpr double kFineFactor = 0.25;
@@ -105,6 +111,16 @@ void dumpModel(const rme::State& st)
 // the window.
 void Surface::onEvent_(const ::uf1::InputEvent& ev)
 {
+    // ⇨ THE FIRST TOUCH ONLY WAKES (the extension's rule, onUf1Event): a key
+    // and its release, or a detent, do nothing else. The fader is the exception
+    // there too: a hand on it works at once. Its motor reporting back is no hand.
+    const bool woke = ev.kind != ::uf1::InputKind::FaderPosition && sleep_.wake(steadyMs());
+    if (ev.kind == ::uf1::InputKind::Button) {
+        if (wakeSwallow_.button(ev.id, ev.pressed, woke)) return;
+    } else if (woke && ev.kind == ::uf1::InputKind::EncoderRotate) {
+        return;
+    }
+
     auto& mgr = rme::manager();
     const auto st  = mgr.snapshot();
     const auto cfg = mgr.config();
@@ -202,6 +218,14 @@ void Surface::start()
     // did nothing: no fine mode, no second bank half, and its lamp never lit.
     // The extension's own three, with its double-press latch (Bindings.cpp).
     uf8::bindings::registerModifierBuiltins(nullptr);
+    // ⇨ SLEEP ON A KEY, as in the extension (Frank 02.10.2026). Only posts the
+    // request: the loop pushes, it owns the device. A second press wakes, and
+    // so does any other touch.
+    uf8::bindings::registerBuiltin("sleep_now", uf8::bindings::BuiltinDescriptor{
+        [this](bool firing, bool, int) { if (firing) sleep_.toggleRequest.store(true); },
+        [this](int) { return sleep_.asleep.load(); },
+        "Sleep the surface now", false });
+    uf8::bindings::setBuiltinKind("sleep_now", uf8::bindings::BuiltinKind::Switch);
 
     // The handler fires on the device's worker thread.
     dev_.setInputHandler([this](const ::uf1::InputEvent& ev) {
@@ -448,6 +472,10 @@ void Surface::loop_()
                     // believe nothing it cached (the extension's g_uf1Gen bump).
                     force = true;
                     faceCache = rmef::Cache{};
+                    // Its init sequence lit it: it is awake, and the countdown
+                    // starts now (also after REAPER handed it back).
+                    sleep_.asleep.store(false);
+                    sleep_.lastInputMs.store(steadyMs());
                 }
             }
         }
@@ -465,6 +493,23 @@ void Surface::loop_()
         // "no TotalMix" when the link is down, so it runs whenever the surface
         // is open, not only when the mixer answers.
         if (dev_.isOpen()) {
+            // Sleep: the setting from rme.json, then the clock. Awake, the UF1
+            // goes back to the levels its init sequence set; ORC sets no others.
+            {
+                const auto sc = rme::manager().config();
+                auto push = [this](bool a) {
+                    for (auto& fr : surfsleep::uf1Frames(a, surfsleep::kUf1InitLed,
+                                                         surfsleep::kUf1InitLcd)) {
+                        ++sent_;
+                        dev_.send(std::move(fr));
+                    }
+                };
+                sleep_.enabled.store(sc.sleepEnabled);
+                sleep_.minutes.store(sc.sleepMinutes);
+                // Switched off while dark: light it, as the extension does.
+                if (!sc.sleepEnabled && sleep_.asleep.load()) sleep_.set(false, steadyMs(), push);
+                sleep_.tick(steadyMs(), /*busy*/ false, push);
+            }
             rmef::paint(faceCache, in_, host, out, force);
             force = false;
             cycleActive_.store(true);

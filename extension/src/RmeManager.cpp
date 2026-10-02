@@ -178,8 +178,10 @@ std::string configToJson(const Config& c)
     j += "  ],\n";
     snprintf(buf, sizeof(buf),
         "  \"jog\": { \"target\": \"%s\", \"stepDb\": %.2f },\n"
-        "  \"steps\": { \"vpotDb\": %.2f },\n",
-        clean(c.jogTarget).c_str(), c.jogStepDb, c.vpotStepDb);
+        "  \"steps\": { \"vpotDb\": %.2f },\n"
+        "  \"sleep\": { \"enabled\": %s, \"minutes\": %d },\n",
+        clean(c.jogTarget).c_str(), c.jogStepDb, c.vpotStepDb,
+        c.sleepEnabled ? "true" : "false", c.sleepMinutes);
     j += buf;
     j += "  \"colours\": [";
     for (int i = 0; i < 9; ++i) {
@@ -244,6 +246,11 @@ bool configFromJson(const std::string& json, Config& out)
     }
     if (const wdl_json_element* st = root->get_item_by_name("steps"); st && st->is_object())
         if (const char* v = st->get_string_by_name("vpotDb", true)) c.vpotStepDb = std::atof(v);
+    if (const wdl_json_element* sl = root->get_item_by_name("sleep"); sl && sl->is_object()) {
+        if (const char* v = sl->get_string_by_name("enabled", true))
+            c.sleepEnabled = (std::strcmp(v, "true") == 0 || std::strcmp(v, "1") == 0);
+        if (const char* v = sl->get_string_by_name("minutes", true)) c.sleepMinutes = std::atoi(v);
+    }
     if (const wdl_json_element* arr = root->get_item_by_name("colours"); arr && arr->is_array())
         for (int i = 0; i < 9; ++i)
             if (const wdl_json_element* e = arr->enum_item(i))
@@ -277,6 +284,7 @@ bool configFromJson(const std::string& json, Config& out)
     }
     if (!(c.jogStepDb > 0.0 && c.jogStepDb <= 12.0))   c.jogStepDb  = Config{}.jogStepDb;
     if (!(c.vpotStepDb > 0.0 && c.vpotStepDb <= 12.0)) c.vpotStepDb = Config{}.vpotStepDb;
+    if (c.sleepMinutes < 1 || c.sleepMinutes > 99) c.sleepMinutes = Config{}.sleepMinutes;
     if (c.sendPort <= 0 || c.sendPort > 65535) c.sendPort = Config{}.sendPort;
     if (c.recvPort <= 0 || c.recvPort > 65535) c.recvPort = Config{}.recvPort;
     if (c.host.empty()) c.host = Config{}.host;

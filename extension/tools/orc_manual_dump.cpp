@@ -145,17 +145,22 @@ int main()
     static rme::input::State in;
     static const rme::input::Host host{};
     rme::registerBuiltins(in, host);
+    // Sleep, which ORC registers itself (orc/Surface.cpp, Surface::start): the
+    // same name, title and kind, so the manual lists what the window offers.
+    bnd::registerBuiltin("sleep_now", bnd::BuiltinDescriptor{
+        [](bool, bool, int) {}, [](int) { return false; }, "Sleep the surface now", false });
+    bnd::setBuiltinKind("sleep_now", bnd::BuiltinKind::Switch);
 
     std::string j = "{\n";
 
     // ── the actions a soft key or a transport key can run in ORC ──────────
     // The ORC window's own rule (rmeActions in OrcSettingsWindow.mm): the
-    // builtins in the RME category.
+    // builtins in the RME category, and Sleep.
     j += "  \"actions\": [\n";
     {
         bool first = true;
         for (const auto& n : bnd::builtinNames()) {
-            if (std::string(bnd::builtinCategory(n)) != "RME") continue;
+            if (std::string(bnd::builtinCategory(n)) != "RME" && n != "sleep_now") continue;
             std::string title = bnd::builtinDisplayName(n);
             if (title.rfind("RME: ", 0) == 0) title.erase(0, 5);
             const auto k = bnd::builtinKind(n);

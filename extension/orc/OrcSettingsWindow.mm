@@ -90,7 +90,8 @@ std::vector<std::string> rmeActions()
 {
     std::vector<std::string> out;
     for (const auto& n : bnd::builtinNames())
-        if (std::string(bnd::builtinCategory(n)) == "RME") out.push_back(n);
+        // Plus Sleep, which ORC registers itself (Surface::start).
+        if (std::string(bnd::builtinCategory(n)) == "RME" || n == "sleep_now") out.push_back(n);
     std::sort(out.begin(), out.end(), [](const std::string& a, const std::string& b) {
         return bnd::builtinDisplayName(a) < bnd::builtinDisplayName(b);
     });
@@ -183,6 +184,8 @@ NSStackView* withUnit(NSView* field, NSString* unit)
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* potPushes;
 @property (nonatomic, strong) NSPopUpButton* jogTarget;
 @property (nonatomic, strong) NSTextField*   jogStep;
+@property (nonatomic, strong) NSButton*      sleepBox;
+@property (nonatomic, strong) NSTextField*   sleepMinutes;
 @property (nonatomic, strong) NSTextField*   knobStep;
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* colourPops;
 @property (nonatomic, strong) NSMutableArray<NSTextField*>*   wearerLabels;
@@ -397,6 +400,21 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     [jog addRowWithViews:@[ label(@"Pot step"), withUnit(self.knobStep, @"dB") ]];
     [v setCustomSpacing:20.0 afterView:grid];
     [v addArrangedSubview:jog];
+
+    // ⇨ SLEEP (Frank 02.10.2026: "einen Sleep wie in Rea-Sixty"). The UF1 goes
+    // dark after this long without a touch; the first touch only wakes it. Off
+    // from the factory. The clock is the extension's (SurfaceSleep.h).
+    self.sleepBox = [NSButton checkboxWithTitle:@"Sleep when idle"
+                                         target:self
+                                         action:@selector(sleepChanged:)];
+    NSGridView* sl = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
+    sl.columnSpacing = 10.0;
+    sl.rowSpacing = 8.0;
+    self.sleepMinutes = [self field:@selector(sleepChanged:) width:70];
+    [sl addRowWithViews:@[ label(@"After"), withUnit(self.sleepMinutes, @"minutes") ]];
+    [v setCustomSpacing:20.0 afterView:jog];
+    [v addArrangedSubview:self.sleepBox];
+    [v addArrangedSubview:sl];
 
     item.view = [self pageWithStack:v];
     return item;
@@ -694,6 +712,10 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
         self.jogStep.stringValue = [NSString stringWithFormat:@"%.2f", cfg.jogStepDb];
     if (self.window.firstResponder != self.knobStep.currentEditor)
         self.knobStep.stringValue = [NSString stringWithFormat:@"%.2f", cfg.vpotStepDb];
+    self.sleepBox.state = cfg.sleepEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+    if (self.window.firstResponder != self.sleepMinutes.currentEditor)
+        self.sleepMinutes.stringValue = @(cfg.sleepMinutes).stringValue;
+    self.sleepMinutes.enabled = cfg.sleepEnabled;
 
     std::string wearers[9];
     // Who wears a TotalMix colour: mixer channels only. The effects carry a
@@ -1047,6 +1069,13 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
     const double jog  = self.jogStep.doubleValue;
     const double knob = self.knobStep.doubleValue;
     [self apply:^(rme::Config& c) { c.jogStepDb = jog; c.vpotStepDb = knob; }];
+}
+
+- (void)sleepChanged:(id)sender
+{
+    const bool on = self.sleepBox.state == NSControlStateValueOn;
+    const int  m  = std::clamp((int)self.sleepMinutes.integerValue, 1, 99);
+    [self apply:^(rme::Config& c) { c.sleepEnabled = on; c.sleepMinutes = m; }];
 }
 
 - (void)colourChanged:(NSPopUpButton*)sender

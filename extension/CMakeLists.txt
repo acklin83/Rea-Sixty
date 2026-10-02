@@ -831,6 +831,12 @@ if(NOT WIN32)
     target_include_directories(test_selset_bank PRIVATE src)
     add_test(NAME selset_bank COMMAND test_selset_bank)
 
+    # Sleep: the clock Rea-Sixty and ORC share, the UF1's lights, the waking press
+    # (SurfaceSleep.h).
+    add_executable(test_surface_sleep tests/test_surface_sleep.cpp src/UF1Protocol.cpp)
+    target_include_directories(test_surface_sleep PRIVATE src)
+    add_test(NAME surface_sleep COMMAND test_surface_sleep)
+
     add_executable(test_uc1_protocol tests/test_uc1_protocol.cpp src/UC1Protocol.cpp)
     target_include_directories(test_uc1_protocol PRIVATE src)
     add_test(NAME uc1_protocol COMMAND test_uc1_protocol)
