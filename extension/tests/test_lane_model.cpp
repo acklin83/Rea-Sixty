@@ -185,6 +185,22 @@ int main()
     EXPECT(near(nextEdge(es, 5.0), 5.0));                               // past the end
     EXPECT(near(prevEdge(es, 0.0), 0.0));
 
+    // ---- loop around the cut ----------------------------------------------------
+    {
+        const std::vector<double> es = { 0.0, 18.98, 20.98, 22.98 };
+        EXPECT(near(nearestEdge(es, 20.98), 20.98));     // on a cut
+        EXPECT(near(nearestEdge(es, 21.5), 20.98));      // between: the nearer
+        EXPECT(near(nearestEdge(es, 60.0), 22.98));      // far away: still the nearest
+        EXPECT(near(nearestEdge({}, 5.0), 5.0));         // none: the cursor
+        double s = 0, e = 0;
+        loopAround(20.98, 2.0, s, e);
+        EXPECT(near(s, 19.98) && near(e, 21.98));
+        loopAround(0.5, 2.0, s, e);                      // not before the project
+        EXPECT(near(s, 0.0) && near(e, 1.5));
+        loopAround(10.0, 0.0, s, e);                     // nonsense length: 2 s
+        EXPECT(near(s, 9.0) && near(e, 11.0));
+    }
+
     // ---- no slivers (Test.RPP, 02.10.2026) ------------------------------------
     {
         // After stroke 1 (lane 4 of the file's 0-based count = "5"): lane 7 goes on

@@ -289,6 +289,27 @@ inline double prevEdge(const std::vector<double>& es, double t, double eps = 1e-
     return t;
 }
 
+// ---- loop around the cut ----------------------------------------------------------------
+// SHIFT + ← (Frank 02.10.2026): `len` seconds centred on the cut nearest `t` (the one
+// the cursor sits on after ← / →), from `edges` as ← / → use them. No edge at all:
+// centred on `t`. The loop does not start before the project.
+inline double nearestEdge(const std::vector<double>& edges, double t)
+{
+    double best = t, dist = -1.0;
+    for (double e : edges) {
+        const double d = e > t ? e - t : t - e;
+        if (dist < 0.0 || d < dist) { best = e; dist = d; }
+    }
+    return best;
+}
+inline void loopAround(double cut, double len, double& s, double& e)
+{
+    if (!(len > 0.0)) len = 2.0;
+    s = cut - len / 2.0;
+    e = cut + len / 2.0;
+    if (s < 0.0) s = 0.0;
+}
+
 // ---- no slivers at the cuts ------------------------------------------------------------
 // REAPER lets neighbouring comp areas overlap by 10 ms. A stroke that starts where the
 // last one ended cut the old area there and left its 10 ms head plus overlap behind,

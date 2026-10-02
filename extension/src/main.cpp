@@ -14373,11 +14373,25 @@ static int laneHeard_(MediaTrack* tr, const lanes::PlaySet& set)
 
 // Every tick while a Lanes mode is live: who plays on the lane track, ours or
 // REAPER's (a punch-in switches lanes on its own; A/B has to know the set before).
+// The take last heard alone on each track: what Comp here takes while the comp
+// lane plays (it never takes from the comp lane itself; that made REAPER add
+// "E" lanes, Frank 02.10.2026). Fed by every single-take play set we see,
+// ours and REAPER's (a click on a lane button counts).
+static std::unordered_map<MediaTrack*, int> g_laneLastTake;
+static void laneNoteTake_(MediaTrack* tr, const lanes::PlaySet& set)
+{
+    if (lanes::countOn(set) != 1) return;
+    for (int i = 0; i < static_cast<int>(set.size()); ++i)
+        if (set[i] && i != laneCompInfo_(tr).compLane) g_laneLastTake[tr] = i;
+}
+
 static void laneObserve_()
 {
     MediaTrack* tr = laneTrack_();
     if (!laneTrackHasLanes_(tr)) return;
-    g_laneAb[tr].observe(lanePlaySet_(tr));
+    const lanes::PlaySet now = lanePlaySet_(tr);
+    g_laneAb[tr].observe(now);
+    laneNoteTake_(tr, now);
 }
 
 // The lane track plus, when REAPER's grouping is on, its media-edit group mates.
@@ -14449,6 +14463,7 @@ static void laneHearAlone_(MediaTrack* tr, int lane)
     g_laneHeard[tr] = lane;
     laneApplySet_(tr, set);
     ab.observe(set);
+    laneNoteTake_(tr, set);
     laneFlash_(tr, lane);
     laneLiveHeard_(tr, set);
     laneBankFollow_(lane);
@@ -14604,7 +14619,13 @@ static void laneCompHere_(int laneOverride = -1)
     MediaTrack* tr = laneTrack_();
     const int n = laneCount_(tr);
     if (n <= 0) return;
-    const int lane = laneOverride >= 0 ? laneOverride : laneHeard_(tr, lanePlaySet_(tr));
+    int lane = laneOverride >= 0 ? laneOverride : laneHeard_(tr, lanePlaySet_(tr));
+    // ⛔ NEVER FROM THE COMP LANE. While it plays, the take last heard alone.
+    const int comp = laneCompInfo_(tr).compLane;
+    if (lane == comp) {
+        auto it = g_laneLastTake.find(tr);
+        lane = (it != g_laneLastTake.end() && it->second != comp) ? it->second : -1;
+    }
     if (lane < 0 || lane >= n) return;
     double s = 0, e = 0;
     if (!laneVerbRange_(tr, lane, s, e)) return;
@@ -14660,10 +14681,10 @@ static void laneCompAreaTurn_(int steps)
 
 // ← / →: the edit cursor to the previous / next comp-area edge or item edge of
 // the heard lane. Seeks while playing, like the Markers encoder mode.
-static void laneEdge_(int dir)
+// The stops of ← / → and of the loop around the cut: comp-area edges plus the
+// item edges of the heard lane.
+static std::vector<double> laneEdgesList_(MediaTrack* tr)
 {
-    MediaTrack* tr = laneTrack_();
-    if (laneCount_(tr) <= 0 || dir == 0) return;
     const int lane = laneHeard_(tr, lanePlaySet_(tr));
     std::vector<double> extra;
     const int ni = CountTrackMediaItems(tr);
@@ -14674,38 +14695,30 @@ static void laneEdge_(int dir)
         extra.push_back(p);
         extra.push_back(p + GetMediaItemInfo_Value(it, "D_LENGTH"));
     }
-    const std::vector<double> es = lanes::edges(laneCompInfo_(tr).areas, extra);
+    return lanes::edges(laneCompInfo_(tr).areas, extra);
+}
+
+static void laneEdge_(int dir)
+{
+    MediaTrack* tr = laneTrack_();
+    if (laneCount_(tr) <= 0 || dir == 0) return;
+    const std::vector<double> es = laneEdgesList_(tr);
     const double cur = GetCursorPosition();
     const double t = dir > 0 ? lanes::nextEdge(es, cur) : lanes::prevEdge(es, cur);
     if (t != cur) SetEditCurPos(t, true, true);
 }
 
-// Shift + ←: loop the comp area under the cursor, else the heard lane's item
-// under it, and switch repeat on (Fall 1).
+// Shift + ←: loop "Loop around the cut" seconds centred on the cut nearest the
+// edit cursor, and switch repeat on (Frank 02.10.2026; it looped the whole comp
+// area or item before). Settings → Bindings → UF1, jog object Lanes.
+std::atomic<double> g_laneLoopAround{2.0};
 static void laneLoopHere_()
 {
     MediaTrack* tr = laneTrack_();
     if (laneCount_(tr) <= 0) return;
-    const double cur = GetCursorPosition();
-    const auto& ci = laneCompInfo_(tr);
-    double s = 0, e = 0;
-    const int a = lanes::areaAt(ci.areas, cur);
-    if (a >= 0) {
-        s = ci.areas[static_cast<size_t>(a)].start;
-        e = ci.areas[static_cast<size_t>(a)].end;
-    } else {
-        const int lane = laneHeard_(tr, lanePlaySet_(tr));
-        bool found = false;
-        const int ni = CountTrackMediaItems(tr);
-        for (int i = 0; i < ni && !found; ++i) {
-            MediaItem* it = GetTrackMediaItem(tr, i);
-            if (static_cast<int>(GetMediaItemInfo_Value(it, "I_FIXEDLANE")) != lane) continue;
-            const double p = GetMediaItemInfo_Value(it, "D_POSITION");
-            const double l = GetMediaItemInfo_Value(it, "D_LENGTH");
-            if (p <= cur && cur < p + l) { s = p; e = p + l; found = true; }
-        }
-        if (!found) return;
-    }
+    double s = 0.0, e = 0.0;
+    lanes::loopAround(lanes::nearestEdge(laneEdgesList_(tr), GetCursorPosition()),
+                      g_laneLoopAround.load(), s, e);
     GetSet_LoopTimeRange2(nullptr, true, true, &s, &e, false);
     GetSetRepeat(1);
     UpdateTimeline();
@@ -52821,6 +52834,13 @@ void   reasixty_setLaneLeadInMs(double v)
     SetExtState("rea_sixty", "laneLeadInMs", std::to_string(v).c_str(), true);
 }
 
+double reasixty_laneLoopAround() { return g_laneLoopAround.load(); }
+void   reasixty_setLaneLoopAround(double v)
+{
+    v = std::clamp(v, 0.2, 30.0);
+    g_laneLoopAround.store(v);
+    SetExtState("rea_sixty", "laneLoopAround", std::to_string(v).c_str(), true);
+}
 double reasixty_uf1JogFineDiv() { return g_uf1JogFineDiv.load(); }
 void   reasixty_setUf1JogFineDiv(double v)
 {
@@ -56449,7 +56469,7 @@ void registerBindingHandlers()
     registerBuiltin("lane_comp_area_down", DescBuilder{ laneOp(LaneOpCode::AreaDown),
         nullptr, "Lanes: comp area one lane down", false });
     registerBuiltin("lane_loop_here", DescBuilder{ laneOp(LaneOpCode::LoopHere),
-        nullptr, "Lanes: loop the comp area / item here", false });
+        nullptr, "Lanes: loop around the cut", false });
     registerBuiltin("lane_edge_prev", DescBuilder{ laneOp(LaneOpCode::EdgePrev),
         nullptr, "Lanes: cursor to previous edge", false });
     registerBuiltin("lane_edge_next", DescBuilder{ laneOp(LaneOpCode::EdgeNext),
@@ -59642,6 +59662,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         flag("laneBringsBank", g_laneBringsBank);
         if (const char* v = GetExtState("rea_sixty", "lanePlayAround"); v && *v)
             g_lanePlayAround.store(std::clamp(std::atof(v), 0.0, 10.0));
+        if (const char* v = GetExtState("rea_sixty", "laneLoopAround"); v && *v)
+            g_laneLoopAround.store(std::clamp(std::atof(v), 0.2, 30.0));
         if (const char* v = GetExtState("rea_sixty", "laneLeadInMs"); v && *v)
             g_laneLeadInMs.store(std::clamp(std::atof(v), 0.0, 500.0));
     }

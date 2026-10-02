@@ -195,6 +195,8 @@ void        reasixty_setUf1FadeXfadeEditor(bool on);
 double      reasixty_uf1FadeFollowMin();
 void        reasixty_setUf1FadeFollowMin(double v);
 double      reasixty_uf1JogStep(int mode);
+double      reasixty_laneLoopAround();
+void        reasixty_setLaneLoopAround(double v);
 void        reasixty_setUf1JogStep(int mode, double v);
 int         reasixty_uf1JogUnit(int mode);
 void        reasixty_setUf1JogUnit(int mode, int unit);
@@ -4904,6 +4906,15 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             if (ImGui_Checkbox(ctx, "Show REAPER's crossfade editor##jog", &xe))
                 reasixty_setUf1FadeXfadeEditor(xe);
             help_(ctx, "Empty with nothing selected.");
+        }
+        if (liveJm == 6) {   // Lanes: SHIFT + ← loops this long around the cut
+            double la = reasixty_laneLoopAround();
+            double ld = 0.5, lf = 1.0;
+            ImGui_SetNextItemWidth(ctx, 140.0);
+            if (ImGui_InputDouble(ctx, "Loop around the cut (s)##jog", &la, &ld, &lf, "%.1f", &fl))
+                reasixty_setLaneLoopAround(la);
+            help_(ctx, "SHIFT + left loops this long, centred on the cut nearest the cursor.\n"
+                       "The UF8's Lanes cross uses it too.");
         }
         // Per-mode TIME axis unit + amount, for the live mode only. Razor (4)
         // has no time axis at the wheel, so it shows none of this; Lanes (6)

@@ -9081,8 +9081,8 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "lane_comp_area_down",
       "Fixed lanes: the comp area under the edit cursor takes the lane below." },
     { "lane_loop_here",
-      "Fixed lanes: loop the comp area under the edit cursor, or the item of the "
-      "lane you hear, and switch repeat on." },
+      "Fixed lanes: loop a few seconds centred on the cut nearest the edit cursor, "
+      "and switch repeat on. How long is set with the UF1's jog object Lanes." },
     { "lane_edge_prev",
       "Fixed lanes: edit cursor to the previous comp-area or item edge." },
     { "lane_edge_next",
