@@ -832,8 +832,8 @@ const NavSeed kNavSeed[] = {
         // Lanes (plan docs/fixed-lanes-plan.md, Baustein B): ↑ / ↓ step the
         // heard lane, Shift steps the comp area under the cursor; ← / → go to
         // the comp-area or item edges, Shift ← loops there, Shift → is A/B;
-        // the centre is a HOLD: tap = Comp here, held + wheel = paint, long =
-        // live comping (lane_comp_paint); Shift centre plays the comp lane (Frank
+        // the centre is a HOLD: tap = Comp here, held + wheel = paint, held and
+        // let go unturned = nothing (lane_comp_paint); Shift centre plays the comp lane (Frank
         // 02.10.2026: lane_play_toggle could only ever take the one lane a step
         // left playing out again). The UF8's Lanes cross is the same table
         // (seedUf8LanesCross_).
@@ -4311,8 +4311,7 @@ void upgradeLanesShiftCentre_(Config& c)
 }
 
 // v54: the centre of the Lanes cross (UF1 centre, UF8 FIT) becomes the HOLD
-// lane_comp_paint: tap = Comp here as before, held + wheel/encoder = paint, long
-// = live comping. Only where the slot still holds the factory Comp here.
+// lane_comp_paint: tap = Comp here as before, held + wheel/encoder = paint. Only where the slot still holds the factory Comp here.
 void upgradeLanesCentrePaint_(Config& c)
 {
     auto swap = [](Binding& bd) {
@@ -9038,8 +9037,8 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "the loop, or the item under the edit cursor." },
     { "lane_comp_paint",
       "Fixed lanes: tap for Comp here. Hold and turn the wheel or encoder to paint "
-      "the stretch you run over into the comp. Hold without turning to switch live "
-      "comping on or off. Set the key to Press." },
+      "the stretch you run over into the comp; let go without turning to call it "
+      "off. Set the key to Press." },
     { "lane_paint_live",
       "Fixed lanes: live comping on or off. While the song plays, every lane "
       "change cuts the comp there." },

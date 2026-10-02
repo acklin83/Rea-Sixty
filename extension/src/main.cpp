@@ -14680,8 +14680,8 @@ std::atomic<bool>   g_laneSnapPaint{false};    // "Snap cuts to the grid", off
 std::atomic<double> g_laneLeadInMs{20.0};      // "Cut lead-in", 20 ms
 
 // The centre of the Lanes cross (lane_comp_paint): held, the wheel and the
-// encoder paint; let go, a tap is Comp here and a long press without a turn
-// switches live comping. Written on the input thread at the edges, so a detent
+// encoder paint; let go, a tap is Comp here and a long hold without a turn is
+// nothing (the way out of a stroke). Written on the input thread at the edges, so a detent
 // that comes right after the press already finds it held.
 std::atomic<bool>    g_laneCentreHeld{false};
 std::atomic<int64_t> g_laneCentreDownMs{0};
@@ -14905,12 +14905,14 @@ static void laneLiveTick_(bool modeLive)
     g_laneLivePlaying = playing;
 }
 
-// The centre let go: a stroke ends, a long press switches live comping, a tap
-// is Comp here.
+// The centre let go: a stroke ends, a tap is Comp here, and a hold without a
+// turn does nothing: that is how a stroke is called off, also while the comp
+// lane plays and there is nothing to paint from (Frank 02.10.2026). Live
+// comping has its own builtin.
 static void laneCentreUp_(double heldMs)
 {
     if (g_laneStroke.on) { lanePaintEnd_(); return; }
-    if (heldMs >= kLaneLongPressMs) { g_laneLive.store(!g_laneLive.load()); return; }
+    if (heldMs >= kLaneLongPressMs) return;
     laneCompHere_();
 }
 
@@ -26343,6 +26345,9 @@ static void uf8EncPushEdge_(bool pressed)
     const auto pid = uf8RemapForEncMode_(uf8::bindings::ButtonId::ChannelPush);
     const bool longHeld = nowMs_() - g_uf8EncPushDownMs.load() >= 500;
     if (longHeld && uf8::bindings::fireLongPress(pid)) return;
+    // Lanes: the push writes the comp. Held for a pick and let go unturned is
+    // a change of mind, not a Comp here (Frank 02.10.2026).
+    if (longHeld && g_encoderMode.load() == EncoderMode::Lanes) return;
     // A press and its release in one go: dispatch's own short / double-press
     // logic sees the same pair it would have, only later.
     uf8::bindings::dispatch(pid, true);
@@ -56266,7 +56271,7 @@ void registerBindingHandlers()
         [](int) { return g_laneComping.load(); }, "Lanes: comp here", false });
     // ⇨ THE CENTRE OF THE LANES CROSS (plan decision 5): a HOLD. Pressed, the
     // wheel and the encoder paint; let go, the drain decides between the end of
-    // a stroke, live comping on/off (long, no turn) and Comp here (a tap). The
+    // a stroke, Comp here (a tap) and nothing (long, no turn). The
     // edges are taken here, on the input thread, so the first detent after the
     // press already sees the key held. Lit while live comping is on (Frank
     // 02.10.2026).
@@ -56283,7 +56288,7 @@ void registerBindingHandlers()
                         static_cast<double>(nowMs_() - g_laneCentreDownMs.load())});
         },
         [](int) { return g_laneLive.load(); },
-        "Lanes: tap comps, hold+turn paints, long = live comping", false });
+        "Lanes: tap comps, hold+turn paints", false });
     registerBuiltin("lane_paint_live", DescBuilder{
         [](bool firing, bool, int) { if (firing) g_laneLive.store(!g_laneLive.load()); },
         [](int) { return g_laneLive.load(); }, "Lanes: live comping on / off", false });
