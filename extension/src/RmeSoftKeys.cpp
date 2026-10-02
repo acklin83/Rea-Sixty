@@ -110,6 +110,21 @@ bool loadDyn(DK kind, int slot)
     return true;
 }
 
+KeyLamp dynKeyLamp(const bnd::Binding& slot, int half, int led)
+{
+    KeyLamp k;
+    if (led <= 0 || half < 0 || half >= bnd::kModifierCount) return k;
+    uint8_t c[3];
+    bnd::Brightness bri;
+    const auto& sp = slot.shortPress[half];
+    if (led >= 2) bnd::effectiveLedActive  (slot, sp, c, bri);
+    else          bnd::effectiveLedInactive(slot, sp, c, bri);
+    if (bri == bnd::Brightness::Off) return k;
+    k.rgb    = (std::uint32_t(c[0]) << 16) | (std::uint32_t(c[1]) << 8) | std::uint32_t(c[2]);
+    k.bright = (bri == bnd::Brightness::Bright);
+    return k;
+}
+
 std::array<uf1spread::SkCell, 4> row(int bank, int half)
 {
     std::array<uf1spread::SkCell, 4> cells{};
@@ -120,16 +135,17 @@ std::array<uf1spread::SkCell, 4> row(int bank, int half)
             c = uf1sk::staticBankCell(bank, i, half);
             continue;
         }
-        // The extension's uf1DynBankCell_ for a slot with a colour: white
-        // through the colour path, because on the UF1 a key without a colour
-        // knows only lit and dim, and "no link" has to be dark.
+        // Always through the colour path, because on the UF1 a key without a
+        // colour knows only lit and dim, and "no link" has to be dark. The
+        // colour is the key's own (dynKeyLamp), white when none is set.
         const DynSlot d = dynSlot(kind, half * 4 + i);
+        const KeyLamp lamp = dynKeyLamp(bnd::getUf1SoftBankSlot(bank, i), half, d.led);
         c.label     = d.label;
         c.haveLabel = true;
         c.on        = (d.led >= 2);
         c.hasColour = true;
-        c.colBright = (d.led >= 2);
-        c.colRgb    = (d.led == 0) ? 0u : 0xFFFFFFu;
+        c.colBright = lamp.bright;
+        c.colRgb    = lamp.rgb;
     }
     return cells;
 }

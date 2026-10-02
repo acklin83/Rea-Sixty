@@ -180,6 +180,34 @@ int main()
               [&](bnd::DynamicBankKind, int slot) { loaded = slot; });
     EXPECT(loaded == 6);
 
+    // ── a TotalMix key's lamp: the key's own colours, white when it has none ──
+    {
+        bnd::Binding bd;                                    // fresh: white Bright / Dim
+        auto L = sk::dynKeyLamp(bd, 0, 2);
+        EXPECT(L.rgb == 0xFFFFFFu && L.bright);
+        L = sk::dynKeyLamp(bd, 0, 1);
+        EXPECT(L.rgb == 0xFFFFFFu && !L.bright);
+        L = sk::dynKeyLamp(bd, 0, 0);                       // no link: dark
+        EXPECT(L.rgb == 0u && !L.bright);
+        // Half 2 (items 5-8) has its own: green active, red inactive.
+        auto& led = bd.shortPress[1].led;
+        led.hasActive = true;
+        led.color[0] = 0x00; led.color[1] = 0xFF; led.color[2] = 0x00;
+        led.brightness = bnd::Brightness::Bright;
+        led.hasInactive = true;
+        led.inactiveColor[0] = 0xFF; led.inactiveColor[1] = 0x00; led.inactiveColor[2] = 0x00;
+        led.inactiveBrightness = bnd::Brightness::Dim;
+        L = sk::dynKeyLamp(bd, 1, 2);
+        EXPECT(L.rgb == 0x00FF00u && L.bright);
+        L = sk::dynKeyLamp(bd, 1, 1);
+        EXPECT(L.rgb == 0xFF0000u && !L.bright);
+        EXPECT(sk::dynKeyLamp(bd, 0, 2).rgb == 0xFFFFFFu);  // half 1 untouched
+        EXPECT(sk::dynKeyLamp(bd, 1, 0).rgb == 0u);         // no link beats the colour
+        // Inactive Off: the other snapshots dark.
+        led.inactiveBrightness = bnd::Brightness::Off;
+        EXPECT(sk::dynKeyLamp(bd, 1, 1).rgb == 0u);
+    }
+
     // ── transport keys ───────────────────────────────────────────────────────
     EXPECT(bnd::dispatchSideCarKey(bnd::ButtonId::Uf1Play, true));
     EXPECT(g_durecPlay == 1);
