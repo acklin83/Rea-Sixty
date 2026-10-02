@@ -1027,7 +1027,7 @@ It works on the **selected track**: the one you last touched, if it is selected,
 ## Where it lives
 
 - **UF1:** jog object **Lanes** (`SCRUB` held + jog, or **UF1 Jog Mode: Lanes**). The jog steps the lanes, the nav cross carries the Lanes keys, and the time field shows the name of the lane you now hear (or *LANE 3* for a lane without a name of its own).
-- **UF8:** encoder mode **Lanes** (push held + turn, or **Encoder Mode → Lanes**). The encoder steps the lanes, the cursor pad carries the same keys as the UF1's cross with FIT as its centre, and the push is Comp here.
+- **UF8:** encoder mode **Lanes** (push held + turn, or **Encoder Mode → Lanes**). The encoder steps the lanes, the cursor pad carries the same keys as the UF1's cross, and the push is Comp here.
 - The UF1's own encoder can run Lanes too. It is unticked in its ring from the factory, because the jog does it there; tick it under the UF1's push in *Settings → Bindings → UF1*.
 
 | Key | Does | With `SHIFT` |
@@ -1035,7 +1035,7 @@ It works on the **selected track**: the one you last touched, if it is selected,
 | jog / encoder | Play the next lane, alone | The comp area under the edit cursor takes the next lane |
 | `↑` / `↓` | Play the lane above / below, alone | The comp area under the edit cursor takes the lane above / below |
 | `←` / `→` | Edit cursor to the previous / next comp-area or item edge | `←` loops the comp area (or the item) there, `→` is A/B |
-| centre (UF8: FIT) | Tap: Comp here. Hold and turn: paint | Play the comp lane |
+| centre | Tap: Comp here. Hold and turn: paint | Play the comp lane |
 
 All of them are bindings like any other cross key, per jog object on the UF1 and per encoder mode on the UF8.
 
@@ -1047,7 +1047,7 @@ All of them are bindings like any other cross key, per jog object on the UF1 and
 
 **Comp here** puts the lane you hear into the comp lane, over the time selection, or over the loop when there is none, or over the item of that lane under the edit cursor. Each Comp here is one undo step.
 
-**Painting.** Hold the centre and turn the jog (UF8: hold FIT and turn the encoder). The edit cursor moves silently, by the step of the jog object Playhead on the UF1 and of the encoder mode Playhead on the UF8; `SHIFT` makes the jog's step finer. A razor at the height of the lane you hear shows the stretch you have run over, and turning back shortens it. The time field shows *PAINT* and the lane number. Let go, and that stretch goes into the comp from the lane you hear, as one undo step. Then REAPER plays the comp from a second before the stretch to a second after it, stops, and the edit cursor goes to where you let go. The lane you painted from plays again, so the next stroke takes from the same take. While the song is playing, nothing is played back after a stroke. Painting takes from a take: while the comp lane plays, step to a take first. To call a stroke off, turn back to where it started, or hold the centre and let go without turning; a long hold without a turn does nothing.
+**Painting.** Hold the centre and turn the jog (UF8: the encoder). The edit cursor moves silently, by the step of the jog object Playhead on the UF1 and of the encoder mode Playhead on the UF8; `SHIFT` makes the jog's step finer. A razor at the height of the lane you hear shows the stretch you have run over, and turning back shortens it. The time field shows *PAINT* and the lane number. Let go, and that stretch goes into the comp from the lane you hear, as one undo step. Then REAPER plays the comp from a second before the stretch to a second after it, stops, and the edit cursor goes to where you let go. The lane you painted from plays again, so the next stroke takes from the same take. While the song is playing, nothing is played back after a stroke. Painting takes from a take: while the comp lane plays, step to a take first. To call a stroke off, turn back to where it started, or hold the centre and let go without turning; a long hold without a turn does nothing.
 
 On the UF8, holding the push and letting go without turning does nothing in Lanes either, so a mode pick you change your mind about does not write the comp.
 
@@ -1075,7 +1075,7 @@ On the UF8, holding the push and letting go without turning does nothing in Lane
 
 **A guitar solo cut while it plays (UF1).** Five takes of the solo on five lanes. Press your live comping key: live comping is on. Press play before the solo. At the start of the solo turn the jog to take 2, at bar 5 to take 5, for the last phrase to take 1. Each change writes the part before it into the comp while the solo runs; stop writes the last one. Three cuts, three undo steps. To work on one spot, loop it and change lanes on every pass until it sits, then press the live comping key again to switch it off.
 
-**With the UF8 alone.** Select the track, hold the push and turn to **Lanes**. The encoder steps the takes, the cursor pad is the cross from the table above, the push is Comp here, `SHIFT` + encoder moves a comp area. Hold FIT and turn the encoder to paint. The UF8 has no display for the lane name; REAPER's lane buttons show which lane plays.
+**With the UF8 alone.** Select the track, hold the push and turn to **Lanes**. The encoder steps the takes, the cursor pad is the cross from the table above, the push is Comp here, `SHIFT` + encoder moves a comp area. Hold the centre and turn the encoder to paint. The UF8 has no display for the lane name; REAPER's lane buttons show which lane plays.
 
 \newpage
 

@@ -22981,7 +22981,7 @@ void drainInputQueue()
                     uf8EncoderStepVisible_(step);
                     continue;
                 }
-                // Encoder mode Lanes with the centre (FIT) held: the
+                // Encoder mode Lanes with the pad's centre held: the
                 // encoder paints, a detent of the Playhead mode's nudge.
                 if (g_encoderMode.load() == EncoderMode::Lanes
                     && g_laneCentreHeld.load()) {

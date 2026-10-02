@@ -960,7 +960,7 @@ void fillDerivedUf8EncSlots_(Config& c)
 void seedUf8LanesCross_(Config& c)
 {
     constexpr int kLanes = kUf8EncModeCountForKeys - 1;    // EncoderMode::Lanes
-    // FIT is the HOLD of the UF1's centre (lane_comp_paint): held + encoder
+    // The pad's centre is the HOLD, as on the UF1 (lane_comp_paint): held + encoder
     // paints. ENC PUSH stays a tap, its hold + turn picks the encoder mode.
     const struct { ButtonId base; const char* action; const char* shift; Behavior beh; } k[] = {
         { ButtonId::ZoomUp,      "lane_prev",       "lane_comp_area_up",   Behavior::Momentary },
@@ -4310,7 +4310,7 @@ void upgradeLanesShiftCentre_(Config& c)
     }
 }
 
-// v54: the centre of the Lanes cross (UF1 centre, UF8 FIT) becomes the HOLD
+// v54: the centre of the Lanes cross (UF1 and UF8, the centre) becomes the HOLD
 // lane_comp_paint: tap = Comp here as before, held + wheel/encoder = paint. Only where the slot still holds the factory Comp here.
 void upgradeLanesCentrePaint_(Config& c)
 {
