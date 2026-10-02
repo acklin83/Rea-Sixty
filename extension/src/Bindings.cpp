@@ -832,16 +832,15 @@ const NavSeed kNavSeed[] = {
         // Lanes (plan docs/fixed-lanes-plan.md, Baustein B): ↑ / ↓ step the
         // heard lane, Shift steps the comp area under the cursor; ← / → go to
         // the comp-area or item edges, Shift ← loops there, Shift → is A/B;
-        // the centre is a HOLD: tap = Comp here, held + wheel = paint, held and
-        // let go unturned = nothing (lane_comp_paint); Shift centre plays the comp lane (Frank
-        // 02.10.2026: lane_play_toggle could only ever take the one lane a step
-        // left playing out again). The UF8's Lanes cross is the same table
+        // the centre is a HOLD: tap = play the comp lane, held + wheel = paint,
+        // held and let go unturned = nothing (lane_comp_paint); Shift centre is
+        // Comp here, needed once to start the comp (Frank 02.10.2026). The UF8's Lanes cross is the same table
         // (seedUf8LanesCross_).
         { ButtonId::Uf1NavUpLanes,        "lane_prev",      "", Behavior::Momentary , "lane_comp_area_up" },
         { ButtonId::Uf1NavDownLanes,      "lane_next",      "", Behavior::Momentary , "lane_comp_area_down" },
         { ButtonId::Uf1NavLeftLanes,      "lane_edge_prev", "", Behavior::Momentary , "lane_loop_here" },
         { ButtonId::Uf1NavRightLanes,     "lane_edge_next", "", Behavior::Momentary , "lane_ab" },
-        { ButtonId::Uf1NavCentreLanes,    "lane_comp_paint", "", Behavior::Hold , "lane_play_comp" },
+        { ButtonId::Uf1NavCentreLanes,    "lane_comp_paint", "", Behavior::Hold , "lane_comp_here" },
     };
 
 // ---- Factory defaults -----------------------------------------------------
@@ -961,14 +960,15 @@ void seedUf8LanesCross_(Config& c)
 {
     constexpr int kLanes = kUf8EncModeCountForKeys - 1;    // EncoderMode::Lanes
     // The pad's centre is the HOLD, as on the UF1 (lane_comp_paint): held + encoder
-    // paints. ENC PUSH stays a tap, its hold + turn picks the encoder mode.
+    // paints. ENC PUSH is A/B (turn through the takes, push back to the comp),
+    // its hold + turn picks the encoder mode.
     const struct { ButtonId base; const char* action; const char* shift; Behavior beh; } k[] = {
         { ButtonId::ZoomUp,      "lane_prev",       "lane_comp_area_up",   Behavior::Momentary },
         { ButtonId::ZoomDown,    "lane_next",       "lane_comp_area_down", Behavior::Momentary },
         { ButtonId::ZoomLeft,    "lane_edge_prev",  "lane_loop_here",      Behavior::Momentary },
         { ButtonId::ZoomRight,   "lane_edge_next",  "lane_ab",             Behavior::Momentary },
-        { ButtonId::ZoomCenter,  "lane_comp_paint", "lane_play_comp",      Behavior::Hold      },
-        { ButtonId::ChannelPush, "lane_comp_here",  nullptr,               Behavior::Momentary },
+        { ButtonId::ZoomCenter,  "lane_comp_paint", "lane_comp_here",      Behavior::Hold      },
+        { ButtonId::ChannelPush, "lane_ab",         nullptr,               Behavior::Momentary },
     };
     for (Layer& L : c.layers)
         for (const auto& e : k) {
@@ -3547,7 +3547,7 @@ bool invokeBuiltin(const std::string& name, int param)
 // v52 (2026-10-01): the jog mode and the encoder mode Lanes. The UF1 cross gets
 // its five Lanes slots (upgradeBackfillUf1Buttons_ fills missing kNavSeed ids,
 // green like the rest of the cross), the UF8 its Lanes cross on every layer.
-constexpr int kCurrentBindingsVersion = 54;
+constexpr int kCurrentBindingsVersion = 55;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -4310,6 +4310,12 @@ void upgradeLanesShiftCentre_(Config& c)
     }
 }
 
+// v55: Comp here is needed once, to start the comp (Frank 02.10.2026). Shift +
+// centre becomes Comp here (was: play the comp lane, which a tap on the centre
+// now does), and the UF8 ENC PUSH in Lanes becomes A/B (was: Comp here). Only
+// where the factory value still stands.
+void upgradeLanesCompHereToShift_(Config& c);
+
 // v54: the centre of the Lanes cross (UF1 and UF8, the centre) becomes the HOLD
 // lane_comp_paint: tap = Comp here as before, held + wheel/encoder = paint. Only where the slot still holds the factory Comp here.
 void upgradeLanesCentrePaint_(Config& c)
@@ -4326,6 +4332,31 @@ void upgradeLanesCentrePaint_(Config& c)
     for (Layer& L : c.layers) {
         auto jt = L.bindings.find(perEncModeUf8Id(ButtonId::ZoomCenter, kLanes));
         if (jt != L.bindings.end()) swap(jt->second);
+    }
+}
+
+void upgradeLanesCompHereToShift_(Config& c)
+{
+    const int S = static_cast<int>(Modifier::Shift);
+    const int P = static_cast<int>(Modifier::Plain);
+    auto shiftSwap = [&](Binding& bd) {
+        auto& sh = bd.shortPress[S];
+        if (bd.shortPress[P].action == "lane_comp_paint"
+            && sh.type == ActionType::Builtin && sh.action == "lane_play_comp")
+            sh.action = "lane_comp_here";
+    };
+    auto it = c.layers[0].bindings.find(ButtonId::Uf1NavCentreLanes);
+    if (it != c.layers[0].bindings.end()) shiftSwap(it->second);
+    constexpr int kLanes = kUf8EncModeCountForKeys - 1;    // EncoderMode::Lanes
+    for (Layer& L : c.layers) {
+        auto jt = L.bindings.find(perEncModeUf8Id(ButtonId::ZoomCenter, kLanes));
+        if (jt != L.bindings.end()) shiftSwap(jt->second);
+        auto pt = L.bindings.find(perEncModeUf8Id(ButtonId::ChannelPush, kLanes));
+        if (pt != L.bindings.end()) {
+            auto& p = pt->second.shortPress[P];
+            if (p.type == ActionType::Builtin && p.action == "lane_comp_here")
+                p.action = "lane_ab";
+        }
     }
 }
 
@@ -4824,6 +4855,9 @@ void load()
             }
             if (tmp.version < 54) {
                 upgradeLanesCentrePaint_(tmp);
+            }
+            if (tmp.version < 55) {
+                upgradeLanesCompHereToShift_(tmp);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -9036,9 +9070,9 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "Fixed lanes: the lane you hear goes into the comp, over the time selection, "
       "the loop, or the item under the edit cursor." },
     { "lane_comp_paint",
-      "Fixed lanes: tap for Comp here. Hold and turn the wheel or encoder to paint "
-      "the stretch you run over into the comp; let go without turning to call it "
-      "off. Set the key to Press." },
+      "Fixed lanes: tap to play the comp lane. Hold and turn the wheel or encoder "
+      "to paint the stretch you run over into the comp; let go without turning "
+      "to call it off. Set the key to Press." },
     { "lane_paint_live",
       "Fixed lanes: live comping on or off. While the song plays, every lane "
       "change cuts the comp there." },
@@ -9407,7 +9441,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "lane_play_comp", "Lane Comp" },
     { "lane_play_toggle", "Lane +/-" },
     { "lane_comp_here", "Comp Here" },
-    { "lane_comp_paint", "Comp/Paint" },
+    { "lane_comp_paint", "Paint/Comp" },
     { "lane_paint_live", "Live Comp" },
     { "lane_comp_area_up", "Area Up" },
     { "lane_comp_area_down", "Area Down" },

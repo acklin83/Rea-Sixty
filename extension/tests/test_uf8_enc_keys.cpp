@@ -92,8 +92,8 @@ int main()
         EXPECT(bnd::getBinding(L, bnd::perEncModeUf8Id(ButtonId::ZoomCenter, kLanes)).behavior
                == bnd::Behavior::Hold);
         EXPECT(bnd::getBinding(L, bnd::perEncModeUf8Id(ButtonId::ZoomCenter, kLanes))
-                   .shortPress[static_cast<int>(bnd::Modifier::Shift)].action == "lane_play_comp");
-        EXPECT(plainAction(L, bnd::perEncModeUf8Id(ButtonId::ChannelPush, kLanes)) == "lane_comp_here");
+                   .shortPress[static_cast<int>(bnd::Modifier::Shift)].action == "lane_comp_here");
+        EXPECT(plainAction(L, bnd::perEncModeUf8Id(ButtonId::ChannelPush, kLanes)) == "lane_ab");
         EXPECT(bnd::getBinding(L, bnd::perEncModeUf8Id(ButtonId::ZoomRight, kLanes))
                    .shortPress[static_cast<int>(bnd::Modifier::Shift)].action == "lane_ab");
     }
@@ -171,9 +171,10 @@ int main()
         EXPECT(bnd::fromName(bnd::toName(ButtonId::Uf1NavDownLanes)) == ButtonId::Uf1NavDownLanes);
     }
 
-    // ── v53 + v54: a v52 file has the centre as Comp here (Momentary) with
-    // lane_play_toggle on Shift. It becomes the hold lane_comp_paint with Play
-    // comp lane on Shift; a centre the user bound differently is left alone. ──
+    // ── v53 + v54 + v55: a v52 file has the centre as Comp here (Momentary)
+    // with lane_play_toggle on Shift, and ENC PUSH as Comp here. It ends as the
+    // hold lane_comp_paint with Comp here on Shift and ENC PUSH as A/B; a centre
+    // the user bound differently is left alone. ─────────────────────────────
     {
         const int S = static_cast<int>(bnd::Modifier::Shift);
         auto v52 = [&](bnd::Binding bd) {
@@ -186,6 +187,10 @@ int main()
         for (int L = 0; L < 3; ++L) {
             const ButtonId id = bnd::perEncModeUf8Id(ButtonId::ZoomCenter, kLanes);
             bnd::setBinding(L, id, v52(bnd::getBinding(L, id)));
+            const ButtonId pid = bnd::perEncModeUf8Id(ButtonId::ChannelPush, kLanes);
+            bnd::Binding push = bnd::getBinding(L, pid);
+            push.shortPress[P].action = "lane_comp_here";
+            bnd::setBinding(L, pid, push);
         }
         bnd::setBinding(0, ButtonId::Uf1NavCentreLanes,
                         v52(bnd::getBinding(0, ButtonId::Uf1NavCentreLanes)));
@@ -204,7 +209,8 @@ int main()
             const bnd::Binding bd = bnd::getBinding(L, bnd::perEncModeUf8Id(ButtonId::ZoomCenter, kLanes));
             EXPECT(bd.shortPress[P].action == "lane_comp_paint");
             EXPECT(bd.behavior == bnd::Behavior::Hold);
-            EXPECT(bd.shortPress[S].action == "lane_play_comp");
+            EXPECT(bd.shortPress[S].action == "lane_comp_here");
+            EXPECT(plainAction(L, bnd::perEncModeUf8Id(ButtonId::ChannelPush, kLanes)) == "lane_ab");
         }
         {
             const bnd::Binding bd = bnd::getBinding(1, bnd::perEncModeUf8Id(ButtonId::ZoomCenter, kLanes));
@@ -214,9 +220,7 @@ int main()
         const bnd::Binding c = bnd::getBinding(0, ButtonId::Uf1NavCentreLanes);
         EXPECT(c.shortPress[P].action == "lane_comp_paint");
         EXPECT(c.behavior == bnd::Behavior::Hold);
-        EXPECT(c.shortPress[S].action == "lane_play_comp");
-        // ENC PUSH stays a tap.
-        EXPECT(plainAction(0, bnd::perEncModeUf8Id(ButtonId::ChannelPush, kLanes)) == "lane_comp_here");
+        EXPECT(c.shortPress[S].action == "lane_comp_here");
     }
 
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }

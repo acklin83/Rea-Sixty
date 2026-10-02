@@ -193,7 +193,7 @@ Tapping the mode that is already live returns the encoder to Channel Select, whi
 
 **Hold the encoder's push and turn** to pick a mode on the surface. While you hold it, the scribble strips list the modes around the current one: the current mode sits on strip 4 with its top soft key lit, and each detent moves one mode on. Let go and the encoder stays in that mode. Which modes the ring offers, and in what order, is set under PUSH in *Settings → Bindings → UF8*: tick a mode to include it, move it with ▲ / ▼. All sixteen are in from the factory. The mode keys and actions above reach every mode, ticked or not.
 
-The push fires when you let go, and only if you did not turn. Held past half a second it fires its long-press slot, if that slot is on.
+The push fires when you let go, and only if you did not turn. Held past half a second and let go without turning, it does nothing: that is a mode pick called off. The push has no long press.
 
 **The cursor pad and the push have their own bindings in every encoder mode.** In *Settings → Bindings → UF8* the five pad keys and PUSH show the bindings of the mode the UF8 is in, and the *Encoder mode* drop-down above the editor switches the mode, on the surface too. Out of the box every mode carries the bindings these six keys had before, so nothing changes until you give a mode its own.
 
@@ -844,7 +844,7 @@ The cross is not one thing either — it follows the object, exactly like the wh
 | **Razor** | Aim at the **left** / **right** edge. | Aim at the **top** / **bottom** edge. | **Hold** it to take the **whole area** and drag its content. See *Razor* below. |
 | **Fades**, aiming | Aim at the **fade-in** / **fade-out**. | Next / previous fade type. | Switch the cross over to walking the items. |
 | **Fades**, walking | Select the previous / next item on the track. | Select the item on the track above / below. | Switch the cross back to aiming. |
-| **Lanes** | Edit cursor to the previous / next comp-area or item edge. `SHIFT` + `←` loops the comp area or item there, `SHIFT` + `→` is A/B. | Play the lane above / below. `SHIFT`: the comp area under the edit cursor takes the lane above / below. | Tap: Comp here. **Hold** it and the wheel paints into the comp; see *Fixed lanes*. `SHIFT`: play the comp lane. |
+| **Lanes** | Edit cursor to the previous / next comp-area or item edge. `SHIFT` + `←` loops the comp area or item there, `SHIFT` + `→` is A/B. | Play the lane above / below. `SHIFT`: the comp area under the edit cursor takes the lane above / below. | Tap: play the comp lane. **Hold** it and the wheel paints into the comp; see *Fixed lanes*. `SHIFT`: Comp here. |
 
 Playhead and Scrub carry the plain zoom cross, the same five REAPER zoom actions
 the UF8's cursor pad uses (40111 / 40112 / 1011 / 1012 / 40295): with no editing
@@ -1027,7 +1027,7 @@ It works on the **selected track**: the one you last touched, if it is selected,
 ## Where it lives
 
 - **UF1:** jog object **Lanes** (`SCRUB` held + jog, or **UF1 Jog Mode: Lanes**). The jog steps the lanes, the nav cross carries the Lanes keys, and the time field shows the name of the lane you now hear (or *LANE 3* for a lane without a name of its own).
-- **UF8:** encoder mode **Lanes** (push held + turn, or **Encoder Mode → Lanes**). The encoder steps the lanes, the cursor pad carries the same keys as the UF1's cross, and the push is Comp here.
+- **UF8:** encoder mode **Lanes** (push held + turn, or **Encoder Mode → Lanes**). The encoder steps the lanes, the cursor pad carries the same keys as the UF1's cross, and the push is A/B: turn through the takes, push to go back to the comp or whatever played before.
 - The UF1's own encoder can run Lanes too. It is unticked in its ring from the factory, because the jog does it there; tick it under the UF1's push in *Settings → Bindings → UF1*.
 
 | Key | Does | With `SHIFT` |
@@ -1035,7 +1035,7 @@ It works on the **selected track**: the one you last touched, if it is selected,
 | jog / encoder | Play the next lane, alone | The comp area under the edit cursor takes the next lane |
 | `↑` / `↓` | Play the lane above / below, alone | The comp area under the edit cursor takes the lane above / below |
 | `←` / `→` | Edit cursor to the previous / next comp-area or item edge | `←` loops the comp area (or the item) there, `→` is A/B |
-| centre | Tap: Comp here. Hold and turn: paint | Play the comp lane |
+| centre | Tap: play the comp lane. Hold and turn: paint | Comp here |
 
 All of them are bindings like any other cross key, per jog object on the UF1 and per encoder mode on the UF8.
 
@@ -1057,7 +1057,7 @@ The bank shows the track the Lanes keys work on, the selected one, so it can dif
 
 **A/B** goes back to what played before the last change, the whole set of lanes. When several lanes played together and you step through single lanes to listen in, A/B brings the layered set back, however many steps it was. It also catches REAPER's own switches while a Lanes mode is on: when REAPER plays a new take after a punch-in, A/B returns to what played before.
 
-**Comp here** puts the lane you hear into the comp lane, over the time selection, or over the loop when there is none, or over the item of that lane under the edit cursor. Each Comp here is one undo step.
+**Comp here** (`SHIFT` + centre) puts the lane you hear into the comp lane, over the time selection, or over the loop when there is none, or over the item of that lane under the edit cursor. Use it to start a comp; after that, painting and `SHIFT` + jog change the parts. Each Comp here is one undo step.
 
 **Moving a comp area** to another lane with `SHIFT` + jog or encoder is one undo step for the whole turn, however many lanes you pass. `SHIFT` + `↑` / `↓` is one undo step per press.
 
@@ -1073,7 +1073,7 @@ On the UF8, holding the push and letting go without turning does nothing in Lane
 
 ## Working with it
 
-**A lead vocal from six takes, line by line (UF1).** Select the vocal track and put the jog on **Lanes**. Loop the first line, the way you always do in REAPER or with `SHIFT` + `←` on a comp area, and press play. Turn the jog: take after take plays in the loop, and the time field names it. When one sits, press the centre: that line goes into the comp. `→` takes the edit cursor to the next edge, loop the next line and go on. A single word from another take: step to that take, select the word as a time selection, press the centre.
+**A lead vocal from six takes, line by line (UF1).** Select the vocal track and put the jog on **Lanes**. Loop the first line, the way you always do in REAPER or with `SHIFT` + `←` on a comp area, and press play. Turn the jog: take after take plays in the loop, and the time field names it. When one sits, press `SHIFT` + centre: that line goes into the comp. Tap the centre to hear the comp. `→` takes the edit cursor to the next edge, loop the next line and go on. A single word from another take: step to that take and paint over the word.
 
 **One spot of the comp, later.** Put the edit cursor into the comp area you want to change and press `SHIFT` + `↑` or `↓` (or turn the jog with `SHIFT` held): that area now comes from the lane above or below. With the loop running you hear it right away.
 
@@ -1081,7 +1081,7 @@ On the UF8, holding the push and letting go without turning does nothing in Lane
 
 **A doubled part.** Let two lanes play together in REAPER (Cmd-click the lane's play button on the Mac, Ctrl-click on Windows). Turn the jog to hear any single take alone; `SHIFT` + `→` brings the two back together.
 
-**Drums in a group.** Kick, snare, overheads and room in one media-edit group that the snare leads, REAPER's grouping on. Select the snare and turn the jog: the whole kit switches to the next take together. A time selection over a fill and the centre puts that fill into the comp on every drum track at once.
+**Drums in a group.** Kick, snare, overheads and room in one media-edit group that the snare leads, REAPER's grouping on. Select the snare and turn the jog: the whole kit switches to the next take together. A time selection over a fill and `SHIFT` + centre puts that fill into the comp on every drum track at once.
 
 **After a punch-in.** When REAPER plays the new take afterwards, `SHIFT` + `→` returns to the comp you had.
 
@@ -1089,7 +1089,7 @@ On the UF8, holding the push and letting go without turning does nothing in Lane
 
 **A guitar solo cut while it plays (UF1).** Five takes of the solo on five lanes. Press your live comping key: live comping is on. Press play before the solo. At the start of the solo turn the jog to take 2, at bar 5 to take 5, for the last phrase to take 1. Each change writes the part before it into the comp while the solo runs; stop writes the last one. Three cuts, three undo steps. To work on one spot, loop it and change lanes on every pass until it sits, then press the live comping key again to switch it off.
 
-**With the UF8 alone.** Select the track, hold the push and turn to **Lanes**. The encoder steps the takes, the cursor pad is the cross from the table above, the push is Comp here, `SHIFT` + encoder moves a comp area. Hold the centre and turn the encoder to paint. The eight top keys show the lanes by name, the ones playing lit: press one to hear it, `SHIFT` + key to layer it, Cmd + key for Comp here from it.
+**With the UF8 alone.** Select the track, hold the push and turn to **Lanes**. The encoder steps the takes, the cursor pad is the cross from the table above, the push is A/B, `SHIFT` + encoder moves a comp area. Hold the centre and turn the encoder to paint. The eight top keys show the lanes by name, the ones playing lit: press one to hear it, `SHIFT` + key to layer it, Cmd + key for Comp here from it.
 
 \newpage
 
@@ -2350,6 +2350,8 @@ The fixed-lanes keys (see the chapter **Fixed lanes**). They work on the selecte
 - **Lanes: play all**, **Lanes: play none**, **Lanes: play only the comp lane**.
 - **Lanes: heard lane into / out of the play set** lets the lane you hear play together with the others, or takes it out.
 - **Lanes: comp here** puts the lane you hear into the comp. It lights while comping is on.
+- **Lanes: tap plays the comp, hold+turn paints** is the centre of the Lanes cross: a tap plays the comp lane, held the jog or encoder paints. Set the key to Press. It lights while live comping is on.
+- **Lanes: live comping on / off**: while the song plays, every lane change cuts the comp there.
 - **Lanes: comp area one lane up** / **down** gives the comp area under the edit cursor the lane above / below.
 - **Lanes: loop the comp area / item here** loops the comp area under the edit cursor, or the item of the lane you hear, and switches repeat on.
 - **Lanes: cursor to previous edge** / **next edge** moves the edit cursor to the previous / next comp-area or item edge.

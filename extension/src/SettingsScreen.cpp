@@ -4956,7 +4956,14 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                           || id == ButtonId::Uc1Encoder1
                           || id == ButtonId::Uc1Encoder2
                           || id == ButtonId::Uf1ChannelEncoder);
-    const bool longPressAvailable = !plainIsModifier && !isEncoder;
+    // ⇨ THE UF8 PUSH HAS NO LONG PRESS: holding it picks the encoder mode, and
+    // letting go unturned is a change of mind (Frank 02.10.2026). Every mode's
+    // own PUSH too.
+    ButtonId pushBase = ButtonId::None;
+    const bool isUf8Push = id == ButtonId::ChannelPush
+        || (uf8::bindings::splitPerEncModeUf8Id(id, &pushBase, nullptr)
+            && pushBase == ButtonId::ChannelPush);
+    const bool longPressAvailable = !plainIsModifier && !isEncoder && !isUf8Push;
     // Controls with no addressable button LED → hide the LED-appearance block.
     // The rotate-gesture encoders (isEncoder) PLUS the channel-encoder PUSH —
     // a real button (so it KEEPS long-press, hence not in isEncoder) but with
@@ -5161,6 +5168,9 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             if (isEncoder) {
                 ImGui_TextDisabled(ctx,
                     "Long-press doesn't apply to encoder rotation.");
+            } else if (isUf8Push) {
+                ImGui_TextDisabled(ctx,
+                    "Holding the push picks the encoder mode.");
             } else {
                 ImGui_TextDisabled(ctx,
                     "Long-press disabled — this button IS a modifier.");
