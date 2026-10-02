@@ -1020,14 +1020,14 @@ off. It is on a key as well, as **Fades: show REAPER's crossfade editor**.
 
 # Fixed lanes
 
-REAPER's fixed item lanes put several takes of a track on top of each other: one lane per take, a comp lane that collects the best parts. Rea-Sixty lets you work through them from the surface, with the transport running: hear one take after the other, put the one that sits into the comp, change a part of the comp later.
+REAPER's fixed item lanes put several takes of a track on top of each other: one lane per take, a comp lane that collects the best parts. Rea-Sixty lets you work through them from the surface, with the transport running: hear one take after the other, put the one that sits into the comp, paint a stretch of a take into the comp with the wheel, cut between takes while the song plays, change a part of the comp later.
 
 It works on the **selected track**: the one you last touched, if it is selected, otherwise the first selected track. Needs REAPER 7.12 or newer. On a track without fixed lanes the Lanes keys do nothing.
 
 ## Where it lives
 
 - **UF1:** jog object **Lanes** (`SCRUB` held + jog, or **UF1 Jog Mode: Lanes**). The jog steps the lanes, the nav cross carries the Lanes keys, and the time field shows the name of the lane you now hear (or *LANE 3* for a lane without a name of its own).
-- **UF8:** encoder mode **Lanes** (push held + turn, or **Encoder Mode → Lanes**). The encoder steps the lanes, the cursor pad carries the same keys as the UF1's cross, and the push is Comp here.
+- **UF8:** encoder mode **Lanes** (push held + turn, or **Encoder Mode → Lanes**). The encoder steps the lanes, the cursor pad carries the same keys as the UF1's cross with FIT as its centre, and the push is Comp here.
 - The UF1's own encoder can run Lanes too. It is unticked in its ring from the factory, because the jog does it there; tick it under the UF1's push in *Settings → Bindings → UF1*.
 
 | Key | Does | With `SHIFT` |
@@ -1035,7 +1035,7 @@ It works on the **selected track**: the one you last touched, if it is selected,
 | jog / encoder | Play the next lane, alone | The comp area under the edit cursor takes the next lane |
 | `↑` / `↓` | Play the lane above / below, alone | The comp area under the edit cursor takes the lane above / below |
 | `←` / `→` | Edit cursor to the previous / next comp-area or item edge | `←` loops the comp area (or the item) there, `→` is A/B |
-| centre (UF8: FIT and the push) | Comp here | Play the comp lane |
+| centre (UF8: FIT) | Tap: Comp here. Hold and turn: paint. Hold without turning: live comping on or off | Play the comp lane |
 
 All of them are bindings like any other cross key, per jog object on the UF1 and per encoder mode on the UF8.
 
@@ -1045,7 +1045,13 @@ All of them are bindings like any other cross key, per jog object on the UF1 and
 
 **A/B** goes back to what played before the last change, the whole set of lanes. When several lanes played together and you step through single lanes to listen in, A/B brings the layered set back, however many steps it was. It also catches REAPER's own switches while a Lanes mode is on: when REAPER plays a new take after a punch-in, A/B returns to what played before.
 
-**Comp here** puts the lane you hear into the comp lane, over the time selection, or over the loop when there is none, or over the item of that lane under the edit cursor. Each Comp here is one undo step. The centre key lights while comping is on for the track.
+**Comp here** puts the lane you hear into the comp lane, over the time selection, or over the loop when there is none, or over the item of that lane under the edit cursor. Each Comp here is one undo step.
+
+**Painting.** Hold the centre and turn the jog (UF8: hold FIT and turn the encoder). The edit cursor moves silently, by the step of the jog object Playhead on the UF1 and of the encoder mode Playhead on the UF8; `SHIFT` makes the jog's step finer. A razor at the height of the lane you hear shows the stretch you have run over, and turning back shortens it. The time field shows *PAINT* and the lane number. Let go, and that stretch goes into the comp from the lane you hear, as one undo step. Then REAPER plays the comp from a second before the stretch to a second after it, stops, and the edit cursor goes to where you let go. The lane you painted from plays again, so the next stroke takes from the same take. While the song is playing, nothing is played back after a stroke. Painting takes from a take: while the comp lane plays, step to a take first.
+
+**Live comping.** Hold the centre without turning for half a second, or press a key bound to **Lanes: live comping on / off**. The centre lights and the banner says *Lanes • Live comping On*. Press play. From then on every lane change with the jog, the encoder or `↑` / `↓` is a cut: the part since the last change goes into the comp at once, from the lane that played. The first change only marks where the first part starts. A lane that plays for less than half a second counts as passed on the way: turning from take 2 to take 5 goes over 3 and 4, and the part goes to take 5 from where you started turning. Stop ends the last part. Each cut is one undo step. With the loop running, the part that is open when the loop jumps back ends at the loop end, and the next pass writes only where you change lanes, so a pass without a change leaves the comp as it is. Switching live comping off, selecting another track or leaving the Lanes mode also ends the open part.
+
+**Cuts** land 20 ms before the point you chose, so the start of a word is not clipped, and can snap to the grid. Both are set under *Settings → Behaviour → Fixed lanes*.
 
 **Groups.** When REAPER's item grouping is on (the toolbar button), stepping, A/B and Comp here also act on every track that follows a media-edit group the selected track leads, on the same lane numbers. With grouping off they act on the selected track only.
 
@@ -1063,7 +1069,11 @@ All of them are bindings like any other cross key, per jog object on the UF1 and
 
 **After a punch-in.** When REAPER plays the new take afterwards, `SHIFT` + `→` returns to the comp you had.
 
-**With the UF8 alone.** Select the track, hold the push and turn to **Lanes**. The encoder steps the takes, the cursor pad is the cross from the table above, FIT and the push are Comp here, `SHIFT` + encoder moves a comp area. The UF8 has no display for the lane name; REAPER's lane buttons show which lane plays.
+**One syllable from another take (UF1).** Turn the jog to the take that has it. Put the edit cursor just before the syllable, with `←` / `→` to the nearest edge or with the mouse. Hold the centre and turn the jog slowly to the right: the razor grows over the syllable. Too far, turn back. Let go: the syllable is in the comp, and REAPER plays it with a second either side, then stops.
+
+**A guitar solo cut while it plays (UF1).** Five takes of the solo on five lanes. Hold the centre without turning: live comping is on. Press play before the solo. At the start of the solo turn the jog to take 2, at bar 5 to take 5, for the last phrase to take 1. Each change writes the part before it into the comp while the solo runs; stop writes the last one. Three cuts, three undo steps. To work on one spot, loop it and change lanes on every pass until it sits, then hold the centre again to switch live comping off.
+
+**With the UF8 alone.** Select the track, hold the push and turn to **Lanes**. The encoder steps the takes, the cursor pad is the cross from the table above, the push is Comp here, `SHIFT` + encoder moves a comp area. Hold FIT and turn the encoder to paint, hold FIT without turning for live comping. The UF8 has no display for the lane name; REAPER's lane buttons show which lane plays.
 
 \newpage
 
@@ -1294,6 +1304,17 @@ Surface-side handling of the REAPER Master bus. See **Master track** (own chapte
 |---|---|
 | Announce the soft-key bank on the time display | On by default. Switching the UF1's soft-key bank flashes the bank's name across the ten-cell time field for about a second, the same way a format change flashes *BARS* / *TIME* / *SAMPLES*, and the clock comes back by itself. Holding SHIFT counts as a switch, because a modifier set is a bank of its own; if that set simply takes Plain's bank its name is the same one, and nothing flashes. A bank you named in *Settings → Bindings → UF1* shows that name; a dynamic bank shows what kind it is (`EFFECTS`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`, `HUE`, `OBS`); an unnamed static bank shows its number (`SOFT 3`). |
 | Start the UF1 in a fixed view | Off by default, and the UF1 comes back up in the view you last left it in. Ticking it pins whichever view the UF1 is showing at that moment instead; the combo below changes it to Plug-in, DAW, Meter or Sends. Either way the view is applied once, on the first timer tick that sees the UF1, so plugging the device in mid-session engages it too. The last-used view is remembered globally, not per project: which view the surface shows belongs to the surface, not to the session you happen to open. |
+
+### Fixed lanes
+
+| Control | Effect |
+|---|---|
+| Lane steps skip comp lanes | On by default. The jog, the encoder and `↑` / `↓` pass over the comp lane and walk the takes. |
+| Scrub while painting | Off by default: the cursor moves silently while you paint. On: painting sounds like a scrub. |
+| Play the stroke after painting | On by default. After a stroke REAPER plays the comp around it, stops, and the edit cursor goes to where you let go. |
+| Played before and after the stroke | How much of the comp plays on either side of a stroke. 1 s by default. |
+| Snap cuts to the grid | Off by default. Painting and live comping cut on the nearest grid line. |
+| Cut lead-in | Every cut lands this much earlier. 20 ms by default. |
 
 ### Keyboard
 

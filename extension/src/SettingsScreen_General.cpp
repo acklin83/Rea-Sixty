@@ -204,6 +204,19 @@ void               reasixty_uf1BankDisplayName(int bank, int mod,
 // Announce the soft-key bank on the UF1's time display when it changes.
 bool               reasixty_uf1BankNameFlash();
 void               reasixty_setUf1BankNameFlash(bool on);
+// Behaviour → Fixed lanes.
+bool               reasixty_laneSkipComp();
+void               reasixty_setLaneSkipComp(bool on);
+bool               reasixty_laneScrubPaint();
+void               reasixty_setLaneScrubPaint(bool on);
+bool               reasixty_lanePlayStroke();
+void               reasixty_setLanePlayStroke(bool on);
+bool               reasixty_laneSnapPaint();
+void               reasixty_setLaneSnapPaint(bool on);
+double             reasixty_lanePlayAround();
+void               reasixty_setLanePlayAround(double v);
+double             reasixty_laneLeadInMs();
+void               reasixty_setLaneLeadInMs(double v);
 int                reasixty_uf1ViewMode();
 bool               reasixty_rmeAvailable();
 int                reasixty_uf1StartupViewNow();
@@ -1625,6 +1638,50 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
         if (ImGui_Checkbox(ctx, "Announce the soft-key bank on the time display",
                            &bn))
             reasixty_setUf1BankNameFlash(bn);
+    }
+
+    ImGui_Spacing(ctx);
+    ImGui_Spacing(ctx);
+    sectionHeader("Fixed lanes");
+
+    {
+        bool v = reasixty_laneSkipComp();
+        if (ImGui_Checkbox(ctx, "Lane steps skip comp lanes", &v))
+            reasixty_setLaneSkipComp(v);
+        help_(ctx, "The wheel and the encoder walk the takes and pass over the comp lane.");
+
+        v = reasixty_laneScrubPaint();
+        if (ImGui_Checkbox(ctx, "Scrub while painting", &v))
+            reasixty_setLaneScrubPaint(v);
+        help_(ctx, "Off: the cursor moves silently while you paint.");
+
+        v = reasixty_lanePlayStroke();
+        if (ImGui_Checkbox(ctx, "Play the stroke after painting", &v))
+            reasixty_setLanePlayStroke(v);
+        help_(ctx, "REAPER plays the comp around what you painted, stops, and the\n"
+                   "cursor goes back to where you let go.");
+
+        v = reasixty_laneSnapPaint();
+        if (ImGui_Checkbox(ctx, "Snap cuts to the grid", &v))
+            reasixty_setLaneSnapPaint(v);
+        help_(ctx, "Painting and live comping cut on the nearest grid line.");
+
+        auto field = [&](const char* label, const char* id, double cur, const char* fmt,
+                         void (*setFn)(double), const char* tip) {
+            double d = cur;
+            ImGui_SetNextItemWidth(ctx, 90.0);
+            if (ImGui_InputDouble(ctx, id, &d, nullptr, nullptr, fmt, nullptr))
+                setFn(d);
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            ImGui_Text(ctx, label);
+            help_(ctx, tip);
+        };
+        field("Played before and after the stroke", "##lane_play_around",
+              reasixty_lanePlayAround(), "%.1f s", reasixty_setLanePlayAround,
+              "How much of the comp you hear around what you painted.");
+        field("Cut lead-in", "##lane_lead_in",
+              reasixty_laneLeadInMs(), "%.0f ms", reasixty_setLaneLeadInMs,
+              "Every cut lands this much earlier, so the start of a word is not clipped.");
     }
 
     ImGui_Spacing(ctx);

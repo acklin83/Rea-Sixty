@@ -6542,6 +6542,7 @@ constexpr uint8_t kUf1JogActionShiftBit = 0x80;
 enum class LaneOpCode : uint8_t {
     Next, Prev, AB, PlayAll, PlayNone, PlayComp, PlayToggle,
     CompHere, AreaUp, AreaDown, LoopHere, EdgePrev, EdgeNext,
+    CentreUp,   // lane_comp_paint let go; value = how long it was held (ms)
 };
 
 // Sub-ops for PendingInput::Uf1Transport (carried in PendingInput::value).
@@ -14414,6 +14415,10 @@ static void laneFlash_(MediaTrack* tr, int lane)
     uf1FlashTimecode_(txt, 1200);
 }
 
+// Live comping hears every change of the lane track's play set (below, with the
+// painting).
+static void laneLiveHeard_(MediaTrack* tr, const lanes::PlaySet& set);
+
 // Step the heard lane by `dir` lanes (wheel, encoder, ↑ / ↓). Exclusive: the
 // wheel previews ONE lane; the set before it waits in A/B.
 static void laneStep_(int dir)
@@ -14439,6 +14444,7 @@ static void laneStep_(int dir)
     laneApplySet_(tr, set);
     ab.observe(set);
     laneFlash_(tr, lane);
+    laneLiveHeard_(tr, set);
 }
 
 // Can the wheel go further this way? Lights ↑ / ↓ on the UF1 cross.
@@ -14481,10 +14487,12 @@ static void lanePlayOp_(LanePlayOp op)
             set = ab.recall(n);              // swapped in already
             if (set.empty()) return;
             laneApplySet_(tr, set);
+            laneLiveHeard_(tr, set);
             return;
     }
     laneApplySet_(tr, set);
     ab.observe(set);
+    laneLiveHeard_(tr, set);
 }
 
 // The range a comp or loop verb works on: the time selection, else the loop
@@ -14513,28 +14521,44 @@ static bool laneVerbRange_(MediaTrack* tr, int lane, double& s, double& e)
 // lane as the source, works during playback, one undo entry). 42475 acts on
 // every razor in the project, so any other razor is put aside and given back.
 // ⚠ 42475 with comping OFF on the track was not measured.
-static void laneCompHere_(int laneOverride = -1)
-{
-    MediaTrack* tr = laneTrack_();
-    const int n = laneCount_(tr);
-    if (n <= 0) return;
-    const int lane = laneOverride >= 0 ? laneOverride : laneHeard_(tr, lanePlaySet_(tr));
-    if (lane < 0 || lane >= n) return;
-    double s = 0, e = 0;
-    if (!laneVerbRange_(tr, lane, s, e)) return;
-
-    std::vector<std::pair<MediaTrack*, std::string>> aside;
-    const int nTr = CountTracks(nullptr);
-    static std::vector<char> rz(1 << 16);
-    for (int i = 0; i < nTr; ++i) {
-        MediaTrack* t = GetTrack(nullptr, i);
-        rz[0] = 0;
-        GetSetMediaTrackInfo_String(t, "P_RAZOREDITS_EXT", rz.data(), false);
-        if (rz[0]) {
-            aside.emplace_back(t, std::string(rz.data()));
-            GetSetMediaTrackInfo_String(t, "P_RAZOREDITS_EXT", const_cast<char*>(""), true);
+// Every razor in the project, taken away and given back: 42475 acts on all of
+// them, and a stroke shows its own while it is painted.
+struct LaneRazorsAside {
+    std::vector<std::pair<MediaTrack*, std::string>> v;
+    void take()
+    {
+        static std::vector<char> rz(1 << 16);
+        const int nTr = CountTracks(nullptr);
+        for (int i = 0; i < nTr; ++i) {
+            MediaTrack* t = GetTrack(nullptr, i);
+            rz[0] = 0;
+            GetSetMediaTrackInfo_String(t, "P_RAZOREDITS_EXT", rz.data(), false);
+            if (rz[0]) {
+                v.emplace_back(t, std::string(rz.data()));
+                GetSetMediaTrackInfo_String(t, "P_RAZOREDITS_EXT", const_cast<char*>(""), true);
+            }
         }
     }
+    void giveBack()
+    {
+        for (auto& a : v)
+            if (ValidatePtr2(nullptr, a.first, "MediaTrack*"))
+                GetSetMediaTrackInfo_String(a.first, "P_RAZOREDITS_EXT",
+                                            const_cast<char*>(a.second.c_str()), true);
+        v.clear();
+    }
+};
+
+// [s, e] of `lane` into the comp, on the lane track and its group mates (same
+// lane number). `keepPlaying`: writing the comp can hand the track to its comp
+// lane; painting and live comping keep the lane you chose playing, Comp here
+// leaves it to REAPER.
+static void laneCompRange_(MediaTrack* tr, int lane, double s, double e,
+                           bool keepPlaying = false)
+{
+    const lanes::PlaySet before = lanePlaySet_(tr);
+    LaneRazorsAside aside;
+    aside.take();
     for (MediaTrack* t : laneTracksWithGroup_(tr)) {
         const int tn = laneCount_(t);
         if (lane >= tn) continue;
@@ -14544,9 +14568,22 @@ static void laneCompHere_(int laneOverride = -1)
     Main_OnCommand(42475, 0);
     for (MediaTrack* t : laneTracksWithGroup_(tr))
         GetSetMediaTrackInfo_String(t, "P_RAZOREDITS_EXT", const_cast<char*>(""), true);
-    for (auto& a : aside)
-        GetSetMediaTrackInfo_String(a.first, "P_RAZOREDITS_EXT", const_cast<char*>(a.second.c_str()), true);
+    aside.giveBack();
+    if (keepPlaying && !before.empty() && !lanes::same(lanePlaySet_(tr), before))
+        laneApplySet_(tr, before);
     UpdateArrange();
+}
+
+static void laneCompHere_(int laneOverride = -1)
+{
+    MediaTrack* tr = laneTrack_();
+    const int n = laneCount_(tr);
+    if (n <= 0) return;
+    const int lane = laneOverride >= 0 ? laneOverride : laneHeard_(tr, lanePlaySet_(tr));
+    if (lane < 0 || lane >= n) return;
+    double s = 0, e = 0;
+    if (!laneVerbRange_(tr, lane, s, e)) return;
+    laneCompRange_(tr, lane, s, e);
 }
 
 // ⇨ THE COMP AREA UNDER THE CURSOR ONE LANE UP / DOWN: select the comp-lane item
@@ -14634,6 +14671,249 @@ static void laneLoopHere_()
     UpdateTimeline();
 }
 
+// ===== PAINTING AND LIVE COMPING (plan Baustein F) ==================================
+// Behaviour → Fixed lanes; the setters persist them (reasixty_setLane*).
+std::atomic<bool>   g_laneScrubPaint{false};   // "Scrub while painting", factory off
+std::atomic<bool>   g_lanePlayStroke{true};    // "Play the stroke after painting", on
+std::atomic<double> g_lanePlayAround{1.0};     // seconds played before and after it
+std::atomic<bool>   g_laneSnapPaint{false};    // "Snap cuts to the grid", off
+std::atomic<double> g_laneLeadInMs{20.0};      // "Cut lead-in", 20 ms
+
+// The centre of the Lanes cross (lane_comp_paint): held, the wheel and the
+// encoder paint; let go, a tap is Comp here and a long press without a turn
+// switches live comping. Written on the input thread at the edges, so a detent
+// that comes right after the press already finds it held.
+std::atomic<bool>    g_laneCentreHeld{false};
+std::atomic<int64_t> g_laneCentreDownMs{0};
+std::atomic<bool>    g_laneLive{false};        // live comping on (lamp of the centre)
+constexpr double     kLaneLongPressMs = 500.0;
+// Live comping: a lane heard for less than this was passed on the way (LiveComp).
+constexpr double     kLaneLiveSettleSec = 0.5;
+
+// A cut point on the grid when asked: the measure's own grid, as the jog's.
+static double laneSnap_(double t)
+{
+    if (!g_laneSnapPaint.load()) return t;
+    const double q = TimeMap2_timeToQN(nullptr, t);
+    return TimeMap2_QNToTime(nullptr,
+        jog::snapInMeasure(q, uf1ProjectGridQN_(), uf1MeasureAtQN_(q)));
+}
+static double laneLeadIn_() { return std::max(0.0, g_laneLeadInMs.load()) / 1000.0; }
+
+// ⇨ A STROKE: the stretch the cursor runs over while the centre is held. It
+// starts with the first detent (a tap without one stays Comp here), shows as a
+// razor at the height of the lane you hear, and turning back shortens it. Your
+// own razors wait aside until it is done.
+struct LaneStroke {
+    bool        on     = false;
+    MediaTrack* tr     = nullptr;
+    int         lane   = -1;
+    double      anchor = 0.0, at = 0.0;
+    LaneRazorsAside aside;
+};
+static LaneStroke g_laneStroke;
+
+// Where the next paint step starts from: the stroke's end, else the cursor.
+static double lanePaintFrom_()
+{
+    return g_laneStroke.on ? g_laneStroke.at : GetCursorPosition();
+}
+
+static void lanePaintShow_(const LaneStroke& st)
+{
+    const double s = std::min(st.anchor, st.at), e = std::max(st.anchor, st.at);
+    for (MediaTrack* t : laneTracksWithGroup_(st.tr)) {
+        const int tn = laneCount_(t);
+        const std::string entry = (st.lane < tn && e - s > 1e-4)
+            ? lanes::razorEntry(s, e, st.lane, tn) : std::string();
+        GetSetMediaTrackInfo_String(t, "P_RAZOREDITS_EXT", const_cast<char*>(entry.c_str()), true);
+    }
+    UpdateArrange();
+}
+
+static void lanePaintTo_(double target)
+{
+    LaneStroke& st = g_laneStroke;
+    if (!st.on) {
+        MediaTrack* tr = laneTrack_();
+        if (laneCount_(tr) <= 0) return;
+        const int lane = laneHeard_(tr, lanePlaySet_(tr));
+        if (lane < 0 || lane == laneCompInfo_(tr).compLane) return;   // nothing to paint from
+        st.on = true;
+        st.tr = tr;
+        st.lane = lane;
+        st.anchor = st.at = GetCursorPosition();
+        st.aside.take();
+    }
+    if (target < 0.0) target = 0.0;
+    // ⚠ Scrub while painting: CSurf_ScrubAmt moves by a delta, and whether the
+    // edit cursor follows it was never measured, so the stroke keeps its own end
+    // and the release puts the cursor there.
+    if (g_laneScrubPaint.load() && CSurf_ScrubAmt) CSurf_ScrubAmt(target - st.at);
+    else                                           SetEditCurPos(target, true, false);
+    st.at = target;
+    lanePaintShow_(st);
+    uf1FlashTimecode_("PAINT " + std::to_string(st.lane + 1), 800);
+}
+
+// UF8 encoder: one detent of the Playhead encoder mode's nudge, measured by
+// letting ApplyNudge move the cursor and putting it back.
+static void lanePaintNudge_(int step)
+{
+    const double from = lanePaintFrom_();
+    const double cur  = GetCursorPosition();
+    SetEditCurPos(from, false, false);
+    applyPlayheadNudge_(step);
+    const double to = GetCursorPosition();
+    SetEditCurPos(cur, false, false);
+    lanePaintTo_(to);
+}
+
+// ⇨ PLAY THE STROKE: REAPER plays the comp from a second before the stroke to a
+// second after it (both transitions), stops, and the cursor goes back to where
+// the stroke ended; the lane you painted from plays again (Frank 02.10.2026).
+struct LaneAudition {
+    bool        on = false, seen = false;
+    MediaTrack* tr = nullptr;
+    int         lane = -1;
+    double      stopAt = 0.0, back = 0.0, lastPos = 0.0;
+    int64_t     startMs = 0;
+};
+static LaneAudition g_laneAudition;
+
+static void laneAuditionStart_(MediaTrack* tr, int lane, double s, double e, double back)
+{
+    const int n = laneCount_(tr);
+    const int comp = laneCompInfo_(tr).compLane;
+    if (n <= 0 || comp < 0 || comp >= n) return;
+    laneApplySet_(tr, lanes::only(n, comp));
+    const double around = std::max(0.0, g_lanePlayAround.load());
+    const double from = std::max(0.0, s - around);
+    SetEditCurPos(from, false, false);
+    CSurf_OnPlay();
+    LaneAudition a;
+    a.on = true; a.tr = tr; a.lane = lane;
+    a.stopAt = e + around; a.back = back; a.lastPos = from; a.startMs = nowMs_();
+    g_laneAudition = a;
+}
+
+static void laneAuditionEnd_(bool stop)
+{
+    const LaneAudition a = g_laneAudition;
+    g_laneAudition = LaneAudition{};
+    if (stop && (GetPlayState() & 1)) CSurf_OnStop();
+    SetEditCurPos(a.back, true, false);
+    if (ValidatePtr2(nullptr, a.tr, "MediaTrack*")) {
+        const int n = laneCount_(a.tr);
+        if (a.lane >= 0 && a.lane < n) laneApplySet_(a.tr, lanes::only(n, a.lane));
+    }
+}
+
+// Every tick: stop at the end, or let go when someone else stopped it, sent it
+// round a loop, or it never got going.
+static void laneAuditionTick_()
+{
+    LaneAudition& a = g_laneAudition;
+    if (!a.on) return;
+    if (!(GetPlayState() & 1)) {
+        if (a.seen || nowMs_() - a.startMs > 500) laneAuditionEnd_(false);
+        return;
+    }
+    a.seen = true;
+    const double pos = GetPlayPosition();
+    if (pos >= a.stopAt || lanes::jumpedBack(a.lastPos, pos)) { laneAuditionEnd_(true); return; }
+    a.lastPos = pos;
+}
+
+// Let go of a stroke: the stretch into the comp (one undo step, group mates too),
+// cuts snapped when asked and moved the lead-in earlier, your razors back.
+static void lanePaintEnd_()
+{
+    LaneStroke st = std::move(g_laneStroke);
+    g_laneStroke = LaneStroke{};
+    if (!ValidatePtr2(nullptr, st.tr, "MediaTrack*")) { st.aside.giveBack(); return; }
+    for (MediaTrack* t : laneTracksWithGroup_(st.tr))
+        GetSetMediaTrackInfo_String(t, "P_RAZOREDITS_EXT", const_cast<char*>(""), true);
+    SetEditCurPos(st.at, true, false);
+    double s = 0.0, e = 0.0;
+    const bool any = lanes::strokeRange(laneSnap_(st.anchor), laneSnap_(st.at),
+                                        laneLeadIn_(), s, e);
+    if (any) laneCompRange_(st.tr, st.lane, s, e, /*keepPlaying*/ true);
+    st.aside.giveBack();
+    UpdateArrange();
+    if (any && g_lanePlayStroke.load() && !(GetPlayState() & 1))
+        laneAuditionStart_(st.tr, st.lane, s, e, st.at);
+}
+
+// ⇨ LIVE COMPING: while the transport runs, every lane change is a cut and the
+// section before it goes into the comp at once (one undo step per cut). Stop, a
+// loop jump, switching it off, another track or leaving the Lanes mode close the
+// open section (LaneModel.h, LiveComp).
+static lanes::LiveComp g_laneLiveCut;
+static MediaTrack*     g_laneLiveTr      = nullptr;
+static double          g_laneLivePos     = 0.0;
+static bool            g_laneLivePlaying = false;
+
+static void laneLiveWrite_(const lanes::LiveSection& sec)
+{
+    MediaTrack* tr = g_laneLiveTr;
+    if (!ValidatePtr2(nullptr, tr, "MediaTrack*")) return;
+    if (sec.lane < 0 || sec.lane >= laneCount_(tr)) return;
+    laneCompRange_(tr, sec.lane, sec.start, sec.end, /*keepPlaying*/ true);
+}
+
+static void laneLiveClose_(double t)
+{
+    lanes::LiveSection sec;
+    if (g_laneLiveCut.close(t, sec)) laneLiveWrite_(sec);
+}
+
+static void laneLiveHeard_(MediaTrack* tr, const lanes::PlaySet& set)
+{
+    if (!g_laneLive.load() || !(GetPlayState() & 1) || !tr) return;
+    if (tr != g_laneLiveTr) { laneLiveClose_(g_laneLivePos); g_laneLiveTr = tr; }
+    int lane = -1;
+    if (lanes::countOn(set) == 1)
+        for (int i = 0; i < static_cast<int>(set.size()); ++i) if (set[i]) lane = i;
+    if (lane == laneCompInfo_(tr).compLane) lane = -1;   // the comp is no source
+    const double t = std::max(0.0, laneSnap_(GetPlayPosition()) - laneLeadIn_());
+    lanes::LiveSection sec;
+    if (g_laneLiveCut.change(lane, t, sec, kLaneLiveSettleSec)) laneLiveWrite_(sec);
+}
+
+static void laneLiveTick_(bool modeLive)
+{
+    const bool playing = (GetPlayState() & 1) != 0;
+    const double pos = playing ? GetPlayPosition() : g_laneLivePos;
+    if (!g_laneLive.load() || !modeLive) {
+        laneLiveClose_(pos);
+    } else if (playing) {
+        if (g_laneLivePlaying && lanes::jumpedBack(g_laneLivePos, pos)) {
+            // Round the loop: the section ends at the loop end.
+            double end = g_laneLivePos, ls = 0.0, le = 0.0;
+            GetSet_LoopTimeRange2(nullptr, false, true, &ls, &le, false);
+            if (GetSetRepeat(-1) == 1 && le > ls
+                && g_laneLivePos >= ls && g_laneLivePos <= le + 0.25)
+                end = le;
+            laneLiveClose_(end);
+        }
+        if (g_laneLiveCut.open && laneTrack_() != g_laneLiveTr) laneLiveClose_(pos);
+    } else if (g_laneLivePlaying) {
+        laneLiveClose_(g_laneLivePos);                     // stop
+    }
+    g_laneLivePos = pos;
+    g_laneLivePlaying = playing;
+}
+
+// The centre let go: a stroke ends, a long press switches live comping, a tap
+// is Comp here.
+static void laneCentreUp_(double heldMs)
+{
+    if (g_laneStroke.on) { lanePaintEnd_(); return; }
+    if (heldMs >= kLaneLongPressMs) { g_laneLive.store(!g_laneLive.load()); return; }
+    laneCompHere_();
+}
+
 // What the lane keys show (their builtins' stateOf reads these, so the UF1
 // cross and the UF8 zoom pad light like any other binding): ↑ / ↓ only where
 // there is a lane to go to, the centre while comping is on. Written by
@@ -14651,7 +14931,10 @@ static bool lanesModeLive_()
 // REAPER's own switches, a punch-in is one) and refresh the lamp states.
 void laneTick_()
 {
-    if (!lanesModeLive_()) {
+    laneAuditionTick_();
+    const bool live = lanesModeLive_();
+    laneLiveTick_(live);
+    if (!live) {
         g_laneCanUp.store(false); g_laneCanDown.store(false); g_laneComping.store(false);
         return;
     }
@@ -14663,7 +14946,7 @@ void laneTick_()
 }
 
 // The drain of PendingInput::LaneOp: one lane_* builtin.
-void applyLaneOp_(uint8_t op)
+void applyLaneOp_(uint8_t op, double value)
 {
     switch (static_cast<LaneOpCode>(op)) {
         case LaneOpCode::Next:       laneStep_(+1);                          break;
@@ -14679,6 +14962,7 @@ void applyLaneOp_(uint8_t op)
         case LaneOpCode::LoopHere:   laneLoopHere_();                        break;
         case LaneOpCode::EdgePrev:   laneEdge_(-1);                          break;
         case LaneOpCode::EdgeNext:   laneEdge_(+1);                          break;
+        case LaneOpCode::CentreUp:   laneCentreUp_(value);                   break;
     }
 }
 
@@ -14767,9 +15051,9 @@ void applyUf1JogRazor_(int count, double timeDelta)
 // on it: the de-jitter hands on two detents at a time, which from an odd cell used
 // to jump every bar. `fine` is the Shift divisor (1 without), and it makes the lines
 // finer too. All of it in JogGrid.h, pinned by test_jog_grid.
-static void uf1JogMovePlayhead_(double delta, Uf1JogUnit unit, double step, double fine)
+static double uf1JogPlayheadTarget_(double cur, double delta, Uf1JogUnit unit,
+                                   double step, double fine)
 {
-    const double cur = GetCursorPosition();
     double np = cur + delta;
     if (unit == Uf1JogUnit::Grid) {
         const double grid = uf1ProjectGridQN_();
@@ -14779,8 +15063,12 @@ static void uf1JogMovePlayhead_(double delta, Uf1JogUnit unit, double step, doub
                                       uf1MeasureAtQN_);
         np = TimeMap2_QNToTime(nullptr, qTo);
     }
-    if (np < 0.0) np = 0.0;
-    SetEditCurPos(np, true, false);
+    return np < 0.0 ? 0.0 : np;
+}
+static void uf1JogMovePlayhead_(double delta, Uf1JogUnit unit, double step, double fine)
+{
+    SetEditCurPos(uf1JogPlayheadTarget_(GetCursorPosition(), delta, unit, step, fine),
+                  true, false);
 }
 
 // ⇨ IS THE WHEEL DRIVING THE PLAY CURSOR RIGHT NOW? Not "which mode is it in":
@@ -14816,25 +15104,35 @@ static void uf1TimeSelSet_(double farEnd)
 // per-mode value in its per-mode UNIT (Seconds / ZoomRel = fraction of visible range
 // / Grid = fraction of grid length), Shift = fine (÷ g_uf1JogFineDiv). Baustein 1/2:
 // Playhead + Scrub move the edit cursor; Items moves the selection in time.
-void uf1JogDispatch_(int count)
+// The seconds `count` detents move in `mode`, with that mode's step and unit
+// (Shift = fine). Lanes painting borrows Playhead's.
+static double uf1JogDelta_(Uf1JogMode mode, int count,
+                           Uf1JogUnit& unit, double& step, double& fine)
 {
-    count = uf1JogDeJitter_(count);
-    if (count == 0) return;
-    const auto mode = g_uf1JogMode.load();
-    double step = g_uf1JogStep[static_cast<int>(mode)].load();
-    double fine = 1.0;   // the Shift divisor, also for the playhead's grid lines
+    step = g_uf1JogStep[static_cast<int>(mode)].load();
+    fine = 1.0;   // the Shift divisor, also for the playhead's grid lines
     if (uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)) {
         const double d = g_uf1JogFineDiv.load();
         if (d > 0.0) { step /= d; fine = d; }
     }
-    const auto unit = static_cast<Uf1JogUnit>(g_uf1JogUnit[static_cast<int>(mode)].load());
+    unit = static_cast<Uf1JogUnit>(g_uf1JogUnit[static_cast<int>(mode)].load());
     double scale = 1.0;   // step unit → seconds
     switch (unit) {
         case Uf1JogUnit::Seconds: scale = 1.0;                break;
         case Uf1JogUnit::ZoomRel: scale = uf1JogViewSec_();   break;
         case Uf1JogUnit::Grid:    scale = uf1JogGridSec_();   break;
     }
-    const double delta = step * scale * count;   // seconds
+    return step * scale * count;
+}
+
+void uf1JogDispatch_(int count)
+{
+    count = uf1JogDeJitter_(count);
+    if (count == 0) return;
+    const auto mode = g_uf1JogMode.load();
+    Uf1JogUnit unit;
+    double step = 0.0, fine = 1.0;
+    const double delta = uf1JogDelta_(mode, count, unit, step, fine);   // seconds
     // Cmd in Playhead = pull a time selection instead of just moving the cursor.
     // Latched, not held by a key: the first detent drops the anchor, the rest
     // drag the far end, and releasing Cmd leaves the selection alone.
@@ -14927,7 +15225,17 @@ void uf1JogDispatch_(int count)
             break;
         case Uf1JogMode::Razor:    applyUf1JogRazor_(count, delta);    break;
         case Uf1JogMode::Fades:    applyUf1JogFades_(count, delta);    break;
-        case Uf1JogMode::Lanes:    applyUf1JogLanes_(count);           break;
+        case Uf1JogMode::Lanes:
+            // Centre held: the wheel paints, at Playhead mode's step.
+            if (g_laneCentreHeld.load()) {
+                Uf1JogUnit pu;
+                double ps = 0.0, pf = 1.0;
+                const double pd = uf1JogDelta_(Uf1JogMode::Playhead, count, pu, ps, pf);
+                lanePaintTo_(uf1JogPlayheadTarget_(lanePaintFrom_(), pd, pu, ps, pf));
+            } else {
+                applyUf1JogLanes_(count);
+            }
+            break;
     }
 }
 
@@ -22098,7 +22406,7 @@ void drainInputQueue()
             continue;
         }
         if (e.kind == PendingInput::LaneOp) {
-            applyLaneOp_(e.strip);
+            applyLaneOp_(e.strip, e.value);
             continue;
         }
         // Every selected track, not just the first: an automation key is an
@@ -22316,6 +22624,9 @@ void drainInputQueue()
                             // helper persists uf1EncoderMode. Drain runs on the main
                             // thread → SetExtState is safe here.
                             uf1EncoderStepVisible_(tracks);
+                        } else if (g_uf1EncoderMode.load() == EncoderMode::Lanes
+                                   && g_laneCentreHeld.load()) {
+                            lanePaintNudge_(tracks);   // the centre held: paint
                         } else if (g_uf1EncoderMode.load() == EncoderMode::Lanes
                                    && uf8::bindings::modifierHeld(
                                           uf8::bindings::Modifier::Shift)) {
@@ -22666,6 +22977,13 @@ void drainInputQueue()
                 // turned flag was set at the enqueue, on the input thread).
                 if (g_uf8EncPushHeld.load()) {
                     uf8EncoderStepVisible_(step);
+                    continue;
+                }
+                // Encoder mode Lanes with the centre (FIT) held: the
+                // encoder paints, a detent of the Playhead mode's nudge.
+                if (g_encoderMode.load() == EncoderMode::Lanes
+                    && g_laneCentreHeld.load()) {
+                    lanePaintNudge_(step);
                     continue;
                 }
                 // Encoder mode Lanes: Shift steps the comp area under the
@@ -45159,6 +45477,7 @@ void onTimerBody_()
         static int           mbSideCar = 0;
         static int           mbJog = 0;
         static bool          mbEnvPh = false;
+        static bool          mbLaneLive = false;
         static bool          mbFadeOut = false;
         static bool          mbFadeWalk = false;
         static unsigned      mbSeq     = 0;
@@ -45486,6 +45805,7 @@ void onTimerBody_()
         const int  ufsc = static_cast<int>(g_uf1SideCar.load());
         const int  jm   = static_cast<int>(g_uf1JogMode.load());
         const bool eph  = g_uf1EnvJogPlayhead.load();
+        const bool llv  = g_laneLive.load();
         const bool fdo  = g_uf1FadeOutEdge.load();
         const bool fdw  = g_uf1FadeCrossWalks.load();
         const bool u8s  = g_pluginFaderMode.load();
@@ -45514,7 +45834,7 @@ void onTimerBody_()
             mbSticky = sa; mbStickyArm = sarm; mbFocusPin = fp; mbFocusScope = fsc;
             mbStickyPairArm = sprm;
             mbFlip = ufl; mbMaster = ufm; mbStrip = ufs; mbExt = ufe; mbExtSide = ufes;
-            mbView = ufv; mbSideCar = ufsc; mbJog = jm; mbEnvPh = eph;
+            mbView = ufv; mbSideCar = ufsc; mbJog = jm; mbEnvPh = eph; mbLaneLive = llv;
             mbFadeOut = fdo; mbFadeWalk = fdw;
             mbUf8Strip = u8s; mbUf8Plugin = u8p; mbTouch = tch;
             mbU8Bank = u8bn;
@@ -45598,6 +45918,9 @@ void onTimerBody_()
             // Envelope mode's jog target (nav-centre): points ⇄ playhead.
             if (eph != mbEnvPh) { chg.push_back(std::string("Envelope \xE2\x80\xA2 ")
                                       + (eph ? "Playhead" : "Points")); mbEnvPh = eph; }
+            // Live comping: the centre's lamp says it, the desktop did not.
+            if (llv != mbLaneLive) { chg.push_back(std::string("Lanes \xE2\x80\xA2 Live comping ")
+                                         + onOff(llv)); mbLaneLive = llv; }
             // Fades mode's two switches: which edge the wheel is on, and whether
             // the cross aims or walks. Both are invisible on the desktop
             // otherwise, and the LED alone cannot say which of the two it means.
@@ -52312,6 +52635,35 @@ void   reasixty_setUf1JogPickSpeed(double v)
     g_uf1JogPickSpeed.store(v);
     SetExtState("rea_sixty", "uf1JogPickSpeed", std::to_string(v).c_str(), true);
 }
+// Behaviour → Fixed lanes (plan Baustein F, Banner/Einstellungen).
+static void laneSetFlag_(std::atomic<bool>& a, const char* key, bool on)
+{
+    a.store(on);
+    SetExtState("rea_sixty", key, on ? "1" : "0", true);
+}
+bool   reasixty_laneSkipComp()            { return g_laneSkipComp.load(); }
+void   reasixty_setLaneSkipComp(bool on)  { laneSetFlag_(g_laneSkipComp, "laneSkipComp", on); }
+bool   reasixty_laneScrubPaint()          { return g_laneScrubPaint.load(); }
+void   reasixty_setLaneScrubPaint(bool on){ laneSetFlag_(g_laneScrubPaint, "laneScrubPaint", on); }
+bool   reasixty_lanePlayStroke()          { return g_lanePlayStroke.load(); }
+void   reasixty_setLanePlayStroke(bool on){ laneSetFlag_(g_lanePlayStroke, "lanePlayStroke", on); }
+bool   reasixty_laneSnapPaint()           { return g_laneSnapPaint.load(); }
+void   reasixty_setLaneSnapPaint(bool on) { laneSetFlag_(g_laneSnapPaint, "laneSnapPaint", on); }
+double reasixty_lanePlayAround()          { return g_lanePlayAround.load(); }
+void   reasixty_setLanePlayAround(double v)
+{
+    v = std::clamp(v, 0.0, 10.0);
+    g_lanePlayAround.store(v);
+    SetExtState("rea_sixty", "lanePlayAround", std::to_string(v).c_str(), true);
+}
+double reasixty_laneLeadInMs()            { return g_laneLeadInMs.load(); }
+void   reasixty_setLaneLeadInMs(double v)
+{
+    v = std::clamp(v, 0.0, 500.0);
+    g_laneLeadInMs.store(v);
+    SetExtState("rea_sixty", "laneLeadInMs", std::to_string(v).c_str(), true);
+}
+
 double reasixty_uf1JogFineDiv() { return g_uf1JogFineDiv.load(); }
 void   reasixty_setUf1JogFineDiv(double v)
 {
@@ -55912,6 +56264,29 @@ void registerBindingHandlers()
         nullptr, "Lanes: heard lane into / out of the play set", false });
     registerBuiltin("lane_comp_here", DescBuilder{ laneOp(LaneOpCode::CompHere),
         [](int) { return g_laneComping.load(); }, "Lanes: comp here", false });
+    // ⇨ THE CENTRE OF THE LANES CROSS (plan decision 5): a HOLD. Pressed, the
+    // wheel and the encoder paint; let go, the drain decides between the end of
+    // a stroke, live comping on/off (long, no turn) and Comp here (a tap). The
+    // edges are taken here, on the input thread, so the first detent after the
+    // press already sees the key held. Lit while live comping is on (Frank
+    // 02.10.2026).
+    registerBuiltin("lane_comp_paint", DescBuilder{
+        [](bool firing, bool pressed, int) {
+            if (!firing) return;
+            if (pressed) {
+                g_laneCentreDownMs.store(nowMs_());
+                g_laneCentreHeld.store(true);
+                return;
+            }
+            g_laneCentreHeld.store(false);
+            queueInput({PendingInput::LaneOp, static_cast<uint8_t>(LaneOpCode::CentreUp),
+                        static_cast<double>(nowMs_() - g_laneCentreDownMs.load())});
+        },
+        [](int) { return g_laneLive.load(); },
+        "Lanes: tap comps, hold+turn paints, long = live comping", false });
+    registerBuiltin("lane_paint_live", DescBuilder{
+        [](bool firing, bool, int) { if (firing) g_laneLive.store(!g_laneLive.load()); },
+        [](int) { return g_laneLive.load(); }, "Lanes: live comping on / off", false });
     registerBuiltin("lane_comp_area_up", DescBuilder{ laneOp(LaneOpCode::AreaUp),
         nullptr, "Lanes: comp area one lane up", false });
     registerBuiltin("lane_comp_area_down", DescBuilder{ laneOp(LaneOpCode::AreaDown),
@@ -58352,11 +58727,12 @@ void registerBindingHandlers()
             "uf1_encoder_fx_scroll_all", "uf1_encoder_instance_scroll_all",
             "uf1_encoder_fx_move", "uf1_encoder_cs_cycle", "uf1_encoder_bc_cycle",
             "uf1_encoder_fav_cycle", "uf1_encoder_selset_cycle", "uf1_encoder_lanes",
+            "lane_paint_live",
         };
         // Read press and release themselves: the content drag holds, the zoom
         // keys light their lamp while held.
         static const char* const kEdges[] = {
-            "jog_content_drag",
+            "jog_content_drag", "lane_comp_paint",
             "zoom_up", "zoom_down", "zoom_left", "zoom_right", "zoom_center",
         };
         std::vector<std::string> unknown;
@@ -59096,6 +59472,20 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     }
     if (const char* v = GetExtState("rea_sixty", "uf1JogFineDiv"); v && *v) {
         const double d = std::atof(v); if (d >= 1.0) g_uf1JogFineDiv.store(d);
+    }
+    // Behaviour → Fixed lanes.
+    {
+        auto flag = [](const char* key, std::atomic<bool>& a) {
+            if (const char* v = GetExtState("rea_sixty", key); v && *v) a.store(std::atoi(v) != 0);
+        };
+        flag("laneSkipComp",   g_laneSkipComp);
+        flag("laneScrubPaint", g_laneScrubPaint);
+        flag("lanePlayStroke", g_lanePlayStroke);
+        flag("laneSnapPaint",  g_laneSnapPaint);
+        if (const char* v = GetExtState("rea_sixty", "lanePlayAround"); v && *v)
+            g_lanePlayAround.store(std::clamp(std::atof(v), 0.0, 10.0));
+        if (const char* v = GetExtState("rea_sixty", "laneLeadInMs"); v && *v)
+            g_laneLeadInMs.store(std::clamp(std::atof(v), 0.0, 500.0));
     }
     if (const char* v = GetExtState("rea_sixty", "uf1JogTrackDiv"); v && *v) {
         const double d = std::atof(v); if (d >= 1.0) g_uf1JogTrackDiv.store(d);

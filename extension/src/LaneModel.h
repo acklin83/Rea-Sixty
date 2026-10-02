@@ -289,4 +289,79 @@ inline double prevEdge(const std::vector<double>& es, double t, double eps = 1e-
     return t;
 }
 
+// ---- painting and live comping (Baustein F) ----------------------------------------
+
+// The stretch a stroke paints: from where the hold began to where the cursor got,
+// either way round (turning back takes back what went too far), both cuts moved
+// `leadIn` earlier so a cut lands just before a consonant rather than on it.
+// False when nothing is left to paint.
+inline bool strokeRange(double anchor, double at, double leadIn, double& s, double& e)
+{
+    s = std::min(anchor, at);
+    e = std::max(anchor, at);
+    if (e - s < 1e-4) return false;
+    s -= leadIn;
+    e -= leadIn;
+    if (s < 0.0) s = 0.0;
+    return e - s >= 1e-4;
+}
+
+// Live comping: while the transport runs, every change of the heard lane is a cut,
+// and the section that ends there goes into the comp at once (one undo step per cut,
+// plan decision 6). Nothing is written before the first change: the first one opens
+// the first section.
+struct LiveSection { int lane = -1; double start = 0.0, end = 0.0; };
+
+struct LiveComp {
+    bool   open  = false;
+    int    lane  = -1;
+    double start = 0.0;
+
+    // The heard lane is now `newLane`, from `t` on (-1: several lanes or the comp
+    // lane play, nothing to take a section from). True when a section ended here.
+    //
+    // A lane that played for less than `settle` was passed on the way: turning the
+    // wheel from take 2 to take 5 walks over 3 and 4. It is never written; the lane
+    // you stop on takes its start (or, for -1, it is dropped).
+    bool change(int newLane, double t, LiveSection& out, double settle = 0.0)
+    {
+        if (open && t - start < settle) {
+            if (newLane >= 0) lane = newLane;
+            else { open = false; lane = -1; }
+            return false;
+        }
+        const bool done = finish(t, out);
+        open  = newLane >= 0;
+        lane  = newLane;
+        start = t;
+        return done;
+    }
+
+    // Stop, the loop jumping back, live comping off, another track: the open section
+    // ends at `t` and none opens. After a loop jump the next pass writes only where
+    // it changes lanes, so a pass without a change leaves the comp alone (Frank
+    // 02.10.2026).
+    bool close(double t, LiveSection& out)
+    {
+        const bool done = finish(t, out);
+        open = false;
+        lane = -1;
+        return done;
+    }
+
+    bool finish(double t, LiveSection& out) const
+    {
+        if (!open || t - start < 1e-4) return false;
+        out = { lane, start, t };
+        return true;
+    }
+};
+
+// The play position went back since the last look: the loop jumped to its start, or
+// someone seeked. `slack` swallows the jitter of the reported position.
+inline bool jumpedBack(double last, double now, double slack = 0.05)
+{
+    return now < last - slack;
+}
+
 } // namespace lanes

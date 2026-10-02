@@ -185,6 +185,90 @@ int main()
     EXPECT(near(nextEdge(es, 5.0), 5.0));                               // past the end
     EXPECT(near(prevEdge(es, 0.0), 0.0));
 
+    // ---- painting --------------------------------------------------------------
+    {
+        double s = 0, e = 0;
+        // Forward, 20 ms lead-in on both cuts.
+        EXPECT(strokeRange(2.0, 3.5, 0.02, s, e));
+        EXPECT(near(s, 1.98) && near(e, 3.48));
+        // Backwards: the same stretch.
+        EXPECT(strokeRange(3.5, 2.0, 0.02, s, e));
+        EXPECT(near(s, 1.98) && near(e, 3.48));
+        // Turned back onto the anchor: nothing to paint.
+        EXPECT(!strokeRange(2.0, 2.0, 0.02, s, e));
+        // At the project start the lead-in stops at zero.
+        EXPECT(strokeRange(0.01, 1.0, 0.02, s, e));
+        EXPECT(near(s, 0.0) && near(e, 0.98));
+        // No lead-in.
+        EXPECT(strokeRange(1.0, 2.0, 0.0, s, e));
+        EXPECT(near(s, 1.0) && near(e, 2.0));
+    }
+
+    // ---- live comping ----------------------------------------------------------
+    {
+        LiveComp lc;
+        LiveSection sec;
+        // Fall 4: lane 2 at bar 1 (t 10), lane 5 at t 20, lane 1 at t 30, stop at 40.
+        EXPECT(!lc.change(1, 10.0, sec));                 // first change only opens
+        EXPECT(lc.change(4, 20.0, sec));
+        EXPECT(sec.lane == 1 && near(sec.start, 10.0) && near(sec.end, 20.0));
+        EXPECT(lc.change(0, 30.0, sec));
+        EXPECT(sec.lane == 4 && near(sec.start, 20.0) && near(sec.end, 30.0));
+        EXPECT(lc.close(40.0, sec));                      // stop closes the last one
+        EXPECT(sec.lane == 0 && near(sec.start, 30.0) && near(sec.end, 40.0));
+        EXPECT(!lc.open);
+        EXPECT(!lc.close(41.0, sec));                     // nothing open, nothing written
+
+        // A loop jump closes at the loop end and opens nothing: a pass without a
+        // change writes nothing.
+        EXPECT(!lc.change(2, 12.0, sec));
+        EXPECT(lc.close(16.0, sec));
+        EXPECT(sec.lane == 2 && near(sec.start, 12.0) && near(sec.end, 16.0));
+        EXPECT(!lc.close(16.0, sec));
+
+        // Several lanes (or the comp lane) play: the open section ends, none opens.
+        EXPECT(!lc.change(3, 5.0, sec));
+        EXPECT(lc.change(-1, 7.0, sec));
+        EXPECT(sec.lane == 3 && near(sec.end, 7.0));
+        EXPECT(!lc.open);
+        EXPECT(!lc.change(1, 8.0, sec));                  // and the next change opens
+        EXPECT(lc.open && lc.lane == 1);
+
+        // A cut at the same moment it opened writes nothing.
+        LiveComp z;
+        EXPECT(!z.change(1, 3.0, sec));
+        EXPECT(!z.change(2, 3.0, sec));
+        EXPECT(z.lane == 2);
+
+        // A cut that lies before the start (a seek back the tick did not see yet)
+        // writes nothing either.
+        EXPECT(!z.change(0, 2.0, sec));
+    }
+    // Passing lanes on the way (the wheel from take 2 to take 5): a lane shorter
+    // than `settle` is not written, the one you stop on starts where it started.
+    {
+        LiveComp lc;
+        LiveSection sec;
+        EXPECT(!lc.change(1, 10.0, sec, 0.5));
+        EXPECT(lc.change(2, 20.0, sec, 0.5));             // lane 1 ran 10 s: written
+        EXPECT(sec.lane == 1 && near(sec.end, 20.0));
+        EXPECT(!lc.change(3, 20.2, sec, 0.5));            // passed
+        EXPECT(!lc.change(4, 20.4, sec, 0.5));            // passed
+        EXPECT(lc.lane == 4 && near(lc.start, 20.0));
+        EXPECT(lc.change(0, 30.0, sec, 0.5));
+        EXPECT(sec.lane == 4 && near(sec.start, 20.0) && near(sec.end, 30.0));
+        // Passing into a layered set drops the short one.
+        EXPECT(!lc.change(-1, 30.2, sec, 0.5));
+        EXPECT(!lc.open);
+        // Stop writes what is open, however short.
+        EXPECT(!lc.change(2, 31.0, sec, 0.5));
+        EXPECT(lc.close(31.2, sec));
+        EXPECT(sec.lane == 2 && near(sec.start, 31.0) && near(sec.end, 31.2));
+    }
+    EXPECT(jumpedBack(16.0, 8.0));
+    EXPECT(!jumpedBack(16.0, 15.98));                     // jitter
+    EXPECT(!jumpedBack(16.0, 16.03));
+
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
     std::printf("lane_model: all passed\n");
     return 0;
