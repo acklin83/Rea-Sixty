@@ -6197,9 +6197,9 @@ void pushSleepBrightness_(bool asleep)
 // The exchange elects exactly one waker, so the press after it dispatches
 // normally even though the light is up to a tick behind.
 // Atomics only, no REAPER API here ([[feedback-reaper-api-input-thread]]).
-bool surfaceWake_()
+bool surfaceWake_(bool arrives)
 {
-    if (!g_sleep.wake(nowMs_())) return false;
+    if (!g_sleep.wake(nowMs_(), arrives)) return false;
     // Buttons are swallowed one layer down, as a press/release pair.
     uf8::bindings::armWakeSwallow();
     return true;
@@ -26775,8 +26775,8 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
         } else if (cmd == 0x22 && data[i + 2] == 0x03) {
             // Activity, and the wake edge if the surface was dark. The press
             // itself is dropped one layer down, in dispatch(), together with
-            // its release — see armWakeSwallow.
-            (void)surfaceWake_();
+            // its release — see armWakeSwallow. A release only stamps.
+            (void)surfaceWake_(data[i + 5] == 0x01);
             // Button: FF 22 03 id 00 state cksum
             //
             // UF8 PM-mode button ID map (see docs/protocol-notes.md). The
@@ -27439,7 +27439,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // the fader — and the debounce below tracks touch as press/release
             // PAIRS (g_touchReported / g_touchReleasePending). Dropping the
             // down edge here would hand it a release it never saw a press for.
-            (void)surfaceWake_();
+            (void)surfaceWake_(data[i + 4] != 0);
             // Fader touch: FF 20 02 strip state cksum
             //
             // Capacitive touch — hardware-debounced. We track the state so
@@ -27653,7 +27653,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // A turn on a dark surface wakes it and moves nothing. Encoders
             // have no release edge, so this one is swallowed right here rather
             // than in the bindings layer.
-            if (surfaceWake_()) { i += frameSize; continue; }
+            if (surfaceWake_(true)) { i += frameSize; continue; }
             // V-pot rotation: FF 24 02 strip raw cksum
             //
             // `raw` is a 6-bit signed detent delta (two's complement) in
@@ -28051,7 +28051,9 @@ void onUf1Event(const uf1::InputEvent& ev)
     // frames that passed length and checksum, so unlike the UF8 path there is no
     // idle poll to filter out. FaderPosition is the one exception and is handled
     // in its own case: that is the motor reporting back, not a hand.
-    const bool woke = (ev.kind != uf1::InputKind::FaderPosition) && surfaceWake_();
+    // A release (key, fader, encoder touch) is activity, never the wake.
+    const bool arrives = ev.pressed || ev.kind == uf1::InputKind::EncoderRotate;
+    const bool woke = (ev.kind != uf1::InputKind::FaderPosition) && surfaceWake_(arrives);
     switch (ev.kind) {
         case uf1::InputKind::FaderTouch:
             if (f) std::fprintf(f, "FADER TOUCH %s\n", ev.pressed ? "down" : "up");
@@ -53396,7 +53398,7 @@ double reasixty_knobSpeedUc1()        { return g_knobSpeedUc1.load(); }
 // ---- Sleep ----------------------------------------------------------------
 // surfaceWake_ itself has internal linkage; UC1Surface.cpp is its own
 // translation unit and reaches it through here.
-bool reasixty_surfaceWake()           { return surfaceWake_(); }
+bool reasixty_surfaceWake(bool arrives) { return surfaceWake_(arrives); }
 bool reasixty_isAsleep()              { return g_sleep.asleep.load(); }
 bool reasixty_sleepEnabled()          { return g_sleep.enabled.load(); }
 int  reasixty_sleepMinutes()          { return g_sleep.minutes.load(); }

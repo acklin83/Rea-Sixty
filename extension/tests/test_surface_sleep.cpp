@@ -65,6 +65,20 @@ int main()
         EXPECT(pushes.size() == 1 && pushes[0] == 1);
     }
 
+    // ---- a release is activity, never a wake ----------------------------------------
+    {
+        Clock c;
+        pushes.clear();
+        c.toggleRequest = true;                    // Sleep now, pressed
+        c.tick(1000, false, push);
+        EXPECT(c.asleep.load());
+        EXPECT(!c.wake(1100, /*arrives*/ false));  // its key let go
+        EXPECT(c.asleep.load() && c.lastInputMs.load() == 1100);
+        c.tick(1200, false, push);
+        EXPECT(pushes.size() == 1 && pushes[0] == 1);
+        EXPECT(c.wake(1300));                      // the next press wakes
+    }
+
     // ---- "Sleep now" wins over busy and toggles back -------------------------------
     {
         Clock c;
