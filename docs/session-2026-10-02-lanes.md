@@ -21,13 +21,16 @@ Plan: `docs/fixed-lanes-plan.md`. Frank tested step 4 (B+E+G) at the surface: wo
 - Manual: Fixed lanes chapter (bank, painting, live comping, workflows), Behaviour
   table, jog cross table; "FIT" removed (it was a binding name, not a key name).
 
+- `b707e4f` C2: the UF8 Lanes mode overlays the Lanes bank on the top keys.
+- `036b3ba` Centre tap = play the comp lane, Shift + centre = Comp here (needed once),
+  UF8 ENC PUSH in Lanes = A/B. UF8 ENC PUSH has no long press in any mode. Bindings v55.
+
 ## Decisions (Frank)
 Cursor after the audition: stroke end. Post-roll: yes. Loop jump: close, open nothing.
 Centre lamp: live comping. No "Lanes Live" mode for now. SHIFT + jog: keep, one undo
 per turn. Bank: no long press, lane track not focused track, comp green.
 
 ## Open
-- C2: the Lanes mode brings the bank onto the UF8 top keys (plan decision 9).
 - D strips + F.3 SEL as cut keys, takes in items, UF8 value line with lane names.
 - Unmeasured: hold edges on the UF8 per-mode centre, CSurf_ScrubAmt while painting,
   42475 during live comping with comping off, undo block merging 42707/42708,
