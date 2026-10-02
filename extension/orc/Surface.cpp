@@ -114,7 +114,10 @@ void Surface::onEvent_(const ::uf1::InputEvent& ev)
     // ⇨ THE FIRST TOUCH ONLY WAKES (the extension's rule, onUf1Event): a key
     // and its release, or a detent, do nothing else. The fader is the exception
     // there too: a hand on it works at once. Its motor reporting back is no hand.
-    const bool woke = ev.kind != ::uf1::InputKind::FaderPosition && sleep_.wake(steadyMs());
+    // A release (key, fader, encoder touch) is activity, never the wake.
+    const bool arrives = ev.pressed || ev.kind == ::uf1::InputKind::EncoderRotate;
+    const bool woke = ev.kind != ::uf1::InputKind::FaderPosition
+                   && sleep_.wake(steadyMs(), arrives);
     if (ev.kind == ::uf1::InputKind::Button) {
         if (wakeSwallow_.button(ev.id, ev.pressed, woke)) return;
     } else if (woke && ev.kind == ::uf1::InputKind::EncoderRotate) {
@@ -504,10 +507,12 @@ void Surface::loop_()
                         dev_.send(std::move(fr));
                     }
                 };
-                sleep_.enabled.store(sc.sleepEnabled);
+                // Switched OFF while dark: light it, as the extension's setter
+                // does. Only on that change: asked every pass, it lit the
+                // surface 33 ms after "Sleep now" whenever idle sleep was off.
+                if (sleep_.enabled.exchange(sc.sleepEnabled) && !sc.sleepEnabled)
+                    sleep_.set(false, steadyMs(), push);
                 sleep_.minutes.store(sc.sleepMinutes);
-                // Switched off while dark: light it, as the extension does.
-                if (!sc.sleepEnabled && sleep_.asleep.load()) sleep_.set(false, steadyMs(), push);
                 sleep_.tick(steadyMs(), /*busy*/ false, push);
             }
             rmef::paint(faceCache, in_, host, out, force);

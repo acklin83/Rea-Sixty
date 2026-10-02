@@ -37,9 +37,13 @@ struct Clock {
     // An input event (a hand, never the fader's motor). True when THIS event woke
     // the surfaces: the caller drops it, so a hand reaching for a dark panel does
     // nothing it cannot see. The exchange elects exactly one waker.
-    bool wake(int64_t nowMs)
+    // ⇨ ONLY A HAND ARRIVING WAKES (`arrives`: a press, a turn, a touch down). A
+    // release is activity and nothing more: letting go of the key that just
+    // put the surface to sleep woke it again (Frank 02.10.2026, ORC).
+    bool wake(int64_t nowMs, bool arrives = true)
     {
         lastInputMs.store(nowMs);
+        if (!arrives) return false;
         if (!asleep.exchange(false)) return false;
         wakeRequest.store(true);
         return true;
