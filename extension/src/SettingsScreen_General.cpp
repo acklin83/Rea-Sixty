@@ -1655,7 +1655,7 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
         v = reasixty_laneBringsBank();
         if (ImGui_Checkbox(ctx, "UF8 Lanes mode shows the Lanes bank", &v))
             reasixty_setLaneBringsBank(v);
-        help_(ctx, "While the UF8 encoder is in Lanes, the eight top keys are the lanes\n"
+        help_(ctx, "While the UF8 encoder is in Lanes, the eight soft keys are the lanes\n"
                    "of the selected track. Leaving the mode brings your bank back.");
 
         v = reasixty_laneScrubPaint();
