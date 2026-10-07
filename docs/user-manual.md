@@ -1840,7 +1840,7 @@ Recalling a slot snaps the surface to strip 0 = first channel of the set, so lar
 
 Bind buttons to **Recall Selection Slot (toggle)** with param 1..8, and **Save current REAPER selection to slot** with param 1..8, via Settings → Bindings.
 
-**All eight on one bank.** Give a soft-key bank the dynamic kind **Selection Sets**. On the UF8 the eight top keys are slots 1 to 8; on the UF1 the four keys show 1 to 4, and a long press on ◄ / ► turns to 5 to 8. A key reads the set's name, or `Set 3` for an unnamed one and `Grp 12` for a group slot, and wears the slot's colour from the table above. Lit is the recalled set, dim a used slot, dark an empty one.
+**All eight on one bank.** Give a soft-key bank the dynamic kind **Selection Sets**. On the UF8 the eight soft keys are slots 1 to 8; on the UF1 the four keys show 1 to 4, and a long press on ◄ / ► turns to 5 to 8. A key reads the set's name, or `Set 3` for an unnamed one and `Grp 12` for a group slot, and wears the slot's colour from the table above. Lit is the recalled set, dim a used slot, dark an empty one.
 
 | Gesture | What it does |
 |---|---|
