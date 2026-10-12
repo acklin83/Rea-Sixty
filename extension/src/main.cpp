@@ -48390,14 +48390,41 @@ void onTimerBody_()
             s_csInit = true;
             s_csLast = csNow;
 
-            if (tr != s_lastVuTrack) {
+            // ⛔ NO ACCESSOR ON A TRACK WHOSE ITEMS CARRY TAKE FX (Frank
+            // 12.10.2026). GetAudioAccessorSamples renders the items WITH their
+            // take FX, on this main thread and with the SAME plug-in instances
+            // the audio thread is running: REAPER calls OnStop/setMainsChanged
+            // on them for every read. Measured with Archetype Nolly X on items:
+            // ~1 s per tick (channel changes showed in the MCP 1-2 s late) and
+            // the playing sound chopped. There the input meter shows the
+            // "Rea-Sixty Input Level" probe or nothing. Re-checked when the
+            // project changes (take FX added or removed).
+            static bool s_vuTakeFx  = false;
+            static int  s_vuTakeSig = -1;
+            const int vuSig = GetProjectStateChangeCount(nullptr);
+            const bool vuNewTrack = (tr != s_lastVuTrack);
+            if (vuNewTrack || vuSig != s_vuTakeSig) {
+                s_vuTakeSig = vuSig;
+                bool fx = false;
+                const int ni = CountTrackMediaItems(tr);
+                for (int i = 0; i < ni && !fx; ++i)
+                    if (MediaItem_Take* tk = GetActiveTake(GetTrackMediaItem(tr, i)))
+                        fx = TakeFX_GetCount(tk) > 0;
+                s_vuTakeFx = fx;
+            }
+            if (vuNewTrack) {
                 teardownAccessor();
-                s_vuAccessor = CreateTrackAudioAccessor(tr);
                 s_lastVuTrack = tr;
                 // Reset envelopes across track switches: a stale (especially
                 // pegged) hold from the previous track must not bleed in.
                 g_envUc1In_[0]  = g_envUc1In_[1]  = -1000.0;
                 g_envUc1Out_[0] = g_envUc1Out_[1] = -1000.0;
+            }
+            if (s_vuTakeFx && s_vuAccessor) {
+                DestroyAudioAccessor(s_vuAccessor);
+                s_vuAccessor = nullptr;
+            } else if (!s_vuTakeFx && !s_vuAccessor) {
+                s_vuAccessor = CreateTrackAudioAccessor(tr);
             }
 
             float dbInL = -120.f;
