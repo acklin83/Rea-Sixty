@@ -86,6 +86,16 @@ void registerBuiltins(input::State& in, const input::Host& host)
         [&in](int) { return input::faderMainActive(in, manager().snapshot()); },
         "RME: Main on the fader", false
     });
+    // The "Ask TotalMix again" button of ORC's TotalMix page, as a key (forum
+    // 2026-10-12: a TotalMix that came up slowly left faders and switches dead
+    // until someone asked). The link asks twice more by itself after it comes
+    // up (RmeManager), this is for whatever that still misses.
+    registerBuiltin("rme_ask_again", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (firing) manager().refresh();
+        },
+        nullptr, "RME: Ask TotalMix again", false
+    });
 
     // ⇨ WHAT A PRESS MEANS (Bindings.h, BuiltinKind). These flip, so a key can
     // hold them (Press) as well as switch them (Toggle). Holding works because

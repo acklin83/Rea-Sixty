@@ -1365,6 +1365,15 @@ inline void uf1SetViewMode_(int v)
     // the surface has to re-push after a mode change it didn't originate.
     g_pageDirty.store(true);
 }
+// ⇨ ONE DOOR INTO THE SIDE-CAR. SHIFT + MODE, the startup view and the uf1_rme
+// builtin go in and out the same way: every entry starts in the overview, and
+// the page repaints.
+inline void uf1SetSideCar_(Uf1SideCar sc)
+{
+    g_uf1SideCar.store(sc);
+    g_rmeIn.strip.store(false);
+    g_pageDirty.store(true);
+}
 // Which of the four is live right now — LED state, the cycle step, the banner.
 inline int uf1ViewMode_()
 {
@@ -27147,9 +27156,7 @@ void onUf1Event(const uf1::InputEvent& ev)
                     if (sc >= 0 && sc < kUf1SideCarCount && *uf1SideCarName_(sc)) {
                         const auto want = static_cast<Uf1SideCar>(sc + 1);
                         const auto cur  = g_uf1SideCar.load();
-                        g_uf1SideCar.store(cur == want ? Uf1SideCar::None : want);
-                        g_rmeIn.strip.store(false);   // jedes Betreten beginnt in der Uebersicht
-                        g_pageDirty.store(true);
+                        uf1SetSideCar_(cur == want ? Uf1SideCar::None : want);
                     }
                     break;
                 }
@@ -43949,11 +43956,7 @@ static void applyUf1StartupView_()
     // side-car goes over it, exactly as SHIFT + MODE, RME does, so leaving the
     // side-car leads back there. Without ORC (no rme.json) there is no side-car
     // to enter and the UF1 simply comes up in its last view.
-    if (pinned && g_rmeAvailable.load()) {
-        g_uf1SideCar.store(Uf1SideCar::RmeMonitor);
-        g_rmeIn.strip.store(false);   // every entry starts in the overview
-        g_pageDirty.store(true);
-    }
+    if (pinned && g_rmeAvailable.load()) uf1SetSideCar_(Uf1SideCar::RmeMonitor);
     // No fixed view pinned: come back up in the one the UF1 was last left in.
     // GLOBAL, not per project (Frank 2026-08-18) — which view the surface shows
     // is a property of the surface, not of the session you happen to open.
@@ -55278,6 +55281,24 @@ void registerBindingHandlers()
     regUf1View("uf1_view_meter",  kUf1ViewMeter,  "UF1 Mode: Meter");
     regUf1View("uf1_view_sends",  kUf1ViewSends,  "UF1 Mode: Sends");
 
+    // The RME side-car as a key, reachable from any surface and the Stream Deck
+    // (forum 2026-10-12). The same switch as SHIFT + MODE, RME: a second press
+    // leaves it. Without ORC (no rme.json) there is no side-car and it does
+    // nothing, as the menu offers nothing there.
+    {
+        DescBuilder d{
+            [](bool firing, bool /*pressed*/, int /*param*/) {
+                if (!firing || !g_rmeAvailable.load()) return;
+                uf1SetSideCar_(g_uf1SideCar.load() == Uf1SideCar::RmeMonitor
+                                   ? Uf1SideCar::None : Uf1SideCar::RmeMonitor);
+            },
+            [](int) { return g_uf1SideCar.load() == Uf1SideCar::RmeMonitor; },
+            "UF1 Mode: RME", false
+        };
+        d.deviceMask = 0b111;
+        registerBuiltin("uf1_rme", d);
+    }
+
     // The preset browser, as an action. In the Meter view SK4 already opens it;
     // in the Channel view every soft key is a p188 parameter, so there is no key
     // to take — this makes it bindable to any button on any surface instead of
@@ -57601,7 +57622,7 @@ void registerBindingHandlers()
             "uf1_strip_mode_toggle", "uf1_strip_mode_toggle_with_gui",
             "uf8_plugin_mode_toggle", "uf8_plugin_mode_toggle_with_gui",
             "uf1_extender", "uf1_extender_side",
-            "uf1_presets", "uf1_hue", "uf1_sends_receives_toggle",
+            "uf1_presets", "uf1_hue", "uf1_rme", "uf1_sends_receives_toggle",
             "folder_mode", "show_only_selected", "tcp_follows_selection_toggle",
             "vca_mode",
             "marker_overlay_toggle", "marker_overlay_markers_only_toggle",
