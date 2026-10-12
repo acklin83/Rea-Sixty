@@ -1452,8 +1452,10 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
                            &on)) {
             if (on) {
                 // Seed from the live engaged bank; fall back to a valid
-                // user-Quick when nothing usable is engaged.
-                int lv = uf8::bindings::getActiveLayer();
+                // user-Quick when nothing usable is engaged. The Quick layer:
+                // getActiveLayer is pinned to Layer 1 under "Layers switch
+                // Quicks only", and a bank lives on the layer the surface is on.
+                int lv = uf8::bindings::getQuickLayer();
                 if (lv < 0 || lv > 2) lv = 1;
                 int lq = reasixty_activeQuickFor(lv);
                 int ls = reasixty_activeSubBankFor(lv);
@@ -1514,7 +1516,7 @@ void SettingsScreen::drawBehaviour(ImGui_Context* ctx)
             ImGui_SameLine(ctx, nullptr, nullptr);
             if (ImGui_Button(ctx, "Use current hardware bank",
                              /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-                int lv = uf8::bindings::getActiveLayer();
+                int lv = uf8::bindings::getQuickLayer();
                 if (lv < 0 || lv > 2) lv = 1;
                 int lq = reasixty_activeQuickFor(lv);
                 int ls = reasixty_activeSubBankFor(lv);

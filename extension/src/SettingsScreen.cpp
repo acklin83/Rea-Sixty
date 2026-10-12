@@ -1101,28 +1101,40 @@ bool ctxIsSoftKey_(uf8::bindings::ButtonId id)
     return (id >= ButtonId::TopSoftKey1 && id <= ButtonId::TopSoftKey8)
         || (id >= ButtonId::Uf1DisplaySoft1 && id <= ButtonId::Uf1DisplaySoft4);
 }
-uf8::bindings::Binding ctxReadBinding_(int layer, uf8::bindings::ButtonId id,
+// ⛔ WHICH LAYER A KEY IS EDITED ON. Two answers, and the editor has to give
+// the one the surface gives. A soft-key slot lives in a Quick's set, so it is
+// on the Quick layer. Every other key follows dispatch (applyLayerOption):
+// under "Layers switch Quicks only" that is Layer 1, except the layer's own
+// selector keys (Quick 1-3, V-POT and Soft 1-5 Bank), which stay on the layer
+// the surface is on. The editor took getActiveLayer for all of them, so on
+// Layer 2 it wrote Quick 1 into Layer 1, and Layer 1's Quick 1 then jumped to
+// Layer 2 (forum report 2026-10-12, since 19140df3).
+int ctxSoftKeyLayer_()
+{
+    return uf8::bindings::getQuickLayer();
+}
+uf8::bindings::Binding ctxReadBinding_(uf8::bindings::ButtonId id,
                                        int quick, int subBank)
 {
     using namespace uf8::bindings;
     if (id >= ButtonId::TopSoftKey1 && id <= ButtonId::TopSoftKey8) {
         const int slot = static_cast<int>(id) - static_cast<int>(ButtonId::TopSoftKey1);
-        if (quick >= 0) return getUserQuickSlot(layer, quick, subBank, slot);
+        if (quick >= 0) return getUserQuickSlot(ctxSoftKeyLayer_(), quick, subBank, slot);
         return Binding{};
     }
     if (id >= ButtonId::Uf1DisplaySoft1 && id <= ButtonId::Uf1DisplaySoft4) {
         const int slot = static_cast<int>(id) - static_cast<int>(ButtonId::Uf1DisplaySoft1);
         return getUf1SoftBankSlot(uf1EditLiveBank_(), slot);
     }
-    return getBinding(layer, id);
+    return getBinding(layerForButton(id), id);
 }
-void ctxWriteBinding_(int layer, uf8::bindings::ButtonId id,
+void ctxWriteBinding_(uf8::bindings::ButtonId id,
                       int quick, int subBank, const uf8::bindings::Binding& bd)
 {
     using namespace uf8::bindings;
     if (id >= ButtonId::TopSoftKey1 && id <= ButtonId::TopSoftKey8) {
         const int slot = static_cast<int>(id) - static_cast<int>(ButtonId::TopSoftKey1);
-        if (quick >= 0) setUserQuickSlot(layer, quick, subBank, slot, bd);
+        if (quick >= 0) setUserQuickSlot(ctxSoftKeyLayer_(), quick, subBank, slot, bd);
         return;
     }
     if (id >= ButtonId::Uf1DisplaySoft1 && id <= ButtonId::Uf1DisplaySoft4) {
@@ -1130,11 +1142,10 @@ void ctxWriteBinding_(int layer, uf8::bindings::ButtonId id,
         setUf1SoftBankSlot(uf1EditLiveBank_(), slot, bd);
         return;
     }
-    setBinding(layer, id, bd);
+    setBinding(layerForButton(id), id, bd);
 }
 
-void renderBindingContextMenu_(ImGui_Context* ctx, int layer,
-                               int quick, int subBank)
+void renderBindingContextMenu_(ImGui_Context* ctx, int quick, int subBank)
 {
     if (s_bindingCtxOpenRequested) {
         ImGui_OpenPopup(ctx, "##binding_ctx_menu", nullptr);
@@ -1143,8 +1154,7 @@ void renderBindingContextMenu_(ImGui_Context* ctx, int layer,
     if (!ImGui_BeginPopup(ctx, "##binding_ctx_menu", nullptr)) return;
 
     if (ImGui_MenuItem(ctx, "Copy binding",  nullptr, nullptr, nullptr)) {
-        s_bindingClipboard = ctxReadBinding_(
-            layer, s_bindingCtxBtn, quick, subBank);
+        s_bindingClipboard = ctxReadBinding_(s_bindingCtxBtn, quick, subBank);
         // The clipboard keeps the WHOLE binding; Paste decides which set to take
         // from it. Stubbing it down to one set here meant pasting onto an
         // ordinary button wiped that button's colours and its other slots.
@@ -1171,7 +1181,7 @@ void renderBindingContextMenu_(ImGui_Context* ctx, int layer,
     {
         if (ctxIsSoftKey_(s_bindingCtxBtn)) {
             // Merge into the destination's set, leaving the other one alone.
-            auto dst = ctxReadBinding_(layer, s_bindingCtxBtn, quick, subBank);
+            auto dst = ctxReadBinding_(s_bindingCtxBtn, quick, subBank);
             const int m = g_slotEditModIdx;
             dst.shortPress[m]  = s_bindingClipboard.shortPress[m];
             dst.longPress[m]   = s_bindingClipboard.longPress[m];
@@ -1195,10 +1205,10 @@ void renderBindingContextMenu_(ImGui_Context* ctx, int layer,
             } else if (dst.shortPress[m].label.empty()) {
                 dst.shortPress[m].label = s_bindingClipboard.label;
             }
-            ctxWriteBinding_(layer, s_bindingCtxBtn, quick, subBank, dst);
+            ctxWriteBinding_(s_bindingCtxBtn, quick, subBank, dst);
         } else {
             ctxWriteBinding_(
-                layer, s_bindingCtxBtn, quick, subBank, s_bindingClipboard);
+                s_bindingCtxBtn, quick, subBank, s_bindingClipboard);
         }
     }
 
@@ -1220,7 +1230,7 @@ void renderBindingContextMenu_(ImGui_Context* ctx, int layer,
         if (ImGui_MenuItem(ctx, "Reset binding to factory default", nullptr,
                            nullptr, &resetEnabled))
         {
-            resetBindingToDefault(layer, s_bindingCtxBtn);
+            resetBindingToDefault(layerForButton(s_bindingCtxBtn), s_bindingCtxBtn);
         }
     }
     ImGui_EndPopup(ctx);
@@ -1558,8 +1568,8 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
     };
 
     // Layer whose bindings the schematic reflects (assigned-tint + hover
-    // tooltip read getBinding(bindLayer, id)). Stream B, Frank 2026-06-22.
-    const int bindLayer = uf8::bindings::getActiveLayer();
+    // tooltip): per key, the layer that key fires from (layerForButton, see
+    // ctxSoftKeyLayer_). Stream B, Frank 2026-06-22.
 
     // Bindable button: hit-tests against the canvas mouse, draws a
     // hardware-face rectangle, highlights on hover/select. Returns
@@ -1589,7 +1599,8 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
         // empty ones stay neutral grey. Selected / hover override both.
         const bool reg   = regularBindable_(id);
         const bool bound = reg && bindingHasAnyAction_(
-                               uf8::bindings::getBinding(bindLayer, id));
+                               uf8::bindings::getBinding(
+                                   uf8::bindings::layerForButton(id), id));
         // An LED colour takes the tile's face, at a third of its intensity so
         // the silk-screen number stays readable, and the full colour on the
         // border. Selection and hover still win: they say where you ARE, and
@@ -1624,7 +1635,8 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
         // manual hit-testing, so we drive the tooltip off our own `hot`
         // flag rather than item-hover state.
         if (hot && reg && bound) {
-            const std::string tip = buildBindingTooltip_(bindLayer, id, label);
+            const std::string tip = buildBindingTooltip_(
+                uf8::bindings::layerForButton(id), id, label);
             if (!tip.empty()) ImGui_SetTooltip(ctx, tip.c_str());
         }
         return clicked;
@@ -2129,8 +2141,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
 
     // Right-click context menu — must live inside the same canvas ID
     // scope as the OpenPopup call so the popup ID matches.
-    renderBindingContextMenu_(ctx, uf8::bindings::getActiveLayer(),
-                               editQuick, editSubBank);
+    renderBindingContextMenu_(ctx, editQuick, editSubBank);
 
     ImGui_PopFont(ctx);
 }
@@ -2690,7 +2701,7 @@ void drawUc1BindingsVector(ImGui_Context* ctx, ButtonId& sel)
               ButtonId::Uc1Encoder2Push, "PUSH");
 
     // Right-click context menu — same canvas ID scope as drawUf8Vector.
-    renderBindingContextMenu_(ctx, uf8::bindings::getActiveLayer(), -1, 0);
+    renderBindingContextMenu_(ctx, -1, 0);
 
     ImGui_PopFont(ctx);
 }
@@ -2732,8 +2743,6 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     const float mx = static_cast<float>(mxd) - c.ox;
     const float my = static_cast<float>(myd) - c.oy;
 
-    const int bindLayer = getActiveLayer();
-
     auto inside = [&](float x, float y, float w, float h) {
         return canvasHovered
             && mx >= x && mx <= x + w && my >= y && my <= y + h;
@@ -2753,7 +2762,7 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
             s_bindingCtxOpenRequested = true;
         }
         const bool reg   = regularBindable_(id);
-        const bool bound = reg && bindingHasAnyAction_(getBinding(bindLayer, id));
+        const bool bound = reg && bindingHasAnyAction_(getBinding(layerForButton(id), id));
         const uint32_t fill   = selected ? 0x4477CCFF
                               : hot       ? 0x3A4253FF
                               : bound     ? 0x2C3A2EFF
@@ -2767,7 +2776,8 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
         drawTextCentered_(c, x + w / 2.0f, y + h / 2.0f, txt, label);
         ImGui_PopFont(ctx);
         if (hot && reg && bound) {
-            const std::string tip = buildBindingTooltip_(bindLayer, id, label);
+            const std::string tip = buildBindingTooltip_(
+                uf8::bindings::layerForButton(id), id, label);
             if (!tip.empty()) ImGui_SetTooltip(ctx, tip.c_str());
         }
         return clicked;
@@ -2803,7 +2813,7 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
             s_bindingCtxOpenRequested = true;
         }
         const bool bound = regularBindable_(pushId)
-                        && bindingHasAnyAction_(getBinding(bindLayer, pushId));
+                        && bindingHasAnyAction_(getBinding(layerForButton(pushId), pushId));
         const uint32_t face   = selected ? 0x33436AFF
                               : hot       ? 0x2A3346FF
                                           : 0x14181EFF;
@@ -2830,7 +2840,7 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
             ImGui_PopFont(ctx);
         }
         if (hot && bound) {
-            const std::string tip = buildBindingTooltip_(bindLayer, pushId, cap);
+            const std::string tip = buildBindingTooltip_(layerForButton(pushId), pushId, cap);
             if (!tip.empty()) ImGui_SetTooltip(ctx, tip.c_str());
         }
     };
@@ -3082,7 +3092,7 @@ void drawUf1Vector(ImGui_Context* ctx, ButtonId& sel)
     ImGui_PopFont(ctx);
 
     // Right-click context menu — same canvas ID scope as drawUf8Vector.
-    renderBindingContextMenu_(ctx, getActiveLayer(), -1, 0);
+    renderBindingContextMenu_(ctx, -1, 0);
 
     ImGui_PopFont(ctx);
 }
@@ -7398,8 +7408,8 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // Quicks only" on, getActiveLayer is pinned to Layer 1, so the highlight
     // could only ever land on the rows that live there and clicking a set on
     // Layer 2 or 3 marked nothing (Frank 2026-09-08). The per-button editor
-    // below keeps getActiveLayer, because that one really is about which
-    // binding fires.
+    // below asks layerForButton, because that one is about which binding
+    // fires, and for the selector keys that is this layer too.
     const int       s_editLayer = getQuickLayer();
     // ⛔ UND DIE ZWEITE ANTWORT, DIE BIS HIERHER FEHLTE. Der Kommentar darueber
     // sagt seit dem 08.09., der Tasten-Editor nehme getActiveLayer — der Aufruf
@@ -7408,9 +7418,12 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     // Layer 1, der Editor zeigte die leeren Tasten von Layer 2, und eine
     // Bindung sah geloescht aus, die es nie war (Frank 23.09.: "Shift+Rec-Mode
     // Bindung im Bindings-Tab weg obwohl der push am Geraet noch funktioniert").
-    // Alles, was eine BINDUNG anfasst — Editor, Reset, Import und Export —
-    // nimmt ab jetzt diese Zahl, alles, was Quicks und Baenke anfasst, die
-    // darueber ([[uf8-global-led-binding-rules]]).
+    // Reset, Import und Export einer ganzen Ebene nehmen diese Zahl, alles,
+    // was Quicks und Baenke anfasst, die darueber
+    // ([[uf8-global-led-binding-rules]]). Der Tasten-Editor fragt pro Taste
+    // layerForButton: die Layer-Waehler (Quick 1-3, Bank-Reihe) feuern auf der
+    // Ebene, auf der die Flaeche steht, und mit dieser Zahl landete L2 Quick 1
+    // auf Layer 1 (Forum 12.10.2026, ctxSoftKeyLayer_).
     const int       s_bindLayer = getActiveLayer();
     static ButtonId s_selected  = ButtonId::None;
 
@@ -8448,7 +8461,9 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             }
         }
     } else {
-        drawBindingEditor(ctx, s_bindLayer, editSel);
+        // Per key, not s_bindLayer: the selector keys stay on the layer the
+        // surface is on (ctxSoftKeyLayer_).
+        drawBindingEditor(ctx, layerForButton(editSel), editSel);
     }
 
     // UF1 behaviour toggles — rendered BELOW the editor so they add NO height above
