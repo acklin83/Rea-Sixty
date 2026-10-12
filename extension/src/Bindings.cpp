@@ -8499,7 +8499,8 @@ const char* builtinCategory(const std::string& n)
 
     // TotalMix FX over OSC (RmeManager): the control-room keys of the RME
     // side-car's factory bank. Their own group, like OBS and Hue.
-    if (n.rfind("rme_", 0) == 0)
+    // uf1_rme sits here too, for the reason uf1_hue sits under Hue.
+    if (n.rfind("rme_", 0) == 0 || n == "uf1_rme")
         return "RME";
 
     return "";
@@ -8832,6 +8833,13 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "rme_fader_main",
       "Puts TotalMix' Main output on the UF1 fader in the RME side-car. The "
       "lamp is lit while Main is on the fader." },
+    { "rme_ask_again",
+      "Asks TotalMix for its whole state again, the same as the button on "
+      "ORC's TotalMix page. For when faders or switches do not follow after "
+      "TotalMix was started." },
+    { "uf1_rme",
+      "Switches the UF1 to the RME side-car and back, the same as SHIFT + MODE, "
+      "RME. Does nothing until ORC is set up." },
     { "rme_show_window",
       "Shows or hides the TotalMix window. TotalMix says nothing about its own "
       "window, so the lamp is what we last sent." },
@@ -9584,6 +9592,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "rme_durec_next", "DuRec Next" },
     { "rme_durec_previous", "DuRec Prev" },
     { "rme_fader_main", "Main" },
+    { "rme_ask_again", "Ask TMix" },
     { "rme_show_window", "TotalMix" },
     { "obs_record_toggle", "OBS Rec" },
     { "obs_record_pause", "OBS Pause" },
@@ -9647,6 +9656,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "uf1_master", "UF1 Master" },
     { "uf1_page_step", "UF1 Page" },
     { "uf1_presets", "UF1 Presets" },
+    { "uf1_rme", "UF1 RME" },
     { "uf1_sends_receives_toggle", "UF1 Snd/Rcv" },
     { "uf1_strip_mode_toggle", "UF1 Strip" },
     { "uf1_strip_mode_toggle_with_gui", "UF1 Strp+GUI" },

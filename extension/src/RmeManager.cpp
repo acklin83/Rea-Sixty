@@ -27,6 +27,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 
 #if defined(_WIN32)
   using rme_socket_t = SOCKET;
@@ -433,6 +434,18 @@ void Manager::workerLoop()
     auto          lastRx      = clock::now() - std::chrono::hours(1);
     auto          retryAt     = clock::now();
     bool          heardSinceAsk = false;
+    // ⇨ TOTALMIX ANSWERS BEFORE IT HAS FINISHED LOADING. The first reply after
+    // a reboot or a relaunch can come while TotalMix is still building its
+    // mixer, and then only part of the state arrives: soft keys work, faders and
+    // switches do not, until someone asks again (forum report 2026-10-12, a slow
+    // machine). The 30 s re-ask below never helps, because a running TotalMix
+    // is never silent (333 level messages/s). So every time the link comes up we
+    // ask twice more, a little later; a reply that was already complete is just
+    // sent again.
+    constexpr std::chrono::seconds kFollowUps[] = { std::chrono::seconds(3),
+                                                    std::chrono::seconds(10) };
+    clock::time_point onlineAt{};
+    int           followUpsLeft = 0;
     std::vector<std::uint8_t> buf(65536);
 
     auto closeSock = [&] {
@@ -563,6 +576,8 @@ void Manager::workerLoop()
                 lastRx = clock::now();
                 heardSinceAsk = true;
                 if (link_.load() != LinkState::Online) {
+                    onlineAt      = lastRx;
+                    followUpsLeft = static_cast<int>(std::size(kFollowUps));
                     char t[160];
                     snprintf(t, sizeof(t), "connected to TotalMix (%s:%d, answers on %d)",
                                   cfg.host.c_str(), cfg.sendPort, cfg.recvPort);
@@ -575,6 +590,12 @@ void Manager::workerLoop()
         // Every 30 s of it we ask once; no answer within 3 s means it is gone.
         const auto t = clock::now();
         const LinkState ls = link_.load();
+        if (ls == LinkState::Online && followUpsLeft > 0) {
+            const auto next = kFollowUps[std::size(kFollowUps) - followUpsLeft];
+            if (t - onlineAt >= next) { ask(); --followUpsLeft; }
+        } else if (ls != LinkState::Online) {
+            followUpsLeft = 0;
+        }
         if (ls == LinkState::Waiting || ls == LinkState::Silent) {
             if (t - lastAsk > std::chrono::seconds(3)) ask();
         } else if (ls == LinkState::Online) {
