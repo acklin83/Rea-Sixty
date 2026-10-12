@@ -16,12 +16,18 @@ macOS 27.0.1 (26A434), REAPER 7.82. Diagnosis only, no code change.
 - 21 crashes 06.-10.10. in `CSurf_SetSurfaceMute` (0x50 = SetSurfaceMute vtable slot of a
   deleted surface): all at quit, triggered by `reaper_playhead.dylib` loading a theme while
   unloading. Not Rea-Sixty, not CSI.
-- 12.10. 17:31: SIGSEGV in Archetype Nolly X (take FX), with `mach_vm_allocate_kernel
-  failed`; REAPER had 11 GB malloc'd. Nolly X is the first victim of exhausted memory.
+- 12.10. 17:31 and 18:51: SIGSEGV at 0x17d in Archetype Nolly X 1.0.2 (take FX), identical
+  offsets both times. Reproducible: razor edit with the mouse during playback on items with
+  Nolly as take FX crashes every time; without Nolly on the item it does not (Frank, 19:0x).
+  A bug in Nolly, not memory exhaustion (18:51 at 7.9 of 36 GB; the `mach_vm_allocate_kernel`
+  triage line also shows up in unrelated quit crashes). Frank renders the Nolly track.
 
-## Open: REAPER memory grows ~80-150 MB/min
-- Continues with Nolly X bypassed and offline; Undo History shows nothing unusual.
-- 16:22-16:39: 8.6 GB written via `ProcessFxMsgQ > FxChain::DoUndoStateChange > SaveState`.
-- CPU mostly SSL 4K E DSP including its socket writes to the 360 core (our impersonator).
-- Next: test REAPER without Rea-Sixty (same project, measure `ps rss`), then look at the
-  SslCore impersonator's buffers and other growing containers.
+## Solved: REAPER memory grew ~50-170 MB/min (not Rea-Sixty)
+- Grew without the Rea-Sixty dylib loaded as well (18:01).
+- `sample`: `ProcessFxMsgQ > DoUndoStateChange > SaveState` spends its time in SSL Meter Pro's
+  getState. Meter Pro sits in the monitoring FX, saved to `reaper-hwoutfx.ini`: 57 MB, of it
+  56 MB Meter Pro, rewritten every ~5 s during playback (34 GB written in 2 h).
+- Meter Pro's loudness log file was on, so its whole log lives in the plug-in state. Log off:
+  state 57.5 MB -> 1.28 MB, growth ~170 MB/min -> ~8 MB/min (19:14-19:18, playing). Meter Pro
+  still reports a state change every ~5 s during playback, harmless at 1.28 MB.
+- lldb on this project is not an option: Sonsig Rev-A's copy protection stops the debugger.
