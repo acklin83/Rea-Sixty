@@ -9,6 +9,7 @@
 //
 #include "Bindings.h"
 
+#include <cstdio>
 #include <string_view>
 
 namespace uf8::bindings {
@@ -19,9 +20,44 @@ enum class PickAction : std::uint8_t {
     SelectAndRun,  // pick it, and let the press run as well
 };
 
+// ⇨ THE LAYER A BINDING TAKES THE SURFACE TO, or -1 when it stays. Every way a
+// binding switches layers: softkey_bank_N (named by coordinate, (N - 1) / 3 is
+// its layer), softkey_set_engage with a set number, layer_select_N and the old
+// layer_select with a param. Sets 8 and 9 (domain_cs / domain_bc) do not move
+// the layer; they drop the set on the layer you are on.
+inline int layerTheSlotLeadsTo(const ActionSlot& sp)
+{
+    for (int i = 0; i < stepCount(sp); ++i) {
+        const ActionStep& st = stepAt(sp, i);
+        if (st.type != ActionType::Builtin) continue;
+        int n = 0;
+        if (std::sscanf(st.action.c_str(), "softkey_bank_%d", &n) == 1
+            && n >= 1 && n <= 9)
+            return (n - 1) / 3;
+        if (st.action == "softkey_set_engage") {
+            int l = 0, q = 0;
+            if (softKeySetToLayerQuick(st.param, l, q)) return l;
+            continue;
+        }
+        if (std::sscanf(st.action.c_str(), "layer_select_%d", &n) == 1
+            && n >= 1 && n <= 3)
+            return n - 1;
+        if (st.action == "layer_select" && st.param >= 0 && st.param <= 2)
+            return st.param;
+    }
+    return -1;
+}
+
 // `plainBuiltin` is the Plain short-press builtin bound to the key ("" when
 // none or not a builtin), so a key the user made a modifier stays one.
-inline PickAction pickActionFor(ButtonId id, std::string_view plainBuiltin)
+// `leavesLayer`: the binding would take the surface to another layer
+// (layerTheSlotLeadsTo). Such a key is picked and NOT run, except LAYER 1-3,
+// whose job that is. Otherwise the pane jumped with it and you edited the key
+// of the other layer (forum 2026-10-14: "on layer one I click Quick 2 to edit
+// it and jump to layer 2"). The click on its tile in Settings follows the same
+// rule (drawUf8Vector).
+inline PickAction pickActionFor(ButtonId id, std::string_view plainBuiltin,
+                                bool leavesLayer = false)
 {
     if (id == ButtonId::None) return PickAction::PassThrough;
     // ⇨ MODIFIERS STAY MODIFIERS. SHIFT/FINE are bindings that go through
@@ -56,6 +92,9 @@ inline PickAction pickActionFor(ButtonId id, std::string_view plainBuiltin)
         case ButtonId::SoftKey3Bank: case ButtonId::SoftKey4Bank:
         case ButtonId::SoftKey5Bank:
         case ButtonId::Uf1ArrowLeft: case ButtonId::Uf1ArrowRight:
+            if (leavesLayer && id != ButtonId::Layer1 && id != ButtonId::Layer2
+                && id != ButtonId::Layer3)
+                return PickAction::Select;
             return PickAction::SelectAndRun;
         default:
             return PickAction::Select;

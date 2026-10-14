@@ -522,9 +522,13 @@ bool bindingsPickGate_(int tab, uf8::bindings::ButtonId bid, uint8_t rawId,
     if (!uf8::reasixty_bindingsPaneLive() || bid == ButtonId::None) return false;
     const Binding bd = getBinding(layerForButton(bid), bid);
     const auto& sp = bd.shortPress[static_cast<int>(Modifier::Plain)];
+    // What the press would run: the slot of the modifier held now.
+    const int to = layerTheSlotLeadsTo(
+        bd.shortPress[static_cast<int>(currentModifierSnapshot())]);
     const PickAction act = pickActionFor(
         bid, sp.type == ActionType::Builtin ? std::string_view(sp.action)
-                                            : std::string_view());
+                                            : std::string_view(),
+        to >= 0 && to != getQuickLayer());
     if (act == PickAction::PassThrough) return false;
     uf8::reasixty_bindingsPick(tab, static_cast<int>(bid));
     if (act == PickAction::SelectAndRun) return false;

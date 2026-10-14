@@ -35,6 +35,49 @@ int main()
                         ButtonId::VPotBank, ButtonId::SoftKey1Bank, ButtonId::SoftKey5Bank,
                         ButtonId::Uf1ArrowLeft, ButtonId::Uf1ArrowRight })
         EXPECT(pickActionFor(b, "") == PickAction::SelectAndRun);
+
+    // ⇨ WHERE A BINDING TAKES THE SURFACE (forum 2026-10-14). Every builtin
+    // that switches layers, with the layer it lands on.
+    auto slot = [](const char* action, int param = 0) {
+        ActionSlot s;
+        s.type = ActionType::Builtin;
+        s.action = action;
+        s.param = param;
+        return s;
+    };
+    EXPECT(layerTheSlotLeadsTo(slot("softkey_bank_1")) == 0);
+    EXPECT(layerTheSlotLeadsTo(slot("softkey_bank_3")) == 0);
+    EXPECT(layerTheSlotLeadsTo(slot("softkey_bank_4")) == 1);
+    EXPECT(layerTheSlotLeadsTo(slot("softkey_bank_9")) == 2);
+    EXPECT(layerTheSlotLeadsTo(slot("softkey_bank_select", 2)) == -1);
+    // Sets by number: 1 = L1 Q3, 2-4 = L2, 5-7 = L3, 8/9 = L1 Q1/Q2.
+    EXPECT(layerTheSlotLeadsTo(slot("softkey_set_engage", 1)) == 0);
+    EXPECT(layerTheSlotLeadsTo(slot("softkey_set_engage", 2)) == 1);
+    EXPECT(layerTheSlotLeadsTo(slot("softkey_set_engage", 4)) == 1);
+    EXPECT(layerTheSlotLeadsTo(slot("softkey_set_engage", 5)) == 2);
+    EXPECT(layerTheSlotLeadsTo(slot("softkey_set_engage", 8)) == 0);
+    EXPECT(layerTheSlotLeadsTo(slot("softkey_set_engage", 0)) == -1);
+    EXPECT(layerTheSlotLeadsTo(slot("layer_select_2")) == 1);
+    EXPECT(layerTheSlotLeadsTo(slot("layer_select", 2)) == 2);
+    // Sets 8 and 9 by their own builtins stay on the layer.
+    EXPECT(layerTheSlotLeadsTo(slot("domain_cs")) == -1);
+    EXPECT(layerTheSlotLeadsTo(slot("domain_bc")) == -1);
+    EXPECT(layerTheSlotLeadsTo(slot("ssl_softkey")) == -1);
+    // A later step counts too.
+    {
+        ActionSlot s = slot("flip");
+        ActionStep st;
+        st.type = ActionType::Builtin;
+        st.action = "softkey_bank_7";
+        s.extraSteps.push_back(st);
+        EXPECT(layerTheSlotLeadsTo(s) == 2);
+    }
+    // A Quick that leaves the layer is picked, not run; LAYER keys still run.
+    EXPECT(pickActionFor(ButtonId::Quick2, "softkey_bank_4", true) == PickAction::Select);
+    EXPECT(pickActionFor(ButtonId::SoftKey3Bank, "", true) == PickAction::Select);
+    EXPECT(pickActionFor(ButtonId::Quick2, "softkey_bank_2", false) == PickAction::SelectAndRun);
+    EXPECT(pickActionFor(ButtonId::Layer2, "layer_select_2", true) == PickAction::SelectAndRun);
+
     if (g_fail == 0) std::printf("test_bindings_pick: all passed\n");
     return g_fail == 0 ? 0 : 1;
 }

@@ -8,6 +8,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include "BindingsPick.h"
 #include <cstring>
 #include <ctime>
 #include <functional>
@@ -1548,36 +1549,6 @@ std::string buildBindingTooltip_(int layer, ButtonId id, const char* label)
 // the cached mouse-coords against each button's local rectangle.
 // `sel` is updated on click. Layout follows SSL UF8 User Guide page 14
 // (numbered controls).
-// ⇨ A QUICK THAT LEADS OFF THIS LAYER IS ONLY PICKED, NOT PRESSED. A click on
-// a Quick tile fires its binding, so the tile both engages its set and gets
-// selected for editing. When the binding goes to another layer (a Soft-Key Set
-// that lives there, a layer select), the surface jumped, the editor followed
-// it, and you edited that layer's Quick instead of the one you clicked (forum
-// 2026-10-14: "on layer one I click Quick 2 to edit it and jump to layer 2").
-// The layer this click would switch to, or -1 when it stays.
-static int quickTileTargetLayer_(ButtonId id)
-{
-    using namespace uf8::bindings;
-    const Binding bd = getBinding(layerForButton(id), id);
-    const ActionSlot& sp =
-        bd.shortPress[static_cast<int>(currentModifierSnapshot())];
-    for (int i = 0; i < stepCount(sp); ++i) {
-        const ActionStep& st = stepAt(sp, i);
-        if (st.type != ActionType::Builtin) continue;
-        int n = 0;
-        // softkey_bank_N is named by coordinate: (N - 1) / 3 is its layer.
-        if (std::sscanf(st.action.c_str(), "softkey_bank_%d", &n) == 1
-            && n >= 1 && n <= 9)
-            return (n - 1) / 3;
-        if (std::sscanf(st.action.c_str(), "layer_select_%d", &n) == 1
-            && n >= 1 && n <= 3)
-            return n - 1;
-        if (st.action == "layer_select" && st.param >= 0 && st.param <= 2)
-            return st.param;
-    }
-    return -1;
-}
-
 void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
                    int editQuick, int editSubBank)
 {
@@ -1980,7 +1951,12 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
     for (auto& b : quickBtns) {
         const bool justClicked = drawHwBtn(b.x, b.y, 36, 22, b.id, b.lbl);
         if (justClicked) {
-            const int to = quickTileTargetLayer_(b.id);
+            // ⇨ A QUICK THAT LEADS OFF THIS LAYER IS ONLY PICKED, NOT PRESSED
+            // (BindingsPick.h, the same rule as a press on the hardware).
+            const auto qb = uf8::bindings::getBinding(
+                uf8::bindings::layerForButton(b.id), b.id);
+            const int to = uf8::bindings::layerTheSlotLeadsTo(qb.shortPress[
+                static_cast<int>(uf8::bindings::currentModifierSnapshot())]);
             if (to < 0 || to == activeLayer) {
                 uf8::bindings::dispatch(b.id, /*pressed*/ true);
                 uf8::bindings::dispatch(b.id, /*pressed*/ false);
