@@ -8095,6 +8095,11 @@ const char* builtinCategory(const std::string& n)
      || n == "uf1_presets"
      || n.rfind("uf1_strip_mode_", 0) == 0
      || n.rfind("uf1_view_", 0) == 0
+     // The RME side-car is a UF1 mode like the views. It sat under RME in
+     // v0.6.5, a category Rea-Sixty's picker leaves out (those are ORC's to
+     // bind), so it could only be reached from the Stream Deck (forum
+     // 2026-10-14).
+     || n == "uf1_rme"
      || n == "uf1_extender" || n == "uf1_extender_side"
      || n == "restart")
         return "Hardware Modes";
@@ -8186,8 +8191,7 @@ const char* builtinCategory(const std::string& n)
 
     // TotalMix FX over OSC (RmeManager): the control-room keys of the RME
     // side-car's factory bank. Their own group, like OBS and Hue.
-    // uf1_rme sits here too, for the reason uf1_hue sits under Hue.
-    if (n.rfind("rme_", 0) == 0 || n == "uf1_rme")
+    if (n.rfind("rme_", 0) == 0)
         return "RME";
 
     return "";
