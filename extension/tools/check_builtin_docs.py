@@ -150,6 +150,18 @@ def main() -> int:
               and category_of(n, rules) not in order]
     stale_lbl  = [n for n in sorted(labels) if n not in names]
 
+    # ⇨ A CATEGORY THE PICKER SKIPS HIDES WHAT ONLY REA-SIXTY REGISTERS.
+    # Rea-Sixty's picker leaves whole categories out (RME: those are ORC's to
+    # bind, SettingsScreen.cpp `if (std::strcmp(cat, "RME") == 0) continue;`).
+    # A builtin that main.cpp registers and ORC does not, put into such a
+    # category, can then be bound nowhere but the Stream Deck. uf1_rme shipped
+    # that way in v0.6.5 and this check passed it (forum 2026-10-14).
+    skipped = set(re.findall(r'strcmp\(cat, "([^"]+)"\) == 0\) continue;',
+                             (SRC / "SettingsScreen.cpp").read_text()))
+    rs_only = registered_names((SRC / "main.cpp").read_text())
+    hidden = [n for n in sorted(rs_only)
+              if not n.startswith("__") and category_of(n, rules) in skipped]
+
     print(f"registered builtins : {len(names)}")
     print(f"soft-key labels     : {len(labels)}")
     print(f"documented (exact)  : {len(exact)}")
@@ -179,7 +191,13 @@ def main() -> int:
               f"builtinCategoryOrder ({len(no_cat)}):")
         for n in no_cat:
             print(f"  {n}  ->  {category_of(n, rules)!r}")
-    bad = bool(missing or stale or no_label or long_label or stale_lbl or no_cat)
+    if hidden:
+        print(f"\nHIDDEN IN REA-SIXTY'S PICKER, registered by main.cpp only and "
+              f"in a category the picker skips ({len(hidden)}):")
+        for n in hidden:
+            print(f"  {n}  ->  {category_of(n, rules)!r}")
+    bad = bool(missing or stale or no_label or long_label or stale_lbl or no_cat
+               or hidden)
     if not bad:
         print("\nevery registered builtin has a description, a label \u226412 chars "
               "and a category the picker shows")

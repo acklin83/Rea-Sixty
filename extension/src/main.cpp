@@ -57778,8 +57778,11 @@ void registerBindingHandlers()
         const int n = layer * 3 + quick + 1;         // the coordinate 1..9
         auto d = softKeyBank(n);
         char name[32]; snprintf(name, sizeof(name), "softkey_bank_%d", n);
+        // Where the set lives, in the name: Set 2 is Layer 2's Quick 1, which
+        // nobody guesses from the number (forum 2026-10-14).
         char dn[56];
-        snprintf(dn, sizeof(dn), "Soft-Key Set %d", setNo);
+        snprintf(dn, sizeof(dn), "Soft-Key Set %d (Layer %d, Quick %d)",
+                 setNo, layer + 1, quick + 1);
         d.displayName = dn;
         registerBuiltin(name, d);
     }
