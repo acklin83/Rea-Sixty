@@ -1549,6 +1549,20 @@ std::string buildBindingTooltip_(int layer, ButtonId id, const char* label)
 // the cached mouse-coords against each button's local rectangle.
 // `sel` is updated on click. Layout follows SSL UF8 User Guide page 14
 // (numbered controls).
+// ⇨ A TILE THAT LEADS OFF THIS LAYER IS ONLY PICKED, NOT PRESSED. Quick and
+// bank tiles run their binding on a click (hardware proxy). One that would take
+// the surface to another layer is just selected, or the pane jumps with it and
+// you edit the other layer's key: the same rule as a press on the hardware
+// (BindingsPick.h, forum 2026-10-14).
+static bool tileLeavesLayer_(ButtonId id, int activeLayer)
+{
+    using namespace uf8::bindings;
+    const Binding bd = getBinding(layerForButton(id), id);
+    const int to = layerTheSlotLeadsTo(
+        bd.shortPress[static_cast<int>(currentModifierSnapshot())]);
+    return to >= 0 && to != activeLayer;
+}
+
 void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
                    int editQuick, int editSubBank)
 {
@@ -1951,13 +1965,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
     for (auto& b : quickBtns) {
         const bool justClicked = drawHwBtn(b.x, b.y, 36, 22, b.id, b.lbl);
         if (justClicked) {
-            // ⇨ A QUICK THAT LEADS OFF THIS LAYER IS ONLY PICKED, NOT PRESSED
-            // (BindingsPick.h, the same rule as a press on the hardware).
-            const auto qb = uf8::bindings::getBinding(
-                uf8::bindings::layerForButton(b.id), b.id);
-            const int to = uf8::bindings::layerTheSlotLeadsTo(qb.shortPress[
-                static_cast<int>(uf8::bindings::currentModifierSnapshot())]);
-            if (to < 0 || to == activeLayer) {
+            if (!tileLeavesLayer_(b.id, activeLayer)) {
                 uf8::bindings::dispatch(b.id, /*pressed*/ true);
                 uf8::bindings::dispatch(b.id, /*pressed*/ false);
             }
@@ -2055,8 +2063,10 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
                 // schematic click actually switches the SSL PAGE bank
                 // (g_softKeyBank), exactly like pressing the hardware
                 // button would.
-                uf8::bindings::dispatch(b.id, /*pressed*/ true);
-                uf8::bindings::dispatch(b.id, /*pressed*/ false);
+                if (!tileLeavesLayer_(b.id, activeLayer)) {
+                    uf8::bindings::dispatch(b.id, /*pressed*/ true);
+                    uf8::bindings::dispatch(b.id, /*pressed*/ false);
+                }
                 // Plugin Mode locks softkey_bank_select out; keep the pane
                 // reachable (see reasixty_editorEngageSubBankIfLocked).
                 reasixty_editorEngageSubBankIfLocked(b.idx);
