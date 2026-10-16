@@ -20,6 +20,17 @@ namespace rmeu = reasixty::rme::uf1;
 
 namespace {
 
+// ⇨ OPEN AT LOGIN ONLY FROM APPLICATIONS (16.10.2026). SMAppService registers
+// the copy that is running, by its path. Ticked once in a build folder, macOS
+// started that build at every login from then on, whichever state it was in,
+// while the released ORC sat unused in /Applications (Frank's Mac, 12. to 16.10.).
+bool runningFromApplications()
+{
+    NSString* path = NSBundle.mainBundle.bundleURL.URLByResolvingSymlinksInPath.path;
+    NSString* user = [NSHomeDirectory() stringByAppendingPathComponent:@"Applications/"];
+    return [path hasPrefix:@"/Applications/"] || [path hasPrefix:user];
+}
+
 // Every target a pot or the jog wheel can carry: the control-room roles first,
 // then whatever this remote can actually see, named as TotalMix names it.
 // ⇨ Built from the live state, so the list is the mixer's answer rather than one
@@ -325,6 +336,10 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     self.loginBox = [NSButton checkboxWithTitle:@"Open at login"
                                          target:self
                                          action:@selector(loginChanged:)];
+    if (!runningFromApplications()) {
+        self.loginBox.enabled = NO;
+        self.loginBox.toolTip = @"Only for the ORC in Applications.";
+    }
     [v addArrangedSubview:self.loginBox];
 
     NSGridView* grid = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
@@ -1002,6 +1017,7 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
 
 - (void)loginChanged:(id)sender
 {
+    if (!runningFromApplications()) { [self refresh]; return; }
     const bool on = self.loginBox.state == NSControlStateValueOn;
     SMAppService* app = SMAppService.mainAppService;
     NSError* err = nil;
