@@ -4783,10 +4783,22 @@ static bool beginEditorColumn_(ImGui_Context* ctx, const char* id,
                                double w, double h, bool* drawBody)
 {
     *drawBody = false;
+    // One line per column each time it drops out of view, so a report says
+    // whether this case happened.
+    static std::string s_hidden;
     if (!ImGui_IsRectVisible(ctx, w, h)) {
         ImGui_Dummy(ctx, w, h);
+        if (s_hidden.find(std::string("|") + id + "|") == std::string::npos) {
+            s_hidden += std::string("|") + id + "|";
+            if (FILE* f = std::fopen(uf8::logPath("rea_sixty.log").c_str(), "a")) {
+                std::fprintf(f, "[settings] binding editor column %s below the fold, placeholder drawn\n", id);
+                std::fclose(f);
+            }
+        }
         return false;
     }
+    if (const auto at = s_hidden.find(std::string("|") + id + "|"); at != std::string::npos)
+        s_hidden.erase(at, std::strlen(id) + 2);
     int childFlags = ImGui_ChildFlags_Borders;
     *drawBody = ImGui_BeginChild(ctx, id, &w, &h, &childFlags, nullptr);
     return true;
