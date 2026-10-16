@@ -1187,8 +1187,8 @@ if(APPLE)
     set(MACOSX_BUNDLE_GUI_IDENTIFIER ch.stoersender.orc)
     # ORC starts at 1.0 (Frank 29.09.2026). The build number goes up with every
     # release, whatever the version string does.
-    set(MACOSX_BUNDLE_SHORT_VERSION_STRING 1.2.2)
-    set(MACOSX_BUNDLE_BUNDLE_VERSION 5)
+    set(MACOSX_BUNDLE_SHORT_VERSION_STRING 1.2.3)
+    set(MACOSX_BUNDLE_BUNDLE_VERSION 6)
     configure_file(orc/Info.plist.in "${CMAKE_BINARY_DIR}/OrcInfo.plist" @ONLY)
     set_target_properties(orc PROPERTIES
         OUTPUT_NAME ORC
