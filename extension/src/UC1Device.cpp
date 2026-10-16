@@ -205,8 +205,7 @@ bool UC1Device::open()
         { {0xFF, 0x4E, 0x00, 0x4E}, 17  },
     };
     // Handshake runner — returns rc of the first failed transfer (or 0
-    // on full success). Pulled into a lambda so we can retry it after
-    // libusb_reset_device on PIPE.
+    // on full success). Pulled into a lambda so it can be retried on PIPE.
     auto runHandshake = [&]() -> int {
         for (const auto& step : kHandshake) {
             if (step.delayMsBefore > 0) {
@@ -223,38 +222,27 @@ bool UC1Device::open()
         return 0;
     };
     int hsRc = runHandshake();
-    // On PIPE the device is in a state CLEAR_FEATURE(ENDPOINT_HALT)
-    // can't fix (we already ran clear_halt above with rc=0). Retry
-    // once after a full libusb_reset_device — USB-level reset clears
-    // every endpoint state. Frank 2026-05-20: confirmed via stale.log
-    // that chOut/chIn returned 0 even when the handshake STALLed.
+    // On PIPE: free both endpoints and try the handshake once more. ⛔ NO
+    // libusb_reset_device here any more (16.10.2026). A reset re-enumerates the
+    // device, and a UC1 that drops off the bus while that runs takes libusb down
+    // with it: darwin_reenumerate_device dereferenced null and REAPER crashed
+    // (17:29:31, a UC1 that had fallen off the bus 15 times in two minutes,
+    // "Accessory needs power"). A device that will not talk now gets a fresh
+    // open() from the stale-handle loop five seconds later, which is what the
+    // reset was for.
     if (hsRc == LIBUSB_ERROR_PIPE) {
         if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uc1_stale.log").c_str(), "a")) {
             const auto t = std::chrono::system_clock::now().time_since_epoch();
             const auto ms = std::chrono::duration_cast<
                 std::chrono::milliseconds>(t).count();
-            std::fprintf(f, "[%lld] UC1 handshake PIPE -> resetting "
-                            "device + retrying\n",
+            std::fprintf(f, "[%lld] UC1 handshake PIPE -> clearing halt + retrying once\n",
                          static_cast<long long>(ms));
             std::fclose(f);
         }
-        const int rrc = libusb_reset_device(handle_);
-        if (rrc == 0) {
-            // Reset may have invalidated the kernel-driver state;
-            // re-detach + re-claim before the retry.
-            if (libusb_kernel_driver_active(handle_, kInterface) == 1) {
-                libusb_detach_kernel_driver(handle_, kInterface);
-            }
-            libusb_claim_interface(handle_, kInterface);
-            libusb_clear_halt(handle_, kEpOut);
-            libusb_clear_halt(handle_, kEpIn);
-            hsRc = runHandshake();
-        } else {
-            // reset_device failed (typically NO_DEVICE - the reset
-            // actually re-enumerated the device under us). The next
-            // open() attempt will see a fresh device. Surface the
-            // original PIPE as the failure reason.
-        }
+        libusb_clear_halt(handle_, kEpOut);
+        libusb_clear_halt(handle_, kEpIn);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        hsRc = runHandshake();
     }
     if (hsRc < 0) {
         lastError_ = std::string("handshake OUT failed: ") + libusb_error_name(hsRc);
