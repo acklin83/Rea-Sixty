@@ -4768,6 +4768,30 @@ static void drawEncoderRingEditor_(ImGui_Context* ctx, bool uf8)
     }
 }
 
+// ⇨ NEVER A CHILD WINDOW BELOW THE FOLD (16.10.2026). The editor's columns are
+// fixed-size BeginChild windows. Pushed below the visible part of the pane, a
+// child is culled, and a culled child makes ReaImGui tear the whole Settings
+// window down until REAPER restarts, even with BeginChild/EndChild paired
+// correctly (03.08. SEL's double column, 18.08. SCRUB, 16.10. JOG and the
+// small-screen key: the "View:" / "Jog Mode:" row above the columns pushes them
+// down by one line, and with the pane scrolled to the top on a short window they
+// end up under the edge; a forum user on a 4K screen, then Frank). Where the
+// column would not be visible, a Dummy of the same size keeps the layout and no
+// child is begun. Returns whether a child was begun (the caller ends it);
+// *drawBody says whether to draw its contents.
+static bool beginEditorColumn_(ImGui_Context* ctx, const char* id,
+                               double w, double h, bool* drawBody)
+{
+    *drawBody = false;
+    if (!ImGui_IsRectVisible(ctx, w, h)) {
+        ImGui_Dummy(ctx, w, h);
+        return false;
+    }
+    int childFlags = ImGui_ChildFlags_Borders;
+    *drawBody = ImGui_BeginChild(ctx, id, &w, &h, &childFlags, nullptr);
+    return true;
+}
+
 void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
 {
     using namespace uf8::bindings;
@@ -5026,8 +5050,6 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
     auto drawColumn = [&](const char* title, const char* tag,
                           ActionSlot* slots, bool isLongCol)
     {
-        double w = colW, h = colH;
-        int childFlags = ImGui_ChildFlags_Borders;
         char childId[32];
         snprintf(childId, sizeof(childId), "%s_col", tag);
         // ⇨ These two columns are the ONE pair that has always been paired
@@ -5039,7 +5061,8 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         // read the cursor position and the remaining height and did nothing
         // with either, because the logging call had been stripped and the
         // scaffold left behind. Removed 2026-08-25 with the actual cause.)
-        const bool colOpen = ImGui_BeginChild(ctx, childId, &w, &h, &childFlags, nullptr);
+        bool colOpen = false;
+        const bool colBegun = beginEditorColumn_(ctx, childId, colW, colH, &colOpen);
         if (colOpen) {
             ImGui_Text(ctx, title);
             ImGui_Separator(ctx);
@@ -5153,7 +5176,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             }
             }   // if (renderSlots)
         }
-        ImGui_EndChild(ctx);
+        if (colBegun) ImGui_EndChild(ctx);
     };
 
     // SEL (Uf8Select / Uf1Sel): single press = built-in track SELECT (native,
@@ -5200,9 +5223,9 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
         // Placeholder column so the editor's two panels stay balanced
         // for the two cases where long-press doesn't apply: this button
         // is itself a modifier, or it's the encoder rotate gesture.
-        double w = colW, h = colH;
-        int childFlags = ImGui_ChildFlags_Borders;
-        if (ImGui_BeginChild(ctx, "lp_col_disabled", &w, &h, &childFlags, nullptr)) {
+        bool lpOpen = false;
+        const bool lpBegun = beginEditorColumn_(ctx, "lp_col_disabled", colW, colH, &lpOpen);
+        if (lpOpen) {
             ImGui_Text(ctx, "LONG PRESS");
             ImGui_Separator(ctx);
             if (isEncoder) {
@@ -5217,16 +5240,16 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
             }
             if (bd.hasLongPress) { bd.hasLongPress = false; dirty = true; }
         }
-        ImGui_EndChild(ctx);
+        if (lpBegun) ImGui_EndChild(ctx);
     }
     } else {
         // SEL: the same two columns as any key, SHORT left and LONG right
         // (Frank 2026-09-30). SHORT is the built-in select, so its column only
         // says so; LONG (and the double press below) are assignable. Two
         // children, like the placeholder column above, never a third.
-        double w = colW, h = colH;
-        int childFlags = ImGui_ChildFlags_Borders;
-        if (ImGui_BeginChild(ctx, "sp_col_sel", &w, &h, &childFlags, nullptr)) {
+        bool spOpen = false;
+        const bool spBegun = beginEditorColumn_(ctx, "sp_col_sel", colW, colH, &spOpen);
+        if (spOpen) {
             ImGui_Text(ctx, "SHORT PRESS");
             ImGui_Separator(ctx);
             ImGui_TextDisabled(ctx, "Selects the track (built-in).");
@@ -5254,7 +5277,7 @@ void drawBindingEditor(ImGui_Context* ctx, int layer, ButtonId id)
                     dirty = true;
             }
         }
-        ImGui_EndChild(ctx);
+        if (spBegun) ImGui_EndChild(ctx);
         ImGui_SameLine(ctx, nullptr, nullptr);
         drawColumn("LONG PRESS", "lp", bd.longPress, /*isLongCol*/ true);
     }
