@@ -1656,6 +1656,15 @@ constexpr int kSeenUf1 = 0b100;
 // asks. Off: Rea-Sixty still takes a free UF1, it just does not ask ORC for it.
 std::atomic<bool> g_uf1TakeFromOrc{true};
 std::atomic<bool> g_uf1WantRetry{false};
+// ⇨ AND THE SAME PATIENCE FOR THE UF8 AND THE UC1 (16.10.2026). The stale-handle
+// loop below only retried a device that had been open once and was then lost;
+// one that failed at REAPER start was dropped for the whole session. Frank's UC1
+// that morning: one refused frame in the init flood at start, then nothing until
+// REAPER restarted, although macOS saw it the whole time. Set when the start
+// attempt fails on a machine that has had the device before, cleared once it is
+// open, exactly as g_uf1WantRetry.
+std::atomic<bool> g_uf8WantRetry{false};
+std::atomic<bool> g_uc1WantRetry{false};
 
 static std::string orcHandoverPath_()
 {
@@ -25899,6 +25908,7 @@ void initDevices_()
             std::fclose(f);
         }
         g_dev.reset();
+        if (g_devicesSeen.load() & kSeenUf8) g_uf8WantRetry.store(true);
     } else {
         markDeviceSeen_(kSeenUf8);
         g_sync = std::make_unique<uf8::ColorSync>(*g_dev);
@@ -25955,6 +25965,7 @@ void initDevices_()
             std::fclose(f);
         }
         g_uc1_dev.reset();
+        if (g_devicesSeen.load() & kSeenUc1) g_uc1WantRetry.store(true);
     }
 
     // Best-effort UF1 attach (Phase 0 bring-up). Absence is fine.
@@ -26306,6 +26317,8 @@ void shutdownDevices_()
     // Stop asking: ORC takes the UF1 back within its next poll.
     orcHandoverMark_(false);
     g_uf1WantRetry.store(false);
+    g_uf8WantRetry.store(false);
+    g_uc1WantRetry.store(false);
     g_slotTrack.fill(nullptr);
 }
 
@@ -47804,8 +47817,10 @@ void onTimerBody_()
         // device stays "lost" and is tried again every 5 s, and the reason is
         // logged (once, and again whenever it changes).
         static bool sUc1Lost = false, sUf8Lost = false, sUf1Lost = false;
-        const bool ucStale = (g_uc1_dev && g_uc1_dev->needsReopen()) || (sUc1Lost && !g_uc1_dev);
-        const bool ufStale = (g_dev     && g_dev->needsReopen())     || (sUf8Lost && !g_dev);
+        const bool ucStale = (g_uc1_dev && g_uc1_dev->needsReopen())
+                          || ((sUc1Lost || g_uc1WantRetry.load()) && !g_uc1_dev);
+        const bool ufStale = (g_dev     && g_dev->needsReopen())
+                          || ((sUf8Lost || g_uf8WantRetry.load()) && !g_dev);
         const bool u1Stale = (g_uf1_dev && g_uf1_dev->needsReopen())
                           || ((sUf1Lost || g_uf1WantRetry.load()) && !g_uf1_dev);
         auto staleLog = [](const char* file, const std::string& line) {
@@ -47822,14 +47837,19 @@ void onTimerBody_()
             sLastReopen = nowR;
             if (ucStale) {
                 static std::string sUc1Err;
-                if (!sUc1Lost) staleLog("rea_sixty_uc1_stale.log", "UC1 stale handle - reopening...");
+                if (!sUc1Lost)
+                    staleLog("rea_sixty_uc1_stale.log", g_uc1WantRetry.load()
+                             ? "UC1 did not open at start - retrying..."
+                             : "UC1 stale handle - reopening...");
                 g_uc1_surface.reset();
                 if (g_uc1_dev) g_uc1_dev->close();
                 g_uc1_dev.reset();
                 g_uc1_dev = std::make_unique<uc1::UC1Device>();
                 if (g_uc1_dev->open()) {
-                    if (sUc1Lost) staleLog("rea_sixty_uc1_stale.log", "UC1 reopened after retry");
+                    if (sUc1Lost || g_uc1WantRetry.load())
+                        staleLog("rea_sixty_uc1_stale.log", "UC1 reopened after retry");
                     sUc1Lost = false; sUc1Err.clear();
+                    g_uc1WantRetry.store(false);
                     g_uc1_surface = std::make_unique<uc1::UC1Surface>();
                     g_uc1_surface->attach(*g_uc1_dev);
                     if (auto* tr = GetLastTouchedTrack()) {
@@ -47847,14 +47867,19 @@ void onTimerBody_()
             }
             if (ufStale) {
                 static std::string sUf8Err;
-                if (!sUf8Lost) staleLog("rea_sixty_uf8_stale.log", "UF8 stale handle - reopening...");
+                if (!sUf8Lost)
+                    staleLog("rea_sixty_uf8_stale.log", g_uf8WantRetry.load()
+                             ? "UF8 did not open at start - retrying..."
+                             : "UF8 stale handle - reopening...");
                 g_sync.reset();
                 if (g_dev) g_dev->close();
                 g_dev.reset();
                 g_dev = std::make_unique<uf8::UF8Device>();
                 if (g_dev->open()) {
-                    if (sUf8Lost) staleLog("rea_sixty_uf8_stale.log", "UF8 reopened after retry");
+                    if (sUf8Lost || g_uf8WantRetry.load())
+                        staleLog("rea_sixty_uf8_stale.log", "UF8 reopened after retry");
                     sUf8Lost = false; sUf8Err.clear();
+                    g_uf8WantRetry.store(false);
                     g_sync = std::make_unique<uf8::ColorSync>(*g_dev);
                     g_sync->invalidate();
                     g_dev->setRawInputHandler(onUf8Input);
