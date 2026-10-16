@@ -25908,7 +25908,6 @@ void initDevices_()
             std::fclose(f);
         }
         g_dev.reset();
-        if (g_devicesSeen.load() & kSeenUf8) g_uf8WantRetry.store(true);
     } else {
         markDeviceSeen_(kSeenUf8);
         g_sync = std::make_unique<uf8::ColorSync>(*g_dev);
@@ -25965,7 +25964,6 @@ void initDevices_()
             std::fclose(f);
         }
         g_uc1_dev.reset();
-        if (g_devicesSeen.load() & kSeenUc1) g_uc1WantRetry.store(true);
     }
 
     // Best-effort UF1 attach (Phase 0 bring-up). Absence is fine.
@@ -25977,15 +25975,25 @@ void initDevices_()
     // ⇨ PATIENCE. Not open now is not "not there": ORC may be letting go this
     // very second, or SSL 360 may still hold it. Retry when we asked ORC for it,
     // or when this machine has had a UF1 before. A machine that never had one
-    // does not poll for it.
-    if (!g_uf1_dev && (g_uf1TakeFromOrc.load() || (g_devicesSeen.load() & kSeenUf1)))
-        g_uf1WantRetry.store(true);
+    // does not poll for it. Decided at the end of this function, once
+    // devices_seen is loaded.
 
 
     // Push the persisted brightness level to both devices now that
     // they're open. If no ExtState yet (first-run), defaults to "full".
     loadBrightness();
     applyBrightness();
+
+    // ⇨ WHICH SURFACES TO KEEP TRYING. ⛔ AFTER loadBrightness, which is what
+    // reads devices_seen: asked before it, the inventory held only what had just
+    // opened, so a UF8 or UC1 that failed here was never retried (1b24c40a did
+    // exactly that and did nothing, Frank's UC1 16.10. 17:32). The UF1 also asks
+    // when ORC was asked to hand it over, ORC may be letting go this very second.
+    const int seen = g_devicesSeen.load();
+    if (!g_dev && (seen & kSeenUf8)) g_uf8WantRetry.store(true);
+    if (!g_uc1_dev && (seen & kSeenUc1)) g_uc1WantRetry.store(true);
+    if (!g_uf1_dev && (g_uf1TakeFromOrc.load() || (seen & kSeenUf1)))
+        g_uf1WantRetry.store(true);
 }
 
 // Close every device and drop the derived state. The counterpart to
