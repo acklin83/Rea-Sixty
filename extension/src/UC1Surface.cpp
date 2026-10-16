@@ -525,10 +525,11 @@ void UC1Surface::attach(UC1Device& device)
     });
 }
 
-void UC1Surface::setFocusedTrack(void* track)
+void UC1Surface::setFocusedTrack(void* track, const char* file, int line)
 {
     if (focusedTrack_ == track) return;
     focusedTrack_ = track;
+    noteFullRepaint_(file, line);
     // Channel switched → show the CS track-name carousel briefly (1 s), then
     // it self-hides so the steady-state LCD shows the plug-in label, not the
     // carousel. Frank 2026-06-28: "Karussell nur beim Umschalten per Encoder".
@@ -906,8 +907,48 @@ void UC1Surface::hideNavCarousel()
     refresh();
 }
 
-void UC1Surface::invalidateCache()
+void UC1Surface::noteFullRepaint_(const char* file, int line)
 {
+    flushRepaintStats_();
+    const char* base = file ? std::strrchr(file, '/') : nullptr;
+    if (!base && file) base = std::strrchr(file, '\\');
+    std::string key = base ? base + 1 : (file ? file : "?");
+    key += ':' + std::to_string(line);
+    ++repaintBy_[key];
+    ++repaintTotal_;
+}
+
+void UC1Surface::flushRepaintStats_()
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (now - repaintWindow_ < std::chrono::seconds(1)) return;
+    if (repaintTotal_ >= 3) {
+        std::vector<std::pair<int, std::string>> top;
+        for (const auto& [k, n] : repaintBy_) top.push_back({ n, k });
+        std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) {
+            return a.first > b.first;
+        });
+        if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uc1_stats.log").c_str(), "a")) {
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+            std::fprintf(f, "[%lld] UC1 full repaints in %.1f s: %d, by:",
+                         static_cast<long long>(ms),
+                         std::chrono::duration<double>(now - repaintWindow_).count(),
+                         repaintTotal_);
+            for (std::size_t i = 0; i < top.size() && i < 6; ++i)
+                std::fprintf(f, " %s x%d", top[i].second.c_str(), top[i].first);
+            std::fprintf(f, "\n");
+            std::fclose(f);
+        }
+    }
+    repaintBy_.clear();
+    repaintTotal_ = 0;
+    repaintWindow_ = now;
+}
+
+void UC1Surface::invalidateCache(const char* file, int line)
+{
+    noteFullRepaint_(file, line);
     ringCellCache_.clear();
     lastZone05Text_.clear();  // force the next pushFocusedParamReadout_ to send
     lastZone03Text_.clear();
@@ -925,6 +966,7 @@ void UC1Surface::invalidateCache()
 
 int UC1Surface::poll()
 {
+    flushRepaintStats_();
     // ⇨ DAS MODEL-FELD FOLGT DEM EINGANG, auch wenn niemand die Spur wechselt.
     // In REC + RME traegt es den Eingangsnamen (refresh()), und refresh() laeuft
     // bei Spur- und Plug-in-Wechseln. Wer REC einschaltet, den Eingang in REAPER

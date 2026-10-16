@@ -63,7 +63,10 @@ public:
     // Set the track whose SSL plugins the UC1 should drive. Pass nullptr
     // to detach (no track focused — UC1 goes idle). Call this from
     // REAPER's SetTrackSelected callback or similar.
-    void setFocusedTrack(void* track /*MediaTrack**/);
+    // `file`/`line` name the caller for the full-repaint statistics
+    // (noteFullRepaint_); callers never pass them.
+    void setFocusedTrack(void* track /*MediaTrack**/,
+                         const char* file = __builtin_FILE(), int line = __builtin_LINE());
 
     // Force a full re-push of every cached LED state on the next refresh.
     // Used to recover from device init-flood overlap at startup: our
@@ -71,7 +74,7 @@ public:
     // fires shortly after open(), leaving rings in stale positions until
     // the next focus change. Calling this drops the cache so the next
     // refresh writes every cell from scratch.
-    void invalidateCache();
+    void invalidateCache(const char* file = __builtin_FILE(), int line = __builtin_LINE());
 
     // Accessor so REAPER callbacks (e.g. SetSurfaceMute) can gate their
     // UC1 refreshes on whether the event concerns the focused track.
@@ -197,6 +200,16 @@ public:
     const std::string& lastError() const { return lastError_; }
 
 private:
+    // ⇨ WHO REPAINTS THE WHOLE UC1 (16.10.2026). Every cache drop (invalidateCache,
+    // setFocusedTrack) makes the next poll rewrite every LED, ~640 frames. At
+    // 14:41 that day it ran 6 to 15 times a second for four seconds. Counted per
+    // caller, and a second with 3 or more goes to rea_sixty_uc1_stats.log.
+    void noteFullRepaint_(const char* file, int line);
+    void flushRepaintStats_();
+    std::unordered_map<std::string, int> repaintBy_;
+    int repaintTotal_ = 0;
+    std::chrono::steady_clock::time_point repaintWindow_ = std::chrono::steady_clock::now();
+
     // --- event dispatch (main thread) ---
     void handleKnob_(const KnobEvent& ev);
     void handleButton_(const ButtonEvent& ev);

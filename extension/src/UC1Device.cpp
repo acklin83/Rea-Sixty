@@ -3,6 +3,7 @@
 // Detent census (main.cpp) — see g_uc1KnobCount.
 void reasixty_uc1KnobCensus(int id, int mag, bool wire);
 #include "LogPath.h"
+#include "Uc1SendQueue.h"
 
 #include <libusb.h>
 
@@ -16,6 +17,7 @@ void reasixty_uc1KnobCensus(int id, int mag, bool wire);
 #include <map>
 #include <mutex>
 #include <queue>
+#include <unordered_map>
 #include <span>
 
 #include "uc1_init_sequence.inc"
@@ -88,7 +90,7 @@ constexpr auto kGrStreamInterval  = std::chrono::milliseconds(20);
 struct UC1Device::PendingSend {
     std::mutex              mu;
     std::condition_variable cv;
-    std::queue<std::vector<uint8_t>> q;
+    Uc1SendQueue            q;   // LED writes for one cell collapse to the newest
 };
 
 UC1Device::UC1Device()
@@ -419,11 +421,7 @@ void UC1Device::workerLoop_()
             pending_->cv.wait_for(lk, std::chrono::milliseconds(10),
                 [&] { return !pending_->q.empty() || shuttingDown_; });
             if (shuttingDown_) break;
-            burst.reserve(pending_->q.size());
-            while (!pending_->q.empty()) {
-                burst.push_back(std::move(pending_->q.front()));
-                pending_->q.pop();
-            }
+            burst = pending_->q.takeAll();
         }
 
         const auto now = std::chrono::steady_clock::now();
@@ -523,7 +521,12 @@ void UC1Device::workerLoop_()
         }
 
         if (now - rateStart >= std::chrono::seconds(1)) {
-            if (rateTotal > 150) {
+            int dropped = 0;
+            {
+                std::lock_guard<std::mutex> lk(pending_->mu);
+                dropped = pending_->q.takeSuperseded();
+            }
+            if (rateTotal + dropped > 150) {
                 std::vector<std::pair<int, uint32_t>> top;
                 for (const auto& [k, n] : rateByKind) top.push_back({ n, k });
                 std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) {
@@ -532,8 +535,8 @@ void UC1Device::workerLoop_()
                 if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uc1_stats.log").c_str(), "a")) {
                     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::system_clock::now().time_since_epoch()).count();
-                    std::fprintf(f, "[%lld] UC1 queued %d frames in 1 s, top:",
-                                 static_cast<long long>(ms), rateTotal);
+                    std::fprintf(f, "[%lld] UC1 queued %d frames in 1 s (+%d superseded LED writes dropped), top:",
+                                 static_cast<long long>(ms), rateTotal, dropped);
                     for (std::size_t i = 0; i < top.size() && i < 6; ++i)
                         std::fprintf(f, " %06x x%d", top[i].second, top[i].first);
                     std::fprintf(f, "\n");

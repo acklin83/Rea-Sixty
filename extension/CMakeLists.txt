@@ -854,6 +854,11 @@ if(NOT WIN32)
     target_link_libraries(test_uf8_enc_keys PRIVATE Threads::Threads)
     add_test(NAME uf8_enc_keys COMMAND test_uf8_enc_keys)
 
+    # The UC1's send queue: LED writes for one cell collapse to the newest.
+    add_executable(test_uc1_send_queue tests/test_uc1_send_queue.cpp)
+    target_include_directories(test_uc1_send_queue PRIVATE src)
+    add_test(NAME uc1_send_queue COMMAND test_uc1_send_queue)
+
     add_executable(test_uc1_protocol tests/test_uc1_protocol.cpp src/UC1Protocol.cpp)
     target_include_directories(test_uc1_protocol PRIVATE src)
     add_test(NAME uc1_protocol COMMAND test_uc1_protocol)
