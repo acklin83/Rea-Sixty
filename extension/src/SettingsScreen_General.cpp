@@ -35,6 +35,8 @@ void reasixty_setUf1TakeFromOrc(bool on);
 int  reasixty_devicesSeenMask();
 void reasixty_forgetAbsentDevices();
 const char* reasixty_uf8Serial();
+bool reasixty_uf8RightConnected();
+const char* reasixty_uf8RightSerial();
 const char* reasixty_uc1Serial();
 const char* reasixty_uf1Serial();
 bool reasixty_sleepEnabled();
@@ -614,7 +616,9 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
         ImGui_Text(ctx, line);
     };
 
-    deviceLine("UF8", uf8On, reasixty_uf8Serial());
+    // Two UF8s: one 16-strip surface, named by side (dual UF8).
+    const bool uf8ROn = reasixty_uf8RightConnected();
+    deviceLine(uf8ROn ? "UF8 L" : "UF8", uf8On, reasixty_uf8Serial());
     if (uf8On) {
         ImGui_SameLine(ctx, /*offset_from_start_x*/ nullptr, /*spacing*/ nullptr);
         if (ImGui_Button(ctx, "Identify##uf8",
@@ -622,6 +626,7 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
             reasixty_identifyUf8();
         }
     }
+    if (uf8ROn) deviceLine("UF8 R", true, reasixty_uf8RightSerial());
 
     deviceLine("UC1", uc1On, reasixty_uc1Serial());
     if (uc1On) {

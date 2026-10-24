@@ -564,6 +564,67 @@ int uf8UnitIndexForSide_(int side)
 bool uf8DualActive_() { return g_dev && g_dev2 && g_dev->isOpen() && g_dev2->isOpen(); }
 void onUf8Input2(const uint8_t* data, size_t len);
 bool openUf8SecondUnit_();
+void closeUf8SecondUnit_();
+
+// ⇨ ONE BANK ACROSS BOTH UNITS (dual-UF8 stage 1b). Every UF8 strip index in
+// this file is a SURFACE strip, 0..uf8Strips_()-1: 0..7 on the left unit and,
+// with a second UF8 claimed, 8..15 on the right one. Per-strip state is sized
+// kUf8MaxStrips; the strip count itself is 8 until the right unit opens, so a
+// one-UF8 rig walks exactly the eight strips it always did. The frame builders
+// in Protocol.h still speak one unit's 0..7: uf8Local_() is the strip on its own
+// unit and the uf8Send* helpers below pick the unit.
+constexpr int kUf8MaxStrips = 16;
+std::atomic<int> g_uf8StripCount{8};   // 16 while the right unit is open
+inline int uf8Strips_() { return g_uf8StripCount.load(std::memory_order_relaxed); }
+inline int uf8Units_()  { return uf8Strips_() / 8; }
+inline uint8_t uf8Local_(int strip) { return static_cast<uint8_t>(strip & 7); }
+// The unit a surface strip lives on; nullptr when that unit is not there.
+inline uf8::UF8Device* uf8UnitDev_(int unit)
+{
+    return unit == 0 ? g_dev.get() : (unit == 1 ? g_dev2.get() : nullptr);
+}
+inline uf8::UF8Device* uf8DevFor_(int strip) { return uf8UnitDev_(strip >> 3); }
+// Frame for strip `strip`, built with uf8Local_(strip), to that strip's unit.
+inline void uf8SendS_(int strip, std::vector<uint8_t> frame)
+{
+    if (strip < 0 || strip >= kUf8MaxStrips) return;
+    if (auto* d = uf8DevFor_(strip)) d->send(std::move(frame));
+}
+inline void uf8SendPriS_(int strip, std::vector<uint8_t> frame)
+{
+    if (strip < 0 || strip >= kUf8MaxStrips) return;
+    if (auto* d = uf8DevFor_(strip)) d->sendPriority(std::move(frame));
+}
+// A unit-wide frame (one per unit), e.g. the eight-strip V-Pot bar.
+inline void uf8SendUnit_(int unit, std::vector<uint8_t> frame)
+{
+    if (auto* d = uf8UnitDev_(unit)) d->send(std::move(frame));
+}
+// The eight strips of `unit` out of a surface-wide per-strip array.
+template <class T, size_t N>
+inline std::array<T, 8> uf8UnitSlice_(const std::array<T, N>& a, int unit)
+{
+    static_assert(N >= static_cast<size_t>(kUf8MaxStrips), "per-strip array");
+    std::array<T, 8> out{};
+    for (int i = 0; i < 8; ++i) out[i] = a[unit * 8 + i];
+    return out;
+}
+// A selection-style bitmask (bit s = surface strip s) as `unit`'s 8-bit mask.
+inline uint16_t uf8UnitMask_(uint32_t mask, int unit)
+{
+    return static_cast<uint16_t>((mask >> (unit * 8)) & 0xFFu);
+}
+// A per-strip array with every element set to `v` (dedup sentinels).
+template <class T>
+inline std::array<T, kUf8MaxStrips> uf8FilledArray_(const T& v)
+{
+    std::array<T, kUf8MaxStrips> a;
+    a.fill(v);
+    return a;
+}
+// Reset every per-strip cache and in-flight gesture of surface strips
+// [from, to) — a unit appearing or going away. Defined after the caches.
+void uf8ResetStripState_(int from, int to);
 std::unique_ptr<uf8::ColorSync>   g_sync;
 std::unique_ptr<uf8::MidiBridge>  g_midi;
 
@@ -1160,7 +1221,7 @@ private:
 // Per-slot MediaTrack cache so GetTouchState can map REAPER's track
 // pointer back to a strip index without a linear scan each call. Filled
 // by the timer; main-thread-only.
-std::array<MediaTrack*, 8> g_slotTrack{};
+std::array<MediaTrack*, kUf8MaxStrips> g_slotTrack{};
 
 // Bank offset in 8-strip windows. Bank Left/Right shift by 8; scroll
 // wheel (once implemented) will shift by 1. Clamped in [0, max track
@@ -2270,8 +2331,8 @@ int64_t nowMs_();
 
 // The value-line formatters and the UF1 text-zone widths live in Uf1Text.h.
 constexpr int64_t kPanOverlayMs = 600;
-extern std::array<int64_t, 8>     g_panOverlayUntilMs;
-extern std::array<std::string, 8> g_panOverlayText;
+extern std::array<int64_t, kUf8MaxStrips>     g_panOverlayUntilMs;
+extern std::array<std::string, kUf8MaxStrips> g_panOverlayText;
 
 // V-Pot pan "fake touch": the V-Pot has no touch sensor, so to make REAPER's
 // Touch automation record we hold the touch armed for a short window after each
@@ -2280,8 +2341,11 @@ extern std::array<std::string, 8> g_panOverlayText;
 // the window lapses (user stopped turning) the writes stop and Touch releases.
 // Nine places: the UF8's eight strips, and the UF1's pot above the fader
 // (kUf1PanTouchSlot, 27.09.2026). One mechanism for both surfaces.
-constexpr int kPanTouchSlots   = 9;
+constexpr int kPanTouchSlots   = 9 + 8;   // + the right-hand UF8's strips (9..16)
 constexpr int kUf1PanTouchSlot = 8;
+// Pan touch slot of UF8 surface strip `s`: the left unit keeps 0..7, the right
+// unit's strips sit after the UF1's slot so no existing slot moved.
+inline int uf8PanSlot_(int s) { return s < 8 ? s : 9 + (s - 8); }
 extern std::array<int64_t, kPanTouchSlots>      g_panTouchUntilMs;
 extern std::array<double, kPanTouchSlots>       g_panTouchVal;
 extern std::array<MediaTrack*, kPanTouchSlots>  g_panTouchTr;
@@ -2297,7 +2361,7 @@ extern std::array<MediaTrack*, kPanTouchSlots> g_faderPanTr;
 // wrote something else (a plug-in parameter, pan). GetTouchState reports only
 // that: a fader on a parameter reported "volume touched" and REAPER wrote
 // volume and pan points it never moved (Frank 27.09.2026). Cleared on release.
-inline std::array<MediaTrack*, 8> g_faderVolTr{};
+inline std::array<MediaTrack*, kUf8MaxStrips> g_faderVolTr{};
 // Defined with the V-Pot pan code below; the UF1's pan pot calls it earlier.
 static void writeVpotTrackPan_(MediaTrack* tr, int strip, double panDelta);
 
@@ -2311,9 +2375,10 @@ inline bool potHoldLive_(int64_t now, int64_t until) { return until != 0 && now 
 
 // Volume on a pot, the pan pot's twin (writeVpotTrackVol_): 0..7 UF8 strips,
 // 8 the UF1's pot above the fader, 9..12 the UF1 DAW view's four pots.
-constexpr int kVolTouchSlots      = 13;
+constexpr int kVolTouchSlots      = 13 + 8;   // + the right-hand UF8 (13..20)
 constexpr int kUf1VolTouchAbove   = 8;
 constexpr int kUf1VolTouchDawBase = 9;
+inline int uf8VolSlot_(int s) { return s < 8 ? s : 13 + (s - 8); }
 extern std::array<int64_t, kVolTouchSlots>      g_volTouchUntilMs;
 extern std::array<double, kVolTouchSlots>       g_volTouchVal;
 extern std::array<MediaTrack*, kVolTouchSlots>  g_volTouchTr;
@@ -2339,8 +2404,8 @@ static bool potEnvelopeWriteRoute_(const StripRoute& r, PotEnv kind, double valu
 // One undo step per pot movement, taken in the timer once the pot rests.
 inline int64_t g_potEnvUndoDueMs = 0;
 // Which pot slots last wrote through the envelope (then they are no touch).
-inline std::array<bool, 9>  g_panTouchViaEnv{};
-inline std::array<bool, 13> g_volTouchViaEnv{};
+inline std::array<bool, kPanTouchSlots> g_panTouchViaEnv{};
+inline std::array<bool, kVolTouchSlots> g_volTouchViaEnv{};
 
 // ⇨ A FADER ON A PLUG-IN PARAMETER ENDS ITS EDIT WHEN THE HAND LETS GO (Frank
 // 27.09.2026: "parameter auf fader macht es falsch (geht nicht zurück)"). REAPER
@@ -2352,10 +2417,10 @@ inline std::array<bool, 13> g_volTouchViaEnv{};
 // envelope's next point is what Frank wants, and REAPER does that by itself.
 constexpr int kUf1FaderEditSlot = 8;
 struct FaderFxEdit { MediaTrack* tr; int fx; int param; };
-inline std::array<std::vector<FaderFxEdit>, 9> g_faderFxEdit;
+inline std::array<std::vector<FaderFxEdit>, kPanTouchSlots> g_faderFxEdit;   // UF8 strip s → uf8PanSlot_(s)
 inline void noteFaderFxEdit_(int slot, MediaTrack* tr, int fx, int param)
 {
-    if (slot < 0 || slot >= 9 || !tr || fx < 0 || param < 0) return;
+    if (slot < 0 || slot >= kPanTouchSlots || !tr || fx < 0 || param < 0) return;
     auto& v = g_faderFxEdit[static_cast<size_t>(slot)];
     for (const auto& e : v)
         if (e.tr == tr && e.fx == fx && e.param == param) return;
@@ -2363,7 +2428,7 @@ inline void noteFaderFxEdit_(int slot, MediaTrack* tr, int fx, int param)
 }
 inline void endFaderFxEdit_(int slot)
 {
-    if (slot < 0 || slot >= 9) return;
+    if (slot < 0 || slot >= kPanTouchSlots) return;
     auto& v = g_faderFxEdit[static_cast<size_t>(slot)];
     for (const auto& e : v)
         if (ValidatePtr2(nullptr, e.tr, "MediaTrack*"))
@@ -2375,7 +2440,7 @@ inline void endFaderFxEdit_(int slot)
 // in the V-Pot value line; turning the V-Pot reveals the actual value
 // for kFolderRevealMs, then it reverts to "Folder".
 constexpr int64_t kFolderRevealMs = 3000;
-extern std::array<int64_t, 8>     g_folderRevealUntilMs;
+extern std::array<int64_t, kUf8MaxStrips>     g_folderRevealUntilMs;
 
 // V-Pot push reset safety net: after a V-Pot push, ignore rotation on the
 // same strip for this window. Stops the tiny twist that often rides along
@@ -2384,7 +2449,7 @@ extern std::array<int64_t, 8>     g_folderRevealUntilMs;
 // One window for every pot: PushQuiet.h holds the number since the UF1 and
 // the RME side-car got the same rule (Frank 2026-09-29).
 constexpr int64_t kVpotPushRotSuppressMs = reasixty::kPushQuietMs;
-extern std::array<int64_t, 8>     g_vpotPushSuppressUntilMs;
+extern std::array<int64_t, kUf8MaxStrips>     g_vpotPushSuppressUntilMs;
 // The UF1's REAPER path, the same rule: 0..3 the four display pots, 4 the pot
 // above the fader. Armed by their push drains, checked in the Uf1Encoder
 // drain; both on the main thread.
@@ -2531,8 +2596,8 @@ void refreshMcpCollapsedParents_() {
 // millis at the press edge (0 = not currently held). spill_fired = true
 // once the long-press threshold elapsed and the spill toggle ran (so
 // the held button doesn't keep firing every tick). Cleared on release.
-std::array<std::atomic<int64_t>, 8> g_selPressMs{};
-std::array<std::atomic<bool>, 8>    g_selSpillFired{};
+std::array<std::atomic<int64_t>, kUf8MaxStrips> g_selPressMs{};
+std::array<std::atomic<bool>, kUf8MaxStrips>    g_selSpillFired{};
 
 constexpr int64_t kSelLongPressMs = 500;
 
@@ -2543,7 +2608,7 @@ constexpr int64_t kSelLongPressMs = 500;
 // so tapping SEL on two different strips never counts as a double. Mirrors
 // Bindings.cpp kDoubleClickMs (0.4 s). Shift+SEL (additive select) is
 // excluded — it keeps its own semantics.
-std::array<std::atomic<int64_t>, 8> g_uf8SelDblMs{};
+std::array<std::atomic<int64_t>, kUf8MaxStrips> g_uf8SelDblMs{};
 constexpr int64_t kUf8SelDoubleMs = 400;
 
 inline int visibleTrackCount() {
@@ -2581,8 +2646,10 @@ inline int stripToVisibleSlot(int strip, int bankOffset) {
             const bool right = dm.fillDir() == uf8::dynamount::FillDir::Right;
             // Right-anchored mounts sit on strips 8-N..7, so the left strips
             // 0..7-N map 1:1 onto tracks. Left-anchored mounts sit on 0..N-1,
-            // so track strips start at N and shift down by N.
-            const int tpos = right ? strip : (strip - n);
+            // so track strips start at N and shift down by N. The mounts stay on
+            // the left UF8; a right-hand unit's strips come after them either
+            // way, so they shift down by N too.
+            const int tpos = (right && strip < 8) ? strip : (strip - n);
             return tpos + bankOffset;
         }
     }
@@ -2599,7 +2666,7 @@ inline int stripToVisibleSlot(int strip, int bankOffset) {
         if (n > 0) {
             if (hm.slotForStrip(strip) >= 0) return -1;   // lamp strip, no track
             const bool right = hm.fillDir() == uf8::hue::HueManager::FillDir::Right;
-            const int tpos = right ? strip : (strip - n);
+            const int tpos = (right && strip < 8) ? strip : (strip - n);   // see DynaMount
             return tpos + bankOffset;
         }
     }
@@ -2617,7 +2684,7 @@ inline int stripToVisibleSlot(int strip, int bankOffset) {
     const int mps = g_masterPinShift.load() ? masterPinnedStrip_() : -1;
     if (mps >= 0 && strip == mps) return -1;       // Master's own strip
     const int pos = (mps == 0) ? (strip - 1) : strip;  // left-Master shifts rest right
-    const int usable = (mps >= 0) ? 7 : 8;
+    const int usable = (mps >= 0) ? uf8Strips_() - 1 : uf8Strips_();
 
     // Pinned-sticky: the first g_pinnedCount entries of g_visibleTracks were
     // floated to the front by rebuildVisibleTrackList, so they map 1:1 onto
@@ -4232,7 +4299,7 @@ void drainSpillRequests_() {
 void checkSelLongPressSpill() {
     drainSpillRequests_();
     const int64_t now = nowMs_();
-    for (int s = 0; s < 8; ++s) {
+    for (int s = 0; s < uf8Strips_(); ++s) {
         const int64_t pressMs = g_selPressMs[s].load();
         if (pressMs == 0) continue;
         if (g_selSpillFired[s].load()) continue;
@@ -5435,9 +5502,11 @@ void pushUf8Brightness(int ledLevel, int scribbleLevel)
     scribbleLevel = clampLevel_(scribbleLevel);
     const auto& bl = kBrightnessTable[ledLevel];
     const auto& bs = kBrightnessTable[scribbleLevel];
-    if (g_dev && g_dev->isOpen()) {
-        g_dev->send(uf8::buildLedBrightness(bl.uf8_led));
-        g_dev->send(uf8::buildLcdBrightness(bs.uf8_lcd));
+    for (int u = 0; u < uf8Units_(); ++u) {   // both UF8s alike
+        auto* d = uf8UnitDev_(u);
+        if (!d || !d->isOpen()) continue;
+        d->send(uf8::buildLedBrightness(bl.uf8_led));
+        d->send(uf8::buildLcdBrightness(bs.uf8_lcd));
     }
 }
 
@@ -6215,10 +6284,12 @@ void tickIdentify()
 // set, because the UF1 is not on the Brightness sliders (see pushBrightness).
 void pushSleepBrightness_(bool asleep)
 {
-    if (g_dev && g_dev->isOpen()) {
-        g_dev->send(uf8::buildLedBrightness(
+    for (int u = 0; u < uf8Units_(); ++u) {   // both UF8s alike
+        auto* d = uf8UnitDev_(u);
+        if (!d || !d->isOpen()) continue;
+        d->send(uf8::buildLedBrightness(
             asleep ? 0x00 : kBrightnessTable[clampLevel_(g_brightness.load())].uf8_led));
-        g_dev->send(uf8::buildLcdBrightness(
+        d->send(uf8::buildLcdBrightness(
             asleep ? 0x00 : kBrightnessTable[clampLevel_(g_scribbleBrightness.load())].uf8_lcd));
     }
     if (g_uc1_dev && g_uc1_dev->isOpen()) {
@@ -7288,7 +7359,8 @@ int masterPinnedStrip_()
     if (g_selectionMode.load() == SelectionMode::Auto) return -1;
     if (g_uf8PluginMode.load())                        return -1;
     if (anyRoutingActive_())                           return -1;
-    return (pin == MasterPin::Strip1) ? 0 : 7;
+    // "Strip 8" is the surface's last strip: 16 with two UF8s.
+    return (pin == MasterPin::Strip1) ? 0 : uf8Strips_() - 1;
 }
 
 // Master-pin override: the REAPER Master bus when physical strip `strip`
@@ -7305,7 +7377,8 @@ inline MediaTrack* masterPinTrack_(int strip)
 // so existing banking maths is byte-identical when the feature is off.
 int effectiveStripCount_()
 {
-    return (masterPinnedStrip_() >= 0 && g_masterPinShift.load()) ? 7 : 8;
+    const int n = uf8Strips_();   // 8, or 16 with the right-hand UF8
+    return (masterPinnedStrip_() >= 0 && g_masterPinShift.load()) ? n - 1 : n;
 }
 
 // Bank WINDOW width for the banking maths (clamp / follow-selection / bank-step) —
@@ -7390,7 +7463,7 @@ bool uf1ExtenderRouteFader_()
 // the Bank ←/→ step so the 9-wide send window tiles without a gap.
 int sendWindowWidth_()
 {
-    return 8 + (uf1ExtenderRouteFader_() ? 1 : 0);
+    return uf8Strips_() + (uf1ExtenderRouteFader_() ? 1 : 0);
 }
 
 // +1 offset for the UF8's banked SEND strips when the Extender is LEFT (UF1 takes
@@ -7815,7 +7888,7 @@ StripRoute resolveFaderRoute_(int strip, int bankOffset, int trackCount)
 StripRoute uf1ExtenderSendRoute_()
 {
     if (!uf1ExtenderRouteFader_()) return {};
-    const int uf1Strip = g_uf1ExtenderSide.load() ? 8 : -1;
+    const int uf1Strip = g_uf1ExtenderSide.load() ? uf8Strips_() : -1;   // one past the UF8 edge
     return resolveFaderRoute_(uf1Strip, 0, 0);
 }
 
@@ -7922,7 +7995,10 @@ void writeRouteVolumeLinear_(const StripRoute& r, double v)
 // of the UF8 route bank). writeRouteVolAutomation_ / finishRouteVolEdit_ index
 // these arrays by that slot, so every UF1 send fader reuses the same proven
 // value-diff-probe + Touch-finalise machinery as the UF8 8-strip send fader.
-constexpr int kSendGestureSlots = 14;
+constexpr int kSendGestureSlots = 14 + 8;
+// 14..21 = the right-hand UF8's strips 9..16 (dual UF8), after every UF1 slot so
+// none of those moved. uf8SendSlot_ maps a surface strip onto its slot.
+inline int uf8SendSlot_(int s) { return s < 8 ? s : 14 + (s - 8); }
 // The UF1 Extender's reserved send-gesture slot (fader vol + above-fader V-Pot pan
 // + the CUT mute all key off it). Must be < kSendGestureSlots.
 constexpr int kExtSendGestureSlot = 13;
@@ -9523,7 +9599,7 @@ double g_encoderAccum  = 0.0;   // unified accumulator for the bindings-routed
 // V-Pot scrolls its own track's auto-mode. Slower scale than pan
 // (kAutoModeRotateScale) so one mode-step takes a few detents instead
 // of a flick.
-double g_autoModeAccum[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+double g_autoModeAccum[kUf8MaxStrips] = {};
 constexpr double kAutoModeRotateScale = 6.0;
 
 // Selection-Mode Instance per-strip V-Pot rotation accumulators.
@@ -9531,7 +9607,7 @@ constexpr double kAutoModeRotateScale = 6.0;
 // doesn't touch global focus or the track's selection (Frank
 // 2026-05-14 "soll ohne track selection gehen - einfach nur den track
 // des v-pots verändern").
-double g_stripInstanceAccum[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+double g_stripInstanceAccum[kUf8MaxStrips] = {};
 
 // Per-track active-FX cursor for Selection-Mode Instance. Survives
 // bank scrolls, project save/load, AND FX-chain reorder. Keyed by
@@ -20027,19 +20103,28 @@ inline int uf8FaderBankClamped_()
     return std::clamp(g_uf8FaderBank.load(),
                       0, uf8::kUserUf8FaderBankCount - 1);
 }
+// Dual UF8: `slot` is a SURFACE strip (0..15). The left unit shows the fader
+// bank Bank ←/→ selected, the right unit the other one — a 16-channel map
+// (SSL Sigma remote) lies across both units at once. One UF8: slot 0..7, the
+// selected bank, exactly as before.
+inline int uf8FaderBankForStrip_(int slot)
+{
+    return (uf8FaderBankClamped_() + (slot >= 8 ? 1 : 0))
+         % uf8::kUserUf8FaderBankCount;
+}
 inline const uf8::UserUf8BankSlot& userVpotSlot_(
     const uf8::UserUf8Map& map, int vpotBank, int slot)
 {
     const int vb = std::clamp(vpotBank,
                               0, uf8::kUserUf8VpotBankCount - 1);
-    const int s  = std::clamp(slot, 0, 7);
-    return map.banks.banks[uf8FaderBankClamped_()][vb][s];
+    const int s  = std::clamp(slot, 0, kUf8MaxStrips - 1);
+    return map.banks.banks[uf8FaderBankForStrip_(s)][vb][s & 7];
 }
 inline const uf8::UserUf8StripBinding& userStripBinding_(
     const uf8::UserUf8Map& map, int slot)
 {
-    const int s = std::clamp(slot, 0, 7);
-    return map.strips[uf8FaderBankClamped_()][s];
+    const int s = std::clamp(slot, 0, kUf8MaxStrips - 1);
+    return map.strips[uf8FaderBankForStrip_(s)][s & 7];
 }
 
 // Cached resolver — returns the user-plug-in context for the currently
@@ -20445,8 +20530,8 @@ void flipPanWrite_(MediaTrack* tr, bool inStripMode, double pan, int touchSlot)
 // Alt-drag snap-back feature in commitDebouncedTouchReleases: if Alt
 // is still held on release, this is written back instead of the
 // touch-end position.
-std::array<std::atomic<uint16_t>, 8> g_touchOriginPb{};
-std::array<std::atomic<bool>, 8>     g_touchOriginPbValid{};
+std::array<std::atomic<uint16_t>, kUf8MaxStrips> g_touchOriginPb{};
+std::array<std::atomic<bool>, kUf8MaxStrips>     g_touchOriginPbValid{};
 
 // Sticky Pot (per-track pinned param, defined in the core block). Forward-declared
 // here for the UF8 fader paths: under FLIP the pin moves onto the fader, so
@@ -20531,7 +20616,7 @@ uint16_t computeStripCurrentPb_(uint8_t s, MediaTrack* tr,
     if (g_uf8PluginMode.load()) {
         if (auto uctx = userStripCtxFocused_(); uctx.map) {
             const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
-                uctx.map->uf8.strips[uf8FaderBankClamped_()][s],
+                userStripBinding_(uctx.map->uf8, s),
                 g_fxActiveLayer.load(std::memory_order_relaxed));
             if (sb.faderVst3Param >= 0) {
                 double n = TrackFX_GetParamNormalized(
@@ -22359,9 +22444,9 @@ void stickyWriteRotation_(MediaTrack* tr, int fx, int param, int strip, double d
     (void)jsfxNorm;
     double next;
     if (stepped && pStep > 0.0 && !jsfxBogus) {
-        static float s_acc[8]{};
-        static std::chrono::steady_clock::time_point s_last[8]{};
-        const int sIdx = strip & 7;
+        static float s_acc[kUf8MaxStrips]{};
+        static std::chrono::steady_clock::time_point s_last[kUf8MaxStrips]{};
+        const int sIdx = strip & (kUf8MaxStrips - 1);
         const auto now = std::chrono::steady_clock::now();
         if (s_last[sIdx].time_since_epoch().count() != 0
             && now - s_last[sIdx] > std::chrono::milliseconds(150))
@@ -23565,9 +23650,9 @@ void drainInputQueue()
                 // so 1 detent stepped gain 1..3 dB. Accumulate so each
                 // physical detent is one ±1 dB step — Frank 2026-05-16
                 // "REC V-Pot rotate zu schnell, doppelt so langsam".
-                static double s_recGainAccum[8] = {0,0,0,0,0,0,0,0};
+                static double s_recGainAccum[kUf8MaxStrips] = {};
                 constexpr double kRecGainScale = 2.0;
-                const int s = (e.strip < 8) ? e.strip : 0;
+                const int s = (e.strip < kUf8MaxStrips) ? e.strip : 0;
                 s_recGainAccum[s] += e.value / kRecGainScale;
                 int step = 0;
                 if (s_recGainAccum[s] >=  1.0) {
@@ -23594,9 +23679,9 @@ void drainInputQueue()
                 // hardware-channel step + naturally absorbs push-
                 // induced jitter (Frank 2026-05-16: "input cycle zu
                 // schnell, verstell den kanal oft versehentlich bei push").
-                static double s_inChanAccum[8] = {0,0,0,0,0,0,0,0};
+                static double s_inChanAccum[kUf8MaxStrips] = {};
                 constexpr double kInputChanScale = 4.0;
-                const int s = (e.strip < 8) ? e.strip : 0;
+                const int s = (e.strip < kUf8MaxStrips) ? e.strip : 0;
                 s_inChanAccum[s] += e.value / kInputChanScale;
                 int delta = 0;
                 if (s_inChanAccum[s] >=  1.0) {
@@ -23644,8 +23729,7 @@ void drainInputQueue()
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
                         const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
-                            uctx.map->uf8.strips[uf8FaderBankClamped_()][
-                                static_cast<int>(e.strip)],
+                            userStripBinding_(uctx.map->uf8, static_cast<int>(e.strip)),
                             g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.soloVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
@@ -23694,8 +23778,7 @@ void drainInputQueue()
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
                         const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
-                            uctx.map->uf8.strips[uf8FaderBankClamped_()][
-                                static_cast<int>(e.strip)],
+                            userStripBinding_(uctx.map->uf8, static_cast<int>(e.strip)),
                             g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.cutVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
@@ -23727,8 +23810,7 @@ void drainInputQueue()
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
                         const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
-                            uctx.map->uf8.strips[uf8FaderBankClamped_()][
-                                static_cast<int>(e.strip)],
+                            userStripBinding_(uctx.map->uf8, static_cast<int>(e.strip)),
                             g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.selVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
@@ -23755,8 +23837,7 @@ void drainInputQueue()
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
                         const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
-                            uctx.map->uf8.strips[uf8FaderBankClamped_()][
-                                static_cast<int>(e.strip)],
+                            userStripBinding_(uctx.map->uf8, static_cast<int>(e.strip)),
                             g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.selVst3Param >= 0) {
                             const double cur = TrackFX_GetParamNormalized(
@@ -23827,12 +23908,12 @@ void drainInputQueue()
                             pan = pan * 2.0 - 1.0;
                             if (pan < -1.0) pan = -1.0;
                             if (pan >  1.0) pan =  1.0;
-                            writeRoutePanAutomation_(fr, e.strip, pan);
+                            writeRoutePanAutomation_(fr, uf8SendSlot_(e.strip), pan);
                             g_panOverlayUntilMs[e.strip] = nowMs_() + kPanOverlayMs;
                             g_panOverlayText[e.strip]    =
                                 composeValueLine("Pan", formatPanReadout(pan));
                         } else {
-                            writeRouteVolAutomation_(fr, e.strip, e.value);
+                            writeRouteVolAutomation_(fr, uf8SendSlot_(e.strip), e.value);
                         }
                         break;
                     }
@@ -23848,7 +23929,7 @@ void drainInputQueue()
                         double n = uf8PbToParamNorm_(linearVolumeToPb(e.value));
                         const double prevN = TrackFX_GetParamNormalized(tr, sfx, sp);
                         TrackFX_SetParamNormalized(tr, sfx, sp, n);
-                        noteFaderFxEdit_(static_cast<int>(e.strip), tr, sfx, sp);
+                        noteFaderFxEdit_(uf8PanSlot_(e.strip), tr, sfx, sp);
                         g_stickyFocusLockUntilMs.store(nowMs_() + 400);
                         stickyApplyMacro_(tr, prevN);
                         break;
@@ -23878,7 +23959,7 @@ void drainInputQueue()
                     if (slF->inverted) normF = 1.0 - normF;
                     TrackFX_SetParamNormalized(tr, mmF.fxIndex,
                         slF->vst3Param, normF);
-                    noteFaderFxEdit_(static_cast<int>(e.strip), tr, mmF.fxIndex,
+                    noteFaderFxEdit_(uf8PanSlot_(e.strip), tr, mmF.fxIndex,
                                      slF->vst3Param);
                     uf8::param_groups::broadcastBuiltinSlot(
                         tr, focusedF.domain, focusedF.slotIdx, normF);
@@ -23896,7 +23977,7 @@ void drainInputQueue()
                     if (pan < -1.0) pan = -1.0;
                     if (pan >  1.0) pan =  1.0;
                     flipPanWrite_(tr, g_pluginFaderMode.load(), pan,
-                                  static_cast<int>(e.strip));
+                                  uf8PanSlot_(e.strip));
                     break;
                 }
                 // Plugin-fader mode: route the fader to the SSL strip's
@@ -23910,14 +23991,14 @@ void drainInputQueue()
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
                         const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
-                            uctx.map->uf8.strips[uf8FaderBankClamped_()][s],
+                            userStripBinding_(uctx.map->uf8, s),
                             g_fxActiveLayer.load(std::memory_order_relaxed));
                         if (sb.faderVst3Param >= 0) {
                             double n = uf8PbToParamNorm_(linearVolumeToPb(e.value));
                             if (sb.faderInverted) n = 1.0 - n;
                             TrackFX_SetParamNormalized(uctx.tr, uctx.fxIdx,
                                 sb.faderVst3Param, n);
-                            noteFaderFxEdit_(s, uctx.tr, uctx.fxIdx, sb.faderVst3Param);
+                            noteFaderFxEdit_(uf8PanSlot_(s), uctx.tr, uctx.fxIdx, sb.faderVst3Param);
                             uf8::param_groups::broadcastUserParam(
                                 uctx.tr, uctx.map, sb.faderVst3Param, n);
                         }
@@ -23947,7 +24028,7 @@ void drainInputQueue()
                         //                                  window
                         diagSetParamLog_("strip_mode/fader",
                             tr, cs.fxIndex, cs.vst3Param, n, setOk, after);
-                        noteFaderFxEdit_(static_cast<int>(e.strip), tr, cs.fxIndex,
+                        noteFaderFxEdit_(uf8PanSlot_(e.strip), tr, cs.fxIndex,
                                          cs.vst3Param);
                         // CS FaderLevel isn't a Link slot for built-in
                         // variants — broadcast by re-resolving per member
@@ -23958,7 +24039,7 @@ void drainInputQueue()
                             if (mcs.vst3Param >= 0) {
                                 TrackFX_SetParamNormalized(m, mcs.fxIndex,
                                     mcs.vst3Param, n);
-                                noteFaderFxEdit_(static_cast<int>(e.strip), m,
+                                noteFaderFxEdit_(uf8PanSlot_(e.strip), m,
                                                  mcs.fxIndex, mcs.vst3Param);
                             }
                         }
@@ -23981,7 +24062,7 @@ void drainInputQueue()
                 // cache the value — motor echo reads GetTrackUIVolPan
                 // on each tick so it always reflects whatever REAPER
                 // actually has (including envelope playback).
-                if (e.strip < 8) g_faderVolTr[e.strip] = tr;   // before the write
+                if (e.strip < kUf8MaxStrips) g_faderVolTr[e.strip] = tr;   // before the write
                 CSurf_OnVolumeChange(tr, e.value, false);
                 break;
             }
@@ -23990,7 +24071,7 @@ void drainInputQueue()
                 // with a push would otherwise bump the param back off the
                 // just-reset value. Swallow rotation for a short window
                 // after a push on the same strip.
-                if (e.strip < 8 &&
+                if (e.strip < kUf8MaxStrips &&
                     nowMs_() < g_vpotPushSuppressUntilMs[e.strip]) {
                     break;
                 }
@@ -24009,7 +24090,7 @@ void drainInputQueue()
                 // briefly shows the real value before snapping back to
                 // "Folder". Set unconditionally — the value-line resolver
                 // gates on folder_mode + parent-track itself.
-                if (e.strip < 8)
+                if (e.strip < kUf8MaxStrips)
                     g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                 // Send/Receive routing on the V-Pot wins everything else.
                 // Treat V-Pot detents as a volume scrub against the routed
@@ -24036,19 +24117,20 @@ void drainInputQueue()
                         // envelope, so D_PAN trim stays put → points pinned at centre).
                         const int64_t now = nowMs_();
                         const std::string key = routeCacheKey_(r);
-                        if (now - g_sendPanVpotMs[strip] > 300
-                            || g_sendPanVpotKey[strip] != key) {
-                            g_sendPanVpotAccum[strip] = readRoutePanEffective_(r);
-                            g_sendPanVpotKey[strip]   = key;
+                        const int gs = uf8SendSlot_(strip);   // gesture slot
+                        if (now - g_sendPanVpotMs[gs] > 300
+                            || g_sendPanVpotKey[gs] != key) {
+                            g_sendPanVpotAccum[gs] = readRoutePanEffective_(r);
+                            g_sendPanVpotKey[gs]   = key;
                         }
                         const double next = uf8::applyVirtualNotch(
-                            g_sendPanVpotAccum[strip], dv, /*center*/0.0,
+                            g_sendPanVpotAccum[gs], dv, /*center*/0.0,
                             /*zone*/g_notchZone.load() * 2.0,
                             -1.0, 1.0);
-                        g_sendPanVpotAccum[strip] = next;
-                        g_sendPanVpotMs[strip]    = now;
+                        g_sendPanVpotAccum[gs] = next;
+                        g_sendPanVpotMs[gs]    = now;
                         if (!potEnvelopeWriteRoute_(r, PotEnv::Pan, next))
-                            writeRoutePanAutomation_(r, strip, next);
+                            writeRoutePanAutomation_(r, gs, next);
                         g_panOverlayUntilMs[strip] = now + kPanOverlayMs;
                         g_panOverlayText[strip]    =
                             composeValueLine("Pan", formatPanReadout(next));
@@ -24078,7 +24160,7 @@ void drainInputQueue()
                                 // track's own pan (P_PAN), not the send.
                                 // The V-Pot's track-pan write, so it records
                                 // and holds in Touch (it was a bare D_PAN).
-                                writeVpotTrackPan_(tr, static_cast<int>(e.strip), delta);
+                                writeVpotTrackPan_(tr, uf8PanSlot_(e.strip), delta);
                             } else if (g_flip.load()) {
                                 writeRouteVolDelta(fr, delta);
                             } else {
@@ -24126,7 +24208,7 @@ void drainInputQueue()
                         const int bank = std::clamp(g_softKeyBank.load(),
                                                     0, 5);
                         const uf8::UserUf8BankSlot bs = uf8::fxEffectiveVpot(
-                            uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s],
+                            userVpotSlot_(uctx.map->uf8, bank, s),
                             g_fxActiveLayer.load(std::memory_order_relaxed));
                         // Rotary step-cycle: scrub through the curated
                         // PushStep list (a plug-in BUTTON's options or a
@@ -24136,12 +24218,12 @@ void drainInputQueue()
                         if (bs.vpotMode == uf8::VPotMode::StepCycle
                             && !bs.vpotSteps.empty())
                         {
-                            static float s_scAcc[8][6]{};
+                            static float s_scAcc[kUf8MaxStrips][6]{};
                             static std::chrono::steady_clock::time_point
-                                s_scLast[8][6]{};
-                            static int s_scIdx[8][6]{};
-                            auto& acc   = s_scAcc[s & 7][bank % 6];
-                            auto& lastT = s_scLast[s & 7][bank % 6];
+                                s_scLast[kUf8MaxStrips][6]{};
+                            static int s_scIdx[kUf8MaxStrips][6]{};
+                            auto& acc   = s_scAcc[s & 15][bank % 6];
+                            auto& lastT = s_scLast[s & 15][bank % 6];
                             const auto now = std::chrono::steady_clock::now();
                             if (lastT.time_since_epoch().count() != 0
                                 && now - lastT > std::chrono::milliseconds(150))
@@ -24167,7 +24249,7 @@ void drainInputQueue()
                                 const double d = v - static_cast<double>(st.norm);
                                 return d < 1e-3 && d > -1e-3;
                             };
-                            int curIdx = s_scIdx[s & 7][bank % 6];
+                            int curIdx = s_scIdx[s & 15][bank % 6];
                             if (!stepMatches(curIdx)) {
                                 curIdx = -1;
                                 for (int i = 0; i < n; ++i)
@@ -24176,7 +24258,7 @@ void drainInputQueue()
                             const int nextIdx = uf8::stepCycleAdvance(
                                 steps, curIdx, r.logicalSteps);
                             if (nextIdx < 0) break;
-                            s_scIdx[s & 7][bank % 6] = nextIdx;
+                            s_scIdx[s & 15][bank % 6] = nextIdx;
                             const uf8::PushStep& sel = steps[nextIdx];
                             if (sel.vst3Param < 0) break;
                             TrackFX_SetParamNormalized(
@@ -24232,11 +24314,11 @@ void drainInputQueue()
                                 // doesn't slam through stops, and a sub-
                                 // threshold reversal doesn't fight the
                                 // residue.
-                                static float s_acc[8][6]{};
+                                static float s_acc[kUf8MaxStrips][6]{};
                                 static std::chrono::steady_clock::time_point
-                                    s_last[8][6]{};
-                                auto& acc   = s_acc[s & 7][bank & 7];
-                                auto& lastT = s_last[s & 7][bank & 7];
+                                    s_last[kUf8MaxStrips][6]{};
+                                auto& acc   = s_acc[s & 15][bank & 7];
+                                auto& lastT = s_last[s & 15][bank & 7];
                                 const auto now =
                                     std::chrono::steady_clock::now();
                                 if (lastT.time_since_epoch().count() != 0
@@ -24337,9 +24419,9 @@ void drainInputQueue()
                             // sub-quantum fine-mode moves until they cross
                             // the slider grid (else the param sticks in fine).
                             if (jsfxBogusStep && !gridFineApplied) {
-                                static double s_jsfxWant[8][6]{};
+                                static double s_jsfxWant[kUf8MaxStrips][6]{};
                                 next = uf8::jsfxAccumulate(
-                                    s_jsfxWant[s & 7][bank % 6], cur, next);
+                                    s_jsfxWant[s & 15][bank % 6], cur, next);
                             }
                             TrackFX_SetParamNormalized(uctx.tr,
                                 uctx.fxIdx, bs.vst3Param, next);
@@ -24400,7 +24482,7 @@ void drainInputQueue()
                     // feel as the V-Pot driving the param). Fine quarters.
                     double dPb = e.value * 16383.0;
                     if (shiftHeldAnywhere_()) dPb *= 0.25;
-                    writeVpotTrackVol_(tr, static_cast<int>(e.strip), [dPb](double cur) {
+                    writeVpotTrackVol_(tr, uf8VolSlot_(e.strip), [dPb](double cur) {
                         int newPb = static_cast<int>(std::round(
                             static_cast<double>(linearVolumeToPb(cur)) + dPb));
                         newPb = std::clamp(newPb, 0, 16383);
@@ -24415,7 +24497,7 @@ void drainInputQueue()
                 if (g_flip.load() && forcePan) {
                     double dPb = e.value * 16383.0;
                     if (shiftHeldAnywhere_()) dPb *= 0.25;
-                    writeVpotTrackVol_(tr, static_cast<int>(e.strip), [dPb](double cur) {
+                    writeVpotTrackVol_(tr, uf8VolSlot_(e.strip), [dPb](double cur) {
                         int newPb = static_cast<int>(std::round(
                             static_cast<double>(linearVolumeToPb(cur)) + dPb));
                         newPb = std::clamp(newPb, 0, 16383);
@@ -24465,10 +24547,10 @@ void drainInputQueue()
                         // sens=1.0 (2 detents per step) → same baseline
                         // as the UC1 stepped path; user-learned slots
                         // pick up their custom sens + snapped range.
-                        static float s_acc[8]{};
+                        static float s_acc[kUf8MaxStrips]{};
                         static std::chrono::steady_clock::time_point
-                            s_last[8]{};
-                        const int sIdx = static_cast<int>(e.strip) & 7;
+                            s_last[kUf8MaxStrips]{};
+                        const int sIdx = static_cast<int>(e.strip) & 15;
                         auto& acc   = s_acc[sIdx];
                         auto& lastT = s_last[sIdx];
                         const auto now =
@@ -24574,9 +24656,9 @@ void drainInputQueue()
                     // JSFX coarse-quantisation accumulator: keep sub-quantum
                     // fine-mode moves until they cross the slider grid.
                     if (jsfxBogusStep && !gridFineApplied) {
-                        static double s_jsfxWant[8]{};
+                        static double s_jsfxWant[kUf8MaxStrips]{};
                         next = uf8::jsfxAccumulate(
-                            s_jsfxWant[static_cast<int>(e.strip) & 7],
+                            s_jsfxWant[static_cast<int>(e.strip) & 15],
                             cur, next);
                     }
                     const bool slOk = TrackFX_SetParamNormalized(
@@ -24619,16 +24701,16 @@ void drainInputQueue()
                     // Fall through to REAPER pan if no CS plug-in.
                     const double panDelta = e.value
                         * reasixty_uf8KnobScale(vpotFineActive_());
-                    writeVpotTrackPan_(tr, e.strip, panDelta);
+                    writeVpotTrackPan_(tr, uf8PanSlot_(e.strip), panDelta);
                 } else {
                     const double panDelta = e.value
                         * reasixty_uf8KnobScale(vpotFineActive_());
-                    writeVpotTrackPan_(tr, e.strip, panDelta);
+                    writeVpotTrackPan_(tr, uf8PanSlot_(e.strip), panDelta);
                 }
                 break;
             }
             case PendingInput::PanCenter: {
-                if (e.strip < 8) {
+                if (e.strip < kUf8MaxStrips) {
                     g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                     // Arm the rotation safety net for this strip.
                     g_vpotPushSuppressUntilMs[e.strip] =
@@ -24665,8 +24747,8 @@ void drainInputQueue()
                                 // and a turn in between resumed from the pan
                                 // BEFORE the push. Cleared, the next turn re-seeds
                                 // from the centre just written.
-                                g_sendPanVpotAccum[e.strip] = 0.0;
-                                g_sendPanVpotKey[e.strip].clear();
+                                g_sendPanVpotAccum[uf8SendSlot_(e.strip)] = 0.0;
+                                g_sendPanVpotKey[uf8SendSlot_(e.strip)].clear();
                                 g_panOverlayUntilMs[e.strip] = nowMs_() + kPanOverlayMs;
                                 g_panOverlayText[e.strip]    =
                                     composeValueLine("Pan", formatPanReadout(0.0));
@@ -24679,8 +24761,8 @@ void drainInputQueue()
                             if (g_forcePan.load()) {
                                 SetTrackSendInfo_Value(vr.track, vr.sendCategory,
                                                        vr.sendIndex, "D_PAN", 0.0);
-                                g_sendPanVpotAccum[e.strip] = 0.0;   // as above
-                                g_sendPanVpotKey[e.strip].clear();
+                                g_sendPanVpotAccum[uf8SendSlot_(e.strip)] = 0.0;   // as above
+                                g_sendPanVpotKey[uf8SendSlot_(e.strip)].clear();
                             } else {
                                 writeRouteVolumeLinear_(vr, 1.0);
                             }
@@ -24717,7 +24799,7 @@ void drainInputQueue()
                         const int bank = std::clamp(g_softKeyBank.load(),
                                                     0, 5);
                         const uf8::UserUf8BankSlot bs = uf8::fxEffectiveVpot(
-                            uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s],
+                            userVpotSlot_(uctx.map->uf8, bank, s),
                             g_fxActiveLayer.load(std::memory_order_relaxed));
                         // StepCycle: a PRESS advances ONE enabled step and
                         // WRAPS (button parity — last → first), so the same
@@ -24917,7 +24999,7 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::AutoModeStep: {
-                if (e.strip < 8)
+                if (e.strip < kUf8MaxStrips)
                     g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                 // AUTO mode SEL push: cycle auto-mode 0..5 with
                 // wraparound, ledColourFor and the scribble strip's
@@ -24928,7 +25010,7 @@ void drainInputQueue()
                 // Flash the new mode on the strip's value line — the value line
                 // no longer shows it permanently (the V-Pot drives the param),
                 // so give brief feedback on the change. Frank 2026-06-24.
-                if (e.strip < 8) {
+                if (e.strip < kUf8MaxStrips) {
                     const char* nm = "Trim";
                     switch (next) {
                         case 1: nm = "Read";  break;
@@ -24944,7 +25026,7 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::AutoModeSet: {
-                if (e.strip < 8)
+                if (e.strip < kUf8MaxStrips)
                     g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                 // AUTO mode V-Pot push: snap the strip's auto-mode to
                 // the value carried in e.value (0 = Trim/Read by
@@ -24957,12 +25039,12 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::AutoModeDelta: {
-                if (e.strip < 8)
+                if (e.strip < kUf8MaxStrips)
                     g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                 // AUTO mode V-Pot rotation: accumulate detents, step
                 // strip's auto-mode ±1 within [0..5]. Per-strip accum
                 // so two V-Pots scrolling at once don't fight.
-                const uint8_t s = e.strip < 8 ? e.strip : 0;
+                const uint8_t s = e.strip < kUf8MaxStrips ? e.strip : 0;
                 g_autoModeAccum[s] += e.value / kAutoModeRotateScale;
                 int step = 0;
                 if (g_autoModeAccum[s] >=  1.0) {
@@ -24983,14 +25065,14 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::StripInstanceDelta: {
-                if (e.strip < 8)
+                if (e.strip < kUf8MaxStrips)
                     g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                 // Instance mode V-Pot rotation: cycle the strip's
                 // track's FX list per-strip, no focus / selection
                 // changes (Frank 2026-05-14 "ohne track selection,
                 // einfach den track des v-pots verändern"). Walks all
                 // FX on the track, wraps. Per-strip accumulator.
-                const uint8_t s = e.strip < 8 ? e.strip : 0;
+                const uint8_t s = e.strip < kUf8MaxStrips ? e.strip : 0;
                 g_stripInstanceAccum[s] += e.value / kChannelEncoderScale;
                 int step = 0;
                 if (g_stripInstanceAccum[s] >=  1.0) {
@@ -25094,7 +25176,7 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::StripInstanceOpen: {
-                if (e.strip < 8)
+                if (e.strip < kUf8MaxStrips)
                     g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                 // Instance mode V-Pot push: toggle the FX window for
                 // this strip's active instance. Tracks ownership so
@@ -25112,7 +25194,7 @@ void drainInputQueue()
                 break;
             }
             case PendingInput::StripInstanceCycleDelta: {
-                if (e.strip < 8)
+                if (e.strip < kUf8MaxStrips)
                     g_folderRevealUntilMs[e.strip] = nowMs_() + kFolderRevealMs;
                 // Instance Cycle mode V-Pot rotation: cycle ONLY through
                 // Instances (CS / BC / UF8-Mode-learned) on the strip's
@@ -25121,7 +25203,7 @@ void drainInputQueue()
                 // hardware-mappable to scroll through). Shares the
                 // per-strip accumulator with FX Cycle since the two modes
                 // are mutually exclusive.
-                const uint8_t s = e.strip < 8 ? e.strip : 0;
+                const uint8_t s = e.strip < kUf8MaxStrips ? e.strip : 0;
                 g_stripInstanceAccum[s] += e.value / kChannelEncoderScale;
                 int step = 0;
                 if (g_stripInstanceAccum[s] >=  1.0) {
@@ -25475,9 +25557,9 @@ uint16_t linearVolumeToPb(double linear)
 // right as the user grabs the fader; release events are deferred until
 // the sensor has stayed quiet for kTouchDebounceQuiet — if any press
 // arrives during that window the release is cancelled.
-std::array<std::atomic<bool>, 8>                       g_touchReported{};
-std::array<std::atomic<bool>, 8>                       g_touchReleasePending{};
-std::array<std::chrono::steady_clock::time_point, 8>   g_touchLastPress{};
+std::array<std::atomic<bool>, kUf8MaxStrips>                       g_touchReported{};
+std::array<std::atomic<bool>, kUf8MaxStrips>                       g_touchReleasePending{};
+std::array<std::chrono::steady_clock::time_point, kUf8MaxStrips>   g_touchLastPress{};
 constexpr auto kTouchDebounceQuiet = std::chrono::milliseconds(150);
 
 bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
@@ -25495,14 +25577,15 @@ bool ReaSixtySurface::GetTouchState(MediaTrack* tr, int isPan)
         // A fader riding pan under FLIP, with the hand on it (flipPanWrite_).
         if (tr) {
             // Cleared on every release, so an entry is this touch's own.
-            for (int s = 0; s < 8; ++s)
-                if (g_faderPanTr[s] == tr && g_touchReported[s].load()) return true;
+            for (int s = 0; s < uf8Strips_(); ++s)
+                if (g_faderPanTr[uf8PanSlot_(s)] == tr && g_touchReported[s].load())
+                    return true;
             if (g_faderPanTr[kUf1PanTouchSlot] == tr && g_uf1FaderTouched.load())
                 return true;
         }
         return false;
     }
-    for (int s = 0; s < 8; ++s) {
+    for (int s = 0; s < uf8Strips_(); ++s) {
         if (!g_touchReported[s].load()) continue;
         // Only when this touch wrote THIS track's volume (g_faderVolTr). A fader
         // on a plug-in parameter or on pan under FLIP is no volume touch.
@@ -25594,12 +25677,30 @@ uf8::LedClass toUf8LedClass(LedClass cls)
     }
 }
 
+// A unit-wide LED (transport, modes, layers, …): the same lamp on every UF8,
+// so both units' keys read the same.
 void sendLedFrames(uf8::LedColourFrames frames)
 {
     if (!g_dev) return;
+    if (g_dev2 && uf8Units_() > 1) {
+        if (!frames.ff38.empty())   g_dev2->send(frames.ff38);
+        if (!frames.ff39.empty())   g_dev2->send(frames.ff39);
+        if (!frames.legacy.empty()) g_dev2->send(frames.legacy);
+    }
     if (!frames.ff38.empty())   g_dev->send(std::move(frames.ff38));
     if (!frames.ff39.empty())   g_dev->send(std::move(frames.ff39));
     if (!frames.legacy.empty()) g_dev->send(std::move(frames.legacy));
+}
+
+// A per-strip LED (Solo / Cut / Sel, the top soft key): built for
+// uf8Local_(strip), sent only to the unit the strip is on.
+void sendLedFramesS_(int strip, uf8::LedColourFrames frames)
+{
+    auto* d = uf8DevFor_(strip);
+    if (!d) return;
+    if (!frames.ff38.empty())   d->send(std::move(frames.ff38));
+    if (!frames.ff39.empty())   d->send(std::move(frames.ff39));
+    if (!frames.legacy.empty()) d->send(std::move(frames.legacy));
 }
 
 // Forward declarations for helpers defined further down (used by
@@ -25656,10 +25757,14 @@ extern int g_lastAutoMode;
 void sendSelRenderTrigger()
 {
     if (!g_dev) return;
-    g_dev->send({0xFF, 0x38, 0x04, 0x24, 0x00, 0x12, 0xF0, 0x62});
-    g_dev->send({0xFF, 0x39, 0x04, 0x24, 0x00, 0x12, 0xF0, 0x63});
-    g_dev->send({0xFF, 0x38, 0x04, 0x24, 0x00, 0x3F, 0xF0, 0x8F});
-    g_dev->send({0xFF, 0x39, 0x04, 0x24, 0x00, 0x00, 0xF0, 0x51});
+    for (int u = 0; u < uf8Units_(); ++u) {   // each unit takes its own bitmask next
+        auto* d = uf8UnitDev_(u);
+        if (!d) continue;
+        d->send({0xFF, 0x38, 0x04, 0x24, 0x00, 0x12, 0xF0, 0x62});
+        d->send({0xFF, 0x39, 0x04, 0x24, 0x00, 0x12, 0xF0, 0x63});
+        d->send({0xFF, 0x38, 0x04, 0x24, 0x00, 0x3F, 0xF0, 0x8F});
+        d->send({0xFF, 0x39, 0x04, 0x24, 0x00, 0x00, 0xF0, 0x51});
+    }
     // The 4 raw frames above leave cell 0x24 in a bright-ish leftover
     // state (a=0x3F 0xF0, b=0x00 0xF0). The dedup cache in
     // sendUf8GlobalLed is unaware of those raw writes and still thinks
@@ -25676,16 +25781,17 @@ void sendSelRenderTrigger()
 void pushSelectedStripBitmask()
 {
     if (!g_dev) return;
-    uint16_t mask = 0;
+    uint32_t mask = 0;   // bit s = surface strip s
     const int bankOffset = g_bankOffset.load();
     const int trackCount = visibleTrackCount();
-    for (int s = 0; s < 8; ++s) {
+    for (int s = 0; s < uf8Strips_(); ++s) {
         MediaTrack* t = uf8StripSelTrack_(s, bankOffset, trackCount, g_slotTrack[s]);
         if (t && GetMediaTrackInfo_Value(t, "I_SELECTED") > 0.5) {
-            mask |= static_cast<uint16_t>(1u << s);
+            mask |= 1u << s;
         }
     }
-    g_dev->send(uf8::buildSelectedStripBitmask(mask));
+    for (int u = 0; u < uf8Units_(); ++u)
+        uf8SendUnit_(u, uf8::buildSelectedStripBitmask(uf8UnitMask_(mask, u)));
 }
 
 void sendLed(LedClass cls, MediaTrack* tr, bool on)
@@ -25736,11 +25842,11 @@ void sendLed(LedClass cls, MediaTrack* tr, bool on)
     if (cls == LedClass::Sel
         && resolveFaderRoute_(0, g_bankOffset.load(), visibleTrackCount()).active())
         return;
-    for (int s = 0; s < 8; ++s) {
+    for (int s = 0; s < uf8Strips_(); ++s) {
         if (g_slotTrack[s] != tr) continue;
         const uf8::LedClass devCls = toUf8LedClass(cls);
         const uf8::LedColour col = ledColourFor(cls, tr);
-        sendLedFrames(uf8::buildLedColourPair(static_cast<uint8_t>(s), devCls, on, col));
+        sendLedFramesS_(s, uf8::buildLedColourPair(uf8Local_(s), devCls, on, col));
         if (cls == LedClass::Sel) {
             sendSelRenderTrigger();
             pushSelectedStripBitmask();
@@ -26088,9 +26194,9 @@ void initDevices_()
         // colour-pair for every per-strip LED at open time so the initial
         // display matches an idle REAPER session.
         for (uint8_t s = 0; s < 8; ++s) {
-            sendLedFrames(uf8::buildLedColourPair(s, uf8::LedClass::Solo, false));
-            sendLedFrames(uf8::buildLedColourPair(s, uf8::LedClass::Cut,  false));
-            sendLedFrames(uf8::buildLedColourPair(s, uf8::LedClass::Sel,  false));
+            sendLedFramesS_(s, uf8::buildLedColourPair(s, uf8::LedClass::Solo, false));
+            sendLedFramesS_(s, uf8::buildLedColourPair(s, uf8::LedClass::Cut,  false));
+            sendLedFramesS_(s, uf8::buildLedColourPair(s, uf8::LedClass::Sel,  false));
         }
 
         // Force the bank-change re-sync block to fire on the very first
@@ -26489,7 +26595,7 @@ static void uf8DualLog_(const std::string& line)
 // normal case, and g_dev2 simply stays null.
 bool openUf8SecondUnit_()
 {
-    if (g_dev2) { g_dev2->close(); g_dev2.reset(); }
+    closeUf8SecondUnit_();
     if (uf8::UF8Device::countAttached() < 2) return false;
     auto dev = std::make_unique<uf8::UF8Device>();
     if (!dev->open(uf8UnitIndexForSide_(1))) {
@@ -26499,7 +26605,9 @@ bool openUf8SecondUnit_()
     }
     g_dev2 = std::move(dev);
     g_dev2->setRawInputHandler(onUf8Input2);
-    // Same idle start as the left unit: every per-strip LED dark.
+    // Same idle start as the left unit: every per-strip LED dark, faders at the
+    // position the left unit's start-up parks them on.
+    const uint16_t pb0dB = linearVolumeToPb(1.0);
     for (uint8_t s = 0; s < 8; ++s) {
         for (auto cls : { uf8::LedClass::Solo, uf8::LedClass::Cut, uf8::LedClass::Sel }) {
             auto f = uf8::buildLedColourPair(s, cls, false);
@@ -26507,30 +26615,50 @@ bool openUf8SecondUnit_()
             if (!f.ff39.empty())   g_dev2->send(std::move(f.ff39));
             if (!f.legacy.empty()) g_dev2->send(std::move(f.legacy));
         }
+        g_dev2->send(uf8::buildFaderPosition(s, static_cast<uint8_t>(pb0dB & 0x7F),
+                                             static_cast<uint8_t>((pb0dB >> 7) & 0x7F)));
     }
+    // Strips 9-16 start from nothing: every cache "unknown", every motor engaged
+    // (open() re-engages them), no touch in flight.
+    uf8ResetStripState_(8, kUf8MaxStrips);
+    if (g_sync) g_sync->setSecondUnit(g_dev2.get());
+    g_uf8StripCount.store(16);
     uf8DualLog_("UF8 dual: left unit at USB " + (g_dev ? g_dev->portPath() : std::string("?"))
              + ", right unit at USB " + g_dev2->portPath()
              + (g_uf8SwapUnits.load() ? " (swapped)" : ""));
     consoleMsg_(("Rea-Sixty: second UF8 attached as the right-hand unit (USB "
                  + g_dev2->portPath() + ")\n").c_str());
+    // The bank is twice as wide now: re-clamp it and repaint everything.
     g_bankDirty.store(true);
+    g_pageDirty.store(true);
+    if (g_sync) g_sync->invalidate();
     return true;
 }
 
-// Input from the right-hand unit. Stage 1a: the unit is claimed and kept alive
-// but carries no strips yet, so its input is dropped (strip mapping lands in
-// stage 1b).
-void onUf8Input2(const uint8_t* /*data*/, size_t /*len*/) {}
+// Drop the right-hand unit (unplugged, stale, reopening, shutting down). The
+// surface is eight strips again from the next tick on.
+void closeUf8SecondUnit_()
+{
+    const bool had = g_dev2 != nullptr;
+    g_uf8StripCount.store(8);
+    if (g_sync) g_sync->setSecondUnit(nullptr);
+    if (g_dev2) g_dev2->close();
+    g_dev2.reset();
+    if (had) {
+        uf8ResetStripState_(8, kUf8MaxStrips);
+        g_bankDirty.store(true);
+        g_pageDirty.store(true);
+    }
+}
 
 void shutdownDevices_()
 {
     g_sync.reset();
     if (g_midi) g_midi->close();
     g_midi.reset();
+    closeUf8SecondUnit_();
     if (g_dev) g_dev->close();
     g_dev.reset();
-    if (g_dev2) g_dev2->close();
-    g_dev2.reset();
     g_uc1_surface.reset();
     if (g_uc1_dev) g_uc1_dev->close();
     g_uc1_dev.reset();
@@ -26584,16 +26712,16 @@ reaper_csurf_reg_t g_csurfReg = {
 };
 
 // De-dup for pitch-bend so REAPER's motor echo doesn't re-trigger us.
-std::array<std::atomic<uint8_t>, 8> g_lastMsbOut{};
-std::array<std::atomic<uint8_t>, 8> g_lastLsbOut{};
+std::array<std::atomic<uint8_t>, kUf8MaxStrips> g_lastMsbOut{};
+std::array<std::atomic<uint8_t>, kUf8MaxStrips> g_lastLsbOut{};
 
 // Latest raw fader position (pb14) seen during a touch — recorded
 // regardless of deadband, so commitDebouncedTouchReleases can snap
 // REAPER to where the user's hand actually left the fader. Without
 // this the motor jerks back to pre-touch on release because the
 // >=4-LSB deadband swallowed the tiny finger-induced shift.
-std::array<std::atomic<uint16_t>, 8> g_lastTouchPb{};
-std::array<std::atomic<bool>, 8>     g_lastTouchPbValid{};
+std::array<std::atomic<uint16_t>, kUf8MaxStrips> g_lastTouchPb{};
+std::array<std::atomic<bool>, kUf8MaxStrips>     g_lastTouchPbValid{};
 
 // ⇨ AND THE OTHER DIRECTION, and the same for FLIP (Frank 2026-09-17: "die
 // Option auf beide Richtungen machen. Also Flip und Strip Mode beidseitig
@@ -26653,7 +26781,7 @@ void uf8FollowUf1Flip_(bool on)
 // Last fader motor position we actually wrote to the UF8 — lets the timer
 // dedup motor-echo pushes, and lets the touch-release handler prime the
 // firmware with the user's new position before re-enabling the motor.
-std::array<uint16_t, 8>             g_lastFaderPb{};
+std::array<uint16_t, kUf8MaxStrips>             g_lastFaderPb{};
 bool                                g_faderPbInit{false};
 
 // Touch-anchoring (Frank 2026-06-05). The capacitive position the firmware
@@ -26671,14 +26799,14 @@ bool                                g_faderPbInit{false};
 // value exactly (a no-op write — no seed corruption); subsequent frames
 // track the user's motion. Mode-agnostic: the anchor is whatever the
 // motor was parked at, so track-vol / plugin / FLIP all pick up cleanly.
-std::array<std::atomic<uint16_t>, 8> g_motorTargetPb{};   // mirror of last driven motor pb (main thread)
+std::array<std::atomic<uint16_t>, kUf8MaxStrips> g_motorTargetPb{};   // mirror of last driven motor pb (main thread)
 // DynaMount send-on-release: while a mount strip's fader is touched we only
 // cache the latest normalised position here; the value is pushed to the mount
 // ONCE on touch-release (open-loop mounts shouldn't chase every intermediate
 // frame — Frank 2026-06-28). Axis (distance vs left/right) is decided by FLIP
 // at release time.
-std::array<std::atomic<double>, 8> g_dynFaderPendingNorm{};
-std::array<std::atomic<bool>,   8> g_dynFaderPendingValid{};
+std::array<std::atomic<double>, kUf8MaxStrips> g_dynFaderPendingNorm{};
+std::array<std::atomic<bool>,   kUf8MaxStrips> g_dynFaderPendingValid{};
 
 // pb14 → normalised 0..1 for a DynaMount fader. The physical fader ends don't
 // quite reach pb 0 / max (firmware readback offset), so raw norm tops out
@@ -26703,11 +26831,12 @@ static inline double dynaFaderNorm_(uint16_t pb14)
 // 2026-06-09: "external input only sometimes moves the fader"). Tracked so
 // the motor-follow can re-engage a limp strip when REAPER drives it.
 // Init true: UF8Device::open() re-engages all 8 motors after init replay.
-std::array<std::atomic<bool>, 8>     g_faderMotorEngaged{
-    {true, true, true, true, true, true, true, true}};
-std::array<std::atomic<uint16_t>, 8> g_touchAnchorPb{};   // motor pb captured at touch-down
-std::array<std::atomic<uint16_t>, 8> g_touchGrabPb{};     // first raw readback of the touch
-std::array<std::atomic<bool>, 8>     g_touchGrabValid{};  // grab captured yet?
+std::array<std::atomic<bool>, kUf8MaxStrips>     g_faderMotorEngaged{
+    {true, true, true, true, true, true, true, true,
+     true, true, true, true, true, true, true, true}};
+std::array<std::atomic<uint16_t>, kUf8MaxStrips> g_touchAnchorPb{};   // motor pb captured at touch-down
+std::array<std::atomic<uint16_t>, kUf8MaxStrips> g_touchGrabPb{};     // first raw readback of the touch
+std::array<std::atomic<bool>, kUf8MaxStrips>     g_touchGrabValid{};  // grab captured yet?
 // Last readback-vs-drive offset (LSB, signed) measured on a touch where the
 // fader was genuinely PARKED (a touch following a quiet gap, so the motor
 // had settled it on the target). Carried into rapid re-touches — where the
@@ -26715,14 +26844,14 @@ std::array<std::atomic<bool>, 8>     g_touchGrabValid{};  // grab captured yet?
 // offset — so we subtract the clean parked offset from pb14 and REAPER
 // follows the physical fader (load-bearing for ganged faders: without it,
 // plain anchoring discards the displacement and the ganged peers desync).
-std::array<std::atomic<int>, 8>      g_touchReadbackOffset{};
+std::array<std::atomic<int>, kUf8MaxStrips>      g_touchReadbackOffset{};
 // True when THIS touch began after a quiet gap (fader parked) → its
 // grab−anchor gap is a trustworthy offset measurement. Set at touch-down.
-std::array<std::atomic<bool>, 8>     g_touchParked{};
+std::array<std::atomic<bool>, kUf8MaxStrips>     g_touchParked{};
 // Effective (anchored) pb of the latest touch frame — what release writes
 // back, so the commit lands on the same value as the live drag instead of
 // snapping to the offset raw readback.
-std::array<std::atomic<uint16_t>, 8> g_lastTouchEffPb{};
+std::array<std::atomic<uint16_t>, kUf8MaxStrips> g_lastTouchEffPb{};
 
 // Max plausible readback-vs-drive offset (LSB). When the grab readback at
 // touch-down is within this of the motor target, the fader is parked and the
@@ -26774,7 +26903,7 @@ constexpr long kParkedQuietMs = 600;
 // — manifests as Fader 8 (or any fader, but statistically Fader 8 most
 // often) silently failing to limp because the TOUCH event never reaches
 // the dispatcher. Capped to prevent unbounded growth from corrupt input.
-static std::vector<uint8_t> g_inputResidual;
+static std::array<std::vector<uint8_t>, 2> g_inputResidualU;   // per UF8 unit
 constexpr size_t kInputResidualMax = 64;
 
 // UF8 wire tracing is OFF unless REASIXTY_UF8_TRACE is set. The per-packet
@@ -26852,8 +26981,17 @@ static void uf8EncPushEdge_(bool pressed)
     uf8::bindings::dispatch(pid, false);
 }
 
-void onUf8Input(const uint8_t* dataIn, size_t lenIn)
+// `unit` 0 = the left UF8 (g_dev), 1 = the right one (g_dev2). The hardware
+// numbers its strips 0..7 on either unit; every strip decoded below is turned
+// into a SURFACE strip (+8 on the right unit) before it reaches anything else.
+// Global keys (transport, banks, soft keys, the channel encoder) act the same
+// from either unit. Called under g_uf8InputMx, so the two units' worker
+// threads never run this concurrently.
+static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
 {
+    const int base = unit * 8;
+    // Each unit stitches its own URBs.
+    std::vector<uint8_t>& g_inputResidual = g_inputResidualU[unit & 1];
     // NOTE: do NOT add per-packet file logging here. This runs on the libusb
     // input thread for EVERY IN packet; a synchronous fopen/fprintf/fclose per
     // packet throttles the thread under fast input (V-pot spins) and grows an
@@ -26996,7 +27134,9 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // FF 20 02 TOUCH. cap51_ssl360_fader8_drag captured both
             // directions on user's UF8 (Windows + SSL 360°): Fader 1
             // = byte 00, Fader 8 = byte 07. No shift, no asymmetry.
-            const uint8_t strip   = data[i + 3];
+            const uint8_t hwFader = data[i + 3];
+            const uint8_t strip   = static_cast<uint8_t>(hwFader < 8 ? hwFader + base
+                                                                    : 0xFF);
             const uint8_t rawA    = data[i + 4];
             const uint8_t rawHigh = data[i + 4] & 0x80;     // diag: was bit 7 set?
             // ⛔ IN TOUCH-TO-LEARN A FADER IS A LEARN GESTURE, NOT A CONTROL.
@@ -27014,7 +27154,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // The TOUCH itself still runs: it limps the motor, so the cap stays
             // loose under the finger instead of fighting it.
             if (g_hudTouchLearn.load()) { i += frameSize; continue; }
-            if (strip < 8 && g_touchReported[strip].load()) {
+            if (hwFader < 8 && g_touchReported[strip].load()) {
                 const uint8_t lsb = rawA & 0x7F;
                 const uint8_t msb = data[i + 5] & 0x7F;
                 const uint16_t pb14 = static_cast<uint16_t>(lsb | (msb << 7));
@@ -27068,10 +27208,11 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // MIDI CC layer: the fader is a controller, not a track. The
                 // main thread turns the position into a value and MIDI; the
                 // hand position goes back as the motor target, as below.
-                if (uf8::bindings::ccLayerActive()) {
+                // Left unit only: the layer has eight strips (midicc::kStrips).
+                if (strip < 8 && uf8::bindings::ccLayerActive()) {
                     queueInput({PendingInput::CcFader, strip, static_cast<double>(pbOut)});
-                    if (g_dev)
-                        g_dev->send(uf8::buildFaderPosition(strip, lsbOut | 0x80, msbOut));
+                    uf8SendS_(strip, uf8::buildFaderPosition(
+                        uf8Local_(strip), lsbOut | 0x80, msbOut));
                     i += frameSize;
                     continue;
                 }
@@ -27087,8 +27228,8 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     if (mnt >= 0) {
                         g_dynFaderPendingNorm[strip].store(dynaFaderNorm_(pbOut));
                         g_dynFaderPendingValid[strip].store(true);
-                        if (g_dev)
-                            g_dev->send(uf8::buildFaderPosition(strip, lsbOut | 0x80, msbOut));
+                        uf8SendS_(strip, uf8::buildFaderPosition(
+                            uf8Local_(strip), lsbOut | 0x80, msbOut));
                         i += frameSize;
                         continue;
                     }
@@ -27108,8 +27249,8 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                             static_cast<double>(pbOut)
                                 / static_cast<double>(kUf8FaderPbMax),
                             /*released=*/false);
-                        if (g_dev)
-                            g_dev->send(uf8::buildFaderPosition(strip, lsbOut | 0x80, msbOut));
+                        uf8SendS_(strip, uf8::buildFaderPosition(
+                            uf8Local_(strip), lsbOut | 0x80, msbOut));
                         i += frameSize;
                         continue;
                     }
@@ -27178,9 +27319,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // target matches the user's last touch position.
                 // Without these echoes the motor falls back to a
                 // stale internal value (typically near 0) on release.
-                if (g_dev) {
-                    g_dev->send(uf8::buildFaderPosition(strip, lsbOut | 0x80, msbOut));
-                }
+                uf8SendS_(strip, uf8::buildFaderPosition(uf8Local_(strip), lsbOut | 0x80, msbOut));
                 // Deadband filter on the pb14 value, NOT on lsb alone.
                 // Splitting into msb/lsb produced upward "blips" while the
                 // user pulled the fader down: every MSB boundary crossed
@@ -27246,7 +27385,8 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // only" and swallows the press, so PAGE did nothing while the bank
             // keys (select AND run) worked (Frank 27.10.2026). A CC layer has no
             // key editor to pick into; the keys it keeps still go to the pick.
-            if (uf8::bindings::ccLayerActive()) {
+            // Left unit only, for now: the right one keeps its REAPER keys.
+            if (unit == 0 && uf8::bindings::ccLayerActive()) {
                 auto key = [&](midicc::Kind k, int idx) {
                     if (btnWoke && pressed) return;
                     queueInput({PendingInput::CcKey,
@@ -27682,7 +27822,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     //                          instance.
                     if (pressed) {
                         const uint8_t strip =
-                            static_cast<uint8_t>(id - 0x08);
+                            static_cast<uint8_t>(id - 0x08 + base);
                         // Hue mode: a lamp strip's V-Pot push does whatever
                         // Settings put on it (white/colour toggle by default).
                         // Ahead of the learn intercept for the same reason the
@@ -27765,7 +27905,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     }
                     handledNatively = true;
                 } else if (id >= 0x20 && id <= 0x37) {
-                    const uint8_t strip = static_cast<uint8_t>((id - 0x20) / 3);
+                    const uint8_t strip = static_cast<uint8_t>((id - 0x20) / 3 + base);
                     const int which     = (id - 0x20) % 3;   // 0=SOLO 1=CUT 2=SEL
                     // Hue mode: a lamp strip's three keys belong to the lamp,
                     // and this has to come BEFORE the learn arm — there is no
@@ -27937,19 +28077,20 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 i += frameSize;
                 continue;
             }
-            const uint8_t strip = rawStrip;
+            const uint8_t strip = static_cast<uint8_t>(rawStrip + base);
             // MIDI CC layer: the cap limps the motor under the finger and does
             // nothing else: no track selected, no automation seeded, no learn.
             // The release goes through the debounce like the track path's (the
             // sensor bounces under a held finger); commitDebouncedTouchReleases
             // skips its REAPER writeback on this layer.
-            if (uf8::bindings::ccLayerActive()) {
+            // The CC layer is on the left unit only (eight strips, midicc::kStrips).
+            if (strip < 8 && uf8::bindings::ccLayerActive()) {
                 if (state != 0) {
                     g_touchLastPress[strip] = std::chrono::steady_clock::now();
                     g_touchReleasePending[strip].store(false);
                     g_touchGrabValid[strip].store(false);
                     g_touchReported[strip].store(true);
-                    if (g_dev) g_dev->sendPriority(uf8::buildMotorEnable(strip, false));
+                    uf8SendPriS_(strip, uf8::buildMotorEnable(uf8Local_(strip), false));
                     g_faderMotorEngaged[strip].store(false);
                 } else {
                     g_touchReleasePending[strip].store(true);
@@ -27967,14 +28108,13 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // touch-ON limp the motor (loose under the finger); on touch-OFF
             // push the cached position to the mount ONCE (FLIP picks the axis)
             // and drop touch-reported so the feedback loop re-parks the motor.
-            if (strip < 8 && g_selectionMode.load() == SelectionMode::DynaMount) {
+            if (g_selectionMode.load() == SelectionMode::DynaMount) {
                 const int mnt = uf8::dynamount::manager().mountForStrip(strip);
                 if (mnt >= 0) {
                     if (state != 0) {
                         g_touchReported[strip].store(true);
                         g_dynFaderPendingValid[strip].store(false);
-                        if (g_dev) g_dev->sendPriority(
-                            uf8::buildMotorEnable(strip, false));
+                        uf8SendPriS_(strip, uf8::buildMotorEnable(uf8Local_(strip), false));
                         g_faderMotorEngaged[strip].store(false);
                     } else {
                         g_touchReported[strip].store(false);
@@ -27997,13 +28137,12 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // along. Without the flush the last position sits in the coalescer
             // until the rate window rolls round, which reads as a lamp that
             // lands a beat after the hand stops.
-            if (strip < 8 && g_selectionMode.load() == SelectionMode::Hue) {
+            if (g_selectionMode.load() == SelectionMode::Hue) {
                 const int hslot = uf8::hue::manager().slotForStrip(strip);
                 if (hslot >= 0) {
                     if (state != 0) {
                         g_touchReported[strip].store(true);
-                        if (g_dev) g_dev->sendPriority(
-                            uf8::buildMotorEnable(strip, false));
+                        uf8SendPriS_(strip, uf8::buildMotorEnable(uf8Local_(strip), false));
                         g_faderMotorEngaged[strip].store(false);
                     } else {
                         g_touchReported[strip].store(false);
@@ -28015,7 +28154,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     continue;
                 }
             }
-            if (strip < 8) {
+            {
                 // Diag log — same path as f73201c. Append-mode, one line
                 // per touch event so we can correlate with FF 1B keepalive
                 // and FF 1D motor commands logged from the worker thread.
@@ -28131,7 +28270,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     // winken vom fader"). Limping is for a finger riding the cap;
                     // a learn touch is a tap, and nothing fights it.
                     if (!g_hudTouchLearn.load()) {
-                        if (g_dev) g_dev->sendPriority(uf8::buildMotorEnable(strip, false));
+                        uf8SendPriS_(strip, uf8::buildMotorEnable(uf8Local_(strip), false));
                         g_faderMotorEngaged[strip].store(false);
                     }
                     // Settings → Behaviour → Tracks → "Touch selects channel": queue
@@ -28170,7 +28309,8 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             //   0x3F..0x20 =  -1 .. -32  (counter-clockwise)
             // Bits 0x40/0x80 are unused — confirmed empirically on a live
             // UF8 by capturing slow CW vs. CCW rotations.
-            const uint8_t strip = data[i + 3];
+            const uint8_t hwPot = data[i + 3];   // 0..7 strips, 0x08 = channel encoder
+            const uint8_t strip = static_cast<uint8_t>(hwPot < 8 ? hwPot + base : hwPot);
             const uint8_t raw   = data[i + 4];
             int8_t signed6 = static_cast<int8_t>(raw & 0x3F);
             if (signed6 & 0x20) signed6 |= 0xC0;   // sign-extend from 6 bits
@@ -28185,14 +28325,14 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // writing pan/param — suppress the rest of this frame. A TURN means a
             // continuous (Value) binding, so clear the Toggle intent the press
             // path may have set (Frank 2026-06-20).
-            if (strip < 8 && uf8TouchLearnArm_(0, strip)) {
+            if (hwPot < 8 && uf8TouchLearnArm_(0, strip)) {
                 g_uf8HwLearnAsToggle.store(false);
                 i += frameSize;
                 continue;
             }
             // DynaMount mode: a mount strip's V-Pot nudges rotation (r),
             // regardless of FLIP. Atomic setter → safe from the input thread.
-            if (strip < 8 && g_selectionMode.load() == SelectionMode::DynaMount) {
+            if (hwPot < 8 && g_selectionMode.load() == SelectionMode::DynaMount) {
                 const int mnt = uf8::dynamount::manager().mountForStrip(strip);
                 if (mnt >= 0) {
                     uf8::dynamount::manager().nudgeRotation(mnt, signed6);
@@ -28203,7 +28343,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // Hue mode: a lamp strip's V-Pot walks whichever axis Settings put
             // on it (hue by default, saturation under FLIP). Atomic setter, so
             // it is safe from the input thread.
-            if (strip < 8 && g_selectionMode.load() == SelectionMode::Hue) {
+            if (hwPot < 8 && g_selectionMode.load() == SelectionMode::Hue) {
                 const int hslot = uf8::hue::manager().slotForStrip(strip);
                 if (hslot >= 0) {
                     uf8::hue::manager().nudgePot(hslot, signed6, g_flip.load());
@@ -28211,7 +28351,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     continue;
                 }
             }
-            if (strip < 8) {
+            if (hwPot < 8) {
                 // Continuous detent fraction = signed6/128. DON'T change this
                 // divisor: the stepped-param path recovers the integer detent
                 // count by multiplying e.value back ×128, so it's load-bearing.
@@ -28310,7 +28450,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                             break;
                     }
                 }
-            } else if (strip == 0x08) {
+            } else if (hwPot == 0x08) {
                 // Bankable dynamic bank paging: when the engaged sub-bank is
                 // an FX / Sends bank configured to page with the UF8 encoder,
                 // consume the detent here (post a page delta for the main
@@ -28345,6 +28485,23 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
 
         i += frameSize;
     }
+}
+
+// Both units' worker threads deliver here; one at a time, so everything the
+// handler keeps for itself (the modifier snapshot, the bindings pick state,
+// the per-function statics) still has a single user.
+static std::mutex g_uf8InputMx;
+void onUf8Input(const uint8_t* data, size_t len)
+{
+    std::lock_guard<std::mutex> lk(g_uf8InputMx);
+    onUf8InputUnit_(data, len, 0);
+}
+// The right-hand unit: strips 9-16 of the surface.
+void onUf8Input2(const uint8_t* data, size_t len)
+{
+    std::lock_guard<std::mutex> lk(g_uf8InputMx);
+    if (uf8Strips_() < 16) return;   // not (yet / any more) part of the surface
+    onUf8InputUnit_(data, len, 1);
 }
 
 // ---- UF1 bring-up (Phase 0) ------------------------------------------------
@@ -39000,11 +39157,11 @@ uint32_t reaperColorForVisibleSlot(int slot)
     // Empty bank slots without any per-strip binding paint the strip OFF
     // so it visually matches the blanked scribble / channel# / LEDs.
     // (Frank 2026-05-09.)
-    if (g_uf8PluginMode.load() && slot >= 0 && slot < 8) {
+    if (g_uf8PluginMode.load() && slot >= 0 && slot < uf8Strips_()) {
         if (auto u = userStripCtxFocused_(); u.map) {
             const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
-            const auto& bs   = u.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][slot];
-            const auto& strp = u.map->uf8.strips[uf8FaderBankClamped_()][slot];
+            const auto& bs   = userVpotSlot_(u.map->uf8, bank, slot);
+            const auto& strp = userStripBinding_(u.map->uf8, slot);
             if (bs.stripColour != 0) {
                 return bs.stripColour & 0x00FFFFFFu;
             }
@@ -39323,8 +39480,8 @@ bool isBipolarSlot(const uf8::LinkSlot& s)
 
 // Slot-level state caches — push only on change to avoid hammering the
 // OUT endpoint 30× per second.
-std::array<std::string, 8> g_lastTrackName{};
-std::array<std::string, 8> g_lastSlotLabel{};
+std::array<std::string, kUf8MaxStrips> g_lastTrackName{};
+std::array<std::string, kUf8MaxStrips> g_lastSlotLabel{};
 // Top-soft-key LED dedup. -1 = unset. Encodes the TopSoftKeyState as
 // 0=Off / 1=Dim / 2=On so transitions between any two visible levels
 // trigger a re-push.
@@ -39335,7 +39492,7 @@ std::array<std::string, 8> g_lastSlotLabel{};
 // — the "leuchtet erst nach Shift" + "alter Mode bleibt an" bug (Frank
 // 2026-06-23). -1 is unreachable by any real composite, so it stays the
 // "force push" sentinel.
-std::array<int32_t, 8>     g_lastTopSoftKey{-1, -1, -1, -1, -1, -1, -1, -1};
+std::array<int32_t, kUf8MaxStrips>     g_lastTopSoftKey = uf8FilledArray_<int32_t>(-1);
 // Sentinel that can't be a real label nor a blank send — guarantees
 // the first refresh (after extension load or bank shift) actually
 // emits a frame, even when the resolved csType is empty. Without
@@ -39343,26 +39500,25 @@ std::array<int32_t, 8>     g_lastTopSoftKey{-1, -1, -1, -1, -1, -1, -1, -1};
 // tracks and the firmware kept the last LCD content (e.g. "4K E" left
 // over from an SSL 360° session). Frank 2026-05-25.
 inline constexpr const char* kCsTypeSentinel = "\x01";
-std::array<std::string, 8> g_lastCsType{
-    kCsTypeSentinel, kCsTypeSentinel, kCsTypeSentinel, kCsTypeSentinel,
-    kCsTypeSentinel, kCsTypeSentinel, kCsTypeSentinel, kCsTypeSentinel };
-std::array<std::string, 8> g_lastValueLine{};
-std::array<std::string, 8> g_lastFaderDb{};
+std::array<std::string, kUf8MaxStrips> g_lastCsType =
+    uf8FilledArray_<std::string>(kCsTypeSentinel);
+std::array<std::string, kUf8MaxStrips> g_lastValueLine{};
+std::array<std::string, kUf8MaxStrips> g_lastFaderDb{};
 // The unit slot beside it. Cached separately, or a strip that keeps the same
 // NUMBER while its unit changes (a FLIP onto a different parameter that happens
 // to read the same value) would keep the old unit on the LCD.
-std::array<std::string, 8> g_lastFaderDbUnit{};
-std::array<std::string, 8> g_lastChanNum{};
-std::array<uint16_t, 8>    g_lastVPotBar{};      // 16-bit LE per strip
-std::array<uint8_t, 8>     g_lastVPotMode{};     // FF 66 09 0D mode byte per strip
+std::array<std::string, kUf8MaxStrips> g_lastFaderDbUnit{};
+std::array<std::string, kUf8MaxStrips> g_lastChanNum{};
+std::array<uint16_t, kUf8MaxStrips>    g_lastVPotBar{};      // 16-bit LE per strip
+std::array<uint8_t, kUf8MaxStrips>     g_lastVPotMode{};     // FF 66 09 0D mode byte per strip
 
 // Routed pan-tweak overlay: when the user moves a control that writes
 // the routed D_PAN, the value-line briefly shows the formatted pan
 // readout instead of the send name, then reverts after kPanOverlayMs.
 // Touched from drainInputQueue (main thread) and read from the timer
 // (also main thread) — plain types are sufficient.
-std::array<int64_t, 8>     g_panOverlayUntilMs{};
-std::array<std::string, 8> g_panOverlayText{};
+std::array<int64_t, kUf8MaxStrips>     g_panOverlayUntilMs{};
+std::array<std::string, kUf8MaxStrips> g_panOverlayText{};
 
 // V-Pot pan fake-touch hold state (see forward decls).
 std::array<int64_t, kPanTouchSlots>      g_panTouchUntilMs{};
@@ -39377,8 +39533,8 @@ std::array<MediaTrack*, kVolTouchSlots>  g_volTouchTr{};
 // Folder Mode reveal timestamps — bumped by V-Pot-driven inputs in
 // drainInputQueue so a parent strip briefly shows the real value before
 // reverting to "Folder". See kFolderRevealMs in the forward decls.
-std::array<int64_t, 8>     g_folderRevealUntilMs{};
-std::array<int64_t, 8>     g_vpotPushSuppressUntilMs{};
+std::array<int64_t, kUf8MaxStrips>     g_folderRevealUntilMs{};
+std::array<int64_t, kUf8MaxStrips>     g_vpotPushSuppressUntilMs{};
 reasixty::PushQuiet<5>     g_uf1PotPushQuiet;
 
 // CUT LED last-pushed state per strip — int8_t with -1 = unknown / force
@@ -39387,13 +39543,13 @@ reasixty::PushQuiet<5>     g_uf1PotPushQuiet;
 // B_MUTE, otherwise the bank track's B_MUTE. REAPER's SetSurfaceMute
 // callback only fires for track mute changes, so a per-tick poll is the
 // only way to keep the LED in sync with send-mute toggles.
-std::array<int8_t, 8>      g_lastCutLed{-1, -1, -1, -1, -1, -1, -1, -1};
+std::array<int8_t, kUf8MaxStrips>      g_lastCutLed = uf8FilledArray_<int8_t>(-1);
 // Per-strip Solo / Sel last-pushed state used by the user-strip-mode
 // LED override (Plugin Mode + a learned plug-in focused). Outside user-
 // strip mode, Solo/Sel LEDs are pushed event-driven via sendLed from
 // REAPER callbacks — these caches are unused there. -1 = unknown.
-std::array<int8_t, 8>      g_lastSoloLed{-1, -1, -1, -1, -1, -1, -1, -1};
-std::array<int8_t, 8>      g_lastSelLed {-1, -1, -1, -1, -1, -1, -1, -1};
+std::array<int8_t, kUf8MaxStrips>      g_lastSoloLed = uf8FilledArray_<int8_t>(-1);
+std::array<int8_t, kUf8MaxStrips>      g_lastSelLed  = uf8FilledArray_<int8_t>(-1);
 bool                       g_vpotBarInit{false};
 
 // Resolve the LinkSlot for one visible strip at the current page index.
@@ -39712,13 +39868,13 @@ static void pushUf8EncPickerDecorations_()
         label.resize(uf8::kUf8ScribbleChars, ' ');
         if (label != g_lastSlotLabel[s]) {
             g_lastSlotLabel[s] = label;
-            g_dev->send(uf8::buildPluginSlotName(static_cast<uint8_t>(s), label));
+            uf8SendS_(s, uf8::buildPluginSlotName(uf8Local_(s), label));
         }
         std::string chan = "  ";
         if (m >= 0) chan = std::to_string(pos + 1);
         if (chan != g_lastChanNum[s]) {
             g_lastChanNum[s] = chan;
-            g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), chan));
+            uf8SendS_(s, uf8::buildChannelNumber(uf8Local_(s), chan));
         }
         const uf8::TopSoftKeyState tssk =
             m < 0 ? uf8::TopSoftKeyState::Off
@@ -39729,8 +39885,8 @@ static void pushUf8EncPickerDecorations_()
                                 ^ static_cast<int32_t>(rgb);
         if (composite != g_lastTopSoftKey[s]) {
             g_lastTopSoftKey[s] = composite;
-            sendLedFrames(uf8::buildTopSoftKeyLed(
-                static_cast<uint8_t>(s), tssk, uf8::ledColourForTrackRgb(rgb)));
+            sendLedFramesS_(s, uf8::buildTopSoftKeyLed(
+                uf8Local_(s), tssk, uf8::ledColourForTrackRgb(rgb)));
         }
     }
 }
@@ -39776,7 +39932,7 @@ void pushNavOverlayDecorations()
         }
         if (label != g_lastSlotLabel[s]) {
             g_lastSlotLabel[s] = label;
-            g_dev->send(uf8::buildPluginSlotName(static_cast<uint8_t>(s), label));
+            uf8SendS_(s, uf8::buildPluginSlotName(uf8Local_(s), label));
         }
 
         // Channel Number zone — marker / region index. Empty otherwise.
@@ -39790,7 +39946,7 @@ void pushNavOverlayDecorations()
         }
         if (chan != g_lastChanNum[s]) {
             g_lastChanNum[s] = chan;
-            g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), chan));
+            uf8SendS_(s, uf8::buildChannelNumber(uf8Local_(s), chan));
         }
 
         // Phase 2.8c — optional lower-row write. Off (=0) leaves the
@@ -39824,8 +39980,8 @@ void pushNavOverlayDecorations()
             if (lower.size() > 7) lower.resize(7);
             if (lower != g_lastValueLine[s]) {
                 g_lastValueLine[s] = lower;
-                g_dev->send(uf8::buildStripTextLower(
-                    static_cast<uint8_t>(s), lower));
+                uf8SendS_(s, uf8::buildStripTextLower(
+                    uf8Local_(s), lower));
             }
         }
 
@@ -39850,8 +40006,8 @@ void pushNavOverlayDecorations()
           ^ static_cast<int32_t>(rgb & 0x00FFFFFFu);
         if (composite != g_lastTopSoftKey[s]) {
             g_lastTopSoftKey[s] = composite;
-            sendLedFrames(uf8::buildTopSoftKeyLed(
-                static_cast<uint8_t>(s), tssk, ledClr));
+            sendLedFramesS_(s, uf8::buildTopSoftKeyLed(
+                uf8Local_(s), tssk, ledClr));
         }
     }
 }
@@ -40490,14 +40646,16 @@ void pushZonesForVisibleSlots()
     // SOLO/CUT/SEL) still renders normally so the user keeps live
     // track feedback while navigating markers.
     // The encoder-mode picker (ENC PUSH held) owns the same three zones.
-    const bool overlayActive = uf8::nav::Overlay::instance().active()
-                            || uf8EncPickerShown_();
+    // Both live on the LEFT unit only (their windows are eight wide); the
+    // right-hand unit keeps painting its own strips underneath.
+    const bool overlayActiveAny = uf8::nav::Overlay::instance().active()
+                               || uf8EncPickerShown_();
 
     const int trackCount = visibleTrackCount();
     const int bankOffset = g_bankOffset.load();
     const auto focused   = uf8::getFocusedParam();
 
-    std::array<uint16_t, 8> vpotBar{};
+    std::array<uint16_t, kUf8MaxStrips> vpotBar{};
 
     // Full re-push on a bank change — every cached "last" value refers
     // to a different track now, so dedup would suppress legitimate
@@ -40606,7 +40764,7 @@ void pushZonesForVisibleSlots()
         g_vpotBarInit = false;
         if (g_sync) g_sync->invalidate();
 
-        for (int s = 0; s < 8; ++s) {
+        for (int s = 0; s < uf8Strips_(); ++s) {
             const int rs = stripToVisibleSlot(s, bankOffset);
             MediaTrack* t = visibleTrackAt(rs);
             if (MediaTrack* mp = masterPinTrack_(s)) t = mp;  // Master-pin
@@ -40620,12 +40778,12 @@ void pushZonesForVisibleSlots()
             // track. ARM LED ID mapping still unverified (cap23b needed)
             // so it's gated inside sendLed itself.
             if (g_dev) {
-                const auto strip = static_cast<uint8_t>(s);
-                sendLedFrames(uf8::buildLedColourPair(strip, uf8::LedClass::Sel,  sel,
+                const auto strip = uf8Local_(s);
+                sendLedFramesS_(s, uf8::buildLedColourPair(strip, uf8::LedClass::Sel,  sel,
                                                       ledColourFor(LedClass::Sel,  selT)));
-                sendLedFrames(uf8::buildLedColourPair(strip, uf8::LedClass::Cut,  mute,
+                sendLedFramesS_(s, uf8::buildLedColourPair(strip, uf8::LedClass::Cut,  mute,
                                                       ledColourFor(LedClass::Mute, t)));
-                sendLedFrames(uf8::buildLedColourPair(strip, uf8::LedClass::Solo, solo,
+                sendLedFramesS_(s, uf8::buildLedColourPair(strip, uf8::LedClass::Solo, solo,
                                                       ledColourFor(LedClass::Solo, t)));
                 (void)arm;
             }
@@ -40634,17 +40792,18 @@ void pushZonesForVisibleSlots()
         // happens in the next loop), so compute the bitmask directly from
         // the new bank's tracks instead of pushSelectedStripBitmask().
         if (g_dev) {
-            uint16_t mask = 0;
-            for (int s = 0; s < 8; ++s) {
+            uint32_t mask = 0;   // bit s = surface strip s
+            for (int s = 0; s < uf8Strips_(); ++s) {
                 const int rs = stripToVisibleSlot(s, bankOffset);
                 MediaTrack* t = visibleTrackAt(rs);
                 if (MediaTrack* mp = masterPinTrack_(s)) t = mp;  // Master-pin
                 t = uf8StripSelTrack_(s, bankOffset, trackCount, t);  // route, if any
                 if (t && GetMediaTrackInfo_Value(t, "I_SELECTED") > 0.5) {
-                    mask |= static_cast<uint16_t>(1u << s);
+                    mask |= 1u << s;
                 }
             }
-            g_dev->send(uf8::buildSelectedStripBitmask(mask));
+            for (int u = 0; u < uf8Units_(); ++u)
+                uf8SendUnit_(u, uf8::buildSelectedStripBitmask(uf8UnitMask_(mask, u)));
         }
     }
 
@@ -40661,7 +40820,9 @@ void pushZonesForVisibleSlots()
     // one answer per tick, not one per strip.
     MediaTrack* const barFocusTrack = activeFocusTrack_();
 
-    for (int s = 0; s < 8; ++s) {
+    for (int s = 0; s < uf8Strips_(); ++s) {
+        // The Nav overlay / encoder picker own three zones on the LEFT unit only.
+        const bool overlayActive = overlayActiveAny && s < 8;
         const int realSlot = stripToVisibleSlot(s, bankOffset);
         MediaTrack* tr = visibleTrackAt(realSlot);
         // Master-pin: this physical strip shows/controls the REAPER Master
@@ -40706,7 +40867,7 @@ void pushZonesForVisibleSlots()
             if (userS.map) {
                 userStripActive = true;
                 const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
-                const auto& sb = userS.map->uf8.strips[uf8FaderBankClamped_()][s];
+                const auto& sb = userStripBinding_(userS.map->uf8, s);
                 userBoundFader = sb.faderVst3Param;
                 userBoundSolo  = sb.soloVst3Param;
                 userBoundCut   = sb.cutVst3Param;
@@ -40717,7 +40878,7 @@ void pushZonesForVisibleSlots()
                 userInvertSolo = sb.soloInvert;
                 userInvertCut  = sb.cutInvert;
                 userInvertSel  = sb.selInvert;
-                userBoundVpot  = userS.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s].vst3Param;
+                userBoundVpot  = userVpotSlot_(userS.map->uf8, bank, s).vst3Param;
             }
         }
 
@@ -40783,8 +40944,8 @@ void pushZonesForVisibleSlots()
                 uf8::LedColour cutCol = (userStripActive && userColourCut != 0)
                     ? uf8::ledColourForTrackRgb(userColourCut)
                     : ledColourFor(LedClass::Mute, colourTr);
-                sendLedFrames(uf8::buildLedColourPair(
-                    static_cast<uint8_t>(s), uf8::LedClass::Cut, effMute,
+                sendLedFramesS_(s, uf8::buildLedColourPair(
+                    uf8Local_(s), uf8::LedClass::Cut, effMute,
                     cutCol));
             }
         }
@@ -40808,8 +40969,8 @@ void pushZonesForVisibleSlots()
                 const uf8::LedColour soloCol = (userColourSolo != 0)
                     ? uf8::ledColourForTrackRgb(userColourSolo)
                     : ledColourFor(LedClass::Solo, userS.tr);
-                sendLedFrames(uf8::buildLedColourPair(
-                    static_cast<uint8_t>(s), uf8::LedClass::Solo, soloOn,
+                sendLedFramesS_(s, uf8::buildLedColourPair(
+                    uf8Local_(s), uf8::LedClass::Solo, soloOn,
                     soloCol));
             }
 
@@ -40823,8 +40984,8 @@ void pushZonesForVisibleSlots()
                 const uf8::LedColour selCol = (userColourSel != 0)
                     ? uf8::ledColourForTrackRgb(userColourSel)
                     : ledColourFor(LedClass::Sel, userS.tr);
-                sendLedFrames(uf8::buildLedColourPair(
-                    static_cast<uint8_t>(s), uf8::LedClass::Sel, selOn,
+                sendLedFramesS_(s, uf8::buildLedColourPair(
+                    uf8Local_(s), uf8::LedClass::Sel, selOn,
                     selCol));
             }
         } else if (soloRmeActive && tr) {
@@ -40838,8 +40999,8 @@ void pushZonesForVisibleSlots()
             const int8_t soloKey = soloOn ? 1 : 0;
             if (soloKey != g_lastSoloLed[s]) {
                 g_lastSoloLed[s] = soloKey;
-                sendLedFrames(uf8::buildLedColourPair(
-                    static_cast<uint8_t>(s), uf8::LedClass::Solo, soloOn,
+                sendLedFramesS_(s, uf8::buildLedColourPair(
+                    uf8Local_(s), uf8::LedClass::Solo, soloOn,
                     ledColourFor(LedClass::Solo, tr)));
             }
             g_lastSelLed[s] = -1;
@@ -40852,8 +41013,8 @@ void pushZonesForVisibleSlots()
             // event-driven.
             if (g_lastSoloLed[s] != 0) {
                 g_lastSoloLed[s] = 0;
-                sendLedFrames(uf8::buildLedColourPair(
-                    static_cast<uint8_t>(s), uf8::LedClass::Solo, false,
+                sendLedFramesS_(s, uf8::buildLedColourPair(
+                    uf8Local_(s), uf8::LedClass::Solo, false,
                     ledColourFor(LedClass::Solo, tr)));
             }
             g_lastSelLed[s] = -1;
@@ -40869,8 +41030,8 @@ void pushZonesForVisibleSlots()
             const int8_t soloKey = soloOn ? 1 : 0;
             if (soloKey != g_lastSoloLed[s]) {
                 g_lastSoloLed[s] = soloKey;
-                sendLedFrames(uf8::buildLedColourPair(
-                    static_cast<uint8_t>(s), uf8::LedClass::Solo, soloOn,
+                sendLedFramesS_(s, uf8::buildLedColourPair(
+                    uf8Local_(s), uf8::LedClass::Solo, soloOn,
                     ledColourFor(LedClass::Solo, tr)));
             }
             // SEL stays event-driven and is never force-cleared by routing;
@@ -40889,6 +41050,10 @@ void pushZonesForVisibleSlots()
         // tr only inside `if (tr)` guards, so this block is safe when
         // tr == nullptr.
         {
+            // The eight soft keys are the surface's FUNCTION keys, not per-track
+            // ones: a right-hand UF8's row shows and fires the same eight as the
+            // left's (sk = the key's position on its own unit).
+            const int sk = s & 7;
             // Domain normally follows the focused param; with bank-follow OFF it
             // stays on the latched domain so a param touch in the other domain
             // doesn't flip the soft-key row (Frank 2026-06-26, Quick-2/BC case).
@@ -40996,18 +41161,18 @@ void pushZonesForVisibleSlots()
                  && !dynOwnsSet
                  && setOwnsDynamicKey_(
                         uf8::bindings::getUserQuickSlot(
-                            curLayer, curQuick, curSub, s),
+                            curLayer, curQuick, curSub, sk),
                         static_cast<int>(
                             uf8::bindings::bankModifierSnapshot())));
             if (userCtx
                 && dynKind != uf8::bindings::DynamicBankKind::None
                 && !dynSetOwns) {
-                dynInfo = dynamicBankSlot_(dynKind, dynBankContextTrack_(), s);
+                dynInfo = dynamicBankSlot_(dynKind, dynBankContextTrack_(), sk);
                 userLabel = dynInfo.label;
                 userBankSlotPresent = dynInfo.present;
             } else if (curQuick >= 0) {
                 const auto userSlot = uf8::bindings::getUserQuickSlot(
-                    curLayer, curQuick, curSub, s);
+                    curLayer, curQuick, curSub, sk);
                 // ⇨ THE ROW FOLLOWS THE HELD MODIFIER.
                 // Hold Shift and the eight keys show their Shift layer, hold Cmd
                 // and they show the Cmd layer. The slots and the dispatch have
@@ -41082,10 +41247,10 @@ void pushZonesForVisibleSlots()
             // On Plain an occupied key still shows and fires the plug-in
             // parameter, unchanged; only the held-modifier sets open up.
             if (!userCtx && !pluginModeLocal && curLayer == 0 && vSk.linkIdx
-                && (vSk.linkIdx[s] == softkey::kNoSlot || sslSetOwnsRow)) {
+                && (vSk.linkIdx[sk] == softkey::kNoSlot || sslSetOwnsRow)) {
                 const int qd = (domSk == uf8::Domain::BusComp) ? 1 : 0;
                 const auto fslot = uf8::bindings::getUserQuickSlot(
-                    0, qd, bankSk, s);
+                    0, qd, bankSk, sk);
                 // ⇨ THE HELD SET, like every other soft-key path. This read
                 // Plain outright, so holding Shift over a free BC slot fired the
                 // Shift action while the LCD went on showing the Plain name —
@@ -41134,7 +41299,7 @@ void pushZonesForVisibleSlots()
                     uf8::bindings::ButtonId::TopSoftKey8,
                 };
                 const auto bd = uf8::bindings::getBinding(
-                    uf8::bindings::getActiveLayer(), kTskIds[s]);
+                    uf8::bindings::getActiveLayer(), kTskIds[sk]);
                 const int mIdx = static_cast<int>(curModifier);
                 if (mIdx >= 0 && mIdx < uf8::bindings::kModifierCount
                     && !bd.shortPress[mIdx].label.empty()) {
@@ -41153,7 +41318,7 @@ void pushZonesForVisibleSlots()
                 // A held set with nothing on this key shows NOTHING. Handing the
                 // plug-in's own name back would announce that the key still does
                 // what Plain does — the rule the user Quicks already follow.
-                else if (!sslSetOwnsRow)        label = std::string(vSk.labels[s]);
+                else if (!sslSetOwnsRow)        label = std::string(vSk.labels[sk]);
             }
             // Fold UTF-8 → Latin-1 before padding so umlauts in user labels,
             // favourite names and dynamic-bank (send/track) names render on
@@ -41182,7 +41347,7 @@ void pushZonesForVisibleSlots()
             const int slotLink = userCtx
                 ? (userBankSlotPresent ? 0 : softkey::kNoSlot)
                 : (sslFreeSlotPresent ? 0
-                   : (sslSetOwnsRow ? softkey::kNoSlot : vSk.linkIdx[s]));
+                   : (sslSetOwnsRow ? softkey::kNoSlot : vSk.linkIdx[sk]));
             // Synthetic toggle columns: read the per-strip state directly
             // (not the focused state) so each column's LED reflects the
             // toggle's actual on/off for THIS strip's track. Only ONE
@@ -41226,13 +41391,13 @@ void pushZonesForVisibleSlots()
                 if (auto uctxBank = userStripCtxFocused_(); uctxBank.map) {
                     for (int sIdx = 0; sIdx < 8; ++sIdx) {
                         if (uctxBank.map->uf8.banks
-                            .banks[uf8FaderBankClamped_()][s][sIdx].vst3Param >= 0)
+                            .banks[uf8FaderBankClamped_()][sk][sIdx].vst3Param >= 0)
                         {
                             bankAssigned = true; break;
                         }
                     }
                 }
-                const bool isActive = (s == activeBank);
+                const bool isActive = (sk == activeBank);
                 // During learn the user can switch to an as-yet-empty bank to
                 // fill it (the input-thread soft-key handler allows navigating
                 // to empty banks while learning). Light the ACTIVE selector so
@@ -41273,7 +41438,7 @@ void pushZonesForVisibleSlots()
                 } else {
                     if (userBankSlotPresent) {
                         const auto userSlot = uf8::bindings::getUserQuickSlot(
-                            curLayer, curQuick, curSub, s);
+                            curLayer, curQuick, curSub, sk);
                         // The set that is showing, not the union of both — the
                         // label above already followed it.
                         slotActive = bindingHasActiveSlotForSet_(
@@ -41292,7 +41457,7 @@ void pushZonesForVisibleSlots()
                 // 2026-06-23: "LED muss auch sein".)
                 const int qd = (domSk == uf8::Domain::BusComp) ? 1 : 0;
                 const auto fslot = uf8::bindings::getUserQuickSlot(
-                    0, qd, bankSk, s);
+                    0, qd, bankSk, sk);
                 const bool slotActive = bindingHasActiveSlotForSet_(
                     fslot,
                     static_cast<int>(uf8::bindings::bankModifierSnapshot()));
@@ -41358,7 +41523,7 @@ void pushZonesForVisibleSlots()
                 ledClr = uf8::ledColourForTrackRgb(ledColRgb);
             } else if (pluginModeLocal) {
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                    const auto& tl = uctx.map->uf8.topSoftKeyLeds[s];
+                    const auto& tl = uctx.map->uf8.topSoftKeyLeds[sk];
                     const uint32_t bc = tl.colour & 0x00FFFFFFu;
                     if (bc != 0) {
                         ledColRgb = bc;
@@ -41370,7 +41535,7 @@ void pushZonesForVisibleSlots()
                 // for the reasoning. effectiveLed* falls back to the key's
                 // colour, so a set without an override is unchanged.
                 const auto userSlot = uf8::bindings::getUserQuickSlot(
-                    curLayer, curQuick, curSub, s);
+                    curLayer, curQuick, curSub, sk);
                 const int lm =
                     static_cast<int>(uf8::bindings::bankModifierSnapshot());
                 uint8_t c[3];
@@ -41386,7 +41551,7 @@ void pushZonesForVisibleSlots()
             } else if (sslFreeSlotPresent) {
                 const int qd = (domSk == uf8::Domain::BusComp) ? 1 : 0;
                 const auto fslot = uf8::bindings::getUserQuickSlot(
-                    0, qd, bankSk, s);
+                    0, qd, bankSk, sk);
                 const int lm =
                     static_cast<int>(uf8::bindings::bankModifierSnapshot());
                 uint8_t c[3];
@@ -41410,7 +41575,7 @@ void pushZonesForVisibleSlots()
                     uf8::bindings::ButtonId::TopSoftKey7,
                     uf8::bindings::ButtonId::TopSoftKey8,
                 };
-                const auto bid = kTskIdsForLed[s];
+                const auto bid = kTskIdsForLed[sk];
                 if (uf8::bindings::hasBinding(curLayer, bid)) {
                     const auto bd =
                         uf8::bindings::getBinding(curLayer, bid);
@@ -41436,12 +41601,12 @@ void pushZonesForVisibleSlots()
             // dedup caches don't ping-pong against pushNavOverlayDecorations.
             if (!overlayActive && composite != g_lastTopSoftKey[s]) {
                 g_lastTopSoftKey[s] = composite;
-                sendLedFrames(uf8::buildTopSoftKeyLed(
-                    static_cast<uint8_t>(s), tssk, ledClr));
+                sendLedFramesS_(s, uf8::buildTopSoftKeyLed(
+                    uf8Local_(s), tssk, ledClr));
             }
             if (!overlayActive && label != g_lastSlotLabel[s]) {
                 g_lastSlotLabel[s] = label;
-                g_dev->send(uf8::buildPluginSlotName(static_cast<uint8_t>(s), label));
+                uf8SendS_(s, uf8::buildPluginSlotName(uf8Local_(s), label));
             }
         }
 
@@ -41528,14 +41693,14 @@ void pushZonesForVisibleSlots()
                     nm.resize(uf8::kUf8ScribbleChars);
                 if (bankChanged || g_lastTrackName[s] != nm) {
                     g_lastTrackName[s] = nm;
-                    g_dev->send(uf8::buildStripTextUpper(static_cast<uint8_t>(s), nm));
+                    uf8SendS_(s, uf8::buildStripTextUpper(uf8Local_(s), nm));
                 }
 
                 // Channel-strip-type zone — tag the strip as a mount.
                 const std::string cs = "DYNA";
                 if (bankChanged || g_lastCsType[s] != cs) {
                     g_lastCsType[s] = cs;
-                    g_dev->send(uf8::buildChannelStripType(static_cast<uint8_t>(s), cs));
+                    uf8SendS_(s, uf8::buildChannelStripType(uf8Local_(s), cs));
                 }
 
                 // Channel-number digit — mount slot (1-based config index).
@@ -41544,7 +41709,7 @@ void pushZonesForVisibleSlots()
                 const std::string ch = chbuf;
                 if (!overlayActive && (bankChanged || g_lastChanNum[s] != ch)) {
                     g_lastChanNum[s] = ch;
-                    g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), ch));
+                    uf8SendS_(s, uf8::buildChannelNumber(uf8Local_(s), ch));
                 }
 
                 // Fader readout — the active axis value in DynaMount terms:
@@ -41556,8 +41721,8 @@ void pushZonesForVisibleSlots()
                 const std::string db = dbbuf;
                 if (bankChanged || g_lastFaderDb[s] != db) {
                     g_lastFaderDb[s] = db;
-                    g_dev->send(uf8::buildFaderDbReadout(
-                        static_cast<uint8_t>(s), db, ""));
+                    uf8SendS_(s, uf8::buildFaderDbReadout(
+                        uf8Local_(s), db, ""));
                 }
 
                 // Value line — full mount state in X/Y/R (+ OFF when offline).
@@ -41569,7 +41734,7 @@ void pushZonesForVisibleSlots()
                 if (vl.size() > 19) vl.resize(19);
                 if (bankChanged || g_lastValueLine[s] != vl) {
                     g_lastValueLine[s] = vl;
-                    g_dev->send(uf8::buildValueLine(static_cast<uint8_t>(s), vl));
+                    uf8SendS_(s, uf8::buildValueLine(uf8Local_(s), vl));
                 }
 
                 // Motor fader — drive to the active axis position. Skipped
@@ -41594,14 +41759,14 @@ void pushZonesForVisibleSlots()
                         const uint8_t lsb = static_cast<uint8_t>(pb & 0x7F);
                         const uint8_t msb = static_cast<uint8_t>((pb >> 7) & 0x7F);
                         if (!g_faderMotorEngaged[s].load()) {
-                            g_dev->send(uf8::buildFaderPosition(
-                                static_cast<uint8_t>(s), (lsb | 0x80), msb));
-                            g_dev->send(uf8::buildMotorEnable(
-                                static_cast<uint8_t>(s), true));
+                            uf8SendS_(s, uf8::buildFaderPosition(
+                                uf8Local_(s), (lsb | 0x80), msb));
+                            uf8SendS_(s, uf8::buildMotorEnable(
+                                uf8Local_(s), true));
                             g_faderMotorEngaged[s].store(true);
                         }
-                        g_dev->send(uf8::buildFaderPosition(
-                            static_cast<uint8_t>(s), lsb, msb));
+                        uf8SendS_(s, uf8::buildFaderPosition(
+                            uf8Local_(s), lsb, msb));
                     }
                 }
 
@@ -41634,8 +41799,8 @@ void pushZonesForVisibleSlots()
                     nm.resize(uf8::kUf8ScribbleChars);
                 if (bankChanged || g_lastTrackName[s] != nm) {
                     g_lastTrackName[s] = nm;
-                    g_dev->send(uf8::buildStripTextUpper(
-                        static_cast<uint8_t>(s), nm));
+                    uf8SendS_(s, uf8::buildStripTextUpper(
+                        uf8Local_(s), nm));
                 }
 
                 // Channel-strip-type zone — tag the strip, and say WHICH kind
@@ -41645,8 +41810,8 @@ void pushZonesForVisibleSlots()
                     (cfg.kind == uf8::hue::TargetKind::Group) ? "ZONE" : "LAMP";
                 if (bankChanged || g_lastCsType[s] != cs) {
                     g_lastCsType[s] = cs;
-                    g_dev->send(uf8::buildChannelStripType(
-                        static_cast<uint8_t>(s), cs));
+                    uf8SendS_(s, uf8::buildChannelStripType(
+                        uf8Local_(s), cs));
                 }
 
                 // Channel-number digit — the slot's 1-based config index.
@@ -41655,8 +41820,8 @@ void pushZonesForVisibleSlots()
                 const std::string ch = chbuf;
                 if (!overlayActive && (bankChanged || g_lastChanNum[s] != ch)) {
                     g_lastChanNum[s] = ch;
-                    g_dev->send(uf8::buildChannelNumber(
-                        static_cast<uint8_t>(s), ch));
+                    uf8SendS_(s, uf8::buildChannelNumber(
+                        uf8Local_(s), ch));
                 }
 
                 // Fader readout — brightness in percent. No "dB": this is not a
@@ -41668,8 +41833,8 @@ void pushZonesForVisibleSlots()
                 const std::string db = dbbuf;
                 if (bankChanged || g_lastFaderDb[s] != db) {
                     g_lastFaderDb[s] = db;
-                    g_dev->send(uf8::buildFaderDbReadout(
-                        static_cast<uint8_t>(s), db, ""));
+                    uf8SendS_(s, uf8::buildFaderDbReadout(
+                        uf8Local_(s), db, ""));
                 }
 
                 // Value line — the full lamp state, or OFFLINE when the bridge
@@ -41678,7 +41843,7 @@ void pushZonesForVisibleSlots()
                 if (vl.size() > 19) vl.resize(19);
                 if (bankChanged || g_lastValueLine[s] != vl) {
                     g_lastValueLine[s] = vl;
-                    g_dev->send(uf8::buildValueLine(static_cast<uint8_t>(s), vl));
+                    uf8SendS_(s, uf8::buildValueLine(uf8Local_(s), vl));
                 }
 
                 // Motor fader — brightness, parked while the user has hold of
@@ -41696,14 +41861,14 @@ void pushZonesForVisibleSlots()
                         const uint8_t lsb = static_cast<uint8_t>(pb & 0x7F);
                         const uint8_t msb = static_cast<uint8_t>((pb >> 7) & 0x7F);
                         if (!g_faderMotorEngaged[s].load()) {
-                            g_dev->send(uf8::buildFaderPosition(
-                                static_cast<uint8_t>(s), (lsb | 0x80), msb));
-                            g_dev->send(uf8::buildMotorEnable(
-                                static_cast<uint8_t>(s), true));
+                            uf8SendS_(s, uf8::buildFaderPosition(
+                                uf8Local_(s), (lsb | 0x80), msb));
+                            uf8SendS_(s, uf8::buildMotorEnable(
+                                uf8Local_(s), true));
                             g_faderMotorEngaged[s].store(true);
                         }
-                        g_dev->send(uf8::buildFaderPosition(
-                            static_cast<uint8_t>(s), lsb, msb));
+                        uf8SendS_(s, uf8::buildFaderPosition(
+                            uf8Local_(s), lsb, msb));
                     }
                 }
 
@@ -41742,23 +41907,23 @@ void pushZonesForVisibleSlots()
             const std::string blankCh   = "  ";
             if (bankChanged || g_lastCsType[s] != blankCs) {
                 g_lastCsType[s] = blankCs;
-                g_dev->send(uf8::buildChannelStripType(static_cast<uint8_t>(s), blankCs));
+                uf8SendS_(s, uf8::buildChannelStripType(uf8Local_(s), blankCs));
             }
             if (!overlayActive && (bankChanged || g_lastChanNum[s] != blankCh)) {
                 g_lastChanNum[s] = blankCh;
-                g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), blankCh));
+                uf8SendS_(s, uf8::buildChannelNumber(uf8Local_(s), blankCh));
             }
             if (bankChanged || g_lastTrackName[s] != blankName) {
                 g_lastTrackName[s] = blankName;
-                g_dev->send(uf8::buildStripTextUpper(static_cast<uint8_t>(s), blankName));
+                uf8SendS_(s, uf8::buildStripTextUpper(uf8Local_(s), blankName));
             }
             if (bankChanged || g_lastFaderDb[s] != blankDb) {
                 g_lastFaderDb[s] = blankDb;
-                g_dev->send(uf8::buildFaderDbReadout(static_cast<uint8_t>(s), blankDb));
+                uf8SendS_(s, uf8::buildFaderDbReadout(uf8Local_(s), blankDb));
             }
             if (bankChanged || g_lastValueLine[s] != blankVal) {
                 g_lastValueLine[s] = blankVal;
-                g_dev->send(uf8::buildValueLine(static_cast<uint8_t>(s), blankVal));
+                uf8SendS_(s, uf8::buildValueLine(uf8Local_(s), blankVal));
             }
 
             // Empty channel (no track) OR routing-mode invalid slot → park the
@@ -41774,8 +41939,8 @@ void pushZonesForVisibleSlots()
             if (!g_touchReported[s].load()) {
                 if (!g_faderPbInit || g_lastFaderPb[s] != 0) {
                     g_lastFaderPb[s] = 0;
-                    g_dev->send(uf8::buildFaderPosition(
-                        static_cast<uint8_t>(s), 0, 0));
+                    uf8SendS_(s, uf8::buildFaderPosition(
+                        uf8Local_(s), 0, 0));
                 }
             }
 
@@ -42093,7 +42258,7 @@ void pushZonesForVisibleSlots()
         if (csType.size() > 12) csType.resize(12);
         if (csType != g_lastCsType[s]) {
             g_lastCsType[s] = csType;
-            g_dev->send(uf8::buildChannelStripType(static_cast<uint8_t>(s), csType));
+            uf8SendS_(s, uf8::buildChannelStripType(uf8Local_(s), csType));
         }
 
         // (Top-zone soft-key label + LED block lives BEFORE the empty-strip
@@ -42134,7 +42299,7 @@ void pushZonesForVisibleSlots()
             }
             if (!overlayActive && chan != g_lastChanNum[s]) {
                 g_lastChanNum[s] = chan;
-                g_dev->send(uf8::buildChannelNumber(static_cast<uint8_t>(s), chan));
+                uf8SendS_(s, uf8::buildChannelNumber(uf8Local_(s), chan));
             }
         }
 
@@ -42170,7 +42335,7 @@ void pushZonesForVisibleSlots()
                 const int bank = std::clamp(g_softKeyBank.load(),
                     0, uf8::kUserUf8BankCount - 1);
                 const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
-                    uctx.map->uf8.strips[uf8FaderBankClamped_()][s],
+                    userStripBinding_(uctx.map->uf8, s),
                     g_fxActiveLayer.load(std::memory_order_relaxed));
                 if (sb.faderVst3Param >= 0) {
                     userF = { uctx.tr, uctx.fxIdx,
@@ -42278,7 +42443,7 @@ void pushZonesForVisibleSlots()
             // param. Empty slots show collapsed-bar.
             auto uctx = userStripCtxFocused_();
             const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
-            const auto& bs = uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s];
+            const auto& bs = userVpotSlot_(uctx.map->uf8, bank, s);
             if (bs.vst3Param < 0) {
                 vpotBar[s] = (uint16_t{0x00} | (uint16_t{0x80} << 8));
             } else {
@@ -42441,7 +42606,7 @@ void pushZonesForVisibleSlots()
                                     /*foldLatin1*/ true);
             if (n != g_lastTrackName[s]) {
                 g_lastTrackName[s] = n;
-                g_dev->send(uf8::buildStripTextUpper(static_cast<uint8_t>(s), n));
+                uf8SendS_(s, uf8::buildStripTextUpper(uf8Local_(s), n));
             }
         }
 
@@ -42547,7 +42712,7 @@ void pushZonesForVisibleSlots()
         if (dbStr != g_lastFaderDb[s] || dbUnit != g_lastFaderDbUnit[s]) {
             g_lastFaderDb[s]     = dbStr;
             g_lastFaderDbUnit[s] = dbUnit;
-            g_dev->send(uf8::buildFaderDbReadout(static_cast<uint8_t>(s),
+            uf8SendS_(s, uf8::buildFaderDbReadout(uf8Local_(s),
                                                  dbStr, dbUnit));
         }
 
@@ -42662,12 +42827,12 @@ void pushZonesForVisibleSlots()
                     // we're in the !g_touchReported branch: the finger is off
                     // the cap, so this can't cause the "alle Fader sperren"
                     // re-engage-against-hand regression (b1adad9).
-                    g_dev->send(uf8::buildFaderPosition(
-                        static_cast<uint8_t>(s), (lsb | 0x80), msb));
-                    g_dev->send(uf8::buildMotorEnable(static_cast<uint8_t>(s), true));
+                    uf8SendS_(s, uf8::buildFaderPosition(
+                        uf8Local_(s), (lsb | 0x80), msb));
+                    uf8SendS_(s, uf8::buildMotorEnable(uf8Local_(s), true));
                     g_faderMotorEngaged[s].store(true);
                 }
-                g_dev->send(uf8::buildFaderPosition(static_cast<uint8_t>(s), lsb, msb));
+                uf8SendS_(s, uf8::buildFaderPosition(uf8Local_(s), lsb, msb));
             }
         }
 
@@ -42728,8 +42893,8 @@ void pushZonesForVisibleSlots()
         {
             if (auto uctx = userStripCtxFocused_(); uctx.map) {
                 const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
-                const auto& bs = uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s];
-                const auto& fb = uctx.map->uf8.strips[uf8FaderBankClamped_()][s];
+                const auto& bs = userVpotSlot_(uctx.map->uf8, bank, s);
+                const auto& fb = userStripBinding_(uctx.map->uf8, s);
                 auto sanitizeFormattedValue = [](char* vbuf, size_t cap)
                 {
                     std::string valStr(vbuf);
@@ -43043,13 +43208,13 @@ void pushZonesForVisibleSlots()
         // g_navUf8Show — so with the UF8's display off and a lower-row format
         // set, nobody wrote the row and nobody let the V-Pot value back in. It
         // just stood there (Frank 2026-09-08, found in the audit).
-        const bool navOwnsLower =
-            uf8::nav::Overlay::instance().active()
+        const bool navOwnsLower = s < 8   // the overlay is the left unit's
+         && uf8::nav::Overlay::instance().active()
          && g_navUf8Show.load()
          && g_navLowerRow.load() != 0;
         if (!navOwnsLower && valLine != g_lastValueLine[s]) {
             g_lastValueLine[s] = valLine;
-            g_dev->send(uf8::buildValueLine(static_cast<uint8_t>(s), valLine));
+            uf8SendS_(s, uf8::buildValueLine(uf8Local_(s), valLine));
         }
     }
     g_faderPbInit = true;
@@ -43064,13 +43229,13 @@ void pushZonesForVisibleSlots()
     //   0x01 = unipolar L→R full sweep (Freq/Q/Threshold — cap15 mode
     //          register `01 01 01 01 03 03 03 03` with byte0=0..0x64)
     //   0x03 = empty / disabled (no track in bank, or binary toggle)
-    std::array<uint8_t, 8> vpotMode{};
+    std::array<uint8_t, kUf8MaxStrips> vpotMode{};
     {
         const int trackCount = visibleTrackCount();
         const auto focused = uf8::getFocusedParam();
         const int bankOffset = g_bankOffset.load();
-        for (uint8_t s = 0; s < 8; ++s) {
-            const int realSlot = stripToVisibleSlot(static_cast<int>(s), bankOffset);
+        for (int s = 0; s < uf8Strips_(); ++s) {
+            const int realSlot = stripToVisibleSlot(s, bankOffset);
             if (realSlot < 0 || realSlot >= trackCount) {
                 vpotMode[s] = 0x03;
                 continue;
@@ -43128,7 +43293,7 @@ void pushZonesForVisibleSlots()
                 if (auto uctx = userStripCtxFocused_(); uctx.map) {
                     const int bank = std::clamp(g_softKeyBank.load(), 0, uf8::kUserUf8BankCount - 1);
                     const uf8::UserUf8BankSlot bs = uf8::fxEffectiveVpot(
-                        uctx.map->uf8.banks.banks[uf8FaderBankClamped_()][bank][s],
+                        userVpotSlot_(uctx.map->uf8, bank, s),
                         g_fxActiveLayer.load(std::memory_order_relaxed));
                     if (bs.vst3Param < 0
                         || bs.vpotMode == uf8::VPotMode::Toggle)
@@ -43197,31 +43362,34 @@ void pushZonesForVisibleSlots()
             }
         }
     }
-    bool modeChanged = !g_vpotBarInit;
-    if (!modeChanged) {
-        for (uint8_t s = 0; s < 8; ++s) {
-            if (vpotMode[s] != g_lastVPotMode[s]) { modeChanged = true; break; }
+    // One bar frame and one mode frame per unit, each its own eight strips.
+    for (int u = 0; u < uf8Units_(); ++u) {
+        bool modeChanged = !g_vpotBarInit;
+        if (!modeChanged) {
+            for (int s = u * 8; s < u * 8 + 8; ++s) {
+                if (vpotMode[s] != g_lastVPotMode[s]) { modeChanged = true; break; }
+            }
+        }
+        bool barChanged = false;
+        for (int s = u * 8; s < u * 8 + 8; ++s) {
+            if (vpotBar[s] != g_lastVPotBar[s]) { barChanged = true; break; }
+        }
+        // Position FIRST per cap37 ordering.
+        if (barChanged) {
+            for (int s = u * 8; s < u * 8 + 8; ++s) g_lastVPotBar[s] = vpotBar[s];
+            uf8SendUnit_(u, uf8::buildVPotReadoutBar(uf8UnitSlice_(vpotBar, u)));
+        }
+        if (modeChanged) {
+            for (int s = u * 8; s < u * 8 + 8; ++s) g_lastVPotMode[s] = vpotMode[s];
+            std::vector<uint8_t> mf{0xFF, 0x66, 0x09, 0x0D};
+            for (auto m : uf8UnitSlice_(vpotMode, u)) mf.push_back(m);
+            uint8_t cks = 0;
+            for (size_t i = 1; i < mf.size(); ++i) cks += mf[i];
+            mf.push_back(cks);
+            uf8SendUnit_(u, std::move(mf));
         }
     }
-    bool barChanged = false;
-    for (uint8_t s = 0; s < 8; ++s) {
-        if (vpotBar[s] != g_lastVPotBar[s]) { barChanged = true; break; }
-    }
-    // Position FIRST per cap37 ordering.
-    if (barChanged) {
-        g_lastVPotBar = vpotBar;
-        g_dev->send(uf8::buildVPotReadoutBar(vpotBar));
-    }
-    if (modeChanged) {
-        g_lastVPotMode = vpotMode;
-        std::vector<uint8_t> mf{0xFF, 0x66, 0x09, 0x0D};
-        for (auto m : vpotMode) mf.push_back(m);
-        uint8_t cks = 0;
-        for (size_t i = 1; i < mf.size(); ++i) cks += mf[i];
-        mf.push_back(cks);
-        g_dev->send(std::move(mf));
-        g_vpotBarInit = true;
-    }
+    g_vpotBarInit = true;
 }
 
 // Mouse-edits in the SSL plug-in GUI: REAPER tracks the most recently
@@ -43863,7 +44031,7 @@ void refreshFxActiveLayer_()
 void commitDebouncedTouchReleases()
 {
     const auto now = std::chrono::steady_clock::now();
-    for (uint8_t s = 0; s < 8; ++s) {
+    for (int s = 0; s < uf8Strips_(); ++s) {
         if (!g_touchReleasePending[s].load()) continue;
         // The release writeback is a fader write like the live one, and it is
         // the LAST thing to touch the param — without this the guard on the
@@ -43887,9 +44055,9 @@ void commitDebouncedTouchReleases()
         // work and carry their own check.
         MediaTrack* tr = g_slotTrack[s];
         if (!tr || !ValidatePtr2(nullptr, tr, "MediaTrack*")) {
-            endFaderFxEdit_(static_cast<int>(s));
+            endFaderFxEdit_(uf8PanSlot_(s));
             g_faderVolTr[s] = nullptr;
-            g_faderPanTr[s] = nullptr;
+            g_faderPanTr[uf8PanSlot_(s)] = nullptr;
             continue;
         }
 
@@ -43952,14 +44120,14 @@ void commitDebouncedTouchReleases()
                         pan = pan * 2.0 - 1.0;
                         if (pan < -1.0) pan = -1.0;
                         if (pan >  1.0) pan =  1.0;
-                        writeRoutePanAutomation_(fr, static_cast<int>(s), pan);
-                        finishRoutePanEdit_(static_cast<int>(s));
+                        writeRoutePanAutomation_(fr, uf8SendSlot_(s), pan);
+                        finishRoutePanEdit_(uf8SendSlot_(s));
                     } else {
                         // Land the final value through the automation path, then
                         // signal end-of-edit so Touch finalises + snaps back.
-                        writeRouteVolAutomation_(fr, static_cast<int>(s),
+                        writeRouteVolAutomation_(fr, uf8SendSlot_(s),
                                                  pbToLinearVolume(touchPb));
-                        finishRouteVolEdit_(static_cast<int>(s));
+                        finishRouteVolEdit_(uf8SendSlot_(s));
                     }
                 }
                 // active-but-invalid: eat the writeback, do NOT fall
@@ -43988,7 +44156,7 @@ void commitDebouncedTouchReleases()
                     const double n = uf8PbToParamNorm_(touchPb);
                     const double prevN = TrackFX_GetParamNormalized(tr, sfxR, sprR);
                     TrackFX_SetParamNormalized(tr, sfxR, sprR, n);
-                    noteFaderFxEdit_(static_cast<int>(s), tr, sfxR, sprR);
+                    noteFaderFxEdit_(uf8PanSlot_(s), tr, sfxR, sprR);
                     g_stickyFocusLockUntilMs.store(nowMs_() + 400);
                     stickyApplyMacro_(tr, prevN);
                 } else if (g_flip.load() && faderMayTakeSlot_(tr, slT)) {
@@ -43996,7 +44164,7 @@ void commitDebouncedTouchReleases()
                     if (slT->inverted) normT = 1.0 - normT;
                     TrackFX_SetParamNormalized(tr, mmT.fxIndex,
                         slT->vst3Param, normT);
-                    noteFaderFxEdit_(static_cast<int>(s), tr, mmT.fxIndex,
+                    noteFaderFxEdit_(uf8PanSlot_(s), tr, mmT.fxIndex,
                                      slT->vst3Param);
                     uf8::param_groups::broadcastBuiltinSlot(
                         tr, focusedT.domain, focusedT.slotIdx, normT);
@@ -44008,19 +44176,18 @@ void commitDebouncedTouchReleases()
                     if (pan < -1.0) pan = -1.0;
                     if (pan >  1.0) pan =  1.0;
                     flipPanWrite_(tr, g_pluginFaderMode.load(), pan,
-                                  static_cast<int>(s));
+                                  uf8PanSlot_(s));
                 } else if (g_uf8PluginMode.load()) {
                     if (auto uctxT = userStripCtxFocused_(); uctxT.map) {
                         const int bank = std::clamp(g_softKeyBank.load(),
                             0, uf8::kUserUf8BankCount - 1);
-                        const auto& sb = uctxT.map->uf8.strips[uf8FaderBankClamped_()][
-                            static_cast<int>(s)];
+                        const auto& sb = userStripBinding_(uctxT.map->uf8, static_cast<int>(s));
                         if (sb.faderVst3Param >= 0) {
                             double n = uf8PbToParamNorm_(touchPb);
                             if (sb.faderInverted) n = 1.0 - n;
                             TrackFX_SetParamNormalized(uctxT.tr,
                                 uctxT.fxIdx, sb.faderVst3Param, n);
-                            noteFaderFxEdit_(static_cast<int>(s), uctxT.tr,
+                            noteFaderFxEdit_(uf8PanSlot_(s), uctxT.tr,
                                              uctxT.fxIdx, sb.faderVst3Param);
                             uf8::param_groups::broadcastUserParam(
                                 uctxT.tr, uctxT.map, sb.faderVst3Param, n);
@@ -44035,14 +44202,14 @@ void commitDebouncedTouchReleases()
                         const double n = uf8PbToParamNorm_(touchPb);
                         TrackFX_SetParamNormalized(tr, csT.fxIndex,
                             csT.vst3Param, n);
-                        noteFaderFxEdit_(static_cast<int>(s), tr, csT.fxIndex,
+                        noteFaderFxEdit_(uf8PanSlot_(s), tr, csT.fxIndex,
                                          csT.vst3Param);
                         for (auto* m : uf8::param_groups::resolveBroadcastTargets(tr)) {
                             const auto mcs = csFaderForTrack(m);
                             if (mcs.vst3Param >= 0) {
                                 TrackFX_SetParamNormalized(m, mcs.fxIndex,
                                     mcs.vst3Param, n);
-                                noteFaderFxEdit_(static_cast<int>(s), m,
+                                noteFaderFxEdit_(uf8PanSlot_(s), m,
                                                  mcs.fxIndex, mcs.vst3Param);
                             }
                         }
@@ -44062,9 +44229,9 @@ void commitDebouncedTouchReleases()
         // The hand is off: a plug-in parameter this fader wrote ends its edit, so
         // Touch returns it like track volume (TrackFX_EndParamEdit), and what it
         // reported as touched is forgotten, so the next touch starts clean.
-        endFaderFxEdit_(static_cast<int>(s));
+        endFaderFxEdit_(uf8PanSlot_(s));
         g_faderVolTr[s] = nullptr;
-        g_faderPanTr[s] = nullptr;
+        g_faderPanTr[uf8PanSlot_(s)] = nullptr;
 
         // Re-engage the motor ONLY if the user actually moved the fader
         // during this touch. SSL 360° on Windows verified 2026-05-06 via
@@ -44094,7 +44261,7 @@ void commitDebouncedTouchReleases()
                     const int bank = std::clamp(g_softKeyBank.load(),
                         0, uf8::kUserUf8BankCount - 1);
                     const uf8::UserUf8StripBinding sb = uf8::fxEffectiveStrip(
-                        uctx.map->uf8.strips[uf8FaderBankClamped_()][s],
+                        userStripBinding_(uctx.map->uf8, s),
                         g_fxActiveLayer.load(std::memory_order_relaxed));
                     if (sb.faderVst3Param >= 0) {
                         double norm = TrackFX_GetParamNormalized(
@@ -44119,7 +44286,7 @@ void commitDebouncedTouchReleases()
                     pb = static_cast<uint16_t>(p14);
                 }
             }
-            if (g_dev) g_dev->send(uf8::buildMotorEnable(s, true));
+            uf8SendS_(s, uf8::buildMotorEnable(uf8Local_(s), true));
             g_faderMotorEngaged[s].store(true);
             // Snap-back: firmware's target buffer is still pointing at
             // the user's drag-end position (last bit-7 echo). Re-enable
@@ -44132,7 +44299,7 @@ void commitDebouncedTouchReleases()
             if (snapBack) {
                 const uint8_t lsb = static_cast<uint8_t>(pb & 0x7F);
                 const uint8_t msb = static_cast<uint8_t>((pb >> 7) & 0x7F);
-                if (g_dev) g_dev->send(uf8::buildFaderPosition(s, lsb, msb));
+                uf8SendS_(s, uf8::buildFaderPosition(uf8Local_(s), lsb, msb));
             }
             g_lastFaderPb[s] = pb;
         }
@@ -44145,7 +44312,7 @@ void commitDebouncedTouchReleases()
 // latches the measured level instead of ramping up from silence.
 double g_envUc1In_[2]  = { -1000.0, -1000.0 };
 double g_envUc1Out_[2] = { -1000.0, -1000.0 };
-double g_envUf8_[16];
+double g_envUf8_[kUf8MaxStrips * 2];
 bool   g_meterEnvInit_ = false;
 std::chrono::steady_clock::time_point g_meterEnvLast_{};
 
@@ -44173,7 +44340,7 @@ double meterTick(int meterId, double& env, double instDb, double dtSec)
     return env;
 }
 
-std::array<uint8_t, 16> g_lastVuLevels{};
+std::array<uint8_t, kUf8MaxStrips * 2> g_lastVuLevels{};
 bool g_vuInit = false;
 std::chrono::steady_clock::time_point g_lastVuPushTime{};
 
@@ -44182,8 +44349,53 @@ std::chrono::steady_clock::time_point g_lastVuPushTime{};
 // Byte 0x00 = no LEDs lit (true rest); ramps up monotonically to ~0x18
 // at full GR. Only the strip that hosts the focused CS plug-in carries
 // nonzero values; other strips stay at 0x00 (cleared each tick).
-std::array<uint8_t, 8> g_uf8GrBytes{};
-std::array<uint8_t, 8> g_uf8GateGrBytes{};   // ballistics holder for the gate GR row
+std::array<uint8_t, kUf8MaxStrips> g_uf8GrBytes{};
+std::array<uint8_t, kUf8MaxStrips> g_uf8GateGrBytes{};   // ballistics holder for the gate GR row
+
+// See the declaration. Strips [from, to) start over: every dedup cache says
+// "unknown" so the next tick repaints them, no touch or gesture is in flight,
+// every motor engaged (UF8Device::open re-engages them all).
+extern bool g_globalLedsInit;
+void uf8ResetStripState_(int from, int to)
+{
+    from = std::clamp(from, 0, kUf8MaxStrips);
+    to   = std::clamp(to,   0, kUf8MaxStrips);
+    for (int s = from; s < to; ++s) {
+        g_slotTrack[s] = nullptr;
+        g_lastTrackName[s].clear();
+        g_lastSlotLabel[s].clear();
+        g_lastTopSoftKey[s] = -1;
+        g_lastCsType[s]     = kCsTypeSentinel;
+        g_lastValueLine[s].clear();
+        g_lastFaderDb[s].clear();
+        g_lastFaderDbUnit[s].clear();
+        g_lastChanNum[s].clear();
+        g_lastVPotBar[s]  = 0xFFFF;
+        g_lastVPotMode[s] = 0xFF;
+        g_lastCutLed[s]  = -1;
+        g_lastSoloLed[s] = -1;
+        g_lastSelLed[s]  = -1;
+        g_lastFaderPb[s] = 0xFFFF;
+        g_panOverlayUntilMs[s] = 0;
+        g_folderRevealUntilMs[s] = 0;
+        g_vpotPushSuppressUntilMs[s] = 0;
+        g_touchReported[s].store(false);
+        g_touchReleasePending[s].store(false);
+        g_lastTouchPbValid[s].store(false);
+        g_touchOriginPbValid[s].store(false);
+        g_touchGrabValid[s].store(false);
+        g_dynFaderPendingValid[s].store(false);
+        g_faderMotorEngaged[s].store(true);
+        g_selPressMs[s].store(0);
+        g_faderVolTr[s] = nullptr;
+        g_faderPanTr[uf8PanSlot_(s)] = nullptr;
+        g_uf8GrBytes[s] = 0;
+        g_uf8GateGrBytes[s] = 0;
+    }
+    g_vpotBarInit = false;   // the unit-wide V-Pot mode frame goes out again
+    g_vuInit = false;        // and the meters
+    g_globalLedsInit = false;   // a new unit's transport / mode lamps
+}
 
 void pushVuMeter()
 {
@@ -44205,7 +44417,7 @@ void pushVuMeter()
 
     const int trackCount = visibleTrackCount();
     const int bankOffset = g_bankOffset.load();
-    std::array<uint8_t, 16> levels{};
+    std::array<uint8_t, kUf8MaxStrips * 2> levels{};
 
     // Byte-level hysteresis per strip × channel. REAPER's peak ballistics
     // produce 1-byte drift on continuous audio (block boundaries don't
@@ -44216,7 +44428,7 @@ void pushVuMeter()
     // the bottom LED clears cleanly when audio stops (otherwise held=1
     // would stick forever after any activity, leaving the lowest segment
     // permanently lit).
-    static std::array<uint8_t, 16> s_held{};
+    static std::array<uint8_t, kUf8MaxStrips * 2> s_held{};
     auto stepByte = [](uint8_t& held, uint8_t raw) {
         if (raw > held) held = raw;
         else if (raw == 0 || held - raw >= 2) held = raw;
@@ -44235,12 +44447,12 @@ void pushVuMeter()
         if (dtSec <= 0.0)  dtSec = 0.001;
         if (dtSec >  1.0)  dtSec = 1.0;  // clamp gross stalls
     } else {
-        for (int i = 0; i < 16; ++i) g_envUf8_[i] = -1000.0;
+        for (int i = 0; i < kUf8MaxStrips * 2; ++i) g_envUf8_[i] = -1000.0;
         g_meterEnvInit_ = true;
     }
     g_meterEnvLast_ = tNow;
 
-    for (int s = 0; s < 8; ++s) {
+    for (int s = 0; s < uf8Strips_(); ++s) {
         uint8_t rawL = 0, rawR = 0;
         if (!pluginModeBlank) {
             // The strip's own track, or in a Send/Receive fader mode the far
@@ -44298,9 +44510,13 @@ void pushVuMeter()
     }
     g_vuInit = true;
     g_lastVuLevels = levels;
-    auto frames = uf8::buildVuMeter(levels);
-    g_dev->send(std::move(frames[0]));
-    g_dev->send(std::move(frames[1]));
+    for (int u = 0; u < uf8Units_(); ++u) {   // 8 strips × in/out per unit
+        std::array<uint8_t, 16> unitLevels{};
+        for (int i = 0; i < 16; ++i) unitLevels[size_t(i)] = levels[size_t(u * 16 + i)];
+        auto frames = uf8::buildVuMeter(unitLevels);
+        uf8SendUnit_(u, std::move(frames[0]));
+        uf8SendUnit_(u, std::move(frames[1]));
+    }
 }
 
 void pushSelColourBar()
@@ -45487,7 +45703,9 @@ void pushTouchLearnFeedback_()
                 // V-Pot ring: pulse the bar over the real values of the others.
                 // Force the armed strip's mode to unipolar so the bar shows even
                 // on an as-yet-unmapped control (else "no bar" hides the pulse).
-                auto mode = g_lastVPotMode;
+                // Touch-to-Learn arms left-unit strips only (0..7), so these
+                // eight-strip frames are the left unit's.
+                auto mode = uf8UnitSlice_(g_lastVPotMode, 0);
                 if (mode[strip] != 0x01) {
                     mode[strip] = 0x01;
                     std::vector<uint8_t> mf{0xFF, 0x66, 0x09, 0x0D};
@@ -45497,7 +45715,7 @@ void pushTouchLearnFeedback_()
                     mf.push_back(cks);
                     g_dev->send(std::move(mf));
                 }
-                auto bar = g_lastVPotBar;
+                auto bar = uf8UnitSlice_(g_lastVPotBar, 0);
                 bar[strip] = vpotPosFromUnipolar(breath);
                 g_dev->send(uf8::buildVPotReadoutBar(bar));
                 g_dev->send(uf8::buildStripTextLower(
@@ -45519,7 +45737,7 @@ void pushTouchLearnFeedback_()
                 const uf8::LedClass cls = (kind == 2) ? uf8::LedClass::Solo
                                         : (kind == 3) ? uf8::LedClass::Cut
                                                       : uf8::LedClass::Sel;
-                sendLedFrames(uf8::buildLedColourPair(
+                sendLedFramesS_(strip, uf8::buildLedColourPair(
                     static_cast<uint8_t>(strip), cls, blink));
             }
         }
@@ -48827,8 +49045,7 @@ void onTimerBody_()
                              ? "UF8 did not open at start - retrying..."
                              : "UF8 stale handle - reopening...");
                 g_sync.reset();
-                if (g_dev2) g_dev2->close();
-                g_dev2.reset();
+                closeUf8SecondUnit_();
                 if (g_dev) g_dev->close();
                 g_dev.reset();
                 g_dev = std::make_unique<uf8::UF8Device>();
@@ -48841,9 +49058,9 @@ void onTimerBody_()
                     g_sync->invalidate();
                     g_dev->setRawInputHandler(onUf8Input);
                     for (uint8_t s = 0; s < 8; ++s) {
-                        sendLedFrames(uf8::buildLedColourPair(s, uf8::LedClass::Solo, false));
-                        sendLedFrames(uf8::buildLedColourPair(s, uf8::LedClass::Cut,  false));
-                        sendLedFrames(uf8::buildLedColourPair(s, uf8::LedClass::Sel,  false));
+                        sendLedFramesS_(s, uf8::buildLedColourPair(s, uf8::LedClass::Solo, false));
+                        sendLedFramesS_(s, uf8::buildLedColourPair(s, uf8::LedClass::Cut,  false));
+                        sendLedFramesS_(s, uf8::buildLedColourPair(s, uf8::LedClass::Sel,  false));
                     }
                     openUf8SecondUnit_();
                     g_bankDirty.store(true);
@@ -49067,12 +49284,15 @@ void onTimerBody_()
         // UF8 strips (0..7) + the UF1 Extender send V-Pot (slot 13) — send PAN has
         // no touch-release, so finalise its automation edit once idle. (8..11 are
         // the UF1-local sends V-Pots, which drive VOL not pan.)
-        for (int s = 0; s < 8; ++s)
+        // Dual UF8: the right-hand unit's strips sit at uf8SendSlot_(8..15).
+        for (int st = 0; st < uf8Strips_(); ++st) {
+            const int s = uf8SendSlot_(st);
             if (g_sendPanEditUiIdx[s] != INT_MIN && g_sendPanEditUntilMs[s]
                 && !potHoldLive_(now, g_sendPanEditUntilMs[s])) {
                 finishRoutePanEdit_(s);
                 g_sendPanEditUntilMs[s] = 0;
             }
+        }
         if (g_sendPanEditUiIdx[kExtSendGestureSlot] != INT_MIN
             && g_sendPanEditUntilMs[kExtSendGestureSlot]
             && !potHoldLive_(now, g_sendPanEditUntilMs[kExtSendGestureSlot])) {
@@ -49185,11 +49405,13 @@ void onTimerBody_()
             }
             g_sync->invalidate();   // so the real colours come back when it ends
         } else if (uf8EncPickerShown_()) {
-            g_sync->refresh(uf8EncPickerColorForStrip_);
+            // The picker, the Nav overlay and the CC layer live on the left
+            // unit; the right-hand one keeps its tracks' colours.
+            g_sync->refresh(uf8EncPickerColorForStrip_, reaperColorForVisibleSlot);
         } else if (g_ccIdx >= 0) {
-            g_sync->refresh(ccColorForStrip_);
+            g_sync->refresh(ccColorForStrip_, reaperColorForVisibleSlot);
         } else if (overlayOnUf8) {
-            g_sync->refresh(navColorForStrip);
+            g_sync->refresh(navColorForStrip, reaperColorForVisibleSlot);
         } else {
             g_sync->refresh(reaperColorForVisibleSlot);
         }
@@ -49567,8 +49789,8 @@ void onTimerBody_()
     // GainReduction_dB tracks the signal envelope tightly so the raw
     // byte swings several positions per audio beat without rate-limit.
     {
-        std::array<uint8_t, 8> targetBytes{};  // all zero by default
-        std::array<uint8_t, 8> gateBytes{};    // gate GR row (FF 66 09 16)
+        std::array<uint8_t, kUf8MaxStrips> targetBytes{};  // all zero by default
+        std::array<uint8_t, kUf8MaxStrips> gateBytes{};    // gate GR row (FF 66 09 16)
         // ⇨ ALL EIGHT STRIPS, NOT JUST THE FOCUSED ONE.
         // Until 2026-09-10 this resolved exactly one track and blanked the other
         // seven, which is how it had worked since 5dc644c in April: eight GR
@@ -49583,7 +49805,7 @@ void onTimerBody_()
         // in a profile, this is the loop it is in.
         const int bankOffset = g_bankOffset.load();
         const int grTrackCount = visibleTrackCount();
-        for (int st = 0; st < 8; ++st) {
+        for (int st = 0; st < uf8Strips_(); ++st) {
             // Same track the level row reads: the strip's own, or the far end
             // of its route in a Send/Receive fader mode (uf8StripMeterTrack_).
             MediaTrack* tr = uf8StripMeterTrack_(st, bankOffset, grTrackCount);
@@ -49857,9 +50079,11 @@ void onTimerBody_()
             gateBytes[st] = newByteG;
             }
         }
-        if (g_dev && g_dev->isOpen()) {
-            g_dev->setGrBytes(targetBytes);
-            g_dev->setGateGrBytes(gateBytes);
+        for (int u = 0; u < uf8Units_(); ++u) {   // each unit's own eight
+            auto* d = uf8UnitDev_(u);
+            if (!d || !d->isOpen()) continue;
+            d->setGrBytes(uf8UnitSlice_(targetBytes, u));
+            d->setGateGrBytes(uf8UnitSlice_(gateBytes, u));
         }
     }
     if (g_uc1_surface) g_uc1_surface->poll();
@@ -51164,8 +51388,7 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
         // Close both and let the stale-recovery block reopen them in the new
         // order (within 5 s): it opens the left unit, then the right.
         g_sync.reset();
-        if (g_dev2) g_dev2->close();
-        g_dev2.reset();
+        closeUf8SecondUnit_();
         if (g_dev) g_dev->close();
         g_dev.reset();
         g_uf8WantRetry.store(true);
@@ -51677,6 +51900,17 @@ void reasixty_forgetAbsentDevices()
 bool reasixty_uf8Connected()
 {
     return g_dev && g_dev->isOpen();
+}
+
+// The right-hand UF8 of a dual-UF8 rig (Settings → Devices).
+bool reasixty_uf8RightConnected()
+{
+    return uf8Strips_() > 8 && g_dev2 && g_dev2->isOpen();
+}
+const char* reasixty_uf8RightSerial()
+{
+    if (!g_dev2) return "";
+    return g_dev2->serial().c_str();
 }
 
 bool reasixty_uc1Connected()
@@ -55465,7 +55699,7 @@ void reasixty_bumpFolderReveal(MediaTrack* tr)
     const int n = visibleTrackCount();
     const int bankOffset = g_bankOffset.load();
     const int64_t until = nowMs_() + kFolderRevealMs;
-    for (int s = 0; s < 8; ++s) {
+    for (int s = 0; s < uf8Strips_(); ++s) {
         const int realSlot = stripToVisibleSlot(s, bankOffset);
         if (realSlot < 0 || realSlot >= n) continue;
         if (visibleTrackAt(realSlot) == tr) {
