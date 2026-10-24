@@ -550,7 +550,12 @@ std::unique_ptr<uf8::UF8Device>   g_dev;
 // the bus. Which physical unit is which comes from the USB port order
 // (UF8Device::open(unitIndex)), flipped by the "swap UF8 units" setting.
 // SAFETY: one UF8 attached → g_dev2 stays null → every path is unchanged.
-std::unique_ptr<uf8::UF8Device>   g_dev2;
+// Shared, not unique: the libusb worker threads (fader echoes, builtins that
+// light a key) reach it through uf8UnitDev_, which hands out a reference that
+// keeps the unit alive while the main thread drops it (closeUf8SecondUnit_).
+// Every write and every off-main-thread read goes through g_dev2Mx.
+std::shared_ptr<uf8::UF8Device>   g_dev2;
+std::mutex                        g_dev2Mx;
 // ExtState "uf8SwapUnits": swap which port-ordered UF8 is left and right.
 std::atomic<bool> g_uf8SwapUnits{false};
 // USB unit index (UF8Device::open) for the left (side 0) / right (side 1) unit.
@@ -579,26 +584,36 @@ inline int uf8Strips_() { return g_uf8StripCount.load(std::memory_order_relaxed)
 inline int uf8Units_()  { return uf8Strips_() / 8; }
 inline uint8_t uf8Local_(int strip) { return static_cast<uint8_t>(strip & 7); }
 // The unit a surface strip lives on; nullptr when that unit is not there.
-inline uf8::UF8Device* uf8UnitDev_(int unit)
+// Safe from any thread: the right unit comes back as an owning reference.
+// The left unit is g_dev, whose lifetime works as it always has, so it comes
+// back non-owning.
+inline std::shared_ptr<uf8::UF8Device> uf8UnitDev_(int unit)
 {
-    return unit == 0 ? g_dev.get() : (unit == 1 ? g_dev2.get() : nullptr);
+    if (unit == 0)
+        return std::shared_ptr<uf8::UF8Device>(std::shared_ptr<uf8::UF8Device>(),
+                                               g_dev.get());
+    if (unit == 1) {
+        std::lock_guard<std::mutex> lk(g_dev2Mx);
+        return g_dev2;
+    }
+    return nullptr;
 }
-inline uf8::UF8Device* uf8DevFor_(int strip) { return uf8UnitDev_(strip >> 3); }
+inline std::shared_ptr<uf8::UF8Device> uf8DevFor_(int strip) { return uf8UnitDev_(strip >> 3); }
 // Frame for strip `strip`, built with uf8Local_(strip), to that strip's unit.
 inline void uf8SendS_(int strip, std::vector<uint8_t> frame)
 {
     if (strip < 0 || strip >= kUf8MaxStrips) return;
-    if (auto* d = uf8DevFor_(strip)) d->send(std::move(frame));
+    if (auto d = uf8DevFor_(strip)) d->send(std::move(frame));
 }
 inline void uf8SendPriS_(int strip, std::vector<uint8_t> frame)
 {
     if (strip < 0 || strip >= kUf8MaxStrips) return;
-    if (auto* d = uf8DevFor_(strip)) d->sendPriority(std::move(frame));
+    if (auto d = uf8DevFor_(strip)) d->sendPriority(std::move(frame));
 }
 // A unit-wide frame (one per unit), e.g. the eight-strip V-Pot bar.
 inline void uf8SendUnit_(int unit, std::vector<uint8_t> frame)
 {
-    if (auto* d = uf8UnitDev_(unit)) d->send(std::move(frame));
+    if (auto d = uf8UnitDev_(unit)) d->send(std::move(frame));
 }
 // The eight strips of `unit` out of a surface-wide per-strip array.
 template <class T, size_t N>
@@ -5503,7 +5518,7 @@ void pushUf8Brightness(int ledLevel, int scribbleLevel)
     const auto& bl = kBrightnessTable[ledLevel];
     const auto& bs = kBrightnessTable[scribbleLevel];
     for (int u = 0; u < uf8Units_(); ++u) {   // both UF8s alike
-        auto* d = uf8UnitDev_(u);
+        auto d = uf8UnitDev_(u);
         if (!d || !d->isOpen()) continue;
         d->send(uf8::buildLedBrightness(bl.uf8_led));
         d->send(uf8::buildLcdBrightness(bs.uf8_lcd));
@@ -6285,7 +6300,7 @@ void tickIdentify()
 void pushSleepBrightness_(bool asleep)
 {
     for (int u = 0; u < uf8Units_(); ++u) {   // both UF8s alike
-        auto* d = uf8UnitDev_(u);
+        auto d = uf8UnitDev_(u);
         if (!d || !d->isOpen()) continue;
         d->send(uf8::buildLedBrightness(
             asleep ? 0x00 : kBrightnessTable[clampLevel_(g_brightness.load())].uf8_led));
@@ -23585,6 +23600,9 @@ void drainInputQueue()
             continue;
         }
 
+        // A right-hand UF8 strip whose unit has gone since it was queued: the
+        // eight-strip layout would put it on a track that is not on the surface.
+        if (e.strip >= 8 && e.strip < kUf8MaxStrips && uf8Strips_() <= 8) continue;
         const int slot = stripToVisibleSlot(e.strip, bankOffset);
         MediaTrack* tr = (slot >= 0) ? visibleTrackAt(slot) : nullptr;
         if (MediaTrack* mp = masterPinTrack_(e.strip)) tr = mp;  // Master-pin
@@ -25682,10 +25700,13 @@ uf8::LedClass toUf8LedClass(LedClass cls)
 void sendLedFrames(uf8::LedColourFrames frames)
 {
     if (!g_dev) return;
-    if (g_dev2 && uf8Units_() > 1) {
-        if (!frames.ff38.empty())   g_dev2->send(frames.ff38);
-        if (!frames.ff39.empty())   g_dev2->send(frames.ff39);
-        if (!frames.legacy.empty()) g_dev2->send(frames.legacy);
+    // Builtins run this on the worker threads too: through uf8UnitDev_ only.
+    if (uf8Units_() > 1) {
+        if (auto d2 = uf8UnitDev_(1)) {
+            if (!frames.ff38.empty())   d2->send(frames.ff38);
+            if (!frames.ff39.empty())   d2->send(frames.ff39);
+            if (!frames.legacy.empty()) d2->send(frames.legacy);
+        }
     }
     if (!frames.ff38.empty())   g_dev->send(std::move(frames.ff38));
     if (!frames.ff39.empty())   g_dev->send(std::move(frames.ff39));
@@ -25696,7 +25717,7 @@ void sendLedFrames(uf8::LedColourFrames frames)
 // uf8Local_(strip), sent only to the unit the strip is on.
 void sendLedFramesS_(int strip, uf8::LedColourFrames frames)
 {
-    auto* d = uf8DevFor_(strip);
+    auto d = uf8DevFor_(strip);
     if (!d) return;
     if (!frames.ff38.empty())   d->send(std::move(frames.ff38));
     if (!frames.ff39.empty())   d->send(std::move(frames.ff39));
@@ -25758,7 +25779,7 @@ void sendSelRenderTrigger()
 {
     if (!g_dev) return;
     for (int u = 0; u < uf8Units_(); ++u) {   // each unit takes its own bitmask next
-        auto* d = uf8UnitDev_(u);
+        auto d = uf8UnitDev_(u);
         if (!d) continue;
         d->send({0xFF, 0x38, 0x04, 0x24, 0x00, 0x12, 0xF0, 0x62});
         d->send({0xFF, 0x39, 0x04, 0x24, 0x00, 0x12, 0xF0, 0x63});
@@ -26603,8 +26624,11 @@ bool openUf8SecondUnit_()
         consoleMsg_(("Rea-Sixty UF8 (right): " + dev->lastError() + "\n").c_str());
         return false;
     }
-    g_dev2 = std::move(dev);
-    g_dev2->setRawInputHandler(onUf8Input2);
+    dev->setRawInputHandler(onUf8Input2);
+    {
+        std::lock_guard<std::mutex> lk(g_dev2Mx);
+        g_dev2 = std::move(dev);
+    }
     // Same idle start as the left unit: every per-strip LED dark, faders at the
     // position the left unit's start-up parks them on.
     const uint16_t pb0dB = linearVolumeToPb(1.0);
@@ -26632,6 +26656,7 @@ bool openUf8SecondUnit_()
     g_bankDirty.store(true);
     g_pageDirty.store(true);
     if (g_sync) g_sync->invalidate();
+    applyBrightness();   // the user's brightness (or sleep), also on a hot-plug
     return true;
 }
 
@@ -26640,10 +26665,24 @@ bool openUf8SecondUnit_()
 void closeUf8SecondUnit_()
 {
     const bool had = g_dev2 != nullptr;
+    if (had) {
+        // Close what strips 9-16 had open in REAPER first: a send's Touch
+        // edit and a fader's plug-in parameter edit end, as a release would.
+        for (int s = 8; s < kUf8MaxStrips; ++s) {
+            finishRoutePanEdit_(uf8SendSlot_(s));
+            finishRouteVolEdit_(uf8SendSlot_(s));
+            endFaderFxEdit_(uf8PanSlot_(s));
+        }
+    }
     g_uf8StripCount.store(8);
     if (g_sync) g_sync->setSecondUnit(nullptr);
-    if (g_dev2) g_dev2->close();
-    g_dev2.reset();
+    std::shared_ptr<uf8::UF8Device> old;
+    {
+        std::lock_guard<std::mutex> lk(g_dev2Mx);
+        old = std::move(g_dev2);
+    }
+    if (old) old->close();   // joins its worker; a worker thread still holding
+    old.reset();             // a reference keeps the object until it lets go
     if (had) {
         uf8ResetStripState_(8, kUf8MaxStrips);
         g_bankDirty.store(true);
@@ -27453,9 +27492,9 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                     const int target = id - 0x18;
                     bool anyAssigned = false;
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                        for (int sIdx = 0; sIdx < 8; ++sIdx) {
-                            if (uctx.map->uf8.banks
-                                .banks[uf8FaderBankClamped_()][target][sIdx].vst3Param >= 0)
+                        // Every strip on the surface: 16 with two UF8s.
+                        for (int sIdx = 0; sIdx < uf8Strips_(); ++sIdx) {
+                            if (userVpotSlot_(uctx.map->uf8, target, sIdx).vst3Param >= 0)
                             {
                                 anyAssigned = true; break;
                             }
@@ -41389,9 +41428,8 @@ void pushZonesForVisibleSlots()
                     uf8::kUserUf8BankCount - 1);
                 bool bankAssigned = false;
                 if (auto uctxBank = userStripCtxFocused_(); uctxBank.map) {
-                    for (int sIdx = 0; sIdx < 8; ++sIdx) {
-                        if (uctxBank.map->uf8.banks
-                            .banks[uf8FaderBankClamped_()][sk][sIdx].vst3Param >= 0)
+                    for (int sIdx = 0; sIdx < uf8Strips_(); ++sIdx) {
+                        if (userVpotSlot_(uctxBank.map->uf8, sk, sIdx).vst3Param >= 0)
                         {
                             bankAssigned = true; break;
                         }
@@ -50080,7 +50118,7 @@ void onTimerBody_()
             }
         }
         for (int u = 0; u < uf8Units_(); ++u) {   // each unit's own eight
-            auto* d = uf8UnitDev_(u);
+            auto d = uf8UnitDev_(u);
             if (!d || !d->isOpen()) continue;
             d->setGrBytes(uf8UnitSlice_(targetBytes, u));
             d->setGateGrBytes(uf8UnitSlice_(gateBytes, u));
