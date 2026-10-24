@@ -545,6 +545,25 @@ void reasixty_selsetClear(int slot1to8);
 namespace {
 
 std::unique_ptr<uf8::UF8Device>   g_dev;
+// ⇨ SECOND UF8 (dual-UF8, tshadgett 2026-10). g_dev is always the LEFT unit
+// (strips 1-8), g_dev2 the RIGHT one (strips 9-16) when a second UF8 is on
+// the bus. Which physical unit is which comes from the USB port order
+// (UF8Device::open(unitIndex)), flipped by the "swap UF8 units" setting.
+// SAFETY: one UF8 attached → g_dev2 stays null → every path is unchanged.
+std::unique_ptr<uf8::UF8Device>   g_dev2;
+// ExtState "uf8SwapUnits": swap which port-ordered UF8 is left and right.
+std::atomic<bool> g_uf8SwapUnits{false};
+// USB unit index (UF8Device::open) for the left (side 0) / right (side 1) unit.
+int uf8UnitIndexForSide_(int side)
+{
+    // Swapping only means something with two units; with one, the left (and
+    // only) unit is always USB index 0 whatever the setting says.
+    if (uf8::UF8Device::countAttached() < 2) return side == 0 ? 0 : 1;
+    return (side == 0) == !g_uf8SwapUnits.load() ? 0 : 1;
+}
+bool uf8DualActive_() { return g_dev && g_dev2 && g_dev->isOpen() && g_dev2->isOpen(); }
+void onUf8Input2(const uint8_t* data, size_t len);
+bool openUf8SecondUnit_();
 std::unique_ptr<uf8::ColorSync>   g_sync;
 std::unique_ptr<uf8::MidiBridge>  g_midi;
 
@@ -26037,8 +26056,10 @@ void initDevices_()
     // during any given session. Previously the surface bailed out if UF8
     // couldn't be opened, which meant a UC1-only setup never reached the
     // UC1 init below.
+    if (const char* v = GetExtState("rea_sixty", "uf8SwapUnits"); v && *v)
+        g_uf8SwapUnits.store(std::atoi(v) != 0);
     g_dev = std::make_unique<uf8::UF8Device>();
-    const bool uf8Opened = g_dev->open();
+    const bool uf8Opened = g_dev->open(uf8UnitIndexForSide_(0));
     if (!uf8Opened) {
         const std::string err = g_dev->lastError();
         consoleMsg_(("Rea-Sixty UF8: " + err
@@ -26085,6 +26106,8 @@ void initDevices_()
         for (uint8_t s = 0; s < 8; ++s) {
             g_dev->send(uf8::buildFaderPosition(s, lsb, msb));
         }
+        // A second UF8 on the bus becomes the right-hand unit (strips 9-16).
+        openUf8SecondUnit_();
     }
 
     // Best-effort UC1 attach — absence is fine, UF8 runs standalone.
@@ -26450,6 +26473,55 @@ static void uf1EnsurePacer_()
         g_uf1PacerThread = std::thread(uf1CyclePacerLoop_);
 }
 
+// One line in rea_sixty_uf8_stale.log, same format as the stale-handle log.
+static void uf8DualLog_(const std::string& line)
+{
+    if (FILE* f = std::fopen(uf8::logPath("rea_sixty_uf8_stale.log").c_str(), "a")) {
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        std::fprintf(f, "[%lld] %s\n", static_cast<long long>(ms), line.c_str());
+        std::fclose(f);
+    }
+}
+
+// Open the right-hand UF8 when a second unit is attached. Called after the left
+// unit opened (start-up and reopen). Absence is not an error: one UF8 is the
+// normal case, and g_dev2 simply stays null.
+bool openUf8SecondUnit_()
+{
+    if (g_dev2) { g_dev2->close(); g_dev2.reset(); }
+    if (uf8::UF8Device::countAttached() < 2) return false;
+    auto dev = std::make_unique<uf8::UF8Device>();
+    if (!dev->open(uf8UnitIndexForSide_(1))) {
+        uf8DualLog_("UF8 unit 2 open failed: " + dev->lastError());
+        consoleMsg_(("Rea-Sixty UF8 (right): " + dev->lastError() + "\n").c_str());
+        return false;
+    }
+    g_dev2 = std::move(dev);
+    g_dev2->setRawInputHandler(onUf8Input2);
+    // Same idle start as the left unit: every per-strip LED dark.
+    for (uint8_t s = 0; s < 8; ++s) {
+        for (auto cls : { uf8::LedClass::Solo, uf8::LedClass::Cut, uf8::LedClass::Sel }) {
+            auto f = uf8::buildLedColourPair(s, cls, false);
+            if (!f.ff38.empty())   g_dev2->send(std::move(f.ff38));
+            if (!f.ff39.empty())   g_dev2->send(std::move(f.ff39));
+            if (!f.legacy.empty()) g_dev2->send(std::move(f.legacy));
+        }
+    }
+    uf8DualLog_("UF8 dual: left unit at USB " + (g_dev ? g_dev->portPath() : std::string("?"))
+             + ", right unit at USB " + g_dev2->portPath()
+             + (g_uf8SwapUnits.load() ? " (swapped)" : ""));
+    consoleMsg_(("Rea-Sixty: second UF8 attached as the right-hand unit (USB "
+                 + g_dev2->portPath() + ")\n").c_str());
+    g_bankDirty.store(true);
+    return true;
+}
+
+// Input from the right-hand unit. Stage 1a: the unit is claimed and kept alive
+// but carries no strips yet, so its input is dropped (strip mapping lands in
+// stage 1b).
+void onUf8Input2(const uint8_t* /*data*/, size_t /*len*/) {}
+
 void shutdownDevices_()
 {
     g_sync.reset();
@@ -26457,6 +26529,8 @@ void shutdownDevices_()
     g_midi.reset();
     if (g_dev) g_dev->close();
     g_dev.reset();
+    if (g_dev2) g_dev2->close();
+    g_dev2.reset();
     g_uc1_surface.reset();
     if (g_uc1_dev) g_uc1_dev->close();
     g_uc1_dev.reset();
@@ -48696,6 +48770,22 @@ void onTimerBody_()
                 std::fclose(f);
             }
         };
+        // Right-hand UF8: reopen it on its own when its handle went stale, or
+        // pick it up when it is plugged in after start. Only while the left
+        // unit is healthy (a left reopen brings the right one back with it).
+        {
+            static auto sLastUnit2 = std::chrono::steady_clock::now();
+            const bool leftOk = g_dev && !ufStale;
+            const bool unit2Stale = g_dev2 && g_dev2->needsReopen();
+            if (leftOk && (unit2Stale || !g_dev2)
+                && nowR - sLastUnit2 >= std::chrono::seconds(5)) {
+                sLastUnit2 = nowR;
+                if (unit2Stale || uf8::UF8Device::countAttached() >= 2) {
+                    if (unit2Stale) uf8DualLog_("UF8 unit 2 stale handle - reopening...");
+                    openUf8SecondUnit_();
+                }
+            }
+        }
         if ((ucStale || ufStale || u1Stale)
             && nowR - sLastReopen >= std::chrono::seconds(5))
         {
@@ -48737,10 +48827,12 @@ void onTimerBody_()
                              ? "UF8 did not open at start - retrying..."
                              : "UF8 stale handle - reopening...");
                 g_sync.reset();
+                if (g_dev2) g_dev2->close();
+                g_dev2.reset();
                 if (g_dev) g_dev->close();
                 g_dev.reset();
                 g_dev = std::make_unique<uf8::UF8Device>();
-                if (g_dev->open()) {
+                if (g_dev->open(uf8UnitIndexForSide_(0))) {
                     if (sUf8Lost || g_uf8WantRetry.load())
                         staleLog("rea_sixty_uf8_stale.log", "UF8 reopened after retry");
                     sUf8Lost = false; sUf8Err.clear();
@@ -48753,6 +48845,7 @@ void onTimerBody_()
                         sendLedFrames(uf8::buildLedColourPair(s, uf8::LedClass::Cut,  false));
                         sendLedFrames(uf8::buildLedColourPair(s, uf8::LedClass::Sel,  false));
                     }
+                    openUf8SecondUnit_();
                     g_bankDirty.store(true);
                     applyBrightness();
                 } else {
@@ -50404,6 +50497,11 @@ custom_action_register_t g_actionUf1ExtenderSide{
     0, "REASIXTY_UF1_EXTENDER_SIDE", "Rea-Sixty: UF1 Extender side (left / right)", nullptr,
 };
 int g_cmdUf1ExtenderSide = 0;
+// Dual UF8: swap which unit is left (strips 1-8) and right (strips 9-16).
+custom_action_register_t g_actionUf8SwapUnits{
+    0, "REASIXTY_UF8_SWAP_UNITS", "Rea-Sixty: Swap UF8 units (left / right)", nullptr,
+};
+int g_cmdUf8SwapUnits = 0;
 // Focus Set scope: cycle Both -> UF1-only -> UF8-only -> Both.
 custom_action_register_t g_actionFocusScopeCycle{
     0, "REASIXTY_FOCUS_SCOPE_CYCLE", "Rea-Sixty: Focus Set scope (cycle Both / UF1 / UF8)", nullptr,
@@ -51057,6 +51155,22 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
         if (on && focusSetPinHolds_()) g_tempSelsetRecallRequest.store(true);
         g_bankDirty.store(true);
         g_pageDirty.store(true);
+        return true;
+    }
+    if (command == g_cmdUf8SwapUnits) {
+        const bool sw = !g_uf8SwapUnits.load();
+        g_uf8SwapUnits.store(sw);
+        SetExtState("rea_sixty", "uf8SwapUnits", sw ? "1" : "0", true);
+        // Close both and let the stale-recovery block reopen them in the new
+        // order (within 5 s): it opens the left unit, then the right.
+        g_sync.reset();
+        if (g_dev2) g_dev2->close();
+        g_dev2.reset();
+        if (g_dev) g_dev->close();
+        g_dev.reset();
+        g_uf8WantRetry.store(true);
+        consoleMsg_(sw ? "Rea-Sixty: UF8 units swapped - reopening...\n"
+                       : "Rea-Sixty: UF8 units back in USB order - reopening...\n");
         return true;
     }
     if (command == g_cmdUf1ExtenderSide) {
@@ -61080,6 +61194,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdVcaSpillSelected  = plugin_register("custom_action", &g_actionVcaSpillSelected);
     g_cmdVcaSpillExit      = plugin_register("custom_action", &g_actionVcaSpillExit);
     g_cmdUf1ExtenderSide   = plugin_register("custom_action", &g_actionUf1ExtenderSide);
+    g_cmdUf8SwapUnits      = plugin_register("custom_action", &g_actionUf8SwapUnits);
     g_cmdFocusScopeCycle   = plugin_register("custom_action", &g_actionFocusScopeCycle);
     g_cmdJogModeCycle    = plugin_register("custom_action", &g_actionJogModeCycle);
     g_cmdJogModePlayhead = plugin_register("custom_action", &g_actionJogModePlayhead);
