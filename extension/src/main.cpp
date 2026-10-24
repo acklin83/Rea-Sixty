@@ -4351,6 +4351,10 @@ inline bool isVPotPanFocus(const uf8::FocusedParam& f) {
 // mode banks 2..5 are present-but-empty per SSL UF8 User Guide.
 // Layout from SSL UF8 User Guide p.180-181. Persisted across sessions.
 std::atomic<int>  g_softKeyBank{0};
+// Dual UF8, Plug-in Mode: the RIGHT unit's V-Pot bank while the map is spread
+// across both units (uf8PmSpread_). Its own soft-key row selects it, the way the
+// left row selects g_softKeyBank. ExtState softKeyBankRight.
+std::atomic<int>  g_softKeyBankRight{1};
 std::atomic<bool> g_softKeyDirty{false};
 // When on (default), a focused-parameter change switches the SSL soft-key bank
 // to whichever bank holds that param ("bank-follow-focus"). Off = the soft-key
@@ -20118,28 +20122,74 @@ inline int uf8FaderBankClamped_()
     return std::clamp(g_uf8FaderBank.load(),
                       0, uf8::kUserUf8FaderBankCount - 1);
 }
-// Dual UF8: `slot` is a SURFACE strip (0..15). The left unit shows the fader
-// bank Bank ←/→ selected, the right unit the other one — a 16-channel map
-// (SSL Sigma remote) lies across both units at once. One UF8: slot 0..7, the
-// selected bank, exactly as before.
+// Dual UF8: `slot` is a SURFACE strip (0..15). Two ways a map lies across the
+// two units, chosen per map:
+//   * FADER SPLIT — the map uses its second fader bank (a 16-channel plug-in,
+//     SSL Sigma remote). The left unit shows the fader bank Bank ←/→ selected,
+//     the right unit the other one: all sixteen channels at once.
+//   * SPREAD — every other map. Both units show the same fader bank; the right
+//     unit's V-Pots show a second V-Pot bank of their own (g_softKeyBankRight,
+//     picked with the right unit's soft keys), so sixteen parameters sit under
+//     the hands. Its faders, Solo, Cut and Sel have no binding there.
+// One UF8: slot 0..7, the selected banks, exactly as before.
+inline bool uf8PmFaderSplit_(const uf8::UserUf8Map& map)
+{
+    const int other = (uf8FaderBankClamped_() + 1) % uf8::kUserUf8FaderBankCount;
+    for (int s = 0; s < 8; ++s) {
+        const auto& st = map.strips[other][s];
+        if (st.faderVst3Param >= 0 || st.soloVst3Param >= 0
+            || st.cutVst3Param >= 0 || st.selVst3Param >= 0) return true;
+        for (int vb = 0; vb < uf8::kUserUf8VpotBankCount; ++vb)
+            if (map.banks.banks[other][vb][s].vst3Param >= 0) return true;
+    }
+    return false;
+}
+inline bool uf8PmSpread_(const uf8::UserUf8Map& map)
+{
+    return uf8Strips_() > 8 && !uf8PmFaderSplit_(map);
+}
 inline int uf8FaderBankForStrip_(int slot)
 {
     return (uf8FaderBankClamped_() + (slot >= 8 ? 1 : 0))
          % uf8::kUserUf8FaderBankCount;
 }
+inline int uf8RightVpotBank_()
+{
+    return std::clamp(g_softKeyBankRight.load(), 0, uf8::kUserUf8VpotBankCount - 1);
+}
+// `vpotBank` is the LEFT unit's bank (g_softKeyBank) at every call site; a
+// right-unit strip of a spread map answers from its own bank instead.
 inline const uf8::UserUf8BankSlot& userVpotSlot_(
     const uf8::UserUf8Map& map, int vpotBank, int slot)
 {
     const int vb = std::clamp(vpotBank,
                               0, uf8::kUserUf8VpotBankCount - 1);
     const int s  = std::clamp(slot, 0, kUf8MaxStrips - 1);
+    if (s >= 8 && uf8PmSpread_(map))
+        return map.banks.banks[uf8FaderBankClamped_()][uf8RightVpotBank_()][s & 7];
     return map.banks.banks[uf8FaderBankForStrip_(s)][vb][s & 7];
 }
 inline const uf8::UserUf8StripBinding& userStripBinding_(
     const uf8::UserUf8Map& map, int slot)
 {
+    static const uf8::UserUf8StripBinding kNone{};
     const int s = std::clamp(slot, 0, kUf8MaxStrips - 1);
+    if (s >= 8 && uf8PmSpread_(map)) return kNone;
     return map.strips[uf8FaderBankForStrip_(s)][s & 7];
+}
+// Does V-Pot bank `vb` hold anything on the strips a soft key of `unit` would
+// show it on? Drives which bank keys work and light in Plug-in Mode.
+inline bool uf8PmVpotBankAssigned_(const uf8::UserUf8Map& map, int vb, int unit)
+{
+    vb = std::clamp(vb, 0, uf8::kUserUf8VpotBankCount - 1);
+    const bool split = uf8Strips_() > 8 && uf8PmFaderSplit_(map);
+    for (int fbOff = 0; fbOff < (split ? 2 : 1); ++fbOff) {
+        const int fb = (uf8FaderBankClamped_() + fbOff) % uf8::kUserUf8FaderBankCount;
+        for (int s = 0; s < 8; ++s)
+            if (map.banks.banks[fb][vb][s].vst3Param >= 0) return true;
+    }
+    (void)unit;
+    return false;
 }
 
 // Cached resolver — returns the user-plug-in context for the currently
@@ -27491,14 +27541,24 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 if (pressed) {
                     const int target = id - 0x18;
                     bool anyAssigned = false;
+                    // The right unit's row picks the right unit's V-Pot bank when
+                    // the map is spread across both units (uf8PmSpread_).
+                    bool rightRow = false;
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                        // Every strip on the surface: 16 with two UF8s.
-                        for (int sIdx = 0; sIdx < uf8Strips_(); ++sIdx) {
-                            if (userVpotSlot_(uctx.map->uf8, target, sIdx).vst3Param >= 0)
-                            {
-                                anyAssigned = true; break;
-                            }
+                        anyAssigned = uf8PmVpotBankAssigned_(uctx.map->uf8, target, unit);
+                        rightRow = unit == 1 && uf8PmSpread_(uctx.map->uf8);
+                    }
+                    if (rightRow) {
+                        if ((anyAssigned || g_hudEnabled.load() || g_hudTouchLearn.load())
+                            && g_softKeyBankRight.exchange(target) != target) {
+                            g_softKeyDirty.store(true);
+                            g_bankDirty.store(true);
+                            char buf[8];
+                            snprintf(buf, sizeof(buf), "%d", target);
+                            SetExtState("ReaSixty", "softKeyBankRight", buf, true);
                         }
+                        i += frameSize;
+                        continue;
                     }
                     // Empty (unassigned) banks are normally no-function. But
                     // while the Learn-HUD is open OR standalone Touch-to-Learn is
@@ -27538,7 +27598,8 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
             // (handledNatively) and the nav intercept below never runs — the
             // soft-key jump silently did nothing (Frank 2026-07-27).
             const bool navOwnsSoftKey =
-                (id >= 0x18 && id <= 0x1F
+                (unit == 0   // the marker overlay is on the left unit only
+                 && id >= 0x18 && id <= 0x1F
                  && uf8::nav::Overlay::instance().active()
                  && g_navUf8Show.load());
             if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()
@@ -27553,8 +27614,12 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 const int layer = uf8::bindings::getQuickLayer();
                 const int aq = (layer >= 0 && layer <= 2)
                                ? g_activeQuick[layer].load() : -1;
-                if (aq >= 0) {
-                    const int sb = g_activeSubBank[layer].load();
+                // The right unit's row is the engaged set's NEXT bank (see the
+                // painter); past the last bank its keys do nothing.
+                const int sb = (aq >= 0) ? g_activeSubBank[layer].load() + unit : 0;
+                if (aq >= 0 && sb >= uf8::bindings::kSubBanksPerQuick) {
+                    handledNatively = true;
+                } else if (aq >= 0) {
                     // A dynamic Sub-Bank computes its keys live → route the
                     // press to the dynamic handler (posts to the main-thread
                     // drain) instead of the stored user-Quick binding.
@@ -27618,10 +27683,15 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 // Q2 while the press fires Q1 (Frank desync 2026-06-26).
                 const auto domain = softKeyDomainNow_();
                 const bool isBc   = (domain == uf8::Domain::BusComp);
+                // The right unit's row is the next page (see the painter).
                 const int  bank   = std::clamp(g_softKeyBank.load(),
-                                        0, softkey::maxBankFor(domain));
+                                        0, softkey::maxBankFor(domain)) + unit;
                 const int  slot   = id - 0x18;
-                const auto v      = softkey::viewFor(domain, bank);
+                if (bank > softkey::maxBankFor(domain)) {
+                    handledNatively = true;   // past the last page: an empty key
+                }
+                const auto v      = softkey::viewFor(domain,
+                                        std::min(bank, softkey::maxBankFor(domain)));
                 // Free slot, or ANY held modifier set: Plain belongs to the
                 // plug-in wherever the plug-in has a parameter, every other set
                 // belongs to the user on every key (Frank 2026-08-25, "shift als
@@ -27630,7 +27700,19 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 const bool modHeld =
                     uf8::bindings::bankModifierSnapshot()
                         != uf8::bindings::Modifier::Plain;
-                if (!sslOwnsSlot || modHeld) {
+                if (handledNatively) {
+                    // past the last page
+                } else if (unit == 1 && sslOwnsSlot && !modHeld
+                           && uf8::bindings::getBinding(uf8::bindings::getActiveLayer(),
+                                  uf8::bindings::fromUf8DeviceId(id))
+                                  .shortPress[static_cast<int>(uf8::bindings::Modifier::Plain)]
+                                  .action == "ssl_softkey") {
+                    // The key's own binding is the stock ssl_softkey, which focuses
+                    // a slot of the LEFT row's page. On the right row the slot is
+                    // on the next page: focus that one here instead.
+                    if (pressed) uf8::setFocus({domain, v.linkIdx[slot]});
+                    handledNatively = true;
+                } else if (!sslOwnsSlot || modHeld) {
                     const int q = isBc ? 1 : 0;   // Q2 = BC, Q1 = CS
                     if (uf8::bindings::dispatchUserQuickSlot(
                             0, q, bank, slot, pressed)) {
@@ -27656,7 +27738,7 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
             // generic bindings layer so the overlay always wins while
             // active. Release is swallowed too (no per-key action on
             // release in v1).
-            if (!handledNatively
+            if (!handledNatively && unit == 0
                 && id >= 0x18 && id <= 0x1F
                 && uf8::nav::Overlay::instance().active()
                 && g_navUf8Show.load())
@@ -27774,6 +27856,26 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                     handledOv = true;
                 }
                 if (handledOv) handledNatively = true;
+            }
+
+            // Right unit, stock ssl_softkey binding, not taken above: the slot
+            // is on the page AFTER the left row's (the painter shows it there),
+            // so focus that one rather than let ssl_softkey use the left page.
+            if (!handledNatively && unit == 1 && id >= 0x18 && id <= 0x1F
+                && !g_uf8PluginMode.load()
+                && uf8::bindings::bankModifierSnapshot() == uf8::bindings::Modifier::Plain
+                && uf8::bindings::getBinding(uf8::bindings::getActiveLayer(),
+                       uf8::bindings::fromUf8DeviceId(id))
+                       .shortPress[static_cast<int>(uf8::bindings::Modifier::Plain)]
+                       .action == "ssl_softkey") {
+                const auto domain = softKeyDomainNow_();
+                const int  bank   = std::clamp(g_softKeyBank.load(),
+                                        0, softkey::maxBankFor(domain)) + 1;
+                if (pressed && bank <= softkey::maxBankFor(domain)) {
+                    const int link = softkey::viewFor(domain, bank).linkIdx[id - 0x18];
+                    if (link != softkey::kNoSlot) uf8::setFocus({domain, link});
+                }
+                handledNatively = true;
             }
 
             // Bindings layer — globals previously hardcoded inline. Now
@@ -41099,9 +41201,21 @@ void pushZonesForVisibleSlots()
             // Same resolver the press-dispatch paths use → labels and dispatch
             // can never disagree.
             const auto domSk = softKeyDomainNow_();
+            // ⇨ THE RIGHT UNIT'S ROW IS THE NEXT PAGE. Its eight keys show the
+            // page after the left row's: the next SSL soft-key page, the next
+            // bank of the engaged Quick set. Sixteen keys, configured where the
+            // eight always were (the Soft-Key Sets matrix). Past the last page
+            // the row is empty.
+            const int unitSk = s >> 3;
             const int bankSk = std::clamp(g_softKeyBank.load(),
-                0, softkey::maxBankFor(domSk));
-            auto vSk = softkey::viewFor(domSk, bankSk);
+                0, softkey::maxBankFor(domSk)) + unitSk;
+            const bool bankPast = bankSk > softkey::maxBankFor(domSk);
+            static const int kNoLinks[8] = {
+                softkey::kNoSlot, softkey::kNoSlot, softkey::kNoSlot, softkey::kNoSlot,
+                softkey::kNoSlot, softkey::kNoSlot, softkey::kNoSlot, softkey::kNoSlot };
+            static const char* const kNoLabels[8] = { "", "", "", "", "", "", "", "" };
+            auto vSk = bankPast ? softkey::View{ kNoLinks, kNoLabels }
+                                : softkey::viewFor(domSk, bankSk);
 
             // FX Learn UF8: synthesise an 8-slot view from the focused
             // user-plug-in's bank table, overriding the hardcoded CS/BC
@@ -41162,8 +41276,9 @@ void pushZonesForVisibleSlots()
             const int curQuick  = (!pluginModeLocal
                                    && curLayer >= 0 && curLayer <= 2)
                                   ? g_activeQuick[curLayer].load()  : -1;
-            const int curSub    = (curLayer >= 0 && curLayer <= 2)
-                                  ? g_activeSubBank[curLayer].load() : 0;
+            const int curSub    = ((curLayer >= 0 && curLayer <= 2)
+                                  ? g_activeSubBank[curLayer].load() : 0) + unitSk;
+            const bool subPast  = curSub >= uf8::bindings::kSubBanksPerQuick;
             std::string userLabel;
             bool userBankSlotPresent = false;
             // Dynamic Sub-Bank: keys computed live from the focused track's
@@ -41180,7 +41295,7 @@ void pushZonesForVisibleSlots()
             if (laneOv) {
                 dynKind = uf8::bindings::DynamicBankKind::Lanes;
                 dynOwnsSet = true;
-            } else if (curQuick >= 0)
+            } else if (curQuick >= 0 && !subPast)
                 dynKind = uf8::bindings::getSubBankDynamicFor(
                     curLayer, curQuick, curSub,
                     static_cast<int>(uf8::bindings::bankModifierSnapshot()),
@@ -41209,7 +41324,7 @@ void pushZonesForVisibleSlots()
                 dynInfo = dynamicBankSlot_(dynKind, dynBankContextTrack_(), sk);
                 userLabel = dynInfo.label;
                 userBankSlotPresent = dynInfo.present;
-            } else if (curQuick >= 0) {
+            } else if (curQuick >= 0 && !subPast) {
                 const auto userSlot = uf8::bindings::getUserQuickSlot(
                     curLayer, curQuick, curSub, sk);
                 // ⇨ THE ROW FOLLOWS THE HELD MODIFIER.
@@ -41285,7 +41400,7 @@ void pushZonesForVisibleSlots()
             // "shift als mod für ALLE bänke öffnen (auch die SSL Factory)".
             // On Plain an occupied key still shows and fires the plug-in
             // parameter, unchanged; only the held-modifier sets open up.
-            if (!userCtx && !pluginModeLocal && curLayer == 0 && vSk.linkIdx
+            if (!userCtx && !pluginModeLocal && curLayer == 0 && vSk.linkIdx && !bankPast
                 && (vSk.linkIdx[sk] == softkey::kNoSlot || sslSetOwnsRow)) {
                 const int qd = (domSk == uf8::Domain::BusComp) ? 1 : 0;
                 const auto fslot = uf8::bindings::getUserQuickSlot(
@@ -41423,17 +41538,15 @@ void pushZonesForVisibleSlots()
                 // gewiesene Soft-Key V-Pot banks no-function" →
                 // visually dark so the user sees which banks are
                 // empty and can't navigate there).
-                const int activeBank = std::clamp(
+                int activeBank = std::clamp(
                     g_softKeyBank.load(), 0,
                     uf8::kUserUf8BankCount - 1);
                 bool bankAssigned = false;
                 if (auto uctxBank = userStripCtxFocused_(); uctxBank.map) {
-                    for (int sIdx = 0; sIdx < uf8Strips_(); ++sIdx) {
-                        if (userVpotSlot_(uctxBank.map->uf8, sk, sIdx).vst3Param >= 0)
-                        {
-                            bankAssigned = true; break;
-                        }
-                    }
+                    bankAssigned = uf8PmVpotBankAssigned_(uctxBank.map->uf8, sk, s >> 3);
+                    // A spread map: the right row shows the right unit's bank.
+                    if (s >= 8 && uf8PmSpread_(uctxBank.map->uf8))
+                        activeBank = uf8RightVpotBank_();
                 }
                 const bool isActive = (sk == activeBank);
                 // During learn the user can switch to an as-yet-empty bank to
@@ -61145,6 +61258,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // Restore persisted UI mode flags (Pan override, encoder mode) so
     // they survive REAPER restarts. ExtState is global per-extension —
     // persistAcrossSessions=true writes through to reaper-extstate.ini.
+    if (const char* v = GetExtState("ReaSixty", "softKeyBankRight"); v && *v)
+        g_softKeyBankRight.store(std::clamp(std::atoi(v), 0, uf8::kUserUf8VpotBankCount - 1));
     if (const char* v = GetExtState("ReaSixty", "forcePan");
         v && v[0] == '1') {
         g_forcePan.store(true);
