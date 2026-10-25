@@ -27776,6 +27776,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                             if (a != 0 && a <= kUf8FaderPbMax) {
                                 queueInput({PendingInput::VolumeAbs, strip,
                                             pbToLinearVolume(a)});
+                                faderInputLog_("SEED", strip, a, 0, 0, "Q");
                             }
                         }
                         // Alt-drag snap-back: capture the pre-touch pb14 on
@@ -43215,6 +43216,8 @@ void commitDebouncedTouchReleases()
             ? (snapBack ? g_touchOriginPb[s].load()
                         : g_lastTouchEffPb[s].load())
             : 0;
+        faderInputLog_("REL", s, touchPb, 0, 0,
+                       !userMoved ? "NOMOVE" : snapBack ? "SNAPBACK" : "WRITE");
         if (userMoved) {
             g_lastTouchPbValid[s].store(false);
             g_touchOriginPbValid[s].store(false);
