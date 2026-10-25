@@ -27672,12 +27672,23 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // firmware's tendency to drive toward its stale target
                 // between re-enable and the next position command.
                 if (state != 0) {
+                    // ⛔ ONLY THE FIRST ON OF A TOUCH STARTS ONE. The sensor
+                    // bounces under a held finger (see kTouchDebounceQuiet), and
+                    // every bounce used to re-anchor to g_motorTargetPb, which the
+                    // motor follow does NOT update while the strip is touched. So
+                    // a bounce mid-move took the value from the moment the finger
+                    // first landed, and the seed below wrote it: a one-frame spike
+                    // back to the start value in the automation (forum 2026-10-25,
+                    // Windows, two faders moved at once). A bounce late in a long
+                    // hold also counted as "parked" and stored the whole move as
+                    // readback offset. A bounce only keeps the touch alive.
+                    const bool touchStarts = !g_touchReported[strip].load();
                     // "Parked" = this touch follows a quiet gap, so the motor
                     // had settled the fader on target and the grab−anchor gap
                     // is a clean offset measurement (vs a rapid re-touch where
                     // the gap is real displacement). Compare BEFORE
                     // overwriting g_touchLastPress.
-                    {
+                    if (touchStarts) {
                         const auto nowT = std::chrono::steady_clock::now();
                         const auto sinceLast = std::chrono::duration_cast<
                             std::chrono::milliseconds>(
@@ -27687,55 +27698,57 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     g_touchLastPress[strip] = std::chrono::steady_clock::now();
                     g_touchReleasePending[strip].store(false);
                     g_touchReported[strip].store(true);
-                    // Touch-anchoring: freeze the motor's current target as
-                    // the anchor and arm grab-capture. The first POS frame
-                    // of this touch then writes the anchor verbatim (no-op)
-                    // instead of the offset raw readback — see g_motorTargetPb.
-                    g_touchAnchorPb[strip].store(g_motorTargetPb[strip].load());
-                    g_touchGrabValid[strip].store(false);
-                    // Touch-seed: write the STARTING value to REAPER on the
-                    // touch-down edge, before any movement frame arrives.
-                    // REAPER's Touch/Latch automation latches the envelope's
-                    // first point from the track value sampled while
-                    // GetTouchState() is true; if our first *movement* write
-                    // lands before REAPER samples, the envelope seeds at an
-                    // already-moved value (Frank 2026-06-09: "takes a later
-                    // value as the fader's starting point"). Queuing the
-                    // anchor (= frozen motor target = current volume) here
-                    // makes the true starting value the first thing REAPER
-                    // sees, so the envelope opens exactly where the fader
-                    // was. The first POS frame re-writes the same value
-                    // (no-op), then real motion follows. Skipped when the
-                    // anchor is invalid (-INF / uninit) — the POS path's raw
-                    // fallback covers that case.
-                    // ⛔ NOT WHILE TOUCH-TO-LEARN IS ON. There the touch is a
-                    // learn gesture, not the start of a move, so there is no
-                    // envelope to seed — and in Plug-in Mode this write lands on
-                    // the plug-in PARAMETER, which is exactly the signal the
-                    // learn poll is watching. Dropping the position frames
-                    // (4b73bb2) was only half of it; this edge writes before the
-                    // first frame ever arrives.
-                    if (!g_hudTouchLearn.load()) {
-                        const uint16_t a = g_touchAnchorPb[strip].load();
-                        if (a != 0 && a <= kUf8FaderPbMax) {
-                            queueInput({PendingInput::VolumeAbs, strip,
-                                        pbToLinearVolume(a)});
+                    if (touchStarts) {
+                        // Touch-anchoring: freeze the motor's current target as
+                        // the anchor and arm grab-capture. The first POS frame
+                        // of this touch then writes the anchor verbatim (no-op)
+                        // instead of the offset raw readback — see g_motorTargetPb.
+                        g_touchAnchorPb[strip].store(g_motorTargetPb[strip].load());
+                        g_touchGrabValid[strip].store(false);
+                        // Touch-seed: write the STARTING value to REAPER on the
+                        // touch-down edge, before any movement frame arrives.
+                        // REAPER's Touch/Latch automation latches the envelope's
+                        // first point from the track value sampled while
+                        // GetTouchState() is true; if our first *movement* write
+                        // lands before REAPER samples, the envelope seeds at an
+                        // already-moved value (Frank 2026-06-09: "takes a later
+                        // value as the fader's starting point"). Queuing the
+                        // anchor (= frozen motor target = current volume) here
+                        // makes the true starting value the first thing REAPER
+                        // sees, so the envelope opens exactly where the fader
+                        // was. The first POS frame re-writes the same value
+                        // (no-op), then real motion follows. Skipped when the
+                        // anchor is invalid (-INF / uninit) — the POS path's raw
+                        // fallback covers that case.
+                        // ⛔ NOT WHILE TOUCH-TO-LEARN IS ON. There the touch is a
+                        // learn gesture, not the start of a move, so there is no
+                        // envelope to seed — and in Plug-in Mode this write lands on
+                        // the plug-in PARAMETER, which is exactly the signal the
+                        // learn poll is watching. Dropping the position frames
+                        // (4b73bb2) was only half of it; this edge writes before the
+                        // first frame ever arrives.
+                        if (!g_hudTouchLearn.load()) {
+                            const uint16_t a = g_touchAnchorPb[strip].load();
+                            if (a != 0 && a <= kUf8FaderPbMax) {
+                                queueInput({PendingInput::VolumeAbs, strip,
+                                            pbToLinearVolume(a)});
+                            }
                         }
-                    }
-                    // Alt-drag snap-back: capture the pre-touch pb14 on
-                    // the main thread. Done via the queue (not inline
-                    // here) because REAPER track/FX API calls would
-                    // crash from the libusb input thread — see
-                    // feedback-reaper-api-input-thread.md.
-                    // queueInput guarantees ordering: any VolumeAbs
-                    // events from FF 21 03 frames that follow this
-                    // touch-on can only arrive AFTER us (touchReported
-                    // gates them), so the snapshot drains before any
-                    // drag value is written.
-                    g_touchOriginPbValid[strip].store(false);
-                    if (g_altDragSnapBack.load()) {
-                        queueInput({PendingInput::TouchOriginSnapshot,
-                                    strip, 0.0});
+                        // Alt-drag snap-back: capture the pre-touch pb14 on
+                        // the main thread. Done via the queue (not inline
+                        // here) because REAPER track/FX API calls would
+                        // crash from the libusb input thread — see
+                        // feedback-reaper-api-input-thread.md.
+                        // queueInput guarantees ordering: any VolumeAbs
+                        // events from FF 21 03 frames that follow this
+                        // touch-on can only arrive AFTER us (touchReported
+                        // gates them), so the snapshot drains before any
+                        // drag value is written.
+                        g_touchOriginPbValid[strip].store(false);
+                        if (g_altDragSnapBack.load()) {
+                            queueInput({PendingInput::TouchOriginSnapshot,
+                                        strip, 0.0});
+                        }
                     }
                     // Send LIMP unconditionally on every touch-ON edge —
                     // a previously-lost OFF event would otherwise pin
@@ -49376,7 +49389,10 @@ int g_cmdBrightnessDown = 0;
 //   kind = "POS" (position frame) | "TOUCH" (touch on/off)
 //   delta = signed pb14 - prevPb (positive = upward, negative = downward)
 //   decision = "ACC" (accepted, queued to REAPER) | "REJ" (filtered out)
-std::atomic<bool>             g_faderInputLog{false};
+// On with REASIXTY_UF8_TRACE, like the rest of the UF8 wire tracing. Every
+// position frame lands here raw: "ECHO … HIBIT" is a frame with bit 7 set,
+// "DROP_NOHI" one without, "ACC" the anchored value that went to REAPER.
+std::atomic<bool>             g_faderInputLog{std::getenv("REASIXTY_UF8_TRACE") != nullptr};
 std::mutex                    g_faderInputLogMutex;
 std::chrono::steady_clock::time_point g_faderInputLogStart{};
 
@@ -49389,6 +49405,7 @@ void faderInputLog_(const char* kind, int strip, int pb14, int prevPb,
     if (!f) {
         f = std::fopen(uf8::logPath("uf8_fader_input.log").c_str(), "w");
         if (!f) return;
+        g_faderInputLogStart = std::chrono::steady_clock::now();
         std::fprintf(f, "t_ms\tkind\tstrip\tpb14\tprevPb\tdelta\tdecision\n");
     }
     const auto now = std::chrono::steady_clock::now();
