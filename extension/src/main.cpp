@@ -26649,9 +26649,21 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
     const uint8_t* data = dataIn;
     size_t         len  = lenIn;
     if (!g_inputResidual.empty()) {
-        stitched.reserve(g_inputResidual.size() + lenIn);
+        // ⛔ EVERY PACKET STARTS WITH THE 31 xx SESSION PREFIX, the one that
+        // continues a split frame too, and sometimes a packet is NOTHING but
+        // the prefix (cap51 at 36.038: "31 60 ff 21 03 07 c9", then "31 60",
+        // then "31 60 48 3c"). Appended as it came, the prefix became the
+        // frame's payload: LSB 0x31 / MSB 0x60 = pb 12337, or MSB 0x31 = 63xx,
+        // a one-frame jump of the fader to a fixed value. Two faders at once
+        // split more frames, so it showed up there (forum 2026-10-25, and
+        // Frank's log the same evening: strip 4 read 12337 and 6295 mid-move).
+        const uint8_t* cont    = dataIn;
+        size_t         contLen = lenIn;
+        if (contLen >= 2 && cont[0] == 0x31) { cont += 2; contLen -= 2; }
+        if (contLen == 0) return;   // prefix only: keep the residual waiting
+        stitched.reserve(g_inputResidual.size() + contLen);
         stitched.insert(stitched.end(), g_inputResidual.begin(), g_inputResidual.end());
-        stitched.insert(stitched.end(), dataIn, dataIn + lenIn);
+        stitched.insert(stitched.end(), cont, cont + contLen);
         g_inputResidual.clear();
         data = stitched.data();
         len  = stitched.size();
@@ -26736,6 +26748,21 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
 
         // Dispatch by command.
         if (cmd == 0x21 && data[i + 2] == 0x03) {
+            // The last byte is the sum of the five before it (everything after
+            // FF), right in all 1287 position frames of the SSL 360 captures.
+            // A frame that fails it was put together wrong; resync byte by
+            // byte instead of moving a fader to a value nobody sent.
+            {
+                const uint8_t sum = static_cast<uint8_t>(
+                    data[i + 1] + data[i + 2] + data[i + 3] + data[i + 4] + data[i + 5]);
+                if (sum != data[i + 6]) {
+                    faderInputLog_("POS", data[i + 3],
+                                   (data[i + 4] & 0x7F) | ((data[i + 5] & 0x7F) << 7),
+                                   data[i + 6], sum, "BADCK");
+                    ++i;
+                    continue;
+                }
+            }
             // Fader position: FF 21 03 strip A B cksum
             // A = MCU LSB (high bit is a flag, masked), B = MCU MSB.
             // Native route: push into the input queue as an absolute volume
