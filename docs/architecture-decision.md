@@ -29,9 +29,12 @@ REAPER  <->  CSI  <->  virtual MCU MIDI  <->  reaper-uf8  <->  UF8
    Type, Value Line, O/PdB readout, SSL plug-in detection — all require
    REAPER API access (FX list, track volume in dB, track name). CSI
    cannot forward any of that.
-3. **Full 16-bit fader resolution.** MCU pitch-bend is 14-bit; going
-   direct via `CSurf_OnVolumeChange` uses REAPER's native 16-bit
-   precision.
+3. **Full fader resolution.** The UF8 reports 14 bit, the same as MCU
+   pitch-bend, the UF1 15 bit. Going direct via `CSurf_OnVolumeChange`,
+   which takes a `double`, passes on everything the fader reports.
+   (Corrected 2026-10-25: this point used to promise "REAPER's native
+   16-bit precision". REAPER takes volume as a double, and no SSL fader
+   sends 16 bit.)
 4. **Single source of truth.** Current state already has two pipelines
    writing to the scribble strips in parallel (CSI MCU-SysEx + direct
    `pushZonesForVisibleSlots`). The conflict resolves itself once CSI
@@ -65,7 +68,7 @@ REAPER  <->  CSI  <->  virtual MCU MIDI  <->  reaper-uf8  <->  UF8
    updated on `SetTrackListChange`. v1 hardcoded slots 0..7;
    bank-left/right wires to UF8 bank buttons later.
 4. **Outputs REAPER→UF8 via Surface callbacks**:
-   - `SetSurfaceVolume` → `buildFaderPosition` (16-bit now)
+   - `SetSurfaceVolume` → `buildFaderPosition` (14-bit pitch-bend value)
    - `SetTrackTitle` → `buildStripTextUpper`
    - `SetSurfaceMute/Solo/RecArm/Selected` → LED frames
    - `SetPlayState/SetRepeatState` → transport LEDs
@@ -75,7 +78,7 @@ REAPER  <->  CSI  <->  virtual MCU MIDI  <->  reaper-uf8  <->  UF8
    - Test: track rename in REAPER appears on UF8 with MIDI silent.
 5. **Inputs UF8→REAPER via CSurf_* calls** (replacing MCU synth in
    `main.cpp:77`):
-   - Fader → `CSurf_OnVolumeChange(tr, vol, false)` with full 16-bit
+   - Fader → `CSurf_OnVolumeChange(tr, vol, false)` with the full 14 bit
    - Fader touch → internal state answering `GetTouchState()` callback
    - Button → `CSurf_OnMuteChange` / `CSurf_OnSoloChange` / etc. per ID
    - V-Pot → `CSurf_OnPanChange(tr, delta, true)` (Pan-only for v1)

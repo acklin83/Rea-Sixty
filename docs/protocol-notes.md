@@ -117,11 +117,14 @@ Checksum follows the standard sum-of-payload rule. Examples:
 Decoded 2026-04-29 from cap47.
 - `21 03` — fader-position command type
 - `strip` = `0..7`
-- `pos_lo` / `pos_hi` — 16-bit position, **little-endian** (LSB first)
+- `pos_lo` / `pos_hi` — **14-bit** position, 7 bits in each byte, LSB first: `pos = (pos_lo & 0x7F) | ((pos_hi & 0x7F) << 7)`, 0..16383, the MCU pitch-bend layout. `pos_hi` never has bit 7 set (1287 frames across the SSL 360 captures).
+- Bit 7 of `pos_lo` is a flag, not part of the value. It splits the frames into two interleaved streams; the stream without it reads about 70 higher (median 56..94 per fader, Frank's UF8, 2026-10-25). Both are real positions.
+- End stops measured on all eight faders 2026-10-25: bottom 128..142 (never 0), top 15389..15488 with bit 7, 15546..15615 without.
+- The checksum is the sum of the five bytes after `FF`. A frame can be split across two USB packets, and the continuation packet starts with its own `31 60` (sometimes a packet is nothing but `31 60`).
 
-During a manual slow drag of fader 1 we observed the LE value sweep smoothly, e.g. `BC 5F → A3 5F → 6C 5F → 37 5F → 08 5F → BB 5E → 5E 5E → FB 5D` = 0x5FBC, 0x5FA3, 0x5F6C, … decreasing monotonically (~10 ms cadence during active movement).
+During a manual slow drag of fader 1 the bytes swept smoothly, e.g. `BC 5F → A3 5F → 6C 5F → 37 5F → 08 5F → BB 5E → 5E 5E → FB 5D` (~10 ms cadence during active movement). `BC 5F` is 0x3C + (0x5F << 7) = 12220.
 
-Position is NOT capped at 0x4000 / 14-bit. Full 16-bit range is used; observed values from ~0x37xx to ~0x62xx during partial-throw movement, so range is at least 0x0000…0xFFFF. Confirm extremes with a future top-and-bottom sweep capture.
+⚠ Corrected 2026-10-25. This section first read the two bytes as one 16-bit little-endian value and concluded the full 0x0000..0xFFFF range was used. That was wrong: the high bit of each byte is not part of the position.
 
 ### `31 60 FF 21 03 <strip> <pos_lo> <pos_hi> FF 33 02 00 <flag> CKSUM` (12-byte payload, 15-byte frame) — fader position with secondary tag
 Position frames sometimes have a `FF 33 02 00 <flag>` segment appended in the same URB (single bulk transfer carries two stacked frames). Observed 10× during the slow-drag of cap47, mostly clustered in the steepest movement region. `<flag>` alternates `0x00` ↔ `0x01` between consecutive tagged frames. Hypothesis: a secondary touch sensor (capacitive vs. mechanical) or a "moved past detent" flag — needs a follow-up capture isolating the trigger to confirm.

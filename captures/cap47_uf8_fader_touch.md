@@ -37,7 +37,7 @@ Position stream during slow-drag: monotonic LE16 descent
 
 Both new opcodes documented in `docs/protocol-notes.md` under "Events — UF8 → host":
 - `FF 20 02 <strip> <state>` — fader touch
-- `FF 21 03 <strip> <lsb> <msb>` — fader position (16-bit LE)
+- `FF 21 03 <strip> <lsb> <msb>` — fader position (14 bit: LSB and MSB carry 7 bits each, bit 7 of the LSB is a stream flag; see docs/protocol-notes.md. Corrected 2026-10-25, this line said 16-bit LE)
 - Composite `FF 21 03 … FF 33 02 00 <flag>` — position + secondary tag (TBD)
 
 ## What's still open

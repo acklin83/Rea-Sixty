@@ -29,7 +29,7 @@ three things start grinding:
    Either you replace SSL 360° or you live without colours.
 3. **The bridge between REAPER and SSL 360° is MCU.** MCU is the
    ancient Mackie protocol every DAW understands. It has no concept of
-   colour. It has 14-bit faders instead of REAPER's native 16-bit. It
+   colour. It
    can't tell the controller what's on screen or which plug-in
    parameter you're touching. SSL has to use it anyway because it's the
    only thing that works with all five DAWs they support.
@@ -67,9 +67,9 @@ strips. No plug-in required, no special mode, no setup. This is the
 feature that started the whole project, and it's been working since
 Phase 1.
 
-The faders get smoother. REAPER stores volume in 16-bit; MCU only
-carries 14-bit. By talking to the API directly we keep the full
-resolution. Same for V-Pots — REAPER gets the raw delta, not a
+The faders use every position the hardware reports, 14 bit on the UF8
+and 15 bit on the UF1, with a correction table so the printed dB marks
+match REAPER's readout. The V-Pots hand REAPER the raw delta, not a
 quantised MIDI CC.
 
 The UC1's gain-reduction meter follows the actual compression on the
@@ -146,7 +146,7 @@ keep shipping what we ship.
 **If SSL ever removes the plug-in-on-every-track requirement,** the
 headline feature parity closes. We still have folder mode, selection
 sets, generic FX learn, the themed mixer, the in-REAPER settings, the
-16-bit faders, the no-daemon install. The project keeps its reason
+calibrated faders, the no-daemon install. The project keeps its reason
 to exist.
 
 ## So why finish it
