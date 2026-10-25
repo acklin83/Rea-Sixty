@@ -26527,6 +26527,10 @@ constexpr uint16_t kUf8StopBottomHi = 200;     // bit 7 set
 constexpr uint16_t kUf8StopBottomLo = 320;     // bit 7 clear
 constexpr uint16_t kUf8StopTopHi    = 15380;   // bit 7 set
 constexpr uint16_t kUf8StopTopLo    = 15530;   // bit 7 clear
+// How much higher a frame WITHOUT bit 7 reads than one with it, during slow
+// movement: median 56..94 per fader in Frank's log of 2026-10-25 (sd 20..40).
+// One value for all eight replayed as well as eight separate ones.
+constexpr uint16_t kUf8LoStreamOffset = 70;
 // -1 = on the bottom stop, +1 = on the top stop, 0 = in between.
 inline int uf8FaderStop_(uint16_t rawPb, bool hiBit)
 {
@@ -26765,12 +26769,18 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 const uint8_t lsb = rawA & 0x7F;
                 const uint8_t msb = data[i + 5] & 0x7F;
                 const uint16_t pb14 = static_cast<uint16_t>(lsb | (msb << 7));
-                // On a stop, from either stream, the frame stands for the end
-                // itself: pbOut is what gets written and echoed. pb14 stays raw
-                // for the anchoring, whose grab measures the readback offset.
+                // pbIn = the frame in the bit-7 stream's terms (a frame without
+                // bit 7 shifted down, see kUf8LoStreamOffset). On a stop, from
+                // either stream, the frame stands for the end itself: pbOut is
+                // what gets written and echoed. pb14 stays raw for the grab,
+                // which measures the readback offset.
                 const int stop = uf8FaderStop_(pb14, rawHigh != 0);
+                const uint16_t pbIn = rawHigh ? pb14
+                    : (pb14 > kUf8LoStreamOffset
+                           ? static_cast<uint16_t>(pb14 - kUf8LoStreamOffset)
+                           : uint16_t(0));
                 const uint16_t pbOut = stop < 0 ? uint16_t(0)
-                                     : stop > 0 ? kUf8FaderPbMax : pb14;
+                                     : stop > 0 ? kUf8FaderPbMax : pbIn;
                 const uint8_t lsbOut = static_cast<uint8_t>(pbOut & 0x7F);
                 const uint8_t msbOut = static_cast<uint8_t>((pbOut >> 7) & 0x7F);
                 if (stop != 0)
@@ -26785,32 +26795,26 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 if (rawHigh) {
                     faderInputLog_("ECHO", strip, pb14, 0, int(rawA), "HIBIT");
                 }
-                // Bit 7 of byte 4 is a firmware-side flag, not an
-                // echo of our outbound bit-7-set frames. Verified by
-                // capturing /tmp/uf8_fader_input.log with our outbound
-                // echoes DISABLED — bit-7-set frames still arrived,
-                // and they were the only ones that formed a clean
-                // monotonic stream during a smooth pull. The bit-7-
-                // CLEAR frames carry the +50..+100 LSB upward spikes
-                // ("Werte korrigieren minimal gegen oben") and appear
-                // to be some secondary signal (capacitive vs mech
-                // sensor, or motor-state polling — exact semantics
-                // TBD). For volume tracking we only want the
-                // authoritative bit-7-set stream.
-                if (!rawHigh && stop == 0) {
-                    faderInputLog_("POS", strip, pb14, 0, 0, "DROP_NOHI");
-                    i += frameSize;   // cmd 0x21 = 7 bytes; was hardcoded
-                                      // 6 → parser slid 1 byte into the
-                                      // checksum on every drop. The
-                                      // skip-byte recovery at the top of
-                                      // the loop usually masked this, but
-                                      // when the lone checksum happened
-                                      // to be 0xFF the next iteration
-                                      // misparsed it as a frame start —
-                                      // most visibly affecting fader 8
-                                      // (last-pushed-byte position in
-                                      // typical bundle layouts).
-                    continue;
+                // Bit 7 of byte 4 is a firmware-side flag, not an echo of our
+                // outbound bit-7-set frames (verified with our echoes off). It
+                // splits the frames into two streams, each a full 14-bit value.
+                // ⛔ THE FRAMES WITHOUT IT ARE NOT NOISE. They were dropped for
+                // months as "+50..+100 upward spikes", which halved the input:
+                // in Frank's log of 2026-10-25 the bit-7 stream alone left 19 %
+                // of the 30 Hz ticks during a move without a new value, and
+                // REAPER drew stairs ("UF1 ist VIEL smoother als UF8"). They are
+                // the same movement read ~70 higher, so shifted down they fill
+                // the gaps: 1 % stairs, a few ~25-step wiggles, measured by
+                // replaying that log.
+                if (!rawHigh) {
+                    faderInputLog_("POS", strip, pb14, pbIn, 0, "NOHI");
+                    // Until the first bit-7 frame of the touch has set the grab
+                    // there is no offset to apply, and the raw value would nudge
+                    // the level by the readback offset on the first write.
+                    if (stop == 0 && !g_touchGrabValid[strip].load()) {
+                        i += frameSize;
+                        continue;
+                    }
                 }
                 // DynaMount mode: a mount strip's fader drives the robotic
                 // mount, not a track. Send-on-release (Frank 2026-06-28): the
@@ -26865,14 +26869,14 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // raw pb14 when no valid anchor exists (anchor 0 = -INF /
                 // uninitialised, or sentinel > pbMax before the first
                 // motor-follow tick).
-                // A frame without bit 7 (only a stop frame gets this far) reads
-                // ~100 LSB higher than the stream the offset is measured in, so
-                // it never becomes the grab and never feeds the offset.
+                // A frame without bit 7 never becomes the grab: the offset is
+                // measured in the bit-7 stream, and the shifted frame is only
+                // as good as kUf8LoStreamOffset.
                 if (rawHigh && !g_touchGrabValid[strip].load()) {
                     g_touchGrabPb[strip].store(pb14);
                     g_touchGrabValid[strip].store(true);
                 }
-                uint16_t effPb = pb14;
+                uint16_t effPb = pbIn;
                 {
                     const uint16_t anchor = g_touchAnchorPb[strip].load();
                     const uint16_t grab   = g_touchGrabPb[strip].load();
@@ -26888,7 +26892,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     //    parked offset so REAPER follows the physical fader
                     //    instead of discarding the displacement (which desyncs
                     //    ganged peers and mis-seeds the automation envelope).
-                    if (rawHigh && g_touchGrabValid[strip].load()
+                    if (g_touchGrabValid[strip].load()
                         && anchor != 0 && anchor <= kUf8FaderPbMax) {
                         int offset;
                         if (g_touchParked[strip].load()
@@ -26898,7 +26902,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         } else {
                             offset = g_touchReadbackOffset[strip].load();
                         }
-                        int eff = int(pb14) - offset;
+                        int eff = int(pbIn) - offset;
                         if (eff < 0)                       eff = 0;
                         if (eff > int(kUf8FaderPbMax))     eff = int(kUf8FaderPbMax);
                         effPb = static_cast<uint16_t>(eff);
