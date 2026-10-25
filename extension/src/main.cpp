@@ -26508,6 +26508,32 @@ std::array<std::atomic<uint16_t>, 8> g_lastTouchEffPb{};
 // DISPLACED from its parked position (motor couldn't re-park during a rapid
 // ganged push), so the gap is real displacement we must track, not discard.
 constexpr int kAnchorOffsetMax = 500;
+
+// ⛔ THE END STOPS, AS THE UF1 HAS THEM (uf1::kFaderEndSnap): both ends snap.
+// Measured on Frank's UF8 2026-10-25 (uf8_fader_input.log, all 8 faders fast
+// and slow to both stops). The raw readback never reaches the ends:
+//  • bottom: frames with bit 7 stop at 128..142, never 0. The anchoring adds
+//    the strip's own readback offset on top, so a fader on the stop wrote
+//    ~130..280 to REAPER: about -100 dB, a different value on every channel
+//    (forum 2026-10-25: "only -103 dB or so, each channel different").
+//  • top: frames with bit 7 stop at 15389..15488, the ones without at
+//    15546..15615. On a fast push the last frame before the stop is often one
+//    WITHOUT bit 7, which the handler drops, so REAPER kept the last frame with
+//    it, well short of +12 (Frank 2026-10-25: "bei schnellen Bewegungen").
+// So a frame from EITHER stream inside these zones puts the fader on its end,
+// past the anchor offset. The zones are wider than the UF1's because the stop
+// itself sits up to ~100 LSB apart from fader to fader.
+constexpr uint16_t kUf8StopBottomHi = 200;     // bit 7 set
+constexpr uint16_t kUf8StopBottomLo = 320;     // bit 7 clear
+constexpr uint16_t kUf8StopTopHi    = 15380;   // bit 7 set
+constexpr uint16_t kUf8StopTopLo    = 15530;   // bit 7 clear
+// -1 = on the bottom stop, +1 = on the top stop, 0 = in between.
+inline int uf8FaderStop_(uint16_t rawPb, bool hiBit)
+{
+    if (rawPb <= (hiBit ? kUf8StopBottomHi : kUf8StopBottomLo)) return -1;
+    if (rawPb >= (hiBit ? kUf8StopTopHi    : kUf8StopTopLo))    return +1;
+    return 0;
+}
 // A touch beginning after at least this long without a press counts as
 // "parked": the motor had settled the fader on target, so its grab−anchor
 // gap is a clean offset measurement. Rapid re-touches (shorter gap) reuse
@@ -26739,6 +26765,17 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 const uint8_t lsb = rawA & 0x7F;
                 const uint8_t msb = data[i + 5] & 0x7F;
                 const uint16_t pb14 = static_cast<uint16_t>(lsb | (msb << 7));
+                // On a stop, from either stream, the frame stands for the end
+                // itself: pbOut is what gets written and echoed. pb14 stays raw
+                // for the anchoring, whose grab measures the readback offset.
+                const int stop = uf8FaderStop_(pb14, rawHigh != 0);
+                const uint16_t pbOut = stop < 0 ? uint16_t(0)
+                                     : stop > 0 ? kUf8FaderPbMax : pb14;
+                const uint8_t lsbOut = static_cast<uint8_t>(pbOut & 0x7F);
+                const uint8_t msbOut = static_cast<uint8_t>((pbOut >> 7) & 0x7F);
+                if (stop != 0)
+                    faderInputLog_("POS", strip, pb14, pbOut, stop,
+                                   rawHigh ? "STOP_HI" : "STOP_LO");
                 // Diag: log whether bit 7 of LSB was set on the inbound
                 // frame. If the firmware echoes back our `lsb|0x80` touch
                 // echoes as position events, those echoes carry the bit
@@ -26760,7 +26797,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // sensor, or motor-state polling — exact semantics
                 // TBD). For volume tracking we only want the
                 // authoritative bit-7-set stream.
-                if (!rawHigh) {
+                if (!rawHigh && stop == 0) {
                     faderInputLog_("POS", strip, pb14, 0, 0, "DROP_NOHI");
                     i += frameSize;   // cmd 0x21 = 7 bytes; was hardcoded
                                       // 6 → parser slid 1 byte into the
@@ -26785,10 +26822,10 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 if (g_selectionMode.load() == SelectionMode::DynaMount) {
                     const int mnt = uf8::dynamount::manager().mountForStrip(strip);
                     if (mnt >= 0) {
-                        g_dynFaderPendingNorm[strip].store(dynaFaderNorm_(pb14));
+                        g_dynFaderPendingNorm[strip].store(dynaFaderNorm_(pbOut));
                         g_dynFaderPendingValid[strip].store(true);
                         if (g_dev)
-                            g_dev->send(uf8::buildFaderPosition(strip, lsb | 0x80, msb));
+                            g_dev->send(uf8::buildFaderPosition(strip, lsbOut | 0x80, msbOut));
                         i += frameSize;
                         continue;
                     }
@@ -26805,11 +26842,11 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     if (hslot >= 0) {
                         uf8::hue::manager().setFader(
                             hslot,
-                            static_cast<double>(pb14)
+                            static_cast<double>(pbOut)
                                 / static_cast<double>(kUf8FaderPbMax),
                             /*released=*/false);
                         if (g_dev)
-                            g_dev->send(uf8::buildFaderPosition(strip, lsb | 0x80, msb));
+                            g_dev->send(uf8::buildFaderPosition(strip, lsbOut | 0x80, msbOut));
                         i += frameSize;
                         continue;
                     }
@@ -26828,7 +26865,10 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // raw pb14 when no valid anchor exists (anchor 0 = -INF /
                 // uninitialised, or sentinel > pbMax before the first
                 // motor-follow tick).
-                if (!g_touchGrabValid[strip].load()) {
+                // A frame without bit 7 (only a stop frame gets this far) reads
+                // ~100 LSB higher than the stream the offset is measured in, so
+                // it never becomes the grab and never feeds the offset.
+                if (rawHigh && !g_touchGrabValid[strip].load()) {
                     g_touchGrabPb[strip].store(pb14);
                     g_touchGrabValid[strip].store(true);
                 }
@@ -26848,7 +26888,8 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     //    parked offset so REAPER follows the physical fader
                     //    instead of discarding the displacement (which desyncs
                     //    ganged peers and mis-seeds the automation envelope).
-                    if (anchor != 0 && anchor <= kUf8FaderPbMax) {
+                    if (rawHigh && g_touchGrabValid[strip].load()
+                        && anchor != 0 && anchor <= kUf8FaderPbMax) {
                         int offset;
                         if (g_touchParked[strip].load()
                             && std::abs(gap) <= kAnchorOffsetMax) {
@@ -26863,6 +26904,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         effPb = static_cast<uint16_t>(eff);
                     }
                 }
+                if (stop != 0) effPb = pbOut;   // the end, past the offset
                 g_lastTouchEffPb[strip].store(effPb);
                 // Echo the position back to UF8 with bit 7 of LSB SET.
                 // SSL360 does this throughout every touch (cap32 OUT
@@ -26874,7 +26916,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 // Without these echoes the motor falls back to a
                 // stale internal value (typically near 0) on release.
                 if (g_dev) {
-                    g_dev->send(uf8::buildFaderPosition(strip, lsb | 0x80, msb));
+                    g_dev->send(uf8::buildFaderPosition(strip, lsbOut | 0x80, msbOut));
                 }
                 // Deadband filter on the pb14 value, NOT on lsb alone.
                 // Splitting into msb/lsb produced upward "blips" while the
@@ -26889,14 +26931,16 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 const uint16_t prevPb = static_cast<uint16_t>(
                     (uint16_t(g_lastMsbOut[strip].load()) << 7) |
                      uint16_t(g_lastLsbOut[strip].load()));
-                const int signedDelta = int(pb14) - int(prevPb);
+                // pbOut, not pb14: a stop frame a few LSB from the last one
+                // still has to land the end once.
+                const int signedDelta = int(pbOut) - int(prevPb);
                 if (std::abs(signedDelta) >= 4) {
-                    g_lastMsbOut[strip].store(msb);
-                    g_lastLsbOut[strip].store(lsb);
+                    g_lastMsbOut[strip].store(msbOut);
+                    g_lastLsbOut[strip].store(lsbOut);
                     queueInput({PendingInput::VolumeAbs, strip, pbToLinearVolume(effPb)});
                     faderInputLog_("POS", strip, effPb, prevPb, signedDelta, "ACC");
                 } else {
-                    faderInputLog_("POS", strip, pb14, prevPb, signedDelta, "REJ");
+                    faderInputLog_("POS", strip, pbOut, prevPb, signedDelta, "REJ");
                 }
             }
         } else if (cmd == 0x22 && data[i + 2] == 0x03) {
@@ -28823,10 +28867,15 @@ void openUf1BringUp_()
 constexpr uint16_t kUf1FaderMax   = uf1::kFaderMax;
 constexpr double   kUf1FaderTopDb = 12.0;
 
+// ⛔ BOTH ENDS SNAP HERE TOO, as on every other UF1 fader path
+// (uf1::faderPosToNorm). Volume, sends and items were the three that divided
+// raw, so the top stopped at +11.9 (Frank 2026-10-25: "geht oft nur bis auf
+// +11.9") and the bottom, which the hardware never reports as a clean 0, could
+// miss -inf. Same 64-step zones as the parameters.
 double uf1PosToVol_(uint16_t pos)
 {
-    if (pos == 0) return 0.0;
-    if (pos > kUf1FaderMax) pos = kUf1FaderMax;
+    if (pos <= uf1::kFaderEndSnap) return 0.0;
+    if (pos >= kUf1FaderMax - uf1::kFaderEndSnap) pos = kUf1FaderMax;
     const double topSlider = DB2SLIDER(kUf1FaderTopDb);
     const double slider = static_cast<double>(pos) / static_cast<double>(kUf1FaderMax) * topSlider;
     const double db_raw = SLIDER2DB(slider);
