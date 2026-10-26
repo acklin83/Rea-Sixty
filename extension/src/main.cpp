@@ -45547,6 +45547,101 @@ void refreshUf1TraceFlag_()
     if (g_uf1_dev) g_uf1_dev->setFrameTrace(want);
 }
 
+// ⛔ THE UC1 INPUT METER HEARS ONLY THE LANES THAT PLAY (Frank 26.10.2026).
+// A track audio accessor renders EVERY item on the track, silent fixed lanes
+// included: five takes on five lanes read as five takes summed, far too loud.
+// Where a lane is silent, the meter reads the playing items one take at a time
+// and sums those, which is what REAPER plays: usually one lane, several when
+// several are switched on, plus crossfades inside a lane.
+// ⚠ A take accessor's time is the ITEM's time (0 = item start), as scripts on
+// the Cockos forum use it; not measured here.
+static bool uc1InputNeedsTakeRead_(MediaTrack* tr)
+{
+    if (static_cast<int>(GetMediaTrackInfo_Value(tr, "I_FREEMODE")) == 2)
+        return static_cast<int>(GetMediaTrackInfo_Value(tr, "C_ALLLANESPLAY")) != 1;
+    // Lanes switched off while hidden lanes remain: their items never play.
+    return static_cast<int>(GetMediaTrackInfo_Value(tr, "C_LANESCOLLAPSED")) == 2;
+}
+
+struct Uc1TakeReader_ { MediaItem_Take* take; AudioAccessor* acc; bool used; };
+static std::vector<Uc1TakeReader_> g_uc1TakeReaders_;
+
+static void uc1TakeReadersClear_()
+{
+    for (auto& r : g_uc1TakeReaders_) DestroyAudioAccessor(r.acc);
+    g_uc1TakeReaders_.clear();
+}
+
+// Linear peak per channel over [t, t + nSamp / sr) of the items on `tr` that
+// play. nSamp <= 4096. Readers of takes no longer under the playhead are
+// destroyed; they never get validated, so a deleted take is never touched.
+static void uc1LaneInputPeak_(MediaTrack* tr, double t, int sr, int nSamp,
+                              double& pL, double& pR)
+{
+    constexpr int kMaxBlk = 4096;
+    static double sum[kMaxBlk * 2];
+    static double one[kMaxBlk * 2];
+    if (nSamp > kMaxBlk) nSamp = kMaxBlk;
+    std::fill(sum, sum + nSamp * 2, 0.0);
+    for (auto& r : g_uc1TakeReaders_) r.used = false;
+
+    const bool fixed = static_cast<int>(GetMediaTrackInfo_Value(tr, "I_FREEMODE")) == 2;
+    const double winEnd = t + static_cast<double>(nSamp) / sr;
+    const int ni = CountTrackMediaItems(tr);
+    for (int i = 0; i < ni; ++i) {
+        MediaItem* it = GetTrackMediaItem(tr, i);
+        const double pos = GetMediaItemInfo_Value(it, "D_POSITION");
+        const double len = GetMediaItemInfo_Value(it, "D_LENGTH");
+        if (pos >= winEnd || pos + len <= t) continue;
+        const int plays = static_cast<int>(GetMediaItemInfo_Value(it, "C_LANEPLAYS"));
+        if (fixed ? plays <= 0 : plays == -1) continue;
+        if (GetMediaItemInfo_Value(it, "B_MUTE") > 0.5) continue;
+        MediaItem_Take* tk = GetActiveTake(it);
+        if (!tk || TakeIsMIDI(tk)) continue;
+
+        Uc1TakeReader_* rd = nullptr;
+        for (auto& r : g_uc1TakeReaders_) if (r.take == tk) { rd = &r; break; }
+        if (!rd) {
+            AudioAccessor* acc = CreateTakeAudioAccessor(tk);
+            if (!acc) continue;
+            g_uc1TakeReaders_.push_back({tk, acc, false});
+            rd = &g_uc1TakeReaders_.back();
+        }
+        rd->used = true;
+        AudioAccessorValidateState(rd->acc);
+
+        // An item starting inside the window is read from its start, into the
+        // matching place of the window.
+        int skip = 0;
+        if (pos > t) skip = static_cast<int>((pos - t) * sr);
+        const int n = nSamp - skip;
+        if (n <= 0) continue;
+        PCM_source* src = GetMediaItemTake_Source(tk);
+        const int nch = (src && GetMediaSourceNumChannels(src) == 1) ? 1 : 2;
+        const double local = (skip > 0) ? 0.0 : t - pos;
+        if (GetAudioAccessorSamples(rd->acc, sr, nch, local, n, one) <= 0) continue;
+        for (int s = 0; s < n; ++s) {
+            const double l = one[s * nch];
+            const double r = one[s * nch + nch - 1];
+            sum[(skip + s) * 2]     += l;
+            sum[(skip + s) * 2 + 1] += r;
+        }
+    }
+    for (size_t k = g_uc1TakeReaders_.size(); k-- > 0;)
+        if (!g_uc1TakeReaders_[k].used) {
+            DestroyAudioAccessor(g_uc1TakeReaders_[k].acc);
+            g_uc1TakeReaders_.erase(g_uc1TakeReaders_.begin() + static_cast<std::ptrdiff_t>(k));
+        }
+
+    pL = pR = 0.0;
+    for (int s = 0; s < nSamp; ++s) {
+        const double l = std::fabs(sum[s * 2]);
+        const double r = std::fabs(sum[s * 2 + 1]);
+        if (l > pL) pL = l;
+        if (r > pR) pR = r;
+    }
+}
+
 void onTimerBody_()
 {
     ++g_tickCounter;
@@ -48476,6 +48571,7 @@ void onTimerBody_()
                 DestroyAudioAccessor(s_vuAccessor);
                 s_vuAccessor = nullptr;
             }
+            uc1TakeReadersClear_();
             s_lastVuTrack = nullptr;
         };
         if (!focus) {
@@ -48562,6 +48658,10 @@ void onTimerBody_()
             } else if (!s_vuTakeFx && !s_vuAccessor) {
                 s_vuAccessor = CreateTrackAudioAccessor(tr);
             }
+            // Silent fixed lanes: the track accessor would sum them in, so the
+            // playing takes are read one by one (uc1LaneInputPeak_).
+            const bool laneRead = !s_vuTakeFx && uc1InputNeedsTakeRead_(tr);
+            if (!laneRead) uc1TakeReadersClear_();
 
             float dbInL = -120.f;
             float dbInR = -120.f;
@@ -48629,7 +48729,15 @@ void onTimerBody_()
             // GetPlayState bits: 1 = playing, 2 = paused, 4 = recording.
             const int playState = GetPlayState();
             const bool transportLive = (playState & 1) || (playState & 4);
-            if (!gotHelper && s_vuAccessor && transportLive) {
+            if (!gotHelper && laneRead && transportLive) {
+                // Same forward window as the track accessor below.
+                int nSamp = static_cast<int>(dtSec * 48000 + 0.5) + 512;
+                if (nSamp > 4096) nSamp = 4096;
+                double pL = 0.0, pR = 0.0;
+                uc1LaneInputPeak_(tr, GetPlayPosition(), 48000, nSamp, pL, pR);
+                dbInL = peakToDb(pL);
+                dbInR = peakToDb(pR);
+            } else if (!gotHelper && s_vuAccessor && transportLive) {
                 AudioAccessorValidateState(s_vuAccessor);
                 constexpr int kNchans = 2;
                 constexpr int kSr     = 48000;
