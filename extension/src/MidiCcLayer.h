@@ -88,7 +88,9 @@ struct Layer {
     std::string inputDevice;            // "" = none
     bool followItems    = true;         // follow the CC lanes of the selected track
     int  defaultChannel = 1;            // 1..16
-    Page pages[kPages];
+    // On the heap: bindings' Config is ~600 KB already and must never grow on a
+    // stack (Windows load crash, twice). kPages entries, always.
+    std::vector<Page> pages = std::vector<Page>(kPages);
 };
 
 inline bool assigned(const Control& c) { return c.number >= 0 && c.number <= 127; }

@@ -2040,6 +2040,66 @@ void serializeBindingBody_(const Binding& bd, std::ostringstream& os)
     }
 }
 
+
+// ---- MIDI CC layer (docs/midi-cc-layer-plan.md, Baustein C) ------------------
+// "midi_cc": {"outputs": [...], "input": "", "follow_items": true,
+//   "default_channel": 1, "pages": [ {"fader": [ctl x8], "vpot": [...],
+//   "push": [...], "soft": [...], "send_plugin": [...], "foot": [ctl x2]} x5 ]}
+// ctl: {"ch", "n", "hr", "beh", "name", "col"}. Additive keys, no version bump:
+// an older Rea-Sixty skips them and reads the layer as a Reaper layer.
+const char* const kCcKindKeys_[midicc::kKindCount] = {
+    "fader", "vpot", "push", "soft", "send_plugin", "foot" };
+
+void serializeCcLayer_(const midicc::Layer& L, std::ostringstream& os, const char* pad)
+{
+    os << "{\"outputs\": [";
+    for (size_t i = 0; i < L.outputs.size(); ++i) {
+        if (i) os << ", ";
+        appendEscaped(os, L.outputs[i]);
+    }
+    os << "], \"input\": ";
+    appendEscaped(os, L.inputDevice);
+    os << ", \"follow_items\": " << (L.followItems ? "true" : "false")
+       << ", \"default_channel\": " << L.defaultChannel << ", \"pages\": [";
+    for (int p = 0; p < midicc::kPages; ++p) {
+        if (p) os << ",";
+        os << "\n" << pad << "  {";
+        for (int k = 0; k < midicc::kKindCount; ++k) {
+            const auto kind = static_cast<midicc::Kind>(k);
+            if (k) os << ",";
+            os << "\n" << pad << "    \"" << kCcKindKeys_[k] << "\": [";
+            for (int i = 0; i < midicc::countOf(kind); ++i) {
+                const midicc::Control& c = L.pages[p].at(kind, i);
+                if (i) os << ", ";
+                os << "{\"ch\": " << c.channel << ", \"n\": " << c.number
+                   << ", \"hr\": " << (c.hiRes ? "true" : "false")
+                   << ", \"beh\": \"" << (c.behaviour == midicc::Behaviour::Hold ? "hold" : "toggle")
+                   << "\", \"name\": ";
+                appendEscaped(os, c.name);
+                os << ", \"col\": " << c.colour << "}";
+            }
+            os << "]";
+        }
+        os << "}";
+    }
+    os << "]}";
+}
+
+void serializeCcPresets_(const Config& c, std::ostringstream& os)
+{
+    if (c.ccPresets.empty()) return;
+    os << ",\n  \"cc_presets\": [";
+    for (size_t i = 0; i < c.ccPresets.size(); ++i) {
+        if (i) os << ",";
+        os << "\n    {\"name\": ";
+        appendEscaped(os, c.ccPresets[i].name);
+        os << ", \"layer\": ";
+        serializeCcLayer_(c.ccPresets[i].layer, os, "    ");
+        os << "}";
+    }
+    os << "\n  ]";
+}
+
 void serializeLayerBody_(const Layer& L, std::ostringstream& os,
                          const char* fieldPad, const char* bindingPad)
 {
@@ -2051,6 +2111,13 @@ void serializeLayerBody_(const Layer& L, std::ostringstream& os,
     os << fieldPad << "\"vpot_default_mode\": ";
     appendEscaped(os, L.vpotDefaultMode);
     os << ",\n";
+    if (L.kind == LayerKind::MidiCc)
+        os << fieldPad << "\"kind\": \"midi_cc\",\n";
+    if (L.kind == LayerKind::MidiCc || L.ccUsed) {
+        os << fieldPad << "\"midi_cc\": ";
+        serializeCcLayer_(L.cc, os, fieldPad);
+        os << ",\n";
+    }
     os << fieldPad << "\"bindings\": {";
     bool first = true;
     // ⇨ STABLE ORDER — walk kNames, not the map.
@@ -2479,6 +2546,7 @@ std::string serialize(const Config& c)
     serializeSoftKeySetNames_(c, os);
     serializeUf8SubBankNames_(c, os);
     serializeUf1SoftBankNames_(c, os);
+    serializeCcPresets_(c, os);
     os << "\n}\n";
     return os.str();
 }
@@ -3032,6 +3100,77 @@ void parseUf1SoftBankNames_(wdl_json_element* root, Config& out)
     }
 }
 
+
+// The reader for serializeCcLayer_. Missing keys keep what `out` had (the factory
+// set), so a hand-edited file with half a page still loads.
+void parseCcLayer_(wdl_json_element* o, midicc::Layer& out)
+{
+    if (!o || !o->is_object()) return;
+    auto num = [](wdl_json_element* e, const char* k, int def) {
+        if (auto* v = e->get_item_by_name(k))
+            if (auto* t = v->get_string_value(true)) return std::atoi(t);
+        return def;
+    };
+    auto flag = [](wdl_json_element* e, const char* k, bool def) {
+        if (auto* v = e->get_item_by_name(k))
+            if (auto* t = v->get_string_value(true))
+                return std::strcmp(t, "true") == 0 || std::strcmp(t, "1") == 0;
+        return def;
+    };
+    if (auto* a = o->get_item_by_name("outputs"); a && a->is_array() && a->m_array) {
+        out.outputs.clear();
+        for (int i = 0; i < a->m_array->GetSize(); ++i)
+            if (auto* e = a->enum_item(i))
+                if (auto* t = e->get_string_value()) out.outputs.push_back(t);
+    }
+    if (auto* v = o->get_item_by_name("input"))
+        if (auto* t = v->get_string_value()) out.inputDevice = t;
+    out.followItems    = flag(o, "follow_items", out.followItems);
+    out.defaultChannel = std::clamp(num(o, "default_channel", out.defaultChannel), 1, 16);
+    auto* pages = o->get_item_by_name("pages");
+    if (!pages || !pages->is_array() || !pages->m_array) return;
+    for (int p = 0; p < pages->m_array->GetSize() && p < midicc::kPages; ++p) {
+        wdl_json_element* po = pages->enum_item(p);
+        if (!po || !po->is_object()) continue;
+        for (int k = 0; k < midicc::kKindCount; ++k) {
+            const auto kind = static_cast<midicc::Kind>(k);
+            auto* arr = po->get_item_by_name(kCcKindKeys_[k]);
+            if (!arr || !arr->is_array() || !arr->m_array) continue;
+            for (int i = 0; i < arr->m_array->GetSize() && i < midicc::countOf(kind); ++i) {
+                wdl_json_element* co = arr->enum_item(i);
+                if (!co || !co->is_object()) continue;
+                midicc::Control& c = out.pages[p].at(kind, i);
+                c.channel = std::clamp(num(co, "ch", c.channel), 0, 16);
+                c.number  = std::clamp(num(co, "n", c.number), -1, 127);
+                c.hiRes   = flag(co, "hr", c.hiRes);
+                if (auto* v = co->get_item_by_name("beh"))
+                    if (auto* t = v->get_string_value())
+                        c.behaviour = std::strcmp(t, "hold") == 0
+                            ? midicc::Behaviour::Hold : midicc::Behaviour::Toggle;
+                if (auto* v = co->get_item_by_name("name"))
+                    if (auto* t = v->get_string_value()) c.name = t;
+                c.colour  = num(co, "col", c.colour);
+            }
+        }
+    }
+}
+
+void parseCcPresets_(wdl_json_element* root, Config& out)
+{
+    auto* arr = root->get_item_by_name("cc_presets");
+    if (!arr || !arr->is_array() || !arr->m_array) return;
+    for (int i = 0; i < arr->m_array->GetSize(); ++i) {
+        wdl_json_element* eo = arr->enum_item(i);
+        if (!eo || !eo->is_object()) continue;
+        CcPreset p;
+        if (auto* v = eo->get_item_by_name("name"))
+            if (auto* t = v->get_string_value()) p.name = t;
+        if (p.name.empty()) continue;
+        parseCcLayer_(eo->get_item_by_name("layer"), p.layer);
+        out.ccPresets.push_back(std::move(p));
+    }
+}
+
 bool parseLayer_(wdl_json_element* lobj, Layer& out)
 {
     if (!lobj || !lobj->is_object()) return false;
@@ -3042,6 +3181,14 @@ bool parseLayer_(wdl_json_element* lobj, Layer& out)
             out.autoWhenMixerVisible = (std::strcmp(s, "true") == 0 || std::strcmp(s, "1") == 0);
     if (auto* v = lobj->get_item_by_name("vpot_default_mode"))
         if (auto* s = v->get_string_value()) out.vpotDefaultMode = s;
+    if (auto* v = lobj->get_item_by_name("kind"))
+        if (auto* s = v->get_string_value())
+            out.kind = std::strcmp(s, "midi_cc") == 0 ? LayerKind::MidiCc : LayerKind::Reaper;
+    if (auto* v = lobj->get_item_by_name("midi_cc"); v && v->is_object()) {
+        out.ccUsed = true;
+        parseCcLayer_(v, out.cc);
+    }
+    if (out.kind == LayerKind::MidiCc) out.ccUsed = true;
     auto* bobj = lobj->get_item_by_name("bindings");
     if (!bobj || !bobj->is_object()) return true;
     const int n = bobj->m_array ? bobj->m_array->GetSize() : 0;
@@ -3326,6 +3473,7 @@ bool tryParse_(const std::string& json, Config& out)
     parseSoftKeySetNames_(root, out);
     parseUf8SubBankNames_(root, out);
     parseUf1SoftBankNames_(root, out);
+    parseCcPresets_(root, out);
     return true;
 }
 
@@ -9831,12 +9979,114 @@ bool builtinHasState(const std::string& name)
         || static_cast<bool>(it->second.stateOfStep);
 }
 
+
+// ---- MIDI CC layer accessors ----------------------------------------------------
+namespace {
+std::atomic<int> g_ccActiveLayer{-1};      // the CC layer the UF8 is on, -1 none
+
+void refreshCcActiveLocked_()
+{
+    const int l = g_cfg.activeLayer;
+    g_ccActiveLayer.store((l >= 0 && l < 3 && g_cfg.layers[l].kind == LayerKind::MidiCc) ? l : -1);
+}
+}
+
+LayerKind layerKind(int layer)
+{
+    if (layer < 0 || layer > 2) return LayerKind::Reaper;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return g_cfg.layers[layer].kind;
+}
+
+void setLayerKind(int layer, LayerKind kind)
+{
+    if (layer < 0 || layer > 2) return;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    Layer& L = g_cfg.layers[layer];
+    if (L.kind == kind) return;
+    L.kind = kind;
+    if (kind == LayerKind::MidiCc) L.ccUsed = true;
+    refreshCcActiveLocked_();
+    persistLocked_();
+}
+
+midicc::Layer ccLayer(int layer)
+{
+    if (layer < 0 || layer > 2) return midicc::factoryLayer();
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    return g_cfg.layers[layer].cc;
+}
+
+void setCcLayer(int layer, const midicc::Layer& cc)
+{
+    if (layer < 0 || layer > 2) return;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    g_cfg.layers[layer].cc = cc;
+    g_cfg.layers[layer].ccUsed = true;
+    persistLocked_();
+}
+
+bool ccLayerActive()      { return g_ccActiveLayer.load() >= 0; }
+int  ccLayerActiveIndex() { return g_ccActiveLayer.load(); }
+
+void refreshCcLayerActive()
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    refreshCcActiveLocked_();
+}
+
+std::vector<std::string> ccPresetNames()
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    std::vector<std::string> v;
+    for (const auto& p : g_cfg.ccPresets) v.push_back(p.name);
+    return v;
+}
+
+bool saveCcPreset(const std::string& name, int layer)
+{
+    if (name.empty() || layer < 0 || layer > 2) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    for (auto& p : g_cfg.ccPresets)
+        if (p.name == name) { p.layer = g_cfg.layers[layer].cc; persistLocked_(); return true; }
+    g_cfg.ccPresets.push_back({name, g_cfg.layers[layer].cc});
+    persistLocked_();
+    return true;
+}
+
+bool loadCcPreset(const std::string& name, int layer)
+{
+    if (layer < 0 || layer > 2) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    for (const auto& p : g_cfg.ccPresets)
+        if (p.name == name) {
+            g_cfg.layers[layer].cc = p.layer;
+            g_cfg.layers[layer].ccUsed = true;
+            persistLocked_();
+            return true;
+        }
+    return false;
+}
+
+bool deleteCcPreset(const std::string& name)
+{
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    auto& v = g_cfg.ccPresets;
+    const auto it = std::find_if(v.begin(), v.end(),
+                                 [&](const CcPreset& p) { return p.name == name; });
+    if (it == v.end()) return false;
+    v.erase(it);
+    persistLocked_();
+    return true;
+}
+
 void setActiveLayer(int layer)
 {
     if (layer < 0 || layer > 2) return;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     if (g_cfg.activeLayer == layer) return;
     g_cfg.activeLayer = layer;
+    refreshCcActiveLocked_();
     // Manual switch wins over a pending mixer-auto save; otherwise
     // closing the mixer would override the user's deliberate choice.
     g_savedLayer = -1;
@@ -9855,6 +10105,7 @@ void onMixerVisibilityChanged(bool visible)
             if (g_cfg.layers[i].autoWhenMixerVisible) {
                 if (g_savedLayer < 0) g_savedLayer = g_cfg.activeLayer;
                 g_cfg.activeLayer = i;
+                refreshCcActiveLocked_();
                 return;
             }
         }
@@ -9862,6 +10113,7 @@ void onMixerVisibilityChanged(bool visible)
         if (g_savedLayer >= 0) {
             g_cfg.activeLayer = g_savedLayer;
             g_savedLayer = -1;
+            refreshCcActiveLocked_();
         }
     }
 }

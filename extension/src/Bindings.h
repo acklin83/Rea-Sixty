@@ -50,6 +50,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "MidiCcLayer.h"   // the MIDI CC layer's data model (Layer::cc)
+
 namespace uf8::bindings {
 
 // Snake_case stable IDs — the JSON serialization key. Frozen so future
@@ -839,11 +841,27 @@ struct LayerUserQuicks {
     UserQuick quicks[kQuicksPerLayer]; // Q1, Q2, Q3
 };
 
+// What a layer drives. MidiCc: the UF8's faders, V-Pots, pushes, soft-keys,
+// SEND/PLUG-IN keys and feet send MIDI (docs/midi-cc-layer-plan.md); the
+// layer's bindings stay stored for the day it goes back to Reaper.
+enum class LayerKind : uint8_t { Reaper, MidiCc };
+
 struct Layer {
     std::string name;
     bool        autoWhenMixerVisible = false;
     std::string vpotDefaultMode      = "pan";
     std::unordered_map<ButtonId, Binding> bindings;
+    LayerKind     kind   = LayerKind::Reaper;
+    // Kept, and written, once the layer has been a CC layer, so switching it back
+    // to Reaper for a while does not lose the CC set.
+    bool          ccUsed = false;
+    midicc::Layer cc     = midicc::factoryLayer();
+};
+
+// A named CC set, recallable into any CC layer (Save / Load in the layer block).
+struct CcPreset {
+    std::string   name;
+    midicc::Layer layer;
 };
 
 // A named snapshot of one Sub-Bank's 8 top-soft-key slots, recallable
@@ -921,6 +939,7 @@ struct Config {
     LayerUserQuicks                userQuicks[3];     // per-layer user-Quick data
     std::vector<SoftKeyBankPreset> bankPresets;       // named Sub-Bank snapshots
     std::vector<Uf1BankPreset>     uf1BankPresets;    // named UF1 bank snapshots
+    std::vector<CcPreset>          ccPresets;         // named MIDI CC sets
     // UF1 soft-key banks (global). [bank 0..9][slot 0..3].
     Binding uf1SoftBanks[kUf1SoftBankStore][kUf1SoftBankSlots];
     // Per-bank dynamic kind. Non-None turns the whole bank into a computed
@@ -1238,6 +1257,25 @@ const Config& get();
 // switches (mixer auto-switch) call onMixerVisibilityChanged instead.
 int  getActiveLayer();
 void setActiveLayer(int layer);
+
+// ---- MIDI CC layer (docs/midi-cc-layer-plan.md, Baustein C) ----
+// The kind and the CC set of a layer. setLayerKind / setCcLayer persist.
+LayerKind     layerKind(int layer);
+void          setLayerKind(int layer, LayerKind kind);
+midicc::Layer ccLayer(int layer);                       // a copy
+void          setCcLayer(int layer, const midicc::Layer& cc);
+// Is the layer the UF8 is on a CC layer? The RAW layer (getQuickLayer): a CC
+// layer takes the whole surface whatever "Layers switch Quicks only" says.
+// Atomic, any thread (the USB input thread asks it per frame). Kept current by
+// every layer switch and every config change, and once per tick by main.cpp.
+bool          ccLayerActive();
+int           ccLayerActiveIndex();                     // -1 = none
+void          refreshCcLayerActive();
+// Presets: save overwrites by name.
+std::vector<std::string> ccPresetNames();
+bool          saveCcPreset(const std::string& name, int layer);
+bool          loadCcPreset(const std::string& name, int layer);
+bool          deleteCcPreset(const std::string& name);
 
 // Dispatch a hardware button event. `pressed` is true on press-edge,
 // false on release-edge. Returns true if `id` is bound on the active
