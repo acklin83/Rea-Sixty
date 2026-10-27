@@ -6435,6 +6435,8 @@ void tickLongPressThreshold()
 // change. Everything that indexes g_activeQuick / g_activeSubBank /
 // userQuicks, and the LAYER lamps and the schema ring, must call getQuickLayer.
 std::atomic<bool> g_layersQuicksOnly{false};
+// The CC layer the surface is on, -1 none (ccLayerActive below).
+std::atomic<int>  g_ccActiveLayer{-1};
 
 // ⇨ THE KEYS THAT ARE THE LAYER MECHANISM ITSELF. Under "Layers switch Quicks
 // only" every other button keeps Layer 1's binding, but these must follow the
@@ -6448,6 +6450,11 @@ std::atomic<bool> g_layersQuicksOnly{false};
 // g_cfgMutex and the LED paths can use it through layerForButton below.
 int applyLayerOption(int rawLayer, ButtonId id)
 {
+    // A MIDI CC layer keeps a few keys for REAPER (Fine, the channel encoder and
+    // its mode keys, the zoom pad, the automation row, FLIP, the layer keys, 360;
+    // docs/midi-cc-layer-plan.md section 4). They resolve on Layer 1. The CC
+    // layer's own keys never get here: onUf8Input takes them first.
+    if (rawLayer >= 0 && rawLayer == g_ccActiveLayer.load()) return 0;
     if (!g_layersQuicksOnly.load()) return rawLayer;
     return isLayerSelectorButton(id) ? rawLayer : 0;
 }
@@ -9982,8 +9989,6 @@ bool builtinHasState(const std::string& name)
 
 // ---- MIDI CC layer accessors ----------------------------------------------------
 namespace {
-std::atomic<int> g_ccActiveLayer{-1};      // the CC layer the UF8 is on, -1 none
-
 void refreshCcActiveLocked_()
 {
     const int l = g_cfg.activeLayer;

@@ -453,6 +453,10 @@ bool reasixty_bankScrollByOne();
 void reasixty_setBankScrollByOne(bool on);
 bool reasixty_bankFollowsSelection();
 void reasixty_setBankFollowsSelection(bool on);
+int  reasixty_ccLivePage();          // MIDI CC layer: the page the UF8 is on
+// SettingsScreen_MidiCc.cpp
+bool drawUf8LayerKindRow(ImGui_Context* ctx, int layer);
+void drawUf8MidiCcLayer(ImGui_Context* ctx, int layer, int livePage);
 int  reasixty_visibilityFollow();
 void reasixty_setVisibilityFollow(int v);
 bool reasixty_pinnedSurvivesBanking();
@@ -7712,6 +7716,11 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
         if (showsDev(kDevUf8)
             && ImGui_BeginTabItem(ctx, "UF8", nullptr, &flagsUf8)) {
             persistDeviceTab(0);
+            // The layer's type first. A MIDI CC layer replaces the schematic
+            // with its own editor (SettingsScreen_MidiCc.cpp).
+            if (drawUf8LayerKindRow(ctx, s_editLayer)) {
+                drawUf8MidiCcLayer(ctx, s_editLayer, reasixty_ccLivePage());
+            } else {
             drawUf8Vector(ctx, s_selected, s_editQuick, s_editSubBank);
             // Bank-scroll stride: when a selection scrolls past the surface
             // edge, jump a whole 8-strip bank or slide by one channel.
@@ -7741,6 +7750,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 reasixty_setLayersQuicksOnly(lqo);
             }
             help_(ctx, "Off: a layer re-binds the whole surface.");
+            }
             ImGui_EndTabItem(ctx);
         }
         int flagsUc1 = tabFlagsForDevice(1);
@@ -7794,10 +7804,13 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
     const bool selIsUf1 =
         s_selected >= ButtonId::Uf1VpotAbovePush
      && s_selected <= ButtonId::Uf1Jog;
+    // A MIDI CC layer has its own editor above; the key editor stays away.
+    const bool ccEditUf8 = s_deviceTab == 0
+        && uf8::bindings::layerKind(s_editLayer) == uf8::bindings::LayerKind::MidiCc;
     const ButtonId editSel =
         (s_deviceTab == 2) ? (selIsUf1 ? s_selected : ButtonId::None) : // UF1 tab: UF1 only
         (s_deviceTab == 1) ? (selIsUc1 ? s_selected : ButtonId::None) : // UC1 tab: UC1 only
-        ((selIsUc1 || selIsUf1) ? ButtonId::None : s_selected);         // UF8 tab: neither
+        (ccEditUf8 || selIsUc1 || selIsUf1) ? ButtonId::None : s_selected; // UF8 tab: neither
 
     const bool isTopSoftKey =
         editSel >= ButtonId::TopSoftKey1

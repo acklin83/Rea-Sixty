@@ -93,6 +93,16 @@ struct Layer {
     std::vector<Page> pages = std::vector<Page>(kPages);
 };
 
+// The colours a control can take (Control::colour), as RGB for the UF8's palette
+// matcher (ledColourForTrackRgb) and the colour bar.
+constexpr int kColourCount = 8;
+constexpr uint32_t kColours[kColourCount] = {
+    0xFF0000, 0xFF8000, 0xFFFF00, 0x00FF00, 0x00FFFF, 0x0000FF, 0xFF00FF, 0xFFFFFF };
+inline uint32_t colourRgb(const Control& c)
+{
+    return kColours[(c.colour >= 0 && c.colour < kColourCount) ? c.colour : 0];
+}
+
 inline bool assigned(const Control& c) { return c.number >= 0 && c.number <= 127; }
 
 inline int channelOf(const Control& c, int defaultChannel)

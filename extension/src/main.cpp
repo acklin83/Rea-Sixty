@@ -6509,6 +6509,12 @@ struct PendingInput {
                          // signed direction where the op has one, else the
                          // press/release edge for the held drag.
         LaneOp,          // a fixed-lanes verb (lane_* builtins). strip = LaneOpCode.
+        // MIDI CC layer (docs/midi-cc-layer-plan.md). Kept last and together:
+        // the drain hands the whole range to ccApplyInput_.
+        CcFader,         // strip = fader, value = UF8 position 0..kUf8FaderPbMax
+        CcVPot,          // strip = V-Pot, value = signed detents
+        CcKey,           // strip = midicc::Kind << 4 | index, value = 1 press / 0 release
+        CcPage,          // strip 0 = go to page `value`, 1 = step by `value`
     };
     Kind    kind;
     uint8_t strip;
@@ -22629,6 +22635,125 @@ void switchProjectState_()
     g_folderSpillScoped.prune(projectIsOpen_);
 }
 
+// ---- MIDI CC layer runtime (docs/midi-cc-layer-plan.md, Bausteine D and E) ----
+// Main thread. The USB thread forwards raw strip events (PendingInput::Cc*);
+// ccApplyInput_ turns them into values and MIDI. ccTick_ keeps the copy of the
+// active CC layer current, ccPaintSurface_ shows it (both beside the painter).
+static midicc::State    g_ccState;
+static midicc::Layer    g_ccLayer;            // copy of the active CC layer
+static int              g_ccIdx  = -1;        // its index, -1 = not on a CC layer
+static uint64_t         g_ccGen  = ~0ull;     // bindings generation of the copy
+static bool             g_ccRepaint = true;   // ccPaintSurface_ resends every cell
+static std::vector<int> g_ccOutModes;         // StuffMIDIMessage modes of the outputs
+static int64_t          g_ccOutResolvedMs = 0;
+
+// REAPER's index of a MIDI output by name, -1 when it is not there. Shared with
+// the MIDI Command bindings (bh.sendMidi).
+int midiOutputIndexByName_(const std::string& name)
+{
+    const int n = GetNumMIDIOutputs();
+    for (int i = 0; i < n; ++i) {
+        char nm[256] = {0};
+        if (!GetMIDIOutputName(i, nm, sizeof(nm)) || !*nm) continue;
+        if (name == nm) return i;
+    }
+    return -1;
+}
+
+// "" = the virtual MIDI keyboard (mode 0), a name = hardware output 16 + N.
+// Resolved again every 2 s, so a device plugged in later is found.
+static void ccResolveOutputs_()
+{
+    g_ccOutModes.clear();
+    for (const auto& o : g_ccLayer.outputs) {
+        const int mode = o.empty() ? 0 : [&] {
+            const int i = midiOutputIndexByName_(o);
+            return i >= 0 ? 16 + i : -1;
+        }();
+        if (mode >= 0 && std::find(g_ccOutModes.begin(), g_ccOutModes.end(), mode)
+                             == g_ccOutModes.end())
+            g_ccOutModes.push_back(mode);
+    }
+    g_ccOutResolvedMs = nowMs_();
+}
+
+static void ccSend_(const std::vector<midicc::Msg>& msgs)
+{
+    if (msgs.empty()) return;
+    if (nowMs_() - g_ccOutResolvedMs > 2000) ccResolveOutputs_();
+    for (const auto& m : msgs)
+        for (const int mode : g_ccOutModes)
+            StuffMIDIMessage(mode, m.status, m.d1, m.d2);
+}
+
+static void ccApplyInput_(const PendingInput& e)
+{
+    if (g_ccIdx < 0) return;              // the layer was left between USB and here
+    using namespace midicc;
+    const Layer& L = g_ccLayer;
+    State& S = g_ccState;
+    const int64_t now = nowMs_();
+    const bool flip = g_flip.load();
+    switch (e.kind) {
+    case PendingInput::CcFader: {
+        const int i = e.strip;
+        if (i >= kStrips) return;
+        const Kind k = faderKind(flip);
+        const Control& c = L.pages[S.page].at(k, i);
+        if (!assigned(c)) return;
+        ccSend_(S.local(L, k, i, faderToValue(static_cast<int>(e.value), hiResActive(k, c)), now));
+        break;
+    }
+    case PendingInput::CcVPot: {
+        const int i = e.strip;
+        if (i >= kStrips) return;
+        const Kind k = ringKind(flip);
+        const Control& c = L.pages[S.page].at(k, i);
+        if (!assigned(c)) return;
+        // An unknown value starts from 0: nothing has said otherwise.
+        const int cur = S.isKnown(S.page, k, i) ? S.v(S.page, k, i) : 0;
+        const bool fine = shiftHeldAnywhere_();
+        const double speed = g_knobSpeedUf8.load();
+        const int det = static_cast<int>(e.value);
+        const int nv = hiResActive(k, c) ? vpotStep(cur >> 7, det, speed, fine) << 7
+                                         : vpotStep(cur, det, speed, fine);
+        ccSend_(S.local(L, k, i, nv, now));
+        break;
+    }
+    case PendingInput::CcKey: {
+        const Kind k = static_cast<Kind>(e.strip >> 4);
+        const int i = e.strip & 0x0F;
+        if (static_cast<int>(k) >= kKindCount || i >= countOf(k)) return;
+        const Control& c = L.pages[S.page].at(k, i);
+        if (!assigned(c)) return;
+        const bool pressed = e.value > 0.5;
+        if (k == Kind::SendPlugin) {
+            if (!pressed) return;
+            ccSend_(S.local(L, k, i, 127, now));
+            // One program per channel: the other keys on it go dark.
+            const int ch = channelOf(c, L.defaultChannel);
+            for (int j = 0; j < kStrips; ++j) {
+                const Control& o = L.pages[S.page].sendPlugin[j];
+                if (j == i || !assigned(o) || channelOf(o, L.defaultChannel) != ch) continue;
+                S.v(S.page, k, j) = 0;
+                S.isKnown(S.page, k, j) = true;
+            }
+            break;
+        }
+        int v = S.isKnown(S.page, k, i) ? S.v(S.page, k, i) : 0;
+        if (keyEdge(c.behaviour, pressed, v)) ccSend_(S.local(L, k, i, v, now));
+        break;
+    }
+    case PendingInput::CcPage:
+        if (e.strip == 0) S.setPage(static_cast<int>(e.value));
+        else              S.stepPage(static_cast<int>(e.value));
+        g_ccRepaint = true;
+        break;
+    default:
+        break;
+    }
+}
+
 void drainInputQueue()
 {
     std::vector<PendingInput> local;
@@ -22645,6 +22770,10 @@ void drainInputQueue()
     const int surfaceCount  = visibleTrackCount();
     const int bankOffset    = g_bankOffset.load();
     for (const auto& e : local) {
+        if (e.kind >= PendingInput::CcFader && e.kind <= PendingInput::CcPage) {
+            ccApplyInput_(e);
+            continue;
+        }
         // Global-scope events (no strip) are dispatched before the
         // per-strip track resolution below.
         if (e.kind == PendingInput::MainAction) {
@@ -25543,6 +25672,8 @@ void pushSelectedStripBitmask()
 void sendLed(LedClass cls, MediaTrack* tr, bool on)
 {
     if (!g_dev) return;
+    // The MIDI CC layer paints Solo / Cut / Sel itself (ccPaintSurface_).
+    if (uf8::bindings::ccLayerActive()) return;
     if (cls == LedClass::Arm) return;   // gate ARM until its colour-pair is captured
     // FX Learn UF8: in user-strip mode, Solo / Cut / Sel LEDs are driven
     // by the per-tick poll in pushZonesForVisibleSlots from user-binding
@@ -26860,6 +26991,16 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                         continue;
                     }
                 }
+                // MIDI CC layer: the fader is a controller, not a track. The
+                // main thread turns the position into a value and MIDI; the
+                // hand position goes back as the motor target, as below.
+                if (uf8::bindings::ccLayerActive()) {
+                    queueInput({PendingInput::CcFader, strip, static_cast<double>(pbOut)});
+                    if (g_dev)
+                        g_dev->send(uf8::buildFaderPosition(strip, lsbOut | 0x80, msbOut));
+                    i += frameSize;
+                    continue;
+                }
                 // DynaMount mode: a mount strip's fader drives the robotic
                 // mount, not a track. Send-on-release (Frank 2026-06-28): the
                 // mount is slow + open-loop, so we DON'T stream every drag
@@ -26995,7 +27136,7 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             // Activity, and the wake edge if the surface was dark. The press
             // itself is dropped one layer down, in dispatch(), together with
             // its release — see armWakeSwallow. A release only stamps.
-            (void)surfaceWake_(data[i + 5] == 0x01);
+            const bool btnWoke = surfaceWake_(data[i + 5] == 0x01);
             // Button: FF 22 03 id 00 state cksum
             //
             // UF8 PM-mode button ID map (see docs/protocol-notes.md). The
@@ -27029,6 +27170,42 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     i += frameSize;
                     continue;
                 }
+            }
+
+            // MIDI CC layer (docs/midi-cc-layer-plan.md section 4): its own keys
+            // go to the main thread, the keys it keeps for REAPER fall through
+            // to dispatch, which resolves them on Layer 1 (applyLayerOption),
+            // and every other key has no function here. The press that wakes a
+            // dark surface sends nothing, as everywhere else.
+            if (uf8::bindings::ccLayerActive()) {
+                auto key = [&](midicc::Kind k, int idx) {
+                    if (btnWoke && pressed) return;
+                    queueInput({PendingInput::CcKey,
+                                static_cast<uint8_t>((static_cast<int>(k) << 4) | idx),
+                                pressed ? 1.0 : 0.0});
+                };
+                bool consumed = true;
+                if (id >= 0x08 && id <= 0x0F)      key(midicc::Kind::Push, id - 0x08);
+                else if (id >= 0x18 && id <= 0x1F) key(midicc::Kind::Soft, id - 0x18);
+                else if (id >= 0x48 && id <= 0x4F) key(midicc::Kind::SendPlugin, id - 0x48);
+                else if (id == 0x00 || id == 0x01) key(midicc::Kind::Foot, id);
+                else if (id >= 0x69 && id <= 0x6D) {          // soft-key bank 1..5 = page
+                    if (pressed) queueInput({PendingInput::CcPage, 0, double(id - 0x69)});
+                } else if (id == 0x52 || id == 0x53) {        // PAGE < >
+                    if (pressed) queueInput({PendingInput::CcPage, 1, id == 0x52 ? -1.0 : 1.0});
+                } else {
+                    switch (id) {
+                        case 0x6F: case 0x73: case 0x74: case 0x75: case 0x76: // Fine, Nav, Nudge, Focus, channel push
+                        case 0x58: case 0x59: case 0x5A: case 0x5B: case 0x5C: case 0x5D: // automation row
+                        case 0x7A: case 0x7B: case 0x7C: case 0x7D: case 0x7E: // zoom pad
+                        case 0x54: case 0x40: case 0x41: case 0x42: case 0x46: // FLIP, layer keys, 360
+                            consumed = false;
+                            break;
+                        default:    // SOLO, CUT, SEL, BANK, Quick, PLUGIN, CHANNEL, ...
+                            break;
+                    }
+                }
+                if (consumed) { i += frameSize; continue; }
             }
 
             bool handledNatively = false;
@@ -27682,6 +27859,25 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 continue;
             }
             const uint8_t strip = rawStrip;
+            // MIDI CC layer: the cap limps the motor under the finger and does
+            // nothing else: no track selected, no automation seeded, no learn.
+            // The release goes through the debounce like the track path's (the
+            // sensor bounces under a held finger); commitDebouncedTouchReleases
+            // skips its REAPER writeback on this layer.
+            if (uf8::bindings::ccLayerActive()) {
+                if (state != 0) {
+                    g_touchLastPress[strip] = std::chrono::steady_clock::now();
+                    g_touchReleasePending[strip].store(false);
+                    g_touchGrabValid[strip].store(false);
+                    g_touchReported[strip].store(true);
+                    if (g_dev) g_dev->sendPriority(uf8::buildMotorEnable(strip, false));
+                    g_faderMotorEngaged[strip].store(false);
+                } else {
+                    g_touchReleasePending[strip].store(true);
+                }
+                i += frameSize;
+                continue;
+            }
             // Touch-to-Learn: touching the fader cap arms its cell (kind 1). We
             // do NOT suppress the normal touch handling below — that limps the
             // motor (so the fader stays loose under the finger) and merely
@@ -27899,6 +28095,13 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             const uint8_t raw   = data[i + 4];
             int8_t signed6 = static_cast<int8_t>(raw & 0x3F);
             if (signed6 & 0x20) signed6 |= 0xC0;   // sign-extend from 6 bits
+            // MIDI CC layer: the V-Pot is a controller. Strip 8, the channel
+            // encoder, stays with REAPER and falls through.
+            if (strip < 8 && uf8::bindings::ccLayerActive()) {
+                queueInput({PendingInput::CcVPot, strip, static_cast<double>(signed6)});
+                i += frameSize;
+                continue;
+            }
             // Touch-to-Learn: turning a V-Pot arms its cell (kind 0) instead of
             // writing pan/param — suppress the rest of this frame. A TURN means a
             // continuous (Value) binding, so clear the Toggle intent the press
@@ -39832,6 +40035,203 @@ void pushUc1NavCarousel()
     g_uc1_surface->showNavCarousel(prev, curr, next, header, palette);
 }
 
+// ---- MIDI CC layer: tick and painter (docs/midi-cc-layer-plan.md, Baustein F) ----
+void invalidateGlobalLedCache_();   // defined with the global LED pusher
+
+// Once per tick, before the input drain: which CC layer the UF8 is on, and a
+// fresh copy of it when the bindings changed. Entering repaints every cell;
+// leaving hands the surface back to the normal painters, which resend all of
+// it (the same flags the encoder picker raises when it closes).
+static void ccTick_()
+{
+    uf8::bindings::refreshCcLayerActive();
+    const int idx = uf8::bindings::ccLayerActiveIndex();
+    const uint64_t gen = uf8::bindings::generation();
+    // Values are forgotten with the project (plan section 6).
+    static ReaProject* s_proj = nullptr;
+    ReaProject* proj = EnumProjects(-1, nullptr, 0);
+    if (proj != s_proj) { s_proj = proj; g_ccState.forget(); g_ccRepaint = true; }
+    if (idx != g_ccIdx) {
+        const bool left = g_ccIdx >= 0 && idx < 0;
+        if (g_ccIdx >= 0 && idx >= 0) g_ccState.forget();   // another CC layer
+        g_ccIdx = idx;
+        g_ccRepaint = true;
+        invalidateGlobalLedCache_();
+        if (idx >= 0) {
+            g_ccLayer = uf8::bindings::ccLayer(idx);
+            g_ccGen = gen;
+            ccResolveOutputs_();
+        }
+        if (left) {
+            g_lastSelLed.fill(-1);
+            g_lastSoloLed.fill(-1);
+            g_lastCutLed.fill(-1);
+            g_bankDirty.store(true);
+            g_pageDirty.store(true);
+            g_softKeyDirty.store(true);
+            g_vpotBarInit = false;
+            if (g_sync) g_sync->invalidate();
+        }
+    } else if (idx >= 0 && gen != g_ccGen) {
+        g_ccLayer = uf8::bindings::ccLayer(idx);
+        g_ccGen = gen;
+        ccResolveOutputs_();
+        g_ccRepaint = true;
+    }
+}
+
+// The colour bar on a CC layer: the fader controller's colour, dark when the
+// strip's fader has nothing on this page.
+uint32_t ccColorForStrip_(int slot)
+{
+    if (g_ccIdx < 0 || slot < 0 || slot >= midicc::kStrips) return 0;
+    const midicc::Kind k = midicc::faderKind(g_flip.load());
+    const midicc::Control& c = g_ccLayer.pages[g_ccState.page].at(k, slot);
+    return midicc::assigned(c) ? midicc::colourRgb(c) : 0;
+}
+
+// Runs INSTEAD of pushZonesForVisibleSlots while the UF8 is on a CC layer. It
+// writes the same cells through the same dedup caches, so either painter can
+// take over from the other: entering clears them here, leaving sets the dirty
+// flags that make pushZonesForVisibleSlots clear them (ccTick_).
+// Per strip: upper scribble = fader controller name, fader readout = its value,
+// value line = the ring controller's name and value, CS-type cell = page,
+// top soft-key = its controller's name and lamp, SEL = fader colour, Solo and
+// Cut dark, motor on the fader value (left alone while the value is unknown or
+// the cap is touched), ring = the V-Pot value. FLIP swaps fader and ring.
+static void ccPaintSurface_()
+{
+    if (!g_dev || !g_dev->isOpen()) return;
+    using namespace midicc;
+    const Layer& L = g_ccLayer;
+    State& S = g_ccState;
+    const Page& P = L.pages[S.page];
+    const bool flip = g_flip.load();
+    const Kind fk = faderKind(flip), rk = ringKind(flip);
+    const bool all = g_ccRepaint;
+    g_ccRepaint = false;
+    if (all) {
+        g_lastTrackName.fill({});
+        g_lastSlotLabel.fill({});
+        g_lastCsType.fill(kCsTypeSentinel);
+        g_lastValueLine.fill({});
+        g_lastFaderDb.fill({});
+        g_lastFaderDbUnit.fill({});
+        g_lastChanNum.fill({});
+        g_lastFaderPb.fill(0xFFFF);
+        g_lastTopSoftKey.fill(-1);
+        g_lastSelLed.fill(-1);
+        g_lastCutLed.fill(-1);
+        g_lastSoloLed.fill(-1);
+        g_vpotBarInit = false;
+        g_dev->send(uf8::buildSelectedStripBitmask(0));
+    }
+    char pg[8];
+    std::snprintf(pg, sizeof(pg), "PG%d", S.page + 1);
+    std::array<uint16_t, 8> bar{};
+    std::array<uint8_t, 8>  mode{};
+    for (int s = 0; s < kStrips; ++s) {
+        const auto st = static_cast<uint8_t>(s);
+        const Control& fc = P.at(fk, s);
+        const Control& rc = P.at(rk, s);
+        const Control& sc = P.soft[s];
+        const bool fOn = assigned(fc), rOn = assigned(rc), sOn = assigned(sc);
+        const bool fKnown = S.isKnown(S.page, fk, s);
+        const bool rKnown = S.isKnown(S.page, rk, s);
+        const int  fv = S.v(S.page, fk, s), rv = S.v(S.page, rk, s);
+
+        const std::string nm = utf8ToLatin1(displayName(fk, fc));
+        if (g_lastTrackName[s] != nm) {
+            g_lastTrackName[s] = nm;
+            g_dev->send(uf8::buildStripTextUpper(st, nm));
+        }
+        if (g_lastCsType[s] != pg) {
+            g_lastCsType[s] = pg;
+            g_dev->send(uf8::buildChannelStripType(st, pg));
+        }
+        if (g_lastChanNum[s] != " ") {
+            g_lastChanNum[s] = " ";
+            g_dev->send(uf8::buildChannelNumber(st, " "));
+        }
+        const std::string fvt = fOn ? valueText(fv, fKnown) : std::string();
+        if (g_lastFaderDb[s] != fvt || g_lastFaderDbUnit[s] != "") {
+            g_lastFaderDb[s] = fvt;
+            g_lastFaderDbUnit[s] = "";
+            g_dev->send(uf8::buildFaderDbReadout(st, fvt, ""));
+        }
+        const std::string vl = rOn
+            ? uf8ValueLine(utf8ToLatin1(displayName(rk, rc)), valueText(rv, rKnown))
+            : std::string();
+        if (g_lastValueLine[s] != vl) {
+            g_lastValueLine[s] = vl;
+            g_dev->send(uf8::buildValueLine(st, vl));
+        }
+        const std::string sl = utf8ToLatin1(displayName(Kind::Soft, sc));
+        if (g_lastSlotLabel[s] != sl) {
+            g_lastSlotLabel[s] = sl;
+            g_dev->send(uf8::buildPluginSlotName(st, sl));
+        }
+        const bool sLit = sOn && S.isKnown(S.page, Kind::Soft, s) && S.v(S.page, Kind::Soft, s) >= 64;
+        const int tsk = !sOn ? 0 : (sLit ? 2 : 1);
+        if (g_lastTopSoftKey[s] != tsk) {
+            g_lastTopSoftKey[s] = tsk;
+            sendLedFrames(uf8::buildTopSoftKeyLed(st,
+                tsk == 2 ? uf8::TopSoftKeyState::On
+                         : tsk == 1 ? uf8::TopSoftKeyState::Dim : uf8::TopSoftKeyState::Off,
+                uf8::ledColourForTrackRgb(colourRgb(sc))));
+        }
+        const int8_t sel = fOn ? 1 : 0;
+        if (g_lastSelLed[s] != sel) {
+            g_lastSelLed[s] = sel;
+            sendLedFrames(uf8::buildLedColourPair(st, uf8::LedClass::Sel, fOn,
+                                                  uf8::ledColourForTrackRgb(colourRgb(fc))));
+        }
+        if (g_lastCutLed[s] != 0) {
+            g_lastCutLed[s] = 0;
+            sendLedFrames(uf8::buildLedColourPair(st, uf8::LedClass::Cut, false));
+        }
+        if (g_lastSoloLed[s] != 0) {
+            g_lastSoloLed[s] = 0;
+            sendLedFrames(uf8::buildLedColourPair(st, uf8::LedClass::Solo, false));
+        }
+        // Motor: the DynaMount block's sequence. A limp strip takes the bit-7
+        // echo first, then the enable, or the firmware drops the position.
+        if (fOn && fKnown && !g_touchReported[s].load()) {
+            const uint16_t pb = static_cast<uint16_t>(valueToFader(fv, hiResActive(fk, fc)));
+            g_motorTargetPb[s].store(pb);
+            const bool engaged = g_faderMotorEngaged[s].load();
+            if (!engaged || g_lastFaderPb[s] != pb) {
+                g_lastFaderPb[s] = pb;
+                const uint8_t lsb = static_cast<uint8_t>(pb & 0x7F);
+                const uint8_t msb = static_cast<uint8_t>((pb >> 7) & 0x7F);
+                if (!engaged) {
+                    g_dev->send(uf8::buildFaderPosition(st, (lsb | 0x80), msb));
+                    g_dev->send(uf8::buildMotorEnable(st, true));
+                    g_faderMotorEngaged[s].store(true);
+                }
+                g_dev->send(uf8::buildFaderPosition(st, lsb, msb));
+            }
+        }
+        bar[s]  = (rOn && rKnown) ? vpotPosFromUnipolar(normalised(rv, hiResActive(rk, rc)))
+                                  : vpotPosFromUnipolar(0.0);
+        mode[s] = rOn ? 0x01 : 0x03;     // unipolar, or no ring
+    }
+    if (!g_vpotBarInit || bar != g_lastVPotBar) {
+        g_lastVPotBar = bar;
+        g_dev->send(uf8::buildVPotReadoutBar(bar));
+    }
+    if (!g_vpotBarInit || mode != g_lastVPotMode) {
+        g_lastVPotMode = mode;
+        std::vector<uint8_t> mf{0xFF, 0x66, 0x09, 0x0D};
+        for (auto m : mode) mf.push_back(m);
+        uint8_t cks = 0;
+        for (size_t i = 1; i < mf.size(); ++i) cks += mf[i];
+        mf.push_back(cks);
+        g_dev->send(std::move(mf));
+        g_vpotBarInit = true;
+    }
+}
+
 void pushZonesForVisibleSlots()
 {
     if (!g_dev || !g_dev->isOpen()) return;
@@ -43227,6 +43627,9 @@ void commitDebouncedTouchReleases()
         g_touchReleasePending[s].store(false);
         const bool wasReported = g_touchReported[s].exchange(false);
         if (!wasReported) continue;
+        // MIDI CC layer: the touch ends and that is all. The painter re-engages
+        // the motor on the value the hand left.
+        if (uf8::bindings::ccLayerActive()) continue;
 
         // ⛔ NO DEVICE CHECK HERE. Everything below this line up to the motor
         // block is REAPER-side: the fader's last position and the automation
@@ -43549,7 +43952,8 @@ void pushVuMeter()
     // blank. The s_held cache + g_lastVuLevels dedup below still apply,
     // so we only emit the "all zero" frame on the transition into
     // Plugin Mode; subsequent ticks short-circuit (Frank 2026-05-13).
-    const bool pluginModeBlank = g_uf8PluginMode.load();
+    // The MIDI CC layer has no tracks on its strips either.
+    const bool pluginModeBlank = g_uf8PluginMode.load() || uf8::bindings::ccLayerActive();
 
     const int trackCount = visibleTrackCount();
     const int bankOffset = g_bankOffset.load();
@@ -44221,6 +44625,29 @@ void sendUf8GlobalLed(uf8::Uf8GlobalLed cell, bool on)
         on ? uf8::GlobalLedState::Bright : uf8::GlobalLedState::Dim);
 }
 
+// A global LED in a state and colour the caller decides, past the bindings'
+// LED resolution, through the same per-cell dedup. For the MIDI CC layer, whose
+// keys carry no binding: the SEND/PLUG-IN colours come from the CC set, and the
+// keys without a function on that layer go dark.
+static void sendUf8GlobalLedDirect_(uf8::Uf8GlobalLed cell, uf8::GlobalLedState state,
+                                    const uf8::LedColour* colour = nullptr)
+{
+    const size_t idx = static_cast<size_t>(cell);
+    const int colour32 = colour ? ((int(colour->aBright) << 24) | (int(colour->bBright) << 16)
+                                 | (int(colour->aDim) << 8) | int(colour->bDim))
+                                : 0x10000;
+    if (idx < g_lastGlobalLedPush.size()) {
+        auto& last = g_lastGlobalLedPush[idx];
+        if (last.valid && last.state == static_cast<int>(state) && last.colour32 == colour32)
+            return;
+        last.state    = static_cast<int>(state);
+        last.colour32 = colour32;
+        last.valid    = true;
+    }
+    if (colour) sendLedFrames(uf8::buildUf8GlobalLed(cell, state, *colour));
+    else        sendLedFrames(uf8::buildUf8GlobalLed(cell, state));
+}
+
 // Per-cell binding lookup for the Auto row. Returns the REAPER mode the
 // cell should light for + whether the binding is the GLOBAL variant
 // (auto_X_global) or the per-track variant (auto_X). targetMode == -1
@@ -44501,12 +44928,25 @@ void pushUf8GlobalLeds()
                                      && activeLayer >= 0 && activeLayer <= 2)
                                     ? g_activeSubBank[activeLayer].load()
                                     : softKeyBank;
+    // MIDI CC layer: the five bank keys are its pages, the keys it gives no
+    // function go dark (onUf8Input's list), SEND/PLUG-IN further down.
+    const bool ccOn = g_ccIdx >= 0;
+    if (ccOn) {
+        constexpr uf8::Uf8GlobalLed kPages[5] = {
+            uf8::Uf8GlobalLed::Soft1, uf8::Uf8GlobalLed::Soft2, uf8::Uf8GlobalLed::Soft3,
+            uf8::Uf8GlobalLed::Soft4, uf8::Uf8GlobalLed::Soft5 };
+        sendUf8GlobalLedDirect_(uf8::Uf8GlobalLed::VPotBank, uf8::GlobalLedState::Off);
+        for (int p = 0; p < 5; ++p)
+            sendUf8GlobalLedDirect_(kPages[p], p == g_ccState.page
+                ? uf8::GlobalLedState::Bright : uf8::GlobalLedState::Dim);
+    } else {
     sendUf8GlobalLed(uf8::Uf8GlobalLed::VPotBank, subBankForLeds == 0);
     sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft1,    subBankForLeds == 1);
     sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft2,    subBankForLeds == 2);
     sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft3,    subBankForLeds == 3);
     sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft4,    subBankForLeds == 4);
     sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft5,    subBankForLeds == 5);
+    }
     g_lastSoftKeyBank = subBankForLeds;
 
     // Page LEDs intentionally not driven — see comment at the top of
@@ -44518,7 +44958,8 @@ void pushUf8GlobalLeds()
     // flip between Plain ↔ Shift slots while pluginLit itself stays at
     // 1 (e.g. both g_pluginFaderMode and g_uf8PluginMode true). The
     // per-cell cache in sendUf8GlobalLed dedupes redundant USB writes.
-    sendUf8GlobalLed(uf8::Uf8GlobalLed::Plugin, pluginLit == 1);
+    if (ccOn) sendUf8GlobalLedDirect_(uf8::Uf8GlobalLed::Plugin, uf8::GlobalLedState::Off);
+    else      sendUf8GlobalLed(uf8::Uf8GlobalLed::Plugin, pluginLit == 1);
     g_lastPluginLit = pluginLit;
 
     // Quick 1 / Quick 2 / Quick 3 LEDs — driven by whatever action is
@@ -44537,6 +44978,7 @@ void pushUf8GlobalLeds()
             uf8::Uf8GlobalLed::Quick3,
         };
         for (auto led : kQuickLeds) {
+            if (ccOn) { sendUf8GlobalLedDirect_(led, uf8::GlobalLedState::Off); continue; }
             const auto bid = buttonIdForGlobalLed(led);
             sendUf8GlobalLed(led, boundActionIsActive_(bid));
         }
@@ -44575,6 +45017,13 @@ void pushUf8GlobalLeds()
             uf8::Uf8GlobalLed::Pan,
         };
         for (auto led : kStateless) {
+            // On a CC layer only 360 and the zoom pad keep a function.
+            if (ccOn && (led == uf8::Uf8GlobalLed::Channel || led == uf8::Uf8GlobalLed::Norm
+                         || led == uf8::Uf8GlobalLed::Rec || led == uf8::Uf8GlobalLed::Auto
+                         || led == uf8::Uf8GlobalLed::Pan)) {
+                sendUf8GlobalLedDirect_(led, uf8::GlobalLedState::Off);
+                continue;
+            }
             const auto bid = buttonIdForGlobalLed(led);
             const bool active = boundActionIsActive_(bid);
             sendUf8GlobalLed(led, active);
@@ -44586,7 +45035,10 @@ void pushUf8GlobalLeds()
         // bank's LED stays off. Outside UF8 Plugin Mode they revert to
         // the regular stateless press-flash so a user-bound momentary
         // (default ±8-strip scroll) shows momentarily on press.
-        if (g_uf8PluginMode.load()) {
+        if (ccOn) {
+            sendUf8GlobalLedDirect_(uf8::Uf8GlobalLed::BankLeft,  uf8::GlobalLedState::Off);
+            sendUf8GlobalLedDirect_(uf8::Uf8GlobalLed::BankRight, uf8::GlobalLedState::Off);
+        } else if (g_uf8PluginMode.load()) {
             const int fb = std::clamp(g_uf8FaderBank.load(),
                                       0, uf8::kUserUf8FaderBankCount - 1);
             sendUf8GlobalLed(uf8::Uf8GlobalLed::BankLeft,  fb != 0);
@@ -44617,6 +45069,20 @@ void pushUf8GlobalLeds()
             uf8::Uf8GlobalLed::SendPlugin7, uf8::Uf8GlobalLed::SendPlugin8,
         };
         for (int i = 0; i < 8; ++i) {
+            if (ccOn) {
+                // Lit = the program this key sends is the one in play.
+                const midicc::Control& c = g_ccLayer.pages[g_ccState.page].sendPlugin[i];
+                if (!midicc::assigned(c)) {
+                    sendUf8GlobalLedDirect_(kSpLeds[i], uf8::GlobalLedState::Off);
+                    continue;
+                }
+                const bool lit = g_ccState.isKnown(g_ccState.page, midicc::Kind::SendPlugin, i)
+                              && g_ccState.v(g_ccState.page, midicc::Kind::SendPlugin, i) >= 64;
+                const uf8::LedColour col = uf8::ledColourForTrackRgb(midicc::colourRgb(c));
+                sendUf8GlobalLedDirect_(kSpLeds[i], lit ? uf8::GlobalLedState::Bright
+                                                        : uf8::GlobalLedState::Dim, &col);
+                continue;
+            }
             const bool sendHit = (sendVAll == i || sendFAll == i);
             const bool recvHit = (recvVAll == i || recvFAll == i);
             const bool routingActive = sendHit || recvHit;
@@ -48312,6 +48778,7 @@ void onTimerBody_()
     // This is CONTAINMENT PLUS EVIDENCE, not a fix: the reason lands in
     // rea_sixty.log with the surface state around it, and the next occurrence
     // finally names what throws instead of leaving another empty report.
+    ccTick_();
     try {
         drainInputQueue();
     } catch (const std::exception& e) {
@@ -48451,13 +48918,16 @@ void onTimerBody_()
             g_sync->invalidate();   // so the real colours come back when it ends
         } else if (uf8EncPickerShown_()) {
             g_sync->refresh(uf8EncPickerColorForStrip_);
+        } else if (g_ccIdx >= 0) {
+            g_sync->refresh(ccColorForStrip_);
         } else if (overlayOnUf8) {
             g_sync->refresh(navColorForStrip);
         } else {
             g_sync->refresh(reaperColorForVisibleSlot);
         }
     }
-    pushZonesForVisibleSlots();
+    if (g_ccIdx >= 0) ccPaintSurface_();
+    else              pushZonesForVisibleSlots();
     persistDynaState_();
     tickHueTransport_();
     // Phase 2.8 Nav Mode — decorate three zones (slot label, channel
@@ -54070,6 +54540,7 @@ void reasixty_setBankFollowsSelection(bool on)
         if (MediaTrack* tr = GetSelectedTrack(nullptr, 0))
             followSelectedInMixer(tr, /*scrollTcp=*/false, /*moveBank=*/true);
 }
+int  reasixty_ccLivePage()            { return g_ccState.page; }
 bool reasixty_bankScrollByOne()       { return g_bankScrollByOne.load(); }
 void reasixty_setBankScrollByOne(bool on)
 {
@@ -60328,10 +60799,9 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
                 }
                 return;
             }
-            for (int i = 0; i < n; ++i) {
-                char nm[256] = {0};
-                if (!GetMIDIOutputName(i, nm, sizeof(nm))) continue;
-                if (device == nm) { StuffMIDIMessage(16 + i, status, d1, d2); return; }
+            if (const int i = midiOutputIndexByName_(device); i >= 0) {
+                StuffMIDIMessage(16 + i, status, d1, d2);
+                return;
             }
             // Bound device no longer enumerated (unplugged or renamed): log once
             // for diagnosis rather than a UI error on every press.

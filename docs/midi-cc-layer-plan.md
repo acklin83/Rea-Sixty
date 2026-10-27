@@ -1,6 +1,11 @@
 # MIDI-CC-Layer auf dem UF8: Plan
 
-Stand 27.10.2026. Nichts gebaut. Franks Entscheide vom 27.10. sind eingearbeitet, das
+Stand 27.10.2026. Gebaut: A Sonde, B Kern, C Datenmodell, D Eingang, E Ausgang, F Anzeige, I Settings.
+Offen: G Rückweg aus Items, H Rückweg von Hardware, J Handbuch.
+Abweichungen beim Bau: Der CC-Editor ist das Raster aus dem Mockup, nicht der UF8-Schaltplan (Fader und
+V-Pots sind dort keine anklickbaren Tasten). 360 behält seine Funktion (öffnet Settings). Die Anzeige ist
+ein eigener Maler (`ccPaintSurface_`), der statt `pushZonesForVisibleSlots` läuft. Unbekannter V-Pot-Wert
+startet bei 0. Franks Entscheide vom 27.10. sind eingearbeitet, das
 Settings-Mockup ist abgenommen („passt so“). Was über REAPER als Tatsache dasteht, ist im
 SDK-Header gelesen (`reaper_plugin_functions.h`, `reaper_plugin.h`) oder in Cockos' eigenen
 Surface-Treibern (`vendor/reaper-sdk/reaper-plugins/reaper_csurf/`). Was über unseren Code

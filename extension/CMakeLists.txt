@@ -397,6 +397,7 @@ add_library(reaper_uf8 MODULE
     src/SettingsScreen.cpp
     # Devices / Appearance / Behaviour panes, split out of SettingsScreen.cpp
     src/SettingsScreen_General.cpp
+    src/SettingsScreen_MidiCc.cpp
     src/ThemeBridge.cpp
     # Phase 2.7 Bindings — Phase A
     src/Bindings.cpp
