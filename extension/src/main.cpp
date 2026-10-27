@@ -1874,6 +1874,14 @@ std::atomic<bool>         g_tcpFollowsSelection{false};
 // bank (bucket snap, default), true = slide the bank by one channel so the
 // selection sits on the edge strip. UF8 Bindings setting. Frank 2026-06-19.
 std::atomic<bool>         g_bankScrollByOne{false};
+// The clutch between REAPER's selection and the bank (Frank 27.10.2026, from a
+// forum question). Off: a selection made in REAPER (mouse, actions, a touched
+// plug-in parameter, leaving a Selection Set) no longer moves the bank, so the
+// UF8 stays on its eight tracks. A selection made on the surface still banks:
+// turning the channel encoder off the bank must not lose the track. UC1 and the
+// UF1 channel keep following the selection, that is focus, not the bank.
+// Global, default on (the behaviour before it existed).
+std::atomic<bool>         g_bankFollowsSelection{true};
 // Which REAPER view the UF8 mirrors for track visibility: 0 = TCP
 // (arrange-view panel), 1 = MCP (mixer). A track hidden in the
 // selected view drops from g_visibleTracks so the surface matches
@@ -5948,6 +5956,9 @@ void loadBrightness()
     if (const char* v = GetExtState("rea_sixty", "bank_scroll_by_one"); v && *v) {
         g_bankScrollByOne.store(std::atoi(v) != 0);
     }
+    if (const char* v = GetExtState("rea_sixty", "bank_follows_selection"); v && *v) {
+        g_bankFollowsSelection.store(std::atoi(v) != 0);
+    }
     // Visibility-follow mode (0 = TCP, 1 = MCP). Falls back to the
     // three legacy keys when the new key is absent, so 0.1.4 users keep
     // their previous intent on first launch of 0.1.5+. Frank 2026-05-22.
@@ -9705,7 +9716,9 @@ int stripInstanceActiveFx_(MediaTrack* tr)
 // scrollTcp gates the optional TCP vertical-scroll: true for hardware-
 // originated selection (the direct callers), false for REAPER-originated
 // selection re-applied from the onTimer SetSurfaceSelected drain.
-void followSelectedInMixer(MediaTrack* tr, bool scrollTcp = true);
+// moveBank = false leaves the bank where it is (g_bankFollowsSelection off on a
+// REAPER-originated selection); the mixer and TCP follow as before.
+void followSelectedInMixer(MediaTrack* tr, bool scrollTcp = true, bool moveBank = true);
 void emitMouseScroll(int32_t delta);
 // applyInstanceCycle_ / applyFxCycle_ feed the UC1 instance carousel with
 // the same displayShort that the FX-Cycle colour-bar uses. The function
@@ -19762,7 +19775,7 @@ void runReaperActionOnTrack_(int cmdId, MediaTrack* tr)
     runReaperActionOnTrackN_(cmdId, tr, 1);
 }
 
-void followSelectedInMixer(MediaTrack* tr, bool scrollTcp)
+void followSelectedInMixer(MediaTrack* tr, bool scrollTcp, bool moveBank)
 {
     if (!kSelectFollowsMixer || !tr) return;
 
@@ -19805,6 +19818,7 @@ void followSelectedInMixer(MediaTrack* tr, bool scrollTcp)
     if (g_tcpFollowsSelection.load() && scrollTcp) {
         Main_OnCommand(40913, 0);
     }
+    if (!moveBank) return;
 
     // Bank-snap operates in surface-visible space — under folder_mode /
     // show_only_selected the bank coordinates are filtered indices, not
@@ -42812,7 +42826,10 @@ void chaseLastTouchedFx()
     if (!isSelected && g_trackSelFollowsParam.load()) {
         if (map->domain == uf8::Domain::ChannelStrip) {
             SetOnlyTrackSelected(tr);
-            followSelectedInMixer(tr);
+            // A parameter touched in REAPER is a REAPER selection: the clutch
+            // applies (g_bankFollowsSelection).
+            followSelectedInMixer(tr, /*scrollTcp=*/true,
+                                  g_bankFollowsSelection.load());
             return;  // SetSurfaceSelected fires and updates UC1
         }
     }
@@ -48152,7 +48169,8 @@ void onTimerBody_()
     // Frank 2026-05-21.
     if (g_pendingFollowSelectedAfterRebuild.exchange(false)) {
         if (MediaTrack* tr = GetSelectedTrack(nullptr, 0)) {
-            followSelectedInMixer(tr, /*scrollTcp=*/false);
+            followSelectedInMixer(tr, /*scrollTcp=*/false,
+                                  g_bankFollowsSelection.load());
         }
     }
 
@@ -48168,7 +48186,8 @@ void onTimerBody_()
             // REAPER-originated selection burst (mouse / marquee / actions):
             // keep the MCP + bank follow, but DON'T vertical-scroll the TCP —
             // that's reserved for hardware selection (see followSelectedInMixer).
-            followSelectedInMixer(tr, /*scrollTcp=*/false);
+            followSelectedInMixer(tr, /*scrollTcp=*/false,
+                                  g_bankFollowsSelection.load());
             // Plugin GUI follows active Instance — re-target the
             // show_focused_plugin_gui window to the newly-selected
             // track's focused FX (no-op when the setting is off or
@@ -49703,6 +49722,10 @@ custom_action_register_t g_actionVcaMode{
     0, "REASIXTY_VCA_MODE", "Rea-Sixty: VCA Mode (top leads only) (toggle)", nullptr,
 };
 int g_cmdVcaMode = 0;
+custom_action_register_t g_actionBankFollowsSel{
+    0, "REASIXTY_BANK_FOLLOWS_SELECTION", "Rea-Sixty: Bank follows REAPER selection (toggle)", nullptr,
+};
+int g_cmdBankFollowsSel = 0;
 custom_action_register_t g_actionVcaSpillSelected{
     0, "REASIXTY_VCA_SPILL_SELECTED", "Rea-Sixty: VCA spill (selected track)", nullptr,
 };
@@ -50231,6 +50254,7 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
         const ActFire kFire[] = {
             { g_cmdFolderMode,        "folder_mode"        },
             { g_cmdVcaMode,           "vca_mode"           },
+            { g_cmdBankFollowsSel,    "bank_follows_selection_toggle" },
             { g_cmdVcaSpillSelected,  "vca_spill_selected" },
             { g_cmdVcaSpillExit,      "vca_spill_exit"     },
         };
@@ -50429,6 +50453,7 @@ int toggleActionState(int command)
             { g_cmdUf1ExtenderToggle, "uf1_extender"             },
             { g_cmdFolderMode,        "folder_mode"              },
             { g_cmdVcaMode,           "vca_mode"                 },
+            { g_cmdBankFollowsSel,    "bank_follows_selection_toggle" },
             { g_cmdVcaSpillSelected,  "vca_spill_selected"       },
             { g_cmdVcaSpillExit,      "vca_spill_exit"           },
             { g_cmdUf1ExtenderSide,   "uf1_extender_side"        },
@@ -53897,6 +53922,17 @@ void reasixty_setTcpFollowsSelection(bool on)
     g_tcpFollowsSelection.store(on);
     SetExtState("rea_sixty", "tcp_follows_selection", on ? "1" : "0", true);
 }
+bool reasixty_bankFollowsSelection() { return g_bankFollowsSelection.load(); }
+void reasixty_setBankFollowsSelection(bool on)
+{
+    g_bankFollowsSelection.store(on);
+    SetExtState("rea_sixty", "bank_follows_selection", on ? "1" : "0", true);
+    // Engaging again brings the bank to the selection at once, not at the next
+    // click in REAPER.
+    if (on)
+        if (MediaTrack* tr = GetSelectedTrack(nullptr, 0))
+            followSelectedInMixer(tr, /*scrollTcp=*/false, /*moveBank=*/true);
+}
 bool reasixty_bankScrollByOne()       { return g_bankScrollByOne.load(); }
 void reasixty_setBankScrollByOne(bool on)
 {
@@ -57110,6 +57146,15 @@ void registerBindingHandlers()
         "TCP follows selection", false
     });
 
+    registerBuiltin("bank_follows_selection_toggle", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            reasixty_setBankFollowsSelection(!g_bankFollowsSelection.load());
+        },
+        [](int) -> bool { return g_bankFollowsSelection.load(); },
+        "Bank follows REAPER selection", false
+    });
+
     // Surface-mirror source (visibility follow): two mutually-exclusive
     // actions so a key sets an absolute mode (LED = that mode active),
     // rather than a blind toggle. 0 = TCP, 1 = MCP. Only atomics +
@@ -59256,6 +59301,7 @@ void registerBindingHandlers()
             "uf1_extender", "uf1_extender_side",
             "uf1_presets", "uf1_hue", "uf1_rme", "uf1_sends_receives_toggle",
             "folder_mode", "show_only_selected", "tcp_follows_selection_toggle",
+            "bank_follows_selection_toggle",
             "vca_mode",
             "marker_overlay_toggle", "marker_overlay_markers_only_toggle",
             "marker_overlay_regions_only_toggle",
@@ -60245,6 +60291,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdUf1ExtenderToggle = plugin_register("custom_action", &g_actionUf1ExtenderToggle);
     g_cmdFolderMode        = plugin_register("custom_action", &g_actionFolderMode);
     g_cmdVcaMode           = plugin_register("custom_action", &g_actionVcaMode);
+    g_cmdBankFollowsSel    = plugin_register("custom_action", &g_actionBankFollowsSel);
     g_cmdVcaSpillSelected  = plugin_register("custom_action", &g_actionVcaSpillSelected);
     g_cmdVcaSpillExit      = plugin_register("custom_action", &g_actionVcaSpillExit);
     g_cmdUf1ExtenderSide   = plugin_register("custom_action", &g_actionUf1ExtenderSide);

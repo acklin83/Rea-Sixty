@@ -326,6 +326,7 @@ constexpr SearchEntry kSearchIndex[] = {
     // user data, not settings, and they change under us.
     // -- Bindings --
     { "Scroll banks:",                                     kSecBindings, "" },
+    { "Bank follows REAPER selection",                     kSecBindings, "" },
     { "Focus Set scope:",                                  kSecBindings, "" },
     { "UF1 Extender - 9th fader of the UF8 bank",          kSecBindings, "Focus Set scope", kDevUf8 },
     { "UF8 sends follow the UF1 Focus Set track",          kSecBindings, "Focus Set scope", kDevUf8 },

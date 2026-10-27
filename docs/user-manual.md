@@ -1368,6 +1368,10 @@ Top of the pane: a tab bar with **UF8**, **UC1** and **UF1**, each rendering its
 
 The "current layer" follows whichever Layer button (1 / 2 / 3) is highlighted in the schematic — click a Layer button to switch the live layer; the green outline indicates which one is active. There is no separate layer-tab strip.
 
+**Scroll banks** (UF8 tab, under the schematic). When a selection leaves the surface, *by 8* jumps a whole bank, *by 1* slides the bank one strip so the track lands on the edge strip.
+
+**Bank follows REAPER selection** (below it, on by default). Off, a track you select in REAPER leaves the bank where it is, so the UF8 stays on its eight tracks. That covers a click in REAPER, an action, a parameter touched in a plug-in window and leaving a Selection Set. A selection made on the surface still banks, so turning the channel encoder past the edge keeps the track on the UF8. The UC1 and the UF1 keep following the selected track, apart from the UF1 fader in Extender mode, which rides the bank. Switching it back on brings the bank to the selection straight away. The same switch is the action *Bank follows REAPER selection* for a key, and `Rea-Sixty: Bank follows REAPER selection (toggle)` in REAPER's action list.
+
 **Layers switch Quicks only** (checkbox on the UF8 tab, under the schematic, off by default). Off, a layer key re-binds the whole surface and every key can carry a different action per layer. On, the surface keeps Layer 1's bindings everywhere and the layer key only selects which group of Quicks and soft-key banks is live: three sets of banks rather than three surfaces. Quick 1 to 3 and the sub-bank row are the exception either way, since their bindings are how a layer's sets are reached. The LAYER lamps and the green ring follow the layer regardless, because that is what the hardware is on, and bindings stored on Layers 2 and 3 are left alone for when you switch it off again.
 
 Five click-to-edit special cases:
@@ -2264,6 +2268,7 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 - **Bank ← (UF8 Plug-in Mode: fader-bank; else ±strip scroll)** — scroll the surface one bank left (8 strips, 9 with the UF1 Extender, less any pinned strips). In UF8 Plug-in Mode the same button flips between fader-banks A / B (for 16-strip plug-ins) instead, and in an "of focused track" send or receive view it pages the send list.
 - **Bank → (UF8 Plug-in Mode: fader-bank; else ±strip scroll)** — scroll 8 strips right (same fader-bank flip in UF8 Plug-in Mode).
 - **Bank by 1ch ← (one strip)** / **Bank by 1ch → (one strip)** — scroll one strip at a time.
+- **Bank follows REAPER selection**: a switch. Off, selecting a track in REAPER no longer moves the bank. Lit while the bank follows. Same setting as the checkbox on the UF8 tab of *Bindings*.
 - **Home (clear routing toggles)** — clear all routing toggles (send / receive views) so V-Pots and faders return to track volume + pan. Also resets the send-list page to the start and drops the Soft-Key Set engaged on the current layer.
 - **Page ← (soft-key bank prev)** / **Page → (soft-key bank next)** — step the SSL Soft-Key PAGE bank, prev / next of the six pages, in either domain.
 

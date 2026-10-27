@@ -451,6 +451,8 @@ bool reasixty_tcpFollowsSelection();
 void reasixty_setTcpFollowsSelection(bool on);
 bool reasixty_bankScrollByOne();
 void reasixty_setBankScrollByOne(bool on);
+bool reasixty_bankFollowsSelection();
+void reasixty_setBankFollowsSelection(bool on);
 int  reasixty_visibilityFollow();
 void reasixty_setVisibilityFollow(int v);
 bool reasixty_pinnedSurvivesBanking();
@@ -7724,6 +7726,11 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             if (ImGui_RadioButtonEx(ctx, "by 1", &byOne, 1)) {
                 reasixty_setBankScrollByOne(true);
             }
+            bool bfs = reasixty_bankFollowsSelection();
+            if (ImGui_Checkbox(ctx, "Bank follows REAPER selection", &bfs)) {
+                reasixty_setBankFollowsSelection(bfs);
+            }
+            help_(ctx, "Off: selecting a track in REAPER leaves the bank where it is.");
             // ⇨ ON THE UF8 TAB, where the layer keys are. It sat above the tab
             // bar and therefore on all three, but only the UF8 has the Quick
             // keys the setting is about: the UC1 has no user-facing layer at

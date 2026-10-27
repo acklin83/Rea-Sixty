@@ -8452,7 +8452,8 @@ const char* builtinCategory(const std::string& n)
      || n == "page_left"  || n == "page_right"
      || n == "bank_by_1_left" || n == "bank_by_1_right"
      || n == "uf1_bank_step" || n == "uf1_page_step"
-     || n == "uf1_dyn_bank_page")
+     || n == "uf1_dyn_bank_page"
+     || n == "bank_follows_selection_toggle")
         return "Bank / Page";
 
     if (n.rfind("auto_", 0) == 0) return "Automation";
@@ -8941,6 +8942,9 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "tcp_follows_selection_toggle",
       "Whether REAPER's track panel scrolls to follow what you select on "
       "the surface." },
+    { "bank_follows_selection_toggle",
+      "Whether the bank follows a track you select in REAPER. Off, the UF8 "
+      "stays on its tracks; selecting on the surface still banks." },
     { "surface_mirror_tcp",
       "The surfaces show what the TRACK panel shows, hidden tracks "
       "included." },
@@ -9632,6 +9636,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "switch_fav_7", "Fav 7" },
     { "switch_fav_8", "Fav 8" },
     { "tcp_follows_selection_toggle", "TCP Follow" },
+    { "bank_follows_selection_toggle", "Bank Follow" },
     { "focus_set_add", "Focus Add" },
     { "focus_set_clear", "Focus Clear" },
     
