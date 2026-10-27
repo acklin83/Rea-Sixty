@@ -62,9 +62,12 @@ derselben Lizenz. Übernommener Code behält seine Autorschaft (Cherry-Pick) ode
   die Seite nach der linken; hinter der letzten Seite ist die rechte Reihe leer. PAGE ◄ ► springt
   um 1. Jedes Gerät zeigt seine eigene Seite: die Seiten-LEDs (V-POT, 1..5) gehen pro Gerät, nicht
   mehr an beide gleich.
-- **Dynamische Bänke** (FX, Lanes, Selection Sets, Favoriten …): zeigt links eine dynamische
-  Bank, setzt die rechte Reihe ihre Liste fort (Einträge 9..16), und das Blättern dieser Bank
-  springt um 16. Sonst zeigt rechts die nächste Bank des Sets (Tims Regel).
+- **Dynamische Bänke**: nur FX und Lanes können mehr als 8 Einträge haben und werden am UF8 in
+  8er-Seiten geblättert (`dynBankBankable_`). Zeigt links eine FX- oder Lanes-Bank, setzt die rechte
+  Reihe ihre Liste fort (Einträge 9..16) und geblättert wird um 16. Alle anderen dynamischen Bänke
+  haben fest 8 Einträge (Parameter Groups, Track Colours, Favoriten, CS/BC-Favoriten, Hue, RME,
+  Selection Sets): rechts steht die nächste Bank des Sets (Tims Regel). Korrigiert 27.10., Frank:
+  „welche Dyn Bank hat bei uns überhaupt 16 Einträge?“
 - **CC-Layer**: rechts die nächste CC-Seite (Regel „Seiten“). Fader, V-Pots und Tasten des
   rechten Geräts gehören dann zu dieser Seite, Touch und Rückwege ebenso.
 - **UF1-Extender**: links, Mitte, rechts. „Mitte“ (UF8 L | UF1 | UF8 R) wirkt nur mit zwei UF8,
@@ -89,7 +92,7 @@ Anstecken, Einstellung aus und an. Tim prüft: zweites Gerät wird erkannt, Swap
 Strip ↔ (Gerät, lokaler Index), Slot-Helfer (Pan, Volume, Send) mit festen UF1-Slots, Bankbreite
 und Strip-Verschiebung pro Strip mit Extender links / Mitte / rechts, Seitenregel (welche Seite
 zeigt welches Gerät, Tastendruck je Gerät, Seite hinter der letzten), Blätterschritt der
-dynamischen Bänke. Test: mit einem Gerät liefert jede Abbildung dasselbe wie die heutigen
+FX- und Lanes-Bänke. Test: mit einem Gerät liefert jede Abbildung dasselbe wie die heutigen
 Funktionen, Extender links und rechts eingeschlossen; „Mitte“ mit einem Gerät = rechts.
 
 ### Stufe 3: die Fläche (selbst gebaut, Tims 1b als Karte)
@@ -104,7 +107,7 @@ in Stufe 4. **Frank prüft: ein UF8 unverändert (Fader, V-Pots, Sends, Plugin M
 links/rechts, CC-Layer). Tim prüft: 16 Strips, Banking, Sends, Extender links/rechts.**
 
 ### Stufe 4: Modi auf zwei Geräten
-Seitenregel für Soft-Keys und CC-Layer mit Seiten-LEDs pro Gerät, dynamische Bänke fortsetzen und
+Seitenregel für Soft-Keys und CC-Layer mit Seiten-LEDs pro Gerät, FX- und Lanes-Bänke fortsetzen und
 um 16 blättern, CC-Layer rechts = nächste Seite (mit Touch und Rückwegen), Plug-in Mode Split /
 Spread (Tims Lösung), UF1-Extender „Mitte“ mit Dreierzyklus. **Tim prüft am Gerät, Frank prüft
 ein UF8 unverändert.**
