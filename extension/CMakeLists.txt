@@ -835,6 +835,10 @@ if(NOT WIN32)
     add_executable(test_lane_model tests/test_lane_model.cpp)
     target_include_directories(test_lane_model PRIVATE src)
     add_test(NAME lane_model COMMAND test_lane_model)
+    # MIDI CC layer: values, keys, messages out and back, CC lanes (MidiCcLayer.h).
+    add_executable(test_midi_cc_layer tests/test_midi_cc_layer.cpp)
+    target_include_directories(test_midi_cc_layer PRIVATE src)
+    add_test(NAME midi_cc_layer COMMAND test_midi_cc_layer)
 
     # Sleep: the clock Rea-Sixty and ORC share, the UF1's lights, the waking press
     # (SurfaceSleep.h).

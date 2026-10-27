@@ -131,6 +131,7 @@
 #include "ProjectScoped.h"
 #include "Protocol.h"
 #include "SetupBundle.h"
+#include "MidiCcLayer.h"
 #include "input_level_jsfx.h"  // generated: uf8::setup_bundle::kInputLevelJsfx{Bytes,Size}
 #include "inserts_overlay_lua.h"  // generated: uf8::setup_bundle::kInsertsOverlayLua{Bytes,Size}
 #include "assignment_hud_lua.h"   // generated: uf8::setup_bundle::kAssignmentHudLua{Bytes,Size}
@@ -19903,6 +19904,8 @@ double   uiVolLinear(MediaTrack* tr);
 // Full rationale + calibration in the kUf8FaderTopDb / pbToLinearVolume
 // block further down. Kept in sync with that block.
 constexpr uint16_t kUf8FaderPbMax = 15583;
+static_assert(midicc::kFaderPbMax == kUf8FaderPbMax,
+              "MidiCcLayer.h maps CC values onto the UF8 fader's travel");
 
 // ⛔ BOTH ENDS SNAP, exactly as uf1PosToNorm_ does. The reason is written out
 // beside kUf1FaderEndSnap: the hardware reports a hair under the stop, so a

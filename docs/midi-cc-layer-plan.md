@@ -295,7 +295,11 @@ kleines JSFX auf einer Spur. Das entscheidet Frank nach der Messung.
 
 ---
 
-## 6. Offene Entscheide für Frank
+## 6. Entscheide (Frank 27.10.2026: „nimm deine Vorschläge“)
+
+Alle fünf wie vorgeschlagen: Tastenliste wie in Abschnitt 4 (SOLO und CUT ohne Funktion), Fader springt auf den letzten Kurvenpunkt, ohne MIDI-Items bleiben die Fader stehen, Werte werden beim Projektwechsel vergessen, V-Pot eine Rastung = 1 Schritt mal „UF8 V-Pot speed“, Fine = 1.
+
+Die Fragen, wie sie gestellt waren:
 
 1. **Tasten ohne Funktion:** Stimmt die Liste in „Was auf dem CC-Layer REAPER bleibt“?
    Insbesondere: Sollen SOLO und CUT als weitere CC-Tasten dienen (SSL macht das nicht)?
