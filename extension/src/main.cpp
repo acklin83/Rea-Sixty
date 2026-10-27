@@ -34192,7 +34192,11 @@ static void uf1ChannelMeterBytes_(MediaTrack* tr, uint8_t& lvL, uint8_t& lvR,
                 }
             }
         }
-        if (gr < 0) gr = sdGrDb_(tr, uf8::Domain::ChannelStrip);
+        // ⛔ The fallback follows "GR meter source" like the UF8 row (g_grAnyFx).
+        // It used to run regardless, so with "Only Show Channel Strip GR" a
+        // compressor mapped as Bus Compressor still lit the UF1 (forum, Frank
+        // 27.10.2026).
+        if (gr < 0) gr = g_grAnyFx.load() ? sdGrDb_(tr, uf8::Domain::ChannelStrip) : 0.0;
         compByte = grByte(gr);
     }
 
