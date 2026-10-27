@@ -50377,16 +50377,14 @@ custom_action_register_t g_actionBankFollowsSel{
     0, "REASIXTY_BANK_FOLLOWS_SELECTION", "Rea-Sixty: Bank follows REAPER selection (toggle)", nullptr,
 };
 int g_cmdBankFollowsSel = 0;
-// Probes for the MIDI CC layer (docs/midi-cc-layer-plan.md, section 5). Debug
-// only, not in any menu Rea-Sixty adds; they run from REAPER's action list.
+// Probe for the MIDI CC layer (docs/midi-cc-layer-plan.md, section 5). Debug
+// only, not in any menu Rea-Sixty adds; it runs from REAPER's action list. Kept
+// for the release (Frank 27.10.2026): it is how a "Device busy" report on
+// Windows gets diagnosed. The virtual-keyboard ramp served its purpose and went.
 custom_action_register_t g_actionMidiInProbe{
     0, "REASIXTY_DEBUG_MIDI_IN_PROBE", "Rea-Sixty: Debug: MIDI input probe (10 s, log only)", nullptr,
 };
 int g_cmdMidiInProbe = 0;
-custom_action_register_t g_actionVkbCcProbe{
-    0, "REASIXTY_DEBUG_VKB_CC_PROBE", "Rea-Sixty: Debug: CC1 ramp to the virtual MIDI keyboard", nullptr,
-};
-int g_cmdVkbCcProbe = 0;
 custom_action_register_t g_actionVcaSpillSelected{
     0, "REASIXTY_VCA_SPILL_SELECTED", "Rea-Sixty: VCA spill (selected track)", nullptr,
 };
@@ -50883,17 +50881,13 @@ void tempSelsetToggleRecall_()
 // not already opened in prefs/MIDI". Whether that means "fails" or "works on one
 // OS and not the other" decides how the CC layer hears hardware, so it is
 // measured before anything is built on it. The input probe opens EVERY input
-// REAPER lists, listens 10 s and logs what arrives; it sends nothing. The VKB
-// probe sends a CC1 ramp 0..127 on channel 1 into the virtual MIDI keyboard
-// (StuffMIDIMessage mode 0) and nowhere else, so a track whose input is the
-// virtual keyboard can record it. Log: logPath("rea_sixty_midi_probe.log").
-// Main thread only: both start from hookCommand2 and tick from onTimerBody_.
+// REAPER lists, listens 10 s and logs what arrives; it sends nothing.
+// Log: logPath("rea_sixty_midi_probe.log"). Main thread only: it starts from
+// hookCommand2 and ticks from onTimerBody_.
 struct MidiProbeInput_ { int dev; std::string name; midi_Input* in; int events; int skipped; };
 static std::vector<MidiProbeInput_> g_midiProbeInputs_;
 static int64_t g_midiProbeInEndMs_ = 0;
 static int64_t g_midiProbeInStartMs_ = 0;
-static int     g_midiProbeVkbNext_ = -1;      // next CC1 value to send, -1 = idle
-static int64_t g_midiProbeVkbStartMs_ = 0;
 
 static void midiProbeLog_(const std::string& line)
 {
@@ -50972,30 +50966,8 @@ static void midiProbeTick_()
         }
         if (now >= g_midiProbeInEndMs_) midiInProbeStop_();
     }
-    if (g_midiProbeVkbNext_ >= 0) {
-        // 0..127 over about 2 s, whatever the tick rate: send every value the
-        // elapsed time has reached.
-        const int64_t el = nowMs_() - g_midiProbeVkbStartMs_;
-        const int upTo = std::min(127, static_cast<int>(el * 127 / 2000));
-        while (g_midiProbeVkbNext_ <= upTo) {
-            StuffMIDIMessage(0, 0xB0, 1, g_midiProbeVkbNext_);
-            ++g_midiProbeVkbNext_;
-        }
-        if (g_midiProbeVkbNext_ > 127) {
-            g_midiProbeVkbNext_ = -1;
-            midiProbeLog_("sent CC1 0..127 on channel 1 to the virtual MIDI keyboard (mode 0)");
-            midiProbeLog_("==== VKB probe end");
-        }
-    }
 }
 
-static void vkbCcProbeStart_()
-{
-    if (g_midiProbeVkbNext_ >= 0) return;
-    midiProbeHeader_("VKB probe: CC1 ramp, channel 1, 2 s");
-    g_midiProbeVkbStartMs_ = nowMs_();
-    g_midiProbeVkbNext_ = 0;
-}
 
 // hookcommand2 is the correct hook for custom_action dispatch per SDK
 // note at reaper_plugin.h:1086. hookcommand (v1) only catches actions
@@ -51007,7 +50979,6 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     if (command == 0) return false;
     if (command == g_cmdBrightnessUp)   { brightnessUp();   return true; }
     if (command == g_cmdMidiInProbe)    { midiInProbeStart_(); return true; }
-    if (command == g_cmdVkbCcProbe)     { vkbCcProbeStart_();  return true; }
     if (command == g_cmdBrightnessDown) { brightnessDown(); return true; }
     if (command == g_cmdToggleMixer)    { g_mixerToggleRequest.store(true); return true; }
     if (command == g_cmdRestart)        { g_restartRequest.store(true); return true; }
@@ -61076,7 +61047,6 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     g_cmdVcaMode           = plugin_register("custom_action", &g_actionVcaMode);
     g_cmdBankFollowsSel    = plugin_register("custom_action", &g_actionBankFollowsSel);
     g_cmdMidiInProbe       = plugin_register("custom_action", &g_actionMidiInProbe);
-    g_cmdVkbCcProbe        = plugin_register("custom_action", &g_actionVkbCcProbe);
     g_cmdVcaSpillSelected  = plugin_register("custom_action", &g_actionVcaSpillSelected);
     g_cmdVcaSpillExit      = plugin_register("custom_action", &g_actionVcaSpillExit);
     g_cmdUf1ExtenderSide   = plugin_register("custom_action", &g_actionUf1ExtenderSide);
