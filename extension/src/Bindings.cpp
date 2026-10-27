@@ -3129,7 +3129,10 @@ void parseCcLayer_(wdl_json_element* o, midicc::Layer& out)
     out.defaultChannel = std::clamp(num(o, "default_channel", out.defaultChannel), 1, 16);
     auto* pages = o->get_item_by_name("pages");
     if (!pages || !pages->is_array() || !pages->m_array) return;
-    for (int p = 0; p < pages->m_array->GetSize() && p < midicc::kPages; ++p) {
+    // Five pages = written before the V-POT page existed (27.10.2026): they were
+    // soft-key bank 1..5 and stay on those keys, pages 1..5 now.
+    const int shift = pages->m_array->GetSize() == 5 ? 1 : 0;
+    for (int p = 0; p < pages->m_array->GetSize() && p + shift < midicc::kPages; ++p) {
         wdl_json_element* po = pages->enum_item(p);
         if (!po || !po->is_object()) continue;
         for (int k = 0; k < midicc::kKindCount; ++k) {
@@ -3139,7 +3142,7 @@ void parseCcLayer_(wdl_json_element* o, midicc::Layer& out)
             for (int i = 0; i < arr->m_array->GetSize() && i < midicc::countOf(kind); ++i) {
                 wdl_json_element* co = arr->enum_item(i);
                 if (!co || !co->is_object()) continue;
-                midicc::Control& c = out.pages[p].at(kind, i);
+                midicc::Control& c = out.pages[p + shift].at(kind, i);
                 c.channel = std::clamp(num(co, "ch", c.channel), 0, 16);
                 c.number  = std::clamp(num(co, "n", c.number), -1, 127);
                 c.hiRes   = flag(co, "hr", c.hiRes);

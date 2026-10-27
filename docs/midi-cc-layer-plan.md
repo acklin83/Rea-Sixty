@@ -1,7 +1,7 @@
 # MIDI-CC-Layer auf dem UF8: Plan
 
-Stand 27.10.2026. Gebaut: A Sonde, B Kern, C Datenmodell, D Eingang, E Ausgang, F Anzeige, I Settings.
-Offen: G Rückweg aus Items, H Rückweg von Hardware, J Handbuch.
+Stand 27.10.2026. Alle Bausteine A bis J gebaut. Nach Franks erstem Test: 6 Seiten (V-POT dazu), PAGE ◄ ► bei offenen
+Settings repariert, keine Farbe für V-Pot-Druck und Fussschalter.
 Abweichungen beim Bau: Der CC-Editor ist das Raster aus dem Mockup, nicht der UF8-Schaltplan (Fader und
 V-Pots sind dort keine anklickbaren Tasten). 360 behält seine Funktion (öffnet Settings). Die Anzeige ist
 ein eigener Maler (`ccPaintSurface_`), der statt `pushZonesForVisibleSlots` läuft. Unbekannter V-Pot-Wert

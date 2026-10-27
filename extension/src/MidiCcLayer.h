@@ -30,7 +30,9 @@
 
 namespace midicc {
 
-constexpr int kPages = 5;              // soft-key bank keys 1..5, as on SSL's layer
+// The soft-key bank keys pick the page: V-POT = page 0, 1..5 = pages 1..5 (Frank
+// 27.10.2026: "V-Pot Soft-Key Bank vergessen, sind damit 6"; SSL's own layer has 5).
+constexpr int kPages = 6;
 constexpr int kStrips = 8;
 constexpr int kFeet = 2;
 // The UF8 fader's top position. Mirrors kUf8FaderPbMax in main.cpp, which
@@ -50,6 +52,23 @@ constexpr int kKindCount = 6;
 
 inline int countOf(Kind k) { return k == Kind::Foot ? kFeet : kStrips; }
 inline bool isKey(Kind k)  { return k == Kind::Push || k == Kind::Soft || k == Kind::Foot; }
+// Whether the UF8 can show the control's colour: a fader on its SEL key and the
+// colour bar, a V-Pot there too once FLIP puts it on the fader, a soft-key and a
+// SEND/PLUG-IN key on their own lamp. A V-Pot push and a foot switch have none.
+inline bool hasColour(Kind k) { return k != Kind::Push && k != Kind::Foot; }
+
+// The page as the CS-type cell shows it (4 characters) and as Settings names it
+// (the key's own label).
+inline const char* pageCell(int p)
+{
+    static const char* const k[kPages] = {"VPOT", "PG1", "PG2", "PG3", "PG4", "PG5"};
+    return (p >= 0 && p < kPages) ? k[p] : "";
+}
+inline const char* pageKey(int p)
+{
+    static const char* const k[kPages] = {"V-POT", "1", "2", "3", "4", "5"};
+    return (p >= 0 && p < kPages) ? k[p] : "";
+}
 
 // Toggle: each press flips between 0 and 127 (SSL's only behaviour). Hold: 127 while
 // held, 0 on release (sustain and the like).
@@ -138,7 +157,7 @@ inline std::string valueText(int value, bool known)
     return std::to_string(value);
 }
 
-// Factory layout, page 1 only; pages 2..5 start unassigned. Faders: the controllers
+// Factory layout, the first page (V-POT) only; the other five start unassigned. Faders: the controllers
 // orchestral libraries and synths answer to most often. V-Pots and V-Pot pushes on
 // CCs MIDI leaves undefined (22..29, 110..117), soft-keys on 102..109, the feet
 // sustain and soft pedal, SEND/PLUG-IN programs 0..7.

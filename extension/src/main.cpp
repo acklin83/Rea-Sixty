@@ -27162,21 +27162,16 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
             const uint8_t state = data[i + 5];
             const bool pressed  = state == 0x01;
 
-            // Settings → Bindings open: the press picks the key (BindingsPick.h).
-            {
-                static std::array<bool, 256> sPickHeld{};
-                if (bindingsPickGate_(0, uf8RemapForEncMode_(uf8::bindings::fromUf8DeviceId(id)), id,
-                                      pressed, sPickHeld)) {
-                    i += frameSize;
-                    continue;
-                }
-            }
-
             // MIDI CC layer (docs/midi-cc-layer-plan.md section 4): its own keys
             // go to the main thread, the keys it keeps for REAPER fall through
             // to dispatch, which resolves them on Layer 1 (applyLayerOption),
             // and every other key has no function here. The press that wakes a
             // dark surface sends nothing, as everywhere else.
+            // ⛔ BEFORE THE SETTINGS PICK. With Settings > Bindings open the pick
+            // takes PAGE < >, the soft-keys, SEND/PLUG-IN and the feet as "select
+            // only" and swallows the press, so PAGE did nothing while the bank
+            // keys (select AND run) worked (Frank 27.10.2026). A CC layer has no
+            // key editor to pick into; the keys it keeps still go to the pick.
             if (uf8::bindings::ccLayerActive()) {
                 auto key = [&](midicc::Kind k, int idx) {
                     if (btnWoke && pressed) return;
@@ -27189,8 +27184,8 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                 else if (id >= 0x18 && id <= 0x1F) key(midicc::Kind::Soft, id - 0x18);
                 else if (id >= 0x48 && id <= 0x4F) key(midicc::Kind::SendPlugin, id - 0x48);
                 else if (id == 0x00 || id == 0x01) key(midicc::Kind::Foot, id);
-                else if (id >= 0x69 && id <= 0x6D) {          // soft-key bank 1..5 = page
-                    if (pressed) queueInput({PendingInput::CcPage, 0, double(id - 0x69)});
+                else if (id >= 0x68 && id <= 0x6D) {          // V-POT, soft-key bank 1..5 = page
+                    if (pressed) queueInput({PendingInput::CcPage, 0, double(id - 0x68)});
                 } else if (id == 0x52 || id == 0x53) {        // PAGE < >
                     if (pressed) queueInput({PendingInput::CcPage, 1, id == 0x52 ? -1.0 : 1.0});
                 } else {
@@ -27206,6 +27201,16 @@ void onUf8Input(const uint8_t* dataIn, size_t lenIn)
                     }
                 }
                 if (consumed) { i += frameSize; continue; }
+            }
+
+            // Settings → Bindings open: the press picks the key (BindingsPick.h).
+            {
+                static std::array<bool, 256> sPickHeld{};
+                if (bindingsPickGate_(0, uf8RemapForEncMode_(uf8::bindings::fromUf8DeviceId(id)), id,
+                                      pressed, sPickHeld)) {
+                    i += frameSize;
+                    continue;
+                }
             }
 
             bool handledNatively = false;
@@ -40080,6 +40085,176 @@ static void ccTick_()
     }
 }
 
+// ---- MIDI CC layer: the return paths (Bausteine G and H) ------------------------
+// Both hand their values to State::apply, which drops them while the hand has the
+// control: a touched fader, or a control sent from within the echo window.
+
+static bool ccTouched_(midicc::Kind k, int i)
+{
+    return k == midicc::faderKind(g_flip.load()) && i >= 0 && i < 8
+        && g_touchReported[i].load();
+}
+
+// G: the CC lanes of the MIDI items on the selected track, at the play position.
+// One take's lanes are read again only when MIDI_GetHash changes.
+struct CcTakeLanes_ {
+    std::string hash;
+    std::unordered_map<int, midicc::Points> cc;   // channel << 7 | controller
+    std::unordered_map<int, midicc::Points> pc;   // channel: program changes
+    int64_t seenMs = 0;
+};
+static std::unordered_map<MediaItem_Take*, CcTakeLanes_> g_ccTakeLanes;
+
+static const CcTakeLanes_& ccLanesFor_(MediaItem_Take* tk, int64_t now)
+{
+    char h[256] = {0};
+    MIDI_GetHash(tk, false, h, sizeof(h));
+    CcTakeLanes_& e = g_ccTakeLanes[tk];
+    e.seenMs = now;
+    if (!e.hash.empty() && e.hash == h) return e;
+    e.hash = h;
+    e.cc.clear();
+    e.pc.clear();
+    int nNotes = 0, nCc = 0, nText = 0;
+    MIDI_CountEvts(tk, &nNotes, &nCc, &nText);
+    for (int i = 0; i < nCc; ++i) {
+        bool sel = false, muted = false;
+        double ppq = 0.0;
+        int chanmsg = 0, chan = 0, m2 = 0, m3 = 0;
+        if (!MIDI_GetCC(tk, i, &sel, &muted, &ppq, &chanmsg, &chan, &m2, &m3) || muted)
+            continue;
+        if (chanmsg == 0xB0)      e.cc[((chan & 0x0F) << 7) | (m2 & 0x7F)].push_back({ppq, m3 & 0x7F});
+        else if (chanmsg == 0xC0) e.pc[chan & 0x0F].push_back({ppq, m2 & 0x7F});
+    }
+    auto byPos = [](const std::pair<double, int>& a, const std::pair<double, int>& b) {
+        return a.first < b.first;
+    };
+    for (auto& kv : e.cc) std::stable_sort(kv.second.begin(), kv.second.end(), byPos);
+    for (auto& kv : e.pc) std::stable_sort(kv.second.begin(), kv.second.end(), byPos);
+    return e;
+}
+
+static void ccFollowItems_(int64_t now)
+{
+    using namespace midicc;
+    const Layer& L = g_ccLayer;
+    State& S = g_ccState;
+    if (!L.followItems) return;
+    if (!(GetPlayState() & 5)) return;                 // playing (1) or recording (4)
+    MediaTrack* tr = GetSelectedTrack(nullptr, 0);
+    if (!tr) return;                                   // no items: the faders stay
+    const double pos = GetPlayPosition();
+    const bool fixed = static_cast<int>(GetMediaTrackInfo_Value(tr, "I_FREEMODE")) == 2;
+    static const Points kNone;
+    const int ni = CountTrackMediaItems(tr);
+    for (int it = 0; it < ni; ++it) {
+        MediaItem* item = GetTrackMediaItem(tr, it);
+        const double ip = GetMediaItemInfo_Value(item, "D_POSITION");
+        const double il = GetMediaItemInfo_Value(item, "D_LENGTH");
+        if (pos < ip || pos >= ip + il) continue;
+        if (GetMediaItemInfo_Value(item, "B_MUTE") > 0.5) continue;
+        // A silent fixed lane is not what plays (the UC1 input meter rule).
+        if (fixed && static_cast<int>(GetMediaItemInfo_Value(item, "C_LANEPLAYS")) <= 0) continue;
+        MediaItem_Take* tk = GetActiveTake(item);
+        if (!tk || !TakeIsMIDI(tk)) continue;
+        const CcTakeLanes_& lanes = ccLanesFor_(tk, now);
+        if (lanes.cc.empty() && lanes.pc.empty()) continue;
+        const double ppq = MIDI_GetPPQPosFromProjTime(tk, pos);
+        for (int p = 0; p < kPages; ++p)
+            for (int k = 0; k < kKindCount; ++k) {
+                const Kind kind = static_cast<Kind>(k);
+                for (int i = 0; i < countOf(kind); ++i) {
+                    const Control& c = L.pages[p].at(kind, i);
+                    if (!assigned(c)) continue;
+                    const int ch = channelOf(c, L.defaultChannel) - 1;
+                    int v = -1;
+                    if (kind == Kind::SendPlugin) {
+                        const auto e = lanes.pc.find(ch);
+                        if (e == lanes.pc.end()) continue;
+                        const int prog = valueAt(e->second, ppq);
+                        if (prog < 0) continue;
+                        v = (prog == c.number) ? 127 : 0;
+                    } else {
+                        const auto m = lanes.cc.find((ch << 7) | c.number);
+                        if (m == lanes.cc.end()) continue;
+                        if (hiResActive(kind, c)) {
+                            const auto l = lanes.cc.find((ch << 7) | (c.number + 32));
+                            v = valueAt14(m->second, l == lanes.cc.end() ? kNone : l->second, ppq);
+                        } else {
+                            v = valueAt(m->second, ppq);
+                        }
+                    }
+                    if (v < 0) continue;
+                    if (S.isKnown(p, kind, i) && S.v(p, kind, i) == v) continue;
+                    S.apply(Hit{p, kind, i, v}, now, p == S.page && ccTouched_(kind, i));
+                }
+            }
+    }
+    // Takes not under the playhead for a while are dropped (a deleted take's
+    // pointer can come back as a new take; its hash then differs anyway).
+    for (auto e = g_ccTakeLanes.begin(); e != g_ccTakeLanes.end();)
+        e = (now - e->second.seenMs > 10000) ? g_ccTakeLanes.erase(e) : std::next(e);
+}
+
+// H: a hardware MIDI input, open while the UF8 is on the CC layer that names it.
+// Measured 27.10.2026: on macOS REAPER hands it over whether or not it has the
+// input enabled itself, and keeps receiving on it; on Windows a real USB driver
+// is unmeasured, so a refusal is shown in Settings ("busy") and retried.
+static midi_Input*       g_ccIn = nullptr;
+static std::string       g_ccInName;            // what g_ccIn is open on, or was tried
+static int               g_ccInStatus = 0;      // 0 none, 1 open, 2 not found, 3 busy
+static int64_t           g_ccInTriedMs = 0;
+static midicc::Assembler g_ccAsm;
+
+static void ccInputClose_()
+{
+    if (g_ccIn) { g_ccIn->stop(); g_ccIn->Destroy(); g_ccIn = nullptr; }
+    g_ccInName.clear();
+    g_ccInStatus = 0;
+}
+
+static void ccInputTick_(int64_t now)
+{
+    const std::string want = g_ccIdx >= 0 ? g_ccLayer.inputDevice : std::string();
+    if (want != g_ccInName) ccInputClose_();
+    if (want.empty()) return;
+    if (!g_ccIn && (g_ccInName.empty() || now - g_ccInTriedMs > 2000)) {
+        g_ccInName = want;
+        g_ccInTriedMs = now;
+        int dev = -1;
+        const int n = GetNumMIDIInputs();
+        for (int i = 0; i < n && dev < 0; ++i) {
+            char nm[256] = {0};
+            if (GetMIDIInputName(i, nm, sizeof(nm)) && want == nm) dev = i;
+        }
+        if (dev < 0) { g_ccInStatus = 2; return; }
+        g_ccIn = CreateMIDIInput(dev);
+        if (!g_ccIn) { g_ccInStatus = 3; return; }
+        g_ccIn->start();
+        g_ccInStatus = 1;
+        g_ccAsm = midicc::Assembler{};
+    }
+    if (!g_ccIn) return;
+    g_ccIn->SwapBufs(static_cast<unsigned int>(now));
+    MIDI_eventlist* list = g_ccIn->GetReadBuf();
+    if (!list) return;
+    int bpos = 0;
+    while (MIDI_event_t* ev = list->EnumItems(&bpos)) {
+        if (ev->size < 2) continue;
+        const midicc::Msg m{ev->midi_message[0], ev->midi_message[1],
+                            static_cast<uint8_t>(ev->size > 2 ? ev->midi_message[2] : 0)};
+        for (const auto& h : midicc::match(g_ccLayer, m, g_ccAsm))
+            g_ccState.apply(h, now, h.page == g_ccState.page && ccTouched_(h.kind, h.index));
+    }
+}
+
+static void ccReturnPaths_()
+{
+    const int64_t now = nowMs_();
+    ccInputTick_(now);                  // also closes the input off the layer
+    if (g_ccIdx >= 0) ccFollowItems_(now);
+}
+
 // The colour bar on a CC layer: the fader controller's colour, dark when the
 // strip's fader has nothing on this page.
 uint32_t ccColorForStrip_(int slot)
@@ -40126,8 +40301,7 @@ static void ccPaintSurface_()
         g_vpotBarInit = false;
         g_dev->send(uf8::buildSelectedStripBitmask(0));
     }
-    char pg[8];
-    std::snprintf(pg, sizeof(pg), "PG%d", S.page + 1);
+    const std::string pg = pageCell(S.page);
     std::array<uint16_t, 8> bar{};
     std::array<uint8_t, 8>  mode{};
     for (int s = 0; s < kStrips; ++s) {
@@ -44932,11 +45106,11 @@ void pushUf8GlobalLeds()
     // function go dark (onUf8Input's list), SEND/PLUG-IN further down.
     const bool ccOn = g_ccIdx >= 0;
     if (ccOn) {
-        constexpr uf8::Uf8GlobalLed kPages[5] = {
+        constexpr uf8::Uf8GlobalLed kPages[midicc::kPages] = {
+            uf8::Uf8GlobalLed::VPotBank,
             uf8::Uf8GlobalLed::Soft1, uf8::Uf8GlobalLed::Soft2, uf8::Uf8GlobalLed::Soft3,
             uf8::Uf8GlobalLed::Soft4, uf8::Uf8GlobalLed::Soft5 };
-        sendUf8GlobalLedDirect_(uf8::Uf8GlobalLed::VPotBank, uf8::GlobalLedState::Off);
-        for (int p = 0; p < 5; ++p)
+        for (int p = 0; p < midicc::kPages; ++p)
             sendUf8GlobalLedDirect_(kPages[p], p == g_ccState.page
                 ? uf8::GlobalLedState::Bright : uf8::GlobalLedState::Dim);
     } else {
@@ -48786,6 +48960,7 @@ void onTimerBody_()
     } catch (...) {
         logInputDrainException_("unknown exception");
     }
+    ccReturnPaths_();
     commitDebouncedTouchReleases();
     // V-Pot send-pan has no touch-release; finalise its automation edit once the
     // knob has been idle past the window (the fader-flip path finalises on release).
@@ -54541,6 +54716,7 @@ void reasixty_setBankFollowsSelection(bool on)
             followSelectedInMixer(tr, /*scrollTcp=*/false, /*moveBank=*/true);
 }
 int  reasixty_ccLivePage()            { return g_ccState.page; }
+int  reasixty_ccInputStatus()         { return g_ccInStatus; }
 bool reasixty_bankScrollByOne()       { return g_bankScrollByOne.load(); }
 void reasixty_setBankScrollByOne(bool on)
 {

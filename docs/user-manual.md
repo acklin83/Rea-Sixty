@@ -3356,6 +3356,70 @@ Because a slot is a chain, one key can send several messages with a gap between 
 
 If the bound device is no longer in REAPER's output list, unplugged or renamed, the press does nothing and the reason is written to `rea_sixty.log`.
 
+## MIDI CC layer (UF8)
+
+Any of the UF8's three layers can be a MIDI CC layer. On it the faders, the V-Pots, the V-Pot pushes, the eight soft-keys above the scribble strips and both foot switches send MIDI Control Change, and the eight SEND/PLUG-IN keys send Program Change. Two uses: riding CC1 and CC11 into an instrument track while it records, and playing the controls of a hardware synth.
+
+It works in both directions. While REAPER plays, the faders and rings follow the CC lanes of the selected track, and a synth that reports its knobs back moves the UF8 with them.
+
+### Setting it up
+
+In *Settings → Bindings → UF8*, go to the layer with its LAYER key on the UF8 or in the schematic, then set **Layer type** to *MIDI CC*. The schematic gives way to the CC editor; the three layer buttons next to *Layer type* switch layers from there. Setting it back to *REAPER* keeps the CC set for later.
+
+| Setting | Effect |
+|---|---|
+| Output | Where the MIDI goes. *REAPER (virtual MIDI keyboard)*: every track whose input is the virtual MIDI keyboard receives it, and records it when armed. Next to it, every MIDI output REAPER lists; tick as many as you like. A ticked device that is unplugged stays ticked and reads *(offline)*. |
+| Input | The MIDI input a synth reports its controls on. When REAPER does not hand the device over, *Device busy* appears next to it: switch the device off as an input in REAPER's MIDI preferences. *Not connected* means the device is not plugged in. |
+| Follow CC in REAPER | While REAPER plays or records, the controls follow the CC lanes of the MIDI items on the selected track. Between two points the value stays on the earlier one until the next. |
+| Default channel | The MIDI channel of every control whose own channel is 0. |
+| CC preset | *Save as* stores the layer's controls under a name. *Load* puts a preset on this layer, *Save* overwrites it, *Delete* removes it. *Default* goes back to the factory set and keeps Output and Input. |
+
+### Pages
+
+Six pages, picked with the soft-key bank keys V-POT and 1 to 5, or stepped with PAGE ◄ ►. The lit bank key is the page you are on, and the cell above each scribble strip names it: VPOT, PG1 to PG5. Each page has its own set of controls.
+
+### Editing a control
+
+Click a control in the grid. Its fields:
+
+| Field | Effect |
+|---|---|
+| Channel | 1 to 16. 0 = the default channel. |
+| CC number / Program | 0 to 127. −1 = the control does nothing. |
+| 14 bit | Faders on CC 0 to 31 only. The fader sends its controller and the one 32 above it (CC1 and CC33), 16384 steps (a single CC has 128). The receiver has to read the pair. |
+| Behaviour | Keys only. *Toggle*: each press sends 127 and 0 in turn. *Hold*: 127 while pressed, 0 on release. |
+| Name | Eight characters, shown on the UF8. Empty shows the number. |
+| Colour | A fader shows it on its SEL key and in the colour bar, a soft-key and a SEND/PLUG-IN key on their own lamp, a V-Pot on SEL while FLIP puts it on the fader. V-Pot pushes and foot switches have no lamp and no colour. |
+
+The factory set fills the V-POT page: faders CC1 (14 bit), CC11, CC2, CC21, CC7, CC10, CC74, CC71; V-Pots CC22 to CC29; V-Pot pushes CC110 to CC117; soft-keys CC102 to CC109; SEND/PLUG-IN programs 0 to 7; foot switches CC64 (sustain) and CC67 (soft pedal), both *Hold*. The other five pages start empty.
+
+### On the UF8
+
+Each strip shows the fader's name on top and its value next to the fader, the V-Pot's name and value on the line below, and the V-Pot's value on the ring. A soft-key shows its name and lights at 127. A SEND/PLUG-IN key lights for the program in play on its channel. The meters are dark.
+
+A value nothing has set yet reads `--`: the fader stays where it is, and nothing is sent until you move it or the return path reports one. A V-Pot without a value starts from 0. Values are forgotten when you switch projects.
+
+FLIP swaps faders and V-Pots: the fader sends the V-Pot's controller, and the ring shows the fader's.
+
+While your finger is on a fader, nothing coming back moves it, and for a moment after any control sent, the same applies to that control. A synth that echoes what it receives therefore does not fight the hand.
+
+### Keys on a MIDI CC layer
+
+FINE, the channel encoder with NAV, NUDGE and FOCUS, the zoom pad, the automation row, FLIP, the layer keys and 360 work as on Layer 1. SOLO, CUT, SEL, BANK, the Quick keys, PLUGIN, CHANNEL, PAN and the selection-mode row have no function on the layer, and their lamps are dark.
+
+### Recording CC1 and CC11 into an instrument track
+
+1. Layer 2 to *MIDI CC*, Output *REAPER (virtual MIDI keyboard)*, *Follow CC in REAPER* on.
+2. An instrument track with the virtual MIDI keyboard as its input, armed, and selected.
+3. LAYER 2 on the UF8, record, ride fader 1 (CC1, 14 bit) and fader 2 (CC11).
+4. Play it back: faders 1 and 2 move along the recorded lanes. Touch one to take over; let go and it follows the lane again.
+
+### A hardware synth that reports back
+
+1. Output: the MIDI output the synth is connected to. Input: the MIDI input that comes back from it.
+2. On a page, set the faders and V-Pots to the synth's CC numbers and the channel it listens on.
+3. Turn a knob on the synth: the fader or ring with that CC moves with it.
+
 \newpage
 
 # Operational modes (track filters)

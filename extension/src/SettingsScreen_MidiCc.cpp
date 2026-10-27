@@ -20,6 +20,8 @@
 #include "reaper_imgui_functions.h"
 #include "reaper_plugin_functions.h"
 
+int reasixty_ccInputStatus();   // main.cpp: 0 none, 1 open, 2 not found, 3 busy
+
 namespace {
 
 namespace bnd = uf8::bindings;
@@ -145,6 +147,16 @@ bool drawLayerBlock_(ImGui_Context* ctx, int layer, midicc::Layer& L)
             ImGui_EndCombo(ctx);
         }
         tip_(ctx, "Where the hardware reports its controls back. The faders follow it.");
+        // How the device answered (only for the layer the UF8 is on).
+        if (!L.inputDevice.empty() && layer == bnd::ccLayerActiveIndex()) {
+            const int st = reasixty_ccInputStatus();
+            if (st == 2 || st == 3) {
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                ImGui_TextDisabled(ctx, st == 2
+                    ? "Not connected."
+                    : "Device busy. Disable it as input in REAPER's MIDI preferences.");
+            }
+        }
     }
 
     {
@@ -255,7 +267,7 @@ void drawCell_(ImGui_Context* ctx, const midicc::Control& c, Kind k, int i, int 
     if (selected) {
         ImGui_PushStyleColor(ctx, ImGui_Col_Button, 0x4477CCFF);
         ++pushed;
-    } else if (on) {
+    } else if (on && midicc::hasColour(k)) {
         ImGui_PushStyleColor(ctx, ImGui_Col_Button, rgba_(midicc::colourRgb(c), 0x55));
         ++pushed;
     }
@@ -276,7 +288,7 @@ bool drawControlEditor_(ImGui_Context* ctx, midicc::Layer& L, int page)
     midicc::Control& c = L.pages[page].at(k, s_index);
 
     char hdr[96];
-    std::snprintf(hdr, sizeof(hdr), "%s %d, page %d", kindName_(k), s_index + 1, page + 1);
+    std::snprintf(hdr, sizeof(hdr), "%s %d, page %s", kindName_(k), s_index + 1, midicc::pageKey(page));
     ImGui_Text(ctx, hdr);
 
     ImGui_Text(ctx, "Channel");
@@ -352,7 +364,10 @@ bool drawControlEditor_(ImGui_Context* ctx, midicc::Layer& L, int page)
         tip_(ctx, "8 characters, as the UF8 shows them. Empty = the CC number.");
     }
 
+    // Only where the UF8 has a lamp for it (midicc::hasColour).
+    if (!midicc::hasColour(k)) return dirty;
     ImGui_Text(ctx, "Colour");
+    if (k == Kind::VPot) tip_(ctx, "Shown on SEL and the colour bar while FLIP puts the V-Pot on the fader.");
     for (int i = 0; i < midicc::kColourCount; ++i) {
         ImGui_SameLine(ctx, nullptr, nullptr);
         char id[32];
@@ -428,14 +443,14 @@ void drawUf8MidiCcLayer(ImGui_Context* ctx, int layer, int livePage)
     for (int p = 0; p < midicc::kPages; ++p) {
         ImGui_SameLine(ctx, nullptr, nullptr);
         char id[24];
-        std::snprintf(id, sizeof(id), " %d ##cc_page_%d", p + 1, p);
+        std::snprintf(id, sizeof(id), " %s ##cc_page_%d", midicc::pageKey(p), p);
         int pushed = 0;
         if (p == s_page) { ImGui_PushStyleColor(ctx, ImGui_Col_Button, 0x4477CCFF); ++pushed; }
         if (ImGui_Button(ctx, id, nullptr, nullptr)) s_page = p;
         if (pushed) ImGui_PopStyleColor(ctx, &pushed);
     }
     ImGui_SameLine(ctx, nullptr, nullptr);
-    ImGui_TextDisabled(ctx, "   on the UF8: soft-key bank keys 1 to 5, PAGE < >");
+    ImGui_TextDisabled(ctx, "   on the UF8: soft-key bank keys V-POT and 1 to 5, PAGE < >");
 
     ImGui_Spacing(ctx);
     const midicc::Page& P = L.pages[s_page];

@@ -114,6 +114,21 @@ int main()
     bnd::load();
     EXPECT(bnd::ccPresetNames().empty());
 
+    // A file from before the V-POT page (five pages): they stay on soft-key bank
+    // keys 1..5, which are pages 1..5 now; V-POT keeps the factory page.
+    {
+        std::ofstream f(g_dir + "/bindings.json");
+        f << "{\"version\": 55, \"active_layer\": 0, \"layers\": [{}, "
+             "{\"kind\": \"midi_cc\", \"midi_cc\": {\"pages\": ["
+             "{\"fader\": [{\"n\": 99}]}, {}, {}, {}, {\"foot\": [{\"n\": 3}]}]}}, {}]}";
+    }
+    bnd::load();
+    EXPECT(bnd::layerKind(1) == bnd::LayerKind::MidiCc);
+    EXPECT(bnd::ccLayer(1).pages[1].fader[0].number == 99);
+    EXPECT(bnd::ccLayer(1).pages[5].foot[0].number == 3);
+    EXPECT(bnd::ccLayer(1).pages[0].fader[0].number == 1);     // factory V-POT page
+    EXPECT(midicc::kPages == 6);
+
     std::system(("rm -rf " + g_dir).c_str());
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
     std::printf("midi_cc_bindings: all passed\n");
