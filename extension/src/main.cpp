@@ -40720,7 +40720,7 @@ static void ccPaintSurface_()
         const int tsk = !sOn ? 0 : (sLit ? 2 : 1);
         if (g_lastTopSoftKey[s] != tsk) {
             g_lastTopSoftKey[s] = tsk;
-            sendLedFrames(uf8::buildTopSoftKeyLed(st,
+            sendLedFramesS_(s, uf8::buildTopSoftKeyLed(st,
                 tsk == 2 ? uf8::TopSoftKeyState::On
                          : tsk == 1 ? uf8::TopSoftKeyState::Dim : uf8::TopSoftKeyState::Off,
                 uf8::ledColourForTrackRgb(colourRgb(sc))));
@@ -40728,16 +40728,16 @@ static void ccPaintSurface_()
         const int8_t sel = fOn ? 1 : 0;
         if (g_lastSelLed[s] != sel) {
             g_lastSelLed[s] = sel;
-            sendLedFrames(uf8::buildLedColourPair(st, uf8::LedClass::Sel, fOn,
+            sendLedFramesS_(s, uf8::buildLedColourPair(st, uf8::LedClass::Sel, fOn,
                                                   uf8::ledColourForTrackRgb(colourRgb(fc))));
         }
         if (g_lastCutLed[s] != 0) {
             g_lastCutLed[s] = 0;
-            sendLedFrames(uf8::buildLedColourPair(st, uf8::LedClass::Cut, false));
+            sendLedFramesS_(s, uf8::buildLedColourPair(st, uf8::LedClass::Cut, false));
         }
         if (g_lastSoloLed[s] != 0) {
             g_lastSoloLed[s] = 0;
-            sendLedFrames(uf8::buildLedColourPair(st, uf8::LedClass::Solo, false));
+            sendLedFramesS_(s, uf8::buildLedColourPair(st, uf8::LedClass::Solo, false));
         }
         // Motor: the DynaMount block's sequence. A limp strip takes the bit-7
         // echo first, then the enable, or the firmware drops the position.
@@ -40761,12 +40761,13 @@ static void ccPaintSurface_()
                                   : vpotPosFromUnipolar(0.0);
         mode[s] = rOn ? 0x01 : 0x03;     // unipolar, or no ring
     }
-    if (!g_vpotBarInit || bar != g_lastVPotBar) {
-        g_lastVPotBar = bar;
+    // The layer is the left unit's: compare and store its eight strips only.
+    if (!g_vpotBarInit || bar != uf8UnitSlice_(g_lastVPotBar, 0)) {
+        std::copy(bar.begin(), bar.end(), g_lastVPotBar.begin());
         g_dev->send(uf8::buildVPotReadoutBar(bar));
     }
-    if (!g_vpotBarInit || mode != g_lastVPotMode) {
-        g_lastVPotMode = mode;
+    if (!g_vpotBarInit || mode != uf8UnitSlice_(g_lastVPotMode, 0)) {
+        std::copy(mode.begin(), mode.end(), g_lastVPotMode.begin());
         std::vector<uint8_t> mf{0xFF, 0x66, 0x09, 0x0D};
         for (auto m : mode) mf.push_back(m);
         uint8_t cks = 0;
