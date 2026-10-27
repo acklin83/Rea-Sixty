@@ -266,6 +266,19 @@ schreibt. Sie sendet nichts. Frank startet sie, ich lese das Log.
 3. `StuffMIDIMessage(0, …)` erreicht eine aufnahmebereite Spur mit Eingang „Virtual MIDI
    keyboard“, und die CCs landen im Item.
 
+### Gemessen am 27.10.2026 (macOS, Mac Studio, REAPER mit Sonde `eabf963c`)
+
+- **3 (virtuelles Keyboard):** `StuffMIDIMessage(0, …)` erreicht eine aufnahmebereite Spur mit Eingang
+  „Virtual MIDI keyboard“, die CC1-Rampe landet im Item (Frank).
+- **1 (Eingang in REAPER aktiviert):** `CreateMIDIInput` OK für jedes echte Gerät, auch die vier
+  UFX+-Ports. Komplete Kontrol S49: 216 Ereignisse (Noten, Pitchbend, Aftertouch, CC1). REAPERs
+  Instrument-Spur auf demselben Eingang klang währenddessen weiter (Frank). Wir nehmen REAPER den
+  Eingang also nicht weg.
+- **2 (Eingang deaktiviert):** ebenso OK, 275 Ereignisse.
+- „Virtual MIDI Keyboard“ selbst gibt `nullptr`: REAPERs eigenes Keyboard, kein Gerät. Für den Plan
+  egal, es taucht in der Input-Liste des Layers nicht auf.
+- **Windows: noch offen.** Dort kann ein MIDI-Eingang exklusiv sein.
+
 Ausgang: Geht 1 auf beiden Systemen, bleibt Baustein H wie beschrieben. Geht 1 nicht, muss
 der Nutzer das Gerät in REAPER als Eingang abschalten, oder der Rückweg läuft über ein
 kleines JSFX auf einer Spur. Das entscheidet Frank nach der Messung.
