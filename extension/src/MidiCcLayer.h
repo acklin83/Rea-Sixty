@@ -144,7 +144,7 @@ inline std::string displayName(Kind k, const Control& c)
     std::string n = c.name;
     if (n.empty() && assigned(c)) {
         char b[16];
-        std::snprintf(b, sizeof(b), k == Kind::SendPlugin ? "PC %d" : "CC %d", c.number);
+        snprintf(b, sizeof(b), k == Kind::SendPlugin ? "PC %d" : "CC %d", c.number);
         n = b;
     }
     if (n.size() > 8) n.resize(8);

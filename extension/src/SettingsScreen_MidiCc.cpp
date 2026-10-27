@@ -108,7 +108,7 @@ bool drawLayerBlock_(ImGui_Context* ctx, int layer, midicc::Layer& L)
     for (size_t i = 0; i < outs.size(); ++i) {
         ImGui_SameLine(ctx, nullptr, nullptr);
         char id[300];
-        std::snprintf(id, sizeof(id), "%s##cc_out_%d", outs[i].c_str(), int(i));
+        snprintf(id, sizeof(id), "%s##cc_out_%d", outs[i].c_str(), int(i));
         bool v = hasOutput_(L, outs[i]);
         if (ImGui_Checkbox(ctx, id, &v)) { setOutput_(L, outs[i], v); dirty = true; }
     }
@@ -118,7 +118,7 @@ bool drawLayerBlock_(ImGui_Context* ctx, int layer, midicc::Layer& L)
         if (o.empty() || std::find(outs.begin(), outs.end(), o) != outs.end()) continue;
         ImGui_SameLine(ctx, nullptr, nullptr);
         char id[320];
-        std::snprintf(id, sizeof(id), "%s (offline)##cc_out_off_%d", o.c_str(), int(i));
+        snprintf(id, sizeof(id), "%s (offline)##cc_out_off_%d", o.c_str(), int(i));
         bool v = true;
         if (ImGui_Checkbox(ctx, id, &v) && !v) { setOutput_(L, o, false); dirty = true; break; }
     }
@@ -137,7 +137,7 @@ bool drawLayerBlock_(ImGui_Context* ctx, int layer, midicc::Layer& L)
             const std::vector<std::string> ins = inputNames_();
             for (size_t i = 0; i < ins.size(); ++i) {
                 char id[300];
-                std::snprintf(id, sizeof(id), "%s##cc_in_%d", ins[i].c_str(), int(i));
+                snprintf(id, sizeof(id), "%s##cc_in_%d", ins[i].c_str(), int(i));
                 bool s = (L.inputDevice == ins[i]);
                 if (ImGui_Selectable(ctx, id, &s, nullptr, nullptr, nullptr)) {
                     L.inputDevice = ins[i];
@@ -189,7 +189,7 @@ bool drawLayerBlock_(ImGui_Context* ctx, int layer, midicc::Layer& L)
                          s_presetSel >= 0 ? names[s_presetSel].c_str() : "(choose)", nullptr)) {
         for (size_t i = 0; i < names.size(); ++i) {
             char id[96];
-            std::snprintf(id, sizeof(id), "%s##cc_pre_%d", names[i].c_str(), int(i));
+            snprintf(id, sizeof(id), "%s##cc_pre_%d", names[i].c_str(), int(i));
             bool s = (s_presetSel == int(i));
             if (ImGui_Selectable(ctx, id, &s, nullptr, nullptr, nullptr)) s_presetSel = int(i);
         }
@@ -262,7 +262,7 @@ void drawCell_(ImGui_Context* ctx, const midicc::Control& c, Kind k, int i, int 
     std::string label = midicc::displayName(k, c);
     if (label.empty()) label = "-";
     char id[64];
-    std::snprintf(id, sizeof(id), "%s##cc_cell_%d_%d_%d", label.c_str(), page, int(k), i);
+    snprintf(id, sizeof(id), "%s##cc_cell_%d_%d_%d", label.c_str(), page, int(k), i);
     int pushed = 0;
     if (selected) {
         ImGui_PushStyleColor(ctx, ImGui_Col_Button, 0x4477CCFF);
@@ -288,7 +288,7 @@ bool drawControlEditor_(ImGui_Context* ctx, midicc::Layer& L, int page)
     midicc::Control& c = L.pages[page].at(k, s_index);
 
     char hdr[96];
-    std::snprintf(hdr, sizeof(hdr), "%s %d, page %s", kindName_(k), s_index + 1, midicc::pageKey(page));
+    snprintf(hdr, sizeof(hdr), "%s %d, page %s", kindName_(k), s_index + 1, midicc::pageKey(page));
     ImGui_Text(ctx, hdr);
 
     ImGui_Text(ctx, "Channel");
@@ -320,7 +320,7 @@ bool drawControlEditor_(ImGui_Context* ctx, midicc::Layer& L, int page)
         if (c.number >= 0 && c.number <= 31) {
             bool hr = c.hiRes;
             char lbl[80];
-            std::snprintf(lbl, sizeof(lbl), "14 bit (CC %d and CC %d)##cc_ed_hr",
+            snprintf(lbl, sizeof(lbl), "14 bit (CC %d and CC %d)##cc_ed_hr",
                           c.number, c.number + 32);
             if (ImGui_Checkbox(ctx, lbl, &hr)) { c.hiRes = hr; dirty = true; }
             tip_(ctx, "16384 steps instead of 128. The receiver has to read the pair.");
@@ -353,7 +353,7 @@ bool drawControlEditor_(ImGui_Context* ctx, midicc::Layer& L, int page)
     ImGui_SameLine(ctx, nullptr, nullptr);
     {
         char buf[16];
-        std::snprintf(buf, 9, "%s", c.name.c_str());   // the field holds 8
+        snprintf(buf, 9, "%s", c.name.c_str());   // the field holds 8
         int flags = 0;
         ImGui_PushItemWidth(ctx, 120);
         if (ImGui_InputText(ctx, "##cc_ed_name", buf, 9, &flags, nullptr)) {
@@ -371,7 +371,7 @@ bool drawControlEditor_(ImGui_Context* ctx, midicc::Layer& L, int page)
     for (int i = 0; i < midicc::kColourCount; ++i) {
         ImGui_SameLine(ctx, nullptr, nullptr);
         char id[32];
-        std::snprintf(id, sizeof(id), "##cc_col_%d", i);
+        snprintf(id, sizeof(id), "##cc_col_%d", i);
         int flags = 0;
         double w = (i == c.colour) ? 30.0 : 22.0, h = w;
         if (ImGui_ColorButton(ctx, id, rgba_(midicc::kColours[i], 0xFF), &flags, &w, &h)) {
@@ -390,7 +390,7 @@ bool drawControlEditor_(ImGui_Context* ctx, midicc::Layer& L, int page)
 bool drawUf8LayerKindRow(ImGui_Context* ctx, int layer)
 {
     char hdr[48];
-    std::snprintf(hdr, sizeof(hdr), "Editing: Layer %d", layer + 1);
+    snprintf(hdr, sizeof(hdr), "Editing: Layer %d", layer + 1);
     ImGui_Text(ctx, hdr);
     ImGui_SameLine(ctx, nullptr, nullptr);
     ImGui_Text(ctx, "   Layer type");
@@ -411,7 +411,7 @@ bool drawUf8LayerKindRow(ImGui_Context* ctx, int layer)
     for (int l = 0; l < 3; ++l) {
         ImGui_SameLine(ctx, nullptr, nullptr);
         char id[32];
-        std::snprintf(id, sizeof(id), "Layer %d##lk_go_%d", l + 1, l);
+        snprintf(id, sizeof(id), "Layer %d##lk_go_%d", l + 1, l);
         if (ImGui_Button(ctx, id, nullptr, nullptr)) {
             const bnd::ButtonId b = l == 0 ? bnd::ButtonId::Layer1
                                   : l == 1 ? bnd::ButtonId::Layer2 : bnd::ButtonId::Layer3;
@@ -443,7 +443,7 @@ void drawUf8MidiCcLayer(ImGui_Context* ctx, int layer, int livePage)
     for (int p = 0; p < midicc::kPages; ++p) {
         ImGui_SameLine(ctx, nullptr, nullptr);
         char id[24];
-        std::snprintf(id, sizeof(id), " %s ##cc_page_%d", midicc::pageKey(p), p);
+        snprintf(id, sizeof(id), " %s ##cc_page_%d", midicc::pageKey(p), p);
         int pushed = 0;
         if (p == s_page) { ImGui_PushStyleColor(ctx, ImGui_Col_Button, 0x4477CCFF); ++pushed; }
         if (ImGui_Button(ctx, id, nullptr, nullptr)) s_page = p;
