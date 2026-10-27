@@ -277,7 +277,17 @@ schreibt. Sie sendet nichts. Frank startet sie, ich lese das Log.
 - **2 (Eingang deaktiviert):** ebenso OK, 275 Ereignisse.
 - „Virtual MIDI Keyboard“ selbst gibt `nullptr`: REAPERs eigenes Keyboard, kein Gerät. Für den Plan
   egal, es taucht in der Input-Liste des Layers nicht auf.
-- **Windows: noch offen.** Dort kann ein MIDI-Eingang exklusiv sein.
+- **Windows 11 (StoerPC), 27.10.:** REAPER listet nur die zwölf SSL-V-MIDI-Ports und das virtuelle
+  Keyboard als Eingänge (die eingebauten Loopbacks von Windows MIDI Services tauchen nicht auf, das
+  Komplete Kontrol S49 MK1 startet ohne NI-Treiber nicht, Code 10). `CreateMIDIInput` OK für alle
+  zwölf, auch für Port 1 bis 4, die REAPER selbst als Eingang offen hat (`midiins_h=983040` =
+  Bits 16 bis 19 der oberen Hälfte = Geräte 48 bis 51; diese Lesart der reaper.ini ist abgeleitet,
+  nicht dokumentiert). Daten kamen keine, es hat niemand gesendet.
+  ⚠ Nicht gemessen: ein echter USB-MIDI-Treiber unter Windows. Die V-MIDI-Ports sind virtuelle
+  Ports (teVirtualMIDI) und können sich anders verhalten.
+- **Folge für Baustein H:** Gibt `CreateMIDIInput` `nullptr`, zeigt der Layer-Block beim Input
+  „Device busy. Disable it as input in REAPER's MIDI preferences.“ und der Rückweg von Hardware
+  fällt für dieses Gerät aus. Damit ist jeder Ausgang der fehlenden Messung abgedeckt.
 
 Ausgang: Geht 1 auf beiden Systemen, bleibt Baustein H wie beschrieben. Geht 1 nicht, muss
 der Nutzer das Gerät in REAPER als Eingang abschalten, oder der Rückweg läuft über ein
