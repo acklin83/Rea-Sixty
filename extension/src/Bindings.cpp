@@ -5952,6 +5952,22 @@ static const ActionSlot& effectiveLongSlot_(const Binding& bd, int m)
     return bd.longPress[static_cast<int>(Modifier::Plain)];
 }
 
+// ⇨ AND FOR THE SHORT PRESS, on the global keys (dispatch). A modifier slot that
+// does nothing hands the press to Plain, so Shift held or latched on FINE leaves
+// PAGE paging (forum 28.10.2026: "paging doesn't work when in shift hold mode").
+// Two holes it closes: a key WITH a long press fired shortPress[m] bare on a tap
+// (the UF1's PAGE keys carry one from the factory), and the key without one
+// fell back only on a slot of type None, not on one that is empty but typed or
+// carries just a colour or label. Soft-key sets do NOT use this: a held set owns
+// its keys even where it is empty (dispatchUserQuickSlot).
+static int effectiveShortMod_(const Binding& bd, int m)
+{
+    if (m != static_cast<int>(Modifier::Plain) && slotIsEmpty_(bd.shortPress[m])
+        && !slotIsEmpty_(bd.shortPress[static_cast<int>(Modifier::Plain)]))
+        return static_cast<int>(Modifier::Plain);
+    return m;
+}
+
 // Same Plain-fallback resolution for the double-press slot.
 static const ActionSlot& effectiveDoubleSlot_(const Binding& bd, int m)
 {
@@ -6159,14 +6175,15 @@ bool dispatch(ButtonId id, bool pressed)
                         }
                     }
                 } else {
-                    // Pre-threshold TAP → short, exactly as before.
-                    runSlot_(bd.shortPress[m],
+                    // Pre-threshold TAP: short, with the Plain fallback.
+                    const int sm = effectiveShortMod_(bd, m);
+                    runSlot_(bd.shortPress[sm],
                                /*firing*/ true, /*pressed*/ false);
-                    if (bd.shortPress[m].type != ActionType::Noop) {
+                    if (bd.shortPress[sm].type != ActionType::Noop) {
                         const auto idx = static_cast<size_t>(id);
                         if (idx < kLastFiredModSize) {
                             g_lastFiredMod[idx].store(
-                                static_cast<uint8_t>(m),
+                                static_cast<uint8_t>(sm),
                                 std::memory_order_relaxed);
                         }
                     }
@@ -6206,17 +6223,14 @@ bool dispatch(ButtonId id, bool pressed)
     } else {  // Behavior::Toggle — fires only on press-edge, uses live mod.
         if (pressed) slotIdx = static_cast<int>(currentModifierSnapshot());
     }
-    // Noop-slot fallback: a Hold-bound modifier button (mod_shift on Fine)
+    // Empty-slot fallback: a Hold-bound modifier button (mod_shift on Fine)
     // sees its own held state in currentModifierSnapshot(), selects the
     // (empty) Shift slot, and the release handler never fires — leaving
     // the modifier stuck permanently. Fall back to Plain so both press
-    // and release edges always reach the handler.
-    if (bd.shortPress[slotIdx].type == ActionType::Noop
-        && slotIdx != static_cast<int>(Modifier::Plain)
-        && bd.shortPress[static_cast<int>(Modifier::Plain)].type != ActionType::Noop)
-    {
-        slotIdx = static_cast<int>(Modifier::Plain);
-    }
+    // and release edges always reach the handler. "Empty" is slotIsEmpty_,
+    // the same test the long and double press use: a slot that is typed but
+    // has no action, or only a colour or label, does nothing either.
+    slotIdx = effectiveShortMod_(bd, slotIdx);
     const auto& slot = bd.shortPress[slotIdx];
     const bool firing = firingFor_(bd.behavior, slot, pressed);
     if (firing && slot.type != ActionType::Noop) {
