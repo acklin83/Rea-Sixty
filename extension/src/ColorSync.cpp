@@ -8,6 +8,12 @@ namespace uf8 {
 
 void ColorSync::refresh(const std::function<uint32_t(int)>& getTrackColor)
 {
+    refresh(getTrackColor, getTrackColor);
+}
+
+void ColorSync::refresh(const std::function<uint32_t(int)>& getTrackColor,
+                        const std::function<uint32_t(int)>& getRightColor)
+{
     if (!dev_.isOpen()) return;
 
     // Palette index 0x00 is OFF on the UF8 firmware. (Palette.cpp also
@@ -26,11 +32,24 @@ void ColorSync::refresh(const std::function<uint32_t(int)>& getTrackColor)
         indices[i] = (rgb == 0) ? kPaletteOff : quantize(rgb);
     }
 
-    if (lastPushedValid_ && indices == lastPushed_) return;
+    if (!lastPushedValid_ || indices != lastPushed_) {
+        dev_.send(buildColorCommand(indices));
+        lastPushed_      = indices;
+        lastPushedValid_ = true;
+    }
 
-    dev_.send(buildColorCommand(indices));
-    lastPushed_      = indices;
-    lastPushedValid_ = true;
+    // Right-hand unit: strips 8..15 of the surface, its own 0..7.
+    if (!dev2_ || !dev2_->isOpen()) return;
+    std::array<uint8_t, kStripCount> right{};
+    for (int i = 0; i < static_cast<int>(kStripCount); ++i) {
+        const uint32_t rgb =
+            getRightColor(static_cast<int>(kStripCount) + i) & 0x00FFFFFFu;
+        right[i] = (rgb == 0) ? kPaletteOff : quantize(rgb);
+    }
+    if (lastPushed2Valid_ && right == lastPushed2_) return;
+    dev2_->send(buildColorCommand(right));
+    lastPushed2_      = right;
+    lastPushed2Valid_ = true;
 }
 
 } // namespace uf8

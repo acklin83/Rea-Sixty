@@ -17,3 +17,12 @@ Swap. Danach Stufe 2 (`Uf8Units.h` + ctest).
   über den Kern (Strip-Verschiebung, Bankbreite, Sendfenster, UF1-Slot, FX-/Lanes-Seiten,
   Extender-Umschalter); `uf8Units_()` = 1 bis Stufe 3.
 - Entscheid Frank: V-POT am rechten UF8 = links Seite 1, rechts Seite 2.
+
+## Stufe 3
+
+- Tims Fläche (1b + Review-Fixes + CC-Malfix) gegen main gelegt, jeder Hunk gelesen.
+- Eigenes: CC-Layer rechts dunkel und taub, Devices-Seite (UF8 L/R, Identify je Gerät, Swap),
+  FX/Lanes-Seiten und Extender-Umschalter bis Stufe 4 auf einem Gerät.
+- Abweichung vom Plan: Identify lässt das Gerät pulsieren statt LEFT/RIGHT zu schreiben.
+- Offen für Stufe 4: rechte Soft-Key-Reihe = nächste Seite, Seiten-LEDs pro Gerät, CC rechts =
+  nächste Seite, Plug-in Mode Split/Spread, Extender Mitte.

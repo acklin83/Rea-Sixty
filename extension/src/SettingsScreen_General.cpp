@@ -34,10 +34,13 @@ bool reasixty_uf1TakeFromOrc();
 void reasixty_setUf1TakeFromOrc(bool on);
 bool reasixty_uf8SecondUnit();
 void reasixty_setUf8SecondUnit(bool on);
-const char* reasixty_uf8RightPortPath();
+void reasixty_identifyUf8Unit(int unit);
+void reasixty_swapUf8Units();
 int  reasixty_devicesSeenMask();
 void reasixty_forgetAbsentDevices();
 const char* reasixty_uf8Serial();
+bool reasixty_uf8RightConnected();
+const char* reasixty_uf8RightSerial();
 const char* reasixty_uc1Serial();
 const char* reasixty_uf1Serial();
 bool reasixty_sleepEnabled();
@@ -617,28 +620,38 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
         ImGui_Text(ctx, line);
     };
 
-    deviceLine("UF8", uf8On, reasixty_uf8Serial());
+    // ⇨ ONE OR TWO UF8s. With "Second UF8" off this is the one line it always
+    // was. On: the left unit is "UF8 L", the right one "UF8 R", each with its
+    // own Identify (that unit pulses), and Swap once both are there.
+    const bool uf8ROn  = reasixty_uf8RightConnected();
+    const bool second  = showsDev(kDevUf8) && reasixty_uf8SecondUnit();
+    deviceLine(second ? "UF8 L" : "UF8", uf8On, reasixty_uf8Serial());
     if (uf8On) {
         ImGui_SameLine(ctx, /*offset_from_start_x*/ nullptr, /*spacing*/ nullptr);
         if (ImGui_Button(ctx, "Identify##uf8",
                          /*size_w*/ nullptr, /*size_h*/ nullptr)) {
-            reasixty_identifyUf8();
+            reasixty_identifyUf8Unit(0);
         }
     }
-    // ⇨ A second UF8 as the right-hand unit. Off by default: then nothing
-    // looks for one and the one UF8 opens the way it always did.
-    if (showsDev(kDevUf8)) {
-        bool second = reasixty_uf8SecondUnit();
-        if (ImGui_Checkbox(ctx, "Second UF8", &second))
-            reasixty_setUf8SecondUnit(second);
-        help_(ctx, "Opens a second UF8 as the right-hand unit. Off: Rea-Sixty "
-                   "uses one UF8 and does not look for another.");
-        if (second) {
-            const char* port = reasixty_uf8RightPortPath();
-            if (*port) snprintf(line, sizeof(line), "  UF8 right   [connected]   USB %s", port);
-            else       snprintf(line, sizeof(line), "  UF8 right   [not connected]");
-            ImGui_Text(ctx, line);
+    if (second) {
+        deviceLine("UF8 R", uf8ROn, reasixty_uf8RightSerial());
+        if (uf8ROn) {
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Identify##uf8r", nullptr, nullptr))
+                reasixty_identifyUf8Unit(1);
+            ImGui_SameLine(ctx, nullptr, nullptr);
+            if (ImGui_Button(ctx, "Swap##uf8", nullptr, nullptr))
+                reasixty_swapUf8Units();
+            help_(ctx, "Swaps which UF8 is left and which is right.");
         }
+    }
+    if (showsDev(kDevUf8)) {
+        bool on = reasixty_uf8SecondUnit();
+        if (ImGui_Checkbox(ctx, "Second UF8", &on))
+            reasixty_setUf8SecondUnit(on);
+        help_(ctx, "A second UF8 to the right of the first: one surface of "
+                   "16 strips. Off: Rea-Sixty uses one UF8 and does not look "
+                   "for another.");
     }
 
     deviceLine("UC1", uc1On, reasixty_uc1Serial());

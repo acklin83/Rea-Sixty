@@ -1,6 +1,6 @@
 # Zwei UF8 als eine Fläche: Plan
 
-Stand 28.10.2026, Entscheide von Frank eingearbeitet, Plan auf logische Fehler geprüft. Stufen 1 und 2 gebaut. Grundlage: PR #10 von Tim Shadgett (tshadgett, `dual-uf8-pr`,
+Stand 28.10.2026, Entscheide von Frank eingearbeitet, Plan auf logische Fehler geprüft. Stufen 1 bis 3 gebaut. Grundlage: PR #10 von Tim Shadgett (tshadgett, `dual-uf8-pr`,
 fünf Commits auf `4311c3e9`, getestet an seiner Kiste mit 2× UF8 + UF1 unter Windows 11).
 Frank: „gemischter Weg“: den Geräteteil übernehmen, die Einbindung in die Fläche selbst bauen,
 sein Diff als Karte. Frank hat kein zweites UF8: das Verhalten mit zwei Geräten kann nur Tim
@@ -114,7 +114,19 @@ zeigt welches Gerät, Tastendruck je Gerät, Seite hinter der letzten), Blätter
 FX- und Lanes-Bänke. Test: mit einem Gerät liefert jede Abbildung dasselbe wie die heutigen
 Funktionen, Extender links und rechts eingeschlossen; „Mitte“ mit einem Gerät = rechts.
 
-### Stufe 3: die Fläche (selbst gebaut, Tims 1b als Karte)
+### Stufe 3: die Fläche (selbst gebaut, Tims 1b als Karte), GEBAUT 28.10.
+Tims `d4beba42` + `6823772b` + `24f64280` gegen `main` gelegt, jeder Hunk gelesen; Konflikte mit
+Stufe 1/2 gelöst (Slot-Helfer rechnen über `Uf8Units.h`, Swap bleibt Anfrage an den Timer,
+`closeUf8SecondUnit_` überall). Dazu von uns:
+- CC-Layer: das rechte UF8 ist dunkel (`uf8BlankUnit_`, auch die Farbbalken und GR) und taub
+  (`onUf8Input2` verwirft alles); beim Verlassen malt es neu (`uf8ResetStripState_(8,16)`). Die
+  globalen Tasten-Lampen spiegeln weiter auf beide Geräte (`sendLedFrames`).
+- Settings → Devices: UF8 L / UF8 R, Identify je Gerät (nur dieses Gerät pulsiert, statt LEFT/RIGHT
+  auf die Scribbles), Swap, Second UF8.
+- FX-/Lanes-Seiten und der Extender-Umschalter rechnen bis Stufe 4 mit einem Gerät
+  (`uf8DynBankUnits_`, `uf8ExtSideUnits_`): die rechte Soft-Key-Reihe zeigt in Stufe 3 dieselben
+  acht wie links (Tims 1b), und „Mitte“ braucht die bool-Leser aus Stufe 2.
+
 Stelle für Stelle durch seinen Diff von `d4beba42` und `6823772b`, jede gelesen, nicht blind
 übernommen: Strip-Arrays auf 16, Senden an das Gerät des Strips, 8er-Rahmen pro Gerät,
 ColorSync pro Gerät, Eingang beider Geräte, Lebenszyklus (rechts kommt und geht), Slots,

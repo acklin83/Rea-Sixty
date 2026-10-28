@@ -34,14 +34,24 @@ public:
     // currently-visible track (0..7), or 0 if that slot has no track.
     void refresh(const std::function<uint32_t(int visibleSlot)>& getTrackColor);
 
+    // Dual UF8: a second unit to the right. While it is set and open,
+    // refresh() also asks for strips 8..15 (`getRightColor`, or `getTrackColor`
+    // when none is given) and pushes them to it. nullptr = one UF8 (default).
+    void setSecondUnit(UF8Device* dev) { dev2_ = dev; lastPushed2Valid_ = false; }
+    void refresh(const std::function<uint32_t(int visibleSlot)>& getTrackColor,
+                 const std::function<uint32_t(int visibleSlot)>& getRightColor);
+
     // Force the next refresh() to push even if the indices haven't changed.
     // Useful after (re)connecting to the device.
-    void invalidate() { lastPushedValid_ = false; }
+    void invalidate() { lastPushedValid_ = false; lastPushed2Valid_ = false; }
 
 private:
     UF8Device&                       dev_;
     std::array<uint8_t, kStripCount> lastPushed_{};
     bool                             lastPushedValid_ = false;
+    UF8Device*                       dev2_ = nullptr;
+    std::array<uint8_t, kStripCount> lastPushed2_{};
+    bool                             lastPushed2Valid_ = false;
 };
 
 } // namespace uf8
