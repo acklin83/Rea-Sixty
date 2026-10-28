@@ -806,6 +806,12 @@ if(NOT WIN32)
     target_include_directories(test_jog_grid PRIVATE src)
     add_test(NAME jog_grid COMMAND test_jog_grid)
 
+    # One or two UF8s as one surface: with one, every mapping is what it was
+    # (Uf8Units.h, header only; docs/dual-uf8-plan.md stage 2).
+    add_executable(test_uf8_units tests/test_uf8_units.cpp)
+    target_include_directories(test_uf8_units PRIVATE src)
+    add_test(NAME uf8_units COMMAND test_uf8_units)
+
     # Project state follows the project tab (ProjectScoped.h, header only).
     add_executable(test_project_scoped tests/test_project_scoped.cpp)
     target_include_directories(test_project_scoped PRIVATE src)

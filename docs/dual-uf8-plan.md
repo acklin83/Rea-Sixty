@@ -1,6 +1,6 @@
 # Zwei UF8 als eine Fläche: Plan
 
-Stand 28.10.2026, Entscheide von Frank eingearbeitet, Plan auf logische Fehler geprüft. Stufe 1 gebaut. Grundlage: PR #10 von Tim Shadgett (tshadgett, `dual-uf8-pr`,
+Stand 28.10.2026, Entscheide von Frank eingearbeitet, Plan auf logische Fehler geprüft. Stufen 1 und 2 gebaut. Grundlage: PR #10 von Tim Shadgett (tshadgett, `dual-uf8-pr`,
 fünf Commits auf `4311c3e9`, getestet an seiner Kiste mit 2× UF8 + UF1 unter Windows 11).
 Frank: „gemischter Weg“: den Geräteteil übernehmen, die Einbindung in die Fläche selbst bauen,
 sein Diff als Karte. Frank hat kein zweites UF8: das Verhalten mit zwei Geräten kann nur Tim
@@ -95,7 +95,19 @@ No-op mit einem UF8. Ergebnis: mit der Einstellung an wird ein zweites UF8 geöf
 dunkel; aus, ist alles wie vorher. **Frank prüft: ein UF8 läuft unverändert, auch nach Ab- und
 Anstecken, Einstellung aus und an. Tim prüft: zweites Gerät wird erkannt, Swap tauscht.**
 
-### Stufe 2: Kern `Uf8Units.h` (reine Logik, ctest)
+### Stufe 2: Kern `Uf8Units.h` (reine Logik, ctest), GEBAUT 28.10.
+`extension/src/Uf8Units.h`, Test `tests/test_uf8_units.cpp` (ctest `uf8_units`). Mit einem UF8
+läuft die Fläche schon jetzt durch den Kern: `uf8StripBase_(strip)`, `uf8SendStripBase_(strip)`,
+`bankWidth_`, `sendWindowWidth_`, der UF1-Slot in `uf1FaderTrack_`, FX-/Lanes-Seiten
+(`dynBankSlotBase_`, `pageDynBank_`, `laneBankFollow_`) und der Extender-Umschalter (Builtin und
+Action, mit einem UF8 weiter links/rechts). `uf8Units_()` gibt 1 zurück, bis Stufe 3 das rechte
+Gerät Strips tragen lässt. Slot-Tabellen per `static_assert` an den Kern gebunden.
+Entscheid Frank 28.10.: V-POT (Seite 1) am rechten UF8 gibt links 1, rechts 2.
+Noch nicht über den Kern (Stufe 3/4): Seitenregel (CC-Layer `setPage`/`stepPage`, Soft-Key-Seiten),
+`uf1ExtenderSendRoute_` (Strip 8 / −1, für Mitte über `uf1SendSlot`), und die Leser, die
+`g_uf1ExtenderSide` als bool lesen: der Lader beim Start (klemmt auf 0/1),
+`reasixty_setUf1ExtenderSide`, die Lampe des Builtins (`== 1`), Settings (zwei Knöpfe).
+
 Strip ↔ (Gerät, lokaler Index), Slot-Helfer (Pan, Volume, Send) mit festen UF1-Slots, Bankbreite
 und Strip-Verschiebung pro Strip mit Extender links / Mitte / rechts, Seitenregel (welche Seite
 zeigt welches Gerät, Tastendruck je Gerät, Seite hinter der letzten), Blätterschritt der

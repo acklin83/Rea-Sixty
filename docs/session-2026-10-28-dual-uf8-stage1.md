@@ -10,3 +10,10 @@
 
 Offen: Frank prüft ein UF8 (Ab-/Anstecken, Einstellung aus und an), Tim prüft zwei Geräte und
 Swap. Danach Stufe 2 (`Uf8Units.h` + ctest).
+
+## Stufe 2
+
+- `Uf8Units.h` + `test_uf8_units` (33 ctests grün). Die Fläche mit einem UF8 rechnet schon
+  über den Kern (Strip-Verschiebung, Bankbreite, Sendfenster, UF1-Slot, FX-/Lanes-Seiten,
+  Extender-Umschalter); `uf8Units_()` = 1 bis Stufe 3.
+- Entscheid Frank: V-POT am rechten UF8 = links Seite 1, rechts Seite 2.

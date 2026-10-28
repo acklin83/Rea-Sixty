@@ -305,6 +305,7 @@ int         reasixty_fxLearnActiveLayer();   // defined later; used in onTimer
 #include "UC1Surface.h"
 #include "UF1Device.h"
 #include "UF8Device.h"
+#include "Uf8Units.h"
 #include "UserPluginCatalog.h"
 #include "VirtualNotch.h"
 
@@ -2053,7 +2054,7 @@ int effectiveStripCount_();
 int bankWidth_();     // Strips, die eine Spur zeigen: effectiveStripCount_()
                       // + UF1-Extender (+1) - die von DynaMount / Hue belegten
                       // (bankReservedStrips_, siehe dort)
-int uf8StripBase_();  // +1 offset for the UF8 banked strips when the UF1 Extender is LEFT
+int uf8StripBase_(int strip);  // +1 for a UF8 strip right of the UF1 in the bank (Extender LEFT)
 
 inline const char* selectionModeStr(SelectionMode m)
 {
@@ -2292,6 +2293,7 @@ extern std::array<std::string, 8> g_panOverlayText;
 // (kUf1PanTouchSlot, 27.09.2026). One mechanism for both surfaces.
 constexpr int kPanTouchSlots   = 9;
 constexpr int kUf1PanTouchSlot = 8;
+static_assert(kPanTouchSlots == uf8units::panSlotCount(1), "Uf8Units.h: kPanSlotsOneUnit");
 extern std::array<int64_t, kPanTouchSlots>      g_panTouchUntilMs;
 extern std::array<double, kPanTouchSlots>       g_panTouchVal;
 extern std::array<MediaTrack*, kPanTouchSlots>  g_panTouchTr;
@@ -2322,6 +2324,7 @@ inline bool potHoldLive_(int64_t now, int64_t until) { return until != 0 && now 
 // Volume on a pot, the pan pot's twin (writeVpotTrackVol_): 0..7 UF8 strips,
 // 8 the UF1's pot above the fader, 9..12 the UF1 DAW view's four pots.
 constexpr int kVolTouchSlots      = 13;
+static_assert(kVolTouchSlots == uf8units::volSlotCount(1), "Uf8Units.h: kVolSlotsOneUnit");
 constexpr int kUf1VolTouchAbove   = 8;
 constexpr int kUf1VolTouchDawBase = 9;
 extern std::array<int64_t, kVolTouchSlots>      g_volTouchUntilMs;
@@ -2650,9 +2653,9 @@ inline int stripToVisibleSlot(int strip, int bankOffset) {
         const int pad = usable - vis;
         if (pad > 0) return pos - pad;
     }
-    // uf8StripBase_() = 1 only when the UF1 Extender is LEFT (UF1 takes slot 0, so
-    // the UF8 banked strips show slots 1..8); 0 otherwise (unchanged).
-    return pos + bankOffset + uf8StripBase_();
+    // uf8StripBase_(strip) = 1 only when the UF1 Extender is LEFT (UF1 takes slot 0,
+    // so the UF8 banked strips show slots 1..8); 0 otherwise (unchanged).
+    return pos + bankOffset + uf8StripBase_(strip);
 }
 
 // Active Selection-Set slot (1..8); 0 = none. selset_recall toggles
@@ -7356,10 +7359,21 @@ int bankReservedStrips_()
     return std::clamp(n, 0, effectiveStripCount_() - 1);   // mindestens ein Track-Strip
 }
 
+// ⇨ THE SURFACE LAYOUT FOR Uf8Units.h (one or two UF8s, the UF1 Extender). The
+// arithmetic of the bank, the Extender's place and the FX / Lanes pages lives
+// there, tested with one UF8 against what it was here before. units stays 1 until
+// the right-hand UF8 carries strips (dual-UF8 plan, stage 3).
+int uf8Units_() { return 1; }
+uf8units::Layout uf8Layout_(bool extender)
+{
+    return { uf8Units_(), extender,
+             uf8units::extSideFromStored(g_uf1ExtenderSide.load()) };
+}
+
 int bankWidth_()
 {
-    return effectiveStripCount_() + (uf1ExtenderActive_() ? 1 : 0)
-         - bankReservedStrips_();
+    return uf8units::bankWidth(uf8Layout_(uf1ExtenderActive_()),
+                               effectiveStripCount_(), bankReservedStrips_());
 }
 
 // +1 offset applied to the UF8's banked strips when the UF1 Extender is on the LEFT:
@@ -7367,9 +7381,9 @@ int bankWidth_()
 // (default) and extender-off → 0 (UF8 strip i = bankOffset + i, unchanged). Applied
 // only to the main banked path in stripToVisibleSlot (pins/master/dynamount are
 // edge-cases not expected to combine with the Extender).
-int uf8StripBase_()
+int uf8StripBase_(int strip)
 {
-    return (uf1ExtenderActive_() && g_uf1ExtenderSide.load() == 0) ? 1 : 0;
+    return uf8units::stripBase(uf8Layout_(uf1ExtenderActive_()), strip);
 }
 
 // UF1 Extender — SENDS case (Step 4, Frank 2026-08-05). When the UF8 bank is
@@ -7400,16 +7414,16 @@ bool uf1ExtenderRouteFader_()
 // the Bank ←/→ step so the 9-wide send window tiles without a gap.
 int sendWindowWidth_()
 {
-    return 8 + (uf1ExtenderRouteFader_() ? 1 : 0);
+    return uf8units::sendWindowWidth(uf8Layout_(uf1ExtenderRouteFader_()));
 }
 
 // +1 offset for the UF8's banked SEND strips when the Extender is LEFT (UF1 takes
 // send slot 0, UF8 shows slots 1..8). Mirrors uf8StripBase_() for the send case;
 // gated on the fader route mode so it never shifts the send strips in a non-route
 // or V-Pot-only mode. RIGHT / off → 0 (UF8 strip i = slot i, unchanged).
-int uf8SendStripBase_()
+int uf8SendStripBase_(int strip)
 {
-    return (uf1ExtenderRouteFader_() && g_uf1ExtenderSide.load() == 0) ? 1 : 0;
+    return uf8units::stripBase(uf8Layout_(uf1ExtenderRouteFader_()), strip);
 }
 
 // Size of the sticky pinned head (Focus Set ∪ honoured TCP pins) that
@@ -7743,7 +7757,7 @@ StripRoute makeRoute_(int strip, int bankOffset, int /*trackCount*/,
         // the UF1 can take send slot 0 (uf8SendStripBase_ — 0 for RIGHT / off, so
         // byte-identical there). The UF1's own +1 strip is resolved the same way
         // with a synthetic strip index (see the Extender fader block).
-        slotIdx        = strip + g_sendBankOffset.load() + uf8SendStripBase_();
+        slotIdx        = strip + g_sendBankOffset.load() + uf8SendStripBase_(strip);
     } else {
         return r;  // not in this routing mode
     }
@@ -7933,6 +7947,7 @@ void writeRouteVolumeLinear_(const StripRoute& r, double v)
 // these arrays by that slot, so every UF1 send fader reuses the same proven
 // value-diff-probe + Touch-finalise machinery as the UF8 8-strip send fader.
 constexpr int kSendGestureSlots = 14;
+static_assert(kSendGestureSlots == uf8units::sendSlotCount(1), "Uf8Units.h: kSendSlotsOneUnit");
 // The UF1 Extender's reserved send-gesture slot (fader vol + above-fader V-Pot pan
 // + the CUT mute all key off it). Must be < kSendGestureSlots.
 constexpr int kExtSendGestureSlot = 13;
@@ -8573,7 +8588,9 @@ struct DynSlotInfo {
 static int dynBankSlotBase_(uf8::bindings::DynamicBankKind kind)
 {
     return dynBankBankable_(kind)
-        ? g_dynBankPage[static_cast<int>(kind)].load() * 8 : 0;
+        ? uf8units::dynBankSlotBase(g_dynBankPage[static_cast<int>(kind)].load(),
+                                    uf8Units_(), 0)
+        : 0;
 }
 
 // ⇨ THE LANES MODE BRINGS ITS BANK (plan Baustein C2, decision 9). While the UF8
@@ -8622,7 +8639,7 @@ static void pageDynBank_(int kind, int delta)
         if (K == uf8::bindings::DynamicBankKind::FxBank) count = TrackFX_GetCount(tr);
         else return;
     }
-    const int maxPage = count > 0 ? (count - 1) / 8 : 0;
+    const int maxPage = uf8units::dynBankMaxPage(count, uf8Units_());
     int p = g_dynBankPage[kind].load() + delta;
     if (p < 0) p = 0;
     if (p > maxPage) p = maxPage;
@@ -14511,7 +14528,7 @@ static void laneLiveHeard_(MediaTrack* tr, const lanes::PlaySet& set);
 static void laneBankFollow_(int lane)
 {
     using DK = uf8::bindings::DynamicBankKind;
-    g_dynBankPage[static_cast<int>(DK::Lanes)].store(lanes::bank::pageOf(lane, 8));
+    g_dynBankPage[static_cast<int>(DK::Lanes)].store(uf8units::dynBankPageOf(lane, uf8Units_()));
     if (uf8::bindings::getUf1SoftBankDynamicFor(
             g_uf1SoftBank.load(),
             static_cast<int>(uf8::bindings::bankModifierSnapshot()), nullptr) == DK::Lanes)
@@ -20767,7 +20784,9 @@ MediaTrack* uf1FaderTrack_()
     if (!g_uf1Master.load()
         && uf1ExtenderActive_() && !uf1ExtenderRouteFader_()) {
         const int slot = g_bankOffset.load()
-                       + (g_uf1ExtenderSide.load() ? effectiveStripCount_() : 0);
+                       + uf8units::uf1BankSlot(
+                             uf8Layout_(true), effectiveStripCount_(),
+                             g_masterPinShift.load() ? masterPinnedStrip_() : -1);
         // ⛔ THE 9th SLOT IS EMPTY EXACTLY WHEN THE UF8 IS NOT FULL, AND THEN THE
         // LEFT HALF HAS NO TRACK — NOT "the selection". visibleTrackAt returns
         // nullptr past the end of the list, and this used to fall through to
@@ -51173,9 +51192,11 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
     }
     if (command == g_cmdUf8SwapUnits) { g_uf8SwapRequest.store(true); return true; }
     if (command == g_cmdUf1ExtenderSide) {
-        const int s = g_uf1ExtenderSide.load() ? 0 : 1;   // toggle left/right
+        // left / right with one UF8, left / middle / right with two
+        const int s = uf8units::nextExtSide(g_uf1ExtenderSide.load(), uf8Units_());
         g_uf1ExtenderSide.store(s);
-        SetExtState("rea_sixty", "uf1ExtenderSide", s ? "1" : "0", true);
+        char sb[4]; std::snprintf(sb, sizeof(sb), "%d", s);
+        SetExtState("rea_sixty", "uf1ExtenderSide", sb, true);
         g_bankDirty.store(true);
         g_pageDirty.store(true);
         return true;
@@ -57669,9 +57690,11 @@ void registerBindingHandlers()
     registerBuiltin("uf1_extender_side", DescBuilder{
         [](bool firing, bool /*pressed*/, int /*param*/) {
             if (!firing) return;
-            const int s = g_uf1ExtenderSide.load() ? 0 : 1;   // toggle left/right
+            // left / right with one UF8, left / middle / right with two
+            const int s = uf8units::nextExtSide(g_uf1ExtenderSide.load(), uf8Units_());
             g_uf1ExtenderSide.store(s);
-            SetExtState("rea_sixty", "uf1ExtenderSide", s ? "1" : "0", true);
+            char sb[4]; std::snprintf(sb, sizeof(sb), "%d", s);
+            SetExtState("rea_sixty", "uf1ExtenderSide", sb, true);
             g_bankDirty.store(true);
             g_pageDirty.store(true);
         },
