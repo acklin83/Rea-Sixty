@@ -40,8 +40,25 @@ public:
     // Try to open the UF8. Returns true on success. On failure `lastError()`
     // gives a diagnostic. The most common failure is exclusive claim by
     // SSL360Core — we report that specifically.
-    bool open();
+    bool open() { return open(0); }
+    // Open the Nth UF8 on the bus (0 = first). Units are ordered by USB port
+    // path (bus number, then the hub port chain), not by serial: on Windows a
+    // UF8 another handle already holds cannot be opened again to read its
+    // serial, so a second unit could not sort the first one in. The port path
+    // reads without opening and stays put as long as the cables do; the
+    // left/right swap setting covers a desk that disagrees with the ports.
+    bool open(int unitIndex);
     void close();
+
+    // Which unit this is (the index passed to open()) and its USB port path,
+    // e.g. "1-3.2". Empty port path until open() has succeeded.
+    int unitIndex() const { return unitIndex_; }
+    const std::string& portPath() const { return portPath_; }
+
+    // How many UF8s are on the bus right now (claimed or not). Cheap; opens a
+    // throwaway libusb context. Used to decide whether to look for a second
+    // unit at all.
+    static int countAttached();
     bool isOpen() const { return handle_ != nullptr; }
 
     // Fire-and-forget send. Thread-safe. Buffers the frame and lets the
@@ -120,6 +137,8 @@ private:
     libusb_context*       ctx_      = nullptr;
     libusb_device_handle* handle_   = nullptr;
     std::string           serial_;
+    std::string           portPath_;
+    int                   unitIndex_ = 0;
     std::atomic<bool>     shuttingDown_{false};
     std::atomic<bool>     frameTrace_{false};
     std::atomic<uint64_t> grBytes_{0};

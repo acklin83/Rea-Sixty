@@ -3,6 +3,7 @@
 
 #include <libusb.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <condition_variable>
@@ -44,17 +45,92 @@ UF8Device::~UF8Device()
     close();
 }
 
-bool UF8Device::open()
+namespace {
+// "bus-p1.p2.p3" — a stable, sortable name for where a device is plugged in.
+std::string usbPortPath_(libusb_device* d)
+{
+    uint8_t ports[8] = {0};
+    const int n = libusb_get_port_numbers(d, ports, 8);
+    std::string s = std::to_string(libusb_get_bus_number(d)) + "-";
+    for (int i = 0; i < n; ++i) {
+        if (i) s += ".";
+        s += std::to_string(ports[i]);
+    }
+    return s;
+}
+
+// Every UF8 on the bus, ordered by port path (numerically per segment so
+// "1-10" sorts after "1-9").
+std::vector<std::pair<std::string, libusb_device*>> listUf8s_(libusb_device** list, ssize_t count)
+{
+    std::vector<std::pair<std::string, libusb_device*>> out;
+    for (ssize_t i = 0; i < count; ++i) {
+        libusb_device_descriptor desc{};
+        if (libusb_get_device_descriptor(list[i], &desc) < 0) continue;
+        if (desc.idVendor != kVid || desc.idProduct != kPid) continue;
+        out.emplace_back(usbPortPath_(list[i]), list[i]);
+    }
+    auto key = [](const std::string& p) {
+        std::vector<int> k;
+        int cur = 0; bool any = false;
+        for (char c : p) {
+            if (c >= '0' && c <= '9') { cur = cur * 10 + (c - '0'); any = true; }
+            else if (any) { k.push_back(cur); cur = 0; any = false; }
+        }
+        if (any) k.push_back(cur);
+        return k;
+    };
+    std::sort(out.begin(), out.end(),
+              [&](const auto& a, const auto& b) { return key(a.first) < key(b.first); });
+    return out;
+}
+} // namespace
+
+int UF8Device::countAttached()
+{
+    libusb_context* ctx = nullptr;
+    if (libusb_init(&ctx) < 0) return 0;
+    libusb_device** list = nullptr;
+    const ssize_t count = libusb_get_device_list(ctx, &list);
+    int n = 0;
+    if (count > 0) n = static_cast<int>(listUf8s_(list, count).size());
+    if (list) libusb_free_device_list(list, 1);
+    libusb_exit(ctx);
+    return n;
+}
+
+bool UF8Device::open(int unitIndex)
 {
     if (handle_) return true;
+    unitIndex_ = unitIndex;
 
     if (libusb_init(&ctx_) < 0) {
         lastError_ = "libusb_init failed";
         return false;
     }
-    handle_ = libusb_open_device_with_vid_pid(ctx_, kVid, kPid);
+    {
+        libusb_device** list = nullptr;
+        const ssize_t count = libusb_get_device_list(ctx_, &list);
+        const auto units = (count > 0) ? listUf8s_(list, count)
+                                       : std::vector<std::pair<std::string, libusb_device*>>{};
+        if (unitIndex < 0 || unitIndex >= static_cast<int>(units.size())) {
+            lastError_ = units.empty()
+                ? "UF8 not found or not accessible — is SSL360Core running? Close it first."
+                : "UF8 unit " + std::to_string(unitIndex + 1) + " not found ("
+                  + std::to_string(units.size()) + " UF8 attached)";
+        } else {
+            const int rc = libusb_open(units[unitIndex].second, &handle_);
+            if (rc == 0) portPath_ = units[unitIndex].first;
+            else {
+                handle_ = nullptr;
+                lastError_ = "UF8 unit " + std::to_string(unitIndex + 1) + " at USB "
+                           + units[unitIndex].first + " not accessible ("
+                           + libusb_error_name(rc) + ") — is SSL360Core running? Close it first.";
+            }
+        }
+        if (list) libusb_free_device_list(list, 1);
+    }
     if (!handle_) {
-        lastError_ = "UF8 not found or not accessible — is SSL360Core running? Close it first.";
         libusb_exit(ctx_);
         ctx_ = nullptr;
         return false;
