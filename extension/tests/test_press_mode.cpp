@@ -299,6 +299,53 @@ int main()
         EXPECT(hold(true) == 0);
     }
 
+    // ── Shift on a key with nothing on Shift: Plain fires (forum 28.10.2026) ──
+    // PAGE with Shift held or latched on FINE has to page.
+    {
+        using bnd::ButtonId;
+        const int P = static_cast<int>(bnd::Modifier::Plain);
+        const int S = static_cast<int>(bnd::Modifier::Shift);
+        auto page = [&](bool longPress) {
+            bnd::Binding bd = bnd::getBinding(bnd::getActiveLayer(), ButtonId::PageLeft);
+            for (auto& sl : bd.shortPress) sl = bnd::ActionSlot{};
+            for (auto& sl : bd.longPress)  sl = bnd::ActionSlot{};
+            bd.behavior = Behavior::Momentary;
+            bd.shortPress[P].type = bnd::ActionType::Builtin;
+            bd.shortPress[P].action = "t_once";
+            bd.hasLongPress = longPress;
+            if (longPress) {   // the UF1's PAGE keys carry one from the factory
+                bd.longPress[P].type = bnd::ActionType::Builtin;
+                bd.longPress[P].action = "t_switch";
+            }
+            return bd;
+        };
+        auto tap = [](const bnd::Binding& bd) {
+            bnd::setBinding(bnd::getActiveLayer(), ButtonId::PageLeft, bd);
+            bnd::dispatch(ButtonId::PageLeft, true);
+            bnd::dispatch(ButtonId::PageLeft, false);
+        };
+        bnd::setModifierHeld(bnd::Modifier::Shift, true);
+        for (bool lp : { false, true }) {
+            g_onceFires = 0; g_swFires = 0;
+            tap(page(lp));                       // Shift slot of type None
+            EXPECT(g_onceFires == 1);
+            EXPECT(g_swFires == 0);              // a tap, not the long press
+            bnd::Binding typed = page(lp);       // typed, but no action
+            typed.shortPress[S].type = bnd::ActionType::Builtin;
+            g_onceFires = 0;
+            tap(typed);
+            EXPECT(g_onceFires == 1);
+            bnd::Binding own = page(lp);         // something on Shift: that fires
+            own.shortPress[S].type = bnd::ActionType::Builtin;
+            own.shortPress[S].action = "t_select";
+            g_onceFires = 0; g_selFires = 0;
+            tap(own);
+            EXPECT(g_onceFires == 0);
+            EXPECT(g_selFires == 1);
+        }
+        bnd::setModifierHeld(bnd::Modifier::Shift, false);
+    }
+
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
     std::printf("press mode ok\n");
     return 0;
