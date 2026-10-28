@@ -553,9 +553,19 @@ std::unique_ptr<uf8::UF8Device>   g_dev;
 std::unique_ptr<uf8::UF8Device>   g_dev2;
 // ExtState "uf8SwapUnits": swap which port-ordered UF8 is left and right.
 std::atomic<bool> g_uf8SwapUnits{false};
+// ⇨ "Second UF8" (Settings → Devices, ExtState "uf8_second_unit"), off by
+// default. Off: no second unit is opened or looked for, and the one UF8 opens
+// the way it always did (UF8Device::open()). A rig with one UF8 notices nothing.
+std::atomic<bool> g_uf8Second{false};
+// Asked for by the swap builtin / action and by the setting, done by the timer
+// (closes both units, the stale-recovery block reopens them in the new order).
+// Not from the builtin itself: that runs on the UF8's own input thread.
+std::atomic<bool> g_uf8SwapRequest{false};
+std::atomic<bool> g_uf8ReopenRequest{false};
 // USB unit index (UF8Device::open) for the left (side 0) / right (side 1) unit.
 int uf8UnitIndexForSide_(int side)
 {
+    if (!g_uf8Second.load()) return uf8::UF8Device::kFirstFound;
     // Swapping only means something with two units; with one, the left (and
     // only) unit is always USB index 0 whatever the setting says.
     if (uf8::UF8Device::countAttached() < 2) return side == 0 ? 0 : 1;
@@ -26058,6 +26068,8 @@ void initDevices_()
     // UC1 init below.
     if (const char* v = GetExtState("rea_sixty", "uf8SwapUnits"); v && *v)
         g_uf8SwapUnits.store(std::atoi(v) != 0);
+    if (const char* v = GetExtState("rea_sixty", "uf8_second_unit"); v && *v)
+        g_uf8Second.store(std::atoi(v) != 0);
     g_dev = std::make_unique<uf8::UF8Device>();
     const bool uf8Opened = g_dev->open(uf8UnitIndexForSide_(0));
     if (!uf8Opened) {
@@ -26490,13 +26502,21 @@ static void uf8DualLog_(const std::string& line)
 bool openUf8SecondUnit_()
 {
     if (g_dev2) { g_dev2->close(); g_dev2.reset(); }
+    if (!g_uf8Second.load()) return false;
     if (uf8::UF8Device::countAttached() < 2) return false;
+    // The timer retries every 5 s: say why only when the reason changes, or the
+    // console pops up every 5 s while SSL 360 holds the second unit.
+    static std::string sLastErr;
     auto dev = std::make_unique<uf8::UF8Device>();
     if (!dev->open(uf8UnitIndexForSide_(1))) {
-        uf8DualLog_("UF8 unit 2 open failed: " + dev->lastError());
-        consoleMsg_(("Rea-Sixty UF8 (right): " + dev->lastError() + "\n").c_str());
+        if (dev->lastError() != sLastErr) {
+            sLastErr = dev->lastError();
+            uf8DualLog_("UF8 unit 2 open failed: " + sLastErr);
+            consoleMsg_(("Rea-Sixty UF8 (right): " + sLastErr + "\n").c_str());
+        }
         return false;
     }
+    sLastErr.clear();
     g_dev2 = std::move(dev);
     g_dev2->setRawInputHandler(onUf8Input2);
     // Same idle start as the left unit: every per-strip LED dark.
@@ -48756,6 +48776,29 @@ void onTimerBody_()
         // device stays "lost" and is tried again every 5 s, and the reason is
         // logged (once, and again whenever it changes).
         static bool sUc1Lost = false, sUf8Lost = false, sUf1Lost = false;
+        // Swap left / right, or the "Second UF8" setting changed: close both
+        // units, the block below reopens them in the new order. Swap needs two
+        // open units; with one it does nothing (it would only blink the one).
+        {
+            const bool swapReq   = g_uf8SwapRequest.exchange(false);
+            const bool reopenReq = g_uf8ReopenRequest.exchange(false);
+            if ((swapReq && uf8DualActive_()) || (reopenReq && g_dev)) {
+                if (swapReq && uf8DualActive_()) {
+                    const bool sw = !g_uf8SwapUnits.load();
+                    g_uf8SwapUnits.store(sw);
+                    SetExtState("rea_sixty", "uf8SwapUnits", sw ? "1" : "0", true);
+                    consoleMsg_(sw ? "Rea-Sixty: UF8 units swapped - reopening...\n"
+                                   : "Rea-Sixty: UF8 units back in USB order - reopening...\n");
+                }
+                g_sync.reset();
+                if (g_dev2) g_dev2->close();
+                g_dev2.reset();
+                if (g_dev) g_dev->close();
+                g_dev.reset();
+                g_uf8WantRetry.store(true);
+                sLastReopen = nowR - std::chrono::seconds(60);
+            }
+        }
         const bool ucStale = (g_uc1_dev && g_uc1_dev->needsReopen())
                           || ((sUc1Lost || g_uc1WantRetry.load()) && !g_uc1_dev);
         const bool ufStale = (g_dev     && g_dev->needsReopen())
@@ -48777,7 +48820,7 @@ void onTimerBody_()
             static auto sLastUnit2 = std::chrono::steady_clock::now();
             const bool leftOk = g_dev && !ufStale;
             const bool unit2Stale = g_dev2 && g_dev2->needsReopen();
-            if (leftOk && (unit2Stale || !g_dev2)
+            if (leftOk && g_uf8Second.load() && (unit2Stale || !g_dev2)
                 && nowR - sLastUnit2 >= std::chrono::seconds(5)) {
                 sLastUnit2 = nowR;
                 if (unit2Stale || uf8::UF8Device::countAttached() >= 2) {
@@ -51128,22 +51171,7 @@ bool hookCommand2(KbdSectionInfo* /*sec*/, int command,
         g_pageDirty.store(true);
         return true;
     }
-    if (command == g_cmdUf8SwapUnits) {
-        const bool sw = !g_uf8SwapUnits.load();
-        g_uf8SwapUnits.store(sw);
-        SetExtState("rea_sixty", "uf8SwapUnits", sw ? "1" : "0", true);
-        // Close both and let the stale-recovery block reopen them in the new
-        // order (within 5 s): it opens the left unit, then the right.
-        g_sync.reset();
-        if (g_dev2) g_dev2->close();
-        g_dev2.reset();
-        if (g_dev) g_dev->close();
-        g_dev.reset();
-        g_uf8WantRetry.store(true);
-        consoleMsg_(sw ? "Rea-Sixty: UF8 units swapped - reopening...\n"
-                       : "Rea-Sixty: UF8 units back in USB order - reopening...\n");
-        return true;
-    }
+    if (command == g_cmdUf8SwapUnits) { g_uf8SwapRequest.store(true); return true; }
     if (command == g_cmdUf1ExtenderSide) {
         const int s = g_uf1ExtenderSide.load() ? 0 : 1;   // toggle left/right
         g_uf1ExtenderSide.store(s);
@@ -51602,6 +51630,25 @@ void reasixty_setShowAbsentDeviceSettings(bool on)
 {
     g_showAbsentDeviceSettings.store(on);
     SetExtState("rea_sixty", "show_absent_devices", on ? "1" : "0", true);
+}
+
+bool reasixty_uf8SecondUnit()
+{
+    return g_uf8Second.load();
+}
+
+void reasixty_setUf8SecondUnit(bool on)
+{
+    if (g_uf8Second.exchange(on) == on) return;
+    SetExtState("rea_sixty", "uf8_second_unit", on ? "1" : "0", true);
+    // Reopen now, so on and off both take the path they will take at start.
+    g_uf8ReopenRequest.store(true);
+}
+
+const char* reasixty_uf8RightPortPath()
+{
+    if (!g_dev2 || !g_dev2->isOpen()) return "";
+    return g_dev2->portPath().c_str();
 }
 
 bool reasixty_uf1TakeFromOrc()
@@ -56919,6 +56966,17 @@ void registerBindingHandlers()
         },
         nullptr,
         "Restart Rea-Sixty (re-open devices)", false
+    });
+
+    // Dual UF8: swap which unit is left and right. The timer does it (see
+    // g_uf8SwapRequest); with one UF8 it does nothing.
+    registerBuiltin("uf8_swap_units", DescBuilder{
+        [](bool firing, bool /*pressed*/, int /*param*/) {
+            if (!firing) return;
+            g_uf8SwapRequest.store(true);
+        },
+        nullptr,
+        "Swap UF8 units (left / right)", false
     });
 
     registerBuiltin("uc1_outgain_fader_toggle", DescBuilder{

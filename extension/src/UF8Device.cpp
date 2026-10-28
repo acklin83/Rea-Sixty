@@ -108,7 +108,12 @@ bool UF8Device::open(int unitIndex)
         lastError_ = "libusb_init failed";
         return false;
     }
-    {
+    if (unitIndex == kFirstFound) {
+        // One UF8: open it exactly as before the second unit existed.
+        handle_ = libusb_open_device_with_vid_pid(ctx_, kVid, kPid);
+        if (handle_) portPath_ = usbPortPath_(libusb_get_device(handle_));
+        else lastError_ = "UF8 not found or not accessible — is SSL360Core running? Close it first.";
+    } else {
         libusb_device** list = nullptr;
         const ssize_t count = libusb_get_device_list(ctx_, &list);
         const auto units = (count > 0) ? listUf8s_(list, count)

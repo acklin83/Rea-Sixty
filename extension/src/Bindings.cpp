@@ -8572,6 +8572,7 @@ const char* builtinCategory(const std::string& n)
      // 2026-10-14).
      || n == "uf1_rme"
      || n == "uf1_extender" || n == "uf1_extender_side"
+     || n == "uf8_swap_units"
      || n == "restart")
         return "Hardware Modes";
 
@@ -8716,6 +8717,10 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "uf1_extender_side",
       "UF1. Whether the extender sits to the left or the right of the "
       "UF8's eight." },
+    { "uf8_swap_units",
+      "UF8. With two UF8s, swaps which one is the left unit and which the "
+      "right. Needs Second UF8 on in Settings, Devices. With one UF8 it "
+      "does nothing." },
     { "uf1_presets",
       "UF1. Opens the preset browser for whichever plug-in the current "
       "view resolves. Reads SSL's own library from disk, not REAPER's "
@@ -9816,6 +9821,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "uf1_dyn_bank_page", "UF1 DynPage" },
     { "uf1_extender", "UF1 Extender" },
     { "uf1_extender_side", "UF1 Ext Side" },
+    { "uf8_swap_units", "Swap UF8s" },
     { "uf1_fine_toggle", "UF1 Fine" },
     { "uf1_five_to_eight", "UF1 5-8" },
     { "uf1_flip", "UF1 Flip" },

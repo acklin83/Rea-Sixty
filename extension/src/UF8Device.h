@@ -40,7 +40,10 @@ public:
     // Try to open the UF8. Returns true on success. On failure `lastError()`
     // gives a diagnostic. The most common failure is exclusive claim by
     // SSL360Core — we report that specifically.
-    bool open() { return open(0); }
+    // open() takes the first UF8 libusb finds, the way it always did: the
+    // path with the "Second UF8" setting off.
+    static constexpr int kFirstFound = -1;
+    bool open() { return open(kFirstFound); }
     // Open the Nth UF8 on the bus (0 = first). Units are ordered by USB port
     // path (bus number, then the hub port chain), not by serial: on Windows a
     // UF8 another handle already holds cannot be opened again to read its

@@ -204,6 +204,7 @@ constexpr SearchEntry kSearchIndex[] = {
     { "Connected devices",                     kSecDevices, "Connected devices" },
     { "Show settings for devices you don't have",
                                                kSecDevices, "Connected devices" },
+    { "Second UF8",                            kSecDevices, "Connected devices", kDevUf8 },
     { "Take the UF1 over from ORC",            kSecDevices, "Connected devices", kDevUf1, true },
     { "Forget devices that aren't connected",
                                                kSecDevices, "Connected devices" },

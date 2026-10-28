@@ -32,6 +32,9 @@ bool reasixty_showAbsentDeviceSettings();
 void reasixty_setShowAbsentDeviceSettings(bool on);
 bool reasixty_uf1TakeFromOrc();
 void reasixty_setUf1TakeFromOrc(bool on);
+bool reasixty_uf8SecondUnit();
+void reasixty_setUf8SecondUnit(bool on);
+const char* reasixty_uf8RightPortPath();
 int  reasixty_devicesSeenMask();
 void reasixty_forgetAbsentDevices();
 const char* reasixty_uf8Serial();
@@ -620,6 +623,21 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
         if (ImGui_Button(ctx, "Identify##uf8",
                          /*size_w*/ nullptr, /*size_h*/ nullptr)) {
             reasixty_identifyUf8();
+        }
+    }
+    // ⇨ A second UF8 as the right-hand unit. Off by default: then nothing
+    // looks for one and the one UF8 opens the way it always did.
+    if (showsDev(kDevUf8)) {
+        bool second = reasixty_uf8SecondUnit();
+        if (ImGui_Checkbox(ctx, "Second UF8", &second))
+            reasixty_setUf8SecondUnit(second);
+        help_(ctx, "Opens a second UF8 as the right-hand unit. Off: Rea-Sixty "
+                   "uses one UF8 and does not look for another.");
+        if (second) {
+            const char* port = reasixty_uf8RightPortPath();
+            if (*port) snprintf(line, sizeof(line), "  UF8 right   [connected]   USB %s", port);
+            else       snprintf(line, sizeof(line), "  UF8 right   [not connected]");
+            ImGui_Text(ctx, line);
         }
     }
 
