@@ -8716,7 +8716,7 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "mutually exclusive." },
     { "uf1_extender_side",
       "UF1. Whether the extender sits to the left or the right of the "
-      "UF8's eight." },
+      "UF8's eight. With two UF8s also between them: left, middle, right." },
     { "uf8_swap_units",
       "UF8. With two UF8s, swaps which one is the left unit and which the "
       "right. Needs Second UF8 on in Settings, Devices. With one UF8 it "

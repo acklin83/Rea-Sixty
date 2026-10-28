@@ -173,6 +173,7 @@ bool        reasixty_uf1Extender();
 void        reasixty_setUf1Extender(bool on);
 int         reasixty_uf1ExtenderSide();       // 1 = right, 0 = left
 void        reasixty_setUf1ExtenderSide(int side);
+bool        reasixty_uf8RightConnected();
 // Focus Set scope: 0 Both, 1 UF1-only, 2 UF8-only (defined in main.cpp).
 int         reasixty_focusSetScope();
 void        reasixty_setFocusSetScope(int scope);
@@ -8693,11 +8694,17 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             && ImGui_Checkbox(ctx, "UF1 Extender - 9th fader of the UF8 bank", &extender))
             reasixty_setUf1Extender(extender);
         if (extender && showsDev(kDevUf8)) {
-            int side = reasixty_uf1ExtenderSide();   // 1 = right, 0 = left
+            int side = reasixty_uf1ExtenderSide();   // 1 = right, 0 = left, 2 = middle
             ImGui_Text(ctx, "Side:");
             ImGui_SameLine(ctx, nullptr, nullptr);
             if (ImGui_RadioButton(ctx, "Left##uf1ext_side", side == 0))
                 reasixty_setUf1ExtenderSide(0);
+            // Between two UF8s. Offered with a second UF8 open, or while it is set.
+            if (reasixty_uf8RightConnected() || side == 2) {
+                ImGui_SameLine(ctx, nullptr, nullptr);
+                if (ImGui_RadioButton(ctx, "Middle##uf1ext_side", side == 2))
+                    reasixty_setUf1ExtenderSide(2);
+            }
             ImGui_SameLine(ctx, nullptr, nullptr);
             if (ImGui_RadioButton(ctx, "Right##uf1ext_side", side == 1))
                 reasixty_setUf1ExtenderSide(1);

@@ -651,6 +651,14 @@ inline std::array<T, kUf8MaxStrips> uf8FilledArray_(const T& v)
 // Reset every per-strip cache and in-flight gesture of surface strips
 // [from, to) — a unit appearing or going away. Defined after the caches.
 void uf8ResetStripState_(int from, int to);
+// Does input from `unit` belong to the MIDI CC layer right now? The left unit
+// whenever the layer is on, the right one while it shows a page (ccPaintSurface_
+// mirrors that into g_ccRightPage). Any thread.
+extern std::atomic<int> g_ccRightPage;
+inline bool uf8CcOwnsUnit_(int unit)
+{
+    return uf8::bindings::ccLayerActive() && (unit == 0 || g_ccRightPage.load() >= 0);
+}
 std::unique_ptr<uf8::ColorSync>   g_sync;
 std::unique_ptr<uf8::MidiBridge>  g_midi;
 
@@ -4364,6 +4372,10 @@ inline bool isVPotPanFocus(const uf8::FocusedParam& f) {
 // mode banks 2..5 are present-but-empty per SSL UF8 User Guide.
 // Layout from SSL UF8 User Guide p.180-181. Persisted across sessions.
 std::atomic<int>  g_softKeyBank{0};
+// Dual UF8, Plug-in Mode: the RIGHT unit's V-Pot bank while the map is spread
+// across both units (uf8PmSpread_). Its own soft-key row selects it, the way the
+// left row selects g_softKeyBank. ExtState softKeyBankRight. (tshadgett)
+std::atomic<int>  g_softKeyBankRight{1};
 std::atomic<bool> g_softKeyDirty{false};
 // When on (default), a focused-parameter change switches the SSL soft-key bank
 // to whichever bank holds that param ("bank-follow-focus"). Off = the soft-key
@@ -7453,12 +7465,10 @@ int bankReservedStrips_()
 // arithmetic of the bank, the Extender's place and the FX / Lanes pages lives
 // there, tested with one UF8 against what it was here before. uf8Units_() is 2
 // while the right-hand UF8 carries strips.
-// ⇨ TWO PLACES STILL COUNT ONE UF8 WITH TWO ATTACHED (dual-UF8 plan, stage 4):
-// the FX / Lanes bank pages (the right row shows the same eight keys as the
-// left until it continues the list) and the Extender side switch (middle needs
-// the readers of g_uf1ExtenderSide that still take it as left / right).
-inline int uf8DynBankUnits_()  { return 1; }
-inline int uf8ExtSideUnits_()  { return 1; }
+// The FX / Lanes bank pages (sixteen wide with two UF8s, the right row continues
+// the list) and the Extender side switch (middle needs two units).
+inline int uf8DynBankUnits_()  { return uf8Units_(); }
+inline int uf8ExtSideUnits_()  { return uf8Units_(); }
 
 uf8units::Layout uf8Layout_(bool extender)
 {
@@ -7813,13 +7823,20 @@ CombinedSlot uf1RouteSlot_(MediaTrack* tr, int slot)
     return layout[slot];
 }
 
+// The UF1 Extender in the MIDDLE of two UF8s (UF8 L | UF1 | UF8 R): no strip
+// index reaches its slot through the UF8 formulas (the right unit's strips are
+// shifted by one around it), so makeRoute_ takes this and asks Uf8Units.h.
+constexpr int kUf1ExtMiddleStrip = -2;
+
 StripRoute makeRoute_(int strip, int bankOffset, int /*trackCount*/,
                       int allIdx, bool thisTrack, int category)
 {
     StripRoute r;
     int slotIdx = -1;   // the visual slot this strip resolves to
     if (allIdx >= 0) {
-        const int rs = stripToVisibleSlot(strip, bankOffset);
+        const int rs = (strip == kUf1ExtMiddleStrip)
+            ? bankOffset + uf8units::uf1BankSlot(uf8Layout_(true), effectiveStripCount_(), -1)
+            : stripToVisibleSlot(strip, bankOffset);
         // Surface-aware lookup: in folder_mode / show_only_selected the
         // strip→track mapping is filtered, so a literal GetTrack(nullptr,
         // rs) would point at the wrong track. visibleTrackAt does the
@@ -7853,7 +7870,9 @@ StripRoute makeRoute_(int strip, int bankOffset, int /*trackCount*/,
         // the UF1 can take send slot 0 (uf8SendStripBase_ — 0 for RIGHT / off, so
         // byte-identical there). The UF1's own +1 strip is resolved the same way
         // with a synthetic strip index (see the Extender fader block).
-        slotIdx        = strip + g_sendBankOffset.load() + uf8SendStripBase_(strip);
+        slotIdx        = (strip == kUf1ExtMiddleStrip)
+            ? g_sendBankOffset.load() + uf8units::uf1SendSlot(uf8Layout_(true))
+            : strip + g_sendBankOffset.load() + uf8SendStripBase_(strip);
     } else {
         return r;  // not in this routing mode
     }
@@ -7935,7 +7954,11 @@ StripRoute resolveFaderRoute_(int strip, int bankOffset, int trackCount)
 StripRoute uf1ExtenderSendRoute_()
 {
     if (!uf1ExtenderRouteFader_()) return {};
-    const int uf1Strip = g_uf1ExtenderSide.load() ? uf8Strips_() : -1;   // one past the UF8 edge
+    // One past the UF8 edge, before it, or between two UF8s.
+    const auto side = uf8units::effectiveSide(
+        uf8units::extSideFromStored(g_uf1ExtenderSide.load()), uf8Units_());
+    const int uf1Strip = side == uf8units::ExtSide::Middle ? kUf1ExtMiddleStrip
+                       : side == uf8units::ExtSide::Right  ? uf8Strips_() : -1;
     return resolveFaderRoute_(uf1Strip, 0, 0);
 }
 
@@ -8723,6 +8746,31 @@ static int engagedBankableKind_()
     return dynBankBankable_(dk) ? static_cast<int>(dk) : -1;
 }
 
+// ⇨ THE SOFT-KEY PAGES OF BOTH UNITS (dual-UF8 plan, stage 4). Left: the live
+// page, the engaged Quick set's bank or else the SSL soft-key bank. Right: the
+// page after it, -1 past the last (Uf8Units.h, pagesForLeft). An FX or Lanes
+// bank does not move on: its list continues on the right row, same page. In
+// UF8 Plug-in Mode the right row is the V-Pot bank keys of a spread map, so it
+// shows the left's page as well. One UF8: right is always -1.
+uf8units::UnitPages uf8SoftKeyPages_()
+{
+    const int units = uf8Units_();
+    const int layer = uf8::bindings::getQuickLayer();
+    const int aq = (layer >= 0 && layer <= 2) ? g_activeQuick[layer].load() : -1;
+    int left = 0, count = 1;
+    if (aq >= 0) {
+        left  = g_activeSubBank[layer].load();
+        count = uf8::bindings::kSubBanksPerQuick;
+    } else {
+        count = softkey::maxBankFor(softKeyDomainNow_()) + 1;
+        left  = std::clamp(g_softKeyBank.load(), 0, count - 1);
+    }
+    auto up = uf8units::pagesForLeft(left, count, units);
+    if (units > 1 && (g_uf8PluginMode.load() || engagedBankableKind_() >= 0))
+        up.right = up.left;
+    return up;
+}
+
 // Page a bankable dynamic bank by `delta` pages, clamped to the focused
 // track's item count. Main-thread only (reads FX / send counts).
 static void pageDynBank_(int kind, int delta)
@@ -8910,7 +8958,8 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
                                     MediaTrack* tr, int slot)
 {
     DynSlotInfo info;
-    if (slot < 0 || slot >= 8) return info;
+    // FX and Lanes run on across a right UF8's row: 8..15 there.
+    if (slot < 0 || slot >= (dynBankBankable_(kind) ? 16 : 8)) return info;
     using DK = uf8::bindings::DynamicBankKind;
     // ⛔ HUE SCENES RESOLVE WITHOUT A TRACK, so this sits AHEAD of the !tr guard
     // below. Every other kind describes something ON the focused track; a light
@@ -9163,7 +9212,7 @@ static void dispatchDynamicPress_(uf8::bindings::DynamicBankKind kind,
                                   int slot, bool pressed,
                                   bool setOwnsBank = false)
 {
-    if (slot < 0 || slot >= 8) return;
+    if (slot < 0 || slot >= (dynBankBankable_(kind) ? 16 : 8)) return;   // 8..15: right row
     static std::unordered_map<int,
         std::pair<std::chrono::steady_clock::time_point,
                   uf8::bindings::Modifier>> s_press;
@@ -20153,28 +20202,73 @@ inline int uf8FaderBankClamped_()
     return std::clamp(g_uf8FaderBank.load(),
                       0, uf8::kUserUf8FaderBankCount - 1);
 }
-// Dual UF8: `slot` is a SURFACE strip (0..15). The left unit shows the fader
-// bank Bank ←/→ selected, the right unit the other one — a 16-channel map
-// (SSL Sigma remote) lies across both units at once. One UF8: slot 0..7, the
-// selected bank, exactly as before.
+// Dual UF8: `slot` is a SURFACE strip (0..15). Two ways a map lies across the
+// two units, chosen per map (Tim Shadgett's rule):
+//   * FADER SPLIT: the map uses its second fader bank (a 16-channel plug-in,
+//     SSL Sigma remote). The left unit shows the fader bank Bank ←/→ selected,
+//     the right unit the other one: all sixteen channels at once.
+//   * SPREAD: every other map. Both units show the same fader bank; the right
+//     unit's V-Pots show a second V-Pot bank of their own (g_softKeyBankRight,
+//     picked with the right unit's soft keys), so sixteen parameters sit under
+//     the hands. Its faders, Solo, Cut and Sel have no binding there.
+// One UF8: slot 0..7, the selected banks, exactly as before.
+inline bool uf8PmFaderSplit_(const uf8::UserUf8Map& map)
+{
+    const int other = (uf8FaderBankClamped_() + 1) % uf8::kUserUf8FaderBankCount;
+    for (int s = 0; s < 8; ++s) {
+        const auto& st = map.strips[other][s];
+        if (st.faderVst3Param >= 0 || st.soloVst3Param >= 0
+            || st.cutVst3Param >= 0 || st.selVst3Param >= 0) return true;
+        for (int vb = 0; vb < uf8::kUserUf8VpotBankCount; ++vb)
+            if (map.banks.banks[other][vb][s].vst3Param >= 0) return true;
+    }
+    return false;
+}
+inline bool uf8PmSpread_(const uf8::UserUf8Map& map)
+{
+    return uf8Strips_() > 8 && !uf8PmFaderSplit_(map);
+}
 inline int uf8FaderBankForStrip_(int slot)
 {
     return (uf8FaderBankClamped_() + (slot >= 8 ? 1 : 0))
          % uf8::kUserUf8FaderBankCount;
 }
+inline int uf8RightVpotBank_()
+{
+    return std::clamp(g_softKeyBankRight.load(), 0, uf8::kUserUf8VpotBankCount - 1);
+}
+// `vpotBank` is the LEFT unit's bank (g_softKeyBank) at every call site; a
+// right-unit strip of a spread map answers from its own bank instead.
 inline const uf8::UserUf8BankSlot& userVpotSlot_(
     const uf8::UserUf8Map& map, int vpotBank, int slot)
 {
     const int vb = std::clamp(vpotBank,
                               0, uf8::kUserUf8VpotBankCount - 1);
     const int s  = std::clamp(slot, 0, kUf8MaxStrips - 1);
+    if (s >= 8 && uf8PmSpread_(map))
+        return map.banks.banks[uf8FaderBankClamped_()][uf8RightVpotBank_()][s & 7];
     return map.banks.banks[uf8FaderBankForStrip_(s)][vb][s & 7];
 }
 inline const uf8::UserUf8StripBinding& userStripBinding_(
     const uf8::UserUf8Map& map, int slot)
 {
+    static const uf8::UserUf8StripBinding kNone{};
     const int s = std::clamp(slot, 0, kUf8MaxStrips - 1);
+    if (s >= 8 && uf8PmSpread_(map)) return kNone;
     return map.strips[uf8FaderBankForStrip_(s)][s & 7];
+}
+// Does V-Pot bank `vb` hold anything on the strips a soft key would show it on?
+// Drives which bank keys work and light in Plug-in Mode.
+inline bool uf8PmVpotBankAssigned_(const uf8::UserUf8Map& map, int vb)
+{
+    vb = std::clamp(vb, 0, uf8::kUserUf8VpotBankCount - 1);
+    const bool split = uf8Strips_() > 8 && uf8PmFaderSplit_(map);
+    for (int fbOff = 0; fbOff < (split ? 2 : 1); ++fbOff) {
+        const int fb = (uf8FaderBankClamped_() + fbOff) % uf8::kUserUf8FaderBankCount;
+        for (int s = 0; s < 8; ++s)
+            if (map.banks.banks[fb][vb][s].vst3Param >= 0) return true;
+    }
+    return false;
 }
 
 // Cached resolver — returns the user-plug-in context for the currently
@@ -22801,6 +22895,22 @@ static int              g_ccIdx  = -1;        // its index, -1 = not on a CC lay
 static uint64_t         g_ccGen  = ~0ull;     // bindings generation of the copy
 static bool             g_ccRepaint = true;   // ccPaintSurface_ resends every cell
 static std::vector<int> g_ccOutModes;         // StuffMIDIMessage modes of the outputs
+// ⇨ TWO UF8s ON A CC LAYER (dual-UF8 plan, stage 4): the right unit shows the
+// page after the left one (Uf8Units.h, pagesForLeft), -1 past the last page,
+// where it is dark and does nothing. Mirrored for the USB threads, which decide
+// whether the right unit's input belongs to the layer.
+std::atomic<int>        g_ccRightPage{-1};
+static uf8units::UnitPages ccPages_()
+{
+    return uf8units::pagesForLeft(g_ccState.page, midicc::kPages, uf8Units_());
+}
+// Surface strip / key index 0..15 → (page, index 0..7). Page -1: nothing there.
+static int ccPageOf_(int& i)
+{
+    if (i < midicc::kStrips) return g_ccState.page;
+    i -= midicc::kStrips;
+    return i < midicc::kStrips ? ccPages_().right : -1;
+}
 static int64_t          g_ccOutResolvedMs = 0;
 
 // REAPER's index of a MIDI output by name, -1 when it is not there. Shared with
@@ -22852,57 +22962,65 @@ static void ccApplyInput_(const PendingInput& e)
     const bool flip = g_flip.load();
     switch (e.kind) {
     case PendingInput::CcFader: {
-        const int i = e.strip;
-        if (i >= kStrips) return;
+        int i = e.strip;
+        const int p = ccPageOf_(i);       // strips 8..15: the right unit's page
+        if (p < 0) return;
         const Kind k = faderKind(flip);
-        const Control& c = L.pages[S.page].at(k, i);
+        const Control& c = L.pages[p].at(k, i);
         if (!assigned(c)) return;
-        ccSend_(S.local(L, k, i, faderToValue(static_cast<int>(e.value), hiResActive(k, c)), now));
+        ccSend_(S.localOn(L, p, k, i, faderToValue(static_cast<int>(e.value), hiResActive(k, c)), now));
         break;
     }
     case PendingInput::CcVPot: {
-        const int i = e.strip;
-        if (i >= kStrips) return;
+        int i = e.strip;
+        const int p = ccPageOf_(i);
+        if (p < 0) return;
         const Kind k = ringKind(flip);
-        const Control& c = L.pages[S.page].at(k, i);
+        const Control& c = L.pages[p].at(k, i);
         if (!assigned(c)) return;
         // An unknown value starts from 0: nothing has said otherwise.
-        const int cur = S.isKnown(S.page, k, i) ? S.v(S.page, k, i) : 0;
+        const int cur = S.isKnown(p, k, i) ? S.v(p, k, i) : 0;
         const bool fine = shiftHeldAnywhere_();
         const double speed = g_knobSpeedUf8.load();
         const int det = static_cast<int>(e.value);
         const int nv = hiResActive(k, c) ? vpotStep(cur >> 7, det, speed, fine) << 7
                                          : vpotStep(cur, det, speed, fine);
-        ccSend_(S.local(L, k, i, nv, now));
+        ccSend_(S.localOn(L, p, k, i, nv, now));
         break;
     }
     case PendingInput::CcKey: {
         const Kind k = static_cast<Kind>(e.strip >> 4);
-        const int i = e.strip & 0x0F;
-        if (static_cast<int>(k) >= kKindCount || i >= countOf(k)) return;
-        const Control& c = L.pages[S.page].at(k, i);
+        int i = e.strip & 0x0F;
+        if (static_cast<int>(k) >= kKindCount) return;
+        // Keys of the right unit come as 8..15 (feet only from the left).
+        const int p = (k == Kind::Foot) ? S.page : ccPageOf_(i);
+        if (p < 0 || i >= countOf(k)) return;
+        const Control& c = L.pages[p].at(k, i);
         if (!assigned(c)) return;
         const bool pressed = e.value > 0.5;
         if (k == Kind::SendPlugin) {
             if (!pressed) return;
-            ccSend_(S.local(L, k, i, 127, now));
+            ccSend_(S.localOn(L, p, k, i, 127, now));
             // One program per channel: the other keys on it go dark.
             const int ch = channelOf(c, L.defaultChannel);
             for (int j = 0; j < kStrips; ++j) {
-                const Control& o = L.pages[S.page].sendPlugin[j];
+                const Control& o = L.pages[p].sendPlugin[j];
                 if (j == i || !assigned(o) || channelOf(o, L.defaultChannel) != ch) continue;
-                S.v(S.page, k, j) = 0;
-                S.isKnown(S.page, k, j) = true;
+                S.v(p, k, j) = 0;
+                S.isKnown(p, k, j) = true;
             }
             break;
         }
-        int v = S.isKnown(S.page, k, i) ? S.v(S.page, k, i) : 0;
-        if (keyEdge(c.behaviour, pressed, v)) ccSend_(S.local(L, k, i, v, now));
+        int v = S.isKnown(p, k, i) ? S.v(p, k, i) : 0;
+        if (keyEdge(c.behaviour, pressed, v)) ccSend_(S.localOn(L, p, k, i, v, now));
         break;
     }
     case PendingInput::CcPage:
-        if (e.strip == 0) S.setPage(static_cast<int>(e.value));
-        else              S.stepPage(static_cast<int>(e.value));
+        // strip 0 / 2: page key on the left / right unit (the right unit's key
+        // picks its own page, the left follows one below), 1: PAGE < > by one.
+        if (e.strip == 1) S.stepPage(static_cast<int>(e.value));
+        else S.setPage(uf8units::pagesAfterPress(e.strip == 2 ? 1 : 0,
+                           static_cast<int>(e.value), kPages, uf8Units_()).left);
         g_ccRepaint = true;
         break;
     default:
@@ -25732,13 +25850,36 @@ uf8::LedClass toUf8LedClass(LedClass cls)
     }
 }
 
+// ⇨ A LAMP FOR ONE UNIT. Set (by LedUnitScope) where two UF8s show different
+// pages: the page keys and, on a CC layer, the SEND/PLUG-IN row. -1 = every
+// unit. Per thread, so a builtin lighting a key on a USB thread never sees the
+// timer's scope.
+thread_local int t_ledUnit = -1;
+// The UF8 whose input is being handled on this thread (0 = left, 1 = right),
+// for the builtins a key press runs: a page key picks the page of the unit it
+// is on. 0 on every other thread (UC1, UF1, Stream Deck, REAPER actions).
+thread_local int t_uf8InputUnit = 0;
+struct LedUnitScope {
+    int prev;
+    explicit LedUnitScope(int unit) : prev(t_ledUnit) { t_ledUnit = unit; }
+    ~LedUnitScope() { t_ledUnit = prev; }
+};
+
 // A unit-wide LED (transport, modes, layers, …): the same lamp on every UF8,
-// so both units' keys read the same.
+// so both units' keys read the same, unless a LedUnitScope picks one.
 void sendLedFrames(uf8::LedColourFrames frames)
 {
     if (!g_dev) return;
+    if (t_ledUnit == 1) {
+        if (auto d2 = uf8UnitDev_(1)) {
+            if (!frames.ff38.empty())   d2->send(std::move(frames.ff38));
+            if (!frames.ff39.empty())   d2->send(std::move(frames.ff39));
+            if (!frames.legacy.empty()) d2->send(std::move(frames.legacy));
+        }
+        return;
+    }
     // Builtins run this on the worker threads too: through uf8UnitDev_ only.
-    if (uf8Units_() > 1) {
+    if (t_ledUnit != 0 && uf8Units_() > 1) {
         if (auto d2 = uf8UnitDev_(1)) {
             if (!frames.ff38.empty())   d2->send(frames.ff38);
             if (!frames.ff39.empty())   d2->send(frames.ff39);
@@ -27076,6 +27217,7 @@ static void uf8EncPushEdge_(bool pressed)
 static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
 {
     const int base = unit * 8;
+    t_uf8InputUnit = unit;   // for the builtins this press runs (page keys)
     // Each unit stitches its own URBs.
     std::vector<uint8_t>& g_inputResidual = g_inputResidualU[unit & 1];
     // NOTE: do NOT add per-packet file logging here. This runs on the libusb
@@ -27294,8 +27436,8 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 // MIDI CC layer: the fader is a controller, not a track. The
                 // main thread turns the position into a value and MIDI; the
                 // hand position goes back as the motor target, as below.
-                // Left unit only: the layer has eight strips (midicc::kStrips).
-                if (strip < 8 && uf8::bindings::ccLayerActive()) {
+                // Either unit: strips 8..15 land on the right unit's page.
+                if (uf8CcOwnsUnit_(unit)) {
                     queueInput({PendingInput::CcFader, strip, static_cast<double>(pbOut)});
                     uf8SendS_(strip, uf8::buildFaderPosition(
                         uf8Local_(strip), lsbOut | 0x80, msbOut));
@@ -27471,10 +27613,12 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
             // only" and swallows the press, so PAGE did nothing while the bank
             // keys (select AND run) worked (Frank 27.10.2026). A CC layer has no
             // key editor to pick into; the keys it keeps still go to the pick.
-            // Left unit only, for now: the right one keeps its REAPER keys.
-            if (unit == 0 && uf8::bindings::ccLayerActive()) {
+            // Both units: the right one's strip keys come as 8..15, its page
+            // keys pick its own page (CcPage 2), see ccApplyInput_.
+            if (uf8CcOwnsUnit_(unit)) {
                 auto key = [&](midicc::Kind k, int idx) {
                     if (btnWoke && pressed) return;
+                    if (k != midicc::Kind::Foot) idx += base;
                     queueInput({PendingInput::CcKey,
                                 static_cast<uint8_t>((static_cast<int>(k) << 4) | idx),
                                 pressed ? 1.0 : 0.0});
@@ -27485,7 +27629,9 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 else if (id >= 0x48 && id <= 0x4F) key(midicc::Kind::SendPlugin, id - 0x48);
                 else if (id == 0x00 || id == 0x01) key(midicc::Kind::Foot, id);
                 else if (id >= 0x68 && id <= 0x6D) {          // V-POT, soft-key bank 1..5 = page
-                    if (pressed) queueInput({PendingInput::CcPage, 0, double(id - 0x68)});
+                    if (pressed) queueInput({PendingInput::CcPage,
+                                             static_cast<uint8_t>(unit == 1 ? 2 : 0),
+                                             double(id - 0x68)});
                 } else if (id == 0x52 || id == 0x53) {        // PAGE < >
                     if (pressed) queueInput({PendingInput::CcPage, 1, id == 0x52 ? -1.0 : 1.0});
                 } else {
@@ -27538,14 +27684,24 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 if (pressed) {
                     const int target = id - 0x18;
                     bool anyAssigned = false;
+                    // The right unit's row picks the right unit's V-Pot bank when
+                    // the map is spread across both units (uf8PmSpread_).
+                    bool rightRow = false;
                     if (auto uctx = userStripCtxFocused_(); uctx.map) {
-                        // Every strip on the surface: 16 with two UF8s.
-                        for (int sIdx = 0; sIdx < uf8Strips_(); ++sIdx) {
-                            if (userVpotSlot_(uctx.map->uf8, target, sIdx).vst3Param >= 0)
-                            {
-                                anyAssigned = true; break;
-                            }
+                        anyAssigned = uf8PmVpotBankAssigned_(uctx.map->uf8, target);
+                        rightRow = unit == 1 && uf8PmSpread_(uctx.map->uf8);
+                    }
+                    if (rightRow) {
+                        if ((anyAssigned || g_hudEnabled.load() || g_hudTouchLearn.load())
+                            && g_softKeyBankRight.exchange(target) != target) {
+                            g_softKeyDirty.store(true);
+                            g_bankDirty.store(true);
+                            char buf[8];
+                            snprintf(buf, sizeof(buf), "%d", target);
+                            SetExtState("ReaSixty", "softKeyBankRight", buf, true);
                         }
+                        i += frameSize;
+                        continue;
                     }
                     // Empty (unassigned) banks are normally no-function. But
                     // while the Learn-HUD is open OR standalone Touch-to-Learn is
@@ -27585,14 +27741,27 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
             // (handledNatively) and the nav intercept below never runs — the
             // soft-key jump silently did nothing (Frank 2026-07-27).
             const bool navOwnsSoftKey =
-                (id >= 0x18 && id <= 0x1F
+                (unit == 0   // the marker overlay is on the left unit only
+                 && id >= 0x18 && id <= 0x1F
                  && uf8::nav::Overlay::instance().active()
                  && g_navUf8Show.load());
+            // ⇨ THE RIGHT UNIT'S ROW IS THE NEXT PAGE (dual-UF8 plan, stage 4),
+            // as the painter shows it (uf8SoftKeyPages_): the next bank of the
+            // engaged set, the next SSL soft-key page; an FX or Lanes bank runs
+            // on with its entries 9..16 instead. Past the last page the keys do
+            // nothing.
+            const uf8units::UnitPages skPages =
+                (unit == 1 && id >= 0x18 && id <= 0x1F) ? uf8SoftKeyPages_()
+                                                        : uf8units::UnitPages{};
+            const bool skPast      = unit == 1 && id >= 0x18 && id <= 0x1F && skPages.right < 0;
+            const bool skContinues = unit == 1 && !skPast && skPages.right == skPages.left;
+            if (skPast && !g_uf8PluginMode.load() && !handledNatively)
+                handledNatively = true;   // an empty key
             if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()
                 && !handledNatively && !navOwnsSoftKey && laneBankOverride_()) {
                 // The Lanes mode's bank: the modifiers are its gestures.
                 dispatchDynamicPress_(uf8::bindings::DynamicBankKind::Lanes,
-                                      id - 0x18, pressed, /*setOwnsBank*/ false);
+                                      id - 0x18 + base, pressed, /*setOwnsBank*/ false);
                 handledNatively = true;
             }
             if (id >= 0x18 && id <= 0x1F && !g_uf8PluginMode.load()
@@ -27601,7 +27770,10 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 const int aq = (layer >= 0 && layer <= 2)
                                ? g_activeQuick[layer].load() : -1;
                 if (aq >= 0) {
-                    const int sb = g_activeSubBank[layer].load();
+                    const int sb = (unit == 1 && !skContinues)
+                                 ? skPages.right : g_activeSubBank[layer].load();
+                    // FX / Lanes running on: the same bank, entries 9..16.
+                    const int dynSlot = id - 0x18 + (skContinues ? 8 : 0);
                     // A dynamic Sub-Bank computes its keys live → route the
                     // press to the dynamic handler (posts to the main-thread
                     // drain) instead of the stored user-Quick binding.
@@ -27630,14 +27802,14 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                             != uf8::bindings::Modifier::Plain;
                     bool tookSlot = false;
                     if (dk != uf8::bindings::DynamicBankKind::None && modHeld
-                        && !ownsSet) {
+                        && !ownsSet && !skContinues) {   // the set has eight slots
                         tookSlot = uf8::bindings::dispatchUserQuickSlot(
                             layer, aq, sb, id - 0x18, pressed);
                     }
                     if (tookSlot) {
                         // handled by the user's slot
                     } else if (dk != uf8::bindings::DynamicBankKind::None) {
-                        dispatchDynamicPress_(dk, id - 0x18, pressed, ownsSet);
+                        dispatchDynamicPress_(dk, dynSlot, pressed, ownsSet);
                     } else {
                         uf8::bindings::dispatchUserQuickSlot(
                             layer, aq, sb, id - 0x18, pressed);
@@ -27665,7 +27837,9 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 // Q2 while the press fires Q1 (Frank desync 2026-06-26).
                 const auto domain = softKeyDomainNow_();
                 const bool isBc   = (domain == uf8::Domain::BusComp);
-                const int  bank   = std::clamp(g_softKeyBank.load(),
+                // The right unit's row: the next SSL page (skPages).
+                const int  bank   = unit == 1 ? skPages.right
+                                  : std::clamp(g_softKeyBank.load(),
                                         0, softkey::maxBankFor(domain));
                 const int  slot   = id - 0x18;
                 const auto v      = softkey::viewFor(domain, bank);
@@ -27677,7 +27851,17 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 const bool modHeld =
                     uf8::bindings::bankModifierSnapshot()
                         != uf8::bindings::Modifier::Plain;
-                if (!sslOwnsSlot || modHeld) {
+                if (unit == 1 && sslOwnsSlot && !modHeld
+                    && uf8::bindings::getBinding(uf8::bindings::getActiveLayer(),
+                           uf8::bindings::fromUf8DeviceId(id))
+                           .shortPress[static_cast<int>(uf8::bindings::Modifier::Plain)]
+                           .action == "ssl_softkey") {
+                    // The key's own binding is the stock ssl_softkey, which focuses
+                    // a slot of the LEFT row's page. On the right row the slot is
+                    // on the next page: focus that one here instead. (tshadgett)
+                    if (pressed) uf8::setFocus({domain, v.linkIdx[slot]});
+                    handledNatively = true;
+                } else if (!sslOwnsSlot || modHeld) {
                     const int q = isBc ? 1 : 0;   // Q2 = BC, Q1 = CS
                     if (uf8::bindings::dispatchUserQuickSlot(
                             0, q, bank, slot, pressed)) {
@@ -27703,7 +27887,7 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
             // generic bindings layer so the overlay always wins while
             // active. Release is swallowed too (no per-key action on
             // release in v1).
-            if (!handledNatively
+            if (!handledNatively && unit == 0
                 && id >= 0x18 && id <= 0x1F
                 && uf8::nav::Overlay::instance().active()
                 && g_navUf8Show.load())
@@ -27821,6 +28005,25 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                     handledOv = true;
                 }
                 if (handledOv) handledNatively = true;
+            }
+
+            // Right unit, stock ssl_softkey binding, not taken above (no Quick,
+            // a layer other than 1): the slot is on the page AFTER the left
+            // row's, as the painter shows it, so focus that one rather than let
+            // ssl_softkey use the left page. (tshadgett)
+            if (!handledNatively && unit == 1 && id >= 0x18 && id <= 0x1F
+                && !g_uf8PluginMode.load()
+                && uf8::bindings::bankModifierSnapshot() == uf8::bindings::Modifier::Plain
+                && uf8::bindings::getBinding(uf8::bindings::getActiveLayer(),
+                       uf8::bindings::fromUf8DeviceId(id))
+                       .shortPress[static_cast<int>(uf8::bindings::Modifier::Plain)]
+                       .action == "ssl_softkey") {
+                const auto domain = softKeyDomainNow_();
+                if (pressed && skPages.right >= 0) {
+                    const int link = softkey::viewFor(domain, skPages.right).linkIdx[id - 0x18];
+                    if (link != softkey::kNoSlot) uf8::setFocus({domain, link});
+                }
+                handledNatively = true;
             }
 
             // Bindings layer — globals previously hardcoded inline. Now
@@ -28169,8 +28372,8 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
             // The release goes through the debounce like the track path's (the
             // sensor bounces under a held finger); commitDebouncedTouchReleases
             // skips its REAPER writeback on this layer.
-            // The CC layer is on the left unit only (eight strips, midicc::kStrips).
-            if (strip < 8 && uf8::bindings::ccLayerActive()) {
+            // The CC layer: the left unit's page, a right unit's next page.
+            if (uf8CcOwnsUnit_(unit)) {
                 if (state != 0) {
                     g_touchLastPress[strip] = std::chrono::steady_clock::now();
                     g_touchReleasePending[strip].store(false);
@@ -28402,7 +28605,7 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
             if (signed6 & 0x20) signed6 |= 0xC0;   // sign-extend from 6 bits
             // MIDI CC layer: the V-Pot is a controller. Strip 8, the channel
             // encoder, stays with REAPER and falls through.
-            if (strip < 8 && uf8::bindings::ccLayerActive()) {
+            if (hwPot < 8 && uf8CcOwnsUnit_(unit)) {
                 queueInput({PendingInput::CcVPot, strip, static_cast<double>(signed6)});
                 i += frameSize;
                 continue;
@@ -28587,9 +28790,12 @@ void onUf8Input2(const uint8_t* data, size_t len)
 {
     std::lock_guard<std::mutex> lk(g_uf8InputMx);
     if (uf8Strips_() < 16) return;   // not (yet / any more) part of the surface
-    // On a MIDI CC layer the right unit is dark and does nothing (plan, stage 3):
-    // its faders and pots would otherwise ride tracks 9-16 nobody can see.
-    if (uf8::bindings::ccLayerActive()) { g_inputResidualU[1].clear(); return; }
+    // On a MIDI CC layer past the last page the right unit is dark and does
+    // nothing: its faders and pots would otherwise ride tracks 9-16 unseen.
+    if (uf8::bindings::ccLayerActive() && !uf8CcOwnsUnit_(1)) {
+        g_inputResidualU[1].clear();
+        return;
+    }
     onUf8InputUnit_(data, len, 1);
 }
 
@@ -40387,7 +40593,8 @@ static void ccTick_()
             ccResolveOutputs_();
         }
         if (left) {
-            uf8ResetStripState_(8, kUf8MaxStrips);   // the right UF8 was dark
+            g_ccRightPage.store(-1);
+            uf8ResetStripState_(8, kUf8MaxStrips);   // the right UF8 had the layer
             g_lastSelLed.fill(-1);
             g_lastSoloLed.fill(-1);
             g_lastCutLed.fill(-1);
@@ -40409,10 +40616,15 @@ static void ccTick_()
 // Both hand their values to State::apply, which drops them while the hand has the
 // control: a touched fader, or a control sent from within the echo window.
 
-static bool ccTouched_(midicc::Kind k, int i)
+// Is the fader showing control `i` of page `p` under a hand? The left unit shows
+// the live page, a right unit the one after it.
+static bool ccTouched_(int p, midicc::Kind k, int i)
 {
-    return k == midicc::faderKind(g_flip.load()) && i >= 0 && i < 8
-        && g_touchReported[i].load();
+    if (k != midicc::faderKind(g_flip.load()) || i < 0 || i >= 8) return false;
+    const auto up = ccPages_();
+    if (p == up.left)  return g_touchReported[i].load();
+    if (p == up.right) return g_touchReported[8 + i].load();
+    return false;
 }
 
 // G: the CC lanes of the MIDI items on the selected track, at the play position.
@@ -40506,7 +40718,7 @@ static void ccFollowItems_(int64_t now)
                     }
                     if (v < 0) continue;
                     if (S.isKnown(p, kind, i) && S.v(p, kind, i) == v) continue;
-                    S.apply(Hit{p, kind, i, v}, now, p == S.page && ccTouched_(kind, i));
+                    S.apply(Hit{p, kind, i, v}, now, ccTouched_(p, kind, i));
                 }
             }
     }
@@ -40564,7 +40776,7 @@ static void ccInputTick_(int64_t now)
         const midicc::Msg m{ev->midi_message[0], ev->midi_message[1],
                             static_cast<uint8_t>(ev->size > 2 ? ev->midi_message[2] : 0)};
         for (const auto& h : midicc::match(g_ccLayer, m, g_ccAsm))
-            g_ccState.apply(h, now, h.page == g_ccState.page && ccTouched_(h.kind, h.index));
+            g_ccState.apply(h, now, ccTouched_(h.page, h.kind, h.index));
     }
 }
 
@@ -40579,9 +40791,11 @@ static void ccReturnPaths_()
 // strip's fader has nothing on this page.
 uint32_t ccColorForStrip_(int slot)
 {
-    if (g_ccIdx < 0 || slot < 0 || slot >= midicc::kStrips) return 0;
+    if (g_ccIdx < 0 || slot < 0) return 0;
+    const int p = ccPageOf_(slot);   // 8..15: the right unit's page
+    if (p < 0) return 0;
     const midicc::Kind k = midicc::faderKind(g_flip.load());
-    const midicc::Control& c = g_ccLayer.pages[g_ccState.page].at(k, slot);
+    const midicc::Control& c = g_ccLayer.pages[p].at(k, slot);
     return midicc::assigned(c) ? midicc::colourRgb(c) : 0;
 }
 
@@ -40639,24 +40853,21 @@ static void uf8BlankUnit_(int unit)
 static void ccPaintSurface_()
 {
     if (!g_dev || !g_dev->isOpen()) return;
-    // ⇨ THE RIGHT UF8 IS DARK ON A CC LAYER (dual-UF8 plan, stage 3). The layer
-    // has eight strips, the left unit's; the right one would otherwise keep the
-    // tracks it showed while its input is dropped (onUf8Input2). Blanked on
-    // entry and whenever a right unit turns up while the layer is on.
-    {
-        static int s_units = 1;
-        const int units = uf8Units_();
-        if (units > 1 && (g_ccRepaint || s_units != units)) uf8BlankUnit_(1);
-        s_units = units;
-    }
     using namespace midicc;
     const Layer& L = g_ccLayer;
     State& S = g_ccState;
-    const Page& P = L.pages[S.page];
     const bool flip = g_flip.load();
     const Kind fk = faderKind(flip), rk = ringKind(flip);
-    const bool all = g_ccRepaint;
+    // ⇨ ONE PAGE PER UNIT (dual-UF8 plan, stage 4). The left UF8 shows the live
+    // page, a right one the page after it; past the last page it is dark
+    // (uf8BlankUnit_) and its input is dropped (g_ccRightPage).
+    const int units = uf8Units_();
+    const uf8units::UnitPages up = ccPages_();
+    g_ccRightPage.store(up.right);
+    static int s_units = 1, s_rightPage = -2;
+    bool all = g_ccRepaint || s_units != units;
     g_ccRepaint = false;
+    s_units = units;
     if (all) {
         g_lastTrackName.fill({});
         g_lastSlotLabel.fill({});
@@ -40671,112 +40882,138 @@ static void ccPaintSurface_()
         g_lastCutLed.fill(-1);
         g_lastSoloLed.fill(-1);
         g_vpotBarInit = false;
-        g_dev->send(uf8::buildSelectedStripBitmask(0));
+        for (int u = 0; u < units; ++u)
+            uf8SendUnit_(u, uf8::buildSelectedStripBitmask(0));
     }
-    const std::string pg = pageCell(S.page);
-    std::array<uint16_t, 8> bar{};
-    std::array<uint8_t, 8>  mode{};
-    for (int s = 0; s < kStrips; ++s) {
-        const auto st = static_cast<uint8_t>(s);
-        const Control& fc = P.at(fk, s);
-        const Control& rc = P.at(rk, s);
-        const Control& sc = P.soft[s];
-        const bool fOn = assigned(fc), rOn = assigned(rc), sOn = assigned(sc);
-        const bool fKnown = S.isKnown(S.page, fk, s);
-        const bool rKnown = S.isKnown(S.page, rk, s);
-        const int  fv = S.v(S.page, fk, s), rv = S.v(S.page, rk, s);
-
-        const std::string nm = utf8ToLatin1(displayName(fk, fc));
-        if (g_lastTrackName[s] != nm) {
-            g_lastTrackName[s] = nm;
-            g_dev->send(uf8::buildStripTextUpper(st, nm));
-        }
-        if (g_lastCsType[s] != pg) {
-            g_lastCsType[s] = pg;
-            g_dev->send(uf8::buildChannelStripType(st, pg));
-        }
-        if (g_lastChanNum[s] != " ") {
-            g_lastChanNum[s] = " ";
-            g_dev->send(uf8::buildChannelNumber(st, " "));
-        }
-        const std::string fvt = fOn ? valueText(fv, fKnown) : std::string();
-        if (g_lastFaderDb[s] != fvt || g_lastFaderDbUnit[s] != "") {
-            g_lastFaderDb[s] = fvt;
-            g_lastFaderDbUnit[s] = "";
-            g_dev->send(uf8::buildFaderDbReadout(st, fvt, ""));
-        }
-        const std::string vl = rOn
-            ? uf8ValueLine(utf8ToLatin1(displayName(rk, rc)), valueText(rv, rKnown))
-            : std::string();
-        if (g_lastValueLine[s] != vl) {
-            g_lastValueLine[s] = vl;
-            g_dev->send(uf8::buildValueLine(st, vl));
-        }
-        const std::string sl = utf8ToLatin1(displayName(Kind::Soft, sc));
-        if (g_lastSlotLabel[s] != sl) {
-            g_lastSlotLabel[s] = sl;
-            g_dev->send(uf8::buildPluginSlotName(st, sl));
-        }
-        const bool sLit = sOn && S.isKnown(S.page, Kind::Soft, s) && S.v(S.page, Kind::Soft, s) >= 64;
-        const int tsk = !sOn ? 0 : (sLit ? 2 : 1);
-        if (g_lastTopSoftKey[s] != tsk) {
-            g_lastTopSoftKey[s] = tsk;
-            sendLedFramesS_(s, uf8::buildTopSoftKeyLed(st,
-                tsk == 2 ? uf8::TopSoftKeyState::On
-                         : tsk == 1 ? uf8::TopSoftKeyState::Dim : uf8::TopSoftKeyState::Off,
-                uf8::ledColourForTrackRgb(colourRgb(sc))));
-        }
-        const int8_t sel = fOn ? 1 : 0;
-        if (g_lastSelLed[s] != sel) {
-            g_lastSelLed[s] = sel;
-            sendLedFramesS_(s, uf8::buildLedColourPair(st, uf8::LedClass::Sel, fOn,
-                                                  uf8::ledColourForTrackRgb(colourRgb(fc))));
-        }
-        if (g_lastCutLed[s] != 0) {
-            g_lastCutLed[s] = 0;
-            sendLedFramesS_(s, uf8::buildLedColourPair(st, uf8::LedClass::Cut, false));
-        }
-        if (g_lastSoloLed[s] != 0) {
-            g_lastSoloLed[s] = 0;
-            sendLedFramesS_(s, uf8::buildLedColourPair(st, uf8::LedClass::Solo, false));
-        }
-        // Motor: the DynaMount block's sequence. A limp strip takes the bit-7
-        // echo first, then the enable, or the firmware drops the position.
-        if (fOn && fKnown && !g_touchReported[s].load()) {
-            const uint16_t pb = static_cast<uint16_t>(valueToFader(fv, hiResActive(fk, fc)));
-            g_motorTargetPb[s].store(pb);
-            const bool engaged = g_faderMotorEngaged[s].load();
-            if (!engaged || g_lastFaderPb[s] != pb) {
-                g_lastFaderPb[s] = pb;
-                const uint8_t lsb = static_cast<uint8_t>(pb & 0x7F);
-                const uint8_t msb = static_cast<uint8_t>((pb >> 7) & 0x7F);
-                if (!engaged) {
-                    g_dev->send(uf8::buildFaderPosition(st, (lsb | 0x80), msb));
-                    g_dev->send(uf8::buildMotorEnable(st, true));
-                    g_faderMotorEngaged[s].store(true);
+    for (int u = 0; u < units; ++u) {
+        const int page = uf8units::pageOnUnit(up, u);
+        if (u == 1) {
+            const bool changed = page != s_rightPage;
+            s_rightPage = page;
+            if (page < 0) {
+                if (all || changed) uf8BlankUnit_(1);
+                continue;
+            }
+            if (changed && !all) {   // dark until now: every cell of it again
+                for (int s = 8; s < 16; ++s) {
+                    g_lastTrackName[s].clear(); g_lastSlotLabel[s].clear();
+                    g_lastCsType[s] = kCsTypeSentinel; g_lastValueLine[s].clear();
+                    g_lastFaderDb[s].clear(); g_lastFaderDbUnit[s].clear();
+                    g_lastChanNum[s].clear(); g_lastFaderPb[s] = 0xFFFF;
+                    g_lastTopSoftKey[s] = -1; g_lastSelLed[s] = -1;
+                    g_lastCutLed[s] = -1; g_lastSoloLed[s] = -1;
+                    g_lastVPotBar[s] = 0xFFFF; g_lastVPotMode[s] = 0xFF;
                 }
-                g_dev->send(uf8::buildFaderPosition(st, lsb, msb));
             }
         }
-        bar[s]  = (rOn && rKnown) ? vpotPosFromUnipolar(normalised(rv, hiResActive(rk, rc)))
-                                  : vpotPosFromUnipolar(0.0);
-        mode[s] = rOn ? 0x01 : 0x03;     // unipolar, or no ring
+        const Page& P = L.pages[page];
+        const std::string pg = pageCell(page);
+        std::array<uint16_t, 8> bar{};
+        std::array<uint8_t, 8>  mode{};
+        for (int l = 0; l < kStrips; ++l) {
+            const int s = u * 8 + l;                 // surface strip
+            const auto st = static_cast<uint8_t>(l); // the strip on its unit
+            const Control& fc = P.at(fk, l);
+            const Control& rc = P.at(rk, l);
+            const Control& sc = P.soft[l];
+            const bool fOn = assigned(fc), rOn = assigned(rc), sOn = assigned(sc);
+            const bool fKnown = S.isKnown(page, fk, l);
+            const bool rKnown = S.isKnown(page, rk, l);
+            const int  fv = S.v(page, fk, l), rv = S.v(page, rk, l);
+
+            const std::string nm = utf8ToLatin1(displayName(fk, fc));
+            if (g_lastTrackName[s] != nm) {
+                g_lastTrackName[s] = nm;
+                uf8SendS_(s, uf8::buildStripTextUpper(st, nm));
+            }
+            if (g_lastCsType[s] != pg) {
+                g_lastCsType[s] = pg;
+                uf8SendS_(s, uf8::buildChannelStripType(st, pg));
+            }
+            if (g_lastChanNum[s] != " ") {
+                g_lastChanNum[s] = " ";
+                uf8SendS_(s, uf8::buildChannelNumber(st, " "));
+            }
+            const std::string fvt = fOn ? valueText(fv, fKnown) : std::string();
+            if (g_lastFaderDb[s] != fvt || g_lastFaderDbUnit[s] != "") {
+                g_lastFaderDb[s] = fvt;
+                g_lastFaderDbUnit[s] = "";
+                uf8SendS_(s, uf8::buildFaderDbReadout(st, fvt, ""));
+            }
+            const std::string vl = rOn
+                ? uf8ValueLine(utf8ToLatin1(displayName(rk, rc)), valueText(rv, rKnown))
+                : std::string();
+            if (g_lastValueLine[s] != vl) {
+                g_lastValueLine[s] = vl;
+                uf8SendS_(s, uf8::buildValueLine(st, vl));
+            }
+            const std::string sl = utf8ToLatin1(displayName(Kind::Soft, sc));
+            if (g_lastSlotLabel[s] != sl) {
+                g_lastSlotLabel[s] = sl;
+                uf8SendS_(s, uf8::buildPluginSlotName(st, sl));
+            }
+            const bool sLit = sOn && S.isKnown(page, Kind::Soft, l) && S.v(page, Kind::Soft, l) >= 64;
+            const int tsk = !sOn ? 0 : (sLit ? 2 : 1);
+            if (g_lastTopSoftKey[s] != tsk) {
+                g_lastTopSoftKey[s] = tsk;
+                sendLedFramesS_(s, uf8::buildTopSoftKeyLed(st,
+                    tsk == 2 ? uf8::TopSoftKeyState::On
+                             : tsk == 1 ? uf8::TopSoftKeyState::Dim : uf8::TopSoftKeyState::Off,
+                    uf8::ledColourForTrackRgb(colourRgb(sc))));
+            }
+            const int8_t sel = fOn ? 1 : 0;
+            if (g_lastSelLed[s] != sel) {
+                g_lastSelLed[s] = sel;
+                sendLedFramesS_(s, uf8::buildLedColourPair(st, uf8::LedClass::Sel, fOn,
+                                                      uf8::ledColourForTrackRgb(colourRgb(fc))));
+            }
+            if (g_lastCutLed[s] != 0) {
+                g_lastCutLed[s] = 0;
+                sendLedFramesS_(s, uf8::buildLedColourPair(st, uf8::LedClass::Cut, false));
+            }
+            if (g_lastSoloLed[s] != 0) {
+                g_lastSoloLed[s] = 0;
+                sendLedFramesS_(s, uf8::buildLedColourPair(st, uf8::LedClass::Solo, false));
+            }
+            // Motor: the DynaMount block's sequence. A limp strip takes the bit-7
+            // echo first, then the enable, or the firmware drops the position.
+            if (fOn && fKnown && !g_touchReported[s].load()) {
+                const uint16_t pb = static_cast<uint16_t>(valueToFader(fv, hiResActive(fk, fc)));
+                g_motorTargetPb[s].store(pb);
+                const bool engaged = g_faderMotorEngaged[s].load();
+                if (!engaged || g_lastFaderPb[s] != pb) {
+                    g_lastFaderPb[s] = pb;
+                    const uint8_t lsb = static_cast<uint8_t>(pb & 0x7F);
+                    const uint8_t msb = static_cast<uint8_t>((pb >> 7) & 0x7F);
+                    if (!engaged) {
+                        uf8SendS_(s, uf8::buildFaderPosition(st, (lsb | 0x80), msb));
+                        uf8SendS_(s, uf8::buildMotorEnable(st, true));
+                        g_faderMotorEngaged[s].store(true);
+                    }
+                    uf8SendS_(s, uf8::buildFaderPosition(st, lsb, msb));
+                }
+            }
+            bar[l]  = (rOn && rKnown) ? vpotPosFromUnipolar(normalised(rv, hiResActive(rk, rc)))
+                                      : vpotPosFromUnipolar(0.0);
+            mode[l] = rOn ? 0x01 : 0x03;     // unipolar, or no ring
+        }
+        // Each unit's eight strips: compare and store its own slice.
+        if (!g_vpotBarInit || bar != uf8UnitSlice_(g_lastVPotBar, u)) {
+            std::copy(bar.begin(), bar.end(), g_lastVPotBar.begin() + u * 8);
+            uf8SendUnit_(u, uf8::buildVPotReadoutBar(bar));
+        }
+        if (!g_vpotBarInit || mode != uf8UnitSlice_(g_lastVPotMode, u)) {
+            std::copy(mode.begin(), mode.end(), g_lastVPotMode.begin() + u * 8);
+            std::vector<uint8_t> mf{0xFF, 0x66, 0x09, 0x0D};
+            for (auto m : mode) mf.push_back(m);
+            uint8_t cks = 0;
+            for (size_t i = 1; i < mf.size(); ++i) cks += mf[i];
+            mf.push_back(cks);
+            uf8SendUnit_(u, std::move(mf));
+        }
     }
-    // The layer is the left unit's: compare and store its eight strips only.
-    if (!g_vpotBarInit || bar != uf8UnitSlice_(g_lastVPotBar, 0)) {
-        std::copy(bar.begin(), bar.end(), g_lastVPotBar.begin());
-        g_dev->send(uf8::buildVPotReadoutBar(bar));
-    }
-    if (!g_vpotBarInit || mode != uf8UnitSlice_(g_lastVPotMode, 0)) {
-        std::copy(mode.begin(), mode.end(), g_lastVPotMode.begin());
-        std::vector<uint8_t> mf{0xFF, 0x66, 0x09, 0x0D};
-        for (auto m : mode) mf.push_back(m);
-        uint8_t cks = 0;
-        for (size_t i = 1; i < mf.size(); ++i) cks += mf[i];
-        mf.push_back(cks);
-        g_dev->send(std::move(mf));
-        g_vpotBarInit = true;
-    }
+    if (units < 2) s_rightPage = -2;
+    g_vpotBarInit = true;
 }
 
 void pushZonesForVisibleSlots()
@@ -40962,6 +41199,8 @@ void pushZonesForVisibleSlots()
     // dynBankContextTrack_ earlier the same day. Hoisted out of the loop: it is
     // one answer per tick, not one per strip.
     MediaTrack* const barFocusTrack = activeFocusTrack_();
+    // The soft-key page each unit shows (the right one the next, or nothing).
+    const uf8units::UnitPages skPages = uf8SoftKeyPages_();
 
     for (int s = 0; s < uf8Strips_(); ++s) {
         // The Nav overlay / encoder picker own three zones on the LEFT unit only.
@@ -41203,9 +41442,23 @@ void pushZonesForVisibleSlots()
             // Same resolver the press-dispatch paths use → labels and dispatch
             // can never disagree.
             const auto domSk = softKeyDomainNow_();
-            const int bankSk = std::clamp(g_softKeyBank.load(),
-                0, softkey::maxBankFor(domSk));
-            auto vSk = softkey::viewFor(domSk, bankSk);
+            // ⇨ THE RIGHT UNIT'S ROW IS THE NEXT PAGE (dual-UF8 plan, stage 4).
+            // Its eight keys show the page after the left row's: the next SSL
+            // soft-key page, the next bank of the engaged Quick set; an FX or
+            // Lanes bank runs on with its entries 9..16 (skContinues). Past the
+            // last page the row is empty. One UF8: unitSk is always 0.
+            const int unitSk = s >> 3;
+            const bool skPast      = unitSk == 1 && skPages.right < 0;
+            const bool skContinues = unitSk == 1 && !skPast && skPages.right == skPages.left;
+            const int bankSk = (unitSk == 1 && !skContinues && !skPast)
+                ? std::clamp(skPages.right, 0, softkey::maxBankFor(domSk))
+                : std::clamp(g_softKeyBank.load(), 0, softkey::maxBankFor(domSk));
+            static const int kNoLinks[8] = {
+                softkey::kNoSlot, softkey::kNoSlot, softkey::kNoSlot, softkey::kNoSlot,
+                softkey::kNoSlot, softkey::kNoSlot, softkey::kNoSlot, softkey::kNoSlot };
+            static const char* const kNoLabels[8] = { "", "", "", "", "", "", "", "" };
+            auto vSk = skPast ? softkey::View{ kNoLinks, kNoLabels }
+                              : softkey::viewFor(domSk, bankSk);
 
             // FX Learn UF8: synthesise an 8-slot view from the focused
             // user-plug-in's bank table, overriding the hardcoded CS/BC
@@ -41266,8 +41519,12 @@ void pushZonesForVisibleSlots()
             const int curQuick  = (!pluginModeLocal
                                    && curLayer >= 0 && curLayer <= 2)
                                   ? g_activeQuick[curLayer].load()  : -1;
-            const int curSub    = (curLayer >= 0 && curLayer <= 2)
-                                  ? g_activeSubBank[curLayer].load() : 0;
+            const int curSub    = (unitSk == 1 && !skContinues && !skPast)
+                                  ? skPages.right
+                                  : ((curLayer >= 0 && curLayer <= 2)
+                                     ? g_activeSubBank[curLayer].load() : 0);
+            // FX / Lanes running on: entries 9..16 of the same bank.
+            const int dynSk = sk + (skContinues ? 8 : 0);
             std::string userLabel;
             bool userBankSlotPresent = false;
             // Dynamic Sub-Bank: keys computed live from the focused track's
@@ -41284,7 +41541,7 @@ void pushZonesForVisibleSlots()
             if (laneOv) {
                 dynKind = uf8::bindings::DynamicBankKind::Lanes;
                 dynOwnsSet = true;
-            } else if (curQuick >= 0)
+            } else if (curQuick >= 0 && !skPast)
                 dynKind = uf8::bindings::getSubBankDynamicFor(
                     curLayer, curQuick, curSub,
                     static_cast<int>(uf8::bindings::bankModifierSnapshot()),
@@ -41302,6 +41559,7 @@ void pushZonesForVisibleSlots()
                 (curQuick >= 0
                  && dynKind != uf8::bindings::DynamicBankKind::None
                  && !dynOwnsSet
+                 && !skContinues   // the set's stored slots are the left row's
                  && setOwnsDynamicKey_(
                         uf8::bindings::getUserQuickSlot(
                             curLayer, curQuick, curSub, sk),
@@ -41310,10 +41568,10 @@ void pushZonesForVisibleSlots()
             if (userCtx
                 && dynKind != uf8::bindings::DynamicBankKind::None
                 && !dynSetOwns) {
-                dynInfo = dynamicBankSlot_(dynKind, dynBankContextTrack_(), sk);
+                dynInfo = dynamicBankSlot_(dynKind, dynBankContextTrack_(), dynSk);
                 userLabel = dynInfo.label;
                 userBankSlotPresent = dynInfo.present;
-            } else if (curQuick >= 0) {
+            } else if (curQuick >= 0 && !skPast) {
                 const auto userSlot = uf8::bindings::getUserQuickSlot(
                     curLayer, curQuick, curSub, sk);
                 // ⇨ THE ROW FOLLOWS THE HELD MODIFIER.
@@ -41389,7 +41647,7 @@ void pushZonesForVisibleSlots()
             // "shift als mod für ALLE bänke öffnen (auch die SSL Factory)".
             // On Plain an occupied key still shows and fires the plug-in
             // parameter, unchanged; only the held-modifier sets open up.
-            if (!userCtx && !pluginModeLocal && curLayer == 0 && vSk.linkIdx
+            if (!userCtx && !pluginModeLocal && curLayer == 0 && vSk.linkIdx && !skPast
                 && (vSk.linkIdx[sk] == softkey::kNoSlot || sslSetOwnsRow)) {
                 const int qd = (domSk == uf8::Domain::BusComp) ? 1 : 0;
                 const auto fslot = uf8::bindings::getUserQuickSlot(
@@ -41527,17 +41785,15 @@ void pushZonesForVisibleSlots()
                 // gewiesene Soft-Key V-Pot banks no-function" →
                 // visually dark so the user sees which banks are
                 // empty and can't navigate there).
-                const int activeBank = std::clamp(
+                int activeBank = std::clamp(
                     g_softKeyBank.load(), 0,
                     uf8::kUserUf8BankCount - 1);
                 bool bankAssigned = false;
                 if (auto uctxBank = userStripCtxFocused_(); uctxBank.map) {
-                    for (int sIdx = 0; sIdx < uf8Strips_(); ++sIdx) {
-                        if (userVpotSlot_(uctxBank.map->uf8, sk, sIdx).vst3Param >= 0)
-                        {
-                            bankAssigned = true; break;
-                        }
-                    }
+                    bankAssigned = uf8PmVpotBankAssigned_(uctxBank.map->uf8, sk);
+                    // A spread map: the right row shows the right unit's bank.
+                    if (s >= 8 && uf8PmSpread_(uctxBank.map->uf8))
+                        activeBank = uf8RightVpotBank_();
                 }
                 const bool isActive = (sk == activeBank);
                 // During learn the user can switch to an as-yet-empty bank to
@@ -45115,19 +45371,25 @@ struct GlobalLedKey {
     bool valid    = false;
 };
 constexpr size_t kGlobalLedCacheSize = 64;  // Uf8GlobalLed enum has ~46 entries
-std::array<GlobalLedKey, kGlobalLedCacheSize> g_lastGlobalLedPush{};
+// One row per UF8: row 1 is the right unit's, written only under
+// LedUnitScope(1); every other push keeps row 0.
+std::array<std::array<GlobalLedKey, kGlobalLedCacheSize>, 2> g_lastGlobalLedPushU{};
+inline std::array<GlobalLedKey, kGlobalLedCacheSize>& globalLedCache_()
+{
+    return g_lastGlobalLedPushU[t_ledUnit == 1 ? 1 : 0];
+}
 
 void invalidateGlobalLedCache_()
 {
-    for (auto& k : g_lastGlobalLedPush) k.valid = false;
+    for (auto& row : g_lastGlobalLedPushU)
+        for (auto& k : row) k.valid = false;
 }
 
 void invalidateGlobalLedCell_(uf8::Uf8GlobalLed cell)
 {
     const size_t idx = static_cast<size_t>(cell);
-    if (idx < g_lastGlobalLedPush.size()) {
-        g_lastGlobalLedPush[idx].valid = false;
-    }
+    for (auto& row : g_lastGlobalLedPushU)
+        if (idx < row.size()) row[idx].valid = false;
 }
 
 void sendUf8GlobalLed(uf8::Uf8GlobalLed cell, uf8::GlobalLedState callerState)
@@ -45207,8 +45469,9 @@ void sendUf8GlobalLed(uf8::Uf8GlobalLed cell, uf8::GlobalLedState callerState)
                  | (int(r.colour->aDim)    <<  8)
                  |  int(r.colour->bDim);
     }
-    if (idx < g_lastGlobalLedPush.size()) {
-        auto& last = g_lastGlobalLedPush[idx];
+    auto& cache = globalLedCache_();
+    if (idx < cache.size()) {
+        auto& last = cache[idx];
         if (last.valid && last.state == static_cast<int>(r.state) &&
             last.colour32 == colour32) {
             return;
@@ -45242,8 +45505,9 @@ static void sendUf8GlobalLedDirect_(uf8::Uf8GlobalLed cell, uf8::GlobalLedState 
     const int colour32 = colour ? ((int(colour->aBright) << 24) | (int(colour->bBright) << 16)
                                  | (int(colour->aDim) << 8) | int(colour->bDim))
                                 : 0x10000;
-    if (idx < g_lastGlobalLedPush.size()) {
-        auto& last = g_lastGlobalLedPush[idx];
+    auto& cache = globalLedCache_();
+    if (idx < cache.size()) {
+        auto& last = cache[idx];
         if (last.valid && last.state == static_cast<int>(state) && last.colour32 == colour32)
             return;
         last.state    = static_cast<int>(state);
@@ -45537,21 +45801,38 @@ void pushUf8GlobalLeds()
     // MIDI CC layer: the five bank keys are its pages, the keys it gives no
     // function go dark (onUf8Input's list), SEND/PLUG-IN further down.
     const bool ccOn = g_ccIdx >= 0;
-    if (ccOn) {
+    // ⇨ EACH UF8 LIGHTS ITS OWN PAGE (dual-UF8 plan, stage 4): the left the live
+    // one, a right unit the page after it, none past the last. An FX / Lanes
+    // bank continues on the right row, so both light the same key there.
+    {
         constexpr uf8::Uf8GlobalLed kPages[midicc::kPages] = {
             uf8::Uf8GlobalLed::VPotBank,
             uf8::Uf8GlobalLed::Soft1, uf8::Uf8GlobalLed::Soft2, uf8::Uf8GlobalLed::Soft3,
             uf8::Uf8GlobalLed::Soft4, uf8::Uf8GlobalLed::Soft5 };
-        for (int p = 0; p < midicc::kPages; ++p)
-            sendUf8GlobalLedDirect_(kPages[p], p == g_ccState.page
-                ? uf8::GlobalLedState::Bright : uf8::GlobalLedState::Dim);
-    } else {
-    sendUf8GlobalLed(uf8::Uf8GlobalLed::VPotBank, subBankForLeds == 0);
-    sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft1,    subBankForLeds == 1);
-    sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft2,    subBankForLeds == 2);
-    sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft3,    subBankForLeds == 3);
-    sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft4,    subBankForLeds == 4);
-    sendUf8GlobalLed(uf8::Uf8GlobalLed::Soft5,    subBankForLeds == 5);
+        const int units = uf8Units_();
+        uf8units::UnitPages up;
+        if (ccOn) {
+            up = ccPages_();
+        } else {
+            // The left lamp is the stored bank as it always was (unclamped: in
+            // Plug-in Mode g_softKeyBank is the V-Pot bank, 0..7); the right
+            // unit's comes from the page rule, or is the left's where the list
+            // runs on.
+            const auto skp = uf8SoftKeyPages_();
+            up.left  = subBankForLeds;
+            up.right = (skp.right >= 0 && skp.right == skp.left) ? subBankForLeds : skp.right;
+        }
+        for (int u = 0; u < units; ++u) {
+            LedUnitScope scope(units > 1 ? u : -1);
+            const int lit = uf8units::pageOnUnit(up, u);
+            for (int p = 0; p < midicc::kPages; ++p) {
+                if (ccOn)
+                    sendUf8GlobalLedDirect_(kPages[p], p == lit
+                        ? uf8::GlobalLedState::Bright : uf8::GlobalLedState::Dim);
+                else
+                    sendUf8GlobalLed(kPages[p], p == lit);
+            }
+        }
     }
     g_lastSoftKeyBank = subBankForLeds;
 
@@ -45674,21 +45955,30 @@ void pushUf8GlobalLeds()
             uf8::Uf8GlobalLed::SendPlugin5, uf8::Uf8GlobalLed::SendPlugin6,
             uf8::Uf8GlobalLed::SendPlugin7, uf8::Uf8GlobalLed::SendPlugin8,
         };
-        for (int i = 0; i < 8; ++i) {
-            if (ccOn) {
-                // Lit = the program this key sends is the one in play.
-                const midicc::Control& c = g_ccLayer.pages[g_ccState.page].sendPlugin[i];
-                if (!midicc::assigned(c)) {
-                    sendUf8GlobalLedDirect_(kSpLeds[i], uf8::GlobalLedState::Off);
-                    continue;
+        // On a CC layer each UF8's row is its own page's (the right unit's
+        // the page after the left's, dark past the last).
+        if (ccOn) {
+            const int units = uf8Units_();
+            const auto up = ccPages_();
+            for (int u = 0; u < units; ++u) {
+                LedUnitScope scope(units > 1 ? u : -1);
+                const int pg = uf8units::pageOnUnit(up, u);
+                for (int i = 0; i < 8; ++i) {
+                    // Lit = the program this key sends is the one in play.
+                    const midicc::Control* c = pg >= 0 ? &g_ccLayer.pages[pg].sendPlugin[i] : nullptr;
+                    if (!c || !midicc::assigned(*c)) {
+                        sendUf8GlobalLedDirect_(kSpLeds[i], uf8::GlobalLedState::Off);
+                        continue;
+                    }
+                    const bool lit = g_ccState.isKnown(pg, midicc::Kind::SendPlugin, i)
+                                  && g_ccState.v(pg, midicc::Kind::SendPlugin, i) >= 64;
+                    const uf8::LedColour col = uf8::ledColourForTrackRgb(midicc::colourRgb(*c));
+                    sendUf8GlobalLedDirect_(kSpLeds[i], lit ? uf8::GlobalLedState::Bright
+                                                            : uf8::GlobalLedState::Dim, &col);
                 }
-                const bool lit = g_ccState.isKnown(g_ccState.page, midicc::Kind::SendPlugin, i)
-                              && g_ccState.v(g_ccState.page, midicc::Kind::SendPlugin, i) >= 64;
-                const uf8::LedColour col = uf8::ledColourForTrackRgb(midicc::colourRgb(c));
-                sendUf8GlobalLedDirect_(kSpLeds[i], lit ? uf8::GlobalLedState::Bright
-                                                        : uf8::GlobalLedState::Dim, &col);
-                continue;
             }
+        }
+        for (int i = 0; i < 8 && !ccOn; ++i) {
             const bool sendHit = (sendVAll == i || sendFAll == i);
             const bool recvHit = (recvVAll == i || recvFAll == i);
             const bool routingActive = sendHit || recvHit;
@@ -49573,7 +49863,7 @@ void onTimerBody_()
             // unit; the right-hand one keeps its tracks' colours.
             g_sync->refresh(uf8EncPickerColorForStrip_, reaperColorForVisibleSlot);
         } else if (g_ccIdx >= 0) {
-            g_sync->refresh(ccColorForStrip_);   // 8..15 answer 0: the right UF8 dark
+            g_sync->refresh(ccColorForStrip_);   // 8..15: the right UF8's page, 0 past the last
         } else if (overlayOnUf8) {
             g_sync->refresh(navColorForStrip, reaperColorForVisibleSlot);
         } else {
@@ -50882,7 +51172,7 @@ custom_action_register_t g_actionUf1ExtenderToggle{
 };
 int g_cmdUf1ExtenderToggle = 0;
 custom_action_register_t g_actionUf1ExtenderSide{
-    0, "REASIXTY_UF1_EXTENDER_SIDE", "Rea-Sixty: UF1 Extender side (left / right)", nullptr,
+    0, "REASIXTY_UF1_EXTENDER_SIDE", "Rea-Sixty: UF1 Extender side (left / middle / right)", nullptr,
 };
 int g_cmdUf1ExtenderSide = 0;
 // Dual UF8: swap which unit is left (strips 1-8) and right (strips 9-16).
@@ -54678,12 +54968,14 @@ void reasixty_setUf1Extender(bool on)
     g_bankDirty.store(true);
     g_pageDirty.store(true);
 }
-int  reasixty_uf1ExtenderSide() { return g_uf1ExtenderSide.load(); }   // 1=right, 0=left
+int  reasixty_uf1ExtenderSide() { return g_uf1ExtenderSide.load(); }   // 1=right, 0=left, 2=middle
 void reasixty_setUf1ExtenderSide(int side)
 {
-    const int s = (side != 0) ? 1 : 0;
+    // 0 left, 1 right, 2 middle (between two UF8s; with one it acts as right).
+    const int s = (side == 0 || side == 2) ? side : 1;
     if (s == g_uf1ExtenderSide.exchange(s)) return;
-    SetExtState("rea_sixty", "uf1ExtenderSide", s ? "1" : "0", true);
+    char sb[4]; std::snprintf(sb, sizeof(sb), "%d", s);
+    SetExtState("rea_sixty", "uf1ExtenderSide", sb, true);
     g_bankDirty.store(true);
     g_pageDirty.store(true);
 }
@@ -58041,8 +58333,8 @@ void registerBindingHandlers()
             g_bankDirty.store(true);
             g_pageDirty.store(true);
         },
-        [](int) { return g_uf1ExtenderSide.load() == 1; },   // lit = right (default)
-        "UF1 Extender: side (left / right)", false
+        [](int) { return g_uf1ExtenderSide.load() != 0; },   // lit = right (default) or middle
+        "UF1 Extender: side (left / middle / right)", false
     });
 
     // UF1 Jog Mode (Baustein 1) — cycle + direct-set builtins. Atomic store +
@@ -60119,11 +60411,12 @@ void registerBindingHandlers()
             // the top-soft-key row. SSL g_softKeyBank stays untouched
             // so re-entering CS/BC context resumes whatever the user
             // last navigated on the plug-in side.
+            // Two UF8s: the key picks the page of the unit it is on, the left
+            // unit shows the one below it (Uf8Units.h, pagesAfterPress).
             if (activeQuick >= 0) {
-                int target = param;
-                if (target < 0) target = 0;
-                if (target >= uf8::bindings::kSubBanksPerQuick)
-                    target = uf8::bindings::kSubBanksPerQuick - 1;
+                const int target = uf8units::pagesAfterPress(
+                    t_uf8InputUnit, param, uf8::bindings::kSubBanksPerQuick,
+                    uf8Units_()).left;
                 if (g_activeSubBank[layer].exchange(target) != target) {
                     g_softKeyDirty.store(true);
                     g_bankDirty.store(true);
@@ -60134,9 +60427,8 @@ void registerBindingHandlers()
             const auto domain = (fp.domain == uf8::Domain::BusComp)
                 ? uf8::Domain::BusComp : uf8::Domain::ChannelStrip;
             const int maxBank = softkey::maxBankFor(domain);
-            int target = param;
-            if (target < 0)        target = 0;
-            if (target > maxBank)  target = maxBank;
+            const int target = uf8units::pagesAfterPress(
+                t_uf8InputUnit, param, maxBank + 1, uf8Units_()).left;
             if (g_softKeyBank.exchange(target) != target) {
                 g_softKeyDirty.store(true);
                 char buf[8];
@@ -61268,6 +61560,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // Restore persisted UI mode flags (Pan override, encoder mode) so
     // they survive REAPER restarts. ExtState is global per-extension —
     // persistAcrossSessions=true writes through to reaper-extstate.ini.
+    if (const char* v = GetExtState("ReaSixty", "softKeyBankRight"); v && *v)
+        g_softKeyBankRight.store(std::clamp(std::atoi(v), 0, uf8::kUserUf8VpotBankCount - 1));
     if (const char* v = GetExtState("ReaSixty", "forcePan");
         v && v[0] == '1') {
         g_forcePan.store(true);
@@ -61352,7 +61646,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     if (const char* v = GetExtState("rea_sixty", "uf1Extender"); v && *v)
         g_uf1Extender.store(std::atoi(v) != 0);          // default off
     if (const char* v = GetExtState("rea_sixty", "uf1ExtenderSide"); v && *v)
-        g_uf1ExtenderSide.store(std::atoi(v) != 0 ? 1 : 0);  // default right (1)
+        g_uf1ExtenderSide.store(std::atoi(v) == 0 ? 0 : std::atoi(v) == 2 ? 2 : 1);  // default right (1), 2 middle
     if (const char* v = GetExtState("rea_sixty", "focusSetScope"); v && *v) {
         const int s = std::atoi(v);
         g_focusSetScope.store((s >= 0 && s <= 2) ? s : 0);   // default Both (0)

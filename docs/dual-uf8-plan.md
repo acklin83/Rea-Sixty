@@ -1,6 +1,6 @@
 # Zwei UF8 als eine Fläche: Plan
 
-Stand 28.10.2026, Entscheide von Frank eingearbeitet, Plan auf logische Fehler geprüft. Stufen 1 bis 3 gebaut. Grundlage: PR #10 von Tim Shadgett (tshadgett, `dual-uf8-pr`,
+Stand 28.10.2026, Entscheide von Frank eingearbeitet, Plan auf logische Fehler geprüft. Stufen 1 bis 4 gebaut. Grundlage: PR #10 von Tim Shadgett (tshadgett, `dual-uf8-pr`,
 fünf Commits auf `4311c3e9`, getestet an seiner Kiste mit 2× UF8 + UF1 unter Windows 11).
 Frank: „gemischter Weg“: den Geräteteil übernehmen, die Einbindung in die Fläche selbst bauen,
 sein Diff als Karte. Frank hat kein zweites UF8: das Verhalten mit zwei Geräten kann nur Tim
@@ -137,7 +137,21 @@ und ohne Funktion (kein unsichtbares Bedienen der Spuren 9..16); die nächste CC
 in Stufe 4. **Frank prüft: ein UF8 unverändert (Fader, V-Pots, Sends, Plugin Mode, Extender
 links/rechts, CC-Layer). Tim prüft: 16 Strips, Banking, Sends, Extender links/rechts.**
 
-### Stufe 4: Modi auf zwei Geräten
+### Stufe 4: Modi auf zwei Geräten, GEBAUT 28.10.
+- Seitentasten (V-POT, 1..5) wählen die Seite des Geräts, auf dem sie gedrückt werden
+  (`t_uf8InputUnit` in `softkey_bank_select`, CC: `CcPage` strip 2); V-POT rechts = links 1,
+  rechts 2. PAGE ◄ ► bleibt ±1.
+- Seiten-LEDs und auf dem CC-Layer die SEND/PLUG-IN-Reihe pro Gerät (`LedUnitScope`,
+  Lampen-Cache je Gerät). Die linke Seiten-LED zeigt den gespeicherten Wert wie bisher.
+- Rechte Soft-Key-Reihe = nächste Seite (`uf8SoftKeyPages_`, Maler und Druck); FX und Lanes setzen
+  die Liste fort (Einträge 9..16, Seiten 16 breit). Hinter der letzten Seite leer.
+- CC-Layer: rechts die nächste Seite mit Eingang, Touch, Rückwegen und Farben
+  (`State::localOn`, `ccPageOf_`, `ccTouched_(page, …)`); hinter der letzten Seite dunkel und taub.
+- Plug-in Mode Split / Spread nach Tim (`89be6895`): `uf8PmSpread_`, `g_softKeyBankRight`.
+- UF1-Extender „Mitte“: Umschalter links → Mitte → rechts mit zwei UF8 (mit einem weiter
+  links/rechts), Settings-Knopf „Middle“, Lader und Setter kennen 2, Send-Route über
+  `kUf1ExtMiddleStrip`. Lampe des Builtins: an für rechts und Mitte.
+
 Seitenregel für Soft-Keys und CC-Layer mit Seiten-LEDs pro Gerät, FX- und Lanes-Bänke fortsetzen und
 um 16 blättern, CC-Layer rechts = nächste Seite (mit Touch und Rückwegen), Plug-in Mode Split /
 Spread (Tims Lösung), UF1-Extender „Mitte“ mit Dreierzyklus. **Tim prüft am Gerät, Frank prüft

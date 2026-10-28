@@ -26,3 +26,12 @@ Swap. Danach Stufe 2 (`Uf8Units.h` + ctest).
 - Abweichung vom Plan: Identify lässt das Gerät pulsieren statt LEFT/RIGHT zu schreiben.
 - Offen für Stufe 4: rechte Soft-Key-Reihe = nächste Seite, Seiten-LEDs pro Gerät, CC rechts =
   nächste Seite, Plug-in Mode Split/Spread, Extender Mitte.
+
+## Stufe 4
+
+- Seiten pro Gerät (Tasten, LEDs), rechte Soft-Key-Reihe = nächste Seite, FX/Lanes fortgesetzt,
+  CC-Layer rechts = nächste Seite (mit Touch/Rückwegen), Plug-in Mode Split/Spread (Tim),
+  Extender Mitte. `test_midi_cc_layer` deckt `State::localOn` ab.
+- Mit einem UF8 Zeile für Zeile gegen vorher geprüft; die linke Seiten-LED bleibt beim
+  ungeklemmten Wert (Plug-in Mode: V-Pot-Bank 0..7).
+- Offen: Stufe 5 (Handbuch „Two UF8s“, Changelog mit Tim, Antwort auf PR #10).

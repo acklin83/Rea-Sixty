@@ -148,6 +148,25 @@ int main()
         s.forget();
         EXPECT(!s.isKnown(0, Kind::Fader, 0) && s.page == 0);
     }
+    // ---- a second UF8 writes the page after the live one (localOn) -----------
+    {
+        Layer L;
+        L.pages[0].fader[0] = cc(7);
+        L.pages[1].fader[0] = cc(8);
+        State s;
+        auto m = s.localOn(L, 1, Kind::Fader, 0, 90, 5000);
+        EXPECT(m.size() == 1 && m[0] == (Msg{0xB0, 8, 90}));   // page 1's controller
+        EXPECT(s.isKnown(1, Kind::Fader, 0) && s.v(1, Kind::Fader, 0) == 90);
+        EXPECT(!s.isKnown(0, Kind::Fader, 0));                 // the live page untouched
+        EXPECT(s.page == 0);
+        EXPECT(s.localOn(L, 1, Kind::Fader, 0, 90, 5010).empty());   // no repeats
+        EXPECT(!s.apply(Hit{1, Kind::Fader, 0, 20}, 5050, false));   // its echo window
+        EXPECT(s.localOn(L, -1, Kind::Fader, 0, 1, 6000).empty());   // no page
+        EXPECT(s.localOn(L, kPages, Kind::Fader, 0, 1, 6000).empty());
+        // local() is localOn() on the live page.
+        auto m0 = s.local(L, Kind::Fader, 0, 50, 7000);
+        EXPECT(m0.size() == 1 && m0[0] == (Msg{0xB0, 7, 50}));
+    }
 
     // ---- CC lanes in items -------------------------------------------------------
     {

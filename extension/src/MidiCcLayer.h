@@ -387,13 +387,20 @@ struct State {
     // not change (nothing is repeated).
     std::vector<Msg> local(const Layer& L, Kind k, int i, int newValue, int64_t nowMs)
     {
-        const Control& c = L.pages[page].at(k, i);
-        int& cur = v(page, k, i);
-        bool& kn = isKnown(page, k, i);
+        return localOn(L, page, k, i, newValue, nowMs);
+    }
+    // The same on page `p`: a second UF8 shows the page after `page` and its hand
+    // writes there (dual UF8).
+    std::vector<Msg> localOn(const Layer& L, int p, Kind k, int i, int newValue, int64_t nowMs)
+    {
+        if (p < 0 || p >= kPages) return {};
+        const Control& c = L.pages[p].at(k, i);
+        int& cur = v(p, k, i);
+        bool& kn = isKnown(p, k, i);
         if (kn && cur == newValue && k != Kind::SendPlugin) return {};
         cur = newValue;
         kn = true;
-        sentAt(page, k, i) = nowMs;
+        sentAt(p, k, i) = nowMs;
         return messagesFor(k, c, L.defaultChannel, newValue);
     }
 };
