@@ -1,6 +1,6 @@
 # Zwei UF8 als eine Fläche: Plan
 
-Stand 27.10.2026, Entscheide von Frank eingearbeitet, Plan auf logische Fehler geprüft. Nichts gebaut. Grundlage: PR #10 von Tim Shadgett (tshadgett, `dual-uf8-pr`,
+Stand 28.10.2026, Entscheide von Frank eingearbeitet, Plan auf logische Fehler geprüft. Stufe 1 gebaut. Grundlage: PR #10 von Tim Shadgett (tshadgett, `dual-uf8-pr`,
 fünf Commits auf `4311c3e9`, getestet an seiner Kiste mit 2× UF8 + UF1 unter Windows 11).
 Frank: „gemischter Weg“: den Geräteteil übernehmen, die Einbindung in die Fläche selbst bauen,
 sein Diff als Karte. Frank hat kein zweites UF8: das Verhalten mit zwei Geräten kann nur Tim
@@ -81,7 +81,14 @@ derselben Lizenz. Übernommener Code behält seine Autorschaft (Cherry-Pick) ode
 **Kein Release zwischen den Stufen 2 und 4.** Erst wenn Stufe 4 auf `main` ist, gehen zwei UF8 in
 ein Release. Stufe 1 allein darf mit (Einstellung ab Werk aus).
 
-### Stufe 1: Geräteteil übernehmen (Tims Code, seine Autorschaft)
+### Stufe 1: Geräteteil übernehmen (Tims Code, seine Autorschaft), GEBAUT 28.10.
+`58e93fcf` (Cherry-Pick, Autor Tim), `9a94bceb` (unser Teil). Abweichungen vom PR: mit
+„Second UF8“ aus öffnet `UF8Device::open()` (`kFirstFound`) wie bisher über
+`libusb_open_device_with_vid_pid`, die Geräteliste läuft nur mit der Einstellung an (Risiko
+„Stufe 1 ändert das Öffnen auch für ein UF8“ damit erledigt). Umschalten der Einstellung öffnet
+das UF8 neu. Swap (Builtin `uf8_swap_units` und Tims Action) setzt nur eine Anfrage, der Timer
+tauscht. Öffnungsfehler rechts: Konsole nur bei neuem Grund, nicht alle 5 s.
+
 Cherry-Pick von `5e45f266` auf `main`, Konflikte von Hand. Dazu von uns: die Einstellung
 „Second UF8“ (gated Öffnen und Suchen), Swap als Builtin (Picker-Kategorie, Doku-Text) und als
 No-op mit einem UF8. Ergebnis: mit der Einstellung an wird ein zweites UF8 geöffnet und bleibt
