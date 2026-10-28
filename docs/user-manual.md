@@ -418,6 +418,66 @@ For clarity (Rev 11 reference, p.14-17):
 
 \newpage
 
+# Two UF8s
+
+Two UF8s side by side are one surface with 16 strips. Banking, sends and everything on a strip run across both units, and the keys outside the strips do the same on either one.
+
+## Setting it up
+
+1. Plug both UF8s in.
+2. Tick **Second UF8** in Settings, Devices. It is off out of the box, and while it is off Rea-Sixty uses one UF8 and does not look for another. Switching it on or off restarts the UF8 once, so its displays go dark for a moment.
+3. The device list now shows **UF8 L** and **UF8 R**, each with **Identify**, which flashes that unit. If the one flashing as UF8 L stands on the right of your desk, press **Swap**.
+
+Left and right follow the order of the USB ports the two are plugged into. Swap reverses it, and Rea-Sixty keeps your choice. Swap is also an action for a key, *Swap UF8 units (left / right)* under *Hardware Modes*, and the REAPER action *Rea-Sixty: Swap UF8 units (left / right)*. With one UF8 it does nothing.
+
+A second UF8 plugged in later joins within a few seconds. Unplug it and the surface is back to eight strips.
+
+## What 16 strips change
+
+- The BANK keys move by 16 strips, 17 with the UF1 Extender.
+- The Master pinned to strip 8 sits on strip 16, the last one.
+- A send or receive view on the faders shows 16 sends at a time.
+- Each unit shows its own eight strips: names, values, meters, gain reduction and the colour bar.
+- Brightness and Sleep apply to both units.
+- The keys that are not part of a strip (FLIP, PAN, FINE, the layer keys, the Quick keys, NORM, REC and AUTO, the automation row, the CHANNEL encoder and the keys around it, the cursor pad, SEND/PLUG-IN, BANK and PAGE) do the same on either unit, and their lamps light on both. The page keys are the exception, see below.
+
+## Pages
+
+The soft-keys of the right UF8 show the page after the left one's: the next SSL soft-key page, or the next bank of the soft-key set that is engaged. On the last page the right row is empty.
+
+The page keys V-POT and 1 to 5 pick the page of the unit you press them on, and the other unit follows. Press **3** on the right UF8: it shows page 3, the left one page 2. Press **V-POT** on the right UF8: there is no page before it, so the left one shows V-POT and the right one page 1. Each UF8 lights the key of its own page. The PAGE keys step both units by one page.
+
+FX and Lanes banks are lists. With two UF8s the right row carries on with entries 9 to 16 of the same list, and each page step moves 16 entries.
+
+## UF8 Plug-in Mode on two units
+
+A map that uses its second fader bank, a plug-in with 16 channels, lies across both units: the left UF8 shows the fader bank picked with the BANK keys, the right one the other bank. With any other map the right UF8's V-Pots get a V-Pot bank of their own, picked with the right unit's soft-keys, so 16 parameters sit on the V-Pots. The right unit's faders, SOLO, CUT and SEL do nothing then.
+
+## MIDI CC layer on two units
+
+The right UF8 shows the page after the left one, with its own controls and values, and sends on that page. Return paths and the fader under your hand work there as on the left. On the last page, PG5, the right UF8 is dark and does nothing. The SEND/PLUG-IN keys of each unit belong to the page that unit shows.
+
+## Only on the left UF8
+
+- The marker list of Nav Mode. The right UF8 keeps showing its tracks.
+- The encoder-mode picker, also when you open it from the right unit.
+- DynaMount mounts and Hue lamps. They take strips of the left UF8, and the right one shows the tracks that follow.
+- Touch to Learn learns from the controls of the left UF8 only.
+
+## The UF1 as Extender
+
+With two UF8s the Extender has three places:
+
+| Side | Strips |
+|---|---|
+| Left | UF1 on strip 1, the UF8s on 2 to 17 |
+| Middle | Left UF8 on 1 to 8, UF1 on 9, right UF8 on 10 to 17 |
+| Right | The UF8s on 1 to 16, UF1 on 17 |
+
+The side switch steps left, middle, right. **Middle** appears in the settings while a second UF8 is connected; with one UF8 it acts as right.
+
+\newpage
+
 # UC1 hardware
 
 The UC1 mirrors the SSL Channel Strip 2 + Bus Compressor 2 controls on a dedicated unit, plus a central control panel for navigation. When UC1 is plugged in alongside UF8, it auto-engages on the focused REAPER track and follows the focused Instance.
@@ -789,6 +849,8 @@ track. Turn it off and the Extender is back as it was.
 Extender and the Focus-Set pin are mutually exclusive: switching either on clears
 the other, and releasing the pin puts the Extender back the way you left it.
 
+With two UF8s there is a third place, **Middle**, between them (chapter *Two UF8s*).
+
 *Settings → Bindings → UF1.*
 
 ## Pin Set — parking the UF1 on a Focus Set
@@ -1131,6 +1193,8 @@ The hardware: what is plugged in, how bright it is, how its meters fall, how its
 One line per device — **UF8**, **UC1**, **UF1** — reading `[connected]` or `[not connected]`, plus `SN` and the serial number when connected.
 
 UF8 and UC1 each get an **Identify** button while connected: it flashes that unit's LEDs and displays between Dark and Full at 4 Hz for two seconds, so you can tell which box is which in a multi-unit rig. The UF1 has no Identify button.
+
+**Second UF8** adds a UF8 to the right of the first (chapter *Two UF8s*). With it on, the list names them **UF8 L** and **UF8 R**, each with its own **Identify**, and **Swap** exchanges left and right.
 
 Rea-Sixty remembers which surfaces have been attached to this computer, and hides the settings for the ones that never have. With only a UF1 on the desk you do not see UC1 GR calibration, UF8 V-Pot feel, or the UF8 and UC1 halves of the REC block. The search box hides them too, so a search cannot land you on a control the page does not draw.
 
@@ -2265,7 +2329,7 @@ Same six modes, but applied via REAPER's *global override* (overrides every trac
 
 ## Bank navigation
 
-- **Bank ← (UF8 Plug-in Mode: fader-bank; else ±strip scroll)** — scroll the surface one bank left (8 strips, 9 with the UF1 Extender, less any pinned strips). In UF8 Plug-in Mode the same button flips between fader-banks A / B (for 16-strip plug-ins) instead, and in an "of focused track" send or receive view it pages the send list.
+- **Bank ← (UF8 Plug-in Mode: fader-bank; else ±strip scroll)** — scroll the surface one bank left (8 strips, 9 with the UF1 Extender, 16 and 17 with two UF8s, less any pinned strips). In UF8 Plug-in Mode the same button flips between fader-banks A / B (for 16-strip plug-ins) instead, and in an "of focused track" send or receive view it pages the send list.
 - **Bank → (UF8 Plug-in Mode: fader-bank; else ±strip scroll)** — scroll 8 strips right (same fader-bank flip in UF8 Plug-in Mode).
 - **Bank by 1ch ← (one strip)** / **Bank by 1ch → (one strip)** — scroll one strip at a time.
 - **Bank follows REAPER selection**: a switch. Off, selecting a track in REAPER no longer moves the bank. Lit while the bank follows. Same setting as the checkbox on the UF8 tab of *Bindings*.
@@ -2477,6 +2541,7 @@ When held, these shift every other binding to its modifier slot. The UF8 has one
 - **Mode-change banner: show / hide (flashes Sel / Encoder mode)** — show / hide the transient **mode-change banner**. See *On-Screen Display → Mode-change banner*.
 - **Touch-to-Learn: arm / disarm (touch a control, wiggle a param)** — arm / disarm **Touch-to-Learn**. While armed, touch a control on the surface and wiggle a plug-in parameter to learn it to that control on the fly — FX-Learn without opening Settings. Disarming cancels and clears the pending learn. Bindable here (category *Hardware Modes*); the soft-keys switch to the V-Pot layer while armed, and a V-Pot **press** learns as a Toggle binding. Step cycles are built in the editor, not by touch (see *FX Learn → Step cycle*).
 - **Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)** — flip the UC1 **Out Gain** pot between its mapped SSL Channel-Strip *Fader Level* parameter and **REAPER's track volume fader**. While engaged, the pot drives track volume even on tracks with no channel-strip plug-in, and the LED ring + readout follow the track fader. Bindable from the Bindings picker (under *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Toggle UC1 Out-Gain (Mapped ↔ REAPER Fader)* (`REASIXTY_UC1_OUTGAIN_FADER_TOGGLE`) for the keyboard / toolbar.
+- **Swap UF8 units (left / right)**: with two UF8s, swaps which one is the left unit. Bindable here (category *Hardware Modes*) and available as the REAPER action *Rea-Sixty: Swap UF8 units (left / right)* (`REASIXTY_UF8_SWAP_UNITS`). With one UF8 it does nothing.
 - **Restart Rea-Sixty (re-open devices)** — close the UF8, UC1, UF1 and MIDI ports and open them again, so a surface that has stopped responding can be revived without the trip through Preferences → Control Surface. Bindable here (category *Hardware Modes*) **and** available as the REAPER action *Rea-Sixty: Restart Rea-Sixty (re-open devices)* (`REASIXTY_RESTART`) — worth a keyboard shortcut, since a hardware key is no help when the hardware is the thing that needs re-opening. This re-opens the **devices**, not the extension: REAPER holds the plug-in for the life of the process, so a new build still needs REAPER restarted.
 
 ## Internal (not user-bindable)

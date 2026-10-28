@@ -1,6 +1,6 @@
 # Zwei UF8 als eine Fläche: Plan
 
-Stand 28.10.2026, Entscheide von Frank eingearbeitet, Plan auf logische Fehler geprüft. Stufen 1 bis 4 gebaut. Grundlage: PR #10 von Tim Shadgett (tshadgett, `dual-uf8-pr`,
+Stand 28.10.2026, Entscheide von Frank eingearbeitet, Plan auf logische Fehler geprüft. Stufen 1 bis 4 gebaut, Handbuch (Stufe 5) geschrieben. Grundlage: PR #10 von Tim Shadgett (tshadgett, `dual-uf8-pr`,
 fünf Commits auf `4311c3e9`, getestet an seiner Kiste mit 2× UF8 + UF1 unter Windows 11).
 Frank: „gemischter Weg“: den Geräteteil übernehmen, die Einbindung in die Fläche selbst bauen,
 sein Diff als Karte. Frank hat kein zweites UF8: das Verhalten mit zwei Geräten kann nur Tim
@@ -157,7 +157,22 @@ um 16 blättern, CC-Layer rechts = nächste Seite (mit Touch und Rückwegen), Pl
 Spread (Tims Lösung), UF1-Extender „Mitte“ mit Dreierzyklus. **Tim prüft am Gerät, Frank prüft
 ein UF8 unverändert.**
 
-### Stufe 5: Handbuch, Changelog, Antwort an Tim
+### Stufe 5: Handbuch, Changelog, Antwort an Tim, Handbuch GEBAUT 28.10.
+Handbuch: Kapitel „Two UF8s“ nach „UF8 hardware“, dazu Devices-Seite (Second UF8, UF8 L/R,
+Swap), Extender (Middle), Bank-Aktionen (16/17), Aktion *Swap UF8 units*. Die Release Notes
+entstehen erst beim Release; diese Zeilen gehören dann hinein (Tim nennen):
+
+```
+## Two UF8s
+- Two UF8s side by side as one surface with 16 strips. Built from Tim Shadgett's pull request (#10), who also tested it on his two units.
+- Settings, Devices: Second UF8 (off out of the box), UF8 L and UF8 R with Identify each, Swap. Left and right follow the USB ports.
+- The right unit's soft-keys show the next page; the page keys pick the page of the unit they are pressed on, and each unit lights its own. FX and Lanes banks run on with entries 9 to 16.
+- MIDI CC layer: the right unit shows the next page.
+- UF8 Plug-in Mode: a 16-channel map lies across both units; any other map gets a second V-Pot bank on the right unit.
+- UF1 Extender: a third place, between the two UF8s.
+- Manual: new chapter Two UF8s.
+```
+
 Kapitel „Two UF8s“ (Einrichten, links/rechts, Seiten, was nur links läuft, Extender), Changelog
 nennt Tim. Die Antwort auf den PR (Dank, gemischter Weg, Bitte um Tests je Stufe) geht schon vor
 Stufe 1 raus: ich entwerfe, Frank liest, dann wird gepostet. Den PR schliessen wir, wenn Stufe 4
