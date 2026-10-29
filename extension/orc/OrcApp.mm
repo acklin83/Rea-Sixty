@@ -115,7 +115,7 @@ static orc::Surface* g_surface = nullptr;
         // leave the unit dark without a word (docs/orc-uf8-plan.md, section 5).
         const orc::Uf8Status u8 = g_surface->uf8Status();
         if (u8.open)
-            self.uf8Line.title = @"UF8   held by ORC";
+            self.uf8Line.title = [NSString stringWithFormat:@"UF8   held by ORC, %s", u8.serial.c_str()];
         else if (orc::reaperWantsUf1() && orc::reaperMarkerVersion() == 1)
             self.uf8Line.title = @"UF8   REAPER cannot take it yet: update the REAPER extension";
         else

@@ -102,8 +102,10 @@ std::vector<std::string> rmeActions()
 {
     std::vector<std::string> out;
     for (const auto& n : bnd::builtinNames())
-        // Plus Sleep, which ORC registers itself (Surface::start).
-        if (std::string(bnd::builtinCategory(n)) == "RME" || n == "sleep_now") out.push_back(n);
+        // Plus Sleep and the brightness steps (category Brightness), which ORC
+        // registers itself (Surface::start).
+        if (std::string(bnd::builtinCategory(n)) == "RME"
+            || std::string(bnd::builtinCategory(n)) == "Brightness") out.push_back(n);
     std::sort(out.begin(), out.end(), [](const std::string& a, const std::string& b) {
         return bnd::builtinDisplayName(a) < bnd::builtinDisplayName(b);
     });
@@ -210,6 +212,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
 @property (nonatomic, strong) NSTextField*   jogStep;
 @property (nonatomic, strong) NSButton*      sleepBox;
 @property (nonatomic, strong) NSTextField*   sleepMinutes;
+@property (nonatomic, strong) NSButton*      showMainBox;
 @property (nonatomic, strong) NSTextField*   knobStep;
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* colourPops;
 @property (nonatomic, strong) NSMutableArray<NSTextField*>*   wearerLabels;
@@ -282,7 +285,9 @@ NSStackView* withUnit(NSView* field, NSString* unit)
         // one (Frank 27.09.2026: "Highlight nicht sauber").
         tabs.focusRingType = NSFocusRingTypeNone;
         [tabs addTabViewItem:[self connectionTab]];
+        [tabs addTabViewItem:[self surfacesTab]];
         [tabs addTabViewItem:[self controlsTab]];
+        [tabs addTabViewItem:[self uf8Tab]];
         [tabs addTabViewItem:[self softKeysTab]];
         [tabs addTabViewItem:[self coloursTab]];
         // Hue, DynaMount, OBS for the UF8's side-cars (docs/orc-uf8-plan.md).
@@ -392,7 +397,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
 - (NSTabViewItem*)controlsTab
 {
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"controls"];
-    item.label = @"Controls";
+    item.label = @"UF1 Controls";
 
     NSStackView* v = [[NSStackView alloc] init];
     // ⇨ No "turn" column: a pot turns the volume of its target, there is
@@ -433,9 +438,22 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     [v setCustomSpacing:20.0 afterView:grid];
     [v addArrangedSubview:jog];
 
-    // ⇨ SLEEP (Frank 02.10.2026: "einen Sleep wie in Rea-Sixty"). The UF1 goes
-    // dark after this long without a touch; the first touch only wakes it. Off
-    // from the factory. The clock is the extension's (SurfaceSleep.h).
+    item.view = [self pageWithStack:v];
+    return item;
+}
+
+// ⇨ WHAT IS THE UF1's AND WHAT THE UF8's (Frank 29.10.2026: "besser beschriften,
+// was UF1 und was UF8 ist"). Sleep is both surfaces' (one clock), so it has a
+// page of its own rather than sitting under the UF1's controls.
+- (NSTabViewItem*)surfacesTab
+{
+    NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"surfaces"];
+    item.label = @"Surfaces";
+    NSStackView* v = [[NSStackView alloc] init];
+
+    // ⇨ SLEEP (Frank 02.10.2026: "einen Sleep wie in Rea-Sixty"). The UF1 and the
+    // UF8 go dark after this long without a touch; the first touch only wakes
+    // them. Off from the factory. The clock is the extension's (SurfaceSleep.h).
     self.sleepBox = [NSButton checkboxWithTitle:@"Sleep when idle"
                                          target:self
                                          action:@selector(sleepChanged:)];
@@ -444,10 +462,23 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     sl.rowSpacing = 8.0;
     self.sleepMinutes = [self field:@selector(sleepChanged:) width:70];
     [sl addRowWithViews:@[ label(@"After"), withUnit(self.sleepMinutes, @"minutes") ]];
-    [v setCustomSpacing:20.0 afterView:jog];
     [v addArrangedSubview:self.sleepBox];
     [v addArrangedSubview:sl];
 
+    item.view = [self pageWithStack:v];
+    return item;
+}
+
+// The UF8's own settings (Frank 29.10.2026, "Show Main Volume on Change").
+- (NSTabViewItem*)uf8Tab
+{
+    NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"uf8"];
+    item.label = @"UF8 Controls";
+    NSStackView* v = [[NSStackView alloc] init];
+    self.showMainBox = [NSButton checkboxWithTitle:@"Show Main volume on change"
+                                            target:self
+                                            action:@selector(showMainChanged:)];
+    [v addArrangedSubview:self.showMainBox];
     item.view = [self pageWithStack:v];
     return item;
 }
@@ -526,11 +557,11 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     NSGridView* tr = [NSGridView gridViewWithNumberOfColumns:4 rows:0];
     tr.columnSpacing = 10.0;
     tr.rowSpacing = 6.0;
-    [tr addRowWithViews:@[ dim(@"Transport"), dim(@"Action"),
+    [tr addRowWithViews:@[ dim(@"UF1 transport"), dim(@"Action"),
                            dim(@"Active"), dim(@"Inactive") ]];
     for (int k = 0; k < kKeyCount; ++k) {
         if (k == kTransportCount) {
-            NSGridRow* row = [tr addRowWithViews:@[ dim(@"UF8"),
+            NSGridRow* row = [tr addRowWithViews:@[ dim(@"UF8 keys"),
                 [NSGridCell emptyContentView], [NSGridCell emptyContentView],
                 [NSGridCell emptyContentView] ]];
             row.topPadding = 12.0;
@@ -756,6 +787,7 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
     if (self.window.firstResponder != self.sleepMinutes.currentEditor)
         self.sleepMinutes.stringValue = @(cfg.sleepMinutes).stringValue;
     self.sleepMinutes.enabled = cfg.sleepEnabled;
+    self.showMainBox.state = cfg.uf8ShowMainOnChange ? NSControlStateValueOn : NSControlStateValueOff;
 
     std::string wearers[9];
     // Who wears a TotalMix colour: mixer channels only. The effects carry a
@@ -1122,6 +1154,12 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
     const bool on = self.sleepBox.state == NSControlStateValueOn;
     const int  m  = std::clamp((int)self.sleepMinutes.integerValue, 1, 99);
     [self apply:^(rme::Config& c) { c.sleepEnabled = on; c.sleepMinutes = m; }];
+}
+
+- (void)showMainChanged:(id)sender
+{
+    const bool on = self.showMainBox.state == NSControlStateValueOn;
+    [self apply:^(rme::Config& c) { c.uf8ShowMainOnChange = on; }];
 }
 
 - (void)colourChanged:(NSPopUpButton*)sender

@@ -11,6 +11,7 @@
 // throwaway folder, so the factory banks are seeded into a temp file and never
 // into the user's own orc.json.
 
+#include "../orc/OrcLight.h"
 #include "Bindings.h"
 #include "BindingsHost.h"
 #include "PushQuiet.h"
@@ -150,17 +151,21 @@ int main()
     bnd::registerBuiltin("sleep_now", bnd::BuiltinDescriptor{
         [](bool, bool, int) {}, [](int) { return false; }, "Sleep the surface now", false });
     bnd::setBuiltinKind("sleep_now", bnd::BuiltinKind::Switch);
+    // And the brightness steps, the same table ORC registers (orc/OrcLight.h).
+    orc::registerBrightnessBuiltins({});
 
     std::string j = "{\n";
 
     // ── the actions a soft key or a transport key can run in ORC ──────────
     // The ORC window's own rule (rmeActions in OrcSettingsWindow.mm): the
-    // builtins in the RME category, and Sleep.
+    // builtins in the RME category, and Sleep and the brightness steps
+    // (category Brightness).
     j += "  \"actions\": [\n";
     {
         bool first = true;
         for (const auto& n : bnd::builtinNames()) {
-            if (std::string(bnd::builtinCategory(n)) != "RME" && n != "sleep_now") continue;
+            const std::string cat = bnd::builtinCategory(n);
+            if (cat != "RME" && cat != "Brightness") continue;
             std::string title = bnd::builtinDisplayName(n);
             if (title.rfind("RME: ", 0) == 0) title.erase(0, 5);
             const auto k = bnd::builtinKind(n);

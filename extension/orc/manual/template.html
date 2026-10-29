@@ -205,7 +205,7 @@ it runs from follows, so a second copy is told apart.</td></tr>
 <tr><th>UF1</th><td><em>held by ORC</em> and the unit's serial number, or <em>not open</em> and the
 reason ORC was given. ORC tries again every two seconds, so a UF1 plugged in later or let go by
 another program is picked up by itself.</td></tr>
-<tr><th>UF8</th><td><em>held by ORC</em>, or <em>not open</em> and the reason. Tried again every two
+<tr><th>UF8</th><td><em>held by ORC</em> and the unit's serial number, or <em>not open</em> and the reason. Tried again every two
 seconds like the UF1.</td></tr>
 <tr><th>TotalMix</th><td>The link to TotalMix, see <a href="#trouble">when something is off</a>.</td></tr>
 <tr><th>Settings…</th><td>Opens <a href="#settings">the settings window</a>.</td></tr>
@@ -371,7 +371,7 @@ the page name and number, and on the EQ and Low Cut pages the channel's EQ curve
 <h3>The four pots</h3>
 <p><strong>Overview.</strong> Four of eight targets, in two banks (<a href="#c-58">5-8</a> switches).
 Turning sets the target's level in steps of {{potStepDb}} dB. A push does what is set for that pot
-on the settings page <a href="#set-controls">Controls</a>: make it the submix, put it on the fader,
+on the settings page <a href="#set-controls">UF1 Controls</a>: make it the submix, put it on the fader,
 mute it, or nothing. Out of the box every push picks the submix, and the targets are:</p>
 <!--GEN:pots-->
 <p><strong>STRIP.</strong> The page's parameters. A push sets the parameter back to its default,
@@ -418,7 +418,7 @@ With STRIP open the view stays open on the new row's channel.</td></tr>
 <h3>Jog wheel</h3>
 <p>The level of one fixed target, out of the box Main, in steps of {{jogStepDb}} dB. The time
 display shows that level. Target and step are on the settings page
-<a href="#set-controls">Controls</a>.</p>
+<a href="#set-controls">UF1 Controls</a>.</p>
 </div>
 
 <div class="ctl" id="c-transport" data-btn="kRwd kFfw kStop kPlay kRec">
@@ -913,7 +913,8 @@ of the normal step. In DynaMount, FINE and a push on a soft key store over a pre
 <h3>CHANNEL encoder</h3>
 <p>In every mode the level of the jog wheel's target, out of the box Main, in steps of
 {{jogStepDb}} dB, as the UF1's jog wheel. Target and step are on the settings page
-<a href="#set-controls">Controls</a>.</p>
+<a href="#set-controls">UF1 Controls</a>. In TotalMix, Main stands on strip 8 for two seconds while
+you turn (<a href="#set-uf8">Show Main volume on change</a>).</p>
 </div>
 
 <div class="ctl" id="u-bank" data-uf8="kBankLeft kBankRight">
@@ -1028,7 +1029,18 @@ copy that ticked it.</td></tr>
 <tr><th>Ask TotalMix again</th><td>Asks TotalMix for everything it knows, for example after you
 renamed channels.</td></tr>
 </tbody></table>
-<h3 id="set-controls">Controls</h3>
+<h3 id="set-surfaces">Surfaces</h3>
+<table class="data"><tbody>
+<tr><th>Sleep when idle, After</th><td>Off out of the box. On, the UF1 and the UF8 go dark after this
+many minutes (1 to 99) without a touch. They keep running behind the dark panels, so they wake with
+the same picture. Whatever you touch first only wakes them: that key or that turn does nothing else.
+A hand on a fader works at once. The action <em>Sleep the surface now</em> puts them to sleep from a
+key; press it again, or touch anything, to wake them.</td></tr>
+</tbody></table>
+<p>How bright the LEDs and the displays are is set from a key, with the six <em>Brightness</em>
+<a href="#actions">actions</a>: LEDs, displays (LCDs) or both, one step brighter or darker, five
+steps from dark to full. Both surfaces follow, and ORC keeps the steps.</p>
+<h3 id="set-controls">UF1 Controls</h3>
 <table class="data"><tbody>
 <tr><th>Pot, Target, Push</th><td>The eight pot targets, bank 1 and bank 2: a control-room role
 (Main, Main B, Phones 1 to 4, Talkback) or any channel TotalMix shows this remote. The push: Submix,
@@ -1036,15 +1048,16 @@ Select (put it on the fader), Mute or Nothing.</td></tr>
 <tr><th>Jog wheel</th><td>The jog wheel's target.</td></tr>
 <tr><th>Jog step</th><td>dB per step of the jog wheel.</td></tr>
 <tr><th>Pot step</th><td>dB per step of the four pots in the overview.</td></tr>
-<tr><th>Sleep when idle, After</th><td>Off out of the box. On, the UF1 goes dark after this many
-minutes (1 to 99) without a touch. It keeps running behind the dark panel, so it wakes with the same
-picture. Whatever you touch first only wakes it: that key or that turn does nothing else. A hand on
-the fader works at once. The action <em>Sleep the surface now</em> puts it to sleep from a key;
-press it again, or touch anything, to wake it.</td></tr>
 </tbody></table>
 <p class="note">A role follows TotalMix: when a snapshot moves Phones 1 to another output, the pot
 follows it. A role TotalMix has not given to any output reads <em>not assigned</em>, and one this
 remote cannot see reads <em>hidden</em>.</p>
+<h3 id="set-uf8">UF8 Controls</h3>
+<table class="data"><tbody>
+<tr><th>Show Main volume on change</th><td>On out of the box. A turn of the UF8's CHANNEL encoder
+puts its target, Main, on strip 8 for two seconds: name, level, fader. Its fader, V-Pot and CUT act on
+Main meanwhile, and keep it there while you use them.</td></tr>
+</tbody></table>
 <h3 id="set-softkeys">Soft Keys</h3>
 <table class="data"><tbody>
 <tr><th>Bank, Half</th><td>Which bank and which half you are editing.</td></tr>
@@ -1055,8 +1068,8 @@ takes the action's own.</td></tr>
 <tr><th>Active, Inactive</th><td>Per key: the lamp's colour while its action is on, and otherwise.
 <em>Off</em> leaves the lamp dark. On a bank of snapshots or layouts, Active is the snapshot or layout that is loaded and Inactive the others; without a colour of their own the keys are white.</td></tr>
 <tr><th>Factory set for this bank</th><td>Puts this bank back the way it came.</td></tr>
-<tr><th>Transport</th><td>An action and the two lamp colours for each of the five transport keys.</td></tr>
-<tr><th>UF8</th><td>The same for QUICK 1-3, NAV, NUDGE, FOCUS, NORM, REC and AUTO on the UF8.</td></tr>
+<tr><th>UF1 transport</th><td>An action and the two lamp colours for each of the UF1's five transport keys.</td></tr>
+<tr><th>UF8 keys</th><td>The same for QUICK 1-3, NAV, NUDGE, FOCUS, NORM, REC and AUTO on the UF8.</td></tr>
 </tbody></table>
 <h3 id="set-modes">Modes</h3>
 <p>Hue, DynaMount and OBS for the UF8. <em>Import from REAPER</em> copies the Hue, DynaMount and OBS

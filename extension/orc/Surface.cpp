@@ -2,6 +2,7 @@
 #include "Surface.h"
 
 #include "OrcConfig.h"
+#include "OrcLight.h"
 #include "OrcModes.h"
 #include "DynaMountManager.h"
 #include "Uf1SoftKeys.h"
@@ -9,6 +10,7 @@
 #include "RmeBuiltins.h"
 #include "RmeSoftKeys.h"
 #include "Bindings.h"
+#include "Brightness.h"
 #include "RmeFace.h"
 #include "RmeInput.h"
 #include "Uf1Pacer.h"
@@ -227,6 +229,16 @@ void Surface::start()
         [this](int) { return sleep_.asleep.load(); },
         "Sleep the surface now", false });
     uf8::bindings::setBuiltinKind("sleep_now", uf8::bindings::BuiltinKind::Switch);
+    // ⇨ BRIGHTNESS ON A KEY (OrcLight.h): ORC's two steps in rme.json; the loop
+    // lights the surfaces from there.
+    auto stepLight = [](int dLed, int dLcd) {
+        auto& m = rme::manager();
+        rme::Config c = m.config();
+        c.brightLed = brightness::clampLevel(c.brightLed + dLed);
+        c.brightLcd = brightness::clampLevel(c.brightLcd + dLcd);
+        m.setConfig(c);
+    };
+    orc::registerBrightnessBuiltins(stepLight);
     // Sleep on the UF8's QUICK 1 from the factory (Frank 29.10.2026).
     Uf8Surface::seedUserKeys();
 
@@ -286,6 +298,9 @@ void Surface::loop_()
     auto lastOpenTry = std::chrono::steady_clock::now() - std::chrono::seconds(5);
 
     bool force = true;
+    // What the surfaces were last lit at (Brightness.h steps), and whether each was open.
+    int  lightLed = -1, lightLcd = -1;
+    bool lightUf1 = false, lightUf8 = false;
 
     // ⇨ THE HOST'S ANSWERS TO THE SHARED PAINTER. Each one is a thing the
     // extension answers from its own globals; unset ones are states (no MODE
@@ -525,18 +540,30 @@ void Surface::loop_()
         // the clock. Awake, the UF1 goes back to the levels its init sequence
         // set and the UF8 to Rea-Sixty's factory Brightness; ORC sets no others.
         // Runs whenever either surface is open (a UF8 alone sleeps too).
-        if (dev_.isOpen() || (uf8_ && uf8_->status().open)) {
+        const bool uf1Open = dev_.isOpen();
+        const bool uf8Open = uf8_ && uf8_->status().open;
+        if (uf1Open || uf8Open) {
             const auto sc = rme::manager().config();
-            auto push = [this](bool a) {
+            // ⇨ THE BRIGHTNESS STEPS (Brightness.h, rme.json, the brightness_*
+            // actions; Frank 29.10.2026), both surfaces alike, as in Rea-Sixty.
+            const int led = brightness::clampLevel(sc.brightLed);
+            const int lcd = brightness::clampLevel(sc.brightLcd);
+            auto push = [this, led, lcd](bool a) {
                 if (dev_.isOpen()) {
-                    for (auto& fr : surfsleep::uf1Frames(a, surfsleep::kUf1InitLed,
-                                                         surfsleep::kUf1InitLcd)) {
+                    for (auto& fr : surfsleep::uf1Frames(a, brightness::kTable[led].uf8_led,
+                                                         brightness::kTable[lcd].uf1_lcd)) {
                         ++sent_;
                         dev_.send(std::move(fr));
                     }
                 }
-                if (uf8_) uf8_->pushSleep(a);
+                if (uf8_) uf8_->pushLight(a, led, lcd);
             };
+            // A new step, or a surface that just came up at its own levels:
+            // light it at the steps, unless the surfaces sleep.
+            if ((led != lightLed || lcd != lightLcd || (uf1Open && !lightUf1) || (uf8Open && !lightUf8))
+                && !sleep_.asleep.load())
+                push(false);
+            lightLed = led; lightLcd = lcd;
             // Switched OFF while dark: light it, as the extension's setter
             // does. Only on that change: asked every pass, it lit the
             // surface 33 ms after "Sleep now" whenever idle sleep was off.
@@ -545,6 +572,8 @@ void Surface::loop_()
             sleep_.minutes.store(sc.sleepMinutes);
             sleep_.tick(steadyMs(), /*busy*/ false, push);
         }
+        lightUf1 = uf1Open;
+        lightUf8 = uf8Open;
 
         // ⇨ ONE PASS OF THE SIDE-CAR PAINTER, the extension's own. It paints
         // "no TotalMix" when the link is down, so it runs whenever the surface
@@ -563,6 +592,9 @@ void Surface::loop_()
         // Hue, OBS and DynaMount: whatever a manager marked changed, to ORC's
         // own files (OrcModes).
         orc::modes::saveIfDirty();
+        // rme.json too, when a key changed it (the brightness actions); the
+        // settings window saves its own edits at once.
+        orc::saveRmeConfigIfDirty();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(33));
     }

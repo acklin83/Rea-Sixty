@@ -55,6 +55,13 @@ struct Side {
     std::atomic<int>  chanPageGroup{0};  // which eight pages the soft keys show
     std::atomic<double> potAccum[kStrips] = {};
     PushQuiet<kStrips> pushQuiet;
+    // ⇨ MAIN ON STRIP 8 WHILE IT MOVES (Config::uf8ShowMainOnChange): the
+    // CHANNEL encoder's target and until when it stands there, on a steady
+    // clock in ms. Strip 8's fader, V-Pot and CUT act on it meanwhile, and each
+    // of them keeps it there.
+    std::atomic<std::int64_t> mainUntilMs{0};
+    std::atomic<int>          mainRow{0};
+    std::atomic<int>          mainCh{-1};
 
     Side() = default;
     Side(const Side&) = delete;
@@ -129,7 +136,12 @@ int  submixKeyLamp(const State& st, const rmei::State& in, int key);
 void pickSubmix(const State& st, rmei::State& in, const Config& cfg, int key);
 
 // The channel encoder: Main volume, as the UF1's jog (cfg.jogTarget, jogStepDb).
-Writes mainVolume(const State& st, const rmei::State& in, const Config& cfg, int detents,
-                  double scale);
+// With cfg.uf8ShowMainOnChange the target stands on strip 8 for kMainShowMs.
+constexpr int          kMainStrip  = 7;
+constexpr std::int64_t kMainShowMs = 2000;
+Writes mainVolume(const State& st, const rmei::State& in, Side& u, const Config& cfg,
+                  int detents, double scale);
+// True while strip 8 shows the CHANNEL encoder's target.
+bool mainShowing(const Side& u);
 
 } // namespace reasixty::rme::uf8side

@@ -83,7 +83,7 @@ def statuses():
         out.append(m.group(1).split(",")[0].split(":")[0].strip())
     # The UF8 line (docs/orc-uf8-plan.md, stage 5), and its fixed texts.
     for m in re.finditer(r'@"UF8   ([^"%]+)', app):
-        out.append(m.group(1).split(":")[0].strip())
+        out.append(m.group(1).split(",")[0].split(":")[0].strip())
     for m in re.finditer(r'st_\.error\s*=\s*"([^"]+)"', src("orc/Uf8Surface.cpp")):
         out.append(m.group(1))
     return sorted(set(s for s in out if s))

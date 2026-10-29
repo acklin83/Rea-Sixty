@@ -1,6 +1,7 @@
 #include "Uf8Surface.h"
 
 #include "Bindings.h"
+#include "Brightness.h"
 #include "DynaMountManager.h"
 #include "HueManager.h"
 #include "ObsManager.h"
@@ -116,6 +117,7 @@ void Uf8Surface::close()
     if (dev_.isOpen()) dev_.close();
     std::lock_guard<std::mutex> lk(mu_);
     st_.open = false;
+    st_.serial.clear();
 }
 
 Uf8Status Uf8Surface::status() const
@@ -175,6 +177,7 @@ void Uf8Surface::tick(bool yielding)
         }
         std::lock_guard<std::mutex> lk(mu_);
         st_.open  = false;
+        st_.serial.clear();
         st_.error = "handed over to REAPER";
         return;
     }
@@ -192,8 +195,9 @@ void Uf8Surface::tick(bool yielding)
         const bool ok = dev_.open();
         {
             std::lock_guard<std::mutex> lk(mu_);
-            st_.open  = ok;
-            st_.error = ok ? std::string() : dev_.lastError();
+            st_.open   = ok;
+            st_.serial = ok ? dev_.serial() : std::string();
+            st_.error  = ok ? std::string() : dev_.lastError();
         }
         if (!ok) {
             if (dev_.lastError() != lastErr_) {
@@ -204,20 +208,24 @@ void Uf8Surface::tick(bool yielding)
             return;
         }
         lastErr_.clear();
-        orc::logLine("ORC: UF8 open.\n");
+        orc::logLine("ORC: UF8 open, serial %s.\n", dev_.serial().c_str());
         std::fflush(stdout);
         // A device that just came up believes nothing we cached.
         resetCache_();
         repaint_.store(true);
-        if (sleep_.asleep.load()) pushSleep(true);
+        // Lit at the Brightness steps, or dark if the surfaces sleep.
+        pushLight(sleep_.asleep.load(), led_.load(), lcd_.load());
     }
     paint_();
 }
 
-void Uf8Surface::pushSleep(bool asleep)
+void Uf8Surface::pushLight(bool asleep, int led, int lcd)
 {
+    led_.store(brightness::clampLevel(led));
+    lcd_.store(brightness::clampLevel(lcd));
     if (!dev_.isOpen()) return;
-    for (auto& f : surfsleep::uf8Frames(asleep, surfsleep::kUf8FullLed, surfsleep::kUf8FullLcd))
+    for (auto& f : surfsleep::uf8Frames(asleep, brightness::kTable[led_.load()].uf8_led,
+                                        brightness::kTable[lcd_.load()].uf8_lcd))
         dev_.send(std::move(f));
 }
 
@@ -532,7 +540,7 @@ void Uf8Surface::onFrame_(const uf8frames::Frame& f)
         // The channel encoder is Main in every mode: monitor volume never hides
         // behind a light.
         if (pot == kChannelEncoder) {
-            send_(u8s::mainVolume(st, in_, cfg, delta, scale_()));
+            send_(u8s::mainVolume(st, in_, side_, cfg, delta, scale_()));
             return;
         }
         if (pot >= 8) return;

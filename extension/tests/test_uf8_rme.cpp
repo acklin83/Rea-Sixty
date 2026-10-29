@@ -221,9 +221,31 @@ int main()
     }
     // ── the channel encoder is Main ──────────────────────────────────────────
     {
-        const auto w = u8::mainVolume(st, in, cfg, 2, 1.0);
+        const auto w = u8::mainVolume(st, in, side, cfg, 2, 1.0);
         EXPECT(w.size() == 1 && w[0].first == "/output/0/volume");
         EXPECT(w.size() == 1 && std::abs(w[0].second - (-9.0f)) < 1e-4f);
+        // ⇨ AND MAIN STANDS ON STRIP 8 meanwhile (Config::uf8ShowMainOnChange).
+        EXPECT(u8::mainShowing(side));
+        const auto f = u8::frame(st, in, side, cfg, soft);
+        const auto& m = f.strips[u8::kMainStrip];
+        EXPECT(m.upper == "Main" && m.csType == "OUTPUT" && m.drive && !m.sel);
+        // Its fader writes Main, CUT mutes Main, SEL leaves the row alone.
+        const auto fw = u8::fader(st, in, side, u8::kMainStrip, 0.5);
+        EXPECT(fw.size() == 1 && fw[0].first.rfind("/output/0/", 0) == 0);
+        const auto cw = u8::cut(st, in, side, u8::kMainStrip);
+        EXPECT(cw.size() == 1 && cw[0].first.rfind("/output/0/", 0) == 0);
+        const int rowBefore = in.row.load();
+        u8::sel(st, in, side, u8::kMainStrip);
+        EXPECT(in.row.load() == rowBefore);
+        // Two seconds on, strip 8 is the row's again.
+        side.mainUntilMs.store(0);
+        EXPECT(!u8::mainShowing(side));
+        EXPECT(u8::frame(st, in, side, cfg, soft).strips[u8::kMainStrip].upper != "Main");
+        // Switched off, the encoder leaves strip 8 alone.
+        Config off = cfg;
+        off.uf8ShowMainOnChange = false;
+        u8::mainVolume(st, in, side, off, 1, 1.0);
+        EXPECT(!u8::mainShowing(side));
     }
 
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }

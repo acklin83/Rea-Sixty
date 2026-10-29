@@ -120,6 +120,16 @@ struct Config {
     // Rea-Sixty has its own (Settings → Devices → Sleep) and reads past these.
     bool sleepEnabled = false;
     int  sleepMinutes = 15;
+    // ⇨ THE UF8 SHOWS MAIN WHILE IT MOVES (Frank 29.10.2026, "Show Main Volume on
+    // Change"): a turn of the UF8's CHANNEL encoder puts the jog target on strip
+    // 8 for two seconds, in the TotalMix side-car (Uf8Rme). Rea-Sixty reads it
+    // from here too.
+    bool uf8ShowMainOnChange = true;
+    // ⇨ ORC's BRIGHTNESS (Frank 29.10.2026), the steps of Brightness.h, 0 dark ..
+    // 4 full, for the UF1 and the UF8 alike, set by the brightness_* actions.
+    // Rea-Sixty keeps its own in REAPER and does not read these.
+    int  brightLed = 4;
+    int  brightLcd = 4;
 
     // Host and ports only. A pot or a colour changing must not drop the link.
     bool sameConnection(const Config& o) const

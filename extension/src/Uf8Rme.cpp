@@ -7,6 +7,7 @@
 #include "Uf8Fader.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <map>
@@ -14,6 +15,12 @@
 namespace reasixty::rme::uf8side {
 
 namespace {
+
+std::int64_t steadyMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 int clampFirst(int first, int count)
 {
@@ -145,6 +152,28 @@ void shiftWindow(const State& st, const rmei::State& in, Side& u, int by)
     u.first[ri].store(clampFirst(clampFirst(u.first[ri].load(), n) + by, n));
 }
 
+bool mainShowing(const Side& u)
+{
+    return u.mainCh.load() >= 0 && steadyMs() < u.mainUntilMs.load();
+}
+
+namespace {
+// What a strip acts on: its channel of the row, or on strip 8 the CHANNEL
+// encoder's target while it stands there (mainShowing). `held` says the second.
+struct Target { rmeu::Row r; int ch; bool held; };
+Target targetOf(const State& st, const rmei::State& in, const Side& u, int strip)
+{
+    if (strip == kMainStrip && mainShowing(u))
+        return { rmeu::rowAt(u.mainRow.load()), u.mainCh.load(), true };
+    return { rmeu::rowAt(in.row.load()), channels(st, in, u)[static_cast<size_t>(strip)], false };
+}
+// A hand on strip 8 while Main stands there keeps it there.
+void keepMain(const Side& u, const Target& t)
+{
+    if (t.held) const_cast<Side&>(u).mainUntilMs.store(steadyMs() + kMainShowMs);
+}
+} // namespace
+
 // ── what the strips show ─────────────────────────────────────────────────────
 
 Frame frame(const State& st, const rmei::State& in, const Side& u, const Config& cfg,
@@ -173,9 +202,14 @@ Frame frame(const State& st, const rmei::State& in, const Side& u, const Config&
         v.ringMode = 0x01;
     };
 
+    const bool mainOn = mainShowing(u);
     for (int s = 0; s < kStrips; ++s) {
         uf8strips::View& v = f.strips[static_cast<size_t>(s)];
-        const int ch = chs[static_cast<size_t>(s)];
+        // Strip 8 shows Main while the CHANNEL encoder moves it (mainShowing):
+        // its own row and channel there, everything else as for any strip.
+        const bool held = mainOn && s == kMainStrip;
+        const auto rs = held ? rmeu::rowAt(u.mainRow.load()) : r;
+        const int  ch = held ? u.mainCh.load() : chs[static_cast<size_t>(s)];
         // The soft keys: the bank's cells in the overview, the pages in the
         // channel view (key 1 = the first page of the current group of eight).
         if (cv) {
@@ -202,19 +236,19 @@ Frame frame(const State& st, const rmei::State& in, const Side& u, const Config&
         }
 
         // Name, row, number, colour.
-        v.upper = utf8ToLatin1(rmeu::displayName(st, r, ch));
+        v.upper = utf8ToLatin1(rmeu::displayName(st, rs, ch));
         if (v.upper.size() > uf8::kUf8ScribbleChars) v.upper.resize(uf8::kUf8ScribbleChars);
         // The colour bar: where the fader's level goes, as on the UF1 (Frank
         // 29.10.2026: the cell takes twelve characters, Protocol.cpp).
-        v.csType  = utf8ToLatin1(rmeu::barText(st, r, sub));
+        v.csType  = utf8ToLatin1(rmeu::barText(st, rs, sub));
         if (v.csType.size() > 12) v.csType.resize(12);
         v.chanNum = std::to_string(ch + 1);
-        if (const rme::Channel* c = rmeu::channelOf(st, r, ch); c && c->colour >= 0 && c->colour < 9)
+        if (const rme::Channel* c = rmeu::channelOf(st, rs, ch); c && c->colour >= 0 && c->colour < 9)
             f.colour[static_cast<size_t>(s)] = cfg.colourMap[c->colour];
 
         // Level: the readout, and where the motor puts the fader.
         bool known = false;
-        const double db = rmeu::levelDb(st, r, ch, sub, known);
+        const double db = rmeu::levelDb(st, rs, ch, sub, known);
         v.faderText = known ? face::dbText(db) : std::string();
         v.faderUnit = (known && db > -99.0) ? "dB" : "";
         if (known) {
@@ -225,15 +259,15 @@ Frame frame(const State& st, const rmei::State& in, const Side& u, const Config&
         }
 
         // Lamps: SEL = the channel the UF1 shows, CUT = mute, SOLO = solo in the submix.
-        v.sel  = (ch == sel);
-        v.cut  = rmeu::muted(st, r, ch);
-        v.solo = rmeu::soloed(st, r, ch, sub);
+        v.sel  = !held && (ch == sel);
+        v.cut  = rmeu::muted(st, rs, ch);
+        v.solo = rmeu::soloed(st, rs, ch, sub);
 
         // Meter: TotalMix' peak level, when it sends one.
         {
-            const std::map<int, double>* lv = (r == rmeu::Row::Input) ? &st.levelIn
-                                            : (r == rmeu::Row::Playback) ? &st.levelPb
-                                            : (r == rmeu::Row::Output) ? &st.levelOut : nullptr;
+            const std::map<int, double>* lv = (rs == rmeu::Row::Input) ? &st.levelIn
+                                            : (rs == rmeu::Row::Playback) ? &st.levelPb
+                                            : (rs == rmeu::Row::Output) ? &st.levelOut : nullptr;
             if (lv) {
                 const auto it = lv->find(ch);
                 const std::uint8_t b = (it != lv->end()) ? dbToVuByte_(it->second) : 0;
@@ -245,19 +279,19 @@ Frame frame(const State& st, const rmei::State& in, const Side& u, const Config&
         // The pot and the value line.
         if (cv) {
             cvPot(v, s);
-        } else if (const rmes::Param* g = gainParam(st, r, ch)) {
+        } else if (const rmes::Param* g = gainParam(st, rs, ch)) {
             double val = 0.0;
-            const bool k = rmes::value(st, r, ch, *g, val);
-            v.valueLine = uf8ValueLine(utf8ToLatin1(rmes::label(st, r, ch, *g)),
-                                       k ? rmes::format(*g, r, val) : std::string());
-            v.ring     = uf8::vpotPosUnipolar(k ? rmes::norm(*g, r, val) : 0.0);
+            const bool k = rmes::value(st, rs, ch, *g, val);
+            v.valueLine = uf8ValueLine(utf8ToLatin1(rmes::label(st, rs, ch, *g)),
+                                       k ? rmes::format(*g, rs, val) : std::string());
+            v.ring     = uf8::vpotPosUnipolar(k ? rmes::norm(*g, rs, val) : 0.0);
             v.ringMode = 0x01;
         } else {
-            const std::string a = rmeu::panAddress(r, ch, sub);
+            const std::string a = rmeu::panAddress(rs, ch, sub);
             if (!a.empty()) {
                 bool pk = false;
-                const double pan = rmeu::panValue(st, r, ch, sub, pk);
-                if (rmeu::panIsWidth(r)) {
+                const double pan = rmeu::panValue(st, rs, ch, sub, pk);
+                if (rmeu::panIsWidth(rs)) {
                     char b[16];
                     snprintf(b, sizeof b, "%.2f", pk ? pan : 0.0);
                     v.valueLine = uf8ValueLine("Width", pk ? b : "");
@@ -281,9 +315,11 @@ Writes fader(const State& st, const rmei::State& in, const Side& u, int strip, d
 {
     Writes out;
     if (strip < 0 || strip >= kStrips) return out;
-    const int ch = channels(st, in, u)[static_cast<size_t>(strip)];
+    const Target t = targetOf(st, in, u, strip);
+    const int  ch  = t.ch;
     if (ch < 0) return out;
-    const auto r   = rmeu::rowAt(in.row.load());
+    keepMain(u, t);
+    const auto r   = t.r;
     const int  sub = rmeu::effectiveSubmix(st, in.submix.load());
     // An effect's volume needs no submix, like an output's.
     if (r != rmeu::Row::Output && r != rmeu::Row::Fx && sub < 0) return out;
@@ -315,20 +351,23 @@ Writes vpot(const State& st, const rmei::State& in, Side& u, const Config& cfg,
         }
         return rmes::nudge(st, r, sel, *p, delta, scale);
     }
-    const int ch = channels(st, in, u)[static_cast<size_t>(strip)];
+    const Target t = targetOf(st, in, u, strip);
+    const int ch = t.ch;
     if (ch < 0) return out;
-    if (const rmes::Param* g = gainParam(st, r, ch)) {
-        if (rmes::stepsWhole(*g)) return rmes::nudge(st, r, ch, *g, wholeSteps(u.potAccum[strip], delta));
-        return rmes::nudge(st, r, ch, *g, delta, scale);
+    keepMain(u, t);
+    const auto rs = t.r;
+    if (const rmes::Param* g = gainParam(st, rs, ch)) {
+        if (rmes::stepsWhole(*g)) return rmes::nudge(st, rs, ch, *g, wholeSteps(u.potAccum[strip], delta));
+        return rmes::nudge(st, rs, ch, *g, delta, scale);
     }
     const int sub = rmeu::effectiveSubmix(st, in.submix.load());
-    const std::string a = rmeu::panAddress(r, ch, sub);
+    const std::string a = rmeu::panAddress(rs, ch, sub);
     if (a.empty()) return out;
     bool known = false;
-    const double cur = rmeu::panValue(st, r, ch, sub, known);
+    const double cur = rmeu::panValue(st, rs, ch, sub, known);
     // 2 % per count, as the UF1's pot above the fader. On the FX row the pot is
     // the width, 0 mono .. 1 stereo.
-    const double lo = rmeu::panIsWidth(r) ? 0.0 : -1.0;
+    const double lo = rmeu::panIsWidth(rs) ? 0.0 : -1.0;
     const double nv = std::clamp(cur + delta * 0.02 * scale, lo, 1.0);
     if (nv != cur) out.push_back({ a, static_cast<float>(nv) });
     return out;
@@ -350,30 +389,36 @@ Writes vpotPush(const State& st, const rmei::State& in, Side& u, const Config& c
         if (!p) return out;
         return page.key[strip] ? rmes::press(st, r, sel, *p) : rmes::resetWrites(st, r, sel, *p);
     }
-    const int ch = channels(st, in, u)[static_cast<size_t>(strip)];
+    const Target t = targetOf(st, in, u, strip);
+    const int ch = t.ch;
     if (ch < 0) return out;
-    if (const rmes::Param* g = gainParam(st, r, ch)) return rmes::resetWrites(st, r, ch, *g);
+    keepMain(u, t);
+    const auto rs = t.r;
+    if (const rmes::Param* g = gainParam(st, rs, ch)) return rmes::resetWrites(st, rs, ch, *g);
     const int sub = rmeu::effectiveSubmix(st, in.submix.load());
-    const std::string a = rmeu::panAddress(r, ch, sub);
-    if (!a.empty()) out.push_back({ a, rmeu::panIsWidth(r) ? 1.0f : 0.0f });
+    const std::string a = rmeu::panAddress(rs, ch, sub);
+    if (!a.empty()) out.push_back({ a, rmeu::panIsWidth(rs) ? 1.0f : 0.0f });
     return out;
 }
 
 void sel(const State& st, rmei::State& in, const Side& u, int strip)
 {
     if (strip < 0 || strip >= kStrips) return;
-    const int ch = channels(st, in, u)[static_cast<size_t>(strip)];
-    if (ch < 0) return;
-    rmei::select(in, rmeu::rowAt(in.row.load()), ch);
+    const Target t = targetOf(st, in, u, strip);
+    // Main standing on strip 8 is not on the row: SEL there would move the UF8
+    // to the output row under the hand.
+    if (t.ch < 0 || t.held) return;
+    rmei::select(in, t.r, t.ch);
 }
 
 Writes cut(const State& st, const rmei::State& in, const Side& u, int strip)
 {
     Writes out;
     if (strip < 0 || strip >= kStrips) return out;
-    const int ch = channels(st, in, u)[static_cast<size_t>(strip)];
-    if (ch < 0) return out;
-    const auto w = rmeu::muteToggle(st, rmeu::rowAt(in.row.load()), ch);
+    const Target t = targetOf(st, in, u, strip);
+    if (t.ch < 0) return out;
+    keepMain(u, t);
+    const auto w = rmeu::muteToggle(st, t.r, t.ch);
     if (!w.first.empty()) out.push_back(w);
     return out;
 }
@@ -382,9 +427,10 @@ Writes solo(const State& st, const rmei::State& in, const Side& u, int strip)
 {
     Writes out;
     if (strip < 0 || strip >= kStrips) return out;
-    const int ch = channels(st, in, u)[static_cast<size_t>(strip)];
+    const Target t = targetOf(st, in, u, strip);
+    const int ch = t.ch;
     if (ch < 0) return out;
-    const auto r   = rmeu::rowAt(in.row.load());
+    const auto r   = t.r;
     const int  sub = rmeu::effectiveSubmix(st, in.submix.load());
     const std::string a = rmeu::soloAddress(r, ch, sub);
     if (a.empty()) return out;   // outputs have no solo
@@ -420,12 +466,18 @@ void stepPageGroup(const State& st, const rmei::State& in, Side& u, const Config
     u.chanPageGroup.store(std::clamp(u.chanPageGroup.load() + dir, 0, groups - 1));
 }
 
-Writes mainVolume(const State& st, const rmei::State& in, const Config& cfg, int detents,
-                  double scale)
+Writes mainVolume(const State& st, const rmei::State& in, Side& u, const Config& cfg,
+                  int detents, double scale)
 {
     Writes out;
     const rmeu::Target t = rmeu::resolveTarget(st, cfg.jogTarget);
-    if (t.visible) rmei::nudgeLevel(in, st, t.row, t.ch, detents, cfg.jogStepDb, scale, out);
+    if (!t.visible) return out;
+    rmei::nudgeLevel(in, st, t.row, t.ch, detents, cfg.jogStepDb, scale, out);
+    if (cfg.uf8ShowMainOnChange) {
+        u.mainRow.store(static_cast<int>(t.row));
+        u.mainCh.store(t.ch);
+        u.mainUntilMs.store(steadyMs() + kMainShowMs);
+    }
     return out;
 }
 

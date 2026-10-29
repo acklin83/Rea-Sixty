@@ -37,6 +37,7 @@ inline constexpr double kFineFactor = 0.25;
 
 struct Uf8Status {
     bool        open = false;
+    std::string serial;   // the unit's USB serial, as the UF1 line shows its own
     std::string error;
 };
 
@@ -55,8 +56,10 @@ class Uf8Surface {
     void tick(bool yielding);
     void close();
 
-    // Asleep or awake, as the shared clock says. Loop thread.
-    void pushSleep(bool asleep);
+    // Asleep (dark) or awake at the Brightness steps `led` / `lcd`
+    // (Brightness.h), as the shared clock and rme.json say. Loop thread. The
+    // steps are kept for a unit that opens later.
+    void pushLight(bool asleep, int led, int lcd);
 
     Uf8Status status() const;
 
@@ -115,6 +118,7 @@ class Uf8Surface {
     std::array<int, 20>                      cLed_{};
     std::array<std::int64_t, kUserKeyCount>  cUser_{};
     std::atomic<bool>                        repaint_{true};
+    std::atomic<int>                         led_{4}, lcd_{4};   // Brightness.h steps
 
     // What the device shows (Uf8Strips::Cells point in here). Loop thread.
     std::array<std::string, 8>   cUpper_, cCs_, cChan_, cFt_, cFu_, cVl_, cSl_;

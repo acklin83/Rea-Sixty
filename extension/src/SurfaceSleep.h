@@ -84,7 +84,8 @@ struct Clock {
 // panel master: 0 asleep, full awake. `led` / `lcd` are the levels to wake to.
 constexpr uint8_t kUf1MasterFull = 0xFF;
 // SSL's cold-start levels (uf1_init_sequence.inc:158-159, UF1Protocol.h): what
-// the UF1 shows when nothing else sets a level, ORC's case.
+// the UF1 shows when nothing else sets a level. Both programs set one since
+// 29.10.2026 (Brightness.h); ORC used these until then.
 constexpr uint8_t kUf1InitLed = 0x10;
 constexpr uint8_t kUf1InitLcd = 0x32;
 
@@ -99,8 +100,8 @@ inline std::vector<std::vector<uint8_t>> uf1Frames(bool asleep, uint8_t led, uin
 // shared with ORC): the LED master and the scribble LCDs. Asleep both go to a
 // real 0, which the Brightness table never sends (its darkest step is still
 // legible). `led` / `lcd` are the levels to wake to.
-// What a UF8 is lit to when nothing else sets a level, ORC's case: Rea-Sixty's
-// factory Brightness, BL_Full in main.cpp's kBrightnessTable (uf8_led, uf8_lcd).
+// Rea-Sixty's factory Brightness for the UF8, Full in Brightness.h (uf8_led,
+// uf8_lcd). ORC lit the UF8 at these until it got its own steps (29.10.2026).
 constexpr uint8_t kUf8FullLed = 0x20;
 constexpr uint8_t kUf8FullLcd = 0xA0;
 inline std::vector<std::vector<uint8_t>> uf8Frames(bool asleep, uint8_t led, uint8_t lcd)
