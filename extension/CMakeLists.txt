@@ -822,6 +822,12 @@ if(NOT WIN32)
     target_include_directories(test_uf8_frames PRIVATE src)
     add_test(NAME uf8_frames COMMAND test_uf8_frames)
 
+    # The UF8 fader as a controller: stops, the stream without bit 7, the
+    # motor re-engage (Uf8Fader.h; docs/orc-uf8-plan.md stage 5).
+    add_executable(test_uf8_fader tests/test_uf8_fader.cpp src/Protocol.cpp)
+    target_include_directories(test_uf8_fader PRIVATE src)
+    add_test(NAME uf8_fader COMMAND test_uf8_fader)
+
     # Project state follows the project tab (ProjectScoped.h, header only).
     add_executable(test_project_scoped tests/test_project_scoped.cpp)
     target_include_directories(test_project_scoped PRIVATE src)

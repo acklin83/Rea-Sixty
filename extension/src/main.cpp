@@ -106,6 +106,7 @@
 #include "LaneModel.h"
 #include "OrcHandover.h"
 #include "Uf8Frames.h"
+#include "Uf8Fader.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
 #include <sys/time.h> // gettimeofday, for the lines in ORC's log
@@ -20200,7 +20201,7 @@ double   uiVolLinear(MediaTrack* tr);
 // against the real hardware range, not the 14-bit protocol max (16383).
 // Full rationale + calibration in the kUf8FaderTopDb / pbToLinearVolume
 // block further down. Kept in sync with that block.
-constexpr uint16_t kUf8FaderPbMax = 15583;
+constexpr uint16_t kUf8FaderPbMax = uf8fader::kPbMax;   // 15583, Uf8Fader.h
 static_assert(midicc::kFaderPbMax == kUf8FaderPbMax,
               "MidiCcLayer.h maps CC values onto the UF8 fader's travel");
 
@@ -27196,35 +27197,16 @@ std::array<std::atomic<uint16_t>, kUf8MaxStrips> g_lastTouchEffPb{};
 // ganged push), so the gap is real displacement we must track, not discard.
 constexpr int kAnchorOffsetMax = 500;
 
-// ⛔ THE END STOPS, AS THE UF1 HAS THEM (uf1::kFaderEndSnap): both ends snap.
-// Measured on Frank's UF8 2026-10-25 (uf8_fader_input.log, all 8 faders fast
-// and slow to both stops). The raw readback never reaches the ends:
-//  • bottom: frames with bit 7 stop at 128..142, never 0. The anchoring adds
-//    the strip's own readback offset on top, so a fader on the stop wrote
-//    ~130..280 to REAPER: about -100 dB, a different value on every channel
-//    (forum 2026-10-25: "only -103 dB or so, each channel different").
-//  • top: frames with bit 7 stop at 15389..15488, the ones without at
-//    15546..15615. On a fast push the last frame before the stop is often one
-//    WITHOUT bit 7, which the handler drops, so REAPER kept the last frame with
-//    it, well short of +12 (Frank 2026-10-25: "bei schnellen Bewegungen").
-// So a frame from EITHER stream inside these zones puts the fader on its end,
-// past the anchor offset. The zones are wider than the UF1's because the stop
-// itself sits up to ~100 LSB apart from fader to fader.
-constexpr uint16_t kUf8StopBottomHi = 200;     // bit 7 set
-constexpr uint16_t kUf8StopBottomLo = 320;     // bit 7 clear
-constexpr uint16_t kUf8StopTopHi    = 15380;   // bit 7 set
-constexpr uint16_t kUf8StopTopLo    = 15530;   // bit 7 clear
-// How much higher a frame WITHOUT bit 7 reads than one with it, during slow
-// movement: median 56..94 per fader in Frank's log of 2026-10-25 (sd 20..40).
-// One value for all eight replayed as well as eight separate ones.
-constexpr uint16_t kUf8LoStreamOffset = 70;
+// ⛔ THE END STOPS AND THE STREAM WITHOUT BIT 7 live in Uf8Fader.h since
+// 29.10.2026, shared with ORC; the measurements and the reasons are written
+// there. These names stay for the code below.
+constexpr uint16_t kUf8StopBottomHi   = uf8fader::kStopBottomHi;
+constexpr uint16_t kUf8StopBottomLo   = uf8fader::kStopBottomLo;
+constexpr uint16_t kUf8StopTopHi      = uf8fader::kStopTopHi;
+constexpr uint16_t kUf8StopTopLo      = uf8fader::kStopTopLo;
+constexpr uint16_t kUf8LoStreamOffset = uf8fader::kLoStreamOffset;
 // -1 = on the bottom stop, +1 = on the top stop, 0 = in between.
-inline int uf8FaderStop_(uint16_t rawPb, bool hiBit)
-{
-    if (rawPb <= (hiBit ? kUf8StopBottomHi : kUf8StopBottomLo)) return -1;
-    if (rawPb >= (hiBit ? kUf8StopTopHi    : kUf8StopTopLo))    return +1;
-    return 0;
-}
+inline int uf8FaderStop_(uint16_t rawPb, bool hiBit) { return uf8fader::stop(rawPb, hiBit); }
 // A touch beginning after at least this long without a press counts as
 // "parked": the motor had settled the fader on target, so its grab−anchor
 // gap is a clean offset measurement. Rapid re-touches (shorter gap) reuse
@@ -27400,13 +27382,11 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 // either stream, the frame stands for the end itself: pbOut is
                 // what gets written and echoed. pb14 stays raw for the grab,
                 // which measures the readback offset.
-                const int stop = uf8FaderStop_(pb14, rawHigh != 0);
-                const uint16_t pbIn = rawHigh ? pb14
-                    : (pb14 > kUf8LoStreamOffset
-                           ? static_cast<uint16_t>(pb14 - kUf8LoStreamOffset)
-                           : uint16_t(0));
-                const uint16_t pbOut = stop < 0 ? uint16_t(0)
-                                     : stop > 0 ? kUf8FaderPbMax : pbIn;
+                const uf8fader::Read rd = uf8fader::read(pb14, rawHigh != 0,
+                                                         g_touchGrabValid[strip].load());
+                const int stop = rd.stop;
+                const uint16_t pbIn  = rd.pbIn;
+                const uint16_t pbOut = rd.pbOut;
                 const uint8_t lsbOut = static_cast<uint8_t>(pbOut & 0x7F);
                 const uint8_t msbOut = static_cast<uint8_t>((pbOut >> 7) & 0x7F);
                 if (stop != 0)
