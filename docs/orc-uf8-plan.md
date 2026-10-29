@@ -504,3 +504,80 @@ gelten weiter, aber immer für beide Programme.
 - 8 wird: die Modus-Builtins (`selection_mode_obs`, `selection_mode_totalmix` mit Startwerten) im
   geteilten Code, Werksbelegung in ORC, Option aus Frage N. Kein `ModeKeys.h`.
 - 9 (OBS-Modus) und 10 (TotalMix in Rea-Sixty) bauen jeweils beide Programme in derselben Stufe.
+
+---
+
+## 15. Einwand Frank 29.10.: der gemeinsame Ordner muss bei jedem Kunden funktionieren
+
+Frank: „Das Programm geht an viele User raus. Die haben nur Rea-Sixty, nur ORC oder beides.
+Muss immer funktionieren.“ Den Vorschlag aus 14.2 (gemeinsamer Ordner `Stoersender`) gegen alle
+drei Gruppen und gegen die Reihenfolge der Installation geprüft. **Er hält nicht.**
+
+### 15.1 Wo der gemeinsame Ordner bricht
+
+| # | Fall | Was passiert |
+|---|---|---|
+| 1 | Kunde hat Rea-Sixty mit eingerichtetem Hue, installiert **zuerst** das neue ORC, aktualisiert Rea-Sixty später | ORC legt `hue.json` an. Rea-Sixty übernimmt seinen ExtState nur, „wenn es die Datei noch nicht gibt“: seine Lampen sind still weg. Genau der Fehler, den der ExtState-Newline im August hatte |
+| 2 | ORC neuer als Rea-Sixty (getrennte Releases, ReaPack gegen DMG) | ORC schreibt ein Format, das das ältere Rea-Sixty nicht kennt. Liest es halb, schreibt es beim nächsten Speichern das alte Format zurück und löscht ORCs neue Felder |
+| 3 | ORC unter Windows als Store-MSIX (der Weg aus `orc-mac-release-plan.md`, „Windows, später“) | Microsoft: neu angelegte Dateien unter `AppData` landen bei einer virtualisierten App an einem privaten Ort pro App. Legt ORC die Datei an, sieht Rea-Sixty sie nie (Quelle: learn.microsoft.com, „Understanding how packaged desktop apps run on Windows“, Abschnitt AppData, am 29.10. gelesen). Legt Rea-Sixty sie zuerst an, geht es. Also wieder abhängig von der Reihenfolge |
+| 4 | Portables REAPER oder zwei REAPER-Installationen | heute hat jede ihren eigenen ExtState. Ein Ordner pro Benutzer macht daraus still eine gemeinsame Konfiguration |
+| 5 | Zwei Schreiber | in 14.2 als tragbar begründet, bleibt aber eine Ausnahme von der Regel |
+
+Fall 1 bis 3 treffen genau die Kunden, die Frank meint: wer beide Programme hat, hat sie selten
+am selben Tag installiert und selten auf demselben Stand.
+
+### 15.2 Neuer Vorschlag: jedes Programm besitzt seine Einstellungen, geteilt wird der Code
+
+| | Rea-Sixty | ORC |
+|---|---|---|
+| Hue / OBS / DynaMount-Einstellungen | bleiben im ExtState, **wie heute**, nichts zieht um | eigene Dateien im ORC-Ordner (`hue.json`, `obs.json`, `dynamount.json`) |
+| Format | dasselbe: die `serialize`/`deserialize` der Manager (`HueManager.cpp:696`, `ObsManager.cpp:103`, `DynaMountManager.cpp:194`), nur der Speicherort ist verschieden | |
+| Bedienung | der geteilte Modus-Code (Abschnitt 7.1, 14.1) | derselbe |
+| Übernehmen | Knopf „Import from ORC“ in den Reitern Hue/OBS/DynaMount, nur sichtbar, wenn ORCs Ordner existiert | Knopf „Import from Rea-Sixty“ (bzw. neutral benannt, Produktregel), nur sichtbar, wenn REAPERs `reaper-extstate.ini` existiert. Liest nur die drei Schlüssel, schreibt nie in REAPERs Dateien |
+
+Damit gilt für jede Gruppe:
+
+| Gruppe | funktioniert, weil |
+|---|---|
+| nur Rea-Sixty | nichts ändert sich, kein neuer Ordner, kein neuer Pfad |
+| nur ORC | ORC liest und schreibt nur seinen eigenen Ordner |
+| beides, egal in welcher Reihenfolge installiert | jedes läuft mit seinen eigenen Einstellungen. Der Import ist ein Knopfdruck, kein Automatismus, also nie ein stiller Verlust |
+| beides, verschiedene Stände | jedes liest nur sein eigenes Format. Der Import überspringt unbekannte Felder |
+| Windows-ORC als MSIX (später) | ORC schreibt nur in seinen eigenen Bereich. Der Import liest nur (Lesen fremder Dateien unter `AppData` ist erlaubt, laut derselben Quelle) |
+| portables REAPER | unverändert |
+
+Der Hue-Schlüssel kommt beim Import mit, die Bridge muss also nicht neu gekoppelt werden.
+
+**Preis:** wer beide hat und in einem Programm eine Lampe umstellt, hat sie im anderen nicht
+umgestellt, bis er importiert. Die BEDIENUNG ist trotzdem gleich (Bedingung 1 betrifft den Code,
+nicht die Belegung). Rea-Sixty ändert sich gar nicht, ausser dem Import-Knopf.
+
+### 15.3 Was trotzdem zwischen den Programmen wandern muss: der DynaMount-Stand
+
+Positionen sind Laufzustand, keine Einstellung, und offen geregelt (Abschnitt 3). Sie wandern
+**nur mit der Übergabe**, also nur wenn beide installiert sind und ORC läuft:
+- ORC schreibt die Positionen in `handover.released` (ORC-Ordner, existiert dann sicher).
+- Rea-Sixty schreibt sie beim Beenden in `handover.returned` im ORC-Ordner, aber nur, wenn es den
+  Ordner gibt (so wie heute schon die Marke, `orcHandoverMark_`, `main.cpp:1823-1847`).
+- Ohne ORC: Rea-Sixty hält seinen `dynamount_state` im ExtState wie heute.
+- Die Positionen werden nur übernommen, wenn die Stativ-IP in beiden Einstellungen dieselbe ist.
+  Sonst gilt der eigene Stand (zwei verschieden eingerichtete Programme dürfen sich nicht
+  gegenseitig Stative zuordnen).
+
+### 15.4 Alt gegen neu bei der Übergabe
+
+| Rea-Sixty | ORC | Ergebnis |
+|---|---|---|
+| alt (v1-Marke, wartet nicht) | neu | ORC gibt auf die Marke hin frei wie heute. UF8 hält das alte Rea-Sixty nicht fest, weil es ihn nie wiederholt öffnet: **Lücke**, der UF8 bleibt nach dem REAPER-Start bei ORC, bis REAPER neu startet. Abhilfe: ORC gibt auf die v1-Marke hin auch den UF8 frei und das alte Rea-Sixty bekommt ihn beim nächsten Start. Hinweis in den Release Notes: Rea-Sixty zuerst aktualisieren |
+| neu | alt (kein `orc.pid`) | Rea-Sixty sieht kein laufendes ORC, wartet nicht, verhält sich wie heute |
+| neu | neu | Übergabe v2 |
+| neu | nicht installiert | wie heute, kein Ordner, keine Marke |
+
+### 15.5 Was damit aus Abschnitt 14 wird
+
+- 14.2, „neutraler Ordner“: **verworfen.** Frage Q entfällt.
+- 14.5, Stufe 7b: wird „Import-Knöpfe in beiden, ORCs eigene Dateien“. Kein Umzug in Rea-Sixty,
+  keine Einmal-Übernahme.
+- Frage O (TotalMix-Side-Car) bleibt offen; O2 („neutraler Ordner“) fällt aus demselben Grund
+  weg. Die Alternative wäre ein eigener `rme`-Speicher in Rea-Sixty mit Import, also derselbe Weg
+  wie hier. Vorschlag bleibt O1.
