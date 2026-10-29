@@ -107,10 +107,19 @@ Remote 2 geht nicht.
    statt „stoerme“.
 2. **Eine Quelle:** Die Seite zieht ins Rea-Sixty-Repo zu ORC, das stoerme-Repo wird nach dem
    Umstieg stillgelegt.
-3. *Offen:* ab Werk aus (Vorschlag: aus, ein offener Port ist eine bewusste Entscheidung).
-4. *Offen:* PIN Pflicht, sobald an (Vorschlag: ja; ORC erzeugt beim ersten Einschalten einen
-   vierstelligen PIN, zeigt ihn im Reiter und im Menü, nie im QR-Code).
+3. **Ab Werk aus:** kein Port, keine zweite Remote, bis man im Reiter Phones das Häkchen setzt.
+   TotalMix und die Kopfhörermixe bleiben davon unberührt.
+4. **PIN Pflicht, sobald an:** ORC erzeugt beim ersten Einschalten einen vierstelligen PIN, zeigt
+   ihn im Reiter und im Menü neben der Adresse, änderbar, nie im QR-Code.
 5. **Ein Remote für alle Kopfhörer, wie stoermes Bridge heute**, eine gemeinsame Sichtbarkeit.
+6. **Die Seite 1:1** in Aufbau und Verhalten, mit diesen Änderungen:
+   - **Logo** wählbar im Reiter Phones (PNG, JPG, SVG), liegt in ORCs Ordner, ab Werk ein
+     neutrales MoreMe-Zeichen. **Studioname** als Feld daneben, ab Werk leer (ersetzt das feste
+     „Störsender Studio“).
+   - „stoerme“/„stoer“ wird **MoreMe**.
+   - **Sprache folgt dem Handy:** Deutsch oder Englisch, sonst Englisch (rund 25 Textstellen).
+   - „Wir merken uns das auf diesem Gerät“ wird „Dieses Gerät merkt sich die Wahl“ (keine „wir“),
+     „Verbinde mit Bridge…“ wird ORC.
 
 ## 10. Belege
 
