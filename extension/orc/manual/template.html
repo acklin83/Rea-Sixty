@@ -156,10 +156,10 @@ Philips Hue lamps and DynaMount mic stands, and its soft keys switch OBS scenes
   <li>Quit SSL 360°, connect the UF1, start ORC. Its menu bar item says who holds the UF1 and
       whether TotalMix answers (<a href="#menubar">the menu bar</a>).</li>
   <li>If you want ORC there whenever the Mac is on, tick <em>Open at login</em> in the settings
-      window, page Connection.</li>
+      window, page General.</li>
 </ol>
 <p>A different port or a TotalMix on another machine goes in the settings window, page
-<a href="#set-connection">Connection</a>.</p>
+<a href="#set-connection">General</a>.</p>
 </section>
 
 <section id="reasixty">
@@ -171,7 +171,7 @@ the action you gave it in ORC, its lamp in ORC's colours, or else stays REAPER's
 included.</p>
 <p>Two Rea-Sixty built-ins put this on any key or a Stream Deck button: <em>UF1 Mode: RME</em>
 switches the UF1 to this view and back, <em>RME: Ask TotalMix again</em> does what the button of the
-same name on the Connection page does.</p>
+same name on the General page does.</p>
 <h3>Who holds the UF1</h3>
 <p>When REAPER starts, Rea-Sixty asks ORC for the UF1 and the UF8, and ORC lets go of both
 surfaces, the TotalMix port, and its connections to Hue, OBS and the DynaMount stands. REAPER opens
@@ -191,7 +191,7 @@ ORC installed.</p>
 pages. Change them in ORC and REAPER picks them up. Without ORC installed, Rea-Sixty offers no
 TotalMix view at all.</p>
 <p>Hue, DynaMount and OBS are set up in each program on its own, so each works without the other.
-<em>Import from REAPER</em> on the <a href="#set-modes">Modes</a> page copies Rea-Sixty's settings
+<em>Import from REAPER</em> on the <a href="#set-modes">UF8 Modes</a> page copies Rea-Sixty's settings
 into ORC, and Rea-Sixty has <em>Import from ORC</em> on its Hue, OBS and DynaMount pages.</p>
 </section>
 
@@ -371,7 +371,7 @@ the page name and number, and on the EQ and Low Cut pages the channel's EQ curve
 <h3>The four pots</h3>
 <p><strong>Overview.</strong> Four of eight targets, in two banks (<a href="#c-58">5-8</a> switches).
 Turning sets the target's level in steps of {{potStepDb}} dB. A push does what is set for that pot
-on the settings page <a href="#set-controls">UF1 Controls</a>: make it the submix, put it on the fader,
+on the settings page <a href="#set-controls">UF1</a>: make it the submix, put it on the fader,
 mute it, or nothing. Out of the box every push picks the submix, and the targets are:</p>
 <!--GEN:pots-->
 <p><strong>STRIP.</strong> The page's parameters. A push sets the parameter back to its default,
@@ -418,12 +418,12 @@ With STRIP open the view stays open on the new row's channel.</td></tr>
 <h3>Jog wheel</h3>
 <p>The level of one fixed target, out of the box Main, in steps of {{jogStepDb}} dB. The time
 display shows that level. Target and step are on the settings page
-<a href="#set-controls">UF1 Controls</a>.</p>
+<a href="#set-controls">UF1</a>.</p>
 </div>
 
 <div class="ctl" id="c-transport" data-btn="kRwd kFfw kStop kPlay kRec">
 <h3>Transport keys</h3>
-<p>Empty out of the box. The settings page <a href="#set-softkeys">Soft Keys</a> puts any of the
+<p>Empty out of the box. The settings page <a href="#set-controls">UF1</a> puts any of the
 <a href="#actions">actions</a> on them, the DuRec recorder for example, and sets each key's lamp: its
 <em>Active</em> colour while the action is on, its <em>Inactive</em> colour otherwise. A key with no
 action stays dark.</p>
@@ -803,7 +803,7 @@ under it on the strip.</p>
 <tr><td>TotalMix</td><td>The <a href="#softkeys">soft-key bank</a> picked with
 <a href="#u-vpotbank">V-POT, 1-5</a>, both halves at once: keys 1-4 its first half, 5-8 its second.
 In the <a href="#uf8-chanview">channel view</a> they are the channel's pages.</td></tr>
-<tr><td>Hue</td><td>The eight scenes from the page <a href="#set-modes">Modes</a>. A push recalls a
+<tr><td>Hue</td><td>The eight scenes from the page <a href="#set-modes">UF8 Modes</a>. A push recalls a
 scene, a long press starts it moving. The scene showing is lit.</td></tr>
 <tr><td>DynaMount</td><td>The eight presets (<a href="#uf8-dyna">DynaMount</a>). A push drives the
 stands to it, a long press on an empty key stores where they are now, FINE and a push stores over
@@ -837,7 +837,7 @@ position. The bottom line: X, Y and R, and <code>OFF</code> when the stand does 
 <tr><td>TotalMix, channel view</td><td>The page's control</td><td>Its default, or a switch on and off
 (<a href="#uf8-chanview">channel view</a>)</td></tr>
 <tr><td>Hue</td><td>Hue, with <a href="#u-flip">FLIP</a> saturation (both set on the page
-<a href="#set-modes">Modes</a>)</td><td>White on and off</td></tr>
+<a href="#set-modes">UF8 Modes</a>)</td><td>White on and off</td></tr>
 <tr><td>DynaMount</td><td>Rotation. The stand turns about a second after you stop.</td><td>Nothing</td></tr>
 </tbody></table>
 <p>In TotalMix, after a push the same V-Pot ignores turning for {{pushQuietMs}} ms, as on the UF1.</p>
@@ -913,7 +913,7 @@ of the normal step. In DynaMount, FINE and a push on a soft key store over a pre
 <h3>CHANNEL encoder</h3>
 <p>In every mode the level of the jog wheel's target, out of the box Main, in steps of
 {{jogStepDb}} dB, as the UF1's jog wheel. Target and step are on the settings page
-<a href="#set-controls">UF1 Controls</a>. In TotalMix, Main stands on strip 8 for two seconds while
+<a href="#set-controls">UF1</a>. In TotalMix, Main stands on strip 8 for two seconds while
 you turn (<a href="#set-uf8">Show Main volume on change</a>).</p>
 </div>
 
@@ -935,7 +935,7 @@ you turn (<a href="#set-uf8">Show Main volume on change</a>).</p>
 <div class="ctl" id="u-user" data-uf8="kQuick1 kQuick2 kQuick3 kNav kNudge kFocus kSelNorm kSelRec kSelAuto">
 <h3>QUICK 1-3, SELECTION MODE, NAV, NUDGE, FOCUS</h3>
 <p>Empty out of the box apart from QUICK 1, which is <em>Sleep the surface now</em>. The settings page
-<a href="#set-softkeys">Soft Keys</a> puts any of the <a href="#actions">actions</a> on QUICK 1-3,
+<a href="#set-uf8">UF8</a> puts any of the <a href="#actions">actions</a> on QUICK 1-3,
 NORM, REC, AUTO, NAV, NUDGE and FOCUS, and sets each key's lamp: its <em>Active</em> colour while the
 action is on, its <em>Inactive</em> colour otherwise. A key with no action stays dark. They work in
 every mode.</p>
@@ -977,11 +977,11 @@ it again to go back to the overview.</p>
 <section id="uf8-modes">
 <h2>Hue, DynaMount and OBS on the UF8</h2>
 <h3 id="uf8-hue">Hue</h3>
-<p>Each lamp or zone set up on the page <a href="#set-modes">Modes</a> sits on one strip, from the
+<p>Each lamp or zone set up on the page <a href="#set-modes">UF8 Modes</a> sits on one strip, from the
 left or from the right. Strips without a lamp are dark. What each control does is under its own
 heading above.</p>
 <h3 id="uf8-dyna">DynaMount</h3>
-<p>Each stand set up on the page <a href="#set-modes">Modes</a> sits on one strip. A preset is
+<p>Each stand set up on the page <a href="#set-modes">UF8 Modes</a> sits on one strip. A preset is
 where every stand is at one moment; the soft keys are the eight presets. A preset finds each stand by
 its IP address, and a stand the preset does not know stays where it is.</p>
 <h3 id="uf8-obs">OBS</h3>
@@ -1000,13 +1000,15 @@ yourself or one of three lists:</p>
       loads one. The key of the active snapshot is lit.</li>
   <li><strong>TotalMix layouts</strong>: the eight layouts. A press loads one; the one loaded last is lit.</li>
   <li><strong>OBS scenes</strong>: the first eight scenes OBS reports, in OBS's order. A press switches
-      to one; the scene on air is lit. Needs OBS set up on the page <a href="#set-modes">Modes</a>.</li>
+      to one; the scene on air is lit. Needs OBS set up on the page <a href="#set-modes">UF8 Modes</a>.</li>
 </ul>
 <p>On the UF8, V-POT to 5 pick banks 1 to 6, and its eight soft keys show a bank's two halves at once
 (<a href="#u-soft">soft keys</a>).</p>
 <p>Out of the box:</p>
 <!--GEN:banks-->
-<p>Every bank, key, label and action is set on the settings page <a href="#set-softkeys">Soft Keys</a>.</p>
+<p>Every bank, key, label and action is set on the settings page <a href="#set-softkeys">Soft Keys</a>.
+The transport keys are on the page <a href="#set-controls">UF1</a>, the UF8's own keys on the page
+<a href="#set-uf8">UF8</a>.</p>
 <h3 id="actions">Actions</h3>
 <p>What a soft key or a transport key can do, {{actionCount}} actions. A <em>switch</em> turns something
 on and off and its key is lit while on; a <em>press</em> does one thing each time.</p>
@@ -1016,7 +1018,7 @@ on and off and its key is lit while on; a <em>press</em> does one thing each tim
 <section id="settings">
 <h2>The settings window</h2>
 <p>Settings… in the menu bar. Every change is saved at once.</p>
-<h3 id="set-connection">Connection</h3>
+<h3 id="set-connection">General</h3>
 <table class="data"><tbody>
 <tr><th>Talk to TotalMix</th><td>The link on or off.</td></tr>
 <tr><th>Open at login</th><td>Starts ORC when you log in. macOS may ask you to allow it once; ORC
@@ -1028,9 +1030,6 @@ copy that ticked it.</td></tr>
 <tr><th>Status</th><td>The link, as in the menu bar.</td></tr>
 <tr><th>Ask TotalMix again</th><td>Asks TotalMix for everything it knows, for example after you
 renamed channels.</td></tr>
-</tbody></table>
-<h3 id="set-surfaces">Surfaces</h3>
-<table class="data"><tbody>
 <tr><th>Sleep when idle, After</th><td>Off out of the box. On, the UF1 and the UF8 go dark after this
 many minutes (1 to 99) without a touch. They keep running behind the dark panels, so they wake with
 the same picture. Whatever you touch first only wakes them: that key or that turn does nothing else.
@@ -1040,7 +1039,7 @@ key; press it again, or touch anything, to wake them.</td></tr>
 <p>How bright the LEDs and the displays are is set from a key, with the six <em>Brightness</em>
 <a href="#actions">actions</a>: LEDs, displays (LCDs) or both, one step brighter or darker, five
 steps from dark to full. Both surfaces follow, and ORC keeps the steps.</p>
-<h3 id="set-controls">UF1 Controls</h3>
+<h3 id="set-controls">UF1</h3>
 <table class="data"><tbody>
 <tr><th>Pot, Target, Push</th><td>The eight pot targets, bank 1 and bank 2: a control-room role
 (Main, Main B, Phones 1 to 4, Talkback) or any channel TotalMix shows this remote. The push: Submix,
@@ -1048,15 +1047,19 @@ Select (put it on the fader), Mute or Nothing.</td></tr>
 <tr><th>Jog wheel</th><td>The jog wheel's target.</td></tr>
 <tr><th>Jog step</th><td>dB per step of the jog wheel.</td></tr>
 <tr><th>Pot step</th><td>dB per step of the four pots in the overview.</td></tr>
+<tr><th>Transport</th><td>An action and the two lamp colours for each of the five transport keys:
+<em>Active</em> while the action is on, <em>Inactive</em> otherwise, <em>Off</em> dark.</td></tr>
 </tbody></table>
 <p class="note">A role follows TotalMix: when a snapshot moves Phones 1 to another output, the pot
 follows it. A role TotalMix has not given to any output reads <em>not assigned</em>, and one this
 remote cannot see reads <em>hidden</em>.</p>
-<h3 id="set-uf8">UF8 Controls</h3>
+<h3 id="set-uf8">UF8</h3>
 <table class="data"><tbody>
 <tr><th>Show Main volume on change</th><td>On out of the box. A turn of the UF8's CHANNEL encoder
 puts its target, Main, on strip 8 for two seconds: name, level, fader. Its fader, V-Pot and CUT act on
 Main meanwhile, and keep it there while you use them.</td></tr>
+<tr><th>Keys</th><td>An action and the two lamp colours for QUICK 1-3, NORM, REC, AUTO, NAV, NUDGE
+and FOCUS, as for the UF1's transport keys.</td></tr>
 </tbody></table>
 <h3 id="set-softkeys">Soft Keys</h3>
 <table class="data"><tbody>
@@ -1068,11 +1071,10 @@ takes the action's own.</td></tr>
 <tr><th>Active, Inactive</th><td>Per key: the lamp's colour while its action is on, and otherwise.
 <em>Off</em> leaves the lamp dark. On a bank of snapshots or layouts, Active is the snapshot or layout that is loaded and Inactive the others; without a colour of their own the keys are white.</td></tr>
 <tr><th>Factory set for this bank</th><td>Puts this bank back the way it came.</td></tr>
-<tr><th>UF1 transport</th><td>An action and the two lamp colours for each of the UF1's five transport keys.</td></tr>
-<tr><th>UF8 keys</th><td>The same for QUICK 1-3, NAV, NUDGE, FOCUS, NORM, REC and AUTO on the UF8.</td></tr>
 </tbody></table>
-<h3 id="set-modes">Modes</h3>
-<p>Hue, DynaMount and OBS for the UF8. <em>Import from REAPER</em> copies the Hue, DynaMount and OBS
+<h3 id="set-modes">UF8 Modes</h3>
+<p>Hue (LAYER 2) and DynaMount (LAYER 3) for the UF8, and OBS for the OBS scenes banks, which the
+UF1 shows too. <em>Import from REAPER</em> copies the Hue, DynaMount and OBS
 settings Rea-Sixty keeps in REAPER into ORC, once.</p>
 <table class="data"><tbody>
 <tr><th>OBS</th><td><em>Talk to OBS</em>, host, port and password of OBS's WebSocket server (in OBS
@@ -1084,8 +1086,8 @@ with <em>Go</em>, <em>Store</em> and <em>Clear</em>.</td></tr>
 seconds. Then up to eight lamps, rooms or zones, eight scenes, and the V-Pot's two roles.</td></tr>
 </tbody></table>
 <h3 id="set-colours">Colours</h3>
-<p>TotalMix has nine channel colours, the UF1 its own palette. This page says which UF1 colour each
-TotalMix colour shows as, and lists the channels that wear it.</p>
+<p>TotalMix has nine channel colours, the UF1 and the UF8 their own palette. This page says which
+colour each TotalMix colour shows as on both, and lists the channels that wear it.</p>
 </section>
 
 <section id="trouble">
@@ -1093,7 +1095,7 @@ TotalMix colour shows as, and lists the channels that wear it.</p>
 <h3>The TotalMix line</h3>
 <table class="data"><thead><tr><th>It says</th><th>What it means, what to do</th></tr></thead><tbody>
 <tr><td>online</td><td>All good.</td></tr>
-<tr><td>off</td><td><em>Talk to TotalMix</em> is off (page Connection).</td></tr>
+<tr><td>off</td><td><em>Talk to TotalMix</em> is off (page General).</td></tr>
 <tr><td>waiting for TotalMix</td><td>ORC asks and nobody answers. TotalMix is not running, OSC is off,
 the remote is not <em>In Use</em>, or the ports do not match (<a href="#setup">setting up</a>).</td></tr>
 <tr><td>port … is in use by another program</td><td>Another program listens on ORC's port. Pick a

@@ -9056,7 +9056,7 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "lamp is lit while Main is on the fader." },
     { "rme_ask_again",
       "Asks TotalMix for its whole state again, as the button Ask TotalMix "
-      "again on ORC's Connection page does. For when faders or switches do not "
+      "again on ORC's General page does. For when faders or switches do not "
       "follow after TotalMix was started." },
     { "uf1_rme",
       "Switches the UF1 to the RME side-car and back, the same as SHIFT + MODE, "

@@ -285,7 +285,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
         // one (Frank 27.09.2026: "Highlight nicht sauber").
         tabs.focusRingType = NSFocusRingTypeNone;
         [tabs addTabViewItem:[self connectionTab]];
-        [tabs addTabViewItem:[self surfacesTab]];
+        // controlsTab before uf8Tab: their key rows fill trActions in order.
         [tabs addTabViewItem:[self controlsTab]];
         [tabs addTabViewItem:[self uf8Tab]];
         [tabs addTabViewItem:[self softKeysTab]];
@@ -340,7 +340,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
 - (NSTabViewItem*)connectionTab
 {
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"connection"];
-    item.label = @"Connection";
+    item.label = @"General";
 
     NSStackView* v = [[NSStackView alloc] init];
 
@@ -386,6 +386,22 @@ NSStackView* withUnit(NSView* field, NSString* unit)
                                        action:@selector(askAgain:)];
     [v addArrangedSubview:ask];
 
+    // ⇨ SLEEP (Frank 02.10.2026: "einen Sleep wie in Rea-Sixty"). The UF1 and the
+    // UF8 go dark after this long without a touch; the first touch only wakes
+    // them. Off from the factory. One clock for both surfaces (SurfaceSleep.h),
+    // so it is here and not on a surface's page (Frank 29.10.2026).
+    self.sleepBox = [NSButton checkboxWithTitle:@"Sleep when idle"
+                                         target:self
+                                         action:@selector(sleepChanged:)];
+    NSGridView* sl = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
+    sl.columnSpacing = 10.0;
+    sl.rowSpacing = 8.0;
+    self.sleepMinutes = [self field:@selector(sleepChanged:) width:70];
+    [sl addRowWithViews:@[ label(@"After"), withUnit(self.sleepMinutes, @"minutes") ]];
+    [v setCustomSpacing:20.0 afterView:ask];
+    [v addArrangedSubview:self.sleepBox];
+    [v addArrangedSubview:sl];
+
     self.errorLabel = label(@"");
     self.errorLabel.textColor = NSColor.systemRedColor;
     [v addArrangedSubview:self.errorLabel];
@@ -397,7 +413,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
 - (NSTabViewItem*)controlsTab
 {
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"controls"];
-    item.label = @"UF1 Controls";
+    item.label = @"UF1";
 
     NSStackView* v = [[NSStackView alloc] init];
     // ⇨ No "turn" column: a pot turns the volume of its target, there is
@@ -438,47 +454,29 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     [v setCustomSpacing:20.0 afterView:grid];
     [v addArrangedSubview:jog];
 
-    item.view = [self pageWithStack:v];
-    return item;
-}
-
-// ⇨ WHAT IS THE UF1's AND WHAT THE UF8's (Frank 29.10.2026: "besser beschriften,
-// was UF1 und was UF8 ist"). Sleep is both surfaces' (one clock), so it has a
-// page of its own rather than sitting under the UF1's controls.
-- (NSTabViewItem*)surfacesTab
-{
-    NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"surfaces"];
-    item.label = @"Surfaces";
-    NSStackView* v = [[NSStackView alloc] init];
-
-    // ⇨ SLEEP (Frank 02.10.2026: "einen Sleep wie in Rea-Sixty"). The UF1 and the
-    // UF8 go dark after this long without a touch; the first touch only wakes
-    // them. Off from the factory. The clock is the extension's (SurfaceSleep.h).
-    self.sleepBox = [NSButton checkboxWithTitle:@"Sleep when idle"
-                                         target:self
-                                         action:@selector(sleepChanged:)];
-    NSGridView* sl = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
-    sl.columnSpacing = 10.0;
-    sl.rowSpacing = 8.0;
-    self.sleepMinutes = [self field:@selector(sleepChanged:) width:70];
-    [sl addRowWithViews:@[ label(@"After"), withUnit(self.sleepMinutes, @"minutes") ]];
-    [v addArrangedSubview:self.sleepBox];
-    [v addArrangedSubview:sl];
+    NSGridView* tr = [self keyTableFrom:0 to:kTransportCount heading:@"Transport"];
+    [v setCustomSpacing:20.0 afterView:jog];
+    [v addArrangedSubview:tr];
 
     item.view = [self pageWithStack:v];
     return item;
 }
 
-// The UF8's own settings (Frank 29.10.2026, "Show Main Volume on Change").
+// ⇨ ONE PAGE PER SURFACE (Frank 29.10.2026: "einen Tab für UF1 und einen für
+// UF8, mit je allem drin"). The UF8's: Show Main volume on change, and the nine
+// keys the user binds (orc/Uf8Surface.cpp kUserKeys).
 - (NSTabViewItem*)uf8Tab
 {
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"uf8"];
-    item.label = @"UF8 Controls";
+    item.label = @"UF8";
     NSStackView* v = [[NSStackView alloc] init];
     self.showMainBox = [NSButton checkboxWithTitle:@"Show Main volume on change"
                                             target:self
                                             action:@selector(showMainChanged:)];
     [v addArrangedSubview:self.showMainBox];
+    NSGridView* keys = [self keyTableFrom:kTransportCount to:kKeyCount heading:@"Keys"];
+    [v setCustomSpacing:20.0 afterView:self.showMainBox];
+    [v addArrangedSubview:keys];
     item.view = [self pageWithStack:v];
     return item;
 }
@@ -552,20 +550,21 @@ NSStackView* withUnit(NSView* field, NSString* unit)
                                            action:@selector(skFactory:)];
     [v addArrangedSubview:factory];
 
-    // The same two colours for the transport keys, on the key's own binding.
-    // Rea-Sixty's side-car lamp reads them too (orcKeySlot, Bindings.h).
+    item.view = [self pageWithStack:v];
+    return item;
+}
+
+// ⇨ THE KEYS THAT RUN ONE ACTION (kTransport): an action and the two lamp
+// colours on the key's own binding, rows `from`..`to`-1. Rea-Sixty's side-car
+// lamp reads the transport keys' too (orcKeySlot, Bindings.h). The rows must be
+// built in kTransport's order: the arrays below are indexed by it.
+- (NSGridView*)keyTableFrom:(int)from to:(int)to heading:(NSString*)heading
+{
     NSGridView* tr = [NSGridView gridViewWithNumberOfColumns:4 rows:0];
     tr.columnSpacing = 10.0;
     tr.rowSpacing = 6.0;
-    [tr addRowWithViews:@[ dim(@"UF1 transport"), dim(@"Action"),
-                           dim(@"Active"), dim(@"Inactive") ]];
-    for (int k = 0; k < kKeyCount; ++k) {
-        if (k == kTransportCount) {
-            NSGridRow* row = [tr addRowWithViews:@[ dim(@"UF8 keys"),
-                [NSGridCell emptyContentView], [NSGridCell emptyContentView],
-                [NSGridCell emptyContentView] ]];
-            row.topPadding = 12.0;
-        }
+    [tr addRowWithViews:@[ dim(heading), dim(@"Action"), dim(@"Active"), dim(@"Inactive") ]];
+    for (int k = from; k < to; ++k) {
         NSPopUpButton* act = [self popUp:@selector(trActionChanged:) tag:k width:240];
         NSPopUpButton* on  = [self palettePop:@selector(trLedChanged:) tag:k width:130];
         NSPopUpButton* off = [self palettePop:@selector(trLedChanged:) tag:k + 100 width:130];
@@ -574,11 +573,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
         [self.trInactive addObject:off];
         [tr addRowWithViews:@[ label(@(kTransport[k].name)), act, on, off ]];
     }
-    [v setCustomSpacing:20.0 afterView:factory];
-    [v addArrangedSubview:tr];
-
-    item.view = [self pageWithStack:v];
-    return item;
+    return tr;
 }
 
 - (NSTabViewItem*)coloursTab

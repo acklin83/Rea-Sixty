@@ -115,7 +115,7 @@ void saveDynaDevices()
 - (NSTabViewItem*)tabItem
 {
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"modes"];
-    item.label = @"Modes";
+    item.label = @"UF8 Modes";
     self.dynaOn = [NSMutableArray array];   self.dynaName = [NSMutableArray array];
     self.dynaIp = [NSMutableArray array];   self.dynaColour = [NSMutableArray array];
     self.dynaStatus = [NSMutableArray array];
@@ -135,7 +135,7 @@ void saveDynaDevices()
     }
 
     // OBS
-    [v addArrangedSubview:heading(@"OBS")];
+    [v addArrangedSubview:heading(@"OBS, soft-key banks")];
     self.obsOn = [NSButton checkboxWithTitle:@"Talk to OBS" target:self action:@selector(obsChanged:)];
     [v addArrangedSubview:self.obsOn];
     {
@@ -156,7 +156,7 @@ void saveDynaDevices()
     }
 
     // DynaMount
-    [v addArrangedSubview:heading(@"DynaMount")];
+    [v addArrangedSubview:heading(@"DynaMount, LAYER 3")];
     self.dynaFill = [NSSegmentedControl segmentedControlWithLabels:@[ @"Fill from left", @"Fill from right" ]
                                                       trackingMode:NSSegmentSwitchTrackingSelectOne
                                                             target:self action:@selector(dynaFillChanged:)];
@@ -215,7 +215,7 @@ void saveDynaDevices()
     }
 
     // Hue
-    [v addArrangedSubview:heading(@"Hue")];
+    [v addArrangedSubview:heading(@"Hue, LAYER 2")];
     {
         NSStackView* row = [NSStackView stackViewWithViews:@[
             [self button:@"Find bridge" action:@selector(hueFind:) tag:0],
