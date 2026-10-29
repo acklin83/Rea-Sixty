@@ -120,6 +120,14 @@ void toggleChannelView(const State& st, const rmei::State& in, Side& u);
 void pickPage(const State& st, const rmei::State& in, Side& u, const Config& cfg, int key);
 void stepPageGroup(const State& st, const rmei::State& in, Side& u, const Config& cfg, int dir);
 
+// ⇨ SEND/PLUG-IN 1-8 PICK THE SUBMIX (Frank 29.10.2026), in the control room's
+// order: 1-4 Phones 1-4, 5 Main B, 6 Main (rmeu::controlRoomOutputs), 7-8 empty.
+// A role without an output leaves its key dark rather than letting the others
+// move up, as on the UF1's pots. The lamp: 2 the submix in play, 1 another
+// output, 0 none.
+int  submixKeyLamp(const State& st, const rmei::State& in, int key);
+void pickSubmix(const State& st, rmei::State& in, const Config& cfg, int key);
+
 // The channel encoder: Main volume, as the UF1's jog (cfg.jogTarget, jogStepDb).
 Writes mainVolume(const State& st, const rmei::State& in, const Config& cfg, int detents,
                   double scale);

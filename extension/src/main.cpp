@@ -27757,7 +27757,8 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
             // ⇨ TOTALMIX SIDE-CAR KEYS (plan 2.1, the left UF8): SOLO/CUT/SEL and
             // the V-Pot pushes belong to its strips; Bank 8, Page 1, the nav
             // cross as on the UF1 (rows, submix, TotalMix' window), PLUG-IN
-            // the channel view, whose pages are on the soft keys. Every other
+            // the channel view, whose pages are on the soft keys, SEND/PLUG-IN
+            // 1-6 the submix (Frank 29.10.: control room order). Every other
             // key (Layer, FINE, FLIP, V-POT / 1-5, 360 ...) stays a binding, so
             // Shift + Layer 1 leaves again.
             if (unit == 0 && tmOwnsStrip_(0)) {
@@ -27767,6 +27768,7 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 const bool mine = (id >= 0x20 && id <= 0x37) || (id >= 0x08 && id <= 0x0F)
                     || id == 0x78 || id == 0x79 || id == 0x52 || id == 0x53
                     || (id >= 0x7A && id <= 0x7E) || id == 0x50
+                    || (id >= 0x48 && id <= 0x4F)
                     || (chanView && id >= 0x18 && id <= 0x1F);
                 if (mine) {
                     if (pressed && !btnWoke) {
@@ -27784,6 +27786,8 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                             w = u8s::vpotPush(rst, g_rmeIn, g_uf8RmeSide, rcfg, id - 0x08, nowMs_());
                         } else if (id >= 0x18 && id <= 0x1F) {
                             u8s::pickPage(rst, g_rmeIn, g_uf8RmeSide, rcfg, id - 0x18);
+                        } else if (id >= 0x48 && id <= 0x4F) {
+                            u8s::pickSubmix(rst, g_rmeIn, rcfg, id - 0x48);
                         } else switch (id) {
                             case 0x78: u8s::shiftWindow(rst, g_rmeIn, g_uf8RmeSide, -8); break;
                             case 0x79: u8s::shiftWindow(rst, g_rmeIn, g_uf8RmeSide, +8); break;
@@ -46059,7 +46063,33 @@ void pushUf8GlobalLeds()
                 }
             }
         }
-        for (int i = 0; i < 8 && !ccOn; ++i) {
+        // ⇨ THE TOTALMIX SIDE-CAR owns the left UF8's row: the submix keys
+        // (Uf8Rme::submixKeyLamp, shared with ORC). A right UF8 keeps its
+        // routing lamps, scoped to it.
+        const bool tmRow = !ccOn && tmOwnsStrip_(0);
+        if (tmRow) {
+            const int units = uf8Units_();
+            {
+                LedUnitScope scope(units > 1 ? 0 : -1);
+                const reasixty::rme::State rst = reasixty::rme::manager().snapshot();
+                for (int i = 0; i < 8; ++i) {
+                    const int lamp = reasixty::rme::uf8side::submixKeyLamp(rst, g_rmeIn, i);
+                    sendUf8GlobalLedDirect_(kSpLeds[i], lamp == 2 ? uf8::GlobalLedState::Bright
+                                                      : lamp == 1 ? uf8::GlobalLedState::Dim
+                                                                  : uf8::GlobalLedState::Off);
+                }
+            }
+            if (units > 1) {
+                LedUnitScope scope(1);
+                for (int i = 0; i < 8; ++i) {
+                    const bool routingActive = sendVAll == i || sendFAll == i
+                                            || recvVAll == i || recvFAll == i;
+                    sendUf8GlobalLed(kSpLeds[i], routingActive
+                        || boundActionIsActive_(buttonIdForGlobalLed(kSpLeds[i])));
+                }
+            }
+        }
+        for (int i = 0; i < 8 && !ccOn && !tmRow; ++i) {
             const bool sendHit = (sendVAll == i || sendFAll == i);
             const bool recvHit = (recvVAll == i || recvFAll == i);
             const bool routingActive = sendHit || recvHit;

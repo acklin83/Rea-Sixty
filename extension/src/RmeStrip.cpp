@@ -308,6 +308,19 @@ std::vector<View> views(const State& st, Row r, int ch,
                     keys.push_back(p);
             }
         }
+        // ⇨ STEREO HAS ONE PLACE, the fourth key of the first view (V-Pot 8 on
+        // the UF8), mono or stereo, mic or line (Frank 29.10.2026: "wär gut,
+        // wenn der button am selben Ort landen würde wie beim Mono"). Packing
+        // put it third on a stereo line pair and onto the second view on a
+        // stereo mic pair; the keys it passes over move one on.
+        if (const auto it = std::find_if(keys.begin(), keys.end(),
+                [](const Param* p) { return std::string(p->id) == "stereo"; });
+            it != keys.end()) {
+            const Param* stereo = *it;
+            keys.erase(it);
+            if (keys.size() < 3) keys.resize(3, nullptr);
+            keys.insert(keys.begin() + 3, stereo);
+        }
         const std::size_t count = (std::max(pots.size(), keys.size()) + 3) / 4;
         for (std::size_t j = 0; j < count; ++j) {
             View v;

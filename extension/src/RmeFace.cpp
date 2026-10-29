@@ -363,14 +363,7 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
     // Ausgang: OUTPUT, ohne TotalMix: RME.
     {
         std::string name = "RME", db, line;
-        std::string barText = !linked ? std::string("RME")
-                            : row == rmeu::Row::Output ? std::string("OUTPUT")
-                            : row == rmeu::Row::Fx     ? std::string("FX")
-                            : [&] {
-                                  const std::string on =
-                                      rmeu::displayName(st, rmeu::Row::Output, sub);
-                                  return "> " + (on.empty() ? std::string("--") : on);
-                              }();
+        std::string barText = !linked ? std::string("RME") : rmeu::barText(st, row, sub);
         int no = 0, pal = 0, barPos = -1;
         bool barCentre = false;
         std::string chSoft;

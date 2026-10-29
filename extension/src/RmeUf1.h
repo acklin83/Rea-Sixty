@@ -18,6 +18,7 @@
 #include "RmeState.h"
 #include "Uf1EqCurve.h"
 
+#include <array>
 #include <functional>
 #include <string>
 #include <utility>
@@ -61,6 +62,17 @@ const char* fxSection(int ch);
 // V-Pot bank jump.
 constexpr int kControlRoomKey = -(1 << 20);   // below every channel number
 int orderKey(const State& st, Row r, int ch);
+// The control room's six outputs in that order, -1 where a role has none. The
+// UF8's SEND/PLUG-IN keys 1-6 pick the submix by it (Frank 29.10.2026: "selbe
+// Reihenfolge wie die Outputs im Control-Room").
+constexpr int kControlRoomSlots = 6;
+std::array<int, kControlRoomSlots> controlRoomOutputs(const State& st);
+
+// ⇨ THE COLOUR BAR'S TEXT: where a level goes. Inputs and playbacks "> Phones 2"
+// (the submix, "> --" without one), outputs "OUTPUT", the FX row "FX". The
+// UF1's bar and the UF8's CS-type cell (twelve characters) show it alike
+// (Frank 29.10.2026).
+std::string barText(const State& st, Row r, int submix);
 
 // Visible channels of a row in that order: named on this remote and colour != 0.
 std::vector<int> visibleChannels(const State& st, Row r);

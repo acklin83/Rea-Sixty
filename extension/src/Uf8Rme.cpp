@@ -20,17 +20,6 @@ int clampFirst(int first, int count)
     return std::clamp(first, 0, std::max(0, count - kStrips));
 }
 
-const char* rowTag(rmeu::Row r)
-{
-    switch (r) {
-        case rmeu::Row::Input:    return "IN";
-        case rmeu::Row::Playback: return "PB";
-        case rmeu::Row::Output:   return "OUT";
-        case rmeu::Row::Fx:       return "FX";
-    }
-    return "";
-}
-
 // The page the channel view shows, and every page the channel has.
 struct Pages {
     std::vector<rmes::View> all;
@@ -146,7 +135,10 @@ Frame frame(const State& st, const rmei::State& in, const Side& u, const Config&
         // Name, row, number, colour.
         v.upper = utf8ToLatin1(rmeu::displayName(st, r, ch));
         if (v.upper.size() > uf8::kUf8ScribbleChars) v.upper.resize(uf8::kUf8ScribbleChars);
-        v.csType  = rowTag(r);
+        // The colour bar: where the fader's level goes, as on the UF1 (Frank
+        // 29.10.2026: the cell takes twelve characters, Protocol.cpp).
+        v.csType  = utf8ToLatin1(rmeu::barText(st, r, sub));
+        if (v.csType.size() > 12) v.csType.resize(12);
         v.chanNum = std::to_string(ch + 1);
         if (const rme::Channel* c = rmeu::channelOf(st, r, ch); c && c->colour >= 0 && c->colour < 9)
             f.colour[static_cast<size_t>(s)] = cfg.colourMap[c->colour];
@@ -385,6 +377,26 @@ Writes mainVolume(const State& st, const rmei::State& in, const Config& cfg, int
     const rmeu::Target t = rmeu::resolveTarget(st, cfg.jogTarget);
     if (t.visible) rmei::nudgeLevel(in, st, t.row, t.ch, detents, cfg.jogStepDb, scale, out);
     return out;
+}
+
+namespace {
+int submixKeyOutput(const State& st, int key)
+{
+    if (key < 0 || key >= rmeu::kControlRoomSlots) return -1;
+    return rmeu::controlRoomOutputs(st)[static_cast<size_t>(key)];
+}
+} // namespace
+
+int submixKeyLamp(const State& st, const rmei::State& in, int key)
+{
+    const int out = submixKeyOutput(st, key);
+    if (out < 0) return 0;
+    return out == rmeu::effectiveSubmix(st, in.submix.load()) ? 2 : 1;
+}
+
+void pickSubmix(const State& st, rmei::State& in, const Config& cfg, int key)
+{
+    rmei::setSubmix(in, st, cfg, submixKeyOutput(st, key));
 }
 
 } // namespace reasixty::rme::uf8side

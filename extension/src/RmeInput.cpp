@@ -143,8 +143,14 @@ void stepSubmix(State& s, const rme::State& st, const Config& cfg, int dir)
     const int  idx = (at == outs.end()) ? 0 : static_cast<int>(at - outs.begin());
     const int  n   = static_cast<int>(outs.size());
     const int  to  = outs[static_cast<size_t>((idx + (dir > 0 ? 1 : n - 1)) % n)];
-    s.submix.store(to);
-    followBank(s, st, cfg, rmeu::Row::Output, to);
+    setSubmix(s, st, cfg, to);
+}
+
+void setSubmix(State& s, const rme::State& st, const Config& cfg, int out)
+{
+    if (out < 0) return;
+    s.submix.store(out);
+    followBank(s, st, cfg, rmeu::Row::Output, out);
 }
 
 void toggleWindow(State& s, const Host& h, Writes& out)

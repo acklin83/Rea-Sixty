@@ -56,12 +56,25 @@ std::string displayName(const State& st, Row r, int ch)
 int orderKey(const State& st, Row r, int ch)
 {
     if (r != Row::Output || ch < 0) return ch;
-    // TotalMix FX, control room section, left to right (seen 27.09.2026).
-    const int cr[6] = { st.phones[0], st.phones[1], st.phones[2], st.phones[3],
-                        st.mainOutB, st.mainOut };
-    for (int i = 0; i < 6; ++i)
-        if (cr[i] == ch) return kControlRoomKey + i;
+    const auto cr = controlRoomOutputs(st);
+    for (int i = 0; i < kControlRoomSlots; ++i)
+        if (cr[static_cast<size_t>(i)] == ch) return kControlRoomKey + i;
     return ch;
+}
+
+std::array<int, kControlRoomSlots> controlRoomOutputs(const State& st)
+{
+    // TotalMix FX, control room section, left to right (seen 27.09.2026).
+    return { st.phones[0], st.phones[1], st.phones[2], st.phones[3],
+             st.mainOutB, st.mainOut };
+}
+
+std::string barText(const State& st, Row r, int submix)
+{
+    if (r == Row::Output) return "OUTPUT";
+    if (r == Row::Fx)     return "FX";
+    const std::string on = displayName(st, Row::Output, submix);
+    return "> " + (on.empty() ? std::string("--") : on);
 }
 
 std::vector<int> visibleChannels(const State& st, Row r)

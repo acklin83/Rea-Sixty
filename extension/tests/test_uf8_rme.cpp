@@ -86,6 +86,21 @@ int main()
         u8::follow(st, in, side);
         EXPECT(u8::channels(st, in, side)[0] == 0);
     }
+    // ── SEND/PLUG-IN: the submix in the control room's order ─────────────────
+    {
+        EXPECT(u8::submixKeyLamp(st, in, 0) == 2);          // Phones 1, in play
+        EXPECT(u8::submixKeyLamp(st, in, 5) == 1);          // Main, another output
+        EXPECT(u8::submixKeyLamp(st, in, 1) == 0);          // Phones 2: no output
+        EXPECT(u8::submixKeyLamp(st, in, 4) == 0);          // Main B: none
+        EXPECT(u8::submixKeyLamp(st, in, 6) == 0 && u8::submixKeyLamp(st, in, 7) == 0);
+        u8::pickSubmix(st, in, cfg, 5);
+        EXPECT(in.submix.load() == 0);
+        EXPECT(u8::frame(st, in, side, cfg, soft).strips[2].csType == "> Main");
+        u8::pickSubmix(st, in, cfg, 1);                     // a dark key changes nothing
+        EXPECT(in.submix.load() == 0);
+        u8::pickSubmix(st, in, cfg, 0);
+        EXPECT(in.submix.load() == 6);
+    }
     // ── SEL is the UF1's selection ───────────────────────────────────────────
     {
         u8::sel(st, in, side, 2);
@@ -97,7 +112,7 @@ int main()
         const auto f = u8::frame(st, in, side, cfg, soft);
         const auto& v = f.strips[2];
         EXPECT(v.upper == "In 3");
-        EXPECT(v.csType == "IN");
+        EXPECT(v.csType == "> Phones 1");                 // the submix, as on the UF1
         EXPECT(v.chanNum == "3");
         EXPECT(v.sel);
         EXPECT(!f.strips[1].sel);

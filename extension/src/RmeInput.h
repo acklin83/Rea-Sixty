@@ -116,6 +116,9 @@ void nudgeLevel(const State& s, const rme::State& st, rmeu::Row r, int ch,
 void stepRow(State& s, int dir);
 // The V-Pot bank follows the output stepped to (followBank).
 void stepSubmix(State& s, const rme::State& st, const Config& cfg, int dir);
+// The submix set to output `out` (ignored when out < 0), the bank following as
+// above. The UF8's SEND/PLUG-IN keys (Uf8Rme::pickSubmix).
+void setSubmix(State& s, const rme::State& st, const Config& cfg, int out);
 // If channel `ch` of row `r` sits on a pot of the other bank, switch 5-8's bank
 // to it. Nav left/right and the channel encoder both call this (Frank 25.09.).
 void followBank(State& s, const rme::State& st, const Config& cfg, rmeu::Row r, int ch);

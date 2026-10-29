@@ -514,12 +514,13 @@ int main()
               "a view draws the graph when it carries EQ or low cut");
 
         // ⇨ Input and Input 2 are packed (Frank 27.09.). The stereo pair: pots
-        // Gain, Width; keys Phase L, Phase R, then Stereo, M/S from Input 2.
+        // Gain, Width; keys Phase L, Phase R, M/S from Input 2, and Stereo in
+        // its one place, the fourth key (Frank 29.10.).
         const auto st2 = sp::views(s, Row::Input, 30, pages);
         check(!st2.empty() && st2[0].name == "Input" && st2[0].id == 0
               && st2[0].pots[0] == gain && st2[0].pots[1] == width && !st2[0].pots[2]
               && st2[0].keys[0] == sp::find("phase") && st2[0].keys[1] == phaseR
-              && st2[0].keys[2] == sp::find("stereo") && st2[0].keys[3] == sp::find("msproc")
+              && st2[0].keys[2] == sp::find("msproc") && st2[0].keys[3] == sp::find("stereo")
               && st2.size() == 1,
               "a stereo strip's Input 2 moves up into Input's empty slots");
 
@@ -530,9 +531,9 @@ int main()
         const auto t2 = sp::views(s, Row::Input, 2, pages);
         check(t2.size() == 1 && t2[0].name == "Input"
               && t2[0].pots[0] == sp::find("fxsend") && !t2[0].pots[1]
-              && t2[0].keys[0] == sp::find("phase") && t2[0].keys[1] == sp::find("stereo")
-              && !t2[0].keys[2],
-              "T2 gets one page: FX Send, Phase, Stereo");
+              && t2[0].keys[0] == sp::find("phase") && !t2[0].keys[1] && !t2[0].keys[2]
+              && t2[0].keys[3] == sp::find("stereo"),
+              "T2 gets one page: FX Send, Phase, and Stereo on the fourth key");
 
         // More than four keys spill onto a second view, named after Input 2.
         name("/input/12/name", "Mic"); put("/input/12/gain", 20);
@@ -544,6 +545,18 @@ int main()
               && mic[1].keys[0] == sp::find("instrument") && mic[1].keys[1] == sp::find("autoset")
               && mic[0].pots[0] == gain && !mic[1].pots[0],
               "the fifth key opens Input 2, in page order");
+
+        // A stereo mic pair: 48V, Pad, Phase L, Phase R and Stereo want the first
+        // view. Stereo keeps the fourth key, Phase R moves on (Frank 29.10.:
+        // Stereo was on the second view, "fehlt").
+        name("/input/40/name", "OH"); put("/input/40/stereo", 1); put("/input/40/gain", 30);
+        put("/input/40/48v", 1); put("/input/40/pad", 0); put("/input/40/phase", 0);
+        put("/input/41/phase", 0); put("/input/40/msproc", 0);
+        const auto oh = sp::views(s, Row::Input, 40, pages);
+        check(oh.size() == 2 && oh[0].keys[0] == sp::find("48v") && oh[0].keys[1] == sp::find("pad")
+              && oh[0].keys[2] == sp::find("phase") && oh[0].keys[3] == sp::find("stereo")
+              && oh[1].keys[0] == phaseR && oh[1].keys[1] == sp::find("msproc"),
+              "a stereo mic pair has Stereo on the fourth key too");
 
         // A page on its own stays as written, slot for slot: an output with Pan
         // and Delay but no crossfeed keeps Delay on pot 2.

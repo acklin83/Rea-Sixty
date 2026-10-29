@@ -29,6 +29,7 @@ namespace {
 // UF8 button ids (Bindings.cpp fromUf8DeviceId, Protocol.h).
 constexpr std::uint8_t kVpotPush1  = 0x08;   // ..0x0F
 constexpr std::uint8_t kTopSoft1   = 0x18;   // ..0x1F
+constexpr std::uint8_t kSendPlugin1 = 0x48;  // ..0x4F: SEND/PLUG-IN, the submix
 constexpr std::uint8_t kStripKeys  = 0x20;   // ..0x37: per strip SOLO, CUT, SEL
 constexpr std::uint8_t kLayer1     = 0x40;
 constexpr std::uint8_t kLayer2     = 0x41;
@@ -304,6 +305,11 @@ void Uf8Surface::paintLeds_()
     using S = uf8::GlobalLedState;
     const int mode = mode_.load();
     const int page = skPage_.load();
+    int sp[8] = {};
+    if (mode == static_cast<int>(Mode::TotalMix)) {
+        const rme::State st = rme::manager().snapshot();
+        for (int k = 0; k < 8; ++k) sp[k] = u8s::submixKeyLamp(st, in_, k);
+    }
     const struct { G led; int state; } want[] = {
         { G::Layer1,   mode == 0 ? 2 : 1 },
         { G::Layer2,   mode == 1 ? 2 : 1 },
@@ -317,7 +323,13 @@ void Uf8Surface::paintLeds_()
         { G::Soft3,    page == 3 ? 2 : 1 },
         { G::Soft4,    page == 4 ? 2 : 0 },
         { G::Soft5,    page == 5 ? 2 : 0 },
+        // SEND/PLUG-IN: the submix keys, in TotalMix only.
+        { G::SendPlugin1, sp[0] }, { G::SendPlugin2, sp[1] },
+        { G::SendPlugin3, sp[2] }, { G::SendPlugin4, sp[3] },
+        { G::SendPlugin5, sp[4] }, { G::SendPlugin6, sp[5] },
+        { G::SendPlugin7, sp[6] }, { G::SendPlugin8, sp[7] },
     };
+    static_assert(std::size(want) == std::tuple_size<decltype(cLed_)>::value);
     for (size_t i = 0; i < std::size(want); ++i) {
         if (cLed_[i] == want[i].state) continue;
         cLed_[i] = want[i].state;
@@ -606,6 +618,10 @@ void Uf8Surface::onButton_(std::uint8_t id, bool pressed)
     }
     if (id >= kVpotPush1 && id < kVpotPush1 + 8) {
         send_(u8s::vpotPush(st, in_, side_, cfg, id - kVpotPush1, nowMs_()));
+        return;
+    }
+    if (id >= kSendPlugin1 && id < kSendPlugin1 + 8) {
+        u8s::pickSubmix(st, in_, cfg, id - kSendPlugin1);
         return;
     }
     rmei::Writes w;

@@ -142,7 +142,8 @@ std::vector<uint8_t> buildPluginSlotName(uint8_t strip, std::string_view text);
 // All decoded from cap14a–cap18 on 2026-04-20.
 //
 // Channel Strip Type ("CS 2" / "4K B" / "4K E" / "BusComp"):
-//   FF 66 06 17 <strip> <4 ASCII chars> CKSUM       (9 bytes)
+//   FF 66 <N+2> 17 <strip> <N chars> CKSUM. SSL 360° sends 4; the cell shows
+//   twelve (measured 2026-08-12, Protocol.cpp).
 std::vector<uint8_t> buildChannelStripType(uint8_t strip, std::string_view fourChars);
 
 // Per-strip button LEDs — monochrome on/off path (legacy, unused for

@@ -104,7 +104,7 @@ class Uf8Surface {
     // the hand waits here.
     std::array<std::atomic<bool>, 8>         dynPending_{};
     std::array<std::atomic<double>, 8>       dynPendingNorm_{};
-    std::array<int, 12>                      cLed_{};
+    std::array<int, 20>                      cLed_{};
     std::atomic<bool>                        repaint_{true};
 
     // What the device shows (Uf8Strips::Cells point in here). Loop thread.

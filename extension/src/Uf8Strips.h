@@ -14,7 +14,7 @@
 //
 // The cells, top to bottom (Protocol.h has the field map):
 //   colour bar        not here: ColorSync in main.cpp, buildColorCommand in ORC
-//   CS-type cell      csType (4 chars)          buildChannelStripType
+//   CS-type cell      csType (12 chars)         buildChannelStripType
 //   channel number    chanNum                   buildChannelNumber
 //   upper scribble    upper (8 chars, Latin-1)  buildStripTextUpper
 //   fader readout     faderText + faderUnit     buildFaderDbReadout
