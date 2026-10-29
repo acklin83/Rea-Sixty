@@ -393,6 +393,7 @@ void Surface::loop_()
     // The handover check's own state, local to this loop (one surface, one loop).
     auto lastCheck = std::chrono::steady_clock::time_point{};
     bool yielding  = false;
+    bool released  = false;   // the receipt for this handover is written
     std::string lastOpenErr;
 
     while (!quit_.load()) {
@@ -423,6 +424,8 @@ void Surface::loop_()
                     std::fflush(stdout);
                     rme::manager().start();
                     lastOpenTry = now - std::chrono::seconds(5);   // try at once
+                    orc::clearReleased();
+                    released = false;
                 }
                 yielding = want;
             }
@@ -436,6 +439,18 @@ void Surface::loop_()
                     st_.open = false;
                     st_.serial.clear();
                     st_.error = "handed over to REAPER";
+                }
+                // ⇨ THE RECEIPT, once the surface is closed and the TotalMix
+                // port with it (manager().stop() above joins its worker).
+                // Rea-Sixty opens the devices on this instead of guessing.
+                if (!released) {
+                    const int pid = orc::reaperMarkerPid();
+                    if (pid > 0) {
+                        orc::markReleased(pid);
+                        released = true;
+                        orc::logLine("ORC: released the surfaces to REAPER pid %d\n", pid);
+                        std::fflush(stdout);
+                    }
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(33));
                 continue;

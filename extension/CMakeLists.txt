@@ -812,6 +812,10 @@ if(NOT WIN32)
     target_include_directories(test_uf8_units PRIVATE src)
     add_test(NAME uf8_units COMMAND test_uf8_units)
 
+    add_executable(test_orc_handover tests/test_orc_handover.cpp)
+    target_include_directories(test_orc_handover PRIVATE src)
+    add_test(NAME orc_handover COMMAND test_orc_handover)
+
     # Project state follows the project tab (ProjectScoped.h, header only).
     add_executable(test_project_scoped tests/test_project_scoped.cpp)
     target_include_directories(test_project_scoped PRIVATE src)

@@ -104,9 +104,12 @@
 #include "SurfaceSleep.h"
 #include "EncoderRing.h"
 #include "LaneModel.h"
+#include "OrcHandover.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
 #include <sys/time.h> // gettimeofday, for the lines in ORC's log
+#include <csignal>    // kill(pid, 0), is ORC alive
+#include <cerrno>
 #endif
 #include "Uf1Pacer.h"
 #include "Uf1SoftKeys.h"
@@ -1820,29 +1823,93 @@ static void orcLogLine_(const char* what)
 #endif
 }
 
-static void orcHandoverMark_(bool want)
+// Returns true when the marker was written, i.e. ORC is installed and was asked.
+static bool orcHandoverMark_(bool want)
 {
 #ifdef __APPLE__
     const std::string path = orcHandoverPath_();
-    if (path.empty()) return;
+    if (path.empty()) return false;
     if (!want) {
         if (std::remove(path.c_str()) == 0)
             orcLogLine_("handover marker removed, ORC may take the UF1 back");
-        return;
+        return false;
     }
     // Only where ORC lives: fopen fails when the folder is missing, and that is
-    // the whole check.
-    if (FILE* f = std::fopen(path.c_str(), "w")) {
-        std::fprintf(f, "%d\n", static_cast<int>(getpid()));
-        std::fclose(f);
+    // the whole check. The second line tells ORC that this Rea-Sixty waits for
+    // its receipt (handover.released); an ORC that does not know it reads the
+    // pid and stops there.
+    if (orc_handover::writeFile(path, orc_handover::formatMarker(static_cast<int>(getpid())))) {
         char line[96];
         std::snprintf(line, sizeof(line), "handover marker set (REAPER pid %d), asking ORC for the UF1",
                       static_cast<int>(getpid()));
         orcLogLine_(line);
+        return true;
     }
+    return false;
 #else
     (void)want;   // ORC exists on macOS only
+    return false;
 #endif
+}
+
+// ⇨ THE RECEIPT (Frank 29.10.2026, docs/orc-uf8-plan.md section 5). An ORC
+// that knows it writes ORC/orc.pid while it runs and, once it has closed the
+// surfaces and its TotalMix port, ORC/handover.released with our pid. While an
+// ORC is alive and has not answered, the UF1 and the UF8 are not opened: the
+// open would only fail against ORC's claim and wait 5 s for the next try. No
+// receipt within kOrcReceiptWaitMs (an ORC that hangs, or one too old to write
+// orc.pid never makes us wait at all): the retry loop takes over as before.
+constexpr int64_t kOrcReceiptWaitMs = 3000;
+// steady_clock milliseconds until which the UF1 and UF8 wait for the receipt;
+// 0 = not waiting.
+std::atomic<int64_t> g_orcWaitUntilMs{0};
+
+static int64_t orcNowMs_()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+#ifdef __APPLE__
+static int orcReadPid_(const std::string& file)
+{
+    const std::string marker = orcHandoverPath_();
+    if (marker.empty()) return 0;
+    return orc_handover::parsePid(orc_handover::readFile(
+        marker.substr(0, marker.rfind('/') + 1) + file));
+}
+#endif
+
+// ORC runs (its orc.pid names a live process).
+static bool orcRunning_()
+{
+#ifdef __APPLE__
+    const int pid = orcReadPid_("orc.pid");
+    return pid > 0 && (::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM);
+#else
+    return false;
+#endif
+}
+
+// ORC has let go of the surfaces for this REAPER.
+static bool orcReleasedForUs_()
+{
+#ifdef __APPLE__
+    return orcReadPid_("handover.released") == static_cast<int>(getpid());
+#else
+    return false;
+#endif
+}
+
+// Ask ORC and, when it runs and has not answered yet, start waiting for the
+// receipt. Returns true while that wait holds the UF1 and the UF8 back.
+static bool orcAskAndWait_()
+{
+    if (!orcHandoverMark_(true)) return false;
+    if (!orcRunning_() || orcReleasedForUs_()) return false;
+    g_orcWaitUntilMs.store(orcNowMs_() + kOrcReceiptWaitMs);
+    orcLogLine_("ORC runs, waiting for its receipt before opening the UF1 and UF8");
+    return true;
 }
 
 // Per-domain (Frank 2026-06-26): CS defaults to COPY (carry the live EQ/dyn values
@@ -26365,9 +26432,20 @@ void initDevices_()
         g_uf8SwapUnits.store(std::atoi(v) != 0);
     if (const char* v = GetExtState("rea_sixty", "uf8_second_unit"); v && *v)
         g_uf8Second.store(std::atoi(v) != 0);
+    // ⇨ ASK ORC FIRST, BEFORE THE UF8 (29.10.2026): an ORC that holds the UF1
+    // and, from ORC 2.0 on, the UF8 lets go of both, and while it has not said
+    // so neither is opened here (orcAskAndWait_). The retry loop in onTimer
+    // opens them the moment the receipt is there.
+    if (const char* v = GetExtState("rea_sixty", "uf1_take_from_orc"); v && *v)
+        g_uf1TakeFromOrc.store(std::atoi(v) != 0);
+    g_orcWaitUntilMs.store(0);   // a restart starts a fresh handover
+    if (g_uf1TakeFromOrc.load()) orcAskAndWait_();
+    const bool orcHolds = g_orcWaitUntilMs.load() > 0;
     g_dev = std::make_unique<uf8::UF8Device>();
-    const bool uf8Opened = g_dev->open(uf8UnitIndexForSide_(0));
-    if (!uf8Opened) {
+    const bool uf8Opened = !orcHolds && g_dev->open(uf8UnitIndexForSide_(0));
+    if (orcHolds && !uf8Opened) {
+        g_dev.reset();   // waiting for ORC, not failed: no console line
+    } else if (!uf8Opened) {
         const std::string err = g_dev->lastError();
         consoleMsg_(("Rea-Sixty UF8: " + err
                      + "  (UF8 optional — continuing)\n").c_str());
@@ -26445,11 +26523,10 @@ void initDevices_()
     }
 
     // Best-effort UF1 attach (Phase 0 bring-up). Absence is fine.
-    // ⇨ Ask ORC for it first, if that is what the user wants (see g_uf1TakeFromOrc).
-    if (const char* v = GetExtState("rea_sixty", "uf1_take_from_orc"); v && *v)
-        g_uf1TakeFromOrc.store(std::atoi(v) != 0);
-    orcHandoverMark_(g_uf1TakeFromOrc.load());
-    openUf1BringUp_();
+    // ⇨ ORC was asked above, before the UF8 (orcAskAndWait_). With the setting
+    // off, any stale marker of ours goes.
+    if (!g_uf1TakeFromOrc.load()) orcHandoverMark_(false);
+    if (!orcHolds) openUf1BringUp_();
     // ⇨ PATIENCE. Not open now is not "not there": ORC may be letting go this
     // very second, or SSL 360 may still hold it. Retry when we asked ORC for it,
     // or when this machine has had a UF1 before. A machine that never had one
@@ -26468,7 +26545,9 @@ void initDevices_()
     // exactly that and did nothing, Frank's UC1 16.10. 17:32). The UF1 also asks
     // when ORC was asked to hand it over, ORC may be letting go this very second.
     const int seen = g_devicesSeen.load();
-    if (!g_dev && (seen & kSeenUf8)) g_uf8WantRetry.store(true);
+    // ⇨ And when ORC holds it: a machine where the UF8 has only ever lived in
+    // ORC never set kSeenUf8 here and would not ask again.
+    if (!g_dev && ((seen & kSeenUf8) || orcHolds)) g_uf8WantRetry.store(true);
     if (!g_uc1_dev && (seen & kSeenUc1)) g_uc1WantRetry.store(true);
     if (!g_uf1_dev && (g_uf1TakeFromOrc.load() || (seen & kSeenUf1)))
         g_uf1WantRetry.store(true);
@@ -49428,12 +49507,27 @@ void onTimerBody_()
                 sLastReopen = nowR - std::chrono::seconds(60);
             }
         }
+        // ⇨ WAITING FOR ORC'S RECEIPT (orcAskAndWait_): the UF1 and the UF8
+        // stay shut until ORC says it has let go, or the wait runs out. Then
+        // the next pass tries at once rather than on the 5-s beat.
+        bool holdForOrc = false;
+        if (const int64_t until = g_orcWaitUntilMs.load(); until > 0) {
+            const bool receipt = orcReleasedForUs_();
+            if (receipt || orcNowMs_() >= until) {
+                g_orcWaitUntilMs.store(0);
+                orcLogLine_(receipt ? "ORC released the surfaces, opening them"
+                                    : "no receipt from ORC in time, trying the surfaces anyway");
+                sLastReopen = nowR - std::chrono::seconds(60);
+            } else {
+                holdForOrc = true;
+            }
+        }
         const bool ucStale = (g_uc1_dev && g_uc1_dev->needsReopen())
                           || ((sUc1Lost || g_uc1WantRetry.load()) && !g_uc1_dev);
         const bool ufStale = (g_dev     && g_dev->needsReopen())
-                          || ((sUf8Lost || g_uf8WantRetry.load()) && !g_dev);
+                          || ((sUf8Lost || g_uf8WantRetry.load()) && !g_dev && !holdForOrc);
         const bool u1Stale = (g_uf1_dev && g_uf1_dev->needsReopen())
-                          || ((sUf1Lost || g_uf1WantRetry.load()) && !g_uf1_dev);
+                          || ((sUf1Lost || g_uf1WantRetry.load()) && !g_uf1_dev && !holdForOrc);
         auto staleLog = [](const char* file, const std::string& line) {
             if (FILE* f = std::fopen(uf8::logPath(file).c_str(), "a")) {
                 const auto t = std::chrono::system_clock::now().time_since_epoch();
@@ -52297,7 +52391,11 @@ void reasixty_setUf1TakeFromOrc(bool on)
     SetExtState("rea_sixty", "uf1_take_from_orc", on ? "1" : "0", true);
     // Takes effect now, not at the next start: ask (or stop asking) at once,
     // and if the UF1 is not ours yet, start trying for it.
-    orcHandoverMark_(on);
+    if (on) {
+        if (orcAskAndWait_() && !g_dev) g_uf8WantRetry.store(true);
+    } else {
+        orcHandoverMark_(false);
+    }
     if (on && !g_uf1_dev) g_uf1WantRetry.store(true);
 }
 

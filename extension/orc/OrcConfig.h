@@ -57,4 +57,23 @@ std::string linkSummary();
 // A file left behind by a crashed REAPER names a dead pid and is ignored.
 bool reaperWantsUf1();
 
+// ⇨ HANDOVER, SECOND HALF: THE RECEIPT (Frank 29.10.2026, docs/orc-uf8-plan.md
+// section 5). Without it Rea-Sixty could only guess when ORC had let go and
+// retried every 5 s. Now:
+//   · <supportDir>/orc.pid holds ORC's pid while ORC runs. Rea-Sixty waits for
+//     the receipt only when that process lives; no ORC, no wait.
+//   · <supportDir>/handover.released holds the pid of the REAPER that asked,
+//     written once ORC has closed the surfaces and its TotalMix port. Removed
+//     when ORC takes them back.
+// A marker from a Rea-Sixty that knows the receipt carries a second line "v2";
+// older ones carry only the pid (reaperMarkerVersion).
+void writeOrcPid();
+void removeOrcPid();
+// The pid in the handover marker, or 0 when there is none or it is unreadable.
+int reaperMarkerPid();
+// 2 for a marker with the "v2" line, 1 for a pid-only marker, 0 for none.
+int reaperMarkerVersion();
+void markReleased(int reaperPid);
+void clearReleased();
+
 } // namespace orc

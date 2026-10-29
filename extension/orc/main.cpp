@@ -127,6 +127,9 @@ int main()
                 orc::rmeConfigPath().c_str());
     std::fflush(stdout);
 
+    // ORC runs: Rea-Sixty waits for the receipt only while this pid lives.
+    orc::writeOrcPid();
+
     orc::Surface surface;
     surface.start();
 
@@ -135,6 +138,8 @@ int main()
 
     surface.stop();
     rme::manager().stop();
+    orc::removeOrcPid();
+    orc::clearReleased();
     orc::logLine("ORC: closed.\n");
     return 0;
 }

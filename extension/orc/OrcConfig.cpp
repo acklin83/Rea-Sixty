@@ -1,6 +1,7 @@
 #include "OrcConfig.h"
 
 #include "RmeManager.h"
+#include "OrcHandover.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -9,6 +10,7 @@
 #include <cerrno>
 #include <csignal>
 #include <sys/types.h>
+#include <unistd.h>
 
 namespace orc {
 
@@ -51,15 +53,42 @@ bool saveRmeConfig(const reasixty::rme::Config& c)
 
 bool reaperWantsUf1()
 {
-    FILE* f = std::fopen((supportDir() + "/handover").c_str(), "rb");
-    if (!f) return false;
-    int pid = 0;
-    const bool got = std::fscanf(f, "%d", &pid) == 1;
-    std::fclose(f);
-    if (!got || pid <= 0) return false;
+    const int pid = reaperMarkerPid();
+    if (pid <= 0) return false;
     // kill(pid, 0) sends nothing and answers "does it exist": 0, or EPERM for a
     // process that exists but is not ours to signal.
     return ::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM;
+}
+
+void writeOrcPid()
+{
+    orc_handover::writeFile(supportDir() + "/orc.pid", orc_handover::formatPid(::getpid()));
+}
+
+void removeOrcPid()
+{
+    std::remove((supportDir() + "/orc.pid").c_str());
+}
+
+int reaperMarkerPid()
+{
+    return orc_handover::parseMarker(orc_handover::readFile(supportDir() + "/handover")).pid;
+}
+
+int reaperMarkerVersion()
+{
+    return orc_handover::parseMarker(orc_handover::readFile(supportDir() + "/handover")).version;
+}
+
+void markReleased(int reaperPid)
+{
+    orc_handover::writeFile(supportDir() + "/handover.released",
+                            orc_handover::formatPid(reaperPid));
+}
+
+void clearReleased()
+{
+    std::remove((supportDir() + "/handover.released").c_str());
 }
 
 std::string saveRmeConfigIfDirty()
