@@ -365,6 +365,7 @@ add_library(reaper_uf8 MODULE
     src/RmeInput.cpp
     src/RmeFace.cpp
     src/Uf8Rme.cpp
+    src/ModeBuiltins.cpp
     src/RmeBuiltins.cpp
     src/RmeSoftKeys.cpp
     src/Uf1Pacer.cpp
@@ -1175,7 +1176,20 @@ if(APPLE)
         # REAPER nothing; Uf8Frames / Uf8Fader / Uf8Strips are headers.
         src/Protocol.cpp
         src/UF8Device.cpp
-        src/Uf8Rme.cpp)
+        src/Uf8Rme.cpp
+        # Hue, DynaMount and OBS, the extension's managers (stage 6). No REAPER
+        # in any of them; their settings live in ORC's own files (OrcModes).
+        src/HueColor.cpp
+        src/HueClient.cpp
+        src/HueManager.cpp
+        src/macos_http.mm
+        src/DynaMountClient.cpp
+        src/DynaMountManager.cpp
+        src/ObsManager.cpp
+        src/ObsProto.cpp
+        src/WsClient.cpp
+        src/Sha256.cpp
+        src/ModeBuiltins.cpp)
     add_executable(orc
         orc/main.cpp
         # Stage 7: the tick that used to be main()'s body, and the Mac side.
@@ -1323,7 +1337,8 @@ if(APPLE)
         "${ORC_LIBUSB_PREFIX}/install/include/libusb-1.0")
     target_compile_options(orc_manual_dump PRIVATE -mmacosx-version-min=13.0)
     target_link_options(orc_manual_dump PRIVATE -mmacosx-version-min=13.0)
-    target_link_libraries(orc_manual_dump PRIVATE "${ORC_LIBUSB_DYLIB}" Threads::Threads)
+    target_link_libraries(orc_manual_dump PRIVATE "${ORC_LIBUSB_DYLIB}" Threads::Threads
+        "-framework Foundation")
     set_target_properties(orc_manual_dump PROPERTIES
         BUILD_RPATH "${ORC_LIBUSB_PREFIX}/install/lib")
 endif()

@@ -120,9 +120,11 @@ def main() -> int:
     # unread here, its names would have counted as stale doc entries.
     # Bindings.cpp too since 2026-09-27: mod_shift / mod_cmd / mod_ctrl
     # (registerModifierBuiltins), so ORC registers the same three.
+    # ModeBuiltins.cpp since 2026-10-29: the Hue, DynaMount and OBS actions,
+    # registered by both programs.
     bindings = (SRC / "Bindings.cpp").read_text()
     main_cpp = "\n".join((SRC / f).read_text()
-                         for f in ("main.cpp", "RmeBuiltins.cpp")) + "\n" + bindings
+                         for f in ("main.cpp", "RmeBuiltins.cpp", "ModeBuiltins.cpp")) + "\n" + bindings
 
     names = registered_names(main_cpp)
     exact, prefixes = doc_tables(bindings)

@@ -109,6 +109,7 @@
 #include "Uf8Fader.h"
 #include "Uf8Strips.h"
 #include "Uf8ModeViews.h"
+#include "ModeBuiltins.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
 #include <sys/time.h> // gettimeofday, for the lines in ORC's log
@@ -57635,66 +57636,14 @@ void registerBindingHandlers()
     // DynaMount presets, parameter 1..8 (Frank 29.10.2026). The soft-key bank
     // DynaMountPresets does the same with all eight; these put one preset on any
     // key. Builtins run on the input thread: the manager's preset calls lock.
-    registerBuiltin("dynamount_preset_recall", DescBuilder{
-        [](bool firing, bool /*pressed*/, int param) {
-            if (!firing) return;
-            uf8::dynamount::manager().recallPreset(param > 0 ? param - 1 : 0);
-            g_bankDirty.store(true);
-        },
-        [](int param) {
-            return uf8::dynamount::manager().lastPreset() == (param > 0 ? param - 1 : 0);
-        },
-        "DynaMount: go to preset", true
-    });
-    registerBuiltin("dynamount_preset_store", DescBuilder{
-        [](bool firing, bool /*pressed*/, int param) {
-            if (!firing) return;
-            uf8::dynamount::manager().storePreset(param > 0 ? param - 1 : 0);
-            g_bankDirty.store(true);
-        },
-        nullptr, "DynaMount: store preset", true
-    });
-
-    // Scene recall, parameter 1..8 = the slot in Settings → Modes → Hue. A
-    // plain builtin rather than a dynamic bank, so a scene goes on any key of
-    // any surface the bindings already reach. Long press starts the scene
-    // dynamically (dynamic_palette) instead of just recalling it.
-    registerBuiltin("hue_scene_recall", DescBuilder{
-        [](bool firing, bool /*pressed*/, int param) {
-            if (!firing) return;
-            const int slot = (param > 0) ? (param - 1) : 0;
-            uf8::hue::manager().recallSceneSlot(slot, /*dynamic=*/false);
-        },
-        nullptr, "Hue: recall scene", true
-    });
-    registerBuiltin("hue_scene_recall_dynamic", DescBuilder{
-        [](bool firing, bool /*pressed*/, int param) {
-            if (!firing) return;
-            const int slot = (param > 0) ? (param - 1) : 0;
-            uf8::hue::manager().recallSceneSlot(slot, /*dynamic=*/true);
-        },
-        nullptr, "Hue: start scene dynamically", true
-    });
-    registerBuiltin("hue_all_off", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (firing) uf8::hue::manager().allOff();
-        },
-        nullptr, "Hue: all lamps off", false
-    });
-    // Arms the recording light without touching the Settings pane, and reads
-    // back its state so a bound key can light up while it is held.
-    registerBuiltin("hue_rec_light", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (!firing) return;
-            uf8::hue::RecLightConfig rc = uf8::hue::manager().recLight();
-            rc.enabled = !rc.enabled;
-            // No write here: setRecLight marks the config dirty and
-            // tickHueTransport_ flushes it, which is the one place that saves.
-            uf8::hue::manager().setRecLight(rc);
-        },
-        [](int) { return uf8::hue::manager().recLight().enabled; },
-        "Hue: recording light on / off", false
-    });
+    // ⇨ HUE, DYNAMOUNT AND OBS: src/ModeBuiltins.cpp since 29.10.2026, shared
+    // with ORC. The recording light is Rea-Sixty's alone.
+    {
+        reasixty::modes::BuiltinHost mh;
+        mh.changed  = [] { g_bankDirty.store(true); };
+        mh.recLight = true;
+        reasixty::modes::registerBuiltins(mh);
+    }
 
     // ---- OBS ---------------------------------------------------------------
     // Everything here only POSTS: the manager's queue is drained by its own
@@ -57704,62 +57653,6 @@ void registerBindingHandlers()
     // ── TotalMix: the six rme_* builtins ─────────────────────────────────────
     // ⇨ They live in src/RmeBuiltins.cpp since 25.09.2026, shared with ORC.
     reasixty::rme::registerBuiltins(g_rmeIn, rmeInputHost_());
-    registerBuiltin("obs_record_toggle", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (!firing) return;
-            reasixty::obs::manager().toggleRecord();
-        },
-        [](int) { return reasixty::obs::manager().recording(); },
-        "OBS: start / stop recording", false
-    });
-    registerBuiltin("obs_record_pause", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (!firing) return;
-            reasixty::obs::manager().toggleRecordPause();
-        },
-        [](int) { return reasixty::obs::manager().paused(); },
-        "OBS: pause / resume recording", false
-    });
-    registerBuiltin("obs_chapter_marker", DescBuilder{
-        [](bool firing, bool /*pressed*/, int /*param*/) {
-            if (!firing) return;
-            // No name: OBS numbers them itself, and the input thread has no
-            // business asking REAPER what the current marker is called.
-            reasixty::obs::manager().chapter(std::string());
-        },
-        nullptr, "OBS: chapter mark in the recording", false
-    });
-    // ⇨ A NAME BEATS A NUMBER, and both are kept. The number counts positions
-    // in OBS's scene list, and a position moves the moment the list is
-    // reordered in OBS — every key bound to it then fires the wrong scene
-    // without a word. A name survives that, so the step's text field wins when
-    // it is filled and the number stays for the bindings that already use it.
-    // The LED asks the same question the press does, so the two can never
-    // disagree about which scene the key means.
-    {
-        auto obsSceneName = [](const uf8::bindings::ActionStep& st) {
-            if (!st.textParam.empty()) return st.textParam;
-            return reasixty::obs::manager().sceneAt(st.param - 1);  // 1-based
-        };
-        BuiltinDescriptor d{
-            [](bool /*firing*/, bool /*pressed*/, int /*param*/) {},  // see runWithStep
-            nullptr,                                                  // see stateOfStep
-            "OBS: switch to scene", true
-        };
-        d.runWithStep = [obsSceneName](bool firing, bool /*pressed*/,
-                                       const uf8::bindings::ActionStep& st) {
-            if (!firing) return;
-            const std::string nm = obsSceneName(st);
-            if (!nm.empty()) reasixty::obs::manager().switchScene(nm);
-        };
-        d.usesText = true;
-        d.stateOfStep = [obsSceneName](const uf8::bindings::ActionStep& st) {
-            const std::string nm = obsSceneName(st);
-            return !nm.empty() && nm == reasixty::obs::manager().currentScene();
-        };
-        registerBuiltin("obs_scene_recall", std::move(d));
-    }
-
     // Explicit "back to Norm" — bind to the Norm/CLEAR hardware button.
     // Always sets Norm (no toggle); pressing it from Norm is a no-op
     // change but still forces a re-push so the LED layer stays in sync.
