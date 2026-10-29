@@ -170,6 +170,11 @@ es nicht mehr. Wird beim Bau korrigiert.
 
 ## 6. Modi wählen
 
+**Überholt durch Abschnitt 14** (Konfliktprüfung 29.10.): Modi werden in beiden Programmen
+über dieselben Builtins betreten, die Tasten sind Bindungen in `orc.json` bzw. `bindings.json`.
+Ein eigenes `ModeKeys`-Modul entfällt. Zweimal dieselbe Modustaste = zurück zur Grundstellung,
+wie in Rea-Sixty. Der Text unten bleibt als Werksbelegung für ORC gültig.
+
 ### 6.1 Die Tasten
 
 Vier Modi, Layer 1-3 sind drei Tasten. **Vorschlag: V-POT und 1-5**, sechs Plätze:
@@ -261,6 +266,9 @@ Füllrichtung bleibt eine Rea-Sixty-Einstellung.
 ---
 
 ## 8. Konfiguration: wem gehört was
+
+**Überholt durch Abschnitt 14.2:** Weg a macht Rea-Sixty von ORC abhängig. Neuer Vorschlag:
+ein neutraler Ordner, den keins der beiden Programme besitzt.
 
 Heute liegt Hue/OBS/DynaMount in REAPERs ExtState. ORC kann das nicht lesen, ohne REAPERs
 INI-Datei anzufassen. Drei Wege:
@@ -389,3 +397,110 @@ UF1-Eingang; kein `SelectionMode::TotalMix`/`Obs`; obs-websocket-Namen `GetInput
   der Doku nachsehen.
 - Ob `slotLabelForVisibleSlot` (`main.cpp:39556`) überhaupt aufgerufen wird; die Suche fand keinen
   Aufrufer. Beim Herausziehen in 7a klären, toten Code nicht mitnehmen.
+
+---
+
+## 14. Konfliktprüfung (Frank 29.10.)
+
+Zwei Bedingungen: **(1) Die Modi fühlen sich in ORC und Rea-Sixty gleich an. (2) ORC ist keine
+Abhängigkeit für Rea-Sixty.** Der Plan oben gegen beide gelesen, dazu der Code.
+
+### 14.1 Funde
+
+| # | Stelle im Plan | Konflikt mit | Befund | Auflösung |
+|---|---|---|---|---|
+| 1 | 8a: ORC besitzt hue/obs/dynamount.json, Rea-Sixty liest nur, wenn ORC installiert ist | (2) | Rea-Sixtys Einstellungen wären gesperrt, sobald ORC daliegt. Das ist eine Abhängigkeit, nur eine weiche | neutraler Ordner, 14.2 |
+| 2 | **heute schon:** der TotalMix-Side-Car in Rea-Sixty | (2) | `g_rmeAvailable` (`main.cpp:924-926`): ohne ORCs `rme.json` gibt es keinen Side-Car, unter Windows/Linux gar keinen. Entscheid vom 25.09. | **Frage O** |
+| 3 | Frage K: TotalMix auf dem UF8 auch in Rea-Sixty | (2) | erbt Fund 2 | mit O |
+| 4 | 3: DynaMount-Stand in `ORC/dynamount_state.json` | (2) | Ordner gehört ORC | neutraler Ordner |
+| 5 | 3: Übergabe v2 | (2) | Rea-Sixty wartet nur, wenn `orc.pid` lebt. Ohne ORC wie heute | kein Konflikt |
+| 6 | 6.1/6.3: eigenes `ModeKeys`-Modul in ORC | (1) | Rea-Sixty betritt Modi über `selection_mode_hue` / `selection_mode_dynamount` (`main.cpp:57766-57776`, Umschalter `registerSelectionModeToggle` `:57671`). Ein zweiter Mechanismus fühlt sich anders an und läuft auseinander | ORC benutzt dieselben Builtins über seine Bindungs-Engine (läuft dort schon, `orc.json`). Neue Builtins `selection_mode_obs`, `selection_mode_totalmix` (Parameter = Startwerte) entstehen einmal, für beide |
+| 7 | 6.1 Frage F: zweimal dieselbe Taste tut nichts | (1) | in Rea-Sixty geht derselbe Modus-Builtin zurück auf Norm | gleiches Verhalten: zurück zur Grundstellung. In ORC ist die Grundstellung einstellbar (ab Werk TotalMix, ohne TotalMix-Link dunkel) |
+| 8 | 6.1: V-POT/1-5 als Modustasten | (1) | in Rea-Sixty sind das die Soft-Key-Seiten (`softkey_bank_select`, `Bindings.cpp:1408-1428`). Rea-Sixty ab Werk umbelegen nimmt bestehenden Nutzern die Seiten | nur ORCs Werksbelegung. Wer es in REAPER gleich will, bindet dieselben Builtins auf dieselben Tasten. **Innerhalb** des Modus ist alles gleich, nur der Eingang ist ab Werk verschieden. **Frage P** |
+| 9 | 7.1: ORC belegt alle 8 Strips, „Füllrichtung braucht ORC nicht“ | (1) | in Rea-Sixty sitzen Lampe 1 bzw. Stativ 1 je nach Füllrichtung links oder rechts (`stripToVisibleSlot` `:2677/2699`, `mountForStrip`) | ORC nimmt dieselbe Füllrichtung aus derselben Konfiguration. Lampe 3 sitzt in beiden Programmen auf demselben Strip. Die übrigen Strips: Spuren in REAPER, dunkel in ORC (unvermeidlich) |
+| 10 | 5.2/7.2/9: Soft-Keys zeigen im Modus die Szenen | (1) | in Rea-Sixty ändert ein Modus die Soft-Key-Reihe NICHT (kein Soft-Key-Zweig unter den 16 Hue-Stellen) | Option „Ein Modus bringt seine Bank mit“ im geteilten Bindungscode, in beiden Programmen gleich. Rea-Sixty ab Werk aus (heutiges Verhalten), ORC ab Werk an. **Frage N** |
+| 11 | 6.2: UF1 bleibt in ORC immer TotalMix | (1) | in Rea-Sixty ist der UF1-Hue-Modus ein **eigenes** Builtin `uf1_hue` (`main.cpp:58558`), er folgt dem UF8 nicht | kein Konflikt: in beiden folgt der UF1 dem UF8-Modus nicht. ORC bietet `uf1_hue` in der ersten Runde nicht an (Maler `uf1PaintHue_` müsste dafür auch heraus) |
+| 12 | 7.2 Frage H: Aufnahmelicht nach OBS nur in ORC | (1) | Rea-Sixty hat OBS auch | Auslöser „REAPER-Aufnahme / OBS-Aufnahme“ als Feld in der geteilten Hue-Konfiguration, in beiden. ORC zeigt nur OBS |
+| 13 | 7.2 Frage I: DynaMount-Positionsspeicher | (1) | nur in ORC gedacht | im geteilten DynaMount-Modul, also in beiden, oder gar nicht |
+| 14 | 9: OBS-Modus nur ORC (Frage K: Rea-Sixty später) | (1) | Ein Modus, den es nur in einem Programm gibt, fühlt sich nicht gleich an | als geteiltes Modul, `SelectionMode::Obs` in Rea-Sixty in derselben Stufe |
+| 15 | 7.2: Marken-Cues `hue:` / `obs:` | (1) | nur REAPER hat Marker | bleibt Rea-Sixty, ist keine Bedienung der Fläche |
+| 16 | 7.3: zwei Einstellungsoberflächen (ImGui, AppKit) für dieselben Werte | (1) | doppelter Oberflächencode, Feldnamen können auseinanderlaufen | unvermeidlich (ImGui geht in ORC nicht mit, Entscheid 25.09.). Gleiche Feldnamen, gleiche Reihenfolge, gleiche Grenzen aus dem Modul (nicht im Fenster) |
+| 17 | 5.2: Kanal-Encoder = Main Volume in TotalMix | (1) | nur relevant, wenn TotalMix-auf-UF8 auch in Rea-Sixty kommt | im geteilten Modul, gilt dann in beiden |
+
+### 14.2 Die Antwort auf „separat oder Rea-Sixty ändern“
+
+**Weder getrennt noch Rea-Sixty umbauen. Ein Modus, ein Code, eine Konfiguration, und Rea-Sixty
+ist die Vorlage.**
+
+- **Verhalten:** Rea-Sixtys Hue und DynaMount sind am Gerät erprobt. ORC übernimmt sie, wie sie
+  sind (Abschnitt 7.1, wortwörtlich herausgezogen). Rea-Sixtys Bedienung ändert sich dadurch
+  nicht. Getrennt bauen hiesse zwei Maler, zwei Eingaben, und die laufen auseinander: genau die
+  Fehlerklasse, die ORCs ersten Maler am 25.09. gekostet hat.
+- **Neues entsteht einmal, im geteilten Modul, und kommt in beide:** OBS-Modus, TotalMix auf dem
+  UF8, Positionsspeicher, Aufnahmelicht nach OBS. Was in REAPER keinen Sinn hat, bekommt
+  REAPER nicht; was in ORC keinen Sinn hat (Marker, REAPER-Aufnahme), bekommt ORC nicht.
+- **Was sich an Rea-Sixty ändert, ist nur unter der Haube:** Code wandert in Module, und die
+  Konfiguration zieht aus dem ExtState in Dateien.
+- **Getrennte Konfiguration** (Lampen zweimal einrichten, Stative zweimal kalibrieren) bricht
+  Bedingung (1) im Kleinen: Lampe 3 wäre in ORC eine andere als in REAPER, sobald einer
+  nachzieht und der andere nicht.
+
+**Konfiguration, neuer Vorschlag:** ein neutraler Ordner, der weder ORC noch Rea-Sixty gehört.
+
+| | Mac | Windows | Linux |
+|---|---|---|---|
+| Ordner | `~/Library/Application Support/Stoersender/` | `%APPDATA%\Stoersender\` | `~/.config/stoersender/` |
+| Dateien | `hue.json`, `obs.json`, `dynamount.json`, `dynamount_state.json` | gleich | gleich |
+
+- Rea-Sixty benutzt den Ordner auf **allen** Plattformen, mit oder ohne ORC. Ein Codeweg, keine
+  Abhängigkeit. Beim ersten Start mit der neuen Version übernimmt es die ExtState-Werte einmal
+  in die Dateien, wenn es sie noch nicht gibt, und lässt den ExtState danach liegen (Rückweg bei
+  einem Downgrade).
+- ORC benutzt denselben Ordner.
+- ⛔ **Damit gibt es zwei Schreiber**, entgegen der Regel „ein Wert, ein Schreiber“. Begründung,
+  warum es hier trotzdem geht: Die Manager laufen dank Übergabe nie in beiden Programmen
+  zugleich, und der einzige Schreiber, der nicht von einer Hand kommt, ist die Bridge-Suche
+  (`HueManager.cpp:944`), also ein Manager. Was bleibt, sind Eingaben in zwei Einstellungsfenstern.
+  Darum: Schreiben nur bei Änderung, atomar (Zwischendatei + `rename`), jede Seite liest bei
+  geänderter mtime neu (1×/s, wie heute `rme.json`) und schreibt immer Lesen-Ändern-Schreiben
+  der ganzen Datei. Verloren geht etwas nur, wenn Frank in derselben Sekunde in beiden Fenstern
+  dasselbe Feld ändert.
+- Klartext-Passwörter (OBS, Hue-Schlüssel) wie heute im ExtState, nur in einer anderen Datei.
+- Setup-Bundle (`SetupBundle.cpp`) trägt diese Werte heute nicht (`kKeys` ohne hue/obs/dyna), der
+  Kommentar `main.cpp:61484` geht davon aus. Beim Umzug klären, Kommentar richtigstellen.
+
+### 14.3 Die neue Frage O: der TotalMix-Side-Car
+
+Bedingung (2) gilt nach dem Wortlaut auch für ihn, und heute ist sie verletzt: Rea-Sixty bietet
+den Side-Car nur an, wenn ORCs `rme.json` daliegt (Entscheid 25.09., „Die ganze Konfig für den
+RME Side-Car kommt in ORC“). Zwei Möglichkeiten:
+
+| | was | Folge |
+|---|---|---|
+| **O1** | so lassen: TotalMix ist ORCs Sache, Rea-Sixty leiht es nur | Abhängigkeit bleibt, aber nur für TotalMix. TotalMix-auf-UF8 in Rea-Sixty (Frage K) gibt es dann auch nur mit ORC. Windows/Linux ohne Side-Car |
+| O2 | `rme.json` und die RME-Bänke (heute in `orc.json`) ziehen in denselben neutralen Ordner | Side-Car geht ohne ORC, auch unter Windows/Linux. Aber: Rea-Sixty hat seit 25.09. keine RME-Einstellungen mehr (Seite Modes, RME entfernt). Ohne ORC gälte nur die Werksbelegung, oder Rea-Sixty bekommt die Seite zurück |
+
+Vorschlag: **O1**, und die Bedingung (2) für Hue, OBS und DynaMount gilt ab jetzt. Grund: den
+Side-Car gibt es in Rea-Sixty für ORC-Nutzer, DynaMount (seit Juni) und Hue (seit August) gibt
+es in Rea-Sixty ohne ORC, die dürfen nichts verlieren. O2 lohnt sich erst, wenn jemand den Side-Car unter Windows
+will.
+
+### 14.4 Neue offene Fragen
+
+| | Frage | Vorschlag |
+|---|---|---|
+| N | Option „Modus bringt seine Soft-Key-Bank mit“ (Rea-Sixty ab Werk aus, ORC an)? | ja |
+| O | TotalMix-Side-Car bleibt an ORC gebunden (O1) oder zieht in den neutralen Ordner (O2)? | O1 |
+| P | Modus-Builtins in Rea-Sixty ab Werk auf keine Taste (wie heute), in ORC auf V-POT/1-5? | ja |
+| Q | Neutraler Ordner `Stoersender` als Name? Er steht dann auf Kundenrechnern | ja, oder `Rea-Sixty and ORC` |
+
+Frage B ist damit durch 14.2 ersetzt, F durch Fund 7, G durch Fund 11 bestätigt. H, I, J, K
+gelten weiter, aber immer für beide Programme.
+
+### 14.5 Folgen für die Reihenfolge (Abschnitt 11)
+
+- 7b wird: Konfiguration in den neutralen Ordner, **zuerst in Rea-Sixty allein** (mit
+  Einmal-Übernahme aus dem ExtState), ein Release, dann ORC liest mit.
+- 8 wird: die Modus-Builtins (`selection_mode_obs`, `selection_mode_totalmix` mit Startwerten) im
+  geteilten Code, Werksbelegung in ORC, Option aus Frage N. Kein `ModeKeys.h`.
+- 9 (OBS-Modus) und 10 (TotalMix in Rea-Sixty) bauen jeweils beide Programme in derselben Stufe.
