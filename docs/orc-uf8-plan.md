@@ -187,8 +187,9 @@ statt zwei Begriffe, die fast dasselbe tun.
 Heute legt Rea-Sixty beim REAPER-Start eine Marke mit seiner Prozessnummer in ORCs Ordner, ORC gibt
 den UF1 frei, Rea-Sixty probiert alle 5 s, bis es ihn hat. Das reicht für den UF8 nicht:
 
-- Rea-Sixty öffnet den UF8 heute nur einmal beim Start und **versucht es nie wieder**. Hält ORC
-  ihn in dem Moment, bleibt er bei ORC.
+- Rea-Sixty versucht einen UF8, der beim Start nicht aufging, seit v0.6.7 alle 5 s wieder
+  (`a3cee694`), aber **nur, wenn REAPER auf diesem Rechner schon einmal einen UF8 hatte**
+  (`kSeenUf8`). Wer den UF8 bisher nur in ORC benutzt hat, bekäme ihn nie in REAPER.
 - **DynaMount-Stative melden ihre Position nicht.** Haben zwei Programme verschiedene Zahlen,
   springt das Stativ beim ersten Dreh.
 
@@ -203,10 +204,15 @@ Neu, in einfachen Worten:
 
 Ohne ORC ändert sich für Rea-Sixty nichts.
 
-⛔ **Reihenfolge der Releases:** ein altes Rea-Sixty mit dem neuen ORC bekäme den UF8 nie in
-REAPER (es versucht ihn nur einmal). Darum kommt **Rea-Sixty mit der neuen Übergabe zuerst** raus,
-ORC mit UF8 danach. ORC erkennt ein altes Rea-Sixty und meldet im Menü, dass die REAPER-Erweiterung
-aktualisiert werden muss.
+**Gebaut (Stufe 1, `c2dfbd21`):** `orc.pid`, `handover.released`, Marke mit Versionszeile,
+Warten höchstens 3 s, danach sofort öffnen; UF8-Retry auch ohne `kSeenUf8`, wenn ORC ihn hält.
+Format einmal in `src/OrcHandover.h`, Test `test_orc_handover`. Die Stativ-Positionen kommen in
+Stufe 6 dazu.
+
+**Alt gegen neu:** ein Rea-Sixty ab v0.6.7 mit dem neuen ORC bekommt den UF8 nach höchstens 5 s,
+wenn REAPER ihn auf diesem Rechner schon einmal hatte. Älter, oder nie gehabt: nie. Darum kommt
+**Rea-Sixty mit Stufe 1 zuerst** raus, ORC mit UF8 danach. ORC erkennt eine Marke ohne
+Versionszeile und meldet im Menü, dass die REAPER-Erweiterung aktualisiert werden muss.
 
 ---
 
@@ -314,8 +320,8 @@ Gelesen am 29.10. (`b7b6deb0`):
   (`g_rmeAvailable`, `:924-926`).
 - REC/RME = `SelectionMode::Rec`/`RecMon` mit eingeschaltetem RME (`recRmeActive_`, `:2199`).
 - Shift: Tastatur-Spiegel `setKeyboardShiftHeld` (`main.cpp:47825` ff.) oder `mod_shift`; ab Werk nur am UF1 (`Bindings.cpp:1536`). PLUG-IN in Rea-Sixty: Plain `ssl_strip_mode_toggle`, Shift `uf8_plugin_mode_toggle` (`Bindings.cpp:1298-1324`).
-- Übergabe ohne Quittung (`main.cpp:1823-1847`, ORC `Surface.cpp:405-443`), UF8-Startfehler ohne
-  Retry.
+- Übergabe ohne Quittung (`main.cpp:1823-1847`, ORC `Surface.cpp:405-443`); UF8-Startfehler mit
+  Retry seit v0.6.7, aber nur mit `kSeenUf8` (`main.cpp:26471`, Stand vor Stufe 1).
 - TotalMix-Builtins heute: Dim, Mono, Speaker B, Talkback, Mute FX, Ext In, DURec, `rme_fader_main`,
   `rme_ask_again`, `rme_show_window`. Reihe und Submix wählt das Nav-Kreuz, kein neues Builtin nötig.
 - Windows-Store-Apps: neue Dateien unter `AppData` landen an einem privaten Ort (Microsoft,
