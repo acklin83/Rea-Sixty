@@ -277,6 +277,21 @@ Rea-Sixty-Nutzer bekommen mit 1 bis 4 schon etwas (Side-Car, Presets), bevor ORC
 
 ---
 
+## 7.4 Stand des Baus
+
+| Stufe | Commit | gebaut |
+|---|---|---|
+| 1 Übergabe mit Quittung | `c2dfbd21` | ja |
+| 2 `Uf8Frames`, UF8-Schlaf | `52ec0e7d` | ja |
+| 3a Side-Car: ganzer linker UF8, zurück in den vorigen Modus, Shift + Layer 2/3, Bindungen v56 | `2ca11262` | ja |
+| 3b Hue/DynaMount-Maler und -Eingang herausziehen | | offen |
+| 4 DynaMount-Presets | `bfdd0544` | ja |
+
+Abweichungen: keine neuen Builtin-Namen `uf8_sidecar_*`, die Side-Cars bleiben `selection_mode_hue` /
+`selection_mode_dynamount` (sonst zwei Einträge pro Modus im Picker). Presets mit den Gesten der
+Selection-Set-Bank (`selbank::op`): Druck = anfahren, lang auf leerem Platz = speichern, Shift =
+überschreiben, Ctrl = löschen.
+
 ## 8. Entschieden (Frank 29.10.)
 
 - Hue und DynaMount werden in Rea-Sixty UF8-Side-Car, die gemischte Ansicht fällt weg.
