@@ -107,6 +107,7 @@
 #include "OrcHandover.h"
 #include "Uf8Frames.h"
 #include "Uf8Fader.h"
+#include "Uf8Strips.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
 #include <sys/time.h> // gettimeofday, for the lines in ORC's log
@@ -40883,92 +40884,45 @@ static void ccPaintSurface_()
             const bool rKnown = S.isKnown(page, rk, l);
             const int  fv = S.v(page, fk, l), rv = S.v(page, rk, l);
 
-            const std::string nm = utf8ToLatin1(displayName(fk, fc));
-            if (g_lastTrackName[s] != nm) {
-                g_lastTrackName[s] = nm;
-                uf8SendS_(s, uf8::buildStripTextUpper(st, nm));
-            }
-            if (g_lastCsType[s] != pg) {
-                g_lastCsType[s] = pg;
-                uf8SendS_(s, uf8::buildChannelStripType(st, pg));
-            }
-            if (g_lastChanNum[s] != " ") {
-                g_lastChanNum[s] = " ";
-                uf8SendS_(s, uf8::buildChannelNumber(st, " "));
-            }
-            const std::string fvt = fOn ? valueText(fv, fKnown) : std::string();
-            if (g_lastFaderDb[s] != fvt || g_lastFaderDbUnit[s] != "") {
-                g_lastFaderDb[s] = fvt;
-                g_lastFaderDbUnit[s] = "";
-                uf8SendS_(s, uf8::buildFaderDbReadout(st, fvt, ""));
-            }
-            const std::string vl = rOn
+            // ⇨ THE CELLS GO OUT THROUGH Uf8Strips.h (29.10.2026), shared with
+            // ORC's TotalMix side-car, into this file's own g_last* caches.
+            uf8strips::View v;
+            v.upper     = utf8ToLatin1(displayName(fk, fc));
+            v.csType    = pg;
+            v.chanNum   = " ";
+            v.faderText = fOn ? valueText(fv, fKnown) : std::string();
+            v.faderUnit = "";
+            v.valueLine = rOn
                 ? uf8ValueLine(utf8ToLatin1(displayName(rk, rc)), valueText(rv, rKnown))
                 : std::string();
-            if (g_lastValueLine[s] != vl) {
-                g_lastValueLine[s] = vl;
-                uf8SendS_(s, uf8::buildValueLine(st, vl));
-            }
-            const std::string sl = utf8ToLatin1(displayName(Kind::Soft, sc));
-            if (g_lastSlotLabel[s] != sl) {
-                g_lastSlotLabel[s] = sl;
-                uf8SendS_(s, uf8::buildPluginSlotName(st, sl));
-            }
+            v.slotLabel = utf8ToLatin1(displayName(Kind::Soft, sc));
             const bool sLit = sOn && S.isKnown(page, Kind::Soft, l) && S.v(page, Kind::Soft, l) >= 64;
-            const int tsk = !sOn ? 0 : (sLit ? 2 : 1);
-            if (g_lastTopSoftKey[s] != tsk) {
-                g_lastTopSoftKey[s] = tsk;
-                sendLedFramesS_(s, uf8::buildTopSoftKeyLed(st,
-                    tsk == 2 ? uf8::TopSoftKeyState::On
-                             : tsk == 1 ? uf8::TopSoftKeyState::Dim : uf8::TopSoftKeyState::Off,
-                    uf8::ledColourForTrackRgb(colourRgb(sc))));
-            }
-            const int8_t sel = fOn ? 1 : 0;
-            if (g_lastSelLed[s] != sel) {
-                g_lastSelLed[s] = sel;
-                sendLedFramesS_(s, uf8::buildLedColourPair(st, uf8::LedClass::Sel, fOn,
-                                                      uf8::ledColourForTrackRgb(colourRgb(fc))));
-            }
-            if (g_lastCutLed[s] != 0) {
-                g_lastCutLed[s] = 0;
-                sendLedFramesS_(s, uf8::buildLedColourPair(st, uf8::LedClass::Cut, false));
-            }
-            if (g_lastSoloLed[s] != 0) {
-                g_lastSoloLed[s] = 0;
-                sendLedFramesS_(s, uf8::buildLedColourPair(st, uf8::LedClass::Solo, false));
-            }
-            // Motor: the DynaMount block's sequence. A limp strip takes the bit-7
-            // echo first, then the enable, or the firmware drops the position.
-            if (fOn && fKnown && !g_touchReported[s].load()) {
-                const uint16_t pb = static_cast<uint16_t>(valueToFader(fv, hiResActive(fk, fc)));
-                g_motorTargetPb[s].store(pb);
-                const bool engaged = g_faderMotorEngaged[s].load();
-                if (!engaged || g_lastFaderPb[s] != pb) {
-                    g_lastFaderPb[s] = pb;
-                    const uint8_t lsb = static_cast<uint8_t>(pb & 0x7F);
-                    const uint8_t msb = static_cast<uint8_t>((pb >> 7) & 0x7F);
-                    if (!engaged) {
-                        uf8SendS_(s, uf8::buildFaderPosition(st, (lsb | 0x80), msb));
-                        uf8SendS_(s, uf8::buildMotorEnable(st, true));
-                        g_faderMotorEngaged[s].store(true);
-                    }
-                    uf8SendS_(s, uf8::buildFaderPosition(st, lsb, msb));
-                }
-            }
+            v.topKey    = !sOn ? 0 : (sLit ? 2 : 1);
+            v.topKeyRgb = colourRgb(sc);
+            v.sel       = fOn;
+            v.selRgb    = colourRgb(fc);
+            v.drive     = fOn && fKnown;
+            v.faderPb   = v.drive ? static_cast<uint16_t>(valueToFader(fv, hiResActive(fk, fc))) : 0;
+            bool engaged = g_faderMotorEngaged[s].load();
+            const bool drove = uf8strips::paintStrip(
+                uf8strips::Cells{ g_lastTrackName[s], g_lastCsType[s], g_lastChanNum[s],
+                                  g_lastFaderDb[s], g_lastFaderDbUnit[s], g_lastValueLine[s],
+                                  g_lastSlotLabel[s], g_lastTopSoftKey[s], g_lastSelLed[s],
+                                  g_lastCutLed[s], g_lastSoloLed[s], g_lastFaderPb[s] },
+                v, st, g_touchReported[s].load(), engaged,
+                [s](std::vector<uint8_t> f) { uf8SendS_(s, std::move(f)); },
+                [s](uf8::LedColourFrames f) { sendLedFramesS_(s, std::move(f)); });
+            g_faderMotorEngaged[s].store(engaged);
+            if (v.drive && !g_touchReported[s].load()) g_motorTargetPb[s].store(v.faderPb);
+            (void)drove;
             bar[l]  = (rOn && rKnown) ? vpotPosFromUnipolar(normalised(rv, hiResActive(rk, rc)))
                                       : vpotPosFromUnipolar(0.0);
             mode[l] = rOn ? 0x01 : 0x03;     // unipolar, or no ring
         }
         // Each unit's eight strips: compare and store its own slice.
-        if (!g_vpotBarInit || bar != uf8UnitSlice_(g_lastVPotBar, u)) {
-            std::copy(bar.begin(), bar.end(), g_lastVPotBar.begin() + u * 8);
-            uf8SendUnit_(u, uf8::buildVPotReadoutBar(bar));
-        }
-        if (!g_vpotBarInit || mode != uf8UnitSlice_(g_lastVPotMode, u)) {
-            std::copy(mode.begin(), mode.end(), g_lastVPotMode.begin() + u * 8);
-            auto mf = uf8::buildVPotMode(mode);
-            uf8SendUnit_(u, std::move(mf));
-        }
+        uf8strips::paintRings(g_lastVPotBar.data() + u * 8, g_lastVPotMode.data() + u * 8,
+                              g_vpotBarInit, bar, mode,
+                              [u](std::vector<uint8_t> f) { uf8SendUnit_(u, std::move(f)); });
     }
     if (units < 2) s_rightPage = -2;
     g_vpotBarInit = true;

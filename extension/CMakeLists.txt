@@ -828,6 +828,12 @@ if(NOT WIN32)
     target_include_directories(test_uf8_fader PRIVATE src)
     add_test(NAME uf8_fader COMMAND test_uf8_fader)
 
+    # One UF8 strip as a controller surface, shared by the MIDI CC layer and
+    # ORC's TotalMix side-car (Uf8Strips.h; docs/orc-uf8-plan.md stage 5).
+    add_executable(test_uf8_strips tests/test_uf8_strips.cpp src/Protocol.cpp)
+    target_include_directories(test_uf8_strips PRIVATE src)
+    add_test(NAME uf8_strips COMMAND test_uf8_strips)
+
     # Project state follows the project tab (ProjectScoped.h, header only).
     add_executable(test_project_scoped tests/test_project_scoped.cpp)
     target_include_directories(test_project_scoped PRIVATE src)
