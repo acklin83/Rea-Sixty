@@ -108,6 +108,7 @@
 #include "Uf8Frames.h"
 #include "Uf8Fader.h"
 #include "Uf8Strips.h"
+#include "Uf8ModeViews.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
 #include <sys/time.h> // gettimeofday, for the lines in ORC's log
@@ -41943,55 +41944,29 @@ void pushZonesForVisibleSlots()
             auto& dm = uf8::dynamount::manager();
             const int mnt = dm.mountForStrip(s);
             if (mnt >= 0) {
-                const auto info    = dm.info(mnt);
                 const bool flipped = g_flip.load();
-                int        hVal = dm.targetH(mnt);
-                int        vVal = dm.targetV(mnt);
-                const int  rVal = dm.targetR(mnt);
-
-                // Live display: while the fader is touched the mount itself
-                // isn't moved until release (send-on-release), but the SCREEN
-                // should still follow the fader. Map the cached pending norm
-                // through the same calibration mapFader uses and overwrite the
-                // active axis so the readout / value line track the drag in
-                // real time. Fader axis: no FLIP → X (horizontal, v); FLIP → Y
-                // (distance, h, inverted) (Frank 2026-06-28).
                 const bool faderDist = flipped;
-                if (g_touchReported[s].load() && g_dynFaderPendingValid[s].load()) {
-                    double norm = g_dynFaderPendingNorm[s].load();
-                    if (norm < 0.0) norm = 0.0;
-                    if (norm > 1.0) norm = 1.0;
-                    const auto& c = info.cal;
-                    const int lo = faderDist ? c.hMin : c.vMin;
-                    const int hi = faderDist ? c.hMax : c.vMax;
-                    // Distance (Y) fader is inverted (top = nearest) — mirror
-                    // setDistance(1-f01) so the live readout matches.
-                    const double useNorm = faderDist ? (1.0 - norm) : norm;
-                    const int live = lo + static_cast<int>(useNorm * (hi - lo) + 0.5);
-                    if (faderDist) hVal = live; else vVal = live;
-                }
-
-                // Upper scribble — mount name (≤7 chars, folded to Latin-1).
-                std::string nm = utf8ToLatin1(info.name);
-                if (nm.empty()) nm = "MOUNT";
-                if (nm.size() > uf8::kUf8ScribbleChars)
-                    nm.resize(uf8::kUf8ScribbleChars);
+                // ⇨ WHAT THE STRIP SHOWS is Uf8ModeViews.h since 29.10.2026,
+                // shared with ORC; the caches and the sends stay here.
+                const uf8modes::Cells mc = uf8modes::dyna(
+                    dm, mnt, flipped,
+                    g_touchReported[s].load() && g_dynFaderPendingValid[s].load(),
+                    g_dynFaderPendingNorm[s].load());
+                const std::string nm = mc.upper;
                 if (bankChanged || g_lastTrackName[s] != nm) {
                     g_lastTrackName[s] = nm;
                     uf8SendS_(s, uf8::buildStripTextUpper(uf8Local_(s), nm));
                 }
 
                 // Channel-strip-type zone — tag the strip as a mount.
-                const std::string cs = "DYNA";
+                const std::string cs = mc.csType;
                 if (bankChanged || g_lastCsType[s] != cs) {
                     g_lastCsType[s] = cs;
                     uf8SendS_(s, uf8::buildChannelStripType(uf8Local_(s), cs));
                 }
 
                 // Channel-number digit — mount slot (1-based config index).
-                char chbuf[8];
-                snprintf(chbuf, sizeof(chbuf), "%d", mnt + 1);
-                const std::string ch = chbuf;
+                const std::string ch = mc.chanNum;
                 if (!overlayActive && (bankChanged || g_lastChanNum[s] != ch)) {
                     g_lastChanNum[s] = ch;
                     uf8SendS_(s, uf8::buildChannelNumber(uf8Local_(s), ch));
@@ -42000,10 +41975,7 @@ void pushZonesForVisibleSlots()
                 // Fader readout — the active axis value in DynaMount terms:
                 // no FLIP → X (horizontal), FLIP → Y (distance). No "dB" unit
                 // (this isn't a level): pass "" to blank the unit slot.
-                char dbbuf[8];
-                snprintf(dbbuf, sizeof(dbbuf), "%c%d",
-                         faderDist ? 'Y' : 'X', faderDist ? hVal : vVal);
-                const std::string db = dbbuf;
+                const std::string db = mc.faderText;
                 if (bankChanged || g_lastFaderDb[s] != db) {
                     g_lastFaderDb[s] = db;
                     uf8SendS_(s, uf8::buildFaderDbReadout(
@@ -42012,11 +41984,7 @@ void pushZonesForVisibleSlots()
 
                 // Value line — full mount state in X/Y/R (+ OFF when offline).
                 // X = left/right (v), Y = distance (h), R = rotation (r).
-                char vlbuf[24];
-                snprintf(vlbuf, sizeof(vlbuf), "X%-3d Y%-3d R%-3d%s",
-                         vVal, hVal, rVal, info.online ? "" : " OFF");
-                std::string vl = vlbuf;
-                if (vl.size() > 19) vl.resize(19);
+                const std::string vl = mc.valueLine;
                 if (bankChanged || g_lastValueLine[s] != vl) {
                     g_lastValueLine[s] = vl;
                     uf8SendS_(s, uf8::buildValueLine(uf8Local_(s), vl));
@@ -42034,7 +42002,7 @@ void pushZonesForVisibleSlots()
                 if (!g_touchReported[s].load()) {
                     // faderNorm(idx, horizontal): true → X (left/right), false →
                     // Y (distance, inverted). No FLIP shows X, FLIP shows Y.
-                    const double fn = dm.faderNorm(mnt, /*horizontal=*/!faderDist);
+                    const double fn = mc.fader01;
                     uint16_t pb = static_cast<uint16_t>(
                         fn * static_cast<double>(kUf8FaderPbMax) + 0.5);
                     if (pb > kUf8FaderPbMax) pb = kUf8FaderPbMax;
@@ -42056,9 +42024,7 @@ void pushZonesForVisibleSlots()
                 }
 
                 // V-Pot ring — rotation 0..180 as a unipolar bar.
-                vpotBar[s] = vpotPosFromUnipolar(
-                    static_cast<double>(rVal) /
-                    static_cast<double>(uf8::dynamount::kRMax));
+                vpotBar[s] = vpotPosFromUnipolar(mc.ring);
                 continue;
             }
         }
@@ -42073,15 +42039,10 @@ void pushZonesForVisibleSlots()
             auto& hm = uf8::hue::manager();
             const int hslot = hm.slotForStrip(s);
             if (hslot >= 0) {
-                const uf8::hue::SlotConfig cfg = hm.slot(hslot);
-
-                // Upper scribble — the lamp label, folded to Latin-1 like every
-                // other name that reaches this surface.
-                std::string nm = utf8ToLatin1(
-                    cfg.label.empty() ? cfg.bridgeName : cfg.label);
-                if (nm.empty()) nm = "LAMP";
-                if (nm.size() > uf8::kUf8ScribbleChars)
-                    nm.resize(uf8::kUf8ScribbleChars);
+                // ⇨ WHAT THE STRIP SHOWS is Uf8ModeViews.h since 29.10.2026,
+                // shared with ORC; the caches and the sends stay here.
+                const uf8modes::Cells mc = uf8modes::hue(hm, hslot, g_flip.load());
+                const std::string nm = mc.upper;
                 if (bankChanged || g_lastTrackName[s] != nm) {
                     g_lastTrackName[s] = nm;
                     uf8SendS_(s, uf8::buildStripTextUpper(
@@ -42091,8 +42052,7 @@ void pushZonesForVisibleSlots()
                 // Channel-strip-type zone — tag the strip, and say WHICH kind
                 // it is: a zone answers once a second where a lamp answers ten
                 // times, and that is the whole difference in feel.
-                const std::string cs =
-                    (cfg.kind == uf8::hue::TargetKind::Group) ? "ZONE" : "LAMP";
+                const std::string cs = mc.csType;
                 if (bankChanged || g_lastCsType[s] != cs) {
                     g_lastCsType[s] = cs;
                     uf8SendS_(s, uf8::buildChannelStripType(
@@ -42100,9 +42060,7 @@ void pushZonesForVisibleSlots()
                 }
 
                 // Channel-number digit — the slot's 1-based config index.
-                char chbuf[8];
-                snprintf(chbuf, sizeof(chbuf), "%d", hslot + 1);
-                const std::string ch = chbuf;
+                const std::string ch = mc.chanNum;
                 if (!overlayActive && (bankChanged || g_lastChanNum[s] != ch)) {
                     g_lastChanNum[s] = ch;
                     uf8SendS_(s, uf8::buildChannelNumber(
@@ -42111,11 +42069,7 @@ void pushZonesForVisibleSlots()
 
                 // Fader readout — brightness in percent. No "dB": this is not a
                 // level, so the unit slot is blanked.
-                char dbbuf[8];
-                if (!hm.liveOn(hslot)) snprintf(dbbuf, sizeof(dbbuf), "OFF");
-                else snprintf(dbbuf, sizeof(dbbuf), "%d",
-                              static_cast<int>(hm.liveBri01(hslot) * 100.0 + 0.5));
-                const std::string db = dbbuf;
+                const std::string db = mc.faderText;
                 if (bankChanged || g_lastFaderDb[s] != db) {
                     g_lastFaderDb[s] = db;
                     uf8SendS_(s, uf8::buildFaderDbReadout(
@@ -42124,8 +42078,7 @@ void pushZonesForVisibleSlots()
 
                 // Value line — the full lamp state, or OFFLINE when the bridge
                 // is not answering for this one.
-                std::string vl = hm.liveValueLine(hslot);
-                if (vl.size() > 19) vl.resize(19);
+                const std::string vl = mc.valueLine;
                 if (bankChanged || g_lastValueLine[s] != vl) {
                     g_lastValueLine[s] = vl;
                     uf8SendS_(s, uf8::buildValueLine(uf8Local_(s), vl));
@@ -42136,7 +42089,7 @@ void pushZonesForVisibleSlots()
                 // the strip is left limp and the firmware discards plain drive
                 // frames, so the bit-7 echo has to load the limp buffer first.
                 if (!g_touchReported[s].load()) {
-                    const double fn = hm.liveBri01(hslot);
+                    const double fn = mc.fader01;
                     uint16_t pb = static_cast<uint16_t>(
                         fn * static_cast<double>(kUf8FaderPbMax) + 0.5);
                     if (pb > kUf8FaderPbMax) pb = kUf8FaderPbMax;
@@ -42160,21 +42113,7 @@ void pushZonesForVisibleSlots()
                 // V-Pot ring — whichever axis the pot is on. Hue is a CIRCLE,
                 // so its bar wraps at 360 and a unipolar ring is the honest
                 // picture of it; saturation and warmth are plain 0..1.
-                const uf8::hue::Controls ctl = hm.controls();
-                const uf8::hue::PotRole role =
-                    g_flip.load() ? ctl.potFlip : ctl.pot;
-                double ring = 0.0;
-                switch (role) {
-                    case uf8::hue::PotRole::Hue:
-                        ring = hm.liveHueDeg(hslot) / 360.0; break;
-                    case uf8::hue::PotRole::Saturation:
-                        ring = hm.liveSat(hslot); break;
-                    case uf8::hue::PotRole::Warmth:
-                        ring = hm.liveWarm(hslot); break;
-                    case uf8::hue::PotRole::Off:
-                    default: ring = 0.0; break;
-                }
-                vpotBar[s] = vpotPosFromUnipolar(ring);
+                vpotBar[s] = vpotPosFromUnipolar(mc.ring);
                 continue;
             }
         }

@@ -1028,6 +1028,22 @@ if(NOT WIN32)
     endif()
     add_test(NAME hue COMMAND test_hue)
 
+    # What a stand and a lamp show on a UF8 strip, Rea-Sixty and ORC alike
+    # (Uf8ModeViews.h; docs/orc-uf8-plan.md stage 6).
+    add_executable(test_uf8_mode_views tests/test_uf8_mode_views.cpp
+        src/HueColor.cpp src/HueClient.cpp src/HueManager.cpp
+        src/DynaMountClient.cpp src/DynaMountManager.cpp src/TrackName.cpp)
+    target_include_directories(test_uf8_mode_views PRIVATE src "${WDL_DIR}")
+    target_link_libraries(test_uf8_mode_views PRIVATE Threads::Threads)
+    if(APPLE)
+        target_sources(test_uf8_mode_views PRIVATE src/macos_http.mm)
+        target_link_libraries(test_uf8_mode_views PRIVATE "-framework Foundation")
+    else()
+        target_sources(test_uf8_mode_views PRIVATE src/linux_http.cpp)
+        target_link_libraries(test_uf8_mode_views PRIVATE ${CMAKE_DL_LIBS})
+    endif()
+    add_test(NAME uf8_mode_views COMMAND test_uf8_mode_views)
+
     # SHA-256 against the FIPS vectors, the login string against the shape the
     # obs-websocket document spells out, and the message parsers against real
     # frames. All of it pure: no socket is opened by this test.
