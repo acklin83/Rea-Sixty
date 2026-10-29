@@ -123,13 +123,19 @@ Writes solo(const State& st, const rmei::State& in, const Side& u, int strip);
 // PLUG-IN: the channel view on or off (only with a selected channel).
 void toggleChannelView(const State& st, const rmei::State& in, Side& u);
 // A soft key in the channel view: the page on that key. Page < > in the channel
-// view: the next eight pages, when there are more than eight.
+// view: see stepPage.
 Writes pickPage(const State& st, const rmei::State& in, Side& u, const Config& cfg, int key);
 // ⇨ ON THE FX ROW SOFT KEY 8 IS THE EFFECT ON AND OFF (Frank 29.10.2026: "sollte
 // der jeweilige Soft-Key sein, dimm = off, bright = on"), so pickPage returns
 // its write; the pages are on keys 1-7 there.
 constexpr int kFxSwitchKey = 7;
-void stepPageGroup(const State& st, const rmei::State& in, Side& u, const Config& cfg, int dir);
+// ⇨ PAGE ◄ ► IN THE CHANNEL VIEW STEP THE PAGE (Frank 29.10.2026: "ich hab gedacht
+// wir banken mit Page < >"), no wrap; the soft keys follow to the page's group.
+void stepPage(const State& st, const rmei::State& in, Side& u, const Config& cfg, int dir);
+// PAGE ◄ ► lit where they lead somewhere: in the channel view to a page, in
+// the overview to another channel (shiftWindow by one).
+struct PageLamps { bool left = false, right = false; };
+PageLamps pageLamps(const State& st, const rmei::State& in, const Side& u, const Config& cfg);
 
 // ⇨ SEND/PLUG-IN 1-8 PICK THE SUBMIX (Frank 29.10.2026), in the control room's
 // order: 1-4 Phones 1-4, 5 Main B, 6 Main (rmeu::controlRoomOutputs), 7-8 empty.

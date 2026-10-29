@@ -50,24 +50,26 @@ Pages pagesOf(const State& st, rmeu::Row r, int ch, const Config& cfg, int wantI
     if (r == rmeu::Row::Fx) {
         // ⇨ REVERB AND ECHO ON ALL EIGHT V-POTS (Frank 29.10.2026: "kein Grund
         // nur die ersten zu belegen"). The UF1's pages are four pots and four
-        // switches; the effect has almost no switches, and its on/off is CUT. So
-        // here every control of the effect in page order, eight to a page, then
-        // any switch other than on/off. A page takes the name and id of the view
-        // its first V-Pot comes from.
-        struct Item { const rmes::Param* p; bool key; int view; };
+        // switches; the effect has almost no switches, and its on/off is soft key
+        // 8 (kFxSwitchKey) and CUT. So here every control of the effect in page
+        // order, eight to a page, then any switch other than on/off.
+        struct Item { const rmes::Param* p; bool key; };
         std::vector<Item> items;
-        for (int vi = 0; vi < static_cast<int>(views.size()); ++vi)
-            for (const rmes::Param* q : views[static_cast<size_t>(vi)].pots)
-                if (q) items.push_back({ q, false, vi });
-        for (int vi = 0; vi < static_cast<int>(views.size()); ++vi)
-            for (const rmes::Param* q : views[static_cast<size_t>(vi)].keys)
+        for (const auto& v : views)
+            for (const rmes::Param* q : v.pots)
+                if (q) items.push_back({ q, false });
+        for (const auto& v : views)
+            for (const rmes::Param* q : v.keys)
                 if (q && std::string(q->id) != "rev_on" && std::string(q->id) != "echo_on")
-                    items.push_back({ q, true, vi });
+                    items.push_back({ q, true });
         for (std::size_t at = 0; at < items.size(); at += kStrips) {
             Page pg;
-            const rmes::View& first = views[static_cast<size_t>(items[at].view)];
-            pg.id   = first.id;
-            pg.name = first.name;
+            // Page j is named and keyed after the effect's view j (Reverb,
+            // Reverb 2 ...), not after the view its first control came from:
+            // that gave "Reverb 3" for the second page (Frank 29.10.2026).
+            const std::size_t j = std::min(at / kStrips, views.size() - 1);
+            pg.id   = views[j].id;
+            pg.name = views[j].name;
             for (std::size_t k = 0; k < static_cast<std::size_t>(kStrips) && at + k < items.size(); ++k) {
                 pg.p[k]   = items[at + k].p;
                 pg.key[k] = items[at + k].key;
@@ -486,14 +488,35 @@ Writes pickPage(const State& st, const rmei::State& in, Side& u, const Config& c
     return {};
 }
 
-void stepPageGroup(const State& st, const rmei::State& in, Side& u, const Config& cfg, int dir)
+void stepPage(const State& st, const rmei::State& in, Side& u, const Config& cfg, int dir)
 {
     const auto r   = rmeu::rowAt(in.row.load());
     const int  sel = rmei::selected(in, st, r);
     const Pages pg = pagesOf(st, r, sel, cfg, u.chanPage.load());
-    const int pk = pageKeys(r);
-    const int groups = std::max(1, (static_cast<int>(pg.all.size()) + pk - 1) / pk);
-    u.chanPageGroup.store(std::clamp(u.chanPageGroup.load() + dir, 0, groups - 1));
+    if (pg.at < 0) return;
+    const int n  = static_cast<int>(pg.all.size());
+    const int to = std::clamp(pg.at + (dir > 0 ? 1 : -1), 0, n - 1);
+    u.chanPage.store(pg.all[static_cast<size_t>(to)].id);
+    u.chanPageGroup.store(to / pageKeys(r));
+}
+
+PageLamps pageLamps(const State& st, const rmei::State& in, const Side& u, const Config& cfg)
+{
+    PageLamps l;
+    const auto r = rmeu::rowAt(in.row.load());
+    const int sel = rmei::selected(in, st, r);
+    if (u.chanView.load() && sel >= 0) {
+        const Pages pg = pagesOf(st, r, sel, cfg, u.chanPage.load());
+        if (pg.at < 0) return l;
+        l.left  = pg.at > 0;
+        l.right = pg.at < static_cast<int>(pg.all.size()) - 1;
+        return l;
+    }
+    const int n = static_cast<int>(rmeu::visibleChannels(st, r).size());
+    const int f = clampFirst(u.first[static_cast<int>(r)].load(), n);
+    l.left  = f > 0;
+    l.right = f < clampFirst(n, n);
+    return l;
 }
 
 Writes mainVolume(const State& st, const rmei::State& in, Side& u, const Config& cfg,

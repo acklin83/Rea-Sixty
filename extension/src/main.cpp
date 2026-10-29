@@ -27829,10 +27829,10 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                         } else switch (id) {
                             case 0x78: u8s::shiftWindow(rst, g_rmeIn, g_uf8RmeSide, -8); break;
                             case 0x79: u8s::shiftWindow(rst, g_rmeIn, g_uf8RmeSide, +8); break;
-                            case 0x52: if (chanView) u8s::stepPageGroup(rst, g_rmeIn, g_uf8RmeSide, rcfg, -1);
+                            case 0x52: if (chanView) u8s::stepPage(rst, g_rmeIn, g_uf8RmeSide, rcfg, -1);
                                        else          u8s::shiftWindow(rst, g_rmeIn, g_uf8RmeSide, -1);
                                        break;
-                            case 0x53: if (chanView) u8s::stepPageGroup(rst, g_rmeIn, g_uf8RmeSide, rcfg, +1);
+                            case 0x53: if (chanView) u8s::stepPage(rst, g_rmeIn, g_uf8RmeSide, rcfg, +1);
                                        else          u8s::shiftWindow(rst, g_rmeIn, g_uf8RmeSide, +1);
                                        break;
                             case 0x7A: reasixty::rme::input::stepRow(g_rmeIn, -1); break;
@@ -45991,8 +45991,31 @@ void pushUf8GlobalLeds()
     }
     g_lastSoftKeyBank = subBankForLeds;
 
-    // Page LEDs intentionally not driven — see comment at the top of
-    // pushUf8GlobalLeds explaining the cell collision with Soft 2/3.
+    // Page LEDs: not driven from bindings; page_left / page_right light theirs
+    // while pressed. ⇨ IN THE TOTALMIX SIDE-CAR they are lit where they lead
+    // somewhere (Uf8Rme::pageLamps, as in ORC; Frank 29.10.2026), on the left
+    // UF8, and go dark again when the side-car ends.
+    {
+        static bool s_tmPages = false;
+        const bool tmPages = !ccOn && tmOwnsStrip_(0);
+        if (tmPages || s_tmPages) {
+            LedUnitScope scope(uf8Units_() > 1 ? 0 : -1);
+            if (tmPages) {
+                auto& rm = reasixty::rme::manager();
+                const auto pl = reasixty::rme::uf8side::pageLamps(rm.snapshot(), g_rmeIn,
+                                                                  g_uf8RmeSide, rm.config());
+                sendUf8GlobalLedDirect_(uf8::Uf8GlobalLed::PageLeft,
+                    pl.left ? uf8::GlobalLedState::Bright : uf8::GlobalLedState::Off);
+                sendUf8GlobalLedDirect_(uf8::Uf8GlobalLed::PageRight,
+                    pl.right ? uf8::GlobalLedState::Bright : uf8::GlobalLedState::Off);
+            } else {
+                // Back to the baseline the init sets (below, !g_globalLedsInit).
+                sendUf8GlobalLed(uf8::Uf8GlobalLed::PageLeft, false);
+                sendUf8GlobalLed(uf8::Uf8GlobalLed::PageRight, false);
+            }
+        }
+        s_tmPages = tmPages;
+    }
 
     // Plugin button — bright while ANY bound modifier-slot action is
     // active (see pluginLit above). Pushed every tick because the

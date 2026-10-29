@@ -313,9 +313,11 @@ void Uf8Surface::paintLeds_()
     using S = uf8::GlobalLedState;
     const int mode = mode_.load();
     int sp[8] = {};
+    u8s::PageLamps pl;
     if (mode == static_cast<int>(Mode::TotalMix)) {
         const rme::State st = rme::manager().snapshot();
         for (int k = 0; k < 8; ++k) sp[k] = u8s::submixKeyLamp(st, in_, k);
+        pl = u8s::pageLamps(st, in_, side_, rme::manager().config());
     }
     const struct { G led; int state; } want[] = {
         { G::Layer1,   mode == 0 ? 2 : 1 },
@@ -335,6 +337,8 @@ void Uf8Surface::paintLeds_()
         { G::SendPlugin3, sp[2] }, { G::SendPlugin4, sp[3] },
         { G::SendPlugin5, sp[4] }, { G::SendPlugin6, sp[5] },
         { G::SendPlugin7, sp[6] }, { G::SendPlugin8, sp[7] },
+        // PAGE ◄ ►: lit where they lead somewhere (Uf8Rme::pageLamps).
+        { G::PageLeft,  pl.left ? 2 : 0 }, { G::PageRight, pl.right ? 2 : 0 },
     };
     static_assert(std::size(want) == std::tuple_size<decltype(cLed_)>::value);
     for (size_t i = 0; i < std::size(want); ++i) {
@@ -695,11 +699,11 @@ void Uf8Surface::onButton_(std::uint8_t id, bool pressed)
         case kBankLeft:   u8s::shiftWindow(st, in_, side_, -8); break;
         case kBankRight:  u8s::shiftWindow(st, in_, side_, +8); break;
         case kPageLeft:
-            if (side_.chanView.load()) u8s::stepPageGroup(st, in_, side_, cfg, -1);
+            if (side_.chanView.load()) u8s::stepPage(st, in_, side_, cfg, -1);
             else                       u8s::shiftWindow(st, in_, side_, -1);
             break;
         case kPageRight:
-            if (side_.chanView.load()) u8s::stepPageGroup(st, in_, side_, cfg, +1);
+            if (side_.chanView.load()) u8s::stepPage(st, in_, side_, cfg, +1);
             else                       u8s::shiftWindow(st, in_, side_, +1);
             break;
         // The nav cross, as on the UF1 (RmeInput::button, Frank 29.10.): rows,

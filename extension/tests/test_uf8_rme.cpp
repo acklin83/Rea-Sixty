@@ -73,6 +73,15 @@ int main()
         EXPECT(u8::channels(st, in, side)[0] == 1);
         u8::shiftWindow(st, in, side, -1);
     }
+    // ── PAGE ◄ ► in the overview: lit where the window can move ─────────────
+    {
+        u8::Side ps;
+        auto pl = u8::pageLamps(st, in, ps, cfg);
+        EXPECT(!pl.left && pl.right);                         // 12 inputs, first 8 shown
+        u8::shiftWindow(st, in, ps, 8);
+        pl = u8::pageLamps(st, in, ps, cfg);
+        EXPECT(pl.left && !pl.right);
+    }
     // ── the window follows a channel the UF1 picks ────────────────────────────
     {
         in_::select(in, rmeu::Row::Input, 10);
@@ -223,6 +232,20 @@ int main()
         EXPECT(sw.size() == 1 && sw[0].first.find("enable") != std::string::npos && sw[0].second == 1.0f);
         // V-Pot 8 turns a control, not a switch.
         EXPECT(!u8::vpot(fx, fin, fs, cfg, 7, 1, 1.0, 0).empty());
+        // ⇨ PAGE ◄ ► STEP THE PAGES, lit where they lead (Frank 29.10.). The
+        // second page is "Reverb 2", not the name of the view its first control
+        // came from.
+        EXPECT(f.strips[0].slotLabel == "Reverb" && f.strips[1].slotLabel == "Reverb 2");
+        auto pl = u8::pageLamps(fx, fin, fs, cfg);
+        EXPECT(!pl.left && pl.right);
+        u8::stepPage(fx, fin, fs, cfg, +1);
+        EXPECT(u8::frame(fx, fin, fs, cfg, soft).strips[1].topKey == 2);
+        pl = u8::pageLamps(fx, fin, fs, cfg);
+        EXPECT(pl.left && !pl.right);
+        u8::stepPage(fx, fin, fs, cfg, +1);                      // no wrap
+        EXPECT(u8::frame(fx, fin, fs, cfg, soft).strips[1].topKey == 2);
+        u8::stepPage(fx, fin, fs, cfg, -1);
+        EXPECT(u8::frame(fx, fin, fs, cfg, soft).strips[0].topKey == 2);
     }
     // ── the channel encoder is Main ──────────────────────────────────────────
     {

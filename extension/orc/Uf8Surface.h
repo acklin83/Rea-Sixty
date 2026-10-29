@@ -115,7 +115,7 @@ class Uf8Surface {
     // the hand waits here.
     std::array<std::atomic<bool>, 8>         dynPending_{};
     std::array<std::atomic<double>, 8>       dynPendingNorm_{};
-    std::array<int, 20>                      cLed_{};
+    std::array<int, 22>                      cLed_{};
     std::array<std::int64_t, kUserKeyCount>  cUser_{};
     std::atomic<bool>                        repaint_{true};
     std::atomic<int>                         led_{4}, lcd_{4};   // Brightness.h steps
