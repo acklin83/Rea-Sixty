@@ -193,6 +193,14 @@ bool levelTakesFaderlin(Row r)
     return r != Row::Fx;
 }
 
+std::pair<std::string, float> levelFromFader(Row r, int ch, int submix, double lin)
+{
+    if (levelTakesFaderlin(r))
+        return { levelAddress(r, ch, submix, /*faderlin*/ true), static_cast<float>(lin) };
+    const double db = std::max(faderlinToDb(lin), -65.0);
+    return { levelAddress(r, ch, submix, /*faderlin*/ false), static_cast<float>(db) };
+}
+
 std::string muteAddress(Row r, int ch)
 {
     if (r == Row::Fx) {

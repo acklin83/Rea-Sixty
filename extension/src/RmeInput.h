@@ -108,6 +108,11 @@ rmes::View stripView(const State& s, const rme::State& st, rmeu::Row r, int sel,
                      const Config& cfg);
 
 void select(State& s, rmeu::Row r, int ch);
+// A channel's level shifted by `detents` steps of `stepDb` (times `scale`, the
+// fine factor): inputs and playbacks write their node in the current submix.
+// The UF1's pots and jog, and the UF8's channel encoder (Uf8Rme).
+void nudgeLevel(const State& s, const rme::State& st, rmeu::Row r, int ch,
+                int detents, double stepDb, double scale, Writes& out);
 void stepRow(State& s, int dir);
 // The V-Pot bank follows the output stepped to (followBank).
 void stepSubmix(State& s, const rme::State& st, const Config& cfg, int dir);

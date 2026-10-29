@@ -364,6 +364,7 @@ add_library(reaper_uf8 MODULE
     src/Uf1Text.cpp
     src/RmeInput.cpp
     src/RmeFace.cpp
+    src/Uf8Rme.cpp
     src/RmeBuiltins.cpp
     src/RmeSoftKeys.cpp
     src/Uf1Pacer.cpp
@@ -955,6 +956,16 @@ if(NOT WIN32)
     endif()
     add_test(NAME rme_input COMMAND test_rme_input)
 
+    # TotalMix on the UF8's strips (Uf8Rme; docs/orc-uf8-plan.md stage 5).
+    add_executable(test_uf8_rme tests/test_uf8_rme.cpp src/Uf8Rme.cpp
+        src/RmeInput.cpp src/RmeFace.cpp src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp
+        src/RmeUf1.cpp src/RmeStrip.cpp src/RmeNames.cpp src/Uf1EqCurve.cpp src/Uf1Spread.cpp
+        src/Uf1Text.cpp src/TrackName.cpp src/UF1Protocol.cpp src/Protocol.cpp
+        src/LogPath.cpp)
+    target_include_directories(test_uf8_rme PRIVATE src "${WDL_DIR}")
+    target_link_libraries(test_uf8_rme PRIVATE Threads::Threads)
+    add_test(NAME uf8_rme COMMAND test_uf8_rme)
+
     # The RME side-car's soft keys (RmeSoftKeys) and where its banks come from
     # (Bindings.cpp, setSideCarSource): ORC's file, banks 10.. only, never
     # written back. Links the real bindings engine, like ORC does.
@@ -1142,7 +1153,13 @@ if(APPLE)
         # with the extension.
         src/Bindings.cpp
         src/KeyMacro.cpp
-        src/LogPath.cpp)
+        src/LogPath.cpp
+        # The UF8 (docs/orc-uf8-plan.md, stage 5): the device and its frames,
+        # and TotalMix on its strips. Protocol.cpp and UF8Device.cpp ask
+        # REAPER nothing; Uf8Frames / Uf8Fader / Uf8Strips are headers.
+        src/Protocol.cpp
+        src/UF8Device.cpp
+        src/Uf8Rme.cpp)
     add_executable(orc
         orc/main.cpp
         # Stage 7: the tick that used to be main()'s body, and the Mac side.

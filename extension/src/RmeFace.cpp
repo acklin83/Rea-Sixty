@@ -318,18 +318,10 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
             // -64.x dB, also nie auf -inf (Frank 21.09.). uf1PosToNorm_ rastet
             // die unteren und oberen 64 Schritte auf 0 / 1 ein.
             const double lin = ::uf1::faderPosToNorm(pos);
-            if (rmeu::levelTakesFaderlin(row)) {
-                rm.send(rmeu::levelAddress(row, sel, sub, /*faderlin*/ true),
-                        static_cast<float>(lin));
-            } else {
-                // ⇨ FX VOLUME IS dB ONLY, -65..+6 (measured 29.09.2026): the same
-                // fader law as TotalMix' own faders, written as dB. Off stops at
-                // -65, where TotalMix clamps it anyway; writing -300 would have
-                // left our copy at "-" and TotalMix at -65.
-                const double db = std::max(rme::faderlinToDb(lin), -65.0);
-                rm.send(rmeu::levelAddress(row, sel, sub, /*faderlin*/ false),
-                        static_cast<float>(db));
-            }
+            // ⇨ faderlin, or dB on the FX row: rmeu::levelFromFader, shared
+            // with the UF8's TotalMix side-car since 29.10.2026.
+            const auto w = rmeu::levelFromFader(row, sel, sub, lin);
+            if (!w.first.empty()) rm.send(w.first, w.second);
         }
         // ⇨ ECHO THE HAND TO THE MOTOR TARGET WHILE IT IS LIMP, exactly as
         // Rea-Sixty's channel painter does (main.cpp, "wobble") and as SSL 360

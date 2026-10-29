@@ -52,7 +52,15 @@ void append(Writes& out, const Writes& w) { out.insert(out.end(), w.begin(), w.e
 void nudge(const State& s, const Host& h, const rme::State& st, rmeu::Row r, int ch,
            int detents, double stepDb, Writes& out)
 {
-    stepDb *= knobScale(h);
+    nudgeLevel(s, st, r, ch, detents, stepDb, knobScale(h), out);
+}
+
+} // namespace
+
+void nudgeLevel(const State& s, const rme::State& st, rmeu::Row r, int ch,
+                int detents, double stepDb, double scale, Writes& out)
+{
+    stepDb *= scale;
     const int sub = rmeu::effectiveSubmix(st, s.submix.load());
     if (r != rmeu::Row::Output && r != rmeu::Row::Fx && sub < 0) return;
     bool known = false;
@@ -62,8 +70,6 @@ void nudge(const State& s, const Host& h, const rme::State& st, rmeu::Row r, int
     out.push_back({ rmeu::levelAddress(r, ch, sub, /*faderlin*/ false),
                     static_cast<float>(v) });
 }
-
-} // namespace
 
 // ── queries ──────────────────────────────────────────────────────────────────
 

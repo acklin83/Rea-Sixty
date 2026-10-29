@@ -98,6 +98,15 @@ double levelDb(const State& st, Row r, int ch, int submix, bool& known);
 std::string levelAddress(Row r, int ch, int submix, bool faderlin);
 bool        levelTakesFaderlin(Row r);
 
+// ⇨ A FADER POSITION AS A LEVEL WRITE, one rule for every fader (UF1 side-car,
+// UF8 TotalMix side-car; out of RmeFace.cpp 29.10.2026). `lin` 0..1 is the same
+// travel as TotalMix' own fader. Inputs, playbacks and outputs take faderlin;
+// FX volume is dB only, -65..+6 (measured 29.09.2026), written through the same
+// fader law, and off stops at -65, where TotalMix clamps it anyway (-300 would
+// have left our copy at "-" and TotalMix at -65). Empty address: nothing to
+// write (no submix for an input yet, or no such FX).
+std::pair<std::string, float> levelFromFader(Row r, int ch, int submix, double lin);
+
 // Mute of a channel strip, /<input|playback|output>/<n>/mute. One place, because
 // the V-Pot push and CUT both write it.
 // On the FX row "muted" is the effect switched OFF: /reverb/enable 0. So the
