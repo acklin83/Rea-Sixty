@@ -863,7 +863,7 @@ Binding mkBuiltin(const char* name, Behavior b, const char* label,
     return bd;
 }
 
-// Shift + Layer 2 / 3 enter the Hue / DynaMount side-car, where that Shift
+// Shift + Layer 1 / 2 / 3 enter the TotalMix / Hue / DynaMount side-car, where that Shift
 // slot is still empty: the factory and the v56 upgrade both come through here,
 // so an install that already put something there keeps it. (An empty Shift slot
 // falls back to the Plain one, the layer switch: empty-modifier-slot rule.)
@@ -872,6 +872,7 @@ void seedShiftLayerSideCars_(std::unordered_map<ButtonId, Binding>& L)
 {
     const int S = static_cast<int>(Modifier::Shift);
     const struct { ButtonId id; const char* action; } kSeed[] = {
+        { ButtonId::Layer1, "selection_mode_totalmix" },
         { ButtonId::Layer2, "selection_mode_hue" },
         { ButtonId::Layer3, "selection_mode_dynamount" },
     };
@@ -3727,7 +3728,8 @@ bool invokeBuiltin(const std::string& name, int param)
 // green like the rest of the cross), the UF8 its Lanes cross on every layer.
 // v56 (2026-10-29): Shift + Layer 2 / 3 enter the Hue / DynaMount UF8
 // side-car, where that Shift slot is still empty (seedShiftLayerSideCars_).
-constexpr int kCurrentBindingsVersion = 56;
+// v57 (2026-10-29): Shift + Layer 1 enters the TotalMix side-car the same way.
+constexpr int kCurrentBindingsVersion = 57;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -5039,7 +5041,7 @@ void load()
             if (tmp.version < 55) {
                 upgradeLanesCompHereToShift_(tmp);
             }
-            if (tmp.version < 56) {
+            if (tmp.version < 57) {   // v56 seeded 2 / 3, v57 adds 1; empty slots only
                 for (Layer& L : tmp.layers) seedShiftLayerSideCars_(L.bindings);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
@@ -9203,6 +9205,9 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "dynamount_preset_store",
       "Stores where every DynaMount stand is now into the preset given as the "
       "parameter, 1 to 8, over whatever was there." },
+    { "selection_mode_totalmix",
+      "The left UF8 becomes eight TotalMix channels of the row the UF1 shows, "
+      "with ORC installed. Press again to go back to the mode you came from." },
     { "selection_mode_hue",
       "The left UF8 becomes the lamps: one strip per lamp, fader is "
       "brightness, V-Pot the colour, SEL picks which lamp. Press again to go "
@@ -9769,6 +9774,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "dynamount_preset_store", "Dyna Store" },
     { "selection_mode_dynamount", "DynaMount" },
     { "selection_mode_hue", "Hue Mode" },
+    { "selection_mode_totalmix", "TotalMix" },
     { "selection_mode_instance", "FX Cycle" },
     { "selection_mode_instance_cycle", "Inst Cycle" },
     { "selection_mode_norm", "Select" },

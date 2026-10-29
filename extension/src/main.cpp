@@ -111,6 +111,7 @@
 #include "Uf8ModeViews.h"
 #include "ModeBuiltins.h"
 #include "ModeSettings.h"
+#include "Uf8Rme.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
 #include <sys/time.h> // gettimeofday, for the lines in ORC's log
@@ -2255,8 +2256,26 @@ inline std::string readTrackPExt_(MediaTrack* tr, const char* key)
 // & V-Pot rotation scrolls auto-modes; Instance = V-Pot rotation
 // cycles the plug-in instance on the strip's track. Bindable via the
 // `selection_mode_*` builtins (registered in registerBindingHandlers).
-enum class SelectionMode : uint8_t { Norm = 0, Rec, RecMon, Auto, Instance, InstanceCycle, DynaMount, Hue };
+enum class SelectionMode : uint8_t { Norm = 0, Rec, RecMon, Auto, Instance, InstanceCycle, DynaMount, Hue,
+                                      TotalMix };   // the UF8's TotalMix side-car (29.10.2026), only with ORC
 std::atomic<SelectionMode> g_selectionMode{SelectionMode::Norm};
+// ⇨ THE UF8's TOTALMIX SIDE-CAR (Uf8Rme, shared with ORC): its own part beside
+// g_rmeIn (the UF1 side-car's selection, which it shares), and the colours and
+// meters the painter worked out for the colour bar and the VU.
+static reasixty::rme::uf8side::Side g_uf8RmeSide;
+static std::array<std::atomic<int>, 8> g_tmColour{};
+static std::array<std::atomic<uint8_t>, 16> g_tmVu{};
+static std::atomic<uint16_t> g_tmSelMask{0};   // the SEL lit by TotalMix, bit = strip
+// The TotalMix side-car holds this surface strip (the left UF8, ORC set up).
+inline bool tmOwnsStrip_(int strip)
+{
+    return strip >= 0 && strip < 8
+        && g_selectionMode.load() == SelectionMode::TotalMix && g_rmeAvailable.load();
+}
+// Writes from Uf8Rme to TotalMix, through the side-car's one sender.
+static void rmeSend_(const reasixty::rme::strip::Writes& w);
+static const reasixty::rme::input::Host& rmeInputHost_();
+inline void tmSend_(const reasixty::rme::uf8side::Writes& w) { rmeSend_(w); }
 // The REAPER selection mode a UF8 side-car (Hue, DynaMount) returns to.
 std::atomic<SelectionMode> g_selModeBeforeSideCar{SelectionMode::Norm};
 // Come back as Normal after a REAPER restart (Settings → Behaviour → Selection
@@ -2297,6 +2316,7 @@ inline const char* selectionModeStr(SelectionMode m)
         case SelectionMode::InstanceCycle: return "instance_cycle";
         case SelectionMode::DynaMount:     return "dynamount";
         case SelectionMode::Hue:           return "hue";
+        case SelectionMode::TotalMix:      return "totalmix";
         case SelectionMode::Norm:
         default:                           return "norm";
     }
@@ -2320,6 +2340,7 @@ inline const char* selectionModeFriendly(SelectionMode m)
         case SelectionMode::InstanceCycle: return "Instance Cycle";
         case SelectionMode::DynaMount:     return "DynaMount";
         case SelectionMode::Hue:           return "Hue";
+        case SelectionMode::TotalMix:      return "TotalMix";
         case SelectionMode::Norm:
         default:                           return "Select";
     }
@@ -2335,6 +2356,7 @@ inline SelectionMode parseSelectionMode(const char* s)
     if (std::strcmp(s, "instance_cycle") == 0) return SelectionMode::InstanceCycle;
     if (std::strcmp(s, "dynamount")      == 0) return SelectionMode::DynaMount;
     if (std::strcmp(s, "hue")            == 0) return SelectionMode::Hue;
+    if (std::strcmp(s, "totalmix")       == 0) return SelectionMode::TotalMix;
     return SelectionMode::Norm;
 }
 
@@ -2827,6 +2849,11 @@ inline int stripToVisibleSlot(int strip, int bankOffset) {
     }
     if (g_selectionMode.load() == SelectionMode::Hue) {
         if (strip < 8) return -1;   // a lamp strip, or dark
+        return (strip - 8) + bankOffset;
+    }
+    // TotalMix: the left UF8 is the mixer's eight channels (Uf8Rme).
+    if (g_selectionMode.load() == SelectionMode::TotalMix) {
+        if (strip < 8) return -1;
         return (strip - 8) + bankOffset;
     }
     // Unified reservation that composes Master-pin Shift + the sticky pin
@@ -7584,7 +7611,8 @@ int bankReservedStrips_()
 {
     const auto m = g_selectionMode.load();
     int n = 0;
-    if (m == SelectionMode::DynaMount || m == SelectionMode::Hue) n = 8;
+    if (m == SelectionMode::DynaMount || m == SelectionMode::Hue
+        || m == SelectionMode::TotalMix) n = 8;
     return std::clamp(n, 0, effectiveStripCount_() - 1);   // mindestens ein Track-Strip
 }
 
@@ -27535,6 +27563,17 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 // back to release the way DynaMount does it, the lamp would only
                 // move once you let go, which is exactly the feel this feature
                 // exists to avoid.
+                // TotalMix side-car: the strip's channel level into the submix
+                // (Uf8Rme, the UF1 side-car's write rule), the hand echoed.
+                if (tmOwnsStrip_(strip)) {
+                    tmSend_(reasixty::rme::uf8side::fader(
+                        reasixty::rme::manager().snapshot(), g_rmeIn, g_uf8RmeSide, strip,
+                        static_cast<double>(pbOut) / static_cast<double>(kUf8FaderPbMax)));
+                    uf8SendS_(strip, uf8::buildFaderPosition(
+                        uf8Local_(strip), lsbOut | 0x80, msbOut));
+                    i += frameSize;
+                    continue;
+                }
                 if (g_selectionMode.load() == SelectionMode::Hue) {
                     const int hslot = uf8::hue::manager().slotForStrip(strip);
                     if (hslot >= 0) {
@@ -27713,6 +27752,60 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                     }
                 }
                 if (consumed) { i += frameSize; continue; }
+            }
+
+            // ⇨ TOTALMIX SIDE-CAR KEYS (plan 2.1, the left UF8): SOLO/CUT/SEL and
+            // the V-Pot pushes belong to its strips; Bank 8, Page 1, the nav
+            // cross as on the UF1 (rows, submix, TotalMix' window), PLUG-IN
+            // the channel view, whose pages are on the soft keys. Every other
+            // key (Layer, FINE, FLIP, V-POT / 1-5, 360 ...) stays a binding, so
+            // Shift + Layer 1 leaves again.
+            if (unit == 0 && tmOwnsStrip_(0)) {
+                namespace u8s = reasixty::rme::uf8side;
+                auto& rm = reasixty::rme::manager();
+                const bool chanView = g_uf8RmeSide.chanView.load();
+                const bool mine = (id >= 0x20 && id <= 0x37) || (id >= 0x08 && id <= 0x0F)
+                    || id == 0x78 || id == 0x79 || id == 0x52 || id == 0x53
+                    || (id >= 0x7A && id <= 0x7E) || id == 0x50
+                    || (chanView && id >= 0x18 && id <= 0x1F);
+                if (mine) {
+                    if (pressed && !btnWoke) {
+                        const reasixty::rme::State  rst  = rm.snapshot();
+                        const reasixty::rme::Config rcfg = rm.config();
+                        reasixty::rme::input::Writes w;
+                        if (id >= 0x20 && id <= 0x37) {
+                            const int st = (id - 0x20) / 3;
+                            switch ((id - 0x20) % 3) {
+                                case 0: w = u8s::solo(rst, g_rmeIn, g_uf8RmeSide, st); break;
+                                case 1: w = u8s::cut(rst, g_rmeIn, g_uf8RmeSide, st);  break;
+                                case 2: u8s::sel(rst, g_rmeIn, g_uf8RmeSide, st);       break;
+                            }
+                        } else if (id >= 0x08 && id <= 0x0F) {
+                            w = u8s::vpotPush(rst, g_rmeIn, g_uf8RmeSide, rcfg, id - 0x08, nowMs_());
+                        } else if (id >= 0x18 && id <= 0x1F) {
+                            u8s::pickPage(rst, g_rmeIn, g_uf8RmeSide, rcfg, id - 0x18);
+                        } else switch (id) {
+                            case 0x78: u8s::shiftWindow(rst, g_rmeIn, g_uf8RmeSide, -8); break;
+                            case 0x79: u8s::shiftWindow(rst, g_rmeIn, g_uf8RmeSide, +8); break;
+                            case 0x52: if (chanView) u8s::stepPageGroup(rst, g_rmeIn, g_uf8RmeSide, rcfg, -1);
+                                       else          u8s::shiftWindow(rst, g_rmeIn, g_uf8RmeSide, -1);
+                                       break;
+                            case 0x53: if (chanView) u8s::stepPageGroup(rst, g_rmeIn, g_uf8RmeSide, rcfg, +1);
+                                       else          u8s::shiftWindow(rst, g_rmeIn, g_uf8RmeSide, +1);
+                                       break;
+                            case 0x7A: reasixty::rme::input::stepRow(g_rmeIn, -1); break;
+                            case 0x7E: reasixty::rme::input::stepRow(g_rmeIn, +1); break;
+                            case 0x7B: reasixty::rme::input::stepSubmix(g_rmeIn, rst, rcfg, -1); break;
+                            case 0x7D: reasixty::rme::input::stepSubmix(g_rmeIn, rst, rcfg, +1); break;
+                            case 0x7C: reasixty::rme::input::toggleWindow(g_rmeIn, rmeInputHost_(), w); break;
+                            case 0x50: u8s::toggleChannelView(rst, g_rmeIn, g_uf8RmeSide); break;
+                            default: break;
+                        }
+                        tmSend_(w);
+                    }
+                    i += frameSize;
+                    continue;
+                }
             }
 
             // Settings → Bindings open: the press picks the key (BindingsPick.h).
@@ -28487,6 +28580,19 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                     continue;
                 }
             }
+            // TotalMix side-car: the cap limps the motor and nothing else; the
+            // value goes out with each position frame (Uf8Rme), as Hue's does.
+            if (tmOwnsStrip_(strip)) {
+                if (state != 0) {
+                    g_touchReported[strip].store(true);
+                    uf8SendPriS_(strip, uf8::buildMotorEnable(uf8Local_(strip), false));
+                    g_faderMotorEngaged[strip].store(false);
+                } else {
+                    g_touchReported[strip].store(false);
+                }
+                i += frameSize;
+                continue;
+            }
             // Hue mode: touch limps the motor the same way, but the release only
             // has to say "send the final value now" — the drag was streaming all
             // along. Without the flush the last position sits in the coalescer
@@ -28686,6 +28792,22 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
             }
             // DynaMount mode: a mount strip's V-Pot nudges rotation (r),
             // regardless of FLIP. Atomic setter → safe from the input thread.
+            // TotalMix side-car: the strip's gain or pan (Uf8Rme), and the
+            // channel encoder Main, as the UF1's jog (plan 2.1).
+            if (hwPot < 8 && tmOwnsStrip_(strip)) {
+                auto& rm = reasixty::rme::manager();
+                tmSend_(reasixty::rme::uf8side::vpot(rm.snapshot(), g_rmeIn, g_uf8RmeSide,
+                        rm.config(), strip, signed6, shiftFineActive_() ? g_fineFactorUf8.load() : 1.0, nowMs_()));
+                i += frameSize;
+                continue;
+            }
+            if (hwPot == 8 && unit == 0 && tmOwnsStrip_(0)) {
+                auto& rm = reasixty::rme::manager();
+                tmSend_(reasixty::rme::uf8side::mainVolume(rm.snapshot(), g_rmeIn, rm.config(),
+                        signed6, shiftFineActive_() ? g_fineFactorUf8.load() : 1.0));
+                i += frameSize;
+                continue;
+            }
             if (hwPot < 8 && g_selectionMode.load() == SelectionMode::DynaMount) {
                 const int mnt = uf8::dynamount::manager().mountForStrip(strip);
                 if (mnt >= 0) {
@@ -39486,6 +39608,15 @@ uint32_t reaperColorForVisibleSlot(int slot)
         const int hslot = hm.slotForStrip(slot);
         if (hslot >= 0) return uf8modes::hueRgb(hm, hslot);   // Uf8ModeViews.h, shared with ORC
     }
+    // TotalMix strip — the channel's TotalMix colour through ORC's colourMap,
+    // a palette index (pushZonesForVisibleSlots stored it); 0 = off.
+    if (g_selectionMode.load() == SelectionMode::TotalMix && slot >= 0 && slot < 8) {
+        const int idx = g_tmColour[slot].load();
+        if (idx <= 0) return 0;
+        if (const auto e = uf8::paletteEntry(static_cast<uint8_t>(idx)))
+            return (uint32_t(e->r) << 16) | (uint32_t(e->g) << 8) | uint32_t(e->b);
+        return 0;
+    }
 
     const int realSlot   = stripToVisibleSlot(slot, bankOffset);
 
@@ -41141,6 +41272,27 @@ void pushZonesForVisibleSlots()
     // The soft-key page each unit shows (the right one the next, or nothing).
     const uf8units::UnitPages skPages = uf8SoftKeyPages_();
 
+    // ⇨ TOTALMIX ON THE LEFT UF8 (SelectionMode::TotalMix, only with ORC's
+    // settings). One frame per pass from Uf8Rme; each strip goes out through
+    // Uf8Strips into this file's caches below.
+    const bool tmActive = g_selectionMode.load() == SelectionMode::TotalMix
+                       && g_rmeAvailable.load();
+    reasixty::rme::uf8side::Frame tmFrame;
+    bool tmChanView = false;
+    if (tmActive) {
+        auto& rm = reasixty::rme::manager();
+        const reasixty::rme::State  rst  = rm.snapshot();
+        const reasixty::rme::Config rcfg = rm.config();
+        reasixty::rme::uf8side::follow(rst, g_rmeIn, g_uf8RmeSide);
+        tmFrame = reasixty::rme::uf8side::frame(rst, g_rmeIn, g_uf8RmeSide, rcfg, {});
+        tmChanView = g_uf8RmeSide.chanView.load();
+        for (int i = 0; i < 8; ++i) g_tmColour[i].store(tmFrame.colour[static_cast<size_t>(i)]);
+        for (int i = 0; i < 16; ++i) g_tmVu[i].store(tmFrame.vu[static_cast<size_t>(i)]);
+        uint16_t selMask = 0;
+        for (int i = 0; i < 8; ++i)
+            if (tmFrame.strips[static_cast<size_t>(i)].sel) selMask = static_cast<uint16_t>(selMask | (1u << i));
+        g_tmSelMask.store(selMask);
+    }
     for (int s = 0; s < uf8Strips_(); ++s) {
         // The Nav overlay / encoder picker own three zones on the LEFT unit only.
         const bool overlayActive = overlayActiveAny && s < 8;
@@ -41155,6 +41307,9 @@ void pushZonesForVisibleSlots()
         // Keep the slot→track mapping fresh so GetTouchState can map
         // REAPER's track pointer back to a strip index.
         g_slotTrack[s] = tr;
+        // A TotalMix strip: SOLO, CUT and SEL are the mixer's, painted in the
+        // TotalMix branch below; the track LED blocks leave it alone.
+        const bool tmStrip = tmActive && s < 8;
 
         // Send/Receive routing — when a routing mode is on, this strip's
         // V-Pot / fader / scribble pull from a send or receive instead
@@ -41211,7 +41366,7 @@ void pushZonesForVisibleSlots()
         // TotalReaper-mirrored P_EXT state (48V / Pad / Phase).
         const RecRmeAction cutRme = g_recCut.load();
         const bool cutRmeActive   = recRmeButtonActive(cutRme);
-        {
+        if (!tmStrip) {
             bool effMute = false;
             if (userStripActive) {
                 if (userBoundCut >= 0) {
@@ -41279,7 +41434,9 @@ void pushZonesForVisibleSlots()
         // force a re-push when leaving the per-tick-owning mode.
         const RecRmeAction soloRme = g_recSolo.load();
         const bool soloRmeActive   = recRmeButtonActive(soloRme);
-        if (userStripActive) {
+        if (tmStrip) {
+            // TotalMix paints SOLO, CUT and SEL itself (Uf8Strips), below.
+        } else if (userStripActive) {
             bool soloOn = (userBoundSolo >= 0)
                 && TrackFX_GetParamNormalized(
                        userS.tr, userS.fxIdx, userBoundSolo) >= 0.5;
@@ -41370,7 +41527,8 @@ void pushZonesForVisibleSlots()
         // — labels are bank-global, not per-track. Synthetic toggles read
         // tr only inside `if (tr)` guards, so this block is safe when
         // tr == nullptr.
-        {
+        // TotalMix's channel view owns the soft keys: they pick its pages.
+        if (!(tmStrip && tmChanView)) {
             // The eight soft keys are the surface's FUNCTION keys, not per-track
             // ones: a right-hand UF8's row shows and fires the same eight as the
             // left's (sk = the key's position on its own unit).
@@ -41986,6 +42144,31 @@ void pushZonesForVisibleSlots()
             const auto& r = routedFader ? faderRoute : vpotRoute;
             if (r.track) tr = r.track;
         }
+        // TotalMix strip — Uf8Rme's view through Uf8Strips (shared with ORC)
+        // into this file's caches, then nothing else for it. In the overview
+        // the soft-key cells stay the bank's (painted above); in the channel
+        // view they are the pages.
+        if (tmStrip) {
+            uf8strips::View v = tmFrame.strips[static_cast<size_t>(s)];
+            if (!tmChanView) {
+                v.slotLabel = g_lastSlotLabel[s];
+                v.topKey    = g_lastTopSoftKey[s];
+            }
+            bool engaged = g_faderMotorEngaged[s].load();
+            uf8strips::paintStrip(
+                uf8strips::Cells{ g_lastTrackName[s], g_lastCsType[s], g_lastChanNum[s],
+                                  g_lastFaderDb[s], g_lastFaderDbUnit[s], g_lastValueLine[s],
+                                  g_lastSlotLabel[s], g_lastTopSoftKey[s], g_lastSelLed[s],
+                                  g_lastCutLed[s], g_lastSoloLed[s], g_lastFaderPb[s] },
+                v, uf8Local_(s), g_touchReported[s].load(), engaged,
+                [s](std::vector<uint8_t> f) { uf8SendS_(s, std::move(f)); },
+                [s](uf8::LedColourFrames f) { sendLedFramesS_(s, std::move(f)); });
+            g_faderMotorEngaged[s].store(engaged);
+            if (v.drive && !g_touchReported[s].load()) g_motorTargetPb[s].store(v.faderPb);
+            vpotBar[s] = v.ring;
+            continue;
+        }
+
         // DynaMount strip — render the mount's live state and skip the
         // track render pipeline. `tr` is null for mount strips, so the
         // Solo/Cut/Sel LED blocks above already painted them off; the colour
@@ -43510,6 +43693,20 @@ void pushZonesForVisibleSlots()
         const auto focused = uf8::getFocusedParam();
         const int bankOffset = g_bankOffset.load();
         for (int s = 0; s < uf8Strips_(); ++s) {
+            // The side-cars' strips have no track but a ring of their own:
+            // TotalMix's from Uf8Rme, a lamp's or a stand's unipolar (their
+            // painters fill vpotBar). Until 29.10.2026 they fell into the
+            // "no track" case below and their rings never showed.
+            if (s < 8) {
+                const auto selm = g_selectionMode.load();
+                if (tmActive) { vpotMode[s] = tmFrame.strips[static_cast<size_t>(s)].ringMode; continue; }
+                if (selm == SelectionMode::Hue && uf8::hue::manager().slotForStrip(s) >= 0) {
+                    vpotMode[s] = 0x01; continue;
+                }
+                if (selm == SelectionMode::DynaMount && uf8::dynamount::manager().mountForStrip(s) >= 0) {
+                    vpotMode[s] = 0x01; continue;
+                }
+            }
             const int realSlot = stripToVisibleSlot(s, bankOffset);
             if (realSlot < 0 || realSlot >= trackCount) {
                 vpotMode[s] = 0x03;
@@ -44723,9 +44920,15 @@ void pushVuMeter()
     }
     g_meterEnvLast_ = tNow;
 
+    const bool tmMeters = g_selectionMode.load() == SelectionMode::TotalMix && g_rmeAvailable.load();
     for (int s = 0; s < uf8Strips_(); ++s) {
         uint8_t rawL = 0, rawR = 0;
-        if (!pluginModeBlank) {
+        if (tmMeters && s < 8) {
+            // TotalMix side-car: the mixer's peak levels (Uf8Rme, when TotalMix
+            // sends them), already bytes.
+            rawL = g_tmVu[s * 2].load();
+            rawR = g_tmVu[s * 2 + 1].load();
+        } else if (!pluginModeBlank) {
             // The strip's own track, or in a Send/Receive fader mode the far
             // end of its route (uf8StripMeterTrack_, same answer as the name).
             if (MediaTrack* tr = uf8StripMeterTrack_(s, bankOffset, trackCount)) {
@@ -44802,7 +45005,12 @@ void pushSelColourBar()
     // unselected. The 16-bit mask has bit (strip+1) set for the
     // currently-selected strip (T1=0x02, T2=0x04, …, T8=0x0100).
     uint16_t mask = 0;
+    // A TotalMix strip's SEL is the mixer's (Uf8Strips in pushZonesForVisibleSlots);
+    // here only its bit in the mask, so the firmware draws that SEL as the lit one.
+    const bool tm = g_selectionMode.load() == SelectionMode::TotalMix && g_rmeAvailable.load();
+    if (tm) mask = g_tmSelMask.load();
     for (int s = 0; s < 8; ++s) {
+        if (tm) { g_lastSelBright[s] = 0xFE; continue; }   // unknown again after TotalMix
         const int idx = stripToVisibleSlot(s, bankOffset);
         MediaTrack* tr = (idx >= 0 && idx < trackCount) ? visibleTrackAt(idx) : nullptr;
         const bool sel = tr && GetMediaTrackInfo_Value(tr, "I_SELECTED") > 0.5;
@@ -57578,8 +57786,14 @@ void registerBindingHandlers()
                     // or AUTO included, not Norm. Switching side-car to side-car
                     // keeps that way back.
                     auto sideCar = [](SelectionMode m) {
-                        return m == SelectionMode::Hue || m == SelectionMode::DynaMount;
+                        return m == SelectionMode::Hue || m == SelectionMode::DynaMount
+                            || m == SelectionMode::TotalMix;
                     };
+                    // TotalMix on the UF8 needs ORC's TotalMix settings, as the
+                    // UF1's side-car does (g_rmeAvailable); without them the
+                    // key does nothing rather than open an empty mixer.
+                    if (mode == SelectionMode::TotalMix && cur != mode
+                        && !g_rmeAvailable.load()) return;
                     SelectionMode next;
                     if (cur == mode) {
                         next = sideCar(mode) ? g_selModeBeforeSideCar.load()
@@ -57686,6 +57900,15 @@ void registerBindingHandlers()
     // V-Pots the colour axis, CUT is on/off, SOLO is a light solo and SEL picks
     // the UF1's focus lamp. The rest of the left UF8 is dark (since 29.10.2026).
     // Pressed again it returns to the REAPER mode it came from.
+    // TotalMix Mode, a UF8 side-car (Frank 29.10.2026, docs/orc-uf8-plan.md
+    // 2.1) — the left UF8 is eight TotalMix channels of the row the UF1's
+    // side-car has chosen (Uf8Rme, shared with ORC): faders the levels into the
+    // submix, V-Pots gain or pan, SEL the channel the UF1 shows. Only where ORC
+    // is set up. Pressed again it returns to the REAPER mode it came from.
+    registerSelectionModeToggle("selection_mode_totalmix",
+                                SelectionMode::TotalMix,
+                                "Selection Mode → TotalMix");
+
     registerSelectionModeToggle("selection_mode_hue",
                                 SelectionMode::Hue,
                                 "Selection Mode → Hue");

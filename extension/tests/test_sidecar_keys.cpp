@@ -1,4 +1,4 @@
-// Shift + Layer 2 / 3 enter the Hue / DynaMount UF8 side-car (Frank 29.10.2026,
+// Shift + Layer 1 / 2 / 3 enter the TotalMix / Hue / DynaMount UF8 side-car (Frank 29.10.2026,
 // docs/orc-uf8-plan.md 2.2): in the factory set on every layer, and by the v56
 // upgrade only where that Shift slot is still empty. Runs the real bindings
 // engine on a temp directory.
@@ -55,7 +55,7 @@ int main()
         EXPECT(l2.shortPress[0].action == "layer_select_2");
         EXPECT(shiftOf(l2).action == "selection_mode_hue");
         EXPECT(shiftOf(l3).action == "selection_mode_dynamount");
-        EXPECT(bnd::slotIsEmpty(shiftOf(l1)));   // TotalMix comes later
+        EXPECT(shiftOf(l1).action == "selection_mode_totalmix");
     }
 
     // An install from before v56: the user put something of their own on
@@ -70,7 +70,7 @@ int main()
         bnd::setBinding(0, ButtonId::Layer3, l3);
     }
     std::string t = fileText();
-    const auto at = t.find("\"version\": 56");
+    const auto at = t.find("\"version\": 57");
     EXPECT(at != std::string::npos);
     if (at != std::string::npos) t.replace(at, 13, "\"version\": 55");
     writeText(t);
@@ -78,7 +78,7 @@ int main()
 
     EXPECT(shiftOf(bnd::getBinding(0, ButtonId::Layer2)).action == "layer_select_1");   // kept
     EXPECT(shiftOf(bnd::getBinding(0, ButtonId::Layer3)).action == "selection_mode_dynamount");   // filled
-    EXPECT(fileText().find("\"version\": 56") != std::string::npos);
+    EXPECT(fileText().find("\"version\": 57") != std::string::npos);
 
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
     std::printf("sidecar_keys: all passed\n");
