@@ -405,6 +405,12 @@ Manager::Scenes Manager::scenes() const
     return sc;
 }
 
+Manager::Visible Manager::visible() const
+{
+    std::lock_guard<std::mutex> lk(mx_);
+    return visible_;
+}
+
 State Manager::snapshot() const
 {
     std::lock_guard<std::mutex> lk(mx_);
@@ -459,6 +465,21 @@ void Manager::workerLoop()
     clock::time_point onlineAt{};
     int           followUpsLeft = 0;
     std::vector<std::uint8_t> buf(65536);
+    // The round being collected (setRounds): who reported a submix node since
+    // the last ask, and when the window closes.
+    bool               collecting = false;
+    std::vector<int>   collectIn, collectPb;
+    clock::time_point  commitAt{};
+    auto noteNode = [&](const std::string& a) {
+        // /mix/<in|pb>/<channel>/<submix>/<what>
+        if (a.size() < 9 || a.compare(0, 5, "/mix/") != 0 || a[7] != '/') return;
+        const bool in = a.compare(5, 2, "in") == 0;
+        if (!in && a.compare(5, 2, "pb") != 0) return;
+        if (a[8] < '0' || a[8] > '9') return;
+        auto& v = in ? collectIn : collectPb;
+        const int n = std::atoi(a.c_str() + 8);
+        if (std::find(v.begin(), v.end(), n) == v.end()) v.push_back(n);
+    };
 
     auto closeSock = [&] {
         if (sock != kNoSocket) { RME_CLOSE(sock); sock = kNoSocket; }
@@ -470,6 +491,14 @@ void Manager::workerLoop()
                  reinterpret_cast<sockaddr*>(&to), sizeof(to));
         lastAsk = clock::now();
         heardSinceAsk = false;
+        // A new ask starts the round afresh, also when the last one was still
+        // collecting: stoerme's bridge does the same (clearTimeout, new sets).
+        if (roundsMs_.load() > 0) {
+            collecting = true;
+            collectIn.clear();
+            collectPb.clear();
+            commitAt = lastAsk + std::chrono::milliseconds(400);
+        }
     };
 
     while (run_.load()) {
@@ -488,7 +517,9 @@ void Manager::workerLoop()
                 std::lock_guard<std::mutex> lk(mx_);
                 state_ = State{};
                 queue_.clear();
+                visible_ = Visible{};
             }
+            collecting = false;
             rev_.fetch_add(1);
             retryAt = clock::now();
         }
@@ -581,6 +612,7 @@ void Manager::workerLoop()
                     [&](const Message& m) {
                         oscTrace_('<', m.address, m.args.empty() ? 0.0 : m.args[0].number());
                         ingest(state_, m);
+                        if (collecting) noteNode(m.address);
                     });
             }
             if (got > 0) {
@@ -596,6 +628,19 @@ void Manager::workerLoop()
                     setStatus(LinkState::Online, t);
                 }
             }
+        }
+
+        if (collecting && clock::now() >= commitAt) {
+            collecting = false;
+            std::sort(collectIn.begin(), collectIn.end());
+            std::sort(collectPb.begin(), collectPb.end());
+            {
+                std::lock_guard<std::mutex> lk(mx_);
+                visible_.in = collectIn;
+                visible_.pb = collectPb;
+                ++visible_.round;
+            }
+            rev_.fetch_add(1);
         }
 
         // TotalMix only speaks when something changes, so silence is normal.
@@ -615,6 +660,9 @@ void Manager::workerLoop()
                 && lastAsk > lastRx) {
                 setStatus(LinkState::Silent,
                           "TotalMix stopped answering (quit, or the remote is off)");
+            } else if (const int every = roundsMs_.load();
+                       every > 0 && t - lastAsk >= std::chrono::milliseconds(every)) {
+                ask();   // the next round (setRounds)
             } else if (t - lastRx > std::chrono::seconds(30)
                        && t - lastAsk > std::chrono::seconds(30)) {
                 ask();

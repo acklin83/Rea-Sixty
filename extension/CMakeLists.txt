@@ -819,6 +819,15 @@ if(NOT WIN32)
     target_include_directories(test_orc_handover PRIVATE src)
     add_test(NAME orc_handover COMMAND test_orc_handover)
 
+    # ORC MoreMe, the headphone mixer in the browser (docs/orc-phones-plan.md,
+    # stage 1): stoerme's protocol, the lock, the mute, the rounds, the PIN.
+    add_executable(test_orc_phones tests/test_orc_phones.cpp orc/Phones.cpp
+        src/RmeState.cpp src/RmeOsc.cpp src/RmeManager.cpp src/RmeNames.cpp
+        src/Sha256.cpp src/LogPath.cpp)
+    target_include_directories(test_orc_phones PRIVATE src orc "${WDL_DIR}")
+    target_link_libraries(test_orc_phones PRIVATE Threads::Threads)
+    add_test(NAME orc_phones COMMAND test_orc_phones)
+
     # UF8 bulk-IN packets to whole frames, shared by Rea-Sixty and ORC
     # (Uf8Frames.h, header only; docs/orc-uf8-plan.md stage 2).
     add_executable(test_uf8_frames tests/test_uf8_frames.cpp)

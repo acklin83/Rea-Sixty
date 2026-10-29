@@ -105,6 +105,11 @@ std::string fallback(const char* what, int i)
 
 }  // namespace
 
+std::string toUtf8(const std::string& s)
+{
+    return isMultibyteUtf8(s) ? s : latin1ToUtf8(s);
+}
+
 bool parseNames(const std::string& xml, Names& out)
 {
     Names n;

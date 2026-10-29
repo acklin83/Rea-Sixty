@@ -176,6 +176,21 @@ class Manager {
     // Ask TotalMix for everything again.
     void refresh() { refreshReq_.store(true); }
 
+    // ⇨ ROUNDS, FOR ORC MOREME (docs/orc-phones-plan.md, section 4). TotalMix
+    // sends nothing for a channel hidden on this remote, so the only way to
+    // learn that a channel WAS hidden is to ask again and see who is missing.
+    // With rounds on, the link asks /sendall every `everyMs` and counts the
+    // inputs and playbacks that report a submix node in the 400 ms after each
+    // ask: that set is visible() until the next round. stoerme's bridge does
+    // the same (every 3 s, 400 ms). Off by default: the surfaces' remote keeps
+    // asking only after it connects and on request, as before.
+    struct Visible {
+        std::uint64_t    round = 0;   // rounds committed so far; 0 = none yet
+        std::vector<int> in, pb;      // ascending
+    };
+    void    setRounds(int everyMs) { roundsMs_.store(everyMs > 0 ? everyMs : 0); }
+    Visible visible() const;
+
     // The control-room switches, without copying the whole cache: surface LEDs
     // ask this every tick.
     struct ControlRoom {
@@ -212,6 +227,8 @@ class Manager {
     std::atomic<std::uint64_t> rev_{0};
     std::atomic<bool>          cfgDirty_{false};
     std::atomic<bool>          refreshReq_{false};
+    std::atomic<int>           roundsMs_{0};
+    Visible                    visible_;   // under mx_
 };
 
 Manager& manager();

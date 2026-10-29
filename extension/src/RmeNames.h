@@ -33,6 +33,12 @@ struct Names {
 // false when the text holds neither (not a TotalMix state file).
 bool parseNames(const std::string& xml, Names& out);
 
+// `s` as UTF-8: unchanged when it already is valid UTF-8, otherwise read as
+// Latin-1. The same rule parseNames applies to the state file, for any other
+// text TotalMix hands over (ORC MoreMe sends channel names to a browser, which
+// closes a WebSocket on a text frame that is not UTF-8).
+std::string toUtf8(const std::string& s);
+
 // The display name of slot `i` (0..7), with the fallback applied.
 std::string snapshotName(const Names& n, int i);
 std::string layoutName(const Names& n, int i);
