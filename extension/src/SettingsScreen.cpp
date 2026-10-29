@@ -24307,7 +24307,7 @@ static void drawHueTab_(ImGui_Context* ctx)
                     bool none = c.rid.empty();
                     if (ImGui_Selectable(ctx, "(none)", &none, nullptr,
                                          nullptr, nullptr)) {
-                        c.rid.clear(); c.groupId.clear(); c.bridgeName.clear();
+                        c = slotWithNothing(c);
                         mgr.setSlot(i, c);
                     }
                     for (const Light& L : lights) {
@@ -24315,12 +24315,7 @@ static void drawHueTab_(ImGui_Context* ctx)
                         const std::string lbl = lightLabel(L);
                         if (ImGui_Selectable(ctx, lbl.c_str(), &sel, nullptr,
                                              nullptr, nullptr)) {
-                            c.kind = TargetKind::Light;
-                            c.rid  = L.id;
-                            c.groupId.clear();
-                            c.bridgeName = L.name;
-                            if (c.label.empty())
-                                c.label = L.name.substr(0, kLabelChars);
+                            c = slotWithLight(c, L);   // HueManager.h, shared with ORC
                             mgr.setSlot(i, c);
                         }
                     }
@@ -24332,12 +24327,7 @@ static void drawHueTab_(ImGui_Context* ctx)
                             std::string(g.isZone ? "Zone > " : "Room > ") + g.name;
                         if (ImGui_Selectable(ctx, lbl.c_str(), &sel, nullptr,
                                              nullptr, nullptr)) {
-                            c.kind    = TargetKind::Group;
-                            c.rid     = g.groupedLightId;
-                            c.groupId = g.id;
-                            c.bridgeName = g.name;
-                            if (c.label.empty())
-                                c.label = g.name.substr(0, kLabelChars);
+                            c = slotWithGroup(c, g);   // HueManager.h, shared with ORC
                             mgr.setSlot(i, c);
                         }
                     }
@@ -24547,9 +24537,7 @@ static void drawHueTab_(ImGui_Context* ctx)
                         const std::string lbl = sceneLabel(sc);
                         if (ImGui_Selectable(ctx, lbl.c_str(), &sel, nullptr,
                                              nullptr, nullptr)) {
-                            s.id         = sc.id;
-                            s.bridgeName = sc.name;
-                            if (s.label.empty()) s.label = sc.name.substr(0, 12);
+                            s = sceneSlotWith(s, sc);   // HueManager.h, shared with ORC
                             mgr.setSceneSlot(i, s);
                         }
                     }

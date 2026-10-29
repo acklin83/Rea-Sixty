@@ -140,6 +140,41 @@ struct SlotLive {
     std::atomic<bool>   reachable{false};
 };
 
+// ⇨ WHAT A SLOT POINTS AT, one rule for Rea-Sixty's Hue tab and ORC's (out of
+// SettingsScreen.cpp, 29.10.2026). A lamp is its light id; a room or zone is
+// its grouped_light, the only form of a group with a state. The label follows
+// the bridge's name until someone typed one.
+inline SlotConfig slotWithLight(SlotConfig c, const Light& L)
+{
+    c.kind = TargetKind::Light;
+    c.rid  = L.id;
+    c.groupId.clear();
+    c.bridgeName = L.name;
+    if (c.label.empty()) c.label = L.name.substr(0, kLabelChars);
+    return c;
+}
+inline SlotConfig slotWithGroup(SlotConfig c, const Group& g)
+{
+    c.kind    = TargetKind::Group;
+    c.rid     = g.groupedLightId;
+    c.groupId = g.id;
+    c.bridgeName = g.name;
+    if (c.label.empty()) c.label = g.name.substr(0, kLabelChars);
+    return c;
+}
+inline SlotConfig slotWithNothing(SlotConfig c)
+{
+    c.rid.clear(); c.groupId.clear(); c.bridgeName.clear();
+    return c;
+}
+inline SceneSlot sceneSlotWith(SceneSlot s, const Scene& sc)
+{
+    s.id         = sc.id;
+    s.bridgeName = sc.name;
+    if (s.label.empty()) s.label = sc.name.substr(0, 12);
+    return s;
+}
+
 class HueManager {
 public:
     HueManager() = default;

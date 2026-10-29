@@ -1,4 +1,5 @@
 #import "OrcSettingsWindow.h"
+#import "OrcModesTab.h"
 #import <ServiceManagement/ServiceManagement.h>
 
 #include "Bindings.h"
@@ -213,6 +214,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* trActive;
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* trInactive;
 @property (nonatomic, strong) NSTimer* tick;
+@property (nonatomic, strong) OrcModesTab* modesTab;
 @end
 
 @implementation OrcSettingsWindowController {
@@ -271,6 +273,9 @@ NSStackView* withUnit(NSView* field, NSString* unit)
         [tabs addTabViewItem:[self controlsTab]];
         [tabs addTabViewItem:[self softKeysTab]];
         [tabs addTabViewItem:[self coloursTab]];
+        // Hue, DynaMount, OBS for the UF8's side-cars (docs/orc-uf8-plan.md).
+        self.modesTab = [[OrcModesTab alloc] init];
+        [tabs addTabViewItem:[self.modesTab tabItem]];
         [w.contentView addSubview:tabs];
         [self refresh];
     }
@@ -680,6 +685,7 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
 
 - (void)refresh
 {
+    [self.modesTab refreshInWindow:self.window];
     auto& mgr = rme::manager();
     const auto cfg = mgr.config();
     const auto st  = mgr.snapshot();

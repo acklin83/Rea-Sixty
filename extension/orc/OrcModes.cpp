@@ -43,14 +43,19 @@ void load()
 void saveIfDirty()
 {
     auto& hm = uf8::hue::manager();
-    if (hm.takeConfigDirty()) {
-        write("hue_config", hm.serialize());
-        write("hue_key", hm.serializeCredentials());
-    }
+    if (hm.takeConfigDirty()) write("hue_config", hm.serialize());
     auto& om = reasixty::obs::manager();
-    if (om.takeConfigDirty()) {
-        write("obs_config", om.serialize());
-        write("obs_key", om.serializeCredentials());
+    if (om.takeConfigDirty()) write("obs_config", om.serialize());
+    // The keys: pairing and the password field change them without a config
+    // edit, so they are compared rather than flagged.
+    static std::string lastHueKey = read("hue_key"), lastObsKey = read("obs_key");
+    if (const std::string k = hm.serializeCredentials(); k != lastHueKey) {
+        lastHueKey = k;
+        write("hue_key", k);
+    }
+    if (const std::string k = om.serializeCredentials(); k != lastObsKey) {
+        lastObsKey = k;
+        write("obs_key", k);
     }
     auto& dm = uf8::dynamount::manager();
     if (dm.takePresetsDirty()) write("dynamount_presets", dm.serializePresets());

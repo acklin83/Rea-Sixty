@@ -1220,6 +1220,7 @@ if(APPLE)
         orc/OrcConfig.cpp
         orc/OrcApp.mm
         orc/OrcSettingsWindow.mm
+        orc/OrcModesTab.mm
         orc/OrcLogo.cpp
         "${CMAKE_BINARY_DIR}/ORC.icns"
         ${ORC_SHARED_SOURCES})
@@ -1242,6 +1243,7 @@ if(APPLE)
     set_source_files_properties(
         orc/OrcApp.mm
         orc/OrcSettingsWindow.mm
+        orc/OrcModesTab.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     # WDL only for its JSON parser, which RmeManager reads rme.json with. No
     # REAPER header comes in with it: WDL is a standalone utility library.
