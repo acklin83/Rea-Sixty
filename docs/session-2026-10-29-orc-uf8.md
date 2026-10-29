@@ -66,9 +66,12 @@ installiert (Hash `e731e66c`), ORC-Entwicklungsbuild in `extension/build/ORC.app
   UF8 Controls.
 - Import lief 14:11 (6 Werte), vorher nie gedrückt.
 
+## Release
+- Rea-Sixty v0.8.0 „The Return of the Son of Shut Up and Play yer UF8“ (Tag `8879ea6c`) und ORC 1.3.0
+  (Build 7, `409fab22`) veröffentlicht, mit Zwei-UF8 (Known issue: auf zwei Geräten ungetestet).
+  ReaPack, reasixty.com, ORC-Handbuch auf Pages live. Tag-Build alle vier Jobs grün.
+
 ## Offen
-- Release: Rea-Sixty zuerst (sonst bekommt ein altes Rea-Sixty den UF8 nie zurück), dann ORC
-  mit UF8. Nur mit Franks Go.
 - FLIP im TotalMix-Side-Car hat keine Belegung.
 - Gefragt, nicht gebaut: Reverb/Echo in der Kanalansicht auf alle 8 V-Pots; ob Nav-Kreuz
   links/rechts bei Frank den Submix schaltet (im Code ja).
