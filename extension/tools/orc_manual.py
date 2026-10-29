@@ -86,6 +86,12 @@ def statuses():
         out.append(m.group(1).split(",")[0].split(":")[0].strip())
     for m in re.finditer(r'st_\.error\s*=\s*"([^"]+)"', src("orc/Uf8Surface.cpp")):
         out.append(m.group(1))
+    # ORC MoreMe's line (docs/orc-phones-plan.md): summary() and the page's own errors.
+    ps = src("orc/PhonesServer.cpp")
+    body = ps[ps.index("std::string summary(const Status& st)"):]
+    body = body[:body.index("\n}")]
+    out += re.findall(r'return "([^"]+)";', body)
+    out += re.findall(r'listenErr = "([^"]+)";', ps)
     return sorted(set(s for s in out if s))
 
 
