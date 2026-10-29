@@ -284,11 +284,14 @@ Rea-Sixty-Nutzer bekommen mit 1 bis 4 schon etwas (Side-Car, Presets), bevor ORC
 | 1 Übergabe mit Quittung | `c2dfbd21` | ja |
 | 2 `Uf8Frames`, UF8-Schlaf | `52ec0e7d` | ja |
 | 3a Side-Car: ganzer linker UF8, zurück in den vorigen Modus, Shift + Layer 2/3, Bindungen v56 | `2ca11262` | ja |
-| 3b Hue/DynaMount-Maler und -Eingang herausziehen | | offen |
+| 3b Hue/DynaMount-Maler herausziehen (`Uf8ModeViews.h`), Aktionen (`ModeBuiltins`) | `dded8af3`, `12154248` | ja, mit Stufe 6 |
 | 4 DynaMount-Presets | `bfdd0544` | ja |
 | 5a `Uf8Fader.h`: Endanschläge, Bit-7-Strom, Echo, Motor-Wiederanlauf | `4298de10` | ja |
-| 5b `Uf8Cells`: die UF8-Zellen-Schreiber aus `main.cpp` (Scribble mit Latin-1, Wertzeile, dB-Anzeige, Kanalnummer, CS-Typ, V-Pot-Ring mit Positions- und Modus-Frame, Farbbalken, VU dB auf Byte, LED-Paare), `main.cpp` läuft darauf | | offen, nächster Schritt |
-| 5c `Uf8Rme`: Kanäle auf den 8 Strips (Fenster folgt Auswahl), Eingang, Ansicht; Maler über `Uf8Cells`; ORC-Surface mit UF8 | | offen |
+| 5b `Uf8Strips.h` (ein Strip als Controller, der MIDI-CC-Layer läuft darauf), Ring-Frames in `Protocol`, V-Pot-Delta und dunkle Einheit | `b825a7ac`, `8bd767f0`, `fb65e371` | ja |
+| 5c `Uf8Rme` (TotalMix auf 8 Strips, Kanalansicht), ORC fährt den UF8 | `b6d18035`, `772198d4` | ja |
+| 6 `ModeSettings` (ein Lader, Import aus ORC), ORC behält Hue/OBS/DynaMount, Standpositionen reisen mit der Übergabe, ORC-UF8: Hue- und DynaMount-Side-Car, FLIP, Soft-Key-Seiten, ORC-Reiter „Modes“ | `367b5b76`, `e73fb5e4`, `7117aa82`, `4bfd526c` | ja |
+| 7 TotalMix-Side-Car am UF8 in Rea-Sixty (Shift + Layer 1, Bindungen v57), auf `Uf8Rme` | `40b3c1e2` | ja |
+| 8 ORC-Handbuch: Kapitel UF8, Seite Modes, Menüzeile UF8; `orc_manual.py` prüft die UF8-Tasten | `d6b42dc8` | ja, Release offen |
 
 Umgestellt beim Bauen: **3b kommt mit Stufe 6**, wenn ORC Hue und DynaMount bekommt. Dann steht die
 Form des UF8-Malers aus 5b fest und die Hue/DynaMount-Maler werden nur einmal umgebaut.
@@ -302,6 +305,19 @@ Abweichungen: keine neuen Builtin-Namen `uf8_sidecar_*`, die Side-Cars bleiben `
 `selection_mode_dynamount` (sonst zwei Einträge pro Modus im Picker). Presets mit den Gesten der
 Selection-Set-Bank (`selbank::op`): Druck = anfahren, lang auf leerem Platz = speichern, Shift =
 überschreiben, Ctrl = löschen.
+In ORC (keine Tastatur): lang auf leerem Platz = speichern, FINE + Druck = überschreiben, löschen nur
+im Reiter Modes.
+
+Weitere Abweichungen beim Bauen:
+- **FLIP im TotalMix-Side-Car tut nichts.** FLIP wirkt in Hue (zweite V-Pot-Rolle) und DynaMount
+  (Fader auf Abstand). Im TotalMix-Modus ist keine Belegung entschieden.
+- **ORC-Knopf heisst „Import from REAPER“**, nennt also REAPER im ORC-Fenster (nicht Rea-Sixty).
+- **Rea-Sixty-Handbuch erwähnt ORC und das TotalMix-Side-Car nicht** (Entscheid 27.09. „Handbuch
+  ohne ORC“). Shift + Layer 1 tut ohne ORC nichts.
+- **Im ORC-Reiter fehlen Hue-Push-Rolle und „Fader unten = aus“**: Standard (Weiss an/aus, unten aus)
+  oder was der Import aus REAPER mitbringt.
+- Hue/DynaMount-V-Pot-Ringe fehlten in Rea-Sixty seit jeher (Ring-Modus 0x03 auf Strips ohne Spur),
+  mit Stufe 3 gefixt.
 
 ## 8. Entschieden (Frank 29.10.)
 
