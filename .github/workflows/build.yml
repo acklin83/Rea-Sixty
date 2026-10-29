@@ -165,6 +165,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 3   # only the release run needs them, and only that day
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact_path }}
           if-no-files-found: error
@@ -177,6 +178,7 @@ jobs:
         if: matrix.name == 'macos-x86_64'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 3   # only the release run needs them, and only that day
           name: macos-x86_64-libs
           path: |
             extension/build/libusb-1.0.0.dylib
@@ -193,6 +195,7 @@ jobs:
         if: matrix.name == 'linux-x86_64'
         uses: actions/upload-artifact@v4
         with:
+          retention-days: 3   # only the release run needs them, and only that day
           name: linux-libs
           path: |
             extension/build/libusb-1.0.so.*
