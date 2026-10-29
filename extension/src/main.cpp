@@ -113,6 +113,7 @@
 #include "Uf8ModeViews.h"
 #include "ModeBuiltins.h"
 #include "ModeSettings.h"
+#include "ModeSync.h"
 #include "Uf8Rme.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
@@ -1950,17 +1951,63 @@ static int importModesFromOrc_()
 
 // The stands' positions from ORC's receipt or from our own returned file,
 // into the DynaMount manager (by IP, without driving them).
+// ⇨ HUE, DYNAMOUNT AND OBS IN STEP WITH ORC (ModeSync.h, Frank 29.10.2026): our
+// values live in ExtState as always, each with a "<key>_stamp" beside it that
+// g_modeStamper sets when the value changes, whoever wrote it.
+static std::string modeValue_(const char* key)
+{
+    const char* v = GetExtState("rea_sixty", key);
+    return std::string(v ? v : "");
+}
+static modesync::Ms modeStamp_(const char* key)
+{
+    const char* v = GetExtState("rea_sixty", (std::string(key) + "_stamp").c_str());
+    return (v && *v) ? std::atoll(v) : 0;
+}
+static void setModeStamp_(const char* key, modesync::Ms stamp)
+{
+    SetExtState("rea_sixty", (std::string(key) + "_stamp").c_str(),
+                std::to_string(stamp).c_str(), true);
+}
+static modesync::Stamper g_modeStamper;
+
 static void orcTakeStandPositions_(const char* file)
 {
 #ifdef __APPLE__
     const std::string marker = orcHandoverPath_();
     if (marker.empty()) return;
-    const auto r = orc_handover::parseReleased(orc_handover::readFile(
-        marker.substr(0, marker.rfind('/') + 1) + file));
-    if (r.positions.empty()) return;
-    const int n = uf8::dynamount::manager().applyPositionsByIp(r.positions);
+    const std::string text = orc_handover::readFile(marker.substr(0, marker.rfind('/') + 1) + file);
+    const auto r = orc_handover::parseReleased(text);
+    if (!r.positions.empty()) {
+        const int n = uf8::dynamount::manager().applyPositionsByIp(r.positions);
+        char line[96];
+        snprintf(line, sizeof(line), "took the positions of %d stand(s) from ORC", n);
+        orcLogLine_(line);
+    }
+    // ORC's values where they are newer than ours; with no stamp on either
+    // side ORC's (ModeSync.h). Into ExtState with ORC's stamp, then into the
+    // managers, as Import from ORC does.
+    g_modeStamper.tick(modeValue_, setModeStamp_, modesync::nowMs());   // ours first
+    std::map<std::string, std::string> got;
+    for (const auto& v : modesync::parse(text)) {
+        bool known = false;
+        for (const char* k : modesettings::kImportKeys) known = known || v.key == k;
+        if (!known || !modesync::takeIncoming(modeStamp_(v.key.c_str()), v.stamp, v.value,
+                                              /*incomingIsOrc*/ true))
+            continue;
+        SetExtState("rea_sixty", v.key.c_str(), v.value.c_str(), true);
+        setModeStamp_(v.key.c_str(), v.stamp);
+        got[v.key] = v.value;
+    }
+    if (!got.empty())
+        modesettings::apply([&got](const char* key) {
+            const auto it = got.find(key);
+            return it == got.end() ? std::string() : it->second;
+        });
+    g_modeStamper.prime(modeValue_);   // what came in carries ORC's stamp
     char line[96];
-    snprintf(line, sizeof(line), "took the positions of %d stand(s) from ORC", n);
+    snprintf(line, sizeof(line), "took %d Hue/DynaMount/OBS value(s) from ORC",
+             static_cast<int>(got.size()));
     orcLogLine_(line);
 #else
     (void)file;
@@ -1977,8 +2024,11 @@ static void orcReturnStandPositions_()
     const std::string dir = marker.substr(0, marker.rfind('/') + 1);
     struct stat sb{};
     if (::stat(dir.c_str(), &sb) != 0) return;
+    // With our Hue, DynaMount and OBS values, stamped up to now (ModeSync.h).
+    g_modeStamper.tick(modeValue_, setModeStamp_, modesync::nowMs());
     orc_handover::writeFile(dir + "handover.returned",
-                            uf8::dynamount::manager().positionsByIp() + "\n");
+        orc_handover::formatReturned(uf8::dynamount::manager().positionsByIp(),
+                                     modesync::format(modesync::collect(modeValue_, modeStamp_))));
 #endif
 }
 
@@ -46461,6 +46511,8 @@ static void tickHueTransport_()
     // only follows it, once a second, so a change in ORC's settings window
     // reaches the side-car while REAPER runs.
     if ((g_tickCounter % 30) == 0) reasixty_rmeLoadConfig_(/*force*/ false);
+    // Hue, DynaMount and OBS: a value that changed gets its stamp (ModeSync.h).
+    if ((g_tickCounter % 30) == 15) g_modeStamper.tick(modeValue_, setModeStamp_, modesync::nowMs());
     // The side-car's banks, same file owner, same rate (setSideCarSource).
     if ((g_tickCounter % 30) == 0) uf8::bindings::refreshSideCarSource();
 
@@ -61653,6 +61705,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         const char* v = GetExtState("rea_sixty", key);
         return std::string(v ? v : "");
     });
+    // What is stored now is seen, not changed (ModeSync.h): no stamp for it.
+    g_modeStamper.prime(modeValue_);
     reasixty::obs::manager().start();
 
     initLog("step: load RME config");

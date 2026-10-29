@@ -10,9 +10,10 @@
 //                      Rea-Sixty that waits for ORC's receipt.
 //   orc.pid            written by ORC while it runs: "<pid>\n".
 //   handover.released  written by ORC once it has let go: "<REAPER pid>\n",
-//                      then a line of DynaMount positions ("ip,h,r,v;...").
-//   handover.returned  written by Rea-Sixty as REAPER quits: the positions line
-//                      alone, for ORC to take over.
+//                      then a line of DynaMount positions ("ip,h,r,v;..."),
+//                      then ORC's Hue/DynaMount/OBS values (ModeSync.h).
+//   handover.returned  written by Rea-Sixty as REAPER quits: the positions line,
+//                      then its values, for ORC to take over.
 //
 // Plan: docs/orc-uf8-plan.md, section 5.
 
@@ -60,30 +61,50 @@ inline int parsePid(const std::string& text)
     return pid;
 }
 
+// The line of a text after `skip` newlines, without its line end. Lines of the
+// mode values ("M\t...", ModeSync.h) are not positions: an empty string then.
+inline std::string lineAfter(const std::string& text, int skip)
+{
+    std::size_t pos = 0;
+    for (int i = 0; i < skip; ++i) {
+        const auto nl = text.find('\n', pos);
+        if (nl == std::string::npos) return {};
+        pos = nl + 1;
+    }
+    std::string line = text.substr(pos, text.find('\n', pos) - pos);
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    return line.rfind("M\t", 0) == 0 ? std::string() : line;
+}
+
 // The receipt with the stands' positions: the pid on the first line (older
-// readers stop there), the positions on the second.
+// readers stop there), the positions on the second, the mode values below
+// (`modes`, ModeSync::format).
 struct Released {
     int         pid = 0;
     std::string positions;
 };
 
-inline std::string formatReleased(int pid, const std::string& positions)
+inline std::string formatReleased(int pid, const std::string& positions,
+                                  const std::string& modes = {})
 {
-    return formatPid(pid) + positions + "\n";
+    return formatPid(pid) + positions + "\n" + modes;
 }
 
 inline Released parseReleased(const std::string& text)
 {
     Released r;
-    r.pid = parsePid(text);
-    const auto nl = text.find('\n');
-    if (nl != std::string::npos) {
-        std::string rest = text.substr(nl + 1);
-        while (!rest.empty() && (rest.back() == '\n' || rest.back() == '\r')) rest.pop_back();
-        r.positions = rest;
-    }
+    r.pid       = parsePid(text);
+    r.positions = lineAfter(text, 1);
     return r;
 }
+
+// handover.returned: the positions on the first line, the mode values below.
+inline std::string formatReturned(const std::string& positions, const std::string& modes = {})
+{
+    return positions + "\n" + modes;
+}
+
+inline std::string returnedPositions(const std::string& text) { return lineAfter(text, 0); }
 
 // Whole small file into a string; empty when it is not there.
 inline std::string readFile(const std::string& path)

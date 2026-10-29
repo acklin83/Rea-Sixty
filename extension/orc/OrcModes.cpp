@@ -3,6 +3,7 @@
 #include "DynaMountManager.h"
 #include "HueManager.h"
 #include "ModeSettings.h"
+#include "ModeSync.h"
 #include "ObsManager.h"
 #include "OrcConfig.h"
 #include "OrcHandover.h"
@@ -27,11 +28,23 @@ std::string read(const char* key)
     return v;
 }
 
-void write(const char* key, const std::string& value)
+long long stamp(const char* key)
+{
+    return std::atoll(orc_handover::readFile(dir() + "/" + key + ".stamp").c_str());
+}
+
+void write(const char* key, const std::string& value, long long st)
 {
     // A newline would cut the value when Rea-Sixty imports it into ExtState.
     if (value.find('\n') != std::string::npos) return;
+    if (value == read(key)) return;   // unchanged: no write, no new stamp
     orc_handover::writeFile(dir() + "/" + key, value);
+    orc_handover::writeFile(dir() + "/" + key + ".stamp", std::to_string(st));
+}
+
+void write(const char* key, const std::string& value)
+{
+    write(key, value, modesync::nowMs());
 }
 
 void load()
@@ -92,6 +105,33 @@ int importFromReaper()
     }
     if (n > 0) modesettings::apply([](const char* key) { return read(key); });
     orc::logLine("ORC: imported %d mode setting(s) from REAPER\n", n);
+    return n;
+}
+
+std::string syncOut()
+{
+    saveIfDirty();
+    return modesync::format(modesync::collect([](const char* k) { return read(k); },
+                                              [](const char* k) { return stamp(k); }));
+}
+
+int syncIn(const std::string& returned)
+{
+    // ORC's own edits made while REAPER held the surfaces are stamped first, so
+    // they win where they are the newer.
+    saveIfDirty();
+    int n = 0;
+    for (const auto& v : modesync::parse(returned)) {
+        bool known = false;
+        for (const char* k : modesettings::kImportKeys) known = known || v.key == k;
+        if (!known) continue;
+        if (!modesync::takeIncoming(stamp(v.key.c_str()), v.stamp, v.value, /*incomingIsOrc*/ false))
+            continue;
+        write(v.key.c_str(), v.value, v.stamp);
+        ++n;
+    }
+    if (n > 0) modesettings::apply([](const char* key) { return read(key); });
+    orc::logLine("ORC: took %d Hue/DynaMount/OBS value(s) from REAPER\n", n);
     return n;
 }
 

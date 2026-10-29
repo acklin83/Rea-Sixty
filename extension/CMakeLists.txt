@@ -1064,6 +1064,12 @@ if(NOT WIN32)
     endif()
     add_test(NAME mode_settings COMMAND test_mode_settings)
 
+    # Hue, DynaMount and OBS in step between ORC and Rea-Sixty at the handover
+    # (ModeSync.h): the lines, who wins, the stamps. Header-only.
+    add_executable(test_mode_sync tests/test_mode_sync.cpp)
+    target_include_directories(test_mode_sync PRIVATE src)
+    add_test(NAME mode_sync COMMAND test_mode_sync)
+
     # SHA-256 against the FIPS vectors, the login string against the shape the
     # obs-websocket document spells out, and the message parsers against real
     # frames. All of it pure: no socket is opened by this test.

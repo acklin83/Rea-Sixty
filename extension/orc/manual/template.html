@@ -190,9 +190,12 @@ ORC installed.</p>
 <p>ORC keeps the settings and Rea-Sixty reads them: pot targets, soft-key banks, colours, STRIP
 pages. Change them in ORC and REAPER picks them up. Without ORC installed, Rea-Sixty offers no
 TotalMix view at all.</p>
-<p>Hue, DynaMount and OBS are set up in each program on its own, so each works without the other.
-<em>Import from REAPER</em> on the <a href="#set-modes">UF8 Modes</a> page copies Rea-Sixty's settings
-into ORC, and Rea-Sixty has <em>Import from ORC</em> on its Hue, OBS and DynaMount pages.</p>
+<p>Hue, DynaMount and OBS are kept by each program on its own, so each works without the other,
+and they are brought in step at every handover: when REAPER takes the surfaces, Rea-Sixty takes
+every setting that was changed in ORC since; when REAPER quits, ORC takes every one changed in
+REAPER. The newer change wins. A setting nobody has changed since this came in is ORC's on the first
+handover. <em>Import from REAPER</em> on the <a href="#set-modes">UF8 Modes</a> page and
+<em>Import from ORC</em> on Rea-Sixty's Hue, OBS and DynaMount pages copy everything at once.</p>
 </section>
 
 <section id="menubar">
@@ -1078,8 +1081,9 @@ takes the action's own.</td></tr>
 </tbody></table>
 <h3 id="set-modes">UF8 Modes</h3>
 <p>Hue (LAYER 2) and DynaMount (LAYER 3) for the UF8, and OBS for the OBS scenes banks, which the
-UF1 shows too. <em>Import from REAPER</em> copies the Hue, DynaMount and OBS
-settings Rea-Sixty keeps in REAPER into ORC, once.</p>
+UF1 shows too. They follow Rea-Sixty's at every handover
+(<a href="#reasixty">ORC and Rea-Sixty</a>). <em>Import from REAPER</em> copies all of Rea-Sixty's
+Hue, DynaMount and OBS settings into ORC at once.</p>
 <table class="data"><tbody>
 <tr><th>OBS</th><td><em>Talk to OBS</em>, host, port and password of OBS's WebSocket server (in OBS
 under Tools, WebSocket Server Settings).</td></tr>
@@ -1143,7 +1147,7 @@ and the STRIP pages.</td></tr>
 <tr><th><code>~/Library/Application Support/ORC/orc.json</code></th><td>The soft-key banks and the
 transport keys.</td></tr>
 <tr><th><code>~/Library/Application Support/ORC/modes</code></th><td>Hue, DynaMount and OBS, one file
-per value, and where the stands stand.</td></tr>
+per value with the time of its last change beside it, and where the stands stand.</td></tr>
 <tr><th><code>/tmp/orc.log</code></th><td>ORC's log. Useful with a bug report.</td></tr>
 </tbody></table>
 <p>To start from scratch, quit ORC and remove the folder <code>~/Library/Application Support/ORC</code>.</p>

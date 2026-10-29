@@ -3,6 +3,7 @@
 // copies.
 
 #include "ModeSettings.h"
+#include "DynaMountManager.h"
 
 #include <cstdio>
 #include <string>
@@ -39,6 +40,16 @@ int main()
     bool state = false;
     for (const char* k : modesettings::kImportKeys) state = state || std::string(k) == "dynamount_state";
     EXPECT(!state);
+
+    // ⇨ A GETTER WITHOUT A FILL LEAVES THE DIRECTION ALONE (an import or a
+    // handover that brings only some values, ModeSync.h).
+    {
+        auto& dm = uf8::dynamount::manager();
+        modesettings::apply([](const char* k) { return std::string(k) == "dynamount_fill" ? std::string("R") : std::string(); });
+        EXPECT(dm.fillDir() == uf8::dynamount::FillDir::Right);
+        modesettings::apply([](const char*) { return std::string(); });
+        EXPECT(dm.fillDir() == uf8::dynamount::FillDir::Right);
+    }
 
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
     std::printf("mode_settings: all passed\n");

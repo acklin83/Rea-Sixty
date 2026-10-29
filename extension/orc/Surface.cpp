@@ -3,6 +3,7 @@
 
 #include "OrcConfig.h"
 #include "OrcLight.h"
+#include "OrcHandover.h"
 #include "OrcModes.h"
 #include "DynaMountManager.h"
 #include "Uf1SoftKeys.h"
@@ -447,10 +448,16 @@ void Surface::loop_()
                     lastOpenTry = now - std::chrono::seconds(5);   // try at once
                     orc::clearReleased();
                     released = false;
-                    // The stands are where REAPER left them (handover.returned).
+                    // The stands are where REAPER left them (handover.returned),
+                    // and Hue, DynaMount and OBS as REAPER last had them where
+                    // that is newer (ModeSync.h).
                     if (const std::string back = orc::takeReturned(); !back.empty()) {
-                        const int n = uf8::dynamount::manager().applyPositionsByIp(back);
-                        orc::logLine("ORC: took the positions of %d stand(s) back from REAPER\n", n);
+                        const std::string pos = orc_handover::returnedPositions(back);
+                        if (!pos.empty()) {
+                            const int n = uf8::dynamount::manager().applyPositionsByIp(pos);
+                            orc::logLine("ORC: took the positions of %d stand(s) back from REAPER\n", n);
+                        }
+                        orc::modes::syncIn(back);
                     }
                     orc::modes::startWorkers();
                 }
@@ -475,7 +482,8 @@ void Surface::loop_()
                 if (!released) {
                     const int pid = orc::reaperMarkerPid();
                     if (pid > 0) {
-                        orc::markReleased(pid, uf8::dynamount::manager().positionsByIp());
+                        orc::markReleased(pid, uf8::dynamount::manager().positionsByIp(),
+                                          orc::modes::syncOut());
                         released = true;
                         orc::logLine("ORC: released the surfaces to REAPER pid %d\n", pid);
                         std::fflush(stdout);

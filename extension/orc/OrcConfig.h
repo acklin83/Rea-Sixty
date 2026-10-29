@@ -73,9 +73,11 @@ void removeOrcPid();
 int reaperMarkerPid();
 // 2 for a marker with the "v2" line, 1 for a pid-only marker, 0 for none.
 int reaperMarkerVersion();
-// With the DynaMount positions ("ip,h,r,v;...") on a second line.
-void markReleased(int reaperPid, const std::string& positions = {});
-// Rea-Sixty's positions as REAPER quit (handover.returned), then removed.
+// With the DynaMount positions ("ip,h,r,v;...") on a second line and ORC's
+// Hue/DynaMount/OBS values below (ModeSync.h).
+void markReleased(int reaperPid, const std::string& positions = {}, const std::string& modes = {});
+// What Rea-Sixty left as REAPER quit (handover.returned): its positions and its
+// values (orc_handover::returnedPositions, ModeSync::parse); then removed.
 std::string takeReturned();
 void clearReleased();
 

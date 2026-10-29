@@ -16,9 +16,13 @@ void apply(const Get& get)
         uf8::dynamount::DynaMountManager& dm = uf8::dynamount::manager();
         if (const std::string blob = get("dynamount_devices"); !blob.empty())
             dm.deserialize(blob);
-        const std::string fill = get("dynamount_fill");
-        dm.setFillDir((!fill.empty() && fill[0] == 'R') ? uf8::dynamount::FillDir::Right
-                                                        : uf8::dynamount::FillDir::Left);
+        // Only a stored direction: a getter without one (an import, a handover
+        // that brings some values, ModeSync.h) leaves the direction alone
+        // instead of turning a right fill to the left. Never stored = left,
+        // the manager's own default.
+        if (const std::string fill = get("dynamount_fill"); !fill.empty())
+            dm.setFillDir(fill[0] == 'R' ? uf8::dynamount::FillDir::Right
+                                         : uf8::dynamount::FillDir::Left);
         if (const std::string pr = get("dynamount_presets"); !pr.empty())
             dm.deserializePresets(pr);
         dm.takePresetsDirty();   // loading is not an edit
