@@ -862,6 +862,12 @@ if(NOT WIN32)
     target_include_directories(test_midi_cc_bindings PRIVATE src "${WDL_DIR}")
     target_link_libraries(test_midi_cc_bindings PRIVATE Threads::Threads)
     add_test(NAME midi_cc_bindings COMMAND test_midi_cc_bindings)
+    # Shift + Layer 2 / 3 = the Hue / DynaMount UF8 side-car (factory, v56 upgrade).
+    add_executable(test_sidecar_keys tests/test_sidecar_keys.cpp
+        src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp)
+    target_include_directories(test_sidecar_keys PRIVATE src "${WDL_DIR}")
+    target_link_libraries(test_sidecar_keys PRIVATE Threads::Threads)
+    add_test(NAME sidecar_keys COMMAND test_sidecar_keys)
 
     # Sleep: the clock Rea-Sixty and ORC share, the UF1's lights, the waking press
     # (SurfaceSleep.h).

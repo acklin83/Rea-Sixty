@@ -2180,6 +2180,8 @@ inline std::string readTrackPExt_(MediaTrack* tr, const char* key)
 // `selection_mode_*` builtins (registered in registerBindingHandlers).
 enum class SelectionMode : uint8_t { Norm = 0, Rec, RecMon, Auto, Instance, InstanceCycle, DynaMount, Hue };
 std::atomic<SelectionMode> g_selectionMode{SelectionMode::Norm};
+// The REAPER selection mode a UF8 side-car (Hue, DynaMount) returns to.
+std::atomic<SelectionMode> g_selModeBeforeSideCar{SelectionMode::Norm};
 // Come back as Normal after a REAPER restart (Settings → Behaviour → Selection
 // mode). The mode itself is still persisted; this only decides whether the
 // stored value is READ at startup — see the loader for why that distinction
@@ -2734,45 +2736,21 @@ inline MediaTrack* visibleTrackAt(int idx) {
 // negative slots, so existing null-check callers stay correct without
 // extra guards.
 inline int stripToVisibleSlot(int strip, int bankOffset) {
-    // DynaMount mode: the enabled mounts pin N physical strips to one side
-    // (Left → strips 0..N-1, Right → strips 8-N..7); those strips control
-    // robotic mounts, not tracks, so they return -1 here. The remaining
-    // strips show tracks with the window PUSHED past the reserved block, so
-    // the mounts don't consume track slots — same idea as AUTO fill, but the
-    // reservation is a fixed count (N) instead of right-padding. Composes
-    // ahead of Master-pin / sticky (those aren't expected to combine with
-    // DynaMount mode).
+    // ⇨ DYNAMOUNT AND HUE ARE UF8 SIDE-CARS (Frank 29.10.2026, docs/orc-uf8-plan.md
+    // section 3): the mode has the whole left UF8. Its defined rows sit on N
+    // strips at one end (mountForStrip / slotForStrip, Left 0..N-1 or Right
+    // 8-N..7) and every other strip of that unit is dark rather than a track,
+    // so the surface reads the same as in ORC, where there are no tracks. A
+    // right-hand UF8 keeps showing tracks, from the bank's start (Tim's rule:
+    // modes only on the left unit). Until 29.10. the other left strips showed
+    // tracks pushed past the reserved block.
     if (g_selectionMode.load() == SelectionMode::DynaMount) {
-        auto& dm = uf8::dynamount::manager();
-        const int n = dm.definedCount();
-        if (n > 0) {
-            if (dm.mountForStrip(strip) >= 0) return -1;  // mount strip, no track
-            const bool right = dm.fillDir() == uf8::dynamount::FillDir::Right;
-            // Right-anchored mounts sit on strips 8-N..7, so the left strips
-            // 0..7-N map 1:1 onto tracks. Left-anchored mounts sit on 0..N-1,
-            // so track strips start at N and shift down by N. The mounts stay on
-            // the left UF8; a right-hand unit's strips come after them either
-            // way, so they shift down by N too.
-            const int tpos = (right && strip < 8) ? strip : (strip - n);
-            return tpos + bankOffset;
-        }
+        if (strip < 8) return -1;   // a mount strip, or dark: no track either way
+        return (strip - 8) + bankOffset;
     }
-    // Hue mode: the same reservation, one floor up. The defined lamp slots pin
-    // N strips to one side and those strips carry lights instead of tracks, so
-    // they return -1 here and the remaining strips show the bank pushed past
-    // the reserved block. Deliberately a copy of the DynaMount branch rather
-    // than a shared helper: the two modes are mutually exclusive (one
-    // SelectionMode) and folding them together would only hide which one is
-    // holding a strip when something goes wrong.
     if (g_selectionMode.load() == SelectionMode::Hue) {
-        auto& hm = uf8::hue::manager();
-        const int n = hm.definedCount();
-        if (n > 0) {
-            if (hm.slotForStrip(strip) >= 0) return -1;   // lamp strip, no track
-            const bool right = hm.fillDir() == uf8::hue::HueManager::FillDir::Right;
-            const int tpos = (right && strip < 8) ? strip : (strip - n);   // see DynaMount
-            return tpos + bankOffset;
-        }
+        if (strip < 8) return -1;   // a lamp strip, or dark
+        return (strip - 8) + bankOffset;
     }
     // Unified reservation that composes Master-pin Shift + the sticky pin
     // head (Focus Set ∪ honoured TCP pins) + banking, left to right:
@@ -7521,12 +7499,15 @@ bool uf1ExtenderActive_()
 // heraus, die Flaeche zeigte die ersten fuenf und die letzten drei waren mit
 // keinem Tastendruck erreichbar (Frank 23.09.: "sind weg"). Das Handbuch
 // versprach genau das Gegenteil.
+// Seit 29.10.2026 sind beide Modi UF8-Side-Cars: sie halten den ganzen linken UF8
+// (stripToVisibleSlot), also sind dort acht Strips ohne Spur, egal wie viele Zeilen
+// definiert sind. Die Klemme bleibt: mit einem UF8 bleibt ein Bankschritt uebrig,
+// den nur ein UF1-Extender oder ein rechter UF8 sieht.
 int bankReservedStrips_()
 {
     const auto m = g_selectionMode.load();
     int n = 0;
-    if (m == SelectionMode::DynaMount) n = uf8::dynamount::manager().definedCount();
-    else if (m == SelectionMode::Hue)  n = uf8::hue::manager().definedCount();
+    if (m == SelectionMode::DynaMount || m == SelectionMode::Hue) n = 8;
     return std::clamp(n, 0, effectiveStripCount_() - 1);   // mindestens ein Track-Strip
 }
 
@@ -57674,8 +57655,22 @@ void registerBindingHandlers()
                 [mode](bool firing, bool /*pressed*/, int /*param*/) {
                     if (!firing) return;
                     const auto cur  = g_selectionMode.load();
-                    const auto next = (cur == mode) ? SelectionMode::Norm
-                                                    : mode;
+                    // ⇨ A UF8 SIDE-CAR (Hue, DynaMount; Frank 29.10.2026) goes
+                    // back where it came from: the REAPER mode before it, REC
+                    // or AUTO included, not Norm. Switching side-car to side-car
+                    // keeps that way back.
+                    auto sideCar = [](SelectionMode m) {
+                        return m == SelectionMode::Hue || m == SelectionMode::DynaMount;
+                    };
+                    SelectionMode next;
+                    if (cur == mode) {
+                        next = sideCar(mode) ? g_selModeBeforeSideCar.load()
+                                             : SelectionMode::Norm;
+                    } else {
+                        next = mode;
+                        if (sideCar(mode) && !sideCar(cur))
+                            g_selModeBeforeSideCar.store(cur);
+                    }
                     // Leaving Auto SEL mode → revert any selset-armed
                     // tracks back to Trim/Read AND scroll the surface
                     // back to the selected track. The selset auto-mode
@@ -57759,18 +57754,20 @@ void registerBindingHandlers()
                                 SelectionMode::InstanceCycle,
                                 "Selection Mode → Instance Cycle (V-Pot)");
 
-    // DynaMount Mode — the enabled mounts (Settings → Modes → DYNA) pin N
-    // strips to one side; their faders drive distance / left-right (FLIP
-    // swaps the axis) and their V-Pots nudge rotation. The remaining strips
-    // stay normal tracks (banked past the reserved block).
+    // DynaMount Mode, a UF8 side-car — the enabled mounts (Settings → Modes →
+    // DYNA) sit on N strips at one end; their faders drive distance /
+    // left-right (FLIP swaps the axis) and their V-Pots nudge rotation. The
+    // rest of the left UF8 is dark (since 29.10.2026; it used to show tracks).
+    // Pressed again it returns to the REAPER mode it came from.
     registerSelectionModeToggle("selection_mode_dynamount",
                                 SelectionMode::DynaMount,
                                 "Selection Mode → DynaMount");
 
-    // Hue Mode — the defined lamp slots (Settings → Modes → Hue) pin N strips
-    // to one side; their faders are brightness, their V-Pots the colour axis,
-    // CUT is on/off, SOLO is a light solo and SEL picks the UF1's focus lamp.
-    // The remaining strips stay normal tracks.
+    // Hue Mode, a UF8 side-car — the defined lamp slots (Settings → Modes →
+    // Hue) sit on N strips at one end; their faders are brightness, their
+    // V-Pots the colour axis, CUT is on/off, SOLO is a light solo and SEL picks
+    // the UF1's focus lamp. The rest of the left UF8 is dark (since 29.10.2026).
+    // Pressed again it returns to the REAPER mode it came from.
     registerSelectionModeToggle("selection_mode_hue",
                                 SelectionMode::Hue,
                                 "Selection Mode → Hue");

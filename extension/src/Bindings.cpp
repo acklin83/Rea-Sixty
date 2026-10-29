@@ -863,6 +863,29 @@ Binding mkBuiltin(const char* name, Behavior b, const char* label,
     return bd;
 }
 
+// Shift + Layer 2 / 3 enter the Hue / DynaMount side-car, where that Shift
+// slot is still empty: the factory and the v56 upgrade both come through here,
+// so an install that already put something there keeps it. (An empty Shift slot
+// falls back to the Plain one, the layer switch: empty-modifier-slot rule.)
+bool slotIsEmpty_(const ActionSlot& s);   // below, with the slot helpers
+void seedShiftLayerSideCars_(std::unordered_map<ButtonId, Binding>& L)
+{
+    const int S = static_cast<int>(Modifier::Shift);
+    const struct { ButtonId id; const char* action; } kSeed[] = {
+        { ButtonId::Layer2, "selection_mode_hue" },
+        { ButtonId::Layer3, "selection_mode_dynamount" },
+    };
+    for (const auto& k : kSeed) {
+        auto it = L.find(k.id);
+        if (it == L.end()) continue;   // no layer key here, nothing to add to
+        auto& sh = it->second.shortPress[S];
+        if (!slotIsEmpty_(sh)) continue;
+        sh.type   = ActionType::Builtin;
+        sh.action = k.action;
+        sh.param  = 0;
+    }
+}
+
 // ⛔ A DERIVED SLOT SHOWS WHAT THE KEY DOES — IT DOES NOT SIT THERE EMPTY.
 // The UF1's per-view keys (5-8, the two page arrows, the SOFT key × Plugin /
 // DAW / Meter / Sends) and the per-mode nav cross (five keys × six jog modes)
@@ -1171,6 +1194,10 @@ void seedFactoryDefaults_(Config& c)
         L[ButtonId::Layer1] = mkBuiltin("layer_select_1", Behavior::Momentary, "LAYER 1");
         L[ButtonId::Layer2] = mkBuiltin("layer_select_2", Behavior::Momentary, "LAYER 2");
         L[ButtonId::Layer3] = mkBuiltin("layer_select_3", Behavior::Momentary, "LAYER 3");
+        // ⇨ SHIFT + LAYER = THE UF8 SIDE-CARS (Frank 29.10.2026,
+        // docs/orc-uf8-plan.md 2.2): 2 Hue, 3 DynaMount; 1 is TotalMix once the
+        // UF8 has it in REAPER. The same keys as in ORC, where Layer alone does it.
+        seedShiftLayerSideCars_(L);
     }
 
     auto& L1 = c.layers[0].bindings;
@@ -3698,7 +3725,9 @@ bool invokeBuiltin(const std::string& name, int param)
 // v52 (2026-10-01): the jog mode and the encoder mode Lanes. The UF1 cross gets
 // its five Lanes slots (upgradeBackfillUf1Buttons_ fills missing kNavSeed ids,
 // green like the rest of the cross), the UF8 its Lanes cross on every layer.
-constexpr int kCurrentBindingsVersion = 55;
+// v56 (2026-10-29): Shift + Layer 2 / 3 enter the Hue / DynaMount UF8
+// side-car, where that Shift slot is still empty (seedShiftLayerSideCars_).
+constexpr int kCurrentBindingsVersion = 56;
 
 // v7→v8: restore Layer-1 Q1/Q2 to the SSL CS/BC Momentary builtins.
 // Only touches bindings that exactly match the v7 factory swap (so
@@ -5009,6 +5038,9 @@ void load()
             }
             if (tmp.version < 55) {
                 upgradeLanesCompHereToShift_(tmp);
+            }
+            if (tmp.version < 56) {
+                for (Layer& L : tmp.layers) seedShiftLayerSideCars_(L.bindings);
             }
             // Belt-and-suspenders sanitize. Always runs, regardless of
             // version, so any stale references to removed builtins
@@ -8826,9 +8858,9 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "on that track, so Strip Mode and Plug-in Mode follow along. Does "
       "nothing on a track with fewer than two." },
     { "selection_mode_dynamount",
-      "The enabled robotic mic stands take over N strips: fader drives "
-      "distance or left-right, V-Pot nudges rotation. The rest stay "
-      "ordinary tracks." },
+      "The left UF8 becomes the robotic mic stands: one strip per stand, fader "
+      "drives distance or left-right, V-Pot nudges rotation. Press again to go "
+      "back to the mode you came from." },
     { "encoder_mode_dispatch",
       "Runs whatever the Channel Encoder's current mode says. This is the "
       "action the encoder itself carries; the modes below choose what it "
@@ -9161,8 +9193,9 @@ static const BuiltinDoc kBuiltinDocs[] = {
       "Starts the Hue scene given as the parameter, 1 to 8, and lets it keep "
       "moving rather than landing on one still state." },
     { "selection_mode_hue",
-      "Selection Mode where the strips drive the lamps: the V-Pots take hue, "
-      "saturation and brightness, and the SEL keys pick which lamp." },
+      "The left UF8 becomes the lamps: one strip per lamp, fader is "
+      "brightness, V-Pot the colour, SEL picks which lamp. Press again to go "
+      "back to the mode you came from." },
     { "uf1_hue",
       "Puts the UF1's own controls on the lamps - its V-Pots take the three "
       "axes, so the light is adjustable without the UF8." },

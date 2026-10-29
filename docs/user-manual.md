@@ -461,7 +461,7 @@ The right UF8 shows the page after the left one, with its own controls and value
 
 - The marker list of Nav Mode. The right UF8 keeps showing its tracks.
 - The encoder-mode picker, also when you open it from the right unit.
-- DynaMount mounts and Hue lamps. They take strips of the left UF8, and the right one shows the tracks that follow.
+- DynaMount and Hue. They take the whole left UF8; the right one shows tracks from the start of the bank.
 - Touch to Learn learns from the controls of the left UF8 only.
 
 ## The UF1 as Extender
@@ -2948,11 +2948,9 @@ DynaMount makes robotic microphone stands. In DynaMount mode the UF8 strips driv
 
 ## Engaging the mode
 
-Bind **Selection Mode → DynaMount** to a button; it toggles like every other Selection Mode. There is no switch in Settings — the Dynamount tab configures the stands, it does not turn the mode on.
+Press **Shift + LAYER 3**, with Shift on the computer keyboard or the UF1's SHIFT. Press it again to go back to the mode you came from, REC or AUTO included. The action behind it is **Selection Mode → DynaMount**, and you can put it on any other key. There is no switch in Settings: the Dynamount tab configures the stands, it does not turn the mode on.
 
-With no mounts enabled the mode does nothing at all, and every strip stays a track.
-
-Enabled mounts pin to one end of the surface and carry no track. The other strips remain ordinary track strips and keep the project order: two mounts mean six track strips, and the bank buttons reach the rest of the session as usual.
+DynaMount mode takes the whole left UF8. Each enabled mount sits on one strip at the end you chose with Fill; the other strips of the left UF8 are dark. A right-hand UF8 keeps showing tracks.
 
 ## Driving a mount
 
@@ -3029,9 +3027,9 @@ A room or zone appears in the list only if it has lamps in it. An empty room can
 
 ## Engaging the mode
 
-Bind **Selection Mode → Hue** to a button. It toggles like every other Selection Mode, and there is no switch in Settings: the Hue tab configures the lamps, it does not turn the mode on.
+Press **Shift + LAYER 2**, with Shift on the computer keyboard or the UF1's SHIFT. Press it again to go back to the mode you came from, REC or AUTO included. The action behind it is **Selection Mode → Hue**, and you can put it on any other key. There is no switch in Settings: the Hue tab configures the lamps, it does not turn the mode on.
 
-With no lamps enabled the mode does nothing and every strip stays a track. Enabled lamps pin to one end of the surface, and the tracks keep their order on the strips that are left: three lamps mean five track strips, and the bank buttons reach the rest of the session as usual.
+Hue mode takes the whole left UF8. Each enabled lamp sits on one strip at the end you chose with Fill; the other strips of the left UF8 are dark. A right-hand UF8 keeps showing tracks.
 
 ## Driving a lamp from the UF8
 
