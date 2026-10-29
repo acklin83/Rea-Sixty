@@ -53,6 +53,18 @@ int main()
     EXPECT(parsePid("x") == 0);
     EXPECT(parsePid("0\n") == 0);
 
+    // The receipt carries the stands' positions on its second line; an older
+    // reader still finds the pid first.
+    {
+        const std::string t = formatReleased(4711, "10.0.0.1,10,90,50;10.0.0.2,0,45,30;");
+        EXPECT(parsePid(t) == 4711);
+        const Released r = parseReleased(t);
+        EXPECT(r.pid == 4711);
+        EXPECT(r.positions == "10.0.0.1,10,90,50;10.0.0.2,0,45,30;");
+        EXPECT(parseReleased("4711\n").positions.empty());   // ORC without stands
+        EXPECT(parseReleased(formatPid(9)).pid == 9);
+    }
+
     // Through the file system, as the two programs do it.
     {
         char tmpl[] = "/tmp/orc_handover_testXXXXXX";

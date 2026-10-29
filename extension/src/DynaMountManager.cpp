@@ -364,6 +364,44 @@ void DynaMountManager::deserializePresets(const std::string& s) {
     presets_ = std::move(next);
 }
 
+// ---- positions between programs ---------------------------------------------
+
+std::string DynaMountManager::positionsByIp() {
+    std::ostringstream os;
+    std::lock_guard<std::mutex> lk(cfgMx_);
+    for (int i = 0; i < kMaxMounts; ++i) {
+        const Mount& m = mounts_[i];
+        if (!m.enabled || m.ip.empty()) continue;
+        os << scrubPresetName(m.ip) << ',' << m.tgtH.load() << ',' << m.tgtR.load()
+           << ',' << m.tgtV.load() << ';';
+    }
+    return os.str();
+}
+
+int DynaMountManager::applyPositionsByIp(const std::string& s) {
+    int n = 0;
+    std::istringstream is(s);
+    std::string rec;
+    while (std::getline(is, rec, ';')) {
+        std::vector<std::string> v;
+        std::istringstream rs(rec);
+        std::string x;
+        while (std::getline(rs, x, ',')) v.push_back(x);
+        if (v.size() != 4 || v[0].empty()) continue;
+        int idx = -1;
+        {
+            std::lock_guard<std::mutex> lk(cfgMx_);
+            for (int i = 0; i < kMaxMounts; ++i)
+                if (mounts_[i].enabled && mounts_[i].ip == v[0]) { idx = i; break; }
+        }
+        if (idx < 0) continue;
+        setTargets(idx, std::atoi(v[1].c_str()), std::atoi(v[2].c_str()),
+                   std::atoi(v[3].c_str()), /*markDirty=*/false);
+        ++n;
+    }
+    return n;
+}
+
 // ---- singleton --------------------------------------------------------------
 
 DynaMountManager& manager() {

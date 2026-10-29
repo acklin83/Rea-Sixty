@@ -160,6 +160,15 @@ public:
     std::string serializePresets();
     void deserializePresets(const std::string& s);
 
+    // ---- Positions between programs (docs/orc-uf8-plan.md section 5) --------
+    // The stands report no position, so whoever drove them last must hand its
+    // numbers to the one that takes over: "ip,h,r,v;" per enabled stand. Applied
+    // only to a stand with the same IP here (two differently set-up programs
+    // must not assign each other's stands), and without driving it: it is
+    // already standing there. Returns how many stands took a position.
+    std::string positionsByIp();
+    int applyPositionsByIp(const std::string& s);
+
     // ---- Persistence (pure; REAPER-free, unit-tested) ----------------------
     // Compact tab/newline-delimited form of the mount config + calibration.
     // Fill direction is persisted separately by the caller.

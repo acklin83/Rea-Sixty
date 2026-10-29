@@ -80,10 +80,19 @@ int reaperMarkerVersion()
     return orc_handover::parseMarker(orc_handover::readFile(supportDir() + "/handover")).version;
 }
 
-void markReleased(int reaperPid)
+void markReleased(int reaperPid, const std::string& positions)
 {
     orc_handover::writeFile(supportDir() + "/handover.released",
-                            orc_handover::formatPid(reaperPid));
+                            orc_handover::formatReleased(reaperPid, positions));
+}
+
+std::string takeReturned()
+{
+    const std::string path = supportDir() + "/handover.returned";
+    std::string t = orc_handover::readFile(path);
+    std::remove(path.c_str());
+    while (!t.empty() && (t.back() == '\n' || t.back() == '\r')) t.pop_back();
+    return t;
 }
 
 void clearReleased()

@@ -73,7 +73,10 @@ void removeOrcPid();
 int reaperMarkerPid();
 // 2 for a marker with the "v2" line, 1 for a pid-only marker, 0 for none.
 int reaperMarkerVersion();
-void markReleased(int reaperPid);
+// With the DynaMount positions ("ip,h,r,v;...") on a second line.
+void markReleased(int reaperPid, const std::string& positions = {});
+// Rea-Sixty's positions as REAPER quit (handover.returned), then removed.
+std::string takeReturned();
 void clearReleased();
 
 } // namespace orc

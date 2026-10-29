@@ -1216,6 +1216,7 @@ if(APPLE)
         # OrcSettingsWindow have AppKit and neither of the other two.
         orc/Surface.cpp
         orc/Uf8Surface.cpp
+        orc/OrcModes.cpp
         orc/OrcConfig.cpp
         orc/OrcApp.mm
         orc/OrcSettingsWindow.mm

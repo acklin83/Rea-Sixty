@@ -45,6 +45,8 @@
 #include "BindingsHost.h"
 #include "LogPath.h"
 #include "OrcConfig.h"
+#include "OrcModes.h"
+#include "ModeBuiltins.h"
 #include "OrcUi.h"
 #include "RmeManager.h"
 #include "Surface.h"
@@ -101,6 +103,12 @@ int main()
     uf8::bindings::load();
     orc::logLine("ORC: bindings from %s\n", uf8::bindings::configPath().c_str());
 
+    // ⇨ HUE, OBS, DYNAMOUNT (docs/orc-uf8-plan.md stage 6): ORC's own files,
+    // and the actions the extension registers, from the same file. No
+    // recording light: it follows REAPER's record state (Frank 29.10.2026).
+    orc::modes::load();
+    reasixty::modes::registerBuiltins(reasixty::modes::BuiltinHost{});
+
     // The link's settings, ORC's own copy of them. ⛔ Not the extension's file:
     // one writer per file (Frank, 2026-09-25). See OrcConfig.h.
     rme::Config cfg;
@@ -138,6 +146,8 @@ int main()
 
     surface.stop();
     rme::manager().stop();
+    orc::modes::saveIfDirty();
+    orc::modes::stopWorkers();
     orc::removeOrcPid();
     orc::clearReleased();
     orc::logLine("ORC: closed.\n");

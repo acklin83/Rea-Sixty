@@ -2,6 +2,8 @@
 #include "Surface.h"
 
 #include "OrcConfig.h"
+#include "OrcModes.h"
+#include "DynaMountManager.h"
 #include "Uf1SoftKeys.h"
 #include "Uf1Text.h"
 #include "RmeBuiltins.h"
@@ -421,6 +423,9 @@ void Surface::loop_()
                     orc::logLine("ORC: REAPER asked for the UF1, letting go of it and of TotalMix\n");
                     std::fflush(stdout);
                     rme::manager().stop();
+                    // Hue, OBS and the stands too: one program talks to them
+                    // at a time.
+                    orc::modes::stopWorkers();
                 }
                 if (!want && yielding) {
                     orc::logLine("ORC: REAPER let go of the UF1, taking it and TotalMix back\n");
@@ -429,6 +434,12 @@ void Surface::loop_()
                     lastOpenTry = now - std::chrono::seconds(5);   // try at once
                     orc::clearReleased();
                     released = false;
+                    // The stands are where REAPER left them (handover.returned).
+                    if (const std::string back = orc::takeReturned(); !back.empty()) {
+                        const int n = uf8::dynamount::manager().applyPositionsByIp(back);
+                        orc::logLine("ORC: took the positions of %d stand(s) back from REAPER\n", n);
+                    }
+                    orc::modes::startWorkers();
                 }
                 yielding = want;
             }
@@ -451,7 +462,7 @@ void Surface::loop_()
                 if (!released) {
                     const int pid = orc::reaperMarkerPid();
                     if (pid > 0) {
-                        orc::markReleased(pid);
+                        orc::markReleased(pid, uf8::dynamount::manager().positionsByIp());
                         released = true;
                         orc::logLine("ORC: released the surfaces to REAPER pid %d\n", pid);
                         std::fflush(stdout);
@@ -550,6 +561,10 @@ void Surface::loop_()
 
         // ⇨ AND THE UF8: open it, retry it, paint TotalMix on it.
         if (uf8_) uf8_->tick(/*yielding*/ false);
+
+        // Hue, OBS and DynaMount: whatever a manager marked changed, to ORC's
+        // own files (OrcModes).
+        orc::modes::saveIfDirty();
 
         std::this_thread::sleep_for(std::chrono::milliseconds(33));
     }

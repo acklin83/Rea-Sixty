@@ -183,6 +183,26 @@ int main()
         EXPECT(m.lastPreset() == -1);
     }
 
+    // --- positions between programs, by IP -------------------------------
+    {
+        DynaMountManager a;
+        a.setMount(0, true, "Kick", "10.0.0.1", 1);
+        a.setMount(1, true, "Snare", "10.0.0.2", 1);
+        a.setTargets(0, 11, 22, 33, false);
+        a.setTargets(1, 44, 55, 66, false);
+        const std::string p = a.positionsByIp();
+        EXPECT(p == "10.0.0.1,11,22,33;10.0.0.2,44,55,66;");
+        DynaMountManager b;                                 // set up the other way round,
+        b.setMount(3, true, "Snare", "10.0.0.2", 1);        // and without the kick
+        b.setMount(5, true, "Room",  "10.0.0.9", 1);
+        b.setTargets(5, 7, 8, 9, false);
+        EXPECT(b.applyPositionsByIp(p) == 1);
+        EXPECT(b.targetH(3) == 44 && b.targetR(3) == 55 && b.targetV(3) == 66);
+        EXPECT(b.targetH(5) == 7);                          // unknown to the sender: kept
+        EXPECT(b.applyPositionsByIp("") == 0);
+        EXPECT(b.applyPositionsByIp("garbage;1,2;") == 0);
+    }
+
     std::printf("test_dynamount: all passed\n");
     return 0;
 }

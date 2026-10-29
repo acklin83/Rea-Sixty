@@ -9,7 +9,10 @@
 //                      "<pid>\n" up to Rea-Sixty 0.7.x, "<pid>\nv2\n" from the
 //                      Rea-Sixty that waits for ORC's receipt.
 //   orc.pid            written by ORC while it runs: "<pid>\n".
-//   handover.released  written by ORC once it has let go: "<REAPER pid>\n".
+//   handover.released  written by ORC once it has let go: "<REAPER pid>\n",
+//                      then a line of DynaMount positions ("ip,h,r,v;...").
+//   handover.returned  written by Rea-Sixty as REAPER quits: the positions line
+//                      alone, for ORC to take over.
 //
 // Plan: docs/orc-uf8-plan.md, section 5.
 
@@ -55,6 +58,31 @@ inline int parsePid(const std::string& text)
     int pid = 0;
     if (std::sscanf(text.c_str(), "%d", &pid) != 1 || pid <= 0) return 0;
     return pid;
+}
+
+// The receipt with the stands' positions: the pid on the first line (older
+// readers stop there), the positions on the second.
+struct Released {
+    int         pid = 0;
+    std::string positions;
+};
+
+inline std::string formatReleased(int pid, const std::string& positions)
+{
+    return formatPid(pid) + positions + "\n";
+}
+
+inline Released parseReleased(const std::string& text)
+{
+    Released r;
+    r.pid = parsePid(text);
+    const auto nl = text.find('\n');
+    if (nl != std::string::npos) {
+        std::string rest = text.substr(nl + 1);
+        while (!rest.empty() && (rest.back() == '\n' || rest.back() == '\r')) rest.pop_back();
+        r.positions = rest;
+    }
+    return r;
 }
 
 // Whole small file into a string; empty when it is not there.

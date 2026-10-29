@@ -1945,6 +1945,40 @@ static int importModesFromOrc_()
     return static_cast<int>(got.size());
 }
 
+// The stands' positions from ORC's receipt or from our own returned file,
+// into the DynaMount manager (by IP, without driving them).
+static void orcTakeStandPositions_(const char* file)
+{
+#ifdef __APPLE__
+    const std::string marker = orcHandoverPath_();
+    if (marker.empty()) return;
+    const auto r = orc_handover::parseReleased(orc_handover::readFile(
+        marker.substr(0, marker.rfind('/') + 1) + file));
+    if (r.positions.empty()) return;
+    const int n = uf8::dynamount::manager().applyPositionsByIp(r.positions);
+    char line[96];
+    snprintf(line, sizeof(line), "took the positions of %d stand(s) from ORC", n);
+    orcLogLine_(line);
+#else
+    (void)file;
+#endif
+}
+
+// As REAPER quits: our stands' positions for ORC, which takes the surfaces
+// back next (handover.returned). Only where ORC is installed.
+static void orcReturnStandPositions_()
+{
+#ifdef __APPLE__
+    const std::string marker = orcHandoverPath_();
+    if (marker.empty()) return;
+    const std::string dir = marker.substr(0, marker.rfind('/') + 1);
+    struct stat sb{};
+    if (::stat(dir.c_str(), &sb) != 0) return;
+    orc_handover::writeFile(dir + "handover.returned",
+                            uf8::dynamount::manager().positionsByIp() + "\n");
+#endif
+}
+
 // Ask ORC and, when it runs and has not answered yet, start waiting for the
 // receipt. Returns true while that wait holds the UF1 and the UF8 back.
 static bool orcAskAndWait_()
@@ -27052,6 +27086,7 @@ void shutdownDevices_()
         g_uf1_dev.reset();
     }
     // Stop asking: ORC takes the UF1 back within its next poll.
+    orcReturnStandPositions_();
     orcHandoverMark_(false);
     g_uf1WantRetry.store(false);
     g_uf8WantRetry.store(false);
@@ -49300,6 +49335,10 @@ void onTimerBody_()
                 g_orcWaitUntilMs.store(0);
                 orcLogLine_(receipt ? "ORC released the surfaces, opening them"
                                     : "no receipt from ORC in time, trying the surfaces anyway");
+                // ⇨ THE STANDS' POSITIONS COME WITH THE RECEIPT: ORC drove them
+                // last, and they report nothing themselves (section 5 of the
+                // plan). Only stands with the same IP here take them.
+                if (receipt) orcTakeStandPositions_("handover.released");
                 sLastReopen = nowR - std::chrono::seconds(60);
             } else {
                 holdForOrc = true;
