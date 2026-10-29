@@ -286,6 +286,17 @@ Rea-Sixty-Nutzer bekommen mit 1 bis 4 schon etwas (Side-Car, Presets), bevor ORC
 | 3a Side-Car: ganzer linker UF8, zurück in den vorigen Modus, Shift + Layer 2/3, Bindungen v56 | `2ca11262` | ja |
 | 3b Hue/DynaMount-Maler und -Eingang herausziehen | | offen |
 | 4 DynaMount-Presets | `bfdd0544` | ja |
+| 5a `Uf8Fader.h`: Endanschläge, Bit-7-Strom, Echo, Motor-Wiederanlauf | `4298de10` | ja |
+| 5b `Uf8Cells`: die UF8-Zellen-Schreiber aus `main.cpp` (Scribble mit Latin-1, Wertzeile, dB-Anzeige, Kanalnummer, CS-Typ, V-Pot-Ring mit Positions- und Modus-Frame, Farbbalken, VU dB auf Byte, LED-Paare), `main.cpp` läuft darauf | | offen, nächster Schritt |
+| 5c `Uf8Rme`: Kanäle auf den 8 Strips (Fenster folgt Auswahl), Eingang, Ansicht; Maler über `Uf8Cells`; ORC-Surface mit UF8 | | offen |
+
+Umgestellt beim Bauen: **3b kommt mit Stufe 6**, wenn ORC Hue und DynaMount bekommt. Dann steht die
+Form des UF8-Malers aus 5b fest und die Hue/DynaMount-Maler werden nur einmal umgebaut.
+**Keine eigene `RmeSelection`:** UF1 und UF8 lesen dasselbe `input::State` (eine Instanz pro
+Programm, `g_rmeIn` bzw. ORCs `in_`); der UF8 hat nur sein Achterfenster zusätzlich. Das spart den
+Umbau von 83 Zugriffen und hält die Auswahl trotzdem einmal.
+Der UF1-Schreibweg des Faders (faderlin, FX in dB, Berührungs-Entprellung, `RmeFace.cpp:303-360`)
+wird für den UF8 als Funktion herausgezogen, nicht kopiert.
 
 Abweichungen: keine neuen Builtin-Namen `uf8_sidecar_*`, die Side-Cars bleiben `selection_mode_hue` /
 `selection_mode_dynamount` (sonst zwei Einträge pro Modus im Picker). Presets mit den Gesten der
