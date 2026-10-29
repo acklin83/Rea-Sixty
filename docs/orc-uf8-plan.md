@@ -33,6 +33,21 @@ gebaut. Die früheren Fassungen liegen in der Git-Geschichte (`c64ba2ab` bis `1f
 Hue und DynaMount verhalten sich so, wie Frank sie heute aus Rea-Sixty kennt. Neu ist nur, dass
 sie die ganze Fläche haben: Strips ohne Lampe oder Stativ sind dunkel statt REAPER-Spuren.
 
+**Tasten im TotalMix-Side-Car am UF8** (Frank 29.10.: Nav-Kreuz wie am UF1):
+
+| Taste | Funktion | wie am UF1 |
+|---|---|---|
+| Nav ▲ ▼ | Reihe wählen (Inputs, Playbacks, Outputs, FX), mit Umlauf | `RmeInput.cpp:291` |
+| Nav ◄ ► | Submix wählen, mit Umlauf | `RmeInput.cpp:296` |
+| Nav Mitte | TotalMix-Fenster zeigen/verbergen | `RmeInput.cpp:302` |
+| Bank ◄ ► | die 8 Kanäle um 8 weiter | |
+| Channel ◄ ► | um 1 weiter | |
+| PLUG-IN | Kanalansicht (2.6) | Druck auf den Kanal-Encoder |
+| Kanal-Encoder | Main Volume | Jog |
+
+Das Nav-Kreuz ist am UF8 das Zoom-Kreuz (Tasten 0x7A-0x7E). Die Funktionen kommen aus denselben
+Zeilen wie am UF1 (`stepRow`, `stepSubmix`, `toggleWindow`), nicht nachgebaut.
+
 ### 2.2 Hinein und heraus
 
 | | ORC | Rea-Sixty |
@@ -66,7 +81,7 @@ die Seiten legt man Bänke. Die Bankarten, die es für diese Modi braucht:
 
 | Bankart | gibt es | Druck | lang |
 |---|---|---|---|
-| TotalMix-Tasten (Dim, Mono, Speaker B, Talkback, Reihe wählen …) | ja (Side-Car-Bänke in `orc.json`) | Aktion | |
+| TotalMix-Tasten (Dim, Mono, Speaker B, Talkback …) | ja (Side-Car-Bänke in `orc.json`) | Aktion | |
 | TotalMix-Snapshots | ja | laden | |
 | Hue-Szenen | ja (`HueScenes`) | Szene | dynamisch |
 | OBS-Szenen | ja (`ObsScenes`) | Szene | |
@@ -269,7 +284,9 @@ Rea-Sixty-Nutzer bekommen mit 1 bis 4 schon etwas (Side-Car, Presets), bevor ORC
 - So vorgesehen: das Achterfenster folgt der UF1-Auswahl immer; die TotalMix-Soft-Keys am UF8
   zeigen dieselbe Bank wie der UF1 (beide Hälften auf einmal); ORCs Grundstellung ist TotalMix.
 
-**Offen, neu mit Abschnitt 2.6:**
+**Entschieden mit 2.6 (Frank 29.10., „so bauen“):** Kanalansicht über PLUG-IN, eine Seite auf den 8 V-Pots. Nav-Kreuz wie am UF1, Bank ◄ ► = 8er-Bänke.
+
+~~Offen, neu mit Abschnitt 2.6:~~
 
 | | Frage | Vorschlag |
 |---|---|---|
@@ -300,7 +317,7 @@ Gelesen am 29.10. (`b7b6deb0`):
 - Übergabe ohne Quittung (`main.cpp:1823-1847`, ORC `Surface.cpp:405-443`), UF8-Startfehler ohne
   Retry.
 - TotalMix-Builtins heute: Dim, Mono, Speaker B, Talkback, Mute FX, Ext In, DURec, `rme_fader_main`,
-  `rme_ask_again`, `rme_show_window`. Reihe wählen gibt es noch nicht als Builtin.
+  `rme_ask_again`, `rme_show_window`. Reihe und Submix wählt das Nav-Kreuz, kein neues Builtin nötig.
 - Windows-Store-Apps: neue Dateien unter `AppData` landen an einem privaten Ort (Microsoft,
   „Understanding how packaged desktop apps run on Windows“).
 
