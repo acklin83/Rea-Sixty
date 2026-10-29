@@ -24100,11 +24100,8 @@ static void drawHueTab_(ImGui_Context* ctx)
         for (const Group& g : groups) if (g.id == id) return &g;
         return nullptr;
     };
-    auto sceneLabel = [&](const Scene& s) -> std::string {
-        if (const Group* g = groupById(s.groupRid))
-            return g->name + " > " + s.name;
-        return s.name;
-    };
+    // "Room > Scene", HueManager.h, the same in ORC's Hue tab.
+    auto sceneLabel = [&](const Scene& s) -> std::string { return sceneMenuLabel(s, groups); };
 
     // ================= BRIDGE ==============================================
     ImGui_TextDisabled(ctx, "BRIDGE");

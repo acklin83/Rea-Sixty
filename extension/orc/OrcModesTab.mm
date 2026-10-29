@@ -48,6 +48,17 @@ void saveDynaDevices()
 - (BOOL)isFlipped { return YES; }
 @end
 
+// ⛔ ONE ITEM PER ENTRY, NAMES TWICE INCLUDED. -[NSPopUpButton addItemWithTitle:]
+// drops an item that has the same title already, so a menu of Hue scenes (every
+// room has its Entspannen, its Konzentrieren) came out shorter than the list it
+// was filled from, and every pick below the first double took the wrong scene
+// (Frank 29.10.2026: picked Chill, ELO, Video, the keys said ELO, Chill,
+// Konzentrieren). The menu itself keeps doubles.
+static void addEntry(NSPopUpButton* pop, NSString* title)
+{
+    [pop.menu addItemWithTitle:title action:nil keyEquivalent:@""];
+}
+
 @interface OrcModesTab ()
 @property (nonatomic, strong) NSTextField* importResult;
 // OBS
@@ -73,6 +84,7 @@ void saveDynaDevices()
 @property (nonatomic, strong) NSMutableArray<NSTextField*>*   hueLabel;
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* hueTarget;
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* hueScene;
+@property (nonatomic, strong) NSMutableArray<NSTextField*>*   hueSceneLabel;
 @property (nonatomic, strong) NSPopUpButton* huePot;
 @property (nonatomic, strong) NSPopUpButton* huePotFlip;
 @end
@@ -122,6 +134,7 @@ void saveDynaDevices()
     self.presetName = [NSMutableArray array]; self.presetStands = [NSMutableArray array];
     self.hueOn = [NSMutableArray array];    self.hueLabel = [NSMutableArray array];
     self.hueTarget = [NSMutableArray array]; self.hueScene = [NSMutableArray array];
+    self.hueSceneLabel = [NSMutableArray array];
 
     NSStackView* v = [[NSStackView alloc] init];
 
@@ -177,7 +190,7 @@ void saveDynaDevices()
             ip.placeholderString = @"192.168.1.50";
             NSPopUpButton* col = [self popUp:@selector(dynaChanged:) width:70 tag:i];
             for (int k = 0; k < palCount; ++k) {
-                [col addItemWithTitle:@""];
+                addEntry(col, @"");   // eight swatches, all titled "" (addEntry)
                 const auto c = pal[k];
                 col.lastItem.image = [NSImage imageWithSize:NSMakeSize(28, 12) flipped:NO
                                              drawingHandler:^BOOL(NSRect r) {
@@ -253,12 +266,16 @@ void saveDynaDevices()
     }
     [v addArrangedSubview:heading(@"Scenes")];
     {
-        NSGridView* g = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
+        // The key's label beside the scene, as in Rea-Sixty's Hue tab.
+        NSGridView* g = [NSGridView gridViewWithNumberOfColumns:3 rows:0];
         g.columnSpacing = 8; g.rowSpacing = 6;
+        [g addRowWithViews:@[ dim(@""), dim(@"Scene"), dim(@"Key label") ]];
         for (int i = 0; i < hue::kMaxScenes; ++i) {
-            NSPopUpButton* sc = [self popUp:@selector(hueSceneChanged:) width:240 tag:i];
-            [g addRowWithViews:@[ label([NSString stringWithFormat:@"%d", i + 1]), sc ]];
+            NSPopUpButton* sc = [self popUp:@selector(hueSceneChanged:) width:300 tag:i];
+            NSTextField* lb = [self field:@selector(hueSceneLabelChanged:) width:110 tag:i];
+            [g addRowWithViews:@[ label([NSString stringWithFormat:@"%d", i + 1]), sc, lb ]];
             [self.hueScene addObject:sc];
+            [self.hueSceneLabel addObject:lb];
         }
         [v addArrangedSubview:g];
     }
@@ -355,7 +372,7 @@ void saveDynaDevices()
         const bool refillTargets = targets != _lastTargets;
         _lastTargets = targets;
         std::vector<std::string> sceneKeys;
-        for (const auto& sc : scenes) sceneKeys.push_back(sc.id + "\t" + sc.name);
+        for (const auto& sc : scenes) sceneKeys.push_back(sc.id + "\t" + hue::sceneMenuLabel(sc, groups));
         const bool refillScenes = sceneKeys != _lastScenes;
         _lastScenes = sceneKeys;
 
@@ -366,11 +383,11 @@ void saveDynaDevices()
             NSPopUpButton* tg = self.hueTarget[i];
             if (refillTargets || tg.numberOfItems == 0) {
                 [tg removeAllItems];
-                [tg addItemWithTitle:@"(none)"];
-                for (const auto& L : lights) [tg addItemWithTitle:str(L.name)];
+                addEntry(tg, @"(none)");
+                for (const auto& L : lights) addEntry(tg, str(L.name));
                 for (const auto& g : groups)
                     if (!g.groupedLightId.empty())
-                        [tg addItemWithTitle:str(std::string(g.isZone ? "Zone > " : "Room > ") + g.name)];
+                        addEntry(tg, str(std::string(g.isZone ? "Zone > " : "Room > ") + g.name));
             }
             // Select what the slot points at.
             NSInteger at = 0, k = 1;
@@ -390,12 +407,13 @@ void saveDynaDevices()
             NSPopUpButton* sp = self.hueScene[i];
             if (refillScenes || sp.numberOfItems == 0) {
                 [sp removeAllItems];
-                [sp addItemWithTitle:@"(none)"];
-                for (const auto& sc : scenes) [sp addItemWithTitle:str(sc.name)];
+                addEntry(sp, @"(none)");
+                for (const auto& sc : scenes) addEntry(sp, str(hue::sceneMenuLabel(sc, groups)));
             }
             NSInteger at = 0, k = 1;
             for (const auto& sc : scenes) { if (sc.id == s.id) at = k; ++k; }
             [sp selectItemAtIndex:at];
+            if (!typing(self.hueSceneLabel[i])) self.hueSceneLabel[i].stringValue = str(s.label);
         }
         const hue::Controls ctl = hm.controls();
         [self.huePot selectItemAtIndex:static_cast<NSInteger>(ctl.pot)];
@@ -506,6 +524,15 @@ void saveDynaDevices()
     if (pick <= 0) { hm.setSceneSlot(i, hue::SceneSlot{}); return; }
     if (pick - 1 < static_cast<NSInteger>(scenes.size()))
         hm.setSceneSlot(i, hue::sceneSlotWith(hm.sceneSlot(i), scenes[static_cast<size_t>(pick - 1)]));
+}
+
+- (void)hueSceneLabelChanged:(NSTextField*)sender
+{
+    const int i = static_cast<int>(sender.tag);
+    auto& hm = hue::manager();
+    hue::SceneSlot s = hm.sceneSlot(i);
+    s.label = cstr(sender.stringValue).substr(0, 12);
+    hm.setSceneSlot(i, s);
 }
 
 - (void)hueControlsChanged:(id)sender

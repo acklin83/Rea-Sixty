@@ -669,6 +669,32 @@ int main()
         EXPECT(k.find('\n') == std::string::npos);
     }
 
+    {
+        // ⇨ THE LABEL FOLLOWS THE PICK (Frank 29.10.2026: picked Chill over ELO,
+        // the key went on saying ELO), and a typed one stays.
+        Scene elo;   elo.id = "e";   elo.name = "ELO";
+        Scene chill; chill.id = "c"; chill.name = "Chill";
+        SceneSlot s = sceneSlotWith(SceneSlot{}, elo);
+        EXPECT(s.label == "ELO");
+        s = sceneSlotWith(s, chill);
+        EXPECT(s.id == "c" && s.label == "Chill");
+        s.label = "Mood";
+        s = sceneSlotWith(s, elo);
+        EXPECT(s.id == "e" && s.label == "Mood");
+        // The same for a lamp slot.
+        Light a; a.id = "a"; a.name = "Desk";
+        Light b; b.id = "b"; b.name = "Shelf";
+        SlotConfig c = slotWithLight(SlotConfig{}, a);
+        EXPECT(c.label == "Desk");
+        c = slotWithLight(c, b);
+        EXPECT(c.label == "Shelf");
+        // Scenes in a menu name their room: Hue has an Entspannen in each.
+        Group g; g.id = "r1"; g.name = "Studio";
+        Scene rel; rel.id = "x"; rel.name = "Entspannen"; rel.groupRid = "r1";
+        EXPECT(sceneMenuLabel(rel, { g }) == "Studio > Entspannen");
+        EXPECT(sceneMenuLabel(elo, { g }) == "ELO");
+    }
+
     std::printf("test_hue: all good\n");
     return 0;
 }

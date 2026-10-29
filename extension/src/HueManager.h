@@ -144,22 +144,32 @@ struct SlotLive {
 // SettingsScreen.cpp, 29.10.2026). A lamp is its light id; a room or zone is
 // its grouped_light, the only form of a group with a state. The label follows
 // the bridge's name until someone typed one.
+// ⛔ "FOLLOWS" MEANS IT CHANGES WITH THE TARGET (Frank 29.10.2026: picked Chill
+// over ELO, the key went on saying ELO). Only an empty label used to be filled,
+// so the name of the first pick stuck. A label that is the old target's name, as
+// the fill left it, is not typed: it takes the new name.
+inline bool labelFollowsName(const std::string& label, const std::string& oldName, std::size_t n)
+{
+    return label.empty() || label == oldName.substr(0, n);
+}
 inline SlotConfig slotWithLight(SlotConfig c, const Light& L)
 {
+    const bool follow = labelFollowsName(c.label, c.bridgeName, kLabelChars);
     c.kind = TargetKind::Light;
     c.rid  = L.id;
     c.groupId.clear();
     c.bridgeName = L.name;
-    if (c.label.empty()) c.label = L.name.substr(0, kLabelChars);
+    if (follow) c.label = L.name.substr(0, kLabelChars);
     return c;
 }
 inline SlotConfig slotWithGroup(SlotConfig c, const Group& g)
 {
+    const bool follow = labelFollowsName(c.label, c.bridgeName, kLabelChars);
     c.kind    = TargetKind::Group;
     c.rid     = g.groupedLightId;
     c.groupId = g.id;
     c.bridgeName = g.name;
-    if (c.label.empty()) c.label = g.name.substr(0, kLabelChars);
+    if (follow) c.label = g.name.substr(0, kLabelChars);
     return c;
 }
 inline SlotConfig slotWithNothing(SlotConfig c)
@@ -169,10 +179,21 @@ inline SlotConfig slotWithNothing(SlotConfig c)
 }
 inline SceneSlot sceneSlotWith(SceneSlot s, const Scene& sc)
 {
+    const bool follow = labelFollowsName(s.label, s.bridgeName, 12);
     s.id         = sc.id;
     s.bridgeName = sc.name;
-    if (s.label.empty()) s.label = sc.name.substr(0, 12);
+    if (follow) s.label = sc.name.substr(0, 12);
     return s;
+}
+
+// ⇨ A SCENE IN A MENU: "Room > Scene". Hue puts its own scenes (Entspannen,
+// Konzentrieren ...) into every room, so the name alone is no answer to which
+// one; Rea-Sixty's Hue tab and ORC's both list them this way.
+inline std::string sceneMenuLabel(const Scene& sc, const std::vector<Group>& groups)
+{
+    for (const auto& g : groups)
+        if (g.id == sc.groupRid) return g.name + " > " + sc.name;
+    return sc.name;
 }
 
 class HueManager {
