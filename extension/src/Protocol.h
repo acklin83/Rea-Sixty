@@ -323,6 +323,23 @@ std::vector<uint8_t> buildValueLine(uint8_t strip, std::string_view nineteenChar
 // something else entirely (sent on soft-key mode changes, not V-Pot motion).
 std::vector<uint8_t> buildVPotReadoutBar(const std::array<uint16_t, kStripCount>& positions);
 
+// V-Pot ring mode, one byte per strip: 0x01 unipolar, 0x02 bipolar, 0x03 no
+// ring. Sent AFTER the positions (cap37 ordering).
+//   FF 66 09 0D <8 mode bytes> CKSUM    (13 bytes)
+// main.cpp built this inline in four places until 29.10.2026; one builder now,
+// shared with ORC.
+std::vector<uint8_t> buildVPotMode(const std::array<uint8_t, kStripCount>& modes);
+
+// Ring positions for buildVPotReadoutBar, out of main.cpp (29.10.2026).
+//   Bipolar (Gain, Pan centre-anchored): byte0 = signed -100..+100, byte1 = 0x80
+//     only at the centre (0x00).
+//   Unipolar (Freq, Q, Threshold): byte0 = 0..100, byte1 = 0x00.
+//   Pan is a single line, not a fill (Frank 2026-08-19), so it goes out
+//     unipolar at (pan + 1) / 2.
+uint16_t vpotPosBipolar(double v);
+uint16_t vpotPosUnipolar(double v);
+uint16_t vpotPosPan(double pan);
+
 // O/PdB Fader Readout — the big fader-dB number.
 // Format reserves 6 ASCII bytes for the value followed by the literal "dB"
 // suffix. SSL 360° captures (cap16) only fill the first 4 bytes and leave

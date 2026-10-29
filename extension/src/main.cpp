@@ -39889,30 +39889,10 @@ const uf8::LinkSlot* slotForStrip(MediaTrack* tr,
 // Wire order matters: cap37 sends position (FF 66 11 0F) FIRST,
 // then mode (FF 66 09 0D) ~55 µs later. Sending mode-then-position
 // with mismatched encoding renders a wrong-direction bar.
-uint16_t vpotPosFromBipolar(double v)
-{
-    if (v < -1.0) v = -1.0;
-    if (v >  1.0) v =  1.0;
-    int b0 = static_cast<int>(std::round(v * 100.0));
-    if (b0 == 0) return 0x8000;  // centre anchor: byte0=0x00, byte1=0x80
-    if (b0 < -100) b0 = -100;
-    if (b0 >  100) b0 =  100;
-    return static_cast<uint16_t>(static_cast<uint8_t>(static_cast<int8_t>(b0)));
-}
-
-// Mode 0x01 unipolar: byte0 = 0..0x64 (0..100), byte1 = 0x00.
-// cap15 t=11.052/13.206/14.795 mode-register `01 01 01 01 03 03 03 03`
-// with positions `00 00`/`32 00`/`64 00` cover 0%/50%/100%.
-uint16_t vpotPosFromUnipolar(double v)
-{
-    if (v < 0.0) v = 0.0;
-    if (v > 1.0) v = 1.0;
-    int b0 = static_cast<int>(std::round(v * 100.0));
-    if (b0 < 0)   b0 = 0;
-    if (b0 > 100) b0 = 100;
-    return static_cast<uint16_t>(b0 & 0xFF);
-}
-
+// The ring positions live in Protocol (uf8::vpotPos*, 29.10.2026), shared with
+// ORC; these names stay for the code here.
+uint16_t vpotPosFromBipolar(double v)  { return uf8::vpotPosBipolar(v); }
+uint16_t vpotPosFromUnipolar(double v) { return uf8::vpotPosUnipolar(v); }
 uint16_t vpotPosFromNormalized(double v) { return vpotPosFromUnipolar(v); }
 
 // ⇨ PAN IS A SINGLE LINE, NOT A FILL (Frank 2026-08-19: "pan füllt auf UF8 von
@@ -40002,12 +39982,7 @@ std::string splitFaderUnit_(std::string v, std::string* unitOut)
     return val;
 }
 
-uint16_t vpotPosFromPan(double pan)
-{
-    if (pan < -1.0) pan = -1.0;
-    if (pan >  1.0) pan =  1.0;
-    return vpotPosFromUnipolar((pan + 1.0) * 0.5);
-}
+uint16_t vpotPosFromPan(double pan) { return uf8::vpotPosPan(pan); }
 
 // Phase 2.8 Nav Mode — colour-bar callback used by ColorSync when the
 // overlay is active. Returns the strip item's REAPER colour (low 24
@@ -40827,11 +40802,7 @@ static void uf8BlankUnit_(int unit)
         d->send(uf8::buildFaderPosition(l, 0, 0));
     }
     d->send(uf8::buildVPotReadoutBar(std::array<uint16_t, 8>{}));
-    std::vector<uint8_t> mf{0xFF, 0x66, 0x09, 0x0D};
-    for (int i = 0; i < 8; ++i) mf.push_back(0x03);   // no ring
-    uint8_t cks = 0;
-    for (size_t i = 1; i < mf.size(); ++i) cks += mf[i];
-    mf.push_back(cks);
+    auto mf = uf8::buildVPotMode(std::array<uint8_t, 8>{0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03});   // no ring
     d->send(std::move(mf));
     auto vu = uf8::buildVuMeter(std::array<uint8_t, 16>{});
     d->send(std::move(vu[0]));
@@ -40995,11 +40966,7 @@ static void ccPaintSurface_()
         }
         if (!g_vpotBarInit || mode != uf8UnitSlice_(g_lastVPotMode, u)) {
             std::copy(mode.begin(), mode.end(), g_lastVPotMode.begin() + u * 8);
-            std::vector<uint8_t> mf{0xFF, 0x66, 0x09, 0x0D};
-            for (auto m : mode) mf.push_back(m);
-            uint8_t cks = 0;
-            for (size_t i = 1; i < mf.size(); ++i) cks += mf[i];
-            mf.push_back(cks);
+            auto mf = uf8::buildVPotMode(mode);
             uf8SendUnit_(u, std::move(mf));
         }
     }
@@ -43770,11 +43737,7 @@ void pushZonesForVisibleSlots()
         }
         if (modeChanged) {
             for (int s = u * 8; s < u * 8 + 8; ++s) g_lastVPotMode[s] = vpotMode[s];
-            std::vector<uint8_t> mf{0xFF, 0x66, 0x09, 0x0D};
-            for (auto m : uf8UnitSlice_(vpotMode, u)) mf.push_back(m);
-            uint8_t cks = 0;
-            for (size_t i = 1; i < mf.size(); ++i) cks += mf[i];
-            mf.push_back(cks);
+            auto mf = uf8::buildVPotMode(uf8UnitSlice_(vpotMode, u));
             uf8SendUnit_(u, std::move(mf));
         }
     }
@@ -46131,11 +46094,7 @@ void pushTouchLearnFeedback_()
                 auto mode = uf8UnitSlice_(g_lastVPotMode, 0);
                 if (mode[strip] != 0x01) {
                     mode[strip] = 0x01;
-                    std::vector<uint8_t> mf{0xFF, 0x66, 0x09, 0x0D};
-                    for (auto m : mode) mf.push_back(m);
-                    uint8_t cks = 0;
-                    for (size_t i = 1; i < mf.size(); ++i) cks += mf[i];
-                    mf.push_back(cks);
+                    auto mf = uf8::buildVPotMode(mode);
                     g_dev->send(std::move(mf));
                 }
                 auto bar = uf8UnitSlice_(g_lastVPotBar, 0);

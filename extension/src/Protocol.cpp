@@ -472,6 +472,43 @@ std::vector<uint8_t> buildVPotReadoutBar(const std::array<uint16_t, kStripCount>
     return frame;
 }
 
+std::vector<uint8_t> buildVPotMode(const std::array<uint8_t, kStripCount>& modes)
+{
+    std::vector<uint8_t> frame{kFrameMagic, 0x66, 0x09, 0x0D};
+    for (auto m : modes) frame.push_back(m);
+    std::span<const uint8_t> payload{frame.data() + 1, frame.size() - 1};
+    frame.push_back(checksum(payload));
+    return frame;
+}
+
+uint16_t vpotPosBipolar(double v)
+{
+    if (v < -1.0) v = -1.0;
+    if (v >  1.0) v =  1.0;
+    int b0 = static_cast<int>(std::round(v * 100.0));
+    if (b0 == 0) return 0x8000;  // centre anchor: byte0=0x00, byte1=0x80
+    if (b0 < -100) b0 = -100;
+    if (b0 >  100) b0 =  100;
+    return static_cast<uint16_t>(static_cast<uint8_t>(static_cast<int8_t>(b0)));
+}
+
+uint16_t vpotPosUnipolar(double v)
+{
+    if (v < 0.0) v = 0.0;
+    if (v > 1.0) v = 1.0;
+    int b0 = static_cast<int>(std::round(v * 100.0));
+    if (b0 < 0)   b0 = 0;
+    if (b0 > 100) b0 = 100;
+    return static_cast<uint16_t>(b0 & 0xFF);
+}
+
+uint16_t vpotPosPan(double pan)
+{
+    if (pan < -1.0) pan = -1.0;
+    if (pan >  1.0) pan =  1.0;
+    return vpotPosUnipolar((pan + 1.0) * 0.5);
+}
+
 std::vector<uint8_t> buildFaderDbReadout(uint8_t strip, std::string_view value,
                                          std::string_view unit)
 {

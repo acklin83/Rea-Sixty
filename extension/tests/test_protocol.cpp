@@ -246,6 +246,29 @@ int main()
         EXPECT(f.ff39[3] == 0x02);
     }
 
+    // V-Pot ring mode (29.10.2026, out of main.cpp): the bytes main.cpp built
+    // inline, FF 66 09 0D, eight modes, sum checksum.
+    {
+        const std::array<uint8_t, 8> modes{0x01, 0x03, 0x02, 0x01, 0x03, 0x03, 0x01, 0x02};
+        std::vector<uint8_t> old{0xFF, 0x66, 0x09, 0x0D};
+        for (auto m : modes) old.push_back(m);
+        uint8_t cks = 0;
+        for (size_t i = 1; i < old.size(); ++i) cks += old[i];
+        old.push_back(cks);
+        EXPECT(buildVPotMode(modes) == old);
+        EXPECT(buildVPotMode(modes).size() == 13);
+    }
+    // Ring positions.
+    EXPECT(vpotPosBipolar(0.0) == 0x8000);       // centre anchor
+    EXPECT(vpotPosBipolar(1.0) == 0x0064);
+    EXPECT(vpotPosBipolar(-1.0) == 0x009C);      // -100 as a signed byte
+    EXPECT(vpotPosBipolar(5.0) == 0x0064);       // clamped
+    EXPECT(vpotPosUnipolar(0.5) == 50);
+    EXPECT(vpotPosUnipolar(-1.0) == 0);
+    EXPECT(vpotPosPan(0.0) == 50);               // pan is a line at the middle
+    EXPECT(vpotPosPan(-1.0) == 0);
+    EXPECT(vpotPosPan(1.0) == 100);
+
     std::printf("OK — all checks passed\n");
     return 0;
 }
