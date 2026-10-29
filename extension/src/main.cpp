@@ -110,6 +110,7 @@
 #include "Uf8Strips.h"
 #include "Uf8ModeViews.h"
 #include "ModeBuiltins.h"
+#include "ModeSettings.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
 #include <sys/time.h> // gettimeofday, for the lines in ORC's log
@@ -1904,6 +1905,44 @@ static bool orcReleasedForUs_()
 #else
     return false;
 #endif
+}
+
+// ⇨ IMPORT FROM ORC (docs/orc-uf8-plan.md section 6). ORC keeps the Hue, OBS
+// and DynaMount settings in files named like our ExtState keys, in
+// <ORC>/modes; this copies them into our ExtState and the managers. A button,
+// never automatic: each program owns its own settings. Empty when ORC has
+// none; returns how many values came over.
+static std::string orcModesDir_()
+{
+#ifdef __APPLE__
+    const std::string marker = orcHandoverPath_();
+    if (marker.empty()) return {};
+    const std::string dir = marker.substr(0, marker.rfind('/') + 1) + "modes";
+    struct stat sb{};
+    return (::stat(dir.c_str(), &sb) == 0) ? dir : std::string();
+#else
+    return {};   // ORC exists on macOS only
+#endif
+}
+
+static int importModesFromOrc_()
+{
+    const std::string dir = orcModesDir_();
+    if (dir.empty()) return 0;
+    std::map<std::string, std::string> got;
+    for (const char* key : modesettings::kImportKeys) {
+        std::string v = orc_handover::readFile(dir + "/" + key);
+        while (!v.empty() && (v.back() == '\n' || v.back() == '\r')) v.pop_back();
+        if (v.empty() || v.find('\n') != std::string::npos) continue;   // ExtState cuts at a newline
+        got[key] = v;
+    }
+    for (const auto& [k, v] : got) SetExtState("rea_sixty", k.c_str(), v.c_str(), true);
+    if (!got.empty())
+        modesettings::apply([&got](const char* key) {
+            const auto it = got.find(key);
+            return it == got.end() ? std::string() : it->second;
+        });
+    return static_cast<int>(got.size());
 }
 
 // Ask ORC and, when it runs and has not answered yet, start waiting for the
@@ -53601,6 +53640,9 @@ int reasixty_uf1StartupViewNow()
 }
 // Is the RME side-car offered here at all (ORC's rme.json is there)?
 bool reasixty_rmeAvailable() { return g_rmeAvailable.load(); }
+// The Settings tabs' Import from ORC (orcModesDir_ / importModesFromOrc_).
+std::string reasixty_orcModesDir()        { return orcModesDir_(); }
+int         reasixty_importModesFromOrc() { return importModesFromOrc_(); }
 // The editor's view picker switches the SURFACE, exactly as its jog-object
 // picker does: there is no edit-only view, so what you edit is always what the
 // UF1 is showing and the two cannot drift apart.
@@ -61219,70 +61261,15 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // the main thread (so the libusb input thread never triggers the lazy
     // singleton init mid-frame). Settings → DYNA edits update the same
     // singleton live.
-    {
-        uf8::dynamount::DynaMountManager& dm = uf8::dynamount::manager();
-        if (const char* blob = GetExtState("rea_sixty", "dynamount_devices");
-            blob && *blob)
-            dm.deserialize(blob);
-        const char* fill = GetExtState("rea_sixty", "dynamount_fill");
-        dm.setFillDir((fill && *fill == 'R') ? uf8::dynamount::FillDir::Right
-                                             : uf8::dynamount::FillDir::Left);
-        // The eight presets (persistDynaState_ saves them when they change).
-        if (const char* pr = GetExtState("rea_sixty", "dynamount_presets"); pr && *pr)
-            dm.deserializePresets(pr);
-        dm.takePresetsDirty();   // loading is not an edit
-        // Restore the last-known mount positions (saved live by
-        // persistDynaState_). markDirty=false: the mounts physically hold this
-        // pose already, so don't re-drive them on launch. Format "idx,h,r,v;".
-        if (const char* st = GetExtState("rea_sixty", "dynamount_state");
-            st && *st)
-        {
-            const char* p = st;
-            while (*p) {
-                int idx = 0, h = 0, r = 90, v = 0;
-                if (std::sscanf(p, "%d,%d,%d,%d", &idx, &h, &r, &v) == 4)
-                    dm.setTargets(idx, h, r, v, /*markDirty=*/false);
-                const char* semi = std::strchr(p, ';');
-                if (!semi) break;
-                p = semi + 1;
-            }
-        }
-        // Probe every enabled mount once at startup so the DYNA tab + surface
-        // show online/offline without the user opening Settings and clicking
-        // Detect each time (Frank 2026-06-28). Worker is already running.
-        for (int i = 0; i < uf8::dynamount::kMaxMounts; ++i)
-            if (dm.mountEnabled(i)) dm.requestDetect(i);
-    }
-
-    initLog("step: init Hue manager");
-    // Same reasoning as DynaMount above: load the persisted slots so Hue Mode
-    // works without first opening Settings, and touch the singleton HERE, on the
-    // main thread, so the libusb input thread never trips the lazy init
-    // mid-frame. The application key lives in its own ExtState value so a shared
-    // setup bundle can carry the slots without the credentials.
-    {
-        uf8::hue::HueManager& hm = uf8::hue::manager();
-        if (const char* blob = GetExtState("rea_sixty", "hue_config");
-            blob && *blob)
-            hm.deserialize(blob);
-        if (const char* key = GetExtState("rea_sixty", "hue_key"); key && *key)
-            hm.deserializeCredentials(key);
-    }
-
-    initLog("step: load OBS config");
-    // Same split and the same reason: the password lives in its own value so a
-    // shared setup bundle can carry the host and port without it. The worker is
-    // started either way and idles while the feature is off, so switching it on
-    // in Settings needs no restart.
-    {
-        auto& om = reasixty::obs::manager();
-        if (const char* blob = GetExtState("rea_sixty", "obs_config");
-            blob && *blob)
-            om.deserialize(blob);
-        if (const char* key = GetExtState("rea_sixty", "obs_key"); key && *key)
-            om.deserializeCredentials(key);
-        om.start();
-    }
+    // ⇨ DYNAMOUNT, HUE AND OBS LOAD THROUGH ModeSettings.cpp since 29.10.2026,
+    // shared with ORC, which keeps the same values in files. Touched HERE, on the
+    // main thread, so the libusb input thread never trips a lazy singleton init
+    // mid-frame. OBS's worker starts either way and idles while it is off.
+    modesettings::apply([](const char* key) {
+        const char* v = GetExtState("rea_sixty", key);
+        return std::string(v ? v : "");
+    });
+    reasixty::obs::manager().start();
 
     initLog("step: load RME config");
     // ⇨ ORC's rme.json, read only (see reasixty_rmeConfigPath_). The worker

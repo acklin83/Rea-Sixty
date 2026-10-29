@@ -366,6 +366,7 @@ add_library(reaper_uf8 MODULE
     src/RmeFace.cpp
     src/Uf8Rme.cpp
     src/ModeBuiltins.cpp
+    src/ModeSettings.cpp
     src/RmeBuiltins.cpp
     src/RmeSoftKeys.cpp
     src/Uf1Pacer.cpp
@@ -1045,6 +1046,23 @@ if(NOT WIN32)
     endif()
     add_test(NAME uf8_mode_views COMMAND test_uf8_mode_views)
 
+    # The mode settings' keys and REAPER's ExtState file, for the Import
+    # (ModeSettings; docs/orc-uf8-plan.md section 6).
+    add_executable(test_mode_settings tests/test_mode_settings.cpp src/ModeSettings.cpp
+        src/HueColor.cpp src/HueClient.cpp src/HueManager.cpp
+        src/DynaMountClient.cpp src/DynaMountManager.cpp
+        src/ObsManager.cpp src/ObsProto.cpp src/WsClient.cpp src/Sha256.cpp)
+    target_include_directories(test_mode_settings PRIVATE src "${WDL_DIR}")
+    target_link_libraries(test_mode_settings PRIVATE Threads::Threads)
+    if(APPLE)
+        target_sources(test_mode_settings PRIVATE src/macos_http.mm)
+        target_link_libraries(test_mode_settings PRIVATE "-framework Foundation")
+    else()
+        target_sources(test_mode_settings PRIVATE src/linux_http.cpp)
+        target_link_libraries(test_mode_settings PRIVATE ${CMAKE_DL_LIBS})
+    endif()
+    add_test(NAME mode_settings COMMAND test_mode_settings)
+
     # SHA-256 against the FIPS vectors, the login string against the shape the
     # obs-websocket document spells out, and the message parsers against real
     # frames. All of it pure: no socket is opened by this test.
@@ -1189,7 +1207,8 @@ if(APPLE)
         src/ObsProto.cpp
         src/WsClient.cpp
         src/Sha256.cpp
-        src/ModeBuiltins.cpp)
+        src/ModeBuiltins.cpp
+        src/ModeSettings.cpp)
     add_executable(orc
         orc/main.cpp
         # Stage 7: the tick that used to be main()'s body, and the Mac side.

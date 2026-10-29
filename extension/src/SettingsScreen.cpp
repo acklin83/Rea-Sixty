@@ -56,6 +56,8 @@ bool reasixty_uc1Connected();
 // See main.cpp's g_devicesSeen.
 bool reasixty_settingsShowsDevice(int mask);
 bool reasixty_rmeAvailable();   // ORC is set up (its rme.json is there)
+std::string reasixty_orcModesDir();          // ORC's own mode settings, or empty
+int         reasixty_importModesFromOrc();   // copy them over, how many came
 // SSL soft-key occupancy, so the editor asks the same question the input
 // path does instead of keeping a second copy of the rule.
 bool reasixty_sslSoftKeySlotOccupied(bool isBc, int bank, int slot);
@@ -23640,6 +23642,31 @@ void SettingsScreen::drawFxLearn(ImGui_Context* ctx)
 // from the UF8 surface in DynaMount Mode. Backend: DynaMountManager (own worker
 // thread). Persists to ExtState "rea_sixty"/"dynamount_devices" (+ "_fill"),
 // which SetupBundle picks up automatically. See REA-SIXTY-INTEGRATION.md.
+// ⇨ IMPORT FROM ORC (docs/orc-uf8-plan.md section 6). Shown only where ORC
+// keeps settings of its own; copies Hue, OBS and DynaMount over at once, never
+// on its own. s_modesImportGen tells the tabs to reseed their text fields.
+static int  s_modesImportGen = 0;
+
+static void drawImportFromOrc_(ImGui_Context* ctx, const char* id)
+{
+    if (reasixty_orcModesDir().empty()) return;
+    static int s_lastCount = -1;
+    char label[48];
+    snprintf(label, sizeof(label), "Import from ORC##%s", id);
+    if (ImGui_Button(ctx, label, nullptr, nullptr)) {
+        s_lastCount = reasixty_importModesFromOrc();
+        ++s_modesImportGen;
+    }
+    help_(ctx, "Takes ORC's Hue, OBS and DynaMount settings over these.");
+    if (s_lastCount >= 0) {
+        ImGui_SameLine(ctx, nullptr, nullptr);
+        char done[48];
+        snprintf(done, sizeof(done), "%d values imported", s_lastCount);
+        ImGui_TextDisabled(ctx, done);
+    }
+    ImGui_Spacing(ctx);
+}
+
 static void drawDynaMountTab_(ImGui_Context* ctx)
 {
     using namespace uf8::dynamount;
@@ -23647,8 +23674,10 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
 
     // One-shot load of persisted config into the manager + seed text buffers.
     static bool s_loaded = false;
+    static int  s_gen    = 0;
     static char s_name[kMaxMounts][32];
     static char s_ip[kMaxMounts][24];
+    if (s_gen != s_modesImportGen) { s_gen = s_modesImportGen; s_loaded = false; }
     if (!s_loaded) {
         const char* blob = GetExtState("rea_sixty", "dynamount_devices");
         if (blob && *blob) mgr.deserialize(blob);
@@ -23671,6 +23700,7 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
         "Control up to 8 DynaMount robotic mic stands from the UF8 strips. "
         "In DynaMount mode the left UF8 is theirs; strips without a mount are dark.");
     ImGui_Spacing(ctx);
+    drawImportFromOrc_(ctx, "dyna");
 
     // Fill direction — which side the pinned DynaMount strips anchor to.
     bool fillRight = mgr.fillDir() == FillDir::Right;
@@ -23814,6 +23844,8 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
     {
         static char s_pname[DynaMountManager::kMaxPresets][32];
         static bool s_pseeded = false;
+        static int  s_pgen    = 0;
+        if (s_pgen != s_modesImportGen) { s_pgen = s_modesImportGen; s_pseeded = false; }
         if (!s_pseeded) {
             for (int k = 0; k < DynaMountManager::kMaxPresets; ++k)
                 snprintf(s_pname[k], sizeof(s_pname[k]), "%s", mgr.preset(k).name.c_str());
@@ -23906,6 +23938,7 @@ static void drawObsTab_(ImGui_Context* ctx)
     ImGui_TextDisabled(ctx,
         "Server on in OBS under Tools, WebSocket Server Settings.");
     ImGui_Spacing(ctx);
+    drawImportFromOrc_(ctx, "obs");
 
     Config cfg = om.config();
 
@@ -24036,9 +24069,10 @@ static void drawHueTab_(ImGui_Context* ctx)
     };
 
     ImGui_Text(ctx,
-        "Control Philips Hue lights from the UF8 strips and the UF1. Only the "
-        "defined slots become Hue strips; the rest stay tracks.");
+        "Control Philips Hue lights from the UF8 strips and the UF1. In Hue mode "
+        "the left UF8 is theirs; strips without a lamp are dark.");
     ImGui_Spacing(ctx);
+    drawImportFromOrc_(ctx, "hue");
 
     // ---- catalogue snapshots, taken once per frame ------------------------
     // Every row below wants the same three lists, and each call copies them out
