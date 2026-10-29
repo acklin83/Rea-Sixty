@@ -31,6 +31,10 @@
 
 namespace orc {
 
+// The extension's default fine factor (g_fineFactorUf1 in main.cpp), for SHIFT
+// on the UF1 and FINE on the UF8 alike. ORC has no setting for it yet.
+inline constexpr double kFineFactor = 0.25;
+
 struct Uf8Status {
     bool        open = false;
     std::string error;
@@ -81,7 +85,7 @@ class Uf8Surface {
     void paint_();
     void resetCache_();
     std::int64_t nowMs_() const;
-    double scale_() const { return fineHeld_.load() ? 0.25 : 1.0; }
+    double scale_() const { return fineHeld_.load() ? kFineFactor : 1.0; }
     void send_(const reasixty::rme::uf8side::Writes& w);
 
     reasixty::rme::input::State& in_;

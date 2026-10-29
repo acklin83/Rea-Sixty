@@ -4,6 +4,7 @@
 // channel view, Main on the channel encoder.
 
 #include "Uf8Rme.h"
+#include "RmeStrip.h"
 
 #include <cstdio>
 #include <string>
@@ -183,6 +184,40 @@ int main()
         u8::Side s4;
         u8::toggleChannelView(st, empty, s4);
         EXPECT(!s4.chanView.load());
+    }
+    // ── the FX row: the effect's controls on all eight V-Pots (Frank 29.10.) ──
+    {
+        State fx = fixture();
+        Channel rv; rv.name = "Reverb"; rv.colour = 4; rv.seen = true;
+        for (const char* l : { "enable", "type", "predelay", "roomscale", "time", "lowcut",
+                               "highcut", "highdamp", "smooth", "width", "attack", "hold",
+                               "release" })
+            rv.setLeaf(l, 0.0);
+        rv.setLeaf("type", 12.0);                               // Envelope
+        fx.fx[0] = rv;
+        in_::State fin;
+        fin.row.store(static_cast<int>(rmeu::Row::Fx));
+        in_::select(fin, rmeu::Row::Fx, 0);
+        u8::Side fs;
+        u8::toggleChannelView(fx, fin, fs);
+        EXPECT(fs.chanView.load());
+        // What the UF1 would show, four to a view: the controls to expect.
+        int pots = 0;
+        for (const auto& v : reasixty::rme::strip::views(fx, rmeu::Row::Fx, 0, cfg.stripPages))
+            for (const auto* q : v.pots) if (q) ++pots;
+        EXPECT(pots > 8);
+        const auto f = u8::frame(fx, fin, fs, cfg, soft);
+        int shown = 0;
+        for (int s = 0; s < 8; ++s) {
+            EXPECT(f.strips[static_cast<size_t>(s)].valueLine.find("Reverb") != 0);   // on/off is CUT
+            if (!f.strips[static_cast<size_t>(s)].valueLine.empty()) ++shown;
+        }
+        EXPECT(shown == 8);                                     // all eight V-Pots
+        int pages = 0;
+        for (int s = 0; s < 8; ++s) if (!f.strips[static_cast<size_t>(s)].slotLabel.empty()) ++pages;
+        EXPECT(pages == (pots + 7) / 8);                        // eight to a page
+        // V-Pot 8 turns a control, not a switch.
+        EXPECT(!u8::vpot(fx, fin, fs, cfg, 7, 1, 1.0, 0).empty());
     }
     // ── the channel encoder is Main ──────────────────────────────────────────
     {

@@ -63,10 +63,13 @@ table.data th { font-weight: 600; background: var(--card); }
 .steps li { margin: 6px 0; }
 .surface { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px; align-items: start; }
 .surface svg { width: 100%; max-width: 520px; height: auto; display: block; margin: 0 auto; }
+.surface.wide svg { max-width: 100%; }
 @media (min-width: 1240px) {
   .surface { grid-template-columns: 440px minmax(0, 1fr); }
   .surface svg { position: sticky; top: 16px; }
 }
+.surface.wide { grid-template-columns: minmax(0, 1fr); }
+.surface.wide svg { position: static; }
 .tw { overflow-x: auto; }
 svg .pnl { fill: var(--panel); stroke: var(--panel-line); stroke-width: 1.5; }
 svg .k { fill: var(--key); stroke: var(--panel-line); stroke-width: 1.2; }
@@ -101,11 +104,9 @@ svg a:hover .knob, svg a:focus .knob { fill: var(--accent); }
     <li><a href="#surface">The UF1, control by control</a></li>
     <li><a href="#strip">STRIP: one channel in detail</a></li>
     <li class="sub"><a href="#reverb">Reverb types</a></li>
-    <li><a href="#uf8">The UF8</a></li>
-    <li class="sub"><a href="#uf8-totalmix">TotalMix on the UF8</a></li>
-    <li class="sub"><a href="#uf8-hue">Hue</a></li>
-    <li class="sub"><a href="#uf8-dyna">DynaMount</a></li>
-    <li class="sub"><a href="#uf8-obs">OBS</a></li>
+    <li><a href="#uf8">The UF8, control by control</a></li>
+    <li><a href="#uf8-chanview">The UF8's channel view</a></li>
+    <li><a href="#uf8-modes">Hue, DynaMount and OBS on the UF8</a></li>
     <li><a href="#softkeys">Soft-key banks</a></li>
     <li class="sub"><a href="#actions">Actions</a></li>
     <li><a href="#settings">The settings window</a></li>
@@ -473,101 +474,519 @@ them back at once.</p>
 </section>
 
 <section id="uf8">
-<h2>The UF8</h2>
-<p>The UF8 has three modes on its LAYER keys. The lamp of the active one is lit.</p>
-<table class="data"><tbody>
-<tr><th data-uf8="kLayer1">LAYER 1</th><td>TotalMix, where the UF8 starts.</td></tr>
-<tr><th data-uf8="kLayer2">LAYER 2</th><td>Hue. Press again to go back to TotalMix.</td></tr>
-<tr><th data-uf8="kLayer3">LAYER 3</th><td>DynaMount. Press again to go back to TotalMix.</td></tr>
-</tbody></table>
-<p>The eight soft keys above the strips belong to the mode: in TotalMix a <a href="#softkeys">soft-key
-bank</a>, in Hue the scenes, in DynaMount the presets. These keys work the same in every mode:</p>
-<table class="data"><tbody>
-<tr><th data-uf8="kChannelEncoder">CHANNEL encoder</th><td>Main volume, in every mode, as the UF1's
-jog wheel.</td></tr>
-<tr><th data-uf8="kFine">FINE</th><td>Pressed: finer steps.</td></tr>
-<tr><th data-uf8="kFlip">FLIP</th><td>In Hue the V-Pot's second role, in DynaMount the fader's
-other axis.</td></tr>
-<tr><th data-uf8="kBtn360">360</th><td>Opens the settings window and closes it again.</td></tr>
-<tr><th data-uf8="kQuick1 kQuick2 kQuick3 kNav kNudge kFocus kSelNorm kSelRec kSelAuto">QUICK 1-3,
-NAV, NUDGE, FOCUS, NORM, REC, AUTO</th><td>Whatever you put on them on the page
-<a href="#set-softkeys">Soft Keys</a>. Out of the box QUICK 1 is <em>Sleep the surface now</em> and the
-others do nothing.</td></tr>
-</tbody></table>
-<p>The UF1 stays on TotalMix whatever the UF8 shows, so Main volume is always at hand.</p>
+<h2>The UF8, control by control</h2>
+<p>Click a control on the drawing to jump to it.</p>
+<div class="surface wide">
+  <svg viewBox="0 0 1000 480" role="img" aria-label="Drawing of the UF8 with clickable controls">
+  <rect class="pnl" x="2" y="2" width="996" height="476" rx="6"/>
+  <text class="lb" x="29" y="16">LAYER</text>
+  <text class="lb" x="79" y="16">QUICK</text>
+  <a href="#u-layer">
+  <rect class="k" x="12" y="20" width="34" height="18" rx="3"/>
+  <rect class="k" x="12" y="44" width="34" height="18" rx="3"/>
+  <rect class="k" x="12" y="68" width="34" height="18" rx="3"/>
+  </a>
+  <a href="#u-user">
+  <rect class="k" x="62" y="20" width="34" height="18" rx="3"/>
+  <rect class="k" x="62" y="44" width="34" height="18" rx="3"/>
+  <rect class="k" x="62" y="68" width="34" height="18" rx="3"/>
+  </a>
+  <text class="lb" x="29" y="33">1</text>
+  <text class="lb" x="79" y="33">1</text>
+  <text class="lb" x="29" y="57">2</text>
+  <text class="lb" x="79" y="57">2</text>
+  <text class="lb" x="29" y="81">3</text>
+  <text class="lb" x="79" y="81">3</text>
+  <a href="#u-360">
+  <rect class="k" x="12" y="96" width="84" height="18" rx="3"/>
+  </a>
+  <text class="lb" x="54" y="109">360</text>
+  <text class="lb" x="54" y="132">SEND / PLUG-IN</text>
+  <a href="#u-sendplugin">
+  <rect class="k" x="12" y="138" width="34" height="18" rx="3"/>
+  <rect class="k" x="62" y="138" width="34" height="18" rx="3"/>
+  <rect class="k" x="12" y="162" width="34" height="18" rx="3"/>
+  <rect class="k" x="62" y="162" width="34" height="18" rx="3"/>
+  <rect class="k" x="12" y="186" width="34" height="18" rx="3"/>
+  <rect class="k" x="62" y="186" width="34" height="18" rx="3"/>
+  <rect class="k" x="12" y="210" width="34" height="18" rx="3"/>
+  <rect class="k" x="62" y="210" width="34" height="18" rx="3"/>
+  </a>
+  <text class="lb" x="29" y="151">1</text>
+  <text class="lb" x="79" y="151">2</text>
+  <text class="lb" x="29" y="175">3</text>
+  <text class="lb" x="79" y="175">4</text>
+  <text class="lb" x="29" y="199">5</text>
+  <text class="lb" x="79" y="199">6</text>
+  <text class="lb" x="29" y="223">7</text>
+  <text class="lb" x="79" y="223">8</text>
+  <a href="#u-plugin">
+  <rect class="k" x="12" y="240" width="40" height="18" rx="3"/>
+  </a>
+  <text class="lb" x="32" y="253">PLUG-IN</text>
+  <a href="#u-idle">
+  <rect class="k" x="56" y="240" width="40" height="18" rx="3"/>
+  </a>
+  <text class="lb" x="76" y="253">CHANNEL</text>
+  <text class="lb" x="54" y="276">PAGE</text>
+  <a href="#u-page">
+  <rect class="k" x="12" y="280" width="40" height="18" rx="3"/>
+  <rect class="k" x="56" y="280" width="40" height="18" rx="3"/>
+  </a>
+  <text class="lb" x="32" y="293">◄</text>
+  <text class="lb" x="76" y="293">►</text>
+  <a href="#u-flip">
+  <rect class="k" x="12" y="308" width="84" height="18" rx="3"/>
+  </a>
+  <text class="lb" x="54" y="321">FLIP</text>
+  <text class="lb" x="54" y="344">AUTOMATION</text>
+  <a href="#u-idle">
+  <rect class="k" x="12" y="348" width="26" height="18" rx="3"/>
+  <rect class="k" x="40" y="348" width="26" height="18" rx="3"/>
+  <rect class="k" x="68" y="348" width="26" height="18" rx="3"/>
+  <rect class="k" x="12" y="370" width="26" height="18" rx="3"/>
+  <rect class="k" x="40" y="370" width="26" height="18" rx="3"/>
+  <rect class="k" x="68" y="370" width="26" height="18" rx="3"/>
+  </a>
+  <a href="#u-soft">
+  <rect class="k" x="140" y="12" width="50" height="16" rx="3"/>
+  </a>
+  <a href="#u-scribble">
+  <rect class="scr" x="130" y="36" width="70" height="56" rx="3"/>
+  </a>
+  <a href="#u-vpot">
+  <circle class="knob" cx="165" cy="118" r="14"/>
+  </a>
+  <a href="#u-solocutsel">
+  <rect class="k" x="145" y="144" width="40" height="14" rx="3"/>
+  <rect class="k" x="145" y="162" width="40" height="14" rx="3"/>
+  <rect class="k" x="145" y="180" width="40" height="14" rx="3"/>
+  </a>
+  <text class="lb" x="165" y="154">SOLO</text>
+  <text class="lb" x="165" y="172">CUT</text>
+  <text class="lb" x="165" y="190">SEL</text>
+  <a href="#u-fader">
+  <rect x="163" y="206" width="4" height="250" rx="2" fill="var(--panel-line)"/>
+  <rect class="k" x="150" y="300" width="30" height="16" rx="3"/>
+  </a>
+  <a href="#u-soft">
+  <rect class="k" x="222" y="12" width="50" height="16" rx="3"/>
+  </a>
+  <a href="#u-scribble">
+  <rect class="scr" x="212" y="36" width="70" height="56" rx="3"/>
+  </a>
+  <a href="#u-vpot">
+  <circle class="knob" cx="247" cy="118" r="14"/>
+  </a>
+  <a href="#u-solocutsel">
+  <rect class="k" x="227" y="144" width="40" height="14" rx="3"/>
+  <rect class="k" x="227" y="162" width="40" height="14" rx="3"/>
+  <rect class="k" x="227" y="180" width="40" height="14" rx="3"/>
+  </a>
+  <text class="lb" x="247" y="154">SOLO</text>
+  <text class="lb" x="247" y="172">CUT</text>
+  <text class="lb" x="247" y="190">SEL</text>
+  <a href="#u-fader">
+  <rect x="245" y="206" width="4" height="250" rx="2" fill="var(--panel-line)"/>
+  <rect class="k" x="232" y="300" width="30" height="16" rx="3"/>
+  </a>
+  <a href="#u-soft">
+  <rect class="k" x="304" y="12" width="50" height="16" rx="3"/>
+  </a>
+  <a href="#u-scribble">
+  <rect class="scr" x="294" y="36" width="70" height="56" rx="3"/>
+  </a>
+  <a href="#u-vpot">
+  <circle class="knob" cx="329" cy="118" r="14"/>
+  </a>
+  <a href="#u-solocutsel">
+  <rect class="k" x="309" y="144" width="40" height="14" rx="3"/>
+  <rect class="k" x="309" y="162" width="40" height="14" rx="3"/>
+  <rect class="k" x="309" y="180" width="40" height="14" rx="3"/>
+  </a>
+  <text class="lb" x="329" y="154">SOLO</text>
+  <text class="lb" x="329" y="172">CUT</text>
+  <text class="lb" x="329" y="190">SEL</text>
+  <a href="#u-fader">
+  <rect x="327" y="206" width="4" height="250" rx="2" fill="var(--panel-line)"/>
+  <rect class="k" x="314" y="300" width="30" height="16" rx="3"/>
+  </a>
+  <a href="#u-soft">
+  <rect class="k" x="386" y="12" width="50" height="16" rx="3"/>
+  </a>
+  <a href="#u-scribble">
+  <rect class="scr" x="376" y="36" width="70" height="56" rx="3"/>
+  </a>
+  <a href="#u-vpot">
+  <circle class="knob" cx="411" cy="118" r="14"/>
+  </a>
+  <a href="#u-solocutsel">
+  <rect class="k" x="391" y="144" width="40" height="14" rx="3"/>
+  <rect class="k" x="391" y="162" width="40" height="14" rx="3"/>
+  <rect class="k" x="391" y="180" width="40" height="14" rx="3"/>
+  </a>
+  <text class="lb" x="411" y="154">SOLO</text>
+  <text class="lb" x="411" y="172">CUT</text>
+  <text class="lb" x="411" y="190">SEL</text>
+  <a href="#u-fader">
+  <rect x="409" y="206" width="4" height="250" rx="2" fill="var(--panel-line)"/>
+  <rect class="k" x="396" y="300" width="30" height="16" rx="3"/>
+  </a>
+  <a href="#u-soft">
+  <rect class="k" x="468" y="12" width="50" height="16" rx="3"/>
+  </a>
+  <a href="#u-scribble">
+  <rect class="scr" x="458" y="36" width="70" height="56" rx="3"/>
+  </a>
+  <a href="#u-vpot">
+  <circle class="knob" cx="493" cy="118" r="14"/>
+  </a>
+  <a href="#u-solocutsel">
+  <rect class="k" x="473" y="144" width="40" height="14" rx="3"/>
+  <rect class="k" x="473" y="162" width="40" height="14" rx="3"/>
+  <rect class="k" x="473" y="180" width="40" height="14" rx="3"/>
+  </a>
+  <text class="lb" x="493" y="154">SOLO</text>
+  <text class="lb" x="493" y="172">CUT</text>
+  <text class="lb" x="493" y="190">SEL</text>
+  <a href="#u-fader">
+  <rect x="491" y="206" width="4" height="250" rx="2" fill="var(--panel-line)"/>
+  <rect class="k" x="478" y="300" width="30" height="16" rx="3"/>
+  </a>
+  <a href="#u-soft">
+  <rect class="k" x="550" y="12" width="50" height="16" rx="3"/>
+  </a>
+  <a href="#u-scribble">
+  <rect class="scr" x="540" y="36" width="70" height="56" rx="3"/>
+  </a>
+  <a href="#u-vpot">
+  <circle class="knob" cx="575" cy="118" r="14"/>
+  </a>
+  <a href="#u-solocutsel">
+  <rect class="k" x="555" y="144" width="40" height="14" rx="3"/>
+  <rect class="k" x="555" y="162" width="40" height="14" rx="3"/>
+  <rect class="k" x="555" y="180" width="40" height="14" rx="3"/>
+  </a>
+  <text class="lb" x="575" y="154">SOLO</text>
+  <text class="lb" x="575" y="172">CUT</text>
+  <text class="lb" x="575" y="190">SEL</text>
+  <a href="#u-fader">
+  <rect x="573" y="206" width="4" height="250" rx="2" fill="var(--panel-line)"/>
+  <rect class="k" x="560" y="300" width="30" height="16" rx="3"/>
+  </a>
+  <a href="#u-soft">
+  <rect class="k" x="632" y="12" width="50" height="16" rx="3"/>
+  </a>
+  <a href="#u-scribble">
+  <rect class="scr" x="622" y="36" width="70" height="56" rx="3"/>
+  </a>
+  <a href="#u-vpot">
+  <circle class="knob" cx="657" cy="118" r="14"/>
+  </a>
+  <a href="#u-solocutsel">
+  <rect class="k" x="637" y="144" width="40" height="14" rx="3"/>
+  <rect class="k" x="637" y="162" width="40" height="14" rx="3"/>
+  <rect class="k" x="637" y="180" width="40" height="14" rx="3"/>
+  </a>
+  <text class="lb" x="657" y="154">SOLO</text>
+  <text class="lb" x="657" y="172">CUT</text>
+  <text class="lb" x="657" y="190">SEL</text>
+  <a href="#u-fader">
+  <rect x="655" y="206" width="4" height="250" rx="2" fill="var(--panel-line)"/>
+  <rect class="k" x="642" y="300" width="30" height="16" rx="3"/>
+  </a>
+  <a href="#u-soft">
+  <rect class="k" x="714" y="12" width="50" height="16" rx="3"/>
+  </a>
+  <a href="#u-scribble">
+  <rect class="scr" x="704" y="36" width="70" height="56" rx="3"/>
+  </a>
+  <a href="#u-vpot">
+  <circle class="knob" cx="739" cy="118" r="14"/>
+  </a>
+  <a href="#u-solocutsel">
+  <rect class="k" x="719" y="144" width="40" height="14" rx="3"/>
+  <rect class="k" x="719" y="162" width="40" height="14" rx="3"/>
+  <rect class="k" x="719" y="180" width="40" height="14" rx="3"/>
+  </a>
+  <text class="lb" x="739" y="154">SOLO</text>
+  <text class="lb" x="739" y="172">CUT</text>
+  <text class="lb" x="739" y="190">SEL</text>
+  <a href="#u-fader">
+  <rect x="737" y="206" width="4" height="250" rx="2" fill="var(--panel-line)"/>
+  <rect class="k" x="724" y="300" width="30" height="16" rx="3"/>
+  </a>
+  <text class="st" x="136" y="50">&gt; Phones 2</text><text class="st" x="136" y="66">Vox</text><text class="st" x="136" y="86">Gain 24.0</text>
+  <a href="#u-vpotbank">
+  <rect class="k" x="806" y="14" width="50" height="18" rx="3"/>
+  <rect class="k" x="862" y="14" width="50" height="18" rx="3"/>
+  <rect class="k" x="918" y="14" width="50" height="18" rx="3"/>
+  <rect class="k" x="806" y="38" width="50" height="18" rx="3"/>
+  <rect class="k" x="862" y="38" width="50" height="18" rx="3"/>
+  <rect class="k" x="918" y="38" width="50" height="18" rx="3"/>
+  </a>
+  <text class="lb" x="831" y="27">V-POT</text>
+  <text class="lb" x="887" y="27">1</text>
+  <text class="lb" x="943" y="27">2</text>
+  <text class="lb" x="831" y="51">3</text>
+  <text class="lb" x="887" y="51">4</text>
+  <text class="lb" x="943" y="51">5</text>
+  <a href="#u-idle">
+  <rect class="k" x="806" y="70" width="78" height="18" rx="3"/>
+  </a>
+  <text class="lb" x="845" y="83">PAN</text>
+  <a href="#u-fine">
+  <rect class="k" x="890" y="70" width="78" height="18" rx="3"/>
+  </a>
+  <text class="lb" x="929" y="83">FINE</text>
+  <text class="lb" x="887" y="106">SELECTION MODE</text>
+  <a href="#u-user">
+  <rect class="k" x="806" y="110" width="50" height="18" rx="3"/>
+  <rect class="k" x="862" y="110" width="50" height="18" rx="3"/>
+  <rect class="k" x="918" y="110" width="50" height="18" rx="3"/>
+  </a>
+  <text class="lb" x="831" y="123">NORM</text>
+  <text class="lb" x="887" y="123">REC</text>
+  <text class="lb" x="943" y="123">AUTO</text>
+  <text class="lb" x="887" y="146">CHANNEL</text>
+  <a href="#u-channel">
+  <circle cx="887" cy="185" r="32" fill="none" stroke="var(--panel-line)"/>
+  <circle class="knob" cx="887" cy="185" r="22"/>
+  </a>
+  <a href="#u-user">
+  <rect class="k" x="806" y="228" width="50" height="18" rx="3"/>
+  <rect class="k" x="862" y="228" width="50" height="18" rx="3"/>
+  <rect class="k" x="918" y="228" width="50" height="18" rx="3"/>
+  </a>
+  <text class="lb" x="831" y="241">NAV</text>
+  <text class="lb" x="887" y="241">NUDGE</text>
+  <text class="lb" x="943" y="241">FOCUS</text>
+  <text class="lb" x="887" y="266">BANK</text>
+  <a href="#u-bank">
+  <rect class="k" x="838" y="270" width="46" height="18" rx="3"/>
+  <rect class="k" x="890" y="270" width="46" height="18" rx="3"/>
+  </a>
+  <text class="lb" x="861" y="283">◄</text>
+  <text class="lb" x="913" y="283">►</text>
+  <a href="#u-nav">
+  <rect class="k" x="874" y="318" width="26" height="22" rx="3"/>
+  <rect class="k" x="840" y="350" width="26" height="22" rx="3"/>
+  <circle class="k" cx="887" cy="361" r="10"/>
+  <rect class="k" x="908" y="350" width="26" height="22" rx="3"/>
+  <rect class="k" x="874" y="382" width="26" height="22" rx="3"/>
+  </a>
+  </svg>
 
-<h3 id="uf8-totalmix">TotalMix on the UF8</h3>
-<p>The eight strips show eight channels of the row the UF1 shows. Without a UF1, the nav cross picks
-the row. With a UF1, both work on one selection: SEL on the UF8 puts that channel on the UF1, and a
-channel picked on the UF1 moves the UF8 so it is on a strip.</p>
-<table class="data"><tbody>
-<tr><th data-uf8="kStripKeys">Fader</th><td>The channel's level. Inputs and playbacks set their
-level into the current submix (<a href="#rows">the submix</a>).</td></tr>
-<tr><th>V-Pot</th><td>On an input with a preamp, the gain. Otherwise the pan into the submix, on the
-FX row the width.</td></tr>
-<tr><th data-uf8="kVpotPush1">V-Pot push</th><td>Gain to 0 dB, pan to the middle, width to stereo.</td></tr>
-<tr><th>SEL</th><td>This channel on the UF1.</td></tr>
-<tr><th>CUT</th><td>Mute, on the FX row the effect off.</td></tr>
-<tr><th>SOLO</th><td>Solo in the submix. Outputs have none.</td></tr>
-<tr><th data-uf8="kBankLeft kBankRight">BANK ◄ ►</th><td>Eight channels on.</td></tr>
-<tr><th data-uf8="kPageLeft kPageRight">PAGE ◄ ►</th><td>One channel on. In the channel view: the
-next eight pages, where a channel has more.</td></tr>
-<tr><th data-uf8="kZoomUp kZoomDown">Nav cross up, down</th><td>The row.</td></tr>
-<tr><th data-uf8="kZoomLeft kZoomRight">Nav cross left, right</th><td>The submix.</td></tr>
-<tr><th data-uf8="kSendPlugin1">SEND/PLUG-IN 1-6</th><td>The submix, in the order of TotalMix'
-control room: 1-4 Phones 1-4, 5 Main B, 6 Main. The key of the submix in play is lit, a key without
-an output is dark.</td></tr>
-<tr><th data-uf8="kZoomCenter">Nav cross centre</th><td>TotalMix' window shown or hidden.</td></tr>
-<tr><th data-uf8="kPlugin">PLUG-IN</th><td>The channel view, on and off.</td></tr>
-<tr><th data-uf8="kVpotBank">V-POT, 1-5</th><td>The soft-key bank: V-POT bank 1, 1 bank 2, up to 5
-for bank 6. It is the UF1's bank too, so &lt; &gt; on the UF1 change it as well. The key of the bank
-showing is lit, a key without a bank is dark.</td></tr>
-<tr><th data-uf8="kTopSoft1">Soft keys</th><td>The bank's eight keys at once: keys 1-4 its first half,
-5-8 its second.</td></tr>
-</tbody></table>
-<p>The scribble strips show the channel's name and number, the colour bar where the level goes
-(<em>&gt; Phones 2</em> on inputs and playbacks, <em>OUTPUT</em>, <em>FX</em>) in the channel's TotalMix
-colour (page <a href="#set-colours">Colours</a>), the meters the levels TotalMix sends when
-<em>Send Peak Level</em> is on.</p>
-<p><strong>The channel view</strong> puts one <a href="#strip">STRIP</a> page of the selected channel
-on the eight V-Pots: V-Pots 1-4 are the page's controls, V-Pots 5-8 its switches, which a push
-switches. The soft keys pick the page. The faders stay the eight channels' levels. The UF8 shows the
-values as numbers; the EQ curve is the UF1's.</p>
+<div>
+<p>The UF8 has three modes on its LAYER keys: <strong>TotalMix</strong>, <strong>Hue</strong> and
+<strong>DynaMount</strong>. Where a control does something different in each mode, its table says
+what, mode by mode. In TotalMix, as on the UF1, it can also differ by <a href="#rows">row</a>.</p>
+<p class="note">The UF1 stays on TotalMix whatever the UF8 shows, so Main volume is always at hand.
+With a UF1 next to it, both work on one selection: SEL on the UF8 puts that channel on the UF1, a
+channel picked on the UF1 moves the UF8 so it is on a strip, and both show the same soft-key bank.</p>
 
+<div class="ctl" id="u-layer" data-uf8="kLayer1 kLayer2 kLayer3">
+<h3>LAYER 1-3</h3>
+<table class="data"><tbody>
+<tr><th>LAYER 1</th><td>TotalMix, where the UF8 starts.</td></tr>
+<tr><th>LAYER 2</th><td>Hue. Press again to go back to TotalMix.</td></tr>
+<tr><th>LAYER 3</th><td>DynaMount. Press again to go back to TotalMix.</td></tr>
+</tbody></table>
+<p>The lamp of the active mode is lit.</p>
+</div>
+
+<div class="ctl" id="u-soft" data-uf8="kTopSoft1">
+<h3>Soft keys</h3>
+<p>The eight keys above the scribble strips. They belong to the mode, and each key's name stands
+under it on the strip.</p>
+<table class="data"><thead><tr><th>Mode</th><th>The keys are</th></tr></thead><tbody>
+<tr><td>TotalMix</td><td>The <a href="#softkeys">soft-key bank</a> picked with
+<a href="#u-vpotbank">V-POT, 1-5</a>, both halves at once: keys 1-4 its first half, 5-8 its second.
+In the <a href="#uf8-chanview">channel view</a> they are the channel's pages.</td></tr>
+<tr><td>Hue</td><td>The eight scenes from the page <a href="#set-modes">Modes</a>. A push recalls a
+scene, a long press starts it moving. The scene showing is lit.</td></tr>
+<tr><td>DynaMount</td><td>The eight presets (<a href="#uf8-dyna">DynaMount</a>). A push drives the
+stands to it, a long press on an empty key stores where they are now, FINE and a push stores over
+the preset on that key. The preset recalled last is lit.</td></tr>
+</tbody></table>
+</div>
+
+<div class="ctl" id="u-scribble">
+<h3>Scribble strips</h3>
+<table class="data"><thead><tr><th>Mode</th><th>Shows</th></tr></thead><tbody>
+<tr><td>TotalMix</td><td>The channel's name, number and level in dB. The colour bar has the
+channel's TotalMix colour (page <a href="#set-colours">Colours</a>) and says where the fader writes:
+<code>&gt; Phones 2</code> for an input or a playback (the <a href="#rows">submix</a>),
+<code>OUTPUT</code> for an output, <code>FX</code> for Reverb and Echo. The bottom line shows what
+the V-Pot sets. The meters show the levels TotalMix sends when <em>Send Peak Level</em> is on.</td></tr>
+<tr><td>Hue</td><td>The lamp's name, <code>LAMP</code> or <code>ZONE</code> in the colour bar, the
+brightness in percent or <code>OFF</code>. The bottom line: brightness, hue and saturation, or the
+colour temperature while white is on.</td></tr>
+<tr><td>DynaMount</td><td>The stand's name, <code>DYNA</code> in the colour bar, the fader's axis and
+position. The bottom line: X, Y and R, and <code>OFF</code> when the stand does not answer.</td></tr>
+</tbody></table>
+</div>
+
+<div class="ctl" id="u-vpot" data-uf8="kVpotPush1">
+<h3>V-Pots</h3>
+<table class="data"><thead><tr><th>Mode, row</th><th>Turn</th><th>Push</th></tr></thead><tbody>
+<tr><td>TotalMix, input with a preamp</td><td>Gain</td><td>0 dB</td></tr>
+<tr><td>TotalMix, other inputs, playback</td><td>Pan in the current submix</td><td>Centre</td></tr>
+<tr><td>TotalMix, output</td><td>The output's own pan</td><td>Centre</td></tr>
+<tr><td>TotalMix, FX</td><td>Width, 0 (mono) to 1 (stereo)</td><td>Full stereo</td></tr>
+<tr><td>TotalMix, channel view</td><td>The page's control</td><td>Its default, or a switch on and off
+(<a href="#uf8-chanview">channel view</a>)</td></tr>
+<tr><td>Hue</td><td>Hue, with <a href="#u-flip">FLIP</a> saturation (both set on the page
+<a href="#set-modes">Modes</a>)</td><td>White on and off</td></tr>
+<tr><td>DynaMount</td><td>Rotation. The stand turns about a second after you stop.</td><td>Nothing</td></tr>
+</tbody></table>
+<p>In TotalMix, after a push the same V-Pot ignores turning for {{pushQuietMs}} ms, as on the UF1.</p>
+</div>
+
+<div class="ctl" id="u-solocutsel" data-uf8="kStripKeys">
+<h3>SOLO, CUT, SEL</h3>
+<table class="data"><thead><tr><th>Mode, row</th><th>SOLO</th><th>CUT</th><th>SEL</th></tr></thead><tbody>
+<tr><td>TotalMix, input, playback</td><td>Solo in the current submix</td><td>Mute</td><td>This channel on the UF1</td></tr>
+<tr><td>TotalMix, output</td><td>Nothing (TotalMix has no solo on an output)</td><td>Mute</td><td>This channel on the UF1, and the submix</td></tr>
+<tr><td>TotalMix, FX</td><td>Nothing</td><td>Switches the effect off and on; lit while off</td><td>This channel on the UF1</td></tr>
+<tr><td>Hue</td><td>This lamp stays on, every other one goes dark</td><td>The lamp on and off</td><td>Nothing</td></tr>
+<tr><td>DynaMount</td><td>Nothing</td><td>Nothing</td><td>Nothing</td></tr>
+</tbody></table>
+</div>
+
+<div class="ctl" id="u-fader" data-uf8="kStripKeys">
+<h3>Faders</h3>
+<p>Motorised: they move when the value changes elsewhere.</p>
+<table class="data"><thead><tr><th>Mode, row</th><th>The fader sets</th></tr></thead><tbody>
+<tr><td>TotalMix, input, playback</td><td>The level in the current submix</td></tr>
+<tr><td>TotalMix, output</td><td>The output's volume</td></tr>
+<tr><td>TotalMix, FX</td><td>The effect's volume</td></tr>
+<tr><td>Hue</td><td>Brightness. At the bottom the lamp goes off.</td></tr>
+<tr><td>DynaMount</td><td>Left and right. With <a href="#u-flip">FLIP</a> the distance, fader up
+is nearest. The stand moves when you let go of the fader.</td></tr>
+</tbody></table>
+</div>
+
+<div class="ctl" id="u-sendplugin" data-uf8="kSendPlugin1">
+<h3>SEND / PLUG-IN 1-8</h3>
+<p>In TotalMix: the <a href="#rows">submix</a>, in the order of TotalMix' control room: 1-4 Phones
+1-4, 5 Main B, 6 Main. The key of the submix in play is lit, a key without an output is dark, 7 and
+8 are empty. In Hue and DynaMount they do nothing.</p>
+</div>
+
+<div class="ctl" id="u-plugin" data-uf8="kPlugin">
+<h3>PLUG-IN</h3>
+<p>In TotalMix: the <a href="#uf8-chanview">channel view</a> of the selected channel, on and off.
+Lit while on.</p>
+</div>
+
+<div class="ctl" id="u-page" data-uf8="kPageLeft kPageRight">
+<h3>PAGE ◄ ►</h3>
+<p>In TotalMix: the strips one channel on. In the channel view: the next eight pages, where a
+channel has more than eight. In Hue and DynaMount they do nothing.</p>
+</div>
+
+<div class="ctl" id="u-flip" data-uf8="kFlip">
+<h3>FLIP</h3>
+<table class="data"><tbody>
+<tr><th>TotalMix</th><td>Nothing.</td></tr>
+<tr><th>Hue</th><td>The V-Pots' second role, out of the box saturation.</td></tr>
+<tr><th>DynaMount</th><td>The faders set the distance instead of left and right.</td></tr>
+</tbody></table>
+<p>Lit while on.</p>
+</div>
+
+<div class="ctl" id="u-vpotbank" data-uf8="kVpotBank">
+<h3>V-POT, 1-5</h3>
+<p>In TotalMix: the <a href="#softkeys">soft-key bank</a> on the soft keys, V-POT bank 1, 1 bank 2,
+up to 5 for bank 6. It is the UF1's bank too, so &lt; &gt; on the UF1 change it as well. The key of
+the bank showing is lit, a key without a bank is dark. In Hue and DynaMount they are dark.</p>
+</div>
+
+<div class="ctl" id="u-fine" data-uf8="kFine">
+<h3>FINE</h3>
+<p>Held: the CHANNEL encoder, and in TotalMix the V-Pots, turn in finer steps, {{fineFactorText}}
+of the normal step. In DynaMount, FINE and a push on a soft key store over a preset.</p>
+</div>
+
+<div class="ctl" id="u-channel" data-uf8="kChannelEncoder">
+<h3>CHANNEL encoder</h3>
+<p>In every mode the level of the jog wheel's target, out of the box Main, in steps of
+{{jogStepDb}} dB, as the UF1's jog wheel. Target and step are on the settings page
+<a href="#set-controls">Controls</a>.</p>
+</div>
+
+<div class="ctl" id="u-bank" data-uf8="kBankLeft kBankRight">
+<h3>BANK ◄ ►</h3>
+<p>In TotalMix: the strips eight channels on. In Hue and DynaMount they do nothing.</p>
+</div>
+
+<div class="ctl" id="u-nav" data-uf8="kZoomUp kZoomDown kZoomLeft kZoomRight kZoomCenter">
+<h3>Nav cross</h3>
+<table class="data"><tbody>
+<tr><th>Up, down</th><td>The previous or next row: Input, Playback, Output, FX, and round again.</td></tr>
+<tr><th>Left, right</th><td>The previous or next <a href="#rows">submix</a>, round the visible outputs.</td></tr>
+<tr><th>Centre</th><td>Shows or hides the TotalMix window.</td></tr>
+</tbody></table>
+<p>As on the UF1, in TotalMix. In Hue and DynaMount it does nothing.</p>
+</div>
+
+<div class="ctl" id="u-user" data-uf8="kQuick1 kQuick2 kQuick3 kNav kNudge kFocus kSelNorm kSelRec kSelAuto">
+<h3>QUICK 1-3, SELECTION MODE, NAV, NUDGE, FOCUS</h3>
+<p>Empty out of the box apart from QUICK 1, which is <em>Sleep the surface now</em>. The settings page
+<a href="#set-softkeys">Soft Keys</a> puts any of the <a href="#actions">actions</a> on QUICK 1-3,
+NORM, REC, AUTO, NAV, NUDGE and FOCUS, and sets each key's lamp: its <em>Active</em> colour while the
+action is on, its <em>Inactive</em> colour otherwise. A key with no action stays dark. They work in
+every mode.</p>
+</div>
+
+<div class="ctl" id="u-360" data-uf8="kBtn360">
+<h3>360</h3>
+<p>Opens the settings window. Press it again to close it.</p>
+</div>
+
+<div class="ctl" id="u-idle">
+<h3>Keys ORC leaves alone</h3>
+<p>CHANNEL beside PLUG-IN, PAN, the six automation keys and a push on the CHANNEL encoder do nothing
+in ORC.</p>
+</div>
+</div>
+
+</div>
+</section>
+
+<section id="uf8-chanview">
+<h2>The UF8's channel view</h2>
+<p>PLUG-IN in TotalMix puts the selected channel's <a href="#strip">STRIP</a> pages on the UF8. Press
+it again to go back to the overview.</p>
+<ul>
+  <li>The soft keys pick the page: each key is one page, and the page showing is lit. A channel with
+      more than eight pages has the rest behind PAGE ◄ ►.</li>
+  <li>V-Pots 1-4 are the page's controls, V-Pots 5-8 its switches: a push switches, a turn does
+      nothing. The bottom line names each one and shows its value.</li>
+  <li>On the FX row, Reverb and Echo spread their controls over all eight V-Pots, eight to a page.
+      They have no switch there: CUT switches the effect off and on.</li>
+  <li>A push on a control sets it back to its default, the last column of the page list under
+      <a href="#strip">STRIP</a>.</li>
+  <li>The faders stay the eight channels' levels. The UF8 shows values as numbers; the EQ curve is
+      the UF1's.</li>
+</ul>
+</section>
+
+<section id="uf8-modes">
+<h2>Hue, DynaMount and OBS on the UF8</h2>
 <h3 id="uf8-hue">Hue</h3>
-<p>Each lamp or zone set up on the <a href="#set-modes">Modes</a> page sits on one strip, from the
-left or from the right. Strips without a lamp are dark.</p>
-<table class="data"><tbody>
-<tr><th>Fader</th><td>Brightness. At the bottom the lamp goes off.</td></tr>
-<tr><th>V-Pot</th><td>Hue, with FLIP saturation. Both are set on the Modes page: hue,
-saturation, warmth or nothing.</td></tr>
-<tr><th>V-Pot push</th><td>White on and off.</td></tr>
-<tr><th>CUT</th><td>The lamp on and off.</td></tr>
-<tr><th>SOLO</th><td>This lamp stays on, every other one goes dark.</td></tr>
-</tbody></table>
-<p>The soft keys are the eight scenes: push recalls a scene, a long press starts it moving. V-POT and
-1-5 are dark.</p>
-
+<p>Each lamp or zone set up on the page <a href="#set-modes">Modes</a> sits on one strip, from the
+left or from the right. Strips without a lamp are dark. What each control does is under its own
+heading above.</p>
 <h3 id="uf8-dyna">DynaMount</h3>
-<p>Each stand set up on the <a href="#set-modes">Modes</a> page sits on one strip.</p>
-<table class="data"><tbody>
-<tr><th>Fader</th><td>Left and right. With FLIP the distance, fader up is nearest. The stand moves
-when you let go of the fader.</td></tr>
-<tr><th>V-Pot</th><td>Rotation. The stand turns about a second after you stop.</td></tr>
-</tbody></table>
-<p>A preset is where every stand is at one moment. The soft keys are the eight presets, V-POT and 1-5
-are dark:</p>
-<table class="data"><tbody>
-<tr><th>Push</th><td>The stands drive to the preset.</td></tr>
-<tr><th>Long press, on an empty key</th><td>Stores where the stands are now.</td></tr>
-<tr><th>FINE and push</th><td>Stores over the preset on that key.</td></tr>
-</tbody></table>
-<p>A preset finds each stand by its IP address. A stand the preset does not know stays where it is.</p>
-
+<p>Each stand set up on the page <a href="#set-modes">Modes</a> sits on one strip. A preset is
+where every stand is at one moment; the soft keys are the eight presets. A preset finds each stand by
+its IP address, and a stand the preset does not know stays where it is.</p>
 <h3 id="uf8-obs">OBS</h3>
-<p>OBS's scenes are a kind of <a href="#softkeys">soft-key bank</a>: put <em>OBS scenes</em> on a bank
-on the page <a href="#set-softkeys">Soft Keys</a>, and in TotalMix its key on V-POT to 5 brings them
-up, on the UF8 and on the UF1.</p>
+<p>OBS's scenes are a kind of <a href="#softkeys">soft-key bank</a>: put <em>OBS scenes</em> on a
+bank on the page <a href="#set-softkeys">Soft Keys</a>, and in TotalMix its key on V-POT to 5 brings
+them up, on the UF8 and on the UF1.</p>
 </section>
 
 <section id="softkeys">
@@ -583,7 +1002,7 @@ yourself or one of three lists:</p>
       to one; the scene on air is lit. Needs OBS set up on the page <a href="#set-modes">Modes</a>.</li>
 </ul>
 <p>On the UF8, V-POT to 5 pick banks 1 to 6, and its eight soft keys show a bank's two halves at once
-(<a href="#uf8-totalmix">TotalMix on the UF8</a>).</p>
+(<a href="#u-soft">soft keys</a>).</p>
 <p>Out of the box:</p>
 <!--GEN:banks-->
 <p>Every bank, key, label and action is set on the settings page <a href="#set-softkeys">Soft Keys</a>.</p>

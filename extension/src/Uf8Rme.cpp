@@ -20,9 +20,17 @@ int clampFirst(int first, int count)
     return std::clamp(first, 0, std::max(0, count - kStrips));
 }
 
+// One page of the channel view on the eight V-Pots: what each V-Pot is, and
+// whether it is a switch (a push switches it, a turn does nothing).
+struct Page {
+    int                id = -1;   // the strip view's id (RmeStrip::View), stable
+    std::string        name;
+    const rmes::Param* p[kStrips]   = {};
+    bool               key[kStrips] = {};
+};
 // The page the channel view shows, and every page the channel has.
 struct Pages {
-    std::vector<rmes::View> all;
+    std::vector<Page> all;
     int at = -1;   // index into all
 };
 
@@ -30,7 +38,49 @@ Pages pagesOf(const State& st, rmeu::Row r, int ch, const Config& cfg, int wantI
 {
     Pages p;
     if (ch < 0) return p;
-    p.all = rmes::views(st, r, ch, cfg.stripPages);
+    const auto views = rmes::views(st, r, ch, cfg.stripPages);
+    if (views.empty()) return p;
+    if (r == rmeu::Row::Fx) {
+        // ⇨ REVERB AND ECHO ON ALL EIGHT V-POTS (Frank 29.10.2026: "kein Grund
+        // nur die ersten zu belegen"). The UF1's pages are four pots and four
+        // switches; the effect has almost no switches, and its on/off is CUT. So
+        // here every control of the effect in page order, eight to a page, then
+        // any switch other than on/off. A page takes the name and id of the view
+        // its first V-Pot comes from.
+        struct Item { const rmes::Param* p; bool key; int view; };
+        std::vector<Item> items;
+        for (int vi = 0; vi < static_cast<int>(views.size()); ++vi)
+            for (const rmes::Param* q : views[static_cast<size_t>(vi)].pots)
+                if (q) items.push_back({ q, false, vi });
+        for (int vi = 0; vi < static_cast<int>(views.size()); ++vi)
+            for (const rmes::Param* q : views[static_cast<size_t>(vi)].keys)
+                if (q && std::string(q->id) != "rev_on" && std::string(q->id) != "echo_on")
+                    items.push_back({ q, true, vi });
+        for (std::size_t at = 0; at < items.size(); at += kStrips) {
+            Page pg;
+            const rmes::View& first = views[static_cast<size_t>(items[at].view)];
+            pg.id   = first.id;
+            pg.name = first.name;
+            for (std::size_t k = 0; k < static_cast<std::size_t>(kStrips) && at + k < items.size(); ++k) {
+                pg.p[k]   = items[at + k].p;
+                pg.key[k] = items[at + k].key;
+            }
+            p.all.push_back(pg);
+        }
+    } else {
+        // Every other row as on the UF1: V-Pots 1-4 the view's controls, 5-8
+        // its switches.
+        for (const auto& v : views) {
+            Page pg;
+            pg.id = v.id; pg.name = v.name;
+            for (int k = 0; k < 4; ++k) {
+                pg.p[k]     = v.pots[k];
+                pg.p[k + 4] = v.keys[k];
+                pg.key[k + 4] = true;
+            }
+            p.all.push_back(pg);
+        }
+    }
     if (p.all.empty()) return p;
     p.at = 0;
     for (int i = 0; i < static_cast<int>(p.all.size()); ++i)
@@ -107,7 +157,21 @@ Frame frame(const State& st, const rmei::State& in, const Side& u, const Config&
     const auto chs = channels(st, in, u);
     const bool cv  = u.chanView.load() && sel >= 0;
     const Pages pg = cv ? pagesOf(st, r, sel, cfg, u.chanPage.load()) : Pages{};
-    const rmes::View* page = (pg.at >= 0) ? &pg.all[static_cast<size_t>(pg.at)] : nullptr;
+    const Page* page = (pg.at >= 0) ? &pg.all[static_cast<size_t>(pg.at)] : nullptr;
+
+    // The channel view on V-Pot `s`: the page's control or switch (pagesOf),
+    // on the selected channel.
+    auto cvPot = [&](uf8strips::View& v, int s) {
+        const rmes::Param* p = page ? page->p[s] : nullptr;
+        if (!p) { v.ringMode = 0x03; return; }
+        double val = 0.0;
+        const bool k = rmes::value(st, r, sel, *p, val);
+        v.valueLine = uf8ValueLine(utf8ToLatin1(rmes::label(st, r, sel, *p)),
+                                   k ? rmes::format(*p, r, val) : std::string());
+        v.ring     = page->key[s] ? uf8::vpotPosUnipolar((k && val >= 0.5) ? 1.0 : 0.0)
+                                  : uf8::vpotPosUnipolar(k ? rmes::norm(*p, r, val) : 0.0);
+        v.ringMode = 0x01;
+    };
 
     for (int s = 0; s < kStrips; ++s) {
         uf8strips::View& v = f.strips[static_cast<size_t>(s)];
@@ -129,7 +193,12 @@ Frame frame(const State& st, const rmei::State& in, const Side& u, const Config&
         if (v.slotLabel.size() > uf8::kUf8ScribbleChars) v.slotLabel.resize(uf8::kUf8ScribbleChars);
         if (ch < 0) {
             v.ringMode = 0x03;
-            continue;   // an empty strip: dark, fader left alone
+            // ⛔ THE CHANNEL VIEW'S V-POTS DO NOT NEED A CHANNEL ON THEIR STRIP:
+            // they are the selected channel's. The FX row has two channels, so
+            // V-Pots 3-8 stayed blank there (Frank 29.10.2026, "nur die ersten
+            // 2"), and any row shorter than eight lost its last V-Pots.
+            if (cv) cvPot(v, s);
+            continue;   // otherwise an empty strip: dark, fader left alone
         }
 
         // Name, row, number, colour.
@@ -175,24 +244,7 @@ Frame frame(const State& st, const rmei::State& in, const Side& u, const Config&
 
         // The pot and the value line.
         if (cv) {
-            // The channel view: pots 1-4 = the page's parameters, 5-8 = its
-            // switches, all on the selected channel.
-            const rmes::Param* p = page ? (s < 4 ? page->pots[s] : page->keys[s - 4]) : nullptr;
-            if (p) {
-                double val = 0.0;
-                const bool k = rmes::value(st, r, sel, *p, val);
-                v.valueLine = uf8ValueLine(utf8ToLatin1(rmes::label(st, r, sel, *p)),
-                                           k ? rmes::format(*p, r, val) : std::string());
-                if (s < 4) {
-                    v.ring     = uf8::vpotPosUnipolar(k ? rmes::norm(*p, r, val) : 0.0);
-                    v.ringMode = 0x01;
-                } else {
-                    v.ring     = uf8::vpotPosUnipolar((k && val >= 0.5) ? 1.0 : 0.0);
-                    v.ringMode = 0x01;
-                }
-            } else {
-                v.ringMode = 0x03;
-            }
+            cvPot(v, s);
         } else if (const rmes::Param* g = gainParam(st, r, ch)) {
             double val = 0.0;
             const bool k = rmes::value(st, r, ch, *g, val);
@@ -250,10 +302,11 @@ Writes vpot(const State& st, const rmei::State& in, Side& u, const Config& cfg,
     const auto r   = rmeu::rowAt(in.row.load());
     const int  sel = rmei::selected(in, st, r);
     if (u.chanView.load() && sel >= 0) {
-        if (strip >= 4) return out;   // the switches: a push, not a turn
         const Pages pg = pagesOf(st, r, sel, cfg, u.chanPage.load());
         if (pg.at < 0) return out;
-        const rmes::Param* p = pg.all[static_cast<size_t>(pg.at)].pots[strip];
+        const Page& page = pg.all[static_cast<size_t>(pg.at)];
+        if (page.key[strip]) return out;   // a switch: a push, not a turn
+        const rmes::Param* p = page.p[strip];
         if (!p) return out;
         if (rmes::stepsWhole(*p)) {
             const int steps = wholeSteps(u.potAccum[strip], delta);
@@ -292,13 +345,10 @@ Writes vpotPush(const State& st, const rmei::State& in, Side& u, const Config& c
     if (u.chanView.load() && sel >= 0) {
         const Pages pg = pagesOf(st, r, sel, cfg, u.chanPage.load());
         if (pg.at < 0) return out;
-        const rmes::View& view = pg.all[static_cast<size_t>(pg.at)];
-        if (strip < 4) {
-            if (const rmes::Param* p = view.pots[strip]) return rmes::resetWrites(st, r, sel, *p);
-            return out;
-        }
-        if (const rmes::Param* p = view.keys[strip - 4]) return rmes::press(st, r, sel, *p);
-        return out;
+        const Page& page = pg.all[static_cast<size_t>(pg.at)];
+        const rmes::Param* p = page.p[strip];
+        if (!p) return out;
+        return page.key[strip] ? rmes::press(st, r, sel, *p) : rmes::resetWrites(st, r, sel, *p);
     }
     const int ch = channels(st, in, u)[static_cast<size_t>(strip)];
     if (ch < 0) return out;

@@ -41,10 +41,6 @@ int64_t steadyMs()
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-// The extension's default fine factor (g_fineFactorUf1 in main.cpp). ORC has no
-// setting for it yet.
-constexpr double kFineFactor = 0.25;
-
 const char* kindName(uf1::InputKind k)
 {
     switch (k) {

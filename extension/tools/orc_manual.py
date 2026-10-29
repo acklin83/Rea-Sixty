@@ -58,7 +58,7 @@ def facts():
         "minMacos": one(r"<key>LSMinimumSystemVersion</key>\s*<string>([0-9.]+)</string>",
                         plist, "LSMinimumSystemVersion"),
         "libusbVersion": one(r"set\(ORC_LIBUSB_VERSION\s+([0-9.]+)\)", cm, "libusb version"),
-        "fineFactor": one(r"constexpr double kFineFactor\s*=\s*([0-9.]+);", surface, "kFineFactor"),
+        "fineFactor": one(r"constexpr double kFineFactor\s*=\s*([0-9.]+);", src("orc/Uf8Surface.h"), "kFineFactor"),
     }
 
 
