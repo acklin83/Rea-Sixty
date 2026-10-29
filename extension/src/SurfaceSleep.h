@@ -15,6 +15,7 @@
 // run on the thread that owns the devices; `push(asleep)` is called there and
 // does the device writes.
 
+#include "Protocol.h"
 #include "UF1Protocol.h"
 
 #include <atomic>
@@ -92,6 +93,16 @@ inline std::vector<std::vector<uint8_t>> uf1Frames(bool asleep, uint8_t led, uin
     return { uf1::buildMasterBrightness(asleep ? 0x00 : kUf1MasterFull),
              uf1::buildLedBrightness(asleep ? 0x00 : led),
              uf1::buildLcdBrightness(asleep ? 0x00 : lcd) };
+}
+
+// ⇨ THE UF8's TWO LIGHTS (29.10.2026, out of main.cpp's pushSleepBrightness_,
+// shared with ORC): the LED master and the scribble LCDs. Asleep both go to a
+// real 0, which the Brightness table never sends (its darkest step is still
+// legible). `led` / `lcd` are the levels to wake to.
+inline std::vector<std::vector<uint8_t>> uf8Frames(bool asleep, uint8_t led, uint8_t lcd)
+{
+    return { uf8::buildLedBrightness(asleep ? 0x00 : led),
+             uf8::buildLcdBrightness(asleep ? 0x00 : lcd) };
 }
 
 // The press that woke the surface is swallowed with its release. Keyed by the

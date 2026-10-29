@@ -120,6 +120,20 @@ int main()
         EXPECT(!s.button(0x31, false, false));
     }
 
+    // The UF8's two lights (29.10.2026, shared with ORC): LED master and the
+    // scribble LCDs, a real 0 asleep, the given levels awake, in that order.
+    {
+        const auto dark = surfsleep::uf8Frames(true, 0x20, 0xA0);
+        EXPECT(dark.size() == 2);
+        EXPECT(dark[0] == uf8::buildLedBrightness(0x00));
+        EXPECT(dark[1] == uf8::buildLcdBrightness(0x00));
+        const auto lit = surfsleep::uf8Frames(false, 0x13, 0x60);
+        EXPECT(lit[0] == uf8::buildLedBrightness(0x13));
+        EXPECT(lit[1] == uf8::buildLcdBrightness(0x60));
+        EXPECT(lit[0][1] == 0x2D);   // FF 2D: the LED master
+        EXPECT(lit[1][1] == 0x4F);   // FF 4F: the LCD backlight
+    }
+
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
     std::printf("surface_sleep: all passed\n");
     return 0;

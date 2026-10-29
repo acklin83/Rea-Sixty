@@ -816,6 +816,12 @@ if(NOT WIN32)
     target_include_directories(test_orc_handover PRIVATE src)
     add_test(NAME orc_handover COMMAND test_orc_handover)
 
+    # UF8 bulk-IN packets to whole frames, shared by Rea-Sixty and ORC
+    # (Uf8Frames.h, header only; docs/orc-uf8-plan.md stage 2).
+    add_executable(test_uf8_frames tests/test_uf8_frames.cpp)
+    target_include_directories(test_uf8_frames PRIVATE src)
+    add_test(NAME uf8_frames COMMAND test_uf8_frames)
+
     # Project state follows the project tab (ProjectScoped.h, header only).
     add_executable(test_project_scoped tests/test_project_scoped.cpp)
     target_include_directories(test_project_scoped PRIVATE src)
@@ -859,7 +865,7 @@ if(NOT WIN32)
 
     # Sleep: the clock Rea-Sixty and ORC share, the UF1's lights, the waking press
     # (SurfaceSleep.h).
-    add_executable(test_surface_sleep tests/test_surface_sleep.cpp src/UF1Protocol.cpp)
+    add_executable(test_surface_sleep tests/test_surface_sleep.cpp src/UF1Protocol.cpp src/Protocol.cpp)
     target_include_directories(test_surface_sleep PRIVATE src)
     add_test(NAME surface_sleep COMMAND test_surface_sleep)
 

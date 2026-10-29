@@ -105,6 +105,7 @@
 #include "EncoderRing.h"
 #include "LaneModel.h"
 #include "OrcHandover.h"
+#include "Uf8Frames.h"
 #ifdef __APPLE__
 #include <unistd.h>   // getpid, for the ORC handover marker
 #include <sys/time.h> // gettimeofday, for the lines in ORC's log
@@ -6396,10 +6397,11 @@ void pushSleepBrightness_(bool asleep)
     for (int u = 0; u < uf8Units_(); ++u) {   // both UF8s alike
         auto d = uf8UnitDev_(u);
         if (!d || !d->isOpen()) continue;
-        d->send(uf8::buildLedBrightness(
-            asleep ? 0x00 : kBrightnessTable[clampLevel_(g_brightness.load())].uf8_led));
-        d->send(uf8::buildLcdBrightness(
-            asleep ? 0x00 : kBrightnessTable[clampLevel_(g_scribbleBrightness.load())].uf8_lcd));
+        // The two frames are SurfaceSleep's (shared with ORC).
+        for (auto& fr : surfsleep::uf8Frames(asleep,
+                 kBrightnessTable[clampLevel_(g_brightness.load())].uf8_led,
+                 kBrightnessTable[clampLevel_(g_scribbleBrightness.load())].uf8_lcd))
+            d->send(std::move(fr));
     }
     if (g_uc1_dev && g_uc1_dev->isOpen()) {
         const auto& bl = kBrightnessTable[clampLevel_(g_brightness.load())];
@@ -27201,16 +27203,9 @@ inline int uf8FaderStop_(uint16_t rawPb, bool hiBit)
 // the last parked offset instead of measuring a displacement-laden one.
 constexpr long kParkedQuietMs = 600;
 
-// Carry-over buffer for frames split across USB bulk-IN URBs. UF8
-// firmware emits FF-framed events back-to-back without aligning them
-// to USB packet boundaries, so a `FF 20 02 <strip> <state>` touch
-// frame can arrive as `FF 20 02` in one URB and `<strip> <state>` in
-// the next. Without stitching, both halves are dropped (`unknown:` log)
-// — manifests as Fader 8 (or any fader, but statistically Fader 8 most
-// often) silently failing to limp because the TOUCH event never reaches
-// the dispatcher. Capped to prevent unbounded growth from corrupt input.
-static std::array<std::vector<uint8_t>, 2> g_inputResidualU;   // per UF8 unit
-constexpr size_t kInputResidualMax = 64;
+// Carry-over for frames split across USB bulk-IN URBs, one per UF8 unit
+// (Uf8Frames.h says why it exists).
+static std::array<uf8frames::Assembler, 2> g_uf8FrameAsm;
 
 // UF8 wire tracing is OFF unless REASIXTY_UF8_TRACE is set. The per-packet
 // /tmp logs below run on the libusb input / motor threads; an unconditional
@@ -27297,8 +27292,6 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
 {
     const int base = unit * 8;
     t_uf8InputUnit = unit;   // for the builtins this press runs (page keys)
-    // Each unit stitches its own URBs.
-    std::vector<uint8_t>& g_inputResidual = g_inputResidualU[unit & 1];
     // NOTE: do NOT add per-packet file logging here. This runs on the libusb
     // input thread for EVERY IN packet; a synchronous fopen/fprintf/fclose per
     // packet throttles the thread under fast input (V-pot spins) and grows an
@@ -27308,128 +27301,37 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
     // REASIXTY_UF1_TRACE and buffer, never an unconditional per-packet write.
     if (!g_midi) return;
 
-    // Stitch any leftover bytes from the previous URB to the front of
-    // this one before parsing. The thread-safety story: this handler
-    // runs on the libusb event thread and is the SOLE writer/reader of
-    // g_inputResidual.
-    std::vector<uint8_t> stitched;
-    const uint8_t* data = dataIn;
-    size_t         len  = lenIn;
-    if (!g_inputResidual.empty()) {
-        // ⛔ EVERY PACKET STARTS WITH THE 31 xx SESSION PREFIX, the one that
-        // continues a split frame too, and sometimes a packet is NOTHING but
-        // the prefix (cap51 at 36.038: "31 60 ff 21 03 07 c9", then "31 60",
-        // then "31 60 48 3c"). Appended as it came, the prefix became the
-        // frame's payload: LSB 0x31 / MSB 0x60 = pb 12337, or MSB 0x31 = 63xx,
-        // a one-frame jump of the fader to a fixed value. Two faders at once
-        // split more frames, so it showed up there (forum 2026-10-25, and
-        // Frank's log the same evening: strip 4 read 12337 and 6295 mid-move).
-        const uint8_t* cont    = dataIn;
-        size_t         contLen = lenIn;
-        if (contLen >= 2 && cont[0] == 0x31) { cont += 2; contLen -= 2; }
-        if (contLen == 0) return;   // prefix only: keep the residual waiting
-        stitched.reserve(g_inputResidual.size() + contLen);
-        stitched.insert(stitched.end(), g_inputResidual.begin(), g_inputResidual.end());
-        stitched.insert(stitched.end(), cont, cont + contLen);
-        g_inputResidual.clear();
-        data = stitched.data();
-        len  = stitched.size();
-    }
-
-    // Walk past each FF frame in the buffer (multiple frames can arrive
-    // concatenated, optionally preceded by a 31 60 / 31 00 session prefix).
-    size_t i = 0;
-    while (i < len) {
-        // Session-prefix byte 0x31 + flag byte: skip both.
-        if (data[i] == 0x31 && i + 1 < len) { i += 2; continue; }
-        if (data[i] != 0xFF) { ++i; continue; }
-        // Need at least FF + cmd to know how much more to expect. If
-        // we only have a lone FF at the end, drop it — it's most likely
-        // a stray byte (frame checksum that happened to land on 0xFF),
-        // not the start of a real frame. Saving it as residual would
-        // mis-frame the next URB. If we have FF+cmd, only save when
-        // the cmd byte is one we actually know — otherwise the FF was
-        // also a stray.
-        if (i + 1 >= len) {
-            // Lone FF at the very end — drop.
-            break;
-        }
-        if (i + 2 >= len) {
-            // FF + cmd at the end. Only carry over if cmd is recognised.
-            const uint8_t peekCmd = data[i + 1];
-            const bool known = (peekCmd == 0x04 || peekCmd == 0x20 ||
-                                peekCmd == 0x21 || peekCmd == 0x22 ||
-                                peekCmd == 0x23 || peekCmd == 0x24 ||
-                                peekCmd == 0x33);
-            if (known && len - i <= kInputResidualMax) {
-                g_inputResidual.assign(data + i, data + len);
+    // ⇨ FRAMING LIVES IN Uf8Frames.h (29.10.2026), shared with ORC: stitching
+    // across URBs, the 31 xx prefix, the position checksum. Pulled out verbatim;
+    // what follows here is the dispatch, unchanged, now once per whole frame.
+    std::vector<uf8frames::Frame> frames;
+    uf8frames::feed(g_uf8FrameAsm[unit & 1], dataIn, lenIn, frames,
+        [](uf8frames::Skip kind, const uint8_t* at, size_t avail) {
+            if (kind == uf8frames::Skip::BadChecksum) {
+                const uint8_t sum = static_cast<uint8_t>(at[1] + at[2] + at[3] + at[4] + at[5]);
+                faderInputLog_("POS", at[3], (at[4] & 0x7F) | ((at[5] & 0x7F) << 7),
+                               at[6], sum, "BADCK");
+                return;
             }
-            break;
-        }
-
-        // Figure out frame size based on the command byte.
-        const uint8_t cmd = data[i + 1];
-        size_t frameSize = 0;
-        switch (cmd) {
-            // FF 04 02 XX 01 XX = 6 bytes total. Two payload variants
-            // (02 9d 01 a4 / 02 94 01 9b) cycle alternately. Previous
-            // frameSize=7 was wrong: it skipped past the actual end of
-            // the poll frame, swallowing whatever FF byte came next —
-            // which is exactly how bundled "FF 04 ... FF 21 03 ..."
-            // and "FF 04 ... FF 20 02 ..." packets lost their touch /
-            // fader events. Symptom: motor stays engaged because the
-            // firmware sees its FF 21 03 echoes never come back from
-            // host (we never receive the events to echo them).
-            case 0x04: frameSize = 6; break;   // poll
-            case 0x21: frameSize = 7; break;   // fader position
-            case 0x22: frameSize = 7; break;   // button
-            case 0x20: frameSize = 6; break;   // fader touch (capacitive)
-            case 0x23: frameSize = 6; break;   // pressure sensor (TBD)
-            case 0x24: frameSize = 6; break;   // v-pot rotation
-            case 0x33: frameSize = 6; break;   // pressure sensor (TBD)
-            default:   frameSize = 0; break;
-        }
-        if (frameSize == 0) {
-            // Unknown command — log (trace-gated) and skip one byte.
+            // Unknown command — log (trace-gated).
             if (g_uf8Trace)
             if (FILE* f = std::fopen(uf8::logPath("reaper_uf8_unknown.log").c_str(), "a")) {
                 std::fprintf(f, "unknown:");
-                const size_t show = std::min<size_t>(len - i, 12);
-                for (size_t k = 0; k < show; ++k) std::fprintf(f, " %02X", data[i + k]);
+                const size_t show = std::min<size_t>(avail, 12);
+                for (size_t k = 0; k < show; ++k) std::fprintf(f, " %02X", at[k]);
                 std::fprintf(f, "\n");
                 std::fclose(f);
             }
-            ++i;
-            continue;
-        }
-        if (i + frameSize > len) {
-            // Truncated frame at end of buffer — known opcode but the
-            // payload extends past the URB boundary. Carry the partial
-            // frame into the next URB rather than dropping it (which
-            // is how Fader 8 TOUCH events and others were silently lost).
-            if (len - i <= kInputResidualMax) {
-                g_inputResidual.assign(data + i, data + len);
-            }
-            break;
-        }
+        });
+
+    for (const uf8frames::Frame& fr : frames) {
+        const uint8_t* data      = fr.b;
+        size_t         i         = 0;   // the body below still steps it per frame
+        const uint8_t  cmd       = data[1];
+        const size_t   frameSize = fr.n;
 
         // Dispatch by command.
         if (cmd == 0x21 && data[i + 2] == 0x03) {
-            // The last byte is the sum of the five before it (everything after
-            // FF), right in all 1287 position frames of the SSL 360 captures.
-            // A frame that fails it was put together wrong; resync byte by
-            // byte instead of moving a fader to a value nobody sent.
-            {
-                const uint8_t sum = static_cast<uint8_t>(
-                    data[i + 1] + data[i + 2] + data[i + 3] + data[i + 4] + data[i + 5]);
-                if (sum != data[i + 6]) {
-                    faderInputLog_("POS", data[i + 3],
-                                   (data[i + 4] & 0x7F) | ((data[i + 5] & 0x7F) << 7),
-                                   data[i + 6], sum, "BADCK");
-                    ++i;
-                    continue;
-                }
-            }
             // Fader position: FF 21 03 strip A B cksum
             // A = MCU LSB (high bit is a flag, masked), B = MCU MSB.
             // Native route: push into the input queue as an absolute volume
@@ -28872,7 +28774,7 @@ void onUf8Input2(const uint8_t* data, size_t len)
     // On a MIDI CC layer past the last page the right unit is dark and does
     // nothing: its faders and pots would otherwise ride tracks 9-16 unseen.
     if (uf8::bindings::ccLayerActive() && !uf8CcOwnsUnit_(1)) {
-        g_inputResidualU[1].clear();
+        g_uf8FrameAsm[1].residual.clear();
         return;
     }
     onUf8InputUnit_(data, len, 1);
