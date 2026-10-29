@@ -1,7 +1,7 @@
 # Plan: ORC MoreMe (stoerme in ORC, Kopfhörermixer für Musiker)
 
 Stand 29.10.2026, Auftrag Frank: „Würd's schon gerne weitergeben“, Plan wie bei ORC-UF8.
-Nichts gebaut.
+Gebaut am 29.10.2026, Stufen 1-5, siehe 7.4. Am Gerät nicht geprüft.
 
 ## 1. Das Bild in fünf Sätzen
 
@@ -92,6 +92,45 @@ Remote 2 geht nicht.
 | 3 | Zweite TotalMix-Verbindung mit regelmässigem Fragen, Übergabe lässt sie offen |
 | 4 | Reiter Phones, Menüzeile, QR-Code |
 | 5 | Handbuch, dann Umstieg in deinem Studio |
+
+## 7.4 Stand des Baus
+
+| Stufe | Commit | gebaut |
+|---|---|---|
+| 1 `orc/Phones.*`: stoermes JSON rein/raus, Sperre mit Übernahme, Mute über den Fader mit gemerktem Pegel, Sichtbarkeit pro Runde, PIN-Sperre aus `pin.js`; `Manager::setRounds` (/sendall alle 3 s, 400 ms Fenster, `visible()`); `RmeNames::toUtf8` | `e1a70aa2` | ja, ctest `orc_phones` (Fälle aus `pin.test.js`) |
+| 2 `orc/WebSocket.*` (RFC 6455 Server-Seite, HTTP), `orc/PhonesServer.*` (ein Thread, `poll()`), Seite `orc/moreme/moreme.html` + Zeichen `moreme-logo.svg` im Bundle unter Resources/moreme | `30c5b58a` | ja, ctests `orc_websocket` (RFC-Beispielbytes), `orc_phones_server` (echter Server gegen falsches TotalMix, nur Ports vom System) |
+| 3 Zweites `rme::Manager` in `PhonesServer`, Host von der Seite General, Ports 7003/7004; Übergabe in `Surface.cpp` stoppt nur `rme::manager()` | `30c5b58a` | ja |
+| 4 Reiter **MoreMe**, Menüzeile **MoreMe** mit Adresse, PIN und QR-Code (CoreImage, nur die Adresse) | `30c5b58a` | ja |
+| 5 Handbuch-Kapitel „MoreMe: headphone mixes on phones“, Seite MoreMe, Dateien, Fehlerzeilen; `orc_manual.py` prüft die MoreMe-Menütexte | `b1e868d2` | ja, Release offen |
+
+Dateien in ORCs Ordner: `moreme.json` (an/aus, Ports, Studioname, Logo-Dateiname), `moreme.pin`
+(0600), das gewählte Logo als `moreme-logo.png|jpg|svg`.
+
+Beim Bauen entschieden oder abgewichen:
+- **Reiter und Menüzeile heissen „MoreMe“**, nach 9.1 (der Auftrag nannte sie „Phones“).
+- **Ping alle 15 s, ein stummes Handy fliegt nach 45 s** und gibt seinen Kopfhörer frei. stoerme
+  hatte das nicht: ein eingeschlafenes Handy hielt seinen Kopfhörer, bis macOS die Verbindung
+  aufgab.
+- **Neuer PIN schickt alle Handys zur PIN-Eingabe.** stoerme las den PIN nur beim Start.
+- **Kein PIN, keine Seite**: der Server öffnet den Port nicht ohne PIN (zweite Sperre neben dem
+  Reiter, der nie einen leeren PIN speichert). Beim Start mit „an“ und fehlender PIN-Datei macht
+  ORC einen neuen.
+- **Nur Änderungen an die Handys**, auch beim Master (stoerme schickte den Master bei jeder Runde).
+  Ein in TotalMix umbenannter Kanal schickt einen neuen Snapshot (stoerme nur bei Farbe und
+  Sichtbarkeit).
+- Ein Phones-Ausgang -1 gilt als nicht zugewiesen (stoerme nahm -1 als Bus).
+- Die Seite lädt die Schrift Inter weiter von Google Fonts (1:1); ohne Internet fällt sie auf die
+  Systemschrift zurück. Alte `stoerme.*`-Werte im Handy (PIN, Kopfhörer, Ansicht) werden übernommen,
+  solange die Adresse gleich bleibt.
+- `WsClient.cpp` (OBS) hat seine eigene Rahmen-Logik behalten; `orc/WebSocket` ist nur die
+  Server-Seite.
+- ORC-Version unverändert 1.3.0 / Build 7. Der Build in /Applications ist ad hoc signiert, die
+  notarisierte 1.3.0 liegt im Scratchpad der Session und als DMG in `dist/orc-1.3.0/`.
+
+**Dein Umstieg (Abschnitt 6):** stoermes LaunchAgent stoppen
+(`launchctl bootout gui/$(id -u)/ch.stoersender.stoerme`), ORC neu starten, im Reiter MoreMe
+einschalten, deinen stoerme-PIN ins Feld PIN. Läuft stoerme noch, zeigt die Menüzeile
+„port 8088 is in use by another program“ bzw. „TotalMix port in use by another program“.
 
 ## 8. Zu messen (am Gerät, durch dich)
 
