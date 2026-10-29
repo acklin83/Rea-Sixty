@@ -137,6 +137,13 @@ int main()
         EXPECT(a.residual.size() == 2);
     }
 
+    // V-Pot delta: six signed bits.
+    EXPECT(vpotDelta(0x01) == 1);
+    EXPECT(vpotDelta(0x1F) == 31);
+    EXPECT(vpotDelta(0x3F) == -1);
+    EXPECT(vpotDelta(0x20) == -32);
+    EXPECT(vpotDelta(0x41) == 1);      // bit 0x40 unused
+
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
     std::printf("uf8_frames: all passed\n");
     return 0;

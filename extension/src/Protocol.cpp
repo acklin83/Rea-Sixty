@@ -5,6 +5,7 @@
 #include <cstring>
 #include <limits>
 #include <numeric>
+#include <string>
 
 namespace uf8 {
 
@@ -479,6 +480,38 @@ std::vector<uint8_t> buildVPotMode(const std::array<uint8_t, kStripCount>& modes
     std::span<const uint8_t> payload{frame.data() + 1, frame.size() - 1};
     frame.push_back(checksum(payload));
     return frame;
+}
+
+std::vector<std::vector<uint8_t>> blankUnitFrames()
+{
+    std::vector<std::vector<uint8_t>> out;
+    const std::string blankName(kUf8ScribbleChars, ' ');
+    const std::string blankVal(19, ' ');
+    const LedColour off{};
+    auto leds = [&](LedColourFrames f) {
+        if (!f.ff38.empty())   out.push_back(std::move(f.ff38));
+        if (!f.ff39.empty())   out.push_back(std::move(f.ff39));
+        if (!f.legacy.empty()) out.push_back(std::move(f.legacy));
+    };
+    for (uint8_t l = 0; l < 8; ++l) {
+        out.push_back(buildStripTextUpper(l, blankName));
+        out.push_back(buildChannelStripType(l, ""));
+        out.push_back(buildChannelNumber(l, "  "));
+        out.push_back(buildFaderDbReadout(l, "    ", ""));
+        out.push_back(buildValueLine(l, blankVal));
+        out.push_back(buildPluginSlotName(l, blankName));
+        leds(buildTopSoftKeyLed(l, TopSoftKeyState::Off, off));
+        for (auto cls : { LedClass::Solo, LedClass::Cut, LedClass::Sel })
+            leds(buildLedColourPair(l, cls, false));
+        out.push_back(buildFaderPosition(l, 0, 0));
+    }
+    out.push_back(buildVPotReadoutBar(std::array<uint16_t, 8>{}));
+    out.push_back(buildVPotMode(std::array<uint8_t, 8>{0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03}));
+    auto vu = buildVuMeter(std::array<uint8_t, 16>{});
+    out.push_back(std::move(vu[0]));
+    out.push_back(std::move(vu[1]));
+    out.push_back(buildSelectedStripBitmask(0));
+    return out;
 }
 
 uint16_t vpotPosBipolar(double v)

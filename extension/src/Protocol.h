@@ -336,6 +336,12 @@ std::vector<uint8_t> buildVPotMode(const std::array<uint8_t, kStripCount>& modes
 //   Unipolar (Freq, Q, Threshold): byte0 = 0..100, byte1 = 0x00.
 //   Pan is a single line, not a fill (Frank 2026-08-19), so it goes out
 //     unipolar at (pan + 1) / 2.
+// Every cell of one UF8 dark: scribbles, readouts, soft keys, strip LEDs, rings,
+// meters, fader down, no strip selected. Out of main.cpp's uf8BlankUnit_
+// (29.10.2026), in its order; the LED pairs are flattened (FF 38, FF 39, legacy).
+// The GR bytes of the heartbeat are not frames: the caller clears those.
+std::vector<std::vector<uint8_t>> blankUnitFrames();
+
 uint16_t vpotPosBipolar(double v);
 uint16_t vpotPosUnipolar(double v);
 uint16_t vpotPosPan(double pan);

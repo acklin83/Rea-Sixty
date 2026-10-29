@@ -269,6 +269,16 @@ int main()
     EXPECT(vpotPosPan(-1.0) == 0);
     EXPECT(vpotPosPan(1.0) == 100);
 
+    // A dark unit (out of main.cpp's uf8BlankUnit_): per strip 6 cell frames,
+    // the soft-key lamp (pair + legacy = 3), SOLO/CUT/SEL (pairs = 6), the
+    // fader; then rings, modes, two VU, the mask.
+    {
+        const auto f = blankUnitFrames();
+        EXPECT(f.size() == 8 * (6 + 3 + 6 + 1) + 5);
+        EXPECT(f.front() == buildStripTextUpper(0, std::string(kUf8ScribbleChars, ' ')));
+        EXPECT(f.back() == buildSelectedStripBitmask(0));
+    }
+
     std::printf("OK — all checks passed\n");
     return 0;
 }

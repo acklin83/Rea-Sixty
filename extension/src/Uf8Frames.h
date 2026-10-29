@@ -168,4 +168,15 @@ void feed(Assembler& a, const std::uint8_t* dataIn, std::size_t lenIn,
     }
 }
 
+// FF 24 02 <pot> <raw>: `raw` is a 6-bit signed detent delta (two's
+// complement) in the low 6 bits: 0x01..0x1F = +1..+31 (clockwise), 0x3F..0x20 =
+// -1..-32. Bits 0x40/0x80 are unused, confirmed on a live UF8 by capturing slow
+// CW vs. CCW rotations. Pot 0..7 = the strips, 0x08 = the channel encoder.
+inline int vpotDelta(std::uint8_t raw)
+{
+    std::int8_t v = static_cast<std::int8_t>(raw & 0x3F);
+    if (v & 0x20) v = static_cast<std::int8_t>(v | 0xC0);   // sign-extend from 6 bits
+    return v;
+}
+
 } // namespace uf8frames

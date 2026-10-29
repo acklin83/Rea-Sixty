@@ -28591,8 +28591,7 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
             const uint8_t hwPot = data[i + 3];   // 0..7 strips, 0x08 = channel encoder
             const uint8_t strip = static_cast<uint8_t>(hwPot < 8 ? hwPot + base : hwPot);
             const uint8_t raw   = data[i + 4];
-            int8_t signed6 = static_cast<int8_t>(raw & 0x3F);
-            if (signed6 & 0x20) signed6 |= 0xC0;   // sign-extend from 6 bits
+            const int8_t signed6 = static_cast<int8_t>(uf8frames::vpotDelta(raw));   // Uf8Frames.h
             // MIDI CC layer: the V-Pot is a controller. Strip 8, the channel
             // encoder, stays with REAPER and falls through.
             if (hwPot < 8 && uf8CcOwnsUnit_(unit)) {
@@ -40782,33 +40781,9 @@ static void uf8BlankUnit_(int unit)
 {
     auto d = uf8UnitDev_(unit);
     if (!d || !d->isOpen()) return;
-    const std::string blankName(uf8::kUf8ScribbleChars, ' ');
-    const std::string blankVal(19, ' ');
-    const uf8::LedColour off{};
-    auto leds = [&](uf8::LedColourFrames f) {
-        if (!f.ff38.empty())   d->send(std::move(f.ff38));
-        if (!f.ff39.empty())   d->send(std::move(f.ff39));
-        if (!f.legacy.empty()) d->send(std::move(f.legacy));
-    };
-    for (uint8_t l = 0; l < 8; ++l) {
-        d->send(uf8::buildStripTextUpper(l, blankName));
-        d->send(uf8::buildChannelStripType(l, ""));
-        d->send(uf8::buildChannelNumber(l, "  "));
-        d->send(uf8::buildFaderDbReadout(l, "    ", ""));
-        d->send(uf8::buildValueLine(l, blankVal));
-        d->send(uf8::buildPluginSlotName(l, blankName));
-        leds(uf8::buildTopSoftKeyLed(l, uf8::TopSoftKeyState::Off, off));
-        for (auto cls : { uf8::LedClass::Solo, uf8::LedClass::Cut, uf8::LedClass::Sel })
-            leds(uf8::buildLedColourPair(l, cls, false));
-        d->send(uf8::buildFaderPosition(l, 0, 0));
-    }
-    d->send(uf8::buildVPotReadoutBar(std::array<uint16_t, 8>{}));
-    auto mf = uf8::buildVPotMode(std::array<uint8_t, 8>{0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03});   // no ring
-    d->send(std::move(mf));
-    auto vu = uf8::buildVuMeter(std::array<uint8_t, 16>{});
-    d->send(std::move(vu[0]));
-    d->send(std::move(vu[1]));
-    d->send(uf8::buildSelectedStripBitmask(0));
+    // The frames are Protocol's (uf8::blankUnitFrames, shared with ORC since
+    // 29.10.2026), in the order this function sent them.
+    for (auto& f : uf8::blankUnitFrames()) d->send(std::move(f));
     d->setGrBytes(std::array<uint8_t, 8>{});
     d->setGateGrBytes(std::array<uint8_t, 8>{});
 }
