@@ -568,7 +568,7 @@ Positionen sind Laufzustand, keine Einstellung, und offen geregelt (Abschnitt 3)
 
 | Rea-Sixty | ORC | Ergebnis |
 |---|---|---|
-| alt (v1-Marke, wartet nicht) | neu | ORC gibt auf die Marke hin frei wie heute. UF8 hält das alte Rea-Sixty nicht fest, weil es ihn nie wiederholt öffnet: **Lücke**, der UF8 bleibt nach dem REAPER-Start bei ORC, bis REAPER neu startet. Abhilfe: ORC gibt auf die v1-Marke hin auch den UF8 frei und das alte Rea-Sixty bekommt ihn beim nächsten Start. Hinweis in den Release Notes: Rea-Sixty zuerst aktualisieren |
+| alt (v1-Marke, wartet nicht) | neu | UF1 wie heute. **UF8 bricht:** das alte Rea-Sixty öffnet den UF8 beim REAPER-Start genau einmal und wiederholt nie (Memory `uc1-wedged-after-failed-open`). ORC hält ihn in dem Moment noch (es merkt die Marke erst nach bis zu 500 ms), also landet der UF8 bei diesem Rea-Sixty nie in REAPER, bei keinem Start. Nicht reparierbar, das alte Rea-Sixty ist draussen. Darum: **Rea-Sixty mit Übergabe v2 und UF8-Retry wird ein Release VOR ORC mit UF8.** ORC erkennt die alte Marke (keine Versionszeile) und zeigt im Menü „REAPER cannot take the UF8 yet: update Rea-Sixty“, statt still festzuhalten |
 | neu | alt (kein `orc.pid`) | Rea-Sixty sieht kein laufendes ORC, wartet nicht, verhält sich wie heute |
 | neu | neu | Übergabe v2 |
 | neu | nicht installiert | wie heute, kein Ordner, keine Marke |
