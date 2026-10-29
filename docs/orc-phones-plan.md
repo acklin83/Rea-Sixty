@@ -1,4 +1,4 @@
-# Plan: stoerme in ORC (Kopfhörermixer für Musiker)
+# Plan: ORC MoreMe (stoerme in ORC, Kopfhörermixer für Musiker)
 
 Stand 29.10.2026, Auftrag Frank: „Würd's schon gerne weitergeben“, Plan wie bei ORC-UF8.
 Nichts gebaut.
@@ -101,18 +101,16 @@ Remote 2 geht nicht.
   `NSLocalNetworkUsageDescription`-Eintrag im Info.plist; ob es den für eingehende Verbindungen
   braucht, ist ungeklärt.
 
-## 9. Fragen an dich
+## 9. Entschieden (Frank 29.10.) und offen
 
-1. **Name:** stoerme bleibt der Name (die Seite heisst so, Logo Störsender), oder neutral, z. B.
-   „ORC Phones“?
-2. **Eine Quelle für die Seite:** Sie zieht ins Rea-Sixty-Repo (bei ORC), und das stoerme-Repo wird
-   danach stillgelegt? Sonst gibt es zwei Kopien.
-3. **Ab Werk aus?** Ich würde aus vorschlagen: ein offener Port ist eine bewusste Entscheidung.
-4. **Ohne PIN starten erlauben?** stoerme lässt das zu und meldet es nur. Für Weitergabe würde ich
-   einen PIN verlangen, sobald der Mixer an ist.
-5. **Ein Remote für alle Kopfhörer** (wie stoermes Bridge heute, eine gemeinsame Sichtbarkeit) oder
-   pro Kopfhörer eine eigene Remote mit eigener Auswahl (wie stoermes README es beschreibt)? Eine
-   ist einfacher und spart Slots.
+1. **Name: ORC MoreMe.** Reiter, Menüzeile und Handbuch heissen so; die Seite trägt den Namen
+   statt „stoerme“.
+2. **Eine Quelle:** Die Seite zieht ins Rea-Sixty-Repo zu ORC, das stoerme-Repo wird nach dem
+   Umstieg stillgelegt.
+3. *Offen:* ab Werk aus (Vorschlag: aus, ein offener Port ist eine bewusste Entscheidung).
+4. *Offen:* PIN Pflicht, sobald an (Vorschlag: ja; ORC erzeugt beim ersten Einschalten einen
+   vierstelligen PIN, zeigt ihn im Reiter und im Menü, nie im QR-Code).
+5. **Ein Remote für alle Kopfhörer, wie stoermes Bridge heute**, eine gemeinsame Sichtbarkeit.
 
 ## 10. Belege
 
