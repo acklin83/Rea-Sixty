@@ -215,7 +215,12 @@ int main()
         EXPECT(shown == 8);                                     // all eight V-Pots
         int pages = 0;
         for (int s = 0; s < 8; ++s) if (!f.strips[static_cast<size_t>(s)].slotLabel.empty()) ++pages;
-        EXPECT(pages == (pots + 7) / 8);                        // eight to a page
+        EXPECT(pages == (pots + 7) / 8 + 1);                    // eight to a page, and key 8
+        // ⇨ SOFT KEY 8 IS THE EFFECT ON / OFF, dim while off (Frank 29.10.).
+        EXPECT(f.strips[u8::kFxSwitchKey].slotLabel == "Reverb");
+        EXPECT(f.strips[u8::kFxSwitchKey].topKey == 1);
+        const auto sw = u8::pickPage(fx, fin, fs, cfg, u8::kFxSwitchKey);
+        EXPECT(sw.size() == 1 && sw[0].first.find("enable") != std::string::npos && sw[0].second == 1.0f);
         // V-Pot 8 turns a control, not a switch.
         EXPECT(!u8::vpot(fx, fin, fs, cfg, 7, 1, 1.0, 0).empty());
     }

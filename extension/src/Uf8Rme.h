@@ -124,7 +124,11 @@ Writes solo(const State& st, const rmei::State& in, const Side& u, int strip);
 void toggleChannelView(const State& st, const rmei::State& in, Side& u);
 // A soft key in the channel view: the page on that key. Page < > in the channel
 // view: the next eight pages, when there are more than eight.
-void pickPage(const State& st, const rmei::State& in, Side& u, const Config& cfg, int key);
+Writes pickPage(const State& st, const rmei::State& in, Side& u, const Config& cfg, int key);
+// ⇨ ON THE FX ROW SOFT KEY 8 IS THE EFFECT ON AND OFF (Frank 29.10.2026: "sollte
+// der jeweilige Soft-Key sein, dimm = off, bright = on"), so pickPage returns
+// its write; the pages are on keys 1-7 there.
+constexpr int kFxSwitchKey = 7;
 void stepPageGroup(const State& st, const rmei::State& in, Side& u, const Config& cfg, int dir);
 
 // ⇨ SEND/PLUG-IN 1-8 PICK THE SUBMIX (Frank 29.10.2026), in the control room's

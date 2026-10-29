@@ -627,7 +627,7 @@ void Uf8Surface::onButton_(std::uint8_t id, bool pressed)
     if (id >= kTopSoft1 && id < kTopSoft1 + 8) {
         const int k = id - kTopSoft1;
         if (m == Mode::TotalMix && side_.chanView.load()) {
-            if (pressed) u8s::pickPage(st, in_, side_, cfg, k);
+            if (pressed) send_(u8s::pickPage(st, in_, side_, cfg, k));
             return;
         }
         softKey_(m, k, pressed);

@@ -152,6 +152,20 @@ void shiftWindow(const State& st, const rmei::State& in, Side& u, int by)
     u.first[ri].store(clampFirst(clampFirst(u.first[ri].load(), n) + by, n));
 }
 
+namespace {
+// The soft keys that pick pages in the channel view: seven on the FX row, where
+// key 8 is the effect's on/off (kFxSwitchKey), eight elsewhere.
+int pageKeys(rmeu::Row r) { return r == rmeu::Row::Fx ? kFxSwitchKey : kStrips; }
+// The effect's on/off on the FX row (rev_on / echo_on), nullptr elsewhere.
+const rmes::Param* fxSwitch(const State& st, rmeu::Row r, int ch)
+{
+    if (r != rmeu::Row::Fx || ch < 0) return nullptr;
+    for (const char* id : { "rev_on", "echo_on" })
+        if (const rmes::Param* p = rmes::find(id); p && rmes::available(st, r, ch, *p)) return p;
+    return nullptr;
+}
+} // namespace
+
 bool mainShowing(const Side& u)
 {
     return u.mainCh.load() >= 0 && steadyMs() < u.mainUntilMs.load();
@@ -213,8 +227,17 @@ Frame frame(const State& st, const rmei::State& in, const Side& u, const Config&
         // The soft keys: the bank's cells in the overview, the pages in the
         // channel view (key 1 = the first page of the current group of eight).
         if (cv) {
-            const int pi = u.chanPageGroup.load() * kStrips + s;
-            if (pi < static_cast<int>(pg.all.size())) {
+            const int pk = pageKeys(r);
+            const int pi = u.chanPageGroup.load() * pk + s;
+            if (s >= pk) {
+                // Soft key 8 on the FX row: the effect on (bright) or off (dim).
+                if (const rmes::Param* sw = fxSwitch(st, r, sel)) {
+                    double on = 0.0;
+                    const bool k = rmes::value(st, r, sel, *sw, on);
+                    v.slotLabel = utf8ToLatin1(rmes::label(st, r, sel, *sw));
+                    v.topKey    = (k && on >= 0.5) ? 2 : 1;
+                }
+            } else if (pi < static_cast<int>(pg.all.size())) {
                 v.slotLabel = utf8ToLatin1(pg.all[static_cast<size_t>(pi)].name);
                 v.topKey    = (pi == pg.at) ? 2 : 1;
             }
@@ -447,14 +470,20 @@ void toggleChannelView(const State& st, const rmei::State& in, Side& u)
     u.chanView.store(true);
 }
 
-void pickPage(const State& st, const rmei::State& in, Side& u, const Config& cfg, int key)
+Writes pickPage(const State& st, const rmei::State& in, Side& u, const Config& cfg, int key)
 {
     const auto r   = rmeu::rowAt(in.row.load());
     const int  sel = rmei::selected(in, st, r);
+    const int  pk  = pageKeys(r);
+    if (key >= pk) {
+        if (const rmes::Param* sw = fxSwitch(st, r, sel)) return rmes::press(st, r, sel, *sw);
+        return {};
+    }
     const Pages pg = pagesOf(st, r, sel, cfg, u.chanPage.load());
-    const int pi = u.chanPageGroup.load() * kStrips + key;
-    if (pi < 0 || pi >= static_cast<int>(pg.all.size())) return;
+    const int pi = u.chanPageGroup.load() * pk + key;
+    if (pi < 0 || pi >= static_cast<int>(pg.all.size())) return {};
     u.chanPage.store(pg.all[static_cast<size_t>(pi)].id);
+    return {};
 }
 
 void stepPageGroup(const State& st, const rmei::State& in, Side& u, const Config& cfg, int dir)
@@ -462,7 +491,8 @@ void stepPageGroup(const State& st, const rmei::State& in, Side& u, const Config
     const auto r   = rmeu::rowAt(in.row.load());
     const int  sel = rmei::selected(in, st, r);
     const Pages pg = pagesOf(st, r, sel, cfg, u.chanPage.load());
-    const int groups = std::max(1, (static_cast<int>(pg.all.size()) + kStrips - 1) / kStrips);
+    const int pk = pageKeys(r);
+    const int groups = std::max(1, (static_cast<int>(pg.all.size()) + pk - 1) / pk);
     u.chanPageGroup.store(std::clamp(u.chanPageGroup.load() + dir, 0, groups - 1));
 }
 

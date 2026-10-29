@@ -27823,7 +27823,7 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                         } else if (id >= 0x08 && id <= 0x0F) {
                             w = u8s::vpotPush(rst, g_rmeIn, g_uf8RmeSide, rcfg, id - 0x08, nowMs_());
                         } else if (id >= 0x18 && id <= 0x1F) {
-                            u8s::pickPage(rst, g_rmeIn, g_uf8RmeSide, rcfg, id - 0x18);
+                            w = u8s::pickPage(rst, g_rmeIn, g_uf8RmeSide, rcfg, id - 0x18);
                         } else if (id >= 0x48 && id <= 0x4F) {
                             u8s::pickSubmix(rst, g_rmeIn, rcfg, id - 0x48);
                         } else switch (id) {
