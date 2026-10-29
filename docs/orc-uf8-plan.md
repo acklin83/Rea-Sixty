@@ -37,17 +37,26 @@ sie die ganze Fläche haben: Strips ohne Lampe oder Stativ sind dunkel statt REA
 
 | | ORC | Rea-Sixty |
 |---|---|---|
-| TotalMix | Layer 1, kurz | Layer 1, **lang** |
-| Hue | Layer 2, kurz | Layer 2, lang |
-| DynaMount | Layer 3, kurz | Layer 3, lang |
-| heraus | dieselbe Taste nochmal: zurück zu TotalMix (ab Werk) | dieselbe Taste nochmal: zurück zu REAPER |
+| TotalMix | Layer 1 (auch Shift + Layer 1) | **Shift + Layer 1** |
+| Hue | Layer 2 (auch Shift + Layer 2) | Shift + Layer 2 |
+| DynaMount | Layer 3 (auch Shift + Layer 3) | Shift + Layer 3 |
+| heraus | dieselbe Taste nochmal: zurück zu TotalMix | dieselbe Taste nochmal: zurück zu REAPER |
 
-- Kurz drücken bleibt in Rea-Sixty der Layer-Wechsel. ORC hat keine Layer, darum reicht dort
-  kurz. Gleiche Taste, gleicher Modus, in beiden Programmen.
+- Layer ohne Shift bleibt in Rea-Sixty der Layer-Wechsel. ORC hat keine Layer, darum reicht dort
+  die Taste allein; Shift + Layer geht in ORC genauso, damit die Hand in beiden Programmen
+  dasselbe tun kann.
+- Shift ist in Rea-Sixty die Tastatur (Spiegel `setKeyboardShiftHeld`, `main.cpp:47825` ff.) oder
+  eine Flächentaste mit `mod_shift` (am UF1 ab Werk SHIFT). Der UF8 hat ab Werk keine Shift-Taste.
+  In ORC gibt es keinen Tastatur-Spiegel; dort zählt die Taste allein bzw. SHIFT am UF1.
 - Dahinter stehen drei Builtins (`uf8_sidecar_totalmix`, `uf8_sidecar_hue`,
   `uf8_sidecar_dynamount`), frei belegbar wie jedes Builtin.
 - Die heutigen `selection_mode_hue` und `selection_mode_dynamount` werden zu Namen für dieselben
   Builtins. Wer sie auf eine Taste gelegt hat, behält seine Belegung.
+- **Bestehende Installationen:** die Werksbelegung erreicht nur neue oder zurückgesetzte
+  Konfigurationen. Für alle anderen setzt eine Hochstufung der Bindungsdatei Shift + Layer 1-3,
+  **nur wo der Shift-Platz leer ist** (heute fällt ein leerer Shift-Platz auf den Layer-Wechsel
+  zurück, `empty-modifier-slot-falls-back-to-plain`). Franks `bindings.json`: Layer 1-3 haben nur
+  einen Plain-Eintrag, Shift ist frei (gelesen 29.10.).
 - Die Layer-LED des aktiven Side-Cars leuchtet in der Farbe des Modus.
 
 ### 2.3 Soft-Keys
@@ -84,10 +93,36 @@ OBS. Rea-Sixty ändert seine Werksbelegung nicht.
 | DynaMount-Side-Car am UF8 | ja | ja | ja |
 | DynaMount-Presets | ja | ja | ja |
 | OBS-Soft-Keys | ja | ja | ja |
-| TotalMix-Side-Car am UF8 | nein (Frage 3) | ja | ja |
+| TotalMix-Side-Car am UF8 | nein | ja | ja |
 | TotalMix-Side-Car am UF1 | nein (wie heute) | ja | ja |
 | REC/RME über TotalReaper | ja | nein | ja, in REAPER |
 | Windows, Linux | Rea-Sixty ja, ohne TotalMix-Side-Car | ORC nur Mac | |
+
+### 2.6 EQ, Dynamics usw. am UF8: die Kanalansicht
+
+Am UF1 öffnet der Druck auf den Kanal-Encoder die Kanaleinstellungen (STRIP): Seiten wie Input,
+Low Cut, EQ 1-3, Dyn, Expander, AutoLevel, Output, je 4 V-Pots und 4 Schalter, dazu der EQ-Graph.
+Am UF8 allein (ORC ohne UF1) geht das so:
+
+| UF8 | in der Kanalansicht |
+|---|---|
+| hinein / heraus | **PLUG-IN**, nochmal PLUG-IN = zurück. In Rea-Sixty heisst PLUG-IN dasselbe: Plug-in bzw. Kanalzug der gewählten Spur auf die V-Pots |
+| welcher Kanal | der gewählte (SEL). SEL auf einem anderen Strip wechselt den Kanal, die Seite bleibt |
+| 8 V-Pots | **eine Seite des UF1-STRIP**: V-Pot 1-4 = die 4 Regler der Seite, V-Pot 5-8 = die 4 Schalter der Seite (Ring voll = an, Drehen oder Drücken schaltet) |
+| Wertzeile unter jedem V-Pot | Name und Wert, z.B. `Gain     +24`, `Freq   2.4k`, `EQ        ON` |
+| Soft-Keys oben 1-8 | **Seite wählen**, direkt: Input, Input 2, Low Cut, EQ 1, EQ 2, EQ 3, Dyn, Expander. Die übrigen (AutoLevel, Output, FX) mit Page ◄ ►. Lampe auf der aktiven Seite |
+| Fader | bleiben die Pegel der 8 Kanäle, man mischt weiter |
+| obere Scribble-Zeile | bleibt der Kanalname über jedem Fader |
+| EQ-Graph | gibt es am UF8 nicht; Werte als Zahl |
+| V-POT / 1-5 | ohne Wirkung, solange die Soft-Keys oben Seiten wählen (wie im UF8-Plug-in-Mode von Rea-Sixty) |
+
+- **Seiten aus derselben Konfiguration wie am UF1** (`rme.json`, `strip`): keine zweite Belegung,
+  und Seiten, die ein Kanal nicht hat, fallen weg wie am UF1.
+- **Mit UF1:** die Kanalansicht am UF8 geht auch; beide zeigen denselben Kanal, die Seiten wählt
+  jede Fläche für sich.
+- **In Rea-Sixty** gleich, sobald es den TotalMix-Side-Car am UF8 dort gibt (Stufe 7).
+- Weiterhin ohne UF1: Kanal-Encoder = Main Volume; Dim, Mono, Talkback, Snapshots über die
+  Soft-Key-Bank; Submix wählen wie am UF1 (Ausgang wählen).
 
 ---
 
@@ -95,15 +130,16 @@ OBS. Rea-Sixty ändert seine Werksbelegung nicht.
 
 | | heute | neu |
 |---|---|---|
-| Hue, DynaMount | `SelectionMode`: N Strips gehören dem Modus, der Rest zeigt Spuren | UF8-Side-Car: ganze Fläche. **Frage 1** |
-| Hinein | `selection_mode_*`, ab Werk keine Taste | Layer 1-3 lang (ab Werk), alte Builtin-Namen gehen weiter |
+| Hue, DynaMount | `SelectionMode`: N Strips gehören dem Modus, der Rest zeigt Spuren | UF8-Side-Car: ganze Fläche |
+| Hue-Aufnahmelicht | nach REAPER-Aufnahme | **bleibt so.** In ORC gibt es keins (Frank 29.10.) |
+| Hinein | `selection_mode_*`, ab Werk keine Taste | Shift + Layer 1-3 (ab Werk und per Hochstufung, nur wo leer), alte Builtin-Namen gehen weiter |
 | DynaMount-Presets | gibt es nicht | Bankart + Builtins + Tabelle in den Einstellungen |
-| TotalMix am UF8 | über REC/RME (TotalReaper) | bleibt; dazu Side-Car nur mit ORC (Frage 3) |
+| TotalMix am UF8 | über REC/RME (TotalReaper) | bleibt; dazu Side-Car nur mit ORC |
 | Übergabe | UF1, ohne Quittung | UF1 + UF8, mit Quittung (Abschnitt 5) |
 | Einstellungen Hue, OBS, DynaMount | ExtState | ExtState, unverändert; dazu ein Import-Knopf aus ORC |
 | Zwei UF8 | Hue, DynaMount nur links | Side-Car nur links (wie Tims Regel) |
 
-**Was Rea-Sixty-Nutzer verlieren (Frage 1):** die gemischte Ansicht, also zwei Stative links und
+**Was Rea-Sixty-Nutzer verlieren:** die gemischte Ansicht, also zwei Stative links und
 sechs Spuren rechts gleichzeitig. Wer Stative fährt und gleichzeitig Spuren braucht, wechselt mit
 einem Druck. Dafür ist es **ein** Begriff (Side-Car) für UF1 und UF8 und für beide Programme,
 statt zwei Begriffe, die fast dasselbe tun.
@@ -128,7 +164,6 @@ statt zwei Begriffe, die fast dasselbe tun.
   Löschen).
 - **Speicher:** eigener Schlüssel `dynamount_presets` (Rea-Sixty ExtState, ORC `dynamount.json`),
   Trennzeichen `;` und Tab, nie ein Zeilenumbruch (ExtState-Lehre vom 27.08.), Round-Trip-Test.
-- Idee für später, nur Rea-Sixty: Marken-Cue `dyna:Name` wie `hue:` und `obs:`. **Frage 5.**
 
 ---
 
@@ -172,7 +207,7 @@ von ORC (Windows trennt deren Dateien ab) und bei portablem REAPER. Getrennt plu
 jedem Fall.
 
 Ausnahme, wie heute: die **TotalMix-Einstellungen gehören ORC**. Rea-Sixty liest sie nur, darum
-gibt es den TotalMix-Side-Car in Rea-Sixty nur mit ORC (Frage 3).
+gibt es den TotalMix-Side-Car in Rea-Sixty nur mit ORC.
 
 ---
 
@@ -210,32 +245,36 @@ zurückgibt. Viermal ist das beim Hue-Bau schiefgegangen.
 |---|---|---|---|
 | 1 | Übergabe mit Quittung, UF8-Retry | beide | **Rea-Sixty zuerst** |
 | 2 | `Uf8Frames`, UF8-Schlaf herausziehen | Rea-Sixty | mit 1 |
-| 3 | UF8-Side-Car in Rea-Sixty: Hue und DynaMount ziehen um (herausgezogen, ganze Fläche), Layer lang | Rea-Sixty | |
+| 3 | UF8-Side-Car in Rea-Sixty: Hue und DynaMount ziehen um (herausgezogen, ganze Fläche), Shift + Layer, Hochstufung | Rea-Sixty | |
 | 4 | DynaMount-Presets | Rea-Sixty | mit 3 |
-| 5 | UF8 in ORC, TotalMix-Side-Car (`RmeSelection`, `Uf8RmeFace`), UF1 + UF8 als ein Pult | ORC | |
+| 5 | UF8 in ORC, TotalMix-Side-Car (`RmeSelection`, `Uf8RmeFace`), Kanalansicht (PLUG-IN), UF1 + UF8 als ein Pult | ORC | |
 | 6 | Hue, DynaMount, Presets, OBS-Bänke in ORC, Reiter, Import in beiden | beide | |
-| 7 | TotalMix-Side-Car am UF8 auch in Rea-Sixty (nach Frage 3) | Rea-Sixty | |
+| 7 | TotalMix-Side-Car am UF8 auch in Rea-Sixty, mit Kanalansicht | Rea-Sixty | |
 | 8 | Handbücher, ORC 2.0.0 + Rea-Sixty aus demselben Commit | beide | |
 
 Rea-Sixty-Nutzer bekommen mit 1 bis 4 schon etwas (Side-Car, Presets), bevor ORC den UF8 kann.
 
 ---
 
-## 8. Fragen an Frank
+## 8. Entschieden (Frank 29.10.)
+
+- Hue und DynaMount werden in Rea-Sixty UF8-Side-Car, die gemischte Ansicht fällt weg.
+- Eintritt in Rea-Sixty ab Werk **Shift + Layer 1-3** (statt lang drücken), in ORC Layer allein.
+- TotalMix-Side-Car am UF8 in Rea-Sixty wie am UF1, also nur mit ORC.
+- DynaMount-Preset = alle Stative zusammen, acht Stück.
+- Kein Marken-Cue `dyna:`.
+- Kanal-Encoder am UF8 im TotalMix-Side-Car = Main Volume.
+- ORC 2.0.0.
+- Hue-Aufnahmelicht: nur Rea-Sixty, wie heute. ORC bekommt keins.
+- So vorgesehen: das Achterfenster folgt der UF1-Auswahl immer; die TotalMix-Soft-Keys am UF8
+  zeigen dieselbe Bank wie der UF1 (beide Hälften auf einmal); ORCs Grundstellung ist TotalMix.
+
+**Offen, neu mit Abschnitt 2.6:**
 
 | | Frage | Vorschlag |
 |---|---|---|
-| 1 | Hue und DynaMount in Rea-Sixty werden UF8-Side-Car (ganze Fläche), die gemischte Ansicht mit Spuren fällt weg? | ja |
-| 2 | Side-Car-Tasten: Layer 1-3, in ORC kurz, in Rea-Sixty lang? | ja |
-| 3 | TotalMix-Side-Car am UF8 in Rea-Sixty wie am UF1, also nur mit ORC? | ja |
-| 4 | DynaMount-Preset = alle Stative zusammen, acht Stück? | ja |
-| 5 | Marken-Cue `dyna:Name` in Rea-Sixty? | später |
-| 6 | Kanal-Encoder am UF8 im TotalMix-Side-Car = Main Volume? | ja |
-| 7 | ORC-Version | 2.0.0 |
-
-Ohne eigene Frage, so vorgesehen und änderbar: das Achterfenster folgt der UF1-Auswahl immer;
-die TotalMix-Soft-Keys am UF8 zeigen dieselbe Bank wie der UF1 (beide Hälften auf einmal); ORCs
-Grundstellung ist TotalMix.
+| 1 | Kanalansicht am UF8 über PLUG-IN? | ja |
+| 2 | Eine STRIP-Seite auf den 8 V-Pots (4 Regler + 4 Schalter), Seitenwahl auf den Soft-Keys oben? Die Alternative wären zwei Seiten nebeneinander (8 Regler), dann müssten die Schalter auf die Soft-Keys und die Seitenwahl auf Page ◄ ► | eine Seite |
 
 ---
 
@@ -257,7 +296,7 @@ Gelesen am 29.10. (`b7b6deb0`):
   (`uf1SetSideCar_`, `main.cpp:1489-1497`). Es gibt es nur mit ORCs `rme.json`
   (`g_rmeAvailable`, `:924-926`).
 - REC/RME = `SelectionMode::Rec`/`RecMon` mit eingeschaltetem RME (`recRmeActive_`, `:2199`).
-- Builtins mit Lang-Druck gibt es (`Binding::longPress`, `Bindings.h:638`).
+- Shift: Tastatur-Spiegel `setKeyboardShiftHeld` (`main.cpp:47825` ff.) oder `mod_shift`; ab Werk nur am UF1 (`Bindings.cpp:1536`). PLUG-IN in Rea-Sixty: Plain `ssl_strip_mode_toggle`, Shift `uf8_plugin_mode_toggle` (`Bindings.cpp:1298-1324`).
 - Übergabe ohne Quittung (`main.cpp:1823-1847`, ORC `Surface.cpp:405-443`), UF8-Startfehler ohne
   Retry.
 - TotalMix-Builtins heute: Dim, Mono, Speaker B, Talkback, Mute FX, Ext In, DURec, `rme_fader_main`,
@@ -266,6 +305,4 @@ Gelesen am 29.10. (`b7b6deb0`):
   „Understanding how packaged desktop apps run on Windows“).
 
 Nicht belegt: wie schnell ein freigegebener UF8 unter macOS für REAPER frei ist (darum 3 s); ob
-TotalMix Pegel für alle Reihen schickt; wie Lang-Druck auf einer Taste mit „momentary“-Verhalten wirkt: der Layer-Wechsel darf erst beim Loslassen feuern, wenn ein Lang-Druck belegt ist (Tap mit Lang-Druck, `b7b6deb0`), vor Stufe 3 im Code prüfen.
-
-Geprüft: in Franks `bindings.json` haben Layer 1-3 auf allen drei Layern nur einen Kurz-Druck, der Lang-Druck ist frei.
+TotalMix Pegel für alle Reihen schickt; ob die UF8-Soft-Keys oben eine eigene Beschriftung auf dem Display haben, die die Seitennamen zeigen kann (vor Stufe 5 in der Feldkarte `Protocol.h` nachsehen).
