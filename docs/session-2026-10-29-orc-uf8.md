@@ -57,6 +57,13 @@ installiert (Hash `e731e66c`), ORC-Entwicklungsbuild in `extension/build/ORC.app
   Main B, Main), Stereo immer 4. Taste der ersten Ansicht (UF1 und UF8).
 - `215738f2` Soft-Keys gehören zum Modus (Plan 2.3 neu), OBS-Szenen als Bankart, `RoomCells.h`
   (Hue/DynaMount/OBS-Zellen einmal statt dreimal), ORC: neun UF8-Tasten belegbar, Sleep auf QUICK 1.
+- `dec24753` Kanalansicht: V-Pots auf Strips ohne Kanal gemalt (FX-Reihe hat 2 Kanäle, V-Pots 3-8
+  blieben leer = Franks „nur die ersten 2“), Reverb/Echo auf allen 8 V-Pots (Ein/Aus = CUT).
+  ORC-Handbuch: UF8 Bedienelement für Bedienelement mit Zeichnung, wie der UF1-Teil.
+- `94103fee` Show Main Volume on Change (Main 2 s auf Strip 8, Option in rme.json, an),
+  `Brightness.h` geteilt, ORC hat die sechs Brightness-Aktionen (Stufen in rme.json, Standard
+  Full, gilt für UF1 und UF8), UF8-Seriennummer im Menü, Reiter Surfaces / UF1 Controls /
+  UF8 Controls.
 - Import lief 14:11 (6 Werte), vorher nie gedrückt.
 
 ## Offen
