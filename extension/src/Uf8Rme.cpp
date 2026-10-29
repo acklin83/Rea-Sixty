@@ -512,6 +512,13 @@ PageLamps pageLamps(const State& st, const rmei::State& in, const Side& u, const
         l.right = pg.at < static_cast<int>(pg.all.size()) - 1;
         return l;
     }
+    return bankLamps(st, in, u);
+}
+
+PageLamps bankLamps(const State& st, const rmei::State& in, const Side& u)
+{
+    PageLamps l;
+    const auto r = rmeu::rowAt(in.row.load());
     const int n = static_cast<int>(rmeu::visibleChannels(st, r).size());
     const int f = clampFirst(u.first[static_cast<int>(r)].load(), n);
     l.left  = f > 0;

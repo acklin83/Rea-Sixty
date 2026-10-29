@@ -27805,7 +27805,7 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 const bool chanView = g_uf8RmeSide.chanView.load();
                 const bool mine = (id >= 0x20 && id <= 0x37) || (id >= 0x08 && id <= 0x0F)
                     || id == 0x78 || id == 0x79 || id == 0x52 || id == 0x53
-                    || (id >= 0x7A && id <= 0x7E) || id == 0x50
+                    || (id >= 0x7A && id <= 0x7E) || id == 0x50 || id == 0x76
                     || (id >= 0x48 && id <= 0x4F)
                     || (chanView && id >= 0x18 && id <= 0x1F);
                 if (mine) {
@@ -27840,7 +27840,9 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                             case 0x7B: reasixty::rme::input::stepSubmix(g_rmeIn, rst, rcfg, -1); break;
                             case 0x7D: reasixty::rme::input::stepSubmix(g_rmeIn, rst, rcfg, +1); break;
                             case 0x7C: reasixty::rme::input::toggleWindow(g_rmeIn, rmeInputHost_(), w); break;
-                            case 0x50: u8s::toggleChannelView(rst, g_rmeIn, g_uf8RmeSide); break;
+                            // A push on the CHANNEL encoder too, as on the UF1.
+                            case 0x50: case 0x76:
+                                u8s::toggleChannelView(rst, g_rmeIn, g_uf8RmeSide); break;
                             default: break;
                         }
                         tmSend_(w);
@@ -46103,6 +46105,27 @@ void pushUf8GlobalLeds()
         if (ccOn) {
             sendUf8GlobalLedDirect_(uf8::Uf8GlobalLed::BankLeft,  uf8::GlobalLedState::Off);
             sendUf8GlobalLedDirect_(uf8::Uf8GlobalLed::BankRight, uf8::GlobalLedState::Off);
+        } else if (tmOwnsStrip_(0)) {
+            // ⇨ THE TOTALMIX SIDE-CAR: lit where the window can move
+            // (Uf8Rme::bankLamps, as in ORC; Frank 29.10.2026), left UF8. A
+            // right UF8 keeps the bindings' lamps, scoped to it.
+            const int units = uf8Units_();
+            {
+                LedUnitScope scope(units > 1 ? 0 : -1);
+                auto& rm = reasixty::rme::manager();
+                const auto bl = reasixty::rme::uf8side::bankLamps(rm.snapshot(), g_rmeIn, g_uf8RmeSide);
+                sendUf8GlobalLedDirect_(uf8::Uf8GlobalLed::BankLeft,
+                    bl.left ? uf8::GlobalLedState::Bright : uf8::GlobalLedState::Off);
+                sendUf8GlobalLedDirect_(uf8::Uf8GlobalLed::BankRight,
+                    bl.right ? uf8::GlobalLedState::Bright : uf8::GlobalLedState::Off);
+            }
+            if (units > 1) {
+                LedUnitScope scope(1);
+                sendUf8GlobalLed(uf8::Uf8GlobalLed::BankLeft,
+                    boundActionIsActive_(buttonIdForGlobalLed(uf8::Uf8GlobalLed::BankLeft)));
+                sendUf8GlobalLed(uf8::Uf8GlobalLed::BankRight,
+                    boundActionIsActive_(buttonIdForGlobalLed(uf8::Uf8GlobalLed::BankRight)));
+            }
         } else if (g_uf8PluginMode.load()) {
             const int fb = std::clamp(g_uf8FaderBank.load(),
                                       0, uf8::kUserUf8FaderBankCount - 1);

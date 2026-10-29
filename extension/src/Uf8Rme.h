@@ -136,6 +136,9 @@ void stepPage(const State& st, const rmei::State& in, Side& u, const Config& cfg
 // the overview to another channel (shiftWindow by one).
 struct PageLamps { bool left = false, right = false; };
 PageLamps pageLamps(const State& st, const rmei::State& in, const Side& u, const Config& cfg);
+// BANK ◄ ► lit where the window can move, in the overview and the channel view
+// alike: there they still move the channels on the faders (Frank 29.10.2026).
+PageLamps bankLamps(const State& st, const rmei::State& in, const Side& u);
 
 // ⇨ SEND/PLUG-IN 1-8 PICK THE SUBMIX (Frank 29.10.2026), in the control room's
 // order: 1-4 Phones 1-4, 5 Main B, 6 Main (rmeu::controlRoomOutputs), 7-8 empty.

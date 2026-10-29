@@ -911,17 +911,19 @@ the bank showing is lit, a key without a bank is dark. In Hue and DynaMount they
 of the normal step. In DynaMount, FINE and a push on a soft key store over a preset.</p>
 </div>
 
-<div class="ctl" id="u-channel" data-uf8="kChannelEncoder">
+<div class="ctl" id="u-channel" data-uf8="kChannelEncoder kChannelPush">
 <h3>CHANNEL encoder</h3>
 <p>In every mode the level of the jog wheel's target, out of the box Main, in steps of
 {{jogStepDb}} dB, as the UF1's jog wheel. Target and step are on the settings page
 <a href="#set-controls">UF1</a>. In TotalMix, Main stands on strip 8 for two seconds while
-you turn (<a href="#set-uf8">Show Main volume on change</a>).</p>
+you turn (<a href="#set-uf8">Show Main volume on change</a>). A push opens and closes the
+<a href="#uf8-chanview">channel view</a>, as PLUG-IN does and as the push opens STRIP on the UF1.</p>
 </div>
 
 <div class="ctl" id="u-bank" data-uf8="kBankLeft kBankRight">
 <h3>BANK ◄ ►</h3>
-<p>In TotalMix: the strips eight channels on. In Hue and DynaMount they do nothing.</p>
+<p>In TotalMix: the strips eight channels on, in the channel view as well. Lit where there are more
+channels in that direction. In Hue and DynaMount they do nothing and stay dark.</p>
 </div>
 
 <div class="ctl" id="u-nav" data-uf8="kZoomUp kZoomDown kZoomLeft kZoomRight kZoomCenter">
@@ -950,8 +952,7 @@ every mode.</p>
 
 <div class="ctl" id="u-idle">
 <h3>Keys ORC leaves alone</h3>
-<p>CHANNEL beside PLUG-IN, PAN, the six automation keys and a push on the CHANNEL encoder do nothing
-in ORC.</p>
+<p>CHANNEL beside PLUG-IN, PAN and the six automation keys do nothing in ORC.</p>
 </div>
 </div>
 
@@ -960,8 +961,8 @@ in ORC.</p>
 
 <section id="uf8-chanview">
 <h2>The UF8's channel view</h2>
-<p>PLUG-IN in TotalMix puts the selected channel's <a href="#strip">STRIP</a> pages on the UF8. Press
-it again to go back to the overview.</p>
+<p>PLUG-IN in TotalMix, or a push on the CHANNEL encoder, puts the selected channel's
+<a href="#strip">STRIP</a> pages on the UF8. Press it again to go back to the overview.</p>
 <ul>
   <li>The soft keys pick the page: each key is one page, and the page showing is lit. PAGE ◄ ► step
       to the previous and next page, and are lit where there is one.</li>

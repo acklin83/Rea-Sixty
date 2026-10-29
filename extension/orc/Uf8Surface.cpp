@@ -39,6 +39,7 @@ constexpr std::uint8_t kLayer2     = 0x41;
 constexpr std::uint8_t kLayer3     = 0x42;
 constexpr std::uint8_t kBtn360     = 0x46;
 constexpr std::uint8_t kPlugin     = 0x50;
+constexpr std::uint8_t kChannelPush = 0x76;   // a push on the CHANNEL encoder
 constexpr std::uint8_t kPageLeft   = 0x52;
 constexpr std::uint8_t kPageRight  = 0x53;
 constexpr std::uint8_t kFlip       = 0x54;
@@ -313,11 +314,12 @@ void Uf8Surface::paintLeds_()
     using S = uf8::GlobalLedState;
     const int mode = mode_.load();
     int sp[8] = {};
-    u8s::PageLamps pl;
+    u8s::PageLamps pl, bl;
     if (mode == static_cast<int>(Mode::TotalMix)) {
         const rme::State st = rme::manager().snapshot();
         for (int k = 0; k < 8; ++k) sp[k] = u8s::submixKeyLamp(st, in_, k);
         pl = u8s::pageLamps(st, in_, side_, rme::manager().config());
+        bl = u8s::bankLamps(st, in_, side_);
     }
     const struct { G led; int state; } want[] = {
         { G::Layer1,   mode == 0 ? 2 : 1 },
@@ -339,6 +341,7 @@ void Uf8Surface::paintLeds_()
         { G::SendPlugin7, sp[6] }, { G::SendPlugin8, sp[7] },
         // PAGE ◄ ►: lit where they lead somewhere (Uf8Rme::pageLamps).
         { G::PageLeft,  pl.left ? 2 : 0 }, { G::PageRight, pl.right ? 2 : 0 },
+        { G::BankLeft,  bl.left ? 2 : 0 }, { G::BankRight, bl.right ? 2 : 0 },
     };
     static_assert(std::size(want) == std::tuple_size<decltype(cLed_)>::value);
     for (size_t i = 0; i < std::size(want); ++i) {
@@ -718,7 +721,10 @@ void Uf8Surface::onButton_(std::uint8_t id, bool pressed)
             rmei::toggleWindow(in_, h, w);
             break;
         }
-        case kPlugin:     u8s::toggleChannelView(st, in_, side_); break;
+        // A push on the CHANNEL encoder too, as on the UF1, where it opens
+        // STRIP (Frank 29.10.2026).
+        case kPlugin:
+        case kChannelPush: u8s::toggleChannelView(st, in_, side_); break;
         default: break;
     }
     send_(w);

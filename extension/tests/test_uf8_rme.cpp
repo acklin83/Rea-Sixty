@@ -81,6 +81,12 @@ int main()
         u8::shiftWindow(st, in, ps, 8);
         pl = u8::pageLamps(st, in, ps, cfg);
         EXPECT(pl.left && !pl.right);
+        // BANK ◄ ► the same, and in the channel view too (the faders still bank).
+        auto bl = u8::bankLamps(st, in, ps);
+        EXPECT(bl.left && !bl.right);
+        u8::shiftWindow(st, in, ps, -8);
+        bl = u8::bankLamps(st, in, ps);
+        EXPECT(!bl.left && bl.right);
     }
     // ── the window follows a channel the UF1 picks ────────────────────────────
     {
