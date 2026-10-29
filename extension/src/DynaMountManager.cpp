@@ -239,6 +239,131 @@ void DynaMountManager::deserialize(const std::string& s) {
     }
 }
 
+// ---- presets ----------------------------------------------------------------
+
+static std::string scrubPresetName(const std::string& in) {
+    std::string out = in;
+    for (char& c : out)
+        if (c == '\t' || c == '\n' || c == '\r' || c == ';' || c == '|' || c == ',') c = ' ';
+    return out;
+}
+
+void DynaMountManager::storePreset(int slot) {
+    if (slot < 0 || slot >= kMaxPresets) return;
+    std::vector<PresetPos> pos;
+    {
+        std::lock_guard<std::mutex> lk(cfgMx_);
+        for (int i = 0; i < kMaxMounts; ++i) {
+            const Mount& m = mounts_[i];
+            if (!m.enabled || m.ip.empty()) continue;
+            pos.push_back({m.ip, m.tgtH.load(), m.tgtR.load(), m.tgtV.load()});
+        }
+    }
+    if (pos.empty()) return;   // nothing to remember
+    {
+        std::lock_guard<std::mutex> lk(presetMx_);
+        Preset& p = presets_[slot];
+        p.pos = std::move(pos);
+        if (p.name.empty()) p.name = "Preset " + std::to_string(slot + 1);
+    }
+    lastPreset_.store(slot);
+    presetsDirty_.store(true);
+}
+
+bool DynaMountManager::recallPreset(int slot) {
+    if (slot < 0 || slot >= kMaxPresets) return false;
+    std::vector<PresetPos> pos;
+    { std::lock_guard<std::mutex> lk(presetMx_); pos = presets_[slot].pos; }
+    if (pos.empty()) return false;
+    bool any = false;
+    for (const PresetPos& pp : pos) {
+        int idx = -1;
+        {
+            std::lock_guard<std::mutex> lk(cfgMx_);
+            for (int i = 0; i < kMaxMounts; ++i)
+                if (mounts_[i].enabled && mounts_[i].ip == pp.ip) { idx = i; break; }
+        }
+        if (idx < 0) continue;   // that stand is not set up (any more)
+        // Rotation goes at once like the other axes: a recall is one deliberate
+        // move, not a knob being spun (the V-Pot's 1-s debounce is for that).
+        mounts_[idx].rotPendingMs.store(0);
+        setTargets(idx, pp.h, pp.r, pp.v, /*markDirty=*/true);
+        any = true;
+    }
+    if (any) lastPreset_.store(slot);
+    return any;
+}
+
+void DynaMountManager::clearPreset(int slot) {
+    if (slot < 0 || slot >= kMaxPresets) return;
+    { std::lock_guard<std::mutex> lk(presetMx_); presets_[slot] = Preset{}; }
+    if (lastPreset_.load() == slot) lastPreset_.store(-1);
+    presetsDirty_.store(true);
+}
+
+void DynaMountManager::setPresetName(int slot, const std::string& name) {
+    if (slot < 0 || slot >= kMaxPresets) return;
+    { std::lock_guard<std::mutex> lk(presetMx_); presets_[slot].name = scrubPresetName(name); }
+    presetsDirty_.store(true);
+}
+
+DynaMountManager::Preset DynaMountManager::preset(int slot) {
+    if (slot < 0 || slot >= kMaxPresets) return {};
+    std::lock_guard<std::mutex> lk(presetMx_);
+    return presets_[slot];
+}
+
+std::string DynaMountManager::serializePresets() {
+    std::lock_guard<std::mutex> lk(presetMx_);
+    std::ostringstream os;
+    for (int i = 0; i < kMaxPresets; ++i) {
+        const Preset& p = presets_[i];
+        if (!p.defined() && p.name.empty()) continue;
+        os << i << '\t' << scrubPresetName(p.name) << '\t';
+        for (size_t k = 0; k < p.pos.size(); ++k) {
+            const PresetPos& pp = p.pos[k];
+            if (k) os << '|';
+            os << scrubPresetName(pp.ip) << ',' << pp.h << ',' << pp.r << ',' << pp.v;
+        }
+        os << ';';
+    }
+    return os.str();
+}
+
+void DynaMountManager::deserializePresets(const std::string& s) {
+    std::array<Preset, kMaxPresets> next{};
+    std::istringstream is(s);
+    std::string rec;
+    while (std::getline(is, rec, ';')) {
+        if (rec.empty()) continue;
+        std::vector<std::string> f;
+        std::string cur;
+        std::istringstream rs(rec);
+        while (std::getline(rs, cur, '\t')) f.push_back(cur);
+        if (f.size() < 2) continue;
+        const int idx = std::atoi(f[0].c_str());
+        if (idx < 0 || idx >= kMaxPresets) continue;
+        Preset p;
+        p.name = f[1];
+        if (f.size() >= 3) {
+            std::istringstream ps(f[2]);
+            std::string one;
+            while (std::getline(ps, one, '|')) {
+                std::vector<std::string> v;
+                std::istringstream vs(one);
+                std::string x;
+                while (std::getline(vs, x, ',')) v.push_back(x);
+                if (v.size() != 4 || v[0].empty()) continue;
+                p.pos.push_back({v[0], std::atoi(v[1].c_str()), std::atoi(v[2].c_str()),
+                                 std::atoi(v[3].c_str())});
+            }
+        }
+        next[idx] = std::move(p);
+    }
+    std::lock_guard<std::mutex> lk(presetMx_);
+    presets_ = std::move(next);
+}
+
 // ---- singleton --------------------------------------------------------------
 
 DynaMountManager& manager() {

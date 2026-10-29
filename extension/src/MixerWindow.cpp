@@ -297,6 +297,7 @@ constexpr SearchEntry kSearchIndex[] = {
     { "NAV",                                   kSecModes,           "" },
     { "Nudge",                                 kSecModes,           "" },
     { "Dynamount",                             kSecModes,           "" },
+    { "DynaMount presets",                     kSecModes,           "Dynamount" },
     { "OBS",                                   kSecModes,           "" },
     { "FX Learn",                              kSecFxLearn,         "" },
     // The three modifier-layer flags moved out of Behaviour → Keyboard into

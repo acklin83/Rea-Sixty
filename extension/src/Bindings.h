@@ -763,6 +763,12 @@ enum class DynamicBankKind : uint8_t {
     // or out of the lanes that play, Cmd is Comp here from it. Pages like the FX
     // bank on the UF8.
     Lanes = 13,
+    // The eight DynaMount presets (Frank 29.10.2026, docs/orc-uf8-plan.md section
+    // 4): a preset is the position of every stand at once. Same keys as the
+    // Selection Sets, on purpose: push drives the stands there, long stores into
+    // an EMPTY slot, Shift stores over, Ctrl clears (selbank::op). The key of the
+    // preset last recalled or stored is lit.
+    DynaMountPresets = 14,
 };
 
 // ⛔ THE PARSER'S UPPER BOUND LIVES HERE, NOT IN THE PARSER. Both loaders check
@@ -770,7 +776,7 @@ enum class DynamicBankKind : uint8_t {
 // a new kind was accepted by the editor, written to disk, and then silently
 // dropped on the next load — the bank came back static and nothing said why.
 // Adding a kind means moving this line, and only this line.
-constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::Lanes;
+constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::DynaMountPresets;
 
 // ⇨ DOES THIS KIND SPEND THE MODIFIERS ON ITS OWN GESTURES?
 // The FX bank and the Selection Sets bank do (Shift saves over, Cmd selects, Ctrl

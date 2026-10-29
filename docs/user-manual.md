@@ -1396,7 +1396,7 @@ Surface-side handling of the REAPER Master bus. See **Master track** (own chapte
 
 | Control | Effect |
 |---|---|
-| Announce the soft-key bank on the time display | On by default. Switching the UF1's soft-key bank flashes the bank's name across the ten-cell time field for about a second, the same way a format change flashes *BARS* / *TIME* / *SAMPLES*, and the clock comes back by itself. Holding SHIFT counts as a switch, because a modifier set is a bank of its own; if that set simply takes Plain's bank its name is the same one, and nothing flashes. A bank you named in *Settings → Bindings → UF1* shows that name; a dynamic bank shows what kind it is (`EFFECTS`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`, `HUE`, `OBS`); an unnamed static bank shows its number (`SOFT 3`). |
+| Announce the soft-key bank on the time display | On by default. Switching the UF1's soft-key bank flashes the bank's name across the ten-cell time field for about a second, the same way a format change flashes *BARS* / *TIME* / *SAMPLES*, and the clock comes back by itself. Holding SHIFT counts as a switch, because a modifier set is a bank of its own; if that set simply takes Plain's bank its name is the same one, and nothing flashes. A bank you named in *Settings → Bindings → UF1* shows that name; a dynamic bank shows what kind it is (`EFFECTS`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`, `HUE`, `DYNA`, `OBS`); an unnamed static bank shows its number (`SOFT 3`). |
 | Start the UF1 in a fixed view | Off by default, and the UF1 comes back up in the view you last left it in. Ticking it pins whichever view the UF1 is showing at that moment instead; the combo below changes it to Plug-in, DAW, Meter or Sends. Either way the view is applied once, on the first timer tick that sees the UF1, so plugging the device in mid-session engages it too. The last-used view is remembered globally, not per project: which view the surface shows belongs to the surface, not to the session you happen to open. |
 
 ### Fixed lanes
@@ -1527,7 +1527,7 @@ Recalling a preset also turns the bank back into a static one. A **dynamic** ban
 
 **Recalling a preset names the bank after it.** Load *Drum compression* into a bank and that is what the bank is called, in the banner and in the panel's menu, without typing it a second time. Factory banks do the same, so a recalled *Encoder Modes* announces itself by name. Type over it whenever you want something else; the name is yours from then on.
 
-With no name of your own the field starts empty and the bank announces its default name: its dynamic kind (`FX`, `Groups`, `Colours`, `Favourites`, `CS Favourites`, `BC Favourites`, `Hue`, `OBS`), else its set and position (`Set 2, Soft 3`, or the set's own name in place of `Set 2`). On Sets 8 and 9 the default is the page the plug-in fills, `SSL CS Bank 3`. Clearing the field puts that default back, which is also how you undo a name.
+With no name of your own the field starts empty and the bank announces its default name: its dynamic kind (`FX`, `Groups`, `Colours`, `Favourites`, `CS Favourites`, `BC Favourites`, `Hue`, `DynaMount`, `OBS`), else its set and position (`Set 2, Soft 3`, or the set's own name in place of `Set 2`). On Sets 8 and 9 the default is the page the plug-in fills, `SSL CS Bank 3`. Clearing the field puts that default back, which is also how you undo a name.
 
 ### Dynamic soft-key banks
 
@@ -1545,6 +1545,7 @@ Right-click the bank's cell in the matrix and open **Dynamic bank**. The kinds a
 | `CS Favourites` | The eight Channel Strip favourites, whatever you are focused on |
 | `BC Favourites` | The eight Bus Compressor favourites, the same way |
 | `Hue Scenes` | Your eight Hue scene slots, each key in its scene's colour |
+| `DynaMount Presets` | Your eight DynaMount presets (see *DynaMount mode, Presets*) |
 | `OBS Scenes` | The scenes OBS is showing, by name, the one on air lit |
 | `Selection Sets` | Selection Set slots 1–8, by name and in each slot's colour, the recalled one lit, the used ones dim |
 | `Lanes` | The fixed lanes of the selected track, by name, the ones playing lit, the comp lane green. See *Fixed lanes* |
@@ -1556,7 +1557,7 @@ The choice is stored per bank, so each of the six banks in a set can be dynamic 
 A dynamic bank announces itself in three places, so you never edit slots that cannot fire:
 
 - The bank's selector key on the schematic (V-POT / Soft 1-5) carries an **amber tick** in its top-right corner. The matrix cell itself stays plain.
-- The eight scribble strips above it read the bank's kind (`FX`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`, `HUE`, `OBS`, `SETS`) rather than the stored slot labels, because those labels never reach the hardware while the bank is dynamic.
+- The eight scribble strips above it read the bank's kind (`FX`, `GROUPS`, `COLOURS`, `FAVS`, `CS FAVS`, `BC FAVS`, `HUE`, `DYNA`, `OBS`, `SETS`) rather than the stored slot labels, because those labels never reach the hardware while the bank is dynamic.
 - Clicking any of the eight keys shows what the bank computes instead of a slot editor, with the same **Dynamic bank** dropdown and the same settings the cell shows, so you can switch it back to static, or tune the palette or the FX paging, without hunting for the cell.
 
 On Sets 8 and 9 it depends on the page. A dynamic bank computes all eight keys, so it can only go where the plug-in claims none of them: the bus comp's four empty pages take one, the pages SSL fills do not. Every page of the other seven sets can.
@@ -2973,6 +2974,27 @@ Solo, Cut and Sel have no function on a mount strip and their LEDs stay dark.
 This matters because the protocol is one-way: the stands report no position, so Rea-Sixty knows only what it last told them. Positions are remembered globally and restored on the next launch without re-driving the motors, on the assumption that nothing moved in between. If you move a stand with the DynaMount app, by hand, or after a power cut, the two disagree — press Home and they match again.
 
 Home is a normal move command, so the stand travels to that pose; it is not a hardware homing or self-calibration routine.
+
+## Presets
+
+A preset is where every stand is at one moment: X, Y and R of all enabled mounts together. Eight of them, for example *Drums close*, *Drums room*, *Vocal*.
+
+**On the soft keys.** Set a soft-key bank's type to **DynaMount Presets**. The keys work like the Selection Sets bank:
+
+| Gesture | What happens |
+|---|---|
+| Push | The stands drive to the preset |
+| Hold, on an empty key | Stores where the stands are now |
+| Shift + push | Stores over the preset on that key |
+| Ctrl + push | Clears the key |
+
+The key of the preset you last went to or stored is lit. The bank works in every mode, also while the faders are on tracks.
+
+**On any other key.** **DynaMount: go to preset** and **DynaMount: store preset**, parameter **1** to **8**.
+
+**In Settings.** The Dynamount tab lists the eight presets with their names, how many stands each one has, and **Go**, **Store** and **Clear**.
+
+A preset finds each stand by its IP address, not by its row in the table. Moving a mount to another row keeps its positions. A stand the preset does not know stays where it is, and so does one that is switched off.
 
 ## Connection
 

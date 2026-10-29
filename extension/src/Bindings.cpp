@@ -8561,6 +8561,11 @@ const char* builtinCategory(const std::string& n)
     if (n.rfind("hue_", 0) == 0 || n == "uf1_hue")
         return "Hue";
 
+    // DynaMount's own actions (the presets). The mode itself stays under
+    // Selection Modes with the others.
+    if (n.rfind("dynamount_", 0) == 0)
+        return "DynaMount";
+
     if (n.rfind("encoder_", 0) == 0 || n.rfind("uf1_encoder_", 0) == 0)
         return "Encoder Modes";
 
@@ -9192,6 +9197,12 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "hue_scene_recall_dynamic",
       "Starts the Hue scene given as the parameter, 1 to 8, and lets it keep "
       "moving rather than landing on one still state." },
+    { "dynamount_preset_recall",
+      "Drives every DynaMount stand to the preset given as the parameter, 1 to "
+      "8. Stands the preset does not know stay where they are." },
+    { "dynamount_preset_store",
+      "Stores where every DynaMount stand is now into the preset given as the "
+      "parameter, 1 to 8, over whatever was there." },
     { "selection_mode_hue",
       "The left UF8 becomes the lamps: one strip per lamp, fader is "
       "brightness, V-Pot the colour, SEL picks which lamp. Press again to go "
@@ -9754,6 +9765,8 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "select_relative", "Sel Step" },
     { "selection_clear_all", "Clear Sel" },
     { "selection_mode_auto", "Automation" },
+    { "dynamount_preset_recall", "Dyna Preset" },
+    { "dynamount_preset_store", "Dyna Store" },
     { "selection_mode_dynamount", "DynaMount" },
     { "selection_mode_hue", "Hue Mode" },
     { "selection_mode_instance", "FX Cycle" },
@@ -9920,7 +9933,7 @@ const std::vector<const char*>& builtinCategoryOrder()
         "Hardware Modes", "Plug-in", "Layer", "Soft-Key Bank", "SSL",
         "Bank / Page", "Automation", "Zoom", "Sends / Receives",
         "Selection Sets", "Parameter Groups", "Tracks", "Master",
-        "Brightness", "Modifiers", "FX Param", "Sticky Pot", "Hue", "OBS",
+        "Brightness", "Modifiers", "FX Param", "Sticky Pot", "Hue", "DynaMount", "OBS",
         "RME",
     };
     return kCats;

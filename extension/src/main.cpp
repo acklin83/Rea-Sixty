@@ -9027,6 +9027,17 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
         info.rgb    = hm.sceneSlot(slot).rgb;
         return info;
     }
+    // ⛔ AND THE DYNAMOUNT PRESETS: a preset is the room's stands, not the
+    // track's. Empty slots stay dark but take a long press (store).
+    if (kind == DK::DynaMountPresets) {
+        auto& dm = uf8::dynamount::manager();
+        const auto p = dm.preset(slot);
+        if (!p.defined()) return info;
+        info.present = true;
+        info.label   = p.name.empty() ? "Preset " + std::to_string(slot + 1) : p.name;
+        info.led     = (dm.lastPreset() == slot) ? 2 : 1;
+        return info;
+    }
     // ⛔ SAME REASON, SAME PLACE: an OBS scene has nothing to do with the
     // focused track either, so it resolves before the guard below.
     if (kind == DK::ObsScenes) {
@@ -9222,7 +9233,8 @@ static int dynamicBankItemCountUf1_(uf8::bindings::DynamicBankKind kind,
     if (kind == DK::FxBank) return tr ? TrackFX_GetCount(tr) : 0;
     if (kind == DK::ParamGroups || kind == DK::TrackColours
         || kind == DK::Favourites || kind == DK::HueScenes
-        || kind == DK::CsFavourites || kind == DK::BcFavourites) return 8;
+        || kind == DK::CsFavourites || kind == DK::BcFavourites
+        || kind == DK::DynaMountPresets) return 8;
     // However many scenes OBS reports, not a fixed eight: this drives the page
     // count, so a fixed number would page onto keys that resolve to nothing.
     if (kind == DK::ObsScenes)
@@ -9511,6 +9523,39 @@ static void applyDynBankHueSceneOp_(int slot, int gesture)
         uf1FlashTimecode_(nm, 1200);
 }
 
+// A DynaMount preset key. The Selection Sets' gestures (selbank::op), so the
+// two banks that store something read alike: push recalls, long stores into an
+// empty slot, Shift stores over, Ctrl clears. Main thread.
+static void applyDynBankDynaPresetOp_(int slot, int gesture)
+{
+    if (slot < 0 || slot >= uf8::dynamount::DynaMountManager::kMaxPresets) return;
+    auto& dm = uf8::dynamount::manager();
+    const auto p = dm.preset(slot);
+    char fl[16];
+    switch (selbank::op(gesture, p.defined())) {
+        case selbank::Op::Recall:
+            if (dm.recallPreset(slot))
+                uf1FlashTimecode_(p.name.empty() ? "PRESET " + std::to_string(slot + 1)
+                                                 : p.name, 1200);
+            break;
+        case selbank::Op::Save:
+            if (dm.definedCount() == 0) break;   // no stand set up, nothing to store
+            dm.storePreset(slot);
+            // Seven segments: no K, M, V, W or X, so "STORED", not "SAVED".
+            std::snprintf(fl, sizeof(fl), "STORED %d", slot + 1);
+            uf1FlashTimecode_(fl, 1200);
+            break;
+        case selbank::Op::Clear:
+            dm.clearPreset(slot);
+            std::snprintf(fl, sizeof(fl), "CLEAR %d", slot + 1);
+            uf1FlashTimecode_(fl, 1200);
+            break;
+        default:
+            break;
+    }
+    g_bankDirty.store(true);
+}
+
 static void applyDynBankFavouriteOp_(int slot, int gesture,
                                      uf8::bindings::DynamicBankKind kind)
 {
@@ -9587,6 +9632,7 @@ static void applyDynBankReq_(uint32_t enc)
     // Ahead of the track guard, same reason as the resolver: a scene is not a
     // property of the focused track.
     if (kind == DK::HueScenes) { applyDynBankHueSceneOp_(slot, gesture); return; }
+    if (kind == DK::DynaMountPresets) { applyDynBankDynaPresetOp_(slot, gesture); return; }
     if (kind == DK::ObsScenes) {
         // Plain push only. The other gestures stay free: a scene has one
         // reading, and OBS's own second one (preview) belongs to studio mode,
@@ -9639,6 +9685,7 @@ static void applyDynBankUf1_(uf8::bindings::DynamicBankKind kind,
         if (absIdx >= 0 && absIdx < 8) applyDynBankHueSceneOp_(absIdx, gesture);
         return;
     }
+    if (kind == DK::DynaMountPresets) { applyDynBankDynaPresetOp_(absIdx, gesture); return; }
     // ⛔ OBS SCENES WERE PICKABLE AND DEAD ON THE UF1. The kind is in the UF1's
     // dynamic-bank list and dynamicBankSlot_ resolves its labels, so the four
     // keys came up with the scene names on them — and the press fell through
@@ -34509,6 +34556,7 @@ static std::string uf8BankDisplayName_(int layer, int quick, int sub, int mod,
         case DynamicBankKind::CsFavourites: return withSet("CS Favourites");
         case DynamicBankKind::BcFavourites: return withSet("BC Favourites");
         case DynamicBankKind::HueScenes:    return withSet("Hue");
+        case DynamicBankKind::DynaMountPresets: return withSet("DynaMount");
         case DynamicBankKind::ObsScenes:    return withSet("OBS");
         case DynamicBankKind::RmeSnapshots: return withSet("Snapshots");
         case DynamicBankKind::RmeLayouts:   return withSet("Layouts");
@@ -34599,6 +34647,7 @@ static std::string uf1BankDisplayName_(int bank, int mod)
         // K, M, V, W and X do not exist there, and a word this field cannot draw
         // does not fail loudly, it just reads as a different word.
         case DynamicBankKind::HueScenes:    return "HUE";
+        case DynamicBankKind::DynaMountPresets: return "DYNA";
         case DynamicBankKind::ObsScenes:    return "OBS";
         // No K, M, V, W or X in either word; 9 and 7 of the ten cells.
         case DynamicBankKind::RmeSnapshots: return "SNAPSHOTS";
@@ -46296,6 +46345,10 @@ static void persistDynaState_()
         lastBlob = blob;
         SetExtState("rea_sixty", "dynamount_state", blob.c_str(), true);
     }
+    // The presets, when a key or the Settings tab changed one. Here and not in
+    // the press: stores run on the main thread here, and so does SetExtState.
+    if (dm.takePresetsDirty())
+        SetExtState("rea_sixty", "dynamount_presets", dm.serializePresets().c_str(), true);
 }
 
 // Minimal JSON string escaper for the bridge's hand-built output lines.
@@ -57772,6 +57825,29 @@ void registerBindingHandlers()
                                 SelectionMode::Hue,
                                 "Selection Mode → Hue");
 
+    // DynaMount presets, parameter 1..8 (Frank 29.10.2026). The soft-key bank
+    // DynaMountPresets does the same with all eight; these put one preset on any
+    // key. Builtins run on the input thread: the manager's preset calls lock.
+    registerBuiltin("dynamount_preset_recall", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            uf8::dynamount::manager().recallPreset(param > 0 ? param - 1 : 0);
+            g_bankDirty.store(true);
+        },
+        [](int param) {
+            return uf8::dynamount::manager().lastPreset() == (param > 0 ? param - 1 : 0);
+        },
+        "DynaMount: go to preset", true
+    });
+    registerBuiltin("dynamount_preset_store", DescBuilder{
+        [](bool firing, bool /*pressed*/, int param) {
+            if (!firing) return;
+            uf8::dynamount::manager().storePreset(param > 0 ? param - 1 : 0);
+            g_bankDirty.store(true);
+        },
+        nullptr, "DynaMount: store preset", true
+    });
+
     // Scene recall, parameter 1..8 = the slot in Settings → Modes → Hue. A
     // plain builtin rather than a dynamic bank, so a scene goes on any key of
     // any surface the bindings already reach. Long press starts the scene
@@ -61451,6 +61527,10 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
         const char* fill = GetExtState("rea_sixty", "dynamount_fill");
         dm.setFillDir((fill && *fill == 'R') ? uf8::dynamount::FillDir::Right
                                              : uf8::dynamount::FillDir::Left);
+        // The eight presets (persistDynaState_ saves them when they change).
+        if (const char* pr = GetExtState("rea_sixty", "dynamount_presets"); pr && *pr)
+            dm.deserializePresets(pr);
+        dm.takePresetsDirty();   // loading is not an edit
         // Restore the last-known mount positions (saved live by
         // persistDynaState_). markDirty=false: the mounts physically hold this
         // pose already, so don't re-drive them on launch. Format "idx,h,r,v;".

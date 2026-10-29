@@ -1375,6 +1375,7 @@ static const char* dynKindLabel_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::CsFavourites: return "CS Favourites";
         case DynamicBankKind::BcFavourites: return "BC Favourites";
         case DynamicBankKind::HueScenes:   return "Hue Scenes";
+        case DynamicBankKind::DynaMountPresets: return "DynaMount Presets";
         case DynamicBankKind::ObsScenes:   return "OBS Scenes";
         case DynamicBankKind::RmeSnapshots: return "TotalMix Snapshots";
         case DynamicBankKind::RmeLayouts:  return "TotalMix Layouts";
@@ -1418,6 +1419,9 @@ static const char* const kLaneBankGestures_ =
     "Key N is lane N of the selected track. Push plays the lane alone.\n"
     "Shift: the lane joins the lanes that play, or leaves them.\n"
     "Cmd: Comp here from this lane. On a track without lanes, key 1 turns them on.";
+static const char* const kDynaPresetGestures_ =
+    "Push drives the stands to the preset. Hold: store where they are now into "
+    "an empty slot. Shift: store over. Ctrl: clear the slot.";
 static const char* const kSelsetBankGestures_ =
     "Push recalls the set (press again to switch it off). Hold: store the "
     "REAPER selection into an empty slot. Shift: store over. Cmd: select "
@@ -1435,6 +1439,7 @@ static const char* dynKindShort_(uf8::bindings::DynamicBankKind k)
         case DynamicBankKind::CsFavourites: return "CS FAVS";
         case DynamicBankKind::BcFavourites: return "BC FAVS";
         case DynamicBankKind::HueScenes:   return "HUE";
+        case DynamicBankKind::DynaMountPresets: return "DYNA";
         case DynamicBankKind::ObsScenes:   return "OBS";
         case DynamicBankKind::RmeSnapshots: return "SNAPSHOTS";
         case DynamicBankKind::RmeLayouts:  return "LAYOUTS";
@@ -5641,6 +5646,7 @@ void drawUserQuickSlotEditor_(ImGui_Context* ctx, int editLayer,
                     DynamicBankKind::None,        DynamicBankKind::FxBank,
                     DynamicBankKind::ParamGroups, DynamicBankKind::TrackColours,
                     DynamicBankKind::Favourites,  DynamicBankKind::HueScenes,
+                    DynamicBankKind::DynaMountPresets,
                     DynamicBankKind::CsFavourites, DynamicBankKind::BcFavourites,
                     DynamicBankKind::ObsScenes,
                     DynamicBankKind::RmeSnapshots, DynamicBankKind::RmeLayouts,
@@ -6327,6 +6333,7 @@ static void drawDynamicBankSettings_(ImGui_Context* ctx, int layer, int quick,
                 ImGui_EndCombo(ctx);
             }
             if (curKind == DynamicBankKind::Lanes) help_(ctx, kLaneBankGestures_);
+            if (curKind == DynamicBankKind::DynaMountPresets) help_(ctx, kDynaPresetGestures_);
             ImGui_Spacing(ctx);
         }
 
@@ -6414,6 +6421,8 @@ static void drawDynamicBankSettings_(ImGui_Context* ctx, int layer, int quick,
         } else if (curKind == DynamicBankKind::SelectionSets) {
             ImGui_TextDisabled(ctx,
                 kSelsetBankGestures_);
+        } else if (curKind == DynamicBankKind::DynaMountPresets) {
+            help_(ctx, kDynaPresetGestures_);
         }
     }
 }
@@ -6814,6 +6823,7 @@ static void renderBankMatrixContextMenu_(ImGui_Context* ctx)
             { DynamicBankKind::CsFavourites, "CS Favourites" },
             { DynamicBankKind::BcFavourites, "BC Favourites" },
             { DynamicBankKind::HueScenes,    "Hue Scenes" },
+            { DynamicBankKind::DynaMountPresets, "DynaMount Presets" },
             { DynamicBankKind::ObsScenes,    "OBS Scenes" },
             { DynamicBankKind::RmeSnapshots, "TotalMix Snapshots" },
             { DynamicBankKind::RmeLayouts,   "TotalMix Layouts" },
@@ -7245,6 +7255,7 @@ static void renderUf1BankMatrixContextMenu_(ImGui_Context* ctx)
             DynamicBankKind::ParamGroups,  DynamicBankKind::TrackColours,
             DynamicBankKind::Favourites,   DynamicBankKind::CsFavourites,
             DynamicBankKind::BcFavourites, DynamicBankKind::HueScenes,
+            DynamicBankKind::DynaMountPresets,
             DynamicBankKind::ObsScenes,
             DynamicBankKind::RmeSnapshots, DynamicBankKind::RmeLayouts,
             DynamicBankKind::SelectionSets, DynamicBankKind::Lanes,
@@ -8565,6 +8576,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 { DynamicBankKind::CsFavourites, "CS Favourites" },
                 { DynamicBankKind::BcFavourites, "BC Favourites" },
                 { DynamicBankKind::HueScenes,    "Hue Scenes" },
+            { DynamicBankKind::DynaMountPresets, "DynaMount Presets" },
                 { DynamicBankKind::ObsScenes,    "OBS Scenes" },
                 { DynamicBankKind::RmeSnapshots, "TotalMix Snapshots" },
                 { DynamicBankKind::RmeLayouts,   "TotalMix Layouts" },
@@ -8603,6 +8615,7 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 ImGui_EndCombo(ctx);
             }
             if (curKind == DynamicBankKind::Lanes) help_(ctx, kLaneBankGestures_);
+            if (curKind == DynamicBankKind::DynaMountPresets) help_(ctx, kDynaPresetGestures_);
             ImGui_Spacing(ctx);
 
             if (curKind != DynamicBankKind::None) {
@@ -23656,7 +23669,7 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
 
     ImGui_Text(ctx,
         "Control up to 8 DynaMount robotic mic stands from the UF8 strips. "
-        "Only the defined mounts become DynaMount strips; the rest stay tracks.");
+        "In DynaMount mode the left UF8 is theirs; strips without a mount are dark.");
     ImGui_Spacing(ctx);
 
     // Fill direction — which side the pinned DynaMount strips anchor to.
@@ -23790,6 +23803,75 @@ static void drawDynaMountTab_(ImGui_Context* ctx)
             ImGui_Text(ctx, status);
         }
         ImGui_EndTable(ctx);
+    }
+
+    // ⇨ PRESETS (Frank 29.10.2026): the position of every stand at once, eight
+    // of them. The soft-key bank "DynaMount Presets" and the two actions use the
+    // same eight. Saved by the timer (persistDynaState_), not here.
+    ImGui_Spacing(ctx);
+    ImGui_Separator(ctx);
+    ImGui_Text(ctx, "Presets");
+    {
+        static char s_pname[DynaMountManager::kMaxPresets][32];
+        static bool s_pseeded = false;
+        if (!s_pseeded) {
+            for (int k = 0; k < DynaMountManager::kMaxPresets; ++k)
+                snprintf(s_pname[k], sizeof(s_pname[k]), "%s", mgr.preset(k).name.c_str());
+            s_pseeded = true;
+        }
+        int ptf = 0;
+        if (ImGui_BeginTable(ctx, "##dyna_presets", 6, &ptf, nullptr, nullptr, nullptr)) {
+            int    wFlag = ImGui_TableColumnFlags_WidthFixed;
+            double wNum  = scaleW_(ctx, 24.0);
+            double wName = scaleW_(ctx, 150.0);
+            double wPos  = scaleW_(ctx, 90.0);
+            double wBtn  = scaleW_(ctx, 60.0);
+            ImGui_TableSetupColumn(ctx, "#",      &wFlag, &wNum,  nullptr);
+            ImGui_TableSetupColumn(ctx, "Name",   &wFlag, &wName, nullptr);
+            ImGui_TableSetupColumn(ctx, "Stands", &wFlag, &wPos,  nullptr);
+            ImGui_TableSetupColumn(ctx, "",       &wFlag, &wBtn,  nullptr);
+            ImGui_TableSetupColumn(ctx, "",       &wFlag, &wBtn,  nullptr);
+            ImGui_TableSetupColumn(ctx, "",       &wFlag, &wBtn,  nullptr);
+            ImGui_TableHeadersRow(ctx);
+            for (int k = 0; k < DynaMountManager::kMaxPresets; ++k) {
+                const auto pr = mgr.preset(k);
+                char id[40];
+                ImGui_TableNextColumn(ctx);
+                ImGui_Text(ctx, std::to_string(k + 1).c_str());
+                ImGui_TableNextColumn(ctx);
+                ImGui_SetNextItemWidth(ctx, -1.0);
+                snprintf(id, sizeof(id), "##dm_pname_%d", k);
+                int tf = 0;
+                char hint[16]; snprintf(hint, sizeof(hint), "Preset %d", k + 1);
+                if (ImGui_InputTextWithHint(ctx, id, hint, s_pname[k], sizeof(s_pname[k]),
+                                            &tf, nullptr))
+                    mgr.setPresetName(k, s_pname[k]);
+                ImGui_TableNextColumn(ctx);
+                if (pr.defined()) {
+                    char n[24]; snprintf(n, sizeof(n), "%d", static_cast<int>(pr.pos.size()));
+                    ImGui_Text(ctx, n);
+                } else {
+                    ImGui_TextDisabled(ctx, "--");
+                }
+                ImGui_TableNextColumn(ctx);
+                snprintf(id, sizeof(id), "Go##dm_pgo_%d", k);
+                if (pr.defined() && ImGui_Button(ctx, id, nullptr, nullptr))
+                    mgr.recallPreset(k);
+                ImGui_TableNextColumn(ctx);
+                snprintf(id, sizeof(id), "Store##dm_pst_%d", k);
+                if (ImGui_Button(ctx, id, nullptr, nullptr)) {
+                    mgr.storePreset(k);
+                    snprintf(s_pname[k], sizeof(s_pname[k]), "%s", mgr.preset(k).name.c_str());
+                }
+                ImGui_TableNextColumn(ctx);
+                snprintf(id, sizeof(id), "Clear##dm_pclr_%d", k);
+                if (pr.defined() && ImGui_Button(ctx, id, nullptr, nullptr)) {
+                    mgr.clearPreset(k);
+                    s_pname[k][0] = 0;
+                }
+            }
+            ImGui_EndTable(ctx);
+        }
     }
 
     ImGui_Spacing(ctx);

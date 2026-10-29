@@ -128,6 +128,38 @@ public:
     // Ask the worker to probe this mount's IP; result lands in proto + online.
     void requestDetect(int idx);
 
+    // ---- Presets (Frank 29.10.2026, docs/orc-uf8-plan.md section 4) ----------
+    // A preset is a scene: the position of EVERY enabled mount at once, eight of
+    // them, named. Each position is keyed by the mount's IP address, not its row,
+    // so reordering the rows cannot send one stand's position to another. Recall
+    // drives every mount the preset knows and that is enabled now; a mount the
+    // preset does not know stays where it is. Thread-safe: the soft keys run on
+    // the input thread, Settings on the main thread.
+    static constexpr int kMaxPresets = 8;
+    struct PresetPos { std::string ip; int h = 0, r = 90, v = 50; };
+    struct Preset {
+        std::string            name;
+        std::vector<PresetPos> pos;
+        bool defined() const { return !pos.empty(); }
+    };
+    // Captures the current targets of the enabled mounts into `slot`. Keeps the
+    // slot's name, or names it "Preset N" when it has none.
+    void storePreset(int slot);
+    // Drives the mounts to `slot`. False when the slot is empty or none of its
+    // mounts is enabled.
+    bool recallPreset(int slot);
+    void clearPreset(int slot);
+    void setPresetName(int slot, const std::string& name);
+    Preset preset(int slot);
+    // The slot last recalled or stored, -1 none. Lights its key.
+    int lastPreset() const { return lastPreset_.load(); }
+    // Set by store / clear / rename; the caller saves on the main thread.
+    bool takePresetsDirty() { return presetsDirty_.exchange(false); }
+    // ';' between slots, '\t' between fields, '|' between positions, ',' inside
+    // one; no newline (ExtState drops everything after one). Names are scrubbed.
+    std::string serializePresets();
+    void deserializePresets(const std::string& s);
+
     // ---- Persistence (pure; REAPER-free, unit-tested) ----------------------
     // Compact tab/newline-delimited form of the mount config + calibration.
     // Fill direction is persisted separately by the caller.
@@ -140,6 +172,10 @@ private:
     std::vector<int> enabledOrder();  // config indices of enabled mounts, in slot order
 
     std::array<Mount, kMaxMounts> mounts_;
+    std::array<Preset, kMaxPresets> presets_;
+    std::mutex          presetMx_;
+    std::atomic<int>    lastPreset_{-1};
+    std::atomic<bool>   presetsDirty_{false};
     std::mutex          cfgMx_;
     std::atomic<FillDir> fill_{FillDir::Left};
     std::atomic<uint32_t> detectReq_{0};  // bitmask of mounts to detect
