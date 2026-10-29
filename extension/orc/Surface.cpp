@@ -231,6 +231,8 @@ void Surface::start()
         [this](int) { return sleep_.asleep.load(); },
         "Sleep the surface now", false });
     uf8::bindings::setBuiltinKind("sleep_now", uf8::bindings::BuiltinKind::Switch);
+    // Sleep on the UF8's QUICK 1 from the factory (Frank 29.10.2026).
+    Uf8Surface::seedUserKeys();
 
     // The handler fires on the device's worker thread.
     dev_.setInputHandler([this](const ::uf1::InputEvent& ev) {

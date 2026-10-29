@@ -1,7 +1,9 @@
 #include "RmeSoftKeys.h"
 
 #include "RmeManager.h"
+#include "ObsManager.h"
 #include "RmeNames.h"
+#include "RoomCells.h"
 #include "Uf1SoftKeys.h"
 
 #include <algorithm>
@@ -64,7 +66,7 @@ DK rmeKind(int bank)
     // The bank's kind is Plain's: a TotalMix bank is one list of eight, split
     // over the two halves, not two lists.
     const DK k = bnd::getUf1SoftBankDynamic(bank, static_cast<int>(bnd::Modifier::Plain));
-    return (k == DK::RmeSnapshots || k == DK::RmeLayouts) ? k : DK::None;
+    return (k == DK::RmeSnapshots || k == DK::RmeLayouts || k == DK::ObsScenes) ? k : DK::None;
 }
 
 // Moved from the extension's dynamicBankSlot_ (main.cpp), 25.09.2026, word for
@@ -76,6 +78,15 @@ DynSlot dynSlot(DK kind, int slot)
 {
     DynSlot d;
     if (slot < 0 || slot >= 8) return d;
+    // ⇨ OBS SCENES ON A TOTALMIX BANK (Frank 29.10.2026: OBS is no mode of its
+    // own, its scenes are a bank kind). The first eight OBS reports, in its
+    // order; the one on air lit, a key past the last dark.
+    if (kind == DK::ObsScenes) {
+        const roomcells::Cell c = roomcells::obsScene(slot);
+        d.label = c.label;
+        d.led   = c.led;
+        return d;
+    }
     const auto& nm = namesFromDisk();
     const bool snap = (kind == DK::RmeSnapshots);
     d.label = snap ? snapshotName(nm, slot) : layoutName(nm, slot);
@@ -100,6 +111,13 @@ DynSlot dynSlot(DK kind, int slot)
 bool loadDyn(DK kind, int slot)
 {
     if (slot < 0 || slot >= 8) return false;
+    if (kind == DK::ObsScenes) {
+        auto& om = reasixty::obs::manager();
+        const std::string nm = om.sceneAt(slot);
+        if (nm.empty()) return false;
+        om.switchScene(nm);
+        return true;
+    }
     if (kind != DK::RmeSnapshots && kind != DK::RmeLayouts) return false;
     auto& rm = manager();
     if (rm.link() != LinkState::Online) return false;
@@ -148,6 +166,28 @@ std::array<uf1spread::SkCell, 4> row(int bank, int half)
         c.colRgb    = lamp.rgb;
     }
     return cells;
+}
+
+// ⇨ THE UF8's EIGHT SOFT KEYS IN THE TOTALMIX SIDE-CAR (Frank 29.10.2026: the
+// soft keys belong to the mode): bank `bankAbs`, both halves at once, keys 1-4
+// the first, 5-8 the second. The same on the UF8 in ORC and in Rea-Sixty.
+std::array<uf8side::SoftCell, 8> uf8Row(int bankAbs)
+{
+    std::array<uf8side::SoftCell, 8> soft{};
+    for (int h = 0; h < 2; ++h) {
+        if (h == 1 && !hasSecondHalf(bankAbs)) break;
+        const auto cells = row(bankAbs, h);
+        for (int k = 0; k < 4; ++k) {
+            const auto& c = cells[static_cast<size_t>(k)];
+            uf8side::SoftCell& o = soft[static_cast<size_t>(h * 4 + k)];
+            if (!c.haveLabel || c.label.empty()) continue;
+            o.label = c.label;
+            // A colour of 0 is "no link" (row): dark.
+            o.lamp  = (c.hasColour && !c.colRgb) ? 0 : (c.on || c.colBright) ? 2 : 1;
+            o.rgb   = c.hasColour ? c.colRgb : 0xFFFFFFu;
+        }
+    }
+    return soft;
 }
 
 void press(int bank, int half, int slot, bool pressed, const DynLoad& load)

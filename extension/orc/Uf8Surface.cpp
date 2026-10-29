@@ -8,8 +8,10 @@
 #include "OrcLog.h"
 #include "Palette.h"
 #include "Protocol.h"
+#include "RoomCells.h"
 #include "RmeSoftKeys.h"
 #include "SelsetBank.h"
+#include "Uf1SoftKeys.h"
 #include "Uf8Fader.h"
 #include "Uf8ModeViews.h"
 #include "Uf8Strips.h"
@@ -56,6 +58,34 @@ constexpr std::int64_t kTouchHoldMs = 150;
 constexpr std::int64_t kLongPressMs = 500;
 
 constexpr int kPages = 6;   // V-POT, 1-5
+
+// ⇨ THE KEYS THE USER BINDS (Frank 29.10.2026): QUICK 1-3, NAV / NUDGE / FOCUS,
+// NORM / REC / AUTO. Each runs what the Soft Keys page puts on it, through the
+// bindings engine, in every mode. Sleep on QUICK 1 from the factory.
+constexpr std::uint8_t kQuick1 = 0x43, kQuick2 = 0x44, kQuick3 = 0x45;
+constexpr std::uint8_t kSelNorm = 0x70, kSelRec = 0x71, kSelAuto = 0x72;
+constexpr std::uint8_t kNav = 0x73, kNudge = 0x74, kFocus = 0x75;
+struct UserKey { std::uint8_t id; uf8::Uf8GlobalLed led; };
+constexpr UserKey kUserKeys[Uf8Surface::kUserKeyCount] = {
+    { kQuick1,  uf8::Uf8GlobalLed::Quick1 }, { kQuick2, uf8::Uf8GlobalLed::Quick2 },
+    { kQuick3,  uf8::Uf8GlobalLed::Quick3 },
+    { kNav,     uf8::Uf8GlobalLed::Nav },    { kNudge,  uf8::Uf8GlobalLed::Nudge },
+    { kFocus,   uf8::Uf8GlobalLed::Focus },
+    { kSelNorm, uf8::Uf8GlobalLed::Norm },   { kSelRec, uf8::Uf8GlobalLed::Rec },
+    { kSelAuto, uf8::Uf8GlobalLed::Auto },
+};
+
+// What ORC can run: a builtin it registered (TotalMix, sleep, the modifiers).
+// Anything else on these keys is the factory layer orc.json inherited from
+// Rea-Sixty (domain_cs, the encoder modes ...) and does nothing here.
+const uf8::bindings::ActionSlot* orcSlot(const uf8::bindings::Binding& bd, int mod)
+{
+    namespace bnd = uf8::bindings;
+    if (mod < 0 || mod >= bnd::kModifierCount) return nullptr;
+    const bnd::ActionSlot& sl = bd.shortPress[mod];
+    if (sl.type != bnd::ActionType::Builtin || !bnd::builtinRegistered(sl.action)) return nullptr;
+    return &sl;
+}
 
 // The colour bar's palette index for an RGB, as ColorSync does it.
 std::uint8_t barIndex(std::uint32_t rgb)
@@ -109,6 +139,7 @@ void Uf8Surface::resetCache_()
     cVu_.fill(0xFF);
     cSelMask_ = -1;
     cLed_.fill(-1);
+    cUser_.fill(-1);
 }
 
 void Uf8Surface::send_(const u8s::Writes& w)
@@ -190,56 +221,25 @@ void Uf8Surface::pushSleep(bool asleep)
         dev_.send(std::move(f));
 }
 
-// The eight soft keys of a page (V-POT / 1-5): the TotalMix bank, Hue scenes,
-// DynaMount presets, OBS scenes. The same three-state lamps as everywhere.
-std::array<u8s::SoftCell, 8> Uf8Surface::softCells_(int page)
+// ⇨ THE SOFT KEYS BELONG TO THE MODE (Frank 29.10.2026: "Hue Presets sollten im
+// Hue mode erscheinen ... Dyna Sachen im Dyna Mode"). TotalMix: the bank V-POT /
+// 1-5 picked, which is the UF1's bank too, both halves at once (keys 1-4 the
+// first, 5-8 the second); OBS scenes are a bank kind there. Hue: the eight
+// scenes. DynaMount: the eight presets. The same three-state lamps as everywhere.
+std::array<u8s::SoftCell, 8> Uf8Surface::softCells_(Mode m)
 {
+    namespace bnd = uf8::bindings;
+    if (m == Mode::TotalMix)
+        return rme::softkeys::uf8Row(bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme) + scBank_.load());
     std::array<u8s::SoftCell, 8> soft{};
-    if (page == 0) {
-        // The side-car's current RME bank, both halves at once (keys 1-4 the
-        // first, 5-8 the second; plan 2.1).
-        namespace bnd = uf8::bindings;
-        const int bank = bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme) + scBank_.load();
-        for (int h = 0; h < 2; ++h) {
-            if (h == 1 && !rme::softkeys::hasSecondHalf(bank)) break;
-            const auto row = rme::softkeys::row(bank, h);
-            for (int k = 0; k < 4; ++k) {
-                const auto& c = row[static_cast<size_t>(k)];
-                u8s::SoftCell& o = soft[static_cast<size_t>(h * 4 + k)];
-                if (!c.haveLabel) continue;
-                o.label = c.label;
-                o.lamp  = (c.on || c.colBright) ? 2 : 1;
-                o.rgb   = c.hasColour ? c.colRgb : 0xFFFFFFu;
-            }
-        }
-    } else if (page == 1) {
-        auto& hm = uf8::hue::manager();
-        for (int k = 0; k < 8; ++k) {
-            if (!hm.sceneSlotFilled(k)) continue;
-            auto& o = soft[static_cast<size_t>(k)];
-            o.label = hm.sceneSlotName(k);
-            if (o.label.empty()) o.label = "Scene";
-            o.lamp  = hm.sceneSlotActive(k) ? 2 : 1;
-            o.rgb   = hm.sceneSlot(k).rgb;
-        }
-    } else if (page == 2) {
-        auto& dm = uf8::dynamount::manager();
-        for (int k = 0; k < 8; ++k) {
-            const auto p = dm.preset(k);
-            if (!p.defined()) continue;
-            auto& o = soft[static_cast<size_t>(k)];
-            o.label = p.name.empty() ? "Preset " + std::to_string(k + 1) : p.name;
-            o.lamp  = (dm.lastPreset() == k) ? 2 : 1;
-        }
-    } else if (page == 3) {
-        auto& om = reasixty::obs::manager();
-        for (int k = 0; k < 8; ++k) {
-            const std::string nm = om.sceneAt(k);
-            if (nm.empty()) continue;
-            auto& o = soft[static_cast<size_t>(k)];
-            o.label = nm;
-            o.lamp  = (nm == om.currentScene()) ? 2 : 1;
-        }
+    for (int k = 0; k < 8; ++k) {
+        const roomcells::Cell c = (m == Mode::Hue) ? roomcells::hueScene(k)
+                                                   : roomcells::dynaPreset(k);
+        if (!c.present) continue;
+        auto& o = soft[static_cast<size_t>(k)];
+        o.label = c.label;
+        o.lamp  = c.led;
+        o.rgb   = c.hasRgb ? c.rgb : 0xFFFFFFu;
     }
     return soft;
 }
@@ -251,7 +251,7 @@ void Uf8Surface::paintTotalMix_(std::array<uf8strips::View, 8>& views, std::arra
     const rme::Config cfg = mgr.config();
     const rme::State  st  = mgr.snapshot();
     u8s::follow(st, in_, side_);
-    const u8s::Frame fr = u8s::frame(st, in_, side_, cfg, softCells_(skPage_.load()));
+    const u8s::Frame fr = u8s::frame(st, in_, side_, cfg, softCells_(Mode::TotalMix));
     views  = fr.strips;
     colour = fr.colour;
     vu     = fr.vu;
@@ -261,7 +261,7 @@ void Uf8Surface::paintTotalMix_(std::array<uf8strips::View, 8>& views, std::arra
 // without a lamp or a stand dark, the soft keys the current page.
 void Uf8Surface::paintMode_(Mode m, std::array<uf8strips::View, 8>& views, std::array<int, 8>& colour)
 {
-    const auto soft = softCells_(skPage_.load());
+    const auto soft = softCells_(m);
     const bool flip = flip_.load();
     for (int s = 0; s < 8; ++s) {
         uf8strips::View& v = views[static_cast<size_t>(s)];
@@ -304,7 +304,6 @@ void Uf8Surface::paintLeds_()
     using G = uf8::Uf8GlobalLed;
     using S = uf8::GlobalLedState;
     const int mode = mode_.load();
-    const int page = skPage_.load();
     int sp[8] = {};
     if (mode == static_cast<int>(Mode::TotalMix)) {
         const rme::State st = rme::manager().snapshot();
@@ -317,12 +316,12 @@ void Uf8Surface::paintLeds_()
         { G::Flip,     flip_.load() ? 2 : 1 },
         { G::Plugin,   side_.chanView.load() ? 2 : 1 },
         { G::Fine,     fineHeld_.load() ? 2 : 1 },
-        { G::VPotBank, page == 0 ? 2 : 1 },
-        { G::Soft1,    page == 1 ? 2 : 1 },
-        { G::Soft2,    page == 2 ? 2 : 1 },
-        { G::Soft3,    page == 3 ? 2 : 1 },
-        { G::Soft4,    page == 4 ? 2 : 0 },
-        { G::Soft5,    page == 5 ? 2 : 0 },
+        { G::VPotBank, bankKeyLamp_(0) },
+        { G::Soft1,    bankKeyLamp_(1) },
+        { G::Soft2,    bankKeyLamp_(2) },
+        { G::Soft3,    bankKeyLamp_(3) },
+        { G::Soft4,    bankKeyLamp_(4) },
+        { G::Soft5,    bankKeyLamp_(5) },
         // SEND/PLUG-IN: the submix keys, in TotalMix only.
         { G::SendPlugin1, sp[0] }, { G::SendPlugin2, sp[1] },
         { G::SendPlugin3, sp[2] }, { G::SendPlugin4, sp[3] },
@@ -338,6 +337,49 @@ void Uf8Surface::paintLeds_()
         if (!f.ff38.empty())   dev_.send(std::move(f.ff38));
         if (!f.ff39.empty())   dev_.send(std::move(f.ff39));
         if (!f.legacy.empty()) dev_.send(std::move(f.legacy));
+    }
+
+    // The user's keys: the binding's colours, active bright, otherwise dim, dark
+    // when ORC runs nothing there (as the UF1's transport keys, Surface.cpp).
+    namespace bnd = uf8::bindings;
+    const int layer = bnd::getActiveLayer();
+    const int mod   = static_cast<int>(bnd::currentModifierSnapshot());
+    for (int i = 0; i < kUserKeyCount; ++i) {
+        const auto& u = kUserKeys[i];
+        const bnd::Binding bd = bnd::getBinding(layer, bnd::fromUf8DeviceId(u.id));
+        std::int64_t want = 0;
+        S state = S::Off;
+        std::uint32_t rgb = 0;
+        if (const bnd::ActionSlot* sl = orcSlot(bd, mod)) {
+            const bool on = bnd::bindingHasActiveSlotForSet(bd, mod);
+            rgb = uf1sk::bindingLedColour(bd, *sl, on);
+            if (rgb) state = on ? S::Bright : S::Dim;
+        }
+        want = (static_cast<std::int64_t>(state) << 32) | rgb;
+        if (cUser_[static_cast<size_t>(i)] == want) continue;
+        cUser_[static_cast<size_t>(i)] = want;
+        auto f = state == S::Off ? uf8::buildUf8GlobalLed(u.led, S::Off)
+                                 : uf8::buildUf8GlobalLed(u.led, state, uf8::ledColourForTrackRgb(rgb));
+        if (!f.ff38.empty())   dev_.send(std::move(f.ff38));
+        if (!f.ff39.empty())   dev_.send(std::move(f.ff39));
+        if (!f.legacy.empty()) dev_.send(std::move(f.legacy));
+    }
+}
+
+void Uf8Surface::seedUserKeys()
+{
+    namespace bnd = uf8::bindings;
+    const bnd::ButtonId q1 = bnd::fromUf8DeviceId(kQuick1);
+    for (int layer = 0; layer < 3; ++layer) {
+        bnd::Binding bd = bnd::getBinding(layer, q1);
+        bnd::ActionSlot& sl = bd.shortPress[static_cast<int>(bnd::Modifier::Plain)];
+        // Only over the inherited factory: an empty key is the user's choice.
+        if (bnd::slotIsEmpty(sl) || orcSlot(bd, static_cast<int>(bnd::Modifier::Plain))) continue;
+        sl = bnd::ActionSlot{};
+        sl.type   = bnd::ActionType::Builtin;
+        sl.action = "sleep_now";
+        bd.label.clear();
+        bnd::setBinding(layer, q1, bd);
     }
 }
 
@@ -517,13 +559,12 @@ void Uf8Surface::onFrame_(const uf8frames::Frame& f)
     }
 }
 
-// A soft key on the current page. TotalMix keys follow press and release (the
-// bindings decide); scenes and presets act on release, so a long press can mean
+// A soft key of the mode. TotalMix keys follow press and release (the bindings
+// decide); scenes and presets act on release, so a long press can mean
 // something else.
-void Uf8Surface::softKey_(int k, bool pressed)
+void Uf8Surface::softKey_(Mode m, int k, bool pressed)
 {
-    const int page = skPage_.load();
-    if (page == 0) {
+    if (m == Mode::TotalMix) {
         namespace bnd = uf8::bindings;
         rme::softkeys::press(bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme) + scBank_.load(),
                              k / 4, k % 4, pressed);
@@ -531,10 +572,10 @@ void Uf8Surface::softKey_(int k, bool pressed)
     }
     if (pressed) { keyDownMs_[k].store(nowMs_()); return; }
     const bool longPress = nowMs_() - keyDownMs_[k].load() >= kLongPressMs;
-    if (page == 1) {
+    if (m == Mode::Hue) {
         // Hue: push recalls, long starts it moving (Rea-Sixty's HueScenes bank).
         uf8::hue::manager().recallSceneSlot(k, /*dynamic=*/longPress);
-    } else if (page == 2) {
+    } else if (m == Mode::Dyna) {
         // DynaMount: the Selection Sets' gestures (selbank::op, as Rea-Sixty's
         // DynaMountPresets bank): push recalls, long stores into an empty slot,
         // FINE + push stores over.
@@ -546,11 +587,17 @@ void Uf8Surface::softKey_(int k, bool pressed)
             case selbank::Op::Clear:  dm.clearPreset(k); break;
             default: break;
         }
-    } else if (page == 3) {
-        auto& om = reasixty::obs::manager();
-        const std::string nm = om.sceneAt(k);
-        if (!nm.empty()) om.switchScene(nm);
     }
+}
+
+// V-POT / 1-5 in TotalMix: the bank, 1-6, when there is one (Soft Keys page).
+// The UF1 shows the same bank, from its first half, as after its own < >.
+int Uf8Surface::bankKeyLamp_(int idx) const
+{
+    namespace bnd = uf8::bindings;
+    if (static_cast<Mode>(mode_.load()) != Mode::TotalMix) return 0;
+    if (idx >= bnd::uf1SideCarBankInUseCount(bnd::kUf1SideCarSetRme)) return 0;
+    return scBank_.load() == idx ? 2 : 1;
 }
 
 void Uf8Surface::onButton_(std::uint8_t id, bool pressed)
@@ -561,13 +608,21 @@ void Uf8Surface::onButton_(std::uint8_t id, bool pressed)
     const Mode m = static_cast<Mode>(mode_.load());
 
     if (id == kFine) { fineHeld_.store(pressed); return; }
+    for (const auto& u : kUserKeys) {
+        if (u.id != id) continue;
+        namespace bnd = uf8::bindings;
+        const bnd::ButtonId b = bnd::fromUf8DeviceId(id);
+        const int mod = static_cast<int>(bnd::currentModifierSnapshot());
+        if (orcSlot(bnd::getBinding(bnd::getActiveLayer(), b), mod)) bnd::dispatch(b, pressed);
+        return;
+    }
     if (id >= kTopSoft1 && id < kTopSoft1 + 8) {
         const int k = id - kTopSoft1;
         if (m == Mode::TotalMix && side_.chanView.load()) {
             if (pressed) u8s::pickPage(st, in_, side_, cfg, k);
             return;
         }
-        softKey_(k, pressed);
+        softKey_(m, k, pressed);
         return;
     }
     if (!pressed) return;
@@ -581,8 +636,11 @@ void Uf8Surface::onButton_(std::uint8_t id, bool pressed)
         case kBtn360: settings_.store(true);    return;
         default: break;
     }
-    if (id >= kVpotBank && id < kVpotBank + kPages) {   // V-POT, 1-5: the soft-key page
-        skPage_.store(id - kVpotBank);
+    if (id >= kVpotBank && id < kVpotBank + kPages) {   // V-POT, 1-5: the TotalMix bank
+        if (bankKeyLamp_(id - kVpotBank) != 0) {
+            scBank_.store(id - kVpotBank);
+            in_.skHalf.store(0);
+        }
         return;
     }
 

@@ -60,13 +60,20 @@ class Uf8Surface {
     // DynaMount; the same key again goes back to TotalMix, ORC's ground state.
     enum class Mode : int { TotalMix = 0, Hue = 1, Dyna = 2 };
 
+    // QUICK 1-3, NAV / NUDGE / FOCUS, NORM / REC / AUTO: bound on the Soft Keys
+    // page. Puts Sleep on QUICK 1 where orc.json still has the factory layer it
+    // inherited. Call once the builtins are registered.
+    static constexpr int kUserKeyCount = 9;
+    static void seedUserKeys();
+
   private:
     void onRaw_(const std::uint8_t* data, std::size_t len);
     void paintTotalMix_(std::array<uf8strips::View, 8>& views, std::array<int, 8>& colour,
                         std::array<std::uint8_t, 16>& vu);
     void paintMode_(Mode m, std::array<uf8strips::View, 8>& views, std::array<int, 8>& colour);
-    std::array<reasixty::rme::uf8side::SoftCell, 8> softCells_(int page);
-    void softKey_(int key, bool pressed);
+    std::array<reasixty::rme::uf8side::SoftCell, 8> softCells_(Mode m);
+    void softKey_(Mode m, int key, bool pressed);
+    int  bankKeyLamp_(int idx) const;
     void paintLeds_();
     void setMode_(Mode m);
     void onFrame_(const uf8frames::Frame& f);
@@ -96,15 +103,13 @@ class Uf8Surface {
     std::atomic<bool>                        fineHeld_{false};
     std::atomic<int>                         mode_{0};       // Mode
     std::atomic<bool>                        flip_{false};
-    // Soft-key page on V-POT / 1-5 (plan 2.3): 0 the TotalMix bank, 1 Hue
-    // scenes, 2 DynaMount presets, 3 OBS scenes, 4-5 empty.
-    std::atomic<int>                         skPage_{0};
     std::array<std::atomic<std::int64_t>, 8> keyDownMs_{};    // soft keys, for the long press
     // A stand's fader is sent on release (Frank 2026-06-28): the position under
     // the hand waits here.
     std::array<std::atomic<bool>, 8>         dynPending_{};
     std::array<std::atomic<double>, 8>       dynPendingNorm_{};
     std::array<int, 20>                      cLed_{};
+    std::array<std::int64_t, kUserKeyCount>  cUser_{};
     std::atomic<bool>                        repaint_{true};
 
     // What the device shows (Uf8Strips::Cells point in here). Loop thread.

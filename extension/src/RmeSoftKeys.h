@@ -21,6 +21,7 @@
 #include "Bindings.h"
 #include "RmeInput.h"
 #include "Uf1Spread.h"
+#include "Uf8Rme.h"
 
 #include <array>
 #include <functional>
@@ -88,5 +89,9 @@ std::array<uf1spread::SkCell, 4> row(int bank, int half);
 // loadDyn right here (ORC).
 using DynLoad = std::function<void(uf8::bindings::DynamicBankKind kind, int slot)>;
 void press(int bank, int half, int slot, bool pressed, const DynLoad& load = {});
+
+// The UF8's eight soft keys in the TotalMix side-car: bank `bankAbs`, both
+// halves at once (keys 1-4 the first, 5-8 the second). ORC and Rea-Sixty.
+std::array<uf8side::SoftCell, 8> uf8Row(int bankAbs);
 
 } // namespace reasixty::rme::softkeys

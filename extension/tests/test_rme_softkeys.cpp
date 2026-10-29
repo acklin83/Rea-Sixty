@@ -162,6 +162,22 @@ int main()
     // A TotalMix bank: kind from Plain, halves are items 1-4 and 5-8.
     EXPECT(sk::rmeKind(bnd::kUf1RmeBankBase + 1) == bnd::DynamicBankKind::RmeSnapshots);
     EXPECT(sk::rmeKind(bnd::kUf1RmeBankBase) == bnd::DynamicBankKind::None);
+
+    // ⇨ THE UF8's ROW (Frank 29.10.2026): both halves at once, keys 1-4 the
+    // first, 5-8 the second; a TotalMix bank's keys are its eight items.
+    {
+        const auto u = sk::uf8Row(bnd::kUf1RmeBankBase);
+        EXPECT(u[0].label == r0[0].label && u[4].label == r1[0].label);
+        EXPECT(u[0].label == "Dim" && u[4].label == "Ext In");
+        // OBS scenes are a bank kind: with no OBS every key is dark.
+        bnd::setUf1SoftBankDynamic(bnd::kUf1RmeBankBase + 4, 0, bnd::DynamicBankKind::ObsScenes);
+        EXPECT(sk::rmeKind(bnd::kUf1RmeBankBase + 4) == bnd::DynamicBankKind::ObsScenes);
+        const auto o = sk::uf8Row(bnd::kUf1RmeBankBase + 4);
+        bool dark = true;
+        for (const auto& c : o) dark = dark && c.label.empty() && c.lamp == 0;
+        EXPECT(dark);
+        bnd::setUf1SoftBankDynamic(bnd::kUf1RmeBankBase + 4, 0, bnd::DynamicBankKind::None);
+    }
     auto s0 = sk::row(bnd::kUf1RmeBankBase + 1, 0);
     auto s1 = sk::row(bnd::kUf1RmeBankBase + 1, 1);
     // Names from TotalMix' own file where there is one (this Mac's), else

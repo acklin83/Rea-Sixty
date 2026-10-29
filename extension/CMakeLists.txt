@@ -976,7 +976,8 @@ if(NOT WIN32)
         src/TrackName.cpp src/Uf1EqCurve.cpp src/UF1Protocol.cpp
         src/RmeInput.cpp src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp
         src/RmeUf1.cpp src/RmeStrip.cpp src/RmeNames.cpp
-        src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp)
+        src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp
+        src/ObsManager.cpp src/ObsProto.cpp src/WsClient.cpp src/Sha256.cpp)
     target_include_directories(test_rme_softkeys PRIVATE src "${WDL_DIR}")
     target_link_libraries(test_rme_softkeys PRIVATE Threads::Threads)
     if(WIN32)

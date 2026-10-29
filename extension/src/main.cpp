@@ -100,6 +100,7 @@
 #include "JogGrid.h"
 #include "McpFolderCollapse.h"
 #include "VcaSpill.h"
+#include "RoomCells.h"
 #include "SelsetBank.h"
 #include "SurfaceSleep.h"
 #include "EncoderRing.h"
@@ -2271,6 +2272,30 @@ inline bool tmOwnsStrip_(int strip)
 {
     return strip >= 0 && strip < 8
         && g_selectionMode.load() == SelectionMode::TotalMix && g_rmeAvailable.load();
+}
+// ⇨ THE LEFT UF8's SOFT KEYS AND V-POT / 1-5 BELONG TO ITS SIDE-CAR (Frank
+// 29.10.2026: "Hue Presets sollten im Hue mode erscheinen ... Dyna Sachen im
+// Dyna Mode"), as in ORC: TotalMix the soft-key bank V-POT / 1-5 pick (the
+// UF1 side-car's bank, g_sideCarBank), Hue the scenes, DynaMount the presets,
+// V-POT / 1-5 dark there. A right UF8 keeps its bindings.
+enum class ScKeys : uint8_t { None, TotalMix, Hue, Dyna };
+inline ScKeys sideCarKeys_()
+{
+    switch (g_selectionMode.load()) {
+        case SelectionMode::TotalMix:  return g_rmeAvailable.load() ? ScKeys::TotalMix : ScKeys::None;
+        case SelectionMode::Hue:       return ScKeys::Hue;
+        case SelectionMode::DynaMount: return ScKeys::Dyna;
+        default:                       return ScKeys::None;
+    }
+}
+// V-POT / 1-5 in the TotalMix side-car: 2 the bank showing, 1 another bank in
+// use (ORC's Soft Keys page), 0 none. Dark in Hue and DynaMount.
+inline int sideCarBankKeyLamp_(int idx)
+{
+    if (sideCarKeys_() != ScKeys::TotalMix) return 0;
+    namespace bnd = uf8::bindings;
+    if (idx >= bnd::uf1SideCarBankInUseCount(bnd::kUf1SideCarSetRme)) return 0;
+    return g_sideCarBank[bnd::kUf1SideCarSetRme].load() == idx ? 2 : 1;
 }
 // Writes from Uf8Rme to TotalMix, through the side-car's one sender.
 static void rmeSend_(const reasixty::rme::strip::Writes& w);
@@ -9116,42 +9141,20 @@ static DynSlotInfo dynamicBankSlot_(uf8::bindings::DynamicBankKind kind,
     // FX and Lanes run on across a right UF8's row: 8..15 there.
     if (slot < 0 || slot >= (dynBankBankable_(kind) ? 16 : 8)) return info;
     using DK = uf8::bindings::DynamicBankKind;
-    // ⛔ HUE SCENES RESOLVE WITHOUT A TRACK, so this sits AHEAD of the !tr guard
-    // below. Every other kind describes something ON the focused track; a light
-    // scene belongs to the room. Leaving it after the guard would have made the
+    // ⛔ HUE SCENES, DYNAMOUNT PRESETS AND OBS SCENES RESOLVE WITHOUT A TRACK, so
+    // this sits AHEAD of the !tr guard below. Every other kind describes
+    // something ON the focused track; these belong to the room. Leaving it after the guard would have made the
     // whole bank blank on a project with nothing selected.
-    if (kind == DK::HueScenes) {
-        auto& hm = uf8::hue::manager();
-        if (!hm.sceneSlotFilled(slot)) return info;   // empty slot → dark key
-        info.present = true;
-        info.label   = hm.sceneSlotName(slot);
-        if (info.label.empty()) info.label = "Scene";
-        const bool active = hm.sceneSlotActive(slot);
-        info.led    = active ? 2 : 1;
-        info.hasRgb = true;
-        info.rgb    = hm.sceneSlot(slot).rgb;
-        return info;
-    }
-    // ⛔ AND THE DYNAMOUNT PRESETS: a preset is the room's stands, not the
-    // track's. Empty slots stay dark but take a long press (store).
-    if (kind == DK::DynaMountPresets) {
-        auto& dm = uf8::dynamount::manager();
-        const auto p = dm.preset(slot);
-        if (!p.defined()) return info;
-        info.present = true;
-        info.label   = p.name.empty() ? "Preset " + std::to_string(slot + 1) : p.name;
-        info.led     = (dm.lastPreset() == slot) ? 2 : 1;
-        return info;
-    }
-    // ⛔ SAME REASON, SAME PLACE: an OBS scene has nothing to do with the
-    // focused track either, so it resolves before the guard below.
-    if (kind == DK::ObsScenes) {
-        auto& om = reasixty::obs::manager();
-        const std::string nm = om.sceneAt(slot);
-        if (nm.empty()) return info;                 // fewer scenes than keys
-        info.present = true;
-        info.label   = nm;
-        info.led     = (nm == om.currentScene()) ? 2 : 1;
+    // The cells themselves are RoomCells.h, shared with the UF8 side-cars and ORC.
+    if (kind == DK::HueScenes || kind == DK::DynaMountPresets || kind == DK::ObsScenes) {
+        const roomcells::Cell c = kind == DK::HueScenes        ? roomcells::hueScene(slot)
+                                : kind == DK::DynaMountPresets ? roomcells::dynaPreset(slot)
+                                                               : roomcells::obsScene(slot);
+        info.present = c.present;
+        info.label   = c.label;
+        info.led     = c.led;
+        info.hasRgb  = c.hasRgb;
+        info.rgb     = c.rgb;
         return info;
     }
     // ⛔ SELECTION SETS, same place, same reason: a slot belongs to the project,
@@ -9725,6 +9728,32 @@ static void applyDynBankSelsetOp_(int slot0, int gesture)
             break;
     }
     g_bankDirty.store(true);
+}
+
+// One soft key of the left UF8 while a side-car has them (sideCarKeys_): the
+// TotalMix bank's cell (RmeSoftKeys::uf8Row, ORC's too), or a Hue scene /
+// DynaMount preset (RoomCells.h through dynamicBankSlot_). False: not the
+// side-car's.
+static bool sideCarSoftCell_(int s, reasixty::rme::uf8side::SoftCell& out)
+{
+    if (s < 0 || s >= 8) return false;
+    const ScKeys k = sideCarKeys_();
+    if (k == ScKeys::None) return false;
+    if (k == ScKeys::TotalMix) {
+        namespace bnd = uf8::bindings;
+        out = reasixty::rme::softkeys::uf8Row(bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme)
+            + g_sideCarBank[bnd::kUf1SideCarSetRme].load())[static_cast<size_t>(s)];
+        return true;
+    }
+    using DK = uf8::bindings::DynamicBankKind;
+    const DynSlotInfo d = dynamicBankSlot_(k == ScKeys::Hue ? DK::HueScenes : DK::DynaMountPresets,
+                                           nullptr, s);
+    out = {};
+    if (!d.present) return true;
+    out.label = d.label;
+    out.lamp  = d.led;
+    out.rgb   = d.hasRgb ? d.rgb : 0xFFFFFFu;
+    return true;
 }
 
 static void applyDynBankReq_(uint32_t enc)
@@ -27754,6 +27783,45 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 if (consumed) { i += frameSize; continue; }
             }
 
+            // ⇨ THE SIDE-CAR'S SOFT KEYS AND V-POT / 1-5 (sideCarKeys_), left UF8.
+            // TotalMix's channel view keeps its page keys (below).
+            if (unit == 0 && sideCarKeys_() != ScKeys::None
+                && !(sideCarKeys_() == ScKeys::TotalMix && g_uf8RmeSide.chanView.load())
+                && ((id >= 0x18 && id <= 0x1F) || (id >= 0x68 && id <= 0x6D))) {
+                const ScKeys sk = sideCarKeys_();
+                namespace bnd = uf8::bindings;
+                const int set = bnd::kUf1SideCarSetRme;
+                if (id >= 0x68) {
+                    // V-POT / 1-5: the TotalMix bank, as after the UF1's < >.
+                    if (pressed && !btnWoke && sideCarBankKeyLamp_(id - 0x68) != 0) {
+                        g_sideCarBank[set].store(id - 0x68);
+                        g_rmeIn.skHalf.store(0);
+                    }
+                } else if (!(btnWoke && pressed)) {
+                    const int k = id - 0x18;
+                    if (sk == ScKeys::TotalMix) {
+                        // The UF1's press (RmeSoftKeys), its loader too: a
+                        // snapshot or layout loads on the main thread, where
+                        // its name goes to the time field.
+                        reasixty::rme::softkeys::press(
+                            bnd::uf1SideCarBankBase(set) + g_sideCarBank[set].load(),
+                            k / 4, k % 4, pressed,
+                            [](bnd::DynamicBankKind kind, int slot) {
+                                g_uf1DynBankReq.store((1u << 31)
+                                    | (static_cast<uint32_t>(kind) << 24)
+                                    | ((static_cast<uint32_t>(slot) & 0xFFFFu) << 8));
+                            });
+                    } else {
+                        // Scenes and presets with the gestures of their banks.
+                        dispatchDynamicPress_(sk == ScKeys::Hue ? bnd::DynamicBankKind::HueScenes
+                                                                : bnd::DynamicBankKind::DynaMountPresets,
+                                              k, pressed);
+                    }
+                }
+                i += frameSize;
+                continue;
+            }
+
             // ⇨ TOTALMIX SIDE-CAR KEYS (plan 2.1, the left UF8): SOLO/CUT/SEL and
             // the V-Pot pushes belong to its strips; Bank 8, Page 1, the nav
             // cross as on the UF1 (rows, submix, TotalMix' window), PLUG-IN
@@ -41531,8 +41599,33 @@ void pushZonesForVisibleSlots()
         // — labels are bank-global, not per-track. Synthetic toggles read
         // tr only inside `if (tr)` guards, so this block is safe when
         // tr == nullptr.
+        // ⇨ A SIDE-CAR'S SOFT KEYS (sideCarSoftCell_): its own cells, nothing
+        // of the bank painter below. The nav overlay still wins, as there.
+        reasixty::rme::uf8side::SoftCell scCell;
+        const bool scKeys = !(tmStrip && tmChanView) && s < 8 && g_ccIdx < 0
+                         && sideCarSoftCell_(s, scCell);
+        if (scKeys && !overlayActive) {
+            std::string label = scCell.label;
+            if (label.size() > 12) label.resize(12);
+            const uf8::TopSoftKeyState tssk = scCell.lamp == 2 ? uf8::TopSoftKeyState::On
+                                            : scCell.lamp == 1 ? uf8::TopSoftKeyState::Dim
+                                                               : uf8::TopSoftKeyState::Off;
+            const uint32_t rgb = scCell.lamp ? (scCell.rgb & 0x00FFFFFFu) : 0;
+            const int32_t composite = (int32_t(40 + scCell.lamp) << 24)
+                                    ^ (int32_t(static_cast<int>(tssk)) << 28)
+                                    ^ static_cast<int32_t>(rgb);
+            if (composite != g_lastTopSoftKey[s]) {
+                g_lastTopSoftKey[s] = composite;
+                sendLedFramesS_(s, uf8::buildTopSoftKeyLed(uf8Local_(s), tssk,
+                                                           uf8::ledColourForTrackRgb(rgb)));
+            }
+            if (label != g_lastSlotLabel[s]) {
+                g_lastSlotLabel[s] = label;
+                uf8SendS_(s, uf8::buildPluginSlotName(uf8Local_(s), label));
+            }
+        }
         // TotalMix's channel view owns the soft keys: they pick its pages.
-        if (!(tmStrip && tmChanView)) {
+        if (!(tmStrip && tmChanView) && !scKeys) {
             // The eight soft keys are the surface's FUNCTION keys, not per-track
             // ones: a right-hand UF8's row shows and fires the same eight as the
             // left's (sk = the key's position on its own unit).
@@ -45907,11 +46000,18 @@ void pushUf8GlobalLeds()
             up.left  = subBankForLeds;
             up.right = (skp.right >= 0 && skp.right == skp.left) ? subBankForLeds : skp.right;
         }
+        const bool scPages = !ccOn && sideCarKeys_() != ScKeys::None;
         for (int u = 0; u < units; ++u) {
             LedUnitScope scope(units > 1 ? u : -1);
             const int lit = uf8units::pageOnUnit(up, u);
             for (int p = 0; p < midicc::kPages; ++p) {
-                if (ccOn)
+                // The side-car's bank keys on the left UF8 (sideCarBankKeyLamp_).
+                if (scPages && u == 0) {
+                    const int lamp = sideCarBankKeyLamp_(p);
+                    sendUf8GlobalLedDirect_(kPages[p], lamp == 2 ? uf8::GlobalLedState::Bright
+                                                     : lamp == 1 ? uf8::GlobalLedState::Dim
+                                                                 : uf8::GlobalLedState::Off);
+                } else if (ccOn)
                     sendUf8GlobalLedDirect_(kPages[p], p == lit
                         ? uf8::GlobalLedState::Bright : uf8::GlobalLedState::Dim);
                 else

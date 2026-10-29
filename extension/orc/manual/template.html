@@ -480,18 +480,19 @@ them back at once.</p>
 <tr><th data-uf8="kLayer2">LAYER 2</th><td>Hue. Press again to go back to TotalMix.</td></tr>
 <tr><th data-uf8="kLayer3">LAYER 3</th><td>DynaMount. Press again to go back to TotalMix.</td></tr>
 </tbody></table>
-<p>These keys work the same in every mode:</p>
+<p>The eight soft keys above the strips belong to the mode: in TotalMix a <a href="#softkeys">soft-key
+bank</a>, in Hue the scenes, in DynaMount the presets. These keys work the same in every mode:</p>
 <table class="data"><tbody>
-<tr><th data-uf8="kVpotBank">V-POT, 1-5</th><td>The page of the eight soft keys: V-POT the TotalMix
-soft-key bank, 1 the Hue scenes, 2 the DynaMount presets, 3 the OBS scenes. 4 and 5 are empty.</td></tr>
-<tr><th data-uf8="kTopSoft1">Soft keys</th><td>The keys of that page. A TotalMix bank shows both
-halves at once, keys 1-4 and 5-8.</td></tr>
 <tr><th data-uf8="kChannelEncoder">CHANNEL encoder</th><td>Main volume, in every mode, as the UF1's
 jog wheel.</td></tr>
 <tr><th data-uf8="kFine">FINE</th><td>Pressed: finer steps.</td></tr>
 <tr><th data-uf8="kFlip">FLIP</th><td>In Hue the V-Pot's second role, in DynaMount the fader's
 other axis.</td></tr>
 <tr><th data-uf8="kBtn360">360</th><td>Opens the settings window and closes it again.</td></tr>
+<tr><th data-uf8="kQuick1 kQuick2 kQuick3 kNav kNudge kFocus kSelNorm kSelRec kSelAuto">QUICK 1-3,
+NAV, NUDGE, FOCUS, NORM, REC, AUTO</th><td>Whatever you put on them on the page
+<a href="#set-softkeys">Soft Keys</a>. Out of the box QUICK 1 is <em>Sleep the surface now</em> and the
+others do nothing.</td></tr>
 </tbody></table>
 <p>The UF1 stays on TotalMix whatever the UF8 shows, so Main volume is always at hand.</p>
 
@@ -518,6 +519,11 @@ control room: 1-4 Phones 1-4, 5 Main B, 6 Main. The key of the submix in play is
 an output is dark.</td></tr>
 <tr><th data-uf8="kZoomCenter">Nav cross centre</th><td>TotalMix' window shown or hidden.</td></tr>
 <tr><th data-uf8="kPlugin">PLUG-IN</th><td>The channel view, on and off.</td></tr>
+<tr><th data-uf8="kVpotBank">V-POT, 1-5</th><td>The soft-key bank: V-POT bank 1, 1 bank 2, up to 5
+for bank 6. It is the UF1's bank too, so &lt; &gt; on the UF1 change it as well. The key of the bank
+showing is lit, a key without a bank is dark.</td></tr>
+<tr><th data-uf8="kTopSoft1">Soft keys</th><td>The bank's eight keys at once: keys 1-4 its first half,
+5-8 its second.</td></tr>
 </tbody></table>
 <p>The scribble strips show the channel's name and number, the colour bar where the level goes
 (<em>&gt; Phones 2</em> on inputs and playbacks, <em>OUTPUT</em>, <em>FX</em>) in the channel's TotalMix
@@ -539,7 +545,8 @@ saturation, warmth or nothing.</td></tr>
 <tr><th>CUT</th><td>The lamp on and off.</td></tr>
 <tr><th>SOLO</th><td>This lamp stays on, every other one goes dark.</td></tr>
 </tbody></table>
-<p>Soft-key page 1 has the eight scenes: push recalls a scene, a long press starts it moving.</p>
+<p>The soft keys are the eight scenes: push recalls a scene, a long press starts it moving. V-POT and
+1-5 are dark.</p>
 
 <h3 id="uf8-dyna">DynaMount</h3>
 <p>Each stand set up on the <a href="#set-modes">Modes</a> page sits on one strip.</p>
@@ -548,7 +555,8 @@ saturation, warmth or nothing.</td></tr>
 when you let go of the fader.</td></tr>
 <tr><th>V-Pot</th><td>Rotation. The stand turns about a second after you stop.</td></tr>
 </tbody></table>
-<p>A preset is where every stand is at one moment. Soft-key page 2 has the eight presets:</p>
+<p>A preset is where every stand is at one moment. The soft keys are the eight presets, V-POT and 1-5
+are dark:</p>
 <table class="data"><tbody>
 <tr><th>Push</th><td>The stands drive to the preset.</td></tr>
 <tr><th>Long press, on an empty key</th><td>Stores where the stands are now.</td></tr>
@@ -557,20 +565,25 @@ when you let go of the fader.</td></tr>
 <p>A preset finds each stand by its IP address. A stand the preset does not know stays where it is.</p>
 
 <h3 id="uf8-obs">OBS</h3>
-<p>Soft-key page 3 has the first eight scenes OBS reports, in OBS's order. Push switches to that scene; the
-key of the scene on air is lit.</p>
+<p>OBS's scenes are a kind of <a href="#softkeys">soft-key bank</a>: put <em>OBS scenes</em> on a bank
+on the page <a href="#set-softkeys">Soft Keys</a>, and in TotalMix its key on V-POT to 5 brings them
+up, on the UF8 and on the UF1.</p>
 </section>
 
 <section id="softkeys">
 <h2>Soft-key banks</h2>
 <p>In the overview the four keys above the large screen play a bank of eight keys, four at a time.
 &lt; and &gt; step through the banks, BANK ◄ ► pick the half. A bank holds either keys you set up
-yourself or one of two lists TotalMix keeps:</p>
+yourself or one of three lists:</p>
 <ul>
   <li><strong>TotalMix snapshots</strong>: the eight snapshots by the names TotalMix gives them. A press
       loads one. The key of the active snapshot is lit.</li>
   <li><strong>TotalMix layouts</strong>: the eight layouts. A press loads one; the one loaded last is lit.</li>
+  <li><strong>OBS scenes</strong>: the first eight scenes OBS reports, in OBS's order. A press switches
+      to one; the scene on air is lit. Needs OBS set up on the page <a href="#set-modes">Modes</a>.</li>
 </ul>
+<p>On the UF8, V-POT to 5 pick banks 1 to 6, and its eight soft keys show a bank's two halves at once
+(<a href="#uf8-totalmix">TotalMix on the UF8</a>).</p>
 <p>Out of the box:</p>
 <!--GEN:banks-->
 <p>Every bank, key, label and action is set on the settings page <a href="#set-softkeys">Soft Keys</a>.</p>
@@ -616,7 +629,7 @@ remote cannot see reads <em>hidden</em>.</p>
 <h3 id="set-softkeys">Soft Keys</h3>
 <table class="data"><tbody>
 <tr><th>Bank, Half</th><td>Which bank and which half you are editing.</td></tr>
-<tr><th>Shows</th><td>Keys, TotalMix snapshots or TotalMix layouts.</td></tr>
+<tr><th>Shows</th><td>Keys, TotalMix snapshots, TotalMix layouts or OBS scenes.</td></tr>
 <tr><th>Name</th><td>The bank's name on the large screen.</td></tr>
 <tr><th>Label, Action</th><td>Per key: what the screen says and what a press does. An empty label
 takes the action's own.</td></tr>
@@ -624,6 +637,7 @@ takes the action's own.</td></tr>
 <em>Off</em> leaves the lamp dark. On a bank of snapshots or layouts, Active is the snapshot or layout that is loaded and Inactive the others; without a colour of their own the keys are white.</td></tr>
 <tr><th>Factory set for this bank</th><td>Puts this bank back the way it came.</td></tr>
 <tr><th>Transport</th><td>An action and the two lamp colours for each of the five transport keys.</td></tr>
+<tr><th>UF8</th><td>The same for QUICK 1-3, NAV, NUDGE, FOCUS, NORM, REC and AUTO on the UF8.</td></tr>
 </tbody></table>
 <h3 id="set-modes">Modes</h3>
 <p>Hue, DynaMount and OBS for the UF8. <em>Import from REAPER</em> copies the Hue, DynaMount and OBS

@@ -111,14 +111,26 @@ std::vector<std::string> rmeActions()
 }
 
 // The five transport keys the side-car hands to ORC's bindings (Bindings.cpp,
-// dispatchSideCarKey), in the order they sit on the surface.
+// dispatchSideCarKey), in the order they sit on the surface, then the UF8's
+// keys the user binds (Frank 29.10.2026, orc/Uf8Surface.cpp kUserKeys).
 struct TransportKey { bnd::ButtonId id; const char* name; };
-const TransportKey kTransport[5] = {
+constexpr int kTransportCount = 5;
+constexpr int kKeyCount = kTransportCount + 9;
+const TransportKey kTransport[kKeyCount] = {
     { bnd::ButtonId::Uf1Rwd,  "Rewind" },
     { bnd::ButtonId::Uf1Ffw,  "Forward" },
     { bnd::ButtonId::Uf1Stop, "Stop" },
     { bnd::ButtonId::Uf1Play, "Play" },
     { bnd::ButtonId::Uf1Rec,  "Record" },
+    { bnd::ButtonId::Quick1,        "QUICK 1" },
+    { bnd::ButtonId::Quick2,        "QUICK 2" },
+    { bnd::ButtonId::Quick3,        "QUICK 3" },
+    { bnd::ButtonId::Nav,           "NAV" },
+    { bnd::ButtonId::Nudge,         "NUDGE" },
+    { bnd::ButtonId::EncFocus,      "FOCUS" },
+    { bnd::ButtonId::SelectionNorm, "NORM" },
+    { bnd::ButtonId::SelectionRec,  "REC" },
+    { bnd::ButtonId::SelectionAuto, "AUTO" },
 };
 
 NSString* str(const std::string& s) { return @(s.c_str()); }
@@ -471,6 +483,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     [self.skKind addItemWithTitle:@"Keys"];
     [self.skKind addItemWithTitle:@"TotalMix snapshots"];
     [self.skKind addItemWithTitle:@"TotalMix layouts"];
+    [self.skKind addItemWithTitle:@"OBS scenes"];
     [head addRowWithViews:@[ label(@"Shows"), self.skKind ]];
 
     self.skName = [self field:@selector(skNameChanged:) width:200];
@@ -515,10 +528,16 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     tr.rowSpacing = 6.0;
     [tr addRowWithViews:@[ dim(@"Transport"), dim(@"Action"),
                            dim(@"Active"), dim(@"Inactive") ]];
-    for (int k = 0; k < 5; ++k) {
+    for (int k = 0; k < kKeyCount; ++k) {
+        if (k == kTransportCount) {
+            NSGridRow* row = [tr addRowWithViews:@[ dim(@"UF8"),
+                [NSGridCell emptyContentView], [NSGridCell emptyContentView],
+                [NSGridCell emptyContentView] ]];
+            row.topPadding = 12.0;
+        }
         NSPopUpButton* act = [self popUp:@selector(trActionChanged:) tag:k width:240];
         NSPopUpButton* on  = [self palettePop:@selector(trLedChanged:) tag:k width:130];
-        NSPopUpButton* off = [self palettePop:@selector(trLedChanged:) tag:k + 10 width:130];
+        NSPopUpButton* off = [self palettePop:@selector(trLedChanged:) tag:k + 100 width:130];
         [self.trActions addObject:act];
         [self.trActive addObject:on];
         [self.trInactive addObject:off];
@@ -798,9 +817,11 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
     const int half = [self skHalfNow];
     const auto kind = bnd::getUf1SoftBankDynamic(bank, 0);
     const bool dyn = kind == bnd::DynamicBankKind::RmeSnapshots
-                  || kind == bnd::DynamicBankKind::RmeLayouts;
+                  || kind == bnd::DynamicBankKind::RmeLayouts
+                  || kind == bnd::DynamicBankKind::ObsScenes;
     [self.skKind selectItemAtIndex:kind == bnd::DynamicBankKind::RmeSnapshots ? 1
                                  : kind == bnd::DynamicBankKind::RmeLayouts   ? 2
+                                 : kind == bnd::DynamicBankKind::ObsScenes    ? 3
                                  : kind == bnd::DynamicBankKind::None         ? 0 : -1];
     if (self.window.firstResponder != self.skName.currentEditor)
         self.skName.stringValue = str(bnd::getUf1SoftBankName(bank, 0));
@@ -830,12 +851,14 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
     }
 
     const int layer = bnd::getActiveLayer();
-    for (int k = 0; k < 5; ++k) {
+    for (int k = 0; k < kKeyCount; ++k) {
         const bnd::Binding bd = bnd::getBinding(layer, kTransport[k].id);
         const auto& sp = bd.shortPress[0];
         // A REAPER action there is ORC's inherited factory and does nothing in
         // ORC: it reads as "None", which is also what Rea-Sixty makes of it.
-        if (sp.type == bnd::ActionType::Builtin && sp.action.rfind("rme_", 0) == 0)
+        // Sleep is ORC's own as well (the menu's last entry).
+        if (sp.type == bnd::ActionType::Builtin
+            && std::find(_actions.begin(), _actions.end(), sp.action) != _actions.end())
             [self selectAction:self.trActions[k] slot:sp];
         else
             [self.trActions[k] selectItemAtIndex:0];
@@ -864,11 +887,11 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
     [self refreshSoftKeys];
 }
 
-// Tags 0-4 Active, 10-14 Inactive, on the transport key's binding.
+// Tags 0-13 Active, 100-113 Inactive, on the key's own binding.
 - (void)trLedChanged:(NSPopUpButton*)sender
 {
-    const bool active = sender.tag < 10;
-    const int k = (int)(sender.tag % 10);
+    const bool active = sender.tag < 100;
+    const int k = (int)(sender.tag % 100);
     const int layer = bnd::getActiveLayer();
     bnd::Binding bd = bnd::getBinding(layer, kTransport[k].id);
     if (active) ledFromTag(sender.selectedTag, true, bd.color, bd.brightness);
@@ -891,6 +914,7 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
     const NSInteger i = sender.indexOfSelectedItem;
     const auto kind = i == 1 ? bnd::DynamicBankKind::RmeSnapshots
                     : i == 2 ? bnd::DynamicBankKind::RmeLayouts
+                    : i == 3 ? bnd::DynamicBankKind::ObsScenes
                              : bnd::DynamicBankKind::None;
     bnd::setUf1SoftBankDynamic(bank, 0, kind);
     // The kind belongs to the bank, both halves (RmeSoftKeys::rmeKind).

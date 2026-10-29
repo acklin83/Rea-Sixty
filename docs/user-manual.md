@@ -2951,7 +2951,7 @@ DynaMount makes robotic microphone stands. In DynaMount mode the UF8 strips driv
 
 Press **Shift + LAYER 3**, with Shift on the computer keyboard or the UF1's SHIFT. Press it again to go back to the mode you came from, REC or AUTO included. The action behind it is **Selection Mode → DynaMount**, and you can put it on any other key. There is no switch in Settings: the Dynamount tab configures the stands, it does not turn the mode on.
 
-DynaMount mode takes the whole left UF8. Each enabled mount sits on one strip at the end you chose with Fill; the other strips of the left UF8 are dark. A right-hand UF8 keeps showing tracks.
+DynaMount mode takes the whole left UF8. Each enabled mount sits on one strip at the end you chose with Fill; the other strips of the left UF8 are dark. Its eight soft keys are the eight presets, with the gestures of the presets bank (see Presets below), and V-POT and 1-5 are dark. A right-hand UF8 keeps showing tracks and its own soft keys.
 
 ## Driving a mount
 
@@ -3051,7 +3051,7 @@ A room or zone appears in the list only if it has lamps in it. An empty room can
 
 Press **Shift + LAYER 2**, with Shift on the computer keyboard or the UF1's SHIFT. Press it again to go back to the mode you came from, REC or AUTO included. The action behind it is **Selection Mode → Hue**, and you can put it on any other key. There is no switch in Settings: the Hue tab configures the lamps, it does not turn the mode on.
 
-Hue mode takes the whole left UF8. Each enabled lamp sits on one strip at the end you chose with Fill; the other strips of the left UF8 are dark. A right-hand UF8 keeps showing tracks.
+Hue mode takes the whole left UF8. Each enabled lamp sits on one strip at the end you chose with Fill; the other strips of the left UF8 are dark. Its eight soft keys are the eight scenes, as on a Hue scenes bank, and V-POT and 1-5 are dark. A right-hand UF8 keeps showing tracks and its own soft keys.
 
 ## Driving a lamp from the UF8
 
