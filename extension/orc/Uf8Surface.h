@@ -20,6 +20,7 @@
 #include "UF8Device.h"
 #include "Uf8Frames.h"
 #include "Uf8Rme.h"
+#include "Uf8Strips.h"
 
 #include <array>
 #include <atomic>
@@ -55,8 +56,19 @@ class Uf8Surface {
 
     Uf8Status status() const;
 
+    // ⇨ THE UF8's SIDE-CARS IN ORC (plan 2.2): Layer 1 TotalMix, 2 Hue, 3
+    // DynaMount; the same key again goes back to TotalMix, ORC's ground state.
+    enum class Mode : int { TotalMix = 0, Hue = 1, Dyna = 2 };
+
   private:
     void onRaw_(const std::uint8_t* data, std::size_t len);
+    void paintTotalMix_(std::array<uf8strips::View, 8>& views, std::array<int, 8>& colour,
+                        std::array<std::uint8_t, 16>& vu);
+    void paintMode_(Mode m, std::array<uf8strips::View, 8>& views, std::array<int, 8>& colour);
+    std::array<reasixty::rme::uf8side::SoftCell, 8> softCells_(int page);
+    void softKey_(int key, bool pressed);
+    void paintLeds_();
+    void setMode_(Mode m);
     void onFrame_(const uf8frames::Frame& f);
     void onButton_(std::uint8_t id, bool pressed);
     void paint_();
@@ -82,6 +94,17 @@ class Uf8Surface {
     std::array<std::atomic<std::int64_t>, 8> releasedMs_{};
     std::array<std::atomic<bool>, 8>         engaged_{};
     std::atomic<bool>                        fineHeld_{false};
+    std::atomic<int>                         mode_{0};       // Mode
+    std::atomic<bool>                        flip_{false};
+    // Soft-key page on V-POT / 1-5 (plan 2.3): 0 the TotalMix bank, 1 Hue
+    // scenes, 2 DynaMount presets, 3 OBS scenes, 4-5 empty.
+    std::atomic<int>                         skPage_{0};
+    std::array<std::atomic<std::int64_t>, 8> keyDownMs_{};    // soft keys, for the long press
+    // A stand's fader is sent on release (Frank 2026-06-28): the position under
+    // the hand waits here.
+    std::array<std::atomic<bool>, 8>         dynPending_{};
+    std::array<std::atomic<double>, 8>       dynPendingNorm_{};
+    std::array<int, 12>                      cLed_{};
     std::atomic<bool>                        repaint_{true};
 
     // What the device shows (Uf8Strips::Cells point in here). Loop thread.

@@ -12,6 +12,7 @@
 #include "Protocol.h"
 #include "TrackName.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <string>
 
@@ -26,6 +27,35 @@ struct Cells {
     double      fader01 = 0; // where the motor puts the fader, 0..1
     double      ring    = 0; // the V-Pot ring, unipolar 0..1
 };
+
+// A palette index of Settings (selPaletteRgb) as 0xRRGGBB, clamped; 0 without
+// a palette.
+inline std::uint32_t paletteRgb(int ci)
+{
+    int count = 0;
+    const uf8::PaletteRgb* pal = uf8::selPaletteRgb(&count);
+    if (count <= 0) return 0;
+    if (ci < 0) ci = 0;
+    if (ci >= count) ci = count - 1;
+    const uf8::PaletteRgb& p = pal[ci];
+    return (std::uint32_t(p.r) << 16) | (std::uint32_t(p.g) << 8) | std::uint32_t(p.b);
+}
+
+// The colour bar of a stand: its configured palette colour (a stand has no
+// colour of its own, so it borrows one). main.cpp reaperColorForVisibleSlot.
+inline std::uint32_t dynaRgb(uf8::dynamount::DynaMountManager& dm, int mnt)
+{
+    return paletteRgb(dm.info(mnt).color);
+}
+
+// The colour bar of a lamp: the LAMP's live colour; the configured palette
+// colour for a lamp that is off or not heard from yet.
+inline std::uint32_t hueRgb(uf8::hue::HueManager& hm, int slot)
+{
+    const std::uint32_t live = hm.liveRgb24(slot);
+    if (live != 0u) return live;
+    return paletteRgb(hm.slot(slot).colour);
+}
 
 // A mount strip. `pending`: the fader is under the hand and has moved
 // (send-on-release, Frank 2026-06-28): the screen follows the hand, the stand

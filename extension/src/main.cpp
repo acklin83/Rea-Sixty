@@ -39474,18 +39474,7 @@ uint32_t reaperColorForVisibleSlot(int slot)
     if (g_selectionMode.load() == SelectionMode::DynaMount && slot >= 0 && slot < 8) {
         auto& dm = uf8::dynamount::manager();
         const int mnt = dm.mountForStrip(slot);
-        if (mnt >= 0) {
-            int palCount = 0;
-            const uf8::PaletteRgb* pal = uf8::selPaletteRgb(&palCount);
-            int ci = dm.info(mnt).color;
-            if (ci < 0) ci = 0;
-            if (palCount > 0 && ci >= palCount) ci = palCount - 1;
-            if (palCount > 0) {
-                const uf8::PaletteRgb& p = pal[ci];
-                return (uint32_t(p.r) << 16) | (uint32_t(p.g) << 8) | uint32_t(p.b);
-            }
-            return 0;
-        }
+        if (mnt >= 0) return uf8modes::dynaRgb(dm, mnt);   // Uf8ModeViews.h, shared with ORC
     }
     // Hue strip — the colour bar shows the LAMP's live colour, not a palette
     // slot picked in Settings. A mount has no colour of its own so it borrows
@@ -39495,20 +39484,7 @@ uint32_t reaperColorForVisibleSlot(int slot)
     if (g_selectionMode.load() == SelectionMode::Hue && slot >= 0 && slot < 8) {
         auto& hm = uf8::hue::manager();
         const int hslot = hm.slotForStrip(slot);
-        if (hslot >= 0) {
-            const uint32_t live = hm.liveRgb24(hslot);
-            if (live != 0u) return live;
-            int palCount = 0;
-            const uf8::PaletteRgb* pal = uf8::selPaletteRgb(&palCount);
-            int ci = hm.slot(hslot).colour;
-            if (ci < 0) ci = 0;
-            if (palCount > 0 && ci >= palCount) ci = palCount - 1;
-            if (palCount > 0) {
-                const uf8::PaletteRgb& p = pal[ci];
-                return (uint32_t(p.r) << 16) | (uint32_t(p.g) << 8) | uint32_t(p.b);
-            }
-            return 0;
-        }
+        if (hslot >= 0) return uf8modes::hueRgb(hm, hslot);   // Uf8ModeViews.h, shared with ORC
     }
 
     const int realSlot   = stripToVisibleSlot(slot, bankOffset);
