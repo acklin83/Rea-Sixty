@@ -17,6 +17,7 @@ static orc::Surface* g_surface = nullptr;
 @interface OrcAppDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @property (nonatomic, strong) NSStatusItem* item;
 @property (nonatomic, strong) NSMenuItem*   uf1Line;
+@property (nonatomic, strong) NSMenuItem*   uf8Line;
 @property (nonatomic, strong) NSMenuItem*   mixerLine;
 @end
 
@@ -72,10 +73,13 @@ static orc::Surface* g_surface = nullptr;
         // Rea-Sixty cannot answer either, and the reason a surface "does
         // nothing" nine times out of ten.
         _uf1Line   = [[NSMenuItem alloc] initWithTitle:@"UF1" action:nil keyEquivalent:@""];
+        _uf8Line   = [[NSMenuItem alloc] initWithTitle:@"UF8" action:nil keyEquivalent:@""];
         _mixerLine = [[NSMenuItem alloc] initWithTitle:@"TotalMix" action:nil keyEquivalent:@""];
         _uf1Line.enabled = NO;
+        _uf8Line.enabled = NO;
         _mixerLine.enabled = NO;
         [menu addItem:_uf1Line];
+        [menu addItem:_uf8Line];
         [menu addItem:_mixerLine];
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItemWithTitle:@"Settings…"
@@ -105,6 +109,17 @@ static orc::Surface* g_surface = nullptr;
         self.uf1Line.title = st.open
             ? [NSString stringWithFormat:@"UF1   held by ORC, %s", st.serial.c_str()]
             : [NSString stringWithFormat:@"UF1   not open: %s", st.error.c_str()];
+        // The UF8, the same way. ⇨ A REAPER extension too old for the receipt
+        // (a marker without "v2", OrcHandover.h) may never pick the UF8 up: it
+        // tried once at its start, while ORC still held it. Say so rather than
+        // leave the unit dark without a word (docs/orc-uf8-plan.md, section 5).
+        const orc::Uf8Status u8 = g_surface->uf8Status();
+        if (u8.open)
+            self.uf8Line.title = @"UF8   held by ORC";
+        else if (orc::reaperWantsUf1() && orc::reaperMarkerVersion() == 1)
+            self.uf8Line.title = @"UF8   REAPER cannot take it yet: update the REAPER extension";
+        else
+            self.uf8Line.title = [NSString stringWithFormat:@"UF8   not open: %s", u8.error.c_str()];
     }
     self.mixerLine.title = [NSString stringWithFormat:@"TotalMix   %s",
                                      orc::linkSummary().c_str()];

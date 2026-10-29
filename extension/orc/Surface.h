@@ -28,6 +28,7 @@
 #include "Uf1Pacer.h"
 #include "UF1Device.h"
 #include "Uf1Spread.h"
+#include "Uf8Surface.h"
 
 namespace orc {
 
@@ -52,6 +53,7 @@ class Surface {
     void stop();
 
     Status status() const;
+    Uf8Status uf8Status() const { return uf8_ ? uf8_->status() : Uf8Status{}; }
 
     // ⇨ THE VIEW IS PART OF THE INPUT STATE, not a flag of its own. The channel
     // encoder's push and the settings window are two ways to the same switch,
@@ -101,6 +103,11 @@ class Surface {
     // swallowed with its release.
     surfsleep::Clock       sleep_;
     surfsleep::WakeSwallow wakeSwallow_;
+
+    // ⇨ THE UF8 (docs/orc-uf8-plan.md stage 5): TotalMix on its strips, with
+    // this surface's selection, soft-key bank and sleep clock. Created in
+    // start(), after the members it points at.
+    std::unique_ptr<Uf8Surface> uf8_;
 
     std::atomic<bool>     faderTouched_{false};
     std::atomic<uint16_t> faderPos_{0};

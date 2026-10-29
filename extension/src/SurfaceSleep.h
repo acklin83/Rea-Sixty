@@ -99,6 +99,10 @@ inline std::vector<std::vector<uint8_t>> uf1Frames(bool asleep, uint8_t led, uin
 // shared with ORC): the LED master and the scribble LCDs. Asleep both go to a
 // real 0, which the Brightness table never sends (its darkest step is still
 // legible). `led` / `lcd` are the levels to wake to.
+// What a UF8 is lit to when nothing else sets a level, ORC's case: Rea-Sixty's
+// factory Brightness, BL_Full in main.cpp's kBrightnessTable (uf8_led, uf8_lcd).
+constexpr uint8_t kUf8FullLed = 0x20;
+constexpr uint8_t kUf8FullLcd = 0xA0;
 inline std::vector<std::vector<uint8_t>> uf8Frames(bool asleep, uint8_t led, uint8_t lcd)
 {
     return { uf8::buildLedBrightness(asleep ? 0x00 : led),

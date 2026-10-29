@@ -256,6 +256,8 @@ void Surface::start()
         rme::setOscTrace(true);   // the mixer's side too: rme_osc_trace.log
     }
 
+    if (!uf8_) uf8_ = std::make_unique<Uf8Surface>(in_, scBank_, sleep_, settingsRequest_);
+
     quit_.store(false);
     th_    = std::thread([this] { loop_(); });
     pacer_ = std::thread([this] { pacerLoop_(); });
@@ -267,6 +269,7 @@ void Surface::stop()
     if (pacer_.joinable()) pacer_.join();
     if (th_.joinable()) th_.join();
     dev_.close();
+    if (uf8_) uf8_->close();
 }
 
 Status Surface::status() const
@@ -434,6 +437,8 @@ void Surface::loop_()
                     cycleActive_.store(false);
                     dev_.close();
                 }
+                // The UF8 goes with it, before the receipt below.
+                if (uf8_) uf8_->tick(/*yielding*/ true);
                 {
                     std::lock_guard<std::mutex> lk(mu_);
                     st_.open = false;
@@ -507,35 +512,44 @@ void Surface::loop_()
             if (link == rme::LinkState::Online) dumpModel(rme::manager().snapshot());
         }
 
-        // ⇨ ONE PASS OF THE SIDE-CAR PAINTER, the extension's own. It paints
-        // "no TotalMix" when the link is down, so it runs whenever the surface
-        // is open, not only when the mixer answers.
-        if (dev_.isOpen()) {
-            // Sleep: the setting from rme.json, then the clock. Awake, the UF1
-            // goes back to the levels its init sequence set; ORC sets no others.
-            {
-                const auto sc = rme::manager().config();
-                auto push = [this](bool a) {
+        // ⇨ SLEEP, ONE CLOCK FOR BOTH SURFACES: the setting from rme.json, then
+        // the clock. Awake, the UF1 goes back to the levels its init sequence
+        // set and the UF8 to Rea-Sixty's factory Brightness; ORC sets no others.
+        // Runs whenever either surface is open (a UF8 alone sleeps too).
+        if (dev_.isOpen() || (uf8_ && uf8_->status().open)) {
+            const auto sc = rme::manager().config();
+            auto push = [this](bool a) {
+                if (dev_.isOpen()) {
                     for (auto& fr : surfsleep::uf1Frames(a, surfsleep::kUf1InitLed,
                                                          surfsleep::kUf1InitLcd)) {
                         ++sent_;
                         dev_.send(std::move(fr));
                     }
-                };
-                // Switched OFF while dark: light it, as the extension's setter
-                // does. Only on that change: asked every pass, it lit the
-                // surface 33 ms after "Sleep now" whenever idle sleep was off.
-                if (sleep_.enabled.exchange(sc.sleepEnabled) && !sc.sleepEnabled)
-                    sleep_.set(false, steadyMs(), push);
-                sleep_.minutes.store(sc.sleepMinutes);
-                sleep_.tick(steadyMs(), /*busy*/ false, push);
-            }
+                }
+                if (uf8_) uf8_->pushSleep(a);
+            };
+            // Switched OFF while dark: light it, as the extension's setter
+            // does. Only on that change: asked every pass, it lit the
+            // surface 33 ms after "Sleep now" whenever idle sleep was off.
+            if (sleep_.enabled.exchange(sc.sleepEnabled) && !sc.sleepEnabled)
+                sleep_.set(false, steadyMs(), push);
+            sleep_.minutes.store(sc.sleepMinutes);
+            sleep_.tick(steadyMs(), /*busy*/ false, push);
+        }
+
+        // ⇨ ONE PASS OF THE SIDE-CAR PAINTER, the extension's own. It paints
+        // "no TotalMix" when the link is down, so it runs whenever the surface
+        // is open, not only when the mixer answers.
+        if (dev_.isOpen()) {
             rmef::paint(faceCache, in_, host, out, force);
             force = false;
             cycleActive_.store(true);
         } else {
             cycleActive_.store(false);
         }
+
+        // ⇨ AND THE UF8: open it, retry it, paint TotalMix on it.
+        if (uf8_) uf8_->tick(/*yielding*/ false);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(33));
     }
