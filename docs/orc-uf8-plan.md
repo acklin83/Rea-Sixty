@@ -74,22 +74,20 @@ Zeilen wie am UF1 (`stepRow`, `stepSubmix`, `toggleWindow`), nicht nachgebaut.
   einen Plain-Eintrag, Shift ist frei (gelesen 29.10.).
 - Die Layer-LED des aktiven Side-Cars leuchtet in der Farbe des Modus.
 
-### 2.3 Soft-Keys
+### 2.3 Soft-Keys gehören zum Modus (Frank 29.10. nachmittags, ersetzt „Seiten über alle Modi“)
 
-**V-POT und 1-5 bleiben in beiden Programmen die Soft-Key-Seiten**, wie heute in Rea-Sixty. Auf
-die Seiten legt man Bänke. Die Bankarten, die es für diese Modi braucht:
+| Modus | Soft-Keys über den Strips | V-POT, 1-5 |
+|---|---|---|
+| TotalMix | die gewählte TotalMix-Bank, beide Hälften (1-4, 5-8) | Bank 1-6, dieselbe Bankwahl wie am UF1 (`g_sideCarBank` / ORCs `scBank_`) |
+| Hue | die 8 Szenen | dunkel |
+| DynaMount | die 8 Presets | dunkel |
 
-| Bankart | gibt es | Druck | lang |
-|---|---|---|---|
-| TotalMix-Tasten (Dim, Mono, Speaker B, Talkback …) | ja (Side-Car-Bänke in `orc.json`) | Aktion | |
-| TotalMix-Snapshots | ja | laden | |
-| Hue-Szenen | ja (`HueScenes`) | Szene | dynamisch |
-| OBS-Szenen | ja (`ObsScenes`) | Szene | |
-| OBS Aufnahme / Pause / Kapitel | ja (Builtins) | | |
-| **DynaMount-Presets** | **neu**, Abschnitt 4 | Preset anfahren | Preset speichern |
+OBS ist kein Modus, sondern eine **Bankart „OBS scenes“** der TotalMix-Bänke (Reiter Soft Keys),
+also im TotalMix-Modus auf einer der Tasten V-POT bis 5, am UF8 und am UF1. In Rea-Sixty gilt das
+für die drei Side-Cars am linken UF8, ein rechter UF8 behält seine Bindungen.
 
-ORC bringt ab Werk auf V-POT eine TotalMix-Bank, auf 1 Hue-Szenen, auf 2 DynaMount-Presets, auf 3
-OBS. Rea-Sixty ändert seine Werksbelegung nicht.
+ORC: QUICK 1-3, NAV/NUDGE/FOCUS, NORM/REC/AUTO sind im Reiter Soft Keys belegbar (Tabelle „UF8“
+unter den Transport-Tasten), Sleep ab Werk auf QUICK 1.
 
 ### 2.4 UF1 und UF8 zusammen
 

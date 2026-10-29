@@ -51,8 +51,18 @@ installiert (Hash `e731e66c`), ORC-Entwicklungsbuild in `extension/build/ORC.app
 - Der UF8-Start-Retry existierte schon seit v0.6.7 (`a3cee694`), nur mit `kSeenUf8`; die
   Memory sagte „nie wiederholt“ und war veraltet (korrigiert).
 
+## Nachmittag (Franks Test)
+- `4cfdf354` Submix im Farbbalken (CS-Type-Zelle hat 12 Zeichen, gemessen 12.08.; `rmeu::barText`
+  mit dem UF1 geteilt), SEND/PLUG-IN 1-6 wählen den Submix in Control-Room-Reihenfolge (Phones 1-4,
+  Main B, Main), Stereo immer 4. Taste der ersten Ansicht (UF1 und UF8).
+- `215738f2` Soft-Keys gehören zum Modus (Plan 2.3 neu), OBS-Szenen als Bankart, `RoomCells.h`
+  (Hue/DynaMount/OBS-Zellen einmal statt dreimal), ORC: neun UF8-Tasten belegbar, Sleep auf QUICK 1.
+- Import lief 14:11 (6 Werte), vorher nie gedrückt.
+
 ## Offen
 - Release: Rea-Sixty zuerst (sonst bekommt ein altes Rea-Sixty den UF8 nie zurück), dann ORC
   mit UF8. Nur mit Franks Go.
 - FLIP im TotalMix-Side-Car hat keine Belegung.
+- Gefragt, nicht gebaut: Reverb/Echo in der Kanalansicht auf alle 8 V-Pots; ob Nav-Kreuz
+  links/rechts bei Frank den Submix schaltet (im Code ja).
 - Rea-Sixty-Handbuch erwähnt ORC und das TotalMix-Side-Car bewusst nicht (27.09.).
