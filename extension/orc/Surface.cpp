@@ -437,6 +437,8 @@ void Surface::loop_()
                     orc::logLine("ORC: REAPER asked for the UF1, letting go of it and of TotalMix\n");
                     std::fflush(stdout);
                     rme::manager().stop();
+                    // ⛔ NOT MoreMe's remote (orc/PhonesServer.h): the musicians'
+                    // headphones keep their mixer while REAPER records.
                     // Hue, OBS and the stands too: one program talks to them
                     // at a time.
                     orc::modes::stopWorkers();

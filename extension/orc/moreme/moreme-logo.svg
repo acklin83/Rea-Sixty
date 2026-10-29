@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="180" height="180">
+  <!-- The MoreMe mark: what the page shows until a studio picks its own logo
+       (ORC, settings, MoreMe). A headphone, nothing else. -->
+  <circle cx="90" cy="90" r="86" fill="#161616" stroke="#0099FF" stroke-width="4"/>
+  <path d="M48 106 V94 a42 42 0 0 1 84 0 V106" fill="none" stroke="#FFFFFF"
+        stroke-width="9" stroke-linecap="round"/>
+  <rect x="37" y="98" width="25" height="42" rx="10" fill="#0099FF"/>
+  <rect x="118" y="98" width="25" height="42" rx="10" fill="#0099FF"/>
+</svg>

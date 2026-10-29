@@ -1,5 +1,6 @@
 #import "OrcSettingsWindow.h"
 #import "OrcModesTab.h"
+#import "OrcPhonesTab.h"
 #import <ServiceManagement/ServiceManagement.h>
 
 #include "Bindings.h"
@@ -230,6 +231,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* trInactive;
 @property (nonatomic, strong) NSTimer* tick;
 @property (nonatomic, strong) OrcModesTab* modesTab;
+@property (nonatomic, strong) OrcPhonesTab* phonesTab;
 @end
 
 @implementation OrcSettingsWindowController {
@@ -293,6 +295,9 @@ NSStackView* withUnit(NSView* field, NSString* unit)
         // Hue, DynaMount, OBS for the UF8's side-cars (docs/orc-uf8-plan.md).
         self.modesTab = [[OrcModesTab alloc] init];
         [tabs addTabViewItem:[self.modesTab tabItem]];
+        // ORC MoreMe, the headphone mixer in the browser (docs/orc-phones-plan.md).
+        self.phonesTab = [[OrcPhonesTab alloc] init];
+        [tabs addTabViewItem:[self.phonesTab tabItem]];
         [w.contentView addSubview:tabs];
         [self refresh];
     }
@@ -731,6 +736,7 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
 - (void)refresh
 {
     [self.modesTab refreshInWindow:self.window];
+    [self.phonesTab refreshInWindow:self.window];
     auto& mgr = rme::manager();
     const auto cfg = mgr.config();
     const auto st  = mgr.snapshot();

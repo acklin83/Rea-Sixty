@@ -827,6 +827,23 @@ if(NOT WIN32)
     target_include_directories(test_orc_phones PRIVATE src orc "${WDL_DIR}")
     target_link_libraries(test_orc_phones PRIVATE Threads::Threads)
     add_test(NAME orc_phones COMMAND test_orc_phones)
+    # Its WebSocket and HTTP codec (stage 2): RFC 6455's own example bytes.
+    add_executable(test_orc_websocket tests/test_orc_websocket.cpp orc/WebSocket.cpp
+        src/Sha256.cpp "${WDL_DIR}/WDL/sha.cpp")
+    target_include_directories(test_orc_websocket PRIVATE src orc "${WDL_DIR}")
+    add_test(NAME orc_websocket COMMAND test_orc_websocket)
+    # The server end to end, a browser and a fake TotalMix on ports the system
+    # hands the test (stages 2 and 3). macOS only, as ORC.
+    if(APPLE)
+        add_executable(test_orc_phones_server tests/test_orc_phones_server.cpp
+            orc/PhonesServer.cpp orc/Phones.cpp orc/WebSocket.cpp orc/OrcConfig.cpp
+            src/RmeState.cpp src/RmeOsc.cpp src/RmeManager.cpp src/RmeNames.cpp
+            src/Sha256.cpp src/LogPath.cpp "${WDL_DIR}/WDL/sha.cpp")
+        target_include_directories(test_orc_phones_server PRIVATE src orc "${WDL_DIR}")
+        target_link_libraries(test_orc_phones_server PRIVATE Threads::Threads
+            "-framework CoreFoundation")
+        add_test(NAME orc_phones_server COMMAND test_orc_phones_server)
+    endif()
 
     # UF8 bulk-IN packets to whole frames, shared by Rea-Sixty and ORC
     # (Uf8Frames.h, header only; docs/orc-uf8-plan.md stage 2).
@@ -1238,6 +1255,13 @@ if(APPLE)
         orc/OrcSettingsWindow.mm
         orc/OrcModesTab.mm
         orc/OrcLogo.cpp
+        # ORC MoreMe, the headphone mixer in the browser (docs/orc-phones-plan.md):
+        # the mixer's logic, the WebSocket codec, the server and its page.
+        orc/Phones.cpp
+        orc/WebSocket.cpp
+        orc/PhonesServer.cpp
+        orc/OrcPhonesTab.mm
+        "${WDL_DIR}/WDL/sha.cpp"
         "${CMAKE_BINARY_DIR}/ORC.icns"
         ${ORC_SHARED_SOURCES})
     # ⇨ THE ICON, RENDERED FROM THE WORDMARK (orc/OrcLogo.cpp, Frank 29.09.2026:
@@ -1260,6 +1284,7 @@ if(APPLE)
         orc/OrcApp.mm
         orc/OrcSettingsWindow.mm
         orc/OrcModesTab.mm
+        orc/OrcPhonesTab.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     # WDL only for its JSON parser, which RmeManager reads rme.json with. No
     # REAPER header comes in with it: WDL is a standalone utility library.
@@ -1306,7 +1331,8 @@ if(APPLE)
     add_dependencies(orc orc_libusb)
     target_include_directories(orc PRIVATE "${ORC_LIBUSB_PREFIX}/install/include/libusb-1.0")
     target_link_libraries(orc PRIVATE "${ORC_LIBUSB_DYLIB}" Threads::Threads
-        "-framework AppKit" "-framework ServiceManagement")
+        "-framework AppKit" "-framework ServiceManagement" "-framework CoreImage"
+        "-framework UniformTypeIdentifiers")
     # ⇨ A BUNDLE, because a status item needs one. An unbundled binary can put
     # an item in the menu bar, but it has no Info.plist to carry LSUIElement, no
     # name for the system to show and nothing to sign or notarise later.
@@ -1345,11 +1371,23 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_BINARY_DIR}/ORC.icns"
             "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Resources/ORC.icns"
+        # MoreMe's page and its mark, served from here (orc/PhonesServer.cpp).
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Resources/moreme"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/orc/moreme/moreme.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/orc/moreme/moreme-logo.svg"
+            "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Resources/moreme/"
         COMMAND codesign --force --sign -
             "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Frameworks/libusb-1.0.0.dylib"
         COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:orc>"
-        COMMENT "Bundling libusb and the icon into ORC.app, then signing"
+        COMMENT "Bundling libusb, the icon and MoreMe's page into ORC.app, then signing"
         VERBATIM)
+    # ⛔ The step above runs only when ORC links. A change to the page alone
+    # would otherwise stay out of the bundle: relink when either file changes.
+    set_property(TARGET orc APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/orc/moreme/moreme.html"
+        "${CMAKE_CURRENT_SOURCE_DIR}/orc/moreme/moreme-logo.svg")
 
     add_executable(orc_icon tools/orc_icon.cpp orc/OrcLogo.cpp)
     target_include_directories(orc_icon PRIVATE orc)

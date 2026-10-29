@@ -48,6 +48,7 @@
 #include "OrcModes.h"
 #include "ModeBuiltins.h"
 #include "OrcUi.h"
+#include "PhonesServer.h"
 #include "RmeManager.h"
 #include "Surface.h"
 
@@ -135,6 +136,25 @@ int main()
                 orc::rmeConfigPath().c_str());
     std::fflush(stdout);
 
+    // ⇨ ORC MOREME, the headphone mixer in the browser (docs/orc-phones-plan.md).
+    // Off from the factory. Its own TotalMix remote, which the handover to
+    // REAPER leaves alone (PhonesServer.h).
+    {
+        namespace ph = orc::phones;
+        ph::Settings ps;
+        ph::loadSettings(ps);
+        std::string pin = ph::loadPin();
+        // ⛔ On means a PIN. A file deleted by hand gets a new one.
+        if (ps.enabled && pin.empty()) {
+            pin = ph::generatePin();
+            ph::savePin(pin);
+        }
+        ph::server().apply(ps, pin);
+        if (ps.enabled)
+            orc::logLine("MoreMe: on, page port %d, TotalMix send %d, receive %d\n",
+                         ps.webPort, ps.sendPort, ps.recvPort);
+    }
+
     // ORC runs: Rea-Sixty waits for the receipt only while this pid lives.
     orc::writeOrcPid();
 
@@ -145,6 +165,7 @@ int main()
     orc::runApp(surface, [] { return g_interrupted.load(); });
 
     surface.stop();
+    orc::phones::server().stop();
     rme::manager().stop();
     orc::modes::saveIfDirty();
     orc::modes::stopWorkers();

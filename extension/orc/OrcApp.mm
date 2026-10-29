@@ -4,8 +4,10 @@
 #import "OrcSettingsWindow.h"
 
 #import <Cocoa/Cocoa.h>
+#import <CoreImage/CoreImage.h>
 
 #include "OrcConfig.h"
+#include "PhonesServer.h"
 #include "Surface.h"
 
 namespace rme = reasixty::rme;
@@ -19,7 +21,39 @@ static orc::Surface* g_surface = nullptr;
 @property (nonatomic, strong) NSMenuItem*   uf1Line;
 @property (nonatomic, strong) NSMenuItem*   uf8Line;
 @property (nonatomic, strong) NSMenuItem*   mixerLine;
+@property (nonatomic, strong) NSMenuItem*   moremeLine;
+@property (nonatomic, strong) NSMenuItem*   moremeAddress;
+@property (nonatomic, strong) NSMenuItem*   moremeQr;
+@property (nonatomic, strong) NSImageView*  moremeQrView;
+@property (nonatomic, copy)   NSString*     moremeQrFor;
 @end
+
+// ⇨ THE ADDRESS AS A QR CODE, for the musicians to scan (docs/orc-phones-plan.md).
+// macOS draws it (CoreImage's QR generator), no library. ⛔ The address only,
+// never the PIN (Frank 29.10.2026). Drawn pixel for pixel: a smoothed QR code
+// does not scan.
+static NSImage* qrImage(NSString* text, CGFloat side)
+{
+    CIFilter* f = [CIFilter filterWithName:@"CIQRCodeGenerator"];
+    [f setValue:[text dataUsingEncoding:NSUTF8StringEncoding] forKey:@"inputMessage"];
+    [f setValue:@"M" forKey:@"inputCorrectionLevel"];
+    CIImage* code = f.outputImage;
+    if (!code) return nil;
+    CIContext* ctx = [CIContext contextWithOptions:nil];
+    CGImageRef cg = [ctx createCGImage:code fromRect:code.extent];
+    if (!cg) return nil;
+    id held = CFBridgingRelease(cg);
+    return [NSImage imageWithSize:NSMakeSize(side, side) flipped:NO drawingHandler:^BOOL(NSRect r) {
+        [NSColor.whiteColor setFill];
+        NSRectFill(r);
+        CGContextRef c = NSGraphicsContext.currentContext.CGContext;
+        CGContextSetInterpolationQuality(c, kCGInterpolationNone);
+        CGContextSetShouldAntialias(c, false);
+        const CGFloat quiet = std::floor(side * 0.08);
+        CGContextDrawImage(c, CGRectInset(r, quiet, quiet), (__bridge CGImageRef)held);
+        return YES;
+    }];
+}
 
 @implementation OrcAppDelegate
 
@@ -81,6 +115,27 @@ static orc::Surface* g_surface = nullptr;
         [menu addItem:_uf1Line];
         [menu addItem:_uf8Line];
         [menu addItem:_mixerLine];
+        // ⇨ ORC MOREME: its state, then the address and the PIN to give the
+        // musicians, then the address to scan. The last two only while the page
+        // is served.
+        _moremeLine = [[NSMenuItem alloc] initWithTitle:@"MoreMe" action:nil keyEquivalent:@""];
+        _moremeLine.enabled = NO;
+        [menu addItem:_moremeLine];
+        _moremeAddress = [[NSMenuItem alloc] initWithTitle:@"" action:@selector(copyMoremeAddress:)
+                                             keyEquivalent:@""];
+        _moremeAddress.target = self;
+        _moremeAddress.toolTip = @"Copy the address";
+        [menu addItem:_moremeAddress];
+        _moremeQr = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+        {
+            const CGFloat side = 168.0;
+            NSView* box = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, side + 40.0, side + 12.0)];
+            _moremeQrView = [[NSImageView alloc] initWithFrame:NSMakeRect(20.0, 6.0, side, side)];
+            _moremeQrView.imageScaling = NSImageScaleNone;
+            [box addSubview:_moremeQrView];
+            _moremeQr.view = box;
+        }
+        [menu addItem:_moremeQr];
         [menu addItem:[NSMenuItem separatorItem]];
         [menu addItemWithTitle:@"Settings…"
                         action:@selector(openSettings:)
@@ -123,6 +178,29 @@ static orc::Surface* g_surface = nullptr;
     }
     self.mixerLine.title = [NSString stringWithFormat:@"TotalMix   %s",
                                      orc::linkSummary().c_str()];
+
+    namespace ph = orc::phones;
+    const ph::Status mm = ph::server().status();
+    self.moremeLine.title = [NSString stringWithFormat:@"MoreMe   %s", ph::summary(mm).c_str()];
+    const std::string addr = (mm.enabled && mm.listening) ? ph::pageAddress(mm.port) : std::string();
+    self.moremeAddress.hidden = addr.empty();
+    self.moremeQr.hidden = addr.empty();
+    if (!addr.empty()) {
+        NSString* a = [NSString stringWithUTF8String:addr.c_str()];
+        self.moremeAddress.title = [NSString stringWithFormat:@"%@   PIN %s", a,
+                                             ph::server().pin().c_str()];
+        if (![a isEqualToString:self.moremeQrFor]) {
+            self.moremeQrFor = a;
+            self.moremeQrView.image = qrImage(a, self.moremeQrView.frame.size.width);
+        }
+    }
+}
+
+- (void)copyMoremeAddress:(id)sender
+{
+    if (!self.moremeQrFor) return;
+    [NSPasteboard.generalPasteboard clearContents];
+    [NSPasteboard.generalPasteboard setString:self.moremeQrFor forType:NSPasteboardTypeString];
 }
 
 - (void)openSettings:(id)sender { [[OrcSettingsWindowController shared] present]; }

@@ -1,0 +1,917 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="theme-color" content="#0D0D0D" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=0, viewport-fit=cover" />
+<title>MoreMe</title>
+<!-- Filled in by ORC as it serves the page (orc/PhonesServer.cpp). -->
+<meta name="moreme-studio" content="">
+<meta name="moreme-version" content="">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=Inter+Tight:wght@700;900&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0D0D0D; --bg2:#161616; --bg3:#1f1f1f;
+  --fg:#FFFFFF; --fg2:#A8A8A8; --fg3:#666;
+  --accent:#0099FF; --accent2:#0077cc;
+  --red:#690000; --red2:#a00000;
+  --yellow:#f0c000;
+  --green:#3fcf6a;
+  --rad:14px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+html,body{margin:0;background:var(--bg);color:var(--fg);font-family:'Inter',system-ui,sans-serif;font-size:16px;overscroll-behavior:none;user-select:none;-webkit-user-select:none;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+html{height:100%}
+body{
+  height:100vh;height:100dvh;
+  display:flex;flex-direction:column;
+  overflow:hidden;
+  touch-action:none;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* HEADER */
+.head{flex:none;display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px;background:var(--bg);z-index:10}
+.brand{font-family:'Inter Tight',sans-serif;font-weight:900;font-style:italic;letter-spacing:-0.02em;font-size:20px;display:flex;align-items:center;gap:8px}
+.brand .dot{width:10px;height:10px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);transition:background .2s,box-shadow .2s}
+.brand .dot.off{background:var(--red2);box-shadow:0 0 8px var(--red2)}
+.brand .lo,#intro h1 .lo{color:var(--red)}
+.head .who{font-size:16px;color:var(--fg);font-weight:700;text-align:right;line-height:1.2}
+.gear{background:none;border:none;color:var(--fg2);font-size:22px;padding:6px 10px;cursor:pointer}
+
+/* CARDS */
+.wrap{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y;padding:0 12px 24px;max-width:680px;width:100%;margin:0 auto}
+.card{background:var(--bg2);border-radius:var(--rad);padding:14px 14px 10px;margin-bottom:10px;position:relative;overflow:hidden}
+.card.master{background:linear-gradient(180deg,#1a2233 0%,var(--bg2) 100%);border:1px solid #223040}
+.card .row1{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:8px;gap:8px;min-height:22px}
+.card .name{font-weight:700;font-size:16px;letter-spacing:-0.01em;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card.master .name{font-family:'Inter Tight',sans-serif;font-weight:900;font-style:italic;font-size:16px;letter-spacing:0.05em;text-transform:uppercase;color:var(--accent)}
+.card .db{font-variant-numeric:tabular-nums;font-size:16px;color:var(--fg2);font-weight:500;min-width:70px;text-align:right}
+.card .db.hot{color:var(--yellow)}
+.card .db.clip{color:var(--red2)}
+
+/* FADER */
+.fader{position:relative;height:42px;background:var(--bg3);border-radius:21px;touch-action:manipulation;cursor:pointer;margin-bottom:6px}
+.fader .fill{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:21px;width:0;pointer-events:none}
+.fader .thumb{position:absolute;top:50%;width:36px;height:36px;border-radius:50%;background:#fff;transform:translate(-50%,-50%);left:0;box-shadow:0 2px 10px rgba(0,0,0,0.4);pointer-events:none;border:2px solid #ddd}
+.fader .nick{position:absolute;top:50%;width:2px;height:14px;background:rgba(255,255,255,0.35);transform:translate(-50%,-50%);pointer-events:none}
+.fader.muted .fill{filter:grayscale(1) brightness(0.5)}
+.card.muted{padding:6px 14px}
+.card.muted .row1{margin-bottom:0;min-height:46px;align-items:center;padding-right:54px}
+.card.muted .fader,.card.muted .pan,.card.muted .btn.solo,.card.muted .db{display:none}
+.card.muted .ctrl{position:absolute;right:14px;top:50%;transform:translateY(-50%);margin-top:0}
+.card.muted .name{color:var(--fg2)}
+
+/* CONTROLS ROW (pan, mute, solo) */
+.ctrl{display:flex;align-items:center;gap:8px;margin-top:2px}
+.pan{flex:1;height:24px;position:relative;background:var(--bg3);border-radius:12px;touch-action:manipulation;cursor:pointer}
+.pan .pthumb{position:absolute;top:50%;left:50%;width:18px;height:18px;border-radius:50%;background:var(--fg2);transform:translate(-50%,-50%);transition:background .15s;pointer-events:none}
+.pan .center{position:absolute;top:50%;left:50%;width:2px;height:10px;background:rgba(255,255,255,0.2);transform:translate(-50%,-50%);pointer-events:none}
+.pan .plabel{position:absolute;top:50%;font-size:11px;color:var(--fg3);transform:translateY(-50%);pointer-events:none;font-weight:600}
+.pan .plabel.l{left:8px}
+.pan .plabel.r{right:8px}
+.pan.active .pthumb{background:var(--accent)}
+
+.btn{background:var(--bg3);color:var(--fg2);border:none;width:46px;height:46px;border-radius:12px;font-family:'Inter Tight',sans-serif;font-weight:900;font-size:18px;letter-spacing:0.05em;cursor:pointer;transition:background .12s,color .12s,transform .08s;touch-action:manipulation}
+.btn:active{transform:scale(0.94)}
+.btn.mute.on{background:var(--red);color:#fff}
+.btn.solo.on{background:var(--yellow);color:#000}
+
+/* INTRO / SELECT */
+#intro{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y;padding:24px 20px;text-align:center}
+#intro .logo{display:block;margin:8px auto 16px;width:180px;height:180px;filter:drop-shadow(0 4px 14px rgba(0,0,0,0.5))}
+#intro h1{font-family:'Inter Tight',sans-serif;font-weight:900;font-style:italic;font-size:32px;margin:8px 0 6px;letter-spacing:-0.02em}
+#intro p{color:var(--fg2);font-size:16px;margin:0 0 24px;line-height:1.5}
+#intro .pick{display:flex;flex-direction:column;gap:8px;max-width:340px;margin:0 auto}
+#intro button.tk{background:var(--bg2);color:var(--fg);border:1px solid #2a2a2a;padding:18px 16px;border-radius:var(--rad);font-size:17px;font-weight:600;cursor:pointer;text-align:left;font-family:inherit;display:flex;align-items:center;gap:12px}
+#intro button.tk:active{background:var(--bg3)}
+#intro button.tk .swatch{width:14px;height:14px;border-radius:50%;background:var(--accent);flex:none}
+#intro button.tk.locked{opacity:0.45}
+#intro button.tk .badge{margin-left:auto;font-size:12px;font-weight:600;color:var(--fg3);background:var(--bg3);border:1px solid #2a2a2a;border-radius:6px;padding:3px 8px;flex:none}
+#intro .empty{color:var(--fg3);padding:40px 20px;font-style:italic;font-size:16px}
+#toast{position:fixed;left:50%;bottom:32px;transform:translateX(-50%);background:#222;color:var(--fg);border:1px solid #3a3a3a;border-radius:10px;padding:12px 18px;font-size:15px;font-weight:600;box-shadow:0 6px 18px rgba(0,0,0,0.5);z-index:50;opacity:0;pointer-events:none;transition:opacity 0.2s;max-width:80vw;text-align:center}
+#toast.show{opacity:1}
+
+/* SETTINGS OVERLAY */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,0.85);backdrop-filter:blur(6px);z-index:100;display:none;align-items:flex-start;justify-content:center;padding:60px 20px}
+.overlay.open{display:flex}
+.overlay .panel{background:var(--bg2);border-radius:var(--rad);padding:20px;width:100%;max-width:380px}
+.overlay h2{font-family:'Inter Tight',sans-serif;font-weight:900;font-style:italic;margin:0 0 16px;font-size:22px}
+.overlay label{display:block;font-size:13px;color:var(--fg2);text-transform:uppercase;letter-spacing:0.08em;margin:14px 0 6px}
+.overlay input{width:100%;background:var(--bg3);border:1px solid #2a2a2a;color:var(--fg);padding:12px;border-radius:10px;font:inherit;font-size:16px}
+.overlay .actions{display:flex;gap:8px;margin-top:20px}
+.overlay .actions button{flex:1;background:var(--accent);color:#000;border:none;padding:14px;border-radius:10px;font:inherit;font-size:16px;font-weight:700;cursor:pointer}
+.overlay .actions button.sec{background:var(--bg3);color:var(--fg)}
+.overlay .actions button.danger{background:var(--red);color:#fff}
+.overlay .ver{margin-top:16px;color:var(--fg3);font-size:12px;text-align:center}
+
+/* LOADING */
+.loading{padding:40px 20px;color:var(--fg2);text-align:center;font-style:italic;font-size:16px}
+
+.hidden{display:none !important}
+
+/* ============================================================
+   WIDE / iPad MEDIA VIEW: channels side by side as vertical strips.
+   ============================================================ */
+#mix.wide{
+  display:flex;flex-wrap:nowrap;gap:8px;
+  justify-content:flex-start;align-items:stretch;
+  max-width:none;padding:4px 12px 24px;
+  overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;
+  touch-action:pan-x;
+}
+#mix.wide .card{
+  flex:0 0 88px;height:100%;min-height:320px;margin-bottom:0;padding:12px 8px 10px;
+  display:flex;flex-direction:column;align-items:stretch;
+}
+#mix.wide .card .row1{flex-direction:column;align-items:center;gap:2px;margin-bottom:4px;min-height:0}
+#mix.wide .card .name{flex:none;max-width:100%;text-align:center}
+#mix.wide .card .db{min-width:0;text-align:center}
+
+#mix.wide .fader{width:44px;height:auto;flex:1;min-height:140px;margin:8px auto;background:transparent;border-radius:0;touch-action:none}
+#mix.wide .fader::before{content:'';position:absolute;left:50%;top:0;bottom:0;width:10px;transform:translateX(-50%);background:var(--bg3);border-radius:5px}
+#mix.wide .fader .fill{top:auto;left:50%;right:auto;bottom:0;width:10px;height:0;border-radius:5px;transform:translateX(-50%)}
+#mix.wide .fader .thumb{top:auto;left:50%;bottom:0;width:42px;height:22px;border-radius:5px;background:#2a2a2a;border:1px solid #555;box-shadow:0 1px 4px rgba(0,0,0,0.5);transform:translate(-50%,50%)}
+#mix.wide .fader .thumb::after{content:'';position:absolute;left:8px;right:8px;top:50%;height:2px;background:#888;transform:translateY(-50%)}
+#mix.wide .fader .nick{top:auto;left:50%;bottom:0;width:14px;height:2px;transform:translate(-50%,50%)}
+#mix.wide .card.master .fader .fill{background:linear-gradient(0deg,var(--accent2),var(--accent))}
+
+#mix.wide .ctrl{flex-direction:column;gap:6px;margin-top:6px;align-items:center}
+#mix.wide .btn{width:100%;height:40px}
+
+#mix.wide .pan{width:40px;height:40px;flex:none;border-radius:50%;background:var(--bg3);border:1px solid #333;margin:0 auto;position:relative}
+#mix.wide .pan .plabel{display:none}
+#mix.wide .pan .center{display:none}
+#mix.wide .pan .pthumb{left:50%;bottom:50%;top:auto;width:3px;height:15px;margin-left:-1.5px;border-radius:2px;background:var(--fg);transform-origin:50% 100%;transform:rotate(0deg)}
+#mix.wide .pan.active .pthumb{background:var(--accent)}
+
+#mix.wide .card.muted{padding:12px 8px 10px}
+#mix.wide .card.muted .row1{flex-direction:column;align-items:center;margin-bottom:4px;min-height:0;padding-right:0}
+#mix.wide .card.muted .fader{display:block}
+#mix.wide .card.muted .pan{display:block}
+#mix.wide .card.muted .db{display:block}
+#mix.wide .card.muted .btn.solo{display:block}
+#mix.wide .card.muted .ctrl{position:static;transform:none;margin-top:6px;flex-direction:column}
+
+/* STICKY MASTER */
+#mix.sticky-master .card.master{position:sticky;top:0;z-index:5;box-shadow:0 6px 14px rgba(0,0,0,0.5)}
+#mix.wide.sticky-master .card.master{position:sticky;top:auto;left:0;z-index:5;box-shadow:6px 0 14px rgba(0,0,0,0.5)}
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="brand"><span class="dot" id="connDot"></span><span>More<span class="lo">Me</span></span></div>
+  <div class="who" id="whoBox"></div>
+  <button class="gear" id="gearBtn" aria-label="settings" data-t-aria="settings">⚙</button>
+</div>
+
+<!-- INTRO -->
+<div id="intro" class="hidden">
+  <img class="logo" id="logoImg" src="logo" alt="">
+  <h1>More<span class="lo">Me</span></h1>
+  <p data-t-html="pick">Wähle deinen Kopfhörer-Mix.<br>Dieses Gerät merkt sich die Wahl.</p>
+  <div class="pick" id="trackPick"><div class="empty" data-t="connecting">Verbinde mit ORC…</div></div>
+</div>
+
+<!-- MAIN MIX -->
+<div id="mix" class="wrap hidden"></div>
+
+<div id="toast"></div>
+
+<!-- SETTINGS OVERLAY -->
+<div class="overlay" id="overlay">
+  <div class="panel">
+    <h2 data-t="settings">Einstellungen</h2>
+    <label data-t="mix">Kopfhörer-Mix</label>
+    <select id="setTrack" style="width:100%;background:var(--bg3);border:1px solid #2a2a2a;color:var(--fg);padding:12px;border-radius:10px;font:inherit;font-size:16px"></select>
+    <label data-t="view">Ansicht</label>
+    <select id="setLayout" style="width:100%;background:var(--bg3);border:1px solid #2a2a2a;color:var(--fg);padding:12px;border-radius:10px;font:inherit;font-size:16px">
+      <option value="auto" data-t="viewAuto">Automatisch (je nach Gerät)</option>
+      <option value="iphone" data-t="viewPhone">iPhone (Liste)</option>
+      <option value="ipad" data-t="viewPad">iPad (Mischpult)</option>
+    </select>
+    <label data-t="sticky">Master fixieren</label>
+    <select id="setSticky" style="width:100%;background:var(--bg3);border:1px solid #2a2a2a;color:var(--fg);padding:12px;border-radius:10px;font:inherit;font-size:16px">
+      <option value="0" data-t="stickyOff">Aus (mitscrollen)</option>
+      <option value="1" data-t="stickyOn">An (oben/links angepinnt)</option>
+    </select>
+    <div class="actions">
+      <button class="sec" id="setCancel" data-t="cancel">Abbrechen</button>
+      <button id="setSave" data-t="save">Speichern</button>
+    </div>
+    <div class="actions">
+      <button class="danger" id="setReset" data-t="reset">Gerät zurücksetzen</button>
+    </div>
+    <div class="ver" id="verLabel">MoreMe</div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   ORC MoreMe · headphone mix (TotalMix FX Global OSC, through ORC)
+   Browser ⇄ WebSocket ⇄ ORC ⇄ OSC/UDP ⇄ TotalMix
+   stoerme's page (docs/orc-phones-plan.md), 1:1 in layout and behaviour;
+   new: the name, the logo and studio name from ORC, German or English.
+   ============================================================ */
+
+function meta(name){ const m = document.querySelector('meta[name="'+name+'"]'); return m ? m.content : ''; }
+const VERSION = meta('moreme-version');
+const STUDIO = meta('moreme-studio');
+
+const LS = {
+  identity: 'moreme.identity',   // selected mix id
+  layout: 'moreme.layout',       // 'auto' | 'iphone' | 'ipad'
+  sticky: 'moreme.sticky',       // '1' = master pinned
+  pin: 'moreme.pin'              // the studio PIN, once it was accepted
+};
+// A phone that used the page under its old name keeps its choices.
+for (const k of Object.keys(LS)){
+  try {
+    const old = localStorage.getItem('stoerme.' + k);
+    if (old != null && localStorage.getItem(LS[k]) == null) localStorage.setItem(LS[k], old);
+  } catch(_){}
+}
+
+// ---- Language: the phone's, German or English, else English ----
+const LANG = (((navigator.languages && navigator.languages[0]) || navigator.language || 'en')
+              .toLowerCase().startsWith('de')) ? 'de' : 'en';
+const TEXT = {
+  de: {
+    title: 'Kopfhörer-Mix',
+    pick: 'Wähle deinen Kopfhörer-Mix.<br>Dieses Gerät merkt sich die Wahl.',
+    connecting: 'Verbinde mit ORC…',
+    settings: 'Einstellungen', mix: 'Kopfhörer-Mix', view: 'Ansicht',
+    viewAuto: 'Automatisch (je nach Gerät)', viewPhone: 'iPhone (Liste)', viewPad: 'iPad (Mischpult)',
+    sticky: 'Master fixieren', stickyOff: 'Aus (mitscrollen)', stickyOn: 'An (oben/links angepinnt)',
+    cancel: 'Abbrechen', save: 'Speichern', reset: 'Gerät zurücksetzen',
+    wrongPin: 'Falscher PIN',
+    tooMany: (min)=>'Zu viele Versuche. Bitte in ' + min + ' Min. nochmal.',
+    taken: 'Dieser Kopfhörer ist belegt',
+    takenOver: 'Dein Kopfhörer wurde übernommen',
+    noTotalMix: 'ORC da, TotalMix antwortet nicht.',
+    noMixes: 'Keine Kopfhörer-Mixe gefunden.',
+    hintNoOrc: 'Die Seite erreicht den Rechner im Studio nicht.',
+    hintNoTotalMix: 'In TotalMix: OSC einschalten, dann TotalMix neu starten.',
+    hintNoMixes: 'In TotalMix sind keine Phones-Ausgänge eingerichtet.',
+    next: 'Weiter', pinHint: 'Den PIN bekommst du im Studio.',
+    badge: 'belegt', takeOver: (label)=>label + ' ist belegt. Trotzdem übernehmen?',
+    notFound: 'Mix nicht gefunden',
+    notFoundText: 'Dieser Kopfhörer-Mix ist nicht (mehr) konfiguriert. Tippe auf ⚙ um einen anderen zu wählen.',
+    forget: 'Identität löschen?'
+  },
+  en: {
+    title: 'Headphone mix',
+    pick: 'Pick your headphone mix.<br>This device remembers the choice.',
+    connecting: 'Connecting to ORC…',
+    settings: 'Settings', mix: 'Headphone mix', view: 'View',
+    viewAuto: 'Automatic (by device)', viewPhone: 'iPhone (list)', viewPad: 'iPad (mixing desk)',
+    sticky: 'Pin the master', stickyOff: 'Off (scrolls along)', stickyOn: 'On (pinned top/left)',
+    cancel: 'Cancel', save: 'Save', reset: 'Reset this device',
+    wrongPin: 'Wrong PIN',
+    tooMany: (min)=>'Too many tries. Try again in ' + min + ' min.',
+    taken: 'This headphone is taken',
+    takenOver: 'Your headphone was taken over',
+    noTotalMix: 'ORC is there, TotalMix does not answer.',
+    noMixes: 'No headphone mixes found.',
+    hintNoOrc: 'This page cannot reach the studio computer.',
+    hintNoTotalMix: 'In TotalMix: switch OSC on, then restart TotalMix.',
+    hintNoMixes: 'TotalMix has no Phones outputs set up.',
+    next: 'Continue', pinHint: 'You get the PIN in the studio.',
+    badge: 'taken', takeOver: (label)=>label + ' is taken. Take it over anyway?',
+    notFound: 'Mix not found',
+    notFoundText: 'This headphone mix is not set up (any more). Tap ⚙ to pick another one.',
+    forget: 'Forget this device?'
+  }
+};
+function t(k){ return TEXT[LANG][k]; }
+function applyLanguage(){
+  document.documentElement.lang = LANG;
+  document.title = 'MoreMe · ' + (STUDIO || t('title'));
+  document.querySelectorAll('[data-t]').forEach(el=>{ el.textContent = t(el.dataset.t); });
+  document.querySelectorAll('[data-t-html]').forEach(el=>{ el.innerHTML = t(el.dataset.tHtml); });
+  document.querySelectorAll('[data-t-aria]').forEach(el=>{ el.setAttribute('aria-label', t(el.dataset.tAria)); });
+  const logo = $('logoImg'); if (logo) logo.alt = STUDIO || 'MoreMe';
+}
+
+// ---- State ----
+let state = {
+  mixes: [],            // [{id,label,bus,color}] from ORC's config
+  tmSeen: false,        // has TotalMix ever answered ORC? (from config)
+  sources: [],          // [{id,label,kind,n,color,max}] from the snapshot
+  mixId: null,          // selected mix id
+  selName: '',
+  recvs: [],            // per-source values, same index order as state.sources: [{vol(amp),pan,mute}]
+  master: {vol:1, mute:0},
+  lastReplyT: 0,
+  connected: false,
+  needPin: false,       // ORC asked for the PIN (no config until it's right)
+  pendingPin: null,     // typed PIN, stored once ORC accepts it
+  dragSend: null,       // 0=master, -y=source#
+  dragKind: null,       // 'vol'|'pan'
+  panRef: null
+};
+
+// ---- Volume curve (dB-linear, 0 dB lands at pos 0.75) ----
+function posToDb(p){
+  if (p <= 0.001) return -Infinity;
+  if (p < 0.20) return -90 + (p/0.20)*60;
+  if (p < 0.75) return -30 + ((p-0.20)/0.55)*30;
+  return ((p-0.75)/0.25)*12;
+}
+function dbToPos(db){
+  if (!isFinite(db) || db <= -90) return 0;
+  if (db < -30) return ((db+90)/60)*0.20;
+  if (db < 0)   return 0.20 + ((db+30)/30)*0.55;
+  if (db > 12) db = 12;
+  return 0.75 + (db/12)*0.25;
+}
+function ampToDb(a){a=parseFloat(a); return a<=0 ? -Infinity : 20*Math.log10(a);}
+function dbToAmp(db){db=Number(db); if(!isFinite(db)||db<=-150) return 0; if(db>12) db=12; return Math.pow(10, db/20);}
+function ampToPos(a){return dbToPos(ampToDb(a));}
+function posToAmp(p){const db=posToDb(p); return isFinite(db)?dbToAmp(db):0;}
+function fmtDb(db){
+  if (!isFinite(db)) return '−∞';
+  if (Math.abs(db)<0.05) return '0.0 dB';
+  return (db>0?'+':'') + db.toFixed(1) + ' dB';
+}
+// fader ceiling for a card: master/output 0 dB, source = its configured max
+function srcMax(sendId){
+  if (sendId === 0) return 0;
+  const s = state.sources[-sendId-1];
+  return s ? s.max : 6;
+}
+
+// ---- WebSocket data layer ----
+let ws = null;
+function wsConnect(){
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  let url = (window.MOREME_WS || (proto + '://' + location.host + '/ws'));
+  try { ws = new WebSocket(url); } catch(e){ setTimeout(wsConnect, 1500); return; }
+  ws.onopen = ()=>{ state.lastReplyT = Date.now(); wsSend({t:'hello', pin: localStorage.getItem(LS.pin) || ''}); };
+  ws.onmessage = (e)=>{ state.lastReplyT = Date.now(); try{ handleMsg(JSON.parse(e.data)); }catch(_){} };
+  ws.onclose = ()=>{ ws = null; setTimeout(wsConnect, 1200); };
+  ws.onerror = ()=>{ try{ ws.close(); }catch(_){} };
+}
+function wsSend(o){ if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+
+function handleMsg(m){
+  switch (m.t){
+    case 'pin': // ORC wants the PIN (first visit, wrong PIN, or too many tries)
+      state.needPin = true;
+      if (m.wrong){ localStorage.removeItem(LS.pin); showToast(t('wrongPin')); }
+      if (m.wait) showToast(t('tooMany')(Math.ceil(m.wait/60)));
+      state.pendingPin = null;
+      if ($('trackPick')) $('trackPick').dataset.sig = '';
+      updateUI();
+      break;
+    case 'config':
+      if (state.pendingPin){ localStorage.setItem(LS.pin, state.pendingPin); state.pendingPin = null; }
+      if (state.needPin){ state.needPin = false; $('trackPick').dataset.sig = ''; }
+      // ORC curates the channel list; performer only needs the mix list here.
+      // The per-mix source list arrives with the snapshot after we select.
+      state.mixes = m.mixes || [];
+      state.tmSeen = !!m.tmSeen;
+      { const want = localStorage.getItem(LS.identity); if (want && state.mixes.some(x=>x.id===want)) wsSend({t:'select', mix:want}); }
+      updateUI();
+      break;
+    case 'snapshot':
+      if (m.mix !== localStorage.getItem(LS.identity)) break;
+      state.mixId = m.mix;
+      state.sources = (m.sources || []).map(s=>Object.assign({}, s));
+      state.recvs = state.sources.map(s=>{
+        const v = (m.values && m.values[s.id]) || {};
+        return { vol: dbToAmp(v.db != null ? v.db : -300), pan: v.pan || 0, mute: v.mute ? 1 : 0, solo: v.solo ? 1 : 0 };
+      });
+      state.master.vol = dbToAmp((m.master&&m.master.db) != null ? m.master.db : -300);
+      state.master.mute = (m.master&&m.master.mute) ? 1 : 0;
+      delete $('mix').dataset.sig; // source set may have changed → full rebuild
+      updateUI();
+      break;
+    case 'update':{
+      if (m.mix !== state.mixId) break;
+      const i = state.sources.findIndex(s=>s.id===m.src);
+      if (i < 0) break;
+      const sendId = -(i+1);
+      const r = state.recvs[i] || (state.recvs[i] = {});
+      const dragging = state.dragSend === sendId;
+      if (m.db !== undefined && !(dragging && state.dragKind==='vol')) r.vol = dbToAmp(m.db);
+      if (m.pan !== undefined && !(dragging && state.dragKind==='pan')) r.pan = m.pan;
+      if (m.mute !== undefined) r.mute = m.mute?1:0;
+      if (m.solo !== undefined) r.solo = m.solo?1:0;
+      break;
+    }
+    case 'master':
+      if (m.mix !== state.mixId) break;
+      if (m.db !== undefined && !(state.dragSend===0 && state.dragKind==='vol')) state.master.vol = dbToAmp(m.db);
+      if (m.mute !== undefined) state.master.mute = m.mute?1:0;
+      break;
+    case 'denied':   // someone else holds this mix: back to the picker
+      localStorage.removeItem(LS.identity); state.mixId = null;
+      showToast(t('taken'));
+      delete $('mix').dataset.sig; updateUI();
+      break;
+    case 'released': // our mix was taken over by another performer
+      localStorage.removeItem(LS.identity); state.mixId = null;
+      showToast(t('takenOver'));
+      delete $('mix').dataset.sig; updateUI();
+      break;
+  }
+}
+
+let toastTimer = null;
+function showToast(msg){
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>t.classList.remove('show'), 3000);
+}
+
+// ---- Connection indicator ----
+function checkConn(){
+  const ok = !!(ws && ws.readyState === 1);
+  if (ok !== state.connected){
+    state.connected = ok;
+    document.getElementById('connDot').classList.toggle('off', !ok);
+    // The waiting text reads `connected`, so a flip has to repaint it. Without
+    // this the page keeps whichever of the two sentences it was born with.
+    const mixEl = $('mix');
+    if (mixEl) delete mixEl.dataset.state;
+    const pickEl = $('trackPick');
+    if (pickEl) pickEl.dataset.sig = '';
+    updateUI();
+  }
+}
+setInterval(checkConn, 400);
+
+// ---- UI helpers ----
+function $(id){return document.getElementById(id);}
+const wideMq = window.matchMedia('(min-width: 700px)');
+function getLayoutPref(){return localStorage.getItem(LS.layout) || 'auto';}
+function getStickyPref(){return localStorage.getItem(LS.sticky) === '1';}
+function isWide(){
+  const pref = getLayoutPref();
+  if (pref === 'iphone') return false;
+  if (pref === 'ipad')   return true;
+  return wideMq.matches;
+}
+wideMq.addEventListener('change', updateUI);
+// ⛔ TWO FAILURES, TWO SENTENCES. "Connecting" used to appear whenever the mix
+// list was empty, which is also what a perfectly connected ORC looks like while
+// TotalMix says nothing. It sent Frank looking at the wrong end for an evening
+// (2026-08-27). The dot in the header is ORC; this text is what is behind it.
+function waitingText(){
+  if (!state.connected) return t('connecting');
+  if (!state.tmSeen)    return t('noTotalMix');
+  return t('noMixes');
+}
+function waitingHint(){
+  if (!state.connected) return t('hintNoOrc');
+  if (!state.tmSeen)    return t('hintNoTotalMix');
+  return t('hintNoMixes');
+}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+function renderPin(){
+  $('intro').classList.remove('hidden');
+  $('mix').classList.add('hidden');
+  delete $('mix').dataset.state;
+  const pick = $('trackPick');
+  if (pick.dataset.sig === 'pin') return; // built once: rebuilding would eat the typing
+  pick.dataset.sig = 'pin';
+  pick.innerHTML = '<form id="pinForm" style="display:flex;flex-direction:column;gap:8px">'
+    + '<input id="pinInput" type="password" inputmode="numeric" autocomplete="off" placeholder="PIN" '
+    + 'style="background:var(--bg2);border:1px solid #2a2a2a;color:var(--fg);padding:16px;border-radius:var(--rad);font:inherit;font-size:20px;text-align:center;letter-spacing:.3em">'
+    + '<button class="tk" type="submit" style="justify-content:center">' + escapeHtml(t('next')) + '</button>'
+    + '<div class="empty" style="padding:8px 0">' + escapeHtml(t('pinHint')) + '</div></form>';
+  $('pinForm').onsubmit = (e)=>{
+    e.preventDefault();
+    const v = $('pinInput').value.trim();
+    if (!v) return;
+    state.pendingPin = v;
+    wsSend({t:'hello', pin:v});
+  };
+}
+
+function renderIntro(){
+  $('intro').classList.remove('hidden');
+  $('mix').classList.add('hidden');
+  delete $('mix').dataset.state;
+  const pick = $('trackPick');
+  if (!state.mixes.length){
+    pick.innerHTML = '<div class="empty">' + escapeHtml(waitingText())
+                   + '<br><span style="opacity:.6;font-size:.85em">'
+                   + escapeHtml(waitingHint()) + '</span></div>';
+    pick.dataset.sig = '';
+    return;
+  }
+  const sig = state.mixes.map(m=>m.id+':'+m.label+':'+(m.color||'')+':'+(m.locked?1:0)).join('|');
+  if (pick.dataset.sig === sig) return;
+  pick.dataset.sig = sig;
+  pick.innerHTML = '';
+  for (const m of state.mixes){
+    const b = document.createElement('button');
+    b.className = 'tk' + (m.locked ? ' locked' : '');
+    b.innerHTML = '<span class="swatch" style="background:'+(m.color||'var(--accent)')+'"></span><span>'+escapeHtml(m.label)+'</span>'
+                + (m.locked ? '<span class="badge">' + escapeHtml(t('badge')) + '</span>' : '');
+    b.onclick = m.locked
+      ? ()=>{ if (confirm(t('takeOver')(m.label))) chooseMix(m.id, true); }
+      : ()=>chooseMix(m.id);
+    pick.appendChild(b);
+  }
+}
+
+function chooseMix(id, force){
+  localStorage.setItem(LS.identity, id);
+  state.mixId = id;
+  const mix = state.mixes.find(x=>x.id===id);
+  state.selName = mix ? mix.label : id;
+  wsSend({t:'select', mix:id, force:force||undefined});
+  $('intro').classList.add('hidden');
+  $('mix').classList.remove('hidden');
+}
+
+function renderMix(){
+  const root = $('mix');
+  $('intro').classList.add('hidden');
+  root.classList.remove('hidden');
+
+  if (!state.mixes.length){
+    root.classList.remove('wide');
+    if (root.dataset.state !== 'loading'){
+      root.innerHTML = '<div class="loading">' + escapeHtml(waitingText())
+                     + '<br><span style="opacity:.6;font-size:.85em">'
+                     + escapeHtml(waitingHint()) + '</span></div>';
+      root.dataset.state = 'loading';
+    }
+    return;
+  }
+  const want = localStorage.getItem(LS.identity);
+  const mix = state.mixes.find(x=>x.id===want);
+  if (!mix){
+    root.classList.remove('wide');
+    if (root.dataset.state !== 'notfound'){
+      root.innerHTML = '<div class="card"><div class="row1"><div class="name">' + escapeHtml(t('notFound')) + '</div></div><p style="color:var(--fg2);font-size:16px;line-height:1.5">' + escapeHtml(t('notFoundText')) + '</p></div>';
+      root.dataset.state = 'notfound';
+    }
+    return;
+  }
+  state.mixId = mix.id;
+  state.selName = mix.label;
+  delete root.dataset.state;
+  root.classList.toggle('wide', isWide());
+  root.classList.toggle('sticky-master', getStickyPref());
+  $('whoBox').textContent = mix.label;
+
+  const recvCnt = state.sources.length;
+  let sig = 'M';
+  for (const s of state.sources) sig += '|'+s.id;
+  if (root.dataset.sig !== sig){
+    root.dataset.sig = sig;
+    root.innerHTML = '';
+    root.appendChild(buildCard({master:true}));
+    for (let y=1;y<=recvCnt;y++) root.appendChild(buildCard({recv:y}));
+  }
+  updateCard(root.querySelector('[data-send="0"]'), {master:true});
+  for (let y=1;y<=recvCnt;y++) updateCard(root.querySelector('[data-send="'+(-y)+'"]'), {recv:y});
+}
+
+function buildCard(opts){
+  const isMaster = !!opts.master;
+  const sendId = isMaster ? 0 : -opts.recv;
+  const card = document.createElement('div');
+  card.className = 'card' + (isMaster?' master':'');
+  card.dataset.send = sendId;
+  card.innerHTML =
+    '<div class="row1">'+
+      '<div class="name"></div>'+
+      '<div class="db"></div>'+
+    '</div>'+
+    '<div class="fader">'+
+      '<div class="fill"></div>'+
+      '<div class="nick" data-nick="0db"></div>'+
+      '<div class="thumb"></div>'+
+    '</div>'+
+    (isMaster ? '' :
+      '<div class="ctrl">'+
+        '<div class="pan"><span class="plabel l">L</span><span class="center"></span><div class="pthumb"></div><span class="plabel r">R</span></div>'+
+        '<button class="btn mute" data-act="mute">M</button>'+
+        '<button class="btn solo" data-act="solo">S</button>'+
+      '</div>') +
+    (isMaster ?
+      '<div class="ctrl" style="justify-content:flex-end"><button class="btn mute" data-act="mute">M</button></div>'
+      : '');
+
+  const fader = card.querySelector('.fader');
+  wireSlider(fader, sendId, 'vol');
+  if (!isMaster){
+    wireSlider(card.querySelector('.pan'), sendId, 'pan');
+  }
+  card.querySelectorAll('[data-act="mute"]').forEach(b=>b.addEventListener('click', ()=>toggleMute(sendId)));
+  const solo = card.querySelector('[data-act="solo"]');
+  if (solo) solo.addEventListener('click', ()=>toggleSolo(-sendId));
+  return card;
+}
+
+function updateCard(card, opts){
+  if (!card) return;
+  const isMaster = !!opts.master;
+  let vol, pan=0, mute=0, name='', col='#0099FF';
+  if (isMaster){
+    vol = state.master.vol; mute = state.master.mute; name = 'MASTER OUT';
+  } else {
+    const r = state.recvs[opts.recv-1];
+    if (!r) return;
+    const s = state.sources[opts.recv-1];
+    vol = r.vol; pan = r.pan; mute = r.mute;
+    name = (s && s.label) || ('Source '+opts.recv);
+    col = (s && s.color) || '#0099FF';
+  }
+  card.querySelector('.name').textContent = name;
+  const db = ampToDb(vol);
+  const dbEl = card.querySelector('.db');
+  dbEl.textContent = fmtDb(db);
+  dbEl.classList.toggle('hot', db>0 && db<=6);
+  dbEl.classList.toggle('clip', db>6);
+
+  const fader = card.querySelector('.fader');
+  const fill = fader.querySelector('.fill');
+  const thumb = fader.querySelector('.thumb');
+  const nick = fader.querySelector('.nick');
+  const rect = fader.getBoundingClientRect();
+  const pos = ampToPos(vol);
+  if (isWide()){
+    const h = rect.height;
+    if (h>0){
+      const py = pos*h;
+      fill.style.height = py+'px';
+      thumb.style.bottom = py+'px';
+      nick.style.bottom = (dbToPos(0)*h)+'px';
+      fill.style.width=''; thumb.style.left=''; nick.style.left='';
+    }
+  } else {
+    const w = rect.width;
+    if (w>0){
+      const px = pos*w;
+      fill.style.width = px+'px';
+      // keep the round thumb fully inside the card (overflow:hidden clips it at the ends)
+      thumb.style.left = Math.max(18, Math.min(w-18, px))+'px';
+      nick.style.left = (dbToPos(0)*w)+'px';
+      fill.style.height=''; thumb.style.bottom=''; nick.style.bottom='';
+    }
+  }
+
+  const displayMute = mute === 1;
+  fader.classList.toggle('muted', displayMute);
+  card.classList.toggle('muted', displayMute);
+
+  if (!isMaster){
+    fill.style.background = 'linear-gradient(90deg, color-mix(in srgb,'+col+' 60%, black), '+col+')';
+    const pn = card.querySelector('.pan');
+    const pt = card.querySelector('.pthumb');
+    if (isWide()){
+      pt.style.left=''; pt.style.transform = 'rotate('+(pan*135)+'deg)';
+    } else {
+      pt.style.transform='';
+      const pw = pn.getBoundingClientRect().width;
+      if (pw>0){ const ppx=((pan+1)/2)*pw; pt.style.left = Math.max(9, Math.min(pw-9, ppx))+'px'; }
+    }
+    pn.classList.toggle('active', Math.abs(pan)>0.01);
+    const ml = card.querySelector('.plabel.l');
+    const mr = card.querySelector('.plabel.r');
+    if (pan < -0.01){ ml.style.color='var(--accent)'; mr.style.color='var(--fg3)'; }
+    else if (pan > 0.01){ mr.style.color='var(--accent)'; ml.style.color='var(--fg3)'; }
+    else { ml.style.color='var(--fg3)'; mr.style.color='var(--fg3)'; }
+  }
+  card.querySelectorAll('[data-act="mute"]').forEach(b=>b.classList.toggle('on', displayMute));
+  const sBtn = card.querySelector('[data-act="solo"]');
+  if (sBtn) sBtn.classList.toggle('on', !isMaster && !!(state.recvs[opts.recv-1] && state.recvs[opts.recv-1].solo));
+}
+
+// ---- SLIDER WIRING (tap/scroll-friendly) ----
+const SLOP = 8;
+let pend = null;
+function valueAxisIsVertical(kind){ return isWide() && (kind === 'vol' || kind === 'pan'); }
+
+function wireSlider(el, sendId, kind){
+  el.addEventListener('pointerdown', e=>{
+    pend = {sendId, kind, id:e.pointerId, x:e.clientX, y:e.clientY};
+  });
+  el.addEventListener('pointermove', e=>{
+    if (state.dragSend === sendId && state.dragKind === kind){
+      e.preventDefault();
+      handleDrag(el, e, sendId, kind, false);
+      return;
+    }
+    if (!pend || pend.id !== e.pointerId || pend.sendId !== sendId || pend.kind !== kind) return;
+    const dx = e.clientX - pend.x, dy = e.clientY - pend.y;
+    if (Math.abs(dx) < SLOP && Math.abs(dy) < SLOP) return;
+    const movedAlongValue = valueAxisIsVertical(kind) ? Math.abs(dy) > Math.abs(dx)
+                                                       : Math.abs(dx) > Math.abs(dy);
+    if (movedAlongValue){
+      e.preventDefault();
+      el.setPointerCapture(e.pointerId);
+      state.dragSend = sendId;
+      state.dragKind = kind;
+      if (kind === 'pan' && isWide()){
+        const cur = (state.recvs[-sendId-1]||{}).pan || 0;
+        state.panRef = {y:e.clientY, pan:cur};
+      }
+      pend = null;
+      handleDrag(el, e, sendId, kind, false);
+    } else {
+      pend = null;
+    }
+  });
+  el.addEventListener('pointerup', e=>{
+    if (state.dragSend === sendId && state.dragKind === kind){
+      handleDrag(el, e, sendId, kind, true);
+      state.dragSend = null; state.dragKind = null;
+    }
+    if (pend && pend.id === e.pointerId) pend = null;
+  });
+  el.addEventListener('pointercancel', e=>{
+    if (state.dragSend === sendId && state.dragKind === kind){
+      state.dragSend = null; state.dragKind = null;
+    }
+    if (pend && pend.id === e.pointerId) pend = null;
+  });
+}
+
+const PAN_THROW = 150;
+function handleDrag(el, e, sendId, kind, isEnd){
+  const r = el.getBoundingClientRect();
+  if (kind === 'pan' && isWide()){
+    const ref = state.panRef || {y:e.clientY, pan:0};
+    let pan = ref.pan + (ref.y - e.clientY) / PAN_THROW;
+    pan = Math.max(-1, Math.min(1, pan));
+    if (Math.abs(pan) < 0.04) pan = 0;
+    if (pan > 0.96) pan = 1; if (pan < -0.96) pan = -1;
+    applyPan(sendId, pan, isEnd);
+    return;
+  }
+  let p;
+  if (kind === 'vol' && isWide()) p = (r.bottom - e.clientY) / r.height;
+  else p = (e.clientX - r.left) / r.width;
+  p = Math.max(0, Math.min(1, p));
+  if (kind === 'vol'){
+    const snap = dbToPos(0);
+    if (Math.abs(p - snap) < 0.02) p = snap;
+    applyVol(sendId, posToAmp(p), isEnd);
+  } else {
+    let pan = p*2 - 1;
+    if (Math.abs(pan) < 0.04) pan = 0;
+    if (pan > 0.96) pan = 1; if (pan < -0.96) pan = -1;
+    applyPan(sendId, pan, isEnd);
+  }
+}
+
+function applyVol(sendId, amp, isEnd){
+  if (!state.mixId) return;
+  let db = ampToDb(amp);
+  const max = srcMax(sendId);
+  if (!isFinite(db) || db <= -90){ db = -300; amp = 0; }
+  else if (db > max){ db = max; amp = dbToAmp(max); }
+  if (sendId === 0){
+    state.master.vol = amp;
+    wsSend({t:'master', mix:state.mixId, ctrl:'vol', val:db, end:!!isEnd});
+  } else {
+    const i = -sendId-1;
+    if (state.recvs[i]) state.recvs[i].vol = amp;
+    const s = state.sources[i];
+    if (s) wsSend({t:'set', mix:state.mixId, src:s.id, ctrl:'fader', val:db, end:!!isEnd});
+  }
+  refreshCard(sendId);
+}
+function applyPan(sendId, pan, isEnd){
+  if (!state.mixId || sendId >= 0) return; // master card has no pan control
+  const i = -sendId-1;
+  if (state.recvs[i]) state.recvs[i].pan = pan;
+  const s = state.sources[i];
+  if (s) wsSend({t:'set', mix:state.mixId, src:s.id, ctrl:'pan', val:pan, end:!!isEnd});
+  refreshCard(sendId);
+}
+
+// Immediate visual feedback while dragging: don't wait for the 250ms tick.
+function refreshCard(sendId){
+  const card = $('mix').querySelector('[data-send="'+sendId+'"]');
+  if (card) updateCard(card, sendId === 0 ? {master:true} : {recv:-sendId});
+}
+
+// re-render keeping the tapped card visually fixed (WebKit has no scroll anchoring)
+function renderAnchored(anchorSend){
+  const mix = $('mix');
+  const card = mix.querySelector('[data-send="'+anchorSend+'"]');
+  const before = card ? card.getBoundingClientRect().top : 0;
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  updateUI();
+  if (!card) return;
+  const pin = ()=>{
+    const after = card.getBoundingClientRect().top;
+    const d = after - before;
+    if (Math.abs(d) > 0.5) mix.scrollTop += d;
+  };
+  pin();
+  requestAnimationFrame(pin);
+}
+
+function toggleMute(sendId){
+  if (!state.mixId) return;
+  if (sendId === 0){
+    state.master.mute = state.master.mute ? 0 : 1;
+    wsSend({t:'master', mix:state.mixId, ctrl:'mute'});
+    refreshCard(0);
+  } else {
+    const r = state.recvs[-sendId-1];
+    if (r) r.mute = r.mute ? 0 : 1;
+    const s = state.sources[-sendId-1];
+    if (s) wsSend({t:'mute', mix:state.mixId, src:s.id});
+    refreshCard(sendId);
+  }
+  navigator.vibrate && navigator.vibrate(8);
+}
+
+// Native per-submix solo (TotalMix /mix/<kind>/<n>/<bus>/solo): doesn't touch
+// any fader and doesn't affect other headphones.
+function toggleSolo(recv){
+  if (!state.mixId) return;
+  const r = state.recvs[recv-1]; if (!r) return;
+  r.solo = r.solo ? 0 : 1; // optimistic
+  const s = state.sources[recv-1];
+  if (s) wsSend({t:'solo', mix:state.mixId, src:s.id});
+  navigator.vibrate && navigator.vibrate(12);
+  refreshCard(-recv);
+}
+
+// ---- SETTINGS ----
+$('gearBtn').addEventListener('click', openSettings);
+$('setCancel').addEventListener('click', ()=>$('overlay').classList.remove('open'));
+$('setSave').addEventListener('click', ()=>{
+  const id = $('setTrack').value;
+  if (id){
+    localStorage.setItem(LS.identity, id);
+    const mix = state.mixes.find(x=>x.id===id);
+    state.mixId = id;
+    state.selName = mix ? mix.label : id;
+    wsSend({t:'select', mix:id});
+  }
+  localStorage.setItem(LS.layout, $('setLayout').value);
+  localStorage.setItem(LS.sticky, $('setSticky').value);
+  $('overlay').classList.remove('open');
+  delete $('mix').dataset.sig;
+  updateUI();
+});
+$('setReset').addEventListener('click', ()=>{
+  if (confirm(t('forget'))){
+    localStorage.removeItem(LS.identity);
+    location.reload();
+  }
+});
+function openSettings(){
+  const sel = $('setTrack');
+  sel.innerHTML = '';
+  for (const m of state.mixes){
+    const opt = document.createElement('option');
+    opt.value = m.id; opt.textContent = m.label;
+    if (m.id === state.mixId) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  $('setLayout').value = getLayoutPref();
+  $('setSticky').value = getStickyPref() ? '1' : '0';
+  $('overlay').classList.add('open');
+}
+
+// ---- MAIN LOOP ----
+function updateUI(){
+  if (state.needPin){ renderPin(); return; }
+  const who = localStorage.getItem(LS.identity);
+  if (!who){ renderIntro(); return; }
+  renderMix();
+}
+
+function init(){
+  applyLanguage();
+  $('verLabel').textContent = 'MoreMe · ORC ' + (VERSION || '') + (STUDIO ? ' · ' + STUDIO : '');
+  wsConnect();
+  updateUI();
+  setInterval(updateUI, 250);
+}
+init();
+
+// ---- DISABLE ZOOM (all devices) ----
+['gesturestart','gesturechange','gestureend'].forEach(t=>
+  document.addEventListener(t, e=>e.preventDefault(), {passive:false}));
+let lastTouchEnd = 0;
+document.addEventListener('touchend', e=>{
+  const now = Date.now();
+  if (now - lastTouchEnd <= 300) e.preventDefault();
+  lastTouchEnd = now;
+}, {passive:false});
+document.addEventListener('wheel', e=>{ if (e.ctrlKey || e.metaKey) e.preventDefault(); }, {passive:false});
+document.addEventListener('keydown', e=>{
+  if ((e.ctrlKey || e.metaKey) && ['+','-','=','0'].includes(e.key)) e.preventDefault();
+});
+</script>
+</body>
+</html>
