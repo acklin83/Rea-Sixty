@@ -101,6 +101,11 @@ svg a:hover .knob, svg a:focus .knob { fill: var(--accent); }
     <li><a href="#surface">The UF1, control by control</a></li>
     <li><a href="#strip">STRIP: one channel in detail</a></li>
     <li class="sub"><a href="#reverb">Reverb types</a></li>
+    <li><a href="#uf8">The UF8</a></li>
+    <li class="sub"><a href="#uf8-totalmix">TotalMix on the UF8</a></li>
+    <li class="sub"><a href="#uf8-hue">Hue</a></li>
+    <li class="sub"><a href="#uf8-dyna">DynaMount</a></li>
+    <li class="sub"><a href="#uf8-obs">OBS</a></li>
     <li><a href="#softkeys">Soft-key banks</a></li>
     <li class="sub"><a href="#actions">Actions</a></li>
     <li><a href="#settings">The settings window</a></li>
@@ -116,6 +121,9 @@ svg a:hover .knob, svg a:focus .knob { fill: var(--accent); }
 <p>ORC turns an SSL UF1 into a remote control for RME TotalMix FX. The fader, the pots and the keys
 move TotalMix directly, and the two screens show what TotalMix is doing: channel names and colours,
 levels, the EQ, reverb and echo. ORC runs in the menu bar and needs no DAW.</p>
+<p>With an SSL UF8 next to it, the UF8 shows eight TotalMix channels on its faders, or drives
+Philips Hue lamps and DynaMount mic stands, and its soft keys switch OBS scenes
+(<a href="#uf8">the UF8</a>). The UF8 works on its own too.</p>
 <p>ORC is free.</p>
 </section>
 
@@ -123,7 +131,7 @@ levels, the EQ, reverb and echo. ORC runs in the menu bar and needs no DAW.</p>
 <h2>What you need</h2>
 <ul>
   <li>A Mac with macOS {{minMacos}} or later, Apple silicon or Intel.</li>
-  <li>An SSL UF1, connected by USB.</li>
+  <li>An SSL UF1, an SSL UF8, or both, connected by USB.</li>
   <li>An RME interface with TotalMix FX 2.1 or later. ORC talks Global OSC, which arrived with 2.1.</li>
 </ul>
 <p>SSL 360° has to be closed while ORC uses the UF1. Only one program can hold the surface at a time.</p>
@@ -164,17 +172,26 @@ included.</p>
 switches the UF1 to this view and back, <em>RME: Ask TotalMix again</em> does what the button of the
 same name on the Connection page does.</p>
 <h3>Who holds the UF1</h3>
-<p>When REAPER starts, Rea-Sixty asks ORC for the UF1 and ORC lets go of the surface and of the
-TotalMix port. When REAPER quits, ORC takes both back. The menu bar then reads
+<p>When REAPER starts, Rea-Sixty asks ORC for the UF1 and the UF8, and ORC lets go of both
+surfaces, the TotalMix port, and its connections to Hue, OBS and the DynaMount stands. REAPER opens
+the surfaces once ORC has confirmed. When REAPER quits, ORC takes everything back. The stands report
+no position of their own, so their positions go across with the surfaces, for every stand set up
+with the same IP address in both programs. The menu bar then reads
 <em>handed over to REAPER</em> for as long as REAPER has it. Rea-Sixty's setting
 <em>Take the UF1 over from ORC</em> (Settings, Connected devices) switches this off, and then
 REAPER leaves the UF1 with ORC.</p>
 <p>ORC can only take the UF1 back after REAPER if it is running, so with both on one Mac,
 <em>Open at login</em> is worth ticking.</p>
+<p>In REAPER, Shift and LAYER 1, 2 or 3 on the UF8 open the same three modes as in ORC
+(<a href="#uf8">the UF8</a>), and the same key again goes back to REAPER. The TotalMix mode needs
+ORC installed.</p>
 <h3>One set of settings</h3>
 <p>ORC keeps the settings and Rea-Sixty reads them: pot targets, soft-key banks, colours, STRIP
 pages. Change them in ORC and REAPER picks them up. Without ORC installed, Rea-Sixty offers no
 TotalMix view at all.</p>
+<p>Hue, DynaMount and OBS are set up in each program on its own, so each works without the other.
+<em>Import from REAPER</em> on the <a href="#set-modes">Modes</a> page copies Rea-Sixty's settings
+into ORC, and Rea-Sixty has <em>Import from ORC</em> on its Hue, OBS and DynaMount pages.</p>
 </section>
 
 <section id="menubar">
@@ -187,6 +204,8 @@ it runs from follows, so a second copy is told apart.</td></tr>
 <tr><th>UF1</th><td><em>held by ORC</em> and the unit's serial number, or <em>not open</em> and the
 reason ORC was given. ORC tries again every two seconds, so a UF1 plugged in later or let go by
 another program is picked up by itself.</td></tr>
+<tr><th>UF8</th><td><em>held by ORC</em>, or <em>not open</em> and the reason. Tried again every two
+seconds like the UF1.</td></tr>
 <tr><th>TotalMix</th><td>The link to TotalMix, see <a href="#trouble">when something is off</a>.</td></tr>
 <tr><th>Settings…</th><td>Opens <a href="#settings">the settings window</a>.</td></tr>
 <tr><th>Manual</th><td>Opens this page.</td></tr>
@@ -453,6 +472,91 @@ them back at once.</p>
 <!--GEN:reverbtypes-->
 </section>
 
+<section id="uf8">
+<h2>The UF8</h2>
+<p>The UF8 has three modes on its LAYER keys. The lamp of the active one is lit.</p>
+<table class="data"><tbody>
+<tr><th data-uf8="kLayer1">LAYER 1</th><td>TotalMix, where the UF8 starts.</td></tr>
+<tr><th data-uf8="kLayer2">LAYER 2</th><td>Hue. Press again to go back to TotalMix.</td></tr>
+<tr><th data-uf8="kLayer3">LAYER 3</th><td>DynaMount. Press again to go back to TotalMix.</td></tr>
+</tbody></table>
+<p>These keys work the same in every mode:</p>
+<table class="data"><tbody>
+<tr><th data-uf8="kVpotBank">V-POT, 1-5</th><td>The page of the eight soft keys: V-POT the TotalMix
+soft-key bank, 1 the Hue scenes, 2 the DynaMount presets, 3 the OBS scenes. 4 and 5 are empty.</td></tr>
+<tr><th data-uf8="kTopSoft1">Soft keys</th><td>The keys of that page. A TotalMix bank shows both
+halves at once, keys 1-4 and 5-8.</td></tr>
+<tr><th data-uf8="kChannelEncoder">CHANNEL encoder</th><td>Main volume, in every mode, as the UF1's
+jog wheel.</td></tr>
+<tr><th data-uf8="kFine">FINE</th><td>Pressed: finer steps.</td></tr>
+<tr><th data-uf8="kFlip">FLIP</th><td>In Hue the V-Pot's second role, in DynaMount the fader's
+other axis.</td></tr>
+<tr><th data-uf8="kBtn360">360</th><td>Opens the settings window and closes it again.</td></tr>
+</tbody></table>
+<p>The UF1 stays on TotalMix whatever the UF8 shows, so Main volume is always at hand.</p>
+
+<h3 id="uf8-totalmix">TotalMix on the UF8</h3>
+<p>The eight strips show eight channels of the row the UF1 shows. Without a UF1, the nav cross picks
+the row. With a UF1, both work on one selection: SEL on the UF8 puts that channel on the UF1, and a
+channel picked on the UF1 moves the UF8 so it is on a strip.</p>
+<table class="data"><tbody>
+<tr><th data-uf8="kStripKeys">Fader</th><td>The channel's level. Inputs and playbacks set their
+level into the current submix (<a href="#rows">the submix</a>).</td></tr>
+<tr><th>V-Pot</th><td>On an input with a preamp, the gain. Otherwise the pan into the submix, on the
+FX row the width.</td></tr>
+<tr><th data-uf8="kVpotPush1">V-Pot push</th><td>Gain to 0 dB, pan to the middle, width to stereo.</td></tr>
+<tr><th>SEL</th><td>This channel on the UF1.</td></tr>
+<tr><th>CUT</th><td>Mute, on the FX row the effect off.</td></tr>
+<tr><th>SOLO</th><td>Solo in the submix. Outputs have none.</td></tr>
+<tr><th data-uf8="kBankLeft kBankRight">BANK ◄ ►</th><td>Eight channels on.</td></tr>
+<tr><th data-uf8="kPageLeft kPageRight">PAGE ◄ ►</th><td>One channel on. In the channel view: the
+next eight pages, where a channel has more.</td></tr>
+<tr><th data-uf8="kZoomUp kZoomDown">Nav cross up, down</th><td>The row.</td></tr>
+<tr><th data-uf8="kZoomLeft kZoomRight">Nav cross left, right</th><td>The submix.</td></tr>
+<tr><th data-uf8="kZoomCenter">Nav cross centre</th><td>TotalMix' window shown or hidden.</td></tr>
+<tr><th data-uf8="kPlugin">PLUG-IN</th><td>The channel view, on and off.</td></tr>
+</tbody></table>
+<p>The scribble strips show the channel's name, the row and its number, the colour bar its TotalMix
+colour (page <a href="#set-colours">Colours</a>), the meters the levels TotalMix sends when
+<em>Send Peak Level</em> is on.</p>
+<p><strong>The channel view</strong> puts one <a href="#strip">STRIP</a> page of the selected channel
+on the eight V-Pots: V-Pots 1-4 are the page's controls, V-Pots 5-8 its switches, which a push
+switches. The soft keys pick the page. The faders stay the eight channels' levels. The UF8 shows the
+values as numbers; the EQ curve is the UF1's.</p>
+
+<h3 id="uf8-hue">Hue</h3>
+<p>Each lamp or zone set up on the <a href="#set-modes">Modes</a> page sits on one strip, from the
+left or from the right. Strips without a lamp are dark.</p>
+<table class="data"><tbody>
+<tr><th>Fader</th><td>Brightness. At the bottom the lamp goes off.</td></tr>
+<tr><th>V-Pot</th><td>Hue, with FLIP saturation. Both are set on the Modes page: hue,
+saturation, warmth or nothing.</td></tr>
+<tr><th>V-Pot push</th><td>White on and off.</td></tr>
+<tr><th>CUT</th><td>The lamp on and off.</td></tr>
+<tr><th>SOLO</th><td>This lamp stays on, every other one goes dark.</td></tr>
+</tbody></table>
+<p>Soft-key page 1 has the eight scenes: push recalls a scene, a long press starts it moving.</p>
+
+<h3 id="uf8-dyna">DynaMount</h3>
+<p>Each stand set up on the <a href="#set-modes">Modes</a> page sits on one strip.</p>
+<table class="data"><tbody>
+<tr><th>Fader</th><td>Left and right. With FLIP the distance, fader up is nearest. The stand moves
+when you let go of the fader.</td></tr>
+<tr><th>V-Pot</th><td>Rotation. The stand turns about a second after you stop.</td></tr>
+</tbody></table>
+<p>A preset is where every stand is at one moment. Soft-key page 2 has the eight presets:</p>
+<table class="data"><tbody>
+<tr><th>Push</th><td>The stands drive to the preset.</td></tr>
+<tr><th>Long press, on an empty key</th><td>Stores where the stands are now.</td></tr>
+<tr><th>FINE and push</th><td>Stores over the preset on that key.</td></tr>
+</tbody></table>
+<p>A preset finds each stand by its IP address. A stand the preset does not know stays where it is.</p>
+
+<h3 id="uf8-obs">OBS</h3>
+<p>Soft-key page 3 has the first eight scenes OBS reports, in OBS's order. Push switches to that scene; the
+key of the scene on air is lit.</p>
+</section>
+
 <section id="softkeys">
 <h2>Soft-key banks</h2>
 <p>In the overview the four keys above the large screen play a bank of eight keys, four at a time.
@@ -517,6 +621,18 @@ takes the action's own.</td></tr>
 <tr><th>Factory set for this bank</th><td>Puts this bank back the way it came.</td></tr>
 <tr><th>Transport</th><td>An action and the two lamp colours for each of the five transport keys.</td></tr>
 </tbody></table>
+<h3 id="set-modes">Modes</h3>
+<p>Hue, DynaMount and OBS for the UF8. <em>Import from REAPER</em> copies the Hue, DynaMount and OBS
+settings Rea-Sixty keeps in REAPER into ORC, once.</p>
+<table class="data"><tbody>
+<tr><th>OBS</th><td><em>Talk to OBS</em>, host, port and password of OBS's WebSocket server (in OBS
+under Tools, WebSocket Server Settings).</td></tr>
+<tr><th>DynaMount</th><td>Up to eight stands: on, name, IP address, colour; <em>Detect</em> checks
+that the address answers, <em>Home</em> drives the stand to X50 Y0 R90. Below, the eight presets
+with <em>Go</em>, <em>Store</em> and <em>Clear</em>.</td></tr>
+<tr><th>Hue</th><td><em>Find bridge</em>, then <em>Pair</em> and the bridge's link button within 30
+seconds. Then up to eight lamps, rooms or zones, eight scenes, and the V-Pot's two roles.</td></tr>
+</tbody></table>
 <h3 id="set-colours">Colours</h3>
 <p>TotalMix has nine channel colours, the UF1 its own palette. This page says which UF1 colour each
 TotalMix colour shows as, and lists the channels that wear it.</p>
@@ -548,6 +664,15 @@ Check that TotalMix is running and the remote is still <em>In Use</em>.</td></tr
 <tr><td>not open, with another reason</td><td>ORC could not open the UF1. Is it connected and
 switched on? Is SSL 360° still running? ORC tries again every two seconds.</td></tr>
 </tbody></table>
+<h3>The UF8 line</h3>
+<table class="data"><thead><tr><th>It says</th><th>What it means, what to do</th></tr></thead><tbody>
+<tr><td>held by ORC</td><td>All good.</td></tr>
+<tr><td>not open: handed over to REAPER</td><td>Rea-Sixty has the UF8 while REAPER runs.</td></tr>
+<tr><td>REAPER cannot take it yet: update the REAPER extension</td><td>The Rea-Sixty in REAPER is
+older than this ORC and may not pick the UF8 up. Update Rea-Sixty.</td></tr>
+<tr><td>not open, with another reason</td><td>Is the UF8 connected and switched on? Is SSL 360°
+still running? ORC tries again every two seconds.</td></tr>
+</tbody></table>
 <h3>No level meters on the UF1</h3>
 <p>Switch <em>Send Peak Level</em> on for ORC's remote in TotalMix.</p>
 </section>
@@ -559,6 +684,8 @@ switched on? Is SSL 360° still running? ORC tries again every two seconds.</td>
 and the STRIP pages.</td></tr>
 <tr><th><code>~/Library/Application Support/ORC/orc.json</code></th><td>The soft-key banks and the
 transport keys.</td></tr>
+<tr><th><code>~/Library/Application Support/ORC/modes</code></th><td>Hue, DynaMount and OBS, one file
+per value, and where the stands stand.</td></tr>
 <tr><th><code>/tmp/orc.log</code></th><td>ORC's log. Useful with a bug report.</td></tr>
 </tbody></table>
 <p>To start from scratch, quit ORC and remove the folder <code>~/Library/Application Support/ORC</code>.</p>

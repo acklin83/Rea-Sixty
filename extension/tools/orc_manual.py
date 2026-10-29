@@ -81,6 +81,11 @@ def statuses():
     app = src("orc/OrcApp.mm")
     for m in re.finditer(r'@"UF1   ([a-z ]+)', app):
         out.append(m.group(1).split(",")[0].split(":")[0].strip())
+    # The UF8 line (docs/orc-uf8-plan.md, stage 5), and its fixed texts.
+    for m in re.finditer(r'@"UF8   ([^"%]+)', app):
+        out.append(m.group(1).split(":")[0].strip())
+    for m in re.finditer(r'st_\.error\s*=\s*"([^"]+)"', src("orc/Uf8Surface.cpp")):
+        out.append(m.group(1))
     return sorted(set(s for s in out if s))
 
 
@@ -274,6 +279,10 @@ def build(dump_json, check_only):
     for c in encs:
         if not re.search(rf'data-enc="[^"]*\b{c}\b', t):
             problems.append(f"UF1 encoder uf1::enc::{c} has no section (data-enc)")
+    # Every UF8 key ORC acts on (the ids in orc/Uf8Surface.cpp) has its place.
+    for k in sorted(set(re.findall(r"constexpr std::uint8_t (k\w+)\s*=", src("orc/Uf8Surface.cpp")))):
+        if not re.search(rf'data-uf8="[^"]*\b{k}\b', t):
+            problems.append(f"UF8 key {k} (orc/Uf8Surface.cpp) has no section (data-uf8)")
     text = html.unescape(re.sub(r"<[^>]+>", " ", out))
     for s in statuses():
         if s not in text:
@@ -284,7 +293,7 @@ def build(dump_json, check_only):
             print("  -", p)
         return 1
     if check_only:
-        print("orc_manual: every key, encoder and menu-bar text has its place")
+        print("orc_manual: every key, encoder and menu-bar text has its place (UF1 and UF8)")
         return 0
     # Every data table in a scroll wrapper, so a narrow screen scrolls the
     # table and never the page.
