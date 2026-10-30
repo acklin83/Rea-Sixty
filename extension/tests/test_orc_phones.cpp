@@ -220,6 +220,26 @@ int main()
         EXPECT(mx.held() == 0);
     }
 
+    // ── the studio's own names (Frank 30.10.2026) ────────────────────────────
+    // Own name first, then TotalMix' name, then "Phones N"; pushed at once.
+    {
+        Mixer mx;
+        rme::State st = rig();
+        mx.sync(st, vis(1, { 1, 2 }, { 0 }), true);
+        const int a = mx.open("a");
+        mx.message(a, R"({"t":"hello"})", 0);
+        mx.takeOut();
+        mx.setNames({ "", "Bass", "", "" });
+        auto out = mx.takeOut();
+        const std::string cfg = to(out, a);
+        EXPECT(has(cfg, R"("label":"Drums")"));    // no own name: TotalMix' name
+        EXPECT(has(cfg, R"("label":"Bass")"));     // own name over "Phones 2"
+        EXPECT(!has(cfg, R"("label":"Phones 2")"));
+        mx.setNames({ "Voc", "", "", "" });
+        out = mx.takeOut();
+        EXPECT(has(to(out, a), R"("label":"Voc")") && has(to(out, a), R"("label":"Phones 2")"));
+    }
+
     // ── values both ways, quiet rounds, the mute ─────────────────────────────
     {
         Mixer mx;

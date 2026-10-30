@@ -199,6 +199,15 @@ body{
       <option value="0" data-t="stickyOff">Aus (mitscrollen)</option>
       <option value="1" data-t="stickyOn">An (oben/links angepinnt)</option>
     </select>
+    <label data-t="language">Sprache</label>
+    <select id="setLang" style="width:100%;background:var(--bg3);border:1px solid #2a2a2a;color:var(--fg);padding:12px;border-radius:10px;font:inherit;font-size:16px">
+      <option value="auto" data-t="langAuto">Automatisch (Sprache des Geräts)</option>
+      <option value="de">Deutsch</option>
+      <option value="en">English</option>
+      <option value="fr">Français</option>
+      <option value="it">Italiano</option>
+      <option value="rm">Rumantsch</option>
+    </select>
     <div class="actions">
       <button class="sec" id="setCancel" data-t="cancel">Abbrechen</button>
       <button id="setSave" data-t="save">Speichern</button>
@@ -226,7 +235,8 @@ const LS = {
   identity: 'moreme.identity',   // selected mix id
   layout: 'moreme.layout',       // 'auto' | 'iphone' | 'ipad'
   sticky: 'moreme.sticky',       // '1' = master pinned
-  pin: 'moreme.pin'              // the studio PIN, once it was accepted
+  pin: 'moreme.pin',             // the studio PIN, once it was accepted
+  lang: 'moreme.lang'            // 'auto' | 'de' | 'en' | 'fr' | 'it' | 'rm'
 };
 // A phone that used the page under its old name keeps its choices. Moved, not
 // copied: a left-over old key would bring the mix back after every reset.
@@ -238,9 +248,20 @@ for (const k of Object.keys(LS)){
   } catch(_){}
 }
 
-// ---- Language: the phone's, German or English, else English ----
-const LANG = (((navigator.languages && navigator.languages[0]) || navigator.language || 'en')
-              .toLowerCase().startsWith('de')) ? 'de' : 'en';
+// ---- Language: picked on this phone, else the phone's own, else English ----
+// (Frank 30.10.2026: German, English, French, Italian, Rumantsch Grischun.)
+const LANGS = ['de','en','fr','it','rm'];
+function pickLang(){
+  const want = localStorage.getItem(LS.lang);
+  if (LANGS.includes(want)) return want;
+  const phone = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || 'en'];
+  for (const l of phone){
+    const two = String(l || '').toLowerCase().slice(0, 2);
+    if (LANGS.includes(two)) return two;
+  }
+  return 'en';
+}
+let LANG = pickLang();
 const TEXT = {
   de: {
     title: 'Kopfhörer-Mix',
@@ -263,7 +284,8 @@ const TEXT = {
     badge: 'belegt', takeOver: (label)=>label + ' ist belegt. Trotzdem übernehmen?',
     notFound: 'Mix nicht gefunden',
     notFoundText: 'Dieser Kopfhörer-Mix ist nicht (mehr) konfiguriert. Tippe auf ⚙ um einen anderen zu wählen.',
-    forget: 'Identität löschen?'
+    forget: 'Identität löschen?',
+    language: 'Sprache', langAuto: 'Automatisch (Sprache des Geräts)'
   },
   en: {
     title: 'Headphone mix',
@@ -286,7 +308,82 @@ const TEXT = {
     badge: 'taken', takeOver: (label)=>label + ' is taken. Take it over anyway?',
     notFound: 'Mix not found',
     notFoundText: 'This headphone mix is not set up (any more). Tap ⚙ to pick another one.',
-    forget: 'Forget this device?'
+    forget: 'Forget this device?',
+    language: 'Language', langAuto: 'Automatic (the device\'s language)'
+  },
+  fr: {
+    title: 'Mix casque',
+    pick: 'Choisis ton mix casque.<br>Cet appareil s\'en souvient.',
+    connecting: 'Connexion à ORC…',
+    settings: 'Réglages', mix: 'Mix casque', view: 'Affichage',
+    viewAuto: 'Automatique (selon l\'appareil)', viewPhone: 'iPhone (liste)', viewPad: 'iPad (table de mixage)',
+    sticky: 'Fixer le master', stickyOff: 'Non (défile avec la page)', stickyOn: 'Oui (épinglé en haut/à gauche)',
+    cancel: 'Annuler', save: 'Enregistrer', reset: 'Réinitialiser cet appareil',
+    wrongPin: 'PIN incorrect',
+    tooMany: (min)=>'Trop d\'essais. Réessaie dans ' + min + ' min.',
+    taken: 'Ce casque est déjà pris',
+    takenOver: 'Quelqu\'un a repris ton casque',
+    noTotalMix: 'ORC est là, TotalMix ne répond pas.',
+    noMixes: 'Aucun mix casque trouvé.',
+    hintNoOrc: 'Cette page n\'atteint pas l\'ordinateur du studio.',
+    hintNoTotalMix: 'Dans TotalMix : active OSC, puis redémarre TotalMix.',
+    hintNoMixes: 'TotalMix n\'a aucune sortie Phones configurée.',
+    next: 'Continuer', pinHint: 'Le PIN, tu l\'obtiens au studio.',
+    badge: 'pris', takeOver: (label)=>label + ' est déjà pris. Le reprendre quand même ?',
+    notFound: 'Mix introuvable',
+    notFoundText: 'Ce mix casque n\'est pas (ou plus) configuré. Touche ⚙ pour en choisir un autre.',
+    forget: 'Oublier cet appareil ?',
+    language: 'Langue', langAuto: 'Automatique (langue de l\'appareil)'
+  },
+  it: {
+    title: 'Mix cuffie',
+    pick: 'Scegli il tuo mix cuffie.<br>Questo dispositivo ricorda la scelta.',
+    connecting: 'Connessione a ORC…',
+    settings: 'Impostazioni', mix: 'Mix cuffie', view: 'Vista',
+    viewAuto: 'Automatica (in base al dispositivo)', viewPhone: 'iPhone (elenco)', viewPad: 'iPad (mixer)',
+    sticky: 'Fissa il master', stickyOff: 'No (scorre con la pagina)', stickyOn: 'Sì (fisso in alto/a sinistra)',
+    cancel: 'Annulla', save: 'Salva', reset: 'Reimposta questo dispositivo',
+    wrongPin: 'PIN errato',
+    tooMany: (min)=>'Troppi tentativi. Riprova tra ' + min + ' min.',
+    taken: 'Queste cuffie sono occupate',
+    takenOver: 'Qualcuno ha preso le tue cuffie',
+    noTotalMix: 'ORC c\'è, TotalMix non risponde.',
+    noMixes: 'Nessun mix cuffie trovato.',
+    hintNoOrc: 'Questa pagina non raggiunge il computer dello studio.',
+    hintNoTotalMix: 'In TotalMix: attiva OSC, poi riavvia TotalMix.',
+    hintNoMixes: 'In TotalMix non ci sono uscite Phones configurate.',
+    next: 'Avanti', pinHint: 'Il PIN te lo danno in studio.',
+    badge: 'occupato', takeOver: (label)=>label + ' è occupato. Prenderlo comunque?',
+    notFound: 'Mix non trovato',
+    notFoundText: 'Questo mix cuffie non è (più) configurato. Tocca ⚙ per sceglierne un altro.',
+    forget: 'Dimenticare questo dispositivo?',
+    language: 'Lingua', langAuto: 'Automatica (lingua del dispositivo)'
+  },
+  // Rumantsch Grischun, words checked against the Pledari Grond (30.10.2026);
+  // wants a native speaker's read.
+  rm: {
+    title: 'Mix d\'uregliers',
+    pick: 'Tscherna tes mix d\'uregliers.<br>Quest apparat memorisescha la tscherna.',
+    connecting: 'Colliaziun cun ORC…',
+    settings: 'Preferenzas', mix: 'Mix d\'uregliers', view: 'Vista',
+    viewAuto: 'Automatic (tenor l\'apparat)', viewPhone: 'iPhone (glista)', viewPad: 'iPad (pult da maschadar)',
+    sticky: 'Fixar il master', stickyOff: 'Na (scrolla cun la pagina)', stickyOn: 'Gea (fixà sura/a sanestra)',
+    cancel: 'Annullar', save: 'Memorisar', reset: 'Definir da nov quest apparat',
+    wrongPin: 'PIN fauss',
+    tooMany: (min)=>'Memia bleras tentativas. Emprova danovamain en ' + min + ' min.',
+    taken: 'Quests uregliers èn occupads',
+    takenOver: 'Insatgi ha surpiglià tes uregliers',
+    noTotalMix: 'ORC è qua, TotalMix na respunda betg.',
+    noMixes: 'Nagins mixs d\'uregliers chattads.',
+    hintNoOrc: 'Questa pagina na cuntanscha betg il calculatur dal studio.',
+    hintNoTotalMix: 'En TotalMix: envida OSC e reavia lura TotalMix.',
+    hintNoMixes: 'TotalMix n\'ha naginas sortidas Phones endrizzadas.',
+    next: 'Vinavant', pinHint: 'Il PIN survegns ti en il studio.',
+    badge: 'occupà', takeOver: (label)=>label + ' è occupà. Tuttina surpigliar?',
+    notFound: 'Mix betg chattà',
+    notFoundText: 'Quest mix d\'uregliers n\'è betg (pli) configurà. Tutga ⚙ per tscherner in auter.',
+    forget: 'Emblidar quest apparat?',
+    language: 'Lingua', langAuto: 'Automatic (lingua da l\'apparat)'
   }
 };
 function t(k){ return TEXT[LANG][k]; }
@@ -860,6 +957,16 @@ $('setSave').addEventListener('click', ()=>{
   }
   localStorage.setItem(LS.layout, $('setLayout').value);
   localStorage.setItem(LS.sticky, $('setSticky').value);
+  localStorage.setItem(LS.lang, $('setLang').value);
+  const lang = pickLang();
+  if (lang !== LANG){
+    // Everything built from t() is built again: the picker, the PIN page,
+    // the cards.
+    LANG = lang;
+    applyLanguage();
+    $('trackPick').dataset.sig = '';
+    delete $('mix').dataset.state;
+  }
   $('overlay').classList.remove('open');
   delete $('mix').dataset.sig;
   updateUI();
@@ -881,6 +988,7 @@ function openSettings(){
   }
   $('setLayout').value = getLayoutPref();
   $('setSticky').value = getStickyPref() ? '1' : '0';
+  { const l = localStorage.getItem(LS.lang); $('setLang').value = LANGS.includes(l) ? l : 'auto'; }
   $('overlay').classList.add('open');
 }
 

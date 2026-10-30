@@ -43,6 +43,7 @@ int port(NSTextField* f)
 @property (nonatomic, strong) NSTextField* recvPort;
 @property (nonatomic, strong) NSTextField* pinField;
 @property (nonatomic, strong) NSTextField* studio;
+@property (nonatomic, strong) NSArray<NSTextField*>* names;
 @property (nonatomic, strong) NSImageView* logoView;
 @property (nonatomic, strong) NSTextField* address;
 @property (nonatomic, strong) NSTextField* status;
@@ -106,6 +107,18 @@ int port(NSTextField* f)
         [NSButton buttonWithTitle:@"Default Logo" target:self action:@selector(defaultLogo:)] ]];
     logoRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     [look addRowWithViews:@[ label(@"Logo"), logoRow ]];
+    // ⇨ THE STUDIO'S OWN NAMES FOR THE FOUR HEADPHONES (Frank 30.10.2026).
+    // Empty: TotalMix' name of the output, else "Phones N".
+    NSMutableArray<NSTextField*>* names = [NSMutableArray array];
+    for (int i = 0; i < 4; ++i) {
+        NSTextField* f = [self field:@selector(namesChanged:) width:220];
+        f.placeholderString = [NSString stringWithFormat:@"Phones %d", i + 1];
+        [names addObject:f];
+        NSGridRow* row = [look addRowWithViews:@[
+            label([NSString stringWithFormat:@"Phones %d", i + 1]), f ]];
+        if (i == 0) row.topPadding = 10.0;
+    }
+    self.names = names;
     [v setCustomSpacing:20.0 afterView:g];
     [v addArrangedSubview:look];
 
@@ -191,6 +204,17 @@ int port(NSTextField* f)
     [self store:s pin:ph::server().pin()];
 }
 
+- (void)namesChanged:(id)sender
+{
+    ph::Settings s = ph::server().settings();
+    for (int i = 0; i < 4; ++i) {
+        NSString* n = [self.names[i].stringValue stringByTrimmingCharactersInSet:
+                       NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        s.names[static_cast<size_t>(i)] = cstr(n);
+    }
+    [self store:s pin:ph::server().pin()];
+}
+
 - (void)chooseLogo:(id)sender
 {
     NSOpenPanel* p = [NSOpenPanel openPanel];
@@ -229,6 +253,8 @@ int port(NSTextField* f)
     if (!typing(self.recvPort)) self.recvPort.stringValue = @(s.recvPort).stringValue;
     if (!typing(self.pinField)) self.pinField.stringValue = str(ph::server().pin());
     if (!typing(self.studio))   self.studio.stringValue   = str(s.studio);
+    for (int i = 0; i < 4; ++i)
+        if (!typing(self.names[i])) self.names[i].stringValue = str(s.names[static_cast<size_t>(i)]);
     self.status.stringValue = str(ph::summary(st));
     const std::string addr = (s.enabled && st.listening) ? ph::pageAddress(s.webPort) : std::string();
     self.address.stringValue = addr.empty() ? @"--" : str(addr);

@@ -27,6 +27,7 @@
 #include "RmeManager.h"
 #include "RmeState.h"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -106,6 +107,11 @@ class Mixer {
     // The version the page shows under its settings.
     void setVersion(const std::string& v) { version_ = v; }
 
+    // The studio's own names for Phones 1-4 (ORC's MoreMe page, Frank
+    // 30.10.2026). "" falls back to TotalMix' name of the output, then to
+    // "Phones N". Everybody inside sees the new name at once.
+    void setNames(const std::array<std::string, 4>& n) { names_ = n; pushConfig_(); }
+
     // A WebSocket opened. `key` is clientKey() of the connection.
     int  open(const std::string& key);
     // It closed. Its headphone is free at once.
@@ -164,6 +170,7 @@ class Mixer {
 
     PinChecker                         pin_;
     std::string                        version_ = "1";
+    std::array<std::string, 4>         names_;
     std::map<int, Client>              clients_;   // by id = by arrival, as stoerme's Set
     int                                nextId_ = 1;
     std::map<std::string, FailRecord>  fails_;

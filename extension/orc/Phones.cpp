@@ -356,6 +356,7 @@ std::string Mixer::configJson_(int forId) const
             if (!o->second.name.empty()) label = o->second.name;
             colour = colourHex(o->second.colour);
         }
+        if (!names_[p - 1].empty()) label = names_[p - 1];
         if (colour.empty()) colour = kPalette[(p - 1) % 8];
         const int h = holderOf_(id);
         if (!first) mixes += ",";
