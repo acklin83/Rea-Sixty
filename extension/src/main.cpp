@@ -1536,6 +1536,13 @@ inline const char* uf1ViewModeFriendly_(int v)
 std::atomic<void*> g_pendingFocusTrack{nullptr};
 std::atomic<bool>  g_pendingFocusGuiSync{false};
 
+// Same coalescing for SetSurfaceSolo → UC1 refresh. ⛔ REAPER re-reports EVERY
+// track's solo/mute/arm/select on each rec-arm (measured 30.10.2026, GitHub #11:
+// 741 solo callbacks per arm at 738 tracks), and refresh() itself walks all
+// tracks, ~1.3 ms there. One refresh per callback held the main thread ~1 s per
+// arm. Set by SetSurfaceSolo, consumed once per tick before the UC1 poll.
+std::atomic<bool>  g_pendingUc1SoloRefresh{false};
+
 // Set while runReaperActionOnTrackN_ is doing its save → SetOnlyTrackSelected
 // → Main_OnCommand → restore dance. Each step fires SetSurfaceSelected, and
 // without this gate the coalescer would latch onto whichever track happened
@@ -26335,9 +26342,11 @@ void ReaSixtySurface::SetSurfaceSolo(MediaTrack* tr, bool solo)
     sendLed(LedClass::Solo, tr, solo);
     // UC1's Solo / Solo Clear LEDs track REAPER state. Solo Clear
     // reflects "any track soloed anywhere", so every SetSurfaceSolo
-    // callback has to refresh regardless of which track fired it.
+    // callback asks for a refresh regardless of which track fired it.
+    // Deferred to the next tick (g_pendingUc1SoloRefresh): a rec-arm makes
+    // REAPER fire this for every track in the project.
     (void)solo;
-    if (g_uc1_surface) g_uc1_surface->refresh();
+    if (g_uc1_surface) g_pendingUc1SoloRefresh.store(true);
 }
 void ReaSixtySurface::SetSurfaceMute(MediaTrack* tr, bool mute)
 {
@@ -50840,6 +50849,9 @@ void onTimerBody_()
             d->setGateGrBytes(uf8UnitSlice_(gateBytes, u));
         }
     }
+    // One refresh for a whole burst of SetSurfaceSolo callbacks.
+    if (g_pendingUc1SoloRefresh.exchange(false) && g_uc1_surface)
+        g_uc1_surface->refresh();
     if (g_uc1_surface) g_uc1_surface->poll();
 
     // Touch-to-Learn hardware feedback — after the normal surface render so it
