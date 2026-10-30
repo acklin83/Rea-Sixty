@@ -83,7 +83,8 @@ struct State {
 // The things the input path cannot know by itself.
 // ⛔ An unset callback is a STATE, not a failure, and each one has the answer
 // that makes the surface behave as if the host had never heard of it: no mode
-// menu, no fine mode, link up. ORC leaves the first two unset.
+// menu, no fine mode, link up, normal speed. ORC leaves the first unset,
+// Rea-Sixty the potSpeed (its knobScale already carries its own speed).
 struct Host {
     std::function<bool()>   modeMenuOpen;  // the MODE menu owns the keys
     std::function<double()> knobScale;     // fine mode factor, 1.0 = normal
@@ -91,6 +92,10 @@ struct Host {
     // Milliseconds on a steady clock, for PushQuiet. Unset: std::chrono's own.
     // A test sets it to walk time without waiting.
     std::function<std::int64_t()> nowMs;
+    // The pots' speed on top of knobScale, 1.0 = normal; the jog leaves it out
+    // (Frank 30.10.2026). ORC's Config::uf1PotSpeed. Last, so the positional
+    // initialiser in Rea-Sixty's main.cpp keeps its order.
+    std::function<double()> potSpeed;
 };
 
 // ── queries the painter and the LEDs share with the input path ───────────────

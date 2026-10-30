@@ -109,6 +109,22 @@ int main()
         if (w.size() == 1) EXPECT(std::fabs(w[0].second - 0.05f) < 0.001f);
     }
 
+    // ── the pot speed reaches the pots, not the jog (Frank 30.10.2026) ──────
+    {
+        in_::Host slow;
+        slow.knobScale = [] { return 0.5; };   // fine on top
+        slow.potSpeed  = [] { return 0.5; };
+        in_::State s;
+        in_::Writes w;
+        in_::encoder(s, slow, st, cfg, ::uf1::enc::kVpot1, +1, w);
+        EXPECT(w.size() == 1);
+        if (w.size() == 1) EXPECT(std::fabs(w[0].second - 0.125f) < 0.001f);   // 0.5 dB * 0.5 * 0.5
+        w.clear();
+        in_::encoder(s, slow, st, cfg, ::uf1::enc::kJog, +1, w);
+        EXPECT(w.size() == 1);
+        if (w.size() == 1) EXPECT(std::fabs(w[0].second - 0.5f) < 0.001f);     // 1 dB * fine only
+    }
+
     // ── the channel encoder gathers four counts into one detent ──────────────
     {
         in_::State s;

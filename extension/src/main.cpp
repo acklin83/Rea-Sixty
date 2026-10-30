@@ -28891,7 +28891,7 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
             if (hwPot < 8 && tmOwnsStrip_(strip)) {
                 auto& rm = reasixty::rme::manager();
                 tmSend_(reasixty::rme::uf8side::vpot(rm.snapshot(), g_rmeIn, g_uf8RmeSide,
-                        rm.config(), strip, signed6, shiftFineActive_() ? g_fineFactorUf8.load() : 1.0, nowMs_()));
+                        rm.config(), strip, signed6, reasixty_uf8KnobScale(shiftFineActive_()), nowMs_()));
                 i += frameSize;
                 continue;
             }

@@ -179,11 +179,11 @@ std::string configToJson(const Config& c)
     j += "  ],\n";
     snprintf(buf, sizeof(buf),
         "  \"jog\": { \"target\": \"%s\", \"stepDb\": %.2f },\n"
-        "  \"steps\": { \"vpotDb\": %.2f },\n"
+        "  \"steps\": { \"vpotDb\": %.2f, \"uf1Speed\": %.2f, \"uf8Speed\": %.2f },\n"
         "  \"sleep\": { \"enabled\": %s, \"minutes\": %d },\n"
         "  \"uf8\": { \"showMainOnChange\": %s },\n"
         "  \"brightness\": { \"led\": %d, \"lcd\": %d },\n",
-        clean(c.jogTarget).c_str(), c.jogStepDb, c.vpotStepDb,
+        clean(c.jogTarget).c_str(), c.jogStepDb, c.vpotStepDb, c.uf1PotSpeed, c.uf8PotSpeed,
         c.sleepEnabled ? "true" : "false", c.sleepMinutes,
         c.uf8ShowMainOnChange ? "true" : "false", c.brightLed, c.brightLcd);
     j += buf;
@@ -248,8 +248,11 @@ bool configFromJson(const std::string& json, Config& out)
         if (const char* v = jog->get_string_by_name("target")) c.jogTarget = v;
         if (const char* v = jog->get_string_by_name("stepDb", true)) c.jogStepDb = std::atof(v);
     }
-    if (const wdl_json_element* st = root->get_item_by_name("steps"); st && st->is_object())
-        if (const char* v = st->get_string_by_name("vpotDb", true)) c.vpotStepDb = std::atof(v);
+    if (const wdl_json_element* st = root->get_item_by_name("steps"); st && st->is_object()) {
+        if (const char* v = st->get_string_by_name("vpotDb", true))   c.vpotStepDb  = std::atof(v);
+        if (const char* v = st->get_string_by_name("uf1Speed", true)) c.uf1PotSpeed = std::atof(v);
+        if (const char* v = st->get_string_by_name("uf8Speed", true)) c.uf8PotSpeed = std::atof(v);
+    }
     if (const wdl_json_element* sl = root->get_item_by_name("sleep"); sl && sl->is_object()) {
         if (const char* v = sl->get_string_by_name("enabled", true))
             c.sleepEnabled = (std::strcmp(v, "true") == 0 || std::strcmp(v, "1") == 0);
@@ -295,6 +298,8 @@ bool configFromJson(const std::string& json, Config& out)
     }
     if (!(c.jogStepDb > 0.0 && c.jogStepDb <= 12.0))   c.jogStepDb  = Config{}.jogStepDb;
     if (!(c.vpotStepDb > 0.0 && c.vpotStepDb <= 12.0)) c.vpotStepDb = Config{}.vpotStepDb;
+    if (!(c.uf1PotSpeed >= Config::kPotSpeedMin && c.uf1PotSpeed <= Config::kPotSpeedMax)) c.uf1PotSpeed = Config{}.uf1PotSpeed;
+    if (!(c.uf8PotSpeed >= Config::kPotSpeedMin && c.uf8PotSpeed <= Config::kPotSpeedMax)) c.uf8PotSpeed = Config{}.uf8PotSpeed;
     if (c.sleepMinutes < 1 || c.sleepMinutes > 99) c.sleepMinutes = Config{}.sleepMinutes;
     if (c.brightLed < 0 || c.brightLed > 4) c.brightLed = Config{}.brightLed;
     if (c.brightLcd < 0 || c.brightLcd > 4) c.brightLcd = Config{}.brightLcd;

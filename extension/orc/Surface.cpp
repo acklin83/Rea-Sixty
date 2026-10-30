@@ -212,6 +212,8 @@ void Surface::start()
     host_.knobScale = [] {
         return uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift) ? kFineFactor : 1.0;
     };
+    // The pots' speed from the UF1 page; the jog keeps its own step.
+    host_.potSpeed = [] { return rme::manager().config().uf1PotSpeed; };
 
     // The six rme_* builtins, the extension's own (src/RmeBuiltins.cpp), against
     // this surface's side-car state. Without them the factory bank's rme_dim

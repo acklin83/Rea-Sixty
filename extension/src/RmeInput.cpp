@@ -24,6 +24,7 @@ std::int64_t nowMs(const Host& h)
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 double knobScale(const Host& h) { return h.knobScale ? h.knobScale() : 1.0; }
+double potScale(const Host& h) { return knobScale(h) * (h.potSpeed ? h.potSpeed() : 1.0); }
 bool online(const Host& h) { return !h.online || h.online(); }
 
 int vpotSlot(const State& s, int pot)
@@ -49,10 +50,10 @@ void append(Writes& out, const Writes& w) { out.insert(out.end(), w.begin(), w.e
 
 // Level of a channel shifted by `detents`, in dB. Inputs and playbacks write
 // their node in the current submix.
-void nudge(const State& s, const Host& h, const rme::State& st, rmeu::Row r, int ch,
-           int detents, double stepDb, Writes& out)
+void nudge(const State& s, const rme::State& st, rmeu::Row r, int ch,
+           int detents, double stepDb, double scale, Writes& out)
 {
-    nudgeLevel(s, st, r, ch, detents, stepDb, knobScale(h), out);
+    nudgeLevel(s, st, r, ch, detents, stepDb, scale, out);
 }
 
 } // namespace
@@ -192,14 +193,14 @@ bool encoder(State& s, const Host& h, const rme::State& st, const Config& cfg,
             if (steps != 0) append(out, rmes::nudge(st, r, sel, *p, steps));
             return true;
         }
-        append(out, rmes::nudge(st, r, sel, *p, delta, knobScale(h)));
+        append(out, rmes::nudge(st, r, sel, *p, delta, potScale(h)));
         return true;
     }
     if (id >= ::uf1::enc::kVpot1 && id <= ::uf1::enc::kVpot4) {
         const auto& slot = cfg.vpots[vpotSlot(s, id - ::uf1::enc::kVpot1)];
         if (slot.turn != "volume") return true;
         const rmeu::Target t = rmeu::resolveTarget(st, slot.target);
-        if (t.visible) nudge(s, h, st, t.row, t.ch, delta, cfg.vpotStepDb, out);
+        if (t.visible) nudge(s, st, t.row, t.ch, delta, cfg.vpotStepDb, potScale(h), out);
         return true;
     }
     if (id == ::uf1::enc::kChannel) {
@@ -223,7 +224,7 @@ bool encoder(State& s, const Host& h, const rme::State& st, const Config& cfg,
     }
     if (id == ::uf1::enc::kJog) {
         const rmeu::Target t = rmeu::resolveTarget(st, cfg.jogTarget);
-        if (t.visible) nudge(s, h, st, t.row, t.ch, delta, cfg.jogStepDb, out);
+        if (t.visible) nudge(s, st, t.row, t.ch, delta, cfg.jogStepDb, knobScale(h), out);
         return true;
     }
     if (id == ::uf1::enc::kVpotAboveFader) {
@@ -240,7 +241,7 @@ bool encoder(State& s, const Host& h, const rme::State& st, const Config& cfg,
         const double cur = rmeu::panValue(st, r, sel, sub, known);
         // On the FX row the pot is the width, 0 mono .. 1 stereo.
         const double lo  = rmeu::panIsWidth(r) ? 0.0 : -1.0;
-        const double nv  = std::clamp(cur + delta * 0.02 * knobScale(h), lo, 1.0);
+        const double nv  = std::clamp(cur + delta * 0.02 * potScale(h), lo, 1.0);
         if (nv != cur) out.push_back({ a, static_cast<float>(nv) });
         return true;
     }

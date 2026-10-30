@@ -89,6 +89,9 @@ class Uf8Surface {
     void resetCache_();
     std::int64_t nowMs_() const;
     double scale_() const { return fineHeld_.load() ? kFineFactor : 1.0; }
+    // A V-Pot's: the speed from the UF8 page on top. The CHANNEL encoder keeps
+    // scale_(), it has its own step (Frank 30.10.2026).
+    double potScale_(double speed) const { return speed * scale_(); }
     void send_(const reasixty::rme::uf8side::Writes& w);
 
     reasixty::rme::input::State& in_;

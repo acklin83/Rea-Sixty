@@ -560,7 +560,7 @@ void Uf8Surface::onFrame_(const uf8frames::Frame& f)
             const int mnt = dm.mountForStrip(pot);
             if (mnt >= 0) dm.nudgeRotation(mnt, delta);
         } else {
-            send_(u8s::vpot(st, in_, side_, cfg, pot, delta, scale_(), nowMs_()));
+            send_(u8s::vpot(st, in_, side_, cfg, pot, delta, potScale_(cfg.uf8PotSpeed), nowMs_()));
         }
         return;
     }

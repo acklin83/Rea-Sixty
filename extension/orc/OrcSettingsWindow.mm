@@ -215,6 +215,8 @@ NSStackView* withUnit(NSView* field, NSString* unit)
 @property (nonatomic, strong) NSTextField*   sleepMinutes;
 @property (nonatomic, strong) NSButton*      showMainBox;
 @property (nonatomic, strong) NSTextField*   knobStep;
+@property (nonatomic, strong) NSTextField*   uf1Speed;
+@property (nonatomic, strong) NSTextField*   uf8Speed;
 @property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* colourPops;
 @property (nonatomic, strong) NSMutableArray<NSTextField*>*   wearerLabels;
 @property (nonatomic, strong) NSPopUpButton*      skBank;
@@ -456,6 +458,8 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     [jog addRowWithViews:@[ label(@"Jog step"), withUnit(self.jogStep, @"dB") ]];
     self.knobStep = [self field:@selector(stepsChanged:) width:70];
     [jog addRowWithViews:@[ label(@"Pot step"), withUnit(self.knobStep, @"dB") ]];
+    self.uf1Speed = [self field:@selector(speedChanged:) width:70];
+    [jog addRowWithViews:@[ label(@"V-Pot speed"), withUnit(self.uf1Speed, @"x") ]];
     [v setCustomSpacing:20.0 afterView:grid];
     [v addArrangedSubview:jog];
 
@@ -479,8 +483,14 @@ NSStackView* withUnit(NSView* field, NSString* unit)
                                             target:self
                                             action:@selector(showMainChanged:)];
     [v addArrangedSubview:self.showMainBox];
+    NSGridView* speed = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
+    speed.columnSpacing = 10.0;
+    self.uf8Speed = [self field:@selector(speedChanged:) width:70];
+    [speed addRowWithViews:@[ label(@"V-Pot speed"), withUnit(self.uf8Speed, @"x") ]];
+    [v setCustomSpacing:12.0 afterView:self.showMainBox];
+    [v addArrangedSubview:speed];
     NSGridView* keys = [self keyTableFrom:kTransportCount to:kKeyCount heading:@"Keys"];
-    [v setCustomSpacing:20.0 afterView:self.showMainBox];
+    [v setCustomSpacing:20.0 afterView:speed];
     [v addArrangedSubview:keys];
     item.view = [self pageWithStack:v];
     return item;
@@ -784,6 +794,10 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
         self.jogStep.stringValue = [NSString stringWithFormat:@"%.2f", cfg.jogStepDb];
     if (self.window.firstResponder != self.knobStep.currentEditor)
         self.knobStep.stringValue = [NSString stringWithFormat:@"%.2f", cfg.vpotStepDb];
+    if (self.window.firstResponder != self.uf1Speed.currentEditor)
+        self.uf1Speed.stringValue = [NSString stringWithFormat:@"%.2f", cfg.uf1PotSpeed];
+    if (self.window.firstResponder != self.uf8Speed.currentEditor)
+        self.uf8Speed.stringValue = [NSString stringWithFormat:@"%.2f", cfg.uf8PotSpeed];
     self.sleepBox.state = cfg.sleepEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     if (self.window.firstResponder != self.sleepMinutes.currentEditor)
         self.sleepMinutes.stringValue = @(cfg.sleepMinutes).stringValue;
@@ -1148,6 +1162,16 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
     const double jog  = self.jogStep.doubleValue;
     const double knob = self.knobStep.doubleValue;
     [self apply:^(rme::Config& c) { c.jogStepDb = jog; c.vpotStepDb = knob; }];
+}
+
+- (void)speedChanged:(id)sender
+{
+    auto clampSpeed = [](double v) {
+        return std::clamp(v, rme::Config::kPotSpeedMin, rme::Config::kPotSpeedMax);
+    };
+    const double uf1 = clampSpeed(self.uf1Speed.doubleValue);
+    const double uf8 = clampSpeed(self.uf8Speed.doubleValue);
+    [self apply:^(rme::Config& c) { c.uf1PotSpeed = uf1; c.uf8PotSpeed = uf8; }];
 }
 
 - (void)sleepChanged:(id)sender

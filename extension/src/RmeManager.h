@@ -103,6 +103,13 @@ struct Config {
     std::string jogTarget  = "main";
     double      jogStepDb  = 0.5;
     double      vpotStepDb = 0.5;
+    // ⇨ ORC's V-POT SPEED, one per surface (Frank 30.10.2026: "pro Gerät die
+    // Geschwindigkeit"). Multiplies a pot's turn, fine on top; the UF1's jog and
+    // the UF8's CHANNEL encoder keep their own step. 0.1 .. 2.0. Rea-Sixty keeps
+    // its own in REAPER (Settings → General) and does not read these.
+    static constexpr double kPotSpeedMin = 0.1, kPotSpeedMax = 2.0;
+    double      uf1PotSpeed = 1.0;
+    double      uf8PotSpeed = 1.0;
     // TotalMix colour index -> UF1 palette index for the colour bar. The nine
     // names are in RmeUf1.h (colourName), read off TotalMix' own menu on
     // 2026-09-25: hidden, white, grey, orange, red, blue, green, yellow, pink.

@@ -268,6 +268,23 @@ int main()
         check(bad.sendPort == 7005 && bad.recvPort == 7006, "impossible ports fall back");
     }
 
+    // ── V-Pot speed per surface (Frank 30.10.2026) ──────────────────────────
+    {
+        Config c;
+        check(c.uf1PotSpeed == 1.0 && c.uf8PotSpeed == 1.0, "speed: 1.0 out of the box");
+        c.uf1PotSpeed = 0.5; c.uf8PotSpeed = 1.75;
+        Config r;
+        configFromJson(configToJson(c), r);
+        check(std::fabs(r.uf1PotSpeed - 0.5) < 1e-9 && std::fabs(r.uf8PotSpeed - 1.75) < 1e-9,
+              "speed: round trip keeps both");
+        Config bad;
+        configFromJson("{\"steps\": {\"uf1Speed\": 0, \"uf8Speed\": 9}}", bad);
+        check(bad.uf1PotSpeed == 1.0 && bad.uf8PotSpeed == 1.0, "speed: out of range falls back");
+        Config old;
+        configFromJson("{\"steps\": {\"vpotDb\": 1.0}}", old);
+        check(old.uf1PotSpeed == 1.0 && old.vpotStepDb == 1.0, "speed: a file without it keeps 1.0");
+    }
+
     // ── rme.json carries the whole side-car layout ──────────────────────────
     {
         Config c;
