@@ -228,11 +228,13 @@ const LS = {
   sticky: 'moreme.sticky',       // '1' = master pinned
   pin: 'moreme.pin'              // the studio PIN, once it was accepted
 };
-// A phone that used the page under its old name keeps its choices.
+// A phone that used the page under its old name keeps its choices. Moved, not
+// copied: a left-over old key would bring the mix back after every reset.
 for (const k of Object.keys(LS)){
   try {
     const old = localStorage.getItem('stoerme.' + k);
     if (old != null && localStorage.getItem(LS[k]) == null) localStorage.setItem(LS[k], old);
+    localStorage.removeItem('stoerme.' + k);
   } catch(_){}
 }
 
