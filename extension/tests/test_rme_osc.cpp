@@ -327,6 +327,44 @@ int main()
         check(!a.sameConnection(b), "moving a port is");
     }
 
+    // ── a stereo pair linked and unlinked (Frank 30.10.2026) ────────────────
+    // Linked: the right half leaves the surfaces' list, though it keeps the
+    // name it had while mono. A flip of a known /stereo is counted (the Manager
+    // asks /sendall on it); the first report is not.
+    {
+        namespace u = reasixty::rme::uf1;
+        State sp;
+        auto put = [&](const char* addr, float v) {
+            Message m; m.address = addr; m.args.push_back(Arg::fromFloat(v)); ingest(sp, m);
+        };
+        auto name = [&](const char* addr, const char* n) {
+            Message m; m.address = addr; m.args.push_back(Arg::fromString(n)); ingest(sp, m);
+        };
+        name("/input/30/name", "Kik");   put("/input/30/color", 1); put("/input/30/stereo", 0);
+        name("/input/31/name", "Snare"); put("/input/31/color", 1); put("/input/31/stereo", 0);
+        name("/input/33/name", "Tom");   put("/input/33/color", 1);
+        check(sp.stereoFlips == 0, "stereo: the first report is no flip");
+        auto ins = u::visibleChannels(sp, u::Row::Input);
+        check(ins.size() == 3, "stereo: mono pair shows both channels");
+
+        put("/input/30/stereo", 1);
+        check(sp.stereoFlips == 1, "stereo: linking is a flip");
+        ins = u::visibleChannels(sp, u::Row::Input);
+        check(ins.size() == 2 && ins[0] == 30 && ins[1] == 33, "stereo: the right half is gone");
+        check(u::channelOf(sp, u::Row::Input, 31) != nullptr, "stereo: its leaves stay readable");
+
+        put("/input/31/stereo", 1);   // a right half reporting stereo hides nothing
+        ins = u::visibleChannels(sp, u::Row::Input);
+        check(ins.size() == 2 && ins[1] == 33, "stereo: an odd channel never hides the next");
+
+        put("/input/30/stereo", 0);
+        check(sp.stereoFlips == 3, "stereo: unlinking is a flip");   // 31 flipped too
+        ins = u::visibleChannels(sp, u::Row::Input);
+        check(ins.size() == 3 && ins[1] == 31, "stereo: unlinked, both channels again");
+        put("/input/30/stereo", 0);
+        check(sp.stereoFlips == 3, "stereo: the same value again is no flip");
+    }
+
     // ── the UF1 side-car's view of TotalMix (RmeUf1) ────────────────────────
     {
         namespace u = reasixty::rme::uf1;

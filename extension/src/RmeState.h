@@ -174,6 +174,13 @@ struct State {
     // Use", or the ports are crossed, or TotalMix is not running.
     std::uint64_t ingested = 0;
 
+    // ⇨ A STEREO PAIR LINKED OR UNLINKED (Frank 30.10.2026). Counts flips of a
+    // channel's /stereo that it had reported before, not the first report. On a
+    // flip TotalMix copies the left half's values onto the right one and does
+    // not report them for the right index, so the Manager asks /sendall again
+    // when this moves: names and levels of both halves come back.
+    std::uint64_t stereoFlips = 0;
+
     // The channel a role names, or nullptr when the role is unassigned (-1) or
     // names a channel this remote cannot see. Those two are different answers
     // and the caller is expected to tell them apart: roleAssigned() says whether

@@ -430,7 +430,10 @@ void Manager::send(const std::string& address, float value)
         if (!cfg_.enabled) return;
         queue_.emplace_back(address, value);
         oscTrace_('>', address, value);
+        const std::uint64_t flips = state_.stereoFlips;
         ingest(state_, localEcho(address, value));
+        // Our own link or unlink: ask again after the write (queue first).
+        if (state_.stereoFlips != flips) refreshReq_.store(true);
     }
     rev_.fetch_add(1);
 }
@@ -610,8 +613,10 @@ void Manager::workerLoop()
                              static_cast<int>(buf.size()), 0);
         if (n > 0) {
             std::size_t got = 0;
+            bool flipped = false;
             {
                 std::lock_guard<std::mutex> lk(mx_);
+                const std::uint64_t flips = state_.stereoFlips;
                 got = forEachMessage(
                     std::span<const std::uint8_t>(buf.data(), static_cast<std::size_t>(n)),
                     [&](const Message& m) {
@@ -619,7 +624,10 @@ void Manager::workerLoop()
                         ingest(state_, m);
                         if (collecting) noteNode(m.address);
                     });
+                flipped = state_.stereoFlips != flips;
             }
+            // A pair linked or unlinked in TotalMix: both halves again.
+            if (flipped) refreshReq_.store(true);
             if (got > 0) {
                 rev_.fetch_add(1);
                 lastRx = clock::now();

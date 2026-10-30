@@ -33,6 +33,19 @@ static const std::map<int, Channel>& mapOf(const State& st, Row r)
     return st.outputs;
 }
 
+// ⇨ THE RIGHT HALF OF A STEREO PAIR IS NOT A STRIP OF ITS OWN (Frank
+// 30.10.2026: "nach Schaltung auf stereo sind auf surface immer noch beide
+// kanäle sichtbar"). It keeps the name it announced while mono, and TotalMix
+// never takes a name back. TotalMix pairs 1+2, 3+4 ..., so a right half is an
+// odd index whose left neighbour reports stereo. channelOf() still answers for
+// it: Phase R and the right-hand gain are read there.
+static bool rightHalf(const std::map<int, Channel>& m, Row r, int idx)
+{
+    if (r == Row::Fx || idx % 2 == 0) return false;
+    const auto left = m.find(idx - 1);
+    return left != m.end() && left->second.stereo;
+}
+
 const Channel* channelOf(const State& st, Row r, int ch)
 {
     const auto& m = mapOf(st, r);
@@ -80,8 +93,9 @@ std::string barText(const State& st, Row r, int submix)
 std::vector<int> visibleChannels(const State& st, Row r)
 {
     std::vector<int> v;
-    for (const auto& [idx, c] : mapOf(st, r))
-        if (c.seen && c.colour != 0) v.push_back(idx);   // std::map: ascending
+    const auto& m = mapOf(st, r);
+    for (const auto& [idx, c] : m)
+        if (c.seen && c.colour != 0 && !rightHalf(m, r, idx)) v.push_back(idx);   // ascending
     std::stable_sort(v.begin(), v.end(), [&](int a, int b) {
         return orderKey(st, r, a) < orderKey(st, r, b);
     });

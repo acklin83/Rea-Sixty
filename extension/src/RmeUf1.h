@@ -74,7 +74,8 @@ std::array<int, kControlRoomSlots> controlRoomOutputs(const State& st);
 // (Frank 29.10.2026).
 std::string barText(const State& st, Row r, int submix);
 
-// Visible channels of a row in that order: named on this remote and colour != 0.
+// Visible channels of a row in that order: named on this remote and colour != 0,
+// and not the right half of a stereo pair.
 std::vector<int> visibleChannels(const State& st, Row r);
 
 // Step through a list by `delta`, clamped at both ends. A `cur` not in the list

@@ -210,6 +210,7 @@ bool ingest(State& st, const Message& m)
     std::map<int, Channel>* mp = mapFor(st, section);
     if (!mp) return false;
     Channel& ch = (*mp)[idx];
+    const bool stereoKnown = ch.leaf("stereo") != nullptr;
     // Every numeric leaf, whatever else happens to it below.
     if (!m.args.empty() && m.args[0].type != Arg::Type::String)
         ch.setLeaf(leaf, m.args[0].number());
@@ -230,7 +231,12 @@ bool ingest(State& st, const Message& m)
     if (leaf == "color")  { ch.colour = static_cast<int>(num(m)); return true; }
     if (leaf == "volume") { ch.volume = num(m); return true; }
     if (leaf == "mute")   { ch.mute   = truthy(m); return true; }
-    if (leaf == "stereo") { ch.stereo = truthy(m); return true; }
+    if (leaf == "stereo") {
+        const bool on = truthy(m);
+        if (stereoKnown && on != ch.stereo) ++st.stereoFlips;
+        ch.stereo = on;
+        return true;
+    }
     // The channel EQ. Band leaves are "eq/band<N><what>", N = 1..3.
     if (leaf.rfind("eq/", 0) == 0) {
         ChannelEq& e = ch.eq;
