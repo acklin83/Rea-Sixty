@@ -103,7 +103,7 @@ int port(NSTextField* f)
     NSStackView* logoRow = [NSStackView stackViewWithViews:@[
         self.logoView,
         [NSButton buttonWithTitle:@"Choose…" target:self action:@selector(chooseLogo:)],
-        [NSButton buttonWithTitle:@"MoreMe mark" target:self action:@selector(defaultLogo:)] ]];
+        [NSButton buttonWithTitle:@"Default Logo" target:self action:@selector(defaultLogo:)] ]];
     logoRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     [look addRowWithViews:@[ label(@"Logo"), logoRow ]];
     [v setCustomSpacing:20.0 afterView:g];
