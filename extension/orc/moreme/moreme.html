@@ -207,6 +207,7 @@ body{
       <option value="fr">Français</option>
       <option value="it">Italiano</option>
       <option value="rm">Rumantsch</option>
+      <option value="tlh">tlhIngan Hol</option>
     </select>
     <div class="actions">
       <button class="sec" id="setCancel" data-t="cancel">Abbrechen</button>
@@ -236,7 +237,7 @@ const LS = {
   layout: 'moreme.layout',       // 'auto' | 'iphone' | 'ipad'
   sticky: 'moreme.sticky',       // '1' = master pinned
   pin: 'moreme.pin',             // the studio PIN, once it was accepted
-  lang: 'moreme.lang'            // 'auto' | 'de' | 'en' | 'fr' | 'it' | 'rm'
+  lang: 'moreme.lang'            // 'auto' | 'de' | 'en' | 'fr' | 'it' | 'rm' | 'tlh'
 };
 // A phone that used the page under its old name keeps its choices. Moved, not
 // copied: a left-over old key would bring the mix back after every reset.
@@ -249,8 +250,9 @@ for (const k of Object.keys(LS)){
 }
 
 // ---- Language: picked on this phone, else the phone's own, else English ----
-// (Frank 30.10.2026: German, English, French, Italian, Rumantsch Grischun.)
-const LANGS = ['de','en','fr','it','rm'];
+// (Frank 30.10.2026: German, English, French, Italian, Rumantsch Grischun, and
+// Klingon, "wichtig". No phone reports Klingon, so it is picked by hand only.)
+const LANGS = ['de','en','fr','it','rm','tlh'];
 function pickLang(){
   const want = localStorage.getItem(LS.lang);
   if (LANGS.includes(want)) return want;
@@ -384,6 +386,31 @@ const TEXT = {
     notFoundText: 'Quest mix d\'uregliers n\'è betg (pli) configurà. Tutga ⚙ per tscherner in auter.',
     forget: 'Emblidar quest apparat?',
     language: 'Lingua', langAuto: 'Automatic (lingua da l\'apparat)'
+  },
+  // tlhIngan Hol, from the dictionary in my head; not checked against anything.
+  tlh: {
+    title: 'QoQ',
+    pick: 'QoQlIj yIwIv.<br>wIvlIj qaw jan.',
+    connecting: 'ORC vISamlI\'…',
+    settings: 'SeHlaw', mix: 'QoQ', view: 'mIllogh',
+    viewAuto: 'jan wIv', viewPhone: 'iPhone (tetlh)', viewPad: 'iPad (SeHlaw)',
+    sticky: 'master yIngaQmoH', stickyOff: 'ghobe\'', stickyOn: 'HIja\'',
+    cancel: 'yImev', save: 'yIpol', reset: 'jan yIchu\'moH',
+    wrongPin: 'PIN Qagh!',
+    tooMany: (min)=>'law\' Qagh! ' + min + ' tup yIloS.',
+    taken: 'QoQvam lo\'lI\' latlh',
+    takenOver: 'QoQlIj nIHta\' latlh!',
+    noTotalMix: 'ORC tu\'lu\'. TotalMix jangbe\'.',
+    noMixes: 'QoQ tu\'lu\'be\'.',
+    hintNoOrc: 'studio De\'wI\' HotlaHbe\' nav.',
+    hintNoTotalMix: 'TotalMix: OSC yIchu\'. TotalMix yItaghqa\'.',
+    hintNoMixes: 'TotalMix Phones tu\'lu\'be\'.',
+    next: 'yIruch!', pinHint: 'studio-Daq PIN DaSuq.',
+    badge: 'lo\'lu\'', takeOver: (label)=>label + ' lo\'lu\'. yItlhap?',
+    notFound: 'QoQ tu\'lu\'be\'',
+    notFoundText: 'QoQvam tu\'lu\'be\'. ⚙ yIHot, latlh yIwIv.',
+    forget: 'jan DalIj\'a\'?',
+    language: 'Hol', langAuto: 'jan Hol'
   }
 };
 function t(k){ return TEXT[LANG][k]; }
