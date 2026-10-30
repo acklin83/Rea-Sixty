@@ -137,6 +137,12 @@ struct Config {
     // Rea-Sixty keeps its own in REAPER and does not read these.
     int  brightLed = 4;
     int  brightLcd = 4;
+    // ⇨ WHICH SURFACES ORC USES (Frank 30.10.2026: "alle 3 Teile separat ein
+    // und ausschalten"). Off: ORC closes the unit and leaves it alone, free for
+    // SSL 360 or anything else. MoreMe's switch is in moreme.json. Rea-Sixty
+    // does not read these.
+    bool uf1Enabled = true;
+    bool uf8Enabled = true;
 
     // Host and ports only. A pot or a colour changing must not drop the link.
     bool sameConnection(const Config& o) const

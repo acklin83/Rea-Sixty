@@ -498,7 +498,26 @@ void Surface::loop_()
             }
         }
 
-        if (dev_.isOpen() && dev_.needsReopen()) {
+        // ⇨ SWITCHED OFF ON THE UF1 PAGE (Frank 30.10.2026): closed, and not
+        // tried again until it is on.
+        const rme::Config use = rme::manager().config();
+        if (!use.uf1Enabled) {
+            if (dev_.isOpen()) {
+                cycleActive_.store(false);
+                dev_.close();
+                orc::logLine("ORC: UF1 switched off in the settings\n");
+                std::fflush(stdout);
+            }
+            std::lock_guard<std::mutex> lk(mu_);
+            st_.open = false;
+            st_.serial.clear();
+            st_.error.clear();
+            st_.off = true;
+        } else {
+            std::lock_guard<std::mutex> lk(mu_);
+            st_.off = false;
+        }
+        if (use.uf1Enabled && dev_.isOpen() && dev_.needsReopen()) {
             // Stale handle, or no answer to the wake (UF1Device::runInit_,
             // right after the unit was switched on): open again at once.
             orc::logLine("ORC: reopening the UF1 (%s)\n", dev_.lastError().c_str());
@@ -506,7 +525,7 @@ void Surface::loop_()
             dev_.close();
             lastOpenTry = std::chrono::steady_clock::now() - std::chrono::seconds(5);
         }
-        if (!dev_.isOpen()) {
+        if (use.uf1Enabled && !dev_.isOpen()) {
             const auto now = std::chrono::steady_clock::now();
             if (now - lastOpenTry >= std::chrono::seconds(2)) {
                 lastOpenTry = now;
@@ -598,8 +617,12 @@ void Surface::loop_()
             cycleActive_.store(false);
         }
 
-        // ⇨ AND THE UF8: open it, retry it, paint TotalMix on it.
-        if (uf8_) uf8_->tick(/*yielding*/ false);
+        // ⇨ AND THE UF8: open it, retry it, paint TotalMix on it. Or leave it
+        // alone, switched off on its page.
+        if (uf8_) {
+            if (use.uf8Enabled) uf8_->tick(/*yielding*/ false);
+            else                uf8_->off();
+        }
 
         // Hue, OBS and DynaMount: whatever a manager marked changed, to ORC's
         // own files (OrcModes).

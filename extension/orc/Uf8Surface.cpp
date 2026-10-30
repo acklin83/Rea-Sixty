@@ -168,8 +168,26 @@ void Uf8Surface::setMode_(Mode m)
 
 // ── open, retry, paint ───────────────────────────────────────────────────────
 
+void Uf8Surface::off()
+{
+    if (dev_.isOpen()) {
+        dev_.close();
+        orc::logLine("ORC: UF8 switched off in the settings\n");
+        std::fflush(stdout);
+    }
+    std::lock_guard<std::mutex> lk(mu_);
+    st_.open = false;
+    st_.serial.clear();
+    st_.error.clear();
+    st_.off = true;
+}
+
 void Uf8Surface::tick(bool yielding)
 {
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        st_.off = false;
+    }
     if (yielding) {
         if (dev_.isOpen()) {
             dev_.close();

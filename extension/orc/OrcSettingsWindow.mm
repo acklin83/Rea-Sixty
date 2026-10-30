@@ -214,6 +214,8 @@ NSStackView* withUnit(NSView* field, NSString* unit)
 @property (nonatomic, strong) NSButton*      sleepBox;
 @property (nonatomic, strong) NSTextField*   sleepMinutes;
 @property (nonatomic, strong) NSButton*      showMainBox;
+@property (nonatomic, strong) NSButton*      uf1UseBox;
+@property (nonatomic, strong) NSButton*      uf8UseBox;
 @property (nonatomic, strong) NSTextField*   knobStep;
 @property (nonatomic, strong) NSTextField*   uf1Speed;
 @property (nonatomic, strong) NSTextField*   uf8Speed;
@@ -423,6 +425,10 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     item.label = @"UF1";
 
     NSStackView* v = [[NSStackView alloc] init];
+    // ⇨ EACH PART SWITCHED ON ITS OWN PAGE (Frank 30.10.2026).
+    self.uf1UseBox = [NSButton checkboxWithTitle:@"Use the UF1"
+                                          target:self action:@selector(useChanged:)];
+    [v addArrangedSubview:self.uf1UseBox];
     // ⇨ No "turn" column: a pot turns the volume of its target, there is
     // nothing else to pick (Frank 27.09.2026). rme.json keeps its field.
     NSGridView* grid = [NSGridView gridViewWithNumberOfColumns:3 rows:0];
@@ -447,6 +453,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
         [grid addRowWithViews:@[
             label([NSString stringWithFormat:@"Pot %d", i % 4 + 1]), target, push ]];
     }
+    [v setCustomSpacing:16.0 afterView:self.uf1UseBox];
     [v addArrangedSubview:grid];
 
     NSGridView* jog = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
@@ -479,9 +486,13 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     NSTabViewItem* item = [[NSTabViewItem alloc] initWithIdentifier:@"uf8"];
     item.label = @"UF8";
     NSStackView* v = [[NSStackView alloc] init];
+    self.uf8UseBox = [NSButton checkboxWithTitle:@"Use the UF8"
+                                          target:self action:@selector(useChanged:)];
+    [v addArrangedSubview:self.uf8UseBox];
     self.showMainBox = [NSButton checkboxWithTitle:@"Show Main volume on change"
                                             target:self
                                             action:@selector(showMainChanged:)];
+    [v setCustomSpacing:16.0 afterView:self.uf8UseBox];
     [v addArrangedSubview:self.showMainBox];
     NSGridView* speed = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
     speed.columnSpacing = 10.0;
@@ -803,6 +814,8 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
         self.sleepMinutes.stringValue = @(cfg.sleepMinutes).stringValue;
     self.sleepMinutes.enabled = cfg.sleepEnabled;
     self.showMainBox.state = cfg.uf8ShowMainOnChange ? NSControlStateValueOn : NSControlStateValueOff;
+    self.uf1UseBox.state = cfg.uf1Enabled ? NSControlStateValueOn : NSControlStateValueOff;
+    self.uf8UseBox.state = cfg.uf8Enabled ? NSControlStateValueOn : NSControlStateValueOff;
 
     std::string wearers[9];
     // Who wears a TotalMix colour: mixer channels only. The effects carry a
@@ -1162,6 +1175,13 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
     const double jog  = self.jogStep.doubleValue;
     const double knob = self.knobStep.doubleValue;
     [self apply:^(rme::Config& c) { c.jogStepDb = jog; c.vpotStepDb = knob; }];
+}
+
+- (void)useChanged:(id)sender
+{
+    const bool uf1 = self.uf1UseBox.state == NSControlStateValueOn;
+    const bool uf8 = self.uf8UseBox.state == NSControlStateValueOn;
+    [self apply:^(rme::Config& c) { c.uf1Enabled = uf1; c.uf8Enabled = uf8; }];
 }
 
 - (void)speedChanged:(id)sender

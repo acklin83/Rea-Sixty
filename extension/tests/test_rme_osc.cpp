@@ -268,6 +268,19 @@ int main()
         check(bad.sendPort == 7005 && bad.recvPort == 7006, "impossible ports fall back");
     }
 
+    // ── each surface switched on its own (Frank 30.10.2026) ─────────────────
+    {
+        Config c;
+        check(c.uf1Enabled && c.uf8Enabled, "surfaces: both on out of the box");
+        c.uf8Enabled = false;
+        Config r;
+        configFromJson(configToJson(c), r);
+        check(r.uf1Enabled && !r.uf8Enabled, "surfaces: round trip keeps the switches");
+        Config old;
+        configFromJson("{\"version\": 6}", old);
+        check(old.uf1Enabled && old.uf8Enabled, "surfaces: a file without them keeps both on");
+    }
+
     // ── V-Pot speed per surface (Frank 30.10.2026) ──────────────────────────
     {
         Config c;

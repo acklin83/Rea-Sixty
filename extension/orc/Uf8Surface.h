@@ -39,6 +39,7 @@ struct Uf8Status {
     bool        open = false;
     std::string serial;   // the unit's USB serial, as the UF1 line shows its own
     std::string error;
+    bool        off = false;   // switched off on the UF8 page
 };
 
 class Uf8Surface {
@@ -54,6 +55,8 @@ class Uf8Surface {
     // shut, paint while it is open. `yielding`: REAPER holds the surfaces, the
     // UF8 is closed and left alone (the handover, OrcConfig.h).
     void tick(bool yielding);
+    // Switched off on the UF8 page: closed, and left alone until it is on again.
+    void off();
     void close();
 
     // Asleep (dark) or awake at the Brightness steps `led` / `lcd`

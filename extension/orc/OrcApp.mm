@@ -161,7 +161,8 @@ static NSImage* qrImage(NSString* text, CGFloat side)
         // ⛔ The reason is repeated verbatim. libusb cannot tell an absent UF1
         // from one another program is holding, so ORC does not name a culprit
         // it cannot prove.
-        self.uf1Line.title = st.open
+        self.uf1Line.title = st.off ? @"UF1   off"
+            : st.open
             ? [NSString stringWithFormat:@"UF1   held by ORC, %s", st.serial.c_str()]
             : [NSString stringWithFormat:@"UF1   not open: %s", st.error.c_str()];
         // The UF8, the same way. ⇨ A REAPER extension too old for the receipt
@@ -169,7 +170,9 @@ static NSImage* qrImage(NSString* text, CGFloat side)
         // tried once at its start, while ORC still held it. Say so rather than
         // leave the unit dark without a word (docs/orc-uf8-plan.md, section 5).
         const orc::Uf8Status u8 = g_surface->uf8Status();
-        if (u8.open)
+        if (u8.off)
+            self.uf8Line.title = @"UF8   off";
+        else if (u8.open)
             self.uf8Line.title = [NSString stringWithFormat:@"UF8   held by ORC, %s", u8.serial.c_str()];
         else if (orc::reaperWantsUf1() && orc::reaperMarkerVersion() == 1)
             self.uf8Line.title = @"UF8   REAPER cannot take it yet: update the REAPER extension";

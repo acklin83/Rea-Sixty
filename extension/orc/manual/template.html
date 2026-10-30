@@ -206,7 +206,7 @@ holds these lines:</p>
 <table class="data"><tbody>
 <tr><th>ORC {{version}}</th><td>The version. When ORC does not run from Applications, the folder
 it runs from follows, so a second copy is told apart.</td></tr>
-<tr><th>UF1</th><td><em>held by ORC</em> and the unit's serial number, or <em>not open</em> and the
+<tr><th>UF1</th><td><em>held by ORC</em> and the unit's serial number, <em>off</em>, or <em>not open</em> and the
 reason ORC was given. ORC tries again every two seconds, so a UF1 plugged in later or let go by
 another program is picked up by itself.</td></tr>
 <tr><th>UF8</th><td><em>held by ORC</em> and the unit's serial number, or <em>not open</em> and the reason. Tried again every two
@@ -1113,6 +1113,8 @@ key; press it again, or touch anything, to wake them.</td></tr>
 steps from dark to full. Both surfaces follow, and ORC keeps the steps.</p>
 <h3 id="set-controls">UF1</h3>
 <table class="data"><tbody>
+<tr><th>Use the UF1</th><td>On out of the box. Off: ORC lets go of the UF1 and leaves it alone, so SSL
+360° or another program can have it. The menu bar says <em>off</em>. REAPER still gets it as before.</td></tr>
 <tr><th>Pot, Target, Push</th><td>The eight pot targets, bank 1 and bank 2: a control-room role
 (Main, Main B, Phones 1 to 4, Talkback) or any channel TotalMix shows this remote. The push: Submix,
 Select (put it on the fader), Mute or Nothing.</td></tr>
@@ -1130,6 +1132,7 @@ follows it. A role TotalMix has not given to any output reads <em>not assigned</
 remote cannot see reads <em>hidden</em>.</p>
 <h3 id="set-uf8">UF8</h3>
 <table class="data"><tbody>
+<tr><th>Use the UF8</th><td>The same for the UF8.</td></tr>
 <tr><th>Show Main volume on change</th><td>On out of the box. A turn of the UF8's CHANNEL encoder
 puts its target, Main, on strip 8 for two seconds: name, level, fader. Its fader, V-Pot and CUT act on
 Main meanwhile, and keep it there while you use them.</td></tr>
@@ -1209,6 +1212,7 @@ Check that TotalMix is running and the remote is still <em>In Use</em>.</td></tr
 <h3>The UF1 line</h3>
 <table class="data"><thead><tr><th>It says</th><th>What it means, what to do</th></tr></thead><tbody>
 <tr><td>held by ORC</td><td>All good.</td></tr>
+<tr><td>off</td><td><em>Use the UF1</em> is off on the settings page <a href="#set-controls">UF1</a>.</td></tr>
 <tr><td>not open: handed over to REAPER</td><td>Rea-Sixty has the UF1 while REAPER runs
 (<a href="#reasixty">ORC and Rea-Sixty</a>).</td></tr>
 <tr><td>not open, with another reason</td><td>ORC could not open the UF1. Is it connected and
@@ -1217,6 +1221,7 @@ switched on? Is SSL 360° still running? ORC tries again every two seconds.</td>
 <h3>The UF8 line</h3>
 <table class="data"><thead><tr><th>It says</th><th>What it means, what to do</th></tr></thead><tbody>
 <tr><td>held by ORC</td><td>All good.</td></tr>
+<tr><td>off</td><td><em>Use the UF8</em> is off on the settings page <a href="#set-uf8">UF8</a>.</td></tr>
 <tr><td>not open: handed over to REAPER</td><td>Rea-Sixty has the UF8 while REAPER runs.</td></tr>
 <tr><td>REAPER cannot take it yet: update the REAPER extension</td><td>The Rea-Sixty in REAPER is
 older than this ORC and may not pick the UF8 up. Update Rea-Sixty.</td></tr>

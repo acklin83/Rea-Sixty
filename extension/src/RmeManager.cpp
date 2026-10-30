@@ -182,10 +182,12 @@ std::string configToJson(const Config& c)
         "  \"steps\": { \"vpotDb\": %.2f, \"uf1Speed\": %.2f, \"uf8Speed\": %.2f },\n"
         "  \"sleep\": { \"enabled\": %s, \"minutes\": %d },\n"
         "  \"uf8\": { \"showMainOnChange\": %s },\n"
-        "  \"brightness\": { \"led\": %d, \"lcd\": %d },\n",
+        "  \"brightness\": { \"led\": %d, \"lcd\": %d },\n"
+        "  \"surfaces\": { \"uf1\": %s, \"uf8\": %s },\n",
         clean(c.jogTarget).c_str(), c.jogStepDb, c.vpotStepDb, c.uf1PotSpeed, c.uf8PotSpeed,
         c.sleepEnabled ? "true" : "false", c.sleepMinutes,
-        c.uf8ShowMainOnChange ? "true" : "false", c.brightLed, c.brightLcd);
+        c.uf8ShowMainOnChange ? "true" : "false", c.brightLed, c.brightLcd,
+        c.uf1Enabled ? "true" : "false", c.uf8Enabled ? "true" : "false");
     j += buf;
     j += "  \"colours\": [";
     for (int i = 0; i < 9; ++i) {
@@ -264,6 +266,12 @@ bool configFromJson(const std::string& json, Config& out)
     if (const wdl_json_element* br = root->get_item_by_name("brightness"); br && br->is_object()) {
         if (const char* v = br->get_string_by_name("led", true)) c.brightLed = std::atoi(v);
         if (const char* v = br->get_string_by_name("lcd", true)) c.brightLcd = std::atoi(v);
+    }
+    if (const wdl_json_element* sf = root->get_item_by_name("surfaces"); sf && sf->is_object()) {
+        if (const char* v = sf->get_string_by_name("uf1", true))
+            c.uf1Enabled = !(std::strcmp(v, "false") == 0 || std::strcmp(v, "0") == 0);
+        if (const char* v = sf->get_string_by_name("uf8", true))
+            c.uf8Enabled = !(std::strcmp(v, "false") == 0 || std::strcmp(v, "0") == 0);
     }
     if (const wdl_json_element* arr = root->get_item_by_name("colours"); arr && arr->is_array())
         for (int i = 0; i < 9; ++i)

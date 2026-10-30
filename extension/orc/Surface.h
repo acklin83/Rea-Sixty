@@ -43,6 +43,7 @@ struct Status {
     // inventing a third state it cannot prove.
     std::string error;
     long        frames = 0;
+    bool        off    = false;   // switched off on the UF1 page
 };
 
 class Surface {
