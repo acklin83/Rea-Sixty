@@ -424,7 +424,8 @@ void Server::loop()
         if (r.path == "/ws" && ws::isUpgrade(r)) {
             queue(c, ws::upgradeResponse(r));
             c.ws    = true;
-            c.mixId = mixer.open(clientKey(c.peer, r.header("x-real-ip")));
+            c.mixId = mixer.open(clientKey(c.peer, r.header("x-real-ip"),
+                                           r.header("x-forwarded-for")));
             fdOfMix[c.mixId] = c.fd;
             return;
         }

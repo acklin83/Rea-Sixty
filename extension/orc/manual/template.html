@@ -1039,10 +1039,26 @@ TotalMix' own solo in that mix.</p>
 <p>Every phone has to enter the PIN before it sees anything. Five wrong PINs within ten minutes lock
 that address out for ten minutes. A new PIN sends every phone back to the PIN entry. The QR code has
 the address only, never the PIN.</p>
-<p>To reach MoreMe from outside the studio network, put a reverse proxy with HTTPS in front of it
-(on a NAS, for example) and forward the page and <code>/ws</code> to the Mac. If the proxy passes the
-client's address in <code>X-Real-IP</code>, the lock-out counts that address; MoreMe accepts the
-header only from a proxy inside a private network.</p>
+<p>Inside the studio network nothing needs setting up: the musicians scan the QR code in the menu, or
+type the address next to it.</p>
+<h3>Your own address from outside</h3>
+<p>For musicians who join from elsewhere, or a phone on mobile data, MoreMe can sit behind an address
+of your own, such as <code>phones.example.com</code>:</p>
+<ol class="steps">
+  <li>Give the Mac a fixed address in your router (a DHCP reservation), so the forwarding below
+      always finds it. The Mac must stay awake while the musicians mix.</li>
+  <li>Point the name at your studio's public address in your domain's DNS.</li>
+  <li>Run a reverse proxy with HTTPS on a device the internet can reach: a NAS, a router with a
+      proxy, or a server. Forward the name to the Mac on MoreMe's port (8088 out of the box), with
+      WebSocket support switched on for <code>/ws</code>. HTTPS is not optional here: without it the
+      PIN crosses the internet as plain text.</li>
+  <li>Without opening a port in the router, a tunnel service does the same: a program on the Mac
+      keeps an encrypted connection out to the service, which serves your name.</li>
+</ol>
+<p>The lock-out after five wrong PINs counts per address. Behind a proxy every phone arrives from
+the proxy, so MoreMe reads the phone's own address from <code>X-Real-IP</code>, or from the last
+entry of <code>X-Forwarded-For</code> when that is all the proxy sends. It believes these headers
+only from a proxy inside a private network; from anywhere else they could be forged.</p>
 </section>
 
 <section id="softkeys">

@@ -73,8 +73,14 @@ FailRecord afterFail(const FailRecord* rec, long long nowMs);
 // which passes the real client in X-Real-IP; the header counts only from a
 // peer inside a private network, from anywhere else it could be forged to
 // dodge the limiter.
+// ⇨ AND X-FORWARDED-FOR (Frank 30.10.2026): many proxies and tunnels send only
+// that one, and without it every phone looked like the proxy, so one guesser
+// locked every musician out. Same rule: only from a private peer. Its LAST
+// entry is taken, the address the proxy itself saw; anything to the left the
+// client could have written.
 bool        isPrivate(const std::string& ip);
-std::string clientKey(const std::string& peer, const std::string& xRealIp);
+std::string clientKey(const std::string& peer, const std::string& xRealIp,
+                      const std::string& xForwardedFor = {});
 
 // ── TotalMix colour index to the page's swatch ───────────────────────────────
 // stoerme's table (bridge.js TMFX_COLORS, marked "to calibrate" there): 1 is

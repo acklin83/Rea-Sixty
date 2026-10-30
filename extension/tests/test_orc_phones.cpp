@@ -116,6 +116,12 @@ int main()
         EXPECT(clientKey("::ffff:192.168.177.3", "85.1.2.3") == "85.1.2.3");   // NAS proxy
         EXPECT(clientKey("85.9.9.9", "1.1.1.1") == "85.9.9.9");               // forged from outside
         EXPECT(clientKey("192.168.177.50", "") == "192.168.177.50");          // direct LAN client
+        // X-Forwarded-For when there is no X-Real-IP: its last entry, the one
+        // the proxy wrote; only from a private peer (Frank 30.10.2026).
+        EXPECT(clientKey("127.0.0.1", "", "6.6.6.6, 7.7.7.7, 85.1.2.3") == "85.1.2.3");     // tunnel on the Mac
+        EXPECT(clientKey("192.168.177.3", "", "85.1.2.3") == "85.1.2.3");
+        EXPECT(clientKey("85.9.9.9", "", "1.1.1.1") == "85.9.9.9");                 // forged from outside
+        EXPECT(clientKey("192.168.177.3", "85.1.2.3", "9.9.9.9") == "85.1.2.3");   // X-Real-IP wins
         EXPECT(isPrivate("100.109.232.65"));                                  // tailnet
         EXPECT(!isPrivate("172.32.0.1"));
         EXPECT(isPrivate("172.16.0.1") && isPrivate("172.31.255.1"));

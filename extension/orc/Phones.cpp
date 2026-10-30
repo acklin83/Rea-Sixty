@@ -73,16 +73,25 @@ bool isPrivate(const std::string& ip)
     return second("172.", 16, 31) || second("100.", 64, 127);
 }
 
-std::string clientKey(const std::string& peer, const std::string& xRealIp)
+std::string clientKey(const std::string& peer, const std::string& xRealIp,
+                      const std::string& xForwardedFor)
 {
+    auto trim = [](std::string t) {
+        while (!t.empty() && (t.back() == ' ' || t.back() == '\t')) t.pop_back();
+        std::size_t b = 0;
+        while (b < t.size() && (t[b] == ' ' || t[b] == '\t')) ++b;
+        return t.substr(b);
+    };
     std::string p = peer;
     if (p.rfind("::ffff:", 0) == 0) p = p.substr(7);
-    std::string real = xRealIp;
-    while (!real.empty() && (real.back() == ' ' || real.back() == '\t')) real.pop_back();
-    std::size_t b = 0;
-    while (b < real.size() && (real[b] == ' ' || real[b] == '\t')) ++b;
-    real = real.substr(b);
-    return !real.empty() && isPrivate(p) ? real : p;
+    if (!isPrivate(p)) return p;
+    std::string real = trim(xRealIp);
+    if (real.empty()) {
+        const std::string xff = xForwardedFor;
+        const auto comma = xff.rfind(',');
+        real = trim(comma == std::string::npos ? xff : xff.substr(comma + 1));
+    }
+    return real.empty() ? p : real;
 }
 
 // ── colours ──────────────────────────────────────────────────────────────────
