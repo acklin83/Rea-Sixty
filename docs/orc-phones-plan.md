@@ -23,8 +23,9 @@ und lässt sich nur bewusst übernehmen (die „Tölpel-Sperre“).
   zweiten Remote, Status.
 - Im Menü eine Zeile **Phones** mit dem Zustand (aus, TotalMix antwortet nicht, Anzahl
   verbundener Handys) und der Adresse für die Musiker, dazu ein QR-Code zum Abscannen.
-- Sichtbare Kanäle kuratiert man in TotalMix, wie bei stoerme: Options, Channel Layout, „Hide in
-  OSC Remote N“ für die Remote des Mixers. Die Flächen (UF1, UF8) sehen weiter ihre eigene Auswahl.
+- Sichtbare Kanäle kuratiert man in TotalMix, wie bei stoerme: über die globalen Layouts (Frank
+  30.10.; stoermes README nennt „Hide in OSC Remote N“, gemeint war das nicht). MoreMe zeigt, was
+  TotalMix in der /sendall-Runde schickt, dieselbe Regel wie stoermes Bridge.
 
 ## 3. Warum eine zweite TotalMix-Verbindung
 
