@@ -125,6 +125,15 @@ class Mixer {
     void sync(const reasixty::rme::State& st, const reasixty::rme::Manager::Visible& vis,
               bool tmSeen);
 
+    // ⇨ THE METERS (Frank 30.10.2026): the peak levels TotalMix sends when
+    // "Send Peak Level" is on for this remote, to every phone on a headphone
+    // that has its meters on. Per source its own signal (TotalMix has no level
+    // per mix), and the headphone output as the master; L and R apart on a
+    // stereo channel. Rounded to half a dB, below -60 dB as off, and only what
+    // changed since that phone was last told. Called ten times a second, after
+    // sync(): it reads the state sync() took in.
+    void meters();
+
     // What to send, and to whom.
     std::vector<std::pair<int, std::string>> takeOut();
     std::vector<Osc>                         takeOsc();
@@ -146,6 +155,8 @@ class Mixer {
         bool        authed = false;
         std::string mix;        // "phone<N>", "" = none
         std::string cfgJson;    // the last config this client was sent
+        bool        meters = true;               // switched off on the phone
+        std::map<std::string, int> lvSent;       // half-dB steps last sent, by "m"/"in:3"
     };
     // ⇨ MUTE THAT TOTALMIX DOES NOT HAVE. Global OSC has no mute per routing,
     // so the fader rides to -inf and the level the phones SHOW stays the one it

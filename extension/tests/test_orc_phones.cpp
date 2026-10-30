@@ -220,6 +220,61 @@ int main()
         EXPECT(mx.held() == 0);
     }
 
+    // ── the meters (Frank 30.10.2026) ────────────────────────────────────────
+    // Per source its own peak, the headphone output as "m", L and R apart on a
+    // stereo channel; half-dB steps, -60 dB and below as off; only changes.
+    {
+        Mixer mx;
+        rme::State st = rig();
+        feed(st, "/output/8/stereo", 1);
+        feed(st, "/input/2/stereo", 1);
+        feed(st, "/level/out/8", -12.3f);
+        feed(st, "/level/out/9", -14.0f);
+        feed(st, "/level/in/1", -20.2f);
+        feed(st, "/level/in/2", -90.0f);   // below the floor
+        feed(st, "/level/in/3", -6.0f);    // the right half of input 2
+        mx.sync(st, vis(1, { 1, 2 }, { 0 }), true);
+        const int a = mx.open("a"), b = mx.open("b");
+        mx.message(a, R"({"t":"hello"})", 0);
+        mx.message(b, R"({"t":"hello"})", 0);
+        mx.message(a, R"({"t":"select","mix":"phone1"})", 0);
+        mx.takeOut();
+        mx.meters();
+        auto out = mx.takeOut();
+        const std::string lv = to(out, a);
+        EXPECT(has(lv, R"("t":"levels","mix":"phone1")"));
+        EXPECT(has(lv, R"("m":[-12.5,-14])"));          // stereo output, L and R
+        EXPECT(has(lv, R"("in:1":[-20])"));             // mono, rounded to half a dB
+        EXPECT(has(lv, R"("in:2":[-60,-6])"));          // stereo source, L off
+        EXPECT(has(lv, R"("pb:0":[-60])"));             // nothing reported: off
+        EXPECT(to(out, b).empty());                     // no headphone, no meters
+
+        mx.meters();                                    // nothing changed
+        out = mx.takeOut();
+        EXPECT(to(out, a).empty());
+
+        feed(st, "/level/in/1", -20.1f);                // same half-dB step
+        feed(st, "/level/out/9", -3.0f);
+        mx.sync(st, vis(1, { 1, 2 }, { 0 }), true);
+        mx.takeOut();
+        mx.meters();
+        out = mx.takeOut();
+        EXPECT(has(to(out, a), R"("lv":{"m":[-12.5,-3]})"));   // only the change
+
+        mx.message(a, R"({"t":"meters","on":false})", 0);
+        feed(st, "/level/in/1", -1.0f);
+        mx.sync(st, vis(1, { 1, 2 }, { 0 }), true);
+        mx.takeOut();
+        mx.meters();
+        out = mx.takeOut();
+        EXPECT(to(out, a).empty());                     // switched off on the phone
+
+        mx.message(a, R"({"t":"meters","on":true})", 0);
+        mx.meters();
+        out = mx.takeOut();
+        EXPECT(has(to(out, a), R"("in:1":[-1])") && has(to(out, a), R"("m":)"));   // all once
+    }
+
     // ── the studio's own names (Frank 30.10.2026) ────────────────────────────
     // Own name first, then TotalMix' name, then "Phones N"; pushed at once.
     {

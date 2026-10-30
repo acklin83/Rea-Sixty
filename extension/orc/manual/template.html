@@ -1015,7 +1015,8 @@ stay on the phones during a recording.</p>
 <ol class="steps">
   <li>In TotalMix, pick a second free remote in the OSC settings, tick <em>In Use</em>, IP
       <code>{{host}}</code>, <em>Port incoming</em> <code>7003</code>, <em>Port outgoing</em>
-      <code>7004</code>. These are MoreMe's numbers out of the box. TotalMix opens a new remote's
+      <code>7004</code>. These are MoreMe's numbers out of the box. For the level meters on the
+      phones, switch <em>Send Peak Level</em> on for this remote too. TotalMix opens a new remote's
       port when it starts, so restart TotalMix after setting it up.</li>
   <li>In ORC, settings window, page <a href="#set-moreme">MoreMe</a>, tick
       <em>Headphone mixes in the browser</em>. ORC makes a four-digit PIN.</li>
@@ -1032,6 +1033,12 @@ away on the phones a few seconds later. All headphone mixes show the same channe
 <p>A headphone mix in use on one phone is marked <em>taken</em> on the others. Tapping it asks
 whether to take it over; the phone that had it goes back to the list. A phone that drops off the
 network frees its mix within a minute.</p>
+<h3>Level meters</h3>
+<p>Each source shows its level at its fader, and the master shows the headphone output, the
+level that reaches the headphones. A stereo channel has two bars. The source meters show the source's own
+signal, wherever its fader stands in this mix: TotalMix reports no level per mix. The meters
+need <em>Send Peak Level</em> on MoreMe's remote; without it the bars stay empty. Each phone can
+switch them off in the page's settings (⚙).</p>
 <h3>Mute and solo</h3>
 <p>TotalMix has no mute for one source in one mix, so MoreMe's mute turns that source down to
 off and brings it back to the level it had. Moving the same fader in TotalMix ends the mute. Solo is

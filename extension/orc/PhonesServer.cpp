@@ -355,6 +355,7 @@ void Server::loop()
     std::string   tmHost;
     auto          lastHost   = clock::now() - std::chrono::hours(1);
     auto          lastSync   = clock::now() - std::chrono::hours(1);
+    unsigned      meterTick  = 0;
     auto          lastPing   = clock::now();
     std::map<int, Conn> conns;          // by fd
     std::map<int, int>  fdOfMix;        // mixer id -> fd
@@ -569,6 +570,9 @@ void Server::loop()
             const rme::State st = link_.snapshot();
             tmSeen = st.ingested > 0;
             mixer.sync(st, link_.visible(), tmSeen);
+            // The meters ten times a second: TotalMix sends ~24 a second, and
+            // the phone draws the fall in between.
+            if (++meterTick % 2 == 0) mixer.meters();
         }
         for (auto& [id, json] : mixer.takeOut()) {
             const auto f = fdOfMix.find(id);

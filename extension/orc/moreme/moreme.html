@@ -65,6 +65,24 @@ body{
 .card.muted .ctrl{position:absolute;right:14px;top:50%;transform:translateY(-50%);margin-top:0}
 .card.muted .name{color:var(--fg2)}
 
+/* METERS (Frank 30.10.2026): the level TotalMix reports, under the fader in the
+   list, beside it on the desk. A gradient under a cover that shrinks, so the
+   colours stay where the dB are. -60 .. 0 dB, linear in dB. */
+.meter{display:flex;flex-direction:column;gap:2px;margin:0 2px 6px;pointer-events:none}
+.meter .mb{position:relative;height:4px;border-radius:2px;overflow:hidden;
+  background:linear-gradient(90deg,var(--green) 0 90%,var(--yellow) 90% 99%,var(--red2) 99%)}
+.meter .cv{position:absolute;top:0;right:0;bottom:0;width:100%;background:var(--bg3)}
+.meter .pk{position:absolute;top:0;bottom:0;width:2px;left:0;background:var(--fg);opacity:0}
+.meter .pk.hot{background:var(--yellow)}
+.meter .pk.clip{background:#ff3030}
+.meter.v{display:none}
+#mix.wide .meter.h{display:none}
+#mix.wide .meter.v{display:flex;flex-direction:row;position:absolute;top:0;bottom:0;left:calc(50% + 10px);margin:0;gap:2px}
+#mix.wide .meter.v .mb{width:4px;height:auto;background:linear-gradient(0deg,var(--green) 0 90%,var(--yellow) 90% 99%,var(--red2) 99%)}
+#mix.wide .meter.v .cv{left:0;width:auto;height:100%;top:0;bottom:auto}
+#mix.wide .meter.v .pk{left:0;right:0;width:auto;height:2px;top:auto;bottom:0}
+#mix.meters-off .meter{display:none !important}
+
 /* CONTROLS ROW (pan, mute, solo) */
 .ctrl{display:flex;align-items:center;gap:8px;margin-top:2px}
 .pan{flex:1;height:24px;position:relative;background:var(--bg3);border-radius:12px;touch-action:manipulation;cursor:pointer}
@@ -199,6 +217,11 @@ body{
       <option value="0" data-t="stickyOff">Aus (mitscrollen)</option>
       <option value="1" data-t="stickyOn">An (oben/links angepinnt)</option>
     </select>
+    <label data-t="meters">Pegelanzeige</label>
+    <select id="setMeters" style="width:100%;background:var(--bg3);border:1px solid #2a2a2a;color:var(--fg);padding:12px;border-radius:10px;font:inherit;font-size:16px">
+      <option value="1" data-t="metersOn">An</option>
+      <option value="0" data-t="metersOff">Aus</option>
+    </select>
     <label data-t="language">Sprache</label>
     <select id="setLang" style="width:100%;background:var(--bg3);border:1px solid #2a2a2a;color:var(--fg);padding:12px;border-radius:10px;font:inherit;font-size:16px">
       <option value="auto" data-t="langAuto">Automatisch (Sprache des Geräts)</option>
@@ -237,7 +260,8 @@ const LS = {
   layout: 'moreme.layout',       // 'auto' | 'iphone' | 'ipad'
   sticky: 'moreme.sticky',       // '1' = master pinned
   pin: 'moreme.pin',             // the studio PIN, once it was accepted
-  lang: 'moreme.lang'            // 'auto' | 'de' | 'en' | 'fr' | 'it' | 'rm' | 'tlh'
+  lang: 'moreme.lang',           // 'auto' | 'de' | 'en' | 'fr' | 'it' | 'rm' | 'tlh'
+  meters: 'moreme.meters'        // '0' = meters off on this phone
 };
 // A phone that used the page under its old name keeps its choices. Moved, not
 // copied: a left-over old key would bring the mix back after every reset.
@@ -272,6 +296,7 @@ const TEXT = {
     settings: 'Einstellungen', mix: 'Kopfhörer-Mix', view: 'Ansicht',
     viewAuto: 'Automatisch (je nach Gerät)', viewPhone: 'iPhone (Liste)', viewPad: 'iPad (Mischpult)',
     sticky: 'Master fixieren', stickyOff: 'Aus (mitscrollen)', stickyOn: 'An (oben/links angepinnt)',
+    meters: 'Pegelanzeige', metersOn: 'An', metersOff: 'Aus',
     cancel: 'Abbrechen', save: 'Speichern', reset: 'Gerät zurücksetzen',
     wrongPin: 'Falscher PIN',
     tooMany: (min)=>'Zu viele Versuche. Bitte in ' + min + ' Min. nochmal.',
@@ -296,6 +321,7 @@ const TEXT = {
     settings: 'Settings', mix: 'Headphone mix', view: 'View',
     viewAuto: 'Automatic (by device)', viewPhone: 'iPhone (list)', viewPad: 'iPad (mixing desk)',
     sticky: 'Pin the master', stickyOff: 'Off (scrolls along)', stickyOn: 'On (pinned top/left)',
+    meters: 'Meters', metersOn: 'On', metersOff: 'Off',
     cancel: 'Cancel', save: 'Save', reset: 'Reset this device',
     wrongPin: 'Wrong PIN',
     tooMany: (min)=>'Too many tries. Try again in ' + min + ' min.',
@@ -320,6 +346,7 @@ const TEXT = {
     settings: 'Réglages', mix: 'Mix casque', view: 'Affichage',
     viewAuto: 'Automatique (selon l\'appareil)', viewPhone: 'iPhone (liste)', viewPad: 'iPad (table de mixage)',
     sticky: 'Fixer le master', stickyOff: 'Non (défile avec la page)', stickyOn: 'Oui (épinglé en haut/à gauche)',
+    meters: 'Vumètres', metersOn: 'Oui', metersOff: 'Non',
     cancel: 'Annuler', save: 'Enregistrer', reset: 'Réinitialiser cet appareil',
     wrongPin: 'PIN incorrect',
     tooMany: (min)=>'Trop d\'essais. Réessaie dans ' + min + ' min.',
@@ -344,6 +371,7 @@ const TEXT = {
     settings: 'Impostazioni', mix: 'Mix cuffie', view: 'Vista',
     viewAuto: 'Automatica (in base al dispositivo)', viewPhone: 'iPhone (elenco)', viewPad: 'iPad (mixer)',
     sticky: 'Fissa il master', stickyOff: 'No (scorre con la pagina)', stickyOn: 'Sì (fisso in alto/a sinistra)',
+    meters: 'Indicatori di livello', metersOn: 'Sì', metersOff: 'No',
     cancel: 'Annulla', save: 'Salva', reset: 'Reimposta questo dispositivo',
     wrongPin: 'PIN errato',
     tooMany: (min)=>'Troppi tentativi. Riprova tra ' + min + ' min.',
@@ -370,6 +398,7 @@ const TEXT = {
     settings: 'Preferenzas', mix: 'Mix d\'uregliers', view: 'Vista',
     viewAuto: 'Automatic (tenor l\'apparat)', viewPhone: 'iPhone (glista)', viewPad: 'iPad (pult da maschadar)',
     sticky: 'Fixar il master', stickyOff: 'Na (scrolla cun la pagina)', stickyOn: 'Gea (fixà sura/a sanestra)',
+    meters: 'Indicatur dal livel', metersOn: 'Gea', metersOff: 'Na',
     cancel: 'Annullar', save: 'Memorisar', reset: 'Definir da nov quest apparat',
     wrongPin: 'PIN fauss',
     tooMany: (min)=>'Memia bleras tentativas. Emprova danovamain en ' + min + ' min.',
@@ -395,6 +424,7 @@ const TEXT = {
     settings: 'SeHlaw', mix: 'QoQ', view: 'mIllogh',
     viewAuto: 'jan wIv', viewPhone: 'iPhone (tetlh)', viewPad: 'iPad (SeHlaw)',
     sticky: 'master yIngaQmoH', stickyOff: 'ghobe\'', stickyOn: 'HIja\'',
+    meters: 'QoQ juvwI\'', metersOn: 'HIja\'', metersOff: 'ghobe\'',
     cancel: 'yImev', save: 'yIpol', reset: 'jan yIchu\'moH',
     wrongPin: 'PIN Qagh!',
     tooMany: (min)=>'law\' Qagh! ' + min + ' tup yIloS.',
@@ -471,6 +501,75 @@ function srcMax(sendId){
   return s ? s.max : 6;
 }
 
+// ---- METERS ----
+// What ORC last said per meter ("m" = the mix's output, "in:3" a source), and
+// what is drawn: the bar falls 24 dB a second, the peak line holds 1.5 s.
+const meters = {};
+const METER_FLOOR = -60;
+function metersOn(){ return localStorage.getItem(LS.meters) !== '0'; }
+function meterOf(k){ return meters[k] || (meters[k] = {target:[], shown:[], peak:[], peakT:[]}); }
+function dropMeters(){ for (const k in meters) meters[k].target = meters[k].target.map(()=>METER_FLOOR); }
+function applyMeters(){
+  const on = metersOn();
+  $('mix').classList.toggle('meters-off', !on);
+  if (!on) dropMeters();
+  wsSend({t:'meters', on});
+}
+function meterKey(sendId){
+  if (sendId === 0) return 'm';
+  const s = state.sources[-sendId-1];
+  return s ? s.id : null;
+}
+// One bar per channel side, built when the count changes.
+function drawMeter(el, mt, wide){
+  const n = mt.shown.length;
+  if (el.childElementCount !== n){
+    el.innerHTML = '';
+    for (let i=0;i<n;i++){
+      const b = document.createElement('div'); b.className = 'mb';
+      b.innerHTML = '<div class="cv"></div><div class="pk"></div>';
+      el.appendChild(b);
+    }
+  }
+  for (let i=0;i<n;i++){
+    const b = el.children[i];
+    const pos = Math.max(0, Math.min(1, (mt.shown[i]-METER_FLOOR)/-METER_FLOOR));
+    const pk  = Math.max(0, Math.min(1, (mt.peak[i]-METER_FLOOR)/-METER_FLOOR));
+    const cv = b.firstChild, p = b.lastChild;
+    if (wide){ cv.style.height = ((1-pos)*100)+'%'; cv.style.width = ''; p.style.bottom = 'calc('+(pk*100)+'% - 2px)'; p.style.left = ''; }
+    else     { cv.style.width  = ((1-pos)*100)+'%'; cv.style.height = ''; p.style.left = 'calc('+(pk*100)+'% - 2px)'; p.style.bottom = ''; }
+    p.style.opacity = mt.peak[i] > METER_FLOOR ? '1' : '0';
+    p.classList.toggle('hot',  mt.peak[i] > -6 && mt.peak[i] <= -0.5);
+    p.classList.toggle('clip', mt.peak[i] > -0.5);
+  }
+}
+let meterLast = 0;
+function meterFrame(t){
+  const dt = meterLast ? Math.min(0.2, (t-meterLast)/1000) : 0;
+  meterLast = t;
+  const root = $('mix');
+  if (metersOn() && !root.classList.contains('hidden')){
+    const wide = root.classList.contains('wide');
+    for (const card of root.querySelectorAll('.card')){
+      const k = meterKey(Number(card.dataset.send));
+      const mt = k && meters[k];
+      if (!mt) continue;
+      const n = mt.target.length;
+      for (let i=0;i<n;i++){
+        const tg = mt.target[i];
+        const sh = mt.shown[i] == null ? METER_FLOOR : mt.shown[i];
+        mt.shown[i] = tg >= sh ? tg : Math.max(tg, sh - 24*dt);
+        if (mt.peak[i] == null || tg >= mt.peak[i]){ mt.peak[i] = tg; mt.peakT[i] = t; }
+        else if (t - mt.peakT[i] > 1500) mt.peak[i] = Math.max(tg, mt.peak[i] - 24*dt);
+      }
+      mt.shown.length = n; mt.peak.length = n;
+      drawMeter(card.querySelector(wide ? '.meter.v' : '.meter.h'), mt, wide);
+    }
+  }
+  requestAnimationFrame(meterFrame);
+}
+requestAnimationFrame(meterFrame);
+
 // ---- WebSocket data layer ----
 let ws = null;
 function wsConnect(){
@@ -479,7 +578,7 @@ function wsConnect(){
   try { ws = new WebSocket(url); } catch(e){ setTimeout(wsConnect, 1500); return; }
   ws.onopen = ()=>{ state.lastReplyT = Date.now(); wsSend({t:'hello', pin: localStorage.getItem(LS.pin) || ''}); };
   ws.onmessage = (e)=>{ state.lastReplyT = Date.now(); try{ handleMsg(JSON.parse(e.data)); }catch(_){} };
-  ws.onclose = ()=>{ ws = null; setTimeout(wsConnect, 1200); };
+  ws.onclose = ()=>{ ws = null; dropMeters(); setTimeout(wsConnect, 1200); };
   ws.onerror = ()=>{ try{ ws.close(); }catch(_){} };
 }
 function wsSend(o){ if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
@@ -501,6 +600,7 @@ function handleMsg(m){
       // The per-mix source list arrives with the snapshot after we select.
       state.mixes = m.mixes || [];
       state.tmSeen = !!m.tmSeen;
+      if (!metersOn()) wsSend({t:'meters', on:false});   // ORC starts every phone with them on
       { const want = localStorage.getItem(LS.identity); if (want && state.mixes.some(x=>x.id===want)) wsSend({t:'select', mix:want}); }
       updateUI();
       break;
@@ -530,6 +630,15 @@ function handleMsg(m){
       if (m.solo !== undefined) r.solo = m.solo?1:0;
       break;
     }
+    case 'levels':
+      if (m.mix !== state.mixId || !m.lv) break;
+      for (const k in m.lv){
+        const v = m.lv[k];
+        if (!Array.isArray(v)) continue;
+        const mt = meterOf(k);
+        mt.target = v.map(Number);
+      }
+      break;
     case 'master':
       if (m.mix !== state.mixId) break;
       if (m.db !== undefined && !(state.dragSend===0 && state.dragKind==='vol')) state.master.vol = dbToAmp(m.db);
@@ -717,8 +826,10 @@ function buildCard(opts){
     '<div class="fader">'+
       '<div class="fill"></div>'+
       '<div class="nick" data-nick="0db"></div>'+
+      '<div class="meter v"></div>'+
       '<div class="thumb"></div>'+
     '</div>'+
+    '<div class="meter h"></div>'+
     (isMaster ? '' :
       '<div class="ctrl">'+
         '<div class="pan"><span class="plabel l">L</span><span class="center"></span><div class="pthumb"></div><span class="plabel r">R</span></div>'+
@@ -984,6 +1095,8 @@ $('setSave').addEventListener('click', ()=>{
   }
   localStorage.setItem(LS.layout, $('setLayout').value);
   localStorage.setItem(LS.sticky, $('setSticky').value);
+  localStorage.setItem(LS.meters, $('setMeters').value);
+  applyMeters();
   localStorage.setItem(LS.lang, $('setLang').value);
   const lang = pickLang();
   if (lang !== LANG){
@@ -1015,6 +1128,7 @@ function openSettings(){
   }
   $('setLayout').value = getLayoutPref();
   $('setSticky').value = getStickyPref() ? '1' : '0';
+  $('setMeters').value = metersOn() ? '1' : '0';
   { const l = localStorage.getItem(LS.lang); $('setLang').value = LANGS.includes(l) ? l : 'auto'; }
   $('overlay').classList.add('open');
 }
@@ -1029,6 +1143,7 @@ function updateUI(){
 
 function init(){
   applyLanguage();
+  $('mix').classList.toggle('meters-off', !metersOn());
   $('verLabel').textContent = 'MoreMe · ORC ' + (VERSION || '') + (STUDIO ? ' · ' + STUDIO : '');
   wsConnect();
   updateUI();

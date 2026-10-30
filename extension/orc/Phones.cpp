@@ -200,6 +200,7 @@ struct Msg {
     std::string t, pin, mix, src, ctrl;
     bool        pinIsString = false;
     bool        force       = false;
+    bool        on          = true;   // "meters
     double      val         = NAN;
 };
 
@@ -226,6 +227,11 @@ bool parseMsg(const std::string& json, Msg& out)
         const std::string v = f->m_value;
         out.force = f->m_value_string ? !v.empty()
                   : !(v == "false" || v == "null" || v == "0" || v == "0.0");
+    }
+    if (const wdl_json_element* f = root->get_item_by_name("on"); f && f->m_value) {
+        const std::string v = f->m_value;
+        out.on = f->m_value_string ? !v.empty()
+               : !(v == "false" || v == "null" || v == "0" || v == "0.0");
     }
     if (const wdl_json_element* v = root->get_item_by_name("val");
         v && v->m_value && !v->m_value_string) {
@@ -442,10 +448,73 @@ void Mixer::pushConfig_()
 
 void Mixer::resnapViewers_()
 {
-    for (const auto& [id, c] : clients_) {
+    for (auto& [id, c] : clients_) {
         if (!c.authed) continue;
         const int p = phoneOf(c.mix);
-        if (p && busOfPhone_(p) >= 0) send_(id, snapshotJson_(p));
+        if (p && busOfPhone_(p) >= 0) {
+            c.lvSent.clear();   // a new snapshot rebuilds the cards
+            send_(id, snapshotJson_(p));
+        }
+    }
+}
+
+// ── meters ────────────────────────────────────────────────────────────────────
+
+namespace {
+
+// Half-dB steps; everything at or below -60 dB is one value, "off".
+constexpr int kMeterFloor = -120;
+int meterStep(const std::map<int, double>& lv, int ch)
+{
+    const auto it = lv.find(ch);
+    if (it == lv.end() || !std::isfinite(it->second)) return kMeterFloor;
+    return std::max(kMeterFloor, static_cast<int>(std::lround(it->second * 2.0)));
+}
+
+// [L] or [L,R] in dB, from half-dB steps.
+std::string meterJson(const std::vector<int>& v)
+{
+    std::string o = "[";
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        if (i) o += ",";
+        o += jnum(v[i] / 2.0);
+    }
+    return o + "]";
+}
+
+} // namespace
+
+void Mixer::meters()
+{
+    // A channel's level index is its strip index, the right half of a stereo
+    // channel one more (measured 21.09.2026, uf1-sidecar-rme-feasibility 13.7).
+    auto steps = [](const std::map<int, rme::Channel>& strips, const std::map<int, double>& lv,
+                    int n) {
+        std::vector<int> v{ meterStep(lv, n) };
+        const auto c = strips.find(n);
+        if (c != strips.end() && c->second.stereo) v.push_back(meterStep(lv, n + 1));
+        return v;
+    };
+    for (auto& [id, c] : clients_) {
+        if (!c.authed || !c.meters) continue;
+        const int p = phoneOf(c.mix);
+        const int bus = busOfPhone_(p);
+        if (bus < 0) continue;
+        std::string body;
+        auto put = [&](const std::string& key, const std::vector<int>& v) {
+            int packed = 0;   // one number per meter for the "changed?" test
+            for (const int s : v) packed = packed * 1024 + (s - kMeterFloor);
+            const auto old = c.lvSent.find(key);
+            if (old != c.lvSent.end() && old->second == packed) return;
+            c.lvSent[key] = packed;
+            if (!body.empty()) body += ",";
+            body += jstr(key) + ":" + meterJson(v);
+        };
+        put("m", steps(st_.outputs, st_.levelOut, bus));
+        for (const int n : visIn_) put("in:" + std::to_string(n), steps(st_.inputs, st_.levelIn, n));
+        for (const int n : visPb_) put("pb:" + std::to_string(n), steps(st_.playbacks, st_.levelPb, n));
+        if (!body.empty())
+            send_(id, "{\"t\":\"levels\",\"mix\":" + jstr(c.mix) + ",\"lv\":{" + body + "}}");
     }
 }
 
@@ -523,9 +592,16 @@ void Mixer::message(int id, const std::string& json, long long nowMs)
             send_(h, "{\"t\":\"released\",\"mix\":" + jstr(m.mix) + "}");
         }
         c.mix = m.mix;
+        c.lvSent.clear();   // a new headphone: every meter once
         send_(id, snapshotJson_(phone));
         refresh_ = true;   // re-read the layout, so a newly shown channel turns up
         pushConfig_();     // the claim changed: everybody's locked flags
+        return;
+    }
+
+    if (m.t == "meters") {
+        c.meters = m.on;
+        c.lvSent.clear();   // back on: every meter once
         return;
     }
 
