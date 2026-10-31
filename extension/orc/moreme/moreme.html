@@ -82,6 +82,18 @@ body{
 #mix.wide .meter.v .cv{left:0;width:auto;height:100%;top:0;bottom:auto}
 #mix.wide .meter.v .pk{left:0;right:0;width:auto;height:2px;top:auto;bottom:0}
 #mix.meters-off .meter{display:none !important}
+/* "In the fader" (Frank 31.10.2026), TRAPS' channel meter: the level lights
+   the whole track in the channel colour, -60 .. 0 dB, pale at the start, full
+   at the tip, red with a glow above -3 dB. The fader's fill dims to a base, so
+   the level shows strong inside it and pale beyond it. */
+.fader .fm{display:none;position:absolute;inset:0;border-radius:inherit;overflow:hidden;pointer-events:none;flex-direction:column}
+.fader .fm .fl{position:relative;flex:1}
+.fader .fm .lv{position:absolute;left:0;top:0;bottom:0;width:0;border-radius:21px}
+#mix.meters-fader .meter{display:none !important}
+#mix.meters-fader .fader .fm{display:flex}
+#mix.meters-fader .fader .fill{opacity:.45}
+#mix.wide .fader .fm{left:50%;right:auto;width:10px;transform:translateX(-50%);border-radius:5px;flex-direction:row}
+#mix.wide .fader .fm .lv{left:0;right:0;top:auto;bottom:0;width:auto;height:0;border-radius:5px}
 
 /* CONTROLS ROW (pan, mute, solo) */
 .ctrl{display:flex;align-items:center;gap:8px;margin-top:2px}
@@ -219,7 +231,8 @@ body{
     </select>
     <label data-t="meters">Pegelanzeige</label>
     <select id="setMeters" style="width:100%;background:var(--bg3);border:1px solid #2a2a2a;color:var(--fg);padding:12px;border-radius:10px;font:inherit;font-size:16px">
-      <option value="1" data-t="metersOn">An</option>
+      <option value="1" data-t="metersBars">Balken</option>
+      <option value="2" data-t="metersFader">Im Fader</option>
       <option value="0" data-t="metersOff">Aus</option>
     </select>
     <label data-t="language">Sprache</label>
@@ -261,7 +274,7 @@ const LS = {
   sticky: 'moreme.sticky',       // '1' = master pinned
   pin: 'moreme.pin',             // the studio PIN, once it was accepted
   lang: 'moreme.lang',           // 'auto' | 'de' | 'en' | 'fr' | 'it' | 'rm' | 'tlh'
-  meters: 'moreme.meters'        // '0' = meters off on this phone
+  meters: 'moreme.meters'        // '1' bars, '2' in the fader, '0' off
 };
 // A phone that used the page under its old name keeps its choices. Moved, not
 // copied: a left-over old key would bring the mix back after every reset.
@@ -296,7 +309,7 @@ const TEXT = {
     settings: 'Einstellungen', mix: 'Kopfhörer-Mix', view: 'Ansicht',
     viewAuto: 'Automatisch (je nach Gerät)', viewPhone: 'iPhone (Liste)', viewPad: 'iPad (Mischpult)',
     sticky: 'Master fixieren', stickyOff: 'Aus (mitscrollen)', stickyOn: 'An (oben/links angepinnt)',
-    meters: 'Pegelanzeige', metersOn: 'An', metersOff: 'Aus',
+    meters: 'Pegelanzeige', metersBars: 'Balken', metersFader: 'Im Fader', metersOff: 'Aus',
     cancel: 'Abbrechen', save: 'Speichern', reset: 'Gerät zurücksetzen',
     wrongPin: 'Falscher PIN',
     tooMany: (min)=>'Zu viele Versuche. Bitte in ' + min + ' Min. nochmal.',
@@ -321,7 +334,7 @@ const TEXT = {
     settings: 'Settings', mix: 'Headphone mix', view: 'View',
     viewAuto: 'Automatic (by device)', viewPhone: 'iPhone (list)', viewPad: 'iPad (mixing desk)',
     sticky: 'Pin the master', stickyOff: 'Off (scrolls along)', stickyOn: 'On (pinned top/left)',
-    meters: 'Meters', metersOn: 'On', metersOff: 'Off',
+    meters: 'Meters', metersBars: 'Bars', metersFader: 'In the fader', metersOff: 'Off',
     cancel: 'Cancel', save: 'Save', reset: 'Reset this device',
     wrongPin: 'Wrong PIN',
     tooMany: (min)=>'Too many tries. Try again in ' + min + ' min.',
@@ -346,7 +359,7 @@ const TEXT = {
     settings: 'Réglages', mix: 'Mix casque', view: 'Affichage',
     viewAuto: 'Automatique (selon l\'appareil)', viewPhone: 'iPhone (liste)', viewPad: 'iPad (table de mixage)',
     sticky: 'Fixer le master', stickyOff: 'Non (défile avec la page)', stickyOn: 'Oui (épinglé en haut/à gauche)',
-    meters: 'Vumètres', metersOn: 'Oui', metersOff: 'Non',
+    meters: 'Vumètres', metersBars: 'Barres', metersFader: 'Dans le fader', metersOff: 'Non',
     cancel: 'Annuler', save: 'Enregistrer', reset: 'Réinitialiser cet appareil',
     wrongPin: 'PIN incorrect',
     tooMany: (min)=>'Trop d\'essais. Réessaie dans ' + min + ' min.',
@@ -371,7 +384,7 @@ const TEXT = {
     settings: 'Impostazioni', mix: 'Mix cuffie', view: 'Vista',
     viewAuto: 'Automatica (in base al dispositivo)', viewPhone: 'iPhone (elenco)', viewPad: 'iPad (mixer)',
     sticky: 'Fissa il master', stickyOff: 'No (scorre con la pagina)', stickyOn: 'Sì (fisso in alto/a sinistra)',
-    meters: 'Indicatori di livello', metersOn: 'Sì', metersOff: 'No',
+    meters: 'Indicatori di livello', metersBars: 'Barre', metersFader: 'Nel fader', metersOff: 'No',
     cancel: 'Annulla', save: 'Salva', reset: 'Reimposta questo dispositivo',
     wrongPin: 'PIN errato',
     tooMany: (min)=>'Troppi tentativi. Riprova tra ' + min + ' min.',
@@ -398,7 +411,7 @@ const TEXT = {
     settings: 'Preferenzas', mix: 'Mix d\'uregliers', view: 'Vista',
     viewAuto: 'Automatic (tenor l\'apparat)', viewPhone: 'iPhone (glista)', viewPad: 'iPad (pult da maschadar)',
     sticky: 'Fixar il master', stickyOff: 'Na (scrolla cun la pagina)', stickyOn: 'Gea (fixà sura/a sanestra)',
-    meters: 'Indicatur dal livel', metersOn: 'Gea', metersOff: 'Na',
+    meters: 'Indicatur dal livel', metersBars: 'Travs', metersFader: 'En il fader', metersOff: 'Na',
     cancel: 'Annullar', save: 'Memorisar', reset: 'Definir da nov quest apparat',
     wrongPin: 'PIN fauss',
     tooMany: (min)=>'Memia bleras tentativas. Emprova danovamain en ' + min + ' min.',
@@ -424,7 +437,7 @@ const TEXT = {
     settings: 'SeHlaw', mix: 'QoQ', view: 'mIllogh',
     viewAuto: 'jan wIv', viewPhone: 'iPhone (tetlh)', viewPad: 'iPad (SeHlaw)',
     sticky: 'master yIngaQmoH', stickyOff: 'ghobe\'', stickyOn: 'HIja\'',
-    meters: 'QoQ juvwI\'', metersOn: 'HIja\'', metersOff: 'ghobe\'',
+    meters: 'QoQ juvwI\'', metersBars: 'tlhegh', metersFader: 'faderDaq', metersOff: 'ghobe\'',
     cancel: 'yImev', save: 'yIpol', reset: 'jan yIchu\'moH',
     wrongPin: 'PIN Qagh!',
     tooMany: (min)=>'law\' Qagh! ' + min + ' tup yIloS.',
@@ -506,12 +519,14 @@ function srcMax(sendId){
 // what is drawn: the bar falls 24 dB a second, the peak line holds 1.5 s.
 const meters = {};
 const METER_FLOOR = -60;
-function metersOn(){ return localStorage.getItem(LS.meters) !== '0'; }
+function meterPref(){ const v = localStorage.getItem(LS.meters); return v === '0' || v === '2' ? v : '1'; }
+function metersOn(){ return meterPref() !== '0'; }
 function meterOf(k){ return meters[k] || (meters[k] = {target:[], shown:[], peak:[], peakT:[]}); }
 function dropMeters(){ for (const k in meters) meters[k].target = meters[k].target.map(()=>METER_FLOOR); }
 function applyMeters(){
   const on = metersOn();
   $('mix').classList.toggle('meters-off', !on);
+  $('mix').classList.toggle('meters-fader', meterPref() === '2');
   if (!on) dropMeters();
   wsSend({t:'meters', on});
 }
@@ -543,6 +558,50 @@ function drawMeter(el, mt, wide){
     p.classList.toggle('clip', mt.peak[i] > -0.5);
   }
 }
+// "In the fader": one lane per side, TRAPS' gradient and glow in the
+// channel colour. The level rises at once and eases down (TRAPS: a quarter of
+// the way per 60 Hz frame).
+function drawFaderMeter(card, mt, wide, col, dt, fillPos){
+  const fm = card.querySelector('.fm');
+  if (!fm) return;
+  const n = mt.target.length;
+  if (fm.childElementCount !== n){
+    fm.innerHTML = '';
+    for (let i=0;i<n;i++){ const l = document.createElement('div'); l.className = 'fl'; l.innerHTML = '<div class="lv"></div>'; fm.appendChild(l); }
+  }
+  mt.fpos = mt.fpos || [];
+  const ease = 1 - Math.pow(0.75, dt*60);
+  for (let i=0;i<n;i++){
+    const tg = Math.max(0, Math.min(1, (mt.target[i]-METER_FLOOR)/-METER_FLOOR));
+    const cur = mt.fpos[i] || 0;
+    mt.fpos[i] = tg >= cur ? tg : cur + (tg-cur)*ease;
+    const hot = mt.target[i] > -3;
+    const lv = fm.children[i].firstChild;
+    const tip = hot ? '#ff4444' : col;
+    const dir = wide ? '0deg' : '90deg';
+    lv.style.background = 'linear-gradient('+dir+','+col+'44,'+col+'99 70%,'+tip+')';
+    lv.style.boxShadow = '0 0 '+(hot?12:6)+'px '+(hot?'#ff444455':col+'44');
+    if (wide){ lv.style.height = (mt.fpos[i]*100)+'%'; lv.style.width = ''; }
+    else     { lv.style.width  = (mt.fpos[i]*100)+'%'; lv.style.height = ''; }
+    // Strong inside the fader's fill, pale beyond it: the part of the level
+    // past the fader position is masked down.
+    const strong = mt.fpos[i] > 0 ? Math.min(100, fillPos / mt.fpos[i] * 100) : 100;
+    const mask = strong >= 100 ? 'none'
+      : 'linear-gradient('+dir+',#000 '+strong+'%,rgba(0,0,0,.3) '+strong+'%)';
+    lv.style.webkitMaskImage = mask; lv.style.maskImage = mask;
+  }
+}
+function cardFillPos(sendId){
+  if (sendId === 0) return ampToPos(state.master.vol);
+  const r = state.recvs[-sendId-1];
+  return r ? ampToPos(r.vol) : 0;
+}
+function cardColour(sendId){
+  if (sendId === 0) return '#0099FF';
+  const s = state.sources[-sendId-1];
+  const c = (s && s.color) || '#0099FF';
+  return /^#[0-9a-fA-F]{6}$/.test(c) ? c : '#0099FF';
+}
 let meterLast = 0;
 function meterFrame(t){
   const dt = meterLast ? Math.min(0.2, (t-meterLast)/1000) : 0;
@@ -563,7 +622,11 @@ function meterFrame(t){
         else if (t - mt.peakT[i] > 1500) mt.peak[i] = Math.max(tg, mt.peak[i] - 24*dt);
       }
       mt.shown.length = n; mt.peak.length = n;
-      drawMeter(card.querySelector(wide ? '.meter.v' : '.meter.h'), mt, wide);
+      if (meterPref() === '2') {
+        const sid = Number(card.dataset.send);
+        drawFaderMeter(card, mt, wide, cardColour(sid), dt, cardFillPos(sid));
+      }
+      else drawMeter(card.querySelector(wide ? '.meter.v' : '.meter.h'), mt, wide);
     }
   }
   requestAnimationFrame(meterFrame);
@@ -825,6 +888,7 @@ function buildCard(opts){
     '</div>'+
     '<div class="fader">'+
       '<div class="fill"></div>'+
+      '<div class="fm"></div>'+
       '<div class="nick" data-nick="0db"></div>'+
       '<div class="meter v"></div>'+
       '<div class="thumb"></div>'+
@@ -1128,7 +1192,7 @@ function openSettings(){
   }
   $('setLayout').value = getLayoutPref();
   $('setSticky').value = getStickyPref() ? '1' : '0';
-  $('setMeters').value = metersOn() ? '1' : '0';
+  $('setMeters').value = meterPref();
   { const l = localStorage.getItem(LS.lang); $('setLang').value = LANGS.includes(l) ? l : 'auto'; }
   $('overlay').classList.add('open');
 }
@@ -1144,6 +1208,7 @@ function updateUI(){
 function init(){
   applyLanguage();
   $('mix').classList.toggle('meters-off', !metersOn());
+  $('mix').classList.toggle('meters-fader', meterPref() === '2');
   $('verLabel').textContent = 'MoreMe · ORC ' + (VERSION || '') + (STUDIO ? ' · ' + STUDIO : '');
   wsConnect();
   updateUI();
