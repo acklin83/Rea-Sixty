@@ -6,18 +6,18 @@
 #include "ModeSync.h"
 #include "ObsManager.h"
 #include "OrcConfig.h"
+#include "OrcFiles.h"
 #include "OrcHandover.h"
 #include "OrcLog.h"
 
 #include <cstdlib>
-#include <sys/stat.h>
 
 namespace orc::modes {
 
 std::string dir()
 {
     const std::string d = orc::supportDir() + "/modes";
-    ::mkdir(d.c_str(), 0755);
+    orc_files::makeDir(d);
     return d;
 }
 
@@ -90,10 +90,9 @@ void saveIfDirty()
 
 int importFromReaper()
 {
-    const char* home = std::getenv("HOME");
-    if (!home) return 0;
-    const std::string ini = orc_handover::readFile(
-        std::string(home) + "/Library/Application Support/REAPER/reaper-extstate.ini");
+    const std::string reaper = orc_files::reaperFolder();
+    if (reaper.empty()) return 0;
+    const std::string ini = orc_handover::readFile(reaper + "/reaper-extstate.ini");
     if (ini.empty()) return 0;
     const auto vals = modesettings::parseIni(ini, "rea_sixty");
     int n = 0;

@@ -1,3 +1,6 @@
+// ⛔ First: winsock2.h before anything that brings windows.h in.
+#include "OrcSock.h"
+
 #include "SettingsServer.h"
 
 #include "OrcConfig.h"
@@ -6,21 +9,16 @@
 #include "PhonesServer.h"
 #include "WebSocket.h"
 
-#include <arpa/inet.h>
 #include <cctype>
-#include <cerrno>
 #include <chrono>
 #include <cstdlib>
-#include <fcntl.h>
 #include <map>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 namespace orc::settings {
 
 namespace ph = orc::phones;
+using orc::sock::kNone;
+using orc::sock::sock_t;
 
 namespace {
 
@@ -29,7 +27,7 @@ constexpr std::size_t kMaxHead    = 16 * 1024;
 constexpr std::size_t kMaxPending = 4 * 1024 * 1024;
 
 struct Conn {
-    int         fd = -1;
+    sock_t      fd = kNone;
     std::string peer;
     std::string in, out;
     bool        ws      = false;
@@ -49,7 +47,7 @@ std::string lower(std::string s)
 std::string makeToken()
 {
     unsigned char b[16];
-    arc4random_buf(b, sizeof(b));
+    orc::randomBytes(b, sizeof(b));
     static const char k[] = "0123456789abcdef";
     std::string o;
     for (const unsigned char c : b) { o.push_back(k[c >> 4]); o.push_back(k[c & 15]); }
@@ -117,8 +115,9 @@ Server::~Server() { stop(); }
 std::string Server::start(const std::string& resources, const Host& host)
 {
     stop();
-    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return {};
+    orc::sock::startup();
+    const sock_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == kNone) return {};
     sockaddr_in me{};
     me.sin_family      = AF_INET;
     me.sin_port        = 0;                         // the system picks
@@ -126,11 +125,11 @@ std::string Server::start(const std::string& resources, const Host& host)
     socklen_t len = sizeof(me);
     if (::bind(fd, reinterpret_cast<sockaddr*>(&me), sizeof(me)) != 0 || ::listen(fd, 8) != 0
         || ::getsockname(fd, reinterpret_cast<sockaddr*>(&me), &len) != 0) {
-        ::close(fd);
+        orc::sock::closeSock(fd);
         orc::logLine("Settings: could not open a socket\n");
         return {};
     }
-    ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
+    orc::sock::setNonBlocking(fd);
     const int port = ntohs(me.sin_port);
     port_.store(port);
     const std::string token = makeToken();
@@ -142,7 +141,7 @@ std::string Server::start(const std::string& resources, const Host& host)
     ctx_.loginAvailable = loginAvailable;
     ctx_.loginOn        = loginOn;
     run_.store(true);
-    worker_ = std::thread([this, fd, token, resources] { loop(fd, token, resources); });
+    worker_ = std::thread([this, fd, token, resources] { loop(static_cast<std::uintptr_t>(fd), token, resources); });
     return "http://127.0.0.1:" + std::to_string(port) + "/s/" + token + "/";
 }
 
@@ -160,13 +159,14 @@ void Server::post(std::function<void(Context&)> fn)
     queue_.push_back(std::move(fn));
 }
 
-void Server::loop(int listenFd, std::string token, std::string resources)
+void Server::loop(std::uintptr_t listenValue, std::string token, std::string resources)
 {
+    const sock_t listenFd = static_cast<sock_t>(listenValue);
     using clock = std::chrono::steady_clock;
     const std::string base = "/s/" + token + "/";
     const std::string wsPath = base + "ws";
     const int myPort = port_.load();
-    std::map<int, Conn> conns;
+    std::map<sock_t, Conn> conns;
     auto lastState = clock::now() - std::chrono::hours(1);
     bool force = false;   // an edit: the page hears back even if nothing changed
 
@@ -176,9 +176,9 @@ void Server::loop(int listenFd, std::string token, std::string resources)
     };
     auto flush = [](Conn& c) {
         while (!c.out.empty()) {
-            const ssize_t n = ::send(c.fd, c.out.data(), c.out.size(), 0);
+            const long n = orc::sock::sendSome(c.fd, c.out.data(), c.out.size());
             if (n > 0) { c.out.erase(0, static_cast<std::size_t>(n)); continue; }
-            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return;
+            if (n < 0 && orc::sock::wouldBlock()) return;
             c.dead = true;
             return;
         }
@@ -242,7 +242,7 @@ void Server::loop(int listenFd, std::string token, std::string resources)
         fds.push_back({ listenFd, POLLIN, 0 });
         for (auto& [fd, c] : conns)
             fds.push_back({ fd, static_cast<short>(POLLIN | (c.out.empty() ? 0 : POLLOUT)), 0 });
-        const int ready = ::poll(fds.data(), static_cast<nfds_t>(fds.size()), 50);
+        const int ready = orc::sock::pollAll(fds, 50);
         const auto t = clock::now();
         if (ready > 0) {
             for (const pollfd& p : fds) {
@@ -251,14 +251,11 @@ void Server::loop(int listenFd, std::string token, std::string resources)
                     for (;;) {
                         sockaddr_in peer{};
                         socklen_t len = sizeof(peer);
-                        const int fd = ::accept(listenFd, reinterpret_cast<sockaddr*>(&peer), &len);
-                        if (fd < 0) break;
-                        if (conns.size() >= kMaxConns) { ::close(fd); continue; }
-                        ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
-                        // ⛔ A write to a peer that has gone would raise SIGPIPE and
-                        // end ORC; this turns it into an error we read.
-                        const int one = 1;
-                        ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+                        const sock_t fd = ::accept(listenFd, reinterpret_cast<sockaddr*>(&peer), &len);
+                        if (fd == kNone) break;
+                        if (conns.size() >= kMaxConns) { orc::sock::closeSock(fd); continue; }
+                        orc::sock::setNonBlocking(fd);
+                        orc::sock::noSigPipe(fd);
                         char ip[INET_ADDRSTRLEN] = {};
                         ::inet_ntop(AF_INET, &peer.sin_addr, ip, sizeof(ip));
                         Conn c;
@@ -275,9 +272,9 @@ void Server::loop(int listenFd, std::string token, std::string resources)
                 if (p.revents & POLLIN) {
                     char buf[16384];
                     for (;;) {
-                        const ssize_t n = ::recv(c.fd, buf, sizeof(buf), 0);
+                        const long n = orc::sock::recvSome(c.fd, buf, sizeof(buf));
                         if (n > 0) { c.in.append(buf, static_cast<std::size_t>(n)); c.lastRx = t; continue; }
-                        if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR))
+                        if (n == 0 || !orc::sock::wouldBlock())
                             c.dead = true;
                         break;
                     }
@@ -321,12 +318,12 @@ void Server::loop(int listenFd, std::string token, std::string resources)
             if (!c.dead && !c.out.empty()) flush(c);
         for (auto it = conns.begin(); it != conns.end();) {
             if (!it->second.dead) { ++it; continue; }
-            ::close(it->first);
+            orc::sock::closeSock(it->first);
             it = conns.erase(it);
         }
     }
-    for (auto& [fd, c] : conns) ::close(fd);
-    ::close(listenFd);
+    for (auto& [fd, c] : conns) orc::sock::closeSock(fd);
+    orc::sock::closeSock(listenFd);
 }
 
 } // namespace orc::settings

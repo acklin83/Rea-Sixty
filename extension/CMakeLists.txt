@@ -797,12 +797,6 @@ if(NOT WIN32)
     add_test(NAME press_mode COMMAND test_press_mode)
 
     # ORC's transport keys: one decision for press and lamp, in ORC's colours.
-    add_executable(test_orc_keys tests/test_orc_keys.cpp
-        src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp
-        src/Uf1SoftKeys.cpp src/UF1Protocol.cpp src/Uf1Text.cpp src/TrackName.cpp)
-    target_include_directories(test_orc_keys PRIVATE src "${WDL_DIR}")
-    target_link_libraries(test_orc_keys PRIVATE Threads::Threads)
-    add_test(NAME orc_keys COMMAND test_orc_keys)
 
     # The UF1 jog in Grid unit never falls between the grid (JogGrid.h, header only).
     add_executable(test_jog_grid tests/test_jog_grid.cpp)
@@ -815,37 +809,7 @@ if(NOT WIN32)
     target_include_directories(test_uf8_units PRIVATE src)
     add_test(NAME uf8_units COMMAND test_uf8_units)
 
-    add_executable(test_orc_handover tests/test_orc_handover.cpp)
-    target_include_directories(test_orc_handover PRIVATE src)
-    add_test(NAME orc_handover COMMAND test_orc_handover)
 
-    # ORC MoreMe, the headphone mixer in the browser (docs/orc-phones-plan.md,
-    # stage 1): stoerme's protocol, the lock, the mute, the rounds, the PIN.
-    add_executable(test_orc_phones tests/test_orc_phones.cpp orc/Phones.cpp orc/Performers.cpp
-        src/RmeState.cpp src/RmeOsc.cpp src/RmeManager.cpp src/RmeNames.cpp
-        src/RmeUf1.cpp src/RmeStrip.cpp src/Uf1EqCurve.cpp
-        src/Sha256.cpp src/LogPath.cpp)
-    target_include_directories(test_orc_phones PRIVATE src orc "${WDL_DIR}")
-    target_link_libraries(test_orc_phones PRIVATE Threads::Threads)
-    add_test(NAME orc_phones COMMAND test_orc_phones)
-    # Its WebSocket and HTTP codec (stage 2): RFC 6455's own example bytes.
-    add_executable(test_orc_websocket tests/test_orc_websocket.cpp orc/WebSocket.cpp
-        src/Sha256.cpp "${WDL_DIR}/WDL/sha.cpp")
-    target_include_directories(test_orc_websocket PRIVATE src orc "${WDL_DIR}")
-    add_test(NAME orc_websocket COMMAND test_orc_websocket)
-    # The server end to end, a browser and a fake TotalMix on ports the system
-    # hands the test (stages 2 and 3). macOS only, as ORC.
-    if(APPLE)
-        add_executable(test_orc_phones_server tests/test_orc_phones_server.cpp
-            orc/PhonesServer.cpp orc/Phones.cpp orc/Performers.cpp orc/WebSocket.cpp orc/OrcConfig.cpp
-            src/RmeState.cpp src/RmeOsc.cpp src/RmeManager.cpp src/RmeNames.cpp
-            src/RmeUf1.cpp src/RmeStrip.cpp src/Uf1EqCurve.cpp
-            src/Sha256.cpp src/LogPath.cpp "${WDL_DIR}/WDL/sha.cpp")
-        target_include_directories(test_orc_phones_server PRIVATE src orc "${WDL_DIR}")
-        target_link_libraries(test_orc_phones_server PRIVATE Threads::Threads
-            "-framework CoreFoundation")
-        add_test(NAME orc_phones_server COMMAND test_orc_phones_server)
-    endif()
 
     # UF8 bulk-IN packets to whole frames, shared by Rea-Sixty and ORC
     # (Uf8Frames.h, header only; docs/orc-uf8-plan.md stage 2).
@@ -960,37 +924,8 @@ if(NOT WIN32)
     # The UF1 EQ curve: the pure half of the graph painter. Pins the cap73
     # height scale, the two filter rails that were regressions once, and that a
     # band LIST of any length sums — which is the reason it was split out.
-    # The RME Global OSC codec and the TotalMix state cache. Bytes and values
-    # from the live dump of 2026-09-19; pins bundles (every TotalMix packet is
-    # one), the three-valued snapshot echo, and that a role pointing at a
-    # channel this remote cannot see is a STATE and not a bug.
-    add_executable(test_rme_osc tests/test_rme_osc.cpp
-        src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp src/RmeUf1.cpp src/RmeStrip.cpp
-        src/RmeInput.cpp src/RmeNames.cpp
-        src/Uf1EqCurve.cpp
-        src/LogPath.cpp)
-    target_include_directories(test_rme_osc PRIVATE src "${WDL_DIR}")
-    # RmeManager brings its worker thread, and on Windows its socket.
-    find_package(Threads REQUIRED)
-    target_link_libraries(test_rme_osc PRIVATE Threads::Threads)
-    if(WIN32)
-        target_link_libraries(test_rme_osc PRIVATE ws2_32)
-    endif()
-    add_test(NAME rme_osc COMMAND test_rme_osc)
 
-    # What the UF1 does TO TotalMix. Pure: an event and a state in, a list of
-    # OSC addresses out, no socket and no surface. ⇨ The pair to test_orc_paint.
-    add_executable(test_rme_input tests/test_rme_input.cpp
-        src/RmeInput.cpp src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp
-        src/RmeUf1.cpp src/RmeStrip.cpp src/RmeNames.cpp src/Uf1EqCurve.cpp
-        src/UF1Protocol.cpp
-        src/LogPath.cpp)
-    target_include_directories(test_rme_input PRIVATE src "${WDL_DIR}")
-    target_link_libraries(test_rme_input PRIVATE Threads::Threads)
-    if(WIN32)
-        target_link_libraries(test_rme_input PRIVATE ws2_32)
-    endif()
-    add_test(NAME rme_input COMMAND test_rme_input)
+
 
     # TotalMix on the UF8's strips (Uf8Rme; docs/orc-uf8-plan.md stage 5).
     add_executable(test_uf8_rme tests/test_uf8_rme.cpp src/Uf8Rme.cpp
@@ -1002,37 +937,7 @@ if(NOT WIN32)
     target_link_libraries(test_uf8_rme PRIVATE Threads::Threads)
     add_test(NAME uf8_rme COMMAND test_uf8_rme)
 
-    # The RME side-car's soft keys (RmeSoftKeys) and where its banks come from
-    # (Bindings.cpp, setSideCarSource): ORC's file, banks 10.. only, never
-    # written back. Links the real bindings engine, like ORC does.
-    add_executable(test_rme_softkeys tests/test_rme_softkeys.cpp
-        src/RmeSoftKeys.cpp src/Uf1SoftKeys.cpp src/Uf1Spread.cpp src/Uf1Text.cpp
-        src/TrackName.cpp src/Uf1EqCurve.cpp src/UF1Protocol.cpp
-        src/RmeInput.cpp src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp
-        src/RmeUf1.cpp src/RmeStrip.cpp src/RmeNames.cpp
-        src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp
-        src/ObsManager.cpp src/ObsProto.cpp src/WsClient.cpp src/Sha256.cpp)
-    target_include_directories(test_rme_softkeys PRIVATE src "${WDL_DIR}")
-    target_link_libraries(test_rme_softkeys PRIVATE Threads::Threads)
-    if(WIN32)
-        target_link_libraries(test_rme_softkeys PRIVATE ws2_32)
-    endif()
-    add_test(NAME rme_softkeys COMMAND test_rme_softkeys)
 
-    # What TotalMix looks like on the UF1: the side-car painter, shared by the
-    # extension and ORC. Pins the labels, the layer and the time field.
-    add_executable(test_rme_face tests/test_rme_face.cpp
-        src/RmeFace.cpp src/RmeInput.cpp src/RmeOsc.cpp src/RmeState.cpp
-        src/RmeManager.cpp src/RmeUf1.cpp src/RmeStrip.cpp src/RmeNames.cpp
-        src/Uf1EqCurve.cpp src/UF1Protocol.cpp src/Uf1Spread.cpp src/Uf1Text.cpp
-        src/TrackName.cpp
-        src/LogPath.cpp)
-    target_include_directories(test_rme_face PRIVATE src "${WDL_DIR}")
-    target_link_libraries(test_rme_face PRIVATE Threads::Threads)
-    if(WIN32)
-        target_link_libraries(test_rme_face PRIVATE ws2_32)
-    endif()
-    add_test(NAME rme_face COMMAND test_rme_face)
     # Press-to-pick in Settings -> Bindings: which surface key a press selects,
     # selects and runs, or leaves alone. Header only.
     add_executable(test_bindings_pick tests/test_bindings_pick.cpp)
@@ -1179,6 +1084,143 @@ if(NOT WIN32)
     endif()
 endif()
 
+
+# ----- tests that also run on Windows --------------------------------------------
+# What ORC stands on (docs/orc-windows-plan.md, section 15). ⛔ Only ports the system
+# hands out and a scratch folder (tests/TestScratch.h), nothing opens a device.
+# ⇨ ORC_WINDOWS: its own workflow (.github/workflows/orc-windows.yml) builds these
+# under Windows, so a red ORC does not hold up the extension's DLL.
+option(ORC_WINDOWS "Build ORC and its tests under Windows" OFF)
+if(NOT WIN32 OR ORC_WINDOWS)
+find_package(Threads REQUIRED)
+enable_testing()
+
+# ORC's way of building under Windows, for ORC and for its tests.
+function(orc_windows_settings t)
+    if(NOT WIN32)
+        return()
+    endif()
+    target_compile_definitions(${t} PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX WDL_NO_DEFINE_MINMAX
+        _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(${t} PRIVATE /utf-8)
+    target_link_libraries(${t} PRIVATE ws2_32)
+    target_sources(${t} PRIVATE orc/win/orc.manifest)
+    # ⛔ The Mac's 8 MB, for the main thread and every std::thread: sizeof(Config) is
+    # ~937 KB and Windows' default is 1 MB (memory windows-stack-overflow-config).
+    target_link_options(${t} PRIVATE /STACK:8388608)
+    # No Visual C++ Redistributable on the customer's machine.
+    set_target_properties(${t} PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded")
+endfunction()
+
+# The RME Global OSC codec and the TotalMix state cache. Bytes and values
+# from the live dump of 2026-09-19; pins bundles (every TotalMix packet is
+# one), the three-valued snapshot echo, and that a role pointing at a
+# channel this remote cannot see is a STATE and not a bug.
+add_executable(test_rme_osc tests/test_rme_osc.cpp
+    src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp src/RmeUf1.cpp src/RmeStrip.cpp
+    src/RmeInput.cpp src/RmeNames.cpp
+    src/Uf1EqCurve.cpp
+    src/LogPath.cpp)
+target_include_directories(test_rme_osc PRIVATE src "${WDL_DIR}")
+# RmeManager brings its worker thread, and on Windows its socket.
+find_package(Threads REQUIRED)
+target_link_libraries(test_rme_osc PRIVATE Threads::Threads)
+if(WIN32)
+    target_link_libraries(test_rme_osc PRIVATE ws2_32)
+endif()
+add_test(NAME rme_osc COMMAND test_rme_osc)
+add_executable(test_orc_keys tests/test_orc_keys.cpp
+    src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp
+    src/Uf1SoftKeys.cpp src/UF1Protocol.cpp src/Uf1Text.cpp src/TrackName.cpp)
+target_include_directories(test_orc_keys PRIVATE src "${WDL_DIR}")
+target_link_libraries(test_orc_keys PRIVATE Threads::Threads)
+add_test(NAME orc_keys COMMAND test_orc_keys)
+add_executable(test_orc_handover tests/test_orc_handover.cpp)
+target_include_directories(test_orc_handover PRIVATE src)
+add_test(NAME orc_handover COMMAND test_orc_handover)
+# ORC MoreMe, the headphone mixer in the browser (docs/orc-phones-plan.md,
+# stage 1): stoerme's protocol, the lock, the mute, the rounds, the PIN.
+add_executable(test_orc_phones tests/test_orc_phones.cpp orc/Phones.cpp orc/Performers.cpp
+    src/RmeState.cpp src/RmeOsc.cpp src/RmeManager.cpp src/RmeNames.cpp
+    src/RmeUf1.cpp src/RmeStrip.cpp src/Uf1EqCurve.cpp
+    src/Sha256.cpp src/LogPath.cpp)
+target_include_directories(test_orc_phones PRIVATE src orc "${WDL_DIR}")
+target_link_libraries(test_orc_phones PRIVATE Threads::Threads)
+add_test(NAME orc_phones COMMAND test_orc_phones)
+# Its WebSocket and HTTP codec (stage 2): RFC 6455's own example bytes.
+add_executable(test_orc_websocket tests/test_orc_websocket.cpp orc/WebSocket.cpp
+    src/Sha256.cpp "${WDL_DIR}/WDL/sha.cpp")
+target_include_directories(test_orc_websocket PRIVATE src orc "${WDL_DIR}")
+add_test(NAME orc_websocket COMMAND test_orc_websocket)
+# What the UF1 does TO TotalMix. Pure: an event and a state in, a list of
+# OSC addresses out, no socket and no surface. ⇨ The pair to test_orc_paint.
+add_executable(test_rme_input tests/test_rme_input.cpp
+    src/RmeInput.cpp src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp
+    src/RmeUf1.cpp src/RmeStrip.cpp src/RmeNames.cpp src/Uf1EqCurve.cpp
+    src/UF1Protocol.cpp
+    src/LogPath.cpp)
+target_include_directories(test_rme_input PRIVATE src "${WDL_DIR}")
+target_link_libraries(test_rme_input PRIVATE Threads::Threads)
+if(WIN32)
+    target_link_libraries(test_rme_input PRIVATE ws2_32)
+endif()
+add_test(NAME rme_input COMMAND test_rme_input)
+# The RME side-car's soft keys (RmeSoftKeys) and where its banks come from
+# (Bindings.cpp, setSideCarSource): ORC's file, banks 10.. only, never
+# written back. Links the real bindings engine, like ORC does.
+add_executable(test_rme_softkeys tests/test_rme_softkeys.cpp
+    src/RmeSoftKeys.cpp src/Uf1SoftKeys.cpp src/Uf1Spread.cpp src/Uf1Text.cpp
+    src/TrackName.cpp src/Uf1EqCurve.cpp src/UF1Protocol.cpp
+    src/RmeInput.cpp src/RmeOsc.cpp src/RmeState.cpp src/RmeManager.cpp
+    src/RmeUf1.cpp src/RmeStrip.cpp src/RmeNames.cpp
+    src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp
+    src/ObsManager.cpp src/ObsProto.cpp src/WsClient.cpp src/Sha256.cpp)
+target_include_directories(test_rme_softkeys PRIVATE src "${WDL_DIR}")
+target_link_libraries(test_rme_softkeys PRIVATE Threads::Threads)
+if(WIN32)
+    target_link_libraries(test_rme_softkeys PRIVATE ws2_32)
+endif()
+add_test(NAME rme_softkeys COMMAND test_rme_softkeys)
+# What TotalMix looks like on the UF1: the side-car painter, shared by the
+# extension and ORC. Pins the labels, the layer and the time field.
+add_executable(test_rme_face tests/test_rme_face.cpp
+    src/RmeFace.cpp src/RmeInput.cpp src/RmeOsc.cpp src/RmeState.cpp
+    src/RmeManager.cpp src/RmeUf1.cpp src/RmeStrip.cpp src/RmeNames.cpp
+    src/Uf1EqCurve.cpp src/UF1Protocol.cpp src/Uf1Spread.cpp src/Uf1Text.cpp
+    src/TrackName.cpp
+    src/LogPath.cpp)
+target_include_directories(test_rme_face PRIVATE src "${WDL_DIR}")
+target_link_libraries(test_rme_face PRIVATE Threads::Threads)
+if(WIN32)
+    target_link_libraries(test_rme_face PRIVATE ws2_32)
+endif()
+add_test(NAME rme_face COMMAND test_rme_face)
+# The server end to end, a browser and a fake TotalMix on ports the system
+# hands the test (stages 2 and 3). Where ORC runs.
+if(APPLE OR WIN32)
+    add_executable(test_orc_phones_server tests/test_orc_phones_server.cpp
+        orc/PhonesServer.cpp orc/Phones.cpp orc/Performers.cpp orc/WebSocket.cpp orc/OrcConfig.cpp
+        src/RmeState.cpp src/RmeOsc.cpp src/RmeManager.cpp src/RmeNames.cpp
+        src/RmeUf1.cpp src/RmeStrip.cpp src/Uf1EqCurve.cpp
+        src/Sha256.cpp src/LogPath.cpp "${WDL_DIR}/WDL/sha.cpp")
+    target_include_directories(test_orc_phones_server PRIVATE src orc "${WDL_DIR}")
+    target_link_libraries(test_orc_phones_server PRIVATE Threads::Threads)
+    add_test(NAME orc_phones_server COMMAND test_orc_phones_server)
+endif()
+
+foreach(t test_orc_keys test_orc_handover test_orc_phones test_orc_websocket
+          test_rme_osc test_rme_input test_rme_softkeys test_rme_face)
+    orc_windows_settings(${t})
+endforeach()
+if(WIN32)
+    orc_windows_settings(test_orc_phones_server)
+endif()
+target_link_libraries(test_orc_handover PRIVATE Threads::Threads)
+foreach(t test_rme_osc test_rme_input test_rme_softkeys test_rme_face)
+    target_include_directories(${t} PRIVATE tests)
+endforeach()
+endif()
+
 # ----- ORC ---------------------------------------------------------------------
 # Open Remote Control: the UF1 as a monitor controller for RME TotalMix, with no
 # DAW under it. Its own program, in this repo because it lives off the same
@@ -1194,9 +1236,16 @@ endif()
 # that is deliberate: the boundary is checked by the linker rather than
 # remembered by whoever is editing.
 #
-# macOS first. Windows and Linux need their own USB permissions story and are
-# not in scope yet, so the target is gated rather than left to fail confusingly.
-if(APPLE)
+# macOS and Windows. Linux is out: RME has no TotalMix for it (Frank 03.11.2026).
+# The version stands here, not under APPLE; tools/orc-release.sh and
+# tools/orc_manual.py read this line.
+set(MACOSX_BUNDLE_SHORT_VERSION_STRING 1.6.0)
+if(APPLE OR WIN32)
+    if(WIN32)
+        set(ORC_HTTP_SOURCE src/win_http.cpp)
+    else()
+        set(ORC_HTTP_SOURCE src/macos_http.mm)
+    endif()
     # The shared half of ORC: the extension's own files, no REAPER in any of
     # them. ORC and tools/orc_manual_dump (the manual's data) both build from
     # this one list, so the manual describes exactly the code ORC runs.
@@ -1241,7 +1290,7 @@ if(APPLE)
         src/HueColor.cpp
         src/HueClient.cpp
         src/HueManager.cpp
-        src/macos_http.mm
+        ${ORC_HTTP_SOURCE}
         src/DynaMountClient.cpp
         src/DynaMountManager.cpp
         src/ObsManager.cpp
@@ -1250,6 +1299,9 @@ if(APPLE)
         src/Sha256.cpp
         src/ModeBuiltins.cpp
         src/ModeSettings.cpp)
+endif()
+
+if(APPLE)
     add_executable(orc
         orc/main.cpp
         # Stage 7: the tick that used to be main()'s body, and the Mac side.
@@ -1259,6 +1311,7 @@ if(APPLE)
         orc/Uf8Surface.cpp
         orc/OrcModes.cpp
         orc/OrcConfig.cpp
+        orc/OrcMenu.cpp
         orc/OrcApp.mm
         orc/OrcLogo.cpp
         # ORC MoreMe, the headphone mixer in the browser (docs/orc-phones-plan.md):
@@ -1297,6 +1350,17 @@ if(APPLE)
     # WDL only for its JSON parser, which RmeManager reads rme.json with. No
     # REAPER header comes in with it: WDL is a standalone utility library.
     target_include_directories(orc PRIVATE src vendor/WDL)
+    target_compile_definitions(orc PRIVATE ORC_VERSION="${MACOSX_BUNDLE_SHORT_VERSION_STRING}")
+    # ⛔ THE STACK GUARD, FOR ORC TOO. MSVC has no such flag, and ORC's code is the
+    # same on both, so the Mac build catches what would crash under Windows.
+    if(HAVE_WFRAME_LARGER_THAN)
+        target_compile_options(orc PRIVATE -Wframe-larger-than=262144)
+        if(HAVE_WERROR_FRAME_BARE)
+            target_compile_options(orc PRIVATE -Werror=frame-larger-than)
+        elseif(HAVE_WERROR_FRAME_ARG)
+            target_compile_options(orc PRIVATE -Werror=frame-larger-than=262144)
+        endif()
+    endif()
 
     # ⇨ ONE APP FOR BOTH MACS, FROM MACOS 13 (release plan step 2, Frank
     # 29.09.2026). arm64 and x86_64 in one binary. 13 because the launch-at-
@@ -1352,7 +1416,6 @@ if(APPLE)
     set(MACOSX_BUNDLE_GUI_IDENTIFIER ch.stoersender.orc)
     # ORC starts at 1.0 (Frank 29.09.2026). The build number goes up with every
     # release, whatever the version string does.
-    set(MACOSX_BUNDLE_SHORT_VERSION_STRING 1.6.0)
     set(MACOSX_BUNDLE_BUNDLE_VERSION 10)
     configure_file(orc/Info.plist.in "${CMAKE_BINARY_DIR}/OrcInfo.plist" @ONLY)
     set_target_properties(orc PROPERTIES
@@ -1456,4 +1519,59 @@ if(APPLE)
         "-framework Foundation")
     set_target_properties(orc_manual_dump PROPERTIES
         BUILD_RPATH "${ORC_LIBUSB_PREFIX}/install/lib")
+endif()
+
+# ORC under Windows (docs/orc-windows-plan.md). libusb as the extension has it, no
+# hidapi: ORC has no UC1.
+if(WIN32 AND ORC_WINDOWS)
+    set(ORC_WIN_LIBUSB_DLL "${LIBUSB_ROOT}/${LIBUSB_MSVC}/MS64/dll/libusb-1.0.dll")
+    function(orc_windows_program t)
+        orc_windows_settings(${t})
+        target_include_directories(${t} PRIVATE src orc vendor/WDL "${WDL_DIR}")
+        target_link_libraries(${t} PRIVATE reasixty_libusb Threads::Threads
+            winhttp setupapi iphlpapi bcrypt)
+        add_custom_command(TARGET ${t} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ORC_WIN_LIBUSB_DLL}"
+                "$<TARGET_FILE_DIR:${t}>/libusb-1.0.dll")
+    endfunction()
+
+    set(ORC_SETTINGS_TEST_SOURCES
+        orc/OrcSettingsModel.cpp orc/SettingsServer.cpp orc/OrcModes.cpp orc/OrcConfig.cpp
+        orc/PhonesServer.cpp orc/Phones.cpp orc/Performers.cpp orc/WebSocket.cpp
+        "${WDL_DIR}/WDL/sha.cpp" ${ORC_SHARED_SOURCES})
+    add_executable(test_orc_settings tests/test_orc_settings.cpp ${ORC_SETTINGS_TEST_SOURCES})
+    orc_windows_program(test_orc_settings)
+    target_compile_definitions(test_orc_settings PRIVATE
+        ORC_SETTINGS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/orc/settings")
+    add_test(NAME orc_settings COMMAND test_orc_settings)
+
+    add_executable(orc
+        orc/main.cpp
+        orc/Surface.cpp
+        orc/Uf8Surface.cpp
+        orc/OrcModes.cpp
+        orc/OrcConfig.cpp
+        orc/OrcMenu.cpp
+        orc/OrcTray.cpp
+        orc/Phones.cpp
+        orc/Performers.cpp
+        orc/WebSocket.cpp
+        orc/PhonesServer.cpp
+        orc/OrcSettingsModel.cpp
+        orc/SettingsServer.cpp
+        "${WDL_DIR}/WDL/sha.cpp"
+        ${ORC_SHARED_SOURCES})
+    orc_windows_program(orc)
+    target_compile_definitions(orc PRIVATE ORC_VERSION="${MACOSX_BUNDLE_SHORT_VERSION_STRING}")
+    set_target_properties(orc PROPERTIES OUTPUT_NAME ORC)
+    # The pages beside the program, as orc::resourcesDir() expects them.
+    add_custom_command(TARGET orc POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/orc/moreme" "$<TARGET_FILE_DIR:orc>/moreme"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/orc/settings" "$<TARGET_FILE_DIR:orc>/settings")
+
+    add_custom_target(orc_windows_all DEPENDS orc test_orc_settings test_orc_keys test_orc_handover
+        test_orc_phones test_orc_websocket test_orc_phones_server
+        test_rme_osc test_rme_input test_rme_softkeys test_rme_face)
 endif()

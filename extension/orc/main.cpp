@@ -29,7 +29,7 @@
 //   orc/OrcConfig.cpp         where ORC's own files live. Plain C++.
 //   orc/OrcApp.mm             the status item and its menu. AppKit.
 //   orc/OrcWebWindow.mm       the window around the settings page. AppKit.
-//   orc/SettingsServer.cpp    serves that page, this Mac only. Its own thread.
+//   orc/SettingsServer.cpp    serves that page, this computer only. Its own thread.
 //   orc/OrcSettingsModel.cpp  what the page shows and changes. Plain C++.
 //
 
@@ -38,15 +38,21 @@
 #include <csignal>
 #include <cstdio>
 #include <ctime>
+#include <filesystem>
 #include <string>
+#include <system_error>
 
-#include <sys/stat.h>
-#include <unistd.h>
+#if defined(_WIN32)
+#  include <io.h>
+#else
+#  include <unistd.h>
+#endif
 
 #include "Bindings.h"
 #include "BindingsHost.h"
 #include "LogPath.h"
 #include "OrcConfig.h"
+#include "OrcFiles.h"
 #include "OrcModes.h"
 #include "ModeBuiltins.h"
 #include "OrcUi.h"
@@ -79,14 +85,24 @@ int main()
     // log (LogPath), orc.log; over 10 MB at start it is moved to orc.log.1.
     {
         const std::string path = uf8::logPath("orc.log");
-        struct stat sb{};
-        if (::stat(path.c_str(), &sb) == 0 && sb.st_size > 10 * 1024 * 1024)
-            std::rename(path.c_str(), (path + ".1").c_str());
+        std::error_code ec;
+        const auto bytes = std::filesystem::file_size(path, ec);
+        if (!ec && bytes > 10 * 1024 * 1024) orc_files::replaceFile(path, path + ".1");
+#if defined(_WIN32)
+        if (::_isatty(::_fileno(stdout))) std::printf("ORC: logging to %s\n", path.c_str());
+        // ⛔ Not the Mac's two lines. Started without a console stderr has no
+        // descriptor, and _dup2 on that ends the process. And setvbuf with _IOLBF
+        // and size 0 is an invalid parameter there, which ends it as well; _IOLBF
+        // would be full buffering anyway (Microsoft, setvbuf).
+        if (std::freopen(path.c_str(), "a", stdout)) std::setvbuf(stdout, nullptr, _IONBF, 0);
+        if (std::freopen(path.c_str(), "a", stderr)) std::setvbuf(stderr, nullptr, _IONBF, 0);
+#else
         if (::isatty(STDOUT_FILENO)) std::printf("ORC: logging to %s\n", path.c_str());
         if (std::freopen(path.c_str(), "a", stdout)) {
             ::dup2(::fileno(stdout), STDERR_FILENO);
             std::setvbuf(stdout, nullptr, _IOLBF, 0);
         }
+#endif
         const std::time_t now = std::time(nullptr);
         char when[32];
         std::strftime(when, sizeof(when), "%Y-%m-%d %H:%M:%S", std::localtime(&now));

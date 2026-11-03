@@ -104,7 +104,7 @@ Server& server();
 // The menu's line: "off", "TotalMix does not answer", "2 phones" ...
 std::string summary(const Status& st);
 
-// http://<this Mac's address>:<port>, the address musicians type or scan. ""
+// http://<this computer's address>:<port>, the address musicians type or scan. ""
 // when the Mac has no network address.
 std::string pageAddress(int port);
 

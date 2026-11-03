@@ -45,7 +45,7 @@ std::string jstr(const std::string& s)
         const auto c = static_cast<unsigned char>(ch);
         if (c == '"') o += "\\\"";
         else if (c == '\\') o += "\\\\";
-        else if (c < 0x20) { char b[8]; std::snprintf(b, sizeof(b), "\\u%04x", c); o += b; }
+        else if (c < 0x20) { char b[8]; snprintf(b, sizeof(b), "\\u%04x", c); o += b; }
         else o.push_back(ch);
     }
     return o + "\"";
@@ -56,14 +56,14 @@ const char* jbool(bool v) { return v ? "true" : "false"; }
 std::string jnum(double v)
 {
     char b[32];
-    std::snprintf(b, sizeof(b), "%.2f", v);
+    snprintf(b, sizeof(b), "%.2f", v);
     return b;
 }
 
 std::string hexColour(uint8_t r, uint8_t g, uint8_t b)
 {
     char t[8];
-    std::snprintf(t, sizeof(t), "#%02x%02x%02x", r, g, b);
+    snprintf(t, sizeof(t), "#%02x%02x%02x", r, g, b);
     return t;
 }
 
@@ -140,7 +140,7 @@ std::vector<Choice> targetChoices(const rme::State& st)
         out.push_back({ "", headers[r], true });
         for (int ch : chans) {
             char spec[32];
-            std::snprintf(spec, sizeof spec, "%s:%d", kinds[r], ch);
+            snprintf(spec, sizeof spec, "%s:%d", kinds[r], ch);
             out.push_back({ spec, rmeu::displayName(st, row, ch) });
         }
     }

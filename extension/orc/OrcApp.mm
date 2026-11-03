@@ -6,11 +6,8 @@
 #import <Cocoa/Cocoa.h>
 #import <CoreImage/CoreImage.h>
 
-#include "OrcConfig.h"
-#include "PhonesServer.h"
+#include "OrcMenu.h"
 #include "Surface.h"
-
-namespace rme = reasixty::rme;
 
 // The one surface, for the menu to ask about. Set by runApp before the loop
 // starts and not touched again.
@@ -161,43 +158,17 @@ static NSImage* qrImage(NSString* text, CGFloat side)
 
 - (void)menuNeedsUpdate:(NSMenu*)menu
 {
-    if (g_surface) {
-        const orc::Status st = g_surface->status();
-        // ⛔ The reason is repeated verbatim. libusb cannot tell an absent UF1
-        // from one another program is holding, so ORC does not name a culprit
-        // it cannot prove.
-        self.uf1Line.title = st.off ? @"UF1   off"
-            : st.open
-            ? [NSString stringWithFormat:@"UF1   held by ORC, %s", st.serial.c_str()]
-            : [NSString stringWithFormat:@"UF1   not open: %s", st.error.c_str()];
-        // The UF8, the same way. ⇨ A REAPER extension too old for the receipt
-        // (a marker without "v2", OrcHandover.h) may never pick the UF8 up: it
-        // tried once at its start, while ORC still held it. Say so rather than
-        // leave the unit dark without a word (docs/orc-uf8-plan.md, section 5).
-        const orc::Uf8Status u8 = g_surface->uf8Status();
-        if (u8.off)
-            self.uf8Line.title = @"UF8   off";
-        else if (u8.open)
-            self.uf8Line.title = [NSString stringWithFormat:@"UF8   held by ORC, %s", u8.serial.c_str()];
-        else if (orc::reaperWantsUf1() && orc::reaperMarkerVersion() == 1)
-            self.uf8Line.title = @"UF8   REAPER cannot take it yet: update the REAPER extension";
-        else
-            self.uf8Line.title = [NSString stringWithFormat:@"UF8   not open: %s", u8.error.c_str()];
-    }
-    self.mixerLine.title = [NSString stringWithFormat:@"TotalMix   %s",
-                                     orc::linkSummary().c_str()];
-
-    namespace ph = orc::phones;
-    const ph::Status mm = ph::server().status();
-    self.moremeLine.title = [NSString stringWithFormat:@"MoreMe   %s", ph::summary(mm).c_str()];
-    self.moremeDesk.hidden = !(mm.enabled && mm.listening);
-    const std::string addr = (mm.enabled && mm.listening) ? ph::pageAddress(mm.port) : std::string();
-    self.moremeAddress.hidden = addr.empty();
-    self.moremeQr.hidden = addr.empty();
-    if (!addr.empty()) {
-        NSString* a = [NSString stringWithUTF8String:addr.c_str()];
-        self.moremeAddress.title = [NSString stringWithFormat:@"%@   PIN %s", a,
-                                             ph::server().pin().c_str()];
+    const orc::MenuLines m = orc::menuLines(g_surface);
+    self.uf1Line.title    = @(m.uf1.c_str());
+    self.uf8Line.title    = @(m.uf8.c_str());
+    self.mixerLine.title  = @(m.mixer.c_str());
+    self.moremeLine.title = @(m.moreme.c_str());
+    self.moremeDesk.hidden = !m.deskShown;
+    self.moremeAddress.hidden = m.address.empty();
+    self.moremeQr.hidden = m.address.empty();
+    if (!m.address.empty()) {
+        NSString* a = @(m.address.c_str());
+        self.moremeAddress.title = @(m.addressLine.c_str());
         if (![a isEqualToString:self.moremeQrFor]) {
             self.moremeQrFor = a;
             self.moremeQrView.image = qrImage(a, self.moremeQrView.frame.size.width);

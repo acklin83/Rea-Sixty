@@ -201,7 +201,7 @@ std::string upgradeResponse(const Request& r)
 std::string response(int status, const std::string& contentType, const std::string& body)
 {
     char head[256];
-    std::snprintf(head, sizeof(head),
+    snprintf(head, sizeof(head),
                   "HTTP/1.1 %d %s\r\n"
                   "Content-Type: %s\r\n"
                   "Content-Length: %zu\r\n"

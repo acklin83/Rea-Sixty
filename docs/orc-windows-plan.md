@@ -1,6 +1,6 @@
 # ORC für Windows, Plan
 
-Stand 03.11.2026. Nichts gebaut, wartet auf Franks OK. Entscheid Frank: Mac-Release ORC 1.6.0 / Rea-Sixty v0.9.0 zuerst und ohne Windows. Windows danach als eigene ORC-Version, sobald er es am StoerPC getestet hat. Linux ist gestrichen.
+Stand 03.11.2026. Plan freigegeben (Frank 03.11.: „Plan ok, alle Empfehlungen so, teste als sunny“), im Bau. Entscheid Frank: Mac-Release ORC 1.6.0 / Rea-Sixty v0.9.0 zuerst und ohne Windows. Windows danach als eigene ORC-Version, sobald er es am StoerPC getestet hat. Linux ist gestrichen.
 
 ## Ziel
 `ORC.exe`, x64, Windows 10 1903 oder neuer und Windows 11, kann alles, was ORC am Mac kann: UF1 und UF8, TotalMix, MoreMe, Studio Control, Hue, OBS, DynaMount, Übergabe an Rea-Sixty. Dieselbe Seite, dasselbe Modell, dieselben Dateiformate. Neu sind nur Dinge, die Windows erzwingt: Treiber-Karte auf der Seite und ein Installer.
@@ -34,7 +34,7 @@ Entscheid: unsichtbares Fenster plus `Shell_NotifyIcon`, `NOTIFYICON_VERSION_4`,
 - Eine Instanz: benannter Mutex. Ein zweiter Start öffnet die Einstellungen der ersten und endet. Am Mac verhindert das LaunchServices, unter Windows kämen sonst zwei ORC an USB, Port und `orc.pid`.
 - Abmelden und Herunterfahren: Windows darf den Prozess nach `WM_ENDSESSION` jederzeit beenden. Der Abschluss aus `main()` wird eine Funktion, die der Handler aufruft, sonst bleiben UF1 und `orc.pid` hängen.
 
-Symbol: Wortmarke aus `orc/OrcLogo.cpp`. Unter Windows ist das Feld quadratisch, bei 16 Pixeln bleiben rund 5 Pixel Buchstabenhöhe. Probe gerendert, Frage 2. Windows färbt nichts selbst, darum zwei Varianten, hell und dunkel, gewählt über `SystemUsesLightTheme`. Der Wert ist undokumentiert, fehlt er, gilt dunkel, das ist auch Microsofts eigene Beschreibung des Fehlfalls. `tools/orc_icon` lernt `.ico`, die Dateien liegen im Repo, weil das Werkzeug CoreGraphics braucht. Ein CI-Schritt am Mac vergleicht sie mit dem frisch Gerenderten, damit es eine Zeichnung bleibt.
+Symbol: Wortmarke aus `orc/OrcLogo.cpp`. Unter Windows ist das Feld quadratisch, bei 16 Pixeln bleiben rund 5 Pixel Buchstabenhöhe. Windows färbt nichts selbst, darum zwei Varianten, hell und dunkel, gewählt über `SystemUsesLightTheme`. Der Wert ist undokumentiert, fehlt er, gilt dunkel, das ist auch Microsofts eigene Beschreibung des Fehlfalls. `tools/orc_icon` lernt `.ico`, die Dateien liegen im Repo, weil das Werkzeug CoreGraphics braucht. Ein CI-Schritt am Mac vergleicht sie mit dem frisch Gerenderten, damit es eine Zeichnung bleibt.
 
 ## 3. Fenster, WebView2, Laufzeit
 Entscheid: WebView2 Evergreen, statisch gelinkter Loader (`WebView2LoaderStatic.lib`, keine zusätzliche DLL), Paket `Microsoft.Web.WebView2` 1.0.4314.35 per FetchContent mit Hash. Kein Fixed Version: wir müssten die Laufzeit mitliefern und aktuell halten.
@@ -80,7 +80,7 @@ Neu `orc/OrcSock.h`, gilt für beide Server und die Tests: `sock_t`, Fehlercode,
 - Kein `SO_REUSEADDR` und kein `SO_EXCLUSIVEADDRUSE` (Memory `windows-so-reuseaddr-hijacks-port`). Grenze: Ohne Option scheitert ein zweites Bind auf dieselbe Adresse, aber Wildcard neben einer bestimmten Adresse gelingt. Bindet ein anderes Programm `0.0.0.0:7006` und ORC `127.0.0.1:7006`, meldet Windows keinen Konflikt. Das ist kein neuer Fehler, nur eine Meldung „port in use“, die dort fehlt.
 - `RmeManager`: `SIO_UDP_CONNRESET` aus. Sonst liefert `recv` nach jedem Senden an ein geschlossenes TotalMix `WSAECONNRESET`. Der Code läuft dann nur eine Runde leer, aber der Pfad ist unter Windows nie gefahren, weil das Side-Car dort aus ist (`reasixty_rmeConfigPath_` liefert leer).
 
-Firewall: ein Programm, das eingehend lauscht, löst ohne Erlaubnis-Regel den Dialog aus. Admins bekommen bei Abbrechen eine Sperrregel, Nicht-Admins immer. MoreMe wäre damit beim ersten Einschalten dauerhaft taub, ohne dass der Nutzer es merkt. Entscheid: Der Installer legt eine Erlaubnis-Regel für `ORC.exe` an, das Deinstallieren entfernt sie. Sie gilt erst etwas, wenn MoreMe läuft, und MoreMe hat die PIN. Profile: Frage 6, Windows macht unbekannte Netze zu Public. Für reines Loopback habe ich keine Microsoft-Aussage gefunden, mit der Regel ist die Frage für das installierte ORC egal.
+Firewall: ein Programm, das eingehend lauscht, löst ohne Erlaubnis-Regel den Dialog aus. Admins bekommen bei Abbrechen eine Sperrregel, Nicht-Admins immer. MoreMe wäre damit beim ersten Einschalten dauerhaft taub, ohne dass der Nutzer es merkt. Entscheid: Der Installer legt eine Erlaubnis-Regel für `ORC.exe` an, das Deinstallieren entfernt sie. Sie gilt erst etwas, wenn MoreMe läuft, und MoreMe hat die PIN. Sie gilt für alle Profile, denn Windows macht unbekannte Netze zu Public. Für reines Loopback habe ich keine Microsoft-Aussage gefunden, mit der Regel ist die Frage für das installierte ORC egal.
 
 ## 6. WinUSB-Treiber
 Entscheid: wiederverwenden, nicht nachbauen. `reasixty_installWinUsbDriver`, `…Uninstall…`, `…DriverStatus`, `winUsbRunElevated_` und der Job-Zustand (`main.cpp` ab 56940) ziehen nach neu `src/WinUsbDriver.{h,cpp}`, REAPER-frei, beide Programme rufen es. `main.cpp` darf nie in ORCs Quellenliste. INF und Skript bleiben eine Kopie, das eingebettete `winusb_inf.h` aus CMake auch.
@@ -97,7 +97,7 @@ WinUSB erlaubt ein Programm pro Gerät. Hotplug von libusb ist unter Windows ab 
 ## 7. TotalMix und OSC
 Gleicher Weg wie am Mac: UDP auf `127.0.0.1`, Global OSC ab TotalMix 2.1, zwei Remotes (Flächen 7005/7006, MoreMe 7003/7004). `host` muss IPv4 sein (`RmeManager.cpp:618`), `localhost` wird zu `127.0.0.1`. RMEs Handbuch beschreibt die vier Remote-Seiten für Mac und Windows gleich. Am 30.09. hörte TotalMix unter Windows auf `0.0.0.0` (IPv4), gemessen.
 
-**Bekannte Falle, gemessen am 30.09. auf dem StoerPC:** Steht in TotalMix unter OSC Details „Send changes“ aus, beantwortet es `/sendall` nur mit Pegeln. ORC wäre dann online, mit leeren Kanälen. Frage 8.
+**Bekannte Falle, gemessen am 30.09. auf dem StoerPC:** Steht in TotalMix unter OSC Details „Send changes“ aus, beantwortet es `/sendall` nur mit Pegeln. ORC wäre dann online, mit leeren Kanälen. Das kommt ins Handbuch, keine neue Menüzeile.
 
 ## 8. Übergabe ORC und Rea-Sixty
 Dieselben Dateien, derselbe Ablauf (`src/OrcHandover.h`), nur in `%APPDATA%\ORC`. WinUSB macht die Übergabe sogar Pflicht, ein zweites Öffnen scheitert. Dazu kommt:
@@ -105,7 +105,7 @@ Dieselben Dateien, derselbe Ablauf (`src/OrcHandover.h`), nur in `%APPDATA%\ORC`
 - `kill(pid, 0)` wird `orc_handover::processAlive`: `OpenProcess` plus `GetExitCodeProcess`. `ACCESS_DENIED` zählt als lebt, wie `EPERM` heute (REAPER kann erhöht laufen). Windows vergibt PIDs schnell neu, eine fremde PID hielte ORC zurück, bis der Prozess endet. Am Mac ist das dieselbe Grenze, ich baue nichts dagegen.
 - `rename` über eine bestehende Datei scheitert unter Windows. `writeRmeJson` geht über `MoveFileExW` mit `REPLACE_EXISTING`. `fopen` öffnet ohne `FILE_SHARE_DELETE`, ein Leser kann das Ersetzen und auch `std::remove` scheitern lassen. Rea-Sixty liest `rme.json` einmal pro Sekunde, die Übergabe prüft zweimal pro Sekunde. Darum `replaceFile` und `removeFile` mit kurzem Wiederholen, und ein Test mit Schreibern und Lesern. Sonst bliebe `handover` still liegen.
 - `stat` liefert unter Windows Sekunden. `Bindings.cpp:5195` und `main.cpp` (`reasixty_rmeLoadConfig_`) vergleichen Zeit und Grösse, zwei Änderungen in derselben Sekunde mit gleicher Grösse gingen verloren. Gemeinsamer Helfer mit `GetFileAttributesExA`.
-- Rea-Sixty: die 9 `__APPLE__`-Stellen, beide Pfade und der Schalter „Take the UF1 over from ORC“ gelten auch für `_WIN32`. Damit wird auch das RME-Side-Car in Rea-Sixty unter Windows erstmals aktiv, denn es hängt an denselben Pfaden. Das ist die grösste Folge dieses Abschnitts: Rea-Sixty braucht dafür ein eigenes Release (Frage 4).
+- Rea-Sixty: die 9 `__APPLE__`-Stellen, beide Pfade und der Schalter „Take the UF1 over from ORC“ gelten auch für `_WIN32`. Damit wird auch das RME-Side-Car in Rea-Sixty unter Windows erstmals aktiv, denn es hängt an denselben Pfaden. Das ist die grösste Folge dieses Abschnitts: Rea-Sixty braucht dafür ein eigenes Release.
 - Ein Rea-Sixty ohne diese Stufe kennt ORC unter Windows nicht. Dann gilt: wer zuerst öffnet, hat das Gerät, der andere zeigt „not open“.
 
 ## 9. Autostart
@@ -130,7 +130,7 @@ Alle hätten den Mac-Test bestanden.
 - `this Mac` steht in Fehlertexten und Handbuch, wird `this computer`, auch am Mac.
 
 ## 13. Installer und Signierung
-**Installer:** Erhöht, nach `%ProgramFiles%\ORC`, mit `ORC.exe`, `libusb-1.0.dll`, `moreme\`, `settings\`, `Licenses\`. Schliesst ein laufendes ORC per Mutex, setzt die Firewall-Regel, zieht bei Bedarf die WebView2-Laufzeit. `%APPDATA%\ORC` bleibt beim Deinstallieren liegen, wie am Mac. Werkzeug: Frage 3. Inno Setup bittet kommerzielle Nutzer um eine bezahlte Lizenz, NSIS ist zlib und frei. Inno liegt auf dem CI-Runner, NSIS müsste CI nachladen.
+**Installer:** Erhöht, nach `%ProgramFiles%\ORC`, mit `ORC.exe`, `libusb-1.0.dll`, `moreme\`, `settings\`, `Licenses\`. Schliesst ein laufendes ORC per Mutex, setzt die Firewall-Regel, zieht bei Bedarf die WebView2-Laufzeit. `%APPDATA%\ORC` bleibt beim Deinstallieren liegen, wie am Mac. Werkzeug: NSIS, zlib und frei, CI lädt es nach. Inno Setup bittet kommerzielle Nutzer um eine bezahlte Lizenz.
 
 **Microsoft Store: verworfen.** Das schliesst den offenen Punkt aus `orc-standalone`. MSIX leitet neue Dateien unter `AppData` in einen privaten Ordner um, Rea-Sixty fände `%APPDATA%\ORC` nicht mehr. MSIX kennt keine Treiber, der Store nimmt keine Programme mit erhöhten Rechten, eine exe müsste schon signiert sein.
 
@@ -143,12 +143,12 @@ Alle hätten den Mac-Test bestanden.
 | Certum Open Source | ab 69 Euro | auf Frank als Person, Karte und Leser, signieren nur dort, wo die Karte steckt, nicht in CI. Seite zeigt zugleich „out of stock“ und „in stock“ |
 | Azure Artifact Signing | rund 9.99 USD im Monat | Microsofts Seiten widersprechen sich zu Schweiz und zu 3 Jahren Steuerhistorie, Einzelfirma ungeklärt. Vor dem Anlegen Support fragen |
 
-Empfehlung: erste Fassung unsigniert mit demselben Known Issue, parallel SignPath beantragen, das würde auch Rea-Sixty helfen. Frage 1. Der Treiber-Katalog signiert sich weiter selbst, das ist davon unabhängig.
+Entschieden: erste Fassung unsigniert mit demselben Known Issue, parallel SignPath, das würde auch Rea-Sixty helfen. Der Treiber-Katalog signiert sich weiter selbst, das ist davon unabhängig.
 
 ## 14. CI und Release
 - `extension/CMakeLists.txt`: Ziel `orc` unter `if(APPLE OR WIN32)`, geteilte Liste mit `win_http.cpp` statt `macos_http.mm`, Windows-Quellen, `ws2_32`, `iphlpapi`, `bcrypt`, `winhttp`, `setupapi`. libusb wie bei der DLL (`LIBUSB_ROOT`), keine hidapi. Die Version zieht aus dem Block `if(APPLE)` heraus, `orc-release.sh:26` liest sie weiter mit `sed`.
 - `.github/workflows/build.yml`, Job `windows-x64`: baut `orc`, fährt `ctest -C Release -R` auf den ORC-Tests (heute läuft dort gar kein Test), baut den Installer, lädt ihn als Artefakt hoch. Prüft Hashes für libusb, WebView2, QR. Dazu Eingabe am `workflow_dispatch`, um nur Windows zu fahren, damit ein Testlauf keine Mac-Runner belegt.
-- Bauen in CI, wie die Rea-Sixty-DLL. Der StoerPC hat keine CMake im Pfad und braucht auch keine. Die Notarisierung bleibt lokal am Mac. Release: `orc-release.sh` wie bisher, das Windows-Artefakt desselben Commits kommt in dasselbe GitHub-Release (Frage 5).
+- Bauen in CI, wie die Rea-Sixty-DLL. Der StoerPC hat keine CMake im Pfad und braucht auch keine. Die Notarisierung bleibt lokal am Mac. Release: `orc-release.sh` wie bisher, das Windows-Artefakt desselben Commits kommt in dasselbe GitHub-Release.
 - `licenses/THIRD-PARTY-NOTICES.txt`: libusb-Absatz je Plattform (DLL neben der exe, austauschbar, LGPL), dazu WebView2 SDK (BSD-artig), QR (MIT). Der libusb-Tarball liegt schon im Release.
 
 ## 15. Tests
@@ -184,7 +184,7 @@ Jede Stufe baut auf beiden Plattformen, die Mac-Tests bleiben grün, das Mac-Ver
 
 **Stufe 8, Texte.** Handbuch: Voraussetzungen, Treiber, Firewall, Überlauf, Send changes, Grenzen. `orc_manual.py --check` deckt die neuen Status-Texte ab. Website `orc.astro` („Mac only“), ORC-README. Known Issues. Danach Franks Test als Kunde, Release erst auf sein Wort.
 
-Arbeit auf dem Branch, solange das Release läuft, nichts nach `main`. Danach Frage 9.
+Arbeit auf dem Branch bis nach Franks Test, nichts nach `main`.
 
 ## 17. Was nur Frank am StoerPC testen kann
 Ich kann per SSH Tests fahren und Dateien ablegen, aber kein Fenster sehen und nichts bedienen.
@@ -200,17 +200,17 @@ Ich kann per SSH Tests fahren und Dateien ablegen, aber kein Fenster sehen und n
 ## 18. Was ich nicht baue
 Windows auf ARM (auch Rea-Sixty hat kein ARM-Build), Microsoft Store, Auto-Update, dunkle Popup-Menüs über undokumentierte Aufrufe, portables REAPER beim Import, neue Einstellungen, Hilfesätze auf der Seite. Der Dialog vor Treiber-Install ist die eine Warnung, die sein muss.
 
-## 19. Offene Fragen an Frank
-1. **Signatur:** erste Fassung unsigniert wie Rea-Sixty und SignPath beantragen? Oder vorher Geld ausgeben?
-2. **Symbol:** Wortmarke trotz nur 5 Pixeln Höhe bei 16 Pixeln, oder bei kleinen Grössen nur das O?
-3. **Installer:** NSIS (frei, CI lädt nach) oder Inno Setup (Lizenz kaufen, Preis stand nicht auf der Seite)? Empfehlung NSIS.
-4. **Rea-Sixty:** Side-Car unter Windows mit einem eigenen Rea-Sixty-Release gleichzeitig freigeben? Empfehlung ja, ohne es wäre die Port-Übergabe sinnlos.
-5. **Version:** Mac und Windows gemeinsam als nächste ORC-Version aus einem Commit? Empfehlung ja, gleicher Code und gleiche Dateien.
-6. **Firewall:** Regel für alle Netzprofile oder nur Privat? Dein LAN am StoerPC steht auf Public. Nur Privat hiesse dort: Handys kommen nicht rein, ohne Meldung. Empfehlung alle, MoreMe ist ab Werk aus und hat die PIN.
-7. **Gerätename im Gerätemanager:** heute „SSL UF1 (Rea-Sixty / WinUSB)“. Für ORC-Nutzer neutral „SSL UF1 (WinUSB)“? Empfehlung ja, Dateiname und Zertifikat bleiben.
-8. **Send changes:** nur Handbuch, oder eine Menüzeile, wenn nach `/sendall` keine Kanalwerte kommen? Das wäre neu, wirkt auch am Mac.
-9. **Mergen:** nach dem Release Stufe für Stufe nach `main`, oder Branch bis nach deinem Test?
-10. **Testaufbau:** Testest du als `frank` (jetzt angemeldet) oder `sunny` (dort liegt Rea-Sixty)? UF1, UF8 und UFX+ steckst du für Stufe 2 an? TotalMix dort meldet 0.2.0.3, ORC braucht 2.1 mit Global OSC. Ziehst du das nach?
+## 19. Entschieden (Frank 03.11.)
+1. **Signatur:** erste Fassung unsigniert wie Rea-Sixty, mit demselben Known Issue. SignPath wird parallel beantragt, das macht Frank: Der Antrag geht nach aussen und verlangt Signaturregeln auf der Website.
+2. **Symbol:** Wortmarke. Frank hat keine Änderung verlangt, der Plan bleibt stehen.
+3. **Installer:** NSIS.
+4. **Rea-Sixty:** Side-Car unter Windows mit eigenem Rea-Sixty-Release.
+5. **Version:** Mac und Windows gemeinsam als nächste ORC-Version aus einem Commit.
+6. **Firewall:** Regel für alle Netzprofile.
+7. **Gerätename:** neutral „SSL UF1 (WinUSB)“, Dateiname und Zertifikat bleiben.
+8. **Send changes:** nur Handbuch, keine neue Menüzeile. Frank hat dazu keine Empfehlung bekommen, darum gilt der kleinere Weg.
+9. **Mergen:** Branch bis nach Franks Test. Auch hier keine Empfehlung, darum der Weg, der `main` nicht anfasst.
+10. **Testaufbau:** Frank testet als `sunny`. Offen bleibt nur, dass die Geräte für Stufe 2 angesteckt sind und TotalMix 2.1 oder neuer läuft.
 
 ## 20. Belegt und nicht belegt
 **Aus dem Code gelesen:** alle `datei:zeile` und Tabellen oben.

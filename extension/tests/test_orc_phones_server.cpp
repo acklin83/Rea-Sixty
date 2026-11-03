@@ -7,22 +7,19 @@
 // picked the same way, so nothing it sends can reach a real program (memory
 // never-send-osc-on-franks-mac: a test once sent a gain to a running TotalMix).
 
+#include "OrcSock.h"
+
 #include "PhonesServer.h"
 #include "RmeOsc.h"
+#include "TestScratch.h"
 #include "WebSocket.h"
 
-#include <arpa/inet.h>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
-#include <netinet/in.h>
-#include <poll.h>
 #include <string>
 #include <cstdlib>
-#include <sys/socket.h>
-#include <sys/stat.h>
 #include <thread>
-#include <unistd.h>
 #include <vector>
 
 static int g_fail = 0;
@@ -32,57 +29,68 @@ static int g_fail = 0;
 namespace rme = reasixty::rme;
 namespace ph  = orc::phones;
 using clk = std::chrono::steady_clock;
+using orc::sock::kNone;
+using orc::sock::sock_t;
+
+static int pollOne(pollfd& p, int ms)
+{
+    std::vector<pollfd> one{ p };
+    const int r = orc::sock::pollAll(one, ms);
+    p = one[0];
+    return r;
+}
 
 // A port nobody holds: bind 0 on loopback, read what the system chose, let go.
 static int freePort(int type)
 {
-    const int fd = ::socket(AF_INET, type, 0);
+    const sock_t fd = ::socket(AF_INET, type, 0);
     sockaddr_in a{};
     a.sin_family = AF_INET;
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     ::bind(fd, reinterpret_cast<sockaddr*>(&a), sizeof(a));
     socklen_t len = sizeof(a);
     ::getsockname(fd, reinterpret_cast<sockaddr*>(&a), &len);
-    ::close(fd);
+    orc::sock::closeSock(fd);
     return ntohs(a.sin_port);
 }
 
 // The fake TotalMix: bound on its own port 0, answers whoever asked.
 struct FakeMix {
-    int         fd = -1;
+    sock_t      fd = kNone;
     int         port = 0;
     sockaddr_in from{};
     bool        heard = false;
     std::vector<std::string> got;   // "address value"
 
-    FakeMix()
+    explicit FakeMix(int wanted = 0)
     {
         fd = ::socket(AF_INET, SOCK_DGRAM, 0);
         sockaddr_in a{};
         a.sin_family = AF_INET;
+        a.sin_port = htons(static_cast<std::uint16_t>(wanted));
         a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         ::bind(fd, reinterpret_cast<sockaddr*>(&a), sizeof(a));
         socklen_t len = sizeof(a);
         ::getsockname(fd, reinterpret_cast<sockaddr*>(&a), &len);
         port = ntohs(a.sin_port);
     }
-    ~FakeMix() { ::close(fd); }
+    ~FakeMix() { orc::sock::closeSock(fd); }
     // Read what arrived for up to `ms`.
     void pump(int ms)
     {
         const auto end = clk::now() + std::chrono::milliseconds(ms);
         while (clk::now() < end) {
             pollfd p{ fd, POLLIN, 0 };
-            if (::poll(&p, 1, 20) <= 0) continue;
+            if (pollOne(p, 20) <= 0) continue;
             unsigned char buf[2048];
             socklen_t len = sizeof(from);
-            const ssize_t n = ::recvfrom(fd, buf, sizeof(buf), 0, reinterpret_cast<sockaddr*>(&from), &len);
+            const long n = ::recvfrom(fd, reinterpret_cast<char*>(buf), sizeof(buf), 0, reinterpret_cast<sockaddr*>(&from), &len);
             if (n <= 0) continue;
             heard = true;
             rme::forEachMessage(std::span<const std::uint8_t>(buf, static_cast<std::size_t>(n)),
                                 [&](const rme::Message& m) {
                 char v[32];
-                std::snprintf(v, sizeof(v), " %g", m.args.empty() ? 0.0 : m.args[0].number());
+                snprintf(v, sizeof(v), " %g", m.args.empty() ? 0.0 : m.args[0].number());
                 got.push_back(m.address + v);
             });
         }
@@ -99,13 +107,13 @@ struct FakeMix {
     }
     void send(const std::vector<std::uint8_t>& pkt)
     {
-        ::sendto(fd, pkt.data(), pkt.size(), 0, reinterpret_cast<sockaddr*>(&from), sizeof(from));
+        ::sendto(fd, reinterpret_cast<const char*>(pkt.data()), static_cast<int>(pkt.size()), 0, reinterpret_cast<sockaddr*>(&from), sizeof(from));
     }
 };
 
 // A browser: TCP, the upgrade, masked text frames.
 struct Browser {
-    int         fd = -1;
+    sock_t      fd = kNone;
     std::string in;
     bool        open = false;
 
@@ -120,7 +128,7 @@ struct Browser {
         const std::string req = "GET /ws HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\n"
                                 "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
                                 "Sec-WebSocket-Version: 13\r\n" + extraHeader + "\r\n";
-        ::send(fd, req.data(), req.size(), 0);
+        orc::sock::sendSome(fd, req.data(), req.size());
         const auto end = clk::now() + std::chrono::seconds(3);
         while (clk::now() < end && in.find("\r\n\r\n") == std::string::npos) readSome(50);
         const std::size_t e = in.find("\r\n\r\n");
@@ -133,9 +141,9 @@ struct Browser {
     void readSome(int ms)
     {
         pollfd p{ fd, POLLIN, 0 };
-        if (::poll(&p, 1, ms) <= 0) return;
+        if (pollOne(p, ms) <= 0) return;
         char buf[8192];
-        const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+        const long n = orc::sock::recvSome(fd, buf, sizeof(buf));
         if (n > 0) in.append(buf, static_cast<std::size_t>(n));
         else open = false;
     }
@@ -148,7 +156,7 @@ struct Browser {
         else { f.push_back(static_cast<char>(0x80 | 126)); f.push_back(static_cast<char>(s.size() >> 8)); f.push_back(static_cast<char>(s.size() & 0xFF)); }
         for (const unsigned char m : mask) f.push_back(static_cast<char>(m));
         for (std::size_t i = 0; i < s.size(); ++i) f.push_back(static_cast<char>(s[i] ^ mask[i & 3]));
-        ::send(fd, f.data(), f.size(), 0);
+        orc::sock::sendSome(fd, f.data(), f.size());
     }
     // Text messages that arrived within `ms`, unmasked server frames.
     std::string messages(int ms)
@@ -169,13 +177,13 @@ struct Browser {
         }
         return all;
     }
-    ~Browser() { if (fd >= 0) ::close(fd); }
+    ~Browser() { if (fd != kNone) orc::sock::closeSock(fd); }
 };
 
 // One HTTP GET, with its answer.
 static std::string httpGet(int port, const std::string& path, const std::string& headers)
 {
-    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    const sock_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in a{};
     a.sin_family = AF_INET;
     a.sin_port = htons(static_cast<std::uint16_t>(port));
@@ -183,18 +191,18 @@ static std::string httpGet(int port, const std::string& path, const std::string&
     std::string in;
     if (::connect(fd, reinterpret_cast<sockaddr*>(&a), sizeof(a)) == 0) {
         const std::string req = "GET " + path + " HTTP/1.1\r\n" + headers + "\r\n";
-        ::send(fd, req.data(), req.size(), 0);
+        orc::sock::sendSome(fd, req.data(), req.size());
         const auto end = clk::now() + std::chrono::seconds(2);
         while (clk::now() < end) {
             pollfd p{ fd, POLLIN, 0 };
-            if (::poll(&p, 1, 50) <= 0) continue;
+            if (pollOne(p, 50) <= 0) continue;
             char buf[4096];
-            const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+            const long n = orc::sock::recvSome(fd, buf, sizeof(buf));
             if (n <= 0) break;
             in.append(buf, static_cast<std::size_t>(n));
         }
     }
-    ::close(fd);
+    orc::sock::closeSock(fd);
     return in;
 }
 
@@ -202,14 +210,10 @@ static bool has(const std::string& s, const std::string& part) { return s.find(p
 
 int main()
 {
-    // ⛔ ORC's folder is $HOME's. A test on this Mac must not read Frank's
-    // performers, nor anything write to them.
-    char home[] = "/tmp/orc-phones-test-XXXXXX";
-    if (::mkdtemp(home)) {
-        ::setenv("HOME", home, 1);
-        ::mkdir((std::string(home) + "/Library").c_str(), 0755);
-        ::mkdir((std::string(home) + "/Library/Application Support").c_str(), 0755);
-    }
+    orc::sock::startup();
+    // ⛔ A test on this computer must not read Frank's performers, nor anything
+    // write to them.
+    testscratch::useAsHome(testscratch::makeDir("orc-phones-test-"));
 
     FakeMix mix;
     ph::Settings s;
@@ -299,26 +303,26 @@ int main()
 
     // A plain page request: no page in a test binary, a clean 404 and a close.
     {
-        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        const sock_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
         sockaddr_in a{};
         a.sin_family = AF_INET;
         a.sin_port = htons(static_cast<std::uint16_t>(s.webPort));
         a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
         EXPECT(::connect(fd, reinterpret_cast<sockaddr*>(&a), sizeof(a)) == 0);
         const std::string req = "GET /nothing HTTP/1.1\r\nHost: x\r\n\r\n";
-        ::send(fd, req.data(), req.size(), 0);
+        orc::sock::sendSome(fd, req.data(), req.size());
         std::string resp;
         const auto end = clk::now() + std::chrono::seconds(2);
         while (clk::now() < end) {
             pollfd p{ fd, POLLIN, 0 };
-            if (::poll(&p, 1, 50) <= 0) continue;
+            if (pollOne(p, 50) <= 0) continue;
             char buf[1024];
-            const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+            const long n = orc::sock::recvSome(fd, buf, sizeof(buf));
             if (n <= 0) break;   // closed after the answer
             resp.append(buf, static_cast<std::size_t>(n));
         }
         EXPECT(resp.compare(0, 22, "HTTP/1.1 404 Not Found") == 0);
-        ::close(fd);
+        orc::sock::closeSock(fd);
     }
 
     // Off: the port is free again.
@@ -327,6 +331,26 @@ int main()
     {
         Browser d;
         EXPECT(!d.connect(s.webPort));
+    }
+
+    // TotalMix not there yet: sends go to a closed port, which Windows answers with
+    // WSAECONNRESET on the next read. The link has to outlive that and find the
+    // TotalMix that turns up.
+    {
+        const int late = freePort(SOCK_DGRAM);
+        ph::Settings t = s;
+        t.enabled  = true;
+        t.webPort  = freePort(SOCK_STREAM);
+        t.sendPort = late;
+        t.recvPort = freePort(SOCK_DGRAM);
+        ph::Server waits;
+        waits.apply(t, "1357");
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        FakeMix arrives(late);
+        arrives.pump(4000);
+        EXPECT(arrives.heard && arrives.saw("/sendall 1"));
+        t.enabled = false;
+        waits.apply(t, "1357");
     }
 
     if (g_fail) { std::printf("test_orc_phones_server: %d failure(s)\n", g_fail); return 1; }

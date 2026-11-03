@@ -151,7 +151,7 @@ std::string jstr(const std::string& raw)
         else if (c == '\\') o += "\\\\";
         else if (c < 0x20) {
             char b[8];
-            std::snprintf(b, sizeof(b), "\\u%04x", c);
+            snprintf(b, sizeof(b), "\\u%04x", c);
             o += b;
         } else o.push_back(ch);
     }
@@ -162,7 +162,7 @@ std::string jnum(double v)
 {
     if (!std::isfinite(v)) return "null";   // what JSON.stringify writes
     char b[32];
-    std::snprintf(b, sizeof(b), "%.9g", v);
+    snprintf(b, sizeof(b), "%.9g", v);
     return b;
 }
 
@@ -1079,7 +1079,7 @@ std::string Mixer::stripJson_(const std::string& mix, const std::string& target)
             if (model.on)
                 for (const uf1eq::Band& b : model.bands) db += uf1eq::bandDb(b, f);
             char t[16];
-            std::snprintf(t, sizeof(t), "%.2f", std::clamp(db, -30.0, 30.0));
+            snprintf(t, sizeof(t), "%.2f", std::clamp(db, -30.0, 30.0));
             if (i) curve += ",";
             curve += t;
         }

@@ -79,11 +79,11 @@ def statuses():
     out.append("is in use by another program")
     for m in re.finditer(r'st_\.error\s*=\s*"([^"]+)"', src("orc/Surface.cpp")):
         out.append(m.group(1))
-    app = src("orc/OrcApp.mm")
-    for m in re.finditer(r'@"UF1   ([a-z ]+)', app):
+    menu = src("orc/OrcMenu.cpp")
+    for m in re.finditer(r'"UF1   ([a-z ]+)', menu):
         out.append(m.group(1).split(",")[0].split(":")[0].strip())
     # The UF8 line (docs/orc-uf8-plan.md, stage 5), and its fixed texts.
-    for m in re.finditer(r'@"UF8   ([^"%]+)', app):
+    for m in re.finditer(r'"UF8   ([^"%]+)', menu):
         out.append(m.group(1).split(",")[0].split(":")[0].strip())
     for m in re.finditer(r'st_\.error\s*=\s*"([^"]+)"', src("orc/Uf8Surface.cpp")):
         out.append(m.group(1))

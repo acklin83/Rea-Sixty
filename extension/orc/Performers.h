@@ -67,7 +67,7 @@ std::string outputsJson(const reasixty::rme::State& st);
 // menu am mac"), which is why it needs no PIN. The peer has to be the Mac itself,
 // no reverse proxy in between (no forwarding header), and the Host and Origin
 // have to be the loopback: a page on the internet cannot talk to it through the
-// browser on this Mac.
+// browser on this computer.
 bool deskAllowed(const std::string& peer, const std::string& xRealIp, const std::string& xForwardedFor,
                  const std::string& host, const std::string& origin);
 

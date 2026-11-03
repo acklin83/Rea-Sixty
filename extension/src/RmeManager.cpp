@@ -605,6 +605,13 @@ void Manager::workerLoop()
                 continue;
             }
 #if defined(_WIN32)
+            // ⛔ Windows answers a send to a port nobody holds with WSAECONNRESET
+            // on the next recv, on a UDP socket too. TotalMix not running is a
+            // normal state here, not an event for this socket.
+            BOOL report = FALSE;
+            DWORD unused = 0;
+            ::WSAIoctl(sock, _WSAIOW(IOC_VENDOR, 12), &report, sizeof(report), nullptr, 0,
+                       &unused, nullptr, nullptr);
             DWORD tv = 100;
 #else
             timeval tv{}; tv.tv_usec = 100000;

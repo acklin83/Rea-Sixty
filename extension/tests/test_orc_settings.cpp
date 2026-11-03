@@ -6,6 +6,8 @@
 // reach a real program (memory never-send-osc-on-franks-mac). MoreMe's remote only
 // starts on ports from freePort, nobody listening.
 
+#include "OrcSock.h"
+
 #include "../orc/OrcLight.h"
 #include "Bindings.h"
 #include "BindingsHost.h"
@@ -24,19 +26,17 @@
 #include "RmeSoftKeys.h"
 #include "SettingsServer.h"
 
-#include <arpa/inet.h>
+#include "TestScratch.h"
+
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
-#include <dirent.h>
-#include <netinet/in.h>
-#include <poll.h>
+#include <filesystem>
 #include <string>
-#include <sys/socket.h>
 #include <sys/stat.h>
 #include <thread>
-#include <unistd.h>
+#include <vector>
 
 static int g_fail = 0;
 #define EXPECT(cond) do { if (!(cond)) { \
@@ -49,6 +49,16 @@ namespace ph   = orc::phones;
 namespace rme  = reasixty::rme;
 namespace set  = orc::settings;
 using clk = std::chrono::steady_clock;
+using orc::sock::kNone;
+using orc::sock::sock_t;
+
+static int pollOne(pollfd& p, int ms)
+{
+    std::vector<pollfd> one{ p };
+    const int r = orc::sock::pollAll(one, ms);
+    p = one[0];
+    return r;
+}
 
 static bool has(const std::string& s, const std::string& what) { return s.find(what) != std::string::npos; }
 static bool fileExists(const std::string& p) { struct stat sb{}; return ::stat(p.c_str(), &sb) == 0; }
@@ -56,60 +66,60 @@ static std::string file(const std::string& p) { return orc_handover::readFile(p)
 
 static int freePort(int type)
 {
-    const int fd = ::socket(AF_INET, type, 0);
+    const sock_t fd = ::socket(AF_INET, type, 0);
     sockaddr_in a{};
     a.sin_family = AF_INET;
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     ::bind(fd, reinterpret_cast<sockaddr*>(&a), sizeof(a));
     socklen_t len = sizeof(a);
     ::getsockname(fd, reinterpret_cast<sockaddr*>(&a), &len);
-    ::close(fd);
+    orc::sock::closeSock(fd);
     return ntohs(a.sin_port);
 }
 
-static int connectTo(int port)
+static sock_t connectTo(int port)
 {
-    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    const sock_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in a{};
     a.sin_family = AF_INET;
     a.sin_port = htons(static_cast<std::uint16_t>(port));
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    if (::connect(fd, reinterpret_cast<sockaddr*>(&a), sizeof(a)) != 0) { ::close(fd); return -1; }
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&a), sizeof(a)) != 0) { orc::sock::closeSock(fd); return kNone; }
     return fd;
 }
 
 // One request, with its answer.
 static std::string http(int port, const std::string& path, const std::string& headers)
 {
-    const int fd = connectTo(port);
-    if (fd < 0) return {};
+    const sock_t fd = connectTo(port);
+    if (fd == kNone) return {};
     const std::string req = "GET " + path + " HTTP/1.1\r\n" + headers + "\r\n";
-    ::send(fd, req.data(), req.size(), 0);
+    orc::sock::sendSome(fd, req.data(), req.size());
     std::string in;
     const auto end = clk::now() + std::chrono::seconds(3);
     while (clk::now() < end) {
         pollfd p{ fd, POLLIN, 0 };
-        if (::poll(&p, 1, 50) <= 0) continue;
+        if (pollOne(p, 50) <= 0) continue;
         char buf[8192];
-        const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+        const long n = orc::sock::recvSome(fd, buf, sizeof(buf));
         if (n <= 0) break;
         in.append(buf, static_cast<std::size_t>(n));
     }
-    ::close(fd);
+    orc::sock::closeSock(fd);
     return in;
 }
 
 // A browser: the upgrade, masked text frames.
 struct Browser {
-    int fd = -1;
+    sock_t fd = kNone;
     std::string in;
     bool connect(int port, const std::string& path, const std::string& host)
     {
         fd = connectTo(port);
-        if (fd < 0) return false;
+        if (fd == kNone) return false;
         const std::string req = "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nUpgrade: websocket\r\n"
             "Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
-        ::send(fd, req.data(), req.size(), 0);
+        orc::sock::sendSome(fd, req.data(), req.size());
         const auto end = clk::now() + std::chrono::seconds(3);
         while (clk::now() < end && in.find("\r\n\r\n") == std::string::npos) readSome(50);
         const std::size_t e = in.find("\r\n\r\n");
@@ -121,9 +131,9 @@ struct Browser {
     void readSome(int ms)
     {
         pollfd p{ fd, POLLIN, 0 };
-        if (::poll(&p, 1, ms) <= 0) return;
+        if (pollOne(p, ms) <= 0) return;
         char buf[65536];
-        const ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
+        const long n = orc::sock::recvSome(fd, buf, sizeof(buf));
         if (n > 0) in.append(buf, static_cast<std::size_t>(n));
     }
     void sendText(const std::string& s)
@@ -134,7 +144,7 @@ struct Browser {
         f.push_back(static_cast<char>(0x80 | s.size()));
         for (const unsigned char m : mask) f.push_back(static_cast<char>(m));
         for (std::size_t i = 0; i < s.size(); ++i) f.push_back(static_cast<char>(s[i] ^ mask[i & 3]));
-        ::send(fd, f.data(), f.size(), 0);
+        orc::sock::sendSome(fd, f.data(), f.size());
     }
     // The newest whole text message within `ms`, "" for none.
     std::string message(int ms)
@@ -165,7 +175,7 @@ struct Browser {
         }
         return got;
     }
-    ~Browser() { if (fd >= 0) ::close(fd); }
+    ~Browser() { if (fd != kNone) orc::sock::closeSock(fd); }
 };
 
 static void testAllowed()
@@ -525,11 +535,8 @@ static void testRmeJsonWhole()
     EXPECT(broken == 0);
     EXPECT(orc::saveRmeConfig(rme::manager().config()));
     bool leftover = false;
-    if (DIR* d = ::opendir(orc::supportDir().c_str())) {
-        while (const dirent* e = ::readdir(d))
-            if (std::string(e->d_name).find("rme.json.") == 0) leftover = true;
-        ::closedir(d);
-    }
+    for (const auto& e : std::filesystem::directory_iterator(orc::supportDir()))
+        if (e.path().filename().string().find("rme.json.") == 0) leftover = true;
     EXPECT(!leftover);
 }
 
@@ -542,6 +549,26 @@ static void testBackslashInFiles()
     ph::Settings b;
     EXPECT(ph::loadSettings(b));
     EXPECT(b.studio == a.studio);
+
+    // ⛔ The logo's name is a file in ORC's folder and nothing else: under Windows
+    // a backslash and a drive are paths too.
+    for (const char* bad : { "../x.png", "..\\x.png", "C:x.png", "sub\\x.png", "..", "." }) {
+        ph::Settings l;
+        l.logo = bad;
+        EXPECT(ph::saveSettings(l));
+        ph::Settings r;
+        EXPECT(ph::loadSettings(r));
+        EXPECT(r.logo.empty());
+    }
+    {
+        ph::Settings l;
+        l.logo = "moreme-logo.png";
+        EXPECT(ph::saveSettings(l));
+        ph::Settings r;
+        EXPECT(ph::loadSettings(r));
+        EXPECT(r.logo == "moreme-logo.png");
+    }
+    EXPECT(ph::saveSettings(a));
 
     ph::Book book;
     ph::Performer p;
@@ -584,13 +611,13 @@ static void testServer(const std::string& res)
         const std::string addr = ph::pageAddress(port);
         if (!addr.empty()) {
             const std::string ip = addr.substr(7, addr.rfind(':') - 7);
-            const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+            const sock_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
             sockaddr_in a{};
             a.sin_family = AF_INET;
             a.sin_port = htons(static_cast<std::uint16_t>(port));
             ::inet_pton(AF_INET, ip.c_str(), &a.sin_addr);
             EXPECT(::connect(fd, reinterpret_cast<sockaddr*>(&a), sizeof(a)) != 0);
-            ::close(fd);
+            orc::sock::closeSock(fd);
         }
     }
 
@@ -661,13 +688,11 @@ static void testPageHasEverything(const std::string& res)
 
 int main()
 {
-    // ⛔ HOME first: orc::supportDir() reads it.
-    char tmpl[] = "/tmp/orc_settings_testXXXXXX";
-    const char* home = mkdtemp(tmpl);
-    if (!home) return 1;
-    ::setenv("HOME", home, 1);
-    ::mkdir((std::string(home) + "/Library").c_str(), 0755);
-    ::mkdir((std::string(home) + "/Library/Application Support").c_str(), 0755);
+    orc::sock::startup();
+    // ⛔ The scratch folder first: orc::supportDir() reads it.
+    const std::string home = testscratch::makeDir("orc_settings_test");
+    if (home.empty()) return 1;
+    testscratch::useAsHome(home);
 
     bnd::Host bh;
     bh.configDir  = []() -> std::string { return orc::supportDir(); };

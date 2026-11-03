@@ -27,7 +27,8 @@
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <unistd.h>
+
+#include "TestScratch.h"
 
 namespace bnd = uf8::bindings;
 namespace sk  = reasixty::rme::softkeys;
@@ -80,8 +81,7 @@ static int g_dim = 0;
 
 int main()
 {
-    char tmpl[] = "/tmp/rme_softkeys_XXXXXX";
-    g_dir = mkdtemp(tmpl);
+    g_dir = testscratch::makeDir("rme_softkeys_");
     const std::string orc = g_dir + "/orc.json";
 
     bnd::Host h;
@@ -381,9 +381,8 @@ int main()
         EXPECT(!bnd::modifierHeld(bnd::Modifier::Shift) && !mirror.load());
     }
 
-    std::remove(orc.c_str());
-    std::remove((g_dir + "/bindings.json").c_str());
-    rmdir(g_dir.c_str());
+    std::error_code ec;
+    std::filesystem::remove_all(g_dir, ec);
     if (g_fail) { std::printf("%d failure(s)\n", g_fail); return 1; }
     std::printf("rme_softkeys: all passed\n");
     return 0;

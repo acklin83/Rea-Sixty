@@ -1,29 +1,87 @@
 #include "OrcConfig.h"
 
 #include "RmeManager.h"
+#include "OrcFiles.h"
 #include "OrcHandover.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
 #include <string>
-#include <sys/stat.h>
-#include <cerrno>
-#include <csignal>
-#include <sys/types.h>
-#include <unistd.h>
+
+#if defined(_WIN32)
+#  include <bcrypt.h>
+#  pragma comment(lib, "bcrypt.lib")
+#elif defined(__APPLE__)
+#  include <climits>
+#  include <mach-o/dyld.h>
+#endif
 
 namespace orc {
 
 std::string supportDir()
 {
-    const char* home = std::getenv("HOME");
-    if (!home) return ".";
-    const std::string d = std::string(home) + "/Library/Application Support/ORC";
-    // Best effort: an existing directory returns EEXIST, which is the outcome
-    // we want. A failure here shows up as a failed write later, with a path.
-    ::mkdir(d.c_str(), 0755);
+    const std::string d = orc_files::supportFolder();
+    if (d.empty()) return ".";
+    // Best effort: an existing directory is the outcome we want. A failure here
+    // shows up as a failed write later, with a path.
+    orc_files::makeOwnerOnlyDir(d);
     return d;
+}
+
+std::string resourcesDir()
+{
+#if defined(_WIN32)
+    wchar_t exe[32768];
+    const DWORD n = ::GetModuleFileNameW(nullptr, exe, 32768);
+    if (n == 0 || n >= 32768) return {};
+    std::string p = orc_files::narrow_(exe);          // ...\\ORC\\ORC.exe
+    return p.substr(0, p.find_last_of('\\'));
+#else
+    char exe[PATH_MAX];
+    std::uint32_t size = sizeof(exe);
+    if (_NSGetExecutablePath(exe, &size) != 0) return {};
+    char real[PATH_MAX];
+    if (!::realpath(exe, real)) return {};
+    std::string p = real;                             // .../ORC.app/Contents/MacOS/ORC
+    p = p.substr(0, p.find_last_of('/'));             // .../Contents/MacOS
+    p = p.substr(0, p.find_last_of('/'));             // .../Contents
+    return p + "/Resources";
+#endif
+}
+
+std::string version()
+{
+#ifdef ORC_VERSION
+    return ORC_VERSION;
+#else
+    return "?";
+#endif
+}
+
+void randomBytes(void* out, std::size_t n)
+{
+#if defined(_WIN32)
+    ::BCryptGenRandom(nullptr, static_cast<PUCHAR>(out), static_cast<ULONG>(n),
+                      BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+#else
+    arc4random_buf(out, n);
+#endif
+}
+
+unsigned randomBelow(unsigned n)
+{
+#if defined(_WIN32)
+    // arc4random_uniform's way: throw away the top of the range, so that every
+    // result is equally likely.
+    const unsigned limit = 0xFFFFFFFFu - (0xFFFFFFFFu % n);
+    unsigned v = 0;
+    do { randomBytes(&v, sizeof(v)); } while (v >= limit);
+    return v % n;
+#else
+    return arc4random_uniform(n);
+#endif
 }
 
 std::string rmeConfigPath() { return supportDir() + "/rme.json"; }
@@ -55,13 +113,13 @@ bool writeRmeJson(const reasixty::rme::Config& c)
 {
     const std::string json = reasixty::rme::configToJson(c);
     const std::string path = rmeConfigPath();
-    const std::string tmp = path + "." + std::to_string(::getpid());
+    const std::string tmp = path + "." + std::to_string(orc_files::currentPid());
     FILE* f = std::fopen(tmp.c_str(), "wb");
     if (!f) return false;
     bool ok = std::fwrite(json.data(), 1, json.size(), f) == json.size();
     ok = std::fclose(f) == 0 && ok;
-    if (ok) ok = std::rename(tmp.c_str(), path.c_str()) == 0;
-    if (!ok) std::remove(tmp.c_str());
+    if (ok) ok = orc_files::replaceFile(tmp, path);
+    if (!ok) orc_files::removeFile(tmp);
     return ok;
 }
 
@@ -75,21 +133,17 @@ bool saveRmeConfig(const reasixty::rme::Config& c)
 
 bool reaperWantsUf1()
 {
-    const int pid = reaperMarkerPid();
-    if (pid <= 0) return false;
-    // kill(pid, 0) sends nothing and answers "does it exist": 0, or EPERM for a
-    // process that exists but is not ours to signal.
-    return ::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM;
+    return orc_files::processAlive(reaperMarkerPid());
 }
 
 void writeOrcPid()
 {
-    orc_handover::writeFile(supportDir() + "/orc.pid", orc_handover::formatPid(::getpid()));
+    orc_handover::writeFile(supportDir() + "/orc.pid", orc_handover::formatPid(orc_files::currentPid()));
 }
 
 void removeOrcPid()
 {
-    std::remove((supportDir() + "/orc.pid").c_str());
+    orc_files::removeFile(supportDir() + "/orc.pid");
 }
 
 int reaperMarkerPid()
@@ -112,14 +166,14 @@ std::string takeReturned()
 {
     const std::string path = supportDir() + "/handover.returned";
     std::string t = orc_handover::readFile(path);
-    std::remove(path.c_str());
+    orc_files::removeFile(path);
     while (!t.empty() && (t.back() == '\n' || t.back() == '\r')) t.pop_back();
     return t;
 }
 
 void clearReleased()
 {
-    std::remove((supportDir() + "/handover.released").c_str());
+    orc_files::removeFile(supportDir() + "/handover.released");
 }
 
 std::string saveRmeConfigIfDirty()

@@ -9,22 +9,34 @@
 // the same day each program had its own file; the rule that survived is the
 // one about writers.)
 //
-//   ~/Library/Application Support/ORC/orc.json   the bindings (stage 6)
-//   ~/Library/Application Support/ORC/rme.json   the TotalMix link
+//   <supportDir>/orc.json   the bindings (stage 6)
+//   <supportDir>/rme.json   the TotalMix link
+// supportDir is ~/Library/Application Support/ORC, %APPDATA%\ORC under Windows.
 //
 // The format is the extension's, byte for byte: configToJson / configFromJson
 // out of RmeManager. One reader, one writer, one shape.
 
+#include <cstddef>
 #include <string>
 
 namespace reasixty::rme { struct Config; }
 
 namespace orc {
 
-// ~/Library/Application Support/ORC, created if it is not there. Falls back to
-// the working directory when HOME is unset, which is what the bindings host
-// does too.
+// ORC's folder, created if it is not there. Falls back to the working directory
+// when the system does not name one, which is what the bindings host does too.
 std::string supportDir();
+
+// Where the pages live: ORC.app/Contents/Resources, or the folder of ORC.exe. Each
+// holds moreme/ and settings/.
+std::string resourcesDir();
+
+// This build's version, "?" where the build did not say (tests).
+std::string version();
+
+// From the system's own generator.
+void randomBytes(void* out, std::size_t n);
+unsigned randomBelow(unsigned n);
 
 std::string rmeConfigPath();
 

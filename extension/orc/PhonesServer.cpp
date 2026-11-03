@@ -1,36 +1,43 @@
+// ⛔ First: winsock2.h before anything that brings windows.h in.
+#include "OrcSock.h"
+
 #include "PhonesServer.h"
 
 #include "JsonTree.h"
 #include "OrcConfig.h"
+#include "OrcFiles.h"
 #include "OrcHandover.h"
 #include "OrcLog.h"
 #include "Performers.h"
 #include "Phones.h"
 #include "WebSocket.h"
 
-#include <CoreFoundation/CoreFoundation.h>
-#include <arpa/inet.h>
-#include <cerrno>
 #include <chrono>
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fcntl.h>
-#include <ifaddrs.h>
-#include <mach-o/dyld.h>
+#include <filesystem>
 #include <map>
-#include <net/if.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#include <system_error>
 #include <vector>
+
+#if defined(_WIN32)
+#  include <iphlpapi.h>
+#  pragma comment(lib, "iphlpapi.lib")
+#else
+#  include <fcntl.h>
+#  include <ifaddrs.h>
+#  include <net/if.h>
+#  include <sys/stat.h>
+#  include <unistd.h>
+#endif
 
 namespace orc::phones {
 
 namespace rme = reasixty::rme;
+using orc::sock::kNone;
+using orc::sock::sock_t;
 
 // ── the files ────────────────────────────────────────────────────────────────
 
@@ -48,7 +55,7 @@ std::string jsonStr(const std::string& s)
         if (c == '"') o += "\\\"";
         // ⛔ wdl_json_parser reads two backslashes as a quote (jsonparse.h).
         else if (c == '\\') o += "\\u005c";
-        else if (c < 0x20) { char b[8]; std::snprintf(b, sizeof(b), "\\u%04x", c); o += b; }
+        else if (c < 0x20) { char b[8]; snprintf(b, sizeof(b), "\\u%04x", c); o += b; }
         else o.push_back(ch);
     }
     return o + "\"";
@@ -57,7 +64,7 @@ std::string jsonStr(const std::string& s)
 std::string lowerExt(const std::string& path)
 {
     const std::size_t dot = path.find_last_of('.');
-    const std::size_t slash = path.find_last_of('/');
+    const std::size_t slash = path.find_last_of("/\\");
     if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) return {};
     std::string e = path.substr(dot + 1);
     for (char& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -99,8 +106,9 @@ bool loadSettings(Settings& out)
     if (const char* v = root->get_string_by_name("logo")) {
         // A file name in ORC's folder and nothing else: no path from a file
         // that somebody else might have written.
+        // ⛔ Under Windows a backslash and a drive are paths too.
         const std::string l = v;
-        if (l.find('/') == std::string::npos && l != "." && l != "..") s.logo = l;
+        if (l.find_first_of("/\\:") == std::string::npos && l != "." && l != "..") s.logo = l;
     }
     out = s;
     return true;
@@ -128,6 +136,10 @@ std::string loadPin()
 bool savePin(const std::string& pin)
 {
     const std::string path = pinPath();
+#if defined(_WIN32)
+    // ORC's folder is this user's alone (orc_files::makeOwnerOnlyDir).
+    return orc_handover::writeFile(path, pin + "\n");
+#else
     // Readable by the user only, before anything is in it.
     const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) return false;
@@ -136,12 +148,13 @@ bool savePin(const std::string& pin)
     const bool ok = ::write(fd, text.data(), text.size()) == static_cast<ssize_t>(text.size());
     ::close(fd);
     return ok;
+#endif
 }
 
 std::string generatePin()
 {
     char b[8];
-    std::snprintf(b, sizeof(b), "%04u", arc4random_uniform(10000));
+    snprintf(b, sizeof(b), "%04u", orc::randomBelow(10000));
     return b;
 }
 
@@ -149,9 +162,11 @@ std::string importLogo(const std::string& sourcePath, std::string& err)
 {
     const std::string ext = lowerExt(sourcePath);
     if (!imageType(ext)) { err = "PNG, JPG or SVG"; return {}; }
-    struct stat sb{};
-    if (::stat(sourcePath.c_str(), &sb) != 0 || !S_ISREG(sb.st_mode)) { err = "Cannot read the file"; return {}; }
-    if (sb.st_size > 5 * 1024 * 1024) { err = "Larger than 5 MB"; return {}; }
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(sourcePath, ec)) { err = "Cannot read the file"; return {}; }
+    const auto bytes = std::filesystem::file_size(sourcePath, ec);
+    if (ec) { err = "Cannot read the file"; return {}; }
+    if (bytes > 5 * 1024 * 1024) { err = "Larger than 5 MB"; return {}; }
     std::string data;
     if (FILE* f = std::fopen(sourcePath.c_str(), "rb")) {
         char buf[16384];
@@ -162,7 +177,7 @@ std::string importLogo(const std::string& sourcePath, std::string& err)
     if (data.empty()) { err = "Cannot read the file"; return {}; }
     const std::string name = "moreme-logo." + (ext == "jpeg" ? std::string("jpg") : ext);
     for (const char* old : { "moreme-logo.png", "moreme-logo.jpg", "moreme-logo.svg" })
-        if (name != old) std::remove((orc::supportDir() + "/" + old).c_str());
+        if (name != old) orc_files::removeFile(orc::supportDir() + "/" + old);
     if (!orc_handover::writeFile(orc::supportDir() + "/" + name, data)) {
         err = "Cannot write to " + orc::supportDir();
         return {};
@@ -185,30 +200,8 @@ std::string logoData(std::string& type)
 
 namespace {
 
-// ORC.app/Contents/Resources/moreme, where the build puts the page and the mark.
-std::string resourceDir()
-{
-    char exe[PATH_MAX];
-    std::uint32_t size = sizeof(exe);
-    if (_NSGetExecutablePath(exe, &size) != 0) return {};
-    char real[PATH_MAX];
-    if (!::realpath(exe, real)) return {};
-    std::string p = real;                          // .../ORC.app/Contents/MacOS/ORC
-    p = p.substr(0, p.find_last_of('/'));          // .../Contents/MacOS
-    p = p.substr(0, p.find_last_of('/'));          // .../Contents
-    return p + "/Resources/moreme";
-}
-
-std::string orcVersion()
-{
-    CFBundleRef b = CFBundleGetMainBundle();
-    if (!b) return "?";
-    const void* v = CFBundleGetValueForInfoDictionaryKey(b, CFSTR("CFBundleShortVersionString"));
-    if (!v || CFGetTypeID(v) != CFStringGetTypeID()) return "?";
-    char buf[64];
-    if (!CFStringGetCString(static_cast<CFStringRef>(v), buf, sizeof(buf), kCFStringEncodingUTF8)) return "?";
-    return buf;
-}
+// Where the build puts the page and the mark.
+std::string resourceDir() { return orc::resourcesDir() + "/moreme"; }
 
 std::string htmlAttr(const std::string& s)
 {
@@ -250,14 +243,14 @@ std::string serve(const ws::Request& r, const Settings& s, const std::string& re
         replaceOnce(page, "<meta name=\"moreme-studio\" content=\"\">",
                     "<meta name=\"moreme-studio\" content=\"" + htmlAttr(s.studio) + "\">");
         replaceOnce(page, "<meta name=\"moreme-version\" content=\"\">",
-                    "<meta name=\"moreme-version\" content=\"" + htmlAttr(orcVersion()) + "\">");
+                    "<meta name=\"moreme-version\" content=\"" + htmlAttr(orc::version()) + "\">");
         replaceOnce(page, "<meta name=\"moreme-performer\" content=\"\">",
                     "<meta name=\"moreme-performer\" content=\"" + performer + "\">");
         return ws::response(200, "text/html; charset=utf-8", page);
     }
     if (r.path == "/desk") {
         if (!deskAllowed(peer, r.header("x-real-ip"), r.header("x-forwarded-for"), r.header("host"), {}))
-            return ws::response(403, "text/plain; charset=utf-8", "Studio Control answers on this Mac only");
+            return ws::response(403, "text/plain; charset=utf-8", "Studio Control answers on this computer only");
         const std::string page = orc_handover::readFile(res + "/desk.html");
         if (page.empty()) return ws::response(404, "text/plain; charset=utf-8", "not found");
         return ws::response(200, "text/html; charset=utf-8", page);
@@ -292,7 +285,7 @@ constexpr std::size_t kMaxHead    = 16 * 1024;
 constexpr std::size_t kMaxPending = 1024 * 1024; // a peer that stopped reading
 
 struct Conn {
-    int            fd = -1;
+    sock_t         fd = kNone;
     std::string    peer;
     std::string    in, out;
     bool           ws      = false;
@@ -371,10 +364,10 @@ void Server::loop()
 
     const std::string res = resourceDir();
     Mixer mixer;
-    mixer.setVersion(orcVersion());
+    mixer.setVersion(orc::version());
     mixer.setLog([](const std::string& line) { orc::logLine("%s\n", line.c_str()); });
 
-    int           listenFd   = -1;
+    sock_t        listenFd   = kNone;
     int           listenPort = 0;
     std::string   listenErr;
     auto          retryAt    = clock::now();
@@ -391,36 +384,32 @@ void Server::loop()
     auto          lastSync   = clock::now() - std::chrono::hours(1);
     unsigned      meterTick  = 0;
     auto          lastPing   = clock::now();
-    std::map<int, Conn> conns;          // by fd
-    std::map<int, int>  fdOfMix;        // mixer id -> fd
+    std::map<sock_t, Conn> conns;       // by fd
+    std::map<int, sock_t> fdOfMix;      // mixer id -> fd
     bool                tmSeen = false;
 
     auto closeListen = [&] {
-        if (listenFd >= 0) { ::close(listenFd); listenFd = -1; }
+        if (listenFd != kNone) { orc::sock::closeSock(listenFd); listenFd = kNone; }
     };
     auto openListen = [&](int port) {
         closeListen();
         listenPort = port;
-        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0) { listenErr = "could not open a socket"; return; }
-        // ⇨ macOS's SO_REUSEADDR: past a TIME_WAIT left by the last run, never
-        // next to a live listener (that still fails with EADDRINUSE). Windows
-        // reads the flag the other way round (memory windows-so-reuseaddr-
-        // hijacks-port); ORC is macOS only.
-        const int one = 1;
-        ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        orc::sock::startup();
+        const sock_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd == kNone) { listenErr = "could not open a socket"; return; }
+        orc::sock::allowQuickRebind(fd);
         sockaddr_in me{};
         me.sin_family      = AF_INET;
         me.sin_port        = htons(static_cast<std::uint16_t>(port));
         me.sin_addr.s_addr = htonl(INADDR_ANY);   // the phones are on the network
         if (::bind(fd, reinterpret_cast<sockaddr*>(&me), sizeof(me)) != 0 || ::listen(fd, 16) != 0) {
-            ::close(fd);
+            orc::sock::closeSock(fd);
             char t[96];
-            std::snprintf(t, sizeof(t), "port %d is in use by another program", port);
+            snprintf(t, sizeof(t), "port %d is in use by another program", port);
             listenErr = t;
             return;
         }
-        ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
+        orc::sock::setNonBlocking(fd);
         listenFd = fd;
         listenErr.clear();
         orc::logLine("MoreMe: page on port %d\n", port);
@@ -440,9 +429,9 @@ void Server::loop()
     };
     auto flush = [&](Conn& c) {
         while (!c.out.empty()) {
-            const ssize_t n = ::send(c.fd, c.out.data(), c.out.size(), 0);
+            const long n = orc::sock::sendSome(c.fd, c.out.data(), c.out.size());
             if (n > 0) { c.out.erase(0, static_cast<std::size_t>(n)); continue; }
-            if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) return;
+            if (n < 0 && orc::sock::wouldBlock()) return;
             c.dead = true;   // the peer is gone
             return;
         }
@@ -467,7 +456,7 @@ void Server::loop()
             if (!deskAllowed(c.peer, r.header("x-real-ip"), r.header("x-forwarded-for"),
                              r.header("host"), r.header("origin"))) {
                 orc::logLine("MoreMe: Studio Control refused for %s\n", c.peer.c_str());
-                queue(c, ws::response(403, "text/plain; charset=utf-8", "this Mac only"));
+                queue(c, ws::response(403, "text/plain; charset=utf-8", "this computer only"));
                 c.closing = true;
                 return;
             }
@@ -494,7 +483,7 @@ void Server::loop()
         const auto token = [] {
             static const char k[] = "abcdefghijklmnopqrstuvwxyz0123456789";
             std::string o;
-            for (int i = 0; i < 8; ++i) o.push_back(k[arc4random_uniform(sizeof(k) - 1)]);
+            for (int i = 0; i < 8; ++i) o.push_back(k[orc::randomBelow(sizeof(k) - 1)]);
             return o;
         };
         if (applyDesk(book, text, token)) {
@@ -535,7 +524,7 @@ void Server::loop()
             if (gen_ != gen) {
                 gen = gen_;
                 const bool ports = cur.sendPort != want_.sendPort || cur.recvPort != want_.recvPort;
-                const bool web   = cur.webPort != want_.webPort || listenFd < 0;
+                const bool web   = cur.webPort != want_.webPort || listenFd == kNone;
                 const bool pin   = curPin != pin_;
                 cur = want_;
                 if (pin) {
@@ -548,7 +537,7 @@ void Server::loop()
                 }
                 if (web) retryAt = now;
                 if (ports) lastHost = now - std::chrono::hours(1);
-                if (web && listenFd >= 0 && listenPort != cur.webPort) closeListen();
+                if (web && listenFd != kNone && listenPort != cur.webPort) closeListen();
             }
         }
         // The mixer is the one the surfaces talk to: same host, other ports.
@@ -566,20 +555,20 @@ void Server::loop()
         // ⛔ No PIN, no page (Frank 29.10.2026: a PIN as soon as it is on).
         // The settings page never leaves it empty; this is the second lock.
         if (curPin.empty()) {
-            if (listenFd >= 0) closeListen();
+            if (listenFd != kNone) closeListen();
             listenErr = "no PIN set";
-        } else if (listenFd < 0 && now >= retryAt) {
+        } else if (listenFd == kNone && now >= retryAt) {
             openListen(cur.webPort);
-            if (listenFd < 0) retryAt = now + std::chrono::seconds(3);
+            if (listenFd == kNone) retryAt = now + std::chrono::seconds(3);
         }
 
         std::vector<pollfd> fds;
         fds.reserve(conns.size() + 1);
-        if (listenFd >= 0) fds.push_back({ listenFd, POLLIN, 0 });
+        if (listenFd != kNone) fds.push_back({ listenFd, POLLIN, 0 });
         for (auto& [fd, c] : conns)
             fds.push_back({ fd, static_cast<short>(POLLIN | (c.out.empty() ? 0 : POLLOUT)), 0 });
         const int ready = fds.empty() ? (std::this_thread::sleep_for(std::chrono::milliseconds(50)), 0)
-                                      : ::poll(fds.data(), static_cast<nfds_t>(fds.size()), 50);
+                                      : orc::sock::pollAll(fds, 50);
         const auto t = clock::now();
         if (ready > 0) {
             for (const pollfd& p : fds) {
@@ -588,14 +577,11 @@ void Server::loop()
                     for (;;) {
                         sockaddr_in peer{};
                         socklen_t len = sizeof(peer);
-                        const int fd = ::accept(listenFd, reinterpret_cast<sockaddr*>(&peer), &len);
-                        if (fd < 0) break;
-                        if (conns.size() >= kMaxConns) { ::close(fd); continue; }
-                        ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
-                        // ⛔ A write to a phone that has gone would raise SIGPIPE and
-                        // end ORC; this turns it into an error we read.
-                        const int one = 1;
-                        ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+                        const sock_t fd = ::accept(listenFd, reinterpret_cast<sockaddr*>(&peer), &len);
+                        if (fd == kNone) break;
+                        if (conns.size() >= kMaxConns) { orc::sock::closeSock(fd); continue; }
+                        orc::sock::setNonBlocking(fd);
+                        orc::sock::noSigPipe(fd);
                         Conn c;
                         c.fd     = fd;
                         c.peer   = peerAddress(peer);
@@ -610,12 +596,12 @@ void Server::loop()
                 if (p.revents & POLLIN) {
                     char buf[16384];
                     for (;;) {
-                        const ssize_t n = ::recv(c.fd, buf, sizeof(buf), 0);
+                        const long n = orc::sock::recvSome(c.fd, buf, sizeof(buf));
                         if (n > 0) { c.in.append(buf, static_cast<std::size_t>(n)); c.lastRx = t; continue; }
                         // ⛔ 0 AND a real error both end the connection: once, the
                         // impersonator cleaned up only on 0 and leaked a socket per
                         // reset until the process died (memory sslcore-fd-setsize).
-                        if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR))
+                        if (n == 0 || !orc::sock::wouldBlock())
                             c.dead = true;
                         break;
                     }
@@ -687,14 +673,14 @@ void Server::loop()
                 mixer.close(it->second.mixId);
                 fdOfMix.erase(it->second.mixId);
             }
-            ::close(it->first);
+            orc::sock::closeSock(it->first);
             it = conns.erase(it);
         }
 
         {
             std::lock_guard<std::mutex> lk(mx_);
             status_.enabled   = true;
-            status_.listening = listenFd >= 0;
+            status_.listening = listenFd != kNone;
             status_.port      = cur.webPort;
             status_.error     = listenErr;
             status_.tmSeen    = tmSeen;
@@ -703,7 +689,7 @@ void Server::loop()
         }
     }
 
-    for (auto& [fd, c] : conns) ::close(fd);
+    for (auto& [fd, c] : conns) orc::sock::closeSock(fd);
     closeListen();
 }
 
@@ -722,9 +708,40 @@ std::string summary(const Status& st)
 
 std::string pageAddress(int port)
 {
+    std::string best, any;
+#if defined(_WIN32)
+    // The wired and the wireless port first, one with a way out before one
+    // without: the phones are on that network, not on a VPN tunnel or on the
+    // virtual switch of a VM, which also calls itself Ethernet.
+    std::string wired;
+    ULONG size = 15 * 1024;
+    std::vector<unsigned char> mem(size);
+    const ULONG flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER
+                      | GAA_FLAG_INCLUDE_GATEWAYS;
+    auto* first = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(mem.data());
+    ULONG rc = ::GetAdaptersAddresses(AF_INET, flags, nullptr, first, &size);
+    if (rc == ERROR_BUFFER_OVERFLOW) {
+        mem.resize(size);
+        first = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(mem.data());
+        rc = ::GetAdaptersAddresses(AF_INET, flags, nullptr, first, &size);
+    }
+    if (rc != NO_ERROR) return {};
+    for (const IP_ADAPTER_ADDRESSES* i = first; i; i = i->Next) {
+        if (i->OperStatus != IfOperStatusUp || i->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+        for (const IP_ADAPTER_UNICAST_ADDRESS* u = i->FirstUnicastAddress; u; u = u->Next) {
+            if (!u->Address.lpSockaddr || u->Address.lpSockaddr->sa_family != AF_INET) continue;
+            const std::string ip = peerAddress(*reinterpret_cast<const sockaddr_in*>(u->Address.lpSockaddr));
+            if (ip.rfind("169.254.", 0) == 0) continue;   // no DHCP answer: unreachable
+            const bool lan = i->IfType == IF_TYPE_ETHERNET_CSMACD || i->IfType == IF_TYPE_IEEE80211;
+            if (lan && i->FirstGatewayAddress) { if (best.empty()) best = ip; }
+            else if (lan) { if (wired.empty()) wired = ip; }
+            else if (any.empty()) any = ip;
+        }
+    }
+    if (best.empty()) best = wired;
+#else
     ifaddrs* list = nullptr;
     if (::getifaddrs(&list) != 0) return {};
-    std::string best, any;
     for (ifaddrs* i = list; i; i = i->ifa_next) {
         if (!i->ifa_addr || i->ifa_addr->sa_family != AF_INET) continue;
         if (!(i->ifa_flags & IFF_UP) || (i->ifa_flags & IFF_LOOPBACK)) continue;
@@ -737,6 +754,7 @@ std::string pageAddress(int port)
         else if (any.empty()) any = ip;
     }
     ::freeifaddrs(list);
+#endif
     const std::string ip = best.empty() ? any : best;
     if (ip.empty()) return {};
     return "http://" + ip + (port == 80 ? std::string() : ":" + std::to_string(port));

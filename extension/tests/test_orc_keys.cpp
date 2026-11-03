@@ -12,7 +12,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
-#include <unistd.h>
+
+#include "TestScratch.h"
 
 namespace bnd = uf8::bindings;
 
@@ -26,8 +27,7 @@ static int  g_monoFires = 0;
 
 int main()
 {
-    char tmpl[] = "/tmp/rs_orckeysXXXXXX";
-    g_dir = mkdtemp(tmpl);
+    g_dir = testscratch::makeDir("rs_orckeys");
     bnd::Host h;
     h.configDir  = [] { return g_dir; };
     h.configFile = [] { return std::string("bindings.json"); };

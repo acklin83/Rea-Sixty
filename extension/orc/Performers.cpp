@@ -27,7 +27,7 @@ std::string jstr(const std::string& s)
         if (c == '"') o += "\\\"";
         // ⛔ wdl_json_parser reads two backslashes as a quote (jsonparse.h).
         else if (c == '\\') o += "\\u005c";
-        else if (c < 0x20) { char b[8]; std::snprintf(b, sizeof(b), "\\u%04x", c); o += b; }
+        else if (c < 0x20) { char b[8]; snprintf(b, sizeof(b), "\\u%04x", c); o += b; }
         else o.push_back(ch);
     }
     return o + "\"";
@@ -338,7 +338,7 @@ bool deskAllowed(const std::string& peer, const std::string& xRealIp, const std:
     if (!xRealIp.empty() || !xForwardedFor.empty()) return false;
     if (!loopbackName(hostOnly(host))) return false;
     // A browser sends Origin with a WebSocket. A page elsewhere can't fake it.
-    // The port counts: another page on this Mac, on another port, is another page.
+    // The port counts: another page on this computer, on another port, is another page.
     if (!origin.empty() && hostWithPort(origin) != hostWithPort(host)) return false;
     return true;
 }

@@ -35,6 +35,7 @@
 #endif
 
 #include "BindingsHost.h"   // the questions this file asks outwards
+#include "OrcFiles.h"
 
 #include "WDL/jsonparse.h"
 #include "JsonTree.h"
@@ -5190,16 +5191,7 @@ SideCarSource g_scSrc;   // guarded by g_cfgMutex
 
 bool statFile_(const std::string& path, long long& mtime, long long& size)
 {
-    struct stat sb{};
-    if (path.empty() || stat(path.c_str(), &sb) != 0) return false;
-#ifdef __APPLE__
-    mtime = static_cast<long long>(sb.st_mtimespec.tv_sec) * 1000000000LL
-          + sb.st_mtimespec.tv_nsec;
-#else
-    mtime = static_cast<long long>(sb.st_mtime);
-#endif
-    size = static_cast<long long>(sb.st_size);
-    return true;
+    return orc_files::fileStamp(path, mtime, size);
 }
 
 // Copy what the file holds into g_cfg's RME banks; a missing file leaves them
