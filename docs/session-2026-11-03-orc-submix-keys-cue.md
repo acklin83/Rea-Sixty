@@ -14,6 +14,10 @@ Auslöser: djp53 (Dave) im RME-Forum, Thread ORC, Posts 10 und 11. Frank: bauen,
 - `cuechan=8` kommt an, `-1` löscht, beides im nächsten `/sendall` gelesen. Kein Echo an den schreibenden Remote.
 - Submix-Auswahl von TotalMix: keine Adresse, auch mit „Submix linked to OSC controller 3“ still. Follow gestrichen (Frank: „ist eh flexibler ohne“).
 
+## Aus Franks Test
+- Menüs zeigten Main, Main B und Phones doppelt: `displayName` nennt einen Ausgang mit Rolle nach der Rolle, die Liste führte ihn zusätzlich unter Outputs. Jetzt nur noch als Rolle (`rmeu::outputsWithoutRole`). Ein gespeicherter fester Ausgang, der inzwischen eine Rolle hat, zeigt die Rolle (`rmeu::menuSpec`), die Datei bleibt.
+- Soft-Key der Submix-Bank wurde in ORC am UF8 nicht gelb: `topKey` im Cache von `paintStrip` kennt nur den Zustand. `forgetTopKeyOnColour` vor dem Malen, mit Test. Rea-Sixty hatte den Fehler nicht, sein Cache ist ein Composite mit Farbe.
+
 ## Offen
 - Die neuen ORC-Menüs nicht offscreen gerendert.
 - Kein Release. Altes Rea-Sixty mit neuem ORC: Tasten auf Werk, Bankart 15 fällt beim Laden weg (Parser-Grenze).

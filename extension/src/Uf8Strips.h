@@ -73,6 +73,17 @@ struct Cells {
     std::uint16_t& faderPb;
 };
 
+// ⛔ `topKey` caches the state, not the colour, so a key that changes colour and
+// stays dim is never sent (Cue on a soft key, a Hue scene). A caller whose colour
+// can change calls this first; it forgets the state when the colour moved.
+// Rea-Sixty's soft keys don't: their cache holds a composite with the colour.
+inline void forgetTopKeyOnColour(std::int32_t& topKey, std::uint32_t& lastRgb, const View& v)
+{
+    if (lastRgb == v.topKeyRgb) return;
+    lastRgb = v.topKeyRgb;
+    topKey  = -1;
+}
+
 // One strip. `st` is the strip on its unit (0..7). `send(frame)` writes a
 // frame, `leds(LedColourFrames)` an LED pair. `touched`: the cap is under a
 // finger, the motor stays off it. `engaged` is the caller's motor flag. Returns

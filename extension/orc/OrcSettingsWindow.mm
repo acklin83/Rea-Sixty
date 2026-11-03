@@ -79,7 +79,9 @@ std::vector<Choice> targetChoices(const rme::State& st)
     static_assert(rmeu::kMixerRowCount == 3, "kinds[] and headers[] name each mixer row");
     for (int r = 0; r < rmeu::kMixerRowCount; ++r) {
         const auto row = static_cast<rmeu::Row>(r);
-        const auto chans = rmeu::visibleChannels(st, row);
+        // An output with a role is the role above, under the same name.
+        const auto chans = row == rmeu::Row::Output ? rmeu::outputsWithoutRole(st)
+                                                    : rmeu::visibleChannels(st, row);
         if (chans.empty()) continue;
         out.push_back({ "", headers[r], true });
         for (int ch : chans) {
@@ -1157,6 +1159,16 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
         if (!choices[i].header && choices[i].spec == spec) {
             [pop selectItemAtIndex:(NSInteger)i];
             return;
+        }
+    }
+    // A fixed output that has since got a role is listed as that role.
+    const std::string asRole = rmeu::menuSpec(rme::manager().snapshot(), spec);
+    if (asRole != spec) {
+        for (std::size_t i = 0; i < choices.size(); ++i) {
+            if (!choices[i].header && choices[i].spec == asRole) {
+                [pop selectItemAtIndex:(NSInteger)i];
+                return;
+            }
         }
     }
     // ⛔ A spec the live list cannot contain (the link is down, or the channel

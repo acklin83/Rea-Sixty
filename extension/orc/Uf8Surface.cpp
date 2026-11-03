@@ -445,6 +445,7 @@ void Uf8Surface::paint_()
         const auto& v = views[static_cast<size_t>(s)];
         const bool touched = touched_[s].load() || (now - releasedMs_[s].load() < kTouchHoldMs);
         bool engaged = engaged_[s].load();
+        uf8strips::forgetTopKeyOnColour(cTop_[s], cTopRgb_[s], v);
         uf8strips::paintStrip(
             uf8strips::Cells{ cUpper_[s], cCs_[s], cChan_[s], cFt_[s], cFu_[s], cVl_[s], cSl_[s],
                               cTop_[s], cSel_[s], cCut_[s], cSolo_[s], cPb_[s] },

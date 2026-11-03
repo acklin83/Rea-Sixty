@@ -441,6 +441,33 @@ int main()
             check(ins4.empty(), "no inputs sent, none listed");
         }
 
+        // A menu lists an output with a role once, as the role (Frank 03.11.2026:
+        // Phones 1 twice under one name). A fixed spec on it shows as the role.
+        {
+            State sm;
+            auto putm = [&](const std::string& a, float v) {
+                Message m; m.address = a; m.args.push_back(Arg::fromFloat(v)); ingest(sm, m);
+            };
+            auto namem = [&](const std::string& a, const char* n) {
+                Message m; m.address = a; m.args.push_back(Arg::fromString(n)); ingest(sm, m);
+            };
+            for (int ch : {0, 2, 6, 8}) {
+                namem("/output/" + std::to_string(ch) + "/name", "AN");
+                putm("/output/" + std::to_string(ch) + "/color", 1);
+                putm("/output/" + std::to_string(ch) + "/stereo", 0);
+            }
+            sm.mainOut = 0; sm.mainOutB = -1;
+            sm.phones[0] = 6; sm.phones[1] = -1; sm.phones[2] = -1; sm.phones[3] = -1;
+            check(u::roleSpecOf(sm, 0) == "main" && u::roleSpecOf(sm, 6) == "phones1"
+                  && u::roleSpecOf(sm, 2).empty() && u::roleSpecOf(sm, -1).empty(),
+                  "menu: role word of an output");
+            check(u::outputsWithoutRole(sm) == std::vector<int>{2, 8},
+                  "menu: outputs with a role are not listed again");
+            check(u::menuSpec(sm, "output:6") == "phones1", "menu: a fixed output now a role");
+            check(u::menuSpec(sm, "output:2") == "output:2", "menu: a fixed output stays");
+            check(u::menuSpec(sm, "phones1") == "phones1" && u::menuSpec(sm, "input:6") == "input:6",
+                  "menu: other specs pass through");
+        }
         const auto p1 = u::resolveTarget(s3, "phones1");
         check(p1.row == u::Row::Output && p1.ch == 8 && p1.visible, "phones1 is the role");
         const auto p3 = u::resolveTarget(s3, "phones3");

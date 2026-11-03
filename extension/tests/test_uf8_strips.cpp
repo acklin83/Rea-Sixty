@@ -67,6 +67,25 @@ int main()
         Out o2;
         EXPECT(!paintStrip(c.cells(), v, 2, false, engaged, o2.send(), o2.led()));
         EXPECT(o2.frames.empty() && o2.leds == 0);
+        // Same state, new colour (Cue on a soft key that stays dim): the lamp goes
+        // out again once, and only with the colour check in front of the paint.
+        {
+            std::uint32_t lastRgb = v.topKeyRgb;
+            View yellow = v;
+            yellow.topKeyRgb = 0xFFFF00u;
+            Out o3;
+            paintStrip(c.cells(), yellow, 2, false, engaged, o3.send(), o3.led());
+            EXPECT(o3.leds == 0);   // the state alone never notices
+            forgetTopKeyOnColour(c.top, lastRgb, yellow);
+            paintStrip(c.cells(), yellow, 2, false, engaged, o3.send(), o3.led());
+            EXPECT(o3.leds == 1);
+            forgetTopKeyOnColour(c.top, lastRgb, yellow);
+            paintStrip(c.cells(), yellow, 2, false, engaged, o3.send(), o3.led());
+            EXPECT(o3.leds == 1);   // and only once
+            forgetTopKeyOnColour(c.top, lastRgb, v);
+            paintStrip(c.cells(), v, 2, false, engaged, o3.send(), o3.led());
+            EXPECT(o3.leds == 2);   // back to white
+        }
         // One cell changed: that cell.
         View w = v; w.valueLine = "Pan          L20";
         Out o3;

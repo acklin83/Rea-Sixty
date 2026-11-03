@@ -132,6 +132,7 @@ class Uf8Surface {
     // What the device shows (Uf8Strips::Cells point in here). Loop thread.
     std::array<std::string, 8>   cUpper_, cCs_, cChan_, cFt_, cFu_, cVl_, cSl_;
     std::array<std::int32_t, 8>  cTop_{};
+    std::array<std::uint32_t, 8> cTopRgb_{};
     std::array<std::int8_t, 8>   cSel_{}, cCut_{}, cSolo_{};
     std::array<std::uint16_t, 8> cPb_{};
     std::uint16_t                cBar_[8] = {};

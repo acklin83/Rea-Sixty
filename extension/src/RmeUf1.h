@@ -78,6 +78,16 @@ std::string barText(const State& st, Row r, int submix);
 // and not the right half of a stereo pair.
 std::vector<int> visibleChannels(const State& st, Row r);
 
+// The role word of an output that has a role right now ("main", "mainB",
+// "phones1".."phones4"), empty otherwise. displayName shows such an output under
+// its role, so a menu with both would list it twice under one name.
+std::string roleSpecOf(const State& st, int ch);
+// The visible outputs a menu lists below the roles: those without one.
+std::vector<int> outputsWithoutRole(const State& st);
+// What a menu selects for a stored spec: a fixed output that has since got a
+// role (a snapshot moved it) shows as that role. The stored spec is untouched.
+std::string menuSpec(const State& st, const std::string& spec);
+
 // Step through a list by `delta`, clamped at both ends. A `cur` not in the list
 // lands on the nearest entry in the direction of travel; `key` is the order the
 // list is sorted by (orderKey for a row), plain channel number without one.

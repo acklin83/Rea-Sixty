@@ -102,6 +102,31 @@ std::vector<int> visibleChannels(const State& st, Row r)
     return v;
 }
 
+std::string roleSpecOf(const State& st, int ch)
+{
+    if (ch < 0) return {};
+    if (ch == st.mainOut)  return "main";
+    if (ch == st.mainOutB) return "mainB";
+    for (int i = 0; i < 4; ++i)
+        if (ch == st.phones[i]) return "phones" + std::to_string(i + 1);
+    return {};
+}
+
+std::vector<int> outputsWithoutRole(const State& st)
+{
+    std::vector<int> v = visibleChannels(st, Row::Output);
+    v.erase(std::remove_if(v.begin(), v.end(),
+                           [&](int ch) { return !roleSpecOf(st, ch).empty(); }), v.end());
+    return v;
+}
+
+std::string menuSpec(const State& st, const std::string& spec)
+{
+    if (spec.rfind("output:", 0) != 0) return spec;
+    const std::string role = roleSpecOf(st, std::atoi(spec.c_str() + 7));
+    return role.empty() ? spec : role;
+}
+
 int stepChannel(const std::vector<int>& list, int cur, int delta)
 {
     return stepChannel(list, cur, delta, [](int ch) { return ch; });
