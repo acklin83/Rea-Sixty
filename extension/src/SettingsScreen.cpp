@@ -1121,17 +1121,28 @@ static int g_slotEditModIdx = 0;
 
 // ---- Dragging in the soft-key matrices ------------------------------------
 // Drop on a place and the two swap, so nothing is lost and an empty target is a
-// plain move: this page has no undo. Cmd held at the drop (ALT on Windows, the
-// same keyboard mirror every modifier here reads) copies instead. The store side
-// is uf8::bindings::dropBank and its siblings.
-static uf8::bindings::SoftKeyDrop softKeyDropNow_()
+// plain move: this page has no undo. Cmd held at the drop (ALT on Windows) copies
+// instead. The store side is uf8::bindings::dropBank and its siblings.
+// ⛔ NOT modifierHeld(Modifier::Cmd). That mirror is switched off while any item in
+// this window is active, so that typing a capital does not move the surface
+// (MixerWindow::onRunTick), and the item being dragged is active: it could never
+// see Cmd during a drag (Frank 2026-11-03: "copy mit cmd nicht"). Ask the system.
+static void captureHeldMods_(ImGui_Context* ctx, bool& ctrl, bool& alt,
+                             bool& shift, bool& cmd);
+static uf8::bindings::SoftKeyDrop softKeyDropNow_(ImGui_Context* ctx)
 {
-    using namespace uf8::bindings;
-    return modifierHeld(Modifier::Cmd) ? SoftKeyDrop::Copy : SoftKeyDrop::Swap;
+    using uf8::bindings::SoftKeyDrop;
+    bool ctrl = false, alt = false, shift = false, cmd = false;
+    captureHeldMods_(ctx, ctrl, alt, shift, cmd);
+#if defined(__APPLE__)
+    return cmd ? SoftKeyDrop::Copy : SoftKeyDrop::Swap;
+#else
+    return alt ? SoftKeyDrop::Copy : SoftKeyDrop::Swap;
+#endif
 }
-static std::string softKeyDragText_(const std::string& what)
+static std::string softKeyDragText_(ImGui_Context* ctx, const std::string& what)
 {
-    return (softKeyDropNow_() == uf8::bindings::SoftKeyDrop::Copy ? "Copy " : "Move ")
+    return (softKeyDropNow_(ctx) == uf8::bindings::SoftKeyDrop::Copy ? "Copy " : "Move ")
         + what;
 }
 // Both act on the item just submitted.
@@ -1141,7 +1152,7 @@ static void softKeyDragSource_(ImGui_Context* ctx, const char* type,
     int dndF = 0;
     if (!ImGui_BeginDragDropSource(ctx, &dndF)) return;
     ImGui_SetDragDropPayload(ctx, type, payload, nullptr);
-    ImGui_Text(ctx, softKeyDragText_(what).c_str());
+    ImGui_Text(ctx, softKeyDragText_(ctx, what).c_str());
     ImGui_EndDragDropSource(ctx);
 }
 static bool softKeyDropTarget_(ImGui_Context* ctx, const char* type,
@@ -2289,7 +2300,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
         if (s_keyDragging && canvasActive) {
             char what[24];
             snprintf(what, sizeof(what), "Soft-Key %d", s_keyDragFrom + 1);
-            ImGui_SetTooltip(ctx, softKeyDragText_(what).c_str());
+            ImGui_SetTooltip(ctx, softKeyDragText_(ctx, what).c_str());
         }
         if (!canvasActive) {
             // Released on this very frame, or the pane went away mid-drag and the
@@ -2297,7 +2308,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
             if (s_keyDragging && ImGui_IsMouseReleased(ctx, 0) && keyDragOver >= 0
                 && uf8::bindings::dropUf8Key(activeLayer, editQuick, editSubBank,
                                              s_keyDragFrom, keyDragOver,
-                                             g_slotEditModIdx, softKeyDropNow_())) {
+                                             g_slotEditModIdx, softKeyDropNow_(ctx))) {
                 sel = kStripTsk[keyDragOver];
             }
             s_keyDragFrom = -1;
@@ -8215,13 +8226,13 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                     s_bankKeepScroll = ImGui_GetScrollY(ctx);
                     if (uf8::bindings::dropBank(bankDropL, bankDropQ, bankDropSb,
                                                 bankDropToL, bankDropToQ, bankDropToSb,
-                                                bankDropMod, softKeyDropNow_()))
+                                                bankDropMod, softKeyDropNow_(ctx)))
                         reasixty_engageSoftKeyBank(bankDropToL, bankDropToQ,
                                                    bankDropToSb);
                 }
                 if (setDropTo > 0)
                     uf8::bindings::dropSoftKeySet(setDropFrom, setDropTo,
-                                                  softKeyDropNow_());
+                                                  softKeyDropNow_(ctx));
                 renderBankMatrixContextMenu_(ctx);
                 renderBankMatrixModals_(ctx);
             }
@@ -8717,14 +8728,14 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                 if (uf1BankDropTo >= 0) {
                     s_bankKeepScroll = ImGui_GetScrollY(ctx);
                     if (dropUf1Bank(uf1BankDropFrom, uf1BankDropTo, uf1BankDropMod,
-                                    softKeyDropNow_()))
+                                    softKeyDropNow_(ctx)))
                         uf1EditSetLiveBank_(uf1BankDropTo);
                 }
                 if (uf1KeyDropToBank >= 0) {
                     s_bankKeepScroll = ImGui_GetScrollY(ctx);
                     if (dropUf1Key(uf1KeyDropBank, uf1KeyDropSlot, uf1KeyDropToBank,
                                    uf1KeyDropToSlot, uf1KeyDropMod,
-                                   softKeyDropNow_())) {
+                                   softKeyDropNow_(ctx))) {
                         uf1EditSetLiveBank_(uf1KeyDropToBank);
                         s_selected = static_cast<ButtonId>(
                             static_cast<int>(ButtonId::Uf1DisplaySoft1)
