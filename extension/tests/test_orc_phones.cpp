@@ -587,6 +587,31 @@ int main()
         EXPECT(has(s, "\"t\":\"strip\"") && has(s, "\"curve\":[") && has(s, "\"b1gain\":{\"v\":"));
         EXPECT(!has(s, "\"b1freq\""));                                  // Simple doesn't get it
         mx.takeOsc();
+        // Advanced: the shapes, by the catalogue's names. Band 3's filters are the
+        // other way round from band 1's (measured at the mixer 25.09.2026).
+        feed(st, "/input/1/eq/band3type", 2);
+        mx.sync(st, vis(1, {1, 2}, {0}), true);
+        drums.chanEq = 2;
+        mx.setPerformers({ drums, bass });
+        mx.takeOut();
+        mx.message(a, R"({"t":"stripOpen","mix":"perf:drumsaaa","target":"in:1"})", 0);
+        out = mx.takeOut();
+        s = to(out, a);
+        EXPECT(has(s, R"("names":["Bell","Shelf","HiPass","LoPass"])"));
+        EXPECT(has(s, R"("names":["Bell","Shelf","LoPass","HiPass"])"));
+        mx.takeOsc();
+        mx.message(a, R"({"t":"strip","mix":"perf:drumsaaa","target":"in:1","param":"b1type","val":1})", 0);
+        osc = mx.takeOsc();
+        EXPECT(osc.size() == 1 && osc[0].address == "/input/1/eq/band1type" && osc[0].value == 1.0f);
+        mx.message(a, R"({"t":"strip","mix":"perf:drumsaaa","target":"in:1","param":"b1type","val":9})", 0);
+        osc = mx.takeOsc();
+        EXPECT(osc.size() == 1 && osc[0].value == 3.0f);               // the last entry, no further
+        drums.chanEq = 1;
+        mx.setPerformers({ drums, bass });
+        mx.takeOut();
+        mx.message(a, R"({"t":"strip","mix":"perf:drumsaaa","target":"in:1","param":"b1type","val":1})", 0);
+        EXPECT(mx.takeOsc().empty());                                  // Simple: not the shape
+        mx.takeOut();
 
         // The own output: no fader unless it was given.
         const int c = mx.open("10.0.0.6");

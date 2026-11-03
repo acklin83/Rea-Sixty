@@ -1051,7 +1051,16 @@ std::string Mixer::stripJson_(const std::string& mix, const std::string& target)
         if (!first) vals += ",";
         first = false;
         vals += jstr(id) + ":{\"v\":" + jnum(v) + ",\"lo\":" + jnum(p->lo) + ",\"hi\":" + jnum(p->hi)
-              + ",\"step\":" + jnum(p->step) + "}";
+              + ",\"step\":" + jnum(p->step);
+        // ⛔ A list's names come from the catalogue: band 3's order is not band 1's
+        // (memory rme-eq-band3-indices), and a second copy on the phone would get
+        // that wrong.
+        if (p->kind == strip::Kind::List) {
+            vals += ",\"names\":[";
+            for (std::size_t i = 0; i < p->names.size(); ++i) vals += (i ? "," : "") + jstr(p->names[i]);
+            vals += "]";
+        }
+        vals += "}";
     };
     const int eq = stripLevel_(mix, target, "eq"), dyn = stripLevel_(mix, target, "dyn"),
               al = stripLevel_(mix, target, "al");

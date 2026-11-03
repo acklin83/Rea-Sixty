@@ -1654,12 +1654,32 @@ function drawEq(body, m){
   });
   body.appendChild(seg);
   const n = strip.band;
+  const shape = listSeg('b'+n+'type');   // bass and treble only: the middle band is always a bell
+  if (shape) body.appendChild(shape);
   [slider('b'+n+'gain','Gain','dB'), slider('b'+n+'freq','Freq','Hz',true), slider('b'+n+'q','Q','')].forEach(x=>x&&body.appendChild(x));
   if (has('lc_on')){
     body.appendChild(group(t('lowCut'), 'lc_on'));
     const f = slider('lc_freq','Freq','Hz',true);
     if (f) body.appendChild(f);
+    const sl = listSeg('lc_slope');
+    if (sl) body.appendChild(sl);
   }
+}
+// A list parameter as buttons, with the names ORC sends.
+function listSeg(id){
+  if (!has(id)) return null;
+  const d = strip.data.vals[id];
+  if (!d.names || !d.names.length) return null;
+  const seg = document.createElement('div');
+  seg.className = 'seg2';
+  d.names.forEach((name,i)=>{
+    const b = document.createElement('button');
+    b.textContent = name;
+    b.className = Math.round(d.v) === i ? 'on' : '';
+    b.onclick = () => { setParam(id, i); drawStrip(); };
+    seg.appendChild(b);
+  });
+  return seg;
 }
 function drawCurveOnly(){
   const svg = document.getElementById('eqSvg');
