@@ -33,7 +33,6 @@ Jeder Musiker bekommt sein eigenes Layout: eigener Ausgang, eigene Fader, eigene
    - dB-Skala direkt am Fader.
    - EQ, DYN und FX Send erscheinen am Streifen nur, wenn sie freigegeben sind und der Kanal den Parameter hat (`strip::available`, keine feste Liste pro Kanalart).
    - Kopfzeile mit Name, Rolle, Ausgang und dem Knopf Hell/Dunkel.
-   - Hinweis, wenn rechts noch mehr Fader kommen.
    - Pan, Mute, Solo und die Meter bleiben.
    - Die Wahl Streifen oder Liste und, wenn freigegeben, die Liste Meine Fader mit Ausblenden und Pfeilen liegen in den vorhandenen Einstellungen (Zahnrad).
 3. EQ: Grafik zum Ziehen mit Q und Werten, einfache Stufe Bass/Mid/Treble, Bypass. Kurve aus `Uf1EqCurve` auf dem Server, keine zweite Kopie in JavaScript. Parameter aus dem Katalog in `RmeStrip.cpp`.

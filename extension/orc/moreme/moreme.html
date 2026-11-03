@@ -193,7 +193,8 @@ body{
 /* Fixed on the right on the strips (Frank 03.11.2026), at the end of the row. */
 #mix.wide.sticky-master .card.master{order:99;margin-left:auto;position:sticky;top:auto;left:auto;right:0;z-index:5;box-shadow:-6px 0 14px rgba(0,0,0,0.5)}
 
-/* PERFORMER: header line, EQ/DYN keys, FX send, dB scale, swipe hint */
+/* PERFORMER: header line, EQ/DYN keys, FX send, dB scale */
+#mix.wide .card.master{border:none;outline:1px solid #223040}
 .head .who small{display:block;font-size:12px;font-weight:500;color:var(--fg2)}
 .head .right{display:flex;align-items:center;gap:2px}
 .moon{background:none;border:none;color:var(--fg2);font-size:20px;padding:6px 8px;cursor:pointer}
@@ -206,8 +207,6 @@ body{
 .tick{display:none;position:absolute;left:-20px;width:18px;text-align:right;font-size:10px;line-height:10px;margin-bottom:-5px;color:var(--fg3);pointer-events:none}
 #mix.wide .tick{display:block}
 #mix.wide .keys{flex-direction:column;gap:4px}
-#hint{flex:none;text-align:center;font-size:12px;color:var(--fg3);padding:2px 0 6px}
-#hint:empty{display:none}
 .card.nomaster{display:none}
 /* ⇨ A PHONE ON ITS SIDE (Frank 03.11.2026, iPhone in Safari: about 190 px for a
    card). Stacked, the fader had nothing left and ran over the name. So: name and
@@ -217,7 +216,6 @@ body{
   .head .who{font-size:14px}
   .brand{font-size:16px}
   .moon,.gear{font-size:18px;padding:2px 6px}
-  #hint{font-size:10px;padding:0 0 2px}
   #mix.wide{padding:2px 8px 2px;gap:6px}
   #mix.wide .card,#mix.wide .card.muted{
     flex:0 0 110px;min-height:0;padding:5px 5px;gap:3px 4px;align-items:stretch;
@@ -307,7 +305,6 @@ body.light #toast{background:#fff;border-color:#c4c7cc}
 
 <!-- MAIN MIX -->
 <div id="mix" class="wrap hidden"></div>
-<div id="hint"></div>
 
 <!-- EQ AND DYNAMICS -->
 <div id="strip"><div class="bar"><button id="stripBack"></button><b id="stripName"></b>
@@ -417,7 +414,6 @@ function pickLang(){
 let LANG = pickLang();
 const TEXT = {
   de: {
-    swipe: (n)=>n + ' weitere Fader, seitwärts wischen',
     linkUnknown: 'Diesen Link gibt es nicht mehr. Frag im Studio nach dem neuen.', linkNoOutput: 'Dein Kopfhörer ist im Moment keinem Ausgang zugewiesen.',
     myFaders: 'Meine Fader', hide: 'Ausblenden', show: 'Zeigen', back: 'Zurück', ownOutput: 'Mein Kopfhörer', on: 'An',
     bass: 'Bass', mid: 'Mitten', treble: 'Höhen', lowCut: 'Low Cut', compression: 'Kompression', volume: 'Lautstärke',
@@ -446,7 +442,6 @@ const TEXT = {
     language: 'Sprache', langAuto: 'Automatisch (Sprache des Geräts)'
   },
   en: {
-    swipe: (n)=>n + ' more, swipe sideways',
     linkUnknown: 'This link no longer exists. Ask the studio for the new one.', linkNoOutput: 'Your headphones have no output right now.',
     myFaders: 'My faders', hide: 'Hide', show: 'Show', back: 'Back', ownOutput: 'My headphones', on: 'On',
     bass: 'Bass', mid: 'Mid', treble: 'Treble', lowCut: 'Low Cut', compression: 'Compression', volume: 'Volume',
@@ -475,7 +470,6 @@ const TEXT = {
     language: 'Language', langAuto: 'Automatic (the device\'s language)'
   },
   fr: {
-    swipe: (n)=>n + ' de plus, glisser sur le côté',
     linkUnknown: 'Ce lien n\'existe plus. Demande le nouveau au studio.', linkNoOutput: 'Ton casque n\'a pas de sortie pour le moment.',
     myFaders: 'Mes faders', hide: 'Masquer', show: 'Afficher', back: 'Retour', ownOutput: 'Mon casque', on: 'Oui',
     bass: 'Graves', mid: 'Médiums', treble: 'Aigus', lowCut: 'Coupe-bas', compression: 'Compression', volume: 'Volume',
@@ -504,7 +498,6 @@ const TEXT = {
     language: 'Langue', langAuto: 'Automatique (langue de l\'appareil)'
   },
   it: {
-    swipe: (n)=>n + ' in più, scorri di lato',
     linkUnknown: 'Questo link non esiste più. Chiedi quello nuovo in studio.', linkNoOutput: 'Le tue cuffie al momento non hanno un\'uscita.',
     myFaders: 'I miei fader', hide: 'Nascondi', show: 'Mostra', back: 'Indietro', ownOutput: 'Le mie cuffie', on: 'Sì',
     bass: 'Bassi', mid: 'Medi', treble: 'Alti', lowCut: 'Taglio bassi', compression: 'Compressione', volume: 'Volume',
@@ -535,7 +528,6 @@ const TEXT = {
   // Rumantsch Grischun, words checked against the Pledari Grond (30.10.2026);
   // wants a native speaker's read.
   rm: {
-    swipe: (n)=>n + ' ulteriurs, stritgar da la vart',
     linkUnknown: 'Quest link na exista betg pli. Dumonda en il studio.', linkNoOutput: 'Tes headphones n\'han ussa nagina sortida.',
     myFaders: 'Mes faders', hide: 'Zuppentar', show: 'Mussar', back: 'Enavos', ownOutput: 'Mes headphones', on: 'Gea',
     bass: 'Bass', mid: 'Mid', treble: 'Treble', lowCut: 'Low Cut', compression: 'Cumpressiun', volume: 'Volumen',
@@ -565,7 +557,6 @@ const TEXT = {
   },
   // tlhIngan Hol, from the dictionary in my head; not checked against anything.
   tlh: {
-    swipe: (n)=>n + ' latlh',
     linkUnknown: 'link tu\'lu\'be\'.', linkNoOutput: 'QoQ yIqaw.',
     myFaders: 'fader wIj', hide: 'So\'', show: 'cha\'', back: 'chegh', ownOutput: 'QoQ wIj', on: 'HIja\'',
     bass: 'Bass', mid: 'Mid', treble: 'Treble', lowCut: 'Low Cut', compression: 'Compression', volume: 'Volume',
@@ -1000,7 +991,6 @@ function renderMix(){
   $('intro').classList.add('hidden');
   root.classList.remove('hidden');
 
-  $('hint').textContent = '';
   if (TOKEN && state.link && state.link !== 'ok'){
     root.classList.remove('wide');
     const key = state.link === 'unknown' ? 'linkUnknown' : 'linkNoOutput';
@@ -1049,26 +1039,30 @@ function renderMix(){
     root.innerHTML = '';
     root.appendChild(buildCard({master:true}));
     for (let y=1;y<=recvCnt;y++) root.appendChild(buildCard({recv:y}));
+    alignFaders();
+  } else if (root.dataset.alignW !== (root.classList.contains('wide')?'w':'l')+innerWidth+'x'+innerHeight){
+    alignFaders();
   }
+  root.dataset.alignW = (root.classList.contains('wide')?'w':'l')+innerWidth+'x'+innerHeight;
   updateCard(root.querySelector('[data-send="0"]'), {master:true});
   for (let y=1;y<=recvCnt;y++) updateCard(root.querySelector('[data-send="'+(-y)+'"]'), {recv:y});
-  updateHint();
 }
 
-// ⇨ MORE FADERS TO THE RIGHT: the strips scroll sideways, and a phone gives no
-// other sign of it.
-function updateHint(){
+// ⇨ ONE LENGTH FOR ALL FADERS, so 0 dB is at the same height on every strip. A strip
+// with EQ, DYN and FX keys under its fader would otherwise have a shorter one than
+// a strip without (Frank 03.11.2026). On a phone on its side the keys sit beside
+// the fader and this has nothing to do.
+const sideMq = window.matchMedia('(max-height: 500px)');
+function alignFaders(){
   const root = $('mix');
-  let text = '';
-  if (root.classList.contains('wide')){
-    const card = root.querySelector('.card:not(.master)');
-    const w = card ? card.offsetWidth + 8 : 1;
-    const hidden = Math.ceil((root.scrollWidth - root.clientWidth - root.scrollLeft - 2) / w);
-    if (hidden > 0) text = t('swipe')(hidden);
-  }
-  if ($('hint').textContent !== text) $('hint').textContent = text;
+  const all = [...root.querySelectorAll('.fader')];
+  all.forEach(f=>{ f.style.flex = ''; });
+  if (!root.classList.contains('wide') || sideMq.matches) return;
+  const h = all.map(f=>f.offsetHeight).filter(x=>x>0);
+  if (!h.length) return;
+  const min = Math.min(...h);
+  all.forEach(f=>{ f.style.flex = '0 0 '+min+'px'; });
 }
-$('mix').addEventListener('scroll', updateHint);
 
 // dB marks beside a strip's fader, where the fader's own curve puts them.
 function faderTicks(sendId){
@@ -1169,27 +1163,22 @@ function updateCard(card, opts){
   const fill = fader.querySelector('.fill');
   const thumb = fader.querySelector('.thumb');
   const nick = fader.querySelector('.nick');
-  const rect = fader.getBoundingClientRect();
+  // ⇨ IN PER CENT, NOT PIXELS: a fader changes length when Safari's bars come and
+  // go or the phone turns, and a position in pixels stays behind until the next
+  // tick, the 0 dB mark first of all (Frank 03.11.2026).
   const pos = ampToPos(vol);
+  const pc = (pos*100)+'%', zero = (dbToPos(0)*100)+'%';
   if (isWide()){
-    const h = rect.height;
-    if (h>0){
-      const py = pos*h;
-      fill.style.height = py+'px';
-      thumb.style.bottom = py+'px';
-      nick.style.bottom = (dbToPos(0)*h)+'px';
-      fill.style.width=''; thumb.style.left=''; nick.style.left='';
-    }
+    fill.style.height = pc;
+    thumb.style.bottom = pc;
+    nick.style.bottom = zero;
+    fill.style.width=''; thumb.style.left=''; nick.style.left='';
   } else {
-    const w = rect.width;
-    if (w>0){
-      const px = pos*w;
-      fill.style.width = px+'px';
-      // keep the round thumb fully inside the card (overflow:hidden clips it at the ends)
-      thumb.style.left = Math.max(18, Math.min(w-18, px))+'px';
-      nick.style.left = (dbToPos(0)*w)+'px';
-      fill.style.height=''; thumb.style.bottom=''; nick.style.bottom='';
-    }
+    fill.style.width = pc;
+    // keep the round thumb fully inside the card (overflow:hidden clips it at the ends)
+    thumb.style.left = 'clamp(18px, '+pc+', calc(100% - 18px))';
+    nick.style.left = zero;
+    fill.style.height=''; thumb.style.bottom=''; nick.style.bottom='';
   }
 
   const displayMute = mute === 1;
