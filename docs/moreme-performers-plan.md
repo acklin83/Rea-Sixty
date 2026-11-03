@@ -25,7 +25,7 @@ Jeder Musiker bekommt sein eigenes Layout: eigener Ausgang, eigene Fader, eigene
    - Performer: Name, Rolle, Ausgang (Rolle oder fester Ausgang, `rmeu::keyOutput`), Fader (TotalMix-Layout oder eigene Liste: Quelle Input oder Playback mit TotalMix-Namen, Name und Farbe vorbelegt aus TotalMix und änderbar, Reihenfolge), Master an/aus, Freigaben, Link-Kennung. Gespeichert in `moreme-performers.json`, damit nur der Server-Thread diese Datei schreibt und der Reiter MoreMe (`moreme.json`) nie dagegen läuft.
    - Seite in drei Spalten: Performer, Einstellungen, QR und Link (Kopieren, Teilen, Vorschau). Oben Snapshots: New, Save, Save as.
    - Performer-Liste mit Kurzstatus: Ausgang, Anzahl Fader oder TotalMix-Layout, EQ- und DYN-Stufe.
-   - Fader sortieren mit Pfeilen hoch und runter, das geht auch auf dem Tablet.
+   - Fader sortieren mit Griffen per Drag and Drop, auch am Handy (Frank 03.11.).
    - Jede Änderung sofort gespeichert und sofort auf dem Handy.
 2. Handyseite: Link öffnet das eigene Layout, Hell/Dunkel, Doppeltipp setzt zurück.
    - Master: bleibt die vorhandene Einstellung Master fixieren (`LS.sticky`, `getStickyPref`). Ab Werk neu an, heute aus. In der Liste oben, bei den Streifen im Hoch- und Querformat rechts statt heute links, der Text der Einstellung in allen Sprachen zieht mit.

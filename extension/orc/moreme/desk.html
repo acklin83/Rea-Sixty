@@ -44,15 +44,15 @@ h2:not(:first-child){margin-top:20px}
 .three label>*{margin-top:4px}
 input[type=color]{width:24px;height:24px;padding:0;border:none;background:none;border-radius:50%;cursor:pointer}
 .lay{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px}
-.fr{display:grid;grid-template-columns:44px 24px minmax(0,1fr) 170px 26px;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #202020}
+.grip{cursor:grab;color:var(--fg3);font-size:16px;line-height:1;text-align:center;touch-action:none;user-select:none;padding:6px 0}
+.grip:hover{color:var(--fg)}
+.fr.dragging{background:var(--bg3);border-radius:8px;outline:1px solid var(--accent)}
+.fr{display:grid;grid-template-columns:20px 24px minmax(0,1fr) 170px 26px;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid #202020}
 .fr.ro{padding:7px 0}
 .fr.ro .sw{width:14px;height:14px;border-radius:50%;justify-self:center}
 .src{color:var(--fg2);font-size:12px}
 .fr .x{background:none;border:none;color:var(--fg3);cursor:pointer;font-size:16px}
 .fr .x:hover{color:var(--fg)}
-.ud{display:flex;gap:2px}
-.ud button{background:var(--bg3);border:1px solid var(--line);border-radius:5px;width:21px;height:24px;padding:0;cursor:pointer;color:var(--fg2);font-size:11px}
-.ud button:hover{color:var(--fg)}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .chl{width:64px;align-self:center}
 .chip{background:var(--bg3);border:1px dashed #3a3a3a;border-radius:16px;padding:4px 11px;cursor:pointer;font-size:12px;color:var(--fg2)}
@@ -73,7 +73,7 @@ input[type=color]{width:24px;height:24px;padding:0;border:none;background:none;b
 #wideSlot{padding:0 16px}
 .empty{color:var(--fg3);padding:24px 8px;text-align:center}
 @media(max-width:1000px){.cols{grid-template-columns:minmax(0,1fr)}}
-@media(max-width:560px){.three{grid-template-columns:1fr}.fr{grid-template-columns:44px 24px minmax(0,1fr) 100px 22px}}
+@media(max-width:560px){.three{grid-template-columns:1fr}.fr{grid-template-columns:20px 24px minmax(0,1fr) 100px 22px}}
 </style></head><body>
 <div class="top">
   <div class="brand"><span class="dot off" id="dot"></span><span>More<span class="lo">Me</span></span></div>
@@ -104,7 +104,7 @@ input[type=color]{width:24px;height:24px;padding:0;border:none;background:none;b
     <div class="lay"><div class="seg" id="laySeg"></div><button class="b sm" id="copyL">Copy TotalMix layout</button><span class="note" id="layNote"></span></div>
     <div id="faders"></div>
     <div id="quick"></div>
-    <div class="perm" style="margin-top:12px"><span>Performer can hide and sort faders on the phone</span><div class="seg" data-k="hide" data-o="Off,Hide"></div></div>
+    <div class="perm" style="margin-top:12px"><span>Performer can hide and sort faders on the phone</span><div class="seg" data-k="hide" data-o="Off,On"></div></div>
     <h2>Master</h2>
     <div class="perm">
       <span>Own output fader</span><div class="seg" data-k="master" data-o="Off,On"></div>
@@ -138,7 +138,7 @@ input[type=color]{width:24px;height:24px;padding:0;border:none;background:none;b
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let ws=null,S=null,curId=null,land=false,shownFrame=null,pendingDraw=false;
-let addWait=null;
+let addWait=null,sorting=false;
 const P=()=>S&&S.book.performers.find(p=>p.id===curId)||null;
 const chan=id=>S.channels.find(c=>c.id===id);
 const srcText=id=>{const[k,n]=id.split(':');return(k==='in'?'In ':'PB ')+n};
@@ -158,6 +158,8 @@ function on(m){
     if(!P())curId=S.book.performers.length?S.book.performers[0].id:null;
     $('#tmWarn').textContent=m.tmSeen?'':'TotalMix does not answer';
     // Never rebuild under a cursor: what's being typed is newer than this.
+    // Nor under a row being dragged: it arrives with the drop.
+    if(sorting)return;
     const a=document.activeElement;
     if(a&&a.tagName==='INPUT'&&a.type==='text'){pendingDraw=true;drawSoft();return}
     draw();
@@ -229,7 +231,7 @@ function drawFaders(){
   };
   $('#faders').innerHTML=p.faders.map((x,i)=>{
     const c=chan(x.src);
-    return '<div class="fr"><span class="ud"><button data-up="'+i+'" aria-label="Up">&#8593;</button><button data-dn="'+i+'" aria-label="Down">&#8595;</button></span>'
+    return '<div class="fr" data-row="'+i+'"><span class="grip" aria-label="Drag to sort">&#8801;</span>'
       +'<input type="color" value="'+esc(x.colour||(c&&c.color)||'#888888')+'" data-c="'+i+'" aria-label="Colour">'
       +'<input type="text" maxlength="64" value="'+esc(x.name)+'" placeholder="'+esc(c?c.label:srcText(x.src))+'" data-n="'+i+'" aria-label="Name">'
       +'<select data-s="'+i+'" aria-label="Source">'+options(x)+'</select>'
@@ -239,14 +241,50 @@ function drawFaders(){
   document.querySelectorAll('[data-n]').forEach(e=>e.oninput=()=>{p.faders[e.dataset.n].name=e.value;push()});
   document.querySelectorAll('[data-s]').forEach(e=>e.onchange=()=>{p.faders[e.dataset.s].src=e.value;drawFaders();changed()});
   document.querySelectorAll('[data-x]').forEach(e=>e.onclick=()=>{p.faders.splice(+e.dataset.x,1);drawFaders();changed()});
-  const mv=(i,d)=>{const j=i+d;if(j<0||j>=p.faders.length)return;[p.faders[i],p.faders[j]]=[p.faders[j],p.faders[i]];drawFaders();changed()};
-  document.querySelectorAll('[data-up]').forEach(e=>e.onclick=()=>mv(+e.dataset.up,-1));
-  document.querySelectorAll('[data-dn]').forEach(e=>e.onclick=()=>mv(+e.dataset.dn,1));
+  dragSort($('#faders'),order=>{
+    sorting=false;
+    p.faders=order.map(i=>p.faders[+i]);
+    drawFaders();changed();
+  });
   const rest=k=>S.channels.filter(c=>c.kind===k&&!p.faders.some(f=>f.src===c.id));
   const row=(l,k)=>rest(k).length?'<div class="chips"><span class="lbl chl">'+l+'</span>'+rest(k).map(c=>'<span class="chip" data-q="'+c.id+'">+ '+esc(c.label)+'</span>').join('')+'</div>':'';
   $('#quick').innerHTML=row('Inputs','in')+row('Playbacks','pb');
   document.querySelectorAll('[data-q]').forEach(e=>e.onclick=()=>{p.faders.push({src:e.dataset.q,name:'',colour:''});drawFaders();changed()});
 }
+// ⇨ SORT BY THE GRIP, mouse or finger. The row under the finger stays where it is
+// in the page and its neighbours move past it: taking it out of the page would
+// end the pointer capture, and with it the drag.
+function dragSort(box, onDone, scroller){
+  box.querySelectorAll('.grip').forEach(g=>{
+    g.onpointerdown=e=>{
+      e.preventDefault();
+      const row=g.closest('[data-row]');
+      if(!row)return;
+      try{g.setPointerCapture(e.pointerId)}catch(_){}
+      row.classList.add('dragging');
+      if(typeof sortStart==='function')sortStart();
+      g.onpointermove=ev=>{
+        if(scroller){
+          const r=scroller.getBoundingClientRect();
+          if(ev.clientY<r.top+48)scroller.scrollTop-=10;
+          else if(ev.clientY>r.bottom-48)scroller.scrollTop+=10;
+        }
+        for(;;){
+          const prev=row.previousElementSibling,next=row.nextElementSibling;
+          if(prev&&prev.dataset.row!==undefined){const b=prev.getBoundingClientRect();if(ev.clientY<b.top+b.height/2){box.insertBefore(prev,row.nextSibling);continue}}
+          if(next&&next.dataset.row!==undefined){const b=next.getBoundingClientRect();if(ev.clientY>b.top+b.height/2){box.insertBefore(next,row);continue}}
+          break;
+        }
+      };
+      g.onpointerup=g.onpointercancel=()=>{
+        g.onpointermove=g.onpointerup=g.onpointercancel=null;
+        row.classList.remove('dragging');
+        onDone([...box.querySelectorAll('[data-row]')].map(r=>r.dataset.row));
+      };
+    };
+  });
+}
+function sortStart(){sorting=true}
 function copyLayout(p){p.faders=S.channels.map(c=>({src:c.id,name:'',colour:''}))}
 function drawSegs(){
   const p=P();

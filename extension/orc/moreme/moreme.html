@@ -127,9 +127,10 @@ body{
 #toast.show{opacity:1}
 
 /* SETTINGS OVERLAY */
-.overlay{position:fixed;inset:0;background:rgba(0,0,0,0.85);backdrop-filter:blur(6px);z-index:100;display:none;align-items:flex-start;justify-content:center;padding:60px 20px}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,0.85);backdrop-filter:blur(6px);z-index:100;display:none;align-items:flex-start;justify-content:center;padding:60px 20px;overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y}
 .overlay.open{display:flex}
-.overlay .panel{background:var(--bg2);border-radius:var(--rad);padding:20px;width:100%;max-width:380px}
+.overlay .panel{position:relative;background:var(--bg2);border-radius:var(--rad);padding:20px;width:100%;max-width:380px;margin-bottom:40px}
+.overlay .close{position:absolute;top:12px;right:12px;background:var(--bg3);border:none;border-radius:50%;width:36px;height:36px;color:var(--fg);font-size:16px;cursor:pointer}
 .overlay h2{font-family:'Inter Tight',sans-serif;font-weight:900;font-style:italic;margin:0 0 16px;font-size:22px}
 .overlay label{display:block;font-size:13px;color:var(--fg2);text-transform:uppercase;letter-spacing:0.08em;margin:14px 0 6px}
 .overlay input{width:100%;background:var(--bg3);border:1px solid #2a2a2a;color:var(--fg);padding:12px;border-radius:10px;font:inherit;font-size:16px}
@@ -226,6 +227,8 @@ body{
 .my.off .n{color:var(--fg3)}
 .my .sw{width:12px;height:12px;border-radius:50%;flex:none}
 .my button{background:var(--bg3);border:none;border-radius:6px;color:var(--fg);font:inherit;font-size:13px;padding:5px 9px;cursor:pointer}
+.my .grip{flex:none;width:32px;text-align:center;font-size:20px;line-height:1;color:var(--fg3);cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none;padding:6px 0}
+.my.dragging{background:var(--bg3);border-radius:8px;outline:1px solid var(--accent)}
 
 /* STRIP PAGE: EQ and dynamics */
 #strip{position:fixed;inset:0;z-index:90;background:var(--bg);display:none;flex-direction:column;padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
@@ -292,6 +295,7 @@ body.light #toast{background:#fff;border-color:#c4c7cc}
 <!-- SETTINGS OVERLAY -->
 <div class="overlay" id="overlay">
   <div class="panel">
+    <button class="close" id="setClose" aria-label="close">✕</button>
     <h2 data-t="settings">Einstellungen</h2>
     <div id="myBox" class="hidden">
       <label data-t="myFaders">Meine Fader</label>
@@ -1361,6 +1365,7 @@ function toggleSolo(recv){
 // ---- SETTINGS ----
 $('gearBtn').addEventListener('click', openSettings);
 $('setCancel').addEventListener('click', ()=>$('overlay').classList.remove('open'));
+$('setClose').addEventListener('click', ()=>$('overlay').classList.remove('open'));
 $('setSave').addEventListener('click', ()=>{
   const id = $('setTrack').value;
   if (id && !TOKEN){
@@ -1450,24 +1455,52 @@ function drawMine(){
   box.classList.toggle('hidden', !on);
   if (!on) return;
   const my = mineGet(), list = mineOrdered(state.allSources || []);
-  $('myList').innerHTML = list.map((s,k)=>{
+  $('myList').innerHTML = list.map(s=>{
     const off = my.hid.includes(s.id);
-    return '<div class="my'+(off?' off':'')+'"><span class="sw" style="background:'+escapeHtml(s.color)+'"></span><span class="n">'+escapeHtml(s.label)+'</span>'
-         + '<button data-eye="'+escapeHtml(s.id)+'">'+escapeHtml(t(off?'show':'hide'))+'</button>'
-         + '<button data-mv="'+k+':-1" aria-label="up">↑</button><button data-mv="'+k+':1" aria-label="down">↓</button></div>';
+    return '<div class="my'+(off?' off':'')+'" data-row="'+escapeHtml(s.id)+'"><span class="grip" aria-label="drag to sort">≡</span><span class="sw" style="background:'+escapeHtml(s.color)+'"></span><span class="n">'+escapeHtml(s.label)+'</span>'
+         + '<button data-eye="'+escapeHtml(s.id)+'">'+escapeHtml(t(off?'show':'hide'))+'</button></div>';
   }).join('');
   $('myList').querySelectorAll('[data-eye]').forEach(b=>b.onclick=()=>{
     const id = b.dataset.eye, m = mineGet();
     m.hid = m.hid.includes(id) ? m.hid.filter(x=>x!==id) : m.hid.concat(id);
     mineSave(m);
   });
-  $('myList').querySelectorAll('[data-mv]').forEach(b=>b.onclick=()=>{
-    const [k,d] = b.dataset.mv.split(':').map(Number), j = k+d;
-    if (j < 0 || j >= list.length) return;
-    const ids = list.map(s=>s.id);
-    [ids[k], ids[j]] = [ids[j], ids[k]];
+  dragSort($('myList'), ids=>{
     const m = mineGet(); m.ord = ids;
     mineSave(m);
+  }, $('overlay'));
+}
+
+// ⇨ SORT BY THE GRIP, mouse or finger. The row under the finger stays where it is
+// in the page and its neighbours move past it: taking it out of the page would
+// end the pointer capture, and with it the drag.
+function dragSort(box, onDone, scroller){
+  box.querySelectorAll('.grip').forEach(g=>{
+    g.onpointerdown=e=>{
+      e.preventDefault();
+      const row=g.closest('[data-row]');
+      if(!row)return;
+      try{g.setPointerCapture(e.pointerId)}catch(_){}
+      row.classList.add('dragging');
+      g.onpointermove=ev=>{
+        if(scroller){
+          const r=scroller.getBoundingClientRect();
+          if(ev.clientY<r.top+48)scroller.scrollTop-=10;
+          else if(ev.clientY>r.bottom-48)scroller.scrollTop+=10;
+        }
+        for(;;){
+          const prev=row.previousElementSibling,next=row.nextElementSibling;
+          if(prev&&prev.dataset.row!==undefined){const b=prev.getBoundingClientRect();if(ev.clientY<b.top+b.height/2){box.insertBefore(prev,row.nextSibling);continue}}
+          if(next&&next.dataset.row!==undefined){const b=next.getBoundingClientRect();if(ev.clientY>b.top+b.height/2){box.insertBefore(next,row);continue}}
+          break;
+        }
+      };
+      g.onpointerup=g.onpointercancel=()=>{
+        g.onpointermove=g.onpointerup=g.onpointercancel=null;
+        row.classList.remove('dragging');
+        onDone([...box.querySelectorAll('[data-row]')].map(r=>r.dataset.row));
+      };
+    };
   });
 }
 
