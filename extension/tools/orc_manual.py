@@ -21,6 +21,7 @@ Run:
 Output: extension/build/orc-manual/index.html
 """
 import argparse
+import base64
 import html
 import json
 import re
@@ -273,6 +274,14 @@ def build(dump_json, check_only):
         out = out.replace(f"<!--GEN:{k}-->", v)
 
     problems = []
+    # Screenshots go into the page itself: the manual is published as one file.
+    def shot(m):
+        png = EXT.parent / "docs" / "screenshots" / f"{m.group(1)}.png"
+        if not png.is_file():
+            problems.append(f"screenshot missing: {png.name}")
+            return m.group(0)
+        return 'src="data:image/png;base64,' + base64.b64encode(png.read_bytes()).decode() + '"'
+    out = re.sub(r'src="shot:([\w-]+)"', shot, out)
     for m in re.findall(r"\{\{(\w+)\}\}", out):
         problems.append(f"unfilled token {{{{{m}}}}}")
     for m in re.findall(r"<!--GEN:(\w+)-->", out):

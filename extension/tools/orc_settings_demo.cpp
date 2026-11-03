@@ -56,7 +56,8 @@ static int fakeMix()
             { "/playback/1", { "", "DAW 1/2", 6 } }, { "/playback/3", { "", "Click", 7 } },
             { "/output/1",   { "", "AN 1/2", 1 } }, { "/output/3",   { "", "AN 3/4", 1 } },
             { "/output/5",   { "", "PH 5/6", 5 } }, { "/output/7",   { "", "PH 7/8", 5 } },
-            { "/output/9",   { "", "ADAT 1/2", 2 } } };
+            { "/output/9",   { "", "PH 9/10", 5 } }, { "/output/11",  { "", "PH 11/12", 5 } },
+            { "/output/13",  { "", "ADAT 1/2", 2 } } };
         while (g_run.load()) {
             pollfd p{ fd, POLLIN, 0 };
             if (::poll(&p, 1, 200) <= 0) continue;
@@ -71,10 +72,20 @@ static int fakeMix()
             say(rme::encodeFloat("/controlroom/mainb", 3));
             say(rme::encodeFloat("/controlroom/phones1", 5));
             say(rme::encodeFloat("/controlroom/phones2", 7));
+            say(rme::encodeFloat("/controlroom/phones3", 9));
+            say(rme::encodeFloat("/controlroom/phones4", 11));
             for (const auto& [addr, n] : chans) {
                 say(rme::encode(addr + "/name", { rme::Arg::fromString(n.value) }));
                 say(rme::encodeFloat(addr + "/color", n.colour));
                 say(rme::encodeFloat(addr + "/volume", -6.0f));
+            }
+            // A source is visible to MoreMe once a mix reports it.
+            for (const int out : { 5, 7, 9, 11 }) {
+                const std::string o = "/" + std::to_string(out) + "/fader";
+                for (int i = 1; i <= 4; ++i)
+                    say(rme::encodeFloat("/mix/in/" + std::to_string(i) + o, -6.0f - i));
+                for (const int pb : { 1, 3 })
+                    say(rme::encodeFloat("/mix/pb/" + std::to_string(pb) + o, -3.0f));
             }
         }
         ::close(fd);

@@ -52,6 +52,8 @@ h3 { font-size: 19px; margin: 28px 0 8px; }
 h4 { font-size: 16px; margin: 22px 0 4px; }
 p, li { max-width: 72ch; }
 .note { color: var(--muted); font-size: 0.93em; }
+figure.shot { margin: 16px 0; }
+figure.shot img { display: block; width: 100%; height: auto; border: 1px solid var(--line); border-radius: 10px; }
 table.data { border-collapse: collapse; width: 100%; margin: 8px 0 16px; font-size: 14.5px; }
 table.data th, table.data td { text-align: left; vertical-align: top; padding: 6px 10px;
   border-bottom: 1px solid var(--line); }
@@ -202,7 +204,7 @@ handover. <em>Import from REAPER</em> on the <a href="#set-modes">UF8 Modes</a> 
 <section id="menubar">
 <h2>The menu bar</h2>
 <p>ORC has no Dock icon and no window of its own until you open the settings. Its menu bar item
-holds these lines:</p>
+shows these lines:</p>
 <table class="data"><tbody>
 <tr><th>ORC {{version}}</th><td>The version. When ORC does not run from Applications, the folder
 it runs from follows, so a second copy is told apart.</td></tr>
@@ -1039,6 +1041,8 @@ away on the phones a few seconds later. All headphone mixes show the same channe
 pick Phones 1 to 4 as above. As soon as there is a performer, the phones list performers instead.</p>
 <p>It fills the settings page <a href="#set-moreme">MoreMe</a> while MoreMe is on. The menu bar opens it
 too. It runs on this Mac only and needs no PIN.</p>
+<figure class="shot"><img src="shot:orc-settings-studio-control" width="1600" height="1025" loading="lazy"
+alt="Studio Control on the page MoreMe: four performers on Phones 1 to 4, one performer's faders and access, its QR code and a preview of its phone page"></figure>
 <table class="data"><tbody>
 <tr><th>Performers</th><td>One per musician. Each shows its output, its faders and what it may change.</td></tr>
 <tr><th>Output</th><td>Phones 1 to 4, Main, Main B, or any other output TotalMix shows. A role follows
@@ -1138,7 +1142,10 @@ on and off and its key is lit while on; a <em>press</em> does one thing each tim
 
 <section id="settings">
 <h2>The settings window</h2>
-<p>Settings… in the menu bar. Every change is saved at once.</p>
+<p>Settings… in the menu bar opens ORC's window, with its pages in the list on the left. Every change
+is saved at once.</p>
+<figure class="shot"><img src="shot:orc-settings-general" width="1600" height="440" loading="lazy"
+alt="ORC's settings window on the page General: the list of pages on the left, TotalMix, Startup and Sleep on the right"></figure>
 <h3 id="set-connection">General</h3>
 <table class="data"><tbody>
 <tr><th>Talk to TotalMix</th><td>The link on or off.</td></tr>
@@ -1199,7 +1206,8 @@ TotalMix shows this remote. A role follows TotalMix, as on the pots.</td></tr>
 </tbody></table>
 <h3 id="set-softkeys">Soft Keys</h3>
 <table class="data"><tbody>
-<tr><th>Bank, Half</th><td>Which bank and which half you are editing.</td></tr>
+<tr><th>Banks</th><td>The ten banks, each with its name or what it shows. Click one to edit it.</td></tr>
+<tr><th>Half</th><td>Keys 1-4 or Keys 5-8 of that bank.</td></tr>
 <tr><th>Shows</th><td>Keys, TotalMix snapshots, TotalMix layouts, OBS scenes or TotalMix submixes.</td></tr>
 <tr><th>Name</th><td>The bank's name on the large screen.</td></tr>
 <tr><th>Label, Action</th><td>Per key: what the screen says and what a press does. An empty label
@@ -1209,6 +1217,11 @@ the output's name.</td></tr>
 <em>Off</em> leaves the lamp dark. On a bank of snapshots or layouts, Active is the snapshot or layout that is loaded and Inactive the others; without a colour of their own the keys are white.</td></tr>
 <tr><th>Factory set for this bank</th><td>Puts this bank back the way it came.</td></tr>
 </tbody></table>
+<figure class="shot"><img src="shot:orc-settings-soft-keys" width="1600" height="810" loading="lazy"
+alt="The page Soft Keys: the ten banks in a list, and the four keys of bank 1 with label, action and lamp colours"></figure>
+<h3 id="set-colours">Colours</h3>
+<p>TotalMix has nine channel colours, the UF1 and the UF8 their own palette. This page says which
+colour each TotalMix colour shows as on both, and lists the channels that wear it.</p>
 <h3 id="set-modes">UF8 Modes</h3>
 <p>Hue (LAYER 2) and DynaMount (LAYER 3) for the UF8, and OBS for the OBS scenes banks, which the
 UF1 shows too. They follow Rea-Sixty's at every handover
@@ -1243,9 +1256,6 @@ goes back to the one ORC comes with.</td></tr>
 <tr><th>Studio Control</th><td>Below these, while MoreMe is on: the performers and their links
 (<a href="#moreme">MoreMe</a>). <em>Setup</em> shows or hides the ports, the studio name and the logo.</td></tr>
 </tbody></table>
-<h3 id="set-colours">Colours</h3>
-<p>TotalMix has nine channel colours, the UF1 and the UF8 their own palette. This page says which
-colour each TotalMix colour shows as on both, and lists the channels that wear it.</p>
 </section>
 
 <section id="trouble">

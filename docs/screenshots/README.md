@@ -110,3 +110,9 @@ None. Every rail entry and every section that needed one has a capture.
   a payment link together — leave it out of contexts where that is not wanted.
 - Captured at Retina scale (roughly 2300–2700 px wide). Metadata is stripped.
   Let the site's image pipeline downscale; do not commit pre-scaled variants.
+
+## ORC
+
+`orc-settings-*.png` show ORC's settings window with made-up data, rendered offscreen by
+`extension/tools/orc_settings_demo.cpp` on a scratch HOME: no ORC, no TotalMix, no surface. ORC's
+manual embeds them (`extension/tools/orc_manual.py`), `/orc` on the website imports two.
