@@ -73,7 +73,7 @@ jobs:
         run: |
           choco install nsis -y --no-progress
           $stage = (Resolve-Path orc-stage).Path
-          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DVERSION=$env:ORC_VERSION" "/DSTAGE=$stage" "/DOUT=$pwd\ORC-$env:ORC_VERSION-Setup.exe" extension/orc/win/orc.nsi
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 /INPUTCHARSET UTF8 "/DVERSION=$env:ORC_VERSION" "/DSTAGE=$stage" "/DOUT=$pwd\ORC-$env:ORC_VERSION-Setup.exe" extension/orc/win/orc.nsi
           if ($LASTEXITCODE -ne 0) { throw "makensis $LASTEXITCODE" }
 
       - name: Upload the program

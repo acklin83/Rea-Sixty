@@ -100,7 +100,7 @@ Section
 
     WriteRegStr HKLM "${KEY_UNINSTALL}" "DisplayName" "ORC"
     WriteRegStr HKLM "${KEY_UNINSTALL}" "DisplayVersion" "${VERSION}"
-    WriteRegStr HKLM "${KEY_UNINSTALL}" "Publisher" "St$örsender Studio"
+    WriteRegStr HKLM "${KEY_UNINSTALL}" "Publisher" "Störsender Studio"
     WriteRegStr HKLM "${KEY_UNINSTALL}" "DisplayIcon" "$INSTDIR\ORC.exe"
     WriteRegStr HKLM "${KEY_UNINSTALL}" "InstallLocation" "$INSTDIR"
     WriteRegStr HKLM "${KEY_UNINSTALL}" "UninstallString" '"$INSTDIR\Uninstall ORC.exe"'
