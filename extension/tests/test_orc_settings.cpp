@@ -523,6 +523,11 @@ static void testRmeJsonWhole()
     while (clk::now() < end) {
         rme::Config got;
         const std::string json = file(orc::rmeConfigPath());
+#if defined(_WIN32)
+        // The moment of the swap can refuse the open there. That is no reading, and
+        // the reader asks again (reasixty_rmeLoadConfig_); half a file would be wrong.
+        if (json.empty()) { ++reads; continue; }
+#endif
         if (json.empty() || !rme::configFromJson(json, got)
             || (got.host != one.host && got.host != two.host)) ++broken;
         ++reads;
@@ -653,7 +658,7 @@ static void testServer(const std::string& res)
     // Nothing listens once the window has closed.
     set::server().stop();
     EXPECT(set::server().port() == 0);
-    EXPECT(connectTo(port) < 0);
+    EXPECT(connectTo(port) == kNone);
     // And a new start is a new address.
     const std::string again = set::server().start(res, set::Host{});
     EXPECT(!again.empty() && again != url);
