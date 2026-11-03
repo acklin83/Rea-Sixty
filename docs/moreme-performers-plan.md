@@ -27,8 +27,9 @@ Jeder Musiker bekommt sein eigenes Layout: eigener Ausgang, eigene Fader, eigene
    - Performer-Liste mit Kurzstatus: Ausgang, Anzahl Fader oder TotalMix-Layout, EQ- und DYN-Stufe.
    - Fader sortieren mit Pfeilen hoch und runter, das geht auch auf dem Tablet.
    - Jede Änderung sofort gespeichert und sofort auf dem Handy.
-2. Handyseite: Link öffnet das eigene Layout, Querformat mit festem Master, Hell/Dunkel, Doppeltipp setzt zurück.
-   - Senkrechte Streifen auch im Hochformat, als Wahl am Handy neben der heutigen Liste. Die Faderlänge passt sich dem Bildschirm an, gescrollt wird nur seitwärts.
+2. Handyseite: Link öffnet das eigene Layout, Hell/Dunkel, Doppeltipp setzt zurück.
+   - Master: bleibt die vorhandene Einstellung Master fixieren (`LS.sticky`, `getStickyPref`). Ab Werk neu an, heute aus. In der Liste oben, bei den Streifen im Hoch- und Querformat rechts statt heute links, der Text der Einstellung in allen Sprachen zieht mit.
+   - Ein neues Handy startet im Hochformat mit der heutigen Liste. Senkrechte Streifen auch im Hochformat sind die Wahl am Handy. Die Faderlänge passt sich dem Bildschirm an, gescrollt wird nur seitwärts.
    - dB-Skala direkt am Fader.
    - EQ, DYN und FX Send erscheinen am Streifen nur, wenn sie freigegeben sind und der Kanal den Parameter hat (`strip::available`, keine feste Liste pro Kanalart).
    - Kopfzeile mit Name, Rolle, Ausgang und dem Knopf Hell/Dunkel.
