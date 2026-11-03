@@ -283,6 +283,14 @@ int main()
         EXPECT(has(b.messages(200), R"("src":"in:1","db":-3)"));
 
         // TotalMix moves it: the phone follows.
+        // ⛔ Not before the next ask: an open round drops what comes back for a
+        // node just written (Manager::workerLoop), and this mixer never closes
+        // a round with names. Without the wait the line hung on the follow-up
+        // ask falling between the write and here, by 100 ms.
+        mix.got.clear();
+        const auto askBy = clk::now() + std::chrono::seconds(5);
+        while (clk::now() < askBy && !mix.saw("/sendall 1")) mix.pump(100);
+        EXPECT(mix.saw("/sendall 1"));
         mix.say("/mix/in/1/8/fader", -12.0f);
         EXPECT(has(b.messages(400), R"("src":"in:1","db":-12)"));
 
