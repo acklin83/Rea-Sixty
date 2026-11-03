@@ -234,7 +234,7 @@ inline bool fileStamp(const std::string& path, long long& mtime, long long& size
 #  if defined(__APPLE__)
     mtime = static_cast<long long>(sb.st_mtimespec.tv_sec) * 1000000000LL + sb.st_mtimespec.tv_nsec;
 #  else
-    mtime = static_cast<long long>(sb.st_mtime);
+    mtime = static_cast<long long>(sb.st_mtim.tv_sec) * 1000000000LL + sb.st_mtim.tv_nsec;
 #  endif
     size = static_cast<long long>(sb.st_size);
     return true;
