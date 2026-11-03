@@ -42,6 +42,14 @@ using Writes = rmes::Writes;
 
 // The UF8's own part. One per program, owned by the caller; atomics because the
 // input arrives on the device thread and the painter runs on another.
+// Quick 1-3, and Layer 1-3 without a modifier, do nothing while the left UF8 is a
+// side-car. With one, Layer is how to get from mode to mode.
+constexpr bool deadInSideCar(std::uint8_t id, bool modifierHeld)
+{
+    if (id >= 0x43 && id <= 0x45) return true;
+    return id >= 0x40 && id <= 0x42 && !modifierHeld;
+}
+
 struct Side {
     // First visible channel on strip 1, an index into rmeu::visibleChannels of
     // that row. Each row keeps its own.

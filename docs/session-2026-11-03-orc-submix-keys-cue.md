@@ -37,3 +37,4 @@ Nicht geprüft: am echten TotalMix und Handy; das ORC-Fenster und der Reiter im 
 ## Aus Franks Test
 - UF8-Meter: L = R, beide Balken nahmen den linken Kanal. Regel des UF1 übernommen.
 - UF8 und UF1 zeigen je ihre eigene Soft-Key-Bank (`uf8ScBank_`, `g_sideCarBankUf8`), ein Speicher.
+- UF8 als Side-Car in Rea-Sixty (TotalMix, Hue, DynaMount): Quick 1-3 und Layer 1-3 ohne Modifier sind tot (`uf8side::deadInSideCar`), sie verstellten die Bank eines unsichtbaren Modus und meldeten das im Banner. Shift + Layer bleibt, das ist der Weg zwischen den Modi.

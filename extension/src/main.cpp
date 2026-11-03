@@ -27927,6 +27927,23 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 }
             }
 
+            // ⇨ QUICK AND PLAIN LAYER ARE DEAD IN A SIDE-CAR (Frank 03.11.2026): they
+            // moved the bank of a mode that isn't showing and announced it in the
+            // banner. Shift + Layer stays, it's the way between the modes. A key
+            // let through at the press gets its release too, with Shift gone or not.
+            if (unit == 0 && sideCarKeys_() != ScKeys::None && id >= 0x40 && id <= 0x45) {
+                static std::array<bool, 6> sPassed{};
+                bool& passed = sPassed[static_cast<size_t>(id - 0x40)];
+                if (pressed) {
+                    const bool mod = uf8::bindings::currentModifierSnapshot() != uf8::bindings::Modifier::Plain;
+                    passed = !reasixty::rme::uf8side::deadInSideCar(id, mod);
+                }
+                if (!passed) {
+                    i += frameSize;
+                    continue;
+                }
+            }
+
             bool handledNatively = false;
 
             // UF8 Plugin Mode: TopSoftKey 1..8 (0x18..0x1F) become bank

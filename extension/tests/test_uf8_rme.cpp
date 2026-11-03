@@ -241,6 +241,19 @@ int main()
         // An output has no solo: the key is its Cue. Strip 1 is Phones 1, channel 6.
         EXPECT(val(u8::solo(st, outs, s3, 0), "/controlroom/cuechan") == 6.0f);
     }
+    // ── Quick and Layer in a side-car (Frank 03.11.2026) ────────────────────────
+    {
+        for (const std::uint8_t q : { 0x43, 0x44, 0x45 }) {
+            EXPECT(u8::deadInSideCar(q, false));
+            EXPECT(u8::deadInSideCar(q, true));
+        }
+        for (const std::uint8_t l : { 0x40, 0x41, 0x42 }) {
+            EXPECT(u8::deadInSideCar(l, false));
+            EXPECT(!u8::deadInSideCar(l, true));   // Shift + Layer leaves the mode
+        }
+        EXPECT(!u8::deadInSideCar(0x46, false));   // 360 and the rest stay bindings
+        EXPECT(!u8::deadInSideCar(0x68, false));
+    }
     // ── the meter, L and R apart on a stereo channel (Frank 03.11.2026) ─────────
     {
         State ms = fixture();
