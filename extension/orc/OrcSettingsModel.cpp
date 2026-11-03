@@ -699,6 +699,46 @@ void logoChosen(const std::string& path, Context& c)
     storeMoreme(c, s, ph::server().pin());
 }
 
+#if defined(_WIN32)
+namespace {
+
+const std::vector<winusb::Device> kUsbDevices = {
+    { "VID_31E9&PID_0025", "UF1" },
+    { "VID_31E9&PID_0021", "UF8" },
+};
+
+// A walk over the USB tree: every few seconds, and at once after anything happened.
+std::string usbJson(const Context& c)
+{
+    const int job = winusb::jobState();
+    if (job == 2) {
+        c.usbMessage = winusb::jobMessage();
+        winusb::jobClear();
+        c.usbStateAt = 0;
+    } else if (job == 1) {
+        c.usbMessage = winusb::jobMessage();
+    }
+    const long long now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (c.usbState.empty() || c.usbStateAt == 0 || now - c.usbStateAt >= 3) {
+        c.usbStateAt = now;
+        std::string list;
+        for (const winusb::DeviceState& d : winusb::status(kUsbDevices)) {
+            if (!list.empty()) list += ",";
+            list += "{\"n\":" + jstr(d.name) + ",\"s\":"
+                  + jstr(!d.connected ? "not connected"
+                         : d.ready ? "ready"
+                         : d.service.empty() ? "no driver" : "needs the driver, on " + d.service)
+                  + ",\"ok\":" + jbool(d.ready) + "}";
+        }
+        c.usbState = "[" + list + "]";
+    }
+    return "{\"devices\":" + c.usbState + ",\"busy\":" + jbool(job == 1) + ",\"msg\":" + jstr(c.usbMessage) + "}";
+}
+
+} // namespace
+#endif
+
 void apply(const std::string& json, Context& c)
 {
     wdl_json_parser jp;
@@ -758,46 +798,6 @@ void apply(const std::string& json, Context& c)
     else if (t == "chooseLogo") { if (c.host.chooseLogo) c.host.chooseLogo(); }
     else if (starts("mm"))   applyMoreme(t, m, c);
 }
-
-#if defined(_WIN32)
-namespace {
-
-const std::vector<winusb::Device> kUsbDevices = {
-    { "VID_31E9&PID_0025", "UF1" },
-    { "VID_31E9&PID_0021", "UF8" },
-};
-
-// A walk over the USB tree: every few seconds, and at once after anything happened.
-std::string usbJson(const Context& c)
-{
-    const int job = winusb::jobState();
-    if (job == 2) {
-        c.usbMessage = winusb::jobMessage();
-        winusb::jobClear();
-        c.usbStateAt = 0;
-    } else if (job == 1) {
-        c.usbMessage = winusb::jobMessage();
-    }
-    const long long now = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
-    if (c.usbState.empty() || c.usbStateAt == 0 || now - c.usbStateAt >= 3) {
-        c.usbStateAt = now;
-        std::string list;
-        for (const winusb::DeviceState& d : winusb::status(kUsbDevices)) {
-            if (!list.empty()) list += ",";
-            list += "{\"n\":" + jstr(d.name) + ",\"s\":"
-                  + jstr(!d.connected ? "not connected"
-                         : d.ready ? "ready"
-                         : d.service.empty() ? "no driver" : "needs the driver, on " + d.service)
-                  + ",\"ok\":" + jbool(d.ready) + "}";
-        }
-        c.usbState = "[" + list + "]";
-    }
-    return "{\"devices\":" + c.usbState + ",\"busy\":" + jbool(job == 1) + ",\"msg\":" + jstr(c.usbMessage) + "}";
-}
-
-} // namespace
-#endif
 
 std::string stateJson(const Context& c)
 {

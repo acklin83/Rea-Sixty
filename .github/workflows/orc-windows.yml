@@ -20,6 +20,7 @@ jobs:
         shell: pwsh
         run: |
           curl.exe -L -o libusb.7z https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.7z
+          if ((Get-FileHash libusb.7z -Algorithm SHA256).Hash -ne '7FB1DFEC805B97983763D7D0AE244320DA12ADD1003D4249C96CC4D586398C79') { throw 'libusb.7z checksum' }
           7z x libusb.7z -o"${{ github.workspace }}/libusb"
           curl.exe -L -o hidapi.zip https://github.com/libusb/hidapi/releases/download/hidapi-0.15.0/hidapi-win.zip
           Expand-Archive -Path hidapi.zip -DestinationPath "${{ github.workspace }}/hidapi"
@@ -37,14 +38,56 @@ jobs:
       - name: Test
         run: ctest --test-dir extension/build -C Release --output-on-failure --timeout 180 -R "^(orc_(keys|handover|phones|websocket|phones_server|settings)|rme_(osc|input|softkeys|face))$"
 
-      - name: Upload ORC
+      # The folder the installer packs, and the same folder for a look without one.
+      - name: Stage
+        shell: pwsh
+        run: |
+          $rel = 'extension/build/Release'
+          $stage = 'orc-stage'
+          New-Item -ItemType Directory -Force "$stage/Licenses" | Out-Null
+          Copy-Item "$rel/ORC.exe","$rel/libusb-1.0.dll" $stage
+          Copy-Item -Recurse "$rel/moreme","$rel/settings" $stage
+          # libusb's release DLL needs the Visual C++ runtime, and a clean Windows may
+          # not have it: the copy beside ORC.exe, as Microsoft allows.
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $crt = Get-ChildItem "$vs\VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT\vcruntime140.dll" | Sort-Object FullName | Select-Object -Last 1
+          Copy-Item $crt.FullName $stage
+          # Microsoft's bootstrapper for the WebView2 Runtime, checked by its signature.
+          curl.exe -L -o "$stage/MicrosoftEdgeWebview2Setup.exe" "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+          $sig = Get-AuthenticodeSignature "$stage/MicrosoftEdgeWebview2Setup.exe"
+          if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'Microsoft') { throw 'bootstrapper signature' }
+          # The notices, as tools/orc-release.sh makes them on the Mac.
+          $cm = Get-Content extension/CMakeLists.txt -Raw
+          $ver = [regex]::Match($cm, 'MACOSX_BUNDLE_SHORT_VERSION_STRING\s+([0-9.]+)').Groups[1].Value
+          $lu = [regex]::Match($cm, 'set\(ORC_LIBUSB_VERSION\s+([0-9.]+)\)').Groups[1].Value
+          (Get-Content extension/orc/licenses/THIRD-PARTY-NOTICES.txt -Raw).Replace('@VERSION@',$ver).Replace('@LIBUSB_VERSION@',$lu) | Set-Content -NoNewline "$stage/Licenses/THIRD-PARTY-NOTICES.txt"
+          curl.exe -L -o libusb-src.tar.bz2 "https://github.com/libusb/libusb/releases/download/v$lu/libusb-$lu.tar.bz2"
+          tar xjf libusb-src.tar.bz2
+          Copy-Item "libusb-$lu/COPYING" "$stage/Licenses/libusb-COPYING.txt"
+          Copy-Item "libusb-$lu/AUTHORS" "$stage/Licenses/libusb-AUTHORS.txt"
+          Copy-Item (Get-ChildItem -Recurse extension/build/_deps -Filter LICENSE.txt | Where-Object FullName -match 'webview2' | Select-Object -First 1).FullName "$stage/Licenses/WebView2-LICENSE.txt"
+          "ORC_VERSION=$ver" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Installer
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          $stage = (Resolve-Path orc-stage).Path
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" /V2 "/DVERSION=$env:ORC_VERSION" "/DSTAGE=$stage" "/DOUT=$pwd\ORC-$env:ORC_VERSION-Setup.exe" extension/orc/win/orc.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis $LASTEXITCODE" }
+
+      - name: Upload the program
         uses: actions/upload-artifact@v4
         with:
           retention-days: 7
           name: orc-windows
-          path: |
-            extension/build/Release/ORC.exe
-            extension/build/Release/libusb-1.0.dll
-            extension/build/Release/moreme/
-            extension/build/Release/settings/
+          path: orc-stage/
+          if-no-files-found: error
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          retention-days: 7
+          name: orc-windows-setup
+          path: ORC-*-Setup.exe
           if-no-files-found: error

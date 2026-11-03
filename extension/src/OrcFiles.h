@@ -66,7 +66,22 @@ inline std::string reaperFolder()
     return base.empty() ? std::string() : base + "\\REAPER";
 }
 
+// Where TotalMix keeps its last.<device>.xml with the snapshot and layout names.
+// Read from the StoerPC 03.11.2026: %LOCALAPPDATA%\TotalMixFX.
+inline std::string totalMixFolder()
+{
+    wchar_t buf[32768];
+    const DWORD n = ::GetEnvironmentVariableW(L"LOCALAPPDATA", buf, 32768);
+    return (n > 0 && n < 32768) ? narrow_(buf) + "\\TotalMixFX" : std::string();
+}
+
 inline bool makeDir(const std::string& path) { return ::CreateDirectoryA(path.c_str(), nullptr) != 0; }
+
+inline bool folderExists(const std::string& path)
+{
+    const DWORD a = ::GetFileAttributesA(path.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+}
 
 // ⛔ `0600` HAS NO MEANING HERE, AND THE FOLDER BELOW CAN BE READABLE BY EVERYBODY
 // (measured on the StoerPC 03.11.2026: Roaming inherits Users and Everyone). ORC's
@@ -172,10 +187,23 @@ inline std::string reaperFolder()
     const char* home = std::getenv("HOME");
     return home ? std::string(home) + "/Library/Application Support/REAPER" : std::string();
 }
+
+inline std::string totalMixFolder()
+{
+    const char* home = std::getenv("HOME");
+    return home && *home ? std::string(home) + "/Library/Application Support/RME TotalMix FX" : std::string();
+}
 #  else
 inline std::string supportFolder() { return {}; }   // ORC does not run here
 inline std::string reaperFolder() { return {}; }
+inline std::string totalMixFolder() { return {}; }
 #  endif
+
+inline bool folderExists(const std::string& path)
+{
+    struct stat sb{};
+    return ::stat(path.c_str(), &sb) == 0 && S_ISDIR(sb.st_mode);
+}
 
 // An existing directory fails with EEXIST, which is the outcome we want. Any other
 // failure shows up as a failed write later, with a path.

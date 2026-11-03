@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <dwmapi.h>
+#include <objbase.h>
 #include <shobjidl.h>
 #include <shellapi.h>
 #include <string>
@@ -212,7 +213,7 @@ void missingRuntime()
         L"ORC's settings need the Microsoft Edge WebView2 Runtime. Open Microsoft's download page?",
         L"ORC", MB_ICONWARNING | MB_YESNO);
     if (a == IDYES)
-        ::ShellExecuteW(nullptr, L"open", L"https://developer.microsoft.com/microsoft-edge/webview2/",
+        ::ShellExecuteW(nullptr, L"open", L"https://developer.microsoft.com/microsoft-edge/webview2/consumer/",
                         nullptr, nullptr, SW_SHOWNORMAL);
     ::PostMessageW(g_wnd, WM_CLOSE, 0, 0);
 }
@@ -330,7 +331,7 @@ void buildWindow()
     wc.cbSize        = sizeof(wc);
     wc.lpfnWndProc   = windowProc;
     wc.hInstance     = ::GetModuleHandleW(nullptr);
-    wc.hCursor       = ::LoadCursorW(nullptr, IDC_ARROW);
+    wc.hCursor       = ::LoadCursorW(nullptr, MAKEINTRESOURCEW(32512))   /* IDC_ARROW */;
     wc.hIcon         = ::LoadIconW(wc.hInstance, MAKEINTRESOURCEW(kIconApp));
     wc.hbrBackground = ::CreateSolidBrush(RGB(0x0D, 0x0D, 0x0D));
     wc.lpszClassName = kWindowClass;

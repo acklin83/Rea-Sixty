@@ -664,7 +664,7 @@ void SettingsScreen::drawDevices(ImGui_Context* ctx)
     }
 
     deviceLine("UF1", uf1On, reasixty_uf1Serial());
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
     // ⇨ ORC, the standalone, may hold the UF1 when REAPER starts. On: REAPER
     // asks for it and ORC lets go. Off: REAPER leaves it with ORC.
     // Only where ORC is set up (Frank 27.09.: nothing of it without ORC); the

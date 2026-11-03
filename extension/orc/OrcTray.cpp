@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <objbase.h>
 #include <shellapi.h>
 #include <string>
 #include <windowsx.h>

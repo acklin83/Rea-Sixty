@@ -32,6 +32,16 @@ OUT="$REPO/dist/orc-$VERSION"
 APP="$OUT/work/ORC.app"
 echo "==> ORC $VERSION, libusb $LIBUSB_VERSION -> $OUT"
 
+# ── 0. the Windows icons still show this drawing (tools/orc_icon --ico) ──────
+cmake -S "$EXT" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release > /dev/null
+cmake --build "$BUILD" --target orc_icon --parallel
+ICO_CHECK="$(mktemp -d)"
+"$BUILD/orc_icon" --ico "$ICO_CHECK"
+for ico in ORC.ico ORC-tray-white.ico ORC-tray-black.ico; do
+    cmp -s "$ICO_CHECK/$ico" "$EXT/orc/win/$ico" || { echo "orc/win/$ico no longer matches the wordmark: orc_icon --ico orc/win"; exit 1; }
+done
+rm -rf "$ICO_CHECK"
+
 # ── 1. build ────────────────────────────────────────────────────────────────
 cmake -S "$EXT" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release > /dev/null
 cmake --build "$BUILD" --target orc --parallel

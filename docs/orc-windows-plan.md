@@ -34,7 +34,7 @@ Entscheid: unsichtbares Fenster plus `Shell_NotifyIcon`, `NOTIFYICON_VERSION_4`,
 - Eine Instanz: benannter Mutex. Ein zweiter Start öffnet die Einstellungen der ersten und endet. Am Mac verhindert das LaunchServices, unter Windows kämen sonst zwei ORC an USB, Port und `orc.pid`.
 - Abmelden und Herunterfahren: Windows darf den Prozess nach `WM_ENDSESSION` jederzeit beenden. Der Abschluss aus `main()` wird eine Funktion, die der Handler aufruft, sonst bleiben UF1 und `orc.pid` hängen.
 
-Symbol: Wortmarke aus `orc/OrcLogo.cpp`. Unter Windows ist das Feld quadratisch, bei 16 Pixeln bleiben rund 5 Pixel Buchstabenhöhe. Windows färbt nichts selbst, darum zwei Varianten, hell und dunkel, gewählt über `SystemUsesLightTheme`. Der Wert ist undokumentiert, fehlt er, gilt dunkel, das ist auch Microsofts eigene Beschreibung des Fehlfalls. `tools/orc_icon` lernt `.ico`, die Dateien liegen im Repo, weil das Werkzeug CoreGraphics braucht. Ein CI-Schritt am Mac vergleicht sie mit dem frisch Gerenderten, damit es eine Zeichnung bleibt.
+Symbol: Wortmarke aus `orc/OrcLogo.cpp`. Unter Windows ist das Feld quadratisch, bei 16 Pixeln bleiben rund 5 Pixel Buchstabenhöhe. Windows färbt nichts selbst, darum zwei Varianten, hell und dunkel, gewählt über `SystemUsesLightTheme`. Der Wert ist undokumentiert, fehlt er, gilt dunkel, das ist auch Microsofts eigene Beschreibung des Fehlfalls. `tools/orc_icon` lernt `.ico`, die Dateien liegen im Repo, weil das Werkzeug CoreGraphics braucht. `tools/orc-release.sh` rendert sie neu und bricht ab, wenn sie abweichen, damit es eine Zeichnung bleibt. CI am Mac ginge nicht: CoreGraphics kann je nach macOS andere Bytes liefern.
 
 ## 3. Fenster, WebView2, Laufzeit
 Entscheid: WebView2 Evergreen, statisch gelinkter Loader (`WebView2LoaderStatic.lib`, keine zusätzliche DLL), Paket `Microsoft.Web.WebView2` 1.0.4314.35 per FetchContent mit Hash. Kein Fixed Version: wir müssten die Laufzeit mitliefern und aktuell halten.
@@ -114,7 +114,7 @@ Dieselben Dateien, derselbe Ablauf (`src/OrcHandover.h`), nur in `%APPDATA%\ORC`
 Grenze: Schaltet der Nutzer ORC im Task-Manager aus, bleibt der Run-Wert stehen und die Seite zeigt weiter An. Das sagt nur der undokumentierte Schlüssel `StartupApproved\Run`, und die Quellen sind sich über dessen Inhalt nicht einig. Ich lese ihn nicht. Ein Satz im Handbuch.
 
 ## 10. QR im Menü
-Windows hat keinen eingebauten QR-Generator. Entscheid: nayuki QR-Code-generator (MIT, eine `.cpp`, eine `.hpp`) per FetchContent auf festem Commit, `vendor/` ist gitignored. Bild pixelgenau als `HBITMAP` über `MIIM_BITMAP`, weisser Rand wie am Mac, nur Adresse, nie PIN. Der Mac bleibt bei CoreImage. Adresse kopieren: `SetClipboardData`.
+Windows hat keinen eingebauten QR-Generator. Entscheid: nayuki QR-Code-generator (MIT, eine `.cpp`, eine `.hpp`) per FetchContent auf festem Commit, `vendor/` ist gitignored. Pixelgenau gezeichnet in einem Owner-Draw-Eintrag (`WM_DRAWITEM`), statt des Bilds über `MIIM_BITMAP` aus dem ersten Plan: Windows hätte das Bild beim Darüberfahren eingefärbt. Weisser Rand wie am Mac, nur Adresse, nie PIN. Der Mac bleibt bei CoreImage. Adresse kopieren: `SetClipboardData`.
 
 ## 11. Tastatur-Shift
 `OrcKeyboard.h`, zweiter Zweig: `GetAsyncKeyState(VK_SHIFT) & 0x8000`, nur im Moment des Drucks, wie am Mac. Grenze laut Microsoft: Hat ein erhöhtes Programm den Vordergrund, kommt 0, dann wirkt Shift nicht. Der Rest geht.
@@ -126,8 +126,10 @@ Alle hätten den Mac-Test bestanden.
 - **Pfad über die Datei:** `PhonesServer.cpp` prüft den Logonamen aus `moreme.json` nur auf `/`. Unter Windows käme `..\..\x` durch. Auch `\` und `:` prüfen.
 - **Stack:** `-Wframe-larger-than` hängt nur an `reaper_uf8` (CMake ab 503), `Config` ist rund 937 KB. Das Mac-Ziel `orc` und die Tests bekommen dieselbe Sperre, `ORC.exe` zusätzlich `/STACK` auf 8 MB (Memory `windows-stack-overflow-config`).
 - `std::snprintf` steht 12-mal in ORC-Dateien, WDL macht es unter Windows zum Makro. CI zeigt jede Stelle.
-- `NOMINMAX` gilt nur für `reaper_uf8`, kommt zu `orc`. `/MT` für `ORC.exe`, damit kein VC-Redistributable nötig ist. Ob die fertige `libusb-1.0.dll` eines braucht, prüfe ich in Stufe 2 an ihren Importen.
+- `NOMINMAX` gilt nur für `reaper_uf8`, kommt zu `orc`. `/MT` für `ORC.exe`, damit kein VC-Redistributable nötig ist. Die fertige `libusb-1.0.dll` importiert `VCRUNTIME140.dll` (`dumpbin` am StoerPC), darum liegt `vcruntime140.dll` neben `ORC.exe` im Installer.
 - `this Mac` steht in Fehlertexten und Handbuch, wird `this computer`, auch am Mac.
+
+**Beim Bau gefunden, stand nicht im Plan:** Die Namen der Snapshots und Layouts kommen aus `last.*.xml` von TotalMix (`RmeNames.cpp`), bisher nur am Mac. Unter Windows liegt die Datei in `%LOCALAPPDATA%\TotalMixFX` (am StoerPC gelesen). `namesFromDisk` liest jetzt beide. WDL macht `snprintf` unter Windows zu einem Makro ohne Rückgabewert, darum auch keine Auswertung davon. Eine schlanke `windows.h` hat kein `timeval`, `UF1Device` und `UF8Device` holen es aus `winsock2.h`.
 
 ## 13. Installer und Signierung
 **Installer:** Erhöht, nach `%ProgramFiles%\ORC`, mit `ORC.exe`, `libusb-1.0.dll`, `moreme\`, `settings\`, `Licenses\`. Schliesst ein laufendes ORC per Mutex, setzt die Firewall-Regel, zieht bei Bedarf die WebView2-Laufzeit. `%APPDATA%\ORC` bleibt beim Deinstallieren liegen, wie am Mac. Werkzeug: NSIS, zlib und frei, CI lädt es nach. Inno Setup bittet kommerzielle Nutzer um eine bezahlte Lizenz.
@@ -147,7 +149,7 @@ Entschieden: erste Fassung unsigniert mit demselben Known Issue, parallel SignPa
 
 ## 14. CI und Release
 - `extension/CMakeLists.txt`: Ziel `orc` unter `if(APPLE OR WIN32)`, geteilte Liste mit `win_http.cpp` statt `macos_http.mm`, Windows-Quellen, `ws2_32`, `iphlpapi`, `bcrypt`, `winhttp`, `setupapi`. libusb wie bei der DLL (`LIBUSB_ROOT`), keine hidapi. Die Version zieht aus dem Block `if(APPLE)` heraus, `orc-release.sh:26` liest sie weiter mit `sed`.
-- `.github/workflows/build.yml`, Job `windows-x64`: baut `orc`, fährt `ctest -C Release -R` auf den ORC-Tests (heute läuft dort gar kein Test), baut den Installer, lädt ihn als Artefakt hoch. Prüft Hashes für libusb, WebView2, QR. Dazu Eingabe am `workflow_dispatch`, um nur Windows zu fahren, damit ein Testlauf keine Mac-Runner belegt.
+- Eigener Workflow `.github/workflows/orc-windows.yml` statt eines Schritts in `build.yml`, Schalter `-DORC_WINDOWS=ON`: Ein rotes ORC hält die Rea-Sixty-DLL nicht auf, und ein Testlauf belegt keine Mac-Runner. Baut `orc`, fährt `ctest -C Release -R` auf den ORC-Tests, baut den Installer, lädt ihn als Artefakt hoch. Hashes für libusb, WebView2, QR.
 - Bauen in CI, wie die Rea-Sixty-DLL. Der StoerPC hat keine CMake im Pfad und braucht auch keine. Die Notarisierung bleibt lokal am Mac. Release: `orc-release.sh` wie bisher, das Windows-Artefakt desselben Commits kommt in dasselbe GitHub-Release.
 - `licenses/THIRD-PARTY-NOTICES.txt`: libusb-Absatz je Plattform (DLL neben der exe, austauschbar, LGPL), dazu WebView2 SDK (BSD-artig), QR (MIT). Der libusb-Tarball liegt schon im Release.
 

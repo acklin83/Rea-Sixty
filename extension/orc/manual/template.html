@@ -100,6 +100,7 @@ svg a:hover .knob, svg a:focus .knob { fill: var(--accent); }
     <li><a href="#what">What ORC does</a></li>
     <li><a href="#need">What you need</a></li>
     <li><a href="#setup">Setting up</a></li>
+    <li><a href="#windows">ORC under Windows</a></li>
     <li><a href="#reasixty">ORC and Rea-Sixty</a></li>
     <li><a href="#menubar">The menu bar</a></li>
     <li><a href="#rows">Rows, channels and the submix</a></li>
@@ -134,11 +135,14 @@ Philips Hue lamps and DynaMount mic stands, and its soft keys switch OBS scenes
 <section id="need">
 <h2>What you need</h2>
 <ul>
-  <li>A Mac with macOS {{minMacos}} or later, Apple silicon or Intel.</li>
+  <li>A Mac with macOS {{minMacos}} or later, Apple silicon or Intel, or a 64-bit PC with Windows 11
+      or Windows 10 version 1903 or later.</li>
   <li>An SSL UF1, an SSL UF8, or both, connected by USB.</li>
   <li>An RME interface with TotalMix FX 2.1 or later. ORC talks Global OSC, which arrived with 2.1.</li>
 </ul>
-<p>SSL 360° has to be closed while ORC uses the UF1. Only one program can hold the surface at a time.</p>
+<p>SSL 360° has to be closed while ORC uses the UF1. Only one program can use the surface at a time.
+Under Windows SSL 360° loses the surfaces for good once ORC's USB driver is installed
+(<a href="#windows">ORC under Windows</a>).</p>
 </section>
 
 <section id="setup">
@@ -154,6 +158,7 @@ Philips Hue lamps and DynaMount mic stands, and its soft keys switch OBS scenes
       everything else works and the meters stay empty.</li>
 </ol>
 <h3>ORC</h3>
+<p>The steps for the Mac. Windows has <a href="#windows">its own</a>.</p>
 <ol class="steps">
   <li>Open the disk image and drag ORC to Applications.</li>
   <li>Quit SSL 360°, connect the UF1, start ORC. Its menu bar item says who holds the UF1 and
@@ -163,6 +168,36 @@ Philips Hue lamps and DynaMount mic stands, and its soft keys switch OBS scenes
 </ol>
 <p>A different port or a TotalMix on another machine goes in the settings window, page
 <a href="#set-connection">General</a>.</p>
+</section>
+
+<section id="windows">
+<h2>ORC under Windows</h2>
+<ol class="steps">
+  <li>Run <code>ORC-{{version}}-Setup.exe</code>. ORC has no code signature yet, so SmartScreen warns
+      about an unknown publisher: More info, Run anyway.</li>
+  <li>Start ORC. Windows may put its icon in the hidden part of the taskbar, behind the small arrow.
+      Drag it out if you want it in view.</li>
+  <li>Connect the UF1 or the UF8, open <em>Settings…</em>, page General, and press <em>Install</em>
+      under USB driver. Windows asks for permission once. Unplug and replug the surface afterwards.</li>
+</ol>
+<p>The driver takes the UF1 and the UF8 away from SSL 360°; the UC1 stays with it. In Device Manager
+they move to Universal Serial Bus devices and are called <em>SSL UF1 (WinUSB)</em> and
+<em>SSL UF8 (WinUSB)</em>. A surface plugged in for the first time after that may land on SSL's driver:
+press <em>Install</em> again with it connected. <em>Remove</em> takes the driver off again, also for
+Rea-Sixty, if you use it. To get a surface back to SSL 360°, reinstall SSL 360° afterwards.</p>
+<p>With Smart App Control on, Windows refuses to run ORC because it has no signature. Turning Smart
+App Control off under Windows Security, App &amp; browser control, lets it run.</p>
+<p>In TotalMix, under OSC Details, <em>Send changes</em> has to be on. Without it TotalMix answers with
+levels only, and ORC shows TotalMix online with no channels. The rest of
+<a href="#setup">setting up</a> is the same as on the Mac.</p>
+<p>The menu is in the taskbar icon, left or right click, and has the same lines as the
+<a href="#menubar">menu bar</a> on the Mac. Where this page says Mac or menu bar, it means the PC and
+that icon.</p>
+<p><em>Open at login</em> works for the installed ORC in Program Files. If you switch ORC off in Task
+Manager's startup list, the settings page still shows it on; switch it back on there.</p>
+<p>The installer sets a firewall rule so the phones reach MoreMe, on every network type: Windows
+calls an unknown network public. Uninstalling removes the rule. Your settings in
+<code>%APPDATA%\ORC</code> and the USB driver stay.</p>
 </section>
 
 <section id="reasixty">
@@ -1040,7 +1075,7 @@ away on the phones a few seconds later. All headphone mixes show the same channe
 <p>Studio Control gives each musician an own link and an own layout. Without performers, the phones
 pick Phones 1 to 4 as above. As soon as there is a performer, the phones list performers instead.</p>
 <p>It fills the settings page <a href="#set-moreme">MoreMe</a> while MoreMe is on. The menu bar opens it
-too. It runs on this Mac only and needs no PIN.</p>
+too. It runs on this computer only and needs no PIN.</p>
 <figure class="shot"><img src="shot:orc-settings-studio-control" width="1600" height="1025" loading="lazy"
 alt="Studio Control on the page MoreMe: four performers on Phones 1 to 4, one performer's faders and access, its QR code and a preview of its phone page"></figure>
 <table class="data"><tbody>
@@ -1150,9 +1185,11 @@ alt="ORC's settings window on the page General: the list of pages on the left, T
 <table class="data"><tbody>
 <tr><th>Talk to TotalMix</th><td>The link on or off.</td></tr>
 <tr><th>Open at login</th><td>Starts ORC when you log in. macOS may ask you to allow it once; ORC
-then opens the right place in System Settings. Only for ORC in Applications: macOS starts the
-copy that ticked it.</td></tr>
-<tr><th>Host</th><td>Where TotalMix runs. <code>{{host}}</code> is this Mac.</td></tr>
+then opens the right place in System Settings. Only for ORC in Applications, or in Program Files under
+Windows: the system starts the copy that ticked it.</td></tr>
+<tr><th>USB driver</th><td>Windows only (<a href="#windows">ORC under Windows</a>): what the UF1 and the
+UF8 are bound to right now, <em>Install</em>, <em>Remove</em>, <em>Refresh</em>.</td></tr>
+<tr><th>Host</th><td>Where TotalMix runs. <code>{{host}}</code> is this computer.</td></tr>
 <tr><th>Send to port</th><td>TotalMix' <em>Port incoming</em>, out of the box {{sendPort}}.</td></tr>
 <tr><th>Listen on port</th><td>TotalMix' <em>Port outgoing</em>, out of the box {{recvPort}}.</td></tr>
 <tr><th>Status</th><td>The link, as in the menu bar.</td></tr>
@@ -1269,7 +1306,7 @@ the remote is not <em>In Use</em>, or the ports do not match (<a href="#setup">s
 <tr><td>port … is in use by another program</td><td>Another program listens on ORC's port. Pick a
 different <em>Listen on port</em> and set the same number as the remote's <em>Port outgoing</em> in
 TotalMix.</td></tr>
-<tr><td>could not open a socket</td><td>macOS refused ORC a network connection. Quit ORC and
+<tr><td>could not open a socket</td><td>The system refused ORC a network connection. Quit ORC and
 start it again.</td></tr>
 <tr><td>host is not an IPv4 address</td><td>The Host field holds something other than an address
 like <code>192.168.1.20</code>.</td></tr>
@@ -1282,6 +1319,8 @@ Check that TotalMix is running and the remote is still <em>In Use</em>.</td></tr
 <tr><td>off</td><td><em>Use the UF1</em> is off on the settings page <a href="#set-controls">UF1</a>.</td></tr>
 <tr><td>not open: handed over to REAPER</td><td>Rea-Sixty has the UF1 while REAPER runs
 (<a href="#reasixty">ORC and Rea-Sixty</a>).</td></tr>
+<tr><td>needs the USB driver</td><td>Windows: the UF1 is connected and SSL's driver still has it
+(<a href="#windows">ORC under Windows</a>).</td></tr>
 <tr><td>not open, with another reason</td><td>ORC could not open the UF1. Is it connected and
 switched on? Is SSL 360° still running? ORC tries again every two seconds.</td></tr>
 </tbody></table>
@@ -1292,6 +1331,8 @@ switched on? Is SSL 360° still running? ORC tries again every two seconds.</td>
 <tr><td>not open: handed over to REAPER</td><td>Rea-Sixty has the UF8 while REAPER runs.</td></tr>
 <tr><td>REAPER cannot take it yet: update the REAPER extension</td><td>The Rea-Sixty in REAPER is
 older than this ORC and may not pick the UF8 up. Update Rea-Sixty.</td></tr>
+<tr><td>needs the USB driver</td><td>Windows: the UF8 is connected and SSL's driver still has it
+(<a href="#windows">ORC under Windows</a>).</td></tr>
 <tr><td>not open, with another reason</td><td>Is the UF8 connected and switched on? Is SSL 360°
 still running? ORC tries again every two seconds.</td></tr>
 </tbody></table>
@@ -1308,10 +1349,10 @@ phones say the same.</td></tr>
 <tr><td>port … is in use by another program</td><td>Another program uses the page port. Pick
 another <em>Page port</em>.</td></tr>
 <tr><td>no PIN set</td><td>The PIN file was removed. Untick and tick MoreMe again for a new one.</td></tr>
-<tr><td>could not open a socket</td><td>macOS refused ORC a network connection. Quit ORC and
+<tr><td>could not open a socket</td><td>The system refused ORC a network connection. Quit ORC and
 start it again.</td></tr>
 </tbody></table>
-<p>The phone shows <em>Connecting to ORC</em> when it cannot reach the Mac: wrong network, wrong
+<p>The phone shows <em>Connecting to ORC</em> when it cannot reach the computer: wrong network, wrong
 address, or MoreMe is off. The first time a phone connects, macOS may ask whether ORC may accept
 incoming connections; allow it.</p>
 <h3>No level meters on the UF1</h3>
@@ -1336,12 +1377,17 @@ snapshots of Studio Control.</td></tr>
 <tr><th><code>/tmp/orc.log</code></th><td>ORC's log. Useful with a bug report.</td></tr>
 </tbody></table>
 <p>To start from scratch, quit ORC and remove the folder <code>~/Library/Application Support/ORC</code>.</p>
+<p>Under Windows the same files are in <code>%APPDATA%\ORC</code>, readable by your user only, and the
+log is <code>%TEMP%\orc.log</code>. The settings window's browser data is in
+<code>%LOCALAPPDATA%\ORC\WebView2</code>.</p>
 </section>
 
 <section id="licences">
 <h2>Licences</h2>
 <p>ORC is free. It contains libusb {{libusbVersion}}, © the libusb authors, under the GNU Lesser
-General Public License 2.1. The licence text and libusb's source come with every ORC release.</p>
+General Public License 2.1. The licence text and libusb's source come with every ORC release. The
+version for Windows also contains Project Nayuki's QR code library and Microsoft's WebView2 loader;
+their licences come with it.</p>
 <p class="note">SSL, UF1 and SSL 360° are trademarks of Solid State Logic. ORC is not affiliated
 with Solid State Logic or RME.</p>
 </section>

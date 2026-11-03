@@ -7,9 +7,11 @@
 #include <fstream>
 #include <sstream>
 
-#if defined(__APPLE__)
-#include <dirent.h>
-#include <sys/stat.h>
+#include "OrcFiles.h"
+
+#if defined(__APPLE__) || defined(_WIN32)
+#include <filesystem>
+#include <system_error>
 #endif
 
 namespace reasixty::rme {
@@ -140,7 +142,7 @@ std::string layoutName(const Names& n, int i)
 const Names& namesFromDisk()
 {
     static Names s_names;
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(_WIN32)
     static std::string s_path;
     static long long   s_mtime = -1;
     static auto        s_next  = std::chrono::steady_clock::time_point{};
@@ -148,27 +150,22 @@ const Names& namesFromDisk()
     if (now < s_next) return s_names;
     s_next = now + std::chrono::seconds(2);
 
-    const char* home = std::getenv("HOME");
-    if (!home || !*home) return s_names;
-    const std::string dir = std::string(home)
-                          + "/Library/Application Support/RME TotalMix FX";
+    const std::string dir = orc_files::totalMixFolder();
+    if (dir.empty()) return s_names;
     // The newest last.*.xml: one per device TotalMix has seen, and the one it
     // wrote last belongs to the device that is running (Frank 22.09.).
     std::string best;
     long long   bestT = -1;
-    if (DIR* d = opendir(dir.c_str())) {
-        while (const dirent* e = readdir(d)) {
-            const std::string nm = e->d_name;
-            if (nm.size() < 9 || nm.compare(0, 5, "last.") != 0
-                || nm.compare(nm.size() - 4, 4, ".xml") != 0)
-                continue;
-            const std::string p = dir + "/" + nm;
-            struct stat st{};
-            if (stat(p.c_str(), &st) != 0) continue;
-            const long long t = static_cast<long long>(st.st_mtime);
-            if (t > bestT) { bestT = t; best = p; }
-        }
-        closedir(d);
+    std::error_code ec;
+    for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        const std::string nm = it->path().filename().string();
+        if (nm.size() < 9 || nm.compare(0, 5, "last.") != 0
+            || nm.compare(nm.size() - 4, 4, ".xml") != 0)
+            continue;
+        const std::string p = dir + "/" + nm;
+        long long t = 0, size = 0;
+        if (!orc_files::fileStamp(p, t, size)) continue;
+        if (t > bestT) { bestT = t; best = p; }
     }
     if (best.empty() || (best == s_path && bestT == s_mtime)) return s_names;
     s_path  = best;

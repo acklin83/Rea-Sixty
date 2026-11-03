@@ -107,6 +107,7 @@
 #include "EncoderRing.h"
 #include "LaneModel.h"
 #include "OrcHandover.h"
+#include "OrcFiles.h"
 #include "WinUsbDriver.h"
 #include "Uf8Frames.h"
 #include "Uf8Fader.h"
@@ -1807,13 +1808,8 @@ std::atomic<bool> g_uc1WantRetry{false};
 
 static std::string orcHandoverPath_()
 {
-#ifdef __APPLE__
-    const char* home = std::getenv("HOME");
-    return home ? std::string(home) + "/Library/Application Support/ORC/handover"
-                : std::string();
-#else
-    return std::string();   // ORC exists on macOS only
-#endif
+    const std::string d = orc_files::supportFolder();   // empty where ORC does not run
+    return d.empty() ? std::string() : d + "/handover";
 }
 
 // ⇨ OUR SIDE OF THE HANDOVER, IN ORC'S LOG (Frank 01.10.2026, after recording
@@ -1823,35 +1819,39 @@ static std::string orcHandoverPath_()
 // installed (its folder exists): a machine without ORC gets no file.
 static void orcLogLine_(const char* what)
 {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
     const std::string marker = orcHandoverPath_();
     if (marker.empty()) return;
-    struct stat sb{};
-    if (::stat(marker.substr(0, marker.rfind('/')).c_str(), &sb) != 0) return;
-    timeval tv{};
-    gettimeofday(&tv, nullptr);
+    if (!orc_files::folderExists(marker.substr(0, marker.rfind('/')))) return;
+    using namespace std::chrono;
+    const auto wall = system_clock::now();
+    const std::time_t secs = system_clock::to_time_t(wall);
+    const int millis = static_cast<int>(duration_cast<milliseconds>(wall.time_since_epoch()).count() % 1000);
     std::tm lt{};
-    localtime_r(&tv.tv_sec, &lt);
+#ifdef _WIN32
+    localtime_s(&lt, &secs);
+#else
+    localtime_r(&secs, &lt);
+#endif
     char ts[16];
     std::strftime(ts, sizeof(ts), "%H:%M:%S", &lt);
     if (FILE* f = std::fopen(uf8::logPath("orc.log").c_str(), "a")) {
-        std::fprintf(f, "[%s.%03d] REA-SIXTY: %s\n", ts,
-                     static_cast<int>(tv.tv_usec / 1000), what);
+        std::fprintf(f, "[%s.%03d] REA-SIXTY: %s\n", ts, millis, what);
         std::fclose(f);
     }
 #else
-    (void)what;   // ORC exists on macOS only
+    (void)what;   // ORC does not run here
 #endif
 }
 
 // Returns true when the marker was written, i.e. ORC is installed and was asked.
 static bool orcHandoverMark_(bool want)
 {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
     const std::string path = orcHandoverPath_();
     if (path.empty()) return false;
     if (!want) {
-        if (std::remove(path.c_str()) == 0)
+        if (orc_files::removeFile(path))
             orcLogLine_("handover marker removed, ORC may take the UF1 back");
         return false;
     }
@@ -1859,10 +1859,10 @@ static bool orcHandoverMark_(bool want)
     // the whole check. The second line tells ORC that this Rea-Sixty waits for
     // its receipt (handover.released); an ORC that does not know it reads the
     // pid and stops there.
-    if (orc_handover::writeFile(path, orc_handover::formatMarker(static_cast<int>(getpid())))) {
+    if (orc_handover::writeFile(path, orc_handover::formatMarker(orc_files::currentPid()))) {
         char line[96];
         std::snprintf(line, sizeof(line), "handover marker set (REAPER pid %d), asking ORC for the UF1",
-                      static_cast<int>(getpid()));
+                      orc_files::currentPid());
         orcLogLine_(line);
         return true;
     }
@@ -1891,7 +1891,7 @@ static int64_t orcNowMs_()
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
 static int orcReadPid_(const std::string& file)
 {
     const std::string marker = orcHandoverPath_();
@@ -1904,9 +1904,8 @@ static int orcReadPid_(const std::string& file)
 // ORC runs (its orc.pid names a live process).
 static bool orcRunning_()
 {
-#ifdef __APPLE__
-    const int pid = orcReadPid_("orc.pid");
-    return pid > 0 && (::kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM);
+#if defined(__APPLE__) || defined(_WIN32)
+    return orc_files::processAlive(orcReadPid_("orc.pid"));
 #else
     return false;
 #endif
@@ -1915,8 +1914,8 @@ static bool orcRunning_()
 // ORC has let go of the surfaces for this REAPER.
 static bool orcReleasedForUs_()
 {
-#ifdef __APPLE__
-    return orcReadPid_("handover.released") == static_cast<int>(getpid());
+#if defined(__APPLE__) || defined(_WIN32)
+    return orcReadPid_("handover.released") == orc_files::currentPid();
 #else
     return false;
 #endif
@@ -1929,14 +1928,13 @@ static bool orcReleasedForUs_()
 // none; returns how many values came over.
 static std::string orcModesDir_()
 {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
     const std::string marker = orcHandoverPath_();
     if (marker.empty()) return {};
     const std::string dir = marker.substr(0, marker.rfind('/') + 1) + "modes";
-    struct stat sb{};
-    return (::stat(dir.c_str(), &sb) == 0) ? dir : std::string();
+    return orc_files::folderExists(dir) ? dir : std::string();
 #else
-    return {};   // ORC exists on macOS only
+    return {};   // ORC does not run here
 #endif
 }
 
@@ -1984,7 +1982,7 @@ static modesync::Stamper g_modeStamper;
 
 static void orcTakeStandPositions_(const char* file)
 {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
     const std::string marker = orcHandoverPath_();
     if (marker.empty()) return;
     const std::string text = orc_handover::readFile(marker.substr(0, marker.rfind('/') + 1) + file);
@@ -2029,12 +2027,11 @@ static void orcTakeStandPositions_(const char* file)
 // back next (handover.returned). Only where ORC is installed.
 static void orcReturnStandPositions_()
 {
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(_WIN32)
     const std::string marker = orcHandoverPath_();
     if (marker.empty()) return;
     const std::string dir = marker.substr(0, marker.rfind('/') + 1);
-    struct stat sb{};
-    if (::stat(dir.c_str(), &sb) != 0) return;
+    if (!orc_files::folderExists(dir.substr(0, dir.size() - 1))) return;
     // With our Hue, DynaMount and OBS values, stamped up to now (ModeSync.h).
     g_modeStamper.tick(modeValue_, setModeStamp_, modesync::nowMs());
     orc_handover::writeFile(dir + "handover.returned",
@@ -5016,30 +5013,20 @@ static std::map<std::string, std::string>& favAssignMap_(bool cs) { return cs ? 
 // its only writer; Rea-Sixty reads it at start and whenever it changes, and
 // never writes it. Until that day the extension kept its own copy under
 // <ResourcePath>/rea_sixty/, edited from Modes → RME; both are gone.
-// ⛔ No ORC, no RME side-car: on Windows and Linux until ORC runs there, and on
-// a Mac where ORC is not installed. Empty path = not available here.
+// ⛔ No ORC, no RME side-car: on Linux, where ORC does not run, and on a Mac or a
+// Windows machine where ORC is not installed. Empty path = not available here.
 static std::string reasixty_rmeConfigPath_()
 {
-#ifdef __APPLE__
-    const char* home = std::getenv("HOME");
-    return home ? std::string(home) + "/Library/Application Support/ORC/rme.json"
-                : std::string();
-#else
-    return std::string();
-#endif
+    const std::string d = orc_files::supportFolder();
+    return d.empty() ? std::string() : d + "/rme.json";
 }
 
 // ORC's bindings file: the RME side-car's soft-key banks and the transport keys
 // it binds come from here (Bindings.h, setSideCarSource). Same rule as above.
 static std::string reasixty_orcBindingsPath_()
 {
-#ifdef __APPLE__
-    const char* home = std::getenv("HOME");
-    return home ? std::string(home) + "/Library/Application Support/ORC/orc.json"
-                : std::string();
-#else
-    return std::string();
-#endif
+    const std::string d = orc_files::supportFolder();
+    return d.empty() ? std::string() : d + "/orc.json";
 }
 
 // Read ORC's rme.json into the link when it is new or changed (modification
@@ -5051,8 +5038,8 @@ static void reasixty_rmeLoadConfig_(bool force)
     static long long sMtime = -1, sSize = -1;
     auto& rm = reasixty::rme::manager();
     const std::string path = reasixty_rmeConfigPath_();
-    struct stat sb{};
-    const bool have = !path.empty() && ::stat(path.c_str(), &sb) == 0;
+    long long mt = 0, sz = 0;
+    const bool have = orc_files::fileStamp(path, mt, sz);
     if (!have) {
         if (force || g_rmeAvailable.load()) {
             g_rmeAvailable.store(false);
@@ -5066,15 +5053,7 @@ static void reasixty_rmeLoadConfig_(bool force)
         }
         return;
     }
-#ifdef __APPLE__
-    const long long mt = static_cast<long long>(sb.st_mtimespec.tv_sec) * 1000000000LL
-                       + sb.st_mtimespec.tv_nsec;
-#else
-    const long long mt = static_cast<long long>(sb.st_mtime);
-#endif
-    const long long sz = static_cast<long long>(sb.st_size);
     if (!force && mt == sMtime && sz == sSize) return;
-    sMtime = mt; sSize = sz;
     std::string json;
     if (FILE* f = std::fopen(path.c_str(), "rb")) {
         char buf[4096];
@@ -5082,6 +5061,9 @@ static void reasixty_rmeLoadConfig_(bool force)
         while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) json.append(buf, n);
         std::fclose(f);
     }
+    // ⛔ Only what was read counts as seen. Under Windows the moment ORC swaps the
+    // file can refuse the open, and then the next second has to try again.
+    if (!json.empty()) { sMtime = mt; sSize = sz; }
     reasixty::rme::Config c = rm.config();
     if (!json.empty() && reasixty::rme::configFromJson(json, c)) rm.setConfig(c);
     rm.takeConfigDirty();           // read, not changed: nobody writes it back
