@@ -195,6 +195,9 @@ body{
 
 /* PERFORMER: header line, EQ/DYN keys, FX send, dB scale */
 #mix.wide .card.master{border:none;outline:1px solid #223040}
+/* ⛔ The row of strips scrolls sideways, and a finger on pan or FX send went with it
+   (Frank 03.11.2026). These two belong to the finger, as the fader does. */
+#mix.wide .pan,#mix.wide .fxb{touch-action:none}
 .head .who small{display:block;font-size:12px;font-weight:500;color:var(--fg2)}
 .head .right{display:flex;align-items:center;gap:2px}
 .moon{background:none;border:none;color:var(--fg2);font-size:20px;padding:6px 8px;cursor:pointer}
@@ -1226,7 +1229,9 @@ function wireSlider(el, sendId, kind){
     if (!pend || pend.id !== e.pointerId || pend.sendId !== sendId || pend.kind !== kind) return;
     const dx = e.clientX - pend.x, dy = e.clientY - pend.y;
     if (Math.abs(dx) < SLOP && Math.abs(dy) < SLOP) return;
-    const movedAlongValue = valueAxisIsVertical(kind) ? Math.abs(dy) > Math.abs(dx)
+    // The knob on a strip turns whichever way the finger goes.
+    const movedAlongValue = (kind === 'pan' && isWide()) ? true
+                          : valueAxisIsVertical(kind) ? Math.abs(dy) > Math.abs(dx)
                                                        : Math.abs(dx) > Math.abs(dy);
     if (movedAlongValue){
       e.preventDefault();
@@ -1235,7 +1240,7 @@ function wireSlider(el, sendId, kind){
       state.dragKind = kind;
       if (kind === 'pan' && isWide()){
         const cur = (state.recvs[-sendId-1]||{}).pan || 0;
-        state.panRef = {y:e.clientY, pan:cur};
+        state.panRef = {x:e.clientX, y:e.clientY, pan:cur};
       }
       pend = null;
       handleDrag(el, e, sendId, kind, false);
@@ -1280,8 +1285,8 @@ function handleDrag(el, e, sendId, kind, isEnd){
     return;
   }
   if (kind === 'pan' && isWide()){
-    const ref = state.panRef || {y:e.clientY, pan:0};
-    let pan = ref.pan + (ref.y - e.clientY) / PAN_THROW;
+    const ref = state.panRef || {x:e.clientX, y:e.clientY, pan:0};
+    let pan = ref.pan + ((ref.y - e.clientY) + (e.clientX - ref.x)) / PAN_THROW;
     pan = Math.max(-1, Math.min(1, pan));
     if (Math.abs(pan) < 0.04) pan = 0;
     if (pan > 0.96) pan = 1; if (pan < -0.96) pan = -1;
