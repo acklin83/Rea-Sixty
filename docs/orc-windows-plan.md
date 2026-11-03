@@ -1,6 +1,6 @@
 # ORC für Windows, Plan
 
-Stand 03.11.2026. Plan freigegeben (Frank 03.11.: „Plan ok, alle Empfehlungen so, teste als sunny“), im Bau. Entscheid Frank: Mac-Release ORC 1.6.0 / Rea-Sixty v0.9.0 zuerst und ohne Windows. Windows danach als eigene ORC-Version, sobald er es am StoerPC getestet hat. Linux ist gestrichen.
+Stand 03.11.2026. Plan freigegeben (Frank 03.11.: „Plan ok, alle Empfehlungen so, teste als sunny“), gebaut auf Branch `claude/orc-windows-59c1a5`, Frank testet. Entscheid Frank: Mac-Release ORC 1.6.0 / Rea-Sixty v0.9.0 zuerst und ohne Windows. Windows danach als eigene ORC-Version, sobald er es am StoerPC getestet hat. Linux ist gestrichen.
 
 ## Ziel
 `ORC.exe`, x64, Windows 10 1903 oder neuer und Windows 11, kann alles, was ORC am Mac kann: UF1 und UF8, TotalMix, MoreMe, Studio Control, Hue, OBS, DynaMount, Übergabe an Rea-Sixty. Dieselbe Seite, dasselbe Modell, dieselben Dateiformate. Neu sind nur Dinge, die Windows erzwingt: Treiber-Karte auf der Seite und ein Installer.
