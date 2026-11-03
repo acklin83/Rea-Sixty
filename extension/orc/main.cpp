@@ -50,6 +50,7 @@
 #include "OrcUi.h"
 #include "PhonesServer.h"
 #include "RmeManager.h"
+#include "SettingsServer.h"
 #include "Surface.h"
 
 namespace rme = reasixty::rme;
@@ -164,6 +165,8 @@ int main()
     // AppKit owns the main thread from here until the user quits.
     orc::runApp(surface, [] { return g_interrupted.load(); });
 
+    // First: its thread may be calling into everything below.
+    orc::settings::server().stop();
     surface.stop();
     orc::phones::server().stop();
     rme::manager().stop();

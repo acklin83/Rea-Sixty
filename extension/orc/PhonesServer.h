@@ -52,6 +52,9 @@ std::string performersPath();
 // Copies a picture into ORC's folder as the page's logo and returns the file
 // name to keep in Settings::logo, or "" with `err` set. PNG, JPG and SVG.
 std::string importLogo(const std::string& sourcePath, std::string& err);
+// The studio's own logo and its media type, "" when it has none (settings().logo
+// empty or the file gone).
+std::string logoData(std::string& type);
 
 struct Status {
     bool        enabled   = false;
@@ -72,7 +75,8 @@ class Server {
     Server& operator=(const Server&) = delete;
 
     // Takes the settings and the PIN as they are now: starts, stops or
-    // reconfigures. Main thread.
+    // reconfigures. One caller at a time: main() at the start, the settings
+    // window's server after that.
     void apply(const Settings& s, const std::string& pin);
     void stop();
 

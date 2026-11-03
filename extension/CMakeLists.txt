@@ -1264,7 +1264,10 @@ if(APPLE)
         orc/WebSocket.cpp
         orc/PhonesServer.cpp
         orc/OrcPhonesTab.mm
-        orc/OrcDeskWindow.mm
+        # The settings as a page in ORC's window (docs/orc-settings-web-plan.md).
+        orc/OrcSettingsModel.cpp
+        orc/SettingsServer.cpp
+        orc/OrcWebWindow.mm
         "${WDL_DIR}/WDL/sha.cpp"
         "${CMAKE_BINARY_DIR}/ORC.icns"
         ${ORC_SHARED_SOURCES})
@@ -1289,7 +1292,7 @@ if(APPLE)
         orc/OrcSettingsWindow.mm
         orc/OrcModesTab.mm
         orc/OrcPhonesTab.mm
-        orc/OrcDeskWindow.mm
+        orc/OrcWebWindow.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     # WDL only for its JSON parser, which RmeManager reads rme.json with. No
     # REAPER header comes in with it: WDL is a standalone utility library.
@@ -1384,6 +1387,10 @@ if(APPLE)
             "${CMAKE_CURRENT_SOURCE_DIR}/orc/moreme/desk.html"
             "${CMAKE_CURRENT_SOURCE_DIR}/orc/moreme/moreme-logo.svg"
             "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Resources/moreme/"
+        # The settings page and its font.
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/orc/settings"
+            "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Resources/settings"
         COMMAND codesign --force --sign -
             "$<TARGET_BUNDLE_CONTENT_DIR:orc>/Frameworks/libusb-1.0.0.dylib"
         COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:orc>"
@@ -1393,7 +1400,9 @@ if(APPLE)
     # would otherwise stay out of the bundle: relink when either file changes.
     set_property(TARGET orc APPEND PROPERTY LINK_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/orc/moreme/moreme.html"
-        "${CMAKE_CURRENT_SOURCE_DIR}/orc/moreme/moreme-logo.svg")
+        "${CMAKE_CURRENT_SOURCE_DIR}/orc/moreme/desk.html"
+        "${CMAKE_CURRENT_SOURCE_DIR}/orc/moreme/moreme-logo.svg"
+        "${CMAKE_CURRENT_SOURCE_DIR}/orc/settings/settings.html")
 
     add_executable(orc_icon tools/orc_icon.cpp orc/OrcLogo.cpp)
     target_include_directories(orc_icon PRIVATE orc)
@@ -1413,6 +1422,30 @@ if(APPLE)
     # code ORC runs knows about itself: the actions, the factory banks, the
     # STRIP pages with ranges and push defaults. tools/orc_manual.py builds the
     # manual from it. The host's architecture only; it never ships.
+    # The settings end to end: the model against files in a scratch HOME, the
+    # server over a real socket. Nothing starts a link or a worker (no OSC, no
+    # USB): MoreMe only on ports the test was given, at a fake TotalMix.
+    set(ORC_SETTINGS_TEST_SOURCES
+        orc/OrcSettingsModel.cpp orc/SettingsServer.cpp orc/OrcModes.cpp orc/OrcConfig.cpp
+        orc/PhonesServer.cpp orc/Phones.cpp orc/Performers.cpp orc/WebSocket.cpp
+        "${WDL_DIR}/WDL/sha.cpp" ${ORC_SHARED_SOURCES})
+    add_executable(test_orc_settings tests/test_orc_settings.cpp ${ORC_SETTINGS_TEST_SOURCES})
+    # A page to look at in a browser or offscreen: the same server on a scratch HOME.
+    add_executable(orc_settings_demo tools/orc_settings_demo.cpp ${ORC_SETTINGS_TEST_SOURCES})
+    foreach(t test_orc_settings orc_settings_demo)
+        add_dependencies(${t} orc_libusb)
+        target_include_directories(${t} PRIVATE src orc vendor/WDL "${WDL_DIR}"
+            "${ORC_LIBUSB_PREFIX}/install/include/libusb-1.0")
+        target_compile_options(${t} PRIVATE -mmacosx-version-min=13.0)
+        target_link_options(${t} PRIVATE -mmacosx-version-min=13.0)
+        target_link_libraries(${t} PRIVATE "${ORC_LIBUSB_DYLIB}" Threads::Threads
+            "-framework Foundation" "-framework CoreFoundation")
+        set_target_properties(${t} PROPERTIES BUILD_RPATH "${ORC_LIBUSB_PREFIX}/install/lib")
+    endforeach()
+    target_compile_definitions(test_orc_settings PRIVATE
+        ORC_SETTINGS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/orc/settings")
+    add_test(NAME orc_settings COMMAND test_orc_settings)
+
     add_executable(orc_manual_dump tools/orc_manual_dump.cpp ${ORC_SHARED_SOURCES})
     add_dependencies(orc_manual_dump orc_libusb)
     target_include_directories(orc_manual_dump PRIVATE src vendor/WDL

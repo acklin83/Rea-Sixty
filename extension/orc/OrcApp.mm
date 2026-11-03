@@ -2,6 +2,7 @@
 #include "OrcLogo.h"
 #include <cmath>
 #import "OrcSettingsWindow.h"
+#import "OrcWebWindow.h"
 
 #import <Cocoa/Cocoa.h>
 #import <CoreImage/CoreImage.h>
@@ -146,6 +147,9 @@ static NSImage* qrImage(NSString* text, CGFloat side)
         [menu addItemWithTitle:@"Settings…"
                         action:@selector(openSettings:)
                  keyEquivalent:@","].target = self;
+        [menu addItemWithTitle:@"Settings (old)…"
+                        action:@selector(openOldSettings:)
+                 keyEquivalent:@""].target = self;
         // ⇨ THE MANUAL, NOT A SENTENCE IN THE WINDOW (Frank 27.09.2026: no
         // helper texts in ORC's window; 29.09.: "ein schlaues Handbuch").
         [menu addItemWithTitle:@"Manual"
@@ -215,7 +219,9 @@ static NSImage* qrImage(NSString* text, CGFloat side)
     [NSPasteboard.generalPasteboard setString:self.moremeQrFor forType:NSPasteboardTypeString];
 }
 
-- (void)openSettings:(id)sender { [[OrcSettingsWindowController shared] present]; }
+- (void)openSettings:(id)sender { [[OrcWebSettings shared] present]; }
+
+- (void)openOldSettings:(id)sender { [[OrcSettingsWindowController shared] present]; }
 
 // ⇨ THE MANUAL'S ADDRESS: GitHub Pages of the releases-only repo acklin83/ORC
 // (docs/orc-mac-release-plan.md, step 9), built by tools/orc_manual.py. It goes
@@ -270,7 +276,7 @@ void runApp(Surface& surface, const std::function<bool()>& interrupted)
             // closes it again (Frank 01.10.2026), here on the main thread where
             // AppKit wants it.
             if (g_surface && g_surface->takeSettingsRequest())
-                [[OrcSettingsWindowController shared] toggle];
+                [[OrcWebSettings shared] toggle];
         }];
         [NSApp run];
         [watch invalidate];

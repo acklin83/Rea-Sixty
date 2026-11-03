@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ORC Settings</title>
+<!-- ORC's settings (docs/orc-settings-web-plan.md). Served by ORC, for its own window only.
+     The page computes nothing: orc/OrcSettingsModel.cpp sends the state and takes the edits. -->
+<style>
+@font-face{font-family:Inter;font-weight:400;src:url(fonts/inter-latin-400.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:Inter;font-weight:400;src:url(fonts/inter-latin-ext-400.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:Inter;font-weight:500;src:url(fonts/inter-latin-500.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:Inter;font-weight:500;src:url(fonts/inter-latin-ext-500.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:Inter;font-weight:700;src:url(fonts/inter-latin-700.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:Inter;font-weight:700;src:url(fonts/inter-latin-ext-700.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:Inter;font-weight:900;src:url(fonts/inter-latin-900.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:Inter;font-weight:900;src:url(fonts/inter-latin-ext-900.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+:root{--bg:#0D0D0D;--bg2:#161616;--bg3:#1f1f1f;--line:#2a2a2a;--fg:#fff;--fg2:#A8A8A8;--fg3:#666;--accent:#0099FF;--red2:#a00000;--green:#3fcf6a;--err:#ff8080;--rad:14px}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 Inter,system-ui,-apple-system,sans-serif;user-select:none;-webkit-user-select:none}
+button,input,select{font:inherit;color:inherit}
+input,.sel-text{user-select:text;-webkit-user-select:text}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* ⛔ A native select ignores padding and height in WebKit: it stood 24 points high beside 38-point fields. */
+select,input[type=text],input[type=password]{background-color:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:0 10px;height:34px;width:100%;min-width:0}
+select{-webkit-appearance:none;appearance:none;padding-right:26px;text-overflow:ellipsis;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14' viewBox='0 0 10 14'%3E%3Cpath d='M1.5 5.5 5 2l3.5 3.5M1.5 8.5 5 12l3.5-3.5' fill='none' stroke='%23A8A8A8' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center}
+input::placeholder{color:var(--fg3)}
+:disabled{opacity:.42}
+.b{background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:0 12px;height:34px;cursor:pointer;white-space:nowrap}
+.b:hover:not(:disabled){border-color:#444}
+.b.sm{padding:0 10px;height:28px;font-size:12px}
+.b.danger{color:var(--err)}
+.seg{display:inline-flex;background:var(--bg3);border-radius:8px;padding:2px;flex:none}
+.seg button{background:none;border:none;border-radius:6px;padding:0 10px;height:30px;cursor:pointer;color:var(--fg2);font-size:12px;white-space:nowrap}
+.seg button.on{background:var(--accent);color:#000;font-weight:700}
+.seg button.on.o{background:#3a3a3a;color:var(--fg);font-weight:500}
+
+.app{height:100%;display:flex}
+.bar{display:flex;flex-direction:column;gap:14px;width:176px;flex:none;border-right:1px solid var(--line);padding:14px 10px;overflow:auto}
+.brand{font-weight:900;font-style:italic;font-size:20px;letter-spacing:-.02em;display:flex;align-items:center;gap:8px;padding:0 8px}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--green);flex:none}
+.dot.off{background:var(--red2)}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav button{background:none;color:var(--fg2);text-align:left;padding:9px 10px;border-radius:10px;border:1px solid transparent;cursor:pointer;white-space:nowrap}
+.nav button:hover:not(:disabled):not(.on){background:var(--bg3);color:var(--fg)}
+.nav button.on{background:var(--bg3);color:var(--fg);font-weight:500;border-color:var(--accent)}
+.main{flex:1;min-width:0;overflow:auto;padding:12px 16px 40px}
+.main.full{overflow:hidden;padding:0}
+.page{display:none}.page.on{display:block}
+.main.full #pages,#pg-desk.on{height:100%}
+#desk{display:block;width:100%;height:100%;border:none;background:var(--bg)}
+#err{color:var(--err);font-size:12px;padding:0 2px 8px}
+#err:empty{display:none}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,470px),1fr));gap:12px;align-items:start;max-width:1400px}
+.stack{display:grid;gap:12px}
+.card{background:var(--bg2);border-radius:var(--rad);padding:14px;min-width:0}
+.card.wide{grid-column:1/-1}
+h2{margin:0 0 10px;font-size:12px;font-weight:700;color:var(--fg2);letter-spacing:.08em;text-transform:uppercase}
+.rows{display:grid;grid-template-columns:minmax(110px,230px) minmax(min-content,1fr);gap:8px 12px;align-items:center}
+.rows>.v{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
+.lab{color:var(--fg2)}
+input.num{width:84px;flex:none}.wid{max-width:240px}
+.unit{color:var(--fg2)}
+.st{display:inline-flex;align-items:center;gap:6px}
+.st i{width:8px;height:8px;border-radius:50%;background:var(--green);flex:none}
+.st.dim{color:var(--fg2)}.st.dim i{background:var(--fg3)}
+.mt{margin-top:12px}
+.acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.note{color:var(--fg3);font-size:12px}
+
+.tw{overflow-x:auto;margin:0 -2px;padding:0 2px}
+table{border-collapse:collapse;width:100%}
+th{font-size:12px;font-weight:500;color:var(--fg3);text-align:left;padding:0 8px 6px 0;white-space:nowrap}
+td{padding:4px 8px 4px 0;border-top:1px solid #202020;vertical-align:middle}
+tr>:last-child{padding-right:0}
+td.k{color:var(--fg2);white-space:nowrap;width:1%;padding-right:14px}
+td.w{white-space:nowrap;width:1%}
+td.dimtext{color:var(--fg2);font-size:12px}
+td select,td input[type=text],.pick{min-width:96px}
+
+.pick{display:flex;align-items:center;gap:8px;width:100%;height:34px;background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:0 10px;cursor:pointer;text-align:left;white-space:nowrap}
+.pick:hover{border-color:#444}
+.sw{width:12px;height:12px;border-radius:3px;flex:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
+.sw.none{background:none;box-shadow:inset 0 0 0 1px #555}
+.pick.only{width:64px;min-width:64px;justify-content:center}.pick.only .sw{width:32px}
+#pop{position:fixed;display:none;background:#262626;border:1px solid #3a3a3a;border-radius:10px;padding:4px;z-index:20;max-height:calc(100vh - 16px);overflow:auto;box-shadow:0 10px 30px rgba(0,0,0,.6)}
+#pop button{display:flex;align-items:center;gap:8px;width:100%;background:none;border:none;border-radius:6px;padding:5px 10px;cursor:pointer;text-align:left;white-space:nowrap}
+#pop button:hover{background:var(--accent);color:#000}
+#pop button.cur{font-weight:700}
+
+.split{display:grid;grid-template-columns:200px minmax(0,1fr);gap:12px;align-items:start;max-width:1400px}
+.bk{display:block;width:100%;background:none;color:inherit;text-align:left;padding:8px 10px;border-radius:10px;cursor:pointer;border:1px solid transparent}
+.bk:hover{background:var(--bg3)}
+.bk.on{background:var(--bg3);border-color:var(--accent)}
+.bk b{display:block;font-weight:700}
+.bk small{color:var(--fg2);font-size:12px}
+.skhead{display:grid;grid-template-columns:auto 220px 220px;justify-content:start;gap:12px;align-items:end;margin-bottom:12px}
+.skhead label{display:block;font-size:12px;color:var(--fg2)}.skhead label>*{margin-top:4px;font-size:14px;color:var(--fg)}
+.logo{width:56px;height:56px;border-radius:10px;flex:none;object-fit:contain}
+@media(max-width:820px){.split{grid-template-columns:minmax(0,1fr)}.skhead{grid-template-columns:minmax(0,1fr);justify-content:stretch}#bankList{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:2px}}
+</style></head><body>
+<div class="app">
+  <div class="bar">
+    <div class="brand"><span class="dot off" id="dot"></span><span>ORC</span></div>
+    <div class="nav" id="nav"></div>
+  </div>
+  <div class="main" id="main"><div id="err"></div><div id="pages"></div></div>
+</div>
+<div id="pop"></div>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const PAGES=[['general','General'],['uf1','UF1'],['uf8','UF8'],['soft','Soft Keys'],['colours','Colours'],['modes','UF8 Modes'],['moreme','MoreMe'],['desk','Studio Control']];
+const KINDS=['Keys','TotalMix snapshots','TotalMix layouts','OBS scenes','TotalMix submixes'];
+let ws=null,S=null,page=PAGES.some(p=>p[0]===location.hash.slice(1))?location.hash.slice(1):'general';
+let curBank=0,menuOpen=false,menuAt=0,pending=false,deskSrc='';
+const halves={},last={};
+
+// ---- the link to ORC ----
+function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))}
+function connect(){
+  ws=new WebSocket('ws://'+location.host+location.pathname+'ws');
+  ws.onopen=()=>$('#dot').classList.remove('off');
+  ws.onclose=()=>{$('#dot').classList.add('off');setTimeout(connect,1000)};
+  ws.onmessage=e=>{let m;try{m=JSON.parse(e.data)}catch(_){return}if(m.t==='state'){S=m;draw()}};
+}
+
+// ---- what a control is ----
+const M=o=>' data-m="'+esc(JSON.stringify(o))+'"';
+const field=(m,v,attrs='')=>'<input type="text" value="'+esc(v)+'" '+attrs+M(m)+'>';
+const segOf=(m,labels,cur,dis)=>'<span class="seg"'+M(m)+'>'+labels.map((t,i)=>'<button type="button" data-v="'+i+'" class="'+(i===cur?'on':'')+(t==='Off'?' o':'')+'"'+(dis?' disabled':'')+'>'+t+'</button>').join('')+'</span>';
+const onoff=(m,on,dis)=>segOf(m,['Off','On'],on?1:0,dis);
+const opt=(v,t,cur)=>'<option value="'+esc(v)+'"'+(v===cur?' selected':'')+'>'+esc(t)+'</option>';
+// null: the value is no entry of this list. Then the menu shows nothing, and never its first entry.
+const sel=(m,inner,cur,dis)=>'<select'+(cur===null?' data-blank="1"':'')+(dis?' disabled':'')+M(m)+'>'+inner+'</select>';
+function choiceOpts(list,cur){
+  let o='',open=false;
+  list.forEach(c=>{
+    if(c.h!==undefined){if(open)o+='</optgroup>';o+='<optgroup label="'+esc(c.h)+'">';open=true}
+    else o+=opt(c.s,c.l,cur);
+  });
+  return o+(open?'</optgroup>':'');
+}
+const targetSel=(m,cur)=>sel(m,choiceOpts(S.targets,cur),cur);
+const outputSel=(m,cur,dis)=>sel(m,choiceOpts(S.outputs,cur),cur,dis);
+const actionSel=(m,cur,dis)=>sel(m,opt('','None',cur)+S.actions.map(a=>opt(a.a,a.l,cur)).join(''),cur,dis);
+const swatch=c=>c?'<span class="sw" style="background:'+esc(c)+'"></span>':'<span class="sw none"></span>';
+function colour(m,cur){
+  const e=S.palette.find(p=>p.i===cur);
+  return '<button type="button" class="pick"'+M(m)+' data-col="'+(cur===null?'':cur)+'">'+(e?swatch(e.c)+'<span>'+esc(e.n)+'</span>':'<span>&nbsp;</span>')+'</button>';
+}
+const row=(l,v)=>'<span class="lab">'+esc(l)+'</span><div class="v">'+v+'</div>';
+const rows=a=>'<div class="rows">'+a.join('')+'</div>';
+const card=(title,inner,wide)=>'<section class="card'+(wide?' wide':'')+'"><h2>'+esc(title)+'</h2>'+inner+'</section>';
+const table=(heads,lines)=>'<div class="tw"><table><thead><tr>'+heads.map(h=>'<th>'+esc(h)+'</th>').join('')+'</tr></thead><tbody>'+lines.map(r=>'<tr>'+r+'</tr>').join('')+'</tbody></table></div>';
+const status=(t,good)=>'<span class="st'+(good?'':' dim')+'"><i></i>'+esc(t)+'</span>';
+const rme=(f,v,attrs)=>field({t:'rme',f},v,attrs);
+const unit=(input,u)=>input+'<span class="unit">'+u+'</span>';
+const keyRow=(k,i)=>'<td class="k">'+esc(k.n)+'</td><td>'+actionSel({t:'keyAction',k:i},k.action)+'</td><td style="width:112px">'+colour({t:'keyLed',k:i,active:1},k.on)+'</td><td style="width:112px">'+colour({t:'keyLed',k:i,active:0},k.off)+'</td>';
+
+// ---- the pages ----
+const DRAW={
+  general(){const g=S.general;return '<div class="cards">'
+    +card('TotalMix',rows([row('Talk to TotalMix',onoff({t:'rme',f:'enabled'},g.enabled)),row('Host',rme('host',g.host,'class="wid"')),row('Send to port',rme('sendPort',g.sendPort,'class="num"')),row('Listen on port',rme('recvPort',g.recvPort,'class="num"')),row('Status',status(g.status,g.online))])+'<div class="acts mt"><button type="button" class="b"'+M({t:'ask'})+'>Ask TotalMix again</button></div>')
+    +'<div class="stack">'
+    +card('Startup',rows([row('Open at login','<span'+(g.loginAvailable?'':' title="Only for the ORC in Applications."')+'>'+onoff({t:'login'},g.loginOn,!g.loginAvailable)+'</span>')]))
+    +card('Sleep',rows([row('Sleep when idle',onoff({t:'rme',f:'sleepEnabled'},g.sleepEnabled)),row('After',unit(rme('sleepMinutes',g.sleepMinutes,'class="num"'+(g.sleepEnabled?'':' disabled')),'minutes'))]))
+    +'</div></div>'},
+  uf1(){const u=S.uf1;
+    const bank=b=>table(['Pot','Target','Push'],[0,1,2,3].map(i=>{const p=u.pots[b*4+i];
+      return '<td class="k">Pot '+(i+1)+'</td><td>'+targetSel({t:'pot',i:b*4+i,f:'target'},p.target)+'</td><td style="width:120px">'+sel({t:'pot',i:b*4+i,f:'push'},S.pushes.map(x=>opt(x.v,x.l,p.push)).join(''),S.pushes.some(x=>x.v===p.push)?p.push:null)+'</td>'}));
+    return '<div class="cards">'
+    +card('UF1',rows([row('Use the UF1',onoff({t:'rme',f:'uf1Enabled'},u.use)),row('Jog wheel',targetSel({t:'rme',f:'jogTarget'},u.jogTarget)),row('Jog step',unit(rme('jogStepDb',u.jogStepDb,'class="num"'),'dB')),row('Pot step',unit(rme('vpotStepDb',u.vpotStepDb,'class="num"'),'dB')),row('V-Pot speed',unit(rme('uf1PotSpeed',u.speed,'class="num"'),'x'))]))
+    +card('Transport',table(['Key','Action','Active','Inactive'],S.keys.slice(0,S.transportCount).map((k,i)=>keyRow(k,i))))
+    +card('Bank 1',bank(0))+card('Bank 2',bank(1))
+    +'</div>'},
+  uf8(){const u=S.uf8;return '<div class="cards">'
+    +card('UF8',rows([row('Use the UF8',onoff({t:'rme',f:'uf8Enabled'},u.use)),row('Show Main volume on change',onoff({t:'rme',f:'uf8ShowMainOnChange'},u.showMain)),row('V-Pot speed',unit(rme('uf8PotSpeed',u.speed,'class="num"'),'x'))]))
+    +card('SEND/PLUG-IN',table(['Key','Output'],u.submix.map((s,i)=>'<td class="k">'+(i+1)+'</td><td>'+outputSel({t:'submixKey',i},s)+'</td>')))
+    +card('Keys',table(['Key','Action','Active','Inactive'],S.keys.map((k,i)=>[k,i]).slice(S.transportCount).map(x=>keyRow(x[0],x[1]))),true)
+    +'</div>'},
+  soft(){
+    const b=S.banks[curBank],half=halves[curBank]||0,dyn=b.kind>=1&&b.kind<=3,sub=b.kind===4;
+    const list=S.banks.map((x,i)=>'<button type="button" class="bk'+(i===curBank?' on':'')+'" data-bank="'+i+'"><b>Bank '+(i+1)+'</b><small>'+esc(x.name||KINDS[x.kind]||'')+'</small></button>').join('');
+    const keys=b.halves[half].map((k,i)=>{
+      const a={t:'skAction',b:curBank,h:half,i};
+      const action=sub?outputSel(a,k.action):dyn?'<select disabled></select>':actionSel(a,k.action);
+      return '<td class="k">'+(i+1+half*4)+'</td><td style="width:150px">'+field({t:'skLabel',b:curBank,h:half,i},k.label,'placeholder="'+esc(k.ph)+'"'+(dyn?' disabled':''))+'</td><td>'+action+'</td><td style="width:130px">'+colour({t:'skLed',b:curBank,h:half,i,active:1},k.on)+'</td><td style="width:130px">'+colour({t:'skLed',b:curBank,h:half,i,active:0},k.off)+'</td>';
+    });
+    return '<div class="split"><section class="card"><h2>Banks</h2><div id="bankList">'+list+'</div></section><section class="card"><h2>Bank '+(curBank+1)+'</h2><div class="skhead">'
+      +'<label>Half<div><span class="seg" id="skHalf">'+['Keys 1-4','Keys 5-8'].map((t,i)=>'<button type="button" data-half="'+i+'" class="'+(i===half?'on':'')+'">'+t+'</button>').join('')+'</span></div></label>'
+      +'<label>Shows'+sel({t:'skKind',b:curBank},KINDS.map((k,i)=>'<option value="'+i+'"'+(i===b.kind?' selected':'')+'>'+k+'</option>').join(''),b.kind)+'</label>'
+      +'<label>Name'+field({t:'skName',b:curBank},b.name)+'</label></div>'
+      +table(['Key','Label',sub?'Output':'Action','Active','Inactive'],keys)
+      +'<div class="acts mt"><button type="button" class="b"'+M({t:'skFactory',b:curBank})+'>Factory set for this bank</button></div></section></div>'},
+  colours(){return '<div class="cards">'+card('Colours',table(['TotalMix','UF1','Channels'],S.colours.map((c,i)=>'<td class="k">'+esc(c.n)+'</td><td style="width:200px">'+colour({t:'colour',i},c.v)+'</td><td class="dimtext">'+esc(c.w)+'</td>')),true)+'</div>'},
+  modes(){const o=S.obs,d=S.dyna,h=S.hue;
+    const roles=(f,c)=>sel({t:'hueControls',f},['Hue','Saturation','Warmth','Off'].map((t,i)=>'<option value="'+i+'"'+(i===c?' selected':'')+'>'+t+'</option>').join(''),c);
+    const opts=(list,cur)=>list.map(x=>opt(x.v,x.l,cur)).join('');
+    const swatchPick=(i,c)=>'<button type="button" class="pick only" data-only="1" data-col="'+c+'"'+M({t:'dyna',i,f:'colour'})+' aria-label="Colour">'+swatch(d.swatches[c])+'</button>';
+    return '<div class="cards">'
+    +card('Import','<div class="acts"><button type="button" class="b"'+M({t:'import'})+'>Import from REAPER</button><span class="note">'+esc(S.importResult)+'</span></div>',true)
+    +card('OBS, soft-key banks',rows([row('Talk to OBS',onoff({t:'obs',f:'enabled'},o.enabled)),row('Host',field({t:'obs',f:'host'},o.host,'class="wid"')),row('Port',field({t:'obs',f:'port'},o.port,'class="num"')),
+       row('Password','<input type="password" class="wid" data-pw="1" value="'+(o.hasPassword?'xxxxxxxx':'')+'"'+M({t:'obsPassword'})+'>'),row('Status',status(o.status,o.status!=='off'))]))
+    +card('Hue, LAYER 2','<div class="acts">'+[['hueFind','Find bridge'],['huePair','Pair'],['hueCancel','Cancel'],['hueRefresh','Refresh lights + scenes']].map(x=>'<button type="button" class="b sm"'+M({t:x[0]})+'>'+x[1]+'</button>').join('')+'<button type="button" class="b sm danger"'+M({t:'hueForget'})+'>Forget</button></div><div class="mt">'
+       +rows([row('IP',field({t:'hueIp'},h.ip,'class="wid"')),row('Status',status(h.status,/lights/.test(h.status))),row('Fill',segOf({t:'hueFill'},['Fill from left','Fill from right'],h.fillRight?1:0)),row('V-Pot',roles('pot',h.pot)),row('V-Pot + FLIP',roles('flip',h.potFlip))])+'</div>')
+    +card('Hue lamps',table(['On','Label','Target'],h.slots.map((s,i)=>'<td class="w">'+onoff({t:'hueSlot',i,f:'on'},s.on)+'</td><td style="width:140px">'+field({t:'hueSlot',i,f:'label'},s.label,'maxlength="8"')+'</td><td>'+sel({t:'hueTarget',i},opts(h.targets,s.target),s.target)+'</td>')))
+    +card('Scenes',table(['','Scene','Key label'],h.sceneSlots.map((s,i)=>'<td class="k">'+(i+1)+'</td><td>'+sel({t:'hueScene',i},opts(h.scenes,s.id),s.id)+'</td><td style="width:140px">'+field({t:'hueSceneLabel',i},s.label,'maxlength="12"')+'</td>')))
+    +card('DynaMount, LAYER 3','<div class="acts" style="margin-bottom:10px">'+segOf({t:'dynaFill'},['Fill from left','Fill from right'],d.fillRight?1:0)+'</div>'
+       +table(['On','Name','IP address','Colour','','Calibrate','Status'],d.mounts.map((m,i)=>'<td class="w">'+onoff({t:'dyna',i,f:'on'},m.on)+'</td><td>'+field({t:'dyna',i,f:'name'},m.name,'placeholder="mic name"')+'</td><td>'+field({t:'dyna',i,f:'ip'},m.ip,'placeholder="192.168.1.50"')+'</td><td class="w">'+swatchPick(i,m.colour)+'</td><td class="w"><button type="button" class="b sm"'+M({t:'dynaDetect',i})+'>Detect</button></td><td class="w"><button type="button" class="b sm"'+M({t:'dynaHome',i})+'>Home</button></td><td class="dimtext w">'+esc(m.status)+'</td>')),true)
+    +card('Presets',table(['#','Name','Stands',''],d.presets.map((p,i)=>'<td class="k">'+(i+1)+'</td><td>'+field({t:'presetName',i},p.name,'placeholder="Preset '+(i+1)+'"')+'</td><td class="dimtext w">'+esc(p.stands)+'</td><td class="w"><button type="button" class="b sm"'+M({t:'presetGo',i})+'>Go</button> <button type="button" class="b sm"'+M({t:'presetStore',i})+'>Store</button> <button type="button" class="b sm"'+M({t:'presetClear',i})+'>Clear</button></td>')),true)
+    +'</div>'},
+  moreme(){const m=S.moreme;return '<div class="cards">'
+    +card('Headphone mixes',rows([row('Headphone mixes in the browser',onoff({t:'mmOn'},m.enabled)),row('Address','<span class="sel-text">'+esc(m.address||'--')+'</span>'),row('PIN',field({t:'mmPin'},m.pin,'class="num"')),row('Page port',field({t:'mmPort',f:'webPort'},m.webPort,'class="num"')),row('TotalMix send to port',field({t:'mmPort',f:'sendPort'},m.sendPort,'class="num"')),row('TotalMix listen on port',field({t:'mmPort',f:'recvPort'},m.recvPort,'class="num"')),row('Status',status(m.status,m.good))]))
+    +'<div class="stack">'
+    +card('On the page',rows([row('Studio name',field({t:'mmStudio'},m.studio,'class="wid"')),row('Logo','<img class="logo" alt="" src="logo?'+m.logoStamp+'"><button type="button" class="b"'+M({t:'chooseLogo'})+'>Choose…</button><button type="button" class="b"'+M({t:'mmLogoDefault'})+'>Default Logo</button>')]))
+    +card('Headphones',rows(m.names.map((n,i)=>row('Phones '+(i+1),field({t:'mmName',i},n,'class="wid" placeholder="Phones '+(i+1)+'"')))))
+    +'</div></div>'},
+};
+
+// ---- drawing ----
+$('#nav').innerHTML=PAGES.map(p=>'<button type="button" data-p="'+p[0]+'">'+p[1]+'</button>').join('');
+$('#pages').innerHTML=PAGES.map(p=>'<div class="page" id="pg-'+p[0]+'"></div>').join('');
+$('#pg-desk').innerHTML='<iframe id="desk" title="Studio Control" allow="clipboard-write"></iframe>';
+const inMenu=()=>menuOpen&&Date.now()-menuAt<60000;
+// Never rebuild under a cursor or an open menu: what is being typed or picked is newer than this.
+function busy(){
+  const a=document.activeElement;
+  return inMenu()||$('#pop').style.display==='block'||(a&&(a.tagName==='INPUT'||a.tagName==='SELECT'));
+}
+function draw(){
+  if(!S)return;
+  $('#err').textContent=S.error||'';
+  // Studio Control needs MoreMe's page.
+  const deskBtn=document.querySelector('#nav [data-p=desk]');
+  deskBtn.disabled=!S.moreme.desk;
+  if(!S.moreme.desk&&page==='desk')page='moreme';
+  document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.p===page));
+  document.querySelectorAll('.page').forEach(p=>p.classList.toggle('on',p.id==='pg-'+page));
+  $('#main').classList.toggle('full',page==='desk');
+  $('#err').style.display=page==='desk'?'none':'';
+  if(page==='desk'){
+    if(deskSrc!==S.moreme.desk){deskSrc=S.moreme.desk;$('#desk').src=deskSrc}
+    return;
+  }
+  if(busy()){pending=true;return}
+  pending=false;
+  const html=DRAW[page]();
+  if(last[page]===html)return;
+  last[page]=html;
+  const box=$('#pg-'+page);
+  box.innerHTML=html;
+  box.querySelectorAll('select[data-blank]').forEach(s=>s.selectedIndex=-1);
+}
+function go(p){page=p;history.replaceState(null,'','#'+p);closePop();draw()}
+window.orcShow=go;
+document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>go(b.dataset.p));
+window.addEventListener('hashchange',()=>{const p=location.hash.slice(1);if(PAGES.some(x=>x[0]===p))go(p)});
+
+// ---- edits ----
+function edited(el,v){
+  const m=JSON.parse(el.dataset.m);
+  if(v!==undefined)m.v=v;
+  send(m);
+  delete last[page];   // refused or clamped: the answer draws over what was typed
+}
+document.addEventListener('change',e=>{
+  const el=e.target;
+  if(!el.dataset||!el.dataset.m)return;
+  edited(el,el.value);
+  menuOpen=false;
+  if(el.tagName==='SELECT')el.blur();
+});
+document.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&e.target.tagName==='INPUT')e.target.blur();
+  if(e.key==='Escape')closePop();
+});
+document.addEventListener('focusin',e=>{if(e.target.dataset&&e.target.dataset.pw)e.target.select()});
+document.addEventListener('focusout',()=>setTimeout(()=>{if(pending&&!busy())draw()},0));
+// A native menu takes the mouse while it is open; the next move on the page means it closed.
+document.addEventListener('pointerdown',e=>{if(e.target.tagName==='SELECT'){menuOpen=true;menuAt=Date.now()}else menuOpen=false},true);
+document.addEventListener('mousemove',()=>{if(menuOpen&&Date.now()-menuAt>300){menuOpen=false;if(pending&&!busy())draw()}});
+document.addEventListener('click',e=>{
+  const bank=e.target.closest('[data-bank]');
+  if(bank){curBank=+bank.dataset.bank;delete last.soft;draw();return}
+  const half=e.target.closest('[data-half]');
+  if(half){halves[curBank]=+half.dataset.half;delete last.soft;draw();return}
+  const pick=e.target.closest('.pick');
+  if(pick){openPop(pick);e.stopPropagation();return}
+  if(!e.target.closest('#pop'))closePop();
+  const seg=e.target.closest('.seg button');
+  if(seg&&seg.parentElement.dataset.m){
+    seg.parentElement.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===seg));
+    edited(seg.parentElement,seg.dataset.v);
+    return;
+  }
+  const btn=e.target.closest('button[data-m]');
+  if(btn)edited(btn);
+});
+
+// The colour menu: the word beside its swatch, which a select cannot show. For the
+// stands the swatch alone.
+const pop=$('#pop');let popFor=null;
+function closePop(){if(!popFor&&pop.style.display!=='block')return;pop.style.display='none';popFor=null;if(pending&&!busy())draw()}
+function openPop(p){
+  if(popFor===p){closePop();return}
+  popFor=p;
+  const only=p.dataset.only==='1',cur=p.dataset.col;
+  const list=only?S.dyna.swatches.map((c,i)=>({i,c,n:''})):S.palette;
+  pop.innerHTML=list.map(x=>'<button type="button" class="'+(String(x.i)===cur?'cur':'')+'" data-v="'+x.i+'">'+swatch(x.c)+esc(x.n)+'</button>').join('');
+  pop.style.display='block';
+  const r=p.getBoundingClientRect(),h=pop.offsetHeight;
+  pop.style.minWidth=r.width+'px';
+  pop.style.left=Math.max(8,Math.min(r.left,innerWidth-pop.offsetWidth-8))+'px';
+  pop.style.top=(r.bottom+4+h>innerHeight?Math.max(8,r.top-h-4):r.bottom+4)+'px';
+  pop.querySelectorAll('button').forEach(b=>b.onclick=()=>{const el=popFor;closePop();edited(el,b.dataset.v)});
+}
+$('#main').addEventListener('scroll',closePop,true);
+connect();
+</script>
+</body></html>

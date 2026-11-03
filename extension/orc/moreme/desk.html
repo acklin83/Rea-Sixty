@@ -5,6 +5,14 @@
 <title>Studio Control</title>
 <!-- MoreMe's Studio Control (docs/moreme-performers-plan.md): served by ORC, this Mac only. -->
 <style>
+@font-face{font-family:Inter;font-weight:400;src:url(/fonts/inter-latin-400.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:Inter;font-weight:400;src:url(/fonts/inter-latin-ext-400.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:Inter;font-weight:500;src:url(/fonts/inter-latin-500.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:Inter;font-weight:500;src:url(/fonts/inter-latin-ext-500.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:Inter;font-weight:700;src:url(/fonts/inter-latin-700.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:Inter;font-weight:700;src:url(/fonts/inter-latin-ext-700.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:Inter;font-weight:900;src:url(/fonts/inter-latin-900.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:Inter;font-weight:900;src:url(/fonts/inter-latin-ext-900.woff2) format('woff2');unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
 :root{--bg:#0D0D0D;--bg2:#161616;--bg3:#1f1f1f;--line:#2a2a2a;--fg:#fff;--fg2:#A8A8A8;--fg3:#666;--accent:#0099FF;--red:#690000;--red2:#a00000;--green:#3fcf6a;--rad:14px}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 Inter,system-ui,-apple-system,sans-serif}
@@ -19,7 +27,14 @@ button,input,select{font:inherit;color:inherit}
 .grow{flex:1}
 .snap{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .lbl{color:var(--fg3);font-size:12px}
-select,input[type=text],input[type=password]{background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:7px 10px;width:100%}
+/* ⛔ A native select ignores padding and height in WebKit. */
+select,input[type=text],input[type=password]{background-color:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:7px 10px;width:100%}
+select{-webkit-appearance:none;appearance:none;height:34px;padding:0 26px 0 10px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='14' viewBox='0 0 10 14'%3E%3Cpath d='M1.5 5.5 5 2l3.5 3.5M1.5 8.5 5 12l3.5-3.5' fill='none' stroke='%23A8A8A8' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center}
+.embed .brand,.embed .page{display:none}
+.dlgbg{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:50}
+.dlg{background:var(--bg2);border:1px solid #3a3a3a;border-radius:var(--rad);padding:16px;width:360px;max-width:calc(100% - 32px)}
+.dlg p{margin:0 0 12px}.dlg input{margin-bottom:12px}
+.dlg .acts{display:flex;justify-content:flex-end;gap:8px}
 .snap select{width:auto;max-width:200px}
 .b{background:var(--bg3);border:1px solid var(--line);border-radius:8px;padding:7px 12px;cursor:pointer;white-space:nowrap}
 .b:hover{border-color:#444}
@@ -61,6 +76,7 @@ input[type=color]{width:24px;height:24px;padding:0;border:none;background:none;b
 .seg{display:inline-flex;background:var(--bg3);border-radius:8px;padding:2px}
 .seg button{background:none;border:none;border-radius:6px;padding:4px 10px;cursor:pointer;color:var(--fg2);font-size:12px}
 .seg button.on{background:var(--accent);color:#000;font-weight:700}
+.seg button.on.o{background:#3a3a3a;color:var(--fg);font-weight:500}
 .note{color:var(--fg3);font-size:12px;margin:6px 0 8px}
 .lay .note{margin:0}
 .qr{display:flex;gap:12px;align-items:center}
@@ -136,6 +152,8 @@ input[type=color]{width:24px;height:24px;padding:0;border:none;background:none;b
 </div>
 <script>
 const $=s=>document.querySelector(s);
+// In ORC's settings window the frame already says what this is.
+if(new URLSearchParams(location.search).get('embed'))document.documentElement.classList.add('embed');
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let ws=null,S=null,curId=null,land=false,shownFrame=null,pendingDraw=false;
 let addWait=null,sorting=false;
@@ -291,7 +309,7 @@ function drawSegs(){
   document.querySelectorAll('.seg[data-k]').forEach(s=>{
     const o=s.dataset.o.split(','),k=s.dataset.k,num=!!s.dataset.n;
     const cur=num?p[k]:(p[k]?1:0);
-    s.innerHTML=o.map((t,i)=>'<button class="'+(cur===i?'on':'')+'" data-v="'+i+'">'+t+'</button>').join('');
+    s.innerHTML=o.map((t,i)=>'<button class="'+(cur===i?'on':'')+(t==='Off'?' o':'')+'" data-v="'+i+'">'+t+'</button>').join('');
     s.querySelectorAll('button').forEach(b=>b.onclick=()=>{p[k]=num?+b.dataset.v:b.dataset.v==='1';drawSegs();changed()});
   });
 }
@@ -308,25 +326,44 @@ function drawRight(){
   if(shownFrame!==p.id){shownFrame=p.id;$('#frame').src='/p/'+p.id+'?preview=1'}
 }
 
+// ---- a question, in the page ----
+// ⛔ Not confirm() or prompt(): in ORC's window this page is a frame from another
+// port, and Chromium blocks those from such a frame (ORC under Windows).
+function ask(text,withInput,value){
+  return new Promise(done=>{
+    const bg=document.createElement('div');bg.className='dlgbg';
+    bg.innerHTML='<div class="dlg" role="dialog" aria-modal="true"><p></p>'+(withInput?'<input type="text" maxlength="64">':'')+'<div class="acts"><button class="b" data-c>Cancel</button><button class="b" data-o>OK</button></div></div>';
+    bg.querySelector('p').textContent=text;
+    const inp=bg.querySelector('input');
+    const close=ok=>{bg.remove();done(ok?(withInput?inp.value:true):(withInput?null:false))};
+    bg.querySelector('[data-c]').onclick=()=>close(false);
+    bg.querySelector('[data-o]').onclick=()=>close(true);
+    bg.onkeydown=e=>{if(e.key==='Escape')close(false);if(e.key==='Enter')close(true)};
+    document.body.appendChild(bg);
+    if(inp){inp.value=value||'';inp.focus();inp.select()}else bg.querySelector('[data-o]').focus();
+  });
+}
+
 // ---- controls ----
 $('#add').onclick=()=>{const before=S.book.performers.map(p=>p.id);addWait=before;send({t:'add'})};
-$('#remove').onclick=()=>{const p=P();if(p&&confirm('Delete '+(p.name||'this performer')+'? The link stops working.'))send({t:'remove',id:p.id})};
+$('#remove').onclick=()=>{const p=P();if(p)ask('Delete '+(p.name||'this performer')+'? The link stops working.').then(ok=>{if(ok)send({t:'remove',id:p.id})})};
 $('#name').oninput=e=>{P().name=e.target.value;drawList();push()};
 $('#role').oninput=e=>{P().role=e.target.value;drawList();push()};
 $('#out').onchange=e=>{P().output=e.target.value;changed()};
 $('#pcol').oninput=e=>{P().colour=e.target.value;drawList();push()};
-$('#copyL').onclick=()=>{const p=P();if(p.faders.length&&!confirm('Replace this list with the TotalMix layout?'))return;copyLayout(p);drawFaders();changed()};
+$('#copyL').onclick=()=>{const p=P(),go=()=>{copyLayout(p);drawFaders();changed()};if(p.faders.length)ask('Replace this list with the TotalMix layout?').then(ok=>{if(ok)go()});else go()};
 $('#snapSel').onchange=e=>{if(e.target.value)send({t:'snapLoad',name:e.target.value})};
-$('#snapNew').onclick=()=>{if(confirm('Start empty? Performers not saved in a snapshot are gone.'))send({t:'snapNew'})};
+$('#snapNew').onclick=()=>ask('Start empty? Performers not saved in a snapshot are gone.').then(ok=>{if(ok)send({t:'snapNew'})});
 $('#snapSave').onclick=()=>{if(S.book.current)send({t:'snapSave'});else saveAs()};
-function saveAs(){const n=prompt('Snapshot name',S.book.current||'');if(n&&n.trim())send({t:'snapSave',name:n.trim()})}
+function saveAs(){ask('Snapshot name',true,S.book.current||'').then(n=>{if(n&&n.trim())send({t:'snapSave',name:n.trim()})})}
 $('#snapAs').onclick=saveAs;
-$('#snapDel').onclick=()=>{if(S.book.current&&confirm('Delete the snapshot '+S.book.current+'?'))send({t:'snapDelete',name:S.book.current})};
+$('#snapDel').onclick=()=>{if(S.book.current)ask('Delete the snapshot '+S.book.current+'?').then(ok=>{if(ok)send({t:'snapDelete',name:S.book.current})})};
 $('#copy').onclick=()=>{
   const url=$('#url').textContent;
   const done=()=>{$('#copy').textContent='Copied';setTimeout(()=>$('#copy').textContent='Copy',1200)};
-  if(navigator.clipboard&&window.isSecureContext)navigator.clipboard.writeText(url).then(done);
-  else{const t=document.createElement('textarea');t.value=url;document.body.appendChild(t);t.select();document.execCommand('copy');t.remove();done()}
+  const old=()=>{const t=document.createElement('textarea');t.value=url;document.body.appendChild(t);t.select();document.execCommand('copy');t.remove();done()};
+  if(navigator.clipboard&&window.isSecureContext)navigator.clipboard.writeText(url).then(done,old);
+  else old();
 };
 if(!navigator.share)$('#share').style.display='none';
 $('#share').onclick=()=>{const p=P();navigator.share({title:'MoreMe '+p.name,url:$('#url').textContent}).catch(()=>{})};

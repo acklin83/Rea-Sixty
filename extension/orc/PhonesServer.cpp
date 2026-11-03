@@ -176,6 +176,16 @@ std::string importLogo(const std::string& sourcePath, std::string& err)
     return name;
 }
 
+std::string logoData(std::string& type)
+{
+    const std::string logo = server().settings().logo;
+    if (logo.empty()) return {};
+    const char* t = imageType(lowerExt(logo));
+    if (!t) return {};
+    type = t;
+    return orc_handover::readFile(orc::supportDir() + "/" + logo);
+}
+
 // ── what the page is made of ─────────────────────────────────────────────────
 
 namespace {
@@ -256,6 +266,12 @@ std::string serve(const ws::Request& r, const Settings& s, const std::string& re
         const std::string page = orc_handover::readFile(res + "/desk.html");
         if (page.empty()) return ws::response(404, "text/plain; charset=utf-8", "not found");
         return ws::response(200, "text/html; charset=utf-8", page);
+    }
+    // Studio Control's font, the settings page's files.
+    if (r.path.rfind("/fonts/inter-", 0) == 0 && r.path.find("..") == std::string::npos
+        && r.path.size() > 6 && r.path.compare(r.path.size() - 6, 6, ".woff2") == 0) {
+        const std::string data = orc_handover::readFile(res + "/../settings" + r.path);
+        if (!data.empty()) return ws::response(200, "font/woff2", data);
     }
     if (r.path == "/logo") {
         if (!s.logo.empty()) {
