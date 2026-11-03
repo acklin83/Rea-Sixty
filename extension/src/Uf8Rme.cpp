@@ -296,9 +296,15 @@ Frame frame(const State& st, const rmei::State& in, const Side& u, const Config&
                                             : (rs == rmeu::Row::Output) ? &st.levelOut : nullptr;
             if (lv) {
                 const auto it = lv->find(ch);
-                const std::uint8_t b = (it != lv->end()) ? dbToVuByte_(it->second) : 0;
-                f.vu[static_cast<size_t>(s * 2)]     = b;
-                f.vu[static_cast<size_t>(s * 2 + 1)] = b;
+                const std::uint8_t l = (it != lv->end()) ? dbToVuByte_(it->second) : 0;
+                std::uint8_t r = l;
+                // The right side from n + 1 on a stereo channel only: on a mono
+                // one n + 1 is the next channel. The UF1's rule (RmeFace).
+                const rme::Channel* c = rmeu::channelOf(st, rs, ch);
+                if (c && c->stereo)
+                    if (const auto ir = lv->find(ch + 1); ir != lv->end()) r = dbToVuByte_(ir->second);
+                f.vu[static_cast<size_t>(s * 2)]     = l;
+                f.vu[static_cast<size_t>(s * 2 + 1)] = r;
             }
         }
 

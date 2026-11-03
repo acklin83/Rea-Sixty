@@ -241,6 +241,28 @@ int main()
         // An output has no solo: the key is its Cue. Strip 1 is Phones 1, channel 6.
         EXPECT(val(u8::solo(st, outs, s3, 0), "/controlroom/cuechan") == 6.0f);
     }
+    // ── the meter, L and R apart on a stereo channel (Frank 03.11.2026) ─────────
+    {
+        State ms = fixture();
+        in_::State mi;
+        u8::Side   mside;
+        mi.row.store(static_cast<int>(rmeu::Row::Input));
+        const auto vis = rmeu::visibleChannels(ms, rmeu::Row::Input);
+        EXPECT(!vis.empty());
+        if (!vis.empty()) {
+            const int ch = vis[0];
+            ms.levelIn[ch] = -6.0;
+            ms.levelIn[ch + 1] = -40.0;
+            const Config mc;
+            const std::array<u8::SoftCell, 8> ms8{};
+            ms.inputs[ch].stereo = false;
+            auto f = u8::frame(ms, mi, mside, mc, ms8);
+            EXPECT(f.vu[0] > 0 && f.vu[0] == f.vu[1]);   // mono: n + 1 is the next channel
+            ms.inputs[ch].stereo = true;
+            f = u8::frame(ms, mi, mside, mc, ms8);
+            EXPECT(f.vu[0] > f.vu[1]);    // stereo: n + 1 is the right side
+        }
+    }
     // ── the channel view ──────────────────────────────────────────────────────
     {
         u8::toggleChannelView(st, in, side);
