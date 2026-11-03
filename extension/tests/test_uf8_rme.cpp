@@ -156,7 +156,7 @@ int main()
         w = u8::cueKey(s2, c2, 6);                           // again: off
         EXPECT(w.size() == 1 && w[0].second == -1.0f);
         EXPECT(u8::cueKey(s2, c2, 7).empty());               // a dark key sends nothing
-        // ── Shift + SEL: only an output, its SOLO lamp says so ──
+        // ── SOLO on an output is its Cue, and its lamp says so ──
         u8::Side sd;
         in_::State i3;
         i3.row.store(static_cast<int>(rmeu::Row::Output));
@@ -164,12 +164,14 @@ int main()
         int at = -1;
         for (int k = 0; k < 8; ++k) if (chs[static_cast<size_t>(k)] == 4) at = k;
         EXPECT(at >= 0);
-        w = u8::cueStrip(s2, i3, sd, at);
-        EXPECT(w.size() == 1 && w[0].second == -1.0f);       // cued above: off
+        w = u8::solo(s2, i3, sd, at);
+        EXPECT(w.size() == 1 && w[0].first == "/controlroom/cuechan" && w[0].second == -1.0f);   // cued above: off
+        EXPECT(i3.submix.load() == -1);
         const std::array<u8::SoftCell, 8> none{};
         EXPECT(u8::frame(s2, i3, sd, c2, none).strips[static_cast<size_t>(at)].solo);
         i3.row.store(static_cast<int>(rmeu::Row::Input));
-        EXPECT(u8::cueStrip(s2, i3, sd, 2).empty());
+        w = u8::solo(s2, i3, sd, 2);
+        EXPECT(w.empty() || w[0].first != "/controlroom/cuechan");
     }
     // ── SEL is the UF1's selection ───────────────────────────────────────────
     {
@@ -236,7 +238,8 @@ int main()
         in_::State outs;
         outs.row.store(static_cast<int>(rmeu::Row::Output));
         u8::Side s3;
-        EXPECT(u8::solo(st, outs, s3, 0).empty());          // outputs have no solo
+        // An output has no solo: the key is its Cue. Strip 1 is Phones 1, channel 6.
+        EXPECT(val(u8::solo(st, outs, s3, 0), "/controlroom/cuechan") == 6.0f);
     }
     // ── the channel view ──────────────────────────────────────────────────────
     {

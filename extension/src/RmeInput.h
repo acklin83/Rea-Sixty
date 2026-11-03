@@ -96,9 +96,6 @@ struct Host {
     // (Frank 30.10.2026). ORC's Config::uf1PotSpeed. Last, so the positional
     // initialiser in Rea-Sixty's main.cpp keeps its order.
     std::function<double()> potSpeed;
-    // SHIFT is held, from the surface or the keyboard: SEL on an output cues it
-    // (Frank 03.11.2026). Unset: no.
-    std::function<bool()>   shift;
 };
 
 // ── queries the painter and the LEDs share with the input path ───────────────

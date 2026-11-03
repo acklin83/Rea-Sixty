@@ -6,7 +6,7 @@ Auslöser: djp53 (Dave) im RME-Forum, Thread ORC, Posts 10 und 11. Frank: bauen,
 - SEND/PLUG-IN 1-8: je ein Ausgang, `Config::uf8SubmixKeys`, `rme.json` Block `uf8.submixKeys`, ORC-Reiter UF8. Werk = bisherige Belegung. Kein Versions-Bump, alte Dateien behalten das Werk.
 - `rmeu::keyOutput`: versteckt, rechte Hälfte, kein Ausgang = dunkel und tot. War ein Fehler: eine versteckte Rolle leuchtete, der Druck landete still auf Main (`effectiveSubmix`). Phones 3/4 hängen bei Frank am Snapshot.
 - Bankart `RmeSubmixes = 15`. Ausgang steckt im Slot (`ActionSlot::textParam`, Aktion `rme_submix`, damit der Serialiser den Slot behält; gefeuert wird sie nie). Banken 10.. liegen in orc.json, Rea-Sixty liest sie, darum keine Liste in Rea-Sixty.
-- Cue: `/controlroom/cuechan`. Shift + SEL auf Ausgängen, Shift + SEND/PLUG-IN, Shift + Taste der Submix-Bank. Submix bleibt. Gelb, Helligkeit weiter = Submix. SOLO-Lampe auf Ausgängen = Cue. UF1 gleich.
+- Cue: `/controlroom/cuechan`. SOLO auf Ausgängen (Frank, statt des ersten Shift + SEL), Shift + SEND/PLUG-IN, Shift + Taste der Submix-Bank. Submix bleibt. Gelb, Helligkeit weiter = Submix. SOLO-Lampe auf Ausgängen = Cue. UF1 gleich.
 - Shift: ORC UF8 = FINE (0x6F), Tastatur nur beim Druck (`orc/OrcKeyboard.h`), kein Spiegel. Rea-Sixty `shiftHeldAnywhere_()`.
 - Handbuch ORC: Abschnitt Cue, Soft-Key-Bänke, UF8, Reiter.
 

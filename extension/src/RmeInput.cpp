@@ -424,20 +424,20 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
             const auto m = rmeu::muteToggle(st, r, sel);
             if (!m.first.empty()) out.push_back({ m.first, m.second });
         } else if (id == ::uf1::btn::kSolo) {
-            // Solo sits in the routing: input/playback into the submix. An
-            // output has none, so the key does nothing there.
-            const std::string a = rmeu::soloAddress(r, sel, sub);
-            if (!a.empty())
-                out.push_back({ a, rmeu::soloed(st, r, sel, sub) ? 0.0f : 1.0f });
-        } else if (r == rmeu::Row::Output) {
-            if (h.shift && h.shift()) {
-                // Shift + SEL cues the output, the submix stays (Frank 03.11.2026).
+            if (r == rmeu::Row::Output) {
+                // An output has no solo: the key is its Cue, where TotalMix has
+                // it too, and the submix stays (Frank 03.11.2026).
                 const auto m = rmeu::cueToggle(st, sel);
                 if (!m.first.empty()) out.push_back({ m.first, m.second });
             } else {
-                // SEL on an output makes it the submix, like a click in TotalMix.
-                s.submix.store(sel);
+                // Solo sits in the routing: input/playback into the submix.
+                const std::string a = rmeu::soloAddress(r, sel, sub);
+                if (!a.empty())
+                    out.push_back({ a, rmeu::soloed(st, r, sel, sub) ? 0.0f : 1.0f });
             }
+        } else if (r == rmeu::Row::Output) {
+            // SEL on an output makes it the submix, like a click in TotalMix.
+            s.submix.store(sel);
         }
         return true;
     }

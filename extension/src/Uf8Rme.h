@@ -151,9 +151,6 @@ void pickSubmix(const State& st, rmei::State& in, const Config& cfg, int key);
 // lamp turns yellow, SOLO's colour, its brightness still says the submix.
 bool submixKeyCued(const State& st, const Config& cfg, int key);
 Writes cueKey(const State& st, const Config& cfg, int key);
-// SHIFT + SEL on an output strip does the same, Main standing on strip 8 too. On
-// any other row the press does nothing; the caller has already decided on Shift.
-Writes cueStrip(const State& st, const rmei::State& in, const Side& u, int strip);
 
 // The channel encoder: Main volume, as the UF1's jog (cfg.jogTarget, jogStepDb).
 // With cfg.uf8ShowMainOnChange the target stands on strip 8 for kMainShowMs.

@@ -322,8 +322,8 @@ int main()
         in_::button(s, bare, fx, cfg, press(::uf1::btn::kCut), w);
         EXPECT(w.size() == 1 && w[0].first == "/reverb/enable" && w[0].second == 0.0f);
 
-        // ⇨ Shift + SEL cues an output, on another row it writes nothing, and
-        // without Shift it picks the submix as before (Frank 03.11.2026).
+        // ⇨ SOLO cues an output and the submix stays; SEL picks the submix as
+        // before (Frank 03.11.2026).
         {
             State co;
             co.mainOut = 0;
@@ -332,15 +332,13 @@ int main()
             in_::State cs;
             cs.row.store(static_cast<int>(reasixty::rme::uf1::Row::Output));
             cs.sel[2].store(4);
-            in_::Host shifted;
-            shifted.shift = [] { return true; };
             w.clear();
-            in_::button(cs, shifted, co, cfg, press(::uf1::btn::kSel), w);
+            in_::button(cs, bare, co, cfg, press(::uf1::btn::kSolo), w);
             EXPECT(w.size() == 1 && w[0].first == "/controlroom/cuechan" && w[0].second == 4.0f);
             EXPECT(cs.submix.load() == -1);
             co.cueChannel = 4;
             w.clear();
-            in_::button(cs, shifted, co, cfg, press(::uf1::btn::kSel), w);
+            in_::button(cs, bare, co, cfg, press(::uf1::btn::kSolo), w);
             EXPECT(w.size() == 1 && w[0].second == -1.0f);
             w.clear();
             in_::button(cs, bare, co, cfg, press(::uf1::btn::kSel), w);

@@ -457,9 +457,16 @@ Writes solo(const State& st, const rmei::State& in, const Side& u, int strip)
     const int ch = t.ch;
     if (ch < 0) return out;
     const auto r   = t.r;
+    // On an output SOLO is the Cue, where TotalMix has it too (Frank 03.11.2026).
+    if (r == rmeu::Row::Output) {
+        keepMain(u, t);
+        const auto m = rmeu::cueToggle(st, ch);
+        if (!m.first.empty()) out.push_back({ m.first, m.second });
+        return out;
+    }
     const int  sub = rmeu::effectiveSubmix(st, in.submix.load());
     const std::string a = rmeu::soloAddress(r, ch, sub);
-    if (a.empty()) return out;   // outputs have no solo
+    if (a.empty()) return out;
     out.push_back({ a, rmeu::soloed(st, r, ch, sub) ? 0.0f : 1.0f });
     return out;
 }
@@ -576,15 +583,5 @@ Writes cueKey(const State& st, const Config& cfg, int key)
     return out;
 }
 
-Writes cueStrip(const State& st, const rmei::State& in, const Side& u, int strip)
-{
-    Writes out;
-    if (strip < 0 || strip >= kStrips) return out;
-    const Target t = targetOf(st, in, u, strip);
-    if (t.r != rmeu::Row::Output) return out;
-    const auto m = rmeu::cueToggle(st, t.ch);
-    if (!m.first.empty()) out.push_back({ m.first, m.second });
-    return out;
-}
 
 } // namespace reasixty::rme::uf8side

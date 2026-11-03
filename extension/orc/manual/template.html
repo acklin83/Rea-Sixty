@@ -350,7 +350,7 @@ writes: <code>&gt; Main</code> for an input or a playback (the <a href="#rows">s
 <h3>SOLO, CUT, SEL</h3>
 <table class="data"><thead><tr><th>Row</th><th>SOLO</th><th>CUT</th><th>SEL</th></tr></thead><tbody>
 <tr><td>Input, Playback</td><td>Solo in the current submix</td><td>Mute</td><td>Nothing</td></tr>
-<tr><td>Output</td><td>Nothing, lit while the output is <a href="#cue">cued</a></td><td>Mute</td><td>Makes it the submix. With SHIFT: cues it</td></tr>
+<tr><td>Output</td><td><a href="#cue">Cue</a>, lit while cued</td><td>Mute</td><td>Makes it the submix</td></tr>
 <tr><td>FX</td><td>Nothing</td><td>Switches the effect off and on; lit while off</td><td>Nothing</td></tr>
 </tbody></table>
 </div>
@@ -855,7 +855,7 @@ position. The bottom line: X, Y and R, and <code>OFF</code> when the stand does 
 <h3>SOLO, CUT, SEL</h3>
 <table class="data"><thead><tr><th>Mode, row</th><th>SOLO</th><th>CUT</th><th>SEL</th></tr></thead><tbody>
 <tr><td>TotalMix, input, playback</td><td>Solo in the current submix</td><td>Mute</td><td>This channel on the UF1</td></tr>
-<tr><td>TotalMix, output</td><td>Nothing, lit while the output is <a href="#cue">cued</a></td><td>Mute</td><td>This channel on the UF1, and the submix. With FINE: cues it</td></tr>
+<tr><td>TotalMix, output</td><td><a href="#cue">Cue</a>, lit while cued</td><td>Mute</td><td>This channel on the UF1, and the submix</td></tr>
 <tr><td>TotalMix, FX</td><td>Nothing</td><td>Switches the effect off and on; lit while off</td><td>This channel on the UF1</td></tr>
 <tr><td>Hue</td><td>This lamp stays on, every other one goes dark</td><td>The lamp on and off</td><td>Nothing</td></tr>
 <tr><td>DynaMount</td><td>Nothing</td><td>Nothing</td><td>Nothing</td></tr>
@@ -918,8 +918,8 @@ the bank showing is lit, a key without a bank is dark. In Hue and DynaMount they
 <div class="ctl" id="u-fine" data-uf8="kFine">
 <h3>FINE</h3>
 <p>Held: the CHANNEL encoder, and in TotalMix the V-Pots, turn in finer steps, {{fineFactorText}}
-of the normal step. In TotalMix it is the UF8's Shift for <a href="#cue">Cue</a>. In DynaMount, FINE
-and a push on a soft key store over a preset.</p>
+of the normal step. In TotalMix, FINE and a SEND/PLUG-IN key or a key of a submix bank
+<a href="#cue">cue</a> its output. In DynaMount, FINE and a push on a soft key store over a preset.</p>
 </div>
 
 <div class="ctl" id="u-channel" data-uf8="kChannelEncoder kChannelPush">
@@ -1129,9 +1129,9 @@ key; press it again, or touch anything, to wake them.</td></tr>
 steps from dark to full. Both surfaces follow, and ORC keeps the steps.</p>
 <h3 id="cue">Cue</h3>
 <p>TotalMix cues one hardware output at a time and sends it to the output set under Assign, Cue to in
-its control room. ORC switches the Cue, the destination stays in TotalMix. Three ways, each with SHIFT
-on the UF1, FINE on the UF8, or Shift on the Mac's keyboard: SEL on an output strip, a SEND/PLUG-IN key,
-a key of a submix bank. The same press on the cued output switches it off. The submix does not move.</p>
+its control room. ORC switches the Cue, the destination stays in TotalMix. SOLO on an output is its Cue.
+A SEND/PLUG-IN key or a key of a submix bank cues its output with SHIFT on the UF1, FINE on the UF8, or
+Shift on the Mac's keyboard. The same press on the cued output switches it off. The submix does not move.</p>
 <h3 id="set-controls">UF1</h3>
 <table class="data"><tbody>
 <tr><th>Use the UF1</th><td>On out of the box. Off: ORC lets go of the UF1 and leaves it alone, so SSL
@@ -1155,8 +1155,8 @@ remote cannot see reads <em>hidden</em>.</p>
 <table class="data"><tbody>
 <tr><th>Use the UF8</th><td>The same for the UF8.</td></tr>
 <tr><th>Show Main volume on change</th><td>On out of the box. A turn of the UF8's CHANNEL encoder
-puts its target, Main, on strip 8 for two seconds: name, level, fader. Its fader, V-Pot and CUT act on
-Main meanwhile, and keep it there while you use them.</td></tr>
+puts its target, Main, on strip 8 for two seconds: name, level, fader. Its fader, V-Pot, CUT and SOLO
+act on Main meanwhile, and keep it there while you use them.</td></tr>
 <tr><th>V-Pot speed</th><td>The same for the UF8's eight V-Pots, 0.10 to 2.00. The CHANNEL
 encoder keeps the jog step.</td></tr>
 <tr><th>Keys</th><td>An action and the two lamp colours for QUICK 1-3, NORM, REC, AUTO, NAV, NUDGE

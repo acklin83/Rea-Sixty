@@ -717,11 +717,7 @@ void Uf8Surface::onButton_(std::uint8_t id, bool pressed)
         switch ((id - kStripKeys) % 3) {
             case 0: send_(u8s::solo(st, in_, side_, s)); break;
             case 1: send_(u8s::cut(st, in_, side_, s));  break;
-            case 2:
-                // Shift + SEL on an output cues it (Frank 03.11.2026).
-                if (shiftNow_()) send_(u8s::cueStrip(st, in_, side_, s));
-                else             u8s::sel(st, in_, side_, s);
-                break;
+            case 2: u8s::sel(st, in_, side_, s);          break;
         }
         return;
     }

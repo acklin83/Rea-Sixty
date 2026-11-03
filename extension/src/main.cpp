@@ -27877,10 +27877,7 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                             switch ((id - 0x20) % 3) {
                                 case 0: w = u8s::solo(rst, g_rmeIn, g_uf8RmeSide, st); break;
                                 case 1: w = u8s::cut(rst, g_rmeIn, g_uf8RmeSide, st);  break;
-                                case 2:
-                                    if (shiftHeldAnywhere_()) w = u8s::cueStrip(rst, g_rmeIn, g_uf8RmeSide, st);
-                                    else u8s::sel(rst, g_rmeIn, g_uf8RmeSide, st);
-                                    break;
+                                case 2: u8s::sel(rst, g_rmeIn, g_uf8RmeSide, st);       break;
                             }
                         } else if (id >= 0x08 && id <= 0x0F) {
                             w = u8s::vpotPush(rst, g_rmeIn, g_uf8RmeSide, rcfg, id - 0x08, nowMs_());
@@ -29223,8 +29220,6 @@ static const reasixty::rme::input::Host& rmeInputHost_()
         [] { return g_uf1ModeMenu.load(); },
         [] { return reasixty_uf1KnobScale(shiftFineActive_() || g_uf1CsFine.load()); },
         [] { return reasixty::rme::manager().link() == reasixty::rme::LinkState::Online; },
-        nullptr, nullptr,
-        [] { return shiftHeldAnywhere_(); },
     };
     return h;
 }
