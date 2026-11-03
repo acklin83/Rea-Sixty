@@ -115,8 +115,11 @@ jobs:
           -DLIBUSB_ROOT="${{ github.workspace }}/libusb"
           -DHIDAPI_ROOT="${{ github.workspace }}/hidapi"
 
+      # A number, always: bare --parallel is `make -j` with no limit, all targets
+      # at once. macos-latest has 3 cores and 7 GB, and the Build step there took
+      # anything from 5 minutes to the 6-hour limit, or lost the runner altogether.
       - name: Build
-        run: cmake --build extension/build --config Release --parallel
+        run: cmake --build extension/build --config Release --parallel 3
 
       # ctest, wherever the tests exist. CMakeLists gates them off on WIN32
       # (the smoke-test wiring was never ported), so Windows skips this and
