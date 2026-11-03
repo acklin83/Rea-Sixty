@@ -1037,9 +1037,8 @@ away on the phones a few seconds later. All headphone mixes show the same channe
 <h3>Performers and Studio Control</h3>
 <p>Studio Control gives each musician an own link and an own layout. Without performers, the phones
 pick Phones 1 to 4 as above. As soon as there is a performer, the phones list performers instead.</p>
-<p>Open it from the menu bar or the page <a href="#set-moreme">MoreMe</a>, or on a tablet under the
-Mac's address with <code>/desk</code> at the end and the Studio Control PIN. It answers in the local network only, not
-through an address from outside.</p>
+<p>Open it from the menu bar or the page <a href="#set-moreme">MoreMe</a>. It runs on this Mac only and
+needs no PIN.</p>
 <table class="data"><tbody>
 <tr><th>Performers</th><td>One per musician. Each shows its output, its faders and what it may change.</td></tr>
 <tr><th>Output</th><td>Phones 1 to 4, Main, Main B, or any other output TotalMix shows. A role follows
@@ -1232,8 +1231,7 @@ to TotalMix on MoreMe's remote (<a href="#moreme">MoreMe</a>). The first time it
 <tr><th>Address</th><td>The address for the phones, while the page is served.</td></tr>
 <tr><th>PIN</th><td>4 to 8 digits. A change takes effect at once.</td></tr>
 <tr><th>Page port</th><td>The page's port, out of the box 8088.</td></tr>
-<tr><th>Studio Control PIN</th><td>The PIN of <a href="#moreme">Studio Control</a> on a tablet, 4 to 8 digits. <em>Open</em> opens it
-in a window of ORC, which needs no PIN.</td></tr>
+<tr><th>Studio Control</th><td><em>Open</em> opens <a href="#moreme">Studio Control</a> in a window of ORC.</td></tr>
 <tr><th>TotalMix send to port</th><td>The <em>Port incoming</em> of MoreMe's remote in TotalMix, out
 of the box 7003.</td></tr>
 <tr><th>TotalMix listen on port</th><td>The <em>Port outgoing</em> of that remote, out of the box
@@ -1325,8 +1323,6 @@ next to it the logo, if you picked one.</td></tr>
 by your user only.</td></tr>
 <tr><th><code>~/Library/Application Support/ORC/moreme-performers.json</code></th><td>The performers and the
 snapshots of Studio Control.</td></tr>
-<tr><th><code>~/Library/Application Support/ORC/moreme.deskpin</code></th><td>The PIN of Studio Control,
-readable by your user only.</td></tr>
 <tr><th><code>/tmp/orc.log</code></th><td>ORC's log. Useful with a bug report.</td></tr>
 </tbody></table>
 <p>To start from scratch, quit ORC and remove the folder <code>~/Library/Application Support/ORC</code>.</p>

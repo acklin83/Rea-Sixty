@@ -75,13 +75,7 @@ void openStudioControl()
         web.UIDelegate = delegate;
         [window.contentView addSubview:web];
     }
-    // Loaded anew each time: the port or the PIN may have changed. The PIN goes in
-    // here, from ORC's own file: it is never in the page.
-    [web.configuration.userContentController removeAllUserScripts];
-    NSString* pin = [NSString stringWithUTF8String:ph::server().deskPin().c_str()] ?: @"";
-    [web.configuration.userContentController addUserScript:
-        [[WKUserScript alloc] initWithSource:[NSString stringWithFormat:@"window.MOREME_DESK_PIN=\"%@\";", pin]
-                               injectionTime:WKUserScriptInjectionTimeAtDocumentStart forMainFrameOnly:YES]];
+    // Loaded anew each time: the port may have changed.
     [web loadRequest:[NSURLRequest requestWithURL:url]];
     [NSApp activateIgnoringOtherApps:YES];
     [window makeKeyAndOrderFront:nil];

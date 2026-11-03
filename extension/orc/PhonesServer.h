@@ -46,9 +46,6 @@ std::string settingsPath();
 std::string loadPin();                     // "" = none yet
 bool        savePin(const std::string& pin);
 std::string generatePin();                 // four digits
-// Studio Control's own PIN (moreme.deskpin, the same care as moreme.pin).
-std::string loadDeskPin();
-bool        saveDeskPin(const std::string& pin);
 // The performers, moreme-performers.json. Only the server's thread writes it.
 std::string performersPath();
 
@@ -76,14 +73,13 @@ class Server {
 
     // Takes the settings and the PIN as they are now: starts, stops or
     // reconfigures. Main thread.
-    void apply(const Settings& s, const std::string& pin, const std::string& deskPin);
+    void apply(const Settings& s, const std::string& pin);
     void stop();
 
     Status status() const;
     // What apply() was last given: the one copy the settings page reads.
     Settings    settings() const;
     std::string pin() const;
-    std::string deskPin() const;
 
   private:
     void loop();
@@ -91,7 +87,6 @@ class Server {
     mutable std::mutex mx_;
     Settings           want_;
     std::string        pin_;
-    std::string        deskPin_;
     std::uint32_t      gen_ = 0;
     Status             status_;
 

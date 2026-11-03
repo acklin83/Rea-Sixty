@@ -24,11 +24,11 @@ Auslöser: djp53 (Dave) im RME-Forum, Thread ORC, Posts 10 und 11. Frank: bauen,
 
 ## MoreMe: Performer und Studio Control (Frank: ins selbe Release)
 Plan: `docs/moreme-performers-plan.md`, alle Stufen gebaut.
-- `orc/Performers.*`: Modell, JSON, Desk-Befehle, `deskAllowed`. Datei `moreme-performers.json`, schreibt nur der Server-Thread. Desk-PIN `moreme.deskpin`.
+- `orc/Performers.*`: Modell, JSON, Desk-Befehle, `deskAllowed`. Datei `moreme-performers.json`, schreibt nur der Server-Thread. 
 - `orc/Phones.*`: Mixe `perf:<link>` neben `phone<N>`, Quellen pro Mix (`sourcesOf_`), serverseitige Sperren (fremder Mix, fremde Quelle, Master, EQ/Dyn/FX nach Stufe), Strip-Seite mit Kurve aus `rmeu::eqModel` + `uf1eq::bandDb`.
 - `orc/moreme/desk.html`: Studio Control, QR-Encoder in JS (dekodiert mit CIDetector, Versionen 2 bis 10). Vorschau = die echte Handyseite im Frame.
 - `orc/moreme/moreme.html`: Link `/p/<id>`, Streifen im Hochformat über die vorhandene Ansicht, dB-Skala, EQ/DYN/FX am Streifen, Kopfzeile, Hell/Dunkel, Wisch-Hinweis, Doppeltipp, Meine Fader, EQ- und Dynamics-Seite.
-- `orc/OrcDeskWindow.mm`: eigenes Fenster mit WKWebView, PIN per User-Script, ATS `NSAllowsLocalNetworking`.
+- `orc/OrcDeskWindow.mm`: eigenes Fenster mit WKWebView, ATS `NSAllowsLocalNetworking`. `/desk` nur 127.0.0.1, ohne PIN (Frank: nur am Mac, nie Tablet).
 - Abweichung vom Plan: Doppeltipp nicht auf dem Master (0 dB aus dem Nichts auf den Ohren).
 
 Geprüft: alle ctests, Mixer-Sperren als Test, Demo mit echtem Server und falschem TotalMix auf Systemports im Browser (Desk, Vorschau, EQ, Dyn, Streifen, Querformat, Hell, Meine Fader), WKWebView offscreen mit denselben ATS-Einstellungen.

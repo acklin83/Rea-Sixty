@@ -36,7 +36,6 @@ namespace rme = reasixty::rme;
 
 std::string settingsPath() { return orc::supportDir() + "/moreme.json"; }
 static std::string pinPath() { return orc::supportDir() + "/moreme.pin"; }
-static std::string deskPinPath() { return orc::supportDir() + "/moreme.deskpin"; }
 std::string performersPath() { return orc::supportDir() + "/moreme-performers.json"; }
 
 namespace {
@@ -124,15 +123,16 @@ bool saveSettings(const Settings& s)
     return orc_handover::writeFile(settingsPath(), json);
 }
 
-static std::string readPinFile(const std::string& path)
+std::string loadPin()
 {
-    std::string p = orc_handover::readFile(path);
+    std::string p = orc_handover::readFile(pinPath());
     while (!p.empty() && (p.back() == '\n' || p.back() == '\r' || p.back() == ' ')) p.pop_back();
     return p;
 }
 
-static bool writePinFile(const std::string& path, const std::string& pin)
+bool savePin(const std::string& pin)
 {
+    const std::string path = pinPath();
     // Readable by the user only, before anything is in it.
     const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) return false;
@@ -142,11 +142,6 @@ static bool writePinFile(const std::string& path, const std::string& pin)
     ::close(fd);
     return ok;
 }
-
-std::string loadPin() { return readPinFile(pinPath()); }
-bool savePin(const std::string& pin) { return writePinFile(pinPath(), pin); }
-std::string loadDeskPin() { return readPinFile(deskPinPath()); }
-bool saveDeskPin(const std::string& pin) { return writePinFile(deskPinPath(), pin); }
 
 std::string generatePin()
 {
@@ -257,7 +252,7 @@ std::string serve(const ws::Request& r, const Settings& s, const std::string& re
     }
     if (r.path == "/desk") {
         if (!deskAllowed(peer, r.header("x-real-ip"), r.header("x-forwarded-for"), r.header("host"), {}))
-            return ws::response(403, "text/plain; charset=utf-8", "Studio Control answers in the local network only");
+            return ws::response(403, "text/plain; charset=utf-8", "Studio Control answers on this Mac only");
         const std::string page = orc_handover::readFile(res + "/desk.html");
         if (page.empty()) return ws::response(404, "text/plain; charset=utf-8", "not found");
         return ws::response(200, "text/html; charset=utf-8", page);
@@ -294,7 +289,6 @@ struct Conn {
     bool           dead    = false;
     int            mixId   = 0;
     bool           desk    = false;   // Studio Control, not a phone
-    bool           deskOk  = false;   // past its PIN
     std::string    deskSent;          // the state it was last sent
     ws::Reader     reader;
     std::chrono::steady_clock::time_point lastRx;
@@ -312,13 +306,12 @@ Server& server()
 
 Server::~Server() { stop(); }
 
-void Server::apply(const Settings& s, const std::string& pin, const std::string& deskPin)
+void Server::apply(const Settings& s, const std::string& pin)
 {
     {
         std::lock_guard<std::mutex> lk(mx_);
         want_ = s;
         pin_  = pin;
-        deskPin_ = deskPin;
         ++gen_;
     }
     if (!s.enabled) { stop(); return; }
@@ -350,12 +343,6 @@ std::string Server::pin() const
     return pin_;
 }
 
-std::string Server::deskPin() const
-{
-    std::lock_guard<std::mutex> lk(mx_);
-    return deskPin_;
-}
-
 Status Server::status() const
 {
     std::lock_guard<std::mutex> lk(mx_);
@@ -383,9 +370,6 @@ void Server::loop()
     std::uint32_t gen        = ~0u;
     Settings      cur;
     std::string   curPin;
-    std::string   curDeskPin;
-    PinChecker    deskChecker;
-    std::map<std::string, FailRecord> deskFails;
     // ⇨ THE PERFORMERS. This thread is the only one that touches them or the file.
     Book          book;
     parseBook(orc_handover::readFile(performersPath()), book);
@@ -468,11 +452,11 @@ void Server::loop()
             return;
         }
         if (r.path == "/deskws" && ws::isUpgrade(r)) {
-            // ⛔ Local network only, and never through the reverse proxy.
+            // ⛔ This Mac only, and never through the reverse proxy.
             if (!deskAllowed(c.peer, r.header("x-real-ip"), r.header("x-forwarded-for"),
                              r.header("host"), r.header("origin"))) {
                 orc::logLine("MoreMe: Studio Control refused for %s\n", c.peer.c_str());
-                queue(c, ws::response(403, "text/plain; charset=utf-8", "local network only"));
+                queue(c, ws::response(403, "text/plain; charset=utf-8", "this Mac only"));
                 c.closing = true;
                 return;
             }
@@ -494,39 +478,7 @@ void Server::loop()
         queue(c, resp);
         c.closing = true;
     };
-    auto deskText = [&](Conn& c, const std::string& text, long long nowMs) {
-        std::string t, pin;
-        {
-            wdl_json_parser jp;
-            const wdl_json_element* root = jp.parse(text.c_str(), static_cast<int>(text.size()));
-            JsonTreeGuard guard{jp, root};
-            if (!root || !root->is_object()) return;
-            if (const char* v = root->get_string_by_name("t")) t = v;
-            if (const char* v = root->get_string_by_name("pin")) pin = v;
-        }
-        if (t == "hello") {
-            const auto rec = [&]() -> const FailRecord* {
-                const auto it = deskFails.find(c.peer);
-                return it == deskFails.end() ? nullptr : &it->second;
-            };
-            long long left = lockLeft(rec(), nowMs);
-            if (!left && !pin.empty() && deskChecker.required()) {
-                if (deskChecker.ok(pin)) {
-                    deskFails.erase(c.peer);
-                    c.deskOk = true;
-                    c.deskSent.clear();
-                    return;
-                }
-                deskFails[c.peer] = afterFail(rec(), nowMs);
-                left = lockLeft(rec(), nowMs);
-                orc::logLine("MoreMe: wrong Studio Control PIN from %s\n", c.peer.c_str());
-            }
-            queue(c, ws::encodeFrame(ws::kText,
-                std::string("{\"t\":\"pin\",\"wrong\":") + ((!pin.empty() && !left) ? "1" : "0")
-                + ",\"wait\":" + std::to_string((left + 999) / 1000) + "}"));
-            return;
-        }
-        if (!c.deskOk) return;
+    auto deskText = [&](const std::string& text) {
         // A link is eight of these: hard to guess, short enough to read out.
         const auto token = [] {
             static const char k[] = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -550,7 +502,7 @@ void Server::loop()
             switch (c.reader.feed(f, text)) {
                 case ws::Reader::Got::Nothing: break;
                 case ws::Reader::Got::Message:
-                    if (c.desk) deskText(c, text, nowMs);
+                    if (c.desk) deskText(text);
                     else        mixer.message(c.mixId, text, nowMs);
                     break;
                 case ws::Reader::Got::Ping:    queue(c, ws::encodeFrame(ws::kPong, text)); break;
@@ -583,16 +535,6 @@ void Server::loop()
                     mixer.setPin(curPin);
                     if (!firstPin) orc::logLine("MoreMe: new PIN, phones asked again\n");
                     firstPin = false;
-                }
-                if (curDeskPin != deskPin_) {
-                    curDeskPin  = deskPin_;
-                    deskChecker = PinChecker(curDeskPin);
-                    deskFails.clear();
-                    for (auto& [fd, c] : conns) {
-                        if (!c.desk || !c.deskOk) continue;
-                        c.deskOk = false;   // whoever had the old one has no new one
-                        queue(c, ws::encodeFrame(ws::kText, R"({"t":"pin","wrong":0,"wait":0})"));
-                    }
                 }
                 if (web) retryAt = now;
                 if (ports) lastHost = now - std::chrono::hours(1);
@@ -688,7 +630,7 @@ void Server::loop()
             // Studio Control: its state, whenever any of it changed.
             std::string desk;
             for (auto& [fd, c] : conns) {
-                if (!c.desk || !c.deskOk || c.dead) continue;
+                if (!c.desk || c.dead) continue;
                 if (desk.empty()) {
                     std::string book1 = bookJson(book);
                     desk = "{\"t\":\"state\",\"book\":" + book1

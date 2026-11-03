@@ -497,15 +497,15 @@ int main()
         EXPECT(!ph::applyDesk(b, "not json", token) && !ph::applyDesk(b, R"({"t":"remove","id":"nobody"})", token));
         EXPECT(ph::validToken("abcd1234") && !ph::validToken("abc") && !ph::validToken("../etc") && !ph::validToken("ABCD"));
 
-        // ⛔ Studio Control: local network, directly, from a local name.
-        EXPECT(ph::deskAllowed("192.168.1.5", "", "", "192.168.1.2:8088", "http://192.168.1.2:8088"));
-        EXPECT(ph::deskAllowed("127.0.0.1", "", "", "127.0.0.1:8088", ""));
-        EXPECT(ph::deskAllowed("192.168.1.5", "", "", "studio.local:8088", "http://studio.local:8088"));
-        EXPECT(!ph::deskAllowed("8.8.8.8", "", "", "192.168.1.2:8088", ""));                       // from outside
-        EXPECT(!ph::deskAllowed("192.168.1.3", "8.8.8.8", "", "phones.example.com", ""));          // the proxy
-        EXPECT(!ph::deskAllowed("192.168.1.3", "", "8.8.8.8", "192.168.1.2:8088", ""));
-        EXPECT(!ph::deskAllowed("192.168.1.3", "", "", "phones.example.com", ""));                 // a proxy without headers
-        EXPECT(!ph::deskAllowed("192.168.1.5", "", "", "192.168.1.2:8088", "http://evil.example.com")); // another page
+        // ⛔ Studio Control: this Mac, directly, under the loopback's name.
+        EXPECT(ph::deskAllowed("127.0.0.1", "", "", "127.0.0.1:8088", "http://127.0.0.1:8088"));
+        EXPECT(ph::deskAllowed("127.0.0.1", "", "", "localhost:8088", ""));
+        EXPECT(!ph::deskAllowed("192.168.1.5", "", "", "192.168.1.2:8088", ""));                // a phone on the network
+        EXPECT(!ph::deskAllowed("8.8.8.8", "", "", "127.0.0.1:8088", ""));                      // from outside
+        EXPECT(!ph::deskAllowed("127.0.0.1", "8.8.8.8", "", "127.0.0.1", ""));                  // a proxy on this Mac
+        EXPECT(!ph::deskAllowed("127.0.0.1", "", "8.8.8.8", "127.0.0.1", ""));
+        EXPECT(!ph::deskAllowed("127.0.0.1", "", "", "phones.example.com", ""));                // a proxy without headers
+        EXPECT(!ph::deskAllowed("127.0.0.1", "", "", "127.0.0.1:8088", "http://evil.example.com")); // another page
 
         // The mixer: a link shows its performer, and only what they were given.
         rme::State st = rig();

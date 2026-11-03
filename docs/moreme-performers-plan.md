@@ -6,8 +6,8 @@ Frank 03.11.2026, angenommen mit allen Vorschlägen. Gebaut 03.11. (Frank: kommt
 Jeder Musiker bekommt sein eigenes Layout: eigener Ausgang, eigene Fader, eigene Freigaben, eigener Link. Der Tontechniker richtet das auf einer Seite ein.
 
 ## Entschieden
-- Studio Control ist eine lokale Seite, die ORC selbst ausliefert (`/desk`), nichts im Internet. Am Mac öffnet sie sich in einem eigenen ORC-Fenster mit Web-Ansicht, vom Tablet über die Adresse des Macs. Grund: läuft unter Windows unverändert, geht vom iPad, Vorschau der Handyseite direkt daneben.
-- `/desk` hat einen eigenen PIN und antwortet nur im lokalen Netz. Anfragen über den Reverse Proxy (X-Forwarded-For, X-Real-IP) oder von aussen werden abgewiesen.
+- Studio Control ist eine lokale Seite, die ORC selbst ausliefert (`/desk`), nichts im Internet. Sie öffnet sich in einem eigenen ORC-Fenster mit Web-Ansicht, auf dem Mac (Frank 03.11.: „mach ich doch über das menu am mac, nie am phone/tablet“). Grund für die Seite: läuft unter Windows unverändert, Vorschau der Handyseite direkt daneben.
+- `/desk` antwortet nur auf dem Mac selbst (127.0.0.1) und braucht darum keinen PIN. Anfragen übers Netz, über den Reverse Proxy (X-Forwarded-For, X-Real-IP) oder von einer fremden Seite im Browser werden abgewiesen.
 - Der Reiter MoreMe in ORC behält ein/aus, Ports, PIN, Studioname und Logo und bekommt den Knopf Studio Control, auch im ORC-Menü.
 - QR-Code und Link pro Performer. Der Handy-PIN gilt weiter, nur beim ersten Mal, das Handy merkt ihn sich. Der QR-Code enthält nie den PIN.
 - Ohne Performer bleibt die heutige Liste Phones 1-4.

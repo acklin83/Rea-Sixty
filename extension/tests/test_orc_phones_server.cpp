@@ -218,7 +218,7 @@ int main()
     s.sendPort = mix.port;
     s.recvPort = freePort(SOCK_DGRAM);
     ph::Server srv;
-    srv.apply(s, "2468", "9999");
+    srv.apply(s, "2468");
     // ⛔ Studio Control: refused through a proxy, whichever way it comes in.
     {
         const auto t0 = clk::now();
@@ -290,7 +290,7 @@ int main()
         EXPECT(srv.status().phones == 2 && srv.status().held == 1);
 
         // A new PIN: both back to the PIN page.
-        srv.apply(s, "1357", "9999");
+        srv.apply(s, "1357");
         EXPECT(has(b.messages(400), "\"t\":\"pin\""));
     }
     // Both closed: nobody left.
@@ -323,7 +323,7 @@ int main()
 
     // Off: the port is free again.
     s.enabled = false;
-    srv.apply(s, "1357", "9999");
+    srv.apply(s, "1357");
     {
         Browser d;
         EXPECT(!d.connect(s.webPort));

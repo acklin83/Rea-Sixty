@@ -63,10 +63,11 @@ bool applyDesk(Book& b, const std::string& json, const std::function<std::string
 // outputs without a role (rmeu::outputsWithoutRole, the rule of ORC's menus).
 std::string outputsJson(const reasixty::rme::State& st);
 
-// ⛔ STUDIO CONTROL IS FOR THE LOCAL NETWORK. The peer has to be private, no
-// reverse proxy in between (no forwarding header), and the Host and Origin have
-// to be a local name: a page on the internet cannot talk to it through the
-// engineer's browser.
+// ⛔ STUDIO CONTROL IS FOR THIS MAC (Frank 03.11.2026: "mach ich doch über das
+// menu am mac"), which is why it needs no PIN. The peer has to be the Mac itself,
+// no reverse proxy in between (no forwarding header), and the Host and Origin
+// have to be the loopback: a page on the internet cannot talk to it through the
+// browser on this Mac.
 bool deskAllowed(const std::string& peer, const std::string& xRealIp, const std::string& xForwardedFor,
                  const std::string& host, const std::string& origin);
 

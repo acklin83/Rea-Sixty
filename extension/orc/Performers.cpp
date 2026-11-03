@@ -317,11 +317,7 @@ std::string hostOnly(std::string h)
     return h;
 }
 
-bool localName(const std::string& h)
-{
-    if (h == "localhost" || isPrivate(h)) return true;
-    return h.size() > 6 && h.compare(h.size() - 6, 6, ".local") == 0;
-}
+bool loopbackName(const std::string& h) { return h == "127.0.0.1" || h == "localhost"; }
 
 } // namespace
 
@@ -330,9 +326,9 @@ bool deskAllowed(const std::string& peer, const std::string& xRealIp, const std:
 {
     std::string p = peer;
     if (p.rfind("::ffff:", 0) == 0) p = p.substr(7);
-    if (!isPrivate(p)) return false;
+    if (p != "127.0.0.1") return false;
     if (!xRealIp.empty() || !xForwardedFor.empty()) return false;
-    if (!localName(hostOnly(host))) return false;
+    if (!loopbackName(hostOnly(host))) return false;
     // A browser sends Origin with a WebSocket. A page elsewhere can't fake it.
     if (!origin.empty() && hostOnly(origin) != hostOnly(host)) return false;
     return true;

@@ -3,7 +3,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Studio Control</title>
-<!-- MoreMe's Studio Control (docs/moreme-performers-plan.md): served by ORC, local network only. -->
+<!-- MoreMe's Studio Control (docs/moreme-performers-plan.md): served by ORC, this Mac only. -->
 <style>
 :root{--bg:#0D0D0D;--bg2:#161616;--bg3:#1f1f1f;--line:#2a2a2a;--fg:#fff;--fg2:#A8A8A8;--fg3:#666;--accent:#0099FF;--red:#690000;--red2:#a00000;--green:#3fcf6a;--rad:14px}
 *{box-sizing:border-box}
@@ -72,11 +72,6 @@ input[type=color]{width:24px;height:24px;padding:0;border:none;background:none;b
 .frame.land{width:844px;height:390px;border-radius:22px;margin:12px auto 0}
 #wideSlot{padding:0 16px}
 .empty{color:var(--fg3);padding:24px 8px;text-align:center}
-#pinBox{position:fixed;inset:0;background:var(--bg);display:none;align-items:center;justify-content:center;z-index:50}
-#pinBox.open{display:flex}
-#pinBox form{width:280px;text-align:center}
-#pinBox input{text-align:center;font-size:20px;padding:12px;margin:12px 0}
-#pinErr{color:#ff8080;min-height:20px;font-size:13px}
 @media(max-width:1000px){.cols{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:560px){.three{grid-template-columns:1fr}.fr{grid-template-columns:44px 24px minmax(0,1fr) 100px 22px}}
 </style></head><body>
@@ -139,13 +134,6 @@ input[type=color]{width:24px;height:24px;padding:0;border:none;background:none;b
     <div id="phSlot"><iframe class="frame" id="frame" title="Phone preview"></iframe></div>
   </div>
 </div>
-<div id="pinBox"><form id="pinForm">
-  <div class="brand" style="justify-content:center"><span>More<span class="lo">Me</span></span></div>
-  <div class="page">Studio Control</div>
-  <input type="password" id="pinInput" inputmode="numeric" autocomplete="off" placeholder="PIN">
-  <button class="b" style="width:100%">Open</button>
-  <div id="pinErr"></div>
-</form></div>
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -159,25 +147,12 @@ const srcText=id=>{const[k,n]=id.split(':');return(k==='in'?'In ':'PB ')+n};
 function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))}
 function connect(){
   ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/deskws');
-  ws.onopen=()=>{$('#dot').classList.remove('off');send({t:'hello',pin:window.MOREME_DESK_PIN||localGet()||''})};
+  ws.onopen=()=>{$('#dot').classList.remove('off')};
   ws.onclose=()=>{$('#dot').classList.add('off');setTimeout(connect,1500)};
   ws.onmessage=e=>{let m;try{m=JSON.parse(e.data)}catch(_){return}on(m)};
 }
-function localGet(){try{return localStorage.getItem('moreme.deskpin')}catch(_){return null}}
-function localSet(v){try{v?localStorage.setItem('moreme.deskpin',v):localStorage.removeItem('moreme.deskpin')}catch(_){}}
-let tried='';
 function on(m){
-  if(m.t==='pin'){
-    $('#pinBox').classList.add('open');
-    if(m.wrong){localSet('');$('#pinErr').textContent='Wrong PIN'}
-    else if(m.wait)$('#pinErr').textContent='Too many tries. Wait '+Math.ceil(m.wait/60)+' min.';
-    else $('#pinErr').textContent='';
-    $('#pinInput').focus();
-    return;
-  }
   if(m.t==='state'){
-    if(tried){localSet(tried);tried=''}
-    $('#pinBox').classList.remove('open');
     S=m;window.MOREME_PREVIEW_PIN=m.phonePin;
     if(addWait){const n=m.book.performers.find(p=>!addWait.includes(p.id));if(n){curId=n.id;addWait=null}}
     if(!P())curId=S.book.performers.length?S.book.performers[0].id:null;
@@ -188,7 +163,6 @@ function on(m){
     draw();
   }
 }
-$('#pinForm').onsubmit=e=>{e.preventDefault();const v=$('#pinInput').value.trim();if(!v)return;tried=v;send({t:'hello',pin:v});$('#pinInput').value=''};
 document.addEventListener('focusout',()=>setTimeout(()=>{if(pendingDraw){pendingDraw=false;draw()}},0));
 
 // ---- edits: into the local copy at once, to ORC right after ----
