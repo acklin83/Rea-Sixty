@@ -259,8 +259,11 @@ void Uf8Surface::pushLight(bool asleep, int led, int lcd)
 std::array<u8s::SoftCell, 8> Uf8Surface::softCells_(Mode m)
 {
     namespace bnd = uf8::bindings;
-    if (m == Mode::TotalMix)
+    if (m == Mode::TotalMix) {
+        // A bank that went out of use (ORC's Soft Keys page) falls back to the first.
+        if (scBank_.load() >= bnd::uf1SideCarBankInUseCount(bnd::kUf1SideCarSetRme)) scBank_.store(0);
         return rme::softkeys::uf8Row(bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme) + scBank_.load(), &in_);
+    }
     std::array<u8s::SoftCell, 8> soft{};
     for (int k = 0; k < 8; ++k) {
         const roomcells::Cell c = (m == Mode::Hue) ? roomcells::hueScene(k)
@@ -687,7 +690,6 @@ void Uf8Surface::onButton_(std::uint8_t id, bool pressed)
     if (id >= kVpotBank && id < kVpotBank + kPages) {   // V-POT, 1-5: the TotalMix bank
         if (bankKeyLamp_(id - kVpotBank) != 0) {
             scBank_.store(id - kVpotBank);
-            in_.skHalf.store(0);
         }
         return;
     }

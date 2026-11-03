@@ -990,6 +990,9 @@ static int rmeVpotSlot_(int pot)
 // Gespeichert bei uf1SideCarBankBase(set) + Bank in denselben Arrays wie die
 // DAW-Baenke. Satz 0 = RME, Satz 1 = Item Volume (Bindings.h).
 std::atomic<int> g_sideCarBank[2] = { 0, 0 };
+// The TotalMix bank on the UF8. Same store, its own place in it: each surface can
+// show another bank at the same time (Frank 03.11.2026).
+std::atomic<int> g_sideCarBankUf8{ 0 };
 // Die Soft-Key-Bank, die das laufende Side-Car gerade zeigt (absolut im Store),
 // -1 ohne Side-Car.
 static int uf1SideCarBankNow_()
@@ -2353,7 +2356,7 @@ inline int sideCarBankKeyLamp_(int idx)
     if (sideCarKeys_() != ScKeys::TotalMix) return 0;
     namespace bnd = uf8::bindings;
     if (idx >= bnd::uf1SideCarBankInUseCount(bnd::kUf1SideCarSetRme)) return 0;
-    return g_sideCarBank[bnd::kUf1SideCarSetRme].load() == idx ? 2 : 1;
+    return g_sideCarBankUf8.load() == idx ? 2 : 1;
 }
 // Writes from Uf8Rme to TotalMix, through the side-car's one sender.
 static void rmeSend_(const reasixty::rme::strip::Writes& w);
@@ -9768,8 +9771,11 @@ static bool sideCarSoftCell_(int s, reasixty::rme::uf8side::SoftCell& out)
     if (k == ScKeys::None) return false;
     if (k == ScKeys::TotalMix) {
         namespace bnd = uf8::bindings;
+        // A bank that went out of use falls back to the first.
+        if (g_sideCarBankUf8.load() >= std::max(1, bnd::uf1SideCarBankInUseCount(bnd::kUf1SideCarSetRme)))
+            g_sideCarBankUf8.store(0);
         out = reasixty::rme::softkeys::uf8Row(bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme)
-            + g_sideCarBank[bnd::kUf1SideCarSetRme].load(), &g_rmeIn)[static_cast<size_t>(s)];
+            + g_sideCarBankUf8.load(), &g_rmeIn)[static_cast<size_t>(s)];
         return true;
     }
     using DK = uf8::bindings::DynamicBankKind;
@@ -27823,8 +27829,7 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                 if (id >= 0x68) {
                     // V-POT / 1-5: the TotalMix bank, as after the UF1's < >.
                     if (pressed && !btnWoke && sideCarBankKeyLamp_(id - 0x68) != 0) {
-                        g_sideCarBank[set].store(id - 0x68);
-                        g_rmeIn.skHalf.store(0);
+                        g_sideCarBankUf8.store(id - 0x68);
                     }
                 } else if (!(btnWoke && pressed)) {
                     const int k = id - 0x18;
@@ -27833,7 +27838,7 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                         // snapshot or layout loads on the main thread, where
                         // its name goes to the time field.
                         reasixty::rme::softkeys::press(
-                            bnd::uf1SideCarBankBase(set) + g_sideCarBank[set].load(),
+                            bnd::uf1SideCarBankBase(set) + g_sideCarBankUf8.load(),
                             k / 4, k % 4, pressed,
                             [](bnd::DynamicBankKind kind, int slot) {
                                 g_uf1DynBankReq.store((1u << 31)

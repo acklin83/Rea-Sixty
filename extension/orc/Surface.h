@@ -97,7 +97,8 @@ class Surface {
     // the surface writes to TotalMix and the motor is left alone; let go and the
     // painter drives it again.
     // The side-car's soft-key bank, relative within the RME set.
-    std::atomic<int>      scBank_{0};
+    std::atomic<int>      scBank_{0};      // the bank on the UF1
+    std::atomic<int>      uf8ScBank_{0};   // the bank on the UF8 (Frank 03.11.2026: one store, each shows its own)
 
     // ⇨ SLEEP, the extension's clock (SurfaceSleep.h): dark after the minutes
     // set on the Controls page, the first touch only wakes. The waking press is

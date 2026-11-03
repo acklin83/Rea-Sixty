@@ -275,7 +275,7 @@ void Surface::start()
         rme::setOscTrace(true);   // the mixer's side too: rme_osc_trace.log
     }
 
-    if (!uf8_) uf8_ = std::make_unique<Uf8Surface>(in_, scBank_, sleep_, settingsRequest_);
+    if (!uf8_) uf8_ = std::make_unique<Uf8Surface>(in_, uf8ScBank_, sleep_, settingsRequest_);
 
     quit_.store(false);
     th_    = std::thread([this] { loop_(); });
