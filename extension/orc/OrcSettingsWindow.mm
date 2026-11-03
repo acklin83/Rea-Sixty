@@ -4,6 +4,7 @@
 #import <ServiceManagement/ServiceManagement.h>
 
 #include "Bindings.h"
+#include "OrcLayout.h"
 #include "OrcConfig.h"
 #include "Palette.h"
 #include "RmeManager.h"
@@ -363,6 +364,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     for (NSView* sub in stack.arrangedSubviews)
         [sub setContentHuggingPriority:NSLayoutPriorityRequired - 1
                         forOrientation:NSLayoutConstraintOrientationHorizontal];
+    orc::keepTextWhole(stack);
     scroll.documentView = stack;
     [NSLayoutConstraint activateConstraints:@[
         [stack.topAnchor      constraintEqualToAnchor:scroll.contentView.topAnchor],

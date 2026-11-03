@@ -1,6 +1,7 @@
 #import "OrcModesTab.h"
 
 #include "DynaMountManager.h"
+#include "OrcLayout.h"
 #include "HueManager.h"
 #include "ObsManager.h"
 #include "OrcModes.h"
@@ -306,6 +307,7 @@ static void addEntry(NSPopUpButton* pop, NSString* title)
     for (NSView* sub in v.arrangedSubviews)
         [sub setContentHuggingPriority:NSLayoutPriorityRequired - 1
                         forOrientation:NSLayoutConstraintOrientationHorizontal];
+    orc::keepTextWhole(v);
     scroll.documentView = v;
     [NSLayoutConstraint activateConstraints:@[
         [v.topAnchor      constraintEqualToAnchor:clip.topAnchor],

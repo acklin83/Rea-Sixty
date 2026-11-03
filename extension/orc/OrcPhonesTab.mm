@@ -2,6 +2,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #include "OrcConfig.h"
+#include "OrcLayout.h"
 #include "PhonesServer.h"
 
 #include <string>
@@ -140,6 +141,7 @@ int port(NSTextField* f)
     for (NSView* sub in v.arrangedSubviews)
         [sub setContentHuggingPriority:NSLayoutPriorityRequired - 1
                         forOrientation:NSLayoutConstraintOrientationHorizontal];
+    orc::keepTextWhole(v);
     scroll.documentView = v;
     [NSLayoutConstraint activateConstraints:@[
         [v.topAnchor      constraintEqualToAnchor:scroll.contentView.topAnchor],
