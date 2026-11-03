@@ -157,7 +157,7 @@ int main()
     std::string j = "{\n";
 
     // ── the actions a soft key or a transport key can run in ORC ──────────
-    // The ORC window's own rule (rmeActions in OrcSettingsWindow.mm): the
+    // The settings page's own rule (rmeActions in orc/OrcSettingsModel.cpp): the
     // builtins in the RME category, and Sleep and the brightness steps
     // (category Brightness).
     j += "  \"actions\": [\n";

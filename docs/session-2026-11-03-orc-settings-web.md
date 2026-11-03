@@ -33,7 +33,8 @@ Plan: `docs/orc-settings-web-plan.md`. Frank: Leiste links, Off grau, `deskAllow
 ## Nicht geprüft
 ORC selbst wurde nicht gestartet (würde UF1, UF8 und den TotalMix-Remote übernehmen). Open at login, Logo-Dialog, Cmd-C und Cmd-V (hätte Franks Zwischenablage berührt), native Menüs per Maus, Hue mit echter Bridge, DynaMount mit echten Ständern, OBS, Import aus REAPER mit echten Werten, Studio Control mit echtem TotalMix, signierter Release-Build.
 
-## Offen
-- Stufe 6 nach Franks Test: `OrcSettingsWindow.mm`, `OrcModesTab`, `OrcPhonesTab`, `OrcLayout.h`, `Settings (old)…`, CMake, Kommentare in `main.cpp`, `OrcUi.h`, `tools/orc_manual_dump.cpp`.
-- Nur Frank: `rme.json` wird nicht atomar geschrieben, fixen oder nicht.
+## Danach
+- Frank 03.11.: „tests alle grün“. Darum altes Fenster entfernt: `OrcSettingsWindow`, `OrcModesTab`, `OrcPhonesTab`, `OrcLayout.h`, `OrcDeskWindow.h`, `Settings (old)…`.
+- Frank 03.11.: `rme.json` auch fixen. Temporäre Datei und `rename()`, Test `testRmeJsonWhole`. Der erste Test dazu war falsch (ein Host von 40000 Zeichen sprengt den Puffer in `configToJson`), die Zahl stammt aus dem korrigierten: 3656 von 8463 Lesungen kaputt, jetzt keine.
+- `orc_handover::writeFile` schreibt weiter direkt, siehe Plan.
 - Windows-Milestone: Plan Abschnitt 4.

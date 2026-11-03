@@ -1,7 +1,7 @@
 #pragma once
 //
-// ORC's face: the menu-bar item and the settings window. AppKit lives behind
-// this header and nowhere else, so everything above it stays plain C++.
+// ORC's face: the menu-bar item and the window around the settings page. AppKit
+// lives behind this header and nowhere else, so everything above it stays plain C++.
 //
 // ⛔ NOT A MIXER ON SCREEN. Frank, 25.09.2026: "wir brauchen ja eigentlich nur
 // die settings, die ganze bedienung machen wir ja eh übers uf1." ORC's controls
@@ -9,10 +9,14 @@
 // what, and a page for the things a knob cannot set: ports, which role sits on
 // which pot, which colour becomes which.
 //
-// ⛔ AppKit, not Dear ImGui. The first stage-7 build drew its own window with
-// ImGui and it looked like a tool, not like a Mac program. Also: vendor/ is in
-// .gitignore (WDL and the REAPER SDK arrive by FetchContent), so a vendored
-// ImGui would have lived on one machine and CI could never have built ORC.
+// ⛔ No Dear ImGui. The first stage-7 build drew its own window with ImGui and it
+// looked like a tool, not like a Mac program. Also: vendor/ is in .gitignore (WDL
+// and the REAPER SDK arrive by FetchContent), so a vendored ImGui would have lived
+// on one machine and CI could never have built ORC.
+//
+// ⇨ THE SETTINGS ARE A WEB PAGE IN ORC'S WINDOW since 03.11.2026 (Frank:
+// docs/orc-settings-web-plan.md), the same page later under Windows. The status
+// item and the window around the page stay native.
 //
 // ⛔ Objective-C++, no Swift. A Swift target would be a second toolchain in a
 // CMake build that has none; AppKit answers the same questions from .mm files

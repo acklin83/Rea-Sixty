@@ -1,11 +1,11 @@
 # ORC: Einstellungsfenster als lokale Web-Seite, Plan
 
-Frank 03.11.2026. Plan freigegeben, Mockup abgenommen, Stufen 1 bis 5 gebaut. Stufe 6 (AppKit weg) nach Franks Test.
+Frank 03.11.2026. Plan freigegeben, Mockup abgenommen, alle Stufen gebaut, von Frank am Gerät geprüft („tests alle grün“), altes Fenster entfernt. Nicht released.
 
 ## Ziel
 Das ganze Fenster ORC Settings wird eine Seite im Stil von Studio Control, die ORC selbst ausliefert und in einem eigenen Fenster zeigt. Studio Control zieht in dasselbe Fenster (Frank 03.11.). Dieselbe Seite läuft später unter Windows. Kein Control geht verloren, kein Wert bekommt einen zweiten Besitzer.
 
-Kommt ins selbe Release wie ORC 1.6.0 / Rea-Sixty v0.9.0 (Frank 03.11.: „das neue Settings kommt in dieses Release“). Gebaut auf `main`, das alte Fenster bleibt bis zum letzten Commit unter `Settings (old)…` erreichbar.
+Kommt ins selbe Release wie ORC 1.6.0 / Rea-Sixty v0.9.0 (Frank 03.11.: „das neue Settings kommt in dieses Release“). Gebaut auf `main`, das alte Fenster lief bis zu Franks Test unter `Settings (old)…` mit.
 
 ## 1. Wer serviert die Seite
 Entscheid: ein eigener kleiner Server `orc/SettingsServer.{h,cpp}`, nicht `ph::Server`.
@@ -44,7 +44,7 @@ Neu `orc/OrcSettingsModel.{h,cpp}`, reines C++ ohne Socket und ohne AppKit, im S
 - `stateJson()`: liest die Manager und baut den Zustand für die Seite.
 - `apply(json)`: eine Nachricht von der Seite, ein Aufruf derselben Setter wie heute.
 
-Dorthin wandert alles, was heute in den `.mm`-Dateien Logik ist: `targetChoices`, `outputChoices`, `rmeActions`, `actionTitle`, `kTransport`, `kPushes`, die Regeln aus `skLabelChanged`, `skActionChanged`, `skKindChanged`, `speedChanged`, `sleepChanged`, `validPin`, `obsChanged`, `hueTargetChanged`. Abweichung vom ersten Plan: weil alles in einem Zug ins selbe Release geht, bleiben die AppKit-Reiter unangetastet und das Modell hat bis zu Stufe 6 eine Kopie dieser Regeln. Die Tests prüfen das Modell gegen die Regeln aus dem AppKit-Code, Stufe 6 löscht die alte Kopie. Der Umbau bleibt so bis zuletzt einfach rückgängig zu machen.
+Dorthin wandert alles, was heute in den `.mm`-Dateien Logik ist: `targetChoices`, `outputChoices`, `rmeActions`, `actionTitle`, `kTransport`, `kPushes`, die Regeln aus `skLabelChanged`, `skActionChanged`, `skKindChanged`, `speedChanged`, `sleepChanged`, `validPin`, `obsChanged`, `hueTargetChanged`. Abweichung vom ersten Plan: weil alles in einem Zug ins selbe Release ging, blieben die AppKit-Reiter unangetastet und das Modell hatte bis zu Stufe 6 eine Kopie dieser Regeln. Stufe 6 hat die alte Kopie gelöscht.
 
 Die Seite rechnet nichts. Sie bekommt Listen und je Feld, was gewählt ist, und schickt, was der Nutzer geändert hat.
 
@@ -159,8 +159,9 @@ Dazu: Tooltip „Only for the ORC in Applications“ am gesperrten Open at login
 ## Was ich nicht baue
 Keine neuen Einstellungen, keine Hilfetexte auf den Seiten (Frank 27.09.), keine Suche, keine Bedienung vom Tablet, keinen PIN auf der Seite. Keine Änderung an den Dateiformaten, Rea-Sixty liest `rme.json` und `orc.json` weiter wie bisher. Kein Umbau von `PhonesServer.cpp` über die drei Helfer hinaus. Keine Teile der Windows-Milestone ausser dem, was hier steht.
 
-## Aufgefallen, nicht Teil des Plans
-- `saveRmeConfig` und `orc_handover::writeFile` schreiben direkt in die Datei, ohne temporäre Datei und Umbenennen, und `takeConfigDirty` schützt nicht vor zwei gleichzeitigen Schreibern (Fenster, Surface-Thread). Rea-Sixty liest `rme.json`. Was der Leser bei einer halben Datei tut, habe ich nicht untersucht.
+## Aufgefallen und behoben
+- `deskAllowed` verglich den Origin ohne Port (`44c038f6`).
+- `rme.json` war nicht atomar: Im Test mit zwei schreibenden Threads fand ein Leser die Datei in 3656 von 8463 Fällen leer oder abgeschnitten, jetzt in keinem. Temporäre Datei und `rename()`, Speichern nacheinander. `orc_handover::writeFile` (`moreme.json`, `modes/*`, Übergabedateien) schreibt weiter direkt. Der Header läuft auch unter Windows, wo `rename` über eine bestehende Datei scheitert. Frank hat nur `rme.json` freigegeben.
 
 ## Entschieden (Frank 03.11.)
 - Nur dunkel wie Studio Control.
@@ -171,7 +172,7 @@ Keine neuen Einstellungen, keine Hilfetexte auf den Seiten (Frank 27.09.), keine
 - Das neue Settings kommt ins selbe Release.
 
 ## Noch offen
-- `rme.json` nicht atomar geschrieben (siehe „Aufgefallen“): Frank hat ihn nicht freigegeben.
+- Nichts in diesem Plan. Die Windows-Teile gehören zur Milestone ORC für Windows.
 
 ## Belegt und nicht belegt
 Aus dem Code gelesen: alle Tabellen oben, Sperren und Schreiber. Gelaufen: `test_orc_settings`, die Seite gegen den echten Server in WebKit und Chromium (Scratch-HOME, falsches TotalMix), `OrcWebWindow.mm` in einem Scratch-Bundle ausserhalb des Bildschirms. Nicht gelaufen: ORC selbst, Open at login, der Logo-Dialog, Cmd-C und Cmd-V. Hue-Setter nur an den Sperren geprüft: `hm.setSlot` und Co. ohne Bridge, Auswahl aus echten Lampen und Szenen nicht.

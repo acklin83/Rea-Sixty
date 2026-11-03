@@ -3,7 +3,6 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <WebKit/WebKit.h>
 
-#include "OrcDeskWindow.h"
 #include "SettingsServer.h"
 
 #include <string>
@@ -213,9 +212,3 @@ void installEditMenu()
 }
 
 @end
-
-namespace orc {
-
-void openStudioControl() { [[OrcWebSettings shared] presentPage:@"moreme"]; }
-
-} // namespace orc

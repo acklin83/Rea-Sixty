@@ -28,7 +28,9 @@
 //   orc/Surface.cpp           the UF1 and TotalMix. Its own thread. No AppKit.
 //   orc/OrcConfig.cpp         where ORC's own files live. Plain C++.
 //   orc/OrcApp.mm             the status item and its menu. AppKit.
-//   orc/OrcSettingsWindow.mm  the settings page. AppKit.
+//   orc/OrcWebWindow.mm       the window around the settings page. AppKit.
+//   orc/SettingsServer.cpp    serves that page, this Mac only. Its own thread.
+//   orc/OrcSettingsModel.cpp  what the page shows and changes. Plain C++.
 //
 
 #include "OrcLog.h"

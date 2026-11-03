@@ -1248,14 +1248,12 @@ if(APPLE)
         orc/main.cpp
         # Stage 7: the tick that used to be main()'s body, and the Mac side.
         # ⛔ Surface has the device and the mixer and no AppKit; OrcApp and
-        # OrcSettingsWindow have AppKit and neither of the other two.
+        # OrcWebWindow have AppKit and neither of the other two.
         orc/Surface.cpp
         orc/Uf8Surface.cpp
         orc/OrcModes.cpp
         orc/OrcConfig.cpp
         orc/OrcApp.mm
-        orc/OrcSettingsWindow.mm
-        orc/OrcModesTab.mm
         orc/OrcLogo.cpp
         # ORC MoreMe, the headphone mixer in the browser (docs/orc-phones-plan.md):
         # the mixer's logic, the WebSocket codec, the server and its page.
@@ -1263,7 +1261,6 @@ if(APPLE)
         orc/Performers.cpp
         orc/WebSocket.cpp
         orc/PhonesServer.cpp
-        orc/OrcPhonesTab.mm
         # The settings as a page in ORC's window (docs/orc-settings-web-plan.md).
         orc/OrcSettingsModel.cpp
         orc/SettingsServer.cpp
@@ -1280,18 +1277,15 @@ if(APPLE)
     # the POST_BUILD signing, and the signature then missed the file (29.09.).
     set_source_files_properties("${CMAKE_BINARY_DIR}/ORC.icns" PROPERTIES
         GENERATED TRUE HEADER_FILE_ONLY TRUE)
-    # ⛔ NATIVE APPKIT, NOT A DRAWN UI (Frank, 25.09.2026). The first stage-7
-    # build vendored Dear ImGui and drew its own window; it looked like a tool
-    # rather than a Mac program, and vendor/ is in .gitignore (WDL and the
-    # REAPER SDK arrive by FetchContent), so those files would have lived on one
-    # machine and CI could never have built this target. AppKit needs nothing
-    # vendored. No Swift either: that would be a second toolchain in a build
-    # that has none, and .mm files already compile here.
+    # ⛔ NO DEAR IMGUI (Frank, 25.09.2026). The first stage-7 build vendored it and
+    # drew its own window; it looked like a tool rather than a Mac program, and
+    # vendor/ is in .gitignore (WDL and the REAPER SDK arrive by FetchContent), so
+    # those files would have lived on one machine and CI could never have built
+    # this target. The status item and the window are AppKit, the settings a web
+    # page in that window (docs/orc-settings-web-plan.md). No Swift: that would be
+    # a second toolchain in a build that has none, and .mm files already compile.
     set_source_files_properties(
         orc/OrcApp.mm
-        orc/OrcSettingsWindow.mm
-        orc/OrcModesTab.mm
-        orc/OrcPhonesTab.mm
         orc/OrcWebWindow.mm
         PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     # WDL only for its JSON parser, which RmeManager reads rme.json with. No
