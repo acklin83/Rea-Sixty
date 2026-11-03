@@ -1498,6 +1498,31 @@ bool              pasteBankFromClipboard(int layer, int quick, int subBank, int 
 bool              clearBank(int layer, int quick, int subBank, int mod,
                             bool bothSets);
 
+// ---- Drag and drop in the soft-key matrices (Settings, Bindings) ----------
+// Swap: both places trade what they hold, so an empty target is simply a move
+// and nothing is ever lost. There is no undo on this page. Copy (Cmd held at the
+// drop): the target is overwritten, the source stays.
+// `mod` follows the bank clipboard's rule: dragged on Plain the whole bank goes,
+// Shift included, dragged on Shift only the Shift set. A bank copy takes Shift
+// along only where Shift holds something and otherwise leaves the target's alone,
+// exactly like Copy and Paste. The clipboard itself is not touched.
+// What goes with a bank: its keys, name and dynamic kind, and the LED of its
+// selector key. Things that point at a PLACE stay put: the startup bank, Soft-Key
+// Set: engage N and uf1_bank_select then lead to whatever is there now.
+// Each returns false for a bad address or a drop on itself, and writes nothing.
+enum class SoftKeyDrop : uint8_t { Swap, Copy };
+bool dropBank(int srcLayer, int srcQuick, int srcSubBank,
+              int dstLayer, int dstQuick, int dstSubBank, int mod, SoftKeyDrop how);
+// All six banks with both sets, the LEDs and the set's name. Refuses Sets 8 and 9.
+bool dropSoftKeySet(int srcSet, int dstSet, SoftKeyDrop how);
+bool dropUf8Key(int layer, int quick, int subBank, int srcSlot, int dstSlot,
+                int mod, SoftKeyDrop how);
+bool dropUf1Bank(int srcBank, int dstBank, int mod, SoftKeyDrop how);
+bool dropUf1Key(int srcBank, int srcSlot, int dstBank, int dstSlot, int mod,
+                SoftKeyDrop how);
+// Is there anything on this key to drag? On Plain the whole key, Shift included.
+bool softKeyHasContent(const Binding& bd, int mod);
+
 // ---- Factory Rea-Sixty soft-key bank presets ----------------------------
 // Read-only curated banks built ONLY from Rea-Sixty's own built-ins (the
 // many that have no dedicated UF8 key). Six banks of 8 slots each; their

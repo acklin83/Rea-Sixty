@@ -905,6 +905,12 @@ if(NOT WIN32)
     target_include_directories(test_midi_cc_bindings PRIVATE src "${WDL_DIR}")
     target_link_libraries(test_midi_cc_bindings PRIVATE Threads::Threads)
     add_test(NAME midi_cc_bindings COMMAND test_midi_cc_bindings)
+    # Dragging soft-key banks, sets and keys in Settings: the store side.
+    add_executable(test_softkey_drop tests/test_softkey_drop.cpp
+        src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp)
+    target_include_directories(test_softkey_drop PRIVATE src "${WDL_DIR}")
+    target_link_libraries(test_softkey_drop PRIVATE Threads::Threads)
+    add_test(NAME softkey_drop COMMAND test_softkey_drop)
     # Shift + Layer 2 / 3 = the Hue / DynaMount UF8 side-car (factory, v56 upgrade).
     add_executable(test_sidecar_keys tests/test_sidecar_keys.cpp
         src/Bindings.cpp src/KeyMacro.cpp src/LogPath.cpp)

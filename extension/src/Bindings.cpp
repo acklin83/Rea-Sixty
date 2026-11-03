@@ -7540,6 +7540,45 @@ struct BankClipboard_ {
     std::string     label;                      // human text for the menu
 };
 BankClipboard_ g_bankClip;
+
+// What a copy of a bank carries, and where it lands. The clipboard and a drag
+// with Cmd held are the same copy; only the clipboard keeps it for later.
+// Caller holds g_cfgMutex.
+void captureBankLocked_(const UserQuickSubBank& sb, int mod, BankClipboard_& c)
+{
+    // Same rule as saveBankPreset: copying Plain takes Shift along when Shift
+    // holds something, copying while ON Shift is that one set.
+    const bool takeShift = (mod == 0) && subBankSetHasContentLocked_(sb, 1);
+    for (int s = 0; s < kSlotsPerSubBank; ++s) {
+        capturePresetSlotLocked_(sb.slots[s], mod, c.slots[s]);
+        if (takeShift) capturePresetSlotLocked_(sb.slots[s], 1, c.shiftSlots[s]);
+    }
+    c.hasShift  = takeShift;
+    c.name      = sb.name[mod];
+    c.dyn       = sb.dynamic[mod];
+    if (takeShift) { c.nameShift = sb.name[1]; c.dynShift = sb.dynamic[1]; }
+    c.full      = true;
+}
+void applyBankLocked_(const BankClipboard_& c, UserQuickSubBank& sb, int mod)
+{
+    const int dstMod = c.hasShift ? 0 : mod;
+    for (int s = 0; s < kSlotsPerSubBank; ++s) {
+        applyPresetSlotLocked_(c.slots[s], dstMod, sb.slots[s]);
+        if (c.hasShift)
+            applyPresetSlotLocked_(c.shiftSlots[s], 1, sb.slots[s]);
+    }
+    sb.name[dstMod]    = c.name;
+    // ⇨ AND THE KIND COMES ALONG, unlike recallBankPreset which clears it. A
+    // preset is eight static slots, so recalling one onto a dynamic bank has to
+    // make it static or the slots would be unreachable. A COPY is the cell
+    // itself: copying a Favourites bank and pasting a static one would not be a
+    // copy of anything (Frank 2026-09-04).
+    sb.dynamic[dstMod] = c.dyn;
+    if (c.hasShift) {
+        sb.name[1]    = c.nameShift;
+        sb.dynamic[1] = c.dynShift;
+    }
+}
 }  // namespace
 
 bool bankClipboardFull()     { std::lock_guard<std::mutex> lk(g_cfgMutex);
@@ -7556,22 +7595,10 @@ bool copyBankToClipboard(int layer, int quick, int subBank, int mod,
     if (!userQuickSlotInRange_(layer, quick, subBank, 0)) return false;
     if (mod < 0 || mod >= kSoftKeyModifierSets) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    const UserQuickSubBank& sb =
-        g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank];
-    // Same rule as saveBankPreset: copying Plain takes Shift along when Shift
-    // holds something, copying while ON Shift is that one set.
-    const bool takeShift = (mod == 0) && subBankSetHasContentLocked_(sb, 1);
     BankClipboard_ c;
-    for (int s = 0; s < kSlotsPerSubBank; ++s) {
-        capturePresetSlotLocked_(sb.slots[s], mod, c.slots[s]);
-        if (takeShift) capturePresetSlotLocked_(sb.slots[s], 1, c.shiftSlots[s]);
-    }
-    c.hasShift  = takeShift;
-    c.name      = sb.name[mod];
-    c.dyn       = sb.dynamic[mod];
-    if (takeShift) { c.nameShift = sb.name[1]; c.dynShift = sb.dynamic[1]; }
+    captureBankLocked_(g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank],
+                       mod, c);
     c.label     = label;
-    c.full      = true;
     g_bankClip  = std::move(c);
     return true;
 }
@@ -7582,24 +7609,8 @@ bool pasteBankFromClipboard(int layer, int quick, int subBank, int mod)
     if (mod < 0 || mod >= kSoftKeyModifierSets) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     if (!g_bankClip.full) return false;
-    auto& sb = g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank];
-    const int dstMod = g_bankClip.hasShift ? 0 : mod;
-    for (int s = 0; s < kSlotsPerSubBank; ++s) {
-        applyPresetSlotLocked_(g_bankClip.slots[s], dstMod, sb.slots[s]);
-        if (g_bankClip.hasShift)
-            applyPresetSlotLocked_(g_bankClip.shiftSlots[s], 1, sb.slots[s]);
-    }
-    sb.name[dstMod]    = g_bankClip.name;
-    // ⇨ AND THE KIND COMES ALONG, unlike recallBankPreset which clears it. A
-    // preset is eight static slots, so recalling one onto a dynamic bank has to
-    // make it static or the slots would be unreachable. A COPY is the cell
-    // itself: copying a Favourites bank and pasting a static one would not be a
-    // copy of anything (Frank 2026-09-04).
-    sb.dynamic[dstMod] = g_bankClip.dyn;
-    if (g_bankClip.hasShift) {
-        sb.name[1]    = g_bankClip.nameShift;
-        sb.dynamic[1] = g_bankClip.dynShift;
-    }
+    applyBankLocked_(g_bankClip,
+                     g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank], mod);
     persistLocked_();
     return true;
 }
@@ -7644,6 +7655,44 @@ struct Uf1BankClipboard_ {
     std::string     label;                      // human text for the menu
 };
 Uf1BankClipboard_ g_uf1BankClip;
+
+// The UF1 twins of captureBankLocked_ / applyBankLocked_. Caller holds g_cfgMutex.
+void captureUf1BankLocked_(int bank, int mod, Uf1BankClipboard_& c)
+{
+    const bool takeShift = (mod == 0) && uf1BankSetHasContentLocked_(bank, 1);
+    for (int s = 0; s < kUf1SoftBankSlots; ++s) {
+        capturePresetSlotLocked_(g_cfg.uf1SoftBanks[bank][s], mod, c.slots[s]);
+        if (takeShift)
+            capturePresetSlotLocked_(g_cfg.uf1SoftBanks[bank][s], 1,
+                                     c.shiftSlots[s]);
+    }
+    c.hasShift = takeShift;
+    c.name     = g_cfg.uf1SoftBankName[bank][mod];
+    c.dyn      = g_cfg.uf1SoftBankDynamic[bank][mod];
+    if (takeShift) {
+        c.nameShift = g_cfg.uf1SoftBankName[bank][1];
+        c.dynShift  = g_cfg.uf1SoftBankDynamic[bank][1];
+    }
+    c.full     = true;
+}
+void applyUf1BankLocked_(const Uf1BankClipboard_& c, int bank, int mod)
+{
+    const int dstMod = c.hasShift ? 0 : mod;
+    for (int s = 0; s < kUf1SoftBankSlots; ++s) {
+        applyPresetSlotLocked_(c.slots[s], dstMod, g_cfg.uf1SoftBanks[bank][s]);
+        if (c.hasShift)
+            applyPresetSlotLocked_(c.shiftSlots[s], 1,
+                                   g_cfg.uf1SoftBanks[bank][s]);
+    }
+    // The kind comes along, for the reason the UF8 paste documents: a copy that
+    // turned a Favourites bank into a static one would not be a copy.
+    g_cfg.uf1SoftBankName[bank][dstMod]    = c.name;
+    g_cfg.uf1SoftBankDynamic[bank][dstMod] = c.dyn;
+    if (c.hasShift) {
+        g_cfg.uf1SoftBankName[bank][1]    = c.nameShift;
+        g_cfg.uf1SoftBankDynamic[bank][1] = c.dynShift;
+    }
+}
 }  // namespace
 
 bool uf1BankClipboardFull()     { std::lock_guard<std::mutex> lk(g_cfgMutex);
@@ -7661,23 +7710,9 @@ bool copyUf1BankToClipboard(int bank, int mod, const std::string& label)
     if (bank < 0 || bank >= kUf1SoftBankStore) return false;
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
-    const bool takeShift = (mod == 0) && uf1BankSetHasContentLocked_(bank, 1);
     Uf1BankClipboard_ c;
-    for (int s = 0; s < kUf1SoftBankSlots; ++s) {
-        capturePresetSlotLocked_(g_cfg.uf1SoftBanks[bank][s], mod, c.slots[s]);
-        if (takeShift)
-            capturePresetSlotLocked_(g_cfg.uf1SoftBanks[bank][s], 1,
-                                     c.shiftSlots[s]);
-    }
-    c.hasShift = takeShift;
-    c.name     = g_cfg.uf1SoftBankName[bank][mod];
-    c.dyn      = g_cfg.uf1SoftBankDynamic[bank][mod];
-    if (takeShift) {
-        c.nameShift = g_cfg.uf1SoftBankName[bank][1];
-        c.dynShift  = g_cfg.uf1SoftBankDynamic[bank][1];
-    }
+    captureUf1BankLocked_(bank, mod, c);
     c.label       = label;
-    c.full        = true;
     g_uf1BankClip = std::move(c);
     return true;
 }
@@ -7688,22 +7723,7 @@ bool pasteUf1BankFromClipboard(int bank, int mod)
     if (mod  < 0 || mod  >= kSoftKeyModifierSets) return false;
     std::lock_guard<std::mutex> lk(g_cfgMutex);
     if (!g_uf1BankClip.full) return false;
-    const int dstMod = g_uf1BankClip.hasShift ? 0 : mod;
-    for (int s = 0; s < kUf1SoftBankSlots; ++s) {
-        applyPresetSlotLocked_(g_uf1BankClip.slots[s], dstMod,
-                               g_cfg.uf1SoftBanks[bank][s]);
-        if (g_uf1BankClip.hasShift)
-            applyPresetSlotLocked_(g_uf1BankClip.shiftSlots[s], 1,
-                                   g_cfg.uf1SoftBanks[bank][s]);
-    }
-    // The kind comes along, for the reason the UF8 paste documents: a copy that
-    // turned a Favourites bank into a static one would not be a copy.
-    g_cfg.uf1SoftBankName[bank][dstMod]    = g_uf1BankClip.name;
-    g_cfg.uf1SoftBankDynamic[bank][dstMod] = g_uf1BankClip.dyn;
-    if (g_uf1BankClip.hasShift) {
-        g_cfg.uf1SoftBankName[bank][1]    = g_uf1BankClip.nameShift;
-        g_cfg.uf1SoftBankDynamic[bank][1] = g_uf1BankClip.dynShift;
-    }
+    applyUf1BankLocked_(g_uf1BankClip, bank, mod);
     persistLocked_();
     return true;
 }
@@ -7722,6 +7742,171 @@ bool clearUf1Bank(int bank, int mod, bool bothSets)
     };
     wipe(bothSets ? 0 : mod);
     if (bothSets) wipe(1);
+    persistLocked_();
+    return true;
+}
+
+// ---- Drag and drop in the soft-key matrices ------------------------------
+// See Bindings.h. A swap goes straight through the store rather than through a
+// clipboard: it has to carry everything a place holds, including what a preset
+// slot leaves out, and it must not touch the clipboard the user may be holding.
+namespace {
+// One key, whole on Plain, the Shift half otherwise. The long- and double-press
+// flags belong to the key, not to a set, so a half swap leaves both keys with
+// the columns either of them was using (the same OR as applyPresetSlotLocked_).
+void swapKeyLocked_(Binding& a, Binding& b, int mod)
+{
+    if (mod == 0) { std::swap(a, b); return; }
+    std::swap(a.shortPress[mod],  b.shortPress[mod]);
+    std::swap(a.longPress[mod],   b.longPress[mod]);
+    std::swap(a.doublePress[mod], b.doublePress[mod]);
+    a.hasLongPress   = b.hasLongPress   = a.hasLongPress   || b.hasLongPress;
+    a.hasDoublePress = b.hasDoublePress = a.hasDoublePress || b.hasDoublePress;
+}
+
+void copyKeyLocked_(const Binding& src, Binding& dst, int mod)
+{
+    Binding half;
+    capturePresetSlotLocked_(src, mod, half);
+    applyPresetSlotLocked_(half, mod, dst);
+    if (mod == 0 && !(slotHasNoData_(src.shortPress[1])
+                      && slotHasNoData_(src.longPress[1])
+                      && slotHasNoData_(src.doublePress[1]))) {
+        capturePresetSlotLocked_(src, 1, half);
+        applyPresetSlotLocked_(half, 1, dst);
+    }
+}
+
+// The LED of a bank's selector key goes with the bank (Frank 2026-11-03), the
+// one difference from the clipboard, which leaves it behind.
+void swapBankLocked_(int srcL, int srcQ, int srcSb, int dstL, int dstQ, int dstSb,
+                     int mod)
+{
+    UserQuick& qa = g_cfg.userQuicks[srcL].quicks[srcQ];
+    UserQuick& qb = g_cfg.userQuicks[dstL].quicks[dstQ];
+    UserQuickSubBank& a = qa.subBanks[srcSb];
+    UserQuickSubBank& b = qb.subBanks[dstSb];
+    for (int s = 0; s < kSlotsPerSubBank; ++s)
+        swapKeyLocked_(a.slots[s], b.slots[s], mod);
+    const int endMod = (mod == 0) ? kSoftKeyModifierSets : mod + 1;
+    for (int m = mod; m < endMod; ++m) {
+        std::swap(a.name[m],    b.name[m]);
+        std::swap(a.dynamic[m], b.dynamic[m]);
+        std::swap(qa.subBankLeds[srcSb][m], qb.subBankLeds[dstSb][m]);
+    }
+}
+}  // namespace
+
+bool softKeyHasContent(const Binding& bd, int mod)
+{
+    if (mod == 0) return !bindingHasNoData_(bd);
+    if (mod < 0 || mod >= kSoftKeyModifierSets) return false;
+    return !(slotHasNoData_(bd.shortPress[mod])
+             && slotHasNoData_(bd.longPress[mod])
+             && slotHasNoData_(bd.doublePress[mod]));
+}
+
+bool dropBank(int srcL, int srcQ, int srcSb, int dstL, int dstQ, int dstSb,
+              int mod, SoftKeyDrop how)
+{
+    if (!userQuickSlotInRange_(srcL, srcQ, srcSb, 0)) return false;
+    if (!userQuickSlotInRange_(dstL, dstQ, dstSb, 0)) return false;
+    if (mod < 0 || mod >= kSoftKeyModifierSets)       return false;
+    if (srcL == dstL && srcQ == dstQ && srcSb == dstSb) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (how == SoftKeyDrop::Swap) {
+        swapBankLocked_(srcL, srcQ, srcSb, dstL, dstQ, dstSb, mod);
+    } else {
+        const UserQuick& qa = g_cfg.userQuicks[srcL].quicks[srcQ];
+        UserQuick&       qb = g_cfg.userQuicks[dstL].quicks[dstQ];
+        BankClipboard_ c;
+        captureBankLocked_(qa.subBanks[srcSb], mod, c);
+        applyBankLocked_(c, qb.subBanks[dstSb], mod);
+        qb.subBankLeds[dstSb][c.hasShift ? 0 : mod] =
+            qa.subBankLeds[srcSb][c.hasShift ? 0 : mod];
+        if (c.hasShift) qb.subBankLeds[dstSb][1] = qa.subBankLeds[srcSb][1];
+    }
+    persistLocked_();
+    return true;
+}
+
+bool dropSoftKeySet(int srcSet, int dstSet, SoftKeyDrop how)
+{
+    // Sets 8 and 9 are SSL's rows, and those stay where they are.
+    if (srcSet >= 8 || dstSet >= 8 || srcSet == dstSet) return false;
+    int srcL = 0, srcQ = 0, dstL = 0, dstQ = 0;
+    if (!softKeySetToLayerQuick(srcSet, srcL, srcQ)) return false;
+    if (!softKeySetToLayerQuick(dstSet, dstL, dstQ)) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    UserQuick& a = g_cfg.userQuicks[srcL].quicks[srcQ];
+    UserQuick& b = g_cfg.userQuicks[dstL].quicks[dstQ];
+    if (how == SoftKeyDrop::Swap) {
+        // One bank at a time rather than std::swap(a, b): a whole set does not
+        // belong on the stack ([[windows-stack-overflow-config]]).
+        for (int sb = 0; sb < kSubBanksPerQuick; ++sb)
+            swapBankLocked_(srcL, srcQ, sb, dstL, dstQ, sb, /*mod*/ 0);
+        std::swap(a.name, b.name);
+    } else {
+        b = a;
+    }
+    persistLocked_();
+    return true;
+}
+
+bool dropUf8Key(int layer, int quick, int subBank, int srcSlot, int dstSlot,
+                int mod, SoftKeyDrop how)
+{
+    if (!userQuickSlotInRange_(layer, quick, subBank, srcSlot)) return false;
+    if (!userQuickSlotInRange_(layer, quick, subBank, dstSlot)) return false;
+    if (mod < 0 || mod >= kSoftKeyModifierSets) return false;
+    if (srcSlot == dstSlot) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    auto& sb = g_cfg.userQuicks[layer].quicks[quick].subBanks[subBank];
+    if (how == SoftKeyDrop::Swap) swapKeyLocked_(sb.slots[srcSlot], sb.slots[dstSlot], mod);
+    else                          copyKeyLocked_(sb.slots[srcSlot], sb.slots[dstSlot], mod);
+    persistLocked_();
+    return true;
+}
+
+// The ten DAW banks only: the side-car's banks above them are ORC's.
+bool dropUf1Bank(int src, int dst, int mod, SoftKeyDrop how)
+{
+    if (src < 0 || src >= kUf1SoftBankCount) return false;
+    if (dst < 0 || dst >= kUf1SoftBankCount) return false;
+    if (mod < 0 || mod >= kSoftKeyModifierSets) return false;
+    if (src == dst) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    if (how == SoftKeyDrop::Swap) {
+        for (int s = 0; s < kUf1SoftBankSlots; ++s)
+            swapKeyLocked_(g_cfg.uf1SoftBanks[src][s], g_cfg.uf1SoftBanks[dst][s], mod);
+        const int endMod = (mod == 0) ? kSoftKeyModifierSets : mod + 1;
+        for (int m = mod; m < endMod; ++m) {
+            std::swap(g_cfg.uf1SoftBankName[src][m],    g_cfg.uf1SoftBankName[dst][m]);
+            std::swap(g_cfg.uf1SoftBankDynamic[src][m], g_cfg.uf1SoftBankDynamic[dst][m]);
+        }
+    } else {
+        Uf1BankClipboard_ c;
+        captureUf1BankLocked_(src, mod, c);
+        applyUf1BankLocked_(c, dst, mod);
+    }
+    persistLocked_();
+    return true;
+}
+
+bool dropUf1Key(int srcBank, int srcSlot, int dstBank, int dstSlot, int mod,
+                SoftKeyDrop how)
+{
+    if (srcBank < 0 || srcBank >= kUf1SoftBankCount) return false;
+    if (dstBank < 0 || dstBank >= kUf1SoftBankCount) return false;
+    if (srcSlot < 0 || srcSlot >= kUf1SoftBankSlots) return false;
+    if (dstSlot < 0 || dstSlot >= kUf1SoftBankSlots) return false;
+    if (mod < 0 || mod >= kSoftKeyModifierSets) return false;
+    if (srcBank == dstBank && srcSlot == dstSlot) return false;
+    std::lock_guard<std::mutex> lk(g_cfgMutex);
+    Binding& a = g_cfg.uf1SoftBanks[srcBank][srcSlot];
+    Binding& b = g_cfg.uf1SoftBanks[dstBank][dstSlot];
+    if (how == SoftKeyDrop::Swap) swapKeyLocked_(a, b, mod);
+    else                          copyKeyLocked_(a, b, mod);
     persistLocked_();
     return true;
 }

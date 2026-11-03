@@ -1118,6 +1118,42 @@ bool                    s_bindingCtxOpenRequested = false;
 // earlier cut put four radio buttons on every individual key; that was the same
 // data seen through the wrong lens.
 static int g_slotEditModIdx = 0;
+
+// ---- Dragging in the soft-key matrices ------------------------------------
+// Drop on a place and the two swap, so nothing is lost and an empty target is a
+// plain move: this page has no undo. Cmd held at the drop (ALT on Windows, the
+// same keyboard mirror every modifier here reads) copies instead. The store side
+// is uf8::bindings::dropBank and its siblings.
+static uf8::bindings::SoftKeyDrop softKeyDropNow_()
+{
+    using namespace uf8::bindings;
+    return modifierHeld(Modifier::Cmd) ? SoftKeyDrop::Copy : SoftKeyDrop::Swap;
+}
+static std::string softKeyDragText_(const std::string& what)
+{
+    return (softKeyDropNow_() == uf8::bindings::SoftKeyDrop::Copy ? "Copy " : "Move ")
+        + what;
+}
+// Both act on the item just submitted.
+static void softKeyDragSource_(ImGui_Context* ctx, const char* type,
+                               const char* payload, const std::string& what)
+{
+    int dndF = 0;
+    if (!ImGui_BeginDragDropSource(ctx, &dndF)) return;
+    ImGui_SetDragDropPayload(ctx, type, payload, nullptr);
+    ImGui_Text(ctx, softKeyDragText_(what).c_str());
+    ImGui_EndDragDropSource(ctx);
+}
+static bool softKeyDropTarget_(ImGui_Context* ctx, const char* type,
+                               char* buf, int bufSz)
+{
+    if (!ImGui_BeginDragDropTarget(ctx)) return false;
+    int af = 0;
+    const bool got = ImGui_AcceptDragDropPayload(ctx, type, buf, bufSz, &af);
+    ImGui_EndDragDropTarget(ctx);
+    return got;
+}
+
 // NOT called "layer" anywhere the user can see it — that word already means
 // the surface layers 1-3 (Frank 2026-08-18). These are modifiers.
 static const char* const kModifierName_[2] = { "Plain", "Shift" };
@@ -1604,6 +1640,7 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
     // same canvas item.
     int rightBtn = 1;
     const bool canvasRightClicked = ImGui_IsItemClicked(ctx, &rightBtn);
+    const bool canvasActive = ImGui_IsItemActive(ctx);
 
     double mxd = 0, myd = 0;
     ImGui_GetMousePos(ctx, &mxd, &myd);
@@ -1620,6 +1657,14 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
             && mx >= x && mx <= x + w
             && my >= y && my <= y + h;
     };
+
+    // ⇨ DRAGGING A SOFT-KEY ONTO ANOTHER. By hand, not ImGui's drag and drop: the
+    // whole schematic is one item, and an item cannot be a drop target for itself.
+    // Key and LCD under it both grab, because the LCD is where the name is.
+    static int   s_keyDragFrom = -1;
+    static bool  s_keyDragging = false;
+    static float s_keyDragX = 0, s_keyDragY = 0;
+    int keyDragOver = -1;
 
     // Layer whose bindings the schematic reflects (assigned-tint + hover
     // tooltip): per key, the layer that key fires from (layerForButton, see
@@ -1801,6 +1846,39 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
                    uf8::bindings::getUserQuickSlot(activeLayer, editQuick,
                                                    editSubBank, i),
                    g_slotEditModIdx);
+        {
+            // A key can be dragged where it is the user's: not one the SSL plug-in
+            // fills, and not a computed one, whose stored slot sits idle. A set
+            // looking at Plain's dynamic bank takes a key, as its editor does.
+            const char* const* sslEl = (editIsSslCsBc && editQuick >= 0)
+                ? reasixty_softkeyStockLabels(editQuick == 1 ? 1 : 0, editSubBank)
+                : nullptr;
+            const bool sslOwnsKey = sslEl && sslEl[i] && sslEl[i][0];
+            const bool dynIdle =
+                editDynKind != uf8::bindings::DynamicBankKind::None
+                && (g_slotEditModIdx == 0 || editDynOwnsSet);
+            const bool keyFree = editQuick >= 0 && editQuick <= 2
+                && editSubBank >= 0 && editSubBank <= 5
+                && !sslOwnsKey && !dynIdle;
+            const float zx = sx + 4, zy = 12, zw = kStripW - 8, zh = 86;
+            const bool overZone = mx >= zx && mx <= zx + zw
+                               && my >= zy && my <= zy + zh;
+            if (keyFree && canvasClicked && leftBtn == 0 && inside(zx, zy, zw, zh)
+                && uf8::bindings::softKeyHasContent(
+                       uf8::bindings::getUserQuickSlot(activeLayer, editQuick,
+                                                       editSubBank, i),
+                       g_slotEditModIdx)
+                && (editDynKind == uf8::bindings::DynamicBankKind::None
+                    || editSetOwnsKey)) {
+                s_keyDragFrom = i;
+                s_keyDragging = false;
+                s_keyDragX = mx;
+                s_keyDragY = my;
+            }
+            if (s_keyDragFrom >= 0 && keyFree && overZone) keyDragOver = i;
+            if (s_keyDragging && keyDragOver == i && i != s_keyDragFrom)
+                rect_(c, sx + 6, 12, kStripW - 12, 22, 0, 0xFFD040FF, 3.5);
+        }
         if (editDynKind != uf8::bindings::DynamicBankKind::None
             && !editSetOwnsKey) {
             scribble = dynKindShort_(editDynKind);
@@ -2204,6 +2282,28 @@ void drawUf8Vector(ImGui_Context* ctx, ButtonId& sel,
 
     // Brand line — replaces the SSL silk-screen with our product name.
     drawTextCentered_(c, 500, 470, 0x9CA0AAFF, "Rea-Sixty");
+
+    if (s_keyDragFrom >= 0) {
+        const float dx = mx - s_keyDragX, dy = my - s_keyDragY;
+        if (dx * dx + dy * dy > 36.0f) s_keyDragging = true;
+        if (s_keyDragging && canvasActive) {
+            char what[24];
+            snprintf(what, sizeof(what), "Soft-Key %d", s_keyDragFrom + 1);
+            ImGui_SetTooltip(ctx, softKeyDragText_(what).c_str());
+        }
+        if (!canvasActive) {
+            // Released on this very frame, or the pane went away mid-drag and the
+            // mouse is somewhere else by now, which drops nothing.
+            if (s_keyDragging && ImGui_IsMouseReleased(ctx, 0) && keyDragOver >= 0
+                && uf8::bindings::dropUf8Key(activeLayer, editQuick, editSubBank,
+                                             s_keyDragFrom, keyDragOver,
+                                             g_slotEditModIdx, softKeyDropNow_())) {
+                sel = kStripTsk[keyDragOver];
+            }
+            s_keyDragFrom = -1;
+            s_keyDragging = false;
+        }
+    }
 
     // Right-click context menu — must live inside the same canvas ID
     // scope as the OpenPopup call so the popup ID matches.
@@ -7868,6 +7968,11 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             // from the cells it governs (Frank 2026-09-02).
             if (ImGui_BeginTable(ctx, "##sk_set_matrix", 8, &mtFlags,
                                  nullptr, nullptr, nullptr)) {
+                // What a drop asked for. Carried out after the table, so no row
+                // paints half from the old store and half from the new one.
+                int bankDropL = -1, bankDropQ = -1, bankDropSb = -1, bankDropMod = 0;
+                int bankDropToL = -1, bankDropToQ = -1, bankDropToSb = -1;
+                int setDropFrom = 0, setDropTo = 0;
                 const int wFixedCol = ImGui_TableColumnFlags_WidthFixed;
                 int wSet = wFixedCol; double cwSet = scaleW_(ctx, 150.0);
                 ImGui_TableSetupColumn(ctx, "Set", &wSet, &cwSet, nullptr);
@@ -7920,17 +8025,39 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                     // the one thing a binding points at — Soft-Key Set: engage
                     // takes the NUMBER as its parameter (Frank 2026-09-02).
                     char num[8]; snprintf(num, sizeof(num), "%d", setNo);
-                    ImGui_TextDisabled(ctx, num);
+                    // ⇨ THE NUMBER IS ALSO THE HANDLE: drag it onto another number
+                    // and the two sets trade places. SSL's two rows stay put.
+                    const bool setMovable = setNo < 8;
+                    auto setDropHere = [&]() {
+                        char got[16] = {0};
+                        if (setMovable && softKeyDropTarget_(ctx, "SK_SET", got,
+                                static_cast<int>(sizeof(got)))) {
+                            setDropFrom = std::atoi(got);
+                            setDropTo   = setNo;
+                        }
+                    };
+                    if (setMovable) {
+                        char hid[32];
+                        snprintf(hid, sizeof(hid), "%d##sksethandle_%d", setNo, setNo);
+                        ImGui_SmallButton(ctx, hid);
+                        char what[24];
+                        snprintf(what, sizeof(what), "Set %d", setNo);
+                        softKeyDragSource_(ctx, "SK_SET", num, what);
+                        setDropHere();
+                    } else {
+                        ImGui_TextDisabled(ctx, num);
+                    }
                     ImGui_SameLine(ctx, nullptr, nullptr);
                     char hint[24]; snprintf(hint, sizeof(hint), "Set %d", setNo);
                     char nid[32];  snprintf(nid, sizeof(nid), "##skset_%d", setNo);
-                    ImGui_SetNextItemWidth(ctx, scaleW_(ctx, 122.0));
+                    ImGui_SetNextItemWidth(ctx, -1.0);
                     int nFlags = 0;
                     if (ImGui_InputTextWithHint(ctx, nid, hint, s_setNameBuf[bi],
                                                 sizeof(s_setNameBuf[bi]),
                                                 &nFlags, nullptr))
                         uf8::bindings::setSoftKeySetName(setNo, s_setNameBuf[bi]);
                     s_setNameEditing[bi] = ImGui_IsItemActive(ctx);
+                    setDropHere();
                     for (int c = 0; c < 6; ++c) {
                         ImGui_TableSetColumnIndex(ctx, c + 1);
                         char cell[80] = {0};
@@ -8053,10 +8180,48 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                                 s_bankCtxFilled = filled;
                                 s_bankCtxOpen   = true;
                             }
+                            // ⇨ DRAG A CELL ONTO A CELL. Not a page the plug-in
+                            // fills: the store only holds its free slots.
+                            if (!sslSet) {
+                                const int dragMod = g_slotEditModIdx;
+                                if (dragMod == 0
+                                        ? filled
+                                        : uf8::bindings::subBankSetHasContent(
+                                              sl, sq, c, dragMod)) {
+                                    char pl[32];
+                                    snprintf(pl, sizeof(pl), "%d,%d,%d,%d",
+                                             sl, sq, c, dragMod);
+                                    softKeyDragSource_(ctx, "SK_BANK", pl,
+                                        bankCellLabel_(setNo, c, dragMod));
+                                }
+                                char got[32] = {0};
+                                if (softKeyDropTarget_(ctx, "SK_BANK", got,
+                                        static_cast<int>(sizeof(got)))
+                                    && std::sscanf(got, "%d,%d,%d,%d", &bankDropL,
+                                                   &bankDropQ, &bankDropSb,
+                                                   &bankDropMod) == 4) {
+                                    bankDropToL  = sl;
+                                    bankDropToQ  = sq;
+                                    bankDropToSb = c;
+                                }
+                            }
                         }
                     }
                 }
                 ImGui_EndTable(ctx);
+                // The dragged bank is now in the cell it was dropped on, and that
+                // is the bank the pane and the surface go to, like a click on it.
+                if (bankDropToL >= 0) {
+                    s_bankKeepScroll = ImGui_GetScrollY(ctx);
+                    if (uf8::bindings::dropBank(bankDropL, bankDropQ, bankDropSb,
+                                                bankDropToL, bankDropToQ, bankDropToSb,
+                                                bankDropMod, softKeyDropNow_()))
+                        reasixty_engageSoftKeyBank(bankDropToL, bankDropToQ,
+                                                   bankDropToSb);
+                }
+                if (setDropTo > 0)
+                    uf8::bindings::dropSoftKeySet(setDropFrom, setDropTo,
+                                                  softKeyDropNow_());
                 renderBankMatrixContextMenu_(ctx);
                 renderBankMatrixModals_(ctx);
             }
@@ -8253,6 +8418,10 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
             // to be readable inside it.
             if (ImGui_BeginTable(ctx, "##uf1_bank_matrix", 1 + kUf1SoftBankCount,
                                  &mtFlags, nullptr, nullptr, nullptr)) {
+                // What a drop asked for, carried out after the table.
+                int uf1BankDropFrom = -1, uf1BankDropTo = -1, uf1BankDropMod = 0;
+                int uf1KeyDropBank = -1, uf1KeyDropSlot = -1, uf1KeyDropMod = 0;
+                int uf1KeyDropToBank = -1, uf1KeyDropToSlot = -1;
                 const int wFixedCol = ImGui_TableColumnFlags_WidthFixed;
                 int wSlot = wFixedCol; double cwSlot = scaleW_(ctx, 132.0);
                 ImGui_TableSetupColumn(ctx, "##uf1mx_slot", &wSlot, &cwSlot,
@@ -8421,6 +8590,20 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                                      getUf1SoftBankName(b, g_slotEditModIdx)
                                          .c_str());
                         }
+                        // ⇨ THE HEADER IS THE BANK, SO IT IS WHAT YOU DRAG.
+                        if (uf1BankMenuFilled_(b, g_slotEditModIdx)) {
+                            char pl[24];
+                            snprintf(pl, sizeof(pl), "%d,%d", b, g_slotEditModIdx);
+                            softKeyDragSource_(ctx, "SK_UF1BANK", pl,
+                                uf1BankCellLabel_(b, g_slotEditModIdx));
+                        }
+                        char got[24] = {0};
+                        if (softKeyDropTarget_(ctx, "SK_UF1BANK", got,
+                                static_cast<int>(sizeof(got)))
+                            && std::sscanf(got, "%d,%d", &uf1BankDropFrom,
+                                           &uf1BankDropMod) == 2) {
+                            uf1BankDropTo = b;
+                        }
                     }
                 }
                 for (int s = 0; s < kUf1SoftBankSlots; ++s) {
@@ -8439,12 +8622,14 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                         // so its stored slots are dead text and the column
                         // carries the kind instead.
                         std::string txt;
+                        bool keyHasContent = false;
                         const DynamicBankKind kind =
                             getUf1SoftBankDynamicFor(b, g_slotEditModIdx);
                         if (kind != DynamicBankKind::None) {
                             txt = dynKindShort_(kind);
                         } else {
                             const Binding sb = getUf1SoftBankSlot(b, s);
+                            keyHasContent = softKeyHasContent(sb, g_slotEditModIdx);
                             const auto& sp = sb.shortPress[g_slotEditModIdx];
                             if (!sp.label.empty())
                                 txt = sp.label;
@@ -8501,9 +8686,52 @@ void SettingsScreen::drawBindings(ImGui_Context* ctx)
                                 uf1BankMenuFilled_(b, g_slotEditModIdx);
                             s_uf1BankCtxOpen   = true;
                         }
+                        // ⇨ DRAG A KEY ONTO A KEY, also into another bank. A
+                        // computed bank has no key to move, the column carries
+                        // its kind and its header drags the bank.
+                        if (kind == DynamicBankKind::None) {
+                            if (keyHasContent) {
+                                char pl[32];
+                                snprintf(pl, sizeof(pl), "%d,%d,%d",
+                                         b, s, g_slotEditModIdx);
+                                char what[64];
+                                snprintf(what, sizeof(what), "%s, Soft-Key %d",
+                                         uf1BankCellLabel_(b, g_slotEditModIdx).c_str(),
+                                         s + 1);
+                                softKeyDragSource_(ctx, "SK_UF1KEY", pl, what);
+                            }
+                            char got[32] = {0};
+                            if (softKeyDropTarget_(ctx, "SK_UF1KEY", got,
+                                    static_cast<int>(sizeof(got)))
+                                && std::sscanf(got, "%d,%d,%d", &uf1KeyDropBank,
+                                               &uf1KeyDropSlot, &uf1KeyDropMod) == 3) {
+                                uf1KeyDropToBank = b;
+                                uf1KeyDropToSlot = s;
+                            }
+                        }
                     }
                 }
                 ImGui_EndTable(ctx);
+                // What was dragged is now where it was dropped, and that is what
+                // the pane and the surface go to, like a click on it.
+                if (uf1BankDropTo >= 0) {
+                    s_bankKeepScroll = ImGui_GetScrollY(ctx);
+                    if (dropUf1Bank(uf1BankDropFrom, uf1BankDropTo, uf1BankDropMod,
+                                    softKeyDropNow_()))
+                        uf1EditSetLiveBank_(uf1BankDropTo);
+                }
+                if (uf1KeyDropToBank >= 0) {
+                    s_bankKeepScroll = ImGui_GetScrollY(ctx);
+                    if (dropUf1Key(uf1KeyDropBank, uf1KeyDropSlot, uf1KeyDropToBank,
+                                   uf1KeyDropToSlot, uf1KeyDropMod,
+                                   softKeyDropNow_())) {
+                        uf1EditSetLiveBank_(uf1KeyDropToBank);
+                        s_selected = static_cast<ButtonId>(
+                            static_cast<int>(ButtonId::Uf1DisplaySoft1)
+                            + uf1KeyDropToSlot);
+                        slotIdx = uf1KeyDropToSlot;
+                    }
+                }
                 renderUf1BankMatrixContextMenu_(ctx);
                 renderUf1BankMatrixModals_(ctx);
             }

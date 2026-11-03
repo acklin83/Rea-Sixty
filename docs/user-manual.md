@@ -746,6 +746,8 @@ There is no Cmd or Ctrl set, deliberately. The surface has exactly one modifier
 key, so those two could only come from the computer keyboard, where they already
 drive the FX-Learn modifier layers.
 
+In the bank matrix, drag a column header onto another to swap two banks, and a cell onto another cell to swap two keys, also across banks. Onto an empty place that is a move. Hold Cmd (Alt on Windows) as you let go to copy instead. Dragged on Plain, a bank or key goes with its Shift set; dragged on Shift, only the Shift set. A bank takes its name and dynamic kind along. The cells of a dynamic bank do not drag, its header does.
+
 A bank can carry a **name** of its own, typed by double-clicking its column header in the bank matrix, one per set. It
 is what the UF1's time display announces when you switch to that bank, unless you
 turn that off in *Settings → Behaviour → UF1*. A bank
@@ -1486,6 +1488,12 @@ Each set is a **full bank**, not just a second list of actions: its own actions,
 **A preset saved from Plain takes the Shift set with it**, whenever that set holds anything, because a bank is both sets and a preset of half of it would rebuild half a bank. Such a preset replaces **both** sets when you recall it, whichever one you happen to be editing, and the confirm dialog says so before you press it, the same rule a factory bank longer than eight keys follows. Save while you are on Shift and you get that one set, as before; a preset with no Shift half still lands in whichever set you recall it into, so a Plain preset can be recalled into Shift.
 
 **Copy, cut and paste a whole bank.** The cell's right-click menu moves a bank the way the preset does, without naming it: copy takes the eight slots, the bank's name and its dynamic kind, cut takes them and empties the cell, paste writes them into the cell you clicked. Copying from Plain takes the Shift set along when that set holds something, exactly as saving a preset does, and cut then clears both. Pasting reproduces a dynamic bank as a dynamic bank, which is where a copy differs from a preset recall. The clipboard lives for the session, not in the config.
+
+**Drag a bank onto another cell.** The two banks swap places, across sets and columns, and onto an empty cell that is a move. Hold Cmd (Alt on Windows) as you let go to copy instead: the target is overwritten and the original stays. Dragged on Plain, the whole bank goes, with its Shift set; dragged on Shift, only the Shift set. The bank's eight keys, its name, its dynamic kind and the colour of its selector key go with it, and the cell you dropped on is engaged. A copy from Plain follows the Copy rule: it takes Shift along when Shift has something in it, and otherwise leaves the target's Shift set as it is. The pages the SSL plug-in fills in Sets 8 and 9 cannot be dragged or dropped on.
+
+**Drag a whole set.** Drag a set's number onto another set's number, with the same swap and the same Cmd copy. All six banks go, Plain and Shift, with their colours and the set's name. Sets 8 and 9 stay where they are. *Soft-Key Set: engage*, the startup bank and the Quick keys stay with the place, so they now lead to whatever is there.
+
+**Drag a single key.** In the schematic, drag a soft key, or the LCD under it, onto another key of the bank you are on. Long press, double press and step chains go with it. On Plain the whole key moves, on Shift only its Shift set. A key the SSL plug-in fills and a key of a dynamic bank stay put.
 
 **Each set can be its own dynamic bank.** Pick a kind with the header switch on Plain and Plain's bank becomes dynamic; pick one on Shift and that set becomes a bank of its own, so FX on Plain and Track Colours on Shift is a thing you can build. A set left on *Off (take Plain's bank)* does exactly that, which is how a set behaves out of the box.
 
