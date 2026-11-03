@@ -25,3 +25,6 @@ Nicht gelaufen, geht nur mit Frank am Gerät: Taskleiste, Fenster, UF1 und UF8, 
 - Versionsnummer, Build-Nummer, Rea-Sixty-Release mit Side-Car unter Windows, Changelog.
 - Website `orc.astro` („Mac only“), `~/Documents/dev/ORC/README.md`, Handbuch nach `ORC/docs`.
 - Merge nach `main` nach Franks Test.
+
+## CI, Nachtrag
+`test_orc_phones_server` hing am Zufall: eine offene Runde verwirft, was für einen eben geschriebenen Knoten zurückkommt, und der Test bestand nur, weil die Nachfrage 100 ms nach dem Schreiben fiel. Mit 300 ms Verschiebung 3 von 3 rot, seit `7c8f4aff` wartet der Test auf die nächste Abfrage. Dieselbe Logik liegt auf `main`, dort ist der Test noch nicht korrigiert, der Merge bringt ihn mit.
