@@ -448,6 +448,7 @@ void Manager::send(const std::string& address, float value)
         std::lock_guard<std::mutex> lk(mx_);
         if (!cfg_.enabled) return;
         queue_.emplace_back(address, value);
+        if (roundsMs_.load() > 0) writtenSinceAsk_.insert(address);
         oscTrace_('>', address, value);
         const std::uint64_t flips = state_.stereoFlips;
         ingest(state_, localEcho(address, value));
@@ -497,6 +498,14 @@ void Manager::workerLoop()
     bool               collecting = false;
     std::vector<int>   collectIn, collectPb;
     clock::time_point  commitAt{};
+    // The same round's strip names (applyNameRound). It ends when the names have
+    // stopped: levels never do, and a slow machine answers later than 400 ms.
+    constexpr std::chrono::milliseconds kNamesQuiet{500};
+    constexpr std::chrono::milliseconds kRoundQuietMs{1000};
+    bool               roundOpen = false;
+    NameRound          roundNames;
+    clock::time_point  lastName{};
+    clock::time_point  lastWrite = clock::now() - std::chrono::hours(1);
     auto noteNode = [&](const std::string& a) {
         // /mix/<in|pb>/<channel>/<submix>/<what>
         if (a.size() < 9 || a.compare(0, 5, "/mix/") != 0 || a[7] != '/') return;
@@ -525,6 +534,11 @@ void Manager::workerLoop()
             collectIn.clear();
             collectPb.clear();
             commitAt = lastAsk + std::chrono::milliseconds(400);
+            roundOpen = true;
+            roundNames = NameRound{};
+            lastName = lastAsk;
+            std::lock_guard<std::mutex> lk(mx_);
+            writtenSinceAsk_.clear();
         }
     };
 
@@ -620,6 +634,7 @@ void Manager::workerLoop()
             std::lock_guard<std::mutex> lk(mx_);
             out.swap(queue_);
         }
+        if (!out.empty()) lastWrite = clock::now();
         for (const auto& [addr, v] : out) {
             const auto pkt = encodeFloat(addr, v);
             ::sendto(sock, reinterpret_cast<const char*>(pkt.data()),
@@ -640,8 +655,11 @@ void Manager::workerLoop()
                     std::span<const std::uint8_t>(buf.data(), static_cast<std::size_t>(n)),
                     [&](const Message& m) {
                         oscTrace_('<', m.address, m.args.empty() ? 0.0 : m.args[0].number());
+                        if (roundOpen && writtenSinceAsk_.count(m.address)) return;
                         ingest(state_, m);
                         if (collecting) noteNode(m.address);
+                        if (roundOpen && noteRoundName(roundNames, m.address))
+                            lastName = clock::now();
                     });
                 flipped = state_.stereoFlips != flips;
             }
@@ -660,6 +678,17 @@ void Manager::workerLoop()
                     setStatus(LinkState::Online, t);
                 }
             }
+        }
+
+        if (roundOpen && !roundNames.empty() && clock::now() - lastName >= kNamesQuiet) {
+            roundOpen = false;
+            bool gone = false;
+            {
+                std::lock_guard<std::mutex> lk(mx_);
+                gone = applyNameRound(state_, roundNames);
+                writtenSinceAsk_.clear();
+            }
+            if (gone) rev_.fetch_add(1);
         }
 
         if (collecting && clock::now() >= commitAt) {
@@ -693,7 +722,8 @@ void Manager::workerLoop()
                 setStatus(LinkState::Silent,
                           "TotalMix stopped answering (quit, or the remote is off)");
             } else if (const int every = roundsMs_.load();
-                       every > 0 && t - lastAsk >= std::chrono::milliseconds(every)) {
+                       every > 0 && t - lastAsk >= std::chrono::milliseconds(every)
+                       && t - lastWrite >= kRoundQuietMs) {
                 ask();   // the next round (setRounds)
             } else if (t - lastRx > std::chrono::seconds(30)
                        && t - lastAsk > std::chrono::seconds(30)) {

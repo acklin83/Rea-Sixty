@@ -61752,6 +61752,8 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     // ⇨ ORC's rme.json, read only (see reasixty_rmeConfigPath_). The worker
     // starts either way and idles while the link is off, like the OBS one.
     reasixty_rmeLoadConfig_(/*force*/ true);
+    // A channel that leaves TotalMix' layout has to leave the surfaces.
+    reasixty::rme::manager().setRounds(3000);
     reasixty::rme::manager().start();
 
     initLog("step: deploy input-level JSFX");

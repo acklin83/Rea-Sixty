@@ -34,6 +34,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -203,8 +204,13 @@ class Manager {
     // With rounds on, the link asks /sendall every `everyMs` and counts the
     // inputs and playbacks that report a submix node in the 400 ms after each
     // ask: that set is visible() until the next round. stoerme's bridge does
-    // the same (every 3 s, 400 ms). Off by default: the surfaces' remote keeps
-    // asking only after it connects and on request, as before.
+    // the same (every 3 s, 400 ms). The same rounds tell a strip that left the
+    // layout (applyNameRound), which the surfaces' remote needs too: ORC and
+    // Rea-Sixty switch them on for it as well. Off by default.
+    // ⛔ A round repeats every value, one of which can be older than a fader move
+    // we just sent, and TotalMix sends the writer no correction. So no round starts
+    // within kRoundQuietMs of a write, and a round cannot overwrite an address
+    // written since it was asked.
     struct Visible {
         std::uint64_t    round = 0;   // rounds committed so far; 0 = none yet
         std::vector<int> in, pb;      // ascending
@@ -250,6 +256,7 @@ class Manager {
     std::atomic<bool>          cfgDirty_{false};
     std::atomic<bool>          refreshReq_{false};
     std::atomic<int>           roundsMs_{0};
+    std::set<std::string>      writtenSinceAsk_;   // under mx_, only while rounds run
     Visible                    visible_;   // under mx_
 };
 

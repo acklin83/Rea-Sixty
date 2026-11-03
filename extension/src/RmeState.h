@@ -22,6 +22,7 @@
 
 #include <cstdint>
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 
@@ -54,6 +55,7 @@ struct ChannelEq {
 struct Channel {
     std::string name;
     int         colour = -1;   // TotalMix palette INDEX, not RGB. 0 = hidden.
+    int         namedMisses = 0;   // /sendall rounds in a row without its name
     // ⛔ TRUE ONLY ONCE THE CHANNEL HAS ANNOUNCED A NAME. Not "we heard from
     // it": parameters that exist per side (phase, delay, gain, room-EQ bands)
     // are addressed on the right half of a stereo pair by index + 1, so
@@ -210,5 +212,22 @@ double dbToFaderlin(double db);
 // one we know. An unknown address is not a failure: TotalMix sends thousands of
 // them and the ones we ignore today are the ones we grow into.
 bool ingest(State& st, const Message& m);
+
+// ⇨ A CHANNEL THAT LEFT THE LAYOUT. TotalMix sends nothing for a hidden channel,
+// so `seen` could only ever go on: switch from a layout with all channels back to
+// one with fewer and the surfaces kept showing them until ORC restarted (Frank
+// 2026-11-03). A /sendall round names every strip it shows; who is missing from
+// kRoundsToForget rounds in a row is gone. Two, because one round can lose a
+// packet or catch TotalMix still loading, and a strip must not flicker for that.
+// A channel that names itself again is back at once (ingest).
+constexpr int kRoundsToForget = 2;
+struct NameRound {
+    std::set<int> inputs, playbacks, outputs;
+    bool empty() const { return inputs.empty() && playbacks.empty() && outputs.empty(); }
+};
+// Note `address` if it is a strip's name. True when it was.
+bool noteRoundName(NameRound& round, const std::string& address);
+// True when a channel went. An empty round says nothing and changes nothing.
+bool applyNameRound(State& st, const NameRound& round);
 
 }  // namespace reasixty::rme

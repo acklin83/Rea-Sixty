@@ -21,6 +21,18 @@
 #include "RmeUf1.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <functional>
+#include <span>
+#include <thread>
+#if !defined(_WIN32)
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 #include <cmath>
 
 #include <cstdio>
@@ -1096,6 +1108,128 @@ int main()
               && fromV5NoFx.stripPages.size() == 10,
               "v5 file: pages the user removed stay removed");
     }
+
+    // ── a channel that leaves the layout leaves the surfaces ────────────────
+    {
+        State st;
+        ingest(st, Message{ "/output/1/name", { Arg::fromString("Main") } });
+        ingest(st, Message{ "/output/3/name", { Arg::fromString("Phones") } });
+        ingest(st, Message{ "/input/1/name",  { Arg::fromString("Vox") } });
+        NameRound r;
+        check(noteRoundName(r, "/output/1/name"), "a strip's name counts for the round");
+        check(!noteRoundName(r, "/output/3/volume"), "...its volume does not");
+        check(noteRoundName(r, "/input/1/name"), "inputs count");
+        check(!applyNameRound(st, r) && st.outputs[3].seen, "missing once: still there, a packet can get lost");
+        check(applyNameRound(st, r) && !st.outputs[3].seen, "missing twice: gone");
+        check(st.outputs[1].seen && st.inputs[1].seen, "the named ones stay");
+        check(st.outputForRole(3) == nullptr, "a role on it now reads as not visible");
+        ingest(st, Message{ "/output/3/name", { Arg::fromString("Phones") } });
+        check(st.outputs[3].seen, "it names itself again: back at once");
+        check(!applyNameRound(st, NameRound{}) && st.outputs[3].seen, "an empty round says nothing");
+        // Missing, heard, missing: not two in a row.
+        check(!applyNameRound(st, r), "one miss");
+        NameRound all = r;
+        noteRoundName(all, "/output/3/name");
+        applyNameRound(st, all);
+        check(!applyNameRound(st, r) && st.outputs[3].seen, "a round in between starts the count over");
+    }
+#if !defined(_WIN32)
+    // The link end to end, against a fake TotalMix on a port from the system.
+    {
+        const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+        sockaddr_in a{};
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        ::bind(fd, reinterpret_cast<sockaddr*>(&a), sizeof(a));
+        socklen_t alen = sizeof(a);
+        ::getsockname(fd, reinterpret_cast<sockaddr*>(&a), &alen);
+        const int rxFd = ::socket(AF_INET, SOCK_DGRAM, 0);
+        sockaddr_in b{};
+        b.sin_family = AF_INET;
+        b.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        ::bind(rxFd, reinterpret_cast<sockaddr*>(&b), sizeof(b));
+        alen = sizeof(b);
+        ::getsockname(rxFd, reinterpret_cast<sockaddr*>(&b), &alen);
+        const int recvPort = ntohs(b.sin_port);
+        ::close(rxFd);
+
+        std::atomic<bool> run{true}, showThree{true}, staleVolume{false};
+        std::atomic<int>  asks{0};
+        std::thread fake([&] {
+            while (run.load()) {
+                pollfd p{ fd, POLLIN, 0 };
+                if (::poll(&p, 1, 20) <= 0) continue;
+                unsigned char buf[2048];
+                sockaddr_in from{};
+                socklen_t l = sizeof(from);
+                const auto n = ::recvfrom(fd, buf, sizeof(buf), 0, reinterpret_cast<sockaddr*>(&from), &l);
+                if (n <= 0) continue;
+                bool ask = false;
+                forEachMessage(std::span<const std::uint8_t>(buf, static_cast<std::size_t>(n)),
+                               [&](const Message& m) { ask = ask || m.address == "/sendall"; });
+                if (!ask) continue;
+                ++asks;
+                const auto say = [&](const std::vector<std::uint8_t>& pkt) {
+                    ::sendto(fd, pkt.data(), pkt.size(), 0, reinterpret_cast<sockaddr*>(&from), sizeof(from));
+                };
+                say(encode("/output/1/name", { Arg::fromString("Main") }));
+                if (showThree.load()) say(encode("/output/3/name", { Arg::fromString("Phones") }));
+                if (staleVolume.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+                    say(encodeFloat("/output/1/volume", -40.0f));
+                }
+            }
+        });
+        const auto waitFor = [](const std::function<bool()>& ok, int ms) {
+            for (int i = 0; i < ms / 20; ++i) {
+                if (ok()) return true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+            return ok();
+        };
+        {
+            Manager mgr;
+            mgr.setRounds(700);
+            Config c = mgr.config();
+            c.enabled  = true;
+            c.host     = "127.0.0.1";
+            c.sendPort = ntohs(a.sin_port);
+            c.recvPort = recvPort;
+            mgr.setConfig(c);
+            mgr.start();
+            const auto seenThree = [&] {
+                const State st = mgr.snapshot();
+                const auto it = st.outputs.find(3);
+                return it != st.outputs.end() && it->second.seen;
+            };
+            check(waitFor(seenThree, 3000), "the link sees output 3");
+            showThree.store(false);
+            check(waitFor([&] { return !seenThree(); }, 5000), "layout without it: gone after two rounds");
+            check(mgr.snapshot().outputs[1].seen, "output 1 stays");
+            showThree.store(true);
+            check(waitFor(seenThree, 3000), "layout with it again: back");
+
+            // Writing: no round starts under a moving fader.
+            const int before = asks.load();
+            for (int i = 0; i < 30; ++i) {
+                mgr.send("/output/1/volume", -6.0f);
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            check(asks.load() - before <= 1, "no rounds while writing");
+            // A round already under way cannot take a write back.
+            staleVolume.store(true);
+            const int now = asks.load();
+            check(waitFor([&] { return asks.load() > now; }, 3000), "the next round comes once the writing stopped");
+            mgr.send("/output/1/volume", -6.0f);
+            std::this_thread::sleep_for(std::chrono::milliseconds(400));
+            check(mgr.snapshot().outputs[1].volume == -6.0, "a late round value does not overwrite the write");
+            mgr.stop();
+        }
+        run.store(false);
+        fake.join();
+        ::close(fd);
+    }
+#endif
 
 return g_fail == 0 ? 0 : 1;
 }

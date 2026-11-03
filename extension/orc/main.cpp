@@ -130,6 +130,8 @@ int main()
     // Loading is not an edit. Clearing the flag here is what stops the first
     // frame from writing the file back out over a file nobody touched.
     rme::manager().takeConfigDirty();
+    // A channel that leaves TotalMix' layout has to leave the surfaces.
+    rme::manager().setRounds(3000);
     // ⛔ Not while REAPER holds the UF1: the TotalMix port goes with the surface
     // (see Surface.cpp, the handover). The surface loop starts the link the
     // moment REAPER lets go.

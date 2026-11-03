@@ -267,4 +267,37 @@ bool ingest(State& st, const Message& m)
     return true;
 }
 
+bool noteRoundName(NameRound& round, const std::string& address)
+{
+    std::string section, leaf;
+    int idx = 0;
+    if (!splitChannel(address, section, idx, leaf) || leaf != "name") return false;
+    if (section == "input")         round.inputs.insert(idx);
+    else if (section == "playback") round.playbacks.insert(idx);
+    else if (section == "output")   round.outputs.insert(idx);
+    else return false;
+    return true;
+}
+
+bool applyNameRound(State& st, const NameRound& round)
+{
+    if (round.empty()) return false;
+    bool changed = false;
+    const auto walk = [&](std::map<int, Channel>& m, const std::set<int>& named) {
+        for (auto& [idx, ch] : m) {
+            if (named.count(idx)) { ch.namedMisses = 0; continue; }
+            if (!ch.seen) continue;
+            if (++ch.namedMisses >= kRoundsToForget) {
+                ch.seen = false;
+                ch.namedMisses = 0;
+                changed = true;
+            }
+        }
+    };
+    walk(st.inputs, round.inputs);
+    walk(st.playbacks, round.playbacks);
+    walk(st.outputs, round.outputs);
+    return changed;
+}
+
 }  // namespace reasixty::rme
