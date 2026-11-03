@@ -25,9 +25,11 @@
 #include "SettingsServer.h"
 
 #include <arpa/inet.h>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <dirent.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <string>
@@ -494,6 +496,43 @@ static void testMoreme()
     ph::server().stop();
 }
 
+// ⛔ rme.json: Rea-Sixty reads it about once a second while ORC writes it, from two
+// threads at times (the settings, the surface loop). A reader only ever sees a
+// whole file, and no temporary file stays behind.
+static void testRmeJsonWhole()
+{
+    rme::Config one = rme::manager().config(), two = one;
+    one.host = "one.example";
+    two.host = "two.example";
+    EXPECT(orc::saveRmeConfig(one));   // what is in the file before the race starts
+    std::atomic<bool> run{true};
+    std::thread w1([&] { while (run.load()) orc::saveRmeConfig(one); });
+    std::thread w2([&] { while (run.load()) orc::saveRmeConfig(two); });
+    int reads = 0, broken = 0;
+    const auto end = clk::now() + std::chrono::milliseconds(400);
+    while (clk::now() < end) {
+        rme::Config got;
+        const std::string json = file(orc::rmeConfigPath());
+        if (json.empty() || !rme::configFromJson(json, got)
+            || (got.host != one.host && got.host != two.host)) ++broken;
+        ++reads;
+    }
+    run.store(false);
+    w1.join();
+    w2.join();
+    EXPECT(reads > 10);
+    if (broken) std::printf("FAIL %d of %d reads of rme.json were not a whole file\n", broken, reads);
+    EXPECT(broken == 0);
+    EXPECT(orc::saveRmeConfig(rme::manager().config()));
+    bool leftover = false;
+    if (DIR* d = ::opendir(orc::supportDir().c_str())) {
+        while (const dirent* e = ::readdir(d))
+            if (std::string(e->d_name).find("rme.json.") == 0) leftover = true;
+        ::closedir(d);
+    }
+    EXPECT(!leftover);
+}
+
 // ⛔ A backslash through the files: wdl_json_parser reads two of them as a quote.
 static void testBackslashInFiles()
 {
@@ -648,6 +687,7 @@ int main()
     testKeys();
     testSoftKeys();
     testModes();
+    testRmeJsonWhole();
     testMoreme();
     testBackslashInFiles();
     testServer(ORC_SETTINGS_DIR);

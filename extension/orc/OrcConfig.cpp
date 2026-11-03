@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <string>
 #include <sys/stat.h>
 #include <cerrno>
@@ -40,15 +41,36 @@ bool loadRmeConfig(reasixty::rme::Config& out)
     return reasixty::rme::configFromJson(json, out);
 }
 
-bool saveRmeConfig(const reasixty::rme::Config& c)
+namespace {
+
+// One after the other: the settings and the surface loop both save (their last
+// write has to be the newest config, saveRmeConfigIfDirty).
+std::mutex g_rmeSaveMx;
+
+// ⛔ WHOLE FILES ONLY. Rea-Sixty reads rme.json about once a second, and writing
+// into the file itself let a reader find it empty or cut off (test_orc_settings,
+// two threads saving: 3656 of 8463 reads). A temporary file beside it, then
+// rename(), which replaces in one step.
+bool writeRmeJson(const reasixty::rme::Config& c)
 {
     const std::string json = reasixty::rme::configToJson(c);
     const std::string path = rmeConfigPath();
-    FILE* f = std::fopen(path.c_str(), "wb");
+    const std::string tmp = path + "." + std::to_string(::getpid());
+    FILE* f = std::fopen(tmp.c_str(), "wb");
     if (!f) return false;
-    const bool ok = std::fwrite(json.data(), 1, json.size(), f) == json.size();
-    std::fclose(f);
+    bool ok = std::fwrite(json.data(), 1, json.size(), f) == json.size();
+    ok = std::fclose(f) == 0 && ok;
+    if (ok) ok = std::rename(tmp.c_str(), path.c_str()) == 0;
+    if (!ok) std::remove(tmp.c_str());
     return ok;
+}
+
+} // namespace
+
+bool saveRmeConfig(const reasixty::rme::Config& c)
+{
+    std::lock_guard<std::mutex> lk(g_rmeSaveMx);
+    return writeRmeJson(c);
 }
 
 bool reaperWantsUf1()
@@ -103,8 +125,9 @@ void clearReleased()
 std::string saveRmeConfigIfDirty()
 {
     auto& mgr = reasixty::rme::manager();
+    std::lock_guard<std::mutex> lk(g_rmeSaveMx);
     if (!mgr.takeConfigDirty()) return {};
-    if (saveRmeConfig(mgr.config())) return {};
+    if (writeRmeJson(mgr.config())) return {};
     return "Cannot write " + rmeConfigPath();
 }
 
