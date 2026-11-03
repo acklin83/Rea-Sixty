@@ -1,0 +1,32 @@
+// ORC's icons and its version (docs/orc-windows-plan.md). The icons are rendered from
+// the wordmark by tools/orc_icon --ico.
+#include <winver.h>
+
+1 ICON "@ORC_WIN_DIR@/ORC.ico"
+2 ICON "@ORC_WIN_DIR@/ORC-tray-white.ico"
+3 ICON "@ORC_WIN_DIR@/ORC-tray-black.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     @ORC_RC_VERSION@
+PRODUCTVERSION  @ORC_RC_VERSION@
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "St\xF6rsender Studio"
+            VALUE "FileDescription",  "ORC"
+            VALUE "FileVersion",      "@MACOSX_BUNDLE_SHORT_VERSION_STRING@"
+            VALUE "LegalCopyright",   "(c) 2026 Frank Acklin"
+            VALUE "OriginalFilename", "ORC.exe"
+            VALUE "ProductName",      "ORC"
+            VALUE "ProductVersion",   "@MACOSX_BUNDLE_SHORT_VERSION_STRING@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

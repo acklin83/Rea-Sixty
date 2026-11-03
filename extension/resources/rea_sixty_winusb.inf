@@ -1,5 +1,5 @@
-; Rea-Sixty WinUSB driver binding for SSL UF8 + UC1 + UF1.
-; Installed via pnputil from the Rea-Sixty REAPER extension. Binds the
+; WinUSB driver binding for SSL UF8 + UC1 + UF1, for Rea-Sixty and ORC.
+; Installed via pnputil (src/WinUsbDriver.cpp). Binds the
 ; SSL UF8 (VID_31E9 PID_0021), SSL UC1 (VID_31E9 PID_0023) and
 ; SSL UF1 (VID_31E9 PID_0025)
 ; vendor-USB interfaces to Microsoft's signed WinUSB driver so libusb
@@ -16,7 +16,7 @@ Class       = USBDevice
 ClassGuid   = {88BAE032-5A81-49f0-BC3D-A4FF138216D6}
 Provider    = %ProviderName%
 CatalogFile = rea_sixty_winusb.cat
-DriverVer   = 05/19/2026,1.0.0.0
+DriverVer   = 11/03/2026,1.0.1.0
 
 [Manufacturer]
 %ProviderName% = Standard,NTamd64
@@ -60,7 +60,7 @@ AddReg = CoInstallers_AddReg
 HKR,,CoInstallers32,0x00010000,"WdfCoInstaller01011.dll,WdfCoInstaller"
 
 [Strings]
-ProviderName   = "Rea-Sixty"
-UF8.DeviceDesc = "SSL UF8 (Rea-Sixty / WinUSB)"
-UC1.DeviceDesc = "SSL UC1 (Rea-Sixty / WinUSB)"
-UF1.DeviceDesc = "SSL UF1 (Rea-Sixty / WinUSB)"
+ProviderName   = "Stoersender Studio"
+UF8.DeviceDesc = "SSL UF8 (WinUSB)"
+UC1.DeviceDesc = "SSL UC1 (WinUSB)"
+UF1.DeviceDesc = "SSL UF1 (WinUSB)"

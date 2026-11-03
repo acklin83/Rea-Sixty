@@ -1,5 +1,8 @@
 #include "UF1Device.h"
 
+#if defined(_WIN32)
+#  include <winsock2.h>   // timeval, which a lean windows.h leaves out
+#endif
 #include <libusb.h>
 
 #include <chrono>

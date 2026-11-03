@@ -16,7 +16,7 @@
 
 namespace orc::settings {
 
-// What only the platform can answer. Set by the window (OrcWebWindow.mm).
+// What only the platform can answer. Set by the window (OrcWebWindow.mm, .cpp).
 struct Host {
     std::function<void(bool on)> setLogin;     // open at login
     std::function<void()>        chooseLogo;   // the file dialog; logoChosen with the answer
@@ -24,12 +24,17 @@ struct Host {
 
 struct Context {
     Host        host;
-    bool        loginAvailable = false;        // only for the ORC in Applications
+    bool        loginAvailable = false;        // only for the installed ORC
     bool        loginOn        = false;
     int         ownPort        = 0;            // this page's port, not for MoreMe to take
     std::string error;                         // the page's error line
     std::string importResult;
     int         logoStamp      = 0;            // same file name, new picture
+    // Windows: the USB driver's card. A walk over the USB tree, so kept and refreshed
+    // only now and then (stateJson).
+    mutable std::string usbState;              // JSON
+    mutable long long   usbStateAt = 0;
+    mutable std::string usbMessage;
 };
 
 std::string stateJson(const Context& c);

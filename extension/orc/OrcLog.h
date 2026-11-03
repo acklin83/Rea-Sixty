@@ -29,10 +29,13 @@ inline void logLine(const char* fmt, ...)
 #endif
     char buf[1024];
     int n = static_cast<int>(std::strftime(buf, sizeof(buf), "[%H:%M:%S", &lt));
-    n += snprintf(buf + n, sizeof(buf) - n, ".%03d] ", millis);
+    // ⛔ snprintf unqualified and its result unused: WDL makes it a void macro under
+    // Windows (memory uf1-sidecar-rme-plan).
+    snprintf(buf + n, sizeof(buf) - n, ".%03d] ", millis);
+    n += 6;
     va_list ap;
     va_start(ap, fmt);
-    if (n < static_cast<int>(sizeof(buf))) std::vsnprintf(buf + n, sizeof(buf) - n, fmt, ap);
+    if (n < static_cast<int>(sizeof(buf))) vsnprintf(buf + n, sizeof(buf) - n, fmt, ap);
     va_end(ap);
     std::fputs(buf, stdout);
     std::fflush(stdout);

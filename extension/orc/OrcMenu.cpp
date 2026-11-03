@@ -4,6 +4,10 @@
 #include "PhonesServer.h"
 #include "Surface.h"
 
+#if defined(_WIN32)
+#include "WinUsbDriver.h"
+#endif
+
 namespace orc {
 
 MenuLines menuLines(const Surface* surface)
@@ -33,6 +37,20 @@ MenuLines menuLines(const Surface* surface)
         else
             m.uf8 = "UF8   not open: " + u8.error;
     }
+#if defined(_WIN32)
+    // ⇨ PLUGGED IN, BUT SSL'S DRIVER HAS IT: libusb cannot open it, and "not open"
+    // would leave the user without a clue. The menu is the place that asks; ⛔ never
+    // the USB thread (WinUsbDriver.h).
+    if (surface) {
+        const Status st = surface->status();
+        const Uf8Status u8 = surface->uf8Status();
+        if ((!st.off && !st.open) || (!u8.off && !u8.open)) {
+            const auto now = winusb::status({ { "VID_31E9&PID_0025", "UF1" }, { "VID_31E9&PID_0021", "UF8" } });
+            if (!st.off && !st.open && now[0].connected && !now[0].ready) m.uf1 = "UF1   needs the USB driver";
+            if (!u8.off && !u8.open && now[1].connected && !now[1].ready) m.uf8 = "UF8   needs the USB driver";
+        }
+    }
+#endif
     m.mixer = "TotalMix   " + linkSummary();
 
     namespace ph = phones;

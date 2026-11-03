@@ -42,9 +42,7 @@
 #include <string>
 #include <system_error>
 
-#if defined(_WIN32)
-#  include <io.h>
-#else
+#if !defined(_WIN32)
 #  include <unistd.h>
 #endif
 
@@ -72,10 +70,32 @@ std::atomic<bool> g_interrupted{false};
 // landed on. The frame callback notices the flag and closes properly.
 void onSignal(int) { g_interrupted.store(true); }
 
+orc::Surface* g_surface = nullptr;
+
+// What main() does after the loop, in that order. Once, whoever gets there first:
+// the end of the loop, or the session ending under it (OrcUi.h).
+void closeDown()
+{
+    static std::atomic<bool> done{false};
+    if (done.exchange(true)) return;
+    // First: its thread may be calling into everything below.
+    orc::settings::server().stop();
+    g_surface->stop();
+    orc::phones::server().stop();
+    rme::manager().stop();
+    orc::modes::saveIfDirty();
+    orc::modes::stopWorkers();
+    orc::removeOrcPid();
+    orc::clearReleased();
+    orc::logLine("ORC: closed.\n");
+}
+
 } // namespace
 
 int main()
 {
+    if (orc::handedToRunningCopy()) return 0;
+
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
 
@@ -89,9 +109,8 @@ int main()
         const auto bytes = std::filesystem::file_size(path, ec);
         if (!ec && bytes > 10 * 1024 * 1024) orc_files::replaceFile(path, path + ".1");
 #if defined(_WIN32)
-        if (::_isatty(::_fileno(stdout))) std::printf("ORC: logging to %s\n", path.c_str());
-        // ⛔ Not the Mac's two lines. Started without a console stderr has no
-        // descriptor, and _dup2 on that ends the process. And setvbuf with _IOLBF
+        // ⛔ Not the Mac's lines. ORC has no console, so stdout and stderr have no
+        // descriptor, and _isatty or _dup2 on that end the process. And setvbuf with _IOLBF
         // and size 0 is an invalid parameter there, which ends it as well; _IOLBF
         // would be full buffering anyway (Microsoft, setvbuf).
         if (std::freopen(path.c_str(), "a", stdout)) std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -180,20 +199,11 @@ int main()
     orc::writeOrcPid();
 
     orc::Surface surface;
+    g_surface = &surface;
     surface.start();
 
-    // AppKit owns the main thread from here until the user quits.
-    orc::runApp(surface, [] { return g_interrupted.load(); });
-
-    // First: its thread may be calling into everything below.
-    orc::settings::server().stop();
-    surface.stop();
-    orc::phones::server().stop();
-    rme::manager().stop();
-    orc::modes::saveIfDirty();
-    orc::modes::stopWorkers();
-    orc::removeOrcPid();
-    orc::clearReleased();
-    orc::logLine("ORC: closed.\n");
+    // The platform owns the main thread from here until the user quits.
+    orc::runApp(surface, [] { return g_interrupted.load(); }, [] { closeDown(); });
+    closeDown();
     return 0;
 }

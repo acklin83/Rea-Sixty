@@ -5,6 +5,11 @@
 // preview PNGs: the 1024 px icon and the menu-bar mark in black.
 //
 //   orc_icon <out.iconset> [<preview dir>]
+//
+// ⇨ AND THE ICONS FOR WINDOWS, one drawing for both platforms (Frank 29.09.2026):
+//   orc_icon --ico <folder>   writes ORC.ico, ORC-tray-white.ico, ORC-tray-black.ico
+// CoreGraphics only runs here, so these three live in orc/win/ and
+// tools/orc-release.sh refuses a release when they no longer match this drawing.
 
 #include "OrcLogo.h"
 
@@ -12,9 +17,11 @@
 #include <CoreGraphics/CoreGraphics.h>
 #include <ImageIO/ImageIO.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <sys/stat.h>
+#include <vector>
 
 namespace {
 
@@ -97,10 +104,84 @@ CGImageRef icon(int n)
     return img;
 }
 
+std::vector<std::uint8_t> pngBytes(CGImageRef img)
+{
+    CFMutableDataRef data = CFDataCreateMutable(nullptr, 0);
+    CGImageDestinationRef dst = CGImageDestinationCreateWithData(data, CFSTR("public.png"), 1, nullptr);
+    CGImageDestinationAddImage(dst, img, nullptr);
+    CGImageDestinationFinalize(dst);
+    CFRelease(dst);
+    std::vector<std::uint8_t> out(CFDataGetBytePtr(data), CFDataGetBytePtr(data) + CFDataGetLength(data));
+    CFRelease(data);
+    return out;
+}
+
+// The file holds each size as a PNG, which Windows reads from Vista on.
+bool writeIco(const std::string& path, const std::vector<int>& sizes, CGImageRef (*draw)(int, double),
+              double shade)
+{
+    const auto le16 = [](std::vector<std::uint8_t>& v, unsigned x) {
+        v.push_back(x & 0xFF); v.push_back((x >> 8) & 0xFF);
+    };
+    const auto le32 = [&](std::vector<std::uint8_t>& v, std::uint32_t x) {
+        le16(v, x & 0xFFFF); le16(v, x >> 16);
+    };
+    std::vector<std::vector<std::uint8_t>> pngs;
+    for (const int n : sizes) {
+        CGImageRef img = draw(n, shade);
+        pngs.push_back(pngBytes(img));
+        CGImageRelease(img);
+    }
+    std::vector<std::uint8_t> out;
+    le16(out, 0); le16(out, 1); le16(out, static_cast<unsigned>(sizes.size()));
+    std::uint32_t offset = 6 + 16 * static_cast<std::uint32_t>(sizes.size());
+    for (std::size_t i = 0; i < sizes.size(); ++i) {
+        out.push_back(sizes[i] >= 256 ? 0 : static_cast<std::uint8_t>(sizes[i]));
+        out.push_back(sizes[i] >= 256 ? 0 : static_cast<std::uint8_t>(sizes[i]));
+        out.push_back(0); out.push_back(0);
+        le16(out, 1); le16(out, 32);
+        le32(out, static_cast<std::uint32_t>(pngs[i].size()));
+        le32(out, offset);
+        offset += static_cast<std::uint32_t>(pngs[i].size());
+    }
+    for (const auto& p : pngs) out.insert(out.end(), p.begin(), p.end());
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (!f) return false;
+    const bool ok = std::fwrite(out.data(), 1, out.size(), f) == out.size();
+    std::fclose(f);
+    return ok;
+}
+
+CGImageRef appIconFor(int n, double) { return icon(n); }
+
+// ⇨ THE TASKBAR'S FIELD IS SQUARE, and the wordmark is three times as wide as high, so
+// it fills the width and nothing else. Transparent, the letters in one shade.
+CGImageRef trayMark(int n, double shade)
+{
+    CGContextRef ctx = canvas(n, n);
+    CGColorRef c = rgb(shade, shade, shade);
+    const double h = n / orc::wordmarkAspect();
+    orc::drawWordmark(ctx, CGRectMake(0, (n - h) / 2.0, n, h), c);
+    CGImageRef img = CGBitmapContextCreateImage(ctx);
+    CGColorRelease(c);
+    CGContextRelease(ctx);
+    return img;
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
 {
+    if (argc == 3 && std::string(argv[1]) == "--ico") {
+        const std::string d = argv[2];
+        const std::vector<int> app{ 16, 20, 24, 32, 40, 48, 64, 128, 256 };
+        const std::vector<int> tray{ 16, 20, 24, 32, 40, 48, 64 };
+        const bool ok = writeIco(d + "/ORC.ico", app, appIconFor, 0)
+                     && writeIco(d + "/ORC-tray-white.ico", tray, trayMark, 1.0)
+                     && writeIco(d + "/ORC-tray-black.ico", tray, trayMark, 0.0);
+        if (!ok) std::fprintf(stderr, "orc_icon: cannot write into %s\n", d.c_str());
+        return ok ? 0 : 1;
+    }
     if (argc < 2) {
         std::fprintf(stderr, "usage: orc_icon <out.iconset> [<preview dir>]\n");
         return 2;

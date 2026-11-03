@@ -443,6 +443,7 @@ add_library(reaper_uf8 MODULE
     # linux_http.cpp (libcurl via dlopen), HttpClient.cpp (the fallback stub).
     src/HttpClient.cpp
     src/win_http.cpp
+    src/WinUsbDriver.cpp
     src/linux_http.cpp
     src/ExchangeView.cpp
 )
@@ -1537,15 +1538,40 @@ if(WIN32 AND ORC_WINDOWS)
 
     set(ORC_SETTINGS_TEST_SOURCES
         orc/OrcSettingsModel.cpp orc/SettingsServer.cpp orc/OrcModes.cpp orc/OrcConfig.cpp
-        orc/PhonesServer.cpp orc/Phones.cpp orc/Performers.cpp orc/WebSocket.cpp
+        orc/PhonesServer.cpp orc/Phones.cpp orc/Performers.cpp orc/WebSocket.cpp src/WinUsbDriver.cpp
         "${WDL_DIR}/WDL/sha.cpp" ${ORC_SHARED_SOURCES})
     add_executable(test_orc_settings tests/test_orc_settings.cpp ${ORC_SETTINGS_TEST_SOURCES})
     orc_windows_program(test_orc_settings)
+    add_dependencies(test_orc_settings reasixty_winusb_inf_gen)
+    target_include_directories(test_orc_settings PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_compile_definitions(test_orc_settings PRIVATE
         ORC_SETTINGS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/orc/settings")
     add_test(NAME orc_settings COMMAND test_orc_settings)
 
-    add_executable(orc
+    # WebView2's SDK with the static loader (no extra DLL), the QR code for the menu.
+    # Pinned to one version and one checksum each. BSD-style and MIT, in the notices.
+    include(FetchContent)
+    set(ORC_WEBVIEW2_VERSION 1.0.4314.35)
+    FetchContent_Declare(orc_webview2
+        URL "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/${ORC_WEBVIEW2_VERSION}"
+        URL_HASH SHA256=90778deb1b77e36292828b4b5833c9255c27533f40e0ddd55891ae718944edc4
+        DOWNLOAD_NAME webview2.zip
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    FetchContent_MakeAvailable(orc_webview2)
+    set(ORC_QR_DIR "${CMAKE_BINARY_DIR}/orc-qr")
+    file(DOWNLOAD "https://raw.githubusercontent.com/nayuki/QR-Code-generator/v1.8.0/cpp/qrcodegen.cpp"
+        "${ORC_QR_DIR}/qrcodegen.cpp"
+        EXPECTED_HASH SHA256=1f3b3fcdac6954c32cf583ccd02ec9b5901f756a38c461acedc70be4a77d3757)
+    file(DOWNLOAD "https://raw.githubusercontent.com/nayuki/QR-Code-generator/v1.8.0/cpp/qrcodegen.hpp"
+        "${ORC_QR_DIR}/qrcodegen.hpp"
+        EXPECTED_HASH SHA256=b779c3b156cf7a57ce789d6fee4fc991ccc2913774d26c909d22bb8f26b2a793)
+
+    enable_language(RC)
+    set(ORC_WIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/orc/win")
+    string(REPLACE "." "," ORC_RC_VERSION "${MACOSX_BUNDLE_SHORT_VERSION_STRING},0")
+    configure_file(orc/win/ORC.rc.in "${CMAKE_BINARY_DIR}/ORC.rc" @ONLY)
+
+    add_executable(orc WIN32
         orc/main.cpp
         orc/Surface.cpp
         orc/Uf8Surface.cpp
@@ -1553,6 +1579,10 @@ if(WIN32 AND ORC_WINDOWS)
         orc/OrcConfig.cpp
         orc/OrcMenu.cpp
         orc/OrcTray.cpp
+        orc/OrcWebWindow.cpp
+        src/WinUsbDriver.cpp
+        "${ORC_QR_DIR}/qrcodegen.cpp"
+        "${CMAKE_BINARY_DIR}/ORC.rc"
         orc/Phones.cpp
         orc/Performers.cpp
         orc/WebSocket.cpp
@@ -1563,6 +1593,14 @@ if(WIN32 AND ORC_WINDOWS)
         ${ORC_SHARED_SOURCES})
     orc_windows_program(orc)
     target_compile_definitions(orc PRIVATE ORC_VERSION="${MACOSX_BUNDLE_SHORT_VERSION_STRING}")
+    target_include_directories(orc PRIVATE "${ORC_QR_DIR}" "${orc_webview2_SOURCE_DIR}/build/native/include")
+    target_link_libraries(orc PRIVATE "${orc_webview2_SOURCE_DIR}/build/native/x64/WebView2LoaderStatic.lib"
+        version shlwapi)
+    # The driver's INF, embedded like in the extension.
+    add_dependencies(orc reasixty_winusb_inf_gen)
+    target_include_directories(orc PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    # main(), not WinMain: no console, the same first line as on the Mac.
+    target_link_options(orc PRIVATE /ENTRY:mainCRTStartup)
     set_target_properties(orc PROPERTIES OUTPUT_NAME ORC)
     # The pages beside the program, as orc::resourcesDir() expects them.
     add_custom_command(TARGET orc POST_BUILD

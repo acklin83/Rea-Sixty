@@ -219,7 +219,9 @@ static NSImage* qrImage(NSString* text, CGFloat side)
 
 namespace orc {
 
-void runApp(Surface& surface, const std::function<bool()>& interrupted)
+bool handedToRunningCopy() { return false; }
+
+void runApp(Surface& surface, const std::function<bool()>& interrupted, const std::function<void()>&)
 {
     g_surface = &surface;
     @autoreleasepool {

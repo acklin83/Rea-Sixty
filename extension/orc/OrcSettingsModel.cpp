@@ -25,6 +25,11 @@
 #include <iterator>
 #include <vector>
 
+#if defined(_WIN32)
+#include "WinUsbDriver.h"
+#include <chrono>
+#endif
+
 namespace orc::settings {
 
 namespace bnd  = uf8::bindings;
@@ -707,6 +712,20 @@ void apply(const std::string& json, Context& c)
 
     if (t == "rme")        applyRme(m, c);
     else if (t == "ask")   rme::manager().refresh();
+#if defined(_WIN32)
+    else if (t == "usbInstall") {
+        // ORC binds what it can use. The UC1 stays with SSL 360.
+        std::string err;
+        if (!winusb::install(kUsbDevices, &err)) c.usbMessage = "Driver install could not start: " + err;
+        c.usbStateAt = 0;
+    }
+    else if (t == "usbRemove") {
+        std::string err;
+        if (!winusb::uninstall(&err)) c.usbMessage = "Driver uninstall could not start: " + err;
+        c.usbStateAt = 0;
+    }
+    else if (t == "usbRefresh") c.usbStateAt = 0;
+#endif
     else if (t == "login") { if (c.host.setLogin && c.loginAvailable) c.host.setLogin(v == "1"); }
     else if (t == "pot") {
         const int i = std::atoi(text(m, "i").c_str());
@@ -740,6 +759,46 @@ void apply(const std::string& json, Context& c)
     else if (starts("mm"))   applyMoreme(t, m, c);
 }
 
+#if defined(_WIN32)
+namespace {
+
+const std::vector<winusb::Device> kUsbDevices = {
+    { "VID_31E9&PID_0025", "UF1" },
+    { "VID_31E9&PID_0021", "UF8" },
+};
+
+// A walk over the USB tree: every few seconds, and at once after anything happened.
+std::string usbJson(const Context& c)
+{
+    const int job = winusb::jobState();
+    if (job == 2) {
+        c.usbMessage = winusb::jobMessage();
+        winusb::jobClear();
+        c.usbStateAt = 0;
+    } else if (job == 1) {
+        c.usbMessage = winusb::jobMessage();
+    }
+    const long long now = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (c.usbState.empty() || c.usbStateAt == 0 || now - c.usbStateAt >= 3) {
+        c.usbStateAt = now;
+        std::string list;
+        for (const winusb::DeviceState& d : winusb::status(kUsbDevices)) {
+            if (!list.empty()) list += ",";
+            list += "{\"n\":" + jstr(d.name) + ",\"s\":"
+                  + jstr(!d.connected ? "not connected"
+                         : d.ready ? "ready"
+                         : d.service.empty() ? "no driver" : "needs the driver, on " + d.service)
+                  + ",\"ok\":" + jbool(d.ready) + "}";
+        }
+        c.usbState = "[" + list + "]";
+    }
+    return "{\"devices\":" + c.usbState + ",\"busy\":" + jbool(job == 1) + ",\"msg\":" + jstr(c.usbMessage) + "}";
+}
+
+} // namespace
+#endif
+
 std::string stateJson(const Context& c)
 {
     auto& mgr = rme::manager();
@@ -761,9 +820,18 @@ std::string stateJson(const Context& c)
        + ",\"status\":" + jstr(linkText)
        + ",\"online\":" + jbool(mgr.link() == rme::LinkState::Online)
        + ",\"loginAvailable\":" + jbool(c.loginAvailable)
+#if defined(_WIN32)
+       + ",\"loginHint\":" + jstr("Only for the installed ORC.")
+#else
+       + ",\"loginHint\":" + jstr("Only for the ORC in Applications.")
+#endif
        + ",\"loginOn\":" + jbool(c.loginOn)
        + ",\"sleepEnabled\":" + jbool(cfg.sleepEnabled)
-       + ",\"sleepMinutes\":" + std::to_string(cfg.sleepMinutes) + "}";
+       + ",\"sleepMinutes\":" + std::to_string(cfg.sleepMinutes)
+#if defined(_WIN32)
+       + ",\"usb\":" + usbJson(c)
+#endif
+       + "}";
 
     o += ",\"targets\":" + choicesJson(targets) + ",\"outputs\":" + choicesJson(outs);
     o += ",\"pushes\":" + arr(kPushes, [](const PushChoice& p) {

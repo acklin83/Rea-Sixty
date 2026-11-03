@@ -1,7 +1,8 @@
 #pragma once
 //
-// ORC's face: the menu-bar item and the window around the settings page. AppKit
-// lives behind this header and nowhere else, so everything above it stays plain C++.
+// ORC's face: the menu-bar item, or the taskbar icon under Windows, and the window
+// around the settings page. AppKit and Win32 live behind this header and nowhere
+// else, so everything above it stays plain C++.
 //
 // ⛔ NOT A MIXER ON SCREEN. Frank, 25.09.2026: "wir brauchen ja eigentlich nur
 // die settings, die ganze bedienung machen wir ja eh übers uf1." ORC's controls
@@ -28,13 +29,22 @@ namespace orc {
 
 class Surface;
 
-// Installs the status item and runs the macOS event loop ON THE CALLING THREAD,
-// which has to be the main thread. Returns when the user quits, so main() can
-// close the surface and the link in order.
+// Installs the status item and runs the event loop ON THE CALLING THREAD, which has
+// to be the main thread. Returns when the user quits, so main() can close the surface
+// and the link in order.
 //
 // `interrupted` is polled a few times a second. ⛔ It exists because a signal
 // handler may not call into AppKit: Ctrl-C only sets a flag, and the loop reads
 // it from a timer, on the thread AppKit expects.
-void runApp(Surface& surface, const std::function<bool()>& interrupted);
+//
+// `sessionEnding`: the user signs out or Windows shuts down. Windows may end the
+// process right after, so main()'s closing has to happen now. May run again after
+// the loop returns. Never called on the Mac, where stop: gets there first.
+void runApp(Surface& surface, const std::function<bool()>& interrupted,
+            const std::function<void()>& sessionEnding);
+
+// True when another ORC runs on this session and has been told to open its settings:
+// this one leaves at once. macOS keeps it to one by itself.
+bool handedToRunningCopy();
 
 } // namespace orc
