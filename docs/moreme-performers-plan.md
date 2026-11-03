@@ -22,8 +22,16 @@ Jeder Musiker bekommt sein eigenes Layout: eigener Ausgang, eigene Fader, eigene
 1. Performer und Studio Control.
    - Performer: Name, Rolle, Ausgang (Rolle oder fester Ausgang, `rmeu::keyOutput`), Fader (TotalMix-Layout oder eigene Liste: Quelle Input oder Playback mit TotalMix-Namen, Name und Farbe vorbelegt aus TotalMix und änderbar, Reihenfolge), Master an/aus, Freigaben, Link-Kennung. Gespeichert in `moreme.json`.
    - Seite in drei Spalten: Performer, Einstellungen, QR und Link (Kopieren, Teilen, Vorschau). Oben Snapshots: New, Save, Save as.
+   - Performer-Liste mit Kurzstatus: Ausgang, Anzahl Fader oder TotalMix-Layout, EQ- und DYN-Stufe.
+   - Fader sortieren mit Pfeilen hoch und runter, das geht auch auf dem Tablet.
    - Jede Änderung sofort gespeichert und sofort auf dem Handy.
 2. Handyseite: Link öffnet das eigene Layout, Querformat mit festem Master, Hell/Dunkel, Doppeltipp setzt zurück.
+   - Senkrechte Streifen auch im Hochformat, als Wahl am Handy neben der heutigen Liste. Die Faderlänge passt sich dem Bildschirm an, gescrollt wird nur seitwärts.
+   - dB-Skala direkt am Fader.
+   - EQ, DYN und FX Send erscheinen am Streifen nur, wenn sie freigegeben sind und der Kanal den Parameter hat (`strip::available`, keine feste Liste pro Kanalart).
+   - Kopfzeile mit Name, Rolle, Ausgang und dem Knopf Hell/Dunkel.
+   - Hinweis, wenn rechts noch mehr Fader kommen.
+   - Pan, Mute, Solo und die Meter bleiben.
 3. EQ: Grafik zum Ziehen mit Q und Werten, einfache Stufe Bass/Mid/Treble, Bypass. Kurve aus `Uf1EqCurve` auf dem Server, keine zweite Kopie in JavaScript. Parameter aus dem Katalog in `RmeStrip.cpp`.
 4. Dynamics und Auto Level: Kompressor, Expander, Auto Level mit Kennlinie, einfache Stufe. FX Send (`/input/<n>/fxsend`) gesperrt mit dabei.
 5. Tests (nur Ports vom System, nie 7003/7004 auf Franks Mac), Handbuch, Website, alle Sprachen der Seite.
