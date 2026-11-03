@@ -104,11 +104,11 @@ int main()
     }
     // ── SEND/PLUG-IN: the submix in the control room's order ─────────────────
     {
-        EXPECT(u8::submixKeyLamp(st, in, 0) == 2);          // Phones 1, in play
-        EXPECT(u8::submixKeyLamp(st, in, 5) == 1);          // Main, another output
-        EXPECT(u8::submixKeyLamp(st, in, 1) == 0);          // Phones 2: no output
-        EXPECT(u8::submixKeyLamp(st, in, 4) == 0);          // Main B: none
-        EXPECT(u8::submixKeyLamp(st, in, 6) == 0 && u8::submixKeyLamp(st, in, 7) == 0);
+        EXPECT(u8::submixKeyLamp(st, in, cfg, 0) == 2);     // Phones 1, in play
+        EXPECT(u8::submixKeyLamp(st, in, cfg, 5) == 1);     // Main, another output
+        EXPECT(u8::submixKeyLamp(st, in, cfg, 1) == 0);     // Phones 2: no output
+        EXPECT(u8::submixKeyLamp(st, in, cfg, 4) == 0);     // Main B: none
+        EXPECT(u8::submixKeyLamp(st, in, cfg, 6) == 0 && u8::submixKeyLamp(st, in, cfg, 7) == 0);
         u8::pickSubmix(st, in, cfg, 5);
         EXPECT(in.submix.load() == 0);
         EXPECT(u8::frame(st, in, side, cfg, soft).strips[2].csType == "> Main");
@@ -116,6 +116,60 @@ int main()
         EXPECT(in.submix.load() == 0);
         u8::pickSubmix(st, in, cfg, 0);
         EXPECT(in.submix.load() == 6);
+    }
+    // ── each key its output, a hidden one dark and dead ──────────────────────
+    {
+        State s2 = fixture();
+        { Channel c; c.name = "Wedge 3"; c.colour = 4; c.seen = true; s2.outputs[4] = c; }
+        s2.phones[2] = 40;                                   // a role on a channel this remote cannot see
+        Config c2 = cfg;
+        c2.uf8SubmixKeys[6] = "output:4";
+        c2.uf8SubmixKeys[7] = "output:99";
+        c2.uf8SubmixKeys[3] = "input:2";                     // not an output
+        {   // The keys survive the file; a file without them keeps the factory.
+            Config back;
+            EXPECT(reasixty::rme::configFromJson(reasixty::rme::configToJson(c2), back));
+            EXPECT(back.uf8SubmixKeys[6] == "output:4" && back.uf8SubmixKeys[0] == "phones1");
+            Config old;
+            EXPECT(reasixty::rme::configFromJson("{\"version\": 6, \"uf8\": {\"showMainOnChange\": false}}", old));
+            EXPECT(old.uf8SubmixKeys[5] == "main" && old.uf8SubmixKeys[6].empty());
+        }
+        in_::State i2;
+        i2.submix.store(0);
+        EXPECT(u8::submixKeyLamp(s2, i2, c2, 6) == 1);
+        EXPECT(u8::submixKeyLamp(s2, i2, c2, 7) == 0);
+        EXPECT(u8::submixKeyLamp(s2, i2, c2, 2) == 0);       // was lit, and landed on Main
+        EXPECT(u8::submixKeyLamp(s2, i2, c2, 3) == 0);
+        u8::pickSubmix(s2, i2, c2, 2);
+        EXPECT(i2.submix.load() == 0);
+        u8::pickSubmix(s2, i2, c2, 6);
+        EXPECT(i2.submix.load() == 4);
+        EXPECT(u8::submixKeyLamp(s2, i2, c2, 6) == 2);
+        // ── Shift + key cues it, the submix stays ──
+        i2.submix.store(0);
+        auto w = u8::cueKey(s2, c2, 6);
+        EXPECT(w.size() == 1 && w[0].first == "/controlroom/cuechan" && w[0].second == 4.0f);
+        EXPECT(i2.submix.load() == 0);
+        EXPECT(!u8::submixKeyCued(s2, c2, 6));
+        s2.cueChannel = 4;
+        EXPECT(u8::submixKeyCued(s2, c2, 6) && !u8::submixKeyCued(s2, c2, 5));
+        w = u8::cueKey(s2, c2, 6);                           // again: off
+        EXPECT(w.size() == 1 && w[0].second == -1.0f);
+        EXPECT(u8::cueKey(s2, c2, 7).empty());               // a dark key sends nothing
+        // ── Shift + SEL: only an output, its SOLO lamp says so ──
+        u8::Side sd;
+        in_::State i3;
+        i3.row.store(static_cast<int>(rmeu::Row::Output));
+        const auto chs = u8::channels(s2, i3, sd);
+        int at = -1;
+        for (int k = 0; k < 8; ++k) if (chs[static_cast<size_t>(k)] == 4) at = k;
+        EXPECT(at >= 0);
+        w = u8::cueStrip(s2, i3, sd, at);
+        EXPECT(w.size() == 1 && w[0].second == -1.0f);       // cued above: off
+        const std::array<u8::SoftCell, 8> none{};
+        EXPECT(u8::frame(s2, i3, sd, c2, none).strips[static_cast<size_t>(at)].solo);
+        i3.row.store(static_cast<int>(rmeu::Row::Input));
+        EXPECT(u8::cueStrip(s2, i3, sd, 2).empty());
     }
     // ── SEL is the UF1's selection ───────────────────────────────────────────
     {

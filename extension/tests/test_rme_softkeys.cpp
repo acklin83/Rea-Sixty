@@ -97,6 +97,21 @@ int main()
     // Our own file first, with a DAW bank 0 of its own and an RME bank 10 that
     // is about to become someone else's.
     bnd::load();
+
+    // ⇨ A SUBMIX BANK AS ORC WRITES IT: the output has to reach the file, and the
+    // slot must not count as empty there, or it is gone at the next start. Read
+    // back further down, the way Rea-Sixty reads ORC's file.
+    const int kSubmixBank = bnd::kUf1RmeBankBase + 6;
+    bnd::setUf1SoftBankDynamic(kSubmixBank, 0, bnd::DynamicBankKind::RmeSubmixes);
+    sk::setSubmixSpec(kSubmixBank, 2, "output:12");
+    sk::setSubmixSpec(kSubmixBank, 7, "phones3");
+    bnd::save();
+    const std::string orcWithSubmixes = readText(g_dir + "/bindings.json");
+    EXPECT(orcWithSubmixes.find("\"text\": \"output:12\"") != std::string::npos);
+    sk::setSubmixSpec(kSubmixBank, 2, {});
+    sk::setSubmixSpec(kSubmixBank, 7, {});
+    bnd::setUf1SoftBankDynamic(kSubmixBank, 0, bnd::DynamicBankKind::None);
+
     bnd::Binding own;
     own.label = "OWN DAW";
     own.shortPress[0].type   = bnd::ActionType::Builtin;
@@ -177,6 +192,48 @@ int main()
         for (const auto& c : o) dark = dark && c.label.empty() && c.lamp == 0;
         EXPECT(dark);
         bnd::setUf1SoftBankDynamic(bnd::kUf1RmeBankBase + 4, 0, bnd::DynamicBankKind::None);
+    }
+    // ⇨ A SUBMIX BANK (Frank 03.11.2026): a key's output lives in its slot, per half.
+    {
+        const int b = bnd::kUf1RmeBankBase + 5;
+        bnd::setUf1SoftBankDynamic(b, 0, bnd::DynamicBankKind::RmeSubmixes);
+        EXPECT(sk::rmeKind(b) == bnd::DynamicBankKind::RmeSubmixes);
+        EXPECT(sk::hasSecondHalf(b));
+        sk::setSubmixSpec(b, 1, "output:4");
+        sk::setSubmixSpec(b, 6, "phones2");
+        EXPECT(sk::submixSpec(b, 1) == "output:4" && sk::submixSpec(b, 6) == "phones2");
+        EXPECT(sk::submixSpec(b, 0).empty() && sk::submixSpec(b, 5).empty());
+        // Another action's text is no output: an OBS scene called "main" stays a scene.
+        {
+            bnd::Binding bd = bnd::getUf1SoftBankSlot(b, 3);
+            bd.shortPress[0].type      = bnd::ActionType::Builtin;
+            bd.shortPress[0].action    = "obs_scene";
+            bd.shortPress[0].textParam = "main";
+            bnd::setUf1SoftBankSlot(b, 3, bd);
+            EXPECT(sk::submixSpec(b, 3).empty());
+            bnd::setUf1SoftBankSlot(b, 3, bnd::Binding{});
+        }
+        // Without a mixer every key is empty and dark, and a press does nothing.
+        bool dark = true;
+        for (const auto& c : sk::uf8Row(b, &in)) dark = dark && c.label.empty() && c.lamp == 0;
+        EXPECT(dark);
+        in.submix.store(-1);
+        sk::press(b, 0, 1, true, {}, &in, false);
+        EXPECT(in.submix.load() == -1);
+        sk::setSubmixSpec(b, 1, {});
+        sk::setSubmixSpec(b, 6, {});
+        EXPECT(sk::submixSpec(b, 1).empty());
+        bnd::setUf1SoftBankDynamic(b, 0, bnd::DynamicBankKind::None);
+    }
+    // ⇨ AND IT COMES ACROSS: bank, kind and both halves, from ORC's file.
+    {
+        writeText(orc, orcWithSubmixes);
+        EXPECT(bnd::refreshSideCarSource(true));
+        EXPECT(sk::rmeKind(kSubmixBank) == bnd::DynamicBankKind::RmeSubmixes);
+        EXPECT(sk::submixSpec(kSubmixBank, 2) == "output:12");
+        EXPECT(sk::submixSpec(kSubmixBank, 7) == "phones3");
+        writeText(orc, kOrcJson);
+        EXPECT(bnd::refreshSideCarSource(true));
     }
     auto s0 = sk::row(bnd::kUf1RmeBankBase + 1, 0);
     auto s1 = sk::row(bnd::kUf1RmeBankBase + 1, 1);

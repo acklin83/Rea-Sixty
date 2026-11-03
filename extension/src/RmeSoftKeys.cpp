@@ -12,6 +12,7 @@ namespace reasixty::rme::softkeys {
 
 namespace bnd = uf8::bindings;
 using DK = bnd::DynamicBankKind;
+namespace rmeu = reasixty::rme::uf1;
 
 // ⇨ ONLY BANK ◄ ► PICK THE HALF (Frank 2026-09-28: "shift soll in beiden die
 // hälfte gar nicht mehr umschalten, dann ist das konsistent"). Held SHIFT used
@@ -66,7 +67,8 @@ DK rmeKind(int bank)
     // The bank's kind is Plain's: a TotalMix bank is one list of eight, split
     // over the two halves, not two lists.
     const DK k = bnd::getUf1SoftBankDynamic(bank, static_cast<int>(bnd::Modifier::Plain));
-    return (k == DK::RmeSnapshots || k == DK::RmeLayouts || k == DK::ObsScenes) ? k : DK::None;
+    return (k == DK::RmeSnapshots || k == DK::RmeLayouts || k == DK::ObsScenes
+            || k == DK::RmeSubmixes) ? k : DK::None;
 }
 
 // Moved from the extension's dynamicBankSlot_ (main.cpp), 25.09.2026, word for
@@ -143,10 +145,64 @@ KeyLamp dynKeyLamp(const bnd::Binding& slot, int half, int led)
     return k;
 }
 
-std::array<uf1spread::SkCell, 4> row(int bank, int half)
+std::string submixSpec(int bank, int item)
+{
+    if (item < 0 || item >= 8) return {};
+    // Only our own: another action's text is its own business (an OBS scene's name).
+    const auto& sp = bnd::getUf1SoftBankSlot(bank, item % 4).shortPress[item / 4];
+    return sp.action == kSubmixSlotAction ? sp.textParam : std::string();
+}
+
+void setSubmixSpec(int bank, int item, const std::string& spec)
+{
+    if (item < 0 || item >= 8) return;
+    bnd::Binding bd = bnd::getUf1SoftBankSlot(bank, item % 4);
+    auto& sp = bd.shortPress[item / 4];
+    sp.type      = spec.empty() ? bnd::ActionType::Noop : bnd::ActionType::Builtin;
+    sp.action    = spec.empty() ? std::string() : std::string(kSubmixSlotAction);
+    sp.textParam = spec;
+    bnd::setUf1SoftBankSlot(bank, item % 4, bd);
+}
+
+// A submix bank's four cells. The name is the user's label, else TotalMix' own;
+// a key without a visible output is empty and dark, as a key past OBS' last scene.
+static std::array<uf1spread::SkCell, 4> submixRow(int bank, int half, const input::State* in)
 {
     std::array<uf1spread::SkCell, 4> cells{};
+    auto& rm = manager();
+    const State st = rm.snapshot();
+    const bool online = rm.link() == LinkState::Online;
+    const int  sub = in ? rmeu::effectiveSubmix(st, in->submix.load()) : -1;
+    for (int i = 0; i < 4; ++i) {
+        auto& c = cells[static_cast<std::size_t>(i)];
+        const bnd::Binding bd = bnd::getUf1SoftBankSlot(bank, i);
+        const auto& sp = bd.shortPress[half];
+        c.haveLabel = true;
+        c.hasColour = true;
+        const int out = rmeu::keyOutput(st, submixSpec(bank, half * 4 + i));
+        if (out < 0) continue;
+        const std::string& own = (half == 0 && sp.label.empty()) ? bd.label : sp.label;
+        c.label = own.empty() ? rmeu::displayName(st, rmeu::Row::Output, out) : own;
+        const int led = !online ? 0 : out == sub ? 2 : 1;
+        const KeyLamp lamp = dynKeyLamp(bd, half, led);
+        c.on        = led >= 2;
+        c.colBright = lamp.bright;
+        c.colRgb    = lamp.rgb;
+        // Cue is yellow whatever colours the key carries: on stage it has to be
+        // the one thing that means the same on every key (Frank 03.11.2026).
+        if (led > 0 && st.cueChannel == out) {
+            c.colRgb    = 0xFFFF00u;
+            c.colBright = led >= 2;
+        }
+    }
+    return cells;
+}
+
+std::array<uf1spread::SkCell, 4> row(int bank, int half, const input::State* in)
+{
     const DK kind = rmeKind(bank);
+    if (kind == DK::RmeSubmixes) return submixRow(bank, half, in);
+    std::array<uf1spread::SkCell, 4> cells{};
     for (int i = 0; i < 4; ++i) {
         auto& c = cells[static_cast<std::size_t>(i)];
         if (kind == DK::None) {
@@ -171,12 +227,12 @@ std::array<uf1spread::SkCell, 4> row(int bank, int half)
 // ⇨ THE UF8's EIGHT SOFT KEYS IN THE TOTALMIX SIDE-CAR (Frank 29.10.2026: the
 // soft keys belong to the mode): bank `bankAbs`, both halves at once, keys 1-4
 // the first, 5-8 the second. The same on the UF8 in ORC and in Rea-Sixty.
-std::array<uf8side::SoftCell, 8> uf8Row(int bankAbs)
+std::array<uf8side::SoftCell, 8> uf8Row(int bankAbs, const input::State* in)
 {
     std::array<uf8side::SoftCell, 8> soft{};
     for (int h = 0; h < 2; ++h) {
         if (h == 1 && !hasSecondHalf(bankAbs)) break;
-        const auto cells = row(bankAbs, h);
+        const auto cells = row(bankAbs, h, in);
         for (int k = 0; k < 4; ++k) {
             const auto& c = cells[static_cast<size_t>(k)];
             uf8side::SoftCell& o = soft[static_cast<size_t>(h * 4 + k)];
@@ -190,10 +246,25 @@ std::array<uf8side::SoftCell, 8> uf8Row(int bankAbs)
     return soft;
 }
 
-void press(int bank, int half, int slot, bool pressed, const DynLoad& load)
+void press(int bank, int half, int slot, bool pressed, const DynLoad& load,
+           input::State* in, bool shift)
 {
     if (slot < 0 || slot >= 4) return;
     const DK kind = rmeKind(bank);
+    if (kind == DK::RmeSubmixes) {
+        if (!pressed || !in) return;
+        auto& rm = manager();
+        const State st = rm.snapshot();
+        const int out = rmeu::keyOutput(st, submixSpec(bank, half * 4 + slot));
+        if (out < 0) return;
+        if (shift) {
+            const auto m = rmeu::cueToggle(st, out);
+            if (!m.first.empty()) rm.send(m.first, m.second);
+        } else {
+            input::setSubmix(*in, st, rm.config(), out);
+        }
+        return;
+    }
     if (kind == DK::None) {
         bnd::dispatchUf1SoftBankSlot(bank, slot, pressed, half);
         return;

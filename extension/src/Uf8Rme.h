@@ -140,13 +140,20 @@ PageLamps pageLamps(const State& st, const rmei::State& in, const Side& u, const
 // alike: there they still move the channels on the faders (Frank 29.10.2026).
 PageLamps bankLamps(const State& st, const rmei::State& in, const Side& u);
 
-// ⇨ SEND/PLUG-IN 1-8 PICK THE SUBMIX (Frank 29.10.2026), in the control room's
-// order: 1-4 Phones 1-4, 5 Main B, 6 Main (rmeu::controlRoomOutputs), 7-8 empty.
-// A role without an output leaves its key dark rather than letting the others
-// move up, as on the UF1's pots. The lamp: 2 the submix in play, 1 another
-// output, 0 none.
-int  submixKeyLamp(const State& st, const rmei::State& in, int key);
+// ⇨ SEND/PLUG-IN 1-8 PICK THE SUBMIX (Frank 29.10.2026), each key its output from
+// cfg.uf8SubmixKeys (Frank 03.11.2026); the factory is the control room's order: 1-4
+// Phones 1-4, 5 Main B, 6 Main, 7-8 empty. A key without a visible output stays
+// dark rather than letting the others move up, as on the UF1's pots. The lamp: 2
+// the submix in play, 1 another output, 0 none.
+int  submixKeyLamp(const State& st, const rmei::State& in, const Config& cfg, int key);
 void pickSubmix(const State& st, rmei::State& in, const Config& cfg, int key);
+// ⇨ SHIFT + THE KEY CUES ITS OUTPUT, the submix stays (Frank 03.11.2026). The
+// lamp turns yellow, SOLO's colour, its brightness still says the submix.
+bool submixKeyCued(const State& st, const Config& cfg, int key);
+Writes cueKey(const State& st, const Config& cfg, int key);
+// SHIFT + SEL on an output strip does the same, Main standing on strip 8 too. On
+// any other row the press does nothing; the caller has already decided on Shift.
+Writes cueStrip(const State& st, const rmei::State& in, const Side& u, int strip);
 
 // The channel encoder: Main volume, as the UF1's jog (cfg.jogTarget, jogStepDb).
 // With cfg.uf8ShowMainOnChange the target stands on strip 8 for kMainShowMs.

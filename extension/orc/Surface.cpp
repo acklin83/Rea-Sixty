@@ -4,6 +4,7 @@
 #include "OrcConfig.h"
 #include "OrcLight.h"
 #include "OrcHandover.h"
+#include "OrcKeyboard.h"
 #include "OrcModes.h"
 #include "DynaMountManager.h"
 #include "Uf1SoftKeys.h"
@@ -186,7 +187,7 @@ bool Surface::softKeys_(const ::uf1::InputEvent& ev)
         rme::softkeys::press(bnd::uf1SideCarBankBase(set) + scBank_.load(),
                              rme::softkeys::half(in_),
                              static_cast<int>(id - ::uf1::btn::kDisplaySoft1),
-                             ev.pressed);
+                             ev.pressed, {}, &in_, host_.shift());
         return true;
     }
     // < > the bank, Bank ◄ ► the half: the extension's function (RmeSoftKeys).
@@ -211,6 +212,11 @@ void Surface::start()
     // default, g_fineFactorUf1 = 0.25.
     host_.knobScale = [] {
         return uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift) ? kFineFactor : 1.0;
+    };
+    // SEL on an output: with Shift it cues (Frank 03.11.2026), the keyboard counts.
+    host_.shift = [] {
+        return uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)
+            || orc::keyboardShiftHeld();
     };
     // The pots' speed from the UF1 page; the jog keeps its own step.
     host_.potSpeed = [] { return rme::manager().config().uf1PotSpeed; };
@@ -388,7 +394,7 @@ void Surface::loop_()
     host.sideCarSoftKeys = [this, &skCache, skSink](bool f) {
         namespace bnd = uf8::bindings;
         const int bank = bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme) + scBank_.load();
-        const auto cells = rme::softkeys::row(bank, rme::softkeys::half(in_));
+        const auto cells = rme::softkeys::row(bank, rme::softkeys::half(in_), &in_);
         uf1sk::emitRow(cells, f, /*ledsBorrowed*/ false, /*menuOpen*/ false, skCache, skSink);
     };
     // STRIP: the page's switches, built by the shared painter.

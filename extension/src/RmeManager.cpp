@@ -180,13 +180,19 @@ std::string configToJson(const Config& c)
     snprintf(buf, sizeof(buf),
         "  \"jog\": { \"target\": \"%s\", \"stepDb\": %.2f },\n"
         "  \"steps\": { \"vpotDb\": %.2f, \"uf1Speed\": %.2f, \"uf8Speed\": %.2f },\n"
-        "  \"sleep\": { \"enabled\": %s, \"minutes\": %d },\n"
-        "  \"uf8\": { \"showMainOnChange\": %s },\n"
+        "  \"sleep\": { \"enabled\": %s, \"minutes\": %d },\n",
+        clean(c.jogTarget).c_str(), c.jogStepDb, c.vpotStepDb, c.uf1PotSpeed, c.uf8PotSpeed,
+        c.sleepEnabled ? "true" : "false", c.sleepMinutes);
+    j += buf;
+    j += std::string("  \"uf8\": { \"showMainOnChange\": ")
+       + (c.uf8ShowMainOnChange ? "true" : "false") + ", \"submixKeys\": [";
+    for (int i = 0; i < Config::kUf8SubmixKeys; ++i)
+        j += std::string(i ? ", " : "") + "\"" + clean(c.uf8SubmixKeys[i]) + "\"";
+    j += "] },\n";
+    snprintf(buf, sizeof(buf),
         "  \"brightness\": { \"led\": %d, \"lcd\": %d },\n"
         "  \"surfaces\": { \"uf1\": %s, \"uf8\": %s },\n",
-        clean(c.jogTarget).c_str(), c.jogStepDb, c.vpotStepDb, c.uf1PotSpeed, c.uf8PotSpeed,
-        c.sleepEnabled ? "true" : "false", c.sleepMinutes,
-        c.uf8ShowMainOnChange ? "true" : "false", c.brightLed, c.brightLcd,
+        c.brightLed, c.brightLcd,
         c.uf1Enabled ? "true" : "false", c.uf8Enabled ? "true" : "false");
     j += buf;
     j += "  \"colours\": [";
@@ -260,9 +266,14 @@ bool configFromJson(const std::string& json, Config& out)
             c.sleepEnabled = (std::strcmp(v, "true") == 0 || std::strcmp(v, "1") == 0);
         if (const char* v = sl->get_string_by_name("minutes", true)) c.sleepMinutes = std::atoi(v);
     }
-    if (const wdl_json_element* u8 = root->get_item_by_name("uf8"); u8 && u8->is_object())
+    if (const wdl_json_element* u8 = root->get_item_by_name("uf8"); u8 && u8->is_object()) {
         if (const char* v = u8->get_string_by_name("showMainOnChange", true))
             c.uf8ShowMainOnChange = (std::strcmp(v, "true") == 0 || std::strcmp(v, "1") == 0);
+        if (const wdl_json_element* keys = u8->get_item_by_name("submixKeys"); keys && keys->is_array())
+            for (int i = 0; i < Config::kUf8SubmixKeys; ++i)
+                if (const wdl_json_element* e = keys->enum_item(i))
+                    if (const char* v = e->get_string_value()) c.uf8SubmixKeys[i] = v;
+    }
     if (const wdl_json_element* br = root->get_item_by_name("brightness"); br && br->is_object()) {
         if (const char* v = br->get_string_by_name("led", true)) c.brightLed = std::atoi(v);
         if (const char* v = br->get_string_by_name("lcd", true)) c.brightLcd = std::atoi(v);

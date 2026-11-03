@@ -79,8 +79,18 @@ KeyLamp dynKeyLamp(const uf8::bindings::Binding& slot, int half, int led);
 // nothing is sent. Thread-safe (the manager has its own lock).
 bool loadDyn(uf8::bindings::DynamicBankKind kind, int slot);
 
-// The four cells of `bank` (absolute) on `half`.
-std::array<uf1spread::SkCell, 4> row(int bank, int half);
+// ⇨ A SUBMIX BANK'S KEY (DynamicBankKind::RmeSubmixes): item 0..7, its output a
+// target as in rme.json (RmeUf1.h), "" for a dark key. Kept in the slot of that
+// half, ActionSlot::textParam, so it goes where the bank goes: orc.json, which
+// Rea-Sixty reads. The action only makes the serialiser keep the slot; nothing
+// fires it, a dynamic bank's slots do not dispatch.
+inline constexpr const char* kSubmixSlotAction = "rme_submix";
+std::string submixSpec(int bank, int item);
+void setSubmixSpec(int bank, int item, const std::string& spec);
+
+// The four cells of `bank` (absolute) on `half`. `in` says which submix is in
+// play on a submix bank; the other kinds do not read it.
+std::array<uf1spread::SkCell, 4> row(int bank, int half, const input::State* in = nullptr);
 
 // A press of key `slot` (0..3). A static bank fires its slot on that half
 // through the bindings engine, with the engine's long press and behaviour. A
@@ -88,10 +98,14 @@ std::array<uf1spread::SkCell, 4> row(int bank, int half);
 // move it to another thread (the extension, which also flashes the name), else
 // loadDyn right here (ORC).
 using DynLoad = std::function<void(uf8::bindings::DynamicBankKind kind, int slot)>;
-void press(int bank, int half, int slot, bool pressed, const DynLoad& load = {});
+// A submix bank acts right here on the press edge, on any thread (the manager
+// has its own lock, the selection is atomic): `in` is the selection it moves,
+// `shift` makes the press a cue.
+void press(int bank, int half, int slot, bool pressed, const DynLoad& load = {},
+           input::State* in = nullptr, bool shift = false);
 
 // The UF8's eight soft keys in the TotalMix side-car: bank `bankAbs`, both
 // halves at once (keys 1-4 the first, 5-8 the second). ORC and Rea-Sixty.
-std::array<uf8side::SoftCell, 8> uf8Row(int bankAbs);
+std::array<uf8side::SoftCell, 8> uf8Row(int bankAbs, const input::State* in = nullptr);
 
 } // namespace reasixty::rme::softkeys

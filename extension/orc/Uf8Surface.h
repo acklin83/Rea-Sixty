@@ -92,6 +92,9 @@ class Uf8Surface {
     void resetCache_();
     std::int64_t nowMs_() const;
     double scale_() const { return fineHeld_.load() ? kFineFactor : 1.0; }
+    // Shift as a gesture: this surface's FINE key, a key bound to mod_shift, or
+    // the keyboard, read here and now.
+    bool shiftNow_() const;
     // A V-Pot's: the speed from the UF8 page on top. The CHANNEL encoder keeps
     // scale_(), it has its own step (Frank 30.10.2026).
     double potScale_(double speed) const { return speed * scale_(); }

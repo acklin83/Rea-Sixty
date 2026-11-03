@@ -177,6 +177,27 @@ Target resolveTarget(const State& st, const std::string& spec)
     return t;
 }
 
+int keyOutput(const State& st, const std::string& spec)
+{
+    if (spec.empty()) return -1;
+    const Target t = resolveTarget(st, spec);
+    if (t.row != Row::Output || t.ch < 0) return -1;
+    const auto v = visibleChannels(st, Row::Output);
+    return std::find(v.begin(), v.end(), t.ch) == v.end() ? -1 : t.ch;
+}
+
+std::pair<std::string, float> cueToggle(const State& st, int ch)
+{
+    if (ch < 0) return {};
+    return { "/controlroom/cuechan", st.cueChannel == ch ? -1.0f : static_cast<float>(ch) };
+}
+
+bool soloLampOn(const State& st, Row r, int ch, int submix)
+{
+    if (r == Row::Output) return ch >= 0 && st.cueChannel == ch;
+    return soloed(st, r, ch, submix);
+}
+
 int effectiveSubmix(const State& st, int selectedOutput)
 {
     if (const Channel* c = channelOf(st, Row::Output, selectedOutput); c && c->colour != 0)

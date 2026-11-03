@@ -9769,7 +9769,7 @@ static bool sideCarSoftCell_(int s, reasixty::rme::uf8side::SoftCell& out)
     if (k == ScKeys::TotalMix) {
         namespace bnd = uf8::bindings;
         out = reasixty::rme::softkeys::uf8Row(bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme)
-            + g_sideCarBank[bnd::kUf1SideCarSetRme].load())[static_cast<size_t>(s)];
+            + g_sideCarBank[bnd::kUf1SideCarSetRme].load(), &g_rmeIn)[static_cast<size_t>(s)];
         return true;
     }
     using DK = uf8::bindings::DynamicBankKind;
@@ -27839,7 +27839,7 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                                 g_uf1DynBankReq.store((1u << 31)
                                     | (static_cast<uint32_t>(kind) << 24)
                                     | ((static_cast<uint32_t>(slot) & 0xFFFFu) << 8));
-                            });
+                            }, &g_rmeIn, shiftHeldAnywhere_());
                     } else {
                         // Scenes and presets with the gestures of their banks.
                         dispatchDynamicPress_(sk == ScKeys::Hue ? bnd::DynamicBankKind::HueScenes
@@ -27877,14 +27877,18 @@ static void onUf8InputUnit_(const uint8_t* dataIn, size_t lenIn, int unit)
                             switch ((id - 0x20) % 3) {
                                 case 0: w = u8s::solo(rst, g_rmeIn, g_uf8RmeSide, st); break;
                                 case 1: w = u8s::cut(rst, g_rmeIn, g_uf8RmeSide, st);  break;
-                                case 2: u8s::sel(rst, g_rmeIn, g_uf8RmeSide, st);       break;
+                                case 2:
+                                    if (shiftHeldAnywhere_()) w = u8s::cueStrip(rst, g_rmeIn, g_uf8RmeSide, st);
+                                    else u8s::sel(rst, g_rmeIn, g_uf8RmeSide, st);
+                                    break;
                             }
                         } else if (id >= 0x08 && id <= 0x0F) {
                             w = u8s::vpotPush(rst, g_rmeIn, g_uf8RmeSide, rcfg, id - 0x08, nowMs_());
                         } else if (id >= 0x18 && id <= 0x1F) {
                             w = u8s::pickPage(rst, g_rmeIn, g_uf8RmeSide, rcfg, id - 0x18);
                         } else if (id >= 0x48 && id <= 0x4F) {
-                            u8s::pickSubmix(rst, g_rmeIn, rcfg, id - 0x48);
+                            if (shiftHeldAnywhere_()) w = u8s::cueKey(rst, rcfg, id - 0x48);
+                            else u8s::pickSubmix(rst, g_rmeIn, rcfg, id - 0x48);
                         } else switch (id) {
                             case 0x78: u8s::shiftWindow(rst, g_rmeIn, g_uf8RmeSide, -8); break;
                             case 0x79: u8s::shiftWindow(rst, g_rmeIn, g_uf8RmeSide, +8); break;
@@ -29219,6 +29223,8 @@ static const reasixty::rme::input::Host& rmeInputHost_()
         [] { return g_uf1ModeMenu.load(); },
         [] { return reasixty_uf1KnobScale(shiftFineActive_() || g_uf1CsFine.load()); },
         [] { return reasixty::rme::manager().link() == reasixty::rme::LinkState::Online; },
+        nullptr, nullptr,
+        [] { return shiftHeldAnywhere_(); },
     };
     return h;
 }
@@ -29281,7 +29287,7 @@ static bool uf1SideCarSoftKeys_(const uf1::InputEvent& ev)
                     g_uf1DynBankReq.store((1u << 31)
                         | (static_cast<uint32_t>(kind) << 24)
                         | ((static_cast<uint32_t>(slot) & 0xFFFFu) << 8));
-                });
+                }, &g_rmeIn, shiftHeldAnywhere_());
         return true;
     }
     // ⇨ < > BLAETTERN DIE BANK (Frank 22.09.), BANK ◄ ► WAEHLEN DIE HAELFTE
@@ -36997,7 +37003,7 @@ static void uf1PaintSideCarSoftKeys_(bool force)
     // ⇨ DIE ZELLEN KOMMEN AUS RmeSoftKeys (25.09.2026), dieselben wie in ORC:
     // statisch oder TotalMix-Snapshots/-Layouts, Haelfte per Bank ◄ ►.
     const std::array<Uf1SkCell, 4> cells =
-        reasixty::rme::softkeys::row(bank, reasixty::rme::softkeys::half(g_rmeIn));
+        reasixty::rme::softkeys::row(bank, reasixty::rme::softkeys::half(g_rmeIn), &g_rmeIn);
     // Ein anderes Side-Car ist ein anderer Satz: dann alles neu.
     static int sSet = -1;
     const bool setEdge = (set != sSet);
@@ -46246,12 +46252,16 @@ void pushUf8GlobalLeds()
             const int units = uf8Units_();
             {
                 LedUnitScope scope(units > 1 ? 0 : -1);
-                const reasixty::rme::State rst = reasixty::rme::manager().snapshot();
+                const reasixty::rme::State  rst  = reasixty::rme::manager().snapshot();
+                const reasixty::rme::Config rcfg = reasixty::rme::manager().config();
+                const uf8::LedColour cueCol = uf8::ledColourYellow();
                 for (int i = 0; i < 8; ++i) {
-                    const int lamp = reasixty::rme::uf8side::submixKeyLamp(rst, g_rmeIn, i);
+                    const int lamp = reasixty::rme::uf8side::submixKeyLamp(rst, g_rmeIn, rcfg, i);
+                    const bool cue = reasixty::rme::uf8side::submixKeyCued(rst, rcfg, i);
                     sendUf8GlobalLedDirect_(kSpLeds[i], lamp == 2 ? uf8::GlobalLedState::Bright
                                                       : lamp == 1 ? uf8::GlobalLedState::Dim
-                                                                  : uf8::GlobalLedState::Off);
+                                                                  : uf8::GlobalLedState::Off,
+                                            cue ? &cueCol : nullptr);
                 }
             }
             if (units > 1) {

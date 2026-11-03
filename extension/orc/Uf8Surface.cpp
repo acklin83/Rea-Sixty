@@ -6,6 +6,7 @@
 #include "HueManager.h"
 #include "ObsManager.h"
 #include "OrcConfig.h"
+#include "OrcKeyboard.h"
 #include "OrcLog.h"
 #include "Palette.h"
 #include "Protocol.h"
@@ -67,6 +68,8 @@ constexpr int kPages = 6;   // V-POT, 1-5
 constexpr std::uint8_t kQuick1 = 0x43, kQuick2 = 0x44, kQuick3 = 0x45;
 constexpr std::uint8_t kSelNorm = 0x70, kSelRec = 0x71, kSelAuto = 0x72;
 constexpr std::uint8_t kNav = 0x73, kNudge = 0x74, kFocus = 0x75;
+// On top of a lamp state in paintLeds_: this key's output is cued, its lamp yellow.
+constexpr int kLampCue = 10;
 struct UserKey { std::uint8_t id; uf8::Uf8GlobalLed led; };
 constexpr UserKey kUserKeys[Uf8Surface::kUserKeyCount] = {
     { kQuick1,  uf8::Uf8GlobalLed::Quick1 }, { kQuick2, uf8::Uf8GlobalLed::Quick2 },
@@ -257,7 +260,7 @@ std::array<u8s::SoftCell, 8> Uf8Surface::softCells_(Mode m)
 {
     namespace bnd = uf8::bindings;
     if (m == Mode::TotalMix)
-        return rme::softkeys::uf8Row(bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme) + scBank_.load());
+        return rme::softkeys::uf8Row(bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme) + scBank_.load(), &in_);
     std::array<u8s::SoftCell, 8> soft{};
     for (int k = 0; k < 8; ++k) {
         const roomcells::Cell c = (m == Mode::Hue) ? roomcells::hueScene(k)
@@ -334,9 +337,11 @@ void Uf8Surface::paintLeds_()
     int sp[8] = {};
     u8s::PageLamps pl, bl;
     if (mode == static_cast<int>(Mode::TotalMix)) {
-        const rme::State st = rme::manager().snapshot();
-        for (int k = 0; k < 8; ++k) sp[k] = u8s::submixKeyLamp(st, in_, k);
-        pl = u8s::pageLamps(st, in_, side_, rme::manager().config());
+        const rme::State  st  = rme::manager().snapshot();
+        const rme::Config cfg = rme::manager().config();
+        for (int k = 0; k < 8; ++k)
+            sp[k] = u8s::submixKeyLamp(st, in_, cfg, k) + (u8s::submixKeyCued(st, cfg, k) ? kLampCue : 0);
+        pl = u8s::pageLamps(st, in_, side_, cfg);
         bl = u8s::bankLamps(st, in_, side_);
     }
     const struct { G led; int state; } want[] = {
@@ -365,8 +370,10 @@ void Uf8Surface::paintLeds_()
     for (size_t i = 0; i < std::size(want); ++i) {
         if (cLed_[i] == want[i].state) continue;
         cLed_[i] = want[i].state;
-        auto f = uf8::buildUf8GlobalLed(want[i].led,
-            want[i].state == 2 ? S::Bright : want[i].state == 1 ? S::Dim : S::Off);
+        const int lamp = want[i].state % kLampCue;
+        const S   s    = lamp == 2 ? S::Bright : lamp == 1 ? S::Dim : S::Off;
+        auto f = want[i].state >= kLampCue ? uf8::buildUf8GlobalLed(want[i].led, s, uf8::ledColourYellow())
+                                           : uf8::buildUf8GlobalLed(want[i].led, s);
         if (!f.ff38.empty())   dev_.send(std::move(f.ff38));
         if (!f.ff39.empty())   dev_.send(std::move(f.ff39));
         if (!f.legacy.empty()) dev_.send(std::move(f.legacy));
@@ -600,7 +607,7 @@ void Uf8Surface::softKey_(Mode m, int k, bool pressed)
     if (m == Mode::TotalMix) {
         namespace bnd = uf8::bindings;
         rme::softkeys::press(bnd::uf1SideCarBankBase(bnd::kUf1SideCarSetRme) + scBank_.load(),
-                             k / 4, k % 4, pressed);
+                             k / 4, k % 4, pressed, {}, &in_, shiftNow_());
         return;
     }
     if (pressed) { keyDownMs_[k].store(nowMs_()); return; }
@@ -631,6 +638,13 @@ int Uf8Surface::bankKeyLamp_(int idx) const
     if (static_cast<Mode>(mode_.load()) != Mode::TotalMix) return 0;
     if (idx >= bnd::uf1SideCarBankInUseCount(bnd::kUf1SideCarSetRme)) return 0;
     return scBank_.load() == idx ? 2 : 1;
+}
+
+bool Uf8Surface::shiftNow_() const
+{
+    return fineHeld_.load()
+        || uf8::bindings::modifierHeld(uf8::bindings::Modifier::Shift)
+        || keyboardShiftHeld();
 }
 
 void Uf8Surface::onButton_(std::uint8_t id, bool pressed)
@@ -703,7 +717,11 @@ void Uf8Surface::onButton_(std::uint8_t id, bool pressed)
         switch ((id - kStripKeys) % 3) {
             case 0: send_(u8s::solo(st, in_, side_, s)); break;
             case 1: send_(u8s::cut(st, in_, side_, s));  break;
-            case 2: u8s::sel(st, in_, side_, s);          break;
+            case 2:
+                // Shift + SEL on an output cues it (Frank 03.11.2026).
+                if (shiftNow_()) send_(u8s::cueStrip(st, in_, side_, s));
+                else             u8s::sel(st, in_, side_, s);
+                break;
         }
         return;
     }
@@ -712,7 +730,8 @@ void Uf8Surface::onButton_(std::uint8_t id, bool pressed)
         return;
     }
     if (id >= kSendPlugin1 && id < kSendPlugin1 + 8) {
-        u8s::pickSubmix(st, in_, cfg, id - kSendPlugin1);
+        if (shiftNow_()) send_(u8s::cueKey(st, cfg, id - kSendPlugin1));
+        else             u8s::pickSubmix(st, in_, cfg, id - kSendPlugin1);
         return;
     }
     rmei::Writes w;

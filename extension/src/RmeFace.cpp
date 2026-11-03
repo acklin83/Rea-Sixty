@@ -540,7 +540,7 @@ void paint(Cache& cc, input::State& in, const Host& h, const Out& o, bool force)
     {
         // Auf der FX-Reihe heisst CUT "Effekt aus" (rmeu::muted).
         const bool muted  = sel >= 0 && rmeu::muted(st, row, sel);
-        const bool soloOn = sel >= 0 && rmeu::soloed(st, row, sel, sub);
+        const bool soloOn = sel >= 0 && rmeu::soloLampOn(st, row, sel, sub);
         const bool selOn  = sel >= 0 && row == rmeu::Row::Output && sel == sub;
         const int packed = (muted ? 1 : 0) | (soloOn ? 2 : 0) | (selOn ? 4 : 0);
         if (force || packed != cc.sPacked) {

@@ -430,8 +430,14 @@ bool button(State& s, const Host& h, const rme::State& st, const Config& cfg,
             if (!a.empty())
                 out.push_back({ a, rmeu::soloed(st, r, sel, sub) ? 0.0f : 1.0f });
         } else if (r == rmeu::Row::Output) {
-            // SEL on an output makes it the submix, like a click in TotalMix.
-            s.submix.store(sel);
+            if (h.shift && h.shift()) {
+                // Shift + SEL cues the output, the submix stays (Frank 03.11.2026).
+                const auto m = rmeu::cueToggle(st, sel);
+                if (!m.first.empty()) out.push_back({ m.first, m.second });
+            } else {
+                // SEL on an output makes it the submix, like a click in TotalMix.
+                s.submix.store(sel);
+            }
         }
         return true;
     }

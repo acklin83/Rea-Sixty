@@ -8,6 +8,7 @@
 #include "Palette.h"
 #include "RmeManager.h"
 #include "RmeState.h"
+#include "RmeSoftKeys.h"
 #include "RmeUf1.h"
 
 #include <algorithm>
@@ -85,6 +86,23 @@ std::vector<Choice> targetChoices(const rme::State& st)
             char spec[32];
             std::snprintf(spec, sizeof spec, "%s:%d", kinds[r], ch);
             out.push_back({ spec, rmeu::displayName(st, row, ch) });
+        }
+    }
+    return out;
+}
+
+// What a key can pick: the output half of the same list (RmeUf1::keyOutput).
+std::vector<Choice> outputChoices(const rme::State& st)
+{
+    std::vector<Choice> out;
+    bool headed = false, outputs = false;
+    for (const auto& c : targetChoices(st)) {
+        if (c.header) {
+            headed  = true;
+            outputs = c.label == "Outputs";
+            if (outputs) out.push_back(c);
+        } else if (c.spec != "talk" && (!headed || outputs)) {
+            out.push_back(c);
         }
     }
     return out;
@@ -214,6 +232,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
 @property (nonatomic, strong) NSButton*      sleepBox;
 @property (nonatomic, strong) NSTextField*   sleepMinutes;
 @property (nonatomic, strong) NSButton*      showMainBox;
+@property (nonatomic, strong) NSMutableArray<NSPopUpButton*>* submixKeyPops;
 @property (nonatomic, strong) NSButton*      uf1UseBox;
 @property (nonatomic, strong) NSButton*      uf8UseBox;
 @property (nonatomic, strong) NSTextField*   knobStep;
@@ -244,6 +263,10 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     // they are refilled only when the mixer's answer actually changed. Same
     // rule as the surface painter: compare what you draw, not what arrived.
     std::vector<Choice> _lastChoices;
+    // The same for the output menus: the UF8's SEND/PLUG-IN keys and a submix
+    // bank, whose Action column shows them instead of the actions.
+    std::vector<Choice> _lastOutChoices;
+    BOOL _skShowsOutputs;
     // The action menus' entries after "(none)", filled once the surface has
     // registered its builtins (it starts after this window may be built).
     std::vector<std::string> _actions;
@@ -277,6 +300,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
         self.wearerLabels = [NSMutableArray array];
         self.skLabels     = [NSMutableArray array];
         self.skActions    = [NSMutableArray array];
+        self.submixKeyPops = [NSMutableArray array];
         self.skKeyNumbers = [NSMutableArray array];
         self.trActions    = [NSMutableArray array];
         self.skActive     = [NSMutableArray array];
@@ -503,6 +527,17 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     NSGridView* keys = [self keyTableFrom:kTransportCount to:kKeyCount heading:@"Keys"];
     [v setCustomSpacing:20.0 afterView:speed];
     [v addArrangedSubview:keys];
+    NSGridView* subs = [NSGridView gridViewWithNumberOfColumns:2 rows:0];
+    subs.columnSpacing = 10.0;
+    subs.rowSpacing = 6.0;
+    [subs addRowWithViews:@[ dim(@"SEND/PLUG-IN"), dim(@"Output") ]];
+    for (int i = 0; i < rme::Config::kUf8SubmixKeys; ++i) {
+        NSPopUpButton* p = [self popUp:@selector(submixKeyChanged:) tag:i width:240];
+        [self.submixKeyPops addObject:p];
+        [subs addRowWithViews:@[ label([NSString stringWithFormat:@"%d", i + 1]), p ]];
+    }
+    [v setCustomSpacing:20.0 afterView:keys];
+    [v addArrangedSubview:subs];
     item.view = [self pageWithStack:v];
     return item;
 }
@@ -539,6 +574,7 @@ NSStackView* withUnit(NSView* field, NSString* unit)
     [self.skKind addItemWithTitle:@"TotalMix snapshots"];
     [self.skKind addItemWithTitle:@"TotalMix layouts"];
     [self.skKind addItemWithTitle:@"OBS scenes"];
+    [self.skKind addItemWithTitle:@"TotalMix submixes"];
     [head addRowWithViews:@[ label(@"Shows"), self.skKind ]];
 
     self.skName = [self field:@selector(skNameChanged:) width:200];
@@ -792,6 +828,14 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
         for (NSPopUpButton* p in self.potTargets) [self fill:p with:choices];
         [self fill:self.jogTarget with:choices];
     }
+    const auto outChoices = outputChoices(st);
+    if (outChoices != _lastOutChoices) {
+        _lastOutChoices = outChoices;
+        for (NSPopUpButton* p in self.submixKeyPops) [self fill:p with:outChoices];
+        _skShowsOutputs = NO;   // the bank's menus fill again below
+    }
+    for (int i = 0; i < rme::Config::kUf8SubmixKeys; ++i)
+        [self select:self.submixKeyPops[i] spec:cfg.uf8SubmixKeys[i] among:outChoices];
 
     for (int i = 0; i < rme::Config::kVpotSlots; ++i) {
         [self select:self.potTargets[i] spec:cfg.vpots[i].target among:choices];
@@ -869,7 +913,8 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
     if (_actions.empty()) {
         _actions = rmeActions();
         if (!_actions.empty()) {
-            for (NSPopUpButton* p in self.skActions) [self fillActions:p];
+            if (!_skShowsOutputs)
+                for (NSPopUpButton* p in self.skActions) [self fillActions:p];
             for (NSPopUpButton* p in self.trActions) [self fillActions:p];
         }
     }
@@ -882,7 +927,17 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
     [self.skKind selectItemAtIndex:kind == bnd::DynamicBankKind::RmeSnapshots ? 1
                                  : kind == bnd::DynamicBankKind::RmeLayouts   ? 2
                                  : kind == bnd::DynamicBankKind::ObsScenes    ? 3
+                                 : kind == bnd::DynamicBankKind::RmeSubmixes  ? 4
                                  : kind == bnd::DynamicBankKind::None         ? 0 : -1];
+    // A submix bank's Action column is the output menu, with what the mixer has.
+    const bool subs = kind == bnd::DynamicBankKind::RmeSubmixes;
+    if (subs != (bool)_skShowsOutputs || (subs && _lastOutChoices.empty())) {
+        _skShowsOutputs = subs;
+        for (NSPopUpButton* p in self.skActions) {
+            if (subs) [self fill:p with:_lastOutChoices];
+            else      [self fillActions:p];
+        }
+    }
     if (self.window.firstResponder != self.skName.currentEditor)
         self.skName.stringValue = str(bnd::getUf1SoftBankName(bank, 0));
 
@@ -896,10 +951,12 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
         if (self.window.firstResponder != lab.currentEditor) {
             const std::string own = (half == 0 && sp.label.empty()) ? bd.label : sp.label;
             lab.stringValue = dyn ? @"" : str(own);
-            lab.placeholderString = dyn ? @"" : str(bnd::softKeyFallbackLabel(sp));
+            lab.placeholderString = dyn || subs ? @"" : str(bnd::softKeyFallbackLabel(sp));
         }
-        if (dyn) [self.skActions[i] selectItemAtIndex:-1];
-        else     [self selectAction:self.skActions[i] slot:sp];
+        if (subs)     [self select:self.skActions[i] spec:rme::softkeys::submixSpec(bank, half * 4 + i)
+                                 among:_lastOutChoices];
+        else if (dyn) [self.skActions[i] selectItemAtIndex:-1];
+        else          [self selectAction:self.skActions[i] slot:sp];
         // A snapshot or layout key takes its colours from here too (Frank
         // 02.10.2026, RmeSoftKeys::dynKeyLamp): Active = the loaded one,
         // Inactive = the others. Only the label and the action are fixed.
@@ -975,7 +1032,14 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
     const auto kind = i == 1 ? bnd::DynamicBankKind::RmeSnapshots
                     : i == 2 ? bnd::DynamicBankKind::RmeLayouts
                     : i == 3 ? bnd::DynamicBankKind::ObsScenes
+                    : i == 4 ? bnd::DynamicBankKind::RmeSubmixes
                              : bnd::DynamicBankKind::None;
+    // Leaving a submix bank takes its outputs along: on a plain bank a slot naming
+    // no action of ours would be a key that shows the wrong thing.
+    if (kind != bnd::DynamicBankKind::RmeSubmixes)
+        for (int item = 0; item < 8; ++item)
+            if (!rme::softkeys::submixSpec(bank, item).empty())
+                rme::softkeys::setSubmixSpec(bank, item, {});
     bnd::setUf1SoftBankDynamic(bank, 0, kind);
     // The kind belongs to the bank, both halves (RmeSoftKeys::rmeKind).
     bnd::setUf1SoftBankDynamic(bank, 1, bnd::DynamicBankKind::None);
@@ -1015,6 +1079,14 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
     const int bank = [self skBankAbs];
     const int half = [self skHalfNow];
     const int i = (int)sender.tag;
+    if (bnd::getUf1SoftBankDynamic(bank, 0) == bnd::DynamicBankKind::RmeSubmixes) {
+        const NSInteger at = sender.indexOfSelectedItem;
+        rme::softkeys::setSubmixSpec(bank, half * 4 + i,
+            at < 0 || (std::size_t)at >= _lastOutChoices.size() ? std::string()
+                                                                : _lastOutChoices[(std::size_t)at].spec);
+        [self refreshSoftKeys];
+        return;
+    }
     const std::string a = [self actionAt:sender.indexOfSelectedItem];
     bnd::Binding bd = bnd::getUf1SoftBankSlot(bank, i);
     auto& sp = bd.shortPress[half];
@@ -1146,6 +1218,15 @@ static void ledFromTag(NSInteger tag, bool active, uint8_t (&rgb)[3], bnd::Brigh
 {
     if (index < 0 || (std::size_t)index >= _lastChoices.size()) return {};
     return _lastChoices[(std::size_t)index].spec;   // a heading's is empty
+}
+
+- (void)submixKeyChanged:(NSPopUpButton*)sender
+{
+    const int i = (int)sender.tag;
+    const NSInteger at = sender.indexOfSelectedItem;
+    if (at < 0 || (std::size_t)at >= _lastOutChoices.size()) return;
+    const std::string spec = _lastOutChoices[(std::size_t)at].spec;
+    [self apply:^(rme::Config& c) { c.uf8SubmixKeys[i] = spec; }];
 }
 
 - (void)potTargetChanged:(NSPopUpButton*)sender

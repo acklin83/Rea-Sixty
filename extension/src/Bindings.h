@@ -769,6 +769,11 @@ enum class DynamicBankKind : uint8_t {
     // an EMPTY slot, Shift stores over, Ctrl clears (selbank::op). The key of the
     // preset last recalled or stored is lit.
     DynaMountPresets = 14,
+    // ⇨ EIGHT OUTPUTS ON KEYS, EACH WITH ITS NAME (Frank 03.11.2026). A side-car
+    // bank only: ORC sets it up and Rea-Sixty reads ORC's file, so no list in
+    // Rea-Sixty offers it. A key's output is its slot's text (RmeSoftKeys). Push
+    // makes it the submix, Shift cues it, the key in play is lit, a cued one yellow.
+    RmeSubmixes = 15,
 };
 
 // ⛔ THE PARSER'S UPPER BOUND LIVES HERE, NOT IN THE PARSER. Both loaders check
@@ -776,7 +781,7 @@ enum class DynamicBankKind : uint8_t {
 // a new kind was accepted by the editor, written to disk, and then silently
 // dropped on the next load — the bank came back static and nothing said why.
 // Adding a kind means moving this line, and only this line.
-constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::DynaMountPresets;
+constexpr DynamicBankKind kDynamicBankKindLast = DynamicBankKind::RmeSubmixes;
 
 // ⇨ DOES THIS KIND SPEND THE MODIFIERS ON ITS OWN GESTURES?
 // The FX bank and the Selection Sets bank do (Shift saves over, Cmd selects, Ctrl

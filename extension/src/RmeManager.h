@@ -132,6 +132,14 @@ struct Config {
     // 8 for two seconds, in the TotalMix side-car (Uf8Rme). Rea-Sixty reads it
     // from here too.
     bool uf8ShowMainOnChange = true;
+    // ⇨ THE UF8's SEND/PLUG-IN KEYS, ONE OUTPUT EACH (Frank 03.11.2026: "der beste
+    // Live-Controller für TotalMix"). A role or a fixed output, as a pot's target
+    // (RmeUf1.h), "" for a dark key. The factory is the control room in TotalMix'
+    // order, which is what the keys were before they could be set. Rea-Sixty reads
+    // these from here too.
+    static constexpr int kUf8SubmixKeys = 8;
+    std::string uf8SubmixKeys[kUf8SubmixKeys] = { "phones1", "phones2", "phones3", "phones4",
+                                                  "mainB",   "main",    "",        "" };
     // ⇨ ORC's BRIGHTNESS (Frank 29.10.2026), the steps of Brightness.h, 0 dark ..
     // 4 full, for the UF1 and the UF8 alike, set by the brightness_* actions.
     // Rea-Sixty keeps its own in REAPER and does not read these.

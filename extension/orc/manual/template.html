@@ -350,7 +350,7 @@ writes: <code>&gt; Main</code> for an input or a playback (the <a href="#rows">s
 <h3>SOLO, CUT, SEL</h3>
 <table class="data"><thead><tr><th>Row</th><th>SOLO</th><th>CUT</th><th>SEL</th></tr></thead><tbody>
 <tr><td>Input, Playback</td><td>Solo in the current submix</td><td>Mute</td><td>Nothing</td></tr>
-<tr><td>Output</td><td>Nothing (TotalMix has no solo on an output)</td><td>Mute</td><td>Makes it the submix</td></tr>
+<tr><td>Output</td><td>Nothing, lit while the output is <a href="#cue">cued</a></td><td>Mute</td><td>Makes it the submix. With SHIFT: cues it</td></tr>
 <tr><td>FX</td><td>Nothing</td><td>Switches the effect off and on; lit while off</td><td>Nothing</td></tr>
 </tbody></table>
 </div>
@@ -855,7 +855,7 @@ position. The bottom line: X, Y and R, and <code>OFF</code> when the stand does 
 <h3>SOLO, CUT, SEL</h3>
 <table class="data"><thead><tr><th>Mode, row</th><th>SOLO</th><th>CUT</th><th>SEL</th></tr></thead><tbody>
 <tr><td>TotalMix, input, playback</td><td>Solo in the current submix</td><td>Mute</td><td>This channel on the UF1</td></tr>
-<tr><td>TotalMix, output</td><td>Nothing (TotalMix has no solo on an output)</td><td>Mute</td><td>This channel on the UF1, and the submix</td></tr>
+<tr><td>TotalMix, output</td><td>Nothing, lit while the output is <a href="#cue">cued</a></td><td>Mute</td><td>This channel on the UF1, and the submix. With FINE: cues it</td></tr>
 <tr><td>TotalMix, FX</td><td>Nothing</td><td>Switches the effect off and on; lit while off</td><td>This channel on the UF1</td></tr>
 <tr><td>Hue</td><td>This lamp stays on, every other one goes dark</td><td>The lamp on and off</td><td>Nothing</td></tr>
 <tr><td>DynaMount</td><td>Nothing</td><td>Nothing</td><td>Nothing</td></tr>
@@ -877,9 +877,12 @@ is nearest. The stand moves when you let go of the fader.</td></tr>
 
 <div class="ctl" id="u-sendplugin" data-uf8="kSendPlugin1">
 <h3>SEND / PLUG-IN 1-8</h3>
-<p>In TotalMix: the <a href="#rows">submix</a>, in the order of TotalMix' control room: 1-4 Phones
-1-4, 5 Main B, 6 Main. The key of the submix in play is lit, a key without an output is dark, 7 and
-8 are empty. In Hue and DynaMount they do nothing.</p>
+<p>In TotalMix: each key picks one output as the <a href="#rows">submix</a>, any output or control-room
+role, set on the page <a href="#set-uf8">UF8</a>. Out of the box TotalMix' control-room order: 1-4
+Phones 1-4, 5 Main B, 6 Main, 7 and 8 empty. The key of the submix in play is lit. A key whose output
+is empty, hidden or not assigned is dark and does nothing.</p>
+<p>FINE and a key <a href="#cue">cues</a> its output, the submix stays. The lamp turns yellow; the same
+press switches it off. In Hue and DynaMount the keys do nothing.</p>
 </div>
 
 <div class="ctl" id="u-plugin" data-uf8="kPlugin">
@@ -915,7 +918,8 @@ the bank showing is lit, a key without a bank is dark. In Hue and DynaMount they
 <div class="ctl" id="u-fine" data-uf8="kFine">
 <h3>FINE</h3>
 <p>Held: the CHANNEL encoder, and in TotalMix the V-Pots, turn in finer steps, {{fineFactorText}}
-of the normal step. In DynaMount, FINE and a push on a soft key store over a preset.</p>
+of the normal step. In TotalMix it is the UF8's Shift for <a href="#cue">Cue</a>. In DynaMount, FINE
+and a push on a soft key store over a preset.</p>
 </div>
 
 <div class="ctl" id="u-channel" data-uf8="kChannelEncoder kChannelPush">
@@ -1074,14 +1078,17 @@ only from a proxy inside a private network; from anywhere else they could be for
 <section id="softkeys">
 <h2>Soft-key banks</h2>
 <p>In the overview the four keys above the large screen play a bank of eight keys, four at a time.
-&lt; and &gt; step through the banks, BANK ◄ ► pick the half. A bank holds either keys you set up
-yourself or one of three lists:</p>
+&lt; and &gt; step through the banks, BANK ◄ ► pick the half. A bank is either keys you set up
+yourself or one of four lists:</p>
 <ul>
   <li><strong>TotalMix snapshots</strong>: the eight snapshots by the names TotalMix gives them. A press
       loads one. The key of the active snapshot is lit.</li>
   <li><strong>TotalMix layouts</strong>: the eight layouts. A press loads one; the one loaded last is lit.</li>
   <li><strong>OBS scenes</strong>: the first eight scenes OBS reports, in OBS's order. A press switches
       to one; the scene on air is lit. Needs OBS set up on the page <a href="#set-modes">UF8 Modes</a>.</li>
+  <li><strong>TotalMix submixes</strong>: eight outputs you pick, each key showing the output's name from
+      TotalMix. A press makes it the <a href="#rows">submix</a>, which is lit. SHIFT, or FINE on the UF8,
+      and a press <a href="#cue">cues</a> it, and the key turns yellow.</li>
 </ul>
 <p>On the UF8, V-POT to 5 pick banks 1 to 6, and its eight soft keys show a bank's two halves at once
 (<a href="#u-soft">soft keys</a>).</p>
@@ -1120,6 +1127,11 @@ key; press it again, or touch anything, to wake them.</td></tr>
 <p>How bright the LEDs and the displays are is set from a key, with the six <em>Brightness</em>
 <a href="#actions">actions</a>: LEDs, displays (LCDs) or both, one step brighter or darker, five
 steps from dark to full. Both surfaces follow, and ORC keeps the steps.</p>
+<h3 id="cue">Cue</h3>
+<p>TotalMix cues one hardware output at a time and sends it to the output set under Assign, Cue to in
+its control room. ORC switches the Cue, the destination stays in TotalMix. Three ways, each with SHIFT
+on the UF1, FINE on the UF8, or Shift on the Mac's keyboard: SEL on an output strip, a SEND/PLUG-IN key,
+a key of a submix bank. The same press on the cued output switches it off. The submix does not move.</p>
 <h3 id="set-controls">UF1</h3>
 <table class="data"><tbody>
 <tr><th>Use the UF1</th><td>On out of the box. Off: ORC lets go of the UF1 and leaves it alone, so SSL
@@ -1149,14 +1161,17 @@ Main meanwhile, and keep it there while you use them.</td></tr>
 encoder keeps the jog step.</td></tr>
 <tr><th>Keys</th><td>An action and the two lamp colours for QUICK 1-3, NORM, REC, AUTO, NAV, NUDGE
 and FOCUS, as for the UF1's transport keys.</td></tr>
+<tr><th>SEND/PLUG-IN</th><td>The output of each of the eight keys: a control-room role or any output
+TotalMix shows this remote. A role follows TotalMix, as on the pots.</td></tr>
 </tbody></table>
 <h3 id="set-softkeys">Soft Keys</h3>
 <table class="data"><tbody>
 <tr><th>Bank, Half</th><td>Which bank and which half you are editing.</td></tr>
-<tr><th>Shows</th><td>Keys, TotalMix snapshots, TotalMix layouts or OBS scenes.</td></tr>
+<tr><th>Shows</th><td>Keys, TotalMix snapshots, TotalMix layouts, OBS scenes or TotalMix submixes.</td></tr>
 <tr><th>Name</th><td>The bank's name on the large screen.</td></tr>
 <tr><th>Label, Action</th><td>Per key: what the screen says and what a press does. An empty label
-takes the action's own.</td></tr>
+takes the action's own. On a submix bank the Action menu is the key's output, and an empty label takes
+the output's name.</td></tr>
 <tr><th>Active, Inactive</th><td>Per key: the lamp's colour while its action is on, and otherwise.
 <em>Off</em> leaves the lamp dark. On a bank of snapshots or layouts, Active is the snapshot or layout that is loaded and Inactive the others; without a colour of their own the keys are white.</td></tr>
 <tr><th>Factory set for this bank</th><td>Puts this bank back the way it came.</td></tr>

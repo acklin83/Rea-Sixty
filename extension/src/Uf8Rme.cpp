@@ -283,10 +283,11 @@ Frame frame(const State& st, const rmei::State& in, const Side& u, const Config&
             v.faderPb = static_cast<std::uint16_t>(std::lround(std::clamp(lin, 0.0, 1.0) * uf8fader::kPbMax));
         }
 
-        // Lamps: SEL = the channel the UF1 shows, CUT = mute, SOLO = solo in the submix.
+        // Lamps: SEL = the channel the UF1 shows, CUT = mute, SOLO = solo in the
+        // submix, on an output its cue.
         v.sel  = !held && (ch == sel);
         v.cut  = rmeu::muted(st, rs, ch);
-        v.solo = rmeu::soloed(st, rs, ch, sub);
+        v.solo = rmeu::soloLampOn(st, rs, ch, sub);
 
         // Meter: TotalMix' peak level, when it sends one.
         {
@@ -542,23 +543,48 @@ Writes mainVolume(const State& st, const rmei::State& in, Side& u, const Config&
 }
 
 namespace {
-int submixKeyOutput(const State& st, int key)
+int submixKeyOutput(const State& st, const Config& cfg, int key)
 {
-    if (key < 0 || key >= rmeu::kControlRoomSlots) return -1;
-    return rmeu::controlRoomOutputs(st)[static_cast<size_t>(key)];
+    if (key < 0 || key >= Config::kUf8SubmixKeys) return -1;
+    return rmeu::keyOutput(st, cfg.uf8SubmixKeys[key]);
 }
 } // namespace
 
-int submixKeyLamp(const State& st, const rmei::State& in, int key)
+int submixKeyLamp(const State& st, const rmei::State& in, const Config& cfg, int key)
 {
-    const int out = submixKeyOutput(st, key);
+    const int out = submixKeyOutput(st, cfg, key);
     if (out < 0) return 0;
     return out == rmeu::effectiveSubmix(st, in.submix.load()) ? 2 : 1;
 }
 
 void pickSubmix(const State& st, rmei::State& in, const Config& cfg, int key)
 {
-    rmei::setSubmix(in, st, cfg, submixKeyOutput(st, key));
+    rmei::setSubmix(in, st, cfg, submixKeyOutput(st, cfg, key));
+}
+
+bool submixKeyCued(const State& st, const Config& cfg, int key)
+{
+    const int out = submixKeyOutput(st, cfg, key);
+    return out >= 0 && st.cueChannel == out;
+}
+
+Writes cueKey(const State& st, const Config& cfg, int key)
+{
+    Writes out;
+    const auto m = rmeu::cueToggle(st, submixKeyOutput(st, cfg, key));
+    if (!m.first.empty()) out.push_back({ m.first, m.second });
+    return out;
+}
+
+Writes cueStrip(const State& st, const rmei::State& in, const Side& u, int strip)
+{
+    Writes out;
+    if (strip < 0 || strip >= kStrips) return out;
+    const Target t = targetOf(st, in, u, strip);
+    if (t.r != rmeu::Row::Output) return out;
+    const auto m = rmeu::cueToggle(st, t.ch);
+    if (!m.first.empty()) out.push_back({ m.first, m.second });
+    return out;
 }
 
 } // namespace reasixty::rme::uf8side

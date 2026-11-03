@@ -96,6 +96,22 @@ struct Target {
 };
 Target resolveTarget(const State& st, const std::string& spec);
 
+// ⇨ THE OUTPUT A KEY PICKS (the UF8's SEND/PLUG-IN keys, a submix bank's soft
+// keys). -1 when the target is no output, its role has no channel, this remote
+// cannot see the channel, or it is the right half of a pair. Such a key is dark
+// and does nothing: a snapshot can move a role under the hand, and a press on a
+// hidden output landed on Main without a word (effectiveSubmix).
+int keyOutput(const State& st, const std::string& spec);
+
+// ⇨ CUE (Frank 03.11.2026). TotalMix cues one hardware output at a time and
+// reports it as /controlroom/cuechan, -1 for none; measured 03.11. on his TotalMix:
+// a write lands, -1 clears, and the remote that wrote gets no echo. A second cue
+// on the same output switches it off.
+std::pair<std::string, float> cueToggle(const State& st, int ch);
+// SOLO's lamp: solo in the submix, on an output the cue, where TotalMix too has
+// the Cue button instead of Solo.
+bool soloLampOn(const State& st, Row r, int ch, int submix);
+
 // The submix an input/playback node writes into: the given output if it is
 // visible, else Main, else the first visible output, else -1.
 int effectiveSubmix(const State& st, int selectedOutput);
