@@ -5,7 +5,7 @@ author: |
   Frank Acklin
   \
   [www.stoersender-studio.ch](https://www.stoersender-studio.ch)
-date: v0.8.1
+date: v0.9.0
 documentclass: article
 geometry: margin=2.5cm
 fontsize: 11pt
@@ -37,7 +37,7 @@ Runtime dependencies (`libusb`, `hidapi`) ship inside the platform archives; no 
 
 ## Versioning
 
-This manual documents Rea-Sixty v0.8.1. Earlier manuals (anything dated before 2026-09-06) are superseded.
+This manual documents Rea-Sixty v0.9.0. Earlier manuals (anything dated before 2026-09-06) are superseded.
 
 Each release also carries a codename, shown on the **About** tab below the version. The codename has no functional role — just makes the release easier to refer to in conversation.
 
@@ -649,6 +649,11 @@ ORC's manual describes that view control by control:
 <https://acklin83.github.io/ORC/>. Without ORC the page does not appear.
 A transport key that has a TotalMix action in ORC runs it here as well, and its lamp shows it in
 ORC's colours; a transport key ORC leaves free stays REAPER's, lamp included.
+
+**TotalMix on the UF8.** With ORC installed, `SHIFT` + `LAYER 1` puts TotalMix on the left UF8.
+ORC's manual describes it key by key. The UF8 and the UF1 share the soft-key banks set up in ORC,
+and each shows the bank you picked on it. While TotalMix, Hue or DynaMount is on the left UF8, the
+Quick keys and the `LAYER` keys without `SHIFT` do nothing: `SHIFT` + `LAYER` goes from mode to mode.
 
 ## The channel (all views)
 
