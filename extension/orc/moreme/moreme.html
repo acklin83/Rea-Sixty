@@ -209,16 +209,39 @@ body{
 #hint{flex:none;text-align:center;font-size:12px;color:var(--fg3);padding:2px 0 6px}
 #hint:empty{display:none}
 .card.nomaster{display:none}
+/* ⇨ A PHONE ON ITS SIDE (Frank 03.11.2026, iPhone in Safari: about 190 px for a
+   card). Stacked, the fader had nothing left and ran over the name. So: name and
+   value on top, the fader over the full height on the left, the keys beside it. */
 @media (max-height:500px){
-  .head{padding:6px 12px 4px}
-  #mix.wide{padding:2px 8px 6px}
-  #mix.wide .card{min-height:0;padding:6px 6px 6px}
-  #mix.wide .fader{min-height:50px;margin:4px auto}
-  #mix.wide .btn{height:28px;font-size:14px}
-  #mix.wide .pan{width:26px;height:26px}
-  #mix.wide .pan .pthumb{height:10px}
-  #mix.wide .keys button{padding:3px 0;font-size:11px}
-  #mix.wide .ctrl{gap:3px;margin-top:3px}
+  .head{padding:4px 12px 2px}
+  .head .who{font-size:14px}
+  .brand{font-size:16px}
+  .moon,.gear{font-size:18px;padding:2px 6px}
+  #hint{font-size:10px;padding:0 0 2px}
+  #mix.wide{padding:2px 8px 2px;gap:6px}
+  #mix.wide .card,#mix.wide .card.muted{
+    flex:0 0 110px;min-height:0;padding:5px 5px;gap:3px 4px;align-items:stretch;
+    display:grid;grid-template-columns:minmax(0,1fr) 42px;
+    grid-template-rows:auto repeat(6,min-content) 1fr;
+  }
+  #mix.wide .card .row1,#mix.wide .card.muted .row1{grid-column:1 / -1;grid-row:1;margin:0;padding:0;gap:0}
+  #mix.wide .card .name{font-size:12px;line-height:14px;width:100%}
+  #mix.wide .card.master .name{font-size:11px;letter-spacing:0}
+  #mix.wide .card .db{font-size:11px;line-height:13px}
+  #mix.wide .fader,#mix.wide .card.muted .fader{grid-column:1;grid-row:2 / -1;width:26px;min-height:0;height:auto;margin:9px 0 9px 17px}
+  #mix.wide .meter.v{left:calc(100% + 1px);gap:1px}
+  #mix.wide .fader .thumb{width:26px;height:16px}
+  #mix.wide .fader .thumb::after{left:5px;right:5px}
+  .tick{left:-18px;width:15px;font-size:9px}
+  #mix.wide .tick.more{display:none}
+  #mix.wide .keys,#mix.wide .ctrl,#mix.wide .card.muted .ctrl{display:contents}
+  #mix.wide .keys button,#mix.wide .fxb,#mix.wide .ctrl>*{grid-column:2}
+  #mix.wide .keys button{padding:0;height:20px;font-size:10px;border-radius:5px}
+  #mix.wide .fxb{height:14px;margin:0}
+  #mix.wide .fxb span{line-height:14px;font-size:9px;right:4px}
+  #mix.wide .pan,#mix.wide .card.muted .pan{width:22px;height:22px;margin:0 auto}
+  #mix.wide .pan .pthumb{height:8px;width:2px;margin-left:-1px}
+  #mix.wide .btn,#mix.wide .card.muted .btn.solo{width:100%;height:22px;font-size:12px;border-radius:5px}
 }
 
 /* MY FADERS, in the settings */
@@ -306,8 +329,8 @@ body.light #toast{background:#fff;border-color:#c4c7cc}
     <label data-t="view">Ansicht</label>
     <select id="setLayout" style="width:100%;background:var(--bg3);border:1px solid #2a2a2a;color:var(--fg);padding:12px;border-radius:10px;font:inherit;font-size:16px">
       <option value="auto" data-t="viewAuto">Automatisch (je nach Gerät)</option>
-      <option value="iphone" data-t="viewPhone">iPhone (Liste)</option>
-      <option value="ipad" data-t="viewPad">iPad (Mischpult)</option>
+      <option value="iphone" data-t="viewPhone">Horizontale Fader</option>
+      <option value="ipad" data-t="viewPad">Senkrechte Fader</option>
     </select>
     <label data-t="sticky">Master fixieren</label>
     <select id="setSticky" style="width:100%;background:var(--bg3);border:1px solid #2a2a2a;color:var(--fg);padding:12px;border-radius:10px;font:inherit;font-size:16px">
@@ -402,7 +425,7 @@ const TEXT = {
     pick: 'Wähle deinen Kopfhörer-Mix.<br>Dieses Gerät merkt sich die Wahl.',
     connecting: 'Verbinde mit ORC…',
     settings: 'Einstellungen', mix: 'Kopfhörer-Mix', view: 'Ansicht',
-    viewAuto: 'Automatisch (je nach Gerät)', viewPhone: 'iPhone (Liste)', viewPad: 'iPad (Mischpult)',
+    viewAuto: 'Automatisch (je nach Gerät)', viewPhone: 'Horizontale Fader', viewPad: 'Senkrechte Fader',
     sticky: 'Master fixieren', stickyOff: 'Aus (mitscrollen)', stickyOn: 'An (oben/rechts angepinnt)',
     meters: 'Pegelanzeige', metersBars: 'Balken', metersFader: 'Im Fader', metersOff: 'Aus',
     cancel: 'Abbrechen', save: 'Speichern', reset: 'Gerät zurücksetzen',
@@ -431,7 +454,7 @@ const TEXT = {
     pick: 'Pick your headphone mix.<br>This device remembers the choice.',
     connecting: 'Connecting to ORC…',
     settings: 'Settings', mix: 'Headphone mix', view: 'View',
-    viewAuto: 'Automatic (by device)', viewPhone: 'iPhone (list)', viewPad: 'iPad (mixing desk)',
+    viewAuto: 'Automatic (by device)', viewPhone: 'Horizontal faders', viewPad: 'Vertical faders',
     sticky: 'Pin the master', stickyOff: 'Off (scrolls along)', stickyOn: 'On (pinned top/right)',
     meters: 'Meters', metersBars: 'Bars', metersFader: 'In the fader', metersOff: 'Off',
     cancel: 'Cancel', save: 'Save', reset: 'Reset this device',
@@ -460,7 +483,7 @@ const TEXT = {
     pick: 'Choisis ton mix casque.<br>Cet appareil s\'en souvient.',
     connecting: 'Connexion à ORC…',
     settings: 'Réglages', mix: 'Mix casque', view: 'Affichage',
-    viewAuto: 'Automatique (selon l\'appareil)', viewPhone: 'iPhone (liste)', viewPad: 'iPad (table de mixage)',
+    viewAuto: 'Automatique (selon l\'appareil)', viewPhone: 'Faders horizontaux', viewPad: 'Faders verticaux',
     sticky: 'Fixer le master', stickyOff: 'Non (défile avec la page)', stickyOn: 'Oui (épinglé en haut/à droite)',
     meters: 'Vumètres', metersBars: 'Barres', metersFader: 'Dans le fader', metersOff: 'Non',
     cancel: 'Annuler', save: 'Enregistrer', reset: 'Réinitialiser cet appareil',
@@ -489,7 +512,7 @@ const TEXT = {
     pick: 'Scegli il tuo mix cuffie.<br>Questo dispositivo ricorda la scelta.',
     connecting: 'Connessione a ORC…',
     settings: 'Impostazioni', mix: 'Mix cuffie', view: 'Vista',
-    viewAuto: 'Automatica (in base al dispositivo)', viewPhone: 'iPhone (elenco)', viewPad: 'iPad (mixer)',
+    viewAuto: 'Automatica (in base al dispositivo)', viewPhone: 'Fader orizzontali', viewPad: 'Fader verticali',
     sticky: 'Fissa il master', stickyOff: 'No (scorre con la pagina)', stickyOn: 'Sì (fisso in alto/a destra)',
     meters: 'Indicatori di livello', metersBars: 'Barre', metersFader: 'Nel fader', metersOff: 'No',
     cancel: 'Annulla', save: 'Salva', reset: 'Reimposta questo dispositivo',
@@ -520,7 +543,7 @@ const TEXT = {
     pick: 'Tscherna tes mix d\'uregliers.<br>Quest apparat memorisescha la tscherna.',
     connecting: 'Colliaziun cun ORC…',
     settings: 'Preferenzas', mix: 'Mix d\'uregliers', view: 'Vista',
-    viewAuto: 'Automatic (tenor l\'apparat)', viewPhone: 'iPhone (glista)', viewPad: 'iPad (pult da maschadar)',
+    viewAuto: 'Automatic (tenor l\'apparat)', viewPhone: 'Faders orizontals', viewPad: 'Faders verticals',
     sticky: 'Fixar il master', stickyOff: 'Na (scrolla cun la pagina)', stickyOn: 'Gea (fixà sura/a dretga)',
     meters: 'Indicatur dal livel', metersBars: 'Travs', metersFader: 'En il fader', metersOff: 'Na',
     cancel: 'Annullar', save: 'Memorisar', reset: 'Definir da nov quest apparat',
@@ -885,13 +908,18 @@ function $(id){return document.getElementById(id);}
 const wideMq = window.matchMedia('(min-width: 700px)');
 function getLayoutPref(){return localStorage.getItem(LS.layout) || 'auto';}
 function getStickyPref(){return localStorage.getItem(LS.sticky) !== '0';}
+// A phone on its side: strips whatever the choice, a list would show two cards.
+const shortMq = window.matchMedia('(max-height: 500px) and (min-width: 700px)');
 function isWide(){
+  if (shortMq.matches) return true;
   const pref = getLayoutPref();
   if (pref === 'iphone') return false;
   if (pref === 'ipad')   return true;
   return wideMq.matches;
 }
 wideMq.addEventListener('change', updateUI);
+// Turning the phone changes every fader's length: the thumbs follow at once.
+window.addEventListener('resize', updateUI);
 // ⛔ TWO FAILURES, TWO SENTENCES. "Connecting" used to appear whenever the mix
 // list was empty, which is also what a perfectly connected ORC looks like while
 // TotalMix says nothing. It sent Frank looking at the wrong end for an evening
@@ -1048,7 +1076,9 @@ function faderTicks(sendId){
   let o = '';
   for (const db of [6,0,-6,-12,-24,-40]){
     if (db > max) continue;
-    o += '<span class="tick" style="bottom:'+(dbToPos(db)*100)+'%">'+(db>0?'+':'')+db+'</span>';
+    // The ones in between give way on a short fader.
+    const more = db === 6 || db === -6;
+    o += '<span class="tick'+(more?' more':'')+'" style="bottom:'+(dbToPos(db)*100)+'%">'+(db>0?'+':'')+db+'</span>';
   }
   return o;
 }
