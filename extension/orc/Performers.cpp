@@ -307,13 +307,20 @@ std::string outputsJson(const reasixty::rme::State& st)
 
 namespace {
 
-// The host without its port, lower case.
-std::string hostOnly(std::string h)
+// Host and port, lower case, without a scheme or a path.
+std::string hostWithPort(std::string h)
 {
     if (const std::size_t scheme = h.find("://"); scheme != std::string::npos) h = h.substr(scheme + 3);
     if (const std::size_t slash = h.find('/'); slash != std::string::npos) h = h.substr(0, slash);
-    if (const std::size_t colon = h.rfind(':'); colon != std::string::npos) h = h.substr(0, colon);
     for (char& c : h) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return h;
+}
+
+// The host without its port.
+std::string hostOnly(const std::string& hostPort)
+{
+    std::string h = hostWithPort(hostPort);
+    if (const std::size_t colon = h.rfind(':'); colon != std::string::npos) h = h.substr(0, colon);
     return h;
 }
 
@@ -330,7 +337,8 @@ bool deskAllowed(const std::string& peer, const std::string& xRealIp, const std:
     if (!xRealIp.empty() || !xForwardedFor.empty()) return false;
     if (!loopbackName(hostOnly(host))) return false;
     // A browser sends Origin with a WebSocket. A page elsewhere can't fake it.
-    if (!origin.empty() && hostOnly(origin) != hostOnly(host)) return false;
+    // The port counts: another page on this Mac, on another port, is another page.
+    if (!origin.empty() && hostWithPort(origin) != hostWithPort(host)) return false;
     return true;
 }
 

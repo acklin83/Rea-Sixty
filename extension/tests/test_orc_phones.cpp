@@ -506,6 +506,9 @@ int main()
         EXPECT(!ph::deskAllowed("127.0.0.1", "", "8.8.8.8", "127.0.0.1", ""));
         EXPECT(!ph::deskAllowed("127.0.0.1", "", "", "phones.example.com", ""));                // a proxy without headers
         EXPECT(!ph::deskAllowed("127.0.0.1", "", "", "127.0.0.1:8088", "http://evil.example.com")); // another page
+        EXPECT(!ph::deskAllowed("127.0.0.1", "", "", "127.0.0.1:8088", "http://127.0.0.1:3000"));   // a page on another port of this Mac
+        EXPECT(!ph::deskAllowed("127.0.0.1", "", "", "127.0.0.1:8088", "http://127.0.0.1"));
+        EXPECT(!ph::deskAllowed("127.0.0.1", "", "", "127.0.0.1:8088", "null"));
 
         // The mixer: a link shows its performer, and only what they were given.
         rme::State st = rig();
