@@ -37,7 +37,6 @@ struct Settings {
     int         recvPort = 7004;   // TotalMix answers here (its "Port outgoing")
     std::string studio;            // shown on the page; empty = no name
     std::string logo;              // a file name in ORC's folder; empty = the MoreMe mark
-    std::array<std::string, 4> names;   // Phones 1-4 on the page; "" = TotalMix' name
 };
 
 bool        loadSettings(Settings& out);   // false: no file yet (defaults stay)

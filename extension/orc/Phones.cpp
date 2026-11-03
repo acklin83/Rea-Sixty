@@ -428,7 +428,6 @@ std::string Mixer::configJson_(int forId) const
             std::string label = "Phones " + std::to_string(p);
             std::string colour;
             outputLook(bus, label, colour);
-            if (!names_[p - 1].empty()) label = names_[p - 1];
             if (colour.empty()) colour = kPalette[(p - 1) % 8];
             const int h = holderOf_(id);
             if (!first) mixes += ",";

@@ -216,6 +216,6 @@ void installEditMenu()
 
 namespace orc {
 
-void openStudioControl() { [[OrcWebSettings shared] presentPage:@"desk"]; }
+void openStudioControl() { [[OrcWebSettings shared] presentPage:@"moreme"]; }
 
 } // namespace orc

@@ -46,7 +46,8 @@ std::string jsonStr(const std::string& s)
     for (const char ch : s) {
         const auto c = static_cast<unsigned char>(ch);
         if (c == '"') o += "\\\"";
-        else if (c == '\\') o += "\\\\";
+        // ⛔ wdl_json_parser reads two backslashes as a quote (jsonparse.h).
+        else if (c == '\\') o += "\\u005c";
         else if (c < 0x20) { char b[8]; std::snprintf(b, sizeof(b), "\\u%04x", c); o += b; }
         else o.push_back(ch);
     }
@@ -95,10 +96,6 @@ bool loadSettings(Settings& out)
     num("sendPort", s.sendPort);
     num("recvPort", s.recvPort);
     if (const char* v = root->get_string_by_name("studio")) s.studio = v;
-    if (const wdl_json_element* arr = root->get_item_by_name("names"); arr && arr->is_array())
-        for (int i = 0; i < 4; ++i)
-            if (const wdl_json_element* e = arr->enum_item(i))
-                if (const char* v = e->get_string_value()) s.names[static_cast<size_t>(i)] = v;
     if (const char* v = root->get_string_by_name("logo")) {
         // A file name in ORC's folder and nothing else: no path from a file
         // that somebody else might have written.
@@ -117,8 +114,6 @@ bool saveSettings(const Settings& s)
         + "  \"sendPort\": " + std::to_string(s.sendPort) + ",\n"
         + "  \"recvPort\": " + std::to_string(s.recvPort) + ",\n"
         + "  \"studio\": " + jsonStr(s.studio) + ",\n"
-        + "  \"names\": [" + jsonStr(s.names[0]) + ", " + jsonStr(s.names[1]) + ", "
-                         + jsonStr(s.names[2]) + ", " + jsonStr(s.names[3]) + "],\n"
         + "  \"logo\": " + jsonStr(s.logo) + "\n}\n";
     return orc_handover::writeFile(settingsPath(), json);
 }
@@ -543,7 +538,6 @@ void Server::loop()
                 const bool web   = cur.webPort != want_.webPort || listenFd < 0;
                 const bool pin   = curPin != pin_;
                 cur = want_;
-                mixer.setNames(cur.names);
                 if (pin) {
                     curPin = pin_;
                     // The first one is the PIN the mixer starts with; a change

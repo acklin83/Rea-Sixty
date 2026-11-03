@@ -6,14 +6,14 @@ Plan: `docs/orc-settings-web-plan.md`. Frank: Leiste links, Off grau, `deskAllow
 - `orc/SettingsServer`: nur 127.0.0.1, Port vom System, nur solange das Fenster offen ist, Zufallswert im Pfad, Host und Origin exakt mit Port.
 - `orc/OrcSettingsModel`: alle Regeln, Zustand als JSON, eine Nachricht pro Änderung. Läuft auf dem Thread des Servers.
 - `orc/settings/settings.html` und Schrift Inter im Bundle.
-- `orc/OrcWebWindow.mm`: Fenster, Open at login, Logo-Dialog, Edit-Menü. `OrcDeskWindow.mm` ist weg, Studio Control ist Reiter (iframe auf `/desk?embed=1`).
+- `orc/OrcWebWindow.mm`: Fenster, Open at login, Logo-Dialog, Edit-Menü. `OrcDeskWindow.mm` ist weg, Studio Control steht auf dem Reiter MoreMe (iframe auf `/desk?embed=1`).
+- Frank 03.11.: Namen für Phones 1-4 gestrichen (Antwort A), auch im alten Fenster. ⛔ Changelog-Zeile nötig: gespeicherte Namen wirken nicht mehr, ohne Performer steht dort der TotalMix-Name.
 - `desk.html`: eigene Dialoge statt `confirm`/`prompt`, Menüs gleich hoch, Off grau, Schrift über `/fonts/`.
 - `deskAllowed` vergleicht den Origin mit Port (`44c038f6`).
 - Test `test_orc_settings`, Werkzeug `tools/orc_settings_demo.cpp`.
 
 ## Entschieden beim Bau, nach dem Plan
 - Das alte Fenster bleibt unverändert unter `Settings (old)…`. Das Modell hat bis zur Entfernung eine Kopie der Regeln. Rückweg bleibt einfach, Stufe 6 löscht die Kopie.
-- Die Zeile Studio Control im Reiter MoreMe fällt weg, der Reiter ersetzt sie.
 - Keine gemerkte Fensterposition, wie im alten Fenster nicht. Der zuletzt offene Reiter bleibt bis zum Beenden von ORC.
 - Statuszeilen, Adresse, Wearer und Stands laufen weiter, auch wenn ein Feld den Fokus hat. Alles andere wird erst neu gezeichnet, wenn Feld und Menü frei sind.
 - OBS-Passwort: Feld zeigt acht Zeichen als Platzhalter, wird nie an die Seite geschickt. Beim Betreten ist alles markiert, Leeren und Verlassen löscht es.

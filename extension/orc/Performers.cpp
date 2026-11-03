@@ -25,7 +25,8 @@ std::string jstr(const std::string& s)
     for (const char ch : s) {
         const auto c = static_cast<unsigned char>(ch);
         if (c == '"') o += "\\\"";
-        else if (c == '\\') o += "\\\\";
+        // ⛔ wdl_json_parser reads two backslashes as a quote (jsonparse.h).
+        else if (c == '\\') o += "\\u005c";
         else if (c < 0x20) { char b[8]; std::snprintf(b, sizeof(b), "\\u%04x", c); o += b; }
         else o.push_back(ch);
     }

@@ -46,9 +46,21 @@ input::placeholder{color:var(--fg3)}
 .main{flex:1;min-width:0;overflow:auto;padding:12px 16px 40px}
 .main.full{overflow:hidden;padding:0}
 .page{display:none}.page.on{display:block}
-.main.full #pages,#pg-desk.on{height:100%}
-#desk{display:block;width:100%;height:100%;border:none;background:var(--bg)}
 #err{color:var(--err);font-size:12px;padding:0 2px 8px}
+.main.full{display:flex;flex-direction:column}
+.main.full #err{padding:8px 16px 0}
+.main.full #pages{flex:1;min-height:0}
+/* MoreMe: the line and the setup above, Studio Control in all the room below. */
+#pg-moreme.on{display:flex;flex-direction:column;height:100%}
+#mmHead{flex:none;max-height:60%;overflow:auto}
+.main.full #mmHead{padding:10px 16px;border-bottom:1px solid var(--line)}
+#desk{display:none;flex:1;min-height:0;width:100%;border:none;background:var(--bg)}
+.main.full #desk{display:block}
+.mmline{display:flex;align-items:center;flex-wrap:wrap;gap:8px 18px}
+.mmline>span{display:inline-flex;align-items:center;gap:8px}
+.grow{flex:1}
+.mmsetup{margin-top:10px}
+.mmsetup .rows{grid-template-columns:minmax(110px,160px) minmax(min-content,1fr)}
 #err:empty{display:none}
 
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,470px),1fr));gap:12px;align-items:start;max-width:1400px}
@@ -110,10 +122,10 @@ td select,td input[type=text],.pick{min-width:96px}
 <script>
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const PAGES=[['general','General'],['uf1','UF1'],['uf8','UF8'],['soft','Soft Keys'],['colours','Colours'],['modes','UF8 Modes'],['moreme','MoreMe'],['desk','Studio Control']];
+const PAGES=[['general','General'],['uf1','UF1'],['uf8','UF8'],['soft','Soft Keys'],['colours','Colours'],['modes','UF8 Modes'],['moreme','MoreMe']];
 const KINDS=['Keys','TotalMix snapshots','TotalMix layouts','OBS scenes','TotalMix submixes'];
 let ws=null,S=null,page=PAGES.some(p=>p[0]===location.hash.slice(1))?location.hash.slice(1):'general';
-let curBank=0,menuOpen=false,menuAt=0,pending=false,deskSrc='';
+let curBank=0,menuOpen=false,menuAt=0,pending=false,deskSrc='',setupOpen=false;
 const halves={},last={};
 
 // ---- the link to ORC ----
@@ -212,18 +224,26 @@ const DRAW={
        +table(['On','Name','IP address','Colour','','Calibrate','Status'],d.mounts.map((m,i)=>'<td class="w">'+onoff({t:'dyna',i,f:'on'},m.on)+'</td><td>'+field({t:'dyna',i,f:'name'},m.name,'placeholder="mic name"')+'</td><td>'+field({t:'dyna',i,f:'ip'},m.ip,'placeholder="192.168.1.50"')+'</td><td class="w">'+swatchPick(i,m.colour)+'</td><td class="w"><button type="button" class="b sm"'+M({t:'dynaDetect',i})+'>Detect</button></td><td class="w"><button type="button" class="b sm"'+M({t:'dynaHome',i})+'>Home</button></td><td data-live class="dimtext w">'+esc(m.status)+'</td>')),true)
     +card('Presets',table(['#','Name','Stands',''],d.presets.map((p,i)=>'<td class="k">'+(i+1)+'</td><td>'+field({t:'presetName',i},p.name,'placeholder="Preset '+(i+1)+'"')+'</td><td data-live class="dimtext w">'+esc(p.stands)+'</td><td class="w"><button type="button" class="b sm"'+M({t:'presetGo',i})+'>Go</button> <button type="button" class="b sm"'+M({t:'presetStore',i})+'>Store</button> <button type="button" class="b sm"'+M({t:'presetClear',i})+'>Clear</button></td>')),true)
     +'</div>'},
-  moreme(){const m=S.moreme;return '<div class="cards">'
-    +card('Headphone mixes',rows([row('Headphone mixes in the browser',onoff({t:'mmOn'},m.enabled)),row('Address','<span data-live class="sel-text">'+esc(m.address||'--')+'</span>'),row('PIN',field({t:'mmPin'},m.pin,'class="num"')),row('Page port',field({t:'mmPort',f:'webPort'},m.webPort,'class="num"')),row('TotalMix send to port',field({t:'mmPort',f:'sendPort'},m.sendPort,'class="num"')),row('TotalMix listen on port',field({t:'mmPort',f:'recvPort'},m.recvPort,'class="num"')),row('Status',status(m.status,m.good))]))
-    +'<div class="stack">'
-    +card('On the page',rows([row('Studio name',field({t:'mmStudio'},m.studio,'class="wid"')),row('Logo','<img class="logo" alt="" src="logo?'+m.logoStamp+'"><button type="button" class="b"'+M({t:'chooseLogo'})+'>Choose…</button><button type="button" class="b"'+M({t:'mmLogoDefault'})+'>Default Logo</button>')]))
-    +card('Headphones',rows(m.names.map((n,i)=>row('Phones '+(i+1),field({t:'mmName',i},n,'class="wid" placeholder="Phones '+(i+1)+'"')))))
-    +'</div></div>'},
+  moreme(){const m=S.moreme,open=setupOpen||!m.desk;
+    return '<div class="mmline">'
+    +'<span><span class="lab">Headphone mixes in the browser</span>'+onoff({t:'mmOn'},m.enabled)+'</span>'
+    +'<span><span class="lab">Address</span><span data-live class="sel-text">'+esc(m.address||'--')+'</span></span>'
+    +'<span><span class="lab">PIN</span>'+field({t:'mmPin'},m.pin,'class="num"')+'</span>'
+    +'<span><span class="lab">Status</span>'+status(m.status,m.good)+'</span>'
+    +'<span class="grow"></span>'
+    +(m.desk?'<button type="button" class="b" data-setup="1">Setup</button>':'')
+    +'</div>'
+    +(open?'<div class="cards mmsetup">'
+      +card('Ports',rows([row('Page port',field({t:'mmPort',f:'webPort'},m.webPort,'class="num"')),row('TotalMix send to port',field({t:'mmPort',f:'sendPort'},m.sendPort,'class="num"')),row('TotalMix listen on port',field({t:'mmPort',f:'recvPort'},m.recvPort,'class="num"'))]))
+      +card('On the page',rows([row('Studio name',field({t:'mmStudio'},m.studio,'class="wid"')),row('Logo','<img class="logo" alt="" src="logo?'+m.logoStamp+'"><button type="button" class="b"'+M({t:'chooseLogo'})+'>Choose…</button><button type="button" class="b"'+M({t:'mmLogoDefault'})+'>Default Logo</button>')]))
+      +'</div>':'')},
 };
 
 // ---- drawing ----
 $('#nav').innerHTML=PAGES.map(p=>'<button type="button" data-p="'+p[0]+'">'+p[1]+'</button>').join('');
 $('#pages').innerHTML=PAGES.map(p=>'<div class="page" id="pg-'+p[0]+'"></div>').join('');
-$('#pg-desk').innerHTML='<iframe id="desk" title="Studio Control" allow="clipboard-write"></iframe>';
+// ⛔ The frame stays where it is: moving or rebuilding it would reload Studio Control.
+$('#pg-moreme').innerHTML='<div id="mmHead"></div><iframe id="desk" title="Studio Control" allow="clipboard-write"></iframe>';
 const inMenu=()=>menuOpen&&Date.now()-menuAt<60000;
 // Never rebuild under a cursor or an open menu: what is being typed or picked is newer than this.
 function busy(){
@@ -233,20 +253,17 @@ function busy(){
 function draw(){
   if(!S)return;
   $('#err').textContent=S.error||'';
-  // Studio Control needs MoreMe's page.
-  const deskBtn=document.querySelector('#nav [data-p=desk]');
-  deskBtn.disabled=!S.moreme.desk;
-  if(!S.moreme.desk&&page==='desk')page='moreme';
   document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.p===page));
   document.querySelectorAll('.page').forEach(p=>p.classList.toggle('on',p.id==='pg-'+page));
-  $('#main').classList.toggle('full',page==='desk');
-  $('#err').style.display=page==='desk'?'none':'';
-  if(page==='desk'){
-    if(deskSrc!==S.moreme.desk){deskSrc=S.moreme.desk;$('#desk').src=deskSrc}
-    return;
+  // Studio Control needs MoreMe's page. Without it the setup is all there is.
+  const withDesk=page==='moreme'&&!!S.moreme.desk;
+  $('#main').classList.toggle('full',withDesk);
+  if(page==='moreme'&&deskSrc!==S.moreme.desk){
+    deskSrc=S.moreme.desk;
+    if(deskSrc)$('#desk').src=deskSrc;else $('#desk').removeAttribute('src');
   }
   const html=DRAW[page]();
-  const box=$('#pg-'+page);
+  const box=page==='moreme'?$('#mmHead'):$('#pg-'+page);
   if(busy()){
     pending=true;
     const t=document.createElement('template');t.innerHTML=html;
@@ -289,6 +306,7 @@ document.addEventListener('focusout',()=>setTimeout(()=>{if(pending&&!busy())dra
 document.addEventListener('pointerdown',e=>{if(e.target.tagName==='SELECT'){menuOpen=true;menuAt=Date.now()}else menuOpen=false},true);
 document.addEventListener('mousemove',()=>{if(menuOpen&&Date.now()-menuAt>300){menuOpen=false;if(pending&&!busy())draw()}});
 document.addEventListener('click',e=>{
+  if(e.target.closest('[data-setup]')){setupOpen=!setupOpen;delete last.moreme;draw();return}
   const bank=e.target.closest('[data-bank]');
   if(bank){curBank=+bank.dataset.bank;delete last.soft;draw();return}
   const half=e.target.closest('[data-half]');

@@ -388,15 +388,6 @@ bool validPin(const std::string& p)
     return std::all_of(p.begin(), p.end(), [](char c) { return c >= '0' && c <= '9'; });
 }
 
-std::string trimmed(const std::string& s)
-{
-    const auto isSpace = [](char c) { return std::isspace(static_cast<unsigned char>(c)) != 0; };
-    auto b = s.begin(), e = s.end();
-    while (b != e && isSpace(*b)) ++b;
-    while (e != b && isSpace(*(e - 1))) --e;
-    return std::string(b, e);
-}
-
 // ── writing ──────────────────────────────────────────────────────────────────
 
 // ⛔ EVERY EDIT GOES THROUGH setConfig AND THEN saveRmeConfigIfDirty: the manager
@@ -667,10 +658,6 @@ void applyMoreme(const std::string& t, const wdl_json_element* m, Context& c)
         else if (f == "recvPort") s.recvPort = p;
     } else if (t == "mmStudio") {
         s.studio = v;
-    } else if (t == "mmName") {
-        const int i = std::atoi(text(m, "i").c_str());
-        if (i < 0 || i > 3) return;
-        s.names[static_cast<size_t>(i)] = trimmed(v);
     } else if (t == "mmLogoDefault") {
         s.logo.clear();
         ++c.logoStamp;
@@ -912,7 +899,6 @@ std::string stateJson(const Context& c)
            + ",\"good\":" + jbool(serving && ms.tmSeen)
            + ",\"studio\":" + jstr(s.studio)
            + ",\"logoStamp\":" + std::to_string(c.logoStamp)
-           + ",\"names\":" + indexed(4, [&](int i) { return jstr(s.names[static_cast<size_t>(i)]); })
            + ",\"desk\":" + jstr(serving ? "http://127.0.0.1:" + std::to_string(s.webPort) + "/desk?embed=1"
                                          : std::string())
            + "}";

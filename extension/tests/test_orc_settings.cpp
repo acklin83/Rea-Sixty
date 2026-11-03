@@ -16,6 +16,7 @@
 #include "OrcHandover.h"
 #include "OrcModes.h"
 #include "OrcSettingsModel.h"
+#include "Performers.h"
 #include "PhonesServer.h"
 #include "RmeBuiltins.h"
 #include "RmeInput.h"
@@ -456,9 +457,19 @@ static void testMoreme()
     EXPECT(ph::server().settings().studio == "Störsender \"A\" \\ B");
     // And back out, so the page reads what it wrote.
     EXPECT(has(set::stateJson(c), R"("studio":"Störsender \"A\" \\ B")"));
-    set::apply(R"({"t":"mmName","i":1,"v":"  Anna  "})", c);
-    EXPECT(ph::server().settings().names[1] == "Anna");
-    set::apply(R"({"t":"mmName","i":9,"v":"x"})", c);
+    // ⛔ Names for Phones 1-4 are gone: a file from before is read without them, and
+    // the next save drops them.
+    {
+        const std::string before = file(ph::settingsPath());
+        const std::size_t end = before.rfind('}');
+        orc_handover::writeFile(ph::settingsPath(), before.substr(0, end) + ",\n  \"names\": [\"Adi\", \"\", \"\", \"\"]\n}\n");
+        ph::Settings old;
+        EXPECT(ph::loadSettings(old));
+        EXPECT(old.studio == ph::server().settings().studio);
+        ph::saveSettings(old);
+        EXPECT(!has(file(ph::settingsPath()), "Adi"));
+        EXPECT(!has(set::stateJson(c), "\"names\""));
+    }
 
     // The logo: through importLogo unchanged; a wrong type says why.
     set::logoChosen("/tmp/not-a-picture.txt", c);
@@ -481,6 +492,26 @@ static void testMoreme()
     EXPECT(!ph::server().settings().enabled);
     EXPECT(!has(set::stateJson(c), "/desk?embed=1"));
     ph::server().stop();
+}
+
+// ⛔ A backslash through the files: wdl_json_parser reads two of them as a quote.
+static void testBackslashInFiles()
+{
+    ph::Settings a;
+    a.studio = "A\\B \"C\"";
+    EXPECT(ph::saveSettings(a));
+    ph::Settings b;
+    EXPECT(ph::loadSettings(b));
+    EXPECT(b.studio == a.studio);
+
+    ph::Book book;
+    ph::Performer p;
+    p.id = "abcd1234";
+    p.name = "Back\\slash";
+    book.performers.push_back(p);
+    ph::Book back;
+    EXPECT(ph::parseBook(ph::bookJson(book), back));
+    EXPECT(back.performers.size() == 1 && back.performers[0].name == p.name);
 }
 
 static void testServer(const std::string& res)
@@ -568,7 +599,7 @@ static void testPageHasEverything(const std::string& res)
 {
     const std::string page = file(res + "/settings.html");
     for (const char* word : {
-        "General", "Soft Keys", "Colours", "UF8 Modes", "MoreMe", "Studio Control",
+        "General", "Soft Keys", "Colours", "UF8 Modes", "MoreMe", "Studio Control", "Setup",
         "Talk to TotalMix", "Open at login", "Host", "Send to port", "Listen on port", "Status",
         "Ask TotalMix again", "Sleep when idle", "After", "minutes",
         "Use the UF1", "Target", "Push", "Jog wheel", "Jog step", "Pot step", "V-Pot speed", "Transport",
@@ -581,7 +612,7 @@ static void testPageHasEverything(const std::string& res)
         "Hue, LAYER 2", "Find bridge", "Pair", "Cancel", "Refresh lights + scenes", "Forget", "Scenes", "Key label",
         "V-Pot + FLIP", "Saturation", "Warmth", "mic name", "192.168.1.50",
         "Headphone mixes in the browser", "Address", "PIN", "Page port", "TotalMix send to port",
-        "TotalMix listen on port", "Studio name", "Logo", "Choose", "Default Logo", "Phones",
+        "TotalMix listen on port", "Studio name", "Logo", "Choose", "Default Logo",
         "Only for the ORC in Applications." }) {
         if (!has(page, word)) { std::printf("FAIL the page has no \"%s\"\n", word); ++g_fail; }
     }
@@ -618,6 +649,7 @@ int main()
     testSoftKeys();
     testModes();
     testMoreme();
+    testBackslashInFiles();
     testServer(ORC_SETTINGS_DIR);
     testPageHasEverything(ORC_SETTINGS_DIR);
 

@@ -20,16 +20,17 @@ Entscheid: ein eigener kleiner Server `orc/SettingsServer.{h,cpp}`, nicht `ph::S
 
 Alternative verworfen: eigenes URL-Schema plus Script-Message-Brücke, ganz ohne Socket (`WKURLSchemeHandler` am Mac, `WebResourceRequested` unter Windows). Das wären zwei Brücken in zwei Sprachen statt einem Server in C++, und die Tests könnten nicht mehr über einen echten WebSocket fahren.
 
-### Alles in einem Fenster (Frank 03.11.)
-Studio Control wird der achte Reiter. Technisch ein `<iframe>` auf `http://127.0.0.1:<webPort>/desk`: `/desk` und `/deskws` bleiben im MoreMe-Server, dessen Thread der einzige Schreiber der Performer bleibt, und `desk.html` bleibt fast wie sie ist. Die Adresse kommt mit dem Zustand vom Modell.
+### Alles in einem Fenster, MoreMe und Studio Control auf einer Seite (Frank 03.11.)
+Der Reiter MoreMe hat oben eine Zeile (Ein/Aus, Address, PIN, Status, Setup), darunter füllt Studio Control den Rest. Technisch ein `<iframe>` auf `http://127.0.0.1:<webPort>/desk?embed=1`: `/desk` und `/deskws` bleiben im MoreMe-Server, dessen Thread der einzige Schreiber der Performer bleibt. Die Adresse kommt mit dem Zustand vom Modell.
 
 Folgen:
-- MoreMe aus oder Seite nicht erreichbar: der Reiter ist gesperrt, wie heute der Knopf Open und der Menüpunkt (`s.enabled && st.listening`).
-- `Studio Control…` im Menü öffnet dasselbe Fenster auf diesem Reiter. Die Zeile Studio Control im Reiter MoreMe fällt weg, `OrcDeskWindow.{h,mm}` auch.
-- Ein Fenster, eine Grösse: 1280 x 820, Mindestgrösse 620 x 420 wie heute. Kein Grössensprung beim Reiterwechsel. Unter 1000 Punkten Breite stapelt `desk.html` ihre Spalten schon heute.
-- ⛔ Der iframe hat einen anderen Port, also einen anderen Origin. Chromium sperrt `confirm`, `prompt` und `alert` aus solchen Frames (seit Chrome 92). Ob WebView2 das übernimmt, dazu habe ich keine Quelle. `desk.html` bekommt darum eigene Dialoge in der Seite statt `confirm` und `prompt`. Im `WKWebView` gingen sie weiter, unter Windows wäre es sonst ein Fehler, den man erst dort sieht.
-- Kopieren im iframe: `desk.html` fällt ohne Clipboard-API auf `execCommand` zurück. `allow="clipboard-write"` am iframe kommt dazu (aus dem Gedächtnis, Stufe 5 prüft es in beiden Engines).
-- Marke und Seitenname oben in `desk.html` wiederholen nur den Rahmen: `/desk?embed=1` blendet sie aus.
+- MoreMe aus oder Seite nicht erreichbar: nur die Zeile und das offene Setup.
+- `Studio Control…` im Menü öffnet dasselbe Fenster auf MoreMe. `OrcDeskWindow.mm` ist weg.
+- Setup (Page port, TotalMix-Ports, Studio name, Logo) ist zugeklappt, solange MoreMe läuft, ein Knopf klappt es auf.
+- ⛔ Die Namen für Phones 1-4 fallen weg (Frank: Antwort A). Sie galten nur ohne Performer und doppelten deren Namen. Eine alte `moreme.json` wird ohne sie gelesen, das nächste Speichern entfernt sie. Ohne Performer zeigt das Handy den TotalMix-Namen des Ausgangs, sonst Phones N. Gehört in den Changelog.
+- Ein Fenster, eine Grösse: 1280 x 820, Mindestgrösse 620 x 420 wie heute. Unter 1000 Punkten Breite stapelt `desk.html` ihre Spalten schon heute.
+- ⛔ Der iframe hat einen anderen Port, also einen anderen Origin. Chromium sperrt `confirm`, `prompt` und `alert` aus solchen Frames (seit Chrome 92). `desk.html` hat darum eigene Dialoge.
+- Kopieren im iframe: `allow="clipboard-write"`, mit Rückfall auf `execCommand`.
 
 ### Darstellung (aus dem Mockup)
 - ⛔ `<select>` in WebKit ignoriert Padding und Höhe, die Menüs waren im ersten Bild 24 Punkte hoch neben 38 Punkte hohen Feldern. Alle Controls haben darum eine Höhe (34), `appearance:none` mit eigenem Pfeil. `desk.html` hat dasselbe Problem heute und bekommt in Stufe 5 dieselbe Regel.
@@ -133,7 +134,7 @@ Test: erstes Einschalten erzeugt PIN, ungültiger PIN bleibt beim alten, Page po
 Handbuch: Abschnitt The settings window und die Anker `set-*` bleiben, Reiter und Namen auch. `tools/orc_manual.py --check` liest die Status-Texte aus `OrcConfig.cpp`, `OrcApp.mm`, `Surface.cpp`, `PhonesServer.cpp`, nicht aus dem Fenster, und bleibt darum gültig. Dazu `COMPENDIUM.md`, Kommentare in `main.cpp` und `OrcUi.h` („AppKit, not ImGui“ gilt weiter für Menüleiste und Rahmen).
 
 ## Bestand: jedes Control
-Reiter, Namen und Reihenfolge bleiben, das Handbuch verweist darauf. Neu dazu kommt der Reiter Studio Control.
+Reiter, Namen und Reihenfolge bleiben, das Handbuch verweist darauf. Studio Control steht auf dem Reiter MoreMe.
 
 | Reiter | Controls | Schreibt über |
 |---|---|---|
@@ -151,7 +152,7 @@ Reiter, Namen und Reihenfolge bleiben, das Handbuch verweist darauf. Neu dazu ko
 | | DynaMount: Fill; 8 x On, Name, IP, Colour, Detect, Home, Status; Presets 8 x Name, Stands, Go, Store, Clear | `DynaMountManager`, `modes::write` |
 | | Hue: Find bridge, Pair, Cancel, Refresh, Forget, IP, Status, Fill; 8 x On, Label, Target; Scenes 8 x Scene, Key label; V-Pot, V-Pot + FLIP | `HueManager` |
 | MoreMe | Headphone mixes in the browser, Address (markierbar), PIN, Page port, TotalMix send, TotalMix listen, Status | `saveSettings`, `savePin`, `apply` |
-| | Studio name, Logo-Vorschau, Choose, Default Logo, 4 x Phones-Name, Fehlerzeile | dito, `importLogo` |
+| | Studio name, Logo-Vorschau, Choose, Default Logo, Fehlerzeile. Phones-Namen gestrichen (Frank 03.11.) | dito, `importLogo` |
 
 Dazu: Tooltip „Only for the ORC in Applications“ am gesperrten Open at login, Platzhalter der Felder (Labels aus `softKeyFallbackLabel`, Preset N, mic name, 192.168.1.50, Phones N).
 
@@ -163,7 +164,7 @@ Keine neuen Einstellungen, keine Hilfetexte auf den Seiten (Frank 27.09.), keine
 
 ## Entschieden (Frank 03.11.)
 - Nur dunkel wie Studio Control.
-- Alles in einem Fenster, Studio Control als Reiter.
+- Alles in einem Fenster, MoreMe und Studio Control auf einer Seite, Phones-Namen weg.
 - Unsichtbarer Zufallswert in der Adresse, kein PIN.
 - Leiste links, Off grau, auch in Studio Control.
 - `deskAllowed` vor dem Release gefixt (`44c038f6`).

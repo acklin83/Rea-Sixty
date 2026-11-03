@@ -283,16 +283,10 @@ int main()
         mx.sync(st, vis(1, { 1, 2 }, { 0 }), true);
         const int a = mx.open("a");
         mx.message(a, R"({"t":"hello"})", 0);
-        mx.takeOut();
-        mx.setNames({ "", "Bass", "", "" });
         auto out = mx.takeOut();
         const std::string cfg = to(out, a);
-        EXPECT(has(cfg, R"("label":"Drums")"));    // no own name: TotalMix' name
-        EXPECT(has(cfg, R"("label":"Bass")"));     // own name over "Phones 2"
-        EXPECT(!has(cfg, R"("label":"Phones 2")"));
-        mx.setNames({ "Voc", "", "", "" });
-        out = mx.takeOut();
-        EXPECT(has(to(out, a), R"("label":"Voc")") && has(to(out, a), R"("label":"Phones 2")"));
+        EXPECT(has(cfg, R"("label":"Drums")"));      // TotalMix' name
+        EXPECT(has(cfg, R"("label":"Phones 2")"));   // none: its place
     }
 
     // ── values both ways, quiet rounds, the mute ─────────────────────────────

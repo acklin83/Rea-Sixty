@@ -111,7 +111,6 @@ class Mixer {
     // The studio's own names for Phones 1-4 (ORC's MoreMe page, Frank
     // 30.10.2026). "" falls back to TotalMix' name of the output, then to
     // "Phones N". Everybody inside sees the new name at once.
-    void setNames(const std::array<std::string, 4>& n) { names_ = n; pushConfig_(); }
 
     // ⇨ THE PERFORMERS (docs/moreme-performers-plan.md). Each is a mix of its own,
     // "perf:<link>". While there is one, the Phones 1-4 list is gone: everybody
@@ -208,7 +207,6 @@ class Mixer {
 
     PinChecker                         pin_;
     std::string                        version_ = "1";
-    std::array<std::string, 4>         names_;
     std::vector<Performer>             perf_;
     std::map<int, Client>              clients_;   // by id = by arrival, as stoerme's Set
     int                                nextId_ = 1;
