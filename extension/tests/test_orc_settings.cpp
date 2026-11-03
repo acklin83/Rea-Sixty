@@ -664,6 +664,15 @@ static void testServer(const std::string& res)
 static void testPageHasEverything(const std::string& res)
 {
     const std::string page = file(res + "/settings.html");
+    // The tooltip at a greyed Open at login, in the platform's words.
+    const std::string st = set::stateJson(set::Context{});
+#if defined(_WIN32)
+    EXPECT(has(st, "Only for the installed ORC."));
+    EXPECT(has(st, "\"usb\":{\"devices\":["));
+#else
+    EXPECT(has(st, "Only for the ORC in Applications."));
+    EXPECT(!has(st, "\"usb\""));
+#endif
     for (const char* word : {
         "General", "Soft Keys", "Colours", "UF8 Modes", "MoreMe", "Studio Control", "Setup",
         "Talk to TotalMix", "Open at login", "Host", "Send to port", "Listen on port", "Status",
@@ -679,7 +688,7 @@ static void testPageHasEverything(const std::string& res)
         "V-Pot + FLIP", "Saturation", "Warmth", "mic name", "192.168.1.50",
         "Headphone mixes in the browser", "Address", "PIN", "Page port", "TotalMix send to port",
         "TotalMix listen on port", "Studio name", "Logo", "Choose", "Default Logo",
-        "Only for the ORC in Applications." }) {
+        "USB driver" }) {
         if (!has(page, word)) { std::printf("FAIL the page has no \"%s\"\n", word); ++g_fail; }
     }
     EXPECT(page.find("confirm(") == std::string::npos);

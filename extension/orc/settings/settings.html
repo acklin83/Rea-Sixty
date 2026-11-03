@@ -173,13 +173,15 @@ const unit=(input,u)=>input+'<span class="unit">'+u+'</span>';
 const keyRow=(k,i)=>'<td class="k">'+esc(k.n)+'</td><td>'+actionSel({t:'keyAction',k:i},k.action)+'</td><td style="width:112px">'+colour({t:'keyLed',k:i,active:1},k.on)+'</td><td style="width:112px">'+colour({t:'keyLed',k:i,active:0},k.off)+'</td>';
 
 // ---- the pages ----
+// Windows: the USB driver's two buttons ask once, on the card (no dialogs on this page).
+let usbAsk=null;
 const DRAW={
   general(){const g=S.general;return '<div class="cards">'
     +card('TotalMix',rows([row('Talk to TotalMix',onoff({t:'rme',f:'enabled'},g.enabled)),row('Host',rme('host',g.host,'class="wid"')),row('Send to port',rme('sendPort',g.sendPort,'class="num"')),row('Listen on port',rme('recvPort',g.recvPort,'class="num"')),row('Status',status(g.status,g.online))])+'<div class="acts mt"><button type="button" class="b"'+M({t:'ask'})+'>Ask TotalMix again</button></div>')
     +'<div class="stack">'
     +card('Startup',rows([row('Open at login','<span'+(g.loginAvailable?'':' title="'+esc(g.loginHint)+'"')+'>'+onoff({t:'login'},g.loginOn,!g.loginAvailable)+'</span>')]))
     +card('Sleep',rows([row('Sleep when idle',onoff({t:'rme',f:'sleepEnabled'},g.sleepEnabled)),row('After',unit(rme('sleepMinutes',g.sleepMinutes,'class="num"'+(g.sleepEnabled?'':' disabled')),'minutes'))]))
-    +(g.usb?card('USB driver',rows(g.usb.devices.map(d=>row(d.n,status(d.s,d.ok))))+(g.usb.busy?'':'<div class="acts">'+[['usbInstall','Install','SSL 360 will no longer see the UF1 and the UF8.'],['usbRemove','Remove','Removes the driver for every program that uses it.'],['usbRefresh','Refresh','']].map(x=>'<button type="button" class="b"'+M({t:x[0]})+(x[2]?' data-confirm="'+esc(x[2])+'"':'')+'>'+x[1]+'</button>').join('')+'</div>')+(g.usb.msg?'<p class="note">'+esc(g.usb.msg)+'</p>':'')):'')
+    +(g.usb?card('USB driver',rows(g.usb.devices.map(d=>row(d.n,status(d.s,d.ok))))+(g.usb.busy?'':usbAsk?'<p class="note">'+esc(usbAsk==='usbInstall'?'SSL 360 will no longer see the UF1 and the UF8.':'Removes the driver for every program that uses it.')+'</p><div class="acts"><button type="button" class="b"'+M({t:usbAsk})+'>'+(usbAsk==='usbInstall'?'Install':'Remove')+'</button><button type="button" class="b" data-usbno="1">Cancel</button></div>':'<div class="acts"><button type="button" class="b" data-usbask="usbInstall">Install</button><button type="button" class="b" data-usbask="usbRemove">Remove</button><button type="button" class="b"'+M({t:'usbRefresh'})+'>Refresh</button></div>')+(g.usb.msg?'<p class="note">'+esc(g.usb.msg)+'</p>':'')):'')
     +'</div></div>'},
   uf1(){const u=S.uf1;
     const bank=b=>table(['Pot','Target','Push'],[0,1,2,3].map(i=>{const p=u.pots[b*4+i];
@@ -321,8 +323,11 @@ document.addEventListener('click',e=>{
     edited(seg.parentElement,seg.dataset.v);
     return;
   }
+  const ua=e.target.closest('[data-usbask]');
+  if(ua){usbAsk=ua.dataset.usbask;delete last.general;draw();return}
+  if(e.target.closest('[data-usbno]')){usbAsk=null;delete last.general;draw();return}
   const btn=e.target.closest('button[data-m]');
-  if(btn&&(!btn.dataset.confirm||confirm(btn.dataset.confirm)))edited(btn);
+  if(btn){if(usbAsk){usbAsk=null;delete last.general}edited(btn)}
 });
 
 // The colour menu: the word beside its swatch, which a select cannot show. For the
