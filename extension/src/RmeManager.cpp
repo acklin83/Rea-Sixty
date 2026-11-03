@@ -417,7 +417,7 @@ Manager::ControlRoom Manager::controlRoom() const
 {
     std::lock_guard<std::mutex> lk(mx_);
     return { state_.dim, state_.mono, state_.speakerB, state_.talkback, state_.mainOut,
-             state_.externalIn, state_.muteFx };
+             state_.externalIn, state_.muteFx, state_.linkAB };
 }
 
 Manager::Scenes Manager::scenes() const

@@ -9039,6 +9039,9 @@ static const BuiltinDoc kBuiltinDocs[] = {
     { "rme_mute_fx",
       "Mutes TotalMix' reverb and echo on the Main output, or lets them through "
       "again. The lamp follows what TotalMix reports." },
+    { "rme_link_ab",
+      "Links Main B's volume to Main in TotalMix' control room, or separates them. "
+      "The lamp follows what TotalMix reports." },
     { "rme_durec_play",
       "Plays the current DuRec file." },
     { "rme_durec_pause",
@@ -9822,6 +9825,7 @@ static const BuiltinLabel kBuiltinLabels[] = {
     { "rme_talkback", "Talkback" },
     { "rme_ext_in", "Ext In" },
     { "rme_mute_fx", "Mute FX" },
+    { "rme_link_ab", "Link A/B" },
     { "rme_durec_play", "DuRec Play" },
     { "rme_durec_pause", "DuRec Pause" },
     { "rme_durec_stop", "DuRec Stop" },

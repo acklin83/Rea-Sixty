@@ -219,6 +219,7 @@ class Manager {
         int  mainOut = -1;
         bool externalIn = false;   // after mainOut: positional initialisers stay valid
         bool muteFx     = false;   // /controlroom/mutefx, the same reason
+        bool linkAB     = false;   // /controlroom/linkab, Main B follows Main
     };
     ControlRoom controlRoom() const;
 
