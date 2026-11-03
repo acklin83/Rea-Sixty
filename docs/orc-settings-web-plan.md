@@ -173,7 +173,7 @@ Keine neuen Einstellungen, keine Hilfetexte auf den Seiten (Frank 27.09.), keine
 - `rme.json` nicht atomar geschrieben (siehe „Aufgefallen“): Frank hat ihn nicht freigegeben.
 
 ## Belegt und nicht belegt
-Aus dem Code gelesen: alle Tabellen oben, Sperren und Schreiber. Gelaufen: `test_orc_settings`, die Seite gegen den echten Server offscreen in WebKit (Scratch-HOME, falsches TotalMix). Nicht gelaufen: das Fenster selbst (`OrcWebWindow.mm`), Open at login, der Logo-Dialog, Cmd-C und Cmd-V, Chromium. Hue-Setter nur an den Sperren geprüft: `hm.setSlot` und Co. ohne Bridge, Auswahl aus echten Lampen und Szenen nicht.
+Aus dem Code gelesen: alle Tabellen oben, Sperren und Schreiber. Gelaufen: `test_orc_settings`, die Seite gegen den echten Server in WebKit und Chromium (Scratch-HOME, falsches TotalMix), `OrcWebWindow.mm` in einem Scratch-Bundle ausserhalb des Bildschirms. Nicht gelaufen: ORC selbst, Open at login, der Logo-Dialog, Cmd-C und Cmd-V. Hue-Setter nur an den Sperren geprüft: `hm.setSlot` und Co. ohne Bridge, Auswahl aus echten Lampen und Szenen nicht.
 Aus dem Netz: WebView2-Verteilung, Edit-Menü. Keine Microsoft-Quelle: Firewall bei Loopback. Aus dem Gedächtnis: Ablage der WebView2-Daten, `WSAPoll`, `IFileOpenDialog`, Registry-Pfad, `SMAppService` nur vom Main-Thread aufrufen (darum `dispatch_async`, ohne Beleg, dass es nötig wäre).
 
 ## Quellen

@@ -162,7 +162,8 @@ const chan=id=>S.channels.find(c=>c.id===id);
 const srcText=id=>{const[k,n]=id.split(':');return(k==='in'?'In ':'PB ')+n};
 
 // ---- the link to ORC ----
-function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))}
+// ⛔ wdl_json_parser reads \\ as a quote (jsonparse.h), and it reads \u005c right.
+function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o).replace(/\\\\/g,'\\u005c'))}
 function connect(){
   ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/deskws');
   ws.onopen=()=>{$('#dot').classList.remove('off')};

@@ -117,7 +117,8 @@ let curBank=0,menuOpen=false,menuAt=0,pending=false,deskSrc='';
 const halves={},last={};
 
 // ---- the link to ORC ----
-function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))}
+// ⛔ wdl_json_parser reads \\ as a quote (jsonparse.h), and it reads \u005c right.
+function send(o){if(ws&&ws.readyState===1)ws.send(JSON.stringify(o).replace(/\\\\/g,'\\u005c'))}
 function connect(){
   ws=new WebSocket('ws://'+location.host+location.pathname+'ws');
   ws.onopen=()=>$('#dot').classList.remove('off');
@@ -153,7 +154,8 @@ const row=(l,v)=>'<span class="lab">'+esc(l)+'</span><div class="v">'+v+'</div>'
 const rows=a=>'<div class="rows">'+a.join('')+'</div>';
 const card=(title,inner,wide)=>'<section class="card'+(wide?' wide':'')+'"><h2>'+esc(title)+'</h2>'+inner+'</section>';
 const table=(heads,lines)=>'<div class="tw"><table><thead><tr>'+heads.map(h=>'<th>'+esc(h)+'</th>').join('')+'</tr></thead><tbody>'+lines.map(r=>'<tr>'+r+'</tr>').join('')+'</tbody></table></div>';
-const status=(t,good)=>'<span class="st'+(good?'':' dim')+'"><i></i>'+esc(t)+'</span>';
+// data-live: read-outs, which keep moving while a field has the cursor.
+const status=(t,good)=>'<span data-live class="st'+(good?'':' dim')+'"><i></i>'+esc(t)+'</span>';
 const rme=(f,v,attrs)=>field({t:'rme',f},v,attrs);
 const unit=(input,u)=>input+'<span class="unit">'+u+'</span>';
 const keyRow=(k,i)=>'<td class="k">'+esc(k.n)+'</td><td>'+actionSel({t:'keyAction',k:i},k.action)+'</td><td style="width:112px">'+colour({t:'keyLed',k:i,active:1},k.on)+'</td><td style="width:112px">'+colour({t:'keyLed',k:i,active:0},k.off)+'</td>';
@@ -185,7 +187,7 @@ const DRAW={
     const keys=b.halves[half].map((k,i)=>{
       const a={t:'skAction',b:curBank,h:half,i};
       const action=sub?outputSel(a,k.action):dyn?'<select disabled></select>':actionSel(a,k.action);
-      return '<td class="k">'+(i+1+half*4)+'</td><td style="width:150px">'+field({t:'skLabel',b:curBank,h:half,i},k.label,'placeholder="'+esc(k.ph)+'"'+(dyn?' disabled':''))+'</td><td>'+action+'</td><td style="width:130px">'+colour({t:'skLed',b:curBank,h:half,i,active:1},k.on)+'</td><td style="width:130px">'+colour({t:'skLed',b:curBank,h:half,i,active:0},k.off)+'</td>';
+      return '<td class="k">'+(i+1+half*4)+'</td><td style="width:120px">'+field({t:'skLabel',b:curBank,h:half,i},k.label,'placeholder="'+esc(k.ph)+'"'+(dyn?' disabled':''))+'</td><td>'+action+'</td><td style="width:112px">'+colour({t:'skLed',b:curBank,h:half,i,active:1},k.on)+'</td><td style="width:112px">'+colour({t:'skLed',b:curBank,h:half,i,active:0},k.off)+'</td>';
     });
     return '<div class="split"><section class="card"><h2>Banks</h2><div id="bankList">'+list+'</div></section><section class="card"><h2>Bank '+(curBank+1)+'</h2><div class="skhead">'
       +'<label>Half<div><span class="seg" id="skHalf">'+['Keys 1-4','Keys 5-8'].map((t,i)=>'<button type="button" data-half="'+i+'" class="'+(i===half?'on':'')+'">'+t+'</button>').join('')+'</span></div></label>'
@@ -193,13 +195,13 @@ const DRAW={
       +'<label>Name'+field({t:'skName',b:curBank},b.name)+'</label></div>'
       +table(['Key','Label',sub?'Output':'Action','Active','Inactive'],keys)
       +'<div class="acts mt"><button type="button" class="b"'+M({t:'skFactory',b:curBank})+'>Factory set for this bank</button></div></section></div>'},
-  colours(){return '<div class="cards">'+card('Colours',table(['TotalMix','UF1','Channels'],S.colours.map((c,i)=>'<td class="k">'+esc(c.n)+'</td><td style="width:200px">'+colour({t:'colour',i},c.v)+'</td><td class="dimtext">'+esc(c.w)+'</td>')),true)+'</div>'},
+  colours(){return '<div class="cards">'+card('Colours',table(['TotalMix','UF1','Channels'],S.colours.map((c,i)=>'<td class="k">'+esc(c.n)+'</td><td style="width:200px">'+colour({t:'colour',i},c.v)+'</td><td data-live class="dimtext">'+esc(c.w)+'</td>')),true)+'</div>'},
   modes(){const o=S.obs,d=S.dyna,h=S.hue;
     const roles=(f,c)=>sel({t:'hueControls',f},['Hue','Saturation','Warmth','Off'].map((t,i)=>'<option value="'+i+'"'+(i===c?' selected':'')+'>'+t+'</option>').join(''),c);
     const opts=(list,cur)=>list.map(x=>opt(x.v,x.l,cur)).join('');
     const swatchPick=(i,c)=>'<button type="button" class="pick only" data-only="1" data-col="'+c+'"'+M({t:'dyna',i,f:'colour'})+' aria-label="Colour">'+swatch(d.swatches[c])+'</button>';
     return '<div class="cards">'
-    +card('Import','<div class="acts"><button type="button" class="b"'+M({t:'import'})+'>Import from REAPER</button><span class="note">'+esc(S.importResult)+'</span></div>',true)
+    +card('Import','<div class="acts"><button type="button" class="b"'+M({t:'import'})+'>Import from REAPER</button><span data-live class="note">'+esc(S.importResult)+'</span></div>',true)
     +card('OBS, soft-key banks',rows([row('Talk to OBS',onoff({t:'obs',f:'enabled'},o.enabled)),row('Host',field({t:'obs',f:'host'},o.host,'class="wid"')),row('Port',field({t:'obs',f:'port'},o.port,'class="num"')),
        row('Password','<input type="password" class="wid" data-pw="1" value="'+(o.hasPassword?'xxxxxxxx':'')+'"'+M({t:'obsPassword'})+'>'),row('Status',status(o.status,o.status!=='off'))]))
     +card('Hue, LAYER 2','<div class="acts">'+[['hueFind','Find bridge'],['huePair','Pair'],['hueCancel','Cancel'],['hueRefresh','Refresh lights + scenes']].map(x=>'<button type="button" class="b sm"'+M({t:x[0]})+'>'+x[1]+'</button>').join('')+'<button type="button" class="b sm danger"'+M({t:'hueForget'})+'>Forget</button></div><div class="mt">'
@@ -207,11 +209,11 @@ const DRAW={
     +card('Hue lamps',table(['On','Label','Target'],h.slots.map((s,i)=>'<td class="w">'+onoff({t:'hueSlot',i,f:'on'},s.on)+'</td><td style="width:140px">'+field({t:'hueSlot',i,f:'label'},s.label,'maxlength="8"')+'</td><td>'+sel({t:'hueTarget',i},opts(h.targets,s.target),s.target)+'</td>')))
     +card('Scenes',table(['','Scene','Key label'],h.sceneSlots.map((s,i)=>'<td class="k">'+(i+1)+'</td><td>'+sel({t:'hueScene',i},opts(h.scenes,s.id),s.id)+'</td><td style="width:140px">'+field({t:'hueSceneLabel',i},s.label,'maxlength="12"')+'</td>')))
     +card('DynaMount, LAYER 3','<div class="acts" style="margin-bottom:10px">'+segOf({t:'dynaFill'},['Fill from left','Fill from right'],d.fillRight?1:0)+'</div>'
-       +table(['On','Name','IP address','Colour','','Calibrate','Status'],d.mounts.map((m,i)=>'<td class="w">'+onoff({t:'dyna',i,f:'on'},m.on)+'</td><td>'+field({t:'dyna',i,f:'name'},m.name,'placeholder="mic name"')+'</td><td>'+field({t:'dyna',i,f:'ip'},m.ip,'placeholder="192.168.1.50"')+'</td><td class="w">'+swatchPick(i,m.colour)+'</td><td class="w"><button type="button" class="b sm"'+M({t:'dynaDetect',i})+'>Detect</button></td><td class="w"><button type="button" class="b sm"'+M({t:'dynaHome',i})+'>Home</button></td><td class="dimtext w">'+esc(m.status)+'</td>')),true)
-    +card('Presets',table(['#','Name','Stands',''],d.presets.map((p,i)=>'<td class="k">'+(i+1)+'</td><td>'+field({t:'presetName',i},p.name,'placeholder="Preset '+(i+1)+'"')+'</td><td class="dimtext w">'+esc(p.stands)+'</td><td class="w"><button type="button" class="b sm"'+M({t:'presetGo',i})+'>Go</button> <button type="button" class="b sm"'+M({t:'presetStore',i})+'>Store</button> <button type="button" class="b sm"'+M({t:'presetClear',i})+'>Clear</button></td>')),true)
+       +table(['On','Name','IP address','Colour','','Calibrate','Status'],d.mounts.map((m,i)=>'<td class="w">'+onoff({t:'dyna',i,f:'on'},m.on)+'</td><td>'+field({t:'dyna',i,f:'name'},m.name,'placeholder="mic name"')+'</td><td>'+field({t:'dyna',i,f:'ip'},m.ip,'placeholder="192.168.1.50"')+'</td><td class="w">'+swatchPick(i,m.colour)+'</td><td class="w"><button type="button" class="b sm"'+M({t:'dynaDetect',i})+'>Detect</button></td><td class="w"><button type="button" class="b sm"'+M({t:'dynaHome',i})+'>Home</button></td><td data-live class="dimtext w">'+esc(m.status)+'</td>')),true)
+    +card('Presets',table(['#','Name','Stands',''],d.presets.map((p,i)=>'<td class="k">'+(i+1)+'</td><td>'+field({t:'presetName',i},p.name,'placeholder="Preset '+(i+1)+'"')+'</td><td data-live class="dimtext w">'+esc(p.stands)+'</td><td class="w"><button type="button" class="b sm"'+M({t:'presetGo',i})+'>Go</button> <button type="button" class="b sm"'+M({t:'presetStore',i})+'>Store</button> <button type="button" class="b sm"'+M({t:'presetClear',i})+'>Clear</button></td>')),true)
     +'</div>'},
   moreme(){const m=S.moreme;return '<div class="cards">'
-    +card('Headphone mixes',rows([row('Headphone mixes in the browser',onoff({t:'mmOn'},m.enabled)),row('Address','<span class="sel-text">'+esc(m.address||'--')+'</span>'),row('PIN',field({t:'mmPin'},m.pin,'class="num"')),row('Page port',field({t:'mmPort',f:'webPort'},m.webPort,'class="num"')),row('TotalMix send to port',field({t:'mmPort',f:'sendPort'},m.sendPort,'class="num"')),row('TotalMix listen on port',field({t:'mmPort',f:'recvPort'},m.recvPort,'class="num"')),row('Status',status(m.status,m.good))]))
+    +card('Headphone mixes',rows([row('Headphone mixes in the browser',onoff({t:'mmOn'},m.enabled)),row('Address','<span data-live class="sel-text">'+esc(m.address||'--')+'</span>'),row('PIN',field({t:'mmPin'},m.pin,'class="num"')),row('Page port',field({t:'mmPort',f:'webPort'},m.webPort,'class="num"')),row('TotalMix send to port',field({t:'mmPort',f:'sendPort'},m.sendPort,'class="num"')),row('TotalMix listen on port',field({t:'mmPort',f:'recvPort'},m.recvPort,'class="num"')),row('Status',status(m.status,m.good))]))
     +'<div class="stack">'
     +card('On the page',rows([row('Studio name',field({t:'mmStudio'},m.studio,'class="wid"')),row('Logo','<img class="logo" alt="" src="logo?'+m.logoStamp+'"><button type="button" class="b"'+M({t:'chooseLogo'})+'>Choose…</button><button type="button" class="b"'+M({t:'mmLogoDefault'})+'>Default Logo</button>')]))
     +card('Headphones',rows(m.names.map((n,i)=>row('Phones '+(i+1),field({t:'mmName',i},n,'class="wid" placeholder="Phones '+(i+1)+'"')))))
@@ -243,12 +245,18 @@ function draw(){
     if(deskSrc!==S.moreme.desk){deskSrc=S.moreme.desk;$('#desk').src=deskSrc}
     return;
   }
-  if(busy()){pending=true;return}
-  pending=false;
   const html=DRAW[page]();
+  const box=$('#pg-'+page);
+  if(busy()){
+    pending=true;
+    const t=document.createElement('template');t.innerHTML=html;
+    const now=box.querySelectorAll('[data-live]');
+    t.content.querySelectorAll('[data-live]').forEach((e,i)=>{if(now[i]){now[i].className=e.className;now[i].innerHTML=e.innerHTML}});
+    return;
+  }
+  pending=false;
   if(last[page]===html)return;
   last[page]=html;
-  const box=$('#pg-'+page);
   box.innerHTML=html;
   box.querySelectorAll('select[data-blank]').forEach(s=>s.selectedIndex=-1);
 }

@@ -450,8 +450,12 @@ static void testMoreme()
         EXPECT(has(set::stateJson(c), "/desk?embed=1"));
     }
 
-    set::apply(R"({"t":"mmStudio","v":"Studio \"A\""})", c);
-    EXPECT(has(ph::server().settings().studio, "Studio"));
+    // What a page sends: quotes escaped, the rest as UTF-8, a backslash as \\u005c
+    // because wdl_json_parser reads two backslashes as a quote.
+    set::apply(R"({"t":"mmStudio","v":"Störsender \"A\" \u005c B"})", c);
+    EXPECT(ph::server().settings().studio == "Störsender \"A\" \\ B");
+    // And back out, so the page reads what it wrote.
+    EXPECT(has(set::stateJson(c), R"("studio":"Störsender \"A\" \\ B")"));
     set::apply(R"({"t":"mmName","i":1,"v":"  Anna  "})", c);
     EXPECT(ph::server().settings().names[1] == "Anna");
     set::apply(R"({"t":"mmName","i":9,"v":"x"})", c);
